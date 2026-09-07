@@ -74,6 +74,9 @@ pub struct CelestialConfig {
     pub mass_earth: Option<f64>,
     pub radius_km: Option<f64>,
     pub density_kg_m3: Option<f64>,
+    pub rotation_period_hours: Option<f64>,
+    pub axial_tilt_deg: Option<f64>,
+    pub tidal_lock: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +87,9 @@ struct RawBody {
     gravity_source: bool,
     orbit: Option<RawOrbit>,
     design_period_s: Option<f64>,
+    rotation_period_s: Option<f64>,
+    tidal_lock: bool,
+    axial_tilt_rad: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -129,6 +135,9 @@ impl SystemConfig {
                 gravity_source: false,
                 orbit: None,
                 design_period_s: None,
+                rotation_period_s: None,
+                tidal_lock: false,
+                axial_tilt_rad: 0.0,
             },
         )?;
         for star in &self.star {
@@ -153,6 +162,9 @@ impl SystemConfig {
                     gravity_source: true,
                     orbit: None,
                     design_period_s: None,
+                    rotation_period_s: None,
+                    tidal_lock: false,
+                    axial_tilt_rad: 0.0,
                 },
             )?;
         }
@@ -186,6 +198,9 @@ impl SystemConfig {
                     gravity_source: false,
                     orbit: None,
                     design_period_s: None,
+                    rotation_period_s: None,
+                    tidal_lock: false,
+                    axial_tilt_rad: 0.0,
                 },
             )?;
             let relative_a = required_positive(
@@ -327,6 +342,9 @@ impl SystemConfig {
                 parent,
                 orbit,
                 design_period_s: raw.design_period_s,
+                rotation_period_s: raw.rotation_period_s,
+                tidal_lock: raw.tidal_lock,
+                axial_tilt_rad: raw.axial_tilt_rad,
                 gravity_source: raw.gravity_source,
             });
         }
@@ -392,6 +410,23 @@ fn add_config_body(
         .period_days_design
         .map(|days| days * DAY_S)
         .or_else(|| config.period_hours_design.map(|hours| hours * 3_600.0));
+    let rotation_period_s = match config.rotation_period_hours {
+        Some(hours) if hours.is_finite() && hours > 0.0 => Some(hours * 3_600.0),
+        Some(_) => {
+            return Err(SystemSpecError::Invalid(format!(
+                "body {} has invalid rotation_period_hours",
+                config.id
+            )));
+        }
+        None => None,
+    };
+    let axial_tilt_rad = config.axial_tilt_deg.unwrap_or(0.0).to_radians();
+    if !axial_tilt_rad.is_finite() {
+        return Err(SystemSpecError::Invalid(format!(
+            "body {} has invalid axial_tilt_deg",
+            config.id
+        )));
+    }
     if orbit.is_none() && config.host.is_some() {
         return Err(SystemSpecError::Invalid(format!(
             "body {} has a host but no semi-major axis",
@@ -410,6 +445,9 @@ fn add_config_body(
         gravity_source: true,
         orbit,
         design_period_s,
+        rotation_period_s,
+        tidal_lock: config.tidal_lock,
+        axial_tilt_rad,
     });
     Ok(id)
 }

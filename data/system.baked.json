@@ -10,6 +10,9 @@
       "parent": null,
       "orbit": null,
       "design_period_s": null,
+      "rotation_period_s": null,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.0,
       "gravity_source": false
     },
     {
@@ -29,6 +32,9 @@
         "mean_motion_rad_s": 1.1798600164699834e-9
       },
       "design_period_s": 5325345000.0,
+      "rotation_period_s": null,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.0,
       "gravity_source": true
     },
     {
@@ -48,6 +54,9 @@
         "mean_motion_rad_s": 2.976656512282283e-6
       },
       "design_period_s": 2110811.7888,
+      "rotation_period_s": null,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.0,
       "gravity_source": true
     },
     {
@@ -67,6 +76,9 @@
         "mean_motion_rad_s": 2.976656512282283e-6
       },
       "design_period_s": 2110811.7888,
+      "rotation_period_s": null,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.0,
       "gravity_source": true
     },
     {
@@ -86,6 +98,9 @@
         "mean_motion_rad_s": 1.1798600164699834e-9
       },
       "design_period_s": 5325345000.0,
+      "rotation_period_s": null,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.0,
       "gravity_source": false
     },
     {
@@ -105,6 +120,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 3596094.2304,
+      "rotation_period_s": 113400.0,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.19198621771937624,
       "gravity_source": true
     },
     {
@@ -124,6 +142,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 24007058.208,
+      "rotation_period_s": 65520.0,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.10471975511965978,
       "gravity_source": true
     },
     {
@@ -143,6 +164,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 109863828.92160001,
+      "rotation_period_s": 100080.0,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.33161255787892263,
       "gravity_source": true
     },
     {
@@ -162,6 +186,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 258150182.112,
+      "rotation_period_s": 70560.0,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.06981317007977318,
       "gravity_source": true
     },
     {
@@ -181,6 +208,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 188796745.3824,
+      "rotation_period_s": 91440.0,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.13962634015954636,
       "gravity_source": true
     },
     {
@@ -200,6 +230,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 144000.0,
+      "rotation_period_s": null,
+      "tidal_lock": true,
+      "axial_tilt_rad": 0.0,
       "gravity_source": true
     },
     {
@@ -219,6 +252,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 288000.0,
+      "rotation_period_s": null,
+      "tidal_lock": true,
+      "axial_tilt_rad": 0.0,
       "gravity_source": true
     },
     {
@@ -238,6 +274,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 576000.0,
+      "rotation_period_s": null,
+      "tidal_lock": true,
+      "axial_tilt_rad": 0.0,
       "gravity_source": true
     },
     {
@@ -257,6 +296,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 1152000.0,
+      "rotation_period_s": null,
+      "tidal_lock": true,
+      "axial_tilt_rad": 0.0,
       "gravity_source": true
     },
     {
@@ -276,6 +318,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 2304000.0,
+      "rotation_period_s": null,
+      "tidal_lock": true,
+      "axial_tilt_rad": 0.0,
       "gravity_source": true
     },
     {
@@ -295,6 +340,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 82860.6348,
+      "rotation_period_s": null,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.0,
       "gravity_source": true
     },
     {
@@ -314,6 +362,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 532028.1564,
+      "rotation_period_s": null,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.0,
       "gravity_source": true
     },
     {
@@ -333,6 +384,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 1748550.3804,
+      "rotation_period_s": null,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.0,
       "gravity_source": true
     },
     {
@@ -352,6 +406,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 155078.7696,
+      "rotation_period_s": null,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.0,
       "gravity_source": true
     },
     {
@@ -371,6 +428,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 604266.3683999999,
+      "rotation_period_s": null,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.0,
       "gravity_source": true
     },
     {
@@ -390,6 +450,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 535382.028,
+      "rotation_period_s": null,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.0,
       "gravity_source": true
     },
     {
@@ -409,6 +472,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 111145.158,
+      "rotation_period_s": null,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.0,
       "gravity_source": true
     },
     {
@@ -428,6 +494,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 2304000.0,
+      "rotation_period_s": null,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.0,
       "gravity_source": true
     },
     {
@@ -447,6 +516,9 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 8000078.4,
+      "rotation_period_s": null,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.0,
       "gravity_source": true
     }
   ]

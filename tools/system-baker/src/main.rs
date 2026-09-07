@@ -135,5 +135,16 @@ mod tests {
             ephemeris.body(nereid).expect("Nereid descriptor").mu
                 + ephemeris.body(borea).expect("Borea descriptor").mu
         );
+
+        let nereid_body = ephemeris.body(nereid).expect("Nereid descriptor");
+        assert_eq!(nereid_body.rotation_period_s, Some(18.2 * 3_600.0));
+        assert!(!nereid_body.tidal_lock);
+        assert!(nereid_body.axial_tilt_rad.is_finite());
+        assert!(
+            ephemeris
+                .body(ephemeris.body_id("pyra").expect("Pyra body"))
+                .expect("Pyra descriptor")
+                .tidal_lock
+        );
     }
 }

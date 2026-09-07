@@ -142,6 +142,16 @@ pub struct BakedBody {
     pub parent: Option<BodyId>,
     pub orbit: Option<KeplerOrbit>,
     pub design_period_s: Option<f64>,
+    /// Sidereal spin period. `None` means the visual/runtime consumer may use
+    /// its documented fallback for bodies without a spin target yet.
+    #[serde(default)]
+    pub rotation_period_s: Option<f64>,
+    /// Keep the same body-facing longitude pointed at the immediate parent.
+    #[serde(default)]
+    pub tidal_lock: bool,
+    /// Rotation-axis tilt relative to the engine's reference plane.
+    #[serde(default)]
+    pub axial_tilt_rad: f64,
     /// Synthetic barycentres are useful for kinematics but must not be added
     /// to the gravity source list alongside their component bodies.
     pub gravity_source: bool,
@@ -157,6 +167,9 @@ impl BakedBody {
             parent: None,
             orbit: None,
             design_period_s: None,
+            rotation_period_s: None,
+            tidal_lock: false,
+            axial_tilt_rad: 0.0,
             gravity_source: true,
         }
     }
@@ -177,6 +190,9 @@ impl BakedBody {
             parent: Some(parent),
             orbit: Some(orbit),
             design_period_s: None,
+            rotation_period_s: None,
+            tidal_lock: false,
+            axial_tilt_rad: 0.0,
             gravity_source: true,
         }
     }
@@ -196,6 +212,9 @@ impl BakedBody {
             parent,
             orbit,
             design_period_s: None,
+            rotation_period_s: None,
+            tidal_lock: false,
+            axial_tilt_rad: 0.0,
             gravity_source: false,
         }
     }
@@ -257,6 +276,21 @@ impl BakedEphemeris {
                 return Err(EphemerisError::InvalidBody(format!(
                     "body {} has invalid mu {}",
                     body.name, body.mu
+                )));
+            }
+            if body
+                .rotation_period_s
+                .is_some_and(|period| !period.is_finite() || period <= 0.0)
+            {
+                return Err(EphemerisError::InvalidBody(format!(
+                    "body {} has invalid rotation period",
+                    body.name
+                )));
+            }
+            if !body.axial_tilt_rad.is_finite() {
+                return Err(EphemerisError::InvalidBody(format!(
+                    "body {} has invalid axial tilt",
+                    body.name
                 )));
             }
             if let Some(parent) = body.parent {

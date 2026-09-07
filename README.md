@@ -23,6 +23,9 @@
 - импульсные `delta-v` можно задавать упорядоченным расписанием между coast-дугами;
 - root runtime не зависит от Bevy, Tokio, DirectX или Nyx;
 - Nyx/ANISE подключены только в отдельном reference-only validation harness.
+- `apps/client` имеет Bevy 0.19 hierarchical system map: он создаёт все
+  физические тела из того же `SystemConfig::bake()`/`BakedEphemeris`, а не из
+  собственных orbital constants, и переключает локальные map scopes.
 
 Последний сложный прогон:
 
@@ -57,8 +60,8 @@ system-baker ──► data/system.baked.json ──► sim-core
 
 - **MIT engine crates**: reusable numerical kernel, data formats и tooling.
 - **GPL game crates**: client, server и game-specific code.
-- **Cross-platform**: simulation/gameplay API не знает о DirectX; native
-  rendering boundary запланирован через Bevy/wgpu.
+- **Cross-platform**: simulation/gameplay API не знает о DirectX; client
+  rendering boundary реализуется через Bevy/wgpu.
 - **Physics first**: SOI switching не является источником физики; Lagrange
   regions должны следовать из полей и эфемерид.
 
@@ -75,7 +78,14 @@ cargo bench -p thessa-sim-core --bench gravity
 cargo run -p thessa-system-baker -- \
   --input data/system.toml \
   --output data/system.baked.json
+cargo run -p thessa-client
 ```
+
+Клиент открывает Bevy-карту всей design-системы, строит орбиты через
+`sim-core::BakedEphemeris` и позволяет переходить к локальным картам Nereid,
+Orthea, Vesper и B/C binary; серверный authoritative snapshot будет подключён
+следующим шагом. Подробности, шкалы и управление:
+[`docs/09_BEVY_VISUAL_SLICE.md`](docs/09_BEVY_VISUAL_SLICE.md).
 
 Reference harness запускается отдельно, потому что его AGPL-зависимости не
 должны попадать в runtime graph:

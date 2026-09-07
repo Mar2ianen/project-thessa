@@ -1,9 +1,11 @@
 mod map_ui;
 mod navigation;
 mod orbits;
+mod pilot_ui;
 use map_ui::*;
 use navigation::*;
 use orbits::*;
+use pilot_ui::*;
 
 use std::f32::consts::TAU;
 
@@ -97,6 +99,7 @@ fn main() {
                 }),
         )
         .add_plugins(OrbitGizmoPlugin)
+        .add_plugins(PilotHudPlugin)
         .add_plugins(BrpExtrasPlugin::default())
         .insert_resource(SimulationClock::default())
         .insert_resource(NavigationState::default())

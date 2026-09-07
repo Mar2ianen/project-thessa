@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/sim-core",
+    "crates/protocol",
+    "apps/server",
+    "apps/client",
+    "tools/system-baker",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.95"
+
+[workspace.dependencies]
+# Match Bevy's glam line in 0.19.x to make adapter boundaries cheap.
+glam = { version = "0.32", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.9"
+rayon = "1.12.0"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+bevy = { version = "0.19.1", default-features = true }
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"

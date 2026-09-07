@@ -1,0 +1,115 @@
+# Project Thessa — primary resource families, draft v0.1
+# This is design data, not final recipes.
+
+[[resource]]
+id = "iron_ore"
+role = "bulk structural metals"
+
+[[resource]]
+id = "copper_ore"
+role = "conductors, motors, electronics"
+
+[[resource]]
+id = "bulk_silicates"
+role = "stone, glass precursors, ceramics, construction"
+
+[[resource]]
+id = "quartz"
+role = "high-purity silica/electronics"
+
+[[resource]]
+id = "carbon_feedstock"
+role = "fuels, polymers, carbon materials"
+
+[[resource]]
+id = "sulfur"
+role = "chemistry, explosives/processes, high-temp chains"
+
+[[resource]]
+id = "aluminium_ore"
+role = "light structures, tanks, aerospace alloys"
+
+[[resource]]
+id = "nickel_cobalt_refractory"
+role = "engines, turbines, hot structures, magnets"
+
+[[resource]]
+id = "fissile_ore"
+role = "fission power, isotope production, nuclear propulsion"
+
+[[resource]]
+id = "water_ice"
+role = "life support, chemistry, LOX/LH2, deuterium feedstock"
+
+[[resource]]
+id = "nitrogen_volatiles"
+role = "atmospheres, fertilizers/chemistry, cryogenic chains"
+
+[[resource]]
+id = "hydrogen_helium_atmosphere"
+role = "late-game gas giant atmospheric stream; H2, He4, D and trace He3 separation"
+
+[distribution.thessa]
+abundant = ["iron_ore", "copper_ore", "bulk_silicates", "quartz", "water_ice", "carbon_feedstock"]
+limited = ["sulfur"]
+scarce = ["aluminium_ore", "nickel_cobalt_refractory", "fissile_ore"]
+
+[distribution.pyra]
+abundant = ["sulfur", "iron_ore", "nickel_cobalt_refractory"]
+limited = ["bulk_silicates", "fissile_ore"]
+
+[distribution.pelagos]
+abundant = ["water_ice", "nitrogen_volatiles", "carbon_feedstock"]
+limited = ["bulk_silicates", "quartz"]
+notes = "brines are a lithium-bearing feedstock; deuterium is a separation product, not a raw node"
+
+[distribution.auron]
+abundant = ["aluminium_ore", "nickel_cobalt_refractory", "fissile_ore", "quartz"]
+limited = ["iron_ore", "bulk_silicates"]
+
+[distribution.borea]
+abundant = ["water_ice", "nitrogen_volatiles", "carbon_feedstock"]
+limited = ["bulk_silicates"]
+
+[distribution.nix]
+abundant = ["water_ice"]
+limited = ["bulk_silicates"]
+
+[distribution.nereid]
+abundant = ["hydrogen_helium_atmosphere"]
+notes = "He3 is intentionally trace; industrial D-He3 requires huge intake and isotope separation throughput"
+
+[distribution.khepri]
+abundant = ["sulfur", "nickel_cobalt_refractory", "iron_ore"]
+limited = ["fissile_ore", "bulk_silicates"]
+
+[distribution.orthea]
+abundant = ["iron_ore", "nickel_cobalt_refractory", "fissile_ore", "bulk_silicates"]
+limited = ["aluminium_ore", "water_ice"]
+
+[distribution.koro]
+abundant = ["water_ice"]
+
+[distribution.mira]
+abundant = ["bulk_silicates", "iron_ore", "water_ice"]
+limited = ["nickel_cobalt_refractory"]
+
+[distribution.dey]
+abundant = ["water_ice"]
+
+[distribution.vesper]
+abundant = ["hydrogen_helium_atmosphere", "carbon_feedstock", "nitrogen_volatiles"]
+
+[distribution.skadi]
+abundant = ["water_ice", "nitrogen_volatiles", "carbon_feedstock"]
+
+[distribution.mote]
+abundant = ["water_ice"]
+
+[distribution.janus]
+abundant = ["iron_ore", "copper_ore", "bulk_silicates", "water_ice"]
+limited = ["aluminium_ore", "nickel_cobalt_refractory", "fissile_ore", "quartz"]
+notes = "late-game value should not come from being universally richer; unique recipes/material quality TBD"
+
+[distribution.mora]
+abundant = ["bulk_silicates", "water_ice", "iron_ore"]

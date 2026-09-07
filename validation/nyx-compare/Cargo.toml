@@ -1,0 +1,19 @@
+[package]
+name = "thessa-nyx-compare"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.95"
+license = "AGPL-3.0-or-later"
+publish = false
+description = "Reference-only numerical comparison for Project Thessa"
+
+[workspace]
+resolver = "3"
+
+[dependencies]
+anise = "0.10.6"
+glam = { version = "0.32", features = ["serde"] }
+hifitime = "4.3.1"
+nyx-space = "2.5.3"
+toml = "0.9"
+thessa-sim-core = { path = "../../crates/sim-core" }

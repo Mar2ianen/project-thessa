@@ -1,0 +1,11 @@
+[package]
+name = "thessa-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "GPL-3.0-or-later"
+publish = false
+
+[dependencies]
+thessa-protocol = { path = "../../crates/protocol" }
+bevy.workspace = true

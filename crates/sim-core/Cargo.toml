@@ -1,0 +1,16 @@
+[package]
+name = "thessa-sim-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+
+[dependencies]
+glam.workspace = true
+serde.workspace = true
+rayon.workspace = true
+
+[[bench]]
+name = "gravity"
+harness = false

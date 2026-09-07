@@ -1,0 +1,291 @@
+# Project Thessa celestial design data, v0.1.
+# Canonical runtime data must eventually be emitted by system-baker.
+# Units are explicit in field names.
+
+[meta]
+epoch_name = "DESIGN_EPOCH_0"
+status = "design-target-not-canonical"
+runtime_body_motion = "baked_ephemerides"
+vehicle_gravity = "multi_body_test_particle"
+
+[[star]]
+id = "asterion_a"
+mass_solar = 0.82
+radius_solar = 0.83
+temperature_k = 5100.0
+luminosity_solar = 0.42
+
+[[star]]
+id = "asterion_b"
+mass_solar = 2.00
+radius_solar = 1.75
+temperature_k = 8700.0
+luminosity_solar = 15.8
+
+[[star]]
+id = "asterion_c"
+mass_solar = 0.38
+radius_solar = 0.39
+temperature_k = 3500.0
+luminosity_solar = 0.020
+
+[orbit.bc_inner]
+primary = "asterion_b"
+secondary = "asterion_c"
+semi_major_axis_au_relative = 0.220
+eccentricity = 0.040
+period_days_design = 24.430692
+mutual_inclination_outer_deg = 0.0
+notes = "coplanar by design so BC is eclipsing as seen from A-system"
+
+[orbit.a_bc_outer]
+components = ["asterion_a", "bc_barycenter"]
+semi_major_axis_au_relative = 45.0
+eccentricity = 0.060
+period_days_design = 61635.9375
+
+[[planet]]
+id = "khepri"
+host = "asterion_a"
+semi_major_axis_au = 0.220
+eccentricity = 0.030
+inclination_deg = 1.2
+period_days_design = 41.621461
+mass_earth = 0.35
+radius_km = 4400.0
+atmosphere_bar = 0.04
+atmosphere = "CO2/SO2/Ar/N2"
+resources = ["sulfur", "nickel_cobalt_refractory", "iron_ore", "bulk_silicates", "fissile_ore"]
+
+[[planet]]
+id = "nereid"
+host = "asterion_a"
+semi_major_axis_au = 0.780
+eccentricity = 0.015
+inclination_deg = 0.4
+period_days_design = 277.859470
+mass_jupiter = 0.95
+radius_km = 68000.0
+atmosphere = "H2/He + CH4/NH3/H2O traces"
+resources = ["hydrogen_helium_atmosphere"]
+ring_inner_radius_km = 85000.0
+ring_outer_radius_km = 140000.0
+
+[[planet]]
+id = "orthea"
+host = "asterion_a"
+semi_major_axis_au = 2.150
+eccentricity = 0.025
+inclination_deg = 1.1
+period_days_design = 1271.572094
+mass_earth = 2.40
+radius_km = 9000.0
+atmosphere_bar = 2.8
+atmosphere = "N2/CO2/Ar"
+resources = ["iron_ore", "nickel_cobalt_refractory", "fissile_ore", "bulk_silicates", "aluminium_ore", "water_ice"]
+
+[[planet]]
+id = "vesper"
+host = "asterion_a"
+semi_major_axis_au = 3.800
+eccentricity = 0.030
+inclination_deg = 2.0
+period_days_design = 2987.849330
+mass_jupiter = 0.12
+radius_km = 36000.0
+atmosphere = "H2/He/CH4"
+resources = ["hydrogen_helium_atmosphere", "carbon_feedstock", "nitrogen_volatiles"]
+
+# Nereid regular resonant chain.
+[[moon]]
+id = "pyra"
+host = "nereid"
+semi_major_axis_km = 398358.0
+period_hours_design = 40.0
+eccentricity = 0.006
+inclination_deg = 0.30
+mass_earth = 0.006
+radius_km = 1050.0
+tidal_lock = true
+atmosphere_bar = 0.0
+atmosphere = "SO2 local exosphere"
+resources = ["sulfur", "iron_ore", "nickel_cobalt_refractory", "fissile_ore"]
+
+[[moon]]
+id = "thessa"
+host = "nereid"
+semi_major_axis_km = 632354.0
+period_hours_design = 80.0
+eccentricity = 0.003
+inclination_deg = 0.10
+mass_earth = 0.130
+radius_km = 3200.0
+tidal_lock = true
+atmosphere_bar = 1.08
+atmosphere = "N2/O2/Ar/CO2 provisional"
+resources = ["iron_ore", "copper_ore", "bulk_silicates", "quartz", "water_ice", "carbon_feedstock", "sulfur"]
+
+[[moon]]
+id = "pelagos"
+host = "nereid"
+semi_major_axis_km = 1003799.0
+period_hours_design = 160.0
+eccentricity = 0.004
+inclination_deg = 0.15
+mass_earth = 0.055
+radius_km = 2500.0
+tidal_lock = true
+atmosphere_bar = 1.7
+atmosphere = "N2/CO2/H2O/Ar"
+resources = ["water_ice", "nitrogen_volatiles", "carbon_feedstock", "bulk_silicates", "quartz"]
+
+[[moon]]
+id = "auron"
+host = "nereid"
+semi_major_axis_km = 1593432.0
+period_hours_design = 320.0
+eccentricity = 0.002
+inclination_deg = 0.12
+mass_earth = 0.020
+radius_km = 1700.0
+tidal_lock = true
+atmosphere_bar = 0.006
+atmosphere = "CO2/Ar trace"
+resources = ["aluminium_ore", "nickel_cobalt_refractory", "fissile_ore", "quartz", "iron_ore", "bulk_silicates"]
+
+[[moon]]
+id = "borea"
+host = "nereid"
+semi_major_axis_km = 2529415.0
+period_hours_design = 640.0
+eccentricity = 0.005
+inclination_deg = 0.20
+mass_earth = 0.022
+radius_km = 2100.0
+tidal_lock = true
+atmosphere_bar = 0.55
+atmosphere = "N2/CH4/Ar"
+resources = ["water_ice", "nitrogen_volatiles", "carbon_feedstock", "bulk_silicates"]
+
+[[minor_body]]
+id = "nix"
+host = "borea"
+kind = "submoon"
+semi_major_axis_km = 14000.0
+period_hours_design = 30.873655
+eccentricity = 0.003
+inclination_deg = 2.0
+radius_km = 12.5
+density_kg_m3 = 2200.0
+resources = ["water_ice", "bulk_silicates"]
+
+[[minor_body]]
+id = "halo"
+host = "nereid"
+kind = "borea_l4_coorbital"
+semi_major_axis_km = 2529415.0
+period_hours_design = 640.0
+mean_longitude_offset_deg = 60.0
+radius_km = 30.0
+density_kg_m3 = 1800.0
+resources = ["water_ice", "bulk_silicates"]
+
+[[minor_body]]
+id = "cinder"
+host = "nereid"
+kind = "irregular_retrograde_moon"
+semi_major_axis_km = 5800000.0
+period_days_design = 92.5935
+eccentricity = 0.08
+inclination_deg = 162.0
+radius_km = 65.0
+density_kg_m3 = 3200.0
+resources = ["nickel_cobalt_refractory", "iron_ore"]
+
+# Orthea moons.
+[[moon]]
+id = "koro"
+host = "orthea"
+semi_major_axis_km = 55000.0
+period_hours_design = 23.016843
+eccentricity = 0.01
+inclination_deg = 0.5
+radius_km = 18.0
+density_kg_m3 = 1200.0
+resources = ["water_ice"]
+
+[[moon]]
+id = "mira"
+host = "orthea"
+semi_major_axis_km = 190000.0
+period_hours_design = 147.785599
+eccentricity = 0.008
+inclination_deg = 1.0
+mass_earth = 0.012
+radius_km = 1450.0
+atmosphere_bar = 0.08
+atmosphere = "N2/CO2"
+resources = ["bulk_silicates", "iron_ore", "water_ice", "nickel_cobalt_refractory"]
+
+[[moon]]
+id = "dey"
+host = "orthea"
+semi_major_axis_km = 420000.0
+period_hours_design = 485.708439
+eccentricity = 0.03
+inclination_deg = 7.0
+radius_km = 10.0
+density_kg_m3 = 1100.0
+resources = ["water_ice"]
+
+# Vesper moons.
+[[moon]]
+id = "skadi"
+host = "vesper"
+semi_major_axis_km = 210000.0
+period_hours_design = 43.077436
+eccentricity = 0.01
+inclination_deg = 0.5
+mass_earth = 0.002
+radius_km = 720.0
+atmosphere_bar = 0.01
+atmosphere = "N2/CH4 trace"
+resources = ["water_ice", "nitrogen_volatiles", "carbon_feedstock"]
+
+[[moon]]
+id = "mote"
+host = "vesper"
+semi_major_axis_km = 520000.0
+period_hours_design = 167.851769
+eccentricity = 0.04
+inclination_deg = 5.0
+radius_km = 25.0
+density_kg_m3 = 1400.0
+resources = ["water_ice"]
+
+# Circumbinary late-game world around BC.
+[[planet]]
+id = "janus"
+host = "bc_barycenter"
+semi_major_axis_au = 4.400
+eccentricity = 0.020
+inclination_deg = 2.0
+period_days_design = 2185.147516
+mass_earth = 3.20
+radius_km = 9800.0
+atmosphere_bar = 1.4
+atmosphere = "N2/CO2/Ar provisional"
+resources = ["iron_ore", "copper_ore", "bulk_silicates", "water_ice", "aluminium_ore", "nickel_cobalt_refractory", "fissile_ore", "quartz"]
+
+[[moon]]
+id = "mora"
+host = "janus"
+semi_major_axis_km = 210000.0
+period_hours_design = 148.717230
+eccentricity = 0.006
+inclination_deg = 1.0
+mass_earth = 0.025
+radius_km = 1700.0
+atmosphere_bar = 0.02
+atmosphere = "CO2/N2 trace"
+resources = ["bulk_silicates", "water_ice", "iron_ore"]

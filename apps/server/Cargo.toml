@@ -1,0 +1,12 @@
+[package]
+name = "thessa-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "GPL-3.0-or-later"
+publish = false
+
+[dependencies]
+thessa-sim-core = { path = "../../crates/sim-core" }
+thessa-protocol = { path = "../../crates/protocol" }
+tokio.workspace = true

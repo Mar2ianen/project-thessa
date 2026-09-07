@@ -1,0 +1,5 @@
+/target/
+/validation/nyx-compare/target/
+**/*.swp
+**/*.swo
+.DS_Store

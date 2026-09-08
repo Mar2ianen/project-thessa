@@ -60,8 +60,17 @@ pub(super) fn preview_input(
     runtime: Res<RuntimeEphemeris>,
     mut map: ResMut<MapState>,
     ui: Option<Res<MapUiState>>,
+    pilot: Option<Res<PilotHudState>>,
     mut navigation: ResMut<NavigationState>,
 ) {
+    if pilot
+        .as_ref()
+        .is_some_and(|state| state.view_mode == ClientViewMode::Pilot)
+    {
+        // Pilot mode owns KSP-style Space staging, throttle and SAS keys.
+        // Do not let the map clock consume those same keys.
+        return;
+    }
     if keys.just_pressed(KeyCode::Space) {
         clock.paused = !clock.paused;
     }
@@ -79,7 +88,6 @@ pub(super) fn preview_input(
     if ui.as_ref().is_some_and(|state| state.search_active) {
         return;
     }
-
     let requested_mode = if keys.just_pressed(KeyCode::Digit0) {
         Some(MapMode::SystemOverview)
     } else if keys.just_pressed(KeyCode::Digit1) {
@@ -140,6 +148,7 @@ pub(super) fn select_body_with_pointer(
     runtime: Res<RuntimeEphemeris>,
     mut map: ResMut<MapState>,
     ui: Option<Res<MapUiState>>,
+    pilot: Option<Res<PilotHudState>>,
     mut navigation: ResMut<NavigationState>,
 ) {
     // Do not treat a click that was already held while the window opened as a
@@ -150,7 +159,10 @@ pub(super) fn select_body_with_pointer(
     }
     let pointer_blocked = ui
         .as_ref()
-        .is_some_and(|state| state.pointer_over_ui || state.search_active);
+        .is_some_and(|state| state.pointer_over_ui || state.search_active)
+        || pilot
+            .as_ref()
+            .is_some_and(|state| state.view_mode == ClientViewMode::Pilot);
     if pointer_blocked || !buttons.just_pressed(MouseButton::Left) {
         return;
     }
@@ -214,6 +226,7 @@ pub(super) fn update_camera(
     runtime: Res<RuntimeEphemeris>,
     window: Single<&Window, With<PrimaryWindow>>,
     ui: Option<Res<MapUiState>>,
+    pilot: Option<Res<PilotHudState>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_motion: Res<AccumulatedMouseMotion>,
     mut mouse_wheel: MessageReader<MouseWheel>,
@@ -222,8 +235,11 @@ pub(super) fn update_camera(
 ) {
     let delta = time.delta_secs().clamp(0.0, 0.1);
     let mouse_delta = mouse_motion.delta;
-    let pointer_blocked = ui.as_ref().is_some_and(|state| state.pointer_over_ui);
-    let keyboard_blocked = ui.as_ref().is_some_and(|state| state.search_active);
+    let pilot_active = pilot
+        .as_ref()
+        .is_some_and(|state| state.view_mode == ClientViewMode::Pilot);
+    let pointer_blocked = pilot_active || ui.as_ref().is_some_and(|state| state.pointer_over_ui);
+    let keyboard_blocked = pilot_active || ui.as_ref().is_some_and(|state| state.search_active);
 
     // Always consume wheel messages. Otherwise a wheel event over the UI can
     // be replayed as soon as the pointer leaves it.
@@ -233,6 +249,13 @@ pub(super) fn update_camera(
             MouseScrollUnit::Line => event.y,
             MouseScrollUnit::Pixel => event.y / MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR,
         };
+    }
+
+    // Pilot owns the same Camera3d while it is visible. Its input system
+    // updates the camera around the preview vehicle; the map camera must not
+    // overwrite that transform later in the frame.
+    if pilot_active {
+        return;
     }
 
     let first_frame = navigation.last_mode.is_none();

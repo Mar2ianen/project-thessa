@@ -20,9 +20,22 @@
 - корабль получает сумму гравитации от всех движущихся point-mass тел одновременно;
 - есть adaptive Dormand–Prince 5(4) и fixed-step velocity-Verlet;
 - `system-baker` читает `data/system.toml` и создаёт воспроизводимый JSON descriptor;
+- `vehicle-baker` читает произвольный vehicle TOML и собирает проверенный
+  JSON asset с панелями, mass properties и control surfaces;
 - импульсные `delta-v` можно задавать упорядоченным расписанием между coast-дугами;
 - root runtime не зависит от Bevy, Tokio, DirectX или Nyx;
 - Nyx/ANISE подключены только в отдельном reference-only validation harness.
+- `sim-core` теперь имеет первый MIT atmospheric slice: локальный panel aero
+  solver с wind/`omega × r`, smooth stall, transonic/supersonic corrections и
+  optional coefficient tables; он не зависит от внешнего CFD runtime.
+- `sim-core` также имеет детерминированный ISA-подобный atmosphere provider до
+  47 км: `T/p/rho/viscosity/a(T)` и готовый `AeroEnvironment` для aircraft
+  flight points, включая высотный сверхзвуковой режим.
+- локальный aero model подключён к MIT 6-DoF rigid-body slice: body-frame
+  forces/moments, quaternion attitude, gravity, rotating-atmosphere `ω×r`,
+  dynamic p/q/r damping и bounded deterministic substeps;
+- изолированный aero harness сравнивает coefficient sweeps и короткий X-15
+  trajectory proxy с локальными JSBSim/RocketPy references.
 - `apps/client` имеет Bevy 0.19 hierarchical system map: он создаёт все
   физические тела из того же `SystemConfig::bake()`/`BakedEphemeris`, а не из
   собственных orbital constants, и переключает локальные map scopes.
@@ -75,9 +88,14 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 cargo test -p thessa-sim-core --release
 cargo bench -p thessa-sim-core --bench gravity
+cargo bench -p thessa-sim-core --bench aero
+cargo bench -p thessa-sim-core --bench flight
 cargo run -p thessa-system-baker -- \
   --input data/system.toml \
   --output data/system.baked.json
+cargo run -p thessa-vehicle-baker -- \
+  --input data/vehicles/example_aircraft.toml \
+  --output /tmp/example_aircraft.baked.json
 cargo run -p thessa-client
 ```
 
@@ -96,6 +114,28 @@ cargo run --manifest-path validation/nyx-compare/Cargo.toml --release
 
 При первом запуске harness потребуется скачать его изолированные зависимости.
 
+Аэродинамический comparison harness запускается отдельно:
+
+```bash
+THESSA_AERO_PYTHON=.venv-aero/bin/python \
+  cargo run --manifest-path validation/aero-compare/Cargo.toml --release
+```
+
+Перед запуском сравнения создай постоянное локальное окружение
+`.venv-aero` и установи в него optional validators:
+
+```bash
+python -m venv .venv-aero
+.venv-aero/bin/pip install jsbsim rocketpy
+```
+
+Harness проверяет собственные aircraft/rocket/shuttle proxy vectors и пробует
+найти установленные JSBSim, SU2, VSPAERO, AVL, OpenRocket и RocketPy. При
+доступных Python-пакетах он дополнительно печатает side-by-side `CL/CD/Cm`
+ошибки для bundled JSBSim `737/X15/Shuttle` и `CL_alpha/CP` для одинакового
+RocketPy fin-set. Если внешних программ или Python-пакетов нет, harness явно
+сообщает об этом, а не подменяет их результат.
+
 ## Структура
 
 ```text
@@ -105,6 +145,7 @@ apps/server/            GPL server shell
 apps/client/            GPL client shell
 tools/system-baker/     MIT TOML → baked JSON tool
 validation/nyx-compare/ отдельный reference-only workspace
+validation/aero-compare/ отдельный aero reference workspace
 data/                   system and resource design targets
 docs/                   architecture, physics, roadmap and ADRs
 ```
@@ -117,7 +158,8 @@ docs/                   architecture, physics, roadmap and ADRs
 4. [`docs/05_ROADMAP.md`](docs/05_ROADMAP.md) — dependency-ordered roadmap.
 5. [`docs/07_AUTOPILOT.md`](docs/07_AUTOPILOT.md) — composable autopilot graphs.
 6. [`docs/08_NUMERICAL_VERTICAL_SLICE.md`](docs/08_NUMERICAL_VERTICAL_SLICE.md) — текущие формулы, тесты и точность.
-7. [`LICENSING.md`](LICENSING.md) — граница MIT engine / GPL game.
+7. [`docs/11_AERODYNAMICS.md`](docs/11_AERODYNAMICS.md) — aero contract, fidelity tiers, benchmarks и external references.
+8. [`LICENSING.md`](LICENSING.md) — граница MIT engine / GPL game.
 
 ## Roadmap
 

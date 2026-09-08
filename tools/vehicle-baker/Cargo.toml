@@ -1,5 +1,5 @@
 [package]
-name = "thessa-sim-core"
+name = "thessa-vehicle-baker"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,16 +9,6 @@ publish = false
 [dependencies]
 glam.workspace = true
 serde.workspace = true
-rayon.workspace = true
-
-[[bench]]
-name = "gravity"
-harness = false
-
-[[bench]]
-name = "aero"
-harness = false
-
-[[bench]]
-name = "flight"
-harness = false
+serde_json.workspace = true
+thessa-sim-core = { path = "../../crates/sim-core" }
+toml.workspace = true

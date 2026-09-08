@@ -74,3 +74,55 @@ Accessed: 2026-09-07 unless stated otherwise.
 
 - Bevy + WebGPU / wgpu backend overview: https://bevy.org/news/bevy-webgpu/
 - Bevy 0.19 release: https://bevy.org/news/bevy-0-19/
+
+## Aerodynamics and validation
+
+15. **JSBSim** — cross-platform C++ nonlinear 6-DoF flight-dynamics model with
+    configurable aircraft/rocket forces, moments, propulsion and atmosphere.
+    LGPL-2.1; validation-only for the MIT runtime.
+    https://github.com/JSBSim-Team/jsbsim
+    https://jsbsim-team.github.io/jsbsim-reference-manual/
+
+16. **SU2** — open-source multiphysics/CFD suite with compressible flow
+    solvers; used for offline single-point and sweep checks, not realtime
+    vehicle integration.
+    https://su2code.github.io/docs/
+    https://github.com/su2code/SU2
+
+17. **OpenVSP / VSPAERO** — NASA open-source parametric aircraft geometry and
+    VLM/panel aerodynamic analysis. Its official V&V examples include
+    subsonic wing and supersonic delta-wing studies.
+    https://github.com/OpenVSP/OpenVSP
+    https://github.com/OpenVSP/OpenVSP/blob/main/examples/scripts/python_scripts/report.md
+    https://github.com/OpenVSP/OpenVSP/blob/main/LICENSE
+
+18. **AVL** — Mark Drela/Harold Youngren vortex-lattice tool for thin lifting
+    surfaces, slender bodies, trim and stability derivatives; suitable as a
+    low-order subsonic baseline, not a separated-flow or hypersonic oracle.
+    https://web.mit.edu/drela/Public/web/avl/
+    https://web.mit.edu/drela/Public/web/avl/AVL_User_Primer.pdf
+
+19. **OpenRocket** — GPL model-rocket simulator with 6-DoF, staging, drag
+    curves and trajectory output. It is a validation executable/data source,
+    never a dependency of the MIT engine.
+    https://github.com/openrocket/openrocket
+    https://github.com/openrocket/openrocket/blob/unstable/LICENSE.TXT
+
+20. **RocketPy** — MIT rocket simulator with Barrowman surfaces and custom
+    coefficient curves, useful for rocket trajectory and coefficient-table
+    cross-checks.
+    https://github.com/RocketPy-Team/RocketPy
+    https://docs.rocketpy.org/en/latest/user/aerodynamics/surfaces.html
+    https://docs.rocketpy.org/en/latest/user/rocket/generic_surface.html
+
+21. **NASA Common Research Model** — public aircraft geometry and experimental
+    validation material for common CFD/VLM comparisons.
+    https://www.nasa.gov/common_research_model/
+    https://commonresearchmodel.larc.nasa.gov/home-2/
+
+22. **NASA Space Shuttle Operational Aerodynamic Data Book** — public report
+    containing the operational aerodynamic data basis for the Shuttle Vehicle;
+    used as a source for future lifting-body coefficient tables, not vendored
+    into the runtime.
+    https://ntrs.nasa.gov/search.jsp?R=19880072608
+    https://ntrs.nasa.gov/api/citations/19880072608/downloads/19880072608.pdf

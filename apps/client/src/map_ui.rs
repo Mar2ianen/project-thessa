@@ -65,8 +65,12 @@ pub(super) fn update_hud(
     clock: Res<SimulationClock>,
     runtime: Res<RuntimeEphemeris>,
     map: Res<MapState>,
-    mut query: Query<&mut Text, With<Hud>>,
+    pilot: Option<Res<PilotHudState>>,
+    mut query: Query<(&mut Text, &mut Visibility), With<Hud>>,
 ) {
+    let pilot_visible = pilot
+        .as_ref()
+        .is_some_and(|state| state.view_mode == ClientViewMode::Pilot);
     let focus = runtime
         .ephemeris
         .body(map.focus)
@@ -80,7 +84,7 @@ pub(super) fn update_hud(
     let (days, hours, minutes, seconds) = format_sim_time(clock.sim_seconds);
     let status = if clock.paused { "PAUSED" } else { "RUN" };
     let content = format!(
-        "THESSA  /  {}\nFOCUS {}  >  {}\nT+{:03}d {:02}h {:02}m {:02}s  {}  x{:.3}\n[LMB] select  [double] frame\n[RMB] orbit  [MMB] pan  [WHEEL] zoom\n[SPACE] pause  [UP/DOWN] rate  [0-5] scope\n[TAB] next  [ENTER] frame  [F6] pilot HUD preview",
+        "THESSA  /  {}\nFOCUS {}  >  {}\nT+{:03}d {:02}h {:02}m {:02}s  {}  x{:.3}\n[LMB] select  [double] frame\n[RMB] orbit  [MMB] pan  [WHEEL] zoom\n[SPACE] pause  [UP/DOWN] rate  [0-5] scope\n[TAB] next  [ENTER] frame  [F6/P] pilot HUD",
         map.mode.label(),
         focus,
         selected,
@@ -91,7 +95,15 @@ pub(super) fn update_hud(
         status,
         clock.multiplier,
     );
-    for mut text in &mut query {
+    for (mut text, mut visibility) in &mut query {
+        *visibility = if pilot_visible {
+            Visibility::Hidden
+        } else {
+            Visibility::Visible
+        };
+        if pilot_visible {
+            continue;
+        }
         **text = content.clone();
     }
 }

@@ -1,0 +1,34 @@
+# X-15 asset provenance
+
+## `assets/models/north_american_x-15_plane.glb`
+
+- Назначение: импортируемый visual mesh North American X-15, используемый
+  пилотским preview вместо процедурной заглушки.
+- Источник: Sketchfab, модель **North American X-15 Plane**, автор cmoreau:
+  https://sketchfab.com/3d-models/north-american-x-15-plane-bf491206ba844282949734b48b938c53
+- Лицензия: CC BY 4.0. Обязательная атрибуция находится рядом с бинарным
+  ассетом в `north_american_x-15_plane.LICENSE.txt`.
+- Импорт очищен от служебных camera/light/Cube-объектов исходного viewer-
+  архива; геометрия и текстуры модели сохранены.
+
+## `assets/textures/x15-inconel-albedo-v1.png`
+
+- Назначение: prototype albedo/metal surface texture для визуального X-15
+  flight-test ассета. Это визуальный ассет и не является runtime-данными,
+  физической моделью или утверждением о точной поверхности Inconel.
+- Источник: сгенерировано в Codex ImageGen в рамках текущего Project Thessa
+  сеанса; исходный файл:
+  `/home/chechulin/.codex/generated_images/01a07aef-2a4a-74d2-820d-de7da9de0f66/exec-187c768d-89c8-48e2-8a2b-f681236ab786.png`.
+- Внешние материалы: не использовались и не копировались. Ассет добавлен в
+  репозиторий без перезаписи существующего файла.
+- Формат: PNG, 1254×1254, 8-bit RGB.
+- SHA-256 исходника и импортированного файла:
+  `d3bfed7618acb656e9686ec7c1d18f29d3f556cafdf825fd639ed038f1481779`.
+- Лицензия: generated project asset, разрешён для использования и изменения
+  в Project Thessa; отдельная лицензия третьих лиц не заявляется. Не считать
+  этот prototype asset доказательством public-domain или иной внешней
+  лицензии.
+
+Текстурный prototype не используется для imported mesh: GLB содержит свои
+материалы и texture images. Запись сохранена для будущих процедурных
+вариантов поверхности.

@@ -64,15 +64,23 @@ const ORBIT_DIM_START_FACTOR: f32 = 0.75;
 const ORBIT_DIM_END_FACTOR: f32 = 1.50;
 const ORBIT_DIM_STRENGTH: f32 = 0.72;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw_orbits(
     clock: Res<SimulationClock>,
     runtime: Res<RuntimeEphemeris>,
     map: Res<MapState>,
+    pilot: Option<Res<PilotHudState>>,
     cameras: Query<(&OrbitCamera, &GlobalTransform), With<Camera3d>>,
     mut orbit_gizmos: Gizmos<OrbitGizmoConfigGroup>,
     mut selected_gizmos: Gizmos<SelectedOrbitGizmoConfigGroup>,
     mut ring_gizmos: Gizmos<NereidRingGizmoConfigGroup>,
 ) {
+    if pilot
+        .as_ref()
+        .is_some_and(|state| state.view_mode == ClientViewMode::Pilot)
+    {
+        return;
+    }
     let time = SimTime(clock.sim_seconds);
     let (camera_distance, camera_rotation) = cameras
         .iter()

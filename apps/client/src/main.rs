@@ -1,11 +1,11 @@
 mod map_ui;
 mod navigation;
 mod orbits;
-mod pilot_ui;
+mod pilot;
 use map_ui::*;
 use navigation::*;
 use orbits::*;
-use pilot_ui::*;
+use pilot::*;
 
 use std::f32::consts::TAU;
 
@@ -181,6 +181,9 @@ fn setup(
     let system_focus = ephemeris
         .body_id("nereid")
         .expect("the baked system must contain Nereid");
+    let flight_body = ephemeris
+        .body_id("thessa")
+        .expect("the baked system must contain the playable world");
     commands.insert_resource(MapState {
         mode: MapMode::Nereid,
         focus: system_focus,
@@ -334,6 +337,16 @@ fn setup(
         );
     }
 
+    spawn_pilot_preview(
+        &mut commands,
+        sphere_mesh.clone(),
+        visual_materials.thessa.clone(),
+        &asset_server,
+        ephemeris
+            .body(flight_body)
+            .expect("the playable world body must exist")
+            .radius_m,
+    );
     spawn_starfield(
         &mut commands,
         sphere_mesh,
@@ -341,7 +354,10 @@ fn setup(
         visual_materials.asterion_b.clone(),
         &mut materials,
     );
+    let flight_runtime = PilotFlightRuntime::new(&ephemeris, flight_body)
+        .expect("the playable X-15 flight model must initialize");
     commands.insert_resource(RuntimeEphemeris { ephemeris });
+    commands.insert_resource(flight_runtime);
     spawn_hud(&mut commands);
 }
 
@@ -450,7 +466,20 @@ fn spawn_starfield(
     }
 }
 
-fn advance_simulation(time: Res<Time>, mut clock: ResMut<SimulationClock>) {
+fn advance_simulation(
+    time: Res<Time>,
+    pilot: Option<Res<PilotHudState>>,
+    mut clock: ResMut<SimulationClock>,
+) {
+    if pilot
+        .as_ref()
+        .is_some_and(|state| state.view_mode == ClientViewMode::Pilot)
+    {
+        // Atmospheric flight uses real frame time in PilotFlightRuntime. The
+        // map clock must not advance by an unrelated x3600 while the player
+        // is flying, otherwise returning to Map causes a large time jump.
+        return;
+    }
     if !clock.paused {
         let frame_seconds = f64::from(time.delta_secs().min(0.1));
         clock.sim_seconds += frame_seconds * BASE_SIM_RATE_S_PER_REAL_SECOND * clock.multiplier;
@@ -472,10 +501,18 @@ fn update_celestial_visuals(
     clock: Res<SimulationClock>,
     runtime: Res<RuntimeEphemeris>,
     map: Res<MapState>,
+    pilot: Option<Res<PilotHudState>>,
     mut visuals: Query<(&mut Transform, &mut Visibility, &CelestialVisual)>,
 ) {
     let time = SimTime(clock.sim_seconds);
+    let pilot_active = pilot
+        .as_ref()
+        .is_some_and(|state| state.view_mode == ClientViewMode::Pilot);
     for (mut transform, mut visibility, visual) in &mut visuals {
+        if pilot_active {
+            *visibility = Visibility::Hidden;
+            continue;
+        }
         if let Some(position) = map_position(&runtime.ephemeris, &map, visual.id, time) {
             let body = runtime
                 .ephemeris

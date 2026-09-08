@@ -66,6 +66,12 @@ RigidClusterState {
 
 Frame transform — first-class API, не разбросанные `position -= planet_pos` по коду.
 
+Для атмосферного полёта `AtmosphereConfig` выдаёт детерминированные
+`temperature/pressure/density/speed_of_sound/viscosity` по высоте; его sample
+конвертируется в `AeroEnvironment` в vehicle body frame. Это позволяет
+считать один и тот же aircraft state на sea level, в стратосфере и в
+сверхзвуковом flight corridor без ручного пересчёта `Mach`.
+
 ---
 
 ## 3.4. Гравитация
@@ -281,6 +287,16 @@ Baseline tables/functions должны допускать зависимости
 
 Нужна post-stall модель и transonic/supersonic behavior. Именно поэтому готовый `avian_fdm` нельзя принять как full solution v0.1: его текущий documented scope исключает compressibility/supersonic и aeroelasticity.
 
+Первый realtime slice реализован в `thessa-sim-core::PanelAeroModel`: локальные
+панели, `omega x r`, wind, dynamic pressure, Reynolds diagnostic, smooth
+post-stall, transonic drag rise, supersonic trend и optional Mach/AoA
+coefficient table. Он подключён к `evaluate_flight_forces` и
+`integrate_rigid_body_step`/`integrate_rigid_body_duration`: translation,
+quaternion attitude, gravity, rotating atmosphere и dynamic p/q/r damping
+считаются в одном детерминированном 6-DoF state path. Полный контракт и
+fidelity tiers зафиксированы в `docs/11_AERODYNAMICS.md`; внешние solvers
+остаются validation-only.
+
 ### Occlusion / wake
 
 Не CFD. Baseline:
@@ -291,6 +307,14 @@ Baseline tables/functions должны допускать зависимости
 - optional higher-fidelity panel interaction later.
 
 Это позволяет не давать full aerodynamic force поверхности, закрытой корпусом.
+
+Для finite-planform surfaces зона хранит не только площадь и chord, но также
+фактический span, effective aspect ratio, sweep, body-interference factor и
+center-of-pressure point. `PanelAeroModel` применяет Diederich correction к
+2-D compressible lift slope перед расчётом силы; момент берётся относительно
+center of pressure, а не автоматически относительно начала зоны. Это особенно
+важно для низкоaspectных ракетных плавников: применение одного 2-D slope к
+каждой панели завышает `CL_alpha` примерно вдвое.
 
 ---
 
@@ -307,7 +331,9 @@ Baseline tables/functions должны допускать зависимости
 - wind/rotation;
 - weather field optional.
 
-Atmosphere вращается с телом, если design не задаёт другое. Поэтому relative air velocity не равна inertial velocity.
+Atmosphere вращается с телом, если design не задаёт другое. В runtime это
+учитывается как `v_air = v_wind + ω_body × r_body`; поэтому relative air
+velocity не равна inertial velocity.
 
 ### Weather fidelity
 

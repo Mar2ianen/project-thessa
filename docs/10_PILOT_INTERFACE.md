@@ -256,9 +256,33 @@ Warnings derived from physical state:
 Color is secondary. Text/icon/shape must carry semantics so UI stays usable
 without relying only on color perception.
 
+## 10.10. Current vertical slice
+
+The client currently exposes the PFD with the KSP-inspired default layout:
+
+- primary speed and altitude tapes with moving display markers;
+- a world-space preview scene with a compact X-15-like flight-test silhouette,
+  three-engine plume, cockpit glass, and a lowered textured
+  planet horizon so the PFD reads as a flight view rather than a system map;
+- surface/air/orbital/target speed frames and datum/AGL altitude toggle;
+- circular attitude instrument with pitch ladder, pitch labels, a visual
+  heading-cardinal marker, roll scale, prograde/retrograde/target cues, a
+  separated flight-path marker, and the mouse aim reticle;
+- propulsion, target/orbit, control-mode, and flight-status cards;
+- F6/P toggles map and pilot views, M/Shift+M changes control mode,
+  V changes speed frame, B changes altitude frame, and the Pilot camera uses
+  RMB look, MMB pan, wheel zoom and Home reset.
+
+The current pilot has a client-local X-15 flight-test adapter. Its state is
+advanced by the shared `sim-core` 6-DoF rigid-body integrator using the X-15
+panel asset, Thessa gravity field and Thessa atmosphere. Fuel is intentionally
+infinite in this vertical slice; engine staging, throttle, SAS/RCS and control
+surface commands are live. Terrain collision, landing gear forces and network
+authority are still outside this slice.
+
 ---
 
-## 10.10. Data flow
+## 10.11. Data flow
 
 Target architecture:
 
@@ -288,19 +312,35 @@ state IDs and replication semantics are fixed.
 
 ---
 
-## 10.11. Current implementation scaffold
+## 10.12. Current implementation scaffold
 
-`apps/client/src/pilot_ui.rs` contains a deliberately small PFD shell:
+`apps/client/src/pilot.rs` contains the first functional PFD shell:
 
-- `PilotTelemetrySnapshot` — client read model in SI;
-- `PilotHudState` — adapter/resource boundary;
-- `PilotHudPlugin` — Bevy UI shell;
-- `F6` — shows/hides the layout preview before a controllable vehicle exists;
-- missing telemetry renders as `--`; preview does **not** create a fake craft or
-  synthetic physics.
+- `FlightUiState` — client-side derived read model in SI, with position,
+  attitude, independent speed/altitude frames, aero, orbit, target,
+  propulsion and warning fields;
+- `PilotHudState` — view/control state and Mouse Aim command hand-off;
+- `PilotHudPlugin` — Bevy UI and input boundary;
+- `F6` or `P` — switches between map/debug and Pilot view;
+- `M` / `Shift+M` — cycles control modes forward/backward;
+- `V` — cycles the primary speed reference (`surface`, `air`, `orbital`,
+  `target`); `B` — toggles datum/AGL;
+- `W/S` pitch, `A/D` yaw, `Q/E` roll;
+- `Shift/Ctrl` throttle, `X` cutoff, `Z` full throttle, `Space` stage/engine;
+- `T` SAS, `R` RCS, `G` landing gear;
+- the current X-15 state is live telemetry; unavailable values still render as
+  `--` rather than being replaced by fabricated flight data.
 
-The current textual panel exists only to freeze names/semantics and permit UI
-iteration. It should later be decomposed into:
+Stage 1 now renders one compact navball, speed and altitude panels, vehicle and
+flight-context panels, a status block, and a mouse reticle. Map HUD and orbit
+gizmos are hidden only while Pilot is active and return on `F6`. The navball is
+an attitude-display shell with a shaded sphere, pitch ladder and labels, roll
+scale, a live cardinal heading marker, and cue stubs; numeric attitude values
+are not repeated in the altitude or propulsion cards, and it does not duplicate
+a second large artificial horizon.
+
+The remaining data-driven layers can later replace the readout contents without
+changing the UI hierarchy:
 
 ```text
 PilotHudRoot
@@ -320,7 +360,7 @@ PilotHudRoot
 
 ---
 
-## 10.12. Implementation order
+## 10.13. Implementation order
 
 ### P0 — contract / skeleton
 
@@ -330,6 +370,9 @@ PilotHudRoot
 - independent attitude/velocity references.
 
 ### P1 — first controllable rigid craft
+
+Completed for the X-15 flight-test adapter; the next vehicle should use the
+same asset boundary rather than a new pilot-only physics path.
 
 - local tangent frame;
 - attitude quaternion -> indicator;
@@ -341,6 +384,9 @@ PilotHudRoot
 - map <-> pilot view transition.
 
 ### P2 — terrain/atmosphere
+
+Atmosphere, air-relative velocity and Mach/q/AoA are now connected for the
+X-15 slice; terrain/radar and contact dynamics remain pending.
 
 - AGL ray/terrain solution;
 - air-relative velocity;
@@ -366,7 +412,7 @@ PilotHudRoot
 
 ---
 
-## 10.13. Non-goals for the first HUD
+## 10.14. Non-goals for the first HUD
 
 Do not block M1 on:
 

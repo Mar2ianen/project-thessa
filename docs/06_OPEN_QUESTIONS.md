@@ -1,6 +1,7 @@
 # 06 — Open questions
 
-Пункты здесь **специально не зафиксированы** в v0.1.
+Пункты здесь **специально не зафиксированы** в v0.1. Уже принятые решения
+сюда не возвращаются: за них отвечают профильные docs/ADR.
 
 ## Мир / lore
 
@@ -18,9 +19,13 @@
 - Nix tidal `Q/k2` и lifetime;
 - final Cinder orbit;
 - Nereid obliquity/ring tilt;
-- atmospheric scale profiles;
+- atmospheric scale profiles/composition beyond the current Thessa surface target;
 - J2/Jn coefficients каждого meaningful body;
 - weather/climate fields.
+
+Thessa design target уже зафиксирован в `data/system.toml`: `R=3200 km`,
+`g≈0.500 g`, `p0=1.20 bar`. Это не open question, хотя vertical atmosphere
+profile и final composition ещё открыты.
 
 ## Gameplay
 
@@ -47,9 +52,14 @@
 
 ## Physics
 
-- exact aero panel method;
-- transonic model;
-- wake model;
+Tier-A panel method и текущая transonic/supersonic reduced-order baseline уже
+описаны в `docs/11_AERODYNAMICS.md`; они больше не считаются неизвестным
+архитектурным выбором. Открыты следующие уровни fidelity:
+
+- wake/occlusion model и способ компиляции geometry → exposure;
+- граница whole-vehicle coefficient tables vs per-zone/tabulated surfaces;
+- дополнительные оси Tier-B tables: beta, control deflection, Reynolds и
+  dynamic derivatives;
 - structural solver order;
 - reduced-order aeroelasticity method;
 - slosh fidelity;

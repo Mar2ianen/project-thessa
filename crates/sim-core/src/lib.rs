@@ -27,7 +27,8 @@ pub use atmosphere::{AtmosphereConfig, AtmosphereError, AtmosphereSample};
 pub use ephemeris::{BakedBody, BakedEphemeris, BodyId, BodyState, EphemerisError, KeplerOrbit};
 pub use flight::{
     FlightError, FlightForces, FlightStepInput, RigidBodyProperties, RigidBodyState,
-    evaluate_flight_forces, integrate_rigid_body_duration, integrate_rigid_body_step,
+    evaluate_flight_forces, integrate_rigid_body_duration, integrate_rigid_body_duration_sampled,
+    integrate_rigid_body_step,
 };
 pub use frames::{ReferenceFrame, StateVector};
 pub use gravity::{GravityError, GravityField};

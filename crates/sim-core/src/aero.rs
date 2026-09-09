@@ -872,7 +872,10 @@ impl PanelAeroModel {
             let side_axis = lift_axis.cross(chord_axis).normalize();
             let velocity_direction = local_velocity / local_speed;
             let forward = local_velocity.dot(chord_axis);
-            let alpha = local_velocity.dot(lift_axis).atan2(forward);
+            // Conventional vehicle angle of attack is measured from the
+            // incoming flow: a nose-up attitude has a negative body-frame
+            // vertical velocity and therefore a positive alpha.
+            let alpha = (-local_velocity.dot(lift_axis)).atan2(forward);
             let beta = local_velocity
                 .dot(side_axis)
                 .atan2(forward.abs().max(EPS_SPEED_MPS));

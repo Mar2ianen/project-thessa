@@ -311,7 +311,7 @@ fn aero_test_case(speed_mps: f64, angle_of_attack_deg: f64) -> AeroCase {
     let panel = AeroPanel::flat_plate(DVec3::ZERO, 10.0, 2.0).expect("valid test panel");
     let alpha = angle_of_attack_deg.to_radians();
     let state = AeroState::new(
-        DVec3::new(speed_mps, 0.0, speed_mps * alpha.tan()),
+        DVec3::new(speed_mps, 0.0, -speed_mps * alpha.tan()),
         DVec3::ZERO,
     );
     AeroCase::new(
@@ -466,7 +466,7 @@ fn aero_signed_stabilizer_lift_restores_positive_alpha() {
         .expect("valid stabilizer panel");
     let case = AeroCase::new(
         AeroState::new(
-            DVec3::new(100.0, 0.0, 100.0 * 5.0_f64.to_radians().tan()),
+            DVec3::new(100.0, 0.0, -100.0 * 5.0_f64.to_radians().tan()),
             DVec3::ZERO,
         ),
         AeroEnvironment::standard_sea_level(),
@@ -667,7 +667,7 @@ fn aero_finite_planform_and_center_of_pressure_are_geometry_driven() {
                 DVec3::new(
                     0.95 * environment.speed_of_sound_mps * alpha_rad.cos(),
                     0.0,
-                    0.95 * environment.speed_of_sound_mps * alpha_rad.sin(),
+                    -0.95 * environment.speed_of_sound_mps * alpha_rad.sin(),
                 ),
                 DVec3::ZERO,
             ),
@@ -808,7 +808,7 @@ fn aero_swept_surface_uses_normal_mach_for_supersonic_branch() {
                 DVec3::new(
                     2.0 * environment.speed_of_sound_mps * alpha_rad.cos(),
                     0.0,
-                    2.0 * environment.speed_of_sound_mps * alpha_rad.sin(),
+                    -2.0 * environment.speed_of_sound_mps * alpha_rad.sin(),
                 ),
                 DVec3::ZERO,
             ),

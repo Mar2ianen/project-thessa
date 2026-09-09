@@ -62,6 +62,13 @@ Re      = rho * |v_local| * chord / dynamic_viscosity
 allocation; `evaluate_detailed` дополнительно отдаёт разбор по панелям для
 debug overlay, telemetry и настройки модели.
 
+Знак `alpha` единый для runtime и coefficient tables: `alpha > 0` означает,
+что нос аппарата выше набегающего потока (в body frame поток имеет компоненту
+`-lift_axis`). Поэтому симметричная несущая поверхность с положительным
+`lift_coefficient_sign` создаёт положительную подъёмную силу по своему
+`lift_axis`; инвертированный стабилизатор задаётся отдельным знаком, а не
+переворачивает общую конвенцию.
+
 У панели отдельно задаются фактический `span_m`, эффективный aspect ratio,
 sweep, `thickness_to_chord_ratio` и point приложения силы
 (`center_of_pressure_body_m`). Для прямоугольной
@@ -77,7 +84,8 @@ chord.
 Аналитическая модель намеренно компактная, но не статическая «drag-only»
 заглушка:
 
-- локальный `AoA` и sideslip по каждой панели;
+- локальный `AoA` (положительный нос вверх относительно потока) и sideslip по
+  каждой панели;
 - `omega × r`, wind и различная скорость потока на удалённых панелях;
 - линейный lift slope в subsonic области с Prandtl–Glauert-like ограничением;
 - finite-planform lift slope через Diederich correlation с явным

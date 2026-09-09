@@ -1,5 +1,11 @@
 use super::*;
 
+use std::{
+    fs::{File, create_dir_all},
+    io::{BufWriter, Write},
+    path::Path,
+};
+
 use bevy::{
     asset::RenderAssetUsages,
     image::Image,
@@ -25,6 +31,7 @@ const HUD_AMBER: Color = Color::srgb(0.98, 0.72, 0.26);
 // system map's readability curve, this scene keeps the body's authored radius
 // and the imported X-15 mesh in the same unit system.
 const PILOT_SURFACE_CLEARANCE_M: f64 = 5.0;
+const PILOT_START_ALTITUDE_M: f64 = 500.0;
 const PILOT_CAMERA_DEFAULT_DISTANCE_M: f32 = 32.0;
 const PILOT_CAMERA_MIN_DISTANCE_M: f32 = 8.0;
 const PILOT_CAMERA_MAX_DISTANCE_M: f32 = 180.0;
@@ -148,6 +155,108 @@ struct FlightEnvironment {
     density_kg_m3: Option<f64>,
 }
 
+/// Low-overhead CSV recorder for reproducing bad live-flight states outside
+/// the renderer. It is enabled only by the executable; unit tests remain
+/// side-effect free.
+struct FlightTraceWriter {
+    writer: BufWriter<File>,
+    samples_since_flush: u32,
+}
+
+impl FlightTraceWriter {
+    fn create(path: &Path) -> Option<Self> {
+        if let Some(parent) = path.parent() {
+            create_dir_all(parent).ok()?;
+        }
+        let file = File::create(path).ok()?;
+        let mut writer = BufWriter::new(file);
+        writeln!(
+            writer,
+            "t_s,altitude_m,relative_speed_mps,vertical_speed_mps,mach,aoa_deg,q_pa,\
+             pos_x_m,pos_y_m,pos_z_m,vel_x_mps,vel_y_mps,vel_z_mps,\
+             quat_x,quat_y,quat_z,quat_w,omega_x_rps,omega_y_rps,omega_z_rps,\
+             pitch_cmd,yaw_cmd,roll_cmd,throttle,engine,sas,rcs,\
+             force_x_n,force_y_n,force_z_n,moment_x_nm,moment_y_nm,moment_z_nm,\
+             accel_x_mps2,accel_y_mps2,accel_z_mps2"
+        )
+        .ok()?;
+        Some(Self {
+            writer,
+            samples_since_flush: 0,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record(
+        &mut self,
+        time_s: f64,
+        altitude_m: f64,
+        relative_velocity_inertial_mps: DVec3,
+        radial_up: DVec3,
+        air_velocity_body_mps: DVec3,
+        state: RigidBodyState,
+        controls: DVec3,
+        throttle: f64,
+        engine_active: bool,
+        sas_enabled: bool,
+        rcs_enabled: bool,
+        forces: &FlightForces,
+    ) {
+        let aoa_deg = conventional_angle_of_attack_deg(air_velocity_body_mps);
+        let vertical_speed_mps = relative_velocity_inertial_mps.dot(radial_up);
+        let q = forces.aero.dynamic_pressure_pa;
+        let p = state.position_inertial_m;
+        let v = state.velocity_inertial_mps;
+        let qrot = state.orientation_body_to_inertial;
+        let omega = state.angular_velocity_body_rps;
+        let force = forces.total_force_body_n;
+        let moment = forces.total_moment_body_nm;
+        let accel = forces.acceleration_inertial_mps2;
+        let _ = writeln!(
+            self.writer,
+            "{time_s:.6},{altitude_m:.6},{:.6},{vertical_speed_mps:.6},{:.6},{aoa_deg:.6},{q:.6},\
+             {:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.9},{:.9},{:.9},{:.9},\
+             {:.9},{:.9},{:.9},{:.6},{:.6},{:.6},{throttle:.6},{},{},{},\
+             {:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
+            relative_velocity_inertial_mps.length(),
+            forces.aero.mach,
+            p.x,
+            p.y,
+            p.z,
+            v.x,
+            v.y,
+            v.z,
+            qrot.x,
+            qrot.y,
+            qrot.z,
+            qrot.w,
+            omega.x,
+            omega.y,
+            omega.z,
+            controls.x,
+            controls.y,
+            controls.z,
+            engine_active as u8,
+            sas_enabled as u8,
+            rcs_enabled as u8,
+            force.x,
+            force.y,
+            force.z,
+            moment.x,
+            moment.y,
+            moment.z,
+            accel.x,
+            accel.y,
+            accel.z,
+        );
+        self.samples_since_flush += 1;
+        if self.samples_since_flush >= 30 {
+            let _ = self.writer.flush();
+            self.samples_since_flush = 0;
+        }
+    }
+}
+
 /// Live, client-owned flight model for the first playable vehicle.
 ///
 /// The authoritative equations stay in `thessa-sim-core`; this resource only
@@ -176,6 +285,7 @@ pub(super) struct PilotFlightRuntime {
     render_orientation: Quat,
     last_gravity_acceleration_inertial_mps2: DVec3,
     last_forces: Option<FlightForces>,
+    trace: Option<FlightTraceWriter>,
 }
 
 impl PilotFlightRuntime {
@@ -191,23 +301,20 @@ impl PilotFlightRuntime {
             .map_err(|error| format!("Thessa atmosphere is invalid: {error}"))?;
         atmosphere.body_rotation_rad_s = DVec3::new(0.0, 0.0, TAU as f64 / (80.0 * 3_600.0));
 
-        // Start on the playable body's spherical surface, a few metres above
-        // the datum so the first frame is not an underground spawn. Give the
-        // X-15 a short, already-airborne test start: the engine and controls
-        // are live from the first frame, while the spherical datum remains the
-        // collision reference for a genuine surface flight test.
-        let initial_relative_position = DVec3::Z * (body.radius_m + PILOT_SURFACE_CLEARANCE_M);
+        // Start just above the playable body's spherical datum. Give the X-15
+        // a small nose-up launch attitude so its live engine start has a
+        // physically meaningful positive angle of attack.
+        let initial_relative_position = DVec3::Z * (body.radius_m + PILOT_START_ALTITUDE_M);
         let initial_position_inertial_m = body_state.position_inertial + initial_relative_position;
-        let orientation_body_to_inertial = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2);
+        let orientation_body_to_inertial = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2)
+            * DQuat::from_rotation_y(-8.0_f64.to_radians());
         let state = RigidBodyState::new(
             initial_position_inertial_m,
             // The ephemeris velocity is the planet's barycentric translation.
             // Add only the local tangential launch velocity here. A small
-            // upward component gives the powered test start enough
-            // lift to leave the spherical datum. The old 95 m/s component
-            // spawned the X-15 at roughly 28 degrees angle of attack and
-            // immediately excited an unrecoverable pitch.
-            body_state.velocity_inertial + DVec3::Y * 180.0 + DVec3::Z * 12.0,
+            // launch component gives the powered test start enough clearance
+            // without hiding the aerodynamic response behind a large impulse.
+            body_state.velocity_inertial + DVec3::Y * 180.0 - DVec3::Z * 2.0,
             orientation_body_to_inertial,
             DVec3::ZERO,
         )
@@ -255,7 +362,13 @@ impl PilotFlightRuntime {
             render_orientation: render_orientation(orientation_body_to_inertial),
             last_gravity_acceleration_inertial_mps2: DVec3::ZERO,
             last_forces: None,
+            trace: None,
         })
+    }
+
+    pub(super) fn with_trace(mut self, path: &Path) -> Self {
+        self.trace = FlightTraceWriter::create(path);
+        self
     }
 
     fn command_controls(&mut self, pitch: f64, yaw: f64, roll: f64) {
@@ -263,7 +376,12 @@ impl PilotFlightRuntime {
         // preserve roll authority without assigning a panel to two channels.
         let _ = self
             .vehicle
-            .apply_control_inputs(&[pitch, yaw, roll, -roll]);
+            // The vertical tail's positive lift axis produces a negative yaw
+            // moment for positive deflection at the aft arm. Invert only the
+            // rudder command so A/D and the body +Z yaw torque share KSP's
+            // left/right convention; pitch and roll keep their established
+            // mappings.
+            .apply_control_inputs(&[pitch, -yaw, roll, -roll]);
     }
 
     fn thrust_n(&self) -> f64 {
@@ -371,9 +489,13 @@ fn pilot_sas_moment(state: RigidBodyState, target_orientation: DQuat, radial_up:
     let damping = DVec3::new(250_000.0, 900_000.0, 700_000.0);
     let attitude_gain = DVec3::new(600_000.0, 1_500_000.0, 1_000_000.0);
     let horizon_gain = DVec3::splat(50_000.0);
-    -state.angular_velocity_body_rps * damping
+    let requested_moment = -state.angular_velocity_body_rps * damping
         + target_error_body * attitude_gain
-        + local_up_error * horizon_gain
+        + local_up_error * horizon_gain;
+    // SAS is a bounded actuator in KSP as well. Without this limit a modest
+    // accumulated target error turns into an angular impulse large enough to
+    // push the X-15 through stall before the damping term can react.
+    requested_moment.clamp_length(0.0, 180_000.0)
 }
 
 /// Keep the zero-input X-15 preview near a small positive-alpha trim point.
@@ -381,8 +503,8 @@ fn pilot_sas_moment(state: RigidBodyState, target_orientation: DQuat, radial_up:
 /// This is deliberately a bounded moment assist, not an orientation write:
 /// the rigid-body integrator still resolves the resulting attitude and the
 /// panel aero model remains authoritative.  Without this trim term the
-/// temporary five-metre spherical datum can let a stalled craft fall through
-/// the surface and build a large pitch rate before the contact correction.
+/// spherical datum can let a stalled craft fall through the surface and build
+/// a large pitch rate before the contact correction.
 fn pilot_aero_trim_moment(air_velocity_body: DVec3) -> DVec3 {
     let forward_speed = air_velocity_body.x;
     let speed = air_velocity_body.length();
@@ -390,10 +512,10 @@ fn pilot_aero_trim_moment(air_velocity_body: DVec3) -> DVec3 {
         return DVec3::ZERO;
     }
 
-    let angle_of_attack = air_velocity_body.z.atan2(forward_speed.max(1.0));
+    let angle_of_attack = (-air_velocity_body.z).atan2(forward_speed.max(1.0));
     let sideslip = air_velocity_body.y.atan2(forward_speed.abs().max(1.0));
     let trim_angle = 2.0_f64.to_radians();
-    let pitch_error = (angle_of_attack - trim_angle).clamp(-0.45, 0.45);
+    let pitch_error = (trim_angle - angle_of_attack).clamp(-0.45, 0.45);
     let yaw_error = sideslip.clamp(-0.35, 0.35);
     DVec3::new(0.0, -pitch_error * 1_800_000.0, yaw_error * 1_200_000.0)
 }
@@ -675,12 +797,8 @@ pub(super) fn spawn_pilot_preview(
                 PilotPlanetVisual,
                 Mesh3d(sphere_mesh.clone()),
                 MeshMaterial3d(planet_material),
-                Transform::from_xyz(
-                    0.0,
-                    -(planet_radius + PILOT_SURFACE_CLEARANCE_M as f32),
-                    0.0,
-                )
-                .with_scale(Vec3::splat(planet_radius)),
+                Transform::from_xyz(0.0, -(planet_radius + PILOT_START_ALTITUDE_M as f32), 0.0)
+                    .with_scale(Vec3::splat(planet_radius)),
                 Name::new(format!("PFD Thessa planet R={planet_radius_m:.0} m")),
             ));
             preview
@@ -877,7 +995,7 @@ fn update_pilot_preview(
             // or move with the camera and hid scale errors.
             transform.translation = Vec3::new(
                 0.0,
-                -(runtime.planet_radius_m as f32 + PILOT_SURFACE_CLEARANCE_M as f32),
+                -(runtime.planet_radius_m as f32 + PILOT_START_ALTITUDE_M as f32),
                 0.0,
             );
         }
@@ -1647,6 +1765,29 @@ fn simulate_pilot_flight(
         return;
     }
 
+    let trace_time_s = runtime.flight_time_s;
+    let trace_state = runtime.state;
+    let trace_controls = runtime.control_input;
+    let trace_throttle = runtime.throttle;
+    let trace_engine_active = runtime.engine_active;
+    let trace_sas_enabled = runtime.sas_enabled;
+    let trace_rcs_enabled = runtime.rcs_enabled;
+    if let Some(trace) = runtime.trace.as_mut() {
+        trace.record(
+            trace_time_s,
+            altitude_m,
+            relative_velocity_inertial,
+            radial_up,
+            air_velocity_body,
+            trace_state,
+            trace_controls,
+            trace_throttle,
+            trace_engine_active,
+            trace_sas_enabled,
+            trace_rcs_enabled,
+            &forces,
+        );
+    }
     runtime.state = next_state;
     runtime.last_forces = Some(forces);
     runtime.flight_time_s += frame_dt;
@@ -2556,7 +2697,7 @@ mod tests {
         let degrees = |radians: f64| radians.to_degrees();
         assert!((degrees(panels[2].control_deflection_rad) - 12.5).abs() < 1.0e-10);
         assert!((degrees(panels[3].control_deflection_rad) - 12.5).abs() < 1.0e-10);
-        assert!((degrees(panels[4].control_deflection_rad) + 5.5).abs() < 1.0e-10);
+        assert!((degrees(panels[4].control_deflection_rad) - 5.5).abs() < 1.0e-10);
         assert!((degrees(panels[0].control_deflection_rad) + 13.5).abs() < 1.0e-10);
         assert!((degrees(panels[1].control_deflection_rad) - 13.5).abs() < 1.0e-10);
     }
@@ -2577,6 +2718,77 @@ mod tests {
         assert_eq!(format_altitude_unit(Some(25.0)), "m");
         assert_eq!(format_altitude_number(Some(1_300.0)), "1.3");
         assert_eq!(format_altitude_unit(Some(1_300.0)), "km");
+    }
+
+    #[test]
+    fn x15_initial_state_is_relative_to_thessa_not_barycentric() {
+        let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml"))
+            .expect("checked-in system config parses");
+        let ephemeris = config.bake().expect("checked-in system bakes");
+        let reference_body = ephemeris.body_id("thessa").expect("playable body exists");
+        let flight =
+            PilotFlightRuntime::new(&ephemeris, reference_body).expect("X-15 runtime initializes");
+        let body_state = ephemeris
+            .body_state(reference_body, SimTime::EPOCH)
+            .expect("body state evaluates");
+        let relative_velocity = flight.state.velocity_inertial_mps - body_state.velocity_inertial;
+        assert!(
+            (relative_velocity.length() - (180.0_f64.powi(2) + 2.0_f64.powi(2)).sqrt()).abs()
+                < 1.0e-9
+        );
+    }
+
+    #[test]
+    fn x15_initial_force_sample_is_reported_for_flight_audit() {
+        let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml"))
+            .expect("checked-in system config parses");
+        let ephemeris = config.bake().expect("checked-in system bakes");
+        let reference_body = ephemeris.body_id("thessa").expect("playable body exists");
+        let flight =
+            PilotFlightRuntime::new(&ephemeris, reference_body).expect("X-15 runtime initializes");
+        let body = ephemeris.body(reference_body).expect("body exists");
+        let body_state = ephemeris
+            .body_state(reference_body, SimTime::EPOCH)
+            .expect("body state evaluates");
+        let relative = flight.state.position_inertial_m - body_state.position_inertial;
+        let radial_up = relative.normalize();
+        let orientation_inverse = flight.state.orientation_body_to_inertial.inverse();
+        let position_body = orientation_inverse * relative;
+        let relative_velocity_inertial =
+            flight.state.velocity_inertial_mps - body_state.velocity_inertial;
+        let air_velocity_body = orientation_inverse * relative_velocity_inertial
+            - flight.atmosphere.body_rotation_rad_s.cross(position_body);
+        let gravity = GravityField::from_ephemeris(&ephemeris)
+            .acceleration(flight.state.position_inertial_m, SimTime::EPOCH)
+            .expect("gravity evaluates");
+        let sas_moment = pilot_sas_moment(flight.state, flight.sas_target_orientation, radial_up);
+        let trim_moment = pilot_aero_trim_moment(air_velocity_body);
+        let (next, forces) = integrate_rigid_body_step(
+            &flight.aero_model,
+            &flight.vehicle.aero_geometry,
+            flight.atmosphere,
+            flight.state,
+            flight.vehicle.mass_properties,
+            FlightStepInput {
+                altitude_m: PILOT_START_ALTITUDE_M,
+                gravity_acceleration_inertial_mps2: gravity,
+                position_body_m: position_body,
+                wind_velocity_body_mps: orientation_inverse * body_state.velocity_inertial,
+                extra_force_body_n: DVec3::X * flight.thrust_n(),
+                extra_moment_body_nm: sas_moment + trim_moment,
+            },
+            0.02,
+        )
+        .expect("initial X-15 step evaluates");
+        println!(
+            "initial x15: v_rel={:.3} m/s aero={:?} force_body={:?} accel={:?} next_alt={:.3} m",
+            air_velocity_body.length(),
+            forces.aero,
+            forces.total_force_body_n,
+            forces.acceleration_inertial_mps2,
+            (next.position_inertial_m - body_state.position_inertial).length() - body.radius_m,
+        );
+        assert!(forces.acceleration_inertial_mps2.is_finite());
     }
 
     #[test]
@@ -2661,7 +2873,9 @@ mod tests {
         let mut flight =
             PilotFlightRuntime::new(&ephemeris, reference_body).expect("X-15 runtime initializes");
         let body = ephemeris.body(reference_body).expect("body exists");
-        for step in 0..1_500 {
+        let mut minimum_altitude_m = f64::INFINITY;
+        let mut maximum_abs_aoa_deg: f64 = 0.0;
+        for step in 0..9_000 {
             let body_state = ephemeris
                 .body_state(reference_body, SimTime(flight.flight_time_s))
                 .expect("body state evaluates");
@@ -2727,6 +2941,16 @@ mod tests {
             } else {
                 flight.state = state;
             }
+            let measured_altitude_m = (flight.state.position_inertial_m
+                - ephemeris
+                    .body_state(reference_body, SimTime(flight.flight_time_s + 0.02))
+                    .expect("body state evaluates")
+                    .position_inertial)
+                .length()
+                - body.radius_m;
+            minimum_altitude_m = minimum_altitude_m.min(measured_altitude_m);
+            maximum_abs_aoa_deg =
+                maximum_abs_aoa_deg.max(conventional_angle_of_attack_deg(air_velocity_body).abs());
             assert!(
                 flight.state.angular_velocity_body_rps.length() < 0.35,
                 "X-15 uncommanded attitude rate exceeded 0.35 rad/s at step {step}: {:?}",
@@ -2734,5 +2958,13 @@ mod tests {
             );
             flight.flight_time_s += 0.02;
         }
+        assert!(
+            minimum_altitude_m > 100.0,
+            "X-15 zero-input profile fell too low: {minimum_altitude_m:.1} m"
+        );
+        assert!(
+            maximum_abs_aoa_deg < 30.0,
+            "X-15 zero-input profile reached excessive AoA: {maximum_abs_aoa_deg:.1} deg"
+        );
     }
 }

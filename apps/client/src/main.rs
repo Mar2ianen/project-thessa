@@ -7,7 +7,7 @@ use navigation::*;
 use orbits::*;
 use pilot::*;
 
-use std::f32::consts::TAU;
+use std::{f32::consts::TAU, path::Path};
 
 use bevy::{
     asset::AssetPlugin,
@@ -355,7 +355,8 @@ fn setup(
         &mut materials,
     );
     let flight_runtime = PilotFlightRuntime::new(&ephemeris, flight_body)
-        .expect("the playable X-15 flight model must initialize");
+        .expect("the playable X-15 flight model must initialize")
+        .with_trace(Path::new("target/flight-traces/pilot-flight.csv"));
     commands.insert_resource(RuntimeEphemeris { ephemeris });
     commands.insert_resource(flight_runtime);
     spawn_hud(&mut commands);

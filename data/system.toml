@@ -126,10 +126,11 @@ semi_major_axis_km = 632354.0
 period_hours_design = 80.0
 eccentricity = 0.003
 inclination_deg = 0.10
-mass_earth = 0.130
+# With R=3200 km this mass gives 0.500 g to design precision.
+mass_earth = 0.1259652
 radius_km = 3200.0
 tidal_lock = true
-atmosphere_bar = 1.08
+atmosphere_bar = 1.20
 atmosphere = "N2/O2/Ar/CO2 provisional"
 resources = ["iron_ore", "copper_ore", "bulk_silicates", "quartz", "water_ice", "carbon_feedstock", "sulfur"]
 

@@ -356,7 +356,14 @@ fn setup(
     );
     let flight_runtime = PilotFlightRuntime::new(&ephemeris, flight_body)
         .expect("the playable X-15 flight model must initialize")
-        .with_trace(Path::new("target/flight-traces/pilot-flight.csv"));
+        .with_trace(Path::new(&format!(
+            "target/flight-traces/pilot-flight-{}-{}.csv",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            std::process::id(),
+        )));
     commands.insert_resource(RuntimeEphemeris { ephemeris });
     commands.insert_resource(flight_runtime);
     spawn_hud(&mut commands);

@@ -111,10 +111,9 @@ pub struct X15StarterProfile {
 impl X15StarterProfile {
     pub fn new() -> Result<Self, VehicleError> {
         let wing_left = AeroPanel::new(
-            // The main lifting center is just forward of the body reference
-            // point. This gives the starter profile a small positive static
-            // margin against the restoring inverted tail, instead of the
-            // divergent pitch seen when both were behind the reference CG.
+            // Main wing ahead of the CG, conventional positive-lift-slope
+            // tail aft. Positive alpha must lift the tail to lower the nose;
+            // a negative lift slope would instead amplify the disturbance.
             DVec3::new(0.20, -1.40, 0.0),
             DVec3::X,
             DVec3::Z,
@@ -134,8 +133,7 @@ impl X15StarterProfile {
             1.30,
             1.10,
         )?
-        .with_planform(2.25, 3.90, 25.0_f64.to_radians(), 0.94)?
-        .with_lift_sign(-1.0)?;
+        .with_planform(2.25, 3.90, 25.0_f64.to_radians(), 0.94)?;
         let tail_right = AeroPanel::new(
             DVec3::new(-4.15, 0.45, 0.12),
             DVec3::X,
@@ -143,8 +141,7 @@ impl X15StarterProfile {
             1.30,
             1.10,
         )?
-        .with_planform(2.25, 3.90, 25.0_f64.to_radians(), 0.94)?
-        .with_lift_sign(-1.0)?;
+        .with_planform(2.25, 3.90, 25.0_f64.to_radians(), 0.94)?;
         let vertical_tail =
             AeroPanel::new(DVec3::new(-3.75, 0.0, 0.72), DVec3::X, DVec3::Y, 2.55, 1.70)?
                 .with_planform(2.35, 2.15, 32.0_f64.to_radians(), 0.92)?

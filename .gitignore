@@ -2,6 +2,7 @@
 /validation/nyx-compare/target/
 /validation/aero-compare/target/
 /.venv-aero/
+/work/
 **/*.swp
 **/*.swo
 .DS_Store

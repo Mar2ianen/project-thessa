@@ -1,5 +1,9 @@
 use super::*;
 
+mod control;
+mod hud;
+use hud::{spawn_pilot_hud, update_pilot_hud};
+
 use std::{
     fs::{File, create_dir_all},
     io::{BufWriter, Write},
@@ -9,27 +13,25 @@ use std::{
 use bevy::{
     asset::RenderAssetUsages,
     image::Image,
-    math::{DMat3, DQuat, DVec3, Mat3, Rot2},
+    math::{DQuat, DVec3, Mat3},
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
-    ui::widget::ImageNode,
-    ui::{FocusPolicy, UiTransform},
+    ui::FocusPolicy,
     world_serialization::{WorldAsset, WorldAssetRoot},
 };
 
 use thessa_sim_core::{
-    AeroConfig, AeroGeometry, AeroPanel, AtmosphereConfig, AtmosphereError, BakedEphemeris, BodyId,
-    BodyState, FlightError, FlightForces, FlightStepInput, GravityField, PanelAeroModel,
-    RigidBodyProperties, RigidBodyState, VehicleDefinition, integrate_rigid_body_duration_sampled,
+    AeroConfig, AtmosphereConfig, AtmosphereError, BakedEphemeris, BodyId, BodyState, FlightError,
+    FlightForces, FlightStepInput, GravityField, PanelAeroModel, RigidBodyState, VehicleDefinition,
 };
 
-const HUD_BLUE: Color = Color::srgb(0.56, 0.78, 0.94);
-const HUD_TEXT: Color = Color::srgb(0.84, 0.92, 0.98);
-const HUD_MUTED: Color = Color::srgb(0.54, 0.66, 0.74);
-const HUD_GREEN: Color = Color::srgb(0.38, 0.93, 0.51);
+const HUD_TEXT: Color = Color::srgb(0.91, 0.95, 0.98);
+const HUD_MUTED: Color = Color::srgb(0.60, 0.69, 0.76);
+const HUD_GREEN: Color = Color::srgb(0.43, 0.87, 0.73);
 const HUD_AMBER: Color = Color::srgb(0.98, 0.72, 0.26);
 // Pilot preview coordinates are metres around the launch site. Unlike the
 // system map's readability curve, this scene keeps the body's authored radius
 // and the imported X-15 mesh in the same unit system.
+const X15_STALL_ANGLE_DEG: f64 = 22.0;
 const PILOT_SURFACE_CLEARANCE_M: f64 = 5.0;
 const PILOT_START_ALTITUDE_M: f64 = 500.0;
 const PILOT_CAMERA_DEFAULT_DISTANCE_M: f32 = 32.0;
@@ -74,8 +76,8 @@ impl ControlMode {
 
     fn label(self) -> &'static str {
         match self {
-            Self::MouseAim => "MOUSE AIM",
-            Self::Navball => "NAVBALL / KSP",
+            Self::MouseAim => "MOUSE STEERING",
+            Self::Navball => "ATTITUDE HOLD",
             Self::Rate => "RATE CONTROL",
             Self::Direct => "DIRECT / RAW",
         }
@@ -83,7 +85,7 @@ impl ControlMode {
 
     fn description(self) -> &'static str {
         match self {
-            Self::MouseAim => "point cursor / FBW handles the rest",
+            Self::MouseAim => "Cursor commands pitch/yaw rate; center to hold.",
             Self::Navball => "direct attitude target control",
             Self::Rate => "command angular rates",
             Self::Direct => "raw actuator input",
@@ -203,14 +205,6 @@ fn local_air_kinematics(
     })
 }
 
-#[derive(Debug, Clone, Copy)]
-struct PilotFlightSample {
-    time_s: f64,
-    state: RigidBodyState,
-    kinematics: LocalAirKinematics,
-    gravity_acceleration_inertial_mps2: DVec3,
-}
-
 /// Low-overhead CSV recorder for reproducing bad live-flight states outside
 /// the renderer. It is enabled only by the executable; unit tests remain
 /// side-effect free.
@@ -233,7 +227,7 @@ impl FlightTraceWriter {
              quat_x,quat_y,quat_z,quat_w,omega_x_rps,omega_y_rps,omega_z_rps,\
              pitch_cmd,yaw_cmd,roll_cmd,throttle,engine,sas,rcs,\
              force_x_n,force_y_n,force_z_n,moment_x_nm,moment_y_nm,moment_z_nm,\
-             accel_x_mps2,accel_y_mps2,accel_z_mps2"
+             accel_x_mps2,accel_y_mps2,accel_z_mps2,control_mode,surface_pitch,surface_yaw,surface_roll,actuator_saturated,target_quat_x,target_quat_y,target_quat_z,target_quat_w"
         )
         .ok()?;
         Some(Self {
@@ -257,6 +251,10 @@ impl FlightTraceWriter {
         sas_enabled: bool,
         rcs_enabled: bool,
         forces: &FlightForces,
+        mode: ControlMode,
+        surfaces: DVec3,
+        saturated: bool,
+        target: DQuat,
     ) {
         let aoa_deg = conventional_angle_of_attack_deg(air_velocity_body_mps);
         let vertical_speed_mps = relative_velocity_inertial_mps.dot(radial_up);
@@ -273,7 +271,7 @@ impl FlightTraceWriter {
             "{time_s:.6},{altitude_m:.6},{:.6},{vertical_speed_mps:.6},{:.6},{aoa_deg:.6},{q:.6},\
              {:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.9},{:.9},{:.9},{:.9},\
              {:.9},{:.9},{:.9},{:.6},{:.6},{:.6},{throttle:.6},{},{},{},\
-             {:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
+             {:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{:.6},{:.6},{:.6},{},{:.9},{:.9},{:.9},{:.9}",
             relative_velocity_inertial_mps.length(),
             forces.aero.mach,
             p.x,
@@ -304,6 +302,15 @@ impl FlightTraceWriter {
             accel.x,
             accel.y,
             accel.z,
+            mode.label(),
+            surfaces.x,
+            surfaces.y,
+            surfaces.z,
+            saturated as u8,
+            target.x,
+            target.y,
+            target.z,
+            target.w,
         );
         self.samples_since_flush += 1;
         if self.samples_since_flush >= 30 {
@@ -337,6 +344,10 @@ pub(super) struct PilotFlightRuntime {
     gear_down: bool,
     /// Manual body-axis command: pitch, yaw, roll in normalized units.
     control_input: DVec3,
+    surface_input: DVec3,
+    actuator_saturated: bool,
+    accumulator_s: f64,
+    flight_error: Option<String>,
     render_position: Vec3,
     render_orientation: Quat,
     last_gravity_acceleration_inertial_mps2: DVec3,
@@ -379,7 +390,7 @@ impl PilotFlightRuntime {
         let aero_model = PanelAeroModel::new(AeroConfig {
             lift_slope_per_rad: 4.6,
             control_effectiveness: 0.82,
-            stall_angle_rad: 22.0_f64.to_radians(),
+            stall_angle_rad: X15_STALL_ANGLE_DEG.to_radians(),
             max_lift_coefficient: 1.45,
             base_drag_coefficient: 0.032,
             induced_drag_factor: 0.075,
@@ -414,6 +425,10 @@ impl PilotFlightRuntime {
             rcs_enabled: true,
             gear_down: true,
             control_input: DVec3::ZERO,
+            surface_input: DVec3::ZERO,
+            actuator_saturated: false,
+            accumulator_s: 0.0,
+            flight_error: None,
             render_position: Vec3::ZERO,
             render_orientation: render_orientation(orientation_body_to_inertial),
             last_gravity_acceleration_inertial_mps2: DVec3::ZERO,
@@ -432,12 +447,10 @@ impl PilotFlightRuntime {
         // preserve roll authority without assigning a panel to two channels.
         let _ = self
             .vehicle
-            // The vertical tail's positive lift axis produces a negative yaw
-            // moment for positive deflection at the aft arm. Invert only the
-            // rudder command so A/D and the body +Z yaw torque share KSP's
-            // left/right convention; pitch and roll keep their established
-            // mappings.
-            .apply_control_inputs(&[pitch, -yaw, roll, -roll]);
+            // Body +X forward, +Z up implies physical right = -Y.
+            // r x F: aft-tail downforce raises the nose (-Y); downforce
+            // at -Y rolls right (+X); aft-tail +Y force yaws right (-Z).
+            .apply_control_inputs(&[-pitch, yaw, -roll, roll]);
     }
 
     fn thrust_n(&self) -> f64 {
@@ -450,142 +463,9 @@ impl PilotFlightRuntime {
 }
 
 fn x15_vehicle() -> Result<VehicleDefinition, String> {
-    // Keep the lifting center slightly forward of the body reference point.
-    // Together with the inverted horizontal tail this is the small static
-    // margin that prevents a zero-input powered start from pitching into a
-    // post-stall tumble.
-    let wing_left = AeroPanel::new(DVec3::new(0.20, -1.40, 0.0), DVec3::X, DVec3::Z, 9.29, 3.10)
-        .and_then(|panel| panel.with_planform(5.70, 3.50, 35.0_f64.to_radians(), 0.86))
-        .and_then(|panel| panel.with_thickness_ratio(0.085))
-        .map_err(|error| error.to_string())?;
-    let wing_right = AeroPanel::new(DVec3::new(0.20, 1.40, 0.0), DVec3::X, DVec3::Z, 9.29, 3.10)
-        .and_then(|panel| panel.with_planform(5.70, 3.50, 35.0_f64.to_radians(), 0.86))
-        .and_then(|panel| panel.with_thickness_ratio(0.085))
-        .map_err(|error| error.to_string())?;
-    let tail_left = AeroPanel::new(
-        DVec3::new(-4.15, -0.45, 0.12),
-        DVec3::X,
-        DVec3::Z,
-        1.30,
-        1.10,
-    )
-    .and_then(|panel| panel.with_planform(2.25, 3.90, 25.0_f64.to_radians(), 0.94))
-    .and_then(|panel| panel.with_lift_sign(-1.0))
-    .map_err(|error| error.to_string())?;
-    let tail_right = AeroPanel::new(
-        DVec3::new(-4.15, 0.45, 0.12),
-        DVec3::X,
-        DVec3::Z,
-        1.30,
-        1.10,
-    )
-    .and_then(|panel| panel.with_planform(2.25, 3.90, 25.0_f64.to_radians(), 0.94))
-    .and_then(|panel| panel.with_lift_sign(-1.0))
-    .map_err(|error| error.to_string())?;
-    let vertical_tail =
-        AeroPanel::new(DVec3::new(-3.75, 0.0, 0.72), DVec3::X, DVec3::Y, 2.55, 1.70)
-            .and_then(|panel| panel.with_planform(2.35, 2.15, 32.0_f64.to_radians(), 0.92))
-            .and_then(|panel| panel.with_thickness_ratio(0.10))
-            .map_err(|error| error.to_string())?;
-    let geometry = AeroGeometry::new(vec![
-        wing_left,
-        wing_right,
-        tail_left,
-        tail_right,
-        vertical_tail,
-    ])
-    .map_err(|error| error.to_string())?;
-    let properties = RigidBodyProperties::new(
-        10_200.0,
-        DMat3::from_diagonal(DVec3::new(31_000.0, 115_000.0, 125_000.0)),
-    )
-    .map_err(|error| error.to_string())?;
-    let controls = vec![
-        thessa_sim_core::ControlSurfaceDefinition::new(
-            "elevator",
-            vec![2, 3],
-            -25.0_f64.to_radians(),
-            25.0_f64.to_radians(),
-        ),
-        thessa_sim_core::ControlSurfaceDefinition::new(
-            "rudder",
-            vec![4],
-            -22.0_f64.to_radians(),
-            22.0_f64.to_radians(),
-        ),
-        thessa_sim_core::ControlSurfaceDefinition::new(
-            "aileron-left",
-            vec![0],
-            -18.0_f64.to_radians(),
-            18.0_f64.to_radians(),
-        ),
-        thessa_sim_core::ControlSurfaceDefinition::new(
-            "aileron-right",
-            vec![1],
-            -18.0_f64.to_radians(),
-            18.0_f64.to_radians(),
-        ),
-    ]
-    .into_iter()
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|error| error.to_string())?;
-    VehicleDefinition::new("X-15 / THESSA FLIGHT TEST", geometry, properties, controls)
+    thessa_sim_core::X15StarterProfile::new()
+        .map(|profile| profile.vehicle)
         .map_err(|error| error.to_string())
-}
-
-/// KSP-style SAS attitude hold for the live preview. The controller operates
-/// on the authoritative body state and returns a real reaction moment; it
-/// never edits orientation directly or hides aerodynamic instability.
-fn pilot_sas_moment(state: RigidBodyState, target_orientation: DQuat, radial_up: DVec3) -> DVec3 {
-    let body_up = state.orientation_body_to_inertial * DVec3::Z;
-    let body_up_error = body_up.cross(radial_up);
-    let target_error_body =
-        (state.orientation_body_to_inertial.inverse() * target_orientation).to_scaled_axis();
-    let local_up_error = state.orientation_body_to_inertial.inverse() * body_up_error;
-    let damping = DVec3::new(250_000.0, 900_000.0, 700_000.0);
-    let attitude_gain = DVec3::new(600_000.0, 1_500_000.0, 1_000_000.0);
-    let horizon_gain = DVec3::splat(50_000.0);
-    let requested_moment = -state.angular_velocity_body_rps * damping
-        + target_error_body * attitude_gain
-        + local_up_error * horizon_gain;
-    // SAS is a bounded actuator in KSP as well. Without this limit a modest
-    // accumulated target error turns into an angular impulse large enough to
-    // push the X-15 through stall before the damping term can react.
-    requested_moment.clamp_length(0.0, 180_000.0)
-}
-
-/// Keep the zero-input X-15 preview near a small positive-alpha trim point.
-///
-/// This is deliberately a bounded moment assist, not an orientation write:
-/// the rigid-body integrator still resolves the resulting attitude and the
-/// panel aero model remains authoritative.  Without this trim term the
-/// spherical datum can let a stalled craft fall through the surface and build
-/// a large pitch rate before the contact correction.
-fn pilot_aero_trim_moment(air_velocity_body: DVec3) -> DVec3 {
-    let forward_speed = air_velocity_body.x;
-    let speed = air_velocity_body.length();
-    if !speed.is_finite() || speed < 1.0 {
-        return DVec3::ZERO;
-    }
-
-    let angle_of_attack = (-air_velocity_body.z).atan2(forward_speed.max(1.0));
-    let sideslip = air_velocity_body.y.atan2(forward_speed.abs().max(1.0));
-    let trim_angle = 2.0_f64.to_radians();
-    let pitch_error = (trim_angle - angle_of_attack).clamp(-0.45, 0.45);
-    let yaw_error = sideslip.clamp(-0.35, 0.35);
-    DVec3::new(0.0, -pitch_error * 1_800_000.0, yaw_error * 1_200_000.0)
-}
-
-/// Convert KSP-style rate commands into a body-frame torque.
-///
-/// The flight body basis is +X forward, +Y right and +Z up. In that
-/// right-handed basis a positive rotation about +Y turns +X toward -Z, i.e.
-/// lowers the nose. The keyboard convention is the opposite: W is nose-up
-/// and S is nose-down. Keep that conversion in one place so the direct-rate
-/// path and its regression tests cannot silently drift apart.
-fn pilot_rate_moment(pitch: f64, yaw: f64, roll: f64, rcs_enabled: bool) -> DVec3 {
-    let authority = if rcs_enabled { 105_000.0 } else { 35_000.0 };
-    DVec3::new(roll, -pitch, yaw) * authority
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -613,6 +493,7 @@ struct FlightUiState {
     attitude_frame: AttitudeFrame,
     environment: FlightEnvironment,
     surface_velocity_mps: DVec3,
+    orbital_velocity_mps: DVec3,
     gravity_acceleration_mps2: DVec3,
     /// Local-up direction expressed in vehicle body axes. The navball uses
     /// this to project a real sphere instead of moving a flat horizon widget.
@@ -700,7 +581,7 @@ impl FlightUiState {
             rcs_enabled: true,
             engine_active: true,
             gear_down: true,
-            guidance_mode: Some("MOUSE AIM".into()),
+            guidance_mode: Some("MOUSE STEERING".into()),
             ..default()
         }
     }
@@ -714,6 +595,8 @@ pub(super) struct PilotHudState {
     pub(super) altitude_frame: AltitudeFrame,
     flight: FlightUiState,
     mouse_position: Vec2,
+    show_help: bool,
+    show_telemetry: bool,
     pilot_camera_yaw: f32,
     pilot_camera_pitch: f32,
     pilot_camera_distance: f32,
@@ -731,6 +614,8 @@ impl Default for PilotHudState {
             altitude_frame: AltitudeFrame::Datum,
             flight: FlightUiState::default(),
             mouse_position: Vec2::ZERO,
+            show_help: false,
+            show_telemetry: false,
             pilot_camera_yaw: 0.0,
             pilot_camera_pitch: 0.0,
             pilot_camera_distance: PILOT_CAMERA_DEFAULT_DISTANCE_M,
@@ -738,64 +623,6 @@ impl Default for PilotHudState {
             desired_direction: -Vec3::Z,
         }
     }
-}
-
-#[derive(Component)]
-struct PilotHudRoot;
-
-#[derive(Component, Clone, Copy)]
-enum PilotReadout {
-    Header,
-    Control,
-    SpeedValue,
-    SpeedDetail,
-    AltitudeValue,
-    AltitudeUnit,
-    AltitudeDetail,
-    Vehicle,
-    Context,
-    Navball,
-    NavballFooter,
-    Status,
-}
-
-#[derive(Component)]
-struct PilotAimReticle;
-
-#[derive(Component)]
-struct PilotFlightPathMarker;
-
-#[derive(Component)]
-struct PilotFlightPathVector;
-
-#[derive(Component)]
-struct PilotTapeMarker {
-    altitude: bool,
-}
-
-#[derive(Component)]
-struct PilotRollIndicator;
-
-#[derive(Component)]
-struct PilotHeadingMarker;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NavballVector {
-    Prograde,
-    Retrograde,
-    Target,
-    Gravity,
-}
-
-#[derive(Component)]
-struct PilotNavballDisk;
-
-#[derive(Resource)]
-struct PilotNavballImage(Handle<Image>);
-
-#[derive(Component)]
-struct PilotNavballMarker {
-    vector: NavballVector,
 }
 
 #[derive(Component)]
@@ -878,104 +705,13 @@ pub(super) fn spawn_pilot_preview(
         });
 }
 
-fn spawn_pilot_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
-    let navball_image = images.add(make_navball_image(DVec3::Z));
-    commands.insert_resource(PilotNavballImage(navball_image.clone()));
-    commands
-        .spawn((
-            PilotHudRoot,
-            Node {
-                position_type: PositionType::Absolute,
-                width: percent(100),
-                height: percent(100),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.001, 0.004, 0.010, 0.025)),
-            // Let raw mouse motion reach the camera even when the cursor is
-            // over a panel or the navball.
-            FocusPolicy::Pass,
-            Visibility::Hidden,
-            ZIndex(110),
-        ))
-        .with_children(|root| {
-            spawn_panel(
-                root,
-                PilotReadout::Header,
-                "THESSA  //  PRIMARY FLIGHT DISPLAY",
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: px(16),
-                    left: px(18),
-                    width: px(370),
-                    min_height: px(62),
-                    ..panel_node()
-                },
-            );
-            spawn_panel(
-                root,
-                PilotReadout::Control,
-                "CONTROL MODE",
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: px(16),
-                    right: px(18),
-                    width: px(286),
-                    min_height: px(132),
-                    ..panel_node()
-                },
-            );
-            spawn_speed_tape(root);
-            spawn_altitude_tape(root);
-            spawn_panel(
-                root,
-                PilotReadout::Vehicle,
-                "VEHICLE / PROPULSION",
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(18),
-                    bottom: px(24),
-                    width: px(272),
-                    min_height: px(116),
-                    ..panel_node()
-                },
-            );
-            spawn_panel(
-                root,
-                PilotReadout::Context,
-                "TARGET / ORBIT",
-                Node {
-                    position_type: PositionType::Absolute,
-                    right: px(18),
-                    bottom: px(24),
-                    width: px(286),
-                    min_height: px(116),
-                    ..panel_node()
-                },
-            );
-            spawn_navball(root, navball_image.clone());
-            spawn_center_cues(root);
-            spawn_panel(
-                root,
-                PilotReadout::Status,
-                "FLIGHT STATUS",
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: percent(50),
-                    top: px(16),
-                    width: px(276),
-                    margin: UiRect::left(px(-138)),
-                    min_height: px(58),
-                    ..panel_node()
-                },
-            );
-        });
-}
-
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn update_pilot_preview(
     state: Res<PilotHudState>,
     clock: Res<SimulationClock>,
     runtime: Res<PilotFlightRuntime>,
+    mut ambient: ResMut<GlobalAmbientLight>,
+    mut camera_color: Single<&mut Camera, With<Camera3d>>,
     mut camera: Single<&mut Transform, With<Camera3d>>,
     mut preview: Query<
         (&mut Transform, &mut Visibility),
@@ -1015,6 +751,27 @@ fn update_pilot_preview(
     >,
 ) {
     let active = state.view_mode == ClientViewMode::Pilot;
+    ambient.brightness = if active { 500.0 } else { 55.0 };
+    ambient.color = if active {
+        Color::srgb(0.65, 0.76, 0.88)
+    } else {
+        Color::srgb(0.18, 0.22, 0.32)
+    };
+    camera_color.clear_color = ClearColorConfig::Custom(if active {
+        // Presentation-only atmospheric backdrop; fade toward space with altitude.
+        let altitude = state
+            .flight
+            .altitude_datum_m
+            .unwrap_or(PILOT_START_ALTITUDE_M);
+        let atmosphere = (1.0 - altitude / 80_000.0).clamp(0.0, 1.0) as f32;
+        Color::srgb(
+            0.008 + 0.09 * atmosphere,
+            0.018 + 0.16 * atmosphere,
+            0.032 + 0.22 * atmosphere,
+        )
+    } else {
+        Color::srgb(0.001, 0.002, 0.008)
+    });
     if active {
         let target = runtime.render_position
             + Vec3::new(state.pilot_camera_pan.x, state.pilot_camera_pan.y, 0.0);
@@ -1028,7 +785,10 @@ fn update_pilot_preview(
             horizontal * state.pilot_camera_yaw.cos(),
         );
         camera.translation = target + orbit_offset;
-        **camera = camera.looking_at(target, Vec3::Y);
+        **camera = camera.looking_at(
+            target - Vec3::Y * (state.pilot_camera_distance * 0.12),
+            Vec3::Y,
+        );
     }
     for (mut transform, mut visibility) in &mut preview {
         *visibility = if active {
@@ -1076,267 +836,6 @@ fn update_pilot_preview(
     }
 }
 
-fn panel_node() -> Node {
-    Node {
-        padding: UiRect::all(px(10)),
-        border: UiRect::all(px(1)),
-        border_radius: BorderRadius::all(px(5)),
-        flex_direction: FlexDirection::Column,
-        ..default()
-    }
-}
-
-fn spawn_panel(
-    parent: &mut ChildSpawnerCommands<'_>,
-    readout: PilotReadout,
-    title: &'static str,
-    node: Node,
-) {
-    parent
-        .spawn((
-            node,
-            BackgroundColor(Color::srgba(0.004, 0.016, 0.030, 0.42)),
-            BorderColor::all(Color::srgba(0.22, 0.58, 0.78, 0.42)),
-        ))
-        .with_children(|panel| {
-            panel.spawn((
-                Text::new(title),
-                TextFont {
-                    font_size: FontSize::Px(10.5),
-                    ..default()
-                },
-                TextColor(HUD_BLUE),
-                Node {
-                    margin: UiRect::bottom(px(8)),
-                    ..default()
-                },
-            ));
-            panel.spawn((
-                readout,
-                Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(13.0),
-                    ..default()
-                },
-                TextColor(HUD_TEXT),
-                Node {
-                    flex_grow: 1.0,
-                    ..default()
-                },
-            ));
-        });
-}
-
-fn spawn_speed_tape(parent: &mut ChildSpawnerCommands<'_>) {
-    parent
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                top: px(172),
-                left: px(18),
-                width: px(178),
-                height: px(380),
-                ..panel_node()
-            },
-            BackgroundColor(Color::srgba(0.004, 0.016, 0.030, 0.34)),
-            BorderColor::all(Color::srgba(0.22, 0.58, 0.78, 0.42)),
-        ))
-        .with_children(|tape| {
-            tape.spawn((
-                Text::new("SPEED  /  PRIMARY"),
-                TextFont {
-                    font_size: FontSize::Px(10.5),
-                    ..default()
-                },
-                TextColor(HUD_BLUE),
-            ));
-            tape.spawn((
-                PilotReadout::SpeedValue,
-                Text::new("--"),
-                TextFont {
-                    font_size: FontSize::Px(30.0),
-                    ..default()
-                },
-                TextColor(HUD_GREEN),
-                TextLayout::justify(Justify::Center),
-                Node {
-                    width: percent(100),
-                    margin: UiRect::top(px(8)),
-                    ..default()
-                },
-            ));
-            tape.spawn((
-                Text::new("m/s"),
-                TextFont {
-                    font_size: FontSize::Px(11.0),
-                    ..default()
-                },
-                TextColor(HUD_MUTED),
-                TextLayout::justify(Justify::Center),
-                Node {
-                    width: percent(100),
-                    ..default()
-                },
-            ));
-            spawn_tape_scale(tape, false);
-            tape.spawn((
-                PilotReadout::SpeedDetail,
-                Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(12.5),
-                    ..default()
-                },
-                TextColor(HUD_TEXT),
-                Node {
-                    margin: UiRect::top(px(9)),
-                    ..default()
-                },
-            ));
-        });
-}
-
-fn spawn_altitude_tape(parent: &mut ChildSpawnerCommands<'_>) {
-    parent
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                top: px(172),
-                right: px(18),
-                width: px(178),
-                height: px(380),
-                ..panel_node()
-            },
-            BackgroundColor(Color::srgba(0.004, 0.016, 0.030, 0.34)),
-            BorderColor::all(Color::srgba(0.22, 0.58, 0.78, 0.42)),
-        ))
-        .with_children(|tape| {
-            tape.spawn((
-                Text::new("ALTITUDE  /  PRIMARY"),
-                TextFont {
-                    font_size: FontSize::Px(10.5),
-                    ..default()
-                },
-                TextColor(HUD_BLUE),
-            ));
-            tape.spawn((
-                PilotReadout::AltitudeValue,
-                Text::new("--"),
-                TextFont {
-                    font_size: FontSize::Px(30.0),
-                    ..default()
-                },
-                TextColor(HUD_GREEN),
-                TextLayout::justify(Justify::Center),
-                Node {
-                    width: percent(100),
-                    margin: UiRect::top(px(8)),
-                    ..default()
-                },
-            ));
-            tape.spawn((
-                PilotReadout::AltitudeUnit,
-                Text::new("km"),
-                TextFont {
-                    font_size: FontSize::Px(11.0),
-                    ..default()
-                },
-                TextColor(HUD_MUTED),
-                TextLayout::justify(Justify::Center),
-                Node {
-                    width: percent(100),
-                    ..default()
-                },
-            ));
-            spawn_tape_scale(tape, true);
-            tape.spawn((
-                PilotReadout::AltitudeDetail,
-                Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(12.5),
-                    ..default()
-                },
-                TextColor(HUD_TEXT),
-                Node {
-                    margin: UiRect::top(px(9)),
-                    ..default()
-                },
-            ));
-        });
-}
-
-fn spawn_tape_scale(parent: &mut ChildSpawnerCommands<'_>, altitude: bool) {
-    let labels = if altitude {
-        ["100", "75", "50", "25", "0"]
-    } else {
-        ["500", "400", "300", "200", "100"]
-    };
-    parent
-        .spawn((
-            Node {
-                position_type: PositionType::Relative,
-                width: percent(100),
-                height: px(156),
-                margin: UiRect::top(px(12)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.02, 0.08, 0.10, 0.46)),
-            BorderColor::all(Color::srgba(0.20, 0.38, 0.46, 0.42)),
-        ))
-        .with_children(|scale| {
-            scale.spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(12),
-                    top: px(8),
-                    bottom: px(8),
-                    width: px(5),
-                    ..default()
-                },
-                BackgroundColor(Color::srgba(0.20, 0.35, 0.39, 0.72)),
-            ));
-            scale.spawn((
-                PilotTapeMarker { altitude },
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(12),
-                    top: px(52),
-                    width: px(5),
-                    height: px(18),
-                    ..default()
-                },
-                BackgroundColor(HUD_GREEN),
-            ));
-            for (index, label) in labels.into_iter().enumerate() {
-                let top = 7.0 + index as f32 * 35.0;
-                scale.spawn((
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: px(12),
-                        top: px(top),
-                        width: px(37),
-                        height: px(1),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgba(0.78, 0.90, 0.94, 0.75)),
-                ));
-                scale.spawn((
-                    Text::new(label),
-                    TextFont {
-                        font_size: FontSize::Px(11.0),
-                        ..default()
-                    },
-                    TextColor(HUD_TEXT),
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: px(56),
-                        top: px(top - 6.0),
-                        ..default()
-                    },
-                ));
-            }
-        });
-}
-
 fn make_navball_image(local_up_body: DVec3) -> Image {
     const SIZE: u32 = 256;
     let pixels = make_navball_pixels(local_up_body);
@@ -1374,28 +873,30 @@ fn make_navball_pixels(local_up_body: DVec3) -> Vec<u8> {
             let normalized_x = dx / radius;
             let normalized_y = dy / radius;
             // The navball is a view of a unit sphere from the vehicle nose
-            // (+X). Screen-right is body +Y and screen-up is body +Z. This
+            // (+X). Screen-right is forward x up = -Y; screen-up is +Z. This
             // projection makes the horizon respond to all three attitude
             // axes, including roll, instead of painting a flat semicircle.
             let sphere_depth = (1.0 - normalized_x * normalized_x - normalized_y * normalized_y)
                 .max(0.0)
                 .sqrt();
             let sphere_direction =
-                DVec3::new(sphere_depth, normalized_x, -normalized_y).normalize();
+                DVec3::new(sphere_depth, -normalized_x, -normalized_y).normalize();
             let horizon = sphere_direction.dot(local_up);
             let sky_weight = ((horizon + 0.035) / 0.070).clamp(0.0, 1.0);
             let light_direction = DVec3::new(0.42, -0.38, 0.82).normalize();
             let light = (sphere_direction.dot(light_direction) * 0.5 + 0.5).clamp(0.0, 1.0);
-            let edge_shade = 0.46 + 0.54 * light;
+            let edge_shade = 0.70 + 0.30 * light;
             let horizon_glow = (1.0 - horizon.abs() * 15.0).clamp(0.0, 1.0);
-            let sky = DVec3::new(0.035, 0.22, 0.36);
-            let ground = DVec3::new(0.27, 0.145, 0.075);
+            let sky = DVec3::new(0.08, 0.52, 0.72);
+            let ground = DVec3::new(0.60, 0.32, 0.095);
             let mut colour = ground.lerp(sky, sky_weight);
 
             // KSP-style pitch ladder: lines are contours on the sphere in the
             // current local-up frame. They curve naturally near the rim and
             // remain stable when the aircraft rolls or pitches.
-            for pitch_deg in [-30.0_f64, -20.0, -10.0, 0.0, 10.0, 20.0, 30.0] {
+            for pitch_deg in [
+                -60.0_f64, -45.0, -30.0, -20.0, -10.0, 0.0, 10.0, 20.0, 30.0, 45.0, 60.0,
+            ] {
                 let pitch_level = pitch_deg.to_radians().sin();
                 let distance_to_line = (horizon - pitch_level).abs();
                 let line_width = if pitch_deg == 0.0 { 0.018 } else { 0.012 };
@@ -1424,266 +925,6 @@ fn update_navball_image(image: &mut Image, local_up_body: DVec3) {
     }
 }
 
-fn spawn_navball(parent: &mut ChildSpawnerCommands<'_>, navball_image: Handle<Image>) {
-    parent
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                left: percent(50),
-                bottom: px(22),
-                width: px(360),
-                height: px(360),
-                margin: UiRect::left(px(-180)),
-                border: UiRect::all(px(2)),
-                border_radius: BorderRadius::MAX,
-                overflow: Overflow::clip(),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.035, 0.14, 0.20, 0.94)),
-            BorderColor::all(Color::srgba(0.46, 0.78, 0.90, 0.94)),
-        ))
-        .with_children(|navball| {
-            navball.spawn((
-                PilotNavballDisk,
-                ImageNode::new(navball_image),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(10),
-                    right: px(10),
-                    top: px(10),
-                    bottom: px(10),
-                    ..default()
-                },
-            ));
-            navball.spawn((
-                PilotReadout::Navball,
-                Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
-                TextColor(HUD_TEXT),
-                TextLayout::justify(Justify::Center),
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: px(14),
-                    left: px(0),
-                    width: percent(100),
-                    ..default()
-                },
-            ));
-            for (left, height) in [
-                (112.0, 7.0),
-                (136.0, 11.0),
-                (160.0, 16.0),
-                (184.0, 11.0),
-                (208.0, 7.0),
-            ] {
-                navball.spawn((
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: px(left),
-                        top: px(30),
-                        width: px(2),
-                        height: px(height),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgba(0.78, 0.90, 0.94, 0.52)),
-                ));
-            }
-            navball.spawn((
-                PilotRollIndicator,
-                UiTransform::from_rotation(Rot2::radians(0.0)),
-                Text::new("▼"),
-                TextFont {
-                    font_size: FontSize::Px(18.0),
-                    ..default()
-                },
-                TextColor(HUD_AMBER),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(163),
-                    top: px(18),
-                    width: px(34),
-                    height: px(24),
-                    ..default()
-                },
-            ));
-            navball.spawn((
-                Text::new("L                 R"),
-                TextFont {
-                    font_size: FontSize::Px(9.0),
-                    ..default()
-                },
-                TextColor(HUD_MUTED),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(105),
-                    top: px(43),
-                    width: px(150),
-                    ..default()
-                },
-            ));
-            navball.spawn((
-                PilotHeadingMarker,
-                Text::new("N"),
-                TextFont {
-                    font_size: FontSize::Px(18.0),
-                    ..default()
-                },
-                TextColor(HUD_AMBER),
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: px(62),
-                    left: px(154),
-                    ..default()
-                },
-            ));
-            navball.spawn((
-                Text::new("FPV"),
-                TextFont {
-                    font_size: FontSize::Px(11.0),
-                    ..default()
-                },
-                TextColor(HUD_GREEN),
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: px(151),
-                    left: px(146),
-                    ..default()
-                },
-            ));
-            navball.spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(138),
-                    top: px(156),
-                    width: px(52),
-                    height: px(8),
-                    border: UiRect::top(px(2)),
-                    ..default()
-                },
-                BorderColor::all(HUD_AMBER),
-            ));
-            spawn_navball_marker(navball, NavballVector::Prograde, "O", HUD_GREEN);
-            spawn_navball_marker(navball, NavballVector::Retrograde, "X", HUD_AMBER);
-            spawn_navball_marker(navball, NavballVector::Target, "+", HUD_BLUE);
-            spawn_navball_marker(navball, NavballVector::Gravity, "G", HUD_AMBER);
-            navball.spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(164),
-                    top: px(136),
-                    width: px(1),
-                    height: px(48),
-                    ..default()
-                },
-                BackgroundColor(HUD_AMBER),
-            ));
-            navball.spawn((
-                PilotReadout::NavballFooter,
-                Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(10.0),
-                    ..default()
-                },
-                TextColor(HUD_MUTED),
-                TextLayout::justify(Justify::Center),
-                Node {
-                    position_type: PositionType::Absolute,
-                    bottom: px(18),
-                    left: px(0),
-                    width: percent(100),
-                    ..default()
-                },
-            ));
-        });
-}
-
-fn spawn_navball_marker(
-    parent: &mut ChildSpawnerCommands<'_>,
-    vector: NavballVector,
-    marker: &'static str,
-    color: Color,
-) {
-    parent.spawn((
-        PilotNavballMarker { vector },
-        Text::new(marker),
-        TextFont {
-            font_size: FontSize::Px(18.0),
-            ..default()
-        },
-        TextColor(color),
-        Node {
-            position_type: PositionType::Absolute,
-            left: px(180.0),
-            top: px(180.0),
-            ..default()
-        },
-    ));
-}
-
-fn spawn_center_cues(parent: &mut ChildSpawnerCommands<'_>) {
-    parent.spawn((
-        PilotFlightPathVector,
-        UiTransform::from_rotation(Rot2::radians(-0.61)),
-        Node {
-            position_type: PositionType::Absolute,
-            left: percent(50),
-            top: percent(50),
-            width: px(66),
-            height: px(2),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.98, 0.72, 0.26, 0.38)),
-    ));
-    parent
-        .spawn((
-            PilotAimReticle,
-            Node {
-                position_type: PositionType::Absolute,
-                left: percent(50),
-                top: percent(50),
-                width: px(24),
-                height: px(24),
-                margin: UiRect::new(px(-12), px(0), px(-12), px(0)),
-                border: UiRect::all(px(1)),
-                border_radius: BorderRadius::MAX,
-                ..default()
-            },
-            BorderColor::all(HUD_GREEN),
-        ))
-        .with_children(|reticle| {
-            reticle.spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(10),
-                    top: px(10),
-                    width: px(4),
-                    height: px(4),
-                    border_radius: BorderRadius::MAX,
-                    ..default()
-                },
-                BackgroundColor(HUD_GREEN),
-            ));
-        });
-    parent.spawn((
-        PilotFlightPathMarker,
-        Node {
-            position_type: PositionType::Absolute,
-            left: percent(50),
-            top: percent(50),
-            width: px(13),
-            height: px(13),
-            margin: UiRect::new(px(-6), px(0), px(-6), px(0)),
-            border: UiRect::all(px(1)),
-            border_radius: BorderRadius::MAX,
-            ..default()
-        },
-        BorderColor::all(HUD_AMBER),
-    ));
-}
-
 fn simulate_pilot_flight(
     time: Res<Time>,
     clock: Res<SimulationClock>,
@@ -1695,185 +936,15 @@ fn simulate_pilot_flight(
         return;
     }
 
-    let frame_dt = f64::from(time.delta_secs().clamp(0.0, 0.05));
-    if frame_dt <= 0.0 {
+    if runtime.flight_error.is_some() {
         return;
     }
-    let Ok(body) = ephemeris.ephemeris.body(runtime.reference_body) else {
-        return;
-    };
-    let body_radius_m = body.radius_m;
-    let simulation_start_s = runtime.flight_time_s;
-    let atmosphere = runtime.atmosphere;
-    let reference_body = runtime.reference_body;
-    let controls = runtime.control_input;
-    let sas_enabled = runtime.sas_enabled;
-    let rcs_enabled = runtime.rcs_enabled;
-    let target_orientation = runtime.sas_target_orientation;
-    let engine_active = runtime.engine_active;
-    let throttle = runtime.throttle;
-    let thrust_n = runtime.thrust_n();
-    let mass_properties = runtime.vehicle.mass_properties;
-    let sas_active = sas_enabled
-        && matches!(
-            state.control_mode,
-            ControlMode::MouseAim | ControlMode::Navball
-        );
-    let pitch = controls.x;
-    let yaw = controls.y;
-    let roll = controls.z;
-    runtime.command_controls(pitch, yaw, roll);
-
-    // A render frame can span several physics substeps. Sample the ephemeris,
-    // atmosphere, gravity and controller moments for each substep so no force
-    // sample mixes a current rigid state with stale world coordinates.
-    let gravity_field = GravityField::from_ephemeris(&ephemeris.ephemeris);
-    let ephemeris_data = &ephemeris.ephemeris;
-    let mut final_sample = None;
-    let integration = integrate_rigid_body_duration_sampled(
-        &runtime.aero_model,
-        &runtime.vehicle.aero_geometry,
-        atmosphere,
-        runtime.state,
-        mass_properties,
-        frame_dt,
-        0.02,
-        |sample_state, elapsed_s| {
-            let sample_time = SimTime(simulation_start_s + elapsed_s);
-            let body_state = ephemeris_data
-                .body_state(reference_body, sample_time)
-                .map_err(|error| {
-                    FlightError::InvalidInput(format!("reference body sample failed: {error}"))
-                })?;
-            let kinematics =
-                local_air_kinematics(atmosphere, sample_state, body_state, body_radius_m)
-                    .map_err(FlightError::Atmosphere)?;
-            let gravity = gravity_field
-                .acceleration(sample_state.position_inertial_m, sample_time)
-                .map_err(|error| {
-                    FlightError::InvalidInput(format!("gravity sample failed: {error}"))
-                })?;
-            let sas_moment = if sas_active {
-                pilot_sas_moment(sample_state, target_orientation, kinematics.radial_up)
-            } else {
-                DVec3::ZERO
-            };
-            let trim_moment = if sas_active && controls.length_squared() < 1.0e-8 {
-                pilot_aero_trim_moment(kinematics.air_velocity_body_mps)
-            } else {
-                DVec3::ZERO
-            };
-            let relative_radial_speed = kinematics
-                .relative_velocity_inertial_mps
-                .dot(kinematics.radial_up);
-            let contact_moment = if kinematics.altitude_m <= PILOT_SURFACE_CLEARANCE_M + 0.5
-                && relative_radial_speed <= 0.0
-            {
-                -sample_state.angular_velocity_body_rps
-                    * DVec3::new(400_000.0, 700_000.0, 400_000.0)
-            } else {
-                DVec3::ZERO
-            };
-            let rate_moment = pilot_rate_moment(pitch, yaw, roll, rcs_enabled);
-            final_sample = Some(PilotFlightSample {
-                time_s: simulation_start_s + elapsed_s,
-                state: sample_state,
-                kinematics,
-                gravity_acceleration_inertial_mps2: gravity,
-            });
-            Ok(FlightStepInput {
-                altitude_m: kinematics.altitude_m.max(0.0),
-                gravity_acceleration_inertial_mps2: gravity,
-                position_body_m: kinematics.relative_position_body_m,
-                wind_velocity_body_mps: sample_state.orientation_body_to_inertial.inverse()
-                    * body_state.velocity_inertial,
-                extra_force_body_n: DVec3::X * thrust_n,
-                extra_moment_body_nm: sas_moment + trim_moment + contact_moment + rate_moment,
-            })
-        },
-    );
-    let Ok((next_state, forces)) = integration else {
+    let frame_dt = time.delta_secs_f64().clamp(0.0, 0.1);
+    if let Err(error) = runtime.advance(&ephemeris.ephemeris, state.control_mode, frame_dt) {
         runtime.engine_active = false;
         runtime.control_input = DVec3::ZERO;
-        return;
-    };
-    let next_sim_time = SimTime(runtime.flight_time_s + frame_dt);
-    let Ok(next_body_state) = ephemeris
-        .ephemeris
-        .body_state(runtime.reference_body, next_sim_time)
-    else {
-        return;
-    };
-    // First playable slice has a spherical datum and no terrain collision
-    // mesh. Keep the test craft above the datum and remove only inward radial
-    // velocity on contact, so a missed take-off cannot bury the camera.
-    let next_relative = next_state.position_inertial_m - next_body_state.position_inertial;
-    let next_altitude = next_relative.length() - body.radius_m;
-    let next_relative_speed =
-        (next_state.velocity_inertial_mps - next_body_state.velocity_inertial).length();
-    if !next_altitude.is_finite()
-        || next_altitude.abs() > MAX_PILOT_ALTITUDE_M
-        || !next_relative_speed.is_finite()
-        || next_relative_speed > MAX_PILOT_RELATIVE_SPEED_MPS
-        || !next_state.angular_velocity_body_rps.is_finite()
-        || next_state.angular_velocity_body_rps.length() > MAX_PILOT_ANGULAR_RATE_RPS
-    {
-        // A bad control sample must not poison the camera and HUD with an
-        // unbounded state. Keep the last valid state and cut the engine so the
-        // pilot can inspect the situation or leave Pilot mode safely.
-        runtime.engine_active = false;
-        runtime.control_input = DVec3::ZERO;
-        return;
+        runtime.flight_error = Some(error.to_string());
     }
-
-    let Some(final_sample) = final_sample else {
-        runtime.engine_active = false;
-        runtime.control_input = DVec3::ZERO;
-        return;
-    };
-    runtime.last_gravity_acceleration_inertial_mps2 =
-        final_sample.gravity_acceleration_inertial_mps2;
-    if let Some(trace) = runtime.trace.as_mut() {
-        trace.record(
-            final_sample.time_s,
-            final_sample.kinematics.altitude_m,
-            final_sample.kinematics.relative_velocity_inertial_mps,
-            final_sample.kinematics.radial_up,
-            final_sample.kinematics.air_velocity_body_mps,
-            final_sample.state,
-            controls,
-            throttle,
-            engine_active,
-            sas_enabled,
-            rcs_enabled,
-            &forces,
-        );
-    }
-    runtime.state = next_state;
-    runtime.last_forces = Some(forces);
-    runtime.flight_time_s += frame_dt;
-
-    let next_radius = next_relative.length();
-    if next_radius < body.radius_m + PILOT_SURFACE_CLEARANCE_M {
-        let contact_position = next_relative
-            .try_normalize()
-            .unwrap_or(final_sample.kinematics.radial_up)
-            * (body.radius_m + PILOT_SURFACE_CLEARANCE_M);
-        runtime.state.position_inertial_m = next_body_state.position_inertial + contact_position;
-        let next_radial_up = contact_position.normalize_or_zero();
-        let next_relative_velocity =
-            runtime.state.velocity_inertial_mps - next_body_state.velocity_inertial;
-        let inward_speed = next_relative_velocity.dot(-next_radial_up);
-        if inward_speed > 0.0 {
-            runtime.state.velocity_inertial_mps += next_radial_up * inward_speed;
-        }
-    }
-
-    runtime.render_position = pilot_render_offset(
-        (runtime.state.position_inertial_m - next_body_state.position_inertial)
-            - runtime.initial_relative_position_m,
-    );
-    runtime.render_orientation = render_orientation(runtime.state.orientation_body_to_inertial);
 }
 
 /// The checked-in GLB scene (before Blender's Y-up -> Z-up import conversion)
@@ -1886,17 +957,17 @@ fn x15_asset_to_craft_rotation() -> Quat {
 
 fn render_orientation(orientation: DQuat) -> Quat {
     let forward = pilot_render_offset(orientation * DVec3::X).normalize_or_zero();
-    let right = pilot_render_offset(orientation * DVec3::Y).normalize_or_zero();
+    let lateral = pilot_render_offset(orientation * DVec3::Y).normalize_or_zero();
     let up = pilot_render_offset(orientation * DVec3::Z).normalize_or_zero();
     if forward.length_squared() < 1.0e-8
-        || right.length_squared() < 1.0e-8
+        || lateral.length_squared() < 1.0e-8
         || up.length_squared() < 1.0e-8
     {
         return Quat::IDENTITY;
     }
-    // The model's +Y is its nose, +X its right wing and +Z points down so the
+    // The model's +Y is its nose, +X its lateral axis and +Z points down so the
     // three visual axes form a right-handed basis around the engine body axes.
-    Quat::from_mat3(&Mat3::from_cols(right, forward, -up))
+    Quat::from_mat3(&Mat3::from_cols(lateral, forward, -up))
 }
 
 fn pilot_render_offset(relative_delta_m: DVec3) -> Vec3 {
@@ -1907,6 +978,15 @@ fn pilot_render_offset(relative_delta_m: DVec3) -> Vec3 {
         relative_delta_m.x as f32,
         relative_delta_m.z as f32,
         -relative_delta_m.y as f32,
+    )
+}
+
+fn keyboard_control_input(keys: &ButtonInput<KeyCode>) -> DVec3 {
+    // Stick forward (W) lowers the nose; right (D) yaws right.
+    DVec3::new(
+        (keys.pressed(KeyCode::KeyS) as i8 - keys.pressed(KeyCode::KeyW) as i8) as f64,
+        (keys.pressed(KeyCode::KeyD) as i8 - keys.pressed(KeyCode::KeyA) as i8) as f64,
+        (keys.pressed(KeyCode::KeyE) as i8 - keys.pressed(KeyCode::KeyQ) as i8) as f64,
     )
 }
 
@@ -1932,6 +1012,12 @@ fn pilot_input(
     }
 
     if state.view_mode == ClientViewMode::Pilot {
+        if keys.just_pressed(KeyCode::F3) {
+            state.show_telemetry = !state.show_telemetry;
+        }
+        if keys.just_pressed(KeyCode::F1) {
+            state.show_help = !state.show_help;
+        }
         if keys.just_pressed(KeyCode::F8) || keys.just_pressed(KeyCode::Pause) {
             clock.paused = !clock.paused;
         }
@@ -1980,14 +1066,7 @@ fn pilot_input(
         }
 
         let dt = f64::from(time.delta_secs().clamp(0.0, 0.1));
-        // KSP convention: W pitches the nose up, S pitches it down.
-        let keyboard_pitch =
-            (keys.pressed(KeyCode::KeyW) as i8 - keys.pressed(KeyCode::KeyS) as i8) as f64;
-        let keyboard_yaw =
-            (keys.pressed(KeyCode::KeyD) as i8 - keys.pressed(KeyCode::KeyA) as i8) as f64;
-        let keyboard_roll =
-            (keys.pressed(KeyCode::KeyE) as i8 - keys.pressed(KeyCode::KeyQ) as i8) as f64;
-        let keyboard_input = DVec3::new(keyboard_pitch, keyboard_yaw, keyboard_roll);
+        let keyboard_input = keyboard_control_input(&keys);
         // Orbit/pan gestures belong exclusively to the camera. They must not
         // simultaneously command Mouse Aim, otherwise dragging the view also
         // deflects the aircraft and makes the controls feel broken.
@@ -2007,21 +1086,11 @@ fn pilot_input(
             _ => keyboard_input,
         }
         .clamp_length(0.0, 1.0);
-        if state.control_mode == ControlMode::Navball && runtime.sas_enabled {
-            // In KSP/SAS mode a held key changes the attitude target; after
-            // release SAS keeps the last target instead of snapping back to
-            // the spawn attitude or requiring a continuously held key.
-            // Body axes are +X roll, +Y pitch, +Z yaw. W/S pitch, A/D yaw and
-            // Q/E roll must map to those axes in the same order as the direct
-            // rate controller; the old mapping mixed all three channels.
-            let target_axis = DVec3::new(command_input.z, -command_input.x, command_input.y);
-            runtime.sas_target_orientation = (runtime.sas_target_orientation
-                * DQuat::from_scaled_axis(target_axis * (PILOT_ATTITUDE_COMMAND_RATE_RAD_S * dt)))
-            .normalize();
-            runtime.control_input = DVec3::ZERO;
+        runtime.control_input = if clock.paused || !window.focused || state.show_help {
+            DVec3::ZERO
         } else {
-            runtime.control_input = command_input;
-        }
+            command_input
+        };
 
         let throttle_up = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         let throttle_down =
@@ -2051,15 +1120,19 @@ fn pilot_input(
 
     let size = window.resolution.size();
     if size.x > 0.0 && size.y > 0.0 {
-        let cursor = window.cursor_position().unwrap_or(size * 0.5);
+        let cursor = window
+            .cursor_position()
+            .filter(|_| window.focused)
+            .unwrap_or(size * 0.5);
         let ndc = Vec2::new(
             (cursor.x / size.x * 2.0 - 1.0).clamp(-1.0, 1.0),
             (1.0 - cursor.y / size.y * 2.0).clamp(-1.0, 1.0),
         );
         state.mouse_position = cursor;
-        // Guidance/FBW will consume this boundary later. It never writes an
-        // actuator command and does not alter authoritative physics.
-        state.desired_direction = Vec3::new(ndc.x, ndc.y, -1.0).normalize();
+        // Mouse steering requests an angular rate. Keep a neutral center
+        // and let the controller allocate physical surface/jet commands.
+        let steer = (ndc.abs() - Vec2::splat(0.06)).max(Vec2::ZERO) / 0.94 * ndc.signum();
+        state.desired_direction = Vec3::new(steer.x, steer.y, -1.0).normalize();
     }
 }
 
@@ -2122,17 +1195,14 @@ fn live_flight_ui_state(
     let up = flight.state.orientation_body_to_inertial * DVec3::Z;
     let heading_deg = forward.x.atan2(forward.y).to_degrees().rem_euclid(360.0);
     let pitch_deg = forward.dot(radial_up).clamp(-1.0, 1.0).asin().to_degrees();
-    let roll_deg = right
-        .dot(radial_up)
-        .atan2(up.dot(radial_up).max(1.0e-6))
-        .to_degrees();
+    let roll_deg = right.dot(radial_up).atan2(up.dot(radial_up)).to_degrees();
     let altitude_m = kinematics.altitude_m;
     let vertical_speed = velocity_surface.dot(radial_up);
     let gravity = body.mu / relative_position.length().max(1.0).powi(2);
     let force_magnitude = forces
         .map(|forces| forces.total_force_inertial_n.length())
         .unwrap_or_else(|| flight.thrust_n());
-    let g_load = (force_magnitude / flight.vehicle.mass_properties.mass_kg / gravity).max(0.0);
+    let g_load = (force_magnitude / flight.vehicle.mass_properties.mass_kg / 9.80665).max(0.0);
     let (apoapsis_altitude_m, periapsis_altitude_m) = estimate_orbit_altitudes(
         relative_position,
         velocity_relative_inertial,
@@ -2158,14 +1228,13 @@ fn live_flight_ui_state(
                 // The atmosphere sample is deterministic; q and Mach come
                 // from the same environment, avoiding a second atmosphere
                 // approximation in the display path.
-                environment.density_kg_m3
-                    * flight.atmosphere.gas_constant_j_kg_k
-                    * (environment.speed_of_sound_mps.powi(2)
-                        / flight.atmosphere.heat_capacity_ratio)
+                environment.density_kg_m3 * environment.speed_of_sound_mps.powi(2)
+                    / flight.atmosphere.heat_capacity_ratio
             }),
             density_kg_m3: environment.map(|environment| environment.density_kg_m3),
         },
         surface_velocity_mps: velocity_surface,
+        orbital_velocity_mps: velocity_relative_inertial,
         gravity_acceleration_mps2: flight.last_gravity_acceleration_inertial_mps2,
         local_up_body: flight.state.orientation_body_to_inertial.inverse() * radial_up,
         surface_speed_m_s: Some(surface_speed),
@@ -2173,9 +1242,8 @@ fn live_flight_ui_state(
         orbital_speed_m_s: Some(velocity_relative_inertial.length()),
         target_speed_m_s: None,
         altitude_datum_m: Some(altitude_m.max(0.0)),
-        // Until terrain is implemented, the spherical body datum is the
-        // actual collision surface and therefore also the honest AGL value.
-        altitude_agl_m: Some(altitude_m.max(0.0)),
+        // The spherical safety boundary is not a terrain/radar measurement.
+        altitude_agl_m: None,
         vertical_speed_m_s: Some(vertical_speed),
         heading_deg: Some(heading_deg),
         pitch_deg: Some(pitch_deg),
@@ -2214,7 +1282,22 @@ fn live_flight_ui_state(
             }
             .into(),
         ),
-        warnings: Vec::new(),
+        warnings: {
+            let mut warnings = Vec::new();
+            if let Some(error) = &flight.flight_error {
+                warnings.push(format!("FLIGHT STOPPED: {error}"));
+            }
+            if conventional_angle_of_attack_deg(air_velocity).abs() >= X15_STALL_ANGLE_DEG {
+                warnings.push("HIGH ANGLE OF ATTACK".into());
+            }
+            if flight.actuator_saturated {
+                warnings.push("CONTROL LIMIT".into());
+            }
+            if altitude_m < 100.0 && vertical_speed < -1.0 {
+                warnings.push("LOW ALTITUDE / DESCENDING".into());
+            }
+            warnings
+        },
     }
 }
 
@@ -2227,205 +1310,17 @@ fn estimate_orbit_altitudes(
     let distance = position.length();
     let specific_energy = velocity.length_squared() * 0.5 - mu / distance.max(1.0);
     if specific_energy >= 0.0 {
-        return (f64::INFINITY, -radius_m);
+        let eccentricity =
+            (velocity.cross(position.cross(velocity)) / mu - position / distance).length();
+        let periapsis = position.cross(velocity).length_squared() / (mu * (1.0 + eccentricity));
+        return (f64::INFINITY, periapsis - radius_m);
     }
     let semi_major_axis = -mu / (2.0 * specific_energy);
     let eccentricity_vector = velocity.cross(position.cross(velocity)) / mu - position / distance;
     let eccentricity = eccentricity_vector.length().clamp(0.0, 0.999_999);
     (
-        (semi_major_axis * (1.0 + eccentricity) - radius_m).max(0.0),
-        (semi_major_axis * (1.0 - eccentricity) - radius_m).max(0.0),
-    )
-}
-
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
-fn update_pilot_hud(
-    state: Res<PilotHudState>,
-    clock: Res<SimulationClock>,
-    window: Single<&Window, With<PrimaryWindow>>,
-    navball_image: Res<PilotNavballImage>,
-    mut images: ResMut<Assets<Image>>,
-    mut roots: Query<&mut Visibility, With<PilotHudRoot>>,
-    mut readouts: ParamSet<(
-        Query<(&mut Text, &PilotReadout)>,
-        Query<&mut Text, With<PilotHeadingMarker>>,
-    )>,
-    mut nodes: ParamSet<(
-        Query<&mut Node, With<PilotAimReticle>>,
-        Query<(&mut Node, &PilotTapeMarker)>,
-        Query<&mut UiTransform, With<PilotRollIndicator>>,
-        Query<&mut Node, With<PilotFlightPathMarker>>,
-        Query<(&mut Node, &PilotNavballMarker)>,
-    )>,
-) {
-    let visible = state.view_mode == ClientViewMode::Pilot;
-    for mut visibility in &mut roots {
-        *visibility = if visible {
-            Visibility::Visible
-        } else {
-            Visibility::Hidden
-        };
-    }
-    if !visible {
-        return;
-    }
-
-    let cursor = state.mouse_position;
-    let cursor_size = window.resolution.size();
-    for mut node in nodes.p0().iter_mut() {
-        node.left = px(cursor.x - 12.0);
-        node.top = px(cursor.y - 12.0);
-        node.margin = UiRect::ZERO;
-    }
-    // Keep the flight-path cue independent from the mouse cursor. It remains
-    // stable and readable while the live telemetry catches up each frame.
-    for mut node in nodes.p3().iter_mut() {
-        node.left = px(cursor_size.x * 0.5 + 48.0);
-        node.top = px(cursor_size.y * 0.5 - 34.0);
-        node.margin = UiRect::ZERO;
-    }
-
-    let flight = &state.flight;
-    if let Some(mut image) = images.get_mut(&navball_image.0) {
-        update_navball_image(&mut image, flight.local_up_body);
-    }
-    for (mut node, marker) in nodes.p1().iter_mut() {
-        let position = if marker.altitude {
-            flight
-                .altitude_datum_m
-                .map(|value| 1.0 - (value / 100_000.0).clamp(0.0, 1.0))
-        } else {
-            primary_speed(flight, state.speed_frame)
-                .map(|value| 1.0 - ((value - 200.0) / 300.0).clamp(0.0, 1.0))
-        };
-        node.top = px(8.0 + position.unwrap_or(0.5) as f32 * 132.0);
-    }
-    let roll = (flight.roll_deg.unwrap_or(0.0) as f32).to_radians();
-    for mut transform in nodes.p2().iter_mut() {
-        transform.rotation = Rot2::radians(-roll);
-    }
-    for (mut node, marker) in nodes.p4().iter_mut() {
-        let position = navball_marker_position(flight, marker.vector);
-        node.left = px(position.x - 8.0);
-        node.top = px(position.y - 8.0);
-    }
-    for mut text in readouts.p1().iter_mut() {
-        **text = heading_cardinal(flight.heading_deg).into();
-    }
-    let (days, hours, minutes, seconds) = format_sim_time(flight.sim_time_s);
-    for (mut text, readout) in readouts.p0().iter_mut() {
-        let content = match readout {
-            PilotReadout::Header => format!(
-                "SIM T+{:02}d {:02}h {:02}m {:02}s\n{}  /  {}",
-                days,
-                hours,
-                minutes,
-                seconds,
-                match flight.source {
-                    TelemetrySource::Live => "CONNECTED",
-                    TelemetrySource::DemoPreview => "DEMO TELEMETRY",
-                },
-                flight
-                    .environment
-                    .reference_body
-                    .as_deref()
-                    .unwrap_or("NO REFERENCE"),
-            ),
-            PilotReadout::Control => format!(
-                "{} [ON]\n{}\nSAS [{}]  RCS [{}]\nW/S pitch A/D yaw Q/E roll\nSHIFT/CTRL throttle  X/Z engine  Space stage\nF8 pause / resume",
-                state.control_mode.label(),
-                state.control_mode.description(),
-                if flight.sas_enabled { "ON" } else { "OFF" },
-                if flight.rcs_enabled { "ON" } else { "OFF" },
-            ),
-            PilotReadout::SpeedValue => {
-                format_speed_value(primary_speed(flight, state.speed_frame))
-            }
-            PilotReadout::SpeedDetail => format_speed_detail(flight, state.speed_frame),
-            PilotReadout::AltitudeValue => {
-                format_altitude_number(primary_altitude(flight, state.altitude_frame))
-            }
-            PilotReadout::AltitudeUnit => {
-                format_altitude_unit(primary_altitude(flight, state.altitude_frame))
-            }
-            PilotReadout::AltitudeDetail => format_altitude_detail(flight, state.altitude_frame),
-            PilotReadout::Vehicle => {
-                if flight.environment.atmosphere_available {
-                    format!(
-                        "{}\nTHR {}  G {}\nTWR {}  F {}\nGEAR [{}]  SAS [{}]\nENGINE [{}]  RCS [{}]",
-                        flight.vehicle_name.as_deref().unwrap_or("NO VEHICLE"),
-                        format_percent(flight.throttle),
-                        format_scalar(flight.g_load, 2),
-                        format_scalar(flight.twr, 2),
-                        format_force(flight.thrust_n),
-                        if flight.gear_down { "DOWN" } else { "UP" },
-                        if flight.sas_enabled { "ON" } else { "OFF" },
-                        if flight.engine_active { "ON" } else { "OFF" },
-                        if flight.rcs_enabled { "ON" } else { "OFF" },
-                    )
-                } else {
-                    format!(
-                        "{}\nAP {}  PE {}\nT+AP {}  T+PE {}\nRCS [ON]",
-                        flight.vehicle_name.as_deref().unwrap_or("NO VEHICLE"),
-                        format_altitude_value(flight.apoapsis_altitude_m),
-                        format_altitude_value(flight.periapsis_altitude_m),
-                        format_duration(flight.time_to_apoapsis_s),
-                        format_duration(flight.time_to_periapsis_s),
-                    )
-                }
-            }
-            PilotReadout::Context => format!(
-                "REF {}\nTARGET {}\nRANGE {}\nCLOSING {}\nAP {}  PE {}\n[0] director  [1] target",
-                flight.environment.reference_body.as_deref().unwrap_or("--"),
-                flight.target_name.as_deref().unwrap_or("--"),
-                format_distance_short(flight.target_distance_m),
-                format_speed_value(flight.target_closing_speed_m_s),
-                format_altitude_value(flight.apoapsis_altitude_m),
-                format_altitude_value(flight.periapsis_altitude_m),
-            ),
-            PilotReadout::Navball => format!(
-                "{}  |  {}\nO PRO  X RET  + TGT  G GRV",
-                attitude_frame_label(flight.attitude_frame),
-                state.speed_frame.label(),
-            ),
-            PilotReadout::NavballFooter => match flight.source {
-                TelemetrySource::Live => "LOCAL  |  CONNECTED".into(),
-                TelemetrySource::DemoPreview => "LOCAL  |  DEMO PREVIEW".into(),
-            },
-            PilotReadout::Status => match flight.source {
-                TelemetrySource::Live => format!(
-                    "LIVE TELEMETRY\n{} / GUIDANCE ADAPTER READY",
-                    if clock.paused { "PAUSED" } else { "RUNNING" }
-                ),
-                TelemetrySource::DemoPreview => "DISPLAY ONLY\nNO GUIDANCE / NO ACTUATORS".into(),
-            },
-        };
-        **text = content;
-    }
-
-    debug_assert!(cursor_size.x >= 0.0 && cursor_size.y >= 0.0);
-}
-
-fn navball_marker_position(flight: &FlightUiState, vector: NavballVector) -> Vec2 {
-    let inertial_vector = match vector {
-        NavballVector::Prograde | NavballVector::Target => flight.surface_velocity_mps,
-        NavballVector::Retrograde => -flight.surface_velocity_mps,
-        NavballVector::Gravity => flight.gravity_acceleration_mps2,
-    };
-    let direction = inertial_vector.normalize_or_zero();
-    if direction.length_squared() <= 1.0e-8 {
-        return Vec2::new(180.0, 180.0);
-    }
-    let body_direction = (flight.orientation.inverse() * direction).normalize_or_zero();
-    // The center of this navball is the nose (+X). Perspective projection
-    // keeps markers on the sphere instead of pinning them to static debug
-    // coordinates. Directions behind the nose remain visible at the rim,
-    // matching the useful “approaching the edge” cue of KSP's navball.
-    let depth = body_direction.x.abs().max(0.28);
-    let scale = 126.0 / depth;
-    Vec2::new(
-        ((180.0 + body_direction.y * scale).clamp(32.0, 328.0)) as f32,
-        ((180.0 - body_direction.z * scale).clamp(32.0, 328.0)) as f32,
+        semi_major_axis * (1.0 + eccentricity) - radius_m,
+        semi_major_axis * (1.0 - eccentricity) - radius_m,
     )
 }
 
@@ -2442,62 +1337,6 @@ fn primary_altitude(flight: &FlightUiState, frame: AltitudeFrame) -> Option<f64>
     match frame {
         AltitudeFrame::Datum => flight.altitude_datum_m,
         AltitudeFrame::Agl => flight.altitude_agl_m,
-    }
-}
-
-fn format_speed_detail(flight: &FlightUiState, selected: SpeedFrame) -> String {
-    let mut lines = Vec::with_capacity(8);
-    for (frame, label, value) in [
-        (SpeedFrame::Surface, "SURF", flight.surface_speed_m_s),
-        (SpeedFrame::Air, "AIR", flight.air_speed_m_s),
-        (SpeedFrame::Orbital, "ORBIT", flight.orbital_speed_m_s),
-        (SpeedFrame::Target, "TGT", flight.target_speed_m_s),
-    ] {
-        if frame != selected {
-            lines.push(format!("{label:<6}{}", format_speed_value(value)));
-        }
-    }
-    lines.push(format!("MACH  {}", format_scalar(flight.mach, 2)));
-    lines.push(format!(
-        "AoA   {}",
-        format_angle(flight.angle_of_attack_deg)
-    ));
-    lines.push(format!(
-        "Q     {}",
-        format_pressure(flight.dynamic_pressure_pa)
-    ));
-    lines.join("\n")
-}
-
-fn format_altitude_detail(flight: &FlightUiState, selected: AltitudeFrame) -> String {
-    let mut lines = Vec::with_capacity(5);
-    if selected != AltitudeFrame::Datum {
-        lines.push(format!(
-            "DATUM {}",
-            format_altitude_value(flight.altitude_datum_m)
-        ));
-    }
-    if selected != AltitudeFrame::Agl {
-        lines.push(format!(
-            "AGL   {}",
-            format_altitude_value(flight.altitude_agl_m)
-        ));
-    }
-    lines.push(format!(
-        "V/S   {}",
-        format_speed_value(flight.vertical_speed_m_s)
-    ));
-    lines.push(String::new());
-    lines.push("[B] datum / AGL".into());
-    lines.join("\n")
-}
-
-fn attitude_frame_label(frame: AttitudeFrame) -> &'static str {
-    match frame {
-        AttitudeFrame::Local => "LOCAL",
-        AttitudeFrame::Orbit => "ORBIT",
-        AttitudeFrame::Target => "TARGET",
-        AttitudeFrame::Inertial => "INERTIAL",
     }
 }
 
@@ -2526,28 +1365,6 @@ fn format_angle(value: Option<f64>) -> String {
         .unwrap_or_else(|| "--".into())
 }
 
-#[cfg(test)]
-fn format_distance(value_m: Option<f64>) -> String {
-    value_m
-        .filter(|value| value.is_finite())
-        .map(|value| {
-            if value.abs() >= 100_000.0 {
-                format!("{:.1} km", value / 1_000.0)
-            } else {
-                format!("{value:.0} m")
-            }
-        })
-        .unwrap_or_else(|| "--".into())
-}
-
-#[cfg(test)]
-fn format_speed(value_m_s: Option<f64>) -> String {
-    value_m_s
-        .filter(|value| value.is_finite())
-        .map(|value| format!("{value:.1} m/s"))
-        .unwrap_or_else(|| "--".into())
-}
-
 fn format_speed_value(value_m_s: Option<f64>) -> String {
     value_m_s
         .filter(|value| value.is_finite())
@@ -2561,12 +1378,14 @@ fn format_altitude_value(value_m: Option<f64>) -> String {
         .unwrap_or_else(|| "--".into())
 }
 
+#[cfg(test)]
 fn format_altitude_number(value_m: Option<f64>) -> String {
     altitude_parts(value_m)
         .map(|(number, _)| number)
         .unwrap_or_else(|| "--".into())
 }
 
+#[cfg(test)]
 fn format_altitude_unit(value_m: Option<f64>) -> String {
     altitude_parts(value_m)
         .map(|(_, unit)| unit.into())
@@ -2592,13 +1411,6 @@ fn conventional_angle_of_attack_deg(air_velocity_body: DVec3) -> f64 {
         .to_degrees()
 }
 
-fn format_distance_short(value_m: Option<f64>) -> String {
-    value_m
-        .filter(|value| value.is_finite())
-        .map(|value| format!("{:.1} km", value / 1_000.0))
-        .unwrap_or_else(|| "--".into())
-}
-
 fn format_pressure(value_pa: Option<f64>) -> String {
     value_pa
         .filter(|value| value.is_finite())
@@ -2608,16 +1420,6 @@ fn format_pressure(value_pa: Option<f64>) -> String {
             } else {
                 format!("{value:.0} Pa")
             }
-        })
-        .unwrap_or_else(|| "--".into())
-}
-
-fn format_duration(value_s: Option<f64>) -> String {
-    value_s
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .map(|value| {
-            let total = value.round() as u64;
-            format!("{:02}:{:02}", total / 60, total % 60)
         })
         .unwrap_or_else(|| "--".into())
 }
@@ -2654,7 +1456,6 @@ fn format_scalar(value: Option<f64>, precision: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use thessa_sim_core::integrate_rigid_body_step;
 
     #[test]
     fn control_modes_cycle_forward_and_backward() {
@@ -2682,21 +1483,9 @@ mod tests {
     }
 
     #[test]
-    fn selected_primary_values_are_not_repeated_in_detail_readouts() {
-        let preview = FlightUiState::demo_preview(0.0, Some("NEREID".into()));
-        let speed = format_speed_detail(&preview, SpeedFrame::Surface);
-        let altitude = format_altitude_detail(&preview, AltitudeFrame::Datum);
-        assert!(!speed.contains("SURF"));
-        assert!(!altitude.contains("DATUM 82.4"));
-        assert!(!altitude.contains("HDG"));
-        assert!(!altitude.contains("PITCH"));
-        assert!(!altitude.contains("ROLL"));
-    }
-
-    #[test]
     fn missing_preview_values_are_not_formatted_as_physics() {
-        assert_eq!(format_speed(None), "--");
-        assert_eq!(format_distance(None), "--");
+        assert_eq!(format_speed_value(None), "--");
+        assert_eq!(format_altitude_value(None), "--");
         assert_eq!(format_pressure(None), "--");
         assert_eq!(format_percent(None), "--");
     }
@@ -2763,19 +1552,11 @@ mod tests {
         flight.command_controls(0.5, -0.25, -0.75);
         let panels = &flight.vehicle.aero_geometry.panels;
         let degrees = |radians: f64| radians.to_degrees();
-        assert!((degrees(panels[2].control_deflection_rad) - 12.5).abs() < 1.0e-10);
-        assert!((degrees(panels[3].control_deflection_rad) - 12.5).abs() < 1.0e-10);
-        assert!((degrees(panels[4].control_deflection_rad) - 5.5).abs() < 1.0e-10);
-        assert!((degrees(panels[0].control_deflection_rad) + 13.5).abs() < 1.0e-10);
-        assert!((degrees(panels[1].control_deflection_rad) - 13.5).abs() < 1.0e-10);
-    }
-
-    #[test]
-    fn ksp_pitch_rate_command_maps_w_up_and_s_down() {
-        let w = pilot_rate_moment(1.0, 0.0, 0.0, true);
-        let s = pilot_rate_moment(-1.0, 0.0, 0.0, true);
-        assert_eq!(w, DVec3::new(0.0, -105_000.0, 0.0));
-        assert_eq!(s, DVec3::new(0.0, 105_000.0, 0.0));
+        assert!((degrees(panels[2].control_deflection_rad) + 12.5).abs() < 1.0e-10);
+        assert!((degrees(panels[3].control_deflection_rad) + 12.5).abs() < 1.0e-10);
+        assert!((degrees(panels[4].control_deflection_rad) + 5.5).abs() < 1.0e-10);
+        assert!((degrees(panels[0].control_deflection_rad) - 13.5).abs() < 1.0e-10);
+        assert!((degrees(panels[1].control_deflection_rad) + 13.5).abs() < 1.0e-10);
     }
 
     #[test]
@@ -2807,236 +1588,10 @@ mod tests {
     }
 
     #[test]
-    fn x15_initial_force_sample_is_reported_for_flight_audit() {
-        let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml"))
-            .expect("checked-in system config parses");
-        let ephemeris = config.bake().expect("checked-in system bakes");
-        let reference_body = ephemeris.body_id("thessa").expect("playable body exists");
-        let flight =
-            PilotFlightRuntime::new(&ephemeris, reference_body).expect("X-15 runtime initializes");
-        let body = ephemeris.body(reference_body).expect("body exists");
-        let body_state = ephemeris
-            .body_state(reference_body, SimTime::EPOCH)
-            .expect("body state evaluates");
-        let kinematics =
-            local_air_kinematics(flight.atmosphere, flight.state, body_state, body.radius_m)
-                .expect("initial air kinematics evaluate");
-        let gravity = GravityField::from_ephemeris(&ephemeris)
-            .acceleration(flight.state.position_inertial_m, SimTime::EPOCH)
-            .expect("gravity evaluates");
-        let sas_moment = pilot_sas_moment(
-            flight.state,
-            flight.sas_target_orientation,
-            kinematics.radial_up,
-        );
-        let trim_moment = pilot_aero_trim_moment(kinematics.air_velocity_body_mps);
-        let (next, forces) = integrate_rigid_body_step(
-            &flight.aero_model,
-            &flight.vehicle.aero_geometry,
-            flight.atmosphere,
-            flight.state,
-            flight.vehicle.mass_properties,
-            FlightStepInput {
-                altitude_m: PILOT_START_ALTITUDE_M,
-                gravity_acceleration_inertial_mps2: gravity,
-                position_body_m: kinematics.relative_position_body_m,
-                wind_velocity_body_mps: flight.state.orientation_body_to_inertial.inverse()
-                    * body_state.velocity_inertial,
-                extra_force_body_n: DVec3::X * flight.thrust_n(),
-                extra_moment_body_nm: sas_moment + trim_moment,
-            },
-            0.02,
-        )
-        .expect("initial X-15 step evaluates");
-        println!(
-            "initial x15: v_rel={:.3} m/s aero={:?} force_body={:?} accel={:?} next_alt={:.3} m",
-            kinematics.air_velocity_body_mps.length(),
-            forces.aero,
-            forces.total_force_body_n,
-            forces.acceleration_inertial_mps2,
-            (next.position_inertial_m - body_state.position_inertial).length() - body.radius_m,
-        );
-        assert!(forces.acceleration_inertial_mps2.is_finite());
-    }
-
-    #[test]
     fn pilot_aoa_is_positive_when_nose_is_above_velocity() {
         let nose_up = DVec3::new(100.0, 0.0, -100.0 * 5.0_f64.to_radians().tan());
         let nose_down = DVec3::new(100.0, 0.0, 100.0 * 5.0_f64.to_radians().tan());
         assert!((conventional_angle_of_attack_deg(nose_up) - 5.0).abs() < 1.0e-12);
         assert!((conventional_angle_of_attack_deg(nose_down) + 5.0).abs() < 1.0e-12);
-    }
-
-    #[test]
-    fn x15_runtime_stays_finite_during_a_long_controlled_run() {
-        let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml"))
-            .expect("checked-in system config parses");
-        let ephemeris = config.bake().expect("checked-in system bakes");
-        let reference_body = ephemeris.body_id("thessa").expect("playable body exists");
-        let mut flight =
-            PilotFlightRuntime::new(&ephemeris, reference_body).expect("X-15 runtime initializes");
-        let body = ephemeris.body(reference_body).expect("body exists");
-        for step in 0..30_000 {
-            let body_state = ephemeris
-                .body_state(reference_body, SimTime(flight.flight_time_s))
-                .expect("body state evaluates");
-            let relative = flight.state.position_inertial_m - body_state.position_inertial;
-            let gravity = GravityField::from_ephemeris(&ephemeris)
-                .acceleration(
-                    flight.state.position_inertial_m,
-                    SimTime(flight.flight_time_s),
-                )
-                .expect("gravity evaluates");
-            let phase = step as f64 * 0.013;
-            let pitch = phase.sin();
-            let yaw = (phase * 0.73).cos();
-            let roll = (phase * 1.31).sin();
-            flight.command_controls(pitch, yaw, roll);
-            let radial_up = relative.try_normalize().unwrap_or(DVec3::Z);
-            let body_up = flight.state.orientation_body_to_inertial * DVec3::Z;
-            let attitude_error_body =
-                flight.state.orientation_body_to_inertial.inverse() * body_up.cross(radial_up);
-            let sas_moment = -flight.state.angular_velocity_body_rps * 42_000.0
-                + attitude_error_body * 260_000.0;
-            let rate_moment = pilot_rate_moment(pitch, yaw, roll, true);
-            let (state, forces) = integrate_rigid_body_step(
-                &flight.aero_model,
-                &flight.vehicle.aero_geometry,
-                flight.atmosphere,
-                flight.state,
-                flight.vehicle.mass_properties,
-                FlightStepInput {
-                    altitude_m: (relative.length() - body.radius_m).max(0.0),
-                    gravity_acceleration_inertial_mps2: gravity,
-                    position_body_m: relative,
-                    wind_velocity_body_mps: flight.state.orientation_body_to_inertial.inverse()
-                        * body_state.velocity_inertial,
-                    extra_force_body_n: DVec3::X * flight.thrust_n(),
-                    extra_moment_body_nm: sas_moment + rate_moment,
-                },
-                0.02,
-            )
-            .expect("X-15 step evaluates");
-            assert!(state.position_inertial_m.is_finite());
-            assert!(state.velocity_inertial_mps.is_finite());
-            assert!(forces.aero.mach.is_finite());
-            assert!(
-                state.velocity_inertial_mps.length() < 1.0e6,
-                "X-15 diverged at step {step}: speed={} m/s mach={} altitude={} m",
-                state.velocity_inertial_mps.length(),
-                forces.aero.mach,
-                relative.length() - body.radius_m,
-            );
-            flight.state = state;
-            flight.flight_time_s += 0.02;
-        }
-    }
-
-    #[test]
-    fn x15_surface_departure_does_not_spin_without_input() {
-        let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml"))
-            .expect("checked-in system config parses");
-        let ephemeris = config.bake().expect("checked-in system bakes");
-        let reference_body = ephemeris.body_id("thessa").expect("playable body exists");
-        let mut flight =
-            PilotFlightRuntime::new(&ephemeris, reference_body).expect("X-15 runtime initializes");
-        let body = ephemeris.body(reference_body).expect("body exists");
-        let mut minimum_altitude_m = f64::INFINITY;
-        let mut maximum_abs_aoa_deg: f64 = 0.0;
-        for step in 0..9_000 {
-            let body_state = ephemeris
-                .body_state(reference_body, SimTime(flight.flight_time_s))
-                .expect("body state evaluates");
-            let kinematics =
-                local_air_kinematics(flight.atmosphere, flight.state, body_state, body.radius_m)
-                    .expect("air kinematics evaluate");
-            let gravity = GravityField::from_ephemeris(&ephemeris)
-                .acceleration(
-                    flight.state.position_inertial_m,
-                    SimTime(flight.flight_time_s),
-                )
-                .expect("gravity evaluates");
-            flight.command_controls(0.0, 0.0, 0.0);
-            let sas_moment = pilot_sas_moment(
-                flight.state,
-                flight.sas_target_orientation,
-                kinematics.radial_up,
-            );
-            let trim_moment = pilot_aero_trim_moment(kinematics.air_velocity_body_mps);
-            let contact_moment = if kinematics.altitude_m <= 5.5
-                && kinematics
-                    .relative_velocity_inertial_mps
-                    .dot(kinematics.radial_up)
-                    <= 0.0
-            {
-                -flight.state.angular_velocity_body_rps
-                    * DVec3::new(400_000.0, 700_000.0, 400_000.0)
-            } else {
-                DVec3::ZERO
-            };
-            let (state, _forces) = integrate_rigid_body_step(
-                &flight.aero_model,
-                &flight.vehicle.aero_geometry,
-                flight.atmosphere,
-                flight.state,
-                flight.vehicle.mass_properties,
-                FlightStepInput {
-                    altitude_m: kinematics.altitude_m.max(0.0),
-                    gravity_acceleration_inertial_mps2: gravity,
-                    position_body_m: kinematics.relative_position_body_m,
-                    wind_velocity_body_mps: flight.state.orientation_body_to_inertial.inverse()
-                        * body_state.velocity_inertial,
-                    extra_force_body_n: DVec3::X * flight.thrust_n(),
-                    extra_moment_body_nm: sas_moment + trim_moment + contact_moment,
-                },
-                0.02,
-            )
-            .expect("X-15 attitude step evaluates");
-            let next_body_state = ephemeris
-                .body_state(reference_body, SimTime(flight.flight_time_s + 0.02))
-                .expect("next body state evaluates");
-            let next_relative = state.position_inertial_m - next_body_state.position_inertial;
-            if next_relative.length() < body.radius_m + PILOT_SURFACE_CLEARANCE_M {
-                let contact_position = next_relative
-                    .try_normalize()
-                    .unwrap_or(kinematics.radial_up)
-                    * (body.radius_m + PILOT_SURFACE_CLEARANCE_M);
-                let mut state = state;
-                state.position_inertial_m = next_body_state.position_inertial + contact_position;
-                let next_relative_velocity =
-                    state.velocity_inertial_mps - next_body_state.velocity_inertial;
-                let inward_speed = next_relative_velocity.dot(-contact_position.normalize());
-                if inward_speed > 0.0 {
-                    state.velocity_inertial_mps += contact_position.normalize() * inward_speed;
-                }
-                flight.state = state;
-            } else {
-                flight.state = state;
-            }
-            let measured_altitude_m = (flight.state.position_inertial_m
-                - ephemeris
-                    .body_state(reference_body, SimTime(flight.flight_time_s + 0.02))
-                    .expect("body state evaluates")
-                    .position_inertial)
-                .length()
-                - body.radius_m;
-            minimum_altitude_m = minimum_altitude_m.min(measured_altitude_m);
-            maximum_abs_aoa_deg = maximum_abs_aoa_deg
-                .max(conventional_angle_of_attack_deg(kinematics.air_velocity_body_mps).abs());
-            assert!(
-                flight.state.angular_velocity_body_rps.length() < 0.35,
-                "X-15 uncommanded attitude rate exceeded 0.35 rad/s at step {step}: {:?}",
-                flight.state.angular_velocity_body_rps
-            );
-            flight.flight_time_s += 0.02;
-        }
-        assert!(
-            minimum_altitude_m > 100.0,
-            "X-15 zero-input profile fell too low: {minimum_altitude_m:.1} m"
-        );
-        assert!(
-            maximum_abs_aoa_deg < 30.0,
-            "X-15 zero-input profile reached excessive AoA: {maximum_abs_aoa_deg:.1} deg"
-        );
     }
 }

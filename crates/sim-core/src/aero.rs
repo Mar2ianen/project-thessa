@@ -122,8 +122,9 @@ pub struct AeroPanel {
     /// value of `1` is isolated-flow; rocket fin sets can use a documented
     /// Barrowman/body-interference value.
     pub lift_interference_factor: f64,
-    /// Sign/authority multiplier for lift on surfaces such as an inverted
-    /// horizontal tail. `1` is conventional; `-1` produces restoring lift.
+    /// Multiplier of the entire lift curve, including its slope. `1` is
+    /// conventional; `-1` reverses static stability and local-flow damping.
+    /// Negative tail trim lift should use incidence/deflection, not this sign.
     pub lift_coefficient_sign: f64,
     /// Maximum thickness divided by chord. This is used only by the
     /// supersonic thin-airfoil wave-drag term; `0` keeps a mathematical flat

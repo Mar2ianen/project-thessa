@@ -488,9 +488,8 @@ fn aero_dynamic_damping_uses_arbitrary_panel_axes() {
 }
 
 #[test]
-fn aero_signed_stabilizer_lift_restores_positive_alpha() {
+fn aero_aft_stabilizer_lowers_nose_at_positive_alpha() {
     let panel = AeroPanel::flat_plate(DVec3::new(-4.0, 0.0, 0.0), 4.0, 1.2)
-        .and_then(|panel| panel.with_lift_sign(-1.0))
         .expect("valid stabilizer panel");
     let case = AeroCase::new(
         AeroState::new(
@@ -509,8 +508,12 @@ fn aero_signed_stabilizer_lift_restores_positive_alpha() {
     })
     .expect("valid aero model");
     let result = model.evaluate(&case).expect("finite stabilizer result");
-    assert!(result.force_body_n.z < 0.0);
-    assert!(result.moment_body_nm.y < 0.0);
+    assert!(result.force_body_n.z > 0.0);
+    assert!(result.moment_body_nm.y > 0.0);
+    // Verify the physical consequence instead of calling a torque sign
+    // "restoring": +Y rotates the nose toward -Z in this body basis.
+    let nose_after = DQuat::from_rotation_y(result.moment_body_nm.y * 1.0e-6) * DVec3::X;
+    assert!(nose_after.z < 0.0);
 }
 
 #[test]

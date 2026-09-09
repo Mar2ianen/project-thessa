@@ -5260,6 +5260,7 @@ dependencies = [
 name = "thessa-worldgen-rocky"
 version = "0.0.1"
 dependencies = [
+ "png",
  "serde",
  "serde_json",
  "toml",

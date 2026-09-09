@@ -4,7 +4,9 @@
 //! landmark generators + procedural physical-scale detail. Resolution-agnostic:
 //! all scales in metres, gores as normalized fractions.
 
-use thessa_worldgen_rocky::{bake, field, geothermal, manifest, preview, spec_recipe, system_body};
+use thessa_worldgen_rocky::{
+    bake, client_export, field, geothermal, manifest, preview, spec_recipe, system_body,
+};
 
 use std::{env, error::Error, fmt, fs, path::PathBuf};
 
@@ -45,6 +47,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "preview" => cmd_preview(args),
         "bake" => cmd_bake(args),
         "bake-spec" => cmd_bake_spec(args),
+        "export-client-texture" => cmd_export_client_texture(args),
         "--help" | "-h" | "help" => {
             print_help();
             Ok(())
@@ -70,6 +73,12 @@ fn print_help() {
     );
     println!("  thessa-worldgen-rocky list-landmarks --manifest <TOML>");
     println!("  thessa-worldgen-rocky check-landmarks --manifest <TOML>");
+    println!(
+        "  thessa-worldgen-rocky export-client-texture --manifest <TOML> --out <PNG> [--width 2048 --min-wavelength-m 2000]"
+    );
+    println!(
+        "  thessa-worldgen-rocky export-client-texture --recipe <TOML> --body-file <TOML> --out <PNG>"
+    );
     println!("  thessa-worldgen-rocky list-prompts");
     println!("  thessa-worldgen-rocky preview --manifest <TOML> --step-deg 2 --out /tmp/pv");
     println!("  thessa-worldgen-rocky bake --manifest <TOML> --step-deg 2 [--out report.json]");
@@ -698,6 +707,84 @@ fn cmd_check_landmarks(mut args: impl Iterator<Item = String>) -> Result<(), Box
         }
     }
     println!("landmarks ok: {}", manifest.landmark_zones.len());
+    Ok(())
+}
+
+fn cmd_export_client_texture(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+    let mut manifest_path: Option<PathBuf> = None;
+    let mut recipe_path: Option<PathBuf> = None;
+    let mut body_path = PathBuf::from("data/worldgen/thessa_v02.toml");
+    let mut out: Option<PathBuf> = None;
+    let mut width: usize = 2048;
+    let mut height: usize = 1024;
+    let mut min_wl: f64 = 2000.0;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--manifest" => {
+                manifest_path = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--manifest requires a value"))?,
+                ));
+            }
+            "--recipe" => {
+                recipe_path = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--recipe requires a value"))?,
+                ));
+            }
+            "--body-file" => {
+                body_path = PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--body-file requires a value"))?,
+                );
+            }
+            "--out" => {
+                out = Some(PathBuf::from(
+                    args.next().ok_or_else(|| fail("--out requires a value"))?,
+                ));
+            }
+            "--width" => {
+                width = args
+                    .next()
+                    .ok_or_else(|| fail("--width requires a value"))?
+                    .parse()?;
+            }
+            "--height" => {
+                height = args
+                    .next()
+                    .ok_or_else(|| fail("--height requires a value"))?
+                    .parse()?;
+            }
+            "--min-wavelength-m" => {
+                min_wl = args
+                    .next()
+                    .ok_or_else(|| fail("--min-wavelength-m requires a value"))?
+                    .parse()?;
+            }
+            unknown => return Err(fail(format!("unknown argument {unknown}"))),
+        }
+    }
+    let out = out.ok_or_else(|| fail("--out is required"))?;
+    let manifest = match (manifest_path, recipe_path) {
+        (Some(path), None) => load_manifest(&path)?,
+        (None, Some(recipe)) => {
+            let spec: spec_recipe::SpecRecipe = toml::from_str(&fs::read_to_string(&recipe)?)?;
+            let body: spec_recipe::BodyFile = toml::from_str(&fs::read_to_string(&body_path)?)?;
+            spec_recipe::validate_spec(&spec, &body).map_err(fail)?;
+            spec_recipe::manifest_from_spec(&spec).map_err(fail)?
+        }
+        _ => return Err(fail("give exactly one of --manifest or --recipe")),
+    };
+    validate_manifest(&manifest).map_err(fail)?;
+    let field = field::field_from_manifest(&manifest).map_err(fail)?;
+    let (rgb, _) =
+        client_export::render_client_texture(&field, width, height, min_wl).map_err(fail)?;
+    let png = client_export::encode_png_rgb(width, height, &rgb).map_err(fail)?;
+    if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&out, png)?;
+    println!("wrote: {} ({width}x{height})", out.display());
     Ok(())
 }
 

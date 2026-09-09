@@ -269,7 +269,7 @@ fn setup(
         }),
         thessa: materials.add(StandardMaterial {
             base_color: Color::srgb(0.85, 0.90, 0.86),
-            base_color_texture: Some(asset_server.load("textures/thessa-surface-v1.png")),
+            base_color_texture: Some(asset_server.load("textures/thessa-surface-v2.png")),
             perceptual_roughness: 0.92,
             ..default()
         }),

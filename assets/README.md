@@ -7,6 +7,9 @@
 - `textures/orthea-surface-v1.png` — холодная тяжёлая поверхность Orthea;
 - `textures/pelagos-surface-v1.png` — океаническая поверхность Pelagos;
 - `textures/thessa-surface-v1.png` — поверхность луны Thessa;
+- `textures/thessa-surface-v2.png` — Thessa v0.2: процедурная текстура из
+  `thessa-worldgen-rocky` (`export-client-texture` из spec-рецепта, сид 7).
+  Перегенерируется детерминированно, v1 оставлен для отката;
 - `textures/borea-surface-v1.png` — ледяная/базальтовая поверхность Borea;
 - `textures/nereid-atmosphere-v1.png` — тёплые полосы атмосферы газового гиганта Nereid.
 - `textures/vesper-atmosphere-v1.png` — холодные полосы атмосферы Vesper.

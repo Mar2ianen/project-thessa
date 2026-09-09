@@ -6,6 +6,7 @@
 
 pub mod bake;
 pub mod biomes;
+pub mod client_export;
 pub mod climate;
 pub mod erosion;
 pub mod features;

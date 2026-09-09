@@ -33,6 +33,10 @@ const X15_AUTHORED_LENGTH_M: f32 = 15.45;
 const MAX_PILOT_ALTITUDE_M: f64 = 1.0e9;
 const MAX_PILOT_RELATIVE_SPEED_MPS: f64 = 50_000.0;
 const MAX_PILOT_ANGULAR_RATE_RPS: f64 = 25.0;
+// KSP-style attitude keys change the SAS target at a pilotable rate. The old
+// 0.72 rad/s value moved the target by more than 40 degrees every second and
+// drove the X-15 straight through stall before a player could trim it.
+const PILOT_ATTITUDE_COMMAND_RATE_RAD_S: f64 = 0.16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ClientViewMode {
@@ -394,6 +398,18 @@ fn pilot_aero_trim_moment(air_velocity_body: DVec3) -> DVec3 {
     DVec3::new(0.0, -pitch_error * 1_800_000.0, yaw_error * 1_200_000.0)
 }
 
+/// Convert KSP-style rate commands into a body-frame torque.
+///
+/// The flight body basis is +X forward, +Y right and +Z up. In that
+/// right-handed basis a positive rotation about +Y turns +X toward -Z, i.e.
+/// lowers the nose. The keyboard convention is the opposite: W is nose-up
+/// and S is nose-down. Keep that conversion in one place so the direct-rate
+/// path and its regression tests cannot silently drift apart.
+fn pilot_rate_moment(pitch: f64, yaw: f64, roll: f64, rcs_enabled: bool) -> DVec3 {
+    let authority = if rcs_enabled { 105_000.0 } else { 35_000.0 };
+    DVec3::new(roll, -pitch, yaw) * authority
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum TelemetrySource {
     #[default]
@@ -556,6 +572,7 @@ enum PilotReadout {
     SpeedValue,
     SpeedDetail,
     AltitudeValue,
+    AltitudeUnit,
     AltitudeDetail,
     Vehicle,
     Context,
@@ -1043,6 +1060,7 @@ fn spawn_altitude_tape(parent: &mut ChildSpawnerCommands<'_>) {
                 },
             ));
             tape.spawn((
+                PilotReadout::AltitudeUnit,
                 Text::new("km"),
                 TextFont {
                     font_size: FontSize::Px(11.0),
@@ -1572,12 +1590,7 @@ fn simulate_pilot_flight(
         } else {
             DVec3::ZERO
         };
-    let rate_moment = DVec3::new(roll, pitch, yaw)
-        * if runtime.rcs_enabled {
-            105_000.0
-        } else {
-            35_000.0
-        };
+    let rate_moment = pilot_rate_moment(pitch, yaw, roll, runtime.rcs_enabled);
     let thrust = DVec3::X * runtime.thrust_n();
     let input = FlightStepInput {
         altitude_m: altitude_m.max(0.0),
@@ -1799,7 +1812,7 @@ fn pilot_input(
             // rate controller; the old mapping mixed all three channels.
             let target_axis = DVec3::new(command_input.z, -command_input.x, command_input.y);
             runtime.sas_target_orientation = (runtime.sas_target_orientation
-                * DQuat::from_scaled_axis(target_axis * (0.72 * dt)))
+                * DQuat::from_scaled_axis(target_axis * (PILOT_ATTITUDE_COMMAND_RATE_RAD_S * dt)))
             .normalize();
             runtime.control_input = DVec3::ZERO;
         } else {
@@ -1963,7 +1976,7 @@ fn live_flight_ui_state(
         roll_deg: Some(roll_deg),
         mach: forces.map(|forces| forces.aero.mach),
         dynamic_pressure_pa: forces.map(|forces| forces.aero.dynamic_pressure_pa),
-        angle_of_attack_deg: Some(air_velocity.z.atan2(air_velocity.x).to_degrees()),
+        angle_of_attack_deg: Some(conventional_angle_of_attack_deg(air_velocity)),
         sideslip_deg: Some(
             air_velocity
                 .y
@@ -2121,7 +2134,10 @@ fn update_pilot_hud(
             }
             PilotReadout::SpeedDetail => format_speed_detail(flight, state.speed_frame),
             PilotReadout::AltitudeValue => {
-                format_altitude_value(primary_altitude(flight, state.altitude_frame))
+                format_altitude_number(primary_altitude(flight, state.altitude_frame))
+            }
+            PilotReadout::AltitudeUnit => {
+                format_altitude_unit(primary_altitude(flight, state.altitude_frame))
             }
             PilotReadout::AltitudeDetail => format_altitude_detail(flight, state.altitude_frame),
             PilotReadout::Vehicle => {
@@ -2331,16 +2347,40 @@ fn format_speed_value(value_m_s: Option<f64>) -> String {
 }
 
 fn format_altitude_value(value_m: Option<f64>) -> String {
-    value_m
-        .filter(|value| value.is_finite())
-        .map(|value| {
-            if value.abs() < 1_000.0 {
-                format!("{value:.0} m")
-            } else {
-                format!("{:.1} km", value / 1_000.0)
-            }
-        })
+    altitude_parts(value_m)
+        .map(|(number, unit)| format!("{number} {unit}"))
         .unwrap_or_else(|| "--".into())
+}
+
+fn format_altitude_number(value_m: Option<f64>) -> String {
+    altitude_parts(value_m)
+        .map(|(number, _)| number)
+        .unwrap_or_else(|| "--".into())
+}
+
+fn format_altitude_unit(value_m: Option<f64>) -> String {
+    altitude_parts(value_m)
+        .map(|(_, unit)| unit.into())
+        .unwrap_or_else(|| "--".into())
+}
+
+fn altitude_parts(value_m: Option<f64>) -> Option<(String, &'static str)> {
+    value_m.filter(|value| value.is_finite()).map(|value| {
+        if value.abs() < 1_000.0 {
+            (format!("{value:.0}"), "m")
+        } else {
+            (format!("{:.1}", value / 1_000.0), "km")
+        }
+    })
+}
+
+fn conventional_angle_of_attack_deg(air_velocity_body: DVec3) -> f64 {
+    // The reusable aero contract stores +Z as up and defines its coefficient
+    // alpha from the velocity vector. Pilot HUDs conventionally report
+    // positive AoA when the nose is above the velocity vector, hence -w/u.
+    (-air_velocity_body.z)
+        .atan2(air_velocity_body.x)
+        .to_degrees()
 }
 
 fn format_distance_short(value_m: Option<f64>) -> String {
@@ -2522,9 +2562,29 @@ mod tests {
     }
 
     #[test]
+    fn ksp_pitch_rate_command_maps_w_up_and_s_down() {
+        let w = pilot_rate_moment(1.0, 0.0, 0.0, true);
+        let s = pilot_rate_moment(-1.0, 0.0, 0.0, true);
+        assert_eq!(w, DVec3::new(0.0, -105_000.0, 0.0));
+        assert_eq!(s, DVec3::new(0.0, 105_000.0, 0.0));
+    }
+
+    #[test]
     fn surface_altitude_keeps_meter_resolution() {
         assert_eq!(format_altitude_value(Some(25.0)), "25 m");
         assert_eq!(format_altitude_value(Some(1_300.0)), "1.3 km");
+        assert_eq!(format_altitude_number(Some(25.0)), "25");
+        assert_eq!(format_altitude_unit(Some(25.0)), "m");
+        assert_eq!(format_altitude_number(Some(1_300.0)), "1.3");
+        assert_eq!(format_altitude_unit(Some(1_300.0)), "km");
+    }
+
+    #[test]
+    fn pilot_aoa_is_positive_when_nose_is_above_velocity() {
+        let nose_up = DVec3::new(100.0, 0.0, -100.0 * 5.0_f64.to_radians().tan());
+        let nose_down = DVec3::new(100.0, 0.0, 100.0 * 5.0_f64.to_radians().tan());
+        assert!((conventional_angle_of_attack_deg(nose_up) - 5.0).abs() < 1.0e-12);
+        assert!((conventional_angle_of_attack_deg(nose_down) + 5.0).abs() < 1.0e-12);
     }
 
     #[test]
@@ -2558,7 +2618,7 @@ mod tests {
                 flight.state.orientation_body_to_inertial.inverse() * body_up.cross(radial_up);
             let sas_moment = -flight.state.angular_velocity_body_rps * 42_000.0
                 + attitude_error_body * 260_000.0;
-            let rate_moment = DVec3::new(roll, pitch, yaw) * 105_000.0;
+            let rate_moment = pilot_rate_moment(pitch, yaw, roll, true);
             let (state, forces) = integrate_rigid_body_step(
                 &flight.aero_model,
                 &flight.vehicle.aero_geometry,

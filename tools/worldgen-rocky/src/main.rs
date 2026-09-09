@@ -777,13 +777,12 @@ fn cmd_export_client_texture(mut args: impl Iterator<Item = String>) -> Result<(
     };
     validate_manifest(&manifest).map_err(fail)?;
     let field = field::field_from_manifest(&manifest).map_err(fail)?;
-    let (rgb, _) =
-        client_export::render_client_texture(&field, width, height, min_wl).map_err(fail)?;
-    let png = client_export::encode_png_rgb(width, height, &rgb).map_err(fail)?;
     if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&out, png)?;
+    let file = std::fs::File::create(&out)?;
+    let writer = std::io::BufWriter::new(file);
+    client_export::write_client_texture_png(&field, width, height, min_wl, writer).map_err(fail)?;
     println!("wrote: {} ({width}x{height})", out.display());
     Ok(())
 }

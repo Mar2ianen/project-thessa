@@ -1,128 +1,46 @@
-//! Thessa rocky-planet worldgen dev tool.
+//! Thessa rocky-planet worldgen dev tool (MIT, dev-only).
 //!
-//! Dev-only helper, not runtime: validates a resolution-agnostic manifest for
-//! GPT-image-generated base maps (orange-slice gores) plus deterministic
-//! procedural micro-detail. Rocky planets only, no clouds.
+//! Authored macrostructure + deterministic geology/biome logic + explicit
+//! landmark generators + procedural physical-scale detail. Resolution-agnostic:
+//! all scales in metres, gores as normalized fractions.
+
+use thessa_worldgen_rocky::{bake, manifest, preview, terrain};
 
 use std::{env, error::Error, fmt, fs, path::PathBuf};
 
-use serde::{Deserialize, Serialize};
-
-/// Canonical layer set. Exactly these 7 files per planet.
-pub const CANONICAL_LAYERS: [&str; 7] = [
-    "height",
-    "albedo",
-    "biomes",
-    "roughness",
-    "normal",
-    "hydrology",
-    "minerals",
-];
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct Manifest {
-    planet: Planet,
-    gores: Gores,
-    layers: Vec<Layer>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct Planet {
-    name: String,
-    kind: String,
-    datum_radius_m: f64,
-    height_min_m: f64,
-    height_max_m: f64,
-    seed: u64,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct Gores {
-    /// Number of orange-slice segments around the equator. No pixels here,
-    /// only normalized fractions; source resolution can be upgraded later.
-    count: u32,
-    /// Fractional overlap between neighbours, 0..0.25, for seamless stitch.
-    overlap_fraction: f64,
-    /// Whether polar caps are generated as separate images.
-    polar_caps: bool,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct Layer {
-    name: String,
-    file: String,
-    prompt: String,
-}
+use manifest::{CANONICAL_LAYERS, Manifest, validate_manifest};
 
 #[derive(Debug)]
-enum WorldgenError {
-    Message(String),
-}
+struct ToolError(String);
 
-impl fmt::Display for WorldgenError {
+impl fmt::Display for ToolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Message(m) => write!(f, "{m}"),
-        }
+        write!(f, "{}", self.0)
     }
 }
 
-impl Error for WorldgenError {}
+impl Error for ToolError {}
 
 fn fail(message: impl Into<String>) -> Box<dyn Error> {
-    Box::new(WorldgenError::Message(message.into()))
+    Box::new(ToolError(message.into()))
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = env::args().skip(1).peekable();
     let command = args.next().ok_or_else(|| {
-        fail("usage: thessa-worldgen-rocky <check|list-prompts|sample> [--manifest PATH] ...")
+        fail("usage: thessa-worldgen-rocky <check|sample|list-prompts|preview|bake> ...")
     })?;
     match command.as_str() {
-        "check" => {
-            let options = CheckOptions::parse(args)?;
-            let manifest = load_manifest(&options.manifest)?;
-            validate_manifest(&manifest)?;
-            println!(
-                "planet: {} (rocky, seed {})",
-                manifest.planet.name, manifest.planet.seed
-            );
-            println!(
-                "gores: {} overlap {:.3} caps {}",
-                manifest.gores.count, manifest.gores.overlap_fraction, manifest.gores.polar_caps
-            );
-            println!("layers: {}", manifest.layers.len());
-            for layer in &manifest.layers {
-                println!(
-                    "  {name:>10}  {file}  <- {prompt}",
-                    name = layer.name,
-                    file = layer.file,
-                    prompt = layer.prompt
-                );
-            }
-            println!("ok: resolution-agnostic, no pixel constants pinned");
-            Ok(())
-        }
+        "check" => cmd_check(args),
+        "sample" => cmd_sample(args),
         "list-prompts" => {
             for layer in CANONICAL_LAYERS {
                 println!("prompts/{layer}.md");
             }
             Ok(())
         }
-        "sample" => {
-            let options = SampleOptions::parse(args)?;
-            let manifest = load_manifest(&options.manifest)?;
-            validate_manifest(&manifest)?;
-            let height_m = sample_height_detail(
-                manifest.planet.seed,
-                options.lat_deg,
-                options.lon_deg,
-                options.base_height_m,
-                options.detail_scale_m,
-            )?;
-            println!("height_detail_m: {height_m:.3}");
-            Ok(())
-        }
+        "preview" => cmd_preview(args),
+        "bake" => cmd_bake(args),
         "--help" | "-h" | "help" => {
             print_help();
             Ok(())
@@ -133,102 +51,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn print_help() {
     println!("Usage:");
-    println!("  thessa-worldgen-rocky check --manifest data/worldgen/example_rocky.toml");
-    println!("  thessa-worldgen-rocky list-prompts");
+    println!("  thessa-worldgen-rocky check --manifest <TOML>");
     println!(
-        "  thessa-worldgen-rocky sample --manifest <TOML> --lat-deg 12 --lon-deg -40 --base-height-m 800 --detail-scale-m 250"
+        "  thessa-worldgen-rocky sample --manifest <TOML> --lat-deg 12 --lon-deg -40 --detail-scale-m 250"
     );
-}
-
-struct CheckOptions {
-    manifest: PathBuf,
-}
-
-impl CheckOptions {
-    fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, Box<dyn Error>> {
-        let mut manifest = PathBuf::from("data/worldgen/example_rocky.toml");
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "--manifest" => {
-                    manifest = PathBuf::from(
-                        args.next()
-                            .ok_or_else(|| fail("--manifest requires a value"))?,
-                    );
-                }
-                unknown => return Err(fail(format!("unknown argument {unknown}"))),
-            }
-        }
-        Ok(Self { manifest })
-    }
-}
-
-struct SampleOptions {
-    manifest: PathBuf,
-    lat_deg: f64,
-    lon_deg: f64,
-    base_height_m: f64,
-    detail_scale_m: f64,
-}
-
-impl SampleOptions {
-    fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, Box<dyn Error>> {
-        let mut manifest = PathBuf::from("data/worldgen/example_rocky.toml");
-        let mut lat_deg: f64 = 0.0;
-        let mut lon_deg: f64 = 0.0;
-        let mut base_height_m: f64 = 0.0;
-        let mut detail_scale_m: f64 = 250.0;
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "--manifest" => {
-                    manifest = PathBuf::from(
-                        args.next()
-                            .ok_or_else(|| fail("--manifest requires a value"))?,
-                    );
-                }
-                "--lat-deg" => {
-                    lat_deg = args
-                        .next()
-                        .ok_or_else(|| fail("--lat-deg requires a value"))?
-                        .parse()?;
-                }
-                "--lon-deg" => {
-                    lon_deg = args
-                        .next()
-                        .ok_or_else(|| fail("--lon-deg requires a value"))?
-                        .parse()?;
-                }
-                "--base-height-m" => {
-                    base_height_m = args
-                        .next()
-                        .ok_or_else(|| fail("--base-height-m requires a value"))?
-                        .parse()?;
-                }
-                "--detail-scale-m" => {
-                    detail_scale_m = args
-                        .next()
-                        .ok_or_else(|| fail("--detail-scale-m requires a value"))?
-                        .parse()?;
-                }
-                unknown => return Err(fail(format!("unknown argument {unknown}"))),
-            }
-        }
-        if !lat_deg.is_finite() || !(-90.0..=90.0).contains(&lat_deg) {
-            return Err(fail("--lat-deg must be within -90..90"));
-        }
-        if !lon_deg.is_finite() || !(-180.0..=180.0).contains(&lon_deg) {
-            return Err(fail("--lon-deg must be within -180..180"));
-        }
-        if !base_height_m.is_finite() || !detail_scale_m.is_finite() || detail_scale_m <= 0.0 {
-            return Err(fail("heights must be finite and detail scale positive"));
-        }
-        Ok(Self {
-            manifest,
-            lat_deg,
-            lon_deg,
-            base_height_m,
-            detail_scale_m,
-        })
-    }
+    println!("  thessa-worldgen-rocky list-prompts");
+    println!("  thessa-worldgen-rocky preview --manifest <TOML> --step-deg 2 --out /tmp/pv");
+    println!("  thessa-worldgen-rocky bake --manifest <TOML> --step-deg 2 [--out report.json]");
 }
 
 fn load_manifest(path: &PathBuf) -> Result<Manifest, Box<dyn Error>> {
@@ -236,133 +65,222 @@ fn load_manifest(path: &PathBuf) -> Result<Manifest, Box<dyn Error>> {
     Ok(toml::from_str(&source)?)
 }
 
-fn validate_manifest(manifest: &Manifest) -> Result<(), Box<dyn Error>> {
-    if manifest.planet.kind.trim().to_lowercase() != "rocky" {
-        return Err(fail(format!(
-            "planet kind must be \"rocky\" for this tool, got {:?} (gas/ice giants go elsewhere)",
-            manifest.planet.kind
-        )));
-    }
-    if manifest.planet.name.trim().is_empty() {
-        return Err(fail("planet name must not be empty"));
-    }
-    if !manifest.planet.datum_radius_m.is_finite() || manifest.planet.datum_radius_m <= 0.0 {
-        return Err(fail("datum_radius_m must be finite and positive"));
-    }
-    if !manifest.planet.height_min_m.is_finite()
-        || !manifest.planet.height_max_m.is_finite()
-        || manifest
-            .planet
-            .height_min_m
-            .partial_cmp(&manifest.planet.height_max_m)
-            != Some(std::cmp::Ordering::Less)
-    {
-        return Err(fail("need height_min_m < height_max_m, both finite"));
-    }
-    if !(4..=16).contains(&manifest.gores.count) {
-        return Err(fail("gores.count must be 4..=16 orange slices"));
-    }
-    if !manifest.gores.overlap_fraction.is_finite()
-        || !(0.0..=0.25).contains(&manifest.gores.overlap_fraction)
-    {
-        return Err(fail("gores.overlap_fraction must be within 0..=0.25"));
-    }
-    if manifest.layers.len() != CANONICAL_LAYERS.len() {
-        return Err(fail(format!(
-            "need exactly {} layers, got {}",
-            CANONICAL_LAYERS.len(),
-            manifest.layers.len()
-        )));
-    }
-    for expected in CANONICAL_LAYERS {
-        let found = manifest.layers.iter().any(|l| l.name == expected);
-        if !found {
-            return Err(fail(format!("missing canonical layer {expected:?}")));
+fn cmd_check(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+    let mut manifest_path = PathBuf::from("data/worldgen/example_rocky.toml");
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--manifest" => {
+                manifest_path = PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--manifest requires a value"))?,
+                );
+            }
+            unknown => return Err(fail(format!("unknown argument {unknown}"))),
         }
     }
+    let manifest = load_manifest(&manifest_path)?;
+    validate_manifest(&manifest).map_err(fail)?;
+    for feature in &manifest.features {
+        feature.validate().map_err(fail)?;
+    }
+    println!(
+        "planet: {} (rocky, seed {})",
+        manifest.planet.name, manifest.planet.seed
+    );
+    println!(
+        "gores: {} overlap {:.3} caps {}",
+        manifest.gores.count, manifest.gores.overlap_fraction, manifest.gores.polar_caps
+    );
+    println!("layers: {}", manifest.layers.len());
     for layer in &manifest.layers {
-        if layer.file.trim().is_empty() || layer.prompt.trim().is_empty() {
-            return Err(fail(format!(
-                "layer {:?} needs file and prompt",
-                layer.name
-            )));
-        }
+        println!(
+            "  {name:>10}  {file}  <- {prompt}",
+            name = layer.name,
+            file = layer.file,
+            prompt = layer.prompt
+        );
     }
+    println!("features: {}", manifest.features.len());
+    println!(
+        "recipe: mountains {:.2} craters {:.2} volcanism {:.2} erosion {:.2} aridity {:.2}",
+        manifest.terrain.mountain_coverage,
+        manifest.terrain.crater_density,
+        manifest.terrain.volcanism,
+        manifest.terrain.erosion,
+        manifest.climate.aridity,
+    );
+    println!("ok: resolution-agnostic, no pixel constants pinned");
     Ok(())
 }
 
-/// Which orange-slice gore owns a longitude, in normalized [0,1) space.
-/// Resolution-independent: works for any source pixel size.
-pub fn gore_for_longitude(lon_deg: f64, gore_count: u32) -> u32 {
-    let wrapped = (lon_deg + 180.0).rem_euclid(360.0) / 360.0;
-    ((wrapped * f64::from(gore_count)).floor() as u32).min(gore_count - 1)
+fn cmd_sample(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+    let mut manifest_path = PathBuf::from("data/worldgen/example_rocky.toml");
+    let mut lat_deg: f64 = 0.0;
+    let mut lon_deg: f64 = 0.0;
+    let mut detail_scale_m: f64 = 250.0;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--manifest" => {
+                manifest_path = PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--manifest requires a value"))?,
+                );
+            }
+            "--lat-deg" => {
+                lat_deg = args
+                    .next()
+                    .ok_or_else(|| fail("--lat-deg requires a value"))?
+                    .parse()?
+            }
+            "--lon-deg" => {
+                lon_deg = args
+                    .next()
+                    .ok_or_else(|| fail("--lon-deg requires a value"))?
+                    .parse()?
+            }
+            "--detail-scale-m" => {
+                detail_scale_m = args
+                    .next()
+                    .ok_or_else(|| fail("--detail-scale-m requires a value"))?
+                    .parse()?
+            }
+            unknown => return Err(fail(format!("unknown argument {unknown}"))),
+        }
+    }
+    if !lat_deg.is_finite() || !(-90.0..=90.0).contains(&lat_deg) {
+        return Err(fail("--lat-deg must be within -90..90"));
+    }
+    if !lon_deg.is_finite() || !(-180.0..=180.0).contains(&lon_deg) {
+        return Err(fail("--lon-deg must be within -180..180"));
+    }
+    if !detail_scale_m.is_finite() || detail_scale_m <= 0.0 {
+        return Err(fail("--detail-scale-m must be positive"));
+    }
+    let manifest = load_manifest(&manifest_path)?;
+    validate_manifest(&manifest).map_err(fail)?;
+    let knobs = bake::knobs_from_manifest(&manifest);
+    let macro_h = terrain::eval_macro_m(
+        &manifest.features,
+        lat_deg,
+        lon_deg,
+        manifest.planet.datum_radius_m,
+    );
+    let meso_h = terrain::eval_meso_m(
+        manifest.planet.seed,
+        knobs,
+        lat_deg,
+        lon_deg,
+        manifest.planet.datum_radius_m,
+    );
+    let micro_h = terrain::eval_micro_m(
+        manifest.planet.seed,
+        knobs,
+        lat_deg,
+        lon_deg,
+        manifest.planet.datum_radius_m,
+        detail_scale_m,
+    );
+    let site = bake::classify_site_coarse(&manifest, lat_deg, lon_deg, macro_h + meso_h);
+    println!("macro_m: {macro_h:.1} meso_m: {meso_h:.1} micro_m: {micro_h:.1}");
+    println!("height_m: {:.1}", macro_h + meso_h + micro_h);
+    println!("site: {:?} / {:?}", site.biome, site.geology);
+    Ok(())
 }
 
-/// Deterministic procedural micro-detail, resolution-agnostic.
-///
-/// `detail_scale_m` is a physical wavelength, not pixels, so the same manifest
-/// stays valid when the GPT base maps are regenerated at higher resolution.
-pub fn sample_height_detail(
-    seed: u64,
-    lat_deg: f64,
-    lon_deg: f64,
-    base_height_m: f64,
-    detail_scale_m: f64,
-) -> Result<f64, Box<dyn Error>> {
-    if !lat_deg.is_finite()
-        || !lon_deg.is_finite()
-        || !base_height_m.is_finite()
-        || !detail_scale_m.is_finite()
-        || detail_scale_m <= 0.0
-    {
-        return Err(fail("non-finite detail input"));
+fn cmd_preview(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+    let mut manifest_path = PathBuf::from("data/worldgen/example_rocky.toml");
+    let mut step_deg: f64 = 2.0;
+    let mut out = String::from("/tmp/thessa_preview");
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--manifest" => {
+                manifest_path = PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--manifest requires a value"))?,
+                );
+            }
+            "--step-deg" => {
+                step_deg = args
+                    .next()
+                    .ok_or_else(|| fail("--step-deg requires a value"))?
+                    .parse()?
+            }
+            "--out" => out = args.next().ok_or_else(|| fail("--out requires a value"))?,
+            unknown => return Err(fail(format!("unknown argument {unknown}"))),
+        }
     }
-    // Physical-space coordinates: degrees scaled to pseudo-meters at this
-    // detail wavelength. No image resolution involved.
-    let x = lon_deg.to_radians().cos() * 1000.0 / detail_scale_m * 1000.0;
-    let y = lat_deg.to_radians().sin() * 1000.0 / detail_scale_m * 1000.0;
-    let mut amplitude = 0.35 * detail_scale_m.min(500.0);
-    let mut frequency = 1.0;
-    let mut detail = 0.0;
-    for octave in 0..4 {
-        detail += amplitude * value_noise(seed, octave, x * frequency, y * frequency);
-        amplitude *= 0.5;
-        frequency *= 2.03;
-    }
-    let out = base_height_m + detail;
-    if out.is_finite() {
-        Ok(out)
-    } else {
-        Err(fail("non-finite detail"))
-    }
+    let manifest = load_manifest(&manifest_path)?;
+    validate_manifest(&manifest).map_err(fail)?;
+    let (h, b) = preview::render_preview(&manifest, step_deg, &out).map_err(fail)?;
+    println!("wrote: {h}");
+    println!("wrote: {b}");
+    Ok(())
 }
 
-fn hash01(seed: u64, octave: u32, ix: i64, iy: i64) -> f64 {
-    let mut h = seed
-        .wrapping_add(u64::from(octave).wrapping_mul(0x9E37_79B9_7F4A_7C15))
-        .wrapping_add((ix as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9))
-        .wrapping_add((iy as u64).wrapping_mul(0x94D0_49BB_1331_11EB));
-    h ^= h >> 30;
-    h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    h ^= h >> 27;
-    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
-    h ^= h >> 31;
-    // Map to [-1, 1].
-    (h as f64 / u64::MAX as f64) * 2.0 - 1.0
-}
-
-fn value_noise(seed: u64, octave: u32, x: f64, y: f64) -> f64 {
-    let ix = x.floor() as i64;
-    let iy = y.floor() as i64;
-    let fx = x - ix as f64;
-    let fy = y - iy as f64;
-    let sx = fx * fx * (3.0 - 2.0 * fx);
-    let sy = fy * fy * (3.0 - 2.0 * fy);
-    let a = hash01(seed, octave, ix, iy);
-    let b = hash01(seed, octave, ix + 1, iy);
-    let c = hash01(seed, octave, ix, iy + 1);
-    let d = hash01(seed, octave, ix + 1, iy + 1);
-    a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy
+fn cmd_bake(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+    let mut manifest_path = PathBuf::from("data/worldgen/example_rocky.toml");
+    let mut step_deg: f64 = 2.0;
+    let mut out: Option<PathBuf> = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--manifest" => {
+                manifest_path = PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--manifest requires a value"))?,
+                );
+            }
+            "--step-deg" => {
+                step_deg = args
+                    .next()
+                    .ok_or_else(|| fail("--step-deg requires a value"))?
+                    .parse()?
+            }
+            "--out" => {
+                out = Some(PathBuf::from(
+                    args.next().ok_or_else(|| fail("--out requires a value"))?,
+                ))
+            }
+            unknown => return Err(fail(format!("unknown argument {unknown}"))),
+        }
+    }
+    let manifest = load_manifest(&manifest_path)?;
+    validate_manifest(&manifest).map_err(fail)?;
+    let report = bake::bake_report(&manifest, step_deg).map_err(fail)?;
+    println!(
+        "cells: {} ocean: {} lakes: {} rivers: {} salt: {} ice: {}",
+        report.cells,
+        report.ocean_cells,
+        report.lake_cells,
+        report.river_cells,
+        report.salt_cells,
+        report.ice_cells
+    );
+    println!(
+        "height: {:.0}..{:.0} m",
+        report.min_height_m, report.max_height_m
+    );
+    println!("mineral hotspots: {}", report.mineral_hotspots);
+    let mut biomes: Vec<_> = report.biome_histogram.iter().collect();
+    biomes.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
+    for (name, count) in biomes.iter().take(8) {
+        println!("  {name:>20}: {count}");
+    }
+    if !report.errors.is_empty() {
+        for error in &report.errors {
+            println!("ERROR: {error}");
+        }
+        return Err(fail(format!(
+            "bake failed with {} consistency errors",
+            report.errors.len()
+        )));
+    }
+    if let Some(path) = out {
+        let json = serde_json::to_string_pretty(&report).map_err(|e| fail(e.to_string()))?;
+        fs::write(&path, format!("{json}\n"))?;
+        println!("wrote: {}", path.display());
+    }
+    println!("bake ok");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -390,18 +308,40 @@ mod tests {
 
     #[test]
     fn gores_cover_full_longitude_range() {
-        for lon in [-180.0, -90.0, 0.0, 90.0, 179.9] {
-            assert!(gore_for_longitude(lon, 8) < 8);
+        use thessa_worldgen_rocky::gores::GoreLayout;
+        let layout = GoreLayout {
+            count: 8,
+            overlap_fraction: 0.06,
+        };
+        layout.validate().unwrap();
+        let mut owners = std::collections::HashSet::new();
+        for i in 0..800 {
+            owners.insert(layout.owner_for_lon01(i as f64 / 800.0));
         }
-        assert_eq!(gore_for_longitude(-180.0, 8), gore_for_longitude(180.0, 8));
+        assert_eq!(owners.len(), 8);
     }
 
     #[test]
     fn detail_is_deterministic_and_scale_aware() {
-        let a = sample_height_detail(7, 12.0, -40.0, 800.0, 250.0).expect("sample");
-        let b = sample_height_detail(7, 12.0, -40.0, 800.0, 250.0).expect("sample");
-        assert!((a - b).abs() == 0.0);
-        let c = sample_height_detail(8, 12.0, -40.0, 800.0, 250.0).expect("sample");
+        let manifest = example();
+        let knobs = bake::knobs_from_manifest(&manifest);
+        let a = terrain::eval_micro_m(7, knobs, 12.0, -40.0, 3_200_000.0, 250.0);
+        let b = terrain::eval_micro_m(7, knobs, 12.0, -40.0, 3_200_000.0, 250.0);
+        assert_eq!(a, b);
+        let c = terrain::eval_micro_m(8, knobs, 12.0, -40.0, 3_200_000.0, 250.0);
         assert!((a - c).abs() > 1e-9);
+    }
+
+    #[test]
+    fn gore_for_longitude_helper_still_consistent() {
+        use thessa_worldgen_rocky::gores::GoreLayout;
+        assert_eq!(
+            GoreLayout {
+                count: 8,
+                overlap_fraction: 0.0
+            }
+            .owner_for_lon01(0.999),
+            7
+        );
     }
 }

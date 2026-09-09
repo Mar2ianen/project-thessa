@@ -1,6 +1,10 @@
-# Biomes (flat color mask, exact hex)
+# Biomes (broad REGION hints, flat fills)
 
-Paint flat fills, hard edges, no anti-alias blur beyond 1px:
+Paint LARGE coherent regions the bake turns into taxonomy sites
+(primary biome + geology + feature tags). Do NOT shuffle tiny patches:
+the planet must stay readable from orbit (KSP-like, not texture soup).
+
+Suggested region colors (bake re-derives exact sites from terrain):
 
 - deep ocean `#0018A8`, shallow shelf `#1E6FFF`
 - ice cap / glacier `#E8F4FF`
@@ -8,5 +12,6 @@ Paint flat fills, hard edges, no anti-alias blur beyond 1px:
 - volcanic field `#3A1E14`, active lava `#FF4A00`
 - canyon `#5A3A2E`, crater ejecta `#A8A094`
 
-Legend is normative: the baker matches these hex values exactly. One pixel =
-one biome, no mixing. Coastlines match height datum crossing.
+Landmark geology (giant craters, arcs, canyons) comes from the recipe
+`[[features]]` / `[[tectonics]]`, not from paint. Coastlines match the
+height datum crossing.

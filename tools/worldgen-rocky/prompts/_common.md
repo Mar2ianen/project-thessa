@@ -1,6 +1,9 @@
 # Common gore rules (all 7 layers)
 
 - Rocky planet only. No clouds, no haze, no atmosphere beauty pass.
+- Role: MACRO intent and style hints. Base terrain comes from the tectonic +
+  erosion simulation (`bake`), NOT from painted heightmaps. Painted layers
+  guide regions and look, derived physical maps stay internally consistent.
 - Projection: orange-slice gore, one longitude segment per image + polar caps
   separately. Same coastline/shape across all 7 layers, pixel-aligned.
 - Framing: flat orthographic strip, no perspective, no vignette, no text.

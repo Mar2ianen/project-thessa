@@ -142,8 +142,12 @@ impl RigidBodyProperties {
 pub struct FlightStepInput {
     pub altitude_m: f64,
     pub gravity_acceleration_inertial_mps2: DVec3,
-    /// Vehicle position relative to the rotating atmosphere/body origin.
+    /// Vehicle position relative to the rotating atmosphere/body origin,
+    /// expressed in vehicle body axes.
     pub position_body_m: DVec3,
+    /// Translational/local wind velocity already expressed in vehicle axes.
+    /// Rigid atmosphere rotation is added by `evaluate_flight_forces` after
+    /// transforming the configured body angular velocity into the same frame.
     pub wind_velocity_body_mps: DVec3,
     pub extra_force_body_n: DVec3,
     pub extra_moment_body_nm: DVec3,
@@ -207,15 +211,16 @@ pub fn evaluate_flight_forces<M: AeroModel>(
     state.validate()?;
     properties.validate()?;
     input.validate()?;
+    let rotating_air_velocity_body_mps = atmosphere
+        .rotating_air_velocity_body_mps(
+            input.position_body_m,
+            state.orientation_body_to_inertial,
+        )
+        .map_err(FlightError::Atmosphere)?;
     let environment = atmosphere
         .aero_environment(
             input.altitude_m,
-            atmosphere
-                .rotating_wind_velocity_body_mps(
-                    input.position_body_m,
-                    input.wind_velocity_body_mps,
-                )
-                .map_err(FlightError::Atmosphere)?,
+            input.wind_velocity_body_mps + rotating_air_velocity_body_mps,
         )
         .map_err(FlightError::Atmosphere)?;
     let velocity_body_mps =
@@ -290,21 +295,56 @@ pub fn integrate_rigid_body_step<M: AeroModel>(
 }
 
 /// Advance a vehicle for a bounded duration using deterministic equal-sized
-/// substeps. The last force sample is returned for telemetry and control
-/// loops. This keeps the fast single-step API explicit while giving callers a
-/// safe way to cross a max-Q, stall or attitude-change interval without
-/// relying on a frame-rate-dependent large step.
+/// substeps with one already-sampled input. This compatibility path is useful
+/// when gravity, atmosphere and external controls are effectively constant
+/// over the duration. State/time-dependent world inputs should use
+/// [`integrate_rigid_body_duration_sampled`] so every substep sees a coherent
+/// environment sample.
 #[allow(clippy::too_many_arguments)]
 pub fn integrate_rigid_body_duration<M: AeroModel>(
     model: &M,
     geometry: &AeroGeometry,
     atmosphere: AtmosphereConfig,
-    mut state: RigidBodyState,
+    state: RigidBodyState,
     properties: RigidBodyProperties,
     input: FlightStepInput,
     duration_s: f64,
     max_step_s: f64,
 ) -> Result<(RigidBodyState, FlightForces), FlightError> {
+    integrate_rigid_body_duration_sampled(
+        model,
+        geometry,
+        atmosphere,
+        state,
+        properties,
+        duration_s,
+        max_step_s,
+        |_, _| Ok(input),
+    )
+}
+
+/// Advance a vehicle for a bounded duration while re-sampling the complete
+/// [`FlightStepInput`] before every deterministic substep.
+///
+/// The callback receives the current rigid-body state and elapsed time from
+/// the start of this duration. World adapters can therefore update altitude,
+/// multi-body gravity, reference-body translation/rotation, weather and
+/// controller moments without freezing those values at render-frame start.
+#[allow(clippy::too_many_arguments)]
+pub fn integrate_rigid_body_duration_sampled<M, F>(
+    model: &M,
+    geometry: &AeroGeometry,
+    atmosphere: AtmosphereConfig,
+    mut state: RigidBodyState,
+    properties: RigidBodyProperties,
+    duration_s: f64,
+    max_step_s: f64,
+    mut sample_input: F,
+) -> Result<(RigidBodyState, FlightForces), FlightError>
+where
+    M: AeroModel,
+    F: FnMut(RigidBodyState, f64) -> Result<FlightStepInput, FlightError>,
+{
     if !duration_s.is_finite()
         || duration_s < 0.0
         || !max_step_s.is_finite()
@@ -313,6 +353,7 @@ pub fn integrate_rigid_body_duration<M: AeroModel>(
         return Err(FlightError::InvalidStep);
     }
     if duration_s == 0.0 {
+        let input = sample_input(state, 0.0)?;
         return Ok((
             state,
             evaluate_flight_forces(model, geometry, atmosphere, state, properties, input)?,
@@ -323,13 +364,16 @@ pub fn integrate_rigid_body_duration<M: AeroModel>(
         return Err(FlightError::InvalidStep);
     }
     let step_s = duration_s / step_count;
+    let mut elapsed_s = 0.0;
     let mut forces = None;
     for _ in 0..step_count as u64 {
+        let input = sample_input(state, elapsed_s)?;
         let (next_state, next_forces) = integrate_rigid_body_step(
             model, geometry, atmosphere, state, properties, input, step_s,
         )?;
         state = next_state;
         forces = Some(next_forces);
+        elapsed_s += step_s;
     }
     Ok((
         state,

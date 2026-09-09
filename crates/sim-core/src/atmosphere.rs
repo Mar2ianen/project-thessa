@@ -28,7 +28,9 @@ pub struct AtmosphereConfig {
     pub sutherland_reference_temperature_k: f64,
     pub sutherland_constant_k: f64,
     pub sutherland_reference_viscosity_pa_s: f64,
-    /// Angular velocity of the atmosphere/body, expressed in body axes.
+    /// Angular velocity of the atmosphere/reference body in the inertial
+    /// frame used by [`crate::RigidBodyState`]. The flight boundary converts
+    /// this vector into vehicle axes before evaluating `omega × r`.
     /// Zero keeps the provider neutral for non-rotating test worlds.
     pub body_rotation_rad_s: glam::DVec3,
 }
@@ -185,9 +187,43 @@ impl AtmosphereConfig {
         ))
     }
 
-    /// Add the rigid-body air velocity caused by atmospheric rotation at a
-    /// vehicle position. Both vectors are in the vehicle/body axes; callers
-    /// can then pass the returned value as `AeroEnvironment` wind.
+    /// Return the atmosphere velocity caused by rigid body rotation at a
+    /// vehicle-relative position, expressed in vehicle body axes.
+    ///
+    /// `body_rotation_rad_s` is stored in inertial/reference-body axes while
+    /// `position_body_m` is in vehicle axes. Converting the angular-velocity
+    /// vector here prevents a pitched or rolled craft from changing the
+    /// physical atmosphere rotation merely because its local basis changed.
+    pub fn rotating_air_velocity_body_mps(
+        self,
+        position_body_m: glam::DVec3,
+        orientation_body_to_inertial: glam::DQuat,
+    ) -> Result<glam::DVec3, AtmosphereError> {
+        self.validate()?;
+        if !position_body_m.is_finite() || !orientation_body_to_inertial.is_finite() {
+            return Err(AtmosphereError::InvalidWind);
+        }
+        let orientation_error = (orientation_body_to_inertial.length_squared() - 1.0).abs();
+        if orientation_error > 1.0e-6 {
+            return Err(AtmosphereError::InvalidWind);
+        }
+        let rotation_body_rad_s =
+            orientation_body_to_inertial.inverse() * self.body_rotation_rad_s;
+        let wind = rotation_body_rad_s.cross(position_body_m);
+        if wind.is_finite() {
+            Ok(wind)
+        } else {
+            Err(AtmosphereError::NonFiniteWind)
+        }
+    }
+
+    /// Add an already same-frame angular-velocity contribution to a local
+    /// wind vector.
+    ///
+    /// This low-level helper is retained for standalone atmosphere tests and
+    /// callers whose position and rotation vector are already expressed in
+    /// the same axes. Flight integration should prefer
+    /// [`Self::rotating_air_velocity_body_mps`].
     pub fn rotating_wind_velocity_body_mps(
         self,
         position_body_m: glam::DVec3,
@@ -266,7 +302,7 @@ impl fmt::Display for AtmosphereError {
                 formatter,
                 "atmosphere speed must be finite and non-negative"
             ),
-            Self::InvalidWind => write!(formatter, "atmosphere wind and position must be finite"),
+            Self::InvalidWind => write!(formatter, "atmosphere wind/frame data must be finite"),
             Self::NonFiniteSample => write!(formatter, "atmosphere sample is non-finite"),
             Self::NonFiniteWind => write!(formatter, "rotating atmosphere wind is non-finite"),
             Self::NonFinitePressure => write!(formatter, "dynamic pressure is non-finite"),
@@ -387,4 +423,25 @@ fn sutherland_viscosity(
         * (temperature_k / reference_temperature_k).powf(1.5)
         * (reference_temperature_k + sutherland_constant_k)
         / (temperature_k + sutherland_constant_k)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rotating_air_velocity_is_invariant_under_vehicle_basis_rotation() {
+        let mut atmosphere = AtmosphereConfig::default();
+        atmosphere.body_rotation_rad_s = glam::DVec3::new(0.0, 0.0, 2.0);
+        let orientation = glam::DQuat::from_rotation_y(0.71)
+            * glam::DQuat::from_rotation_x(-0.43);
+        let position_body = glam::DVec3::new(3.0, -2.0, 5.0);
+        let position_inertial = orientation * position_body;
+        let expected_inertial = atmosphere.body_rotation_rad_s.cross(position_inertial);
+        let expected_body = orientation.inverse() * expected_inertial;
+        let actual = atmosphere
+            .rotating_air_velocity_body_mps(position_body, orientation)
+            .expect("rotation sample evaluates");
+        assert!((actual - expected_body).length() < 1.0e-12);
+    }
 }

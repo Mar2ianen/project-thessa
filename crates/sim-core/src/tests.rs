@@ -460,6 +460,34 @@ fn aero_dynamic_pitch_damping_opposes_pitch_rate() {
 }
 
 #[test]
+fn aero_dynamic_damping_uses_arbitrary_panel_axes() {
+    let diagonal = 2.0_f64.sqrt().recip();
+    let chord_axis = DVec3::new(diagonal, 0.0, diagonal);
+    let lift_axis = DVec3::Y;
+    let side_axis = lift_axis.cross(chord_axis).normalize();
+    let panel = AeroPanel::new(DVec3::ZERO, chord_axis, lift_axis, 10.0, 2.0)
+        .expect("valid arbitrarily oriented panel");
+    let geometry = AeroGeometry::new(vec![panel]).expect("valid geometry");
+    let model = PanelAeroModel::new(AeroConfig {
+        base_drag_coefficient: 0.0,
+        induced_drag_factor: 0.0,
+        wave_drag_coefficient: 0.0,
+        roll_damping_coefficient: 0.0,
+        pitch_damping_coefficient: -1.0,
+        yaw_damping_coefficient: 0.0,
+        ..AeroConfig::default()
+    })
+    .expect("valid aero model");
+    let state = AeroState::new(DVec3::new(100.0, 0.0, 0.0), side_axis * 0.2);
+    let case = AeroCase::new(state, AeroEnvironment::standard_sea_level(), geometry)
+        .expect("valid aero case");
+    let result = model.evaluate(&case).expect("finite damping result");
+
+    assert!(result.moment_body_nm.dot(side_axis) < 0.0);
+    assert!(result.moment_body_nm.cross(side_axis).length() < 1.0e-9);
+}
+
+#[test]
 fn aero_signed_stabilizer_lift_restores_positive_alpha() {
     let panel = AeroPanel::flat_plate(DVec3::new(-4.0, 0.0, 0.0), 4.0, 1.2)
         .and_then(|panel| panel.with_lift_sign(-1.0))
@@ -532,6 +560,50 @@ fn rigid_body_duration_uses_bounded_deterministic_substeps() {
     .expect("deterministic duration");
     assert_eq!(one, two);
     assert!((one.position_inertial_m.x - 10.006).abs() < 1.0e-12);
+}
+
+#[test]
+fn sampled_duration_calls_callback_for_each_deterministic_substep() {
+    let panel = AeroPanel::flat_plate(DVec3::ZERO, 10.0, 2.0).expect("valid aircraft panel");
+    let geometry = AeroGeometry::new(vec![panel]).expect("valid geometry");
+    let model = PanelAeroModel::new(AeroConfig {
+        base_drag_coefficient: 0.0,
+        induced_drag_factor: 0.0,
+        wave_drag_coefficient: 0.0,
+        ..AeroConfig::default()
+    })
+    .expect("valid aero model");
+    let state = RigidBodyState::new(
+        DVec3::ZERO,
+        DVec3::new(100.0, 0.0, 0.0),
+        DQuat::IDENTITY,
+        DVec3::ZERO,
+    )
+    .expect("valid state");
+    let properties =
+        RigidBodyProperties::new(1_000.0, glam::DMat3::from_diagonal(DVec3::splat(100.0)))
+            .expect("valid properties");
+    let input = FlightStepInput::new(0.0, DVec3::ZERO);
+    let mut elapsed_samples = Vec::new();
+    integrate_rigid_body_duration_sampled(
+        &model,
+        &geometry,
+        AtmosphereConfig::default(),
+        state,
+        properties,
+        0.1,
+        0.02,
+        |_, elapsed_s| {
+            elapsed_samples.push(elapsed_s);
+            Ok(input)
+        },
+    )
+    .expect("valid sampled duration");
+
+    assert_eq!(elapsed_samples.len(), 5);
+    for (index, elapsed_s) in elapsed_samples.into_iter().enumerate() {
+        assert!((elapsed_s - index as f64 * 0.02).abs() < 1.0e-12);
+    }
 }
 
 #[test]

@@ -17,9 +17,9 @@ use bevy::{
 };
 
 use thessa_sim_core::{
-    AeroConfig, AeroGeometry, AeroPanel, AtmosphereConfig, BakedEphemeris, BodyId, FlightForces,
-    FlightStepInput, GravityField, PanelAeroModel, RigidBodyProperties, RigidBodyState,
-    VehicleDefinition, integrate_rigid_body_duration,
+    AeroConfig, AeroGeometry, AeroPanel, AtmosphereConfig, AtmosphereError, BakedEphemeris, BodyId,
+    BodyState, FlightError, FlightForces, FlightStepInput, GravityField, PanelAeroModel,
+    RigidBodyProperties, RigidBodyState, VehicleDefinition, integrate_rigid_body_duration_sampled,
 };
 
 const HUD_BLUE: Color = Color::srgb(0.56, 0.78, 0.94);
@@ -153,6 +153,62 @@ struct FlightEnvironment {
     terrain_available: bool,
     pressure_pa: Option<f64>,
     density_kg_m3: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LocalAirKinematics {
+    relative_position_inertial_m: DVec3,
+    relative_position_body_m: DVec3,
+    relative_velocity_inertial_mps: DVec3,
+    air_velocity_body_mps: DVec3,
+    surface_velocity_inertial_mps: DVec3,
+    radial_up: DVec3,
+    altitude_m: f64,
+}
+
+/// Sample all local flight kinematics from one rigid-body state and one
+/// ephemeris body state. The rotating atmosphere vector is converted into the
+/// vehicle frame by sim-core; callers must not cross a body-frame position with
+/// an inertial-frame angular velocity directly.
+fn local_air_kinematics(
+    atmosphere: AtmosphereConfig,
+    state: RigidBodyState,
+    body_state: BodyState,
+    body_radius_m: f64,
+) -> Result<LocalAirKinematics, AtmosphereError> {
+    let relative_position_inertial_m = state.position_inertial_m - body_state.position_inertial;
+    let radial_up = relative_position_inertial_m
+        .try_normalize()
+        .unwrap_or(DVec3::Z);
+    let orientation_inverse = state.orientation_body_to_inertial.inverse();
+    let relative_position_body_m = orientation_inverse * relative_position_inertial_m;
+    let relative_velocity_inertial_mps = state.velocity_inertial_mps - body_state.velocity_inertial;
+    let relative_velocity_body_mps = orientation_inverse * relative_velocity_inertial_mps;
+    let rotating_air_velocity_body_mps = atmosphere.rotating_air_velocity_body_mps(
+        relative_position_body_m,
+        state.orientation_body_to_inertial,
+    )?;
+    let air_velocity_body_mps = relative_velocity_body_mps - rotating_air_velocity_body_mps;
+    let surface_velocity_inertial_mps = relative_velocity_inertial_mps
+        - state.orientation_body_to_inertial * rotating_air_velocity_body_mps;
+    let altitude_m = relative_position_inertial_m.length() - body_radius_m;
+    Ok(LocalAirKinematics {
+        relative_position_inertial_m,
+        relative_position_body_m,
+        relative_velocity_inertial_mps,
+        air_velocity_body_mps,
+        surface_velocity_inertial_mps,
+        radial_up,
+        altitude_m,
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PilotFlightSample {
+    time_s: f64,
+    state: RigidBodyState,
+    kinematics: LocalAirKinematics,
+    gravity_acceleration_inertial_mps2: DVec3,
 }
 
 /// Low-overhead CSV recorder for reproducing bad live-flight states outside
@@ -297,7 +353,7 @@ impl PilotFlightRuntime {
             .body_state(reference_body, SimTime::EPOCH)
             .map_err(|error| format!("reference body state is unavailable: {error}"))?;
         let gravity = body.mu / body.radius_m.powi(2);
-        let mut atmosphere = AtmosphereConfig::new(288.15, 108_000.0, 287.05287, 1.4, gravity)
+        let mut atmosphere = AtmosphereConfig::new(288.15, 120_000.0, 287.05287, 1.4, gravity)
             .map_err(|error| format!("Thessa atmosphere is invalid: {error}"))?;
         atmosphere.body_rotation_rad_s = DVec3::new(0.0, 0.0, TAU as f64 / (80.0 * 3_600.0));
 
@@ -1643,95 +1699,100 @@ fn simulate_pilot_flight(
     if frame_dt <= 0.0 {
         return;
     }
-    let sim_time = SimTime(runtime.flight_time_s);
     let Ok(body) = ephemeris.ephemeris.body(runtime.reference_body) else {
         return;
     };
-    let Ok(body_state) = ephemeris
-        .ephemeris
-        .body_state(runtime.reference_body, sim_time)
-    else {
-        return;
-    };
-    let relative_position = runtime.state.position_inertial_m - body_state.position_inertial;
-    let altitude_m = relative_position.length() - body.radius_m;
-    let Some(radial_up) = relative_position.try_normalize() else {
-        return;
-    };
-    let orientation_inverse = runtime.state.orientation_body_to_inertial.inverse();
-    let position_body = orientation_inverse * relative_position;
-    let relative_velocity_inertial =
-        runtime.state.velocity_inertial_mps - body_state.velocity_inertial;
-    let relative_velocity_body = orientation_inverse * relative_velocity_inertial;
-    let air_velocity_body =
-        relative_velocity_body - runtime.atmosphere.body_rotation_rad_s.cross(position_body);
-    let gravity = match GravityField::from_ephemeris(&ephemeris.ephemeris)
-        .acceleration(runtime.state.position_inertial_m, sim_time)
-    {
-        Ok(value) => value,
-        Err(_) => return,
-    };
-    runtime.last_gravity_acceleration_inertial_mps2 = gravity;
-
-    let pitch = runtime.control_input.x;
-    let yaw = runtime.control_input.y;
-    let roll = runtime.control_input.z;
-    runtime.command_controls(pitch, yaw, roll);
-
-    // SAS is a deliberately small flight-assist layer: it damps body rates,
-    // holds the KSP-style attitude target accumulated by the pilot controls
-    // and keeps that target close to the local horizon as the craft travels
-    // around the body. It does not bypass the aero model or write a different
-    // authoritative state.
-    let sas_active = runtime.sas_enabled
+    let body_radius_m = body.radius_m;
+    let simulation_start_s = runtime.flight_time_s;
+    let atmosphere = runtime.atmosphere;
+    let reference_body = runtime.reference_body;
+    let controls = runtime.control_input;
+    let sas_enabled = runtime.sas_enabled;
+    let rcs_enabled = runtime.rcs_enabled;
+    let target_orientation = runtime.sas_target_orientation;
+    let engine_active = runtime.engine_active;
+    let throttle = runtime.throttle;
+    let thrust_n = runtime.thrust_n();
+    let mass_properties = runtime.vehicle.mass_properties;
+    let sas_active = sas_enabled
         && matches!(
             state.control_mode,
             ControlMode::MouseAim | ControlMode::Navball
         );
-    let sas_moment = if sas_active {
-        pilot_sas_moment(runtime.state, runtime.sas_target_orientation, radial_up)
-    } else {
-        DVec3::ZERO
-    };
-    let trim_moment = if sas_active && runtime.control_input.length_squared() < 1.0e-8 {
-        pilot_aero_trim_moment(air_velocity_body)
-    } else {
-        DVec3::ZERO
-    };
-    // The first playable datum has no landing gear or terrain contact mesh
-    // yet.  Damping body rates while descending through the five-metre
-    // clearance keeps a soft spherical contact from becoming a spin source.
-    let relative_radial_speed = relative_velocity_inertial.dot(radial_up);
-    let contact_moment =
-        if altitude_m <= PILOT_SURFACE_CLEARANCE_M + 0.5 && relative_radial_speed <= 0.0 {
-            -runtime.state.angular_velocity_body_rps * DVec3::new(400_000.0, 700_000.0, 400_000.0)
-        } else {
-            DVec3::ZERO
-        };
-    let rate_moment = pilot_rate_moment(pitch, yaw, roll, runtime.rcs_enabled);
-    let thrust = DVec3::X * runtime.thrust_n();
-    let input = FlightStepInput {
-        altitude_m: altitude_m.max(0.0),
-        gravity_acceleration_inertial_mps2: gravity,
-        position_body_m: position_body,
-        // The rigid state is global inertial, while the aero contract is
-        // local to the rotating planet. Subtract the planet's ephemeris
-        // velocity at this boundary instead of counting it as airspeed.
-        wind_velocity_body_mps: orientation_inverse * body_state.velocity_inertial,
-        extra_force_body_n: thrust,
-        extra_moment_body_nm: sas_moment + trim_moment + contact_moment + rate_moment,
-    };
+    let pitch = controls.x;
+    let yaw = controls.y;
+    let roll = controls.z;
+    runtime.command_controls(pitch, yaw, roll);
 
-    let Ok((next_state, forces)) = integrate_rigid_body_duration(
+    // A render frame can span several physics substeps. Sample the ephemeris,
+    // atmosphere, gravity and controller moments for each substep so no force
+    // sample mixes a current rigid state with stale world coordinates.
+    let gravity_field = GravityField::from_ephemeris(&ephemeris.ephemeris);
+    let ephemeris_data = &ephemeris.ephemeris;
+    let mut final_sample = None;
+    let integration = integrate_rigid_body_duration_sampled(
         &runtime.aero_model,
         &runtime.vehicle.aero_geometry,
-        runtime.atmosphere,
+        atmosphere,
         runtime.state,
-        runtime.vehicle.mass_properties,
-        input,
+        mass_properties,
         frame_dt,
         0.02,
-    ) else {
+        |sample_state, elapsed_s| {
+            let sample_time = SimTime(simulation_start_s + elapsed_s);
+            let body_state = ephemeris_data
+                .body_state(reference_body, sample_time)
+                .map_err(|error| {
+                    FlightError::InvalidInput(format!("reference body sample failed: {error}"))
+                })?;
+            let kinematics =
+                local_air_kinematics(atmosphere, sample_state, body_state, body_radius_m)
+                    .map_err(FlightError::Atmosphere)?;
+            let gravity = gravity_field
+                .acceleration(sample_state.position_inertial_m, sample_time)
+                .map_err(|error| {
+                    FlightError::InvalidInput(format!("gravity sample failed: {error}"))
+                })?;
+            let sas_moment = if sas_active {
+                pilot_sas_moment(sample_state, target_orientation, kinematics.radial_up)
+            } else {
+                DVec3::ZERO
+            };
+            let trim_moment = if sas_active && controls.length_squared() < 1.0e-8 {
+                pilot_aero_trim_moment(kinematics.air_velocity_body_mps)
+            } else {
+                DVec3::ZERO
+            };
+            let relative_radial_speed = kinematics
+                .relative_velocity_inertial_mps
+                .dot(kinematics.radial_up);
+            let contact_moment = if kinematics.altitude_m <= PILOT_SURFACE_CLEARANCE_M + 0.5
+                && relative_radial_speed <= 0.0
+            {
+                -sample_state.angular_velocity_body_rps
+                    * DVec3::new(400_000.0, 700_000.0, 400_000.0)
+            } else {
+                DVec3::ZERO
+            };
+            let rate_moment = pilot_rate_moment(pitch, yaw, roll, rcs_enabled);
+            final_sample = Some(PilotFlightSample {
+                time_s: simulation_start_s + elapsed_s,
+                state: sample_state,
+                kinematics,
+                gravity_acceleration_inertial_mps2: gravity,
+            });
+            Ok(FlightStepInput {
+                altitude_m: kinematics.altitude_m.max(0.0),
+                gravity_acceleration_inertial_mps2: gravity,
+                position_body_m: kinematics.relative_position_body_m,
+                wind_velocity_body_mps: sample_state.orientation_body_to_inertial.inverse()
+                    * body_state.velocity_inertial,
+                extra_force_body_n: DVec3::X * thrust_n,
+                extra_moment_body_nm: sas_moment + trim_moment + contact_moment + rate_moment,
+            })
+        },
+    );
+    let Ok((next_state, forces)) = integration else {
         runtime.engine_active = false;
         runtime.control_input = DVec3::ZERO;
         return;
@@ -1749,7 +1810,7 @@ fn simulate_pilot_flight(
     let next_relative = next_state.position_inertial_m - next_body_state.position_inertial;
     let next_altitude = next_relative.length() - body.radius_m;
     let next_relative_speed =
-        (next_state.velocity_inertial_mps - body_state.velocity_inertial).length();
+        (next_state.velocity_inertial_mps - next_body_state.velocity_inertial).length();
     if !next_altitude.is_finite()
         || next_altitude.abs() > MAX_PILOT_ALTITUDE_M
         || !next_relative_speed.is_finite()
@@ -1765,26 +1826,26 @@ fn simulate_pilot_flight(
         return;
     }
 
-    let trace_time_s = runtime.flight_time_s;
-    let trace_state = runtime.state;
-    let trace_controls = runtime.control_input;
-    let trace_throttle = runtime.throttle;
-    let trace_engine_active = runtime.engine_active;
-    let trace_sas_enabled = runtime.sas_enabled;
-    let trace_rcs_enabled = runtime.rcs_enabled;
+    let Some(final_sample) = final_sample else {
+        runtime.engine_active = false;
+        runtime.control_input = DVec3::ZERO;
+        return;
+    };
+    runtime.last_gravity_acceleration_inertial_mps2 =
+        final_sample.gravity_acceleration_inertial_mps2;
     if let Some(trace) = runtime.trace.as_mut() {
         trace.record(
-            trace_time_s,
-            altitude_m,
-            relative_velocity_inertial,
-            radial_up,
-            air_velocity_body,
-            trace_state,
-            trace_controls,
-            trace_throttle,
-            trace_engine_active,
-            trace_sas_enabled,
-            trace_rcs_enabled,
+            final_sample.time_s,
+            final_sample.kinematics.altitude_m,
+            final_sample.kinematics.relative_velocity_inertial_mps,
+            final_sample.kinematics.radial_up,
+            final_sample.kinematics.air_velocity_body_mps,
+            final_sample.state,
+            controls,
+            throttle,
+            engine_active,
+            sas_enabled,
+            rcs_enabled,
             &forces,
         );
     }
@@ -1794,7 +1855,9 @@ fn simulate_pilot_flight(
 
     let next_radius = next_relative.length();
     if next_radius < body.radius_m + PILOT_SURFACE_CLEARANCE_M {
-        let contact_position = next_relative.try_normalize().unwrap_or(radial_up)
+        let contact_position = next_relative
+            .try_normalize()
+            .unwrap_or(final_sample.kinematics.radial_up)
             * (body.radius_m + PILOT_SURFACE_CLEARANCE_M);
         runtime.state.position_inertial_m = next_body_state.position_inertial + contact_position;
         let next_radial_up = contact_position.normalize_or_zero();
@@ -2037,23 +2100,21 @@ fn live_flight_ui_state(
     let Ok(body) = ephemeris.body(flight.reference_body) else {
         return FlightUiState::default();
     };
-    let relative_position = flight.state.position_inertial_m - body_state.position_inertial;
-    let radial_up = relative_position.try_normalize().unwrap_or(DVec3::Z);
-    let orientation_inverse = flight.state.orientation_body_to_inertial.inverse();
-    let position_body = orientation_inverse * relative_position;
-    let velocity_relative_inertial =
-        flight.state.velocity_inertial_mps - body_state.velocity_inertial;
-    let atmosphere_rotation_body = flight.atmosphere.body_rotation_rad_s.cross(position_body);
-    let atmosphere_rotation_inertial =
-        flight.state.orientation_body_to_inertial * atmosphere_rotation_body;
-    let velocity_surface = velocity_relative_inertial - atmosphere_rotation_inertial;
-    let velocity_body = orientation_inverse * velocity_relative_inertial;
+    let Ok(kinematics) =
+        local_air_kinematics(flight.atmosphere, flight.state, body_state, body.radius_m)
+    else {
+        return FlightUiState::default();
+    };
+    let relative_position = kinematics.relative_position_inertial_m;
+    let radial_up = kinematics.radial_up;
+    let velocity_relative_inertial = kinematics.relative_velocity_inertial_mps;
+    let velocity_surface = kinematics.surface_velocity_inertial_mps;
     let forces = flight.last_forces.as_ref();
     let environment = forces.map(|forces| forces.environment);
     // The solver's environment contains body translation plus body rotation;
     // use the same explicitly separated terms for the HUD. This prevents the
     // moon's orbital velocity from appearing as a 40 km/s airspeed sample.
-    let air_velocity = velocity_body - atmosphere_rotation_body;
+    let air_velocity = kinematics.air_velocity_body_mps;
     let air_speed = air_velocity.length();
     let surface_speed = velocity_surface.length();
     let forward = flight.state.orientation_body_to_inertial * DVec3::X;
@@ -2065,15 +2126,19 @@ fn live_flight_ui_state(
         .dot(radial_up)
         .atan2(up.dot(radial_up).max(1.0e-6))
         .to_degrees();
-    let altitude_m = relative_position.length() - body.radius_m;
+    let altitude_m = kinematics.altitude_m;
     let vertical_speed = velocity_surface.dot(radial_up);
     let gravity = body.mu / relative_position.length().max(1.0).powi(2);
     let force_magnitude = forces
         .map(|forces| forces.total_force_inertial_n.length())
         .unwrap_or_else(|| flight.thrust_n());
     let g_load = (force_magnitude / flight.vehicle.mass_properties.mass_kg / gravity).max(0.0);
-    let (apoapsis_altitude_m, periapsis_altitude_m) =
-        estimate_orbit_altitudes(relative_position, velocity_surface, body.mu, body.radius_m);
+    let (apoapsis_altitude_m, periapsis_altitude_m) = estimate_orbit_altitudes(
+        relative_position,
+        velocity_relative_inertial,
+        body.mu,
+        body.radius_m,
+    );
 
     FlightUiState {
         source: TelemetrySource::Live,
@@ -2117,11 +2182,14 @@ fn live_flight_ui_state(
         roll_deg: Some(roll_deg),
         mach: forces.map(|forces| forces.aero.mach),
         dynamic_pressure_pa: forces.map(|forces| forces.aero.dynamic_pressure_pa),
-        angle_of_attack_deg: Some(conventional_angle_of_attack_deg(air_velocity)),
+        angle_of_attack_deg: Some(conventional_angle_of_attack_deg(
+            kinematics.air_velocity_body_mps,
+        )),
         sideslip_deg: Some(
-            air_velocity
+            kinematics
+                .air_velocity_body_mps
                 .y
-                .atan2(air_velocity.x.abs().max(1.0e-6))
+                .atan2(kinematics.air_velocity_body_mps.x.abs().max(1.0e-6))
                 .to_degrees(),
         ),
         apoapsis_altitude_m: Some(apoapsis_altitude_m),
@@ -2750,19 +2818,18 @@ mod tests {
         let body_state = ephemeris
             .body_state(reference_body, SimTime::EPOCH)
             .expect("body state evaluates");
-        let relative = flight.state.position_inertial_m - body_state.position_inertial;
-        let radial_up = relative.normalize();
-        let orientation_inverse = flight.state.orientation_body_to_inertial.inverse();
-        let position_body = orientation_inverse * relative;
-        let relative_velocity_inertial =
-            flight.state.velocity_inertial_mps - body_state.velocity_inertial;
-        let air_velocity_body = orientation_inverse * relative_velocity_inertial
-            - flight.atmosphere.body_rotation_rad_s.cross(position_body);
+        let kinematics =
+            local_air_kinematics(flight.atmosphere, flight.state, body_state, body.radius_m)
+                .expect("initial air kinematics evaluate");
         let gravity = GravityField::from_ephemeris(&ephemeris)
             .acceleration(flight.state.position_inertial_m, SimTime::EPOCH)
             .expect("gravity evaluates");
-        let sas_moment = pilot_sas_moment(flight.state, flight.sas_target_orientation, radial_up);
-        let trim_moment = pilot_aero_trim_moment(air_velocity_body);
+        let sas_moment = pilot_sas_moment(
+            flight.state,
+            flight.sas_target_orientation,
+            kinematics.radial_up,
+        );
+        let trim_moment = pilot_aero_trim_moment(kinematics.air_velocity_body_mps);
         let (next, forces) = integrate_rigid_body_step(
             &flight.aero_model,
             &flight.vehicle.aero_geometry,
@@ -2772,8 +2839,9 @@ mod tests {
             FlightStepInput {
                 altitude_m: PILOT_START_ALTITUDE_M,
                 gravity_acceleration_inertial_mps2: gravity,
-                position_body_m: position_body,
-                wind_velocity_body_mps: orientation_inverse * body_state.velocity_inertial,
+                position_body_m: kinematics.relative_position_body_m,
+                wind_velocity_body_mps: flight.state.orientation_body_to_inertial.inverse()
+                    * body_state.velocity_inertial,
                 extra_force_body_n: DVec3::X * flight.thrust_n(),
                 extra_moment_body_nm: sas_moment + trim_moment,
             },
@@ -2782,7 +2850,7 @@ mod tests {
         .expect("initial X-15 step evaluates");
         println!(
             "initial x15: v_rel={:.3} m/s aero={:?} force_body={:?} accel={:?} next_alt={:.3} m",
-            air_velocity_body.length(),
+            kinematics.air_velocity_body_mps.length(),
             forces.aero,
             forces.total_force_body_n,
             forces.acceleration_inertial_mps2,
@@ -2879,7 +2947,9 @@ mod tests {
             let body_state = ephemeris
                 .body_state(reference_body, SimTime(flight.flight_time_s))
                 .expect("body state evaluates");
-            let relative = flight.state.position_inertial_m - body_state.position_inertial;
+            let kinematics =
+                local_air_kinematics(flight.atmosphere, flight.state, body_state, body.radius_m)
+                    .expect("air kinematics evaluate");
             let gravity = GravityField::from_ephemeris(&ephemeris)
                 .acceleration(
                     flight.state.position_inertial_m,
@@ -2887,18 +2957,17 @@ mod tests {
                 )
                 .expect("gravity evaluates");
             flight.command_controls(0.0, 0.0, 0.0);
-            let orientation_inverse = flight.state.orientation_body_to_inertial.inverse();
-            let position_body = orientation_inverse * relative;
-            let relative_velocity_inertial =
-                flight.state.velocity_inertial_mps - body_state.velocity_inertial;
-            let air_velocity_body = orientation_inverse * relative_velocity_inertial
-                - flight.atmosphere.body_rotation_rad_s.cross(position_body);
-            let radial_up = relative.try_normalize().unwrap_or(DVec3::Z);
-            let sas_moment =
-                pilot_sas_moment(flight.state, flight.sas_target_orientation, radial_up);
-            let trim_moment = pilot_aero_trim_moment(air_velocity_body);
-            let contact_moment = if relative.length() - body.radius_m <= 5.5
-                && relative_velocity_inertial.dot(radial_up) <= 0.0
+            let sas_moment = pilot_sas_moment(
+                flight.state,
+                flight.sas_target_orientation,
+                kinematics.radial_up,
+            );
+            let trim_moment = pilot_aero_trim_moment(kinematics.air_velocity_body_mps);
+            let contact_moment = if kinematics.altitude_m <= 5.5
+                && kinematics
+                    .relative_velocity_inertial_mps
+                    .dot(kinematics.radial_up)
+                    <= 0.0
             {
                 -flight.state.angular_velocity_body_rps
                     * DVec3::new(400_000.0, 700_000.0, 400_000.0)
@@ -2912,10 +2981,11 @@ mod tests {
                 flight.state,
                 flight.vehicle.mass_properties,
                 FlightStepInput {
-                    altitude_m: (relative.length() - body.radius_m).max(0.0),
+                    altitude_m: kinematics.altitude_m.max(0.0),
                     gravity_acceleration_inertial_mps2: gravity,
-                    position_body_m: position_body,
-                    wind_velocity_body_mps: orientation_inverse * body_state.velocity_inertial,
+                    position_body_m: kinematics.relative_position_body_m,
+                    wind_velocity_body_mps: flight.state.orientation_body_to_inertial.inverse()
+                        * body_state.velocity_inertial,
                     extra_force_body_n: DVec3::X * flight.thrust_n(),
                     extra_moment_body_nm: sas_moment + trim_moment + contact_moment,
                 },
@@ -2927,7 +2997,9 @@ mod tests {
                 .expect("next body state evaluates");
             let next_relative = state.position_inertial_m - next_body_state.position_inertial;
             if next_relative.length() < body.radius_m + PILOT_SURFACE_CLEARANCE_M {
-                let contact_position = next_relative.try_normalize().unwrap_or(radial_up)
+                let contact_position = next_relative
+                    .try_normalize()
+                    .unwrap_or(kinematics.radial_up)
                     * (body.radius_m + PILOT_SURFACE_CLEARANCE_M);
                 let mut state = state;
                 state.position_inertial_m = next_body_state.position_inertial + contact_position;
@@ -2949,8 +3021,8 @@ mod tests {
                 .length()
                 - body.radius_m;
             minimum_altitude_m = minimum_altitude_m.min(measured_altitude_m);
-            maximum_abs_aoa_deg =
-                maximum_abs_aoa_deg.max(conventional_angle_of_attack_deg(air_velocity_body).abs());
+            maximum_abs_aoa_deg = maximum_abs_aoa_deg
+                .max(conventional_angle_of_attack_deg(kinematics.air_velocity_body_mps).abs());
             assert!(
                 flight.state.angular_velocity_body_rps.length() < 0.35,
                 "X-15 uncommanded attitude rate exceeded 0.35 rad/s at step {step}: {:?}",

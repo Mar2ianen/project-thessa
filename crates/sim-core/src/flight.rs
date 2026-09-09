@@ -212,10 +212,7 @@ pub fn evaluate_flight_forces<M: AeroModel>(
     properties.validate()?;
     input.validate()?;
     let rotating_air_velocity_body_mps = atmosphere
-        .rotating_air_velocity_body_mps(
-            input.position_body_m,
-            state.orientation_body_to_inertial,
-        )
+        .rotating_air_velocity_body_mps(input.position_body_m, state.orientation_body_to_inertial)
         .map_err(FlightError::Atmosphere)?;
     let environment = atmosphere
         .aero_environment(

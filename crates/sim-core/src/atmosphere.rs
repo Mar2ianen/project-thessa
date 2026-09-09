@@ -207,8 +207,7 @@ impl AtmosphereConfig {
         if orientation_error > 1.0e-6 {
             return Err(AtmosphereError::InvalidWind);
         }
-        let rotation_body_rad_s =
-            orientation_body_to_inertial.inverse() * self.body_rotation_rad_s;
+        let rotation_body_rad_s = orientation_body_to_inertial.inverse() * self.body_rotation_rad_s;
         let wind = rotation_body_rad_s.cross(position_body_m);
         if wind.is_finite() {
             Ok(wind)
@@ -431,10 +430,11 @@ mod tests {
 
     #[test]
     fn rotating_air_velocity_is_invariant_under_vehicle_basis_rotation() {
-        let mut atmosphere = AtmosphereConfig::default();
-        atmosphere.body_rotation_rad_s = glam::DVec3::new(0.0, 0.0, 2.0);
-        let orientation = glam::DQuat::from_rotation_y(0.71)
-            * glam::DQuat::from_rotation_x(-0.43);
+        let atmosphere = AtmosphereConfig {
+            body_rotation_rad_s: glam::DVec3::new(0.0, 0.0, 2.0),
+            ..AtmosphereConfig::default()
+        };
+        let orientation = glam::DQuat::from_rotation_y(0.71) * glam::DQuat::from_rotation_x(-0.43);
         let position_body = glam::DVec3::new(3.0, -2.0, 5.0);
         let position_inertial = orientation * position_body;
         let expected_inertial = atmosphere.body_rotation_rad_s.cross(position_inertial);

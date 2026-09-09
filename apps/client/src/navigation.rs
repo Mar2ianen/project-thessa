@@ -690,8 +690,8 @@ mod tests {
             .expect("selected body must remain visible");
         let pan = Vec3::new(0.4, -0.2, 0.1);
         assert_ne!(at_epoch, later, "Thessa should move on its baked orbit");
-        assert_eq!(at_epoch + pan - pan, at_epoch);
-        assert_eq!(later + pan - pan, later);
+        assert!((at_epoch + pan - pan - at_epoch).length() < 1.0e-5);
+        assert!((later + pan - pan - later).length() < 1.0e-5);
         assert_ne!(at_epoch + pan, later + pan);
     }
 

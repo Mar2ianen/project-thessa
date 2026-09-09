@@ -919,9 +919,11 @@ impl PanelAeroModel {
             let aerodynamic_moment = side_axis
                 * (local_q * panel.area_m2 * panel.chord_m * coefficients.pitching_moment);
             let reduced_rates = DVec3::new(
-                state.angular_velocity_body_rps.x * panel.span_m / (2.0 * local_speed),
-                state.angular_velocity_body_rps.y * panel.chord_m / (2.0 * local_speed),
-                state.angular_velocity_body_rps.z * panel.span_m / (2.0 * local_speed),
+                state.angular_velocity_body_rps.dot(chord_axis) * panel.span_m
+                    / (2.0 * local_speed),
+                state.angular_velocity_body_rps.dot(side_axis) * panel.chord_m
+                    / (2.0 * local_speed),
+                state.angular_velocity_body_rps.dot(lift_axis) * panel.span_m / (2.0 * local_speed),
             );
             let dynamic_moment = chord_axis
                 * (local_q

@@ -24,6 +24,8 @@
 - Generic serializable `VehicleDefinition` и `vehicle-baker` TOML → JSON path.
 - Isolated aero validation harness для JSBSim/RocketPy/VSPAERO/AVL/SU2/
   OpenRocket reference workflows.
+- Sampled rigid-body duration API, позволяющий world adapter пересчитывать
+  gravity/altitude/wind/control inputs на каждом deterministic substep.
 
 ### Changed
 
@@ -33,6 +35,9 @@
   а не из barycentric velocity/position напрямую.
 - Aero analytic baseline использует finite-planform correction, swept normal
   Mach и отдельный supersonic wave-drag term.
+- Thessa design target обновлён до `R=3200 km`, `g≈0.500 g`, `p0=1.20 bar`.
+- CI разделён на cross-platform, quality, release-simulation и reference
+  validation jobs; workspace проверяется на Linux, macOS и Windows.
 
 ### Fixed
 
@@ -42,6 +47,8 @@
 - Добавлены guards против non-finite/unbounded pilot flight states.
 - Flight trace пишет достаточный набор state/control/force channels для поиска
   shaking и controller/aero regressions.
+- Вращение атмосферы больше не смешивает inertial/reference-body axes с
+  повернутыми vehicle axes: `omega` переводится в craft frame перед `omega × r`.
 
 ### Validation
 
@@ -64,5 +71,5 @@
 - MIT engine / GPL game licensing boundary и ADR/documentation baseline.
 - Numerical validation против Nyx/ANISE и Lagrange-point reference vectors.
 
-[Unreleased]: https://github.com/Mar2ianen/project-thessa/compare/v0.0.1...HEAD
-[0.0.1]: https://github.com/Mar2ianen/project-thessa/releases/tag/v0.0.1
+> Git tag/release для `0.0.1` пока не создан; changelog не притворяется, что
+> существует release link, которого ещё нет.

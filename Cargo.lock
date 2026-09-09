@@ -5257,6 +5257,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "thessa-worldgen-rocky"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"

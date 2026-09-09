@@ -2,6 +2,33 @@
 
 Sim-first generator for **rocky planets only**. No clouds (separate system).
 
+## Architecture: the FIELD is canonical, PNGs are consumers
+
+```text
+celestial body (data/system.toml)
+        + world recipe / spec
+                |
+                v
+      global planetary field
+   /       |        |        \
+height   biome    geology  climate
+   |
+spectral terrain bands (stable physical wavelengths)
+   |
+authored landmark overrides
+   |
+   v
+sample(direction, min_wavelength_m)
+```
+
+**GLOBAL RASTER != COMPLETE TERRAIN.** PNG/PGM previews (480x270,
+1920x1080) are orbit-preview/debug caches. Close surface detail always comes
+from sampling the field at shorter wavelengths, never from upscaling raster.
+Raster resolution is mostly irrelevant to surface detail.
+
+Future consumers (adaptive cube-sphere renderer, collision mesher) sample the
+same field; tiles/chunks are cache units and never change the terrain.
+
 Pipeline: authored macrostructure (tectonic boundaries + landmark features)
 runs through deterministic erosion, then derives consistent geology/biome,
 hydrology, roughness, minerals and normals. GPT Image 2.5 maps are MACRO

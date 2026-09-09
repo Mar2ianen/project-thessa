@@ -92,6 +92,18 @@ pub fn place_provinces(
     out
 }
 
+/// Default province set: 3 major preferring volcanic/rift landmark positions,
+/// 6 secondary spread globally. Deterministic from (seed, feature sites).
+pub fn default_provinces(seed: u64, hot_spots: &[(f64, f64)]) -> Vec<GeothermalProvince> {
+    let mut lats: Vec<f64> = hot_spots.iter().map(|p| p.0).collect();
+    let mut lons: Vec<f64> = hot_spots.iter().map(|p| p.1).collect();
+    if lats.is_empty() {
+        lats = vec![10.0, -20.0, 35.0];
+        lons = vec![30.0, -60.0, 150.0];
+    }
+    place_provinces(seed, 3, 6, &lats, &lons)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

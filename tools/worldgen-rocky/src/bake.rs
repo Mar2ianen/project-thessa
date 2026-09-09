@@ -10,14 +10,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     biomes::{Biome, Geology, SiteClass, parse_biome},
-    climate::{continentality_steps, nereid_influence},
+    climate::{continentality_metres, nereid_influence},
     erosion::{ErosionKnobs, erode},
     height::encode_height_01,
     hydro::{HeightGrid, WaterClass, classify_water},
     manifest::Manifest,
     minerals::{MineralRichness, sample_minerals},
-    tectonics::eval_uplift_m,
-    terrain::{TerrainKnobs, eval_macro_m, eval_meso_m},
+    terrain::TerrainKnobs,
 };
 
 /// Coarse site classification from height + latitude + recipe + landmarks.
@@ -30,6 +29,36 @@ pub fn classify_site_coarse(
     lon_deg: f64,
     height_m: f64,
 ) -> SiteClass {
+    classify_for_field(
+        lat_deg,
+        lon_deg,
+        height_m,
+        0.0,
+        manifest.climate.polar_extent,
+        manifest.climate.glaciation,
+        manifest.terrain.volcanism,
+        manifest.climate.aridity,
+        &manifest.features,
+        manifest.planet.datum_radius_m,
+    )
+}
+
+/// Field-level classification with explicit parameters (no Manifest).
+/// `geo_flux_w_m2` enables geothermal overrides (snow-free ground, sulfur).
+#[allow(clippy::too_many_arguments)]
+pub fn classify_for_field(
+    lat_deg: f64,
+    lon_deg: f64,
+    height_m: f64,
+    geo_flux_w_m2: f64,
+    polar_extent: f64,
+    glaciation: f64,
+    volcanism: f64,
+    aridity: f64,
+    features: &[crate::features::PlacedFeature],
+    radius_m: f64,
+) -> SiteClass {
+    let _ = lon_deg;
     let polar = lat_deg.abs() / 90.0;
     if height_m < 0.0 {
         let shelf = height_m > -800.0;
@@ -40,31 +69,28 @@ pub fn classify_site_coarse(
         };
         return SiteClass::new(biome, Geology::OceanicCrust);
     }
-    if polar > 1.0 - manifest.climate.polar_extent
-        || (polar > 0.6 && manifest.climate.glaciation > 0.55)
-    {
+    if polar > 1.0 - polar_extent || (polar > 0.6 && glaciation > 0.55) {
         return SiteClass::new(Biome::PolarIceCap, Geology::GlacialTill);
     }
     if height_m > 6000.0 {
         return SiteClass::new(Biome::AlpinePeaks, Geology::ContinentalCrust);
     }
     if height_m > 2500.0 {
-        let volcanic =
-            manifest.terrain.volcanism > 0.5 && ((lat_deg * 3.7 + height_m * 0.001).sin() > 0.3);
+        let volcanic = volcanism > 0.5 && ((lat_deg * 3.7 + height_m * 0.001).sin() > 0.3);
         if volcanic {
             return SiteClass::new(Biome::VolcanicField, Geology::Basaltic);
         }
         return SiteClass::new(Biome::MountainRange, Geology::ContinentalCrust);
     }
-    if manifest.climate.aridity > 0.6 && polar < 0.5 && height_m < 1500.0 {
+    if aridity > 0.6 && polar < 0.5 && height_m < 1500.0 {
         return SiteClass::new(Biome::SandDesert, Geology::Sedimentary);
     }
     let mut site = SiteClass::new(Biome::RockyPlain, Geology::Regolith);
     // Landmark override: strongest in-reach feature wins the biome.
     let mut best = 0.0;
-    for feature in &manifest.features {
+    for feature in features {
         let reach = feature.reach_m();
-        let dlat_m = (lat_deg - feature.lat_deg).to_radians() * manifest.planet.datum_radius_m;
+        let dlat_m = (lat_deg - feature.lat_deg).to_radians() * radius_m;
         let mut dlon = (lon_deg - feature.lon_deg).to_radians();
         if dlon > std::f64::consts::PI {
             dlon -= 2.0 * std::f64::consts::PI;
@@ -72,7 +98,7 @@ pub fn classify_site_coarse(
         if dlon < -std::f64::consts::PI {
             dlon += 2.0 * std::f64::consts::PI;
         }
-        let dlon_m = dlon * manifest.planet.datum_radius_m * lat_deg.to_radians().cos().max(0.05);
+        let dlon_m = dlon * radius_m * lat_deg.to_radians().cos().max(0.05);
         let dist = (dlat_m.powi(2) + dlon_m.powi(2)).sqrt();
         if dist < reach {
             let weight = 1.0 - dist / reach;
@@ -81,6 +107,22 @@ pub fn classify_site_coarse(
                 site = feature_site(feature);
             }
         }
+    }
+    // Geothermal override: strong flux keeps ground snow-free and sulfurous
+    // even inside cold regions (fumaroles, sulfur fields, hot wetlands).
+    if geo_flux_w_m2 > 2.0
+        && matches!(
+            site.biome,
+            Biome::PolarIceCap
+                | Biome::IceCap
+                | Biome::Snowfield
+                | Biome::PermanentSnow
+                | Biome::Glacier
+                | Biome::PeriglacialBarren
+        )
+    {
+        site = SiteClass::new(Biome::GeothermalWetland, Geology::Hydrothermal)
+            .with_tags(crate::biomes::FeatureTag::Fumaroles, None);
     }
     site
 }
@@ -139,8 +181,6 @@ pub fn evaluate_height_grid_steps(
             return Err("grid steps must be within (0, 10] degrees".into());
         }
     }
-    let knobs = knobs_from_manifest(manifest);
-    let strength = manifest.readability.macro_feature_strength;
     let mut lats = Vec::new();
     let mut lat = -90.0;
     while lat <= 90.0 {
@@ -154,34 +194,13 @@ pub fn evaluate_height_grid_steps(
         lon += step_lon_deg;
     }
     let mut grid = HeightGrid::new(lats, lons, manifest.planet.datum_radius_m);
+    // SAME field as point sampling: analytic macro+meso+landmarks per cell.
+    // (Erosion below is a bake-stage refinement; preview/sample share the base.)
+    let field = crate::field::field_from_manifest(manifest)?;
     for (r, lat) in grid.lats.clone().iter().enumerate() {
         for (c, lon) in grid.lons.clone().iter().enumerate() {
-            let macro_h = eval_macro_m(
-                &manifest.features,
-                *lat,
-                *lon,
-                manifest.planet.datum_radius_m,
-            ) * strength;
-            let meso_h = eval_meso_m(
-                manifest.planet.seed,
-                knobs,
-                *lat,
-                *lon,
-                manifest.planet.datum_radius_m,
-            );
-            let tectonic = eval_uplift_m(
-                &manifest.tectonics,
-                *lat,
-                *lon,
-                manifest.planet.datum_radius_m,
-            ) * strength;
-            // Hemispheric design bias: facing side more oceanic, far side
-            // more continental. Physical metres, recipe-driven.
-            let facing = crate::climate::nereid_influence(*lon);
-            let hemi_bias = -4500.0 * manifest.climate.nereid_ocean_bias * facing
-                + 3600.0 * manifest.climate.anti_nereid_land_bias * (1.0 - facing);
-            let h = tectonic + macro_h + meso_h + hemi_bias;
-            grid.h[r][c] = h;
+            let dir = crate::sphere::dir_from_latlon(*lat, *lon);
+            grid.h[r][c] = field.sample(dir, 4000.0).height_m;
         }
     }
     // Erosion is causal: mountains shed talus, droplets carve downhill.
@@ -200,7 +219,7 @@ pub fn evaluate_height_grid_steps(
         }
     }
     if let Some(target) = manifest.ocean_target {
-        calibrate_sea_level(&mut grid, target);
+        calibrate_for_context(&mut grid, target);
         // Re-clamp rails after the datum shift (affects few cells).
         for row in grid.h.iter_mut() {
             for h in row.iter_mut() {
@@ -213,7 +232,7 @@ pub fn evaluate_height_grid_steps(
 
 /// Calibrate sea level: uniform shift so the ocean fraction hits `target`.
 /// Deterministic (total-order sort). Documented datum adjustment, not physics.
-fn calibrate_sea_level(grid: &mut HeightGrid, target: f64) {
+pub(crate) fn calibrate_for_context(grid: &mut HeightGrid, target: f64) {
     let mut sorted: Vec<f64> = grid.h.iter().flatten().copied().collect();
     sorted.sort_by(f64::total_cmp);
     if sorted.is_empty() {
@@ -248,18 +267,16 @@ pub fn derive_normal(grid: &HeightGrid, r: usize, c: usize) -> (f64, f64, f64) {
 pub fn classify_water_driven(grid: &HeightGrid, manifest: &Manifest) -> Vec<Vec<WaterClass>> {
     let arid0 = vec![vec![0.5; grid.cols()]; grid.rows()];
     let water0 = classify_water(grid, &arid0, manifest.climate.glaciation);
-    let dist = continentality_steps(grid, &water0);
-    let cell_m = 2.0 * std::f64::consts::PI * manifest.planet.datum_radius_m / grid.cols() as f64;
-    let arid: Vec<Vec<f64>> = dist
+    // Physical ocean distance in metres (spherical Dijkstra).
+    let dist_m = continentality_metres(grid, &water0);
+    let arid: Vec<Vec<f64>> = dist_m
         .iter()
-        .enumerate()
-        .map(|(r, row)| {
+        .map(|row| {
             row.iter()
                 .enumerate()
                 .map(|(c, d)| {
-                    let continentality = (*d as f64 * cell_m / 2_500_000.0).clamp(0.0, 1.0);
+                    let continentality = (d / 2_500_000.0).clamp(0.0, 1.0);
                     let facing = nereid_influence(grid.lons[c]);
-                    let _ = grid.lats[r];
                     (0.5 * manifest.climate.aridity + 0.6 * continentality - 0.35 * facing)
                         .clamp(0.0, 1.0)
                 })

@@ -155,3 +155,22 @@ prompt = "prompts/hydrology.md"
 name = "minerals"
 file = "minerals_gore_{i}.png"
 prompt = "prompts/minerals.md"
+
+# --- authored landmark zones (layered over procedural features) ---
+[[landmark_zones]]
+id = "kestrel-launch-region"
+center_lat_deg = -24.0
+center_lon_deg = 118.0
+radius_m = 40_000.0
+blend_width_m = 15_000.0
+mode = "surface_overlay"
+surface_tags = ["launch_complex", "graded_plain"]
+
+[[landmark_zones]]
+id = "godshammer-detail"
+center_lat_deg = -25.0
+center_lon_deg = 120.0
+radius_m = 150_000.0
+blend_width_m = 60_000.0
+mode = "procedural_override"
+amplitude_m = 600.0

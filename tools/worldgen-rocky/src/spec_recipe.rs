@@ -530,6 +530,7 @@ pub fn manifest_from_spec(recipe: &SpecRecipe) -> Result<Manifest, String> {
         },
         // Spec ocean target 0.52..0.68: calibrate datum to the midpoint.
         ocean_target: Some(0.60),
+        landmark_zones: Vec::new(),
         features,
     })
 }

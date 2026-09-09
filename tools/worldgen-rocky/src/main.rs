@@ -4,7 +4,7 @@
 //! landmark generators + procedural physical-scale detail. Resolution-agnostic:
 //! all scales in metres, gores as normalized fractions.
 
-use thessa_worldgen_rocky::{bake, geothermal, manifest, preview, spec_recipe, terrain};
+use thessa_worldgen_rocky::{bake, field, geothermal, manifest, preview, spec_recipe, system_body};
 
 use std::{env, error::Error, fmt, fs, path::PathBuf};
 
@@ -28,11 +28,14 @@ fn fail(message: impl Into<String>) -> Box<dyn Error> {
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = env::args().skip(1).peekable();
     let command = args.next().ok_or_else(|| {
-        fail("usage: thessa-worldgen-rocky <check|sample|list-prompts|preview|bake> ...")
+        fail("usage: thessa-worldgen-rocky <check|sample|sample-lods|list-prompts|preview|bake|bake-spec|list-landmarks|check-landmarks> ...")
     })?;
     match command.as_str() {
         "check" => cmd_check(args),
         "sample" => cmd_sample(args),
+        "sample-lods" => cmd_sample_lods(args),
+        "list-landmarks" => cmd_list_landmarks(args),
+        "check-landmarks" => cmd_check_landmarks(args),
         "list-prompts" => {
             for layer in CANONICAL_LAYERS {
                 println!("prompts/{layer}.md");
@@ -54,8 +57,19 @@ fn print_help() {
     println!("Usage:");
     println!("  thessa-worldgen-rocky check --manifest <TOML>");
     println!(
-        "  thessa-worldgen-rocky sample --manifest <TOML> --lat-deg 12 --lon-deg -40 --detail-scale-m 250"
+        "  thessa-worldgen-rocky check --system <TOML> --body <id> --recipe <TOML> [--override-radius]"
     );
+    println!(
+        "  thessa-worldgen-rocky sample --manifest <TOML> --lat-deg 12 --lon-deg -40 --min-wavelength-m 250"
+    );
+    println!(
+        "  thessa-worldgen-rocky sample --system <TOML> --body <id> --manifest <TOML> --lat-deg 12 --lon-deg -40"
+    );
+    println!(
+        "  thessa-worldgen-rocky sample-lods --manifest <TOML> --lat-deg 12 --lon-deg -40 --wavelengths 64000,8000,1000,100"
+    );
+    println!("  thessa-worldgen-rocky list-landmarks --manifest <TOML>");
+    println!("  thessa-worldgen-rocky check-landmarks --manifest <TOML>");
     println!("  thessa-worldgen-rocky list-prompts");
     println!("  thessa-worldgen-rocky preview --manifest <TOML> --step-deg 2 --out /tmp/pv");
     println!("  thessa-worldgen-rocky bake --manifest <TOML> --step-deg 2 [--out report.json]");
@@ -71,6 +85,10 @@ fn load_manifest(path: &PathBuf) -> Result<Manifest, Box<dyn Error>> {
 
 fn cmd_check(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
     let mut manifest_path = PathBuf::from("data/worldgen/example_rocky.toml");
+    let mut system: Option<PathBuf> = None;
+    let mut body: Option<String> = None;
+    let mut recipe: Option<PathBuf> = None;
+    let mut allow_override = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--manifest" => {
@@ -79,10 +97,56 @@ fn cmd_check(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error
                         .ok_or_else(|| fail("--manifest requires a value"))?,
                 );
             }
+            "--system" => {
+                system = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--system requires a value"))?,
+                ));
+            }
+            "--body" => {
+                body = Some(args.next().ok_or_else(|| fail("--body requires a value"))?);
+            }
+            "--recipe" => {
+                recipe = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--recipe requires a value"))?,
+                ));
+            }
+            "--override-radius" => allow_override = true,
             unknown => return Err(fail(format!("unknown argument {unknown}"))),
         }
     }
-    let manifest = load_manifest(&manifest_path)?;
+    // Spec mode: body from the system design + worldgen recipe.
+    if system.is_some() || recipe.is_some() {
+        let system_path = system.ok_or_else(|| fail("check needs --system with --recipe"))?;
+        let body_id = body.ok_or_else(|| fail("check needs --body with --recipe"))?;
+        let recipe_path = recipe.ok_or_else(|| fail("check needs --recipe with --system"))?;
+        let spec: spec_recipe::SpecRecipe = toml::from_str(&fs::read_to_string(&recipe_path)?)?;
+        let sys_source = fs::read_to_string(&system_path)?;
+        let resolved = system_body::resolve_body(&sys_source, &body_id).map_err(fail)?;
+        system_body::check_radius_agreement(spec.planet.datum_radius_m, &resolved, allow_override)
+            .map_err(fail)?;
+        let placed = spec_recipe::place_spec_features(&spec).map_err(fail)?;
+        println!(
+            "body: {} ({:?}, radius {:.0} km, host {})",
+            resolved.entry.id,
+            resolved.kind,
+            resolved.radius_m().map_err(fail)? / 1000.0,
+            resolved.entry.host.as_deref().unwrap_or("-"),
+        );
+        println!("recipe features placed: {}", placed.len());
+        println!("ok: body + recipe agree");
+        return Ok(());
+    }
+    let mut manifest = load_manifest(&manifest_path)?;
+    if let Some(resolved) = resolve_system_body(&system, &body, &mut manifest, allow_override)? {
+        println!(
+            "body: {} ({:?}, radius {:.0} km)",
+            resolved.entry.id,
+            resolved.kind,
+            resolved.radius_m().map_err(fail)? / 1000.0,
+        );
+    }
     validate_manifest(&manifest).map_err(fail)?;
     for feature in &manifest.features {
         feature.validate().map_err(fail)?;
@@ -119,9 +183,12 @@ fn cmd_check(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error
 
 fn cmd_sample(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
     let mut manifest_path = PathBuf::from("data/worldgen/example_rocky.toml");
+    let mut system: Option<PathBuf> = None;
+    let mut body: Option<String> = None;
+    let mut allow_override = false;
     let mut lat_deg: f64 = 0.0;
     let mut lon_deg: f64 = 0.0;
-    let mut detail_scale_m: f64 = 250.0;
+    let mut min_wavelength_m: f64 = 250.0;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--manifest" => {
@@ -130,6 +197,16 @@ fn cmd_sample(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Erro
                         .ok_or_else(|| fail("--manifest requires a value"))?,
                 );
             }
+            "--system" => {
+                system = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--system requires a value"))?,
+                ));
+            }
+            "--body" => {
+                body = Some(args.next().ok_or_else(|| fail("--body requires a value"))?);
+            }
+            "--override-radius" => allow_override = true,
             "--lat-deg" => {
                 lat_deg = args
                     .next()
@@ -142,10 +219,10 @@ fn cmd_sample(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Erro
                     .ok_or_else(|| fail("--lon-deg requires a value"))?
                     .parse()?
             }
-            "--detail-scale-m" => {
-                detail_scale_m = args
+            "--detail-scale-m" | "--min-wavelength-m" => {
+                min_wavelength_m = args
                     .next()
-                    .ok_or_else(|| fail("--detail-scale-m requires a value"))?
+                    .ok_or_else(|| fail("--min-wavelength-m requires a value"))?
                     .parse()?
             }
             unknown => return Err(fail(format!("unknown argument {unknown}"))),
@@ -157,37 +234,39 @@ fn cmd_sample(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Erro
     if !lon_deg.is_finite() || !(-180.0..=180.0).contains(&lon_deg) {
         return Err(fail("--lon-deg must be within -180..180"));
     }
-    if !detail_scale_m.is_finite() || detail_scale_m <= 0.0 {
-        return Err(fail("--detail-scale-m must be positive"));
+    if !min_wavelength_m.is_finite() || min_wavelength_m <= 0.0 {
+        return Err(fail("--min-wavelength-m must be positive"));
     }
-    let manifest = load_manifest(&manifest_path)?;
+    let mut manifest = load_manifest(&manifest_path)?;
+    if let Some(resolved) = resolve_system_body(&system, &body, &mut manifest, allow_override)? {
+        println!(
+            "body: {} ({:?}, g from {:.4} M_earth)",
+            resolved.entry.id,
+            resolved.kind,
+            resolved.entry.mass_earth.unwrap_or(f64::NAN),
+        );
+    }
     validate_manifest(&manifest).map_err(fail)?;
-    let knobs = bake::knobs_from_manifest(&manifest);
-    let macro_h = terrain::eval_macro_m(
-        &manifest.features,
-        lat_deg,
-        lon_deg,
-        manifest.planet.datum_radius_m,
+    // SAME global field as bake/preview: point query, no tiles involved.
+    let field = field::field_from_manifest(&manifest).map_err(fail)?;
+    let dir = thessa_worldgen_rocky::sphere::dir_from_latlon(lat_deg, lon_deg);
+    let s = field.sample(dir, min_wavelength_m);
+    println!(
+        "height_m: {:.1}  (macro {:.1} + procedural {:.1})",
+        s.height_m, s.macro_height_m, s.procedural_height_m
     );
-    let meso_h = terrain::eval_meso_m(
-        manifest.planet.seed,
-        knobs,
-        lat_deg,
-        lon_deg,
-        manifest.planet.datum_radius_m,
+    println!(
+        "site: {:?} / {:?}  tags {:?} {:?}",
+        s.biome, s.geology, s.tag0, s.tag1
     );
-    let micro_h = terrain::eval_micro_m(
-        manifest.planet.seed,
-        knobs,
-        lat_deg,
-        lon_deg,
-        manifest.planet.datum_radius_m,
-        detail_scale_m,
+    println!(
+        "slope {:.4}  geothermal {:.3} W/m2  moisture {:.2}  continentality {:.2}  eclipse {:.2}",
+        s.slope_hint,
+        s.geothermal_flux_w_m2,
+        s.moisture01,
+        s.continentality01,
+        s.eclipse_exposure01,
     );
-    let site = bake::classify_site_coarse(&manifest, lat_deg, lon_deg, macro_h + meso_h);
-    println!("macro_m: {macro_h:.1} meso_m: {meso_h:.1} micro_m: {micro_h:.1}");
-    println!("height_m: {:.1}", macro_h + meso_h + micro_h);
-    println!("site: {:?} / {:?}", site.biome, site.geology);
     Ok(())
 }
 
@@ -290,6 +369,9 @@ fn cmd_bake(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>
 fn cmd_bake_spec(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
     let mut recipe_path = PathBuf::from("data/worldgen/worldgen_recipe.toml");
     let mut body_path = PathBuf::from("data/worldgen/thessa_v02.toml");
+    let mut system: Option<PathBuf> = None;
+    let mut body_id: Option<String> = None;
+    let mut allow_override = false;
     let mut out_dir = PathBuf::from("/tmp/thessa_spec");
     let mut map: Option<(usize, usize)> = None;
     while let Some(arg) = args.next() {
@@ -300,10 +382,22 @@ fn cmd_bake_spec(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn E
                         .ok_or_else(|| fail("--recipe requires a value"))?,
                 );
             }
-            "--body" => {
-                body_path =
-                    PathBuf::from(args.next().ok_or_else(|| fail("--body requires a value"))?);
+            "--body-file" => {
+                body_path = PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--body-file requires a value"))?,
+                );
             }
+            "--system" => {
+                system = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--system requires a value"))?,
+                ));
+            }
+            "--body" => {
+                body_id = Some(args.next().ok_or_else(|| fail("--body requires a value"))?);
+            }
+            "--override-radius" => allow_override = true,
             "--out-dir" => {
                 out_dir = PathBuf::from(
                     args.next()
@@ -326,6 +420,28 @@ fn cmd_bake_spec(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn E
     let recipe: spec_recipe::SpecRecipe = toml::from_str(&fs::read_to_string(&recipe_path)?)?;
     let body: spec_recipe::BodyFile = toml::from_str(&fs::read_to_string(&body_path)?)?;
     spec_recipe::validate_spec(&recipe, &body).map_err(fail)?;
+    if let (Some(system_path), Some(id)) = (system, body_id.clone()) {
+        // Canonical body from the system design wins over the reference file.
+        let sys_source = fs::read_to_string(&system_path)?;
+        let resolved = system_body::resolve_body(&sys_source, &id).map_err(fail)?;
+        system_body::require_rocky(&resolved).map_err(fail)?;
+        system_body::check_radius_agreement(
+            recipe.planet.datum_radius_m,
+            &resolved,
+            allow_override,
+        )
+        .map_err(fail)?;
+        println!(
+            "body: {} ({:?}, radius {:.0} km)",
+            resolved.entry.id,
+            resolved.kind,
+            resolved.radius_m().map_err(fail)? / 1000.0,
+        );
+    } else if body_id.is_some() || allow_override {
+        return Err(fail(
+            "--system/--body/--override-radius must be combined consistently",
+        ));
+    }
     let manifest = spec_recipe::manifest_from_spec(&recipe).map_err(fail)?;
     validate_manifest(&manifest).map_err(fail)?;
     std::fs::create_dir_all(&out_dir)?;
@@ -405,8 +521,8 @@ fn cmd_bake_spec(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn E
 
     // Optional runtime-size global map (macro + large meso only).
     if let Some((w, h)) = map {
-        if w == 0 || h == 0 || w > 4096 || h > 4096 {
-            return Err(fail("--map dimensions must be within 1..=4096"));
+        if w == 0 || h == 0 || w > 8192 || h > 8192 {
+            return Err(fail("--map dimensions must be within 1..=8192"));
         }
         let map_prefix = format!("{prefix}_map-{w}x{h}");
         let (mh, mb) = preview::render_preview_steps(
@@ -420,6 +536,168 @@ fn cmd_bake_spec(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn E
         println!("wrote: {mb}");
     }
     println!("bake-spec ok");
+    Ok(())
+}
+
+/// Resolve `--system/--body` to a rocky body and align the manifest radius.
+/// Returns the body for callers that print inherited metadata.
+fn resolve_system_body(
+    system: &Option<PathBuf>,
+    body_id: &Option<String>,
+    manifest: &mut Manifest,
+    allow_override: bool,
+) -> Result<Option<system_body::ResolvedBody>, Box<dyn Error>> {
+    let (system_path, body) = match (system, body_id) {
+        (Some(path), Some(id)) => (path, id),
+        (None, None) => return Ok(None),
+        _ => return Err(fail("--system and --body must be given together")),
+    };
+    let source = fs::read_to_string(system_path)?;
+    let resolved = system_body::resolve_body(&source, body).map_err(fail)?;
+    let radius_m = system_body::require_rocky(&resolved).map_err(fail)?;
+    system_body::check_radius_agreement(manifest.planet.datum_radius_m, &resolved, allow_override)
+        .map_err(fail)?;
+    if !allow_override {
+        // Inherit canonical radius unless an explicit override was stated.
+        manifest.planet.datum_radius_m = radius_m;
+    }
+    Ok(Some(resolved))
+}
+
+fn cmd_sample_lods(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+    let mut manifest_path = PathBuf::from("data/worldgen/example_rocky.toml");
+    let mut lat_deg: f64 = 0.0;
+    let mut lon_deg: f64 = 0.0;
+    let mut wavelengths = String::from("64000,8000,1000,100");
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--manifest" => {
+                manifest_path = PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--manifest requires a value"))?,
+                );
+            }
+            "--lat-deg" => {
+                lat_deg = args
+                    .next()
+                    .ok_or_else(|| fail("--lat-deg requires a value"))?
+                    .parse()?
+            }
+            "--lon-deg" => {
+                lon_deg = args
+                    .next()
+                    .ok_or_else(|| fail("--lon-deg requires a value"))?
+                    .parse()?
+            }
+            "--wavelengths" => {
+                wavelengths = args
+                    .next()
+                    .ok_or_else(|| fail("--wavelengths requires a value"))?
+            }
+            unknown => return Err(fail(format!("unknown argument {unknown}"))),
+        }
+    }
+    let manifest = load_manifest(&manifest_path)?;
+    validate_manifest(&manifest).map_err(fail)?;
+    let field = field::field_from_manifest(&manifest).map_err(fail)?;
+    let dir = thessa_worldgen_rocky::sphere::dir_from_latlon(lat_deg, lon_deg);
+    for wl in wavelengths.split(',') {
+        let min_wl: f64 = wl.trim().parse().map_err(|_| fail("bad wavelength"))?;
+        let s = field.sample(dir, min_wl);
+        println!(
+            "min_wl {min_wl:>8.0} m  height {sheight:>10.1} m",
+            sheight = s.height_m
+        );
+    }
+    Ok(())
+}
+
+fn cmd_list_landmarks(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+    let mut manifest_path = PathBuf::from("data/worldgen/example_rocky.toml");
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--manifest" => {
+                manifest_path = PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--manifest requires a value"))?,
+                );
+            }
+            unknown => return Err(fail(format!("unknown argument {unknown}"))),
+        }
+    }
+    let manifest = load_manifest(&manifest_path)?;
+    validate_manifest(&manifest).map_err(fail)?;
+    if manifest.landmark_zones.is_empty() {
+        println!("no landmark zones");
+        return Ok(());
+    }
+    for zone in &manifest.landmark_zones {
+        println!(
+            "{id}  {mode:?}  center ({lat:.3}, {lon:.3})  radius {r:.0} m  blend {b:.0} m",
+            id = zone.id,
+            mode = zone.mode,
+            lat = zone.center_lat_deg,
+            lon = zone.center_lon_deg,
+            r = zone.radius_m,
+            b = zone.blend_width_m,
+        );
+    }
+    Ok(())
+}
+
+fn cmd_check_landmarks(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+    let mut manifest_path = PathBuf::from("data/worldgen/example_rocky.toml");
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--manifest" => {
+                manifest_path = PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--manifest requires a value"))?,
+                );
+            }
+            unknown => return Err(fail(format!("unknown argument {unknown}"))),
+        }
+    }
+    let manifest = load_manifest(&manifest_path)?;
+    validate_manifest(&manifest).map_err(fail)?;
+    let field = field::field_from_manifest(&manifest).map_err(fail)?;
+    for zone in &manifest.landmark_zones {
+        // ENU round-trip at 5 km offset must return to centimetres.
+        let dir = thessa_worldgen_rocky::sphere::dir_from_latlon(
+            zone.center_lat_deg + 0.05,
+            zone.center_lon_deg + 0.05,
+        );
+        let enu = zone.to_local(dir, manifest.planet.datum_radius_m);
+        let back = zone.to_world(enu, manifest.planet.datum_radius_m);
+        let err_m = thessa_worldgen_rocky::sphere::great_circle_m(
+            dir,
+            back,
+            manifest.planet.datum_radius_m,
+        );
+        // Blend continuity: sample weights across the ring, must be monotone.
+        let mut prev = 2.0;
+        let mut monotone = true;
+        for i in 0..=20 {
+            let d = zone.radius_m + zone.blend_width_m * i as f64 / 20.0;
+            let ring_dir = zone.to_world([d, 0.0, 0.0], manifest.planet.datum_radius_m);
+            let w = zone.blend_weight(ring_dir, manifest.planet.datum_radius_m);
+            if w > prev + 1e-9 {
+                monotone = false;
+            }
+            prev = w;
+        }
+        // Same base terrain with and without the zone differs only by delta.
+        let s = field.sample(zone.center_dir(), 100.0);
+        println!(
+            "{id}: enu_roundtrip {err_m:.4} m  blend_monotone {monotone}  center_height {h:.1} m",
+            id = zone.id,
+            h = s.height_m,
+        );
+        if err_m > 0.05 || !monotone {
+            return Err(fail(format!("landmark {} failed checks", zone.id)));
+        }
+    }
+    println!("landmarks ok: {}", manifest.landmark_zones.len());
     Ok(())
 }
 
@@ -463,6 +741,7 @@ mod tests {
 
     #[test]
     fn detail_is_deterministic_and_scale_aware() {
+        use thessa_worldgen_rocky::terrain;
         let manifest = example();
         let knobs = bake::knobs_from_manifest(&manifest);
         let a = terrain::eval_micro_m(7, knobs, 12.0, -40.0, 3_200_000.0, 250.0);

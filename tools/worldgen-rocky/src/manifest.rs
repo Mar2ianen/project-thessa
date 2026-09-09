@@ -5,7 +5,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{erosion::ErosionKnobs, features::PlacedFeature, tectonics::Boundary};
+use crate::{
+    erosion::ErosionKnobs, features::PlacedFeature, landmarks::LandmarkZone, tectonics::Boundary,
+};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Manifest {
@@ -21,6 +23,9 @@ pub struct Manifest {
     /// Plate boundaries (tectonics-lite). Empty = no tectonic uplift.
     #[serde(default)]
     pub tectonics: Vec<Boundary>,
+    /// Authored landmark zones (layered over procedural features).
+    #[serde(default)]
+    pub landmark_zones: Vec<LandmarkZone>,
     /// Erosion passes applied during bake.
     #[serde(default)]
     pub erosion: ErosionRecipe,
@@ -243,6 +248,9 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
     }
     for boundary in &manifest.tectonics {
         boundary.validate()?;
+    }
+    for zone in &manifest.landmark_zones {
+        zone.validate()?;
     }
     if manifest.erosion.talus_deg <= 0.0 || manifest.erosion.talus_deg >= 60.0 {
         return Err("erosion.talus_deg must be within (0, 60)".into());

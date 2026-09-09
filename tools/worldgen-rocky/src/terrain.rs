@@ -1,15 +1,30 @@
-//! Terrain evaluation in three explicit physical scale bands.
+//! Terrain evaluation in stable physical spectral bands.
 //!
-//! MACRO ~100-2000 km: authored landmark features + broad provinces.
-//! MESO  ~5-200 km:    secondary relief tied to recipe + geology.
-//! MICRO ~0.01-5 km:   deterministic small detail, physical wavelengths.
+//! MACRO ~125-2000 km: authored provinces (bands) + landmark features.
+//! MESO  ~4-64 km:     relief bands.
+//! MICRO ~32 m-2 km:   detail bands.
 //!
-//! Nothing here knows about pixels. Frequencies are 1/metres.
+//! All bands sample 3D deterministic noise on the unit sphere:
+//!   q = dir * radius_m / wavelength_m
+//! so there is no equirectangular seam, no pole pinching, and physical
+//! wavelengths are uniform over the globe.
+//!
+//! LOD rule: `sample(dir, min_wavelength)` sums exactly the bands with
+//! wavelength >= min_wavelength. A coarse sample is therefore always the
+//! low-frequency PREFIX of a finer sample, never a different surface.
 
 use crate::{
     features::{PlacedFeature, eval_feature_height_m},
     rng,
+    sphere::dir_from_latlon,
 };
+
+/// Macro province bands, metres.
+pub const MACRO_BANDS_M: [f64; 5] = [2_000_000.0, 1_000_000.0, 500_000.0, 250_000.0, 125_000.0];
+/// Meso relief bands, metres.
+pub const MESO_BANDS_M: [f64; 5] = [64_000.0, 32_000.0, 16_000.0, 8_000.0, 4_000.0];
+/// Micro detail bands, metres.
+pub const MICRO_BANDS_M: [f64; 7] = [2000.0, 1000.0, 500.0, 250.0, 125.0, 64.0, 32.0];
 
 /// Recipe knobs (fractions 0..1 unless noted).
 #[derive(Debug, Clone, Copy)]
@@ -35,7 +50,40 @@ impl Default for TerrainKnobs {
     }
 }
 
-/// Evaluate MACRO band: sum of landmark features + broad provinces.
+fn band_channel(band_index: usize) -> u32 {
+    1000 + band_index as u32 * 131
+}
+
+/// One spectral band value in [-amp, +amp].
+pub fn eval_band_m(
+    seed: u64,
+    band_index: usize,
+    dir: [f64; 3],
+    radius_m: f64,
+    wavelength_m: f64,
+    amplitude_m: f64,
+) -> f64 {
+    let q = [
+        dir[0] * radius_m / wavelength_m,
+        dir[1] * radius_m / wavelength_m,
+        dir[2] * radius_m / wavelength_m,
+    ];
+    amplitude_m * rng::value_noise3(seed, band_channel(band_index), q[0], q[1], q[2])
+}
+
+fn macro_amp(wavelength_m: f64, knobs: TerrainKnobs) -> f64 {
+    wavelength_m * 0.0012 * (0.4 + knobs.mountain_coverage)
+}
+
+pub(crate) fn meso_amp(wavelength_m: f64, knobs: TerrainKnobs) -> f64 {
+    wavelength_m * 0.004 * (0.3 + 0.7 * knobs.mountain_coverage) * (1.0 - 0.5 * knobs.erosion)
+}
+
+pub(crate) fn micro_amp(wavelength_m: f64, knobs: TerrainKnobs) -> f64 {
+    (wavelength_m * 0.03).min(knobs.base_roughness_m.max(1.0) * 0.5)
+}
+
+/// Evaluate MACRO band: landmark features + broad provinces (spherical).
 pub fn eval_macro_m(features: &[PlacedFeature], lat_deg: f64, lon_deg: f64, radius_m: f64) -> f64 {
     features
         .iter()
@@ -43,8 +91,16 @@ pub fn eval_macro_m(features: &[PlacedFeature], lat_deg: f64, lon_deg: f64, radi
         .sum()
 }
 
-/// Evaluate MESO band: relief at 5-200 km wavelengths, modulated by knobs.
-/// Deterministic fBm sampled in physical surface metres.
+/// Macro province noise (spherical bands), without discrete features.
+pub fn eval_macro_provinces_m(seed: u64, knobs: TerrainKnobs, dir: [f64; 3], radius_m: f64) -> f64 {
+    MACRO_BANDS_M
+        .iter()
+        .enumerate()
+        .map(|(i, wl)| eval_band_m(seed, i, dir, radius_m, *wl, macro_amp(*wl, knobs)))
+        .sum()
+}
+
+/// Evaluate MESO band: relief at 4-64 km wavelengths (spherical).
 pub fn eval_meso_m(
     seed: u64,
     knobs: TerrainKnobs,
@@ -52,16 +108,16 @@ pub fn eval_meso_m(
     lon_deg: f64,
     radius_m: f64,
 ) -> f64 {
-    // Surface metres from angular coords (equirect local approx is fine for noise input).
-    let x = lon_deg.to_radians() * radius_m;
-    let y = lat_deg.to_radians() * radius_m;
-    // 40 km base wavelength: two octaves cover ~5-80 km.
-    let hills = rng::fbm(seed, 101, x / 40_000.0, y / 40_000.0, 2);
-    let amp = 1200.0 * (0.3 + 0.7 * knobs.mountain_coverage) * (1.0 - 0.5 * knobs.erosion);
-    hills * amp
+    let dir = dir_from_latlon(lat_deg, lon_deg);
+    MESO_BANDS_M
+        .iter()
+        .enumerate()
+        .map(|(i, wl)| eval_band_m(seed, 64 + i, dir, radius_m, *wl, meso_amp(*wl, knobs)))
+        .sum()
 }
 
-/// Evaluate MICRO band: centimetres-to-km detail at explicit wavelengths.
+/// Evaluate MICRO band down to `detail_scale_m` minimum wavelength.
+/// Smaller `detail_scale_m` ADDS shorter bands; shared bands are identical.
 pub fn eval_micro_m(
     seed: u64,
     knobs: TerrainKnobs,
@@ -70,11 +126,24 @@ pub fn eval_micro_m(
     radius_m: f64,
     detail_scale_m: f64,
 ) -> f64 {
-    let scale = detail_scale_m.clamp(0.05, 5000.0);
-    let x = lon_deg.to_radians() * radius_m / scale;
-    let y = lat_deg.to_radians() * radius_m / scale;
-    let amp = (0.35 * scale.min(500.0)).min(knobs.base_roughness_m.max(1.0));
-    rng::fbm(seed, 102, x, y, 4) * amp
+    let dir = dir_from_latlon(lat_deg, lon_deg);
+    eval_micro_dir_m(seed, knobs, dir, radius_m, detail_scale_m)
+}
+
+/// Direction-based micro evaluation (tile/renderer friendly).
+pub fn eval_micro_dir_m(
+    seed: u64,
+    knobs: TerrainKnobs,
+    dir: [f64; 3],
+    radius_m: f64,
+    min_wavelength_m: f64,
+) -> f64 {
+    MICRO_BANDS_M
+        .iter()
+        .enumerate()
+        .filter(|(_, wl)| **wl >= min_wavelength_m)
+        .map(|(i, wl)| eval_band_m(seed, 128 + i, dir, radius_m, *wl, micro_amp(*wl, knobs)))
+        .sum()
 }
 
 /// Full stack. Pure function of inputs.
@@ -87,7 +156,9 @@ pub fn eval_terrain_m(
     radius_m: f64,
     detail_scale_m: f64,
 ) -> f64 {
+    let dir = dir_from_latlon(lat_deg, lon_deg);
     eval_macro_m(features, lat_deg, lon_deg, radius_m)
+        + eval_macro_provinces_m(seed, knobs, dir, radius_m)
         + eval_meso_m(seed, knobs, lat_deg, lon_deg, radius_m)
         + eval_micro_m(seed, knobs, lat_deg, lon_deg, radius_m, detail_scale_m)
 }
@@ -95,7 +166,7 @@ pub fn eval_terrain_m(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::features::Feature;
+    use crate::{features::Feature, sphere::dir_from_latlon};
 
     fn knobs() -> TerrainKnobs {
         TerrainKnobs::default()
@@ -108,7 +179,7 @@ mod tests {
 
     #[test]
     fn stack_is_deterministic_finite_and_seed_sensitive() {
-        let feats = vec![PlacedFeature {
+        let feats = vec![crate::features::PlacedFeature {
             id: "m".into(),
             seed: 3,
             lat_deg: 10.0,
@@ -130,8 +201,40 @@ mod tests {
     }
 
     #[test]
+    fn finer_detail_adds_bands_without_changing_shared_ones() {
+        // LOD prefix property: fine == coarse + exactly the shorter bands.
+        let dir = dir_from_latlon(5.0, 5.0);
+        let coarse = eval_micro_dir_m(7, knobs(), dir, 3_200_000.0, 250.0);
+        let fine = eval_micro_dir_m(7, knobs(), dir, 3_200_000.0, 60.0);
+        let mut added = 0.0;
+        for (i, wl) in MICRO_BANDS_M.iter().enumerate() {
+            if *wl < 250.0 && *wl >= 60.0 {
+                added += eval_band_m(7, 128 + i, dir, 3_200_000.0, *wl, micro_amp(*wl, knobs()));
+            }
+        }
+        assert!(
+            (fine - coarse - added).abs() < 1e-9,
+            "{fine} vs {coarse} + {added}"
+        );
+        assert!((fine - coarse).abs() > 1e-9);
+    }
+
+    #[test]
+    fn seam_and_poles_are_continuous() {
+        // Same physical point via different longitudes => identical height.
+        let a = eval_meso_m(7, knobs(), 10.0, 180.0, 3_200_000.0);
+        let b = eval_meso_m(7, knobs(), 10.0, -180.0, 3_200_000.0);
+        assert_eq!(a, b);
+        // Pole is longitude-invariant.
+        let p0 = eval_meso_m(7, knobs(), 90.0, 0.0, 3_200_000.0);
+        for lon in [-150.0, -45.0, 60.0, 179.0] {
+            assert_eq!(p0, eval_meso_m(7, knobs(), 90.0, lon, 3_200_000.0));
+        }
+    }
+
+    #[test]
     fn finer_detail_scale_changes_micro_but_not_macro() {
-        let feats: Vec<PlacedFeature> = vec![];
+        let feats: Vec<crate::features::PlacedFeature> = vec![];
         let m1 = eval_macro_m(&feats, 5.0, 5.0, 3_200_000.0);
         let m2 = eval_macro_m(&feats, 5.0, 5.0, 3_200_000.0);
         assert_eq!(m1, m2);

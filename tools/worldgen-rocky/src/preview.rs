@@ -95,13 +95,10 @@ mod tests {
 }
 
 use crate::{
-    bake::knobs_from_manifest,
     biomes::geology_color,
-    climate::{continentality_steps, drivers_at, eclipse_exposure, nereid_influence},
-    erosion::{ErosionKnobs, erode},
+    climate::{continentality_metres, drivers_at, eclipse_exposure, nereid_influence},
     geothermal::{GeothermalProvince, geothermal_activity},
     hydro::{HeightGrid, WaterClass},
-    terrain::{eval_macro_m, eval_meso_m},
 };
 
 /// Extra overlay inputs for spec previews.
@@ -188,19 +185,16 @@ pub fn render_spec_overlays(
         std::fs::write(&path, pgm).map_err(|e| e.to_string())?;
         paths.push(path);
     }
-    // Continentality PGM (diagnostic mask, needs ocean distance).
+    // Continentality PGM (diagnostic mask, physical metres).
     {
-        let dist = continentality_steps(grid, water);
+        let dist_m = continentality_metres(grid, water);
         let mut pgm = format!("P5\n{cols} {rows}\n255\n").into_bytes();
         // Normalize by the 2500 km scale used in drivers_at.
-        let cell_km =
-            2.0 * std::f64::consts::PI * manifest.planet.datum_radius_m / 1000.0 / cols as f64;
-        for row in dist {
+        for row in dist_m {
             for d in row {
-                let m = d as f64 * cell_km * 1000.0;
-                let v = (m / 2_500_000.0).clamp(0.0, 1.0);
+                let v = (d / 2_500_000.0).clamp(0.0, 1.0);
                 // Sanity: drivers_at agrees with this mask.
-                let _ = drivers_at(0.0, 0.0, 0.0, m, 0.0, 0.0);
+                let _ = drivers_at(0.0, 0.0, 0.0, d, 0.0, 0.0);
                 pgm.push((v * 255.0).round() as u8);
             }
         }
@@ -236,58 +230,22 @@ impl Readability {
     }
 }
 
-/// Evaluate the full stack on a 480x270 grid and check readability.
+/// Evaluate the SAME global field on a 480x270 grid and check readability.
+/// No separate terrain equation: one field for bake, preview and sampling
+/// (erosion resolution is the only documented difference).
 pub fn readability_480x270(manifest: &Manifest) -> Result<Readability, String> {
     const COLS: usize = 480;
     const ROWS: usize = 270;
-    let knobs = knobs_from_manifest(manifest);
-    let strength = manifest.readability.macro_feature_strength;
-    let lats: Vec<f64> = (0..ROWS)
-        .map(|r| 90.0 - (r as f64 + 0.5) * (180.0 / ROWS as f64))
-        .collect();
-    let lons: Vec<f64> = (0..COLS)
-        .map(|c| -180.0 + (c as f64 + 0.5) * (360.0 / COLS as f64))
-        .collect();
-    let mut grid = HeightGrid::new(lats, lons, manifest.planet.datum_radius_m);
-    for (r, lat) in grid.lats.clone().iter().enumerate() {
-        for (c, lon) in grid.lons.clone().iter().enumerate() {
-            let tectonic = crate::tectonics::eval_uplift_m(
-                &manifest.tectonics,
-                *lat,
-                *lon,
-                manifest.planet.datum_radius_m,
-            ) * strength;
-            let macro_h = eval_macro_m(
-                &manifest.features,
-                *lat,
-                *lon,
-                manifest.planet.datum_radius_m,
-            ) * strength;
-            let meso_h = eval_meso_m(
-                manifest.planet.seed,
-                knobs,
-                *lat,
-                *lon,
-                manifest.planet.datum_radius_m,
-            );
-            grid.h[r][c] = tectonic + macro_h + meso_h;
-        }
-    }
-    erode(
-        &mut grid,
-        ErosionKnobs {
-            thermal_iters: manifest.erosion.thermal_iters.min(6),
-            talus_deg: manifest.erosion.talus_deg,
-            droplets: manifest.erosion.droplets.min(2000),
-            droplet_steps: manifest.erosion.droplet_steps.min(32),
-        },
-    );
+    let field = crate::field::field_from_manifest(manifest)?;
     use std::collections::HashMap;
     let mut counts: HashMap<String, usize> = HashMap::new();
-    for (r, row) in grid.h.iter().enumerate() {
-        for (c, h) in row.iter().enumerate() {
-            let site = classify_site_coarse(manifest, grid.lats[r], grid.lons[c], *h);
-            *counts.entry(format!("{:?}", site.biome)).or_insert(0) += 1;
+    for r in 0..ROWS {
+        let lat = 90.0 - (r as f64 + 0.5) * (180.0 / ROWS as f64);
+        for c in 0..COLS {
+            let lon = -180.0 + (c as f64 + 0.5) * (360.0 / COLS as f64);
+            let dir = crate::sphere::dir_from_latlon(lat, lon);
+            let sample = field.sample(dir, 16_000.0);
+            *counts.entry(format!("{:?}", sample.biome)).or_insert(0) += 1;
         }
     }
     let total = (ROWS * COLS) as f64;

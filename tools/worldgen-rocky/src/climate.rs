@@ -43,35 +43,66 @@ pub fn nereid_influence(lon_deg: f64) -> f64 {
     ((d.cos() + 1.0) / 2.0).powf(1.5)
 }
 
-/// Continentality 0 (open ocean air) .. 1 (deep interior) from a BFS over
-/// land cells, measured in grid steps converted to metres by the caller.
-/// Deterministic: no RNG involved.
-pub fn continentality_steps(grid: &HeightGrid, water: &[Vec<WaterClass>]) -> Vec<Vec<u32>> {
-    use std::collections::VecDeque;
+/// Continentality in METRES from the nearest ocean, via deterministic
+/// Dijkstra over the grid with physical edge lengths (dy_m / dx_m per row).
+/// A polar cell never counts the same as an equatorial one: edge weights
+/// shrink with cos(latitude). Longitude wraps; pole rows are dead ends.
+/// Deterministic: heap ordered by (distance bits, row, col).
+pub fn continentality_metres(grid: &HeightGrid, water: &[Vec<WaterClass>]) -> Vec<Vec<f64>> {
+    use std::collections::BinaryHeap;
+    #[derive(PartialEq)]
+    struct Item {
+        dist_bits: u64,
+        r: usize,
+        c: usize,
+    }
+    impl Eq for Item {}
+    impl Ord for Item {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            other
+                .dist_bits
+                .cmp(&self.dist_bits)
+                .then(other.r.cmp(&self.r))
+                .then(other.c.cmp(&self.c))
+        }
+    }
+    impl PartialOrd for Item {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(other))
+        }
+    }
     let (rows, cols) = (grid.rows(), grid.cols());
-    let mut dist = vec![vec![u32::MAX; cols]; rows];
-    let mut queue = VecDeque::new();
+    let mut dist = vec![vec![f64::INFINITY; cols]; rows];
+    let mut heap = BinaryHeap::new();
     for r in 0..rows {
         for c in 0..cols {
             if matches!(water[r][c], WaterClass::Ocean) {
-                dist[r][c] = 0;
-                queue.push_back((r, c));
+                dist[r][c] = 0.0;
+                heap.push(Item { dist_bits: 0, r, c });
             }
         }
     }
-    while let Some((r, c)) = queue.pop_front() {
-        let nd = dist[r][c].saturating_add(1);
-        // 4-neighbours + longitude wrap.
+    while let Some(Item { r, c, .. }) = heap.pop() {
+        let here = dist[r][c];
+        let (dy_m, dx_m) = grid.cell_m(r);
         let nb = [
-            (r.wrapping_sub(1), c),
-            (r + 1, c),
-            (r, (c + cols - 1) % cols),
-            (r, (c + 1) % cols),
+            (r.wrapping_sub(1), c, dy_m),
+            (r + 1, c, dy_m),
+            (r, (c + cols - 1) % cols, dx_m),
+            (r, (c + 1) % cols, dx_m),
         ];
-        for (nr, nc) in nb {
-            if nr < rows && dist[nr][nc] == u32::MAX {
+        for (nr, nc, w) in nb {
+            if nr >= rows {
+                continue;
+            }
+            let nd = here + w;
+            if nd < dist[nr][nc] {
                 dist[nr][nc] = nd;
-                queue.push_back((nr, nc));
+                heap.push(Item {
+                    dist_bits: nd.to_bits(),
+                    r: nr,
+                    c: nc,
+                });
             }
         }
     }
@@ -158,10 +189,14 @@ mod tests {
                     .collect()
             })
             .collect();
-        let dist = continentality_steps(&grid, &water);
-        assert_eq!(dist[2][0], 0);
+        let dist = continentality_metres(&grid, &water);
+        assert_eq!(dist[2][0], 0.0);
         // Longitude wraps, so mid-landmass (col 3) is farthest from the ocean.
         assert!(dist[2][3] > dist[2][1], "{:?}", dist[2]);
+        // Physical edge lengths: the neighbour cell is one dx_m away.
+        let (_, dx_m) = grid.cell_m(2);
+        assert!((dist[2][1] - dx_m).abs() < 1.0, "{:?}", dist[2]);
+        assert!(dist.iter().flatten().all(|d| d.is_finite()));
     }
 
     #[test]

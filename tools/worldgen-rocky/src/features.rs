@@ -72,6 +72,20 @@ pub enum Feature {
         length_m: f64,
         height_m: f64,
     },
+    Archipelago {
+        chain_length_m: f64,
+        island_radius_m: f64,
+        islands: u32,
+    },
+    VolcanicProvince {
+        radius_m: f64,
+        swell_m: f64,
+        shields: u32,
+    },
+    SaltBasin {
+        radius_m: f64,
+        depth_m: f64,
+    },
 }
 
 /// A feature pinned to the globe.
@@ -177,6 +191,32 @@ impl PlacedFeature {
                 positive(length_m, "length")?;
                 positive(height_m, "height")?;
             }
+            Feature::Archipelago {
+                chain_length_m,
+                island_radius_m,
+                islands,
+            } => {
+                positive(chain_length_m, "chain")?;
+                positive(island_radius_m, "island")?;
+                if *islands == 0 || *islands > 64 {
+                    return Err("islands must be 1..=64".into());
+                }
+            }
+            Feature::VolcanicProvince {
+                radius_m,
+                swell_m,
+                shields,
+            } => {
+                positive(radius_m, "radius")?;
+                non_negative(*swell_m, "swell")?;
+                if *shields > 32 {
+                    return Err("shields must be <= 32".into());
+                }
+            }
+            Feature::SaltBasin { radius_m, depth_m } => {
+                positive(radius_m, "radius")?;
+                positive(depth_m, "depth")?;
+            }
         }
         Ok(())
     }
@@ -207,6 +247,9 @@ impl PlacedFeature {
             } => length_m.max(*width_m) * 1.5,
             Feature::DuneField { extent_m, .. } => *extent_m,
             Feature::Escarpment { length_m, .. } => *length_m,
+            Feature::Archipelago { chain_length_m, .. } => *chain_length_m,
+            Feature::VolcanicProvince { radius_m, .. } => radius_m * 2.5,
+            Feature::SaltBasin { radius_m, .. } => radius_m * 2.0,
         }
     }
 }
@@ -413,6 +456,51 @@ pub fn eval_feature_height_m(pf: &PlacedFeature, lat_deg: f64, lon_deg: f64, rad
             // Step function smoothed across strike.
             height_m * along * smoothstep(-0.5, 0.5, y / length_m * 8.0) - height_m * 0.5 * along
         }
+        Feature::Archipelago {
+            chain_length_m,
+            island_radius_m,
+            islands,
+        } => {
+            // Chain of small volcanic cones along local x, seeded jitter.
+            let mut h = 0.0;
+            for i in 0..*islands {
+                let t = if *islands > 1 {
+                    f64::from(i) / f64::from(islands - 1) - 0.5
+                } else {
+                    0.0
+                };
+                let jx = rng::hash11(pf.seed, 31, i as i64, 0) * chain_length_m * 0.05;
+                let jy = rng::hash11(pf.seed, 32, i as i64, 0) * chain_length_m * 0.08;
+                let cx = t * chain_length_m + jx;
+                let cy = jy;
+                let d = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt() / island_radius_m;
+                // Cone above water + shallow shelf apron below datum.
+                h += 1800.0 * (1.0 - d).max(0.0).powf(1.4)
+                    - 500.0 * (-(d * 0.5).powi(2)).exp() * (1.0 - (1.0 - d).max(0.0));
+            }
+            h
+        }
+        Feature::VolcanicProvince {
+            radius_m,
+            swell_m,
+            shields,
+        } => {
+            let r = (x * x + y * y).sqrt() / radius_m;
+            let swell = swell_m * (-r.powi(2) * 1.2).exp();
+            let mut cones = 0.0;
+            for i in 0..*shields {
+                let ax = rng::hash11(pf.seed, 33, i as i64, 0) * radius_m * 0.6;
+                let ay = rng::hash11(pf.seed, 34, i as i64, 0) * radius_m * 0.6;
+                let d = ((x - ax).powi(2) + (y - ay).powi(2)).sqrt() / (radius_m * 0.18);
+                cones += swell_m * 1.4 * (1.0 - d).max(0.0).powf(1.6);
+            }
+            swell + cones
+        }
+        Feature::SaltBasin { radius_m, depth_m } => {
+            // Flat-floored playa: steep rim descent, dead-flat interior.
+            let r = (x * x + y * y).sqrt() / radius_m;
+            -depth_m * smoothstep(1.0, 0.7, r)
+        }
     };
     if out.is_finite() { out } else { 0.0 }
 }
@@ -531,5 +619,64 @@ mod tests {
         let mut f = crater();
         f.lat_deg = 999.0;
         assert!(f.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod composite_tests {
+    use super::*;
+
+    fn placed(feature: Feature) -> PlacedFeature {
+        PlacedFeature {
+            id: "t".into(),
+            seed: 11,
+            lat_deg: 0.0,
+            lon_deg: 0.0,
+            rotation_rad: 0.0,
+            feature,
+        }
+    }
+
+    #[test]
+    fn archipelago_builds_islands_above_water() {
+        let f = placed(Feature::Archipelago {
+            chain_length_m: 400_000.0,
+            island_radius_m: 30_000.0,
+            islands: 5,
+        });
+        let r = 3_200_000.0;
+        // Tallest point along the chain must clear the water.
+        let mut peak = f64::NEG_INFINITY;
+        for i in 0..41 {
+            let lon_deg = (-200_000.0 + i as f64 * 10_000.0) / r * 180.0 / std::f64::consts::PI;
+            peak = peak.max(eval_feature_height_m(&f, 0.0, lon_deg, r));
+        }
+        assert!(peak > 500.0, "island cone: {peak}");
+    }
+
+    #[test]
+    fn salt_basin_floor_is_flat_and_below_rim() {
+        let f = placed(Feature::SaltBasin {
+            radius_m: 200_000.0,
+            depth_m: 800.0,
+        });
+        let r = 3_200_000.0;
+        let center = eval_feature_height_m(&f, 0.0, 0.0, r);
+        let edge_lon = f64::to_degrees(190_000.0 / r);
+        let edge = eval_feature_height_m(&f, 0.0, edge_lon, r);
+        assert!((center + 800.0).abs() < 1.0, "flat floor: {center}");
+        assert!(edge > center, "rim above floor");
+    }
+
+    #[test]
+    fn volcanic_province_has_relief() {
+        let f = placed(Feature::VolcanicProvince {
+            radius_m: 300_000.0,
+            swell_m: 1200.0,
+            shields: 6,
+        });
+        let h = eval_feature_height_m(&f, 0.0, 0.0, 3_200_000.0);
+        assert!(h > 500.0, "province relief: {h}");
+        assert!(h.is_finite());
     }
 }

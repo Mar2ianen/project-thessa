@@ -65,6 +65,18 @@ pub fn base_density_per_km2(biome: Biome) -> f64 {
         Biome::SimpleCrater | Biome::ComplexCrater | Biome::EjectaField => 160.0,
         Biome::CrateredHighlands | Biome::ImpactBasin => 100.0,
         Biome::CoastBeach | Biome::Archipelago => 25.0,
+        Biome::ColdOcean | Biome::CoastalShelf => 0.0,
+        Biome::TidalFlat | Biome::Beach | Biome::RockyCoast => 20.0,
+        Biome::CoolMaritimePlain | Biome::TemperateGrassland | Biome::Steppe => 30.0,
+        Biome::Wetland | Biome::RiverDelta | Biome::GeothermalWetland => 18.0,
+        Biome::TemperateForest | Biome::CoolForest => 45.0,
+        Biome::ColdDesert | Biome::StonyDesert | Biome::DryBasin => 25.0,
+        Biome::RockyPlateau | Biome::AlpineMeadow | Biome::AlpineBarren => 55.0,
+        Biome::MountainRidge => 115.0,
+        Biome::SeasonalSnow | Biome::PermanentSnow | Biome::IceCap => 8.0,
+        Biome::FreshLava | Biome::FumaroleField | Biome::SulfurField => 85.0,
+        Biome::CraterFloor | Biome::CraterRim | Biome::EjectaPlain => 150.0,
+        Biome::AncientImpactBasin => 95.0,
         Biome::PeriglacialBarren => 70.0,
     }
 }

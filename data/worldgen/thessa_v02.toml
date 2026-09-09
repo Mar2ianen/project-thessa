@@ -1,0 +1,118 @@
+# Proposed Thessa v0.2 design target for worldgen.
+# This file is descriptive/configuration input, not yet canonical runtime data.
+
+[body]
+id = "thessa"
+host = "nereid"
+kind = "habitable_rocky_moon"
+mean_radius_km = 3200.0
+mass_earth = 0.1259652
+surface_gravity_mps2 = 4.903325
+rotation_period_hours = 80.0
+tidal_lock = true
+orbital_semimajor_axis_km = 632354.0
+orbital_eccentricity = 0.003
+orbital_inclination_deg_design = 0.10
+datum = "triaxial_equilibrium_figure_later"
+height_min_m = -8000.0
+height_max_m = 12000.0
+
+[primary_star]
+id = "asterion_a"
+mass_solar = 0.840
+radius_solar = 0.850
+temperature_k = 5150.0
+luminosity_solar = 0.457890
+
+[primary_orbit]
+semi_major_axis_au = 0.780
+eccentricity = 0.015
+mean_flux_w_m2 = 1024.308
+period_days = 274.536876
+
+[distant_star_b]
+id = "asterion_b"
+temperature_k = 8700.0
+luminosity_solar = 15.8
+distance_au_design = 45.0
+flux_w_m2_design = 10.619
+role = "visual_secondary_uv_photochemistry_minor_heat"
+
+[nereid]
+mass_jupiter = 0.95
+radius_km = 68000.0
+rotation_period_hours = 18.2
+axial_tilt_deg = 6.0
+note = "Eclipse season geometry depends on final moon-plane reference."
+
+[atmosphere]
+surface_pressure_bar = 1.20
+reference_temperature_k = 278.0
+n2_mole_fraction = 0.735
+o2_mole_fraction = 0.250
+ar_mole_fraction = 0.012
+co2_mole_fraction = 0.003
+h2o = "variable"
+o3 = "trace_stratospheric_enhanced"
+n2o = "optional_trace"
+mean_molar_mass_g_mol = 29.200954
+gamma_reference = 1.401526
+speed_of_sound_mps_at_reference = 333.075
+surface_density_kg_m3_at_reference = 1.516000
+pressure_scale_height_km_at_reference = 16.143261
+dry_lapse_rate_k_per_km = 4.933622
+o2_partial_pressure_bar = 0.300
+co2_partial_pressure_mbar = 3.6
+
+[climate]
+target_global_mean_surface_temperature_k_min = 276.0
+target_global_mean_surface_temperature_k_max = 280.0
+bond_albedo_design = 0.23
+effective_temperature_k_simple = 241.374
+character = "cool_oceanic_cloudy_geologically_active"
+nereid_facing_bias = "cooler_midday_wetter_cloudier_lower_diurnal_range"
+anti_nereid_bias = "more_continental_drier_larger_diurnal_range"
+high_cloud_greenhouse = true
+
+[clouds]
+storm_anvil_altitude_km_min = 18.0
+storm_anvil_altitude_km_max = 22.0
+thin_high_ice_cloud_altitude_km_min = 20.0
+thin_high_ice_cloud_altitude_km_max = 30.0
+global_uniform_overcast = false
+
+[eclipses]
+central_eclipse_duration_hours_approx = 2.738
+whole_moon_deep_shadow_duration_hours_approx = 2.609
+seasonality = true
+climate_driver = true
+note = "Do not freeze annual mean until orbital-plane geometry is explicit."
+
+[tidal_heating]
+global_mean_target_w_m2_min = 0.10
+global_mean_target_w_m2_max = 0.20
+nominal_w_m2 = 0.145980
+effective_k2_over_q_nominal = 0.008
+climate_role = "minor"
+geology_role = "major"
+spatial_distribution = "localized_provinces_not_uniform"
+
+[worldgen]
+seed = 7
+macro_readability = "high"
+min_major_region_scale_km = 250.0
+target_major_landmark_count_min = 8
+target_major_landmark_count_max = 20
+global_map_role = "macro_and_large_meso_only"
+local_detail = "procedural_later"
+
+[worldgen.driver_fields]
+eclipse_exposure = true
+nereid_radiative_influence = true
+tidal_geothermal_activity = true
+continentality = true
+latitude = true
+elevation = true
+moisture = true
+ocean_distance = true
+geology = true

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     biomes::{Biome, Geology, SiteClass, parse_biome},
+    climate::{continentality_steps, nereid_influence},
     erosion::{ErosionKnobs, erode},
     height::encode_height_01,
     hydro::{HeightGrid, WaterClass, classify_water},
@@ -102,6 +103,9 @@ fn feature_site(feature: &crate::features::PlacedFeature) -> SiteClass {
         }
         Feature::Plateau { .. } => SiteClass::new(Biome::Plateau, Geology::ContinentalCrust),
         Feature::Escarpment { .. } => SiteClass::new(Biome::Escarpment, Geology::Sedimentary),
+        Feature::Archipelago { .. } => SiteClass::new(Biome::Archipelago, Geology::Basaltic),
+        Feature::VolcanicProvince { .. } => SiteClass::new(Biome::VolcanicField, Geology::Basaltic),
+        Feature::SaltBasin { .. } => SiteClass::new(Biome::SaltFlat, Geology::Evaporite),
     }
 }
 
@@ -121,8 +125,19 @@ pub fn knobs_from_manifest(manifest: &Manifest) -> TerrainKnobs {
 /// provinces + tectonic uplift + landmark features, then erosion passes.
 /// Micro detail stays runtime-only.
 pub fn evaluate_height_grid(manifest: &Manifest, step_deg: f64) -> Result<HeightGrid, String> {
-    if !step_deg.is_finite() || step_deg <= 0.0 || step_deg > 10.0 {
-        return Err("preview step must be within (0, 10] degrees".into());
+    evaluate_height_grid_steps(manifest, step_deg, step_deg)
+}
+
+/// Same with independent latitude/longitude steps (map exports).
+pub fn evaluate_height_grid_steps(
+    manifest: &Manifest,
+    step_lat_deg: f64,
+    step_lon_deg: f64,
+) -> Result<HeightGrid, String> {
+    for step in [step_lat_deg, step_lon_deg] {
+        if !step.is_finite() || step <= 0.0 || step > 10.0 {
+            return Err("grid steps must be within (0, 10] degrees".into());
+        }
     }
     let knobs = knobs_from_manifest(manifest);
     let strength = manifest.readability.macro_feature_strength;
@@ -130,13 +145,13 @@ pub fn evaluate_height_grid(manifest: &Manifest, step_deg: f64) -> Result<Height
     let mut lat = -90.0;
     while lat <= 90.0 {
         lats.push(lat);
-        lat += step_deg;
+        lat += step_lat_deg;
     }
     let mut lons = Vec::new();
     let mut lon = -180.0;
     while lon < 180.0 {
         lons.push(lon);
-        lon += step_deg;
+        lon += step_lon_deg;
     }
     let mut grid = HeightGrid::new(lats, lons, manifest.planet.datum_radius_m);
     for (r, lat) in grid.lats.clone().iter().enumerate() {
@@ -160,7 +175,12 @@ pub fn evaluate_height_grid(manifest: &Manifest, step_deg: f64) -> Result<Height
                 *lon,
                 manifest.planet.datum_radius_m,
             ) * strength;
-            let h = tectonic + macro_h + meso_h;
+            // Hemispheric design bias: facing side more oceanic, far side
+            // more continental. Physical metres, recipe-driven.
+            let facing = crate::climate::nereid_influence(*lon);
+            let hemi_bias = -4500.0 * manifest.climate.nereid_ocean_bias * facing
+                + 3600.0 * manifest.climate.anti_nereid_land_bias * (1.0 - facing);
+            let h = tectonic + macro_h + meso_h + hemi_bias;
             grid.h[r][c] = h;
         }
     }
@@ -179,7 +199,33 @@ pub fn evaluate_height_grid(manifest: &Manifest, step_deg: f64) -> Result<Height
             *h = h.clamp(manifest.planet.height_min_m, manifest.planet.height_max_m);
         }
     }
+    if let Some(target) = manifest.ocean_target {
+        calibrate_sea_level(&mut grid, target);
+        // Re-clamp rails after the datum shift (affects few cells).
+        for row in grid.h.iter_mut() {
+            for h in row.iter_mut() {
+                *h = h.clamp(manifest.planet.height_min_m, manifest.planet.height_max_m);
+            }
+        }
+    }
     Ok(grid)
+}
+
+/// Calibrate sea level: uniform shift so the ocean fraction hits `target`.
+/// Deterministic (total-order sort). Documented datum adjustment, not physics.
+fn calibrate_sea_level(grid: &mut HeightGrid, target: f64) {
+    let mut sorted: Vec<f64> = grid.h.iter().flatten().copied().collect();
+    sorted.sort_by(f64::total_cmp);
+    if sorted.is_empty() {
+        return;
+    }
+    let idx = (target.clamp(0.05, 0.95) * (sorted.len() - 1) as f64).round() as usize;
+    let offset = -sorted[idx.min(sorted.len() - 1)];
+    for row in grid.h.iter_mut() {
+        for h in row.iter_mut() {
+            *h += offset;
+        }
+    }
 }
 
 /// Derive tangent-space normal via central differences, in metres.
@@ -197,6 +243,31 @@ pub fn derive_normal(grid: &HeightGrid, r: usize, c: usize) -> (f64, f64, f64) {
     (-hx * inv, -hy * inv, inv)
 }
 
+/// Two-pass water classification with driver-based local dryness:
+/// ocean mask first, then continentality => per-cell aridity for lakes/salt.
+pub fn classify_water_driven(grid: &HeightGrid, manifest: &Manifest) -> Vec<Vec<WaterClass>> {
+    let arid0 = vec![vec![0.5; grid.cols()]; grid.rows()];
+    let water0 = classify_water(grid, &arid0, manifest.climate.glaciation);
+    let dist = continentality_steps(grid, &water0);
+    let cell_m = 2.0 * std::f64::consts::PI * manifest.planet.datum_radius_m / grid.cols() as f64;
+    let arid: Vec<Vec<f64>> = dist
+        .iter()
+        .enumerate()
+        .map(|(r, row)| {
+            row.iter()
+                .enumerate()
+                .map(|(c, d)| {
+                    let continentality = (*d as f64 * cell_m / 2_500_000.0).clamp(0.0, 1.0);
+                    let facing = nereid_influence(grid.lons[c]);
+                    let _ = grid.lats[r];
+                    (0.5 * manifest.climate.aridity + 0.6 * continentality - 0.35 * facing)
+                        .clamp(0.0, 1.0)
+                })
+                .collect()
+        })
+        .collect();
+    classify_water(grid, &arid, manifest.climate.glaciation)
+}
 /// Consistency report: derived layers must agree with height.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsistencyReport {
@@ -215,7 +286,7 @@ pub struct ConsistencyReport {
 
 pub fn bake_report(manifest: &Manifest, step_deg: f64) -> Result<ConsistencyReport, String> {
     let grid = evaluate_height_grid(manifest, step_deg)?;
-    let water = classify_water(&grid, manifest.climate.aridity, manifest.climate.glaciation);
+    let water = classify_water_driven(&grid, manifest);
     let mut report = ConsistencyReport {
         cells: grid.rows() * grid.cols(),
         ocean_cells: 0,

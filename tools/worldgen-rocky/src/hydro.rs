@@ -66,12 +66,17 @@ impl HeightGrid {
 
 /// Classify each cell. `arid_hint01` (0 wet .. 1 arid) and `ice_hint01` come
 /// from the climate recipe + latitude; the terrain decides the rest.
+/// Classify each cell. `arid01` is a per-cell dryness grid (0 wet .. 1 arid),
+/// typically built from continentality + moisture drivers; `ice_hint01` stays
+/// global (polar extent comes from latitude + recipe).
 pub fn classify_water(
     grid: &HeightGrid,
-    arid_hint01: f64,
+    arid01: &[Vec<f64>],
     ice_hint01: f64,
 ) -> Vec<Vec<WaterClass>> {
     let (rows, cols) = (grid.rows(), grid.cols());
+    // True closed depressions via one deterministic priority-flood pass.
+    let depth = depression_depth(grid);
     let mut out = vec![vec![WaterClass::Land; cols]; rows];
     for r in 0..rows {
         let polar = grid.lats[r].abs() / 90.0;
@@ -81,9 +86,11 @@ pub fn classify_water(
                 out[r][c] = WaterClass::Ocean;
             } else if polar > 0.82 || (polar > 0.6 && ice_hint01 > 0.5) {
                 out[r][c] = WaterClass::Ice;
-            } else if is_closed_depression(grid, r, c) {
-                // Closed basin: dry => salt flat, wet => lake.
-                if arid_hint01 > 0.55 {
+            } else if depth[r][c] > 60.0 {
+                // Only substantial closed depressions hold water; shallow
+                // noise pits stay land (drained as wetlands by rivers).
+                // Dry + deep => salt flat, wet + deep => lake.
+                if arid01[r][c] > 0.55 {
                     out[r][c] = WaterClass::SaltFlat;
                 } else {
                     out[r][c] = WaterClass::Lake;
@@ -120,39 +127,110 @@ fn neighbors(rows: usize, cols: usize, r: usize, c: usize) -> Vec<(usize, usize)
     v
 }
 
-/// A cell is a closed depression if no strictly-descending path reaches an
-/// ocean cell or the grid edge (bounded BFS, deterministic order).
-fn is_closed_depression(grid: &HeightGrid, r: usize, c: usize) -> bool {
-    use std::collections::VecDeque;
-    let h0 = grid.h[r][c];
-    if h0 < 0.0 {
-        return false;
+/// Priority-flood fill (deterministic): `filled[r][c]` is the spill height.
+/// Cells where `filled - h` is large sit in true closed depressions.
+/// Pole rows and ocean cells are outlets; longitude wraps.
+fn filled_dem(grid: &HeightGrid) -> Vec<Vec<f64>> {
+    use std::collections::BinaryHeap;
+    #[derive(PartialEq, Eq)]
+    struct Item {
+        key: i64,
+        r: usize,
+        c: usize,
+    }
+    impl Ord for Item {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            // Min-heap by height, then position: fully deterministic.
+            other
+                .key
+                .cmp(&self.key)
+                .then(other.r.cmp(&self.r))
+                .then(other.c.cmp(&self.c))
+        }
+    }
+    impl PartialOrd for Item {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(other))
+        }
     }
     let (rows, cols) = (grid.rows(), grid.cols());
-    let mut seen = vec![vec![false; cols]; rows];
-    let mut queue = VecDeque::from([(r, c)]);
-    seen[r][c] = true;
-    let mut steps = 0usize;
-    while let Some((cr, cc)) = queue.pop_front() {
-        steps += 1;
-        if steps > 4096 {
-            return true;
-        } // large flat basin: treat as closed
-        if cr == 0 || cr + 1 == rows {
-            // Reaches pole edge => open (drains off-map).
-            return false;
+    let mut filled = vec![vec![f64::INFINITY; cols]; rows];
+    let mut visited = vec![vec![false; cols]; rows];
+    let mut heap = BinaryHeap::new();
+    let seed_outlet = |filled: &mut Vec<Vec<f64>>,
+                       visited: &mut Vec<Vec<bool>>,
+                       heap: &mut BinaryHeap<Item>,
+                       r: usize,
+                       c: usize| {
+        filled[r][c] = grid.h[r][c];
+        visited[r][c] = true;
+        heap.push(Item {
+            key: (grid.h[r][c] * 1000.0) as i64,
+            r,
+            c,
+        });
+    };
+    for c in 0..cols {
+        for r in [0, rows - 1] {
+            seed_outlet(&mut filled, &mut visited, &mut heap, r, c);
         }
-        for (nr, nc) in neighbors(rows, cols, cr, cc) {
-            if grid.h[nr][nc] < 0.0 {
-                return false; // drains to ocean
-            }
-            if !seen[nr][nc] && grid.h[nr][nc] <= grid.h[cr][cc] + 1e-9 {
-                seen[nr][nc] = true;
-                queue.push_back((nr, nc));
+    }
+    for r in 0..rows {
+        for c in 0..cols {
+            if grid.h[r][c] < 0.0 && !visited[r][c] {
+                seed_outlet(&mut filled, &mut visited, &mut heap, r, c);
             }
         }
     }
-    true
+    if heap.is_empty() {
+        // No outlet at all (all-land test grids): fall back to global minimum.
+        let mut min = (0usize, 0usize);
+        for r in 0..rows {
+            for c in 0..cols {
+                if grid.h[r][c] < grid.h[min.0][min.1] {
+                    min = (r, c);
+                }
+            }
+        }
+        seed_outlet(&mut filled, &mut visited, &mut heap, min.0, min.1);
+    }
+    while let Some(Item { r, c, .. }) = heap.pop() {
+        let nb = [
+            (r.wrapping_sub(1), c),
+            (r + 1, c),
+            (r, (c + cols - 1) % cols),
+            (r, (c + 1) % cols),
+        ];
+        for (nr, nc) in nb {
+            if nr >= rows || visited[nr][nc] {
+                continue;
+            }
+            visited[nr][nc] = true;
+            // Spill height: never below the cell itself, epsilon above pour point.
+            filled[nr][nc] = grid.h[nr][nc].max(filled[r][c] + 1e-3);
+            heap.push(Item {
+                key: (filled[nr][nc] * 1000.0) as i64,
+                r: nr,
+                c: nc,
+            });
+        }
+    }
+    filled
+}
+
+/// Depression depth in metres: how deep a cell sits below its spill point.
+pub fn depression_depth(grid: &HeightGrid) -> Vec<Vec<f64>> {
+    let filled = filled_dem(grid);
+    grid.h
+        .iter()
+        .zip(filled.iter())
+        .map(|(hrow, frow)| {
+            hrow.iter()
+                .zip(frow.iter())
+                .map(|(h, f)| (f - h).max(0.0))
+                .collect()
+        })
+        .collect()
 }
 
 fn river_seed(_grid: &HeightGrid, r: usize, c: usize) -> bool {
@@ -217,7 +295,8 @@ mod tests {
     #[test]
     fn ocean_below_datum_land_above() {
         let g = cone_grid();
-        let w = classify_water(&g, 0.3, 0.0);
+        let arid = vec![vec![0.3; g.cols()]; g.rows()];
+        let w = classify_water(&g, &arid, 0.0);
         assert_eq!(w[0][0], WaterClass::Ocean);
         assert!(matches!(w[3][3], WaterClass::Land | WaterClass::River));
     }
@@ -225,7 +304,8 @@ mod tests {
     #[test]
     fn rivers_never_flow_uphill() {
         let g = cone_grid();
-        let w = classify_water(&g, 0.3, 0.0);
+        let arid = vec![vec![0.3; g.cols()]; g.rows()];
+        let w = classify_water(&g, &arid, 0.0);
         // Every river cell must have a strictly lower neighbor or touch water.
         for r in 0..g.rows() {
             for c in 0..g.cols() {
@@ -248,6 +328,22 @@ mod tests {
     }
 
     #[test]
+    fn flat_plain_has_no_lakes() {
+        let lats: Vec<f64> = (0..6).map(|i| 30.0 - i as f64).collect();
+        let lons: Vec<f64> = (0..6).map(|i| i as f64 * 2.0).collect();
+        let mut g = HeightGrid::new(lats, lons, 3_200_000.0);
+        for row in g.h.iter_mut() {
+            for h in row.iter_mut() {
+                *h = 400.0;
+            }
+        }
+        g.h[0][0] = -100.0; // one ocean outlet cell
+        let arid = vec![vec![0.2; g.cols()]; g.rows()];
+        let w = classify_water(&g, &arid, 0.0);
+        assert!(w.iter().flatten().all(|c| !matches!(c, WaterClass::Lake)));
+    }
+
+    #[test]
     fn closed_basin_becomes_lake_or_salt() {
         // Bowl with rim above datum everywhere around.
         let lats: Vec<f64> = (0..5).map(|i| 5.0 - i as f64).collect();
@@ -259,9 +355,11 @@ mod tests {
                 *h = 1500.0 + d * 400.0 - if d < 0.5 { 1400.0 } else { 0.0 };
             }
         }
-        let wet = classify_water(&g, 0.1, 0.0);
+        let wet_arid = vec![vec![0.1; g.cols()]; g.rows()];
+        let wet = classify_water(&g, &wet_arid, 0.0);
         assert_eq!(wet[2][2], WaterClass::Lake);
-        let dry = classify_water(&g, 0.9, 0.0);
+        let dry_arid = vec![vec![0.9; g.cols()]; g.rows()];
+        let dry = classify_water(&g, &dry_arid, 0.0);
         assert_eq!(dry[2][2], WaterClass::SaltFlat);
     }
 }

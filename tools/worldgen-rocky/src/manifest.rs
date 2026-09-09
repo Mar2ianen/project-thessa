@@ -24,6 +24,10 @@ pub struct Manifest {
     /// Erosion passes applied during bake.
     #[serde(default)]
     pub erosion: ErosionRecipe,
+    /// Optional sea-level calibration target (ocean fraction 0..1).
+    /// None keeps the physical datum untouched (old manifests, Moon).
+    #[serde(default)]
+    pub ocean_target: Option<f64>,
     #[serde(default)]
     pub features: Vec<PlacedFeature>,
 }
@@ -87,6 +91,12 @@ pub struct ClimateRecipe {
     pub polar_extent: f64,
     pub aridity: f64,
     pub glaciation: f64,
+    /// Facing-side ocean bias 0..1 (depresses sub-Nereid longitudes).
+    #[serde(default)]
+    pub nereid_ocean_bias: f64,
+    /// Anti-Nereid continental bias 0..1 (raises far-side land).
+    #[serde(default)]
+    pub anti_nereid_land_bias: f64,
 }
 
 impl Default for ClimateRecipe {
@@ -95,6 +105,8 @@ impl Default for ClimateRecipe {
             polar_extent: 0.15,
             aridity: 0.4,
             glaciation: 0.2,
+            nereid_ocean_bias: 0.0,
+            anti_nereid_land_bias: 0.0,
         }
     }
 }
@@ -206,6 +218,8 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
         manifest.climate.polar_extent,
         manifest.climate.aridity,
         manifest.climate.glaciation,
+        manifest.climate.nereid_ocean_bias,
+        manifest.climate.anti_nereid_land_bias,
         manifest.readability.macro_feature_strength,
         manifest.readability.landmark_density,
     ] {
@@ -217,6 +231,12 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
         || manifest.readability.biome_min_scale_km <= 0.0
     {
         return Err("biome_min_scale_km must be positive".into());
+    }
+    if manifest
+        .ocean_target
+        .is_some_and(|t| !t.is_finite() || !(0.05..=0.95).contains(&t))
+    {
+        return Err("ocean_target must be within 0.05..=0.95".into());
     }
     for feature in &manifest.features {
         feature.validate()?;

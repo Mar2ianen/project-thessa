@@ -4,7 +4,7 @@
 //! landmark generators + procedural physical-scale detail. Resolution-agnostic:
 //! all scales in metres, gores as normalized fractions.
 
-use thessa_worldgen_rocky::{bake, manifest, preview, terrain};
+use thessa_worldgen_rocky::{bake, geothermal, manifest, preview, spec_recipe, terrain};
 
 use std::{env, error::Error, fmt, fs, path::PathBuf};
 
@@ -41,6 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         "preview" => cmd_preview(args),
         "bake" => cmd_bake(args),
+        "bake-spec" => cmd_bake_spec(args),
         "--help" | "-h" | "help" => {
             print_help();
             Ok(())
@@ -58,6 +59,9 @@ fn print_help() {
     println!("  thessa-worldgen-rocky list-prompts");
     println!("  thessa-worldgen-rocky preview --manifest <TOML> --step-deg 2 --out /tmp/pv");
     println!("  thessa-worldgen-rocky bake --manifest <TOML> --step-deg 2 [--out report.json]");
+    println!(
+        "  thessa-worldgen-rocky bake-spec --recipe <TOML> --body <TOML> --out-dir /tmp/spec [--map 1920x1080]"
+    );
 }
 
 fn load_manifest(path: &PathBuf) -> Result<Manifest, Box<dyn Error>> {
@@ -280,6 +284,142 @@ fn cmd_bake(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>
         println!("wrote: {}", path.display());
     }
     println!("bake ok");
+    Ok(())
+}
+
+fn cmd_bake_spec(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+    let mut recipe_path = PathBuf::from("data/worldgen/worldgen_recipe.toml");
+    let mut body_path = PathBuf::from("data/worldgen/thessa_v02.toml");
+    let mut out_dir = PathBuf::from("/tmp/thessa_spec");
+    let mut map: Option<(usize, usize)> = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--recipe" => {
+                recipe_path = PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--recipe requires a value"))?,
+                );
+            }
+            "--body" => {
+                body_path =
+                    PathBuf::from(args.next().ok_or_else(|| fail("--body requires a value"))?);
+            }
+            "--out-dir" => {
+                out_dir = PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--out-dir requires a value"))?,
+                );
+            }
+            "--map" => {
+                let size = args.next().ok_or_else(|| fail("--map requires WxH"))?;
+                let (w, h) = size
+                    .split_once('x')
+                    .ok_or_else(|| fail("--map must look like 1920x1080"))?;
+                map = Some((
+                    w.parse().map_err(|_| fail("bad map width"))?,
+                    h.parse().map_err(|_| fail("bad map height"))?,
+                ));
+            }
+            unknown => return Err(fail(format!("unknown argument {unknown}"))),
+        }
+    }
+    let recipe: spec_recipe::SpecRecipe = toml::from_str(&fs::read_to_string(&recipe_path)?)?;
+    let body: spec_recipe::BodyFile = toml::from_str(&fs::read_to_string(&body_path)?)?;
+    spec_recipe::validate_spec(&recipe, &body).map_err(fail)?;
+    let manifest = spec_recipe::manifest_from_spec(&recipe).map_err(fail)?;
+    validate_manifest(&manifest).map_err(fail)?;
+    std::fs::create_dir_all(&out_dir)?;
+    let prefix = out_dir
+        .join(&manifest.planet.name)
+        .to_string_lossy()
+        .into_owned();
+
+    // Report at dev resolution.
+    let report = bake::bake_report(&manifest, 2.0).map_err(fail)?;
+    println!(
+        "cells: {} ocean: {} lakes: {} rivers: {} salt: {} ice: {}",
+        report.cells,
+        report.ocean_cells,
+        report.lake_cells,
+        report.river_cells,
+        report.salt_cells,
+        report.ice_cells
+    );
+    if !report.errors.is_empty() {
+        for error in &report.errors {
+            println!("ERROR: {error}");
+        }
+        return Err(fail("bake-spec consistency errors"));
+    }
+
+    // Geothermal provinces prefer volcanic/rift landmarks.
+    let hot_spots: Vec<(f64, f64)> = manifest
+        .features
+        .iter()
+        .filter_map(|f| {
+            use thessa_worldgen_rocky::features::Feature;
+            match &f.feature {
+                Feature::VolcanicProvince { .. }
+                | Feature::ShieldVolcano { .. }
+                | Feature::Canyon { .. } => Some((f.lat_deg, f.lon_deg)),
+                _ => None,
+            }
+        })
+        .collect();
+    let (hlats, hlons): (Vec<f64>, Vec<f64>) = hot_spots.iter().cloned().unzip();
+    let major = recipe.geothermal.major_provinces_min
+        + (thessa_worldgen_rocky::rng::hash01(manifest.planet.seed, 600, 0, 0)
+            * (recipe.geothermal.major_provinces_max - recipe.geothermal.major_provinces_min + 1)
+                as f64) as u32;
+    let secondary = recipe.geothermal.secondary_fields_min
+        + (thessa_worldgen_rocky::rng::hash01(manifest.planet.seed, 601, 0, 0)
+            * (recipe.geothermal.secondary_fields_max - recipe.geothermal.secondary_fields_min + 1)
+                as f64) as u32;
+    let provinces =
+        geothermal::place_provinces(manifest.planet.seed, major, secondary, &hlats, &hlons);
+    println!("geothermal: {major} major + {secondary} secondary provinces");
+
+    // 480x270 diagnostic previews (spec acceptance size).
+    let grid = bake::evaluate_height_grid_steps(&manifest, 2.0 / 3.0, 0.75).map_err(fail)?;
+    let water = bake::classify_water_driven(&grid, &manifest);
+    let (h, b) =
+        preview::render_preview_steps(&manifest, 2.0 / 3.0, 0.75, &prefix).map_err(fail)?;
+    println!("wrote: {h}");
+    println!("wrote: {b}");
+    let overlays = preview::OverlayInputs {
+        provinces,
+        eclipse_strength: 0.28,
+    };
+    for path in
+        preview::render_spec_overlays(&manifest, &grid, &water, &overlays, &prefix).map_err(fail)?
+    {
+        println!("wrote: {path}");
+    }
+
+    // Readability gate: landmarks must survive at 480x270.
+    let readability = preview::readability_480x270(&manifest).map_err(fail)?;
+    println!("readability: {readability:?}");
+    if !readability.passes() {
+        return Err(fail("readability gate failed at 480x270"));
+    }
+
+    // Optional runtime-size global map (macro + large meso only).
+    if let Some((w, h)) = map {
+        if w == 0 || h == 0 || w > 4096 || h > 4096 {
+            return Err(fail("--map dimensions must be within 1..=4096"));
+        }
+        let map_prefix = format!("{prefix}_map-{w}x{h}");
+        let (mh, mb) = preview::render_preview_steps(
+            &manifest,
+            180.0 / h as f64,
+            360.0 / w as f64,
+            &map_prefix,
+        )
+        .map_err(fail)?;
+        println!("wrote: {mh}");
+        println!("wrote: {mb}");
+    }
+    println!("bake-spec ok");
     Ok(())
 }
 

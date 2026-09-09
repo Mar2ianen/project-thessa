@@ -327,6 +327,7 @@ state IDs and replication semantics are fixed.
   `target`); `B` — toggles datum/AGL;
 - `W/S` pitch, `A/D` yaw, `Q/E` roll;
 - `Shift/Ctrl` throttle, `X` cutoff, `Z` full throttle, `Space` stage/engine;
+- `F8` — pause/resume the flight (laptop-friendly; `Pause/Break` is also accepted);
 - `T` SAS, `R` RCS, `G` landing gear;
 - the current X-15 state is live telemetry; unavailable values still render as
   `--` rather than being replaced by fabricated flight data.

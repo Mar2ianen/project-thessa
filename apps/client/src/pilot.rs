@@ -1715,7 +1715,7 @@ fn pilot_input(
     }
 
     if state.view_mode == ClientViewMode::Pilot {
-        if keys.just_pressed(KeyCode::Pause) {
+        if keys.just_pressed(KeyCode::F8) || keys.just_pressed(KeyCode::Pause) {
             clock.paused = !clock.paused;
         }
         for event in mouse_wheel.read() {
@@ -2110,7 +2110,7 @@ fn update_pilot_hud(
                     .unwrap_or("NO REFERENCE"),
             ),
             PilotReadout::Control => format!(
-                "{} [ON]\n{}\nSAS [{}]  RCS [{}]\nW/S pitch A/D yaw Q/E roll\nSHIFT/CTRL throttle  X/Z engine  Space stage\nPAUSE pause",
+                "{} [ON]\n{}\nSAS [{}]  RCS [{}]\nW/S pitch A/D yaw Q/E roll\nSHIFT/CTRL throttle  X/Z engine  Space stage\nF8 pause / resume",
                 state.control_mode.label(),
                 state.control_mode.description(),
                 if flight.sas_enabled { "ON" } else { "OFF" },

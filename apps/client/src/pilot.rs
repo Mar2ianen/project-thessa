@@ -248,7 +248,7 @@ impl PilotFlightRuntime {
             gear_down: true,
             control_input: DVec3::ZERO,
             render_position: Vec3::ZERO,
-            render_orientation: Quat::IDENTITY,
+            render_orientation: render_orientation(orientation_body_to_inertial),
             last_gravity_acceleration_inertial_mps2: DVec3::ZERO,
             last_forces: None,
         })
@@ -676,16 +676,8 @@ pub(super) fn spawn_pilot_preview(
                 .with_children(|vehicle| {
                     vehicle.spawn((
                         WorldAssetRoot(x15_scene),
-                        // Source mesh: nose points along +X and its upper
-                        // surface is +Z. Pilot body axes use nose +Y and
-                        // visual up -Z, so this is the one fixed asset basis
-                        // conversion; flight attitude is applied only to the
-                        // PilotCraftVisual parent. The positive quarter-turn
-                        // is intentional: the previous negative turn put the
-                        // rendered nose 90 degrees away from the flight axes.
                         Transform {
-                            rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)
-                                * Quat::from_rotation_x(std::f32::consts::PI),
+                            rotation: x15_asset_to_craft_rotation(),
                             scale: Vec3::splat(X15_AUTHORED_LENGTH_M / X15_SOURCE_LENGTH_M),
                             ..default()
                         },
@@ -873,11 +865,11 @@ fn update_pilot_preview(
             );
         }
     }
-    if !clock.paused {
-        for mut transform in &mut craft {
-            transform.translation = runtime.render_position;
-            transform.rotation = runtime.render_orientation;
-        }
+    // Copy the authoritative pose even while paused: a freshly spawned scene
+    // must not keep its identity transform when the simulation is stopped.
+    for mut transform in &mut craft {
+        transform.translation = runtime.render_position;
+        transform.rotation = runtime.render_orientation;
     }
     for (mut transform, mut visibility) in &mut flames {
         let active = !clock.paused && runtime.engine_active && runtime.throttle > 0.005;
@@ -1667,10 +1659,18 @@ fn simulate_pilot_flight(
     runtime.render_orientation = render_orientation(runtime.state.orientation_body_to_inertial);
 }
 
+/// The checked-in GLB scene (before Blender's Y-up -> Z-up import conversion)
+/// has nose -X, cockpit/dorsal fin +Y, and lateral +Z. Its root nodes only
+/// scale the mesh; they do not rotate it. Map those axes into the craft
+/// parent's nose +Y, top -Z, lateral +X exactly once.
+fn x15_asset_to_craft_rotation() -> Quat {
+    Quat::from_mat3(&Mat3::from_cols(Vec3::NEG_Y, Vec3::NEG_Z, Vec3::X))
+}
+
 fn render_orientation(orientation: DQuat) -> Quat {
-    let forward = render_position(orientation * DVec3::X).normalize_or_zero();
-    let right = render_position(orientation * DVec3::Y).normalize_or_zero();
-    let up = render_position(orientation * DVec3::Z).normalize_or_zero();
+    let forward = pilot_render_offset(orientation * DVec3::X).normalize_or_zero();
+    let right = pilot_render_offset(orientation * DVec3::Y).normalize_or_zero();
+    let up = pilot_render_offset(orientation * DVec3::Z).normalize_or_zero();
     if forward.length_squared() < 1.0e-8
         || right.length_squared() < 1.0e-8
         || up.length_squared() < 1.0e-8
@@ -2474,19 +2474,28 @@ mod tests {
     }
 
     #[test]
-    fn x15_render_basis_keeps_mesh_nose_and_top_on_physical_axes() {
-        let physical_orientation = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2);
-        let visual_orientation = render_orientation(physical_orientation);
-        let physical_forward =
-            pilot_render_offset(physical_orientation * DVec3::X).normalize_or_zero();
-        let physical_up = pilot_render_offset(physical_orientation * DVec3::Z).normalize_or_zero();
-
-        // The imported GLB is converted once: source +X nose -> parent +Y,
-        // source +Z top -> parent -Z. Attitude itself must come only from the
-        // physical rigid-body orientation, otherwise a 90-degree asset bug
-        // can be mistaken for an aerodynamic tumble.
-        assert!((visual_orientation * Vec3::Y - physical_forward).length() < 1.0e-5);
-        assert!((visual_orientation * Vec3::NEG_Z - physical_up).length() < 1.0e-5);
+    fn x15_glb_nose_top_and_span_follow_physics_in_every_attitude() {
+        // Include the actual asset-child rotation: testing only its parent
+        // previously passed with the GLB sideways and pointing backwards.
+        for orientation in [
+            DQuat::IDENTITY,
+            DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2),
+            DQuat::from_rotation_x(0.8),
+            DQuat::from_rotation_y(-0.7),
+            DQuat::from_rotation_z(1.2)
+                * DQuat::from_rotation_y(-0.4)
+                * DQuat::from_rotation_x(0.6),
+        ] {
+            let mesh_to_world = render_orientation(orientation) * x15_asset_to_craft_rotation();
+            for (asset_axis, body_axis) in [
+                (Vec3::NEG_X, DVec3::X), // nose
+                (Vec3::Y, DVec3::Z),     // dorsal fin / cockpit
+                (Vec3::Z, DVec3::Y),     // span
+            ] {
+                let expected = pilot_render_offset(orientation * body_axis);
+                assert!((mesh_to_world * asset_axis - expected).length() < 1.0e-5);
+            }
+        }
     }
 
     #[test]

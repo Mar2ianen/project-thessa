@@ -39,10 +39,12 @@ impl PilotFlightRuntime {
         mode: ControlMode,
         elapsed_s: f64,
     ) -> Result<(), FlightError> {
+        self.steps_this_frame = 0;
         self.accumulator_s += elapsed_s;
         let gravity_field = GravityField::from_ephemeris(ephemeris);
         while self.accumulator_s + 1.0e-12 >= FLIGHT_STEP_S {
             self.step(ephemeris, &gravity_field, mode)?;
+            self.steps_this_frame += 1;
             self.accumulator_s = (self.accumulator_s - FLIGHT_STEP_S).max(0.0);
         }
         Ok(())

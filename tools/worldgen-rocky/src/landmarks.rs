@@ -163,7 +163,7 @@ impl LandmarkZone {
 }
 
 /// File-backed DEM height patch (delta-from-reference metres).
-/// Minimal parsing boundary: binary P5 grayscale or f32le raw, decoded to
+/// Minimal parsing boundary: binary P5 grayscale (pgm8 only), decoded to
 /// metres via an explicit scale embedded in the asset TOML sidecar.
 /// No GIS dependency.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,7 +174,7 @@ pub struct DemPatchAsset {
     /// Grayscale 0 maps to this delta, 255 (or 1.0) maps to `delta_max_m`.
     pub delta_min_m: f64,
     pub delta_max_m: f64,
-    /// `pgm8` or `f32le`.
+    /// Only `pgm8` is implemented; other encodings are rejected.
     pub format: String,
 }
 

@@ -7,6 +7,7 @@ license = "GPL-3.0-or-later"
 publish = false
 
 [dependencies]
+thessa-worldgen-rocky = { path = "../../tools/worldgen-rocky" }
 thessa-protocol = { path = "../../crates/protocol" }
 thessa-sim-core = { path = "../../crates/sim-core" }
 thessa-perf = { path = "../../crates/perf" }

@@ -5208,6 +5208,7 @@ dependencies = [
  "thessa-perf",
  "thessa-protocol",
  "thessa-sim-core",
+ "thessa-worldgen-rocky",
  "toml",
 ]
 
@@ -5272,6 +5273,7 @@ dependencies = [
  "flate2",
  "serde",
  "serde_json",
+ "thessa-perf",
  "toml",
 ]
 

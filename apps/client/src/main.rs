@@ -3,6 +3,7 @@ mod navigation;
 mod orbits;
 mod perf;
 mod pilot;
+mod terrain;
 use map_ui::*;
 use navigation::*;
 use orbits::*;
@@ -103,6 +104,7 @@ fn main() {
         .add_plugins(OrbitGizmoPlugin)
         .add_plugins(PilotHudPlugin)
         .add_plugins(PerfMonitorPlugin)
+        .add_plugins(terrain::TerrainPlugin)
         .add_plugins(BrpExtrasPlugin::default())
         .insert_resource(SimulationClock::default())
         .insert_resource(NavigationState::default())
@@ -238,7 +240,7 @@ fn setup(
     // The UV sphere duplicates the longitude seam. An icosphere shares the
     // vertices at that seam, which makes a 0/1 texture transition visible as
     // a jagged meridian on close-up planets.
-    let sphere_mesh = meshes.add(Sphere::new(1.0).mesh().uv(64, 32));
+    let sphere_mesh = meshes.add(Sphere::new(1.0).mesh().uv(192, 96));
     let visual_materials = VisualMaterials {
         asterion_a: materials.add(StandardMaterial {
             base_color: Color::srgb(1.0, 0.65, 0.24),
@@ -271,8 +273,10 @@ fn setup(
             ..default()
         }),
         thessa: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.85, 0.90, 0.86),
-            base_color_texture: Some(asset_server.load("textures/thessa-surface-v2.png")),
+            base_color: Color::WHITE,
+            base_color_texture: Some(asset_server.load("worlds/thessa-v3/albedo.png")),
+            normal_map_texture: Some(asset_server.load("worlds/thessa-v3/normal.png")),
+            metallic_roughness_texture: Some(asset_server.load("worlds/thessa-v3/roughness.png")),
             perceptual_roughness: 0.92,
             ..default()
         }),
@@ -499,10 +503,16 @@ fn advance_simulation(
 
 fn update_starfield(
     camera: Single<&Transform, (With<Camera3d>, Without<StarMarker>)>,
-    mut stars: Query<(&mut Transform, &StarMarker)>,
+    survey: Res<terrain::SurfaceSurvey>,
+    mut stars: Query<(&mut Transform, &StarMarker, &mut Visibility)>,
 ) {
     let radius = 500.0;
-    for (mut transform, star) in &mut stars {
+    for (mut transform, star, mut visibility) in &mut stars {
+        *visibility = if survey.active {
+            Visibility::Hidden
+        } else {
+            Visibility::Visible
+        };
         transform.translation = camera.translation + star.direction * radius * star.radius_factor;
         transform.scale = Vec3::splat(star.size * radius / 60.0);
     }

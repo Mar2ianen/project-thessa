@@ -157,6 +157,7 @@ fn perf_end_frame(
     ephemeris: Option<Res<RuntimeEphemeris>>,
     pilot_state: Option<Res<PilotHudState>>,
     pilot_runtime: Option<Res<PilotFlightRuntime>>,
+    terrain: Option<Res<terrain::WorldTerrain>>,
     mut monitor: ResMut<PerfMonitor>,
     mut overlay: Query<(&mut Text, &mut Visibility), With<PerfOverlayText>>,
 ) {
@@ -169,17 +170,14 @@ fn perf_end_frame(
     let in_pilot = pilot_state
         .as_deref()
         .is_some_and(|s| s.view_mode == ClientViewMode::Pilot);
-    let paused = clock.as_deref().is_some_and(|c| c.paused);
-    let frame_dt = time.delta_secs_f64().clamp(0.0, 0.1);
-    let pilot_steps = if in_pilot && !paused {
-        // Actual step count lives inside `PilotFlightRuntime::advance`; the
-        // observable equivalent is floor(frame_dt / fixed_dt) for steady state.
-        // Backlog comes from the runtime accumulator when available.
-        (frame_dt / PILOT_FIXED_DT_S).floor() as u32
-    } else {
-        0
-    };
-    let backlog_s = pilot_runtime.as_deref().map(pilot_backlog_s).unwrap_or(0.0);
+    let pilot_steps = pilot_runtime
+        .as_deref()
+        .map(|r| r.steps_this_frame)
+        .unwrap_or(0);
+    let backlog_s = pilot_runtime
+        .as_deref()
+        .map(PilotFlightRuntime::backlog_s)
+        .unwrap_or(0.0);
     let requested_warp = clock.as_deref().map(|c| c.multiplier).unwrap_or(1.0);
     // Map clock rate is x3600 base; pilot warp is x1 real-time. Effective warp
     // for the fixed-step solver is advanced sim time per wall second.
@@ -222,10 +220,17 @@ fn perf_end_frame(
             })
             .unwrap_or(0),
         active_vehicles: u32::from(in_pilot),
-        active_aero_panels: u32::from(in_pilot),
+        active_aero_panels: if in_pilot {
+            pilot_runtime
+                .as_deref()
+                .map(PilotFlightRuntime::panel_count)
+                .unwrap_or(0)
+        } else {
+            0
+        },
         // Terrain / streaming / RT counters stay zero until those systems land;
         // zero with explicit scope names beats a missing column in captures.
-        ..WorldCounters::default()
+        ..terrain.as_deref().map(|w| w.counters).unwrap_or_default()
     };
     monitor.collector.set_world_counters(world);
 
@@ -233,7 +238,7 @@ fn perf_end_frame(
     monitor.collector.set_memory_sample(MemorySample {
         rss_bytes: current_rss_bytes(),
         asset_cache_bytes: None,
-        terrain_cache_bytes: None,
+        terrain_cache_bytes: terrain.as_deref().map(|w| w.cache_bytes),
         gpu_mem_bytes: None, // unknown: never synthesize a number
     });
 
@@ -242,14 +247,14 @@ fn perf_end_frame(
     // rather than presenting CPU submit time as GPU time.
     monitor.collector.set_gpu_frame(GpuFrame::unavailable());
 
-    // Whole-frame CPU portion: no finer render/extraction split yet, so the
-    // honest split is cpu ~= wall with scopes attributing `sim.total`.
-    monitor
-        .collector
-        .record_cpu_scope("frame.cpu", frame_wall_s);
-    monitor
-        .collector
-        .end_frame(frame_wall_s, frame_wall_s, sim_time_s);
+    // Elapsed main-app schedule interval, excludes vsync between frames.
+    // This is wall duration of CPU work, not OS per-thread CPU utilization.
+    let cpu_s = monitor
+        .frame_start
+        .map(|t| t.elapsed().as_secs_f64())
+        .unwrap_or(0.0);
+    monitor.collector.record_cpu_scope("frame.cpu", cpu_s);
+    monitor.collector.end_frame(frame_wall_s, cpu_s, sim_time_s);
     if monitor.capturing {
         monitor.capture_frames += 1;
     }
@@ -267,12 +272,13 @@ fn perf_end_frame(
     }
 }
 
-/// Read the pilot accumulator backlog without exposing internals widely.
-/// `PilotFlightRuntime` keeps `accumulator_s` private; approximate backlog as
-/// zero here and let the countdown become exact once the runtime exposes a
-/// `backlog_s()` accessor. Kept as a function so the call site is stable.
-fn pilot_backlog_s(_runtime: &PilotFlightRuntime) -> f64 {
-    0.0
+impl PerfMonitor {
+    pub(super) fn record_sim(&mut self, seconds: f64) {
+        self.sim_cpu_s += seconds;
+    }
+    pub(super) fn record_scope(&mut self, name: &str, seconds: f64) {
+        self.collector.record_cpu_scope(name, seconds);
+    }
 }
 
 fn build_overlay_text(monitor: &PerfMonitor, window: &Window, in_pilot: bool) -> String {

@@ -349,6 +349,7 @@ pub(super) struct PilotFlightRuntime {
     surface_input: DVec3,
     actuator_saturated: bool,
     accumulator_s: f64,
+    pub(super) steps_this_frame: u32,
     flight_error: Option<String>,
     render_orientation: Quat,
     last_gravity_acceleration_inertial_mps2: DVec3,
@@ -357,6 +358,20 @@ pub(super) struct PilotFlightRuntime {
 }
 
 impl PilotFlightRuntime {
+    pub(super) fn terrain_origin(&self) -> [f64; 3] {
+        let p = self.render_relative_position_m;
+        [p.x, p.z, -p.y]
+    }
+    pub(super) fn terrain_spin(&self) -> f64 {
+        self.flight_time_s * std::f64::consts::TAU / (80.0 * 3600.0)
+    }
+    pub(super) fn backlog_s(&self) -> f64 {
+        self.accumulator_s
+    }
+    pub(super) fn panel_count(&self) -> u32 {
+        self.vehicle.aero_geometry.panels.len() as u32
+    }
+
     pub(super) fn new(ephemeris: &BakedEphemeris, reference_body: BodyId) -> Result<Self, String> {
         let body = ephemeris
             .body(reference_body)
@@ -429,6 +444,7 @@ impl PilotFlightRuntime {
             surface_input: DVec3::ZERO,
             actuator_saturated: false,
             accumulator_s: 0.0,
+            steps_this_frame: 0,
             flight_error: None,
             render_orientation: render_orientation(orientation_body_to_inertial),
             last_gravity_acceleration_inertial_mps2: DVec3::ZERO,
@@ -639,7 +655,7 @@ impl Default for PilotHudState {
 struct PilotPreviewVisual;
 
 #[derive(Component)]
-struct PilotPlanetVisual;
+pub(super) struct PilotPlanetVisual;
 
 #[derive(Component)]
 struct PilotCraftVisual;
@@ -649,6 +665,8 @@ struct PilotEngineFlame;
 
 pub(super) struct PilotHudPlugin;
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct PilotUpdate;
 impl Plugin for PilotHudPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PilotHudState>()
@@ -663,7 +681,8 @@ impl Plugin for PilotHudPlugin {
                     update_pilot_preview,
                     update_pilot_hud,
                 )
-                    .chain(),
+                    .chain()
+                    .in_set(PilotUpdate),
             );
     }
 }
@@ -929,7 +948,9 @@ fn simulate_pilot_flight(
     ephemeris: Res<RuntimeEphemeris>,
     state: Res<PilotHudState>,
     mut runtime: ResMut<PilotFlightRuntime>,
+    mut perf: ResMut<crate::perf::PerfMonitor>,
 ) {
+    runtime.steps_this_frame = 0;
     if state.view_mode != ClientViewMode::Pilot || clock.paused {
         return;
     }
@@ -938,11 +959,13 @@ fn simulate_pilot_flight(
         return;
     }
     let frame_dt = time.delta_secs_f64().clamp(0.0, 0.1);
+    let started = std::time::Instant::now();
     if let Err(error) = runtime.advance(&ephemeris.ephemeris, state.control_mode, frame_dt) {
         runtime.engine_active = false;
         runtime.control_input = DVec3::ZERO;
         runtime.flight_error = Some(error.to_string());
     }
+    perf.record_sim(started.elapsed().as_secs_f64());
 }
 
 /// The checked-in GLB scene (before Blender's Y-up -> Z-up import conversion)
@@ -1160,6 +1183,7 @@ fn update_flight_ui_state(
     map: Res<MapState>,
     runtime: Res<RuntimeEphemeris>,
     flight_runtime: Res<PilotFlightRuntime>,
+    terrain: Res<terrain::WorldTerrain>,
     mut state: ResMut<PilotHudState>,
 ) {
     let reference_body = runtime
@@ -1173,6 +1197,10 @@ fn update_flight_ui_state(
         reference_body,
         clock.sim_seconds,
     );
+    let origin = DVec3::from_array(flight_runtime.terrain_origin());
+    let body_dir = DQuat::from_rotation_y(-flight_runtime.terrain_spin()) * origin.normalize();
+    let ground = terrain.field.height_m(body_dir.to_array(), 32.0).max(0.0);
+    state.flight.altitude_agl_m = Some(origin.length() - terrain.field.params.radius_m - ground);
     // `map` remains in the signature deliberately: the flight HUD and map
     // share the same body selection resource, but a pilot always flies the
     // selected playable world rather than the current map zoom focus.

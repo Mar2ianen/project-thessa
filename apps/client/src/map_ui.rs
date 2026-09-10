@@ -66,6 +66,7 @@ pub(super) fn update_hud(
     runtime: Res<RuntimeEphemeris>,
     map: Res<MapState>,
     pilot: Option<Res<PilotHudState>>,
+    survey: Res<terrain::SurfaceSurvey>,
     mut query: Query<(&mut Text, &mut Visibility), With<Hud>>,
 ) {
     let pilot_visible = pilot
@@ -96,12 +97,12 @@ pub(super) fn update_hud(
         clock.multiplier,
     );
     for (mut text, mut visibility) in &mut query {
-        *visibility = if pilot_visible {
+        *visibility = if pilot_visible || survey.active {
             Visibility::Hidden
         } else {
             Visibility::Visible
         };
-        if pilot_visible {
+        if pilot_visible || survey.active {
             continue;
         }
         **text = content.clone();

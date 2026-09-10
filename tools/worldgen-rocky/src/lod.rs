@@ -77,28 +77,33 @@ pub fn select_tiles(eye: [f64; 3], radius: f64, max_level: u8, budget: usize) ->
     let eye_r = dot(eye, eye).sqrt();
     let eye_dir = normalize(eye);
     let horizon = (radius / eye_r.max(radius)).clamp(0.0, 1.0).acos();
-    let mut queue: Vec<_> = (0..6).map(TileKey::root).collect();
-    let mut leaves = Vec::new();
-    while let Some(key) = queue.pop() {
-        let center = key.direction(0.5, 0.5);
-        let angular_bound = (2.0 / (1_u64 << key.level) as f64).min(std::f64::consts::PI);
-        if dot(center, eye_dir)
-            < (horizon + angular_bound + 0.10)
-                .min(std::f64::consts::PI)
-                .cos()
-        {
-            continue;
+    let visible = |key: TileKey| {
+        let bound = (2.0 / (1_u64 << key.level) as f64).min(std::f64::consts::PI);
+        dot(key.direction(0.5, 0.5), eye_dir)
+            >= (horizon + bound + 0.10).min(std::f64::consts::PI).cos()
+    };
+    let priority = |key: TileKey| {
+        let delta = sub(eye, key.direction(0.5, 0.5).map(|v| v * radius));
+        key.span_m(radius) / dot(delta, delta).sqrt().max(1.0)
+    };
+    let mut leaves: Vec<_> = (0..6).map(TileKey::root).filter(|k| visible(*k)).collect();
+    // Highest projected error first. A depth-first budget can spend every
+    // subdivision on one corner and leave the point under the camera coarse.
+    while leaves.len() + 3 <= budget.max(6) {
+        let candidate = leaves
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| k.level < max_level.min(20))
+            .max_by(|(_, a), (_, b)| priority(**a).total_cmp(&priority(**b)));
+        let Some((index, key)) = candidate else {
+            break;
+        };
+        if priority(*key) <= 1.0 / 2.4 {
+            break;
         }
-        let delta = sub(eye, center.map(|x| x * radius));
-        let distance = dot(delta, delta).sqrt();
-        if key.level < max_level.min(20)
-            && distance < key.span_m(radius) * 2.4
-            && queue.len() + leaves.len() + 4 <= budget.max(6)
-        {
-            queue.extend(key.children());
-        } else {
-            leaves.push(key);
-        }
+        let children = key.children();
+        leaves.swap_remove(index);
+        leaves.extend(children.into_iter().filter(|k| visible(*k)));
     }
     leaves.sort();
     leaves

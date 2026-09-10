@@ -66,6 +66,7 @@ const ORBIT_DIM_STRENGTH: f32 = 0.72;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_orbits(
+    survey: Res<terrain::SurfaceSurvey>,
     clock: Res<SimulationClock>,
     runtime: Res<RuntimeEphemeris>,
     map: Res<MapState>,
@@ -75,6 +76,9 @@ pub(super) fn draw_orbits(
     mut selected_gizmos: Gizmos<SelectedOrbitGizmoConfigGroup>,
     mut ring_gizmos: Gizmos<NereidRingGizmoConfigGroup>,
 ) {
+    if survey.active {
+        return;
+    }
     if pilot
         .as_ref()
         .is_some_and(|state| state.view_mode == ClientViewMode::Pilot)
@@ -93,7 +97,7 @@ pub(super) fn draw_orbits(
     // selected body's label; the HUD still shows the current focus and target.
     let close_view = camera_distance < 30.0;
     let label_size = if close_view {
-        0.06
+        camera_distance * 0.012
     } else {
         (camera_distance * 0.005).clamp(0.05, 0.18)
     };

@@ -10,6 +10,8 @@ publish = false
 thessa-protocol = { path = "../../crates/protocol" }
 thessa-sim-core = { path = "../../crates/sim-core" }
 thessa-perf = { path = "../../crates/perf" }
-bevy.workspace = true
+thessa-graphics = { path = "../../crates/graphics" }
+thessa-atmosphere = { path = "../../crates/atmosphere" }
+bevy = { workspace = true, features = ["bevy_solari"] }
 bevy_brp_extras = "0.22.0"
 toml.workspace = true

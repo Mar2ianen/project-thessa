@@ -18,6 +18,7 @@ use bevy::ui::FocusPolicy;
 
 use std::time::Instant;
 
+use super::atmosphere::GraphicsResolved;
 use thessa_perf::{
     CaptureMetadata, GpuFrame, MemorySample, PerfCollector, ProfilingLevel, SimBudget,
     WorldCounters, capture_stem, current_rss_bytes, default_capture_metadata,
@@ -42,6 +43,19 @@ pub struct PerfMonitor {
     frame_start: Option<Instant>,
     sim_cpu_s: f64,
     last_status: String,
+}
+
+impl PerfMonitor {
+    /// Record a named CPU scope from another client subsystem (e.g. the
+    /// atmosphere plugin reporting `render.atmosphere`).
+    pub(super) fn record_cpu_scope(&mut self, name: &str, seconds: f64) {
+        self.collector.record_cpu_scope(name, seconds);
+    }
+
+    /// Record a lightweight capture event marker from another subsystem.
+    pub(super) fn push_event(&mut self, name: &str, detail: Option<String>) {
+        self.collector.push_event(name, detail);
+    }
 }
 
 impl Default for PerfMonitor {
@@ -117,12 +131,19 @@ fn perf_handle_keys(
     window: Single<&Window, With<PrimaryWindow>>,
     clock: Option<Res<SimulationClock>>,
     map: Option<Res<MapState>>,
+    graphics: Option<Res<GraphicsResolved>>,
 ) {
     if keys.just_pressed(KeyCode::F4) {
         let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         if shift {
             if monitor.capturing {
-                stop_capture(&mut monitor, &window, clock.as_deref(), map.as_deref());
+                stop_capture(
+                    &mut monitor,
+                    &window,
+                    clock.as_deref(),
+                    map.as_deref(),
+                    graphics.as_deref(),
+                );
             } else {
                 monitor.capturing = true;
                 monitor.capture_frames = 0;
@@ -373,25 +394,31 @@ fn stop_capture(
     window: &Window,
     clock: Option<&SimulationClock>,
     map: Option<&MapState>,
+    graphics: Option<&GraphicsResolved>,
 ) {
     monitor.capturing = false;
     monitor.collector.push_event("capture stopped", None);
     let mut metadata: CaptureMetadata = default_capture_metadata();
     metadata.display.width = window.resolution.width() as u32;
     metadata.display.height = window.resolution.height() as u32;
-    metadata.display.resolution_scale = 1.0;
-    metadata.display.vsync = false;
     metadata.platform.backend = "wgpu".to_string();
-    // Requested -> resolved graphics correlation (spec 12-13, doc 14):
-    // no graphics.toml resolution exists yet, so record the honest placeholder
-    // instead of inventing quality levels. The renderer + future
-    // `ResolvedGraphicsSettings` own these values; perf only carries them.
-    metadata.graphics.preset = "custom".to_string();
-    metadata.graphics.ray_tracing = "off".to_string();
-    metadata
-        .graphics
-        .resolved
-        .insert("backend".to_string(), "wgpu".to_string());
+    // Requested -> resolved graphics correlation (perf spec section 12, visual
+    // atmosphere spec sections 12-13): the perf system never interprets
+    // quality itself, it carries ResolvedGraphicsSettings as metadata.
+    if let Some(resolved) = graphics {
+        metadata.display.resolution_scale = resolved.0.resolution_scale;
+        metadata.display.vsync = resolved.0.vsync;
+        metadata.graphics.preset = resolved.0.preset_label.clone();
+        metadata.graphics.ray_tracing = resolved.0.ray_tracing.as_str().to_string();
+        metadata.graphics.resolved = resolved.0.as_meta_map();
+    } else {
+        metadata.graphics.preset = "unknown".to_string();
+        metadata.graphics.ray_tracing = "unknown".to_string();
+        metadata
+            .graphics
+            .resolved
+            .insert("backend".to_string(), "wgpu".to_string());
+    }
     metadata.graphics.resolved.insert(
         "resolution".to_string(),
         format!(

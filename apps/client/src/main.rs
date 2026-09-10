@@ -1,8 +1,12 @@
+mod atmosphere;
 mod map_ui;
 mod navigation;
 mod orbits;
 mod perf;
 mod pilot;
+use atmosphere::{
+    AtmospherePlugin, GraphicsRequested, GraphicsResolved, PrimaryStarLight, RayTracingActive,
+};
 use map_ui::*;
 use navigation::*;
 use orbits::*;
@@ -11,6 +15,9 @@ use pilot::*;
 
 use std::{f32::consts::TAU, path::Path};
 
+use bevy::render::RenderPlugin;
+use bevy::render::settings::{RenderCreation, WgpuFeatures, WgpuSettings};
+use bevy::solari::prelude::SolariPlugins;
 use bevy::{
     asset::AssetPlugin,
     core_pipeline::tonemapping::Tonemapping,
@@ -20,6 +27,7 @@ use bevy::{
     window::{PrimaryWindow, WindowResolution},
 };
 use bevy_brp_extras::BrpExtrasPlugin;
+use thessa_graphics::{Capabilities, RequestedGraphics, ResolvedGraphicsSettings};
 use thessa_sim_core::{BakedEphemeris, BodyId, KeplerOrbit, SimTime, SystemConfig};
 
 const DISTANCE_UNIT_M: f64 = 125_000_000.0;
@@ -82,27 +90,64 @@ struct MapState {
 }
 
 fn main() {
-    App::new()
-        .add_plugins(
-            DefaultPlugins
-                .set(AssetPlugin {
-                    // Bevy resolves the asset root relative to this package's
-                    // manifest directory: apps/client -> workspace/assets.
-                    file_path: "../../assets".into(),
-                    ..default()
-                })
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "Project Thessa — Nereid System".into(),
-                        resolution: WindowResolution::new(1280, 720),
-                        ..default()
-                    }),
-                    ..default()
-                }),
-        )
+    // Requested graphics first: the RT decision below must happen before
+    // plugins register, while adapter capabilities only exist post-init.
+    // Unknown capability + explicit RT request = fail fast at device creation
+    // with a clear note; `auto` stays raster (see thessa-graphics).
+    let requested = RequestedGraphics::from_toml(include_str!("../../../graphics.toml"))
+        .unwrap_or_else(|error| {
+            eprintln!("[graphics] {error}; falling back to defaults");
+            RequestedGraphics::default()
+        });
+    let resolved = ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+    let rt_active = resolved.ray_tracing.is_active();
+    if rt_active {
+        eprintln!("[graphics] experimental Solari RT path requested; needs RT-capable Vulkan");
+    }
+
+    let mut app = App::new();
+    let mut default_plugins = DefaultPlugins
+        .set(AssetPlugin {
+            // Bevy resolves the asset root relative to this package's
+            // manifest directory: apps/client -> workspace/assets.
+            file_path: "../../assets".into(),
+            ..default()
+        })
+        .set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Project Thessa — Nereid System".into(),
+                resolution: WindowResolution::new(1280, 720),
+                ..default()
+            }),
+            ..default()
+        });
+    if rt_active {
+        // `WgpuSettings` travels inside `RenderPlugin::render_creation` in
+        // 0.19. Forcing RT features makes device creation fail fast on
+        // incapable hardware (explicit opt-in only, never `auto`).
+        default_plugins = default_plugins.set(RenderPlugin {
+            render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                features: WgpuFeatures::default() | SolariPlugins::required_wgpu_features(),
+                ..default()
+            })),
+            ..default()
+        });
+    }
+
+    app.add_plugins(default_plugins);
+    // Solari after DefaultPlugins: its shaders register through the asset
+    // plugin. RT device features were already forced via RenderPlugin above,
+    // so incapable hardware fails fast here instead of mid-frame.
+    if rt_active {
+        app.add_plugins(SolariPlugins);
+    }
+    app.insert_resource(GraphicsRequested(requested))
+        .insert_resource(GraphicsResolved(resolved))
+        .insert_resource(RayTracingActive(rt_active))
         .add_plugins(OrbitGizmoPlugin)
         .add_plugins(PilotHudPlugin)
         .add_plugins(PerfMonitorPlugin)
+        .add_plugins(AtmospherePlugin)
         .add_plugins(BrpExtrasPlugin::default())
         .insert_resource(SimulationClock::default())
         .insert_resource(NavigationState::default())
@@ -175,7 +220,9 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
+    rt_active: Option<Res<RayTracingActive>>,
 ) {
+    let rt_active = rt_active.is_some_and(|flag| flag.0);
     let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml"))
         .expect("the checked-in system configuration must parse");
     let ephemeris = config
@@ -199,7 +246,7 @@ fn setup(
         ..default()
     });
 
-    commands.spawn((
+    let mut camera = commands.spawn((
         Camera3d::default(),
         Projection::Perspective(PerspectiveProjection {
             far: 1_000_000.0,
@@ -222,15 +269,37 @@ fn setup(
         },
         Transform::from_xyz(129.0, 276.0, 287.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
+    // Solari replaces shadow mapping and needs storage-binding usage plus no
+    // MSAA on the camera target; raster keeps the default pipeline.
+    if rt_active {
+        use bevy::camera::CameraMainTextureUsages;
+        use bevy::render::render_resource::TextureUsages;
+        use bevy::solari::prelude::SolariLighting;
+        camera.insert((
+            SolariLighting::default(),
+            CameraMainTextureUsages::default().with(TextureUsages::STORAGE_BINDING),
+            Msaa::Off,
+        ));
+    }
 
     // Asterion's illumination is represented by direction, not by a fake
     // nearby star whose size would make the local map physically misleading.
+    // Illuminance is refreshed every frame from ephemeris geometry at raw-sun
+    // scale so the atmosphere LUT does the filtering; the spawn value only
+    // covers the first frame. The visible disk uses Asterion A's real angular
+    // size (Bevy defaults to Earth's Sun for every light, which would render
+    // the distant companion as a bogus second sun).
     commands.spawn((
+        PrimaryStarLight,
         DirectionalLight {
-            illuminance: 4_500.0,
+            illuminance: 88_000.0,
             color: Color::srgb(1.0, 0.82, 0.63),
-            shadow_maps_enabled: true,
+            shadow_maps_enabled: !rt_active,
             ..default()
+        },
+        bevy::light::SunDisk {
+            angular_size: 0.0099,
+            intensity: 1.0,
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -1.12, -0.70, -0.24)),
     ));

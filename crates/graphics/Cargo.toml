@@ -1,0 +1,12 @@
+[package]
+name = "thessa-graphics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Requested/resolved graphics settings for Project Thessa (spec docs/14_VISUAL_ATMOSPHERE.md sections 15-18)"
+
+[dependencies]
+serde.workspace = true
+toml.workspace = true

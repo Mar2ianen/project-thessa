@@ -62,6 +62,11 @@ pub struct PrimaryStarLight;
 #[derive(Component)]
 struct SecondaryStarLight;
 
+/// Marker on the tertiary-star (Asterion C) fill light. Geometrically near B
+/// but ~1000x dimmer and red: a night-side point, not a third sun.
+#[derive(Component)]
+struct ThirdStarLight;
+
 /// Marker on the shared-atmosphere shell entity following Thessa.
 #[derive(Component)]
 struct ThessaAtmosphereShell;
@@ -293,7 +298,10 @@ fn atmosphere_startup(
             Atmosphere {
                 inner_radius: body.radius_m as f32,
                 outer_radius: (body.radius_m + scale_height * 8.0) as f32,
-                ground_albedo: Vec3::new(0.35, 0.36, 0.33),
+                // Mean linear albedo of thessa-surface-v2 (measured 0.05,
+                // 0.07, 0.11): the multiscatter bounce must match the rendered
+                // ground or the horizon blends against the wrong sky.
+                ground_albedo: Vec3::new(0.05, 0.07, 0.11),
                 medium,
             },
             Transform::default(),
@@ -331,6 +339,23 @@ fn atmosphere_startup(
         },
         Transform::IDENTITY,
         Name::new("Asterion B fill"),
+    ));
+
+    // Tertiary-star fill light (Asterion C): same treatment as B, red and dim.
+    commands.spawn((
+        ThirdStarLight,
+        DirectionalLight {
+            illuminance: 0.0,
+            color: Color::WHITE,
+            shadow_maps_enabled: false,
+            ..default()
+        },
+        bevy::light::SunDisk {
+            angular_size: 0.0001,
+            intensity: 1.0,
+        },
+        Transform::IDENTITY,
+        Name::new("Asterion C fill"),
     ));
 
     if rt_active {
@@ -482,6 +507,7 @@ fn update_atmosphere_visuals(
         (
             With<PrimaryStarLight>,
             Without<SecondaryStarLight>,
+            Without<ThirdStarLight>,
             Without<ThessaAtmosphereShell>,
         ),
     >,
@@ -490,6 +516,16 @@ fn update_atmosphere_visuals(
         (
             With<SecondaryStarLight>,
             Without<PrimaryStarLight>,
+            Without<ThirdStarLight>,
+            Without<ThessaAtmosphereShell>,
+        ),
+    >,
+    mut tertiary: Query<
+        (&mut DirectionalLight, &mut Transform, &mut SunDisk),
+        (
+            With<ThirdStarLight>,
+            Without<PrimaryStarLight>,
+            Without<SecondaryStarLight>,
             Without<ThessaAtmosphereShell>,
         ),
     >,
@@ -499,6 +535,7 @@ fn update_atmosphere_visuals(
             With<ThessaAtmosphereShell>,
             Without<PrimaryStarLight>,
             Without<SecondaryStarLight>,
+            Without<ThirdStarLight>,
         ),
     >,
     visuals: Query<
@@ -508,9 +545,11 @@ fn update_atmosphere_visuals(
             Without<ThessaAtmosphereShell>,
             Without<PrimaryStarLight>,
             Without<SecondaryStarLight>,
+            Without<ThirdStarLight>,
         ),
     >,
     planet_names: Query<(&Name, &GlobalTransform)>,
+    mut camera_settings: Query<&mut AtmosphereSettings, With<Camera3d>>,
     mut monitor: ResMut<PerfMonitor>,
 ) {
     let frame_start = Instant::now();
@@ -543,6 +582,7 @@ fn update_atmosphere_visuals(
     let observer = thessa_state.position_inertial;
     let mut light_a: Option<CelestialLight> = None;
     let mut light_b: Option<CelestialLight> = None;
+    let mut light_c: Option<CelestialLight> = None;
     for star in &catalog.stars {
         let Some(id) = star.body else { continue };
         let Ok(state) = ephemeris.body_state(id, SimTime(sim_time)) else {
@@ -560,6 +600,7 @@ fn update_atmosphere_visuals(
         match star.name.as_str() {
             "asterion_a" => light_a = Some(light),
             "asterion_b" => light_b = Some(light),
+            "asterion_c" => light_c = Some(light),
             _ => {}
         }
     }
@@ -630,6 +671,36 @@ fn update_atmosphere_visuals(
             disk.intensity = 0.0;
         }
     }
+    // Tertiary companion: same ephemeris treatment, red and ~1000x dimmer
+    // than B. Nereid can occult it too; reuse the A factor as a cheap bound
+    // (exact per-source penumbra is follow-up work).
+    if resolved.multi_star {
+        if let Some(c) = light_c.as_ref() {
+            for (mut light, mut transform, mut disk) in &mut tertiary {
+                let travel = (-render_direction(c.direction_to_star)).normalize_or_zero();
+                if travel != Vec3::ZERO {
+                    transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, travel);
+                }
+                light.illuminance =
+                    (c.irradiance_w_m2 * LUX_PER_W_M2 * visibility_a.min(1.0)) as f32;
+                light.color = linear_color(c.color_rgb);
+                disk.angular_size = (2.0 * c.angular_radius_rad) as f32;
+                disk.intensity = 1.0;
+            }
+        }
+    } else {
+        for (mut light, _, mut disk) in &mut tertiary {
+            light.illuminance = 0.0;
+            disk.intensity = 0.0;
+        }
+    }
+
+    // Aerial perspective must cover the visible horizon: the default 32 km
+    // ends mid-frame in the metre-scale pilot scene (~80+ km to the horizon
+    // from 1 km up) and leaves a hard haze cutoff line.
+    for mut settings in &mut camera_settings {
+        settings.aerial_view_lut_max_distance = if in_pilot { 200_000.0 } else { 1_000_000.0 };
+    }
 
     // --- shared shell follows Thessa in the active view's units ---
     if in_pilot {
@@ -683,6 +754,7 @@ fn set_shell_radii(
             With<ThessaAtmosphereShell>,
             Without<PrimaryStarLight>,
             Without<SecondaryStarLight>,
+            Without<ThirdStarLight>,
         ),
     >,
     center: Vec3,
@@ -742,6 +814,54 @@ mod tests {
     fn render_frame_maps_directions() {
         let d = render_direction(DVec3::Z);
         assert!((d - Vec3::Y).length() < 1e-6);
+    }
+
+    fn separation_deg(
+        ephemeris: &BakedEphemeris,
+        observer: BodyId,
+        first: BodyId,
+        second: BodyId,
+        time: thessa_sim_core::SimTime,
+    ) -> f64 {
+        let origin = ephemeris
+            .body_state(observer, time)
+            .unwrap()
+            .position_inertial;
+        let a = (ephemeris.body_state(first, time).unwrap().position_inertial - origin).normalize();
+        let b = (ephemeris
+            .body_state(second, time)
+            .unwrap()
+            .position_inertial
+            - origin)
+            .normalize();
+        a.dot(b).clamp(-1.0, 1.0).acos().to_degrees()
+    }
+
+    #[test]
+    fn epoch_geometry_starts_in_syzygy() {
+        // Design data aligns Thessa-A-BC at EPOCH (separation ~0°), then B
+        // drifts across the sky (~26° by day 20, ~90° by day 69). A second
+        // disk next to the first at sim start is correct geometry, not a
+        // renderer bug; B-C stays a tight ~0.25° pair throughout.
+        use thessa_sim_core::SimTime;
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).unwrap();
+        let ephemeris = config.bake().unwrap();
+        let thessa = ephemeris.body_id("thessa").unwrap();
+        let a = ephemeris.body_id("asterion_a").unwrap();
+        let b = ephemeris.body_id("asterion_b").unwrap();
+        let c = ephemeris.body_id("asterion_c").unwrap();
+        let sep_epoch = separation_deg(&ephemeris, thessa, a, b, SimTime::EPOCH);
+        assert!(sep_epoch < 2.0, "epoch A-B separation: {sep_epoch}");
+        let sep_d69 = separation_deg(&ephemeris, thessa, a, b, SimTime(69.0 * 86400.0));
+        assert!(sep_d69 > 45.0, "day-69 A-B separation: {sep_d69}");
+        for days in [0.0, 69.0, 139.0, 208.0] {
+            let sep_bc = separation_deg(&ephemeris, thessa, b, c, SimTime(days * 86400.0));
+            assert!(
+                sep_bc < 0.5,
+                "B-C pair must stay tight: {sep_bc} at day {days}"
+            );
+        }
     }
 
     #[test]

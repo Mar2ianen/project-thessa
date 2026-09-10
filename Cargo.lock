@@ -5205,9 +5205,18 @@ version = "0.0.1"
 dependencies = [
  "bevy",
  "bevy_brp_extras",
+ "thessa-perf",
  "thessa-protocol",
  "thessa-sim-core",
  "toml",
+]
+
+[[package]]
+name = "thessa-perf"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

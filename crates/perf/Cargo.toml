@@ -1,0 +1,15 @@
+[package]
+name = "thessa-perf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "First-class named performance measurements for Project Thessa (spec docs/15_PERFORMANCE_MONITORING.md)"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

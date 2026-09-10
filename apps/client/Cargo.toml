@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 thessa-protocol = { path = "../../crates/protocol" }
 thessa-sim-core = { path = "../../crates/sim-core" }
+thessa-perf = { path = "../../crates/perf" }
 bevy.workspace = true
 bevy_brp_extras = "0.22.0"
 toml.workspace = true

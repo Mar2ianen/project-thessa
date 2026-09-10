@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/sim-core",
     "crates/protocol",
+    "crates/perf",
     "apps/server",
     "apps/client",
     "tools/system-baker",

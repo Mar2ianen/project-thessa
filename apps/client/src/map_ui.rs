@@ -84,7 +84,7 @@ pub(super) fn update_hud(
     let (days, hours, minutes, seconds) = format_sim_time(clock.sim_seconds);
     let status = if clock.paused { "PAUSED" } else { "RUN" };
     let content = format!(
-        "THESSA  /  {}\nFOCUS {}  >  {}\nT+{:03}d {:02}h {:02}m {:02}s  {}  x{:.3}\n[LMB] select  [double] frame\n[RMB] orbit  [MMB] pan  [WHEEL] zoom\n[SPACE] pause  [UP/DOWN] rate  [0-5] scope\n[TAB] next  [ENTER] frame  [F6/P] pilot HUD",
+        "THESSA  /  {}\nFOCUS {}  >  {}\nT+{:03}d {:02}h {:02}m {:02}s  {}  x{:.3}\n[LMB] select  [double] frame\n[RMB] orbit  [MMB] pan  [WHEEL] zoom\n[SPACE] pause  [UP/DOWN] rate  [0-5] scope\n[TAB] next  [ENTER] frame  [M] flight",
         map.mode.label(),
         focus,
         selected,

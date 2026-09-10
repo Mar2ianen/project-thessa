@@ -258,27 +258,36 @@ without relying only on color perception.
 
 ## 10.10. Current vertical slice
 
-The client currently exposes the PFD with the KSP-inspired default layout:
+The default layout follows the KSP reference: a 256 px navball at bottom center,
+selected speed in its top cap and heading below. A compact dock places thrust
+and utility icons on its left, altitude/vertical speed and SAS/RCS/gear/mode on
+its right. Detailed air/orbit panels expand directly above the side instruments.
+The mode picker opens beside its button. All actions have original vector icons.
 
-- primary speed and altitude tapes with moving display markers;
-- a world-space preview scene with a compact X-15-like flight-test silhouette,
-  three-engine plume, cockpit glass, and a lowered textured
-  planet horizon so the PFD reads as a flight view rather than a system map;
-- surface/air/orbital/target speed frames and datum/AGL altitude toggle;
-- circular attitude instrument with pitch ladder, pitch labels, a visual
-  heading-cardinal marker, roll scale, prograde/retrograde/target cues, a
-  separated flight-path marker, and the mouse aim reticle;
-- propulsion, target/orbit, control-mode, and flight-status cards;
-- F6/P toggles map and pilot views, M/Shift+M changes control mode,
-  V changes speed frame, B changes altitude frame, and the Pilot camera uses
-  RMB look, MMB pan, wheel zoom and Home reset.
+All keyboard hints live in F1. F2 hides the HUD. Detailed air/orbit telemetry
+is hidden until F3 or its chart button is selected. State buttons use shape,
+labels and green illumination; warnings appear only when applicable.
+Prograde/retrograde cues are geometric symbols using the selected velocity
+reference and the same spherical projection as the navball texture. Invalid,
+slow or rear-hemisphere vectors are hidden. There is no fabricated target cue.
 
-The current pilot has a client-local X-15 flight-test adapter. Its state is
-advanced by the shared `sim-core` 6-DoF rigid-body integrator using the X-15
-panel asset, Thessa gravity field and Thessa atmosphere. Fuel is intentionally
-infinite in this vertical slice; engine staging, throttle, SAS/RCS and control
-surface commands are live. Terrain collision, landing gear forces and network
-authority are still outside this slice.
+The client-local X-15 uses sim-core at 120 Hz. The FBW allocator drives bounded,
+slew-limited panel deflections and finite RCS force couples; controller moments
+are requests, never forces added directly to the vehicle. SAS yields to manual
+rate input, captures the achieved attitude, then brakes and holds after release.
+There is no horizon/prograde restoring assist in vacuum. RCS authority comes
+from three opposed prototype jet pairs (400 N per jet, 1.4/5 m arms), not an
+X-15 fidelity claim. Flight tests cover fifteen minutes and full orbital turns.
+
+All authoritative positions remain f64. For rendering, the aircraft is the
+floating origin: its meshes stay at zero and the planet center is converted to
+f32 only after subtraction in f64. The camera rotates by quaternion through
+both poles without angle clamps, with optional craft-relative chase mode.
+
+Fuel remains unlimited, gear has a state but no contact-force model, and the
+spherical anti-burial boundary remains a prototype. AGL is unavailable without
+terrain data. Negative periapsis altitude is displayed honestly. g-load uses
+standard 9.80665 m/s²; TWR uses local gravity.
 
 ---
 
@@ -312,52 +321,27 @@ state IDs and replication semantics are fixed.
 
 ---
 
-## 10.12. Current implementation scaffold
+## 10.12. Implementation and controls
 
-`apps/client/src/pilot.rs` contains the first functional PFD shell:
+- `apps/client/src/pilot.rs`: input, f64 telemetry, preview scene, camera.
+- `apps/client/src/pilot/control.rs`: fixed flight cadence, surface allocation,
+  finite RCS couples, regression tests through the production path.
+- `apps/client/src/pilot/hud.rs`: instruments, geometric cues, button actions.
+- `crates/sim-core/src/vehicle.rs`: shared starter geometry; the client does not
+  keep a second X-15 panel definition.
 
-- `FlightUiState` — client-side derived read model in SI, with position,
-  attitude, independent speed/altitude frames, aero, orbit, target,
-  propulsion and warning fields;
-- `PilotHudState` — view/control state and Mouse Aim command hand-off;
-- `PilotHudPlugin` — Bevy UI and input boundary;
-- `F6` or `P` — switches between map/debug and Pilot view;
-- `M` / `Shift+M` — cycles control modes forward/backward;
-- `V` — cycles the primary speed reference (`surface`, `air`, `orbital`,
-  `target`); `B` — toggles datum/AGL;
-- `W/S` pitch, `A/D` yaw, `Q/E` roll;
-- `Shift/Ctrl` throttle, `X` cutoff, `Z` full throttle, `Space` stage/engine;
-- `F8` — pause/resume the flight (laptop-friendly; `Pause/Break` is also accepted);
-- `T` SAS, `R` RCS, `G` landing gear;
-- the current X-15 state is live telemetry; unavailable values still render as
-  `--` rather than being replaced by fabricated flight data.
+Controls match the README table: W/S nose down/up, A/D yaw left/right, Q/E roll;
+M map, V camera, backquote reset, Caps Lock precision, F1 help, F2 UI,
+F3 telemetry, Escape/F8 pause, T SAS, held F temporarily inverts SAS, R RCS,
+G gear, Shift/Ctrl throttle, X/Z zero/full throttle, Space engine.
+Speed/altitude frames and control mode are selected using instrument buttons.
+Keys for features not implemented (quicksave, IVA, brakes, action sets) are not
+reassigned to unrelated actions.
 
-Stage 1 now renders one compact navball, speed and altitude panels, vehicle and
-flight-context panels, a status block, and a mouse reticle. Map HUD and orbit
-gizmos are hidden only while Pilot is active and return on `F6`. The navball is
-an attitude-display shell with a shaded sphere, pitch ladder and labels, roll
-scale, a live cardinal heading marker, and cue stubs; numeric attitude values
-are not repeated in the altitude or propulsion cards, and it does not duplicate
-a second large artificial horizon.
-
-The remaining data-driven layers can later replace the readout contents without
-changing the UI hierarchy:
-
-```text
-PilotHudRoot
-├── SpeedTape
-├── AttitudeIndicator
-│    ├ horizon/pitch ladder
-│    ├ roll/heading scale
-│    ├ vector markers
-│    └ flight-director cue
-├── AltitudeTape
-├── VerticalSpeed
-├── AirDataStrip
-├── OrbitStrip
-├── PropulsionControlStrip
-└── WarningStack
-```
+The old mouse option remains a rate-steering aid with a neutral dead zone,
+labelled `MOUSE STEERING`; it does not claim a world-direction autopilot.
+Mouse steering is suppressed over buttons, while operating the camera, while
+help is open, on focus loss and during pause.
 
 ---
 
@@ -426,3 +410,33 @@ Do not block M1 on:
 
 First prove that one consistent telemetry contract supports rocket, aircraft,
 spaceplane and weird player-built craft without vehicle-class-specific hacks.
+
+### 10.13 Compact flight dock and integrated worldgen
+
+The bottom dock groups thrust and utility icons to the left of the navball,
+altitude/vertical speed and SAS/RCS/gear/mode to the right. Optional telemetry
+opens above those wings; F1 contains the illustrated icon/key legend. The
+editable icon sources use a 24-unit SVG grid and 4x PNG exports.
+
+The merged rocky generator's 16K texture is shared by map and flight materials.
+The deterministic field remains an offline generator; runtime terrain mesh LOD
+and collision sampling are not implied by loading its albedo texture.
+
+### 10.14 Fast rotation regression
+
+The 2026-09-09 capture stopped at 581.375 s after direct-control manoeuvres.
+Explicit Euler added energy to the gyroscopic term even with zero external
+moment. `sim-core` now solves
+
+`I (omega1 - omega0) / dt = torque - omega_mid × (I omega_mid)`
+
+with `omega_mid = (omega0 + omega1)/2`, then applies the paired normalized
+Cayley quaternion `(dt*omega_mid/2, 1)`. State and units remain unchanged;
+external aero/actuator moments are sampled once per bounded step. Newton's
+three-variable solve has a fixed iteration limit and reports non-convergence.
+No damping force, attitude clamp or modified inertia is introduced.
+
+Torque-free energy and inertial angular momentum errors stay below 7e-13
+over 60 seconds at the captured fast-spin scale. Replaying the recorded
+commands reaches 641.375 s without the former stop (peak 10.796 rad/s).
+The flight benchmark includes both cruise and fast asymmetric rotation.

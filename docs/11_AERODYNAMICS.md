@@ -270,8 +270,10 @@ JSBSim coefficient tables в нашей owned geometry. Этот прогон я
 ## Известные ограничения и следующий срез
 
 Сейчас есть первый full-state 6-DoF rigid vehicle integrator с semi-implicit
-translation, quaternion attitude, atmosphere rotation coupling и optional
-dynamic p/q/r damping. Но ещё отсутствуют изменяемые mass/CoM в одном шаге,
+translation, implicit-midpoint angular dynamics, парным Cayley quaternion
+update, atmosphere rotation coupling и optional dynamic p/q/r damping.
+Свободное вращение сохраняет энергию и инерциальный угловой момент;
+регрессия записанного spin-up проверяется через production flight path. Но ещё отсутствуют изменяемые mass/CoM в одном шаге,
 automatic editor-to-panel meshing, BVH exposure solver, real control-surface
 hinge torque, aeroelasticity, ground effect, propwash, hypersonic real-gas
 chemistry и automatic external CSV provenance adapters. Это сознательная

@@ -2,7 +2,7 @@
 //! the window cannot put the speed, altitude and control cards on top of each other.
 use super::*;
 
-const NAVBALL_SIZE: f32 = 240.0;
+const NAVBALL_SIZE: f32 = 256.0;
 const PANEL: Color = Color::srgba(0.035, 0.052, 0.074, 0.94);
 const EDGE: Color = Color::srgba(0.48, 0.60, 0.69, 0.40);
 
@@ -12,6 +12,8 @@ pub(super) struct PilotHudRoot;
 pub(super) struct HelpPanel;
 #[derive(Component)]
 pub(super) struct DataPanel;
+#[derive(Component)]
+pub(super) struct HudSurface;
 #[derive(Component)]
 pub(super) struct PitchLabel(f64);
 #[derive(Component)]
@@ -36,7 +38,6 @@ pub(super) enum Readout {
     Propulsion,
     Orbit,
     Heading,
-    Attitude,
     Help,
 }
 #[derive(Component)]
@@ -47,6 +48,349 @@ pub(super) struct VectorMarker {
 pub(super) struct NavballTexture {
     image: Handle<Image>,
     last_up: DVec3,
+}
+
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Action {
+    Speed,
+    Altitude,
+    Sas,
+    Rcs,
+    Gear,
+    Engine,
+    Mode,
+    SetMode(ControlMode),
+    Map,
+    Pause,
+    Help,
+    Telemetry,
+    Camera,
+    Precision,
+    ThrottleUp,
+    ThrottleDown,
+}
+#[derive(Component)]
+pub(super) struct ModePanel;
+
+#[derive(Resource)]
+pub(super) struct FlightIcons(std::collections::BTreeMap<&'static str, Handle<Image>>);
+impl FlightIcons {
+    fn load(assets: &AssetServer) -> Self {
+        Self(
+            [
+                "sas",
+                "rcs",
+                "gear",
+                "engine",
+                "mouse",
+                "attitude",
+                "rate",
+                "direct",
+                "map",
+                "pause",
+                "play",
+                "help",
+                "data",
+                "camera",
+                "precision",
+                "plus",
+                "minus",
+                "altitude",
+                "vertical",
+                "speed",
+                "warning",
+            ]
+            .into_iter()
+            .map(|name| (name, assets.load(format!("ui/flight/{name}.png"))))
+            .collect(),
+        )
+    }
+    fn get(&self, name: &str) -> Handle<Image> {
+        self.0[name].clone()
+    }
+}
+#[derive(Component)]
+pub(super) struct ActionIcon(Action);
+#[derive(Component)]
+pub(super) struct StateLamp(Action);
+
+fn mode_icon(mode: ControlMode) -> &'static str {
+    match mode {
+        ControlMode::MouseAim => "mouse",
+        ControlMode::Navball => "attitude",
+        ControlMode::Rate => "rate",
+        ControlMode::Direct => "direct",
+    }
+}
+fn action_icon(action: Action) -> &'static str {
+    match action {
+        Action::Sas => "sas",
+        Action::Rcs => "rcs",
+        Action::Gear => "gear",
+        Action::Engine => "engine",
+        Action::Mode => "attitude",
+        Action::SetMode(mode) => mode_icon(mode),
+        Action::Map => "map",
+        Action::Pause => "pause",
+        Action::Help => "help",
+        Action::Telemetry => "data",
+        Action::Camera => "camera",
+        Action::Precision => "precision",
+        Action::ThrottleUp => "plus",
+        Action::ThrottleDown => "minus",
+        Action::Speed => "speed",
+        Action::Altitude => "altitude",
+    }
+}
+fn icon(
+    parent: &mut ChildSpawnerCommands<'_>,
+    icons: &FlightIcons,
+    name: &str,
+    size: f32,
+    color: Color,
+) {
+    parent.spawn((
+        ImageNode {
+            color,
+            ..ImageNode::new(icons.get(name))
+        },
+        Node {
+            width: px(size),
+            height: px(size),
+            flex_shrink: 0.0,
+            ..default()
+        },
+    ));
+}
+fn button(
+    parent: &mut ChildSpawnerCommands<'_>,
+    font: &Handle<Font>,
+    icons: &FlightIcons,
+    action: Action,
+    title: &str,
+) {
+    let caption = matches!(action, Action::SetMode(_));
+    parent
+        .spawn((
+            Button,
+            action,
+            Node {
+                min_width: px(42),
+                height: px(40),
+                padding: UiRect::axes(px(9), px(7)),
+                column_gap: px(10),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(6)),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            BackgroundColor(PANEL),
+            BorderColor::all(EDGE),
+        ))
+        .with_children(|b| {
+            b.spawn((
+                ActionIcon(action),
+                ImageNode::new(icons.get(action_icon(action))),
+                Node {
+                    width: px(24),
+                    height: px(24),
+                    flex_shrink: 0.0,
+                    ..default()
+                },
+            ));
+            if caption {
+                label(b, font, title, 13.0, HUD_TEXT);
+            }
+            if matches!(
+                action,
+                Action::Sas
+                    | Action::Rcs
+                    | Action::Gear
+                    | Action::Engine
+                    | Action::Precision
+                    | Action::Camera
+                    | Action::Telemetry
+            ) {
+                b.spawn((
+                    StateLamp(action),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        right: px(4),
+                        bottom: px(4),
+                        width: px(4),
+                        height: px(4),
+                        border_radius: BorderRadius::MAX,
+                        ..default()
+                    },
+                    BackgroundColor(EDGE),
+                ));
+            }
+        });
+}
+fn action_active(
+    action: Action,
+    state: &PilotHudState,
+    runtime: &PilotFlightRuntime,
+    clock: &SimulationClock,
+) -> bool {
+    match action {
+        Action::Sas => runtime.sas_enabled,
+        Action::Rcs => runtime.rcs_enabled,
+        Action::Gear => runtime.gear_down,
+        Action::Engine => runtime.engine_active,
+        Action::Pause => clock.paused,
+        Action::Help => state.show_help,
+        Action::Telemetry => state.show_telemetry,
+        Action::Camera => state.pilot_camera_chase,
+        Action::Precision => state.precision_controls,
+        Action::Mode => state.show_modes,
+        Action::SetMode(mode) => state.control_mode == mode,
+        _ => false,
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub(super) fn pilot_hud_buttons(
+    mut state: ResMut<PilotHudState>,
+    mut runtime: ResMut<PilotFlightRuntime>,
+    mut clock: ResMut<SimulationClock>,
+    mut buttons: Query<
+        (
+            &Interaction,
+            &Action,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            Ref<Interaction>,
+        ),
+        With<Button>,
+    >,
+    mut panels: Query<&mut Node, With<ModePanel>>,
+    icons: Res<FlightIcons>,
+    surfaces: Query<&Interaction, With<HudSurface>>,
+    mut glyphs: Query<(&ActionIcon, &mut ImageNode)>,
+    mut lamps: Query<(&StateLamp, &mut BackgroundColor), Without<Button>>,
+) {
+    let visible = state.view_mode == ClientViewMode::Pilot && !state.ui_hidden;
+    state.pointer_over_ui = visible
+        && surfaces
+            .iter()
+            .any(|interaction| *interaction != Interaction::None);
+    for (interaction, action, mut background, mut border, changed) in &mut buttons {
+        if visible && *interaction != Interaction::None {
+            state.pointer_over_ui = true;
+        }
+        if visible && *interaction == Interaction::Pressed && changed.is_changed() {
+            match action {
+                Action::Speed => state.speed_frame = state.speed_frame.next(),
+                Action::Altitude => state.altitude_frame = state.altitude_frame.toggle(),
+                Action::Sas => runtime.sas_enabled = !runtime.sas_enabled,
+                Action::Rcs => runtime.rcs_enabled = !runtime.rcs_enabled,
+                Action::Gear => runtime.gear_down = !runtime.gear_down,
+                Action::Engine => runtime.engine_active = !runtime.engine_active,
+                Action::Mode => state.show_modes = !state.show_modes,
+                Action::SetMode(mode) => {
+                    state.control_mode = *mode;
+                    state.show_modes = false;
+                    runtime.sas_target_orientation = runtime.state.orientation_body_to_inertial;
+                }
+                Action::Map => state.view_mode = ClientViewMode::Map,
+                Action::Pause => clock.paused = !clock.paused,
+                Action::Help => state.show_help = !state.show_help,
+                Action::Telemetry => state.show_telemetry = !state.show_telemetry,
+                Action::Camera => state.pilot_camera_chase = !state.pilot_camera_chase,
+                Action::Precision => state.precision_controls = !state.precision_controls,
+                Action::ThrottleUp => runtime.throttle = (runtime.throttle + 0.1).min(1.0),
+                Action::ThrottleDown => runtime.throttle = (runtime.throttle - 0.1).max(0.0),
+            }
+        }
+        let enabled = action_active(*action, &state, &runtime, &clock);
+        background.0 = if *interaction == Interaction::Hovered {
+            Color::srgb(0.14, 0.23, 0.28)
+        } else if enabled {
+            Color::srgba(0.08, 0.28, 0.22, 0.95)
+        } else {
+            PANEL
+        };
+        *border = BorderColor::all(if enabled { HUD_GREEN } else { EDGE });
+    }
+    for (glyph, mut image) in &mut glyphs {
+        image.color = if action_active(glyph.0, &state, &runtime, &clock) {
+            HUD_GREEN
+        } else {
+            HUD_TEXT
+        };
+        let name = match glyph.0 {
+            Action::Mode => mode_icon(state.control_mode),
+            Action::Pause if clock.paused => "play",
+            _ => action_icon(glyph.0),
+        };
+        image.image = icons.get(name);
+    }
+    for (lamp, mut color) in &mut lamps {
+        color.0 = if action_active(lamp.0, &state, &runtime, &clock) {
+            HUD_GREEN
+        } else {
+            EDGE
+        };
+    }
+    for mut panel in &mut panels {
+        panel.display = if state.show_modes && visible {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+}
+
+fn cue_node() -> Node {
+    Node {
+        position_type: PositionType::Absolute,
+        width: px(16),
+        height: px(16),
+        border: UiRect::all(px(2)),
+        border_radius: BorderRadius::MAX,
+        ..default()
+    }
+}
+fn cue_arms(parent: &mut ChildSpawnerCommands<'_>, retrograde: bool) {
+    for (left, top, width, height) in [(-8, 5, 7, 2), (13, 5, 7, 2), (5, -8, 2, 7)] {
+        parent.spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(left),
+                top: px(top),
+                width: px(width),
+                height: px(height),
+                ..default()
+            },
+            BackgroundColor(HUD_GREEN),
+        ));
+    }
+    if retrograde {
+        parent.spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(2),
+                top: px(5),
+                width: px(8),
+                height: px(2),
+                ..default()
+            },
+            BackgroundColor(HUD_GREEN),
+        ));
+        parent.spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(5),
+                top: px(2),
+                width: px(2),
+                height: px(8),
+                ..default()
+            },
+            BackgroundColor(HUD_GREEN),
+        ));
+    }
 }
 
 fn label(
@@ -93,9 +437,9 @@ fn readout(
 }
 fn card() -> Node {
     Node {
-        padding: UiRect::all(px(16)),
+        padding: UiRect::all(px(12)),
         border: UiRect::all(px(1)),
-        border_radius: BorderRadius::all(px(12)),
+        border_radius: BorderRadius::all(px(8)),
         flex_direction: FlexDirection::Column,
         row_gap: px(6),
         ..default()
@@ -108,7 +452,9 @@ pub(super) fn spawn_pilot_hud(
     assets: Res<AssetServer>,
 ) {
     let font = assets.load("fonts/NotoSans-Regular.ttf");
+    let icons = FlightIcons::load(&assets);
     let texture = images.add(make_navball_image(DVec3::Z));
+    let bezel = assets.load("ui/flight/navball-bezel.png");
     commands.insert_resource(NavballTexture {
         image: texture.clone(),
         last_up: DVec3::Z,
@@ -120,7 +466,6 @@ pub(super) fn spawn_pilot_hud(
                 position_type: PositionType::Absolute,
                 width: percent(100),
                 height: percent(100),
-                padding: UiRect::all(px(16)),
                 ..default()
             },
             FocusPolicy::Pass,
@@ -129,177 +474,314 @@ pub(super) fn spawn_pilot_hud(
         ))
         .with_children(|root| {
             root.spawn(Node {
-                width: percent(100),
-                align_items: AlignItems::Start,
-                column_gap: px(12),
+                position_type: PositionType::Absolute,
+                top: px(16),
+                left: px(18),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(3),
                 ..default()
             })
-            .with_children(|top| {
-                top.spawn(Node {
-                    flex_grow: 1.0,
-                    flex_basis: px(0),
-                    min_width: px(0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(6),
-                    ..default()
-                })
-                .with_children(|left| {
-                    label(left, &font, "THESSA  /  X-15", 14.0, HUD_TEXT);
-                    readout(left, &font, Readout::Header, 12.0, HUD_GREEN);
-                });
-                top.spawn((
-                    Node {
-                        width: px(232),
-                        align_items: AlignItems::Center,
-                        padding: UiRect::axes(px(12), px(8)),
-                        border: UiRect::all(px(2)),
-                        border_radius: BorderRadius::all(px(7)),
-                        flex_direction: FlexDirection::Column,
-                        ..default()
-                    },
-                    BackgroundColor(PANEL),
-                    BorderColor::all(EDGE),
-                ))
-                .with_children(|alt| {
-                    readout(alt, &font, Readout::AltLabel, 11.0, HUD_MUTED);
-                    readout(alt, &font, Readout::Altitude, 32.0, HUD_TEXT);
-                    readout(alt, &font, Readout::Vertical, 12.0, HUD_MUTED);
-                });
-                top.spawn(Node {
-                    flex_grow: 1.0,
-                    flex_basis: px(0),
-                    min_width: px(0),
-                    align_items: AlignItems::End,
-                    flex_direction: FlexDirection::Column,
-                    ..default()
-                })
-                .with_children(|right| {
-                    readout(right, &font, Readout::Mode, 12.0, HUD_MUTED);
-                });
+            .with_children(|mission| {
+                label(mission, &font, "THESSA / X-15", 13.0, HUD_TEXT);
+                readout(mission, &font, Readout::Header, 11.0, HUD_MUTED);
             });
             root.spawn(Node {
                 position_type: PositionType::Absolute,
-                top: px(128),
-                left: px(16),
-                right: px(16),
-                justify_content: JustifyContent::Center,
-                ..default()
-            })
-            .with_children(|status| {
-                readout(status, &font, Readout::Status, 15.0, HUD_AMBER);
-            });
-            root.spawn(Node {
-                position_type: PositionType::Absolute,
-                bottom: px(32),
+                bottom: px(14),
                 left: px(0),
                 right: px(0),
-                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                flex_direction: FlexDirection::Column,
+                row_gap: px(8),
                 ..default()
             })
-            .with_children(|center| {
-                spawn_navball(center, texture.clone(), &font);
-            });
-            root.spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(16),
-                    bottom: px(42),
-                    width: px(132),
-                    padding: UiRect::all(px(10)),
-                    ..card()
-                },
-                BackgroundColor(PANEL),
-                BorderColor::all(EDGE),
-            ))
-            .with_children(|engine| {
-                label(engine, &font, "THROTTLE", 11.0, HUD_MUTED);
-                readout(engine, &font, Readout::Propulsion, 16.0, HUD_GREEN);
-                engine
-                    .spawn((
-                        Node {
-                            width: percent(100),
-                            height: px(5),
-                            border_radius: BorderRadius::MAX,
+            .with_children(|dock| {
+                readout(dock, &font, Readout::Status, 13.0, HUD_AMBER);
+                dock.spawn((
+                    HudSurface,
+                    Interaction::None,
+                    Node {
+                        align_items: AlignItems::End,
+                        column_gap: px(8),
+                        ..default()
+                    },
+                ))
+                .with_children(|instruments| {
+                    instruments
+                        .spawn(Node {
+                            width: px(164),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: px(6),
                             ..default()
-                        },
-                        BackgroundColor(EDGE),
-                    ))
-                    .with_children(|track| {
-                        track.spawn((
-                            ThrottleFill,
-                            Node {
-                                height: percent(100),
-                                width: percent(100),
-                                border_radius: BorderRadius::MAX,
-                                ..default()
-                            },
-                            BackgroundColor(HUD_GREEN),
-                        ));
-                    });
-                label(engine, &font, "Shift / Ctrl · X / Z", 10.0, HUD_MUTED);
-            });
-            for (right, title, kind) in [
-                (false, "AIR DATA", Readout::AirData),
-                (true, "ORBIT / FLIGHT", Readout::Orbit),
-            ] {
-                root.spawn((
-                    DataPanel,
+                        })
+                        .with_children(|left| {
+                            spawn_data(left, &font, "AIR DATA", Readout::AirData);
+                            left.spawn((
+                                Node {
+                                    padding: UiRect::all(px(10)),
+                                    ..card()
+                                },
+                                BackgroundColor(PANEL),
+                                BorderColor::all(EDGE),
+                            ))
+                            .with_children(|power| {
+                                power
+                                    .spawn(Node {
+                                        align_items: AlignItems::Center,
+                                        column_gap: px(7),
+                                        ..default()
+                                    })
+                                    .with_children(|row| {
+                                        icon(row, &icons, "engine", 18.0, HUD_MUTED);
+                                        label(row, &font, "THRUST", 10.0, HUD_MUTED);
+                                    });
+                                readout(power, &font, Readout::Propulsion, 28.0, HUD_GREEN);
+                                power
+                                    .spawn((
+                                        Node {
+                                            width: percent(100),
+                                            height: px(7),
+                                            border_radius: BorderRadius::all(px(2)),
+                                            margin: UiRect::vertical(px(3)),
+                                            ..default()
+                                        },
+                                        BackgroundColor(Color::srgb(0.015, 0.025, 0.035)),
+                                    ))
+                                    .with_children(|track| {
+                                        track.spawn((
+                                            ThrottleFill,
+                                            Node {
+                                                width: percent(100),
+                                                height: percent(100),
+                                                border_radius: BorderRadius::all(px(2)),
+                                                ..default()
+                                            },
+                                            BackgroundColor(HUD_GREEN),
+                                        ));
+                                    });
+                                power
+                                    .spawn(Node {
+                                        column_gap: px(6),
+                                        ..default()
+                                    })
+                                    .with_children(|row| {
+                                        button(row, &font, &icons, Action::ThrottleDown, "");
+                                        button(row, &font, &icons, Action::ThrottleUp, "");
+                                        button(row, &font, &icons, Action::Engine, "");
+                                    });
+                            });
+                            left.spawn((
+                                Node {
+                                    padding: UiRect::all(px(10)),
+                                    row_gap: px(6),
+                                    ..card()
+                                },
+                                BackgroundColor(PANEL),
+                                BorderColor::all(EDGE),
+                            ))
+                            .with_children(|tools| {
+                                for actions in [
+                                    [Action::Camera, Action::Telemetry, Action::Precision],
+                                    [Action::Pause, Action::Map, Action::Help],
+                                ] {
+                                    tools
+                                        .spawn(Node {
+                                            column_gap: px(6),
+                                            ..default()
+                                        })
+                                        .with_children(|row| {
+                                            for action in actions {
+                                                button(row, &font, &icons, action, "");
+                                            }
+                                        });
+                                }
+                            });
+                        });
+                    spawn_navball(instruments, texture.clone(), bezel, &font, &icons);
+                    instruments
+                        .spawn(Node {
+                            width: px(164),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: px(6),
+                            ..default()
+                        })
+                        .with_children(|right| {
+                            spawn_data(right, &font, "ORBIT", Readout::Orbit);
+                            right
+                                .spawn((
+                                    Button,
+                                    Action::Altitude,
+                                    Node {
+                                        align_items: AlignItems::Start,
+                                        padding: UiRect::all(px(10)),
+                                        ..card()
+                                    },
+                                    BackgroundColor(PANEL),
+                                    BorderColor::all(EDGE),
+                                ))
+                                .with_children(|alt| {
+                                    alt.spawn(Node {
+                                        column_gap: px(7),
+                                        align_items: AlignItems::Center,
+                                        ..default()
+                                    })
+                                    .with_children(|row| {
+                                        icon(row, &icons, "altitude", 18.0, HUD_MUTED);
+                                        readout(row, &font, Readout::AltLabel, 10.0, HUD_MUTED);
+                                    });
+                                    readout(alt, &font, Readout::Altitude, 27.0, HUD_TEXT);
+                                    alt.spawn(Node {
+                                        column_gap: px(6),
+                                        align_items: AlignItems::Center,
+                                        ..default()
+                                    })
+                                    .with_children(|row| {
+                                        icon(row, &icons, "vertical", 16.0, HUD_GREEN);
+                                        readout(row, &font, Readout::Vertical, 13.0, HUD_GREEN);
+                                    });
+                                });
+                            right
+                                .spawn((
+                                    Node {
+                                        padding: UiRect::all(px(10)),
+                                        ..card()
+                                    },
+                                    BackgroundColor(PANEL),
+                                    BorderColor::all(EDGE),
+                                ))
+                                .with_children(|controls| {
+                                    controls
+                                        .spawn(Node {
+                                            column_gap: px(6),
+                                            ..default()
+                                        })
+                                        .with_children(|row| {
+                                            for (action, title) in [
+                                                (Action::Sas, "SAS"),
+                                                (Action::Rcs, "RCS"),
+                                                (Action::Gear, "GEAR"),
+                                            ] {
+                                                row.spawn(Node {
+                                                    align_items: AlignItems::Center,
+                                                    flex_direction: FlexDirection::Column,
+                                                    row_gap: px(3),
+                                                    ..default()
+                                                })
+                                                .with_children(|toggle| {
+                                                    button(toggle, &font, &icons, action, "");
+                                                    label(toggle, &font, title, 9.0, HUD_MUTED);
+                                                });
+                                            }
+                                        });
+                                });
+                            right
+                                .spawn((
+                                    Button,
+                                    Action::Mode,
+                                    Node {
+                                        height: px(48),
+                                        column_gap: px(8),
+                                        align_items: AlignItems::Center,
+                                        padding: UiRect::all(px(10)),
+                                        border: UiRect::all(px(1)),
+                                        border_radius: BorderRadius::all(px(8)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(PANEL),
+                                    BorderColor::all(EDGE),
+                                ))
+                                .with_children(|mode| {
+                                    mode.spawn((
+                                        ActionIcon(Action::Mode),
+                                        ImageNode::new(icons.get("attitude")),
+                                        Node {
+                                            width: px(24),
+                                            height: px(24),
+                                            flex_shrink: 0.0,
+                                            ..default()
+                                        },
+                                    ));
+                                    readout(mode, &font, Readout::Mode, 11.0, HUD_TEXT);
+                                });
+                        });
+                });
+                dock.spawn((
+                    ModePanel,
+                    HudSurface,
+                    Interaction::None,
                     Node {
                         position_type: PositionType::Absolute,
-                        top: percent(34),
-                        left: if right { Val::Auto } else { px(16) },
-                        right: if right { px(16) } else { Val::Auto },
-                        width: px(178),
+                        bottom: px(60),
+                        left: percent(50),
+                        margin: UiRect::left(px(152)),
+                        width: px(244),
                         display: Display::None,
+                        padding: UiRect::all(px(8)),
                         ..card()
                     },
                     BackgroundColor(PANEL),
                     BorderColor::all(EDGE),
+                    ZIndex(20),
                 ))
-                .with_children(|panel| {
-                    label(panel, &font, title, 12.0, HUD_TEXT);
-                    readout(panel, &font, kind, 14.0, HUD_MUTED);
-                    if right {
-                        readout(panel, &font, Readout::Attitude, 12.0, HUD_MUTED);
+                .with_children(|modes| {
+                    for mode in ControlMode::ALL {
+                        button(modes, &font, &icons, Action::SetMode(mode), mode.label());
                     }
                 });
-            }
-            root.spawn(Node {
-                position_type: PositionType::Absolute,
-                bottom: px(9),
-                left: px(16),
-                right: px(16),
-                justify_content: JustifyContent::Center,
-                ..default()
-            })
-            .with_children(|footer| {
-                label(
-                    footer,
-                    &font,
-                    "F1 Controls    F3 Telemetry    F8 Pause    F6 Map",
-                    11.0,
-                    HUD_MUTED,
-                );
             });
             root.spawn((
                 HelpPanel,
+                HudSurface,
+                Interaction::None,
                 Node {
                     position_type: PositionType::Absolute,
-                    top: px(128),
+                    top: px(16),
                     right: px(16),
-                    width: px(350),
+                    width: px(480),
                     max_width: percent(94),
-                    max_height: percent(75),
+                    max_height: percent(94),
                     overflow: Overflow::scroll_y(),
                     display: Display::None,
                     ..card()
                 },
                 BackgroundColor(PANEL),
                 BorderColor::all(EDGE),
-                ZIndex(10),
+                ZIndex(30),
             ))
             .with_children(|help| {
                 label(help, &font, "FLIGHT CONTROLS", 16.0, HUD_TEXT);
+                help.spawn(Node {
+                    flex_wrap: FlexWrap::Wrap,
+                    column_gap: px(12),
+                    row_gap: px(10),
+                    margin: UiRect::vertical(px(8)),
+                    ..default()
+                })
+                .with_children(|legend| {
+                    for (name, caption) in [
+                        ("sas", "SAS · T"),
+                        ("rcs", "RCS · R"),
+                        ("gear", "Gear · G"),
+                        ("engine", "Engine · Space"),
+                        ("camera", "Camera · V"),
+                        ("data", "Data · F3"),
+                        ("precision", "Precision · Caps"),
+                        ("pause", "Pause · Esc"),
+                        ("map", "Map · M"),
+                    ] {
+                        legend
+                            .spawn(Node {
+                                width: px(134),
+                                column_gap: px(7),
+                                align_items: AlignItems::Center,
+                                ..default()
+                            })
+                            .with_children(|item| {
+                                icon(item, &icons, name, 22.0, HUD_GREEN);
+                                label(item, &font, caption, 11.0, HUD_TEXT);
+                            });
+                    }
+                });
                 readout(help, &font, Readout::Help, 13.0, HUD_MUTED);
             });
             root.spawn((
@@ -314,25 +796,42 @@ pub(super) fn spawn_pilot_hud(
                 },
                 BorderColor::all(HUD_GREEN),
             ));
-            root.spawn((
-                FlightPathCue,
-                Text::new("⊙"),
-                TextFont {
-                    font: font.clone().into(),
-                    font_size: FontSize::Px(24.0),
-                    ..default()
-                },
-                TextColor(HUD_GREEN),
-                Node {
-                    position_type: PositionType::Absolute,
-                    display: Display::None,
-                    ..default()
-                },
-            ));
+            root.spawn((FlightPathCue, cue_node(), BorderColor::all(HUD_GREEN)))
+                .with_children(|cue| cue_arms(cue, false));
+        });
+    commands.insert_resource(icons);
+}
+
+fn spawn_data(
+    parent: &mut ChildSpawnerCommands<'_>,
+    font: &Handle<Font>,
+    title: &str,
+    kind: Readout,
+) {
+    parent
+        .spawn((
+            DataPanel,
+            Node {
+                display: Display::None,
+                padding: UiRect::all(px(10)),
+                ..card()
+            },
+            BackgroundColor(PANEL),
+            BorderColor::all(EDGE),
+        ))
+        .with_children(|panel| {
+            label(panel, font, title, 10.0, HUD_MUTED);
+            readout(panel, font, kind, 12.0, HUD_TEXT);
         });
 }
 
-fn spawn_navball(parent: &mut ChildSpawnerCommands<'_>, image: Handle<Image>, font: &Handle<Font>) {
+fn spawn_navball(
+    parent: &mut ChildSpawnerCommands<'_>,
+    image: Handle<Image>,
+    bezel: Handle<Image>,
+    font: &Handle<Font>,
+    icons: &FlightIcons,
+) {
     parent
         .spawn(Node {
             width: px(NAVBALL_SIZE + 20.0),
@@ -344,6 +843,8 @@ fn spawn_navball(parent: &mut ChildSpawnerCommands<'_>, image: Handle<Image>, fo
         .with_children(|instrument| {
             instrument
                 .spawn((
+                    Button,
+                    Action::Speed,
                     Node {
                         width: px(156),
                         align_items: AlignItems::Center,
@@ -359,7 +860,16 @@ fn spawn_navball(parent: &mut ChildSpawnerCommands<'_>, image: Handle<Image>, fo
                     ZIndex(2),
                 ))
                 .with_children(|speed| {
-                    readout(speed, font, Readout::SpeedLabel, 11.0, HUD_GREEN);
+                    speed
+                        .spawn(Node {
+                            column_gap: px(5),
+                            align_items: AlignItems::Center,
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            icon(row, icons, "speed", 13.0, HUD_GREEN);
+                            readout(row, font, Readout::SpeedLabel, 10.0, HUD_GREEN);
+                        });
                     readout(speed, font, Readout::Speed, 23.0, HUD_GREEN);
                 });
             instrument
@@ -385,22 +895,15 @@ fn spawn_navball(parent: &mut ChildSpawnerCommands<'_>, image: Handle<Image>, fo
                             ..default()
                         },
                     ));
-                    for degrees in [-60.0_f32, -30.0, 0.0, 30.0, 60.0] {
-                        let angle = degrees.to_radians();
-                        let r = NAVBALL_SIZE * 0.5 - 6.0;
-                        ball.spawn((
-                            Node {
-                                position_type: PositionType::Absolute,
-                                left: px(NAVBALL_SIZE * 0.5 + angle.sin() * r - 2.0),
-                                top: px(NAVBALL_SIZE * 0.5 - angle.cos() * r - 2.0),
-                                width: px(4),
-                                height: px(4),
-                                border_radius: BorderRadius::MAX,
-                                ..default()
-                            },
-                            BackgroundColor(HUD_TEXT),
-                        ));
-                    }
+                    ball.spawn((
+                        ImageNode::new(bezel),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            width: px(NAVBALL_SIZE),
+                            height: px(NAVBALL_SIZE),
+                            ..default()
+                        },
+                    ));
                     ball.spawn((
                         RollPointer,
                         Node {
@@ -457,21 +960,13 @@ fn spawn_navball(parent: &mut ChildSpawnerCommands<'_>, image: Handle<Image>, fo
                         },
                         BorderColor::all(HUD_AMBER),
                     ));
-                    for (retrograde, glyph) in [(false, "⊙"), (true, "⊗")] {
+                    for retrograde in [false, true] {
                         ball.spawn((
                             VectorMarker { retrograde },
-                            Text::new(glyph),
-                            TextFont {
-                                font: font.clone().into(),
-                                font_size: FontSize::Px(22.0),
-                                ..default()
-                            },
-                            TextColor(HUD_GREEN),
-                            Node {
-                                position_type: PositionType::Absolute,
-                                ..default()
-                            },
-                        ));
+                            cue_node(),
+                            BorderColor::all(HUD_GREEN),
+                        ))
+                        .with_children(|cue| cue_arms(cue, retrograde));
                     }
                 });
             instrument
@@ -522,7 +1017,6 @@ pub(super) fn update_pilot_hud(
     clock: Res<SimulationClock>,
     window: Single<&Window, With<PrimaryWindow>>,
     camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
-    runtime: Res<PilotFlightRuntime>,
     mut texture: ResMut<NavballTexture>,
     mut images: ResMut<Assets<Image>>,
     mut roots: Query<&mut Visibility, With<PilotHudRoot>>,
@@ -538,7 +1032,7 @@ pub(super) fn update_pilot_hud(
         Query<&mut Node, With<RollPointer>>,
     )>,
 ) {
-    let visible = state.view_mode == ClientViewMode::Pilot;
+    let visible = state.view_mode == ClientViewMode::Pilot && !state.ui_hidden;
     for mut root in &mut roots {
         *root = if visible {
             Visibility::Visible
@@ -582,8 +1076,8 @@ pub(super) fn update_pilot_hud(
             Display::None
         };
         if let Some(p) = position {
-            node.left = px(p.x - 11.0);
-            node.top = px(p.y - 15.0);
+            node.left = px(p.x - 8.0);
+            node.top = px(p.y - 8.0);
         }
     }
     for mut node in &mut nodes.p3() {
@@ -594,10 +1088,7 @@ pub(super) fn update_pilot_hud(
         let position = direction.and_then(|d| {
             camera
                 .0
-                .world_to_viewport(
-                    camera.1,
-                    runtime.render_position + pilot_render_offset(d * 1000.0),
-                )
+                .world_to_viewport(camera.1, pilot_render_offset(d * 1000.0))
                 .ok()
         });
         node.display = if position.is_some() {
@@ -606,8 +1097,8 @@ pub(super) fn update_pilot_hud(
             Display::None
         };
         if let Some(p) = position {
-            node.left = px(p.x - 12.0);
-            node.top = px(p.y - 16.0);
+            node.left = px(p.x - 8.0);
+            node.top = px(p.y - 8.0);
         }
     }
     for mut node in &mut nodes.p5() {
@@ -654,12 +1145,7 @@ pub(super) fn update_pilot_hud(
                     "FLIGHT TEST"
                 }
             ),
-            Readout::Mode => format!(
-                "{}  [M]\nSAS {}  ·  RCS {}",
-                state.control_mode.label(),
-                on_off(flight.sas_enabled),
-                on_off(flight.rcs_enabled)
-            ),
+            Readout::Mode => state.control_mode.label().into(),
             Readout::Status => {
                 color.0 = if flight.warnings.is_empty() {
                     HUD_MUTED
@@ -667,12 +1153,12 @@ pub(super) fn update_pilot_hud(
                     HUD_AMBER
                 };
                 if clock.paused {
-                    "PAUSED  /  F8 to resume".into()
+                    "PAUSED".into()
                 } else {
                     flight.warnings.join("   ·   ")
                 }
             }
-            Readout::SpeedLabel => format!("{}   [V]", state.speed_frame.label()),
+            Readout::SpeedLabel => state.speed_frame.label().into(),
             Readout::Speed => format!(
                 "{} m/s",
                 format_speed_value(primary_speed(flight, state.speed_frame))
@@ -685,7 +1171,7 @@ pub(super) fn update_pilot_hud(
                 format_pressure(flight.dynamic_pressure_pa)
             ),
             Readout::AltLabel => format!(
-                "{} ALTITUDE   [B]",
+                "ALT · {}",
                 if state.altitude_frame == AltitudeFrame::Datum {
                     "DATUM"
                 } else {
@@ -696,17 +1182,13 @@ pub(super) fn update_pilot_hud(
                 format_altitude_value(primary_altitude(flight, state.altitude_frame))
             }
             Readout::Vertical => format!(
-                "V/S {} m/s",
+                "{} m/s",
                 flight
                     .vertical_speed_m_s
                     .map(|v| format!("{v:+.1}"))
                     .unwrap_or_else(|| "--".into())
             ),
-            Readout::Propulsion => format!(
-                "{}  ·  {}",
-                format_percent(flight.throttle),
-                if flight.engine_active { "ON" } else { "OFF" }
-            ),
+            Readout::Propulsion => format_percent(flight.throttle),
             Readout::Orbit => format!(
                 "AP {}\nPE {}\nAGL {}\nThrust {}\nGear {}",
                 format_altitude_value(flight.apoapsis_altitude_m),
@@ -720,21 +1202,12 @@ pub(super) fn update_pilot_hud(
                 flight.heading_deg.unwrap_or(0.0),
                 heading_cardinal(flight.heading_deg)
             ),
-            Readout::Attitude => format!(
-                "LOCAL   ·   P {:+.0}°   R {:+.0}°",
-                flight.pitch_deg.unwrap_or(0.0),
-                flight.roll_deg.unwrap_or(0.0)
-            ),
             Readout::Help => format!(
-                "{}\n\nW / S   Nose down / up\nA / D   Yaw left / right\nQ / E   Roll\nShift / Ctrl   Throttle\nZ / X   Full throttle / cutoff\nSpace   Toggle engine\nT / R   SAS / RCS       G   Gear\n\nRMB drag   Orbit camera\nMMB drag   Pan       Wheel   Zoom\nHome   Reset camera\n\nV   Speed frame       B   Datum / AGL\nM / Shift+M   Flight mode\nF3   Extra telemetry\nF8   Pause       F6   Map       F1   Close",
+                "{}\n\nW / S   Nose down / up\nA / D   Yaw left / right     Q / E   Roll\nShift / Ctrl   Throttle     Z / X   Full / zero\nSpace   Engine     G   Gear     R   RCS\nT   Toggle SAS     Hold F   Invert SAS\nCaps Lock   Precision controls\n\nRMB drag   Free orbit     MMB drag   Pan\nWheel   Zoom     `   Reset camera\nV   Free / chase camera     M   Orbital map\nEsc / F8   Pause     F2   Hide interface\nF3   Extra telemetry     F1   This layout\n\nClick speed: surface / air / orbit / target\nClick altimeter: datum / AGL\nMode button beside navball: control scheme\nSAS / RCS / GEAR: green means enabled\nIcons to the left: camera, data, precision,\npause, map, help. + / −: throttle.\n\nFuel is unlimited; contact and gear forces\nare not yet simulated. AGL needs terrain.",
                 state.control_mode.description()
             ),
         };
     }
-}
-
-fn on_off(value: bool) -> &'static str {
-    if value { "ON" } else { "OFF" }
 }
 
 #[cfg(test)]

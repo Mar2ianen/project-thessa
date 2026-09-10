@@ -47,7 +47,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         "preview" => cmd_preview(args),
         "bake" => cmd_bake(args),
         "bake-spec" => cmd_bake_spec(args),
-        "export-client-texture" => cmd_export_client_texture(args),
+        "export-client-texture" => cmd_export_client_texture(args, false),
+        "export-client-maps" => cmd_export_client_texture(args, true),
         "--help" | "-h" | "help" => {
             print_help();
             Ok(())
@@ -710,7 +711,10 @@ fn cmd_check_landmarks(mut args: impl Iterator<Item = String>) -> Result<(), Box
     Ok(())
 }
 
-fn cmd_export_client_texture(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+fn cmd_export_client_texture(
+    mut args: impl Iterator<Item = String>,
+    maps: bool,
+) -> Result<(), Box<dyn Error>> {
     let mut manifest_path: Option<PathBuf> = None;
     let mut recipe_path: Option<PathBuf> = None;
     let mut body_path = PathBuf::from("data/worldgen/thessa_v02.toml");
@@ -779,6 +783,11 @@ fn cmd_export_client_texture(mut args: impl Iterator<Item = String>) -> Result<(
     let field = field::field_from_manifest(&manifest).map_err(fail)?;
     if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
+    }
+    if maps {
+        client_export::write_client_maps(&field, width, height, min_wl, &out).map_err(fail)?;
+        println!("wrote client maps: {} ({width}x{height})", out.display());
+        return Ok(());
     }
     let file = std::fs::File::create(&out)?;
     let writer = std::io::BufWriter::new(file);

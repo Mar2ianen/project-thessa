@@ -157,21 +157,28 @@ cargo run -p thessa-client
 
 | Клавиша | Действие |
 | --- | --- |
-| `F6` / `P` | Map ↔ Pilot |
-| `M` / `Shift+M` | следующий / предыдущий control mode |
-| `W/S` | pitch |
-| `A/D` | yaw |
-| `Q/E` | roll |
+| `M` | Map ↔ Pilot |
+| `W/S` | нос вниз / вверх |
+| `A/D` | yaw влево / вправо |
+| `Q/E` | roll влево / вправо |
+| `Caps Lock` | точное управление (25% команды) |
 | `Shift/Ctrl` | throttle up/down |
 | `Z` / `X` | full throttle / cutoff |
-| `Space` | stage / engine |
-| `T` | SAS |
-| `R` | RCS |
-| `G` | gear state |
-| `V` | speed frame |
-| `B` | datum / AGL |
-| `F8` / `Pause` | pause flight |
-| RMB / MMB / wheel / `Home` | camera orbit / pan / zoom / reset |
+| `Space` | engine on/off |
+| `T` / hold `F` | переключить SAS / временно инвертировать SAS |
+| `R` / `G` | RCS / gear state |
+| `V` | свободная / следящая камера |
+| `` ` `` | сброс камеры |
+| `Escape` / `F8` / `Pause` | пауза |
+| `F1` | все подсказки и схема интерфейса |
+| `F2` | скрыть / показать интерфейс |
+| `F3` | дополнительная телеметрия |
+| RMB / MMB / wheel | свободное вращение / pan / zoom |
+
+Режим управления выбирается кнопкой справа сверху. Клик по скорости на навболе
+переключает speed frame; клик по высотомеру — datum/AGL. SAS, RCS, шасси,
+двигатель, камера, карта и пауза имеют кнопки; зелёный цвет означает включённое
+состояние. Дополнительные данные скрыты по умолчанию.
 
 Pilot/PFD contract: [`docs/10_PILOT_INTERFACE.md`](docs/10_PILOT_INTERFACE.md).
 
@@ -285,3 +292,19 @@ AGPL/LGPL code не должен случайно протекать в MIT runt
 [`CONTRIBUTING.md`](CONTRIBUTING.md). Для physics changes желательно добавлять
 не только unit test, но и инвариант/reference vector, который объясняет,
 **какую физическую ошибку этот тест не даёт вернуть**.
+
+### Rocky world generator
+
+The `dev/worldgen-rocky-tool` branch is integrated into this checkout.
+`thessa-worldgen-rocky` builds with the workspace, and its 16384×8192 Thessa v2
+texture is shared by the orbital map and flight view. Fetch LFS assets after
+cloning (`git lfs pull`). The field generator remains an offline tool; the
+current runtime surface mesh/contact boundary is still spherical.
+
+```bash
+cargo run -p thessa-worldgen-rocky -- check --manifest data/worldgen/thessa_demo.toml
+cargo run --release -p thessa-worldgen-rocky -- export-client-texture --recipe data/worldgen/worldgen_recipe.toml --body-file data/worldgen/thessa_v02.toml --out /tmp/thessa-preview.png --width 2048
+```
+
+Flight instruments form a compact bottom dock. The SVG icon sources and their
+4x PNG exports live in `assets/ui/flight/`; F1 includes their illustrated legend.

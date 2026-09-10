@@ -76,7 +76,7 @@ impl Adler {
 fn row_score(filtered: &[u8]) -> u64 {
     filtered
         .iter()
-        .map(|b| (*b as i8 as i16).abs() as u64)
+        .map(|b| (*b as i8 as i16).unsigned_abs() as u64)
         .sum()
 }
 
@@ -117,12 +117,11 @@ pub fn write_png_rows<W: Write>(
         }
         // Adaptive filtering per row: None / Sub / Up, cheapest wins.
         // (Streaming-friendly: only the previous raw row is needed.)
-        let mut best_score = u64::MAX;
         let mut best_filter = 0u8;
         // None.
         candidate[0] = 0;
         candidate[1..].copy_from_slice(&row);
-        best_score = row_score(&candidate[1..]);
+        let mut best_score = row_score(&candidate[1..]);
         // Sub.
         candidate[0] = 1;
         for i in 0..stride {

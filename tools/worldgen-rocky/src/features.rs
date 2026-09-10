@@ -278,18 +278,19 @@ fn local_xy_m(
     center_lon: f64,
     radius_m: f64,
 ) -> (f64, f64) {
-    let dlat = (lat_deg - center_lat).to_radians();
-    let mut dlon = (lon_deg - center_lon).to_radians();
-    if dlon > std::f64::consts::PI {
-        dlon -= 2.0 * std::f64::consts::PI;
+    let center = crate::sphere::dir_from_latlon(center_lat, center_lon);
+    let point = crate::sphere::dir_from_latlon(lat_deg, lon_deg);
+    let angle = crate::sphere::angular_distance(center, point);
+    if angle < 1e-12 {
+        return (0.0, 0.0);
     }
-    if dlon < -std::f64::consts::PI {
-        dlon += 2.0 * std::f64::consts::PI;
+    if angle.sin().abs() < 1e-12 {
+        return (std::f64::consts::PI * radius_m, 0.0);
     }
-    (
-        dlon * radius_m * center_lat.to_radians().cos(),
-        dlat * radius_m,
-    )
+    let (east, north, _) = crate::sphere::enu_basis(center);
+    let dot = |v: [f64; 3]| point.iter().zip(v).map(|(a, b)| a * b).sum::<f64>();
+    let scale = angle * radius_m / angle.sin();
+    (dot(east) * scale, dot(north) * scale)
 }
 
 fn rotate(x: f64, y: f64, rotation_rad: f64) -> (f64, f64) {
@@ -304,6 +305,12 @@ pub fn eval_feature_height_m(pf: &PlacedFeature, lat_deg: f64, lon_deg: f64, rad
         return 0.0;
     }
     let (x, y) = rotate(dx, dy, pf.rotation_rad);
+    let reach = pf.reach_m();
+    let feather = 1.0 - smoothstep(reach * 0.65, reach, (dx * dx + dy * dy).sqrt());
+    // Weathered, irregular footprints; broad features must not end at a hard
+    // culling disk or a straight longitude boundary.
+    let x = x + reach * 0.045 * rng::fbm(pf.seed, 610, x / reach * 7.0, y / reach * 7.0, 3);
+    let y = y + reach * 0.045 * rng::fbm(pf.seed, 611, x / reach * 7.0, y / reach * 7.0, 3);
     let out = match &pf.feature {
         Feature::MountainRange {
             length_m,
@@ -502,7 +509,7 @@ pub fn eval_feature_height_m(pf: &PlacedFeature, lat_deg: f64, lon_deg: f64, rad
             -depth_m * smoothstep(1.0, 0.7, r)
         }
     };
-    if out.is_finite() { out } else { 0.0 }
+    if out.is_finite() { out * feather } else { 0.0 }
 }
 
 fn crater_profile(

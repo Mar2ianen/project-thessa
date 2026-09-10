@@ -1,0 +1,11 @@
+{
+  "generator": "Thessa rocky field v3",
+  "height": 2048,
+  "license": "GPL-3.0-or-later",
+  "min_wavelength_m": 8000.0,
+  "radius_m": 3200000.0,
+  "sea_offset_m": 537.360496167316,
+  "seed": 7,
+  "sunlight_baked": false,
+  "width": 4096
+}

@@ -253,14 +253,55 @@ pub fn evaluate_flight_forces<M: AeroModel>(
     })
 }
 
+// Implicit midpoint for Euler's rigid-body equation. Its quadratic invariants
+// (rotational energy and |I omega|) are conserved with zero external moment.
+// Newton solves only three angular unknowns; aerodynamic loads stay sampled
+// once at the beginning of the caller's bounded physics step.
+fn integrate_rotation(
+    orientation: DQuat,
+    omega: DVec3,
+    inertia: DMat3,
+    moment: DVec3,
+    step_s: f64,
+) -> Result<(DQuat, DVec3), FlightError> {
+    let inverse_inertia = inertia.inverse();
+    let mut next = omega;
+    for _ in 0..12 {
+        let midpoint = (omega + next) * 0.5;
+        let momentum = inertia * midpoint;
+        let residual =
+            next - omega - step_s * (inverse_inertia * (moment - midpoint.cross(momentum)));
+        if residual.length() <= 1.0e-13 * (1.0 + next.length()) {
+            // Cayley rotation paired with midpoint transports the body angular
+            // momentum into the same inertial vector for torque-free motion.
+            let half = midpoint * (step_s * 0.5);
+            let delta = DQuat::from_xyzw(half.x, half.y, half.z, 1.0).normalize();
+            return Ok(((orientation * delta).normalize(), next));
+        }
+        let column = |axis: DVec3| {
+            axis + step_s
+                * 0.5
+                * (inverse_inertia * (axis.cross(momentum) + midpoint.cross(inertia * axis)))
+        };
+        let jacobian = DMat3::from_cols(column(DVec3::X), column(DVec3::Y), column(DVec3::Z));
+        next -= jacobian.inverse() * residual;
+        if !next.is_finite() {
+            return Err(FlightError::NonFiniteResult);
+        }
+    }
+    Err(FlightError::InvalidInput(
+        "angular midpoint solve did not converge; reduce the step".into(),
+    ))
+}
+
 /// Advance a rigid vehicle by one deterministic semi-implicit step.
 ///
-/// Translation uses symplectic-Euler ordering (`v` then `x`), which is robust
-/// for thrust/gravity coast and cheap enough for many active craft. Attitude
-/// uses the updated body angular rate and a normalized exponential-map
-/// quaternion increment. Callers should substep around max-Q, rapid attitude
-/// changes and control saturation; this function deliberately performs one
-/// bounded step rather than hiding a variable-step loop.
+/// Translation uses symplectic-Euler ordering (`v` then `x`). Rotation solves
+/// Euler's equation by implicit midpoint, paired with a normalized Cayley
+/// quaternion increment. This preserves energy and inertial angular momentum
+/// for torque-free motion instead of numerically accelerating a spinning body.
+/// External loads are sampled at the beginning of the step. Callers should
+/// still substep rapidly changing aerodynamic loads and control saturation.
 pub fn integrate_rigid_body_step<M: AeroModel>(
     model: &M,
     geometry: &AeroGeometry,
@@ -277,11 +318,13 @@ pub fn integrate_rigid_body_step<M: AeroModel>(
     let velocity_inertial_mps =
         state.velocity_inertial_mps + forces.acceleration_inertial_mps2 * step_s;
     let position_inertial_m = state.position_inertial_m + velocity_inertial_mps * step_s;
-    let angular_velocity_body_rps =
-        state.angular_velocity_body_rps + forces.angular_acceleration_body_rps2 * step_s;
-    let attitude_delta = DQuat::from_scaled_axis(angular_velocity_body_rps * step_s);
-    let orientation_body_to_inertial =
-        (state.orientation_body_to_inertial * attitude_delta).normalize();
+    let (orientation_body_to_inertial, angular_velocity_body_rps) = integrate_rotation(
+        state.orientation_body_to_inertial,
+        state.angular_velocity_body_rps,
+        properties.inertia_body_kg_m2,
+        forces.total_moment_body_nm,
+        step_s,
+    )?;
     let next_state = RigidBodyState::new(
         position_inertial_m,
         velocity_inertial_mps,

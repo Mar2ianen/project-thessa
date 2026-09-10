@@ -4,6 +4,7 @@
 //! landmark generators + procedural physical-scale detail.
 //! All scales in metres; gores are normalized fractions.
 
+pub mod appearance;
 pub mod bake;
 pub mod biomes;
 pub mod client_export;
@@ -16,6 +17,7 @@ pub mod gores;
 pub mod height;
 pub mod hydro;
 pub mod landmarks;
+pub mod lod;
 pub mod manifest;
 pub mod minerals;
 pub mod png_min;

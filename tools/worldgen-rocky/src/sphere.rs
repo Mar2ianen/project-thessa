@@ -21,7 +21,7 @@ pub fn dir_from_latlon(lat_deg: f64, lon_deg: f64) -> [f64; 3] {
         return [0.0, -1.0, 0.0];
     }
     let lat = lat_deg.to_radians();
-    let lon = lon_deg.to_radians();
+    let lon = ((lon_deg + 180.0).rem_euclid(360.0) - 180.0).to_radians();
     let (slat, clat) = lat.sin_cos();
     let (slon, clon) = lon.sin_cos();
     [clat * clon, slat, -clat * slon]

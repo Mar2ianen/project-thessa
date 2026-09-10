@@ -317,12 +317,12 @@ pub fn bake_report(manifest: &Manifest, step_deg: f64) -> Result<ConsistencyRepo
         mineral_hotspots: 0,
         errors: Vec::new(),
     };
-    for r in 0..grid.rows() {
-        for c in 0..grid.cols() {
+    for (r, water_row) in water.iter().enumerate() {
+        for (c, &water_class) in water_row.iter().enumerate() {
             let h = grid.h[r][c];
             report.min_height_m = report.min_height_m.min(h);
             report.max_height_m = report.max_height_m.max(h);
-            match water[r][c] {
+            match water_class {
                 WaterClass::Ocean => report.ocean_cells += 1,
                 WaterClass::Lake => report.lake_cells += 1,
                 WaterClass::River => report.river_cells += 1,
@@ -331,7 +331,7 @@ pub fn bake_report(manifest: &Manifest, step_deg: f64) -> Result<ConsistencyRepo
                 WaterClass::Land => {}
             }
             // Water/height agreement: ocean IFF below datum.
-            if (water[r][c] == WaterClass::Ocean) != (h < 0.0) {
+            if (water_class == WaterClass::Ocean) != (h < 0.0) {
                 report
                     .errors
                     .push(format!("water/height mismatch at ({r},{c})"));

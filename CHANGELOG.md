@@ -11,6 +11,11 @@
 
 ### Added
 
+- Интегрирована ветка rocky worldgen: генератор в workspace и общая
+  текстура Thessa v2 16K для карты и полёта.
+- Регрессия записанного spin-up на 581 с и проверка сохранения энергии
+  и инерциального углового момента при быстром свободном вращении.
+
 - Bevy 0.19 pilot/PFD vertical slice с отдельными `SURFACE`, `AIR`, `ORBITAL`
   и `TARGET` speed frames, datum/AGL altitude modes и динамическим navball.
 - Client-local X-15 flight-test adapter, подключённый к общему `sim-core`
@@ -29,6 +34,16 @@
 
 ### Changed
 
+- Угловой шаг заменён на implicit midpoint с Cayley-поворотом: свободное
+  вращение больше не получает численную прибавку энергии от explicit Euler.
+
+- Pilot HUD приближен к KSP: плотный нижний блок приборов вокруг navball,
+  21 векторная иконка и явные цветовые состояния кнопок; подсказки только в F1, extra telemetry по F3.
+- M открывает карту, V переключает камеру, backquote сбрасывает её,
+  F2 скрывает UI; камера свободно проходит полюса.
+- X-15 использует общий starter asset, физический FBW allocator и фиксированные
+  120 Hz; trace names уникальны и включают команды рулей/SAS target.
+
 - X-15 imported GLB axes приведены к физическим vehicle axes во всех attitudes.
 - KSP pitch/yaw/roll command mapping и SAS target response стабилизированы.
 - Pilot altitude/speed telemetry теперь считается относительно reference body,
@@ -40,6 +55,13 @@
   validation jobs; workspace проверяется на Linux, macOS и Windows.
 
 ### Fixed
+
+- Дрожание геометрии вдали от старта: pilot render origin теперь у аппарата.
+- Ошибочный отрицательный lift slope горизонтального хвоста и направления
+  рулей; W/S теперь нос вниз/вверх, A/D влево/вправо.
+- SAS не возвращает к старому курсу при ручном развороте; ограниченные RCS
+  тормозят до цели без качаний от насыщения регулятора в вакууме.
+- Убраны ложные target/FPV placeholders, фиктивный AGL и обнуление отрицательного PE.
 
 - Исправлены ошибки знака AoA/control channels, приводившие к неверной реакции
   X-15 на ручной pitch/yaw/roll.

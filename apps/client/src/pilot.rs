@@ -2,7 +2,7 @@ use super::*;
 
 mod control;
 mod hud;
-use hud::{spawn_pilot_hud, update_pilot_hud};
+use hud::{pilot_hud_buttons, spawn_pilot_hud, update_pilot_hud};
 
 use std::{
     fs::{File, create_dir_all},
@@ -64,11 +64,13 @@ pub(super) enum ControlMode {
 impl ControlMode {
     const ALL: [Self; 4] = [Self::MouseAim, Self::Navball, Self::Rate, Self::Direct];
 
+    #[cfg(test)]
     fn next(self) -> Self {
         let index = Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0);
         Self::ALL[(index + 1) % Self::ALL.len()]
     }
 
+    #[cfg(test)]
     fn previous(self) -> Self {
         let index = Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0);
         Self::ALL[(index + Self::ALL.len() - 1) % Self::ALL.len()]
@@ -335,7 +337,7 @@ pub(super) struct PilotFlightRuntime {
     atmosphere: AtmosphereConfig,
     state: RigidBodyState,
     sas_target_orientation: DQuat,
-    initial_relative_position_m: DVec3,
+    render_relative_position_m: DVec3,
     flight_time_s: f64,
     throttle: f64,
     engine_active: bool,
@@ -348,7 +350,6 @@ pub(super) struct PilotFlightRuntime {
     actuator_saturated: bool,
     accumulator_s: f64,
     flight_error: Option<String>,
-    render_position: Vec3,
     render_orientation: Quat,
     last_gravity_acceleration_inertial_mps2: DVec3,
     last_forces: Option<FlightForces>,
@@ -417,7 +418,7 @@ impl PilotFlightRuntime {
             atmosphere,
             state,
             sas_target_orientation: orientation_body_to_inertial,
-            initial_relative_position_m: initial_relative_position,
+            render_relative_position_m: initial_relative_position,
             flight_time_s: 0.0,
             throttle: 1.0,
             engine_active: true,
@@ -429,7 +430,6 @@ impl PilotFlightRuntime {
             actuator_saturated: false,
             accumulator_s: 0.0,
             flight_error: None,
-            render_position: Vec3::ZERO,
             render_orientation: render_orientation(orientation_body_to_inertial),
             last_gravity_acceleration_inertial_mps2: DVec3::ZERO,
             last_forces: None,
@@ -595,10 +595,15 @@ pub(super) struct PilotHudState {
     pub(super) altitude_frame: AltitudeFrame,
     flight: FlightUiState,
     mouse_position: Vec2,
+    show_modes: bool,
+    pointer_over_ui: bool,
     show_help: bool,
     show_telemetry: bool,
-    pilot_camera_yaw: f32,
-    pilot_camera_pitch: f32,
+    pilot_camera_orbit: Quat,
+    pilot_camera_chase: bool,
+    ui_hidden: bool,
+    precision_controls: bool,
+    sas_inverted: bool,
     pilot_camera_distance: f32,
     pilot_camera_pan: Vec2,
     /// Desired direction hand-off for the Mouse Aim flight-assist layer.
@@ -614,10 +619,15 @@ impl Default for PilotHudState {
             altitude_frame: AltitudeFrame::Datum,
             flight: FlightUiState::default(),
             mouse_position: Vec2::ZERO,
+            show_modes: false,
+            pointer_over_ui: false,
             show_help: false,
             show_telemetry: false,
-            pilot_camera_yaw: 0.0,
-            pilot_camera_pitch: 0.0,
+            pilot_camera_orbit: Quat::from_rotation_x(-0.18),
+            pilot_camera_chase: false,
+            ui_hidden: false,
+            precision_controls: false,
+            sas_inverted: false,
             pilot_camera_distance: PILOT_CAMERA_DEFAULT_DISTANCE_M,
             pilot_camera_pan: Vec2::ZERO,
             desired_direction: -Vec3::Z,
@@ -646,6 +656,7 @@ impl Plugin for PilotHudPlugin {
             .add_systems(
                 Update,
                 (
+                    pilot_hud_buttons,
                     pilot_input,
                     simulate_pilot_flight,
                     update_flight_ui_state,
@@ -712,6 +723,7 @@ fn update_pilot_preview(
     runtime: Res<PilotFlightRuntime>,
     mut ambient: ResMut<GlobalAmbientLight>,
     mut camera_color: Single<&mut Camera, With<Camera3d>>,
+    mut projection: Single<&mut Projection, With<Camera3d>>,
     mut camera: Single<&mut Transform, With<Camera3d>>,
     mut preview: Query<
         (&mut Transform, &mut Visibility),
@@ -773,22 +785,12 @@ fn update_pilot_preview(
         Color::srgb(0.001, 0.002, 0.008)
     });
     if active {
-        let target = runtime.render_position
-            + Vec3::new(state.pilot_camera_pan.x, state.pilot_camera_pan.y, 0.0);
-        // Match the established map camera's elevated KSP-style framing. The
-        // horizon stays below the craft instead of filling the whole PFD.
-        let pitch = (0.72 + state.pilot_camera_pitch).clamp(0.12, 1.20);
-        let horizontal = state.pilot_camera_distance * pitch.cos();
-        let orbit_offset = Vec3::new(
-            horizontal * state.pilot_camera_yaw.sin(),
-            state.pilot_camera_distance * pitch.sin(),
-            horizontal * state.pilot_camera_yaw.cos(),
-        );
-        camera.translation = target + orbit_offset;
-        **camera = camera.looking_at(
-            target - Vec3::Y * (state.pilot_camera_distance * 0.12),
-            Vec3::Y,
-        );
+        if let Projection::Perspective(perspective) = &mut **projection {
+            perspective.near = 0.25;
+            perspective.far = (runtime.render_relative_position_m.length()
+                + runtime.planet_radius_m * 2.0) as f32;
+        }
+        **camera = pilot_camera_transform(&state, runtime.render_orientation);
     }
     for (mut transform, mut visibility) in &mut preview {
         *visibility = if active {
@@ -806,20 +808,16 @@ fn update_pilot_preview(
     }
     for mut transform in &mut planet {
         if active {
-            // The planet is anchored at the real launch-site origin. It must
-            // not follow the craft: doing so made the world appear to rotate
-            // or move with the camera and hid scale errors.
-            transform.translation = Vec3::new(
-                0.0,
-                -(runtime.planet_radius_m as f32 + PILOT_START_ALTITUDE_M as f32),
-                0.0,
-            );
+            // Subtract the camera/craft origin in f64 before conversion.
+            // The craft and all its child meshes stay near zero even after
+            // an interplanetary flight; no centimetre-scale f32 cancellation.
+            transform.translation = pilot_render_offset(-runtime.render_relative_position_m);
         }
     }
     // Copy the authoritative pose even while paused: a freshly spawned scene
     // must not keep its identity transform when the simulation is stopped.
     for mut transform in &mut craft {
-        transform.translation = runtime.render_position;
+        transform.translation = Vec3::ZERO;
         transform.rotation = runtime.render_orientation;
     }
     for (mut transform, mut visibility) in &mut flames {
@@ -981,6 +979,23 @@ fn pilot_render_offset(relative_delta_m: DVec3) -> Vec3 {
     )
 }
 
+fn pilot_camera_transform(state: &PilotHudState, craft_orientation: Quat) -> Transform {
+    // Quaternion orbit has no polar clamp and retains camera-up through
+    // vertical crossings. Panning uses camera axes, not fixed world axes.
+    let basis = if state.pilot_camera_chase {
+        craft_orientation
+            * x15_asset_to_craft_rotation()
+            * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2)
+    } else {
+        Quat::IDENTITY
+    };
+    let orbit = basis * state.pilot_camera_orbit;
+    let up = orbit * Vec3::Y;
+    let target = orbit * Vec3::new(state.pilot_camera_pan.x, state.pilot_camera_pan.y, 0.0);
+    Transform::from_translation(target + orbit * Vec3::Z * state.pilot_camera_distance)
+        .looking_at(target - up * (state.pilot_camera_distance * 0.12), up)
+}
+
 fn keyboard_control_input(keys: &ButtonInput<KeyCode>) -> DVec3 {
     // Stick forward (W) lowers the nose; right (D) yaws right.
     DVec3::new(
@@ -1004,7 +1019,7 @@ fn pilot_input(
 ) {
     let mut scroll = 0.0;
 
-    if keys.just_pressed(KeyCode::F6) || keys.just_pressed(KeyCode::KeyP) {
+    if keys.just_pressed(KeyCode::KeyM) {
         state.view_mode = match state.view_mode {
             ClientViewMode::Map => ClientViewMode::Pilot,
             ClientViewMode::Pilot => ClientViewMode::Map,
@@ -1012,13 +1027,20 @@ fn pilot_input(
     }
 
     if state.view_mode == ClientViewMode::Pilot {
+        if keys.just_pressed(KeyCode::F2) {
+            state.ui_hidden = !state.ui_hidden;
+        }
         if keys.just_pressed(KeyCode::F3) {
             state.show_telemetry = !state.show_telemetry;
         }
         if keys.just_pressed(KeyCode::F1) {
             state.show_help = !state.show_help;
+            state.ui_hidden = false;
         }
-        if keys.just_pressed(KeyCode::F8) || keys.just_pressed(KeyCode::Pause) {
+        if keys.just_pressed(KeyCode::F8)
+            || keys.just_pressed(KeyCode::Pause)
+            || keys.just_pressed(KeyCode::Escape)
+        {
             clock.paused = !clock.paused;
         }
         for event in mouse_wheel.read() {
@@ -1029,9 +1051,10 @@ fn pilot_input(
         }
         let mouse_delta = mouse_motion.delta;
         if mouse_buttons.pressed(MouseButton::Right) {
-            state.pilot_camera_yaw -= mouse_delta.x * 0.005;
-            state.pilot_camera_pitch =
-                (state.pilot_camera_pitch + mouse_delta.y * 0.005).clamp(-0.72, 0.72);
+            state.pilot_camera_orbit = (state.pilot_camera_orbit
+                * Quat::from_rotation_y(-mouse_delta.x * 0.005)
+                * Quat::from_rotation_x(-mouse_delta.y * 0.005))
+            .normalize();
         }
         if mouse_buttons.pressed(MouseButton::Middle) {
             let pan_scale = state.pilot_camera_distance * 0.0018;
@@ -1040,39 +1063,34 @@ fn pilot_input(
                 .pilot_camera_pan
                 .clamp(Vec2::splat(-4.0), Vec2::splat(4.0));
         }
-        if scroll != 0.0 {
+        if scroll != 0.0 && !state.show_help && !state.pointer_over_ui {
             state.pilot_camera_distance = (state.pilot_camera_distance * (-scroll * 0.09).exp())
                 .clamp(PILOT_CAMERA_MIN_DISTANCE_M, PILOT_CAMERA_MAX_DISTANCE_M);
         }
-        if keys.just_pressed(KeyCode::Home) {
-            state.pilot_camera_yaw = 0.0;
-            state.pilot_camera_pitch = 0.0;
+        if keys.just_pressed(KeyCode::Backquote) {
+            state.pilot_camera_orbit = Quat::from_rotation_x(-0.18);
             state.pilot_camera_distance = PILOT_CAMERA_DEFAULT_DISTANCE_M;
             state.pilot_camera_pan = Vec2::ZERO;
         }
-        let reverse = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-        if keys.just_pressed(KeyCode::KeyM) {
-            state.control_mode = if reverse {
-                state.control_mode.previous()
-            } else {
-                state.control_mode.next()
-            };
-        }
         if keys.just_pressed(KeyCode::KeyV) {
-            state.speed_frame = state.speed_frame.next();
+            state.pilot_camera_chase = !state.pilot_camera_chase;
         }
-        if keys.just_pressed(KeyCode::KeyB) {
-            state.altitude_frame = state.altitude_frame.toggle();
+        if keys.just_pressed(KeyCode::CapsLock) {
+            state.precision_controls = !state.precision_controls;
+        }
+        let invert_sas = keys.pressed(KeyCode::KeyF);
+        if invert_sas != state.sas_inverted {
+            runtime.sas_enabled = !runtime.sas_enabled;
+            state.sas_inverted = invert_sas;
         }
 
-        let dt = f64::from(time.delta_secs().clamp(0.0, 0.1));
         let keyboard_input = keyboard_control_input(&keys);
         // Orbit/pan gestures belong exclusively to the camera. They must not
         // simultaneously command Mouse Aim, otherwise dragging the view also
         // deflects the aircraft and makes the controls feel broken.
         let camera_gesture =
             mouse_buttons.pressed(MouseButton::Right) || mouse_buttons.pressed(MouseButton::Middle);
-        let mouse_input = if camera_gesture {
+        let mouse_input = if camera_gesture || state.pointer_over_ui || state.show_modes {
             DVec3::ZERO
         } else {
             DVec3::new(
@@ -1089,9 +1107,10 @@ fn pilot_input(
         runtime.control_input = if clock.paused || !window.focused || state.show_help {
             DVec3::ZERO
         } else {
-            command_input
+            command_input * if state.precision_controls { 0.25 } else { 1.0 }
         };
 
+        let dt = time.delta_secs_f64().min(0.1);
         let throttle_up = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         let throttle_down =
             keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
@@ -1287,7 +1306,9 @@ fn live_flight_ui_state(
             if let Some(error) = &flight.flight_error {
                 warnings.push(format!("FLIGHT STOPPED: {error}"));
             }
-            if conventional_angle_of_attack_deg(air_velocity).abs() >= X15_STALL_ANGLE_DEG {
+            if forces.is_some_and(|forces| forces.aero.dynamic_pressure_pa >= 100.0)
+                && conventional_angle_of_attack_deg(air_velocity).abs() >= X15_STALL_ANGLE_DEG
+            {
                 warnings.push("HIGH ANGLE OF ATTACK".into());
             }
             if flight.actuator_saturated {
@@ -1509,6 +1530,19 @@ mod tests {
         // The projected disk keeps transparent corners, so it remains a
         // sphere-shaped instrument when rendered inside the circular frame.
         assert_eq!(&level[0..4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn pilot_camera_orbits_through_both_poles_without_clamping_or_singularities() {
+        let mut hud = PilotHudState::default();
+        for degrees in 0..=720 {
+            hud.pilot_camera_orbit = Quat::from_rotation_x((degrees as f32).to_radians());
+            let camera = pilot_camera_transform(&hud, Quat::IDENTITY);
+            assert!(camera.rotation.is_finite());
+            assert!((camera.translation.length() - hud.pilot_camera_distance).abs() < 1.0e-4);
+        }
+        hud.pilot_camera_orbit = Quat::from_rotation_x(std::f32::consts::PI);
+        assert!(pilot_camera_transform(&hud, Quat::IDENTITY).translation.z < 0.0);
     }
 
     #[test]

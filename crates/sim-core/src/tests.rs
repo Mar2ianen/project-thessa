@@ -1077,3 +1077,52 @@ fn atmosphere_rejects_non_finite_derived_pressure_and_mach() {
     sample.speed_of_sound_mps = 1.0e-300;
     assert!(sample.mach(f64::MAX).is_err());
 }
+
+#[test]
+fn fast_free_rotation_preserves_energy_and_inertial_angular_momentum() {
+    let model = PanelAeroModel::new(AeroConfig::default()).unwrap();
+    let geometry =
+        AeroGeometry::new(vec![AeroPanel::flat_plate(DVec3::ZERO, 1.0, 1.0).unwrap()]).unwrap();
+    let properties = X15StarterProfile::new().unwrap().vehicle.mass_properties;
+    let mut state = RigidBodyState::new(
+        DVec3::ZERO,
+        DVec3::ZERO,
+        DQuat::IDENTITY,
+        DVec3::new(-8.87, -2.54, 0.053),
+    )
+    .unwrap();
+    let inertia = properties.inertia_body_kg_m2;
+    let momentum = inertia * state.angular_velocity_body_rps;
+    let energy = 0.5 * state.angular_velocity_body_rps.dot(momentum);
+    let mut max_energy_error: f64 = 0.0;
+    let mut max_momentum_error: f64 = 0.0;
+    for _ in 0..7200 {
+        (state, _) = integrate_rigid_body_step(
+            &model,
+            &geometry,
+            AtmosphereConfig::default(),
+            state,
+            properties,
+            FlightStepInput::new(1_000_000.0, DVec3::ZERO),
+            1.0 / 120.0,
+        )
+        .unwrap();
+        let h = inertia * state.angular_velocity_body_rps;
+        let energy_error = (0.5 * state.angular_velocity_body_rps.dot(h) / energy - 1.0).abs();
+        let momentum_error =
+            (state.orientation_body_to_inertial * h - momentum).length() / momentum.length();
+        max_energy_error = max_energy_error.max(energy_error);
+        max_momentum_error = max_momentum_error.max(momentum_error);
+        assert!(
+            energy_error < 1e-8,
+            "free rotation gained energy: {energy_error}"
+        );
+        assert!(
+            momentum_error < 1e-8,
+            "inertial angular momentum drift: {momentum_error}"
+        );
+    }
+    println!(
+        "free rotation: relative energy error {max_energy_error:e}, momentum error {max_momentum_error:e}"
+    );
+}

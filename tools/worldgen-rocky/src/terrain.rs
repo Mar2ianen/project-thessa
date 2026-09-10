@@ -93,11 +93,29 @@ pub fn eval_macro_m(features: &[PlacedFeature], lat_deg: f64, lon_deg: f64, radi
 
 /// Macro province noise (spherical bands), without discrete features.
 pub fn eval_macro_provinces_m(seed: u64, knobs: TerrainKnobs, dir: [f64; 3], radius_m: f64) -> f64 {
-    MACRO_BANDS_M
-        .iter()
-        .enumerate()
-        .map(|(i, wl)| eval_band_m(seed, i, dir, radius_m, *wl, macro_amp(*wl, knobs)))
-        .sum()
+    // Warp coherent continental fields before adding relief. The displacement
+    // is a fixed physical length: tile IDs and texture resolution never enter.
+    let p = dir.map(|x| x * radius_m / 1_300_000.0);
+    let warped: [f64; 3] = std::array::from_fn(|i| {
+        dir[i] * radius_m + 420_000.0 * rng::fbm3(seed, 800 + i as u32 * 37, p[0], p[1], p[2], 3)
+    });
+    let q = warped.map(|x| x / 1_650_000.0);
+    let continental = rng::fbm3(seed, 900, q[0], q[1], q[2], 5);
+    let ridge_mask = crate::appearance::smooth(
+        -0.18,
+        0.30,
+        rng::fbm3(seed, 902, p[0] * 1.7, p[1] * 1.7, p[2] * 1.7, 3),
+    );
+    let r = warped.map(|x| x / 260_000.0);
+    let ridge = (1.0 - rng::value_noise3(seed, 905, r[0], r[1], r[2]).abs()).powi(4);
+    continental * 8_500.0
+        + ridge * ridge_mask * 3_800.0 * (0.3 + knobs.mountain_coverage)
+        + MACRO_BANDS_M
+            .iter()
+            .enumerate()
+            .skip(3)
+            .map(|(i, wl)| eval_band_m(seed, i, dir, radius_m, *wl, macro_amp(*wl, knobs)))
+            .sum::<f64>()
 }
 
 /// Evaluate MESO band: relief at 4-64 km wavelengths (spherical).

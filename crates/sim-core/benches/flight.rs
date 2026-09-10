@@ -32,30 +32,46 @@ fn main() {
         })
         .collect();
 
-    let iterations = 500;
-    let started = std::time::Instant::now();
-    for _ in 0..iterations {
-        let next_states: Vec<_> = states
-            .par_iter()
-            .map(|state| {
-                integrate_rigid_body_step(
-                    black_box(&model),
-                    black_box(&geometry),
-                    atmosphere,
-                    *state,
-                    properties,
-                    input,
-                    0.01,
-                )
-                .expect("finite flight step")
-                .0
-            })
-            .collect();
-        black_box(next_states);
+    for (name, angular_rate, inertia) in [
+        ("cruise", DVec3::ZERO, properties.inertia_body_kg_m2),
+        (
+            "fast asymmetric rotation",
+            DVec3::new(-8.87, -2.54, 0.053),
+            thessa_sim_core::X15StarterProfile::new()
+                .unwrap()
+                .vehicle
+                .mass_properties
+                .inertia_body_kg_m2,
+        ),
+    ] {
+        let properties = RigidBodyProperties::new(properties.mass_kg, inertia).unwrap();
+        let iterations = 500;
+        let started = std::time::Instant::now();
+        for _ in 0..iterations {
+            let next_states: Vec<_> = states
+                .par_iter()
+                .map(|state| {
+                    let mut state = *state;
+                    state.angular_velocity_body_rps = angular_rate;
+                    integrate_rigid_body_step(
+                        black_box(&model),
+                        black_box(&geometry),
+                        atmosphere,
+                        state,
+                        properties,
+                        input,
+                        1.0 / 120.0,
+                    )
+                    .expect("finite flight step")
+                    .0
+                })
+                .collect();
+            black_box(next_states);
+        }
+        let elapsed = started.elapsed();
+        println!(
+            "{name}: 256 vehicles x 16 panels x 6-DoF: {elapsed:?} total, {:?} average batch",
+            elapsed / iterations
+        );
     }
-    let elapsed = started.elapsed();
-    println!(
-        "256 vehicles x 16 panels x 6-DoF: {elapsed:?} total, {:?} average frame",
-        elapsed / iterations
-    );
 }

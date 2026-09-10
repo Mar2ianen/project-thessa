@@ -85,6 +85,7 @@ pub struct TerrainSample {
     /// Normalized geothermal flux, W/m2.
     pub geothermal_flux_w_m2: f64,
     pub moisture01: f64,
+    pub temperature_k: f64,
     pub continentality01: f64,
     pub eclipse_exposure01: f64,
 }
@@ -98,6 +99,8 @@ pub struct PlanetField {
     pub landmarks: Vec<LandmarkZone>,
     geo_norm: f64,
     context: ContextGrid,
+    /// Datum calibration belongs to the canonical field, not just a preview.
+    pub sea_offset_m: f64,
 }
 
 struct ContextGrid {
@@ -120,7 +123,7 @@ impl PlanetField {
     ) -> Result<Self, String> {
         validate_params(&params)?;
         let geo_norm = normalize_geothermal(&provinces, params.nominal_flux_w_m2, params.radius_m);
-        let context = build_context(&params, &features, &tectonics);
+        let (context, sea_offset_m) = build_context(&params, &features, &tectonics);
         Ok(Self {
             params,
             features,
@@ -129,6 +132,7 @@ impl PlanetField {
             landmarks,
             geo_norm,
             context,
+            sea_offset_m,
         })
     }
 
@@ -136,6 +140,75 @@ impl PlanetField {
     /// Only bands with wavelength >= min_wavelength_m contribute, so a
     /// coarse sample is always the low-frequency prefix of a finer one.
     pub fn sample(&self, dir: [f64; 3], min_wavelength_m: f64) -> TerrainSample {
+        self.sample_impl(dir, min_wavelength_m, true)
+    }
+
+    /// Material sampling when the consumer already calculates a mesh/texture normal.
+    pub fn sample_surface(&self, dir: [f64; 3], min_wavelength_m: f64) -> TerrainSample {
+        self.sample_impl(dir, min_wavelength_m, false)
+    }
+
+    fn sample_impl(&self, dir: [f64; 3], min_wavelength_m: f64, slope: bool) -> TerrainSample {
+        let (height, macro_h, detail_h) = self.height_parts(dir, min_wavelength_m);
+        let (lat, lon) = latlon_from_dir(dir);
+        // Context lookup (nearest coarse cell).
+        let (_, _, ocean_dist) = self.context_at(lat, lon);
+        let geo_w = geothermal_activity(&self.provinces, lat, lon, self.params.radius_m, 0.0, 0.0);
+        let flux = geo_w * self.geo_norm;
+        let drivers = drivers_at(
+            lat,
+            lon,
+            height,
+            ocean_dist,
+            self.params.eclipse_strength,
+            geo_w.min(1.0),
+        );
+        let site = classify_with_context(&self.params, &self.features, lat, lon, height, flux);
+        // Slope hint from analytic neighbours at the requested wavelength.
+        let slope_hint = if slope {
+            self.slope_hint(dir, min_wavelength_m.max(1.0))
+        } else {
+            0.0
+        };
+        let regional = crate::rng::fbm3(
+            self.params.seed,
+            770,
+            dir[0] * 6.0,
+            dir[1] * 6.0,
+            dir[2] * 6.0,
+            3,
+        );
+        let moisture = (drivers.moisture * 0.65 + 0.15 + regional * 0.45
+            - self.params.aridity * 0.16)
+            .clamp(0.0, 1.0);
+        let temperature_k = 296.0
+            - 52.0 * dir[1].abs().powf(1.4)
+            - height.max(0.0) * 0.005
+            - (1.0 - drivers.eclipse_exposure) * 12.0
+            + regional * 3.0;
+        TerrainSample {
+            height_m: height,
+            macro_height_m: macro_h,
+            procedural_height_m: detail_h,
+            biome: site.biome,
+            geology: site.geology,
+            tag0: site.tag0,
+            tag1: site.tag1,
+            slope_hint,
+            geothermal_flux_w_m2: flux,
+            moisture01: moisture,
+            temperature_k,
+            continentality01: drivers.continentality,
+            eclipse_exposure01: drivers.eclipse_exposure,
+        }
+    }
+
+    /// Allocation-free canonical height for mesh vertices and contact queries.
+    pub fn height_m(&self, dir: [f64; 3], min_wavelength_m: f64) -> f64 {
+        self.height_parts(dir, min_wavelength_m).0
+    }
+
+    fn height_parts(&self, dir: [f64; 3], min_wavelength_m: f64) -> (f64, f64, f64) {
         let min_wl = min_wavelength_m.max(1.0);
         let (lat, lon) = latlon_from_dir(dir);
         let knobs: TerrainKnobs = self.params.knobs.into();
@@ -167,7 +240,7 @@ impl PlanetField {
             self.params.radius_m,
             min_wl,
         );
-        let mut height = macro_h + meso_h + micro_h;
+        let mut height = macro_h + meso_h + micro_h - self.sea_offset_m;
         // Authored landmark overrides (delta-based, datum-robust).
         for zone in &self.landmarks {
             height += zone.height_delta(dir, self.params.radius_m, &|d| {
@@ -182,35 +255,7 @@ impl PlanetField {
             });
         }
         height = height.clamp(self.params.height_min_m, self.params.height_max_m);
-        // Context lookup (nearest coarse cell).
-        let (_, _, ocean_dist) = self.context_at(lat, lon);
-        let geo_w = geothermal_activity(&self.provinces, lat, lon, self.params.radius_m, 0.0, 0.0);
-        let flux = geo_w * self.geo_norm;
-        let drivers = drivers_at(
-            lat,
-            lon,
-            height,
-            ocean_dist,
-            self.params.eclipse_strength,
-            geo_w.min(1.0),
-        );
-        let site = classify_with_context(&self.params, &self.features, lat, lon, height, flux);
-        // Slope hint from analytic neighbours at the requested wavelength.
-        let slope_hint = self.slope_hint(dir, min_wavelength_m.max(1.0));
-        TerrainSample {
-            height_m: height,
-            macro_height_m: macro_h,
-            procedural_height_m: meso_h + micro_h,
-            biome: site.biome,
-            geology: site.geology,
-            tag0: site.tag0,
-            tag1: site.tag1,
-            slope_hint,
-            geothermal_flux_w_m2: flux,
-            moisture01: drivers.moisture,
-            continentality01: drivers.continentality,
-            eclipse_exposure01: drivers.eclipse_exposure,
-        }
+        (height, macro_h - self.sea_offset_m, meso_h + micro_h)
     }
 
     /// Base height without landmarks (used by landmark blending).
@@ -308,7 +353,7 @@ fn build_context(
     params: &PlanetParams,
     features: &[crate::features::PlacedFeature],
     tectonics: &[Boundary],
-) -> ContextGrid {
+) -> (ContextGrid, f64) {
     let step = 2.0;
     let mut lats = Vec::new();
     let mut lat = -90.0;
@@ -342,8 +387,36 @@ fn build_context(
                 + crate::terrain::eval_meso_m(params.seed, knobs, *la, *lo, params.radius_m);
         }
     }
-    if let Some(target) = params.ocean_target {
-        crate::bake::calibrate_for_context(&mut grid, target);
+    let sea_offset_m = params
+        .ocean_target
+        .map(|target| {
+            let mut samples: Vec<_> = grid
+                .h
+                .iter()
+                .enumerate()
+                .flat_map(|(r, row)| {
+                    let weight = lats[r].to_radians().cos().max(0.0);
+                    row.iter().map(move |height| (*height, weight))
+                })
+                .collect();
+            samples.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let target_weight = target * samples.iter().map(|s| s.1).sum::<f64>();
+            let mut accumulated = 0.0;
+            let mut datum = 0.0;
+            for (height, weight) in samples {
+                accumulated += weight;
+                datum = height;
+                if accumulated >= target_weight {
+                    break;
+                }
+            }
+            datum
+        })
+        .unwrap_or(0.0);
+    for row in &mut grid.h {
+        for height in row {
+            *height -= sea_offset_m;
+        }
     }
     let arid0 = vec![vec![0.5; grid.cols()]; grid.rows()];
     let water0 = classify_water(&grid, &arid0, params.glaciation);
@@ -359,13 +432,16 @@ fn build_context(
         }
     }
     let water = classify_water(&grid, &arid, params.glaciation);
-    ContextGrid {
-        lats,
-        lons,
-        water,
-        arid,
-        ocean_dist_m,
-    }
+    (
+        ContextGrid {
+            lats,
+            lons,
+            water,
+            arid,
+            ocean_dist_m,
+        },
+        sea_offset_m,
+    )
 }
 
 /// Normalize the geothermal weight field so its spherical area mean equals

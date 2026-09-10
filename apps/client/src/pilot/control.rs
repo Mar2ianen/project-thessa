@@ -57,19 +57,33 @@ impl PilotFlightRuntime {
         let assisted = mode != ControlMode::Direct;
         let attitude_hold =
             self.sas_enabled && matches!(mode, ControlMode::Navball | ControlMode::MouseAim);
-        let desired_rate = if attitude_hold {
-            self.sas_target_orientation = (self.sas_target_orientation
-                * DQuat::from_scaled_axis(
-                    axes * PILOT_ATTITUDE_COMMAND_RATE_RAD_S * FLIGHT_STEP_S,
-                ))
-            .normalize();
+        let desired_rate = if attitude_hold && axes.length_squared() > 1.0e-8 {
+            // Manual input overrides attitude hold. Capture the achieved
+            // attitude, so a long turn cannot wind an unreachable target past
+            // 180 degrees and make shortest-path SAS reverse the manoeuvre.
+            self.sas_target_orientation = self.state.orientation_body_to_inertial;
+            axes * PILOT_ATTITUDE_COMMAND_RATE_RAD_S
+        } else if attitude_hold {
             let mut error =
                 self.state.orientation_body_to_inertial.inverse() * self.sas_target_orientation;
             // q and -q represent the same attitude; use the short rotation.
             if error.w < 0.0 {
                 error = -error;
             }
-            (error.to_scaled_axis() * 1.6).clamp_length_max(0.35)
+            let angle = error.to_scaled_axis();
+            let couples = rcs_couples();
+            let inertia = self.vehicle.mass_properties.inertia_body_kg_m2;
+            let acceleration = DVec3::new(
+                couples[0].x / inertia.x_axis.x,
+                couples[1].y / inertia.y_axis.y,
+                couples[2].z / inertia.z_axis.z,
+            );
+            // Brake early enough for the finite jets. A fixed high-gain
+            // attitude loop saturates in vacuum and keeps overshooting.
+            let braking_rate = (acceleration * angle.abs() * 0.5).sqrt();
+            (angle * 1.6)
+                .clamp(-braking_rate, braking_rate)
+                .clamp_length_max(0.35)
         } else {
             // Capturing here avoids a jump to an old SAS target when re-enabled.
             self.sas_target_orientation = self.state.orientation_body_to_inertial;
@@ -137,9 +151,7 @@ impl PilotFlightRuntime {
                 self.rcs_enabled,
             )
         };
-        self.actuator_saturated = assisted
-            && command.abs().max_element() > 0.99
-            && (requested - actual_aero - jets).length() > 1_000.0;
+        self.actuator_saturated = assisted && (requested - actual_aero - jets).length() > 1_000.0;
         Ok(jets)
     }
 
@@ -230,10 +242,7 @@ impl PilotFlightRuntime {
         self.flight_time_s += FLIGHT_STEP_S;
         self.last_gravity_acceleration_inertial_mps2 = gravity;
         self.last_forces = Some(forces);
-        self.render_position = pilot_render_offset(
-            (next.position_inertial_m - next_body.position_inertial)
-                - self.initial_relative_position_m,
-        );
+        self.render_relative_position_m = next.position_inertial_m - next_body.position_inertial;
         self.render_orientation = render_orientation(next.orientation_body_to_inertial);
         Ok(())
     }
@@ -289,6 +298,65 @@ mod tests {
             rcs_moment(DVec3::splat(1.0e9), true),
             DVec3::new(1120.0, 4000.0, 4000.0)
         );
+    }
+
+    #[test]
+    fn recorded_high_rate_flight_continues_past_the_previous_stop() {
+        // Live capture, 514.808--581.375 s: restore its first physical state,
+        // then replay the pilot inputs (not the recorded resulting forces).
+        let capture = include_str!("../../../../logs/flight-traces/2026-09-09-high-rate-stop.csv");
+        let mut lines = capture.lines();
+        let columns: Vec<_> = lines.next().unwrap().split(',').collect();
+        let column = |name: &str| columns.iter().position(|c| *c == name).unwrap();
+        let first: Vec<_> = lines.next().unwrap().split(',').collect();
+        let number = |row: &[&str], name: &str| row[column(name)].parse::<f64>().unwrap();
+        let vector = |row: &[&str], names: [&str; 3]| {
+            DVec3::new(
+                number(row, names[0]),
+                number(row, names[1]),
+                number(row, names[2]),
+            )
+        };
+        let (ephemeris, mut flight) = fixture();
+        flight.flight_time_s = (number(&first, "t_s") * 120.0).round() / 120.0;
+        flight.state = RigidBodyState::new(
+            vector(&first, ["pos_x_m", "pos_y_m", "pos_z_m"]),
+            vector(&first, ["vel_x_mps", "vel_y_mps", "vel_z_mps"]),
+            DQuat::from_xyzw(
+                number(&first, "quat_x"),
+                number(&first, "quat_y"),
+                number(&first, "quat_z"),
+                number(&first, "quat_w"),
+            )
+            .normalize(),
+            vector(&first, ["omega_x_rps", "omega_y_rps", "omega_z_rps"]),
+        )
+        .unwrap();
+        flight.surface_input = vector(&first, ["surface_pitch", "surface_yaw", "surface_roll"]);
+        let mut max_rate: f64 = 0.0;
+        for line in lines {
+            let row: Vec<_> = line.split(',').collect();
+            assert_eq!(row[column("control_mode")], "DIRECT / RAW");
+            flight.control_input = vector(&row, ["pitch_cmd", "yaw_cmd", "roll_cmd"]);
+            flight.throttle = number(&row, "throttle");
+            flight.engine_active = row[column("engine")] == "1";
+            flight.sas_enabled = row[column("sas")] == "1";
+            flight.rcs_enabled = row[column("rcs")] == "1";
+            flight
+                .advance(&ephemeris, ControlMode::Direct, FLIGHT_STEP_S)
+                .unwrap();
+            max_rate = max_rate.max(flight.state.angular_velocity_body_rps.length());
+        }
+        flight.control_input = DVec3::ZERO;
+        flight
+            .advance(&ephemeris, ControlMode::Direct, 60.0)
+            .unwrap();
+        println!(
+            "recorded spin replay: t={:.3} s, max rate={max_rate:.6}, final rate={:.6}",
+            flight.flight_time_s,
+            flight.state.angular_velocity_body_rps.length()
+        );
+        assert!(flight.flight_time_s > 640.0);
     }
 
     #[test]
@@ -381,6 +449,66 @@ mod tests {
                 response > 0.025,
                 "{key:?} moved the model the wrong way: {response}"
             );
+        }
+    }
+
+    #[test]
+    fn sas_allows_full_orbital_turn_and_holds_after_release() {
+        for command in [DVec3::Y, DVec3::X] {
+            let (ephemeris, mut flight) = fixture();
+            let body = ephemeris.body(flight.reference_body).unwrap();
+            let origin = ephemeris
+                .body_state(flight.reference_body, SimTime::EPOCH)
+                .unwrap();
+            let radius = body.radius_m + 300_000.0;
+            flight.state.position_inertial_m = origin.position_inertial + DVec3::Z * radius;
+            flight.state.velocity_inertial_mps =
+                origin.velocity_inertial + DVec3::X * (body.mu / radius).sqrt();
+            flight.state.orientation_body_to_inertial = DQuat::IDENTITY;
+            flight.sas_target_orientation = DQuat::IDENTITY;
+            flight.engine_active = false;
+            flight.control_input = command;
+            let axis = if command == DVec3::Y {
+                DVec3::NEG_Z
+            } else {
+                DVec3::NEG_Y
+            };
+            let mut accumulated_angle = 0.0;
+            for _ in 0..5400 {
+                let previous = flight.state.orientation_body_to_inertial;
+                flight
+                    .advance(&ephemeris, ControlMode::Navball, FLIGHT_STEP_S)
+                    .unwrap();
+                let delta = (previous.inverse() * flight.state.orientation_body_to_inertial)
+                    .to_scaled_axis();
+                assert!(
+                    delta.dot(axis) >= -1.0e-8,
+                    "SAS reversed a commanded orbital turn"
+                );
+                accumulated_angle += delta.dot(axis);
+            }
+            assert!(
+                accumulated_angle.to_degrees() > 360.0,
+                "turn stopped at {} deg",
+                accumulated_angle.to_degrees()
+            );
+            flight.control_input = DVec3::ZERO;
+            let released = flight.state.orientation_body_to_inertial;
+            flight
+                .advance(&ephemeris, ControlMode::Navball, 20.0)
+                .unwrap();
+            let hold_error = flight
+                .state
+                .orientation_body_to_inertial
+                .angle_between(released)
+                .to_degrees();
+            println!(
+                "orbital turn: {:.2} deg, hold error {hold_error:.6} deg, rate {:?}",
+                accumulated_angle.to_degrees(),
+                flight.state.angular_velocity_body_rps
+            );
+            assert!(hold_error < 1.0, "SAS hold error {hold_error}");
+            assert!(flight.state.angular_velocity_body_rps.length() < 0.001);
         }
     }
 

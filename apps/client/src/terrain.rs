@@ -400,6 +400,13 @@ fn tiles_overlap(a: TileKey, b: TileKey) -> bool {
     parent.face == child.face && parent.x == child.x >> shift && parent.y == child.y >> shift
 }
 
+/// Display cover: retain old visible tiles overlapped only by unready
+/// wanted tiles (a parent stays until ALL its children are ready — never a
+/// hole, never overlap), then add ready wanted tiles that overlap nothing
+/// already covered. Wanted iterates finest-first: with overlapping tiers
+/// (coarse horizon cover + fine view cone) coarse keys must not shadow fine
+/// children — first-fit insertion order froze the live view at coarse cover
+/// (measured: 367 ready, 40 shown) because coarse sorts first.
 fn ready_terrain_cover(
     wanted: &[TileKey],
     visible: &BTreeSet<TileKey>,
@@ -414,7 +421,9 @@ fn ready_terrain_cover(
                 .any(|new| tiles_overlap(*old, *new) && !ready(new))
         })
         .collect();
-    for key in wanted.iter().filter(|key| ready(key)) {
+    let mut ordered: Vec<TileKey> = wanted.to_vec();
+    ordered.sort_by_key(|key| std::cmp::Reverse(key.level));
+    for key in ordered.iter().filter(|key| ready(key)) {
         if !cover.iter().any(|old| tiles_overlap(*old, *key)) {
             cover.insert(*key);
         }
@@ -560,7 +569,11 @@ fn update_terrain(
     let frustum = if let Projection::Perspective(p) = &*camera.1 {
         let half_v = p.fov * 0.5;
         let half_h = (half_v.tan() * p.aspect_ratio).atan();
-        let half_angle = f64::from(half_v.max(half_h)) + 0.35;
+        // Wide swing margin: the cone must cover the frame CORNERS, not the
+        // axes. A tight cone culls the ground below a forward-looking chase
+        // camera (nadir is ~90° off-axis) and the pilot view never refines
+        // past the coarse cover. Behind-camera tiles are still culled.
+        let half_angle = f64::from(half_v.max(half_h)) + 0.6;
         let forward_body = rotation.inverse() * (camera.0.rotation * Vec3::NEG_Z).as_dvec3();
         Some(lod::SelectionFrustum {
             forward: forward_body.to_array(),
@@ -616,7 +629,7 @@ fn update_terrain(
                 eye.to_array(),
                 radius,
                 17,
-                224,
+                288,
                 |dir| world.field.height_m(dir, 32.0),
                 frustum,
                 detail_bias,

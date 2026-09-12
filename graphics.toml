@@ -31,7 +31,7 @@ exposure_ev100 = 13.0 # manual EV100 when auto_exposure = false
 [atmosphere]
 enabled = true
 quality = "high" # low | medium | high (budgets only, never physics)
-aerial_perspective = true
+aerial_perspective = false
 density_scale = 0.55 # visual optical-depth gain; simulation pressure is unchanged
 multiple_scattering = false # single-scattering first slice; LUT/MS later
 eclipses = true

@@ -120,28 +120,19 @@ pub fn select_tiles_with_height_and_frustum(
     let eye_r = dot(eye, eye).sqrt();
     let eye_dir = normalize(eye);
     let horizon = (radius / eye_r.max(radius)).clamp(0.0, 1.0).acos();
+    // Coverage culling is horizon-only, deliberately NOT frustum-culled:
+    // hard culling by view cone deletes regions the frame still shows
+    // (a forward-looking chase camera sees ground up to ~90° off-axis at
+    // the frame bottom; any cone misses it and the pilot view never
+    // refines past coarse cover). The frustum survives only as a RANKING
+    // weight inside priority(), so off-view tiles settle coarse instead
+    // of vanishing. Live bug preserved as comment: cone 0.6 rad margin
+    // still starved pilot ground to L7.
     let visible = |key: TileKey| {
         let center = key.direction(0.5, 0.5);
         let bound = (2.0 / (1_u64 << key.level) as f64).min(std::f64::consts::PI);
         if dot(center, eye_dir) < (horizon + bound + 0.10).min(std::f64::consts::PI).cos() {
             return false;
-        }
-        if let Some(frustum) = frustum {
-            // Tile angular radius from the eye, padded so edges never clip.
-            // The direction runs eye -> tile (down toward the ground), matching
-            // the camera forward convention.
-            let surface_r = radius + height(center).max(0.0);
-            let to_tile = sub(center.map(|v| v * surface_r), eye);
-            let distance = dot(to_tile, to_tile).sqrt().max(1.0);
-            let bound = key.span_m(radius);
-            if distance <= bound {
-                return true;
-            }
-            let angular_radius = (bound / distance).clamp(0.0, 1.0).asin();
-            let facing = dot(normalize(to_tile), normalize(frustum.forward));
-            if facing < (angular_radius + frustum.cos_limit.clamp(-1.0, 1.0).acos()).cos() {
-                return false;
-            }
         }
         true
     };
@@ -157,12 +148,20 @@ pub fn select_tiles_with_height_and_frustum(
         // Rank error relative to the tile's own quality target. Ranking raw
         // angular span spends the budget on peripheral tiles that already
         // satisfy their relaxed target, starving the center of the view.
+        //
+        // Mild overlap-aware foveation (max x3 at the cone edge): focuses
+        // the fixed budget toward the view center so it reaches L15-16
+        // there instead of uniform L13 everywhere. References rank by
+        // angular size alone, but with a hard 320 budget some focusing is
+        // mandatory. Calibrated live: x9 froze chase-view ground (90°
+        // off-axis nadir) at L11 — x3 keeps it at L12-13 while preserving
+        // center depth. Overlap-aware (closest approach, not center):
+        // center-scored huge tiles covering the fovea ate the full penalty
+        // and starved their own subtrees.
+        // Velocity bias relaxes ONLY the near rule: fast flight is near
+        // the ground, where the near rule governs; the far field keeps
+        // its own fixed target.
         let stop = if let Some(frustum) = frustum {
-            // Overlap-aware foveation: judge a tile by its closest approach
-            // to the view axis, not its center. A huge tile covering the
-            // fovea has its center tens of degrees off-axis; center-based
-            // scoring slaps it with the full x9 edge penalty and its whole
-            // subtree (including the nadir) never refines.
             let to_tile = normalize(delta.map(|v| -v));
             let off_axis = dot(to_tile, normalize(frustum.forward))
                 .clamp(-1.0, 1.0)
@@ -171,18 +170,21 @@ pub fn select_tiles_with_height_and_frustum(
                 (key.span_m(radius) / distance).clamp(-1.0, 1.0).asin();
             let half_cone = frustum.cos_limit.clamp(-1.0, 1.0).acos().max(1e-3);
             let edge = ((off_axis - angular_radius) / half_cone).clamp(0.0, 1.0);
-            // Velocity bias relaxes ONLY the near rule: compounding it into
-            // the far rule and the fovea multiplier froze refinement entirely
-            // (8x * 9x fovea stops even the nadir's own parents). Fast flight
-            // is near the ground, where the near rule governs; the far field
-            // keeps its own fixed target.
+            // Overlap-aware fovea (up to x25 at the cone edge) concentrates
+            // the fixed budget toward the view center: uniform targets
+            // spread 320 leaves evenly and stall everything at L13, and
+            // even x9 leaves the mid-ring eating the depth budget. Edge
+            // tiles sit in fog and peripheral vision; the center keeps the
+            // tight rule. Overlap-aware (closest approach, not center) is
+            // what makes strong foveation safe: tiles covering the fovea
+            // score edge ~0 no matter how far their centers are.
             let bias = detail_bias.clamp(1.0, 32.0);
             let base = if distance > 100_000.0 {
                 1.0 / 10.0
             } else {
                 1.0 / 48.0 * bias
             };
-            base * (1.0 + 8.0 * edge * edge)
+            base * (1.0 + 24.0 * edge * edge)
         } else {
             1.0 / 2.4
         };
@@ -201,22 +203,6 @@ pub fn select_tiles_with_height_and_frustum(
         let Some((index, key)) = candidate else {
             break;
         };
-        if std::env::var("LOD_DEBUG").is_ok() && leaves.len() < 60 {
-            let dir = key.direction(0.5, 0.5);
-            let d = ((eye[0] - dir[0] * radius).powi(2)
-                + (eye[1] - dir[1] * radius).powi(2)
-                + (eye[2] - dir[2] * radius).powi(2))
-            .sqrt();
-            eprintln!(
-                "pick f{} L{} x{} y{} norm={:.3} span/dist={:.3}",
-                key.face,
-                key.level,
-                key.x,
-                key.y,
-                priority(*key),
-                key.span_m(radius) / d.max(1.0)
-            );
-        }
         if priority(*key) <= 1.0 {
             break;
         }
@@ -678,5 +664,39 @@ mod velocity_bias_tests {
             "bias must relax refinement ({coarse_max} vs {sharp_max})"
         );
         assert!(!coarse.is_empty(), "biased selection must still cover");
+    }
+}
+
+#[cfg(test)]
+mod pilot_frustum_tests {
+    use super::*;
+    #[test]
+    fn horizontal_forward_refines_ground_below() {
+        // Pilot chase view: eye 3 km up, camera looking horizontal (+Z
+        // tangent). The ground filling the frame bottom sits 60-90° off
+        // the view axis; cone culling must keep it, or the pilot view
+        // never refines past coarse cover (live L7-only bug).
+        let radius = 3_200_000.0;
+        let eye = [radius + 3000.0, 0.0, 0.0];
+        let frustum = SelectionFrustum {
+            forward: normalize([0.0, 0.0, 1.0]),
+            cos_limit: (1.0_f64).cos(),
+        };
+        let keys = select_tiles_with_height_and_frustum(eye, radius, 17, 320, |_| 0.0, Some(frustum), 1.0);
+        let max_in_view = keys
+            .iter()
+            .filter(|k| {
+                let c = k.direction(0.5, 0.5);
+                // tile roughly below-forward of the eye
+                c[2] > 0.0 && c[0] > 0.99
+            })
+            .map(|k| k.level)
+            .max()
+            .unwrap_or(0);
+        eprintln!("pilot-cone max level below-forward: L{max_in_view} of {} tiles", keys.len());
+        assert!(
+            max_in_view >= 12,
+            "pilot ground culled: L{max_in_view} below-forward"
+        );
     }
 }

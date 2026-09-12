@@ -175,10 +175,8 @@ fn sample_texel(
     (s.height_m, texel_color(field, &s, dir))
 }
 
-/// Stream a client texture of any size (tested to 16K) to a PNG writer.
-/// Memory stays at ~3 rows: heights window for the hillshade pass.
-/// Stream a client texture of any size (tested to 16K) to a PNG writer.
-/// Memory stays at ~3 rows: heights window for the hillshade pass.
+/// Stream albedo to the caller's writer with O(width) row storage plus a
+/// bounded 1 MiB IDAT buffer. No full encoded image is retained here.
 pub fn write_client_texture_png<W: std::io::Write>(
     field: &PlanetField,
     width: usize,
@@ -194,10 +192,7 @@ pub fn write_client_texture_png<W: std::io::Write>(
     }
     let mut rows = RowStream::new(field, width, height, min_wavelength_m);
     let iter: &mut dyn Iterator<Item = Vec<u8>> = &mut rows;
-    let mut owned = Vec::new();
-    crate::png_min::write_png_rows(&mut owned, width, height, iter)?;
-    out.write_all(&owned).map_err(|e| e.to_string())?;
-    Ok(())
+    crate::png_min::write_png_rows(&mut out, width, height, iter)
 }
 
 /// Row-by-row albedo sampling. The material receives sunlight at runtime.

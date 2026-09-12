@@ -151,6 +151,10 @@ pub struct FlightStepInput {
     pub wind_velocity_body_mps: DVec3,
     pub extra_force_body_n: DVec3,
     pub extra_moment_body_nm: DVec3,
+    /// Explicit vacuum-only fast path. Set only for a medium with exactly
+    /// zero aerodynamic load, not solely a low density: speed and spin can
+    /// amplify even a tenuous atmosphere. Defaults to false.
+    pub skip_aero: bool,
 }
 
 impl FlightStepInput {
@@ -162,6 +166,7 @@ impl FlightStepInput {
             wind_velocity_body_mps: DVec3::ZERO,
             extra_force_body_n: DVec3::ZERO,
             extra_moment_body_nm: DVec3::ZERO,
+            skip_aero: false,
         }
     }
 
@@ -223,9 +228,24 @@ pub fn evaluate_flight_forces<M: AeroModel>(
     let velocity_body_mps =
         state.orientation_body_to_inertial.inverse() * state.velocity_inertial_mps;
     let aero_state = AeroState::new(velocity_body_mps, state.angular_velocity_body_rps);
-    let aero = model
-        .evaluate_state(aero_state, environment, geometry)
-        .map_err(FlightError::Aero)?;
+    let aero = if input.skip_aero {
+        let airspeed_mps =
+            (aero_state.velocity_body_mps - environment.wind_velocity_body_mps).length();
+        let mach = airspeed_mps / environment.speed_of_sound_mps;
+        AeroResult {
+            force_body_n: DVec3::ZERO,
+            moment_body_nm: DVec3::ZERO,
+            dynamic_pressure_pa: 0.0,
+            mach: if mach.is_finite() { mach } else { 0.0 },
+            reynolds_number: 0.0,
+            panel_count: 0,
+            panel_loads: None,
+        }
+    } else {
+        model
+            .evaluate_state(aero_state, environment, geometry)
+            .map_err(FlightError::Aero)?
+    };
     let total_force_body_n = aero.force_body_n + input.extra_force_body_n;
     let total_moment_body_nm = aero.moment_body_nm + input.extra_moment_body_nm;
     let total_force_inertial_n = state.orientation_body_to_inertial * total_force_body_n;
@@ -332,6 +352,48 @@ pub fn integrate_rigid_body_step<M: AeroModel>(
         angular_velocity_body_rps,
     )?;
     Ok((next_state, forces))
+}
+
+/// Advance only attitude (orientation + spin) under a body-frame moment,
+/// leaving translation untouched. This is the on-rails half of an unpowered
+/// vacuum coast: translation is sampled from the baked coast path (the same
+/// path the map prediction draws), while RCS attitude authority keeps
+/// integrating at full rate. Splitting here instead of in the caller keeps
+/// the Euler-midpoint/Cayley solver authoritative in one place.
+pub fn integrate_attitude_step(
+    orientation_body_to_inertial: glam::DQuat,
+    angular_velocity_body_rps: glam::DVec3,
+    inertia_body_kg_m2: glam::DMat3,
+    total_moment_body_nm: glam::DVec3,
+    step_s: f64,
+) -> Result<(glam::DQuat, glam::DVec3), FlightError> {
+    if !step_s.is_finite() || step_s < MIN_STEP_S {
+        return Err(FlightError::InvalidStep);
+    }
+    integrate_rotation(
+        orientation_body_to_inertial,
+        angular_velocity_body_rps,
+        inertia_body_kg_m2,
+        total_moment_body_nm,
+        step_s,
+    )
+}
+
+/// Exact free rotation when angular velocity is constant in body axes.
+/// Arbitrary asymmetric tumbling returns None: conserving angular momentum
+/// does not in general mean constant angular velocity. No external moment.
+pub fn constant_spin_orientation(
+    initial: glam::DQuat,
+    omega_body: DVec3,
+    inertia_body: DMat3,
+    elapsed_s: f64,
+) -> Option<glam::DQuat> {
+    if !elapsed_s.is_finite() || elapsed_s < 0.0 || !initial.is_finite()
+        || !omega_body.is_finite() || !inertia_body.is_finite()
+        || omega_body.cross(inertia_body * omega_body) != DVec3::ZERO {
+        return None;
+    }
+    Some((initial * glam::DQuat::from_scaled_axis(omega_body * elapsed_s)).normalize())
 }
 
 /// Advance a vehicle for a bounded duration using deterministic equal-sized

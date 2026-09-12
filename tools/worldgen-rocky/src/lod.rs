@@ -74,31 +74,120 @@ pub fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
 /// Screen-distance refinement, conservative horizon culling and a hard tile
 /// budget. Selection does not depend on previous frames or worker order.
 pub fn select_tiles(eye: [f64; 3], radius: f64, max_level: u8, budget: usize) -> Vec<TileKey> {
+    select_tiles_with_height(eye, radius, max_level, budget, |_| 0.0)
+}
+
+/// Camera frustum for selection culling, in the same body-fixed frame as the
+/// tile directions. Only tiles whose center falls inside the cone (plus tile
+/// angular radius) are seeded/refined: from 5 km the horizon cone admits a
+/// 500 km disc that would eat any budget before the nadir refines. Fast
+/// swings are safe — the client swaps selections only once fully cached, so
+/// a culled frame keeps the previous complete set for one selection period.
+#[derive(Debug, Clone, Copy)]
+pub struct SelectionFrustum {
+    pub forward: [f64; 3],
+    /// Cosine of the keep cone half-angle (FOV/2 plus swing margin).
+    pub cos_limit: f64,
+}
+
+/// Same deterministic priority queue, measuring distance to the actual surface.
+/// Sample the canonical field at a fixed wavelength so camera motion cannot
+/// change geography. Cache priorities within this selection, not across worlds.
+pub fn select_tiles_with_height(
+    eye: [f64; 3],
+    radius: f64,
+    max_level: u8,
+    budget: usize,
+    height: impl Fn([f64; 3]) -> f64,
+) -> Vec<TileKey> {
+    select_tiles_with_height_and_frustum(eye, radius, max_level, budget, height, None)
+}
+
+/// Frustum-culled variant of [`select_tiles_with_height`].
+pub fn select_tiles_with_height_and_frustum(
+    eye: [f64; 3],
+    radius: f64,
+    max_level: u8,
+    budget: usize,
+    height: impl Fn([f64; 3]) -> f64,
+    frustum: Option<SelectionFrustum>,
+) -> Vec<TileKey> {
     let eye_r = dot(eye, eye).sqrt();
     let eye_dir = normalize(eye);
     let horizon = (radius / eye_r.max(radius)).clamp(0.0, 1.0).acos();
-    let mut queue: Vec<_> = (0..6).map(TileKey::root).collect();
-    let mut leaves = Vec::new();
-    while let Some(key) = queue.pop() {
+    let visible = |key: TileKey| {
         let center = key.direction(0.5, 0.5);
-        let angular_bound = (2.0 / (1_u64 << key.level) as f64).min(std::f64::consts::PI);
-        if dot(center, eye_dir)
-            < (horizon + angular_bound + 0.10)
-                .min(std::f64::consts::PI)
-                .cos()
-        {
-            continue;
+        let bound = (2.0 / (1_u64 << key.level) as f64).min(std::f64::consts::PI);
+        if dot(center, eye_dir) < (horizon + bound + 0.10).min(std::f64::consts::PI).cos() {
+            return false;
         }
-        let delta = sub(eye, center.map(|x| x * radius));
-        let distance = dot(delta, delta).sqrt();
-        if key.level < max_level.min(20)
-            && distance < key.span_m(radius) * 2.4
-            && queue.len() + leaves.len() + 4 <= budget.max(6)
-        {
-            queue.extend(key.children());
+        if let Some(frustum) = frustum {
+            // Tile angular radius from the eye, padded so edges never clip.
+            // The direction runs eye -> tile (down toward the ground), matching
+            // the camera forward convention.
+            let surface_r = radius + height(center).max(0.0);
+            let to_tile = sub(center.map(|v| v * surface_r), eye);
+            let distance = dot(to_tile, to_tile).sqrt().max(1.0);
+            let bound = key.span_m(radius);
+            if distance <= bound {
+                return true;
+            }
+            let angular_radius = (bound / distance).clamp(0.0, 1.0).asin();
+            let facing = dot(normalize(to_tile), normalize(frustum.forward));
+            if facing < (angular_radius + frustum.cos_limit.clamp(-1.0, 1.0).acos()).cos() {
+                return false;
+            }
+        }
+        true
+    };
+    let priorities = std::cell::RefCell::new(std::collections::BTreeMap::new());
+    let priority = |key: TileKey| {
+        if let Some(value) = priorities.borrow().get(&key) {
+            return *value;
+        }
+        let dir = key.direction(0.5, 0.5);
+        let surface_r = radius + height(dir).max(0.0);
+        let delta = sub(eye, dir.map(|v| v * surface_r));
+        let distance = dot(delta, delta).sqrt().max(1.0);
+        // Rank error relative to the tile's own quality target. Ranking raw
+        // angular span spends the budget on peripheral tiles that already
+        // satisfy their relaxed target, starving the center of the view.
+        let stop = if let Some(frustum) = frustum {
+            let off_axis = dot(normalize(delta.map(|v| -v)), normalize(frustum.forward))
+                .clamp(-1.0, 1.0)
+                .acos();
+            let half_cone = frustum.cos_limit.clamp(-1.0, 1.0).acos().max(1e-3);
+            let edge = (off_axis / half_cone).min(1.0);
+            let base = if distance > 100_000.0 {
+                1.0 / 10.0
+            } else {
+                1.0 / 48.0
+            };
+            base * (1.0 + 8.0 * edge * edge)
         } else {
-            leaves.push(key);
+            1.0 / 2.4
+        };
+        let value = key.span_m(radius) / distance / stop;
+        priorities.borrow_mut().insert(key, value);
+        value
+    };
+    let mut leaves: Vec<_> = (0..6).map(TileKey::root).filter(|k| visible(*k)).collect();
+    // Strict tile budget, prioritizing normalized projected error.
+    while leaves.len() + 3 <= budget.max(6) {
+        let candidate = leaves
+            .iter()
+            .enumerate()
+            .filter(|(_, key)| key.level < max_level.min(20))
+            .max_by(|(_, a), (_, b)| priority(**a).total_cmp(&priority(**b)));
+        let Some((index, key)) = candidate else {
+            break;
+        };
+        if priority(*key) <= 1.0 {
+            break;
         }
+        let children = key.children();
+        leaves.swap_remove(index);
+        leaves.extend(children.into_iter().filter(|k| visible(*k)));
     }
     leaves.sort();
     leaves
@@ -255,6 +344,232 @@ mod tests {
         assert_eq!(
             near,
             select_tiles([3_201_000.0, 0.0, 0.0], 3_200_000.0, 17, 384)
+        );
+    }
+}
+
+/// Per-tile surface atlas. Geometry and material share spherical coordinates;
+/// a one-texel apron keeps linear filtering continuous at tile boundaries.
+pub struct SurfaceTexture {
+    pub size: usize,
+    pub albedo: Vec<u8>,
+    pub roughness: Vec<u8>,
+    pub normal: Vec<u8>,
+}
+pub fn build_surface_texture(field: &PlanetField, key: TileKey, cells: usize) -> SurfaceTexture {
+    build_surface_texture_for_mesh(field, key, cells, 24)
+}
+
+/// Material normals must subtract the wavelength of the actual mesh grid.
+pub fn build_surface_texture_for_mesh(
+    field: &PlanetField,
+    key: TileKey,
+    cells: usize,
+    mesh_cells: usize,
+) -> SurfaceTexture {
+    assert!((2..=64).contains(&mesh_cells));
+    let size = cells + 3;
+    let mut result = SurfaceTexture {
+        size,
+        albedo: Vec::with_capacity(size * size * 4),
+        roughness: Vec::with_capacity(size * size * 4),
+        normal: vec![0; size * size * 4],
+    };
+    let wavelength = (key.span_m(field.params.radius_m) / cells as f64).max(2.0);
+    let mesh_wavelength = (key.span_m(field.params.radius_m) / mesh_cells as f64 * 2.0).max(32.0);
+    // Reuse the texel neighborhood for material slope instead of paying
+    // for three extra field queries per pixel through the full sample API.
+    let mut samples = Vec::with_capacity(size * size);
+    for y in 0..size {
+        for x in 0..size {
+            samples.push(field.sample_surface(
+                key.direction(
+                    (x as f64 - 1.0) / cells as f64,
+                    (y as f64 - 1.0) / cells as f64,
+                ),
+                32.0,
+            ));
+        }
+    }
+    let mut residual = vec![0.0; size * size];
+    for y in 0..size {
+        for x in 0..size {
+            let dir = key.direction(
+                (x as f64 - 1.0) / cells as f64,
+                (y as f64 - 1.0) / cells as f64,
+            );
+            let mut sample = samples[y * size + x].clone();
+            let dhx = (samples[y * size + (x + 1).min(size - 1)].height_m
+                - samples[y * size + x.saturating_sub(1)].height_m)
+                / (2.0 * wavelength);
+            let dhy = (samples[(y + 1).min(size - 1) * size + x].height_m
+                - samples[y.saturating_sub(1) * size + x].height_m)
+                / (2.0 * wavelength);
+            sample.slope_hint = dhx.hypot(dhy);
+            let material = surface_appearance(field, &sample, dir);
+            residual[y * size + x] =
+                sample.height_m.max(0.0) - field.height_m(dir, mesh_wavelength).max(0.0);
+            let grain: f32 = [8.0_f64, 32.0, 128.0, 512.0]
+                .into_iter()
+                .enumerate()
+                .map(|(band, scale)| {
+                    let p = dir.map(|v| v * field.params.radius_m / scale);
+                    (crate::rng::value_noise3(
+                        field.params.seed,
+                        2201 + band as u32,
+                        p[0],
+                        p[1],
+                        p[2],
+                    ) * (scale / wavelength).clamp(0.0, 1.0)
+                        * 0.3) as f32
+                })
+                .sum();
+            let detail = if sample.height_m > 0.0 {
+                1.0 + grain * 0.25
+            } else {
+                1.0
+            };
+            result.albedo.extend(
+                material
+                    .albedo_srgb
+                    .map(|v| (v * detail * 255.0).clamp(0.0, 255.0) as u8),
+            );
+            result.albedo.push(255);
+            result
+                .roughness
+                .extend([255, (material.roughness * 255.0) as u8, 0, 255]);
+        }
+    }
+    for y in 0..size {
+        for x in 0..size {
+            let dx = (residual[y * size + (x + 1).min(size - 1)]
+                - residual[y * size + x.saturating_sub(1)])
+                / (2.0 * wavelength);
+            let dy = (residual[(y + 1).min(size - 1) * size + x]
+                - residual[y.saturating_sub(1) * size + x])
+                / (2.0 * wavelength);
+            let normal = normalize([-dx, -dy, 1.0]);
+            let i = (y * size + x) * 4;
+            for (j, n) in normal.into_iter().enumerate() {
+                result.normal[i + j] = ((n * 0.5 + 0.5) * 255.0).round() as u8;
+            }
+            result.normal[i + 3] = 255;
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod surface_regressions {
+    use super::*;
+    fn field() -> PlanetField {
+        let recipe =
+            toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml")).unwrap();
+        crate::field::field_from_manifest(&crate::spec_recipe::manifest_from_spec(&recipe).unwrap())
+            .unwrap()
+    }
+    #[test]
+    fn neighboring_material_edges_are_identical_and_opaque() {
+        let field = field();
+        let key = TileKey {
+            face: 0,
+            level: 10,
+            x: 510,
+            y: 511,
+        };
+        let a = build_surface_texture(&field, key, 16);
+        let b = build_surface_texture(&field, TileKey { x: 511, ..key }, 16);
+        for y in 1..18 {
+            let ai = (y * a.size + 17) * 4;
+            let bi = (y * b.size + 1) * 4;
+            assert_eq!(&a.albedo[ai..ai + 4], &b.albedo[bi..bi + 4]);
+            assert_eq!(&a.roughness[ai..ai + 4], &b.roughness[bi..bi + 4]);
+            assert_eq!(&a.normal[ai..ai + 4], &b.normal[bi..bi + 4]);
+        }
+        assert!(a.albedo.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
+        let mesh = build_tile(&field, key, 24);
+        assert!(mesh.positions.iter().flatten().all(|v| v.is_finite()));
+    }
+    #[test]
+    fn priority_refinement_covers_the_camera_instead_of_a_distant_face() {
+        let dir = normalize([1872802.375, 1551433.0, -2079957.75]);
+        let eye = dir.map(|x| x * 3_201_000.0);
+        let keys = select_tiles(eye, 3_200_000.0, 17, 192);
+        let nearest = keys
+            .iter()
+            .min_by(|a, b| {
+                dot(a.direction(0.5, 0.5), dir)
+                    .acos()
+                    .total_cmp(&dot(b.direction(0.5, 0.5), dir).acos())
+            })
+            .unwrap();
+        assert!(
+            nearest.level >= 10,
+            "camera tile is too coarse: {nearest:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod elevation_lod_tests {
+    use super::*;
+    #[test]
+    fn nearby_high_plateau_gets_near_surface_detail() {
+        let radius = 3_200_000.0;
+        let eye = [radius + 5050.0, 0.0, 0.0];
+        let datum = select_tiles(eye, radius, 17, 192);
+        let elevated = select_tiles_with_height(eye, radius, 17, 192, |_| 5000.0);
+        assert!(
+            elevated.iter().map(|k| k.level).max().unwrap()
+                >= datum.iter().map(|k| k.level).max().unwrap() + 3
+        );
+        assert_eq!(
+            elevated,
+            select_tiles_with_height(eye, radius, 17, 192, |_| 5000.0)
+        );
+        assert!(elevated.len() <= 192);
+    }
+}
+
+#[cfg(test)]
+mod near_field_regression_tests {
+    use super::*;
+    #[test]
+    fn five_km_survey_reaches_l16_under_the_camera() {
+        // Live failure: the survey view from 5 km rendered flat gray because
+        // selection stalled at L11-L14 near the camera (horizon-cone
+        // selection sinks the budget into the mid-distance ring). With the
+        // view frustum known, the nadir cone must refine to L16+ in budget.
+        let radius = 3_200_000.0;
+        let eye = [radius + 5000.0, 0.0, 0.0];
+        let eye_dir = normalize(eye);
+        let frustum = SelectionFrustum {
+            forward: normalize([-1.0, 0.0, 0.0]),
+            cos_limit: (0.5_f64 + 0.35).cos(),
+        };
+        let keys =
+            select_tiles_with_height_and_frustum(eye, radius, 17, 320, |_| 0.0, Some(frustum));
+        // One subdivision nets +3 leaves past the budget edge by design.
+        assert!(keys.len() <= 323, "budget overrun: {}", keys.len());
+        let best = keys
+            .iter()
+            .map(|k| (k.level, dot(k.direction(0.5, 0.5), eye_dir).acos()))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .expect("selection non-empty");
+        eprintln!(
+            "nearest tile level {} at {:.3} deg",
+            best.0,
+            best.1.to_degrees()
+        );
+        let mut hist = std::collections::BTreeMap::new();
+        for k in &keys {
+            *hist.entry(k.level).or_insert(0) += 1;
+        }
+        eprintln!("leaves={} hist={:?}", keys.len(), hist);
+        assert!(
+            best.0 >= 15,
+            "near field too coarse from 5 km: L{} under the camera",
+            best.0
         );
     }
 }

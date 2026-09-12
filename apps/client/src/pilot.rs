@@ -20,8 +20,9 @@ use bevy::{
 };
 
 use thessa_sim_core::{
-    AeroConfig, AtmosphereConfig, AtmosphereError, BakedEphemeris, BodyId, BodyState, FlightError,
-    FlightForces, FlightStepInput, GravityField, PanelAeroModel, RigidBodyState, VehicleDefinition,
+    AeroConfig, AtmosphereConfig, AtmosphereError, BakedEphemeris, BodyId, BodyState,
+    EventScheduler, FlightError, FlightForces, FlightStepInput, GravityField, OnRailsCache,
+    PanelAeroModel, RigidBodyState, ScheduledKind, VehicleDefinition,
 };
 
 const HUD_TEXT: Color = Color::srgb(0.91, 0.95, 0.98);
@@ -39,7 +40,13 @@ const PILOT_CAMERA_MIN_DISTANCE_M: f32 = 8.0;
 const PILOT_CAMERA_MAX_DISTANCE_M: f32 = 180.0;
 const X15_SOURCE_LENGTH_M: f32 = 16.77;
 const X15_AUTHORED_LENGTH_M: f32 = 15.45;
-const MAX_PILOT_ALTITUDE_M: f64 = 1.0e9;
+// Solver guard rail, not physics: interlunar transfers range billions of
+// metres from the reference body (outermost catalogued orbit sits near
+// 6e9 m), so the cap covers the whole Nereid system plus escape margin.
+// f64 inertial state holds precision far beyond it; rendering floats on its
+// own origin. Tripping it still latches FLIGHT STOPPED, recoverable with
+// Backspace.
+const MAX_PILOT_ALTITUDE_M: f64 = 2.0e10;
 const MAX_PILOT_RELATIVE_SPEED_MPS: f64 = 50_000.0;
 const MAX_PILOT_ANGULAR_RATE_RPS: f64 = 25.0;
 // KSP-style attitude keys change the SAS target at a pilotable rate. The old
@@ -91,6 +98,30 @@ impl ControlMode {
             Self::Navball => "direct attitude target control",
             Self::Rate => "command angular rates",
             Self::Direct => "raw actuator input",
+        }
+    }
+}
+
+/// Solver regime of the flown vehicle: dense-air 6-DoF flight vs vacuum coast.
+///
+/// Coast is a solver optimization, never a physics switch: translation stays
+/// full multi-body gravity plus thrust, rotation stays torque-free plus RCS.
+/// Below the density threshold aero moments are orders of magnitude under RCS
+/// authority, so the trim solver freezes the surfaces instead of chasing a
+/// near-singular effectiveness matrix. The threshold is a density, not an
+/// altitude, so it follows any atmosphere the config provides.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum FlightRegime {
+    #[default]
+    Aero,
+    Coast,
+}
+
+impl FlightRegime {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Aero => "AERO",
+            Self::Coast => "COAST",
         }
     }
 }
@@ -322,6 +353,8 @@ impl FlightTraceWriter {
     }
 }
 
+type RailsBakeTask = bevy::tasks::Task<Result<(OnRailsCache, f64), String>>;
+
 /// Live, client-owned flight model for the first playable vehicle.
 ///
 /// The authoritative equations stay in `thessa-sim-core`; this resource only
@@ -332,6 +365,8 @@ impl FlightTraceWriter {
 pub(super) struct PilotFlightRuntime {
     pub(super) reference_body: BodyId,
     planet_radius_m: f64,
+    terrain_field: Option<std::sync::Arc<thessa_worldgen_rocky::field::PlanetField>>,
+    launch_site_dir: Option<[f64; 3]>,
     vehicle: VehicleDefinition,
     aero_model: PanelAeroModel,
     atmosphere: AtmosphereConfig,
@@ -348,15 +383,113 @@ pub(super) struct PilotFlightRuntime {
     control_input: DVec3,
     surface_input: DVec3,
     actuator_saturated: bool,
+    regime: FlightRegime,
     accumulator_s: f64,
+    pub(super) steps_this_frame: u32,
+    pub(super) rails_advanced_this_frame: f64,
     flight_error: Option<String>,
     render_orientation: Quat,
     last_gravity_acceleration_inertial_mps2: DVec3,
     last_forces: Option<FlightForces>,
     trace: Option<FlightTraceWriter>,
+    /// The single baked coast trajectory. In an unpowered vacuum coast the
+    /// flight loop samples translation from here (no per-tick integration)
+    /// and the map prediction draws from the same path — one trajectory,
+    /// two consumers. Any thrust, aero load, burn or contact invalidates it.
+    pub(super) rails: OnRailsCache,
+    rails_job: Option<RailsBakeTask>,
+    rails_bake_seconds: Option<f64>,
+    /// Simulation-time event queue: the rails bake arms its wake here, and
+    /// `advance` drains due events instead of polling them every tick.
+    pub(super) scheduler: EventScheduler,
+    /// Last fired wake, for the HUD orbit line.
+    pub(super) wake_notice: Option<String>,
 }
 
 impl PilotFlightRuntime {
+    pub(super) fn initialize_world_site(
+        &mut self,
+        field: std::sync::Arc<thessa_worldgen_rocky::field::PlanetField>,
+        dir: [f64; 3],
+        ephemeris: &BakedEphemeris,
+    ) {
+        let up = DQuat::from_rotation_z(self.terrain_spin()) * DVec3::new(dir[0], -dir[2], dir[1]);
+        let north = (DVec3::Z - up * up.z).normalize();
+        let east = north.cross(up).normalize();
+        let relative = up * (self.planet_radius_m + field.height_m(dir, 32.0).max(0.0) + 500.0);
+        let body = ephemeris
+            .body_state(self.reference_body, SimTime(self.flight_time_s))
+            .expect("launch body");
+        self.state.position_inertial_m = body.position_inertial + relative;
+        self.state.velocity_inertial_mps = body.velocity_inertial
+            + self.atmosphere.body_rotation_rad_s.cross(relative)
+            + east * 180.0
+            - up * 2.0;
+        self.state.orientation_body_to_inertial =
+            DQuat::from_mat3(&bevy::math::DMat3::from_cols(east, north, up))
+                * DQuat::from_rotation_y(-8.0_f64.to_radians());
+        self.sas_target_orientation = self.state.orientation_body_to_inertial;
+        self.render_orientation = render_orientation(self.state.orientation_body_to_inertial);
+        self.render_relative_position_m = relative;
+        self.terrain_field = Some(field);
+        self.launch_site_dir = Some(dir);
+        self.rails.invalidate();
+        self.rails_job = None;
+    }
+    /// Recover from a stopped flight without restarting the app: rebuild the
+    /// launch-site state in place. Clock time is preserved (no rewind);
+    /// controls clear and the engine comes back armed at zero throttle.
+    pub(super) fn reset_to_launch_site(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+    ) -> Result<(), String> {
+        let field = self
+            .terrain_field
+            .clone()
+            .ok_or("no terrain field for reset")?;
+        let dir = self.launch_site_dir.ok_or("no launch site for reset")?;
+        self.flight_error = None;
+        self.engine_active = true;
+        self.throttle = 0.0;
+        self.control_input = DVec3::ZERO;
+        self.surface_input = DVec3::ZERO;
+        self.regime = FlightRegime::Aero;
+        self.accumulator_s = 0.0;
+        self.rails.invalidate();
+        self.rails_job = None;
+        self.scheduler = EventScheduler::new();
+        self.wake_notice = None;
+        self.initialize_world_site(field, dir, ephemeris);
+        Ok(())
+    }
+    pub(super) fn terrain_origin(&self) -> [f64; 3] {
+        let p = self.render_relative_position_m;
+        [p.x, p.z, -p.y]
+    }
+    /// Authoritative inertial craft state for orbit prediction and HUD.
+    pub(super) fn inertial_state_m(&self) -> (DVec3, DVec3) {
+        (
+            self.state.position_inertial_m,
+            self.state.velocity_inertial_mps,
+        )
+    }
+    pub(super) fn terrain_spin(&self) -> f64 {
+        self.flight_time_s * std::f64::consts::TAU / (80.0 * 3600.0)
+    }
+    pub(super) fn stop_reason(&self) -> Option<&str> {
+        self.flight_error.as_deref()
+    }
+
+    pub(super) fn backlog_s(&self) -> f64 {
+        self.accumulator_s
+    }
+    pub(super) fn regime(&self) -> FlightRegime {
+        self.regime
+    }
+    pub(super) fn panel_count(&self) -> u32 {
+        self.vehicle.aero_geometry.panels.len() as u32
+    }
+
     pub(super) fn new(ephemeris: &BakedEphemeris, reference_body: BodyId) -> Result<Self, String> {
         let body = ephemeris
             .body(reference_body)
@@ -413,6 +546,8 @@ impl PilotFlightRuntime {
         Ok(Self {
             reference_body,
             planet_radius_m: body.radius_m,
+            terrain_field: None,
+            launch_site_dir: None,
             vehicle,
             aero_model,
             atmosphere,
@@ -428,12 +563,20 @@ impl PilotFlightRuntime {
             control_input: DVec3::ZERO,
             surface_input: DVec3::ZERO,
             actuator_saturated: false,
+            regime: FlightRegime::Aero,
             accumulator_s: 0.0,
+            steps_this_frame: 0,
+            rails_advanced_this_frame: 0.0,
             flight_error: None,
             render_orientation: render_orientation(orientation_body_to_inertial),
             last_gravity_acceleration_inertial_mps2: DVec3::ZERO,
             last_forces: None,
             trace: None,
+            rails: OnRailsCache::new(),
+            rails_job: None,
+            rails_bake_seconds: None,
+            scheduler: EventScheduler::new(),
+            wake_notice: None,
         })
     }
 
@@ -527,6 +670,7 @@ struct FlightUiState {
     rcs_enabled: bool,
     engine_active: bool,
     gear_down: bool,
+    regime: FlightRegime,
     guidance_mode: Option<String>,
     warnings: Vec<String>,
 }
@@ -639,7 +783,7 @@ impl Default for PilotHudState {
 struct PilotPreviewVisual;
 
 #[derive(Component)]
-struct PilotPlanetVisual;
+pub(super) struct PilotPlanetVisual;
 
 #[derive(Component)]
 struct PilotCraftVisual;
@@ -649,6 +793,8 @@ struct PilotEngineFlame;
 
 pub(super) struct PilotHudPlugin;
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct PilotUpdate;
 impl Plugin for PilotHudPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PilotHudState>()
@@ -663,7 +809,8 @@ impl Plugin for PilotHudPlugin {
                     update_pilot_preview,
                     update_pilot_hud,
                 )
-                    .chain(),
+                    .chain()
+                    .in_set(PilotUpdate),
             );
     }
 }
@@ -790,7 +937,11 @@ fn update_pilot_preview(
             perspective.far = (runtime.render_relative_position_m.length()
                 + runtime.planet_radius_m * 2.0) as f32;
         }
-        **camera = pilot_camera_transform(&state, runtime.render_orientation);
+        **camera = pilot_camera_transform(
+            &state,
+            runtime.render_orientation,
+            pilot_render_offset(runtime.render_relative_position_m).normalize(),
+        );
     }
     for (mut transform, mut visibility) in &mut preview {
         *visibility = if active {
@@ -812,6 +963,8 @@ fn update_pilot_preview(
             // The craft and all its child meshes stay near zero even after
             // an interplanetary flight; no centimetre-scale f32 cancellation.
             transform.translation = pilot_render_offset(-runtime.render_relative_position_m);
+            transform.rotation =
+                Quat::from_rotation_y(runtime.terrain_spin() as f32) * SPHERE_POLE_TO_WORLD_UP;
         }
     }
     // Copy the authoritative pose even while paused: a freshly spawned scene
@@ -925,12 +1078,16 @@ fn update_navball_image(image: &mut Image, local_up_body: DVec3) {
 
 fn simulate_pilot_flight(
     time: Res<Time>,
-    clock: Res<SimulationClock>,
+    mut clock: ResMut<SimulationClock>,
     ephemeris: Res<RuntimeEphemeris>,
     state: Res<PilotHudState>,
     mut runtime: ResMut<PilotFlightRuntime>,
+    mut perf: ResMut<crate::perf::PerfMonitor>,
 ) {
-    if state.view_mode != ClientViewMode::Pilot || clock.paused {
+    runtime.steps_this_frame = 0;
+    runtime.rails_advanced_this_frame = 0.0;
+    clock.sim_seconds = runtime.flight_time_s;
+    if clock.paused {
         return;
     }
 
@@ -938,10 +1095,24 @@ fn simulate_pilot_flight(
         return;
     }
     let frame_dt = time.delta_secs_f64().clamp(0.0, 0.1);
-    if let Err(error) = runtime.advance(&ephemeris.ephemeris, state.control_mode, frame_dt) {
+    let started = std::time::Instant::now();
+    if let Err(error) = runtime.advance_with_budget(
+        &ephemeris.ephemeris,
+        state.control_mode,
+        frame_dt * clock.multiplier,
+        Some(std::time::Duration::from_millis(8)),
+    ) {
         runtime.engine_active = false;
         runtime.control_input = DVec3::ZERO;
+        runtime.accumulator_s = 0.0;
+        perf.push_event("Flight stopped", Some(error.to_string()));
         runtime.flight_error = Some(error.to_string());
+    }
+    clock.sim_seconds = runtime.flight_time_s;
+    perf.record_sim(started.elapsed().as_secs_f64());
+    if let Some(seconds) = runtime.rails_bake_seconds.take() {
+        perf.record_scope("simulation.coast_bake", seconds);
+        perf.push_event("Coast trajectory baked", Some(format!("{seconds:.3} s")));
     }
 }
 
@@ -979,15 +1150,26 @@ fn pilot_render_offset(relative_delta_m: DVec3) -> Vec3 {
     )
 }
 
-fn pilot_camera_transform(state: &PilotHudState, craft_orientation: Quat) -> Transform {
+fn pilot_camera_transform(
+    state: &PilotHudState,
+    craft_orientation: Quat,
+    local_up: Vec3,
+) -> Transform {
     // Quaternion orbit has no polar clamp and retains camera-up through
     // vertical crossings. Panning uses camera axes, not fixed world axes.
+    let forward = craft_orientation * Vec3::Y;
     let basis = if state.pilot_camera_chase {
-        craft_orientation
-            * x15_asset_to_craft_rotation()
-            * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2)
+        Quat::from_mat3(&Mat3::from_cols(
+            -craft_orientation * Vec3::X,
+            -craft_orientation * Vec3::Z,
+            -forward,
+        ))
     } else {
-        Quat::IDENTITY
+        let north = (Vec3::Y - local_up * local_up.y)
+            .try_normalize()
+            .unwrap_or(Vec3::Z);
+        let east = north.cross(local_up).normalize();
+        Quat::from_mat3(&Mat3::from_cols(east, local_up, -north))
     };
     let orbit = basis * state.pilot_camera_orbit;
     let up = orbit * Vec3::Y;
@@ -1016,10 +1198,21 @@ fn pilot_input(
     mut mouse_wheel: MessageReader<MouseWheel>,
     mut state: ResMut<PilotHudState>,
     mut runtime: ResMut<PilotFlightRuntime>,
+    ephemeris: Res<RuntimeEphemeris>,
 ) {
     let mut scroll = 0.0;
 
+    // A stopped flight soft-locks the session without this: rebuild the
+    // launch-site state in place (clock time preserved).
+    if runtime.flight_error.is_some()
+        && keys.just_pressed(KeyCode::Backspace)
+        && let Err(error) = runtime.reset_to_launch_site(&ephemeris.ephemeris)
+    {
+        runtime.flight_error = Some(error);
+    }
+
     if keys.just_pressed(KeyCode::KeyM) {
+        runtime.control_input = DVec3::ZERO;
         state.view_mode = match state.view_mode {
             ClientViewMode::Map => ClientViewMode::Pilot,
             ClientViewMode::Pilot => ClientViewMode::Map,
@@ -1160,19 +1353,14 @@ fn update_flight_ui_state(
     map: Res<MapState>,
     runtime: Res<RuntimeEphemeris>,
     flight_runtime: Res<PilotFlightRuntime>,
+    terrain: Res<terrain::WorldTerrain>,
     mut state: ResMut<PilotHudState>,
 ) {
-    let reference_body = runtime
-        .ephemeris
-        .body(flight_runtime.reference_body)
-        .ok()
-        .map(|body| body.name.to_uppercase());
-    state.flight = live_flight_ui_state(
-        &flight_runtime,
-        &runtime.ephemeris,
-        reference_body,
-        clock.sim_seconds,
-    );
+    state.flight = live_flight_ui_state(&flight_runtime, &runtime.ephemeris, clock.sim_seconds);
+    let origin = DVec3::from_array(flight_runtime.terrain_origin());
+    let body_dir = DQuat::from_rotation_y(-flight_runtime.terrain_spin()) * origin.normalize();
+    let ground = terrain.field.height_m(body_dir.to_array(), 32.0).max(0.0);
+    state.flight.altitude_agl_m = Some(origin.length() - terrain.field.params.radius_m - ground);
     // `map` remains in the signature deliberately: the flight HUD and map
     // share the same body selection resource, but a pilot always flies the
     // selected playable world rather than the current map zoom focus.
@@ -1182,14 +1370,20 @@ fn update_flight_ui_state(
 fn live_flight_ui_state(
     flight: &PilotFlightRuntime,
     ephemeris: &BakedEphemeris,
-    reference_body_name: Option<String>,
     _map_time_s: f64,
 ) -> FlightUiState {
-    let Ok(body_state) = ephemeris.body_state(flight.reference_body, SimTime(flight.flight_time_s))
-    else {
+    let time = SimTime(flight.flight_time_s);
+    // Display frame follows the strongest local pull, not the launch site:
+    // near Nereid the speeds, datum and apsides read relative to Nereid.
+    // Display-only hint — the solver keeps integrating against reference_body.
+    let display_body = ephemeris
+        .dominant_body(flight.state.position_inertial_m, time)
+        .unwrap_or(flight.reference_body);
+    let at_home = display_body == flight.reference_body;
+    let Ok(body_state) = ephemeris.body_state(display_body, time) else {
         return FlightUiState::default();
     };
-    let Ok(body) = ephemeris.body(flight.reference_body) else {
+    let Ok(body) = ephemeris.body(display_body) else {
         return FlightUiState::default();
     };
     let Ok(kinematics) =
@@ -1200,14 +1394,25 @@ fn live_flight_ui_state(
     let relative_position = kinematics.relative_position_inertial_m;
     let radial_up = kinematics.radial_up;
     let velocity_relative_inertial = kinematics.relative_velocity_inertial_mps;
-    let velocity_surface = kinematics.surface_velocity_inertial_mps;
+    // The atmosphere model belongs to the home world: its rotation correction
+    // is only valid there. Away from home the surface speed is the plain
+    // dominant-relative speed and air data is unavailable, not extrapolated.
+    let velocity_surface = if at_home {
+        kinematics.surface_velocity_inertial_mps
+    } else {
+        velocity_relative_inertial
+    };
     let forces = flight.last_forces.as_ref();
     let environment = forces.map(|forces| forces.environment);
     // The solver's environment contains body translation plus body rotation;
     // use the same explicitly separated terms for the HUD. This prevents the
     // moon's orbital velocity from appearing as a 40 km/s airspeed sample.
     let air_velocity = kinematics.air_velocity_body_mps;
-    let air_speed = air_velocity.length();
+    let air_speed = if at_home {
+        Some(air_velocity.length())
+    } else {
+        None
+    };
     let surface_speed = velocity_surface.length();
     let forward = flight.state.orientation_body_to_inertial * DVec3::X;
     let right = flight.state.orientation_body_to_inertial * DVec3::Y;
@@ -1240,24 +1445,32 @@ fn live_flight_ui_state(
         angular_velocity_rad_s: flight.state.angular_velocity_body_rps,
         attitude_frame: AttitudeFrame::Local,
         environment: FlightEnvironment {
-            reference_body: reference_body_name,
+            reference_body: Some(body.name.to_uppercase()),
             atmosphere_available: true,
             terrain_available: false,
-            pressure_pa: environment.map(|environment| {
-                // The atmosphere sample is deterministic; q and Mach come
-                // from the same environment, avoiding a second atmosphere
-                // approximation in the display path.
-                environment.density_kg_m3 * environment.speed_of_sound_mps.powi(2)
-                    / flight.atmosphere.heat_capacity_ratio
-            }),
-            density_kg_m3: environment.map(|environment| environment.density_kg_m3),
+            pressure_pa: if at_home {
+                environment.map(|environment| {
+                    // The atmosphere sample is deterministic; q and Mach come
+                    // from the same environment, avoiding a second atmosphere
+                    // approximation in the display path.
+                    environment.density_kg_m3 * environment.speed_of_sound_mps.powi(2)
+                        / flight.atmosphere.heat_capacity_ratio
+                })
+            } else {
+                None
+            },
+            density_kg_m3: if at_home {
+                environment.map(|environment| environment.density_kg_m3)
+            } else {
+                None
+            },
         },
         surface_velocity_mps: velocity_surface,
         orbital_velocity_mps: velocity_relative_inertial,
         gravity_acceleration_mps2: flight.last_gravity_acceleration_inertial_mps2,
         local_up_body: flight.state.orientation_body_to_inertial.inverse() * radial_up,
         surface_speed_m_s: Some(surface_speed),
-        air_speed_m_s: Some(air_speed),
+        air_speed_m_s: air_speed,
         orbital_speed_m_s: Some(velocity_relative_inertial.length()),
         target_speed_m_s: None,
         altitude_datum_m: Some(altitude_m.max(0.0)),
@@ -1267,18 +1480,34 @@ fn live_flight_ui_state(
         heading_deg: Some(heading_deg),
         pitch_deg: Some(pitch_deg),
         roll_deg: Some(roll_deg),
-        mach: forces.map(|forces| forces.aero.mach),
-        dynamic_pressure_pa: forces.map(|forces| forces.aero.dynamic_pressure_pa),
-        angle_of_attack_deg: Some(conventional_angle_of_attack_deg(
-            kinematics.air_velocity_body_mps,
-        )),
-        sideslip_deg: Some(
-            kinematics
-                .air_velocity_body_mps
-                .y
-                .atan2(kinematics.air_velocity_body_mps.x.abs().max(1.0e-6))
-                .to_degrees(),
-        ),
+        mach: if at_home {
+            forces.map(|forces| forces.aero.mach)
+        } else {
+            None
+        },
+        dynamic_pressure_pa: if at_home {
+            forces.map(|forces| forces.aero.dynamic_pressure_pa)
+        } else {
+            None
+        },
+        angle_of_attack_deg: if at_home {
+            Some(conventional_angle_of_attack_deg(
+                kinematics.air_velocity_body_mps,
+            ))
+        } else {
+            None
+        },
+        sideslip_deg: if at_home {
+            Some(
+                kinematics
+                    .air_velocity_body_mps
+                    .y
+                    .atan2(kinematics.air_velocity_body_mps.x.abs().max(1.0e-6))
+                    .to_degrees(),
+            )
+        } else {
+            None
+        },
         apoapsis_altitude_m: Some(apoapsis_altitude_m),
         periapsis_altitude_m: Some(periapsis_altitude_m),
         time_to_apoapsis_s: None,
@@ -1294,6 +1523,7 @@ fn live_flight_ui_state(
         rcs_enabled: flight.rcs_enabled,
         engine_active: flight.engine_active,
         gear_down: flight.gear_down,
+        regime: flight.regime(),
         guidance_mode: Some(
             match flight.sas_enabled {
                 true => "SAS / PILOT",
@@ -1305,8 +1535,10 @@ fn live_flight_ui_state(
             let mut warnings = Vec::new();
             if let Some(error) = &flight.flight_error {
                 warnings.push(format!("FLIGHT STOPPED: {error}"));
+                warnings.push("BACKSPACE resets flight".into());
             }
-            if forces.is_some_and(|forces| forces.aero.dynamic_pressure_pa >= 100.0)
+            if at_home
+                && forces.is_some_and(|forces| forces.aero.dynamic_pressure_pa >= 100.0)
                 && conventional_angle_of_attack_deg(air_velocity).abs() >= X15_STALL_ANGLE_DEG
             {
                 warnings.push("HIGH ANGLE OF ATTACK".into());
@@ -1537,12 +1769,15 @@ mod tests {
         let mut hud = PilotHudState::default();
         for degrees in 0..=720 {
             hud.pilot_camera_orbit = Quat::from_rotation_x((degrees as f32).to_radians());
-            let camera = pilot_camera_transform(&hud, Quat::IDENTITY);
+            let camera = pilot_camera_transform(&hud, Quat::IDENTITY, Vec3::Y);
             assert!(camera.rotation.is_finite());
             assert!((camera.translation.length() - hud.pilot_camera_distance).abs() < 1.0e-4);
         }
+        hud.pilot_camera_orbit = Quat::IDENTITY;
+        let first = pilot_camera_transform(&hud, Quat::IDENTITY, Vec3::Y).translation;
         hud.pilot_camera_orbit = Quat::from_rotation_x(std::f32::consts::PI);
-        assert!(pilot_camera_transform(&hud, Quat::IDENTITY).translation.z < 0.0);
+        let opposite = pilot_camera_transform(&hud, Quat::IDENTITY, Vec3::Y).translation;
+        assert!(first.dot(opposite) < 0.0);
     }
 
     #[test]
@@ -1618,6 +1853,83 @@ mod tests {
         assert!(
             (relative_velocity.length() - (180.0_f64.powi(2) + 2.0_f64.powi(2)).sqrt()).abs()
                 < 1.0e-9
+        );
+    }
+
+    #[test]
+    fn display_frame_follows_strongest_pull_not_launch_site() {
+        let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml"))
+            .expect("checked-in system config parses");
+        let ephemeris = config.bake().expect("checked-in system bakes");
+        let thessa = ephemeris.body_id("thessa").expect("playable body exists");
+        let nereid = ephemeris.body_id("nereid").expect("giant exists");
+        let mut flight =
+            PilotFlightRuntime::new(&ephemeris, thessa).expect("X-15 runtime initializes");
+        // Park 100 km over Nereid, co-moving with it: Thessa-relative speed
+        // is tens of km/s here, Nereid-relative is zero.
+        let giant = ephemeris
+            .body_state(nereid, SimTime::EPOCH)
+            .expect("giant state evaluates");
+        let giant_body = ephemeris.body(nereid).expect("giant descriptor");
+        flight.state.position_inertial_m =
+            giant.position_inertial + DVec3::Z * (giant_body.radius_m + 100_000.0);
+        flight.state.velocity_inertial_mps = giant.velocity_inertial;
+        flight.flight_time_s = 0.0;
+        let ui = live_flight_ui_state(&flight, &ephemeris, 0.0);
+        assert_eq!(ui.environment.reference_body.as_deref(), Some("NEREID"));
+        // Orbital readout is giant-relative (rest), not Thessa-relative.
+        assert!(
+            ui.orbital_speed_m_s.is_some_and(|v| v < 1.0),
+            "orbital speed must read Nereid-relative, got {:?}",
+            ui.orbital_speed_m_s
+        );
+        // Thessa's air model does not extend to Nereid: no extrapolated air.
+        assert_eq!(ui.air_speed_m_s, None);
+        assert_eq!(ui.mach, None);
+        assert!((ui.altitude_datum_m.unwrap_or(f64::NAN) - 100_000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn stopped_flight_resets_to_launch_site() {
+        use std::sync::Arc;
+        use thessa_worldgen_rocky::{
+            field::field_from_manifest,
+            spec_recipe::{SpecRecipe, manifest_from_spec},
+        };
+        let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml"))
+            .expect("checked-in system config parses");
+        let ephemeris = config.bake().expect("checked-in system bakes");
+        let reference_body = ephemeris.body_id("thessa").expect("playable body exists");
+        let mut flight =
+            PilotFlightRuntime::new(&ephemeris, reference_body).expect("X-15 runtime initializes");
+        let recipe: SpecRecipe =
+            toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml"))
+                .expect("worldgen recipe parses");
+        let manifest = manifest_from_spec(&recipe).expect("world manifest builds");
+        let field = Arc::new(field_from_manifest(&manifest).expect("world field builds"));
+        flight.initialize_world_site(field, [0.0, 1.0, 0.0], &ephemeris);
+        // Simulate the stranded state from the screenshot: error latched,
+        // engine cut, vehicle flung far outside the flight envelope.
+        flight.flight_time_s = 12_345.0;
+        flight.flight_error = Some("flight state exceeded solver bounds".to_string());
+        flight.engine_active = false;
+        flight.throttle = 1.0;
+        flight.state.position_inertial_m += DVec3::new(1.0e9, 0.0, 0.0);
+        flight
+            .reset_to_launch_site(&ephemeris)
+            .expect("reset recovers a stopped flight");
+        assert!(flight.flight_error.is_none());
+        assert_eq!(flight.flight_time_s, 12_345.0);
+        assert!(flight.engine_active);
+        assert_eq!(flight.throttle, 0.0);
+        let body_state = ephemeris
+            .body_state(reference_body, SimTime(flight.flight_time_s))
+            .expect("body state evaluates");
+        let relative = flight.state.position_inertial_m - body_state.position_inertial;
+        let altitude = relative.length() - flight.planet_radius_m;
+        assert!(
+            (0.0..20_000.0).contains(&altitude),
+            "reset must park near the launch site, got {altitude}"
         );
     }
 

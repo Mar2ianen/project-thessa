@@ -16,9 +16,10 @@
 use super::*;
 use bevy::ui::FocusPolicy;
 
+use bevy::tasks::{IoTaskPool, Task, block_on, poll_once};
 use std::time::Instant;
 
-use super::atmosphere::GraphicsResolved;
+use super::atmosphere::{GraphicsResolved, RayTracingActive};
 use thessa_perf::{
     CaptureMetadata, GpuFrame, MemorySample, PerfCollector, ProfilingLevel, SimBudget,
     WorldCounters, capture_stem, current_rss_bytes, default_capture_metadata,
@@ -40,6 +41,9 @@ pub struct PerfMonitor {
     overlay_visible: bool,
     capturing: bool,
     capture_frames: usize,
+    capture_start: u64,
+    export_task: Option<Task<String>>,
+    overlay_updated: Option<Instant>,
     frame_start: Option<Instant>,
     sim_cpu_s: f64,
     last_status: String,
@@ -65,6 +69,9 @@ impl Default for PerfMonitor {
             overlay_visible: false,
             capturing: false,
             capture_frames: 0,
+            capture_start: 0,
+            export_task: None,
+            overlay_updated: None,
             frame_start: None,
             sim_cpu_s: 0.0,
             last_status: "PERF: press F4 for overlay, Shift+F4 to capture".to_string(),
@@ -125,14 +132,24 @@ fn perf_begin_frame(mut monitor: ResMut<PerfMonitor>) {
 
 /// `F4` toggles the overlay, `Shift+F4` starts/stops a short capture.
 /// Bindings are provisional and may move into the controls/settings system.
+#[allow(clippy::too_many_arguments)]
 fn perf_handle_keys(
     keys: Res<ButtonInput<KeyCode>>,
     mut monitor: ResMut<PerfMonitor>,
     window: Single<&Window, With<PrimaryWindow>>,
     clock: Option<Res<SimulationClock>>,
     map: Option<Res<MapState>>,
+    pilot: Res<PilotHudState>,
+    survey: Res<terrain::SurfaceSurvey>,
     graphics: Option<Res<GraphicsResolved>>,
 ) {
+    if let Some(task) = monitor.export_task.as_mut()
+        && let Some(status) = block_on(poll_once(task))
+    {
+        eprintln!("{status}");
+        monitor.last_status = status;
+        monitor.export_task = None;
+    }
     if keys.just_pressed(KeyCode::F4) {
         let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         if shift {
@@ -142,9 +159,21 @@ fn perf_handle_keys(
                     &window,
                     clock.as_deref(),
                     map.as_deref(),
+                    if survey.active {
+                        "surface"
+                    } else if pilot.view_mode == ClientViewMode::Pilot {
+                        "pilot"
+                    } else {
+                        "map"
+                    },
                     graphics.as_deref(),
                 );
-            } else {
+            } else if monitor.export_task.is_none() {
+                monitor.capture_start = monitor
+                    .collector
+                    .latest()
+                    .map(|f| f.frame_index + 1)
+                    .unwrap_or(0);
                 monitor.capturing = true;
                 monitor.capture_frames = 0;
                 monitor.collector.push_event(
@@ -169,47 +198,48 @@ fn perf_handle_keys(
 }
 
 /// Close the frame, push it into the ring, refresh the overlay text.
-/// Capture writing happens on stop (after the frame), never blocking render.
+/// Capture serialization and disk writes run on the IO pool.
 #[allow(clippy::too_many_arguments)]
 fn perf_end_frame(
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     window: Single<&Window, With<PrimaryWindow>>,
     clock: Option<Res<SimulationClock>>,
     ephemeris: Option<Res<RuntimeEphemeris>>,
     pilot_state: Option<Res<PilotHudState>>,
     pilot_runtime: Option<Res<PilotFlightRuntime>>,
+    terrain: Option<Res<terrain::WorldTerrain>>,
+    survey: Res<terrain::SurfaceSurvey>,
+    visible_tiles: Query<(&ViewVisibility, &Mesh3d), With<terrain::SurfaceTile>>,
+    meshes: Res<Assets<Mesh>>,
+    rt_instances: Query<(), With<bevy::solari::prelude::RaytracingMesh3d>>,
+    rt_active: Option<Res<RayTracingActive>>,
     mut monitor: ResMut<PerfMonitor>,
     mut overlay: Query<(&mut Text, &mut Visibility), With<PerfOverlayText>>,
 ) {
-    let frame_wall_s = f64::from(time.delta_secs()).clamp(0.0, 1.0);
+    let frame_wall_s = time.delta_secs_f64();
     let sim_time_s = clock.as_deref().map(|c| c.sim_seconds).unwrap_or(0.0);
 
     // --- simulation budget (spec section 7) ---
-    // Pilot mode advances a 120 Hz fixed-step rigid-body solver with real
-    // frame time; map mode evaluates analytic ephemerides (no fixed steps).
+    // Both views advance the same 120 Hz rigid-body simulation.
     let in_pilot = pilot_state
         .as_deref()
         .is_some_and(|s| s.view_mode == ClientViewMode::Pilot);
-    let paused = clock.as_deref().is_some_and(|c| c.paused);
-    let frame_dt = time.delta_secs_f64().clamp(0.0, 0.1);
-    let pilot_steps = if in_pilot && !paused {
-        // Actual step count lives inside `PilotFlightRuntime::advance`; the
-        // observable equivalent is floor(frame_dt / fixed_dt) for steady state.
-        // Backlog comes from the runtime accumulator when available.
-        (frame_dt / PILOT_FIXED_DT_S).floor() as u32
-    } else {
-        0
-    };
-    let backlog_s = pilot_runtime.as_deref().map(pilot_backlog_s).unwrap_or(0.0);
+    let pilot_steps = pilot_runtime
+        .as_deref()
+        .map(|r| r.steps_this_frame)
+        .unwrap_or(0);
+    let backlog_s = pilot_runtime
+        .as_deref()
+        .map(PilotFlightRuntime::backlog_s)
+        .unwrap_or(0.0);
     let requested_warp = clock.as_deref().map(|c| c.multiplier).unwrap_or(1.0);
-    // Map clock rate is x3600 base; pilot warp is x1 real-time. Effective warp
-    // for the fixed-step solver is advanced sim time per wall second.
-    let sim_budget = if in_pilot {
+    // Effective warp is advanced sim time per wall second in either view.
+    let sim_budget = if pilot_runtime.is_some() {
         SimBudget::from_steps(
             PILOT_FIXED_DT_S,
             pilot_steps,
             monitor.sim_cpu_s,
-            requested_warp.max(1.0),
+            requested_warp,
             backlog_s,
             frame_wall_s.max(1e-9),
         )
@@ -231,7 +261,7 @@ fn perf_end_frame(
         .record_cpu_scope(thessa_perf::scopes::SIM_TOTAL, sim_cpu);
 
     // --- world / terrain counters (spec section 8) ---
-    let world = WorldCounters {
+    let mut world = WorldCounters {
         active_bodies: ephemeris
             .as_deref()
             .map(|e| {
@@ -242,19 +272,40 @@ fn perf_end_frame(
                     .count() as u32
             })
             .unwrap_or(0),
-        active_vehicles: u32::from(in_pilot),
-        active_aero_panels: u32::from(in_pilot),
+        active_vehicles: u32::from(pilot_runtime.is_some()),
+        active_aero_panels: if pilot_runtime.is_some() {
+            pilot_runtime
+                .as_deref()
+                .map(PilotFlightRuntime::panel_count)
+                .unwrap_or(0)
+        } else {
+            0
+        },
         // Terrain / streaming / RT counters stay zero until those systems land;
         // zero with explicit scope names beats a missing column in captures.
-        ..WorldCounters::default()
+        ..terrain.as_deref().map(|w| w.counters).unwrap_or_default()
     };
+    world.terrain_patches_visible = 0;
+    world.terrain_vertices = 0;
+    world.terrain_triangles = 0;
+    for (visibility, mesh) in &visible_tiles {
+        if !visibility.get() {
+            continue;
+        }
+        world.terrain_patches_visible += 1;
+        if let Some(mesh) = meshes.get(&mesh.0) {
+            world.terrain_vertices += mesh.count_vertices() as u64;
+            world.terrain_triangles += mesh.indices().map(|i| i.len() / 3).unwrap_or(0) as u64;
+        }
+    }
+    world.rt_instances = rt_instances.iter().count() as u32;
     monitor.collector.set_world_counters(world);
 
     // --- memory (spec section 9) ---
     monitor.collector.set_memory_sample(MemorySample {
         rss_bytes: current_rss_bytes(),
         asset_cache_bytes: None,
-        terrain_cache_bytes: None,
+        terrain_cache_bytes: terrain.as_deref().map(|w| w.cache_bytes),
         gpu_mem_bytes: None, // unknown: never synthesize a number
     });
 
@@ -263,40 +314,76 @@ fn perf_end_frame(
     // rather than presenting CPU submit time as GPU time.
     monitor.collector.set_gpu_frame(GpuFrame::unavailable());
 
-    // Whole-frame CPU portion: no finer render/extraction split yet, so the
-    // honest split is cpu ~= wall with scopes attributing `sim.total`.
-    monitor
-        .collector
-        .record_cpu_scope("frame.cpu", frame_wall_s);
-    monitor
-        .collector
-        .end_frame(frame_wall_s, frame_wall_s, sim_time_s);
+    // Elapsed main-app schedule interval, excludes vsync between frames.
+    // This is wall duration of CPU work, not OS per-thread CPU utilization.
+    let cpu_s = monitor
+        .frame_start
+        .map(|t| t.elapsed().as_secs_f64())
+        .unwrap_or(0.0);
+    monitor.collector.record_cpu_scope("frame.cpu", cpu_s);
+    monitor.collector.end_frame(frame_wall_s, cpu_s, sim_time_s);
     if monitor.capturing {
         monitor.capture_frames += 1;
     }
 
     // --- overlay text (spec sections 6, 10, 22) ---
-    let text = build_overlay_text(&monitor, &window, in_pilot);
-    monitor.last_status.clone_from(&text);
-    for (mut t, mut vis) in &mut overlay {
-        **t = text.clone();
+    for (_, mut vis) in &mut overlay {
         *vis = if monitor.overlay_visible {
             Visibility::Visible
         } else {
             Visibility::Hidden
         };
     }
+    if monitor.overlay_visible
+        && monitor
+            .overlay_updated
+            .is_none_or(|t| t.elapsed().as_secs_f32() >= 0.25)
+    {
+        let text = build_overlay_text(
+            &monitor,
+            &window,
+            if survey.active {
+                "SURFACE"
+            } else if in_pilot {
+                "PILOT"
+            } else {
+                "MAP"
+            },
+            rt_active.as_deref().is_some_and(|flag| flag.0),
+            if let Some(reason) = pilot_runtime
+                .as_deref()
+                .and_then(PilotFlightRuntime::stop_reason)
+            {
+                Some(reason)
+            } else if clock.as_deref().is_some_and(|clock| clock.paused) {
+                Some("paused")
+            } else {
+                None
+            },
+        );
+        monitor.overlay_updated = Some(Instant::now());
+        for (mut t, _) in &mut overlay {
+            **t = text.clone();
+        }
+    }
 }
 
-/// Read the pilot accumulator backlog without exposing internals widely.
-/// `PilotFlightRuntime` keeps `accumulator_s` private; approximate backlog as
-/// zero here and let the countdown become exact once the runtime exposes a
-/// `backlog_s()` accessor. Kept as a function so the call site is stable.
-fn pilot_backlog_s(_runtime: &PilotFlightRuntime) -> f64 {
-    0.0
+impl PerfMonitor {
+    pub(super) fn record_sim(&mut self, seconds: f64) {
+        self.sim_cpu_s += seconds;
+    }
+    pub(super) fn record_scope(&mut self, name: &str, seconds: f64) {
+        self.collector.record_cpu_scope(name, seconds);
+    }
 }
 
-fn build_overlay_text(monitor: &PerfMonitor, window: &Window, in_pilot: bool) -> String {
+fn build_overlay_text(
+    monitor: &PerfMonitor,
+    window: &Window,
+    view: &str,
+    rt_on: bool,
+    stop_reason: Option<&str>,
+) -> String {
     let Some(wall) = monitor.collector.frame_wall_stats() else {
         return "PERF: warming up...".to_string();
     };
@@ -312,7 +399,9 @@ fn build_overlay_text(monitor: &PerfMonitor, window: &Window, in_pilot: bool) ->
     };
     let (sim_line, warp_flag) = match latest {
         Some(f) => {
-            let flag = if f.sim.is_warp_limited() {
+            let flag = if stop_reason.is_some() {
+                "  STOPPED / PAUSED"
+            } else if f.sim.is_warp_limited() {
                 "  WARP-LIMITED"
             } else {
                 ""
@@ -335,7 +424,7 @@ fn build_overlay_text(monitor: &PerfMonitor, window: &Window, in_pilot: bool) ->
     };
     let world_line = match latest {
         Some(f) => format!(
-            "bodies {:>2} vehicles {} patches {}/{} tris {} stream {} assets {}/{}",
+            "bodies {:>2} vehicles {} visible {} new/frame {} tris {} queue {} assets {}/{} RT {}",
             f.world.active_bodies,
             f.world.active_vehicles,
             f.world.terrain_patches_visible,
@@ -344,6 +433,7 @@ fn build_overlay_text(monitor: &PerfMonitor, window: &Window, in_pilot: bool) ->
             f.world.streaming_queued,
             f.world.assets_loaded,
             f.world.assets_pending,
+            f.world.rt_instances,
         ),
         None => "n/a".to_string(),
     };
@@ -363,12 +453,16 @@ fn build_overlay_text(monitor: &PerfMonitor, window: &Window, in_pilot: bool) ->
         "Shift+F4 capture".to_string()
     };
     let _ = warp_flag;
+    let status = stop_reason
+        .map(|reason| format!("\nSIM: {reason}"))
+        .unwrap_or_default();
     format!(
-        "PERF  {}  {}x{}  [F4] overlay  [{}]\nFRAME {:5.2}ms {:5.0}fps cpu {:5.2}ms gpu unavailable\n  p50 {:5.2} p95 {:5.2} p99 {:5.2} max {:5.2}ms (n={})\nSIM {}\n  sim.total {:5.2}ms\nWORLD {}\nMEM {}\n{}",
-        if in_pilot { "PILOT" } else { "MAP" },
-        window.resolution.width(),
-        window.resolution.height(),
+        "PERF  {}  {}x{}  [F4] overlay  [{}]  [Shift+F12 RT:{}]\nFRAME {:5.2}ms {:5.0}fps cpu {:5.2}ms gpu unavailable\n  p50 {:5.2} p95 {:5.2} p99 {:5.2} max {:5.2}ms (n={})\nSIM {}\n  sim.total {:5.2}ms\nWORLD {}\nMEM {}\n{}{status}",
+        view,
+        window.resolution.physical_width(),
+        window.resolution.physical_height(),
         capture_line,
+        if rt_on { "on" } else { "off" },
         wall.current * 1000.0,
         fps,
         cpu.map(|s| s.current * 1000.0).unwrap_or(0.0),
@@ -392,15 +486,16 @@ fn build_overlay_text(monitor: &PerfMonitor, window: &Window, in_pilot: bool) ->
 fn stop_capture(
     monitor: &mut PerfMonitor,
     window: &Window,
-    clock: Option<&SimulationClock>,
+    _clock: Option<&SimulationClock>,
     map: Option<&MapState>,
+    view: &str,
     graphics: Option<&GraphicsResolved>,
 ) {
     monitor.capturing = false;
     monitor.collector.push_event("capture stopped", None);
     let mut metadata: CaptureMetadata = default_capture_metadata();
-    metadata.display.width = window.resolution.width() as u32;
-    metadata.display.height = window.resolution.height() as u32;
+    metadata.display.width = window.resolution.physical_width();
+    metadata.display.height = window.resolution.physical_height();
     metadata.platform.backend = "wgpu".to_string();
     // Requested -> resolved graphics correlation (perf spec section 12, visual
     // atmosphere spec sections 12-13): the perf system never interprets
@@ -423,32 +518,38 @@ fn stop_capture(
         "resolution".to_string(),
         format!(
             "{}x{}",
-            window.resolution.width(),
-            window.resolution.height()
+            window.resolution.physical_width(),
+            window.resolution.physical_height()
         ),
     );
-    metadata.scenario = match (map, clock) {
-        (Some(m), _) => format!("map:{}", m.mode.label()),
-        (None, Some(_)) => "pilot".to_string(),
-        _ => "unknown".to_string(),
+    metadata.scenario = if view == "map" {
+        format!("map:{}", map.map(|m| m.mode.label()).unwrap_or("unknown"))
+    } else {
+        view.to_string()
     };
-    metadata.window_frames = monitor.collector.len();
-    let capture = monitor.collector.snapshot_capture(metadata);
+    let mut capture = monitor.collector.snapshot_capture(metadata);
+    capture
+        .frames
+        .retain(|f| f.frame_index >= monitor.capture_start);
+    capture
+        .events
+        .retain(|e| e.frame_index >= monitor.capture_start);
+    capture.metadata.window_frames = capture.frames.len();
     let stem = capture_stem();
     let json_path = std::path::PathBuf::from(format!("{stem}.json"));
     let csv_path = std::path::PathBuf::from(format!("{stem}.csv"));
-    // Serialization happens after the frame / on stop, not inside it.
-    let json_result = capture.write_json(&json_path);
-    let csv_result = capture.write_csv(&csv_path);
-    monitor.last_status = match (json_result, csv_result) {
-        (Ok(()), Ok(())) => format!(
-            "PERF: capture wrote {} + {} ({} frames)",
-            json_path.display(),
-            csv_path.display(),
-            capture.frames.len(),
-        ),
-        (Err(e), _) | (_, Err(e)) => format!("PERF: capture write failed: {e}"),
-    };
-    // Surface the result even when the overlay is hidden.
-    eprintln!("{}", monitor.last_status);
+    monitor.export_task = Some(IoTaskPool::get().spawn(async move {
+        let json_result = capture.write_json(&json_path);
+        let csv_result = capture.write_csv(&csv_path);
+        match (json_result, csv_result) {
+            (Ok(()), Ok(())) => format!(
+                "PERF: capture wrote {} + {} ({} frames)",
+                json_path.display(),
+                csv_path.display(),
+                capture.frames.len(),
+            ),
+            (Err(e), _) | (_, Err(e)) => format!("PERF: capture write failed: {e}"),
+        }
+    }));
+    monitor.last_status = "PERF: writing capture…".into();
 }

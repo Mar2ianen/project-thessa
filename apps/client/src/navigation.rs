@@ -10,7 +10,7 @@ const CAMERA_FAR_MARGIN: f32 = 1.20;
 const DOUBLE_CLICK_WINDOW_S: f64 = 0.34;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum NavigationRequest {
+pub(super) enum NavigationRequest {
     None,
     FitScope,
     FrameSelected,
@@ -29,13 +29,13 @@ struct ClickRecord {
 /// selected body cannot be clamped back to a local-mode limit.
 #[derive(Resource)]
 pub(super) struct NavigationState {
-    pan_offset: Vec3,
-    follow_selected: bool,
+    pub(super) pan_offset: Vec3,
+    pub(super) follow_selected: bool,
     last_mode: Option<MapMode>,
     last_focus: Option<BodyId>,
     last_selected: Option<BodyId>,
     pointer_selection_pending: bool,
-    request: NavigationRequest,
+    pub(super) request: NavigationRequest,
     last_click: Option<ClickRecord>,
 }
 
@@ -75,13 +75,10 @@ pub(super) fn preview_input(
         clock.paused = !clock.paused;
     }
     if keys.just_pressed(KeyCode::ArrowUp) {
-        clock.multiplier = (clock.multiplier * 2.0).min(32.0);
+        clock.multiplier = (clock.multiplier * 2.0).min(256.0);
     }
     if keys.just_pressed(KeyCode::ArrowDown) {
         clock.multiplier = (clock.multiplier / 2.0).max(0.125);
-    }
-    if keys.just_pressed(KeyCode::KeyT) {
-        clock.sim_seconds = 0.0;
     }
 
     // Search owns the keyboard while it is active.
@@ -171,9 +168,12 @@ pub(super) fn select_body_with_pointer(
     };
     let (camera, camera_transform) = camera.into_inner();
     let sim_time = SimTime(clock.sim_seconds);
+    let anchor = camera_anchor_f64(&runtime.ephemeris, &map, &navigation, sim_time);
     let mut nearest = None;
     for body_id in visible_physical_body_ids(&runtime.ephemeris, &map) {
-        let Some(position) = map_position(&runtime.ephemeris, &map, body_id, sim_time) else {
+        let Some(position) =
+            map_position_anchored(&runtime.ephemeris, &map, body_id, sim_time, anchor)
+        else {
             continue;
         };
         let Ok(viewport_position) = camera.world_to_viewport_with_depth(camera_transform, position)
@@ -227,6 +227,7 @@ pub(super) fn update_camera(
     window: Single<&Window, With<PrimaryWindow>>,
     ui: Option<Res<MapUiState>>,
     pilot: Option<Res<PilotHudState>>,
+    survey: Res<terrain::SurfaceSurvey>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_motion: Res<AccumulatedMouseMotion>,
     mut mouse_wheel: MessageReader<MouseWheel>,
@@ -254,7 +255,7 @@ pub(super) fn update_camera(
     // Pilot owns the same Camera3d while it is visible. Its input system
     // updates the camera around the preview vehicle; the map camera must not
     // overwrite that transform later in the frame.
-    if pilot_active {
+    if pilot_active || survey.active {
         return;
     }
 
@@ -289,6 +290,11 @@ pub(super) fn update_camera(
 
     let sim_time = SimTime(clock.sim_seconds);
     let bounds = scope_bounds(&runtime.ephemeris, &map, sim_time);
+    // Floating-origin anchor in f64 render units (ZERO when overviewing).
+    // Visuals subtract this before f32 conversion; the camera stays near the
+    // origin so view-matrix cancellation no longer jitters followed bodies.
+    let anchor_f64 = camera_anchor_f64(&runtime.ephemeris, &map, &navigation, sim_time);
+    let anchor_vec = anchor_f64.as_vec3();
 
     for (mut transform, mut camera, mut projection) in &mut query {
         let (fov, aspect) = projection_view(projection.as_ref(), &window);
@@ -299,12 +305,16 @@ pub(super) fn update_camera(
         if !pointer_blocked {
             if mouse_buttons.pressed(MouseButton::Right) {
                 cancel_frame_request(&mut navigation);
-                camera.yaw -= mouse_delta.x * MOUSE_ORBIT_SENSITIVITY;
-                camera.pitch =
-                    (camera.pitch + mouse_delta.y * MOUSE_ORBIT_SENSITIVITY).clamp(0.12, 1.52);
+                camera.orbit = (camera.orbit
+                    * Quat::from_rotation_y(-mouse_delta.x * MOUSE_ORBIT_SENSITIVITY)
+                    * Quat::from_rotation_x(-mouse_delta.y * MOUSE_ORBIT_SENSITIVITY))
+                .normalize();
             }
             if mouse_buttons.pressed(MouseButton::Middle) {
-                cancel_automatic_camera(&mut navigation, camera.target);
+                // Releasing follow must preserve the view: the world jumps by
+                // +anchor when the origin falls back to the focus, so carry
+                // the same offset into the pan target.
+                cancel_automatic_camera(&mut navigation, camera.target + anchor_vec);
                 let right = transform.rotation * Vec3::X;
                 let up = transform.rotation * Vec3::Y;
                 let pan_scale = camera.distance.max(min_distance) * MOUSE_PAN_SENSITIVITY;
@@ -332,16 +342,16 @@ pub(super) fn update_camera(
                 cancel_frame_request(&mut navigation);
             }
             if keys.pressed(KeyCode::KeyQ) {
-                camera.yaw += delta * 0.65;
+                camera.orbit *= Quat::from_rotation_y(delta * 0.65);
             }
             if keys.pressed(KeyCode::KeyE) {
-                camera.yaw -= delta * 0.65;
+                camera.orbit *= Quat::from_rotation_y(-delta * 0.65);
             }
             if keys.pressed(KeyCode::KeyR) {
-                camera.pitch = (camera.pitch + delta * 0.45).clamp(0.12, 1.52);
+                camera.orbit *= Quat::from_rotation_x(-delta * 0.45);
             }
             if keys.pressed(KeyCode::KeyF) {
-                camera.pitch = (camera.pitch - delta * 0.45).clamp(0.12, 1.52);
+                camera.orbit *= Quat::from_rotation_x(delta * 0.45);
             }
             if keys.pressed(KeyCode::KeyW) {
                 camera.distance = (camera.distance - delta * camera.distance.max(1.0) * 0.8)
@@ -356,7 +366,6 @@ pub(super) fn update_camera(
         // Manual input may have cancelled an automatic frame request above.
         // Refresh the local copy before applying the camera request.
         request = navigation.request;
-        let selected_position = map_position(&runtime.ephemeris, &map, map.selected, sim_time);
         match request {
             NavigationRequest::FitScope => {
                 navigation.follow_selected = false;
@@ -376,50 +385,49 @@ pub(super) fn update_camera(
                         delta,
                     )
                     .clamp(min_distance, max_distance);
-                    if (camera.distance - fit_distance).abs() <= fit_distance.max(1.0) * 0.002 {
-                        navigation.request = NavigationRequest::None;
-                    }
-                }
-            }
-            NavigationRequest::FrameSelected => {
-                if let Some(position) = selected_position {
-                    navigation.follow_selected = true;
-                    navigation.pan_offset = Vec3::ZERO;
-                    let radius = runtime
-                        .ephemeris
-                        .body(map.selected)
-                        .map(|body| visual_radius_for_mode(body.radius_m, map.mode))
-                        .unwrap_or(0.15);
-                    let frame_distance = frame_distance_for_radius(radius, fov, aspect);
-                    camera.distance = smooth_scalar(
-                        camera.distance,
-                        frame_distance,
-                        CAMERA_DISTANCE_SMOOTHING_RATE,
-                        delta,
-                    )
-                    .clamp(min_distance, max_distance);
                     camera.target =
-                        smooth_vec3(camera.target, position, CAMERA_SMOOTHING_RATE, delta);
-                    if camera.target.distance(position) <= radius.max(0.02) * 0.01
-                        && (camera.distance - frame_distance).abs()
-                            <= frame_distance.max(1.0) * 0.002
+                        smooth_vec3(camera.target, Vec3::ZERO, CAMERA_SMOOTHING_RATE, delta);
+                    if (camera.distance - fit_distance).abs() <= fit_distance.max(1.0) * 0.002
+                        && camera.target.length() <= 0.01 * fit_distance.max(1.0)
                     {
                         navigation.request = NavigationRequest::None;
                     }
                 }
             }
+            NavigationRequest::FrameSelected => {
+                navigation.follow_selected = true;
+                navigation.pan_offset = Vec3::ZERO;
+                let radius = runtime
+                    .ephemeris
+                    .body(map.selected)
+                    .map(|body| visual_radius_for_mode(body.radius_m, map.mode))
+                    .unwrap_or(0.15);
+                let frame_distance = frame_distance_for_radius(radius, fov, aspect);
+                camera.distance = smooth_scalar(
+                    camera.distance,
+                    frame_distance,
+                    CAMERA_DISTANCE_SMOOTHING_RATE,
+                    delta,
+                )
+                .clamp(min_distance, max_distance);
+                // In the floating-origin frame the followed body sits at the
+                // origin; ease the pan target there instead of chasing a large
+                // focus-relative coordinate in f32.
+                camera.target =
+                    smooth_vec3(camera.target, Vec3::ZERO, CAMERA_SMOOTHING_RATE, delta);
+                if camera.target.length() <= radius.max(0.02) * 0.01
+                    && (camera.distance - frame_distance).abs() <= frame_distance.max(1.0) * 0.002
+                {
+                    navigation.request = NavigationRequest::None;
+                }
+            }
             NavigationRequest::None => {}
         }
 
-        let anchor = if navigation.follow_selected {
-            selected_position.unwrap_or(Vec3::ZERO)
-        } else {
-            Vec3::ZERO
-        };
-        let desired_target = anchor + navigation.pan_offset;
-        // A focused KSP-style camera follows the selected body's current
-        // position exactly. Smoothing this anchor makes a moving moon slowly
-        // walk out of the centre of the view, most visibly while zooming out.
+        // The world is already rebased to the follow anchor: the camera target
+        // is only the small pan offset. Following sets it exactly so a moving
+        // moon cannot walk out of frame; overview pans ease toward the offset.
+        let desired_target = navigation.pan_offset;
         camera.target = if navigation.follow_selected {
             desired_target
         } else {
@@ -427,14 +435,9 @@ pub(super) fn update_camera(
         };
         camera.distance = camera.distance.clamp(min_distance, max_distance);
 
-        let horizontal = camera.distance * camera.pitch.cos();
-        let orbit_offset = Vec3::new(
-            horizontal * camera.yaw.sin(),
-            camera.distance * camera.pitch.sin(),
-            horizontal * camera.yaw.cos(),
-        );
-        transform.translation = camera.target + orbit_offset;
-        *transform = transform.looking_at(camera.target, Vec3::Y);
+        camera.orbit = camera.orbit.normalize();
+        transform.translation = camera.target + camera.orbit * Vec3::Z * camera.distance;
+        *transform = transform.looking_at(camera.target, camera.orbit * Vec3::Y);
 
         update_projection_clip_planes(
             &mut projection,

@@ -1085,12 +1085,15 @@ pub(super) fn update_pilot_hud(
     }
     let direction = flight.surface_velocity_mps.try_normalize();
     for mut node in &mut nodes.p4() {
-        let position = direction.and_then(|d| {
-            camera
-                .0
-                .world_to_viewport(camera.1, pilot_render_offset(d * 1000.0))
-                .ok()
-        });
+        let position = direction
+            .filter(|_| state.control_mode == ControlMode::MouseAim)
+            .and_then(|d| {
+                camera
+                    .0
+                    .world_to_viewport(camera.1, pilot_render_offset(d * 1000.0))
+                    .ok()
+                    .filter(|p| p.y < window.resolution.height() - NAVBALL_SIZE - 160.0)
+            });
         node.display = if position.is_some() {
             Display::Flex
         } else {
@@ -1145,7 +1148,7 @@ pub(super) fn update_pilot_hud(
                     "FLIGHT TEST"
                 }
             ),
-            Readout::Mode => state.control_mode.label().into(),
+            Readout::Mode => format!("{} · {}", state.control_mode.label(), flight.regime.label()),
             Readout::Status => {
                 color.0 = if flight.warnings.is_empty() {
                     HUD_MUTED
@@ -1203,7 +1206,7 @@ pub(super) fn update_pilot_hud(
                 heading_cardinal(flight.heading_deg)
             ),
             Readout::Help => format!(
-                "{}\n\nW / S   Nose down / up\nA / D   Yaw left / right     Q / E   Roll\nShift / Ctrl   Throttle     Z / X   Full / zero\nSpace   Engine     G   Gear     R   RCS\nT   Toggle SAS     Hold F   Invert SAS\nCaps Lock   Precision controls\n\nRMB drag   Free orbit     MMB drag   Pan\nWheel   Zoom     `   Reset camera\nV   Free / chase camera     M   Orbital map\nEsc / F8   Pause     F2   Hide interface\nF3   Extra telemetry     F1   This layout\n\nClick speed: surface / air / orbit / target\nClick altimeter: datum / AGL\nMode button beside navball: control scheme\nSAS / RCS / GEAR: green means enabled\nIcons to the left: camera, data, precision,\npause, map, help. + / −: throttle.\n\nFuel is unlimited; contact and gear forces\nare not yet simulated. AGL needs terrain.",
+                "{}\n\nW / S   Nose down / up\nA / D   Yaw left / right     Q / E   Roll\nShift / Ctrl   Throttle     Z / X   Full / zero\nSpace   Engine     G   Gear     R   RCS\nT   Toggle SAS     Hold F   Invert SAS\nCaps Lock   Precision controls\n\nRMB drag   Free orbit     MMB drag   Pan\nWheel   Zoom     `   Reset camera\nV   Free / chase camera     M   Orbital map\nEsc / F8   Pause     F2   Hide interface\nF3   Extra telemetry     F1   This layout\n\nClick speed: surface / air / orbit / target\nClick altimeter: datum / AGL\nMode button beside navball: control scheme\nSAS / RCS / GEAR: green means enabled\nIcons to the left: camera, data, precision,\npause, map, help. + / −: throttle.\n\nFuel is unlimited; contact and gear forces\nare not yet simulated. F4: performance; Shift+F4: capture.\nF6: surface survey; M: return to map.\nSurvey: Shift+RMB look around; RMB orbit.\nShift+F12: RT / raster (supported GPUs).",
                 state.control_mode.description()
             ),
         };

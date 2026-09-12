@@ -25,12 +25,14 @@ ray_tracing = "auto" # off | local | full | auto
 resolution_scale = 1.0
 vsync = true
 hdr = true
-exposure_ev100 = 13.0 # raw-sun scenes need ~13; tune per preset
+auto_exposure = false # AE metering curve untuned; deterministic manual EV for now
+exposure_ev100 = 13.0 # manual EV100 when auto_exposure = false
 
 [atmosphere]
 enabled = true
 quality = "high" # low | medium | high (budgets only, never physics)
 aerial_perspective = true
+density_scale = 0.55 # visual optical-depth gain; simulation pressure is unchanged
 multiple_scattering = false # single-scattering first slice; LUT/MS later
 eclipses = true
 multi_star = true

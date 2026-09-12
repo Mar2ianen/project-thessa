@@ -7,6 +7,7 @@ license = "GPL-3.0-or-later"
 publish = false
 
 [dependencies]
+thessa-worldgen-rocky = { path = "../../tools/worldgen-rocky" }
 thessa-protocol = { path = "../../crates/protocol" }
 thessa-sim-core = { path = "../../crates/sim-core" }
 thessa-perf = { path = "../../crates/perf" }
@@ -14,4 +15,5 @@ thessa-graphics = { path = "../../crates/graphics" }
 thessa-atmosphere = { path = "../../crates/atmosphere" }
 bevy = { workspace = true, features = ["bevy_solari"] }
 bevy_brp_extras = "0.22.0"
+serde.workspace = true
 toml.workspace = true

@@ -5244,11 +5244,13 @@ version = "0.0.1"
 dependencies = [
  "bevy",
  "bevy_brp_extras",
+ "serde",
  "thessa-atmosphere",
  "thessa-graphics",
  "thessa-perf",
  "thessa-protocol",
  "thessa-sim-core",
+ "thessa-worldgen-rocky",
  "toml",
 ]
 
@@ -5291,6 +5293,7 @@ dependencies = [
  "glam",
  "rayon",
  "serde",
+ "toml",
 ]
 
 [[package]]
@@ -5321,6 +5324,7 @@ dependencies = [
  "flate2",
  "serde",
  "serde_json",
+ "thessa-perf",
  "toml",
 ]
 

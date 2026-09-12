@@ -126,6 +126,11 @@ semi_major_axis_km = 632354.0
 period_hours_design = 80.0
 eccentricity = 0.003
 inclination_deg = 0.10
+# Epoch phasing: 0 deg starts Thessa mid-eclipse (Nereid covers Asterion A
+# for ~2.7 h of every 80 h orbit). This offset starts just past totality in
+# clear daylight; eclipses recur roughly each 80 h orbit while in season.
+# The outer A-BC syzygy is untouched.
+mean_longitude_offset_deg = 10.0
 # With R=3200 km this mass gives 0.500 g to design precision.
 mass_earth = 0.1259652
 radius_km = 3200.0

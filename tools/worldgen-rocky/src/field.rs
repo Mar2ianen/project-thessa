@@ -103,6 +103,7 @@ pub struct PlanetField {
     pub sea_offset_m: f64,
 }
 
+#[derive(Default)]
 struct ContextGrid {
     lats: Vec<f64>,
     lons: Vec<f64>,
@@ -123,17 +124,20 @@ impl PlanetField {
     ) -> Result<Self, String> {
         validate_params(&params)?;
         let geo_norm = normalize_geothermal(&provinces, params.nominal_flux_w_m2, params.radius_m);
-        let (context, sea_offset_m) = build_context(&params, &features, &tectonics);
-        Ok(Self {
+        let mut field = Self {
             params,
             features,
             tectonics,
             provinces,
             landmarks,
             geo_norm,
-            context,
-            sea_offset_m,
-        })
+            context: ContextGrid::default(),
+            sea_offset_m: 0.0,
+        };
+        let (context, offset) = build_context(&field);
+        field.context = context;
+        field.sea_offset_m = offset;
+        Ok(field)
     }
 
     /// Canonical sample. Pure function of (direction, min_wavelength).
@@ -181,8 +185,8 @@ impl PlanetField {
         let moisture = (drivers.moisture * 0.65 + 0.15 + regional * 0.45
             - self.params.aridity * 0.16)
             .clamp(0.0, 1.0);
-        let temperature_k = 296.0
-            - 52.0 * dir[1].abs().powf(1.4)
+        let temperature_k = 294.0
+            - 38.0 * dir[1].powi(2)
             - height.max(0.0) * 0.005
             - (1.0 - drivers.eclipse_exposure) * 12.0
             + regional * 3.0;
@@ -240,6 +244,19 @@ impl PlanetField {
             self.params.radius_m,
             min_wl,
         );
+        let mountain_mask = crate::appearance::smooth(800.0, 3000.0, macro_h);
+        let mountain_detail: f64 = [(8000.0, 1100.0), (4000.0, 450.0)]
+            .into_iter()
+            .filter(|(wl, _)| *wl >= min_wl)
+            .enumerate()
+            .map(|(i, (wl, amp))| {
+                let p = dir.map(|v| v * self.params.radius_m / wl);
+                let n =
+                    crate::rng::value_noise3(self.params.seed, 1900 + i as u32, p[0], p[1], p[2]);
+                ((1.0 - n.abs()).powi(3) - 0.4) * amp * mountain_mask
+            })
+            .sum();
+        let meso_h = meso_h + mountain_detail;
         let mut height = macro_h + meso_h + micro_h - self.sea_offset_m;
         // Authored landmark overrides (delta-based, datum-robust).
         for zone in &self.landmarks {
@@ -282,8 +299,8 @@ impl PlanetField {
     }
 
     fn context_at(&self, lat: f64, lon: f64) -> (WaterClass, f64, f64) {
-        let r = nearest_idx(&self.context.lats, lat);
-        let c = nearest_idx_wrapped(&self.context.lons, lon);
+        let r = regular_index(lat, -90.0, 2.0, self.context.lats.len(), false);
+        let c = regular_index(lon, -180.0, 2.0, self.context.lons.len(), true);
         (
             self.context.water[r][c],
             self.context.arid[r][c],
@@ -292,33 +309,20 @@ impl PlanetField {
     }
 }
 
-fn nearest_idx(xs: &[f64], v: f64) -> usize {
-    let mut best = 0;
-    let mut best_d = f64::INFINITY;
-    for (i, x) in xs.iter().enumerate() {
-        let d = (x - v).abs();
-        if d < best_d {
-            best_d = d;
-            best = i;
-        }
+// The context is a regular 2 degree grid. Lower cell wins exact ties,
+// matching the former scan, with longitude periodic at the seam.
+fn regular_index(value: f64, start: f64, step: f64, count: usize, wrap: bool) -> usize {
+    let position = if wrap {
+        (value - start).rem_euclid(step * count as f64) / step
+    } else {
+        (value - start) / step
+    };
+    let nearest = (position - 0.5).ceil();
+    if wrap {
+        (nearest as i64).rem_euclid(count as i64) as usize
+    } else {
+        nearest.clamp(0.0, (count - 1) as f64) as usize
     }
-    best
-}
-
-fn nearest_idx_wrapped(lons: &[f64], lon: f64) -> usize {
-    let mut best = 0;
-    let mut best_d = f64::INFINITY;
-    for (i, x) in lons.iter().enumerate() {
-        let mut d = (x - lon).abs();
-        if d > 180.0 {
-            d = 360.0 - d;
-        }
-        if d < best_d {
-            best_d = d;
-            best = i;
-        }
-    }
-    best
 }
 
 fn hemi_bias(params: &PlanetParams, lon_deg: f64) -> f64 {
@@ -328,6 +332,12 @@ fn hemi_bias(params: &PlanetParams, lon_deg: f64) -> f64 {
 }
 
 fn validate_params(params: &PlanetParams) -> Result<(), String> {
+    if params
+        .ocean_target
+        .is_some_and(|t| !t.is_finite() || !(0.0..=1.0).contains(&t))
+    {
+        return Err("ocean_target must be finite and within 0..=1".into());
+    }
     if params.name.trim().is_empty() {
         return Err("planet name must not be empty".into());
     }
@@ -349,11 +359,8 @@ fn validate_params(params: &PlanetParams) -> Result<(), String> {
 /// Build the coarse context cache: macro+meso heights, water, aridity,
 /// ocean distance. Deterministic; resolution fixed so caches never leak
 /// into analytic results.
-fn build_context(
-    params: &PlanetParams,
-    features: &[crate::features::PlacedFeature],
-    tectonics: &[Boundary],
-) -> (ContextGrid, f64) {
+fn build_context(field: &PlanetField) -> (ContextGrid, f64) {
+    let params = &field.params;
     let step = 2.0;
     let mut lats = Vec::new();
     let mut lat = -90.0;
@@ -367,24 +374,11 @@ fn build_context(
         lons.push(lon);
         lon += step;
     }
-    let knobs: TerrainKnobs = params.knobs.into();
     let mut grid = HeightGrid::new(lats.clone(), lons.clone(), params.radius_m);
     for (r, la) in lats.iter().enumerate() {
         for (c, lo) in lons.iter().enumerate() {
-            let facing = nereid_influence(*lo);
-            let hb = -4500.0 * params.nereid_ocean_bias * facing
-                + 3600.0 * params.anti_nereid_land_bias * (1.0 - facing);
-            grid.h[r][c] = (eval_macro_m(features, *la, *lo, params.radius_m)
-                + eval_macro_provinces_m(
-                    params.seed,
-                    knobs,
-                    dir_from_latlon(*la, *lo),
-                    params.radius_m,
-                )
-                + eval_uplift_m(tectonics, *la, *lo, params.radius_m)
-                + hb)
-                * params.macro_strength
-                + crate::terrain::eval_meso_m(params.seed, knobs, *la, *lo, params.radius_m);
+            // Same height evaluator as every consumer, before datum calibration.
+            grid.h[r][c] = field.height_m(dir_from_latlon(*la, *lo), 1.0);
         }
     }
     let sea_offset_m = params
@@ -712,5 +706,39 @@ mod tests {
         assert!((0.0..=1.0).contains(&s.continentality01));
         assert!((0.0..=1.0).contains(&s.eclipse_exposure01));
         assert!(s.slope_hint.is_finite() && s.slope_hint >= 0.0);
+    }
+    #[test]
+    fn ocean_datum_is_shared_by_height_surface_and_full_samples() {
+        let mut params = test_params();
+        params.ocean_target = Some(0.6);
+        let f = PlanetField::build(params, vec![], vec![], vec![], vec![]).unwrap();
+        let mut ocean = 0;
+        for i in 0..4096 {
+            let y = 1.0 - 2.0 * (i as f64 + 0.5) / 4096.0;
+            let angle = i as f64 * 2.399963229728653;
+            let r = (1.0 - y * y).sqrt();
+            let dir = [r * angle.cos(), y, r * angle.sin()];
+            let h = f.height_m(dir, 1.0);
+            assert_eq!(h, f.sample_surface(dir, 1.0).height_m);
+            if i % 64 == 0 {
+                assert_eq!(h, f.sample(dir, 1.0).height_m);
+            }
+            ocean += usize::from(h < 0.0);
+        }
+        let fraction = ocean as f64 / 4096.0;
+        assert!((fraction - 0.6).abs() < 0.025, "ocean area {fraction}");
+    }
+    #[test]
+    fn context_arithmetic_wraps_seam_and_clamps_poles() {
+        assert_eq!(regular_index(180.0, -180.0, 2.0, 180, true), 0);
+        assert_eq!(regular_index(-540.0, -180.0, 2.0, 180, true), 0);
+        assert_eq!(regular_index(90.0, -90.0, 2.0, 91, false), 90);
+        assert_eq!(regular_index(-90.0, -90.0, 2.0, 91, false), 0);
+        for n in 0..180 {
+            assert_eq!(
+                regular_index(-180.0 + n as f64 * 2.0, -180.0, 2.0, 180, true),
+                n
+            );
+        }
     }
 }

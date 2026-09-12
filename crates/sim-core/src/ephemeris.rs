@@ -132,6 +132,137 @@ impl KeplerOrbit {
     }
 }
 
+/// Osculating two-body elements at one epoch, derived from an instantaneous
+/// state vector. Unlike [`KeplerOrbit`] this covers hyperbolic escape paths
+/// (`e >= 1`, negative semi-major axis) so a departing craft still reports a
+/// meaningful trajectory instead of an error.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct OsculatingElements {
+    pub central_mu: f64,
+    pub semi_major_axis_m: f64,
+    pub eccentricity: f64,
+    pub inclination_rad: f64,
+    pub longitude_of_ascending_node_rad: f64,
+    pub argument_of_periapsis_rad: f64,
+    pub true_anomaly_rad: f64,
+}
+
+impl OsculatingElements {
+    /// Classical state-to-elements conversion (Vallado algorithm 2).
+    /// Positions/velocities are central-body-relative SI vectors.
+    pub fn from_state(
+        relative_position_m: DVec3,
+        relative_velocity_mps: DVec3,
+        central_mu: f64,
+    ) -> Result<Self, EphemerisError> {
+        if !central_mu.is_finite() || central_mu <= 0.0 {
+            return Err(EphemerisError::InvalidOrbit(
+                "central gravitational parameter must be positive and finite".into(),
+            ));
+        }
+        let r_norm = relative_position_m.length();
+        let v_norm_sq = relative_velocity_mps.length_squared();
+        if !r_norm.is_finite() || r_norm <= 0.0 || !v_norm_sq.is_finite() {
+            return Err(EphemerisError::InvalidOrbit(
+                "state vectors must be finite with nonzero radius".into(),
+            ));
+        }
+        let h = relative_position_m.cross(relative_velocity_mps);
+        let h_norm = h.length();
+        if !h_norm.is_finite() || h_norm <= r_norm * v_norm_sq.sqrt() * 1e-12 {
+            return Err(EphemerisError::InvalidOrbit(
+                "radial plunge has no defined orbital plane".into(),
+            ));
+        }
+        let energy = v_norm_sq / 2.0 - central_mu / r_norm;
+        // Parabolic boundary carries no stable elements in this form.
+        if energy.abs() < central_mu / r_norm * 1e-9 {
+            return Err(EphemerisError::InvalidOrbit(
+                "parabolic energy has no stable elements".into(),
+            ));
+        }
+        let n = DVec3::Z.cross(h);
+        let n_norm = n.length();
+        let r_dot_v = relative_position_m.dot(relative_velocity_mps);
+        let e_vec = (relative_position_m * (v_norm_sq - central_mu / r_norm)
+            - relative_velocity_mps * r_dot_v)
+            / central_mu;
+        let e = e_vec.length();
+        if !e.is_finite() {
+            return Err(EphemerisError::InvalidOrbit(
+                "eccentricity vector is not finite".into(),
+            ));
+        }
+        let h_hat = h / h_norm;
+        let inclination = h.x.hypot(h.y).atan2(h.z);
+        let inclined = n_norm > h_norm * 1e-9;
+        let reference = if inclined { n / n_norm } else { DVec3::X };
+        let raan = if inclined {
+            n.y.atan2(n.x).rem_euclid(TAU)
+        } else {
+            0.0
+        };
+        // Signed angles around the actual angular momentum retain the
+        // quadrant for circular/equatorial and retrograde states alike.
+        let angle = |from: DVec3, to: DVec3| {
+            h_hat
+                .dot(from.cross(to))
+                .atan2(from.dot(to))
+                .rem_euclid(TAU)
+        };
+        let (arg_periapsis, true_anomaly) = if e > 1e-9 {
+            let e_hat = e_vec / e;
+            (
+                angle(reference, e_hat),
+                angle(e_hat, relative_position_m / r_norm),
+            )
+        } else {
+            (0.0, angle(reference, relative_position_m / r_norm))
+        };
+        Ok(Self {
+            central_mu,
+            semi_major_axis_m: -central_mu / (2.0 * energy),
+            eccentricity: e,
+            inclination_rad: inclination,
+            longitude_of_ascending_node_rad: raan,
+            argument_of_periapsis_rad: arg_periapsis,
+            true_anomaly_rad: true_anomaly,
+        })
+    }
+
+    pub fn is_escape(self) -> bool {
+        self.eccentricity >= 1.0
+    }
+
+    /// Periapsis radius, valid for elliptic and hyperbolic paths.
+    pub fn periapsis_m(self) -> f64 {
+        self.semi_major_axis_m * (1.0 - self.eccentricity)
+    }
+
+    /// Apoapsis radius, or `None` on escape trajectories.
+    pub fn apoapsis_m(self) -> Option<f64> {
+        (!self.is_escape()).then_some(self.semi_major_axis_m * (1.0 + self.eccentricity))
+    }
+
+    /// Keplerian period, or `None` on escape trajectories.
+    pub fn period_s(self) -> Option<f64> {
+        (!self.is_escape()).then(|| TAU * (self.semi_major_axis_m.powi(3) / self.central_mu).sqrt())
+    }
+
+    /// Inertial position at a true anomaly, central-body-relative.
+    pub fn position_at_nu(self, true_anomaly_rad: f64) -> DVec3 {
+        let semi_latus = self.semi_major_axis_m * (1.0 - self.eccentricity.powi(2));
+        let radius = semi_latus / (1.0 + self.eccentricity * true_anomaly_rad.cos()).max(1e-9);
+        let (p_hat, q_hat) = perifocal_basis(
+            self.longitude_of_ascending_node_rad,
+            self.argument_of_periapsis_rad,
+            self.inclination_rad,
+        );
+        let (sin_nu, cos_nu) = true_anomaly_rad.sin_cos();
+        p_hat * (radius * cos_nu) + q_hat * (radius * sin_nu)
+    }
+}
+
 /// A single body entry in a deterministic baked ephemeris.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BakedBody {
@@ -260,8 +391,50 @@ impl BakedEphemeris {
         self.body_state_with_stack(id, time, &mut Vec::new())
     }
 
+    /// Conservative inertial speed bound over every orbital phase. Summing
+    /// parent/periapsis bounds also covers nested Kepler/binary trajectories.
+    pub fn maximum_body_speed(&self, id: BodyId) -> Result<f64, EphemerisError> {
+        let mut id = Some(id);
+        let mut speed = 0.0;
+        for _ in 0..=self.bodies.len() {
+            let Some(current) = id else { return Ok(speed); };
+            let body = self.body(current)?;
+            if let Some(orbit) = body.orbit {
+                speed += orbit.mean_motion().abs() * orbit.semi_major_axis_m
+                    * ((1.0 + orbit.eccentricity) / (1.0 - orbit.eccentricity)).sqrt();
+            }
+            id = body.parent;
+        }
+        Err(EphemerisError::InvalidOrbit("cyclic body hierarchy".into()))
+    }
+
     pub fn gravity_sources(&self) -> impl Iterator<Item = &BakedBody> {
         self.bodies.iter().filter(|body| body.gravity_source)
+    }
+
+    /// Display-only dominant body at a position: the gravity source with the
+    /// largest local `mu / r^2`. This is a readout hint (which world the speed
+    /// and orbit lines are relative to), never a physics switch: gravity stays
+    /// a summed field, there is no SOI transition.
+    pub fn dominant_body(&self, position_inertial_m: DVec3, time: SimTime) -> Option<BodyId> {
+        let mut best: Option<(BodyId, f64)> = None;
+        for body in self.gravity_sources() {
+            if !body.mu.is_finite() || body.mu <= 0.0 {
+                continue;
+            }
+            let Ok(state) = self.body_state(body.id, time) else {
+                continue;
+            };
+            let distance_squared = (state.position_inertial - position_inertial_m).length_squared();
+            if !distance_squared.is_finite() || distance_squared <= 0.0 {
+                continue;
+            }
+            let pull = body.mu / distance_squared;
+            if best.is_none_or(|(_, best_pull)| pull > best_pull) {
+                best = Some((body.id, pull));
+            }
+        }
+        best.map(|(id, _)| id)
     }
 
     pub fn validate(&self) -> Result<(), EphemerisError> {

@@ -44,31 +44,35 @@ fn write_chunk<W: Write>(
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-struct Adler {
-    s1: u32,
-    s2: u32,
+/// Bounds compressed output independently of image size. All chunks belong
+/// to one zlib stream; the compressor is not restarted at chunk boundaries.
+const IDAT_CAPACITY: usize = 1024 * 1024;
+struct IdatWriter<'a, W: Write> {
+    out: &'a mut W,
+    buffer: Vec<u8>,
+    table: [u32; 256],
 }
-
-impl Adler {
-    fn new() -> Self {
-        Self { s1: 1, s2: 0 }
-    }
-
-    fn update(&mut self, data: &[u8]) {
-        const MOD: u32 = 65521;
-        for chunk in data.chunks(5552) {
-            for byte in chunk {
-                self.s1 += u32::from(*byte);
-                self.s2 += self.s1;
-            }
-            self.s1 %= MOD;
-            self.s2 %= MOD;
+impl<W: Write> IdatWriter<'_, W> {
+    fn emit(&mut self) -> std::io::Result<()> {
+        if !self.buffer.is_empty() {
+            write_chunk(self.out, b"IDAT", &self.buffer, &self.table)?;
+            self.buffer.clear();
         }
+        Ok(())
     }
-
-    fn digest(self) -> u32 {
-        (self.s2 << 16) | self.s1
+}
+impl<W: Write> Write for IdatWriter<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let count = bytes.len().min(IDAT_CAPACITY - self.buffer.len());
+        self.buffer.extend_from_slice(&bytes[..count]);
+        if self.buffer.len() == IDAT_CAPACITY {
+            self.emit()?;
+        }
+        Ok(count)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.emit()?;
+        self.out.flush()
     }
 }
 
@@ -100,18 +104,21 @@ pub fn write_png_rows<W: Write>(
     ihdr[9] = 2; // truecolor RGB
     write_chunk(out, b"IHDR", &ihdr, &table).map_err(|e| e.to_string())?;
     write_chunk(out, b"sRGB", &[1], &table).map_err(|e| e.to_string())?;
-    // Deflate the filtered scanlines incrementally into one IDAT.
-    let mut compressor = flate2::Compress::new(flate2::Compression::best(), false);
-    let mut idat = Vec::new();
-    let mut adler = Adler::new();
-    // zlib header for best compression.
-    let mut zlib = vec![0x78u8, 0xDA];
+    let chunks = IdatWriter {
+        out,
+        buffer: Vec::with_capacity(IDAT_CAPACITY),
+        table,
+    };
+    let mut compressor = flate2::write::ZlibEncoder::new(chunks, flate2::Compression::best());
     let stride = width * 3;
     let mut filter = vec![0u8; stride + 1];
     let mut prior = vec![0u8; stride];
     let mut candidate = vec![0u8; stride + 1];
     let mut got_rows = 0usize;
     for row in rows {
+        if got_rows >= height {
+            return Err("too many rows".into());
+        }
         if row.len() != stride {
             return Err("row size mismatch".into());
         }
@@ -149,36 +156,15 @@ pub fn write_png_rows<W: Write>(
         }
         let _ = best_filter;
         prior.copy_from_slice(&row);
-        adler.update(&filter);
-        let mut chunk = Vec::with_capacity(65536);
-        let mut consumed = 0usize;
-        while consumed < filter.len() {
-            let before_in = compressor.total_in();
-            compressor
-                .compress_vec(&filter[consumed..], &mut chunk, flate2::FlushCompress::None)
-                .map_err(|e| e.to_string())?;
-            consumed += (compressor.total_in() - before_in) as usize;
-        }
-        idat.extend_from_slice(&chunk);
+        compressor.write_all(&filter).map_err(|e| e.to_string())?;
         got_rows += 1;
     }
     if got_rows != height {
         return Err(format!("expected {height} rows, got {got_rows}"));
     }
-    loop {
-        let mut chunk = Vec::with_capacity(65536);
-        let done = compressor
-            .compress_vec(&[], &mut chunk, flate2::FlushCompress::Finish)
-            .map_err(|e| e.to_string())?;
-        idat.extend_from_slice(&chunk);
-        if matches!(done, flate2::Status::StreamEnd) {
-            break;
-        }
-    }
-    zlib.extend_from_slice(&idat);
-    zlib.extend_from_slice(&adler.digest().to_be_bytes());
-    write_chunk(out, b"IDAT", &zlib, &table).map_err(|e| e.to_string())?;
-    write_chunk(out, b"IEND", &[], &table).map_err(|e| e.to_string())?;
+    let mut chunks = compressor.finish().map_err(|e| e.to_string())?;
+    chunks.emit().map_err(|e| e.to_string())?;
+    write_chunk(chunks.out, b"IEND", &[], &table).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -208,5 +194,124 @@ mod tests {
         assert!(write_png_rows(&mut out, 2, 1, &mut rows).is_err());
         let mut rows = Vec::<Vec<u8>>::new().into_iter();
         assert!(write_png_rows(&mut out, 0, 0, &mut rows).is_err());
+    }
+    #[test]
+    fn multi_idat_roundtrip_crc_and_incremental_delivery() {
+        use std::{
+            cell::Cell,
+            io::{Read, Write},
+            rc::Rc,
+        };
+        struct Sink {
+            bytes: Vec<u8>,
+            rows_seen: Rc<Cell<usize>>,
+            first_idat_row: Option<usize>,
+        }
+        impl Write for Sink {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                if b == b"IDAT" && self.first_idat_row.is_none() {
+                    self.first_idat_row = Some(self.rows_seen.get());
+                }
+                self.bytes.extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let count = Rc::new(Cell::new(0));
+        let mut sink = Sink {
+            bytes: vec![],
+            rows_seen: count.clone(),
+            first_idat_row: None,
+        };
+        let mut seed = 42_u64;
+        let original: Vec<Vec<u8>> = (0..600)
+            .map(|_| {
+                (0..3072)
+                    .map(|_| {
+                        seed ^= seed << 13;
+                        seed ^= seed >> 7;
+                        seed ^= seed << 17;
+                        seed as u8
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut rows = original
+            .clone()
+            .into_iter()
+            .inspect(|_| count.set(count.get() + 1));
+        write_png_rows(&mut sink, 1024, 600, &mut rows).unwrap();
+        assert!(
+            sink.first_idat_row.unwrap() < 600,
+            "output must arrive before final row"
+        );
+        let mut compressed = vec![];
+        let mut offset = 8;
+        let mut idats = 0;
+        while offset < sink.bytes.len() {
+            let n = u32::from_be_bytes(sink.bytes[offset..offset + 4].try_into().unwrap()) as usize;
+            let typ: &[u8; 4] = sink.bytes[offset + 4..offset + 8].try_into().unwrap();
+            let data = &sink.bytes[offset + 8..offset + 8 + n];
+            let crc = u32::from_be_bytes(
+                sink.bytes[offset + 8 + n..offset + 12 + n]
+                    .try_into()
+                    .unwrap(),
+            );
+            assert_eq!(crc, super::crc32(&super::crc32_table(), typ, data));
+            if typ == b"IDAT" {
+                assert!(n <= super::IDAT_CAPACITY);
+                compressed.extend_from_slice(data);
+                idats += 1;
+            }
+            offset += n + 12;
+        }
+        assert!(idats >= 2);
+        let mut decoded = vec![];
+        flate2::read::ZlibDecoder::new(compressed.as_slice())
+            .read_to_end(&mut decoded)
+            .unwrap();
+        let mut prior = vec![0_u8; 3072];
+        for (raw, expected) in decoded.as_chunks::<3073>().0.iter().zip(&original) {
+            let mut row = raw[1..].to_vec();
+            for i in 0..row.len() {
+                let predictor = match raw[0] {
+                    0 => 0,
+                    1 => {
+                        if i >= 3 {
+                            row[i - 3]
+                        } else {
+                            0
+                        }
+                    }
+                    2 => prior[i],
+                    _ => panic!("filter"),
+                };
+                row[i] = row[i].wrapping_add(predictor);
+            }
+            assert_eq!(&row, expected);
+            prior = row;
+        }
+        assert_eq!(decoded.len(), 600 * 3073);
+    }
+
+    #[test]
+    fn propagates_output_failure_and_rejects_extra_rows() {
+        struct Broken;
+        impl std::io::Write for Broken {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("disk full"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        assert!(
+            write_png_rows(&mut Broken, 1, 1, &mut vec![vec![0; 3]].into_iter())
+                .unwrap_err()
+                .contains("disk full")
+        );
+        assert!(write_png_rows(&mut vec![], 1, 1, &mut vec![vec![0; 3]; 2].into_iter()).is_err());
     }
 }

@@ -84,6 +84,7 @@ pub struct ResolvedGraphicsSettings {
     pub vsync: bool,
     pub hdr: bool,
     pub exposure_ev100: f32,
+    pub auto_exposure: bool,
     pub atmosphere_enabled: bool,
     pub atmosphere_quality: Quality,
     pub atmosphere_steps: u32,
@@ -93,6 +94,7 @@ pub struct ResolvedGraphicsSettings {
     pub multi_star: bool,
     pub limb_scattering: bool,
     pub sky_dome: bool,
+    pub atmosphere_density_scale: f32,
     pub airglow: bool,
     pub aurora_shell: bool,
     pub aurora_lighting: bool,
@@ -190,6 +192,7 @@ impl ResolvedGraphicsSettings {
             vsync: requested.renderer.vsync,
             hdr: requested.renderer.hdr,
             exposure_ev100: requested.renderer.exposure_ev100,
+            auto_exposure: requested.renderer.auto_exposure && requested.renderer.hdr,
             atmosphere_enabled: requested.atmosphere.enabled,
             atmosphere_quality: requested.atmosphere.quality,
             atmosphere_steps: requested.atmosphere.ray_steps,
@@ -199,6 +202,7 @@ impl ResolvedGraphicsSettings {
             multi_star: requested.atmosphere.multi_star,
             limb_scattering: requested.atmosphere.limb_scattering,
             sky_dome: requested.atmosphere.sky_dome,
+            atmosphere_density_scale: requested.atmosphere.density_scale.clamp(0.0, 2.0),
             airglow: requested.upper_atmosphere.airglow,
             aurora_shell: requested.upper_atmosphere.aurora,
             aurora_lighting: requested.upper_atmosphere.aurora_lighting && rt_on,
@@ -229,6 +233,7 @@ impl ResolvedGraphicsSettings {
     /// Flat string map for perf capture metadata (`resolved` section).
     pub fn as_meta_map(&self) -> BTreeMap<String, String> {
         let mut map = BTreeMap::new();
+        map.insert("auto_exposure".into(), self.auto_exposure.to_string());
         map.insert("preset".to_string(), self.preset_label.clone());
         map.insert("backend".to_string(), self.backend.name.clone());
         map.insert(
@@ -302,6 +307,24 @@ mod tests {
         let resolved =
             ResolvedGraphicsSettings::from_requested(&RequestedGraphics::default(), &caps);
         assert_eq!(resolved.ray_tracing, ResolvedRayTracing::Local);
+    }
+
+    #[test]
+    fn density_scale_defaults_to_one_and_clamps() {
+        let resolved = ResolvedGraphicsSettings::from_requested(
+            &RequestedGraphics::default(),
+            &Capabilities::unknown(),
+        );
+        assert_eq!(resolved.atmosphere_density_scale, 1.0);
+        let mut requested = RequestedGraphics::default();
+        requested.atmosphere.density_scale = 9.0;
+        let resolved =
+            ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+        assert_eq!(resolved.atmosphere_density_scale, 2.0);
+        requested.atmosphere.density_scale = -1.0;
+        let resolved =
+            ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+        assert_eq!(resolved.atmosphere_density_scale, 0.0);
     }
 
     #[test]

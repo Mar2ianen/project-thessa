@@ -386,3 +386,47 @@ mod tests {
         assert!(t.iter().all(|c| (0.0..=1.0).contains(c)));
     }
 }
+
+#[cfg(test)]
+mod sky_debug_tests {
+    use super::*;
+    use crate::lights::CelestialLight;
+    use crate::optics::nitrogen_oxygen_optics;
+
+    fn thessa_optics() -> AtmosphereOptics {
+        nitrogen_oxygen_optics(3_200_000.0, 120_000.0, 16_300.0).unwrap()
+    }
+
+    fn sun_overhead() -> CelestialLight {
+        CelestialLight {
+            direction_to_star: DVec3::Z,
+            irradiance_w_m2: 1000.0,
+            color_rgb: [1.0, 0.9, 0.8],
+            angular_radius_rad: 0.005,
+            visibility: 1.0,
+        }
+    }
+
+    #[test]
+    fn debug_zenith_radiance_vs_altitude() {
+        let optics = thessa_optics();
+        let sun = sun_overhead();
+        for alt_km in [0.0, 5.0, 16.0, 48.0, 150.0, 656.0] {
+            let cam = DVec3::new(0.0, 0.0, 3_200_000.0 + alt_km * 1000.0);
+            let up = sky_radiance(&optics, cam, DVec3::Z, std::slice::from_ref(&sun), 64, 16);
+            let down = sky_radiance(&optics, cam, -DVec3::Z, std::slice::from_ref(&sun), 64, 16);
+            eprintln!(
+                "alt {alt_km:6.0} km: zenith [{:.4}, {:.4}, {:.4}] nadir [{:.1}, {:.1}, {:.1}] nadir_T [{:.3}, {:.3}, {:.3}]",
+                up.radiance_rgb[0],
+                up.radiance_rgb[1],
+                up.radiance_rgb[2],
+                down.radiance_rgb[0],
+                down.radiance_rgb[1],
+                down.radiance_rgb[2],
+                down.transmittance_rgb[0],
+                down.transmittance_rgb[1],
+                down.transmittance_rgb[2],
+            );
+        }
+    }
+}

@@ -92,6 +92,17 @@ pub fn describe() -> Vec<SettingMeta> {
             description: "Vertical sync.",
         },
         SettingMeta {
+            path: "renderer.auto_exposure",
+            label: "Adaptive exposure",
+            kind: SettingKind::Bool,
+            range: "true | false",
+            step: "-",
+            unit: "-",
+            advanced: false,
+            restart_required: true,
+            description: "Adapt camera brightness to daylight, night and eclipses; disable for manual EV100.",
+        },
+        SettingMeta {
             path: "renderer.exposure_ev100",
             label: "Exposure",
             kind: SettingKind::Float,

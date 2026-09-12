@@ -1,4 +1,4 @@
-//! Thessa rocky-planet worldgen dev library (MIT, dev-only).
+//! Thessa rocky-planet field and offline tooling library (MIT).
 //!
 //! Authored macrostructure + deterministic geology/biome logic + explicit
 //! landmark generators + procedural physical-scale detail.

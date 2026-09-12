@@ -106,7 +106,10 @@ pub struct RendererSettings {
     pub vsync: bool,
     #[serde(default = "default_true")]
     pub hdr: bool,
-    /// Camera exposure compensation. Raw-sun + atmosphere scenes need ~13.
+    /// Adapt the camera to day/night/eclipses using scene luminance.
+    #[serde(default = "default_true")]
+    pub auto_exposure: bool,
+    /// Manual EV100 used when auto exposure is disabled.
     #[serde(default = "default_exposure")]
     pub exposure_ev100: f32,
 }
@@ -128,6 +131,10 @@ impl Default for RendererSettings {
             vsync: true,
             hdr: true,
             exposure_ev100: 13.0,
+            // Deterministic manual exposure until the AE metering curve is
+            // tuned against real HDR scenes (a constant -2.47 curve only
+            // darkens everything).
+            auto_exposure: false,
         }
     }
 }
@@ -152,6 +159,15 @@ pub struct AtmosphereSettings {
     pub sky_dome: bool,
     #[serde(default = "default_ray_steps")]
     pub ray_steps: u32,
+    /// Visual optical-depth multiplier for the scattering medium only
+    /// (renderer appearance, never physics). 1.0 = physical betas from
+    /// pressure; 0.0 = transparent shell/sky. Range enforced at resolve.
+    #[serde(default = "default_density_scale")]
+    pub density_scale: f32,
+}
+
+fn default_density_scale() -> f32 {
+    1.0
 }
 
 fn default_ray_steps() -> u32 {
@@ -170,6 +186,7 @@ impl Default for AtmosphereSettings {
             limb_scattering: true,
             sky_dome: true,
             ray_steps: 24,
+            density_scale: 1.0,
         }
     }
 }

@@ -11,6 +11,9 @@ glam.workspace = true
 serde.workspace = true
 rayon.workspace = true
 
+[dev-dependencies]
+toml.workspace = true
+
 [[bench]]
 name = "gravity"
 harness = false
@@ -21,4 +24,16 @@ harness = false
 
 [[bench]]
 name = "flight"
+harness = false
+
+[[bench]]
+name = "osculating"
+harness = false
+
+[[bench]]
+name = "onrails"
+harness = false
+
+[[bench]]
+name = "gravity_interpolation"
 harness = false

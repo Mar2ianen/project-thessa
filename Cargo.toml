@@ -35,3 +35,11 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 panic = "abort"
+
+[profile.dev.package.thessa-worldgen-rocky]
+opt-level = 2
+
+# The interactive client uses the development profile; keep the numerical
+# kernels optimized so warp doesn't spend its frame budget in debug arithmetic.
+[profile.dev.package.thessa-sim-core]
+opt-level = 2

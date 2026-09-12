@@ -310,9 +310,12 @@ impl EphemerisTable {
         };
         let a = &self.arrays;
         let (lx, hx) = (low * n, high * n);
+        // Width cascade: 8-wide AVX-512, then 4-wide AVX2, then scalar.
+        // Each tier degrades per chunk, so a missing tier falls through
+        // without disturbing the rest.
         let mut body = 0;
         while body + 8 <= n {
-            let done = use_simd
+            let done8 = use_simd
                 && thessa_simd::hermite_snapshot_chunk(
                     &a.pos_x[lx..],
                     &a.pos_x[hx..],
@@ -333,17 +336,81 @@ impl EphemerisTable {
                     &mut out.cy,
                     &mut out.cz,
                 );
-            if !done {
-                for b in body..body + 8 {
-                    let (center, _) = self.node_state(b, low, high, h, s);
-                    out.cx[b] = center.x;
-                    out.cy[b] = center.y;
-                    out.cz[b] = center.z;
+            if !done8 {
+                // Split 8-lane miss into two 4-wide attempts before scalar.
+                for half in [body, body + 4] {
+                    let done4 = use_simd
+                        && thessa_simd::hermite_snapshot_quad(
+                            &a.pos_x[lx..],
+                            &a.pos_x[hx..],
+                            &a.vel_x[lx..],
+                            &a.vel_x[hx..],
+                            &a.pos_y[lx..],
+                            &a.pos_y[hx..],
+                            &a.vel_y[lx..],
+                            &a.vel_y[hx..],
+                            &a.pos_z[lx..],
+                            &a.pos_z[hx..],
+                            &a.vel_z[lx..],
+                            &a.vel_z[hx..],
+                            half,
+                            h,
+                            s,
+                            &mut out.cx,
+                            &mut out.cy,
+                            &mut out.cz,
+                        );
+                    if !done4 {
+                        self.snapshot_scalar_range(out, low, high, h, s, half, half + 4);
+                    }
                 }
             }
             body += 8;
         }
-        for b in body..n {
+        while body + 4 <= n {
+            let done4 = use_simd
+                && thessa_simd::hermite_snapshot_quad(
+                    &a.pos_x[lx..],
+                    &a.pos_x[hx..],
+                    &a.vel_x[lx..],
+                    &a.vel_x[hx..],
+                    &a.pos_y[lx..],
+                    &a.pos_y[hx..],
+                    &a.vel_y[lx..],
+                    &a.vel_y[hx..],
+                    &a.pos_z[lx..],
+                    &a.pos_z[hx..],
+                    &a.vel_z[lx..],
+                    &a.vel_z[hx..],
+                    body,
+                    h,
+                    s,
+                    &mut out.cx,
+                    &mut out.cy,
+                    &mut out.cz,
+                );
+            if !done4 {
+                self.snapshot_scalar_range(out, low, high, h, s, body, body + 4);
+            }
+            body += 4;
+        }
+        self.snapshot_scalar_range(out, low, high, h, s, body, n);
+    }
+
+    /// Scalar snapshot fill over `[from, to)`: the pre-SIMD loop, bitwise
+    /// identical to it, also serving every fallback lane.
+    #[allow(clippy::too_many_arguments)]
+    fn snapshot_scalar_range(
+        &self,
+        out: &mut TableSnapshot,
+        low: usize,
+        high: usize,
+        h: f64,
+        s: f64,
+        from: usize,
+        to: usize,
+    ) {
+        for b in from..to {
             let (center, _) = self.node_state(b, low, high, h, s);
             out.cx[b] = center.x;
             out.cy[b] = center.y;
@@ -385,13 +452,49 @@ impl EphemerisTable {
                     &mut total,
                 );
             if !done {
-                // Singular lane (or SIMD off): scalar chunk, same `None`
-                // semantics as the pre-SIMD loop.
-                for index in body..body + 8 {
-                    total = self.scalar_term(snapshot, position, index, total)?;
+                // Singular 8-lane (or no AVX-512): two 4-wide attempts, then
+                // scalar, same `None` semantics as the pre-SIMD loop.
+                for half in [body, body + 4] {
+                    let done4 = use_simd
+                        && thessa_simd::gravity_quad(
+                            &snapshot.cx,
+                            &snapshot.cy,
+                            &snapshot.cz,
+                            &self.eff_mu,
+                            half,
+                            position.x,
+                            position.y,
+                            position.z,
+                            &mut total,
+                        );
+                    if !done4 {
+                        for index in half..half + 4 {
+                            total = self.scalar_term(snapshot, position, index, total)?;
+                        }
+                    }
                 }
             }
             body += 8;
+        }
+        while body + 4 <= n {
+            let done4 = use_simd
+                && thessa_simd::gravity_quad(
+                    &snapshot.cx,
+                    &snapshot.cy,
+                    &snapshot.cz,
+                    &self.eff_mu,
+                    body,
+                    position.x,
+                    position.y,
+                    position.z,
+                    &mut total,
+                );
+            if !done4 {
+                for index in body..body + 4 {
+                    total = self.scalar_term(snapshot, position, index, total)?;
+                }
+            }
+            body += 4;
         }
         for index in body..n {
             total = self.scalar_term(snapshot, position, index, total)?;

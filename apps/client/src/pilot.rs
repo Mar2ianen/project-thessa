@@ -1224,6 +1224,16 @@ fn pilot_input(
     }
 
     if state.view_mode == ClientViewMode::Pilot {
+        // Time warp shares the map's ArrowUp/Down binding; the map branch
+        // above returns early in pilot view so there is no double handling.
+        // High warp only sustains on rails (see MAX_TIME_WARP); off-rails
+        // the frame budget caps effective warp automatically.
+        if keys.just_pressed(KeyCode::ArrowUp) {
+            clock.multiplier = (clock.multiplier * 2.0).min(MAX_TIME_WARP);
+        }
+        if keys.just_pressed(KeyCode::ArrowDown) {
+            clock.multiplier = (clock.multiplier / 2.0).max(0.125);
+        }
         if keys.just_pressed(KeyCode::F2) {
             state.ui_hidden = !state.ui_hidden;
         }

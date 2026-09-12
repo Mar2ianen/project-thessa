@@ -176,6 +176,12 @@ fn main() {
         .run();
 }
 
+/// Maximum time-warp factor (2^17). High warp only sustains on rails:
+/// off-rails physics is per-tick, so the frame budget caps effective warp
+/// there automatically and the backlog never grows (unserved whole ticks
+/// are dropped, never queued).
+pub(crate) const MAX_TIME_WARP: f64 = 131072.0;
+
 #[derive(Resource)]
 struct SimulationClock {
     sim_seconds: f64,

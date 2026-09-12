@@ -8,6 +8,9 @@ use thessa_sim_core::{
 };
 
 pub(super) const FLIGHT_STEP_S: f64 = thessa_sim_core::WORLD_TICK_S;
+/// Baked coverage ahead (s) below which a fresh worker bake starts while
+/// riding, so sustained warp never stalls at the horizon end.
+const PROACTIVE_REBAKE_AHEAD_S: f64 = 86_400.0;
 const SURFACE_COMMAND_RATE_S: f64 = 2.4; // 60 deg/s for the 25-degree elevator
 
 /// Trim-conditioning threshold, not a force cutoff. At low density the
@@ -219,6 +222,9 @@ impl PilotFlightRuntime {
         if self.thrust_n() != 0.0 || self.rails.is_empty() || self.trace.is_some() {
             return Ok(0.0);
         }
+        // Collect a worker bake that finished while earlier batches flew;
+        // the batch loop otherwise never polls, and coverage would stall.
+        self.poll_rails_bake(ephemeris);
         // A zero controller moment at the first instant is not a promise
         // that SAS stays idle while a spinning craft turns away from target.
         // Do not run the stateful allocator speculatively either: a failed
@@ -271,6 +277,16 @@ impl PilotFlightRuntime {
             COAST_RAILS_VELOCITY_TOL_MPS,
         ) {
             return Ok(0.0);
+        }
+        // Proactive JIT preparation for sustained warp: when baked coverage
+        // ahead drops under a day, start a fresh full-horizon worker bake
+        // now so high warp never stalls on a synchronous rebake at the
+        // horizon end. One job at most; the swap path validates on arrival.
+        if self.rails_job.is_none()
+            && let Some(covered) = self.rails.covered_until()
+            && covered.0 - time.0 < PROACTIVE_REBAKE_AHEAD_S
+        {
+            self.spawn_rails_bake(ephemeris);
         }
         let ticks = (duration / FLIGHT_STEP_S).round() as u64;
         let end = self.time_after_ticks(ticks)?;
@@ -536,9 +552,17 @@ impl PilotFlightRuntime {
         }
     }
 
-    /// Poll/build the common gravity forecast. Reading the map never runs a
-    /// second integrator. Flight adopts it only after the state/key check.
-    pub(crate) fn prepare_shared_trajectory(&mut self, ephemeris: &BakedEphemeris) -> bool {
+    /// Spawn a full-horizon worker bake from the live state unless one is
+    /// already running. No-op headless (no pool). The swap path validates
+    /// ephemeris/config on arrival, so a bake that goes stale mid-flight
+    /// is rejected harmlessly instead of corrupting the cache.
+    fn spawn_rails_bake(&mut self, ephemeris: &BakedEphemeris) {
+        if self.rails_job.is_some() {
+            return;
+        }
+        let Some(pool) = bevy::tasks::AsyncComputeTaskPool::try_get() else {
+            return;
+        };
         let initial = TestParticleState {
             position: self.state.position_inertial_m,
             velocity: self.state.velocity_inertial_mps,
@@ -551,6 +575,20 @@ impl PilotFlightRuntime {
             .filter(|b| b.radius_m > 0.0)
             .map(|b| b.id)
             .collect();
+        let ephemeris = ephemeris.clone();
+        self.rails_job = Some(pool.spawn(async move {
+            let started = std::time::Instant::now();
+            let mut rails = OnRailsCache::new();
+            rails
+                .bake_tick(&ephemeris, initial, time, config, &impact_bodies)
+                .map_err(|e| e.to_string())?;
+            Ok((rails, started.elapsed().as_secs_f64()))
+        }));
+    }
+
+    /// Poll a finished worker bake, adopting it only after the state/key
+    /// check (which also rejects bakes from a pre-edit universe).
+    fn poll_rails_bake(&mut self, ephemeris: &BakedEphemeris) {
         if let Some(task) = self.rails_job.as_mut()
             && let Some(result) = bevy::tasks::block_on(bevy::tasks::poll_once(task))
         {
@@ -566,8 +604,13 @@ impl PilotFlightRuntime {
                             velocity: path.velocities[0],
                         },
                         path.times[0],
-                        config,
-                        &impact_bodies,
+                        TickIntegratorConfig::default(),
+                        &ephemeris
+                            .bodies
+                            .iter()
+                            .filter(|b| b.radius_m > 0.0)
+                            .map(|b| b.id)
+                            .collect::<Vec<_>>(),
                         0.0,
                         0.0,
                     )
@@ -577,6 +620,24 @@ impl PilotFlightRuntime {
                 }
             }
         }
+    }
+
+    /// Poll/build the common gravity forecast. Reading the map never runs a
+    /// second integrator. Flight adopts it only after the state/key check.
+    pub(crate) fn prepare_shared_trajectory(&mut self, ephemeris: &BakedEphemeris) -> bool {
+        let initial = TestParticleState {
+            position: self.state.position_inertial_m,
+            velocity: self.state.velocity_inertial_mps,
+        };
+        let time = SimTime(self.flight_time_s);
+        let config = TickIntegratorConfig::default();
+        let impact_bodies: Vec<_> = ephemeris
+            .bodies
+            .iter()
+            .filter(|b| b.radius_m > 0.0)
+            .map(|b| b.id)
+            .collect();
+        self.poll_rails_bake(ephemeris);
         if self.rails.usable_tick_for(
             ephemeris,
             initial,
@@ -588,18 +649,8 @@ impl PilotFlightRuntime {
         ) {
             return true;
         }
-        if let Some(pool) = bevy::tasks::AsyncComputeTaskPool::try_get() {
-            if self.rails_job.is_none() {
-                let ephemeris = ephemeris.clone();
-                self.rails_job = Some(pool.spawn(async move {
-                    let started = std::time::Instant::now();
-                    let mut rails = OnRailsCache::new();
-                    rails
-                        .bake_tick(&ephemeris, initial, time, config, &impact_bodies)
-                        .map_err(|e| e.to_string())?;
-                    Ok((rails, started.elapsed().as_secs_f64()))
-                }));
-            }
+        if bevy::tasks::AsyncComputeTaskPool::try_get().is_some() {
+            self.spawn_rails_bake(ephemeris);
             return false;
         }
         // Headless tests have no Bevy worker pool.
@@ -1334,6 +1385,46 @@ mod tests {
         assert!(
             (280_000.0..320_000.0).contains(&altitude),
             "coast must hold the orbit, altitude drifted to {altitude}"
+        );
+    }
+
+    #[test]
+    fn warp_scale_batch_jump_covers_an_hour_without_ticks() {
+        // 100kx warp equivalence: one advance call carrying an hour of sim
+        // time must ride batch jumps, not 432k ticks. Attitude stays idle
+        // (Direct, zero input/rates) so batches stay eligible.
+        let (ephemeris, mut flight) = fixture();
+        let origin = ephemeris
+            .body_state(flight.reference_body, SimTime::EPOCH)
+            .unwrap();
+        flight.state.position_inertial_m = origin.position_inertial + DVec3::Z * 1.0e9;
+        flight.state.velocity_inertial_mps = origin.velocity_inertial + DVec3::X * 100.0;
+        flight.state.orientation_body_to_inertial = DQuat::IDENTITY;
+        flight.state.angular_velocity_body_rps = DVec3::ZERO;
+        flight.sas_target_orientation = DQuat::IDENTITY;
+        flight.engine_active = false;
+        flight.throttle = 0.0;
+        flight.control_input = DVec3::ZERO;
+        flight
+            .advance(&ephemeris, ControlMode::Direct, 0.05)
+            .expect("coast warms the rails");
+        assert!(!flight.rails.is_empty());
+        flight
+            .advance(&ephemeris, ControlMode::Direct, 3600.0)
+            .expect("warp hour advances");
+        assert!(
+            (flight.rails_advanced_this_frame - 3600.0).abs() < 1.0,
+            "warp must ride batches, advanced {}",
+            flight.rails_advanced_this_frame
+        );
+        assert_eq!(
+            flight.steps_this_frame, 0,
+            "no per-tick solver work at warp"
+        );
+        assert!(
+            (flight.flight_time_s - 3600.05).abs() < 1.0,
+            "clock must advance by the warped hour, got {}",
+            flight.flight_time_s
         );
     }
 

@@ -75,7 +75,7 @@ pub(super) fn preview_input(
         clock.paused = !clock.paused;
     }
     if keys.just_pressed(KeyCode::ArrowUp) {
-        clock.multiplier = (clock.multiplier * 2.0).min(256.0);
+        clock.multiplier = (clock.multiplier * 2.0).min(MAX_TIME_WARP);
     }
     if keys.just_pressed(KeyCode::ArrowDown) {
         clock.multiplier = (clock.multiplier / 2.0).max(0.125);

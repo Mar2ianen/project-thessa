@@ -713,7 +713,11 @@ mod hermite_velocity_tests {
     #[test]
     fn barycentric_quadratic_is_exact() {
         // x(t) = origin + v*t + a*t^2/2 with a barycentric-scale origin.
-        let origin = DVec3::new(4.82199934755193e12, 1.101318193678849e8, 1.0001922164810932e9);
+        let origin = DVec3::new(
+            4.82199934755193e12,
+            1.101318193678849e8,
+            1.0001922164810932e9,
+        );
         let v = DVec3::new(-2310.338894347516, 50918.39341240515, 240.330294051677);
         let a = DVec3::new(0.5, -0.3, 0.1);
         let h = 1.0 / 60.0;

@@ -6,6 +6,7 @@ members = [
     "crates/protocol",
     "crates/perf",
     "crates/graphics",
+    "crates/flight-net",
     "crates/atmosphere",
     "apps/server",
     "apps/client",

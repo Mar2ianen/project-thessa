@@ -1,0 +1,14 @@
+[package]
+name = "thessa-flight-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "GPL-3.0-or-later"
+publish = false
+
+[dependencies]
+thessa-protocol = { path = "../protocol" }
+thessa-sim-core = { path = "../sim-core" }
+serde.workspace = true
+glam.workspace = true
+postcard.workspace = true

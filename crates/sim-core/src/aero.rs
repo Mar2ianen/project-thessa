@@ -360,6 +360,39 @@ pub struct AeroConfig {
     /// The default follows the Barrowman/RocketPy convention of freezing the
     /// subsonic correction at M=0.8 until the supersonic branch takes over.
     pub transonic_beta_floor: f64,
+    /// Angular width past stall over which attached flow hands over to
+    /// separated flow. Must be positive; ~6 deg keeps the lift peak within
+    /// a few degrees past the critical angle (thin-wing-like break) while
+    /// staying C1-smooth for trim solvers. Wider blends push the peak
+    /// further out and suit gentle low-aspect-ratio stall.
+    /// The handoff uses smoothstep (SIMD-friendly), never tanh/powf.
+    pub post_stall_blend_rad: f64,
+    /// Peak of the separated-flow flat-plate lift term
+    /// (`separated_lift * sin(2*alpha)`). 1.0 recovers thin flat-plate
+    /// theory; ordinary finite surfaces may calibrate lower.
+    pub separated_lift_coefficient: f64,
+    /// Flat-plate drag at 90 deg AoA (`separated_drag * sin^2(alpha)`).
+    /// ~1.9 matches normal-force data for thin plates.
+    pub separated_drag_coefficient: f64,
+    /// Pitching-moment coefficient about the panel side axis once fully
+    /// separated. Models the aft center-of-pressure shift without moving
+    /// geometry; 0.0 keeps the attached value blended to zero.
+    pub separated_pitching_moment: f64,
+    /// Control-surface effectiveness retained in fully separated flow
+    /// (0 = dead stick in the wake, 1 = unaffected). Blended by the same
+    /// separation factor as lift.
+    pub separated_control_factor: f64,
+    /// Polhamus-style leading-edge vortex lift, added on top of both
+    /// branches: `vortex * |sin(alpha)| * sin(alpha) * cos(alpha)`. This is
+    /// the dedicated delta-wing mechanism and never weakens the general
+    /// stall; 0.0 disables it (all legacy panels).
+    pub vortex_lift_factor: f64,
+    /// Hypersonic drag-only cutoff: above this Mach number lift (attached,
+    /// separated and vortex) fades to zero over a fixed 1-Mach band,
+    /// leaving pressure drag. INFINITY disables the cutoff. For ascent
+    /// work where hypersonic lift errors dwarf the trajectory but drag
+    /// still matters.
+    pub drag_only_above_mach: f64,
 }
 
 impl Default for AeroConfig {
@@ -381,6 +414,13 @@ impl Default for AeroConfig {
             supersonic_lift_slope_factor: 4.0,
             supersonic_wave_drag_factor: 1.0,
             transonic_beta_floor: 0.6,
+            post_stall_blend_rad: 6.0_f64.to_radians(),
+            separated_lift_coefficient: 1.0,
+            separated_drag_coefficient: 1.9,
+            separated_pitching_moment: 0.0,
+            separated_control_factor: 0.3,
+            vortex_lift_factor: 0.0,
+            drag_only_above_mach: f64::INFINITY,
         }
     }
 }
@@ -404,10 +444,23 @@ impl AeroConfig {
             self.supersonic_lift_slope_factor,
             self.supersonic_wave_drag_factor,
             self.transonic_beta_floor,
+            self.post_stall_blend_rad,
+            self.separated_lift_coefficient,
+            self.separated_drag_coefficient,
+            self.separated_pitching_moment,
+            self.separated_control_factor,
+            self.vortex_lift_factor,
         ];
         if finite.iter().any(|value| !value.is_finite()) {
             return Err(AeroError::InvalidModel(
                 "aero configuration contains a non-finite value".into(),
+            ));
+        }
+        // drag_only_above_mach may be INFINITY (disabled); anything else
+        // must be a positive finite cutoff.
+        if !(self.drag_only_above_mach.is_infinite() || self.drag_only_above_mach > 0.0) {
+            return Err(AeroError::InvalidModel(
+                "aero configuration has an invalid range".into(),
             ));
         }
         if self.lift_slope_per_rad <= 0.0
@@ -422,6 +475,12 @@ impl AeroConfig {
             || self.supersonic_wave_drag_factor < 0.0
             || self.transonic_beta_floor <= 0.0
             || self.transonic_beta_floor > 1.0
+            || self.post_stall_blend_rad <= 0.0
+            || self.separated_lift_coefficient < 0.0
+            || self.separated_drag_coefficient < 0.0
+            || self.separated_control_factor < 0.0
+            || self.separated_control_factor > 1.0
+            || self.vortex_lift_factor < 0.0
         {
             return Err(AeroError::InvalidModel(
                 "aero configuration has an invalid range".into(),
@@ -438,8 +497,6 @@ impl AeroConfig {
         control_deflection_rad: f64,
         panel: &AeroPanel,
     ) -> AeroCoefficients {
-        let control_alpha = alpha_rad + self.control_effectiveness * control_deflection_rad;
-        let alpha_eff = control_alpha - self.zero_lift_angle_rad;
         let mach = mach.max(0.0);
         // For a swept surface the shock-forming component is the velocity
         // normal to the leading edge. Below M=1 retain the conventional
@@ -477,19 +534,42 @@ impl AeroConfig {
         };
         let lift_slope = finite_planform_lift_slope(compressible_lift_slope, panel);
 
-        // Preserve a continuous lift curve past the stall angle and let the
-        // tanh saturation below provide the final bounded CL. This is a
-        // reduced-order post-stall trend, not a claim of separated-flow CFD.
-        let alpha_abs = alpha_eff.abs();
-        let post_stall_scale = if alpha_abs <= self.stall_angle_rad {
-            1.0
-        } else {
-            (self.stall_angle_rad / alpha_abs).powf(0.35)
-        };
-        let linear_lift = lift_slope * alpha_eff * post_stall_scale;
-        let cl = self.max_lift_coefficient * (linear_lift / self.max_lift_coefficient).tanh();
-        let reynolds_independent_drag =
-            self.base_drag_coefficient + self.induced_drag_factor * cl * cl;
+        // Attached/separated handoff driven by the AERODYNAMIC angle, so a
+        // deflected surface cannot de-stall itself by moving alpha_eff.
+        // smoothstep keeps the whole core to mul/add/min/max (SIMD-friendly);
+        // no tanh/powf anywhere on this path.
+        let alpha_aero = alpha_rad - self.zero_lift_angle_rad;
+        let separation = smoothstep(
+            self.stall_angle_rad,
+            self.stall_angle_rad + self.post_stall_blend_rad,
+            alpha_aero.abs(),
+        );
+        // Control surfaces lose authority in the wake: full gain attached,
+        // fading to the separated factor once stalled.
+        let control_gain = lerp(1.0, self.separated_control_factor, separation);
+        let alpha_eff =
+            alpha_aero + self.control_effectiveness * control_gain * control_deflection_rad;
+        // Attached branch peaks smoothly at max_lift via a rational cap
+        // (C-infinity, one sqrt) rather than tanh saturation.
+        let linear_lift = lift_slope * alpha_eff;
+        let capped_lift = self.max_lift_coefficient * (linear_lift / self.max_lift_coefficient)
+            / (1.0 + (linear_lift / self.max_lift_coefficient).powi(2)).sqrt();
+        // Separated branch is flat-plate-like: sin(2a) lift peaking at 45
+        // deg and vanishing at 0/90 deg, sin^2 drag peaking at 90 deg.
+        // sin(2a) keeps the correct odd symmetry past 90 deg for symmetric
+        // sections; cambered sections treat it as an approximation.
+        let (sin_alpha, cos_alpha) = alpha_eff.sin_cos();
+        let cl_separated = self.separated_lift_coefficient * 2.0 * sin_alpha * cos_alpha;
+        let cl = lerp(capped_lift, cl_separated, separation);
+        // Polhamus-style leading-edge vortex lift: a DEDICATED delta-wing
+        // term, never a weakening of the general stall. Odd in alpha,
+        // vanishing at 0 and 90 deg by construction.
+        let cl_vortex = self.vortex_lift_factor * sin_alpha.abs() * sin_alpha * cos_alpha;
+        // Induced drag follows attached lift only; separation drag takes
+        // over through the blend, rising sharply past stall.
+        let reynolds_independent_drag = self.base_drag_coefficient
+            + self.induced_drag_factor * capped_lift * capped_lift * (1.0 - separation)
+            + self.separated_drag_coefficient * separation * sin_alpha * sin_alpha;
 
         let transonic_rise = smoothstep(0.78, 1.18, mach);
         // Linearized supersonic thin-airfoil theory gives the same pressure
@@ -511,11 +591,32 @@ impl AeroConfig {
             * (transonic_rise * (0.12 + 1.5 * alpha_eff * alpha_eff))
             + smoothstep(1.0, 1.20, normal_mach) * supersonic_wave_drag;
 
+        // Hypersonic drag-only regime: above the cutoff, lift (attached,
+        // separated and vortex alike) fades out over a fixed 1-Mach band
+        // while pressure drag is kept. Off by default (INFINITY, which must
+        // never reach smoothstep: INF-INF is NaN).
+        let lift_fade = if self.drag_only_above_mach.is_infinite() {
+            1.0
+        } else {
+            1.0 - smoothstep(
+                self.drag_only_above_mach,
+                self.drag_only_above_mach + 1.0,
+                mach,
+            )
+        };
+        // Center of pressure drifts aft with separation: blend the moment
+        // coefficient the same way as the forces.
+        let pitching_moment = lerp(
+            self.pitching_moment_coefficient,
+            self.separated_pitching_moment,
+            separation,
+        );
+
         AeroCoefficients {
-            lift: cl,
+            lift: (cl + cl_vortex) * lift_fade,
             drag: reynolds_independent_drag + wave_drag,
             side_force: self.side_force_slope_per_rad * beta_rad,
-            pitching_moment: self.pitching_moment_coefficient,
+            pitching_moment,
         }
     }
 }
@@ -763,6 +864,191 @@ pub trait AeroModel: Sync {
     }
 }
 
+/// Reusable scratch buffers for [`PanelAeroModel::evaluate_soa_simd_scratch`].
+/// Kept by the caller across ticks: after the first evaluation no heap
+/// allocation happens on the fast path, preserving the model's
+/// allocation-free realtime property. Stale entries for inactive
+/// (parked) lanes are always finite, and their kernel outputs are ignored
+/// by force assembly, so reuse is sound.
+#[derive(Debug, Default)]
+pub struct AeroSimdScratch {
+    lanes: Vec<LaneFlow>,
+    alpha_eff: Vec<f64>,
+    beta_k: Vec<f64>,
+    sin_e: Vec<f64>,
+    cos_e: Vec<f64>,
+    sep: Vec<f64>,
+    mach_k: Vec<f64>,
+    sweep_cos: Vec<f64>,
+    cl: Vec<f64>,
+    cd: Vec<f64>,
+    cy: Vec<f64>,
+    cm: Vec<f64>,
+}
+
+impl AeroSimdScratch {
+    fn ensure(&mut self, panels: usize) {
+        self.lanes.clear();
+        self.lanes.reserve(panels);
+        self.alpha_eff.resize(panels, 0.0);
+        self.beta_k.resize(panels, 0.0);
+        self.sin_e.resize(panels, 0.0);
+        self.cos_e.resize(panels, 1.0);
+        self.sep.resize(panels, 0.0);
+        self.mach_k.resize(panels, 0.3);
+        self.sweep_cos.resize(panels, 1.0);
+        self.cl.resize(panels, 0.0);
+        self.cd.resize(panels, 0.0);
+        self.cy.resize(panels, 0.0);
+        self.cm.resize(panels, 0.0);
+    }
+}
+
+/// Per-lane flow state from the scalar prologue shared by the SoA oracle and
+/// the SIMD fast path. Trig (atan2) and control folding stay scalar here;
+/// the kernels consume only `alpha_eff`/`separation`/sin-cos plus Mach.
+/// Inactive lanes (parked panels in vacuum or still air) carry the real
+/// local velocity for load recording but assemble zero force.
+#[derive(Debug, Clone, Copy)]
+struct LaneFlow {
+    chord_axis: DVec3,
+    lift_axis: DVec3,
+    side_axis: DVec3,
+    velocity_direction: DVec3,
+    local_velocity: DVec3,
+    local_speed: f64,
+    local_q: f64,
+    area: f64,
+    chord: f64,
+    span: f64,
+    exposure: f64,
+    center_of_pressure: DVec3,
+    alpha: f64,
+    beta: f64,
+    local_mach: f64,
+    local_reynolds: f64,
+    active: bool,
+}
+
+/// Scalar prologue for one SoA lane: local flow angles and dynamic pressure.
+/// Identical inputs feed the oracle's shared coefficient path and the SIMD
+/// kernels, so any divergence between them is kernel math, never geometry.
+fn lane_flow(
+    state: AeroState,
+    environment: AeroEnvironment,
+    panels: &PanelSoA,
+    index: usize,
+) -> Result<LaneFlow, AeroError> {
+    let position = DVec3::new(
+        panels.pos_x[index],
+        panels.pos_y[index],
+        panels.pos_z[index],
+    );
+    let local_velocity = state.velocity_body_mps + state.angular_velocity_body_rps.cross(position)
+        - environment.wind_velocity_body_mps;
+    let local_speed = finite_length(local_velocity, "local velocity")?;
+    let inactive = LaneFlow {
+        chord_axis: DVec3::X,
+        lift_axis: DVec3::Z,
+        side_axis: DVec3::Y,
+        velocity_direction: DVec3::X,
+        local_velocity,
+        local_speed,
+        local_q: 0.0,
+        area: 0.0,
+        chord: 0.0,
+        span: 0.0,
+        exposure: 0.0,
+        center_of_pressure: DVec3::ZERO,
+        alpha: 0.0,
+        beta: 0.0,
+        local_mach: 0.0,
+        local_reynolds: 0.0,
+        active: false,
+    };
+    if local_speed <= EPS_SPEED_MPS || environment.density_kg_m3 == 0.0 {
+        return Ok(inactive);
+    }
+    let chord_axis = DVec3::new(
+        panels.chord_x[index],
+        panels.chord_y[index],
+        panels.chord_z[index],
+    );
+    let lift_axis = DVec3::new(
+        panels.lift_x[index],
+        panels.lift_y[index],
+        panels.lift_z[index],
+    );
+    let side_axis = lift_axis.cross(chord_axis).normalize();
+    let velocity_direction = local_velocity / local_speed;
+    let forward = local_velocity.dot(chord_axis);
+    let alpha = (-local_velocity.dot(lift_axis)).atan2(forward);
+    let beta = local_velocity
+        .dot(side_axis)
+        .atan2(forward.abs().max(EPS_SPEED_MPS));
+    let local_mach = local_speed / environment.speed_of_sound_mps;
+    if !local_mach.is_finite() {
+        return Err(AeroError::InvalidState(
+            "local Mach number is non-finite".into(),
+        ));
+    }
+    let local_reynolds = reynolds(
+        environment.density_kg_m3,
+        local_speed,
+        panels.chord[index],
+        environment.dynamic_viscosity_pa_s,
+    );
+    if !local_reynolds.is_finite() {
+        return Err(AeroError::InvalidState(
+            "local Reynolds number is non-finite".into(),
+        ));
+    }
+    let local_q = dynamic_pressure(environment.density_kg_m3, local_speed)?;
+    Ok(LaneFlow {
+        chord_axis,
+        lift_axis,
+        side_axis,
+        velocity_direction,
+        local_velocity,
+        local_speed,
+        local_q,
+        area: panels.area[index],
+        chord: panels.chord[index],
+        span: panels.span[index],
+        exposure: panels.exposure[index],
+        center_of_pressure: DVec3::new(
+            panels.cop_x[index],
+            panels.cop_y[index],
+            panels.cop_z[index],
+        ),
+        alpha,
+        beta,
+        local_mach,
+        local_reynolds,
+        active: true,
+    })
+}
+
+/// Zero-load record for inactive lanes, matching the oracle's parked output.
+fn parked_load(lane: &LaneFlow) -> AeroPanelLoad {
+    AeroPanelLoad {
+        force_body_n: DVec3::ZERO,
+        moment_body_nm: DVec3::ZERO,
+        local_velocity_body_mps: lane.local_velocity,
+        dynamic_pressure_pa: 0.0,
+        mach: 0.0,
+        reynolds_number: 0.0,
+        angle_of_attack_rad: 0.0,
+        sideslip_rad: 0.0,
+        coefficients: AeroCoefficients {
+            lift: 0.0,
+            drag: 0.0,
+            side_force: 0.0,
+            pitching_moment: 0.0,
+        },
+    }
+}
+
 /// Fast deterministic panel solver. It is deliberately allocation-free in its
 /// normal result path and is suitable for fixed-rate realtime evaluation.
 #[derive(Debug, Clone, PartialEq)]
@@ -984,6 +1270,458 @@ impl PanelAeroModel {
         })
     }
 
+    /// Scalar oracle over [`PanelSoA`] lanes: same equations as
+    /// [`evaluate_parts`](Self::evaluate_parts) (shared coefficient path),
+    /// transcribed to structure-of-arrays reads. The equivalence test pins
+    /// it against the AoS path; vector kernels in `thessa-simd` target this
+    /// exact data flow with a tolerance test.
+    pub fn evaluate_soa_parts(
+        &self,
+        state: AeroState,
+        environment: AeroEnvironment,
+        panels: &PanelSoA,
+        record_panel_loads: bool,
+    ) -> Result<AeroResult, AeroError> {
+        state.validate()?;
+        environment.validate()?;
+        self.config.validate()?;
+
+        let freestream_velocity = state.velocity_body_mps - environment.wind_velocity_body_mps;
+        let freestream_speed = finite_length(freestream_velocity, "freestream velocity")?;
+        let freestream_dynamic_pressure =
+            dynamic_pressure(environment.density_kg_m3, freestream_speed)?;
+        let mach = freestream_speed / environment.speed_of_sound_mps;
+        if !mach.is_finite() {
+            return Err(AeroError::InvalidState(
+                "freestream Mach number is non-finite".into(),
+            ));
+        }
+        let mut chord_sum = 0.0;
+        for index in 0..panels.count {
+            chord_sum += panels.chord[index];
+        }
+        let reynolds_number = if panels.count > 0 {
+            reynolds(
+                environment.density_kg_m3,
+                freestream_speed,
+                chord_sum / panels.count as f64,
+                environment.dynamic_viscosity_pa_s,
+            )
+        } else {
+            0.0
+        };
+        if !reynolds_number.is_finite() {
+            return Err(AeroError::InvalidState(
+                "freestream Reynolds number is non-finite".into(),
+            ));
+        }
+        let mut force_body_n = DVec3::ZERO;
+        let mut moment_body_nm = DVec3::ZERO;
+        let mut panel_loads = record_panel_loads.then(Vec::new);
+
+        for index in 0..panels.count {
+            let lane = lane_flow(state, environment, panels, index)?;
+            if !lane.active {
+                if let Some(loads) = &mut panel_loads {
+                    loads.push(parked_load(&lane));
+                }
+                continue;
+            }
+            let panel = panels.panel_at(index);
+            let coefficients = self.coefficients(
+                &panel,
+                lane.local_mach,
+                lane.alpha,
+                lane.beta,
+                panels.deflection[index],
+            );
+            if !coefficients.lift.is_finite()
+                || !coefficients.drag.is_finite()
+                || coefficients.drag < 0.0
+                || !coefficients.side_force.is_finite()
+                || !coefficients.pitching_moment.is_finite()
+            {
+                return Err(AeroError::InvalidModel(
+                    "aero coefficients must be finite with non-negative drag".into(),
+                ));
+            }
+            let (force, moment) =
+                self.assemble_lane(state.angular_velocity_body_rps, &lane, &coefficients)?;
+            force_body_n += force;
+            moment_body_nm += moment;
+            if let Some(loads) = &mut panel_loads {
+                loads.push(AeroPanelLoad {
+                    force_body_n: force,
+                    moment_body_nm: moment,
+                    local_velocity_body_mps: lane.local_velocity,
+                    dynamic_pressure_pa: lane.local_q,
+                    mach: lane.local_mach,
+                    reynolds_number: lane.local_reynolds,
+                    angle_of_attack_rad: lane.alpha,
+                    sideslip_rad: lane.beta,
+                    coefficients,
+                });
+            }
+        }
+        Ok(AeroResult {
+            force_body_n,
+            moment_body_nm,
+            dynamic_pressure_pa: freestream_dynamic_pressure,
+            mach,
+            reynolds_number,
+            panel_count: panels.count,
+            panel_loads,
+        })
+    }
+
+    /// SIMD fast path over [`PanelSoA`] lanes: scalar prologue (flow angles,
+    /// separation, control folding, sin/cos) then the 8/4-wide coefficient
+    /// kernels from `thessa-simd`, then the shared assembly below. Short
+    /// tails and machines without AVX-512 evaluate the same shared scalar
+    /// coefficient path per lane, so the result is deterministic for a fixed
+    /// lane count and feature set (cross-machine bits may differ). A
+    /// coefficient table forces delegation to [`evaluate_soa_parts`](Self::evaluate_soa_parts):
+    /// the kernels implement the analytic model only.
+    pub fn evaluate_soa_simd(
+        &self,
+        state: AeroState,
+        environment: AeroEnvironment,
+        panels: &PanelSoA,
+        record_panel_loads: bool,
+    ) -> Result<AeroResult, AeroError> {
+        self.evaluate_soa_simd_scratch(
+            state,
+            environment,
+            panels,
+            record_panel_loads,
+            &mut AeroSimdScratch::default(),
+        )
+    }
+
+    /// SIMD fast path with caller-owned scratch (see [`AeroSimdScratch`]).
+    /// Identical results to [`evaluate_soa_simd`](Self::evaluate_soa_simd)
+    /// without per-tick heap allocation once the scratch is warm.
+    pub fn evaluate_soa_simd_scratch(
+        &self,
+        state: AeroState,
+        environment: AeroEnvironment,
+        panels: &PanelSoA,
+        record_panel_loads: bool,
+        scratch: &mut AeroSimdScratch,
+    ) -> Result<AeroResult, AeroError> {
+        if self.coefficient_table.is_some() {
+            return self.evaluate_soa_parts(state, environment, panels, record_panel_loads);
+        }
+        state.validate()?;
+        environment.validate()?;
+        self.config.validate()?;
+
+        let freestream_velocity = state.velocity_body_mps - environment.wind_velocity_body_mps;
+        let freestream_speed = finite_length(freestream_velocity, "freestream velocity")?;
+        let freestream_dynamic_pressure =
+            dynamic_pressure(environment.density_kg_m3, freestream_speed)?;
+        let mach = freestream_speed / environment.speed_of_sound_mps;
+        if !mach.is_finite() {
+            return Err(AeroError::InvalidState(
+                "freestream Mach number is non-finite".into(),
+            ));
+        }
+        let mut chord_sum = 0.0;
+        for index in 0..panels.count {
+            chord_sum += panels.chord[index];
+        }
+        let reynolds_number = if panels.count > 0 {
+            reynolds(
+                environment.density_kg_m3,
+                freestream_speed,
+                chord_sum / panels.count as f64,
+                environment.dynamic_viscosity_pa_s,
+            )
+        } else {
+            0.0
+        };
+        if !reynolds_number.is_finite() {
+            return Err(AeroError::InvalidState(
+                "freestream Reynolds number is non-finite".into(),
+            ));
+        }
+
+        let n = panels.count;
+        scratch.ensure(n);
+        let s = &mut *scratch;
+        for index in 0..n {
+            let lane = lane_flow(state, environment, panels, index)?;
+            if lane.active {
+                // Analytic-model head, transcribed: the handoff is driven by
+                // the aerodynamic angle so a deflected surface cannot
+                // de-stall itself; control gain fades with separation.
+                let alpha_aero = lane.alpha - self.config.zero_lift_angle_rad;
+                let separation = smoothstep(
+                    self.config.stall_angle_rad,
+                    self.config.stall_angle_rad + self.config.post_stall_blend_rad,
+                    alpha_aero.abs(),
+                );
+                let gain = lerp(1.0, self.config.separated_control_factor, separation);
+                let effective = alpha_aero
+                    + self.config.control_effectiveness * gain * panels.deflection[index];
+                let (sn, cs) = effective.sin_cos();
+                s.alpha_eff[index] = effective;
+                s.beta_k[index] = lane.beta;
+                s.sin_e[index] = sn;
+                s.cos_e[index] = cs;
+                s.sep[index] = separation;
+                s.mach_k[index] = lane.local_mach;
+                s.sweep_cos[index] = panels.sweep_rad[index].cos();
+            }
+            s.lanes.push(lane);
+        }
+        let params = thessa_simd::AeroKernelParams {
+            lift_slope: self.config.lift_slope_per_rad,
+            max_lift: self.config.max_lift_coefficient,
+            base_drag: self.config.base_drag_coefficient,
+            induced: self.config.induced_drag_factor,
+            wave_coeff: self.config.wave_drag_coefficient,
+            side_slope: self.config.side_force_slope_per_rad,
+            cm_att: self.config.pitching_moment_coefficient,
+            sep_lift: self.config.separated_lift_coefficient,
+            sep_drag: self.config.separated_drag_coefficient,
+            cm_sep: self.config.separated_pitching_moment,
+            vortex: self.config.vortex_lift_factor,
+            ss_factor: self.config.supersonic_lift_slope_factor,
+            wave_factor: self.config.supersonic_wave_drag_factor,
+            beta_floor: self.config.transonic_beta_floor,
+            drag_cut: self.config.drag_only_above_mach,
+        };
+        let mut body = 0;
+        while body + 8 <= n {
+            let done = thessa_simd::aero_coefficients_chunk(
+                &s.alpha_eff,
+                &s.beta_k,
+                &s.sin_e,
+                &s.cos_e,
+                &s.sep,
+                &s.mach_k,
+                &s.sweep_cos,
+                &panels.aspect_ratio,
+                &panels.interference,
+                &panels.thickness_ratio,
+                body,
+                &params,
+                &mut s.cl,
+                &mut s.cd,
+                &mut s.cy,
+                &mut s.cm,
+            );
+            if !done {
+                for half in [body, body + 4] {
+                    let done4 = thessa_simd::aero_coefficients_quad(
+                        &s.alpha_eff,
+                        &s.beta_k,
+                        &s.sin_e,
+                        &s.cos_e,
+                        &s.sep,
+                        &s.mach_k,
+                        &s.sweep_cos,
+                        &panels.aspect_ratio,
+                        &panels.interference,
+                        &panels.thickness_ratio,
+                        half,
+                        &params,
+                        &mut s.cl,
+                        &mut s.cd,
+                        &mut s.cy,
+                        &mut s.cm,
+                    );
+                    if !done4 {
+                        for index in half..half + 4 {
+                            let coefficients = self.analytic_lane(panels, &s.lanes[index], index);
+                            s.cl[index] = coefficients.lift;
+                            s.cd[index] = coefficients.drag;
+                            s.cy[index] = coefficients.side_force;
+                            s.cm[index] = coefficients.pitching_moment;
+                        }
+                    }
+                }
+            }
+            body += 8;
+        }
+        while body + 4 <= n {
+            let done4 = thessa_simd::aero_coefficients_quad(
+                &s.alpha_eff,
+                &s.beta_k,
+                &s.sin_e,
+                &s.cos_e,
+                &s.sep,
+                &s.mach_k,
+                &s.sweep_cos,
+                &panels.aspect_ratio,
+                &panels.interference,
+                &panels.thickness_ratio,
+                body,
+                &params,
+                &mut s.cl,
+                &mut s.cd,
+                &mut s.cy,
+                &mut s.cm,
+            );
+            if !done4 {
+                for index in body..body + 4 {
+                    let coefficients = self.analytic_lane(panels, &s.lanes[index], index);
+                    s.cl[index] = coefficients.lift;
+                    s.cd[index] = coefficients.drag;
+                    s.cy[index] = coefficients.side_force;
+                    s.cm[index] = coefficients.pitching_moment;
+                }
+            }
+            body += 4;
+        }
+        for index in body..n {
+            let coefficients = self.analytic_lane(panels, &s.lanes[index], index);
+            s.cl[index] = coefficients.lift;
+            s.cd[index] = coefficients.drag;
+            s.cy[index] = coefficients.side_force;
+            s.cm[index] = coefficients.pitching_moment;
+        }
+
+        let mut force_body_n = DVec3::ZERO;
+        let mut moment_body_nm = DVec3::ZERO;
+        let mut panel_loads = record_panel_loads.then(Vec::new);
+        for index in 0..n {
+            let lane = &s.lanes[index];
+            if !lane.active {
+                if let Some(loads) = &mut panel_loads {
+                    loads.push(parked_load(lane));
+                }
+                continue;
+            }
+            if !s.cl[index].is_finite()
+                || !s.cd[index].is_finite()
+                || s.cd[index] < 0.0
+                || !s.cy[index].is_finite()
+                || !s.cm[index].is_finite()
+            {
+                return Err(AeroError::InvalidModel(
+                    "aero coefficients must be finite with non-negative drag".into(),
+                ));
+            }
+            // Lift sign lives in force assembly, outside the kernels.
+            let coefficients = AeroCoefficients {
+                lift: s.cl[index] * panels.lift_sign[index],
+                drag: s.cd[index],
+                side_force: s.cy[index],
+                pitching_moment: s.cm[index],
+            };
+            let (force, moment) =
+                self.assemble_lane(state.angular_velocity_body_rps, lane, &coefficients)?;
+            force_body_n += force;
+            moment_body_nm += moment;
+            if let Some(loads) = &mut panel_loads {
+                loads.push(AeroPanelLoad {
+                    force_body_n: force,
+                    moment_body_nm: moment,
+                    local_velocity_body_mps: lane.local_velocity,
+                    dynamic_pressure_pa: lane.local_q,
+                    mach: lane.local_mach,
+                    reynolds_number: lane.local_reynolds,
+                    angle_of_attack_rad: lane.alpha,
+                    sideslip_rad: lane.beta,
+                    coefficients,
+                });
+            }
+        }
+
+        if !force_body_n.is_finite() || !moment_body_nm.is_finite() {
+            return Err(AeroError::InvalidState(
+                "summed aero force or moment is non-finite".into(),
+            ));
+        }
+        Ok(AeroResult {
+            force_body_n,
+            moment_body_nm,
+            dynamic_pressure_pa: freestream_dynamic_pressure,
+            mach,
+            reynolds_number,
+            panel_count: panels.count,
+            panel_loads,
+        })
+    }
+
+    /// Shared scalar coefficient lane for SIMD tails and fallback machines:
+    /// the analytic model without lift sign (kernels never see the sign;
+    /// assembly applies it uniformly).
+    fn analytic_lane(&self, panels: &PanelSoA, lane: &LaneFlow, index: usize) -> AeroCoefficients {
+        if !lane.active {
+            return AeroCoefficients {
+                lift: 0.0,
+                drag: 0.0,
+                side_force: 0.0,
+                pitching_moment: 0.0,
+            };
+        }
+        let panel = panels.panel_at(index);
+        self.config.analytic_coefficients(
+            lane.local_mach,
+            lane.alpha,
+            lane.beta,
+            panels.deflection[index],
+            &panel,
+        )
+    }
+
+    /// Force/moment assembly for one lane, shared by the SoA oracle and the
+    /// SIMD fast path: exposure-scaled pressure force along the projected
+    /// axes plus pitching moment about the side axis, CP cross term and the
+    /// rotational-damping moment. Inactive lanes assemble zero.
+    fn assemble_lane(
+        &self,
+        angular_velocity_body_rps: DVec3,
+        lane: &LaneFlow,
+        coefficients: &AeroCoefficients,
+    ) -> Result<(DVec3, DVec3), AeroError> {
+        if !lane.active {
+            return Ok((DVec3::ZERO, DVec3::ZERO));
+        }
+        let lift_direction = project_perpendicular(lane.lift_axis, lane.velocity_direction);
+        let side_direction = project_perpendicular(lane.side_axis, lane.velocity_direction);
+        let force = lane.exposure
+            * lane.local_q
+            * lane.area
+            * (-lane.velocity_direction * coefficients.drag + lift_direction * coefficients.lift
+                - side_direction * coefficients.side_force);
+        let aerodynamic_moment =
+            lane.side_axis * (lane.local_q * lane.area * lane.chord * coefficients.pitching_moment);
+        let reduced_rates = DVec3::new(
+            angular_velocity_body_rps.dot(lane.chord_axis) * lane.span / (2.0 * lane.local_speed),
+            angular_velocity_body_rps.dot(lane.side_axis) * lane.chord / (2.0 * lane.local_speed),
+            angular_velocity_body_rps.dot(lane.lift_axis) * lane.span / (2.0 * lane.local_speed),
+        );
+        let dynamic_moment = lane.chord_axis
+            * (lane.local_q
+                * lane.area
+                * lane.span
+                * self.config.roll_damping_coefficient
+                * reduced_rates.x)
+            + lane.side_axis
+                * (lane.local_q
+                    * lane.area
+                    * lane.chord
+                    * self.config.pitch_damping_coefficient
+                    * reduced_rates.y)
+            + lane.lift_axis
+                * (lane.local_q
+                    * lane.area
+                    * lane.span
+                    * self.config.yaw_damping_coefficient
+                    * reduced_rates.z);
+        let moment = lane.center_of_pressure.cross(force) + aerodynamic_moment + dynamic_moment;
+        if !force.is_finite() || !moment.is_finite() {
+            return Err(AeroError::InvalidState(
+                "aero force or moment is non-finite".into(),
+            ));
+        }
+        Ok((force, moment))
+    }
+
     fn coefficients(
         &self,
         panel: &AeroPanel,
@@ -1037,6 +1775,136 @@ pub fn evaluate_batch<M: AeroModel>(
     cases: &[AeroCase],
 ) -> Vec<Result<AeroResult, AeroError>> {
     cases.par_iter().map(|case| model.evaluate(case)).collect()
+}
+
+/// Structure-of-arrays panel layout for vectorized evaluation: one
+/// contiguous run per field, so an 8-wide kernel loads 8 panels with plain
+/// `loadu` and no gathers. Built once per geometry (vehicle compile time),
+/// consumed every tick. Field order mirrors [`AeroPanel`]; the scalar oracle
+/// below reads the same arrays the kernels will consume.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PanelSoA {
+    pub count: usize,
+    pub pos_x: Vec<f64>,
+    pub pos_y: Vec<f64>,
+    pub pos_z: Vec<f64>,
+    pub cop_x: Vec<f64>,
+    pub cop_y: Vec<f64>,
+    pub cop_z: Vec<f64>,
+    pub chord_x: Vec<f64>,
+    pub chord_y: Vec<f64>,
+    pub chord_z: Vec<f64>,
+    pub lift_x: Vec<f64>,
+    pub lift_y: Vec<f64>,
+    pub lift_z: Vec<f64>,
+    pub area: Vec<f64>,
+    pub chord: Vec<f64>,
+    pub span: Vec<f64>,
+    pub aspect_ratio: Vec<f64>,
+    pub sweep_rad: Vec<f64>,
+    pub interference: Vec<f64>,
+    pub lift_sign: Vec<f64>,
+    pub thickness_ratio: Vec<f64>,
+    pub deflection: Vec<f64>,
+    pub exposure: Vec<f64>,
+}
+
+/// Push helper keeping every lane aligned; a partial push on error would
+/// desynchronize the whole layout.
+macro_rules! push_panel_lane {
+    ($soa:expr, $panel:expr, $chord:expr, $lift:expr) => {{
+        $soa.pos_x.push($panel.position_body_m.x);
+        $soa.pos_y.push($panel.position_body_m.y);
+        $soa.pos_z.push($panel.position_body_m.z);
+        $soa.cop_x.push($panel.center_of_pressure_body_m.x);
+        $soa.cop_y.push($panel.center_of_pressure_body_m.y);
+        $soa.cop_z.push($panel.center_of_pressure_body_m.z);
+        $soa.chord_x.push($chord.x);
+        $soa.chord_y.push($chord.y);
+        $soa.chord_z.push($chord.z);
+        $soa.lift_x.push($lift.x);
+        $soa.lift_y.push($lift.y);
+        $soa.lift_z.push($lift.z);
+        $soa.area.push($panel.area_m2);
+        $soa.chord.push($panel.chord_m);
+        $soa.span.push($panel.span_m);
+        $soa.aspect_ratio.push($panel.planform_aspect_ratio);
+        $soa.sweep_rad.push($panel.planform_sweep_rad);
+        $soa.interference.push($panel.lift_interference_factor);
+        $soa.lift_sign.push($panel.lift_coefficient_sign);
+        $soa.thickness_ratio.push($panel.thickness_to_chord_ratio);
+        $soa.deflection.push($panel.control_deflection_rad);
+        $soa.exposure.push($panel.exposure);
+    }};
+}
+
+impl PanelSoA {
+    /// Compile-once layout from a validated geometry. Axes are normalized
+    /// and orthogonalized exactly like the scalar path, so the oracle below
+    /// and the kernels consume identical inputs.
+    pub fn from_geometry(geometry: &AeroGeometry) -> Result<Self, AeroError> {
+        geometry.validate()?;
+        let mut soa = Self {
+            count: geometry.panels.len(),
+            pos_x: Vec::with_capacity(geometry.panels.len()),
+            pos_y: Vec::with_capacity(geometry.panels.len()),
+            pos_z: Vec::with_capacity(geometry.panels.len()),
+            cop_x: Vec::with_capacity(geometry.panels.len()),
+            cop_y: Vec::with_capacity(geometry.panels.len()),
+            cop_z: Vec::with_capacity(geometry.panels.len()),
+            chord_x: Vec::with_capacity(geometry.panels.len()),
+            chord_y: Vec::with_capacity(geometry.panels.len()),
+            chord_z: Vec::with_capacity(geometry.panels.len()),
+            lift_x: Vec::with_capacity(geometry.panels.len()),
+            lift_y: Vec::with_capacity(geometry.panels.len()),
+            lift_z: Vec::with_capacity(geometry.panels.len()),
+            area: Vec::with_capacity(geometry.panels.len()),
+            chord: Vec::with_capacity(geometry.panels.len()),
+            span: Vec::with_capacity(geometry.panels.len()),
+            aspect_ratio: Vec::with_capacity(geometry.panels.len()),
+            sweep_rad: Vec::with_capacity(geometry.panels.len()),
+            interference: Vec::with_capacity(geometry.panels.len()),
+            lift_sign: Vec::with_capacity(geometry.panels.len()),
+            thickness_ratio: Vec::with_capacity(geometry.panels.len()),
+            deflection: Vec::with_capacity(geometry.panels.len()),
+            exposure: Vec::with_capacity(geometry.panels.len()),
+        };
+        for panel in &geometry.panels {
+            let chord = normalize_axis(panel.chord_axis_body, "chord axis")?;
+            let lift = orthogonal_axis(panel.lift_axis_body, chord, "lift axis")?;
+            push_panel_lane!(soa, panel, chord, lift);
+        }
+        Ok(soa)
+    }
+
+    /// Rehydrate one lane for the shared coefficient path. Copy cost is
+    /// trivial next to a coefficient evaluation; the kernels bypass this.
+    fn panel_at(&self, index: usize) -> AeroPanel {
+        AeroPanel {
+            position_body_m: DVec3::new(self.pos_x[index], self.pos_y[index], self.pos_z[index]),
+            center_of_pressure_body_m: DVec3::new(
+                self.cop_x[index],
+                self.cop_y[index],
+                self.cop_z[index],
+            ),
+            chord_axis_body: DVec3::new(
+                self.chord_x[index],
+                self.chord_y[index],
+                self.chord_z[index],
+            ),
+            lift_axis_body: DVec3::new(self.lift_x[index], self.lift_y[index], self.lift_z[index]),
+            area_m2: self.area[index],
+            chord_m: self.chord[index],
+            span_m: self.span[index],
+            planform_aspect_ratio: self.aspect_ratio[index],
+            planform_sweep_rad: self.sweep_rad[index],
+            lift_interference_factor: self.interference[index],
+            lift_coefficient_sign: self.lift_sign[index],
+            thickness_to_chord_ratio: self.thickness_ratio[index],
+            control_deflection_rad: self.deflection[index],
+            exposure: self.exposure[index],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

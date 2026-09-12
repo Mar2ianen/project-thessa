@@ -42,3 +42,7 @@ harness = false
 [[bench]]
 name = "tick_adaptive"
 harness = false
+
+[[bench]]
+name = "aero_panels"
+harness = false

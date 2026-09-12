@@ -24,8 +24,8 @@ mod vehicle;
 
 pub use aero::{
     AeroCase, AeroCoefficientTable, AeroCoefficients, AeroConfig, AeroEnvironment, AeroError,
-    AeroGeometry, AeroModel, AeroPanel, AeroPanelLoad, AeroResult, AeroState, PanelAeroModel,
-    evaluate_batch,
+    AeroGeometry, AeroModel, AeroPanel, AeroPanelLoad, AeroResult, AeroSimdScratch, AeroState,
+    PanelAeroModel, PanelSoA, evaluate_batch,
 };
 pub use atmosphere::{AtmosphereConfig, AtmosphereError, AtmosphereSample};
 pub use ephemeris::{

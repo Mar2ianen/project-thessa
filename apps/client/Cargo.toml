@@ -10,6 +10,7 @@ publish = false
 thessa-worldgen-rocky = { path = "../../tools/worldgen-rocky" }
 thessa-protocol = { path = "../../crates/protocol" }
 thessa-sim-core = { path = "../../crates/sim-core" }
+thessa-flight-authority = { path = "../../crates/flight-authority" }
 thessa-perf = { path = "../../crates/perf" }
 thessa-graphics = { path = "../../crates/graphics" }
 thessa-atmosphere = { path = "../../crates/atmosphere" }

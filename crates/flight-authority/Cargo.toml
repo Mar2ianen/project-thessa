@@ -1,0 +1,12 @@
+[package]
+name = "thessa-flight-authority"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "GPL-3.0-or-later"
+publish = false
+
+[dependencies]
+thessa-sim-core = { path = "../sim-core" }
+glam.workspace = true
+serde.workspace = true

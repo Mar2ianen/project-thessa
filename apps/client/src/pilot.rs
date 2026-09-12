@@ -60,47 +60,7 @@ pub(super) enum ClientViewMode {
     Pilot,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ControlMode {
-    MouseAim,
-    Navball,
-    Rate,
-    Direct,
-}
-
-impl ControlMode {
-    const ALL: [Self; 4] = [Self::MouseAim, Self::Navball, Self::Rate, Self::Direct];
-
-    #[cfg(test)]
-    fn next(self) -> Self {
-        let index = Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0);
-        Self::ALL[(index + 1) % Self::ALL.len()]
-    }
-
-    #[cfg(test)]
-    fn previous(self) -> Self {
-        let index = Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0);
-        Self::ALL[(index + Self::ALL.len() - 1) % Self::ALL.len()]
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::MouseAim => "MOUSE STEERING",
-            Self::Navball => "ATTITUDE HOLD",
-            Self::Rate => "RATE CONTROL",
-            Self::Direct => "DIRECT / RAW",
-        }
-    }
-
-    fn description(self) -> &'static str {
-        match self {
-            Self::MouseAim => "Cursor commands pitch/yaw rate; center to hold.",
-            Self::Navball => "direct attitude target control",
-            Self::Rate => "command angular rates",
-            Self::Direct => "raw actuator input",
-        }
-    }
-}
+pub(super) use thessa_flight_authority::ControlMode;
 
 /// Solver regime of the flown vehicle: dense-air 6-DoF flight vs vacuum coast.
 ///
@@ -110,21 +70,7 @@ impl ControlMode {
 /// authority, so the trim solver freezes the surfaces instead of chasing a
 /// near-singular effectiveness matrix. The threshold is a density, not an
 /// altitude, so it follows any atmosphere the config provides.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) enum FlightRegime {
-    #[default]
-    Aero,
-    Coast,
-}
-
-impl FlightRegime {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Aero => "AERO",
-            Self::Coast => "COAST",
-        }
-    }
-}
+pub(super) use thessa_flight_authority::FlightRegime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SpeedFrame {

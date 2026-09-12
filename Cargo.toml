@@ -7,6 +7,7 @@ members = [
     "crates/perf",
     "crates/graphics",
     "crates/flight-net",
+    "crates/flight-authority",
     "crates/atmosphere",
     "apps/server",
     "apps/client",

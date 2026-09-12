@@ -100,10 +100,14 @@ pub fn select_tiles_with_height(
     budget: usize,
     height: impl Fn([f64; 3]) -> f64,
 ) -> Vec<TileKey> {
-    select_tiles_with_height_and_frustum(eye, radius, max_level, budget, height, None)
+    select_tiles_with_height_and_frustum(eye, radius, max_level, budget, height, None, 1.0)
 }
 
 /// Frustum-culled variant of [`select_tiles_with_height`].
+/// Velocity bias for the near stop rule (Outerra/Unreal-style: don't chase
+/// detail the viewer crosses in one selection period). `1.0` keeps the base
+/// ~1.2° target; higher values relax it toward the far rule. The client
+/// derives it from eye speed (`1 + speed/100`, clamped); tests pass `1.0`.
 pub fn select_tiles_with_height_and_frustum(
     eye: [f64; 3],
     radius: f64,
@@ -111,6 +115,7 @@ pub fn select_tiles_with_height_and_frustum(
     budget: usize,
     height: impl Fn([f64; 3]) -> f64,
     frustum: Option<SelectionFrustum>,
+    detail_bias: f64,
 ) -> Vec<TileKey> {
     let eye_r = dot(eye, eye).sqrt();
     let eye_dir = normalize(eye);
@@ -153,15 +158,29 @@ pub fn select_tiles_with_height_and_frustum(
         // angular span spends the budget on peripheral tiles that already
         // satisfy their relaxed target, starving the center of the view.
         let stop = if let Some(frustum) = frustum {
-            let off_axis = dot(normalize(delta.map(|v| -v)), normalize(frustum.forward))
+            // Overlap-aware foveation: judge a tile by its closest approach
+            // to the view axis, not its center. A huge tile covering the
+            // fovea has its center tens of degrees off-axis; center-based
+            // scoring slaps it with the full x9 edge penalty and its whole
+            // subtree (including the nadir) never refines.
+            let to_tile = normalize(delta.map(|v| -v));
+            let off_axis = dot(to_tile, normalize(frustum.forward))
                 .clamp(-1.0, 1.0)
                 .acos();
+            let angular_radius =
+                (key.span_m(radius) / distance).clamp(-1.0, 1.0).asin();
             let half_cone = frustum.cos_limit.clamp(-1.0, 1.0).acos().max(1e-3);
-            let edge = (off_axis / half_cone).min(1.0);
+            let edge = ((off_axis - angular_radius) / half_cone).clamp(0.0, 1.0);
+            // Velocity bias relaxes ONLY the near rule: compounding it into
+            // the far rule and the fovea multiplier froze refinement entirely
+            // (8x * 9x fovea stops even the nadir's own parents). Fast flight
+            // is near the ground, where the near rule governs; the far field
+            // keeps its own fixed target.
+            let bias = detail_bias.clamp(1.0, 32.0);
             let base = if distance > 100_000.0 {
                 1.0 / 10.0
             } else {
-                1.0 / 48.0
+                1.0 / 48.0 * bias
             };
             base * (1.0 + 8.0 * edge * edge)
         } else {
@@ -182,6 +201,22 @@ pub fn select_tiles_with_height_and_frustum(
         let Some((index, key)) = candidate else {
             break;
         };
+        if std::env::var("LOD_DEBUG").is_ok() && leaves.len() < 60 {
+            let dir = key.direction(0.5, 0.5);
+            let d = ((eye[0] - dir[0] * radius).powi(2)
+                + (eye[1] - dir[1] * radius).powi(2)
+                + (eye[2] - dir[2] * radius).powi(2))
+            .sqrt();
+            eprintln!(
+                "pick f{} L{} x{} y{} norm={:.3} span/dist={:.3}",
+                key.face,
+                key.level,
+                key.x,
+                key.y,
+                priority(*key),
+                key.span_m(radius) / d.max(1.0)
+            );
+        }
         if priority(*key) <= 1.0 {
             break;
         }
@@ -581,8 +616,15 @@ mod near_field_regression_tests {
             forward: normalize([-1.0, 0.0, 0.0]),
             cos_limit: (0.5_f64 + 0.35).cos(),
         };
-        let keys =
-            select_tiles_with_height_and_frustum(eye, radius, 17, 320, |_| 0.0, Some(frustum));
+        let keys = select_tiles_with_height_and_frustum(
+            eye,
+            radius,
+            17,
+            320,
+            |_| 0.0,
+            Some(frustum),
+            1.0,
+        );
         // One subdivision nets +3 leaves past the budget edge by design.
         assert!(keys.len() <= 323, "budget overrun: {}", keys.len());
         let best = keys
@@ -605,5 +647,36 @@ mod near_field_regression_tests {
             "near field too coarse from 5 km: L{} under the camera",
             best.0
         );
+    }
+}
+
+#[cfg(test)]
+mod velocity_bias_tests {
+    use super::*;
+    #[test]
+    fn bias_relaxes_near_refinement_without_breaking_cover() {
+        // Outerra-style velocity bias: a fast-moving eye must not chase
+        // full detail it crosses within one selection period.
+        let radius = 3_200_000.0;
+        let eye = [radius + 5000.0, 0.0, 0.0];
+        let frustum = SelectionFrustum {
+            forward: normalize([-1.0, 0.0, 0.0]),
+            cos_limit: (0.5_f64 + 0.35).cos(),
+        };
+        let sharp = select_tiles_with_height_and_frustum(eye, radius, 17, 320, |_| 0.0, Some(frustum), 1.0);
+        let coarse = select_tiles_with_height_and_frustum(eye, radius, 17, 320, |_| 0.0, Some(frustum), 8.0);
+        let max_level = |keys: &[TileKey]| keys.iter().map(|k| k.level).max().unwrap_or(0);
+        let sharp_max = max_level(&sharp);
+        let coarse_max = max_level(&coarse);
+        eprintln!("bias 1 -> L{sharp_max}, bias 8 -> L{coarse_max}");
+        let mut hist = std::collections::BTreeMap::new();
+        for k in &coarse { *hist.entry(k.level).or_insert(0) += 1; }
+        eprintln!("coarse leaves={} hist={:?}", coarse.len(), hist);
+        assert!(sharp_max >= 15, "unbiased near field must refine, got L{sharp_max}");
+        assert!(
+            coarse_max < sharp_max,
+            "bias must relax refinement ({coarse_max} vs {sharp_max})"
+        );
+        assert!(!coarse.is_empty(), "biased selection must still cover");
     }
 }

@@ -30,6 +30,13 @@ pub(super) struct WorldTerrain {
     wanted: Vec<TileKey>,
     visible: BTreeSet<TileKey>,
     selection_at: f64,
+    /// Selection-frame eye (body frame) and camera forward driving the
+    /// movement trigger and the velocity LOD bias below.
+    selected_eye: DVec3,
+    selected_forward: DVec3,
+    selected_valid: bool,
+    /// Smoothed eye speed (m/s) for the velocity detail bias.
+    eye_speed_mps: f64,
 }
 struct CachedTile {
     mesh: Handle<Mesh>,
@@ -201,6 +208,10 @@ fn setup_terrain(
         wanted: vec![],
         visible: BTreeSet::new(),
         selection_at: -1.0,
+        selected_eye: DVec3::ZERO,
+        selected_forward: DVec3::NEG_Z,
+        selected_valid: false,
+        eye_speed_mps: 0.0,
     });
     commands
         .spawn((
@@ -558,8 +569,29 @@ fn update_terrain(
     } else {
         None
     };
+    // Camera-frame forward for the frustum and the movement trigger.
+    let forward_render = (camera.0.rotation * Vec3::NEG_Z).as_dvec3();
+    let forward_body = rotation.inverse() * forward_render;
+    let now_s = time.elapsed_secs_f64();
+    // Movement trigger (standard streaming practice): fast flight covers
+    // hundreds of metres per selection period, so a pure timer always lags
+    // behind the view. Reselect when the eye moved >300 m or the view swung
+    // >~7°, besides the 0.35 s timer.
+    let mut moved = !world.selected_valid;
+    if world.selected_valid {
+        let dt = (now_s - world.selection_at).max(1e-3);
+        let eye_speed = (eye - world.selected_eye).length() / dt;
+        // Smoothed: single-frame hitches must not whip the LOD bias.
+        world.eye_speed_mps += (eye_speed - world.eye_speed_mps).clamp(-2000.0, 2000.0) * 0.25;
+        let swing = (forward_body.normalize_or_zero() - world.selected_forward).length();
+        moved = (eye - world.selected_eye).length() > 300.0 || swing > 0.12;
+    }
+    // Velocity detail bias (Outerra/Unreal-style): don't chase detail the
+    // viewer crosses within one selection period. Hover keeps full 1/48°
+    // refinement; 430 m/s cruise relaxes ~5x toward the far rule.
+    let detail_bias = (1.0 + world.eye_speed_mps.max(0.0) / 100.0).clamp(1.0, 8.0);
     let mut selection_changed = false;
-    if time.elapsed_secs_f64() - world.selection_at > 0.35 || world.wanted.is_empty() {
+    if now_s - world.selection_at > 0.35 || moved || world.wanted.is_empty() {
         // Reselect when workers are nearly drained. Existing coverage is
         // retained until its overlapping replacements are ready; disjoint
         // completed tiles appear without waiting for the entire selection.
@@ -578,6 +610,7 @@ fn update_terrain(
                 96,
                 |dir| world.field.height_m(dir, 32.0),
                 None,
+                detail_bias,
             );
             let mut fine = lod::select_tiles_with_height_and_frustum(
                 eye.to_array(),
@@ -586,12 +619,16 @@ fn update_terrain(
                 224,
                 |dir| world.field.height_m(dir, 32.0),
                 frustum,
+                detail_bias,
             );
             wanted.append(&mut fine);
             wanted.sort();
             wanted.dedup();
             world.wanted = wanted;
-            world.selection_at = time.elapsed_secs_f64();
+            world.selection_at = now_s;
+            world.selected_eye = eye;
+            world.selected_forward = forward_body.normalize_or_zero();
+            world.selected_valid = true;
             selection_changed = true;
         }
     }

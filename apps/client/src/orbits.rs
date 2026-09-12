@@ -610,7 +610,9 @@ fn refresh_prediction_cache(
             Some(period) => ((period / 300.0).clamp(5.0, 3600.0), 300),
             None => (600.0, 200),
         },
-        _ => (900.0, 400),
+        // Escape/deep-space legs: 15 min steps over ~12 days, enough to
+        // cross the overview and outlive interlunar cruise planning.
+        _ => (900.0, 1152),
     };
     let config = VerletConfig { step_s, max_steps };
     let path =

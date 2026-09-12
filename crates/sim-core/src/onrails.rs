@@ -23,12 +23,14 @@ use crate::{
 
 /// Authoritative on-rails bake sizing, shared by the flight loop and the map
 /// prediction so both consume one trajectory: 5 s samples keep cubic-Hermite
-/// interpolation error metre-grade (~1 m) at orbital speeds, and 40 000
-/// samples cover ~2.3 days of cruise per bake. Interpolation and accumulated
-/// integration errors differ: the circular 200000 s regression measures
-/// about 130 m position error at 5 s (33 m at 2.5 s), not a global 1 m guarantee.
+/// interpolation error metre-grade (~1 m) at orbital speeds, and 120 000
+/// samples cover ~6.9 days of cruise per bake (interlunar transfers run
+/// multi-day; the map line must outlive them). ~7 MB per full bake.
+/// Interpolation and accumulated integration errors differ: the circular
+/// 200000 s regression measures about 130 m position error at 5 s
+/// (33 m at 2.5 s), not a global 1 m guarantee.
 pub const COAST_RAILS_STEP_S: f64 = 5.0;
-pub const COAST_RAILS_MAX_STEPS: u64 = 40_000;
+pub const COAST_RAILS_MAX_STEPS: u64 = 120_000;
 
 /// Chunked-bake sizing for hitch-free coast entry: the head bake covers
 /// ~2.8 h of cruise synchronously (~9 ms release), then per-frame extensions
@@ -37,8 +39,10 @@ pub const COAST_RAILS_MAX_STEPS: u64 = 40_000;
 pub const COAST_RAILS_HEAD_STEPS: u64 = 2048;
 pub const COAST_RAILS_EXTEND_CHUNK: u64 = 512;
 /// Keep at least this much baked lookahead ahead of the flown epoch; the
-/// flight loop extends toward it one chunk per frame.
-pub const COAST_RAILS_MIN_AHEAD_S: f64 = 86_400.0;
+/// flight loop extends toward it one chunk per frame. Three days keeps the
+/// map prediction line far ahead of any near-term maneuver planning while
+/// bounding steady-state extension work.
+pub const COAST_RAILS_MIN_AHEAD_S: f64 = 259_200.0;
 
 /// Position/velocity reuse tolerances for the flight loop: tight enough that
 /// a maneuver fails the check on its first step, loose enough that solver

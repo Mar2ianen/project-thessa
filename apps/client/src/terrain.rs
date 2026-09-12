@@ -13,7 +13,7 @@ use std::{
 };
 use thessa_worldgen_rocky::{
     field::{PlanetField, field_from_manifest},
-    lod::{self, SurfaceTexture, TerrainTile, TileKey},
+    lod::{self, TerrainTile, TileKey},
     spec_recipe::{SpecRecipe, manifest_from_spec},
     sphere::dir_from_latlon,
 };
@@ -26,7 +26,7 @@ pub(super) struct WorldTerrain {
     pub render_center: Option<Vec3>,
     pub render_origin_m: DVec3,
     cache: BTreeMap<TileKey, CachedTile>,
-    jobs: BTreeMap<TileKey, Task<(TerrainTile, SurfaceTexture, [f64; 2])>>,
+    jobs: BTreeMap<TileKey, Task<TerrainBuildOutput>>,
     wanted: Vec<TileKey>,
     visible: BTreeSet<TileKey>,
     selection_at: f64,
@@ -39,6 +39,20 @@ struct CachedTile {
     texture_bytes: u64,
     material: Handle<StandardMaterial>,
     images: [Handle<Image>; 3],
+}
+
+/// Finished worker output: built mesh plus upload-ready images.
+/// Mipmap generation (`surface_image`, ~65k sRGB powf per 128 px tile) and
+/// mesh assembly (`generate_tangents`) run on the pool, never on the frame
+/// thread — per finished tile the main thread only inserts asset handles.
+struct TerrainBuildOutput {
+    mesh: Mesh,
+    anchor: DVec3,
+    vertices: u64,
+    triangles: u64,
+    texture_bytes: u64,
+    images: [Image; 3],
+    seconds: [f64; 2],
 }
 #[derive(Component)]
 pub(super) struct SurfaceTile(TileKey);
@@ -550,17 +564,33 @@ fn update_terrain(
         // retained until its overlapping replacements are ready; disjoint
         // completed tiles appear without waiting for the entire selection.
         if world.jobs.len() <= 2 {
-            // 320-tile budget: the 1/48-rad refinement rule needs room for
-            // the frustum-culled view plus L16+ tiles under the camera.
+            // Two-tier selection: a coarse horizon cover WITHOUT frustum
+            // culling (L7, ~96 tiles) guarantees no holes ever — frustum
+            // swings between selections used to cull visible regions faster
+            // than the margin allowed, popping whole blocks. The frustum
+            // set (L17, ~224) refines the view cone on top; overlap is
+            // intended (cover logic shows the finest ready tile).
             // The cache below stays bounded (visible + wanted only).
-            world.wanted = lod::select_tiles_with_height_and_frustum(
+            let mut wanted = lod::select_tiles_with_height_and_frustum(
+                eye.to_array(),
+                radius,
+                7,
+                96,
+                |dir| world.field.height_m(dir, 32.0),
+                None,
+            );
+            let mut fine = lod::select_tiles_with_height_and_frustum(
                 eye.to_array(),
                 radius,
                 17,
-                320,
+                224,
                 |dir| world.field.height_m(dir, 32.0),
                 frustum,
             );
+            wanted.append(&mut fine);
+            wanted.sort();
+            wanted.dedup();
+            world.wanted = wanted;
             world.selection_at = time.elapsed_secs_f64();
             selection_changed = true;
         }
@@ -570,15 +600,23 @@ fn update_terrain(
         .iter_mut()
         .filter_map(|(key, task)| block_on(poll_once(task)).map(|result| (*key, result)))
         .collect();
-    for (key, (tile, texture, seconds)) in finished {
+    for (key, output) in finished {
         world.jobs.remove(&key);
+        let TerrainBuildOutput {
+            mesh: built_mesh,
+            anchor,
+            vertices,
+            triangles,
+            texture_bytes,
+            images: [albedo_image, roughness_image, normal_image],
+            seconds,
+        } = output;
         perf.record_scope("world.terrain_meshing", seconds[0]);
         perf.record_scope("world.terrain_materials", seconds[1]);
-        let mesh = meshes.add(mesh_from_tile(&tile, texture.size));
-        let texture_bytes = mip_bytes(texture.size) * 3;
-        let albedo = images.add(surface_image(texture.size, texture.albedo, true));
-        let roughness = images.add(surface_image(texture.size, texture.roughness, false));
-        let normal = images.add(surface_image(texture.size, texture.normal, false));
+        let mesh = meshes.add(built_mesh);
+        let albedo = images.add(albedo_image);
+        let roughness = images.add(roughness_image);
+        let normal = images.add(normal_image);
         let material = materials.add(StandardMaterial {
             base_color: Color::WHITE,
             base_color_texture: Some(albedo.clone()),
@@ -593,9 +631,9 @@ fn update_terrain(
             key,
             CachedTile {
                 mesh,
-                anchor: DVec3::from_array(tile.anchor_m),
-                vertices: tile.positions.len() as u64,
-                triangles: (tile.indices.len() / 3) as u64,
+                anchor,
+                vertices,
+                triangles,
                 texture_bytes,
                 material,
                 images: [albedo, roughness, normal],
@@ -603,9 +641,10 @@ fn update_terrain(
         );
         world.counters.terrain_patches_generated += 1;
     }
-    // Build nearest tiles first: with a deep refinement rule the queue is
-    // long, and key order is arbitrary — without this the near field waits
-    // behind hundreds of far tiles.
+    // Build order: coarse cover (L7-) first so holes close immediately,
+    // then nearest-first for detail. Key order is arbitrary — without this
+    // the near field waits behind hundreds of far tiles, and without the
+    // coarse-first rule a fresh selection shows sky through missing cover.
     let mut pending: Vec<_> = world
         .wanted
         .iter()
@@ -627,7 +666,11 @@ fn update_terrain(
             key.span_m(radius) / dist
         }
         // Positive finite priorities: integer bit order matches float order.
-        std::cmp::Reverse(priority(&world.field, eye, radius, *key).to_bits())
+        // Coarse cover sorts before everything (level is the major key).
+        (
+            key.level.min(8),
+            std::cmp::Reverse(priority(&world.field, eye, radius, *key).to_bits()),
+        )
     });
     // Eight in flight on an 8-core box: tile builds are CPU-bound
     // field sampling, and the pool is core-sized.
@@ -647,14 +690,28 @@ fn update_terrain(
                 let texture = lod::build_surface_texture_for_mesh(
                     &field,
                     key,
-                    if key.level >= 9 { 128 } else { 64 },
+                    lod::texture_cells_for_level(key.level),
                     TILE_CELLS,
                 );
-                (
-                    tile,
-                    texture,
-                    [mesh_s, texture_start.elapsed().as_secs_f64()],
-                )
+                let material_s = texture_start.elapsed().as_secs_f64();
+                // Mesh assembly (tangents) and image upload prep (mipmaps:
+                // ~65k sRGB powf per 128 px tile) stay on the pool: per
+                // finished tile the frame thread only inserts handles.
+                let mesh = mesh_from_tile(&tile, texture.size);
+                let images = [
+                    surface_image(texture.size, texture.albedo.clone(), true),
+                    surface_image(texture.size, texture.roughness.clone(), false),
+                    surface_image(texture.size, texture.normal.clone(), false),
+                ];
+                TerrainBuildOutput {
+                    mesh,
+                    anchor: DVec3::from_array(tile.anchor_m),
+                    vertices: tile.positions.len() as u64,
+                    triangles: (tile.indices.len() / 3) as u64,
+                    texture_bytes: mip_bytes(texture.size) * 3,
+                    images,
+                    seconds: [mesh_s, material_s],
+                }
             }),
         );
         world.counters.terrain_cache_misses += 1;

@@ -356,6 +356,22 @@ pub struct SurfaceTexture {
     pub roughness: Vec<u8>,
     pub normal: Vec<u8>,
 }
+/// Micro-detail grain octave wavelengths, shared by the fade rule below.
+const GRAIN_BANDS: [f64; 4] = [8.0, 32.0, 128.0, 512.0];
+
+/// Texture resolution tiers by tile level: 128 px only where the viewer
+/// can resolve it (L13+), 64 px everywhere else. A 64 px tile costs 4x less
+/// field sampling than 128 px; past a few kilometres fog erases the
+/// difference, and the streaming front (not texel density) is what the eye
+/// catches — unfilled tiles read as holes, coarse ones as ground.
+pub fn texture_cells_for_level(level: u8) -> usize {
+    if level >= 13 {
+        128
+    } else {
+        64
+    }
+}
+
 pub fn build_surface_texture(field: &PlanetField, key: TileKey, cells: usize) -> SurfaceTexture {
     build_surface_texture_for_mesh(field, key, cells, 24)
 }
@@ -380,15 +396,20 @@ pub fn build_surface_texture_for_mesh(
     // Reuse the texel neighborhood for material slope instead of paying
     // for three extra field queries per pixel through the full sample API.
     let mut samples = Vec::with_capacity(size * size);
+    // One macro evaluation per texel, shared three ways: the fine sample
+    // below, its mesh-grid residual further down, and nothing else. The old
+    // code paid a full height_parts (~2.7 us, ~15 noise evals in the
+    // province warp) inside sample_surface AND another inside height_m.
+    let mut prefixes = Vec::with_capacity(size * size);
     for y in 0..size {
         for x in 0..size {
-            samples.push(field.sample_surface(
-                key.direction(
-                    (x as f64 - 1.0) / cells as f64,
-                    (y as f64 - 1.0) / cells as f64,
-                ),
-                32.0,
-            ));
+            let dir = key.direction(
+                (x as f64 - 1.0) / cells as f64,
+                (y as f64 - 1.0) / cells as f64,
+            );
+            let (prefix, macro_h) = field.height_prefix_m(dir);
+            prefixes.push((prefix, macro_h));
+            samples.push(field.sample_surface_from_prefix(dir, prefix, macro_h, 32.0));
         }
     }
     let mut residual = vec![0.0; size * size];
@@ -407,21 +428,34 @@ pub fn build_surface_texture_for_mesh(
                 / (2.0 * wavelength);
             sample.slope_hint = dhx.hypot(dhy);
             let material = surface_appearance(field, &sample, dir);
-            residual[y * size + x] =
-                sample.height_m.max(0.0) - field.height_m(dir, mesh_wavelength).max(0.0);
-            let grain: f32 = [8.0_f64, 32.0, 128.0, 512.0]
+            let (prefix, macro_h) = prefixes[y * size + x];
+            residual[y * size + x] = sample.height_m.max(0.0)
+                - field
+                    .height_from_prefix(dir, prefix, macro_h, mesh_wavelength)
+                    .max(0.0);
+            // Bands finer than ~2 texels cannot resolve and only add
+            // aliasing shimmer: fade them out instead of evaluating full
+            // weight like before. At fine wavelengths (<=4 m) every band
+            // still weights 1.0, identical to the old rule.
+            let grain: f32 = GRAIN_BANDS
                 .into_iter()
                 .enumerate()
-                .map(|(band, scale)| {
+                .filter_map(|(band, scale)| {
+                    let weight = (scale / (2.0 * wavelength)).clamp(0.0, 1.0);
+                    if weight <= 0.0 {
+                        return None;
+                    }
                     let p = dir.map(|v| v * field.params.radius_m / scale);
-                    (crate::rng::value_noise3(
-                        field.params.seed,
-                        2201 + band as u32,
-                        p[0],
-                        p[1],
-                        p[2],
-                    ) * (scale / wavelength).clamp(0.0, 1.0)
-                        * 0.3) as f32
+                    Some(
+                        (crate::rng::value_noise3(
+                            field.params.seed,
+                            2201 + band as u32,
+                            p[0],
+                            p[1],
+                            p[2],
+                        ) * weight
+                            * 0.3) as f32,
+                    )
                 })
                 .sum();
             let detail = if sample.height_m > 0.0 {

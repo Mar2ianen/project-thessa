@@ -14,3 +14,7 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 
 [dev-dependencies]
 thessa-perf = { path = "../../crates/perf" }
+
+[[bench]]
+name = "tiles"
+harness = false

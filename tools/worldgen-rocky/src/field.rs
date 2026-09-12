@@ -152,8 +152,46 @@ impl PlanetField {
         self.sample_impl(dir, min_wavelength_m, false)
     }
 
+    /// Surface sample from a shared [`height_prefix_m`](Self::height_prefix_m):
+    /// identical to [`sample_surface`](Self::sample_surface) up to the final
+    /// ulp, but the ~2 us macro path runs once per texel instead of twice
+    /// (fine sample plus mesh-grid residual).
+    pub fn sample_surface_from_prefix(
+        &self,
+        dir: [f64; 3],
+        prefix_m: f64,
+        macro_h: f64,
+        min_wavelength_m: f64,
+    ) -> TerrainSample {
+        let min_wl = min_wavelength_m.max(1.0);
+        let knobs: TerrainKnobs = self.params.knobs.into();
+        let (meso_h, micro_h) = self.detail_parts_m(dir, min_wl, knobs, macro_h);
+        let height =
+            (prefix_m + meso_h + micro_h - self.sea_offset_m).clamp(self.params.height_min_m, self.params.height_max_m);
+        self.finish_sample(dir, height, macro_h, meso_h + micro_h, 0.0)
+    }
+
     fn sample_impl(&self, dir: [f64; 3], min_wavelength_m: f64, slope: bool) -> TerrainSample {
         let (height, macro_h, detail_h) = self.height_parts(dir, min_wavelength_m);
+        let slope_hint = if slope {
+            self.slope_hint(dir, min_wavelength_m.max(1.0))
+        } else {
+            0.0
+        };
+        self.finish_sample(dir, height, macro_h, detail_h, slope_hint)
+    }
+
+    /// Shared sample tail: classification, climate drivers and material
+    /// state from a resolved height. Bitwise identical to the legacy
+    /// monolith for identical inputs.
+    fn finish_sample(
+        &self,
+        dir: [f64; 3],
+        height: f64,
+        macro_h: f64,
+        detail_h: f64,
+        slope_hint: f64,
+    ) -> TerrainSample {
         let (lat, lon) = latlon_from_dir(dir);
         // Context lookup (nearest coarse cell).
         let (_, _, ocean_dist) = self.context_at(lat, lon);
@@ -168,12 +206,6 @@ impl PlanetField {
             geo_w.min(1.0),
         );
         let site = classify_with_context(&self.params, &self.features, lat, lon, height, flux);
-        // Slope hint from analytic neighbours at the requested wavelength.
-        let slope_hint = if slope {
-            self.slope_hint(dir, min_wavelength_m.max(1.0))
-        } else {
-            0.0
-        };
         let regional = crate::rng::fbm3(
             self.params.seed,
             770,
@@ -212,16 +244,23 @@ impl PlanetField {
         self.height_parts(dir, min_wavelength_m).0
     }
 
-    fn height_parts(&self, dir: [f64; 3], min_wavelength_m: f64) -> (f64, f64, f64) {
-        let min_wl = min_wavelength_m.max(1.0);
-        let (lat, lon) = latlon_from_dir(dir);
-        let knobs: TerrainKnobs = self.params.knobs.into();
-        let strength = self.params.macro_strength;
-        let macro_h = (eval_macro_m(&self.features, lat, lon, self.params.radius_m)
+    /// Cutoff-independent macro term: features, provinces, uplift and
+    /// hemispheric bias. The ~2 us bulk of a height evaluation (~15 noise
+    /// evals in the province warp alone); texture builders evaluate it once
+    /// per texel and share it between the fine sample and the mesh-grid
+    /// residual instead of paying twice.
+    fn macro_term_m(&self, dir: [f64; 3], lat: f64, lon: f64, knobs: TerrainKnobs) -> f64 {
+        (eval_macro_m(&self.features, lat, lon, self.params.radius_m)
             + eval_macro_provinces_m(self.params.seed, knobs, dir, self.params.radius_m)
             + eval_uplift_m(&self.tectonics, lat, lon, self.params.radius_m)
             + hemi_bias(&self.params, lon))
-            * strength;
+            * self.params.macro_strength
+    }
+
+    /// Cutoff-dependent detail: meso bands, mountain detail octaves, micro.
+    /// Returns `(meso_sum, micro_h)` in the exact combination order the
+    /// legacy monolith used, so splits stay bitwise identical.
+    fn detail_parts_m(&self, dir: [f64; 3], min_wl: f64, knobs: TerrainKnobs, macro_h: f64) -> (f64, f64) {
         let meso_h: f64 = MESO_BANDS_M
             .iter()
             .enumerate()
@@ -256,7 +295,63 @@ impl PlanetField {
                 ((1.0 - n.abs()).powi(3) - 0.4) * amp * mountain_mask
             })
             .sum();
-        let meso_h = meso_h + mountain_detail;
+        (meso_h + mountain_detail, micro_h)
+    }
+
+    /// Landmark deltas: cutoff-independent (blend weight plus dir-only
+    /// procedural domes), shared like the macro term.
+    fn landmark_sum_m(&self, dir: [f64; 3], knobs: TerrainKnobs) -> f64 {
+        let mut sum = 0.0;
+        for zone in &self.landmarks {
+            sum += zone.height_delta(dir, self.params.radius_m, &|d| {
+                self.base_height(d)
+                    + crate::terrain::eval_micro_dir_m(
+                        self.params.seed,
+                        knobs,
+                        d,
+                        self.params.radius_m,
+                        250.0,
+                    )
+            });
+        }
+        sum
+    }
+
+    /// Shared cutoff-independent prefix: `(macro + landmarks, macro)`.
+    /// Texture builders compute it once per texel and feed both the fine
+    /// sample and the mesh-grid residual through [`height_from_prefix`](Self::height_from_prefix).
+    /// The macro value rides along so the residual never re-evaluates the
+    /// ~2 us macro path for its mountain mask.
+    pub fn height_prefix_m(&self, dir: [f64; 3]) -> (f64, f64) {
+        let (lat, lon) = latlon_from_dir(dir);
+        let knobs: TerrainKnobs = self.params.knobs.into();
+        let macro_h = self.macro_term_m(dir, lat, lon, knobs);
+        (macro_h + self.landmark_sum_m(dir, knobs), macro_h)
+    }
+
+    /// Height at `min_wavelength_m` from a shared [`height_prefix_m`](Self::height_prefix_m).
+    /// Bitwise identical to [`height_m`](Self::height_m) up to the final
+    /// ulp (the prefix crosses one extra rounding when split out).
+    pub fn height_from_prefix(
+        &self,
+        dir: [f64; 3],
+        prefix_m: f64,
+        macro_h: f64,
+        min_wavelength_m: f64,
+    ) -> f64 {
+        let min_wl = min_wavelength_m.max(1.0);
+        let knobs: TerrainKnobs = self.params.knobs.into();
+        let (meso_h, micro_h) = self.detail_parts_m(dir, min_wl, knobs, macro_h);
+        let height = prefix_m + meso_h + micro_h - self.sea_offset_m;
+        height.clamp(self.params.height_min_m, self.params.height_max_m)
+    }
+
+    fn height_parts(&self, dir: [f64; 3], min_wavelength_m: f64) -> (f64, f64, f64) {
+        let min_wl = min_wavelength_m.max(1.0);
+        let (lat, lon) = latlon_from_dir(dir);
+        let knobs: TerrainKnobs = self.params.knobs.into();
+        let macro_h = self.macro_term_m(dir, lat, lon, knobs);
+        let (meso_h, micro_h) = self.detail_parts_m(dir, min_wl, knobs, macro_h);
         let mut height = macro_h + meso_h + micro_h - self.sea_offset_m;
         // Authored landmark overrides (delta-based, datum-robust).
         for zone in &self.landmarks {
@@ -740,5 +835,49 @@ mod tests {
                 n
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod prefix_regression_tests {
+    use super::*;
+    use crate::{
+        spec_recipe::{SpecRecipe, manifest_from_spec},
+        sphere::dir_from_latlon,
+    };
+
+    fn field() -> PlanetField {
+        let recipe: SpecRecipe =
+            toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml")).unwrap();
+        field_from_manifest(&manifest_from_spec(&recipe).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn shared_prefix_reproduces_canonical_heights() {
+        // The texture fast path must not fork the terrain: prefix-shared
+        // heights track height_m to ~1 ulp, samples to a few ulp (different
+        // association order only). Larger drift means the split changed the
+        // math, and tiles would disagree with physics/contact queries.
+        let field = field();
+        let mut worst_h: f64 = 0.0;
+        let mut worst_sample: f64 = 0.0;
+        for i in 0..512 {
+            let dir = dir_from_latlon(-60.0 + i as f64 * 0.2, 20.0 + i as f64 * 0.13);
+            for min_wl in [2.0, 32.0, 500.0] {
+                let (prefix, macro_h) = field.height_prefix_m(dir);
+                let shared = field.height_from_prefix(dir, prefix, macro_h, min_wl);
+                let exact = field.height_m(dir, min_wl);
+                let scale = exact.abs().max(1.0);
+                worst_h = worst_h.max((shared - exact).abs() / scale);
+                let a = field.sample_surface_from_prefix(dir, prefix, macro_h, 32.0);
+                let b = field.sample_surface(dir, 32.0);
+                let sscale = b.height_m.abs().max(1.0);
+                worst_sample = worst_sample.max((a.height_m - b.height_m).abs() / sscale);
+                assert_eq!(a.biome, b.biome, "prefix path changed classification");
+            }
+        }
+        eprintln!("prefix height drift {worst_h:e}, sample drift {worst_sample:e}");
+        assert!(worst_h < 1e-12, "prefix height drifted {worst_h:e}");
+        assert!(worst_sample < 1e-12, "prefix sample drifted {worst_sample:e}");
     }
 }

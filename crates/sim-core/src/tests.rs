@@ -2318,3 +2318,56 @@ fn year_long_scaled_escape_stays_display_grade() {
         "scaled year drifted {max_deviation:e} m — too coarse even for display"
     );
 }
+
+#[test]
+fn simd_snapshot_and_accel_match_scalar_within_tolerance() {
+    // Cross-path agreement for the AVX-512 kernels on the real 22-source
+    // system: Hermite FMA contraction and rsqrt-Newton refinement must stay
+    // within ~1e-12 relative of the scalar loop. Skipped (vacuous pass)
+    // where AVX-512 is unavailable — then both sides run the same code.
+    use crate::{EphemerisTable, TableSnapshot};
+    if !thessa_simd::avx512_available() {
+        eprintln!("no AVX-512: SIMD agreement vacuous");
+        return;
+    }
+    let config: SystemConfig =
+        toml::from_str(include_str!("../../../data/system.toml")).expect("system parses");
+    let ephemeris = config.bake().expect("system bakes");
+    let bodies: Vec<_> = ephemeris.gravity_sources().map(|body| body.id).collect();
+    let table = EphemerisTable::build(
+        &ephemeris,
+        &bodies,
+        SimTime::EPOCH,
+        SimTime::EPOCH.offset(86_400.0),
+        40.0,
+    )
+    .expect("table builds");
+    let mut simd_snap = TableSnapshot::default();
+    let mut scalar_snap = TableSnapshot::default();
+    let mut worst_snapshot: f64 = 0.0;
+    let mut worst_accel: f64 = 0.0;
+    for minutes in [0, 7, 63, 721, 1439] {
+        let time = SimTime::EPOCH.offset(minutes as f64 * 60.0);
+        table.snapshot_with(time, &mut simd_snap, true);
+        table.snapshot_with(time, &mut scalar_snap, false);
+        assert_eq!(simd_snap.cx.len(), scalar_snap.cx.len());
+        for i in 0..simd_snap.cx.len() {
+            for (a, b) in [
+                (simd_snap.cx[i], scalar_snap.cx[i]),
+                (simd_snap.cy[i], scalar_snap.cy[i]),
+                (simd_snap.cz[i], scalar_snap.cz[i]),
+            ] {
+                let scale = b.abs().max(1.0);
+                worst_snapshot = worst_snapshot.max((a - b).abs() / scale);
+            }
+        }
+        let probe = DVec3::new(1.0e8, -2.0e8, 3.0e8);
+        let simd_a = table.accel_with(&simd_snap, probe, true).expect("simd accel");
+        let scalar_a = table.accel_with(&scalar_snap, probe, false).expect("scalar accel");
+        let scale = scalar_a.length().max(1e-12);
+        worst_accel = worst_accel.max((simd_a - scalar_a).length() / scale);
+    }
+    eprintln!("simd-vs-scalar max relative: snapshot {worst_snapshot:e}, accel {worst_accel:e}");
+    assert!(worst_snapshot < 1e-12, "snapshot diverged {worst_snapshot:e}");
+    assert!(worst_accel < 1e-9, "accel diverged {worst_accel:e}");
+}

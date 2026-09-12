@@ -38,42 +38,75 @@ pub(crate) fn hermite_state(
     )
 }
 
-/// One source body's uniform-node track over `[start, end]`.
-#[derive(Debug, Clone)]
-struct BodyTrack {
+/// Per-body constants, index-aligned with the component arrays below.
+#[derive(Debug, Clone, Copy)]
+struct TrackMeta {
     id: BodyId,
-    mu: f64,
+    /// Effective mu: real mu for gravity sources, exactly 0.0 otherwise, so
+    /// the vector loop needs no skip mask (`x + ±0.0 == x` bitwise, and
+    /// `offset * 0.0` contributes nothing).
+    eff_mu: f64,
     gravitating: bool,
     radius_m: f64,
-    step_s: f64,
-    positions: Vec<DVec3>,
-    velocities: Vec<DVec3>,
 }
 
-impl BodyTrack {
-    fn state_at(&self, time: SimTime, start: SimTime) -> (DVec3, DVec3) {
-        let total = self.positions.len().saturating_sub(1) as f64;
-        let elapsed = (time.seconds() - start.seconds()).clamp(0.0, total * self.step_s);
-        let position = (elapsed / self.step_s).min(total);
-        let low = (position.floor() as usize).min(self.positions.len().saturating_sub(1));
-        let high = (low + 1).min(self.positions.len().saturating_sub(1));
-        let s = (position - low as f64).clamp(0.0, 1.0);
-        let h = ((high - low) as f64) * self.step_s;
-        let p0 = self.positions[low];
-        let p1 = self.positions[high];
-        let v0 = self.velocities[low];
-        let v1 = self.velocities[high];
+/// One body's six component runs, as produced per parallel task.
+type BuiltTrack = (TrackMeta, [Vec<f64>; 6]);
+
+/// Component-major node storage: `pos_x[node * bodies + body]` and siblings.
+/// One node interval of all bodies sits in six contiguous runs, so an
+/// 8-wide kernel loads 8 bodies with plain `loadu` — no gathers. Scalar
+/// readers use the same arrays through [`EphemerisTable::node_state`].
+#[derive(Debug, Clone, Default)]
+struct NodeArrays {
+    bodies: usize,
+    points: usize,
+    pos_x: Vec<f64>,
+    pos_y: Vec<f64>,
+    pos_z: Vec<f64>,
+    vel_x: Vec<f64>,
+    vel_y: Vec<f64>,
+    vel_z: Vec<f64>,
+}
+
+impl NodeArrays {
+    fn node_state(&self, body: usize, low: usize, high: usize, h: f64, s: f64) -> (DVec3, DVec3) {
+        let stride = self.bodies;
+        let p0 = DVec3::new(
+            self.pos_x[low * stride + body],
+            self.pos_y[low * stride + body],
+            self.pos_z[low * stride + body],
+        );
+        let p1 = DVec3::new(
+            self.pos_x[high * stride + body],
+            self.pos_y[high * stride + body],
+            self.pos_z[high * stride + body],
+        );
+        let v0 = DVec3::new(
+            self.vel_x[low * stride + body],
+            self.vel_y[low * stride + body],
+            self.vel_z[low * stride + body],
+        );
+        let v1 = DVec3::new(
+            self.vel_x[high * stride + body],
+            self.vel_y[high * stride + body],
+            self.vel_z[high * stride + body],
+        );
         hermite_state(p0, v0, p1, v1, h, s)
     }
 }
 
-/// One instant of every track's centers, in track order. Reused across the
-/// two accel evals and the impact test of a single Verlet step; refilled
-/// per endpoint by [`snapshot`](EphemerisTable::snapshot).
+/// One instant of every track's centers, in meta order, component-major.
+/// Reused across the two accel evals and the impact test of a single Verlet
+/// step; refilled per endpoint by [`snapshot`](EphemerisTable::snapshot).
+/// Component runs (not `Vec<DVec3>`) so an 8-wide kernel loads 8 bodies
+/// with plain `loadu` — no gathers.
 #[derive(Debug, Clone, Default)]
 pub struct TableSnapshot {
     time: SimTime,
-    centers: Vec<DVec3>,
+    pub(crate) cx: Vec<f64>,
+    pub(crate) cy: Vec<f64>,
+    pub(crate) cz: Vec<f64>,
 }
 
 /// Fast evaluator for a fixed body set over one horizon. Built once per
@@ -82,7 +115,12 @@ pub struct TableSnapshot {
 pub struct EphemerisTable {
     start: SimTime,
     end: SimTime,
-    tracks: Vec<BodyTrack>,
+    node_step_s: f64,
+    meta: Vec<TrackMeta>,
+    /// Effective mu per body (zero for non-gravitating lanes), contiguous
+    /// for the 8-wide gravity kernel.
+    eff_mu: Vec<f64>,
+    arrays: NodeArrays,
 }
 
 impl EphemerisTable {
@@ -119,40 +157,98 @@ impl EphemerisTable {
             ));
         }
         let nodes = (horizon / node_step_s).ceil().max(1.0) as usize;
-        // Node tracks are independent per body (no shared mutable state, no
+        // Tracks are independent per body (no shared mutable state, no
         // reduction), so a parallel fill is bitwise identical to the serial
-        // loop: Rayon preserves encounter order on collect, and each track
-        // integrates only its own nodes. Kepler solves dominate (~85% of a
-        // full-horizon bake), scaling ~linearly to core count.
+        // loop: Rayon preserves encounter order on collect. Kepler solves
+        // dominate (~85% of a full-horizon bake). Each task returns its own
+        // component runs; interleaving below is a memcpy next to the solves.
         use rayon::prelude::*;
-        let tracks: Result<Vec<BodyTrack>, EphemerisError> = bodies
+        let built: Result<Vec<BuiltTrack>, EphemerisError> = bodies
             .par_iter()
             .map(|id| {
                 let body = ephemeris.body(*id)?;
-                let mut positions = Vec::with_capacity(nodes + 1);
-                let mut velocities = Vec::with_capacity(nodes + 1);
+                let mut px = Vec::with_capacity(nodes + 1);
+                let mut py = Vec::with_capacity(nodes + 1);
+                let mut pz = Vec::with_capacity(nodes + 1);
+                let mut vx = Vec::with_capacity(nodes + 1);
+                let mut vy = Vec::with_capacity(nodes + 1);
+                let mut vz = Vec::with_capacity(nodes + 1);
                 for node in 0..=nodes {
                     let state: BodyState =
                         ephemeris.body_state(*id, start.offset(node as f64 * node_step_s))?;
-                    positions.push(state.position_inertial);
-                    velocities.push(state.velocity_inertial);
+                    px.push(state.position_inertial.x);
+                    py.push(state.position_inertial.y);
+                    pz.push(state.position_inertial.z);
+                    vx.push(state.velocity_inertial.x);
+                    vy.push(state.velocity_inertial.y);
+                    vz.push(state.velocity_inertial.z);
                 }
-                Ok(BodyTrack {
-                    id: *id,
-                    mu: body.mu,
-                    gravitating: body.gravity_source,
-                    radius_m: body.radius_m,
-                    step_s: node_step_s,
-                    positions,
-                    velocities,
-                })
+                Ok((
+                    TrackMeta {
+                        id: *id,
+                        eff_mu: if body.gravity_source { body.mu } else { 0.0 },
+                        gravitating: body.gravity_source,
+                        radius_m: body.radius_m,
+                    },
+                    [px, py, pz, vx, vy, vz],
+                ))
             })
             .collect();
+        let built = built?;
+        let nbodies = built.len();
+        let points = nodes + 1;
+        let mut meta = Vec::with_capacity(nbodies);
+        let mut arrays = NodeArrays {
+            bodies: nbodies,
+            points,
+            pos_x: vec![0.0; points * nbodies],
+            pos_y: vec![0.0; points * nbodies],
+            pos_z: vec![0.0; points * nbodies],
+            vel_x: vec![0.0; points * nbodies],
+            vel_y: vec![0.0; points * nbodies],
+            vel_z: vec![0.0; points * nbodies],
+        };
+        for (body, (track_meta, comps)) in built.into_iter().enumerate() {
+            meta.push(track_meta);
+            let [px, py, pz, vx, vy, vz] = comps;
+            for node in 0..points {
+                let base = node * nbodies + body;
+                arrays.pos_x[base] = px[node];
+                arrays.pos_y[base] = py[node];
+                arrays.pos_z[base] = pz[node];
+                arrays.vel_x[base] = vx[node];
+                arrays.vel_y[base] = vy[node];
+                arrays.vel_z[base] = vz[node];
+            }
+        }
+        let eff_mu = meta.iter().map(|track| track.eff_mu).collect();
         Ok(Self {
             start,
             end,
-            tracks: tracks?,
+            node_step_s,
+            meta,
+            eff_mu,
+            arrays,
         })
+    }
+
+    /// Node interval bracketing `time`, or `None` outside coverage.
+    fn segment(&self, time: SimTime) -> Option<(usize, usize, f64, f64)> {
+        if !self.covers(time) || self.arrays.points < 2 {
+            return None;
+        }
+        let total = (self.arrays.points - 1) as f64;
+        let elapsed = (time.seconds() - self.start.seconds()).clamp(0.0, total * self.node_step_s);
+        let position = (elapsed / self.node_step_s).min(total);
+        let low = (position.floor() as usize).min(self.arrays.points - 1);
+        let high = (low + 1).min(self.arrays.points - 1);
+        let s = (position - low as f64).clamp(0.0, 1.0);
+        let h = ((high - low) as f64) * self.node_step_s;
+        Some((low, high, h, s))
+    }
+
+    fn node_state(&self, body: usize, low: usize, high: usize, h: f64, s: f64) -> (DVec3, DVec3) {
+        self.arrays.node_state(body, low, high, h, s)
     }
 
     /// Summed point-mass acceleration at a position/epoch, same definition
@@ -165,15 +261,16 @@ impl EphemerisTable {
     }
 
     pub fn acceleration_at(&self, position: DVec3, time: SimTime) -> Option<DVec3> {
-        if !self.covers(time) || !position.is_finite() {
+        let (low, high, h, s) = self.segment(time)?;
+        if !position.is_finite() {
             return None;
         }
         let mut total = DVec3::ZERO;
-        for track in &self.tracks {
-            if !track.gravitating {
+        for body in 0..self.meta.len() {
+            if !self.meta[body].gravitating {
                 continue;
             }
-            let (center, _) = track.state_at(time, self.start);
+            let (center, _) = self.node_state(body, low, high, h, s);
             let offset = center - position;
             let distance_squared = offset.length_squared();
             if !distance_squared.is_finite() || distance_squared == 0.0 {
@@ -183,54 +280,158 @@ impl EphemerisTable {
             if !inverse.is_finite() {
                 return None;
             }
-            total += offset * (track.mu * inverse.powi(3));
+            total += offset * (self.meta[body].eff_mu * inverse.powi(3));
         }
         total.is_finite().then_some(total)
     }
 
-    /// Fill `out` with every track's center at `time`, in track order.
+    /// Fill `out` with every track's center at `time`, in meta order.
     /// A Verlet step needs body centers at both endpoints for two accel
-    /// evals plus the impact segment test — 4-6 Hermite evals per track
-    /// plus an O(tracks) id lookup per impact body. Snapshotting once per
-    /// endpoint cuts that to 2 evals per track with zero lookups.
+    /// evals plus the impact segment test. Snapshotting once per endpoint
+    /// cuts Hermite evals with zero id lookups.
     pub fn snapshot(&self, time: SimTime, out: &mut TableSnapshot) {
+        self.snapshot_with(time, out, true);
+    }
+
+    /// Snapshot with an explicit SIMD switch: the cross-path agreement test
+    /// forces both sides on the same table. Production always passes `true`
+    /// (dispatch inside degrades gracefully per chunk).
+    pub(crate) fn snapshot_with(&self, time: SimTime, out: &mut TableSnapshot, use_simd: bool) {
         out.time = time;
-        out.centers.clear();
-        out.centers.reserve(self.tracks.len());
-        for track in &self.tracks {
-            out.centers.push(track.state_at(time, self.start).0);
+        let n = self.meta.len();
+        out.cx.resize(n, 0.0);
+        out.cy.resize(n, 0.0);
+        out.cz.resize(n, 0.0);
+        let Some((low, high, h, s)) = self.segment(time) else {
+            out.cx.clear();
+            out.cy.clear();
+            out.cz.clear();
+            return;
+        };
+        let a = &self.arrays;
+        let (lx, hx) = (low * n, high * n);
+        let mut body = 0;
+        while body + 8 <= n {
+            let done = use_simd
+                && thessa_simd::hermite_snapshot_chunk(
+                    &a.pos_x[lx..],
+                    &a.pos_x[hx..],
+                    &a.vel_x[lx..],
+                    &a.vel_x[hx..],
+                    &a.pos_y[lx..],
+                    &a.pos_y[hx..],
+                    &a.vel_y[lx..],
+                    &a.vel_y[hx..],
+                    &a.pos_z[lx..],
+                    &a.pos_z[hx..],
+                    &a.vel_z[lx..],
+                    &a.vel_z[hx..],
+                    body,
+                    h,
+                    s,
+                    &mut out.cx,
+                    &mut out.cy,
+                    &mut out.cz,
+                );
+            if !done {
+                for b in body..body + 8 {
+                    let (center, _) = self.node_state(b, low, high, h, s);
+                    out.cx[b] = center.x;
+                    out.cy[b] = center.y;
+                    out.cz[b] = center.z;
+                }
+            }
+            body += 8;
+        }
+        for b in body..n {
+            let (center, _) = self.node_state(b, low, high, h, s);
+            out.cx[b] = center.x;
+            out.cy[b] = center.y;
+            out.cz[b] = center.z;
         }
     }
 
     /// Summed gravity from a snapshot (centers must come from [`snapshot`](Self::snapshot)).
-    /// Index-aligned with [`tracks`](Self::tracks_len) order; use
-    /// [`impact_from`](Self::impact_from) for the segment test on a pair.
+    /// Index-aligned with meta order; use [`impact_from`](Self::impact_from)
+    /// for the segment test on a pair.
     pub fn accel_from(&self, snapshot: &TableSnapshot, position: DVec3) -> Option<DVec3> {
-        if snapshot.centers.len() != self.tracks.len() || !position.is_finite() {
+        self.accel_with(snapshot, position, true)
+    }
+
+    /// Accel with an explicit SIMD switch (see [`snapshot_with`](Self::snapshot_with)).
+    pub(crate) fn accel_with(
+        &self,
+        snapshot: &TableSnapshot,
+        position: DVec3,
+        use_simd: bool,
+    ) -> Option<DVec3> {
+        if snapshot.cx.len() != self.meta.len() || !position.is_finite() {
             return None;
         }
-        let mut total = DVec3::ZERO;
-        for (track, center) in self.tracks.iter().zip(snapshot.centers.iter()) {
-            if !track.gravitating {
-                continue;
+        let n = self.meta.len();
+        let mut total = (0.0, 0.0, 0.0);
+        let mut body = 0;
+        while body + 8 <= n {
+            let done = use_simd
+                && thessa_simd::gravity_chunk(
+                    &snapshot.cx,
+                    &snapshot.cy,
+                    &snapshot.cz,
+                    &self.eff_mu,
+                    body,
+                    position.x,
+                    position.y,
+                    position.z,
+                    &mut total,
+                );
+            if !done {
+                // Singular lane (or SIMD off): scalar chunk, same `None`
+                // semantics as the pre-SIMD loop.
+                for index in body..body + 8 {
+                    total = self.scalar_term(snapshot, position, index, total)?;
+                }
             }
-            let offset = *center - position;
-            let distance_squared = offset.length_squared();
-            if !distance_squared.is_finite() || distance_squared == 0.0 {
-                return None;
-            }
-            let inverse = distance_squared.sqrt().recip();
-            if !inverse.is_finite() {
-                return None;
-            }
-            total += offset * (track.mu * inverse.powi(3));
+            body += 8;
         }
+        for index in body..n {
+            total = self.scalar_term(snapshot, position, index, total)?;
+        }
+        let total = DVec3::new(total.0, total.1, total.2);
         total.is_finite().then_some(total)
     }
 
+    /// One scalar gravity term; `None` on singularity/non-finite input.
+    /// Non-gravitating lanes carry exactly-zero mu, so skipping them is
+    /// implied (`x + ±0.0 == x` bitwise).
+    fn scalar_term(
+        &self,
+        snapshot: &TableSnapshot,
+        position: DVec3,
+        index: usize,
+        total: (f64, f64, f64),
+    ) -> Option<(f64, f64, f64)> {
+        let dx = snapshot.cx[index] - position.x;
+        let dy = snapshot.cy[index] - position.y;
+        let dz = snapshot.cz[index] - position.z;
+        let distance_squared = dx * dx + dy * dy + dz * dz;
+        if !distance_squared.is_finite() || distance_squared == 0.0 {
+            return None;
+        }
+        let inverse = distance_squared.sqrt().recip();
+        if !inverse.is_finite() {
+            return None;
+        }
+        let t = self.eff_mu[index] * inverse.powi(3);
+        let out = (total.0 + dx * t, total.1 + dy * t, total.2 + dz * t);
+        if out.0.is_finite() && out.1.is_finite() && out.2.is_finite() {
+            Some(out)
+        } else {
+            None
+        }
+    }
+
     /// Moving-frame segment/sphere entry between two snapshots. Iterates
-    /// tracks once (index-aligned centers, integer membership test) instead
-    /// of one map lookup plus two Hermite evals per impact body.
+    /// meta once (index-aligned centers, integer membership test).
     pub fn impact_from(
         &self,
         start_snap: &TableSnapshot,
@@ -239,23 +440,26 @@ impl EphemerisTable {
         to: DVec3,
         impact_bodies: &[BodyId],
     ) -> Option<(BodyId, f64)> {
-        if start_snap.centers.len() != self.tracks.len()
-            || end_snap.centers.len() != self.tracks.len()
-        {
+        if start_snap.cx.len() != self.meta.len() || end_snap.cx.len() != self.meta.len() {
             return None;
         }
         let mut first: Option<(BodyId, f64)> = None;
-        for ((track, start_center), end_center) in self
-            .tracks
-            .iter()
-            .zip(start_snap.centers.iter())
-            .zip(end_snap.centers.iter())
-        {
+        for (index, track) in self.meta.iter().enumerate() {
             if track.radius_m <= 0.0 || !impact_bodies.contains(&track.id) {
                 continue;
             }
-            let relative = from - *start_center;
-            let delta = (to - *end_center) - relative;
+            let start_center = DVec3::new(
+                start_snap.cx[index],
+                start_snap.cy[index],
+                start_snap.cz[index],
+            );
+            let end_center = DVec3::new(
+                end_snap.cx[index],
+                end_snap.cy[index],
+                end_snap.cz[index],
+            );
+            let relative = from - start_center;
+            let delta = (to - end_center) - relative;
             let a = delta.length_squared();
             if a <= 0.0 {
                 continue;
@@ -281,8 +485,9 @@ impl EphemerisTable {
         if !self.covers(time) {
             return None;
         }
-        let track = self.tracks.iter().find(|track| track.id == id)?;
-        let (position_inertial, velocity_inertial) = track.state_at(time, self.start);
+        let index = self.meta.iter().position(|track| track.id == id)?;
+        let (low, high, h, s) = self.segment(time)?;
+        let (position_inertial, velocity_inertial) = self.node_state(index, low, high, h, s);
         // Baked bodies carry no attitude: the ephemeris itself reports
         // IDENTITY/ZERO, so the table matches it exactly.
         Some(BodyState {
@@ -297,10 +502,6 @@ impl EphemerisTable {
         time.0.is_finite() && time.0 >= self.start.0 && time.0 <= self.end.0
     }
 
-    fn track(&self, id: BodyId) -> Option<&BodyTrack> {
-        self.tracks.iter().find(|track| track.id == id)
-    }
-
     /// Table version of the point-in-body check, for fast-bake impact ends.
     pub fn impact_at(
         &self,
@@ -308,16 +509,14 @@ impl EphemerisTable {
         position: DVec3,
         time: SimTime,
     ) -> Option<BodyId> {
-        for body_id in impact_bodies {
-            let Some(track) = self.track(*body_id) else {
-                continue;
-            };
-            if track.radius_m <= 0.0 {
+        let (low, high, h, s) = self.segment(time)?;
+        for (index, track) in self.meta.iter().enumerate() {
+            if track.radius_m <= 0.0 || !impact_bodies.contains(&track.id) {
                 continue;
             }
-            let (center, _) = track.state_at(time, self.start);
+            let (center, _) = self.node_state(index, low, high, h, s);
             if (position - center).length() < track.radius_m {
-                return Some(*body_id);
+                return Some(track.id);
             }
         }
         None
@@ -332,16 +531,15 @@ impl EphemerisTable {
         start_time: SimTime,
         end_time: SimTime,
     ) -> Option<(BodyId, f64)> {
+        let (slow, shigh, sh, ss) = self.segment(start_time)?;
+        let (elow, ehigh, eh, es) = self.segment(end_time)?;
         let mut first: Option<(BodyId, f64)> = None;
-        for body_id in impact_bodies {
-            let Some(track) = self.track(*body_id) else {
-                continue;
-            };
-            if track.radius_m <= 0.0 {
+        for (index, track) in self.meta.iter().enumerate() {
+            if track.radius_m <= 0.0 || !impact_bodies.contains(&track.id) {
                 continue;
             }
-            let (start_center, _) = track.state_at(start_time, self.start);
-            let (end_center, _) = track.state_at(end_time, self.start);
+            let (start_center, _) = self.node_state(index, slow, shigh, sh, ss);
+            let (end_center, _) = self.node_state(index, elow, ehigh, eh, es);
             let relative = from - start_center;
             let delta = (to - end_center) - relative;
             let a = delta.length_squared();
@@ -359,15 +557,14 @@ impl EphemerisTable {
             if (0.0..=1.0).contains(&fraction)
                 && first.is_none_or(|(_, previous)| fraction < previous)
             {
-                first = Some((*body_id, fraction));
+                first = Some((track.id, fraction));
             }
         }
         first
     }
 
-    /// Interpolated body radius lookup still goes to the ephemeris (radii
-    /// are constants; no solve involved).
+    /// Body ids in meta order.
     pub fn source_ids(&self) -> impl Iterator<Item = BodyId> + '_ {
-        self.tracks.iter().map(|track| track.id)
+        self.meta.iter().map(|track| track.id)
     }
 }

@@ -10,6 +10,7 @@ publish = false
 glam.workspace = true
 serde.workspace = true
 rayon.workspace = true
+thessa-simd = { path = "../simd" }
 
 [dev-dependencies]
 toml.workspace = true

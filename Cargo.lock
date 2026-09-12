@@ -5293,8 +5293,13 @@ dependencies = [
  "glam",
  "rayon",
  "serde",
+ "thessa-simd",
  "toml",
 ]
+
+[[package]]
+name = "thessa-simd"
+version = "0.0.1"
 
 [[package]]
 name = "thessa-system-baker"

@@ -1,0 +1,10 @@
+[package]
+name = "thessa-simd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Optional AVX-512 math kernels for Project Thessa numerical loops (spec section 10)"
+
+[dependencies]

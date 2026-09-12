@@ -25,8 +25,7 @@ fn has_avx512() -> bool {
     use std::sync::OnceLock;
     static HAS: OnceLock<bool> = OnceLock::new();
     *HAS.get_or_init(|| {
-        std::arch::is_x86_feature_detected!("avx512f")
-            && std::arch::is_x86_feature_detected!("fma")
+        std::arch::is_x86_feature_detected!("avx512f") && std::arch::is_x86_feature_detected!("fma")
     })
 }
 
@@ -35,8 +34,7 @@ fn has_avx2() -> bool {
     use std::sync::OnceLock;
     static HAS: OnceLock<bool> = OnceLock::new();
     *HAS.get_or_init(|| {
-        std::arch::is_x86_feature_detected!("avx2")
-            && std::arch::is_x86_feature_detected!("fma")
+        std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("fma")
     })
 }
 
@@ -94,31 +92,31 @@ unsafe fn hermite8_avx512(
 ) {
     use std::arch::x86_64::*;
     unsafe {
-    let hn = _mm512_set1_pd(h);
-    let sn = _mm512_set1_pd(s);
-    let two = _mm512_set1_pd(2.0);
-    let three = _mm512_set1_pd(3.0);
-    // One component: a = 3*dx - h*(2*v0+v1); b = h*(v0+v1) - 2*dx;
-    // p = c0 + s*(h*v0 + s*(a + s*b)).
-    macro_rules! component {
-        ($c0:expr, $c1:expr, $vc0:expr, $vc1:expr, $o:expr) => {{
-            let c0 = _mm512_loadu_pd($c0);
-            let c1 = _mm512_loadu_pd($c1);
-            let v0 = _mm512_loadu_pd($vc0);
-            let v1 = _mm512_loadu_pd($vc1);
-            let dx = _mm512_sub_pd(c1, c0);
-            let t = _mm512_fmadd_pd(two, v0, v1);
-            let a = _mm512_fmsub_pd(three, dx, _mm512_mul_pd(hn, t));
-            let u = _mm512_add_pd(v0, v1);
-            let b = _mm512_fmsub_pd(hn, u, _mm512_mul_pd(two, dx));
-            let inner = _mm512_fmadd_pd(sn, b, a);
-            let mid = _mm512_fmadd_pd(sn, inner, _mm512_mul_pd(hn, v0));
-            _mm512_storeu_pd($o, _mm512_fmadd_pd(sn, mid, c0));
-        }};
-    }
-    component!(x0, x1, vx0, vx1, ox);
-    component!(y0, y1, vy0, vy1, oy);
-    component!(z0, z1, vz0, vz1, oz);
+        let hn = _mm512_set1_pd(h);
+        let sn = _mm512_set1_pd(s);
+        let two = _mm512_set1_pd(2.0);
+        let three = _mm512_set1_pd(3.0);
+        // One component: a = 3*dx - h*(2*v0+v1); b = h*(v0+v1) - 2*dx;
+        // p = c0 + s*(h*v0 + s*(a + s*b)).
+        macro_rules! component {
+            ($c0:expr, $c1:expr, $vc0:expr, $vc1:expr, $o:expr) => {{
+                let c0 = _mm512_loadu_pd($c0);
+                let c1 = _mm512_loadu_pd($c1);
+                let v0 = _mm512_loadu_pd($vc0);
+                let v1 = _mm512_loadu_pd($vc1);
+                let dx = _mm512_sub_pd(c1, c0);
+                let t = _mm512_fmadd_pd(two, v0, v1);
+                let a = _mm512_fmsub_pd(three, dx, _mm512_mul_pd(hn, t));
+                let u = _mm512_add_pd(v0, v1);
+                let b = _mm512_fmsub_pd(hn, u, _mm512_mul_pd(two, dx));
+                let inner = _mm512_fmadd_pd(sn, b, a);
+                let mid = _mm512_fmadd_pd(sn, inner, _mm512_mul_pd(hn, v0));
+                _mm512_storeu_pd($o, _mm512_fmadd_pd(sn, mid, c0));
+            }};
+        }
+        component!(x0, x1, vx0, vx1, ox);
+        component!(y0, y1, vy0, vy1, oy);
+        component!(z0, z1, vz0, vz1, oz);
     }
 }
 
@@ -140,43 +138,43 @@ unsafe fn gravity8_avx512(
 ) -> Option<(f64, f64, f64)> {
     use std::arch::x86_64::*;
     unsafe {
-    let vx = _mm512_loadu_pd(cx);
-    let vy = _mm512_loadu_pd(cy);
-    let vz = _mm512_loadu_pd(cz);
-    let m = _mm512_loadu_pd(mu);
-    let dx = _mm512_sub_pd(vx, _mm512_set1_pd(px));
-    let dy = _mm512_sub_pd(vy, _mm512_set1_pd(py));
-    let dz = _mm512_sub_pd(vz, _mm512_set1_pd(pz));
-    let d2 = _mm512_fmadd_pd(dx, dx, _mm512_fmadd_pd(dy, dy, _mm512_mul_pd(dz, dz)));
-    // Singular (d2 == 0) or non-finite lanes invalidate the whole eval,
-    // exactly like the scalar early-`None`.
-    let zero = _mm512_setzero_pd();
-    let bad_mask = _mm512_cmp_pd_mask(d2, d2, _CMP_UNORD_Q)
-        | _mm512_cmp_pd_mask(d2, zero, _CMP_EQ_OQ);
-    if bad_mask != 0 {
-        return None;
-    }
-    let mut x = _mm512_rsqrt14_pd(d2);
-    let half = _mm512_set1_pd(0.5);
-    let one_half = _mm512_set1_pd(1.5);
-    for _ in 0..2 {
-        let x2 = _mm512_mul_pd(x, x);
-        // x *= 1.5 - 0.5*d2*x2
-        x = _mm512_mul_pd(x, _mm512_fnmadd_pd(half, _mm512_mul_pd(d2, x2), one_half));
-    }
-    if _mm512_cmp_pd_mask(x, x, _CMP_UNORD_Q) != 0 {
-        return None;
-    }
-    let inv2 = _mm512_mul_pd(x, x);
-    let inv3 = _mm512_mul_pd(inv2, x);
-    let t = _mm512_mul_pd(m, inv3);
-    let sx = _mm512_reduce_add_pd(_mm512_mul_pd(dx, t));
-    let sy = _mm512_reduce_add_pd(_mm512_mul_pd(dy, t));
-    let sz = _mm512_reduce_add_pd(_mm512_mul_pd(dz, t));
-    if !(sx.is_finite() && sy.is_finite() && sz.is_finite()) {
-        return None;
-    }
-    Some((sx, sy, sz))
+        let vx = _mm512_loadu_pd(cx);
+        let vy = _mm512_loadu_pd(cy);
+        let vz = _mm512_loadu_pd(cz);
+        let m = _mm512_loadu_pd(mu);
+        let dx = _mm512_sub_pd(vx, _mm512_set1_pd(px));
+        let dy = _mm512_sub_pd(vy, _mm512_set1_pd(py));
+        let dz = _mm512_sub_pd(vz, _mm512_set1_pd(pz));
+        let d2 = _mm512_fmadd_pd(dx, dx, _mm512_fmadd_pd(dy, dy, _mm512_mul_pd(dz, dz)));
+        // Singular (d2 == 0) or non-finite lanes invalidate the whole eval,
+        // exactly like the scalar early-`None`.
+        let zero = _mm512_setzero_pd();
+        let bad_mask =
+            _mm512_cmp_pd_mask(d2, d2, _CMP_UNORD_Q) | _mm512_cmp_pd_mask(d2, zero, _CMP_EQ_OQ);
+        if bad_mask != 0 {
+            return None;
+        }
+        let mut x = _mm512_rsqrt14_pd(d2);
+        let half = _mm512_set1_pd(0.5);
+        let one_half = _mm512_set1_pd(1.5);
+        for _ in 0..2 {
+            let x2 = _mm512_mul_pd(x, x);
+            // x *= 1.5 - 0.5*d2*x2
+            x = _mm512_mul_pd(x, _mm512_fnmadd_pd(half, _mm512_mul_pd(d2, x2), one_half));
+        }
+        if _mm512_cmp_pd_mask(x, x, _CMP_UNORD_Q) != 0 {
+            return None;
+        }
+        let inv2 = _mm512_mul_pd(x, x);
+        let inv3 = _mm512_mul_pd(inv2, x);
+        let t = _mm512_mul_pd(m, inv3);
+        let sx = _mm512_reduce_add_pd(_mm512_mul_pd(dx, t));
+        let sy = _mm512_reduce_add_pd(_mm512_mul_pd(dy, t));
+        let sz = _mm512_reduce_add_pd(_mm512_mul_pd(dz, t));
+        if !(sx.is_finite() && sy.is_finite() && sz.is_finite()) {
+            return None;
+        }
+        Some((sx, sy, sz))
     }
 }
 
@@ -208,14 +206,17 @@ pub fn hermite_snapshot_chunk(
 ) -> bool {
     #[cfg(target_arch = "x86_64")]
     {
+        let Some(end) = base.checked_add(8) else {
+            return false;
+        };
         if !(avx512_available()) {
             return false;
         }
         let slices: [&[f64]; 12] = [x0, x1, vx0, vx1, y0, y1, vy0, vy1, z0, z1, vz0, vz1];
-        if slices.iter().any(|v| v.len() < base + 8) {
+        if slices.iter().any(|v| v.len() < end) {
             return false;
         }
-        if ox.len() < base + 8 || oy.len() < base + 8 || oz.len() < base + 8 {
+        if ox.len() < end || oy.len() < end || oz.len() < end {
             return false;
         }
         if !(h.is_finite() && s.is_finite()) {
@@ -267,13 +268,16 @@ pub fn gravity_chunk(
 ) -> bool {
     #[cfg(target_arch = "x86_64")]
     {
+        let Some(end) = base.checked_add(8) else {
+            return false;
+        };
         if !(avx512_available()) {
             return false;
         }
-        if cx.len() < base + 8
-            || cy.len() < base + 8
-            || cz.len() < base + 8
-            || mu.len() < base + 8
+        if cx.len() < end
+            || cy.len() < end
+            || cz.len() < end
+            || mu.len() < end
             || !(px.is_finite() && py.is_finite() && pz.is_finite())
         {
             return false;
@@ -394,10 +398,7 @@ unsafe fn gravity4_avx2(
         let inv3 = _mm256_mul_pd(inv2, inv);
         let t = _mm256_mul_pd(m, inv3);
         let mut partial = [0.0f64; 4];
-        _mm256_storeu_pd(
-            partial.as_mut_ptr(),
-            _mm256_mul_pd(dx, t),
-        );
+        _mm256_storeu_pd(partial.as_mut_ptr(), _mm256_mul_pd(dx, t));
         let sx: f64 = partial.iter().sum();
         _mm256_storeu_pd(partial.as_mut_ptr(), _mm256_mul_pd(dy, t));
         let sy: f64 = partial.iter().sum();
@@ -435,14 +436,17 @@ pub fn hermite_snapshot_quad(
 ) -> bool {
     #[cfg(target_arch = "x86_64")]
     {
+        let Some(end) = base.checked_add(4) else {
+            return false;
+        };
         if !has_avx2() {
             return false;
         }
         let slices: [&[f64]; 12] = [x0, x1, vx0, vx1, y0, y1, vy0, vy1, z0, z1, vz0, vz1];
-        if slices.iter().any(|v| v.len() < base + 4) {
+        if slices.iter().any(|v| v.len() < end) {
             return false;
         }
-        if ox.len() < base + 4 || oy.len() < base + 4 || oz.len() < base + 4 {
+        if ox.len() < end || oy.len() < end || oz.len() < end {
             return false;
         }
         if !(h.is_finite() && s.is_finite()) {
@@ -495,13 +499,16 @@ pub fn gravity_quad(
 ) -> bool {
     #[cfg(target_arch = "x86_64")]
     {
+        let Some(end) = base.checked_add(4) else {
+            return false;
+        };
         if !has_avx2() {
             return false;
         }
-        if cx.len() < base + 4
-            || cy.len() < base + 4
-            || cz.len() < base + 4
-            || mu.len() < base + 4
+        if cx.len() < end
+            || cy.len() < end
+            || cz.len() < end
+            || mu.len() < end
             || !(px.is_finite() && py.is_finite() && pz.is_finite())
         {
             return false;
@@ -606,18 +613,6 @@ mod tests {
         let mut ox = vec![0.0; N];
         let mut oy = vec![0.0; N];
         let mut oz = vec![0.0; N];
-        let check_hermite = |ox: &[f64], xs: &[(&Vec<f64>, &Vec<f64>, &Vec<f64>, &Vec<f64>)], base: usize, width: usize, tag: &str| {
-            for i in base..base + width {
-                let (a0, a1, b0, b1) = (&xs[0].0[i], &xs[0].1[i], &xs[0].2[i], &xs[0].3[i]);
-                let expected = scalar_hermite(*a0, *a1, *b0, *b1, h, s);
-                let scale = expected.abs().max(1.0);
-                assert!(
-                    (ox[i] - expected).abs() / scale < 1e-12,
-                    "{tag} lane {i} diverged"
-                );
-            }
-        };
-        let _ = &check_hermite;
         let mut ran_any = false;
         // 8-wide Hermite at bases 0 and 8.
         for base in [0usize, 8] {
@@ -700,5 +695,44 @@ mod tests {
         }
         eprintln!("simd kernel self-test ran_any={ran_any}");
         assert!(ran_any, "no SIMD tier executed on this machine");
+    }
+}
+
+#[cfg(test)]
+mod boundary_regressions {
+    use super::*;
+
+    #[test]
+    fn overflowing_or_short_batches_fail_without_touching_output() {
+        let input = [1.0; 16];
+        for base in [usize::MAX, usize::MAX - 3, usize::MAX - 7, 16] {
+            let mut gravity = (7.0, 8.0, 9.0);
+            for kernel in [gravity_chunk, gravity_quad] {
+                assert!(!kernel(
+                    &input,
+                    &input,
+                    &input,
+                    &input,
+                    base,
+                    0.0,
+                    0.0,
+                    0.0,
+                    &mut gravity
+                ));
+                assert_eq!(gravity, (7.0, 8.0, 9.0));
+            }
+            let mut x = [7.0; 16];
+            let mut y = [8.0; 16];
+            let mut z = [9.0; 16];
+            for kernel in [hermite_snapshot_chunk, hermite_snapshot_quad] {
+                assert!(!kernel(
+                    &input, &input, &input, &input, &input, &input, &input, &input, &input, &input,
+                    &input, &input, base, 1.0, 0.5, &mut x, &mut y, &mut z
+                ));
+                assert_eq!(x, [7.0; 16]);
+                assert_eq!(y, [8.0; 16]);
+                assert_eq!(z, [9.0; 16]);
+            }
+        }
     }
 }

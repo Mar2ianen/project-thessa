@@ -127,6 +127,9 @@ jobs:
       - name: Compile onrails benchmark
         run: cargo bench -p thessa-sim-core --bench onrails --no-run
 
+      - name: Compile tick-adaptive benchmark
+        run: cargo bench -p thessa-sim-core --bench tick_adaptive --no-run
+
       - name: Compile gravity interpolation benchmark
         run: cargo bench -p thessa-sim-core --bench gravity_interpolation --no-run
 

@@ -374,6 +374,7 @@ pub(super) struct PilotFlightRuntime {
     sas_target_orientation: DQuat,
     render_relative_position_m: DVec3,
     flight_time_s: f64,
+    world_tick: thessa_sim_core::WorldTick,
     throttle: f64,
     engine_active: bool,
     sas_enabled: bool,
@@ -555,6 +556,7 @@ impl PilotFlightRuntime {
             sas_target_orientation: orientation_body_to_inertial,
             render_relative_position_m: initial_relative_position,
             flight_time_s: 0.0,
+            world_tick: thessa_sim_core::WorldTick::default(),
             throttle: 1.0,
             engine_active: true,
             sas_enabled: true,
@@ -1087,6 +1089,7 @@ fn simulate_pilot_flight(
     runtime.steps_this_frame = 0;
     runtime.rails_advanced_this_frame = 0.0;
     clock.sim_seconds = runtime.flight_time_s;
+    clock.tick = runtime.world_tick;
     if clock.paused {
         return;
     }
@@ -1109,6 +1112,7 @@ fn simulate_pilot_flight(
         runtime.flight_error = Some(error.to_string());
     }
     clock.sim_seconds = runtime.flight_time_s;
+    clock.tick = runtime.world_tick;
     perf.record_sim(started.elapsed().as_secs_f64());
     if let Some(seconds) = runtime.rails_bake_seconds.take() {
         perf.record_scope("simulation.coast_bake", seconds);

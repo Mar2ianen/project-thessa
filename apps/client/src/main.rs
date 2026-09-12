@@ -179,6 +179,7 @@ fn main() {
 #[derive(Resource)]
 struct SimulationClock {
     sim_seconds: f64,
+    tick: thessa_sim_core::WorldTick,
     multiplier: f64,
     paused: bool,
 }
@@ -187,6 +188,7 @@ impl Default for SimulationClock {
     fn default() -> Self {
         Self {
             sim_seconds: 0.0,
+            tick: thessa_sim_core::WorldTick::default(),
             multiplier: 1.0,
             paused: false,
         }

@@ -57,7 +57,7 @@ impl PerfCapture {
 
         let mut out = String::new();
         out.push_str(
-            "frame,wall_s,sim_time_s,frame_ms,cpu_ms,gpu_ms,gpu_available,steps,fixed_dt_s,sim_cpu_ms,sim_advanced_s,requested_warp,effective_warp,backlog_ms,bodies,vehicles,patches_visible,patches_generated,triangles,cache_hits,cache_misses,streaming_queued,assets_pending,rss_bytes",
+            "frame,wall_s,sim_time_s,frame_ms,cpu_ms,gpu_ms,gpu_available,steps,fixed_dt_s,sim_cpu_ms,sim_advanced_s,requested_warp,effective_warp,backlog_ms,bodies,vehicles,patches_visible,patches_generated,triangles,cache_hits,cache_misses,streaming_queued,assets_pending,rss_bytes,rails_advanced_s",
         );
         for name in &scope_names {
             let _ = write!(out, ",scope:{name}_ms");
@@ -103,6 +103,7 @@ impl PerfCapture {
                 frame.world.assets_pending,
                 rss,
             );
+            let _ = write!(out, ",{:.6}", frame.sim.rails_time_advanced_s);
             for name in &scope_names {
                 let ms = frame.cpu_scopes.get(name).copied().unwrap_or(0.0) * 1000.0;
                 let _ = write!(out, ",{ms:.4}");
@@ -195,6 +196,30 @@ mod tests {
         let parsed = PerfCapture::from_json(&json).unwrap();
         assert_eq!(parsed, capture);
         assert!(json.contains("format_version"));
+    }
+
+    #[test]
+    fn rails_time_is_exported_and_old_json_defaults_to_zero() {
+        let mut capture = sample_capture();
+        capture.frames[0].sim =
+            SimBudget::from_steps(0.01, 2, 0.001, 100.0, 0.0, 0.01).with_rails_time(0.98, 0.01);
+        let csv = capture.to_csv();
+        let mut lines = csv.lines();
+        let header: Vec<_> = lines.next().unwrap().split(',').collect();
+        let row: Vec<_> = lines.next().unwrap().split(',').collect();
+        assert_eq!(header.len(), row.len());
+        let index = header
+            .iter()
+            .position(|s| *s == "rails_advanced_s")
+            .unwrap();
+        assert_eq!(row[index].parse::<f64>().unwrap(), 0.98);
+        let mut legacy = serde_json::to_value(&capture).unwrap();
+        legacy["frames"][0]["sim"]
+            .as_object_mut()
+            .unwrap()
+            .remove("rails_time_advanced_s");
+        let decoded: PerfCapture = serde_json::from_value(legacy).unwrap();
+        assert_eq!(decoded.frames[0].sim.rails_time_advanced_s, 0.0);
     }
 
     #[test]

@@ -397,11 +397,32 @@ impl BakedEphemeris {
         let mut id = Some(id);
         let mut speed = 0.0;
         for _ in 0..=self.bodies.len() {
-            let Some(current) = id else { return Ok(speed); };
+            let Some(current) = id else {
+                return Ok(speed);
+            };
             let body = self.body(current)?;
             if let Some(orbit) = body.orbit {
-                speed += orbit.mean_motion().abs() * orbit.semi_major_axis_m
+                speed += orbit.mean_motion().abs()
+                    * orbit.semi_major_axis_m
                     * ((1.0 + orbit.eccentricity) / (1.0 - orbit.eccentricity)).sqrt();
+            }
+            id = body.parent;
+        }
+        Err(EphemerisError::InvalidOrbit("cyclic body hierarchy".into()))
+    }
+
+    /// Inertial acceleration bound, summed over nested Kepler orbits.
+    pub fn maximum_body_acceleration(&self, id: BodyId) -> Result<f64, EphemerisError> {
+        let mut id = Some(id);
+        let mut acceleration = 0.0;
+        for _ in 0..=self.bodies.len() {
+            let Some(current) = id else {
+                return Ok(acceleration);
+            };
+            let body = self.body(current)?;
+            if let Some(orbit) = body.orbit {
+                acceleration += orbit.mean_motion().powi(2) * orbit.semi_major_axis_m
+                    / (1.0 - orbit.eccentricity).powi(2);
             }
             id = body.parent;
         }

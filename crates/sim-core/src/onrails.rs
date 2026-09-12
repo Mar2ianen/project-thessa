@@ -84,6 +84,7 @@ pub struct OnRailsCache {
     /// flight loop never rides them and [`extend`](Self::extend) refuses
     /// them, since resume budgeting assumes uniform steps.
     scaled: bool,
+    tick_config: Option<crate::TickIntegratorConfig>,
 }
 
 impl OnRailsCache {
@@ -101,6 +102,7 @@ impl OnRailsCache {
     pub fn invalidate(&mut self) {
         self.path = None;
         self.scaled = false;
+        self.tick_config = None;
     }
 
     /// Bake (or rebake) the coast path from this state and epoch. The
@@ -132,10 +134,17 @@ impl OnRailsCache {
         config: VerletConfig,
         impact_bodies: &[BodyId],
     ) -> Result<&SampledPath, IntegratorError> {
-        let head = COAST_RAILS_HEAD_STEPS.min(config.max_steps.max(1));
+        let head = COAST_RAILS_HEAD_STEPS.min(config.max_steps);
         let mut headed = config;
         headed.max_steps = head;
-        self.bake_impl(ephemeris, initial, start, headed, impact_bodies, Some(config))?;
+        self.bake_impl(
+            ephemeris,
+            initial,
+            start,
+            headed,
+            impact_bodies,
+            Some(config),
+        )?;
         Ok(self.path.as_ref().expect("just baked"))
     }
 
@@ -171,6 +180,7 @@ impl OnRailsCache {
         self.config = Some(store_config.unwrap_or(bake_config));
         self.path = Some(path);
         self.scaled = false;
+        self.tick_config = None;
         Ok(self.path.as_ref().expect("just baked"))
     }
 
@@ -208,7 +218,53 @@ impl OnRailsCache {
         });
         self.path = Some(path);
         self.scaled = true;
+        self.tick_config = None;
         Ok(self.path.as_ref().expect("just baked"))
+    }
+
+    /// Adaptive gravity bake shared by flight and map. Legacy uniform and
+    /// display-only APIs remain available for reference comparisons.
+    pub fn bake_tick(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        initial: TestParticleState,
+        start: SimTime,
+        config: crate::TickIntegratorConfig,
+        impact_bodies: &[BodyId],
+    ) -> Result<&SampledPath, IntegratorError> {
+        let mut bodies = impact_bodies.to_vec();
+        bodies.sort();
+        bodies.dedup();
+        let path = crate::propagate_tick_adaptive(ephemeris, initial, start, config, &bodies)?;
+        self.ephemeris = Some(ephemeris.clone());
+        self.impact_bodies = bodies;
+        self.config = None;
+        self.tick_config = Some(config);
+        self.scaled = false;
+        self.path = Some(path);
+        Ok(self.path.as_ref().expect("just baked"))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn usable_tick_for(
+        &self,
+        ephemeris: &BakedEphemeris,
+        initial: TestParticleState,
+        time: SimTime,
+        config: crate::TickIntegratorConfig,
+        impact_bodies: &[BodyId],
+        position_tolerance_m: f64,
+        velocity_tolerance_mps: f64,
+    ) -> bool {
+        self.tick_config == Some(config)
+            && self.state_matches(
+                ephemeris,
+                initial,
+                time,
+                impact_bodies,
+                position_tolerance_m,
+                velocity_tolerance_mps,
+            )
     }
 
     /// True for timescale-following display bakes (never flight-ridden).
@@ -225,7 +281,7 @@ impl OnRailsCache {
         ephemeris: &BakedEphemeris,
         extra_steps: u64,
     ) -> Result<bool, IntegratorError> {
-        if self.scaled {
+        if self.scaled || self.tick_config.is_some() {
             return Ok(false);
         }
         let (config, bodies) = match (self.config, self.path.is_some()) {
@@ -251,6 +307,9 @@ impl OnRailsCache {
     /// `min_ahead_s` ahead of `now` and the stored horizon is not reached.
     /// Impact-ended paths never extend.
     pub fn needs_extension(&self, now: SimTime, min_ahead_s: f64) -> bool {
+        if self.scaled || self.tick_config.is_some() {
+            return false;
+        }
         let Some(path) = self.path.as_ref() else {
             return false;
         };
@@ -271,7 +330,10 @@ impl OnRailsCache {
 
     /// Live sample count (memory weight ~56 B each).
     pub fn sample_count(&self) -> usize {
-        self.path.as_ref().map(|path| path.positions.len()).unwrap_or(0)
+        self.path
+            .as_ref()
+            .map(|path| path.positions.len())
+            .unwrap_or(0)
     }
 
     /// Sliding window: drop samples older than `now - keep_behind_s`, in
@@ -286,18 +348,27 @@ impl OnRailsCache {
             Some(path) if matches!(path.end, crate::SampledPathEnd::Completed) => path,
             _ => return,
         };
-        if path.positions.len() < 3 || !(keep_behind_s.is_finite() && chunk_s > 0.0) {
+        if path.positions.len() < 3
+            || !now.0.is_finite()
+            || !(keep_behind_s.is_finite()
+                && keep_behind_s >= 0.0
+                && chunk_s.is_finite()
+                && chunk_s > 0.0)
+        {
             return;
         }
-        let horizon = now.seconds() - keep_behind_s - chunk_s;
+        let horizon = now.seconds() - keep_behind_s;
         let cutoff = path.times.partition_point(|t| t.seconds() < horizon);
         // Keep two samples of overlap for the interpolant.
-        let drain = cutoff.saturating_sub(2).min(path.positions.len().saturating_sub(2));
-        if drain == 0 {
+        let drain = cutoff
+            .saturating_sub(2)
+            .min(path.positions.len().saturating_sub(2));
+        if drain == 0 || path.times[drain].0 - path.times[0].0 < chunk_s {
             return;
         }
         path.positions.drain(..drain);
         path.velocities.drain(..drain);
+        path.accelerations.drain(..drain);
         path.times.drain(..drain);
     }
 
@@ -318,6 +389,27 @@ impl OnRailsCache {
         position_tolerance_m: f64,
         velocity_tolerance_mps: f64,
     ) -> bool {
+        self.config == Some(config)
+            && self.tick_config.is_none()
+            && self.state_matches(
+                ephemeris,
+                initial,
+                start,
+                impact_bodies,
+                position_tolerance_m,
+                velocity_tolerance_mps,
+            )
+    }
+
+    fn state_matches(
+        &self,
+        ephemeris: &BakedEphemeris,
+        initial: TestParticleState,
+        start: SimTime,
+        impact_bodies: &[BodyId],
+        position_tolerance_m: f64,
+        velocity_tolerance_mps: f64,
+    ) -> bool {
         let Some(path) = self.path.as_ref() else {
             return false;
         };
@@ -327,9 +419,6 @@ impl OnRailsCache {
             || !velocity_tolerance_mps.is_finite()
             || velocity_tolerance_mps < 0.0
         {
-            return false;
-        }
-        if self.config != Some(config) {
             return false;
         }
         let mut wanted = impact_bodies.to_vec();
@@ -360,9 +449,13 @@ impl OnRailsCache {
     /// Interpolated inertial (position, velocity) at this epoch, or `None`
     /// outside the baked coverage. Position uses cubic Hermite over the
     /// stored endpoint velocities (metre-grade at orbital speeds for the
-    /// 5 s rail step, so the flight loop can sample translation from here);
-    /// velocity is the analytic derivative of that same interpolant.
-    /// This is a sampled trajectory, not a fresh integration.
+    /// 5 s rail step, so the flight loop can sample translation from here).
+    /// Velocity interpolates the stored endpoint accelerations instead of
+    /// differentiating the position curve: at ~1e12 m barycentric
+    /// coordinates f64 rounding is ~1e-3 m, and the position-Hermite
+    /// derivative amplifies it by ~1/h into 0.01-0.1 m/s of pure noise at
+    /// second-scale nodes. This is a sampled trajectory, not a fresh
+    /// integration.
     pub fn sample_at(&self, time: SimTime) -> Option<(DVec3, DVec3)> {
         if !time.0.is_finite() {
             return None;
@@ -376,6 +469,15 @@ impl OnRailsCache {
             if path.positions.len() == 1 && t == first {
                 return Some((path.positions[0], path.velocities[0]));
             }
+            return None;
+        }
+        // Fail closed on non-parallel vectors rather than sampling velocity
+        // against the wrong node's acceleration. Every constructor maintains
+        // parallelism; hand-built paths must too.
+        if path.accelerations.len() != path.positions.len()
+            || path.velocities.len() != path.positions.len()
+            || path.times.len() != path.positions.len()
+        {
             return None;
         }
         let mut low = 0;
@@ -396,18 +498,32 @@ impl OnRailsCache {
         } else {
             0.0
         };
-        let p0 = path.positions[low];
-        let p1 = path.positions[high];
-        let v0 = path.velocities[low];
-        let v1 = path.velocities[high];
-        Some(crate::table::hermite_state(p0, v0, p1, v1, h, s))
+        let (position, _) = crate::table::hermite_state(
+            path.positions[low],
+            path.velocities[low],
+            path.positions[high],
+            path.velocities[high],
+            h,
+            s,
+        );
+        let velocity = crate::table::hermite_velocity(
+            path.velocities[low],
+            path.accelerations[low],
+            path.velocities[high],
+            path.accelerations[high],
+            h,
+            s,
+        );
+        Some((position, velocity))
     }
 
     /// Conservative axis-aligned bounds of the Hermite curve, including
     /// between-node excursions. Cubic Bezier control points enclose a segment;
     /// testing endpoints alone can miss an atmosphere/body crossing.
     pub fn position_bounds(&self, start: SimTime, end: SimTime) -> Option<(DVec3, DVec3)> {
-        if end.0 < start.0 { return None; }
+        if end.0 < start.0 {
+            return None;
+        }
         let (p, _) = self.sample_at(start)?;
         self.sample_at(end)?;
         let path = self.path.as_ref()?;

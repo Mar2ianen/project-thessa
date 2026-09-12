@@ -166,8 +166,8 @@ impl PlanetField {
         let min_wl = min_wavelength_m.max(1.0);
         let knobs: TerrainKnobs = self.params.knobs.into();
         let (meso_h, micro_h) = self.detail_parts_m(dir, min_wl, knobs, macro_h);
-        let height =
-            (prefix_m + meso_h + micro_h - self.sea_offset_m).clamp(self.params.height_min_m, self.params.height_max_m);
+        let height = (prefix_m + meso_h + micro_h - self.sea_offset_m)
+            .clamp(self.params.height_min_m, self.params.height_max_m);
         self.finish_sample(dir, height, macro_h, meso_h + micro_h, 0.0)
     }
 
@@ -260,7 +260,13 @@ impl PlanetField {
     /// Cutoff-dependent detail: meso bands, mountain detail octaves, micro.
     /// Returns `(meso_sum, micro_h)` in the exact combination order the
     /// legacy monolith used, so splits stay bitwise identical.
-    fn detail_parts_m(&self, dir: [f64; 3], min_wl: f64, knobs: TerrainKnobs, macro_h: f64) -> (f64, f64) {
+    fn detail_parts_m(
+        &self,
+        dir: [f64; 3],
+        min_wl: f64,
+        knobs: TerrainKnobs,
+        macro_h: f64,
+    ) -> (f64, f64) {
         let meso_h: f64 = MESO_BANDS_M
             .iter()
             .enumerate()
@@ -878,6 +884,9 @@ mod prefix_regression_tests {
         }
         eprintln!("prefix height drift {worst_h:e}, sample drift {worst_sample:e}");
         assert!(worst_h < 1e-12, "prefix height drifted {worst_h:e}");
-        assert!(worst_sample < 1e-12, "prefix sample drifted {worst_sample:e}");
+        assert!(
+            worst_sample < 1e-12,
+            "prefix sample drifted {worst_sample:e}"
+        );
     }
 }

@@ -3,13 +3,11 @@
 use super::*;
 use bevy::math::DMat3;
 use thessa_sim_core::{
-    AeroModel, AeroState, COAST_RAILS_EXTEND_CHUNK, COAST_RAILS_MAX_STEPS,
-    COAST_RAILS_MIN_AHEAD_S, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_STEP_S,
-    COAST_RAILS_VELOCITY_TOL_MPS, TestParticleState, VerletConfig, evaluate_flight_forces,
-    integrate_attitude_step,
+    AeroModel, AeroState, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_VELOCITY_TOL_MPS,
+    TestParticleState, TickIntegratorConfig, evaluate_flight_forces, integrate_attitude_step,
 };
 
-pub(super) const FLIGHT_STEP_S: f64 = 1.0 / 120.0;
+pub(super) const FLIGHT_STEP_S: f64 = thessa_sim_core::WORLD_TICK_S;
 const SURFACE_COMMAND_RATE_S: f64 = 2.4; // 60 deg/s for the 25-degree elevator
 
 /// Trim-conditioning threshold, not a force cutoff. At low density the
@@ -57,6 +55,31 @@ impl PilotFlightRuntime {
     /// The client may slow requested warp when CPU-bound. Never skip a physics
     /// step or change solver dt to catch up; only advance the clock by work done.
     /// Wall time determines batching only, never a force or physical state.
+    fn sync_world_tick(&mut self) -> Result<(), FlightError> {
+        if self.world_tick.time().0 != self.flight_time_s {
+            self.world_tick = thessa_sim_core::WorldTick::from_time(SimTime(self.flight_time_s))
+                .ok_or_else(|| FlightError::InvalidInput("invalid world tick epoch".into()))?;
+            self.flight_time_s = self.world_tick.time().0;
+        }
+        Ok(())
+    }
+
+    fn time_after_ticks(&self, ticks: u64) -> Result<SimTime, FlightError> {
+        self.world_tick
+            .checked_add(ticks)
+            .map(|tick| tick.time())
+            .ok_or_else(|| FlightError::InvalidInput("world tick overflow".into()))
+    }
+
+    fn commit_ticks(&mut self, ticks: u64) -> Result<(), FlightError> {
+        self.world_tick = self
+            .world_tick
+            .checked_add(ticks)
+            .ok_or_else(|| FlightError::InvalidInput("world tick overflow".into()))?;
+        self.flight_time_s = self.world_tick.time().0;
+        Ok(())
+    }
+
     pub(super) fn advance_with_budget(
         &mut self,
         ephemeris: &BakedEphemeris,
@@ -64,6 +87,7 @@ impl PilotFlightRuntime {
         elapsed_s: f64,
         budget: Option<std::time::Duration>,
     ) -> Result<(), FlightError> {
+        self.sync_world_tick()?;
         let started = std::time::Instant::now();
         self.steps_this_frame = 0;
         self.rails_advanced_this_frame = 0.0;
@@ -76,7 +100,11 @@ impl PilotFlightRuntime {
                 self.rails_advanced_this_frame += coast;
                 // Wake at the event boundary, allowing the owner to react
                 // before any further physical work in this frame.
-                if self.scheduler.next().is_some_and(|event| event.time.0 <= self.flight_time_s + FLIGHT_STEP_S) {
+                if self
+                    .scheduler
+                    .next()
+                    .is_some_and(|event| event.time.0 <= self.flight_time_s + FLIGHT_STEP_S)
+                {
                     break;
                 }
                 continue;
@@ -114,8 +142,13 @@ impl PilotFlightRuntime {
         Ok(())
     }
 
-    fn validate_endpoint(&mut self, ephemeris: &BakedEphemeris, next: &mut RigidBodyState,
-        next_body: BodyState, time: SimTime) -> Result<(), FlightError> {
+    fn validate_endpoint(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        next: &mut RigidBodyState,
+        next_body: BodyState,
+        time: SimTime,
+    ) -> Result<(), FlightError> {
         // Solver guard rails read in the display (dominant-pull) frame, not
         // the launch frame: a Nereid escape at 33 km/s is routine flight,
         // while the same speed against the launch body would be nonsense.
@@ -124,9 +157,7 @@ impl PilotFlightRuntime {
         let guard_body = ephemeris
             .dominant_body(next.position_inertial_m, time)
             .unwrap_or(self.reference_body);
-        let guard_state = ephemeris
-            .body_state(guard_body, time)
-            .unwrap_or(next_body);
+        let guard_state = ephemeris.body_state(guard_body, time).unwrap_or(next_body);
         let guard_radius = ephemeris
             .body(guard_body)
             .map(|body| body.radius_m)
@@ -143,8 +174,9 @@ impl PilotFlightRuntime {
             ));
         }
         if let Some(field) = &self.terrain_field {
-            let body_dir = DQuat::from_rotation_y(-(time.0 * std::f64::consts::TAU / (80.0 * 3600.0)))
-                * DVec3::new(relative.x, relative.z, -relative.y).normalize();
+            let body_dir =
+                DQuat::from_rotation_y(-(time.0 * std::f64::consts::TAU / (80.0 * 3600.0)))
+                    * DVec3::new(relative.x, relative.z, -relative.y).normalize();
             let surface =
                 field.params.radius_m + field.height_m(body_dir.to_array(), 32.0).max(0.0);
             if relative.length() < surface + PILOT_SURFACE_CLEARANCE_M {
@@ -178,64 +210,150 @@ impl PilotFlightRuntime {
     /// One read of a valid coast instead of replaying every translation tick.
     /// The curve hull and each body's maximum orbital speed certify that the
     /// entire interval stays outside geometry and in exactly sampled vacuum.
-    fn try_advance_cached_coast(&mut self, ephemeris: &BakedEphemeris, mode: ControlMode,
-        requested_s: f64) -> Result<f64, FlightError> {
-        if self.thrust_n() != 0.0 || self.rails.is_empty() || self.trace.is_some() { return Ok(0.0); }
+    fn try_advance_cached_coast(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        mode: ControlMode,
+        requested_s: f64,
+    ) -> Result<f64, FlightError> {
+        if self.thrust_n() != 0.0 || self.rails.is_empty() || self.trace.is_some() {
+            return Ok(0.0);
+        }
+        // A zero controller moment at the first instant is not a promise
+        // that SAS stays idle while a spinning craft turns away from target.
+        // Do not run the stateful allocator speculatively either: a failed
+        // batch would otherwise advance its actuator slew twice in one tick.
+        let attitude_hold =
+            self.sas_enabled && matches!(mode, ControlMode::Navball | ControlMode::MouseAim);
+        if self.rcs_enabled
+            && (self.control_input != DVec3::ZERO
+                || (mode != ControlMode::Direct
+                    && self.state.angular_velocity_body_rps != DVec3::ZERO)
+                || (attitude_hold
+                    && self.sas_target_orientation != self.state.orientation_body_to_inertial
+                    && self.sas_target_orientation != -self.state.orientation_body_to_inertial))
+        {
+            return Ok(0.0);
+        }
         let time = SimTime(self.flight_time_s);
         let mut duration = ((requested_s + 1.0e-12) / FLIGHT_STEP_S).floor() * FLIGHT_STEP_S;
         if let Some(event) = self.scheduler.next() {
-            duration = duration.min(((event.time.0 - time.0) / FLIGHT_STEP_S).floor().max(0.0) * FLIGHT_STEP_S);
+            duration = duration
+                .min(((event.time.0 - time.0) / FLIGHT_STEP_S).floor().max(0.0) * FLIGHT_STEP_S);
         }
         if let Some(path) = self.rails.path() {
-            duration = duration.min(((path.end_time.0 - time.0) / FLIGHT_STEP_S).floor().max(0.0) * FLIGHT_STEP_S);
+            duration = duration.min(
+                ((path.end_time.0 - time.0) / FLIGHT_STEP_S)
+                    .floor()
+                    .max(0.0)
+                    * FLIGHT_STEP_S,
+            );
         }
-        if duration < 2.0 * FLIGHT_STEP_S { return Ok(0.0); }
-        let impact_bodies: Vec<_> = ephemeris.bodies.iter().filter(|b| b.radius_m > 0.0).map(|b| b.id).collect();
-        if !self.rails.usable_for(ephemeris, TestParticleState { position: self.state.position_inertial_m,
-            velocity: self.state.velocity_inertial_mps }, time,
-            VerletConfig { step_s: COAST_RAILS_STEP_S, max_steps: COAST_RAILS_MAX_STEPS },
-            &impact_bodies, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_VELOCITY_TOL_MPS) { return Ok(0.0); }
-        let end = time.offset(duration);
-        let Some((min, max)) = self.rails.position_bounds(time, end) else { return Ok(0.0); };
-        for body in ephemeris.bodies.iter().filter(|body| body.radius_m > 0.0 || body.id == self.reference_body) {
-            let center = ephemeris.body_state(body.id, time).map_err(|e| FlightError::InvalidInput(e.to_string()))?;
-            let speed = ephemeris.maximum_body_speed(body.id).map_err(|e| FlightError::InvalidInput(e.to_string()))?;
-            let clearance = center.position_inertial.distance(center.position_inertial.clamp(min, max))
-                - speed * duration - body.radius_m;
+        if duration < 2.0 * FLIGHT_STEP_S {
+            return Ok(0.0);
+        }
+        let impact_bodies: Vec<_> = ephemeris
+            .bodies
+            .iter()
+            .filter(|b| b.radius_m > 0.0)
+            .map(|b| b.id)
+            .collect();
+        if !self.rails.usable_tick_for(
+            ephemeris,
+            TestParticleState {
+                position: self.state.position_inertial_m,
+                velocity: self.state.velocity_inertial_mps,
+            },
+            time,
+            TickIntegratorConfig::default(),
+            &impact_bodies,
+            COAST_RAILS_POSITION_TOL_M,
+            COAST_RAILS_VELOCITY_TOL_MPS,
+        ) {
+            return Ok(0.0);
+        }
+        let ticks = (duration / FLIGHT_STEP_S).round() as u64;
+        let end = self.time_after_ticks(ticks)?;
+        let Some((min, max)) = self.rails.position_bounds(time, end) else {
+            return Ok(0.0);
+        };
+        for body in ephemeris
+            .bodies
+            .iter()
+            .filter(|body| body.radius_m > 0.0 || body.id == self.reference_body)
+        {
+            let center = ephemeris
+                .body_state(body.id, time)
+                .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+            let speed = ephemeris
+                .maximum_body_speed(body.id)
+                .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+            let clearance = center
+                .position_inertial
+                .distance(center.position_inertial.clamp(min, max))
+                - speed * duration
+                - body.radius_m;
             let terrain_bound = if body.id == self.reference_body {
-                self.terrain_field.as_ref().map_or(0.0, |field| field.params.height_max_m.max(0.0))
-            } else { 0.0 };
-            if clearance <= terrain_bound + PILOT_SURFACE_CLEARANCE_M { return Ok(0.0); }
-            if body.id == self.reference_body && self.atmosphere.sample(clearance)?.density_kg_m3 != 0.0 {
+                self.terrain_field
+                    .as_ref()
+                    .map_or(0.0, |field| field.params.height_max_m.max(0.0))
+            } else {
+                0.0
+            };
+            if clearance <= terrain_bound + PILOT_SURFACE_CLEARANCE_M {
+                return Ok(0.0);
+            }
+            if body.id == self.reference_body
+                && self.atmosphere.sample(clearance)?.density_kg_m3 != 0.0
+            {
                 return Ok(0.0);
             }
         }
-        let Some(orientation) = thessa_sim_core::constant_spin_orientation(self.state.orientation_body_to_inertial,
-            self.state.angular_velocity_body_rps, self.vehicle.mass_properties.inertia_body_kg_m2, duration)
-            else { return Ok(0.0); };
-        let home = ephemeris.body_state(self.reference_body, time).map_err(|e| FlightError::InvalidInput(e.to_string()))?;
-        let kinematics = local_air_kinematics(self.atmosphere, self.state, home, self.planet_radius_m)?;
+        let Some(orientation) = thessa_sim_core::constant_spin_orientation(
+            self.state.orientation_body_to_inertial,
+            self.state.angular_velocity_body_rps,
+            self.vehicle.mass_properties.inertia_body_kg_m2,
+            duration,
+        ) else {
+            return Ok(0.0);
+        };
         self.regime = FlightRegime::Coast;
-        if self.allocate_controls(kinematics, mode)? != DVec3::ZERO { return Ok(0.0); }
         let (position, velocity) = self.rails.sample_at(end).expect("bounded coast interval");
-        let mut next = RigidBodyState::new(position, velocity, orientation, self.state.angular_velocity_body_rps)
+        let mut next = RigidBodyState::new(
+            position,
+            velocity,
+            orientation,
+            self.state.angular_velocity_body_rps,
+        )
+        .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+        let next_home = ephemeris
+            .body_state(self.reference_body, end)
             .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
-        let next_home = ephemeris.body_state(self.reference_body, end).map_err(|e| FlightError::InvalidInput(e.to_string()))?;
         self.validate_endpoint(ephemeris, &mut next, next_home, end)?;
         // One telemetry sample per batch, never per skipped translation tick.
-        let gravity = GravityField::from_ephemeris(ephemeris).acceleration(position, end)
+        let gravity = GravityField::from_ephemeris(ephemeris)
+            .acceleration(position, end)
             .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
         self.last_gravity_acceleration_inertial_mps2 = gravity;
-        self.last_forces = Some(evaluate_flight_forces(&self.aero_model, &self.vehicle.aero_geometry,
-            self.atmosphere, next, self.vehicle.mass_properties, FlightStepInput {
-                altitude_m: (position - next_home.position_inertial).length() - self.planet_radius_m,
+        self.last_forces = Some(evaluate_flight_forces(
+            &self.aero_model,
+            &self.vehicle.aero_geometry,
+            self.atmosphere,
+            next,
+            self.vehicle.mass_properties,
+            FlightStepInput {
+                altitude_m: (position - next_home.position_inertial).length()
+                    - self.planet_radius_m,
                 gravity_acceleration_inertial_mps2: gravity,
                 position_body_m: orientation.inverse() * (position - next_home.position_inertial),
                 wind_velocity_body_mps: orientation.inverse() * next_home.velocity_inertial,
-                extra_force_body_n: DVec3::ZERO, extra_moment_body_nm: DVec3::ZERO, skip_aero: true,
-            })?);
+                extra_force_body_n: DVec3::ZERO,
+                extra_moment_body_nm: DVec3::ZERO,
+                skip_aero: true,
+            },
+        )?);
         self.state = next;
-        self.flight_time_s = end.0;
+        self.commit_ticks(ticks)?;
         self.render_relative_position_m = position - next_home.position_inertial;
         self.render_orientation = render_orientation(orientation);
         Ok(duration)
@@ -418,30 +536,16 @@ impl PilotFlightRuntime {
         }
     }
 
-    /// Unpowered vacuum coast on the shared baked trajectory. Translation is
-    /// sampled (cubic Hermite) from the rails path the map prediction draws;
-    /// attitude keeps integrating under the RCS moment. Returns `None` when
-    /// no rails path can serve this step (bake failure, horizon exhausted
-    /// twice in a row) so the caller falls back to a normal integrated step.
-    /// The rails config is the shared [`COAST_RAILS_STEP_S`] sizing, so the
-    /// prediction reuses this exact bake instead of integrating its own.
-    fn try_coast_step_on_rails(
-        &mut self,
-        ephemeris: &BakedEphemeris,
-        time: SimTime,
-        jet_moment: DVec3,
-        body_state: BodyState,
-        gravity: DVec3,
-    ) -> Result<Option<(RigidBodyState, FlightForces)>, FlightError> {
+    /// Poll/build the common gravity forecast. Reading the map never runs a
+    /// second integrator. Flight adopts it only after the state/key check.
+    pub(crate) fn prepare_shared_trajectory(&mut self, ephemeris: &BakedEphemeris) -> bool {
         let initial = TestParticleState {
             position: self.state.position_inertial_m,
             velocity: self.state.velocity_inertial_mps,
         };
-        let config = VerletConfig {
-            step_s: COAST_RAILS_STEP_S,
-            max_steps: COAST_RAILS_MAX_STEPS,
-        };
-        let impact_bodies: Vec<BodyId> = ephemeris
+        let time = SimTime(self.flight_time_s);
+        let config = TickIntegratorConfig::default();
+        let impact_bodies: Vec<_> = ephemeris
             .bodies
             .iter()
             .filter(|b| b.radius_m > 0.0)
@@ -452,12 +556,28 @@ impl PilotFlightRuntime {
         {
             self.rails_job = None;
             if let Ok((rails, seconds)) = result {
-                self.rails = rails;
-                self.rails_bake_seconds = Some(seconds);
-                self.arm_rails_wake();
+                // A worker started before an ephemeris edit must not replace
+                // the common cache with a trajectory from the old universe.
+                if let Some(path) = rails.path()
+                    && rails.usable_tick_for(
+                        ephemeris,
+                        TestParticleState {
+                            position: path.positions[0],
+                            velocity: path.velocities[0],
+                        },
+                        path.times[0],
+                        config,
+                        &impact_bodies,
+                        0.0,
+                        0.0,
+                    )
+                {
+                    self.rails = rails;
+                    self.rails_bake_seconds = Some(seconds);
+                }
             }
         }
-        if !self.rails.usable_for(
+        if self.rails.usable_tick_for(
             ephemeris,
             initial,
             time,
@@ -466,56 +586,48 @@ impl PilotFlightRuntime {
             COAST_RAILS_POSITION_TOL_M,
             COAST_RAILS_VELOCITY_TOL_MPS,
         ) {
-            self.scheduler.clear_rails_wakes();
-            if let Some(pool) = bevy::tasks::AsyncComputeTaskPool::try_get() {
-                if self.rails_job.is_none() {
-                    let ephemeris = ephemeris.clone();
-                    let bodies = impact_bodies.clone();
-                    self.rails_job = Some(pool.spawn(async move {
-                        let started = std::time::Instant::now();
-                        let mut rails = thessa_sim_core::OnRailsCache::new();
-                        rails
-                            .bake(&ephemeris, initial, time, config, &bodies)
-                            .map_err(|error| error.to_string())?;
-                        Ok((rails, started.elapsed().as_secs_f64()))
-                    }));
-                }
-                // Continue the ordinary physical step while the worker bakes.
-                // The finished path must pass the state/version check above.
-                return Ok(None);
-            }
-            // Headless solver tests can run without a Bevy task pool.
-            // Head bake only (~2.8 h, milliseconds): the step below samples
-            // 1/120 s ahead, and coverage grows via extension underneath.
-            if self
-                .rails
-                .bake_head(ephemeris, initial, time, config, &impact_bodies)
-                .is_err()
-            {
-                return Ok(None);
-            }
-            self.arm_rails_wake();
+            return true;
         }
-        // Grow coverage toward the full horizon one small chunk per step.
-        // Each chunk is milliseconds, so the frame budget holds steady while
-        // the 180 ms full bake never blocks the loop.
-        if self.rails.needs_extension(time, COAST_RAILS_MIN_AHEAD_S) {
-            match self.rails.extend(ephemeris, COAST_RAILS_EXTEND_CHUNK) {
-                Ok(true) => self.arm_rails_wake(),
-                Ok(false) => {}
-                Err(_) => {
-                    self.rails.invalidate();
-                    self.scheduler.clear_rails_wakes();
-                    return Ok(None);
-                }
+        if let Some(pool) = bevy::tasks::AsyncComputeTaskPool::try_get() {
+            if self.rails_job.is_none() {
+                let ephemeris = ephemeris.clone();
+                self.rails_job = Some(pool.spawn(async move {
+                    let started = std::time::Instant::now();
+                    let mut rails = OnRailsCache::new();
+                    rails
+                        .bake_tick(&ephemeris, initial, time, config, &impact_bodies)
+                        .map_err(|e| e.to_string())?;
+                    Ok((rails, started.elapsed().as_secs_f64()))
+                }));
             }
+            return false;
         }
-        // Sliding window: drop baked ground older than an hour behind (in
-        // half-hour chunks so the memmove amortizes). Rolling coverage plus
-        // rolling memory — indefinite cruise at ~3 MB steady state instead
-        // of an ever-growing path.
+        // Headless tests have no Bevy worker pool.
+        self.rails
+            .bake_tick(ephemeris, initial, time, config, &impact_bodies)
+            .is_ok()
+    }
+
+    /// Unpowered vacuum coast on the shared baked trajectory. Translation is
+    /// sampled (cubic Hermite) from the rails path the map prediction draws;
+    /// attitude keeps integrating under the RCS moment. Returns `None` when
+    /// no rails path can serve this step (bake failure, horizon exhausted
+    /// twice in a row) so the caller falls back to a normal integrated step.
+    /// Flight and map share the same tick-adaptive bake and interpolant.
+    fn try_coast_step_on_rails(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        time: SimTime,
+        jet_moment: DVec3,
+        body_state: BodyState,
+        gravity: DVec3,
+    ) -> Result<Option<(RigidBodyState, FlightForces)>, FlightError> {
+        if !self.prepare_shared_trajectory(ephemeris) {
+            return Ok(None);
+        }
+        self.arm_rails_wake();
         self.rails.trim_before(time, 3_600.0, 1_800.0);
-        let next_time = time.offset(FLIGHT_STEP_S);
+        let next_time = self.time_after_ticks(1)?;
         if let Some(thessa_sim_core::OnRailsWake::Impact {
             time: impact_time,
             body,
@@ -599,7 +711,8 @@ impl PilotFlightRuntime {
         gravity_field: &GravityField,
         mode: ControlMode,
     ) -> Result<(), FlightError> {
-        let time = SimTime(self.flight_time_s);
+        self.sync_world_tick()?;
+        let time = self.world_tick.time();
         let body_state = ephemeris
             .body_state(self.reference_body, time)
             .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
@@ -639,28 +752,20 @@ impl PilotFlightRuntime {
         {
             match self.try_coast_step_on_rails(ephemeris, time, jet_moment, body_state, gravity)? {
                 Some(coasted) => coasted,
-                None => {
-                    self.rails.invalidate();
-                    self.integrate_powered_step(
-                        gravity, kinematics, body_state, jet_moment, thrust_n, skip_aero,
-                    )?
-                }
+                None => self.integrate_powered_step(
+                    gravity, kinematics, body_state, jet_moment, thrust_n, skip_aero,
+                )?,
             }
         } else {
-            self.rails.invalidate();
-            self.rails_job = None;
             self.scheduler.clear_rails_wakes();
             self.integrate_powered_step(
                 gravity, kinematics, body_state, jet_moment, thrust_n, skip_aero,
             )?
         };
         let next_body = ephemeris
-            .body_state(
-                self.reference_body,
-                SimTime(self.flight_time_s + FLIGHT_STEP_S),
-            )
+            .body_state(self.reference_body, self.time_after_ticks(1)?)
             .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
-        self.validate_endpoint(ephemeris, &mut next, next_body, SimTime(self.flight_time_s + FLIGHT_STEP_S))?;
+        self.validate_endpoint(ephemeris, &mut next, next_body, self.time_after_ticks(1)?)?;
         if let Some(trace) = self.trace.as_mut() {
             trace.record(
                 self.flight_time_s,
@@ -682,7 +787,7 @@ impl PilotFlightRuntime {
             );
         }
         self.state = next;
-        self.flight_time_s += FLIGHT_STEP_S;
+        self.commit_ticks(1)?;
         self.last_gravity_acceleration_inertial_mps2 = gravity;
         self.last_forces = Some(forces);
         self.render_relative_position_m = next.position_inertial_m - next_body.position_inertial;
@@ -1281,6 +1386,34 @@ mod tests {
             "flown state left the rails: {:?} m",
             (position - sampled).length()
         );
+        // A warm cache consumes an entire frame without solver ticks.
+        flight.state.angular_velocity_body_rps = DVec3::X * 0.25;
+        let before_orientation = flight.state.orientation_body_to_inertial;
+        flight
+            .advance(&ephemeris, ControlMode::Direct, 3.2)
+            .unwrap();
+        assert_eq!(flight.steps_this_frame, 0);
+        assert!((flight.rails_advanced_this_frame - 3.2).abs() < 1e-10);
+        let expected = before_orientation * DQuat::from_rotation_x(0.8);
+        assert!(
+            flight
+                .state
+                .orientation_body_to_inertial
+                .abs_diff_eq(expected.normalize(), 1e-12)
+        );
+        // SAS needs to see rotation and must not be skipped for a whole batch.
+        flight.sas_enabled = true;
+        flight.rcs_enabled = true;
+        let before = flight.state;
+        let surface_input = flight.surface_input;
+        assert_eq!(
+            flight
+                .try_advance_cached_coast(&ephemeris, ControlMode::Navball, 3.2)
+                .unwrap(),
+            0.0
+        );
+        assert_eq!(flight.state, before);
+        assert_eq!(flight.surface_input, surface_input);
         // Lighting the engine invalidates the bake: thrust is a maneuver.
         flight.engine_active = true;
         flight.throttle = 1.0;
@@ -1288,8 +1421,8 @@ mod tests {
             .advance(&ephemeris, ControlMode::Direct, 0.05)
             .expect("powered flight advances");
         assert!(
-            flight.rails.is_empty(),
-            "thrust must invalidate the coast rails"
+            flight.rails_advanced_this_frame == 0.0 && flight.steps_this_frame > 0,
+            "thrust must disable riding the gravity forecast"
         );
     }
 }

@@ -17,6 +17,7 @@ mod onrails;
 mod scheduler;
 mod system;
 mod table;
+mod tick_integrator;
 mod time;
 mod units;
 mod vehicle;
@@ -32,8 +33,9 @@ pub use ephemeris::{
 };
 pub use flight::{
     FlightError, FlightForces, FlightStepInput, RigidBodyProperties, RigidBodyState,
-    constant_spin_orientation, evaluate_flight_forces, integrate_attitude_step, integrate_rigid_body_duration,
-    integrate_rigid_body_duration_sampled, integrate_rigid_body_step,
+    constant_spin_orientation, evaluate_flight_forces, integrate_attitude_step,
+    integrate_rigid_body_duration, integrate_rigid_body_duration_sampled,
+    integrate_rigid_body_step,
 };
 pub use frames::{ReferenceFrame, StateVector};
 pub use gravity::{GravityError, GravityField};
@@ -55,7 +57,8 @@ pub use system::{
     SystemSpecError,
 };
 pub use table::{EphemerisTable, TABLE_NODE_EVERY_STEPS, TableSnapshot};
-pub use time::SimTime;
+pub use tick_integrator::{TickIntegratorConfig, propagate_tick_adaptive};
+pub use time::{SimTime, WORLD_TICK_HZ, WORLD_TICK_S, WorldTick};
 pub use units::{AU_M, DAY_S, EARTH_MASS_KG, G, JUPITER_MASS_KG, SOLAR_MASS_KG, TAU};
 pub use vehicle::{ControlSurfaceDefinition, VehicleDefinition, VehicleError, X15StarterProfile};
 

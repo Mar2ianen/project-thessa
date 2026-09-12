@@ -2156,10 +2156,7 @@ fn chunked_extend_matches_full_bake_bitwise() {
         .expect("head bakes");
     let head_elapsed = started.elapsed();
     assert!(
-        chunked
-            .covered_until()
-            .expect("head covers")
-            .seconds()
+        chunked.covered_until().expect("head covers").seconds()
             < full.covered_until().expect("full covers").seconds()
     );
     let mut extensions = 0;
@@ -2236,7 +2233,10 @@ fn rails_trim_keeps_window_and_extend_accounting() {
     short.trim_before(SimTime(5_000.0), 3600.0, 600.0);
     assert!(short.sample_count() < head_count);
     assert!(short.extend(&ephemeris, 512).expect("extends"));
-    eprintln!("trim+extend accounting holds over {} samples", short.sample_count());
+    eprintln!(
+        "trim+extend accounting holds over {} samples",
+        short.sample_count()
+    );
 }
 
 #[test]
@@ -2306,7 +2306,10 @@ fn year_long_scaled_escape_stays_display_grade() {
         };
         max_deviation = max_deviation.max((scaled.positions[i] - reference).length());
     }
-    assert!(compared > 100, "must compare across the year, got {compared}");
+    assert!(
+        compared > 100,
+        "must compare across the year, got {compared}"
+    );
     let span_days = fine_end / 86_400.0;
     eprintln!(
         "year escape scaled deviation {max_deviation:e} m over {span_days:.0} days, {} nodes in {:.2} ms",
@@ -2362,12 +2365,228 @@ fn simd_snapshot_and_accel_match_scalar_within_tolerance() {
             }
         }
         let probe = DVec3::new(1.0e8, -2.0e8, 3.0e8);
-        let simd_a = table.accel_with(&simd_snap, probe, true).expect("simd accel");
-        let scalar_a = table.accel_with(&scalar_snap, probe, false).expect("scalar accel");
+        let simd_a = table
+            .accel_with(&simd_snap, probe, true)
+            .expect("simd accel");
+        let scalar_a = table
+            .accel_with(&scalar_snap, probe, false)
+            .expect("scalar accel");
         let scale = scalar_a.length().max(1e-12);
         worst_accel = worst_accel.max((simd_a - scalar_a).length() / scale);
     }
     eprintln!("simd-vs-scalar max relative: snapshot {worst_snapshot:e}, accel {worst_accel:e}");
-    assert!(worst_snapshot < 1e-12, "snapshot diverged {worst_snapshot:e}");
+    assert!(
+        worst_snapshot < 1e-12,
+        "snapshot diverged {worst_snapshot:e}"
+    );
     assert!(worst_accel < 1e-9, "accel diverged {worst_accel:e}");
+}
+
+#[test]
+fn reused_table_endpoints_match_recomputed_verlet_bitwise() {
+    // Moving sources exercise node transitions, SIMD tails and a fractional
+    // final table interval. Reference intentionally recomputes both endpoints.
+    let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml")).unwrap();
+    let ephemeris = config.bake().unwrap();
+    let home = ephemeris
+        .body_state(ephemeris.body_id("thessa").unwrap(), SimTime::EPOCH)
+        .unwrap();
+    let initial = TestParticleState {
+        position: home.position_inertial + DVec3::Z * 1e9,
+        velocity: home.velocity_inertial + DVec3::X * 100.0,
+    };
+    let sources: Vec<_> = ephemeris.gravity_sources().map(|b| b.id).collect();
+    for steps in [0, 1, 129] {
+        let dt = 5.0;
+        let table = EphemerisTable::build(
+            &ephemeris,
+            &sources,
+            SimTime::EPOCH,
+            SimTime(dt * steps as f64),
+            40.0,
+        )
+        .unwrap();
+        let actual = propagate_sampled_verlet_fast(
+            &ephemeris,
+            initial,
+            SimTime::EPOCH,
+            VerletConfig {
+                step_s: dt,
+                max_steps: steps,
+            },
+            &[],
+            8,
+        )
+        .unwrap();
+        let mut state = initial;
+        let mut time = SimTime::EPOCH;
+        let mut start = TableSnapshot::default();
+        let mut end = TableSnapshot::default();
+        for i in 0..steps as usize {
+            table.snapshot(time, &mut start);
+            let a0 = table.accel_from(&start, state.position).unwrap();
+            let position = state.position + state.velocity * dt + a0 * (0.5 * dt * dt);
+            time = time.offset(dt);
+            table.snapshot(time, &mut end);
+            let a1 = table.accel_from(&end, position).unwrap();
+            state = TestParticleState {
+                position,
+                velocity: state.velocity + (a0 + a1) * (0.5 * dt),
+            };
+            assert_eq!(actual.positions[i + 1], state.position);
+            assert_eq!(actual.velocities[i + 1], state.velocity);
+            assert_eq!(actual.times[i + 1], time);
+        }
+        assert_eq!(actual.stats.accepted_steps, steps);
+        assert_eq!(actual.end_time, time);
+    }
+}
+
+#[test]
+fn table_fallback_ignores_non_gravitating_center() {
+    // A singular zero-mu lane makes the SIMD kernel fall back to scalar.
+    for count in [1, 4, 8, 9] {
+        let bodies: Vec<_> = (0..count)
+            .map(|i| {
+                let mut body = BakedBody::fixed(BodyId(i), "surface-only", 1.0, 1.0);
+                body.gravity_source = false;
+                body
+            })
+            .collect();
+        let ephemeris = BakedEphemeris::new("CONTACT", bodies).unwrap();
+        let ids: Vec<_> = ephemeris.bodies.iter().map(|b| b.id).collect();
+        let table =
+            EphemerisTable::build(&ephemeris, &ids, SimTime::EPOCH, SimTime(1.0), 1.0).unwrap();
+        let mut snapshot = TableSnapshot::default();
+        table.snapshot(SimTime::EPOCH, &mut snapshot);
+        for simd in [false, true] {
+            assert_eq!(
+                table.accel_with(&snapshot, DVec3::ZERO, simd),
+                Some(DVec3::ZERO)
+            );
+        }
+    }
+}
+
+#[test]
+fn extension_rejects_missing_velocity_without_panicking() {
+    let ephemeris = central_ephemeris(4e13);
+    let mut path = propagate_sampled_verlet_fast(
+        &ephemeris,
+        TestParticleState {
+            position: DVec3::X * 1e7,
+            velocity: DVec3::Y * 2000.0,
+        },
+        SimTime::EPOCH,
+        VerletConfig {
+            step_s: 5.0,
+            max_steps: 2,
+        },
+        &[],
+        8,
+    )
+    .unwrap();
+    path.velocities.clear();
+    let before = path.clone();
+    assert!(propagate_sampled_extend(&ephemeris, &mut path, 5.0, 10, 3, &[], 8).is_err());
+    assert_eq!(path, before);
+}
+
+#[test]
+fn failed_extension_rolls_back_already_appended_steps() {
+    let ephemeris = central_ephemeris(1.0);
+    let mut path = SampledPath {
+        positions: vec![DVec3::X; 2],
+        velocities: vec![DVec3::X * 0.5; 2],
+        accelerations: vec![DVec3::ZERO; 2],
+        times: vec![SimTime(-1.0), SimTime::EPOCH],
+        end_time: SimTime::EPOCH,
+        end: SampledPathEnd::Completed,
+        stats: IntegratorStats {
+            accepted_steps: 1,
+            rejected_steps: 0,
+        },
+    };
+    // x=1,v=.5 => x1=1,v1=-.5 => x2=0 (point singularity).
+    let before = path.clone();
+    assert!(propagate_sampled_extend(&ephemeris, &mut path, 1.0, 10, 3, &[], 8).is_err());
+    assert_eq!(path, before);
+}
+
+#[test]
+fn constant_spin_matches_axis_rotation_and_rejects_asymmetric_tumble() {
+    let inertia = glam::DMat3::from_diagonal(DVec3::new(2.0, 3.0, 5.0));
+    let initial = DQuat::from_rotation_y(0.7);
+    for seconds in [0.0, 1.0, 3600.0] {
+        let q = constant_spin_orientation(initial, DVec3::X * 0.25, inertia, seconds).unwrap();
+        assert!(q.abs_diff_eq(
+            (initial * DQuat::from_rotation_x(0.25 * seconds)).normalize(),
+            1e-12
+        ));
+        assert!(
+            constant_spin_orientation(initial, DVec3::ZERO, inertia, seconds)
+                .unwrap()
+                .abs_diff_eq(initial, 1e-12)
+        );
+    }
+    assert!(constant_spin_orientation(initial, DVec3::ONE, inertia, 1.0).is_none());
+}
+
+#[test]
+fn rails_trim_moves_buffers_only_after_accumulating_a_full_chunk() {
+    let ephemeris = central_ephemeris(4e13);
+    let mut rails = OnRailsCache::new();
+    rails
+        .bake(
+            &ephemeris,
+            TestParticleState {
+                position: DVec3::X * 1e7,
+                velocity: DVec3::Y * 2000.0,
+            },
+            SimTime::EPOCH,
+            VerletConfig {
+                step_s: 5.0,
+                max_steps: 1000,
+            },
+            &[],
+        )
+        .unwrap();
+    rails.trim_before(SimTime(720.0), 60.0, 600.0);
+    let after_chunk = rails.sample_count();
+    assert!(after_chunk < 1001);
+    for t in (725..1200).step_by(5) {
+        rails.trim_before(SimTime(f64::from(t)), 60.0, 600.0);
+        assert_eq!(
+            rails.sample_count(),
+            after_chunk,
+            "must not memmove one sample per tick"
+        );
+    }
+    rails.trim_before(SimTime(1400.0), 60.0, 600.0);
+    assert!(rails.sample_count() < after_chunk);
+    assert!(rails.sample_at(SimTime(1340.0)).is_some());
+}
+
+#[test]
+fn zero_step_head_preserves_the_requested_budget() {
+    let ephemeris = central_ephemeris(4e13);
+    let mut rails = OnRailsCache::new();
+    let path = rails
+        .bake_head(
+            &ephemeris,
+            TestParticleState {
+                position: DVec3::X * 1e7,
+                velocity: DVec3::Y * 2000.0,
+            },
+            SimTime::EPOCH,
+            VerletConfig {
+                step_s: 5.0,
+                max_steps: 0,
+            },
+            &[],
+        )
+        .unwrap();
+    assert_eq!(path.positions.len(), 1);
+    assert_eq!(path.end_time, SimTime::EPOCH);
+    assert!(!rails.needs_extension(SimTime::EPOCH, 100.0));
 }

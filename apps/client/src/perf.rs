@@ -26,7 +26,7 @@ use thessa_perf::{
 };
 
 /// Fixed solver step used by the pilot flight path (`pilot/control.rs`).
-const PILOT_FIXED_DT_S: f64 = 1.0 / 120.0;
+const PILOT_FIXED_DT_S: f64 = thessa_sim_core::WORLD_TICK_S;
 
 #[derive(Component)]
 struct PerfOverlayRoot;
@@ -220,7 +220,7 @@ fn perf_end_frame(
     let sim_time_s = clock.as_deref().map(|c| c.sim_seconds).unwrap_or(0.0);
 
     // --- simulation budget (spec section 7) ---
-    // Both views advance the same 120 Hz rigid-body simulation.
+    // Both views share solver ticks and direct cached-coast advancement.
     let in_pilot = pilot_state
         .as_deref()
         .is_some_and(|s| s.view_mode == ClientViewMode::Pilot);
@@ -243,12 +243,19 @@ fn perf_end_frame(
             backlog_s,
             frame_wall_s.max(1e-9),
         )
+        .with_rails_time(
+            pilot_runtime
+                .as_deref()
+                .map_or(0.0, |r| r.rails_advanced_this_frame),
+            frame_wall_s.max(1e-9),
+        )
     } else {
         SimBudget {
             fixed_dt_s: PILOT_FIXED_DT_S,
             steps_this_frame: 0,
             sim_cpu_s: 0.0,
             sim_time_advanced_s: 0.0,
+            rails_time_advanced_s: 0.0,
             requested_warp,
             effective_warp: requested_warp,
             backlog_s: 0.0,
@@ -408,10 +415,11 @@ fn build_overlay_text(
             };
             (
                 format!(
-                    "steps {:>3} cpu {:5.2}ms adv {:7.3}s warp x{:.1}/x{:.1} backlog {:5.2}ms{}",
+                    "steps {:>3} cpu {:5.2}ms adv {:7.3}s rails {:.3}s warp x{:.1}/x{:.1} backlog {:5.2}ms{}",
                     f.sim.steps_this_frame,
                     f.sim.sim_cpu_s * 1000.0,
                     f.sim.sim_time_advanced_s,
+                    f.sim.rails_time_advanced_s,
                     f.sim.requested_warp,
                     f.sim.effective_warp,
                     f.sim.backlog_s * 1000.0,

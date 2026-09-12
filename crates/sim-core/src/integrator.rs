@@ -94,6 +94,14 @@ pub struct SampledPath {
     /// sample reuses the step's start velocity (display-grade; the impact
     /// epoch itself is exact).
     pub velocities: Vec<DVec3>,
+    /// Inertial accelerations parallel to `positions`, from the same field
+    /// evaluations that advanced each step (initial node included). Velocity
+    /// sampling interpolates these, never differentiates positions: at
+    /// ~1e12 m barycentric coordinates f64 rounding is ~1e-3 m, and the
+    /// position-Hermite derivative amplifies it by ~1/h into 0.01-0.1 m/s
+    /// of pure noise. The impact fractional sample reuses the step-start
+    /// acceleration (same display-grade caveat as its velocity).
+    pub accelerations: Vec<DVec3>,
     /// Exact sample epochs, including a fractional final impact step.
     pub times: Vec<SimTime>,
     pub end_time: SimTime,
@@ -142,11 +150,14 @@ pub fn propagate_sampled_verlet(
     positions.push(initial.position);
     let mut velocities = Vec::with_capacity(config.max_steps.min(4096) as usize + 1);
     velocities.push(initial.velocity);
+    let mut accelerations = Vec::with_capacity(config.max_steps.min(4096) as usize + 1);
+    accelerations.push(field.acceleration(initial.position, start_time)?);
     let mut times = vec![start_time];
     if let Some(body) = impact_at(ephemeris, impact_bodies, initial.position, start_time) {
         return Ok(SampledPath {
             positions,
             velocities,
+            accelerations,
             times,
             end_time: start_time,
             end: SampledPathEnd::Impact(body),
@@ -176,6 +187,7 @@ pub fn propagate_sampled_verlet(
             time = time.offset(h * fraction);
             positions.push(state.position.lerp(next_position, fraction));
             velocities.push(state.velocity);
+            accelerations.push(acceleration_0);
             times.push(time);
             stats.accepted_steps += 1;
             end = SampledPathEnd::Impact(body);
@@ -190,11 +202,13 @@ pub fn propagate_sampled_verlet(
         stats.accepted_steps += 1;
         positions.push(state.position);
         velocities.push(state.velocity);
+        accelerations.push(acceleration_1);
         times.push(time);
     }
     Ok(SampledPath {
         positions,
         velocities,
+        accelerations,
         times,
         end_time: time,
         end,
@@ -258,13 +272,25 @@ pub fn propagate_sampled_verlet_fast(
     positions.push(initial.position);
     let mut velocities = Vec::with_capacity(config.max_steps.min(4096) as usize + 1);
     velocities.push(initial.velocity);
+    let mut accelerations = Vec::with_capacity(config.max_steps.min(4096) as usize + 1);
     let mut times = vec![start_time];
     // Bake-start containment is checked exactly (one lookup, no table error
     // possible); per-step segments below use the table consistently.
     if let Some(body) = impact_at(ephemeris, impact_bodies, initial.position, start_time) {
+        // Single-sample path: still carry the start acceleration so the
+        // vectors stay parallel (sample_at answers its own epoch). A total
+        // field failure here (exact-center singularity) keeps the historic
+        // Ok with a zero placeholder rather than invalidating the bake.
+        accelerations.push(
+            table
+                .acceleration_at(initial.position, start_time)
+                .or_else(|| field.acceleration(initial.position, start_time).ok())
+                .unwrap_or(DVec3::ZERO),
+        );
         return Ok(SampledPath {
             positions,
             velocities,
+            accelerations,
             times,
             end_time: start_time,
             end: SampledPathEnd::Impact(body),
@@ -283,6 +309,7 @@ pub fn propagate_sampled_verlet_fast(
         config.max_steps,
         &mut positions,
         &mut velocities,
+        &mut accelerations,
         &mut times,
         &mut stats,
         &mut end,
@@ -290,6 +317,7 @@ pub fn propagate_sampled_verlet_fast(
     Ok(SampledPath {
         positions,
         velocities,
+        accelerations,
         times,
         end_time: time,
         end,
@@ -298,8 +326,9 @@ pub fn propagate_sampled_verlet_fast(
 }
 
 /// Table-backed Verlet loop with per-endpoint snapshots: one Hermite eval
-/// per track per endpoint serves both accel evals and the impact segment
-/// test, replacing 4-6 evals plus O(tracks) id lookups per impact body.
+/// per track per new endpoint serves gravity and the impact segment test.
+/// Accepted endpoints and their acceleration carry into the next step;
+/// N full steps need N+1 snapshots and gravity evaluations, not 2N.
 /// A step whose snapshot accel fails (singularity/non-finite) falls back to
 /// the exact field for that eval, so behavior matches the exact path.
 #[allow(clippy::too_many_arguments)]
@@ -313,6 +342,7 @@ fn run_table_loop(
     max_steps: u64,
     positions: &mut Vec<DVec3>,
     velocities: &mut Vec<DVec3>,
+    accelerations: &mut Vec<DVec3>,
     times: &mut Vec<SimTime>,
     stats: &mut IntegratorStats,
     end: &mut SampledPathEnd,
@@ -322,22 +352,35 @@ fn run_table_loop(
     let mut time = start_time;
     let mut start_snap = TableSnapshot::default();
     let mut end_snap = TableSnapshot::default();
+    if stats.accepted_steps >= max_steps {
+        return Ok(time);
+    }
+    table.snapshot(time, &mut start_snap);
+    let mut acceleration_0 = match table.accel_from(&start_snap, state.position) {
+        Some(acceleration) => acceleration,
+        None => field.acceleration(state.position, time)?,
+    };
+    // Fresh bakes carry only the initial sample; resume calls arrive with
+    // the resume sample (and its acceleration) already stored.
+    if accelerations.len() < positions.len() {
+        accelerations.push(acceleration_0);
+    }
     while stats.accepted_steps < max_steps {
         let h = step_s;
-        table.snapshot(time, &mut start_snap);
-        let acceleration_0 = match table.accel_from(&start_snap, state.position) {
-            Some(acceleration) => acceleration,
-            None => field.acceleration(state.position, time)?,
-        };
         let next_position = state.position + state.velocity * h + acceleration_0 * (0.5 * h * h);
         let next_time = time.offset(h);
         table.snapshot(next_time, &mut end_snap);
-        if let Some((body, fraction)) =
-            table.impact_from(&start_snap, &end_snap, state.position, next_position, impact_bodies)
-        {
+        if let Some((body, fraction)) = table.impact_from(
+            &start_snap,
+            &end_snap,
+            state.position,
+            next_position,
+            impact_bodies,
+        ) {
             time = time.offset(h * fraction);
             positions.push(state.position.lerp(next_position, fraction));
             velocities.push(state.velocity);
+            accelerations.push(acceleration_0);
             times.push(time);
             stats.accepted_steps += 1;
             *end = SampledPathEnd::Impact(body);
@@ -352,9 +395,14 @@ fn run_table_loop(
             velocity: state.velocity + (acceleration_0 + acceleration_1) * (0.5 * h),
         };
         time = next_time;
+        // The accepted endpoint is exactly the next step's initial state.
+        // Swap owned buffers; neither the centers nor gravity need recomputing.
+        std::mem::swap(&mut start_snap, &mut end_snap);
+        acceleration_0 = acceleration_1;
         stats.accepted_steps += 1;
         positions.push(state.position);
         velocities.push(state.velocity);
+        accelerations.push(acceleration_1);
         times.push(time);
     }
     Ok(time)
@@ -380,13 +428,24 @@ pub fn propagate_sampled_extend(
     if !matches!(path.end, SampledPathEnd::Completed) {
         return Ok(false);
     }
-    if path.positions.len() < 2 || path.times.len() != path.positions.len() {
+    if path.positions.len() < 2
+        || path.times.len() != path.positions.len()
+        || path.velocities.len() != path.positions.len()
+        || path.accelerations.len() != path.positions.len()
+        || path.times.last() != Some(&path.end_time)
+        || !path.end_time.0.is_finite()
+        || !path.positions.last().is_some_and(|p| p.is_finite())
+        || !path.velocities.last().is_some_and(|v| v.is_finite())
+        || !path.accelerations.last().is_some_and(|a| a.is_finite())
+    {
         return Err(IntegratorError::InvalidConfig(
             "cannot extend a degenerate path".into(),
         ));
     }
     let baked_step = path.times[1].seconds() - path.times[0].seconds();
-    if !config_step_s.is_finite()
+    if !baked_step.is_finite()
+        || baked_step <= 0.0
+        || !config_step_s.is_finite()
         || config_step_s <= 0.0
         || (baked_step - config_step_s).abs() > 1e-9 * config_step_s.max(1e-9)
     {
@@ -440,7 +499,8 @@ pub fn propagate_sampled_extend(
     // loop wrong gravity.
     let mut stats = path.stats;
     let mut end = SampledPathEnd::Completed;
-    let end_time = run_table_loop(
+    let original_len = path.positions.len();
+    let result = run_table_loop(
         &table,
         &field,
         impact_bodies,
@@ -450,10 +510,23 @@ pub fn propagate_sampled_extend(
         done + take,
         &mut path.positions,
         &mut path.velocities,
+        &mut path.accelerations,
         &mut path.times,
         &mut stats,
         &mut end,
-    )?;
+    );
+    let end_time = match result {
+        Ok(time) => time,
+        Err(error) => {
+            // Keep the stored samples and metadata consistent if an exact
+            // fallback fails partway through this extension.
+            path.positions.truncate(original_len);
+            path.velocities.truncate(original_len);
+            path.accelerations.truncate(original_len);
+            path.times.truncate(original_len);
+            return Err(error);
+        }
+    };
     path.stats = stats;
     path.end_time = end_time;
     path.end = end;
@@ -517,11 +590,14 @@ pub fn propagate_sampled_verlet_scaled(
     let field = GravityField::from_ephemeris(ephemeris);
     let mut positions = vec![initial.position];
     let mut velocities = vec![initial.velocity];
+    // Display-only path, but keep vectors parallel like every other bake.
+    let mut accelerations = vec![field.acceleration(initial.position, start_time)?];
     let mut times = vec![start_time];
     if let Some(body) = impact_at(ephemeris, impact_bodies, initial.position, start_time) {
         return Ok(SampledPath {
             positions,
             velocities,
+            accelerations,
             times,
             end_time: start_time,
             end: SampledPathEnd::Impact(body),
@@ -570,6 +646,7 @@ pub fn propagate_sampled_verlet_scaled(
             time = time.offset(h * fraction);
             positions.push(state.position.lerp(next_position, fraction));
             velocities.push(state.velocity);
+            accelerations.push(acceleration_0);
             times.push(time);
             stats.accepted_steps += 1;
             end = SampledPathEnd::Impact(body);
@@ -584,11 +661,13 @@ pub fn propagate_sampled_verlet_scaled(
         stats.accepted_steps += 1;
         positions.push(state.position);
         velocities.push(state.velocity);
+        accelerations.push(acceleration_1);
         times.push(time);
     }
     Ok(SampledPath {
         positions,
         velocities,
+        accelerations,
         times,
         end_time: time,
         end,
@@ -599,7 +678,7 @@ pub fn propagate_sampled_verlet_scaled(
 /// First impact body whose physical radius contains the point, if any.
 /// Bodies that fail lookup are skipped: the caller validates the list once
 /// up front, so this only fires for structurally invalid ephemerides.
-fn impact_at(
+pub(crate) fn impact_at(
     ephemeris: &BakedEphemeris,
     impact_bodies: &[BodyId],
     position: DVec3,
@@ -621,7 +700,7 @@ fn impact_at(
 /// Earliest sphere entry along a step in each body's moving frame.
 /// Linear relative motion is a display approximation within this one step;
 /// this is not a continuous collision solver for authoritative flight.
-fn impact_segment(
+pub(crate) fn impact_segment(
     ephemeris: &BakedEphemeris,
     impact_bodies: &[BodyId],
     from: DVec3,

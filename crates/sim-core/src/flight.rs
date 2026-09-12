@@ -388,9 +388,13 @@ pub fn constant_spin_orientation(
     inertia_body: DMat3,
     elapsed_s: f64,
 ) -> Option<glam::DQuat> {
-    if !elapsed_s.is_finite() || elapsed_s < 0.0 || !initial.is_finite()
-        || !omega_body.is_finite() || !inertia_body.is_finite()
-        || omega_body.cross(inertia_body * omega_body) != DVec3::ZERO {
+    if !elapsed_s.is_finite()
+        || elapsed_s < 0.0
+        || !initial.is_finite()
+        || !omega_body.is_finite()
+        || !inertia_body.is_finite()
+        || omega_body.cross(inertia_body * omega_body) != DVec3::ZERO
+    {
         return None;
     }
     Some((initial * glam::DQuat::from_scaled_axis(omega_body * elapsed_s)).normalize())

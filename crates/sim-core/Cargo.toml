@@ -38,3 +38,7 @@ harness = false
 [[bench]]
 name = "gravity_interpolation"
 harness = false
+
+[[bench]]
+name = "tick_adaptive"
+harness = false

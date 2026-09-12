@@ -68,7 +68,7 @@ const ORBIT_DIM_STRENGTH: f32 = 0.72;
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_orbits(
     survey: Res<terrain::SurfaceSurvey>,
-    flight: Res<PilotFlightRuntime>,
+    mut flight: ResMut<PilotFlightRuntime>,
     clock: Res<SimulationClock>,
     runtime: Res<RuntimeEphemeris>,
     map: Res<MapState>,
@@ -79,7 +79,6 @@ pub(super) fn draw_orbits(
     mut selected_gizmos: Gizmos<SelectedOrbitGizmoConfigGroup>,
     mut ring_gizmos: Gizmos<NereidRingGizmoConfigGroup>,
     mut prediction_cache: Local<CraftPredictionCache>,
-    mut fallback_rails: Local<thessa_sim_core::OnRailsCache>,
     mut perf: ResMut<perf::PerfMonitor>,
 ) {
     if survey.active {
@@ -132,6 +131,7 @@ pub(super) fn draw_orbits(
         );
     }
     let prediction_started = std::time::Instant::now();
+    flight.prepare_shared_trajectory(&runtime.ephemeris);
     draw_craft_orbit_prediction(
         &runtime.ephemeris,
         &map,
@@ -141,7 +141,6 @@ pub(super) fn draw_orbits(
         camera_pos,
         camera_rotation,
         &mut prediction_cache,
-        &mut fallback_rails,
         &mut selected_gizmos,
     );
     perf.record_scope(
@@ -446,6 +445,7 @@ fn format_countdown(seconds: f64) -> String {
 /// it hits the surface. Drawing the full ellipse for a suborbital arc puts
 /// half the line inside the planet; the clipped arc ends at impact instead.
 /// Returns the central-relative points and whether the end is an impact.
+#[cfg(test)]
 pub(super) fn bound_prediction_arc(
     elements: OsculatingElements,
     body_radius_m: f64,
@@ -470,7 +470,6 @@ pub(super) fn bound_prediction_arc(
 /// the cached points each frame.
 #[derive(Default)]
 pub(super) struct CraftPredictionCache {
-    tick: u64,
     points: Vec<bevy::math::DVec3>,
     impact: Option<bevy::math::DVec3>,
     display: Option<BodyId>,
@@ -490,10 +489,8 @@ pub(super) fn draw_craft_orbit_prediction(
     camera_pos: Vec3,
     camera_rotation: Quat,
     cache: &mut CraftPredictionCache,
-    fallback_rails: &mut thessa_sim_core::OnRailsCache,
     gizmos: &mut Gizmos<SelectedOrbitGizmoConfigGroup>,
 ) {
-    cache.tick += 1;
     let display = craft_display_body(ephemeris, flight, time);
     let Some(center) = map_position_anchored(ephemeris, map, display, time, anchor) else {
         return;
@@ -506,21 +503,10 @@ pub(super) fn draw_craft_orbit_prediction(
         / body.radius_m;
     let to_map_vec =
         |p: bevy::math::DVec3| center + (bevy::math::DVec3::new(p.x, p.z, -p.y) * scale).as_vec3();
-    if cache.tick.is_multiple_of(30) || cache.points.is_empty() || cache.display != Some(display) {
-        // Cut the line where it leaves the current view, never mid-frame:
-        // the old fixed 25x rule ended escape legs inside the overview.
-        let view_cut_m = (center.distance(camera_pos) as f64 * DISTANCE_UNIT_M * 3.0).max(1.0);
-        refresh_prediction_cache(
-            ephemeris,
-            flight,
-            time,
-            display,
-            body.radius_m,
-            view_cut_m,
-            cache,
-            fallback_rails,
-        );
-    }
+    // Projection changes with simulation time, even when the bake is unchanged.
+    // Refresh the bounded polyline each frame; no physics work happens here.
+    let view_cut_m = (center.distance(camera_pos) as f64 * DISTANCE_UNIT_M * 3.0).max(1.0);
+    refresh_prediction_cache(ephemeris, flight, time, display, view_cut_m, cache);
     if cache.points.len() > 1 {
         gizmos.linestrip(
             cache.points.iter().copied().map(to_map_vec),
@@ -536,124 +522,28 @@ pub(super) fn draw_craft_orbit_prediction(
     }
 }
 
-/// Recompute the cached polyline from the single shared trajectory. In an
-/// unpowered vacuum coast the flight loop already rides `flight.rails`, so
-/// the line is projected from that exact bake — zero extra integration, and
-/// the flown path and the drawn line cannot disagree. Outside coast (aero,
-/// thrust) the flight integrates per tick, and the line falls back to a
-/// coarse display-only bake in `fallback_rails`, sized from the osculating
-/// period (one revolution, bound) or a deep-space horizon (escape/unknown).
-/// Samples anchor to the display body's position at each sample epoch and
-/// stop past 25x the initial radius or the view cut; an impact end snaps
-/// onto the surface. Analytic bound arc is the fallback if propagation fails.
-#[allow(clippy::too_many_arguments)]
+/// Project the single runtime-owned bake. During powered/aero flight this
+/// is a gravity-only coast forecast, conditional on external forces ceasing;
+/// during vacuum coast it is exactly the trajectory consumed by the solver.
 fn refresh_prediction_cache(
     ephemeris: &BakedEphemeris,
     flight: &PilotFlightRuntime,
     time: SimTime,
     display: BodyId,
-    body_radius_m: f64,
     view_cut_m: f64,
     cache: &mut CraftPredictionCache,
-    fallback_rails: &mut thessa_sim_core::OnRailsCache,
 ) {
-    use thessa_sim_core::{
-        COAST_RAILS_MAX_STEPS, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_STEP_S,
-        COAST_RAILS_VELOCITY_TOL_MPS, TestParticleState, VerletConfig,
-    };
     cache.display = Some(display);
     cache.points.clear();
     cache.impact = None;
-    let (r_craft, v_craft) = flight.inertial_state_m();
-    let initial = TestParticleState {
-        position: r_craft,
-        velocity: v_craft,
+    let Some(path) = flight.rails.path() else {
+        return;
     };
-    let impact_bodies: Vec<BodyId> = ephemeris
-        .bodies
-        .iter()
-        .filter(|b| b.radius_m > 0.0)
-        .map(|b| b.id)
-        .collect();
-    // The flight loop's own bake serves the line directly in coast.
-    let rails_config = VerletConfig {
-        step_s: COAST_RAILS_STEP_S,
-        max_steps: COAST_RAILS_MAX_STEPS,
-    };
-    if flight.rails.usable_for(
-        ephemeris,
-        initial,
-        time,
-        rails_config,
-        &impact_bodies,
-        COAST_RAILS_POSITION_TOL_M,
-        COAST_RAILS_VELOCITY_TOL_MPS,
-    ) {
-        project_rails_path(
-            ephemeris,
-            flight.rails.path().expect("usable rails hold a path"),
-            display,
-            time,
-            r_craft,
-            view_cut_m,
-            cache,
-        );
+    if time.0 < path.times[0].0 || time.0 > path.end_time.0 {
         return;
     }
-    // Powered/aero flight: coarse display-only bake in the fallback cache.
-    let elements = craft_elements(ephemeris, flight, time);
-    // Escape/deep-space legs ride a timescale-following bake: a year of
-    // interstellar cruise in hundreds of samples instead of millions.
-    // Uniform 4 h steps were measured at 7.4e10 m asymptote error (the fast
-    // periapsis bend never resolves); the scaled bake holds ~1e8 m over a
-    // year, subpixel at any zoom that fits it.
-    if elements.as_ref().is_none_or(|elements| elements.is_escape()) {
-        let scaled_config = VerletConfig {
-            step_s: thessa_sim_core::DISPLAY_SCALED_H_MIN_S,
-            max_steps: thessa_sim_core::DISPLAY_SCALED_MAX_SAMPLES,
-        };
-        let path = if fallback_rails.usable_for(
-            ephemeris, initial, time, scaled_config, &impact_bodies, 5.0, 0.05,
-        ) {
-            fallback_rails.path().expect("usable cache holds a path")
-        } else {
-            match fallback_rails.bake_scaled(ephemeris, initial, time, &impact_bodies) {
-                Ok(path) => path,
-                Err(_) => return,
-            }
-        };
-        project_rails_path(ephemeris, path, display, time, r_craft, view_cut_m, cache);
-        return;
-    }
-    let (step_s, max_steps) = match elements {
-        // Bound arcs always cover a full revolution: the step scales with
-        // the period (clamped for sanity), so long-period loops close
-        // instead of stopping mid-frame past an arbitrary hour cutoff.
-        Some(elements) if !elements.is_escape() => match elements.period_s() {
-            Some(period) => ((period / 300.0).clamp(5.0, 3600.0), 300),
-            None => (600.0, 200),
-        },
-        _ => (900.0, 400),
-    };
-    let config = VerletConfig { step_s, max_steps };
-    let path =
-        if fallback_rails.usable_for(ephemeris, initial, time, config, &impact_bodies, 5.0, 0.05) {
-            fallback_rails.path().expect("usable cache holds a path")
-        } else {
-            match fallback_rails.bake(ephemeris, initial, time, config, &impact_bodies) {
-                Ok(path) => path,
-                Err(_) => {
-                    if let Some(elements) = elements
-                        && !elements.is_escape()
-                    {
-                        let (arc, _) = bound_prediction_arc(elements, body_radius_m, 144);
-                        cache.points = arc;
-                    }
-                    return;
-                }
-            }
-        };
-    project_rails_path(ephemeris, path, display, time, r_craft, view_cut_m, cache);
+    let (position, _) = flight.inertial_state_m();
+    project_rails_path(ephemeris, path, display, time, position, view_cut_m, cache);
 }
 
 /// Project a baked inertial path into display-body-relative polyline points

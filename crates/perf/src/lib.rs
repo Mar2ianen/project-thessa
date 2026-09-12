@@ -385,9 +385,10 @@ impl PerfCollector {
         };
         let sim_line = match latest {
             Some(f) => format!(
-                "SIM steps {:>2} cpu {:5.2}ms warp x{:.1}/x{:.1} backlog {:5.2}ms",
+                "SIM steps {:>2} cpu {:5.2}ms rails {:.3}s warp x{:.1}/x{:.1} backlog {:5.2}ms",
                 f.sim.steps_this_frame,
                 f.sim.sim_cpu_s * 1000.0,
+                f.sim.rails_time_advanced_s,
                 f.sim.requested_warp,
                 f.sim.effective_warp,
                 f.sim.backlog_s * 1000.0
@@ -477,6 +478,7 @@ mod tests {
             steps_this_frame: 12,
             sim_cpu_s: 0.0017,
             sim_time_advanced_s: 0.1,
+            rails_time_advanced_s: 0.0,
             requested_warp: 100.0,
             effective_warp: 96.0,
             backlog_s: 0.0041,

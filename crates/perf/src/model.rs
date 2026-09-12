@@ -44,6 +44,9 @@ pub struct SimBudget {
     pub sim_cpu_s: f64,
     /// Simulation time advanced this frame (`steps * fixed_dt_s` normally).
     pub sim_time_advanced_s: f64,
+    /// Simulation seconds consumed directly from cached trajectories.
+    #[serde(default)]
+    pub rails_time_advanced_s: f64,
     /// Requested time-warp factor.
     pub requested_warp: f64,
     /// Resolved/effective warp actually achieved.
@@ -59,6 +62,7 @@ impl Default for SimBudget {
             steps_this_frame: 0,
             sim_cpu_s: 0.0,
             sim_time_advanced_s: 0.0,
+            rails_time_advanced_s: 0.0,
             requested_warp: 1.0,
             effective_warp: 1.0,
             backlog_s: 0.0,
@@ -88,10 +92,27 @@ impl SimBudget {
             steps_this_frame,
             sim_cpu_s: sim_cpu_s.max(0.0),
             sim_time_advanced_s: advanced,
+            rails_time_advanced_s: 0.0,
             requested_warp,
             effective_warp: effective.max(0.0),
             backlog_s: backlog_s.max(0.0),
         }
+    }
+
+    /// Add direct trajectory advancement to the observed solver budget.
+    pub fn with_rails_time(mut self, rails_s: f64, frame_wall_s: f64) -> Self {
+        self.rails_time_advanced_s = if rails_s.is_finite() {
+            rails_s.max(0.0)
+        } else {
+            0.0
+        };
+        self.sim_time_advanced_s =
+            self.fixed_dt_s * f64::from(self.steps_this_frame) + self.rails_time_advanced_s;
+        if frame_wall_s > 1e-9 {
+            self.effective_warp =
+                (self.sim_time_advanced_s / frame_wall_s).clamp(0.0, self.requested_warp.max(0.0));
+        }
+        self
     }
 
     /// True when the simulation could not keep up with requested warp.
@@ -280,6 +301,16 @@ pub fn default_capture_metadata() -> CaptureMetadata {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cached_advancement_counts_toward_effective_warp() {
+        let budget = super::SimBudget::from_steps(0.01, 2, 0.001, 100.0, 0.0, 0.01)
+            .with_rails_time(0.98, 0.01);
+        assert_eq!(budget.sim_time_advanced_s, 1.0);
+        assert_eq!(budget.rails_time_advanced_s, 0.98);
+        assert_eq!(budget.effective_warp, 100.0);
+        assert_eq!(budget.steps_this_frame, 2);
+    }
+
     use super::*;
 
     #[test]

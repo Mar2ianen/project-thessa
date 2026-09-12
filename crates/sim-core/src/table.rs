@@ -16,6 +16,34 @@ use crate::{BakedEphemeris, BodyId, BodyState, EphemerisError, SimTime};
 /// How often a fast bake samples true ephemeris nodes: every Nth step.
 pub const TABLE_NODE_EVERY_STEPS: u64 = 8;
 
+/// Cubic Hermite velocity from endpoint velocities and accelerations.
+///
+/// Companion to [`hermite_state`], but intentionally NOT its analytic
+/// derivative: differentiating the position Hermite divides f64 rounding of
+/// ~1e12 m barycentric positions (~1e-3 m) by the step, manufacturing
+/// 0.01-0.1 m/s of pure noise at second-scale nodes. Interpolating the
+/// stored endpoint accelerations instead is rounding-clean by construction
+/// (all terms stay O(v) or O(a*h)) and exactly matches endpoint slopes.
+pub(crate) fn hermite_velocity(
+    v0: DVec3,
+    a0: DVec3,
+    v1: DVec3,
+    a1: DVec3,
+    h: f64,
+    s: f64,
+) -> DVec3 {
+    // Cubic Hermite on endpoint velocities with endpoint slopes a0*h,
+    // a1*h, in Horner form. No division by h anywhere: every term stays
+    // O(v) or O(a*h), so ~1e-3 m f64 rounding of barycentric positions
+    // never enters at all.
+    let dv = v1 - v0;
+    let m0 = a0 * h;
+    let m1 = a1 * h;
+    let c2 = dv * 3.0 - m0 * 2.0 - m1;
+    let c3 = m0 + m1 - dv * 2.0;
+    v0 + (m0 + (c2 + c3 * s) * s) * s
+}
+
 /// Cubic Hermite position and its analytic derivative, evaluated using a
 /// relative displacement to avoid cancellation at barycentric coordinates.
 pub(crate) fn hermite_state(
@@ -504,8 +532,8 @@ impl EphemerisTable {
     }
 
     /// One scalar gravity term; `None` on singularity/non-finite input.
-    /// Non-gravitating lanes carry exactly-zero mu, so skipping them is
-    /// implied (`x + ±0.0 == x` bitwise).
+    /// Skip non-gravitating bodies before checking distance: their centers
+    /// are not gravitational singularities, including in SIMD fallback.
     fn scalar_term(
         &self,
         snapshot: &TableSnapshot,
@@ -513,6 +541,9 @@ impl EphemerisTable {
         index: usize,
         total: (f64, f64, f64),
     ) -> Option<(f64, f64, f64)> {
+        if !self.meta[index].gravitating {
+            return Some(total);
+        }
         let dx = snapshot.cx[index] - position.x;
         let dy = snapshot.cy[index] - position.y;
         let dz = snapshot.cz[index] - position.z;
@@ -556,11 +587,7 @@ impl EphemerisTable {
                 start_snap.cy[index],
                 start_snap.cz[index],
             );
-            let end_center = DVec3::new(
-                end_snap.cx[index],
-                end_snap.cy[index],
-                end_snap.cz[index],
-            );
+            let end_center = DVec3::new(end_snap.cx[index], end_snap.cy[index], end_snap.cz[index]);
             let relative = from - start_center;
             let delta = (to - end_center) - relative;
             let a = delta.length_squared();
@@ -669,5 +696,49 @@ impl EphemerisTable {
     /// Body ids in meta order.
     pub fn source_ids(&self) -> impl Iterator<Item = BodyId> + '_ {
         self.meta.iter().map(|track| track.id)
+    }
+}
+
+#[cfg(test)]
+mod hermite_velocity_tests {
+    use super::*;
+    use glam::DVec3;
+
+    /// Quadratic motion is reproduced exactly, including at barycentric
+    /// ~1e12 m coordinates where differentiating the position Hermite
+    /// amplifies f64 rounding (~1e-3 m) by ~1/h into 0.01-0.1 m/s of noise.
+    /// This test pins the regression that broke adaptive baking on the real
+    /// system: position-derived velocity noise tripped the interpolation
+    /// budget at every small step.
+    #[test]
+    fn barycentric_quadratic_is_exact() {
+        // x(t) = origin + v*t + a*t^2/2 with a barycentric-scale origin.
+        let origin = DVec3::new(4.82199934755193e12, 1.101318193678849e8, 1.0001922164810932e9);
+        let v = DVec3::new(-2310.338894347516, 50918.39341240515, 240.330294051677);
+        let a = DVec3::new(0.5, -0.3, 0.1);
+        let h = 1.0 / 60.0;
+        let state_at = |t: f64| (origin + v * t + a * (0.5 * t * t), v + a * t);
+        let (p0, v0) = state_at(0.0);
+        let (p1, v1) = state_at(h);
+        for s in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let t = s * h;
+            let (pe, ve) = state_at(t);
+            let got = hermite_velocity(v0, a, v1, a, h, s);
+            // Exact up to f64 rounding of O(v) terms (~1e-11 at 5e4 m/s).
+            assert!(got.distance(ve) < 1e-9, "s={s}: got {got:?}, want {ve:?}");
+            let (ph, _) = hermite_state(p0, v0, p1, v1, h, s);
+            assert!(ph.distance(pe) < 1e-3, "position baseline moved at s={s}");
+        }
+    }
+
+    #[test]
+    fn endpoints_recover_exactly() {
+        let v0 = DVec3::new(1.0, -2.0, 3.0);
+        let a0 = DVec3::new(0.1, 0.2, -0.1);
+        let v1 = DVec3::new(1.5, -1.0, 4.0);
+        let a1 = DVec3::new(-0.2, 0.1, 0.3);
+        let h = 5.0;
+        assert_eq!(hermite_velocity(v0, a0, v1, a1, h, 0.0), v0);
+        assert_eq!(hermite_velocity(v0, a0, v1, a1, h, 1.0), v1);
     }
 }

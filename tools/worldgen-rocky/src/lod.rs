@@ -166,8 +166,7 @@ pub fn select_tiles_with_height_and_frustum(
             let off_axis = dot(to_tile, normalize(frustum.forward))
                 .clamp(-1.0, 1.0)
                 .acos();
-            let angular_radius =
-                (key.span_m(radius) / distance).clamp(-1.0, 1.0).asin();
+            let angular_radius = (key.span_m(radius) / distance).clamp(-1.0, 1.0).asin();
             let half_cone = frustum.cos_limit.clamp(-1.0, 1.0).acos().max(1e-3);
             let edge = ((off_axis - angular_radius) / half_cone).clamp(0.0, 1.0);
             // Overlap-aware fovea (up to x25 at the cone edge) concentrates
@@ -386,11 +385,7 @@ const GRAIN_BANDS: [f64; 4] = [8.0, 32.0, 128.0, 512.0];
 /// difference, and the streaming front (not texel density) is what the eye
 /// catches — unfilled tiles read as holes, coarse ones as ground.
 pub fn texture_cells_for_level(level: u8) -> usize {
-    if level >= 13 {
-        128
-    } else {
-        64
-    }
+    if level >= 13 { 128 } else { 64 }
 }
 
 pub fn build_surface_texture(field: &PlanetField, key: TileKey, cells: usize) -> SurfaceTexture {
@@ -602,15 +597,8 @@ mod near_field_regression_tests {
             forward: normalize([-1.0, 0.0, 0.0]),
             cos_limit: (0.5_f64 + 0.35).cos(),
         };
-        let keys = select_tiles_with_height_and_frustum(
-            eye,
-            radius,
-            17,
-            320,
-            |_| 0.0,
-            Some(frustum),
-            1.0,
-        );
+        let keys =
+            select_tiles_with_height_and_frustum(eye, radius, 17, 320, |_| 0.0, Some(frustum), 1.0);
         // One subdivision nets +3 leaves past the budget edge by design.
         assert!(keys.len() <= 323, "budget overrun: {}", keys.len());
         let best = keys
@@ -649,16 +637,23 @@ mod velocity_bias_tests {
             forward: normalize([-1.0, 0.0, 0.0]),
             cos_limit: (0.5_f64 + 0.35).cos(),
         };
-        let sharp = select_tiles_with_height_and_frustum(eye, radius, 17, 320, |_| 0.0, Some(frustum), 1.0);
-        let coarse = select_tiles_with_height_and_frustum(eye, radius, 17, 320, |_| 0.0, Some(frustum), 8.0);
+        let sharp =
+            select_tiles_with_height_and_frustum(eye, radius, 17, 320, |_| 0.0, Some(frustum), 1.0);
+        let coarse =
+            select_tiles_with_height_and_frustum(eye, radius, 17, 320, |_| 0.0, Some(frustum), 8.0);
         let max_level = |keys: &[TileKey]| keys.iter().map(|k| k.level).max().unwrap_or(0);
         let sharp_max = max_level(&sharp);
         let coarse_max = max_level(&coarse);
         eprintln!("bias 1 -> L{sharp_max}, bias 8 -> L{coarse_max}");
         let mut hist = std::collections::BTreeMap::new();
-        for k in &coarse { *hist.entry(k.level).or_insert(0) += 1; }
+        for k in &coarse {
+            *hist.entry(k.level).or_insert(0) += 1;
+        }
         eprintln!("coarse leaves={} hist={:?}", coarse.len(), hist);
-        assert!(sharp_max >= 15, "unbiased near field must refine, got L{sharp_max}");
+        assert!(
+            sharp_max >= 15,
+            "unbiased near field must refine, got L{sharp_max}"
+        );
         assert!(
             coarse_max < sharp_max,
             "bias must relax refinement ({coarse_max} vs {sharp_max})"
@@ -682,7 +677,8 @@ mod pilot_frustum_tests {
             forward: normalize([0.0, 0.0, 1.0]),
             cos_limit: (1.0_f64).cos(),
         };
-        let keys = select_tiles_with_height_and_frustum(eye, radius, 17, 320, |_| 0.0, Some(frustum), 1.0);
+        let keys =
+            select_tiles_with_height_and_frustum(eye, radius, 17, 320, |_| 0.0, Some(frustum), 1.0);
         let max_in_view = keys
             .iter()
             .filter(|k| {
@@ -693,7 +689,10 @@ mod pilot_frustum_tests {
             .map(|k| k.level)
             .max()
             .unwrap_or(0);
-        eprintln!("pilot-cone max level below-forward: L{max_in_view} of {} tiles", keys.len());
+        eprintln!(
+            "pilot-cone max level below-forward: L{max_in_view} of {} tiles",
+            keys.len()
+        );
         assert!(
             max_in_view >= 12,
             "pilot ground culled: L{max_in_view} below-forward"

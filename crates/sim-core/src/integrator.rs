@@ -462,6 +462,142 @@ pub fn propagate_sampled_extend(
     Ok(true)
 }
 
+/// Timescale-following variable-step sampling for far display prediction
+/// (interstellar escapes, year horizons). Fixed coarse steps cannot resolve
+/// a fast periapsis bend: the asymptote error compounds forever (measured
+/// 7.4e10 m over a year at 4 h uniform steps). Instead each step spans a
+/// fraction `eta` of the local dynamical time `sqrt(d^3/mu)` to the nearest
+/// source, clamped to `[h_min, h_max]` — dense at periapsis, daily strides
+/// in deep cruise, ~500 samples per year. Same Verlet update per step and
+/// same segment impact semantics; sample times are non-uniform (the shared
+/// Hermite sampler already handles that). Display-grade only: the flight
+/// loop never rides this, it rides fixed-step rails.
+#[allow(clippy::too_many_arguments)]
+pub fn propagate_sampled_verlet_scaled(
+    ephemeris: &BakedEphemeris,
+    initial: TestParticleState,
+    start_time: SimTime,
+    h_min: f64,
+    h_max: f64,
+    eta: f64,
+    max_samples: u64,
+    impact_bodies: &[BodyId],
+) -> Result<SampledPath, IntegratorError> {
+    if !initial.position.is_finite()
+        || !initial.velocity.is_finite()
+        || !start_time.0.is_finite()
+        || !h_min.is_finite()
+        || !h_max.is_finite()
+        || !eta.is_finite()
+        || h_min <= 0.0
+        || h_max < h_min
+        || eta <= 0.0
+    {
+        return Err(IntegratorError::InvalidConfig(
+            "non-finite scaled trajectory input".into(),
+        ));
+    }
+    for body in impact_bodies {
+        ephemeris
+            .body(*body)
+            .map_err(|error| IntegratorError::InvalidConfig(error.to_string()))?;
+    }
+    let sources: Vec<(BodyId, f64)> = {
+        let mut ids: Vec<_> = ephemeris.gravity_sources().map(|body| body.id).collect();
+        ids.extend_from_slice(impact_bodies);
+        ids.sort();
+        ids.dedup();
+        ids.into_iter()
+            .map(|id| {
+                ephemeris
+                    .body(id)
+                    .map(|body| (id, body.mu))
+                    .map_err(|error| IntegratorError::InvalidConfig(error.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let field = GravityField::from_ephemeris(ephemeris);
+    let mut positions = vec![initial.position];
+    let mut velocities = vec![initial.velocity];
+    let mut times = vec![start_time];
+    if let Some(body) = impact_at(ephemeris, impact_bodies, initial.position, start_time) {
+        return Ok(SampledPath {
+            positions,
+            velocities,
+            times,
+            end_time: start_time,
+            end: SampledPathEnd::Impact(body),
+            stats: IntegratorStats::default(),
+        });
+    }
+    // Local dynamical time from exact body states (a handful of Kepler
+    // solves per step, not per source per substep).
+    let timescale = |position: DVec3, time: SimTime| -> f64 {
+        let mut best = f64::INFINITY;
+        for (id, mu) in &sources {
+            if *mu <= 0.0 {
+                continue;
+            }
+            let Ok(state) = ephemeris.body_state(*id, time) else {
+                continue;
+            };
+            let d = (state.position_inertial - position).length();
+            if d > 0.0 && d.is_finite() {
+                best = best.min((d * d * d / mu).sqrt());
+            }
+        }
+        if best.is_finite() {
+            (eta * best).clamp(h_min, h_max)
+        } else {
+            h_max
+        }
+    };
+    let mut state = initial;
+    let mut time = start_time;
+    let mut stats = IntegratorStats::default();
+    let mut end = SampledPathEnd::Completed;
+    while positions.len() as u64 <= max_samples {
+        let h = timescale(state.position, time);
+        let acceleration_0 = field.acceleration(state.position, time)?;
+        let next_position = state.position + state.velocity * h + acceleration_0 * (0.5 * h * h);
+        let next_time = time.offset(h);
+        if let Some((body, fraction)) = impact_segment(
+            ephemeris,
+            impact_bodies,
+            state.position,
+            next_position,
+            time,
+            next_time,
+        ) {
+            time = time.offset(h * fraction);
+            positions.push(state.position.lerp(next_position, fraction));
+            velocities.push(state.velocity);
+            times.push(time);
+            stats.accepted_steps += 1;
+            end = SampledPathEnd::Impact(body);
+            break;
+        }
+        let acceleration_1 = field.acceleration(next_position, next_time)?;
+        state = TestParticleState {
+            position: next_position,
+            velocity: state.velocity + (acceleration_0 + acceleration_1) * (0.5 * h),
+        };
+        time = next_time;
+        stats.accepted_steps += 1;
+        positions.push(state.position);
+        velocities.push(state.velocity);
+        times.push(time);
+    }
+    Ok(SampledPath {
+        positions,
+        velocities,
+        times,
+        end_time: time,
+        end,
+        stats,
+    })
+}
+
 /// First impact body whose physical radius contains the point, if any.
 /// Bodies that fail lookup are skipped: the caller validates the list once
 /// up front, so this only fires for structurally invalid ephemerides.

@@ -602,6 +602,29 @@ fn refresh_prediction_cache(
     }
     // Powered/aero flight: coarse display-only bake in the fallback cache.
     let elements = craft_elements(ephemeris, flight, time);
+    // Escape/deep-space legs ride a timescale-following bake: a year of
+    // interstellar cruise in hundreds of samples instead of millions.
+    // Uniform 4 h steps were measured at 7.4e10 m asymptote error (the fast
+    // periapsis bend never resolves); the scaled bake holds ~1e8 m over a
+    // year, subpixel at any zoom that fits it.
+    if elements.as_ref().is_none_or(|elements| elements.is_escape()) {
+        let scaled_config = VerletConfig {
+            step_s: thessa_sim_core::DISPLAY_SCALED_H_MIN_S,
+            max_steps: thessa_sim_core::DISPLAY_SCALED_MAX_SAMPLES,
+        };
+        let path = if fallback_rails.usable_for(
+            ephemeris, initial, time, scaled_config, &impact_bodies, 5.0, 0.05,
+        ) {
+            fallback_rails.path().expect("usable cache holds a path")
+        } else {
+            match fallback_rails.bake_scaled(ephemeris, initial, time, &impact_bodies) {
+                Ok(path) => path,
+                Err(_) => return,
+            }
+        };
+        project_rails_path(ephemeris, path, display, time, r_craft, view_cut_m, cache);
+        return;
+    }
     let (step_s, max_steps) = match elements {
         // Bound arcs always cover a full revolution: the step scales with
         // the period (clamped for sanity), so long-period loops close
@@ -610,9 +633,7 @@ fn refresh_prediction_cache(
             Some(period) => ((period / 300.0).clamp(5.0, 3600.0), 300),
             None => (600.0, 200),
         },
-        // Escape/deep-space legs: 15 min steps over ~12 days, enough to
-        // cross the overview and outlive interlunar cruise planning.
-        _ => (900.0, 1152),
+        _ => (900.0, 400),
     };
     let config = VerletConfig { step_s, max_steps };
     let path =

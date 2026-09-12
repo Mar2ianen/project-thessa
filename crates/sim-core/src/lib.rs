@@ -41,12 +41,13 @@ pub use integrator::{
     AdaptiveIntegratorConfig, ImpulsiveBurn, IntegratorError, IntegratorStats, PropagationResult,
     SampledPath, SampledPathEnd, TestParticleState, VerletConfig, propagate_adaptive,
     propagate_adaptive_with_burns, propagate_sampled_extend, propagate_sampled_verlet,
-    propagate_sampled_verlet_fast, propagate_velocity_verlet,
+    propagate_sampled_verlet_fast, propagate_sampled_verlet_scaled, propagate_velocity_verlet,
 };
 pub use onrails::{
     COAST_RAILS_EXTEND_CHUNK, COAST_RAILS_HEAD_STEPS, COAST_RAILS_MAX_STEPS,
     COAST_RAILS_MIN_AHEAD_S, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_STEP_S,
-    COAST_RAILS_VELOCITY_TOL_MPS, OnRailsCache, OnRailsWake,
+    COAST_RAILS_VELOCITY_TOL_MPS, DISPLAY_SCALED_ETA, DISPLAY_SCALED_H_MAX_S,
+    DISPLAY_SCALED_H_MIN_S, DISPLAY_SCALED_MAX_SAMPLES, OnRailsCache, OnRailsWake,
 };
 pub use scheduler::{EventScheduler, ScheduledEvent, ScheduledKind};
 pub use system::{

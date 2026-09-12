@@ -62,6 +62,14 @@ pub enum OnRailsWake {
     HorizonEnd { time: SimTime },
 }
 
+/// Far display sizing for interstellar escape legs: timescale-following
+/// steps from a minute out to daily strides. Year horizons in hundreds of
+/// samples (~50 KB) instead of millions.
+pub const DISPLAY_SCALED_H_MIN_S: f64 = 60.0;
+pub const DISPLAY_SCALED_H_MAX_S: f64 = 86_400.0;
+pub const DISPLAY_SCALED_ETA: f64 = 1.0 / 40.0;
+pub const DISPLAY_SCALED_MAX_SAMPLES: u64 = 2_500;
+
 /// Baked unpowered coast: same gravity field and ephemerides as the live
 /// simulation, sampled forward once. Querying is interpolation; integration
 /// happens only on bake.
@@ -72,6 +80,10 @@ pub struct OnRailsCache {
     impact_bodies: Vec<BodyId>,
     config: Option<VerletConfig>,
     path: Option<SampledPath>,
+    /// Timescale-following (non-uniform) bakes serve display only: the
+    /// flight loop never rides them and [`extend`](Self::extend) refuses
+    /// them, since resume budgeting assumes uniform steps.
+    scaled: bool,
 }
 
 impl OnRailsCache {
@@ -88,6 +100,7 @@ impl OnRailsCache {
     /// atmosphere entry, or contact event.
     pub fn invalidate(&mut self) {
         self.path = None;
+        self.scaled = false;
     }
 
     /// Bake (or rebake) the coast path from this state and epoch. The
@@ -157,7 +170,50 @@ impl OnRailsCache {
         self.impact_bodies = bodies;
         self.config = Some(store_config.unwrap_or(bake_config));
         self.path = Some(path);
+        self.scaled = false;
         Ok(self.path.as_ref().expect("just baked"))
+    }
+
+    /// Far display bake for interstellar escape legs: timescale-following
+    /// steps span a year in hundreds of samples instead of millions. Shares
+    /// querying, wakes and trimming with uniform bakes; [`extend`](Self::extend)
+    /// and the flight loop refuse it (non-uniform steps).
+    pub fn bake_scaled(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        initial: TestParticleState,
+        start: SimTime,
+        impact_bodies: &[BodyId],
+    ) -> Result<&SampledPath, IntegratorError> {
+        let mut bodies = impact_bodies.to_vec();
+        bodies.sort();
+        bodies.dedup();
+        let path = crate::propagate_sampled_verlet_scaled(
+            ephemeris,
+            initial,
+            start,
+            DISPLAY_SCALED_H_MIN_S,
+            DISPLAY_SCALED_H_MAX_S,
+            DISPLAY_SCALED_ETA,
+            DISPLAY_SCALED_MAX_SAMPLES,
+            &bodies,
+        )?;
+        self.ephemeris = Some(ephemeris.clone());
+        self.impact_bodies = bodies;
+        // Fixed identity so reuse checks match across rebakes; coverage and
+        // state comparison do the real work.
+        self.config = Some(VerletConfig {
+            step_s: DISPLAY_SCALED_H_MIN_S,
+            max_steps: DISPLAY_SCALED_MAX_SAMPLES,
+        });
+        self.path = Some(path);
+        self.scaled = true;
+        Ok(self.path.as_ref().expect("just baked"))
+    }
+
+    /// True for timescale-following display bakes (never flight-ridden).
+    pub fn is_scaled(&self) -> bool {
+        self.scaled && self.path.is_some()
     }
 
     /// Grow a head-baked path toward its stored horizon by up to
@@ -169,6 +225,9 @@ impl OnRailsCache {
         ephemeris: &BakedEphemeris,
         extra_steps: u64,
     ) -> Result<bool, IntegratorError> {
+        if self.scaled {
+            return Ok(false);
+        }
         let (config, bodies) = match (self.config, self.path.is_some()) {
             (Some(config), true) => (config, self.impact_bodies.clone()),
             _ => return Ok(false),
@@ -208,6 +267,38 @@ impl OnRailsCache {
     /// Latest covered epoch, if any path is held.
     pub fn covered_until(&self) -> Option<SimTime> {
         self.path.as_ref().map(|path| path.end_time)
+    }
+
+    /// Live sample count (memory weight ~56 B each).
+    pub fn sample_count(&self) -> usize {
+        self.path.as_ref().map(|path| path.positions.len()).unwrap_or(0)
+    }
+
+    /// Sliding window: drop samples older than `now - keep_behind_s`, in
+    /// chunks of at least `chunk_s` worth so the O(n) memmove amortizes
+    /// (one move per chunk interval, not per tick). Always retains ≥2
+    /// samples so interpolation stays defined; step accounting
+    /// (`accepted_steps`) is never rewound, so [`extend`](Self::extend)
+    /// keeps budgeting against the stored horizon. Impact-ended paths are
+    /// left alone — their wake names the end, trimming it would lie.
+    pub fn trim_before(&mut self, now: SimTime, keep_behind_s: f64, chunk_s: f64) {
+        let path = match self.path.as_mut() {
+            Some(path) if matches!(path.end, crate::SampledPathEnd::Completed) => path,
+            _ => return,
+        };
+        if path.positions.len() < 3 || !(keep_behind_s.is_finite() && chunk_s > 0.0) {
+            return;
+        }
+        let horizon = now.seconds() - keep_behind_s - chunk_s;
+        let cutoff = path.times.partition_point(|t| t.seconds() < horizon);
+        // Keep two samples of overlap for the interpolant.
+        let drain = cutoff.saturating_sub(2).min(path.positions.len().saturating_sub(2));
+        if drain == 0 {
+            return;
+        }
+        path.positions.drain(..drain);
+        path.velocities.drain(..drain);
+        path.times.drain(..drain);
     }
 
     /// Reuse check: the baked path covers `start` and its interpolated state

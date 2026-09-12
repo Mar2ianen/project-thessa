@@ -510,6 +510,11 @@ impl PilotFlightRuntime {
                 }
             }
         }
+        // Sliding window: drop baked ground older than an hour behind (in
+        // half-hour chunks so the memmove amortizes). Rolling coverage plus
+        // rolling memory — indefinite cruise at ~3 MB steady state instead
+        // of an ever-growing path.
+        self.rails.trim_before(time, 3_600.0, 1_800.0);
         let next_time = time.offset(FLIGHT_STEP_S);
         if let Some(thessa_sim_core::OnRailsWake::Impact {
             time: impact_time,

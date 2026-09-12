@@ -2187,3 +2187,134 @@ fn chunked_extend_matches_full_bake_bitwise() {
         a.positions.len()
     );
 }
+
+#[test]
+fn rails_trim_keeps_window_and_extend_accounting() {
+    // Sliding window for indefinite cruise: old samples drop in chunks,
+    // interpolation/sampling still work inside the window, pre-window
+    // queries correctly miss (forcing rebake), and extension keeps
+    // budgeting against the stored horizon, not the trimmed length.
+    use crate::{OnRailsCache, VerletConfig};
+    let mu = 4.0e13;
+    let radius = 10_000_000.0;
+    let ephemeris = central_ephemeris(mu);
+    let speed = (mu / radius).sqrt();
+    let initial = TestParticleState {
+        position: DVec3::X * radius,
+        velocity: DVec3::Y * speed,
+    };
+    let config = VerletConfig {
+        step_s: 5.0,
+        max_steps: 4_000,
+    };
+    let mut rails = OnRailsCache::new();
+    rails
+        .bake(&ephemeris, initial, SimTime::EPOCH, config, &[])
+        .expect("bakes");
+    assert_eq!(rails.sample_count(), 4001);
+    // Trim everything older than T+3600 s, chunks of 1800 s.
+    rails.trim_before(SimTime(7200.0), 3600.0, 1800.0);
+    let count = rails.sample_count();
+    assert!(count < 4001 && count > 3000, "trimmed to {count} samples");
+    // Inside the window: sampling works.
+    assert!(rails.sample_at(SimTime(10_000.0)).is_some());
+    // Before the window: miss (caller rebakes).
+    assert!(rails.sample_at(SimTime(100.0)).is_none());
+    // Horizon accounting untouched: this bake has 4000 accepted of 4000
+    // max, so no extension even after trimming.
+    assert!(!rails.needs_extension(SimTime(10_000.0), 60.0));
+    // Fresh shorter bake still extends after a trim.
+    let mut short = OnRailsCache::new();
+    let config2 = VerletConfig {
+        step_s: 5.0,
+        max_steps: 4_000,
+    };
+    short
+        .bake_head(&ephemeris, initial, SimTime::EPOCH, config2, &[])
+        .expect("head bakes");
+    let head_count = short.sample_count();
+    short.trim_before(SimTime(5_000.0), 3600.0, 600.0);
+    assert!(short.sample_count() < head_count);
+    assert!(short.extend(&ephemeris, 512).expect("extends"));
+    eprintln!("trim+extend accounting holds over {} samples", short.sample_count());
+}
+
+#[test]
+fn year_long_scaled_escape_stays_display_grade() {
+    // Interstellar prediction needs year horizons without megabyte paths.
+    // Uniform 4 h steps fail catastrophically here (measured 7.4e10 m: the
+    // fast periapsis bend is unresolved and the asymptote error compounds
+    // forever), so the far bake follows the local dynamical timescale
+    // instead: dense at periapsis, daily strides in cruise.
+    use crate::{VerletConfig, propagate_sampled_verlet, propagate_sampled_verlet_scaled};
+    let mu = 4.0e13;
+    let start = 10_000_000.0;
+    let ephemeris = central_ephemeris(mu);
+    let initial = TestParticleState {
+        position: DVec3::X * start,
+        velocity: DVec3::Y * (2.0 * mu / start).sqrt() * 1.2,
+    };
+    let started = std::time::Instant::now();
+    let scaled = propagate_sampled_verlet_scaled(
+        &ephemeris,
+        initial,
+        SimTime::EPOCH,
+        60.0,
+        86_400.0,
+        1.0 / 40.0,
+        700,
+        &[],
+    )
+    .expect("scaled year bakes");
+    let scaled_elapsed = started.elapsed();
+    assert!(
+        scaled.end_time.seconds() >= 105_600.0 * 300.0,
+        "scaled bake must reach the full reference year"
+    );
+    let fine = propagate_sampled_verlet(
+        &ephemeris,
+        initial,
+        SimTime::EPOCH,
+        VerletConfig {
+            step_s: 300.0,
+            max_steps: 105_600,
+        },
+        &[],
+    )
+    .expect("fine year bakes");
+    // Compare at the scaled nodes against the bracketing fine samples,
+    // over the shared horizon only.
+    let fine_end = fine.end_time.seconds();
+    let mut max_deviation: f64 = 0.0;
+    let mut compared = 0;
+    let mut j = 0;
+    for (i, t) in scaled.times.iter().enumerate() {
+        if t.seconds() > fine_end {
+            break;
+        }
+        compared += 1;
+        while j + 1 < fine.times.len() && fine.times[j + 1].seconds() < t.seconds() {
+            j += 1;
+        }
+        let reference = if j + 1 < fine.times.len()
+            && (fine.times[j + 1].seconds() - t.seconds()).abs()
+                < (t.seconds() - fine.times[j].seconds()).abs()
+        {
+            fine.positions[j + 1]
+        } else {
+            fine.positions[j]
+        };
+        max_deviation = max_deviation.max((scaled.positions[i] - reference).length());
+    }
+    assert!(compared > 100, "must compare across the year, got {compared}");
+    let span_days = fine_end / 86_400.0;
+    eprintln!(
+        "year escape scaled deviation {max_deviation:e} m over {span_days:.0} days, {} nodes in {:.2} ms",
+        scaled.positions.len(),
+        scaled_elapsed.as_secs_f64() * 1000.0
+    );
+    assert!(
+        max_deviation < 1.0e9,
+        "scaled year drifted {max_deviation:e} m — too coarse even for display"
+    );
+}

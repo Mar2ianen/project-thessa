@@ -109,6 +109,9 @@ jobs:
       - name: Run release simulation tests
         run: cargo test -p thessa-sim-core --release
 
+      - name: Run release SIMD kernel tests
+        run: cargo test -p thessa-simd --release
+
       - name: Compile gravity benchmark
         run: cargo bench -p thessa-sim-core --bench gravity --no-run
 
@@ -117,6 +120,18 @@ jobs:
 
       - name: Compile flight benchmark
         run: cargo bench -p thessa-sim-core --bench flight --no-run
+
+      - name: Compile osculating benchmark
+        run: cargo bench -p thessa-sim-core --bench osculating --no-run
+
+      - name: Compile onrails benchmark
+        run: cargo bench -p thessa-sim-core --bench onrails --no-run
+
+      - name: Compile gravity interpolation benchmark
+        run: cargo bench -p thessa-sim-core --bench gravity_interpolation --no-run
+
+      - name: Compile terrain tile benchmark
+        run: cargo bench -p thessa-worldgen-rocky --bench tiles --no-run
 
   reference-validation:
     name: Reference validation

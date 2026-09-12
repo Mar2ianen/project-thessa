@@ -54,7 +54,7 @@ pub use system::{
     BinaryOrbitConfig, CelestialConfig, OrbitConfig, StarConfig, SystemConfig, SystemMeta,
     SystemSpecError,
 };
-pub use table::{EphemerisTable, TABLE_NODE_EVERY_STEPS};
+pub use table::{EphemerisTable, TABLE_NODE_EVERY_STEPS, TableSnapshot};
 pub use time::SimTime;
 pub use units::{AU_M, DAY_S, EARTH_MASS_KG, G, JUPITER_MASS_KG, SOLAR_MASS_KG, TAU};
 pub use vehicle::{ControlSurfaceDefinition, VehicleDefinition, VehicleError, X15StarterProfile};

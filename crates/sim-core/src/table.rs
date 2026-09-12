@@ -67,6 +67,15 @@ impl BodyTrack {
     }
 }
 
+/// One instant of every track's centers, in track order. Reused across the
+/// two accel evals and the impact test of a single Verlet step; refilled
+/// per endpoint by [`snapshot`](EphemerisTable::snapshot).
+#[derive(Debug, Clone, Default)]
+pub struct TableSnapshot {
+    time: SimTime,
+    centers: Vec<DVec3>,
+}
+
 /// Fast evaluator for a fixed body set over one horizon. Built once per
 /// bake, queried per step.
 #[derive(Debug, Clone)]
@@ -110,28 +119,40 @@ impl EphemerisTable {
             ));
         }
         let nodes = (horizon / node_step_s).ceil().max(1.0) as usize;
-        let mut tracks = Vec::with_capacity(bodies.len());
-        for id in bodies {
-            let body = ephemeris.body(*id)?;
-            let mut positions = Vec::with_capacity(nodes + 1);
-            let mut velocities = Vec::with_capacity(nodes + 1);
-            for node in 0..=nodes {
-                let state: BodyState =
-                    ephemeris.body_state(*id, start.offset(node as f64 * node_step_s))?;
-                positions.push(state.position_inertial);
-                velocities.push(state.velocity_inertial);
-            }
-            tracks.push(BodyTrack {
-                id: *id,
-                mu: body.mu,
-                gravitating: body.gravity_source,
-                radius_m: body.radius_m,
-                step_s: node_step_s,
-                positions,
-                velocities,
-            });
-        }
-        Ok(Self { start, end, tracks })
+        // Node tracks are independent per body (no shared mutable state, no
+        // reduction), so a parallel fill is bitwise identical to the serial
+        // loop: Rayon preserves encounter order on collect, and each track
+        // integrates only its own nodes. Kepler solves dominate (~85% of a
+        // full-horizon bake), scaling ~linearly to core count.
+        use rayon::prelude::*;
+        let tracks: Result<Vec<BodyTrack>, EphemerisError> = bodies
+            .par_iter()
+            .map(|id| {
+                let body = ephemeris.body(*id)?;
+                let mut positions = Vec::with_capacity(nodes + 1);
+                let mut velocities = Vec::with_capacity(nodes + 1);
+                for node in 0..=nodes {
+                    let state: BodyState =
+                        ephemeris.body_state(*id, start.offset(node as f64 * node_step_s))?;
+                    positions.push(state.position_inertial);
+                    velocities.push(state.velocity_inertial);
+                }
+                Ok(BodyTrack {
+                    id: *id,
+                    mu: body.mu,
+                    gravitating: body.gravity_source,
+                    radius_m: body.radius_m,
+                    step_s: node_step_s,
+                    positions,
+                    velocities,
+                })
+            })
+            .collect();
+        Ok(Self {
+            start,
+            end,
+            tracks: tracks?,
+        })
     }
 
     /// Summed point-mass acceleration at a position/epoch, same definition
@@ -165,6 +186,95 @@ impl EphemerisTable {
             total += offset * (track.mu * inverse.powi(3));
         }
         total.is_finite().then_some(total)
+    }
+
+    /// Fill `out` with every track's center at `time`, in track order.
+    /// A Verlet step needs body centers at both endpoints for two accel
+    /// evals plus the impact segment test — 4-6 Hermite evals per track
+    /// plus an O(tracks) id lookup per impact body. Snapshotting once per
+    /// endpoint cuts that to 2 evals per track with zero lookups.
+    pub fn snapshot(&self, time: SimTime, out: &mut TableSnapshot) {
+        out.time = time;
+        out.centers.clear();
+        out.centers.reserve(self.tracks.len());
+        for track in &self.tracks {
+            out.centers.push(track.state_at(time, self.start).0);
+        }
+    }
+
+    /// Summed gravity from a snapshot (centers must come from [`snapshot`](Self::snapshot)).
+    /// Index-aligned with [`tracks`](Self::tracks_len) order; use
+    /// [`impact_from`](Self::impact_from) for the segment test on a pair.
+    pub fn accel_from(&self, snapshot: &TableSnapshot, position: DVec3) -> Option<DVec3> {
+        if snapshot.centers.len() != self.tracks.len() || !position.is_finite() {
+            return None;
+        }
+        let mut total = DVec3::ZERO;
+        for (track, center) in self.tracks.iter().zip(snapshot.centers.iter()) {
+            if !track.gravitating {
+                continue;
+            }
+            let offset = *center - position;
+            let distance_squared = offset.length_squared();
+            if !distance_squared.is_finite() || distance_squared == 0.0 {
+                return None;
+            }
+            let inverse = distance_squared.sqrt().recip();
+            if !inverse.is_finite() {
+                return None;
+            }
+            total += offset * (track.mu * inverse.powi(3));
+        }
+        total.is_finite().then_some(total)
+    }
+
+    /// Moving-frame segment/sphere entry between two snapshots. Iterates
+    /// tracks once (index-aligned centers, integer membership test) instead
+    /// of one map lookup plus two Hermite evals per impact body.
+    pub fn impact_from(
+        &self,
+        start_snap: &TableSnapshot,
+        end_snap: &TableSnapshot,
+        from: DVec3,
+        to: DVec3,
+        impact_bodies: &[BodyId],
+    ) -> Option<(BodyId, f64)> {
+        if start_snap.centers.len() != self.tracks.len()
+            || end_snap.centers.len() != self.tracks.len()
+        {
+            return None;
+        }
+        let mut first: Option<(BodyId, f64)> = None;
+        for ((track, start_center), end_center) in self
+            .tracks
+            .iter()
+            .zip(start_snap.centers.iter())
+            .zip(end_snap.centers.iter())
+        {
+            if track.radius_m <= 0.0 || !impact_bodies.contains(&track.id) {
+                continue;
+            }
+            let relative = from - *start_center;
+            let delta = (to - *end_center) - relative;
+            let a = delta.length_squared();
+            if a <= 0.0 {
+                continue;
+            }
+            let b = relative.dot(delta);
+            let c = relative.length_squared() - track.radius_m.powi(2);
+            let discriminant = b * b - a * c;
+            if discriminant < 0.0 {
+                continue;
+            }
+            let denominator = -b + discriminant.sqrt();
+            let fraction = if c <= 0.0 { 0.0 } else { c / denominator };
+            if (0.0..=1.0).contains(&fraction)
+                && first.is_none_or(|(_, previous)| fraction < previous)
+            {
+                first = Some((track.id, fraction));
+            }
+        }
+        first
     }
 
     pub fn body_state_at(&self, id: BodyId, time: SimTime) -> Option<BodyState> {

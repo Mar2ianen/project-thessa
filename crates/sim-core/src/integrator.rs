@@ -202,55 +202,6 @@ pub fn propagate_sampled_verlet(
     })
 }
 
-/// Shared fixed-step velocity-Verlet sampling loop. `accel` serves gravity
-/// (exact field or table-backed), `impact` tests moving-body segments; both
-/// are plain closures so exact, fast and resume paths share one loop with no
-/// virtual dispatch. Appends to `target`, which may already hold samples
-/// (resume/extend), and reports the final end state through `end`.
-#[allow(clippy::too_many_arguments)]
-fn run_sampled_loop(
-    initial: TestParticleState,
-    start_time: SimTime,
-    step_s: f64,
-    max_steps: u64,
-    accel: impl Fn(DVec3, SimTime) -> Result<DVec3, IntegratorError>,
-    impact: impl Fn(DVec3, DVec3, SimTime, SimTime) -> Option<(BodyId, f64)>,
-    positions: &mut Vec<DVec3>,
-    velocities: &mut Vec<DVec3>,
-    times: &mut Vec<SimTime>,
-    stats: &mut IntegratorStats,
-    end: &mut SampledPathEnd,
-) -> Result<SimTime, IntegratorError> {
-    let mut state = initial;
-    let mut time = start_time;
-    while stats.accepted_steps < max_steps {
-        let h = step_s;
-        let acceleration_0 = accel(state.position, time)?;
-        let next_position = state.position + state.velocity * h + acceleration_0 * (0.5 * h * h);
-        let next_time = time.offset(h);
-        if let Some((body, fraction)) = impact(state.position, next_position, time, next_time) {
-            time = time.offset(h * fraction);
-            positions.push(state.position.lerp(next_position, fraction));
-            velocities.push(state.velocity);
-            times.push(time);
-            stats.accepted_steps += 1;
-            *end = SampledPathEnd::Impact(body);
-            break;
-        }
-        let acceleration_1 = accel(next_position, next_time)?;
-        state = TestParticleState {
-            position: next_position,
-            velocity: state.velocity + (acceleration_0 + acceleration_1) * (0.5 * h),
-        };
-        time = next_time;
-        stats.accepted_steps += 1;
-        positions.push(state.position);
-        velocities.push(state.velocity);
-        times.push(time);
-    }
-    Ok(time)
-}
-
 /// Fast variant of [`propagate_sampled_verlet`] for long coast bakes: source
 /// bodies are sampled onto a Hermite table every `table_every_steps` steps
 /// (see [`EphemerisTable`](crate::EphemerisTable)) instead of Kepler-solved
@@ -322,22 +273,14 @@ pub fn propagate_sampled_verlet_fast(
     }
     let mut stats = IntegratorStats::default();
     let mut end = SampledPathEnd::Completed;
-    let accel = |position: DVec3, time: SimTime| -> Result<DVec3, IntegratorError> {
-        match table.acceleration_at(position, time) {
-            Some(acceleration) => Ok(acceleration),
-            None => Ok(field.acceleration(position, time)?),
-        }
-    };
-    let impact = |from: DVec3, to: DVec3, start: SimTime, end: SimTime| {
-        table.impact_segment(impact_bodies, from, to, start, end)
-    };
-    let time = run_sampled_loop(
+    let time = run_table_loop(
+        &table,
+        &field,
+        impact_bodies,
         initial,
         start_time,
         config.step_s,
         config.max_steps,
-        accel,
-        impact,
         &mut positions,
         &mut velocities,
         &mut times,
@@ -352,6 +295,69 @@ pub fn propagate_sampled_verlet_fast(
         end,
         stats,
     })
+}
+
+/// Table-backed Verlet loop with per-endpoint snapshots: one Hermite eval
+/// per track per endpoint serves both accel evals and the impact segment
+/// test, replacing 4-6 evals plus O(tracks) id lookups per impact body.
+/// A step whose snapshot accel fails (singularity/non-finite) falls back to
+/// the exact field for that eval, so behavior matches the exact path.
+#[allow(clippy::too_many_arguments)]
+fn run_table_loop(
+    table: &crate::EphemerisTable,
+    field: &GravityField,
+    impact_bodies: &[BodyId],
+    initial: TestParticleState,
+    start_time: SimTime,
+    step_s: f64,
+    max_steps: u64,
+    positions: &mut Vec<DVec3>,
+    velocities: &mut Vec<DVec3>,
+    times: &mut Vec<SimTime>,
+    stats: &mut IntegratorStats,
+    end: &mut SampledPathEnd,
+) -> Result<SimTime, IntegratorError> {
+    use crate::TableSnapshot;
+    let mut state = initial;
+    let mut time = start_time;
+    let mut start_snap = TableSnapshot::default();
+    let mut end_snap = TableSnapshot::default();
+    while stats.accepted_steps < max_steps {
+        let h = step_s;
+        table.snapshot(time, &mut start_snap);
+        let acceleration_0 = match table.accel_from(&start_snap, state.position) {
+            Some(acceleration) => acceleration,
+            None => field.acceleration(state.position, time)?,
+        };
+        let next_position = state.position + state.velocity * h + acceleration_0 * (0.5 * h * h);
+        let next_time = time.offset(h);
+        table.snapshot(next_time, &mut end_snap);
+        if let Some((body, fraction)) =
+            table.impact_from(&start_snap, &end_snap, state.position, next_position, impact_bodies)
+        {
+            time = time.offset(h * fraction);
+            positions.push(state.position.lerp(next_position, fraction));
+            velocities.push(state.velocity);
+            times.push(time);
+            stats.accepted_steps += 1;
+            *end = SampledPathEnd::Impact(body);
+            break;
+        }
+        let acceleration_1 = match table.accel_from(&end_snap, next_position) {
+            Some(acceleration) => acceleration,
+            None => field.acceleration(next_position, next_time)?,
+        };
+        state = TestParticleState {
+            position: next_position,
+            velocity: state.velocity + (acceleration_0 + acceleration_1) * (0.5 * h),
+        };
+        time = next_time;
+        stats.accepted_steps += 1;
+        positions.push(state.position);
+        velocities.push(state.velocity);
+        times.push(time);
+    }
+    Ok(time)
 }
 
 /// Extend an existing [`SampledPath`] forward by up to `extra_steps` fixed
@@ -428,28 +434,20 @@ pub fn propagate_sampled_extend(
         path.end = SampledPathEnd::Impact(body);
         return Ok(false);
     }
-    let accel = |position: DVec3, time: SimTime| -> Result<DVec3, IntegratorError> {
-        match table.acceleration_at(position, time) {
-            Some(acceleration) => Ok(acceleration),
-            None => Ok(field.acceleration(position, time)?),
-        }
-    };
-    let impact = |from: DVec3, to: DVec3, start: SimTime, end: SimTime| {
-        table.impact_segment(impact_bodies, from, to, start, end)
-    };
     // accepted_steps already counts baked steps; bound the shared loop to
     // the table span (done + take), never the total budget — past the short
     // table the interpolant would clamp to its endpoint state and feed the
     // loop wrong gravity.
     let mut stats = path.stats;
     let mut end = SampledPathEnd::Completed;
-    let end_time = run_sampled_loop(
+    let end_time = run_table_loop(
+        &table,
+        &field,
+        impact_bodies,
         resume,
         resume_time,
         config_step_s,
         done + take,
-        accel,
-        impact,
         &mut path.positions,
         &mut path.velocities,
         &mut path.times,

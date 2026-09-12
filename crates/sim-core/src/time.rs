@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// This type intentionally does not expose wall-clock time. A `SimTime` value
 /// is deterministic input to all physics evaluation.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct SimTime(pub f64);
 
 impl SimTime {

@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use thessa_flight_authority::ControlMode;
+use thessa_flight_control::{GuidanceIntent, PropulsionDemand};
 use thessa_protocol::{CodecError, Envelope, kind};
 use thessa_sim_core::RigidBodyState;
 
@@ -65,6 +66,23 @@ pub struct ClientInput {
     pub commands: Vec<Command>,
 }
 
+/// Typed guidance command introduced beside [`ClientInput`] so peers can
+/// migrate without making the legacy SAS representation permanent. The
+/// server still validates and realizes it through native control laws.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GuidanceInput {
+    pub tick: u64,
+    pub intent: GuidanceIntent,
+    pub propulsion: PropulsionDemand,
+}
+
+impl GuidanceInput {
+    pub fn validate(&self) -> Result<(), thessa_flight_control::ControlError> {
+        self.intent.validate()?;
+        PropulsionDemand::new(self.propulsion.normalized).map(|_| ())
+    }
+}
+
 /// Authoritative per-tick snapshot for one vehicle. Lean by design: render
 ///-only derivations (regime labels, map projections) stay client-side.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -105,6 +123,10 @@ pub fn decode_payload<T: for<'a> Deserialize<'a>>(envelope: &Envelope) -> Result
 
 pub fn encode_input(input: &ClientInput) -> Result<Vec<u8>, CodecError> {
     encode_frame(kind::CLIENT_INPUT, input)
+}
+
+pub fn encode_guidance(input: &GuidanceInput) -> Result<Vec<u8>, CodecError> {
+    encode_frame(kind::GUIDANCE_COMMAND, input)
 }
 
 pub fn encode_snapshot(snapshot: &Snapshot) -> Result<Vec<u8>, CodecError> {
@@ -162,6 +184,23 @@ mod tests {
             wake_notice: None,
             flight_error: None,
         }
+    }
+
+    #[test]
+    fn typed_guidance_input_roundtrips_alongside_legacy_input() {
+        let input = GuidanceInput {
+            tick: 12,
+            intent: GuidanceIntent::ManualAxes(Default::default()),
+            propulsion: PropulsionDemand::new(1.0).unwrap(),
+        };
+        let frame = encode_guidance(&input).expect("encode");
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.push(&frame).expect("split");
+        let envelope = decode_frame(&frames[0]).expect("envelope");
+        assert_eq!(envelope.kind, kind::GUIDANCE_COMMAND);
+        let back: GuidanceInput = decode_payload(&envelope).expect("payload");
+        assert_eq!(back, input);
+        back.validate().expect("valid guidance");
     }
 
     #[test]

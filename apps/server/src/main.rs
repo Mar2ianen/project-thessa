@@ -13,9 +13,12 @@ use std::io::{Read, Write};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
-use glam::DVec3;
-use thessa_flight_authority::{ControlMode, FlightAuthority, canonical_launch_setup};
-use thessa_flight_net::{ClientInput, Command, Snapshot};
+use glam::{DQuat, DVec3};
+use thessa_flight_authority::{
+    ControlMode, FlightAuthority, FlightPolicy, GuidanceIntent, PropulsionDemand,
+    canonical_launch_setup,
+};
+use thessa_flight_net::{ClientInput, Command, GuidanceInput, Snapshot};
 use thessa_protocol::{FrameDecoder, kind};
 use thessa_sim_core::{BakedEphemeris, BodyId, SimTime, SystemConfig};
 use thread_bake::ThreadBakeQueue;
@@ -138,6 +141,9 @@ struct Sim {
     authority: FlightAuthority,
     ephemeris: BakedEphemeris,
     control_mode: ControlMode,
+    /// Latest typed guidance command. Legacy ClientInput clears this so the
+    /// two input protocols cannot fight over the same vehicle.
+    guidance: Option<(GuidanceIntent, PropulsionDemand)>,
     clients: std::collections::HashMap<String, ClientVote>,
     advanced_s: f64,
     compute_s: f64,
@@ -170,6 +176,7 @@ impl Sim {
             authority,
             ephemeris,
             control_mode: ControlMode::Navball,
+            guidance: None,
             clients: std::collections::HashMap::new(),
             advanced_s: 0.0,
             compute_s: 0.0,
@@ -219,6 +226,7 @@ impl Sim {
             return false;
         }
         let mut force_snapshot = false;
+        self.guidance = None;
         let has_engine_command = input
             .commands
             .iter()
@@ -295,6 +303,34 @@ impl Sim {
         force_snapshot
     }
 
+    fn apply_guidance(&mut self, id: &str, input: &GuidanceInput) -> bool {
+        if !self.clients.contains_key(id) {
+            return false;
+        }
+        if let Err(error) = input.validate() {
+            self.authority.flight_error = Some(format!("invalid guidance input: {error}"));
+            self.authority.engine_active = false;
+            return true;
+        }
+        let mode = match self.authority.apply_guidance_intent(&input.intent) {
+            Ok(mode) => mode,
+            Err(error) => {
+                self.authority.flight_error = Some(error.to_string());
+                self.authority.engine_active = false;
+                return true;
+            }
+        };
+        // The starter vehicle has no reverse or augmentation actuator yet.
+        // Apply the native policy at the boundary instead of silently giving
+        // a script extra thrust authority.
+        let propulsion = FlightPolicy::default().constrain_propulsion(input.propulsion, true, true);
+        self.authority.throttle = propulsion.normalized;
+        self.authority.engine_active = propulsion.normalized > 0.0;
+        self.control_mode = mode;
+        self.guidance = Some((input.intent.clone(), propulsion));
+        true
+    }
+
     /// Advance one requested wall quantum (or a benchmark chunk); returns
     /// sim-seconds actually advanced. The optional budget only makes ordinary
     /// physics cooperative; it never changes the fixed solver dt.
@@ -312,9 +348,21 @@ impl Sim {
         }
         let before = self.authority.flight_time_s;
         let started = Instant::now();
-        let result =
+        let guidance = self.guidance.clone();
+        let result = if let Some((intent, propulsion)) = guidance {
+            // Typed guidance uses the same authoritative stepper; the legacy
+            // mode is only the compatibility representation used by traces.
+            self.authority.advance_guidance_with_budget(
+                &self.ephemeris,
+                &intent,
+                propulsion,
+                chunk_s,
+                budget,
+            )
+        } else {
             self.authority
-                .advance_with_budget(&self.ephemeris, self.control_mode, chunk_s, budget);
+                .advance_with_budget(&self.ephemeris, self.control_mode, chunk_s, budget)
+        };
         self.compute_s += started.elapsed().as_secs_f64();
         result.map_err(|e| {
                 self.authority.engine_active = false;
@@ -436,6 +484,14 @@ fn decode_client_input(frame: &[u8]) -> Option<ClientInput> {
     thessa_flight_net::decode_payload::<ClientInput>(&envelope).ok()
 }
 
+fn decode_guidance_input(frame: &[u8]) -> Option<GuidanceInput> {
+    let envelope = thessa_flight_net::decode_frame(frame).ok()?;
+    if envelope.kind != kind::GUIDANCE_COMMAND {
+        return None;
+    }
+    thessa_flight_net::decode_payload::<GuidanceInput>(&envelope).ok()
+}
+
 fn enqueue_client_inputs(
     id: &str,
     frames: impl IntoIterator<Item = Vec<u8>>,
@@ -445,6 +501,12 @@ fn enqueue_client_inputs(
         if let Some(input) = decode_client_input(&frame)
             && upstream
                 .send(Upstream::Input(id.to_string(), input))
+                .is_err()
+        {
+            return false;
+        } else if let Some(guidance) = decode_guidance_input(&frame)
+            && upstream
+                .send(Upstream::Guidance(id.to_string(), guidance))
                 .is_err()
         {
             return false;
@@ -486,6 +548,7 @@ fn driver_sleep_duration(
 /// driver and both async/sync writers share one type.
 enum Upstream {
     Input(String, ClientInput),
+    Guidance(String, GuidanceInput),
     Leave(String),
     Subscribe(String, tokio::sync::mpsc::UnboundedSender<Vec<u8>>),
 }
@@ -578,6 +641,9 @@ impl Driver {
             processed += 1;
             match message {
                 Upstream::Input(id, input) => pending.entry(id).or_default().push(input),
+                Upstream::Guidance(id, input) => {
+                    force_snapshot |= self.sim.apply_guidance(&id, &input);
+                }
                 Upstream::Leave(id) => {
                     if let Some(mut queued) = pending.remove(&id)
                         && let Some(input) = queued.take()
@@ -1067,6 +1133,28 @@ mod tests {
             gear_down: false,
             commands,
         }
+    }
+
+    #[test]
+    fn typed_guidance_reaches_the_authoritative_stepper() {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let mut sim = Sim::new(ephemeris, reference_body, false, true).expect("sim");
+        sim.register("pilot");
+        let guidance = GuidanceInput {
+            tick: 0,
+            intent: GuidanceIntent::Attitude {
+                target_body_to_inertial: DQuat::from_rotation_y(0.05),
+                roll_policy: thessa_flight_authority::RollPolicy::Hold,
+            },
+            propulsion: PropulsionDemand::new(0.0).unwrap(),
+        };
+        assert!(sim.apply_guidance("pilot", &guidance));
+        sim.advance_chunk(0.02).expect("advance typed guidance");
+        assert_eq!(sim.control_mode, ControlMode::Navball);
+        assert!(sim.authority.state.position_inertial_m.is_finite());
     }
 
     #[test]

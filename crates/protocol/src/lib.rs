@@ -28,6 +28,9 @@ pub mod kind {
     pub const SNAPSHOT: u32 = 4;
     pub const COMMAND: u32 = 5;
     pub const EVENT: u32 = 6;
+    /// Typed guidance intent. Legacy CLIENT_INPUT remains available during
+    /// the protocol migration and can be retired after both peers migrate.
+    pub const GUIDANCE_COMMAND: u32 = 7;
 }
 
 /// Versioned envelope around one postcard-encoded game payload.

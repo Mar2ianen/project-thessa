@@ -13,9 +13,17 @@
 //! green.
 
 pub mod bake;
+pub(crate) mod control;
 pub mod launch_site;
 pub mod mode;
 pub mod runtime;
+
+pub use thessa_flight_control::{
+    ActuatorGroup, AircraftControlLaw, AllocationResult, ControlDemand, ControlError,
+    DirectControlLaw, DirectionFrame, DirectionTarget, EffectorContribution, FlightControlLaw,
+    FlightPolicy, GuidanceIntent, InputScheme, PilotAxes, PropulsionDemand, RollPolicy,
+    SpacecraftControlLaw, TrajectoryPlanId, allocate_wrench,
+};
 
 pub use bake::{BakeQueue, BakedRails, InlineBakeQueue, RailsBakeRequest};
 pub use launch_site::{canonical_launch_setup, canonical_world_field, survey_bookmarks};

@@ -15,6 +15,7 @@ use std::{
 };
 
 use glam::{DMat3, DQuat, DVec3};
+use thessa_flight_control::{GuidanceIntent, PropulsionDemand};
 use thessa_sim_core::{
     AeroConfig, AeroModel, AeroSimdScratch, AeroState, AtmosphereConfig, AtmosphereError,
     BakedEphemeris, BodyId, BodyState, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_VELOCITY_TOL_MPS,
@@ -25,7 +26,13 @@ use thessa_sim_core::{
 };
 use thessa_worldgen_rocky::field::{ObstacleTrackCertificate, PlanetField};
 
-use crate::{BakeQueue, BakedRails, ControlMode, FlightRegime, InlineBakeQueue, RailsBakeRequest};
+use crate::{
+    BakeQueue, BakedRails, ControlMode, FlightRegime, InlineBakeQueue, RailsBakeRequest,
+    control::{
+        PILOT_ATTITUDE_COMMAND_RATE_RAD_S, SURFACE_COMMAND_RATE_S, allocate_rcs, attitude_demand,
+        slew_surface_command, solve_aero_trim, surface_commands,
+    },
+};
 
 /// Advance the exact production flight path at a fixed physics cadence.
 /// Render frames only contribute elapsed time; they never set solver dt.
@@ -33,15 +40,6 @@ pub const FLIGHT_STEP_S: f64 = WORLD_TICK_S;
 /// Baked coverage ahead (s) below which a fresh worker bake starts while
 /// riding, so sustained warp never stalls at the horizon end.
 const PROACTIVE_REBAKE_AHEAD_S: f64 = 86_400.0;
-const SURFACE_COMMAND_RATE_S: f64 = 2.4; // 60 deg/s for the 25-degree elevator
-// Residual moment below which the trim Newton skips its second pass.
-// Derivation: one tick can inject at most tol*dt/I_min of attitude rate
-// (50*1/120/31000 = 1.3e-5 rad/s on the lightest X-15 axis), and SAS
-// re-solves from measured attitude every tick, so this is a bounded
-// offset, never drift. 50 N m is 20x below the 1000 N m saturation flag
-// and 20-80x below RCS authority (1120-4000 N m), so no actuator or
-// saturation decision can flip inside the tolerance.
-const TRIM_SECOND_PASS_RESIDUAL_TOL_NM: f64 = 50.0;
 
 /// Trim-conditioning threshold, not a force cutoff. At low density the
 /// surface-response matrix becomes ill-conditioned; RCS handles attitude.
@@ -62,8 +60,6 @@ const PILOT_START_ALTITUDE_M: f64 = 500.0;
 const MAX_PILOT_ALTITUDE_M: f64 = 2.0e10;
 const MAX_PILOT_RELATIVE_SPEED_MPS: f64 = 50_000.0;
 const MAX_PILOT_ANGULAR_RATE_RPS: f64 = 25.0;
-// KSP-style attitude keys change the SAS target at a pilotable rate.
-const PILOT_ATTITUDE_COMMAND_RATE_RAD_S: f64 = 0.16;
 
 /// Result of asking the rails fast path to serve the current accumulator.
 /// `WaitingForBake` is deliberately distinct from `NotEligible`: the former
@@ -630,14 +626,93 @@ impl FlightAuthority {
     }
 
     pub fn command_controls(&mut self, pitch: f64, yaw: f64, roll: f64) {
-        // Elevator, rudder, left aileron, right aileron. The split ailerons
-        // preserve roll authority without assigning a panel to two channels.
+        // Body +X forward, +Z up implies physical right = -Y.
+        // r x F: aft-tail downforce raises the nose (-Y); downforce at -Y
+        // rolls right (+X); aft-tail +Y force yaws right (-Z).
         let _ = self
             .vehicle
-            // Body +X forward, +Z up implies physical right = -Y.
-            // r x F: aft-tail downforce raises the nose (-Y); downforce
-            // at -Y rolls right (+X); aft-tail +Y force yaws right (-Z).
-            .apply_control_inputs(&[-pitch, yaw, -roll, roll]);
+            .apply_control_inputs(&surface_commands(pitch, yaw, roll));
+    }
+
+    /// Apply a typed guidance intent through the compatibility control path.
+    /// The returned mode is an execution detail for the legacy stepper; no
+    /// caller gets mutable access to physics or actuator state.
+    pub fn apply_guidance_intent(
+        &mut self,
+        intent: &GuidanceIntent,
+    ) -> Result<ControlMode, FlightError> {
+        intent
+            .validate()
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+        match intent {
+            GuidanceIntent::ManualAxes(axes) => {
+                self.control_input = DVec3::new(axes.pitch, axes.yaw, axes.roll)
+                    .clamp(DVec3::splat(-1.0), DVec3::ONE);
+                self.sas_enabled = false;
+                Ok(ControlMode::Direct)
+            }
+            GuidanceIntent::AngularRate { rate_body_rps } => {
+                // The compatibility rate law consumes normalized control
+                // axes and applies its native 0.16 rad/s scale. Preserve the
+                // requested body-rate signs through the inverse mapping and
+                // clamp only at the physical legacy input boundary.
+                let input = DVec3::new(
+                    -rate_body_rps.y / PILOT_ATTITUDE_COMMAND_RATE_RAD_S,
+                    -rate_body_rps.z / PILOT_ATTITUDE_COMMAND_RATE_RAD_S,
+                    rate_body_rps.x / PILOT_ATTITUDE_COMMAND_RATE_RAD_S,
+                );
+                self.control_input = input.clamp(DVec3::splat(-1.0), DVec3::ONE);
+                self.sas_enabled = false;
+                Ok(ControlMode::Rate)
+            }
+            GuidanceIntent::Attitude {
+                target_body_to_inertial,
+                ..
+            } => {
+                self.sas_target_orientation = *target_body_to_inertial;
+                self.control_input = DVec3::ZERO;
+                self.sas_enabled = true;
+                Ok(ControlMode::Navball)
+            }
+            GuidanceIntent::VelocityDirection { .. }
+            | GuidanceIntent::FlightPath { .. }
+            | GuidanceIntent::Trajectory { .. } => Err(FlightError::InvalidInput(
+                "guidance intent needs a planner before the starter runtime can execute it".into(),
+            )),
+        }
+    }
+
+    /// Execute one typed-guidance quantum. Starter propulsion currently
+    /// realizes nominal demand only; reverse/augmentation are validated by
+    /// the policy/vehicle layer before they can reach this physical model.
+    pub fn advance_guidance(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        intent: &GuidanceIntent,
+        propulsion: PropulsionDemand,
+        elapsed_s: f64,
+    ) -> Result<(), FlightError> {
+        self.advance_guidance_with_budget(ephemeris, intent, propulsion, elapsed_s, None)
+    }
+
+    /// Budgeted typed-guidance entry point used by the server driver. It keeps
+    /// the same cooperative pacing guarantees as legacy `ControlMode` input.
+    pub fn advance_guidance_with_budget(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        intent: &GuidanceIntent,
+        propulsion: PropulsionDemand,
+        elapsed_s: f64,
+        budget: Option<std::time::Duration>,
+    ) -> Result<(), FlightError> {
+        let mode = self.apply_guidance_intent(intent)?;
+        if !propulsion.normalized.is_finite() || !(0.0..=1.0).contains(&propulsion.normalized) {
+            return Err(FlightError::InvalidInput(
+                "starter propulsion accepts nominal demand in [0, 1]; apply flight policy before execution".into(),
+            ));
+        }
+        self.throttle = propulsion.normalized;
+        self.advance_with_budget(ephemeris, mode, elapsed_s, budget)
     }
 
     pub fn thrust_n(&self) -> f64 {
@@ -727,29 +802,6 @@ fn x15_vehicle() -> Result<VehicleDefinition, String> {
     X15StarterProfile::new()
         .map(|profile| profile.vehicle)
         .map_err(|error| error.to_string())
-}
-
-fn body_axes(command: DVec3) -> DVec3 {
-    DVec3::new(command.z, -command.x, -command.y)
-}
-
-// Each opposed pair has zero net force. Locations and force directions are
-// expressed in body metres/newtons; these are prototype jets, not X-15 data.
-fn rcs_couples() -> [DVec3; 3] {
-    [
-        2.0 * DVec3::new(0.0, 1.4, 0.0).cross(DVec3::Z * 400.0),
-        2.0 * DVec3::new(-5.0, 0.0, 0.0).cross(DVec3::Z * 400.0),
-        2.0 * DVec3::new(5.0, 0.0, 0.0).cross(DVec3::Y * 400.0),
-    ]
-}
-
-fn rcs_moment(request: DVec3, enabled: bool) -> DVec3 {
-    if !enabled {
-        return DVec3::ZERO;
-    }
-    rcs_couples().into_iter().fold(DVec3::ZERO, |sum, couple| {
-        sum + couple * (request.dot(couple) / couple.length_squared()).clamp(-1.0, 1.0)
-    })
 }
 
 impl FlightAuthority {
@@ -1274,64 +1326,30 @@ impl FlightAuthority {
         kinematics: LocalAirKinematics,
         mode: ControlMode,
     ) -> Result<DVec3, FlightError> {
-        let axes = body_axes(self.control_input);
+        let attitude = attitude_demand(
+            mode,
+            self.sas_enabled,
+            self.control_input,
+            self.state,
+            self.sas_target_orientation,
+            self.vehicle.mass_properties.inertia_body_kg_m2,
+        );
+        self.sas_target_orientation = attitude.target_orientation;
+        let axes = attitude.axes;
         let assisted = mode != ControlMode::Direct;
-        let attitude_hold =
-            self.sas_enabled && matches!(mode, ControlMode::Navball | ControlMode::MouseAim);
-        let desired_rate = if attitude_hold && axes.length_squared() > 1.0e-8 {
-            // Manual input overrides attitude hold. Capture the achieved
-            // attitude, so a long turn cannot wind an unreachable target past
-            // 180 degrees and make shortest-path SAS reverse the manoeuvre.
-            self.sas_target_orientation = self.state.orientation_body_to_inertial;
-            axes * PILOT_ATTITUDE_COMMAND_RATE_RAD_S
-        } else if attitude_hold {
-            let mut error =
-                self.state.orientation_body_to_inertial.inverse() * self.sas_target_orientation;
-            // q and -q represent the same attitude; use the short rotation.
-            if error.w < 0.0 {
-                error = -error;
-            }
-            let angle = error.to_scaled_axis();
-            let couples = rcs_couples();
-            let inertia = self.vehicle.mass_properties.inertia_body_kg_m2;
-            let acceleration = DVec3::new(
-                couples[0].x / inertia.x_axis.x,
-                couples[1].y / inertia.y_axis.y,
-                couples[2].z / inertia.z_axis.z,
-            );
-            // Brake early enough for the finite jets. A fixed high-gain
-            // attitude loop saturates in vacuum and keeps overshooting.
-            let braking_rate = (acceleration * angle.abs() * 0.5).sqrt();
-            (angle * 1.6)
-                .clamp(-braking_rate, braking_rate)
-                .clamp_length_max(0.35)
-        } else {
-            // Capturing here avoids a jump to an old SAS target when re-enabled.
-            self.sas_target_orientation = self.state.orientation_body_to_inertial;
-            axes * PILOT_ATTITUDE_COMMAND_RATE_RAD_S
-        };
-        let inertia = self.vehicle.mass_properties.inertia_body_kg_m2;
-        let omega = self.state.angular_velocity_body_rps;
-        let requested = inertia * ((desired_rate - omega) / 0.35) + omega.cross(inertia * omega);
+        let requested = attitude.requested_moment_nm;
         // Vacuum fast path: no air load exists, so the trim solve and the
         // response evaluation are skipped outright (exactly zero aero
         // moment); attitude flies on RCS alone.
         if self.regime == FlightRegime::Coast {
-            let jets = if assisted {
-                rcs_moment(requested, self.rcs_enabled)
-            } else {
-                let couples = rcs_couples();
-                rcs_moment(
-                    DVec3::new(couples[0].x, couples[1].y, couples[2].z) * axes,
-                    self.rcs_enabled,
-                )
-            };
-            self.actuator_saturated = assisted && (requested - jets).length() > 1_000.0;
-            return Ok(jets);
+            let allocation = allocate_rcs(requested, DVec3::ZERO, axes, assisted, self.rcs_enabled);
+            self.actuator_saturated = allocation.saturated;
+            return Ok(allocation.moment_body_nm);
         }
         let environment = self
             .atmosphere
             .aero_environment(kinematics.altitude_m.max(0.0), DVec3::ZERO)?;
+        let omega = self.state.angular_velocity_body_rps;
         let aero_state = AeroState::new(kinematics.air_velocity_body_mps, omega);
         let mut command = if assisted {
             self.surface_input
@@ -1344,58 +1362,21 @@ impl FlightAuthority {
         // raw passthrough, so only the assisted solve is gated.
         let solve_trim = assisted && self.regime == FlightRegime::Aero;
         if solve_trim {
-            // Linearize actual panel response at this flow/deflection. The
-            // first pass always runs; the second only pays when it can change
-            // the answer. A first pass that leaves the command untouched
-            // (singular effectiveness) makes the second an identical replay,
-            // so it breaks exact. A residual within
-            // TRIM_SECOND_PASS_RESIDUAL_TOL_NM needs no coupling correction
-            // (bounded offset, re-solved next tick). In cruise both skips
-            // fire and the tick spends 5-7 aero evaluations instead of 9;
-            // near stall the full two passes run as before.
             self.trim_solves += 1;
-            for pass in 0..2 {
-                let before = command;
-                self.command_controls(command.x, command.y, command.z);
-                let baseline = self
-                    .aero_model
-                    .evaluate_state(aero_state, environment, &self.vehicle.aero_geometry)?
-                    .moment_body_nm;
-                if pass == 1
-                    && !self.force_trim_two_pass
-                    && (requested - baseline).length() <= TRIM_SECOND_PASS_RESIDUAL_TOL_NM
-                {
-                    break;
-                }
-                let mut columns = [DVec3::ZERO; 3];
-                for axis in 0..3 {
-                    let mut probe = command;
-                    let delta = if command[axis] > 0.9 { -0.02 } else { 0.02 };
-                    probe[axis] += delta;
-                    self.command_controls(probe.x, probe.y, probe.z);
-                    columns[axis] = (self
-                        .aero_model
-                        .evaluate_state(aero_state, environment, &self.vehicle.aero_geometry)?
-                        .moment_body_nm
-                        - baseline)
-                        / delta;
-                }
-                let effectiveness = DMat3::from_cols(columns[0], columns[1], columns[2]);
-                if effectiveness.determinant().abs() > 1.0e-6 {
-                    command = (command + effectiveness.inverse() * (requested - baseline))
-                        .clamp(DVec3::splat(-1.0), DVec3::ONE);
-                }
-                if pass == 0 && command == before {
-                    break;
-                }
-                if pass == 1 {
-                    self.trim_second_passes += 1;
-                }
-            }
+            let result = solve_aero_trim(
+                &mut self.vehicle,
+                &self.aero_model,
+                aero_state,
+                environment,
+                requested,
+                command,
+                self.force_trim_two_pass,
+            )?;
+            command = result.command;
+            self.trim_second_passes += result.second_passes;
         }
         let max_change = SURFACE_COMMAND_RATE_S * FLIGHT_STEP_S;
-        self.surface_input += (command - self.surface_input)
-            .clamp(DVec3::splat(-max_change), DVec3::splat(max_change));
+        self.surface_input = slew_surface_command(self.surface_input, command, max_change);
         self.command_controls(
             self.surface_input.x,
             self.surface_input.y,
@@ -1405,17 +1386,9 @@ impl FlightAuthority {
             .aero_model
             .evaluate_state(aero_state, environment, &self.vehicle.aero_geometry)?
             .moment_body_nm;
-        let jets = if assisted {
-            rcs_moment(requested - actual_aero, self.rcs_enabled)
-        } else {
-            let couples = rcs_couples();
-            rcs_moment(
-                DVec3::new(couples[0].x, couples[1].y, couples[2].z) * axes,
-                self.rcs_enabled,
-            )
-        };
-        self.actuator_saturated = assisted && (requested - actual_aero - jets).length() > 1_000.0;
-        Ok(jets)
+        let allocation = allocate_rcs(requested, actual_aero, axes, assisted, self.rcs_enabled);
+        self.actuator_saturated = allocation.saturated;
+        Ok(allocation.moment_body_nm)
     }
 
     /// Upper-atmosphere band model: between the vacuum cutoff and the
@@ -1893,6 +1866,26 @@ mod tests {
     }
 
     #[test]
+    fn typed_guidance_executes_through_the_legacy_authority_adapter() {
+        let (ephemeris, mut flight) = fixture();
+        let intent = GuidanceIntent::Attitude {
+            target_body_to_inertial: DQuat::from_rotation_y(0.1),
+            roll_policy: thessa_flight_control::RollPolicy::Hold,
+        };
+        flight
+            .advance_guidance(
+                &ephemeris,
+                &intent,
+                PropulsionDemand::new(0.0).unwrap(),
+                FLIGHT_STEP_S,
+            )
+            .unwrap();
+        assert_eq!(flight.sas_target_orientation, DQuat::from_rotation_y(0.1));
+        assert!(flight.state.position_inertial_m.is_finite());
+        assert!(flight.last_forces.is_some());
+    }
+
+    #[test]
     fn solver_guard_reads_dominant_frame_not_launch_frame() {
         // Live failure: a Nereid escape at 33 km/s Nereid-relative latched
         // FLIGHT STOPPED because the guard measured 50+ km/s against the
@@ -2119,13 +2112,16 @@ mod tests {
                 .unwrap()
                 .moment_body_nm;
             assert!(
-                (moment - base).dot(body_axes(command)) > 0.0,
+                (moment - base).dot(crate::control::body_axes(command)) > 0.0,
                 "wrong surface sign for {command:?}"
             );
         }
-        assert_eq!(rcs_moment(DVec3::splat(1.0e9), false), DVec3::ZERO);
         assert_eq!(
-            rcs_moment(DVec3::splat(1.0e9), true),
+            crate::control::rcs_moment(DVec3::splat(1.0e9), false),
+            DVec3::ZERO
+        );
+        assert_eq!(
+            crate::control::rcs_moment(DVec3::splat(1.0e9), true),
             DVec3::new(1120.0, 4000.0, 4000.0)
         );
     }

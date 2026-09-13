@@ -251,13 +251,13 @@ impl AircraftControlLaw {
     ) -> Result<ControlDemand, ControlError> {
         state.validate()?;
         intent.validate()?;
-        validate_optional_limit(self.max_aoa_rad, true)?;
-        validate_optional_limit(self.max_positive_g, true)?;
-        validate_optional_limit(self.max_negative_g, true)?;
+        validate_optional_limit(self.max_aoa_rad)?;
+        validate_optional_limit(self.max_positive_g)?;
+        validate_optional_limit(self.max_negative_g)?;
         if !self.max_translation_force_n.is_finite() || self.max_translation_force_n < 0.0 {
             return Err(ControlError::InvalidController);
         }
-        let (mut desired_rate, force_body_n) = match intent {
+        let (desired_rate, force_body_n) = match intent {
             GuidanceIntent::ManualAxes(axes) => (
                 DVec3::new(axes.roll, -axes.pitch, -axes.yaw) * 0.16,
                 axes.translation * self.max_translation_force_n,
@@ -276,37 +276,36 @@ impl AircraftControlLaw {
             }
             _ => return Err(ControlError::UnsupportedIntent),
         };
-        if let Some(max_rate) = self.max_aoa_rad {
-            let speed = state.air_velocity_body_mps.length();
-            let aoa = if speed > 1.0e-6 {
-                (-state.air_velocity_body_mps.z).atan2(state.air_velocity_body_mps.x)
-            } else {
-                0.0
-            };
-            if aoa.abs() >= max_rate {
-                desired_rate.y = 0.0;
-            }
-        }
-        if self
-            .max_positive_g
-            .is_some_and(|limit| state.load_factor_g >= limit)
-            || self
-                .max_negative_g
-                .is_some_and(|limit| state.load_factor_g <= -limit)
-        {
-            desired_rate.y = 0.0;
-        }
         if !desired_rate.is_finite() {
             return Err(ControlError::NonFinite("desired aircraft rate"));
         }
         let omega = state.attitude.angular_velocity_body_rps;
         let moment = state.attitude.inertia_body_kg_m2 * ((desired_rate - omega) / 0.35)
             + omega.cross(state.attitude.inertia_body_kg_m2 * omega);
-        Ok(ControlDemand {
+        let demand = ControlDemand {
             force_body_n,
             moment_body_nm: moment,
             propulsion,
-        })
+        };
+        FlightPolicy {
+            max_aoa_rad: self.max_aoa_rad,
+            max_positive_g: self.max_positive_g,
+            max_negative_g: self.max_negative_g,
+            ..FlightPolicy::default()
+        }
+        .constrain_demand_with_context(
+            demand,
+            true,
+            true,
+            FlightPolicyContext {
+                angle_of_attack_rad: if state.air_velocity_body_mps.length() > 1.0e-6 {
+                    (-state.air_velocity_body_mps.z).atan2(state.air_velocity_body_mps.x)
+                } else {
+                    0.0
+                },
+                load_factor_g: state.load_factor_g,
+            },
+        )
     }
 }
 
@@ -371,18 +370,8 @@ impl AttitudeState {
     }
 }
 
-fn validate_optional_limit(
-    limit: Option<f64>,
-    strictly_positive: bool,
-) -> Result<(), ControlError> {
-    if limit.is_some_and(|value| {
-        !value.is_finite()
-            || if strictly_positive {
-                value <= 0.0
-            } else {
-                value < 0.0
-            }
-    }) {
+fn validate_optional_limit(limit: Option<f64>) -> Result<(), ControlError> {
+    if limit.is_some_and(|value| !value.is_finite() || value <= 0.0) {
         return Err(ControlError::InvalidController);
     }
     Ok(())
@@ -468,6 +457,14 @@ pub struct FlightPolicy {
     pub augmentation_allowed: bool,
 }
 
+/// Current flight condition used by policy protections that cannot be
+/// inferred from a demand alone.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlightPolicyContext {
+    pub angle_of_attack_rad: f64,
+    pub load_factor_g: f64,
+}
+
 impl FlightPolicy {
     /// Apply policy at the guidance/control boundary.  The policy owns
     /// permission checks while the returned demand remains a pure value: no
@@ -480,6 +477,39 @@ impl FlightPolicy {
     ) -> ControlDemand {
         demand.propulsion = self.constrain_propulsion(demand.propulsion, airborne, in_atmosphere);
         demand
+    }
+
+    /// Apply propulsion permissions and aircraft envelope protections to a
+    /// complete demand. At an active AoA or load-factor limit, pitch torque
+    /// is removed while the allocator remains free to realize roll/yaw and
+    /// any still-permitted translation.
+    pub fn constrain_demand_with_context(
+        self,
+        mut demand: ControlDemand,
+        airborne: bool,
+        in_atmosphere: bool,
+        context: FlightPolicyContext,
+    ) -> Result<ControlDemand, ControlError> {
+        if !context.angle_of_attack_rad.is_finite() || !context.load_factor_g.is_finite() {
+            return Err(ControlError::NonFinite("flight policy context"));
+        }
+        validate_optional_limit(self.max_aoa_rad)?;
+        validate_optional_limit(self.max_positive_g)?;
+        validate_optional_limit(self.max_negative_g)?;
+        demand = self.constrain_demand(demand, airborne, in_atmosphere);
+        if self
+            .max_aoa_rad
+            .is_some_and(|limit| context.angle_of_attack_rad.abs() >= limit)
+            || self
+                .max_positive_g
+                .is_some_and(|limit| context.load_factor_g >= limit)
+            || self
+                .max_negative_g
+                .is_some_and(|limit| context.load_factor_g <= -limit)
+        {
+            demand.moment_body_nm.y = 0.0;
+        }
+        Ok(demand)
     }
 
     /// Apply permission limits without touching rigid-body or actuator state.

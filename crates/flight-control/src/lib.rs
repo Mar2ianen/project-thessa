@@ -342,6 +342,19 @@ pub struct FlightPolicy {
 }
 
 impl FlightPolicy {
+    /// Apply policy at the guidance/control boundary.  The policy owns
+    /// permission checks while the returned demand remains a pure value: no
+    /// rigid-body, controller, or actuator state is mutated here.
+    pub fn constrain_demand(
+        self,
+        mut demand: ControlDemand,
+        airborne: bool,
+        in_atmosphere: bool,
+    ) -> ControlDemand {
+        demand.propulsion = self.constrain_propulsion(demand.propulsion, airborne, in_atmosphere);
+        demand
+    }
+
     /// Apply permission limits without touching rigid-body or actuator state.
     pub fn constrain_propulsion(
         self,
@@ -534,6 +547,33 @@ mod tests {
                 .normalized,
             0.0
         );
+    }
+
+    #[test]
+    fn policy_constrains_a_complete_demand_without_mutating_the_wrench() {
+        let demand = ControlDemand {
+            force_body_n: DVec3::new(1.0, 2.0, 3.0),
+            moment_body_nm: DVec3::new(4.0, 5.0, 6.0),
+            propulsion: PropulsionDemand::new(-0.2).unwrap(),
+        };
+        let constrained = FlightPolicy::default().constrain_demand(demand, true, true);
+        assert_eq!(constrained.force_body_n, demand.force_body_n);
+        assert_eq!(constrained.moment_body_nm, demand.moment_body_nm);
+        assert_eq!(constrained.propulsion.normalized, 0.0);
+
+        let augmentation = FlightPolicy {
+            augmentation_allowed: true,
+            ..FlightPolicy::default()
+        }
+        .constrain_demand(
+            ControlDemand {
+                propulsion: PropulsionDemand::new(1.2).unwrap(),
+                ..ControlDemand::zero()
+            },
+            true,
+            false,
+        );
+        assert_eq!(augmentation.propulsion.normalized, 1.2);
     }
 
     #[test]

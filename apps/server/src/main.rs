@@ -607,12 +607,9 @@ impl Sim {
                 Ok(true)
             }
             PlanAction::Burn { demand, .. } => {
-                let propulsion =
-                    FlightPolicy::default().constrain_propulsion(demand.propulsion, true, true);
-                self.plan_demand = Some(ControlDemand {
-                    propulsion,
-                    ..demand
-                });
+                let demand = FlightPolicy::default().constrain_demand(demand, true, true);
+                let propulsion = demand.propulsion;
+                self.plan_demand = Some(demand);
                 self.authority.control_input = DVec3::ZERO;
                 self.authority.sas_enabled = false;
                 self.authority.throttle = propulsion.normalized;

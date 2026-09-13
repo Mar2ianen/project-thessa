@@ -6,6 +6,9 @@
 //! higher-level guidance and allocator graph can be layered on them later.
 
 use glam::{DMat3, DQuat, DVec3};
+use thessa_flight_control::{
+    ActuatorGroup, ControlDemand, EffectorContribution, PropulsionDemand, allocate_wrench,
+};
 use thessa_sim_core::{
     AeroEnvironment, AeroModel, AeroState, FlightError, PanelAeroModel, RigidBodyState,
     VehicleDefinition,
@@ -105,9 +108,28 @@ pub(crate) fn rcs_moment(request: DVec3, enabled: bool) -> DVec3 {
     if !enabled {
         return DVec3::ZERO;
     }
-    rcs_couples().into_iter().fold(DVec3::ZERO, |sum, couple| {
-        sum + couple * (request.dot(couple) / couple.length_squared()).clamp(-1.0, 1.0)
-    })
+    let couples = rcs_couples();
+    let effectors: [EffectorContribution; 6] = std::array::from_fn(|index| {
+        let couple = couples[index / 2] * if index % 2 == 0 { 1.0 } else { -1.0 };
+        EffectorContribution {
+            group: ActuatorGroup::Rcs,
+            force_per_command_n: DVec3::ZERO,
+            moment_per_command_nm: couple,
+            max_command: 1.0,
+            weight: 1.0,
+        }
+    });
+    match allocate_wrench(
+        ControlDemand {
+            moment_body_nm: request,
+            propulsion: PropulsionDemand { normalized: 0.0 },
+            force_body_n: DVec3::ZERO,
+        },
+        &effectors,
+    ) {
+        Ok(allocation) => allocation.achieved_moment_body_nm,
+        Err(_) => DVec3::ZERO,
+    }
 }
 
 /// A translation command uses opposed RCS jets as a force-balanced pair. The
@@ -122,17 +144,41 @@ pub(crate) struct RcsForceAllocation {
 }
 
 pub(crate) fn allocate_rcs_force(request: DVec3, enabled: bool) -> RcsForceAllocation {
-    let force_body_n = if enabled {
-        request.clamp(
-            DVec3::splat(-RCS_TRANSLATION_FORCE_N),
-            DVec3::splat(RCS_TRANSLATION_FORCE_N),
-        )
-    } else {
-        DVec3::ZERO
+    if !enabled {
+        return RcsForceAllocation {
+            force_body_n: DVec3::ZERO,
+            saturated: request.length_squared() > 1.0e-12,
+        };
+    }
+    let axes = [DVec3::X, DVec3::Y, DVec3::Z];
+    let effectors: [EffectorContribution; 6] = std::array::from_fn(|index| EffectorContribution {
+        group: ActuatorGroup::Rcs,
+        force_per_command_n: axes[index / 2]
+            * (if index % 2 == 0 {
+                RCS_TRANSLATION_FORCE_N
+            } else {
+                -RCS_TRANSLATION_FORCE_N
+            }),
+        moment_per_command_nm: DVec3::ZERO,
+        max_command: 1.0,
+        weight: 1.0,
+    });
+    let Ok(allocation) = allocate_wrench(
+        ControlDemand {
+            force_body_n: request,
+            moment_body_nm: DVec3::ZERO,
+            propulsion: PropulsionDemand { normalized: 0.0 },
+        },
+        &effectors,
+    ) else {
+        return RcsForceAllocation {
+            force_body_n: DVec3::ZERO,
+            saturated: true,
+        };
     };
     RcsForceAllocation {
-        force_body_n,
-        saturated: (request - force_body_n).length_squared() > 1.0e-12,
+        force_body_n: allocation.achieved_force_body_n,
+        saturated: allocation.saturated,
     }
 }
 

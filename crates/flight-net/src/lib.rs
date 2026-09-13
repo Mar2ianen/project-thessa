@@ -6,7 +6,7 @@
 //! `thessa-protocol`; this crate only owns the game payload registry.
 
 use serde::{Deserialize, Serialize};
-use thessa_autopilot::{PlanDeoptimizationReason, TrajectoryPlan};
+use thessa_autopilot::{AutopilotGraph, PlanDeoptimizationReason, TrajectoryPlan};
 use thessa_flight_authority::ControlMode;
 use thessa_flight_control::{GuidanceIntent, PropulsionDemand};
 use thessa_protocol::{CodecError, Envelope, kind};
@@ -134,6 +134,8 @@ pub fn encode_guidance(input: &GuidanceInput) -> Result<Vec<u8>, CodecError> {
 /// and validates every plan/script before it can affect a vehicle.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AutopilotCommand {
+    SubmitGraph { graph: AutopilotGraph },
+    ClearGraph,
     StartScript { source: String },
     SubmitPlan { plan: TrajectoryPlan },
     Cancel,
@@ -149,6 +151,15 @@ pub struct AutopilotInput {
 impl AutopilotInput {
     pub fn validate(&self) -> Result<(), String> {
         match &self.command {
+            AutopilotCommand::SubmitGraph { graph } => {
+                graph.validate().map(|_| ()).map_err(|errors| {
+                    errors
+                        .into_iter()
+                        .map(|error| error.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                })
+            }
             AutopilotCommand::StartScript { source } if source.trim().is_empty() => {
                 Err("autopilot script must not be empty".into())
             }
@@ -239,6 +250,55 @@ mod tests {
         let frames = decoder.push(&frame).expect("framed envelope");
         let envelope = decode_frame(&frames[0]).expect("envelope");
         assert_eq!(envelope.kind, kind::AUTOPILOT_COMMAND);
+        let back: AutopilotInput = decode_payload(&envelope).expect("payload");
+        assert_eq!(back, input);
+    }
+
+    #[test]
+    fn typed_autopilot_graph_validates_and_roundtrips() {
+        let input = AutopilotInput {
+            tick: 42,
+            command: AutopilotCommand::SubmitGraph {
+                graph: thessa_autopilot::AutopilotGraph {
+                    nodes: vec![
+                        thessa_autopilot::GraphNode {
+                            id: thessa_autopilot::NodeId(1),
+                            name: "source".into(),
+                            kind: thessa_autopilot::NodeKind::Source,
+                            ports: vec![thessa_autopilot::Port::output(
+                                "value",
+                                thessa_autopilot::PortType::Number,
+                            )],
+                        },
+                        thessa_autopilot::GraphNode {
+                            id: thessa_autopilot::NodeId(2),
+                            name: "sink".into(),
+                            kind: thessa_autopilot::NodeKind::Sink,
+                            ports: vec![thessa_autopilot::Port::input(
+                                "value",
+                                thessa_autopilot::PortType::Number,
+                                true,
+                            )],
+                        },
+                    ],
+                    edges: vec![thessa_autopilot::GraphEdge {
+                        from: thessa_autopilot::PortRef {
+                            node: thessa_autopilot::NodeId(1),
+                            port: "value".into(),
+                        },
+                        to: thessa_autopilot::PortRef {
+                            node: thessa_autopilot::NodeId(2),
+                            port: "value".into(),
+                        },
+                    }],
+                },
+            },
+        };
+        input.validate().expect("valid graph");
+        let frame = encode_autopilot(&input).expect("frame");
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.push(&frame).expect("framed envelope");
+        let envelope = decode_frame(&frames[0]).expect("envelope");
         let back: AutopilotInput = decode_payload(&envelope).expect("payload");
         assert_eq!(back, input);
     }

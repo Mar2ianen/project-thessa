@@ -14,7 +14,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use glam::DVec3;
-use thessa_autopilot::{PlanAction, PlanPoll, TrajectoryPlan, TrajectoryPlanRunner};
+use thessa_autopilot::{
+    AutopilotGraph, PlanAction, PlanPoll, TrajectoryPlan, TrajectoryPlanRunner,
+};
 use thessa_autopilot_js::{
     ScriptEngine, ScriptLimits, ScriptResult, ScriptScheduler, ScriptSchedulerStep,
 };
@@ -150,6 +152,7 @@ struct Sim {
     /// Latest typed guidance command. Legacy ClientInput clears this so the
     /// two input protocols cannot fight over the same vehicle.
     guidance: Option<(GuidanceIntent, PropulsionDemand)>,
+    autopilot_graph: Option<AutopilotGraph>,
     plan_runner: Option<TrajectoryPlanRunner>,
     last_autopilot_notice: Option<String>,
     clients: std::collections::HashMap<String, ClientVote>,
@@ -202,6 +205,7 @@ impl Sim {
             ephemeris,
             control_mode: ControlMode::Navball,
             guidance: None,
+            autopilot_graph: None,
             plan_runner: None,
             last_autopilot_notice: None,
             clients: std::collections::HashMap::new(),
@@ -374,6 +378,11 @@ impl Sim {
             return self.fail_autopilot(error);
         }
         match &input.command {
+            AutopilotCommand::SubmitGraph { graph } => self.submit_graph(graph.clone()),
+            AutopilotCommand::ClearGraph => {
+                self.autopilot_graph = None;
+                true
+            }
             AutopilotCommand::Cancel => {
                 self.cancel_autopilot_tasks();
                 self.clear_autopilot_controls();
@@ -395,6 +404,19 @@ impl Sim {
                 }
             }
         }
+    }
+
+    fn submit_graph(&mut self, graph: AutopilotGraph) -> bool {
+        let validation = match graph.validate() {
+            Ok(validation) => validation,
+            Err(errors) => return self.fail_autopilot(graph_errors(errors)),
+        };
+        self.autopilot_graph = Some(graph);
+        self.authority.wake_notice = Some(format!(
+            "AUTOPILOT GRAPH READY nodes={}",
+            validation.topological_order.len()
+        ));
+        true
     }
 
     fn apply_script_step(&mut self, step: ScriptSchedulerStep, host: &mut AutopilotHost) -> bool {
@@ -762,6 +784,14 @@ fn decode_autopilot_input(frame: &[u8]) -> Option<AutopilotInput> {
         return None;
     }
     thessa_flight_net::decode_payload::<AutopilotInput>(&envelope).ok()
+}
+
+fn graph_errors(errors: Vec<thessa_autopilot::GraphError>) -> String {
+    errors
+        .into_iter()
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn enqueue_client_inputs(
@@ -1619,6 +1649,64 @@ mod tests {
         assert!(sim.poll_plan(event).expect("wake plan"));
         assert_eq!(sim.plan_runner.as_ref().unwrap().segment_index(), 1);
         assert_eq!(sim.control_mode, ControlMode::Rate);
+    }
+
+    #[test]
+    fn server_validates_and_stores_graph_ir_before_execution() {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let mut sim = Sim::new(ephemeris, reference_body, false, true).expect("sim");
+        let mut host = AutopilotHost::new().expect("autopilot host");
+        sim.register("pilot");
+        let graph = AutopilotGraph {
+            nodes: vec![
+                thessa_autopilot::GraphNode {
+                    id: thessa_autopilot::NodeId(1),
+                    name: "source".into(),
+                    kind: thessa_autopilot::NodeKind::Source,
+                    ports: vec![thessa_autopilot::Port::output(
+                        "value",
+                        thessa_autopilot::PortType::Number,
+                    )],
+                },
+                thessa_autopilot::GraphNode {
+                    id: thessa_autopilot::NodeId(2),
+                    name: "sink".into(),
+                    kind: thessa_autopilot::NodeKind::Sink,
+                    ports: vec![thessa_autopilot::Port::input(
+                        "value",
+                        thessa_autopilot::PortType::Number,
+                        true,
+                    )],
+                },
+            ],
+            edges: vec![thessa_autopilot::GraphEdge {
+                from: thessa_autopilot::PortRef {
+                    node: thessa_autopilot::NodeId(1),
+                    port: "value".into(),
+                },
+                to: thessa_autopilot::PortRef {
+                    node: thessa_autopilot::NodeId(2),
+                    port: "value".into(),
+                },
+            }],
+        };
+        let input = AutopilotInput {
+            tick: 0,
+            command: AutopilotCommand::SubmitGraph {
+                graph: graph.clone(),
+            },
+        };
+        assert!(sim.apply_autopilot("pilot", &input, &mut host));
+        assert_eq!(sim.autopilot_graph, Some(graph));
+        assert!(
+            sim.authority
+                .wake_notice
+                .as_deref()
+                .is_some_and(|notice| notice.starts_with("AUTOPILOT GRAPH READY"))
+        );
     }
 
     #[test]

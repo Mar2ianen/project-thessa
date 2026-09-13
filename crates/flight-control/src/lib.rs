@@ -516,6 +516,49 @@ pub enum ActuatorGroup {
     ReverseThrusters,
 }
 
+/// Scalar actuator dynamics applied after allocation. A target is first
+/// clipped to the physical command interval, then approached with a
+/// first-order response and an optional slew-rate limit.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ActuatorDynamics {
+    pub response_s: f64,
+    pub max_rate_per_s: Option<f64>,
+    pub min_command: f64,
+    pub max_command: f64,
+}
+
+impl ActuatorDynamics {
+    pub fn validate(self) -> Result<(), ControlError> {
+        if !self.response_s.is_finite()
+            || self.response_s <= 0.0
+            || self
+                .max_rate_per_s
+                .is_some_and(|rate| !rate.is_finite() || rate <= 0.0)
+            || !self.min_command.is_finite()
+            || !self.max_command.is_finite()
+            || self.min_command > self.max_command
+        {
+            return Err(ControlError::InvalidController);
+        }
+        Ok(())
+    }
+
+    pub fn advance(self, current: f64, target: f64, dt_s: f64) -> Result<f64, ControlError> {
+        self.validate()?;
+        if !current.is_finite() || !target.is_finite() || !dt_s.is_finite() || dt_s < 0.0 {
+            return Err(ControlError::NonFinite("actuator state"));
+        }
+        let current = current.clamp(self.min_command, self.max_command);
+        let target = target.clamp(self.min_command, self.max_command);
+        let alpha = 1.0 - (-dt_s / self.response_s).exp();
+        let mut next = current + (target - current) * alpha;
+        if let Some(max_rate_per_s) = self.max_rate_per_s {
+            next = current + (next - current).clamp(-max_rate_per_s * dt_s, max_rate_per_s * dt_s);
+        }
+        Ok(next.clamp(self.min_command, self.max_command))
+    }
+}
+
 /// One generalized allocator effector contribution. The command scalar is
 /// bounded to `[0, 1]`; signed effectors expose opposing contributions as
 /// separate entries or use a signed `force_per_command` where appropriate.
@@ -792,5 +835,20 @@ mod tests {
             .unwrap();
         assert_eq!(demand.moment_body_nm.y, 0.0);
         assert_eq!(demand.force_body_n, DVec3::ZERO);
+    }
+
+    #[test]
+    fn actuator_dynamics_respects_response_rate_and_command_bounds() {
+        let dynamics = ActuatorDynamics {
+            response_s: 0.5,
+            max_rate_per_s: Some(0.4),
+            min_command: -1.0,
+            max_command: 1.0,
+        };
+        let first = dynamics.advance(0.0, 1.0, 0.5).unwrap();
+        assert!((first - 0.2).abs() < 1.0e-12);
+        let settled = dynamics.advance(first, 4.0, 20.0).unwrap();
+        assert_eq!(settled, 1.0);
+        assert_eq!(dynamics.advance(0.0, -4.0, 20.0).unwrap(), -1.0);
     }
 }

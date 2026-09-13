@@ -25,7 +25,9 @@ use thessa_autopilot::{
     Bakeability, Diagnostic, ImpactSite, LandingSite, TrajectoryPlan, TrajectorySegment,
     WaitCondition, WaitId, WaitSet,
 };
-use thessa_flight_control::{DirectionFrame, DirectionTarget, GuidanceIntent, RollPolicy};
+use thessa_flight_control::{
+    DirectionFrame, DirectionTarget, FlightPathTarget, GuidanceIntent, PilotAxes, RollPolicy,
+};
 use thessa_sim_core::SimTime;
 
 #[derive(Debug, Clone, Copy)]
@@ -454,7 +456,9 @@ const SANDBOX_PRELUDE: &str = r#"
   globalThis.Guidance = Object.freeze({
     attitude: (x, y, z, w) => JSON.stringify({kind:'attitude', x, y, z, w}),
     angularRate: (x, y, z) => JSON.stringify({kind:'angular-rate', x, y, z}),
-    velocityDirection: (x, y, z, frame, target_body = null) => JSON.stringify({kind:'velocity-direction', x, y, z, frame, target_body}),
+    manualAxes: (pitch=0, yaw=0, roll=0, tx=0, ty=0, tz=0, propulsion=0) => JSON.stringify({kind:'manual-axes', pitch, yaw, roll, tx, ty, tz, propulsion}),
+    velocityDirection: (x, y, z, frame, target_body = null, roll_policy = 'hold') => JSON.stringify({kind:'velocity-direction', x, y, z, frame, target_body, roll_policy}),
+    flightPath: (x, y, z, frame, roll_policy = 'hold', target_body = null) => JSON.stringify({kind:'flight-path', x, y, z, frame, roll_policy, target_body}),
   });
   globalThis.Landing = Object.freeze({
     site: (x, y, z, radius_m) => JSON.stringify({kind:'landing-site', x, y, z, radius_m}),
@@ -499,11 +503,36 @@ enum ScriptReturn {
         y: f64,
         z: f64,
     },
+    ManualAxes {
+        pitch: f64,
+        yaw: f64,
+        roll: f64,
+        #[serde(default)]
+        tx: f64,
+        #[serde(default)]
+        ty: f64,
+        #[serde(default)]
+        tz: f64,
+        #[serde(default)]
+        propulsion: f64,
+    },
     VelocityDirection {
         x: f64,
         y: f64,
         z: f64,
         frame: String,
+        #[serde(default)]
+        target_body: Option<u32>,
+        #[serde(default = "default_roll_policy")]
+        roll_policy: String,
+    },
+    FlightPath {
+        x: f64,
+        y: f64,
+        z: f64,
+        frame: String,
+        #[serde(default = "default_roll_policy")]
+        roll_policy: String,
         #[serde(default)]
         target_body: Option<u32>,
     },
@@ -575,18 +604,56 @@ fn parse_result(json: &str) -> Result<ScriptResult, ScriptError> {
         ScriptReturn::AngularRate { x, y, z } => Ok(ScriptResult::Guidance(parse_guidance(
             ScriptReturn::AngularRate { x, y, z },
         )?)),
+        ScriptReturn::ManualAxes {
+            pitch,
+            yaw,
+            roll,
+            tx,
+            ty,
+            tz,
+            propulsion,
+        } => Ok(ScriptResult::Guidance(parse_guidance(
+            ScriptReturn::ManualAxes {
+                pitch,
+                yaw,
+                roll,
+                tx,
+                ty,
+                tz,
+                propulsion,
+            },
+        )?)),
         ScriptReturn::VelocityDirection {
             x,
             y,
             z,
             frame,
             target_body,
+            roll_policy,
         } => Ok(ScriptResult::Guidance(parse_guidance(
             ScriptReturn::VelocityDirection {
                 x,
                 y,
                 z,
                 frame,
+                target_body,
+                roll_policy,
+            },
+        )?)),
+        ScriptReturn::FlightPath {
+            x,
+            y,
+            z,
+            frame,
+            roll_policy,
+            target_body,
+        } => Ok(ScriptResult::Guidance(parse_guidance(
+            ScriptReturn::FlightPath {
+                x,
+                y,
+                z,
+                frame,
+                roll_policy,
                 target_body,
             },
         )?)),
@@ -710,36 +777,94 @@ fn parse_guidance(value: ScriptReturn) -> Result<GuidanceIntent, ScriptError> {
                 .map_err(|error| ScriptError::InvalidReturn(error.to_string()))?;
             Ok(intent)
         }
+        ScriptReturn::ManualAxes {
+            pitch,
+            yaw,
+            roll,
+            tx,
+            ty,
+            tz,
+            propulsion,
+        } => {
+            let intent = GuidanceIntent::ManualAxes(PilotAxes {
+                pitch,
+                yaw,
+                roll,
+                translation: glam::DVec3::new(tx, ty, tz),
+                propulsion,
+            });
+            intent
+                .validate()
+                .map_err(|error| ScriptError::InvalidReturn(error.to_string()))?;
+            Ok(intent)
+        }
         ScriptReturn::VelocityDirection {
             x,
             y,
             z,
             frame,
             target_body,
+            roll_policy,
         } => {
-            let frame = match frame.as_str() {
-                "body" => DirectionFrame::Body,
-                "surface" => DirectionFrame::Surface,
-                "orbit" => DirectionFrame::Orbit,
-                "inertial" => DirectionFrame::Inertial,
-                "target" => DirectionFrame::Target,
-                _ => return Err(ScriptError::InvalidReturn("unknown direction frame".into())),
-            };
-            let direction = DirectionTarget::new(glam::DVec3::new(x, y, z), frame)
-                .map_err(|error| ScriptError::InvalidReturn(error.to_string()))?;
-            let direction = match target_body {
-                Some(body) => DirectionTarget::for_target(direction.direction, body)
-                    .map_err(|error| ScriptError::InvalidReturn(error.to_string()))?,
-                None => direction,
-            };
+            let direction = parse_direction(x, y, z, &frame, target_body)?;
             Ok(GuidanceIntent::VelocityDirection {
                 direction,
-                roll_policy: RollPolicy::Hold,
+                roll_policy: parse_roll_policy(&roll_policy)?,
             })
         }
+        ScriptReturn::FlightPath {
+            x,
+            y,
+            z,
+            frame,
+            roll_policy,
+            target_body,
+        } => Ok(GuidanceIntent::FlightPath {
+            target: FlightPathTarget {
+                direction: parse_direction(x, y, z, &frame, target_body)?,
+                roll_policy: parse_roll_policy(&roll_policy)?,
+            },
+        }),
         _ => Err(ScriptError::InvalidReturn(
             "plan guidance segment contains a non-guidance value".into(),
         )),
+    }
+}
+
+fn default_roll_policy() -> String {
+    "hold".into()
+}
+
+fn parse_direction(
+    x: f64,
+    y: f64,
+    z: f64,
+    frame: &str,
+    target_body: Option<u32>,
+) -> Result<DirectionTarget, ScriptError> {
+    let frame = match frame {
+        "body" => DirectionFrame::Body,
+        "surface" => DirectionFrame::Surface,
+        "orbit" => DirectionFrame::Orbit,
+        "inertial" => DirectionFrame::Inertial,
+        "target" => DirectionFrame::Target,
+        _ => return Err(ScriptError::InvalidReturn("unknown direction frame".into())),
+    };
+    let direction = DirectionTarget::new(glam::DVec3::new(x, y, z), frame)
+        .map_err(|error| ScriptError::InvalidReturn(error.to_string()))?;
+    match target_body {
+        Some(body) => DirectionTarget::for_target(direction.direction, body)
+            .map_err(|error| ScriptError::InvalidReturn(error.to_string())),
+        None => Ok(direction),
+    }
+}
+
+fn parse_roll_policy(value: &str) -> Result<RollPolicy, ScriptError> {
+    match value {
+        "free" => Ok(RollPolicy::Free),
+        "hold" => Ok(RollPolicy::Hold),
+        "fixed" => Ok(RollPolicy::Fixed),
+        _ => Err(ScriptError::InvalidReturn("unknown roll policy".into())),
     }
 }
 
@@ -818,6 +943,30 @@ mod tests {
             result,
             ScriptResult::Guidance(GuidanceIntent::VelocityDirection { direction, .. })
                 if direction.frame == DirectionFrame::Target && direction.target_body == Some(7)
+        ));
+    }
+
+    #[test]
+    fn guidance_standard_library_exposes_translation_and_flight_path() {
+        let engine = ScriptEngine::new(ScriptLimits::default()).unwrap();
+        let manual = engine
+            .run("return Guidance.manualAxes(0.1, -0.2, 0.3, 1, -0.5, 0.25, 0.4);")
+            .unwrap();
+        assert!(matches!(
+            manual,
+            ScriptResult::Guidance(GuidanceIntent::ManualAxes(axes))
+                if axes.translation == glam::DVec3::new(1.0, -0.5, 0.25)
+                    && axes.propulsion == 0.4
+        ));
+
+        let path = engine
+            .run("return Guidance.flightPath(0, 0, 1, 'surface', 'fixed');")
+            .unwrap();
+        assert!(matches!(
+            path,
+            ScriptResult::Guidance(GuidanceIntent::FlightPath { target })
+                if target.direction.frame == DirectionFrame::Surface
+                    && target.roll_policy == RollPolicy::Fixed
         ));
     }
 

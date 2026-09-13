@@ -110,6 +110,32 @@ pub(crate) fn rcs_moment(request: DVec3, enabled: bool) -> DVec3 {
     })
 }
 
+/// A translation command uses opposed RCS jets as a force-balanced pair. The
+/// starter vehicle's moment couples are built from two 400 N jets, so each
+/// body axis has 800 N of net translation authority in either direction.
+pub(crate) const RCS_TRANSLATION_FORCE_N: f64 = 800.0;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct RcsForceAllocation {
+    pub force_body_n: DVec3,
+    pub saturated: bool,
+}
+
+pub(crate) fn allocate_rcs_force(request: DVec3, enabled: bool) -> RcsForceAllocation {
+    let force_body_n = if enabled {
+        request.clamp(
+            DVec3::splat(-RCS_TRANSLATION_FORCE_N),
+            DVec3::splat(RCS_TRANSLATION_FORCE_N),
+        )
+    } else {
+        DVec3::ZERO
+    };
+    RcsForceAllocation {
+        force_body_n,
+        saturated: (request - force_body_n).length_squared() > 1.0e-12,
+    }
+}
+
 /// Result of allocating a requested moment across residual RCS authority.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct RcsAllocation {
@@ -242,6 +268,17 @@ mod tests {
         let result = allocate_rcs(DVec3::splat(10_000.0), DVec3::ZERO, DVec3::ONE, true, false);
         assert_eq!(result.moment_body_nm, DVec3::ZERO);
         assert!(result.saturated);
+    }
+
+    #[test]
+    fn translation_rcs_is_bounded_and_reports_saturation() {
+        let result = allocate_rcs_force(DVec3::new(1_000.0, -900.0, 20.0), true);
+        assert_eq!(result.force_body_n, DVec3::new(800.0, -800.0, 20.0));
+        assert!(result.saturated);
+        assert_eq!(
+            allocate_rcs_force(DVec3::X * 10.0, false).force_body_n,
+            DVec3::ZERO
+        );
     }
 
     #[test]

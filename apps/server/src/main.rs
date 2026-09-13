@@ -530,12 +530,6 @@ impl Sim {
                 Ok(true)
             }
             PlanAction::Burn { demand, .. } => {
-                if demand.force_body_n.length_squared() > 1.0e-24 {
-                    return Err(
-                        "starter authority has no force effector for an explicit body-force demand"
-                            .into(),
-                    );
-                }
                 let propulsion =
                     FlightPolicy::default().constrain_propulsion(demand.propulsion, true, true);
                 self.plan_demand = Some(ControlDemand {
@@ -1597,7 +1591,7 @@ mod tests {
                 thessa_autopilot::TrajectorySegment::Burn {
                     duration_s: 0.1,
                     demand: ControlDemand {
-                        force_body_n: DVec3::ZERO,
+                        force_body_n: DVec3::Y * 100.0,
                         moment_body_nm: DVec3::X * 100.0,
                         propulsion: PropulsionDemand::new(0.0).unwrap(),
                     },
@@ -1625,6 +1619,15 @@ mod tests {
             .expect("execute explicit burn");
         assert!(sim.authority.flight_error.is_none());
         assert!(sim.authority.state.angular_velocity_body_rps.x > 0.0);
+        assert_eq!(
+            sim.authority
+                .last_forces
+                .as_ref()
+                .expect("explicit force sample")
+                .total_force_body_n
+                .y,
+            100.0
+        );
         assert!(sim.authority.state.angular_velocity_body_rps.is_finite());
 
         sim.authority.flight_time_s = 0.13;

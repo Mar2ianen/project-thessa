@@ -29,8 +29,9 @@ use thessa_worldgen_rocky::field::{ObstacleTrackCertificate, PlanetField};
 use crate::{
     BakeQueue, BakedRails, ControlMode, FlightRegime, InlineBakeQueue, RailsBakeRequest,
     control::{
-        PILOT_ATTITUDE_COMMAND_RATE_RAD_S, SURFACE_COMMAND_RATE_S, allocate_rcs, attitude_demand,
-        slew_surface_command, solve_aero_trim, surface_commands,
+        PILOT_ATTITUDE_COMMAND_RATE_RAD_S, SURFACE_COMMAND_RATE_S, allocate_rcs,
+        allocate_rcs_force, attitude_demand, slew_surface_command, solve_aero_trim,
+        surface_commands,
     },
 };
 
@@ -340,6 +341,9 @@ pub struct FlightAuthority {
     /// model reads it every tick; the geometry shape never changes at
     /// runtime (control surfaces rotate in place).
     reference_area_m2: f64,
+    /// Explicit translation demand supplied by a declarative plan. It is
+    /// realized by bounded paired RCS force effectors on the fixed-step path.
+    explicit_force_demand_body_n: Option<DVec3>,
     /// Explicit moment demand supplied by a declarative plan. It is consumed
     /// by the same trim/RCS allocator as typed guidance and cleared by the
     /// public demand entry point after its cooperative advance returns.
@@ -389,6 +393,7 @@ impl FlightAuthority {
         self.throttle = 0.0;
         self.control_input = DVec3::ZERO;
         self.surface_input = DVec3::ZERO;
+        self.explicit_force_demand_body_n = None;
         self.explicit_moment_demand_nm = None;
         self.regime = FlightRegime::Aero;
         self.accumulator_s = 0.0;
@@ -615,6 +620,7 @@ impl FlightAuthority {
             trim_second_passes: 0,
             ephemeris_frame: EphemerisFrame::new(),
             reference_area_m2,
+            explicit_force_demand_body_n: None,
             explicit_moment_demand_nm: None,
         })
     }
@@ -722,10 +728,10 @@ impl FlightAuthority {
     }
 
     /// Advance a declarative wrench through the native actuator path. The
-    /// starter vehicle has no lateral/translation thrusters, so force demand
-    /// is intentionally restricted to zero; propulsion remains the physical
-    /// axial effector. Moments use the existing aerodynamic trim plus RCS
-    /// residual allocator and retain its saturation semantics.
+    /// starter vehicle realizes translation through bounded paired RCS force
+    /// effectors while propulsion remains the physical axial effector.
+    /// Moments use the existing aerodynamic trim plus RCS residual allocator
+    /// and retain its saturation semantics.
     pub fn advance_control_demand_with_budget(
         &mut self,
         ephemeris: &BakedEphemeris,
@@ -736,11 +742,6 @@ impl FlightAuthority {
         demand
             .validate()
             .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
-        if demand.force_body_n.length_squared() > 1.0e-24 {
-            return Err(FlightError::InvalidInput(
-                "starter authority has no force effector for an explicit body-force demand".into(),
-            ));
-        }
         if !demand.propulsion.normalized.is_finite()
             || !(0.0..=1.0).contains(&demand.propulsion.normalized)
         {
@@ -750,8 +751,16 @@ impl FlightAuthority {
         }
         self.throttle = demand.propulsion.normalized;
         self.engine_active = demand.propulsion.normalized > 0.0;
+        if demand.force_body_n.length_squared() > 1.0e-24
+            || demand.moment_body_nm.length_squared() > 1.0e-24
+        {
+            self.rails.invalidate();
+            self.scheduler.clear_rails_wakes();
+        }
+        self.explicit_force_demand_body_n = Some(demand.force_body_n);
         self.explicit_moment_demand_nm = Some(demand.moment_body_nm);
         let result = self.advance_with_budget(ephemeris, ControlMode::Direct, elapsed_s, budget);
+        self.explicit_force_demand_body_n = None;
         self.explicit_moment_demand_nm = None;
         result
     }
@@ -1149,6 +1158,12 @@ impl FlightAuthority {
         {
             return Ok(CoastAdvance::NotEligible);
         }
+        if self
+            .explicit_force_demand_body_n
+            .is_some_and(|force| force.length_squared() > 1.0e-24)
+        {
+            return Ok(CoastAdvance::NotEligible);
+        }
         if self.thrust_n() != 0.0 || self.trace.is_some() {
             return Ok(CoastAdvance::NotEligible);
         }
@@ -1444,6 +1459,15 @@ impl FlightAuthority {
         Ok(allocation.moment_body_nm)
     }
 
+    fn allocate_explicit_force(&mut self) -> DVec3 {
+        let Some(request) = self.explicit_force_demand_body_n else {
+            return DVec3::ZERO;
+        };
+        let allocation = allocate_rcs_force(request, self.rcs_enabled);
+        self.actuator_saturated |= allocation.saturated;
+        allocation.force_body_n
+    }
+
     /// Upper-atmosphere band model: between the vacuum cutoff and the
     /// Coast density the panel loop is replaced by reference-area drag
     /// along the airstream (no lift, no aero moment; RCS unchanged).
@@ -1481,6 +1505,7 @@ impl FlightAuthority {
         kinematics: LocalAirKinematics,
         body_state: BodyState,
         jet_moment: DVec3,
+        rcs_force_body_n: DVec3,
         thrust_n: f64,
         band_drag_body_n: DVec3,
         skip_aero: bool,
@@ -1501,7 +1526,7 @@ impl FlightAuthority {
                 position_body_m: kinematics.relative_position_body_m,
                 wind_velocity_body_mps: self.state.orientation_body_to_inertial.inverse()
                     * body_state.velocity_inertial,
-                extra_force_body_n: DVec3::X * thrust_n + band_drag_body_n,
+                extra_force_body_n: DVec3::X * thrust_n + rcs_force_body_n + band_drag_body_n,
                 extra_moment_body_nm: jet_moment,
                 skip_aero,
             },
@@ -1747,6 +1772,7 @@ impl FlightAuthority {
             FlightRegime::Aero
         };
         let jet_moment = self.allocate_controls(kinematics, mode)?;
+        let rcs_force_body_n = self.allocate_explicit_force();
         // Only an exactly empty sampled medium permits zero force; the
         // vacuum cutoff guarantees exactness below its threshold.
         let vacuum = density_kg_m3 == 0.0;
@@ -1771,6 +1797,7 @@ impl FlightAuthority {
                     kinematics,
                     body_state,
                     jet_moment,
+                    rcs_force_body_n,
                     thrust_n,
                     band_drag_body_n,
                     skip_aero,
@@ -1783,6 +1810,7 @@ impl FlightAuthority {
                 kinematics,
                 body_state,
                 jet_moment,
+                rcs_force_body_n,
                 thrust_n,
                 band_drag_body_n,
                 skip_aero,

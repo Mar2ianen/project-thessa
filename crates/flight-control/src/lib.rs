@@ -236,6 +236,78 @@ pub struct AircraftControlLaw {
     pub max_positive_g: Option<f64>,
     pub max_negative_g: Option<f64>,
     pub coordinated_turn_assist: bool,
+    pub max_translation_force_n: f64,
+}
+
+impl AircraftControlLaw {
+    /// Convert aircraft-oriented guidance into a pure physical demand. The
+    /// protection limits only reshape the requested pitch response; actuator
+    /// selection remains the allocator's responsibility.
+    pub fn control_demand(
+        self,
+        state: AircraftState,
+        intent: &GuidanceIntent,
+        propulsion: PropulsionDemand,
+    ) -> Result<ControlDemand, ControlError> {
+        state.validate()?;
+        intent.validate()?;
+        validate_optional_limit(self.max_aoa_rad, true)?;
+        validate_optional_limit(self.max_positive_g, true)?;
+        validate_optional_limit(self.max_negative_g, true)?;
+        if !self.max_translation_force_n.is_finite() || self.max_translation_force_n < 0.0 {
+            return Err(ControlError::InvalidController);
+        }
+        let (mut desired_rate, force_body_n) = match intent {
+            GuidanceIntent::ManualAxes(axes) => (
+                DVec3::new(axes.roll, -axes.pitch, -axes.yaw) * 0.16,
+                axes.translation * self.max_translation_force_n,
+            ),
+            GuidanceIntent::AngularRate { rate_body_rps } => (*rate_body_rps, DVec3::ZERO),
+            GuidanceIntent::Attitude {
+                target_body_to_inertial,
+                ..
+            } => {
+                let mut error = state.attitude.orientation_body_to_inertial.inverse()
+                    * *target_body_to_inertial;
+                if error.w < 0.0 {
+                    error = -error;
+                }
+                (error.to_scaled_axis() * 1.6, DVec3::ZERO)
+            }
+            _ => return Err(ControlError::UnsupportedIntent),
+        };
+        if let Some(max_rate) = self.max_aoa_rad {
+            let speed = state.air_velocity_body_mps.length();
+            let aoa = if speed > 1.0e-6 {
+                (-state.air_velocity_body_mps.z).atan2(state.air_velocity_body_mps.x)
+            } else {
+                0.0
+            };
+            if aoa.abs() >= max_rate {
+                desired_rate.y = 0.0;
+            }
+        }
+        if self
+            .max_positive_g
+            .is_some_and(|limit| state.load_factor_g >= limit)
+            || self
+                .max_negative_g
+                .is_some_and(|limit| state.load_factor_g <= -limit)
+        {
+            desired_rate.y = 0.0;
+        }
+        if !desired_rate.is_finite() {
+            return Err(ControlError::NonFinite("desired aircraft rate"));
+        }
+        let omega = state.attitude.angular_velocity_body_rps;
+        let moment = state.attitude.inertia_body_kg_m2 * ((desired_rate - omega) / 0.35)
+            + omega.cross(state.attitude.inertia_body_kg_m2 * omega);
+        Ok(ControlDemand {
+            force_body_n,
+            moment_body_nm: moment,
+            propulsion,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -266,6 +338,24 @@ pub struct AttitudeState {
     pub inertia_body_kg_m2: DMat3,
 }
 
+/// Read-only flight condition supplied to the aircraft control law.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AircraftState {
+    pub attitude: AttitudeState,
+    pub air_velocity_body_mps: DVec3,
+    pub load_factor_g: f64,
+}
+
+impl AircraftState {
+    pub fn validate(self) -> Result<(), ControlError> {
+        self.attitude.validate()?;
+        if !self.air_velocity_body_mps.is_finite() || !self.load_factor_g.is_finite() {
+            return Err(ControlError::NonFinite("aircraft state"));
+        }
+        Ok(())
+    }
+}
+
 impl AttitudeState {
     pub fn validate(self) -> Result<(), ControlError> {
         if !self.orientation_body_to_inertial.is_finite()
@@ -279,6 +369,23 @@ impl AttitudeState {
         }
         Ok(())
     }
+}
+
+fn validate_optional_limit(
+    limit: Option<f64>,
+    strictly_positive: bool,
+) -> Result<(), ControlError> {
+    if limit.is_some_and(|value| {
+        !value.is_finite()
+            || if strictly_positive {
+                value <= 0.0
+            } else {
+                value < 0.0
+            }
+    }) {
+        return Err(ControlError::InvalidController);
+    }
+    Ok(())
 }
 
 impl SpacecraftControlLaw {
@@ -654,5 +761,36 @@ mod tests {
             )
             .unwrap();
         assert_eq!(demand.force_body_n, DVec3::new(400.0, -800.0, 200.0));
+    }
+
+    #[test]
+    fn aircraft_controller_applies_aoa_and_load_factor_protection() {
+        let state = AircraftState {
+            attitude: AttitudeState {
+                orientation_body_to_inertial: DQuat::IDENTITY,
+                angular_velocity_body_rps: DVec3::ZERO,
+                inertia_body_kg_m2: DMat3::from_diagonal(DVec3::splat(2.0)),
+            },
+            air_velocity_body_mps: DVec3::new(100.0, 0.0, -100.0),
+            load_factor_g: 3.0,
+        };
+        let law = AircraftControlLaw {
+            max_aoa_rad: Some(0.1),
+            max_positive_g: Some(2.0),
+            ..AircraftControlLaw::default()
+        };
+        let demand = law
+            .control_demand(
+                state,
+                &GuidanceIntent::ManualAxes(PilotAxes {
+                    pitch: 1.0,
+                    translation: DVec3::X,
+                    ..PilotAxes::default()
+                }),
+                PropulsionDemand::new(0.0).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(demand.moment_body_nm.y, 0.0);
+        assert_eq!(demand.force_body_n, DVec3::ZERO);
     }
 }

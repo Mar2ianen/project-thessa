@@ -19,10 +19,10 @@ pub mod mode;
 pub mod runtime;
 
 pub use thessa_flight_control::{
-    ActuatorGroup, AircraftControlLaw, AllocationResult, ControlDemand, ControlError,
-    DirectControlLaw, DirectionFrame, DirectionTarget, EffectorContribution, FlightControlLaw,
-    FlightPolicy, GuidanceIntent, InputScheme, PilotAxes, PropulsionDemand, RollPolicy,
-    SpacecraftControlLaw, TrajectoryPlanId, allocate_wrench,
+    ActuatorGroup, AircraftControlLaw, AircraftState, AllocationResult, ControlDemand,
+    ControlError, DirectControlLaw, DirectionFrame, DirectionTarget, EffectorContribution,
+    FlightControlLaw, FlightPolicy, GuidanceIntent, InputScheme, PilotAxes, PropulsionDemand,
+    RollPolicy, SpacecraftControlLaw, TrajectoryPlanId, allocate_wrench,
 };
 
 pub use bake::{BakeQueue, BakedRails, InlineBakeQueue, RailsBakeRequest};

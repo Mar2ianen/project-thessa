@@ -97,6 +97,10 @@ pub enum DirectionFrame {
 pub struct DirectionTarget {
     pub direction: DVec3,
     pub frame: DirectionFrame,
+    /// Stable ephemeris body id used when `frame` is `Target`. Other frames
+    /// keep this unset so wire payloads remain compact and unambiguous.
+    #[serde(default)]
+    pub target_body: Option<u32>,
 }
 
 impl DirectionTarget {
@@ -107,7 +111,14 @@ impl DirectionTarget {
         Ok(Self {
             direction: direction.normalize(),
             frame,
+            target_body: None,
         })
+    }
+
+    pub fn for_target(direction: DVec3, target_body: u32) -> Result<Self, ControlError> {
+        let mut target = Self::new(direction, DirectionFrame::Target)?;
+        target.target_body = Some(target_body);
+        Ok(target)
     }
 }
 

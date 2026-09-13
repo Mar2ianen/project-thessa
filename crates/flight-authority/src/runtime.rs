@@ -725,9 +725,15 @@ impl FlightAuthority {
                     + radial * target.direction.z
             }
             DirectionFrame::Target => {
-                return Err(FlightError::InvalidInput(
-                    "target-frame guidance requires a resolved target body".into(),
-                ));
+                let target_body = target.target_body.ok_or_else(|| {
+                    FlightError::InvalidInput(
+                        "target-frame guidance requires a resolved target body".into(),
+                    )
+                })?;
+                let body = ephemeris
+                    .body_state(BodyId(target_body), SimTime(self.flight_time_s))
+                    .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+                body.orientation * target.direction
             }
         };
         let forward = normalize_direction(body_direction, "guidance direction")?;
@@ -824,6 +830,7 @@ impl FlightAuthority {
                     DirectionTarget {
                         direction: direction.direction,
                         frame: direction.frame,
+                        target_body: direction.target_body,
                     },
                     *roll_policy,
                 )?;
@@ -837,6 +844,7 @@ impl FlightAuthority {
                     DirectionTarget {
                         direction: target.direction.direction,
                         frame: target.direction.frame,
+                        target_body: target.direction.target_body,
                     },
                     target.roll_policy,
                 )?;
@@ -2216,6 +2224,27 @@ mod tests {
         assert!(
             matches!(result, Err(FlightError::InvalidInput(message)) if message.contains("target body"))
         );
+    }
+
+    #[test]
+    fn target_frame_guidance_uses_the_target_body_orientation() {
+        let (ephemeris, mut flight) = fixture();
+        let target_body = ephemeris.body_id("nereid").unwrap();
+        let target_state = ephemeris
+            .body_state(target_body, SimTime(flight.flight_time_s))
+            .unwrap();
+        let direction = DirectionTarget::for_target(DVec3::X, target_body.0).unwrap();
+        flight
+            .apply_guidance_intent(
+                &ephemeris,
+                &GuidanceIntent::VelocityDirection {
+                    direction,
+                    roll_policy: RollPolicy::Hold,
+                },
+            )
+            .unwrap();
+        let forward = flight.sas_target_orientation * DVec3::X;
+        assert!(forward.dot(target_state.orientation * DVec3::X) > 1.0 - 1.0e-12);
     }
 
     #[test]

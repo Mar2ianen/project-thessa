@@ -454,7 +454,7 @@ const SANDBOX_PRELUDE: &str = r#"
   globalThis.Guidance = Object.freeze({
     attitude: (x, y, z, w) => JSON.stringify({kind:'attitude', x, y, z, w}),
     angularRate: (x, y, z) => JSON.stringify({kind:'angular-rate', x, y, z}),
-    velocityDirection: (x, y, z, frame) => JSON.stringify({kind:'velocity-direction', x, y, z, frame}),
+    velocityDirection: (x, y, z, frame, target_body = null) => JSON.stringify({kind:'velocity-direction', x, y, z, frame, target_body}),
   });
   globalThis.Landing = Object.freeze({
     site: (x, y, z, radius_m) => JSON.stringify({kind:'landing-site', x, y, z, radius_m}),
@@ -504,6 +504,8 @@ enum ScriptReturn {
         y: f64,
         z: f64,
         frame: String,
+        #[serde(default)]
+        target_body: Option<u32>,
     },
     LandingSite {
         x: f64,
@@ -573,9 +575,21 @@ fn parse_result(json: &str) -> Result<ScriptResult, ScriptError> {
         ScriptReturn::AngularRate { x, y, z } => Ok(ScriptResult::Guidance(parse_guidance(
             ScriptReturn::AngularRate { x, y, z },
         )?)),
-        ScriptReturn::VelocityDirection { x, y, z, frame } => Ok(ScriptResult::Guidance(
-            parse_guidance(ScriptReturn::VelocityDirection { x, y, z, frame })?,
-        )),
+        ScriptReturn::VelocityDirection {
+            x,
+            y,
+            z,
+            frame,
+            target_body,
+        } => Ok(ScriptResult::Guidance(parse_guidance(
+            ScriptReturn::VelocityDirection {
+                x,
+                y,
+                z,
+                frame,
+                target_body,
+            },
+        )?)),
         ScriptReturn::LandingSite { x, y, z, radius_m } => LandingSite::new([x, y, z], radius_m)
             .map(ScriptResult::LandingSite)
             .map_err(|error| ScriptError::InvalidReturn(error.to_string())),
@@ -696,7 +710,13 @@ fn parse_guidance(value: ScriptReturn) -> Result<GuidanceIntent, ScriptError> {
                 .map_err(|error| ScriptError::InvalidReturn(error.to_string()))?;
             Ok(intent)
         }
-        ScriptReturn::VelocityDirection { x, y, z, frame } => {
+        ScriptReturn::VelocityDirection {
+            x,
+            y,
+            z,
+            frame,
+            target_body,
+        } => {
             let frame = match frame.as_str() {
                 "body" => DirectionFrame::Body,
                 "surface" => DirectionFrame::Surface,
@@ -707,6 +727,11 @@ fn parse_guidance(value: ScriptReturn) -> Result<GuidanceIntent, ScriptError> {
             };
             let direction = DirectionTarget::new(glam::DVec3::new(x, y, z), frame)
                 .map_err(|error| ScriptError::InvalidReturn(error.to_string()))?;
+            let direction = match target_body {
+                Some(body) => DirectionTarget::for_target(direction.direction, body)
+                    .map_err(|error| ScriptError::InvalidReturn(error.to_string()))?,
+                None => direction,
+            };
             Ok(GuidanceIntent::VelocityDirection {
                 direction,
                 roll_policy: RollPolicy::Hold,
@@ -780,6 +805,19 @@ mod tests {
         assert!(matches!(
             result,
             ScriptResult::Guidance(GuidanceIntent::AngularRate { .. })
+        ));
+    }
+
+    #[test]
+    fn target_guidance_constructor_keeps_the_resolved_body_id() {
+        let engine = ScriptEngine::new(ScriptLimits::default()).unwrap();
+        let result = engine
+            .run("return Guidance.velocityDirection(1, 0, 0, 'target', 7);")
+            .unwrap();
+        assert!(matches!(
+            result,
+            ScriptResult::Guidance(GuidanceIntent::VelocityDirection { direction, .. })
+                if direction.frame == DirectionFrame::Target && direction.target_body == Some(7)
         ));
     }
 

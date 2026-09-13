@@ -22,7 +22,8 @@ use rquickjs::{
 };
 use serde::Deserialize;
 use thessa_autopilot::{
-    Bakeability, Diagnostic, TrajectoryPlan, TrajectorySegment, WaitCondition, WaitId, WaitSet,
+    Bakeability, Diagnostic, ImpactSite, LandingSite, TrajectoryPlan, TrajectorySegment,
+    WaitCondition, WaitId, WaitSet,
 };
 use thessa_flight_control::{DirectionFrame, DirectionTarget, GuidanceIntent, RollPolicy};
 use thessa_sim_core::SimTime;
@@ -48,6 +49,8 @@ impl Default for ScriptLimits {
 pub enum ScriptResult {
     Guidance(GuidanceIntent),
     Plan(TrajectoryPlan),
+    LandingSite(LandingSite),
+    ImpactSite(ImpactSite),
     Wait(WaitCondition),
     Diagnostic(Diagnostic),
 }
@@ -453,6 +456,12 @@ const SANDBOX_PRELUDE: &str = r#"
     angularRate: (x, y, z) => JSON.stringify({kind:'angular-rate', x, y, z}),
     velocityDirection: (x, y, z, frame) => JSON.stringify({kind:'velocity-direction', x, y, z, frame}),
   });
+  globalThis.Landing = Object.freeze({
+    site: (x, y, z, radius_m) => JSON.stringify({kind:'landing-site', x, y, z, radius_m}),
+  });
+  globalThis.Impact = Object.freeze({
+    site: (x, y, z, radius_m) => JSON.stringify({kind:'impact-site', x, y, z, radius_m}),
+  });
   globalThis.Wait = Object.freeze({
     at: (seconds) => JSON.stringify({kind:'wait-at', seconds}),
     event: (name) => JSON.stringify({kind:'wait-event', name}),
@@ -495,6 +504,18 @@ enum ScriptReturn {
         y: f64,
         z: f64,
         frame: String,
+    },
+    LandingSite {
+        x: f64,
+        y: f64,
+        z: f64,
+        radius_m: f64,
+    },
+    ImpactSite {
+        x: f64,
+        y: f64,
+        z: f64,
+        radius_m: f64,
     },
     WaitAt {
         seconds: f64,
@@ -551,6 +572,12 @@ fn parse_result(json: &str) -> Result<ScriptResult, ScriptError> {
         ScriptReturn::VelocityDirection { x, y, z, frame } => Ok(ScriptResult::Guidance(
             parse_guidance(ScriptReturn::VelocityDirection { x, y, z, frame })?,
         )),
+        ScriptReturn::LandingSite { x, y, z, radius_m } => LandingSite::new([x, y, z], radius_m)
+            .map(ScriptResult::LandingSite)
+            .map_err(|error| ScriptError::InvalidReturn(error.to_string())),
+        ScriptReturn::ImpactSite { x, y, z, radius_m } => ImpactSite::new([x, y, z], radius_m)
+            .map(ScriptResult::ImpactSite)
+            .map_err(|error| ScriptError::InvalidReturn(error.to_string())),
         ScriptReturn::WaitAt { seconds } if seconds.is_finite() && seconds >= 0.0 => Ok(
             ScriptResult::Wait(WaitCondition::At(thessa_sim_core::SimTime(seconds))),
         ),
@@ -741,6 +768,32 @@ mod tests {
         assert!(matches!(
             result,
             ScriptResult::Guidance(GuidanceIntent::AngularRate { .. })
+        ));
+    }
+
+    #[test]
+    fn site_constructors_return_normalized_typed_targets() {
+        let engine = ScriptEngine::new(ScriptLimits::default()).unwrap();
+        let landing = engine.run("return Landing.site(0, 2, 0, 250);").unwrap();
+        assert!(matches!(
+            landing,
+            ScriptResult::LandingSite(site)
+                if site.center_dir == [0.0, 1.0, 0.0] && site.radius_m == 250.0
+        ));
+        let impact = engine.run("return Impact.site(1, 0, 0, 75);").unwrap();
+        assert!(matches!(
+            impact,
+            ScriptResult::ImpactSite(site)
+                if site.center_dir == [1.0, 0.0, 0.0] && site.radius_m == 75.0
+        ));
+    }
+
+    #[test]
+    fn site_constructor_rejects_invalid_radius() {
+        let engine = ScriptEngine::new(ScriptLimits::default()).unwrap();
+        assert!(matches!(
+            engine.run("return Landing.site(1, 0, 0, -1);"),
+            Err(ScriptError::InvalidReturn(_))
         ));
     }
 

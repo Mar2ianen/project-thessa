@@ -38,6 +38,12 @@ pub enum PortType {
     Diagnostic,
     Event,
     Any,
+    /// Data-first touchdown target. Terrain validation is an authority-side
+    /// concern and is intentionally separate from graph type checking.
+    LandingSite,
+    /// Data-first predicted contact target. It shares the same center/radius
+    /// shape as a landing site but remains a distinct graph type.
+    ImpactSite,
 }
 
 impl PortType {
@@ -73,6 +79,101 @@ impl Port {
         }
     }
 }
+
+/// A surface-centered site supplied by an autopilot planner. The center is a
+/// unit direction in the reference body's frame; the radius describes the
+/// footprint to inspect when the authority later declares obstacles.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LandingSite {
+    pub center_dir: [f64; 3],
+    pub radius_m: f64,
+}
+
+impl LandingSite {
+    pub fn new(center_dir: [f64; 3], radius_m: f64) -> Result<Self, SiteError> {
+        Ok(Self {
+            center_dir: normalize_site_center(center_dir)?,
+            radius_m: validate_site_radius(radius_m)?,
+        })
+    }
+
+    pub fn validate(self) -> Result<(), SiteError> {
+        validate_site_center(self.center_dir)?;
+        validate_site_radius(self.radius_m).map(|_| ())
+    }
+}
+
+/// A predicted impact footprint. It is intentionally separate from
+/// [`LandingSite`] so a graph cannot silently connect a forecast impact to a
+/// planned touchdown input without an explicit adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ImpactSite {
+    pub center_dir: [f64; 3],
+    pub radius_m: f64,
+}
+
+impl ImpactSite {
+    pub fn new(center_dir: [f64; 3], radius_m: f64) -> Result<Self, SiteError> {
+        Ok(Self {
+            center_dir: normalize_site_center(center_dir)?,
+            radius_m: validate_site_radius(radius_m)?,
+        })
+    }
+
+    pub fn validate(self) -> Result<(), SiteError> {
+        validate_site_center(self.center_dir)?;
+        validate_site_radius(self.radius_m).map(|_| ())
+    }
+}
+
+fn normalize_site_center(center_dir: [f64; 3]) -> Result<[f64; 3], SiteError> {
+    let length_sq = center_dir[0] * center_dir[0]
+        + center_dir[1] * center_dir[1]
+        + center_dir[2] * center_dir[2];
+    if !length_sq.is_finite() || length_sq <= 1.0e-24 {
+        return Err(SiteError::InvalidCenter);
+    }
+    let length = length_sq.sqrt();
+    Ok([
+        center_dir[0] / length,
+        center_dir[1] / length,
+        center_dir[2] / length,
+    ])
+}
+
+fn validate_site_center(center_dir: [f64; 3]) -> Result<(), SiteError> {
+    let length_sq = center_dir[0] * center_dir[0]
+        + center_dir[1] * center_dir[1]
+        + center_dir[2] * center_dir[2];
+    if !length_sq.is_finite() || (length_sq - 1.0).abs() > 1.0e-9 {
+        return Err(SiteError::InvalidCenter);
+    }
+    Ok(())
+}
+
+fn validate_site_radius(radius_m: f64) -> Result<f64, SiteError> {
+    if !radius_m.is_finite() || radius_m < 0.0 {
+        return Err(SiteError::InvalidRadius);
+    }
+    Ok(radius_m)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SiteError {
+    InvalidCenter,
+    InvalidRadius,
+}
+
+impl fmt::Display for SiteError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidCenter => write!(formatter, "site center must be finite and nonzero"),
+            Self::InvalidRadius => write!(formatter, "site radius must be finite and non-negative"),
+        }
+    }
+}
+
+impl Error for SiteError {}
 
 /// Static block category. Runtime implementations may attach their own data
 /// around this IR; the category contains enough information for validation.
@@ -869,6 +970,37 @@ impl Error for PlanError {}
 mod tests {
     use super::*;
     use thessa_flight_control::{ActuatorGroup, PilotAxes};
+
+    #[test]
+    fn surface_sites_normalize_centers_but_keep_landing_and_impact_types_distinct() {
+        let landing = LandingSite::new([0.0, 2.0, 0.0], 125.0).unwrap();
+        let impact = ImpactSite::new([0.0, 2.0, 0.0], 125.0).unwrap();
+        assert_eq!(landing.center_dir, [0.0, 1.0, 0.0]);
+        assert_eq!(impact.center_dir, landing.center_dir);
+        assert_eq!(landing.radius_m, impact.radius_m);
+        assert!(!PortType::LandingSite.accepts(PortType::ImpactSite));
+        assert!(PortType::LandingSite.accepts(PortType::LandingSite));
+    }
+
+    #[test]
+    fn surface_sites_reject_degenerate_centers_and_radii() {
+        assert_eq!(
+            LandingSite::new([0.0, 0.0, 0.0], 1.0),
+            Err(SiteError::InvalidCenter)
+        );
+        assert_eq!(
+            ImpactSite::new([1.0, 0.0, 0.0], -1.0),
+            Err(SiteError::InvalidRadius)
+        );
+        assert!(
+            LandingSite {
+                center_dir: [2.0, 0.0, 0.0],
+                radius_m: 1.0,
+            }
+            .validate()
+            .is_err()
+        );
+    }
 
     fn graph_with_edge(from: PortType, to: PortType) -> AutopilotGraph {
         AutopilotGraph {

@@ -15,7 +15,8 @@ use std::time::{Duration, Instant};
 
 use glam::DVec3;
 use thessa_autopilot::{
-    AutopilotGraph, PlanAction, PlanPoll, TrajectoryPlan, TrajectoryPlanRunner,
+    AutopilotGraph, ImpactSite, LandingSite, PlanAction, PlanPoll, TrajectoryPlan,
+    TrajectoryPlanRunner,
 };
 use thessa_autopilot_js::{
     ScriptEngine, ScriptLimits, ScriptResult, ScriptScheduler, ScriptSchedulerStep,
@@ -155,6 +156,10 @@ struct Sim {
     guidance: Option<(GuidanceIntent, PropulsionDemand)>,
     plan_demand: Option<ControlDemand>,
     autopilot_graph: Option<AutopilotGraph>,
+    /// Declared autopilot targets stay data-only until a later landing/
+    /// impact planner consumes them and asks the field for obstacle evidence.
+    landing_site: Option<LandingSite>,
+    impact_site: Option<ImpactSite>,
     plan_runner: Option<TrajectoryPlanRunner>,
     last_autopilot_notice: Option<String>,
     clients: std::collections::HashMap<String, ClientVote>,
@@ -209,6 +214,8 @@ impl Sim {
             guidance: None,
             plan_demand: None,
             autopilot_graph: None,
+            landing_site: None,
+            impact_site: None,
             plan_runner: None,
             last_autopilot_notice: None,
             clients: std::collections::HashMap::new(),
@@ -432,6 +439,8 @@ impl Sim {
             ScriptSchedulerStep::Completed { result, .. } => match result {
                 ScriptResult::Guidance(intent) => self.apply_script_guidance(intent),
                 ScriptResult::Plan(plan) => self.start_plan(plan, host),
+                ScriptResult::LandingSite(site) => self.declare_landing_site(site),
+                ScriptResult::ImpactSite(site) => self.declare_impact_site(site),
                 ScriptResult::Diagnostic(diagnostic) => {
                     eprintln!(
                         "[server] autopilot diagnostic {}: {}",
@@ -448,6 +457,30 @@ impl Sim {
                 )),
             },
         }
+    }
+
+    fn declare_landing_site(&mut self, site: LandingSite) -> bool {
+        if let Err(error) = site.validate() {
+            return self.fail_autopilot(error.to_string());
+        }
+        self.landing_site = Some(site);
+        self.authority.wake_notice = Some(format!(
+            "AUTOPILOT LANDING SITE center=({:.6},{:.6},{:.6}) radius={:.1}m",
+            site.center_dir[0], site.center_dir[1], site.center_dir[2], site.radius_m
+        ));
+        true
+    }
+
+    fn declare_impact_site(&mut self, site: ImpactSite) -> bool {
+        if let Err(error) = site.validate() {
+            return self.fail_autopilot(error.to_string());
+        }
+        self.impact_site = Some(site);
+        self.authority.wake_notice = Some(format!(
+            "AUTOPILOT IMPACT SITE center=({:.6},{:.6},{:.6}) radius={:.1}m",
+            site.center_dir[0], site.center_dir[1], site.center_dir[2], site.radius_m
+        ));
+        true
     }
 
     fn apply_script_guidance(&mut self, intent: GuidanceIntent) -> bool {
@@ -1573,6 +1606,57 @@ mod tests {
             ))
         ));
         assert_eq!(sim.control_mode, ControlMode::Rate);
+    }
+
+    #[test]
+    fn server_stores_data_only_landing_and_impact_site_declarations() {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let mut sim = Sim::new(ephemeris, reference_body, false, true).expect("sim");
+        let mut host = AutopilotHost::new().expect("autopilot host");
+        sim.register("pilot");
+
+        assert!(sim.apply_autopilot(
+            "pilot",
+            &AutopilotInput {
+                tick: 0,
+                command: AutopilotCommand::StartScript {
+                    source: "return Landing.site(0, 2, 0, 300);".into(),
+                },
+            },
+            &mut host,
+        ));
+        assert_eq!(
+            sim.landing_site,
+            Some(LandingSite {
+                center_dir: [0.0, 1.0, 0.0],
+                radius_m: 300.0,
+            })
+        );
+        assert!(sim.plan_runner.is_none());
+
+        assert!(sim.apply_autopilot(
+            "pilot",
+            &AutopilotInput {
+                tick: 1,
+                command: AutopilotCommand::StartScript {
+                    source: "return Impact.site(1, 0, 0, 50);".into(),
+                },
+            },
+            &mut host,
+        ));
+        assert_eq!(
+            sim.impact_site,
+            Some(ImpactSite {
+                center_dir: [1.0, 0.0, 0.0],
+                radius_m: 50.0,
+            })
+        );
+        assert!(sim.authority.wake_notice.as_deref().is_some_and(|notice| {
+            notice.contains("IMPACT SITE") && notice.contains("radius=50.0m")
+        }));
     }
 
     #[test]

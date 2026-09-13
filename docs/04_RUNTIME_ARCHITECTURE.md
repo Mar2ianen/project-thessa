@@ -176,6 +176,36 @@ Controlling client может запускать тот же local flight model 
 
 Lightyear 0.29 — сильный prototype candidate: Bevy 0.19 compatibility, prediction, interpolation, interest management, WebTransport/WASM.
 
+### Observed vs unobserved craft
+
+Procedural generation serves observed eyes only: mesh/texture/normal tiles
+build exclusively around an observer (camera/survey), never per craft.
+Physics is identical for every craft — the same `FlightAuthority` stepping,
+the same canonical field — but an unobserved craft must never pay for, wait
+for, or depend on visual synthesis.
+
+What unobserved craft (and the rails batch certifier, the future autopilot
+landing targeting, and impact prediction) consume instead is *declared*
+terrain: `PlanetField::declare_obstacles(center, radius)` returns exact
+sample-point heights plus max/min/center values and grid slope over a disc,
+sampled from the same `height_m` the contact solver reads. No tiles, no
+textures, no normals. `certify_obstacle_track` combines those reports and
+returns grid spacing, nearest-sample radius, and center-spacing evidence that
+the report discs cover the piecewise-geodesic track. This is sampling coverage
+only; unresolved sub-grid relief still needs a separate withstand proof.
+
+Two rules follow:
+
+1. Batch certification over the reference body uses the live field maximum
+   when terrain is loaded, else the baked-in recipe maximum (the baker
+   clamps every height into recipe bounds, so it is sound with no field
+   build). Certifying against bare datum (0 m) is forbidden: low batches
+   would ghost through unmapped mountains.
+2. Landing and impact sites are data first (`center_dir` + radius fed to
+   `declare_obstacles`): the planned touchdown point under autopilot, or
+   the forecast impact point without it. Heights for those sites are
+   declared before anyone commits to them — otherwise death.
+
 ---
 
 ## 4.7. Native / WASM

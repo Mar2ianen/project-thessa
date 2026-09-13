@@ -890,3 +890,376 @@ mod prefix_regression_tests {
         );
     }
 }
+
+/// Declared obstacle heights around a site: the data an unobserved craft
+/// (or a future autopilot landing / impact predictor) needs instead of
+/// visual tiles. Full physics reads the same field through the same
+/// [`PlanetField::height_m`]; only mesh/texture/normal synthesis is
+/// skipped. Heights are exact at the sampled points; the track coverage proof
+/// is geometric, while unresolved sub-grid relief remains a future withstand
+/// proof obligation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ObstacleReport {
+    pub center_dir: [f64; 3],
+    pub radius_m: f64,
+    pub grid_step_m: f64,
+    /// Number of samples on one side of the square grid. The square contains
+    /// the requested disc, so this plus `grid_step_m` is an auditable layout
+    /// proof rather than an opaque sample count.
+    pub grid_side: u32,
+    /// Worst-case distance from any point in the sampled square to its nearest
+    /// grid sample. This proves geometric sample coverage only; it is not yet
+    /// a bound on unresolved terrain relief.
+    pub sample_cover_radius_m: f64,
+    pub samples: u32,
+    pub center_height_m: f64,
+    pub max_height_m: f64,
+    pub min_height_m: f64,
+    /// Max grid slope (rise/run) between orthogonal neighbors.
+    pub max_slope: f64,
+}
+
+/// Geometric coverage evidence for a sequence of ground-track directions.
+/// The track is covered when every consecutive pair of centers is no farther
+/// apart than two obstacle-report radii. Terrain withstand/error bounds are a
+/// separate, deliberately future proof obligation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ObstacleCoverageProof {
+    pub track_points: u32,
+    pub obstacle_radius_m: f64,
+    /// Tangent-plane report radius mapped back to the spherical surface.
+    pub obstacle_geodesic_radius_m: f64,
+    pub max_center_spacing_m: f64,
+    pub allowed_center_spacing_m: f64,
+    pub grid_step_m: f64,
+    pub grid_side: u32,
+    pub sample_cover_radius_m: f64,
+}
+
+impl ObstacleCoverageProof {
+    pub fn covers_track(&self) -> bool {
+        self.max_center_spacing_m
+            <= self.allowed_center_spacing_m + 1.0e-9 * self.allowed_center_spacing_m.max(1.0)
+    }
+}
+
+/// Obstacle reports collected along one track. `coverage` is the proof that
+/// the report discs cover the piecewise-geodesic centerline; the max/min values
+/// summarize the same reports for a caller that needs a conservative terrain
+/// ceiling.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ObstacleTrackCertificate {
+    pub reports: Vec<ObstacleReport>,
+    pub coverage: ObstacleCoverageProof,
+    pub max_height_m: f64,
+    pub min_height_m: f64,
+}
+
+impl ObstacleTrackCertificate {
+    pub fn covers_track(&self) -> bool {
+        self.coverage.covers_track()
+    }
+}
+
+impl PlanetField {
+    /// Sample obstacle heights on a tangent-plane disc around `center_dir`.
+    /// Grid step is `max(32 m, radius/32)` with the sampling wavelength
+    /// matched to it, so the grid resolves what the samples contain;
+    /// side count caps at 129 (under 17k samples, one-time cost).
+    pub fn declare_obstacles(
+        &self,
+        center_dir: [f64; 3],
+        radius_m: f64,
+    ) -> Result<ObstacleReport, String> {
+        if !radius_m.is_finite() || radius_m < 0.0 {
+            return Err(format!(
+                "obstacle radius must be finite and non-negative, got {radius_m}"
+            ));
+        }
+        let center_len_sq = center_dir[0] * center_dir[0]
+            + center_dir[1] * center_dir[1]
+            + center_dir[2] * center_dir[2];
+        if !center_len_sq.is_finite() || center_len_sq <= 0.0 {
+            return Err("obstacle center direction must be finite and nonzero".to_string());
+        }
+        let center = [
+            center_dir[0] / center_len_sq.sqrt(),
+            center_dir[1] / center_len_sq.sqrt(),
+            center_dir[2] / center_len_sq.sqrt(),
+        ];
+        // Tangent basis: deterministic pick, orthogonalized exactly.
+        let helper = if center[0].abs() < 0.9 {
+            [1.0, 0.0, 0.0]
+        } else {
+            [0.0, 1.0, 0.0]
+        };
+        let mut e1 = [
+            center[1] * helper[2] - center[2] * helper[1],
+            center[2] * helper[0] - center[0] * helper[2],
+            center[0] * helper[1] - center[1] * helper[0],
+        ];
+        let e1_len = (e1[0] * e1[0] + e1[1] * e1[1] + e1[2] * e1[2]).sqrt();
+        e1 = [e1[0] / e1_len, e1[1] / e1_len, e1[2] / e1_len];
+        let e2 = [
+            center[1] * e1[2] - center[2] * e1[1],
+            center[2] * e1[0] - center[0] * e1[2],
+            center[0] * e1[1] - center[1] * e1[0],
+        ];
+        let mut step = (32.0f64).max(radius_m / 32.0);
+        let mut half = (radius_m / step).ceil() as usize;
+        if 2 * half + 1 > 129 {
+            half = 64;
+            step = radius_m / 64.0;
+        }
+        let min_wavelength_m = step.max(32.0);
+        let side = 2 * half + 1;
+        let mut heights = Vec::with_capacity(side * side);
+        let mut max_height_m = f64::NEG_INFINITY;
+        let mut min_height_m = f64::INFINITY;
+        for iy in 0..side {
+            for ix in 0..side {
+                let dx = (ix as f64 - half as f64) * step;
+                let dy = (iy as f64 - half as f64) * step;
+                let p = [
+                    center[0] * self.params.radius_m + e1[0] * dx + e2[0] * dy,
+                    center[1] * self.params.radius_m + e1[1] * dx + e2[1] * dy,
+                    center[2] * self.params.radius_m + e1[2] * dx + e2[2] * dy,
+                ];
+                let len = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+                let dir = [p[0] / len, p[1] / len, p[2] / len];
+                let h = self.height_m(dir, min_wavelength_m);
+                if !h.is_finite() {
+                    return Err("obstacle sampling hit non-finite height".to_string());
+                }
+                max_height_m = max_height_m.max(h);
+                min_height_m = min_height_m.min(h);
+                heights.push(h);
+            }
+        }
+        let center_height_m = heights[half * side + half];
+        let mut max_slope: f64 = 0.0;
+        for iy in 0..side {
+            for ix in 0..side {
+                let h = heights[iy * side + ix];
+                if ix + 1 < side {
+                    max_slope = max_slope.max(((heights[iy * side + ix + 1] - h) / step).abs());
+                }
+                if iy + 1 < side {
+                    max_slope = max_slope.max(((heights[(iy + 1) * side + ix] - h) / step).abs());
+                }
+            }
+        }
+        Ok(ObstacleReport {
+            center_dir: center,
+            radius_m,
+            grid_step_m: step,
+            grid_side: side as u32,
+            sample_cover_radius_m: if side == 1 {
+                0.0
+            } else {
+                step * 0.5_f64.sqrt()
+            },
+            samples: heights.len() as u32,
+            center_height_m,
+            max_height_m,
+            min_height_m,
+            max_slope,
+        })
+    }
+
+    /// Declare obstacles along a ground track and return explicit geometric
+    /// coverage evidence. Each report samples a tangent-plane square that
+    /// contains its obstacle disc. Consecutive report centers must be close
+    /// enough for those discs to cover the complete piecewise-geodesic track.
+    /// This does not claim that unresolved sub-grid relief can withstand a
+    /// vehicle; that is the next certification layer.
+    pub fn certify_obstacle_track(
+        &self,
+        track_dirs: &[[f64; 3]],
+        obstacle_radius_m: f64,
+    ) -> Result<ObstacleTrackCertificate, String> {
+        if track_dirs.is_empty() {
+            return Err("obstacle track must contain at least one point".into());
+        }
+        if !obstacle_radius_m.is_finite() || obstacle_radius_m < 0.0 {
+            return Err(format!(
+                "obstacle track radius must be finite and non-negative, got {obstacle_radius_m}"
+            ));
+        }
+        let mut normalized = Vec::with_capacity(track_dirs.len());
+        for direction in track_dirs {
+            let length_sq = direction[0] * direction[0]
+                + direction[1] * direction[1]
+                + direction[2] * direction[2];
+            if !length_sq.is_finite() || length_sq <= 0.0 {
+                return Err("obstacle track contains a degenerate direction".into());
+            }
+            let length = length_sq.sqrt();
+            normalized.push([
+                direction[0] / length,
+                direction[1] / length,
+                direction[2] / length,
+            ]);
+        }
+        let mut max_center_spacing_m: f64 = 0.0;
+        for pair in normalized.windows(2) {
+            let dot = (pair[0][0] * pair[1][0] + pair[0][1] * pair[1][1] + pair[0][2] * pair[1][2])
+                .clamp(-1.0, 1.0);
+            max_center_spacing_m = max_center_spacing_m.max(self.params.radius_m * dot.acos());
+        }
+        let reports: Vec<_> = normalized
+            .iter()
+            .map(|direction| self.declare_obstacles(*direction, obstacle_radius_m))
+            .collect::<Result<_, _>>()?;
+        let first = reports.first().expect("track has at least one report");
+        let coverage = ObstacleCoverageProof {
+            track_points: normalized.len() as u32,
+            obstacle_radius_m,
+            max_center_spacing_m,
+            obstacle_geodesic_radius_m: self.params.radius_m
+                * (obstacle_radius_m / self.params.radius_m).atan(),
+            allowed_center_spacing_m: 2.0
+                * self.params.radius_m
+                * (obstacle_radius_m / self.params.radius_m).atan(),
+            grid_step_m: first.grid_step_m,
+            grid_side: first.grid_side,
+            sample_cover_radius_m: first.sample_cover_radius_m,
+        };
+        if !coverage.covers_track() {
+            return Err(format!(
+                "obstacle track sampling gap {:.3} m exceeds covered spacing {:.3} m",
+                coverage.max_center_spacing_m, coverage.allowed_center_spacing_m
+            ));
+        }
+        Ok(ObstacleTrackCertificate {
+            max_height_m: reports
+                .iter()
+                .map(|report| report.max_height_m)
+                .fold(f64::NEG_INFINITY, f64::max),
+            min_height_m: reports
+                .iter()
+                .map(|report| report.min_height_m)
+                .fold(f64::INFINITY, f64::min),
+            reports,
+            coverage,
+        })
+    }
+}
+
+#[cfg(test)]
+mod obstacle_tests {
+    use super::*;
+
+    fn field() -> PlanetField {
+        let recipe: crate::spec_recipe::SpecRecipe =
+            toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml")).unwrap();
+        crate::field::field_from_manifest(&crate::spec_recipe::manifest_from_spec(&recipe).unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    fn obstacle_report_is_deterministic_and_bounds_center() {
+        let field = field();
+        let raw: [f64; 3] = [0.3, 0.8, 0.5];
+        let len: f64 = (raw[0] * raw[0] + raw[1] * raw[1] + raw[2] * raw[2]).sqrt();
+        let dir = [raw[0] / len, raw[1] / len, raw[2] / len];
+        let a = field.declare_obstacles(dir, 2000.0).expect("report");
+        let b = field.declare_obstacles(dir, 2000.0).expect("report");
+        assert_eq!(a, b);
+        assert!(a.max_height_m >= a.center_height_m);
+        assert!(a.min_height_m <= a.center_height_m);
+        assert!(a.max_slope >= 0.0);
+        assert!(a.samples > 100);
+        // Center agrees with a direct sample at comparable wavelength.
+        let direct = field.height_m(dir, 32.0);
+        assert!(
+            (a.center_height_m - direct).abs() <= 1.0,
+            "center {} vs direct {direct}",
+            a.center_height_m
+        );
+    }
+
+    #[test]
+    fn obstacle_report_exposes_geometric_sampling_coverage() {
+        let field = field();
+        let report = field
+            .declare_obstacles([0.0, 1.0, 0.0], 2_000.0)
+            .expect("report");
+        assert_eq!(report.grid_side * report.grid_side, report.samples);
+        assert!(report.sample_cover_radius_m > 0.0);
+        assert!(report.sample_cover_radius_m <= report.grid_step_m);
+    }
+
+    #[test]
+    fn obstacle_track_certificate_proves_centerline_coverage() {
+        let field = field();
+        let center = [0.0, 1.0, 0.0];
+        let small_turn = [0.001, (1.0_f64 - 0.001_f64.powi(2)).sqrt(), 0.0];
+        let certificate = field
+            .certify_obstacle_track(&[center, small_turn], 20_000.0)
+            .expect("covered track");
+        assert!(certificate.covers_track());
+        assert_eq!(certificate.coverage.track_points, 2);
+        assert_eq!(certificate.reports.len(), 2);
+        assert!(certificate.coverage.max_center_spacing_m < 40_000.0);
+        assert!(certificate.max_height_m >= certificate.min_height_m);
+
+        let uncovered = field.certify_obstacle_track(&[center, [1.0, 0.0, 0.0]], 20_000.0);
+        assert!(uncovered.is_err(), "a wide sampling gap must not certify");
+    }
+
+    #[test]
+    fn obstacle_report_rejects_degenerate_inputs() {
+        let field = field();
+        assert!(field.declare_obstacles([0.0, 0.0, 0.0], 100.0).is_err());
+        assert!(
+            field
+                .declare_obstacles([f64::NAN, 0.0, 0.0], 100.0)
+                .is_err()
+        );
+        assert!(field.declare_obstacles([0.0, 1.0, 0.0], -1.0).is_err());
+        assert!(
+            field
+                .declare_obstacles([0.0, 1.0, 0.0], f64::INFINITY)
+                .is_err()
+        );
+        // Zero radius is a single-point report, not an error.
+        let point = field
+            .declare_obstacles([0.0, 1.0, 0.0], 0.0)
+            .expect("point");
+        assert_eq!(point.samples, 1);
+        assert_eq!(point.max_slope, 0.0);
+    }
+
+    #[test]
+    fn obstacle_max_covers_known_highland_site() {
+        // A 50 km declaration around high ground must see multi-kilometre
+        // relief (otherwise low batches would certify through mountains).
+        let field = field();
+        // Deterministic high ground: scan a fixed latitude circle for elevation.
+        let mut best = (f64::NEG_INFINITY, [0.0f64, 1.0, 0.0]);
+        for i in 0..360 {
+            let lon = i as f64 * std::f64::consts::TAU / 360.0;
+            let raw = [0.5 * lon.cos(), 0.5, 0.5 * lon.sin()];
+            let len: f64 = (raw[0] * raw[0] + raw[1] * raw[1] + raw[2] * raw[2]).sqrt();
+            let dir = [raw[0] / len, raw[1] / len, raw[2] / len];
+            let h = field.height_m(dir, 32.0);
+            if h > best.0 {
+                best = (h, dir);
+            }
+        }
+        eprintln!("highest meridian sample: {:.0} m", best.0);
+        let report = field.declare_obstacles(best.1, 50_000.0).expect("report");
+        assert!(
+            report.max_height_m >= best.0,
+            "report max {} below sampled {}",
+            report.max_height_m,
+            best.0
+        );
+        assert!(
+            report.max_height_m > 1000.0,
+            "relief {}",
+            report.max_height_m
+        );
+    }
+}

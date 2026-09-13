@@ -12,10 +12,8 @@ use std::{
     time::Instant,
 };
 use thessa_worldgen_rocky::{
-    field::{PlanetField, field_from_manifest},
+    field::PlanetField,
     lod::{self, TerrainTile, TileKey},
-    spec_recipe::{SpecRecipe, manifest_from_spec},
-    sphere::dir_from_latlon,
 };
 
 #[derive(Resource)]
@@ -133,63 +131,17 @@ fn setup_terrain(
         Visibility::Hidden,
         Name::new("Thessa closed terrain backdrop"),
     ));
-    let recipe: SpecRecipe =
-        toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml"))
-            .expect("world recipe");
-    let manifest = manifest_from_spec(&recipe).expect("world manifest");
-    let field = Arc::new(field_from_manifest(&manifest).expect("canonical world field"));
     let system: SystemConfig =
         toml::from_str(include_str!("../../../data/system.toml")).expect("system");
     let ephemeris = system.bake().expect("ephemeris");
-    let planet = ephemeris
-        .body_state(
-            ephemeris.body_id(&recipe.planet.id).expect("terrain world"),
-            SimTime::EPOCH,
-        )
-        .unwrap();
-    // Daylight for bookmark scoring comes from the brightest configured
-    // star, never a named sun.
-    let daylight_star = system
-        .star
-        .iter()
-        .max_by(|a, b| a.luminosity_solar.total_cmp(&b.luminosity_solar))
-        .expect("at least one configured star");
-    let star = ephemeris
-        .body_state(
-            ephemeris.body_id(&daylight_star.id).expect("daylight star"),
-            SimTime::EPOCH,
-        )
-        .unwrap();
-    let light = (star.position_inertial - planet.position_inertial).normalize();
-    let daylight = [light.x, light.z, -light.y];
-    // Deterministic survey bookmarks select real terrain, never manufacture it.
-    let mut best = [(f64::INFINITY, [1.0, 0.0, 0.0]); 3];
-    for lat in (-55..55).step_by(3) {
-        for lon in (-180..180).step_by(3) {
-            let dir = dir_from_latlon(lat as f64, lon as f64);
-            if lod::dot(dir, daylight) < 0.35 {
-                continue;
-            }
-            let s = field.sample_surface(dir, 500.0);
-            if s.height_m <= 0.0 {
-                continue;
-            }
-            let scores = [
-                (s.height_m - 100.0).abs() + (s.temperature_k - 284.0).abs() * 90.0,
-                (s.height_m - 3200.0).abs() + (s.temperature_k - 268.0).abs() * 50.0,
-                (s.height_m - 1500.0).abs() - s.geothermal_flux_w_m2 * 1000.0,
-            ];
-            for i in 0..3 {
-                if scores[i] < best[i].0 {
-                    best[i] = (scores[i], dir);
-                }
-            }
-        }
-    }
-    survey.sites = best
+    // Canonical field plus deterministic bookmarks come from the shared
+    // authority helper, so the headless server selects identical sites
+    // without ever receiving world state.
+    let (field, bookmarks) =
+        thessa_flight_authority::canonical_launch_setup(&ephemeris).expect("launch sites");
+    survey.sites = bookmarks
         .into_iter()
         .zip(["COAST", "HIGHLANDS", "VOLCANIC"])
-        .map(|((_, dir), label)| (dir, label))
         .collect();
     survey.distance = 5000.0;
     survey.orbit = Quat::IDENTITY;
@@ -468,13 +420,13 @@ fn update_terrain(
             ),
         >,
     ),
+    sky: Option<Res<water::WaterSky>>,
 ) {
     let (mut readout, mut backdrop) = display;
     let started = Instant::now();
     let active = survey.active
         || (pilot.view_mode == ClientViewMode::Pilot
-            && DVec3::from_array(runtime.terrain_origin()).length() - world.field.params.radius_m
-                < 80000.0);
+            && runtime.render_terrain_origin_m().length() - world.field.params.radius_m < 80000.0);
     world.counters.terrain_patches_generated = 0;
     if !active {
         world.render_center = None;
@@ -494,7 +446,7 @@ fn update_terrain(
     let radius = world.field.params.radius_m;
     let (origin, rotation, eye) = if survey.active {
         let (dir, label) = survey.sites[survey.site];
-        let spin = DQuat::from_rotation_y(runtime.terrain_spin());
+        let spin = DQuat::from_rotation_y(runtime.render_spin());
         let up = spin * DVec3::from_array(dir);
         let center = up * (radius + world.field.height_m(dir, 32.0).max(0.0));
         let north = (DVec3::Y - up * up.y).normalize();
@@ -532,8 +484,8 @@ fn update_terrain(
         for mut text in &mut readout {
             text.0.clear();
         }
-        let origin = DVec3::from_array(runtime.terrain_origin());
-        let spin = DQuat::from_rotation_y(runtime.terrain_spin());
+        let origin = runtime.render_terrain_origin_m();
+        let spin = DQuat::from_rotation_y(runtime.render_spin());
         (
             origin,
             spin,
@@ -601,8 +553,13 @@ fn update_terrain(
     }
     // Velocity detail bias (Outerra/Unreal-style): don't chase detail the
     // viewer crosses within one selection period. Hover keeps full 1/48°
-    // refinement; 430 m/s cruise relaxes ~5x toward the far rule.
-    let detail_bias = (1.0 + world.eye_speed_mps.max(0.0) / 100.0).clamp(1.0, 8.0);
+    // refinement; 430 m/s cruise relaxes ~5x toward the far rule. Past
+    // ~3 km/s the tile demand at full depth (≈970 new tiles/s at 500 m,
+    // measured) outruns worker throughput (~200/s) by 5x, so the curve
+    // keeps climbing to the LOD-internal cap of 32: at 3.7 km/s demand
+    // drops to ≈174/s (500 m) and ≈10/s (5 km). Detail the viewer crosses
+    // in one frame is motion-blurred anyway.
+    let detail_bias = (1.0 + world.eye_speed_mps.max(0.0) / 100.0).clamp(1.0, 32.0);
     let mut selection_changed = false;
     if now_s - world.selection_at > 0.35 || moved || world.wanted.is_empty() {
         // Reselect when workers are nearly drained. Existing coverage is
@@ -778,7 +735,7 @@ fn update_terrain(
             }
             for key in desired.difference(&world.visible) {
                 let tile = &world.cache[key];
-                commands.spawn((
+                let mut tile_entity = commands.spawn((
                     SurfaceTile(*key),
                     Mesh3d(tile.mesh.clone()),
                     MeshMaterial3d(tile.material.clone()),
@@ -786,6 +743,11 @@ fn update_terrain(
                         .with_rotation(rotation.as_quat()),
                     Name::new(format!("Thessa tile {key:?}")),
                 ));
+                // Shared sky probe at spawn (atomic with creation: no
+                // query/insert race when cover churns under warp).
+                if let Some(sky) = sky.as_deref() {
+                    tile_entity.insert(water::tile_water_probe(sky));
+                }
             }
             world.counters.terrain_cache_hits += desired.len() as u64;
             world.visible = desired;
@@ -864,6 +826,12 @@ fn surface_image(size: usize, pixels: Vec<u8>, srgb: bool) -> Image {
         image::{ImageSampler, ImageSamplerDescriptor},
         render::render_resource::{Extent3d, TextureDimension, TextureFormat},
     };
+    // Exact sRGB decode table: `(v/255)^2.2` evaluated once per byte value
+    // instead of per texel per mip level. Bitwise identical — the table
+    // memoizes the same expression, it does not approximate it.
+    static SRGB_TO_LINEAR: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+    let decode =
+        SRGB_TO_LINEAR.get_or_init(|| std::array::from_fn(|i| (i as f32 / 255.0).powf(2.2)));
     let mut data = pixels.clone();
     let mut previous = pixels;
     let mut width = size;
@@ -877,15 +845,14 @@ fn surface_image(size: usize, pixels: Vec<u8>, srgb: bool) -> Image {
                     let mut sum = 0.0_f32;
                     for dy in 0..2 {
                         for dx in 0..2 {
-                            let value = previous[((y * 2 + dy).min(width - 1) * width
+                            let byte = previous[((y * 2 + dy).min(width - 1) * width
                                 + (x * 2 + dx).min(width - 1))
                                 * 4
-                                + channel] as f32
-                                / 255.0;
+                                + channel];
                             sum += if srgb && channel < 3 {
-                                value.powf(2.2)
+                                decode[byte as usize]
                             } else {
-                                value
+                                byte as f32 / 255.0
                             };
                         }
                     }
@@ -968,7 +935,7 @@ fn update_local_sky(
     let local_origin = if survey.active {
         world.render_origin_m
     } else {
-        DVec3::from_array(flight.terrain_origin())
+        flight.render_terrain_origin_m()
     } + camera.translation.as_dvec3();
     let observer =
         reference.position_inertial + DVec3::new(local_origin.x, -local_origin.z, local_origin.y);

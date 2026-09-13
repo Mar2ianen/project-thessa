@@ -8,28 +8,35 @@
 
 mod thread_bake;
 
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use glam::DVec3;
-use thessa_flight_authority::{ControlMode, FlightAuthority};
+use thessa_flight_authority::{ControlMode, FlightAuthority, canonical_launch_setup};
 use thessa_flight_net::{ClientInput, Command, Snapshot};
 use thessa_protocol::{FrameDecoder, kind};
 use thessa_sim_core::{BakedEphemeris, BodyId, SimTime, SystemConfig};
 use thread_bake::ThreadBakeQueue;
 
-/// Wall seconds covered by one warped iteration. The chunk is sized from
-/// the vote (2 wall-s worth of sim time), so input latency and snapshot
-/// cadence stay interactive at any warp while big requests still trip the
-/// authority catch-up rule (blocking first bake, then unlimited batches).
-const WARP_CHUNK_WALL_S: f64 = 2.0;
-/// Floor for warped chunks: keeps modest requests on the async path
-/// (not the blocking catch-up) while staying far above one tick.
-const WARP_CHUNK_MIN_S: f64 = 4.0;
+/// Wall-time quantum for the authoritative driver. It bounds how long the
+/// driver can stay away from input/snapshot handling; it is not a simulation
+/// rate cap. Each quantum requests `warp * quantum` simulation seconds and
+/// the authority serves as much as its work budget/rails path allows.
+const DRIVER_WORK_QUANTUM_S: f64 = 0.020;
+/// CPU work quantum for ordinary fixed-step physics. When the solver is slower
+/// than the requested warp, unserved demand is dropped and effective warp
+/// reports the actual result; rails batches remain the high-throughput path.
+const SIM_WORK_BUDGET: Duration = Duration::from_millis(4);
+/// Retry cadence while a background rails bake is still warming the cache.
+const BAKE_POLL_INTERVAL: Duration = Duration::from_millis(2);
 /// Wall-pacing for snapshots so high warp does not flood the pipe; the
-/// client interpolates between them.
+/// client renders between them.
 const SNAPSHOT_MIN_INTERVAL_S: f64 = 0.05;
+/// Do not let a producer that ignores input coalescing monopolise the driver.
+/// This is an ingress fairness quantum, not a simulation/TPS limit.
+const MAX_UPSTREAM_MESSAGES_PER_ITERATION: usize = 256;
 /// Upper clamp for requested warp (2^17, same ceiling as the client).
 const MAX_WARP: f64 = 131072.0;
 
@@ -133,7 +140,8 @@ struct Sim {
     control_mode: ControlMode,
     clients: std::collections::HashMap<String, ClientVote>,
     advanced_s: f64,
-    wall_s: f64,
+    compute_s: f64,
+    wall_started: Instant,
     steps: u64,
     rails_s: f64,
 }
@@ -164,7 +172,8 @@ impl Sim {
             control_mode: ControlMode::Navball,
             clients: std::collections::HashMap::new(),
             advanced_s: 0.0,
-            wall_s: 0.0,
+            compute_s: 0.0,
+            wall_started: Instant::now(),
             steps: 0,
             rails_s: 0.0,
         })
@@ -185,9 +194,13 @@ impl Sim {
 
     /// Consensual warp: the minimum vote wins.
     fn effective_warp_limit(&self) -> f64 {
+        if self.clients.is_empty() {
+            return 0.0;
+        }
         self.clients
             .values()
             .map(|vote| vote.warp)
+            .map(|warp| if warp.is_finite() { warp.max(0.0) } else { 0.0 })
             .fold(f64::INFINITY, f64::min)
             .min(MAX_WARP)
     }
@@ -201,9 +214,22 @@ impl Sim {
         self.effective_warp_limit()
     }
 
-    fn apply_input(&mut self, id: &str, input: &ClientInput) {
-        let authority = &mut self.authority;
-        authority.control_input = DVec3::from_array(input.control_input);
+    fn apply_input(&mut self, id: &str, input: &ClientInput) -> bool {
+        if !self.clients.contains_key(id) {
+            return false;
+        }
+        let mut force_snapshot = false;
+        let has_engine_command = input
+            .commands
+            .iter()
+            .any(|command| matches!(command, Command::Stage | Command::Engine { .. }));
+        // Field-level borrows (no `let authority` alias): the Reset arm
+        // below needs `&mut self.authority` together with `&self.ephemeris`,
+        // which an aliased borrow would not allow.
+        let control_input = DVec3::from_array(input.control_input);
+        if control_input.is_finite() {
+            self.authority.control_input = control_input.clamp(DVec3::splat(-1.0), DVec3::ONE);
+        }
         self.control_mode = input.control_mode;
         // A degenerate wire target must never reach the attitude law:
         // keep the previous target unless the new one is finite nonzero.
@@ -214,43 +240,83 @@ impl Sim {
             input.sas_target_xyzw[3],
         );
         if target.is_finite() && target.length_squared() > 1e-12 {
-            authority.sas_target_orientation = target.normalize();
+            self.authority.sas_target_orientation = target.normalize();
         }
-        authority.throttle = input.throttle.clamp(0.0, 1.0);
-        authority.engine_active = input.engine_active;
-        authority.sas_enabled = input.sas_enabled;
-        authority.rcs_enabled = input.rcs_enabled;
-        authority.gear_down = input.gear_down;
+        self.authority.throttle = input.throttle.clamp(0.0, 1.0);
+        // A full input carries a last-value state, but an explicit staging or
+        // engine command is an edge. Do not let a coalesced stale state field
+        // overwrite the result of those preserved events.
+        if !has_engine_command {
+            self.authority.engine_active = input.engine_active;
+        }
+        self.authority.sas_enabled = input.sas_enabled;
+        self.authority.rcs_enabled = input.rcs_enabled;
+        self.authority.gear_down = input.gear_down;
         for command in &input.commands {
             match command {
                 Command::SetWarp { factor } => {
                     if let Some(vote) = self.clients.get_mut(id) {
-                        vote.warp = factor.clamp(0.0, MAX_WARP);
+                        let warp = if factor.is_finite() {
+                            factor.clamp(0.0, MAX_WARP)
+                        } else {
+                            0.0
+                        };
+                        force_snapshot |= vote.warp != warp;
+                        vote.warp = warp;
                     }
                 }
                 // Slice semantics (matches the client): staging drives the
                 // engine cutoff for the single X-15 plant.
-                Command::Stage => authority.engine_active = !authority.engine_active,
-                Command::Engine { active } => authority.engine_active = *active,
+                Command::Stage => {
+                    self.authority.engine_active = !self.authority.engine_active;
+                    force_snapshot = true;
+                }
+                Command::Engine { active } => {
+                    force_snapshot |= self.authority.engine_active != *active;
+                    self.authority.engine_active = *active;
+                }
                 Command::Pause { paused } => {
                     if let Some(vote) = self.clients.get_mut(id) {
+                        force_snapshot |= vote.paused != *paused;
                         vote.paused = *paused;
+                    }
+                }
+                // Relaunch at the canonical site (same baked-in recipe as
+                // the client survey derives it from). Reuses the client
+                // reset path verbatim: clock preserved, controls cleared,
+                // engine armed at zero throttle. No terrain, no relaunch.
+                Command::Reset => {
+                    if self.authority.reset_to_launch_site(&self.ephemeris).is_ok() {
+                        force_snapshot = true;
                     }
                 }
             }
         }
+        force_snapshot
     }
 
-    /// Advance one chunk (or less at 1x); returns sim-seconds advanced.
+    /// Advance one requested wall quantum (or a benchmark chunk); returns
+    /// sim-seconds actually advanced. The optional budget only makes ordinary
+    /// physics cooperative; it never changes the fixed solver dt.
     fn advance_chunk(&mut self, chunk_s: f64) -> Result<f64, String> {
+        self.advance_chunk_with_budget(chunk_s, None)
+    }
+
+    fn advance_chunk_with_budget(
+        &mut self,
+        chunk_s: f64,
+        budget: Option<Duration>,
+    ) -> Result<f64, String> {
         if self.paused() || self.authority.flight_error.is_some() {
             return Ok(0.0);
         }
         let before = self.authority.flight_time_s;
         let started = Instant::now();
-        self.authority
-            .advance_with_budget(&self.ephemeris, self.control_mode, chunk_s, None)
-            .map_err(|e| {
+        let result =
+            self.authority
+                .advance_with_budget(&self.ephemeris, self.control_mode, chunk_s, budget);
+        self.compute_s += started.elapsed().as_secs_f64();
+        result.map_err(|e| {
                 self.authority.engine_active = false;
                 self.authority.flight_error = Some(e.to_string());
                 eprintln!(
@@ -264,7 +330,6 @@ impl Sim {
                 );
                 e.to_string()
             })?;
-        self.wall_s += started.elapsed().as_secs_f64();
         let advanced = self.authority.flight_time_s - before;
         self.advanced_s += advanced;
         self.steps += self.authority.steps_this_frame as u64;
@@ -273,11 +338,34 @@ impl Sim {
     }
 
     fn effective_warp(&self) -> f64 {
-        if self.wall_s <= 0.0 {
+        let wall_s = self.wall_started.elapsed().as_secs_f64();
+        if wall_s <= 0.0 {
             0.0
         } else {
-            (self.advanced_s / self.wall_s).min(self.effective_warp_limit().max(0.0))
+            self.advanced_s / wall_s
         }
+    }
+
+    fn wall_s(&self) -> f64 {
+        self.wall_started.elapsed().as_secs_f64()
+    }
+
+    /// Serve-path launch site: canonical field plus the COAST survey
+    /// bookmark, derived exactly like the client survey (same recipe, same
+    /// scan), so terrain collisions and spawn state match without ever
+    /// transferring world state. Bench paths (`--measure`, `--drift`,
+    /// `--vacuum`) skip this deliberately: they place the craft in orbit
+    /// and must not pay field-build time or terrain checks.
+    fn init_launch_site(&mut self) -> Result<(), String> {
+        let started = Instant::now();
+        let (field, sites) = canonical_launch_setup(&self.ephemeris)?;
+        self.authority
+            .initialize_world_site(field, sites[0], &self.ephemeris);
+        eprintln!(
+            "[server] launch site ready in {:.3}s",
+            started.elapsed().as_secs_f64()
+        );
+        Ok(())
     }
 
     fn snapshot(&self) -> Snapshot {
@@ -290,6 +378,8 @@ impl Sim {
             engine_active: authority.engine_active,
             paused: self.paused(),
             effective_warp: self.effective_warp(),
+            server_compute_s: self.compute_s,
+            server_wall_s: self.wall_s(),
             steps_this_frame: authority.steps_this_frame,
             rails_advanced_s: authority.rails_advanced_this_frame,
             wake_notice: authority.wake_notice.clone(),
@@ -338,6 +428,59 @@ fn send_frame(
     }
 }
 
+fn decode_client_input(frame: &[u8]) -> Option<ClientInput> {
+    let envelope = thessa_flight_net::decode_frame(frame).ok()?;
+    if envelope.kind != kind::CLIENT_INPUT {
+        return None;
+    }
+    thessa_flight_net::decode_payload::<ClientInput>(&envelope).ok()
+}
+
+fn enqueue_client_inputs(
+    id: &str,
+    frames: impl IntoIterator<Item = Vec<u8>>,
+    upstream: &Sender<Upstream>,
+) -> bool {
+    for frame in frames {
+        if let Some(input) = decode_client_input(&frame)
+            && upstream
+                .send(Upstream::Input(id.to_string(), input))
+                .is_err()
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn driver_sleep_duration(
+    ingress_saturated: bool,
+    budget_exhausted: bool,
+    bake_wait: bool,
+    lag_s: f64,
+    requested_warp: f64,
+    work_elapsed: Duration,
+) -> Duration {
+    // Saturation is a yield point, not a 4 ms / 20 ms duty cycle. Returning
+    // zero makes the next iteration run immediately after ingress handling.
+    if ingress_saturated || budget_exhausted {
+        return Duration::ZERO;
+    }
+    if bake_wait {
+        return BAKE_POLL_INTERVAL;
+    }
+    if lag_s + 1.0e-12 >= thessa_sim_core::WORLD_TICK_S {
+        return Duration::ZERO;
+    }
+    let until_tick_s = (thessa_sim_core::WORLD_TICK_S - lag_s) / requested_warp;
+    let remaining_s = until_tick_s - work_elapsed.as_secs_f64();
+    if remaining_s > 0.0 {
+        Duration::from_secs_f64(remaining_s.clamp(0.001, DRIVER_WORK_QUANTUM_S))
+    } else {
+        Duration::ZERO
+    }
+}
+
 /// Traffic from every transport into the sim driver. Subscriber
 /// channels are tokio unbounded senders: `send` never blocks, so the sync
 /// driver and both async/sync writers share one type.
@@ -347,13 +490,59 @@ enum Upstream {
     Subscribe(String, tokio::sync::mpsc::UnboundedSender<Vec<u8>>),
 }
 
+/// Mailbox for one client during a driver quantum. Continuous controls are
+/// last-value-wins; event-like commands remain ordered. Warp and pause are
+/// state votes, so an older vote can be replaced without losing a stage or
+/// toggle event behind it.
+#[derive(Default)]
+struct PendingInput {
+    latest: Option<ClientInput>,
+    commands: Vec<Command>,
+}
+
+impl PendingInput {
+    fn push(&mut self, input: ClientInput) {
+        let mut input = input;
+        let commands = std::mem::take(&mut input.commands);
+        self.latest = Some(input);
+        for command in commands {
+            match command {
+                Command::SetWarp { .. } => {
+                    self.commands
+                        .retain(|queued| !matches!(queued, Command::SetWarp { .. }));
+                    self.commands.push(command);
+                }
+                Command::Pause { .. } => {
+                    self.commands
+                        .retain(|queued| !matches!(queued, Command::Pause { .. }));
+                    self.commands.push(command);
+                }
+                // Stage and explicit engine commands are edge/event-like:
+                // every one must reach the authoritative state in order.
+                event => self.commands.push(event),
+            }
+        }
+    }
+
+    fn take(&mut self) -> Option<ClientInput> {
+        let mut input = self.latest.take()?;
+        input.commands = std::mem::take(&mut self.commands);
+        Some(input)
+    }
+}
+
 /// Shared sim driver: one authoritative tick order for every transport.
 /// stdio and TCP only differ in how frames arrive and where snapshots go.
 struct Driver {
     sim: Sim,
     upstream: Receiver<Upstream>,
     subscribers: Vec<(String, tokio::sync::mpsc::UnboundedSender<Vec<u8>>)>,
-    next_deadline: Instant,
+    /// Desired authoritative sim time generated from real wall time and the
+    /// current consensus warp. Actual service catches this target when the
+    /// machine is fast enough; when it is not, the driver stays busy between
+    /// quanta and effective warp falls honestly.
+    pacing_target_s: f64,
+    last_pacing: Instant,
     last_snapshot: Instant,
     last_status: Instant,
     exit_when_empty: bool,
@@ -373,15 +562,31 @@ impl Driver {
             .retain(|(_, tx)| tx.send(frame.clone()).is_ok());
     }
 
-    /// One iteration; `Ok(true)` asks for orderly shutdown (empty room in
-    /// exit mode). Inputs drain first so a warp vote lands before pacing.
-    fn iterate(&mut self) -> Result<bool, String> {
-        while let Ok(message) = self.upstream.try_recv() {
+    /// Drain a bounded ingress slice. The limit only prevents a hot producer
+    /// from monopolising the sim thread; per-client continuous input is still
+    /// coalesced and event commands are retained in order.
+    fn drain_upstream(&mut self) -> (bool, bool) {
+        let mut pending = BTreeMap::<String, PendingInput>::new();
+        let mut force_snapshot = false;
+        let mut processed = 0;
+        while processed < MAX_UPSTREAM_MESSAGES_PER_ITERATION {
+            let message = match self.upstream.try_recv() {
+                Ok(message) => message,
+                Err(std::sync::mpsc::TryRecvError::Empty)
+                | Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            };
+            processed += 1;
             match message {
-                Upstream::Input(id, input) => self.sim.apply_input(&id, &input),
+                Upstream::Input(id, input) => pending.entry(id).or_default().push(input),
                 Upstream::Leave(id) => {
+                    if let Some(mut queued) = pending.remove(&id)
+                        && let Some(input) = queued.take()
+                    {
+                        let _ = self.sim.apply_input(&id, &input);
+                    }
                     self.sim.unregister(&id);
                     self.subscribers.retain(|(other, _)| other != &id);
+                    force_snapshot = true;
                 }
                 Upstream::Subscribe(id, tx) => {
                     self.sim.register(&id);
@@ -393,80 +598,145 @@ impl Driver {
                         Ok(frame) => {
                             if tx.send(frame).is_ok() {
                                 self.subscribers.push((id, tx));
+                            } else {
+                                self.sim.unregister(&id);
                             }
                         }
                         Err(error) => eprintln!("[server] welcome encode error: {error}"),
                     }
+                    force_snapshot = true;
                 }
             }
+        }
+        for (id, mut queued) in pending {
+            if let Some(input) = queued.take() {
+                force_snapshot |= self.sim.apply_input(&id, &input);
+            }
+        }
+        (
+            force_snapshot,
+            processed == MAX_UPSTREAM_MESSAGES_PER_ITERATION,
+        )
+    }
+
+    /// One iteration; `Ok(true)` asks for orderly shutdown (empty room in
+    /// exit mode). Inputs are coalesced before the pacing target is sampled.
+    fn iterate(&mut self) -> Result<bool, String> {
+        let warp_before_inputs = self.sim.requested_warp();
+        let (force_snapshot, ingress_saturated) = self.drain_upstream();
+        let warp_after_inputs = self.sim.requested_warp();
+        if warp_after_inputs < warp_before_inputs {
+            // A lower vote changes the wall-time target immediately. Keeping
+            // the old target would make the driver spend the next many
+            // iterations catching up to demand generated at the old warp.
+            self.pacing_target_s = self.sim.advanced_s;
         }
         let tick_s = thessa_sim_core::WORLD_TICK_S;
         // No pilots, no flight: hold instead of sprinting at unbounded
         // warp (a fresh server idles at its initial state until the first
         // vote; a deserted one freezes instead of flying away).
         if self.sim.clients.is_empty() {
-            std::thread::sleep(std::time::Duration::from_secs_f64(tick_s));
+            self.pacing_target_s = self.sim.advanced_s;
+            self.last_pacing = Instant::now();
+            std::thread::sleep(Duration::from_secs_f64(tick_s));
             return Ok(self.exit_when_empty);
         }
         // A latched flight error stops advancing but never the loop:
         // snapshots keep flowing with the error visible (the client
         // offers reset). Killing the driver here would hang every peer.
         if self.sim.authority.flight_error.is_some() {
-            std::thread::sleep(std::time::Duration::from_secs_f64(tick_s));
+            self.pacing_target_s = self.sim.advanced_s;
+            self.last_pacing = Instant::now();
+            std::thread::sleep(Duration::from_secs_f64(tick_s));
         } else if self.sim.requested_warp() <= 0.0 || self.sim.paused() {
             // Frozen time, live snapshots (clients stay attached).
-            std::thread::sleep(std::time::Duration::from_secs_f64(tick_s));
+            self.pacing_target_s = self.sim.advanced_s;
+            self.last_pacing = Instant::now();
+            std::thread::sleep(Duration::from_secs_f64(tick_s));
         } else {
-            // Paced warp: the deadline advances by chunk/vote, so the
-            // long-run rate matches the consensus instead of flat-out.
-            // Past machine throughput the deadline falls behind and the
-            // loop degrades to flat-out honestly (effective < requested).
-            let chunk = if self.sim.requested_warp() <= 1.0 {
-                (self.sim.requested_warp() * tick_s).max(tick_s)
+            let now = Instant::now();
+            let wall_delta = now.duration_since(self.last_pacing).as_secs_f64();
+            self.last_pacing = now;
+            let requested_warp = self.sim.requested_warp();
+            self.pacing_target_s += wall_delta * requested_warp;
+            let demand_s = (self.pacing_target_s - self.sim.advanced_s).max(0.0);
+            let chunk = if demand_s + 1.0e-12 >= tick_s {
+                demand_s
             } else {
-                // 60 s and up trips the blocking first bake; below it the
-                // async worker converges (drift during a 2 s bake stays
-                // inside the 5 m adoption gate).
-                (self.sim.requested_warp() * WARP_CHUNK_WALL_S).max(WARP_CHUNK_MIN_S)
+                0.0
             };
-            if let Err(error) = self.sim.advance_chunk(chunk) {
+            let advanced_before = self.sim.advanced_s;
+            let mut advanced_delta = 0.0;
+            let mut budget_exhausted = false;
+            if chunk > 0.0
+                && let Err(error) = self
+                    .sim
+                    .advance_chunk_with_budget(chunk, Some(SIM_WORK_BUDGET))
+            {
                 // Latched in the authority (engine cut + flight_error);
                 // the loop survives so peers see the stop, not a hang.
                 eprintln!("[server] advance failed: {error}");
             }
-            self.next_deadline +=
-                std::time::Duration::from_secs_f64(chunk / self.sim.requested_warp());
-            let now = Instant::now();
-            if self.next_deadline > now {
-                std::thread::sleep(self.next_deadline - now);
-            } else {
-                self.next_deadline = now;
+            if chunk > 0.0 {
+                // Sim::advanced_s is cumulative; use its delta so a pending
+                // bake is distinguishable from an already-running flight.
+                advanced_delta = self.sim.advanced_s - advanced_before;
+                budget_exhausted = self.sim.authority.work_budget_exhausted;
+            }
+            let lag_s = (self.pacing_target_s - self.sim.advanced_s).max(0.0);
+            let bake_wait = chunk > 0.0
+                && advanced_delta <= 0.0
+                && self.sim.authority.waiting_for_rails_bake
+                && self.sim.authority.bake.has_pending();
+            let work_elapsed = now.elapsed();
+            let sleep_s = driver_sleep_duration(
+                ingress_saturated,
+                budget_exhausted,
+                bake_wait,
+                lag_s,
+                requested_warp,
+                work_elapsed,
+            );
+            if !sleep_s.is_zero() {
+                std::thread::sleep(sleep_s);
             }
         }
         let now = Instant::now();
-        if now.duration_since(self.last_snapshot).as_secs_f64() >= SNAPSHOT_MIN_INTERVAL_S {
+        if force_snapshot
+            || now.duration_since(self.last_snapshot).as_secs_f64() >= SNAPSHOT_MIN_INTERVAL_S
+        {
             self.last_snapshot = now;
             self.broadcast_snapshot();
         }
         // Ops telemetry: consensus and throughput at a glance, also the
-        // machine-readable hook for the two-peer consensus test.
+        // machine-readable hook for the two-peer consensus test. The prefix
+        // up to rails_s stays stable for parsing; compute/wall are appended
+        // so effective warp remains reproducible as sim_s / wall_s.
         if now.duration_since(self.last_status).as_secs_f64() >= 2.0 {
             self.last_status = now;
             eprintln!(
-                "[server] status: clients={} reqwarp=x{:.1} effwarp=x{:.1} sim_s={:.0} steps={} rails_s={:.0}",
+                "[server] status: clients={} reqwarp=x{:.1} effwarp=x{:.1} sim_s={:.0} steps={} rails_s={:.0} compute_s={:.1} wall_s={:.1}",
                 self.sim.clients.len(),
                 self.sim.requested_warp(),
                 self.sim.effective_warp(),
                 self.sim.advanced_s,
                 self.sim.steps,
                 self.sim.rails_s,
+                self.sim.compute_s,
+                self.sim.wall_s(),
             );
         }
         Ok(self.exit_when_empty && self.sim.clients.is_empty())
     }
 }
 
-fn run_stdio(sim: Sim) -> Result<(), String> {
+fn run_stdio(mut sim: Sim) -> Result<(), String> {
+    // Canonical terrain: same site the client survey selects. Soft-fails
+    // to terrain-free flight (today's embedded behavior) instead of
+    // refusing to serve.
+    if let Err(error) = sim.init_launch_site() {
+        eprintln!("[server] launch site unavailable ({error}); terrain-free flight");
+    }
     // Stdout writer thread: frames in, bytes out. Stdout is the wire.
     // Joined on shutdown after all senders drop, so the tail flushes.
     let (wire_out, mut wire_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
@@ -487,7 +757,7 @@ fn run_stdio(sim: Sim) -> Result<(), String> {
     let mut decoder = FrameDecoder::new();
     let stdin = std::io::stdin();
     let mut locked = stdin.lock();
-    let welcome = loop {
+    let (welcome, post_handshake_frames) = loop {
         let mut chunk = [0u8; 65536];
         let n = locked.read(&mut chunk).map_err(|e| e.to_string())?;
         if n == 0 {
@@ -505,18 +775,13 @@ fn run_stdio(sim: Sim) -> Result<(), String> {
         let hello: thessa_flight_net::Hello =
             thessa_flight_net::decode_payload(&envelope).map_err(|e| e.to_string())?;
         eprintln!("[server] hello from {:?}", hello.client_name);
-        for frame in frames {
-            if let Ok(envelope) = thessa_flight_net::decode_frame(&frame)
-                && envelope.kind == kind::CLIENT_INPUT
-                && let Ok(input) = thessa_flight_net::decode_payload::<ClientInput>(&envelope)
-            {
-                let _ = upstream_tx.send(Upstream::Input("local".into(), input));
-            }
-        }
-        break thessa_flight_net::Welcome {
-            tick: sim.authority.world_tick.0,
-            flight_time_s: sim.authority.flight_time_s,
-        };
+        break (
+            thessa_flight_net::Welcome {
+                tick: sim.authority.world_tick.0,
+                flight_time_s: sim.authority.flight_time_s,
+            },
+            frames,
+        );
     };
     send_frame(&wire_out, kind::WELCOME, &welcome);
     drop(locked);
@@ -528,28 +793,20 @@ fn run_stdio(sim: Sim) -> Result<(), String> {
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
         let mut locked = stdin.lock();
-        let mut decoder = FrameDecoder::new();
+        // Keep the decoder that performed the handshake: it may contain the
+        // partial prefix/body of the first pipelined input frame.
+        let mut decoder = decoder;
         let mut buffer = [0u8; 65536];
+        if !enqueue_client_inputs("local", post_handshake_frames, &upstream_tx) {
+            return;
+        }
         loop {
             match locked.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(n) => match decoder.push(&buffer[..n]) {
                     Ok(frames) => {
-                        for frame in frames {
-                            let Ok(envelope) = thessa_flight_net::decode_frame(&frame) else {
-                                continue;
-                            };
-                            if envelope.kind != kind::CLIENT_INPUT {
-                                continue;
-                            }
-                            if let Ok(input) =
-                                thessa_flight_net::decode_payload::<ClientInput>(&envelope)
-                                && upstream_tx
-                                    .send(Upstream::Input("local".into(), input))
-                                    .is_err()
-                            {
-                                return;
-                            }
+                        if !enqueue_client_inputs("local", frames, &upstream_tx) {
+                            return;
                         }
                     }
                     Err(error) => {
@@ -567,7 +824,8 @@ fn run_stdio(sim: Sim) -> Result<(), String> {
         sim,
         upstream: upstream_rx,
         subscribers: Vec::new(),
-        next_deadline: Instant::now(),
+        pacing_target_s: 0.0,
+        last_pacing: Instant::now(),
         last_snapshot: Instant::now(),
         last_status: Instant::now(),
         exit_when_empty: true,
@@ -575,6 +833,7 @@ fn run_stdio(sim: Sim) -> Result<(), String> {
     // Local subscription goes through the driver so Welcome/ordering
     // match the TCP path exactly (handshake Welcome was already sent).
     driver.sim.register("local");
+    driver.sim.wall_started = Instant::now();
     driver.subscribers.push(("local".to_string(), wire_out));
     // Opening snapshot so the client never waits a full interval.
     driver.broadcast_snapshot();
@@ -582,10 +841,10 @@ fn run_stdio(sim: Sim) -> Result<(), String> {
     let sim = driver.sim;
     let _ = writer.join();
     eprintln!(
-        "[server] done: {:.1} sim-s, {:.1} wall-s, x{:.1} (votes at exit: {}), {} steps ({:.1} rails-s)",
+        "[server] done: {:.1} sim-s, {:.1} compute-s, x{:.1} (votes at exit: {}), {} steps ({:.1} rails-s)",
         sim.advanced_s,
-        sim.wall_s,
-        sim.advanced_s / sim.wall_s.max(1e-9),
+        sim.compute_s,
+        sim.effective_warp(),
         sim.clients.len(),
         sim.steps,
         sim.rails_s
@@ -595,11 +854,13 @@ fn run_stdio(sim: Sim) -> Result<(), String> {
 
 fn run_measure(mut sim: Sim, target_s: f64) -> Result<(), String> {
     let t0 = Instant::now();
+    sim.wall_started = t0;
     let mut chunks = 0u64;
     while sim.advanced_s < target_s {
         // One max-batch per chunk, like the live loop at high warp
         // (catch-up rule applies).
-        sim.advance_chunk(3600.0)
+        let advanced = sim
+            .advance_chunk(3600.0)
             .map_err(|e| format!("advance: {e}"))?;
         chunks += 1;
         if chunks.is_multiple_of(500) {
@@ -610,6 +871,14 @@ fn run_measure(mut sim: Sim, target_s: f64) -> Result<(), String> {
                 sim.steps,
                 sim.authority.bake.has_pending()
             );
+        }
+        if advanced <= 0.0
+            && sim.authority.waiting_for_rails_bake
+            && sim.authority.bake.has_pending()
+        {
+            // A cold drift measurement waits for the same asynchronous bake
+            // as the live driver. Avoid burning a core while the worker runs.
+            std::thread::sleep(BAKE_POLL_INTERVAL);
         }
         if sim.authority.flight_error.is_some() {
             break;
@@ -650,15 +919,16 @@ async fn handle_tcp_conn(stream: tokio::net::TcpStream, peer: String, upstream: 
             if n == 0 {
                 return Err("eof before hello".to_string());
             }
-            let frames = decoder.push(&buffer[..n]).map_err(|e| e.to_string())?;
-            if let Some(frame) = frames.into_iter().next() {
-                return Ok(frame);
+            let mut frames = decoder.push(&buffer[..n]).map_err(|e| e.to_string())?;
+            if !frames.is_empty() {
+                let frame = frames.remove(0);
+                return Ok((frame, frames));
             }
         }
     })
     .await;
-    let frame = match hello {
-        Ok(Ok(frame)) => frame,
+    let (frame, post_handshake_frames) = match hello {
+        Ok(Ok(frames)) => frames,
         _ => return,
     };
     let Ok(envelope) = thessa_flight_net::decode_frame(&frame) else {
@@ -688,25 +958,19 @@ async fn handle_tcp_conn(stream: tokio::net::TcpStream, peer: String, upstream: 
             }
         }
     });
+    if !enqueue_client_inputs(&id, post_handshake_frames, &upstream) {
+        let _ = upstream.send(Upstream::Leave(id));
+        write_task.abort();
+        return;
+    }
     // Reader loop: socket -> inputs. Any end votes Leave.
     loop {
         match reader.read(&mut buffer).await {
             Ok(0) => break,
             Ok(n) => match decoder.push(&buffer[..n]) {
                 Ok(frames) => {
-                    for frame in frames {
-                        let Ok(envelope) = thessa_flight_net::decode_frame(&frame) else {
-                            continue;
-                        };
-                        if envelope.kind != kind::CLIENT_INPUT {
-                            continue;
-                        }
-                        if let Ok(input) =
-                            thessa_flight_net::decode_payload::<ClientInput>(&envelope)
-                            && upstream.send(Upstream::Input(id.clone(), input)).is_err()
-                        {
-                            break;
-                        }
+                    if !enqueue_client_inputs(&id, frames, &upstream) {
+                        break;
                     }
                 }
                 Err(error) => {
@@ -721,7 +985,10 @@ async fn handle_tcp_conn(stream: tokio::net::TcpStream, peer: String, upstream: 
     write_task.abort();
 }
 
-fn run_tcp(sim: Sim, addr: &str) -> Result<(), String> {
+fn run_tcp(mut sim: Sim, addr: &str) -> Result<(), String> {
+    if let Err(error) = sim.init_launch_site() {
+        eprintln!("[server] launch site unavailable ({error}); terrain-free flight");
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -734,11 +1001,13 @@ fn run_tcp(sim: Sim, addr: &str) -> Result<(), String> {
                 sim,
                 upstream: upstream_rx,
                 subscribers: Vec::new(),
-                next_deadline: Instant::now(),
+                pacing_target_s: 0.0,
+                last_pacing: Instant::now(),
                 last_snapshot: Instant::now(),
                 last_status: Instant::now(),
                 exit_when_empty: false,
             };
+            driver.sim.wall_started = Instant::now();
             loop {
                 if let Err(error) = driver.iterate() {
                     eprintln!("[server] driver error: {error}");
@@ -778,5 +1047,290 @@ fn run() -> Result<(), String> {
             Some(addr) => run_tcp(sim, &addr),
             None => run_stdio(sim),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input(commands: Vec<Command>) -> ClientInput {
+        ClientInput {
+            tick: 0,
+            control_input: [0.0; 3],
+            control_mode: ControlMode::Direct,
+            sas_target_xyzw: [0.0, 0.0, 0.0, 1.0],
+            throttle: 0.0,
+            engine_active: false,
+            sas_enabled: false,
+            rcs_enabled: false,
+            gear_down: false,
+            commands,
+        }
+    }
+
+    #[test]
+    fn coalescing_keeps_latest_controls_and_all_event_commands() {
+        let mut pending = PendingInput::default();
+        let mut first = input(vec![Command::Stage]);
+        first.control_input = [0.1, 0.0, 0.0];
+        pending.push(first);
+        let mut second = input(vec![
+            Command::Stage,
+            Command::Pause { paused: true },
+            Command::SetWarp { factor: 128.0 },
+        ]);
+        second.control_input = [0.2, 0.0, 0.0];
+        pending.push(second);
+        let mut third = input(vec![
+            Command::Pause { paused: false },
+            Command::SetWarp { factor: 256.0 },
+        ]);
+        third.control_input = [0.3, 0.0, 0.0];
+        pending.push(third);
+
+        let merged = pending.take().expect("coalesced input");
+        assert_eq!(merged.control_input, [0.3, 0.0, 0.0]);
+        assert_eq!(merged.commands[0], Command::Stage);
+        assert_eq!(merged.commands[1], Command::Stage);
+        assert_eq!(merged.commands[2], Command::Pause { paused: false });
+        assert_eq!(merged.commands[3], Command::SetWarp { factor: 256.0 });
+    }
+
+    #[test]
+    fn coalesced_engine_events_match_sequential_application() {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let mut sequential = Sim::new(ephemeris.clone(), reference_body, false, true).expect("sim");
+        sequential.register("pilot");
+        let first = input(vec![Command::Engine { active: true }]);
+        let second = input(vec![Command::Stage]);
+        let _ = sequential.apply_input("pilot", &first);
+        let _ = sequential.apply_input("pilot", &second);
+        let expected = sequential.authority.engine_active;
+
+        let mut pending = PendingInput::default();
+        pending.push(first);
+        pending.push(second);
+        let merged = pending.take().expect("merged input");
+        let mut coalesced = Sim::new(ephemeris, reference_body, false, true).expect("sim");
+        coalesced.register("pilot");
+        let _ = coalesced.apply_input("pilot", &merged);
+        assert_eq!(coalesced.authority.engine_active, expected);
+    }
+
+    #[test]
+    fn saturated_work_quantum_does_not_sleep_as_a_fixed_duty_cycle() {
+        assert_eq!(
+            driver_sleep_duration(false, true, false, 0.0, 256.0, Duration::from_millis(100),),
+            Duration::ZERO
+        );
+        assert_eq!(
+            driver_sleep_duration(true, false, false, 0.0, 256.0, Duration::from_millis(100),),
+            Duration::ZERO
+        );
+        assert_eq!(
+            driver_sleep_duration(false, false, true, 0.0, 256.0, Duration::ZERO,),
+            BAKE_POLL_INTERVAL
+        );
+    }
+
+    #[test]
+    fn lowering_warp_rebases_old_pacing_debt() {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let sim = Sim::new(ephemeris, reference_body, false, true).expect("sim");
+        let (upstream_tx, upstream_rx) = channel();
+        let mut driver = Driver {
+            sim,
+            upstream: upstream_rx,
+            subscribers: Vec::new(),
+            pacing_target_s: 1.0e9,
+            last_pacing: Instant::now(),
+            last_snapshot: Instant::now(),
+            last_status: Instant::now(),
+            exit_when_empty: false,
+        };
+        driver.sim.register("pilot");
+        driver.sim.clients.get_mut("pilot").expect("pilot").warp = 256.0;
+        upstream_tx
+            .send(Upstream::Input(
+                "pilot".into(),
+                input(vec![Command::SetWarp { factor: 64.0 }]),
+            ))
+            .expect("queue warp vote");
+
+        assert!(!driver.iterate().expect("driver iteration"));
+        assert!(
+            driver.pacing_target_s < 100.0,
+            "old pacing debt survived warp reduction: {}",
+            driver.pacing_target_s
+        );
+    }
+
+    #[test]
+    fn pause_vote_forces_a_prompt_snapshot_even_at_high_warp() {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let sim = Sim::new(ephemeris, reference_body, false, true).expect("sim");
+        let (upstream_tx, upstream_rx) = channel();
+        let (snapshot_tx, mut snapshot_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut driver = Driver {
+            sim,
+            upstream: upstream_rx,
+            subscribers: vec![("pilot".into(), snapshot_tx)],
+            pacing_target_s: 0.0,
+            last_pacing: Instant::now(),
+            last_snapshot: Instant::now(),
+            last_status: Instant::now(),
+            exit_when_empty: false,
+        };
+        driver.sim.register("pilot");
+        upstream_tx
+            .send(Upstream::Input(
+                "pilot".into(),
+                input(vec![
+                    Command::SetWarp { factor: MAX_WARP },
+                    Command::Pause { paused: true },
+                ]),
+            ))
+            .expect("queue input");
+
+        let started = Instant::now();
+        assert!(!driver.iterate().expect("driver iteration"));
+        assert!(started.elapsed() < Duration::from_millis(100));
+        let frame = snapshot_rx.try_recv().expect("forced snapshot");
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.push(&frame).expect("snapshot frame");
+        let envelope = thessa_flight_net::decode_frame(&frames[0]).expect("envelope");
+        let snapshot: Snapshot = thessa_flight_net::decode_payload(&envelope).expect("snapshot");
+        assert!(snapshot.paused);
+        assert_eq!(snapshot.server_compute_s, 0.0);
+        assert!(snapshot.server_wall_s > 0.0);
+    }
+
+    #[test]
+    fn transport_handshake_preserves_pipelined_and_partial_frames() {
+        let hello = thessa_flight_net::encode_hello(&thessa_flight_net::Hello {
+            client_name: "test".into(),
+        })
+        .expect("hello");
+        let input = thessa_flight_net::encode_input(&input(vec![Command::Stage])).expect("input");
+        let mut stream = hello.clone();
+        stream.extend_from_slice(&input);
+        let split = hello.len() + input.len() / 2;
+        let mut decoder = FrameDecoder::new();
+        let first = decoder.push(&stream[..split]).expect("first read");
+        assert_eq!(first.len(), 1);
+        assert_eq!(
+            thessa_flight_net::decode_frame(&first[0])
+                .expect("hello envelope")
+                .kind,
+            kind::HELLO
+        );
+        let second = decoder.push(&stream[split..]).expect("second read");
+        assert_eq!(second.len(), 1);
+        assert_eq!(
+            thessa_flight_net::decode_frame(&second[0])
+                .expect("input envelope")
+                .kind,
+            kind::CLIENT_INPUT
+        );
+
+        let mut pipelined = hello;
+        pipelined.extend_from_slice(&input);
+        pipelined.extend_from_slice(&input);
+        let frames = FrameDecoder::new();
+        let mut frames = frames;
+        let all = frames.push(&pipelined).expect("pipelined read");
+        assert_eq!(all.len(), 3, "all post-hello frames must survive");
+    }
+}
+
+#[cfg(test)]
+mod reset_tests {
+    use super::*;
+
+    fn sim_with_terrain() -> Sim {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let mut sim = Sim::new(ephemeris, reference_body, false, false).expect("sim");
+        sim.init_launch_site().expect("launch site");
+        sim.register("pilot");
+        sim
+    }
+
+    fn input(commands: Vec<Command>) -> ClientInput {
+        ClientInput {
+            tick: 0,
+            control_input: [0.0; 3],
+            control_mode: ControlMode::Direct,
+            sas_target_xyzw: [0.0, 0.0, 0.0, 1.0],
+            throttle: 0.0,
+            engine_active: false,
+            sas_enabled: false,
+            rcs_enabled: false,
+            gear_down: false,
+            commands,
+        }
+    }
+
+    #[test]
+    fn reset_relaunches_at_canonical_site_and_forces_snapshot() {
+        let mut sim = sim_with_terrain();
+        // Fly away from the launch state first: full throttle climb.
+        // (Plain inputs force no snapshot; the return is a force flag.)
+        let mut climb = input(vec![]);
+        climb.throttle = 1.0;
+        climb.engine_active = true;
+        assert!(!sim.apply_input("pilot", &climb));
+        sim.advance_chunk(5.0).expect("climb");
+        let displaced = sim.authority.state.position_inertial_m;
+        // Reset preserves the clock but rebuilds the launch state.
+        let before = sim.authority.flight_time_s;
+        let forced = sim.apply_input("pilot", &input(vec![Command::Reset]));
+        assert!(forced, "reset must force a prompt snapshot");
+        assert_eq!(sim.authority.flight_time_s, before);
+        assert_ne!(sim.authority.state.position_inertial_m, displaced);
+        assert!(sim.authority.flight_error.is_none());
+        // Second reset from the pad is idempotent on state.
+        let pad = sim.authority.state.position_inertial_m;
+        assert!(sim.apply_input("pilot", &input(vec![Command::Reset])));
+        assert_eq!(sim.authority.state.position_inertial_m, pad);
+    }
+
+    #[test]
+    fn reset_without_terrain_is_a_quiet_noop() {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        // Bench-style sims never init the launch site: Reset must not fail
+        // the driver, it just does nothing.
+        let mut sim = Sim::new(ephemeris, reference_body, false, true).expect("sim");
+        sim.register("pilot");
+        assert!(!sim.apply_input("pilot", &input(vec![Command::Reset])));
+    }
+
+    #[test]
+    fn reset_survives_input_coalescing_as_event() {
+        // Reset is edge/event-like: every one must reach the authoritative
+        // state in order, like Stage. Warp votes stay last-wins around it.
+        let mut pending = PendingInput::default();
+        pending.push(input(vec![Command::SetWarp { factor: 64.0 }]));
+        pending.push(input(vec![Command::Reset]));
+        pending.push(input(vec![Command::SetWarp { factor: 128.0 }]));
+        let merged = pending.take().expect("merged input");
+        assert_eq!(merged.commands.len(), 2);
+        assert_eq!(merged.commands[0], Command::Reset);
+        assert_eq!(merged.commands[1], Command::SetWarp { factor: 128.0 });
     }
 }

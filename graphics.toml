@@ -32,7 +32,10 @@ exposure_ev100 = 13.0 # manual EV100 when auto_exposure = false
 enabled = true
 quality = "high" # low | medium | high (budgets only, never physics)
 aerial_perspective = false
-density_scale = 0.55 # visual optical-depth gain; simulation pressure is unchanged
+density_scale = 0.3 # visual optical-depth gain; simulation pressure is unchanged
+# (0.55 washed terrain contrast: measured +100 shadow lift vs no-atmosphere
+# reference; 0.3 keeps the blue sky while restoring ground contrast. Revisit
+# when the aerial LUT sampling is refined.)
 multiple_scattering = false # single-scattering first slice; LUT/MS later
 eclipses = true
 multi_star = true
@@ -64,6 +67,17 @@ landmarks = false
 atmosphere = true # ray-aware transmittance/sky queries where supported
 clouds = false
 max_distance_m = 500000.0
+
+[shadows]
+# Sun shadow cascade cover for the raster path (RT lighting ignores it).
+# Engine default ends at 150 m; planetary cover is explicit here instead
+# of magic numbers in the client.
+enabled = true
+quality = "high" # low | medium | high (expands the numbers below on preset apply)
+cascades = 4 # 1..=4
+max_distance_m = 12000.0 # far end of cover in metres; first cascade ends at max/40
+map_size = 4096 # per-cascade texel grid, power of two 512..=8192
+normal_bias_m = 1.5 # normal offset in metres against acne on 32 m mesh cells
 
 [debug]
 show_atmosphere_bounds = false

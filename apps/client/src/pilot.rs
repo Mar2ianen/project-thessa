@@ -50,6 +50,17 @@ pub(super) use thessa_flight_authority::{
 pub(super) struct PilotFlightRuntime {
     pub(super) authority: FlightAuthority,
     render_orientation: Quat,
+    render_relative_position_m: DVec3,
+    render_time_s: f64,
+    /// Client intent is kept separately from the latest server acknowledgement
+    /// so an older network sample cannot undo a local throttle or engine edge.
+    input_throttle: f64,
+    input_engine_active: bool,
+    /// Cumulative server timings are telemetry only; local frame/sim timings
+    /// remain owned by the client perf monitor.
+    pub(super) server_compute_s: f64,
+    pub(super) server_wall_s: f64,
+    pub(super) server_effective_warp: f64,
 }
 
 impl std::ops::Deref for PilotFlightRuntime {
@@ -71,9 +82,20 @@ impl PilotFlightRuntime {
         let authority = FlightAuthority::new(ephemeris, reference_body)?
             .with_bake_queue(Box::new(BevyBakeQueue { job: None }));
         let render_orientation = render_orientation(authority.state.orientation_body_to_inertial);
+        let render_relative_position_m = authority.relative_position_m;
+        let render_time_s = authority.flight_time_s;
+        let input_throttle = authority.throttle;
+        let input_engine_active = authority.engine_active;
         Ok(Self {
             authority,
             render_orientation,
+            render_relative_position_m,
+            render_time_s,
+            input_throttle,
+            input_engine_active,
+            server_compute_s: 0.0,
+            server_wall_s: 0.0,
+            server_effective_warp: 0.0,
         })
     }
 
@@ -86,6 +108,21 @@ impl PilotFlightRuntime {
     /// these; they exist so the frame loop pays the conversion once.
     pub(super) fn sync_view(&mut self) {
         self.render_orientation = render_orientation(self.state.orientation_body_to_inertial);
+        self.render_relative_position_m = self.relative_position_m;
+        self.render_time_s = self.flight_time_s;
+    }
+
+    /// Apply only the presentation pose from an interpolated network sample.
+    /// `authority` stays on the newest validated snapshot for input ticks and
+    /// prediction; a visual sample can never advance server state.
+    pub(super) fn sync_render_snapshot(&mut self, ephemeris: &BakedEphemeris, snapshot: &Snapshot) {
+        self.render_orientation = render_orientation(snapshot.state.orientation_body_to_inertial);
+        self.render_time_s = snapshot.flight_time_s;
+        if let Ok(body) = ephemeris.body_state(self.reference_body, SimTime(snapshot.flight_time_s))
+        {
+            self.render_relative_position_m =
+                snapshot.state.position_inertial_m - body.position_inertial;
+        }
     }
 
     // Inherent forwarders: method paths (`PilotFlightRuntime::backlog_s`)
@@ -93,6 +130,23 @@ impl PilotFlightRuntime {
     // sites get one-line shims. Everything else derefs to the authority.
     pub(super) fn backlog_s(&self) -> f64 {
         self.authority.backlog_s()
+    }
+
+    /// Render-space terrain origin for tile placement, backdrop and sky:
+    /// follows the interpolated presentation pose in embedded mode (frame
+    /// rate) instead of the authoritative snapshot cadence (20 Hz), so the
+    /// world no longer steps behind the smoothly interpolated craft.
+    /// Telemetry (AGL altitude etc.) keeps reading authoritative state.
+    pub(super) fn render_terrain_origin_m(&self) -> DVec3 {
+        let p = self.render_relative_position_m;
+        DVec3::new(p.x, p.z, -p.y)
+    }
+
+    /// Render-space planet spin from interpolated time (same reason as
+    /// [`Self::render_terrain_origin_m`]: authority time steps at snapshot
+    /// cadence in embedded mode).
+    pub(super) fn render_spin(&self) -> f64 {
+        self.render_time_s * std::f64::consts::TAU / (80.0 * 3600.0)
     }
 
     pub(super) fn panel_count(&self) -> u32 {
@@ -539,14 +593,22 @@ fn update_pilot_preview(
     });
     if active {
         if let Projection::Perspective(perspective) = &mut **projection {
-            perspective.near = 0.25;
-            perspective.far =
-                (runtime.relative_position_m.length() + runtime.planet_radius_m * 2.0) as f32;
+            // Depth precision at the ground scales with `near`: a fixed
+            // 0.25 m near plane over a 12 Mm far range resolves ~225 m at
+            // 30 km distance, so overlapping tile surfaces shimmer. Push
+            // near out with altitude, keeping it inside half the craft
+            // distance so the cockpit view never clips.
+            let ground_dist_m =
+                (runtime.render_relative_position_m.length() - runtime.planet_radius_m).max(0.0);
+            let craft_dist_m = camera.translation.length().max(1.0) as f64;
+            perspective.near = (craft_dist_m * 0.4).min((ground_dist_m * 0.02).max(0.25)) as f32;
+            perspective.far = (runtime.render_relative_position_m.length()
+                + runtime.planet_radius_m * 2.0) as f32;
         }
         **camera = pilot_camera_transform(
             &state,
             runtime.render_orientation,
-            pilot_render_offset(runtime.relative_position_m).normalize(),
+            pilot_render_offset(runtime.render_relative_position_m).normalize(),
         );
     }
     for (mut transform, mut visibility) in &mut preview {
@@ -568,9 +630,10 @@ fn update_pilot_preview(
             // Subtract the camera/craft origin in f64 before conversion.
             // The craft and all its child meshes stay near zero even after
             // an interplanetary flight; no centimetre-scale f32 cancellation.
-            transform.translation = pilot_render_offset(-runtime.relative_position_m);
-            transform.rotation =
-                Quat::from_rotation_y(runtime.terrain_spin() as f32) * SPHERE_POLE_TO_WORLD_UP;
+            transform.translation = pilot_render_offset(-runtime.render_relative_position_m);
+            transform.rotation = Quat::from_rotation_y(
+                (runtime.render_time_s * std::f64::consts::TAU / (80.0 * 3600.0)) as f32,
+            ) * SPHERE_POLE_TO_WORLD_UP;
         }
     }
     // Copy the authoritative pose even while paused: a freshly spawned scene
@@ -682,9 +745,9 @@ fn update_navball_image(image: &mut Image, local_up_body: DVec3) {
     }
 }
 
-/// Adopt an authoritative snapshot into the local runtime without
-/// stepping: input fields stay local (they feed the next ClientInput),
-/// server-owned fields are overwritten, display derivations recomputed.
+/// Adopt an authoritative snapshot into the local runtime without stepping.
+/// The server acknowledgement updates display/physics state, while the
+/// separate input intent continues feeding the next ClientInput.
 fn adopt_snapshot(
     runtime: &mut PilotFlightRuntime,
     ephemeris: &BakedEphemeris,
@@ -699,6 +762,9 @@ fn adopt_snapshot(
     runtime.engine_active = snapshot.engine_active;
     runtime.steps_this_frame = snapshot.steps_this_frame;
     runtime.rails_advanced_this_frame = snapshot.rails_advanced_s;
+    runtime.server_compute_s = snapshot.server_compute_s;
+    runtime.server_wall_s = snapshot.server_wall_s;
+    runtime.server_effective_warp = snapshot.effective_warp;
     runtime.wake_notice = snapshot.wake_notice.clone();
     runtime.flight_error = snapshot.flight_error.clone();
     let time = SimTime(snapshot.flight_time_s);
@@ -719,6 +785,38 @@ fn adopt_snapshot(
     }
     runtime.sync_view();
 }
+/// Build one server-bound input from live client state. Single
+/// construction site for both the per-frame ferry and edge commands
+/// (Reset), so votes and state fields cannot drift between the two.
+fn client_input_for_server(
+    runtime: &PilotFlightRuntime,
+    state: &PilotHudState,
+    clock: &SimulationClock,
+    extra_commands: Vec<Command>,
+) -> ClientInput {
+    let target = runtime.sas_target_orientation;
+    let mut commands = vec![
+        Command::SetWarp {
+            factor: clock.multiplier,
+        },
+        Command::Pause {
+            paused: clock.paused,
+        },
+    ];
+    commands.extend(extra_commands);
+    ClientInput {
+        tick: runtime.world_tick.0,
+        control_input: runtime.control_input.to_array(),
+        control_mode: state.control_mode,
+        sas_target_xyzw: [target.x, target.y, target.z, target.w],
+        throttle: runtime.input_throttle,
+        engine_active: runtime.input_engine_active,
+        sas_enabled: runtime.sas_enabled,
+        rcs_enabled: runtime.rcs_enabled,
+        gear_down: runtime.gear_down,
+        commands,
+    }
+}
 
 fn simulate_pilot_flight(
     time: Res<Time>,
@@ -738,26 +836,7 @@ fn simulate_pilot_flight(
         // live input buffer down and adopts the newest snapshot. Pause
         // and error states live server-side, so neither early-returns
         // below may skip adoption.
-        let target = runtime.sas_target_orientation;
-        link.send_input(&ClientInput {
-            tick: runtime.world_tick.0,
-            control_input: runtime.control_input.to_array(),
-            control_mode: state.control_mode,
-            sas_target_xyzw: [target.x, target.y, target.z, target.w],
-            throttle: runtime.throttle,
-            engine_active: runtime.engine_active,
-            sas_enabled: runtime.sas_enabled,
-            rcs_enabled: runtime.rcs_enabled,
-            gear_down: runtime.gear_down,
-            commands: vec![
-                Command::SetWarp {
-                    factor: clock.multiplier,
-                },
-                Command::Pause {
-                    paused: clock.paused,
-                },
-            ],
-        });
+        link.send_input(&client_input_for_server(&runtime, &state, &clock, vec![]));
         if let Some(snapshot) = link.latest_snapshot() {
             adopt_snapshot(
                 &mut runtime,
@@ -766,7 +845,11 @@ fn simulate_pilot_flight(
                 &snapshot,
             );
         }
-        runtime.sync_view();
+        if let Some(snapshot) = link.interpolated_snapshot() {
+            runtime.sync_render_snapshot(&ephemeris.ephemeris, &snapshot);
+        } else {
+            runtime.sync_view();
+        }
         clock.sim_seconds = runtime.flight_time_s;
         clock.tick = runtime.world_tick;
         return;
@@ -778,6 +861,8 @@ fn simulate_pilot_flight(
     if runtime.flight_error.is_some() {
         return;
     }
+    runtime.throttle = runtime.input_throttle;
+    runtime.engine_active = runtime.input_engine_active;
     let frame_dt = time.delta_secs_f64().clamp(0.0, 0.1);
     let started = std::time::Instant::now();
     if let Err(error) = runtime.advance_with_budget(
@@ -787,6 +872,7 @@ fn simulate_pilot_flight(
         Some(std::time::Duration::from_millis(8)),
     ) {
         runtime.engine_active = false;
+        runtime.input_engine_active = false;
         runtime.control_input = DVec3::ZERO;
         runtime.accumulator_s = 0.0;
         perf.push_event("Flight stopped", Some(error.to_string()));
@@ -885,16 +971,30 @@ fn pilot_input(
     mut state: ResMut<PilotHudState>,
     mut runtime: ResMut<PilotFlightRuntime>,
     ephemeris: Res<RuntimeEphemeris>,
+    link: Option<Res<crate::embedded::EmbeddedLink>>,
 ) {
     let mut scroll = 0.0;
 
     // A stopped flight soft-locks the session without this: rebuild the
-    // launch-site state in place (clock time preserved).
-    if runtime.flight_error.is_some()
-        && keys.just_pressed(KeyCode::Backspace)
-        && let Err(error) = runtime.reset_to_launch_site(&ephemeris.ephemeris)
-    {
-        runtime.flight_error = Some(error);
+    // launch-site state in place (clock time preserved). Embedded flights
+    // relaunch server-side via command — a local reset would be overwritten
+    // by the next snapshot and only flicker.
+    if runtime.flight_error.is_some() && keys.just_pressed(KeyCode::Backspace) {
+        if let Some(link) = link.as_deref() {
+            link.send_input(&client_input_for_server(
+                &runtime,
+                &state,
+                &clock,
+                vec![Command::Reset],
+            ));
+            runtime.input_throttle = 0.0;
+            runtime.input_engine_active = true;
+        } else if let Err(error) = runtime.reset_to_launch_site(&ephemeris.ephemeris) {
+            runtime.flight_error = Some(error);
+        } else {
+            runtime.input_throttle = runtime.throttle;
+            runtime.input_engine_active = runtime.engine_active;
+        }
     }
 
     if keys.just_pressed(KeyCode::KeyM) {
@@ -1003,14 +1103,14 @@ fn pilot_input(
         let throttle_up = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         let throttle_down =
             keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-        runtime.throttle = (runtime.throttle
+        runtime.input_throttle = (runtime.input_throttle
             + (throttle_up as i8 - throttle_down as i8) as f64 * dt * 0.55)
             .clamp(0.0, 1.0);
         if keys.just_pressed(KeyCode::KeyX) {
-            runtime.throttle = 0.0;
+            runtime.input_throttle = 0.0;
         }
         if keys.just_pressed(KeyCode::KeyZ) {
-            runtime.throttle = 1.0;
+            runtime.input_throttle = 1.0;
         }
         if keys.just_pressed(KeyCode::KeyT) {
             runtime.sas_enabled = !runtime.sas_enabled;
@@ -1022,8 +1122,10 @@ fn pilot_input(
             runtime.gear_down = !runtime.gear_down;
         }
         if keys.just_pressed(KeyCode::Space) {
-            runtime.engine_active = !runtime.engine_active;
+            runtime.input_engine_active = !runtime.input_engine_active;
         }
+        runtime.throttle = runtime.input_throttle;
+        runtime.engine_active = runtime.input_engine_active;
     }
 
     let size = window.resolution.size();
@@ -1670,5 +1772,19 @@ mod tests {
         let nose_down = DVec3::new(100.0, 0.0, 100.0 * 5.0_f64.to_radians().tan());
         assert!((conventional_angle_of_attack_deg(nose_up) - 5.0).abs() < 1.0e-12);
         assert!((conventional_angle_of_attack_deg(nose_down) + 5.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn render_terrain_origin_uses_the_world_render_basis() {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).unwrap();
+        let ephemeris = config.bake().unwrap();
+        let reference_body = ephemeris.body_id("thessa").unwrap();
+        let mut runtime = PilotFlightRuntime::new(&ephemeris, reference_body).unwrap();
+        runtime.render_relative_position_m = DVec3::new(1.0, 2.0, 3.0);
+        assert_eq!(
+            runtime.render_terrain_origin_m(),
+            DVec3::new(1.0, 3.0, -2.0)
+        );
     }
 }

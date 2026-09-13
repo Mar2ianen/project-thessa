@@ -126,3 +126,10 @@ Accessed: 2026-09-07 unless stated otherwise.
     into the runtime.
     https://ntrs.nasa.gov/search.jsp?R=19880072608
     https://ntrs.nasa.gov/api/citations/19880072608/downloads/19880072608.pdf
+
+23. **Gnome-Space-Program (Sushutt)** — Godot/C# KSP-like with classic PQS
+    cube-sphere terrain (quads subdivide by distance, PQSMod noise-displacement
+    stack, dual local/scaled rendering). Procedural-generation reference only;
+    Thessa keeps its deterministic baked-field + rails-batch architecture.
+    No code vendored (license boundary: nothing copied).
+    https://github.com/Sushutt/Gnome-Space-Program

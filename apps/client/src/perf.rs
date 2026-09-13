@@ -87,7 +87,11 @@ impl Plugin for PerfMonitorPlugin {
             .add_systems(Startup, spawn_perf_overlay)
             .add_systems(First, perf_begin_frame)
             .add_systems(Update, perf_handle_keys)
+            .add_systems(Update, perf_autobench.after(perf_handle_keys))
             .add_systems(Last, perf_end_frame);
+        if std::env::var_os("THESSA_AUTOBENCH").is_some() {
+            app.insert_resource(Autobench::default());
+        }
     }
 }
 
@@ -169,18 +173,7 @@ fn perf_handle_keys(
                     graphics.as_deref(),
                 );
             } else if monitor.export_task.is_none() {
-                monitor.capture_start = monitor
-                    .collector
-                    .latest()
-                    .map(|f| f.frame_index + 1)
-                    .unwrap_or(0);
-                monitor.capturing = true;
-                monitor.capture_frames = 0;
-                monitor.collector.push_event(
-                    "capture started",
-                    Some("Shift+F4 from in-game overlay".to_string()),
-                );
-                monitor.last_status = "PERF: capturing... Shift+F4 to stop".to_string();
+                start_capture(&mut monitor, "Shift+F4 from in-game overlay");
             }
         } else {
             monitor.overlay_visible = !monitor.overlay_visible;
@@ -197,8 +190,123 @@ fn perf_handle_keys(
     }
 }
 
-/// Close the frame, push it into the ring, refresh the overlay text.
-/// Capture serialization and disk writes run on the IO pool.
+/// Begin a short capture: shared by the Shift+F4 key binding and the
+/// unattended `THESSA_AUTOBENCH` run below.
+fn start_capture(monitor: &mut PerfMonitor, reason: &str) {
+    monitor.capture_start = monitor
+        .collector
+        .latest()
+        .map(|f| f.frame_index + 1)
+        .unwrap_or(0);
+    monitor.capturing = true;
+    monitor.capture_frames = 0;
+    monitor
+        .collector
+        .push_event("capture started", Some(reason.to_string()));
+    monitor.last_status = "PERF: capturing... Shift+F4 to stop".to_string();
+}
+
+/// Unattended measurement run (`THESSA_AUTOBENCH=1`): warms up, starts a
+/// capture, walks a fixed warp ladder on a wall timer, then stops the
+/// capture and exits once the export task finishes. Same overlay/capture
+/// machinery as the manual path — no special physics, no synthetic input.
+#[derive(Resource, Default)]
+struct Autobench {
+    rung: usize,
+    rung_started: Option<Instant>,
+    boot: Option<Instant>,
+}
+
+/// (requested warp, dwell in wall seconds). Warmup precedes rung 0.
+const AUTOBENCH_LADDER: &[(f64, f64)] = &[(1.0, 8.0), (8.0, 8.0), (64.0, 8.0), (256.0, 10.0)];
+const AUTOBENCH_WARMUP_S: f64 = 6.0;
+
+#[allow(clippy::too_many_arguments)]
+fn perf_autobench(
+    mut bench: Option<ResMut<Autobench>>,
+    mut monitor: ResMut<PerfMonitor>,
+    mut clock: Option<ResMut<SimulationClock>>,
+    window: Single<&Window, With<PrimaryWindow>>,
+    map: Option<Res<MapState>>,
+    pilot: Res<PilotHudState>,
+    survey: Res<terrain::SurfaceSurvey>,
+    graphics: Option<Res<GraphicsResolved>>,
+    mut app_exit: MessageWriter<AppExit>,
+) {
+    let Some(bench) = bench.as_deref_mut() else {
+        return;
+    };
+    // The export task outlives the capture: poll it here exactly like the
+    // key handler does, and exit only after the files land on disk.
+    if let Some(task) = monitor.export_task.as_mut()
+        && let Some(status) = block_on(poll_once(task))
+    {
+        eprintln!("{status}");
+        monitor.last_status = status;
+        monitor.export_task = None;
+    }
+    let boot = *bench.boot.get_or_insert_with(Instant::now);
+    if boot.elapsed().as_secs_f64() < AUTOBENCH_WARMUP_S {
+        return;
+    }
+    if bench.rung >= AUTOBENCH_LADDER.len() {
+        if monitor.capturing {
+            monitor
+                .collector
+                .push_event("autobench warp ladder done", None);
+            stop_capture(
+                &mut monitor,
+                &window,
+                clock.as_deref(),
+                map.as_deref(),
+                autobench_view(&survey, &pilot),
+                graphics.as_deref(),
+            );
+        } else if monitor.export_task.is_none() {
+            eprintln!("PERF: autobench complete, exiting");
+            app_exit.write(AppExit::Success);
+        }
+        return;
+    }
+    if !monitor.capturing && monitor.export_task.is_none() {
+        start_capture(&mut monitor, "autobench unattended run");
+    }
+    let now = Instant::now();
+    match bench.rung_started {
+        // Dwell elapsed: advance to the next rung; it starts next frame.
+        Some(started)
+            if now.duration_since(started).as_secs_f64() >= AUTOBENCH_LADDER[bench.rung].1 =>
+        {
+            bench.rung += 1;
+            bench.rung_started = None;
+        }
+        // Fresh rung: stamp it and apply its warp vote.
+        None => {
+            bench.rung_started = Some(now);
+            let warp = AUTOBENCH_LADDER[bench.rung].0;
+            if let Some(clock) = clock.as_deref_mut()
+                && clock.multiplier != warp
+            {
+                clock.multiplier = warp;
+                monitor
+                    .collector
+                    .push_event("autobench warp", Some(format!("requested warp x{warp}")));
+            }
+        }
+        // Mid-rung: hold the vote (the ferry sends it every frame anyway).
+        Some(_) => {}
+    }
+}
+
+fn autobench_view(survey: &terrain::SurfaceSurvey, pilot: &PilotHudState) -> &'static str {
+    if survey.active {
+        "surface"
+    } else if pilot.view_mode == ClientViewMode::Pilot {
+        "pilot"
+    } else {
+        "map"
+    }
+}
 #[allow(clippy::too_many_arguments)]
 fn perf_end_frame(
     time: Res<Time<Real>>,
@@ -234,7 +342,14 @@ fn perf_end_frame(
         .unwrap_or(0.0);
     let requested_warp = clock.as_deref().map(|c| c.multiplier).unwrap_or(1.0);
     // Effective warp is advanced sim time per wall second in either view.
+    // In embedded mode the snapshot carries cumulative authoritative timings;
+    // they are telemetry only — local `sim_cpu_s` stays the client cost and
+    // is never mixed with server compute.
     let sim_budget = if pilot_runtime.is_some() {
+        let (server_compute_s, server_wall_s, server_effective_warp) = pilot_runtime
+            .as_deref()
+            .map(|r| (r.server_compute_s, r.server_wall_s, r.server_effective_warp))
+            .unwrap_or((0.0, 0.0, 0.0));
         SimBudget::from_steps(
             PILOT_FIXED_DT_S,
             pilot_steps,
@@ -249,6 +364,7 @@ fn perf_end_frame(
                 .map_or(0.0, |r| r.rails_advanced_this_frame),
             frame_wall_s.max(1e-9),
         )
+        .with_server_sample(server_compute_s, server_wall_s, server_effective_warp)
     } else {
         SimBudget {
             fixed_dt_s: PILOT_FIXED_DT_S,
@@ -259,6 +375,9 @@ fn perf_end_frame(
             requested_warp,
             effective_warp: requested_warp,
             backlog_s: 0.0,
+            server_compute_s: 0.0,
+            server_wall_s: 0.0,
+            server_effective_warp: 0.0,
         }
     };
     monitor.collector.set_sim_budget(sim_budget);
@@ -413,20 +532,28 @@ fn build_overlay_text(
             } else {
                 ""
             };
-            (
-                format!(
-                    "steps {:>3} cpu {:5.2}ms adv {:7.3}s rails {:.3}s warp x{:.1}/x{:.1} backlog {:5.2}ms{}",
-                    f.sim.steps_this_frame,
-                    f.sim.sim_cpu_s * 1000.0,
-                    f.sim.sim_time_advanced_s,
-                    f.sim.rails_time_advanced_s,
-                    f.sim.requested_warp,
-                    f.sim.effective_warp,
-                    f.sim.backlog_s * 1000.0,
-                    flag,
-                ),
+            // Server timings are cumulative telemetry, never frame latency:
+            // local `cpu` stays the client sim cost (0 in embedded mode).
+            let base = format!(
+                "steps {:>3} cpu {:5.2}ms adv {:7.3}s rails {:.3}s warp x{:.1}/x{:.1} backlog {:5.2}ms{}",
+                f.sim.steps_this_frame,
+                f.sim.sim_cpu_s * 1000.0,
+                f.sim.sim_time_advanced_s,
+                f.sim.rails_time_advanced_s,
+                f.sim.requested_warp,
+                f.sim.effective_warp,
+                f.sim.backlog_s * 1000.0,
                 flag,
-            )
+            );
+            let line = if f.sim.has_server_sample() {
+                format!(
+                    "{base}\n  srv cpu {:.1}s wall {:.1}s (authoritative, cumulative)",
+                    f.sim.server_compute_s, f.sim.server_wall_s,
+                )
+            } else {
+                base
+            };
+            (line, flag)
         }
         None => ("n/a".to_string(), ""),
     };

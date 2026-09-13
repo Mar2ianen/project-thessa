@@ -27,10 +27,21 @@ pub struct Welcome {
 /// Discrete commands bundled with an input (warp votes, staging, toggles).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Command {
-    SetWarp { factor: f64 },
+    SetWarp {
+        factor: f64,
+    },
     Stage,
-    Engine { active: bool },
-    Pause { paused: bool },
+    Engine {
+        active: bool,
+    },
+    Pause {
+        paused: bool,
+    },
+    /// Relaunch at the canonical survey site, preserving the clock. The
+    /// server derives the site from the same baked-in recipe as the client
+    /// survey, so this event carries no world state — only player intent,
+    /// like staging. Forces a prompt snapshot like staging does.
+    Reset,
 }
 
 /// Per-tick pilot input. The server applies the latest input per client;
@@ -65,6 +76,11 @@ pub struct Snapshot {
     pub engine_active: bool,
     pub paused: bool,
     pub effective_warp: f64,
+    /// Cumulative authoritative-server wall durations. These are separate
+    /// from the client render/simulation CPU timings and make the reported
+    /// warp reproducible as advanced sim time per real elapsed second.
+    pub server_compute_s: f64,
+    pub server_wall_s: f64,
     pub steps_this_frame: u32,
     pub rails_advanced_s: f64,
     pub wake_notice: Option<String>,
@@ -139,6 +155,8 @@ mod tests {
             engine_active: true,
             paused: false,
             effective_warp: 35.2,
+            server_compute_s: 0.042,
+            server_wall_s: 1.705,
             steps_this_frame: 181,
             rails_advanced_s: 0.0,
             wake_notice: None,
@@ -222,5 +240,38 @@ mod tests {
             decode_payload(&decode_frame(&at_client[0]).expect("env")).expect("snapshot");
         assert_eq!(back.tick, input.tick);
         assert_eq!(back, snapshot);
+    }
+}
+
+#[cfg(test)]
+mod reset_command_tests {
+    use super::*;
+    use thessa_protocol::FrameDecoder;
+
+    #[test]
+    fn reset_command_roundtrips_and_preserves_order() {
+        let input = ClientInput {
+            tick: 99,
+            control_input: [0.0; 3],
+            control_mode: ControlMode::Direct,
+            sas_target_xyzw: [0.0, 0.0, 0.0, 1.0],
+            throttle: 0.0,
+            engine_active: false,
+            sas_enabled: false,
+            rcs_enabled: false,
+            gear_down: false,
+            commands: vec![
+                Command::Stage,
+                Command::Reset,
+                Command::SetWarp { factor: 8.0 },
+            ],
+        };
+        let frame = encode_input(&input).expect("encode");
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.push(&frame).expect("split");
+        let back: ClientInput =
+            decode_payload(&decode_frame(&frames[0]).expect("env")).expect("payload");
+        assert_eq!(back, input);
+        assert_eq!(back.commands[1], Command::Reset);
     }
 }

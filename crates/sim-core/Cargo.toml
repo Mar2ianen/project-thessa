@@ -46,3 +46,7 @@ harness = false
 [[bench]]
 name = "aero_panels"
 harness = false
+
+[[bench]]
+name = "ephemeris_batch"
+harness = false

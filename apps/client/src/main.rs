@@ -9,6 +9,7 @@ use atmosphere::{
     AtmospherePlugin, GraphicsRequested, GraphicsResolved, PrimaryStarLight, RayTracingActive,
 };
 mod terrain;
+mod water;
 use map_ui::*;
 use navigation::*;
 use orbits::*;
@@ -17,6 +18,7 @@ use pilot::*;
 
 use std::{f32::consts::TAU, path::Path};
 
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::render::RenderPlugin;
 use bevy::render::settings::{RenderCreation, WgpuFeatures, WgpuSettings};
 use bevy::solari::prelude::SolariPlugins;
@@ -155,6 +157,7 @@ fn main() {
         .add_plugins(PerfMonitorPlugin)
         .add_plugins(AtmospherePlugin)
         .add_plugins(terrain::TerrainPlugin)
+        .add_plugins(water::WaterPlugin)
         .add_plugins(BrpExtrasPlugin::default())
         .insert_resource(SimulationClock::default())
         .insert_resource(NavigationState::default())
@@ -235,6 +238,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
     rt_active: Option<Res<RayTracingActive>>,
+    graphics: Option<Res<GraphicsResolved>>,
 ) {
     let rt_active = rt_active.is_some_and(|flag| flag.0);
     let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml"))
@@ -253,6 +257,13 @@ fn setup(
         focus: system_focus,
         selected: ephemeris.body_id("thessa").expect("starting world"),
     });
+    // Shadow texel grid follows the TOML budget (power of two, validated
+    // at parse; resolve clamps defensively).
+    if let Some(graphics) = graphics.as_deref() {
+        commands.insert_resource(DirectionalLightShadowMap {
+            size: graphics.0.shadow_map_size as usize,
+        });
+    }
 
     commands.insert_resource(GlobalAmbientLight {
         color: Color::srgb(0.18, 0.22, 0.32),
@@ -296,8 +307,35 @@ fn setup(
         DirectionalLight {
             illuminance: 88_000.0,
             color: Color::WHITE,
-            shadow_maps_enabled: !rt_active,
+            shadow_maps_enabled: !rt_active
+                && graphics.as_deref().is_none_or(|g| g.0.shadow_enabled),
+            shadow_depth_bias: 0.02,
+            shadow_normal_bias: graphics
+                .as_deref()
+                .map(|g| g.0.shadow_normal_bias_m as f32)
+                .unwrap_or(1.5),
             ..default()
+        },
+        // Planetary cascade cover from the TOML budget (engine default ends
+        // at 150 m). Near stays sub-metre for pilot detail; first cascade
+        // ends at max/40. Tuned by screenshot, budgeted by preset.
+        {
+            let (cascades, max_m) = graphics
+                .as_deref()
+                .map(|g| {
+                    (
+                        g.0.shadow_cascades as usize,
+                        g.0.shadow_max_distance_m as f32,
+                    )
+                })
+                .unwrap_or((4, 12_000.0));
+            Into::<CascadeShadowConfig>::into(CascadeShadowConfigBuilder {
+                num_cascades: cascades.clamp(1, 4),
+                minimum_distance: 0.5,
+                maximum_distance: max_m,
+                first_cascade_far_bound: max_m / 40.0,
+                overlap_proportion: 0.2,
+            })
         },
         bevy::light::SunDisk::OFF,
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -1.12, -0.70, -0.24)),
@@ -376,7 +414,14 @@ fn setup(
         )));
     commands.insert_resource(RuntimeEphemeris { ephemeris });
     commands.insert_resource(flight_runtime);
-    if std::env::args().any(|arg| arg == "--embedded") {
+    // The flight solver runs in a dedicated server process by default, so
+    // simulation and rendering never compete for the same CPU: snapshots
+    // cross the pipe, inputs go down, the frame stays render-bound.
+    // `--local` keeps the legacy in-frame stepping (blocking sim budget
+    // inside Update) for debugging without the server binary.
+    if std::env::args().any(|arg| arg == "--local") {
+        eprintln!("[client] local simulation (--local); sim shares the frame CPU");
+    } else {
         match embedded::EmbeddedLink::spawn(std::time::Duration::from_secs(15)) {
             Ok(link) => {
                 eprintln!("[client] embedded server linked; flight steps remotely");

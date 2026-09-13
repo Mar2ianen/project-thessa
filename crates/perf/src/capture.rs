@@ -57,7 +57,7 @@ impl PerfCapture {
 
         let mut out = String::new();
         out.push_str(
-            "frame,wall_s,sim_time_s,frame_ms,cpu_ms,gpu_ms,gpu_available,steps,fixed_dt_s,sim_cpu_ms,sim_advanced_s,requested_warp,effective_warp,backlog_ms,bodies,vehicles,patches_visible,patches_generated,triangles,cache_hits,cache_misses,streaming_queued,assets_pending,rss_bytes,rails_advanced_s",
+            "frame,wall_s,sim_time_s,frame_ms,cpu_ms,gpu_ms,gpu_available,steps,fixed_dt_s,sim_cpu_ms,sim_advanced_s,requested_warp,effective_warp,backlog_ms,bodies,vehicles,patches_visible,patches_generated,triangles,cache_hits,cache_misses,streaming_queued,assets_pending,rss_bytes,rails_advanced_s,server_compute_s,server_wall_s,server_effective_warp",
         );
         for name in &scope_names {
             let _ = write!(out, ",scope:{name}_ms");
@@ -104,6 +104,13 @@ impl PerfCapture {
                 rss,
             );
             let _ = write!(out, ",{:.6}", frame.sim.rails_time_advanced_s);
+            let _ = write!(
+                out,
+                ",{:.6},{:.6},{:.2}",
+                frame.sim.server_compute_s,
+                frame.sim.server_wall_s,
+                frame.sim.server_effective_warp
+            );
             for name in &scope_names {
                 let ms = frame.cpu_scopes.get(name).copied().unwrap_or(0.0) * 1000.0;
                 let _ = write!(out, ",{ms:.4}");
@@ -220,6 +227,39 @@ mod tests {
             .remove("rails_time_advanced_s");
         let decoded: PerfCapture = serde_json::from_value(legacy).unwrap();
         assert_eq!(decoded.frames[0].sim.rails_time_advanced_s, 0.0);
+    }
+
+    #[test]
+    fn server_sample_is_exported_and_old_json_defaults_to_zero() {
+        let mut capture = sample_capture();
+        capture.frames[0].sim = SimBudget::from_steps(0.01, 2, 0.0, 100.0, 0.0, 0.01)
+            .with_rails_time(0.0, 0.01)
+            .with_server_sample(12.5, 50.0, 80.0);
+        // Authoritative warp wins over the per-frame recomputation.
+        assert_eq!(capture.frames[0].sim.effective_warp, 80.0);
+        let csv = capture.to_csv();
+        let mut lines = csv.lines();
+        let header: Vec<_> = lines.next().unwrap().split(',').collect();
+        let row: Vec<_> = lines.next().unwrap().split(',').collect();
+        assert_eq!(header.len(), row.len());
+        for (name, expected) in [
+            ("server_compute_s", 12.5),
+            ("server_wall_s", 50.0),
+            ("server_effective_warp", 80.0),
+        ] {
+            let index = header.iter().position(|s| *s == name).unwrap();
+            assert_eq!(row[index].parse::<f64>().unwrap(), expected);
+        }
+        let mut legacy = serde_json::to_value(&capture).unwrap();
+        let sim = legacy["frames"][0]["sim"].as_object_mut().unwrap();
+        sim.remove("server_compute_s");
+        sim.remove("server_wall_s");
+        sim.remove("server_effective_warp");
+        let decoded: PerfCapture = serde_json::from_value(legacy).unwrap();
+        assert_eq!(decoded.frames[0].sim.server_compute_s, 0.0);
+        assert_eq!(decoded.frames[0].sim.server_wall_s, 0.0);
+        assert_eq!(decoded.frames[0].sim.server_effective_warp, 0.0);
+        assert!(!decoded.frames[0].sim.has_server_sample());
     }
 
     #[test]

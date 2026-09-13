@@ -51,6 +51,42 @@ impl<'a> GravityField<'a> {
         }
     }
 
+    /// Gravity from a precomputed [`EphemerisFrame`] slice instead of fresh
+    /// per-body lookups. Same source order, same checks, same summation —
+    /// bitwise identical to [`GravityField::acceleration`] for the same
+    /// timestamp. A short slice reports the missing body as unknown rather
+    /// than panicking on indexing.
+    pub fn acceleration_from_states(
+        &self,
+        position: DVec3,
+        states: &[crate::BodyState],
+    ) -> Result<DVec3, GravityError> {
+        let mut total = DVec3::ZERO;
+        for body_id in &self.source_ids {
+            let body = self.ephemeris.body(*body_id)?;
+            let state = states
+                .get(body_id.index())
+                .ok_or(crate::EphemerisError::UnknownBody(*body_id))?;
+            let offset = state.position_inertial - position;
+            let distance_squared = offset.length_squared();
+            if !distance_squared.is_finite() {
+                return Err(GravityError::NonFinite { body_id: *body_id });
+            }
+            if distance_squared == 0.0 {
+                return Err(GravityError::Singularity { body_id: *body_id });
+            }
+            let inverse_distance = distance_squared.sqrt().recip();
+            total += offset * (body.mu * inverse_distance.powi(3));
+        }
+        if total.is_finite() {
+            Ok(total)
+        } else {
+            Err(GravityError::NonFinite {
+                body_id: self.source_ids[0],
+            })
+        }
+    }
+
     pub fn potential(&self, position: DVec3, time: SimTime) -> Result<f64, GravityError> {
         let mut total = 0.0;
         for body_id in &self.source_ids {

@@ -2924,3 +2924,260 @@ fn aero_soa_simd_matches_oracle_and_panel_loop() {
         assert_eq!(fresh.panel_loads.expect("loads").len(), 10);
     }
 }
+
+fn chain_ephemeris() -> BakedEphemeris {
+    // Barycenter -> planet -> moon -> submoon: every lookup below the top
+    // re-walks shared parents, which is exactly the redundancy the batch
+    // evaluator removes. Radii are nonzero so the bodies also serve as
+    // gravity sources alongside the hierarchy.
+    let mu = 3.986_004_418e14;
+    let orbit = |a: f64, e: f64, m0: f64| {
+        KeplerOrbit::new(mu, a, e, 0.1, 0.2, 0.3, m0).expect("valid test orbit")
+    };
+    BakedEphemeris::new(
+        "TEST_CHAIN_EPOCH",
+        vec![
+            BakedBody::synthetic_barycenter(BodyId(0), "barycenter", mu, None, None),
+            BakedBody::orbital(
+                BodyId(1),
+                "planet",
+                mu * 0.1,
+                6_000_000.0,
+                BodyId(0),
+                orbit(50_000_000.0, 0.05, 0.0),
+            ),
+            BakedBody::orbital(
+                BodyId(2),
+                "moon",
+                mu * 0.01,
+                1_000_000.0,
+                BodyId(1),
+                orbit(5_000_000.0, 0.1, 1.0),
+            ),
+            BakedBody::orbital(
+                BodyId(3),
+                "submoon",
+                mu * 0.001,
+                100_000.0,
+                BodyId(2),
+                orbit(500_000.0, 0.2, 2.0),
+            ),
+        ],
+    )
+    .expect("valid chain ephemeris")
+}
+
+#[test]
+fn batch_states_match_individual_lookups_bitwise() {
+    let ephemeris = chain_ephemeris();
+    let mut frame = EphemerisFrame::new();
+    for seconds in [0.0, 1.0, 8.0 / 120.0, 1_000_000.0, -12_345.678] {
+        let time = SimTime(seconds);
+        let batch = frame
+            .evaluate(&ephemeris, time)
+            .expect("batch evaluation")
+            .to_vec();
+        assert_eq!(batch.len(), ephemeris.bodies.len());
+        for body in &ephemeris.bodies {
+            let single = ephemeris.body_state(body.id, time).expect("single lookup");
+            let batched = batch[body.id.index()];
+            assert_eq!(
+                batched.position_inertial, single.position_inertial,
+                "pos {:?}",
+                body.id
+            );
+            assert_eq!(
+                batched.velocity_inertial, single.velocity_inertial,
+                "vel {:?}",
+                body.id
+            );
+            assert_eq!(batched, single, "full state {:?}", body.id);
+        }
+        // Re-evaluating the same frame at a new time must not leak the old
+        // generation's completion tags into the new pass.
+        assert!(frame.states().len() == ephemeris.bodies.len());
+    }
+}
+
+#[test]
+fn batch_reports_cycles_and_rejects_short_buffers() {
+    let mut cyclic = chain_ephemeris();
+    cyclic.bodies[1].parent = Some(BodyId(3));
+    let mut frame = EphemerisFrame::new();
+    assert!(matches!(
+        frame.evaluate(&cyclic, SimTime::EPOCH),
+        Err(EphemerisError::Cycle(_))
+    ));
+    // A poisoned frame must still serve a healthy universe afterwards.
+    let healthy = chain_ephemeris();
+    assert!(frame.evaluate(&healthy, SimTime::EPOCH).is_ok());
+
+    let mut states = vec![BodyState::ORIGIN; 2];
+    let mut scratch = EphemerisScratch::new();
+    assert!(
+        healthy
+            .body_states_into(SimTime::EPOCH, &mut states, &mut scratch)
+            .is_err()
+    );
+}
+
+#[test]
+fn gravity_and_dominant_from_states_match_naive_paths() {
+    let ephemeris = chain_ephemeris();
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let mut frame = EphemerisFrame::new();
+    let positions = [
+        DVec3::new(56_000_000.0, 0.0, 0.0),
+        DVec3::new(0.0, -49_000_000.0, 1_000_000.0),
+    ];
+    for seconds in [0.0, 40_000.0] {
+        let time = SimTime(seconds);
+        let states = frame.evaluate(&ephemeris, time).expect("batch").to_vec();
+        for position in positions {
+            let naive = field.acceleration(position, time).expect("naive gravity");
+            let batched = field
+                .acceleration_from_states(position, &states)
+                .expect("batched gravity");
+            assert_eq!(batched, naive);
+            assert_eq!(
+                ephemeris.dominant_body_from_states(position, &states),
+                ephemeris.dominant_body(position, time),
+            );
+        }
+    }
+    // A short slice names the missing body instead of panicking.
+    let short = &frame.states()[..2];
+    assert!(field.acceleration_from_states(positions[0], short).is_err());
+}
+
+#[test]
+fn soa_scratch_matches_scalar_panel_loop_within_envelope() {
+    // Gate for routing the per-tick flight path through the vectorized SoA
+    // kernels. The kernels transcribe the analytic model with a different
+    // association order (up to a few ulps on 1e4-scale forces), so this pins
+    // an absolute envelope instead of bitwise equality, per AGENTS 10.1:
+    // 1e-6 N / 1e-6 N m sit ~9 orders below the decision-relevant scales
+    // (254 kN thrust, ~1e3 N m RCS couples and saturation flag) while
+    // relative metrics would lie on near-zero loads. The X-15 layout
+    // (5 panels) exercises both the 4-wide kernel and the scalar tail.
+    let profile = X15StarterProfile::new().expect("x15 profile");
+    let mut vehicle = profile.vehicle.clone();
+    let model = PanelAeroModel::new(profile.aero_config).expect("aero model");
+    let mut panels = PanelSoA::from_geometry(&vehicle.aero_geometry).expect("soa layout");
+    let mut scratch = AeroSimdScratch::default();
+    let env = |density: f64| AeroEnvironment::new(density, 340.294, 1.81e-5, DVec3::ZERO);
+    let flow = |vx: f64, vy: f64, omega: DVec3| AeroState::new(DVec3::new(vx, vy, 0.0), omega);
+    let cases: Vec<(AeroState, AeroEnvironment, [f64; 4])> = vec![
+        (
+            flow(180.0, 0.0, DVec3::ZERO),
+            env(1.0),
+            [0.0, 0.0, 0.0, 0.0],
+        ),
+        (
+            flow(180.0, -8.0, DVec3::ZERO),
+            env(1.0),
+            [-0.5, 0.3, 0.2, -0.2],
+        ),
+        // Past the 22-degree stall angle with rate: separation + omega x r.
+        (
+            flow(150.0, -70.0, DVec3::new(1.0, 0.5, 0.2)),
+            env(0.9),
+            [0.8, -0.6, 1.0, -1.0],
+        ),
+        // Transonic handoff and supersonic thin air with full deflection.
+        (
+            flow(340.0, 5.0, DVec3::ZERO),
+            env(0.8),
+            [0.2, 0.0, 0.5, -0.5],
+        ),
+        (
+            flow(680.0, 20.0, DVec3::new(0.1, -0.2, 0.3)),
+            env(0.4),
+            [1.0, 1.0, -1.0, 1.0],
+        ),
+        // Declared vacuum parks every lane; still air parks them too.
+        (
+            flow(7000.0, 0.0, DVec3::ZERO),
+            env(0.0),
+            [0.4, 0.0, 0.0, 0.0],
+        ),
+        (flow(0.0, 0.0, DVec3::ZERO), env(1.0), [0.0, 0.0, 0.0, 0.0]),
+    ];
+    for (state, environment, commands) in cases {
+        vehicle
+            .apply_control_inputs(&commands)
+            .expect("control inputs");
+        let geometry = &vehicle.aero_geometry;
+        panels.sync_deflections(geometry).expect("deflection sync");
+        let scalar = model
+            .evaluate_state(state, environment, geometry)
+            .expect("scalar evaluation");
+        let vector = model
+            .evaluate_soa_simd_scratch(state, environment, &panels, false, &mut scratch)
+            .expect("soa evaluation");
+        assert!(
+            (vector.force_body_n - scalar.force_body_n).length() <= 1.0e-6,
+            "force envelope {state:?}: {:?} vs {:?}",
+            vector.force_body_n,
+            scalar.force_body_n,
+        );
+        assert!(
+            (vector.moment_body_nm - scalar.moment_body_nm).length() <= 1.0e-6,
+            "moment envelope {state:?}: {:?} vs {:?}",
+            vector.moment_body_nm,
+            scalar.moment_body_nm,
+        );
+        assert!(
+            (vector.dynamic_pressure_pa - scalar.dynamic_pressure_pa).abs() <= 1.0e-9,
+            "q envelope"
+        );
+        assert!(
+            (vector.mach - scalar.mach).abs() <= 1.0e-12,
+            "mach envelope"
+        );
+        assert!(
+            (vector.reynolds_number - scalar.reynolds_number).abs() <= 1.0e-6,
+            "re envelope"
+        );
+        assert_eq!(vector.panel_count, scalar.panel_count, "panel count");
+    }
+}
+
+#[test]
+#[ignore = "wall-clock diagnostic; run with --ignored --nocapture"]
+fn profile_scalar_vs_soa_dev() {
+    let profile = X15StarterProfile::new().expect("x15 profile");
+    let vehicle = profile.vehicle.clone();
+    let geometry = &vehicle.aero_geometry;
+    let model = PanelAeroModel::new(profile.aero_config).expect("aero model");
+    let mut panels = PanelSoA::from_geometry(geometry).expect("soa");
+    let mut scratch = AeroSimdScratch::default();
+    let env = AeroEnvironment::new(1.0, 340.294, 1.81e-5, DVec3::ZERO);
+    let state = AeroState::new(DVec3::new(180.0, -8.0, 0.0), DVec3::ZERO);
+    // Warmup.
+    for _ in 0..200 {
+        let _ = model.evaluate_state(state, env, geometry).expect("scalar");
+        panels.sync_deflections(geometry).expect("sync");
+        let _ = model
+            .evaluate_soa_simd_scratch(state, env, &panels, false, &mut scratch)
+            .expect("soa");
+    }
+    let iters = 2000;
+    let now = std::time::Instant::now();
+    for _ in 0..iters {
+        std::hint::black_box(model.evaluate_state(state, env, geometry).expect("scalar"));
+    }
+    let scalar = now.elapsed();
+    let now = std::time::Instant::now();
+    for _ in 0..iters {
+        panels.sync_deflections(geometry).expect("sync");
+        std::hint::black_box(
+            model
+                .evaluate_soa_simd_scratch(state, env, &panels, false, &mut scratch)
+                .expect("soa"),
+        );
+    }
+    let soa = now.elapsed();
+    eprintln!("scalar: {:?} total, {:?}/eval", scalar, scalar / iters);
+    eprintln!("soa+sync: {:?} total, {:?}/eval", soa, soa / iters);
+}

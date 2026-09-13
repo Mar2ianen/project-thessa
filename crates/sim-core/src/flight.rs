@@ -4,8 +4,8 @@ use glam::{DMat3, DQuat, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AeroEnvironment, AeroError, AeroGeometry, AeroModel, AeroResult, AeroState, AtmosphereConfig,
-    AtmosphereError,
+    AeroEnvironment, AeroError, AeroGeometry, AeroModel, AeroResult, AeroSimdScratch, AeroState,
+    AtmosphereConfig, AtmosphereError, PanelAeroModel, PanelSoA,
 };
 
 const MIN_STEP_S: f64 = 1.0e-9;
@@ -213,6 +213,54 @@ pub fn evaluate_flight_forces<M: AeroModel>(
     properties: RigidBodyProperties,
     input: FlightStepInput,
 ) -> Result<FlightForces, FlightError> {
+    evaluate_flight_forces_with_aero(
+        atmosphere,
+        state,
+        properties,
+        input,
+        |aero_state, environment| {
+            model
+                .evaluate_state(aero_state, environment, geometry)
+                .map_err(FlightError::Aero)
+        },
+    )
+}
+
+/// Evaluate flight forces through the built-in structure-of-arrays aero path.
+/// The flight equations remain identical to [`evaluate_flight_forces`]; only
+/// the panel coefficient/assembly stage uses the reusable SIMD scratch.
+pub fn evaluate_flight_forces_soa(
+    model: &PanelAeroModel,
+    panels: &PanelSoA,
+    scratch: &mut AeroSimdScratch,
+    atmosphere: AtmosphereConfig,
+    state: RigidBodyState,
+    properties: RigidBodyProperties,
+    input: FlightStepInput,
+) -> Result<FlightForces, FlightError> {
+    evaluate_flight_forces_with_aero(
+        atmosphere,
+        state,
+        properties,
+        input,
+        |aero_state, environment| {
+            model
+                .evaluate_soa_simd_scratch(aero_state, environment, panels, false, scratch)
+                .map_err(FlightError::Aero)
+        },
+    )
+}
+
+fn evaluate_flight_forces_with_aero<F>(
+    atmosphere: AtmosphereConfig,
+    state: RigidBodyState,
+    properties: RigidBodyProperties,
+    input: FlightStepInput,
+    evaluate_aero: F,
+) -> Result<FlightForces, FlightError>
+where
+    F: FnOnce(AeroState, AeroEnvironment) -> Result<AeroResult, FlightError>,
+{
     state.validate()?;
     properties.validate()?;
     input.validate()?;
@@ -242,9 +290,7 @@ pub fn evaluate_flight_forces<M: AeroModel>(
             panel_loads: None,
         }
     } else {
-        model
-            .evaluate_state(aero_state, environment, geometry)
-            .map_err(FlightError::Aero)?
+        evaluate_aero(aero_state, environment)?
     };
     let total_force_body_n = aero.force_body_n + input.extra_force_body_n;
     let total_moment_body_nm = aero.moment_body_nm + input.extra_moment_body_nm;
@@ -335,6 +381,36 @@ pub fn integrate_rigid_body_step<M: AeroModel>(
         return Err(FlightError::InvalidStep);
     }
     let forces = evaluate_flight_forces(model, geometry, atmosphere, state, properties, input)?;
+    integrate_rigid_body_step_from_forces(state, properties, forces, step_s)
+}
+
+/// Integrate one rigid-body step using the built-in SoA/SIMD aero evaluator.
+/// This is the allocation-free counterpart to [`integrate_rigid_body_step`]
+/// used by the authoritative X-15 runtime.
+pub fn integrate_rigid_body_step_soa(
+    model: &PanelAeroModel,
+    panels: &PanelSoA,
+    scratch: &mut AeroSimdScratch,
+    atmosphere: AtmosphereConfig,
+    state: RigidBodyState,
+    properties: RigidBodyProperties,
+    input: FlightStepInput,
+    step_s: f64,
+) -> Result<(RigidBodyState, FlightForces), FlightError> {
+    if !step_s.is_finite() || step_s < MIN_STEP_S {
+        return Err(FlightError::InvalidStep);
+    }
+    let forces =
+        evaluate_flight_forces_soa(model, panels, scratch, atmosphere, state, properties, input)?;
+    integrate_rigid_body_step_from_forces(state, properties, forces, step_s)
+}
+
+fn integrate_rigid_body_step_from_forces(
+    state: RigidBodyState,
+    properties: RigidBodyProperties,
+    forces: FlightForces,
+    step_s: f64,
+) -> Result<(RigidBodyState, FlightForces), FlightError> {
     let velocity_inertial_mps =
         state.velocity_inertial_mps + forces.acceleration_inertial_mps2 * step_s;
     let position_inertial_m = state.position_inertial_m + velocity_inertial_mps * step_s;

@@ -1888,6 +1888,24 @@ impl PanelSoA {
         Ok(soa)
     }
 
+    /// Refresh the deflection column after control commands mutate the
+    /// geometry. Shape columns are compile-once (control surfaces rotate
+    /// panels in place without changing area/chord/span); only the
+    /// deflection column varies per evaluation. Caller must invoke this
+    /// after every [`VehicleDefinition::apply_control_inputs`] before reading
+    /// the SoA path, otherwise the kernels fly the previous deflection.
+    pub fn sync_deflections(&mut self, geometry: &AeroGeometry) -> Result<(), AeroError> {
+        if self.count != geometry.panels.len() {
+            return Err(AeroError::InvalidGeometry(
+                "panel count changed after SoA compile; rebuild the layout".into(),
+            ));
+        }
+        for (index, panel) in geometry.panels.iter().enumerate() {
+            self.deflection[index] = panel.control_deflection_rad;
+        }
+        Ok(())
+    }
+
     /// Rehydrate one lane for the shared coefficient path. Copy cost is
     /// trivial next to a coefficient evaluation; the kernels bypass this.
     fn panel_at(&self, index: usize) -> AeroPanel {

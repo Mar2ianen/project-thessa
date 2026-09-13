@@ -27,15 +27,16 @@ pub use aero::{
     AeroGeometry, AeroModel, AeroPanel, AeroPanelLoad, AeroResult, AeroSimdScratch, AeroState,
     PanelAeroModel, PanelSoA, evaluate_batch,
 };
-pub use atmosphere::{AtmosphereConfig, AtmosphereError, AtmosphereSample};
+pub use atmosphere::{AtmosphereConfig, AtmosphereError, AtmosphereSample, BakedAtmosphere};
 pub use ephemeris::{
-    BakedBody, BakedEphemeris, BodyId, BodyState, EphemerisError, KeplerOrbit, OsculatingElements,
+    BakedBody, BakedEphemeris, BodyId, BodyState, EphemerisError, EphemerisFrame, EphemerisScratch,
+    KeplerOrbit, OsculatingElements,
 };
 pub use flight::{
     FlightError, FlightForces, FlightStepInput, RigidBodyProperties, RigidBodyState,
-    constant_spin_orientation, evaluate_flight_forces, integrate_attitude_step,
-    integrate_rigid_body_duration, integrate_rigid_body_duration_sampled,
-    integrate_rigid_body_step,
+    constant_spin_orientation, evaluate_flight_forces, evaluate_flight_forces_soa,
+    integrate_attitude_step, integrate_rigid_body_duration, integrate_rigid_body_duration_sampled,
+    integrate_rigid_body_step, integrate_rigid_body_step_soa,
 };
 pub use frames::{ReferenceFrame, StateVector};
 pub use gravity::{GravityError, GravityField};

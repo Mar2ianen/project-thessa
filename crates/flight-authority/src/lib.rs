@@ -13,12 +13,15 @@
 //! green.
 
 pub mod bake;
+pub mod launch_site;
 pub mod mode;
 pub mod runtime;
 
 pub use bake::{BakeQueue, BakedRails, InlineBakeQueue, RailsBakeRequest};
+pub use launch_site::{canonical_launch_setup, canonical_world_field, survey_bookmarks};
 pub use mode::{ControlMode, FlightRegime};
 pub use runtime::{
     COAST_DENSITY_KG_M3, FlightAuthority, FlightTraceWriter, LocalAirKinematics,
-    X15_STALL_ANGLE_DEG, conventional_angle_of_attack_deg, local_air_kinematics,
+    TerrainTrackCoverage, X15_STALL_ANGLE_DEG, conventional_angle_of_attack_deg,
+    local_air_kinematics,
 };

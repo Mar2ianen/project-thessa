@@ -19,5 +19,5 @@ pub use resolve::{Capabilities, ResolvedBackend, ResolvedGraphicsSettings, Resol
 pub use settings::{
     AuroraQuality, BackendRequest, CloudSettings, ConfigError, DebugSettings, Preset, Quality,
     RayTracingRequest, RaytracingParticipation, RendererSettings, RequestedGraphics,
-    UpperAtmosphereSettings,
+    ShadowSettings, UpperAtmosphereSettings,
 };

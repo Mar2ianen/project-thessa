@@ -3,7 +3,7 @@ use std::{error::Error, fmt};
 use glam::{DQuat, DVec3};
 use serde::{Deserialize, Serialize};
 
-use crate::{SimTime, TAU};
+use crate::{BakedAtmosphere, SimTime, TAU};
 
 /// Stable index into a baked ephemeris. IDs are numeric at runtime so source
 /// ordering can be explicit and independent of hash-map iteration.
@@ -286,6 +286,11 @@ pub struct BakedBody {
     /// Synthetic barycentres are useful for kinematics but must not be added
     /// to the gravity source list alongside their component bodies.
     pub gravity_source: bool,
+    /// Optional atmospheric design and its composition-derived gas properties.
+    /// Older baked ephemerides deserialize with no atmosphere and retain the
+    /// runtime's documented compatibility fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub atmosphere: Option<BakedAtmosphere>,
 }
 
 impl BakedBody {
@@ -302,6 +307,7 @@ impl BakedBody {
             tidal_lock: false,
             axial_tilt_rad: 0.0,
             gravity_source: true,
+            atmosphere: None,
         }
     }
 
@@ -325,6 +331,7 @@ impl BakedBody {
             tidal_lock: false,
             axial_tilt_rad: 0.0,
             gravity_source: true,
+            atmosphere: None,
         }
     }
 
@@ -347,6 +354,7 @@ impl BakedBody {
             tidal_lock: false,
             axial_tilt_rad: 0.0,
             gravity_source: false,
+            atmosphere: None,
         }
     }
 }
@@ -458,6 +466,34 @@ impl BakedEphemeris {
         best.map(|(id, _)| id)
     }
 
+    /// Display-only dominant body read from a precomputed frame slice. Same
+    /// scan order and same skip rules as [`BakedEphemeris::dominant_body`];
+    /// a body missing from the slice is skipped like a failed lookup.
+    pub fn dominant_body_from_states(
+        &self,
+        position_inertial_m: DVec3,
+        states: &[BodyState],
+    ) -> Option<BodyId> {
+        let mut best: Option<(BodyId, f64)> = None;
+        for body in self.gravity_sources() {
+            if !body.mu.is_finite() || body.mu <= 0.0 {
+                continue;
+            }
+            let Some(state) = states.get(body.id.index()) else {
+                continue;
+            };
+            let distance_squared = (state.position_inertial - position_inertial_m).length_squared();
+            if !distance_squared.is_finite() || distance_squared <= 0.0 {
+                continue;
+            }
+            let pull = body.mu / distance_squared;
+            if best.is_none_or(|(_, best_pull)| pull > best_pull) {
+                best = Some((body.id, pull));
+            }
+        }
+        best.map(|(id, _)| id)
+    }
+
     pub fn validate(&self) -> Result<(), EphemerisError> {
         for (index, body) in self.bodies.iter().enumerate() {
             if body.id.index() != index {
@@ -509,9 +545,13 @@ impl BakedEphemeris {
         if stack.contains(&id) {
             return Err(EphemerisError::Cycle(id));
         }
-        let body = self.body(id)?.clone();
+        // Borrow: only `parent`/`orbit` (both `Copy`) are read. Cloning the
+        // whole body here cloned the `String` name on every level of every
+        // lookup — heap churn inside the per-tick gravity loop.
+        let body = self.body(id)?;
+        let (parent, orbit, name) = (body.parent, body.orbit, body.name.as_str());
         stack.push(id);
-        let result = match (body.parent, body.orbit) {
+        let result = match (parent, orbit) {
             (Some(parent), Some(orbit)) => {
                 let parent_state = self.body_state_with_stack(parent, time, stack)?;
                 let (relative_position, relative_velocity) = orbit.state_relative_at(time)?;
@@ -524,13 +564,153 @@ impl BakedEphemeris {
             }
             (None, None) => Ok(BodyState::ORIGIN),
             _ => Err(EphemerisError::InvalidBody(format!(
-                "body {} has an incomplete parent/orbit pair",
-                body.name
+                "body {name} has an incomplete parent/orbit pair",
             ))),
         };
         stack.pop();
         result
     }
+
+    /// Evaluate every body at `time` in a single memoized pass.
+    ///
+    /// Representation optimization, not a model change: each body's Kepler
+    /// solve runs exactly once per timestamp instead of once per dependent
+    /// (`body_state` re-walks shared parents — 58 solves per gravity call on
+    /// the 24-body design system vs 23 here). Values are bitwise identical to
+    /// individual [`BakedEphemeris::body_state`] calls: same solve, same basis,
+    /// same summation order per body.
+    ///
+    /// `out.len()` must equal `bodies.len()`; entry `i` receives the state of
+    /// the body with `BodyId(i)`.
+    pub fn body_states_into(
+        &self,
+        time: SimTime,
+        out: &mut [BodyState],
+        scratch: &mut EphemerisScratch,
+    ) -> Result<(), EphemerisError> {
+        if out.len() != self.bodies.len() {
+            return Err(EphemerisError::InvalidBody(format!(
+                "batch buffer holds {} states for {} bodies",
+                out.len(),
+                self.bodies.len(),
+            )));
+        }
+        scratch.prepare(self.bodies.len());
+        for index in 0..self.bodies.len() {
+            eval_body_into(self, BodyId(index as u32), time, out, scratch)?;
+        }
+        Ok(())
+    }
+}
+
+/// Reusable scratch for [`BakedEphemeris::body_states_into`]. Buffers grow to
+/// the body count once and are then reused allocation-free; a generation tag
+/// per body replaces per-call clearing. Keep one per stepping context (flight
+/// runtime, bake worker) — it is not `Sync`.
+#[derive(Debug, Clone, Default)]
+pub struct EphemerisScratch {
+    completed: Vec<u32>,
+    stack: Vec<BodyId>,
+    generation: u32,
+}
+
+impl EphemerisScratch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn prepare(&mut self, body_count: usize) {
+        if self.completed.len() != body_count {
+            self.completed.resize(body_count, 0);
+        }
+        self.stack.clear();
+        self.generation = self.generation.wrapping_add(1);
+        if self.generation == 0 {
+            // Wrapped after 4B evaluations: re-arm tags instead of aliasing
+            // a stale generation as completed.
+            self.completed.fill(0);
+            self.generation = 1;
+        }
+    }
+}
+
+/// Reusable per-timestamp frame: all body states plus the scratch that built
+/// them. Evaluate once per tick, then serve the reference body, gravity and
+/// guard reads from the same slice instead of re-walking parent chains.
+#[derive(Debug, Clone, Default)]
+pub struct EphemerisFrame {
+    states: Vec<BodyState>,
+    scratch: EphemerisScratch,
+}
+
+impl EphemerisFrame {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Evaluate every body at `time`, reusing internal buffers. The returned
+    /// slice is valid until the next `evaluate` call on this frame.
+    pub fn evaluate(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        time: SimTime,
+    ) -> Result<&[BodyState], EphemerisError> {
+        if self.states.len() != ephemeris.bodies.len() {
+            self.states
+                .resize(ephemeris.bodies.len(), BodyState::ORIGIN);
+        }
+        ephemeris.body_states_into(time, &mut self.states, &mut self.scratch)?;
+        Ok(&self.states)
+    }
+
+    /// Last evaluated states, if any.
+    pub fn states(&self) -> &[BodyState] {
+        &self.states
+    }
+}
+
+fn eval_body_into(
+    ephemeris: &BakedEphemeris,
+    id: BodyId,
+    time: SimTime,
+    out: &mut [BodyState],
+    scratch: &mut EphemerisScratch,
+) -> Result<BodyState, EphemerisError> {
+    let index = id.index();
+    let body = ephemeris.body(id)?;
+    if index >= scratch.completed.len() {
+        return Err(EphemerisError::UnknownBody(id));
+    }
+    if scratch.completed[index] == scratch.generation {
+        return Ok(out[index]);
+    }
+    if scratch.stack.contains(&id) {
+        return Err(EphemerisError::Cycle(id));
+    }
+    let (parent, orbit) = (body.parent, body.orbit);
+    scratch.stack.push(id);
+    let result = match (parent, orbit) {
+        (Some(parent), Some(orbit)) => {
+            let parent_state = eval_body_into(ephemeris, parent, time, out, scratch)?;
+            let (relative_position, relative_velocity) = orbit.state_relative_at(time)?;
+            Ok(BodyState {
+                position_inertial: parent_state.position_inertial + relative_position,
+                velocity_inertial: parent_state.velocity_inertial + relative_velocity,
+                orientation: DQuat::IDENTITY,
+                angular_velocity: DVec3::ZERO,
+            })
+        }
+        (None, None) => Ok(BodyState::ORIGIN),
+        _ => Err(EphemerisError::InvalidBody(format!(
+            "body {} has an incomplete parent/orbit pair",
+            body.name,
+        ))),
+    };
+    scratch.stack.pop();
+    let state = result?;
+    out[index] = state;
+    scratch.completed[index] = scratch.generation;
+    Ok(state)
 }
 
 fn solve_kepler(mean_anomaly: f64, eccentricity: f64) -> f64 {

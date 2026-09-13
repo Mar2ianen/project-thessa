@@ -293,6 +293,61 @@ pub struct DebugSettings {
     pub show_rt_proxies: bool,
 }
 
+/// Sun shadow map cascade coverage. The engine default ends at 150 m, so a
+/// survey camera at kilometres would see no self-shadowing at all; these
+/// bounds carry planetary-scale cover explicitly instead of magic numbers
+/// in the client.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShadowSettings {
+    /// Master switch for the raster shadow path (RT lighting ignores it).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub quality: Quality,
+    /// Cascade count, 1..=4.
+    #[serde(default = "default_shadow_cascades")]
+    pub cascades: u32,
+    /// Far end of cascade cover in metres. Near stays sub-metre for pilot
+    /// detail; the first cascade ends at max/40.
+    #[serde(default = "default_shadow_distance")]
+    pub max_distance_m: f64,
+    /// Shadow texel grid per cascade (power of two, 512..=8192).
+    #[serde(default = "default_shadow_map_size")]
+    pub map_size: u32,
+    /// Normal offset in metres against acne on 32 m mesh cells.
+    #[serde(default = "default_shadow_normal_bias")]
+    pub normal_bias_m: f64,
+}
+
+fn default_shadow_cascades() -> u32 {
+    4
+}
+
+fn default_shadow_distance() -> f64 {
+    12_000.0
+}
+
+fn default_shadow_map_size() -> u32 {
+    4096
+}
+
+fn default_shadow_normal_bias() -> f64 {
+    1.5
+}
+
+impl Default for ShadowSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            quality: Quality::High,
+            cascades: default_shadow_cascades(),
+            max_distance_m: default_shadow_distance(),
+            map_size: default_shadow_map_size(),
+            normal_bias_m: default_shadow_normal_bias(),
+        }
+    }
+}
+
 /// Requested graphics configuration as parsed from `graphics.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestedGraphics {
@@ -311,6 +366,8 @@ pub struct RequestedGraphics {
     #[serde(default)]
     pub raytracing: RaytracingParticipation,
     #[serde(default)]
+    pub shadows: ShadowSettings,
+    #[serde(default)]
     pub debug: DebugSettings,
 }
 
@@ -328,6 +385,7 @@ impl Default for RequestedGraphics {
             clouds: CloudSettings::default(),
             upper_atmosphere: UpperAtmosphereSettings::default(),
             raytracing: RaytracingParticipation::default(),
+            shadows: ShadowSettings::default(),
             debug: DebugSettings::default(),
         }
     }
@@ -396,6 +454,35 @@ impl RequestedGraphics {
                 detail: "expected >= 0".to_string(),
             });
         }
+        if !(1..=4).contains(&self.shadows.cascades) {
+            return Err(ConfigError::InvalidValue {
+                path: "shadows.cascades",
+                detail: format!("expected 1..=4, got {}", self.shadows.cascades),
+            });
+        }
+        if !(100.0..=100_000.0).contains(&self.shadows.max_distance_m) {
+            return Err(ConfigError::InvalidValue {
+                path: "shadows.max_distance_m",
+                detail: format!("expected 100..=100000, got {}", self.shadows.max_distance_m),
+            });
+        }
+        if !(512..=8192).contains(&self.shadows.map_size)
+            || !self.shadows.map_size.is_power_of_two()
+        {
+            return Err(ConfigError::InvalidValue {
+                path: "shadows.map_size",
+                detail: format!(
+                    "expected a power of two in 512..=8192, got {}",
+                    self.shadows.map_size
+                ),
+            });
+        }
+        if !(0.0..=50.0).contains(&self.shadows.normal_bias_m) {
+            return Err(ConfigError::InvalidValue {
+                path: "shadows.normal_bias_m",
+                detail: format!("expected 0..=50, got {}", self.shadows.normal_bias_m),
+            });
+        }
         Ok(())
     }
 
@@ -412,6 +499,11 @@ impl RequestedGraphics {
                 self.atmosphere.aerial_perspective = false;
                 self.atmosphere.limb_scattering = true;
                 self.clouds.enabled = false;
+                self.shadows.quality = Quality::Low;
+                self.shadows.cascades = 2;
+                self.shadows.max_distance_m = 3000.0;
+                self.shadows.map_size = 1024;
+                self.shadows.normal_bias_m = 2.0;
                 self.upper_atmosphere.aurora_quality = AuroraQuality::Low;
                 self.upper_atmosphere.aurora_lighting = false;
             }
@@ -422,6 +514,11 @@ impl RequestedGraphics {
                 self.atmosphere.ray_steps = 16;
                 self.atmosphere.aerial_perspective = true;
                 self.clouds.enabled = false;
+                self.shadows.quality = Quality::Medium;
+                self.shadows.cascades = 4;
+                self.shadows.max_distance_m = 6000.0;
+                self.shadows.map_size = 2048;
+                self.shadows.normal_bias_m = 1.5;
                 self.upper_atmosphere.aurora_quality = AuroraQuality::Low;
             }
             Preset::High => {
@@ -431,6 +528,11 @@ impl RequestedGraphics {
                 self.atmosphere.ray_steps = 24;
                 self.atmosphere.aerial_perspective = true;
                 self.clouds.enabled = false;
+                self.shadows.quality = Quality::High;
+                self.shadows.cascades = 4;
+                self.shadows.max_distance_m = 12_000.0;
+                self.shadows.map_size = 4096;
+                self.shadows.normal_bias_m = 1.5;
                 self.upper_atmosphere.aurora_quality = AuroraQuality::Low;
             }
             Preset::Ultra => {
@@ -440,6 +542,11 @@ impl RequestedGraphics {
                 self.atmosphere.ray_steps = 32;
                 self.atmosphere.aerial_perspective = true;
                 self.clouds.enabled = false;
+                self.shadows.quality = Quality::High;
+                self.shadows.cascades = 4;
+                self.shadows.max_distance_m = 20_000.0;
+                self.shadows.map_size = 4096;
+                self.shadows.normal_bias_m = 1.0;
                 self.upper_atmosphere.aurora_quality = AuroraQuality::High;
             }
             Preset::Custom => {}
@@ -501,6 +608,32 @@ mod tests {
         assert!(RequestedGraphics::from_toml(bad).is_err());
         let bad_steps = "preset = \"high\"\n[atmosphere]\nray_steps = 2\n";
         assert!(RequestedGraphics::from_toml(bad_steps).is_err());
+    }
+
+    #[test]
+    fn shadow_budgets_expand_with_presets_and_validate() {
+        let mut config = RequestedGraphics::default();
+        config.apply_preset(Preset::Low);
+        assert_eq!(config.shadows.cascades, 2);
+        assert_eq!(config.shadows.map_size, 1024);
+        assert!(!config.is_custom());
+        config.apply_preset(Preset::High);
+        assert_eq!(config.shadows.cascades, 4);
+        assert_eq!(config.shadows.max_distance_m, 12_000.0);
+        assert!(!config.is_custom());
+        for bad in [
+            "preset = \"high\"\n[shadows]\ncascades = 9\n",
+            "preset = \"high\"\n[shadows]\nmap_size = 1000\n",
+            "preset = \"high\"\n[shadows]\nmax_distance_m = -5.0\n",
+            "preset = \"high\"\n[shadows]\nnormal_bias_m = 500.0\n",
+        ] {
+            assert!(RequestedGraphics::from_toml(bad).is_err(), "{bad}");
+        }
+        // Missing section still parses (old configs without shadows).
+        let legacy = "preset = \"high\"\n[renderer]\nresolution_scale = 1.0\n";
+        let parsed = RequestedGraphics::from_toml(legacy).unwrap();
+        assert_eq!(parsed.shadows.cascades, 4);
+        assert!(parsed.shadows.enabled);
     }
 
     #[test]

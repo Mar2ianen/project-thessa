@@ -238,7 +238,7 @@ fn action_active(
         Action::Sas => runtime.sas_enabled,
         Action::Rcs => runtime.rcs_enabled,
         Action::Gear => runtime.gear_down,
-        Action::Engine => runtime.engine_active,
+        Action::Engine => runtime.input_engine_active,
         Action::Pause => clock.paused,
         Action::Help => state.show_help,
         Action::Telemetry => state.show_telemetry,
@@ -287,7 +287,10 @@ pub(super) fn pilot_hud_buttons(
                 Action::Sas => runtime.sas_enabled = !runtime.sas_enabled,
                 Action::Rcs => runtime.rcs_enabled = !runtime.rcs_enabled,
                 Action::Gear => runtime.gear_down = !runtime.gear_down,
-                Action::Engine => runtime.engine_active = !runtime.engine_active,
+                Action::Engine => {
+                    runtime.input_engine_active = !runtime.input_engine_active;
+                    runtime.engine_active = runtime.input_engine_active;
+                }
                 Action::Mode => state.show_modes = !state.show_modes,
                 Action::SetMode(mode) => {
                     state.control_mode = *mode;
@@ -300,8 +303,14 @@ pub(super) fn pilot_hud_buttons(
                 Action::Telemetry => state.show_telemetry = !state.show_telemetry,
                 Action::Camera => state.pilot_camera_chase = !state.pilot_camera_chase,
                 Action::Precision => state.precision_controls = !state.precision_controls,
-                Action::ThrottleUp => runtime.throttle = (runtime.throttle + 0.1).min(1.0),
-                Action::ThrottleDown => runtime.throttle = (runtime.throttle - 0.1).max(0.0),
+                Action::ThrottleUp => {
+                    runtime.input_throttle = (runtime.input_throttle + 0.1).min(1.0);
+                    runtime.throttle = runtime.input_throttle;
+                }
+                Action::ThrottleDown => {
+                    runtime.input_throttle = (runtime.input_throttle - 0.1).max(0.0);
+                    runtime.throttle = runtime.input_throttle;
+                }
             }
         }
         let enabled = action_active(*action, &state, &runtime, &clock);

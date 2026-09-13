@@ -121,6 +121,17 @@ mod tests {
             .expect("Thessa epoch state");
         assert!(state.position_inertial.is_finite());
         assert!(state.velocity_inertial.is_finite());
+        let thessa_atmosphere = ephemeris
+            .body(thessa)
+            .expect("Thessa descriptor")
+            .atmosphere
+            .as_ref()
+            .expect("Thessa atmosphere");
+        assert_eq!(thessa_atmosphere.composition, "N2/O2/Ar/CO2 provisional");
+        assert_eq!(thessa_atmosphere.surface_pressure_pa, Some(120_000.0));
+        assert!((280.0..290.0).contains(&thessa_atmosphere.gas_constant_j_kg_k));
+        assert!(thessa_atmosphere.heat_capacity_ratio > 1.0);
+        assert!(thessa_atmosphere.sutherland_reference_viscosity_pa_s > 0.0);
 
         let nereid = ephemeris.body_id("nereid").expect("Nereid body");
         let borea = ephemeris.body_id("borea").expect("Borea body");

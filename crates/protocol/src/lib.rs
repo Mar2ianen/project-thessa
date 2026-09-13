@@ -12,7 +12,11 @@ use serde::{Deserialize, Serialize};
 pub struct ProtocolVersion(pub u16);
 
 impl ProtocolVersion {
-    pub const CURRENT: Self = Self(2);
+    // Snapshot v3 adds authoritative server timing fields. Command Reset
+    // (v4) relaunches the craft at the canonical site from the wire.
+    // Postcard structs are not a negotiated schema, so old peers must fail
+    // the handshake instead of decoding a partially compatible payload.
+    pub const CURRENT: Self = Self(4);
 }
 
 /// Numeric message kind. Game payloads assign their own registry in the

@@ -3,8 +3,8 @@ use std::{collections::BTreeMap, error::Error, fmt};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AU_M, BakedBody, BakedEphemeris, BodyId, DAY_S, EARTH_MASS_KG, EphemerisError, G,
-    JUPITER_MASS_KG, KeplerOrbit, SOLAR_MASS_KG,
+    AU_M, BakedAtmosphere, BakedBody, BakedEphemeris, BodyId, DAY_S, EARTH_MASS_KG, EphemerisError,
+    G, JUPITER_MASS_KG, KeplerOrbit, SOLAR_MASS_KG,
 };
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -77,6 +77,11 @@ pub struct CelestialConfig {
     pub rotation_period_hours: Option<f64>,
     pub axial_tilt_deg: Option<f64>,
     pub tidal_lock: bool,
+    /// Surface pressure in bar. A composition without pressure is retained
+    /// as design metadata, but cannot create a playable atmosphere provider.
+    pub atmosphere_bar: Option<f64>,
+    /// Slash/plus-separated gas names, for example `N2/O2/Ar/CO2`.
+    pub atmosphere: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +95,7 @@ struct RawBody {
     rotation_period_s: Option<f64>,
     tidal_lock: bool,
     axial_tilt_rad: f64,
+    atmosphere: Option<BakedAtmosphere>,
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +144,7 @@ impl SystemConfig {
                 rotation_period_s: None,
                 tidal_lock: false,
                 axial_tilt_rad: 0.0,
+                atmosphere: None,
             },
         )?;
         for star in &self.star {
@@ -165,6 +172,7 @@ impl SystemConfig {
                     rotation_period_s: None,
                     tidal_lock: false,
                     axial_tilt_rad: 0.0,
+                    atmosphere: None,
                 },
             )?;
         }
@@ -201,6 +209,7 @@ impl SystemConfig {
                     rotation_period_s: None,
                     tidal_lock: false,
                     axial_tilt_rad: 0.0,
+                    atmosphere: None,
                 },
             )?;
             let relative_a = required_positive(
@@ -346,6 +355,7 @@ impl SystemConfig {
                 tidal_lock: raw.tidal_lock,
                 axial_tilt_rad: raw.axial_tilt_rad,
                 gravity_source: raw.gravity_source,
+                atmosphere: raw.atmosphere,
             });
         }
         Ok(BakedEphemeris::new(
@@ -433,6 +443,23 @@ fn add_config_body(
             config.id
         )));
     }
+    let atmosphere = match (&config.atmosphere, config.atmosphere_bar) {
+        (Some(composition), surface_pressure_bar) => Some(
+            BakedAtmosphere::from_design(composition, surface_pressure_bar).map_err(|error| {
+                SystemSpecError::Invalid(format!(
+                    "body {} has invalid atmosphere: {error}",
+                    config.id
+                ))
+            })?,
+        ),
+        (None, Some(_)) => {
+            return Err(SystemSpecError::Invalid(format!(
+                "body {} has atmosphere_bar but no atmosphere composition",
+                config.id
+            )));
+        }
+        (None, None) => None,
+    };
     if ids.contains_key(&config.id) {
         return Err(SystemSpecError::DuplicateId(config.id.clone()));
     }
@@ -448,6 +475,7 @@ fn add_config_body(
         rotation_period_s,
         tidal_lock: config.tidal_lock,
         axial_tilt_rad,
+        atmosphere,
     });
     Ok(id)
 }

@@ -177,6 +177,9 @@ pub fn select_tiles_with_height_and_frustum(
             // tight rule. Overlap-aware (closest approach, not center) is
             // what makes strong foveation safe: tiles covering the fovea
             // score edge ~0 no matter how far their centers are.
+            // Cap 32: beyond it coarser tiles churn harder at tile borders
+            // than they save (measured U-curve at 10 km/s), so depth alone
+            // is not the answer there — hysteresis is (separate change).
             let bias = detail_bias.clamp(1.0, 32.0);
             let base = if distance > 100_000.0 {
                 1.0 / 10.0
@@ -255,11 +258,12 @@ pub fn build_tile(field: &PlanetField, key: TileKey, cells: usize) -> TerrainTil
     let mut tile = TerrainTile {
         key,
         anchor_m: anchor,
-        positions: Vec::new(),
-        normals: Vec::new(),
-        colors: Vec::new(),
-        surface: Vec::new(),
-        indices: Vec::new(),
+        // Exact counts: no reallocation churn on the worker pool.
+        positions: Vec::with_capacity((cells + 1) * (cells + 1) + 4 * cells),
+        normals: Vec::with_capacity((cells + 1) * (cells + 1) + 4 * cells),
+        colors: Vec::with_capacity((cells + 1) * (cells + 1) + 4 * cells),
+        surface: Vec::with_capacity((cells + 1) * (cells + 1) + 4 * cells),
+        indices: Vec::with_capacity(cells * cells * 6 + 4 * cells * 6),
     };
     for y in 0..=cells {
         for x in 0..=cells {
@@ -290,7 +294,7 @@ pub fn build_tile(field: &PlanetField, key: TileKey, cells: usize) -> TerrainTil
                 .extend([a, a + 1, a + n, a + 1, a + n + 1, a + n]);
         }
     }
-    let mut edge = Vec::new();
+    let mut edge = Vec::with_capacity(4 * cells);
     for x in 0..cells as u32 {
         edge.push(x);
     }
@@ -392,6 +396,61 @@ pub fn build_surface_texture(field: &PlanetField, key: TileKey, cells: usize) ->
     build_surface_texture_for_mesh(field, key, cells, 24)
 }
 
+/// Macro prefix evaluated on a coarse grid (`step` texels) covering the
+/// tile plus one node past each far edge, so every texel bilinearly
+/// interpolates between bracketing nodes with uniform weights.
+fn coarse_prefix_grid(
+    field: &PlanetField,
+    key: TileKey,
+    cells: usize,
+    size: usize,
+    step: usize,
+) -> (Vec<(f64, f64)>, usize) {
+    let grid = (size - 1) / step + 2;
+    let mut prefix_grid = Vec::with_capacity(grid * grid);
+    for gy in 0..grid {
+        for gx in 0..grid {
+            let dir = key.direction(
+                ((gx * step) as f64 - 1.0) / cells as f64,
+                ((gy * step) as f64 - 1.0) / cells as f64,
+            );
+            prefix_grid.push(field.height_prefix_m(dir));
+        }
+    }
+    (prefix_grid, grid)
+}
+
+/// Bilinear sample of a [`coarse_prefix_grid`] at texel `(x, y)`.
+/// Returns `(prefix_m, macro_h)`.
+fn sample_prefix_grid(
+    prefix_grid: &[(f64, f64)],
+    grid: usize,
+    step: usize,
+    x: usize,
+    y: usize,
+) -> (f64, f64) {
+    let gx = (x / step).min(grid - 2);
+    let gy = (y / step).min(grid - 2);
+    let tx = (x - gx * step) as f64 / step as f64;
+    let ty = (y - gy * step) as f64 / step as f64;
+    let (p00, m00) = prefix_grid[gy * grid + gx];
+    let (p10, m10) = prefix_grid[gy * grid + gx + 1];
+    let (p01, m01) = prefix_grid[(gy + 1) * grid + gx];
+    let (p11, m11) = prefix_grid[(gy + 1) * grid + gx + 1];
+    let lerp = |a: f64, b: f64, t: f64| a + (b - a) * t;
+    (
+        lerp(lerp(p00, p10, tx), lerp(p01, p11, tx), ty),
+        lerp(lerp(m00, m10, tx), lerp(m01, m11, tx), ty),
+    )
+}
+
+/// Fine-sample cutoff shared by the texture height and the mesh-grid
+/// residual below. When `mesh_wavelength` floors to this value both
+/// evaluations run identical detail bands, so the residual is exactly
+/// zero and the second evaluation is skipped (pinned by
+/// `deep_tile_material_normals_are_flat`).
+const TEXTURE_DETAIL_MIN_WL_M: f64 = 32.0;
+
 /// Material normals must subtract the wavelength of the actual mesh grid.
 pub fn build_surface_texture_for_mesh(
     field: &PlanetField,
@@ -408,33 +467,47 @@ pub fn build_surface_texture_for_mesh(
         normal: vec![0; size * size * 4],
     };
     let wavelength = (key.span_m(field.params.radius_m) / cells as f64).max(2.0);
-    let mesh_wavelength = (key.span_m(field.params.radius_m) / mesh_cells as f64 * 2.0).max(32.0);
+    let mesh_wavelength =
+        (key.span_m(field.params.radius_m) / mesh_cells as f64 * 2.0).max(TEXTURE_DETAIL_MIN_WL_M);
+    // Identical detail bands on both sides make the residual exactly zero
+    // (verified by diagnostic, pinned by test): skip the second evaluation.
+    let flat_residual = mesh_wavelength <= TEXTURE_DETAIL_MIN_WL_M;
     // Reuse the texel neighborhood for material slope instead of paying
     // for three extra field queries per pixel through the full sample API.
     let mut samples = Vec::with_capacity(size * size);
-    // One macro evaluation per texel, shared three ways: the fine sample
-    // below, its mesh-grid residual further down, and nothing else. The old
-    // code paid a full height_parts (~2.7 us, ~15 noise evals in the
-    // province warp) inside sample_surface AND another inside height_m.
-    let mut prefixes = Vec::with_capacity(size * size);
+    // The macro prefix is smooth by construction (features, provinces and
+    // uplift without meso/micro bands), so it is evaluated on a coarse grid
+    // and bilinearly interpolated: ~16x fewer ~4 us macro evaluations per
+    // tile. The interpolation error is bounded by test against direct
+    // evaluation; the mesh-grid residual below cancels the shared prefix
+    // term exactly, so only height classification near thresholds can shift,
+    // within the pinned centimetre bound.
+    const PREFIX_STEP: usize = 4;
+    let (prefix_grid, grid) = coarse_prefix_grid(field, key, cells, size, PREFIX_STEP);
+    let at = |x: usize, y: usize| sample_prefix_grid(&prefix_grid, grid, PREFIX_STEP, x, y);
+    // Directions are pure function of (x, y): compute once, reuse in the
+    // residual loop below instead of re-normalizing per texel.
+    let mut dirs = Vec::with_capacity(size * size);
     for y in 0..size {
         for x in 0..size {
             let dir = key.direction(
                 (x as f64 - 1.0) / cells as f64,
                 (y as f64 - 1.0) / cells as f64,
             );
-            let (prefix, macro_h) = field.height_prefix_m(dir);
-            prefixes.push((prefix, macro_h));
-            samples.push(field.sample_surface_from_prefix(dir, prefix, macro_h, 32.0));
+            dirs.push(dir);
+            let (prefix, macro_h) = at(x, y);
+            samples.push(field.sample_surface_from_prefix(
+                dir,
+                prefix,
+                macro_h,
+                TEXTURE_DETAIL_MIN_WL_M,
+            ));
         }
     }
     let mut residual = vec![0.0; size * size];
     for y in 0..size {
         for x in 0..size {
-            let dir = key.direction(
-                (x as f64 - 1.0) / cells as f64,
-                (y as f64 - 1.0) / cells as f64,
-            );
+            let dir = dirs[y * size + x];
             let mut sample = samples[y * size + x].clone();
             let dhx = (samples[y * size + (x + 1).min(size - 1)].height_m
                 - samples[y * size + x.saturating_sub(1)].height_m)
@@ -444,11 +517,19 @@ pub fn build_surface_texture_for_mesh(
                 / (2.0 * wavelength);
             sample.slope_hint = dhx.hypot(dhy);
             let material = surface_appearance(field, &sample, dir);
-            let (prefix, macro_h) = prefixes[y * size + x];
-            residual[y * size + x] = sample.height_m.max(0.0)
-                - field
-                    .height_from_prefix(dir, prefix, macro_h, mesh_wavelength)
-                    .max(0.0);
+            // Same interpolated prefix as the fine sample above: the shared
+            // term cancels in the residual, isolating mesh-grid detail.
+            // At or below the detail cutoff both sides run identical bands
+            // and the residual is exactly zero (see above).
+            let (prefix, macro_h) = at(x, y);
+            residual[y * size + x] = if flat_residual {
+                0.0
+            } else {
+                sample.height_m.max(0.0)
+                    - field
+                        .height_from_prefix(dir, prefix, macro_h, mesh_wavelength)
+                        .max(0.0)
+            };
             // Bands finer than ~2 texels cannot resolve and only add
             // aliasing shimmer: fade them out instead of evaluating full
             // weight like before. At fine wavelengths (<=4 m) every band
@@ -539,6 +620,53 @@ mod surface_regressions {
         assert!(a.albedo.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
         let mesh = build_tile(&field, key, 24);
         assert!(mesh.positions.iter().flatten().all(|v| v.is_finite()));
+    }
+    #[test]
+    fn deep_tile_material_normals_are_flat_and_coarse_ones_are_not() {
+        // At/below the detail cutoff both residual sides run identical
+        // bands, so the residual is exactly zero and the builder skips the
+        // second evaluation: L14 normals are flat +Z by model, not by
+        // accident. A coarse tile (mesh wavelength above the cutoff) must
+        // keep real relief, guarding against an over-eager skip.
+        let field = field();
+        let deep = build_surface_texture_for_mesh(
+            &field,
+            TileKey {
+                face: 1,
+                level: 14,
+                x: 100,
+                y: 200,
+            },
+            128,
+            32,
+        );
+        assert!(
+            deep.normal
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| p == &[128, 128, 255, 255])
+        );
+        let coarse = build_surface_texture_for_mesh(
+            &field,
+            TileKey {
+                face: 1,
+                level: 10,
+                x: 100,
+                y: 200,
+            },
+            64,
+            32,
+        );
+        assert!(
+            coarse
+                .normal
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|p| p != &[128, 128, 255, 255]),
+            "coarse tile lost its relief normals"
+        );
     }
     #[test]
     fn priority_refinement_covers_the_camera_instead_of_a_distant_face() {
@@ -697,5 +825,140 @@ mod pilot_frustum_tests {
             max_in_view >= 12,
             "pilot ground culled: L{max_in_view} below-forward"
         );
+    }
+}
+
+#[cfg(test)]
+mod coarse_prefix_tests {
+    use super::*;
+
+    fn field() -> PlanetField {
+        let recipe: crate::spec_recipe::SpecRecipe =
+            toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml")).unwrap();
+        crate::field::field_from_manifest(&crate::spec_recipe::manifest_from_spec(&recipe).unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    fn coarse_prefix_interpolation_error_within_span_fraction() {
+        // Bound vs tile span: bilerp of the smooth macro prefix converges
+        // second-order (measured 1.9 m at L7 → 1e-5 m at L14 → 2e-7 at L17),
+        // and the mesh-grid residual cancels the shared term, so only sea
+        // classification inside this band can shift. span/20000 keeps cover
+        // tiles 4e-5 off-span (invisible) and fine tiles sub-millimetre
+        // (below f32 height quantization at kilometre radii).
+        let field = field();
+        for (level, cells) in [(7u8, 24usize), (10, 24), (14, 32), (17, 32)] {
+            let mut worst = 0.0f64;
+            for face in 0..6u8 {
+                let key = TileKey {
+                    face,
+                    level,
+                    x: 100,
+                    y: 200,
+                };
+                let size = cells + 3;
+                let (grid_vals, grid) = coarse_prefix_grid(&field, key, cells, size, 4);
+                let mut x = 0;
+                while x < size {
+                    let mut y = 0;
+                    while y < size {
+                        let dir = key.direction(
+                            (x as f64 - 1.0) / cells as f64,
+                            (y as f64 - 1.0) / cells as f64,
+                        );
+                        let (direct, _) = field.height_prefix_m(dir);
+                        let (interp, _) = sample_prefix_grid(&grid_vals, grid, 4, x, y);
+                        worst = worst.max((direct - interp).abs());
+                        y += 3;
+                    }
+                    x += 3;
+                }
+            }
+            eprintln!("L{level}: coarse prefix worst error: {worst:.6e} m");
+            let span = field.params.radius_m * 2.0 / (1u64 << level) as f64;
+            assert!(
+                worst <= span / 20000.0,
+                "L{level} prefix error {worst:.6e} m over span {span:.0}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod fast_track_demand_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn field() -> PlanetField {
+        let r: crate::spec_recipe::SpecRecipe =
+            toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml")).unwrap();
+        crate::field::field_from_manifest(&crate::spec_recipe::manifest_from_spec(&r).unwrap())
+            .unwrap()
+    }
+
+    /// New-tile demand for one wall second of level flight at ~3.7 km/s
+    /// (62 m per 60 Hz frame): size of the wanted set plus fresh tiles
+    /// across 60 consecutive selections.
+    fn demand_per_second(field: &PlanetField, altitude_m: f64, bias: f64) -> (usize, usize) {
+        let radius = field.params.radius_m;
+        let frustum = |_eye: [f64; 3]| SelectionFrustum {
+            forward: normalize([-1.0, 0.0, 0.0]),
+            cos_limit: 0.5,
+        };
+        let select = |eye: [f64; 3]| -> BTreeSet<TileKey> {
+            select_tiles_with_height_and_frustum(
+                eye,
+                radius,
+                17,
+                288,
+                |dir| field.height_m(dir, 32.0),
+                Some(frustum(eye)),
+                bias,
+            )
+            .into_iter()
+            .collect()
+        };
+        let mut eye = [radius + altitude_m, 0.0, 0.0];
+        let mut prev = select(eye);
+        let wanted = prev.len();
+        let mut total_new = 0;
+        for _ in 0..60 {
+            eye[1] += 62.0;
+            let next = select(eye);
+            total_new += next.difference(&prev).count();
+            prev = next;
+        }
+        (wanted, total_new)
+    }
+
+    #[test]
+    fn fast_low_flight_demand_fits_worker_throughput() {
+        // Regression for >1 km/s surface flight: at the old client bias
+        // cap (8x) a 500 m ground track at orbital speed demanded ~970
+        // fresh tiles/s against ~200/s worker throughput (perpetual
+        // catch-up, pop-in, holes). Bias 32 (the LOD-internal cap) drops
+        // it into the serviceable range. Bounds carry ~2x margin over
+        // calibration (10/s at 5 km, 174/s at 500 m).
+        let field = field();
+        let (wanted_hi, new_hi) = demand_per_second(&field, 5000.0, 32.0);
+        assert!(wanted_hi <= 150, "wanted {wanted_hi} at 5 km");
+        assert!(new_hi <= 60, "demand {new_hi}/s at 5 km");
+        let (wanted_lo, new_lo) = demand_per_second(&field, 500.0, 32.0);
+        assert!(wanted_lo <= 200, "wanted {wanted_lo} at 500 m");
+        assert!(new_lo <= 300, "demand {new_lo}/s at 500 m");
+    }
+
+    #[test]
+    fn velocity_bias_monotonically_reduces_demand() {
+        // Structural: deepening the velocity bias must never grow the
+        // wanted set or the fresh-tile demand at fixed speed/altitude.
+        let field = field();
+        for altitude_m in [500.0, 5000.0] {
+            let (w8, n8) = demand_per_second(&field, altitude_m, 8.0);
+            let (w32, n32) = demand_per_second(&field, altitude_m, 32.0);
+            assert!(w32 <= w8, "alt {altitude_m}: wanted {w32} > {w8}");
+            assert!(n32 <= n8, "alt {altitude_m}: demand {n32} > {n8}");
+        }
     }
 }

@@ -104,6 +104,11 @@ pub struct ResolvedGraphicsSettings {
     pub rt_atmosphere_queries: bool,
     pub rt_clouds: bool,
     pub rt_max_distance_m: f64,
+    pub shadow_enabled: bool,
+    pub shadow_cascades: u32,
+    pub shadow_max_distance_m: f64,
+    pub shadow_map_size: u32,
+    pub shadow_normal_bias_m: f64,
     /// Human-readable fallback notes, also stored in captures.
     #[serde(default)]
     pub notes: Vec<String>,
@@ -212,6 +217,11 @@ impl ResolvedGraphicsSettings {
             rt_atmosphere_queries: requested.raytracing.atmosphere && rt_on,
             rt_clouds: requested.raytracing.clouds && rt_on,
             rt_max_distance_m: requested.raytracing.max_distance_m,
+            shadow_enabled: requested.shadows.enabled,
+            shadow_cascades: requested.shadows.cascades.clamp(1, 4),
+            shadow_max_distance_m: requested.shadows.max_distance_m.clamp(100.0, 100_000.0),
+            shadow_map_size: requested.shadows.map_size.clamp(512, 8192),
+            shadow_normal_bias_m: requested.shadows.normal_bias_m.clamp(0.0, 50.0),
             notes,
         }
     }
@@ -263,6 +273,15 @@ impl ResolvedGraphicsSettings {
         map.insert(
             "rt_max_distance_m".to_string(),
             format!("{:.0}", self.rt_max_distance_m),
+        );
+        map.insert("shadows".to_string(), self.shadow_enabled.to_string());
+        map.insert(
+            "shadow_cascades".to_string(),
+            self.shadow_cascades.to_string(),
+        );
+        map.insert(
+            "shadow_map_size".to_string(),
+            self.shadow_map_size.to_string(),
         );
         for (i, note) in self.notes.iter().enumerate() {
             map.insert(format!("note_{i}"), note.clone());
@@ -335,5 +354,19 @@ mod tests {
             ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
         assert_eq!(resolved.backend.name, "auto");
         assert!(resolved.notes.iter().any(|n| n.contains("dx12")));
+    }
+
+    #[test]
+    fn shadow_budgets_resolve_with_defensive_clamps() {
+        let requested = RequestedGraphics::default();
+        let resolved =
+            ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+        assert!(resolved.shadow_enabled);
+        assert_eq!(resolved.shadow_cascades, 4);
+        assert_eq!(resolved.shadow_map_size, 4096);
+        assert!((resolved.shadow_max_distance_m - 12_000.0).abs() < 1e-9);
+        let meta = resolved.as_meta_map();
+        assert_eq!(meta["shadows"], "true");
+        assert_eq!(meta["shadow_cascades"], "4");
     }
 }

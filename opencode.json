@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "thessa-brp": {
+      "type": "local",
+      "command": ["/home/chechulin/.cargo/bin/bevy_brp_mcp"],
+      "enabled": true
+    }
+  }
+}

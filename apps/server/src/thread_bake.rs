@@ -10,11 +10,15 @@ use thessa_sim_core::OnRailsCache;
 
 pub struct ThreadBakeQueue {
     job: Option<JoinHandle<Result<BakedRails, String>>>,
+    discard_result: bool,
 }
 
 impl ThreadBakeQueue {
     pub fn new() -> Self {
-        Self { job: None }
+        Self {
+            job: None,
+            discard_result: false,
+        }
     }
 
     fn take_finished(&mut self) -> Option<Result<BakedRails, String>> {
@@ -42,6 +46,7 @@ impl BakeQueue for ThreadBakeQueue {
         if self.job.is_some() {
             return;
         }
+        self.discard_result = false;
         self.job = Some(std::thread::spawn(move || {
             let started = std::time::Instant::now();
             let mut rails = OnRailsCache::new();
@@ -63,6 +68,10 @@ impl BakeQueue for ThreadBakeQueue {
 
     fn poll_bake(&mut self) -> Option<Result<BakedRails, String>> {
         let result = self.take_finished()?;
+        if self.discard_result {
+            self.discard_result = false;
+            return None;
+        }
         match &result {
             Ok(baked) => eprintln!(
                 "[bake] harvested: {:.1}s wall bake, rails now live",
@@ -78,9 +87,18 @@ impl BakeQueue for ThreadBakeQueue {
     }
 
     fn reset(&mut self) {
-        // Dropping the handle detaches a running bake; its result is
-        // discarded and the state/key check never sees it.
-        self.job = None;
+        // A JoinHandle cannot be cancelled safely. Keep it until it is
+        // harvested, but discard its result; this serializes a post-reset
+        // bake instead of oversubscribing the CPU with stale work.
+        self.discard_result = self.job.is_some();
+    }
+}
+
+impl Drop for ThreadBakeQueue {
+    fn drop(&mut self) {
+        if let Some(job) = self.job.take() {
+            let _ = job.join();
+        }
     }
 }
 
@@ -108,7 +126,7 @@ mod tests {
             time: SimTime::EPOCH,
             config: TickIntegratorConfig::default(),
             impact_bodies: vec![body],
-            ephemeris,
+            ephemeris: ephemeris.clone(),
         });
         assert!(queue.has_pending());
         // Second request while busy is dropped.
@@ -125,6 +143,27 @@ mod tests {
         let baked = baked.expect("bake must succeed");
         assert!(baked.bake_seconds >= 0.0);
         assert!(!queue.has_pending());
+
+        queue.request_bake(RailsBakeRequest {
+            initial: TestParticleState {
+                position: origin.position_inertial + glam::DVec3::Z * 500_000.0,
+                velocity: origin.velocity_inertial + glam::DVec3::X * 3000.0,
+            },
+            time: SimTime::EPOCH,
+            config: TickIntegratorConfig::default(),
+            impact_bodies: vec![body],
+            ephemeris,
+        });
         queue.reset();
+        assert!(queue.has_pending(), "reset must retain a running worker");
+        let reset_deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while queue.has_pending() {
+            assert!(queue.poll_bake().is_none(), "reset bake must be discarded");
+            assert!(
+                std::time::Instant::now() < reset_deadline,
+                "reset bake stuck"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 }

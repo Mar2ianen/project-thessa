@@ -62,7 +62,15 @@ impl BakeQueue for ThreadBakeQueue {
     }
 
     fn poll_bake(&mut self) -> Option<Result<BakedRails, String>> {
-        self.take_finished()
+        let result = self.take_finished()?;
+        match &result {
+            Ok(baked) => eprintln!(
+                "[bake] harvested: {:.1}s wall bake, rails now live",
+                baked.bake_seconds
+            ),
+            Err(error) => eprintln!("[bake] worker failed: {error}"),
+        }
+        Some(result)
     }
 
     fn has_pending(&self) -> bool {

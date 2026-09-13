@@ -45,7 +45,7 @@ pub trait BakeQueue: Send + Sync {
     fn reset(&mut self);
 }
 
-fn run_bake(request: &RailsBakeRequest) -> Result<BakedRails, String> {
+pub(crate) fn run_bake(request: &RailsBakeRequest) -> Result<BakedRails, String> {
     let started = std::time::Instant::now();
     let mut rails = OnRailsCache::new();
     rails

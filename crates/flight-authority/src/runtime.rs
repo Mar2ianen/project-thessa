@@ -42,6 +42,16 @@ const SURFACE_COMMAND_RATE_S: f64 = 2.4; // 60 deg/s for the 25-degree elevator
 /// density (q grows with speed squared even above this threshold).
 pub const COAST_DENSITY_KG_M3: f64 = 1.0e-7;
 
+// Longest single rails-batch jump. Bounds wake/event latency and
+// forces periodic cache revalidation on long horizons.
+pub const MAX_COAST_BATCH_JUMP_S: f64 = 3600.0;
+
+// Requested sim time above which an async bake cannot converge: beyond
+// ~a minute of requested flight the sim drifts past the adoption gate
+// before any worker finishes, so the cache bakes blocking once instead
+// of re-requesting forever.
+pub const ASYNC_BAKE_FOLLOW_S: f64 = 60.0;
+
 pub const X15_STALL_ANGLE_DEG: f64 = 22.0;
 const PILOT_SURFACE_CLEARANCE_M: f64 = 5.0;
 const PILOT_START_ALTITUDE_M: f64 = 500.0;
@@ -508,8 +518,11 @@ impl FlightAuthority {
         let jet_moment = self.allocate_controls(kinematics, mode);
         self.sas_target_orientation = saved_target;
         let jet_moment = jet_moment?;
-        let skip_aero = density_kg_m3 == 0.0;
-        let forces = evaluate_flight_forces(
+        let vacuum = density_kg_m3 == 0.0;
+        let band = self.upper_band_drag(kinematics, density_kg_m3);
+        let skip_aero = vacuum || band.is_some();
+        let (band_drag_body_n, band_q_pa) = band.unwrap_or((DVec3::ZERO, 0.0));
+        let mut forces = evaluate_flight_forces(
             &self.aero_model,
             &self.vehicle.aero_geometry,
             self.atmosphere,
@@ -521,11 +534,14 @@ impl FlightAuthority {
                 position_body_m: kinematics.relative_position_body_m,
                 wind_velocity_body_mps: self.state.orientation_body_to_inertial.inverse()
                     * body_state.velocity_inertial,
-                extra_force_body_n: DVec3::X * self.thrust_n(),
+                extra_force_body_n: DVec3::X * self.thrust_n() + band_drag_body_n,
                 extra_moment_body_nm: jet_moment,
                 skip_aero,
             },
         )?;
+        if band_q_pa > 0.0 {
+            forces.aero.dynamic_pressure_pa = band_q_pa;
+        }
         Ok((gravity, forces))
     }
 }
@@ -729,18 +745,111 @@ impl FlightAuthority {
     /// One read of a valid coast instead of replaying every translation tick.
     /// The curve hull and each body's maximum orbital speed certify that the
     /// entire interval stays outside geometry and in exactly sampled vacuum.
+    /// Current-state usability probe shared by the batch path.
+    fn rails_usable_now(&self, ephemeris: &BakedEphemeris) -> bool {
+        let initial = TestParticleState {
+            position: self.state.position_inertial_m,
+            velocity: self.state.velocity_inertial_mps,
+        };
+        let time = SimTime(self.flight_time_s);
+        let config = TickIntegratorConfig::default();
+        let impact_bodies: Vec<_> = ephemeris
+            .bodies
+            .iter()
+            .filter(|b| b.radius_m > 0.0)
+            .map(|b| b.id)
+            .collect();
+        self.rails.usable_tick_for(
+            ephemeris,
+            initial,
+            time,
+            config,
+            &impact_bodies,
+            COAST_RAILS_POSITION_TOL_M,
+            COAST_RAILS_VELOCITY_TOL_MPS,
+        )
+    }
+
+    /// Synchronous bake from live state, adopted on arrival: the blocking
+    /// catch-up for warp starts (and the no-worker fallback everywhere).
+    /// Runs inline regardless of queue flavor; a pending async bake is the
+    /// caller's responsibility to check first.
+    fn bake_now(&mut self, ephemeris: &BakedEphemeris) {
+        let initial = TestParticleState {
+            position: self.state.position_inertial_m,
+            velocity: self.state.velocity_inertial_mps,
+        };
+        let request = RailsBakeRequest {
+            initial,
+            time: SimTime(self.flight_time_s),
+            config: TickIntegratorConfig::default(),
+            impact_bodies: ephemeris
+                .bodies
+                .iter()
+                .filter(|b| b.radius_m > 0.0)
+                .map(|b| b.id)
+                .collect(),
+            ephemeris: ephemeris.clone(),
+        };
+        if let Ok(baked) = crate::bake::run_bake(&request) {
+            self.adopt_rails_bake(ephemeris, baked);
+        }
+    }
+
+    /// Shared adoption: state/key check, then swap. Used by the async poll
+    /// and the blocking catch-up alike.
+    fn adopt_rails_bake(&mut self, ephemeris: &BakedEphemeris, baked: BakedRails) {
+        let rails = baked.rails;
+        if let Some(path) = rails.path()
+            && rails.usable_tick_for(
+                ephemeris,
+                TestParticleState {
+                    position: path.positions[0],
+                    velocity: path.velocities[0],
+                },
+                path.times[0],
+                TickIntegratorConfig::default(),
+                &ephemeris
+                    .bodies
+                    .iter()
+                    .filter(|b| b.radius_m > 0.0)
+                    .map(|b| b.id)
+                    .collect::<Vec<_>>(),
+                0.0,
+                0.0,
+            )
+        {
+            self.rails = rails;
+            self.rails_bake_seconds = Some(baked.bake_seconds);
+        }
+    }
+
     fn try_advance_cached_coast(
         &mut self,
         ephemeris: &BakedEphemeris,
         mode: ControlMode,
         requested_s: f64,
     ) -> Result<f64, FlightError> {
-        if self.thrust_n() != 0.0 || self.rails.is_empty() || self.trace.is_some() {
+        if self.thrust_n() != 0.0 || self.trace.is_some() {
             return Ok(0.0);
         }
         // Collect a worker bake that finished while earlier batches flew;
         // the batch loop otherwise never polls, and coverage would stall.
         self.poll_rails_bake(ephemeris);
+        // Warp catch-up: an async bake can never converge when the request
+        // outruns the worker (the sim drifts past the 5 m adoption gate
+        // before the worker finishes, so the loop would re-request
+        // forever). Above the threshold an unusable cache bakes blocking
+        // once, then rides unlimited; a pending bake is left alone.
+        if requested_s > ASYNC_BAKE_FOLLOW_S
+            && !self.bake.has_pending()
+            && !self.rails_usable_now(ephemeris)
+        {
+            self.bake_now(ephemeris);
+        }
+        if self.rails.is_empty() {
+            return Ok(0.0);
+        }
         // A zero controller moment at the first instant is not a promise
         // that SAS stays idle while a spinning craft turns away from target.
         // Do not run the stateful allocator speculatively either: a failed
@@ -759,6 +868,11 @@ impl FlightAuthority {
         }
         let time = SimTime(self.flight_time_s);
         let mut duration = ((requested_s + 1.0e-12) / FLIGHT_STEP_S).floor() * FLIGHT_STEP_S;
+        // Capped jumps: vacuum batches are drag-free by construction
+        // (the cutoff declares exact vacuum), so this bounds wake/event
+        // latency and forces periodic revalidation instead of certifying
+        // dynamics — one horizon rides as capped jumps, never one leap.
+        duration = duration.min(MAX_COAST_BATCH_JUMP_S);
         if let Some(event) = self.scheduler.next() {
             duration = duration
                 .min(((event.time.0 - time.0) / FLIGHT_STEP_S).floor().max(0.0) * FLIGHT_STEP_S);
@@ -774,24 +888,7 @@ impl FlightAuthority {
         if duration < 2.0 * FLIGHT_STEP_S {
             return Ok(0.0);
         }
-        let impact_bodies: Vec<_> = ephemeris
-            .bodies
-            .iter()
-            .filter(|b| b.radius_m > 0.0)
-            .map(|b| b.id)
-            .collect();
-        if !self.rails.usable_tick_for(
-            ephemeris,
-            TestParticleState {
-                position: self.state.position_inertial_m,
-                velocity: self.state.velocity_inertial_mps,
-            },
-            time,
-            TickIntegratorConfig::default(),
-            &impact_bodies,
-            COAST_RAILS_POSITION_TOL_M,
-            COAST_RAILS_VELOCITY_TOL_MPS,
-        ) {
+        if !self.rails_usable_now(ephemeris) {
             return Ok(0.0);
         }
         // Proactive JIT preparation for sustained warp: when baked coverage
@@ -806,25 +903,23 @@ impl FlightAuthority {
         }
         let ticks = (duration / FLIGHT_STEP_S).round() as u64;
         let end = self.time_after_ticks(ticks)?;
-        let Some((min, max)) = self.rails.position_bounds(time, end) else {
+        // Coverage guard only; separation is certified per-sample below.
+        if self.rails.position_bounds(time, end).is_none() {
             return Ok(0.0);
-        };
+        }
         for body in ephemeris
             .bodies
             .iter()
             .filter(|body| body.radius_m > 0.0 || body.id == self.reference_body)
         {
-            let center = ephemeris
-                .body_state(body.id, time)
-                .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
-            let speed = ephemeris
-                .maximum_body_speed(body.id)
-                .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
-            let clearance = center
-                .position_inertial
-                .distance(center.position_inertial.clamp(min, max))
-                - speed * duration
-                - body.radius_m;
+            // Exact segment certification: five smooth samples of the true
+            // craft-body separation, both endpoints evaluated on the live
+            // ephemeris. The old worst-case margin (body approaching at
+            // full chain speed for the whole batch) treated a co-moving
+            // planet as hostile and refused every near-planet batch; the
+            // between-sample curvature error is sub-meter, far inside the
+            // surface clearance. Geometry keeps a hard refuse; only the
+            // margin heuristic is gone.
             let terrain_bound = if body.id == self.reference_body {
                 self.terrain_field
                     .as_ref()
@@ -832,13 +927,31 @@ impl FlightAuthority {
             } else {
                 0.0
             };
-            if clearance <= terrain_bound + PILOT_SURFACE_CLEARANCE_M {
-                return Ok(0.0);
-            }
-            if body.id == self.reference_body
-                && self.atmosphere.sample(clearance)?.density_kg_m3 != 0.0
-            {
-                return Ok(0.0);
+            for point in 0..5 {
+                let sample_time = SimTime(time.0 + (end.0 - time.0) * f64::from(point) / 4.0);
+                let Some((position, _)) = self.rails.sample_at(sample_time) else {
+                    return Ok(0.0);
+                };
+                let body_state = ephemeris
+                    .body_state(body.id, sample_time)
+                    .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+                let clearance_m =
+                    (position - body_state.position_inertial).length() - body.radius_m;
+                if clearance_m <= terrain_bound + PILOT_SURFACE_CLEARANCE_M {
+                    return Ok(0.0);
+                }
+                if body.id == self.reference_body {
+                    let altitude_m =
+                        (position - body_state.position_inertial).length() - self.planet_radius_m;
+                    let density_kg_m3 = self
+                        .atmosphere
+                        .sample(altitude_m.max(0.0))
+                        .map(|sample| sample.density_kg_m3)
+                        .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+                    if density_kg_m3 != 0.0 {
+                        return Ok(0.0);
+                    }
+                }
             }
         }
         let Some(orientation) = thessa_sim_core::constant_spin_orientation(
@@ -1018,6 +1131,42 @@ impl FlightAuthority {
         Ok(jets)
     }
 
+    /// Upper-atmosphere band model: between the vacuum cutoff and the
+    /// Coast density the panel loop is replaced by reference-area drag
+    /// along the airstream (no lift, no aero moment; RCS unchanged).
+    /// Returns the body drag force plus the measured dynamic pressure for
+    /// display, or `None` outside the band. The calibration test pins the
+    /// absolute error against the full panel sum; the batch cap certifies
+    /// the drift this approximation can accumulate over one jump.
+    fn upper_band_drag(
+        &self,
+        kinematics: LocalAirKinematics,
+        density_kg_m3: f64,
+    ) -> Option<(DVec3, f64)> {
+        if density_kg_m3 <= self.atmosphere.vacuum_cutoff_density_kg_m3
+            || density_kg_m3 >= COAST_DENSITY_KG_M3
+        {
+            return None;
+        }
+        let airspeed_mps = kinematics.air_velocity_body_mps.length();
+        if airspeed_mps == 0.0 {
+            return Some((DVec3::ZERO, 0.0));
+        }
+        let dynamic_pressure_pa = 0.5 * density_kg_m3 * airspeed_mps * airspeed_mps;
+        let reference_area_m2: f64 = self
+            .vehicle
+            .aero_geometry
+            .panels
+            .iter()
+            .map(|panel| panel.area_m2)
+            .sum();
+        let drag_body_n = -kinematics.air_velocity_body_mps / airspeed_mps
+            * (dynamic_pressure_pa
+                * self.aero_model.config.upper_atmosphere_drag_coefficient
+                * reference_area_m2);
+        Some((drag_body_n, dynamic_pressure_pa))
+    }
+
     /// Full rigid-body step for powered/aero flight (translation integrated).
     fn integrate_powered_step(
         &mut self,
@@ -1026,6 +1175,7 @@ impl FlightAuthority {
         body_state: BodyState,
         jet_moment: DVec3,
         thrust_n: f64,
+        band_drag_body_n: DVec3,
         skip_aero: bool,
     ) -> Result<(RigidBodyState, FlightForces), FlightError> {
         thessa_sim_core::integrate_rigid_body_step(
@@ -1040,7 +1190,7 @@ impl FlightAuthority {
                 position_body_m: kinematics.relative_position_body_m,
                 wind_velocity_body_mps: self.state.orientation_body_to_inertial.inverse()
                     * body_state.velocity_inertial,
-                extra_force_body_n: DVec3::X * thrust_n,
+                extra_force_body_n: DVec3::X * thrust_n + band_drag_body_n,
                 extra_moment_body_nm: jet_moment,
                 skip_aero,
             },
@@ -1103,41 +1253,12 @@ impl FlightAuthority {
 
     /// Poll a finished worker bake, adopting it only after the state/key
     /// check (which also rejects bakes from a pre-edit universe).
-    /// Poll a finished worker bake, adopting it only after the state/key
-    /// check (which also rejects bakes from a pre-edit universe).
     fn poll_rails_bake(&mut self, ephemeris: &BakedEphemeris) {
         let Some(result) = self.bake.poll_bake() else {
             return;
         };
         if let Ok(baked) = result {
-            let BakedRails {
-                rails,
-                bake_seconds: seconds,
-            } = baked;
-            // A worker started before an ephemeris edit must not replace
-            // the common cache with a trajectory from the old universe.
-            if let Some(path) = rails.path()
-                && rails.usable_tick_for(
-                    ephemeris,
-                    TestParticleState {
-                        position: path.positions[0],
-                        velocity: path.velocities[0],
-                    },
-                    path.times[0],
-                    TickIntegratorConfig::default(),
-                    &ephemeris
-                        .bodies
-                        .iter()
-                        .filter(|b| b.radius_m > 0.0)
-                        .map(|b| b.id)
-                        .collect::<Vec<_>>(),
-                    0.0,
-                    0.0,
-                )
-            {
-                self.rails = rails;
-                self.rails_bake_seconds = Some(seconds);
-            }
+            self.adopt_rails_bake(ephemeris, baked);
         }
     }
 
@@ -1169,8 +1290,11 @@ impl FlightAuthority {
             return true;
         }
         // The queue decides how the bake runs (pool, thread, inline).
+        // Poll again right away: inline queues already finished, so the
+        // first coast step rides (and arms its wake) without deferring.
         self.spawn_rails_bake(ephemeris);
-        false
+        self.poll_rails_bake(ephemeris);
+        self.rails_usable_now(ephemeris)
     }
 
     /// Unpowered vacuum coast on the shared baked trajectory. Translation is
@@ -1303,30 +1427,52 @@ impl FlightAuthority {
             .acceleration(self.state.position_inertial_m, time)
             .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
         let jet_moment = self.allocate_controls(kinematics, mode)?;
-        // Only an exactly empty sampled medium permits zero force.
-        // Low density alone does not bound drag at high speed;
-        // Coast freezes trim but retains residual panel forces.
-        let skip_aero = density_kg_m3 == 0.0;
+        // Only an exactly empty sampled medium permits zero force; the
+        // vacuum cutoff guarantees exactness below its threshold.
+        let vacuum = density_kg_m3 == 0.0;
+        // Upper band: reference-area drag replaces the panel loop, whose
+        // cost dominates multi-vehicle steps while its output is deep
+        // below the gravity/thrust scales. Moments stay RCS-only.
+        let band = self.upper_band_drag(kinematics, density_kg_m3);
+        let skip_aero = vacuum || band.is_some();
+        let (band_drag_body_n, band_q_pa) = band.unwrap_or((DVec3::ZERO, 0.0));
         let thrust_n = self.thrust_n();
         // Unpowered vacuum coast rides the single baked trajectory instead
         // of integrating translation per tick; the map prediction draws the
         // same path. Attitude (RCS) still integrates at full rate below.
-        let (mut next, forces) = if self.regime == FlightRegime::Coast
+        let (mut next, mut forces) = if self.regime == FlightRegime::Coast
             && thrust_n == 0.0
             && skip_aero
         {
             match self.try_coast_step_on_rails(ephemeris, time, jet_moment, body_state, gravity)? {
                 Some(coasted) => coasted,
                 None => self.integrate_powered_step(
-                    gravity, kinematics, body_state, jet_moment, thrust_n, skip_aero,
+                    gravity,
+                    kinematics,
+                    body_state,
+                    jet_moment,
+                    thrust_n,
+                    band_drag_body_n,
+                    skip_aero,
                 )?,
             }
         } else {
             self.scheduler.clear_rails_wakes();
             self.integrate_powered_step(
-                gravity, kinematics, body_state, jet_moment, thrust_n, skip_aero,
+                gravity,
+                kinematics,
+                body_state,
+                jet_moment,
+                thrust_n,
+                band_drag_body_n,
+                skip_aero,
             )?
         };
+        // skip_aero zeroes the aero summary; restore the measured dynamic
+        // pressure so HUD readouts stay on-model through the band.
+        if band_q_pa > 0.0 {
+            forces.aero.dynamic_pressure_pa = band_q_pa;
+        }
         let next_body = ephemeris
             .body_state(self.reference_body, self.time_after_ticks(1)?)
             .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
@@ -1862,6 +2008,115 @@ mod tests {
             (280_000.0..320_000.0).contains(&altitude),
             "coast must hold the orbit, altitude drifted to {altitude}"
         );
+    }
+
+    /// Upper-band calibration: reference-area drag vs the full panel
+    /// sum across attitudes and band altitudes. The relative error is
+    /// large (attitude-independent drag cannot track panels), but the
+    /// absolute envelope is what matters: ~23 N worst case is 8e-11 m
+    /// per tick and dissipative, against 100 kN weight and 254 kN
+    /// thrust. Moments stay RCS-dominated by orders of magnitude.
+    #[test]
+    fn upper_band_drag_matches_full_panels_within_newtons() {
+        use thessa_sim_core::AeroState;
+        let (ephemeris, mut flight) = fixture();
+        let body = ephemeris.body(flight.reference_body).unwrap();
+        let origin = ephemeris
+            .body_state(flight.reference_body, SimTime::EPOCH)
+            .unwrap();
+        let mut worst_force = 0.0f64;
+        let mut worst_moment = 0.0f64;
+        for altitude_m in [280_000.0f64, 300_000.0] {
+            let radius = body.radius_m + altitude_m;
+            for pitch_deg in [0.0f64, 10.0, 30.0, 90.0] {
+                flight.state.position_inertial_m = origin.position_inertial + DVec3::Z * radius;
+                flight.state.velocity_inertial_mps = origin.velocity_inertial + DVec3::X * 7000.0;
+                flight.state.orientation_body_to_inertial =
+                    DQuat::from_rotation_y(pitch_deg.to_radians());
+                flight.state.angular_velocity_body_rps = DVec3::ZERO;
+                let time = SimTime(flight.flight_time_s);
+                let home = ephemeris.body_state(flight.reference_body, time).unwrap();
+                let kinematics = local_air_kinematics(
+                    flight.atmosphere,
+                    flight.state,
+                    home,
+                    flight.planet_radius_m,
+                )
+                .unwrap();
+                let density = flight
+                    .atmosphere
+                    .sample(kinematics.altitude_m.max(0.0))
+                    .unwrap()
+                    .density_kg_m3;
+                assert!(
+                    density > flight.atmosphere.vacuum_cutoff_density_kg_m3
+                        && density < COAST_DENSITY_KG_M3,
+                    "case must sit in the band, got {density:.3e} at {altitude_m}"
+                );
+                let (band_drag, _) = flight
+                    .upper_band_drag(kinematics, density)
+                    .expect("band must engage");
+                let environment = flight
+                    .atmosphere
+                    .aero_environment(kinematics.altitude_m.max(0.0), DVec3::ZERO)
+                    .unwrap();
+                let aero_state = AeroState::new(
+                    kinematics.air_velocity_body_mps,
+                    flight.state.angular_velocity_body_rps,
+                );
+                let full = flight
+                    .aero_model
+                    .evaluate_state(aero_state, environment, &flight.vehicle.aero_geometry)
+                    .unwrap();
+                worst_force = worst_force.max((band_drag - full.force_body_n).length());
+                worst_moment = worst_moment.max(full.moment_body_nm.length());
+            }
+        }
+        assert!(
+            worst_force < 40.0,
+            "band drag diverged {worst_force:.1} N from panels"
+        );
+        assert!(
+            worst_moment < 25.0,
+            "band drops {worst_moment:.1} N·m of panel moment"
+        );
+    }
+
+    /// Batch unlock: with the declared vacuum, an unpowered drift above
+    /// the atmosphere top rides rails batches instead of integrating
+    /// every tick. The altitude is found programmatically (first exact
+    /// zero density), so the test tracks the model, not a magic number.
+    #[test]
+    fn declared_vacuum_unlocks_batches_above_the_top() {
+        let (ephemeris, flight) = fixture();
+        let probe_altitude_m = [300_000.0f64, 350_000.0, 400_000.0, 500_000.0, 800_000.0]
+            .into_iter()
+            .find(|altitude_m| {
+                flight
+                    .atmosphere
+                    .sample(*altitude_m)
+                    .map(|sample| sample.density_kg_m3 == 0.0)
+                    .unwrap_or(false)
+            })
+            .expect("model must reach declared vacuum somewhere");
+        let (ephemeris, mut flight) = circular_orbit_fixture(probe_altitude_m);
+        flight.engine_active = false;
+        flight.throttle = 0.0;
+        let mut rails_total = 0.0;
+        let mut steps_total = 0u64;
+        for _ in 0..4 {
+            flight
+                .advance(&ephemeris, ControlMode::Navball, 120.0)
+                .unwrap();
+            rails_total += flight.rails_advanced_this_frame;
+            // steps_this_frame is per advance call; sample before reset.
+            steps_total += flight.steps_this_frame as u64;
+        }
+        assert!(
+            rails_total > 0.0,
+            "no batch rode at {probe_altitude_m:.0} m drift (steps={steps_total})"
+        );
+        eprintln!("drift at {probe_altitude_m:.0} m: rails_s={rails_total:.0} steps={steps_total}");
     }
 
     #[test]

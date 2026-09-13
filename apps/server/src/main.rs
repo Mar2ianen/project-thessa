@@ -19,9 +19,13 @@ use thessa_protocol::{FrameDecoder, kind};
 use thessa_sim_core::{BakedEphemeris, BodyId, SimTime, SystemConfig};
 use thread_bake::ThreadBakeQueue;
 
-/// Sim time per loop iteration: 120 ticks. Bounds input latency at high
-/// warp without capping throughput (the frame budget this replaces).
-const CHUNK_S: f64 = 1.0;
+/// Sim time per warped iteration: matches the authority catch-up rule
+/// (requests above 60 s bake blocking once on a cold cache, then ride
+/// unlimited) while keeping input latency coarse-grained sane.
+const WARP_CHUNK_S: f64 = 120.0;
+/// Wall-pacing for snapshots so high warp does not flood the pipe; the
+/// client interpolates between them.
+const SNAPSHOT_MIN_INTERVAL_S: f64 = 0.05;
 /// Upper clamp for requested warp (2^17, same ceiling as the client).
 const MAX_WARP: f64 = 131072.0;
 
@@ -127,8 +131,11 @@ impl Sim {
         let mut authority = FlightAuthority::new(&ephemeris, reference_body)
             .map_err(|e| format!("authority init: {e}"))?
             .with_bake_queue(Box::new(ThreadBakeQueue::new()));
-        if vacuum {
-            place_in_circular_orbit(&ephemeris, &mut authority)?;
+        // Drift rides above the atmosphere top (declared vacuum) so
+        // batches engage; plain vacuum stays at 300 km in the band.
+        let altitude_m = if drift { 400_000.0 } else { 300_000.0 };
+        if vacuum || drift {
+            place_in_circular_orbit(&ephemeris, &mut authority, altitude_m)?;
         }
         if drift {
             authority.engine_active = false;
@@ -232,6 +239,7 @@ impl Sim {
 fn place_in_circular_orbit(
     ephemeris: &BakedEphemeris,
     authority: &mut FlightAuthority,
+    altitude_m: f64,
 ) -> Result<(), String> {
     use glam::DQuat;
     let body = ephemeris
@@ -240,7 +248,7 @@ fn place_in_circular_orbit(
     let origin = ephemeris
         .body_state(authority.reference_body, SimTime::EPOCH)
         .map_err(|e| e.to_string())?;
-    let radius = body.radius_m + 300_000.0;
+    let radius = body.radius_m + altitude_m;
     authority.state.position_inertial_m = origin.position_inertial + DVec3::Z * radius;
     authority.state.velocity_inertial_mps =
         origin.velocity_inertial + DVec3::X * (body.mu / radius).sqrt();
@@ -330,6 +338,9 @@ fn run_stdio(mut sim: Sim) -> Result<(), String> {
     // Client EOF (pump exit) ends the loop after draining.
     let tick_s = thessa_sim_core::WORLD_TICK_S;
     let mut next_deadline = Instant::now();
+    let mut last_snapshot = Instant::now();
+    // Opening snapshot so the client never waits a full interval.
+    send_frame(&wire_out, kind::SNAPSHOT, &sim.snapshot());
     loop {
         while let Ok(frame) = frames_rx.try_recv() {
             let Ok(envelope) = thessa_flight_net::decode_frame(&frame) else {
@@ -357,11 +368,15 @@ fn run_stdio(mut sim: Sim) -> Result<(), String> {
                 next_deadline = now;
             }
         } else {
-            sim.advance_chunk(CHUNK_S)
+            sim.advance_chunk(WARP_CHUNK_S)
                 .map_err(|e| format!("advance: {e}"))?;
         }
-        let snapshot = sim.snapshot();
-        send_frame(&wire_out, kind::SNAPSHOT, &snapshot);
+        let now = Instant::now();
+        if now.duration_since(last_snapshot).as_secs_f64() >= SNAPSHOT_MIN_INTERVAL_S {
+            last_snapshot = now;
+            let snapshot = sim.snapshot();
+            send_frame(&wire_out, kind::SNAPSHOT, &snapshot);
+        }
         // Pump exit drops the sender; try_recv errors only on disconnect
         // once drained, so probe cheaply: a failed non-blocking recv with
         // no senders left means EOF.
@@ -401,9 +416,21 @@ fn run_stdio(mut sim: Sim) -> Result<(), String> {
 
 fn run_measure(mut sim: Sim, target_s: f64) -> Result<(), String> {
     let t0 = Instant::now();
+    let mut chunks = 0u64;
     while sim.advanced_s < target_s {
-        sim.advance_chunk(CHUNK_S)
+        // Warp-sized chunks like the live loop (catch-up rule applies).
+        sim.advance_chunk(WARP_CHUNK_S)
             .map_err(|e| format!("advance: {e}"))?;
+        chunks += 1;
+        if chunks % 500 == 0 {
+            eprintln!(
+                "  [progress] sim={:.0} rails_total={:.0} steps_total={} bake_pending={}",
+                sim.advanced_s,
+                sim.rails_s,
+                sim.steps,
+                sim.authority.bake.has_pending()
+            );
+        }
         if sim.authority.flight_error.is_some() {
             break;
         }

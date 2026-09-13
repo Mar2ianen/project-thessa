@@ -393,6 +393,14 @@ pub struct AeroConfig {
     /// work where hypersonic lift errors dwarf the trajectory but drag
     /// still matters.
     pub drag_only_above_mach: f64,
+    /// Reference drag coefficient for the upper-atmosphere band (between
+    /// the vacuum cutoff and the Coast density): the panel loop is
+    /// replaced by `q * coefficient * total panel area` along the
+    /// airstream, with no lift and no aero moment. A flat-plate normal
+    /// value (1.0) is conservative for slender vehicles; calibrate per
+    /// airframe against the full panel sum — the band regression test
+    /// pins the absolute error envelope.
+    pub upper_atmosphere_drag_coefficient: f64,
 }
 
 impl Default for AeroConfig {
@@ -421,6 +429,7 @@ impl Default for AeroConfig {
             separated_control_factor: 0.3,
             vortex_lift_factor: 0.0,
             drag_only_above_mach: f64::INFINITY,
+            upper_atmosphere_drag_coefficient: 1.0,
         }
     }
 }
@@ -450,6 +459,7 @@ impl AeroConfig {
             self.separated_pitching_moment,
             self.separated_control_factor,
             self.vortex_lift_factor,
+            self.upper_atmosphere_drag_coefficient,
         ];
         if finite.iter().any(|value| !value.is_finite()) {
             return Err(AeroError::InvalidModel(
@@ -481,6 +491,7 @@ impl AeroConfig {
             || self.separated_control_factor < 0.0
             || self.separated_control_factor > 1.0
             || self.vortex_lift_factor < 0.0
+            || self.upper_atmosphere_drag_coefficient < 0.0
         {
             return Err(AeroError::InvalidModel(
                 "aero configuration has an invalid range".into(),

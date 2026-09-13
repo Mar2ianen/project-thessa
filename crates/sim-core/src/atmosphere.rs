@@ -33,6 +33,18 @@ pub struct AtmosphereConfig {
     /// this vector into vehicle axes before evaluating `omega × r`.
     /// Zero keeps the provider neutral for non-rotating test worlds.
     pub body_rotation_rad_s: glam::DVec3,
+    /// Explicit end of the atmosphere: below this density the medium is
+    /// declared vacuum and [`sample`](Self::sample) returns exactly zero
+    /// density (and pressure). This is what lets rails batches and the
+    /// exact-vacuum fast paths engage near a planet instead of only in
+    /// deep space where the exponential tail underflows on its own.
+    ///
+    /// Calibrated, not arbitrary: at the default 1e-10 kg/m³ an X-15-class
+    /// vehicle (10 t, CdA ~ 1 m²) at orbital speed sees ~2e-7 m/s² of drag,
+    /// i.e. ~1.3 m of drift over the maximum one-hour coast batch — inside
+    /// the 5 m batch position tolerance with margin. See the cutoff
+    /// regression test pinning this envelope.
+    pub vacuum_cutoff_density_kg_m3: f64,
 }
 
 impl Default for AtmosphereConfig {
@@ -47,6 +59,7 @@ impl Default for AtmosphereConfig {
             sutherland_constant_k: SUTHERLAND_CONSTANT_K,
             sutherland_reference_viscosity_pa_s: SUTHERLAND_REFERENCE_VISCOSITY_PA_S,
             body_rotation_rad_s: glam::DVec3::ZERO,
+            vacuum_cutoff_density_kg_m3: 1.0e-10,
         }
     }
 }
@@ -81,6 +94,7 @@ impl AtmosphereConfig {
             self.sutherland_reference_temperature_k,
             self.sutherland_constant_k,
             self.sutherland_reference_viscosity_pa_s,
+            self.vacuum_cutoff_density_kg_m3,
         ];
         if finite.iter().any(|value| !value.is_finite()) {
             return Err(AtmosphereError::InvalidConfig(
@@ -100,12 +114,43 @@ impl AtmosphereConfig {
             || self.sutherland_reference_temperature_k <= 0.0
             || self.sutherland_constant_k < 0.0
             || self.sutherland_reference_viscosity_pa_s <= 0.0
+            || self.vacuum_cutoff_density_kg_m3 <= 0.0
         {
             return Err(AtmosphereError::InvalidConfig(
                 "atmosphere configuration has an invalid range".into(),
             ));
         }
         Ok(())
+    }
+
+    /// Approximate geometric altitude where the model density sinks below
+    /// the vacuum cutoff: the declared end of the atmosphere for maps, HUD
+    /// readouts and batch pre-checks. Found by bisection (the profile is
+    /// monotone in practice); sea level when even that is already vacuum.
+    pub fn top_altitude_m(self) -> f64 {
+        if self
+            .sample(0.0)
+            .map(|sample| sample.density_kg_m3)
+            .unwrap_or(f64::INFINITY)
+            < self.vacuum_cutoff_density_kg_m3
+        {
+            return 0.0;
+        }
+        let mut low = 0.0;
+        let mut high = 4.0e6;
+        for _ in 0..80 {
+            let mid = 0.5 * (low + high);
+            let density = self
+                .sample(mid)
+                .map(|sample| sample.density_kg_m3)
+                .unwrap_or(f64::INFINITY);
+            if density < self.vacuum_cutoff_density_kg_m3 {
+                high = mid;
+            } else {
+                low = mid;
+            }
+        }
+        high
     }
 
     /// Evaluate the atmosphere at geometric altitude in metres.
@@ -159,6 +204,16 @@ impl AtmosphereConfig {
         {
             return Err(AtmosphereError::NonFiniteSample);
         }
+
+        // Declared vacuum: below the cutoff the medium is exactly nothing,
+        // so exact-vacuum fast paths (skip_aero, rails batches) engage.
+        // Temperature and derived acoustics stay on-model (finite, smooth
+        // for displays); only the mass terms go to zero.
+        let (pressure_pa, density_kg_m3) = if density_kg_m3 < self.vacuum_cutoff_density_kg_m3 {
+            (0.0, 0.0)
+        } else {
+            (pressure_pa, density_kg_m3)
+        };
 
         Ok(AtmosphereSample {
             altitude_m,
@@ -427,6 +482,41 @@ fn sutherland_viscosity(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn thessa_like() -> AtmosphereConfig {
+        AtmosphereConfig::new(288.15, 120_000.0, 287.05287, 1.4, 9.0).expect("valid")
+    }
+
+    #[test]
+    fn vacuum_cutoff_declares_exact_vacuum_above_top() {
+        let atmosphere = thessa_like();
+        let top = atmosphere.top_altitude_m();
+        assert!(
+            (100_000.0..1_000_000.0).contains(&top),
+            "Thessa top out of band: {top}"
+        );
+        let above = atmosphere.sample(top + 10_000.0).expect("sample");
+        assert_eq!(above.density_kg_m3, 0.0);
+        assert_eq!(above.pressure_pa, 0.0);
+        assert!(above.temperature_k.is_finite());
+        assert!(above.speed_of_sound_mps.is_finite());
+        let below = atmosphere
+            .sample((top - 50_000.0).max(0.0))
+            .expect("sample");
+        assert!(
+            below.density_kg_m3 > 0.0,
+            "50 km under the top must still be air"
+        );
+    }
+
+    #[test]
+    fn vacuum_cutoff_rejects_nonpositive_thresholds() {
+        let mut atmosphere = thessa_like();
+        atmosphere.vacuum_cutoff_density_kg_m3 = 0.0;
+        assert!(atmosphere.validate().is_err());
+        atmosphere.vacuum_cutoff_density_kg_m3 = f64::NAN;
+        assert!(atmosphere.validate().is_err());
+    }
 
     #[test]
     fn rotating_air_velocity_is_invariant_under_vehicle_basis_rotation() {

@@ -478,7 +478,7 @@ const SANDBOX_PRELUDE: &str = r#"
   });
   globalThis.Plan = Object.freeze({
     coast: (duration_s) => JSON.stringify({kind:'plan', id:0, bakeability:'pure', segments:[{kind:'coast', duration_s}]}),
-    burn: (duration_s, normalized) => JSON.stringify({kind:'plan', id:0, bakeability:'guarded', segments:[{kind:'burn', duration_s, normalized}]}),
+    burn: (duration_s, normalized, fx=0, fy=0, fz=0, mx=0, my=0, mz=0) => JSON.stringify({kind:'plan', id:0, bakeability:'guarded', segments:[{kind:'burn', duration_s, normalized, force_body_n:[fx, fy, fz], moment_body_nm:[mx, my, mz]}]}),
     guidance: (duration_s, guidance) => JSON.stringify({kind:'plan', id:0, bakeability:'guarded', segments:[{kind:'guidance', duration_s, intent:JSON.parse(guidance)}]}),
     wait: (condition) => JSON.stringify({kind:'plan', id:0, bakeability:'live', segments:[{kind:'wait', condition:JSON.parse(condition)}]}),
   });
@@ -549,6 +549,10 @@ enum ScriptPlanSegment {
     Burn {
         duration_s: f64,
         normalized: f64,
+        #[serde(default)]
+        force_body_n: Option<[f64; 3]>,
+        #[serde(default)]
+        moment_body_nm: Option<[f64; 3]>,
     },
     Guidance {
         duration_s: f64,
@@ -633,16 +637,24 @@ fn parse_plan(
             ScriptPlanSegment::Burn {
                 duration_s,
                 normalized,
+                force_body_n,
+                moment_body_nm,
             } => {
                 let propulsion = thessa_flight_control::PropulsionDemand::new(normalized)
                     .map_err(|error| ScriptError::InvalidReturn(error.to_string()))?;
-                Ok(TrajectorySegment::Burn {
-                    duration_s,
-                    demand: thessa_flight_control::ControlDemand {
-                        propulsion,
-                        ..thessa_flight_control::ControlDemand::zero()
-                    },
-                })
+                let demand = thessa_flight_control::ControlDemand {
+                    force_body_n: force_body_n
+                        .map(glam::DVec3::from_array)
+                        .unwrap_or(glam::DVec3::ZERO),
+                    moment_body_nm: moment_body_nm
+                        .map(glam::DVec3::from_array)
+                        .unwrap_or(glam::DVec3::ZERO),
+                    propulsion,
+                };
+                demand
+                    .validate()
+                    .map_err(|error| ScriptError::InvalidReturn(error.to_string()))?;
+                Ok(TrajectorySegment::Burn { duration_s, demand })
             }
             ScriptPlanSegment::Guidance { duration_s, intent } => Ok(TrajectorySegment::Guidance {
                 duration_s,
@@ -851,6 +863,23 @@ mod tests {
             ScriptResult::Plan(TrajectoryPlan { segments, bakeability: Bakeability::Guarded, .. })
                 if matches!(segments.as_slice(), [TrajectorySegment::Guidance { .. }])
         ));
+    }
+
+    #[test]
+    fn plan_burn_can_emit_a_physical_wrench() {
+        let engine = ScriptEngine::new(ScriptLimits::default()).unwrap();
+        let result = engine
+            .run("return Plan.burn(5, 0.4, 0, 100, 0, 2, 0, 0);")
+            .unwrap();
+        let ScriptResult::Plan(plan) = result else {
+            panic!("Plan.burn must return a plan");
+        };
+        let [TrajectorySegment::Burn { demand, .. }] = plan.segments.as_slice() else {
+            panic!("Plan.burn must return one burn segment");
+        };
+        assert_eq!(demand.force_body_n, glam::DVec3::Y * 100.0);
+        assert_eq!(demand.moment_body_nm, glam::DVec3::X * 2.0);
+        assert_eq!(demand.propulsion.normalized, 0.4);
     }
 
     #[test]

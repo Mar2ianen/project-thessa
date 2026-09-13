@@ -24,7 +24,7 @@ use thessa_sim_core::{
     TestParticleState, TickIntegratorConfig, VehicleDefinition, WORLD_TICK_S, X15StarterProfile,
     evaluate_flight_forces_soa, integrate_attitude_step, integrate_rigid_body_step_soa,
 };
-use thessa_worldgen_rocky::field::{ObstacleTrackCertificate, PlanetField};
+use thessa_worldgen_rocky::field::{ObstacleReport, ObstacleTrackCertificate, PlanetField};
 
 use crate::{
     BakeQueue, BakedRails, ControlMode, FlightRegime, InlineBakeQueue, RailsBakeRequest,
@@ -496,6 +496,24 @@ impl FlightAuthority {
             min_altitude_m,
             min_obstacle_clearance_m,
         })
+    }
+
+    /// Declare one landing or impact footprint against the canonical field.
+    /// `None` means terrain is not loaded in this authority instance; the
+    /// caller can retain the site and resolve it when an observed field is
+    /// available without inventing a zero-height fallback.
+    pub fn obstacle_report(
+        &self,
+        center_dir: [f64; 3],
+        radius_m: f64,
+    ) -> Result<Option<ObstacleReport>, String> {
+        let Some(field) = self.terrain_field.as_ref() else {
+            return Ok(None);
+        };
+        field
+            .declare_obstacles(center_dir, radius_m)
+            .map(Some)
+            .map_err(|error| format!("terrain obstacle report: {error}"))
     }
 
     pub fn new(ephemeris: &BakedEphemeris, reference_body: BodyId) -> Result<Self, String> {
@@ -2883,6 +2901,12 @@ mod rails_terrain_bound_tests {
         // only tighten it (the baker clamps into recipe bounds).
         let (ephemeris, mut flight) = authority();
         assert!(flight.terrain_field.is_none());
+        assert_eq!(
+            flight
+                .obstacle_report([0.0, 1.0, 0.0], 100.0)
+                .expect("terrain-free report lookup"),
+            None
+        );
         assert_eq!(flight.recipe_max_elevation_m, 12_000.0);
         assert_eq!(flight.rails_terrain_bound_m(), 12_000.0);
         let (field, sites) = canonical_launch_setup(&ephemeris).expect("launch setup");
@@ -2909,5 +2933,20 @@ mod rails_terrain_bound_tests {
         // Clearance is reported as evidence; the sub-grid withstand gate is
         // deliberately a separate follow-up proof.
         assert!(coverage.min_obstacle_clearance_m.is_finite());
+    }
+
+    #[test]
+    fn site_obstacle_report_uses_the_loaded_canonical_field() {
+        let (ephemeris, mut flight) = authority();
+        let (field, sites) = canonical_launch_setup(&ephemeris).expect("launch setup");
+        flight.initialize_world_site(field, sites[0], &ephemeris);
+        let report = flight
+            .obstacle_report(sites[0], 300.0)
+            .expect("site report")
+            .expect("loaded field report");
+        assert_eq!(report.center_dir, sites[0]);
+        assert_eq!(report.radius_m, 300.0);
+        assert!(report.max_height_m >= report.min_height_m);
+        assert!(report.max_slope.is_finite());
     }
 }

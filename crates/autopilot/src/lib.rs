@@ -532,6 +532,380 @@ pub enum BlockStatus {
     Degraded,
 }
 
+/// Small value boundary used by native graph execution. Domain-specific
+/// blocks may carry richer payloads out of band, but every edge still crosses
+/// this type-checked boundary before a downstream block is run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum GraphValue {
+    Unit,
+    Bool(bool),
+    Number(f64),
+    LandingSite(LandingSite),
+    ImpactSite(ImpactSite),
+    /// A typed token for domain values whose payload belongs to the host
+    /// block (Vehicle, OrbitTarget, and so on).
+    Typed(PortType),
+}
+
+impl GraphValue {
+    pub fn port_type(&self) -> PortType {
+        match self {
+            Self::Unit => PortType::Unit,
+            Self::Bool(_) => PortType::Bool,
+            Self::Number(_) => PortType::Number,
+            Self::LandingSite(_) => PortType::LandingSite,
+            Self::ImpactSite(_) => PortType::ImpactSite,
+            Self::Typed(ty) => *ty,
+        }
+    }
+
+    fn validate(&self) -> Result<(), GraphValueError> {
+        match self {
+            Self::Number(value) if !value.is_finite() => Err(GraphValueError::NonFiniteNumber),
+            Self::LandingSite(site) => site.validate().map_err(|_| GraphValueError::InvalidSite),
+            Self::ImpactSite(site) => site.validate().map_err(|_| GraphValueError::InvalidSite),
+            Self::Typed(PortType::Any) => Err(GraphValueError::UntypedToken),
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphValueError {
+    NonFiniteNumber,
+    InvalidSite,
+    UntypedToken,
+}
+
+impl fmt::Display for GraphValueError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NonFiniteNumber => write!(formatter, "graph value contains a non-finite number"),
+            Self::InvalidSite => write!(formatter, "graph value contains an invalid surface site"),
+            Self::UntypedToken => write!(formatter, "graph value cannot use the Any port type"),
+        }
+    }
+}
+
+impl Error for GraphValueError {}
+
+/// Result returned by a native block at one execution boundary. Waiting does
+/// not consume a physics tick: the runner parks the node and lets the owner
+/// wake it with simulation time or a domain event.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GraphNodeOutcome {
+    Complete {
+        outputs: BTreeMap<String, GraphValue>,
+    },
+    Wait {
+        condition: WaitCondition,
+    },
+    Fail {
+        diagnostic: Diagnostic,
+    },
+    Abort {
+        diagnostic: Diagnostic,
+    },
+}
+
+/// Native block boundary. The runner owns graph state and dependency order;
+/// the block owns its deterministic domain behavior and any continuation
+/// state needed after a wait.
+pub trait GraphBlock {
+    fn execute(
+        &mut self,
+        node: &GraphNode,
+        inputs: &BTreeMap<String, GraphValue>,
+    ) -> GraphNodeOutcome;
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum GraphRunState {
+    Progress {
+        executed: Vec<NodeId>,
+    },
+    Waiting {
+        node: NodeId,
+        condition: WaitCondition,
+    },
+    Complete,
+    Failed {
+        node: NodeId,
+        diagnostic: Diagnostic,
+    },
+    Aborted {
+        node: NodeId,
+        diagnostic: Diagnostic,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum GraphExecutionError {
+    UnknownNode(NodeId),
+    MissingOutput {
+        from: PortRef,
+        to: PortRef,
+    },
+    InvalidOutput {
+        port: PortRef,
+        expected: PortType,
+        produced: PortType,
+    },
+    InvalidValue {
+        port: PortRef,
+        error: GraphValueError,
+    },
+    InvalidWait {
+        node: NodeId,
+        error: WaitError,
+    },
+    Deadlock,
+}
+
+impl fmt::Display for GraphExecutionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownNode(id) => {
+                write!(formatter, "graph execution references unknown node {id:?}")
+            }
+            Self::MissingOutput { from, to } => {
+                write!(
+                    formatter,
+                    "graph node {from:?} did not produce value for {to:?}"
+                )
+            }
+            Self::InvalidOutput {
+                port,
+                expected,
+                produced,
+            } => write!(
+                formatter,
+                "graph output {port:?} produced {produced:?}, expected {expected:?}"
+            ),
+            Self::InvalidValue { port, error } => {
+                write!(formatter, "graph output {port:?} is invalid: {error}")
+            }
+            Self::InvalidWait { node, error } => {
+                write!(
+                    formatter,
+                    "graph node {node:?} returned an invalid wait: {error}"
+                )
+            }
+            Self::Deadlock => write!(formatter, "graph has no runnable node or wait boundary"),
+        }
+    }
+}
+
+impl Error for GraphExecutionError {}
+
+/// Deterministic graph scheduler for native blocks. Nodes are considered in
+/// ascending `NodeId` order, so independent parallel-ready blocks execute in
+/// a stable order while a Join naturally waits for all incoming edges.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphRunner {
+    graph: AutopilotGraph,
+    statuses: BTreeMap<NodeId, BlockStatus>,
+    outputs: BTreeMap<(NodeId, String), GraphValue>,
+    waiting: Option<(NodeId, WaitCondition)>,
+    terminal: Option<GraphRunState>,
+}
+
+impl GraphRunner {
+    pub fn new(graph: AutopilotGraph) -> Result<Self, Vec<GraphError>> {
+        graph.validate()?;
+        Ok(Self {
+            graph,
+            statuses: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+            waiting: None,
+            terminal: None,
+        })
+    }
+
+    pub fn graph(&self) -> &AutopilotGraph {
+        &self.graph
+    }
+
+    pub fn status(&self, node: NodeId) -> Option<BlockStatus> {
+        self.statuses.get(&node).copied()
+    }
+
+    pub fn output(&self, node: NodeId, port: &str) -> Option<&GraphValue> {
+        self.outputs.get(&(node, port.to_string()))
+    }
+
+    pub fn is_complete(&self) -> bool {
+        matches!(self.terminal, Some(GraphRunState::Complete))
+    }
+
+    pub fn abort(&mut self, diagnostic: Diagnostic) {
+        if self.terminal.is_none() {
+            self.terminal = Some(GraphRunState::Aborted {
+                node: NodeId(0),
+                diagnostic,
+            });
+        }
+    }
+
+    /// Run all currently ready blocks until the graph completes, parks, or
+    /// reaches an explicit failure. `event` is delivered only to the node
+    /// whose wait condition is parked, never polled through every node.
+    pub fn poll<B: GraphBlock>(
+        &mut self,
+        now: SimTime,
+        event: Option<&str>,
+        block: &mut B,
+    ) -> Result<GraphRunState, GraphExecutionError> {
+        if !now.0.is_finite() {
+            return Err(GraphExecutionError::Deadlock);
+        }
+        if let Some(terminal) = &self.terminal {
+            return Ok(terminal.clone());
+        }
+        if let Some((node, condition)) = self.waiting.clone() {
+            if !condition.is_due(now, event) {
+                return Ok(GraphRunState::Waiting { node, condition });
+            }
+            self.waiting = None;
+            self.statuses.remove(&node);
+        }
+
+        let mut executed = Vec::new();
+        loop {
+            let Some(node) = self.next_ready_node()? else {
+                if self.statuses.len() == self.graph.nodes.len()
+                    && self
+                        .statuses
+                        .values()
+                        .all(|status| *status == BlockStatus::Ok)
+                {
+                    self.terminal = Some(GraphRunState::Complete);
+                    return Ok(GraphRunState::Complete);
+                }
+                if executed.is_empty() {
+                    return Err(GraphExecutionError::Deadlock);
+                }
+                return Ok(GraphRunState::Progress { executed });
+            };
+            let inputs = self.inputs_for(node)?;
+            let graph_node = self
+                .graph
+                .nodes
+                .iter()
+                .find(|candidate| candidate.id == node)
+                .cloned()
+                .ok_or(GraphExecutionError::UnknownNode(node))?;
+            match block.execute(&graph_node, &inputs) {
+                GraphNodeOutcome::Complete { outputs } => {
+                    self.store_outputs(&graph_node, outputs)?;
+                    self.statuses.insert(node, BlockStatus::Ok);
+                    executed.push(node);
+                }
+                GraphNodeOutcome::Wait { condition } => {
+                    condition
+                        .validate()
+                        .map_err(|error| GraphExecutionError::InvalidWait { node, error })?;
+                    self.statuses.insert(node, BlockStatus::Waiting);
+                    self.waiting = Some((node, condition.clone()));
+                    return Ok(GraphRunState::Waiting { node, condition });
+                }
+                GraphNodeOutcome::Fail { diagnostic } => {
+                    self.statuses.insert(node, BlockStatus::Failed);
+                    let state = GraphRunState::Failed { node, diagnostic };
+                    self.terminal = Some(state.clone());
+                    return Ok(state);
+                }
+                GraphNodeOutcome::Abort { diagnostic } => {
+                    self.statuses.insert(node, BlockStatus::Failed);
+                    let state = GraphRunState::Aborted { node, diagnostic };
+                    self.terminal = Some(state.clone());
+                    return Ok(state);
+                }
+            }
+        }
+    }
+
+    fn next_ready_node(&self) -> Result<Option<NodeId>, GraphExecutionError> {
+        Ok(self
+            .graph
+            .nodes
+            .iter()
+            .filter(|node| !self.statuses.contains_key(&node.id))
+            .filter(|node| {
+                self.graph
+                    .edges
+                    .iter()
+                    .filter(|edge| edge.to.node == node.id)
+                    .all(|edge| {
+                        self.statuses
+                            .get(&edge.from.node)
+                            .is_some_and(|status| *status == BlockStatus::Ok)
+                    })
+            })
+            .map(|node| node.id)
+            .min())
+    }
+
+    fn inputs_for(
+        &self,
+        node: NodeId,
+    ) -> Result<BTreeMap<String, GraphValue>, GraphExecutionError> {
+        let mut inputs = BTreeMap::new();
+        for edge in self.graph.edges.iter().filter(|edge| edge.to.node == node) {
+            let key = (edge.from.node, edge.from.port.clone());
+            let Some(value) = self.outputs.get(&key).cloned() else {
+                return Err(GraphExecutionError::MissingOutput {
+                    from: edge.from.clone(),
+                    to: edge.to.clone(),
+                });
+            };
+            inputs.insert(edge.to.port.clone(), value);
+        }
+        Ok(inputs)
+    }
+
+    fn store_outputs(
+        &mut self,
+        node: &GraphNode,
+        outputs: BTreeMap<String, GraphValue>,
+    ) -> Result<(), GraphExecutionError> {
+        for (name, value) in outputs {
+            let port = node
+                .port(&name)
+                .filter(|port| port.direction == PortDirection::Output)
+                .ok_or_else(|| GraphExecutionError::InvalidOutput {
+                    port: PortRef {
+                        node: node.id,
+                        port: name.clone(),
+                    },
+                    expected: PortType::Any,
+                    produced: value.port_type(),
+                })?;
+            value
+                .validate()
+                .map_err(|error| GraphExecutionError::InvalidValue {
+                    port: PortRef {
+                        node: node.id,
+                        port: name.clone(),
+                    },
+                    error,
+                })?;
+            if !port.ty.accepts(value.port_type()) {
+                return Err(GraphExecutionError::InvalidOutput {
+                    port: PortRef {
+                        node: node.id,
+                        port: name.clone(),
+                    },
+                    expected: port.ty,
+                    produced: value.port_type(),
+                });
+            }
+            self.outputs.insert((node.id, name), value);
+        }
+        Ok(())
+    }
+}
+
 /// Conditions are registered once and evaluated only when the scheduler has
 /// a relevant time or domain event. There is no graph polling contract here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -971,6 +1345,51 @@ mod tests {
     use super::*;
     use thessa_flight_control::{ActuatorGroup, PilotAxes};
 
+    #[derive(Default)]
+    struct TestBlock {
+        calls: BTreeMap<NodeId, u32>,
+    }
+
+    impl GraphBlock for TestBlock {
+        fn execute(
+            &mut self,
+            node: &GraphNode,
+            inputs: &BTreeMap<String, GraphValue>,
+        ) -> GraphNodeOutcome {
+            let calls = self.calls.entry(node.id).or_default();
+            *calls += 1;
+            if node.kind == NodeKind::Wait && *calls == 1 {
+                return GraphNodeOutcome::Wait {
+                    condition: WaitCondition::At(SimTime(10.0)),
+                };
+            }
+            let number = inputs
+                .values()
+                .filter_map(|value| match value {
+                    GraphValue::Number(value) => Some(*value),
+                    _ => None,
+                })
+                .sum::<f64>();
+            let mut outputs = BTreeMap::new();
+            for port in node
+                .ports
+                .iter()
+                .filter(|port| port.direction == PortDirection::Output)
+            {
+                outputs.insert(
+                    port.name.clone(),
+                    match port.ty {
+                        PortType::Number => {
+                            GraphValue::Number(if number == 0.0 { 2.0 } else { number })
+                        }
+                        _ => GraphValue::Unit,
+                    },
+                );
+            }
+            GraphNodeOutcome::Complete { outputs }
+        }
+    }
+
     #[test]
     fn surface_sites_normalize_centers_but_keep_landing_and_impact_types_distinct() {
         let landing = LandingSite::new([0.0, 2.0, 0.0], 125.0).unwrap();
@@ -1000,6 +1419,159 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn graph_runner_executes_sequence_and_join_in_stable_order() {
+        let graph = AutopilotGraph {
+            nodes: vec![
+                GraphNode {
+                    id: NodeId(3),
+                    name: "right".into(),
+                    kind: NodeKind::Custom {
+                        bakeability: Bakeability::Pure,
+                        wait_capable: false,
+                    },
+                    ports: vec![
+                        Port::input("value", PortType::Number, true),
+                        Port::output("right", PortType::Number),
+                    ],
+                },
+                GraphNode {
+                    id: NodeId(1),
+                    name: "source".into(),
+                    kind: NodeKind::Source,
+                    ports: vec![Port::output("value", PortType::Number)],
+                },
+                GraphNode {
+                    id: NodeId(4),
+                    name: "join".into(),
+                    kind: NodeKind::Join,
+                    ports: vec![
+                        Port::input("left", PortType::Number, true),
+                        Port::input("right", PortType::Number, true),
+                        Port::output("sum", PortType::Number),
+                    ],
+                },
+                GraphNode {
+                    id: NodeId(2),
+                    name: "left".into(),
+                    kind: NodeKind::Custom {
+                        bakeability: Bakeability::Pure,
+                        wait_capable: false,
+                    },
+                    ports: vec![
+                        Port::input("value", PortType::Number, true),
+                        Port::output("left", PortType::Number),
+                    ],
+                },
+            ],
+            edges: vec![
+                GraphEdge {
+                    from: PortRef {
+                        node: NodeId(1),
+                        port: "value".into(),
+                    },
+                    to: PortRef {
+                        node: NodeId(2),
+                        port: "value".into(),
+                    },
+                },
+                GraphEdge {
+                    from: PortRef {
+                        node: NodeId(1),
+                        port: "value".into(),
+                    },
+                    to: PortRef {
+                        node: NodeId(3),
+                        port: "value".into(),
+                    },
+                },
+                GraphEdge {
+                    from: PortRef {
+                        node: NodeId(2),
+                        port: "left".into(),
+                    },
+                    to: PortRef {
+                        node: NodeId(4),
+                        port: "left".into(),
+                    },
+                },
+                GraphEdge {
+                    from: PortRef {
+                        node: NodeId(3),
+                        port: "right".into(),
+                    },
+                    to: PortRef {
+                        node: NodeId(4),
+                        port: "right".into(),
+                    },
+                },
+            ],
+        };
+        let mut runner = GraphRunner::new(graph).unwrap();
+        let mut block = TestBlock::default();
+        assert_eq!(
+            runner.poll(SimTime(0.0), None, &mut block).unwrap(),
+            GraphRunState::Complete
+        );
+        assert_eq!(
+            runner.output(NodeId(4), "sum"),
+            Some(&GraphValue::Number(4.0))
+        );
+        assert_eq!(runner.status(NodeId(2)), Some(BlockStatus::Ok));
+        assert_eq!(runner.status(NodeId(3)), Some(BlockStatus::Ok));
+    }
+
+    #[test]
+    fn graph_runner_parks_a_wait_and_resumes_only_on_its_condition() {
+        let graph = AutopilotGraph {
+            nodes: vec![
+                GraphNode {
+                    id: NodeId(1),
+                    name: "wait".into(),
+                    kind: NodeKind::Wait,
+                    ports: vec![Port::output("done", PortType::Unit)],
+                },
+                GraphNode {
+                    id: NodeId(2),
+                    name: "sink".into(),
+                    kind: NodeKind::Sink,
+                    ports: vec![Port::input("done", PortType::Unit, true)],
+                },
+            ],
+            edges: vec![GraphEdge {
+                from: PortRef {
+                    node: NodeId(1),
+                    port: "done".into(),
+                },
+                to: PortRef {
+                    node: NodeId(2),
+                    port: "done".into(),
+                },
+            }],
+        };
+        let mut runner = GraphRunner::new(graph).unwrap();
+        let mut block = TestBlock::default();
+        assert!(matches!(
+            runner.poll(SimTime(0.0), None, &mut block).unwrap(),
+            GraphRunState::Waiting {
+                node: NodeId(1),
+                condition: WaitCondition::At(SimTime(10.0))
+            }
+        ));
+        assert!(matches!(
+            runner.poll(SimTime(9.0), None, &mut block).unwrap(),
+            GraphRunState::Waiting {
+                node: NodeId(1),
+                ..
+            }
+        ));
+        assert_eq!(
+            runner.poll(SimTime(10.0), None, &mut block).unwrap(),
+            GraphRunState::Complete
+        );
+        assert_eq!(block.calls.get(&NodeId(1)), Some(&2));
     }
 
     fn graph_with_edge(from: PortType, to: PortType) -> AutopilotGraph {

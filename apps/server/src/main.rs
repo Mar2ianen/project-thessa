@@ -22,7 +22,7 @@ use thessa_autopilot_js::{
     ScriptEngine, ScriptLimits, ScriptResult, ScriptScheduler, ScriptSchedulerStep,
 };
 use thessa_flight_authority::{
-    ControlMode, FlightAuthority, FlightPolicy, GuidanceIntent, PropulsionDemand,
+    ControlMode, FlightAuthority, FlightPolicy, GuidanceIntent, ObstacleReport, PropulsionDemand,
     canonical_launch_setup,
 };
 use thessa_flight_control::ControlDemand;
@@ -159,7 +159,9 @@ struct Sim {
     /// Declared autopilot targets stay data-only until a later landing/
     /// impact planner consumes them and asks the field for obstacle evidence.
     landing_site: Option<LandingSite>,
+    landing_obstacles: Option<ObstacleReport>,
     impact_site: Option<ImpactSite>,
+    impact_obstacles: Option<ObstacleReport>,
     plan_runner: Option<TrajectoryPlanRunner>,
     last_autopilot_notice: Option<String>,
     clients: std::collections::HashMap<String, ClientVote>,
@@ -215,7 +217,9 @@ impl Sim {
             plan_demand: None,
             autopilot_graph: None,
             landing_site: None,
+            landing_obstacles: None,
             impact_site: None,
+            impact_obstacles: None,
             plan_runner: None,
             last_autopilot_notice: None,
             clients: std::collections::HashMap::new(),
@@ -463,10 +467,27 @@ impl Sim {
         if let Err(error) = site.validate() {
             return self.fail_autopilot(error.to_string());
         }
+        let obstacles = match self
+            .authority
+            .obstacle_report(site.center_dir, site.radius_m)
+        {
+            Ok(obstacles) => obstacles,
+            Err(error) => return self.fail_autopilot(error),
+        };
+        let obstacle_state = if obstacles.is_some() {
+            "ready"
+        } else {
+            "pending"
+        };
         self.landing_site = Some(site);
+        self.landing_obstacles = obstacles;
         self.authority.wake_notice = Some(format!(
-            "AUTOPILOT LANDING SITE center=({:.6},{:.6},{:.6}) radius={:.1}m",
-            site.center_dir[0], site.center_dir[1], site.center_dir[2], site.radius_m
+            "AUTOPILOT LANDING SITE center=({:.6},{:.6},{:.6}) radius={:.1}m obstacles={}",
+            site.center_dir[0],
+            site.center_dir[1],
+            site.center_dir[2],
+            site.radius_m,
+            obstacle_state
         ));
         true
     }
@@ -475,10 +496,27 @@ impl Sim {
         if let Err(error) = site.validate() {
             return self.fail_autopilot(error.to_string());
         }
+        let obstacles = match self
+            .authority
+            .obstacle_report(site.center_dir, site.radius_m)
+        {
+            Ok(obstacles) => obstacles,
+            Err(error) => return self.fail_autopilot(error),
+        };
+        let obstacle_state = if obstacles.is_some() {
+            "ready"
+        } else {
+            "pending"
+        };
         self.impact_site = Some(site);
+        self.impact_obstacles = obstacles;
         self.authority.wake_notice = Some(format!(
-            "AUTOPILOT IMPACT SITE center=({:.6},{:.6},{:.6}) radius={:.1}m",
-            site.center_dir[0], site.center_dir[1], site.center_dir[2], site.radius_m
+            "AUTOPILOT IMPACT SITE center=({:.6},{:.6},{:.6}) radius={:.1}m obstacles={}",
+            site.center_dir[0],
+            site.center_dir[1],
+            site.center_dir[2],
+            site.radius_m,
+            obstacle_state
         ));
         true
     }
@@ -1635,6 +1673,7 @@ mod tests {
                 radius_m: 300.0,
             })
         );
+        assert!(sim.landing_obstacles.is_none());
         assert!(sim.plan_runner.is_none());
 
         assert!(sim.apply_autopilot(
@@ -1654,6 +1693,7 @@ mod tests {
                 radius_m: 50.0,
             })
         );
+        assert!(sim.impact_obstacles.is_none());
         assert!(sim.authority.wake_notice.as_deref().is_some_and(|notice| {
             notice.contains("IMPACT SITE") && notice.contains("radius=50.0m")
         }));

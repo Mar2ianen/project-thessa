@@ -219,23 +219,12 @@ impl ControlDemand {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub struct AircraftControlLaw {
     pub max_aoa_rad: Option<f64>,
     pub max_positive_g: Option<f64>,
     pub max_negative_g: Option<f64>,
     pub coordinated_turn_assist: bool,
-}
-
-impl Default for AircraftControlLaw {
-    fn default() -> Self {
-        Self {
-            max_aoa_rad: None,
-            max_positive_g: None,
-            max_negative_g: None,
-            coordinated_turn_assist: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -342,7 +331,7 @@ pub enum FlightControlLaw {
     Direct(DirectControlLaw),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub struct FlightPolicy {
     pub max_aoa_rad: Option<f64>,
     pub max_positive_g: Option<f64>,
@@ -350,19 +339,6 @@ pub struct FlightPolicy {
     pub reverse_airborne_allowed: bool,
     pub reverse_in_atmosphere_allowed: bool,
     pub augmentation_allowed: bool,
-}
-
-impl Default for FlightPolicy {
-    fn default() -> Self {
-        Self {
-            max_aoa_rad: None,
-            max_positive_g: None,
-            max_negative_g: None,
-            reverse_airborne_allowed: false,
-            reverse_in_atmosphere_allowed: false,
-            augmentation_allowed: false,
-        }
-    }
 }
 
 impl FlightPolicy {

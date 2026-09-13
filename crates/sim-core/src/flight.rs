@@ -387,6 +387,7 @@ pub fn integrate_rigid_body_step<M: AeroModel>(
 /// Integrate one rigid-body step using the built-in SoA/SIMD aero evaluator.
 /// This is the allocation-free counterpart to [`integrate_rigid_body_step`]
 /// used by the authoritative X-15 runtime.
+#[allow(clippy::too_many_arguments)]
 pub fn integrate_rigid_body_step_soa(
     model: &PanelAeroModel,
     panels: &PanelSoA,

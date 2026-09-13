@@ -268,12 +268,11 @@ impl AutopilotGraph {
             let mut stack = Vec::new();
             let mut cycle_without_wait = false;
             for node in &self.nodes {
-                if !matches!(colors.get(&node.id), Some(VisitColor::Black)) {
-                    if let Err(error) =
+                if !matches!(colors.get(&node.id), Some(VisitColor::Black))
+                    && let Err(error) =
                         visit_cycle(node.id, &adjacency, &nodes, &mut colors, &mut stack)
-                    {
-                        cycle_without_wait |= GraphError::is_cycle_error(&error);
-                    }
+                {
+                    cycle_without_wait |= GraphError::is_cycle_error(&error);
                 }
             }
             if cycle_without_wait {
@@ -528,6 +527,10 @@ impl WaitSet {
         self.waits.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.waits.is_empty()
+    }
+
     pub fn next_time(&self) -> Option<SimTime> {
         self.waits
             .values()
@@ -615,6 +618,187 @@ impl TrajectoryPlan {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlanExecutionMode {
+    Baked,
+    Live,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlanDeoptimizationReason {
+    GuardInvalidated,
+    ManualOverride,
+    LiveInterrupt,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PlanAction {
+    Coast {
+        until: SimTime,
+    },
+    Burn {
+        until: SimTime,
+        demand: ControlDemand,
+    },
+    Guidance {
+        until: SimTime,
+        intent: GuidanceIntent,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PlanPoll {
+    Action {
+        mode: PlanExecutionMode,
+        action: PlanAction,
+    },
+    Waiting {
+        mode: PlanExecutionMode,
+        condition: WaitCondition,
+    },
+    Complete {
+        mode: PlanExecutionMode,
+    },
+}
+
+/// Deterministic plan cursor used by the authority layer. It advances only
+/// when the owner presents a simulation time or a relevant domain event; it
+/// does not own a physics loop and never sleeps a worker thread.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrajectoryPlanRunner {
+    plan: TrajectoryPlan,
+    segment_index: usize,
+    segment_start: SimTime,
+    mode: PlanExecutionMode,
+    deoptimization: Option<PlanDeoptimizationReason>,
+}
+
+impl TrajectoryPlanRunner {
+    pub fn new(plan: TrajectoryPlan, start: SimTime) -> Result<Self, PlanError> {
+        plan.validate()?;
+        validate_plan_time(start)?;
+        let mode = match plan.bakeability {
+            Bakeability::Live => PlanExecutionMode::Live,
+            Bakeability::Pure | Bakeability::Guarded => PlanExecutionMode::Baked,
+        };
+        Ok(Self {
+            plan,
+            segment_index: 0,
+            segment_start: start,
+            mode,
+            deoptimization: None,
+        })
+    }
+
+    pub fn plan(&self) -> &TrajectoryPlan {
+        &self.plan
+    }
+
+    pub fn mode(&self) -> PlanExecutionMode {
+        self.mode
+    }
+
+    pub fn segment_index(&self) -> usize {
+        self.segment_index
+    }
+
+    pub fn deoptimization_reason(&self) -> Option<PlanDeoptimizationReason> {
+        self.deoptimization
+    }
+
+    /// Switch the current plan to live execution after a guard, pilot
+    /// override, or other runtime condition invalidates baked assumptions.
+    /// The cursor is retained so the authority can continue from the same
+    /// declarative segment under live control.
+    pub fn deoptimize(&mut self, reason: PlanDeoptimizationReason) -> bool {
+        let changed = self.mode != PlanExecutionMode::Live;
+        self.mode = PlanExecutionMode::Live;
+        self.deoptimization = Some(reason);
+        changed
+    }
+
+    /// Return the current action, park on a guard, or advance through all
+    /// segments that are already complete at `now`.
+    pub fn poll(&mut self, now: SimTime, event: Option<&str>) -> Result<PlanPoll, PlanError> {
+        validate_plan_time(now)?;
+        loop {
+            let Some(segment) = self.plan.segments.get(self.segment_index) else {
+                return Ok(PlanPoll::Complete { mode: self.mode });
+            };
+            match segment {
+                TrajectorySegment::Coast { duration_s } => {
+                    let until = plan_segment_end(self.segment_start, *duration_s)?;
+                    if now.0 >= until.0 {
+                        self.segment_index += 1;
+                        self.segment_start = until;
+                        continue;
+                    }
+                    return Ok(PlanPoll::Action {
+                        mode: self.mode,
+                        action: PlanAction::Coast { until },
+                    });
+                }
+                TrajectorySegment::Burn { duration_s, demand } => {
+                    let until = plan_segment_end(self.segment_start, *duration_s)?;
+                    if now.0 >= until.0 {
+                        self.segment_index += 1;
+                        self.segment_start = until;
+                        continue;
+                    }
+                    return Ok(PlanPoll::Action {
+                        mode: self.mode,
+                        action: PlanAction::Burn {
+                            until,
+                            demand: *demand,
+                        },
+                    });
+                }
+                TrajectorySegment::Guidance { duration_s, intent } => {
+                    let until = plan_segment_end(self.segment_start, *duration_s)?;
+                    if now.0 >= until.0 {
+                        self.segment_index += 1;
+                        self.segment_start = until;
+                        continue;
+                    }
+                    return Ok(PlanPoll::Action {
+                        mode: self.mode,
+                        action: PlanAction::Guidance {
+                            until,
+                            intent: intent.clone(),
+                        },
+                    });
+                }
+                TrajectorySegment::Wait { condition } => {
+                    if condition.is_due(now, event) {
+                        self.segment_index += 1;
+                        self.segment_start = now;
+                        continue;
+                    }
+                    return Ok(PlanPoll::Waiting {
+                        mode: self.mode,
+                        condition: condition.clone(),
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn validate_plan_time(time: SimTime) -> Result<(), PlanError> {
+    time.0
+        .is_finite()
+        .then_some(())
+        .ok_or(PlanError::InvalidStartTime(time.0))
+}
+
+fn plan_segment_end(start: SimTime, duration: f64) -> Result<SimTime, PlanError> {
+    let end = start.offset(duration);
+    end.0
+        .is_finite()
+        .then_some(end)
+        .ok_or(PlanError::TimeOverflow { start, duration })
+}
+
 fn contains_domain_event(condition: &WaitCondition) -> bool {
     match condition {
         WaitCondition::Event(_) => true,
@@ -650,6 +834,8 @@ impl Error for WaitError {}
 pub enum PlanError {
     Empty,
     InvalidDuration(f64),
+    InvalidStartTime(f64),
+    TimeOverflow { start: SimTime, duration: f64 },
     Control(thessa_flight_control::ControlError),
     Wait(WaitError),
     LiveGuardInPurePlan,
@@ -662,6 +848,12 @@ impl fmt::Display for PlanError {
             Self::InvalidDuration(duration) => {
                 write!(formatter, "invalid segment duration {duration}")
             }
+            Self::InvalidStartTime(time) => write!(formatter, "invalid plan time {time}"),
+            Self::TimeOverflow { start, duration } => write!(
+                formatter,
+                "plan segment end overflows from start {} by {} seconds",
+                start.0, duration
+            ),
             Self::Control(error) => write!(formatter, "control demand is invalid: {error}"),
             Self::Wait(error) => write!(formatter, "wait condition is invalid: {error}"),
             Self::LiveGuardInPurePlan => {
@@ -676,7 +868,7 @@ impl Error for PlanError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use thessa_flight_control::ActuatorGroup;
+    use thessa_flight_control::{ActuatorGroup, PilotAxes};
 
     fn graph_with_edge(from: PortType, to: PortType) -> AutopilotGraph {
         AutopilotGraph {
@@ -855,6 +1047,138 @@ mod tests {
         assert!(matches!(
             plan.validate(),
             Err(PlanError::LiveGuardInPurePlan)
+        ));
+    }
+
+    #[test]
+    fn plan_runner_emits_absolute_boundaries_for_baked_segments() {
+        let plan = TrajectoryPlan {
+            id: TrajectoryPlanId(7),
+            segments: vec![
+                TrajectorySegment::Coast { duration_s: 5.0 },
+                TrajectorySegment::Burn {
+                    duration_s: 2.0,
+                    demand: ControlDemand::zero(),
+                },
+            ],
+            bakeability: Bakeability::Pure,
+        };
+        let mut runner = TrajectoryPlanRunner::new(plan, SimTime(100.0)).unwrap();
+
+        assert!(matches!(
+            runner.poll(SimTime(100.0), None).unwrap(),
+            PlanPoll::Action {
+                mode: PlanExecutionMode::Baked,
+                action: PlanAction::Coast {
+                    until: SimTime(105.0)
+                },
+            }
+        ));
+        assert!(matches!(
+            runner.poll(SimTime(105.0), None).unwrap(),
+            PlanPoll::Action {
+                mode: PlanExecutionMode::Baked,
+                action: PlanAction::Burn {
+                    until: SimTime(107.0),
+                    ..
+                },
+            }
+        ));
+        assert_eq!(
+            runner.poll(SimTime(107.0), None).unwrap(),
+            PlanPoll::Complete {
+                mode: PlanExecutionMode::Baked
+            }
+        );
+    }
+
+    #[test]
+    fn plan_runner_parks_on_a_guard_and_resumes_after_the_event() {
+        let plan = TrajectoryPlan {
+            id: TrajectoryPlanId(8),
+            segments: vec![
+                TrajectorySegment::Wait {
+                    condition: WaitCondition::Event("impact".into()),
+                },
+                TrajectorySegment::Guidance {
+                    duration_s: 2.0,
+                    intent: GuidanceIntent::ManualAxes(PilotAxes::default()),
+                },
+            ],
+            bakeability: Bakeability::Guarded,
+        };
+        let mut runner = TrajectoryPlanRunner::new(plan, SimTime(20.0)).unwrap();
+        assert!(matches!(
+            runner.poll(SimTime(20.0), Some("other")),
+            Ok(PlanPoll::Waiting {
+                mode: PlanExecutionMode::Baked,
+                condition: WaitCondition::Event(ref name),
+            }) if name == "impact"
+        ));
+        assert!(matches!(
+            runner.poll(SimTime(21.0), Some("impact")).unwrap(),
+            PlanPoll::Action {
+                mode: PlanExecutionMode::Baked,
+                action: PlanAction::Guidance {
+                    until: SimTime(23.0),
+                    ..
+                },
+            }
+        ));
+    }
+
+    #[test]
+    fn plan_runner_deoptimizes_without_losing_its_cursor() {
+        let plan = TrajectoryPlan {
+            id: TrajectoryPlanId(9),
+            segments: vec![TrajectorySegment::Coast { duration_s: 4.0 }],
+            bakeability: Bakeability::Guarded,
+        };
+        let mut runner = TrajectoryPlanRunner::new(plan, SimTime(30.0)).unwrap();
+        assert_eq!(runner.segment_index(), 0);
+        assert!(runner.deoptimize(PlanDeoptimizationReason::GuardInvalidated));
+        assert_eq!(runner.mode(), PlanExecutionMode::Live);
+        assert_eq!(
+            runner.deoptimization_reason(),
+            Some(PlanDeoptimizationReason::GuardInvalidated)
+        );
+        assert!(matches!(
+            runner.poll(SimTime(30.0), None).unwrap(),
+            PlanPoll::Action {
+                mode: PlanExecutionMode::Live,
+                action: PlanAction::Coast {
+                    until: SimTime(34.0)
+                },
+            }
+        ));
+    }
+
+    #[test]
+    fn plan_runner_rejects_non_finite_start_time() {
+        let plan = TrajectoryPlan {
+            id: TrajectoryPlanId(10),
+            segments: vec![TrajectorySegment::Coast { duration_s: 1.0 }],
+            bakeability: Bakeability::Pure,
+        };
+        assert!(matches!(
+            TrajectoryPlanRunner::new(plan, SimTime(f64::NAN)),
+            Err(PlanError::InvalidStartTime(time)) if time.is_nan()
+        ));
+    }
+
+    #[test]
+    fn plan_runner_rejects_an_overflowing_segment_boundary() {
+        let plan = TrajectoryPlan {
+            id: TrajectoryPlanId(11),
+            segments: vec![TrajectorySegment::Coast {
+                duration_s: f64::MAX,
+            }],
+            bakeability: Bakeability::Pure,
+        };
+        let mut runner = TrajectoryPlanRunner::new(plan, SimTime(f64::MAX / 2.0)).unwrap();
+        assert!(matches!(
+            runner.poll(SimTime(f64::MAX / 2.0), None),
+            Err(PlanError::TimeOverflow { .. })
         ));
     }
 }

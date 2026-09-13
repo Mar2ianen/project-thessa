@@ -114,7 +114,11 @@ struct Sim {
 }
 
 impl Sim {
-    fn new(ephemeris: BakedEphemeris, reference_body: BodyId, vacuum: bool) -> Result<Self, String> {
+    fn new(
+        ephemeris: BakedEphemeris,
+        reference_body: BodyId,
+        vacuum: bool,
+    ) -> Result<Self, String> {
         let mut authority = FlightAuthority::new(&ephemeris, reference_body)
             .map_err(|e| format!("authority init: {e}"))?
             .with_bake_queue(Box::new(ThreadBakeQueue::new()));
@@ -296,7 +300,9 @@ fn run_stdio(mut sim: Sim) -> Result<(), String> {
     });
 
     // Handshake on the main thread: first frame must be Hello.
-    let frame = frames_rx.recv().map_err(|_| "stdin closed before handshake")?;
+    let frame = frames_rx
+        .recv()
+        .map_err(|_| "stdin closed before handshake")?;
     let envelope = thessa_flight_net::decode_frame(&frame).map_err(|e| e.to_string())?;
     if envelope.kind != kind::HELLO {
         return Err(format!("expected HELLO, got kind {}", envelope.kind));
@@ -332,7 +338,8 @@ fn run_stdio(mut sim: Sim) -> Result<(), String> {
             std::thread::sleep(std::time::Duration::from_secs_f64(tick_s));
         } else if sim.warp <= 1.0 {
             let chunk = (sim.warp * tick_s).max(tick_s);
-            sim.advance_chunk(chunk).map_err(|e| format!("advance: {e}"))?;
+            sim.advance_chunk(chunk)
+                .map_err(|e| format!("advance: {e}"))?;
             next_deadline += std::time::Duration::from_secs_f64(chunk / sim.warp);
             let now = Instant::now();
             if next_deadline > now {
@@ -341,7 +348,8 @@ fn run_stdio(mut sim: Sim) -> Result<(), String> {
                 next_deadline = now;
             }
         } else {
-            sim.advance_chunk(CHUNK_S).map_err(|e| format!("advance: {e}"))?;
+            sim.advance_chunk(CHUNK_S)
+                .map_err(|e| format!("advance: {e}"))?;
         }
         let snapshot = sim.snapshot();
         send_frame(&wire_out, kind::SNAPSHOT, &snapshot);

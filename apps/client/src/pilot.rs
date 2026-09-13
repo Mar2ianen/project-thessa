@@ -14,7 +14,8 @@ use bevy::{
     world_serialization::{WorldAsset, WorldAssetRoot},
 };
 
-use thessa_sim_core::{BakedEphemeris, BodyId, OnRailsCache};
+use thessa_flight_net::{ClientInput, Command, Snapshot};
+use thessa_sim_core::{BakedEphemeris, BodyId, OnRailsCache, SimTime, WorldTick};
 
 const HUD_TEXT: Color = Color::srgb(0.91, 0.95, 0.98);
 const HUD_MUTED: Color = Color::srgb(0.60, 0.69, 0.76);
@@ -37,7 +38,7 @@ pub(super) enum ClientViewMode {
 
 use thessa_flight_authority::{BakeQueue, BakedRails, RailsBakeRequest};
 pub(super) use thessa_flight_authority::{
-    ControlMode, FlightAuthority, FlightRegime, X15_STALL_ANGLE_DEG,
+    COAST_DENSITY_KG_M3, ControlMode, FlightAuthority, FlightRegime, X15_STALL_ANGLE_DEG,
     conventional_angle_of_attack_deg, local_air_kinematics,
 };
 
@@ -681,6 +682,44 @@ fn update_navball_image(image: &mut Image, local_up_body: DVec3) {
     }
 }
 
+/// Adopt an authoritative snapshot into the local runtime without
+/// stepping: input fields stay local (they feed the next ClientInput),
+/// server-owned fields are overwritten, display derivations recomputed.
+fn adopt_snapshot(
+    runtime: &mut PilotFlightRuntime,
+    ephemeris: &BakedEphemeris,
+    mode: ControlMode,
+    snapshot: &Snapshot,
+) {
+    runtime.state = snapshot.state;
+    runtime.flight_time_s = snapshot.flight_time_s;
+    runtime.world_tick = WorldTick(snapshot.tick);
+    runtime.accumulator_s = 0.0;
+    runtime.throttle = snapshot.throttle;
+    runtime.engine_active = snapshot.engine_active;
+    runtime.steps_this_frame = snapshot.steps_this_frame;
+    runtime.rails_advanced_this_frame = snapshot.rails_advanced_s;
+    runtime.wake_notice = snapshot.wake_notice.clone();
+    runtime.flight_error = snapshot.flight_error.clone();
+    let time = SimTime(snapshot.flight_time_s);
+    let Ok(body_state) = ephemeris.body_state(runtime.reference_body, time) else {
+        return;
+    };
+    runtime.relative_position_m = runtime.state.position_inertial_m - body_state.position_inertial;
+    runtime.regime = match runtime
+        .atmosphere
+        .sample((runtime.relative_position_m.length() - runtime.planet_radius_m).max(0.0))
+    {
+        Ok(sample) if sample.density_kg_m3 < COAST_DENSITY_KG_M3 => FlightRegime::Coast,
+        _ => FlightRegime::Aero,
+    };
+    if let Ok((gravity, forces)) = runtime.display_loads(ephemeris, time, mode) {
+        runtime.last_gravity_acceleration_inertial_mps2 = gravity;
+        runtime.last_forces = Some(forces);
+    }
+    runtime.sync_view();
+}
+
 fn simulate_pilot_flight(
     time: Res<Time>,
     mut clock: ResMut<SimulationClock>,
@@ -688,11 +727,50 @@ fn simulate_pilot_flight(
     state: Res<PilotHudState>,
     mut runtime: ResMut<PilotFlightRuntime>,
     mut perf: ResMut<crate::perf::PerfMonitor>,
+    link: Option<Res<crate::embedded::EmbeddedLink>>,
 ) {
     runtime.steps_this_frame = 0;
     runtime.rails_advanced_this_frame = 0.0;
     clock.sim_seconds = runtime.flight_time_s;
     clock.tick = runtime.world_tick;
+    if let Some(link) = link.as_deref() {
+        // Embedded mode: the server steps; this frame only ferries the
+        // live input buffer down and adopts the newest snapshot. Pause
+        // and error states live server-side, so neither early-returns
+        // below may skip adoption.
+        let target = runtime.sas_target_orientation;
+        link.send_input(&ClientInput {
+            tick: runtime.world_tick.0,
+            control_input: runtime.control_input.to_array(),
+            control_mode: state.control_mode,
+            sas_target_xyzw: [target.x, target.y, target.z, target.w],
+            throttle: runtime.throttle,
+            engine_active: runtime.engine_active,
+            sas_enabled: runtime.sas_enabled,
+            rcs_enabled: runtime.rcs_enabled,
+            gear_down: runtime.gear_down,
+            commands: vec![
+                Command::SetWarp {
+                    factor: clock.multiplier,
+                },
+                Command::Pause {
+                    paused: clock.paused,
+                },
+            ],
+        });
+        if let Some(snapshot) = link.latest_snapshot() {
+            adopt_snapshot(
+                &mut runtime,
+                &ephemeris.ephemeris,
+                state.control_mode,
+                &snapshot,
+            );
+        }
+        runtime.sync_view();
+        clock.sim_seconds = runtime.flight_time_s;
+        clock.tick = runtime.world_tick;
+        return;
+    }
     if clock.paused {
         return;
     }

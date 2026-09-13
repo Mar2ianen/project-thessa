@@ -1,4 +1,5 @@
 mod atmosphere;
+mod embedded;
 mod map_ui;
 mod navigation;
 mod orbits;
@@ -375,6 +376,17 @@ fn setup(
         )));
     commands.insert_resource(RuntimeEphemeris { ephemeris });
     commands.insert_resource(flight_runtime);
+    if std::env::args().any(|arg| arg == "--embedded") {
+        match embedded::EmbeddedLink::spawn(std::time::Duration::from_secs(15)) {
+            Ok(link) => {
+                eprintln!("[client] embedded server linked; flight steps remotely");
+                commands.insert_resource(link);
+            }
+            Err(error) => {
+                eprintln!("[client] embedded server unavailable ({error}); local simulation");
+            }
+        }
+    }
     spawn_hud(&mut commands);
 }
 

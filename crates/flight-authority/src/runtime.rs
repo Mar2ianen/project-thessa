@@ -475,6 +475,59 @@ impl FlightAuthority {
             0.0
         }
     }
+
+    /// Display-only load evaluation for embedded clients: replicates the
+    /// force path of [`step`](Self::step) at adopted snapshot state without
+    /// advancing the clock. The SAS target is saved and restored around the
+    /// control allocation because capture-on-manual-input must only fire on
+    /// the authority that owns the input stream.
+    pub fn display_loads(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        time: SimTime,
+        mode: ControlMode,
+    ) -> Result<(DVec3, FlightForces), FlightError> {
+        let body_state = ephemeris
+            .body_state(self.reference_body, time)
+            .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+        let kinematics = local_air_kinematics(
+            self.atmosphere,
+            self.state,
+            body_state,
+            self.planet_radius_m,
+        )?;
+        let density_kg_m3 = self
+            .atmosphere
+            .sample(kinematics.altitude_m.max(0.0))
+            .map(|sample| sample.density_kg_m3)
+            .unwrap_or(f64::INFINITY);
+        let gravity = thessa_sim_core::GravityField::from_ephemeris(ephemeris)
+            .acceleration(self.state.position_inertial_m, time)
+            .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+        let saved_target = self.sas_target_orientation;
+        let jet_moment = self.allocate_controls(kinematics, mode);
+        self.sas_target_orientation = saved_target;
+        let jet_moment = jet_moment?;
+        let skip_aero = density_kg_m3 == 0.0;
+        let forces = evaluate_flight_forces(
+            &self.aero_model,
+            &self.vehicle.aero_geometry,
+            self.atmosphere,
+            self.state,
+            self.vehicle.mass_properties,
+            FlightStepInput {
+                altitude_m: kinematics.altitude_m.max(0.0),
+                gravity_acceleration_inertial_mps2: gravity,
+                position_body_m: kinematics.relative_position_body_m,
+                wind_velocity_body_mps: self.state.orientation_body_to_inertial.inverse()
+                    * body_state.velocity_inertial,
+                extra_force_body_n: DVec3::X * self.thrust_n(),
+                extra_moment_body_nm: jet_moment,
+                skip_aero,
+            },
+        )?;
+        Ok((gravity, forces))
+    }
 }
 
 fn x15_vehicle() -> Result<VehicleDefinition, String> {

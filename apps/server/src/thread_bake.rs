@@ -20,7 +20,10 @@ impl ThreadBakeQueue {
     fn take_finished(&mut self) -> Option<Result<BakedRails, String>> {
         let job = self.job.take()?;
         if job.is_finished() {
-            Some(job.join().unwrap_or_else(|_| Err("bake thread panicked".into())))
+            Some(
+                job.join()
+                    .unwrap_or_else(|_| Err("bake thread panicked".into())),
+            )
         } else {
             self.job = Some(job);
             None

@@ -5322,6 +5322,7 @@ dependencies = [
  "serde",
  "thessa-atmosphere",
  "thessa-flight-authority",
+ "thessa-flight-net",
  "thessa-graphics",
  "thessa-perf",
  "thessa-protocol",

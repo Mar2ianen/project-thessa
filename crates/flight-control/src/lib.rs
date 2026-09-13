@@ -232,6 +232,7 @@ pub struct SpacecraftControlLaw {
     pub attitude_response_s: f64,
     pub translation_response_s: f64,
     pub max_rate_rps: Option<f64>,
+    pub max_translation_force_n: f64,
 }
 
 impl Default for SpacecraftControlLaw {
@@ -240,6 +241,7 @@ impl Default for SpacecraftControlLaw {
             attitude_response_s: 0.35,
             translation_response_s: 0.5,
             max_rate_rps: None,
+            max_translation_force_n: 800.0,
         }
     }
 }
@@ -279,14 +281,21 @@ impl SpacecraftControlLaw {
     ) -> Result<ControlDemand, ControlError> {
         state.validate()?;
         intent.validate()?;
-        if !self.attitude_response_s.is_finite() || self.attitude_response_s <= 0.0 {
+        if !self.attitude_response_s.is_finite()
+            || self.attitude_response_s <= 0.0
+            || !self.translation_response_s.is_finite()
+            || self.translation_response_s <= 0.0
+            || !self.max_translation_force_n.is_finite()
+            || self.max_translation_force_n < 0.0
+        {
             return Err(ControlError::InvalidController);
         }
-        let desired_rate = match intent {
-            GuidanceIntent::ManualAxes(axes) => {
-                DVec3::new(axes.roll, -axes.pitch, -axes.yaw) * 0.16
-            }
-            GuidanceIntent::AngularRate { rate_body_rps } => *rate_body_rps,
+        let (desired_rate, force_body_n) = match intent {
+            GuidanceIntent::ManualAxes(axes) => (
+                DVec3::new(axes.roll, -axes.pitch, -axes.yaw) * 0.16,
+                axes.translation * self.max_translation_force_n,
+            ),
+            GuidanceIntent::AngularRate { rate_body_rps } => (*rate_body_rps, DVec3::ZERO),
             GuidanceIntent::Attitude {
                 target_body_to_inertial,
                 ..
@@ -303,7 +312,7 @@ impl SpacecraftControlLaw {
                     }
                     rate = rate.clamp_length_max(max_rate);
                 }
-                rate
+                (rate, DVec3::ZERO)
             }
             _ => return Err(ControlError::UnsupportedIntent),
         };
@@ -314,7 +323,7 @@ impl SpacecraftControlLaw {
         let moment = state.inertia_body_kg_m2 * ((desired_rate - omega) / self.attitude_response_s)
             + omega.cross(state.inertia_body_kg_m2 * omega);
         Ok(ControlDemand {
-            force_body_n: DVec3::ZERO,
+            force_body_n,
             moment_body_nm: moment,
             propulsion,
         })
@@ -615,5 +624,24 @@ mod tests {
             .unwrap();
         assert_eq!(demand.force_body_n, DVec3::ZERO);
         assert_eq!(demand.moment_body_nm, DVec3::X * (2.0 / 0.35));
+    }
+
+    #[test]
+    fn spacecraft_controller_maps_manual_translation_to_body_force() {
+        let demand = SpacecraftControlLaw::default()
+            .control_demand(
+                AttitudeState {
+                    orientation_body_to_inertial: DQuat::IDENTITY,
+                    angular_velocity_body_rps: DVec3::ZERO,
+                    inertia_body_kg_m2: DMat3::from_diagonal(DVec3::splat(2.0)),
+                },
+                &GuidanceIntent::ManualAxes(PilotAxes {
+                    translation: DVec3::new(0.5, -1.0, 0.25),
+                    ..PilotAxes::default()
+                }),
+                PropulsionDemand::new(0.0).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(demand.force_body_n, DVec3::new(400.0, -800.0, 200.0));
     }
 }

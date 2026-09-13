@@ -17,6 +17,7 @@ use std::{
 use glam::{DMat3, DQuat, DVec3};
 use thessa_flight_control::{
     ControlDemand, DirectionFrame, DirectionTarget, GuidanceIntent, PropulsionDemand, RollPolicy,
+    SpacecraftControlLaw,
 };
 use thessa_sim_core::{
     AeroConfig, AeroModel, AeroSimdScratch, AeroState, AtmosphereConfig, AtmosphereError,
@@ -879,7 +880,17 @@ impl FlightAuthority {
             ));
         }
         self.throttle = propulsion.normalized;
-        self.advance_with_budget(ephemeris, mode, elapsed_s, budget)
+        let translation_force = match intent {
+            GuidanceIntent::ManualAxes(axes) => {
+                axes.translation * SpacecraftControlLaw::default().max_translation_force_n
+            }
+            _ => DVec3::ZERO,
+        };
+        self.explicit_force_demand_body_n =
+            (translation_force.length_squared() > 1.0e-24).then_some(translation_force);
+        let result = self.advance_with_budget(ephemeris, mode, elapsed_s, budget);
+        self.explicit_force_demand_body_n = None;
+        result
     }
 
     /// Advance a declarative wrench through the native actuator path. The

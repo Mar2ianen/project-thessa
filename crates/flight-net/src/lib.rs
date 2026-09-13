@@ -6,7 +6,7 @@
 //! `thessa-protocol`; this crate only owns the game payload registry.
 
 use serde::{Deserialize, Serialize};
-use thessa_protocol::{CodecError, Envelope, FrameDecoder, kind};
+use thessa_protocol::{CodecError, Envelope, kind};
 use thessa_sim_core::RigidBodyState;
 
 /// Client handshake: version check happens on [`Envelope`], this carries

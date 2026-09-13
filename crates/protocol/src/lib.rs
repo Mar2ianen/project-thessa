@@ -122,9 +122,12 @@ impl FrameDecoder {
             if self.buffer.len() < 4 {
                 break;
             }
-            let declared =
-                u32::from_le_bytes([self.buffer[0], self.buffer[1], self.buffer[2], self.buffer[3]])
-                    as usize;
+            let declared = u32::from_le_bytes([
+                self.buffer[0],
+                self.buffer[1],
+                self.buffer[2],
+                self.buffer[3],
+            ]) as usize;
             if declared > MAX_FRAME_BYTES {
                 return Err(CodecError::FrameTooLarge { declared });
             }
@@ -189,7 +192,10 @@ mod tests {
         }
         assert_eq!(decoder.pending_bytes(), 0);
         assert_eq!(got.len(), 2);
-        assert_eq!(decode_envelope(&got[0]).expect("env").kind, kind::CLIENT_INPUT);
+        assert_eq!(
+            decode_envelope(&got[0]).expect("env").kind,
+            kind::CLIENT_INPUT
+        );
         assert_eq!(decode_envelope(&got[1]).expect("env").kind, kind::COMMAND);
     }
 

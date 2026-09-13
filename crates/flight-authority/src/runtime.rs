@@ -1,13 +1,36 @@
-//! Flight assist requests moments, but only surfaces and finite RCS force
-//! couples deliver them. No controller torque is added directly to the body.
-use super::*;
-use bevy::math::DMat3;
-use thessa_sim_core::{
-    AeroModel, AeroState, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_VELOCITY_TOL_MPS,
-    TestParticleState, TickIntegratorConfig, evaluate_flight_forces, integrate_attitude_step,
+//! Authoritative flight runtime: input conditioning, regime selection,
+//! the fixed-step advance loop and rails-bake orchestration.
+//!
+//! Moved verbatim from the client (which keeps only rendering, input
+//! mapping and telemetry wiring). The only adaptations are mechanical:
+//! Bevy types replaced by glam, the rails-bake worker behind [`BakeQueue`],
+//! and render-view fields dropped (the client syncs its view after each
+//! advance; stepping never reads them).
+
+use std::{
+    f32::consts::TAU,
+    fs::{File, create_dir_all},
+    io::{BufWriter, Write},
+    path::Path,
+    sync::Arc,
 };
 
-pub(super) const FLIGHT_STEP_S: f64 = thessa_sim_core::WORLD_TICK_S;
+use glam::{DMat3, DQuat, DVec3};
+use thessa_sim_core::{
+    AeroConfig, AeroModel, AeroState, AtmosphereConfig, AtmosphereError, BakedEphemeris, BodyId,
+    BodyState, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_VELOCITY_TOL_MPS, EventScheduler,
+    FlightError, FlightForces, FlightStepInput, GravityField, OnRailsCache, PanelAeroModel,
+    RigidBodyState, ScheduledKind, SimTime, TestParticleState, TickIntegratorConfig,
+    VehicleDefinition, WORLD_TICK_S, X15StarterProfile, evaluate_flight_forces,
+    integrate_attitude_step,
+};
+use thessa_worldgen_rocky::field::PlanetField;
+
+use crate::{BakeQueue, BakedRails, ControlMode, FlightRegime, InlineBakeQueue, RailsBakeRequest};
+
+/// Advance the exact production flight path at a fixed physics cadence.
+/// Render frames only contribute elapsed time; they never set solver dt.
+pub const FLIGHT_STEP_S: f64 = WORLD_TICK_S;
 /// Baked coverage ahead (s) below which a fresh worker bake starts while
 /// riding, so sustained warp never stalls at the horizon end.
 const PROACTIVE_REBAKE_AHEAD_S: f64 = 86_400.0;
@@ -17,7 +40,448 @@ const SURFACE_COMMAND_RATE_S: f64 = 2.4; // 60 deg/s for the 25-degree elevator
 /// surface-response matrix becomes ill-conditioned; RCS handles attitude.
 /// The flight solver still evaluates residual aero loads at every nonzero
 /// density (q grows with speed squared even above this threshold).
-pub(super) const COAST_DENSITY_KG_M3: f64 = 1.0e-7;
+pub const COAST_DENSITY_KG_M3: f64 = 1.0e-7;
+
+pub const X15_STALL_ANGLE_DEG: f64 = 22.0;
+const PILOT_SURFACE_CLEARANCE_M: f64 = 5.0;
+const PILOT_START_ALTITUDE_M: f64 = 500.0;
+// Solver guard rail, not physics: interlunar transfers range billions of
+// metres from the reference body, so the cap covers the whole Nereid system
+// plus escape margin. Tripping it still latches FLIGHT STOPPED.
+const MAX_PILOT_ALTITUDE_M: f64 = 2.0e10;
+const MAX_PILOT_RELATIVE_SPEED_MPS: f64 = 50_000.0;
+const MAX_PILOT_ANGULAR_RATE_RPS: f64 = 25.0;
+// KSP-style attitude keys change the SAS target at a pilotable rate.
+const PILOT_ATTITUDE_COMMAND_RATE_RAD_S: f64 = 0.16;
+
+#[derive(Debug, Clone, Copy)]
+pub struct LocalAirKinematics {
+    pub relative_position_inertial_m: DVec3,
+    pub relative_position_body_m: DVec3,
+    pub relative_velocity_inertial_mps: DVec3,
+    pub air_velocity_body_mps: DVec3,
+    pub surface_velocity_inertial_mps: DVec3,
+    pub radial_up: DVec3,
+    pub altitude_m: f64,
+}
+
+/// Sample all local flight kinematics from one rigid-body state and one
+/// ephemeris body state. The rotating atmosphere vector is converted into the
+/// vehicle frame by sim-core; callers must not cross a body-frame position with
+/// an inertial-frame angular velocity directly.
+pub fn local_air_kinematics(
+    atmosphere: AtmosphereConfig,
+    state: RigidBodyState,
+    body_state: BodyState,
+    body_radius_m: f64,
+) -> Result<LocalAirKinematics, AtmosphereError> {
+    let relative_position_inertial_m = state.position_inertial_m - body_state.position_inertial;
+    let radial_up = relative_position_inertial_m
+        .try_normalize()
+        .unwrap_or(DVec3::Z);
+    let orientation_inverse = state.orientation_body_to_inertial.inverse();
+    let relative_position_body_m = orientation_inverse * relative_position_inertial_m;
+    let relative_velocity_inertial_mps = state.velocity_inertial_mps - body_state.velocity_inertial;
+    let relative_velocity_body_mps = orientation_inverse * relative_velocity_inertial_mps;
+    let rotating_air_velocity_body_mps = atmosphere.rotating_air_velocity_body_mps(
+        relative_position_body_m,
+        state.orientation_body_to_inertial,
+    )?;
+    let air_velocity_body_mps = relative_velocity_body_mps - rotating_air_velocity_body_mps;
+    let surface_velocity_inertial_mps = relative_velocity_inertial_mps
+        - state.orientation_body_to_inertial * rotating_air_velocity_body_mps;
+    let altitude_m = relative_position_inertial_m.length() - body_radius_m;
+    Ok(LocalAirKinematics {
+        relative_position_inertial_m,
+        relative_position_body_m,
+        relative_velocity_inertial_mps,
+        air_velocity_body_mps,
+        surface_velocity_inertial_mps,
+        radial_up,
+        altitude_m,
+    })
+}
+
+/// Low-overhead CSV recorder for reproducing bad live-flight states outside
+/// the renderer. It is enabled only by the executable; unit tests remain
+pub struct FlightTraceWriter {
+    writer: BufWriter<File>,
+    samples_since_flush: u32,
+}
+
+impl FlightTraceWriter {
+    fn create(path: &Path) -> Option<Self> {
+        if let Some(parent) = path.parent() {
+            create_dir_all(parent).ok()?;
+        }
+        let file = File::create(path).ok()?;
+        let mut writer = BufWriter::new(file);
+        writeln!(
+            writer,
+            "t_s,altitude_m,relative_speed_mps,vertical_speed_mps,mach,aoa_deg,q_pa,\
+             pos_x_m,pos_y_m,pos_z_m,vel_x_mps,vel_y_mps,vel_z_mps,\
+             quat_x,quat_y,quat_z,quat_w,omega_x_rps,omega_y_rps,omega_z_rps,\
+             pitch_cmd,yaw_cmd,roll_cmd,throttle,engine,sas,rcs,\
+             force_x_n,force_y_n,force_z_n,moment_x_nm,moment_y_nm,moment_z_nm,\
+             accel_x_mps2,accel_y_mps2,accel_z_mps2,control_mode,surface_pitch,surface_yaw,surface_roll,actuator_saturated,target_quat_x,target_quat_y,target_quat_z,target_quat_w"
+        )
+        .ok()?;
+        Some(Self {
+            writer,
+            samples_since_flush: 0,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record(
+        &mut self,
+        time_s: f64,
+        altitude_m: f64,
+        relative_velocity_inertial_mps: DVec3,
+        radial_up: DVec3,
+        air_velocity_body_mps: DVec3,
+        state: RigidBodyState,
+        controls: DVec3,
+        throttle: f64,
+        engine_active: bool,
+        sas_enabled: bool,
+        rcs_enabled: bool,
+        forces: &FlightForces,
+        mode: ControlMode,
+        surfaces: DVec3,
+        saturated: bool,
+        target: DQuat,
+    ) {
+        let aoa_deg = conventional_angle_of_attack_deg(air_velocity_body_mps);
+        let vertical_speed_mps = relative_velocity_inertial_mps.dot(radial_up);
+        let q = forces.aero.dynamic_pressure_pa;
+        let p = state.position_inertial_m;
+        let v = state.velocity_inertial_mps;
+        let qrot = state.orientation_body_to_inertial;
+        let omega = state.angular_velocity_body_rps;
+        let force = forces.total_force_body_n;
+        let moment = forces.total_moment_body_nm;
+        let accel = forces.acceleration_inertial_mps2;
+        let _ = writeln!(
+            self.writer,
+            "{time_s:.6},{altitude_m:.6},{:.6},{vertical_speed_mps:.6},{:.6},{aoa_deg:.6},{q:.6},\
+             {:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.9},{:.9},{:.9},{:.9},\
+             {:.9},{:.9},{:.9},{:.6},{:.6},{:.6},{throttle:.6},{},{},{},\
+             {:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{:.6},{:.6},{:.6},{},{:.9},{:.9},{:.9},{:.9}",
+            relative_velocity_inertial_mps.length(),
+            forces.aero.mach,
+            p.x,
+            p.y,
+            p.z,
+            v.x,
+            v.y,
+            v.z,
+            qrot.x,
+            qrot.y,
+            qrot.z,
+            qrot.w,
+            omega.x,
+            omega.y,
+            omega.z,
+            controls.x,
+            controls.y,
+            controls.z,
+            engine_active as u8,
+            sas_enabled as u8,
+            rcs_enabled as u8,
+            force.x,
+            force.y,
+            force.z,
+            moment.x,
+            moment.y,
+            moment.z,
+            accel.x,
+            accel.y,
+            accel.z,
+            mode.label(),
+            surfaces.x,
+            surfaces.y,
+            surfaces.z,
+            saturated as u8,
+            target.x,
+            target.y,
+            target.z,
+            target.w,
+        );
+        self.samples_since_flush += 1;
+        if self.samples_since_flush >= 30 {
+            let _ = self.writer.flush();
+            self.samples_since_flush = 0;
+        }
+    }
+}
+
+pub fn conventional_angle_of_attack_deg(air_velocity_body: DVec3) -> f64 {
+    // The reusable aero contract stores +Z as up and defines its coefficient
+    // alpha from the velocity vector. Pilot HUDs conventionally report
+    // positive AoA when the nose is above the velocity vector, hence -w/u.
+    (-air_velocity_body.z)
+        .atan2(air_velocity_body.x)
+        .to_degrees()
+}
+
+/// Authoritative flight model for the first playable vehicle.
+///
+/// The authoritative equations stay in `thessa-sim-core`; this runtime only
+/// supplies game input, the X-15 asset and a telemetry bridge. Fuel is
+/// intentionally infinite for this slice, while staging still controls the
+/// engine. Render-view state lives client-side; stepping never reads it.
+pub struct FlightAuthority {
+    pub reference_body: BodyId,
+    pub planet_radius_m: f64,
+    pub terrain_field: Option<Arc<PlanetField>>,
+    pub launch_site_dir: Option<[f64; 3]>,
+    pub vehicle: VehicleDefinition,
+    pub aero_model: PanelAeroModel,
+    pub atmosphere: AtmosphereConfig,
+    pub state: RigidBodyState,
+    pub sas_target_orientation: DQuat,
+    pub relative_position_m: DVec3,
+    pub flight_time_s: f64,
+    pub world_tick: thessa_sim_core::WorldTick,
+    pub throttle: f64,
+    pub engine_active: bool,
+    pub sas_enabled: bool,
+    pub rcs_enabled: bool,
+    pub gear_down: bool,
+    /// Manual body-axis command: pitch, yaw, roll in normalized units.
+    pub control_input: DVec3,
+    pub surface_input: DVec3,
+    pub actuator_saturated: bool,
+    pub regime: FlightRegime,
+    pub accumulator_s: f64,
+    pub steps_this_frame: u32,
+    pub rails_advanced_this_frame: f64,
+    pub flight_error: Option<String>,
+    pub last_gravity_acceleration_inertial_mps2: DVec3,
+    pub last_forces: Option<FlightForces>,
+    pub trace: Option<FlightTraceWriter>,
+    /// The single baked coast trajectory. In an unpowered vacuum coast the
+    /// flight loop samples translation from here (no per-tick integration)
+    /// and the map prediction draws from the same path — one trajectory,
+    /// two consumers. Any thrust, aero load, burn or contact invalidates it.
+    pub rails: OnRailsCache,
+    pub bake: Box<dyn BakeQueue>,
+    pub rails_bake_seconds: Option<f64>,
+    /// Simulation-time event queue: the rails bake arms its wake here, and
+    /// `advance` drains due events instead of polling them every tick.
+    pub scheduler: EventScheduler,
+    /// Last fired wake, for the HUD orbit line.
+    pub wake_notice: Option<String>,
+}
+
+impl FlightAuthority {
+    pub fn initialize_world_site(
+        &mut self,
+        field: Arc<PlanetField>,
+        dir: [f64; 3],
+        ephemeris: &BakedEphemeris,
+    ) {
+        let up = DQuat::from_rotation_z(self.terrain_spin()) * DVec3::new(dir[0], -dir[2], dir[1]);
+        let north = (DVec3::Z - up * up.z).normalize();
+        let east = north.cross(up).normalize();
+        let relative = up * (self.planet_radius_m + field.height_m(dir, 32.0).max(0.0) + 500.0);
+        let body = ephemeris
+            .body_state(self.reference_body, SimTime(self.flight_time_s))
+            .expect("launch body");
+        self.state.position_inertial_m = body.position_inertial + relative;
+        self.state.velocity_inertial_mps = body.velocity_inertial
+            + self.atmosphere.body_rotation_rad_s.cross(relative)
+            + east * 180.0
+            - up * 2.0;
+        self.state.orientation_body_to_inertial =
+            DQuat::from_mat3(&DMat3::from_cols(east, north, up))
+                * DQuat::from_rotation_y(-8.0_f64.to_radians());
+        self.sas_target_orientation = self.state.orientation_body_to_inertial;
+        self.relative_position_m = relative;
+        self.terrain_field = Some(field);
+        self.launch_site_dir = Some(dir);
+        self.rails.invalidate();
+        self.bake.reset();
+    }
+    /// Recover from a stopped flight without restarting the app: rebuild the
+    /// launch-site state in place. Clock time is preserved (no rewind);
+    /// controls clear and the engine comes back armed at zero throttle.
+    pub fn reset_to_launch_site(&mut self, ephemeris: &BakedEphemeris) -> Result<(), String> {
+        let field = self
+            .terrain_field
+            .clone()
+            .ok_or("no terrain field for reset")?;
+        let dir = self.launch_site_dir.ok_or("no launch site for reset")?;
+        self.flight_error = None;
+        self.engine_active = true;
+        self.throttle = 0.0;
+        self.control_input = DVec3::ZERO;
+        self.surface_input = DVec3::ZERO;
+        self.regime = FlightRegime::Aero;
+        self.accumulator_s = 0.0;
+        self.rails.invalidate();
+        self.bake.reset();
+        self.scheduler = EventScheduler::new();
+        self.wake_notice = None;
+        self.initialize_world_site(field, dir, ephemeris);
+        Ok(())
+    }
+    pub fn terrain_origin(&self) -> [f64; 3] {
+        let p = self.relative_position_m;
+        [p.x, p.z, -p.y]
+    }
+    /// Authoritative inertial craft state for orbit prediction and HUD.
+    pub fn inertial_state_m(&self) -> (DVec3, DVec3) {
+        (
+            self.state.position_inertial_m,
+            self.state.velocity_inertial_mps,
+        )
+    }
+    pub fn terrain_spin(&self) -> f64 {
+        self.flight_time_s * std::f64::consts::TAU / (80.0 * 3600.0)
+    }
+    pub fn stop_reason(&self) -> Option<&str> {
+        self.flight_error.as_deref()
+    }
+
+    pub fn backlog_s(&self) -> f64 {
+        self.accumulator_s
+    }
+    pub fn regime(&self) -> FlightRegime {
+        self.regime
+    }
+    pub fn panel_count(&self) -> u32 {
+        self.vehicle.aero_geometry.panels.len() as u32
+    }
+
+    pub fn new(ephemeris: &BakedEphemeris, reference_body: BodyId) -> Result<Self, String> {
+        let body = ephemeris
+            .body(reference_body)
+            .map_err(|error| format!("reference body is unavailable: {error}"))?;
+        let body_state = ephemeris
+            .body_state(reference_body, SimTime::EPOCH)
+            .map_err(|error| format!("reference body state is unavailable: {error}"))?;
+        let gravity = body.mu / body.radius_m.powi(2);
+        let mut atmosphere = AtmosphereConfig::new(288.15, 120_000.0, 287.05287, 1.4, gravity)
+            .map_err(|error| format!("Thessa atmosphere is invalid: {error}"))?;
+        atmosphere.body_rotation_rad_s = DVec3::new(0.0, 0.0, TAU as f64 / (80.0 * 3_600.0));
+
+        // Start just above the playable body's spherical datum. Give the X-15
+        // a small nose-up launch attitude so its live engine start has a
+        // physically meaningful positive angle of attack.
+        let initial_relative_position = DVec3::Z * (body.radius_m + PILOT_START_ALTITUDE_M);
+        let initial_position_inertial_m = body_state.position_inertial + initial_relative_position;
+        let orientation_body_to_inertial = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2)
+            * DQuat::from_rotation_y(-8.0_f64.to_radians());
+        let state = RigidBodyState::new(
+            initial_position_inertial_m,
+            // The ephemeris velocity is the planet's barycentric translation.
+            // Add only the local tangential launch velocity here. A small
+            // launch component gives the powered test start enough clearance
+            // without hiding the aerodynamic response behind a large impulse.
+            body_state.velocity_inertial + DVec3::Y * 180.0 - DVec3::Z * 2.0,
+            orientation_body_to_inertial,
+            DVec3::ZERO,
+        )
+        .map_err(|error| format!("X-15 initial state is invalid: {error}"))?;
+        let vehicle = x15_vehicle()?;
+        let aero_model = PanelAeroModel::new(AeroConfig {
+            lift_slope_per_rad: 4.6,
+            control_effectiveness: 0.82,
+            stall_angle_rad: X15_STALL_ANGLE_DEG.to_radians(),
+            max_lift_coefficient: 1.45,
+            base_drag_coefficient: 0.032,
+            induced_drag_factor: 0.075,
+            wave_drag_coefficient: 0.22,
+            side_force_slope_per_rad: 1.10,
+            // The X-15 mesh is a visual reference, not a trimmed wind-tunnel
+            // polar. Keep the zero-input preview trimmed; restoring and
+            // damping moments still come from the actual panel geometry.
+            pitching_moment_coefficient: 0.0,
+            roll_damping_coefficient: -3.0,
+            pitch_damping_coefficient: -4.0,
+            yaw_damping_coefficient: -3.0,
+            supersonic_lift_slope_factor: 4.0,
+            supersonic_wave_drag_factor: 1.15,
+            ..AeroConfig::default()
+        })
+        .map_err(|error| format!("X-15 aero model is invalid: {error}"))?;
+
+        Ok(Self {
+            reference_body,
+            planet_radius_m: body.radius_m,
+            terrain_field: None,
+            launch_site_dir: None,
+            vehicle,
+            aero_model,
+            atmosphere,
+            state,
+            sas_target_orientation: orientation_body_to_inertial,
+            relative_position_m: initial_relative_position,
+            flight_time_s: 0.0,
+            world_tick: thessa_sim_core::WorldTick::default(),
+            throttle: 1.0,
+            engine_active: true,
+            sas_enabled: true,
+            rcs_enabled: true,
+            gear_down: true,
+            control_input: DVec3::ZERO,
+            surface_input: DVec3::ZERO,
+            actuator_saturated: false,
+            regime: FlightRegime::Aero,
+            accumulator_s: 0.0,
+            steps_this_frame: 0,
+            rails_advanced_this_frame: 0.0,
+            flight_error: None,
+            last_gravity_acceleration_inertial_mps2: DVec3::ZERO,
+            last_forces: None,
+            trace: None,
+            rails: OnRailsCache::new(),
+            bake: Box::new(InlineBakeQueue::new()),
+            rails_bake_seconds: None,
+            scheduler: EventScheduler::new(),
+            wake_notice: None,
+        })
+    }
+
+    pub fn with_trace(mut self, path: &Path) -> Self {
+        self.trace = FlightTraceWriter::create(path);
+        self
+    }
+
+    /// Swap the rails-bake worker (Bevy pool in the client, threads on the
+    /// server). The default inline queue bakes synchronously for tests.
+    pub fn with_bake_queue(mut self, bake: Box<dyn BakeQueue>) -> Self {
+        self.bake = bake;
+        self
+    }
+
+    pub fn command_controls(&mut self, pitch: f64, yaw: f64, roll: f64) {
+        // Elevator, rudder, left aileron, right aileron. The split ailerons
+        // preserve roll authority without assigning a panel to two channels.
+        let _ = self
+            .vehicle
+            // Body +X forward, +Z up implies physical right = -Y.
+            // r x F: aft-tail downforce raises the nose (-Y); downforce
+            // at -Y rolls right (+X); aft-tail +Y force yaws right (-Z).
+            .apply_control_inputs(&[-pitch, yaw, -roll, roll]);
+    }
+
+    pub fn thrust_n(&self) -> f64 {
+        if self.engine_active {
+            self.throttle * 254_000.0
+        } else {
+            0.0
+        }
+    }
+}
+
+fn x15_vehicle() -> Result<VehicleDefinition, String> {
+    X15StarterProfile::new()
+        .map(|profile| profile.vehicle)
+        .map_err(|error| error.to_string())
+}
 
 fn body_axes(command: DVec3) -> DVec3 {
     DVec3::new(command.z, -command.x, -command.y)
@@ -42,11 +506,10 @@ fn rcs_moment(request: DVec3, enabled: bool) -> DVec3 {
     })
 }
 
-impl PilotFlightRuntime {
+impl FlightAuthority {
     /// Advance the exact production flight path at a fixed physics cadence.
     /// Render frames only contribute elapsed time; they never set solver dt.
-    #[cfg(test)]
-    pub(super) fn advance(
+    pub fn advance(
         &mut self,
         ephemeris: &BakedEphemeris,
         mode: ControlMode,
@@ -83,7 +546,7 @@ impl PilotFlightRuntime {
         Ok(())
     }
 
-    pub(super) fn advance_with_budget(
+    pub fn advance_with_budget(
         &mut self,
         ephemeris: &BakedEphemeris,
         mode: ControlMode,
@@ -282,7 +745,7 @@ impl PilotFlightRuntime {
         // ahead drops under a day, start a fresh full-horizon worker bake
         // now so high warp never stalls on a synchronous rebake at the
         // horizon end. One job at most; the swap path validates on arrival.
-        if self.rails_job.is_none()
+        if !self.bake.has_pending()
             && let Some(covered) = self.rails.covered_until()
             && covered.0 - time.0 < PROACTIVE_REBAKE_AHEAD_S
         {
@@ -370,8 +833,7 @@ impl PilotFlightRuntime {
         )?);
         self.state = next;
         self.commit_ticks(ticks)?;
-        self.render_relative_position_m = position - next_home.position_inertial;
-        self.render_orientation = render_orientation(orientation);
+        self.relative_position_m = position - next_home.position_inertial;
         Ok(duration)
     }
 
@@ -556,13 +1018,15 @@ impl PilotFlightRuntime {
     /// already running. No-op headless (no pool). The swap path validates
     /// ephemeris/config on arrival, so a bake that goes stale mid-flight
     /// is rejected harmlessly instead of corrupting the cache.
+    /// Request a full-horizon worker bake from the live state unless one is
+    /// already running. The [`BakeQueue`] decides how it runs (Bevy pool in
+    /// the client, thread on the server, inline in tests). The swap path
+    /// validates ephemeris/config on arrival, so a bake that goes stale
+    /// mid-flight is rejected harmlessly instead of corrupting the cache.
     fn spawn_rails_bake(&mut self, ephemeris: &BakedEphemeris) {
-        if self.rails_job.is_some() {
+        if self.bake.has_pending() {
             return;
         }
-        let Some(pool) = bevy::tasks::AsyncComputeTaskPool::try_get() else {
-            return;
-        };
         let initial = TestParticleState {
             position: self.state.position_inertial_m,
             velocity: self.state.velocity_inertial_mps,
@@ -575,56 +1039,58 @@ impl PilotFlightRuntime {
             .filter(|b| b.radius_m > 0.0)
             .map(|b| b.id)
             .collect();
-        let ephemeris = ephemeris.clone();
-        self.rails_job = Some(pool.spawn(async move {
-            let started = std::time::Instant::now();
-            let mut rails = OnRailsCache::new();
-            rails
-                .bake_tick(&ephemeris, initial, time, config, &impact_bodies)
-                .map_err(|e| e.to_string())?;
-            Ok((rails, started.elapsed().as_secs_f64()))
-        }));
+        self.bake.request_bake(RailsBakeRequest {
+            initial,
+            time,
+            config,
+            impact_bodies,
+            ephemeris: ephemeris.clone(),
+        });
     }
 
     /// Poll a finished worker bake, adopting it only after the state/key
     /// check (which also rejects bakes from a pre-edit universe).
+    /// Poll a finished worker bake, adopting it only after the state/key
+    /// check (which also rejects bakes from a pre-edit universe).
     fn poll_rails_bake(&mut self, ephemeris: &BakedEphemeris) {
-        if let Some(task) = self.rails_job.as_mut()
-            && let Some(result) = bevy::tasks::block_on(bevy::tasks::poll_once(task))
-        {
-            self.rails_job = None;
-            if let Ok((rails, seconds)) = result {
-                // A worker started before an ephemeris edit must not replace
-                // the common cache with a trajectory from the old universe.
-                if let Some(path) = rails.path()
-                    && rails.usable_tick_for(
-                        ephemeris,
-                        TestParticleState {
-                            position: path.positions[0],
-                            velocity: path.velocities[0],
-                        },
-                        path.times[0],
-                        TickIntegratorConfig::default(),
-                        &ephemeris
-                            .bodies
-                            .iter()
-                            .filter(|b| b.radius_m > 0.0)
-                            .map(|b| b.id)
-                            .collect::<Vec<_>>(),
-                        0.0,
-                        0.0,
-                    )
-                {
-                    self.rails = rails;
-                    self.rails_bake_seconds = Some(seconds);
-                }
+        let Some(result) = self.bake.poll_bake() else {
+            return;
+        };
+        if let Ok(baked) = result {
+            let BakedRails {
+                rails,
+                bake_seconds: seconds,
+            } = baked;
+            // A worker started before an ephemeris edit must not replace
+            // the common cache with a trajectory from the old universe.
+            if let Some(path) = rails.path()
+                && rails.usable_tick_for(
+                    ephemeris,
+                    TestParticleState {
+                        position: path.positions[0],
+                        velocity: path.velocities[0],
+                    },
+                    path.times[0],
+                    TickIntegratorConfig::default(),
+                    &ephemeris
+                        .bodies
+                        .iter()
+                        .filter(|b| b.radius_m > 0.0)
+                        .map(|b| b.id)
+                        .collect::<Vec<_>>(),
+                    0.0,
+                    0.0,
+                )
+            {
+                self.rails = rails;
+                self.rails_bake_seconds = Some(seconds);
             }
         }
     }
 
     /// Poll/build the common gravity forecast. Reading the map never runs a
     /// second integrator. Flight adopts it only after the state/key check.
-    pub(crate) fn prepare_shared_trajectory(&mut self, ephemeris: &BakedEphemeris) -> bool {
+    pub fn prepare_shared_trajectory(&mut self, ephemeris: &BakedEphemeris) -> bool {
         let initial = TestParticleState {
             position: self.state.position_inertial_m,
             velocity: self.state.velocity_inertial_mps,
@@ -649,14 +1115,9 @@ impl PilotFlightRuntime {
         ) {
             return true;
         }
-        if bevy::tasks::AsyncComputeTaskPool::try_get().is_some() {
-            self.spawn_rails_bake(ephemeris);
-            return false;
-        }
-        // Headless tests have no Bevy worker pool.
-        self.rails
-            .bake_tick(ephemeris, initial, time, config, &impact_bodies)
-            .is_ok()
+        // The queue decides how the bake runs (pool, thread, inline).
+        self.spawn_rails_bake(ephemeris);
+        false
     }
 
     /// Unpowered vacuum coast on the shared baked trajectory. Translation is
@@ -841,22 +1302,21 @@ impl PilotFlightRuntime {
         self.commit_ticks(1)?;
         self.last_gravity_acceleration_inertial_mps2 = gravity;
         self.last_forces = Some(forces);
-        self.render_relative_position_m = next.position_inertial_m - next_body.position_inertial;
-        self.render_orientation = render_orientation(next.orientation_body_to_inertial);
+        self.relative_position_m = next.position_inertial_m - next_body.position_inertial;
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use thessa_sim_core::SystemConfig;
 
-    fn fixture() -> (BakedEphemeris, PilotFlightRuntime) {
+    fn fixture() -> (BakedEphemeris, FlightAuthority) {
         let config: SystemConfig =
-            toml::from_str(include_str!("../../../../data/system.toml")).unwrap();
+            toml::from_str(include_str!("../../../data/system.toml")).unwrap();
         let ephemeris = config.bake().unwrap();
         let runtime =
-            PilotFlightRuntime::new(&ephemeris, ephemeris.body_id("thessa").unwrap()).unwrap();
+            FlightAuthority::new(&ephemeris, ephemeris.body_id("thessa").unwrap()).unwrap();
         (ephemeris, runtime)
     }
 
@@ -965,10 +1425,8 @@ mod tests {
     #[test]
     fn terrain_contact_stops_before_committing_an_underground_pose() {
         let (ephemeris, mut flight) = fixture();
-        let recipe = toml::from_str(include_str!(
-            "../../../../data/worldgen/worldgen_recipe.toml"
-        ))
-        .unwrap();
+        let recipe =
+            toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml")).unwrap();
         let field = std::sync::Arc::new(
             thessa_worldgen_rocky::field::field_from_manifest(
                 &thessa_worldgen_rocky::spec_recipe::manifest_from_spec(&recipe).unwrap(),
@@ -1039,7 +1497,7 @@ mod tests {
     fn recorded_high_rate_flight_continues_past_the_previous_stop() {
         // Live capture, 514.808--581.375 s: restore its first physical state,
         // then replay the pilot inputs (not the recorded resulting forces).
-        let capture = include_str!("../../../../logs/flight-traces/2026-09-09-high-rate-stop.csv");
+        let capture = include_str!("../../../logs/flight-traces/2026-09-09-high-rate-stop.csv");
         let mut lines = capture.lines();
         let columns: Vec<_> = lines.next().unwrap().split(',').collect();
         let column = |name: &str| columns.iter().position(|c| *c == name).unwrap();
@@ -1150,41 +1608,6 @@ mod tests {
             "900 s production path: min altitude {min_alt:.3} m, max AoA {max_aoa:.3} deg, max rate {max_rate:.6} rad/s; two runs {:?}",
             start.elapsed()
         );
-    }
-
-    #[test]
-    fn wasd_moves_the_rendered_nose_in_the_expected_direction() {
-        for (key, right_component, up_component) in [
-            (KeyCode::KeyW, 0.0, -1.0),
-            (KeyCode::KeyS, 0.0, 1.0),
-            (KeyCode::KeyA, -1.0, 0.0),
-            (KeyCode::KeyD, 1.0, 0.0),
-        ] {
-            let (ephemeris, mut flight) = fixture();
-            let (_, mut baseline) = fixture();
-            let initial = flight.state.orientation_body_to_inertial;
-            let forward = pilot_render_offset(initial * DVec3::X);
-            let up = pilot_render_offset(initial * DVec3::Z);
-            let screen_right = forward.cross(up).normalize();
-            let expected = screen_right * right_component + up * up_component;
-            let mut keys = ButtonInput::default();
-            keys.press(key);
-            flight.control_input = keyboard_control_input(&keys);
-            flight
-                .advance(&ephemeris, ControlMode::Navball, 1.0)
-                .unwrap();
-            baseline
-                .advance(&ephemeris, ControlMode::Navball, 1.0)
-                .unwrap();
-            // Follow the real GLB nose (-X) through both render transforms.
-            let nose = flight.render_orientation * x15_asset_to_craft_rotation() * Vec3::NEG_X;
-            let neutral = baseline.render_orientation * x15_asset_to_craft_rotation() * Vec3::NEG_X;
-            let response = (nose - neutral).dot(expected);
-            assert!(
-                response > 0.025,
-                "{key:?} moved the model the wrong way: {response}"
-            );
-        }
     }
 
     #[test]
@@ -1304,7 +1727,7 @@ mod tests {
         }
     }
 
-    fn circular_orbit_fixture(altitude_m: f64) -> (BakedEphemeris, PilotFlightRuntime) {
+    fn circular_orbit_fixture(altitude_m: f64) -> (BakedEphemeris, FlightAuthority) {
         let (ephemeris, mut flight) = fixture();
         let body = ephemeris.body(flight.reference_body).unwrap();
         let origin = ephemeris

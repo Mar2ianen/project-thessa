@@ -14,6 +14,11 @@
 
 pub mod bake;
 pub mod mode;
+pub mod runtime;
 
-pub use bake::BakeQueue;
+pub use bake::{BakeQueue, BakedRails, InlineBakeQueue, RailsBakeRequest};
 pub use mode::{ControlMode, FlightRegime};
+pub use runtime::{
+    FlightAuthority, FlightTraceWriter, LocalAirKinematics, X15_STALL_ANGLE_DEG,
+    conventional_angle_of_attack_deg, local_air_kinematics,
+};

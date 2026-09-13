@@ -5337,6 +5337,8 @@ dependencies = [
  "glam",
  "serde",
  "thessa-sim-core",
+ "thessa-worldgen-rocky",
+ "toml",
 ]
 
 [[package]]

@@ -6,18 +6,26 @@
 //! rejects ambient capabilities before evaluating user code.
 
 use std::{
+    cell::RefCell,
+    collections::BTreeMap,
     error::Error,
     fmt,
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
 };
 
-use rquickjs::{Context, Runtime};
+use rquickjs::{
+    Context, Ctx, Error as JsError, Function, Persistent, Promise, Runtime, prelude::Func,
+};
 use serde::Deserialize;
-use thessa_autopilot::{Bakeability, Diagnostic, TrajectoryPlan, TrajectorySegment, WaitCondition};
+use thessa_autopilot::{
+    Bakeability, Diagnostic, TrajectoryPlan, TrajectorySegment, WaitCondition, WaitId, WaitSet,
+};
 use thessa_flight_control::{DirectionFrame, DirectionTarget, GuidanceIntent, RollPolicy};
+use thessa_sim_core::SimTime;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ScriptLimits {
@@ -44,10 +52,50 @@ pub enum ScriptResult {
     Diagnostic(Diagnostic),
 }
 
+#[derive(Debug)]
+pub struct ScriptContinuation {
+    promise: Persistent<Promise<'static>>,
+    resolver: Persistent<Function<'static>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScriptWait {
+    /// A relative simulation delay. The owning scheduler resolves it against
+    /// the current `SimTime` when the task is started or resumed.
+    After(f64),
+    Condition(WaitCondition),
+}
+
+#[derive(Debug)]
+pub enum ScriptStep {
+    Completed(ScriptResult),
+    Waiting {
+        wait: ScriptWait,
+        continuation: ScriptContinuation,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ScriptTaskId(pub u64);
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScriptSchedulerStep {
+    Completed {
+        task: ScriptTaskId,
+        result: ScriptResult,
+    },
+    Waiting {
+        task: ScriptTaskId,
+        wait: WaitId,
+        condition: WaitCondition,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScriptError {
     InvalidLimits,
     SourceTooLarge { bytes: usize, limit: usize },
+    TaskIdExhausted,
     Runtime(String),
     InvalidReturn(String),
 }
@@ -59,6 +107,7 @@ impl fmt::Display for ScriptError {
             Self::SourceTooLarge { bytes, limit } => {
                 write!(formatter, "script is {bytes} bytes, limit is {limit}")
             }
+            Self::TaskIdExhausted => write!(formatter, "autopilot script task id space exhausted"),
             Self::Runtime(message) => write!(formatter, "QuickJS runtime error: {message}"),
             Self::InvalidReturn(message) => write!(formatter, "invalid script return: {message}"),
         }
@@ -72,6 +121,13 @@ pub struct ScriptEngine {
     context: Context,
     limits: ScriptLimits,
     interrupt_requested: Arc<AtomicBool>,
+    wait_request: Rc<RefCell<Option<PendingWait>>>,
+}
+
+#[derive(Debug)]
+struct PendingWait {
+    wait: ScriptWait,
+    resolver: Persistent<Function<'static>>,
 }
 
 impl ScriptEngine {
@@ -89,11 +145,16 @@ impl ScriptEngine {
         })));
         let context =
             Context::full(&runtime).map_err(|error| ScriptError::Runtime(error.to_string()))?;
+        let wait_request = Rc::new(RefCell::new(None));
+        context
+            .with(|ctx| install_wait_api(ctx, Rc::clone(&wait_request)))
+            .map_err(|error| ScriptError::Runtime(error.to_string()))?;
         Ok(Self {
             runtime,
             context,
             limits,
             interrupt_requested,
+            wait_request,
         })
     }
 
@@ -118,8 +179,58 @@ impl ScriptEngine {
         parse_result(&json)
     }
 
+    /// Start an async graph block. `sim.sleep` and `sim.event` create native
+    /// wait registrations and leave the JS continuation parked in QuickJS;
+    /// this method never sleeps the Rust worker.
+    pub fn run_async(&self, source: &str) -> Result<ScriptStep, ScriptError> {
+        self.check_source_size(source)?;
+        self.wait_request.borrow_mut().take();
+        let wrapped = format!(
+            "{}\n(async function() {{\n'use strict';\n{}\n}})()",
+            SANDBOX_PRELUDE, source
+        );
+        self.context.with(|ctx| {
+            let promise = ctx
+                .eval::<Promise, _>(wrapped.as_str())
+                .map_err(|error| ScriptError::Runtime(error.to_string()))?;
+            self.finish_promise(promise)
+        })
+    }
+
+    fn finish_promise(&self, promise: Promise<'_>) -> Result<ScriptStep, ScriptError> {
+        let persistent_promise = Persistent::save(promise.ctx(), promise.clone());
+        match promise.finish::<String>() {
+            Ok(json) => Ok(ScriptStep::Completed(parse_result(&json)?)),
+            Err(JsError::WouldBlock) => {
+                let pending = self.wait_request.borrow_mut().take().ok_or_else(|| {
+                    ScriptError::Runtime(
+                        "async script suspended without a registered simulation wait".into(),
+                    )
+                })?;
+                Ok(ScriptStep::Waiting {
+                    wait: pending.wait,
+                    continuation: ScriptContinuation {
+                        promise: persistent_promise,
+                        resolver: pending.resolver,
+                    },
+                })
+            }
+            Err(error) => Err(ScriptError::Runtime(error.to_string())),
+        }
+    }
+
     pub fn limits(&self) -> ScriptLimits {
         self.limits
+    }
+
+    fn check_source_size(&self, source: &str) -> Result<(), ScriptError> {
+        if source.len() > self.limits.max_source_bytes {
+            return Err(ScriptError::SourceTooLarge {
+                bytes: source.len(),
+                limit: self.limits.max_source_bytes,
+            });
+        }
+        Ok(())
     }
 
     /// Return a cancellation token that the owning scheduler can set while a
@@ -147,6 +258,179 @@ impl ScriptEngine {
     }
 }
 
+impl ScriptContinuation {
+    /// Resolve one native wait and run the QuickJS job queue until the script
+    /// completes or registers its next simulation wait.
+    pub fn resume(self, engine: &ScriptEngine) -> Result<ScriptStep, ScriptError> {
+        engine.context.with(|ctx| {
+            let resolver = self
+                .resolver
+                .restore(&ctx)
+                .map_err(|error| ScriptError::Runtime(error.to_string()))?;
+            resolver
+                .call::<(), ()>(())
+                .map_err(|error| ScriptError::Runtime(error.to_string()))?;
+            let promise = self
+                .promise
+                .restore(&ctx)
+                .map_err(|error| ScriptError::Runtime(error.to_string()))?;
+            engine.finish_promise(promise)
+        })
+    }
+}
+
+/// Bridges QuickJS continuations to the simulation-owned wait set. The
+/// scheduler owns no wall-clock worker: callers wake it with simulation time
+/// or a domain event, then receive all continuations that became runnable.
+#[derive(Debug, Default)]
+pub struct ScriptScheduler {
+    next_task_id: u64,
+    waits: WaitSet,
+    continuations: BTreeMap<WaitId, (ScriptTaskId, ScriptContinuation)>,
+}
+
+impl ScriptScheduler {
+    pub fn start(
+        &mut self,
+        engine: &ScriptEngine,
+        now: SimTime,
+        source: &str,
+    ) -> Result<ScriptSchedulerStep, ScriptError> {
+        let task = ScriptTaskId(
+            self.next_task_id
+                .checked_add(1)
+                .ok_or(ScriptError::TaskIdExhausted)?,
+        );
+        self.next_task_id = task.0;
+        self.attach(task, now, engine.run_async(source)?)
+    }
+
+    pub fn wake(
+        &mut self,
+        engine: &ScriptEngine,
+        now: SimTime,
+        event: Option<&str>,
+    ) -> Result<Vec<ScriptSchedulerStep>, ScriptError> {
+        let ready = self.waits.wake(now, event);
+        let mut steps = Vec::with_capacity(ready.len());
+        for wait in ready {
+            let Some((task, continuation)) = self.continuations.remove(&wait) else {
+                continue;
+            };
+            steps.push(self.attach(task, now, continuation.resume(engine)?)?);
+        }
+        Ok(steps)
+    }
+
+    pub fn cancel(&mut self, wait: WaitId) -> bool {
+        let removed_wait = self.waits.cancel(wait);
+        let removed_continuation = self.continuations.remove(&wait).is_some();
+        removed_wait || removed_continuation
+    }
+
+    pub fn next_time(&self) -> Option<SimTime> {
+        self.waits.next_time()
+    }
+
+    pub fn pending(&self) -> usize {
+        self.waits.len()
+    }
+
+    fn attach(
+        &mut self,
+        task: ScriptTaskId,
+        now: SimTime,
+        step: ScriptStep,
+    ) -> Result<ScriptSchedulerStep, ScriptError> {
+        match step {
+            ScriptStep::Completed(result) => Ok(ScriptSchedulerStep::Completed { task, result }),
+            ScriptStep::Waiting {
+                wait: script_wait,
+                continuation,
+            } => {
+                let condition = match script_wait {
+                    ScriptWait::After(delay) => WaitCondition::At(now.offset(delay)),
+                    ScriptWait::Condition(condition) => condition,
+                };
+                let wait = self
+                    .waits
+                    .register(condition.clone())
+                    .map_err(|error| ScriptError::Runtime(error.to_string()))?;
+                self.continuations.insert(wait, (task, continuation));
+                Ok(ScriptSchedulerStep::Waiting {
+                    task,
+                    wait,
+                    condition,
+                })
+            }
+        }
+    }
+}
+
+fn install_wait_api(
+    ctx: Ctx<'_>,
+    wait_request: Rc<RefCell<Option<PendingWait>>>,
+) -> rquickjs::Result<()> {
+    let sleep_request = Rc::clone(&wait_request);
+    let sleep = Func::from(
+        move |seconds: f64, resolver: Function| -> rquickjs::Result<()> {
+            if !seconds.is_finite() || seconds < 0.0 {
+                return Err(JsError::new_from_js_message(
+                    "number",
+                    "simulation wait",
+                    "sleep duration must be finite and non-negative",
+                ));
+            }
+            let condition = WaitCondition::At(SimTime(seconds));
+            condition.validate().map_err(|error| {
+                JsError::new_from_js_message("number", "simulation wait", error.to_string())
+            })?;
+            let mut pending = sleep_request.borrow_mut();
+            if pending.is_some() {
+                return Err(JsError::new_from_js_message(
+                    "simulation wait",
+                    "single pending wait",
+                    "a graph block may park only one await at a time",
+                ));
+            }
+            let callback_ctx = resolver.ctx().clone();
+            *pending = Some(PendingWait {
+                wait: ScriptWait::After(seconds),
+                resolver: Persistent::save(&callback_ctx, resolver),
+            });
+            Ok(())
+        },
+    );
+
+    let event_request = Rc::clone(&wait_request);
+    let event = Func::from(
+        move |name: String, resolver: Function| -> rquickjs::Result<()> {
+            let condition = WaitCondition::Event(name);
+            condition.validate().map_err(|error| {
+                JsError::new_from_js_message("string", "simulation event", error.to_string())
+            })?;
+            let mut pending = event_request.borrow_mut();
+            if pending.is_some() {
+                return Err(JsError::new_from_js_message(
+                    "simulation wait",
+                    "single pending wait",
+                    "a graph block may park only one await at a time",
+                ));
+            }
+            let callback_ctx = resolver.ctx().clone();
+            *pending = Some(PendingWait {
+                wait: ScriptWait::Condition(condition),
+                resolver: Persistent::save(&callback_ctx, resolver),
+            });
+            Ok(())
+        },
+    );
+
+    ctx.globals().set("__thessa_register_sleep", sleep)?;
+    ctx.globals().set("__thessa_register_event", event)?;
+    Ok(())
+}
+
 const SANDBOX_PRELUDE: &str = r#"
 (() => {
   const denied = () => { throw new Error('ambient capability is unavailable'); };
@@ -168,6 +452,11 @@ const SANDBOX_PRELUDE: &str = r#"
   });
   globalThis.Diagnostic = Object.freeze({
     warning: (code, message) => JSON.stringify({kind:'warning', code, message}),
+  });
+  globalThis.sim = Object.freeze({
+    sleep: (seconds) => new Promise(resolve => __thessa_register_sleep(seconds, resolve)),
+    timeout: (seconds) => new Promise(resolve => __thessa_register_sleep(seconds, resolve)),
+    event: (name) => new Promise(resolve => __thessa_register_event(name, resolve)),
   });
   globalThis.Plan = Object.freeze({
     coast: (duration_s) => JSON.stringify({kind:'plan', id:0, bakeability:'pure', segments:[{kind:'coast', duration_s}]}),
@@ -509,5 +798,105 @@ mod tests {
             engine.run("return JSON.stringify({kind:'plan', id:0, bakeability:'pure', segments:[{kind:'wait', condition:{kind:'wait-event', name:'impact'}}]});"),
             Err(ScriptError::InvalidReturn(_))
         ));
+    }
+
+    #[test]
+    fn async_sleep_parks_and_resumes_the_continuation() {
+        let engine = ScriptEngine::new(ScriptLimits::default()).unwrap();
+        let step = engine
+            .run_async("await sim.sleep(3); return Guidance.angularRate(0.1, 0, 0);")
+            .unwrap();
+        let continuation = match step {
+            ScriptStep::Waiting {
+                wait: ScriptWait::After(delay),
+                continuation,
+            } => {
+                assert_eq!(delay, 3.0);
+                continuation
+            }
+            ScriptStep::Completed(_) => panic!("sleep should park the script"),
+            ScriptStep::Waiting { .. } => panic!("unexpected wait kind"),
+        };
+
+        let resumed = continuation.resume(&engine).unwrap();
+        assert!(matches!(
+            resumed,
+            ScriptStep::Completed(ScriptResult::Guidance(GuidanceIntent::AngularRate { rate_body_rps }))
+                if rate_body_rps == glam::DVec3::new(0.1, 0.0, 0.0)
+        ));
+    }
+
+    #[test]
+    fn async_event_registers_a_named_wait() {
+        let engine = ScriptEngine::new(ScriptLimits::default()).unwrap();
+        let step = engine
+            .run_async("await sim.event('impact'); return Guidance.angularRate(0, 0.2, 0);")
+            .unwrap();
+        assert!(matches!(
+            step,
+            ScriptStep::Waiting {
+                wait: ScriptWait::Condition(WaitCondition::Event(ref name)),
+                ..
+            } if name == "impact"
+        ));
+    }
+
+    #[test]
+    fn scheduler_wakes_and_reparks_async_tasks() {
+        let engine = ScriptEngine::new(ScriptLimits::default()).unwrap();
+        let mut scheduler = ScriptScheduler::default();
+        let started = scheduler
+            .start(
+                &engine,
+                SimTime(100.0),
+                "await sim.sleep(3); await sim.event('impact'); return Guidance.angularRate(0, 0.2, 0);",
+            )
+            .unwrap();
+        let task = match started {
+            ScriptSchedulerStep::Waiting {
+                task,
+                wait,
+                condition: WaitCondition::At(time),
+            } => {
+                assert_eq!(time, SimTime(103.0));
+                assert_eq!(scheduler.next_time(), Some(SimTime(103.0)));
+                assert_eq!(scheduler.pending(), 1);
+                assert!(!scheduler.cancel(WaitId(999)));
+                (task, wait)
+            }
+            ScriptSchedulerStep::Completed { .. } => panic!("sleep should park the task"),
+            ScriptSchedulerStep::Waiting { .. } => panic!("unexpected wait condition"),
+        };
+
+        assert!(
+            scheduler
+                .wake(&engine, SimTime(102.0), None)
+                .unwrap()
+                .is_empty()
+        );
+        let reparks = scheduler.wake(&engine, SimTime(103.0), None).unwrap();
+        assert_eq!(scheduler.pending(), 1);
+        assert!(matches!(
+            reparks.as_slice(),
+            [ScriptSchedulerStep::Waiting {
+                task: resumed_task,
+                condition: WaitCondition::Event(name),
+                ..
+            }] if *resumed_task == task.0 && name == "impact"
+        ));
+
+        let completed = scheduler
+            .wake(&engine, SimTime(103.0), Some("impact"))
+            .unwrap();
+        assert_eq!(scheduler.pending(), 0);
+        assert!(matches!(
+            completed.as_slice(),
+            [ScriptSchedulerStep::Completed {
+                task: completed_task,
+                result: ScriptResult::Guidance(GuidanceIntent::AngularRate { rate_body_rps }),
+            }] if *completed_task == task.0 && *rate_body_rps == glam::DVec3::new(0.0, 0.2, 0.0)
+        ));
+
+        assert!(!scheduler.cancel(task.1));
     }
 }

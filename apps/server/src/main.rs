@@ -30,6 +30,8 @@ struct Args {
     /// Batch throughput probe: advance this many sim-seconds flat out,
     /// print the effective warp, exit. No IO after setup.
     measure_s: Option<f64>,
+    /// Cut the engine for the run: unpowered coast rides rails batches.
+    drift: bool,
     /// Start in a 300 km circular coast instead of on the pad.
     vacuum: bool,
 }
@@ -39,6 +41,7 @@ fn parse_args() -> Result<Args, String> {
         system_path: None,
         measure_s: None,
         vacuum: false,
+        drift: false,
     };
     let mut rest = std::env::args().skip(1);
     while let Some(arg) = rest.next() {
@@ -58,6 +61,7 @@ fn parse_args() -> Result<Args, String> {
                 args.measure_s = Some(seconds);
             }
             "--vacuum" => args.vacuum = true,
+            "--drift" => args.drift = true,
             "--help" | "-h" => {
                 eprintln!(
                     "usage: thessa-server [--system PATH] [--measure SIM_S] [--vacuum]\n\
@@ -118,12 +122,17 @@ impl Sim {
         ephemeris: BakedEphemeris,
         reference_body: BodyId,
         vacuum: bool,
+        drift: bool,
     ) -> Result<Self, String> {
         let mut authority = FlightAuthority::new(&ephemeris, reference_body)
             .map_err(|e| format!("authority init: {e}"))?
             .with_bake_queue(Box::new(ThreadBakeQueue::new()));
         if vacuum {
             place_in_circular_orbit(&ephemeris, &mut authority)?;
+        }
+        if drift {
+            authority.engine_active = false;
+            authority.throttle = 0.0;
         }
         Ok(Self {
             authority,
@@ -425,7 +434,7 @@ fn run() -> Result<(), String> {
     let system_path = find_system(args.system_path)?;
     eprintln!("[server] system: {system_path}");
     let (ephemeris, reference_body) = load_system(&system_path)?;
-    let sim = Sim::new(ephemeris, reference_body, args.vacuum)?;
+    let sim = Sim::new(ephemeris, reference_body, args.vacuum, args.drift)?;
     match args.measure_s {
         Some(target_s) => run_measure(sim, target_s),
         None => run_stdio(sim),

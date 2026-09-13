@@ -306,8 +306,7 @@ impl Sim {
             place_in_circular_orbit(&ephemeris, &mut authority, altitude_m)?;
         }
         if drift {
-            authority.engine_active = false;
-            authority.throttle = 0.0;
+            authority.stop_propulsion();
         }
         Ok(Self {
             authority,
@@ -398,13 +397,15 @@ impl Sim {
         if target.is_finite() && target.length_squared() > 1e-12 {
             self.authority.sas_target_orientation = target.normalize();
         }
-        self.authority.throttle = input.throttle.clamp(0.0, 1.0);
         // A full input carries a last-value state, but an explicit staging or
         // engine command is an edge. Do not let a coalesced stale state field
         // overwrite the result of those preserved events.
-        if !has_engine_command {
-            self.authority.engine_active = input.engine_active;
-        }
+        let active = if has_engine_command {
+            self.authority.engine_active
+        } else {
+            input.engine_active
+        };
+        self.authority.set_legacy_propulsion(input.throttle, active);
         self.authority.sas_enabled = input.sas_enabled;
         self.authority.rcs_enabled = input.rcs_enabled;
         self.authority.gear_down = input.gear_down;
@@ -459,7 +460,7 @@ impl Sim {
         self.cancel_autopilot_tasks();
         if let Err(error) = input.validate() {
             self.authority.flight_error = Some(format!("invalid guidance input: {error}"));
-            self.authority.engine_active = false;
+            self.authority.stop_propulsion();
             return true;
         }
         self.apply_guidance_command(input.intent.clone(), input.propulsion)
@@ -477,15 +478,18 @@ impl Sim {
             Ok(mode) => mode,
             Err(error) => {
                 self.authority.flight_error = Some(error.to_string());
-                self.authority.engine_active = false;
+                self.authority.stop_propulsion();
                 return false;
             }
         };
         let propulsion =
             FlightPolicy::default().constrain_propulsion(requested_propulsion, true, true);
         self.plan_demand = None;
-        self.authority.throttle = propulsion.normalized;
-        self.authority.engine_active = propulsion.normalized > 0.0;
+        if let Err(error) = self.authority.set_propulsion_target(propulsion) {
+            self.authority.flight_error = Some(error.to_string());
+            self.authority.stop_propulsion();
+            return false;
+        }
         self.control_mode = mode;
         self.guidance = Some((intent, propulsion));
         true
@@ -595,9 +599,9 @@ impl Sim {
                         self.control_mode = ControlMode::Direct;
                         self.authority.control_input = DVec3::ZERO;
                         self.authority.sas_enabled = false;
-                        self.authority.throttle = demand.propulsion.normalized;
-                        self.authority.engine_active = demand.propulsion.normalized > 0.0;
-                        true
+                        self.authority
+                            .set_propulsion_target(demand.propulsion)
+                            .is_ok()
                     }
                 }
             };
@@ -806,8 +810,9 @@ impl Sim {
                 self.plan_demand = Some(demand);
                 self.authority.control_input = DVec3::ZERO;
                 self.authority.sas_enabled = false;
-                self.authority.throttle = propulsion.normalized;
-                self.authority.engine_active = propulsion.normalized > 0.0;
+                self.authority
+                    .set_propulsion_target(propulsion)
+                    .map_err(|error| error.to_string())?;
                 self.control_mode = ControlMode::Direct;
                 self.guidance = None;
                 Ok(true)
@@ -822,8 +827,7 @@ impl Sim {
         self.control_mode = ControlMode::Direct;
         self.authority.control_input = DVec3::ZERO;
         self.authority.sas_enabled = false;
-        self.authority.throttle = 0.0;
-        self.authority.engine_active = false;
+        self.authority.stop_propulsion();
     }
 
     fn cancel_autopilot_tasks(&mut self) {
@@ -1020,8 +1024,7 @@ fn place_in_circular_orbit(
     authority.state.orientation_body_to_inertial = DQuat::IDENTITY;
     authority.state.angular_velocity_body_rps = DVec3::ZERO;
     authority.sas_target_orientation = DQuat::IDENTITY;
-    authority.throttle = 1.0;
-    authority.engine_active = true;
+    authority.set_legacy_propulsion(1.0, true);
     authority.control_input = DVec3::ZERO;
     Ok(())
 }

@@ -16,8 +16,8 @@ use std::{
 
 use glam::{DMat3, DQuat, DVec3};
 use thessa_flight_control::{
-    ControlDemand, DirectionFrame, DirectionTarget, GuidanceIntent, PropulsionDemand, RollPolicy,
-    SpacecraftControlLaw,
+    ActuatorDynamics, ControlDemand, DirectionFrame, DirectionTarget, GuidanceIntent,
+    PropulsionDemand, RollPolicy, SpacecraftControlLaw,
 };
 use thessa_sim_core::{
     AeroConfig, AeroModel, AeroSimdScratch, AeroState, AtmosphereConfig, AtmosphereError,
@@ -308,6 +308,9 @@ pub struct FlightAuthority {
     pub relative_position_m: DVec3,
     pub flight_time_s: f64,
     pub world_tick: thessa_sim_core::WorldTick,
+    /// Requested normalized propulsion command exposed in snapshots. The
+    /// physical command is kept separately below so typed/autopilot paths can
+    /// model spool response without changing the legacy wire semantics.
     pub throttle: f64,
     pub engine_active: bool,
     pub sas_enabled: bool,
@@ -371,6 +374,13 @@ pub struct FlightAuthority {
     /// by the same trim/RCS allocator as typed guidance and cleared by the
     /// public demand entry point after its cooperative advance returns.
     explicit_moment_demand_nm: Option<DVec3>,
+    /// Physical propulsion command after the actuator layer. Legacy pilot
+    /// input keeps this path immediate; typed guidance enables the response
+    /// model explicitly at its boundary.
+    propulsion_actual: f64,
+    propulsion_target: f64,
+    propulsion_dynamics_active: bool,
+    propulsion_dynamics: ActuatorDynamics,
 }
 
 impl FlightAuthority {
@@ -412,8 +422,7 @@ impl FlightAuthority {
             .ok_or("no terrain field for reset")?;
         let dir = self.launch_site_dir.ok_or("no launch site for reset")?;
         self.flight_error = None;
-        self.engine_active = true;
-        self.throttle = 0.0;
+        self.set_legacy_propulsion(0.0, true);
         self.control_input = DVec3::ZERO;
         self.surface_input = DVec3::ZERO;
         self.explicit_force_demand_body_n = None;
@@ -663,6 +672,15 @@ impl FlightAuthority {
             reference_area_m2,
             explicit_force_demand_body_n: None,
             explicit_moment_demand_nm: None,
+            propulsion_actual: 1.0,
+            propulsion_target: 1.0,
+            propulsion_dynamics_active: false,
+            propulsion_dynamics: ActuatorDynamics {
+                response_s: 0.12,
+                max_rate_per_s: Some(8.0),
+                min_command: 0.0,
+                max_command: 1.0,
+            },
         })
     }
 
@@ -685,6 +703,68 @@ impl FlightAuthority {
         let _ = self
             .vehicle
             .apply_control_inputs(&surface_commands(pitch, yaw, roll));
+    }
+
+    /// Apply a legacy pilot/compatibility command with immediate actuator
+    /// semantics. This is used by the old wire representation and by tests
+    /// that directly exercise the original X-15 path.
+    pub fn set_legacy_propulsion(&mut self, throttle: f64, active: bool) {
+        self.throttle = if throttle.is_finite() {
+            throttle.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        self.propulsion_target = self.throttle;
+        self.propulsion_actual = self.throttle;
+        self.propulsion_dynamics_active = false;
+        self.engine_active = active;
+    }
+
+    /// Set a typed/autopilot propulsion target. Allocation produces this
+    /// target; the fixed-step loop advances the physical command below it.
+    pub fn set_propulsion_target(
+        &mut self,
+        propulsion: PropulsionDemand,
+    ) -> Result<(), FlightError> {
+        if !propulsion.normalized.is_finite() || !(0.0..=1.0).contains(&propulsion.normalized) {
+            return Err(FlightError::InvalidInput(
+                "starter propulsion actuator accepts nominal demand in [0, 1]".into(),
+            ));
+        }
+        self.throttle = propulsion.normalized;
+        self.propulsion_target = propulsion.normalized;
+        self.propulsion_dynamics_active = true;
+        if propulsion.normalized > 0.0 {
+            self.engine_active = true;
+        }
+        Ok(())
+    }
+
+    /// Safety cutoff for cancellation, contact, and manual takeover. A hard
+    /// cutoff is intentional here: a disabled engine must not keep producing
+    /// force while the high-level owner is being replaced.
+    pub fn stop_propulsion(&mut self) {
+        self.throttle = 0.0;
+        self.propulsion_target = 0.0;
+        self.propulsion_actual = 0.0;
+        self.propulsion_dynamics_active = false;
+        self.engine_active = false;
+    }
+
+    fn advance_propulsion_actuator(&mut self) -> Result<(), FlightError> {
+        if !self.propulsion_dynamics_active {
+            return Ok(());
+        }
+        self.propulsion_actual = self
+            .propulsion_dynamics
+            .advance(
+                self.propulsion_actual,
+                self.propulsion_target,
+                FLIGHT_STEP_S,
+            )
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+        self.engine_active = self.propulsion_actual > 1.0e-8 || self.propulsion_target > 0.0;
+        Ok(())
     }
 
     fn direction_to_inertial(
@@ -882,12 +962,7 @@ impl FlightAuthority {
         budget: Option<std::time::Duration>,
     ) -> Result<(), FlightError> {
         let mode = self.apply_guidance_intent(ephemeris, intent)?;
-        if !propulsion.normalized.is_finite() || !(0.0..=1.0).contains(&propulsion.normalized) {
-            return Err(FlightError::InvalidInput(
-                "starter propulsion accepts nominal demand in [0, 1]; apply flight policy before execution".into(),
-            ));
-        }
-        self.throttle = propulsion.normalized;
+        self.set_propulsion_target(propulsion)?;
         let translation_force = match intent {
             GuidanceIntent::ManualAxes(axes) => {
                 axes.translation * SpacecraftControlLaw::default().max_translation_force_n
@@ -916,15 +991,7 @@ impl FlightAuthority {
         demand
             .validate()
             .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
-        if !demand.propulsion.normalized.is_finite()
-            || !(0.0..=1.0).contains(&demand.propulsion.normalized)
-        {
-            return Err(FlightError::InvalidInput(
-                "starter propulsion accepts nominal demand in [0, 1]; apply flight policy before execution".into(),
-            ));
-        }
-        self.throttle = demand.propulsion.normalized;
-        self.engine_active = demand.propulsion.normalized > 0.0;
+        self.set_propulsion_target(demand.propulsion)?;
         if demand.force_body_n.length_squared() > 1.0e-24
             || demand.moment_body_nm.length_squared() > 1.0e-24
         {
@@ -940,7 +1007,9 @@ impl FlightAuthority {
     }
 
     pub fn thrust_n(&self) -> f64 {
-        if self.engine_active {
+        if self.propulsion_dynamics_active {
+            self.propulsion_actual * 254_000.0
+        } else if self.engine_active {
             self.throttle * 254_000.0
         } else {
             0.0
@@ -1084,6 +1153,7 @@ impl FlightAuthority {
         self.accumulator_s += elapsed_s;
         let gravity_field = GravityField::from_ephemeris(ephemeris);
         while self.accumulator_s + 1.0e-12 >= FLIGHT_STEP_S {
+            self.advance_propulsion_actuator()?;
             match self.try_advance_cached_coast(ephemeris, mode, self.accumulator_s)? {
                 CoastAdvance::Advanced(coast) => {
                     self.accumulator_s = (self.accumulator_s - coast).max(0.0);
@@ -1338,7 +1408,11 @@ impl FlightAuthority {
         {
             return Ok(CoastAdvance::NotEligible);
         }
-        if self.thrust_n() != 0.0 || self.trace.is_some() {
+        if self.thrust_n() != 0.0
+            || (self.propulsion_dynamics_active
+                && (self.propulsion_target > 1.0e-8 || self.propulsion_actual > 1.0e-8))
+            || self.trace.is_some()
+        {
             return Ok(CoastAdvance::NotEligible);
         }
         // A controlled coast must stay on the fixed-step path so RCS/SAS can
@@ -2138,6 +2212,38 @@ mod tests {
         assert_eq!(flight.sas_target_orientation, DQuat::from_rotation_y(0.1));
         assert!(flight.state.position_inertial_m.is_finite());
         assert!(flight.last_forces.is_some());
+    }
+
+    #[test]
+    fn typed_propulsion_uses_the_post_allocator_actuator_response() {
+        let (ephemeris, mut flight) = fixture();
+        let intent = GuidanceIntent::AngularRate {
+            rate_body_rps: DVec3::ZERO,
+        };
+        flight
+            .advance_guidance(
+                &ephemeris,
+                &intent,
+                PropulsionDemand::new(0.0).unwrap(),
+                FLIGHT_STEP_S,
+            )
+            .unwrap();
+        assert_eq!(flight.throttle, 0.0);
+        assert!(flight.thrust_n() > 0.0);
+        assert!(flight.thrust_n() < 254_000.0);
+
+        for _ in 0..32 {
+            flight
+                .advance_guidance(
+                    &ephemeris,
+                    &intent,
+                    PropulsionDemand::new(1.0).unwrap(),
+                    FLIGHT_STEP_S,
+                )
+                .unwrap();
+        }
+        assert_eq!(flight.throttle, 1.0);
+        assert!(flight.thrust_n() > 200_000.0);
     }
 
     #[test]

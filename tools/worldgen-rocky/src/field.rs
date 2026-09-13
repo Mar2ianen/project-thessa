@@ -896,8 +896,8 @@ mod prefix_regression_tests {
 /// visual tiles. Full physics reads the same field through the same
 /// [`PlanetField::height_m`]; only mesh/texture/normal synthesis is
 /// skipped. Heights are exact at the sampled points; the track coverage proof
-/// is geometric, while unresolved sub-grid relief remains a future withstand
-/// proof obligation.
+/// is geometric. A caller that also supplies a separately validated slope
+/// bound can build an explicit withstand proof.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObstacleReport {
     pub center_dir: [f64; 3],
@@ -973,8 +973,8 @@ impl ObstacleReport {
 
 /// Geometric coverage evidence for a sequence of ground-track directions.
 /// The track is covered when every consecutive pair of centers is no farther
-/// apart than two obstacle-report radii. Terrain withstand/error bounds are a
-/// separate, deliberately future proof obligation.
+/// apart than two obstacle-report radii. A caller can add an explicit
+/// withstand/error bound with [`ObstacleTrackCertificate::withstand_proof`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObstacleCoverageProof {
     pub track_points: u32,

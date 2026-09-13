@@ -108,8 +108,8 @@ pub struct LocalAirKinematics {
 
 /// Terrain evidence for a sampled flight track. The obstacle reports prove
 /// geometric coverage of the piecewise track and provide a conservative
-/// sampled terrain ceiling. This intentionally is not the future sub-grid
-/// withstand proof.
+/// sampled terrain ceiling. Vehicle-clearance evidence is available through
+/// the worldgen obstacle report's explicit withstand proof.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TerrainTrackCoverage {
     pub obstacles: ObstacleTrackCertificate,

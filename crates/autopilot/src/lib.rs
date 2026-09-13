@@ -312,6 +312,14 @@ impl AutopilotGraph {
                     message,
                 });
             }
+            if matches!(node.config.as_ref(), Some(GraphNodeConfig::Wait { .. }))
+                && !node.kind.wait_capable()
+            {
+                errors.push(GraphError::InvalidConfig {
+                    node: node.id,
+                    message: "wait configuration requires a wait-capable node kind".into(),
+                });
+            }
             let mut names = std::collections::HashSet::new();
             for port in &node.ports {
                 if port.name.trim().is_empty() || !names.insert(port.name.clone()) {
@@ -789,6 +797,7 @@ pub struct GraphRunner {
     statuses: BTreeMap<NodeId, BlockStatus>,
     outputs: BTreeMap<(NodeId, String), GraphValue>,
     waiting: BTreeMap<NodeId, WaitCondition>,
+    waiting_events: BTreeMap<NodeId, std::collections::BTreeSet<String>>,
     terminal: Option<GraphRunState>,
 }
 
@@ -800,6 +809,7 @@ impl GraphRunner {
             statuses: BTreeMap::new(),
             outputs: BTreeMap::new(),
             waiting: BTreeMap::new(),
+            waiting_events: BTreeMap::new(),
             terminal: None,
         })
     }
@@ -844,13 +854,24 @@ impl GraphRunner {
         if let Some(terminal) = &self.terminal {
             return Ok(terminal.clone());
         }
+        if let Some(event) = event {
+            for seen in self.waiting_events.values_mut() {
+                seen.insert(event.to_owned());
+            }
+        }
         let ready_waits = self
             .waiting
             .iter()
-            .filter_map(|(node, condition)| condition.is_due(now, event).then_some(*node))
+            .filter_map(|(node, condition)| {
+                let seen = self.waiting_events.get(node);
+                condition
+                    .is_due_with_seen(now, event, seen)
+                    .then_some(*node)
+            })
             .collect::<Vec<_>>();
         for node in ready_waits {
             self.waiting.remove(&node);
+            self.waiting_events.remove(&node);
             self.statuses.remove(&node);
         }
 
@@ -897,6 +918,7 @@ impl GraphRunner {
                         .map_err(|error| GraphExecutionError::InvalidWait { node, error })?;
                     self.statuses.insert(node, BlockStatus::Waiting);
                     self.waiting.insert(node, condition);
+                    self.waiting_events.insert(node, Default::default());
                 }
                 GraphNodeOutcome::Fail { diagnostic } => {
                     self.statuses.insert(node, BlockStatus::Failed);
@@ -1028,15 +1050,27 @@ impl WaitCondition {
     }
 
     fn is_due(&self, now: SimTime, event: Option<&str>) -> bool {
+        self.is_due_with_seen(now, event, None)
+    }
+
+    fn is_due_with_seen(
+        &self,
+        now: SimTime,
+        event: Option<&str>,
+        seen_events: Option<&std::collections::BTreeSet<String>>,
+    ) -> bool {
         match self {
             Self::At(time) => time.0 <= now.0,
-            Self::Event(name) => event.is_some_and(|candidate| candidate == name),
+            Self::Event(name) => {
+                event.is_some_and(|candidate| candidate == name)
+                    || seen_events.is_some_and(|seen| seen.contains(name))
+            }
             Self::Any(conditions) => conditions
                 .iter()
-                .any(|condition| condition.is_due(now, event)),
+                .any(|condition| condition.is_due_with_seen(now, event, seen_events)),
             Self::All(conditions) => conditions
                 .iter()
-                .all(|condition| condition.is_due(now, event)),
+                .all(|condition| condition.is_due_with_seen(now, event, seen_events)),
         }
     }
 
@@ -1062,7 +1096,13 @@ pub struct WaitId(pub u64);
 #[derive(Debug, Clone, PartialEq)]
 pub struct WaitSet {
     next_id: u64,
-    waits: BTreeMap<WaitId, WaitCondition>,
+    waits: BTreeMap<WaitId, WaitRegistration>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct WaitRegistration {
+    condition: WaitCondition,
+    seen_events: std::collections::BTreeSet<String>,
 }
 
 impl Default for WaitSet {
@@ -1079,7 +1119,13 @@ impl WaitSet {
         condition.validate()?;
         let id = WaitId(self.next_id);
         self.next_id = self.next_id.checked_add(1).ok_or(WaitError::IdExhausted)?;
-        self.waits.insert(id, condition);
+        self.waits.insert(
+            id,
+            WaitRegistration {
+                condition,
+                seen_events: Default::default(),
+            },
+        );
         Ok(id)
     }
 
@@ -1098,17 +1144,27 @@ impl WaitSet {
     pub fn next_time(&self) -> Option<SimTime> {
         self.waits
             .values()
-            .filter_map(WaitCondition::next_time)
+            .filter_map(|registration| registration.condition.next_time())
             .min_by(|a, b| a.0.total_cmp(&b.0))
     }
 
     /// Resolve due waits and remove them atomically. A domain event may wake
     /// an event guard early; unrelated waits remain parked.
     pub fn wake(&mut self, now: SimTime, event: Option<&str>) -> Vec<WaitId> {
+        if let Some(event) = event {
+            for registration in self.waits.values_mut() {
+                registration.seen_events.insert(event.to_owned());
+            }
+        }
         let due = self
             .waits
             .iter()
-            .filter_map(|(id, condition)| condition.is_due(now, event).then_some(*id))
+            .filter_map(|(id, registration)| {
+                registration
+                    .condition
+                    .is_due_with_seen(now, event, Some(&registration.seen_events))
+                    .then_some(*id)
+            })
             .collect::<Vec<_>>();
         for id in &due {
             self.waits.remove(id);
@@ -1877,6 +1933,20 @@ mod tests {
         assert_eq!(waits.next_time(), Some(SimTime(20.0)));
         assert!(waits.wake(SimTime(10.0), None).is_empty());
         assert_eq!(waits.wake(SimTime(20.0), None).len(), 1);
+    }
+
+    #[test]
+    fn all_waits_remember_events_until_the_complete_set_arrives() {
+        let mut waits = WaitSet::default();
+        let wait = waits
+            .register(WaitCondition::All(vec![
+                WaitCondition::Event("stage".into()),
+                WaitCondition::Event("engine-ready".into()),
+            ]))
+            .unwrap();
+        assert!(waits.wake(SimTime(0.0), Some("stage")).is_empty());
+        assert_eq!(waits.wake(SimTime(0.0), Some("engine-ready")), vec![wait]);
+        assert!(waits.is_empty());
     }
 
     #[test]

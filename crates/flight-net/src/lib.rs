@@ -6,6 +6,7 @@
 //! `thessa-protocol`; this crate only owns the game payload registry.
 
 use serde::{Deserialize, Serialize};
+use thessa_autopilot::{PlanDeoptimizationReason, TrajectoryPlan};
 use thessa_flight_authority::ControlMode;
 use thessa_flight_control::{GuidanceIntent, PropulsionDemand};
 use thessa_protocol::{CodecError, Envelope, kind};
@@ -129,8 +130,42 @@ pub fn encode_guidance(input: &GuidanceInput) -> Result<Vec<u8>, CodecError> {
     encode_frame(kind::GUIDANCE_COMMAND, input)
 }
 
+/// High-level automation operations. The authoritative server owns execution
+/// and validates every plan/script before it can affect a vehicle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AutopilotCommand {
+    StartScript { source: String },
+    SubmitPlan { plan: TrajectoryPlan },
+    Cancel,
+    Deoptimize { reason: PlanDeoptimizationReason },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutopilotInput {
+    pub tick: u64,
+    pub command: AutopilotCommand,
+}
+
+impl AutopilotInput {
+    pub fn validate(&self) -> Result<(), String> {
+        match &self.command {
+            AutopilotCommand::StartScript { source } if source.trim().is_empty() => {
+                Err("autopilot script must not be empty".into())
+            }
+            AutopilotCommand::SubmitPlan { plan } => {
+                plan.validate().map_err(|error| error.to_string())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 pub fn encode_snapshot(snapshot: &Snapshot) -> Result<Vec<u8>, CodecError> {
     encode_frame(kind::SNAPSHOT, snapshot)
+}
+
+pub fn encode_autopilot(input: &AutopilotInput) -> Result<Vec<u8>, CodecError> {
+    encode_frame(kind::AUTOPILOT_COMMAND, input)
 }
 
 pub fn encode_hello(hello: &Hello) -> Result<Vec<u8>, CodecError> {
@@ -184,6 +219,28 @@ mod tests {
             wake_notice: None,
             flight_error: None,
         }
+    }
+
+    #[test]
+    fn typed_autopilot_plan_roundtrips() {
+        let input = AutopilotInput {
+            tick: 41,
+            command: AutopilotCommand::SubmitPlan {
+                plan: TrajectoryPlan {
+                    id: thessa_flight_control::TrajectoryPlanId(12),
+                    segments: vec![thessa_autopilot::TrajectorySegment::Coast { duration_s: 4.0 }],
+                    bakeability: thessa_autopilot::Bakeability::Pure,
+                },
+            },
+        };
+        input.validate().expect("valid plan");
+        let frame = encode_autopilot(&input).expect("frame");
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.push(&frame).expect("framed envelope");
+        let envelope = decode_frame(&frames[0]).expect("envelope");
+        assert_eq!(envelope.kind, kind::AUTOPILOT_COMMAND);
+        let back: AutopilotInput = decode_payload(&envelope).expect("payload");
+        assert_eq!(back, input);
     }
 
     #[test]

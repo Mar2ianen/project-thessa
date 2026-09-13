@@ -5420,6 +5420,7 @@ dependencies = [
  "glam",
  "postcard",
  "serde",
+ "thessa-autopilot",
  "thessa-flight-authority",
  "thessa-flight-control",
  "thessa-protocol",
@@ -5456,6 +5457,8 @@ version = "0.0.1"
 dependencies = [
  "glam",
  "serde",
+ "thessa-autopilot",
+ "thessa-autopilot-js",
  "thessa-flight-authority",
  "thessa-flight-net",
  "thessa-protocol",

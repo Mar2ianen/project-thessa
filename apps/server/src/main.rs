@@ -13,12 +13,18 @@ use std::io::{Read, Write};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
-use glam::{DQuat, DVec3};
+use glam::DVec3;
+use thessa_autopilot::{PlanAction, PlanPoll, TrajectoryPlan, TrajectoryPlanRunner};
+use thessa_autopilot_js::{
+    ScriptEngine, ScriptLimits, ScriptResult, ScriptScheduler, ScriptSchedulerStep,
+};
 use thessa_flight_authority::{
     ControlMode, FlightAuthority, FlightPolicy, GuidanceIntent, PropulsionDemand,
     canonical_launch_setup,
 };
-use thessa_flight_net::{ClientInput, Command, GuidanceInput, Snapshot};
+use thessa_flight_net::{
+    AutopilotCommand, AutopilotInput, ClientInput, Command, GuidanceInput, Snapshot,
+};
 use thessa_protocol::{FrameDecoder, kind};
 use thessa_sim_core::{BakedEphemeris, BodyId, SimTime, SystemConfig};
 use thread_bake::ThreadBakeQueue;
@@ -144,12 +150,31 @@ struct Sim {
     /// Latest typed guidance command. Legacy ClientInput clears this so the
     /// two input protocols cannot fight over the same vehicle.
     guidance: Option<(GuidanceIntent, PropulsionDemand)>,
+    plan_runner: Option<TrajectoryPlanRunner>,
+    last_autopilot_notice: Option<String>,
     clients: std::collections::HashMap<String, ClientVote>,
     advanced_s: f64,
     compute_s: f64,
     wall_started: Instant,
     steps: u64,
     rails_s: f64,
+}
+
+/// QuickJS is intentionally pinned to the authoritative driver thread:
+/// `rquickjs` contexts and persistent continuations are not `Send`.
+struct AutopilotHost {
+    scheduler: ScriptScheduler,
+    engine: ScriptEngine,
+}
+
+impl AutopilotHost {
+    fn new() -> Result<Self, String> {
+        Ok(Self {
+            engine: ScriptEngine::new(ScriptLimits::default())
+                .map_err(|error| format!("autopilot init: {error}"))?,
+            scheduler: ScriptScheduler::default(),
+        })
+    }
 }
 
 impl Sim {
@@ -177,6 +202,8 @@ impl Sim {
             ephemeris,
             control_mode: ControlMode::Navball,
             guidance: None,
+            plan_runner: None,
+            last_autopilot_notice: None,
             clients: std::collections::HashMap::new(),
             advanced_s: 0.0,
             compute_s: 0.0,
@@ -226,6 +253,7 @@ impl Sim {
             return false;
         }
         let mut force_snapshot = false;
+        self.cancel_autopilot_tasks();
         self.guidance = None;
         let has_engine_command = input
             .commands
@@ -295,6 +323,7 @@ impl Sim {
                 // engine armed at zero throttle. No terrain, no relaunch.
                 Command::Reset => {
                     if self.authority.reset_to_launch_site(&self.ephemeris).is_ok() {
+                        self.last_autopilot_notice = self.authority.wake_notice.clone();
                         force_snapshot = true;
                     }
                 }
@@ -307,6 +336,7 @@ impl Sim {
         if !self.clients.contains_key(id) {
             return false;
         }
+        self.cancel_autopilot_tasks();
         if let Err(error) = input.validate() {
             self.authority.flight_error = Some(format!("invalid guidance input: {error}"));
             self.authority.engine_active = false;
@@ -331,6 +361,233 @@ impl Sim {
         true
     }
 
+    fn apply_autopilot(
+        &mut self,
+        id: &str,
+        input: &AutopilotInput,
+        host: &mut AutopilotHost,
+    ) -> bool {
+        if !self.clients.contains_key(id) {
+            return false;
+        }
+        if let Err(error) = input.validate() {
+            return self.fail_autopilot(error);
+        }
+        match &input.command {
+            AutopilotCommand::Cancel => {
+                self.cancel_autopilot_tasks();
+                self.clear_autopilot_controls();
+                true
+            }
+            AutopilotCommand::Deoptimize { reason } => self
+                .plan_runner
+                .as_mut()
+                .is_some_and(|runner| runner.deoptimize(*reason)),
+            AutopilotCommand::SubmitPlan { plan } => self.start_plan(plan.clone(), host),
+            AutopilotCommand::StartScript { source } => {
+                self.plan_runner = None;
+                host.scheduler.cancel_all();
+                self.last_autopilot_notice = self.authority.wake_notice.clone();
+                let now = SimTime(self.authority.flight_time_s);
+                match host.scheduler.start(&host.engine, now, source) {
+                    Ok(step) => self.apply_script_step(step, host),
+                    Err(error) => self.fail_autopilot(error.to_string()),
+                }
+            }
+        }
+    }
+
+    fn apply_script_step(&mut self, step: ScriptSchedulerStep, host: &mut AutopilotHost) -> bool {
+        match step {
+            ScriptSchedulerStep::Waiting { condition, .. } => {
+                eprintln!("[server] autopilot script waiting on {condition:?}");
+                self.clear_autopilot_controls();
+                true
+            }
+            ScriptSchedulerStep::Completed { result, .. } => match result {
+                ScriptResult::Guidance(intent) => self.apply_script_guidance(intent),
+                ScriptResult::Plan(plan) => self.start_plan(plan, host),
+                ScriptResult::Diagnostic(diagnostic) => {
+                    eprintln!(
+                        "[server] autopilot diagnostic {}: {}",
+                        diagnostic.code, diagnostic.message
+                    );
+                    self.authority.wake_notice = Some(format!(
+                        "AUTOPILOT {}: {}",
+                        diagnostic.code, diagnostic.message
+                    ));
+                    true
+                }
+                ScriptResult::Wait(condition) => self.fail_autopilot(format!(
+                    "autopilot script returned a wait without an await continuation: {condition:?}"
+                )),
+            },
+        }
+    }
+
+    fn apply_script_guidance(&mut self, intent: GuidanceIntent) -> bool {
+        let mode = match self.authority.apply_guidance_intent(&intent) {
+            Ok(mode) => mode,
+            Err(error) => return self.fail_autopilot(error.to_string()),
+        };
+        let requested = match intent {
+            GuidanceIntent::ManualAxes(axes) => PropulsionDemand::new(axes.propulsion)
+                .unwrap_or(PropulsionDemand { normalized: 0.0 }),
+            _ => PropulsionDemand { normalized: 0.0 },
+        };
+        let propulsion = FlightPolicy::default().constrain_propulsion(requested, true, true);
+        self.authority.throttle = propulsion.normalized;
+        self.authority.engine_active = propulsion.normalized > 0.0;
+        self.control_mode = mode;
+        self.guidance = Some((intent, propulsion));
+        true
+    }
+
+    fn start_plan(&mut self, plan: TrajectoryPlan, host: &mut AutopilotHost) -> bool {
+        host.scheduler.cancel_all();
+        self.guidance = None;
+        self.last_autopilot_notice = self.authority.wake_notice.clone();
+        let now = SimTime(self.authority.flight_time_s);
+        let runner = match TrajectoryPlanRunner::new(plan, now) {
+            Ok(runner) => runner,
+            Err(error) => return self.fail_autopilot(error.to_string()),
+        };
+        self.plan_runner = Some(runner);
+        match self.poll_plan(None) {
+            Ok(changed) => changed,
+            Err(error) => self.fail_autopilot(error),
+        }
+    }
+
+    fn prepare_plan(&mut self, event: Option<&str>) -> Result<Option<SimTime>, String> {
+        let now = SimTime(self.authority.flight_time_s);
+        let poll = self
+            .plan_runner
+            .as_mut()
+            .ok_or_else(|| "no active autopilot plan".to_string())?
+            .poll(now, event)
+            .map_err(|error| error.to_string())?;
+        match poll {
+            PlanPoll::Action { action, .. } => {
+                let until = match &action {
+                    PlanAction::Coast { until }
+                    | PlanAction::Burn { until, .. }
+                    | PlanAction::Guidance { until, .. } => *until,
+                };
+                self.apply_plan_action(action)?;
+                Ok(Some(until))
+            }
+            PlanPoll::Waiting { condition, .. } => {
+                eprintln!("[server] autopilot plan waiting on {condition:?}");
+                self.clear_autopilot_controls();
+                Ok(match condition {
+                    thessa_autopilot::WaitCondition::At(time) if time.0 > now.0 => Some(time),
+                    _ => None,
+                })
+            }
+            PlanPoll::Complete { .. } => {
+                self.plan_runner = None;
+                self.clear_autopilot_controls();
+                Ok(None)
+            }
+        }
+    }
+
+    fn poll_plan(&mut self, event: Option<&str>) -> Result<bool, String> {
+        self.prepare_plan(event).map(|_| true)
+    }
+
+    fn apply_plan_action(&mut self, action: PlanAction) -> Result<bool, String> {
+        match action {
+            PlanAction::Coast { .. } => {
+                self.clear_autopilot_controls();
+                Ok(true)
+            }
+            PlanAction::Burn { demand, .. } => {
+                if demand.force_body_n.length_squared() > 1.0e-24
+                    || demand.moment_body_nm.length_squared() > 1.0e-24
+                {
+                    return Err(
+                        "starter authority cannot realize force/moment fields in a plan burn"
+                            .into(),
+                    );
+                }
+                let propulsion =
+                    FlightPolicy::default().constrain_propulsion(demand.propulsion, true, true);
+                self.authority.control_input = DVec3::ZERO;
+                self.authority.sas_enabled = false;
+                self.authority.throttle = propulsion.normalized;
+                self.authority.engine_active = propulsion.normalized > 0.0;
+                self.control_mode = ControlMode::Direct;
+                self.guidance = Some((GuidanceIntent::ManualAxes(Default::default()), propulsion));
+                Ok(true)
+            }
+            PlanAction::Guidance { intent, .. } => Ok(self.apply_script_guidance(intent)),
+        }
+    }
+
+    fn clear_autopilot_controls(&mut self) {
+        self.guidance = None;
+        self.control_mode = ControlMode::Direct;
+        self.authority.control_input = DVec3::ZERO;
+        self.authority.sas_enabled = false;
+        self.authority.throttle = 0.0;
+        self.authority.engine_active = false;
+    }
+
+    fn cancel_autopilot_tasks(&mut self) {
+        self.plan_runner = None;
+    }
+
+    fn fail_autopilot(&mut self, error: impl Into<String>) -> bool {
+        let error = error.into();
+        self.cancel_autopilot_tasks();
+        self.clear_autopilot_controls();
+        self.authority.flight_error = Some(error.clone());
+        eprintln!("[server] autopilot rejected: {error}");
+        true
+    }
+
+    fn wake_autopilot(
+        &mut self,
+        host: &mut AutopilotHost,
+        event: Option<&str>,
+    ) -> Result<bool, String> {
+        if host.scheduler.is_empty() {
+            return Ok(false);
+        }
+        let now = SimTime(self.authority.flight_time_s);
+        let steps = host
+            .scheduler
+            .wake(&host.engine, now, event)
+            .map_err(|error| error.to_string())?;
+        let mut changed = false;
+        for step in steps {
+            changed |= self.apply_script_step(step, host);
+        }
+        Ok(changed)
+    }
+
+    fn take_autopilot_event(&mut self) -> Option<&'static str> {
+        let notice = self.authority.wake_notice.clone()?;
+        if self.last_autopilot_notice.as_deref() == Some(notice.as_str()) {
+            return None;
+        }
+        self.last_autopilot_notice = Some(notice.clone());
+        let upper = notice.to_ascii_uppercase();
+        if upper.contains("IMPACT") {
+            Some("impact")
+        } else if upper.contains("HORIZON") {
+            Some("horizon")
+        } else if upper.contains("NODE") {
+            Some("node")
+        } else if upper.contains("ALARM") {
+            Some("alarm")
+        } else {
+            None
+        }
+    }
+
     /// Advance one requested wall quantum (or a benchmark chunk); returns
     /// sim-seconds actually advanced. The optional budget only makes ordinary
     /// physics cooperative; it never changes the fixed solver dt.
@@ -345,6 +602,13 @@ impl Sim {
     ) -> Result<f64, String> {
         if self.paused() || self.authority.flight_error.is_some() {
             return Ok(0.0);
+        }
+        let mut chunk_s = chunk_s;
+        if self.plan_runner.is_some() {
+            let now = SimTime(self.authority.flight_time_s);
+            if let Some(until) = self.prepare_plan(None)? {
+                chunk_s = chunk_s.min((until.0 - now.0).max(0.0));
+            }
         }
         let before = self.authority.flight_time_s;
         let started = Instant::now();
@@ -492,6 +756,14 @@ fn decode_guidance_input(frame: &[u8]) -> Option<GuidanceInput> {
     thessa_flight_net::decode_payload::<GuidanceInput>(&envelope).ok()
 }
 
+fn decode_autopilot_input(frame: &[u8]) -> Option<AutopilotInput> {
+    let envelope = thessa_flight_net::decode_frame(frame).ok()?;
+    if envelope.kind != kind::AUTOPILOT_COMMAND {
+        return None;
+    }
+    thessa_flight_net::decode_payload::<AutopilotInput>(&envelope).ok()
+}
+
 fn enqueue_client_inputs(
     id: &str,
     frames: impl IntoIterator<Item = Vec<u8>>,
@@ -507,6 +779,12 @@ fn enqueue_client_inputs(
         } else if let Some(guidance) = decode_guidance_input(&frame)
             && upstream
                 .send(Upstream::Guidance(id.to_string(), guidance))
+                .is_err()
+        {
+            return false;
+        } else if let Some(autopilot) = decode_autopilot_input(&frame)
+            && upstream
+                .send(Upstream::Autopilot(id.to_string(), autopilot))
                 .is_err()
         {
             return false;
@@ -549,6 +827,7 @@ fn driver_sleep_duration(
 enum Upstream {
     Input(String, ClientInput),
     Guidance(String, GuidanceInput),
+    Autopilot(String, AutopilotInput),
     Leave(String),
     Subscribe(String, tokio::sync::mpsc::UnboundedSender<Vec<u8>>),
 }
@@ -598,6 +877,7 @@ impl PendingInput {
 /// stdio and TCP only differ in how frames arrive and where snapshots go.
 struct Driver {
     sim: Sim,
+    autopilot: AutopilotHost,
     upstream: Receiver<Upstream>,
     subscribers: Vec<(String, tokio::sync::mpsc::UnboundedSender<Vec<u8>>)>,
     /// Desired authoritative sim time generated from real wall time and the
@@ -642,7 +922,11 @@ impl Driver {
             match message {
                 Upstream::Input(id, input) => pending.entry(id).or_default().push(input),
                 Upstream::Guidance(id, input) => {
+                    self.autopilot.scheduler.cancel_all();
                     force_snapshot |= self.sim.apply_guidance(&id, &input);
+                }
+                Upstream::Autopilot(id, input) => {
+                    force_snapshot |= self.sim.apply_autopilot(&id, &input, &mut self.autopilot);
                 }
                 Upstream::Leave(id) => {
                     if let Some(mut queued) = pending.remove(&id)
@@ -676,6 +960,7 @@ impl Driver {
         }
         for (id, mut queued) in pending {
             if let Some(input) = queued.take() {
+                self.autopilot.scheduler.cancel_all();
                 force_snapshot |= self.sim.apply_input(&id, &input);
             }
         }
@@ -689,7 +974,29 @@ impl Driver {
     /// exit mode). Inputs are coalesced before the pacing target is sampled.
     fn iterate(&mut self) -> Result<bool, String> {
         let warp_before_inputs = self.sim.requested_warp();
-        let (force_snapshot, ingress_saturated) = self.drain_upstream();
+        let (mut force_snapshot, ingress_saturated) = self.drain_upstream();
+        let autopilot_event = self.sim.take_autopilot_event();
+        match self
+            .sim
+            .wake_autopilot(&mut self.autopilot, autopilot_event)
+        {
+            Ok(changed) => force_snapshot |= changed,
+            Err(error) => {
+                self.autopilot.scheduler.cancel_all();
+                force_snapshot |= self.sim.fail_autopilot(error);
+            }
+        }
+        if let Some(event) = autopilot_event
+            && self.sim.plan_runner.is_some()
+        {
+            match self.sim.poll_plan(Some(event)) {
+                Ok(changed) => force_snapshot |= changed,
+                Err(error) => {
+                    self.autopilot.scheduler.cancel_all();
+                    force_snapshot |= self.sim.fail_autopilot(error);
+                }
+            }
+        }
         let warp_after_inputs = self.sim.requested_warp();
         if warp_after_inputs < warp_before_inputs {
             // A lower vote changes the wall-time target immediately. Keeping
@@ -726,11 +1033,17 @@ impl Driver {
             let requested_warp = self.sim.requested_warp();
             self.pacing_target_s += wall_delta * requested_warp;
             let demand_s = (self.pacing_target_s - self.sim.advanced_s).max(0.0);
-            let chunk = if demand_s + 1.0e-12 >= tick_s {
+            let mut chunk = if demand_s + 1.0e-12 >= tick_s {
                 demand_s
             } else {
                 0.0
             };
+            if let Some(wake) = self.autopilot.scheduler.next_time() {
+                let now = SimTime(self.sim.authority.flight_time_s);
+                if wake.0 > now.0 {
+                    chunk = chunk.min(wake.0 - now.0);
+                }
+            }
             let advanced_before = self.sim.advanced_s;
             let mut advanced_delta = 0.0;
             let mut budget_exhausted = false;
@@ -748,6 +1061,28 @@ impl Driver {
                 // bake is distinguishable from an already-running flight.
                 advanced_delta = self.sim.advanced_s - advanced_before;
                 budget_exhausted = self.sim.authority.work_budget_exhausted;
+            }
+            let autopilot_event = self.sim.take_autopilot_event();
+            match self
+                .sim
+                .wake_autopilot(&mut self.autopilot, autopilot_event)
+            {
+                Ok(changed) => force_snapshot |= changed,
+                Err(error) => {
+                    self.autopilot.scheduler.cancel_all();
+                    force_snapshot |= self.sim.fail_autopilot(error);
+                }
+            }
+            if let Some(event) = autopilot_event
+                && self.sim.plan_runner.is_some()
+            {
+                match self.sim.poll_plan(Some(event)) {
+                    Ok(changed) => force_snapshot |= changed,
+                    Err(error) => {
+                        self.autopilot.scheduler.cancel_all();
+                        force_snapshot |= self.sim.fail_autopilot(error);
+                    }
+                }
             }
             let lag_s = (self.pacing_target_s - self.sim.advanced_s).max(0.0);
             let bake_wait = chunk > 0.0
@@ -888,6 +1223,7 @@ fn run_stdio(mut sim: Sim) -> Result<(), String> {
 
     let mut driver = Driver {
         sim,
+        autopilot: AutopilotHost::new()?,
         upstream: upstream_rx,
         subscribers: Vec::new(),
         pacing_target_s: 0.0,
@@ -1063,8 +1399,16 @@ fn run_tcp(mut sim: Sim, addr: &str) -> Result<(), String> {
         let (upstream_tx, upstream_rx) = channel::<Upstream>();
         // Sim driver thread: blocking sleeps stay off the tokio workers.
         std::thread::spawn(move || {
+            let autopilot = match AutopilotHost::new() {
+                Ok(autopilot) => autopilot,
+                Err(error) => {
+                    eprintln!("[server] {error}");
+                    return;
+                }
+            };
             let mut driver = Driver {
                 sim,
+                autopilot,
                 upstream: upstream_rx,
                 subscribers: Vec::new(),
                 pacing_target_s: 0.0,
@@ -1119,6 +1463,8 @@ fn run() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::DQuat;
+    use thessa_autopilot::PlanExecutionMode;
 
     fn input(commands: Vec<Command>) -> ClientInput {
         ClientInput {
@@ -1155,6 +1501,124 @@ mod tests {
         sim.advance_chunk(0.02).expect("advance typed guidance");
         assert_eq!(sim.control_mode, ControlMode::Navball);
         assert!(sim.authority.state.position_inertial_m.is_finite());
+    }
+
+    #[test]
+    fn server_owns_script_waits_and_wakes_them_on_sim_time() {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let mut sim = Sim::new(ephemeris, reference_body, false, true).expect("sim");
+        let mut host = AutopilotHost::new().expect("autopilot host");
+        sim.register("pilot");
+
+        let input = AutopilotInput {
+            tick: 0,
+            command: AutopilotCommand::StartScript {
+                source: "await sim.sleep(0.05); return Guidance.angularRate(0.1, 0, 0);".into(),
+            },
+        };
+        assert!(sim.apply_autopilot("pilot", &input, &mut host));
+        assert_eq!(host.scheduler.pending(), 1);
+        assert!(sim.guidance.is_none());
+        assert_eq!(host.scheduler.next_time(), Some(SimTime(0.05)));
+
+        sim.authority.flight_time_s = 0.05;
+        assert!(sim.wake_autopilot(&mut host, None).expect("wake script"));
+        assert!(matches!(
+            sim.guidance,
+            Some((
+                GuidanceIntent::AngularRate { .. },
+                PropulsionDemand { normalized: 0.0 }
+            ))
+        ));
+        assert_eq!(sim.control_mode, ControlMode::Rate);
+    }
+
+    #[test]
+    fn server_executes_and_deoptimizes_a_submitted_plan() {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let mut sim = Sim::new(ephemeris, reference_body, false, true).expect("sim");
+        let mut host = AutopilotHost::new().expect("autopilot host");
+        sim.register("pilot");
+        let plan = TrajectoryPlan {
+            id: thessa_flight_authority::TrajectoryPlanId(33),
+            segments: vec![
+                thessa_autopilot::TrajectorySegment::Coast { duration_s: 0.02 },
+                thessa_autopilot::TrajectorySegment::Guidance {
+                    duration_s: 0.1,
+                    intent: GuidanceIntent::ManualAxes(Default::default()),
+                },
+            ],
+            bakeability: thessa_autopilot::Bakeability::Guarded,
+        };
+        let input = AutopilotInput {
+            tick: 0,
+            command: AutopilotCommand::SubmitPlan { plan },
+        };
+        assert!(sim.apply_autopilot("pilot", &input, &mut host));
+        assert!(sim.plan_runner.is_some());
+        assert!(!sim.authority.engine_active);
+
+        sim.authority.flight_time_s = 0.02;
+        sim.poll_plan(None).expect("advance plan cursor");
+        assert_eq!(sim.plan_runner.as_ref().unwrap().segment_index(), 1);
+        assert!(sim.plan_runner.as_ref().unwrap().mode() == PlanExecutionMode::Baked);
+
+        let deoptimize = AutopilotInput {
+            tick: 1,
+            command: AutopilotCommand::Deoptimize {
+                reason: thessa_autopilot::PlanDeoptimizationReason::GuardInvalidated,
+            },
+        };
+        assert!(sim.apply_autopilot("pilot", &deoptimize, &mut host));
+        assert_eq!(
+            sim.plan_runner.as_ref().unwrap().mode(),
+            PlanExecutionMode::Live
+        );
+    }
+
+    #[test]
+    fn server_wakes_a_plan_from_an_authoritative_event() {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let mut sim = Sim::new(ephemeris, reference_body, false, true).expect("sim");
+        let mut host = AutopilotHost::new().expect("autopilot host");
+        sim.register("pilot");
+        let plan = TrajectoryPlan {
+            id: thessa_flight_authority::TrajectoryPlanId(34),
+            segments: vec![
+                thessa_autopilot::TrajectorySegment::Wait {
+                    condition: thessa_autopilot::WaitCondition::Event("impact".into()),
+                },
+                thessa_autopilot::TrajectorySegment::Guidance {
+                    duration_s: 0.1,
+                    intent: GuidanceIntent::AngularRate {
+                        rate_body_rps: DVec3::new(0.1, 0.0, 0.0),
+                    },
+                },
+            ],
+            bakeability: thessa_autopilot::Bakeability::Live,
+        };
+        let input = AutopilotInput {
+            tick: 0,
+            command: AutopilotCommand::SubmitPlan { plan },
+        };
+        assert!(sim.apply_autopilot("pilot", &input, &mut host));
+        assert_eq!(sim.plan_runner.as_ref().unwrap().segment_index(), 0);
+
+        sim.authority.wake_notice = Some("IMPACT detected".into());
+        let event = sim.take_autopilot_event();
+        assert_eq!(event, Some("impact"));
+        assert!(sim.poll_plan(event).expect("wake plan"));
+        assert_eq!(sim.plan_runner.as_ref().unwrap().segment_index(), 1);
+        assert_eq!(sim.control_mode, ControlMode::Rate);
     }
 
     #[test]
@@ -1235,6 +1699,7 @@ mod tests {
         let (upstream_tx, upstream_rx) = channel();
         let mut driver = Driver {
             sim,
+            autopilot: AutopilotHost::new().expect("autopilot host"),
             upstream: upstream_rx,
             subscribers: Vec::new(),
             pacing_target_s: 1.0e9,
@@ -1271,6 +1736,7 @@ mod tests {
         let (snapshot_tx, mut snapshot_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut driver = Driver {
             sim,
+            autopilot: AutopilotHost::new().expect("autopilot host"),
             upstream: upstream_rx,
             subscribers: vec![("pilot".into(), snapshot_tx)],
             pacing_target_s: 0.0,

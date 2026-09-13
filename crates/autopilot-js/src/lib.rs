@@ -328,12 +328,21 @@ impl ScriptScheduler {
         removed_wait || removed_continuation
     }
 
+    pub fn cancel_all(&mut self) {
+        self.waits = WaitSet::default();
+        self.continuations.clear();
+    }
+
     pub fn next_time(&self) -> Option<SimTime> {
         self.waits.next_time()
     }
 
     pub fn pending(&self) -> usize {
         self.waits.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.waits.is_empty()
     }
 
     fn attach(

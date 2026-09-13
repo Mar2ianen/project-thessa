@@ -31,6 +31,9 @@ pub mod kind {
     /// Typed guidance intent. Legacy CLIENT_INPUT remains available during
     /// the protocol migration and can be retired after both peers migrate.
     pub const GUIDANCE_COMMAND: u32 = 7;
+    /// Server-owned graph / trajectory commands. The payload contains intent
+    /// or sandboxed source, never authoritative world or actuator state.
+    pub const AUTOPILOT_COMMAND: u32 = 8;
 }
 
 /// Versioned envelope around one postcard-encoded game payload.

@@ -7,6 +7,8 @@ license = "GPL-3.0-or-later"
 publish = false
 
 [dependencies]
+thessa-autopilot = { path = "../../crates/autopilot" }
+thessa-autopilot-js = { path = "../../crates/autopilot-js" }
 thessa-sim-core = { path = "../../crates/sim-core" }
 thessa-protocol = { path = "../../crates/protocol" }
 thessa-flight-authority = { path = "../../crates/flight-authority" }

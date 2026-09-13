@@ -796,8 +796,11 @@ impl FlightAuthority {
         }
     }
 
-    /// Shared adoption: state/key check, then swap. Used by the async poll
-    /// and the blocking catch-up alike.
+    /// Shared adoption: integrity check (this bake, this universe) plus
+    /// timeliness (current state still on it), then swap. A worker that
+    /// finished after the sim outran it is rejected instead of regressing
+    /// the cache; the loop re-requests from live state. Used by the async
+    /// poll and the blocking catch-up alike.
     fn adopt_rails_bake(&mut self, ephemeris: &BakedEphemeris, baked: BakedRails) {
         let rails = baked.rails;
         if let Some(path) = rails.path()
@@ -1168,6 +1171,7 @@ impl FlightAuthority {
     }
 
     /// Full rigid-body step for powered/aero flight (translation integrated).
+    #[allow(clippy::too_many_arguments)]
     fn integrate_powered_step(
         &mut self,
         gravity: DVec3,
@@ -2088,7 +2092,7 @@ mod tests {
     /// zero density), so the test tracks the model, not a magic number.
     #[test]
     fn declared_vacuum_unlocks_batches_above_the_top() {
-        let (ephemeris, flight) = fixture();
+        let (_ephemeris, flight) = fixture();
         let probe_altitude_m = [300_000.0f64, 350_000.0, 400_000.0, 500_000.0, 800_000.0]
             .into_iter()
             .find(|altitude_m| {

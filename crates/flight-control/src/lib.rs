@@ -437,14 +437,86 @@ impl SpacecraftControlLaw {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DirectControlLaw;
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct DirectControlLaw {
+    pub force_scale_n: f64,
+    pub moment_scale_nm: f64,
+}
+
+impl Default for DirectControlLaw {
+    fn default() -> Self {
+        Self {
+            force_scale_n: 800.0,
+            moment_scale_nm: 400.0,
+        }
+    }
+}
+
+impl DirectControlLaw {
+    fn control_demand(
+        self,
+        intent: &GuidanceIntent,
+        propulsion: PropulsionDemand,
+    ) -> Result<ControlDemand, ControlError> {
+        intent.validate()?;
+        PropulsionDemand::new(propulsion.normalized)?;
+        if !self.force_scale_n.is_finite()
+            || self.force_scale_n < 0.0
+            || !self.moment_scale_nm.is_finite()
+            || self.moment_scale_nm < 0.0
+        {
+            return Err(ControlError::InvalidController);
+        }
+        let GuidanceIntent::ManualAxes(axes) = intent else {
+            return Err(ControlError::UnsupportedIntent);
+        };
+        Ok(ControlDemand {
+            force_body_n: axes.translation * self.force_scale_n,
+            moment_body_nm: DVec3::new(axes.roll, -axes.pitch, -axes.yaw) * self.moment_scale_nm,
+            propulsion,
+        })
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum FlightControlLaw {
     Aircraft(AircraftControlLaw),
     Spacecraft(SpacecraftControlLaw),
     Direct(DirectControlLaw),
+}
+
+/// Read-only state selected by a control-law dispatcher. Pairing state and
+/// law explicitly prevents a plane controller from silently consuming a
+/// spacecraft-only state (or vice versa).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ControlLawState {
+    Aircraft(AircraftState),
+    Spacecraft(AttitudeState),
+}
+
+impl FlightControlLaw {
+    pub fn control_demand(
+        self,
+        state: ControlLawState,
+        intent: &GuidanceIntent,
+        propulsion: PropulsionDemand,
+    ) -> Result<ControlDemand, ControlError> {
+        match (self, state) {
+            (Self::Aircraft(law), ControlLawState::Aircraft(state)) => {
+                law.control_demand(state, intent, propulsion)
+            }
+            (Self::Spacecraft(law), ControlLawState::Spacecraft(state)) => {
+                law.control_demand(state, intent, propulsion)
+            }
+            (Self::Direct(law), _) => law.control_demand(intent, propulsion),
+            (Self::Aircraft(_), ControlLawState::Spacecraft(_)) => {
+                Err(ControlError::MismatchedControlState)
+            }
+            (Self::Spacecraft(_), ControlLawState::Aircraft(_)) => {
+                Err(ControlError::MismatchedControlState)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
@@ -683,6 +755,7 @@ pub enum ControlError {
     InvalidAttitude,
     InvalidEffector,
     InvalidController,
+    MismatchedControlState,
     UnsupportedIntent,
 }
 
@@ -702,6 +775,9 @@ impl fmt::Display for ControlError {
             Self::InvalidAttitude => write!(formatter, "attitude target must be a unit quaternion"),
             Self::InvalidEffector => write!(formatter, "effector contribution is invalid"),
             Self::InvalidController => write!(formatter, "control-law parameters are invalid"),
+            Self::MismatchedControlState => {
+                write!(formatter, "control law and supplied state are incompatible")
+            }
             Self::UnsupportedIntent => write!(
                 formatter,
                 "control law does not support this guidance intent"
@@ -834,6 +910,44 @@ mod tests {
             )
             .unwrap();
         assert_eq!(demand.force_body_n, DVec3::new(400.0, -800.0, 200.0));
+    }
+
+    #[test]
+    fn unified_dispatcher_realizes_direct_axes_as_a_physical_demand() {
+        let demand = FlightControlLaw::Direct(DirectControlLaw::default())
+            .control_demand(
+                ControlLawState::Spacecraft(AttitudeState {
+                    orientation_body_to_inertial: DQuat::IDENTITY,
+                    angular_velocity_body_rps: DVec3::ZERO,
+                    inertia_body_kg_m2: DMat3::from_diagonal(DVec3::splat(2.0)),
+                }),
+                &GuidanceIntent::ManualAxes(PilotAxes {
+                    pitch: 0.5,
+                    translation: DVec3::new(0.25, 0.0, -0.5),
+                    propulsion: 0.75,
+                    ..PilotAxes::default()
+                }),
+                PropulsionDemand::new(0.75).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(demand.force_body_n, DVec3::new(200.0, 0.0, -400.0));
+        assert_eq!(demand.moment_body_nm, DVec3::new(0.0, -200.0, 0.0));
+    }
+
+    #[test]
+    fn unified_dispatcher_rejects_a_mismatched_aircraft_state() {
+        let error = FlightControlLaw::Aircraft(AircraftControlLaw::default())
+            .control_demand(
+                ControlLawState::Spacecraft(AttitudeState {
+                    orientation_body_to_inertial: DQuat::IDENTITY,
+                    angular_velocity_body_rps: DVec3::ZERO,
+                    inertia_body_kg_m2: DMat3::from_diagonal(DVec3::splat(2.0)),
+                }),
+                &GuidanceIntent::ManualAxes(PilotAxes::default()),
+                PropulsionDemand::new(0.0).unwrap(),
+            )
+            .expect_err("aircraft law must not consume spacecraft state");
+        assert_eq!(error, ControlError::MismatchedControlState);
     }
 
     #[test]

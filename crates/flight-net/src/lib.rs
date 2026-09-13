@@ -6,6 +6,7 @@
 //! `thessa-protocol`; this crate only owns the game payload registry.
 
 use serde::{Deserialize, Serialize};
+use thessa_flight_authority::ControlMode;
 use thessa_protocol::{CodecError, Envelope, kind};
 use thessa_sim_core::RigidBodyState;
 
@@ -41,6 +42,10 @@ pub struct ClientInput {
     pub tick: u64,
     /// Manual body-axis command: pitch, yaw, roll in normalized units.
     pub control_input: [f64; 3],
+    /// Assist mode selecting the server-side control law.
+    pub control_mode: ControlMode,
+    /// SAS attitude target as (x, y, z, w); ignored unless finite nonzero.
+    pub sas_target_xyzw: [f64; 4],
     pub throttle: f64,
     pub engine_active: bool,
     pub sas_enabled: bool,
@@ -102,11 +107,14 @@ pub fn encode_welcome(welcome: &Welcome) -> Result<Vec<u8>, CodecError> {
 mod tests {
     use super::*;
     use glam::{DQuat, DVec3};
+    use thessa_protocol::FrameDecoder;
 
     fn sample_input() -> ClientInput {
         ClientInput {
             tick: 7200,
             control_input: [0.1, -0.2, 0.0],
+            control_mode: ControlMode::Navball,
+            sas_target_xyzw: [0.0, 0.0, 0.0, 1.0],
             throttle: 0.65,
             engine_active: true,
             sas_enabled: true,

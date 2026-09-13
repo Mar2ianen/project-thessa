@@ -104,6 +104,7 @@ fn load_system(path: &str) -> Result<(BakedEphemeris, BodyId), String> {
 struct Sim {
     authority: FlightAuthority,
     ephemeris: BakedEphemeris,
+    control_mode: ControlMode,
     warp: f64,
     paused: bool,
     advanced_s: f64,
@@ -123,6 +124,7 @@ impl Sim {
         Ok(Self {
             authority,
             ephemeris,
+            control_mode: ControlMode::Navball,
             warp: 1.0,
             paused: false,
             advanced_s: 0.0,
@@ -135,6 +137,18 @@ impl Sim {
     fn apply_input(&mut self, input: &ClientInput) {
         let authority = &mut self.authority;
         authority.control_input = DVec3::from_array(input.control_input);
+        self.control_mode = input.control_mode;
+        // A degenerate wire target must never reach the attitude law:
+        // keep the previous target unless the new one is finite nonzero.
+        let target = glam::DQuat::from_xyzw(
+            input.sas_target_xyzw[0],
+            input.sas_target_xyzw[1],
+            input.sas_target_xyzw[2],
+            input.sas_target_xyzw[3],
+        );
+        if target.is_finite() && target.length_squared() > 1e-12 {
+            authority.sas_target_orientation = target.normalize();
+        }
         authority.throttle = input.throttle.clamp(0.0, 1.0);
         authority.engine_active = input.engine_active;
         authority.sas_enabled = input.sas_enabled;
@@ -162,7 +176,7 @@ impl Sim {
         let before = self.authority.flight_time_s;
         let started = Instant::now();
         self.authority
-            .advance_with_budget(&self.ephemeris, ControlMode::Navball, chunk_s, None)
+            .advance_with_budget(&self.ephemeris, self.control_mode, chunk_s, None)
             .map_err(|e| {
                 self.authority.engine_active = false;
                 self.authority.flight_error = Some(e.to_string());

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 pub struct ProtocolVersion(pub u16);
 
 impl ProtocolVersion {
-    pub const CURRENT: Self = Self(1);
+    pub const CURRENT: Self = Self(2);
 }
 
 /// Numeric message kind. Game payloads assign their own registry in the

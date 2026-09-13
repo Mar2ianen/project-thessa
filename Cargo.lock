@@ -5348,6 +5348,7 @@ dependencies = [
  "glam",
  "postcard",
  "serde",
+ "thessa-flight-authority",
  "thessa-protocol",
  "thessa-sim-core",
 ]
@@ -5380,9 +5381,14 @@ dependencies = [
 name = "thessa-server"
 version = "0.0.1"
 dependencies = [
+ "glam",
+ "serde",
+ "thessa-flight-authority",
+ "thessa-flight-net",
  "thessa-protocol",
  "thessa-sim-core",
  "tokio",
+ "toml",
 ]
 
 [[package]]

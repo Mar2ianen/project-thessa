@@ -15,8 +15,9 @@ use std::time::{Duration, Instant};
 
 use glam::DVec3;
 use thessa_autopilot::{
-    AutopilotGraph, ImpactSite, LandingSite, PlanAction, PlanPoll, TrajectoryPlan,
-    TrajectoryPlanRunner,
+    AutopilotGraph, BlockStatus, GraphBlock, GraphNode, GraphNodeOutcome, GraphRunner, GraphValue,
+    ImpactSite, LandingSite, NodeKind, PlanAction, PlanPoll, PortDirection, PortType,
+    TrajectoryPlan, TrajectoryPlanRunner, WaitCondition,
 };
 use thessa_autopilot_js::{
     ScriptEngine, ScriptLimits, ScriptResult, ScriptScheduler, ScriptSchedulerStep,
@@ -156,6 +157,7 @@ struct Sim {
     guidance: Option<(GuidanceIntent, PropulsionDemand)>,
     plan_demand: Option<ControlDemand>,
     autopilot_graph: Option<AutopilotGraph>,
+    graph_runner: Option<GraphRunner>,
     /// Declared autopilot targets stay data-only until a later landing/
     /// impact planner consumes them and asks the field for obstacle evidence.
     landing_site: Option<LandingSite>,
@@ -177,6 +179,72 @@ struct Sim {
 struct AutopilotHost {
     scheduler: ScriptScheduler,
     engine: ScriptEngine,
+}
+
+/// Structural native graph host used until domain-specific blocks are
+/// registered. It forwards matching typed values and makes a wait node an
+/// event boundary; it never receives mutable access to flight state.
+#[derive(Debug, Default)]
+struct NativeGraphBlock;
+
+impl GraphBlock for NativeGraphBlock {
+    fn execute(
+        &mut self,
+        node: &GraphNode,
+        inputs: &BTreeMap<String, GraphValue>,
+    ) -> GraphNodeOutcome {
+        if matches!(node.kind, NodeKind::Wait)
+            || matches!(
+                node.kind,
+                NodeKind::Custom {
+                    wait_capable: true,
+                    ..
+                }
+            )
+        {
+            return GraphNodeOutcome::Wait {
+                condition: WaitCondition::Event(node.name.clone()),
+            };
+        }
+        let mut outputs = BTreeMap::new();
+        for port in node
+            .ports
+            .iter()
+            .filter(|port| port.direction == PortDirection::Output)
+        {
+            let value = inputs
+                .get(&port.name)
+                .cloned()
+                .or_else(|| {
+                    (inputs.len() == 1)
+                        .then(|| inputs.values().next().cloned())
+                        .flatten()
+                })
+                .or(match port.ty {
+                    PortType::Unit => Some(GraphValue::Unit),
+                    PortType::Bool => Some(GraphValue::Bool(false)),
+                    PortType::Number => Some(GraphValue::Number(0.0)),
+                    PortType::Any => Some(GraphValue::Unit),
+                    ty => Some(GraphValue::Typed(ty)),
+                });
+            let Some(value) = value else {
+                return GraphNodeOutcome::Fail {
+                    diagnostic: thessa_autopilot::Diagnostic {
+                        kind: thessa_autopilot::DiagnosticKind::NoSolution,
+                        code: "GRAPH_OUTPUT_UNRESOLVED".into(),
+                        message: format!(
+                            "graph node {:?} has no value for output {:?}",
+                            node.id, port.name
+                        ),
+                        value: None,
+                        limit: None,
+                    },
+                };
+            };
+            outputs.insert(port.name.clone(), value);
+        }
+        GraphNodeOutcome::Complete { outputs }
+    }
 }
 
 impl AutopilotHost {
@@ -216,6 +284,7 @@ impl Sim {
             guidance: None,
             plan_demand: None,
             autopilot_graph: None,
+            graph_runner: None,
             landing_site: None,
             landing_obstacles: None,
             impact_site: None,
@@ -398,6 +467,7 @@ impl Sim {
             AutopilotCommand::SubmitGraph { graph } => self.submit_graph(graph.clone()),
             AutopilotCommand::ClearGraph => {
                 self.autopilot_graph = None;
+                self.graph_runner = None;
                 true
             }
             AutopilotCommand::Cancel => {
@@ -412,6 +482,7 @@ impl Sim {
             AutopilotCommand::SubmitPlan { plan } => self.start_plan(plan.clone(), host),
             AutopilotCommand::StartScript { source } => {
                 self.plan_runner = None;
+                self.graph_runner = None;
                 host.scheduler.cancel_all();
                 self.last_autopilot_notice = self.authority.wake_notice.clone();
                 let now = SimTime(self.authority.flight_time_s);
@@ -428,12 +499,63 @@ impl Sim {
             Ok(validation) => validation,
             Err(errors) => return self.fail_autopilot(graph_errors(errors)),
         };
+        self.plan_runner = None;
+        self.plan_demand = None;
+        self.guidance = None;
+        self.graph_runner = match GraphRunner::new(graph.clone()) {
+            Ok(runner) => Some(runner),
+            Err(errors) => return self.fail_autopilot(graph_errors(errors)),
+        };
         self.autopilot_graph = Some(graph);
+        if let Err(error) = self.poll_graph(None) {
+            return self.fail_autopilot(error);
+        }
         self.authority.wake_notice = Some(format!(
             "AUTOPILOT GRAPH READY nodes={}",
             validation.topological_order.len()
         ));
         true
+    }
+
+    fn poll_graph(&mut self, event: Option<&str>) -> Result<(), String> {
+        let (state, waiting_status) = {
+            let Some(runner) = self.graph_runner.as_mut() else {
+                return Ok(());
+            };
+            let mut block = NativeGraphBlock;
+            let state = runner
+                .poll(SimTime(self.authority.flight_time_s), event, &mut block)
+                .map_err(|error| error.to_string())?;
+            let status = match &state {
+                thessa_autopilot::GraphRunState::Waiting { node, .. } => {
+                    Some((*node, runner.status(*node).unwrap_or(BlockStatus::Waiting)))
+                }
+                _ => None,
+            };
+            (state, status)
+        };
+        match state {
+            thessa_autopilot::GraphRunState::Progress { .. } => Ok(()),
+            thessa_autopilot::GraphRunState::Waiting { node, .. } => {
+                let status = waiting_status
+                    .map(|(_, status)| status)
+                    .unwrap_or(BlockStatus::Waiting);
+                self.authority.wake_notice = Some(format!(
+                    "AUTOPILOT GRAPH WAIT node={:?} status={:?}",
+                    node, status
+                ));
+                Ok(())
+            }
+            thessa_autopilot::GraphRunState::Complete => {
+                self.authority.wake_notice = Some("AUTOPILOT GRAPH COMPLETE".into());
+                Ok(())
+            }
+            thessa_autopilot::GraphRunState::Failed { diagnostic, .. }
+            | thessa_autopilot::GraphRunState::Aborted { diagnostic, .. } => Err(format!(
+                "autopilot graph {}: {}",
+                diagnostic.code, diagnostic.message
+            )),
+        }
     }
 
     fn apply_script_step(&mut self, step: ScriptSchedulerStep, host: &mut AutopilotHost) -> bool {
@@ -548,6 +670,7 @@ impl Sim {
 
     fn start_plan(&mut self, plan: TrajectoryPlan, host: &mut AutopilotHost) -> bool {
         host.scheduler.cancel_all();
+        self.graph_runner = None;
         self.guidance = None;
         self.last_autopilot_notice = self.authority.wake_notice.clone();
         let now = SimTime(self.authority.flight_time_s);
@@ -634,6 +757,7 @@ impl Sim {
 
     fn cancel_autopilot_tasks(&mut self) {
         self.plan_runner = None;
+        self.graph_runner = None;
     }
 
     fn fail_autopilot(&mut self, error: impl Into<String>) -> bool {
@@ -650,18 +774,18 @@ impl Sim {
         host: &mut AutopilotHost,
         event: Option<&str>,
     ) -> Result<bool, String> {
-        if host.scheduler.is_empty() {
-            return Ok(false);
-        }
         let now = SimTime(self.authority.flight_time_s);
-        let steps = host
-            .scheduler
-            .wake(&host.engine, now, event)
-            .map_err(|error| error.to_string())?;
         let mut changed = false;
-        for step in steps {
-            changed |= self.apply_script_step(step, host);
+        if !host.scheduler.is_empty() {
+            let steps = host
+                .scheduler
+                .wake(&host.engine, now, event)
+                .map_err(|error| error.to_string())?;
+            for step in steps {
+                changed |= self.apply_script_step(step, host);
+            }
         }
+        self.poll_graph(event)?;
         Ok(changed)
     }
 
@@ -751,6 +875,7 @@ impl Sim {
         self.advanced_s += advanced;
         self.steps += self.authority.steps_this_frame as u64;
         self.rails_s += self.authority.rails_advanced_this_frame;
+        self.poll_graph(None)?;
         Ok(advanced)
     }
 
@@ -1816,7 +1941,7 @@ mod tests {
     }
 
     #[test]
-    fn server_validates_and_stores_graph_ir_before_execution() {
+    fn server_validates_and_executes_graph_ir_on_submit() {
         let config: SystemConfig =
             toml::from_str(include_str!("../../../data/system.toml")).expect("system");
         let ephemeris = config.bake().expect("bake");
@@ -1865,6 +1990,11 @@ mod tests {
         };
         assert!(sim.apply_autopilot("pilot", &input, &mut host));
         assert_eq!(sim.autopilot_graph, Some(graph));
+        assert!(
+            sim.graph_runner
+                .as_ref()
+                .is_some_and(GraphRunner::is_complete)
+        );
         assert!(
             sim.authority
                 .wake_notice

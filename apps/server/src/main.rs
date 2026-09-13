@@ -15,9 +15,9 @@ use std::time::{Duration, Instant};
 
 use glam::DVec3;
 use thessa_autopilot::{
-    AutopilotGraph, BlockStatus, GraphBlock, GraphNode, GraphNodeOutcome, GraphRunner, GraphValue,
-    ImpactSite, LandingSite, NodeKind, PlanAction, PlanPoll, PortDirection, PortType,
-    TrajectoryPlan, TrajectoryPlanRunner, WaitCondition,
+    AutopilotGraph, BlockStatus, GraphBlock, GraphControlAction, GraphNode, GraphNodeConfig,
+    GraphNodeOutcome, GraphRunner, GraphValue, ImpactSite, LandingSite, NodeKind, PlanAction,
+    PlanPoll, PortDirection, PortType, TrajectoryPlan, TrajectoryPlanRunner, WaitCondition,
 };
 use thessa_autopilot_js::{
     ScriptEngine, ScriptLimits, ScriptResult, ScriptScheduler, ScriptSchedulerStep,
@@ -188,6 +188,7 @@ struct AutopilotHost {
 #[derive(Debug, Default)]
 struct NativeGraphBlock {
     waited: std::collections::BTreeSet<thessa_autopilot::NodeId>,
+    control_actions: Vec<GraphControlAction>,
 }
 
 impl GraphBlock for NativeGraphBlock {
@@ -206,8 +207,24 @@ impl GraphBlock for NativeGraphBlock {
             );
         if waiting_node && self.waited.insert(node.id) {
             return GraphNodeOutcome::Wait {
-                condition: WaitCondition::Event(node.name.clone()),
+                condition: match node.config.as_ref() {
+                    Some(GraphNodeConfig::Wait { condition }) => condition.clone(),
+                    _ => WaitCondition::Event(node.name.clone()),
+                },
             };
+        }
+        match node.config.as_ref() {
+            Some(GraphNodeConfig::Guidance { intent, propulsion }) => {
+                self.control_actions.push(GraphControlAction::Guidance {
+                    intent: intent.clone(),
+                    propulsion: *propulsion,
+                })
+            }
+            Some(GraphNodeConfig::Demand { demand }) => {
+                self.control_actions
+                    .push(GraphControlAction::Demand { demand: *demand });
+            }
+            _ => {}
         }
         let mut outputs = BTreeMap::new();
         for port in node
@@ -215,21 +232,29 @@ impl GraphBlock for NativeGraphBlock {
             .iter()
             .filter(|port| port.direction == PortDirection::Output)
         {
-            let value = inputs
-                .get(&port.name)
-                .cloned()
-                .or_else(|| {
-                    (inputs.len() == 1)
-                        .then(|| inputs.values().next().cloned())
-                        .flatten()
-                })
-                .or(match port.ty {
-                    PortType::Unit => Some(GraphValue::Unit),
-                    PortType::Bool => Some(GraphValue::Bool(false)),
-                    PortType::Number => Some(GraphValue::Number(0.0)),
-                    PortType::Any => Some(GraphValue::Unit),
-                    ty => Some(GraphValue::Typed(ty)),
-                });
+            let configured_number = match node.config.as_ref() {
+                Some(GraphNodeConfig::Number { value }) if port.ty == PortType::Number => {
+                    Some(GraphValue::Number(*value))
+                }
+                _ => None,
+            };
+            let value = configured_number.or_else(|| {
+                inputs
+                    .get(&port.name)
+                    .cloned()
+                    .or_else(|| {
+                        (inputs.len() == 1)
+                            .then(|| inputs.values().next().cloned())
+                            .flatten()
+                    })
+                    .or(match port.ty {
+                        PortType::Unit => Some(GraphValue::Unit),
+                        PortType::Bool => Some(GraphValue::Bool(false)),
+                        PortType::Number => Some(GraphValue::Number(0.0)),
+                        PortType::Any => Some(GraphValue::Unit),
+                        ty => Some(GraphValue::Typed(ty)),
+                    })
+            });
             let Some(value) = value else {
                 return GraphNodeOutcome::Fail {
                     diagnostic: thessa_autopilot::Diagnostic {
@@ -247,6 +272,10 @@ impl GraphBlock for NativeGraphBlock {
             outputs.insert(port.name.clone(), value);
         }
         GraphNodeOutcome::Complete { outputs }
+    }
+
+    fn take_control_actions(&mut self) -> Vec<GraphControlAction> {
+        std::mem::take(&mut self.control_actions)
     }
 }
 
@@ -433,25 +462,32 @@ impl Sim {
             self.authority.engine_active = false;
             return true;
         }
+        self.apply_guidance_command(input.intent.clone(), input.propulsion)
+    }
+
+    fn apply_guidance_command(
+        &mut self,
+        intent: GuidanceIntent,
+        requested_propulsion: PropulsionDemand,
+    ) -> bool {
         let mode = match self
             .authority
-            .apply_guidance_intent(&self.ephemeris, &input.intent)
+            .apply_guidance_intent(&self.ephemeris, &intent)
         {
             Ok(mode) => mode,
             Err(error) => {
                 self.authority.flight_error = Some(error.to_string());
                 self.authority.engine_active = false;
-                return true;
+                return false;
             }
         };
-        // The starter vehicle has no reverse or augmentation actuator yet.
-        // Apply the native policy at the boundary instead of silently giving
-        // a script extra thrust authority.
-        let propulsion = FlightPolicy::default().constrain_propulsion(input.propulsion, true, true);
+        let propulsion =
+            FlightPolicy::default().constrain_propulsion(requested_propulsion, true, true);
+        self.plan_demand = None;
         self.authority.throttle = propulsion.normalized;
         self.authority.engine_active = propulsion.normalized > 0.0;
         self.control_mode = mode;
-        self.guidance = Some((input.intent.clone(), propulsion));
+        self.guidance = Some((intent, propulsion));
         true
     }
 
@@ -542,6 +578,37 @@ impl Sim {
             };
             (state, status)
         };
+        let actions = self.graph_block.take_control_actions();
+        for action in actions {
+            let applied = match action {
+                GraphControlAction::Guidance { intent, propulsion } => {
+                    self.apply_guidance_command(intent, propulsion)
+                }
+                GraphControlAction::Demand { demand } => {
+                    let demand = FlightPolicy::default().constrain_demand(demand, true, true);
+                    if let Err(error) = demand.validate() {
+                        self.authority.flight_error = Some(error.to_string());
+                        false
+                    } else {
+                        self.guidance = None;
+                        self.plan_demand = Some(demand);
+                        self.control_mode = ControlMode::Direct;
+                        self.authority.control_input = DVec3::ZERO;
+                        self.authority.sas_enabled = false;
+                        self.authority.throttle = demand.propulsion.normalized;
+                        self.authority.engine_active = demand.propulsion.normalized > 0.0;
+                        true
+                    }
+                }
+            };
+            if !applied {
+                return Err(self
+                    .authority
+                    .flight_error
+                    .clone()
+                    .unwrap_or_else(|| "native graph control action failed".into()));
+            }
+        }
         match state {
             thessa_autopilot::GraphRunState::Progress { .. } => Ok(()),
             thessa_autopilot::GraphRunState::Waiting { node, .. } => {
@@ -655,25 +722,21 @@ impl Sim {
     }
 
     fn apply_script_guidance(&mut self, intent: GuidanceIntent) -> bool {
-        let mode = match self
-            .authority
-            .apply_guidance_intent(&self.ephemeris, &intent)
-        {
-            Ok(mode) => mode,
-            Err(error) => return self.fail_autopilot(error.to_string()),
-        };
-        self.plan_demand = None;
         let requested = match intent {
             GuidanceIntent::ManualAxes(axes) => PropulsionDemand::new(axes.propulsion)
                 .unwrap_or(PropulsionDemand { normalized: 0.0 }),
             _ => PropulsionDemand { normalized: 0.0 },
         };
-        let propulsion = FlightPolicy::default().constrain_propulsion(requested, true, true);
-        self.authority.throttle = propulsion.normalized;
-        self.authority.engine_active = propulsion.normalized > 0.0;
-        self.control_mode = mode;
-        self.guidance = Some((intent, propulsion));
-        true
+        if self.apply_guidance_command(intent, requested) {
+            true
+        } else {
+            self.fail_autopilot(
+                self.authority
+                    .flight_error
+                    .clone()
+                    .unwrap_or_else(|| "autopilot guidance failed".into()),
+            )
+        }
     }
 
     fn start_plan(&mut self, plan: TrajectoryPlan, host: &mut AutopilotHost) -> bool {
@@ -1967,6 +2030,7 @@ mod tests {
                         "value",
                         thessa_autopilot::PortType::Number,
                     )],
+                    config: None,
                 },
                 thessa_autopilot::GraphNode {
                     id: thessa_autopilot::NodeId(2),
@@ -1977,6 +2041,7 @@ mod tests {
                         thessa_autopilot::PortType::Number,
                         true,
                     )],
+                    config: None,
                 },
             ],
             edges: vec![thessa_autopilot::GraphEdge {
@@ -2012,6 +2077,58 @@ mod tests {
     }
 
     #[test]
+    fn server_applies_configured_graph_guidance_through_authority() {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let mut sim = Sim::new(ephemeris, reference_body, false, true).expect("sim");
+        let mut host = AutopilotHost::new().expect("autopilot host");
+        sim.register("pilot");
+        let graph = AutopilotGraph {
+            nodes: vec![thessa_autopilot::GraphNode {
+                id: thessa_autopilot::NodeId(1),
+                name: "rate-controller".into(),
+                kind: thessa_autopilot::NodeKind::Controller {
+                    actuator_groups: vec![thessa_flight_control::ActuatorGroup::Rcs],
+                },
+                ports: vec![thessa_autopilot::Port::output(
+                    "target",
+                    thessa_autopilot::PortType::AngularRateTarget,
+                )],
+                config: Some(GraphNodeConfig::Guidance {
+                    intent: GuidanceIntent::AngularRate {
+                        rate_body_rps: DVec3::new(0.1, 0.0, 0.0),
+                    },
+                    propulsion: PropulsionDemand::new(0.0).unwrap(),
+                }),
+            }],
+            edges: Vec::new(),
+        };
+        assert!(sim.apply_autopilot(
+            "pilot",
+            &AutopilotInput {
+                tick: 0,
+                command: AutopilotCommand::SubmitGraph { graph },
+            },
+            &mut host,
+        ));
+        assert_eq!(sim.control_mode, ControlMode::Rate);
+        assert!(matches!(
+            sim.guidance,
+            Some((
+                GuidanceIntent::AngularRate { .. },
+                PropulsionDemand { normalized: 0.0 }
+            ))
+        ));
+        assert!(
+            sim.graph_runner
+                .as_ref()
+                .is_some_and(GraphRunner::is_complete)
+        );
+    }
+
+    #[test]
     fn server_wakes_a_native_graph_wait_from_an_authoritative_event() {
         let config: SystemConfig =
             toml::from_str(include_str!("../../../data/system.toml")).expect("system");
@@ -2030,6 +2147,7 @@ mod tests {
                         "done",
                         thessa_autopilot::PortType::Unit,
                     )],
+                    config: None,
                 },
                 thessa_autopilot::GraphNode {
                     id: thessa_autopilot::NodeId(2),
@@ -2040,6 +2158,7 @@ mod tests {
                         thessa_autopilot::PortType::Unit,
                         true,
                     )],
+                    config: None,
                 },
             ],
             edges: vec![thessa_autopilot::GraphEdge {

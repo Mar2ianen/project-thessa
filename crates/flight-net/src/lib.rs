@@ -269,6 +269,7 @@ mod tests {
                                 "value",
                                 thessa_autopilot::PortType::Number,
                             )],
+                            config: None,
                         },
                         thessa_autopilot::GraphNode {
                             id: thessa_autopilot::NodeId(2),
@@ -279,6 +280,7 @@ mod tests {
                                 thessa_autopilot::PortType::Number,
                                 true,
                             )],
+                            config: None,
                         },
                     ],
                     edges: vec![thessa_autopilot::GraphEdge {

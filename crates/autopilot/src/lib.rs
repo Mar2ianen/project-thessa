@@ -7,7 +7,9 @@
 use std::{collections::BTreeMap, error::Error, fmt};
 
 use serde::{Deserialize, Serialize};
-use thessa_flight_control::{ActuatorGroup, ControlDemand, GuidanceIntent, TrajectoryPlanId};
+use thessa_flight_control::{
+    ActuatorGroup, ControlDemand, GuidanceIntent, PropulsionDemand, TrajectoryPlanId,
+};
 use thessa_sim_core::SimTime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -215,12 +217,54 @@ impl NodeKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Optional declarative payload for a graph node. Keeping the payload in the
+/// graph IR makes native graphs useful without smuggling commands through
+/// node names, while the authority still remains the only code that mutates
+/// flight state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum GraphNodeConfig {
+    Number {
+        value: f64,
+    },
+    Guidance {
+        intent: GuidanceIntent,
+        propulsion: PropulsionDemand,
+    },
+    Demand {
+        demand: ControlDemand,
+    },
+    Wait {
+        condition: WaitCondition,
+    },
+}
+
+impl GraphNodeConfig {
+    fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Number { value } if !value.is_finite() => {
+                Err("graph number configuration must be finite".into())
+            }
+            Self::Guidance { intent, propulsion } => {
+                intent.validate().map_err(|error| error.to_string())?;
+                PropulsionDemand::new(propulsion.normalized)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            }
+            Self::Demand { demand } => demand.validate().map_err(|error| error.to_string()),
+            Self::Wait { condition } => condition.validate().map_err(|error| error.to_string()),
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GraphNode {
     pub id: NodeId,
     pub name: String,
     pub kind: NodeKind,
     pub ports: Vec<Port>,
+    #[serde(default)]
+    pub config: Option<GraphNodeConfig>,
 }
 
 impl GraphNode {
@@ -241,7 +285,7 @@ pub struct GraphEdge {
     pub to: PortRef,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct AutopilotGraph {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
@@ -259,6 +303,14 @@ impl AutopilotGraph {
         for node in &self.nodes {
             if nodes.insert(node.id, node).is_some() {
                 errors.push(GraphError::DuplicateNode(node.id));
+            }
+            if let Some(config) = &node.config
+                && let Err(message) = config.validate()
+            {
+                errors.push(GraphError::InvalidConfig {
+                    node: node.id,
+                    message,
+                });
             }
             let mut names = std::collections::HashSet::new();
             for port in &node.ports {
@@ -454,6 +506,10 @@ pub enum GraphError {
         first: NodeId,
         second: NodeId,
     },
+    InvalidConfig {
+        node: NodeId,
+        message: String,
+    },
     CycleWithoutWait,
 }
 
@@ -497,6 +553,12 @@ impl fmt::Display for GraphError {
                 formatter,
                 "actuator group {group:?} is owned by both {first:?} and {second:?}"
             ),
+            Self::InvalidConfig { node, message } => {
+                write!(
+                    formatter,
+                    "invalid configuration for graph node {node:?}: {message}"
+                )
+            }
             Self::CycleWithoutWait => {
                 write!(formatter, "graph cycle has no wait or yield boundary")
             }
@@ -589,6 +651,20 @@ impl fmt::Display for GraphValueError {
 
 impl Error for GraphValueError {}
 
+/// Commands emitted by configured native blocks. They are deliberately
+/// returned as values so the server can apply them after graph scheduling;
+/// a graph block never receives a mutable authority handle.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GraphControlAction {
+    Guidance {
+        intent: GuidanceIntent,
+        propulsion: PropulsionDemand,
+    },
+    Demand {
+        demand: ControlDemand,
+    },
+}
+
 /// Result returned by a native block at one execution boundary. Waiting does
 /// not consume a physics tick: the runner parks the node and lets the owner
 /// wake it with simulation time or a domain event.
@@ -617,6 +693,12 @@ pub trait GraphBlock {
         node: &GraphNode,
         inputs: &BTreeMap<String, GraphValue>,
     ) -> GraphNodeOutcome;
+
+    /// Drain control actions emitted during the last poll. Non-control blocks
+    /// use the default empty stream; the authority remains the sole consumer.
+    fn take_control_actions(&mut self) -> Vec<GraphControlAction> {
+        Vec::new()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1443,12 +1525,14 @@ mod tests {
                         Port::input("value", PortType::Number, true),
                         Port::output("right", PortType::Number),
                     ],
+                    config: None,
                 },
                 GraphNode {
                     id: NodeId(1),
                     name: "source".into(),
                     kind: NodeKind::Source,
                     ports: vec![Port::output("value", PortType::Number)],
+                    config: None,
                 },
                 GraphNode {
                     id: NodeId(4),
@@ -1459,6 +1543,7 @@ mod tests {
                         Port::input("right", PortType::Number, true),
                         Port::output("sum", PortType::Number),
                     ],
+                    config: None,
                 },
                 GraphNode {
                     id: NodeId(2),
@@ -1471,6 +1556,7 @@ mod tests {
                         Port::input("value", PortType::Number, true),
                         Port::output("left", PortType::Number),
                     ],
+                    config: None,
                 },
             ],
             edges: vec![
@@ -1539,12 +1625,14 @@ mod tests {
                     name: "wait".into(),
                     kind: NodeKind::Wait,
                     ports: vec![Port::output("done", PortType::Unit)],
+                    config: None,
                 },
                 GraphNode {
                     id: NodeId(2),
                     name: "sink".into(),
                     kind: NodeKind::Sink,
                     ports: vec![Port::input("done", PortType::Unit, true)],
+                    config: None,
                 },
             ],
             edges: vec![GraphEdge {
@@ -1590,12 +1678,14 @@ mod tests {
                     name: "waiting-branch".into(),
                     kind: NodeKind::Wait,
                     ports: vec![Port::output("done", PortType::Unit)],
+                    config: None,
                 },
                 GraphNode {
                     id: NodeId(2),
                     name: "parallel-branch".into(),
                     kind: NodeKind::Source,
                     ports: vec![Port::output("done", PortType::Unit)],
+                    config: None,
                 },
             ],
             edges: Vec::new(),
@@ -1626,12 +1716,14 @@ mod tests {
                     name: "source".into(),
                     kind: NodeKind::Source,
                     ports: vec![Port::output("out", from)],
+                    config: None,
                 },
                 GraphNode {
                     id: NodeId(2),
                     name: "sink".into(),
                     kind: NodeKind::Sink,
                     ports: vec![Port::input("in", to, true)],
+                    config: None,
                 },
             ],
             edges: vec![GraphEdge {
@@ -1678,6 +1770,7 @@ mod tests {
                         actuator_groups: vec![ActuatorGroup::Rcs],
                     },
                     ports: Vec::new(),
+                    config: None,
                 },
                 GraphNode {
                     id: NodeId(2),
@@ -1686,6 +1779,7 @@ mod tests {
                         actuator_groups: vec![ActuatorGroup::Rcs],
                     },
                     ports: Vec::new(),
+                    config: None,
                 },
             ],
             edges: Vec::new(),
@@ -1716,6 +1810,7 @@ mod tests {
                         wait_capable: false,
                     },
                     ports: ports(),
+                    config: None,
                 },
                 GraphNode {
                     id: NodeId(2),
@@ -1725,6 +1820,7 @@ mod tests {
                         wait_capable: false,
                     },
                     ports: ports(),
+                    config: None,
                 },
             ],
             edges: vec![

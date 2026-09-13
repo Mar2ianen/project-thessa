@@ -20,7 +20,7 @@ pub mod runtime;
 
 pub use thessa_flight_control::{
     ActuatorDynamics, ActuatorGroup, AircraftControlLaw, AircraftState, AllocationResult,
-    ControlDemand, ControlError, DirectControlLaw, DirectionFrame, DirectionTarget,
+    AttitudeState, ControlDemand, ControlError, DirectControlLaw, DirectionFrame, DirectionTarget,
     EffectorContribution, FlightControlLaw, FlightPolicy, GuidanceIntent, InputScheme, PilotAxes,
     PropulsionDemand, RollPolicy, SpacecraftControlLaw, TrajectoryPlanId, allocate_wrench,
 };

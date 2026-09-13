@@ -158,6 +158,7 @@ struct Sim {
     plan_demand: Option<ControlDemand>,
     autopilot_graph: Option<AutopilotGraph>,
     graph_runner: Option<GraphRunner>,
+    graph_block: NativeGraphBlock,
     /// Declared autopilot targets stay data-only until a later landing/
     /// impact planner consumes them and asks the field for obstacle evidence.
     landing_site: Option<LandingSite>,
@@ -185,7 +186,9 @@ struct AutopilotHost {
 /// registered. It forwards matching typed values and makes a wait node an
 /// event boundary; it never receives mutable access to flight state.
 #[derive(Debug, Default)]
-struct NativeGraphBlock;
+struct NativeGraphBlock {
+    waited: std::collections::BTreeSet<thessa_autopilot::NodeId>,
+}
 
 impl GraphBlock for NativeGraphBlock {
     fn execute(
@@ -193,15 +196,15 @@ impl GraphBlock for NativeGraphBlock {
         node: &GraphNode,
         inputs: &BTreeMap<String, GraphValue>,
     ) -> GraphNodeOutcome {
-        if matches!(node.kind, NodeKind::Wait)
+        let waiting_node = matches!(node.kind, NodeKind::Wait)
             || matches!(
                 node.kind,
                 NodeKind::Custom {
                     wait_capable: true,
                     ..
                 }
-            )
-        {
+            );
+        if waiting_node && self.waited.insert(node.id) {
             return GraphNodeOutcome::Wait {
                 condition: WaitCondition::Event(node.name.clone()),
             };
@@ -285,6 +288,7 @@ impl Sim {
             plan_demand: None,
             autopilot_graph: None,
             graph_runner: None,
+            graph_block: NativeGraphBlock::default(),
             landing_site: None,
             landing_obstacles: None,
             impact_site: None,
@@ -502,6 +506,7 @@ impl Sim {
         self.plan_runner = None;
         self.plan_demand = None;
         self.guidance = None;
+        self.graph_block = NativeGraphBlock::default();
         self.graph_runner = match GraphRunner::new(graph.clone()) {
             Ok(runner) => Some(runner),
             Err(errors) => return self.fail_autopilot(graph_errors(errors)),
@@ -522,9 +527,12 @@ impl Sim {
             let Some(runner) = self.graph_runner.as_mut() else {
                 return Ok(());
             };
-            let mut block = NativeGraphBlock;
             let state = runner
-                .poll(SimTime(self.authority.flight_time_s), event, &mut block)
+                .poll(
+                    SimTime(self.authority.flight_time_s),
+                    event,
+                    &mut self.graph_block,
+                )
                 .map_err(|error| error.to_string())?;
             let status = match &state {
                 thessa_autopilot::GraphRunState::Waiting { node, .. } => {
@@ -2001,6 +2009,65 @@ mod tests {
                 .as_deref()
                 .is_some_and(|notice| notice.starts_with("AUTOPILOT GRAPH READY"))
         );
+    }
+
+    #[test]
+    fn server_wakes_a_native_graph_wait_from_an_authoritative_event() {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let mut sim = Sim::new(ephemeris, reference_body, false, true).expect("sim");
+        let mut host = AutopilotHost::new().expect("autopilot host");
+        sim.register("pilot");
+        let graph = AutopilotGraph {
+            nodes: vec![
+                thessa_autopilot::GraphNode {
+                    id: thessa_autopilot::NodeId(1),
+                    name: "impact".into(),
+                    kind: thessa_autopilot::NodeKind::Wait,
+                    ports: vec![thessa_autopilot::Port::output(
+                        "done",
+                        thessa_autopilot::PortType::Unit,
+                    )],
+                },
+                thessa_autopilot::GraphNode {
+                    id: thessa_autopilot::NodeId(2),
+                    name: "sink".into(),
+                    kind: thessa_autopilot::NodeKind::Sink,
+                    ports: vec![thessa_autopilot::Port::input(
+                        "done",
+                        thessa_autopilot::PortType::Unit,
+                        true,
+                    )],
+                },
+            ],
+            edges: vec![thessa_autopilot::GraphEdge {
+                from: thessa_autopilot::PortRef {
+                    node: thessa_autopilot::NodeId(1),
+                    port: "done".into(),
+                },
+                to: thessa_autopilot::PortRef {
+                    node: thessa_autopilot::NodeId(2),
+                    port: "done".into(),
+                },
+            }],
+        };
+        assert!(sim.apply_autopilot(
+            "pilot",
+            &AutopilotInput {
+                tick: 0,
+                command: AutopilotCommand::SubmitGraph { graph },
+            },
+            &mut host,
+        ));
+        assert!(!sim.graph_runner.as_ref().unwrap().is_complete());
+
+        sim.authority.wake_notice = Some("IMPACT detected".into());
+        let event = sim.take_autopilot_event();
+        assert_eq!(event, Some("impact"));
+        sim.wake_autopilot(&mut host, event).expect("wake graph");
+        assert!(sim.graph_runner.as_ref().unwrap().is_complete());
     }
 
     #[test]

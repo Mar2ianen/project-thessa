@@ -919,6 +919,58 @@ pub struct ObstacleReport {
     pub max_slope: f64,
 }
 
+/// Conservative terrain-clearance proof built on top of an obstacle report.
+/// The caller supplies a separately validated upper bound for terrain slope;
+/// `ObstacleReport::max_slope` is only an observed lower bound from adjacent
+/// samples and is therefore never silently treated as a global guarantee.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ObstacleWithstandProof {
+    pub evaluated_reports: u32,
+    pub altitude_m: f64,
+    pub footprint_radius_m: f64,
+    pub slope_bound: f64,
+    pub max_sampled_height_m: f64,
+    pub unresolved_relief_bound_m: f64,
+    pub conservative_max_height_m: f64,
+    pub clearance_m: f64,
+}
+
+impl ObstacleWithstandProof {
+    pub fn withstands(&self) -> bool {
+        self.clearance_m >= 0.0
+    }
+}
+
+impl ObstacleReport {
+    /// Prove a conservative altitude clearance for this report. The proof is
+    /// valid when `slope_bound` is an externally certified upper bound on the
+    /// terrain's rise/run over the report and the vehicle footprint. The
+    /// report's sample cover radius plus the footprint radius bounds the
+    /// farthest unresolved point that can affect the vehicle.
+    pub fn withstand_proof(
+        &self,
+        altitude_m: f64,
+        footprint_radius_m: f64,
+        slope_bound: f64,
+    ) -> Result<ObstacleWithstandProof, String> {
+        validate_withstand_inputs(altitude_m, footprint_radius_m, slope_bound)?;
+        if slope_bound + 1.0e-12 < self.max_slope {
+            return Err(format!(
+                "withstand slope bound {slope_bound} is below observed report slope {}",
+                self.max_slope
+            ));
+        }
+        Ok(build_withstand_proof(
+            1,
+            altitude_m,
+            footprint_radius_m,
+            slope_bound,
+            self.max_height_m,
+            self.sample_cover_radius_m,
+        ))
+    }
+}
+
 /// Geometric coverage evidence for a sequence of ground-track directions.
 /// The track is covered when every consecutive pair of centers is no farther
 /// apart than two obstacle-report radii. Terrain withstand/error bounds are a
@@ -958,6 +1010,85 @@ pub struct ObstacleTrackCertificate {
 impl ObstacleTrackCertificate {
     pub fn covers_track(&self) -> bool {
         self.coverage.covers_track()
+    }
+
+    /// Apply one externally validated slope bound to every report in the
+    /// covered track and return the worst conservative clearance.
+    pub fn withstand_proof(
+        &self,
+        altitude_m: f64,
+        footprint_radius_m: f64,
+        slope_bound: f64,
+    ) -> Result<ObstacleWithstandProof, String> {
+        validate_withstand_inputs(altitude_m, footprint_radius_m, slope_bound)?;
+        let observed_slope = self
+            .reports
+            .iter()
+            .map(|report| report.max_slope)
+            .fold(0.0, f64::max);
+        if slope_bound + 1.0e-12 < observed_slope {
+            return Err(format!(
+                "withstand slope bound {slope_bound} is below observed track slope {observed_slope}"
+            ));
+        }
+        let max_cover_radius = self
+            .reports
+            .iter()
+            .map(|report| report.sample_cover_radius_m)
+            .fold(0.0, f64::max);
+        Ok(build_withstand_proof(
+            self.reports.len() as u32,
+            altitude_m,
+            footprint_radius_m,
+            slope_bound,
+            self.max_height_m,
+            max_cover_radius,
+        ))
+    }
+}
+
+fn validate_withstand_inputs(
+    altitude_m: f64,
+    footprint_radius_m: f64,
+    slope_bound: f64,
+) -> Result<(), String> {
+    if !altitude_m.is_finite() {
+        return Err(format!(
+            "withstand altitude must be finite, got {altitude_m}"
+        ));
+    }
+    if !footprint_radius_m.is_finite() || footprint_radius_m < 0.0 {
+        return Err(format!(
+            "withstand footprint radius must be finite and non-negative, got {footprint_radius_m}"
+        ));
+    }
+    if !slope_bound.is_finite() || slope_bound < 0.0 {
+        return Err(format!(
+            "withstand slope bound must be finite and non-negative, got {slope_bound}"
+        ));
+    }
+    Ok(())
+}
+
+fn build_withstand_proof(
+    evaluated_reports: u32,
+    altitude_m: f64,
+    footprint_radius_m: f64,
+    slope_bound: f64,
+    max_sampled_height_m: f64,
+    sample_cover_radius_m: f64,
+) -> ObstacleWithstandProof {
+    let unresolved_relief_bound_m = slope_bound * (sample_cover_radius_m + footprint_radius_m);
+    let conservative_max_height_m = max_sampled_height_m + unresolved_relief_bound_m;
+    ObstacleWithstandProof {
+        evaluated_reports,
+        altitude_m,
+        footprint_radius_m,
+        slope_bound,
+        max_sampled_height_m,
+        unresolved_relief_bound_m,
+        conservative_max_height_m,
+        clearance_m: altitude_m - conservative_max_height_m,
     }
 }
 
@@ -1188,6 +1319,58 @@ mod obstacle_tests {
         assert_eq!(report.grid_side * report.grid_side, report.samples);
         assert!(report.sample_cover_radius_m > 0.0);
         assert!(report.sample_cover_radius_m <= report.grid_step_m);
+    }
+
+    #[test]
+    fn obstacle_report_withstand_proof_separates_slope_bound_from_observed_samples() {
+        let field = field();
+        let report = field
+            .declare_obstacles([0.0, 1.0, 0.0], 2_000.0)
+            .expect("report");
+        let slope_bound = report.max_slope + 0.25;
+        let safe_altitude =
+            report.max_height_m + slope_bound * (report.sample_cover_radius_m + 5.0) + 1.0;
+        let proof = report
+            .withstand_proof(safe_altitude, 5.0, slope_bound)
+            .expect("withstand proof");
+        assert!(proof.withstands());
+        assert_eq!(proof.evaluated_reports, 1);
+        assert!(proof.unresolved_relief_bound_m > 0.0);
+        assert!((proof.clearance_m - 1.0).abs() < 1.0e-9);
+
+        let unsafe_proof = report
+            .withstand_proof(proof.conservative_max_height_m - 1.0, 5.0, slope_bound)
+            .expect("proof remains a valid negative result");
+        assert!(!unsafe_proof.withstands());
+        assert!(
+            report
+                .withstand_proof(safe_altitude, 5.0, report.max_slope - 1.0e-9)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn obstacle_track_withstand_proof_uses_the_worst_report() {
+        let field = field();
+        let center = [0.0, 1.0, 0.0];
+        let small_turn = [0.001, (1.0_f64 - 0.001_f64.powi(2)).sqrt(), 0.0];
+        let certificate = field
+            .certify_obstacle_track(&[center, small_turn], 20_000.0)
+            .expect("covered track");
+        let slope_bound = certificate
+            .reports
+            .iter()
+            .map(|report| report.max_slope)
+            .fold(0.0, f64::max)
+            + 0.5;
+        let altitude = certificate.max_height_m
+            + slope_bound * (certificate.coverage.sample_cover_radius_m + 10.0)
+            + 1.0;
+        let proof = certificate
+            .withstand_proof(altitude, 10.0, slope_bound)
+            .expect("track withstand proof");
+        assert_eq!(proof.evaluated_reports, 2);
+        assert!(proof.withstands());
     }
 
     #[test]

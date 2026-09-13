@@ -33,4 +33,4 @@ pub use runtime::{
     TerrainTrackCoverage, X15_STALL_ANGLE_DEG, conventional_angle_of_attack_deg,
     local_air_kinematics,
 };
-pub use thessa_worldgen_rocky::field::ObstacleReport;
+pub use thessa_worldgen_rocky::field::{ObstacleReport, ObstacleWithstandProof};

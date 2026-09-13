@@ -706,7 +706,7 @@ pub struct GraphRunner {
     graph: AutopilotGraph,
     statuses: BTreeMap<NodeId, BlockStatus>,
     outputs: BTreeMap<(NodeId, String), GraphValue>,
-    waiting: Option<(NodeId, WaitCondition)>,
+    waiting: BTreeMap<NodeId, WaitCondition>,
     terminal: Option<GraphRunState>,
 }
 
@@ -717,7 +717,7 @@ impl GraphRunner {
             graph,
             statuses: BTreeMap::new(),
             outputs: BTreeMap::new(),
-            waiting: None,
+            waiting: BTreeMap::new(),
             terminal: None,
         })
     }
@@ -762,17 +762,25 @@ impl GraphRunner {
         if let Some(terminal) = &self.terminal {
             return Ok(terminal.clone());
         }
-        if let Some((node, condition)) = self.waiting.clone() {
-            if !condition.is_due(now, event) {
-                return Ok(GraphRunState::Waiting { node, condition });
-            }
-            self.waiting = None;
+        let ready_waits = self
+            .waiting
+            .iter()
+            .filter_map(|(node, condition)| condition.is_due(now, event).then_some(*node))
+            .collect::<Vec<_>>();
+        for node in ready_waits {
+            self.waiting.remove(&node);
             self.statuses.remove(&node);
         }
 
         let mut executed = Vec::new();
         loop {
             let Some(node) = self.next_ready_node()? else {
+                if let Some((node, condition)) = self.waiting.iter().next() {
+                    return Ok(GraphRunState::Waiting {
+                        node: *node,
+                        condition: condition.clone(),
+                    });
+                }
                 if self.statuses.len() == self.graph.nodes.len()
                     && self
                         .statuses
@@ -806,8 +814,7 @@ impl GraphRunner {
                         .validate()
                         .map_err(|error| GraphExecutionError::InvalidWait { node, error })?;
                     self.statuses.insert(node, BlockStatus::Waiting);
-                    self.waiting = Some((node, condition.clone()));
-                    return Ok(GraphRunState::Waiting { node, condition });
+                    self.waiting.insert(node, condition);
                 }
                 GraphNodeOutcome::Fail { diagnostic } => {
                     self.statuses.insert(node, BlockStatus::Failed);
@@ -1572,6 +1579,43 @@ mod tests {
             GraphRunState::Complete
         );
         assert_eq!(block.calls.get(&NodeId(1)), Some(&2));
+    }
+
+    #[test]
+    fn graph_runner_keeps_independent_parallel_work_running_around_waits() {
+        let graph = AutopilotGraph {
+            nodes: vec![
+                GraphNode {
+                    id: NodeId(1),
+                    name: "waiting-branch".into(),
+                    kind: NodeKind::Wait,
+                    ports: vec![Port::output("done", PortType::Unit)],
+                },
+                GraphNode {
+                    id: NodeId(2),
+                    name: "parallel-branch".into(),
+                    kind: NodeKind::Source,
+                    ports: vec![Port::output("done", PortType::Unit)],
+                },
+            ],
+            edges: Vec::new(),
+        };
+        let mut runner = GraphRunner::new(graph).unwrap();
+        let mut block = TestBlock::default();
+        assert!(matches!(
+            runner.poll(SimTime(0.0), None, &mut block).unwrap(),
+            GraphRunState::Waiting {
+                node: NodeId(1),
+                condition: WaitCondition::At(SimTime(10.0))
+            }
+        ));
+        assert_eq!(block.calls.get(&NodeId(1)), Some(&1));
+        assert_eq!(block.calls.get(&NodeId(2)), Some(&1));
+        assert_eq!(runner.status(NodeId(2)), Some(BlockStatus::Ok));
+        assert_eq!(
+            runner.poll(SimTime(10.0), None, &mut block).unwrap(),
+            GraphRunState::Complete
+        );
     }
 
     fn graph_with_edge(from: PortType, to: PortType) -> AutopilotGraph {

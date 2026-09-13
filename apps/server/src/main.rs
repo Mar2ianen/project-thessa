@@ -360,7 +360,10 @@ impl Sim {
             self.authority.engine_active = false;
             return true;
         }
-        let mode = match self.authority.apply_guidance_intent(&input.intent) {
+        let mode = match self
+            .authority
+            .apply_guidance_intent(&self.ephemeris, &input.intent)
+        {
             Ok(mode) => mode,
             Err(error) => {
                 self.authority.flight_error = Some(error.to_string());
@@ -522,7 +525,10 @@ impl Sim {
     }
 
     fn apply_script_guidance(&mut self, intent: GuidanceIntent) -> bool {
-        let mode = match self.authority.apply_guidance_intent(&intent) {
+        let mode = match self
+            .authority
+            .apply_guidance_intent(&self.ephemeris, &intent)
+        {
             Ok(mode) => mode,
             Err(error) => return self.fail_autopilot(error.to_string()),
         };

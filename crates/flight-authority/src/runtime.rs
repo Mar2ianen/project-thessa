@@ -15,7 +15,9 @@ use std::{
 };
 
 use glam::{DMat3, DQuat, DVec3};
-use thessa_flight_control::{ControlDemand, GuidanceIntent, PropulsionDemand};
+use thessa_flight_control::{
+    ControlDemand, DirectionFrame, DirectionTarget, GuidanceIntent, PropulsionDemand, RollPolicy,
+};
 use thessa_sim_core::{
     AeroConfig, AeroModel, AeroSimdScratch, AeroState, AtmosphereConfig, AtmosphereError,
     BakedEphemeris, BodyId, BodyState, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_VELOCITY_TOL_MPS,
@@ -61,6 +63,26 @@ const PILOT_START_ALTITUDE_M: f64 = 500.0;
 const MAX_PILOT_ALTITUDE_M: f64 = 2.0e10;
 const MAX_PILOT_RELATIVE_SPEED_MPS: f64 = 50_000.0;
 const MAX_PILOT_ANGULAR_RATE_RPS: f64 = 25.0;
+
+fn normalize_direction(vector: DVec3, label: &str) -> Result<DVec3, FlightError> {
+    if !vector.is_finite() {
+        return Err(FlightError::InvalidInput(format!("{label} must be finite")));
+    }
+    let length = vector.length();
+    if !length.is_finite() || length <= 1.0e-12 {
+        return Err(FlightError::InvalidInput(format!(
+            "{label} must be nonzero"
+        )));
+    }
+    Ok(vector / length)
+}
+
+fn surface_tangent_basis(up: DVec3) -> Result<(DVec3, DVec3), FlightError> {
+    let helper = if up.z.abs() < 0.9 { DVec3::Z } else { DVec3::X };
+    let east = normalize_direction(helper.cross(up), "surface east")?;
+    let north = normalize_direction(up.cross(east), "surface north")?;
+    Ok((east, north))
+}
 
 /// Result of asking the rails fast path to serve the current accumulator.
 /// `WaitingForBake` is deliberately distinct from `NotEligible`: the former
@@ -664,11 +686,99 @@ impl FlightAuthority {
             .apply_control_inputs(&surface_commands(pitch, yaw, roll));
     }
 
+    fn direction_to_inertial(
+        &self,
+        ephemeris: &BakedEphemeris,
+        target: DirectionTarget,
+        roll_policy: RollPolicy,
+    ) -> Result<(DVec3, DVec3), FlightError> {
+        let body_direction = match target.frame {
+            DirectionFrame::Body => self.state.orientation_body_to_inertial * target.direction,
+            DirectionFrame::Inertial => target.direction,
+            DirectionFrame::Surface => {
+                let body = ephemeris
+                    .body_state(self.reference_body, SimTime(self.flight_time_s))
+                    .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+                let up = normalize_direction(
+                    self.state.position_inertial_m - body.position_inertial,
+                    "surface up",
+                )?;
+                let (east, north) = surface_tangent_basis(up)?;
+                east * target.direction.x + north * target.direction.y + up * target.direction.z
+            }
+            DirectionFrame::Orbit => {
+                let body = ephemeris
+                    .body_state(self.reference_body, SimTime(self.flight_time_s))
+                    .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+                let radial = normalize_direction(
+                    self.state.position_inertial_m - body.position_inertial,
+                    "orbit radial",
+                )?;
+                let prograde = normalize_direction(
+                    self.state.velocity_inertial_mps - body.velocity_inertial,
+                    "orbit prograde",
+                )?;
+                let normal = normalize_direction(radial.cross(prograde), "orbit normal")?;
+                prograde * target.direction.x
+                    + normal * target.direction.y
+                    + radial * target.direction.z
+            }
+            DirectionFrame::Target => {
+                return Err(FlightError::InvalidInput(
+                    "target-frame guidance requires a resolved target body".into(),
+                ));
+            }
+        };
+        let forward = normalize_direction(body_direction, "guidance direction")?;
+        let current_up = normalize_direction(
+            self.state.orientation_body_to_inertial * DVec3::Z,
+            "current up",
+        )?;
+        let roll_up = match target.frame {
+            DirectionFrame::Surface => {
+                let body = ephemeris
+                    .body_state(self.reference_body, SimTime(self.flight_time_s))
+                    .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+                normalize_direction(
+                    self.state.position_inertial_m - body.position_inertial,
+                    "surface up",
+                )?
+            }
+            _ => current_up,
+        };
+        let mut up_reference = match roll_policy {
+            RollPolicy::Fixed => roll_up,
+            RollPolicy::Free | RollPolicy::Hold => current_up,
+        };
+        if up_reference.cross(forward).length_squared() <= 1.0e-12 {
+            up_reference = if forward.z.abs() < 0.9 {
+                DVec3::Z
+            } else {
+                DVec3::Y
+            };
+        }
+        let side = normalize_direction(up_reference.cross(forward), "guidance roll basis")?;
+        let up = normalize_direction(forward.cross(side), "guidance up basis")?;
+        Ok((forward, up))
+    }
+
+    fn direction_target_orientation(
+        &self,
+        ephemeris: &BakedEphemeris,
+        target: DirectionTarget,
+        roll_policy: RollPolicy,
+    ) -> Result<DQuat, FlightError> {
+        let (forward, up) = self.direction_to_inertial(ephemeris, target, roll_policy)?;
+        let side = normalize_direction(up.cross(forward), "guidance side basis")?;
+        Ok(DQuat::from_mat3(&DMat3::from_cols(forward, side, up)))
+    }
+
     /// Apply a typed guidance intent through the compatibility control path.
     /// The returned mode is an execution detail for the legacy stepper; no
     /// caller gets mutable access to physics or actuator state.
     pub fn apply_guidance_intent(
         &mut self,
+        ephemeris: &BakedEphemeris,
         intent: &GuidanceIntent,
     ) -> Result<ControlMode, FlightError> {
         intent
@@ -704,10 +814,37 @@ impl FlightAuthority {
                 self.sas_enabled = true;
                 Ok(ControlMode::Navball)
             }
-            GuidanceIntent::VelocityDirection { .. }
-            | GuidanceIntent::FlightPath { .. }
-            | GuidanceIntent::Trajectory { .. } => Err(FlightError::InvalidInput(
-                "guidance intent needs a planner before the starter runtime can execute it".into(),
+            GuidanceIntent::VelocityDirection {
+                direction,
+                roll_policy,
+            } => {
+                self.sas_target_orientation = self.direction_target_orientation(
+                    ephemeris,
+                    DirectionTarget {
+                        direction: direction.direction,
+                        frame: direction.frame,
+                    },
+                    *roll_policy,
+                )?;
+                self.control_input = DVec3::ZERO;
+                self.sas_enabled = true;
+                Ok(ControlMode::Navball)
+            }
+            GuidanceIntent::FlightPath { target } => {
+                self.sas_target_orientation = self.direction_target_orientation(
+                    ephemeris,
+                    DirectionTarget {
+                        direction: target.direction.direction,
+                        frame: target.direction.frame,
+                    },
+                    target.roll_policy,
+                )?;
+                self.control_input = DVec3::ZERO;
+                self.sas_enabled = true;
+                Ok(ControlMode::Navball)
+            }
+            GuidanceIntent::Trajectory { .. } => Err(FlightError::InvalidInput(
+                "trajectory guidance requires an active plan runner".into(),
             )),
         }
     }
@@ -735,7 +872,7 @@ impl FlightAuthority {
         elapsed_s: f64,
         budget: Option<std::time::Duration>,
     ) -> Result<(), FlightError> {
-        let mode = self.apply_guidance_intent(intent)?;
+        let mode = self.apply_guidance_intent(ephemeris, intent)?;
         if !propulsion.normalized.is_finite() || !(0.0..=1.0).contains(&propulsion.normalized) {
             return Err(FlightError::InvalidInput(
                 "starter propulsion accepts nominal demand in [0, 1]; apply flight policy before execution".into(),
@@ -1982,6 +2119,92 @@ mod tests {
         assert_eq!(flight.sas_target_orientation, DQuat::from_rotation_y(0.1));
         assert!(flight.state.position_inertial_m.is_finite());
         assert!(flight.last_forces.is_some());
+    }
+
+    #[test]
+    fn direction_guidance_resolves_inertial_surface_orbit_and_flight_path_frames() {
+        let (ephemeris, mut flight) = fixture();
+        let body = ephemeris
+            .body_state(flight.reference_body, SimTime(flight.flight_time_s))
+            .unwrap();
+        flight.state.position_inertial_m = body.position_inertial + DVec3::Z * 1.0e7;
+        flight.state.velocity_inertial_mps = body.velocity_inertial + DVec3::X;
+
+        flight
+            .apply_guidance_intent(
+                &ephemeris,
+                &GuidanceIntent::VelocityDirection {
+                    direction: DirectionTarget::new(DVec3::Y, DirectionFrame::Inertial).unwrap(),
+                    roll_policy: RollPolicy::Hold,
+                },
+            )
+            .unwrap();
+        assert!((flight.sas_target_orientation * DVec3::X).dot(DVec3::Y) > 1.0 - 1.0e-12);
+
+        let surface =
+            DirectionTarget::new(DVec3::new(0.0, 1.0, 0.0), DirectionFrame::Surface).unwrap();
+        flight
+            .apply_guidance_intent(
+                &ephemeris,
+                &GuidanceIntent::VelocityDirection {
+                    direction: surface,
+                    roll_policy: RollPolicy::Fixed,
+                },
+            )
+            .unwrap();
+        let up = normalize_direction(
+            flight.state.position_inertial_m - body.position_inertial,
+            "test surface up",
+        )
+        .unwrap();
+        let (_east, north) = surface_tangent_basis(up).unwrap();
+        assert!((flight.sas_target_orientation * DVec3::X).dot(north) > 1.0 - 1.0e-12);
+        assert!((flight.sas_target_orientation * DVec3::Z).dot(up) > 1.0 - 1.0e-12);
+
+        flight
+            .apply_guidance_intent(
+                &ephemeris,
+                &GuidanceIntent::VelocityDirection {
+                    direction: DirectionTarget::new(DVec3::X, DirectionFrame::Orbit).unwrap(),
+                    roll_policy: RollPolicy::Hold,
+                },
+            )
+            .unwrap();
+        let prograde = normalize_direction(
+            flight.state.velocity_inertial_mps - body.velocity_inertial,
+            "test prograde",
+        )
+        .unwrap();
+        assert!((flight.sas_target_orientation * DVec3::X).dot(prograde) > 1.0 - 1.0e-12);
+
+        flight
+            .apply_guidance_intent(
+                &ephemeris,
+                &GuidanceIntent::FlightPath {
+                    target: thessa_flight_control::FlightPathTarget {
+                        direction: DirectionTarget::new(DVec3::Z, DirectionFrame::Surface).unwrap(),
+                        roll_policy: RollPolicy::Fixed,
+                    },
+                },
+            )
+            .unwrap();
+        assert!((flight.sas_target_orientation * DVec3::X).dot(up) > 1.0 - 1.0e-12);
+        assert!(flight.sas_target_orientation.is_finite());
+    }
+
+    #[test]
+    fn target_frame_guidance_fails_until_a_target_body_is_resolved() {
+        let (ephemeris, mut flight) = fixture();
+        let result = flight.apply_guidance_intent(
+            &ephemeris,
+            &GuidanceIntent::VelocityDirection {
+                direction: DirectionTarget::new(DVec3::X, DirectionFrame::Target).unwrap(),
+                roll_policy: RollPolicy::Hold,
+            },
+        );
+        assert!(
+            matches!(result, Err(FlightError::InvalidInput(message)) if message.contains("target body"))
+        );
     }
 
     #[test]

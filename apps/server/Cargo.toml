@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 thessa-autopilot = { path = "../../crates/autopilot" }
 thessa-autopilot-js = { path = "../../crates/autopilot-js" }
+thessa-flight-control = { path = "../../crates/flight-control" }
 thessa-sim-core = { path = "../../crates/sim-core" }
 thessa-protocol = { path = "../../crates/protocol" }
 thessa-flight-authority = { path = "../../crates/flight-authority" }

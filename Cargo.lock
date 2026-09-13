@@ -5460,6 +5460,7 @@ dependencies = [
  "thessa-autopilot",
  "thessa-autopilot-js",
  "thessa-flight-authority",
+ "thessa-flight-control",
  "thessa-flight-net",
  "thessa-protocol",
  "thessa-sim-core",

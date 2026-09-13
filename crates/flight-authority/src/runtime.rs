@@ -15,7 +15,7 @@ use std::{
 };
 
 use glam::{DMat3, DQuat, DVec3};
-use thessa_flight_control::{GuidanceIntent, PropulsionDemand};
+use thessa_flight_control::{ControlDemand, GuidanceIntent, PropulsionDemand};
 use thessa_sim_core::{
     AeroConfig, AeroModel, AeroSimdScratch, AeroState, AtmosphereConfig, AtmosphereError,
     BakedEphemeris, BodyId, BodyState, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_VELOCITY_TOL_MPS,
@@ -340,6 +340,10 @@ pub struct FlightAuthority {
     /// model reads it every tick; the geometry shape never changes at
     /// runtime (control surfaces rotate in place).
     reference_area_m2: f64,
+    /// Explicit moment demand supplied by a declarative plan. It is consumed
+    /// by the same trim/RCS allocator as typed guidance and cleared by the
+    /// public demand entry point after its cooperative advance returns.
+    explicit_moment_demand_nm: Option<DVec3>,
 }
 
 impl FlightAuthority {
@@ -385,6 +389,7 @@ impl FlightAuthority {
         self.throttle = 0.0;
         self.control_input = DVec3::ZERO;
         self.surface_input = DVec3::ZERO;
+        self.explicit_moment_demand_nm = None;
         self.regime = FlightRegime::Aero;
         self.accumulator_s = 0.0;
         self.rails.invalidate();
@@ -610,6 +615,7 @@ impl FlightAuthority {
             trim_second_passes: 0,
             ephemeris_frame: EphemerisFrame::new(),
             reference_area_m2,
+            explicit_moment_demand_nm: None,
         })
     }
 
@@ -713,6 +719,41 @@ impl FlightAuthority {
         }
         self.throttle = propulsion.normalized;
         self.advance_with_budget(ephemeris, mode, elapsed_s, budget)
+    }
+
+    /// Advance a declarative wrench through the native actuator path. The
+    /// starter vehicle has no lateral/translation thrusters, so force demand
+    /// is intentionally restricted to zero; propulsion remains the physical
+    /// axial effector. Moments use the existing aerodynamic trim plus RCS
+    /// residual allocator and retain its saturation semantics.
+    pub fn advance_control_demand_with_budget(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        demand: ControlDemand,
+        elapsed_s: f64,
+        budget: Option<std::time::Duration>,
+    ) -> Result<(), FlightError> {
+        demand
+            .validate()
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+        if demand.force_body_n.length_squared() > 1.0e-24 {
+            return Err(FlightError::InvalidInput(
+                "starter authority has no force effector for an explicit body-force demand".into(),
+            ));
+        }
+        if !demand.propulsion.normalized.is_finite()
+            || !(0.0..=1.0).contains(&demand.propulsion.normalized)
+        {
+            return Err(FlightError::InvalidInput(
+                "starter propulsion accepts nominal demand in [0, 1]; apply flight policy before execution".into(),
+            ));
+        }
+        self.throttle = demand.propulsion.normalized;
+        self.engine_active = demand.propulsion.normalized > 0.0;
+        self.explicit_moment_demand_nm = Some(demand.moment_body_nm);
+        let result = self.advance_with_budget(ephemeris, ControlMode::Direct, elapsed_s, budget);
+        self.explicit_moment_demand_nm = None;
+        result
     }
 
     pub fn thrust_n(&self) -> f64 {
@@ -1099,6 +1140,15 @@ impl FlightAuthority {
         mode: ControlMode,
         requested_s: f64,
     ) -> Result<CoastAdvance, FlightError> {
+        // A declarative moment is an active actuator demand. The rails path
+        // only integrates free translation and constant-spin attitude, so a
+        // non-zero explicit moment must stay on the fixed-step allocator path.
+        if self
+            .explicit_moment_demand_nm
+            .is_some_and(|moment| moment.length_squared() > 1.0e-24)
+        {
+            return Ok(CoastAdvance::NotEligible);
+        }
         if self.thrust_n() != 0.0 || self.trace.is_some() {
             return Ok(CoastAdvance::NotEligible);
         }
@@ -1334,10 +1384,13 @@ impl FlightAuthority {
             self.sas_target_orientation,
             self.vehicle.mass_properties.inertia_body_kg_m2,
         );
-        self.sas_target_orientation = attitude.target_orientation;
-        let axes = attitude.axes;
-        let assisted = mode != ControlMode::Direct;
-        let requested = attitude.requested_moment_nm;
+        let explicit_moment = self.explicit_moment_demand_nm;
+        if explicit_moment.is_none() {
+            self.sas_target_orientation = attitude.target_orientation;
+        }
+        let axes = explicit_moment.map_or(attitude.axes, |_| DVec3::ZERO);
+        let assisted = explicit_moment.is_some() || mode != ControlMode::Direct;
+        let requested = explicit_moment.unwrap_or(attitude.requested_moment_nm);
         // Vacuum fast path: no air load exists, so the trim solve and the
         // response evaluation are skipped outright (exactly zero aero
         // moment); attitude flies on RCS alone.
@@ -1883,6 +1936,30 @@ mod tests {
         assert_eq!(flight.sas_target_orientation, DQuat::from_rotation_y(0.1));
         assert!(flight.state.position_inertial_m.is_finite());
         assert!(flight.last_forces.is_some());
+    }
+
+    #[test]
+    fn explicit_control_demand_uses_the_native_moment_allocator() {
+        let (ephemeris, mut flight) = fixture();
+        flight.engine_active = false;
+        flight.throttle = 0.0;
+        flight.rcs_enabled = true;
+        let before = flight.state.angular_velocity_body_rps;
+        flight
+            .advance_control_demand_with_budget(
+                &ephemeris,
+                ControlDemand {
+                    force_body_n: DVec3::ZERO,
+                    moment_body_nm: DVec3::X * 100.0,
+                    propulsion: PropulsionDemand::new(0.0).unwrap(),
+                },
+                FLIGHT_STEP_S,
+                None,
+            )
+            .expect("explicit moment demand");
+        assert!(flight.state.angular_velocity_body_rps.x > before.x);
+        assert!(flight.last_forces.is_some());
+        assert!(flight.explicit_moment_demand_nm.is_none());
     }
 
     #[test]

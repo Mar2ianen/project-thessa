@@ -24,6 +24,7 @@ use thessa_flight_authority::{
     ControlMode, FlightAuthority, FlightPolicy, GuidanceIntent, PropulsionDemand,
     canonical_launch_setup,
 };
+use thessa_flight_control::ControlDemand;
 use thessa_flight_net::{
     AutopilotCommand, AutopilotInput, ClientInput, Command, GuidanceInput, Snapshot,
 };
@@ -152,6 +153,7 @@ struct Sim {
     /// Latest typed guidance command. Legacy ClientInput clears this so the
     /// two input protocols cannot fight over the same vehicle.
     guidance: Option<(GuidanceIntent, PropulsionDemand)>,
+    plan_demand: Option<ControlDemand>,
     autopilot_graph: Option<AutopilotGraph>,
     plan_runner: Option<TrajectoryPlanRunner>,
     last_autopilot_notice: Option<String>,
@@ -205,6 +207,7 @@ impl Sim {
             ephemeris,
             control_mode: ControlMode::Navball,
             guidance: None,
+            plan_demand: None,
             autopilot_graph: None,
             plan_runner: None,
             last_autopilot_notice: None,
@@ -452,6 +455,7 @@ impl Sim {
             Ok(mode) => mode,
             Err(error) => return self.fail_autopilot(error.to_string()),
         };
+        self.plan_demand = None;
         let requested = match intent {
             GuidanceIntent::ManualAxes(axes) => PropulsionDemand::new(axes.propulsion)
                 .unwrap_or(PropulsionDemand { normalized: 0.0 }),
@@ -526,22 +530,24 @@ impl Sim {
                 Ok(true)
             }
             PlanAction::Burn { demand, .. } => {
-                if demand.force_body_n.length_squared() > 1.0e-24
-                    || demand.moment_body_nm.length_squared() > 1.0e-24
-                {
+                if demand.force_body_n.length_squared() > 1.0e-24 {
                     return Err(
-                        "starter authority cannot realize force/moment fields in a plan burn"
+                        "starter authority has no force effector for an explicit body-force demand"
                             .into(),
                     );
                 }
                 let propulsion =
                     FlightPolicy::default().constrain_propulsion(demand.propulsion, true, true);
+                self.plan_demand = Some(ControlDemand {
+                    propulsion,
+                    ..demand
+                });
                 self.authority.control_input = DVec3::ZERO;
                 self.authority.sas_enabled = false;
                 self.authority.throttle = propulsion.normalized;
                 self.authority.engine_active = propulsion.normalized > 0.0;
                 self.control_mode = ControlMode::Direct;
-                self.guidance = Some((GuidanceIntent::ManualAxes(Default::default()), propulsion));
+                self.guidance = None;
                 Ok(true)
             }
             PlanAction::Guidance { intent, .. } => Ok(self.apply_script_guidance(intent)),
@@ -549,6 +555,7 @@ impl Sim {
     }
 
     fn clear_autopilot_controls(&mut self) {
+        self.plan_demand = None;
         self.guidance = None;
         self.control_mode = ControlMode::Direct;
         self.authority.control_input = DVec3::ZERO;
@@ -634,8 +641,16 @@ impl Sim {
         }
         let before = self.authority.flight_time_s;
         let started = Instant::now();
+        let plan_demand = self.plan_demand;
         let guidance = self.guidance.clone();
-        let result = if let Some((intent, propulsion)) = guidance {
+        let result = if let Some(demand) = plan_demand {
+            self.authority.advance_control_demand_with_budget(
+                &self.ephemeris,
+                demand,
+                chunk_s,
+                budget,
+            )
+        } else if let Some((intent, propulsion)) = guidance {
             // Typed guidance uses the same authoritative stepper; the legacy
             // mode is only the compatibility representation used by traces.
             self.authority.advance_guidance_with_budget(
@@ -1579,6 +1594,14 @@ mod tests {
             id: thessa_flight_authority::TrajectoryPlanId(33),
             segments: vec![
                 thessa_autopilot::TrajectorySegment::Coast { duration_s: 0.02 },
+                thessa_autopilot::TrajectorySegment::Burn {
+                    duration_s: 0.1,
+                    demand: ControlDemand {
+                        force_body_n: DVec3::ZERO,
+                        moment_body_nm: DVec3::X * 100.0,
+                        propulsion: PropulsionDemand::new(0.0).unwrap(),
+                    },
+                },
                 thessa_autopilot::TrajectorySegment::Guidance {
                     duration_s: 0.1,
                     intent: GuidanceIntent::ManualAxes(Default::default()),
@@ -1598,6 +1621,17 @@ mod tests {
         sim.poll_plan(None).expect("advance plan cursor");
         assert_eq!(sim.plan_runner.as_ref().unwrap().segment_index(), 1);
         assert!(sim.plan_runner.as_ref().unwrap().mode() == PlanExecutionMode::Baked);
+        sim.advance_chunk(thessa_sim_core::WORLD_TICK_S)
+            .expect("execute explicit burn");
+        assert!(sim.authority.flight_error.is_none());
+        assert!(sim.authority.state.angular_velocity_body_rps.x > 0.0);
+        assert!(sim.authority.state.angular_velocity_body_rps.is_finite());
+
+        sim.authority.flight_time_s = 0.13;
+        sim.poll_plan(None).expect("advance to guidance cursor");
+        assert_eq!(sim.plan_runner.as_ref().unwrap().segment_index(), 2);
+        assert!(sim.plan_demand.is_none());
+        assert!(sim.guidance.is_some());
 
         let deoptimize = AutopilotInput {
             tick: 1,

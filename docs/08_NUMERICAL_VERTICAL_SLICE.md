@@ -24,7 +24,7 @@ dx/dt = v
 dv/dt = sum_i mu_i * (body_i(t).position - x) / |body_i(t).position - x|^3
 ```
 
-`body_i(t)` вычисляется из baked analytic segments. SOI switching отсутствует. Вклад ship-to-ship gravity, J2/Jn harmonics, collisions, aero, thrust и thermal coupling намеренно не включены в этот первый срез.
+`body_i(t)` вычисляется из baked analytic segments. SOI switching отсутствует. Вклад ship-to-ship gravity, J2/Jn harmonics, collisions, thrust и thermal coupling намеренно не включены в celestial slice. Atmospheric slice теперь добавляет локальный `PanelAeroModel`, `AtmosphereConfig` и `evaluate_flight_forces`; `integrate_rigid_body_step` связывает их с position/velocity/quaternion/angular-rate state, гравитацией и внешними force/moment. `integrate_rigid_body_duration` даёт детерминированные ограниченные подшаги для active flight. Эта ветка отдельна от orbital test-particle equations.
 
 `SystemConfig::bake` использует design periods только как diagnostic metadata. Mean motion выводится из `mu` и relative semi-major axis; для component-orbits бинарных систем используется общий relative mean motion. Отсутствующие phase angles v0.1 детерминированно принимаются равными нулю.
 
@@ -40,6 +40,17 @@ dv/dt = sum_i mu_i * (body_i(t).position - x) / |body_i(t).position - x|^3
 6. exact replay и order-preserving parallel batch gravity;
 7. явной маркировки reference frame;
 8. детерминированного ordered schedule из импульсных delta-v.
+
+6-DoF/aero regression tests дополнительно проверяют вращение атмосферы,
+стабилизирующий lift sign, dynamic pitch damping, сочетание aero force с
+gravity/extra force и повторяемость bounded-duration substeps.
+
+Аэродинамический слой дополнительно проверяется на ISA atmosphere samples,
+zero-flow, знаки drag/lift,
+`q ~ V²`, `omega x r`, конечность в transonic/supersonic диапазоне,
+bilinear table interpolation и порядок Rayon batch. Подробный внешний
+comparison workflow описан в `docs/11_AERODYNAMICS.md` и
+`validation/aero-compare/README.md`.
 
 `system-baker` отдельно парсит реальный `data/system.toml`, получает 24 тела и 22 физических gravity sources и проверяет epoch state. Generated descriptor лежит в `data/system.baked.json`; он является воспроизводимым build output, не окончательным game canon.
 
@@ -121,8 +132,9 @@ cargo run -p thessa-system-baker -- --input data/system.toml --output data/syste
 3. Добавить hyperbolic/parabolic segment support и event/encounter step policy.
 4. Разобрать расхождение ANISE `Orbit::at_epoch` на наклонных орбитах и
    зафиксировать версию/набор reference vectors для CI.
-5. Добавить dedicated elliptic Lagrange/coorbital segment с общей фазой и
-   eccentricity, затем заменить diagnostic approximation для `halo` точной
-   моделью.
+5. Добавить mass/CoM updates и control/actuator interfaces к vehicle
+   integrator; затем добавить dedicated elliptic Lagrange/coorbital segment
+   с общей фазой и eccentricity, затем заменить diagnostic approximation для
+   `halo` точной моделью.
 6. Подключить vehicle state, thrust/actuator interfaces и server-side batch
    scheduling, не перенося game/GPL code в MIT crate.

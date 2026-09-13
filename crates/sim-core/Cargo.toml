@@ -10,7 +10,39 @@ publish = false
 glam.workspace = true
 serde.workspace = true
 rayon.workspace = true
+thessa-simd = { path = "../simd" }
+
+[dev-dependencies]
+toml.workspace = true
 
 [[bench]]
 name = "gravity"
+harness = false
+
+[[bench]]
+name = "aero"
+harness = false
+
+[[bench]]
+name = "flight"
+harness = false
+
+[[bench]]
+name = "osculating"
+harness = false
+
+[[bench]]
+name = "onrails"
+harness = false
+
+[[bench]]
+name = "gravity_interpolation"
+harness = false
+
+[[bench]]
+name = "tick_adaptive"
+harness = false
+
+[[bench]]
+name = "aero_panels"
 harness = false

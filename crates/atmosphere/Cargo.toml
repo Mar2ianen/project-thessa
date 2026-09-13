@@ -1,0 +1,12 @@
+[package]
+name = "thessa-atmosphere"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Shared visual-atmosphere optics for Project Thessa (spec docs/14_VISUAL_ATMOSPHERE.md): one definition feeding raster and ray-aware backends"
+
+[dependencies]
+glam.workspace = true
+serde.workspace = true

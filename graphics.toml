@@ -1,0 +1,70 @@
+# Project Thessa requested graphics settings.
+#
+# This file is user intent, not runtime truth. At startup the client expands
+# `preset`, then resolves requested values through hardware/backend
+# capabilities into `ResolvedGraphicsSettings` (see `crates/graphics`):
+#
+#   graphics.toml -> requested -> preset expansion -> capability resolution
+#                  -> ResolvedGraphicsSettings -> renderer + perf metadata
+#
+# The future GUI edits THIS file (typed editor over the same TOML), never a
+# second independent settings system. Unknown future keys are preserved on
+# load; physics and world state are never affected by this file.
+#
+# Ray tracing is experimental (Bevy Solari). `ray_tracing = "local"|"full"`
+# requests RT device features and fails fast at startup when the GPU/driver
+# cannot provide them. `"auto"` currently resolves to raster; enable RT
+# explicitly or via `THESSA_RAY_TRACING=local|full`.
+
+version = 1
+preset = "high" # low | medium | high | ultra | custom (auto-shown when values diverge)
+
+[renderer]
+backend = "auto" # auto | vulkan | metal | webgpu (dx12 deferred pending ADR)
+ray_tracing = "auto" # off | local | full | auto
+resolution_scale = 1.0
+vsync = true
+hdr = true
+auto_exposure = false # AE metering curve untuned; deterministic manual EV for now
+exposure_ev100 = 13.0 # manual EV100 when auto_exposure = false
+
+[atmosphere]
+enabled = true
+quality = "high" # low | medium | high (budgets only, never physics)
+aerial_perspective = false
+density_scale = 0.55 # visual optical-depth gain; simulation pressure is unchanged
+multiple_scattering = false # single-scattering first slice; LUT/MS later
+eclipses = true
+multi_star = true
+limb_scattering = true
+sky_dome = true
+ray_steps = 24 # view-march steps for CPU queries (4..128)
+
+[clouds]
+# Clouds are a separate future subsystem (spec section 10). Section kept so
+# presets and the future GUI share one schema from the start.
+enabled = false
+quality = "medium" # low | medium | high
+volumetric = false
+ray_steps = 16
+cast_shadows = false
+
+[upper_atmosphere]
+airglow = true
+aurora = true
+aurora_quality = "low" # low = emissive shell; high = volumetric curtains (later)
+aurora_lighting = false # RT emissive proxy (later)
+
+[raytracing]
+# Participation flags for the experimental Solari path. The single mode
+# switch lives in [renderer] ray_tracing; these flags budget it.
+terrain = true
+vehicles = true
+landmarks = false
+atmosphere = true # ray-aware transmittance/sky queries where supported
+clouds = false
+max_distance_m = 500000.0
+
+[debug]
+show_atmosphere_bounds = false
+show_rt_proxies = false

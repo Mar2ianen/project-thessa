@@ -1,0 +1,14 @@
+[package]
+name = "thessa-vehicle-baker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+
+[dependencies]
+glam.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thessa-sim-core = { path = "../../crates/sim-core" }
+toml.workspace = true

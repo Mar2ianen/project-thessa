@@ -144,7 +144,7 @@ Ice giant без твёрдой доступной поверхности. H₂/
 | Луна | `a` от Nereid | `P` | `e` | Масса | Радиус | Surface g | Escape | Состояние |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
 | **Pyra** | 398 358 km | 40 h | 0.006 | 0.006 M⊕ | 1050 km | 0.22 g | 2.13 km/s | tidal lock |
-| **Thessa** | 632 354 km | 80 h | 0.003 | 0.130 M⊕ | 3200 km | 0.52 g | 5.69 km/s | tidal lock |
+| **Thessa** | 632 354 km | 80 h | 0.003 | 0.1259652 M⊕ | 3200 km | 0.500 g | 5.60 km/s | tidal lock |
 | **Pelagos** | 1 003 799 km | 160 h | 0.004 | 0.055 M⊕ | 2500 km | 0.36 g | 4.19 km/s | tidal lock |
 | **Auron** | 1 593 432 km | 320 h | 0.002 | 0.020 M⊕ | 1700 km | 0.28 g | 3.06 km/s | tidal lock |
 | **Borea** | 2 529 415 km | 640 h | 0.005 | 0.022 M⊕ | 2100 km | 0.20 g | 2.89 km/s | tidal lock |
@@ -166,10 +166,10 @@ Nereid Hill radius на его орбите вокруг A: примерно **8
 
 - radius: 3200 km;
 - mass: 0.13 M⊕;
-- gravity: ~0.52 g;
-- surface circular velocity: ~4.02 km/s;
-- escape: ~5.69 km/s;
-- atmosphere: target `1.08 bar`, примерно N₂ 76%, O₂ 21%, Ar/CO₂/прочее 3%; composition provisional;
+- gravity: ~0.500 g;
+- surface circular velocity: ~3.96 km/s;
+- escape: ~5.60 km/s;
+- atmosphere: target `1.20 bar`, примерно N₂ 76%, O₂ 21%, Ar/CO₂/прочее 3%; composition provisional;
 - mean climate: ~280–292 K с региональной влажностью/океанами;
 - breathable status/life: **open question**, не фиксируется v0.1.
 

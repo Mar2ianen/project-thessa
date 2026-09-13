@@ -1,0 +1,42 @@
+# Provenance-only descriptors for the first aerodynamic validation vectors.
+# These are compact owned proxies; no external model files are copied here.
+
+[[case]]
+id = "naca_like_subsonic_wing"
+vehicle_class = "aircraft"
+geometry = "single finite flat-plate proxy, S=20 m^2, c=2 m"
+regime = "M=0.30, alpha=5 deg"
+external_references = ["AVL", "OpenVSP/VSPAERO", "NASA CRM"]
+runtime_use = "regression vector only"
+
+[[case]]
+id = "rocket_transonic_axisymmetric_proxy"
+vehicle_class = "rocket"
+geometry = "axial drag proxy, S=12 m^2, c=4 m"
+regime = "M=0.95, alpha=0 deg"
+external_references = ["OpenRocket", "RocketPy", "JSBSim"]
+runtime_use = "regression vector only"
+
+[[case]]
+id = "shuttle_hypersonic_entry_proxy"
+vehicle_class = "lifting_body"
+geometry = "two-zone lifting-body proxy, S=65 m^2"
+regime = "M approximately 5.3, alpha=20 deg"
+external_references = ["SU2", "OpenVSP/VSPAERO", "NASA Space Shuttle Aerodynamic Data Book"]
+runtime_use = "regression vector only"
+
+[[case]]
+id = "x15_wing_only_proxy"
+vehicle_class = "supersonic_aircraft"
+geometry = "finite wing proxy using JSBSim X15 metrics: Sw=200 ft^2, span=22.36 ft, c=10.27 ft"
+regime = "M=0.95, 1.1, 1.2, 1.5, 2, 3, 5 at alpha=5 deg; boundary vectors M=0.8, 1.0, 2.0, 6.0"
+external_references = ["JSBSim X15"]
+runtime_use = "reference sweep only; fuselage and tail intentionally omitted"
+
+[[case]]
+id = "x15_mach_boundary_vectors"
+vehicle_class = "supersonic_aircraft"
+geometry = "same finite wing proxy as x15_wing_only_proxy"
+regime = "M=0.8, 1.0, 2.0, 6.0 at alpha=5 deg"
+external_references = ["JSBSim X15"]
+runtime_use = "owned regression vectors; finite-result and performance smoke"

@@ -238,17 +238,17 @@
     {
       "id": 11,
       "name": "thessa",
-      "mu": 51818330798000.0,
+      "mu": 50210049251047.914,
       "radius_m": 3200000.0,
       "parent": 6,
       "orbit": {
-        "central_mu": 1.2040436439129798e+17,
+        "central_mu": 1.2040275610975102e+17,
         "semi_major_axis_m": 632354000.0,
         "eccentricity": 0.003,
         "inclination_rad": 0.0017453292519943296,
         "longitude_of_ascending_node_rad": 0.0,
         "argument_of_periapsis_rad": 0.0,
-        "mean_anomaly_at_epoch_rad": 0.0,
+        "mean_anomaly_at_epoch_rad": 0.17453292519943295,
         "mean_motion_rad_s": null
       },
       "design_period_s": 288000.0,

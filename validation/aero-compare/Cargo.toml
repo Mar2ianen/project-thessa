@@ -1,0 +1,12 @@
+[package]
+name = "thessa-aero-compare"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[workspace]
+
+[dependencies]
+glam = { version = "0.32", features = ["serde"] }
+thessa-sim-core = { path = "../../crates/sim-core" }

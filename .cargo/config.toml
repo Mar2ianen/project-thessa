@@ -1,0 +1,11 @@
+# Machine-specific hot builds are OPT-IN via aliases below, never default:
+# default builds stay portable (generic x86-64), hand-dispatched AVX-512 in
+# thessa-simd works regardless of -C target-cpu. znver4 = Zen 4 (Ryzen 7040/
+# 8040/9000 incl. 8745H): enables AVX2/AVX-512/VNNI autovec repo-wide on top
+# of the explicit kernels (~8% on the bake loop in local measurement).
+
+[alias]
+build-native = ["build", "--config", "build.rustflags=['-C', 'target-cpu=native']"]
+bench-native = ["bench", "--config", "build.rustflags=['-C', 'target-cpu=native']"]
+test-native = ["test", "--config", "build.rustflags=['-C', 'target-cpu=native']"]
+check-native = ["check", "--config", "build.rustflags=['-C', 'target-cpu=native']"]

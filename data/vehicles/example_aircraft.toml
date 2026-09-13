@@ -1,0 +1,59 @@
+name = "example-arbitrary-aircraft"
+mass_kg = 1000.0
+# Symmetric positive-definite inertia tensor, written as rows.
+inertia_body_kg_m2 = [
+  [1200.0, 0.0, 0.0],
+  [0.0, 1800.0, 0.0],
+  [0.0, 0.0, 2400.0],
+]
+
+[[panels]]
+position_body_m = [0.5, -2.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 6.0
+chord_m = 1.5
+span_m = 4.0
+aspect_ratio = 2.6666666667
+thickness_to_chord_ratio = 0.12
+
+[[panels]]
+position_body_m = [0.5, 2.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 6.0
+chord_m = 1.5
+span_m = 4.0
+aspect_ratio = 2.6666666667
+thickness_to_chord_ratio = 0.12
+
+[[panels]]
+position_body_m = [-2.5, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 2.0
+chord_m = 1.0
+span_m = 2.0
+aspect_ratio = 2.0
+lift_coefficient_sign = -1.0
+
+[[panels]]
+position_body_m = [-2.5, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 1.0, 0.0]
+area_m2 = 1.0
+chord_m = 0.8
+span_m = 1.25
+aspect_ratio = 1.5625
+
+[[control_surfaces]]
+name = "elevator"
+panel_indices = [2]
+minimum_deflection_rad = -0.35
+maximum_deflection_rad = 0.35
+
+[[control_surfaces]]
+name = "rudder"
+panel_indices = [3]
+minimum_deflection_rad = -0.45
+maximum_deflection_rad = 0.45

@@ -1,0 +1,11 @@
+Model Information:
+Title: North American X-15 Plane
+Source: https://sketchfab.com/3d-models/north-american-x-15-plane-bf491206ba844282949734b48b938c53
+Author: cmoreau (https://sketchfab.com/cmoreau)
+
+License: CC BY 4.0
+https://creativecommons.org/licenses/by/4.0/
+
+Required attribution:
+This work is based on "North American X-15 Plane" by cmoreau,
+licensed under CC BY 4.0.

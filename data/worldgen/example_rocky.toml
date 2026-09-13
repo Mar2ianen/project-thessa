@@ -1,0 +1,48 @@
+# Example rocky-planet worldgen manifest (dev tool, resolution-agnostic).
+[planet]
+name = "thessa-demo"
+kind = "rocky"
+datum_radius_m = 3_200_000.0
+height_min_m = -8000.0
+height_max_m = 12000.0
+seed = 7
+
+[gores]
+count = 8
+overlap_fraction = 0.06
+polar_caps = true
+
+[[layers]]
+name = "height"
+file = "height_gore_{i}.png"
+prompt = "prompts/height.md"
+
+[[layers]]
+name = "albedo"
+file = "albedo_gore_{i}.png"
+prompt = "prompts/albedo.md"
+
+[[layers]]
+name = "biomes"
+file = "biomes_gore_{i}.png"
+prompt = "prompts/biomes.md"
+
+[[layers]]
+name = "roughness"
+file = "roughness_gore_{i}.png"
+prompt = "prompts/roughness.md"
+
+[[layers]]
+name = "normal"
+file = "normal_gore_{i}.png"
+prompt = "prompts/normal.md"
+
+[[layers]]
+name = "hydrology"
+file = "hydrology_gore_{i}.png"
+prompt = "prompts/hydrology.md"
+
+[[layers]]
+name = "minerals"
+file = "minerals_gore_{i}.png"
+prompt = "prompts/minerals.md"

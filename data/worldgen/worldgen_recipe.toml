@@ -1,0 +1,170 @@
+# Thessa v0.2 generator-facing recipe.
+# Exact schema may be adapted by the implementation, but preserve semantic intent.
+
+[planet]
+id = "thessa"
+seed = 7
+datum_radius_m = 3200000.0
+height_min_m = -8000.0
+height_max_m = 12000.0
+global_map_width = 1920
+global_map_height = 1080
+
+[readability]
+preview_width = 480
+preview_height = 270
+major_region_min_scale_km = 250.0
+macro_feature_strength = 0.85
+avoid_uniform_noise = true
+landmarks_should_survive_downscale = true
+
+[terrain]
+ocean_fraction_target_min = 0.52
+ocean_fraction_target_max = 0.68
+mountain_coverage = 0.18
+plateau_coverage = 0.10
+crater_density = 0.22
+volcanism = 0.18
+rift_activity = 0.16
+erosion_strength = 0.62
+glaciation = 0.20
+roughness_macro = 0.42
+
+[climate_proxy]
+nereid_facing_ocean_bias = 0.22
+anti_nereid_continentality_bias = 0.18
+polar_cooling_strength = 0.70
+elevation_cooling_strength = 0.65
+high_cloud_wet_region_bias = 0.55
+eclipse_cooling_strength = 0.28
+geothermal_local_warming_strength = 0.25
+
+[geothermal]
+major_provinces_min = 2
+major_provinces_max = 4
+secondary_fields_min = 4
+secondary_fields_max = 10
+weak_field_density = 0.35
+prefer_rifts = true
+prefer_volcanic_regions = true
+
+[[feature]]
+kind = "impact_basin"
+count = 1
+diameter_km_min = 1200.0
+diameter_km_max = 2000.0
+depth_km_min = 2.0
+depth_km_max = 5.0
+multi_ring = true
+landmark_priority = 1.0
+
+[[feature]]
+kind = "mountain_arc"
+count = 1
+length_km_min = 1000.0
+length_km_max = 1800.0
+width_km_min = 120.0
+width_km_max = 350.0
+peak_height_km_min = 5.0
+peak_height_km_max = 9.0
+branching_ridges = true
+landmark_priority = 1.0
+
+[[feature]]
+kind = "rift_canyon_system"
+count = 1
+length_km_min = 600.0
+length_km_max = 1400.0
+width_km_min = 30.0
+width_km_max = 160.0
+depth_km_min = 1.0
+depth_km_max = 4.0
+tributaries = true
+geothermal_bias = 0.8
+landmark_priority = 0.95
+
+[[feature]]
+kind = "volcanic_province"
+count = 1
+diameter_km_min = 400.0
+diameter_km_max = 900.0
+dark_basalt_albedo_bias = 0.8
+geothermal_bias = 1.0
+landmark_priority = 0.9
+
+[[feature]]
+kind = "shield_volcano_caldera_complex"
+count_min = 2
+count_max = 4
+diameter_km_min = 80.0
+diameter_km_max = 300.0
+height_km_min = 2.0
+height_km_max = 7.0
+geothermal_bias = 1.0
+
+[[feature]]
+kind = "large_crater"
+count_min = 5
+count_max = 12
+diameter_km_min = 80.0
+diameter_km_max = 450.0
+central_peak_probability = 0.65
+ejecta = true
+
+[[feature]]
+kind = "dry_plateau_salt_basin_complex"
+count = 1
+diameter_km_min = 400.0
+diameter_km_max = 1000.0
+prefer_anti_nereid = true
+aridity_bias = 0.9
+landmark_priority = 0.8
+
+[[feature]]
+kind = "glaciated_mountain_coast"
+count = 1
+length_km_min = 500.0
+length_km_max = 1200.0
+prefer_high_latitude = true
+prefer_ocean_adjacent = true
+landmark_priority = 0.8
+
+[[feature]]
+kind = "archipelago"
+count_min = 2
+count_max = 5
+chain_length_km_min = 200.0
+chain_length_km_max = 900.0
+volcanic_probability = 0.55
+
+[hydrology]
+sea_level_m = 0.0
+derive_ocean_from_height = true
+allow_lakes = true
+route_rivers_downhill = true
+closed_basin_salt_flats = true
+glacial_valley_bias = true
+
+[biomes]
+large_coherent_regions = true
+allow_feature_tags = true
+separate_geology_from_biome = true
+discrete_ids_no_blur = true
+
+[detail]
+global_png_contains_meter_scale_rocks = false
+local_detail_seeded_by_tile = true
+rock_scatter_later = true
+talus_later = true
+outcrops_later = true
+small_craters_later = true
+dune_ripples_later = true
+
+[preview]
+export_height = true
+export_biome = true
+export_geology = true
+export_hydrology = true
+export_geothermal = true
+export_eclipse_exposure = true
+export_continentality = true

@@ -2,7 +2,7 @@ use std::{error::Error, fmt};
 
 use glam::DVec3;
 
-use crate::{GravityError, GravityField, SimTime};
+use crate::{BakedEphemeris, BodyId, GravityError, GravityField, SimTime};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TestParticleState {
@@ -76,6 +76,667 @@ impl Default for VerletConfig {
             max_steps: 10_000_000,
         }
     }
+}
+
+/// How a sampled prediction path ended. Impact/Completed are display facts
+/// about the integrated test particle, not events in the authoritative sim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SampledPathEnd {
+    Completed,
+    Impact(BodyId),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SampledPath {
+    /// Inertial positions including the initial state, one per accepted step.
+    pub positions: Vec<DVec3>,
+    /// Inertial velocities parallel to `positions`. The fractional impact
+    /// sample reuses the step's start velocity (display-grade; the impact
+    /// epoch itself is exact).
+    pub velocities: Vec<DVec3>,
+    /// Inertial accelerations parallel to `positions`, from the same field
+    /// evaluations that advanced each step (initial node included). Velocity
+    /// sampling interpolates these, never differentiates positions: at
+    /// ~1e12 m barycentric coordinates f64 rounding is ~1e-3 m, and the
+    /// position-Hermite derivative amplifies it by ~1/h into 0.01-0.1 m/s
+    /// of pure noise. The impact fractional sample reuses the step-start
+    /// acceleration (same display-grade caveat as its velocity).
+    pub accelerations: Vec<DVec3>,
+    /// Exact sample epochs, including a fractional final impact step.
+    pub times: Vec<SimTime>,
+    pub end_time: SimTime,
+    pub end: SampledPathEnd,
+    pub stats: IntegratorStats,
+}
+
+/// Fixed-step velocity-Verlet recording every sample, for map prediction
+/// lines. The field is the full summed multi-body gravity (no SOI switch),
+/// so the line stays honest where two-body osculating elements would lie
+/// (strong third-body pull, near-parabolic energy). Stops early when the
+/// particle enters any of `impact_bodies`, so the line never dives through
+/// a planet. Impact is the earliest segment/sphere entry, with a fractional
+/// final epoch. This is a display approximation, not contact dynamics. Step count is `VerletConfig::max_steps`; callers size the step
+/// from the osculating period (bound) or a fixed horizon (escape).
+pub fn propagate_sampled_verlet(
+    ephemeris: &BakedEphemeris,
+    initial: TestParticleState,
+    start_time: SimTime,
+    config: VerletConfig,
+    impact_bodies: &[BodyId],
+) -> Result<SampledPath, IntegratorError> {
+    if !initial.position.is_finite()
+        || !initial.velocity.is_finite()
+        || !start_time.0.is_finite()
+        || !(start_time.0 + config.step_s * config.max_steps as f64).is_finite()
+    {
+        return Err(IntegratorError::InvalidConfig(
+            "non-finite sampled trajectory input".into(),
+        ));
+    }
+    if !config.step_s.is_finite() || config.step_s <= 0.0 {
+        return Err(IntegratorError::InvalidConfig(
+            "Verlet step must be positive".into(),
+        ));
+    }
+    // Fail fast on unknown impact bodies; per-step state lookups below are
+    // then infallible for validated ephemerides.
+    for body in impact_bodies {
+        ephemeris
+            .body(*body)
+            .map_err(|error| IntegratorError::InvalidConfig(error.to_string()))?;
+    }
+    let field = GravityField::from_ephemeris(ephemeris);
+    let mut positions = Vec::with_capacity(config.max_steps.min(4096) as usize + 1);
+    positions.push(initial.position);
+    let mut velocities = Vec::with_capacity(config.max_steps.min(4096) as usize + 1);
+    velocities.push(initial.velocity);
+    let mut accelerations = Vec::with_capacity(config.max_steps.min(4096) as usize + 1);
+    accelerations.push(field.acceleration(initial.position, start_time)?);
+    let mut times = vec![start_time];
+    if let Some(body) = impact_at(ephemeris, impact_bodies, initial.position, start_time) {
+        return Ok(SampledPath {
+            positions,
+            velocities,
+            accelerations,
+            times,
+            end_time: start_time,
+            end: SampledPathEnd::Impact(body),
+            stats: IntegratorStats::default(),
+        });
+    }
+    let mut state = initial;
+    let mut time = start_time;
+    let mut stats = IntegratorStats::default();
+    let mut end = SampledPathEnd::Completed;
+    while stats.accepted_steps < config.max_steps {
+        let h = config.step_s;
+        let acceleration_0 = field.acceleration(state.position, time)?;
+        let next_position = state.position + state.velocity * h + acceleration_0 * (0.5 * h * h);
+        let next_time = time.offset(h);
+        // Test moving-body relative segments before sampling gravity at an
+        // endpoint that may be inside a source. Return the earliest entry,
+        // independent of the caller's body order, rather than the far side.
+        if let Some((body, fraction)) = impact_segment(
+            ephemeris,
+            impact_bodies,
+            state.position,
+            next_position,
+            time,
+            next_time,
+        ) {
+            time = time.offset(h * fraction);
+            positions.push(state.position.lerp(next_position, fraction));
+            velocities.push(state.velocity);
+            accelerations.push(acceleration_0);
+            times.push(time);
+            stats.accepted_steps += 1;
+            end = SampledPathEnd::Impact(body);
+            break;
+        }
+        let acceleration_1 = field.acceleration(next_position, next_time)?;
+        state = TestParticleState {
+            position: next_position,
+            velocity: state.velocity + (acceleration_0 + acceleration_1) * (0.5 * h),
+        };
+        time = next_time;
+        stats.accepted_steps += 1;
+        positions.push(state.position);
+        velocities.push(state.velocity);
+        accelerations.push(acceleration_1);
+        times.push(time);
+    }
+    Ok(SampledPath {
+        positions,
+        velocities,
+        accelerations,
+        times,
+        end_time: time,
+        end,
+        stats,
+    })
+}
+
+/// Fast variant of [`propagate_sampled_verlet`] for long coast bakes: source
+/// bodies are sampled onto a Hermite table every `table_every_steps` steps
+/// (see [`EphemerisTable`](crate::EphemerisTable)) instead of Kepler-solved
+/// per step. Same impact semantics; a step whose table acceleration fails
+/// falls back to the exact field for that step, so singularities behave like
+/// the exact path. Prefer this for multi-day rails bakes; keep the exact
+/// variant for short display lines and tests.
+pub fn propagate_sampled_verlet_fast(
+    ephemeris: &BakedEphemeris,
+    initial: TestParticleState,
+    start_time: SimTime,
+    config: VerletConfig,
+    impact_bodies: &[BodyId],
+    table_every_steps: u64,
+) -> Result<SampledPath, IntegratorError> {
+    if !initial.position.is_finite()
+        || !initial.velocity.is_finite()
+        || !start_time.0.is_finite()
+        || !(start_time.0 + config.step_s * config.max_steps as f64).is_finite()
+    {
+        return Err(IntegratorError::InvalidConfig(
+            "non-finite sampled trajectory input".into(),
+        ));
+    }
+    if !config.step_s.is_finite() || config.step_s <= 0.0 {
+        return Err(IntegratorError::InvalidConfig(
+            "Verlet step must be positive".into(),
+        ));
+    }
+    for body in impact_bodies {
+        ephemeris
+            .body(*body)
+            .map_err(|error| IntegratorError::InvalidConfig(error.to_string()))?;
+    }
+    let table_every = table_every_steps.max(1);
+    let horizon_s = config.step_s * config.max_steps as f64;
+    let sources: Vec<BodyId> = {
+        let mut ids: Vec<_> = ephemeris.gravity_sources().map(|body| body.id).collect();
+        ids.extend_from_slice(impact_bodies);
+        ids.sort();
+        ids.dedup();
+        ids
+    };
+    let table = crate::EphemerisTable::build(
+        ephemeris,
+        &sources,
+        start_time,
+        start_time.offset(horizon_s),
+        config.step_s * table_every as f64,
+    )
+    .map_err(|error| IntegratorError::InvalidConfig(error.to_string()))?;
+    let field = GravityField::from_ephemeris(ephemeris);
+    let mut positions = Vec::with_capacity(config.max_steps.min(4096) as usize + 1);
+    positions.push(initial.position);
+    let mut velocities = Vec::with_capacity(config.max_steps.min(4096) as usize + 1);
+    velocities.push(initial.velocity);
+    let mut accelerations = Vec::with_capacity(config.max_steps.min(4096) as usize + 1);
+    let mut times = vec![start_time];
+    // Bake-start containment is checked exactly (one lookup, no table error
+    // possible); per-step segments below use the table consistently.
+    if let Some(body) = impact_at(ephemeris, impact_bodies, initial.position, start_time) {
+        // Single-sample path: still carry the start acceleration so the
+        // vectors stay parallel (sample_at answers its own epoch). A total
+        // field failure here (exact-center singularity) keeps the historic
+        // Ok with a zero placeholder rather than invalidating the bake.
+        accelerations.push(
+            table
+                .acceleration_at(initial.position, start_time)
+                .or_else(|| field.acceleration(initial.position, start_time).ok())
+                .unwrap_or(DVec3::ZERO),
+        );
+        return Ok(SampledPath {
+            positions,
+            velocities,
+            accelerations,
+            times,
+            end_time: start_time,
+            end: SampledPathEnd::Impact(body),
+            stats: IntegratorStats::default(),
+        });
+    }
+    let mut stats = IntegratorStats::default();
+    let mut end = SampledPathEnd::Completed;
+    let time = run_table_loop(
+        &table,
+        &field,
+        impact_bodies,
+        initial,
+        start_time,
+        config.step_s,
+        config.max_steps,
+        &mut positions,
+        &mut velocities,
+        &mut accelerations,
+        &mut times,
+        &mut stats,
+        &mut end,
+    )?;
+    Ok(SampledPath {
+        positions,
+        velocities,
+        accelerations,
+        times,
+        end_time: time,
+        end,
+        stats,
+    })
+}
+
+/// Table-backed Verlet loop with per-endpoint snapshots: one Hermite eval
+/// per track per new endpoint serves gravity and the impact segment test.
+/// Accepted endpoints and their acceleration carry into the next step;
+/// N full steps need N+1 snapshots and gravity evaluations, not 2N.
+/// A step whose snapshot accel fails (singularity/non-finite) falls back to
+/// the exact field for that eval, so behavior matches the exact path.
+#[allow(clippy::too_many_arguments)]
+fn run_table_loop(
+    table: &crate::EphemerisTable,
+    field: &GravityField,
+    impact_bodies: &[BodyId],
+    initial: TestParticleState,
+    start_time: SimTime,
+    step_s: f64,
+    max_steps: u64,
+    positions: &mut Vec<DVec3>,
+    velocities: &mut Vec<DVec3>,
+    accelerations: &mut Vec<DVec3>,
+    times: &mut Vec<SimTime>,
+    stats: &mut IntegratorStats,
+    end: &mut SampledPathEnd,
+) -> Result<SimTime, IntegratorError> {
+    use crate::TableSnapshot;
+    let mut state = initial;
+    let mut time = start_time;
+    let mut start_snap = TableSnapshot::default();
+    let mut end_snap = TableSnapshot::default();
+    if stats.accepted_steps >= max_steps {
+        return Ok(time);
+    }
+    table.snapshot(time, &mut start_snap);
+    let mut acceleration_0 = match table.accel_from(&start_snap, state.position) {
+        Some(acceleration) => acceleration,
+        None => field.acceleration(state.position, time)?,
+    };
+    // Fresh bakes carry only the initial sample; resume calls arrive with
+    // the resume sample (and its acceleration) already stored.
+    if accelerations.len() < positions.len() {
+        accelerations.push(acceleration_0);
+    }
+    while stats.accepted_steps < max_steps {
+        let h = step_s;
+        let next_position = state.position + state.velocity * h + acceleration_0 * (0.5 * h * h);
+        let next_time = time.offset(h);
+        table.snapshot(next_time, &mut end_snap);
+        if let Some((body, fraction)) = table.impact_from(
+            &start_snap,
+            &end_snap,
+            state.position,
+            next_position,
+            impact_bodies,
+        ) {
+            time = time.offset(h * fraction);
+            positions.push(state.position.lerp(next_position, fraction));
+            velocities.push(state.velocity);
+            accelerations.push(acceleration_0);
+            times.push(time);
+            stats.accepted_steps += 1;
+            *end = SampledPathEnd::Impact(body);
+            break;
+        }
+        let acceleration_1 = match table.accel_from(&end_snap, next_position) {
+            Some(acceleration) => acceleration,
+            None => field.acceleration(next_position, next_time)?,
+        };
+        state = TestParticleState {
+            position: next_position,
+            velocity: state.velocity + (acceleration_0 + acceleration_1) * (0.5 * h),
+        };
+        time = next_time;
+        // The accepted endpoint is exactly the next step's initial state.
+        // Swap owned buffers; neither the centers nor gravity need recomputing.
+        std::mem::swap(&mut start_snap, &mut end_snap);
+        acceleration_0 = acceleration_1;
+        stats.accepted_steps += 1;
+        positions.push(state.position);
+        velocities.push(state.velocity);
+        accelerations.push(acceleration_1);
+        times.push(time);
+    }
+    Ok(time)
+}
+
+/// Extend an existing [`SampledPath`] forward by up to `extra_steps` fixed
+/// steps, appending samples in place. The resume state is the path's own end
+/// (no re-integration of covered ground); a short table spans only the
+/// extension horizon, so each call costs proportionally to the chunk, not
+/// the whole path. Returns `Ok(true)` when samples were appended,
+/// `Ok(false)` when the path already ended in impact or reached
+/// `total_max_steps`. Step size must match the baked path (derived from its
+/// first two samples); impact bodies are re-validated like a fresh bake.
+pub fn propagate_sampled_extend(
+    ephemeris: &BakedEphemeris,
+    path: &mut SampledPath,
+    config_step_s: f64,
+    total_max_steps: u64,
+    extra_steps: u64,
+    impact_bodies: &[BodyId],
+    table_every_steps: u64,
+) -> Result<bool, IntegratorError> {
+    if !matches!(path.end, SampledPathEnd::Completed) {
+        return Ok(false);
+    }
+    if path.positions.len() < 2
+        || path.times.len() != path.positions.len()
+        || path.velocities.len() != path.positions.len()
+        || path.accelerations.len() != path.positions.len()
+        || path.times.last() != Some(&path.end_time)
+        || !path.end_time.0.is_finite()
+        || !path.positions.last().is_some_and(|p| p.is_finite())
+        || !path.velocities.last().is_some_and(|v| v.is_finite())
+        || !path.accelerations.last().is_some_and(|a| a.is_finite())
+    {
+        return Err(IntegratorError::InvalidConfig(
+            "cannot extend a degenerate path".into(),
+        ));
+    }
+    let baked_step = path.times[1].seconds() - path.times[0].seconds();
+    if !baked_step.is_finite()
+        || baked_step <= 0.0
+        || !config_step_s.is_finite()
+        || config_step_s <= 0.0
+        || (baked_step - config_step_s).abs() > 1e-9 * config_step_s.max(1e-9)
+    {
+        return Err(IntegratorError::InvalidConfig(
+            "extension step must match the baked path step".into(),
+        ));
+    }
+    for body in impact_bodies {
+        ephemeris
+            .body(*body)
+            .map_err(|error| IntegratorError::InvalidConfig(error.to_string()))?;
+    }
+    let done = path.stats.accepted_steps;
+    if done >= total_max_steps {
+        return Ok(false);
+    }
+    let take = extra_steps.min(total_max_steps - done);
+    if take == 0 {
+        return Ok(false);
+    }
+    let resume = TestParticleState {
+        position: *path.positions.last().expect("checked non-empty"),
+        velocity: *path.velocities.last().expect("checked non-empty"),
+    };
+    let resume_time = path.end_time;
+    let sources: Vec<BodyId> = {
+        let mut ids: Vec<_> = ephemeris.gravity_sources().map(|body| body.id).collect();
+        ids.extend_from_slice(impact_bodies);
+        ids.sort();
+        ids.dedup();
+        ids
+    };
+    let table = crate::EphemerisTable::build(
+        ephemeris,
+        &sources,
+        resume_time,
+        resume_time.offset(config_step_s * take as f64),
+        config_step_s * table_every_steps.max(1) as f64,
+    )
+    .map_err(|error| IntegratorError::InvalidConfig(error.to_string()))?;
+    let field = GravityField::from_ephemeris(ephemeris);
+    // Exact containment at the resume point (one lookup); segments below use
+    // the short table consistently.
+    if let Some(body) = impact_at(ephemeris, impact_bodies, resume.position, resume_time) {
+        path.end = SampledPathEnd::Impact(body);
+        return Ok(false);
+    }
+    // accepted_steps already counts baked steps; bound the shared loop to
+    // the table span (done + take), never the total budget — past the short
+    // table the interpolant would clamp to its endpoint state and feed the
+    // loop wrong gravity.
+    let mut stats = path.stats;
+    let mut end = SampledPathEnd::Completed;
+    let original_len = path.positions.len();
+    let result = run_table_loop(
+        &table,
+        &field,
+        impact_bodies,
+        resume,
+        resume_time,
+        config_step_s,
+        done + take,
+        &mut path.positions,
+        &mut path.velocities,
+        &mut path.accelerations,
+        &mut path.times,
+        &mut stats,
+        &mut end,
+    );
+    let end_time = match result {
+        Ok(time) => time,
+        Err(error) => {
+            // Keep the stored samples and metadata consistent if an exact
+            // fallback fails partway through this extension.
+            path.positions.truncate(original_len);
+            path.velocities.truncate(original_len);
+            path.accelerations.truncate(original_len);
+            path.times.truncate(original_len);
+            return Err(error);
+        }
+    };
+    path.stats = stats;
+    path.end_time = end_time;
+    path.end = end;
+    Ok(true)
+}
+
+/// Timescale-following variable-step sampling for far display prediction
+/// (interstellar escapes, year horizons). Fixed coarse steps cannot resolve
+/// a fast periapsis bend: the asymptote error compounds forever (measured
+/// 7.4e10 m over a year at 4 h uniform steps). Instead each step spans a
+/// fraction `eta` of the local dynamical time `sqrt(d^3/mu)` to the nearest
+/// source, clamped to `[h_min, h_max]` — dense at periapsis, daily strides
+/// in deep cruise, ~500 samples per year. Same Verlet update per step and
+/// same segment impact semantics; sample times are non-uniform (the shared
+/// Hermite sampler already handles that). Display-grade only: the flight
+/// loop never rides this, it rides fixed-step rails.
+#[allow(clippy::too_many_arguments)]
+pub fn propagate_sampled_verlet_scaled(
+    ephemeris: &BakedEphemeris,
+    initial: TestParticleState,
+    start_time: SimTime,
+    h_min: f64,
+    h_max: f64,
+    eta: f64,
+    max_samples: u64,
+    impact_bodies: &[BodyId],
+) -> Result<SampledPath, IntegratorError> {
+    if !initial.position.is_finite()
+        || !initial.velocity.is_finite()
+        || !start_time.0.is_finite()
+        || !h_min.is_finite()
+        || !h_max.is_finite()
+        || !eta.is_finite()
+        || h_min <= 0.0
+        || h_max < h_min
+        || eta <= 0.0
+    {
+        return Err(IntegratorError::InvalidConfig(
+            "non-finite scaled trajectory input".into(),
+        ));
+    }
+    for body in impact_bodies {
+        ephemeris
+            .body(*body)
+            .map_err(|error| IntegratorError::InvalidConfig(error.to_string()))?;
+    }
+    let sources: Vec<(BodyId, f64)> = {
+        let mut ids: Vec<_> = ephemeris.gravity_sources().map(|body| body.id).collect();
+        ids.extend_from_slice(impact_bodies);
+        ids.sort();
+        ids.dedup();
+        ids.into_iter()
+            .map(|id| {
+                ephemeris
+                    .body(id)
+                    .map(|body| (id, body.mu))
+                    .map_err(|error| IntegratorError::InvalidConfig(error.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let field = GravityField::from_ephemeris(ephemeris);
+    let mut positions = vec![initial.position];
+    let mut velocities = vec![initial.velocity];
+    // Display-only path, but keep vectors parallel like every other bake.
+    let mut accelerations = vec![field.acceleration(initial.position, start_time)?];
+    let mut times = vec![start_time];
+    if let Some(body) = impact_at(ephemeris, impact_bodies, initial.position, start_time) {
+        return Ok(SampledPath {
+            positions,
+            velocities,
+            accelerations,
+            times,
+            end_time: start_time,
+            end: SampledPathEnd::Impact(body),
+            stats: IntegratorStats::default(),
+        });
+    }
+    // Local dynamical time from exact body states (a handful of Kepler
+    // solves per step, not per source per substep).
+    let timescale = |position: DVec3, time: SimTime| -> f64 {
+        let mut best = f64::INFINITY;
+        for (id, mu) in &sources {
+            if *mu <= 0.0 {
+                continue;
+            }
+            let Ok(state) = ephemeris.body_state(*id, time) else {
+                continue;
+            };
+            let d = (state.position_inertial - position).length();
+            if d > 0.0 && d.is_finite() {
+                best = best.min((d * d * d / mu).sqrt());
+            }
+        }
+        if best.is_finite() {
+            (eta * best).clamp(h_min, h_max)
+        } else {
+            h_max
+        }
+    };
+    let mut state = initial;
+    let mut time = start_time;
+    let mut stats = IntegratorStats::default();
+    let mut end = SampledPathEnd::Completed;
+    while positions.len() as u64 <= max_samples {
+        let h = timescale(state.position, time);
+        let acceleration_0 = field.acceleration(state.position, time)?;
+        let next_position = state.position + state.velocity * h + acceleration_0 * (0.5 * h * h);
+        let next_time = time.offset(h);
+        if let Some((body, fraction)) = impact_segment(
+            ephemeris,
+            impact_bodies,
+            state.position,
+            next_position,
+            time,
+            next_time,
+        ) {
+            time = time.offset(h * fraction);
+            positions.push(state.position.lerp(next_position, fraction));
+            velocities.push(state.velocity);
+            accelerations.push(acceleration_0);
+            times.push(time);
+            stats.accepted_steps += 1;
+            end = SampledPathEnd::Impact(body);
+            break;
+        }
+        let acceleration_1 = field.acceleration(next_position, next_time)?;
+        state = TestParticleState {
+            position: next_position,
+            velocity: state.velocity + (acceleration_0 + acceleration_1) * (0.5 * h),
+        };
+        time = next_time;
+        stats.accepted_steps += 1;
+        positions.push(state.position);
+        velocities.push(state.velocity);
+        accelerations.push(acceleration_1);
+        times.push(time);
+    }
+    Ok(SampledPath {
+        positions,
+        velocities,
+        accelerations,
+        times,
+        end_time: time,
+        end,
+        stats,
+    })
+}
+
+/// First impact body whose physical radius contains the point, if any.
+/// Bodies that fail lookup are skipped: the caller validates the list once
+/// up front, so this only fires for structurally invalid ephemerides.
+pub(crate) fn impact_at(
+    ephemeris: &BakedEphemeris,
+    impact_bodies: &[BodyId],
+    position: DVec3,
+    time: SimTime,
+) -> Option<BodyId> {
+    for body_id in impact_bodies {
+        let body = ephemeris.body(*body_id).ok()?;
+        if body.radius_m <= 0.0 {
+            continue;
+        }
+        let state = ephemeris.body_state(*body_id, time).ok()?;
+        if (position - state.position_inertial).length() < body.radius_m {
+            return Some(*body_id);
+        }
+    }
+    None
+}
+
+/// Earliest sphere entry along a step in each body's moving frame.
+/// Linear relative motion is a display approximation within this one step;
+/// this is not a continuous collision solver for authoritative flight.
+pub(crate) fn impact_segment(
+    ephemeris: &BakedEphemeris,
+    impact_bodies: &[BodyId],
+    from: DVec3,
+    to: DVec3,
+    start_time: SimTime,
+    end_time: SimTime,
+) -> Option<(BodyId, f64)> {
+    let mut first: Option<(BodyId, f64)> = None;
+    for body_id in impact_bodies {
+        let body = ephemeris.body(*body_id).ok()?;
+        if body.radius_m <= 0.0 {
+            continue;
+        }
+        let start = ephemeris.body_state(*body_id, start_time).ok()?;
+        let end = ephemeris.body_state(*body_id, end_time).ok()?;
+        let relative = from - start.position_inertial;
+        let delta = (to - end.position_inertial) - relative;
+        let a = delta.length_squared();
+        if a <= 0.0 {
+            continue;
+        }
+        let b = relative.dot(delta);
+        let c = relative.length_squared() - body.radius_m.powi(2);
+        let discriminant = b * b - a * c;
+        if discriminant < 0.0 {
+            continue;
+        }
+        // Stable quadratic root for approaching spheres, without cancellation.
+        let denominator = -b + discriminant.sqrt();
+        let fraction = if c <= 0.0 { 0.0 } else { c / denominator };
+        if (0.0..=1.0).contains(&fraction) && first.is_none_or(|(_, previous)| fraction < previous)
+        {
+            first = Some((*body_id, fraction));
+        }
+    }
+    first
 }
 
 pub fn propagate_velocity_verlet(

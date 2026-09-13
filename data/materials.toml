@@ -1,0 +1,72 @@
+# Project Thessa visual material parameters, phase 1.
+#
+# Renderer data, never physics. The client overlays this file on top of its
+# compiled builtins field by field; a missing file, a missing material or a
+# missing key keeps the builtin value and logs loudly. Clearing a texture back
+# to "no map" is not expressible yet (phase 2 with explicit nulls).
+# Colors are sRGB 0..1 triplets, emissive is linear HDR RGB.
+
+[materials.khepri]
+base_color_srgb = [0.60, 0.22, 0.08]
+albedo_texture = "textures/khepri-surface-v1.png"
+perceptual_roughness = 0.92
+
+[materials.nereid]
+base_color_srgb = [0.95, 0.82, 0.58]
+albedo_texture = "textures/nereid-atmosphere-v1.png"
+perceptual_roughness = 0.82
+
+[materials.thessa]
+base_color_srgb = [1.0, 1.0, 1.0]
+albedo_texture = "worlds/thessa-v3/albedo.png"
+normal_texture = "worlds/thessa-v3/normal.png"
+metallic_roughness_texture = "worlds/thessa-v3/roughness.png"
+perceptual_roughness = 0.92
+
+[materials.pelagos]
+base_color_srgb = [0.06, 0.25, 0.44]
+albedo_texture = "textures/pelagos-surface-v1.png"
+# Open water: low roughness for a sun-glint response. No metallic: water is
+# dielectric, specular comes from F0.
+perceptual_roughness = 0.18
+metallic = 0.0
+
+[materials.borea]
+base_color_srgb = [0.78, 0.84, 0.88]
+albedo_texture = "textures/borea-surface-v1.png"
+perceptual_roughness = 0.98
+
+[materials.orthea]
+base_color_srgb = [0.48, 0.53, 0.58]
+albedo_texture = "textures/orthea-surface-v1.png"
+perceptual_roughness = 0.96
+
+[materials.vesper]
+base_color_srgb = [0.53, 0.70, 0.78]
+albedo_texture = "textures/vesper-atmosphere-v1.png"
+perceptual_roughness = 0.62
+
+[materials.janus]
+base_color_srgb = [0.70, 0.62, 0.48]
+albedo_texture = "textures/janus-surface-v1.png"
+perceptual_roughness = 0.94
+
+[materials.volcanic]
+base_color_srgb = [0.30, 0.08, 0.03]
+# Lava-bearing crust glows on its own; the albedo stays dark so the emissive
+# reads as heat rather than paint.
+emissive_linear_rgb = [2.2, 0.35, 0.04]
+perceptual_roughness = 0.90
+
+[materials.metal]
+base_color_srgb = [0.45, 0.38, 0.28]
+perceptual_roughness = 0.45
+metallic = 0.9
+
+[materials.ice]
+base_color_srgb = [0.56, 0.70, 0.78]
+perceptual_roughness = 0.32
+
+[materials.minor]
+base_color_srgb = [0.40, 0.43, 0.46]
+perceptual_roughness = 0.98

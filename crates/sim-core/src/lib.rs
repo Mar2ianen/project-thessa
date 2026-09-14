@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod aero;
+mod affine_propagator;
 mod atmosphere;
 mod ephemeris;
 mod flight;
@@ -29,6 +30,9 @@ pub use aero::{
     AeroGeometry, AeroModel, AeroPanel, AeroPanelLoad, AeroResult, AeroSimdScratch, AeroState,
     PanelAeroModel, PanelSoA, evaluate_batch,
 };
+pub use affine_propagator::{
+    AffinePropagator, ModeCoefficients, PropagatorError, StepCoefficients,
+};
 pub use atmosphere::{AtmosphereConfig, AtmosphereError, AtmosphereSample, BakedAtmosphere};
 pub use ephemeris::{
     BakedBody, BakedEphemeris, BodyId, BodyState, EphemerisError, EphemerisFrame, EphemerisScratch,
@@ -44,8 +48,7 @@ pub use frames::{ReferenceFrame, StateVector};
 pub use gravity::{GravityError, GravityField};
 pub use gravity_patch::{
     CohortConfig, CohortEval, CohortEvaluator, CohortReport, GravityPatch, HESSIAN_FROBENIUS_NORM,
-    HESSIAN_REMAINDER, PatchError, compile_patch, evaluate_cohorts, evaluate_patch,
-    evaluate_patch_soa,
+    HESSIAN_REMAINDER, PatchError, affine_segment_bound, compile_patch, evaluate_cohorts,
 };
 pub use gravity_tree::{
     GravityNode, GravityNodeFrame, GravitySourceTree, TreeEval, monopole_error_estimate,

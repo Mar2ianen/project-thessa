@@ -531,6 +531,43 @@ impl BakedEphemeris {
                         body.name
                     )));
                 }
+            } else if body.orbit.is_some() {
+                return Err(EphemerisError::InvalidBody(format!(
+                    "body {} has an orbit but no parent",
+                    body.name
+                )));
+            }
+        }
+        // Parent links must form a DAG. A cycle passes every check above
+        // yet hangs any consumer that walks parents (frames, tree builder);
+        // only the runtime lookup would notice, far too late. Fail fast.
+        let mut color = vec![0_u8; self.bodies.len()];
+        for start in 0..self.bodies.len() {
+            let mut node = start;
+            let mut path = Vec::new();
+            loop {
+                if color[node] == 2 {
+                    for member in path {
+                        color[member] = 2;
+                    }
+                    break;
+                }
+                if color[node] == 1 {
+                    return Err(EphemerisError::Cycle(self.bodies[node].id));
+                }
+                color[node] = 1;
+                path.push(node);
+                match self.bodies[node].parent {
+                    // Slot validity established above: every parent id
+                    // resolves to its own slot.
+                    Some(parent) => node = parent.index(),
+                    None => {
+                        for member in path {
+                            color[member] = 2;
+                        }
+                        break;
+                    }
+                }
             }
         }
         Ok(())

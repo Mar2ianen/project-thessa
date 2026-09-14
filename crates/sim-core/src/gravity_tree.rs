@@ -41,7 +41,9 @@ pub struct GravitySourceTree {
 
 impl GravitySourceTree {
     /// Invert baked parent links into aggregate nodes. Pure metadata:
-    /// building the tree changes no gravity result.
+    /// building the tree changes no gravity result. Acyclicity is not
+    /// assumed here — it is enforced by [`BakedEphemeris`] validation, so
+    /// every parent walk below terminates.
     pub fn build(ephemeris: &BakedEphemeris) -> Result<Self, crate::EphemerisError> {
         // Ancestor bodies that group at least two gravity sources, plus every
         // source itself: those are the nodes. A source with no source
@@ -232,6 +234,17 @@ impl GravitySourceTree {
                     .map(|node| node.body)
                     .unwrap_or(BodyId(0)),
             });
+        }
+        // Frames index by node id: a short slice (or one from another tree)
+        // must fail open, never panic inside the authoritative core.
+        if frames.len() != self.nodes.len() {
+            return Err(GravityError::Ephemeris(crate::EphemerisError::InvalidBody(
+                format!(
+                    "gravity frame length {} does not match {} tree nodes",
+                    frames.len(),
+                    self.nodes.len()
+                ),
+            )));
         }
         let mut total = DVec3::ZERO;
         let mut error_bound = 0.0;

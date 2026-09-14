@@ -137,11 +137,28 @@ impl<'a> GravityField<'a> {
         positions: &[DVec3],
         states: &[crate::BodyState],
     ) -> Result<Vec<DVec3>, GravityError> {
+        let mut out = Vec::new();
+        self.accelerations_from_frame_into(positions, states, &mut out)?;
+        Ok(out)
+    }
+
+    /// Scratch-writing twin of [`GravityField::accelerations_from_frame`]
+    /// for hot loops: `out` is reused across ticks (resized only when the
+    /// target count changes), so steady-state ticks allocate nothing.
+    pub fn accelerations_from_frame_into(
+        &self,
+        positions: &[DVec3],
+        states: &[crate::BodyState],
+        out: &mut Vec<DVec3>,
+    ) -> Result<(), GravityError> {
         let sources = self.resolved_frame_sources(states.len())?;
-        positions
-            .iter()
-            .map(|position| accumulate_frame(*position, states, &sources))
-            .collect()
+        if out.len() != positions.len() {
+            out.resize(positions.len(), DVec3::ZERO);
+        }
+        for (position, slot) in positions.iter().zip(out.iter_mut()) {
+            *slot = accumulate_frame(*position, states, &sources)?;
+        }
+        Ok(())
     }
 
     /// Resolve `(mu, state index)` for every source in accumulation order.
@@ -165,7 +182,7 @@ impl<'a> GravityField<'a> {
 /// Accumulate point-mass terms from pre-resolved `(mu, state index)` pairs.
 /// Same per-source order, checks and summation as
 /// [`GravityField::acceleration`]; the caller guarantees every index is in
-/// bounds, so a short slice is reported before the parallel loop starts.
+/// bounds, so a short slice is reported before the batch starts.
 fn accumulate_frame(
     position: DVec3,
     states: &[crate::BodyState],

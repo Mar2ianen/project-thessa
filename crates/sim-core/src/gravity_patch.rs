@@ -79,6 +79,12 @@ impl CohortConfig {
 }
 
 /// One compiled local field: shared far field plus the exact-near list.
+///
+/// Valid only for the states it was compiled from (single tick): the
+/// struct carries no epoch, so pairing it with other states is a silent
+/// contract violation. Raw evaluation is therefore crate-private;
+/// [`CohortEvaluator`] is the public multi-evaluation path and enforces
+/// the envelope on every tick.
 #[derive(Debug, Clone)]
 pub struct GravityPatch {
     /// Anchor: affine expansion point.
@@ -258,7 +264,14 @@ fn compile_patch_at(
 /// Evaluate one target through a patch: shared affine far field plus exact
 /// near terms. Deterministic: summation order is patch order, independent
 /// of worker count.
-pub fn evaluate_patch(
+///
+/// Crate-private by design, not by accident: a patch is only valid for the
+/// exact states it was compiled from (single-tick validity), and a public
+/// `(patch, any_states)` signature would let callers silently mix epochs —
+/// fresh exact-near terms over stale far `g0/J` under a legitimate-looking
+/// bound. Multi-evaluation goes through [`CohortEvaluator`], which enforces
+/// the contract with spatial + temporal remainder checks.
+pub(crate) fn evaluate_patch(
     patch: &GravityPatch,
     states: &[BodyState],
     position: DVec3,
@@ -292,33 +305,58 @@ pub fn evaluate_patch(
     }
 }
 
-/// Evaluate one patch over Structure-of-Arrays target slices (doc 23 section
-/// 11 target layout): shared anchor/`g0`/`J` broadcast, SoA outputs. The
-/// exact-near terms accumulate per lane afterwards through
-/// [`evaluate_patch`]-equivalent math; this entry covers the shared affine
-/// part, which is the vectorizable bulk.
-pub fn evaluate_patch_soa(
+/// Posted propagation bound for one analytic segment over a far-only patch:
+/// spatial Hessian remainder at the trajectory's maximum anchor excursion
+/// plus the Lipschitz temporal remainder for source motion over the
+/// interval (uses source velocities from `states`). Returns INFINITY when
+/// the excursion reaches a source or a source drifts onto the anchor: that
+/// IS the rebuild signal, not an error. Refuses patches with exact-near
+/// sources (their point-mass terms admit no constant-coefficient STM —
+/// future hybrid work, never a silent number).
+///
+/// Together with [`crate::AffinePropagator`] this is the programmed form of
+/// the experiment's core contract: analytic propagation must never exceed
+/// its posted bound.
+pub fn affine_segment_bound(
+    ephemeris: &BakedEphemeris,
+    states: &[BodyState],
     patch: &GravityPatch,
-    xs: &[f64],
-    ys: &[f64],
-    zs: &[f64],
-    out_ax: &mut [f64],
-    out_ay: &mut [f64],
-    out_az: &mut [f64],
-) {
-    debug_assert_eq!(xs.len(), ys.len());
-    debug_assert_eq!(xs.len(), zs.len());
-    debug_assert_eq!(xs.len(), out_ax.len());
-    debug_assert_eq!(xs.len(), out_ay.len());
-    debug_assert_eq!(xs.len(), out_az.len());
-    let j = patch.jacobian;
-    for lane in 0..xs.len() {
-        let dx = xs[lane] - patch.center.x;
-        let dy = ys[lane] - patch.center.y;
-        let dz = zs[lane] - patch.center.z;
-        out_ax[lane] = patch.g0.x + j.x_axis.x * dx + j.y_axis.x * dy + j.z_axis.x * dz;
-        out_ay[lane] = patch.g0.y + j.x_axis.y * dx + j.y_axis.y * dy + j.z_axis.y * dz;
-        out_az[lane] = patch.g0.z + j.x_axis.z * dx + j.y_axis.z * dy + j.z_axis.z * dz;
+    excursion_m: f64,
+    interval_s: f64,
+) -> Result<f64, PatchError> {
+    if !patch.exact.is_empty() {
+        return Err(PatchError::AnalyticNeedsFarField);
+    }
+    if excursion_m.is_nan() || excursion_m < 0.0 || !interval_s.is_finite() || interval_s < 0.0 {
+        return Err(PatchError::NonFiniteInput);
+    }
+    let mut bound = 0.0;
+    for source in ephemeris.gravity_sources() {
+        let state = states
+            .get(source.id.index())
+            .ok_or(PatchError::UnknownSource(source.id))?;
+        let distance = (state.position_inertial - patch.center).length();
+        if !distance.is_finite() {
+            return Err(PatchError::Gravity(GravityError::NonFinite {
+                body_id: source.id,
+            }));
+        }
+        let displacement = state.velocity_inertial.length() * interval_s;
+        if !displacement.is_finite() {
+            return Err(PatchError::NonFiniteInput);
+        }
+        let spatial_clearance = distance - excursion_m;
+        let temporal_clearance = distance - displacement;
+        if spatial_clearance <= 0.0 || temporal_clearance <= 0.0 {
+            return Ok(f64::INFINITY);
+        }
+        bound += HESSIAN_REMAINDER * source.mu * excursion_m.powi(2) / spatial_clearance.powi(4);
+        bound += source.mu * 2.0 * displacement / temporal_clearance.powi(3);
+    }
+    if bound.is_finite() {
+        Ok(bound)
+    } else {
+        Err(PatchError::NonFiniteInput)
     }
 }
 
@@ -399,6 +437,26 @@ fn split_cohort(
     }
     let (anchor, radius_m) = ball_of(indices.iter().map(|index| positions[*index]))?;
     let patch = compile_patch_at(ephemeris, states, anchor, radius_m, config)?;
+    split_with_root(
+        ephemeris, states, positions, indices, out, report, config, depth, patch,
+    )
+}
+
+/// Shared tail after a root patch is available: accept it, or split.
+/// Separated so hot-loop callers can compile once and never pay for a
+/// rejected root twice.
+#[allow(clippy::too_many_arguments)]
+fn split_with_root(
+    ephemeris: &BakedEphemeris,
+    states: &[BodyState],
+    positions: &[DVec3],
+    indices: &mut [usize],
+    out: &mut [Option<DVec3>],
+    report: &mut CohortReport,
+    config: CohortConfig,
+    depth: u32,
+    patch: GravityPatch,
+) -> Result<(), PatchError> {
     report.max_radius_m = report.max_radius_m.max(patch.radius_m);
     if patch.error_bound_mps2 <= config.error_budget_mps2 {
         // Telemetry counts executed work only: a rejected parent evaluated
@@ -461,7 +519,7 @@ fn split_cohort(
     Ok(())
 }
 
-/// One chunked batch through a patch into an aligned output slice.
+/// One serial batch through a patch into an aligned output slice.
 /// Deliberately serial (see [`GravityField::accelerations_from_frame`]):
 /// one checked pass with predictable branches beats dispatch + scan at
 /// fleet-tick sizes.
@@ -523,6 +581,10 @@ pub enum PatchError {
     Gravity(GravityError),
     UnknownSource(BodyId),
     NonFiniteInput,
+    /// Analytic propagation needs a far-only patch: exact-near point-mass
+    /// terms admit no constant-coefficient propagator (regime B/C of the
+    /// analytic-propagation note). Fail open, never approximate silently.
+    AnalyticNeedsFarField,
 }
 
 impl std::fmt::Display for PatchError {
@@ -531,6 +593,10 @@ impl std::fmt::Display for PatchError {
             Self::Gravity(error) => write!(formatter, "patch gravity error: {error}"),
             Self::UnknownSource(body) => write!(formatter, "unknown patch source {body:?}"),
             Self::NonFiniteInput => write!(formatter, "non-finite patch input"),
+            Self::AnalyticNeedsFarField => write!(
+                formatter,
+                "analytic propagation needs a far-only patch (exact-near present)"
+            ),
         }
     }
 }
@@ -640,6 +706,9 @@ pub struct CohortEval<'a> {
 #[derive(Debug, Default)]
 pub struct CohortEvaluator {
     out: Vec<DVec3>,
+    slots: Vec<Option<DVec3>>,
+    sc_indices: Vec<usize>,
+    spare_positions: Vec<DVec3>,
     window: Option<ReuseWindow>,
     /// Ticks served from the reuse window (telemetry).
     pub reuses: u64,
@@ -680,8 +749,11 @@ impl CohortEvaluator {
         {
             let exact_len = window.patch.exact.len();
             let patch = &window.patch;
-            self.out.clear();
-            self.out.resize(positions.len(), DVec3::ZERO);
+            // Conditional resize: steady-state ticks skip the memset that
+            // clear()+resize would pay before a full overwrite.
+            if self.out.len() != positions.len() {
+                self.out.resize(positions.len(), DVec3::ZERO);
+            }
             eval_patch_batch(patch, states, positions, &mut self.out)?;
             self.reuses += 1;
             return Ok(CohortEval {
@@ -697,10 +769,21 @@ impl CohortEvaluator {
         // Fresh single-cohort attempt: one compile, no split machinery.
         let patch = compile_patch(ephemeris, states, positions, config)?;
         if patch.error_bound_mps2 <= config.error_budget_mps2 {
-            self.out.clear();
-            self.out.resize(positions.len(), DVec3::ZERO);
+            if self.out.len() != positions.len() {
+                self.out.resize(positions.len(), DVec3::ZERO);
+            }
             eval_patch_batch(&patch, states, positions, &mut self.out)?;
-            let mut old_positions = vec![DVec3::ZERO; ephemeris.bodies.len()];
+            // Recycle the previous window's source buffer (or the spare) so
+            // installs allocate once, on warmup, and never again.
+            let mut old_positions = self
+                .window
+                .take()
+                .map(|installed| installed.old_positions)
+                .unwrap_or_else(|| std::mem::take(&mut self.spare_positions));
+            let n = ephemeris.bodies.len();
+            if old_positions.len() != n {
+                old_positions.resize(n, DVec3::ZERO);
+            }
             for source in ephemeris.gravity_sources() {
                 old_positions[source.id.index()] = states
                     .get(source.id.index())
@@ -726,12 +809,43 @@ impl CohortEvaluator {
                 reused_window: false,
             });
         }
-        // Spread-out group: stateless split path, no window.
-        self.window = None;
+        // Spread-out group: split using the already-compiled root instead
+        // of paying for it twice. The dropped window's source buffer is
+        // parked in the spare for the next install.
+        if let Some(installed) = self.window.take() {
+            self.spare_positions = installed.old_positions;
+        }
         self.rebuilds += 1;
-        let report = evaluate_cohorts(ephemeris, states, positions, config)?;
+        self.sc_indices.clear();
+        self.sc_indices.extend(0..positions.len());
+        if self.slots.len() != positions.len() {
+            self.slots.resize(positions.len(), None);
+        }
+        let mut report = CohortReport {
+            accelerations: Vec::new(),
+            error_bound_mps2: 0.0,
+            cohort_count: 0,
+            split_count: 0,
+            exact_terms: 0,
+            max_radius_m: 0.0,
+        };
+        split_with_root(
+            ephemeris,
+            states,
+            positions,
+            &mut self.sc_indices,
+            &mut self.slots,
+            &mut report,
+            config,
+            0,
+            patch,
+        )?;
         self.out.clear();
-        self.out.extend_from_slice(&report.accelerations);
+        self.out.extend(
+            self.slots
+                .iter()
+                .map(|slot| slot.expect("every target evaluated")),
+        );
         Ok(CohortEval {
             accelerations: &self.out,
             error_bound_mps2: report.error_bound_mps2,

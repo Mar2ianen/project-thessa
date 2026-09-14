@@ -11,17 +11,15 @@ use std::{hint::black_box, time::Instant};
 
 use thessa_rcbt_core::{Node, Tree};
 use thessa_rcbt_ffi::LibcbtTree;
+use thessa_rcbt_wgpu::bench_support::{
+    GpuCtx, GpuPhases, create_apply_layout, create_decode_layout, create_pipeline, groups,
+    readback_pairs, readback_pairs_reused, words_to_bytes,
+};
 use thessa_rcbt_wgpu::heap::CpuMirror;
 use thessa_rcbt_wgpu::shaders::{CBT_APPLY_WGSL, CBT_DECODE_WGSL};
 
-const WORKGROUP: u32 = 64;
-
 fn node(id: u64, depth: u8) -> Node {
     Node::new(id, depth).expect("bench node in range")
-}
-
-fn groups(n: usize) -> u32 {
-    ((n as u32).div_ceil(WORKGROUP)).max(1)
 }
 
 /// Refine batches: split every leaf, level by level, down to `depth`.
@@ -63,59 +61,10 @@ fn main() {
 
     // Shared bind-group layout shape: uniform + active + sums + slot3.
     // Slot 3 differs (read-only ops vs read-write out), so two layouts.
-    let entry = |binding: u32, read_only: bool| wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-            ty: if binding == 0 {
-                wgpu::BufferBindingType::Uniform
-            } else {
-                wgpu::BufferBindingType::Storage { read_only }
-            },
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    };
-    let apply_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("rcbt-apply-layout"),
-        entries: &[
-            entry(0, true),
-            entry(1, false),
-            entry(2, false),
-            entry(3, true),
-        ],
-    });
-    let decode_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("rcbt-decode-layout"),
-        entries: &[
-            entry(0, true),
-            entry(1, false),
-            entry(2, false),
-            entry(3, false),
-        ],
-    });
-    let mk_pipeline = |layout: &wgpu::BindGroupLayout, src: &str, ep: &str| {
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("rcbt-bench-shader"),
-            source: wgpu::ShaderSource::Wgsl(src.into()),
-        });
-        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("rcbt-bench-pl"),
-            bind_group_layouts: &[Some(layout)],
-            immediate_size: 0,
-        });
-        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(ep),
-            layout: Some(&pl),
-            module: &module,
-            entry_point: Some(ep),
-            compilation_options: Default::default(),
-            cache: None,
-        })
-    };
-    let apply_pipe = mk_pipeline(&apply_layout, CBT_APPLY_WGSL, "apply_ops");
-    let decode_pipe = mk_pipeline(&decode_layout, CBT_DECODE_WGSL, "decode_all");
+    let apply_layout = create_apply_layout(&device);
+    let decode_layout = create_decode_layout(&device);
+    let apply_pipe = create_pipeline(&device, &apply_layout, CBT_APPLY_WGSL, "apply_ops");
+    let decode_pipe = create_pipeline(&device, &decode_layout, CBT_DECODE_WGSL, "decode_all");
     let ctx = GpuCtx {
         device: &device,
         queue: &queue,
@@ -260,35 +209,6 @@ fn main() {
             "| refine/d{depth} | libcbt-sparse | {} | {sparse_ms:.1} | OK |",
             expected.len()
         );
-    }
-}
-
-/// Shared GPU objects for one bench run (keeps `run_batches` small).
-struct GpuCtx<'a> {
-    device: &'a wgpu::Device,
-    queue: &'a wgpu::Queue,
-    apply_pipe: &'a wgpu::ComputePipeline,
-    decode_pipe: &'a wgpu::ComputePipeline,
-    apply_layout: &'a wgpu::BindGroupLayout,
-    decode_layout: &'a wgpu::BindGroupLayout,
-}
-
-/// Wall-clock breakdown of one GPU replay. `submit_ms` covers enqueue only;
-/// real GPU completion lands in `readback_ms` (blocking poll), and
-/// `write_buffer` only stages — so read `submit` vs `readback` as
-/// host-overhead vs device+sync, not as kernel time. Kernel-only time needs
-/// timestamp queries (future work, see docs/22).
-#[derive(Default, Debug)]
-struct GpuPhases {
-    alloc_ms: f64,
-    upload_ms: f64,
-    submit_ms: f64,
-    readback_ms: f64,
-}
-
-impl GpuPhases {
-    fn total_ms(&self) -> f64 {
-        self.alloc_ms + self.upload_ms + self.submit_ms + self.readback_ms
     }
 }
 
@@ -679,75 +599,4 @@ fn run_batches_uma(
     );
     phases.readback_ms += t.elapsed().as_secs_f64() * 1000.0;
     (last, phases)
-}
-
-fn readback_pairs(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    src: &wgpu::Buffer,
-    count: usize,
-) -> Vec<(u64, u8)> {
-    readback_pairs_reused(device, queue, src, count, None).0
-}
-
-/// Readback with an optional caller-owned reusable staging buffer (sized in
-/// bytes beforehand). Returns the pairs plus whether the reusable buffer was
-/// used — on unified-memory hardware the copy behind this is a plain memcpy.
-fn readback_pairs_reused(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    src: &wgpu::Buffer,
-    count: usize,
-    reusable: Option<&wgpu::Buffer>,
-) -> (Vec<(u64, u8)>, bool) {
-    let bytes = count * 8;
-    let owned;
-    let staging = match reusable {
-        Some(buf) => buf,
-        None => {
-            owned = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("rcbt-readback"),
-                size: bytes.max(8) as u64,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            &owned
-        }
-    };
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("rcbt-readback-copy"),
-    });
-    if bytes > 0 {
-        encoder.copy_buffer_to_buffer(src, 0, staging, 0, bytes as u64);
-    }
-    queue.submit(Some(encoder.finish()));
-    let slice = staging.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |r| {
-        let _ = tx.send(r);
-    });
-    device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .expect("device poll");
-    rx.recv().expect("map callback").expect("map success");
-    let out = {
-        let view = slice.get_mapped_range();
-        let (_, words, _) = unsafe { view.align_to::<u32>() };
-        words
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|w| (w[0] as u64, w[1] as u8))
-            .collect()
-    };
-    staging.unmap();
-    (out, reusable.is_some())
-}
-
-fn words_to_bytes(words: &[u32]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(words.len() * 4);
-    for w in words {
-        out.extend_from_slice(&w.to_le_bytes());
-    }
-    out
 }

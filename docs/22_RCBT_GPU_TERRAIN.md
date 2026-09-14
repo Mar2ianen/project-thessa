@@ -696,10 +696,55 @@ The current code slice provides:
   pixels at RMSE 0.0001-0.005 with millimetre-exact heights, and RCBT pages
   on the identical footprints build in ~0.2 ms vs 18-67 ms at 198 bytes vs
   54-206 KB with millimetre-exact heights. Pages are geometry-only by
-  design, so they carry no albedo column.
+  design, so they carry no albedo column;
+- an upstream study note (from the vendored `libcbt` source, not folklore):
+  its reduction is a SWAR-vectorized bitfield prepass over the deepest six
+  levels plus full per-level sums upward — always O(heap size), never
+  O(dirty set). Decode walks root-to-leaf per leaf with bitfield extracts.
+  Split/merge themselves are single bit writes. That is exactly the cost
+  our sparse commit sidesteps, and the measured gaps match the asymptotics;
+- a dirty-op sweep on a fixed 262k-leaf tree
+  (`cargo bench -p thessa-rcbt-wgpu --bench crossover`): T_cpu(k),
+  T_sparse(k), T_gpu(k) for k = 4..16384 with leaf-set parity on every
+  point, plus the computed k_crossover lines the backend uses to place a
+  commit. Current tune on 780M: k_crossover(gpu-full < cpu-native) = 4096,
+  k_crossover(gpu-full < libcbt-sparse) = 16 (first crossing; the k=64
+  point is noisy, so the backend must use the curve with hysteresis, not a
+  single threshold);
+- a workgroup ancestor-combining apply kernel (`apply_ops_combined`,
+  `cutoff` uniform, shared-memory `acc[1024]`, unconditional barriers so
+  op-less threads still participate). Dense 32k-split batch: baseline
+  ~0.93 ms vs ~0.86/0.79/0.78/0.70-0.80 ms at cutoff 0/6/8/10 across runs
+  (roughly -10..-25%, run variance is real) — confirming that upper-node
+  atomic contention is the dense-batch bottleneck. Sparse k=4096:
+  combining is neutral (1.15 vs 1.04-1.09), confirming the overhead only
+  pays when ancestors are actually shared. Cutoff stays a measured knob,
+  not a constant.
 
 This baseline intentionally does not claim the M2.5 exit criteria. Baked page
 provider, LEB/cube-sphere neighbor balancing, indirect terrain draws, Bevy
 extraction, and visual error captures remain the
 next integration layers. No server or authoritative `PlanetField` code may
 depend on them.
+
+---
+
+## 20. Open follow-ups with measured status
+
+1. **Batch resolve phase (required before production GPU commits).**
+   Status: empirically motivated, not implemented. The crossover bench
+   initially fed ancestor/descendant-overlapping batches to concurrent GPU
+   threads and corrupted topology exactly as predicted (sequential CPU
+   replayed the same batches fine). Current benches guarantee disjoint
+   parents by construction; shared upper ancestors are safe (commutative
+   adds only). A production classifier must either guarantee the same or
+   run a resolve phase first.
+2. **Persistent compact leaf/draw list.** `decode_all` walks root-to-leaf
+   per leaf every frame. Once `k_crossover` routing exists, the natural
+   next step is maintaining the compact list incrementally and skipping
+   full decode on frames the renderer does not need it.
+3. **Native Vulkan UMA residency.** The portable-wgpu UMA experiment is
+   closed (within noise, stays bench-only). Untested and still worthwhile:
+   native Vulkan with `HOST_VISIBLE | DEVICE_LOCAL` backing, persistent
+   mapped/shared memory, explicit CPU/GPU ownership and sync — motivated
+   by single residency (memory/power on APU/mobile), not by FPS alone.

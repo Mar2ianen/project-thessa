@@ -65,6 +65,30 @@ impl CpuMirror {
         self.sums[1] = 1;
     }
 
+    /// Full uniform level: every node at `depth` becomes a leaf. O(2^depth)
+    /// plain writes; used to build fixed-tree benchmark states identically
+    /// on all sides.
+    pub fn reset_full(&mut self, depth: u8) -> Result<(), &'static str> {
+        if depth == 0 || depth > self.max_depth {
+            return Err("GPU mirror: full level outside 1..=max_depth");
+        }
+        self.active.fill(0);
+        self.sums.fill(0);
+        let first = 1u64 << depth;
+        let count = 1u64 << depth;
+        for id in first..first + count {
+            self.set_bit(id);
+            self.sums[id as usize] = 1;
+        }
+        for d in (0..depth).rev() {
+            let level_count = 1u32 << (depth - d);
+            for id in (1u64 << d)..(1u64 << (d + 1)) {
+                self.sums[id as usize] = level_count;
+            }
+        }
+        Ok(())
+    }
+
     fn set_bit(&mut self, id: u64) {
         let bit = (id - 1) as usize;
         self.active[bit / 32] |= 1 << (bit % 32);
@@ -189,5 +213,31 @@ mod tests {
         // Merging the root pair is structurally fine for the mirror.
         mirror.merge_children(1).unwrap();
         assert_eq!(mirror.leaves(), vec![(1, 0)]);
+    }
+
+    #[test]
+    fn reset_full_builds_uniform_level() {
+        let mut mirror = CpuMirror::new(10).unwrap();
+        mirror.reset_full(3).unwrap();
+        assert_eq!(mirror.node_count(), 8);
+        assert_eq!(
+            mirror.leaves(),
+            vec![
+                (8, 3),
+                (9, 3),
+                (10, 3),
+                (11, 3),
+                (12, 3),
+                (13, 3),
+                (14, 3),
+                (15, 3)
+            ]
+        );
+        // Ancestor sums are exact powers of two, no drift.
+        assert_eq!(mirror.sums()[1], 8);
+        assert_eq!(mirror.sums()[2], 4);
+        assert_eq!(mirror.sums()[3], 4);
+        assert!(mirror.reset_full(0).is_err());
+        assert!(mirror.reset_full(11).is_err());
     }
 }

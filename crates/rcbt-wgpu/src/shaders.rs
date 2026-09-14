@@ -84,6 +84,118 @@ fn apply_ops(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+/// Ancestor-combining apply: same observable semantics as `apply_ops`, but
+/// ancestor deltas with depth below `cutoff` (uniform `p.z`, clamped to 10)
+/// are aggregated per workgroup in shared memory and flushed with one device
+/// atomic per distinct ancestor instead of one per op.
+///
+/// Why: in dense batches every op hammers the same upper nodes (the root
+/// takes ~one atomic per op). Combining turns that into one atomic per
+/// workgroup per ancestor. In sparse batches ancestors barely overlap, so
+/// the barriers + flush loop can cost more than they save — hence `cutoff`
+/// stays a measured tuning knob, with 0 reproducing the baseline path
+/// (modulo two barriers and a single no-op flush iteration).
+///
+/// Correctness notes: barriers are unconditional (threads without ops still
+/// participate); `acc` is indexed by heap id, and ancestors below `cutoff`
+/// always satisfy `id < 2^cutoff <= 1024`; leaf-local writes are unchanged.
+pub const CBT_APPLY_COMBINED_WGSL: &str = r#"
+struct Params {
+    max_depth: u32,
+    count: u32,
+    cutoff: u32,
+    _p1: u32,
+};
+
+@group(0) @binding(0) var<uniform> p: Params;
+@group(0) @binding(1) var<storage, read_write> active_bits: array<atomic<u32>>;
+@group(0) @binding(2) var<storage, read_write> sums: array<atomic<u32>>;
+@group(0) @binding(3) var<storage, read> ops: array<vec4<u32>>;
+
+var<workgroup> acc: array<atomic<i32>, 1024>;
+
+fn set_bit(id: u32) {
+    let bit = id - 1u;
+    atomicOr(&active_bits[bit / 32u], 1u << (bit % 32u));
+}
+
+fn clear_bit(id: u32) {
+    let bit = id - 1u;
+    atomicAnd(&active_bits[bit / 32u], ~(1u << (bit % 32u)));
+}
+
+@compute @workgroup_size(64)
+fn apply_ops_combined(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>,
+) {
+    let cutoff = min(p.cutoff, 10u);
+    let span = 1u << cutoff;
+    for (var e = lid.x; e < span; e += 64u) {
+        atomicStore(&acc[e], 0);
+    }
+    workgroupBarrier();
+
+    let i = gid.x;
+    if (i < arrayLength(&ops)) {
+        let op = ops[i];
+        let id = op.x;
+        let depth = op.y;
+        if (op.z == 0u) {
+            let left = id * 2u;
+            let right = left + 1u;
+            set_bit(left);
+            set_bit(right);
+            clear_bit(id);
+            atomicStore(&sums[left], 1u);
+            atomicStore(&sums[right], 1u);
+            atomicStore(&sums[id], 2u);
+            var a = id / 2u;
+            var ad = i32(depth) - 1;
+            while (ad >= i32(cutoff)) {
+                atomicAdd(&sums[a], 1u);
+                a = a / 2u;
+                ad -= 1;
+            }
+            while (ad >= 0) {
+                atomicAdd(&acc[a], 1);
+                a = a / 2u;
+                ad -= 1;
+            }
+        } else {
+            let left = id * 2u;
+            let right = left + 1u;
+            clear_bit(left);
+            clear_bit(right);
+            set_bit(id);
+            atomicStore(&sums[left], 0u);
+            atomicStore(&sums[right], 0u);
+            atomicStore(&sums[id], 1u);
+            var a = id / 2u;
+            var ad = i32(depth) - 1;
+            while (ad >= i32(cutoff)) {
+                atomicAdd(&sums[a], 0xFFFFFFFFu);
+                a = a / 2u;
+                ad -= 1;
+            }
+            while (ad >= 0) {
+                atomicAdd(&acc[a], -1);
+                a = a / 2u;
+                ad -= 1;
+            }
+        }
+    }
+    workgroupBarrier();
+
+    for (var e = lid.x; e < span; e += 64u) {
+        let d = atomicLoad(&acc[e]);
+        if (d != 0) {
+            atomicAdd(&sums[e], bitcast<u32>(d));
+        }
+    }
+}
+"#;
+
 /// One thread per leaf index: root-to-leaf walk guided by the sums.
 /// `count` (uniform) is the leaf count captured after the last apply.
 pub const CBT_DECODE_WGSL: &str = r#"
@@ -136,6 +248,8 @@ mod tests {
     #[test]
     fn cbt_kernels_parse_as_portable_wgsl() {
         naga::front::wgsl::parse_str(CBT_APPLY_WGSL).expect("apply kernels must parse");
+        naga::front::wgsl::parse_str(CBT_APPLY_COMBINED_WGSL)
+            .expect("combined apply kernels must parse");
         naga::front::wgsl::parse_str(CBT_DECODE_WGSL).expect("decode kernels must parse");
     }
 }

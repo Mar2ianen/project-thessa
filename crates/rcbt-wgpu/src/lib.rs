@@ -8,6 +8,7 @@
 //! WGSL kernels (`apply_ops` + `decode_all`); the legacy `RCBT_WGSL` touch
 //! kernels below stay only as a dispatch bring-up target.
 
+pub mod bench_support;
 pub mod heap;
 pub mod shaders;
 

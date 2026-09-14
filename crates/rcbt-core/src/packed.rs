@@ -291,4 +291,43 @@ mod tests {
         b.reset_to_depth(6).unwrap();
         assert_eq!(a.leaves(), b.leaves());
     }
+
+    /// Wave-like dynamic load: 60 frames of alternating full split-all and
+    /// merge-all waves over a small tree. Topology must stay bounded and
+    /// identical to `Tree` on every frame (this is the `cargo test`
+    /// counterpart of the `dynamic` bench scenarios).
+    #[test]
+    fn packed_tracks_oscillating_wave_load() {
+        let mut a = Tree::at_depth(10, 4).unwrap();
+        let mut b = PackedTree::at_depth(10, 4).unwrap();
+        for frame in 0..60 {
+            if frame % 2 == 0 {
+                let splits: Vec<Node> = a.leaves();
+                for leaf in splits {
+                    assert!(a.split(leaf).is_ok());
+                    assert!(b.split(leaf).is_ok());
+                }
+            } else {
+                // Merge every pair whose children are both leaves.
+                let mut parents = Vec::new();
+                for leaf in a.leaves() {
+                    if leaf.id() & 1 == 0
+                        && let Some(p) = leaf.parent()
+                    {
+                        parents.push(p);
+                    }
+                }
+                parents.sort();
+                parents.dedup();
+                for p in parents {
+                    let ra = a.merge(p);
+                    let rb = b.merge(p);
+                    assert_eq!(ra.is_ok(), rb.is_ok(), "merge agreement {p:?}");
+                }
+            }
+            assert_eq!(a.leaf_count(), b.leaf_count(), "frame {frame} count");
+            assert_eq!(a.leaves(), b.leaves(), "frame {frame} leaves");
+            assert!(a.leaf_count() <= 1 << 9, "frame {frame} bounded");
+        }
+    }
 }

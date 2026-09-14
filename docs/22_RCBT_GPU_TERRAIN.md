@@ -722,6 +722,18 @@ The current code slice provides:
   k_crossover(gpu-full < libcbt-sparse) = 16 (first crossing; the k=64
   point is noisy, so the backend must use the curve with hysteresis, not a
   single threshold);
+- dynamic wave scenarios (`cargo bench -p thessa-rcbt-core --bench dynamic`
+  for CPU, dynamic section of `crossover` for GPU): an analytic 3-wave
+  heightfield plus an optional sweeping camera drive error-based split/merge
+  every frame (120 frames, ~120 ops/frame pure waves, ~320 with camera,
+  leaf counts oscillating 3.7k/6.3k). Same op streams on all sides, parity
+  everywhere. Current tune: waves — packed 0.13 ms vs native 1.7 (x13) vs
+  sparse 12.5 (x96) vs public 179 (x1370); waves+camera — packed 0.35 vs
+  native 5.0 (x14) vs sparse 13.1 (x37) vs public 366 (x1000+). GPU on the
+  same streams: ~16-27 ms with per-frame readback, ~15-16 ms commit-only —
+  i.e. the kernels are idle most of the time and per-frame host round-trips
+  (submit+poll+buffer/bindgroup alloc, ~0.15 ms x 120) dominate. That gap is
+  the quantitative case for follow-up 2, not a GPU-speed verdict;
 - a workgroup ancestor-combining apply kernel (`apply_ops_combined`,
   `cutoff` uniform, shared-memory `acc[1024]`, unconditional barriers so
   op-less threads still participate). Dense 32k-split batch: baseline
@@ -753,7 +765,11 @@ depend on them.
 2. **Persistent compact leaf/draw list.** `decode_all` walks root-to-leaf
    per leaf every frame. Once `k_crossover` routing exists, the natural
    next step is maintaining the compact list incrementally and skipping
-   full decode on frames the renderer does not need it.
+   full decode on frames the renderer does not need it. Measured motivation:
+   on wave dynamics the GPU commit itself is ~15 ms per 120 frames while
+   per-frame readback pushes it to ~17-27 ms — and the CPU packed path does
+   the same 120 frames in 0.13-0.35 ms total, so every host round-trip must
+   go before GPU dynamics can compete at small k.
 3. **Native Vulkan UMA residency.** The portable-wgpu UMA experiment is
    closed (within noise, stays bench-only). Untested and still worthwhile:
    native Vulkan with `HOST_VISIBLE | DEVICE_LOCAL` backing, persistent

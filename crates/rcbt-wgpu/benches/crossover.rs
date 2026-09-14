@@ -25,6 +25,84 @@ use thessa_rcbt_wgpu::shaders::{CBT_APPLY_COMBINED_WGSL, CBT_APPLY_WGSL, CBT_DEC
 const MAX_DEPTH: u8 = 20;
 const BASE_DEPTH: u8 = 18;
 
+// Dynamic wave scenarios share the driver's constants with `dynamic.rs`.
+const WAVE_DEPTH: u8 = 16;
+const WAVE_BASE: u8 = 10;
+const WAVE_MIN: u8 = 8;
+const WAVE_FRAMES: usize = 120;
+const WAVE_SPLIT_EPS: f64 = 1e-5;
+const WAVE_MERGE_EPS: f64 = 2.5e-6;
+
+fn wave_h(x: f64, t: f64) -> f64 {
+    use std::f64::consts::TAU;
+    (TAU * 3.0 * x + 0.9 * t).sin()
+        + 0.35 * (TAU * 7.0 * x - 1.7 * t + 1.3).sin()
+        + 0.12 * (TAU * 13.0 * x + 2.6 * t + 4.1).sin()
+}
+
+fn wave_leaf_err(id: u64, depth: u8, t: f64, cam: Option<f64>) -> f64 {
+    let w = 2f64.powi(-(depth as i32));
+    let a = (id - (1u64 << depth)) as f64 * w;
+    let m = a + 0.5 * w;
+    let e = (wave_h(m, t) - 0.5 * (wave_h(a, t) + wave_h(a + w, t))).abs();
+    match cam {
+        Some(c) => e / (0.05 + (m - c).abs()),
+        None => e,
+    }
+}
+
+/// Wave frames driven against a CPU mirror oracle. Returns per-frame
+/// batches, per-frame expected leaf counts, and the final leaf list.
+/// Batches from one frame are internally consistent in any apply order
+/// (split needs err above SPLIT, merge needs both below MERGE), and only
+/// share commutative upper-ancestor adds — safe for concurrent GPU replay.
+fn drive_waves(camera_sweep: bool) -> (Vec<OpBatch>, Vec<u32>, LeafSet) {
+    let mut driver = CpuMirror::new(WAVE_DEPTH).unwrap();
+    driver.reset_full(WAVE_BASE).unwrap();
+    let mut batches = Vec::with_capacity(WAVE_FRAMES);
+    let mut counts = Vec::with_capacity(WAVE_FRAMES);
+    for f in 0..WAVE_FRAMES {
+        let t = f as f64 / 60.0;
+        let cam = camera_sweep.then(|| f as f64 / WAVE_FRAMES as f64);
+        let mut batch = OpBatch::new();
+        let leaves = driver.leaves();
+        for (id, depth) in &leaves {
+            if *depth < WAVE_DEPTH && wave_leaf_err(*id, *depth, t, cam) > WAVE_SPLIT_EPS {
+                batch.push((*id, *depth, 0));
+            }
+        }
+        for (id, depth) in &leaves {
+            if id & 1 == 1 || *depth == 0 {
+                continue;
+            }
+            let sib = (*id + 1, *depth);
+            if !driver.is_active(sib.0) {
+                continue;
+            }
+            let parent_depth = *depth - 1;
+            if parent_depth < WAVE_MIN {
+                continue;
+            }
+            if wave_leaf_err(*id, *depth, t, cam) < WAVE_MERGE_EPS
+                && wave_leaf_err(sib.0, sib.1, t, cam) < WAVE_MERGE_EPS
+            {
+                batch.push((id >> 1, parent_depth, 1));
+            }
+        }
+        for (id, _, kind) in &batch {
+            match kind {
+                0 => driver.split(*id).unwrap(),
+                _ => driver.merge_children(*id).unwrap(),
+            }
+        }
+        counts.push(driver.node_count());
+        black_box(driver.node_count());
+        batches.push(batch);
+    }
+    let expected = driver.leaves();
+    (batches, counts, expected)
+}
+
 fn node(id: u64, depth: u8) -> Node {
     Node::new(id, depth).expect("bench node in range")
 }
@@ -457,6 +535,122 @@ fn main() {
         let got = readback_pairs(&device, &queue, &out, dense_expected.len());
         assert_eq!(got, dense_expected, "dense combined cutoff={cutoff} parity");
         println!("| dense-32k | gpu-combined cutoff={cutoff} | {ms:.3} | OK |");
+    }
+
+    // Dynamic wave scenarios on GPU: same mixed batches the `dynamic` CPU
+    // bench drives, replayed here with per-frame readback (renderer cost).
+    println!("| dynamic | impl | frames | avg_ops_frame | ms | parity |");
+    println!("|---|---|---|---|---|---|");
+    for camera_sweep in [false, true] {
+        let name = if camera_sweep {
+            "waves+camera"
+        } else {
+            "waves"
+        };
+        let (frames, expected_counts, expected_final) = drive_waves(camera_sweep);
+        let total_ops: usize = frames.iter().map(Vec::len).sum();
+        let avg = total_ops as f64 / frames.len() as f64;
+        let mut init = CpuMirror::new(WAVE_DEPTH).unwrap();
+        init.reset_full(WAVE_BASE).unwrap();
+        queue.write_buffer(&active, 0, &words_to_bytes(init.active_words()));
+        queue.write_buffer(&sums, 0, &words_to_bytes(init.sums()));
+        let t = Instant::now();
+        for (batch, count) in frames.iter().zip(expected_counts.iter()) {
+            let words = pack_ops(batch);
+            let ops_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("rcbt-ops"),
+                size: (words.len() * 4).max(16) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            queue.write_buffer(&ops_buf, 0, &words_to_bytes(&words));
+            queue.write_buffer(
+                &params,
+                0,
+                &words_to_bytes(&[WAVE_DEPTH as u32, *count, 0, 0]),
+            );
+            submit_apply(
+                &ctx,
+                &active,
+                &sums,
+                &params,
+                &ops_buf,
+                groups(batch.len().max(1)),
+            );
+            submit_decode(&ctx, &active, &sums, &params, &out, groups(*count as usize));
+            let got = readback_pairs(&device, &queue, &out, *count as usize);
+            assert_eq!(got.len(), *count as usize, "{name} gpu frame count");
+            black_box(got.len());
+        }
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        // Final full-equality check against the driver oracle.
+        let mut verify = CpuMirror::new(WAVE_DEPTH).unwrap();
+        verify.reset_full(WAVE_BASE).unwrap();
+        for batch in &frames {
+            for (id, _, kind) in batch {
+                match kind {
+                    0 => verify.split(*id).unwrap(),
+                    _ => verify.merge_children(*id).unwrap(),
+                }
+            }
+        }
+        assert_eq!(verify.leaves(), expected_final, "{name} gpu-dynamic parity");
+        println!(
+            "| {name} | gpu-dynamic | {} | {avg:.0} | {ms:.2} | OK |",
+            frames.len()
+        );
+        // Commit-only twin: same applies, submit + poll, no decode/readback
+        // in the timed section. The gap between the two columns is pure
+        // host-sync cost — the quantitative case for a persistent GPU-side
+        // leaf list (docs/22 follow-up 2).
+        let mut init = CpuMirror::new(WAVE_DEPTH).unwrap();
+        init.reset_full(WAVE_BASE).unwrap();
+        queue.write_buffer(&active, 0, &words_to_bytes(init.active_words()));
+        queue.write_buffer(&sums, 0, &words_to_bytes(init.sums()));
+        let t = Instant::now();
+        for batch in frames.iter() {
+            if batch.is_empty() {
+                continue;
+            }
+            let words = pack_ops(batch);
+            let ops_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("rcbt-ops"),
+                size: (words.len() * 4).max(16) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            queue.write_buffer(&ops_buf, 0, &words_to_bytes(&words));
+            queue.write_buffer(&params, 0, &words_to_bytes(&[WAVE_DEPTH as u32, 0, 0, 0]));
+            submit_apply(&ctx, &active, &sums, &params, &ops_buf, groups(batch.len()));
+            device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("device poll");
+            black_box(batch.len());
+        }
+        let commit_ms = t.elapsed().as_secs_f64() * 1000.0;
+        // Untimed verify: one decode + readback, asserted but not billed.
+        queue.write_buffer(
+            &params,
+            0,
+            &words_to_bytes(&[WAVE_DEPTH as u32, expected_final.len() as u32, 0, 0]),
+        );
+        submit_decode(
+            &ctx,
+            &active,
+            &sums,
+            &params,
+            &out,
+            groups(expected_final.len()),
+        );
+        let verify_commit = readback_pairs(&device, &queue, &out, expected_final.len());
+        assert_eq!(
+            verify_commit, expected_final,
+            "{name} gpu-dynamic-commit parity"
+        );
+        println!(
+            "| {name} | gpu-dynamic-commit | {} | {avg:.0} | {commit_ms:.2} | OK |",
+            frames.len()
+        );
     }
 }
 

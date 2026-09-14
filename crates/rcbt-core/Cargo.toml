@@ -24,3 +24,7 @@ harness = false
 [[bench]]
 name = "cbt_profile"
 harness = false
+
+[[bench]]
+name = "dynamic"
+harness = false

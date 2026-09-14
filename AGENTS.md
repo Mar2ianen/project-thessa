@@ -27,25 +27,30 @@
 
 ## 2.1. Cross-platform invariant
 
-- никакого DirectX-specific API в domain/simulation/gameplay code;
+- никакого DirectX/Vulkan/Metal/wgpu-specific API в domain/simulation/gameplay code;
 - shaders и render data не проектируются вокруг DX-only semantics;
-- native rendering boundary — Bevy/wgpu;
+- current native client integration — Bevy + wgpu, но reusable GPU algorithm core **не обязан и не должен** экспортировать Bevy/wgpu types;
+- для reusable GPU subsystem preferred layering: backend-agnostic core -> portable wgpu backend -> optional measured native backend -> Bevy adapter;
 - допустимые backend families: Vulkan, Metal, WebGPU и backend, который wgpu выбирает на поддерживаемой платформе;
+- direct Vulkan backend допустим внутри isolated renderer/GPU subsystem после профилирования; он не меняет simulation/gameplay API;
 - использование D3D12 самим wgpu на Windows не делает DirectX частью архитектурного API; прямые DX12/DXR calls требуют отдельного ADR и по умолчанию запрещены;
+- capability checks предпочтительнее vendor checks (`if AMD/NVIDIA/...`);
 - Linux является first-class dev/runtime target, не портом после Windows;
-- WASM/WebGPU компилируемость клиентского слоя должна регулярно проверяться CI после появления web target.
+- WASM/WebGPU компилируемость portable client/render path должна регулярно проверяться CI после появления web target.
 
 ### Bevy client
 
-Bevy отвечает за:
+Bevy отвечает за текущую client integration:
 
-- rendering / wgpu;
+- rendering integration / default wgpu backend;
 - input;
 - UI;
 - assets;
 - client ECS;
 - debug gizmos/tooling;
 - visual interpolation/extraction.
+
+Bevy не владеет semantic API reusable renderer algorithms. Если subsystem можно использовать вне Bevy (`rcbt`, compression/streaming kernels и т.п.), его core types/traits не должны принимать `Entity`, `RenderWorld`, `wgpu::Device` и подобные integration handles как domain API.
 
 `bevy::Transform` никогда не является authoritative космической координатой.
 
@@ -147,6 +152,8 @@ UX reference: MechJeb-подобные готовые операции (`Ascent 
 
 Оптимизировать representation, а не физические законы. Но там, где эффект доказуемо пренебрежим (§13), — редуцировать модель, а не интегрировать шум.
 
+Для low-level CPU/GPU code performance является частью architecture, но unsafe/layout/platform tricks допускаются только с benchmark и понятным fallback. «Idiomatic» не является целью, если измеримо мешает throughput; «грязный» layout trick не является целью, если counters не показывают проблему.
+
 ## 10.1. Политика редукции модели (bounded model reduction)
 
 Главный инвариант (§1) запрещает подменять причинность коэффициентами **там, где эффект влияет на решения** (траектория, управление, разрушения). Где влияние ограничено доказуемой огибающей ошибки — редукция разрешена и предпочтительна, особенно для множества аппаратов. Каждое упрощение обязано иметь:
@@ -171,7 +178,27 @@ UX reference: MechJeb-подобные готовые операции (`Ascent 
 - AVX2 native baseline, optional AVX-512 build;
 - adaptive simulation rate/step для разных режимов;
 - expensive contacts включаются там, где реально есть контакты;
-- profiler/benchmarks обязательны до ручных intrinsics.
+- profiler/benchmarks обязательны до ручных intrinsics;
+- packed bitsets/bitplanes и word-wise operations допустимы для topology/state machines, если это улучшает measured workload;
+- false sharing проверяется отдельно: per-thread hot mutable state можно cache-pad/align, но padding не добавляется blanket-правилом;
+- `#[repr(C)]` используется для FFI/GPU ABI/layout contracts, а не как универсальная performance annotation;
+- `#[repr(align(N))]`/padded wrapper требует benchmark на target workload и оценки working-set cost;
+- hot read-only state и frequently-written counters/queue heads по возможности разделяются;
+- native GPU fast path обязан сравниваться с portable backend на одинаковой telemetry.
+
+## 10.2. Reusable GPU algorithms
+
+Для `rcbt` и будущих reusable GPU subsystems:
+
+- core semantic API не зависит от Bevy/wgpu/Vulkan;
+- backend trait описывает operations/capabilities, а не thin wrappers над `Device`/`CommandEncoder`;
+- wgpu/WGSL — portable default;
+- native Vulkan/SPIR-V path допустим как optional backend при измеримой причине;
+- subgroup/bit operations предпочтительнее искусственного использования matrix units для bit-tree work;
+- cooperative/matrix hardware может использоваться optional decoder'ом compressed data только после отдельного benchmark;
+- upstream/reference implementation можно bind'ить как oracle/benchmark baseline, но production path не обязан сохранять его internal layout;
+- performance target может быть агрессивнее reference: observable semantics важнее внутренней compatibility;
+- см. `docs/22_RCBT_GPU_TERRAIN.md`.
 
 ## 11. Лицензии
 

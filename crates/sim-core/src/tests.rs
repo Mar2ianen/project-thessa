@@ -298,6 +298,272 @@ fn replay_and_parallel_batch_are_deterministic_and_ordered() {
 }
 
 #[test]
+fn frame_batch_accelerations_match_direct_accumulation_bitwise() {
+    let ephemeris = chain_ephemeris();
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let positions = vec![
+        DVec3::new(8.0e6, 0.0, 0.0),
+        DVec3::new(0.0, 9.0e6, 0.0),
+        DVec3::new(-10.0e6, 0.0, 1.0e6),
+    ];
+    let mut frame = EphemerisFrame::new();
+    for seconds in [0.0, 8.0 / 120.0, 1_000_000.0] {
+        let time = SimTime(seconds);
+        let direct = field
+            .accelerations(&positions, time)
+            .expect("direct batch gravity");
+        let states = frame.evaluate(&ephemeris, time).expect("frame states");
+        let framed = field
+            .accelerations_from_frame(&positions, states)
+            .expect("frame batch gravity");
+        assert_eq!(direct, framed, "frame batch must match at {seconds}s");
+    }
+}
+
+#[test]
+fn tree_groups_binary_children_under_barycenter_node() {
+    let mu_primary = 3.0e14;
+    let mu_secondary = 1.0e14;
+    let ephemeris = two_body_binary(mu_primary, mu_secondary, 1.0e8);
+    let tree = GravitySourceTree::build(&ephemeris).expect("tree builds");
+    // Barycenter aggregate + two source leaves.
+    assert_eq!(tree.node_count(), 3);
+    let root = &tree.nodes()[tree.roots()[0] as usize];
+    assert_eq!(root.children.len(), 2);
+    assert!((root.mu_total - (mu_primary + mu_secondary)).abs() <= 1.0);
+    assert_eq!(root.own_mu, 0.0);
+}
+
+#[test]
+fn monopole_matches_explicit_children_within_posted_bound() {
+    let mu_primary = 3.0e14;
+    let mu_secondary = 1.0e14;
+    let ephemeris = two_body_binary(mu_primary, mu_secondary, 1.0e8);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let tree = GravitySourceTree::build(&ephemeris).expect("tree builds");
+    let mut frame = EphemerisFrame::new();
+    let time = SimTime::EPOCH;
+    let states = frame.evaluate(&ephemeris, time).expect("frame states");
+    let frames = tree.resolve(&ephemeris, states).expect("node frames");
+    // Far-field points: the aggregate must be accepted and stay within its
+    // own posted error bound (doc 23 sections 4, 17). The bound is
+    // conservative by design (no cancellation accounting): at D/R ~ 20 it
+    // already exceeds a 1e-6 budget and the node opens — that is covered by
+    // the zero-budget case below. What the test pins is safety
+    // (measured <= posted) plus the scaling law (bound/field shrinks with
+    // distance) where acceptance happens.
+    let mut last_ratio = f64::INFINITY;
+    for distance in [5.0e9, 2.0e10] {
+        let position = DVec3::new(distance, distance * 0.3, -distance * 0.17);
+        let exact = field.acceleration(position, time).expect("exact gravity");
+        let eval = tree
+            .evaluate(&frames, states, position, 1.0e-6)
+            .expect("tree gravity");
+        assert_eq!(eval.terms_exact, 0, "far aggregate must be accepted");
+        let measured = (eval.acceleration - exact).length();
+        assert!(
+            measured <= eval.error_bound_mps2 * (1.0 + 1.0e-9),
+            "measured {measured:e} exceeds posted bound {:e} at {distance:e} m",
+            eval.error_bound_mps2,
+        );
+        let ratio = eval.error_bound_mps2 / exact.length();
+        assert!(
+            ratio <= 0.05,
+            "vacuous bound: ratio {ratio:e} at {distance:e} m",
+        );
+        assert!(
+            ratio < last_ratio,
+            "bound/field ratio must shrink with distance: {ratio:e} after {last_ratio:e}",
+        );
+        last_ratio = ratio;
+    }
+    // Zero budget opens everything: same physics as the exact path up to
+    // summation order.
+    let position = DVec3::new(4.0e9, 0.0, 0.0);
+    let exact = field.acceleration(position, time).expect("exact gravity");
+    let eval = tree
+        .evaluate(&frames, states, position, 0.0)
+        .expect("tree gravity");
+    assert_eq!(eval.error_bound_mps2, 0.0);
+    assert_eq!(eval.terms_exact, 2);
+    assert!((eval.acceleration - exact).length() <= 1.0e-12);
+}
+
+#[test]
+fn tree_opens_aggregate_ball_for_close_targets() {
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let tree = GravitySourceTree::build(&ephemeris).expect("tree builds");
+    let mut frame = EphemerisFrame::new();
+    let states = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame states");
+    let frames = tree.resolve(&ephemeris, states).expect("node frames");
+    // Sit on top of the secondary: inside the aggregate ball, so the tree
+    // must open and evaluate both bodies exactly.
+    let secondary = states[2].position_inertial + DVec3::new(1.0e6, 0.0, 0.0);
+    let eval = tree
+        .evaluate(&frames, states, secondary, 1.0e-6)
+        .expect("tree gravity");
+    assert_eq!(eval.error_bound_mps2, 0.0);
+    assert_eq!(eval.terms_exact, 2);
+    assert!(eval.nodes_visited >= 3);
+}
+
+#[test]
+fn hessian_norm_matches_closed_form() {
+    // Pins the HESSIAN_FROBENIUS_NORM derivation independently of the
+    // tidal-tensor code: S = sum_ijk [3(d_ij n_k + d_ik n_j + d_jk n_i)
+    // - 15 n_i n_j n_k]^2 must equal 90 for every unit direction.
+    for direction in [
+        DVec3::X,
+        DVec3::Y,
+        DVec3::Z,
+        DVec3::new(1.0, 2.0, 3.0).normalize(),
+        DVec3::new(-0.3, 0.8, 0.55).normalize(),
+    ] {
+        let n = [direction.x, direction.y, direction.z];
+        let mut sum = 0.0;
+        for i in 0..3 {
+            for j in 0..3 {
+                for k in 0..3 {
+                    let delta = |a: usize, b: usize| f64::from(a == b);
+                    let a = delta(i, j) * n[k] + delta(i, k) * n[j] + delta(j, k) * n[i];
+                    let term = 3.0 * a - 15.0 * n[i] * n[j] * n[k];
+                    sum += term * term;
+                }
+            }
+        }
+        assert!(
+            (sum - 90.0).abs() <= 1.0e-9,
+            "Frobenius sum {sum} != 90 for {direction:?}"
+        );
+    }
+    assert!((HESSIAN_FROBENIUS_NORM * HESSIAN_FROBENIUS_NORM - 90.0).abs() <= 1.0e-9);
+    assert!((HESSIAN_REMAINDER * 2.0 - HESSIAN_FROBENIUS_NORM).abs() == 0.0);
+}
+
+#[test]
+fn patch_matches_exact_within_posted_bound() {
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let mut frame = EphemerisFrame::new();
+    let time = SimTime::EPOCH;
+    let states = frame.evaluate(&ephemeris, time).expect("frame states");
+    // Compact ball far from both bodies: everything absorbed, one patch.
+    let center = DVec3::new(3.0e9, 1.0e9, 0.0);
+    let positions: Vec<_> = (0..64)
+        .map(|index| {
+            let i = index as f64;
+            center
+                + DVec3::new((i * 12.9898).sin(), (i * 78.233).sin(), (i * 37.719).sin()) * 20_000.0
+        })
+        .collect();
+    let config = CohortConfig {
+        error_budget_mps2: 1.0e-9,
+        ..Default::default()
+    };
+    let report = evaluate_cohorts(&ephemeris, states, &positions, config).expect("cohorts");
+    assert_eq!(report.cohort_count, 1);
+    assert_eq!(report.split_count, 0);
+    assert!(report.error_bound_mps2 <= config.error_budget_mps2);
+    let exact = field.accelerations(&positions, time).expect("exact batch");
+    for (computed, reference) in report.accelerations.iter().zip(&exact) {
+        let measured = (*computed - *reference).length();
+        assert!(
+            measured <= report.error_bound_mps2 * (1.0 + 1.0e-6),
+            "patch error {measured:e} exceeds posted {:e}",
+            report.error_bound_mps2,
+        );
+    }
+}
+
+#[test]
+fn cohorts_split_before_bound_is_violated() {
+    // Equal masses so each source contributes half the whole-ball bound:
+    // at 60% of it both stay absorbed while their sum violates it.
+    let ephemeris = two_body_binary(2.0e14, 2.0e14, 1.0e8);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let mut frame = EphemerisFrame::new();
+    let time = SimTime::EPOCH;
+    let states = frame.evaluate(&ephemeris, time).expect("frame states");
+    // Stretched group in a smooth field: every source fits the budget
+    // alone, but the summed remainder over the +-1e9 ball does not — so the
+    // cohort must split (not go exact) until the child balls satisfy it.
+    // Budget is calibrated at 60% of the whole-ball bound measured with an
+    // effectively infinite budget.
+    let center = DVec3::new(3.0e10, 0.0, 0.0);
+    let positions: Vec<_> = (0..48)
+        .map(|index| center + DVec3::new((index as f64 - 24.0 + 0.5) * 4.0e7, 0.0, 0.0))
+        .collect();
+    let probe = compile_patch(
+        &ephemeris,
+        states,
+        &positions,
+        CohortConfig {
+            error_budget_mps2: 1.0e300,
+            ..Default::default()
+        },
+    )
+    .expect("probe patch compiles");
+    assert!(
+        probe.exact.is_empty(),
+        "probe must absorb everything, got {:?}",
+        probe.exact
+    );
+    let config = CohortConfig {
+        error_budget_mps2: probe.error_bound_mps2 * 0.6,
+        ..Default::default()
+    };
+    let report = evaluate_cohorts(&ephemeris, states, &positions, config).expect("cohorts");
+    assert!(report.split_count > 0, "stretched group must split");
+    assert!(report.error_bound_mps2 <= config.error_budget_mps2);
+    let exact = field.accelerations(&positions, time).expect("exact batch");
+    for (computed, reference) in report.accelerations.iter().zip(&exact) {
+        let measured = (*computed - *reference).length();
+        assert!(
+            measured <= config.error_budget_mps2 * 10.0,
+            "cohort error {measured:e} escapes the budget"
+        );
+    }
+}
+
+#[test]
+fn patch_soa_matches_aos_evaluation() {
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let mut frame = EphemerisFrame::new();
+    let states = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame states");
+    let center = DVec3::new(3.0e9, 1.0e9, 0.0);
+    let positions: Vec<_> = (0..17)
+        .map(|index| center + DVec3::new(index as f64 * 1_000.0, 0.0, 500.0))
+        .collect();
+    let patch = compile_patch(&ephemeris, states, &positions, CohortConfig::default())
+        .expect("patch compiles");
+    let mut xs = Vec::with_capacity(positions.len());
+    let mut ys = Vec::with_capacity(positions.len());
+    let mut zs = Vec::with_capacity(positions.len());
+    for position in &positions {
+        xs.push(position.x);
+        ys.push(position.y);
+        zs.push(position.z);
+    }
+    let mut ax = vec![0.0; positions.len()];
+    let mut ay = vec![0.0; positions.len()];
+    let mut az = vec![0.0; positions.len()];
+    evaluate_patch_soa(&patch, &xs, &ys, &zs, &mut ax, &mut ay, &mut az);
+    for (index, position) in positions.iter().enumerate() {
+        let reference = evaluate_patch(&patch, states, *position).expect("aos eval");
+        let lane = DVec3::new(ax[index], ay[index], az[index]);
+        // SoA covers the shared affine part only; compare against the same
+        // part by subtracting this lane's exact-near terms is unnecessary
+        // here: far-field ball absorbs everything, exact list is empty.
+        assert!(patch.exact.is_empty());
+        assert!((lane - reference).length() <= 1.0e-15);
+    }
+}
+
+#[test]
 fn explicit_state_vector_keeps_frame_label() {
     let state = StateVector::new(
         DVec3::new(1.0, 2.0, 3.0),

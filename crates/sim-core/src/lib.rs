@@ -12,6 +12,8 @@ mod ephemeris;
 mod flight;
 mod frames;
 mod gravity;
+mod gravity_patch;
+mod gravity_tree;
 mod integrator;
 mod onrails;
 mod scheduler;
@@ -40,6 +42,14 @@ pub use flight::{
 };
 pub use frames::{ReferenceFrame, StateVector};
 pub use gravity::{GravityError, GravityField};
+pub use gravity_patch::{
+    CohortConfig, CohortReport, GravityPatch, HESSIAN_FROBENIUS_NORM, HESSIAN_REMAINDER,
+    PatchError, compile_patch, evaluate_cohorts, evaluate_patch, evaluate_patch_soa,
+    evaluate_patch_unchecked,
+};
+pub use gravity_tree::{
+    GravityNode, GravityNodeFrame, GravitySourceTree, TreeEval, monopole_error_estimate,
+};
 pub use integrator::{
     AdaptiveIntegratorConfig, ImpulsiveBurn, IntegratorError, IntegratorStats, PropagationResult,
     SampledPath, SampledPathEnd, TestParticleState, VerletConfig, propagate_adaptive,

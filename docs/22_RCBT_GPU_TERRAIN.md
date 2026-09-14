@@ -665,13 +665,31 @@ The current code slice provides:
   ~x9-14. OpenMP scaling of the C reduce path on a 65k-leaf refine is clean
   from 1 to 8 threads (~x3.4, plateau at 4-8); 16 threads are bimodal
   across runs on this box (5 ms vs ~450 ms, runtime/scheduler noise outside
-  our code) and need an isolated-box retest before any claim. Rerun every
+  our code) and need an isolated-box retest before any claim.   Rerun every
   table on your own machine before quoting it;
+- a GPU sparse-commit implementation (`rcbt-wgpu` heap layout + `apply_ops`
+  / `decode_all` WGSL kernels, `u32` atomics only, no extensions) measured on
+  real hardware (`cargo bench -p thessa-rcbt-wgpu --bench gpu_cbt`, AMD 780M
+  via Vulkan): mixed split/merge parity asserted against the CPU oracle,
+  then refine columns gpu / gpu+readback / cpu-native. Current tune: 4k
+  leaves go to the CPU (~0.4 ms vs ~2-4 ms GPU, launch overhead dominates),
+  16k leaves are contested at a few ms on both sides, 65k leaves go to the
+  GPU (~3.5 ms vs ~7.4 ms CPU, roughly x2). The GPU number still contains
+  per-batch CPU-side buffer and bind-group creation, which a real
+  integration reuses instead of rebuilding, so treat it as a pessimistic
+  bound, not a ceiling;
 - a terrain-level `legacy-cpu vs rcbt-pages` comparison on shared selections
-  (`cargo bench -p thessa-worldgen-rocky --bench compare`).
+  (`cargo bench -p thessa-worldgen-rocky --bench compare`);
+- a shipped-asset anchor (`cargo bench -p thessa-worldgen-rocky --bench
+  assets`): the live recipe field reproduces `assets/worlds/thessa-v3`
+  albedo at RMSE 0.0013 (linear, stride 16), legacy tiles match shipped
+  pixels at RMSE 0.0001-0.005 with millimetre-exact heights, and RCBT pages
+  on the identical footprints build in ~0.2 ms vs 18-67 ms at 198 bytes vs
+  54-206 KB with millimetre-exact heights. Pages are geometry-only by
+  design, so they carry no albedo column.
 
 This baseline intentionally does not claim the M2.5 exit criteria. Baked page
-provider, LEB/cube-sphere neighbor balancing, GPU semantic split/merge kernels,
-indirect terrain draws, Bevy extraction, and visual error captures remain the
+provider, LEB/cube-sphere neighbor balancing, indirect terrain draws, Bevy
+extraction, and visual error captures remain the
 next integration layers. No server or authoritative `PlanetField` code may
 depend on them.

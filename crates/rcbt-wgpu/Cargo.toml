@@ -13,3 +13,8 @@ wgpu.workspace = true
 
 [dev-dependencies]
 naga = { version = "29.0.4", features = ["wgsl-in"] }
+pollster = "0.4"
+
+[[bench]]
+name = "gpu_cbt"
+harness = false

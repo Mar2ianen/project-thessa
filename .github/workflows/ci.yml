@@ -145,6 +145,12 @@ jobs:
       - name: Compile RCBT vs libcbt benchmark
         run: cargo bench -p thessa-rcbt-core --bench cbt_vs_libcbt --no-run
 
+      - name: Compile RCBT GPU benchmark
+        run: cargo bench -p thessa-rcbt-wgpu --bench gpu_cbt --no-run
+
+      - name: Compile terrain asset benchmark
+        run: cargo bench -p thessa-worldgen-rocky --bench assets --no-run
+
   reference-validation:
     name: Reference validation
     runs-on: ubuntu-latest

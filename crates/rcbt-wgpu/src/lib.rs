@@ -1,9 +1,15 @@
 //! Portable wgpu adapter for the backend-neutral RCBT contracts.
 //!
 //! The adapter owns all wgpu handles. `rcbt-core` remains usable by a server,
-//! a CPU renderer, or another graphics API. The first kernels intentionally
-//! operate on a synthetic u32 storage buffer; terrain page decoding and the
-//! canonical height provider are separate follow-up integrations.
+//! a CPU renderer, or another graphics API.
+//!
+//! [`heap`] is the CPU mirror of the GPU heap layout (pure Rust, shared init
+//! and verification code). [`shaders`] holds the real sparse-commit CBT
+//! WGSL kernels (`apply_ops` + `decode_all`); the legacy `RCBT_WGSL` touch
+//! kernels below stay only as a dispatch bring-up target.
+
+pub mod heap;
+pub mod shaders;
 
 use std::borrow::Cow;
 use std::num::NonZeroU64;

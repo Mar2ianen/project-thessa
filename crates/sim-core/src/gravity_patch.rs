@@ -65,7 +65,7 @@ impl Default for CohortConfig {
 }
 
 impl CohortConfig {
-    fn validate(self) -> Result<(), GravityError> {
+    pub(crate) fn validate(self) -> Result<(), GravityError> {
         if !self.error_budget_mps2.is_finite()
             || self.error_budget_mps2 < 0.0
             || !self.near_open_factor.is_finite()
@@ -219,9 +219,10 @@ pub fn compile_patch(
     compile_patch_at(ephemeris, states, anchor, radius_m, config)
 }
 
-/// Patch core over a precomputed anchor ball: shared by the slice API and
-/// the indexed cohort path (which must not copy groups to evaluate).
-fn compile_patch_at(
+/// Patch core over a precomputed anchor ball: shared by the slice API, the
+/// indexed cohort path (which must not copy groups to evaluate), and the
+/// analytic driver (whose anchor is the trajectory point, not a centroid).
+pub(crate) fn compile_patch_at(
     ephemeris: &BakedEphemeris,
     states: &[BodyState],
     anchor: DVec3,

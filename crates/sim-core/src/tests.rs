@@ -1239,8 +1239,8 @@ fn real_patch_jacobian_is_traceless_and_propagatable() {
         "stable direction must exist, got {lambda:?}"
     );
     let coeffs = propagator.coefficients(60.0).expect("minute coeffs");
-    let (x1, _) = propagator.propagate(&coeffs, center, DVec3::ZERO, patch.g0);
-    assert!(x1.is_finite());
+    let (delta, _) = propagator.propagate(&coeffs, DVec3::ZERO, DVec3::ZERO, patch.g0);
+    assert!((center + delta).is_finite());
 }
 
 #[test]
@@ -1262,11 +1262,14 @@ fn analytic_segment_stays_inside_posted_propagation_bound() {
         .expect("patch compiles");
     assert!(patch.exact.is_empty());
     let propagator = AffinePropagator::compile(patch.jacobian).expect("propagator compiles");
-    let constant = patch.g0 - patch.jacobian * center;
+    // Anchor formulation: the patch is compiled at `center`, so the
+    // constant is g0 itself (never g0 - J*center — that belongs to the
+    // origin-anchored form).
     let velocity = DVec3::new(0.0, 5_000.0, 100.0);
     for duration in [60.0, 600.0] {
         let coeffs = propagator.coefficients(duration).expect("coeffs");
-        let (analytic, _) = propagator.propagate(&coeffs, center, velocity, constant);
+        let (delta, _) = propagator.propagate(&coeffs, DVec3::ZERO, velocity, patch.g0);
+        let analytic = center + delta;
         // Excursion: max anchor distance over sub-samples (conservative max
         // for the spatial remainder, not just the endpoint).
         let mut excursion = 0.0_f64;
@@ -1274,8 +1277,8 @@ fn analytic_segment_stays_inside_posted_propagation_bound() {
             let sub = propagator
                 .coefficients(duration * quarter as f64 / 4.0)
                 .expect("sub coeffs");
-            let (point, _) = propagator.propagate(&sub, center, velocity, constant);
-            excursion = excursion.max((point - center).length());
+            let (sub_delta, _) = propagator.propagate(&sub, DVec3::ZERO, velocity, patch.g0);
+            excursion = excursion.max(sub_delta.length());
         }
         let field_bound = affine_segment_bound(&ephemeris, &states, &patch, excursion, duration)
             .expect("segment bound");
@@ -1351,6 +1354,147 @@ fn analytic_bound_expires_and_refuses_honestly() {
         affine_segment_bound(&ephemeris, &states, &near_patch, 1.0e5, 60.0),
         Err(PatchError::AnalyticNeedsFarField)
     );
+}
+
+#[test]
+fn piecewise_converges_with_budget_and_stays_deterministic() {
+    // Budget-driven convergence: a tighter budget takes shorter segments
+    // and lands closer to exact. Deep-space 1200 s horizon, verified
+    // against per-stage-frame RK4 at the endpoint. (At 1e-12 and below the
+    // driver honestly refuses instead: per-tick source motion alone exceeds
+    // the budget — see the DtFloor case below.)
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let center = DVec3::new(3.0e9, 1.0e9, 0.0);
+    let velocity = DVec3::new(0.0, 5_000.0, 100.0);
+    let run = |budget: f64, horizon: f64| {
+        let mut frame = EphemerisFrame::new();
+        let report = propagate_piecewise(
+            &ephemeris,
+            &mut frame,
+            center,
+            velocity,
+            SimTime::EPOCH,
+            CohortConfig {
+                error_budget_mps2: budget,
+                ..Default::default()
+            },
+            horizon,
+            60.0,
+        )
+        .expect("piecewise runs");
+        assert_eq!(report.fallback, None);
+        // Reference endpoint: exact RK4, 0.5 s steps, per-stage frames.
+        let mut x = center;
+        let mut v = velocity;
+        for step in 0..(horizon / 0.5) as usize {
+            let base = step as f64 * 0.5;
+            let mut accel_at = |position: DVec3, time: SimTime| {
+                let sub = frame.evaluate(&ephemeris, time).expect("frame").to_vec();
+                field
+                    .accelerations_from_frame(std::slice::from_ref(&position), &sub)
+                    .expect("exact")[0]
+            };
+            let k1v = accel_at(x, SimTime(base));
+            let k1x = v;
+            let k2v = accel_at(x + k1x * 0.25, SimTime(base + 0.25));
+            let k2x = v + k1v * 0.25;
+            let k3v = accel_at(x + k2x * 0.25, SimTime(base + 0.25));
+            let k3x = v + k2v * 0.25;
+            let k4v = accel_at(x + k3x * 0.5, SimTime(base + 0.5));
+            let k4x = v + k3v * 0.5;
+            x += (k1x + k2x * 2.0 + k3x * 2.0 + k4x) * (0.5 / 6.0);
+            v += (k1v + k2v * 2.0 + k3v * 2.0 + k4v) * (0.5 / 6.0);
+        }
+        let last = report.steps.last().expect("at least one step");
+        let error = (last.position - x).length();
+        (report.steps.len(), error)
+    };
+    let (loose_steps, loose_error) = run(1.0e-9, 1_200.0);
+    let (tight_steps, tight_error) = run(1.0e-10, 1_200.0);
+    assert!(
+        tight_steps >= loose_steps,
+        "tighter budget must not take fewer segments"
+    );
+    assert!(
+        tight_error < loose_error,
+        "tighter budget must land closer: {tight_error:e} vs {loose_error:e}"
+    );
+    assert!(loose_error <= 1.0, "loose run must stay sane");
+    // Determinism: same inputs, identical report.
+    let mut frame = EphemerisFrame::new();
+    let first = propagate_piecewise(
+        &ephemeris,
+        &mut frame,
+        center,
+        velocity,
+        SimTime::EPOCH,
+        CohortConfig::default(),
+        600.0,
+        60.0,
+    )
+    .expect("first run");
+    let mut frame = EphemerisFrame::new();
+    let second = propagate_piecewise(
+        &ephemeris,
+        &mut frame,
+        center,
+        velocity,
+        SimTime::EPOCH,
+        CohortConfig::default(),
+        600.0,
+        60.0,
+    )
+    .expect("second run");
+    assert_eq!(first, second);
+}
+
+#[test]
+fn piecewise_falls_back_near_body_and_on_zero_budget() {
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let mut frame = EphemerisFrame::new();
+    let states = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame")
+        .to_vec();
+    // 5 km from the secondary with a slow drift: the segment ball reaches
+    // the body on the first attempt → immediate exact-near fallback.
+    let secondary = states[2].position_inertial;
+    let report = propagate_piecewise(
+        &ephemeris,
+        &mut frame,
+        secondary + DVec3::new(5_000.0, 0.0, 0.0),
+        DVec3::new(0.0, 100.0, 0.0),
+        SimTime::EPOCH,
+        CohortConfig::default(),
+        600.0,
+        60.0,
+    )
+    .expect("fallback runs");
+    assert_eq!(report.steps.len(), 1);
+    assert_eq!(
+        report.fallback,
+        Some(AnalyticFallback::ExactNear { body: BodyId(2) })
+    );
+    // Zero budget overflows every source: grind to the dt floor, then hand
+    // the remainder to exact integration.
+    let center = DVec3::new(3.0e9, 1.0e9, 0.0);
+    let report = propagate_piecewise(
+        &ephemeris,
+        &mut frame,
+        center,
+        DVec3::new(0.0, 5_000.0, 0.0),
+        SimTime::EPOCH,
+        CohortConfig {
+            error_budget_mps2: 0.0,
+            ..Default::default()
+        },
+        600.0,
+        60.0,
+    )
+    .expect("zero-budget runs");
+    assert_eq!(report.steps.len(), 1);
+    assert_eq!(report.fallback, Some(AnalyticFallback::DtFloor));
 }
 
 #[test]

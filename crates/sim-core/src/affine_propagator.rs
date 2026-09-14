@@ -18,6 +18,11 @@
 
 use glam::{DMat3, DVec3};
 
+use crate::{
+    BakedEphemeris, BodyId, CohortConfig, EphemerisError, EphemerisFrame, PatchError, SimTime,
+    gravity_patch::{affine_segment_bound, compile_patch_at},
+};
+
 /// Switch to the Taylor branch when `|lambda| dt^2` is this small: the
 /// direct sin/sinh formulas lose nothing yet, but the Taylor remainder
 /// (~s^2/24) is already far below floating-point noise, and the branch
@@ -104,18 +109,32 @@ impl AffinePropagator {
         })
     }
 
-    /// Propagate absolute `(position, velocity)` under `x'' = Jx + c` over
-    /// the interval baked into `coeffs`. Relative (STM) propagation is the
-    /// same call with `c = DVec3::ZERO`.
+    /// Propagate anchor-relative `(displacement, velocity)` under
+    /// `x'' = Jx + c` over the interval baked into `coeffs`, returning the
+    /// new displacement (caller adds the anchor back exactly once).
+    ///
+    /// Formulations that must not be mixed: with anchor-relative state
+    /// `q = Q^T (x - anchor)` the constant is `Q^T g0` — i.e. callers pass
+    /// `constant = g0`, never `g0 - J*anchor` (that constant belongs to the
+    /// origin-anchored form `q = Q^T x`, which reintroduces the 1e9-scale
+    /// fp floor this API exists to avoid).
+    ///
+    /// Displacement in/out is load-bearing precision design, not just API
+    /// shape: transforming absolute 1e9-scale positions through the basis
+    /// every segment floors accuracy at ~1e-6 m per segment, which defeats
+    /// budget tightening (measured: tighter budgets landed FARTHER). With
+    /// anchor-relative state the floor drops to excursion scale (~1e-10 m
+    /// here) and convergence is monotone in the budget again. Relative
+    /// (STM) propagation is the same call with `c = DVec3::ZERO`.
     pub fn propagate(
         &self,
         coeffs: &StepCoefficients,
-        position: DVec3,
+        displacement: DVec3,
         velocity: DVec3,
         constant: DVec3,
     ) -> (DVec3, DVec3) {
         let inverse = self.basis.transpose();
-        let q0 = inverse * position;
+        let q0 = inverse * displacement;
         let u0 = inverse * velocity;
         let cq = inverse * constant;
         let q0 = [q0.x, q0.y, q0.z];
@@ -294,3 +313,262 @@ impl std::fmt::Display for PropagatorError {
 }
 
 impl std::error::Error for PropagatorError {}
+
+/// Floor for the compile ball: prevents degenerate zero-radius acceptance
+/// (whose bound is trivially zero) and the grind it would cause.
+const MIN_BALL_RADIUS_M: f64 = 1_000.0;
+/// Analytic segments below one physics tick buy nothing over exact
+/// stepping: hand the remainder to the exact integrator instead.
+const MIN_SEGMENT_DT_S: f64 = 0.5;
+/// Sanity cap; the temporal bound normally binds far earlier.
+const MAX_SEGMENT_DT_S: f64 = 3_600.0;
+
+/// One accepted analytic segment endpoint.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AnalyticStep {
+    pub time_s: f64,
+    pub position: DVec3,
+    pub velocity: DVec3,
+    pub dt_s: f64,
+    /// Posted position bound for this segment (m).
+    pub bound_m: f64,
+}
+
+/// Why piecewise propagation stopped early (fail-open: the caller continues
+/// with exact integration from the last accepted step).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AnalyticFallback {
+    /// An exact-near source entered the segment ball (near-body regime:
+    /// analytic far-field does not apply).
+    ExactNear { body: BodyId },
+    /// Adaptive shrink reached the physics-tick floor.
+    DtFloor,
+}
+
+/// Piecewise report: `steps[0]` is the initial state (dt 0, bound 0).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PiecewiseReport {
+    pub steps: Vec<AnalyticStep>,
+    pub fallback: Option<AnalyticFallback>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnalyticError {
+    InvalidInput,
+    Patch(PatchError),
+    Propagator(PropagatorError),
+    Ephemeris(EphemerisError),
+}
+
+impl std::fmt::Display for AnalyticError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidInput => write!(formatter, "invalid analytic propagation input"),
+            Self::Patch(error) => write!(formatter, "patch error: {error}"),
+            Self::Propagator(error) => write!(formatter, "propagator error: {error}"),
+            Self::Ephemeris(error) => write!(formatter, "ephemeris error: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for AnalyticError {}
+
+impl From<PatchError> for AnalyticError {
+    fn from(error: PatchError) -> Self {
+        Self::Patch(error)
+    }
+}
+
+impl From<PropagatorError> for AnalyticError {
+    fn from(error: PropagatorError) -> Self {
+        Self::Propagator(error)
+    }
+}
+
+impl From<EphemerisError> for AnalyticError {
+    fn from(error: EphemerisError) -> Self {
+        Self::Ephemeris(error)
+    }
+}
+
+enum Attempt {
+    Accept(AnalyticStep),
+    Shrink,
+    Fallback(AnalyticFallback),
+}
+
+/// Piecewise-analytic propagation (design note §6): compile a patch at the
+/// trajectory point, propagate analytically while the posted bound holds,
+/// rebuild on expiry — the adaptive-integrator shape with analytic inner
+/// segments. Regime A only (far-only patches); near-body encounters and
+/// sub-tick segments fail open via `fallback`, never silently.
+///
+/// `budget_mps2` is the same field-error currency as the cohort system;
+/// the reported per-segment `bound_m` converts it with `dt^2/2` (valid:
+/// sigma * dt << 1 on every accepted segment — a segment that violated it
+/// would blow the field bound first... see `affine_segment_bound`).
+#[allow(clippy::too_many_arguments)]
+pub fn propagate_piecewise(
+    ephemeris: &BakedEphemeris,
+    frame: &mut EphemerisFrame,
+    initial_position: DVec3,
+    initial_velocity: DVec3,
+    start: SimTime,
+    config: CohortConfig,
+    horizon_s: f64,
+    dt_initial_s: f64,
+) -> Result<PiecewiseReport, AnalyticError> {
+    config.validate().map_err(PatchError::Gravity)?;
+    if !initial_position.is_finite()
+        || !initial_velocity.is_finite()
+        || !start.0.is_finite()
+        || !horizon_s.is_finite()
+        || horizon_s <= 0.0
+        || !dt_initial_s.is_finite()
+    {
+        return Err(AnalyticError::InvalidInput);
+    }
+    let mut steps = vec![AnalyticStep {
+        time_s: start.0,
+        position: initial_position,
+        velocity: initial_velocity,
+        dt_s: 0.0,
+        bound_m: 0.0,
+    }];
+    let mut time_s = start.0;
+    let mut position = initial_position;
+    let mut velocity = initial_velocity;
+    let mut dt = dt_initial_s.clamp(MIN_SEGMENT_DT_S, MAX_SEGMENT_DT_S);
+    if !dt.is_finite() || dt <= 0.0 {
+        return Err(AnalyticError::InvalidInput);
+    }
+    while time_s < start.0 + horizon_s {
+        let remaining = start.0 + horizon_s - time_s;
+        let mut dt_try = dt.min(remaining);
+        loop {
+            match attempt_segment(ephemeris, frame, position, velocity, time_s, config, dt_try)? {
+                Attempt::Accept(step) => {
+                    time_s = step.time_s;
+                    position = step.position;
+                    velocity = step.velocity;
+                    steps.push(step);
+                    dt = (dt_try * 1.5).min(MAX_SEGMENT_DT_S);
+                    break;
+                }
+                Attempt::Shrink => {
+                    if dt_try <= MIN_SEGMENT_DT_S {
+                        return Ok(PiecewiseReport {
+                            steps,
+                            fallback: Some(AnalyticFallback::DtFloor),
+                        });
+                    }
+                    dt_try /= 2.0;
+                }
+                Attempt::Fallback(reason) => {
+                    return Ok(PiecewiseReport {
+                        steps,
+                        fallback: Some(reason),
+                    });
+                }
+            }
+        }
+    }
+    Ok(PiecewiseReport {
+        steps,
+        fallback: None,
+    })
+}
+
+fn attempt_segment(
+    ephemeris: &BakedEphemeris,
+    frame: &mut EphemerisFrame,
+    position: DVec3,
+    velocity: DVec3,
+    time_s: f64,
+    config: CohortConfig,
+    dt: f64,
+) -> Result<Attempt, AnalyticError> {
+    if !dt.is_finite() || dt <= 0.0 || !position.is_finite() || !velocity.is_finite() {
+        return Err(AnalyticError::InvalidInput);
+    }
+    let states = frame
+        .evaluate(ephemeris, SimTime(time_s))
+        .map_err(AnalyticError::Ephemeris)?
+        .to_vec();
+    let speed = velocity.length();
+    if !speed.is_finite() {
+        return Err(AnalyticError::InvalidInput);
+    }
+    // Predicted ball covers the linear drift plus a floor: exact-near
+    // classification then sees the real segment ball, and a post-hoc
+    // excursion check keeps the acceptance honest.
+    let radius_m = (speed * dt * 1.25 + MIN_BALL_RADIUS_M).max(MIN_BALL_RADIUS_M);
+    if !radius_m.is_finite() {
+        return Err(AnalyticError::InvalidInput);
+    }
+    let patch = compile_patch_at(ephemeris, &states, position, radius_m, config)?;
+    if !patch.exact.is_empty() {
+        // Genuinely near (the ball reaches a source) → hand to exact
+        // integration at once. Otherwise the ball is merely too big for
+        // the budget (single-source overflow) → shrink it; that converges
+        // because contributions scale with r^2.
+        let mut nearest = BodyId(0);
+        let mut nearest_distance = f64::INFINITY;
+        for source in ephemeris.gravity_sources() {
+            let state = states
+                .get(source.id.index())
+                .ok_or(PatchError::UnknownSource(source.id))?;
+            let distance = (state.position_inertial - position).length();
+            if distance < nearest_distance {
+                nearest_distance = distance;
+                nearest = source.id;
+            }
+        }
+        if !nearest_distance.is_finite() {
+            return Err(AnalyticError::InvalidInput);
+        }
+        if nearest_distance <= radius_m {
+            return Ok(Attempt::Fallback(AnalyticFallback::ExactNear {
+                body: nearest,
+            }));
+        }
+        return Ok(Attempt::Shrink);
+    }
+    let propagator = AffinePropagator::compile(patch.jacobian)?;
+    let coeffs = match propagator.coefficients(dt) {
+        Ok(coeffs) => coeffs,
+        Err(PropagatorError::IntervalTooLong) => return Ok(Attempt::Shrink),
+        Err(other) => return Err(AnalyticError::Propagator(other)),
+    };
+    let constant = patch.g0;
+    let (delta_position, end_velocity) =
+        propagator.propagate(&coeffs, DVec3::ZERO, velocity, constant);
+    let end_position = position + delta_position;
+    if !end_position.is_finite() || !end_velocity.is_finite() {
+        return Ok(Attempt::Shrink);
+    }
+    // Excursion over sub-samples, including the endpoint.
+    let mut excursion_m = 0.0_f64;
+    for quarter in 1..=4 {
+        let sub = propagator.coefficients(dt * quarter as f64 / 4.0)?;
+        let (delta, _) = propagator.propagate(&sub, DVec3::ZERO, velocity, constant);
+        excursion_m = excursion_m.max(delta.length());
+    }
+    if excursion_m.is_nan() || excursion_m > radius_m {
+        return Ok(Attempt::Shrink);
+    }
+    let field_bound = affine_segment_bound(ephemeris, &states, &patch, excursion_m, dt)?;
+    if !field_bound.is_finite() {
+        return Ok(Attempt::Shrink);
+    }
+    if field_bound > config.error_budget_mps2 {
+        return Ok(Attempt::Shrink);
+    }
+    Ok(Attempt::Accept(AnalyticStep {
+        time_s: time_s + dt,
+        position: end_position,
+        velocity: end_velocity,
+        dt_s: dt,
+        bound_m: field_bound * dt * dt / 2.0,
+    }))
+}

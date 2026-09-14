@@ -31,7 +31,8 @@ pub use aero::{
     PanelAeroModel, PanelSoA, evaluate_batch,
 };
 pub use affine_propagator::{
-    AffinePropagator, ModeCoefficients, PropagatorError, StepCoefficients,
+    AffinePropagator, AnalyticError, AnalyticFallback, AnalyticStep, ModeCoefficients,
+    PiecewiseReport, PropagatorError, StepCoefficients, propagate_piecewise,
 };
 pub use atmosphere::{AtmosphereConfig, AtmosphereError, AtmosphereSample, BakedAtmosphere};
 pub use ephemeris::{

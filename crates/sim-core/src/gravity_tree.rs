@@ -68,8 +68,6 @@ impl GravitySourceTree {
         }
         let mut node_index = vec![u32::MAX; ephemeris.bodies.len()];
         let mut nodes = Vec::new();
-        // Bodies are stored parent-first, so one ascending pass sees parents
-        // before children; mu totals accumulate bottom-up afterwards.
         for body in &ephemeris.bodies {
             let is_source = body.gravity_source;
             let groups_several = descendant_sources[body.id.index()] >= 2;
@@ -100,15 +98,13 @@ impl GravitySourceTree {
         for node in &mut nodes {
             node.children.sort_unstable();
         }
-        // Bottom-up mu totals: children sort after parents in node order, so
-        // a reverse pass accumulates exactly once per edge.
-        for node_id in (0..nodes.len()).rev() {
-            let child_mu: f64 = nodes[node_id]
-                .children
-                .iter()
-                .map(|child| nodes[*child as usize].mu_total)
-                .sum();
-            nodes[node_id].mu_total += child_mu;
+        // Bottom-up mu totals by memoized depth-first accumulation: no
+        // ordering assumption on node indices (bodies are not guaranteed
+        // parent-first).
+        let mut memo = vec![None; nodes.len()];
+        for node_id in 0..nodes.len() {
+            let total = accumulate_mu(&nodes, node_id, &mut memo);
+            nodes[node_id].mu_total = total;
         }
         let mut roots = Vec::new();
         for (node_id, node) in nodes.iter().enumerate() {
@@ -143,66 +139,79 @@ impl GravitySourceTree {
 
     /// Resolve per-tick node frames from one ephemeris frame: barycenter and
     /// conservative internal radius per node. O(nodes), once per tick.
+    /// Depth-first with memoization: no ordering assumption on nodes.
     pub fn resolve(
         &self,
         ephemeris: &BakedEphemeris,
         states: &[BodyState],
     ) -> Result<Vec<GravityNodeFrame>, GravityError> {
-        // Children sort after parents in node order: resolve in reverse so
-        // every child frame exists before its parent reads it.
         let mut frames: Vec<Option<GravityNodeFrame>> = vec![None; self.nodes.len()];
-        for node_id in (0..self.nodes.len()).rev() {
-            let node = &self.nodes[node_id];
-            let own_state = states
-                .get(node.body.index())
-                .ok_or(crate::EphemerisError::UnknownBody(node.body))?;
-            // Weighted barycenter over the node's own mass (when it is a
-            // source) and the resolved child barycenters.
-            let mut weighted = own_state.position_inertial * node.own_mu;
-            let mut mass = node.own_mu;
-            let own_radius = if node.own_mu > 0.0 {
-                ephemeris.body(node.body)?.radius_m
-            } else {
-                0.0
-            };
-            for child in &node.children {
-                let child_frame = frames[*child as usize]
-                    .as_ref()
-                    .expect("children resolve before parents");
-                let child_mu = self.nodes[*child as usize].mu_total;
-                weighted += child_frame.barycenter * child_mu;
-                mass += child_mu;
-            }
-            // A node always covers at least one source, so mass is positive;
-            // guard anyway to keep radius finite on degenerate input.
-            let barycenter = if mass > 0.0 && mass.is_finite() {
-                weighted / mass
-            } else {
-                own_state.position_inertial
-            };
-            // Conservative internal radius around the barycenter: every
-            // member (own body when massive, child balls) must fit inside.
-            let mut anchored = if node.own_mu > 0.0 {
-                (own_state.position_inertial - barycenter).length() + own_radius
-            } else {
-                0.0
-            };
-            for child in &node.children {
-                let child_frame = frames[*child as usize]
-                    .as_ref()
-                    .expect("children resolve before parents");
-                anchored = anchored
-                    .max((child_frame.barycenter - barycenter).length() + child_frame.radius_m);
-            }
-            frames[node_id] = Some(GravityNodeFrame {
-                barycenter,
-                radius_m: anchored,
-            });
+        for node_id in 0..self.nodes.len() {
+            self.resolve_node(ephemeris, states, node_id as u32, &mut frames)?;
         }
         Ok(frames
             .into_iter()
             .map(|frame| frame.expect("every node resolved"))
             .collect())
+    }
+
+    fn resolve_node(
+        &self,
+        ephemeris: &BakedEphemeris,
+        states: &[BodyState],
+        node_id: u32,
+        frames: &mut [Option<GravityNodeFrame>],
+    ) -> Result<(), GravityError> {
+        if frames[node_id as usize].is_some() {
+            return Ok(());
+        }
+        let children = self.nodes[node_id as usize].children.clone();
+        for child in children {
+            self.resolve_node(ephemeris, states, child, frames)?;
+        }
+        let node = &self.nodes[node_id as usize];
+        let own_state = states
+            .get(node.body.index())
+            .ok_or(crate::EphemerisError::UnknownBody(node.body))?;
+        // Weighted barycenter over the node's own mass (when it is a
+        // source) and the resolved child barycenters.
+        let mut weighted = own_state.position_inertial * node.own_mu;
+        let mut mass = node.own_mu;
+        let own_radius = if node.own_mu > 0.0 {
+            ephemeris.body(node.body)?.radius_m
+        } else {
+            0.0
+        };
+        for child in &node.children {
+            let child_frame = frames[*child as usize].as_ref().expect("child resolved");
+            let child_mu = self.nodes[*child as usize].mu_total;
+            weighted += child_frame.barycenter * child_mu;
+            mass += child_mu;
+        }
+        // A node always covers at least one source, so mass is positive;
+        // guard anyway to keep radius finite on degenerate input.
+        let barycenter = if mass > 0.0 && mass.is_finite() {
+            weighted / mass
+        } else {
+            own_state.position_inertial
+        };
+        // Conservative internal radius around the barycenter: every
+        // member (own body when massive, child balls) must fit inside.
+        let mut anchored = if node.own_mu > 0.0 {
+            (own_state.position_inertial - barycenter).length() + own_radius
+        } else {
+            0.0
+        };
+        for child in &node.children {
+            let child_frame = frames[*child as usize].as_ref().expect("child resolved");
+            anchored =
+                anchored.max((child_frame.barycenter - barycenter).length() + child_frame.radius_m);
+        }
+        frames[node_id as usize] = Some(GravityNodeFrame {
+            barycenter,
+            radius_m: anchored,
+        });
+        Ok(())
     }
 
     /// Evaluate gravity at one target through the hierarchy: open nodes whose
@@ -308,6 +317,23 @@ pub struct TreeEval {
     pub error_bound_mps2: f64,
     pub nodes_visited: u32,
     pub terms_exact: u32,
+}
+
+/// Memoized depth-first subtree mass (own mu plus descendants), summed once
+/// per edge and without assuming any node index order.
+fn accumulate_mu(nodes: &[GravityNode], node_id: usize, memo: &mut [Option<f64>]) -> f64 {
+    if let Some(total) = memo[node_id] {
+        return total;
+    }
+    // Mark in-progress against pathological cycles (never produced by the
+    // builder, which follows a DAG of parent links).
+    memo[node_id] = Some(nodes[node_id].own_mu);
+    let mut total = nodes[node_id].own_mu;
+    for child in nodes[node_id].children.clone() {
+        total += accumulate_mu(nodes, child as usize, memo);
+    }
+    memo[node_id] = Some(total);
+    total
 }
 
 /// One exact point-mass term with the same checks as

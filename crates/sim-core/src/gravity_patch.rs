@@ -102,37 +102,33 @@ fn tidal_tensor(offset: DVec3, mu: f64, distance: f64) -> DMat3 {
     (outer * (3.0 / distance.powi(5)) - DMat3::IDENTITY * (1.0 / distance.powi(3))) * mu
 }
 
-/// Compile one patch over `positions` (non-empty): bounding ball anchor,
-/// exact-near classification, exact `g0`/`J` over far sources, total bound.
-/// Fails open (caller falls back) only on non-finite input, never silently.
-pub fn compile_patch(
+/// One far source carried through compilation and reuse checks.
+#[derive(Debug, Clone, Copy)]
+struct FarSource {
+    body: BodyId,
+    mu: f64,
+    offset: DVec3,
+    distance: f64,
+}
+
+/// Split sources into exact-near and absorbed-far for one anchor ball.
+/// Pure function of (states, anchor, radius, config): shared by fresh
+/// compilation and reuse validation, so both agree on membership.
+#[derive(Debug)]
+struct SourceClasses {
+    exact: Vec<(BodyId, f64)>,
+    far: Vec<FarSource>,
+}
+
+fn classify_sources(
     ephemeris: &BakedEphemeris,
     states: &[BodyState],
-    positions: &[DVec3],
+    anchor: DVec3,
+    radius_m: f64,
     config: CohortConfig,
-) -> Result<GravityPatch, PatchError> {
-    config.validate().map_err(PatchError::Gravity)?;
-    let anchor = positions
-        .iter()
-        .fold(DVec3::ZERO, |sum, position| sum + *position)
-        / positions.len() as f64;
-    if !anchor.is_finite() {
-        return Err(PatchError::NonFiniteInput);
-    }
-    let mut radius_m = 0.0_f64;
-    for position in positions {
-        if !position.is_finite() {
-            return Err(PatchError::NonFiniteInput);
-        }
-        radius_m = radius_m.max((*position - anchor).length());
-    }
-    if !radius_m.is_finite() {
-        return Err(PatchError::NonFiniteInput);
-    }
+) -> Result<SourceClasses, PatchError> {
     let mut exact = Vec::new();
-    let mut g0 = DVec3::ZERO;
-    let mut jacobian = DMat3::ZERO;
-    let mut error_bound_mps2 = 0.0;
+    let mut far = Vec::new();
     for source in ephemeris.gravity_sources() {
         let state = states
             .get(source.id.index())
@@ -166,15 +162,59 @@ pub fn compile_patch(
             exact.push((source.id, source.mu));
             continue;
         }
-        let inverse = distance_squared.sqrt().recip();
+        far.push(FarSource {
+            body: source.id,
+            mu: source.mu,
+            offset,
+            distance,
+        });
+    }
+    exact.sort_by_key(|(body, _)| body.0);
+    Ok(SourceClasses { exact, far })
+}
+
+/// Compile one patch over `positions` (non-empty): bounding ball anchor,
+/// exact-near classification, exact `g0`/`J` over far sources, total bound.
+/// Fails open (caller falls back) only on non-finite input, never silently.
+pub fn compile_patch(
+    ephemeris: &BakedEphemeris,
+    states: &[BodyState],
+    positions: &[DVec3],
+    config: CohortConfig,
+) -> Result<GravityPatch, PatchError> {
+    config.validate().map_err(PatchError::Gravity)?;
+    let anchor = positions
+        .iter()
+        .fold(DVec3::ZERO, |sum, position| sum + *position)
+        / positions.len() as f64;
+    if !anchor.is_finite() {
+        return Err(PatchError::NonFiniteInput);
+    }
+    let mut radius_m = 0.0_f64;
+    for position in positions {
+        if !position.is_finite() {
+            return Err(PatchError::NonFiniteInput);
+        }
+        radius_m = radius_m.max((*position - anchor).length());
+    }
+    if !radius_m.is_finite() {
+        return Err(PatchError::NonFiniteInput);
+    }
+    let classes = classify_sources(ephemeris, states, anchor, radius_m, config)?;
+    let mut g0 = DVec3::ZERO;
+    let mut jacobian = DMat3::ZERO;
+    let mut error_bound_mps2 = 0.0;
+    for source in &classes.far {
+        let inverse = source.distance.recip();
         if !inverse.is_finite() {
             return Err(PatchError::Gravity(GravityError::NonFinite {
-                body_id: source.id,
+                body_id: source.body,
             }));
         }
-        g0 += offset * (source.mu * inverse.powi(3));
-        jacobian += tidal_tensor(offset, source.mu, distance);
-        error_bound_mps2 += contribution;
+        g0 += source.offset * (source.mu * inverse.powi(3));
+        jacobian += tidal_tensor(source.offset, source.mu, source.distance);
+        let clearance = source.distance - radius_m;
+        error_bound_mps2 += HESSIAN_REMAINDER * source.mu * radius_m.powi(2) / clearance.powi(4);
     }
     if !g0.is_finite()
         || !jacobian.is_finite()
@@ -183,13 +223,12 @@ pub fn compile_patch(
     {
         return Err(PatchError::NonFiniteInput);
     }
-    exact.sort_by_key(|(body, _)| body.0);
     Ok(GravityPatch {
         center: anchor,
         radius_m,
         g0,
         jacobian,
-        exact,
+        exact: classes.exact,
         error_bound_mps2,
     })
 }
@@ -360,25 +399,8 @@ fn split_cohort(
     report.max_radius_m = report.max_radius_m.max(patch.radius_m);
     report.exact_terms += (group.len() * patch.exact.len()) as u64;
     if patch.error_bound_mps2 <= config.error_budget_mps2 {
-        // One chunk per worker (same granularity argument as the framed
-        // batch) with an infallible kernel; finite-scan once, rerun only
-        // failed lanes fallibly for their exact error identity.
-        let workers = rayon::current_num_threads().max(1);
-        let chunk = group.len().div_ceil(workers).max(1);
         let mut accelerations = vec![DVec3::ZERO; group.len()];
-        accelerations
-            .par_chunks_mut(chunk)
-            .zip(group.par_chunks(chunk))
-            .for_each(|(out_block, pos_block)| {
-                for (slot, position) in out_block.iter_mut().zip(pos_block.iter()) {
-                    *slot = evaluate_patch_unchecked(&patch, states, *position);
-                }
-            });
-        for (position, acceleration) in group.iter().zip(accelerations.iter_mut()) {
-            if !acceleration.is_finite() {
-                *acceleration = evaluate_patch(&patch, states, *position)?;
-            }
-        }
+        eval_patch_batch(&patch, states, &group, &mut accelerations)?;
         for (slot, acceleration) in indices.iter().zip(accelerations) {
             out[*slot] = Some(acceleration);
         }
@@ -444,6 +466,34 @@ fn split_cohort(
     Ok(())
 }
 
+/// One chunked batch through a patch into an aligned output slice: one
+/// chunk per worker (same granularity argument as the framed batch) with an
+/// infallible kernel; finite-scan once, rerun only failed lanes fallibly
+/// for their exact error identity.
+fn eval_patch_batch(
+    patch: &GravityPatch,
+    states: &[BodyState],
+    group: &[DVec3],
+    out: &mut [DVec3],
+) -> Result<(), PatchError> {
+    debug_assert_eq!(group.len(), out.len());
+    let workers = rayon::current_num_threads().max(1);
+    let chunk = group.len().div_ceil(workers).max(1);
+    out.par_chunks_mut(chunk)
+        .zip(group.par_chunks(chunk))
+        .for_each(|(out_block, pos_block)| {
+            for (slot, position) in out_block.iter_mut().zip(pos_block.iter()) {
+                *slot = evaluate_patch_unchecked(patch, states, *position);
+            }
+        });
+    for (position, acceleration) in group.iter().zip(out.iter_mut()) {
+        if !acceleration.is_finite() {
+            *acceleration = evaluate_patch(patch, states, *position)?;
+        }
+    }
+    Ok(())
+}
+
 /// Exact all-source accumulation for tiny/degenerate cohorts: same checks
 /// and summation order as [`GravityField`](crate::GravityField).
 fn evaluate_exact_all(
@@ -506,5 +556,206 @@ impl std::error::Error for PatchError {}
 impl From<GravityError> for PatchError {
     fn from(error: GravityError) -> Self {
         Self::Gravity(error)
+    }
+}
+
+/// Single-cohort reuse window: a compiled patch plus the source positions
+/// at compile time (per body slot), so later ticks can bound field
+/// staleness from source motion without recompiling.
+#[derive(Debug, Clone)]
+struct ReuseWindow {
+    patch: GravityPatch,
+    old_positions: Vec<DVec3>,
+    config: CohortConfig,
+}
+
+/// Check whether a window still covers `positions` under `config` at the
+/// current `states`. All bound-driven, no magic thresholds:
+/// membership must agree exactly, then spatial remainder (at the new ball
+/// radius) plus temporal staleness (Lipschitz `2/|y|^3` on `y/|y|^3` times
+/// per-source displacement) must fit the budget. Returns the new radius
+/// and the achieved bound when reusable.
+fn reuse_bound(
+    window: &ReuseWindow,
+    ephemeris: &BakedEphemeris,
+    states: &[BodyState],
+    positions: &[DVec3],
+    config: CohortConfig,
+) -> Result<Option<(f64, f64)>, PatchError> {
+    let anchor = window.patch.center;
+    let mut radius_new = 0.0_f64;
+    for position in positions {
+        if !position.is_finite() {
+            return Err(PatchError::NonFiniteInput);
+        }
+        radius_new = radius_new.max((*position - anchor).length());
+    }
+    if !radius_new.is_finite() {
+        return Err(PatchError::NonFiniteInput);
+    }
+    let classes = classify_sources(ephemeris, states, anchor, radius_new, config)?;
+    if classes.exact != window.patch.exact {
+        return Ok(None);
+    }
+    let mut temporal = 0.0;
+    for source in &classes.far {
+        let old = window
+            .old_positions
+            .get(source.body.index())
+            .copied()
+            .ok_or(PatchError::UnknownSource(source.body))?;
+        let displacement = ((source.offset + anchor) - old).length();
+        if !displacement.is_finite() {
+            return Err(PatchError::NonFiniteInput);
+        }
+        let clearance = source.distance - displacement;
+        if clearance <= 0.0 {
+            return Ok(None);
+        }
+        temporal += source.mu * 2.0 * displacement / clearance.powi(3);
+    }
+    let mut spatial = 0.0;
+    for source in &classes.far {
+        // Far membership guarantees positive clearance (classify routes
+        // `distance <= radius` to exact), but guard the division anyway.
+        let clearance = source.distance - radius_new;
+        if clearance <= 0.0 {
+            return Ok(None);
+        }
+        spatial += HESSIAN_REMAINDER * source.mu * radius_new.powi(2) / clearance.powi(4);
+    }
+    let total = spatial + temporal;
+    if !total.is_finite() {
+        return Err(PatchError::NonFiniteInput);
+    }
+    if total <= config.error_budget_mps2 {
+        Ok(Some((radius_new, total)))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Cohort evaluation borrowing the evaluator's scratch: same telemetry as
+/// [`CohortReport`] but zero-copy on the hot path.
+#[derive(Debug)]
+pub struct CohortEval<'a> {
+    pub accelerations: &'a [DVec3],
+    pub error_bound_mps2: f64,
+    pub cohort_count: usize,
+    pub split_count: usize,
+    pub exact_terms: u64,
+    pub max_radius_m: f64,
+    pub reused_window: bool,
+}
+
+/// Stateful hot-loop evaluator (doc 23 section 10, step 10): owns reusable
+/// scratch so steady-state ticks allocate nothing, and carries a
+/// single-cohort reuse window across ticks while the spatial + temporal
+/// remainder bounds hold. Split/multi-cohort ticks rebuild through the
+/// stateless path and drop the window.
+#[derive(Debug, Default)]
+pub struct CohortEvaluator {
+    out: Vec<DVec3>,
+    window: Option<ReuseWindow>,
+    /// Ticks served from the reuse window (telemetry).
+    pub reuses: u64,
+    /// Ticks that compiled fresh or split (telemetry).
+    pub rebuilds: u64,
+}
+
+impl CohortEvaluator {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn evaluate(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        states: &[BodyState],
+        positions: &[DVec3],
+        config: CohortConfig,
+    ) -> Result<CohortEval<'_>, PatchError> {
+        config.validate().map_err(PatchError::Gravity)?;
+        if positions.is_empty() {
+            self.out.clear();
+            return Ok(CohortEval {
+                accelerations: &[],
+                error_bound_mps2: 0.0,
+                cohort_count: 0,
+                split_count: 0,
+                exact_terms: 0,
+                max_radius_m: 0.0,
+                reused_window: false,
+            });
+        }
+        // Fast path: previous single-cohort window still covers the group.
+        if let Some(window) = &self.window
+            && window.config == config
+            && let Some((radius_new, achieved)) =
+                reuse_bound(window, ephemeris, states, positions, config)?
+        {
+            let exact_len = window.patch.exact.len();
+            let patch = &window.patch;
+            self.out.clear();
+            self.out.resize(positions.len(), DVec3::ZERO);
+            eval_patch_batch(patch, states, positions, &mut self.out)?;
+            self.reuses += 1;
+            return Ok(CohortEval {
+                accelerations: &self.out,
+                error_bound_mps2: achieved,
+                cohort_count: 1,
+                split_count: 0,
+                exact_terms: (positions.len() * exact_len) as u64,
+                max_radius_m: radius_new,
+                reused_window: true,
+            });
+        }
+        // Fresh single-cohort attempt: one compile, no split machinery.
+        let patch = compile_patch(ephemeris, states, positions, config)?;
+        if patch.error_bound_mps2 <= config.error_budget_mps2 {
+            self.out.clear();
+            self.out.resize(positions.len(), DVec3::ZERO);
+            eval_patch_batch(&patch, states, positions, &mut self.out)?;
+            let mut old_positions = vec![DVec3::ZERO; ephemeris.bodies.len()];
+            for source in ephemeris.gravity_sources() {
+                old_positions[source.id.index()] = states
+                    .get(source.id.index())
+                    .ok_or(PatchError::UnknownSource(source.id))?
+                    .position_inertial;
+            }
+            let radius_m = patch.radius_m;
+            let bound = patch.error_bound_mps2;
+            let exact_len = patch.exact.len();
+            self.window = Some(ReuseWindow {
+                patch,
+                old_positions,
+                config,
+            });
+            self.rebuilds += 1;
+            return Ok(CohortEval {
+                accelerations: &self.out,
+                error_bound_mps2: bound,
+                cohort_count: 1,
+                split_count: 0,
+                exact_terms: (positions.len() * exact_len) as u64,
+                max_radius_m: radius_m,
+                reused_window: false,
+            });
+        }
+        // Spread-out group: stateless split path, no window.
+        self.window = None;
+        self.rebuilds += 1;
+        let report = evaluate_cohorts(ephemeris, states, positions, config)?;
+        self.out.clear();
+        self.out.extend_from_slice(&report.accelerations);
+        Ok(CohortEval {
+            accelerations: &self.out,
+            error_bound_mps2: report.error_bound_mps2,
+            cohort_count: report.cohort_count,
+            split_count: report.split_count,
+            exact_terms: report.exact_terms,
+            max_radius_m: report.max_radius_m,
+            reused_window: false,
+        })
     }
 }

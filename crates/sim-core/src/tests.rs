@@ -564,6 +564,235 @@ fn patch_soa_matches_aos_evaluation() {
 }
 
 #[test]
+fn window_reuse_matches_fresh_within_budget() {
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let config = CohortConfig {
+        error_budget_mps2: 1.0e-9,
+        ..Default::default()
+    };
+    let center = DVec3::new(3.0e9, 1.0e9, 0.0);
+    let positions: Vec<_> = (0..32)
+        .map(|index| {
+            let i = index as f64;
+            center + DVec3::new((i * 12.9898).sin(), (i * 78.233).sin(), 0.0) * 20_000.0
+        })
+        .collect();
+    let mut frame = EphemerisFrame::new();
+    let mut evaluator = CohortEvaluator::new();
+    let states0 = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame t0")
+        .to_vec();
+    let first = evaluator
+        .evaluate(&ephemeris, &states0, &positions, config)
+        .expect("first eval builds window");
+    assert!(!first.reused_window);
+    // Sources moved for 10 s; the window must hold with a tighter achieved
+    // bound, and stay within budget against the exact field at t1.
+    let states1 = frame
+        .evaluate(&ephemeris, SimTime(10.0))
+        .expect("frame t1")
+        .to_vec();
+    let second = evaluator
+        .evaluate(&ephemeris, &states1, &positions, config)
+        .expect("second eval reuses window");
+    let reused = second.reused_window;
+    let computed: Vec<_> = second.accelerations.to_vec();
+    assert!(reused);
+    assert_eq!(evaluator.reuses, 1);
+    let exact = field
+        .accelerations(&positions, SimTime(10.0))
+        .expect("exact batch");
+    for (computed, reference) in computed.iter().zip(&exact) {
+        let measured = (*computed - *reference).length();
+        assert!(
+            measured <= config.error_budget_mps2,
+            "reused window error {measured:e} escapes the budget"
+        );
+    }
+}
+
+#[test]
+fn window_rebuilds_when_group_leaves_ball() {
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let config = CohortConfig {
+        error_budget_mps2: 1.0e-9,
+        ..Default::default()
+    };
+    let mut frame = EphemerisFrame::new();
+    let states = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame states")
+        .to_vec();
+    let mut evaluator = CohortEvaluator::new();
+    let near: Vec<_> = (0..16)
+        .map(|index| DVec3::new(3.0e9 + index as f64 * 1_000.0, 0.0, 0.0))
+        .collect();
+    let first = evaluator
+        .evaluate(&ephemeris, &states, &near, config)
+        .expect("first eval");
+    assert!(!first.reused_window);
+    // Teleport the group across the system: the old ball cannot cover it,
+    // so the evaluator must rebuild — and stay correct.
+    let far: Vec<_> = (0..16)
+        .map(|index| DVec3::new(-4.0e9 - index as f64 * 1_000.0, 0.0, 0.0))
+        .collect();
+    let second = evaluator
+        .evaluate(&ephemeris, &states, &far, config)
+        .expect("rebuild eval");
+    let reused = second.reused_window;
+    let computed: Vec<_> = second.accelerations.to_vec();
+    assert!(!reused);
+    assert_eq!(evaluator.rebuilds, 2);
+    let exact = field.accelerations(&far, SimTime::EPOCH).expect("exact");
+    for (computed, reference) in computed.iter().zip(&exact) {
+        assert!((*computed - *reference).length() <= config.error_budget_mps2);
+    }
+}
+
+#[test]
+fn classify_routes_near_host_to_exact() {
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let mut frame = EphemerisFrame::new();
+    let states = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame states");
+    // Ball around the secondary: it is inside, so it must be exact.
+    let secondary = states[2].position_inertial;
+    let group: Vec<_> = (0..8)
+        .map(|index| secondary + DVec3::new(index as f64 * 100_000.0, 0.0, 0.0))
+        .collect();
+    let patch =
+        compile_patch(&ephemeris, states, &group, CohortConfig::default()).expect("patch compiles");
+    let exact_ids: Vec<_> = patch.exact.iter().map(|(body, _)| *body).collect();
+    assert!(
+        exact_ids.contains(&BodyId(2)),
+        "secondary must be exact-near, got {exact_ids:?}"
+    );
+}
+
+#[test]
+fn evaluator_telemetry_sane_on_real_system() {
+    let config_toml: SystemConfig =
+        toml::from_str(include_str!("../../../data/system.toml")).expect("system config");
+    let ephemeris = config_toml.bake().expect("baked system");
+    let home = ephemeris
+        .body_state(ephemeris.body_id("thessa").unwrap(), SimTime::EPOCH)
+        .unwrap();
+    let center = home.position_inertial + DVec3::Z * 1e9;
+    let positions: Vec<_> = (0..300)
+        .map(|index| {
+            let i = index as f64;
+            center
+                + DVec3::new(
+                    (i * 12.9898).sin() * 50_000.0,
+                    (i * 78.233).sin() * 50_000.0,
+                    (i * 37.719).sin() * 50_000.0,
+                )
+        })
+        .collect();
+    let config = CohortConfig {
+        error_budget_mps2: 1.0e-9,
+        ..Default::default()
+    };
+    let mut frame = EphemerisFrame::new();
+    let states = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame")
+        .to_vec();
+    let mut evaluator = CohortEvaluator::new();
+    let first = evaluator
+        .evaluate(&ephemeris, &states, &positions, config)
+        .expect("first");
+    let (reused, cohorts, splits, bound, exact, radius) = (
+        first.reused_window,
+        first.cohort_count,
+        first.split_count,
+        first.error_bound_mps2,
+        first.exact_terms,
+        first.max_radius_m,
+    );
+    assert!(!reused);
+    assert_eq!((cohorts, splits), (1, 0));
+    assert!(
+        bound <= config.error_budget_mps2,
+        "bound {bound:e} exceeds budget"
+    );
+    assert!(
+        exact <= 300 * 22,
+        "exact terms {exact} exceed 300 targets x 22 sources"
+    );
+    assert!(
+        radius < 1.0e6,
+        "radius {radius} insane for a +-50 km convoy"
+    );
+    let second = evaluator
+        .evaluate(&ephemeris, &states, &positions, config)
+        .expect("second");
+    assert!(second.reused_window, "identical tick must reuse");
+}
+
+#[test]
+fn window_reuse_holds_while_sources_drift_slowly() {
+    // Controlled dynamics (binary period ~3e5 s, 10 s ticks): source drift
+    // per tick is metres, so the temporal bound holds and nearly every tick
+    // reuses the window — each one verified against exact. (On the real
+    // system at 0.5 s ticks, fast-moon motion alone shifts the far field by
+    // ~1e-8..1e-6 per tick, so a 1e-9 window correctly rebuilds instead.)
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let config = CohortConfig {
+        error_budget_mps2: 1.0e-9,
+        ..Default::default()
+    };
+    let center = DVec3::new(3.0e9, 1.0e9, 0.0);
+    let mut positions: Vec<_> = (0..32)
+        .map(|index| {
+            let i = index as f64;
+            center + DVec3::new((i * 12.9898).sin(), (i * 78.233).sin(), 0.0) * 20_000.0
+        })
+        .collect();
+    let mut velocities: Vec<_> = (0..32)
+        .map(|index| {
+            let i = index as f64;
+            DVec3::new((i * 3.17).sin(), (i * 5.71).sin(), 0.0) * 2.0
+        })
+        .collect();
+    let mut frame = EphemerisFrame::new();
+    let mut evaluator = CohortEvaluator::new();
+    for tick in 0..50 {
+        let time = SimTime(tick as f64 * 10.0);
+        let states = frame.evaluate(&ephemeris, time).expect("frame").to_vec();
+        let eval = evaluator
+            .evaluate(&ephemeris, &states, &positions, config)
+            .expect("eval");
+        let exact = field.accelerations(&positions, time).expect("exact");
+        for (computed, reference) in eval.accelerations.iter().zip(&exact) {
+            assert!((*computed - *reference).length() <= config.error_budget_mps2);
+        }
+        let accels = eval.accelerations.to_vec();
+        for (index, acceleration) in accels.iter().enumerate() {
+            velocities[index] += *acceleration * 10.0;
+            positions[index] += velocities[index] * 10.0;
+        }
+    }
+    // Temporal staleness grows linearly to the budget, then a rebuild resets
+    // the sawtooth: most ticks reuse, but the bound must actually bite.
+    assert!(
+        evaluator.reuses >= 35,
+        "slow drift must reuse most ticks, got {}",
+        evaluator.reuses
+    );
+    assert!(
+        evaluator.rebuilds >= 5,
+        "temporal bound must bite periodically, got {}",
+        evaluator.rebuilds
+    );
+}
+
+#[test]
 fn explicit_state_vector_keeps_frame_label() {
     let state = StateVector::new(
         DVec3::new(1.0, 2.0, 3.0),

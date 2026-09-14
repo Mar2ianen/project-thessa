@@ -62,3 +62,11 @@ harness = false
 [[bench]]
 name = "planner_batch"
 harness = false
+
+[[bench]]
+name = "fleet_validate"
+harness = false
+
+[[bench]]
+name = "affine_prop"
+harness = false

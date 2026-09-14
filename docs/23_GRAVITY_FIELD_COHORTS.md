@@ -827,6 +827,12 @@ infallible kernel + finite-scan).
 
 ## 22. Добивка: шаги 5, 10, 12, 13 и acceptance §20
 
+> **Historical first-pass measurements — superseded by §23.** This section
+> records the state after the first implementation round (par-dispatch
+> kernels, `6.9e6 m` near-body anchor, per-node tree gate). §23 re-measures
+> everything after the review fixes (serial kernels, real low orbits,
+> remaining-budget tree); where the two disagree, §23 wins.
+
 ### Шаг 5 — квадруполь: не justified (измерено)
 
 Opening pressure монополя на реальной системе (22 источника, 24 узла):
@@ -901,7 +907,11 @@ round-trip (позиции+состояния туда, ускорения об�
 семь пунктов — все приняты:
 
 - P1/benchmark: `6.9e6 m` — это ~3700 км над Thessa (R = 3200 км), не
-  низкая орбита. Якоря заменены на `radius_m + alt`, трио 100/300/1000 км.
+  низкая орбита. Якоря заменены на `radius_m + alt`. Первое трио
+  (100/300/1000 км) оказалось ниже declared-vacuum cutoff (~395 км при
+  1.2 бар и 0.5 g: H ~= 17 км) — то есть в атмосфере, где драг на порядки
+  превышает пиняемый гравитационный бюджет; заменено на 500/750/1000 км
+  с ~6 H запаса (см. обоснование в бенче).
 - P1/perf: inner Rayon удалён из `accelerations_from_frame` и
   `eval_patch_batch` — kernels строго serial; parallelism только уровнем
   выше (fleets/cohorts/jobs). Замер подтверждает: framed/cohort
@@ -926,27 +936,79 @@ round-trip (позиции+состояния туда, ускорения об�
 
 ```text
 case            direct 1T   direct 20T  framed   cohort   vs best-direct  vs framed  div
-deep x128       23.7 s      —           0.40 s   0.159 s  ~25x (*)        2.5x       2.8 см
-deep x300       55.8 s      9.24 s      0.79 s   0.190 s  50x             4.2x       6.0 см
-deep x1000      184.8 s     —           2.41 s   0.407 s  ~75x (*)        5.9x       6.3 см
-low100km x300   55.5 s      9.25 s      0.79 s   0.302 s  30x             2.6x       2.3 м
-low300km x300   55.5 s      9.36 s      0.81 s   0.299 s  31x             2.7x       0.98 м
-low1000km x300  55.6 s      8.97 s      0.78 s   0.309 s  28x             2.5x       0.54 м
+deep x128       23.7 s      —           0.39 s   0.150 s  ~25x (*)        2.6x       2.8 см
+deep x300       55.9 s      9.28 s      0.80 s   0.170 s  55x             4.7x       6.0 см
+deep x1000      185.9 s     —           2.45 s   0.367 s  ~85x (*)        6.7x       6.3 см
+low500km x300   56.9 s      9.29 s      0.81 s   0.335 s  28x             2.4x       0.97 м
+low750km x300   56.9 s      9.04 s      0.80 s   0.329 s  27x             2.4x       0.77 м
+low1000km x300  56.6 s      9.14 s      0.80 s   0.334 s  27x             2.4x       0.54 м
 ```
 
 (*) direct на 20T измерен только для x300 (~6x vs 1T); для x128/x1000
 оценка делением. Первая колонка — выигрыш против старого алгоритма,
 вторая — цена именно новой математики относительно нормального exact.
 
-Низкие орбиты: exact-near pressure 3.1–3.4/22 (против 0 в deep space),
-splits тысячи, reuse 26–34%, группа разносится до ~1800 км — и всё равно
-2.5–2.7x vs framed при дивергенции 0.5–2.3 м за 20 000 с.
+Низкие орбиты: exact-near pressure 3.1–3.2/22 (против 0 в deep space),
+splits тысячи, reuse 26–31%, группа разносится до ~1500 км — и всё равно
+2.4x vs framed при дивергенции 0.5–1.0 м за 20 000 с.
 
-Планировщик serial-vs-serial: x1000 — 8.4x (7 нс/кандидат), x10000 —
-7.5–8x. Single-tick флок: cohort 15–22 нс/таргет deep/low при 1–2 exact.
+Планировщик serial-vs-serial, медианы из 5: x1000 — 9–14x
+(4–6 нс/кандидат), x10000 — 8–16x. Single-tick флок: cohort 14–27 нс/таргет
+deep/low при 0–2 exact. Steady-tick эвалуатора (256 таргетов, окно держит):
+1.35 мкс/тик, 5.3 нс/таргет.
 
 Вывод про parallelism обновлён и усилен: kernels serial
 by construction (измерение применено в реализации, а не только в доке);
 масштабирование — coarse задачами. Точка crossover для возврата
 внутреннего Rayon не найдена до 10k таргетов — single-thread cohort тик
 x1000 занимает 10 мкс.
+
+---
+
+## 24. Analytic frozen-patch propagation: verification
+
+Companion note `thessa_affine_gravity_analytic_propagation.md` (STM /
+eigenmode propagation inside a frozen affine patch) verified by
+implementation (`AffinePropagator`: Jacobi eigensolver, per-mode closed
+form, Taylor branch at `|λ|dt² < 1e-8`, overflow backstop at `σdt > 50`).
+
+Math cross-checks (proved by hand, pinned by tests):
+
+- tidal tensor symmetric (matches `tidal_tensor` assembly) and traceless
+  (`|tr| <= 1e-9` on a real patch) — vacuum dynamics is always a saddle,
+  never pure oscillation; a hyperbolic direction must exist (asserted);
+- absolute form `x'' = Jx + c` subsumes the relative STM form (`c = 0`);
+  no `J^-1` anywhere (singular in general) — per-mode particulars instead;
+- eigensolve deterministic (fixed 12 sweeps, descending sort, sign
+  canonicalization): same input, bitwise same basis.
+
+Accuracy (acceptance §16 of the note):
+
+1. Oracle: STM vs converged RK4 (h = 0.01 s) on a frozen mixed-sign field,
+   three trajectories — agreement 1e-9 relative. ✅
+2. Real far-only deep-space patch, analytic segments vs exact RK4 with
+   per-stage frames (60/600/3600 s): divergence 0.099 м / 99 м / 21 км
+   vs posted `affine_segment_bound` 0.59 м / 622 м / 183 км — margin
+   x6–x9, stable across two segment decades. ✅
+3. Throughput (`affine_prop` bench): 7 нс/кандидат vs Verlet500 3.5 мкс
+   (x500) and RK4-100 1.8 мкс (x260) at x1000; single analytic eval
+   40–150 нс vs exact-RK4 segment 0.8–56 мс. ✅
+4. Planner integration: no planner exists yet (same caveat as §12) —
+   interface ready (`compile`/`coefficients`/`propagate`), finalists
+   revalidatable by the untouched exact path. ⏳
+5. No class shortcuts (pure eigenmode math), CPU-only. ✅
+
+Boundary behavior is fail-open, not silent: expiry returns INFINITY as
+the rebuild signal (asserted at 10-hour excursion); patches with
+exact-near sources refuse analytic propagation
+(`AnalyticNeedsFarField`) instead of dropping point-mass terms; the raw
+single-target evaluator is crate-private so a frozen patch cannot be
+paired with foreign-epoch states through public API (only
+`CohortEvaluator` enforces the envelope per tick).
+
+Two verification scars worth keeping: the first "honest" reference
+(symplectic Euler 0.5 s) carried ~1e-3 m of its own step error and
+looked like a bound violation until replaced by per-stage-frame RK4;
+and the Taylor test reference was first-order in velocity while the
+branch is second-order — both times the test oracle was weaker than the
+code under test, both times fixed on the oracle side.

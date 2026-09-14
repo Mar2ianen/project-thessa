@@ -63,7 +63,7 @@ fn bench_gravity_scenario(
         let frame_per_tick = started.elapsed() / frame_iters;
 
         // (b) direct path: per-target accumulation + per-target lookups.
-        let iters = 10;
+        let iters = 25;
         let started = Instant::now();
         for _ in 0..iters {
             let out = field
@@ -111,11 +111,12 @@ fn bench_gravity_scenario(
         let cohort_per_tick = started.elapsed() / iters as u32;
 
         println!(
-            "{name} x{count}: frame {frame_per_tick:?}/tick | direct {direct_per_tick:?}/tick ({:.1} ns/target) | framed {framed_per_tick:?}/tick ({:.1} ns/target) | cohort {cohort_per_tick:?}/tick ({:.1} ns/target, {cohorts} cohorts, exact {:.1}/22)",
+            "{name} x{count}: frame {frame_per_tick:?}/tick | direct {direct_per_tick:?}/tick ({:.1} ns/target) | framed {framed_per_tick:?}/tick ({:.1} ns/target) | cohort {cohort_per_tick:?}/tick ({:.1} ns/target, {cohorts} cohorts, exact {:.1}/{})",
             direct_per_tick.as_secs_f64() * 1e9 / count as f64,
             framed_per_tick.as_secs_f64() * 1e9 / count as f64,
             cohort_per_tick.as_secs_f64() * 1e9 / count as f64,
             exact_terms as f64 / count as f64,
+            field.source_count(),
         );
 
         // (e) tree opening pressure (doc 23 step 5 verdict input): serial
@@ -280,45 +281,45 @@ fn bench_simd_tail() {
     );
 }
 
-/// Micro: sequential cost of one patch evaluation (affine + exact-near) vs
-/// one full 22-term framed accumulation — isolates per-target math from
-/// Rayon dispatch / allocation overhead of the batch paths.
+/// Micro: steady-tick cost of a persistent evaluator (classify + shared
+/// affine batch over 256 targets, same states every call so the window
+/// holds) vs one full 22-term exact accumulation. Raw per-eval timing is
+/// deliberately unavailable outside the crate (single-tick contract); this
+/// measures the honest production shape instead.
 fn bench_patch_micro(
     ephemeris: &BakedEphemeris,
     states: &[BodyState],
     field: &GravityField,
     time: SimTime,
 ) {
-    use thessa_sim_core::{compile_patch, evaluate_patch};
+    use thessa_sim_core::CohortEvaluator;
     let center = DVec3::new(1.0e9, 3.0e8, 0.0);
     let positions: Vec<_> = (0..256)
         .map(|index| center + DVec3::new(index as f64 * 200.0, 0.0, -(index as f64) * 100.0))
         .collect();
-    let patch = compile_patch(
-        ephemeris,
-        states,
-        &positions,
-        CohortConfig {
-            error_budget_mps2: 1.0e-9,
-            ..Default::default()
-        },
-    )
-    .expect("micro patch compiles");
-    println!(
-        "micro patch: radius {:.1} km, exact-near {}, bound {:e} m/s^2",
-        patch.radius_m / 1000.0,
-        patch.exact.len(),
-        patch.error_bound_mps2,
-    );
-    let iters: u32 = 200_000;
+    let config = CohortConfig {
+        error_budget_mps2: 1.0e-9,
+        ..Default::default()
+    };
+    let mut evaluator = CohortEvaluator::new();
+    let iters: u32 = 20_000;
     let started = Instant::now();
-    for iteration in 0..iters {
-        let position = positions[iteration as usize % positions.len()];
-        black_box(evaluate_patch(&patch, states, black_box(position)).expect("patch eval"));
+    for _ in 0..iters {
+        let eval = evaluator
+            .evaluate(
+                black_box(ephemeris),
+                black_box(states),
+                black_box(&positions),
+                config,
+            )
+            .expect("steady eval");
+        black_box(eval.accelerations.len());
     }
     println!(
-        "micro sequential evaluate_patch: {:?}/eval",
-        started.elapsed() / iters
+        "micro steady evaluator tick (256 targets, window holds): {:?}/tick ({:.1} ns/target, reuses {})",
+        started.elapsed() / iters,
+        started.elapsed().as_secs_f64() * 1e9 / iters as f64 / positions.len() as f64,
+        evaluator.reuses,
     );
     let started = Instant::now();
     for iteration in 0..iters {
@@ -355,16 +356,18 @@ fn main() {
         time,
         &counts,
     );
-
-    // Scenario 2: true low orbit — body radius plus 200 km altitude, not a
+    // Scenario 2: true low orbit — body radius plus 500 km altitude, not a
     // hard-coded 6.9e6 m (which is ~3700 km over Thessa's 3200 km radius).
+    // 500 km clears the ~395 km declared-vacuum cutoff (1.2 bar, 0.5 g:
+    // H ~= 17 km) with ~6 scale heights of margin; 100-300 km are still
+    // atmosphere (drag >> 1e-9 budget) and must not pose as ballistic.
     let thessa_radius_m = ephemeris
         .bodies
         .iter()
         .find(|body| body.name == "thessa")
         .expect("thessa body")
         .radius_m;
-    let low_orbit = home.position_inertial + DVec3::new(thessa_radius_m + 200_000.0, 0.0, 0.0);
+    let low_orbit = home.position_inertial + DVec3::new(thessa_radius_m + 500_000.0, 0.0, 0.0);
     bench_gravity_scenario(
         "low-orbit convoy",
         &field,

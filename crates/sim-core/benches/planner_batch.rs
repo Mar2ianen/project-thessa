@@ -47,43 +47,68 @@ fn main() {
 
     for count in [1_000, 10_000] {
         let positions = candidates(center, 200_000.0, count);
-        // Reference: exact framed batch, timed.
-        let started = Instant::now();
-        let exact = field
-            .accelerations_from_frame(black_box(&positions), black_box(&states))
-            .expect("exact batch");
-        let exact_elapsed = started.elapsed();
+        // Reference: exact framed batch, best of 5 (scheduler/frequency
+        // noise moves single passes noticeably at these micro scales).
+        let mut exact_runs = Vec::with_capacity(5);
+        let exact = loop {
+            let started = Instant::now();
+            let exact = field
+                .accelerations_from_frame(black_box(&positions), black_box(&states))
+                .expect("exact batch");
+            exact_runs.push(started.elapsed());
+            if exact_runs.len() == 5 {
+                break exact;
+            }
+        };
+        exact_runs.sort();
+        let exact_elapsed = exact_runs[2];
         for budget in [1.0e-6, 1.0e-9] {
             let config = CohortConfig {
                 error_budget_mps2: budget,
                 ..Default::default()
             };
-            let mut evaluator = CohortEvaluator::new();
-            let started = Instant::now();
-            let eval = evaluator
-                .evaluate(
-                    black_box(&ephemeris),
-                    black_box(&states),
-                    black_box(&positions),
-                    config,
-                )
-                .expect("candidate batch");
-            let elapsed = started.elapsed();
-            let mut max_error = 0.0_f64;
-            for (computed, reference) in eval.accelerations.iter().zip(&exact) {
-                max_error = max_error.max((*computed - *reference).length());
+            // Median of 5 fresh-evaluator passes (same fixed states, so the
+            // window holds after the first compile inside each pass).
+            let mut runs = Vec::with_capacity(5);
+            for _ in 0..5 {
+                let mut evaluator = CohortEvaluator::new();
+                let started = Instant::now();
+                let eval = evaluator
+                    .evaluate(
+                        black_box(&ephemeris),
+                        black_box(&states),
+                        black_box(&positions),
+                        config,
+                    )
+                    .expect("candidate batch");
+                let elapsed = started.elapsed();
+                let mut max_error = 0.0_f64;
+                for (computed, reference) in eval.accelerations.iter().zip(&exact) {
+                    max_error = max_error.max((*computed - *reference).length());
+                }
+                assert!(
+                    max_error <= eval.error_bound_mps2 * (1.0 + 1.0e-6),
+                    "candidate error {max_error:e} escapes posted {:e}",
+                    eval.error_bound_mps2,
+                );
+                runs.push((
+                    elapsed,
+                    max_error,
+                    eval.error_bound_mps2,
+                    eval.cohort_count,
+                    eval.split_count,
+                ));
             }
-            assert!(
-                max_error <= eval.error_bound_mps2 * (1.0 + 1.0e-6),
-                "candidate error {max_error:e} escapes posted {:e}",
-                eval.error_bound_mps2,
-            );
+            runs.sort_by_key(|run| run.0);
+            let median = runs[2];
+            let (elapsed, max_error, posted, cohorts, splits) =
+                (median.0, median.1, median.2, median.3, median.4);
             println!(
                 "planner x{count} budget {budget:e}: shared patch {elapsed:?} ({:.1} ns/candidate, {} cohorts, {} splits, posted {:e}) vs exact {exact_elapsed:?} (x{:.1}) | max error {max_error:e} m/s^2",
                 elapsed.as_secs_f64() * 1e9 / count as f64,
-                eval.cohort_count,
-                eval.split_count,
-                eval.error_bound_mps2,
+                cohorts,
+                splits,
+                posted,
                 exact_elapsed.as_secs_f64() / elapsed.as_secs_f64(),
             );
         }

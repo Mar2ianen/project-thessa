@@ -703,6 +703,17 @@ The current code slice provides:
   O(dirty set). Decode walks root-to-leaf per leaf with bitfield extracts.
   Split/merge themselves are single bit writes. That is exactly the cost
   our sparse commit sidesteps, and the measured gaps match the asymptotics;
+- a packed single-threaded tree (`rcbt-core::packed::PackedTree`, depth cap
+  20 from the 8 MiB dense-sums footprint) with identical observable
+  semantics to `Tree`, differentially tested against it on refine + sparse
+  + invalid-op sequences. It closes the loop the BTreeSet tree left open:
+  refine d12-d18 at x22-x59 over `libcbt` (0.0-2.6 ms vs 1.2-150 ms),
+  decode-all at x26, sparse k-sweep at x7-x1950 with parity on every point.
+  The upstream baseline is beaten on CPU at every measured workload; no
+  SIMD was needed — profiling showed pointer chasing and allocation, not
+  vectorizable ALU, and per the repo rule (§10) no intrinsics were forced.
+  The cap is explicit: deeper trees stay on `Tree`, the crossover bench
+  routes by measured cost;
 - a dirty-op sweep on a fixed 262k-leaf tree
   (`cargo bench -p thessa-rcbt-wgpu --bench crossover`): T_cpu(k),
   T_sparse(k), T_gpu(k) for k = 4..16384 with leaf-set parity on every

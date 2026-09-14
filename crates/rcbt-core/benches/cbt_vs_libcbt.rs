@@ -12,6 +12,7 @@
 
 use std::{hint::black_box, time::Instant};
 
+use thessa_rcbt_core::packed::PackedTree;
 use thessa_rcbt_core::{
     CandidateAction, FrameBudget, LeafCandidate, Node, Tree, Update, WorkClass, plan_frame,
 };
@@ -175,6 +176,28 @@ fn apply_native(tree: &mut Tree, batches: &[Vec<Op>]) -> usize {
     ops
 }
 
+fn apply_packed(tree: &mut PackedTree, batches: &[Vec<Op>]) -> usize {
+    let mut ops = 0;
+    for batch in batches {
+        for op in batch {
+            match *op {
+                Op::Split { id, depth } => {
+                    tree.split(node(id, depth)).unwrap();
+                }
+                Op::Merge {
+                    parent_id,
+                    parent_depth,
+                } => {
+                    tree.merge(node(parent_id, parent_depth)).unwrap();
+                }
+            }
+            ops += 1;
+        }
+        black_box(tree.leaf_count());
+    }
+    ops
+}
+
 trait Replay {
     fn split_op(&mut self, id: u64, depth: u8);
     fn merge_op(&mut self, parent_id: u64, parent_depth: u8);
@@ -267,7 +290,17 @@ fn main() {
         apply_libcbt(&mut ffi, &batches);
         let ffi_ms = started.elapsed().as_secs_f64() * 1000.0;
 
+        let mut packed = PackedTree::new(depth).unwrap();
+        let started = Instant::now();
+        apply_packed(&mut packed, &batches);
+        let packed_ms = started.elapsed().as_secs_f64() * 1000.0;
+
         check_parity(&native, &ffi, &format!("refine/{depth}"));
+        assert_eq!(
+            packed.leaves(),
+            native.leaves(),
+            "packed refine/{depth} parity"
+        );
         let name = format!("refine/d{depth}");
         report(
             &name,
@@ -277,9 +310,20 @@ fn main() {
             native_ms,
         );
         report(&name, "libcbt-c", ffi.node_count(), total_ops, ffi_ms);
+        report(
+            &name,
+            "rust-packed",
+            packed.leaf_count(),
+            total_ops,
+            packed_ms,
+        );
         println!(
             "| {name} | speedup(native/libcbt) x{:.2} |",
             ffi_ms / native_ms.max(1e-9)
+        );
+        println!(
+            "| {name} | speedup(packed/libcbt) x{:.2} |",
+            ffi_ms / packed_ms.max(1e-9)
         );
     }
 
@@ -453,6 +497,17 @@ fn main() {
         black_box(native_leaves.len());
         let native_ms = started.elapsed().as_secs_f64() * 1000.0;
 
+        let packed_tree = PackedTree::at_depth(depth, depth).unwrap();
+        black_box(packed_tree.leaf_count());
+        let started = Instant::now();
+        let packed_leaves = packed_tree.leaves();
+        black_box(packed_leaves.len());
+        let packed_ms = started.elapsed().as_secs_f64() * 1000.0;
+        assert_eq!(
+            packed_leaves, native_leaves,
+            "packed decode parity d{depth}"
+        );
+
         let ffi = LibcbtTree::at_depth(depth, depth).unwrap();
         let started = Instant::now();
         let ffi_leaves = ffi.leaves();
@@ -480,9 +535,20 @@ fn main() {
             ffi_leaves.len(),
             ffi_ms,
         );
+        report(
+            &name,
+            "rust-packed",
+            packed_leaves.len(),
+            packed_leaves.len(),
+            packed_ms,
+        );
         println!(
             "| {name} | speedup(native/libcbt) x{:.2} |",
             ffi_ms / native_ms.max(1e-9)
+        );
+        println!(
+            "| {name} | speedup(packed/libcbt) x{:.2} |",
+            ffi_ms / packed_ms.max(1e-9)
         );
         let _ = &mut native;
     }

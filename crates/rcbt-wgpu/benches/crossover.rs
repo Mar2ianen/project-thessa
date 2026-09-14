@@ -12,6 +12,7 @@
 
 use std::{hint::black_box, time::Instant};
 
+use thessa_rcbt_core::packed::PackedTree;
 use thessa_rcbt_core::{Node, Tree};
 use thessa_rcbt_ffi::LibcbtTree;
 use thessa_rcbt_wgpu::bench_support::{
@@ -179,6 +180,29 @@ fn main() {
         let got_cpu: Vec<(u64, u8)> = tree.leaves().iter().map(|l| (l.id(), l.depth())).collect();
         assert_eq!(got_cpu, expected, "cpu k={k} parity");
 
+        // CPU packed: same ops on the dense bitfield tree (8 MiB working
+        // set, no allocation or pointer chasing in the hot path).
+        let mut packed_tree = PackedTree::at_depth(MAX_DEPTH, BASE_DEPTH).unwrap();
+        let t = Instant::now();
+        for (id, depth, kind) in &ops {
+            match kind {
+                0 => {
+                    packed_tree.split(node(*id, *depth)).unwrap();
+                }
+                _ => {
+                    packed_tree.merge(node(*id, *depth)).unwrap();
+                }
+            }
+        }
+        black_box(packed_tree.leaf_count());
+        let packed_ms = t.elapsed().as_secs_f64() * 1000.0;
+        let got_packed: Vec<(u64, u8)> = packed_tree
+            .leaves()
+            .iter()
+            .map(|l| (l.id(), l.depth()))
+            .collect();
+        assert_eq!(got_packed, expected, "packed k={k} parity");
+
         // libcbt sparse: fresh full heap, batch FFI + reduce-only.
         let mut sparse = LibcbtTree::new(MAX_DEPTH).unwrap();
         sparse.reset_to_depth(BASE_DEPTH);
@@ -238,6 +262,7 @@ fn main() {
         assert_eq!(verify, expected, "gpu-commit k={k} parity");
 
         println!("| k={k} | cpu-native | {cpu_ms:.3} | OK |");
+        println!("| k={k} | cpu-packed | {packed_ms:.3} | OK |");
         println!("| k={k} | libcbt-sparse | {sparse_ms:.3} | OK |");
         println!("| k={k} | gpu-full | {gpu_ms:.3} | OK |");
         println!("| k={k} | gpu-commit | {commit_ms:.3} | OK |");
@@ -318,6 +343,24 @@ fn main() {
     driver.reset_full(15).unwrap();
     let dense: Vec<(u64, u8, u8)> = driver.leaves().iter().map(|(id, d)| (*id, *d, 0)).collect();
     assert_eq!(dense.len(), 32768);
+    // CPU packed on the identical dense batch (fresh full-15 tree).
+    {
+        let mut pt = PackedTree::at_depth(MAX_DEPTH, 15).unwrap();
+        let t = Instant::now();
+        for (id, depth, _) in &dense {
+            pt.split(node(*id, *depth)).unwrap();
+        }
+        black_box(pt.leaf_count());
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        let got: Vec<(u64, u8)> = pt.leaves().iter().map(|l| (l.id(), l.depth())).collect();
+        let mut m = CpuMirror::new(MAX_DEPTH).unwrap();
+        m.reset_full(15).unwrap();
+        for (id, _, _) in &dense {
+            m.split(*id).unwrap();
+        }
+        assert_eq!(got, m.leaves(), "dense packed parity");
+        println!("| dense-32k | cpu-packed | {ms:.3} | OK |");
+    }
     let dense_words = pack_ops(&dense);
     let dense_expected = {
         let mut m = CpuMirror::new(MAX_DEPTH).unwrap();

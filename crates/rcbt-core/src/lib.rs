@@ -15,6 +15,8 @@ pub const MAX_SUPPORTED_DEPTH: u8 = 58;
 const ENCODING_VERSION: u8 = 1;
 const PAGE_ENCODING_VERSION: u8 = 1;
 
+pub mod packed;
+
 /// A heap-addressed binary-tree node.
 ///
 /// The root has id `1` and depth `0`; children are `id << 1` and

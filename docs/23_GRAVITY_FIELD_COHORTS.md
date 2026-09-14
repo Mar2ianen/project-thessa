@@ -965,50 +965,14 @@ x1000 занимает 10 мкс.
 
 ---
 
-## 24. Analytic frozen-patch propagation: verification
+## 24. Analytic frozen-patch propagation
 
-Companion note `thessa_affine_gravity_analytic_propagation.md` (STM /
-eigenmode propagation inside a frozen affine patch) verified by
-implementation (`AffinePropagator`: Jacobi eigensolver, per-mode closed
-form, Taylor branch at `|λ|dt² < 1e-8`, overflow backstop at `σdt > 50`).
-
-Math cross-checks (proved by hand, pinned by tests):
-
-- tidal tensor symmetric (matches `tidal_tensor` assembly) and traceless
-  (`|tr| <= 1e-9` on a real patch) — vacuum dynamics is always a saddle,
-  never pure oscillation; a hyperbolic direction must exist (asserted);
-- absolute form `x'' = Jx + c` subsumes the relative STM form (`c = 0`);
-  no `J^-1` anywhere (singular in general) — per-mode particulars instead;
-- eigensolve deterministic (fixed 12 sweeps, descending sort, sign
-  canonicalization): same input, bitwise same basis.
-
-Accuracy (acceptance §16 of the note):
-
-1. Oracle: STM vs converged RK4 (h = 0.01 s) on a frozen mixed-sign field,
-   three trajectories — agreement 1e-9 relative. ✅
-2. Real far-only deep-space patch, analytic segments vs exact RK4 with
-   per-stage frames (60/600/3600 s): divergence 0.099 м / 99 м / 21 км
-   vs posted `affine_segment_bound` 0.59 м / 622 м / 183 км — margin
-   x6–x9, stable across two segment decades. ✅
-3. Throughput (`affine_prop` bench): 7 нс/кандидат vs Verlet500 3.5 мкс
-   (x500) and RK4-100 1.8 мкс (x260) at x1000; single analytic eval
-   40–150 нс vs exact-RK4 segment 0.8–56 мс. ✅
-4. Planner integration: no planner exists yet (same caveat as §12) —
-   interface ready (`compile`/`coefficients`/`propagate`), finalists
-   revalidatable by the untouched exact path. ⏳
-5. No class shortcuts (pure eigenmode math), CPU-only. ✅
-
-Boundary behavior is fail-open, not silent: expiry returns INFINITY as
-the rebuild signal (asserted at 10-hour excursion); patches with
-exact-near sources refuse analytic propagation
-(`AnalyticNeedsFarField`) instead of dropping point-mass terms; the raw
-single-target evaluator is crate-private so a frozen patch cannot be
-paired with foreign-epoch states through public API (only
-`CohortEvaluator` enforces the envelope per tick).
-
-Two verification scars worth keeping: the first "honest" reference
-(symplectic Euler 0.5 s) carried ~1e-3 m of its own step error and
-looked like a bound violation until replaced by per-stage-frame RK4;
-and the Taylor test reference was first-order in velocity while the
-branch is second-order — both times the test oracle was weaker than the
-code under test, both times fixed on the oracle side.
+Moved to its own note: `docs/24_ANALYTIC_AFFINE_PROPAGATION.md` (STM /
+eigenmode propagation inside a frozen affine patch, §1–§17) with the
+verification record appended as §18 (implementation
+`AffinePropagator` + `affine_segment_bound`, oracle agreement 1e-9,
+real-patch margins x6–x9 over 60/600/3600 s segments, 7 нс/кандидат vs
+Verlet500/RK4, fail-open boundaries). Single-line summary: the accuracy
+idea holds — frozen affine propagation is exact to fp, and real-patch
+divergence stays inside the posted bound with a stable conservative
+margin.

@@ -899,6 +899,15 @@ sign canonicalization — same input gives bitwise the same basis
 Taylor branch at `|λ|dt² < 1e-8` pinned against an independent series;
 `σdt > 50` returns `IntervalTooLong`.
 
+Formulation trap, caught by the convergence test (do not regress):
+`propagate()` takes anchor-relative displacement and returns a
+displacement, so its constant is `g0` — never `g0 - J*anchor` (that
+constant belongs to the origin-anchored form and silently accelerates
+in the wrong direction: exactly `2g0` off for central geometry,
+quadratic in time). The API doc states the pairing explicitly, and the
+budget-convergence test (tighter budget must land closer) fails on any
+mixing of the two forms.
+
 Two verification scars worth keeping: the first "honest" reference
 (symplectic Euler 0.5 s) carried ~1e-3 m of its own step error and
 looked like a bound violation until replaced by per-stage-frame RK4;

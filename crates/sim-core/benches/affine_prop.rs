@@ -130,20 +130,21 @@ fn bench_b() {
         .expect("patch compiles");
     assert!(patch.exact.is_empty());
     let propagator = AffinePropagator::compile(patch.jacobian).expect("propagator");
-    let constant = patch.g0 - patch.jacobian * center;
+    // Anchor formulation: constant is g0 itself (see propagate docs).
     let velocity = DVec3::new(0.0, 5_000.0, 100.0);
     for duration in [60.0, 600.0, 3_600.0] {
         let coeffs = propagator.coefficients(duration).expect("coeffs");
         let started = Instant::now();
-        let (analytic, _) = propagator.propagate(&coeffs, center, velocity, constant);
+        let (delta, _) = propagator.propagate(&coeffs, DVec3::ZERO, velocity, patch.g0);
+        let analytic = center + delta;
         let analytic_elapsed = started.elapsed();
         let mut excursion = 0.0_f64;
         for quarter in 1..=4 {
             let sub = propagator
                 .coefficients(duration * quarter as f64 / 4.0)
                 .expect("sub coeffs");
-            let (point, _) = propagator.propagate(&sub, center, velocity, constant);
-            excursion = excursion.max((point - center).length());
+            let (sub_delta, _) = propagator.propagate(&sub, DVec3::ZERO, velocity, patch.g0);
+            excursion = excursion.max(sub_delta.length());
         }
         let field_bound = affine_segment_bound(&ephemeris, &states, &patch, excursion, duration)
             .expect("segment bound");

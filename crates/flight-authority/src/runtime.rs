@@ -401,8 +401,11 @@ impl FlightAuthority {
         ephemeris: &BakedEphemeris,
     ) {
         let up = DQuat::from_rotation_z(self.terrain_spin()) * DVec3::new(dir[0], -dir[2], dir[1]);
-        let north = (DVec3::Z - up * up.z).normalize();
-        let east = north.cross(up).normalize();
+        // Pole-safe: the old `(Z - up*up.z).normalize()` divides by ~0 when
+        // `up ≈ Z` (polar survey bookmark) and spawns NaN state. The shared
+        // helper switches reference axis near the poles; identical to the
+        // old basis elsewhere. Fallback is unreachable for unit `up`.
+        let (east, north) = surface_tangent_basis(up).unwrap_or((DVec3::X, DVec3::Y));
         let relative = up * (self.planet_radius_m + field.height_m(dir, 32.0).max(0.0) + 500.0);
         let body = ephemeris
             .body_state(self.reference_body, SimTime(self.flight_time_s))

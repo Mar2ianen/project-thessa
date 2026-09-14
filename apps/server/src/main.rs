@@ -8,9 +8,10 @@
 
 mod thread_bake;
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{Read, Write};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use glam::DVec3;
@@ -153,6 +154,8 @@ enum AutopilotEvent {
     Horizon,
     Node,
     Alarm,
+    Stage,
+    EngineReady,
 }
 
 impl AutopilotEvent {
@@ -162,6 +165,8 @@ impl AutopilotEvent {
             Self::Horizon => "horizon",
             Self::Node => "node",
             Self::Alarm => "alarm",
+            Self::Stage => "stage",
+            Self::EngineReady => "engine-ready",
         }
     }
 }
@@ -219,6 +224,11 @@ struct Sim {
     impact_obstacles: Option<ObstacleReport>,
     plan_runner: Option<TrajectoryPlanRunner>,
     clients: std::collections::HashMap<String, ClientVote>,
+    /// Connection-order pilot lease. The first registered client owns all
+    /// vehicle controls; on departure the lease moves to the earliest client
+    /// still connected, making transfer deterministic across transports.
+    pilot_owner: Option<String>,
+    client_order: Vec<String>,
     last_client_inputs: std::collections::HashMap<String, ClientInput>,
     autopilot_events: VecDeque<AutopilotEvent>,
     advanced_s: f64,
@@ -376,6 +386,8 @@ impl Sim {
             impact_obstacles: None,
             plan_runner: None,
             clients: std::collections::HashMap::new(),
+            pilot_owner: None,
+            client_order: Vec::new(),
             last_client_inputs: std::collections::HashMap::new(),
             autopilot_events: VecDeque::new(),
             advanced_s: 0.0,
@@ -386,18 +398,48 @@ impl Sim {
         })
     }
 
-    /// Register a pilot (handshake); idempotent reconnect refreshes.
+    /// Register a client (handshake); idempotent reconnects retain their
+    /// original connection-order position. The first client becomes pilot.
     fn register(&mut self, id: &str) {
-        self.clients.entry(id.to_string()).or_insert(ClientVote {
-            warp: 1.0,
-            paused: false,
-        });
+        if self.clients.contains_key(id) {
+            return;
+        }
+        self.clients.insert(
+            id.to_string(),
+            ClientVote {
+                warp: 1.0,
+                paused: false,
+            },
+        );
+        self.client_order.push(id.to_string());
+        if self.pilot_owner.is_none() {
+            self.pilot_owner = Some(id.to_string());
+            eprintln!("[server] pilot owner assigned: {id}");
+        }
     }
 
-    /// Drop a pilot's votes on disconnect.
+    fn is_pilot(&self, id: &str) -> bool {
+        self.pilot_owner.as_deref() == Some(id)
+    }
+
+    /// Drop a client's votes on disconnect. The caller cancels the host
+    /// scheduler before this method; changing ownership also clears all
+    /// stale vehicle control state.
     fn unregister(&mut self, id: &str) {
         self.clients.remove(id);
+        self.client_order.retain(|client| client != id);
         self.last_client_inputs.remove(id);
+        if self.is_pilot(id) {
+            self.cancel_autopilot_tasks();
+            self.clear_autopilot_controls();
+            self.authority.flight_error = None;
+            self.pilot_owner = self.client_order.first().cloned();
+            if let Some(owner) = &self.pilot_owner {
+                eprintln!("[server] pilot owner transferred: {id} -> {owner}");
+            } else {
+                eprintln!("[server] pilot owner released: {id}");
+            }
+        }
     }
 
     /// Consensual warp: the minimum vote wins.
@@ -425,6 +467,34 @@ impl Sim {
     fn apply_input(&mut self, id: &str, input: &ClientInput) -> bool {
         if !self.clients.contains_key(id) {
             return false;
+        }
+        if let Err(error) = input.validate() {
+            eprintln!("[server] rejected invalid input from {id}: {error}");
+            return false;
+        }
+        if !self.is_pilot(id) {
+            // Spectators can participate in shared warp/pause policy but can
+            // never alter flight controls or generate an edge command.
+            let mut force_snapshot = false;
+            for command in &input.commands {
+                match command {
+                    Command::SetWarp { factor } => {
+                        if let Some(vote) = self.clients.get_mut(id) {
+                            let warp = factor.clamp(0.0, MAX_WARP);
+                            force_snapshot |= vote.warp != warp;
+                            vote.warp = warp;
+                        }
+                    }
+                    Command::Pause { paused } => {
+                        if let Some(vote) = self.clients.get_mut(id) {
+                            force_snapshot |= vote.paused != *paused;
+                            vote.paused = *paused;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            return force_snapshot;
         }
         let mut force_snapshot = false;
         let previous = self
@@ -484,7 +554,11 @@ impl Sim {
                     }
                 }
                 // Slice semantics (matches the client): staging drives the
-                // engine cutoff for the single X-15 plant.
+                // engine cutoff for the single X-15 plant. Single-vehicle
+                // slice: no VehicleId branching yet (fleet/M5 future work).
+                // Emit domain events so `Wait(Event("stage"))` /
+                // `All(stage, engine-ready)` guards can resolve instead of
+                // parking forever.
                 Command::Stage => {
                     // PendingInput preserves multiple edge commands from
                     // separate frames. Each such frame used to cut off the
@@ -496,6 +570,10 @@ impl Sim {
                     }
                     engine_command_seen = true;
                     self.authority.engine_active = !self.authority.engine_active;
+                    self.autopilot_events.push_back(AutopilotEvent::Stage);
+                    if self.authority.engine_active {
+                        self.autopilot_events.push_back(AutopilotEvent::EngineReady);
+                    }
                     force_snapshot = true;
                 }
                 Command::Engine { active } => {
@@ -504,7 +582,11 @@ impl Sim {
                     }
                     engine_command_seen = true;
                     force_snapshot |= self.authority.engine_active != *active;
+                    let became_ready = *active && !self.authority.engine_active;
                     self.authority.engine_active = *active;
+                    if became_ready {
+                        self.autopilot_events.push_back(AutopilotEvent::EngineReady);
+                    }
                 }
                 Command::Pause { paused } => {
                     if let Some(vote) = self.clients.get_mut(id) {
@@ -528,16 +610,15 @@ impl Sim {
     }
 
     fn apply_guidance(&mut self, id: &str, input: &GuidanceInput) -> bool {
-        if !self.clients.contains_key(id) {
+        if !self.is_pilot(id) {
+            return false;
+        }
+        if let Err(error) = input.validate() {
+            eprintln!("[server] rejected invalid guidance from {id}: {error}");
             return false;
         }
         self.cancel_autopilot_tasks();
         self.clear_autopilot_controls();
-        if let Err(error) = input.validate() {
-            self.authority.flight_error = Some(format!("invalid guidance input: {error}"));
-            self.authority.stop_propulsion();
-            return true;
-        }
         self.apply_guidance_command(input.intent.clone(), input.propulsion)
     }
 
@@ -576,11 +657,12 @@ impl Sim {
         input: &AutopilotInput,
         host: &mut AutopilotHost,
     ) -> bool {
-        if !self.clients.contains_key(id) {
+        if !self.is_pilot(id) {
             return false;
         }
         if let Err(error) = input.validate() {
-            return self.fail_autopilot(error);
+            eprintln!("[server] rejected invalid autopilot from {id}: {error}");
+            return false;
         }
         match &input.command {
             AutopilotCommand::SubmitGraph { graph } => {
@@ -590,8 +672,7 @@ impl Sim {
             AutopilotCommand::ClearGraph => {
                 host.scheduler.cancel_all();
                 self.autopilot_graph = None;
-                self.graph_runner = None;
-                self.plan_runner = None;
+                self.cancel_autopilot_tasks();
                 self.clear_autopilot_controls();
                 true
             }
@@ -607,8 +688,7 @@ impl Sim {
                 .is_some_and(|runner| runner.deoptimize(*reason)),
             AutopilotCommand::SubmitPlan { plan } => self.start_plan(plan.clone(), host),
             AutopilotCommand::StartScript { source } => {
-                self.plan_runner = None;
-                self.graph_runner = None;
+                self.cancel_autopilot_tasks();
                 host.scheduler.cancel_all();
                 self.clear_autopilot_controls();
                 let now = SimTime(self.authority.flight_time_s);
@@ -670,19 +750,24 @@ impl Sim {
                     self.apply_guidance_command(intent, propulsion)
                 }
                 GraphControlAction::Demand { demand } => {
-                    let demand = FlightPolicy::default().constrain_demand(demand, true, true);
-                    if let Err(error) = demand.validate() {
+                    if let Err(error) = demand.validate_envelope() {
                         self.authority.flight_error = Some(error.to_string());
                         false
                     } else {
-                        self.guidance = None;
-                        self.plan_demand = Some(demand);
-                        self.control_mode = ControlMode::Direct;
-                        self.authority.control_input = DVec3::ZERO;
-                        self.authority.sas_enabled = false;
-                        self.authority
-                            .set_propulsion_target(demand.propulsion)
-                            .is_ok()
+                        let demand = FlightPolicy::default().constrain_demand(demand, true, true);
+                        if let Err(error) = demand.validate() {
+                            self.authority.flight_error = Some(error.to_string());
+                            false
+                        } else {
+                            self.guidance = None;
+                            self.plan_demand = Some(demand);
+                            self.control_mode = ControlMode::Direct;
+                            self.authority.control_input = DVec3::ZERO;
+                            self.authority.sas_enabled = false;
+                            self.authority
+                                .set_propulsion_target(demand.propulsion)
+                                .is_ok()
+                        }
                     }
                 }
             };
@@ -885,6 +970,9 @@ impl Sim {
                 Ok(true)
             }
             PlanAction::Burn { demand, .. } => {
+                demand
+                    .validate_envelope()
+                    .map_err(|error| error.to_string())?;
                 let demand = FlightPolicy::default().constrain_demand(demand, true, true);
                 let propulsion = demand.propulsion;
                 self.plan_demand = Some(demand);
@@ -913,6 +1001,12 @@ impl Sim {
     fn cancel_autopilot_tasks(&mut self) {
         self.plan_runner = None;
         self.graph_runner = None;
+        // The block's one-shot wait parking is only meaningful while its
+        // runner is alive. Reset it here so a later graph re-parks its
+        // waits instead of completing them immediately from stale state.
+        // (Single-pass runners execute each node once; true loop/retry
+        // repetition is still a missing Loop combinator, not this set.)
+        self.graph_block = NativeGraphBlock::default();
     }
 
     fn fail_autopilot(&mut self, error: impl Into<String>) -> bool {
@@ -942,6 +1036,9 @@ impl Sim {
                 }
             }
             self.poll_graph(None)?;
+            if self.plan_runner.is_some() {
+                self.poll_plan(None)?;
+            }
         } else {
             for event in events {
                 if !host.scheduler.is_empty() {
@@ -970,6 +1067,9 @@ impl Sim {
         [
             host.scheduler.next_time(),
             self.graph_runner.as_ref().and_then(GraphRunner::next_time),
+            self.plan_runner
+                .as_ref()
+                .and_then(|runner| runner.next_time()),
         ]
         .into_iter()
         .flatten()
@@ -1127,18 +1227,113 @@ fn place_in_circular_orbit(
     Ok(())
 }
 
-fn send_frame(
-    out: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
-    kind: u32,
-    message: &impl serde::Serialize,
-) {
-    match thessa_flight_net::encode_frame(kind, message) {
-        Ok(frame) => {
-            if out.send(frame).is_err() {
-                eprintln!("[server] stdout writer gone");
-            }
+const RELIABLE_OUTBOUND_CAPACITY: usize = 32;
+
+struct OutboundState {
+    reliable: VecDeque<Vec<u8>>,
+    latest_snapshot: Option<Vec<u8>>,
+    closed: bool,
+}
+
+/// Per-client outbound mailbox. Welcome and future control frames are
+/// bounded reliable messages; snapshots are a single latest-wins slot. The
+/// simulation thread only takes a short mutex and never waits for a socket.
+struct OutboundMailbox {
+    state: Mutex<OutboundState>,
+    blocking_wake: Condvar,
+    async_wake: tokio::sync::Notify,
+}
+
+impl OutboundMailbox {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(OutboundState {
+                reliable: VecDeque::with_capacity(RELIABLE_OUTBOUND_CAPACITY),
+                latest_snapshot: None,
+                closed: false,
+            }),
+            blocking_wake: Condvar::new(),
+            async_wake: tokio::sync::Notify::new(),
         }
-        Err(error) => eprintln!("[server] encode error: {error}"),
+    }
+
+    fn push_reliable(&self, frame: Vec<u8>) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state.closed || state.reliable.len() >= RELIABLE_OUTBOUND_CAPACITY {
+            return false;
+        }
+        state.reliable.push_back(frame);
+        drop(state);
+        self.blocking_wake.notify_one();
+        self.async_wake.notify_one();
+        true
+    }
+
+    fn replace_snapshot(&self, frame: Vec<u8>) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state.closed {
+            return false;
+        }
+        state.latest_snapshot = Some(frame);
+        drop(state);
+        self.blocking_wake.notify_one();
+        self.async_wake.notify_one();
+        true
+    }
+
+    fn try_next(&self) -> Option<Vec<u8>> {
+        let mut state = self.state.lock().ok()?;
+        state
+            .reliable
+            .pop_front()
+            .or_else(|| state.latest_snapshot.take())
+    }
+
+    fn blocking_next(&self) -> Option<Vec<u8>> {
+        let mut state = self.state.lock().ok()?;
+        loop {
+            if let Some(frame) = state
+                .reliable
+                .pop_front()
+                .or_else(|| state.latest_snapshot.take())
+            {
+                return Some(frame);
+            }
+            if state.closed {
+                return None;
+            }
+            state = match self.blocking_wake.wait(state) {
+                Ok(guard) => guard,
+                // A poisoned waiter cannot proceed; ending the writer
+                // thread is strictly better than panicking the server.
+                Err(_) => return None,
+            };
+        }
+    }
+
+    async fn next(&self) -> Option<Vec<u8>> {
+        loop {
+            let notified = self.async_wake.notified();
+            if let Some(frame) = self.try_next() {
+                return Some(frame);
+            }
+            if self.state.lock().ok()?.closed {
+                return None;
+            }
+            notified.await;
+        }
+    }
+
+    fn close(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.closed = true;
+        }
+        self.blocking_wake.notify_all();
+        self.async_wake.notify_waiters();
     }
 }
 
@@ -1177,25 +1372,19 @@ fn graph_errors(errors: Vec<thessa_autopilot::GraphError>) -> String {
 fn enqueue_client_inputs(
     id: &str,
     frames: impl IntoIterator<Item = Vec<u8>>,
-    upstream: &Sender<Upstream>,
+    upstream: &IngressSender,
 ) -> bool {
     for frame in frames {
-        if let Some(input) = decode_client_input(&frame)
-            && upstream
-                .send(Upstream::Input(id.to_string(), input))
-                .is_err()
-        {
-            return false;
-        } else if let Some(guidance) = decode_guidance_input(&frame)
-            && upstream
-                .send(Upstream::Guidance(id.to_string(), guidance))
-                .is_err()
-        {
-            return false;
+        if let Some(input) = decode_client_input(&frame) {
+            if !upstream.send_input(id, input) {
+                return false;
+            }
+        } else if let Some(guidance) = decode_guidance_input(&frame) {
+            if !upstream.send_guidance(id, guidance) {
+                return false;
+            }
         } else if let Some(autopilot) = decode_autopilot_input(&frame)
-            && upstream
-                .send(Upstream::Autopilot(id.to_string(), autopilot))
-                .is_err()
+            && !upstream.send_autopilot(id, autopilot)
         {
             return false;
         }
@@ -1270,15 +1459,429 @@ fn clip_pacing_chunk_to_wake(
     chunk_s.min((boundary_s - flight_time_s - backlog_s).max(0.0))
 }
 
-/// Traffic from every transport into the sim driver. Subscriber
-/// channels are tokio unbounded senders: `send` never blocks, so the sync
-/// driver and both async/sync writers share one type.
+const MAX_INGRESS_MESSAGES: usize = 512;
+const MAX_CLIENTS: usize = 256;
+const MAX_PENDING_EDGE_COMMANDS: usize = 64;
+const MAX_CONTINUOUS_SEGMENTS: usize = MAX_INGRESS_MESSAGES + 1;
+
+/// Traffic from every transport into the sim driver. Continuous input is
+/// kept in one latest-value slot per client. Edge-like input, guidance,
+/// autopilot and subscriptions use a bounded async-safe queue. Leaves use a
+/// separate id-set so cleanup cannot be lost when the event queue is full.
 enum Upstream {
-    Input(String, ClientInput),
-    Guidance(String, GuidanceInput),
-    Autopilot(String, AutopilotInput),
-    Leave(String),
-    Subscribe(String, tokio::sync::mpsc::UnboundedSender<Vec<u8>>),
+    Input {
+        id: String,
+        input: ClientInput,
+        sequence: u64,
+    },
+    Guidance {
+        id: String,
+        input: GuidanceInput,
+        sequence: u64,
+    },
+    Autopilot {
+        id: String,
+        input: AutopilotInput,
+        sequence: u64,
+    },
+    Subscribe {
+        id: String,
+        mailbox: Arc<OutboundMailbox>,
+        sequence: u64,
+    },
+}
+
+impl Upstream {
+    fn sequence(&self) -> u64 {
+        match self {
+            Self::Input { sequence, .. }
+            | Self::Guidance { sequence, .. }
+            | Self::Autopilot { sequence, .. }
+            | Self::Subscribe { sequence, .. } => *sequence,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionState {
+    Pending,
+    Active,
+    Closed,
+}
+
+#[derive(Clone)]
+struct IngressSender {
+    events: tokio::sync::mpsc::Sender<Upstream>,
+    latest_inputs: Arc<Mutex<BTreeMap<String, VecDeque<(u64, ClientInput)>>>>,
+    leaves: Arc<Mutex<BTreeSet<String>>>,
+    connections: Arc<Mutex<BTreeMap<String, ConnectionState>>>,
+    next_connection: Arc<AtomicU64>,
+    next_sequence: Arc<AtomicU64>,
+    reliable_fences: Arc<Mutex<BTreeMap<String, u64>>>,
+    ingress_lock: Arc<Mutex<()>>,
+}
+
+struct IngressReceiver {
+    events: tokio::sync::mpsc::Receiver<Upstream>,
+    latest_inputs: Arc<Mutex<BTreeMap<String, VecDeque<(u64, ClientInput)>>>>,
+    leaves: Arc<Mutex<BTreeSet<String>>>,
+    connections: Arc<Mutex<BTreeMap<String, ConnectionState>>>,
+    reliable_fences: Arc<Mutex<BTreeMap<String, u64>>>,
+    ingress_lock: Arc<Mutex<()>>,
+}
+
+impl IngressSender {
+    fn new() -> (Self, IngressReceiver) {
+        let (events, event_receiver) = tokio::sync::mpsc::channel(MAX_INGRESS_MESSAGES);
+        let latest_inputs = Arc::new(Mutex::new(BTreeMap::new()));
+        let leaves = Arc::new(Mutex::new(BTreeSet::new()));
+        let connections = Arc::new(Mutex::new(BTreeMap::new()));
+        let next_sequence = Arc::new(AtomicU64::new(1));
+        let reliable_fences = Arc::new(Mutex::new(BTreeMap::new()));
+        let ingress_lock = Arc::new(Mutex::new(()));
+        (
+            Self {
+                events,
+                latest_inputs: latest_inputs.clone(),
+                leaves: leaves.clone(),
+                connections: connections.clone(),
+                next_connection: Arc::new(AtomicU64::new(1)),
+                next_sequence,
+                reliable_fences: reliable_fences.clone(),
+                ingress_lock: ingress_lock.clone(),
+            },
+            IngressReceiver {
+                events: event_receiver,
+                latest_inputs,
+                leaves,
+                connections,
+                reliable_fences,
+                ingress_lock,
+            },
+        )
+    }
+
+    /// Reserve an internal connection token before enqueueing Subscribe.
+    /// This makes a queued Hello+EOF pair distinguishable from a later
+    /// connection and bounds pending handshakes by the client limit.
+    fn reserve_connection(&self, label: &str) -> Option<String> {
+        let token = self.next_connection.fetch_add(1, Ordering::Relaxed);
+        let id = format!("{label}#{token}");
+        self.reserve_exact_connection(id.clone()).then_some(id)
+    }
+
+    fn reserve_exact_connection(&self, id: String) -> bool {
+        let Ok(mut connections) = self.connections.lock() else {
+            return false;
+        };
+        if connections.len() >= MAX_CLIENTS || connections.contains_key(&id) {
+            return false;
+        }
+        connections.insert(id, ConnectionState::Pending);
+        true
+    }
+
+    fn can_enqueue(&self, id: &str) -> bool {
+        self.connections
+            .lock()
+            .ok()
+            .and_then(|connections| connections.get(id).copied())
+            .is_some_and(|state| state != ConnectionState::Closed)
+    }
+
+    fn mark_active_for_sender(&self, id: &str) -> bool {
+        let Ok(mut connections) = self.connections.lock() else {
+            return false;
+        };
+        let Some(state) = connections.get_mut(id) else {
+            return false;
+        };
+        if *state != ConnectionState::Pending {
+            return false;
+        }
+        *state = ConnectionState::Active;
+        true
+    }
+
+    fn send_input(&self, id: &str, input: ClientInput) -> bool {
+        let Ok(_ingress) = self.ingress_lock.lock() else {
+            return false;
+        };
+        if !self.can_enqueue(id) {
+            return false;
+        }
+        let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
+        if input.commands.iter().any(is_edge_command) {
+            // Fairness: the event queue is shared by all clients. A full
+            // queue means someone (possibly another client) is flooding;
+            // dropping this edge with a warning keeps the victim's
+            // connection alive instead of disconnecting whoever failed
+            // to enqueue last. The driver drains every iteration, so a
+            // transient full is recoverable.
+            match self.events.try_send(Upstream::Input {
+                id: id.to_string(),
+                input,
+                sequence,
+            }) {
+                Ok(()) => {
+                    if let Ok(mut fences) = self.reliable_fences.lock() {
+                        fences.insert(id.to_string(), sequence);
+                    }
+                    true
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    eprintln!("[server] ingress full; dropping edge input from {id}");
+                    true
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => false,
+            }
+        } else {
+            let Ok(mut latest) = self.latest_inputs.lock() else {
+                return false;
+            };
+            if latest.len() >= MAX_CLIENTS && !latest.contains_key(id) {
+                return false;
+            }
+            let segments = latest.entry(id.to_string()).or_default();
+            let fence = self
+                .reliable_fences
+                .lock()
+                .ok()
+                .and_then(|fences| fences.get(id).copied())
+                .unwrap_or(0);
+            if segments.back().is_some_and(|(last, _)| *last > fence) {
+                segments.back_mut().expect("segment exists").1 = input;
+                true
+            } else if segments.len() >= MAX_CONTINUOUS_SEGMENTS {
+                false
+            } else {
+                segments.push_back((sequence, input));
+                true
+            }
+        }
+    }
+
+    fn send_guidance(&self, id: &str, input: GuidanceInput) -> bool {
+        let Ok(_ingress) = self.ingress_lock.lock() else {
+            return false;
+        };
+        if !self.can_enqueue(id) {
+            return false;
+        }
+        let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
+        match self.events.try_send(Upstream::Guidance {
+            id: id.to_string(),
+            input,
+            sequence,
+        }) {
+            Ok(()) => {
+                if let Ok(mut fences) = self.reliable_fences.lock() {
+                    fences.insert(id.to_string(), sequence);
+                }
+                true
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                eprintln!("[server] ingress full; dropping guidance from {id}");
+                true
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => false,
+        }
+    }
+
+    fn send_autopilot(&self, id: &str, input: AutopilotInput) -> bool {
+        let Ok(_ingress) = self.ingress_lock.lock() else {
+            return false;
+        };
+        if !self.can_enqueue(id) {
+            return false;
+        }
+        let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
+        match self.events.try_send(Upstream::Autopilot {
+            id: id.to_string(),
+            input,
+            sequence,
+        }) {
+            Ok(()) => {
+                if let Ok(mut fences) = self.reliable_fences.lock() {
+                    fences.insert(id.to_string(), sequence);
+                }
+                true
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                eprintln!("[server] ingress full; dropping autopilot from {id}");
+                true
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => false,
+        }
+    }
+
+    fn send_subscribe(&self, id: &str, mailbox: Arc<OutboundMailbox>) -> bool {
+        let Ok(_ingress) = self.ingress_lock.lock() else {
+            return false;
+        };
+        let Some(state) = self
+            .connections
+            .lock()
+            .ok()
+            .and_then(|connections| connections.get(id).copied())
+        else {
+            return false;
+        };
+        if state != ConnectionState::Pending {
+            return false;
+        }
+        let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
+        if self
+            .events
+            .try_send(Upstream::Subscribe {
+                id: id.to_string(),
+                mailbox,
+                sequence,
+            })
+            .is_ok()
+        {
+            if let Ok(mut fences) = self.reliable_fences.lock() {
+                fences.insert(id.to_string(), sequence);
+            }
+            true
+        } else {
+            self.close_connection(id);
+            false
+        }
+    }
+
+    fn send_leave(&self, id: &str) -> bool {
+        let Ok(mut connections) = self.connections.lock() else {
+            return false;
+        };
+        let Some(state) = connections.get_mut(id) else {
+            return false;
+        };
+        *state = ConnectionState::Closed;
+        drop(connections);
+        let Ok(mut leaves) = self.leaves.lock() else {
+            return false;
+        };
+        leaves.insert(id.to_string());
+        true
+    }
+
+    fn close_connection(&self, id: &str) {
+        if let Ok(mut connections) = self.connections.lock()
+            && let Some(state) = connections.get_mut(id)
+        {
+            *state = ConnectionState::Closed;
+        }
+    }
+}
+
+impl IngressReceiver {
+    fn take_leaves(&self) -> BTreeSet<String> {
+        let Ok(mut leaves) = self.leaves.lock() else {
+            return BTreeSet::new();
+        };
+        std::mem::take(&mut *leaves)
+    }
+
+    fn remove_latest_input(&self, id: &str) {
+        if let Ok(mut latest) = self.latest_inputs.lock() {
+            latest.remove(id);
+        }
+    }
+
+    /// Atomically cut an ingress batch. Producers cannot allocate a sequence
+    /// number and publish only half of a message while this boundary is held.
+    /// Continuous segments after the last event in this slice stay queued for
+    /// the next slice, so a later state packet cannot leap over an older
+    /// reliable edge that was left behind by the per-iteration cap.
+    fn take_batch(
+        &mut self,
+        max_events: usize,
+    ) -> (Vec<Upstream>, Vec<(String, u64, ClientInput)>, bool) {
+        let Ok(_ingress) = self.ingress_lock.lock() else {
+            return (Vec::new(), Vec::new(), false);
+        };
+        let mut events = Vec::with_capacity(max_events);
+        while events.len() < max_events {
+            match self.events.try_recv() {
+                Ok(message) => events.push(message),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+            }
+        }
+        // If the bounded event slice exhausted the queue, all currently
+        // published continuous segments are safe to take. Otherwise the
+        // remaining event(s) form an older fence for any later state.
+        let watermark = (!self.events.is_empty())
+            .then(|| events.iter().map(Upstream::sequence).max())
+            .flatten();
+        let mut continuous = Vec::new();
+        if let Ok(mut latest) = self.latest_inputs.lock() {
+            for (id, segments) in latest.iter_mut() {
+                while let Some((sequence, _)) = segments.front()
+                    && watermark.is_none_or(|limit| *sequence <= limit)
+                {
+                    let (sequence, input) = segments.pop_front().expect("segment exists");
+                    continuous.push((id.clone(), sequence, input));
+                }
+            }
+            latest.retain(|_, segments| !segments.is_empty());
+        }
+        let saturated = events.len() == max_events;
+        (events, continuous, saturated)
+    }
+
+    fn is_connection_live(&self, id: &str) -> bool {
+        self.connections
+            .lock()
+            .ok()
+            .and_then(|connections| connections.get(id).copied())
+            .is_some_and(|state| state != ConnectionState::Closed)
+    }
+
+    fn mark_active(&self, id: &str) -> bool {
+        let Ok(mut connections) = self.connections.lock() else {
+            return false;
+        };
+        let Some(state) = connections.get_mut(id) else {
+            return false;
+        };
+        if *state != ConnectionState::Pending {
+            return false;
+        }
+        *state = ConnectionState::Active;
+        true
+    }
+
+    fn close_connection(&self, id: &str) {
+        if let Ok(mut connections) = self.connections.lock()
+            && let Some(state) = connections.get_mut(id)
+        {
+            *state = ConnectionState::Closed;
+        }
+    }
+
+    fn finish_closed(&self, ids: &BTreeSet<String>) {
+        if let Ok(mut connections) = self.connections.lock() {
+            for id in ids {
+                if connections.get(id) == Some(&ConnectionState::Closed) {
+                    connections.remove(id);
+                }
+            }
+        }
+        if let Ok(mut fences) = self.reliable_fences.lock() {
+            for id in ids {
+                fences.remove(id);
+            }
+        }
+    }
+}
+
+fn is_edge_command(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Stage | Command::Engine { .. } | Command::Reset
+    )
 }
 
 /// Mailbox for one client during a driver quantum. Continuous controls are
@@ -1289,35 +1892,81 @@ enum Upstream {
 struct PendingInput {
     latest: Option<ClientInput>,
     commands: Vec<Command>,
+    /// `engine_active` echo of the packet that contributed the newest edge
+    /// command, with its sequence. Compared against the newest echo to tell
+    /// a fresh user toggle apart from a stale pre-edge echo (see `take`).
+    edge_echo: Option<bool>,
+    edge_seq: u64,
+    latest_seq: u64,
 }
 
 impl PendingInput {
-    fn push(&mut self, input: ClientInput) {
+    fn push(&mut self, input: ClientInput, seq: u64) -> bool {
         let mut input = input;
         let commands = std::mem::take(&mut input.commands);
-        self.latest = Some(input);
+        let mut merged = std::mem::take(&mut self.commands);
+        let mut edge_seen = false;
         for command in commands {
             match command {
                 Command::SetWarp { .. } => {
-                    self.commands
-                        .retain(|queued| !matches!(queued, Command::SetWarp { .. }));
-                    self.commands.push(command);
+                    merged.retain(|queued| !matches!(queued, Command::SetWarp { .. }));
+                    merged.push(command);
                 }
                 Command::Pause { .. } => {
-                    self.commands
-                        .retain(|queued| !matches!(queued, Command::Pause { .. }));
-                    self.commands.push(command);
+                    merged.retain(|queued| !matches!(queued, Command::Pause { .. }));
+                    merged.push(command);
                 }
                 // Stage and explicit engine commands are edge/event-like:
                 // every one must reach the authoritative state in order.
-                event => self.commands.push(event),
+                event => {
+                    edge_seen |= is_edge_command(&event);
+                    merged.push(event);
+                }
             }
         }
+        if merged
+            .iter()
+            .filter(|command| is_edge_command(command))
+            .count()
+            > MAX_PENDING_EDGE_COMMANDS
+        {
+            self.commands = merged;
+            return false;
+        }
+        // Pushes arrive in sequence order (the driver sorts the slice), so
+        // the newest edge packet's echo is simply the last one observed.
+        if edge_seen {
+            self.edge_echo = Some(input.engine_active);
+            self.edge_seq = seq;
+        }
+        self.latest = Some(input);
+        self.latest_seq = seq;
+        self.commands = merged;
+        true
     }
 
     fn take(&mut self) -> Option<ClientInput> {
         let mut input = self.latest.take()?;
-        input.commands = std::mem::take(&mut self.commands);
+        let mut commands = std::mem::take(&mut self.commands);
+        // `apply_input` ignores the merged state's `engine_active` whenever
+        // an edge is present, so a newer user toggle would be lost. But a
+        // same-valued echo is stale/pre-edge and must NOT override the edge
+        // result (Stage is a toggle: re-applying the old echo would undo it).
+        // Append an explicit trailing edge only when the newest echo is both
+        // strictly newer than the newest edge and different from the edge
+        // packet's echo — proof the user toggled after the edge.
+        if self.latest_seq > self.edge_seq
+            && commands.iter().any(is_edge_command)
+            && Some(input.engine_active) != self.edge_echo
+        {
+            commands.push(Command::Engine {
+                active: input.engine_active,
+            });
+        }
+        input.commands = commands;
+        self.edge_echo = None;
+        self.edge_seq = 0;
+        self.latest_seq = 0;
         Some(input)
     }
 }
@@ -1327,8 +1976,8 @@ impl PendingInput {
 struct Driver {
     sim: Sim,
     autopilot: AutopilotHost,
-    upstream: Receiver<Upstream>,
-    subscribers: Vec<(String, tokio::sync::mpsc::UnboundedSender<Vec<u8>>)>,
+    upstream: IngressReceiver,
+    subscribers: Vec<(String, Arc<OutboundMailbox>)>,
     /// Desired authoritative sim time generated from real wall time and the
     /// current consensus warp. Actual service catches this target when the
     /// machine is fast enough; when it is not, the driver stays busy between
@@ -1342,10 +1991,14 @@ struct Driver {
 
 impl Driver {
     fn apply_client_input(&mut self, id: &str, input: &ClientInput) -> bool {
-        if client_input_takes_over(self.sim.last_client_inputs.get(id), input) {
+        let takeover = self.sim.is_pilot(id)
+            && input.validate().is_ok()
+            && client_input_takes_over(self.sim.last_client_inputs.get(id), input);
+        let force_snapshot = self.sim.apply_input(id, input);
+        if takeover {
             self.autopilot.scheduler.cancel_all();
         }
-        self.sim.apply_input(id, input)
+        force_snapshot
     }
 
     fn broadcast_snapshot(&mut self) {
@@ -1357,8 +2010,13 @@ impl Driver {
                 return;
             }
         };
-        self.subscribers
-            .retain(|(_, tx)| tx.send(frame.clone()).is_ok());
+        self.subscribers.retain(|(_, mailbox)| {
+            let accepted = mailbox.replace_snapshot(frame.clone());
+            if !accepted {
+                mailbox.close();
+            }
+            accepted
+        });
     }
 
     /// Drain a bounded ingress slice. The limit only prevents a hot producer
@@ -1367,34 +2025,84 @@ impl Driver {
     fn drain_upstream(&mut self) -> (bool, bool) {
         let mut pending = BTreeMap::<String, PendingInput>::new();
         let mut force_snapshot = false;
-        let mut processed = 0;
-        while processed < MAX_UPSTREAM_MESSAGES_PER_ITERATION {
-            let message = match self.upstream.try_recv() {
-                Ok(message) => message,
-                Err(std::sync::mpsc::TryRecvError::Empty)
-                | Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
-            };
-            processed += 1;
+        let departed = self.upstream.take_leaves();
+        let mut finish_connections = departed.clone();
+        for id in &departed {
+            self.release_client(id);
+            force_snapshot = true;
+        }
+        let (events, continuous, saturated) = self
+            .upstream
+            .take_batch(MAX_UPSTREAM_MESSAGES_PER_ITERATION);
+        let mut messages = Vec::with_capacity(events.len() + continuous.len());
+        messages.extend(events.into_iter().map(|message| {
+            let sequence = message.sequence();
+            (sequence, message)
+        }));
+        messages.extend(continuous.into_iter().map(|(id, sequence, input)| {
+            (
+                sequence,
+                Upstream::Input {
+                    id,
+                    input,
+                    sequence,
+                },
+            )
+        }));
+        // The latest-value map and the ordered event queue are two storage
+        // paths, not two independent phases. Sequence metadata restores the
+        // original per-connection order before any control transition is
+        // applied. A guidance/autopilot transition flushes that client's
+        // pending manual input first, so an older packet cannot cancel a new
+        // script after it starts.
+        messages.sort_unstable_by_key(|(sequence, _)| *sequence);
+        for (sequence, message) in messages {
             match message {
-                Upstream::Input(id, input) => pending.entry(id).or_default().push(input),
-                Upstream::Guidance(id, input) => {
-                    self.autopilot.scheduler.cancel_all();
+                Upstream::Input { id, input, .. } => {
+                    if departed.contains(&id) || !self.upstream.is_connection_live(&id) {
+                        continue;
+                    }
+                    if !pending.entry(id.clone()).or_default().push(input, sequence) {
+                        eprintln!("[server] input edge queue overflow for {id}; disconnecting");
+                        finish_connections.insert(id.clone());
+                        self.release_client(&id);
+                        force_snapshot = true;
+                    }
+                }
+                Upstream::Guidance { id, input, .. } => {
+                    if departed.contains(&id) || !self.upstream.is_connection_live(&id) {
+                        continue;
+                    }
+                    self.flush_pending_input(&id, &mut pending, &mut force_snapshot);
+                    if self.sim.is_pilot(&id) && input.validate().is_ok() {
+                        self.autopilot.scheduler.cancel_all();
+                    }
                     force_snapshot |= self.sim.apply_guidance(&id, &input);
                 }
-                Upstream::Autopilot(id, input) => {
+                Upstream::Autopilot { id, input, .. } => {
+                    if departed.contains(&id) || !self.upstream.is_connection_live(&id) {
+                        continue;
+                    }
+                    self.flush_pending_input(&id, &mut pending, &mut force_snapshot);
                     force_snapshot |= self.sim.apply_autopilot(&id, &input, &mut self.autopilot);
                 }
-                Upstream::Leave(id) => {
-                    if let Some(mut queued) = pending.remove(&id)
-                        && let Some(input) = queued.take()
-                    {
-                        let _ = self.apply_client_input(&id, &input);
+                Upstream::Subscribe { id, mailbox, .. } => {
+                    if departed.contains(&id) || !self.upstream.is_connection_live(&id) {
+                        // A Hello can be followed by EOF before this bounded
+                        // queue is drained. The persistent token guard keeps
+                        // that stale Subscribe from resurrecting a voter.
+                        mailbox.close();
+                        finish_connections.insert(id);
+                        continue;
                     }
-                    self.sim.unregister(&id);
-                    self.subscribers.retain(|(other, _)| other != &id);
-                    force_snapshot = true;
-                }
-                Upstream::Subscribe(id, tx) => {
+                    if self.sim.clients.len() >= MAX_CLIENTS && !self.sim.clients.contains_key(&id)
+                    {
+                        eprintln!("[server] client limit reached; rejecting {id}");
+                        mailbox.close();
+                        self.upstream.close_connection(&id);
+                        finish_connections.insert(id);
+                        continue;
+                    }
                     self.sim.register(&id);
                     let welcome = thessa_flight_net::Welcome {
                         tick: self.sim.authority.world_tick.0,
@@ -1402,27 +2110,70 @@ impl Driver {
                     };
                     match thessa_flight_net::encode_welcome(&welcome) {
                         Ok(frame) => {
-                            if tx.send(frame).is_ok() {
-                                self.subscribers.push((id, tx));
+                            if mailbox.push_reliable(frame) {
+                                if self.upstream.mark_active(&id) {
+                                    self.subscribers.push((id, mailbox));
+                                } else {
+                                    mailbox.close();
+                                    self.release_client(&id);
+                                    finish_connections.insert(id);
+                                }
                             } else {
-                                self.sim.unregister(&id);
+                                self.release_client(&id);
+                                finish_connections.insert(id);
                             }
                         }
-                        Err(error) => eprintln!("[server] welcome encode error: {error}"),
+                        Err(error) => {
+                            eprintln!("[server] welcome encode error: {error}");
+                            self.release_client(&id);
+                            finish_connections.insert(id);
+                        }
                     }
                     force_snapshot = true;
                 }
             }
         }
         for (id, mut queued) in pending {
+            if departed.contains(&id) || !self.sim.clients.contains_key(&id) {
+                continue;
+            }
             if let Some(input) = queued.take() {
                 force_snapshot |= self.apply_client_input(&id, &input);
             }
         }
-        (
-            force_snapshot,
-            processed == MAX_UPSTREAM_MESSAGES_PER_ITERATION,
-        )
+        self.upstream.finish_closed(&finish_connections);
+        (force_snapshot, saturated)
+    }
+
+    fn flush_pending_input(
+        &mut self,
+        id: &str,
+        pending: &mut BTreeMap<String, PendingInput>,
+        force_snapshot: &mut bool,
+    ) {
+        if let Some(mut queued) = pending.remove(id)
+            && let Some(input) = queued.take()
+        {
+            *force_snapshot |= self.apply_client_input(id, &input);
+        }
+    }
+
+    fn release_client(&mut self, id: &str) {
+        let was_pilot = self.sim.is_pilot(id);
+        if was_pilot {
+            self.autopilot.scheduler.cancel_all();
+        }
+        self.upstream.close_connection(id);
+        self.upstream.remove_latest_input(id);
+        self.sim.unregister(id);
+        self.subscribers.retain(|(other, mailbox)| {
+            if other == id {
+                mailbox.close();
+                false
+            } else {
+                true
+            }
+        });
     }
 
     /// One iteration; `Ok(true)` asks for orderly shutdown (empty room in
@@ -1580,10 +2331,11 @@ fn run_stdio(mut sim: Sim) -> Result<(), String> {
     }
     // Stdout writer thread: frames in, bytes out. Stdout is the wire.
     // Joined on shutdown after all senders drop, so the tail flushes.
-    let (wire_out, mut wire_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    let wire_out = Arc::new(OutboundMailbox::new());
+    let writer_out = wire_out.clone();
     let writer = std::thread::spawn(move || {
         let mut stdout = std::io::stdout().lock();
-        while let Some(frame) = wire_rx.blocking_recv() {
+        while let Some(frame) = writer_out.blocking_next() {
             if stdout.write_all(&frame).is_err() {
                 break;
             }
@@ -1591,7 +2343,13 @@ fn run_stdio(mut sim: Sim) -> Result<(), String> {
         let _ = stdout.flush();
     });
 
-    let (upstream_tx, upstream_rx): (Sender<Upstream>, _) = channel();
+    let (upstream_tx, upstream_rx) = IngressSender::new();
+    let local_id = upstream_tx
+        .reserve_connection("local")
+        .ok_or("could not reserve embedded connection")?;
+    if !upstream_tx.mark_active_for_sender(&local_id) {
+        return Err("could not activate embedded connection".into());
+    }
 
     // Handshake on the main thread: first frame must be Hello. Frames
     // pipelined after it decode straight into the driver queue.
@@ -1624,13 +2382,17 @@ fn run_stdio(mut sim: Sim) -> Result<(), String> {
             frames,
         );
     };
-    send_frame(&wire_out, kind::WELCOME, &welcome);
+    let welcome_frame = thessa_flight_net::encode_welcome(&welcome).map_err(|e| e.to_string())?;
+    if !wire_out.push_reliable(welcome_frame) {
+        return Err("stdout writer unavailable during handshake".into());
+    }
     drop(locked);
 
     // Input pump thread: stdin bytes -> decoded inputs. EOF becomes a
     // Leave, which ends the driver loop after the queued inputs drain
     // (channel FIFO, no drain race). Own lock: the handshake lock above
     // is dropped, so no buffered byte is stranded between the two.
+    let input_id = local_id.clone();
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
         let mut locked = stdin.lock();
@@ -1638,7 +2400,8 @@ fn run_stdio(mut sim: Sim) -> Result<(), String> {
         // partial prefix/body of the first pipelined input frame.
         let mut decoder = decoder;
         let mut buffer = [0u8; 65536];
-        if !enqueue_client_inputs("local", post_handshake_frames, &upstream_tx) {
+        if !enqueue_client_inputs(&input_id, post_handshake_frames, &upstream_tx) {
+            let _ = upstream_tx.send_leave(&input_id);
             return;
         }
         loop {
@@ -1646,7 +2409,8 @@ fn run_stdio(mut sim: Sim) -> Result<(), String> {
                 Ok(0) => break,
                 Ok(n) => match decoder.push(&buffer[..n]) {
                     Ok(frames) => {
-                        if !enqueue_client_inputs("local", frames, &upstream_tx) {
+                        if !enqueue_client_inputs(&input_id, frames, &upstream_tx) {
+                            let _ = upstream_tx.send_leave(&input_id);
                             return;
                         }
                     }
@@ -1658,7 +2422,7 @@ fn run_stdio(mut sim: Sim) -> Result<(), String> {
                 Err(_) => break,
             }
         }
-        let _ = upstream_tx.send(Upstream::Leave("local".into()));
+        let _ = upstream_tx.send_leave(&input_id);
     });
 
     let mut driver = Driver {
@@ -1674,9 +2438,9 @@ fn run_stdio(mut sim: Sim) -> Result<(), String> {
     };
     // Local subscription goes through the driver so Welcome/ordering
     // match the TCP path exactly (handshake Welcome was already sent).
-    driver.sim.register("local");
+    driver.sim.register(&local_id);
     driver.sim.wall_started = Instant::now();
-    driver.subscribers.push(("local".to_string(), wire_out));
+    driver.subscribers.push((local_id, wire_out));
     // Opening snapshot so the client never waits a full interval.
     driver.broadcast_snapshot();
     while !driver.iterate()? {}
@@ -1742,7 +2506,7 @@ fn run_measure(mut sim: Sim, target_s: f64) -> Result<(), String> {
 
 /// One TCP client: handshake, subscribe, pump inputs, forward snapshots.
 /// Ends by voting Leave; the driver prunes the subscriber on it.
-async fn handle_tcp_conn(stream: tokio::net::TcpStream, peer: String, upstream: Sender<Upstream>) {
+async fn handle_tcp_conn(stream: tokio::net::TcpStream, peer: String, upstream: IngressSender) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     // Small sim frames at 20 Hz: Nagle would hold them up to ~40 ms
     // waiting for ACKs (classic delayed-ACK interplay). QUIC would not
@@ -1785,46 +2549,66 @@ async fn handle_tcp_conn(stream: tokio::net::TcpStream, peer: String, upstream: 
     };
     // Client id couples the name with the peer so two same-named
     // processes never share a vote.
-    let id = format!("{}@{peer}", hello_msg.client_name);
-    eprintln!("[server] tcp hello from {id}");
-    let (btx, mut brx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-    if upstream.send(Upstream::Subscribe(id.clone(), btx)).is_err() {
+    let label = format!("{}@{peer}", hello_msg.client_name);
+    let Some(id) = upstream.reserve_connection(&label) else {
+        eprintln!("[server] client limit reached; rejecting {label}");
+        return;
+    };
+    eprintln!("[server] tcp hello from {label} as {id}");
+    let mailbox = Arc::new(OutboundMailbox::new());
+    if !upstream.send_subscribe(&id, mailbox.clone()) {
+        let _ = upstream.send_leave(&id);
         return;
     }
     // Writer task: subscribed frames -> socket. Ends when the driver
     // prunes us (Leave processed) or the socket breaks.
-    let write_task = tokio::spawn(async move {
-        while let Some(frame) = brx.recv().await {
+    let writer_mailbox = mailbox.clone();
+    let mut write_task = tokio::spawn(async move {
+        while let Some(frame) = writer_mailbox.next().await {
             if writer.write_all(&frame).await.is_err() {
                 break;
             }
         }
     });
     if !enqueue_client_inputs(&id, post_handshake_frames, &upstream) {
-        let _ = upstream.send(Upstream::Leave(id));
+        let _ = upstream.send_leave(&id);
         write_task.abort();
         return;
     }
-    // Reader loop: socket -> inputs. Any end votes Leave.
-    loop {
-        match reader.read(&mut buffer).await {
-            Ok(0) => break,
-            Ok(n) => match decoder.push(&buffer[..n]) {
-                Ok(frames) => {
-                    if !enqueue_client_inputs(&id, frames, &upstream) {
+    // Reader loop: socket -> inputs. Any end votes Leave. The select also
+    // aborts this reader when the outbound writer detects a dead peer, so a
+    // closed mailbox cannot leave a zombie connection feeding ingress.
+    let reader_id = id.clone();
+    let reader_upstream = upstream.clone();
+    let mut read_task = tokio::spawn(async move {
+        loop {
+            match reader.read(&mut buffer).await {
+                Ok(0) => break,
+                Ok(n) => match decoder.push(&buffer[..n]) {
+                    Ok(frames) => {
+                        if !enqueue_client_inputs(&reader_id, frames, &reader_upstream) {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("[server] tcp frame error from {reader_id}: {error}");
                         break;
                     }
-                }
-                Err(error) => {
-                    eprintln!("[server] tcp frame error from {id}: {error}");
-                    break;
-                }
-            },
-            Err(_) => break,
+                },
+                Err(_) => break,
+            }
+        }
+    });
+    tokio::select! {
+        _ = &mut read_task => {
+            let _ = upstream.send_leave(&id);
+            write_task.abort();
+        }
+        _ = &mut write_task => {
+            let _ = upstream.send_leave(&id);
+            read_task.abort();
         }
     }
-    let _ = upstream.send(Upstream::Leave(id));
-    write_task.abort();
 }
 
 fn run_tcp(mut sim: Sim, addr: &str) -> Result<(), String> {
@@ -1836,7 +2620,7 @@ fn run_tcp(mut sim: Sim, addr: &str) -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
     runtime.block_on(async move {
-        let (upstream_tx, upstream_rx) = channel::<Upstream>();
+        let (upstream_tx, upstream_rx) = IngressSender::new();
         // Sim driver thread: blocking sleeps stay off the tokio workers.
         std::thread::spawn(move || {
             let autopilot = match AutopilotHost::new() {
@@ -1921,13 +2705,15 @@ mod tests {
         }
     }
 
-    fn test_driver() -> (Driver, Sender<Upstream>) {
+    fn test_driver() -> (Driver, IngressSender) {
         let config: SystemConfig =
             toml::from_str(include_str!("../../../data/system.toml")).expect("system");
         let ephemeris = config.bake().expect("bake");
         let reference_body = ephemeris.body_id("thessa").expect("thessa");
         let sim = Sim::new(ephemeris, reference_body, false, true).expect("sim");
-        let (upstream, receiver) = channel();
+        let (upstream, receiver) = IngressSender::new();
+        assert!(upstream.reserve_exact_connection("pilot".into()));
+        assert!(upstream.mark_active_for_sender("pilot"));
         (
             Driver {
                 sim,
@@ -2554,20 +3340,20 @@ mod tests {
         let mut pending = PendingInput::default();
         let mut first = input(vec![Command::Stage]);
         first.control_input = [0.1, 0.0, 0.0];
-        pending.push(first);
+        pending.push(first, 1);
         let mut second = input(vec![
             Command::Stage,
             Command::Pause { paused: true },
             Command::SetWarp { factor: 128.0 },
         ]);
         second.control_input = [0.2, 0.0, 0.0];
-        pending.push(second);
+        pending.push(second, 2);
         let mut third = input(vec![
             Command::Pause { paused: false },
             Command::SetWarp { factor: 256.0 },
         ]);
         third.control_input = [0.3, 0.0, 0.0];
-        pending.push(third);
+        pending.push(third, 3);
 
         let merged = pending.take().expect("coalesced input");
         assert_eq!(merged.control_input, [0.3, 0.0, 0.0]);
@@ -2575,6 +3361,34 @@ mod tests {
         assert_eq!(merged.commands[1], Command::Stage);
         assert_eq!(merged.commands[2], Command::Pause { paused: false });
         assert_eq!(merged.commands[3], Command::SetWarp { factor: 256.0 });
+    }
+
+    #[test]
+    fn coalesced_trailing_toggle_after_an_edge_is_preserved() {
+        // [Stage(seq1, echo=false), continuous(seq2, echo=true)]: the user
+        // toggled after the edge. The merged batch must carry the newer
+        // absolute intent as a trailing edge instead of dropping it.
+        let mut pending = PendingInput::default();
+        pending.push(input(vec![Command::Stage]), 1);
+        let mut trailing = input(vec![]);
+        trailing.engine_active = true;
+        pending.push(trailing, 2);
+        let merged = pending.take().expect("merged input");
+        assert_eq!(
+            merged.commands.last(),
+            Some(&Command::Engine { active: true })
+        );
+    }
+
+    #[test]
+    fn coalesced_stale_echo_does_not_undo_a_toggle() {
+        // [Stage(seq1, echo=false), continuous(seq2, echo=false)]: no new
+        // user intent — the echo must not override the toggle result.
+        let mut pending = PendingInput::default();
+        pending.push(input(vec![Command::Stage]), 1);
+        pending.push(input(vec![]), 2);
+        let merged = pending.take().expect("merged input");
+        assert_eq!(merged.commands, vec![Command::Stage]);
     }
 
     #[test]
@@ -2592,8 +3406,8 @@ mod tests {
         let expected = sequential.authority.engine_active;
 
         let mut pending = PendingInput::default();
-        pending.push(first);
-        pending.push(second);
+        pending.push(first, 1);
+        pending.push(second, 2);
         let merged = pending.take().expect("merged input");
         let mut coalesced = Sim::new(ephemeris, reference_body, false, true).expect("sim");
         coalesced.register("pilot");
@@ -2706,13 +3520,255 @@ mod tests {
     }
 
     #[test]
+    fn first_client_owns_controls_and_disconnect_transfers_in_order() {
+        let (mut driver, _ingress) = test_driver();
+        driver.sim.register("first");
+        driver.sim.register("second");
+        assert_eq!(driver.sim.pilot_owner.as_deref(), Some("first"));
+
+        let mut manual = input(Vec::new());
+        manual.control_input = [1.0, 0.0, 0.0];
+        manual.throttle = 1.0;
+        manual.engine_active = true;
+        assert!(!driver.sim.apply_input("first", &manual));
+        let state_before_spectator = driver.sim.authority.state;
+        let mut spectator_command = manual.clone();
+        spectator_command.commands = vec![Command::Stage, Command::Reset];
+        assert!(!driver.sim.apply_input("second", &spectator_command));
+        assert_eq!(driver.sim.authority.state, state_before_spectator);
+        assert_eq!(driver.sim.authority.control_input, DVec3::X);
+
+        let spectator_vote = input(vec![Command::Pause { paused: true }]);
+        assert!(driver.sim.apply_input("second", &spectator_vote));
+        assert!(driver.sim.paused());
+
+        let invalid_guidance = GuidanceInput {
+            tick: 0,
+            intent: GuidanceIntent::AngularRate {
+                rate_body_rps: DVec3::splat(f64::NAN),
+            },
+            propulsion: PropulsionDemand {
+                normalized: f64::NAN,
+            },
+        };
+        assert!(!driver.sim.apply_guidance("second", &invalid_guidance));
+        assert!(driver.sim.authority.flight_error.is_none());
+        assert!(!driver.sim.apply_autopilot(
+            "second",
+            &AutopilotInput {
+                tick: 0,
+                command: AutopilotCommand::StartScript {
+                    source: String::new(),
+                },
+            },
+            &mut driver.autopilot,
+        ));
+
+        driver.release_client("first");
+        assert_eq!(driver.sim.pilot_owner.as_deref(), Some("second"));
+        assert_eq!(driver.sim.authority.control_input, DVec3::ZERO);
+        assert!(!driver.sim.authority.engine_active);
+        assert_eq!(driver.autopilot.scheduler.pending(), 0);
+    }
+
+    #[test]
+    fn invalid_input_is_rejected_before_any_state_or_takeover_mutation() {
+        let (mut driver, _ingress) = test_driver();
+        driver.sim.register("pilot");
+        let mut invalid = input(vec![Command::Reset]);
+        invalid.control_input[0] = f64::NAN;
+        invalid.throttle = f64::INFINITY;
+        invalid.sas_target_xyzw[3] = f64::NAN;
+        let state = driver.sim.authority.state;
+        let control = driver.sim.authority.control_input;
+        let engine = driver.sim.authority.engine_active;
+        assert!(!driver.apply_client_input("pilot", &invalid));
+        assert_eq!(driver.sim.authority.state, state);
+        assert_eq!(driver.sim.authority.control_input, control);
+        assert_eq!(driver.sim.authority.engine_active, engine);
+        assert!(driver.sim.authority.flight_error.is_none());
+        assert!(driver.sim.last_client_inputs.is_empty());
+    }
+
+    #[test]
+    fn outbound_mailbox_keeps_welcome_order_and_latest_snapshot_only() {
+        let mailbox = OutboundMailbox::new();
+        assert!(mailbox.push_reliable(vec![1]));
+        assert!(mailbox.push_reliable(vec![2]));
+        for value in 3..=100 {
+            assert!(mailbox.replace_snapshot(vec![value]));
+        }
+        assert_eq!(mailbox.try_next(), Some(vec![1]));
+        assert_eq!(mailbox.try_next(), Some(vec![2]));
+        assert_eq!(mailbox.try_next(), Some(vec![100]));
+        assert_eq!(mailbox.try_next(), None);
+
+        for _ in 0..RELIABLE_OUTBOUND_CAPACITY {
+            assert!(mailbox.push_reliable(vec![0]));
+        }
+        assert!(!mailbox.push_reliable(vec![0]));
+    }
+
+    #[test]
+    fn ingress_coalesces_continuous_input_and_reserves_leave_cleanup() {
+        let (ingress, mut receiver) = IngressSender::new();
+        assert!(ingress.reserve_exact_connection("pilot".into()));
+        assert!(ingress.mark_active_for_sender("pilot"));
+        for tick in 0..10_000 {
+            let mut value = input(Vec::new());
+            value.tick = tick;
+            assert!(ingress.send_input("pilot", value));
+        }
+        let (events, continuous, saturated) = receiver.take_batch(MAX_INGRESS_MESSAGES);
+        assert!(events.is_empty());
+        assert_eq!(continuous.len(), 1);
+        assert!(!saturated);
+
+        for _ in 0..MAX_INGRESS_MESSAGES {
+            assert!(ingress.send_input("pilot", input(vec![Command::Stage])));
+        }
+        // Fairness: a full shared queue drops the edge with a warning but
+        // keeps the sender's connection alive (the flood may come from a
+        // different client). Only a closed connection refuses.
+        assert!(ingress.send_input("pilot", input(vec![Command::Stage])));
+        assert!(ingress.send_leave("pilot"));
+        assert!(receiver.take_leaves().contains("pilot"));
+    }
+
+    #[test]
+    fn eof_before_subscribe_does_not_resurrect_a_queued_connection() {
+        let (mut driver, ingress) = test_driver();
+        let id = ingress
+            .reserve_connection("peer")
+            .expect("connection token");
+        let mailbox = Arc::new(OutboundMailbox::new());
+        assert!(ingress.send_subscribe(&id, mailbox.clone()));
+        assert!(ingress.send_leave(&id));
+
+        let _ = driver.drain_upstream();
+        assert!(driver.sim.clients.is_empty());
+        assert!(driver.subscribers.is_empty());
+        assert!(
+            !ingress
+                .connections
+                .lock()
+                .expect("connection registry")
+                .contains_key(&id)
+        );
+        assert!(mailbox.try_next().is_none());
+    }
+
+    #[test]
+    fn sequence_order_preserves_input_edges_and_script_transitions() {
+        let (mut driver, ingress) = test_driver();
+        driver.sim.register("pilot");
+
+        let mut continuous = input(Vec::new());
+        continuous.control_input = [0.1, 0.0, 0.0];
+        continuous.throttle = 0.1;
+        assert!(ingress.send_input("pilot", continuous));
+        let mut edge = input(vec![Command::Stage]);
+        edge.control_input = [0.8, 0.0, 0.0];
+        edge.throttle = 0.8;
+        assert!(ingress.send_input("pilot", edge));
+        let _ = driver.drain_upstream();
+        assert_eq!(
+            driver.sim.authority.control_input,
+            DVec3::new(0.8, 0.0, 0.0)
+        );
+        assert!(driver.sim.authority.engine_active);
+
+        let (mut driver, ingress) = test_driver();
+        driver.sim.register("pilot");
+        let mut edge = input(vec![Command::Stage]);
+        edge.control_input = [0.8, 0.0, 0.0];
+        edge.throttle = 0.8;
+        assert!(ingress.send_input("pilot", edge));
+        let mut continuous = input(Vec::new());
+        continuous.control_input = [0.1, 0.0, 0.0];
+        continuous.throttle = 0.1;
+        assert!(ingress.send_input("pilot", continuous));
+        let _ = driver.drain_upstream();
+        assert_eq!(
+            driver.sim.authority.control_input,
+            DVec3::new(0.1, 0.0, 0.0)
+        );
+        assert!(driver.sim.authority.engine_active);
+
+        let (mut driver, ingress) = test_driver();
+        driver.sim.register("pilot");
+        let mut before_script = input(Vec::new());
+        before_script.control_input = [0.1, 0.0, 0.0];
+        assert!(ingress.send_input("pilot", before_script));
+        assert!(ingress.send_autopilot(
+            "pilot",
+            AutopilotInput {
+                tick: 0,
+                command: AutopilotCommand::StartScript {
+                    source: "await sim.sleep(1); return Guidance.angularRate(0.1, 0, 0);".into(),
+                },
+            },
+        ));
+        let _ = driver.drain_upstream();
+        assert_eq!(driver.autopilot.scheduler.pending(), 1);
+
+        let (mut driver, ingress) = test_driver();
+        driver.sim.register("pilot");
+        assert!(ingress.send_autopilot(
+            "pilot",
+            AutopilotInput {
+                tick: 0,
+                command: AutopilotCommand::StartScript {
+                    source: "await sim.sleep(1); return Guidance.angularRate(0.1, 0, 0);".into(),
+                },
+            },
+        ));
+        let mut deliberate_manual = input(Vec::new());
+        deliberate_manual.control_input = [0.1, 0.0, 0.0];
+        assert!(ingress.send_input("pilot", deliberate_manual));
+        let _ = driver.drain_upstream();
+        assert_eq!(driver.autopilot.scheduler.pending(), 0);
+    }
+
+    #[test]
+    fn ingress_watermark_defers_latest_state_behind_a_second_event_slice() {
+        let (mut driver, ingress) = test_driver();
+        driver.sim.register("pilot");
+        let guidance = GuidanceInput {
+            tick: 0,
+            intent: GuidanceIntent::AngularRate {
+                rate_body_rps: DVec3::ZERO,
+            },
+            propulsion: PropulsionDemand::new(0.0).expect("zero propulsion"),
+        };
+        for _ in 0..=MAX_UPSTREAM_MESSAGES_PER_ITERATION {
+            assert!(ingress.send_guidance("pilot", guidance.clone()));
+        }
+        let mut manual = input(Vec::new());
+        manual.control_input = [0.4, 0.0, 0.0];
+        assert!(ingress.send_input("pilot", manual));
+
+        let (_, first_saturated) = driver.drain_upstream();
+        assert!(first_saturated);
+        assert_eq!(driver.sim.authority.control_input, DVec3::ZERO);
+        let (_, second_saturated) = driver.drain_upstream();
+        assert!(!second_saturated);
+        assert_eq!(
+            driver.sim.authority.control_input,
+            DVec3::new(0.4, 0.0, 0.0)
+        );
+    }
+
+    #[test]
     fn lowering_warp_rebases_old_pacing_debt() {
         let config: SystemConfig =
             toml::from_str(include_str!("../../../data/system.toml")).expect("system");
         let ephemeris = config.bake().expect("bake");
         let reference_body = ephemeris.body_id("thessa").expect("thessa");
         let sim = Sim::new(ephemeris, reference_body, false, true).expect("sim");
-        let (upstream_tx, upstream_rx) = channel();
+        let (upstream_tx, upstream_rx) = IngressSender::new();
+        assert!(upstream_tx.reserve_exact_connection("pilot".into()));
+        assert!(upstream_tx.mark_active_for_sender("pilot"));
         let mut driver = Driver {
             sim,
             autopilot: AutopilotHost::new().expect("autopilot host"),
@@ -2726,12 +3782,7 @@ mod tests {
         };
         driver.sim.register("pilot");
         driver.sim.clients.get_mut("pilot").expect("pilot").warp = 256.0;
-        upstream_tx
-            .send(Upstream::Input(
-                "pilot".into(),
-                input(vec![Command::SetWarp { factor: 64.0 }]),
-            ))
-            .expect("queue warp vote");
+        assert!(upstream_tx.send_input("pilot", input(vec![Command::SetWarp { factor: 64.0 }]),));
 
         assert!(!driver.iterate().expect("driver iteration"));
         assert!(
@@ -2748,13 +3799,15 @@ mod tests {
         let ephemeris = config.bake().expect("bake");
         let reference_body = ephemeris.body_id("thessa").expect("thessa");
         let sim = Sim::new(ephemeris, reference_body, false, true).expect("sim");
-        let (upstream_tx, upstream_rx) = channel();
-        let (snapshot_tx, mut snapshot_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (upstream_tx, upstream_rx) = IngressSender::new();
+        assert!(upstream_tx.reserve_exact_connection("pilot".into()));
+        assert!(upstream_tx.mark_active_for_sender("pilot"));
+        let snapshot_mailbox = Arc::new(OutboundMailbox::new());
         let mut driver = Driver {
             sim,
             autopilot: AutopilotHost::new().expect("autopilot host"),
             upstream: upstream_rx,
-            subscribers: vec![("pilot".into(), snapshot_tx)],
+            subscribers: vec![("pilot".into(), snapshot_mailbox.clone())],
             pacing_target_s: 0.0,
             last_pacing: Instant::now(),
             last_snapshot: Instant::now(),
@@ -2762,20 +3815,18 @@ mod tests {
             exit_when_empty: false,
         };
         driver.sim.register("pilot");
-        upstream_tx
-            .send(Upstream::Input(
-                "pilot".into(),
-                input(vec![
-                    Command::SetWarp { factor: MAX_WARP },
-                    Command::Pause { paused: true },
-                ]),
-            ))
-            .expect("queue input");
+        assert!(upstream_tx.send_input(
+            "pilot",
+            input(vec![
+                Command::SetWarp { factor: MAX_WARP },
+                Command::Pause { paused: true },
+            ]),
+        ));
 
         let started = Instant::now();
         assert!(!driver.iterate().expect("driver iteration"));
         assert!(started.elapsed() < Duration::from_millis(100));
-        let frame = snapshot_rx.try_recv().expect("forced snapshot");
+        let frame = snapshot_mailbox.try_next().expect("forced snapshot");
         let mut decoder = FrameDecoder::new();
         let frames = decoder.push(&frame).expect("snapshot frame");
         let envelope = thessa_flight_net::decode_frame(&frames[0]).expect("envelope");
@@ -2895,9 +3946,9 @@ mod reset_tests {
         // Reset is edge/event-like: every one must reach the authoritative
         // state in order, like Stage. Warp votes stay last-wins around it.
         let mut pending = PendingInput::default();
-        pending.push(input(vec![Command::SetWarp { factor: 64.0 }]));
-        pending.push(input(vec![Command::Reset]));
-        pending.push(input(vec![Command::SetWarp { factor: 128.0 }]));
+        pending.push(input(vec![Command::SetWarp { factor: 64.0 }]), 1);
+        pending.push(input(vec![Command::Reset]), 2);
+        pending.push(input(vec![Command::SetWarp { factor: 128.0 }]), 3);
         let merged = pending.take().expect("merged input");
         assert_eq!(merged.commands.len(), 2);
         assert_eq!(merged.commands[0], Command::Reset);

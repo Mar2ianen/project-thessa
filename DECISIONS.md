@@ -13,5 +13,6 @@
 | ADR-0007 | Reusable engine crates — MIT; game code/apps — GPL-3.0-or-later | accepted |
 | ADR-0008 | Cross-platform from day one; no DirectX-facing domain/gameplay API; rendering through Bevy/wgpu | accepted |
 | ADR-0009 | Autopilot UX uses MechJeb-like high-level actions, composed as typed event-driven graphs with fork/join | accepted |
+| ADR-0011 | RCBT logical tree and backend contracts are renderer-independent; CPU tile path remains fallback until parity | accepted |
 
 См. `docs/adr/`.

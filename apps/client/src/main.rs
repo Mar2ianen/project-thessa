@@ -143,6 +143,9 @@ fn main() {
     }
 
     app.add_plugins(default_plugins);
+    // RCBT is an opt-in visual topology path. The existing CPU terrain
+    // renderer remains authoritative for this slice until page/error parity.
+    app.add_plugins(thessa_bevy_rcbt::CbtPlugin { max_depth: 16 });
     // Solari selects deferred opaque materials globally, including while
     // disabled. Every camera therefore retains a valid deferred raster path.
     // Plugin finish checks device features; unsupported GPUs keep raster.

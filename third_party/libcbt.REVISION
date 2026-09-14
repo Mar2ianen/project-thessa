@@ -1,0 +1,14 @@
+Repository: https://github.com/jdupuy/libcbt
+Revision: 2d5439a4b2129b3bb4ef8fdddf6a60f169973362
+Reference: master HEAD resolved 2026-09-14
+License: public domain, alternatively MIT (see upstream LICENSE.txt)
+
+The upstream implementation is an oracle and benchmark target only. It is not
+linked into the runtime and its internal heap representation is not a public
+Project Thessa contract.
+
+Vendored for bench-only FFI (no code copied into the project):
+- third_party/libcbt/cbt.h (upstream, unmodified)
+- third_party/libcbt/cbt_shim.c (project-owned plain-integer ABI shim)
+- crates/rcbt-ffi (safe wrapper; bench/test dependency only, serial build
+  without OpenMP so the comparison measures data-structure cost, not threads)

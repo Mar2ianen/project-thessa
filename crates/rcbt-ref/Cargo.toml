@@ -1,0 +1,10 @@
+[package]
+name = "thessa-rcbt-ref"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Small independent observable-topology oracle for RCBT differential tests"
+
+[dependencies]

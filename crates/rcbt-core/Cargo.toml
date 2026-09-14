@@ -1,0 +1,22 @@
+[package]
+name = "thessa-rcbt-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Backend-agnostic concurrent binary tree contracts for adaptive terrain"
+
+[dependencies]
+
+[dev-dependencies]
+thessa-rcbt-ref = { path = "../rcbt-ref" }
+thessa-rcbt-ffi = { path = "../rcbt-ffi" }
+
+[[bench]]
+name = "tree"
+harness = false
+
+[[bench]]
+name = "cbt_vs_libcbt"
+harness = false

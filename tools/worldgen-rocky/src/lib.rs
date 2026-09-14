@@ -5,6 +5,7 @@
 //! All scales in metres; gores are normalized fractions.
 
 pub mod appearance;
+pub mod backend;
 pub mod bake;
 pub mod biomes;
 pub mod client_export;

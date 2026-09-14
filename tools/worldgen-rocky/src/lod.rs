@@ -2,6 +2,7 @@
 //! Tiles cache the field; they never define the terrain or own its random seed.
 use crate::{appearance::surface_appearance, field::PlanetField};
 use serde::{Deserialize, Serialize};
+use thessa_rcbt_core::{HeightPage, HeightPageError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TileKey {
@@ -222,6 +223,29 @@ pub struct TerrainTile {
     /// Signed bedrock height + slope, consumed by the surface material.
     pub surface: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
+}
+
+/// Bake one canonical field slice into the compact page format consumed by
+/// query and renderer adapters. The page address remains a `TileKey` owned by
+/// this terrain layer; `HeightPage` itself stays geometry-agnostic.
+pub fn bake_height_page(
+    field: &PlanetField,
+    key: TileKey,
+    grid_size: u32,
+    max_error_m: f64,
+) -> Result<HeightPage, HeightPageError> {
+    let cells = grid_size.saturating_sub(1).max(1) as usize;
+    let wavelength = (key.span_m(field.params.radius_m) / cells as f64).max(32.0);
+    let grid = grid_size as usize;
+    let samples: Vec<_> = (0..grid)
+        .flat_map(|y| {
+            (0..grid).map(move |x| {
+                let dir = key.direction(x as f64 / cells as f64, y as f64 / cells as f64);
+                field.height_m(dir, wavelength)
+            })
+        })
+        .collect();
+    HeightPage::bake(&samples, grid_size, max_error_m)
 }
 fn linear(v: f32) -> f32 {
     if v <= 0.04045 {
@@ -539,6 +563,26 @@ mod surface_regressions {
         assert!(a.albedo.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
         let mesh = build_tile(&field, key, 24);
         assert!(mesh.positions.iter().flatten().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn canonical_height_page_bakes_from_the_same_field_as_mesh() {
+        let field = field();
+        let key = TileKey {
+            face: 2,
+            level: 5,
+            x: 11,
+            y: 13,
+        };
+        let page = bake_height_page(&field, key, 9, 100.0).expect("page bake");
+        assert_eq!(page.grid_size(), 9);
+        let direction = key.direction(0.5, 0.5);
+        let source = field.height_m(
+            direction,
+            (key.span_m(field.params.radius_m) / 8.0).max(32.0),
+        );
+        assert!((page.sample(0.5, 0.5) as f64 - source).abs() <= 100.0);
+        assert!(page.max_slope_bound().is_finite());
     }
     #[test]
     fn priority_refinement_covers_the_camera_instead_of_a_distant_face() {

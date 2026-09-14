@@ -1,0 +1,13 @@
+[package]
+name = "thessa-rcbt-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Bench-only safe wrapper over the vendored upstream libcbt (never linked into the game runtime)"
+
+[dependencies]
+
+[build-dependencies]
+cc = "1.2"

@@ -1,6 +1,12 @@
 # 22 — `rcbt`: GPU-driven adaptive terrain and baked surface hierarchy
 
-Статус: **architecture / performance target**.
+Статус: **implementation baseline / performance target**.
+
+В workspace уже добавлены первые packages: `thessa-rcbt-core` (pure Rust
+logical tree и backend contract), `thessa-rcbt-ref` (portable differential
+oracle), `thessa-rcbt-wgpu` (WGSL/wgpu dispatch prototype) и
+`thessa-bevy-rcbt` (thin client resource/plugin adapter). Это ещё не замена
+текущего client terrain renderer: CPU tile path остаётся fallback до parity.
 
 Эта дока фиксирует следующий major terrain step после текущего очень быстрого CPU tile builder. Текущий cube-sphere path полезен как baseline и fallback: он доказал, что procedural geometry можно молотить на CPU со скоростью порядка километров в секунду и хорошо масштабировать по cores. Но fixed tile grid остаётся слишком грубой единицей refinement: при локальной потребности в нескольких дополнительных triangles строится целый tile, а CPU budget в итоге упирается в суммарное количество геометрии, которую вообще приходится производить.
 
@@ -623,3 +629,40 @@ Performance target intentionally aggressive: **reference implementation — base
 12. Cooperative-matrix decoder — только отдельный spike, если memory/page bandwidth остаётся bottleneck.
 
 Не оптимизировать всё одновременно: reference oracle и repeatable workload должны существовать раньше архитектурных трюков.
+
+---
+
+## 19. Current implementation baseline
+
+The current code slice provides:
+
+- heap-addressed `Node` values with the `libcbt` root/child/parent semantics;
+- split and parent-merge operations with explicit errors;
+- left-to-right leaf decode/encode symmetry;
+- atomic update batches and deterministic bounded frame planning;
+- terrain-adapter-supplied neighbor traversal with a bounded 2:1 balance pass;
+- stable topology serialization with validation and round-trip tests;
+- independent observable-topology differential tests against the reference
+  model;
+- backend-neutral `CbtBackend`, capability, binding, barrier, dispatch, and
+  metrics contracts;
+- a portable wgpu adapter with validated buffer ranges and compile-checked WGSL
+  kernel entry points;
+- a moving-camera-like sparse mutation benchmark (`cargo bench -p
+  thessa-rcbt-core --bench tree`);
+- a head-to-head bench against the real vendored C library
+  (`cargo bench -p thessa-rcbt-core --bench cbt_vs_libcbt`): identical
+  split/merge sequences replayed on both sides with leaf-set parity checks;
+  current-tune numbers on 4k-262k-leaf workloads show the native tree ahead
+  by ~4-6x on full refinement, ~9-19x on full decode and ~6-7x on
+  split/merge oscillation, with a larger gap on per-frame commit because the
+  C path re-scans the fixed heap while the native path commits only touched
+  leaves (measured, not claimed: rerun the bench on your machine);
+- a terrain-level `legacy-cpu vs rcbt-pages` comparison on shared selections
+  (`cargo bench -p thessa-worldgen-rocky --bench compare`).
+
+This baseline intentionally does not claim the M2.5 exit criteria. Baked page
+provider, LEB/cube-sphere neighbor balancing, GPU semantic split/merge kernels,
+indirect terrain draws, Bevy extraction, and visual error captures remain the
+next integration layers. No server or authoritative `PlanetField` code may
+depend on them.

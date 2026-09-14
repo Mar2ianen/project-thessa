@@ -1,0 +1,12 @@
+[package]
+name = "thessa-bevy-rcbt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Thin Bevy client adapter for the backend-neutral RCBT runtime"
+
+[dependencies]
+bevy.workspace = true
+thessa-rcbt-core = { path = "../rcbt-core" }

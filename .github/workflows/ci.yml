@@ -136,6 +136,15 @@ jobs:
       - name: Compile terrain tile benchmark
         run: cargo bench -p thessa-worldgen-rocky --bench tiles --no-run
 
+      - name: Compile terrain backend comparison benchmark
+        run: cargo bench -p thessa-worldgen-rocky --bench compare --no-run
+
+      - name: Compile RCBT benchmark
+        run: cargo bench -p thessa-rcbt-core --bench tree --no-run
+
+      - name: Compile RCBT vs libcbt benchmark
+        run: cargo bench -p thessa-rcbt-core --bench cbt_vs_libcbt --no-run
+
   reference-validation:
     name: Reference validation
     runs-on: ubuntu-latest

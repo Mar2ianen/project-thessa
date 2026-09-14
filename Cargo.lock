@@ -5314,6 +5314,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "thessa-bevy-rcbt"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "thessa-rcbt-core",
+]
+
+[[package]]
 name = "thessa-client"
 version = "0.0.1"
 dependencies = [
@@ -5321,6 +5329,7 @@ dependencies = [
  "bevy_brp_extras",
  "serde",
  "thessa-atmosphere",
+ "thessa-bevy-rcbt",
  "thessa-flight-authority",
  "thessa-flight-net",
  "thessa-graphics",
@@ -5376,6 +5385,34 @@ version = "0.0.1"
 dependencies = [
  "postcard",
  "serde",
+]
+
+[[package]]
+name = "thessa-rcbt-core"
+version = "0.0.1"
+dependencies = [
+ "thessa-rcbt-ffi",
+ "thessa-rcbt-ref",
+]
+
+[[package]]
+name = "thessa-rcbt-ffi"
+version = "0.0.1"
+dependencies = [
+ "cc",
+]
+
+[[package]]
+name = "thessa-rcbt-ref"
+version = "0.0.1"
+
+[[package]]
+name = "thessa-rcbt-wgpu"
+version = "0.0.1"
+dependencies = [
+ "naga",
+ "thessa-rcbt-core",
+ "wgpu",
 ]
 
 [[package]]
@@ -5436,6 +5473,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thessa-perf",
+ "thessa-rcbt-core",
  "toml",
 ]
 
@@ -6058,12 +6096,14 @@ dependencies = [
  "js-sys",
  "log",
  "naga",
+ "parking_lot",
  "portable-atomic",
  "profiling",
  "raw-window-handle",
  "smallvec",
  "static_assertions",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "wgpu-core",
  "wgpu-hal",
@@ -6096,6 +6136,7 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.20",
  "wgpu-core-deps-apple",
+ "wgpu-core-deps-emscripten",
  "wgpu-core-deps-wasm",
  "wgpu-core-deps-windows-linux-android",
  "wgpu-hal",
@@ -6108,6 +6149,15 @@ name = "wgpu-core-deps-apple"
 version = "29.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5e39e26c4c0e07589e67d18546cf79ff45383659fc72fca4dd293358a0347f3"
+dependencies = [
+ "wgpu-hal",
+]
+
+[[package]]
+name = "wgpu-core-deps-emscripten"
+version = "29.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef043bf135cc68b6f667c55ff4e345ce2b5924d75bad36a47921b0287ca4b24a"
 dependencies = [
  "wgpu-hal",
 ]

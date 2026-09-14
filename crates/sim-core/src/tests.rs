@@ -2608,10 +2608,12 @@ fn x15_post_stall_is_drag_dominated() {
     ) -> crate::AeroCoefficients {
         let mut panel = AeroPanel::flat_plate(DVec3::ZERO, 10.0, 2.0).expect("panel");
         panel.control_deflection_rad = deflection_rad;
-        let mut config = AeroConfig::default();
-        config.lift_slope_per_rad = slope;
-        config.stall_angle_rad = stall_deg.to_radians();
-        config.max_lift_coefficient = max;
+        let config = AeroConfig {
+            lift_slope_per_rad: slope,
+            stall_angle_rad: stall_deg.to_radians(),
+            max_lift_coefficient: max,
+            ..AeroConfig::default()
+        };
         // Constant-speed direction sweep: exact alpha at constant Mach,
         // unlike the tan() construction which blows up Mach near 90 deg.
         let alpha = alpha_deg.to_radians();

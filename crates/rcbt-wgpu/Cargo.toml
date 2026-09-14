@@ -1,0 +1,15 @@
+[package]
+name = "thessa-rcbt-wgpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Portable wgpu backend adapter for RCBT compute stages"
+
+[dependencies]
+thessa-rcbt-core = { path = "../rcbt-core" }
+wgpu.workspace = true
+
+[dev-dependencies]
+naga = { version = "29.0.4", features = ["wgsl-in"] }

@@ -489,6 +489,12 @@ Cache padding/align tricks only after measured false sharing, consistent with pr
    которые 4-wide ядро покрывает без хвоста вообще. Падинг/маски отложить до
    замера нового горячего цикла после реализации §8.
 
+   Update (второй проход): frame/cohort kernels стали строго serial по
+   измерению (диспетчеризация дороже математики до ~10k таргетов), так что
+   вопрос падинга/масок жив только для table-snapshot пути (`accel_with`),
+   где каскад 8→4→scalar остаётся. Там решение — по-прежнему замер хвоста
+   против цены копии/пада, отдельно от флотового тика.
+
 ---
 
 ## 12. Autopilot and trajectory planner reuse
@@ -886,3 +892,61 @@ round-trip (позиции+состояния туда, ускорения об�
   exact-ревалидации;
 - счётчики показывают остаток цены: exact/target, splits, cohorts,
   reuses, posted bound — в каждом прогоне fleet_prop/planner_batch.
+
+---
+
+## 23. Второй проход: ревью-фиксы, serial kernels, настоящие низкие орбиты
+
+Код-ревью пачки `eb4d03c/096a06b` (читался именно код, не summary) дал
+семь пунктов — все приняты:
+
+- P1/benchmark: `6.9e6 m` — это ~3700 км над Thessa (R = 3200 км), не
+  низкая орбита. Якоря заменены на `radius_m + alt`, трио 100/300/1000 км.
+- P1/perf: inner Rayon удалён из `accelerations_from_frame` и
+  `eval_patch_batch` — kernels строго serial; parallelism только уровнем
+  выше (fleets/cohorts/jobs). Замер подтверждает: framed/cohort
+  thread-invariant (x300: 792/190 мс на 1T против 790/183 мс на 20T),
+  дивергенция побитово та же.
+- P2/telemetry: `exact_terms` считался до проверки бюджета (отвергнутый
+  parent засчитывал невыполненную работу) — перенесён в accepted branch.
+- P2/perf cliff: median-tie degenerate check удалён — tie-break по index
+  и так детерминированно делит пополам; `[0,0,0,1]` больше не валится в
+  full exact.
+- P2/contract: tree тратит remaining budget (ascending обход) — posted
+  bound всегда ≤ allocated; multi-accept тест падает на старом коде,
+  проходит на новом (проверено revert-прогоном).
+- P3: leaf support radius = 0 (point-mass; физический радиус — дело
+  collision/surface, не monopole error).
+- P3/validation: split-тест требует measured ≤ posted (не 10x budget) +
+  deterministic property-test (LCG, 3 системы × 16 геометрий).
+- Perf-мясо: inplace indices + `split_at_mut`, indexed compile без копий
+  групп; serial kernels пишут сразу в слоты (без temp+scatter).
+
+Финальный KPI, 40k тиков × 0.5 с, бюджет 1e-9 (обе колонки честно):
+
+```text
+case            direct 1T   direct 20T  framed   cohort   vs best-direct  vs framed  div
+deep x128       23.7 s      —           0.40 s   0.159 s  ~25x (*)        2.5x       2.8 см
+deep x300       55.8 s      9.24 s      0.79 s   0.190 s  50x             4.2x       6.0 см
+deep x1000      184.8 s     —           2.41 s   0.407 s  ~75x (*)        5.9x       6.3 см
+low100km x300   55.5 s      9.25 s      0.79 s   0.302 s  30x             2.6x       2.3 м
+low300km x300   55.5 s      9.36 s      0.81 s   0.299 s  31x             2.7x       0.98 м
+low1000km x300  55.6 s      8.97 s      0.78 s   0.309 s  28x             2.5x       0.54 м
+```
+
+(*) direct на 20T измерен только для x300 (~6x vs 1T); для x128/x1000
+оценка делением. Первая колонка — выигрыш против старого алгоритма,
+вторая — цена именно новой математики относительно нормального exact.
+
+Низкие орбиты: exact-near pressure 3.1–3.4/22 (против 0 в deep space),
+splits тысячи, reuse 26–34%, группа разносится до ~1800 км — и всё равно
+2.5–2.7x vs framed при дивергенции 0.5–2.3 м за 20 000 с.
+
+Планировщик serial-vs-serial: x1000 — 8.4x (7 нс/кандидат), x10000 —
+7.5–8x. Single-tick флок: cohort 15–22 нс/таргет deep/low при 1–2 exact.
+
+Вывод про parallelism обновлён и усилен: kernels serial
+by construction (измерение применено в реализации, а не только в доке);
+масштабирование — coarse задачами. Точка crossover для возврата
+внутреннего Rayon не найдена до 10k таргетов — single-thread cohort тик
+x1000 занимает 10 мкс.

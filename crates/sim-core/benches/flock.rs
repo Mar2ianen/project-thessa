@@ -123,7 +123,7 @@ fn bench_gravity_scenario(
         let tree = GravitySourceTree::build(ephemeris).expect("source tree");
         for budget in [1.0e-9, 1.0e-12] {
             let states = frame.evaluate(ephemeris, time).expect("tree frame states");
-            let frames = tree.resolve(ephemeris, states).expect("node frames");
+            let frames = tree.resolve(states).expect("node frames");
             let mut visited = 0_u64;
             let mut exact_terms = 0_u64;
             for position in &positions {
@@ -356,11 +356,17 @@ fn main() {
         &counts,
     );
 
-    // Scenario 2 (doc 16.2): convoy near Thessa with 1-3 exact-near sources —
-    // low orbit band where the near field dominates.
-    let low_orbit = home.position_inertial + DVec3::new(6.9e6, 0.0, 0.0);
+    // Scenario 2: true low orbit — body radius plus 200 km altitude, not a
+    // hard-coded 6.9e6 m (which is ~3700 km over Thessa's 3200 km radius).
+    let thessa_radius_m = ephemeris
+        .bodies
+        .iter()
+        .find(|body| body.name == "thessa")
+        .expect("thessa body")
+        .radius_m;
+    let low_orbit = home.position_inertial + DVec3::new(thessa_radius_m + 200_000.0, 0.0, 0.0);
     bench_gravity_scenario(
-        "near-body convoy",
+        "low-orbit convoy",
         &field,
         &ephemeris,
         low_orbit,

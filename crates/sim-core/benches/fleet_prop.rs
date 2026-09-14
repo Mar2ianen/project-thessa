@@ -155,19 +155,28 @@ fn main() {
         &[128, 300, 1_000],
         only,
     );
-    // Scenario 2: low-orbit convoy — Kepler shear disperses the group, the
-    // cohorts split and degrade gracefully to exact. Validation scenario,
-    // not the KPI one: divergence must stay bounded while physics demands
-    // exact work.
-    run_scenario(
-        "low-orbit shear",
-        &field,
-        &ephemeris,
-        home.position_inertial + DVec3::new(6.9e6, 0.0, 0.0),
-        home.velocity_inertial + DVec3::new(0.0, (mu / 6.9e6).sqrt(), 0.0),
-        &[300],
-        only,
-    );
+    // Scenarios 2-4: true low orbits at 100/300/1000 km altitude over the
+    // body radius — strong gradient, exact-near pressure, Kepler shear.
+    // (The old 6.9e6 m anchor was ~3700 km over Thessa's 3200 km radius,
+    // i.e. not a low orbit at all.)
+    let thessa_radius_m = ephemeris
+        .bodies
+        .iter()
+        .find(|body| body.name == "thessa")
+        .expect("thessa body")
+        .radius_m;
+    for altitude_km in [100, 300, 1_000] {
+        let radius = thessa_radius_m + altitude_km as f64 * 1000.0;
+        run_scenario(
+            &format!("low-orbit {}km", altitude_km),
+            &field,
+            &ephemeris,
+            home.position_inertial + DVec3::new(radius, 0.0, 0.0),
+            home.velocity_inertial + DVec3::new(0.0, (mu / radius).sqrt(), 0.0),
+            &[300],
+            only,
+        );
+    }
 }
 
 fn convoy(anchor: DVec3, base_velocity: DVec3, count: usize) -> Fleet {

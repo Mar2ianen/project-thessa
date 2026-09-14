@@ -6,10 +6,12 @@
 //! stdin. The handshake runs on the calling thread with a timeout so a
 //! missing or skewed server degrades to local simulation.
 
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::channel;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use thessa_flight_net::{ClientInput, Snapshot};
@@ -22,16 +24,42 @@ struct ReceivedSnapshot {
 }
 
 struct SnapshotInbox {
-    receiver: Receiver<ReceivedSnapshot>,
+    queue: Arc<Mutex<VecDeque<ReceivedSnapshot>>>,
     previous: Option<ReceivedSnapshot>,
     latest: Option<ReceivedSnapshot>,
     next_generation: u64,
     delivered_generation: u64,
 }
 
+#[derive(Clone)]
+struct SnapshotInboxWriter {
+    queue: Arc<Mutex<VecDeque<ReceivedSnapshot>>>,
+}
+
 impl SnapshotInbox {
+    fn new() -> (Self, SnapshotInboxWriter) {
+        let queue = Arc::new(Mutex::new(VecDeque::with_capacity(2)));
+        (
+            Self {
+                queue: queue.clone(),
+                previous: None,
+                latest: None,
+                next_generation: 0,
+                delivered_generation: 0,
+            },
+            SnapshotInboxWriter { queue },
+        )
+    }
+
     fn drain(&mut self) {
-        while let Ok(received) = self.receiver.try_recv() {
+        // A poisoned inbox means the reader thread panicked: keep serving
+        // the last good snapshots instead of killing the render thread.
+        let Ok(mut queue) = self.queue.lock() else {
+            return;
+        };
+        let received_snapshots = queue.drain(..).collect::<Vec<_>>();
+        drop(queue);
+        for received in received_snapshots {
             self.next_generation = self.next_generation.wrapping_add(1);
             let received = ReceivedSnapshot {
                 generation: self.next_generation,
@@ -77,6 +105,21 @@ impl SnapshotInbox {
     }
 }
 
+impl SnapshotInboxWriter {
+    /// Non-blocking latest-wins ingress. At most the two newest
+    /// receive-timestamped snapshots are retained for interpolation.
+    fn push(&self, received: ReceivedSnapshot) -> bool {
+        let Ok(mut queue) = self.queue.try_lock() else {
+            return false;
+        };
+        if queue.len() == 2 {
+            queue.pop_front();
+        }
+        queue.push_back(received);
+        true
+    }
+}
+
 fn interpolate_snapshot(previous: &Snapshot, latest: &Snapshot, alpha: f64) -> Snapshot {
     let alpha = alpha.clamp(0.0, 1.0);
     let mut snapshot = latest.clone();
@@ -108,27 +151,55 @@ struct InputMailbox {
     closed: AtomicBool,
 }
 
+const MAX_PENDING_EDGE_COMMANDS: usize = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputPushError {
+    Closed,
+    TooManyEdgeCommands,
+}
+
 impl InputMailbox {
-    fn push(&self, input: ClientInput) {
+    fn push(&self, input: ClientInput) -> Result<(), InputPushError> {
         if self.closed.load(Ordering::Acquire) {
-            return;
+            return Err(InputPushError::Closed);
         }
-        let mut pending = self.pending.lock().expect("input mailbox poisoned");
+        // Poisoning means another thread panicked while holding the mailbox:
+        // the link is unusable, report it as closed instead of panicking.
+        let Ok(mut pending) = self.pending.lock() else {
+            return Err(InputPushError::Closed);
+        };
         if self.closed.load(Ordering::Acquire) {
-            return;
+            return Err(InputPushError::Closed);
         }
-        if let Some(queued) = pending.as_mut() {
-            let commands = std::mem::take(&mut queued.commands);
-            *queued = input;
-            queued.commands = merge_commands(commands, std::mem::take(&mut queued.commands));
-        } else {
-            *pending = Some(input);
+        let mut input = input;
+        let queued_commands = pending
+            .as_mut()
+            .map(|queued| std::mem::take(&mut queued.commands))
+            .unwrap_or_default();
+        let original_commands = queued_commands.clone();
+        let merged_commands = merge_commands(queued_commands, std::mem::take(&mut input.commands));
+        if merged_commands
+            .iter()
+            .filter(|command| is_edge_command(command))
+            .count()
+            > MAX_PENDING_EDGE_COMMANDS
+        {
+            if let Some(queued) = pending.as_mut() {
+                queued.commands = original_commands;
+            }
+            return Err(InputPushError::TooManyEdgeCommands);
         }
+        input.commands = merged_commands;
+        *pending = Some(input);
         self.wake.notify_one();
+        Ok(())
     }
 
     fn take(&self) -> Option<ClientInput> {
-        let mut pending = self.pending.lock().expect("input mailbox poisoned");
+        let Ok(mut pending) = self.pending.lock() else {
+            return None;
+        };
         loop {
             if let Some(input) = pending.take() {
                 return Some(input);
@@ -136,7 +207,10 @@ impl InputMailbox {
             if self.closed.load(Ordering::Acquire) {
                 return None;
             }
-            pending = self.wake.wait(pending).expect("input mailbox poisoned");
+            pending = match self.wake.wait(pending) {
+                Ok(guard) => guard,
+                Err(_) => return None,
+            };
         }
     }
 
@@ -144,11 +218,21 @@ impl InputMailbox {
         // `take` checks `closed` while holding this mutex and then waits on
         // the same predicate. Change the predicate under that mutex so a
         // waiter cannot observe the old value, release the lock, and miss
-        // the notification between its check and wait.
-        let _pending = self.pending.lock().expect("input mailbox poisoned");
+        // the notification between its check and wait. If the mutex is
+        // poisoned the waiter is already broken: still flip the flag.
+        let _guard = self.pending.lock();
         self.closed.store(true, Ordering::Release);
         self.wake.notify_all();
     }
+}
+
+fn is_edge_command(command: &thessa_flight_net::Command) -> bool {
+    matches!(
+        command,
+        thessa_flight_net::Command::Stage
+            | thessa_flight_net::Command::Engine { .. }
+            | thessa_flight_net::Command::Reset
+    )
 }
 
 fn merge_commands(
@@ -241,7 +325,7 @@ impl EmbeddedLink {
             .map_err(|error| format!("child process: {error}"))?;
         let mut startup = StartupChild::new(child);
 
-        let (snapshots_tx, snapshots) = channel();
+        let (snapshots, snapshots_writer) = SnapshotInbox::new();
         let (welcomed_tx, welcomed_rx) = channel::<()>();
 
         // Reader thread owns stdout end to end: Welcome gate, then snapshots.
@@ -275,15 +359,17 @@ impl EmbeddedLink {
                                 }
                                 if let Ok(snapshot) =
                                     thessa_flight_net::decode_payload::<Snapshot>(&envelope)
-                                    && snapshots_tx
-                                        .send(ReceivedSnapshot {
-                                            snapshot,
-                                            received_at: std::time::Instant::now(),
-                                            generation: 0,
-                                        })
-                                        .is_err()
                                 {
-                                    return;
+                                    let accepted = snapshots_writer.push(ReceivedSnapshot {
+                                        snapshot,
+                                        received_at: std::time::Instant::now(),
+                                        generation: 0,
+                                    });
+                                    if !accepted {
+                                        eprintln!(
+                                            "[client] snapshot inbox busy; dropping stale snapshot"
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -339,21 +425,26 @@ impl EmbeddedLink {
         let child = startup.disarm();
 
         Ok(Self {
-            snapshots: std::sync::Mutex::new(SnapshotInbox {
-                receiver: snapshots,
-                previous: None,
-                latest: None,
-                next_generation: 0,
-                delivered_generation: 0,
-            }),
+            snapshots: std::sync::Mutex::new(snapshots),
             inputs,
             child,
         })
     }
-
-    /// Queue one input for the server (never blocks; drops on disconnect).
-    pub fn send_input(&self, input: &ClientInput) {
-        self.inputs.push(input.clone());
+    /// Queue one input for the server (never blocks; closes on command
+    /// overflow or disconnect so an accepted edge can never be silently
+    /// dropped).
+    pub fn send_input(&self, input: &ClientInput) -> bool {
+        match self.inputs.push(input.clone()) {
+            Ok(()) => true,
+            Err(InputPushError::Closed) => false,
+            Err(InputPushError::TooManyEdgeCommands) => {
+                eprintln!(
+                    "[client] embedded input mailbox overflow; closing link to preserve command ordering"
+                );
+                self.inputs.close();
+                false
+            }
+        }
     }
 
     /// Drain snapshots, keeping the newest. `None` when nothing arrived.
@@ -428,30 +519,19 @@ mod tests {
 
     #[test]
     fn snapshot_inbox_delivers_each_arrival_once() {
-        let (sender, receiver) = channel();
-        let mut inbox = SnapshotInbox {
-            receiver,
-            previous: None,
-            latest: None,
-            next_generation: 0,
-            delivered_generation: 0,
-        };
-        sender
-            .send(ReceivedSnapshot {
-                snapshot: snapshot(DVec3::X, 0.0, 1.0),
-                received_at: std::time::Instant::now(),
-                generation: 0,
-            })
-            .expect("snapshot");
+        let (mut inbox, sender) = SnapshotInbox::new();
+        assert!(sender.push(ReceivedSnapshot {
+            snapshot: snapshot(DVec3::X, 0.0, 1.0),
+            received_at: std::time::Instant::now(),
+            generation: 0,
+        }));
         assert!(inbox.latest().is_some());
         assert!(inbox.latest().is_none());
-        sender
-            .send(ReceivedSnapshot {
-                snapshot: snapshot(DVec3::Y, 0.0, 1.0),
-                received_at: std::time::Instant::now(),
-                generation: 0,
-            })
-            .expect("second snapshot");
+        assert!(sender.push(ReceivedSnapshot {
+            snapshot: snapshot(DVec3::Y, 0.0, 1.0),
+            received_at: std::time::Instant::now(),
+            generation: 0,
+        }));
         assert_eq!(
             inbox
                 .latest()
@@ -465,29 +545,18 @@ mod tests {
 
     #[test]
     fn snapshot_inbox_preserves_reader_receive_times_when_drained_together() {
-        let (sender, receiver) = channel();
+        let (mut inbox, sender) = SnapshotInbox::new();
         let base = std::time::Instant::now();
-        let mut inbox = SnapshotInbox {
-            receiver,
-            previous: None,
-            latest: None,
-            next_generation: 0,
-            delivered_generation: 0,
-        };
-        sender
-            .send(ReceivedSnapshot {
-                snapshot: snapshot(DVec3::X, 0.0, 1.0),
-                received_at: base,
-                generation: 0,
-            })
-            .expect("first snapshot");
-        sender
-            .send(ReceivedSnapshot {
-                snapshot: snapshot(DVec3::Y, 0.0, 2.0),
-                received_at: base + Duration::from_millis(50),
-                generation: 0,
-            })
-            .expect("second snapshot");
+        assert!(sender.push(ReceivedSnapshot {
+            snapshot: snapshot(DVec3::X, 0.0, 1.0),
+            received_at: base,
+            generation: 0,
+        }));
+        assert!(sender.push(ReceivedSnapshot {
+            snapshot: snapshot(DVec3::Y, 0.0, 2.0),
+            received_at: base + Duration::from_millis(50),
+            generation: 0,
+        }));
 
         assert!(
             inbox.latest().is_some(),
@@ -499,6 +568,21 @@ mod tests {
             latest.received_at.duration_since(previous.received_at),
             Duration::from_millis(50)
         );
+    }
+
+    #[test]
+    fn snapshot_inbox_flood_keeps_only_the_two_newest_arrivals() {
+        let (mut inbox, sender) = SnapshotInbox::new();
+        for position in 0..100 {
+            assert!(sender.push(ReceivedSnapshot {
+                snapshot: snapshot(DVec3::X * position as f64, 0.0, position as f64),
+                received_at: std::time::Instant::now(),
+                generation: 0,
+            }));
+        }
+        inbox.drain();
+        assert_eq!(inbox.previous.as_ref().unwrap().snapshot.tick, 98);
+        assert_eq!(inbox.latest.as_ref().unwrap().snapshot.tick, 99);
     }
 
     #[test]
@@ -522,6 +606,37 @@ mod tests {
                 .expect("close must wake a blocked waiter")
         );
         thread.join().expect("waiter thread");
+    }
+
+    #[test]
+    fn input_mailbox_bounds_edge_events_without_dropping_an_accepted_input() {
+        let mailbox = InputMailbox {
+            pending: std::sync::Mutex::new(None),
+            wake: std::sync::Condvar::new(),
+            closed: AtomicBool::new(false),
+        };
+        let mut input = ClientInput {
+            tick: 0,
+            control_input: [0.0; 3],
+            control_mode: thessa_flight_authority::ControlMode::Direct,
+            sas_target_xyzw: [0.0, 0.0, 0.0, 1.0],
+            throttle: 0.0,
+            engine_active: false,
+            sas_enabled: false,
+            rcs_enabled: false,
+            gear_down: false,
+            commands: vec![Command::Stage; MAX_PENDING_EDGE_COMMANDS],
+        };
+        assert!(mailbox.push(input.clone()).is_ok());
+        input.commands.push(Command::Stage);
+        assert_eq!(
+            mailbox.push(input),
+            Err(InputPushError::TooManyEdgeCommands)
+        );
+        assert_eq!(
+            mailbox.take().expect("accepted input").commands.len(),
+            MAX_PENDING_EDGE_COMMANDS
+        );
     }
 
     #[cfg(unix)]

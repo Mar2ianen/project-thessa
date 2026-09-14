@@ -836,7 +836,7 @@ fn simulate_pilot_flight(
         // live input buffer down and adopts the newest snapshot. Pause
         // and error states live server-side, so neither early-returns
         // below may skip adoption.
-        link.send_input(&client_input_for_server(&runtime, &state, &clock, vec![]));
+        let sent = link.send_input(&client_input_for_server(&runtime, &state, &clock, vec![]));
         if let Some(snapshot) = link.latest_snapshot() {
             adopt_snapshot(
                 &mut runtime,
@@ -844,6 +844,15 @@ fn simulate_pilot_flight(
                 state.control_mode,
                 &snapshot,
             );
+        }
+        // A failed send means the mailbox is closed (overflow or dead
+        // server): no new snapshots will arrive. Surface it instead of
+        // freezing silently on the last interpolated frame. Set after
+        // adoption — adopting a stale snapshot would clobber it.
+        if !sent && runtime.flight_error.is_none() {
+            let message = "embedded server link lost; restart the session".to_string();
+            perf.push_event("Server link lost", Some(message.clone()));
+            runtime.flight_error = Some(message);
         }
         if let Some(snapshot) = link.interpolated_snapshot() {
             runtime.sync_render_snapshot(&ephemeris.ephemeris, &snapshot);
@@ -981,12 +990,18 @@ fn pilot_input(
     // by the next snapshot and only flicker.
     if runtime.flight_error.is_some() && keys.just_pressed(KeyCode::Backspace) {
         if let Some(link) = link.as_deref() {
-            link.send_input(&client_input_for_server(
+            let sent = link.send_input(&client_input_for_server(
                 &runtime,
                 &state,
                 &clock,
                 vec![Command::Reset],
             ));
+            if !sent {
+                // Link is dead: the stale server error (if any) will never
+                // clear, so replace it with the actionable cause.
+                runtime.flight_error =
+                    Some("embedded server link lost; restart the session".to_string());
+            }
             runtime.input_throttle = 0.0;
             runtime.input_engine_active = true;
         } else if let Err(error) = runtime.reset_to_launch_site(&ephemeris.ephemeris) {

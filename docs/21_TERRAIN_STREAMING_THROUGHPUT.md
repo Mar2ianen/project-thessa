@@ -741,3 +741,142 @@ canonical field
 - client connects -> visual representation builds without changing physics.
 
 Следующий шаг — не отказаться от процедурности, а **перенести каждый вид procedural work туда, где его стоимость соответствует его consumer: queries/contact на CPU server side, visual frequency/detail на GPU client side**.
+
+## 18. UMA / unified-memory asset residency follow-up
+
+Отдельно от алгоритма LOD и процедурного поля у текущего client path есть более низкоуровневая возможность: уменьшить число **логических копий render data**. На UMA это особенно важно, потому что CPU и GPU конкурируют за один DRAM pool и один memory bandwidth, но выигрыш полезен и на dGPU как экономия system RAM и memcpy.
+
+Нужно различать три задачи:
+
+```text
+A. lifetime / residency
+   не держать CPU payload после того, как immutable asset подготовлен renderer'ом
+
+B. transient build copies
+   не клонировать большие Vec между TerrainTile / SurfaceTexture / Mesh / Image
+
+C. true zero-copy / mapped GPU memory
+   отдельная поздняя оптимизация; не предполагать, что A или B автоматически
+   превращают Bevy/wgpu upload path в zero-copy
+```
+
+### 18.1 Current code-specific opportunities
+
+Сейчас terrain textures уже создаются как `RenderAssetUsages::RENDER_WORLD`, то есть после extraction/preparation их CPU-side pixel payload можно выбросить. Terrain mesh при этом создаётся как:
+
+```rust
+RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD
+```
+
+Это оставляет vertex/index payload доступным в `Assets<Mesh>` даже после подготовки render representation. Для immutable terrain tile это выглядит лишним: `CachedTile` уже хранит `vertices` и `triangles`, а `WorldTerrain` уже считает visible counters из cache metadata.
+
+Отдельный perf path пока снова проходит по `Assets<Mesh>` ради `count_vertices()` / `indices().len()`. Это не должно быть причиной держать полный CPU mesh resident. Эти counters можно брать из `WorldTerrain.visible + WorldTerrain.cache`, после чего terrain mesh может стать render-only asset:
+
+```rust
+Mesh::new(
+    PrimitiveTopology::TriangleList,
+    RenderAssetUsages::RENDER_WORLD,
+)
+```
+
+Target lifecycle тогда такой:
+
+```text
+worker builds tile
+    -> Mesh/Image payload exists on CPU temporarily
+    -> Bevy extracts/prepares render asset
+    -> CPU payload is dropped
+    -> cache keeps Handle + anchor + vertex/triangle/byte metadata
+```
+
+Это **не обещание zero-copy**. Render-world buffer/texture allocation всё ещё существует, а backend может выполнять staging/upload. Выигрыш здесь — не держать вторую долгоживущую CPU representation без consumer.
+
+### 18.2 Avoid worker-local clones before touching renderer internals
+
+Текущий worker также делает копии ещё до Bevy asset extraction:
+
+```text
+TerrainTile.positions.clone() -> Mesh
+TerrainTile.normals.clone()   -> Mesh
+TerrainTile.indices.clone()   -> Mesh
+
+SurfaceTexture.albedo.clone()    -> Image
+SurfaceTexture.roughness.clone() -> Image
+SurfaceTexture.normal.clone()    -> Image
+```
+
+После assembly исходные `TerrainTile` / `SurfaceTexture` больше не являются cache representation. Поэтому builder API стоит перестроить на ownership/move:
+
+```text
+build_tile() / build_surface_texture()
+        |
+        v
+owned vectors
+        |
+        +--> move into Mesh
+        `--> move into Image
+```
+
+Для mesh это может означать `mesh_from_tile(tile: TerrainTile, ...)` либо destructuring с сохранением `anchor`, `vertices`, `triangles` metadata до move. Для texture — передавать owned channel vectors в `surface_image()` без `.clone()`.
+
+Это уменьшает transient allocation и memory traffic независимо от GPU architecture. На UMA выгода потенциально заметнее именно потому, что worker CPU traffic и renderer traffic делят один memory subsystem.
+
+### 18.3 Memory accounting must describe logical residency, not pretend UMA is discrete VRAM
+
+Текущий `world.cache_bytes` оценивает один mesh payload плюс texture bytes. Это полезный logical cache metric, но он не описывает:
+
+- retained CPU mesh payload;
+- render-world/GPU allocation;
+- temporary worker copies;
+- allocator overhead;
+- staging/upload buffers;
+- физическую residency UMA, где отдельного независимого VRAM pool может не быть.
+
+Поэтому performance monitoring лучше разделить как минимум на:
+
+```text
+terrain.cache_logical_bytes
+terrain.cpu_asset_payload_bytes
+terrain.build_transient_bytes_estimate
+terrain.upload_bytes_per_s
+```
+
+`gpu_mem_bytes`/physical UMA residency не нужно синтезировать, если backend не даёт достоверной цифры. Logical byte counters всё равно позволяют проверить, что refactor реально убрал лишнюю representation.
+
+### 18.4 Capability-driven UMA fast path — only after profiling
+
+Если после material split, ownership cleanup и render-only assets измерения покажут, что bottleneck остаётся именно в CPU->GPU upload/copy, тогда можно отдельно исследовать shared-memory fast path:
+
+```text
+capability detection
+    |
+    +--> UMA / host-visible device-local memory available
+    |       -> mapped/ring-buffer or equivalent upload strategy
+    |
+    `--> discrete / unsuitable memory type
+            -> normal staging/upload path
+```
+
+Это должен быть **capability-driven**, а не `if vendor == AMD`. Linux/Vulkan, Metal и другие wgpu backends остаются first-class; backend-specific shortcut не должен проникать в `PlanetField`, terrain semantics или server code.
+
+В wgpu/Bevy такой путь может потребовать более глубокого render-asset/custom-buffer integration и явной синхронизации mapped vs GPU use. Поэтому он не должен предшествовать простым измеримым изменениям выше.
+
+### 18.5 Suggested low-risk order
+
+До крупных renderer rewrites:
+
+1. Перевести immutable terrain `Mesh` на `RenderAssetUsages::RENDER_WORLD`.
+2. Убрать perf dependency на CPU `Assets<Mesh>` и считать visible geometry из `CachedTile` metadata.
+3. Убрать `.clone()` больших mesh/texture vectors в worker assembly через ownership transfer.
+4. Добавить logical/transient/upload byte metrics.
+5. Снять одинаковые hover / 3 km/s / 5 km/s captures на UMA и dGPU, если доступны.
+6. Только если upload остаётся bottleneck — spike mapped/shared-memory path.
+
+Acceptance criteria:
+
+- identical visible terrain and canonical physics;
+- те же visible vertex/triangle counters;
+- меньше retained CPU payload и worker transient traffic;
+- RSS/peak memory не хуже, на UMA ожидается ниже;
+- p95 `request_to_visible` не ухудшается;
+- никакой vendor lock-in и никакой GPU requirement для authoritative terrain.

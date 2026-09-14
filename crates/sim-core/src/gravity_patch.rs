@@ -29,7 +29,6 @@
 //! not part of this layer.
 
 use glam::{DMat3, DVec3};
-use rayon::prelude::*;
 
 use crate::{BakedEphemeris, BodyId, BodyState, GravityError};
 
@@ -173,6 +172,33 @@ fn classify_sources(
     Ok(SourceClasses { exact, far })
 }
 
+/// Bounding ball (anchor + radius) over an iterator of points, with the
+/// same finiteness contract everywhere it is used. Empty input yields a
+/// non-finite anchor and fails open, matching the old fold behavior.
+fn ball_of(
+    points: impl ExactSizeIterator<Item = DVec3> + Clone,
+) -> Result<(DVec3, f64), PatchError> {
+    let mut anchor = DVec3::ZERO;
+    for position in points.clone() {
+        if !position.is_finite() {
+            return Err(PatchError::NonFiniteInput);
+        }
+        anchor += position;
+    }
+    anchor /= points.len() as f64;
+    if !anchor.is_finite() {
+        return Err(PatchError::NonFiniteInput);
+    }
+    let mut radius_m = 0.0_f64;
+    for position in points {
+        radius_m = radius_m.max((position - anchor).length());
+    }
+    if !radius_m.is_finite() {
+        return Err(PatchError::NonFiniteInput);
+    }
+    Ok((anchor, radius_m))
+}
+
 /// Compile one patch over `positions` (non-empty): bounding ball anchor,
 /// exact-near classification, exact `g0`/`J` over far sources, total bound.
 /// Fails open (caller falls back) only on non-finite input, never silently.
@@ -183,23 +209,19 @@ pub fn compile_patch(
     config: CohortConfig,
 ) -> Result<GravityPatch, PatchError> {
     config.validate().map_err(PatchError::Gravity)?;
-    let anchor = positions
-        .iter()
-        .fold(DVec3::ZERO, |sum, position| sum + *position)
-        / positions.len() as f64;
-    if !anchor.is_finite() {
-        return Err(PatchError::NonFiniteInput);
-    }
-    let mut radius_m = 0.0_f64;
-    for position in positions {
-        if !position.is_finite() {
-            return Err(PatchError::NonFiniteInput);
-        }
-        radius_m = radius_m.max((*position - anchor).length());
-    }
-    if !radius_m.is_finite() {
-        return Err(PatchError::NonFiniteInput);
-    }
+    let (anchor, radius_m) = ball_of(positions.iter().copied())?;
+    compile_patch_at(ephemeris, states, anchor, radius_m, config)
+}
+
+/// Patch core over a precomputed anchor ball: shared by the slice API and
+/// the indexed cohort path (which must not copy groups to evaluate).
+fn compile_patch_at(
+    ephemeris: &BakedEphemeris,
+    states: &[BodyState],
+    anchor: DVec3,
+    radius_m: f64,
+    config: CohortConfig,
+) -> Result<GravityPatch, PatchError> {
     let classes = classify_sources(ephemeris, states, anchor, radius_m, config)?;
     let mut g0 = DVec3::ZERO;
     let mut jacobian = DMat3::ZERO;
@@ -268,25 +290,6 @@ pub fn evaluate_patch(
                 .unwrap_or(BodyId(0)),
         })
     }
-}
-
-/// Infallible twin of [`evaluate_patch`]: identical operations in identical
-/// order, minus the branches. Singular lanes evaluate to NaN and propagate,
-/// so callers finite-scan outputs once and rerun only failed lanes
-/// fallibly. Bit-identical output wherever the checked path succeeds.
-pub fn evaluate_patch_unchecked(
-    patch: &GravityPatch,
-    states: &[BodyState],
-    position: DVec3,
-) -> DVec3 {
-    let mut total = patch.g0 + patch.jacobian * (position - patch.center);
-    for (body, mu) in &patch.exact {
-        let offset = states[body.index()].position_inertial - position;
-        let distance_squared = offset.length_squared();
-        let inverse_distance = distance_squared.sqrt().recip();
-        total += offset * (*mu * inverse_distance.powi(3));
-    }
-    total
 }
 
 /// Evaluate one patch over Structure-of-Arrays target slices (doc 23 section
@@ -394,25 +397,29 @@ fn split_cohort(
         report.exact_terms += (indices.len() * ephemeris.gravity_sources().count()) as u64;
         return Ok(());
     }
-    let group: Vec<DVec3> = indices.iter().map(|index| positions[*index]).collect();
-    let patch = compile_patch(ephemeris, states, &group, config)?;
+    let (anchor, radius_m) = ball_of(indices.iter().map(|index| positions[*index]))?;
+    let patch = compile_patch_at(ephemeris, states, anchor, radius_m, config)?;
     report.max_radius_m = report.max_radius_m.max(patch.radius_m);
-    report.exact_terms += (group.len() * patch.exact.len()) as u64;
     if patch.error_bound_mps2 <= config.error_budget_mps2 {
-        let mut accelerations = vec![DVec3::ZERO; group.len()];
-        eval_patch_batch(&patch, states, &group, &mut accelerations)?;
-        for (slot, acceleration) in indices.iter().zip(accelerations) {
-            out[*slot] = Some(acceleration);
+        // Telemetry counts executed work only: a rejected parent evaluated
+        // nothing, and its children report their own terms.
+        report.exact_terms += (indices.len() * patch.exact.len()) as u64;
+        for index in indices.iter() {
+            out[*index] = Some(evaluate_patch(&patch, states, positions[*index])?);
         }
         report.cohort_count += 1;
         report.error_bound_mps2 = report.error_bound_mps2.max(patch.error_bound_mps2);
         return Ok(());
     }
-    // Bound violated: median split along the longest bounding-box axis.
-    let (mut min, mut max) = (group[0], group[0]);
-    for position in &group[1..] {
-        min = min.min(*position);
-        max = max.max(*position);
+    // Bound violated: median split along the longest bounding-box axis,
+    // sorted in place and divided without copying. The index tie-break
+    // keeps the split total and deterministic, so even fully tied
+    // coordinates (grids, formations) divide instead of degrading to
+    // full-exact: both halves always shrink, recursion always terminates.
+    let (mut min, mut max) = (positions[indices[0]], positions[indices[0]]);
+    for index in &indices[1..] {
+        min = min.min(positions[*index]);
+        max = max.max(positions[*index]);
     }
     let extent = max - min;
     let axis = if extent.x >= extent.y && extent.x >= extent.z {
@@ -422,32 +429,20 @@ fn split_cohort(
     } else {
         2
     };
-    let mut ordered = indices.to_owned();
     let coordinate = |index: usize| match axis {
         0 => positions[index].x,
         1 => positions[index].y,
         _ => positions[index].z,
     };
-    ordered.sort_by(|a, b| coordinate(*a).total_cmp(&coordinate(*b)).then(a.cmp(b)));
-    // Degenerate split (all equal on the axis): evaluate exactly rather
-    // than recursing forever on a zero-radius ball with a blown bound.
-    let half = ordered.len() / 2;
-    if half == 0 || coordinate(ordered[half - 1]) == coordinate(ordered[half]) {
-        for index in indices.iter() {
-            out[*index] = Some(evaluate_exact_all(ephemeris, states, positions[*index])?);
-        }
-        report.cohort_count += 1;
-        report.exact_terms += (indices.len() * ephemeris.gravity_sources().count()) as u64;
-        return Ok(());
-    }
+    indices.sort_unstable_by(|a, b| coordinate(*a).total_cmp(&coordinate(*b)).then(a.cmp(b)));
+    let half = indices.len() / 2;
     report.split_count += 1;
-    let mut right = ordered.split_off(half);
-    let mut left = ordered;
+    let (left, right) = indices.split_at_mut(half);
     split_cohort(
         ephemeris,
         states,
         positions,
-        &mut left,
+        left,
         out,
         report,
         config,
@@ -457,7 +452,7 @@ fn split_cohort(
         ephemeris,
         states,
         positions,
-        &mut right,
+        right,
         out,
         report,
         config,
@@ -466,10 +461,10 @@ fn split_cohort(
     Ok(())
 }
 
-/// One chunked batch through a patch into an aligned output slice: one
-/// chunk per worker (same granularity argument as the framed batch) with an
-/// infallible kernel; finite-scan once, rerun only failed lanes fallibly
-/// for their exact error identity.
+/// One chunked batch through a patch into an aligned output slice.
+/// Deliberately serial (see [`GravityField::accelerations_from_frame`]):
+/// one checked pass with predictable branches beats dispatch + scan at
+/// fleet-tick sizes.
 fn eval_patch_batch(
     patch: &GravityPatch,
     states: &[BodyState],
@@ -477,19 +472,8 @@ fn eval_patch_batch(
     out: &mut [DVec3],
 ) -> Result<(), PatchError> {
     debug_assert_eq!(group.len(), out.len());
-    let workers = rayon::current_num_threads().max(1);
-    let chunk = group.len().div_ceil(workers).max(1);
-    out.par_chunks_mut(chunk)
-        .zip(group.par_chunks(chunk))
-        .for_each(|(out_block, pos_block)| {
-            for (slot, position) in out_block.iter_mut().zip(pos_block.iter()) {
-                *slot = evaluate_patch_unchecked(patch, states, *position);
-            }
-        });
-    for (position, acceleration) in group.iter().zip(out.iter_mut()) {
-        if !acceleration.is_finite() {
-            *acceleration = evaluate_patch(patch, states, *position)?;
-        }
+    for (position, slot) in group.iter().zip(out.iter_mut()) {
+        *slot = evaluate_patch(patch, states, *position)?;
     }
     Ok(())
 }

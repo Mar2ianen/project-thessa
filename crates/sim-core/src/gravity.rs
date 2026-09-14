@@ -127,39 +127,21 @@ impl<'a> GravityField<'a> {
     /// summation — bitwise identical to [`GravityField::accelerations`] for
     /// the same timestamp.
     ///
-    /// Granularity note: Rayon dispatches per task, not per flop, and a
-    /// thousand 15 ns closures never amortize eighty task spawns. Targets
-    /// therefore run in one chunk per worker with an infallible kernel;
-    /// outputs are finite-scanned once and only failed lanes pay the
-    /// fallible path for their exact error identity.
+    /// Deliberately serial: fleet-tick batches are latency-bound, and
+    /// measurements show Rayon dispatch dominating the math below ~4k
+    /// targets (x300 cohort: 1T 0.38 s vs 20T 2.21 s over 40k ticks).
+    /// Parallelism belongs one level up — across independent
+    /// fleets/cohorts/jobs — never inside this kernel.
     pub fn accelerations_from_frame(
         &self,
         positions: &[DVec3],
         states: &[crate::BodyState],
     ) -> Result<Vec<DVec3>, GravityError> {
         let sources = self.resolved_frame_sources(states.len())?;
-        if positions.is_empty() {
-            return Ok(Vec::new());
-        }
-        let workers = rayon::current_num_threads().max(1);
-        let chunk = positions.len().div_ceil(workers).max(1);
-        // Direct slice writes: no per-chunk allocation, no collect-concat.
-        let mut out = vec![DVec3::ZERO; positions.len()];
-        out.par_chunks_mut(chunk)
-            .zip(positions.par_chunks(chunk))
-            .for_each(|(out_block, pos_block)| {
-                for (slot, position) in out_block.iter_mut().zip(pos_block.iter()) {
-                    *slot = accumulate_frame_unchecked(*position, states, &sources);
-                }
-            });
-        for (position, acceleration) in positions.iter().zip(out.iter_mut()) {
-            if !acceleration.is_finite() {
-                // Rare lane (singularity / non-finite input): rerun fallibly
-                // for the exact error the checked path reports.
-                *acceleration = accumulate_frame(*position, states, &sources)?;
-            }
-        }
-        Ok(out)
+        positions
+            .iter()
+            .map(|position| accumulate_frame(*position, states, &sources))
+            .collect()
     }
 
     /// Resolve `(mu, state index)` for every source in accumulation order.
@@ -210,26 +192,6 @@ fn accumulate_frame(
             body_id: sources[0].1,
         })
     }
-}
-
-/// Infallible twin of [`accumulate_frame`]: identical operations in
-/// identical order, minus the branches. A singular lane evaluates to NaN
-/// (`0 * inf`) and non-finite inputs propagate, so callers finite-scan the
-/// outputs once and rerun only failed lanes fallibly. Bit-identical output
-/// wherever the checked path succeeds.
-fn accumulate_frame_unchecked(
-    position: DVec3,
-    states: &[crate::BodyState],
-    sources: &[(f64, BodyId)],
-) -> DVec3 {
-    let mut total = DVec3::ZERO;
-    for (mu, body_id) in sources {
-        let offset = states[body_id.index()].position_inertial - position;
-        let distance_squared = offset.length_squared();
-        let inverse_distance = distance_squared.sqrt().recip();
-        total += offset * (*mu * inverse_distance.powi(3));
-    }
-    total
 }
 
 #[derive(Debug, Clone, PartialEq)]

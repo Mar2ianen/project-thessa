@@ -45,7 +45,7 @@ pub use gravity::{GravityError, GravityField};
 pub use gravity_patch::{
     CohortConfig, CohortEval, CohortEvaluator, CohortReport, GravityPatch, HESSIAN_FROBENIUS_NORM,
     HESSIAN_REMAINDER, PatchError, compile_patch, evaluate_cohorts, evaluate_patch,
-    evaluate_patch_soa, evaluate_patch_unchecked,
+    evaluate_patch_soa,
 };
 pub use gravity_tree::{
     GravityNode, GravityNodeFrame, GravitySourceTree, TreeEval, monopole_error_estimate,

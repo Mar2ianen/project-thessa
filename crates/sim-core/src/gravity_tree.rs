@@ -140,14 +140,10 @@ impl GravitySourceTree {
     /// Resolve per-tick node frames from one ephemeris frame: barycenter and
     /// conservative internal radius per node. O(nodes), once per tick.
     /// Depth-first with memoization: no ordering assumption on nodes.
-    pub fn resolve(
-        &self,
-        ephemeris: &BakedEphemeris,
-        states: &[BodyState],
-    ) -> Result<Vec<GravityNodeFrame>, GravityError> {
+    pub fn resolve(&self, states: &[BodyState]) -> Result<Vec<GravityNodeFrame>, GravityError> {
         let mut frames: Vec<Option<GravityNodeFrame>> = vec![None; self.nodes.len()];
         for node_id in 0..self.nodes.len() {
-            self.resolve_node(ephemeris, states, node_id as u32, &mut frames)?;
+            self.resolve_node(states, node_id as u32, &mut frames)?;
         }
         Ok(frames
             .into_iter()
@@ -157,7 +153,6 @@ impl GravitySourceTree {
 
     fn resolve_node(
         &self,
-        ephemeris: &BakedEphemeris,
         states: &[BodyState],
         node_id: u32,
         frames: &mut [Option<GravityNodeFrame>],
@@ -167,7 +162,7 @@ impl GravitySourceTree {
         }
         let children = self.nodes[node_id as usize].children.clone();
         for child in children {
-            self.resolve_node(ephemeris, states, child, frames)?;
+            self.resolve_node(states, child, frames)?;
         }
         let node = &self.nodes[node_id as usize];
         let own_state = states
@@ -177,11 +172,6 @@ impl GravitySourceTree {
         // source) and the resolved child barycenters.
         let mut weighted = own_state.position_inertial * node.own_mu;
         let mut mass = node.own_mu;
-        let own_radius = if node.own_mu > 0.0 {
-            ephemeris.body(node.body)?.radius_m
-        } else {
-            0.0
-        };
         for child in &node.children {
             let child_frame = frames[*child as usize].as_ref().expect("child resolved");
             let child_mu = self.nodes[*child as usize].mu_total;
@@ -197,8 +187,13 @@ impl GravitySourceTree {
         };
         // Conservative internal radius around the barycenter: every
         // member (own body when massive, child balls) must fit inside.
+        // Canonical gravity is point-mass, so a massive body's own support
+        // radius is 0: the mass sits at the center, and the physical body
+        // radius belongs to collision/surface systems, not the monopole
+        // error. (Inside a physical body the point-mass model itself is
+        // what it is — identical in the exact path.)
         let mut anchored = if node.own_mu > 0.0 {
-            (own_state.position_inertial - barycenter).length() + own_radius
+            (own_state.position_inertial - barycenter).length()
         } else {
             0.0
         };
@@ -215,7 +210,11 @@ impl GravitySourceTree {
     }
 
     /// Evaluate gravity at one target through the hierarchy: open nodes whose
-    /// monopole error estimate exceeds `budget_mps2`, accept the rest.
+    /// monopole error estimate does not fit the *remaining* budget, accept
+    /// the rest. The budget is spent as traversal proceeds, so the returned
+    /// bound never exceeds the allocated total however many aggregates are
+    /// accepted. Traversal order is fixed (ascending roots, ascending
+    /// children), hence deterministic and worker-count independent.
     /// Returns the acceleration plus the achieved (summed) error bound, so
     /// callers can check the total against their allocated budget.
     pub fn evaluate(
@@ -236,9 +235,12 @@ impl GravitySourceTree {
         }
         let mut total = DVec3::ZERO;
         let mut error_bound = 0.0;
+        let mut remaining = budget_mps2;
         let mut nodes_visited = 0_u32;
         let mut terms_exact = 0_u32;
-        let mut stack: Vec<u32> = self.roots.clone();
+        // Ascending pop order: roots pushed reversed, children extended
+        // reversed, so every pop takes the smallest pending node id.
+        let mut stack: Vec<u32> = self.roots.iter().rev().copied().collect();
         while let Some(node_id) = stack.pop() {
             let node = &self.nodes[node_id as usize];
             let frame = &frames[node_id as usize];
@@ -268,13 +270,14 @@ impl GravitySourceTree {
             // whose Jacobian has spectral norm 2/|y|^3):
             //   E <= 2 * mu_total * R / (D - R)^3.
             let estimate = 2.0 * node.mu_total * frame.radius_m / clearance.powi(3);
-            if estimate <= budget_mps2 {
+            if estimate <= remaining {
                 let inverse = distance_squared.sqrt().recip();
                 if !inverse.is_finite() {
                     return Err(GravityError::NonFinite { body_id: node.body });
                 }
                 total += offset * (node.mu_total * inverse.powi(3));
                 error_bound += estimate;
+                remaining -= estimate;
             } else {
                 if node.own_mu > 0.0 {
                     total += exact_term(states, node.body, node.own_mu, position)?;
@@ -310,7 +313,8 @@ pub struct GravityNodeFrame {
 }
 
 /// Hierarchy evaluation result: acceleration plus the achieved error bound
-/// (summed accepted-node estimates) and traversal telemetry.
+/// (summed accepted-node estimates, always within the allocated budget)
+/// and traversal telemetry.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TreeEval {
     pub acceleration: DVec3,

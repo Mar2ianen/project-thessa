@@ -320,6 +320,54 @@ fn frame_batch_accelerations_match_direct_accumulation_bitwise() {
     }
 }
 
+fn two_binaries() -> BakedEphemeris {
+    // Barycenter with two planet+moon pairs on opposite sides: the tree has
+    // two internal children (one per pair), so a mid-range budget opens the
+    // root while both pairs compete for the remaining budget.
+    let orbit = |mu: f64, a: f64, m0: f64| {
+        KeplerOrbit::new(mu, a, 0.0, 0.1, 0.2, 0.3, m0).expect("valid test orbit")
+    };
+    BakedEphemeris::new(
+        "TEST_TWO_BINARIES",
+        vec![
+            BakedBody::synthetic_barycenter(BodyId(0), "barycenter", 4.4e14, None, None),
+            BakedBody::orbital(
+                BodyId(1),
+                "planet-a",
+                2.0e14,
+                0.0,
+                BodyId(0),
+                orbit(4.4e14, 2.0e8, 0.0),
+            ),
+            BakedBody::orbital(
+                BodyId(2),
+                "moon-a",
+                2.0e13,
+                0.0,
+                BodyId(1),
+                orbit(2.2e14, 1.0e7, 0.0),
+            ),
+            BakedBody::orbital(
+                BodyId(3),
+                "planet-b",
+                2.0e14,
+                0.0,
+                BodyId(0),
+                orbit(4.4e14, 2.0e8, std::f64::consts::PI),
+            ),
+            BakedBody::orbital(
+                BodyId(4),
+                "moon-b",
+                2.0e13,
+                0.0,
+                BodyId(3),
+                orbit(2.2e14, 1.0e7, std::f64::consts::PI),
+            ),
+        ],
+    )
+    .expect("valid two-binaries ephemeris")
+}
+
 #[test]
 fn tree_groups_binary_children_under_barycenter_node() {
     let mu_primary = 3.0e14;
@@ -335,6 +383,40 @@ fn tree_groups_binary_children_under_barycenter_node() {
 }
 
 #[test]
+fn tree_spends_remaining_budget_across_sibling_aggregates() {
+    // Two planet+moon pairs: at a mid-range budget the root opens while
+    // each pair alone would fit. The first pair spends most of the budget,
+    // forcing the second open — the total posted bound must still hold.
+    // (Per-node gating would accept both and post ~2x the budget.)
+    let ephemeris = two_binaries();
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let tree = GravitySourceTree::build(&ephemeris).expect("tree builds");
+    assert_eq!(tree.node_count(), 5);
+    let mut frame = EphemerisFrame::new();
+    let time = SimTime::EPOCH;
+    let states = frame.evaluate(&ephemeris, time).expect("frame states");
+    let frames = tree.resolve(states).expect("node frames");
+    let budget = 6.0e-9;
+    let position = DVec3::new(1.0e10, 3.0e9, 0.0);
+    let eval = tree
+        .evaluate(&frames, states, position, budget)
+        .expect("tree eval");
+    assert!(
+        eval.error_bound_mps2 <= budget,
+        "posted {:e} exceeds allocated {budget:e}",
+        eval.error_bound_mps2,
+    );
+    assert!(eval.terms_exact >= 1, "root must open at this budget");
+    let exact = field.acceleration(position, time).expect("exact");
+    let measured = (eval.acceleration - exact).length();
+    assert!(
+        measured <= eval.error_bound_mps2 * (1.0 + 1.0e-9),
+        "measured {measured:e} exceeds posted {:e}",
+        eval.error_bound_mps2,
+    );
+}
+
+#[test]
 fn monopole_matches_explicit_children_within_posted_bound() {
     let mu_primary = 3.0e14;
     let mu_secondary = 1.0e14;
@@ -344,7 +426,7 @@ fn monopole_matches_explicit_children_within_posted_bound() {
     let mut frame = EphemerisFrame::new();
     let time = SimTime::EPOCH;
     let states = frame.evaluate(&ephemeris, time).expect("frame states");
-    let frames = tree.resolve(&ephemeris, states).expect("node frames");
+    let frames = tree.resolve(states).expect("node frames");
     // Far-field points: the aggregate must be accepted and stay within its
     // own posted error bound (doc 23 sections 4, 17). The bound is
     // conservative by design (no cancellation accounting): at D/R ~ 20 it
@@ -397,7 +479,7 @@ fn tree_opens_aggregate_ball_for_close_targets() {
     let states = frame
         .evaluate(&ephemeris, SimTime::EPOCH)
         .expect("frame states");
-    let frames = tree.resolve(&ephemeris, states).expect("node frames");
+    let frames = tree.resolve(states).expect("node frames");
     // Sit on top of the secondary: inside the aggregate ball, so the tree
     // must open and evaluate both bodies exactly.
     let secondary = states[2].position_inertial + DVec3::new(1.0e6, 0.0, 0.0);
@@ -520,9 +602,12 @@ fn cohorts_split_before_bound_is_violated() {
     let exact = field.accelerations(&positions, time).expect("exact batch");
     for (computed, reference) in report.accelerations.iter().zip(&exact) {
         let measured = (*computed - *reference).length();
+        // The subsystem's whole point is a provable conservative bound:
+        // hold the measured error to the posted bound, not 10x budget.
         assert!(
-            measured <= config.error_budget_mps2 * 10.0,
-            "cohort error {measured:e} escapes the budget"
+            measured <= report.error_bound_mps2 * (1.0 + 1.0e-6) + 1.0e-15,
+            "cohort error {measured:e} escapes posted {:e}",
+            report.error_bound_mps2,
         );
     }
 }
@@ -790,6 +875,91 @@ fn window_reuse_holds_while_sources_drift_slowly() {
         "temporal bound must bite periodically, got {}",
         evaluator.rebuilds
     );
+}
+
+/// Deterministic xorshift64* for property tests: no new dependencies,
+/// fixed seed, reproducible across runs and workers.
+struct TestRng(u64);
+
+impl TestRng {
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn range(&mut self, lo: f64, hi: f64) -> f64 {
+        lo + (self.next_u64() as f64 / u64::MAX as f64) * (hi - lo)
+    }
+
+    fn unit(&mut self) -> DVec3 {
+        loop {
+            let direction = DVec3::new(
+                self.range(-1.0, 1.0),
+                self.range(-1.0, 1.0),
+                self.range(-1.0, 1.0),
+            );
+            if direction.length_squared() > 1.0e-6 {
+                return direction.normalize();
+            }
+        }
+    }
+}
+
+#[test]
+fn cohorts_hold_posted_bound_over_random_geometries() {
+    // Dozens of deterministic source/target geometries across three
+    // systems: every served acceleration must sit inside its posted bound,
+    // and the posted bound inside the budget. Balls stay far from all
+    // bodies (shell >= 1e9, radius <= 3e7, members within ~3e8), so no
+    // singularities are possible by construction.
+    let systems = [
+        two_body_binary(2.0e14, 2.0e14, 1.0e8),
+        two_body_binary(3.0e14, 1.0e14, 1.0e8),
+        chain_ephemeris(),
+    ];
+    let config = CohortConfig {
+        error_budget_mps2: 1.0e-9,
+        ..Default::default()
+    };
+    let mut rng = TestRng(0x1234_5678_9ABC_DEF0);
+    for (system_index, ephemeris) in systems.iter().enumerate() {
+        let field = GravityField::from_ephemeris(ephemeris);
+        let mut frame = EphemerisFrame::new();
+        let states = frame
+            .evaluate(ephemeris, SimTime::EPOCH)
+            .expect("frame states");
+        for case in 0..16 {
+            let shell = 10.0_f64.powf(rng.range(9.0, 10.5));
+            let center = rng.unit() * shell;
+            let radius = 10.0_f64.powf(rng.range(3.0, 7.5));
+            let count = 1 + (rng.next_u64() % 48) as usize;
+            let positions: Vec<_> = (0..count)
+                .map(|_| center + rng.unit() * rng.range(0.0, radius))
+                .collect();
+            let report =
+                evaluate_cohorts(ephemeris, states, &positions, config).expect("cohorts evaluate");
+            assert!(
+                report.error_bound_mps2 <= config.error_budget_mps2,
+                "system {system_index} case {case}: posted {:e} exceeds budget",
+                report.error_bound_mps2,
+            );
+            let exact = field
+                .accelerations(&positions, SimTime::EPOCH)
+                .expect("exact batch");
+            for (computed, reference) in report.accelerations.iter().zip(&exact) {
+                let measured = (*computed - *reference).length();
+                assert!(
+                    measured <= report.error_bound_mps2 * (1.0 + 1.0e-6) + 1.0e-15,
+                    "system {system_index} case {case}: measured {measured:e} escapes posted {:e}",
+                    report.error_bound_mps2,
+                );
+            }
+        }
+    }
 }
 
 #[test]

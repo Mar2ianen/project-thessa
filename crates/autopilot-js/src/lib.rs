@@ -745,12 +745,13 @@ fn parse_result(json: &str) -> Result<ScriptResult, ScriptError> {
         ScriptReturn::WaitAt { .. } => Err(ScriptError::InvalidReturn(
             "wait time must be finite and non-negative".into(),
         )),
-        ScriptReturn::WaitEvent { name } if !name.trim().is_empty() => {
-            Ok(ScriptResult::Wait(WaitCondition::Event(name)))
+        ScriptReturn::WaitEvent { name } => {
+            let condition = WaitCondition::Event(name);
+            condition
+                .validate()
+                .map_err(|error| ScriptError::InvalidReturn(error.to_string()))?;
+            Ok(ScriptResult::Wait(condition))
         }
-        ScriptReturn::WaitEvent { .. } => Err(ScriptError::InvalidReturn(
-            "wait event must not be empty".into(),
-        )),
         ScriptReturn::WaitAny { conditions } => {
             parse_wait_composite(WaitCondition::Any, conditions)
         }
@@ -928,10 +929,21 @@ fn parse_direction(
     };
     let direction = DirectionTarget::new(glam::DVec3::new(x, y, z), frame)
         .map_err(|error| ScriptError::InvalidReturn(error.to_string()))?;
-    match target_body {
-        Some(body) => DirectionTarget::for_target(direction.direction, body)
-            .map_err(|error| ScriptError::InvalidReturn(error.to_string())),
-        None => Ok(direction),
+    match (frame, target_body) {
+        // A target frame without a body would pass validation here and fail
+        // later at runtime; non-target frames with a body used to be
+        // silently retargeted. Both are script bugs — reject at parse time.
+        (DirectionFrame::Target, Some(body)) => {
+            DirectionTarget::for_target(direction.direction, body)
+                .map_err(|error| ScriptError::InvalidReturn(error.to_string()))
+        }
+        (DirectionFrame::Target, None) => Err(ScriptError::InvalidReturn(
+            "target frame requires a target body".into(),
+        )),
+        (_, Some(_)) => Err(ScriptError::InvalidReturn(
+            "target body requires the 'target' frame".into(),
+        )),
+        (_, None) => Ok(direction),
     }
 }
 
@@ -1020,6 +1032,23 @@ mod tests {
             ScriptResult::Guidance(GuidanceIntent::VelocityDirection { direction, .. })
                 if direction.frame == DirectionFrame::Target && direction.target_body == Some(7)
         ));
+    }
+
+    #[test]
+    fn direction_frame_and_body_mismatch_is_rejected_at_parse() {
+        let engine = ScriptEngine::new(ScriptLimits::default()).unwrap();
+        // Non-target frame with a body: used to silently retarget.
+        assert!(
+            engine
+                .run("return Guidance.velocityDirection(1, 0, 0, 'inertial', 7);")
+                .is_err()
+        );
+        // Target frame without a body: used to fail later at runtime.
+        assert!(
+            engine
+                .run("return Guidance.velocityDirection(1, 0, 0, 'target');")
+                .is_err()
+        );
     }
 
     #[test]

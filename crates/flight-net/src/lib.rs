@@ -26,6 +26,17 @@ pub struct Welcome {
     pub flight_time_s: f64,
 }
 
+/// Wire-level size caps: `MAX_FRAME_BYTES` (8 MiB) alone still allows a
+/// single packet to force `O(N log N)` validation + clone + runner build.
+/// These caps run before domain validation so a hostile peer cannot burn
+/// the driver thread with one frame.
+pub const MAX_COMMANDS_PER_INPUT: usize = 64;
+pub const MAX_GRAPH_NODES: usize = 256;
+pub const MAX_GRAPH_EDGES: usize = 1024;
+pub const MAX_PLAN_SEGMENTS: usize = 256;
+/// Must match `ScriptLimits::default().max_source_bytes`.
+pub const MAX_SCRIPT_SOURCE_BYTES: usize = 64 * 1024;
+
 /// Discrete commands bundled with an input (warp votes, staging, toggles).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Command {
@@ -65,6 +76,56 @@ pub struct ClientInput {
     pub rcs_enabled: bool,
     pub gear_down: bool,
     pub commands: Vec<Command>,
+}
+
+impl ClientInput {
+    /// Validate the complete wire payload before it reaches authoritative
+    /// state.  This is intentionally all-or-nothing: a malformed state field
+    /// or command must not be allowed to apply the otherwise valid fields in
+    /// the same packet.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.commands.len() > MAX_COMMANDS_PER_INPUT {
+            return Err(format!(
+                "too many commands: {} > {MAX_COMMANDS_PER_INPUT}",
+                self.commands.len()
+            ));
+        }
+        if self.control_input.iter().any(|value| !value.is_finite()) {
+            return Err("control axes must be finite".into());
+        }
+        if self
+            .control_input
+            .iter()
+            .any(|value| !(-1.0..=1.0).contains(value))
+        {
+            return Err("control axes must be in [-1, 1]".into());
+        }
+        if !self.throttle.is_finite() || !(0.0..=1.0).contains(&self.throttle) {
+            return Err("throttle must be finite and in [0, 1]".into());
+        }
+        if self.sas_target_xyzw.iter().any(|value| !value.is_finite()) {
+            return Err("SAS quaternion must be finite".into());
+        }
+        let quaternion_norm_sq = self
+            .sas_target_xyzw
+            .iter()
+            .map(|value| value * value)
+            .sum::<f64>();
+        if !quaternion_norm_sq.is_finite() || quaternion_norm_sq <= 1.0e-12 {
+            return Err("SAS quaternion must be nonzero".into());
+        }
+        for command in &self.commands {
+            match command {
+                Command::SetWarp { factor }
+                    if !factor.is_finite() || *factor < 0.0 || *factor > 131_072.0 =>
+                {
+                    return Err("warp vote must be finite and in [0, 131072]".into());
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Typed guidance command introduced beside [`ClientInput`] so peers can
@@ -152,19 +213,62 @@ impl AutopilotInput {
     pub fn validate(&self) -> Result<(), String> {
         match &self.command {
             AutopilotCommand::SubmitGraph { graph } => {
+                if graph.nodes.len() > MAX_GRAPH_NODES {
+                    return Err(format!(
+                        "too many graph nodes: {} > {MAX_GRAPH_NODES}",
+                        graph.nodes.len()
+                    ));
+                }
+                if graph.edges.len() > MAX_GRAPH_EDGES {
+                    return Err(format!(
+                        "too many graph edges: {} > {MAX_GRAPH_EDGES}",
+                        graph.edges.len()
+                    ));
+                }
                 graph.validate().map(|_| ()).map_err(|errors| {
                     errors
                         .into_iter()
                         .map(|error| error.to_string())
                         .collect::<Vec<_>>()
                         .join("; ")
-                })
+                })?;
+                // Trust boundary: raw wrenches from the wire must fit the
+                // authority envelope (internal laws saturate instead).
+                for node in &graph.nodes {
+                    if let Some(thessa_autopilot::GraphNodeConfig::Demand { demand }) = &node.config
+                    {
+                        demand
+                            .validate_envelope()
+                            .map_err(|error| error.to_string())?;
+                    }
+                }
+                Ok(())
             }
             AutopilotCommand::StartScript { source } if source.trim().is_empty() => {
                 Err("autopilot script must not be empty".into())
             }
+            AutopilotCommand::StartScript { source } if source.len() > MAX_SCRIPT_SOURCE_BYTES => {
+                Err(format!(
+                    "autopilot script too large: {} > {MAX_SCRIPT_SOURCE_BYTES}",
+                    source.len()
+                ))
+            }
             AutopilotCommand::SubmitPlan { plan } => {
-                plan.validate().map_err(|error| error.to_string())
+                if plan.segments.len() > MAX_PLAN_SEGMENTS {
+                    return Err(format!(
+                        "too many plan segments: {} > {MAX_PLAN_SEGMENTS}",
+                        plan.segments.len()
+                    ));
+                }
+                plan.validate().map_err(|error| error.to_string())?;
+                for segment in &plan.segments {
+                    if let thessa_autopilot::TrajectorySegment::Burn { demand, .. } = segment {
+                        demand
+                            .validate_envelope()
+                            .map_err(|error| error.to_string())?;
+                    }
+                }
+                Ok(())
             }
             _ => Ok(()),
         }
@@ -206,6 +310,57 @@ mod tests {
             gear_down: false,
             commands: vec![Command::SetWarp { factor: 128.0 }, Command::Stage],
         }
+    }
+
+    #[test]
+    fn client_input_rejects_nonfinite_wire_values() {
+        let mut input = sample_input();
+        input.control_input[1] = f64::NAN;
+        assert!(input.validate().is_err());
+
+        let mut input = sample_input();
+        input.throttle = f64::INFINITY;
+        assert!(input.validate().is_err());
+
+        let mut input = sample_input();
+        input.sas_target_xyzw[3] = f64::NAN;
+        assert!(input.validate().is_err());
+
+        let mut input = sample_input();
+        input.commands = vec![Command::SetWarp { factor: f64::NAN }];
+        assert!(input.validate().is_err());
+    }
+
+    #[test]
+    fn client_input_rejects_command_flood() {
+        let mut input = sample_input();
+        input.commands = vec![Command::Stage; MAX_COMMANDS_PER_INPUT + 1];
+        assert!(input.validate().is_err());
+    }
+
+    #[test]
+    fn autopilot_input_rejects_oversized_payloads() {
+        let big_script = AutopilotInput {
+            tick: 1,
+            command: AutopilotCommand::StartScript {
+                source: "x".repeat(MAX_SCRIPT_SOURCE_BYTES + 1),
+            },
+        };
+        assert!(big_script.validate().is_err());
+        let big_plan = AutopilotInput {
+            tick: 1,
+            command: AutopilotCommand::SubmitPlan {
+                plan: thessa_autopilot::TrajectoryPlan {
+                    id: thessa_flight_control::TrajectoryPlanId(99),
+                    segments: vec![
+                        thessa_autopilot::TrajectorySegment::Coast { duration_s: 1.0 };
+                        MAX_PLAN_SEGMENTS + 1
+                    ],
+                    bakeability: thessa_autopilot::Bakeability::Pure,
+                },
+            },
+        };
+        assert!(big_plan.validate().is_err());
     }
 
     fn sample_snapshot() -> Snapshot {

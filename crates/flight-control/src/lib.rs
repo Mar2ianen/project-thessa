@@ -213,6 +213,12 @@ pub struct ControlDemand {
     pub propulsion: PropulsionDemand,
 }
 
+/// Absolute wrench envelope: generous for any single X-15-class plant
+/// (authoritative thrust is ~2.5e5 N), but blocks absurd 1e308 N wire
+/// values from reaching the integrator as Inf/NaN state.
+pub const MAX_CONTROL_FORCE_N: f64 = 50.0e6;
+pub const MAX_CONTROL_MOMENT_NM: f64 = 50.0e6;
+
 impl ControlDemand {
     pub fn zero() -> Self {
         Self {
@@ -223,10 +229,36 @@ impl ControlDemand {
     }
 
     pub fn validate(self) -> Result<(), ControlError> {
+        // Finite-only by design: the allocator saturates large-but-finite
+        // requests (e.g. RCS saturation probes), so magnitude envelopes
+        // live at the trust boundary (`validate_envelope`), not here.
         if !self.force_body_n.is_finite() || !self.moment_body_nm.is_finite() {
             return Err(ControlError::NonFinite("control demand"));
         }
         PropulsionDemand::new(self.propulsion.normalized).map(|_| ())
+    }
+
+    /// Wire/authority envelope for demands arriving from clients. Internal
+    /// control laws bypass this and saturate through the allocator instead.
+    pub fn validate_envelope(self) -> Result<(), ControlError> {
+        self.validate()?;
+        if self.force_body_n.length() > MAX_CONTROL_FORCE_N {
+            return Err(ControlError::OutOfRange {
+                name: "control force",
+                value: self.force_body_n.length(),
+                min: 0.0,
+                max: MAX_CONTROL_FORCE_N,
+            });
+        }
+        if self.moment_body_nm.length() > MAX_CONTROL_MOMENT_NM {
+            return Err(ControlError::OutOfRange {
+                name: "control moment",
+                value: self.moment_body_nm.length(),
+                min: 0.0,
+                max: MAX_CONTROL_MOMENT_NM,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -818,6 +850,35 @@ mod tests {
         .validate()
         .expect_err("non-unit target must fail");
         assert_eq!(error, ControlError::InvalidAttitude);
+    }
+
+    #[test]
+    fn control_demand_envelope_rejects_absurd_wire_magnitudes() {
+        let huge_force = ControlDemand {
+            force_body_n: DVec3::new(1.0e308, 0.0, 0.0),
+            moment_body_nm: DVec3::ZERO,
+            propulsion: PropulsionDemand::new(0.0).unwrap(),
+        };
+        // Finite-only validation passes (allocator saturates); the trust
+        // boundary envelope rejects.
+        assert!(huge_force.validate().is_ok());
+        assert!(huge_force.validate_envelope().is_err());
+        let huge_moment = ControlDemand {
+            force_body_n: DVec3::ZERO,
+            moment_body_nm: DVec3::new(0.0, 1.0e308, 0.0),
+            propulsion: PropulsionDemand::new(0.0).unwrap(),
+        };
+        assert!(huge_moment.validate().is_ok());
+        assert!(huge_moment.validate_envelope().is_err());
+        // Sane X-15-class wrench still passes both.
+        let sane = ControlDemand {
+            force_body_n: DVec3::new(1.0e5, 0.0, 0.0),
+            moment_body_nm: DVec3::new(0.0, 1.0e4, 0.0),
+            propulsion: PropulsionDemand::new(1.0).unwrap(),
+        };
+        sane.validate().expect("realistic wrench must pass");
+        sane.validate_envelope()
+            .expect("realistic wrench must pass envelope");
     }
 
     #[test]

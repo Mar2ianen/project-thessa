@@ -58,3 +58,7 @@ harness = false
 [[bench]]
 name = "fleet_prop"
 harness = false
+
+[[bench]]
+name = "planner_batch"
+harness = false

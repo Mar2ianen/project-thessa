@@ -15,10 +15,10 @@ use glam::{DMat3, DQuat, DVec3};
 use rayon::prelude::*;
 use thessa_sim_core::{
     AeroConfig, AeroGeometry, AeroPanel, AtmosphereConfig, BakedEphemeris, BodyState, CohortConfig,
-    EphemerisFrame, FlightStepInput, GravityField, PanelAeroModel, RigidBodyProperties,
-    RigidBodyState, SimTime, SystemConfig, evaluate_cohorts, integrate_rigid_body_step,
+    EphemerisFrame, FlightStepInput, GravityField, GravitySourceTree, PanelAeroModel,
+    RigidBodyProperties, RigidBodyState, SimTime, SystemConfig, evaluate_cohorts,
+    integrate_rigid_body_step,
 };
-
 /// Compact convoy: tight spatial cluster (100 km box), shared epoch.
 fn convoy_positions(center: DVec3, count: usize) -> Vec<DVec3> {
     (0..count)
@@ -117,6 +117,29 @@ fn bench_gravity_scenario(
             cohort_per_tick.as_secs_f64() * 1e9 / count as f64,
             exact_terms as f64 / count as f64,
         );
+
+        // (e) tree opening pressure (doc 23 step 5 verdict input): serial
+        // hierarchy traversals, nodes visited + exact terms per target.
+        let tree = GravitySourceTree::build(ephemeris).expect("source tree");
+        for budget in [1.0e-9, 1.0e-12] {
+            let states = frame.evaluate(ephemeris, time).expect("tree frame states");
+            let frames = tree.resolve(ephemeris, states).expect("node frames");
+            let mut visited = 0_u64;
+            let mut exact_terms = 0_u64;
+            for position in &positions {
+                let eval = tree
+                    .evaluate(&frames, states, *position, budget)
+                    .expect("tree eval");
+                visited += eval.nodes_visited as u64;
+                exact_terms += eval.terms_exact as u64;
+            }
+            println!(
+                "{name} x{count} tree budget {budget:e}: nodes/target {:.1}, exact/target {:.1}/{}",
+                visited as f64 / count as f64,
+                exact_terms as f64 / count as f64,
+                tree.node_count(),
+            );
+        }
     }
 }
 

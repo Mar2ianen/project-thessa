@@ -17,7 +17,7 @@ use std::{hint::black_box, time::Instant};
 
 use glam::DVec3;
 use thessa_sim_core::{
-    CohortConfig, EphemerisFrame, GravityField, SimTime, SystemConfig, evaluate_cohorts,
+    CohortConfig, CohortEvaluator, EphemerisFrame, GravityField, SimTime, SystemConfig,
 };
 
 const TICKS: usize = 40_000;
@@ -42,6 +42,8 @@ fn propagate(
     path: Path,
 ) -> CohortStats {
     let mut frame = EphemerisFrame::new();
+    // Persistent across all 40k ticks: scratch reuse + patch window.
+    let mut evaluator = CohortEvaluator::new();
     let mut time = SimTime::EPOCH;
     let mut stats = CohortStats::default();
     for _ in 0..TICKS {
@@ -66,19 +68,20 @@ fn propagate(
                     error_budget_mps2: budget_mps2,
                     ..Default::default()
                 };
-                match evaluate_cohorts(
+                match evaluator.evaluate(
                     black_box(ephemeris),
                     black_box(states),
                     black_box(&fleet.positions),
                     config,
                 ) {
-                    Ok(report) => {
-                        stats.cohorts += report.cohort_count as u64;
-                        stats.splits += report.split_count as u64;
-                        stats.error_bound = stats.error_bound.max(report.error_bound_mps2);
-                        stats.exact_terms += report.exact_terms;
-                        stats.max_radius_m = stats.max_radius_m.max(report.max_radius_m);
-                        report.accelerations
+                    Ok(eval) => {
+                        stats.cohorts += eval.cohort_count as u64;
+                        stats.splits += eval.split_count as u64;
+                        stats.error_bound = stats.error_bound.max(eval.error_bound_mps2);
+                        stats.exact_terms += eval.exact_terms;
+                        stats.max_radius_m = stats.max_radius_m.max(eval.max_radius_m);
+                        stats.reuses += u64::from(eval.reused_window);
+                        eval.accelerations.to_vec()
                     }
                     // Fail open by contract: exact frame path on patch error.
                     Err(_) => {
@@ -107,6 +110,7 @@ struct CohortStats {
     error_bound: f64,
     exact_terms: u64,
     max_radius_m: f64,
+    reuses: u64,
 }
 
 fn main() {
@@ -251,12 +255,13 @@ fn run_scenario(
         }
         let simulated_s = TICKS as f64 * STEP_S;
         println!(
-            "{name} x{count} x{TICKS} ticks: direct {elapsed_a:?} | framed {elapsed_b:?} ({per_tick_b:?}/tick) | cohort {elapsed_c:?} ({per_tick_c:?}/tick, x{:.2} vs direct, {:.1} sim-s/wall-s) | cohorts/tick {:.1}, splits {}, fallbacks {}, posted bound {:e} m/s^2, exact/target {:.1}/22, max radius {:.1} km | divergence: {max_dx:.4} m, {max_dv:.6} m/s",
+            "{name} x{count} x{TICKS} ticks: direct {elapsed_a:?} | framed {elapsed_b:?} ({per_tick_b:?}/tick) | cohort {elapsed_c:?} ({per_tick_c:?}/tick, x{:.2} vs direct, {:.1} sim-s/wall-s) | cohorts/tick {:.1}, splits {}, fallbacks {}, reused {:.1}%, posted bound {:e} m/s^2, exact/target {:.1}/22, max radius {:.1} km | divergence: {max_dx:.4} m, {max_dv:.6} m/s",
             elapsed_a.as_secs_f64() / elapsed_c.as_secs_f64(),
             simulated_s / elapsed_c.as_secs_f64(),
             stats_c.cohorts as f64 / TICKS as f64,
             stats_c.splits,
             stats_c.fallbacks,
+            stats_c.reuses as f64 / TICKS as f64 * 100.0,
             stats_c.error_bound,
             stats_c.exact_terms as f64 / TICKS as f64 / count as f64,
             stats_c.max_radius_m / 1000.0,

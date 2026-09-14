@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::fmt;
 
 pub const MAX_SUPPORTED_DEPTH: u8 = 58;
@@ -243,7 +244,7 @@ where
             CandidateAction::Split => Update::Split(candidate.node),
             CandidateAction::Merge => Update::Merge(candidate.node),
         };
-        if working.apply_batch(std::slice::from_ref(&update)).is_ok() {
+        if working.apply_one(update).is_ok() {
             updates.push(update);
         }
     }
@@ -409,6 +410,9 @@ impl Tree {
     }
 
     pub fn leaf_at(&self, mut index: usize) -> Option<Node> {
+        // Correct but O(leaves) per level: each step recounts a whole subtree.
+        // Frame-rate indexed access must go through `LeafList::snapshot`,
+        // which pays one listing pass and then serves O(1) index/encode.
         if index >= self.leaf_count() {
             return None;
         }
@@ -429,6 +433,8 @@ impl Tree {
     }
 
     pub fn encode_leaf(&self, node: Node) -> Result<usize, TreeError> {
+        // Same note as `leaf_at`: O(subtree) per level. Use `LeafList` for
+        // frame-rate encode traffic.
         if !self.contains(node) {
             return Err(TreeError::NotALeaf(node));
         }
@@ -441,6 +447,13 @@ impl Tree {
             current = parent;
         }
         Ok(result)
+    }
+
+    /// One listing pass that then serves O(1) indexed access and O(1) encode
+    /// for the rest of the frame. This is the intended bridge to draw-list
+    /// construction: snapshot once, index many times.
+    pub fn snapshot(&self) -> LeafList {
+        LeafList::snapshot(self)
     }
 
     pub fn split(&mut self, node: Node) -> Result<[Node; 2], TreeError> {
@@ -475,18 +488,29 @@ impl Tree {
     }
 
     pub fn apply_batch(&mut self, updates: &[Update]) -> Result<(), TreeError> {
+        // Atomic commit: validate the whole batch on a private copy so a
+        // mid-batch conflict leaves `self` untouched.
         let mut candidate = self.clone();
         for update in updates {
-            match *update {
-                Update::Split(node) => {
-                    candidate.split(node)?;
-                }
-                Update::Merge(node) => {
-                    candidate.merge(node)?;
-                }
-            }
+            candidate.apply_one(*update)?;
         }
         *self = candidate;
+        Ok(())
+    }
+
+    /// Single validated mutation without cloning. Used by `plan_frame`, which
+    /// already works on a private copy and must not pay O(leaves) per op.
+    /// Fallible so a conflicting candidate is skipped while earlier accepted
+    /// updates stay committed in the working copy.
+    pub fn apply_one(&mut self, update: Update) -> Result<(), TreeError> {
+        match update {
+            Update::Split(node) => {
+                self.split(node)?;
+            }
+            Update::Merge(node) => {
+                self.merge(node)?;
+            }
+        }
         Ok(())
     }
 
@@ -599,6 +623,57 @@ impl Tree {
             leaf.depth() >= node.depth()
                 && (leaf.id() >> (leaf.depth() - node.depth())) == node.id()
         })
+    }
+}
+
+/// Compact per-frame leaf index: one `leaves()` pass, then O(1) indexed
+/// access and O(1) encode for the rest of the frame. Build once per topology
+/// commit, not once per query.
+///
+/// The rank map is keyed by a single packed `u64` (`id << 6 | depth`), so no
+/// hasher ever sees a struct: one integer multiply per lookup.
+#[derive(Debug, Clone, Default)]
+pub struct LeafList {
+    ordered: Vec<Node>,
+    rank: HashMap<u64, usize>,
+}
+
+fn leaf_key(node: Node) -> u64 {
+    (node.id() << 6) | node.depth() as u64
+}
+
+impl LeafList {
+    pub fn snapshot(tree: &Tree) -> Self {
+        let ordered = tree.leaves();
+        let mut rank = HashMap::with_capacity(ordered.len());
+        for (index, node) in ordered.iter().copied().enumerate() {
+            rank.insert(leaf_key(node), index);
+        }
+        Self { ordered, rank }
+    }
+
+    pub fn len(&self) -> usize {
+        self.ordered.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ordered.is_empty()
+    }
+
+    pub fn index(&self, index: usize) -> Option<Node> {
+        self.ordered.get(index).copied()
+    }
+
+    pub fn encode(&self, node: Node) -> Option<usize> {
+        self.rank.get(&leaf_key(node)).copied()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Node> + '_ {
+        self.ordered.iter().copied()
+    }
+
+    pub fn into_vec(self) -> Vec<Node> {
+        self.ordered
     }
 }
 
@@ -1090,6 +1165,22 @@ mod tests {
             plan.updates(),
             plan_frame(&tree, candidates, FrameBudget { max_operations: 1 }).updates()
         );
+    }
+
+    #[test]
+    fn leaf_list_snapshot_matches_walk_queries() {
+        let mut tree = Tree::at_depth(8, 3).unwrap();
+        tree.split(Node::new(8, 3).unwrap()).unwrap();
+        tree.split(Node::new(9, 3).unwrap()).unwrap();
+        let list = tree.snapshot();
+        assert_eq!(list.len(), tree.leaf_count());
+        for (index, node) in tree.leaves().iter().copied().enumerate() {
+            assert_eq!(list.index(index), Some(node));
+            assert_eq!(tree.leaf_at(index), Some(node));
+            assert_eq!(list.encode(node), Some(index));
+            assert_eq!(tree.encode_leaf(node), Ok(index));
+        }
+        assert_eq!(list.index(list.len()), None);
     }
 
     #[test]

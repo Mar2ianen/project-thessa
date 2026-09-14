@@ -652,12 +652,21 @@ The current code slice provides:
   thessa-rcbt-core --bench tree`);
 - a head-to-head bench against the real vendored C library
   (`cargo bench -p thessa-rcbt-core --bench cbt_vs_libcbt`): identical
-  split/merge sequences replayed on both sides with leaf-set parity checks;
-  current-tune numbers on 4k-262k-leaf workloads show the native tree ahead
-  by ~4-6x on full refinement, ~9-19x on full decode and ~6-7x on
-  split/merge oscillation, with a larger gap on per-frame commit because the
-  C path re-scans the fixed heap while the native path commits only touched
-  leaves (measured, not claimed: rerun the bench on your machine);
+  split/merge sequences replayed on both sides with leaf-set parity checks.
+  The frames workload is a five-column table (same 2000x32 ops, same final
+  topology): native-direct ~10 ms, native real plan+commit ~100 ms, libcbt
+  public `cbt_Update` path ~2.9 s, libcbt sparse (batch FFI + reduce-only)
+  ~210 ms, libcbt sparse through OpenMP/16t ~1.3-3.1 s on small live sets
+  (thread overhead dominates there). In other words: the scary baseline for
+  sparse commits is native-plan+commit vs libcbt-sparse at roughly x2, not
+  x300; the x300 number compares raw local mutations against a full
+  decode+reduce per frame, which is a different commit model, not a
+  different CPU. Full refinement holds at ~x4-6 native, full decode at
+  ~x9-14. OpenMP scaling of the C reduce path on a 65k-leaf refine is clean
+  from 1 to 8 threads (~x3.4, plateau at 4-8); 16 threads are bimodal
+  across runs on this box (5 ms vs ~450 ms, runtime/scheduler noise outside
+  our code) and need an isolated-box retest before any claim. Rerun every
+  table on your own machine before quoting it;
 - a terrain-level `legacy-cpu vs rcbt-pages` comparison on shared selections
   (`cargo bench -p thessa-worldgen-rocky --bench compare`).
 

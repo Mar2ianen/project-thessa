@@ -20,3 +20,7 @@ harness = false
 [[bench]]
 name = "cbt_vs_libcbt"
 harness = false
+
+[[bench]]
+name = "cbt_profile"
+harness = false

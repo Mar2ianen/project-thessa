@@ -1,15 +1,21 @@
 //! Upstream `libcbt` (C, vendored) vs native Rust `Tree` on identical workloads.
 //! Run with `cargo bench -p thessa-rcbt-core --bench cbt_vs_libcbt`.
 //!
-//! Both implementations replay the same operation sequences:
-//! split takes a leaf, merge takes the parent, each batch is committed
-//! (native: immediate; libcbt: decode pass + sum reduction). Final leaf sets
-//! are cross-checked for equality, so the table compares cost, not semantics.
+//! The frames workload is a five-column table: every column replays the same
+//! 2000x32 op sequence and ends on the identical leaf set (asserted); only
+//! the commit path differs:
+//! native-direct (raw split/merge), native-plan+commit (real plan_frame +
+//! atomic batch), libcbt-public (bit writes + cbt_Update decode+reduce),
+//! libcbt-sparse (one batch FFI call + reduce-only), libcbt-sparse-mt (same
+//! through the OpenMP build). The last section scales the OpenMP reduce path
+//! over 1..16 threads.
 
 use std::{hint::black_box, time::Instant};
 
-use thessa_rcbt_core::{Node, Tree};
-use thessa_rcbt_ffi::LibcbtTree;
+use thessa_rcbt_core::{
+    CandidateAction, FrameBudget, LeafCandidate, Node, Tree, Update, WorkClass, plan_frame,
+};
+use thessa_rcbt_ffi::{LibcbtTree, MtCbtTree, set_mt_threads};
 
 #[derive(Debug, Clone, Copy)]
 enum Op {
@@ -169,23 +175,56 @@ fn apply_native(tree: &mut Tree, batches: &[Vec<Op>]) -> usize {
     ops
 }
 
-fn apply_libcbt(tree: &mut LibcbtTree, batches: &[Vec<Op>]) -> usize {
+trait Replay {
+    fn split_op(&mut self, id: u64, depth: u8);
+    fn merge_op(&mut self, parent_id: u64, parent_depth: u8);
+    fn commit(&mut self);
+    fn count(&self) -> usize;
+}
+
+macro_rules! impl_replay {
+    ($t:ty) => {
+        impl Replay for $t {
+            fn split_op(&mut self, id: u64, depth: u8) {
+                self.split(id, depth);
+            }
+            fn merge_op(&mut self, parent_id: u64, parent_depth: u8) {
+                self.merge_children(parent_id, parent_depth);
+            }
+            fn commit(&mut self) {
+                self.reduce();
+            }
+            fn count(&self) -> usize {
+                self.node_count()
+            }
+        }
+    };
+}
+
+impl_replay!(LibcbtTree);
+impl_replay!(MtCbtTree);
+
+fn apply_libcbt_like(tree: &mut impl Replay, batches: &[Vec<Op>]) -> usize {
     let mut ops = 0;
     for batch in batches {
         for op in batch {
             match *op {
-                Op::Split { id, depth } => tree.split(id, depth),
+                Op::Split { id, depth } => tree.split_op(id, depth),
                 Op::Merge {
                     parent_id,
                     parent_depth,
-                } => tree.merge_children(parent_id, parent_depth),
+                } => tree.merge_op(parent_id, parent_depth),
             }
             ops += 1;
         }
-        tree.reduce();
-        black_box(tree.node_count());
+        tree.commit();
+        black_box(tree.count());
     }
     ops
+}
+
+fn apply_libcbt(tree: &mut LibcbtTree, batches: &[Vec<Op>]) -> usize {
+    apply_libcbt_like(tree, batches)
 }
 
 fn check_parity(native: &Tree, ffi: &LibcbtTree, what: &str) {
@@ -249,37 +288,159 @@ fn main() {
     // is adaptive (max depth is not a cost driver), while the libcbt heap is
     // fixed at 2^(max-1) bytes, so it gets a workload-fitted max depth of 16
     // (32 KiB heap for a live set bounded near 4k leaves at depth <= 14).
+    // 2. Sparse mutation frames: the five-column killer table. Every column
+    // replays the same 2000x32 op sequence and ends on the identical leaf
+    // set (asserted); only the commit path differs.
     let frames = gen_frames(10, 14, 2000, 32, 0x9E3779B97F4A7C15);
     let total_ops: usize = frames.iter().map(Vec::len).sum();
 
+    // Column 1: native direct sparse mutations.
     let mut native = Tree::at_depth(24, 10).unwrap();
     let started = Instant::now();
     apply_native(&mut native, &frames);
-    let native_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let direct_ms = started.elapsed().as_secs_f64() * 1000.0;
 
+    // Column 2: native real plan+commit (plan_frame validation + atomic batch).
+    let mut planned = Tree::at_depth(24, 10).unwrap();
+    let started = Instant::now();
+    for batch in &frames {
+        let candidates = batch.iter().map(|op| match *op {
+            Op::Split { id, depth } => LeafCandidate {
+                node: node(id, depth),
+                action: CandidateAction::Split,
+                class: WorkClass::VisibleGeometry,
+                projected_error_px: 4.0 + (id % 7) as f32,
+                predicted_error_px: 2.0,
+                time_to_needed_s: 1.0,
+            },
+            Op::Merge {
+                parent_id,
+                parent_depth,
+            } => LeafCandidate {
+                node: node(parent_id, parent_depth),
+                action: CandidateAction::Merge,
+                class: WorkClass::VisibleGeometry,
+                projected_error_px: 4.0 + (parent_id % 7) as f32,
+                predicted_error_px: 2.0,
+                time_to_needed_s: 1.0,
+            },
+        });
+        // Real planning work (sort + validate on a working copy)...
+        let _plan = plan_frame(&planned, candidates, FrameBudget { max_operations: 64 });
+        // ...then the atomic commit of the identical op order, so parity holds.
+        let updates: Vec<Update> = batch
+            .iter()
+            .map(|op| match *op {
+                Op::Split { id, depth } => Update::Split(node(id, depth)),
+                Op::Merge {
+                    parent_id,
+                    parent_depth,
+                } => Update::Merge(node(parent_id, parent_depth)),
+            })
+            .collect();
+        planned.apply_batch(&updates).unwrap();
+        black_box(planned.leaf_count());
+    }
+    let planned_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    // Column 3: libcbt public path (bit writes + cbt_Update decode+reduce).
     let mut ffi = LibcbtTree::at_depth(16, 10).unwrap();
     let started = Instant::now();
     apply_libcbt(&mut ffi, &frames);
-    let ffi_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let public_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    // Column 4: libcbt sparse (one batch FFI call + reduce-only, no decode).
+    let mut sparse = LibcbtTree::at_depth(16, 10).unwrap();
+    let started = Instant::now();
+    for batch in &frames {
+        let packed: Vec<(u64, i64, u8)> = batch
+            .iter()
+            .map(|op| match *op {
+                Op::Split { id, depth } => (id, depth as i64, 0),
+                Op::Merge {
+                    parent_id,
+                    parent_depth,
+                } => (parent_id, parent_depth as i64, 1),
+            })
+            .collect();
+        sparse.apply_batch_ops(&packed);
+        sparse.reduce_only();
+        black_box(sparse.node_count());
+    }
+    let sparse_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    // Column 5: same sparse commit through the OpenMP build.
+    let mt_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(16);
+    set_mt_threads(mt_threads as u32);
+    let mut mt = MtCbtTree::at_depth(16, 10).unwrap();
+    let started = Instant::now();
+    for batch in &frames {
+        let packed: Vec<(u64, i64, u8)> = batch
+            .iter()
+            .map(|op| match *op {
+                Op::Split { id, depth } => (id, depth as i64, 0),
+                Op::Merge {
+                    parent_id,
+                    parent_depth,
+                } => (parent_id, parent_depth as i64, 1),
+            })
+            .collect();
+        mt.apply_batch_ops(&packed);
+        mt.reduce_only();
+        black_box(mt.node_count());
+    }
+    let mt_ms = started.elapsed().as_secs_f64() * 1000.0;
+    set_mt_threads(1);
 
     check_parity(&native, &ffi, "frames/2000x32");
+    check_parity(&planned, &ffi, "frames-planned/2000x32");
+    assert_eq!(sparse.node_count(), ffi.node_count(), "sparse parity");
+    assert_eq!(sparse.leaves(), ffi.leaves(), "sparse leaf parity");
+    assert_eq!(mt.node_count(), ffi.node_count(), "mt parity");
+    let tag = "frames/2000x32";
     report(
-        "frames/2000x32",
-        "rust-native",
+        tag,
+        "native-direct",
         native.leaf_count(),
         total_ops,
-        native_ms,
+        direct_ms,
     );
     report(
-        "frames/2000x32",
-        "libcbt-c",
-        ffi.node_count(),
+        tag,
+        "native-plan+commit",
+        planned.leaf_count(),
         total_ops,
-        ffi_ms,
+        planned_ms,
+    );
+    report(tag, "libcbt-public", ffi.node_count(), total_ops, public_ms);
+    report(
+        tag,
+        "libcbt-sparse",
+        sparse.node_count(),
+        total_ops,
+        sparse_ms,
+    );
+    report(
+        tag,
+        &format!("libcbt-sparse-mt/{mt_threads}t"),
+        mt.node_count(),
+        total_ops,
+        mt_ms,
     );
     println!(
-        "| frames/2000x32 | speedup(native/libcbt) x{:.2} |",
-        ffi_ms / native_ms.max(1e-9)
+        "| {tag} | native-direct vs libcbt-public x{:.1} |",
+        public_ms / direct_ms.max(1e-9)
+    );
+    println!(
+        "| {tag} | native-plan+commit vs libcbt-sparse x{:.1} |",
+        sparse_ms / planned_ms.max(1e-9)
+    );
+    println!(
+        "| {tag} | native-plan+commit vs libcbt-sparse-mt x{:.1} |",
+        mt_ms / planned_ms.max(1e-9)
     );
 
     // 3. Full decode of every leaf (leaf-list construction).
@@ -359,4 +520,30 @@ fn main() {
         "| oscillate/20r | speedup(native/libcbt) x{:.2} |",
         ffi_ms / native_ms.max(1e-9)
     );
+
+    // 5. OpenMP scaling of the C reduce path (refine to d16, fitted heap).
+    // A flat line means the toolchain built the MT archive without OpenMP.
+    let scale_batches = gen_refine(16);
+    let scale_ops: usize = scale_batches.iter().map(Vec::len).sum();
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    println!("| scale-refine/d16 | impl | leaves | ops | ms | ops_per_s |");
+    for t in [1_usize, 2, 4, 8, 16]
+        .into_iter()
+        .take_while(|t| *t <= threads.max(1))
+    {
+        set_mt_threads(t as u32);
+        let mut mt = MtCbtTree::new(16).unwrap();
+        let started = Instant::now();
+        let ops = apply_libcbt_like(&mut mt, &scale_batches);
+        let ms = started.elapsed().as_secs_f64() * 1000.0;
+        assert_eq!(ops, scale_ops);
+        assert_eq!(mt.node_count(), 65536, "mt scaling parity");
+        println!(
+            "| scale-refine/d16 | libcbt-mt/{t}t | 65536 | {ops} | {ms:.1} | {:.0} |",
+            ops as f64 / ms.max(1e-9) * 1000.0
+        );
+    }
+    set_mt_threads(1);
 }

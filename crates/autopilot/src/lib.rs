@@ -15,6 +15,14 @@ use thessa_sim_core::SimTime;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct NodeId(pub u32);
 
+/// Wire-friendly name caps: event/port/node names arrive from scripts and
+/// the network and are stored per-wait in `BTreeSet`/`BTreeMap`, so an
+/// unbounded `String` is a memory-DoS vector. 128 bytes fits any
+/// human-readable identifier (`stage`, `engine-ready`, …).
+pub const MAX_EVENT_NAME_LEN: usize = 128;
+pub const MAX_PORT_NAME_LEN: usize = 128;
+pub const MAX_NODE_NAME_LEN: usize = 128;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PortDirection {
     Input,
@@ -320,12 +328,30 @@ impl AutopilotGraph {
                     message: "wait configuration requires a wait-capable node kind".into(),
                 });
             }
+            if node.name.len() > MAX_NODE_NAME_LEN {
+                errors.push(GraphError::InvalidConfig {
+                    node: node.id,
+                    message: format!(
+                        "node name is {} bytes, longer than {MAX_NODE_NAME_LEN}",
+                        node.name.len()
+                    ),
+                });
+            }
             let mut names = std::collections::HashSet::new();
             for port in &node.ports {
                 if port.name.trim().is_empty() || !names.insert(port.name.clone()) {
                     errors.push(GraphError::DuplicatePort {
                         node: node.id,
                         port: port.name.clone(),
+                    });
+                }
+                if port.name.len() > MAX_PORT_NAME_LEN {
+                    errors.push(GraphError::InvalidConfig {
+                        node: node.id,
+                        message: format!(
+                            "port name is {} bytes, longer than {MAX_PORT_NAME_LEN}",
+                            port.name.len()
+                        ),
                     });
                 }
             }
@@ -724,7 +750,10 @@ pub enum GraphRunState {
         diagnostic: Diagnostic,
     },
     Aborted {
-        node: NodeId,
+        /// Originating node for block-level aborts; `None` for external
+        /// aborts (server `Cancel`, limits) that are not attributable to
+        /// any node. Never fabricate `NodeId(0)` — it misleads telemetry.
+        node: Option<NodeId>,
         diagnostic: Diagnostic,
     },
 }
@@ -850,7 +879,7 @@ impl GraphRunner {
     pub fn abort(&mut self, diagnostic: Diagnostic) {
         if self.terminal.is_none() {
             self.terminal = Some(GraphRunState::Aborted {
-                node: NodeId(0),
+                node: None,
                 diagnostic,
             });
         }
@@ -945,7 +974,10 @@ impl GraphRunner {
                 }
                 GraphNodeOutcome::Abort { diagnostic } => {
                     self.statuses.insert(node, BlockStatus::Failed);
-                    let state = GraphRunState::Aborted { node, diagnostic };
+                    let state = GraphRunState::Aborted {
+                        node: Some(node),
+                        diagnostic,
+                    };
                     self.terminal = Some(state.clone());
                     return Ok(state);
                 }
@@ -1053,6 +1085,9 @@ impl WaitCondition {
         match self {
             Self::At(time) if !time.0.is_finite() => Err(WaitError::InvalidTime),
             Self::Event(name) if name.trim().is_empty() => Err(WaitError::EmptyEvent),
+            Self::Event(name) if name.len() > MAX_EVENT_NAME_LEN => {
+                Err(WaitError::EventNameTooLong(name.len()))
+            }
             Self::Any(conditions) | Self::All(conditions) if conditions.is_empty() => {
                 Err(WaitError::EmptyComposite)
             }
@@ -1064,10 +1099,6 @@ impl WaitCondition {
             }
             _ => Ok(()),
         }
-    }
-
-    fn is_due(&self, now: SimTime, event: Option<&str>) -> bool {
-        self.is_due_with_seen(now, event, None)
     }
 
     fn is_due_with_seen(
@@ -1383,6 +1414,7 @@ pub struct TrajectoryPlanRunner {
     segment_start: SimTime,
     mode: PlanExecutionMode,
     deoptimization: Option<PlanDeoptimizationReason>,
+    seen_events: std::collections::BTreeSet<String>,
 }
 
 impl TrajectoryPlanRunner {
@@ -1399,6 +1431,7 @@ impl TrajectoryPlanRunner {
             segment_start: start,
             mode,
             deoptimization: None,
+            seen_events: Default::default(),
         })
     }
 
@@ -1418,6 +1451,18 @@ impl TrajectoryPlanRunner {
         self.deoptimization
     }
 
+    /// Earliest simulation time that can advance the parked plan wait,
+    /// accounting for already-remembered domain events. Returns `None` when
+    /// parked on a not-yet-seen event or when not waiting.
+    pub fn next_time(&self) -> Option<SimTime> {
+        match self.plan.segments.get(self.segment_index) {
+            Some(TrajectorySegment::Wait { condition }) => {
+                condition.next_deadline(&self.seen_events).time()
+            }
+            _ => None,
+        }
+    }
+
     /// Switch the current plan to live execution after a guard, pilot
     /// override, or other runtime condition invalidates baked assumptions.
     /// The cursor is retained so the authority can continue from the same
@@ -1433,6 +1478,9 @@ impl TrajectoryPlanRunner {
     /// segments that are already complete at `now`.
     pub fn poll(&mut self, now: SimTime, event: Option<&str>) -> Result<PlanPoll, PlanError> {
         validate_plan_time(now)?;
+        if let Some(event) = event {
+            self.seen_events.insert(event.to_owned());
+        }
         loop {
             let Some(segment) = self.plan.segments.get(self.segment_index) else {
                 return Ok(PlanPoll::Complete { mode: self.mode });
@@ -1481,7 +1529,7 @@ impl TrajectoryPlanRunner {
                     });
                 }
                 TrajectorySegment::Wait { condition } => {
-                    if condition.is_due(now, event) {
+                    if condition.is_due_with_seen(now, event, Some(&self.seen_events)) {
                         self.segment_index += 1;
                         self.segment_start = now;
                         continue;
@@ -1525,6 +1573,7 @@ fn contains_domain_event(condition: &WaitCondition) -> bool {
 pub enum WaitError {
     InvalidTime,
     EmptyEvent,
+    EventNameTooLong(usize),
     EmptyComposite,
     IdExhausted,
 }
@@ -1534,6 +1583,10 @@ impl fmt::Display for WaitError {
         match self {
             Self::InvalidTime => write!(formatter, "wait time must be finite"),
             Self::EmptyEvent => write!(formatter, "wait event must not be empty"),
+            Self::EventNameTooLong(len) => write!(
+                formatter,
+                "wait event name is {len} bytes, longer than {MAX_EVENT_NAME_LEN}"
+            ),
             Self::EmptyComposite => write!(formatter, "composite wait must contain a condition"),
             Self::IdExhausted => write!(formatter, "wait id space exhausted"),
         }
@@ -2307,6 +2360,32 @@ mod tests {
     }
 
     #[test]
+    fn oversized_names_are_rejected() {
+        let long = "e".repeat(MAX_EVENT_NAME_LEN + 1);
+        assert!(matches!(
+            WaitCondition::Event(long).validate(),
+            Err(WaitError::EventNameTooLong(_))
+        ));
+        let graph = AutopilotGraph {
+            nodes: vec![GraphNode {
+                id: NodeId(1),
+                name: "n".repeat(MAX_NODE_NAME_LEN + 1),
+                kind: NodeKind::Source,
+                ports: vec![Port {
+                    name: "p".repeat(MAX_PORT_NAME_LEN + 1),
+                    ty: PortType::Number,
+                    direction: PortDirection::Output,
+                    required: false,
+                }],
+                config: None,
+            }],
+            edges: Vec::new(),
+        };
+        let errors = graph.validate().expect_err("oversized names must fail");
+        assert!(errors.len() >= 2);
+    }
+
+    #[test]
     fn plan_runner_rejects_an_overflowing_segment_boundary() {
         let plan = TrajectoryPlan {
             id: TrajectoryPlanId(11),
@@ -2319,6 +2398,33 @@ mod tests {
         assert!(matches!(
             runner.poll(SimTime(f64::MAX / 2.0), None),
             Err(PlanError::TimeOverflow { .. })
+        ));
+    }
+
+    #[test]
+    fn plan_runner_remembers_events_across_polls_for_all_waits() {
+        let plan = TrajectoryPlan {
+            id: TrajectoryPlanId(12),
+            segments: vec![
+                TrajectorySegment::Wait {
+                    condition: WaitCondition::All(vec![
+                        WaitCondition::Event("stage".into()),
+                        WaitCondition::Event("engine-ready".into()),
+                    ]),
+                },
+                TrajectorySegment::Coast { duration_s: 1.0 },
+            ],
+            bakeability: Bakeability::Guarded,
+        };
+        let mut runner = TrajectoryPlanRunner::new(plan, SimTime(0.0)).unwrap();
+        assert!(matches!(
+            runner.poll(SimTime(0.0), Some("stage")).unwrap(),
+            PlanPoll::Waiting { .. }
+        ));
+        // Second event arrives on a later tick without the first one repeated.
+        assert!(matches!(
+            runner.poll(SimTime(1.0), Some("engine-ready")).unwrap(),
+            PlanPoll::Action { .. }
         ));
     }
 }

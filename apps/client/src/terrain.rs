@@ -735,7 +735,7 @@ fn update_terrain(
             }
             for key in desired.difference(&world.visible) {
                 let tile = &world.cache[key];
-                let mut tile_entity = commands.spawn((
+                let tile_entity = commands.spawn((
                     SurfaceTile(*key),
                     Mesh3d(tile.mesh.clone()),
                     MeshMaterial3d(tile.material.clone()),
@@ -746,7 +746,17 @@ fn update_terrain(
                 // Shared sky probe at spawn (atomic with creation: no
                 // query/insert race when cover churns under warp).
                 if let Some(sky) = sky.as_deref() {
-                    tile_entity.insert(water::tile_water_probe(sky));
+                    // The probe must not share the mesh entity's transform:
+                    // scaling that transform would scale the terrain. Its
+                    // child uses the tile's physical cube-sphere span, with
+                    // a conservative margin for the apron and height field.
+                    let tile_entity = tile_entity.id();
+                    let probe_extent_m = key.span_m(world.field.params.radius_m) * 1.5;
+                    commands.spawn((
+                        water::tile_water_probe(sky),
+                        Transform::from_scale(Vec3::splat(probe_extent_m as f32)),
+                        ChildOf(tile_entity),
+                    ));
                 }
             }
             world.counters.terrain_cache_hits += desired.len() as u64;

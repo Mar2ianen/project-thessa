@@ -22,7 +22,7 @@ struct ReceivedSnapshot {
 }
 
 struct SnapshotInbox {
-    receiver: Receiver<Snapshot>,
+    receiver: Receiver<ReceivedSnapshot>,
     previous: Option<ReceivedSnapshot>,
     latest: Option<ReceivedSnapshot>,
     next_generation: u64,
@@ -31,12 +31,11 @@ struct SnapshotInbox {
 
 impl SnapshotInbox {
     fn drain(&mut self) {
-        while let Ok(snapshot) = self.receiver.try_recv() {
+        while let Ok(received) = self.receiver.try_recv() {
             self.next_generation = self.next_generation.wrapping_add(1);
             let received = ReceivedSnapshot {
-                snapshot,
-                received_at: std::time::Instant::now(),
                 generation: self.next_generation,
+                ..received
             };
             self.previous = self.latest.take();
             self.latest = Some(received);
@@ -142,6 +141,11 @@ impl InputMailbox {
     }
 
     fn close(&self) {
+        // `take` checks `closed` while holding this mutex and then waits on
+        // the same predicate. Change the predicate under that mutex so a
+        // waiter cannot observe the old value, release the lock, and miss
+        // the notification between its check and wait.
+        let _pending = self.pending.lock().expect("input mailbox poisoned");
         self.closed.store(true, Ordering::Release);
         self.wake.notify_all();
     }
@@ -185,6 +189,36 @@ impl Drop for EmbeddedLink {
     }
 }
 
+/// Owns a child during the fallible startup/handshake phase. `Child` itself
+/// does not kill or reap the process when dropped, so every startup error
+/// must pass through this guard.
+struct StartupChild {
+    child: Option<Child>,
+}
+
+impl StartupChild {
+    fn new(child: Child) -> Self {
+        Self { child: Some(child) }
+    }
+
+    fn as_mut(&mut self) -> &mut Child {
+        self.child.as_mut().expect("startup child already disarmed")
+    }
+
+    fn disarm(mut self) -> Child {
+        self.child.take().expect("startup child already disarmed")
+    }
+}
+
+impl Drop for StartupChild {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 impl EmbeddedLink {
     /// Spawn the server next to the client binary, shake hands, return.
     /// Any failure (missing binary, timeout, version skew) is an `Err`
@@ -192,18 +226,30 @@ impl EmbeddedLink {
     pub fn spawn(handshake_timeout: Duration) -> Result<Self, String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let server = exe.with_file_name(format!("thessa-server{}", std::env::consts::EXE_SUFFIX));
-        let mut child = Command::new(&server)
+        let mut command = Command::new(&server);
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::inherit());
+        Self::spawn_command(command, handshake_timeout)
+            .map_err(|error| format!("spawn {}: {error}", server.display()))
+    }
+
+    fn spawn_command(mut command: Command, handshake_timeout: Duration) -> Result<Self, String> {
+        let child = command
             .spawn()
-            .map_err(|e| format!("spawn {}: {e}", server.display()))?;
+            .map_err(|error| format!("child process: {error}"))?;
+        let mut startup = StartupChild::new(child);
 
         let (snapshots_tx, snapshots) = channel();
         let (welcomed_tx, welcomed_rx) = channel::<()>();
 
         // Reader thread owns stdout end to end: Welcome gate, then snapshots.
-        let mut child_out = child.stdout.take().ok_or("server stdout not piped")?;
+        let mut child_out = startup
+            .as_mut()
+            .stdout
+            .take()
+            .ok_or("server stdout not piped")?;
         std::thread::spawn(move || {
             let mut decoder = FrameDecoder::new();
             let mut buffer = [0u8; 65536];
@@ -229,7 +275,13 @@ impl EmbeddedLink {
                                 }
                                 if let Ok(snapshot) =
                                     thessa_flight_net::decode_payload::<Snapshot>(&envelope)
-                                    && snapshots_tx.send(snapshot).is_err()
+                                    && snapshots_tx
+                                        .send(ReceivedSnapshot {
+                                            snapshot,
+                                            received_at: std::time::Instant::now(),
+                                            generation: 0,
+                                        })
+                                        .is_err()
                                 {
                                     return;
                                 }
@@ -247,7 +299,11 @@ impl EmbeddedLink {
 
         // Handshake on this thread: Hello out, Welcome (via the reader)
         // within the timeout. Stdin stays ours until the writer starts.
-        let mut child_in = child.stdin.take().ok_or("server stdin not piped")?;
+        let mut child_in = startup
+            .as_mut()
+            .stdin
+            .take()
+            .ok_or("server stdin not piped")?;
         let hello = thessa_flight_net::Hello {
             client_name: "thessa-client-embedded".into(),
         };
@@ -279,6 +335,8 @@ impl EmbeddedLink {
             }
             let _ = child_in.flush();
         });
+
+        let child = startup.disarm();
 
         Ok(Self {
             snapshots: std::sync::Mutex::new(SnapshotInbox {
@@ -378,11 +436,21 @@ mod tests {
             next_generation: 0,
             delivered_generation: 0,
         };
-        sender.send(snapshot(DVec3::X, 0.0, 1.0)).expect("snapshot");
+        sender
+            .send(ReceivedSnapshot {
+                snapshot: snapshot(DVec3::X, 0.0, 1.0),
+                received_at: std::time::Instant::now(),
+                generation: 0,
+            })
+            .expect("snapshot");
         assert!(inbox.latest().is_some());
         assert!(inbox.latest().is_none());
         sender
-            .send(snapshot(DVec3::Y, 0.0, 1.0))
+            .send(ReceivedSnapshot {
+                snapshot: snapshot(DVec3::Y, 0.0, 1.0),
+                received_at: std::time::Instant::now(),
+                generation: 0,
+            })
             .expect("second snapshot");
         assert_eq!(
             inbox
@@ -396,6 +464,44 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_inbox_preserves_reader_receive_times_when_drained_together() {
+        let (sender, receiver) = channel();
+        let base = std::time::Instant::now();
+        let mut inbox = SnapshotInbox {
+            receiver,
+            previous: None,
+            latest: None,
+            next_generation: 0,
+            delivered_generation: 0,
+        };
+        sender
+            .send(ReceivedSnapshot {
+                snapshot: snapshot(DVec3::X, 0.0, 1.0),
+                received_at: base,
+                generation: 0,
+            })
+            .expect("first snapshot");
+        sender
+            .send(ReceivedSnapshot {
+                snapshot: snapshot(DVec3::Y, 0.0, 2.0),
+                received_at: base + Duration::from_millis(50),
+                generation: 0,
+            })
+            .expect("second snapshot");
+
+        assert!(
+            inbox.latest().is_some(),
+            "drain should accept both arrivals"
+        );
+        let previous = inbox.previous.as_ref().expect("previous snapshot");
+        let latest = inbox.latest.as_ref().expect("latest snapshot");
+        assert_eq!(
+            latest.received_at.duration_since(previous.received_at),
+            Duration::from_millis(50)
+        );
+    }
+
+    #[test]
     fn input_mailbox_close_wakes_waiters() {
         let mailbox = std::sync::Arc::new(InputMailbox {
             pending: std::sync::Mutex::new(None),
@@ -403,8 +509,98 @@ mod tests {
             closed: AtomicBool::new(false),
         });
         let waiter = mailbox.clone();
-        let thread = std::thread::spawn(move || waiter.take());
+        let (done_tx, done_rx) = channel();
+        let thread = std::thread::spawn(move || {
+            done_tx
+                .send(waiter.take().is_none())
+                .expect("waiter result");
+        });
         mailbox.close();
-        assert!(thread.join().expect("waiter thread").is_none());
+        assert!(
+            done_rx
+                .recv_timeout(Duration::from_millis(250))
+                .expect("close must wake a blocked waiter")
+        );
+        thread.join().expect("waiter thread");
+    }
+
+    #[cfg(unix)]
+    fn injected_server(command: &str) -> (std::process::Command, std::path::PathBuf) {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let pid_path = std::env::temp_dir().join(format!(
+            "thessa-embedded-startup-{}-{stamp}.pid",
+            std::process::id()
+        ));
+        let quoted_path = format!("'{}'", pid_path.to_string_lossy().replace('\'', "'\\''"));
+        let script = format!("echo $$ > {quoted_path}; {command}");
+        let mut command_builder = std::process::Command::new("sh");
+        command_builder
+            .args(["-c", script.as_str()])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        (command_builder, pid_path)
+    }
+
+    #[cfg(unix)]
+    fn assert_startup_child_gone(pid_path: &std::path::Path) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        let pid = loop {
+            if let Ok(pid) = std::fs::read_to_string(pid_path)
+                && let Ok(pid) = pid.trim().parse::<u32>()
+            {
+                break pid;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "startup fixture did not publish its pid"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let status = std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(Stdio::null())
+            .status()
+            .expect("run kill -0");
+        assert!(!status.success(), "startup child {pid} is still alive");
+        #[cfg(target_os = "linux")]
+        assert!(
+            !std::path::Path::new("/proc").join(pid.to_string()).exists(),
+            "startup child {pid} was not reaped"
+        );
+        let _ = std::fs::remove_file(pid_path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn embedded_startup_timeout_reaps_child() {
+        let started = std::time::Instant::now();
+        let (command, pid_path) = injected_server("exec sleep 30");
+        let result = EmbeddedLink::spawn_command(command, Duration::from_millis(25));
+        assert!(result.is_err(), "server without welcome must fail startup");
+        assert_startup_child_gone(&pid_path);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "startup cleanup took too long: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn embedded_startup_early_exit_reaps_child() {
+        let started = std::time::Instant::now();
+        let (command, pid_path) = injected_server("exit 0");
+        let result = EmbeddedLink::spawn_command(command, Duration::from_millis(250));
+        assert!(result.is_err(), "early server exit must fail startup");
+        assert_startup_child_gone(&pid_path);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "early-exit cleanup took too long: {:?}",
+            started.elapsed()
+        );
     }
 }

@@ -14,7 +14,10 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
+        mpsc::{SyncSender, sync_channel},
     },
+    thread,
+    time::Duration,
 };
 
 use rquickjs::{
@@ -29,6 +32,12 @@ use thessa_flight_control::{
     DirectionFrame, DirectionTarget, FlightPathTarget, GuidanceIntent, PilotAxes, RollPolicy,
 };
 use thessa_sim_core::SimTime;
+
+/// Maximum wall time one synchronous JS evaluation may occupy the
+/// authoritative server thread. QuickJS's interrupt handler is driven by a
+/// separate timer thread so an infinite loop cannot wait for its own cancel
+/// message to be processed.
+pub const SCRIPT_EXECUTION_BUDGET: Duration = Duration::from_millis(25);
 
 #[derive(Debug, Clone, Copy)]
 pub struct ScriptLimits {
@@ -173,6 +182,10 @@ impl ScriptEngine {
                 limit: self.limits.max_source_bytes,
             });
         }
+        self.with_execution_budget(|| self.run_unbounded(source))
+    }
+
+    fn run_unbounded(&self, source: &str) -> Result<ScriptResult, ScriptError> {
         let wrapped = format!(
             "{}\n(function() {{\n'use strict';\n{}\n}})()",
             SANDBOX_PRELUDE, source
@@ -189,6 +202,10 @@ impl ScriptEngine {
     /// this method never sleeps the Rust worker.
     pub fn run_async(&self, source: &str) -> Result<ScriptStep, ScriptError> {
         self.check_source_size(source)?;
+        self.with_execution_budget(|| self.run_async_unbounded(source))
+    }
+
+    fn run_async_unbounded(&self, source: &str) -> Result<ScriptStep, ScriptError> {
         self.wait_request.borrow_mut().take();
         let wrapped = format!(
             "{}\n(async function() {{\n'use strict';\n{}\n}})()",
@@ -254,6 +271,19 @@ impl ScriptEngine {
         self.interrupt_requested.store(false, Ordering::Relaxed);
     }
 
+    fn with_execution_budget<T>(
+        &self,
+        action: impl FnOnce() -> Result<T, ScriptError>,
+    ) -> Result<T, ScriptError> {
+        let guard = InterruptGuard::start(
+            Arc::clone(&self.interrupt_requested),
+            SCRIPT_EXECUTION_BUDGET,
+        );
+        let result = action();
+        drop(guard);
+        result
+    }
+
     /// Keep the runtime owned by this engine so QuickJS jobs cannot outlive
     /// the VM shard. The method makes the ownership invariant visible to
     /// embedders without exposing the raw QuickJS context.
@@ -267,6 +297,10 @@ impl ScriptContinuation {
     /// Resolve one native wait and run the QuickJS job queue until the script
     /// completes or registers its next simulation wait.
     pub fn resume(self, engine: &ScriptEngine) -> Result<ScriptStep, ScriptError> {
+        engine.with_execution_budget(|| self.resume_unbounded(engine))
+    }
+
+    fn resume_unbounded(self, engine: &ScriptEngine) -> Result<ScriptStep, ScriptError> {
         engine.context.with(|ctx| {
             let resolver = self
                 .resolver
@@ -281,6 +315,48 @@ impl ScriptContinuation {
                 .map_err(|error| ScriptError::Runtime(error.to_string()))?;
             engine.finish_promise(promise)
         })
+    }
+}
+
+/// Arms a wall-time interrupt from a thread that is independent of the
+/// QuickJS evaluation thread. A channel lets the fast path stop and join the
+/// timer immediately instead of sleeping for the full budget on every small
+/// script.
+struct InterruptGuard {
+    flag: Arc<AtomicBool>,
+    previous: bool,
+    cancel: Option<SyncSender<()>>,
+    timer: Option<thread::JoinHandle<()>>,
+}
+
+impl InterruptGuard {
+    fn start(flag: Arc<AtomicBool>, budget: Duration) -> Self {
+        let previous = flag.load(Ordering::Relaxed);
+        let (cancel, cancelled) = sync_channel(0);
+        let timer_flag = Arc::clone(&flag);
+        let timer = thread::spawn(move || {
+            if cancelled.recv_timeout(budget).is_err() {
+                timer_flag.store(true, Ordering::Relaxed);
+            }
+        });
+        Self {
+            flag,
+            previous,
+            cancel: Some(cancel),
+            timer: Some(timer),
+        }
+    }
+}
+
+impl Drop for InterruptGuard {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            let _ = cancel.send(());
+        }
+        if let Some(timer) = self.timer.take() {
+            let _ = timer.join();
+        }
+        self.flag.store(self.previous, Ordering::Relaxed);
     }
 }
 
@@ -1025,6 +1101,41 @@ mod tests {
             Err(ScriptError::Runtime(_))
         ));
         engine.clear_interrupt();
+    }
+
+    #[test]
+    fn execution_budget_interrupts_start_and_allows_recovery() {
+        let engine = ScriptEngine::new(ScriptLimits::default()).unwrap();
+        let started = std::time::Instant::now();
+        assert!(matches!(
+            engine.run("for (;;) {}"),
+            Err(ScriptError::Runtime(_))
+        ));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(matches!(
+            engine.run("return Guidance.angularRate(0.1, 0, 0);"),
+            Ok(ScriptResult::Guidance(_))
+        ));
+    }
+
+    #[test]
+    fn execution_budget_interrupts_resumed_microtasks_and_allows_recovery() {
+        let engine = ScriptEngine::new(ScriptLimits::default()).unwrap();
+        let step = engine.run_async("await sim.sleep(0); for (;;) {}").unwrap();
+        let continuation = match step {
+            ScriptStep::Waiting { continuation, .. } => continuation,
+            ScriptStep::Completed(_) => panic!("sleep should park the script"),
+        };
+        let started = std::time::Instant::now();
+        assert!(matches!(
+            continuation.resume(&engine),
+            Err(ScriptError::Runtime(_))
+        ));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(matches!(
+            engine.run("return Guidance.angularRate(0, 0.1, 0);"),
+            Ok(ScriptResult::Guidance(_))
+        ));
     }
 
     #[test]

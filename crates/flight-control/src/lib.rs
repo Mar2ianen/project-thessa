@@ -569,16 +569,22 @@ impl FlightPolicy {
         validate_optional_limit(self.max_positive_g)?;
         validate_optional_limit(self.max_negative_g)?;
         demand = self.constrain_demand(demand, airborne, in_atmosphere);
-        if self
-            .max_aoa_rad
-            .is_some_and(|limit| context.angle_of_attack_rad.abs() >= limit)
-            || self
-                .max_positive_g
-                .is_some_and(|limit| context.load_factor_g >= limit)
-            || self
-                .max_negative_g
-                .is_some_and(|limit| context.load_factor_g <= -limit)
-        {
+        let pitch_pushes_aoa_outward = self.max_aoa_rad.is_some_and(|limit| {
+            context.angle_of_attack_rad.abs() >= limit
+                && ((context.angle_of_attack_rad > 0.0 && demand.moment_body_nm.y < 0.0)
+                    || (context.angle_of_attack_rad < 0.0 && demand.moment_body_nm.y > 0.0))
+        });
+        // With +X forward and +Z up, +Y is nose-down. Positive load factor
+        // is reduced by nose-down torque; negative load factor is reduced by
+        // nose-up torque. Keep the recovery direction available at either
+        // envelope edge instead of zeroing the whole pitch channel.
+        let pitch_pushes_g_outward = self
+            .max_positive_g
+            .is_some_and(|limit| context.load_factor_g >= limit && demand.moment_body_nm.y < 0.0)
+            || self.max_negative_g.is_some_and(|limit| {
+                context.load_factor_g <= -limit && demand.moment_body_nm.y > 0.0
+            });
+        if pitch_pushes_aoa_outward || pitch_pushes_g_outward {
             demand.moment_body_nm.y = 0.0;
         }
         Ok(demand)
@@ -979,6 +985,47 @@ mod tests {
             .unwrap();
         assert_eq!(demand.moment_body_nm.y, 0.0);
         assert_eq!(demand.force_body_n, DVec3::ZERO);
+    }
+
+    #[test]
+    fn envelope_protection_preserves_pitch_recovery_direction_symmetrically() {
+        let policy = FlightPolicy {
+            max_aoa_rad: Some(0.1),
+            max_positive_g: Some(2.0),
+            max_negative_g: Some(2.0),
+            ..FlightPolicy::default()
+        };
+        let demand = |pitch_moment: f64, aoa: f64, load_factor_g: f64| {
+            policy
+                .constrain_demand_with_context(
+                    ControlDemand {
+                        moment_body_nm: DVec3::new(1.0, pitch_moment, 3.0),
+                        ..ControlDemand::zero()
+                    },
+                    true,
+                    true,
+                    FlightPolicyContext {
+                        angle_of_attack_rad: aoa,
+                        load_factor_g,
+                    },
+                )
+                .unwrap()
+                .moment_body_nm
+        };
+
+        // Positive AoA is reduced by +Y (nose-down), while -Y would deepen
+        // it and is clipped. The negative-AoA case is the mirror image.
+        assert_eq!(demand(2.0, 0.2, 0.0).y, 2.0);
+        assert_eq!(demand(-2.0, 0.2, 0.0).y, 0.0);
+        assert_eq!(demand(-2.0, -0.2, 0.0).y, -2.0);
+        assert_eq!(demand(2.0, -0.2, 0.0).y, 0.0);
+
+        // The g-limit has the same recovery sign convention and must not
+        // remove the allowed direction when the opposite edge is exceeded.
+        assert_eq!(demand(2.0, 0.0, 3.0).y, 2.0);
+        assert_eq!(demand(-2.0, 0.0, 3.0).y, 0.0);
+        assert_eq!(demand(-2.0, 0.0, -3.0).y, -2.0);
+        assert_eq!(demand(2.0, 0.0, -3.0).y, 0.0);
     }
 
     #[test]

@@ -830,6 +830,23 @@ impl GraphRunner {
         matches!(self.terminal, Some(GraphRunState::Complete))
     }
 
+    /// Earliest simulation time that can make one parked graph wait
+    /// actionable, accounting for domain events already remembered by the
+    /// parked node. Composite waits with an outstanding event branch report
+    /// no time until that event arrives; callers must not fast-forward past a
+    /// graph wake based on a merely known, but insufficient, timestamp.
+    pub fn next_time(&self) -> Option<SimTime> {
+        let empty_events = std::collections::BTreeSet::new();
+        self.waiting
+            .iter()
+            .filter_map(|(node, condition)| {
+                condition
+                    .next_deadline(self.waiting_events.get(node).unwrap_or(&empty_events))
+                    .time()
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+    }
+
     pub fn abort(&mut self, diagnostic: Diagnostic) {
         if self.terminal.is_none() {
             self.terminal = Some(GraphRunState::Aborted {
@@ -1074,18 +1091,88 @@ impl WaitCondition {
         }
     }
 
-    fn next_time(&self) -> Option<SimTime> {
+    /// Earliest time-only deadline when no domain event has been observed.
+    /// Stateful schedulers use their event-aware deadline internally.
+    pub fn next_time(&self) -> Option<SimTime> {
+        self.next_deadline(&std::collections::BTreeSet::new())
+            .time()
+    }
+
+    fn next_deadline(&self, seen_events: &std::collections::BTreeSet<String>) -> WaitDeadline {
         match self {
-            Self::At(time) => Some(*time),
-            Self::Event(_) => None,
-            Self::Any(conditions) => conditions
-                .iter()
-                .filter_map(Self::next_time)
-                .min_by(|a, b| a.0.total_cmp(&b.0)),
-            Self::All(conditions) => conditions
-                .iter()
-                .filter_map(Self::next_time)
-                .max_by(|a, b| a.0.total_cmp(&b.0)),
+            Self::At(time) => WaitDeadline::At(*time),
+            Self::Event(name) if seen_events.contains(name) => WaitDeadline::Ready,
+            Self::Event(_) => WaitDeadline::Event,
+            Self::Any(conditions) => {
+                let mut earliest: Option<WaitDeadline> = None;
+                let mut saw_event = false;
+                for condition in conditions {
+                    match condition.next_deadline(seen_events) {
+                        WaitDeadline::Ready => return WaitDeadline::Ready,
+                        WaitDeadline::At(time) => {
+                            earliest = Some(match earliest {
+                                Some(previous) => previous.min_by_time(time),
+                                None => WaitDeadline::At(time),
+                            });
+                        }
+                        WaitDeadline::Event => saw_event = true,
+                    }
+                }
+                earliest.unwrap_or(if saw_event {
+                    WaitDeadline::Event
+                } else {
+                    WaitDeadline::Ready
+                })
+            }
+            Self::All(conditions) => {
+                let mut latest: Option<WaitDeadline> = None;
+                for condition in conditions {
+                    match condition.next_deadline(seen_events) {
+                        WaitDeadline::Event => return WaitDeadline::Event,
+                        WaitDeadline::At(time) => {
+                            latest = Some(match latest {
+                                Some(previous) => previous.max_by_time(time),
+                                None => WaitDeadline::At(time),
+                            });
+                        }
+                        WaitDeadline::Ready => {}
+                    }
+                }
+                latest.unwrap_or(WaitDeadline::Ready)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum WaitDeadline {
+    /// All required parts are already satisfied by remembered events.
+    Ready,
+    /// Simulation time can satisfy the remaining parts.
+    At(SimTime),
+    /// A not-yet-seen domain event is still required.
+    Event,
+}
+
+impl WaitDeadline {
+    fn time(self) -> Option<SimTime> {
+        match self {
+            Self::At(time) => Some(time),
+            Self::Ready | Self::Event => None,
+        }
+    }
+
+    fn min_by_time(self, other: SimTime) -> Self {
+        match self {
+            Self::At(time) if time.0 <= other.0 => Self::At(time),
+            _ => Self::At(other),
+        }
+    }
+
+    fn max_by_time(self, other: SimTime) -> Self {
+        match self {
+            Self::At(time) if time.0 >= other.0 => Self::At(time),
+            _ => Self::At(other),
         }
     }
 }
@@ -1144,7 +1231,12 @@ impl WaitSet {
     pub fn next_time(&self) -> Option<SimTime> {
         self.waits
             .values()
-            .filter_map(|registration| registration.condition.next_time())
+            .filter_map(|registration| {
+                registration
+                    .condition
+                    .next_deadline(&registration.seen_events)
+                    .time()
+            })
             .min_by(|a, b| a.0.total_cmp(&b.0))
     }
 
@@ -1535,6 +1627,32 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct ConfiguredWaitBlock {
+        calls: u32,
+    }
+
+    impl GraphBlock for ConfiguredWaitBlock {
+        fn execute(
+            &mut self,
+            node: &GraphNode,
+            _inputs: &BTreeMap<String, GraphValue>,
+        ) -> GraphNodeOutcome {
+            self.calls += 1;
+            if node.kind == NodeKind::Wait && self.calls == 1 {
+                return GraphNodeOutcome::Wait {
+                    condition: match node.config.as_ref() {
+                        Some(GraphNodeConfig::Wait { condition }) => condition.clone(),
+                        _ => WaitCondition::Event("missing".into()),
+                    },
+                };
+            }
+            GraphNodeOutcome::Complete {
+                outputs: BTreeMap::new(),
+            }
+        }
+    }
+
     #[test]
     fn surface_sites_normalize_centers_but_keep_landing_and_impact_types_distinct() {
         let landing = LandingSite::new([0.0, 2.0, 0.0], 125.0).unwrap();
@@ -1922,6 +2040,34 @@ mod tests {
     }
 
     #[test]
+    fn composite_wait_next_time_is_actionable_only_when_time_can_complete_it() {
+        assert_eq!(
+            WaitCondition::Any(vec![
+                WaitCondition::At(SimTime(10.0)),
+                WaitCondition::Event("impact".into()),
+            ])
+            .next_time(),
+            Some(SimTime(10.0))
+        );
+        assert_eq!(
+            WaitCondition::All(vec![
+                WaitCondition::At(SimTime(10.0)),
+                WaitCondition::At(SimTime(20.0)),
+            ])
+            .next_time(),
+            Some(SimTime(20.0))
+        );
+        assert_eq!(
+            WaitCondition::All(vec![
+                WaitCondition::At(SimTime(10.0)),
+                WaitCondition::Event("impact".into()),
+            ])
+            .next_time(),
+            None
+        );
+    }
+
+    #[test]
     fn all_waits_schedule_the_latest_known_time() {
         let mut waits = WaitSet::default();
         waits
@@ -1947,6 +2093,86 @@ mod tests {
         assert!(waits.wake(SimTime(0.0), Some("stage")).is_empty());
         assert_eq!(waits.wake(SimTime(0.0), Some("engine-ready")), vec![wait]);
         assert!(waits.is_empty());
+    }
+
+    #[test]
+    fn remembered_event_releases_an_all_waits_time_deadline() {
+        let mut waits = WaitSet::default();
+        let wait = waits
+            .register(WaitCondition::All(vec![
+                WaitCondition::At(SimTime(10.0)),
+                WaitCondition::Event("stage".into()),
+            ]))
+            .unwrap();
+        assert_eq!(waits.next_time(), None);
+        assert!(waits.wake(SimTime(2.0), Some("stage")).is_empty());
+        assert_eq!(waits.next_time(), Some(SimTime(10.0)));
+        assert_eq!(waits.wake(SimTime(10.0), None), vec![wait]);
+    }
+
+    #[test]
+    fn nested_wait_deadlines_account_for_multiple_remembered_events() {
+        let mut waits = WaitSet::default();
+        waits
+            .register(WaitCondition::All(vec![
+                WaitCondition::Any(vec![
+                    WaitCondition::At(SimTime(10.0)),
+                    WaitCondition::Event("stage".into()),
+                ]),
+                WaitCondition::All(vec![
+                    WaitCondition::At(SimTime(20.0)),
+                    WaitCondition::Event("engine-ready".into()),
+                ]),
+            ]))
+            .unwrap();
+        assert_eq!(waits.next_time(), None);
+        assert!(waits.wake(SimTime(2.0), Some("stage")).is_empty());
+        assert_eq!(waits.next_time(), None);
+        assert!(waits.wake(SimTime(3.0), Some("engine-ready")).is_empty());
+        assert_eq!(waits.next_time(), Some(SimTime(20.0)));
+    }
+
+    #[test]
+    fn graph_runner_deadline_survives_event_before_time() {
+        let graph = AutopilotGraph {
+            nodes: vec![GraphNode {
+                id: NodeId(1),
+                name: "wait".into(),
+                kind: NodeKind::Wait,
+                ports: Vec::new(),
+                config: Some(GraphNodeConfig::Wait {
+                    condition: WaitCondition::All(vec![
+                        WaitCondition::At(SimTime(10.0)),
+                        WaitCondition::Event("stage".into()),
+                    ]),
+                }),
+            }],
+            edges: Vec::new(),
+        };
+        let mut runner = GraphRunner::new(graph).unwrap();
+        let mut block = ConfiguredWaitBlock::default();
+        assert!(matches!(
+            runner.poll(SimTime(0.0), None, &mut block).unwrap(),
+            GraphRunState::Waiting {
+                condition: WaitCondition::All(_),
+                ..
+            }
+        ));
+        assert_eq!(runner.next_time(), None);
+        assert!(matches!(
+            runner
+                .poll(SimTime(2.0), Some("stage"), &mut block)
+                .unwrap(),
+            GraphRunState::Waiting {
+                condition: WaitCondition::All(_),
+                ..
+            }
+        ));
+        assert_eq!(runner.next_time(), Some(SimTime(10.0)));
+        assert_eq!(
+            runner.poll(SimTime(10.0), None, &mut block).unwrap(),
+            GraphRunState::Complete
+        );
     }
 
     #[test]

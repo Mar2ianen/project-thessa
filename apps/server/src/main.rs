@@ -8,7 +8,7 @@
 
 mod thread_bake;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
@@ -31,7 +31,7 @@ use thessa_flight_net::{
     AutopilotCommand, AutopilotInput, ClientInput, Command, GuidanceInput, Snapshot,
 };
 use thessa_protocol::{FrameDecoder, kind};
-use thessa_sim_core::{BakedEphemeris, BodyId, SimTime, SystemConfig};
+use thessa_sim_core::{BakedEphemeris, BodyId, ScheduledKind, SimTime, SystemConfig};
 use thread_bake::ThreadBakeQueue;
 
 /// Wall-time quantum for the authoritative driver. It bounds how long the
@@ -147,6 +147,58 @@ struct ClientVote {
     paused: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutopilotEvent {
+    Impact,
+    Horizon,
+    Node,
+    Alarm,
+}
+
+impl AutopilotEvent {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Impact => "impact",
+            Self::Horizon => "horizon",
+            Self::Node => "node",
+            Self::Alarm => "alarm",
+        }
+    }
+}
+
+impl From<ScheduledKind> for AutopilotEvent {
+    fn from(kind: ScheduledKind) -> Self {
+        match kind {
+            ScheduledKind::RailsImpact { .. } => Self::Impact,
+            ScheduledKind::RailsHorizon => Self::Horizon,
+            ScheduledKind::ManeuverNode { .. } => Self::Node,
+            ScheduledKind::Alarm => Self::Alarm,
+        }
+    }
+}
+
+fn client_input_takes_over(previous: Option<&ClientInput>, input: &ClientInput) -> bool {
+    if input.commands.iter().any(|command| {
+        matches!(
+            command,
+            Command::Stage | Command::Engine { .. } | Command::Reset
+        )
+    }) {
+        return true;
+    }
+    let Some(previous) = previous else {
+        return input.control_input.iter().any(|axis| axis.abs() > 1.0e-12);
+    };
+    input.control_input != previous.control_input
+        || input.control_mode != previous.control_mode
+        || input.sas_target_xyzw != previous.sas_target_xyzw
+        || input.throttle != previous.throttle
+        || input.engine_active != previous.engine_active
+        || input.sas_enabled != previous.sas_enabled
+        || input.rcs_enabled != previous.rcs_enabled
+        || input.gear_down != previous.gear_down
+}
+
 /// Driver around the authority: inputs in, snapshots out, warp accounting.
 struct Sim {
     authority: FlightAuthority,
@@ -166,8 +218,9 @@ struct Sim {
     impact_site: Option<ImpactSite>,
     impact_obstacles: Option<ObstacleReport>,
     plan_runner: Option<TrajectoryPlanRunner>,
-    last_autopilot_notice: Option<String>,
     clients: std::collections::HashMap<String, ClientVote>,
+    last_client_inputs: std::collections::HashMap<String, ClientInput>,
+    autopilot_events: VecDeque<AutopilotEvent>,
     advanced_s: f64,
     compute_s: f64,
     wall_started: Instant,
@@ -322,8 +375,9 @@ impl Sim {
             impact_site: None,
             impact_obstacles: None,
             plan_runner: None,
-            last_autopilot_notice: None,
             clients: std::collections::HashMap::new(),
+            last_client_inputs: std::collections::HashMap::new(),
+            autopilot_events: VecDeque::new(),
             advanced_s: 0.0,
             compute_s: 0.0,
             wall_started: Instant::now(),
@@ -343,6 +397,7 @@ impl Sim {
     /// Drop a pilot's votes on disconnect.
     fn unregister(&mut self, id: &str) {
         self.clients.remove(id);
+        self.last_client_inputs.remove(id);
     }
 
     /// Consensual warp: the minimum vote wins.
@@ -372,8 +427,13 @@ impl Sim {
             return false;
         }
         let mut force_snapshot = false;
-        self.cancel_autopilot_tasks();
-        self.guidance = None;
+        let previous = self
+            .last_client_inputs
+            .insert(id.to_string(), input.clone());
+        if client_input_takes_over(previous.as_ref(), input) {
+            self.cancel_autopilot_tasks();
+            self.clear_autopilot_controls();
+        }
         let has_engine_command = input
             .commands
             .iter()
@@ -409,6 +469,7 @@ impl Sim {
         self.authority.sas_enabled = input.sas_enabled;
         self.authority.rcs_enabled = input.rcs_enabled;
         self.authority.gear_down = input.gear_down;
+        let mut engine_command_seen = false;
         for command in &input.commands {
             match command {
                 Command::SetWarp { factor } => {
@@ -425,10 +486,23 @@ impl Sim {
                 // Slice semantics (matches the client): staging drives the
                 // engine cutoff for the single X-15 plant.
                 Command::Stage => {
+                    // PendingInput preserves multiple edge commands from
+                    // separate frames. Each such frame used to cut off the
+                    // active autopilot before applying its edge; reproduce
+                    // that cutoff between coalesced engine events without
+                    // resetting the coalesced flight controls.
+                    if engine_command_seen {
+                        self.authority.stop_propulsion();
+                    }
+                    engine_command_seen = true;
                     self.authority.engine_active = !self.authority.engine_active;
                     force_snapshot = true;
                 }
                 Command::Engine { active } => {
+                    if engine_command_seen {
+                        self.authority.stop_propulsion();
+                    }
+                    engine_command_seen = true;
                     force_snapshot |= self.authority.engine_active != *active;
                     self.authority.engine_active = *active;
                 }
@@ -444,7 +518,7 @@ impl Sim {
                 // engine armed at zero throttle. No terrain, no relaunch.
                 Command::Reset => {
                     if self.authority.reset_to_launch_site(&self.ephemeris).is_ok() {
-                        self.last_autopilot_notice = self.authority.wake_notice.clone();
+                        self.autopilot_events.clear();
                         force_snapshot = true;
                     }
                 }
@@ -458,6 +532,7 @@ impl Sim {
             return false;
         }
         self.cancel_autopilot_tasks();
+        self.clear_autopilot_controls();
         if let Err(error) = input.validate() {
             self.authority.flight_error = Some(format!("invalid guidance input: {error}"));
             self.authority.stop_propulsion();
@@ -508,13 +583,20 @@ impl Sim {
             return self.fail_autopilot(error);
         }
         match &input.command {
-            AutopilotCommand::SubmitGraph { graph } => self.submit_graph(graph.clone()),
+            AutopilotCommand::SubmitGraph { graph } => {
+                host.scheduler.cancel_all();
+                self.submit_graph(graph.clone())
+            }
             AutopilotCommand::ClearGraph => {
+                host.scheduler.cancel_all();
                 self.autopilot_graph = None;
                 self.graph_runner = None;
+                self.plan_runner = None;
+                self.clear_autopilot_controls();
                 true
             }
             AutopilotCommand::Cancel => {
+                host.scheduler.cancel_all();
                 self.cancel_autopilot_tasks();
                 self.clear_autopilot_controls();
                 true
@@ -528,7 +610,7 @@ impl Sim {
                 self.plan_runner = None;
                 self.graph_runner = None;
                 host.scheduler.cancel_all();
-                self.last_autopilot_notice = self.authority.wake_notice.clone();
+                self.clear_autopilot_controls();
                 let now = SimTime(self.authority.flight_time_s);
                 match host.scheduler.start(&host.engine, now, source) {
                     Ok(step) => self.apply_script_step(step, host),
@@ -544,8 +626,7 @@ impl Sim {
             Err(errors) => return self.fail_autopilot(graph_errors(errors)),
         };
         self.plan_runner = None;
-        self.plan_demand = None;
-        self.guidance = None;
+        self.clear_autopilot_controls();
         self.graph_block = NativeGraphBlock::default();
         self.graph_runner = match GraphRunner::new(graph.clone()) {
             Ok(runner) => Some(runner),
@@ -746,8 +827,7 @@ impl Sim {
     fn start_plan(&mut self, plan: TrajectoryPlan, host: &mut AutopilotHost) -> bool {
         host.scheduler.cancel_all();
         self.graph_runner = None;
-        self.guidance = None;
-        self.last_autopilot_notice = self.authority.wake_notice.clone();
+        self.clear_autopilot_controls();
         let now = SimTime(self.authority.flight_time_s);
         let runner = match TrajectoryPlanRunner::new(plan, now) {
             Ok(runner) => runner,
@@ -847,41 +927,53 @@ impl Sim {
     fn wake_autopilot(
         &mut self,
         host: &mut AutopilotHost,
-        event: Option<&str>,
+        events: &[AutopilotEvent],
     ) -> Result<bool, String> {
         let now = SimTime(self.authority.flight_time_s);
         let mut changed = false;
-        if !host.scheduler.is_empty() {
-            let steps = host
-                .scheduler
-                .wake(&host.engine, now, event)
-                .map_err(|error| error.to_string())?;
-            for step in steps {
-                changed |= self.apply_script_step(step, host);
+        if events.is_empty() {
+            if !host.scheduler.is_empty() {
+                let steps = host
+                    .scheduler
+                    .wake(&host.engine, now, None)
+                    .map_err(|error| error.to_string())?;
+                for step in steps {
+                    changed |= self.apply_script_step(step, host);
+                }
+            }
+            self.poll_graph(None)?;
+        } else {
+            for event in events {
+                if !host.scheduler.is_empty() {
+                    let steps = host
+                        .scheduler
+                        .wake(&host.engine, now, Some(event.name()))
+                        .map_err(|error| error.to_string())?;
+                    for step in steps {
+                        changed |= self.apply_script_step(step, host);
+                    }
+                }
+                self.poll_graph(Some(event.name()))?;
+                if self.plan_runner.is_some() {
+                    self.poll_plan(Some(event.name()))?;
+                }
             }
         }
-        self.poll_graph(event)?;
         Ok(changed)
     }
 
-    fn take_autopilot_event(&mut self) -> Option<&'static str> {
-        let notice = self.authority.wake_notice.clone()?;
-        if self.last_autopilot_notice.as_deref() == Some(notice.as_str()) {
-            return None;
-        }
-        self.last_autopilot_notice = Some(notice.clone());
-        let upper = notice.to_ascii_uppercase();
-        if upper.contains("IMPACT") {
-            Some("impact")
-        } else if upper.contains("HORIZON") {
-            Some("horizon")
-        } else if upper.contains("NODE") {
-            Some("node")
-        } else if upper.contains("ALARM") {
-            Some("alarm")
-        } else {
-            None
-        }
+    fn take_autopilot_events(&mut self) -> Vec<AutopilotEvent> {
+        self.autopilot_events.drain(..).collect()
+    }
+
+    fn next_autopilot_wake(&self, host: &AutopilotHost) -> Option<SimTime> {
+        [
+            host.scheduler.next_time(),
+            self.graph_runner.as_ref().and_then(GraphRunner::next_time),
+        ]
+        .into_iter()
+        .flatten()
+        .min_by(|a, b| a.0.total_cmp(&b.0))
     }
 
     /// Advance one requested wall quantum (or a benchmark chunk); returns
@@ -950,6 +1042,12 @@ impl Sim {
         self.advanced_s += advanced;
         self.steps += self.authority.steps_this_frame as u64;
         self.rails_s += self.authority.rails_advanced_this_frame;
+        self.autopilot_events.extend(
+            self.authority
+                .take_wake_events()
+                .into_iter()
+                .map(|event| AutopilotEvent::from(event.kind)),
+        );
         self.poll_graph(None)?;
         Ok(advanced)
     }
@@ -1133,6 +1231,45 @@ fn driver_sleep_duration(
     }
 }
 
+/// Simulation time already covered by the pacing target. The authority keeps
+/// a fractional fixed-step remainder in its accumulator, so that remainder
+/// must not be requested again by the driver as fresh demand.
+fn pacing_demand_s(target_s: f64, advanced_s: f64, backlog_s: f64, tick_s: f64) -> f64 {
+    let covered_s = advanced_s + backlog_s;
+    let demand_s = (target_s - covered_s).max(0.0);
+    // A fresh sub-tick request is runnable when it completes the tick that
+    // is already partially queued in the authority accumulator.
+    if backlog_s + demand_s + 1.0e-12 >= tick_s {
+        demand_s
+    } else {
+        0.0
+    }
+}
+
+fn pacing_work_pending(chunk_s: f64, backlog_s: f64, tick_s: f64) -> bool {
+    chunk_s > 0.0 || backlog_s + 1.0e-12 >= tick_s
+}
+
+/// Clip a requested chunk to the first fixed-step boundary at or after a
+/// scheduler wake. The authority can only drain events after whole physics
+/// ticks, so a wake inside the next tick must still be allowed to reach that
+/// tick; clipping to the raw wake-minus-backlog distance would strand a
+/// fractional accumulator forever.
+fn clip_pacing_chunk_to_wake(
+    chunk_s: f64,
+    flight_time_s: f64,
+    backlog_s: f64,
+    wake: SimTime,
+    tick_s: f64,
+) -> f64 {
+    if chunk_s <= 0.0 || wake.0 <= flight_time_s {
+        return chunk_s;
+    }
+    let ticks_until_wake = ((wake.0 - flight_time_s) / tick_s).ceil().max(1.0);
+    let boundary_s = flight_time_s + ticks_until_wake * tick_s;
+    chunk_s.min((boundary_s - flight_time_s - backlog_s).max(0.0))
+}
+
 /// Traffic from every transport into the sim driver. Subscriber
 /// channels are tokio unbounded senders: `send` never blocks, so the sync
 /// driver and both async/sync writers share one type.
@@ -1204,6 +1341,13 @@ struct Driver {
 }
 
 impl Driver {
+    fn apply_client_input(&mut self, id: &str, input: &ClientInput) -> bool {
+        if client_input_takes_over(self.sim.last_client_inputs.get(id), input) {
+            self.autopilot.scheduler.cancel_all();
+        }
+        self.sim.apply_input(id, input)
+    }
+
     fn broadcast_snapshot(&mut self) {
         let snapshot = self.sim.snapshot();
         let frame = match thessa_flight_net::encode_snapshot(&snapshot) {
@@ -1244,7 +1388,7 @@ impl Driver {
                     if let Some(mut queued) = pending.remove(&id)
                         && let Some(input) = queued.take()
                     {
-                        let _ = self.sim.apply_input(&id, &input);
+                        let _ = self.apply_client_input(&id, &input);
                     }
                     self.sim.unregister(&id);
                     self.subscribers.retain(|(other, _)| other != &id);
@@ -1272,8 +1416,7 @@ impl Driver {
         }
         for (id, mut queued) in pending {
             if let Some(input) = queued.take() {
-                self.autopilot.scheduler.cancel_all();
-                force_snapshot |= self.sim.apply_input(&id, &input);
+                force_snapshot |= self.apply_client_input(&id, &input);
             }
         }
         (
@@ -1287,26 +1430,15 @@ impl Driver {
     fn iterate(&mut self) -> Result<bool, String> {
         let warp_before_inputs = self.sim.requested_warp();
         let (mut force_snapshot, ingress_saturated) = self.drain_upstream();
-        let autopilot_event = self.sim.take_autopilot_event();
+        let autopilot_events = self.sim.take_autopilot_events();
         match self
             .sim
-            .wake_autopilot(&mut self.autopilot, autopilot_event)
+            .wake_autopilot(&mut self.autopilot, &autopilot_events)
         {
             Ok(changed) => force_snapshot |= changed,
             Err(error) => {
                 self.autopilot.scheduler.cancel_all();
                 force_snapshot |= self.sim.fail_autopilot(error);
-            }
-        }
-        if let Some(event) = autopilot_event
-            && self.sim.plan_runner.is_some()
-        {
-            match self.sim.poll_plan(Some(event)) {
-                Ok(changed) => force_snapshot |= changed,
-                Err(error) => {
-                    self.autopilot.scheduler.cancel_all();
-                    force_snapshot |= self.sim.fail_autopilot(error);
-                }
             }
         }
         let warp_after_inputs = self.sim.requested_warp();
@@ -1344,22 +1476,27 @@ impl Driver {
             self.last_pacing = now;
             let requested_warp = self.sim.requested_warp();
             self.pacing_target_s += wall_delta * requested_warp;
-            let demand_s = (self.pacing_target_s - self.sim.advanced_s).max(0.0);
-            let mut chunk = if demand_s + 1.0e-12 >= tick_s {
-                demand_s
-            } else {
-                0.0
-            };
-            if let Some(wake) = self.autopilot.scheduler.next_time() {
-                let now = SimTime(self.sim.authority.flight_time_s);
-                if wake.0 > now.0 {
-                    chunk = chunk.min(wake.0 - now.0);
-                }
+            let backlog_s = self.sim.authority.backlog_s();
+            let mut chunk =
+                pacing_demand_s(self.pacing_target_s, self.sim.advanced_s, backlog_s, tick_s);
+            if let Some(wake) = self.sim.next_autopilot_wake(&self.autopilot) {
+                chunk = clip_pacing_chunk_to_wake(
+                    chunk,
+                    self.sim.authority.flight_time_s,
+                    backlog_s,
+                    wake,
+                    tick_s,
+                );
             }
+            // A whole tick can already be queued even when the fresh pacing
+            // demand is zero (for example after a clipped scheduler wake).
+            // Pass zero elapsed time through to the authority so it services
+            // that physical backlog instead of skipping the call forever.
+            let pacing_work_pending = pacing_work_pending(chunk, backlog_s, tick_s);
             let advanced_before = self.sim.advanced_s;
             let mut advanced_delta = 0.0;
             let mut budget_exhausted = false;
-            if chunk > 0.0
+            if pacing_work_pending
                 && let Err(error) = self
                     .sim
                     .advance_chunk_with_budget(chunk, Some(SIM_WORK_BUDGET))
@@ -1368,16 +1505,16 @@ impl Driver {
                 // the loop survives so peers see the stop, not a hang.
                 eprintln!("[server] advance failed: {error}");
             }
-            if chunk > 0.0 {
+            if pacing_work_pending {
                 // Sim::advanced_s is cumulative; use its delta so a pending
                 // bake is distinguishable from an already-running flight.
                 advanced_delta = self.sim.advanced_s - advanced_before;
                 budget_exhausted = self.sim.authority.work_budget_exhausted;
             }
-            let autopilot_event = self.sim.take_autopilot_event();
+            let autopilot_events = self.sim.take_autopilot_events();
             match self
                 .sim
-                .wake_autopilot(&mut self.autopilot, autopilot_event)
+                .wake_autopilot(&mut self.autopilot, &autopilot_events)
             {
                 Ok(changed) => force_snapshot |= changed,
                 Err(error) => {
@@ -1385,18 +1522,9 @@ impl Driver {
                     force_snapshot |= self.sim.fail_autopilot(error);
                 }
             }
-            if let Some(event) = autopilot_event
-                && self.sim.plan_runner.is_some()
-            {
-                match self.sim.poll_plan(Some(event)) {
-                    Ok(changed) => force_snapshot |= changed,
-                    Err(error) => {
-                        self.autopilot.scheduler.cancel_all();
-                        force_snapshot |= self.sim.fail_autopilot(error);
-                    }
-                }
-            }
-            let lag_s = (self.pacing_target_s - self.sim.advanced_s).max(0.0);
+            let lag_s = (self.pacing_target_s
+                - (self.sim.advanced_s + self.sim.authority.backlog_s()))
+            .max(0.0);
             let bake_wait = chunk > 0.0
                 && advanced_delta <= 0.0
                 && self.sim.authority.waiting_for_rails_bake
@@ -1793,6 +1921,62 @@ mod tests {
         }
     }
 
+    fn test_driver() -> (Driver, Sender<Upstream>) {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let sim = Sim::new(ephemeris, reference_body, false, true).expect("sim");
+        let (upstream, receiver) = channel();
+        (
+            Driver {
+                sim,
+                autopilot: AutopilotHost::new().expect("autopilot host"),
+                upstream: receiver,
+                subscribers: Vec::new(),
+                pacing_target_s: 0.0,
+                last_pacing: Instant::now(),
+                last_snapshot: Instant::now(),
+                last_status: Instant::now(),
+                exit_when_empty: false,
+            },
+            upstream,
+        )
+    }
+
+    fn timed_wait_graph(seconds: f64) -> AutopilotGraph {
+        AutopilotGraph {
+            nodes: vec![GraphNode {
+                id: thessa_autopilot::NodeId(1),
+                name: "timed-wait".into(),
+                kind: NodeKind::Wait,
+                ports: Vec::new(),
+                config: Some(GraphNodeConfig::Wait {
+                    condition: WaitCondition::At(SimTime(seconds)),
+                }),
+            }],
+            edges: Vec::new(),
+        }
+    }
+
+    fn event_timed_wait_graph(seconds: f64, event: &str) -> AutopilotGraph {
+        AutopilotGraph {
+            nodes: vec![GraphNode {
+                id: thessa_autopilot::NodeId(1),
+                name: "event-timed-wait".into(),
+                kind: NodeKind::Wait,
+                ports: Vec::new(),
+                config: Some(GraphNodeConfig::Wait {
+                    condition: WaitCondition::All(vec![
+                        WaitCondition::At(SimTime(seconds)),
+                        WaitCondition::Event(event.into()),
+                    ]),
+                }),
+            }],
+            edges: Vec::new(),
+        }
+    }
+
     #[test]
     fn typed_guidance_reaches_the_authoritative_stepper() {
         let config: SystemConfig =
@@ -1837,7 +2021,7 @@ mod tests {
         assert_eq!(host.scheduler.next_time(), Some(SimTime(0.05)));
 
         sim.authority.flight_time_s = 0.05;
-        assert!(sim.wake_autopilot(&mut host, None).expect("wake script"));
+        assert!(sim.wake_autopilot(&mut host, &[]).expect("wake script"));
         assert!(matches!(
             sim.guidance,
             Some((
@@ -1846,6 +2030,154 @@ mod tests {
             ))
         ));
         assert_eq!(sim.control_mode, ControlMode::Rate);
+    }
+
+    #[test]
+    fn neutral_input_and_warp_votes_do_not_cancel_a_waiting_script() {
+        let (mut driver, _) = test_driver();
+        driver.sim.register("pilot");
+        let neutral = input(Vec::new());
+        driver.apply_client_input("pilot", &neutral);
+        assert!(driver.sim.apply_autopilot(
+            "pilot",
+            &AutopilotInput {
+                tick: 0,
+                command: AutopilotCommand::StartScript {
+                    source: "await sim.sleep(1); return Guidance.angularRate(0.1, 0, 0);".into(),
+                },
+            },
+            &mut driver.autopilot,
+        ));
+        assert_eq!(driver.autopilot.scheduler.pending(), 1);
+
+        driver.apply_client_input("pilot", &neutral);
+        driver.apply_client_input("pilot", &input(vec![Command::SetWarp { factor: 128.0 }]));
+        assert_eq!(driver.autopilot.scheduler.pending(), 1);
+
+        driver.sim.plan_demand = Some(ControlDemand {
+            force_body_n: DVec3::X * 100.0,
+            moment_body_nm: DVec3::Y * 50.0,
+            propulsion: PropulsionDemand::new(0.8).unwrap(),
+        });
+        driver.sim.guidance = Some((
+            GuidanceIntent::AngularRate {
+                rate_body_rps: DVec3::X,
+            },
+            PropulsionDemand::new(0.8).unwrap(),
+        ));
+        driver
+            .sim
+            .authority
+            .set_propulsion_target(PropulsionDemand::new(0.8).unwrap())
+            .unwrap();
+        let mut manual = neutral;
+        manual.control_input = [0.25, 0.0, 0.0];
+        driver.apply_client_input("pilot", &manual);
+        assert_eq!(driver.autopilot.scheduler.pending(), 0);
+        assert!(driver.sim.plan_demand.is_none());
+        assert!(driver.sim.guidance.is_none());
+        assert_eq!(driver.sim.authority.thrust_n(), 0.0);
+    }
+
+    #[test]
+    fn cancel_and_graph_submit_drop_old_script_continuations() {
+        let (mut driver, _) = test_driver();
+        driver.sim.register("pilot");
+        let start = AutopilotInput {
+            tick: 0,
+            command: AutopilotCommand::StartScript {
+                source: "await sim.sleep(1); return Guidance.angularRate(0.1, 0, 0);".into(),
+            },
+        };
+        assert!(
+            driver
+                .sim
+                .apply_autopilot("pilot", &start, &mut driver.autopilot)
+        );
+        assert_eq!(driver.autopilot.scheduler.pending(), 1);
+        assert!(driver.sim.apply_autopilot(
+            "pilot",
+            &AutopilotInput {
+                tick: 1,
+                command: AutopilotCommand::Cancel,
+            },
+            &mut driver.autopilot,
+        ));
+        assert_eq!(driver.autopilot.scheduler.pending(), 0);
+        driver.sim.authority.flight_time_s = 2.0;
+        assert!(
+            driver
+                .autopilot
+                .scheduler
+                .wake(&driver.autopilot.engine, SimTime(2.0), None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(driver.sim.guidance.is_none());
+
+        assert!(
+            driver
+                .sim
+                .apply_autopilot("pilot", &start, &mut driver.autopilot)
+        );
+        assert_eq!(driver.autopilot.scheduler.pending(), 1);
+        assert!(driver.sim.apply_autopilot(
+            "pilot",
+            &AutopilotInput {
+                tick: 2,
+                command: AutopilotCommand::SubmitGraph {
+                    graph: timed_wait_graph(10.0),
+                },
+            },
+            &mut driver.autopilot,
+        ));
+        assert_eq!(driver.autopilot.scheduler.pending(), 0);
+        assert!(driver.sim.graph_runner.is_some());
+        driver.sim.authority.flight_time_s = 3.0;
+        assert!(
+            driver
+                .autopilot
+                .scheduler
+                .wake(&driver.autopilot.engine, SimTime(3.0), None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(driver.sim.guidance.is_none());
+    }
+
+    #[test]
+    fn graph_time_wake_clips_high_warp_before_bulk_stepping() {
+        let (mut driver, _) = test_driver();
+        driver.sim.register("pilot");
+        assert!(driver.sim.apply_autopilot(
+            "pilot",
+            &AutopilotInput {
+                tick: 0,
+                command: AutopilotCommand::SubmitGraph {
+                    graph: event_timed_wait_graph(0.05, "impact"),
+                },
+            },
+            &mut driver.autopilot,
+        ));
+        assert!(driver.sim.next_autopilot_wake(&driver.autopilot).is_none());
+        driver
+            .sim
+            .wake_autopilot(&mut driver.autopilot, &[AutopilotEvent::Impact])
+            .expect("remember graph event");
+        let wake = driver
+            .sim
+            .next_autopilot_wake(&driver.autopilot)
+            .expect("graph time wake");
+        let tick_s = thessa_sim_core::WORLD_TICK_S;
+        let clipped = clip_pacing_chunk_to_wake(
+            100.0,
+            driver.sim.authority.flight_time_s,
+            driver.sim.authority.backlog_s(),
+            wake,
+            tick_s,
+        );
+        assert!(clipped < 100.0);
+        assert!(driver.sim.authority.flight_time_s + clipped <= 0.05 + tick_s);
     }
 
     #[test]
@@ -2006,12 +2338,34 @@ mod tests {
         assert!(sim.apply_autopilot("pilot", &input, &mut host));
         assert_eq!(sim.plan_runner.as_ref().unwrap().segment_index(), 0);
 
-        sim.authority.wake_notice = Some("IMPACT detected".into());
-        let event = sim.take_autopilot_event();
-        assert_eq!(event, Some("impact"));
-        assert!(sim.poll_plan(event).expect("wake plan"));
+        sim.autopilot_events.push_back(AutopilotEvent::Impact);
+        let events = sim.take_autopilot_events();
+        assert_eq!(events, vec![AutopilotEvent::Impact]);
+        assert!(sim.poll_plan(Some("impact")).expect("wake plan"));
         assert_eq!(sim.plan_runner.as_ref().unwrap().segment_index(), 1);
         assert_eq!(sim.control_mode, ControlMode::Rate);
+    }
+
+    #[test]
+    fn typed_authority_wakes_preserve_order_and_duplicate_events() {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let mut sim = Sim::new(ephemeris, reference_body, false, false).expect("sim");
+        sim.register("pilot");
+        let tick_s = thessa_sim_core::WORLD_TICK_S;
+        sim.authority
+            .scheduler
+            .arm(ScheduledKind::Alarm, SimTime(tick_s));
+        sim.authority
+            .scheduler
+            .arm(ScheduledKind::Alarm, SimTime(tick_s));
+        sim.advance_chunk(tick_s * 2.0).expect("advance alarms");
+        assert_eq!(
+            sim.take_autopilot_events(),
+            vec![AutopilotEvent::Alarm, AutopilotEvent::Alarm]
+        );
     }
 
     #[test]
@@ -2185,11 +2539,14 @@ mod tests {
         ));
         assert!(!sim.graph_runner.as_ref().unwrap().is_complete());
 
-        sim.authority.wake_notice = Some("IMPACT detected".into());
-        let event = sim.take_autopilot_event();
-        assert_eq!(event, Some("impact"));
-        sim.wake_autopilot(&mut host, event).expect("wake graph");
+        sim.autopilot_events.push_back(AutopilotEvent::Impact);
+        let events = sim.take_autopilot_events();
+        assert_eq!(events, vec![AutopilotEvent::Impact]);
+        sim.wake_autopilot(&mut host, &events).expect("wake graph");
         assert!(sim.graph_runner.as_ref().unwrap().is_complete());
+
+        sim.authority.wake_notice = Some("AUTOPILOT GRAPH WAIT node=impact".into());
+        assert!(sim.take_autopilot_events().is_empty());
     }
 
     #[test]
@@ -2258,6 +2615,94 @@ mod tests {
             driver_sleep_duration(false, false, true, 0.0, 256.0, Duration::ZERO,),
             BAKE_POLL_INTERVAL
         );
+    }
+
+    #[test]
+    fn pacing_demand_does_not_double_count_fractional_authority_backlog() {
+        let tick_s = thessa_sim_core::WORLD_TICK_S;
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let mut authority = FlightAuthority::new(&ephemeris, reference_body).expect("authority");
+        let targets = [(0.012, 1_u64), (0.020, 2), (0.025, 3), (0.030, 3)];
+
+        for (target_s, expected_ticks) in targets {
+            let advanced_s = authority.flight_time_s;
+            let backlog_s = authority.backlog_s();
+            let demand_s = pacing_demand_s(target_s, advanced_s, backlog_s, tick_s);
+            authority
+                .advance(&ephemeris, ControlMode::Direct, demand_s)
+                .expect("target advancement");
+
+            let expected_time_s = expected_ticks as f64 * tick_s;
+            assert!(
+                (authority.flight_time_s - expected_time_s).abs() < 1.0e-12,
+                "target={target_s} advanced={} expected={expected_time_s} backlog={}",
+                authority.flight_time_s,
+                authority.backlog_s()
+            );
+            assert!(authority.backlog_s() < tick_s);
+            assert!(
+                authority.flight_time_s + authority.backlog_s() <= target_s + 1.0e-12,
+                "target={target_s} was overrun: covered={}",
+                authority.flight_time_s + authority.backlog_s()
+            );
+            assert!(
+                target_s - (authority.flight_time_s + authority.backlog_s()) < tick_s,
+                "target={target_s} left more than one tick unserved: covered={}",
+                authority.flight_time_s + authority.backlog_s()
+            );
+        }
+    }
+
+    #[test]
+    fn zero_elapsed_advance_services_a_queued_tick_at_a_scheduler_wake() {
+        let tick_s = thessa_sim_core::WORLD_TICK_S;
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let mut authority = FlightAuthority::new(&ephemeris, reference_body).expect("authority");
+        authority.accumulator_s = tick_s;
+        authority
+            .scheduler
+            .arm(thessa_sim_core::ScheduledKind::Alarm, SimTime(0.001));
+
+        let clipped = clip_pacing_chunk_to_wake(
+            0.0,
+            authority.flight_time_s,
+            authority.backlog_s(),
+            SimTime(0.001),
+            tick_s,
+        );
+        assert_eq!(clipped, 0.0);
+        assert!(pacing_work_pending(clipped, authority.backlog_s(), tick_s));
+
+        authority
+            .advance(&ephemeris, ControlMode::Direct, 0.0)
+            .expect("service queued tick");
+        assert_eq!(authority.steps_this_frame, 1);
+        assert!(authority.backlog_s() < tick_s);
+        assert!(
+            authority
+                .wake_notice
+                .as_deref()
+                .is_some_and(|notice| notice.contains("WAKE ALARM"))
+        );
+    }
+
+    #[test]
+    fn pacing_wake_clip_reaches_the_next_fixed_tick_without_overshoot() {
+        let tick_s = thessa_sim_core::WORLD_TICK_S;
+        let flight_time_s = tick_s;
+        let backlog_s = 0.003666666666666667;
+        let wake = SimTime(flight_time_s + tick_s * 0.25);
+        let clipped =
+            clip_pacing_chunk_to_wake(tick_s * 4.0, flight_time_s, backlog_s, wake, tick_s);
+
+        assert!((clipped - (tick_s - backlog_s)).abs() < 1.0e-12);
+        assert!(clipped < tick_s);
     }
 
     #[test]

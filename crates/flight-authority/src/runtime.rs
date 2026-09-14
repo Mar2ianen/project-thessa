@@ -23,7 +23,7 @@ use thessa_sim_core::{
     AeroConfig, AeroModel, AeroSimdScratch, AeroState, AtmosphereConfig, AtmosphereError,
     BakedEphemeris, BodyId, BodyState, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_VELOCITY_TOL_MPS,
     EphemerisFrame, EventScheduler, FlightError, FlightForces, FlightStepInput, GravityField,
-    OnRailsCache, PanelAeroModel, PanelSoA, RigidBodyState, ScheduledKind, SimTime,
+    OnRailsCache, PanelAeroModel, PanelSoA, RigidBodyState, ScheduledEvent, ScheduledKind, SimTime,
     TestParticleState, TickIntegratorConfig, VehicleDefinition, WORLD_TICK_S, X15StarterProfile,
     evaluate_flight_forces_soa, integrate_attitude_step, integrate_rigid_body_step_soa,
 };
@@ -348,6 +348,11 @@ pub struct FlightAuthority {
     pub scheduler: EventScheduler,
     /// Last fired wake, for the HUD orbit line.
     pub wake_notice: Option<String>,
+    /// Every authoritative wake emitted by the scheduler, retained in due
+    /// order for the server/autopilot bridge. The HUD keeps only the latest
+    /// string, but event consumers must not lose simultaneous or repeated
+    /// domain events.
+    pub wake_events: Vec<ScheduledEvent>,
     /// Test hook: force the residual-driven second trim pass every tick.
     /// Production runs adaptive (a singular first pass still breaks exact —
     /// its replay would be identical). The A/B regression test pins the
@@ -374,6 +379,11 @@ pub struct FlightAuthority {
     /// by the same trim/RCS allocator as typed guidance and cleared by the
     /// public demand entry point after its cooperative advance returns.
     explicit_moment_demand_nm: Option<DVec3>,
+    /// State-dependent direction guidance must refresh its target before
+    /// every physical tick. It also disables the free-translation rails
+    /// batch, whose constant-attitude shortcut cannot observe a moving
+    /// surface/orbit frame.
+    guidance_state_dependent: bool,
     /// Physical propulsion command after the actuator layer. Legacy pilot
     /// input keeps this path immediate; typed guidance enables the response
     /// model explicitly at its boundary.
@@ -433,6 +443,7 @@ impl FlightAuthority {
         self.bake.reset();
         self.scheduler = EventScheduler::new();
         self.wake_notice = None;
+        self.wake_events.clear();
         self.initialize_world_site(field, dir, ephemeris);
         Ok(())
     }
@@ -456,6 +467,10 @@ impl FlightAuthority {
 
     pub fn backlog_s(&self) -> f64 {
         self.accumulator_s
+    }
+
+    pub fn take_wake_events(&mut self) -> Vec<ScheduledEvent> {
+        std::mem::take(&mut self.wake_events)
     }
     pub fn regime(&self) -> FlightRegime {
         self.regime
@@ -665,6 +680,7 @@ impl FlightAuthority {
             rails_bake_seconds: None,
             scheduler: EventScheduler::new(),
             wake_notice: None,
+            wake_events: Vec::new(),
             force_trim_two_pass: false,
             trim_solves: 0,
             trim_second_passes: 0,
@@ -672,6 +688,7 @@ impl FlightAuthority {
             reference_area_m2,
             explicit_force_demand_body_n: None,
             explicit_moment_demand_nm: None,
+            guidance_state_dependent: false,
             propulsion_actual: 1.0,
             propulsion_target: 1.0,
             propulsion_dynamics_active: false,
@@ -963,6 +980,27 @@ impl FlightAuthority {
     ) -> Result<(), FlightError> {
         let mode = self.apply_guidance_intent(ephemeris, intent)?;
         self.set_propulsion_target(propulsion)?;
+        let state_dependent = matches!(
+            intent,
+            GuidanceIntent::VelocityDirection {
+                direction: DirectionTarget {
+                    frame: DirectionFrame::Surface | DirectionFrame::Orbit | DirectionFrame::Target,
+                    ..
+                },
+                ..
+            } | GuidanceIntent::FlightPath {
+                target: thessa_flight_control::FlightPathTarget {
+                    direction: DirectionTarget {
+                        frame: DirectionFrame::Surface
+                            | DirectionFrame::Orbit
+                            | DirectionFrame::Target,
+                        ..
+                    },
+                    ..
+                },
+            }
+        );
+        self.guidance_state_dependent = state_dependent;
         let translation_force = match intent {
             GuidanceIntent::ManualAxes(axes) => {
                 axes.translation * SpacecraftControlLaw::default().max_translation_force_n
@@ -971,7 +1009,14 @@ impl FlightAuthority {
         };
         self.explicit_force_demand_body_n =
             (translation_force.length_squared() > 1.0e-24).then_some(translation_force);
-        let result = self.advance_with_budget(ephemeris, mode, elapsed_s, budget);
+        let result =
+            self.advance_with_budget_hook(ephemeris, mode, elapsed_s, budget, |authority| {
+                if state_dependent {
+                    authority.apply_guidance_intent(ephemeris, intent)?;
+                }
+                Ok(())
+            });
+        self.guidance_state_dependent = false;
         self.explicit_force_demand_body_n = None;
         result
     }
@@ -1144,6 +1189,20 @@ impl FlightAuthority {
         elapsed_s: f64,
         budget: Option<std::time::Duration>,
     ) -> Result<(), FlightError> {
+        self.advance_with_budget_hook(ephemeris, mode, elapsed_s, budget, |_| Ok(()))
+    }
+
+    fn advance_with_budget_hook<F>(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        mode: ControlMode,
+        elapsed_s: f64,
+        budget: Option<std::time::Duration>,
+        mut before_physical_step: F,
+    ) -> Result<(), FlightError>
+    where
+        F: FnMut(&mut Self) -> Result<(), FlightError>,
+    {
         self.sync_world_tick()?;
         let started = std::time::Instant::now();
         self.steps_this_frame = 0;
@@ -1153,6 +1212,7 @@ impl FlightAuthority {
         self.accumulator_s += elapsed_s;
         let gravity_field = GravityField::from_ephemeris(ephemeris);
         while self.accumulator_s + 1.0e-12 >= FLIGHT_STEP_S {
+            before_physical_step(self)?;
             self.advance_propulsion_actuator()?;
             match self.try_advance_cached_coast(ephemeris, mode, self.accumulator_s)? {
                 CoastAdvance::Advanced(coast) => {
@@ -1203,6 +1263,7 @@ impl FlightAuthority {
         // Event-driven wakes: due scheduler events fire here instead of being
         // polled every physics tick.
         for event in self.scheduler.drain_due(SimTime(self.flight_time_s)) {
+            self.wake_events.push(event);
             self.wake_notice = Some(match event.kind {
                 ScheduledKind::RailsImpact { .. } => {
                     format!("WAKE IMPACT T+{:.0}s", event.time.seconds())
@@ -1393,6 +1454,9 @@ impl FlightAuthority {
         mode: ControlMode,
         requested_s: f64,
     ) -> Result<CoastAdvance, FlightError> {
+        if self.guidance_state_dependent {
+            return Ok(CoastAdvance::NotEligible);
+        }
         // A declarative moment is an active actuator demand. The rails path
         // only integrates free translation and constant-spin attitude, so a
         // non-zero explicit moment must stay on the fixed-step allocator path.
@@ -1907,6 +1971,11 @@ impl FlightAuthority {
         }) = self.rails.wake()
             && impact_time.0 <= next_time.0
         {
+            self.wake_events.push(ScheduledEvent {
+                id: 0,
+                time: impact_time,
+                kind: ScheduledKind::RailsImpact { body },
+            });
             self.wake_notice = Some(format!("WAKE IMPACT {body:?} T+{:.3}s", impact_time.0));
             self.rails.invalidate();
             self.scheduler.clear_rails_wakes();
@@ -1920,6 +1989,19 @@ impl FlightAuthority {
             // Ordinary physics handles the next step; a future request can
             // build a new horizon on the worker.
             if let Some(wake) = self.rails.wake() {
+                let event = match wake {
+                    thessa_sim_core::OnRailsWake::Impact { time, body } => ScheduledEvent {
+                        id: 0,
+                        time,
+                        kind: ScheduledKind::RailsImpact { body },
+                    },
+                    thessa_sim_core::OnRailsWake::HorizonEnd { time } => ScheduledEvent {
+                        id: 0,
+                        time,
+                        kind: ScheduledKind::RailsHorizon,
+                    },
+                };
+                self.wake_events.push(event);
                 self.wake_notice = Some(format!("WAKE {wake:?}"));
             }
             self.rails.invalidate();
@@ -2315,6 +2397,57 @@ mod tests {
             .unwrap();
         assert!((flight.sas_target_orientation * DVec3::X).dot(up) > 1.0 - 1.0e-12);
         assert!(flight.sas_target_orientation.is_finite());
+    }
+
+    #[test]
+    fn state_dependent_guidance_is_partition_invariant_and_does_not_ride_rails() {
+        let (ephemeris, mut chunked) = fixture();
+        let (_, mut per_tick) = fixture();
+        let body = ephemeris
+            .body_state(chunked.reference_body, SimTime::EPOCH)
+            .unwrap();
+        let position = body.position_inertial + DVec3::Z * 1.0e7;
+        let velocity = body.velocity_inertial + DVec3::X * 1_000.0;
+        for flight in [&mut chunked, &mut per_tick] {
+            flight.state.position_inertial_m = position;
+            flight.state.velocity_inertial_mps = velocity;
+            flight.relative_position_m = position - body.position_inertial;
+            flight.set_legacy_propulsion(0.0, false);
+        }
+        let intent = GuidanceIntent::VelocityDirection {
+            direction: DirectionTarget::new(DVec3::X, DirectionFrame::Orbit).unwrap(),
+            roll_policy: RollPolicy::Hold,
+        };
+        let propulsion = PropulsionDemand::new(0.0).unwrap();
+        let ticks = 12;
+        chunked
+            .advance_guidance(
+                &ephemeris,
+                &intent,
+                propulsion,
+                FLIGHT_STEP_S * f64::from(ticks),
+            )
+            .unwrap();
+        for _ in 0..ticks {
+            per_tick
+                .advance_guidance(&ephemeris, &intent, propulsion, FLIGHT_STEP_S)
+                .unwrap();
+        }
+        assert_eq!(chunked.flight_time_s, per_tick.flight_time_s);
+        assert!(
+            (chunked.state.position_inertial_m - per_tick.state.position_inertial_m).length()
+                < 1e-9
+        );
+        assert!(
+            (chunked.state.velocity_inertial_mps - per_tick.state.velocity_inertial_mps).length()
+                < 1e-9
+        );
+        assert!(
+            (chunked.sas_target_orientation * DVec3::X)
+                .dot(per_tick.sas_target_orientation * DVec3::X)
+                > 1.0 - 1.0e-12
+        );
+        assert_eq!(chunked.rails_advanced_this_frame, 0.0);
     }
 
     #[test]

@@ -16,8 +16,11 @@ use super::*;
 use bevy::{
     asset::RenderAssetUsages,
     image::Image,
-    light::EnvironmentMapLight,
-    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+    light::{EnvironmentMapLight, LightProbe},
+    render::render_resource::{
+        Extent3d, TextureDataOrder, TextureDimension, TextureFormat, TextureViewDescriptor,
+        TextureViewDimension,
+    },
 };
 
 use crate::atmosphere::PrimaryStarLight;
@@ -160,6 +163,48 @@ fn bake_sky_cubemap(sun_dir: Vec3, sun_tint: [f32; 3]) -> Vec<u8> {
     data
 }
 
+fn sky_cubemap_image(sun_dir: Vec3, sun_tint: [f32; 3]) -> Image {
+    // `Image::new_uninit` defaults to layer-major storage. The baker above
+    // writes every mip level contiguously, so the upload must say mip-major.
+    let mut image = Image::new_uninit(
+        Extent3d {
+            width: SKY_CUBE_SIZE,
+            height: SKY_CUBE_SIZE,
+            depth_or_array_layers: 6,
+        },
+        TextureDimension::D2,
+        TextureFormat::Rgba32Float,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.data_order = TextureDataOrder::MipMajor;
+    image.texture_descriptor.mip_level_count = 6;
+    image.texture_view_descriptor = Some(TextureViewDescriptor {
+        dimension: Some(TextureViewDimension::Cube),
+        ..default()
+    });
+    image.data = Some(bake_sky_cubemap(sun_dir, sun_tint));
+    image
+}
+
+fn black_diffuse_cubemap_image() -> Image {
+    let mut image = Image::new(
+        Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 6,
+        },
+        TextureDimension::D2,
+        vec![2u8; 6 * 4],
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_view_descriptor = Some(TextureViewDescriptor {
+        dimension: Some(TextureViewDimension::Cube),
+        ..default()
+    });
+    image
+}
+
 fn sun_render_dir(light_transform: &Transform) -> Vec3 {
     // Aimed by `aim_light_slot`: NEG_Z is the travel direction, so +Z
     // points back at the sun, in render space like the tile transforms.
@@ -173,32 +218,9 @@ fn build_water_sky(
 ) {
     let sun_dir = sun.single().map(sun_render_dir).unwrap_or(Vec3::Y);
     // Bevy cubemap convention: D2 with 6 array layers (+X, -X, +Y, -Y,
-    // +Z, -Z); the probe pipeline binds the Cube view itself.
-    // `Image::new` asserts base-size data, so a pre-filled mip chain goes
-    // through `new_uninit` with the descriptor patched by hand.
-    let mut image = Image::new_uninit(
-        Extent3d {
-            width: SKY_CUBE_SIZE,
-            height: SKY_CUBE_SIZE,
-            depth_or_array_layers: 6,
-        },
-        TextureDimension::D2,
-        TextureFormat::Rgba32Float,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    image.texture_descriptor.mip_level_count = 6;
-    image.data = Some(bake_sky_cubemap(sun_dir, [1.0, 0.93, 0.85]));
-    let black = Image::new(
-        Extent3d {
-            width: 1,
-            height: 1,
-            depth_or_array_layers: 6,
-        },
-        TextureDimension::D2,
-        vec![2u8; 6 * 4],
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
+    // +Z, -Z); the builders make the Cube view explicit for the probe path.
+    let image = sky_cubemap_image(sun_dir, [1.0, 0.93, 0.85]);
+    let black = black_diffuse_cubemap_image();
     commands.insert_resource(WaterSky {
         image: images.add(image),
         diffuse_black: images.add(black),
@@ -230,15 +252,21 @@ fn refresh_water_sky(
 /// Probe bundle constructor for terrain tile spawn: shared sky specular
 /// plus black diffuse (land lighting untouched). Built at spawn time so
 /// there is no query/insert race with tile despawns.
-pub(super) fn tile_water_probe(sky: &WaterSky) -> EnvironmentMapLight {
-    EnvironmentMapLight {
-        diffuse_map: sky.diffuse_black.clone(),
-        specular_map: sky.image.clone(),
-        // Physical units throughout (dim HDR sky + hot sun disk, no gain
-        // knob). Tuned by screenshot, not by constant.
-        intensity: 1.0,
-        ..default()
-    }
+pub(super) fn tile_water_probe(sky: &WaterSky) -> (EnvironmentMapLight, LightProbe) {
+    (
+        EnvironmentMapLight {
+            diffuse_map: sky.diffuse_black.clone(),
+            specular_map: sky.image.clone(),
+            // Physical units throughout (dim HDR sky + hot sun disk, no gain
+            // knob). Tuned by screenshot, not by constant.
+            intensity: 1.0,
+            ..default()
+        },
+        // The parent terrain tile supplies the physical transform. Keeping
+        // this marker in the bundle makes it impossible to create a map
+        // light that Bevy cannot gather as a reflection probe.
+        LightProbe::default(),
+    )
 }
 
 #[cfg(test)]
@@ -278,5 +306,37 @@ mod tests {
         // +Y face center looks straight up.
         let up = cube_direction(2, 16, 16, 32);
         assert!(up.y > 0.99, "{up:?}");
+    }
+
+    #[test]
+    fn water_images_expose_cube_views_and_mip_major_storage() {
+        let sky = sky_cubemap_image(Vec3::Y, [1.0, 0.93, 0.85]);
+        assert_eq!(sky.data_order, TextureDataOrder::MipMajor);
+        assert_eq!(sky.texture_descriptor.mip_level_count, 6);
+        assert_eq!(
+            sky.texture_view_descriptor
+                .as_ref()
+                .and_then(|descriptor| descriptor.dimension),
+            Some(TextureViewDimension::Cube)
+        );
+        let black = black_diffuse_cubemap_image();
+        assert_eq!(
+            black
+                .texture_view_descriptor
+                .as_ref()
+                .and_then(|descriptor| descriptor.dimension),
+            Some(TextureViewDimension::Cube)
+        );
+
+        let sky = WaterSky {
+            image: Handle::default(),
+            diffuse_black: Handle::default(),
+            sun_dir: Vec3::Y,
+        };
+        let (environment, probe) = tile_water_probe(&sky);
+        let mut world = World::new();
+        world.spawn((environment, probe));
+        let mut query = world.query::<(&LightProbe, &EnvironmentMapLight)>();
+        assert_eq!(query.iter(&world).count(), 1);
     }
 }

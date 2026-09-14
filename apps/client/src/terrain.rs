@@ -2,7 +2,8 @@
 use super::*;
 use bevy::{
     asset::RenderAssetUsages,
-    math::{DQuat, DVec3},
+    ecs::system::SystemParam,
+    math::{DQuat, DVec3, Mat4},
     mesh::{Indices, PrimitiveTopology},
     tasks::{AsyncComputeTaskPool, Task, block_on, poll_once},
 };
@@ -11,10 +12,24 @@ use std::{
     sync::Arc,
     time::Instant,
 };
+use thessa_bevy_rcbt::{
+    CbtFrameInput, CbtRenderPages, CbtRenderState, CbtRenderSurface, RenderView,
+};
+use thessa_rcbt_core::{
+    CandidateAction, HeightPage, LeafCandidate, Node as CbtNode, Tree, WorkClass,
+};
 use thessa_worldgen_rocky::{
     field::PlanetField,
     lod::{self, TerrainTile, TileKey},
 };
+
+#[derive(SystemParam)]
+struct CbtTerrain<'w> {
+    state: Res<'w, CbtRenderState>,
+    input: ResMut<'w, CbtFrameInput>,
+    pages: ResMut<'w, CbtRenderPages>,
+    surface: ResMut<'w, CbtRenderSurface>,
+}
 
 #[derive(Resource)]
 pub(super) struct WorldTerrain {
@@ -37,13 +52,13 @@ pub(super) struct WorldTerrain {
     eye_speed_mps: f64,
 }
 struct CachedTile {
-    mesh: Handle<Mesh>,
+    mesh: Option<Handle<Mesh>>,
     anchor: DVec3,
     vertices: u64,
     triangles: u64,
     texture_bytes: u64,
-    material: Handle<StandardMaterial>,
-    images: [Handle<Image>; 3],
+    material: Option<Handle<StandardMaterial>>,
+    images: Option<[Handle<Image>; 3]>,
 }
 
 /// Finished worker output: built mesh plus upload-ready images.
@@ -51,12 +66,13 @@ struct CachedTile {
 /// mesh assembly (`generate_tangents`) run on the pool, never on the frame
 /// thread — per finished tile the main thread only inserts asset handles.
 struct TerrainBuildOutput {
-    mesh: Mesh,
+    mesh: Option<Mesh>,
+    height_page: HeightPage,
     anchor: DVec3,
     vertices: u64,
     triangles: u64,
     texture_bytes: u64,
-    images: [Image; 3],
+    images: Option<[Image; 3]>,
     seconds: [f64; 2],
 }
 #[derive(Component)]
@@ -105,11 +121,22 @@ impl Plugin for TerrainPlugin {
 fn setup_terrain(
     mut commands: Commands,
     mut survey: ResMut<SurfaceSurvey>,
+    mut cbt_surface: ResMut<CbtRenderSurface>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     assets: Res<AssetServer>,
 ) {
     let started = Instant::now();
+    let gpu_raster = std::env::var_os("THESSA_CBT_GPU_RASTER").is_some();
+    cbt_surface.set_gpu_raster_enabled(gpu_raster);
+    info!(
+        "CBT terrain raster mode: {}",
+        if gpu_raster {
+            "experimental GPU"
+        } else {
+            "CPU fallback"
+        }
+    );
     commands.spawn((
         TerrainBackdrop,
         Mesh3d(meshes.add(Sphere::new(1.0).mesh().uv(192, 96))),
@@ -352,6 +379,81 @@ fn tiles_overlap(a: TileKey, b: TileKey) -> bool {
     parent.face == child.face && parent.x == child.x >> shift && parent.y == child.y >> shift
 }
 
+fn node_is_prefix(prefix: CbtNode, node: CbtNode) -> bool {
+    node.depth() >= prefix.depth() && (node.id() >> (node.depth() - prefix.depth())) == prefix.id()
+}
+
+fn cbt_candidate(node: CbtNode, action: CandidateAction, class: WorkClass) -> LeafCandidate {
+    LeafCandidate {
+        node,
+        action,
+        class,
+        // The terrain adapter supplies physical projected-error candidates in
+        // a later render policy. This bridge keeps requested path operations
+        // deterministic; heap-id order visits ancestors before descendants.
+        projected_error_px: 0.0,
+        predicted_error_px: 0.0,
+        time_to_needed_s: f32::INFINITY,
+    }
+}
+
+/// Convert desired cube-sphere leaves to the binary path operations needed by
+/// the universal CBT plugin. A quadtree level consumes two explicit Morton
+/// splits; intermediate odd-depth leaves are valid topology but not complete
+/// render tiles.
+fn cbt_candidates_for_tiles(topology: &Tree, wanted: &[TileKey]) -> Vec<LeafCandidate> {
+    let desired: Vec<_> = wanted
+        .iter()
+        .filter_map(|key| lod::cbt_node_for_tile(*key))
+        .collect();
+    let mut candidates = Vec::new();
+    for target in &desired {
+        let mut ancestor = *target;
+        let mut path = Vec::new();
+        while !topology.contains(ancestor) {
+            let Some(parent) = ancestor.parent() else {
+                break;
+            };
+            path.push(parent);
+            ancestor = parent;
+        }
+        path.reverse();
+        candidates
+            .extend(path.into_iter().map(|node| {
+                cbt_candidate(node, CandidateAction::Split, WorkClass::CoverageRepair)
+            }));
+    }
+
+    // Reclaim binary leaves outside the requested surface cover. The overlap
+    // check keeps every ancestor of a desired tile alive, including the odd
+    // half-step nodes between quadtree levels.
+    let leaves = topology.leaves();
+    for leaf in leaves {
+        let Some(parent) = leaf.parent() else {
+            continue;
+        };
+        if parent.depth() < lod::CBT_FACE_DEPTH {
+            continue;
+        }
+        let Some(sibling) = leaf.sibling() else {
+            continue;
+        };
+        if !topology.contains(sibling)
+            || desired
+                .iter()
+                .any(|target| node_is_prefix(parent, *target) || node_is_prefix(*target, parent))
+        {
+            continue;
+        }
+        candidates.push(cbt_candidate(
+            parent,
+            CandidateAction::Merge,
+            WorkClass::Cosmetic,
+        ));
+    }
+    candidates
+}
+
 /// Display cover: retain old visible tiles overlapped only by unready
 /// wanted tiles (a parent stays until ALL its children are ready — never a
 /// hole, never overlap), then add ready wanted tiles that overlap nothing
@@ -391,6 +493,7 @@ fn update_terrain(
     runtime: Res<PilotFlightRuntime>,
     survey: Res<SurfaceSurvey>,
     mut world: ResMut<WorldTerrain>,
+    mut cbt: CbtTerrain<'_>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -444,6 +547,7 @@ fn update_terrain(
         return;
     }
     let radius = world.field.params.radius_m;
+    cbt.surface.set_radius_m(radius as f32);
     let (origin, rotation, eye) = if survey.active {
         let (dir, label) = survey.sites[survey.site];
         let spin = DQuat::from_rotation_y(runtime.render_spin());
@@ -492,6 +596,9 @@ fn update_terrain(
             spin.inverse() * (origin + camera.0.translation.as_dvec3()),
         )
     };
+    cbt.surface.set_render_from_body(
+        Mat4::from_rotation_translation(rotation.as_quat(), (-origin).as_vec3()).to_cols_array(),
+    );
     for (mut transform, mut visibility) in &mut backdrop {
         transform.translation = (-origin).as_vec3();
         transform.rotation = rotation.as_quat() * SPHERE_POLE_TO_WORLD_UP;
@@ -602,6 +709,20 @@ fn update_terrain(
             selection_changed = true;
         }
     }
+    let fov_rad = match &*camera.1 {
+        Projection::Perspective(projection) => f64::from(projection.fov),
+        _ => 0.0,
+    };
+    cbt.input.submit(
+        Some(RenderView {
+            eye_body_m: eye.to_array(),
+            forward_body: forward_body.to_array(),
+            velocity_body_mps: [0.0; 3],
+            fov_rad,
+            pixel_error_target: 1.0,
+        }),
+        cbt_candidates_for_tiles(cbt.state.topology(), &world.wanted),
+    );
     let finished: Vec<_> = world
         .jobs
         .iter_mut()
@@ -611,29 +732,44 @@ fn update_terrain(
         world.jobs.remove(&key);
         let TerrainBuildOutput {
             mesh: built_mesh,
+            height_page,
             anchor,
             vertices,
             triangles,
             texture_bytes,
-            images: [albedo_image, roughness_image, normal_image],
+            images: built_images,
             seconds,
         } = output;
+        if let Some(node) = lod::cbt_node_for_tile(key) {
+            cbt.pages.set_page(node.id(), height_page);
+        }
         perf.record_scope("world.terrain_meshing", seconds[0]);
         perf.record_scope("world.terrain_materials", seconds[1]);
-        let mesh = meshes.add(built_mesh);
-        let albedo = images.add(albedo_image);
-        let roughness = images.add(roughness_image);
-        let normal = images.add(normal_image);
-        let material = materials.add(StandardMaterial {
-            base_color: Color::WHITE,
-            base_color_texture: Some(albedo.clone()),
-            metallic_roughness_texture: Some(roughness.clone()),
-            normal_map_texture: Some(normal.clone()),
-            // Match the Thessa/backdrop roughness so tile borders do not
-            // shade darker/lighter than the far field behind them.
-            perceptual_roughness: 0.92,
-            ..default()
-        });
+        let (mesh, material, image_handles) = match (built_mesh, built_images) {
+            (Some(built_mesh), Some([albedo_image, roughness_image, normal_image])) => {
+                let mesh = meshes.add(built_mesh);
+                let albedo = images.add(albedo_image);
+                let roughness = images.add(roughness_image);
+                let normal = images.add(normal_image);
+                let material = materials.add(StandardMaterial {
+                    base_color: Color::WHITE,
+                    base_color_texture: Some(albedo.clone()),
+                    metallic_roughness_texture: Some(roughness.clone()),
+                    normal_map_texture: Some(normal.clone()),
+                    // Match the Thessa/backdrop roughness so tile borders do not
+                    // shade darker/lighter than the far field behind them.
+                    perceptual_roughness: 0.92,
+                    ..default()
+                });
+                (
+                    Some(mesh),
+                    Some(material),
+                    Some([albedo, roughness, normal]),
+                )
+            }
+            (None, None) => (None, None, None),
+            _ => unreachable!("terrain output mesh/material payload must be paired"),
+        };
         world.cache.insert(
             key,
             CachedTile {
@@ -643,7 +779,7 @@ fn update_terrain(
                 triangles,
                 texture_bytes,
                 material,
-                images: [albedo, roughness, normal],
+                images: image_handles,
             },
         );
         world.counters.terrain_patches_generated += 1;
@@ -685,6 +821,7 @@ fn update_terrain(
         .into_iter()
         .take(8_usize.saturating_sub(world.jobs.len()))
         .collect();
+    let gpu_raster = cbt.surface.gpu_raster_enabled();
     for key in pending {
         let field = world.field.clone();
         world.jobs.insert(
@@ -693,29 +830,43 @@ fn update_terrain(
                 let start = Instant::now();
                 let tile = lod::build_tile(&field, key, TILE_CELLS);
                 let mesh_s = start.elapsed().as_secs_f64();
-                let texture_start = Instant::now();
-                let texture = lod::build_surface_texture_for_mesh(
-                    &field,
-                    key,
-                    lod::texture_cells_for_level(key.level),
-                    TILE_CELLS,
-                );
-                let material_s = texture_start.elapsed().as_secs_f64();
-                // Mesh assembly (tangents) and image upload prep (mipmaps:
-                // ~65k sRGB powf per 128 px tile) stay on the pool: per
-                // finished tile the frame thread only inserts handles.
-                let mesh = mesh_from_tile(&tile, texture.size);
-                let images = [
-                    surface_image(texture.size, texture.albedo.clone(), true),
-                    surface_image(texture.size, texture.roughness.clone(), false),
-                    surface_image(texture.size, texture.normal.clone(), false),
-                ];
+                // The direct GPU smoke path needs only the quantized height
+                // page. Avoid paying for CPU mesh assembly, mip generation,
+                // and material uploads when those entities will not be drawn.
+                let (mesh, images, texture_bytes, material_s) = if gpu_raster {
+                    (None, None, 0, 0.0)
+                } else {
+                    let texture_start = Instant::now();
+                    let texture = lod::build_surface_texture_for_mesh(
+                        &field,
+                        key,
+                        lod::texture_cells_for_level(key.level),
+                        TILE_CELLS,
+                    );
+                    let material_s = texture_start.elapsed().as_secs_f64();
+                    // Mesh assembly (tangents) and image upload prep (mipmaps:
+                    // ~65k sRGB powf per 128 px tile) stay on the pool: per
+                    // finished tile the frame thread only inserts handles.
+                    let mesh = mesh_from_tile(&tile, texture.size);
+                    let images = [
+                        surface_image(texture.size, texture.albedo.clone(), true),
+                        surface_image(texture.size, texture.roughness.clone(), false),
+                        surface_image(texture.size, texture.normal.clone(), false),
+                    ];
+                    (
+                        Some(mesh),
+                        Some(images),
+                        mip_bytes(texture.size) * 3,
+                        material_s,
+                    )
+                };
                 TerrainBuildOutput {
                     mesh,
+                    height_page: tile.height_page,
                     anchor: DVec3::from_array(tile.anchor_m),
                     vertices: tile.positions.len() as u64,
                     triangles: (tile.indices.len() / 3) as u64,
-                    texture_bytes: mip_bytes(texture.size) * 3,
+                    texture_bytes,
                     images,
                     seconds: [mesh_s, material_s],
                 }
@@ -735,10 +886,16 @@ fn update_terrain(
             }
             for key in desired.difference(&world.visible) {
                 let tile = &world.cache[key];
+                if cbt.surface.gpu_raster_enabled() {
+                    continue;
+                }
+                let (Some(mesh), Some(material)) = (&tile.mesh, &tile.material) else {
+                    continue;
+                };
                 let tile_entity = commands.spawn((
                     SurfaceTile(*key),
-                    Mesh3d(tile.mesh.clone()),
-                    MeshMaterial3d(tile.material.clone()),
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d(material.clone()),
                     Transform::from_translation((rotation * tile.anchor - origin).as_vec3())
                         .with_rotation(rotation.as_quat()),
                     Name::new(format!("Thessa tile {key:?}")),
@@ -784,10 +941,19 @@ fn update_terrain(
             .collect();
         for key in stale {
             if let Some(tile) = world.cache.remove(&key) {
-                meshes.remove(tile.mesh.id());
-                materials.remove(tile.material.id());
-                for image in tile.images {
-                    images.remove(image.id());
+                if let Some(node) = lod::cbt_node_for_tile(key) {
+                    cbt.pages.remove_page(node.id());
+                }
+                if let Some(mesh) = tile.mesh {
+                    meshes.remove(mesh.id());
+                }
+                if let Some(material) = tile.material {
+                    materials.remove(material.id());
+                }
+                if let Some(tile_images) = tile.images {
+                    for image in tile_images {
+                        images.remove(image.id());
+                    }
                 }
             }
         }
@@ -988,6 +1154,7 @@ fn update_local_sky(
 #[cfg(test)]
 mod streaming_tests {
     use super::*;
+    use thessa_rcbt_core::{FrameBudget, plan_frame};
 
     #[test]
     fn refinement_retains_parent_until_all_children_are_ready() {
@@ -1021,6 +1188,24 @@ mod streaming_tests {
         assert_eq!(
             ready_terrain_cover(&[parent], &visible, |_| true),
             BTreeSet::from([parent])
+        );
+    }
+
+    #[test]
+    fn cbt_bridge_plans_ancestors_before_descendants() {
+        let topology = Tree::at_depth(12, lod::CBT_FACE_DEPTH).unwrap();
+        let wanted = [TileKey {
+            face: 0,
+            level: 2,
+            x: 0,
+            y: 0,
+        }];
+        let candidates = cbt_candidates_for_tiles(&topology, &wanted);
+        let plan = plan_frame(&topology, candidates, FrameBudget { max_operations: 4 });
+        assert_eq!(plan.updates().len(), 4);
+        assert_eq!(
+            plan.updates()[0],
+            thessa_rcbt_core::Update::Split(CbtNode::new(8, 3).unwrap())
         );
     }
 }

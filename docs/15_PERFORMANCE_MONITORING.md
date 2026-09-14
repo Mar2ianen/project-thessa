@@ -1,6 +1,9 @@
 # Performance Monitoring and Profiling
 
-Status: design document / implementation target.
+Status: partial implementation. The capture model, scopes, rolling statistics,
+JSON/CSV export, memory samples, server/on-rails accounting, and tests are
+implemented in `crates/perf`; the complete client overlay and every proposed
+counter remain implementation work.
 
 Scope: client rendering, authoritative simulation, time warp, world/terrain runtime, memory, and capture tooling.
 

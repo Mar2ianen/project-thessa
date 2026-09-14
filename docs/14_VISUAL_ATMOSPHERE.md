@@ -1,6 +1,12 @@
 # Visual Atmosphere Architecture
 
-Status: design document / implementation target.
+Status: partial implementation. Shared optics and graphics-settings crates are
+implemented; the sections below describe the remaining rendering direction.
+
+Current source of truth: `crates/atmosphere`, `crates/graphics`, and
+`apps/client/src/atmosphere.rs`. The client currently uses Bevy raster/LUT
+atmosphere paths plus shared CPU-side optical inputs. Full cloud/weather
+coupling and every ray-aware mode described below are not shipped.
 
 Scope: rocky planets and rocky moons first. Gas giants may reuse parts of the same optical model later, but are not a requirement for the first implementation.
 

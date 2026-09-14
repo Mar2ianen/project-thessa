@@ -1,100 +1,91 @@
 # 06 — Open questions
 
-Пункты здесь **специально не зафиксированы** в v0.1. Уже принятые решения
-сюда не возвращаются: за них отвечают профильные docs/ADR.
+These items are intentionally not locked in the current prototype. Accepted
+decisions belong in the relevant implementation document or ADR.
 
-## Мир / lore
+## World and lore
 
-- финальное название проекта;
-- названия объектов (Asterion/Nereid/Thessa/etc. пока working);
-- есть ли native complex biosphere на Thessa/Pelagos/Janus;
-- breathable ли Thessa без оборудования;
-- почему игрок/колония находится именно там — минимальный lore hook;
-- насколько явно объясняется formation history системы (вероятно почти никак).
+- final project and body names;
+- final lore hook for the Thessa colony;
+- native biosphere and habitability details;
+- how much formation history the player needs to know.
 
-## Celestial numbers
+## Celestial data
 
-- canonical epoch и orbital angles;
-- exact resonant offsets/libration amplitudes Nereid chain;
-- Nix tidal `Q/k2` и lifetime;
+- canonical epoch and orbital phases;
+- resonant offsets and libration amplitudes for the Nereid chain;
+- Nix tidal `Q/k2` and lifetime;
 - final Cinder orbit;
-- Nereid obliquity/ring tilt;
-- atmospheric scale profiles/composition beyond the current Thessa surface target;
-- J2/Jn coefficients каждого meaningful body;
-- weather/climate fields.
+- Nereid obliquity and ring tilt;
+- body-specific atmosphere profiles and composition;
+- J2/Jn coefficients and body-fixed rotations;
+- weather and climate fields;
+- a fully consistent Halo co-orbital solution.
 
-Thessa design target уже зафиксирован в `data/system.toml`: `R=3200 km`,
-`g≈0.500 g`, `p0=1.20 bar`. Это не open question, хотя vertical atmosphere
-profile и final composition ещё открыты.
+The current `data/system.toml` target for Thessa (`R=3200 km`, approximately
+`0.500 g`, `p0=1.20 bar`) is not an open value, but it is still not canonical.
 
 ## Gameplay
 
-- inventory model игрока;
-- насколько физичны отдельные belt items;
-- exact research unlock rules;
-- maintenance intensity;
-- consequences player death/vehicle loss;
-- whether economy/contracts exist at all;
-- how much manual flight is expected before route certification;
-- какие MechJeb-like high-level blocks входят в минимальную standard library;
-- семантика parallel graph при staging/docking/vehicle ownership;
-- whether route automation requires one successful manual/reference flight.
+- player inventory and cargo abstraction;
+- exact research/unlock rules;
+- maintenance intensity and failure consequences;
+- player death and vehicle-loss rules;
+- whether contracts/economy exist;
+- how much manual flight is required before route certification;
+- minimum standard library for MechJeb-like guidance blocks;
+- graph ownership semantics across staging and docking;
+- whether route automation requires a successful manual/reference flight.
 
 ## Vehicle editor
 
-- cross-section parameterization;
-- material thickness UI;
-- how much engine design is exposed;
-- whether engine cycle is discrete class or continuous sub-parameters;
-- procedural wheel/gear editor depth;
-- design validation UX;
-- how to visualize structural/thermal graphs without turning UI into CAD pain.
+- cross-section parameterization and material thickness UX;
+- depth of engine-cycle design;
+- procedural wheel/gear editor;
+- structural/thermal graph visualization;
+- shared design asset and instance storage;
+- design validation and control-authority reports.
 
 ## Physics
 
-Tier-A panel method и текущая transonic/supersonic reduced-order baseline уже
-описаны в `docs/11_AERODYNAMICS.md`; они больше не считаются неизвестным
-архитектурным выбором. Открыты следующие уровни fidelity:
+The Tier-A aero baseline and gravity cohort/affine paths are now implemented
+prototypes rather than open architecture choices. Remaining physics questions:
 
-- wake/occlusion model и способ компиляции geometry → exposure;
-- граница whole-vehicle coefficient tables vs per-zone/tabulated surfaces;
-- дополнительные оси Tier-B tables: beta, control deflection, Reynolds и
-  dynamic derivatives;
-- structural solver order;
-- reduced-order aeroelasticity method;
+- wake/occlusion geometry and exposure compilation;
+- whole-vehicle versus per-zone coefficient tables;
+- table axes for beta, control deflection, Reynolds, and dynamic derivatives;
+- structural solver and fracture order;
+- reduced-order aeroelasticity;
 - slosh fidelity;
-- atmospheric heating correlation;
-- ablative heat-shield model;
-- CPU ray sampling budget;
-- deterministic tolerance across AVX builds.
+- atmospheric heating and ablative heat shield model;
+- CPU ray-sampling budget;
+- deterministic tolerance policy across AVX builds;
+- J2/Jn and hyperbolic/parabolic ephemeris coverage.
 
 ## Runtime
 
-- Avian vs Parry-only local contact implementation;
-- Lightyear adoption after spike;
-- in-process vs separate local server default;
-- save DB/file format;
+- Avian versus a Parry-only local contact implementation;
+- Lightyear or another production replication layer after a spike;
+- save database and migration format;
 - web client scope;
-- whether client prediction shares full sim-flight or reduced model;
-- protocol transport (UDP/QUIC/WebTransport etc.);
-- Windows packaging policy: разрешить wgpu D3D12 backend или форсить Vulkan; architecture от этого не зависит.
+- prediction model for remote craft;
+- production transport choice (UDP/QUIC/WebTransport/etc.);
+- Windows packaging policy for the internal wgpu backend.
 
 ## Performance targets
 
-Need benchmark-backed numbers for:
+Benchmark-backed targets are still needed for:
 
-- 780M 1080p Low/Medium target FPS;
-- max active atmospheric craft at x1;
-- max warp with 1k/5k/10k vehicles;
+- 1080p Low/Medium frame rate;
+- active atmospheric craft at x1;
+- warp with 1k/5k/10k vehicles;
 - factory object count;
-- thermal/structural node budget per design;
+- thermal/structural nodes per design;
 - acceptable memory on 24 GiB systems.
 
-## Licensing / distribution
+## Licensing and distribution
 
-Baseline уже принят: engine MIT, game code GPL-3.0-or-later. Открыты:
-
-- лицензия ассетов/музыки;
-- граница generic `protocol` vs game-specific protocol/rules;
-- допустимость LGPL dependency внутри MIT engine;
-- AGPL tooling только как external validation или возможен optional isolated tool.
+The engine MIT/game GPL-3.0-or-later split is accepted. Remaining questions
+include asset/music licenses, generic versus game-specific protocol boundaries,
+LGPL dependencies inside MIT crates, and whether AGPL tooling remains isolated
+validation only.

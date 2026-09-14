@@ -1,42 +1,55 @@
-# Contributing — draft
+# Contributing
 
-Проект пока на стадии design/prototype. До появления первого вертикального среза изменения оцениваются по трём вопросам:
+Project Thessa is still a design and engineering prototype. Evaluate changes
+against three questions:
 
-1. усиливает ли это основной цикл `factory -> logistics -> aerospace -> factory`;
-2. сохраняет ли это физическую причинность вместо скрытых игровых бонусов;
-3. не связывает ли это simulation core с конкретным renderer/network runtime.
+1. Does the change strengthen the `factory -> logistics -> aerospace -> factory`
+   loop or a documented foundation for it?
+2. Does it preserve physical causality instead of hiding gameplay bonuses in
+   coefficients?
+3. Does it keep the simulation core independent of a renderer or network
+   runtime?
 
-## Минимальные требования к изменениям симуляции
+## Minimum requirements for simulation changes
 
-- единицы — SI внутри authoritative state;
-- каждый новый solver имеет тесты на известные частные случаи;
-- никакой физический hot path не должен зависеть от wall-clock time;
-- результат не должен зависеть от порядка итерации hash-map;
-- новые зависимости проходят проверку лицензии и причины добавления;
-- performance claims подтверждаются benchmark/trace, а не ощущением.
+- use SI units inside authoritative state;
+- add known-case tests for every new solver;
+- keep wall-clock time out of physics hot paths;
+- make results independent of hash-map iteration order;
+- review the license and reason for every new dependency;
+- support performance claims with a benchmark or trace.
 
-## CI baseline (план)
+Numerical regression tests should compare physically meaningful tolerances or
+conserved quantities rather than use `==` for floating-point values.
+
+## Cross-platform baseline
+
+- route new platform APIs through an adapter crate/module;
+- domain and simulation code must not accept Windows or DirectX types;
+- reject shader features without a clear Vulkan/Metal/WebGPU path or graceful
+  fallback;
+- once targets exist, CI must include native Linux builds plus compile/smoke
+  checks for Windows, macOS, and WASM.
+
+## Licensing baseline
+
+- an MIT engine crate must not depend on a GPL game crate;
+- every package has an explicit SPDX `license`;
+- a new copyleft dependency requires an ADR;
+- do not copy reference implementation code into MIT engine crates without a
+  compatible license; reimplement ideas and algorithms independently and test
+  against public results.
+
+## Before opening a change
+
+Run:
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
-cargo test -p sim-core --release
 ```
 
-Отдельные numerical regression tests должны сравнивать не `==` для float, а физически осмысленные tolerances / conserved quantities.
-
-
-## Cross-platform requirements
-
-- новые platform APIs сначала проходят через adapter crate/module;
-- domain/sim code не принимает `windows`/DirectX types;
-- shader feature не принимается, если нет понятного Vulkan/Metal/WebGPU пути или graceful fallback;
-- после появления targets CI должен иметь native Linux build и compile/smoke checks для Windows/macOS/WASM.
-
-## Licensing requirements
-
-- MIT engine crate не может зависеть от GPL game crate;
-- каждый package имеет явный SPDX `license`;
-- новый copyleft dependency требует ADR;
-- копирование reference implementation кода в MIT engine запрещено без совместимой лицензии; идеи/алгоритмы переписываются независимо с тестами против публичных результатов.
+Update the relevant current implementation document or ADR when a contract,
+crate boundary, wire format, or license boundary changes. Keep proposals and
+roadmap items labelled as future work.

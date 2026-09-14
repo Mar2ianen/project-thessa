@@ -1,0 +1,30 @@
+[package]
+name = "thessa-rcbt-wgpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Portable wgpu backend adapter for RCBT compute stages"
+
+[dependencies]
+thessa-rcbt-core = { path = "../rcbt-core" }
+wgpu.workspace = true
+
+[dev-dependencies]
+naga = { version = "29.0.4", features = ["wgsl-in"] }
+pollster = "0.4"
+thessa-rcbt-ffi = { path = "../rcbt-ffi" }
+thessa-rcbt-large-ffi = { path = "../rcbt-large-ffi" }
+
+[[bench]]
+name = "gpu_cbt"
+harness = false
+
+[[bench]]
+name = "crossover"
+harness = false
+
+[[bench]]
+name = "ocbt_vs_reduce"
+harness = false

@@ -1,9 +1,9 @@
 # Security policy
 
-Project Thessa пока находится на стадии pre-prototype. Не публикуйте в Issues
-токены, ключи, приватные данные или рабочие конфигурации серверов.
+Project Thessa is still a pre-alpha prototype. Do not publish tokens, keys,
+private data, or working server configurations in issues or pull requests.
 
-Для потенциальной уязвимости используйте private vulnerability report в
-GitHub Security Advisories, когда он будет включён для репозитория. Если такая
-форма недоступна, сначала откройте draft issue без секретных деталей и не
-прикладывайте эксплуатационные данные публично.
+For a potential vulnerability, use a private vulnerability report through
+GitHub Security Advisories when that feature is enabled for the repository. If
+the form is unavailable, open a draft issue without secrets or exploit details
+and coordinate privately before publishing reproduction data.

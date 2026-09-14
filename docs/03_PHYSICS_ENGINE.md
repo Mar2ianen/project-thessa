@@ -1,699 +1,247 @@
-# 03 — Физический движок
+# 03 — Physics engine
 
-## 3.1. Цель
+## Status
 
-Не «максимально точный aerospace FEM/CFD package», а единая физическая модель, в которой из тех же primitive systems естественно получаются:
+**Implemented numerical prototype.** This document is the current contract for
+the paths in `crates/sim-core`, `crates/flight-control`, and
+`crates/flight-authority`. Structural fracture, thermal networks, and full
+vehicle-system compilation are explicitly future work.
 
-- обычная ракета;
-- многоступенчатый reusable launcher;
-- Starship-like belly-flop vehicle;
-- spaceplane / lifting body;
-- самолёт;
-- ground vehicle;
-- орбитальная станция;
-- weird player-built craft.
+## 3.1. Ownership and units
 
-Движок не должен заранее знать классы `rocket` / `plane` / `spaceplane`. Он знает массы, геометрию, поля, материалы, шарниры, жидкости и исполнительные органы.
+`thessa-sim-core` is MIT, renderer-independent, and free of Bevy/Tokio/network
+dependencies. Authoritative spatial state is `f64` SI data. `SimTime` is the
+only simulation-time type; wall-clock values belong to orchestration and
+telemetry.
 
----
+The core exposes pure data and numerical functions. The authority/runtime layer
+owns command interpretation, control policy, bake queues, contacts, and
+server-facing state.
 
-## 3.2. Уровни state
+## 3.2. State and frames
 
-### Celestial state
+The current state model distinguishes:
 
-Canonical body state приходит из baked ephemeris:
+- baked celestial body states;
+- system-barycentric and body-centered inertial frames;
+- body-fixed and local tangent frames;
+- vehicle body state (position, velocity, orientation, angular velocity,
+  mass/inertia);
+- render-local coordinates, which are client-only.
 
-```rust
-BodyState {
-    position_inertial: DVec3,
-    velocity_inertial: DVec3,
-    orientation: DQuat,
-    angular_velocity: DVec3,
-}
-```
+`ReferenceFrame` and `StateVector` preserve frame labels. A render transform or
+HUD telemetry value is never authoritative physics state.
 
-### Vehicle cluster state
+## 3.3. Celestial ephemerides
 
-Минимум:
+`SystemConfig::bake` reads `data/system.toml` and constructs deterministic
+analytic segments for the design system. `BakedEphemeris` returns body states
+at a `SimTime` without integrating planet/moon mutual dynamics at runtime.
+`thessa-system-baker` serializes a reproducible JSON descriptor.
 
-```rust
-RigidClusterState {
-    position: DVec3,
-    velocity: DVec3,
-    orientation: DQuat,
-    angular_velocity: DVec3,
-    mass: f64,
-    center_of_mass_local: DVec3,
-    inertia_body: DMat3,
-}
-```
+This is a design-target ephemeris, not a high-fidelity planetary ephemeris.
+Periods, phases, and body values are data inputs. Missing phase values are
+deterministically resolved by the baker. A future offline pipeline may fit
+versioned Chebyshev/Hermite tracks to a more authoritative source.
 
-`f64` authoritative. Render transform строится относительно локального/floating origin и переводится в `f32` только на стороне renderer.
+## 3.4. Gravity
 
----
-
-## 3.3. Frames / координаты
-
-Поддержать явные frames:
-
-- global inertial / system barycentric;
-- star-centric;
-- planet/moon-centered inertial;
-- body-fixed rotating;
-- local tangent ENU/NED-like;
-- vehicle body;
-- render-local floating origin.
-
-Frame transform — first-class API, не разбросанные `position -= planet_pos` по коду.
-
-Для атмосферного полёта `AtmosphereConfig` выдаёт детерминированные
-`temperature/pressure/density/speed_of_sound/viscosity` по высоте; его sample
-конвертируется в `AeroEnvironment` в vehicle body frame. Это позволяет
-считать один и тот же aircraft state на sea level, в стратосфере и в
-сверхзвуковом flight corridor без ручного пересчёта `Mach`.
-
----
-
-## 3.4. Гравитация
-
-Для vehicle/test-particle:
-
-\[
-\mathbf a = \sum_i \mathbf a_i + \mathbf a_{harmonics} + \mathbf a_{other}
-\]
-
-Point-mass term:
-
-\[
-\mathbf a_i = \mu_i\frac{\mathbf r_i-\mathbf r}{|\mathbf r_i-\mathbf r|^3}
-\]
-
-### Requirements
-
-- все релевантные stars/planets/moons могут действовать одновременно;
-- ship-ship gravity по умолчанию не считается;
-- SOI — только UI/optimization concept;
-- contribution culling допускается по bounded error threshold;
-- J2 обязателен для тел, где он meaningful;
-- API позволяет J3/J4 и general spherical harmonics;
-- body-fixed harmonic coefficients rotating with body.
-
-### Что это даёт
-
-Без специального gameplay-кода появляются:
-
-- L1–L5 regions;
-- halo/Lissajous-like trajectories;
-- nodal/apsidal precession;
-- sun-synchronous orbits;
-- frozen/unstable low orbits;
-- multi-moon gravity-assist routes.
-
----
-
-## 3.5. Celestial ephemerides
-
-Runtime body motion не интегрируется.
-
-### Offline pipeline
+For a test particle:
 
 ```text
-design orbital targets
-→ high-accuracy n-body integration
-→ resonance capture/relaxation if needed
-→ long-horizon validation
-→ fit deterministic ephemeris representation
-→ versioned game data
+dx/dt = v
+dv/dt = sum_i mu_i * (body_i(t) - x) / |body_i(t) - x|^3
 ```
 
-Возможные representations:
+All relevant physical sources contribute together. SOI switching and patched
+conics are not runtime physics. Synthetic barycenter nodes are coordinate
+anchors and do not duplicate their children’s gravitational contribution.
 
-1. Kepler elements + periodic/resonant corrections;
-2. Chebyshev polynomial segments;
-3. Hermite/spline state segments с bounded error.
+The core provides scalar, ordered batch, Rayon, SIMD-assisted, and hierarchy/
+cohort paths. The order of returned targets is preserved and deterministic.
 
-Критерий — deterministic cross-platform evaluation и быстрый random access по `SimTime`.
+### Gravity hierarchy and cohort patches
 
----
+`gravity_patch.rs` provides:
 
-## 3.6. Integrators
+- `CohortConfig` with explicit spatial/temporal/error boundaries;
+- `GravityPatch` with affine far-field coefficients and exact-near terms;
+- `CohortEvaluator` for many target states;
+- `affine_segment_bound` for a posted absolute propagation bound;
+- deterministic split/fallback behavior when a patch cannot satisfy its bound.
 
-Один integrator на всё — плохая цель.
+The affine approximation is:
 
-### Free flight / orbital
-
-Нужен adaptive high-order ODE path. Кандидаты для собственного/референсного решения:
-
-- Dormand–Prince / DOP853-like;
-- adaptive RK для thrust/aero transition;
-- symplectic mode для долгих conservative coast tests, если даёт пользу.
-
-### Atmosphere / active control
-
-- bounded adaptive step;
-- guidance/control evaluation rate может отличаться от integration substeps;
-- high-rate near max-Q, rapid attitude changes, landing.
-
-### Contact regime
-
-- отдельный local contact solver fixed/substepped;
-- не заставлять orbital integrator решать колёса и constraints.
-
----
-
-## 3.7. Vehicle design compilation
-
-Параметрический design компилируется в несколько независимых representations:
 
 ```text
-VehicleDesign
-├── RenderMeshSet
-├── CollisionModel
-├── AeroModel
-├── StructuralGraph
-├── ThermalGraph
-├── ActuatorGraph
-├── FluidGraph
-└── MassModel
+g(x) ≈ g0 + J (x - x0)
 ```
 
-Это ключевая optimization boundary: свобода редактора не равна количеству rigid bodies.
+It is a bounded model reduction, not an invisible physics coefficient. Exact
+near terms remain explicit. A caller must fall back to exact evaluation when
+the patch is near a body, the budget is exhausted, the source window changes,
+or the error bound is not met.
 
----
+## 3.5. Integrators and coast paths
 
-## 3.8. Structural model
+Implemented paths include:
 
-### Базовая модель
+- adaptive Dormand–Prince 5(4) for general test-particle propagation;
+- velocity-Verlet for fixed-step conservative coast checks;
+- deterministic bounded substeps for rigid-body flight;
+- sampled Verlet/on-rails caches with Hermite position/velocity interpolation;
+- piecewise analytic affine propagation via `AffinePropagator`.
 
-Graph/beam network:
+`propagate_piecewise` compiles a patch around the current trajectory point,
+propagates an analytic frozen-field segment, and rebuilds or stops when the
+posted bound expires. It is not permitted to continue silently outside the
+bound. Active thrust, atmosphere, contacts, assisted control, and other state-
+dependent effects use stepped flight dynamics instead.
+
+The on-rails cache has explicit horizon, sample, impact, atmosphere, obstacle,
+and wake semantics. It can be extended or trimmed only after validating the
+state and ephemeris identity.
+
+## 3.6. Vehicle and rigid-body dynamics
+
+The current `VehicleDefinition` supports serializable geometry, mass/inertia,
+aero panels, control surfaces, and starter propulsion/control channels. The
+rigid-body path integrates:
+
+- position and velocity;
+- quaternion orientation and angular velocity;
+- gravity;
+- thrust/external force and moment;
+- atmosphere and panel aero;
+- control-surface/actuator response;
+- contact and terrain boundary checks through the authority adapter.
+
+The current runtime treats one connected vehicle as one rigid body. A complete
+structural graph that splits into multiple bodies on failure is not implemented.
+
+## 3.7. Aerodynamics
+
+The panel model evaluates local flow for every panel:
 
 ```text
-node: structural station / mass attachment / hinge / engine mount
-edge: beam/shell connection with stiffness + strength + thermal state
+v_local = v_vehicle - v_wind + omega × r_panel
+q       = 0.5 * rho * |v_local|²
+Re      = rho * |v_local| * chord / dynamic_viscosity
 ```
 
-Считаемые quantities по edge/node по мере fidelity:
+Forces are summed in body coordinates and moments use `r × F` around the
+center of mass. The implementation includes local AoA/sideslip, finite
+planform effects, induced drag, compressibility, smooth stall, transonic and
+supersonic corrections, thickness/wave drag, swept-surface normal Mach,
+control-surface effectiveness, static `Cm`, dynamic damping, and optional
+coefficient tables.
 
-- axial load;
-- shear;
-- bending moment;
-- torsion;
-- elastic deflection;
-- temperature-dependent stiffness/yield;
-- accumulated fatigue/damage.
+This is a bounded reduced-order model. It is not CFD and does not claim exact
+shock positions, separation bubbles, chemistry, boundary-layer transition, or
+aeroelasticity. Offline reference solvers can generate validation tables but
+are not runtime dependencies. See [`11_AERODYNAMICS.md`](11_AERODYNAMICS.md).
 
-### Rigid cluster optimization
+## 3.8. Atmosphere
 
-Пока connected structure ведёт себя близко к rigid body, translational/rotational integration идёт одним cluster state. Structural solver всё равно знает внутренние loads.
+`AtmosphereConfig` provides deterministic temperature, pressure, density,
+viscosity, and speed of sound over its configured layers. It also provides a
+rotating-atmosphere velocity boundary and a declared vacuum top.
 
-При failure:
+The current default is ISA-like and is not a final planetary composition
+model. A future body-specific model can provide gas composition, `R`, `gamma`,
+sea-level state, weather, and altitude-dependent winds without changing the
+force/evaluation boundary.
+
+## 3.9. Control, guidance, and actuators
+
+The flight-control crate keeps these layers separate:
 
 ```text
-edge breaks
-→ connected-components(structural graph)
-→ recompute mass/CoM/inertia/aero/thermal connectivity
-→ create N rigid clusters
+pilot / graph input
+        ↓
+guidance intent
+        ↓
+aircraft / spacecraft / direct control law
+        ↓
+flight policy
+        ↓
+physical control demand
+        ↓
+allocator
+        ↓
+actuator dynamics
+        ↓
+sim-core vehicle state
 ```
 
-Это сохраняет реальные разрушения без KSP-like `hundreds of rigid bodies + joints` в штатном полёте.
-
-### Aeroelasticity
-
-Для больших wings/flaps/long bodies structural deformation должен менять aero geometry хотя бы на reduced-order level:
-
-`aero load -> beam twist/bend -> local AoA -> aero load`.
-
-Полный FEM не требуется для baseline.
-
----
-
-## 3.9. Articulated systems / hinges
-
-Не все control surfaces обязаны быть отдельными generic rigid bodies.
-
-`HingeDOF` содержит:
-
-- axis;
-- angle/limits;
-- angular rate;
-- actuator torque/speed curve;
-- inertia of moving element;
-- friction/backlash optional;
-- thermal state;
-- structural attachment.
-
-Для large body flaps moving mass/CoM/inertia учитывается. Аэродинамический hinge moment может физически не дать actuator достичь commanded angle.
-
----
-
-## 3.10. Aerodynamics
-
-### Panel/zone model
-
-Каждой aero zone известны:
-
-- position/orientation;
-- area/reference dimensions;
-- local normal/tangent;
-- shape/profile class;
-- control deflection;
-- material/surface temperature;
-- coefficient model.
-
-Локальная скорость:
-
-\[
-\mathbf v_{local}=\mathbf v_{vehicle}-\mathbf v_{air}+\boldsymbol\omega\times\mathbf r
-\]
-
-Динамическое давление:
-
-\[
-q=\frac{1}{2}\rho |\mathbf v_{local}|^2
-\]
-
-Сила каждой zone вычисляется локально и суммируется в force + moment about CoM.
-
-### Coefficient domains
-
-Baseline tables/functions должны допускать зависимости минимум от:
-
-- angle of attack;
-- sideslip;
-- Mach;
-- Reynolds where justified;
-- control deflection;
-- local flow exposure.
-
-Нужна post-stall модель и transonic/supersonic behavior. Именно поэтому готовый `avian_fdm` нельзя принять как full solution v0.1: его текущий documented scope исключает compressibility/supersonic и aeroelasticity.
-
-Первый realtime slice реализован в `thessa-sim-core::PanelAeroModel`: локальные
-панели, `omega x r`, wind, dynamic pressure, Reynolds diagnostic, smooth
-post-stall, transonic drag rise, supersonic trend и optional Mach/AoA
-coefficient table. Он подключён к `evaluate_flight_forces` и
-`integrate_rigid_body_step`/`integrate_rigid_body_duration`: translation,
-quaternion attitude, gravity, rotating atmosphere и dynamic p/q/r damping
-считаются в одном детерминированном 6-DoF state path. Полный контракт и
-fidelity tiers зафиксированы в `docs/11_AERODYNAMICS.md`; внешние solvers
-остаются validation-only.
-
-### Occlusion / wake
-
-Не CFD. Baseline:
-
-- CPU BVH ray/cone queries against physics geometry;
-- exposure estimate по incoming-flow directions;
-- simple wake attenuation/deflection model;
-- optional higher-fidelity panel interaction later.
-
-Это позволяет не давать full aerodynamic force поверхности, закрытой корпусом.
-
-Для finite-planform surfaces зона хранит не только площадь и chord, но также
-фактический span, effective aspect ratio, sweep, body-interference factor и
-center-of-pressure point. `PanelAeroModel` применяет Diederich correction к
-2-D compressible lift slope перед расчётом силы; момент берётся относительно
-center of pressure, а не автоматически относительно начала зоны. Это особенно
-важно для низкоaspectных ракетных плавников: применение одного 2-D slope к
-каждой панели завышает `CL_alpha` примерно вдвое.
-
----
-
-## 3.11. Atmosphere
-
-Каждое тело может задавать profile/model:
-
-- density;
-- pressure;
-- temperature;
-- composition;
-- viscosity;
-- speed of sound;
-- wind/rotation;
-- weather field optional.
-
-Atmosphere вращается с телом, если design не задаёт другое. В runtime это
-учитывается как `v_air = v_wind + ω_body × r_body`; поэтому relative air
-velocity не равна inertial velocity.
-
-### Weather fidelity
-
-MVP: deterministic vertical profile + simple wind layers.
-
-Later:
-
-- large-scale weather cells;
-- storms;
-- spatial density/temperature variation;
-- procedural but server-deterministic weather seeds.
-
----
-
-## 3.12. Thermal model
-
-Lumped thermal network:
-
-\[
-C_i\frac{dT_i}{dt}=\sum_j G_{ij}(T_j-T_i)+Q_{internal}+Q_{aero}+Q_{solar}+Q_{engine}-Q_{rad}
-\]
-
-Radiation:
-
-\[
-Q_{rad}=\epsilon\sigma A(T^4-T_{env}^4)
-\]
-
-### Thermal nodes
-
-Автоматически генерируются из параметрической geometry:
-
-- windward skin;
-- leeward skin;
-- internal structure;
-- tank wall/contents;
-- engine chamber/nozzle/mount;
-- radiator surfaces;
-- electronics/batteries where needed.
-
-### Coupling
-
-Температура влияет на:
-
-- material strength/stiffness;
-- actuator limits;
-- tank pressure/boil-off;
-- engine limits;
-- battery/electronics capability;
-- ablation/heat shield state.
-
----
-
-## 3.13. Physics ray queries / radiation view factors
-
-Hardware RT не является обязательным.
-
-### Canonical server
-
-CPU BVH / spatial acceleration structure для:
-
-- aero occlusion;
-- solar/stellar occlusion;
-- thermal radiation visibility;
-- plume impingement;
-- lidar/radar sensors;
-- terrain clearance.
-
-### Optional GPU/native acceleration
-
-На поддерживаемом native hardware можно использовать GPU ray tracing/compute для larger sample counts, preview/debug или local single-player acceleration, но authoritative server должен иметь CPU path и не требовать GPU.
-
-Это важно и для dedicated server, и для deterministic behavior между AMD/Intel/NVIDIA/WebGPU clients.
-
----
-
-## 3.14. Propulsion
-
-Engine model отдаёт физические outputs:
-
-- force vector;
-- mass flow;
-- heat flow;
-- electrical/reactor demand;
-- plume geometry;
-- failure/limits state.
-
-### Chemical
-
-Nozzle/chamber/propellant parameterization; ambient pressure влияет на performance.
-
-### Nuclear thermal
-
-Reactor thermal power + propellant flow + nozzle; reactor heat/shielding/radiators matter.
-
-### Electric/ion
-
-Power-limited thrust; efficiency; propellant; radiator/power source coupling.
-
-### Fusion
-
-Pellet/injection/ignition/magnetic nozzle abstraction. Frequency/energy flow drive average thrust, но system remains parameterized machinery, not magic `TorchEngine` block.
-
----
-
-## 3.15. Fluids / tanks
-
-MVP:
-
-- tank volume;
-- propellant mass/density;
-- pressure;
-- temperature;
-- outlets/feeds;
-- boil-off;
-- CoM changes with contents.
-
-Later:
-
-- reduced-order slosh model;
-- ullage;
-- pump/cavitation edge cases;
-- cryogenic stratification if gameplay justifies.
-
-Не делать full CFD tanks.
-
----
-
-## 3.16. Control / FBW
-
-Physics layer знает actuators. Guidance/FBW layer знает desired behavior.
-
-Control allocator решает приближённую задачу:
-
-\[
-B(u)\approx \tau_{desired}
-\]
-
-с ограничениями:
-
-- actuator limits;
-- rates;
-- hinge torque;
-- fuel/energy cost;
-- damaged/unavailable actuators.
-
-Использовать numerical allocation / pseudo-inverse / constrained solve where useful. Никакого прямого `apply desired torque` кроме debug/test harness.
-
----
-
-## 3.17. Contacts / wheels / debris
-
-Вот здесь готовый rigid-body/collision engine полезен.
-
-Нужны:
-
-- landing gear contacts;
-- wheels;
-- player/world collisions;
-- factory vehicles;
-- docking hard-contact;
-- debris;
-- wreckage;
-- local terrain contact.
-
-Не использовать contact engine как источник orbital gravity/aero/thermal physics.
-
----
-
-## 3.18. Что можно взять готовым
-
-### Bevy 0.19.x — **да, shell**
-
-Использовать:
-
-- renderer/wgpu;
-- assets;
-- window/input;
-- client ECS;
-- UI/tooling;
-- gizmos;
-- Web/WASM build path.
-
-Не использовать `Transform` как authoritative universe coordinates.
-
-### Rayon — **да**
-
-Fixed-size/data-parallel CPU work:
-
-- gravity batches;
-- aero zones;
-- thermal edges;
-- structural batches;
-- trajectory candidate evaluation.
-
-### Tokio — **да, но не для physics hot loop**
-
-- networking;
-- async persistence;
-- metrics/admin APIs;
-- channels/orchestration.
-
-Tokio documentation сама рекомендует separate CPU-bound pool вроде Rayon для большого compute workload.
-
-### Parry (`parry3d-f64`) — **сильный кандидат**
-
-Геометрические queries/collision primitives, BVH-related spatial queries, mass properties и f64 path можно переиспользовать без принятия всего rigid-body engine.
-
-### Avian 0.7 — **кандидат для local contact prototype**
-
-Плюсы:
-
-- Bevy 0.19 integration;
-- f64 mode;
-- collision/CCD/joints;
-- modular ECS model.
-
-Риск: не позволять Avian architecture вытечь в `sim-core`. Делать adapter/local physics bubble.
-
-### `avian_fdm 0.2` — **reference/spike, не baseline dependency**
-
-Очень близкая идея zone-based FDM: forces/moments на zones, Avian integration, damage effects. Но current scope не покрывает наши критичные вещи: supersonic/compressibility, aeroelasticity, fuel burn, autopilot, physical detachment. Лицензия LGPL-3.0-or-later требует отдельного решения.
-
-### `nyx-space` — **validation/reference only по умолчанию**
-
-Имеет multibody dynamics, spherical harmonics, finite burns, eclipse/visibility и high-fidelity orbit propagation. Очень полезен для cross-check numerical cases и offline tooling concepts. Но current core license — AGPLv3, поэтому нельзя тихо добавить как обычную dependency, если проект не принимает AGPL.
-
-### Lightyear — **networking candidate**
-
-Под Bevy 0.19 есть server-authoritative networking, prediction, interpolation, interest management и WASM/WebTransport support. Проверить на prototype перед hard commit.
-
-### Bevy/wgpu — **render/compute adapter, не physical semantics**
-
-Используем кроссплатформенный слой Bevy/wgpu. Физический движок не знает DirectX/DXR/Vulkan/Metal. GPU acceleration для ray queries/compute — optional accelerator через adapter; canonical server path остаётся CPU/BVH. Это позволяет Linux/Vulkan, macOS/Metal, Windows backend и WebGPU клиенту использовать один simulation contract.
-
-### Bevy Tasks — **локально полезны**
-
-- `ComputeTaskPool`: frame-bound client compute;
-- `AsyncComputeTaskPool`: mesh/design compilation, preview trajectories, background client tasks.
-
-Не делать их обязательной dependency simulation core.
-
----
-
-## 3.19. SIMD / build targets
-
-x86_64 proposal:
-
-```text
-native-avx2    baseline release
-native-avx512  separate optimized release
+`GuidanceIntent` can represent manual axes, angular rate, attitude, velocity
+direction, flight path, or a trajectory plan. A `ControlDemand` contains body
+force, body moment, and propulsion demand. Aircraft and spacecraft laws may be
+selected or blended by flight condition; neither law directly rotates the
+craft. The allocator reports saturation/residuals and actuator dynamics limit
+the realized response.
+
+RCS, control surfaces, and propulsion are physical effectors. Policy may limit
+or reshape a demand, but it cannot bypass the actuator path.
+
+## 3.10. Contacts and terrain
+
+The current terrain adapter supports spherical contact/altitude boundaries,
+sampled obstacle reports, and geometric track certification for unattended
+paths. The world generator can produce rich rocky fields and client textures,
+but the authoritative contact boundary is not yet a full streamed terrain
+mesh/BVH.
+
+Wheels, structural collision topology, fracture, slosh, and debris bodies are
+future work.
+
+## 3.11. Thermal, structural, and fluid systems
+
+These are architectural requirements, not shipped simulation features yet:
+
+- thermal nodes connected by conductance/radiation edges;
+- aerodynamic, engine, and solar heating in the same thermal graph;
+- temperature-dependent material strength;
+- structural topology changes that update mass, inertia, aero, and thermal
+  connectivity;
+- fluid/electrical graphs and resource flow.
+
+Do not document them as active runtime behavior until they have state types,
+solver paths, known-case tests, regression coverage, and telemetry.
+
+## 3.12. Validation contract
+
+Current tests cover:
+
+- circular and eccentric Kepler cases;
+- velocity-Verlet energy bounds and moving-source behavior;
+- restricted three-body/Lagrange reference vectors;
+- deterministic ordered scalar/Rayon/SIMD batches;
+- gravity patch and affine propagation envelopes;
+- atmosphere layers, rotating flow, zero flow, and finite derived values;
+- aero signs, dynamic pressure, `omega × r`, stall, transonic/supersonic
+  branches, coefficient interpolation, and batch equivalence;
+- rigid-body forces, attitude, actuator response, and contact stopping;
+- on-rails cache reuse, invalidation, impact, wake, extension, and trim.
+
+Reference comparisons live in isolated workspaces:
+
+- `validation/nyx-compare` for orbital propagation diagnostics;
+- `validation/aero-compare` for JSBSim/RocketPy and related workflows.
+
+Run the core checks with:
+
+```bash
+cargo test -p thessa-sim-core
+cargo test -p thessa-flight-authority
+cargo bench -p thessa-sim-core --bench gravity
+cargo bench -p thessa-sim-core --bench affine_prop
 ```
 
-Причина отдельного binary target: LLVM видит ISA globally и может auto-vectorize/inlining без runtime target-feature boundaries.
+## 3.13. Non-goals of the current slice
 
-Hot kernels проектировать data-oriented:
-
-```text
-position_x[]
-position_y[]
-position_z[]
-velocity_x[]
-...
-```
-
-или AoSoA, если это лучше cache/locality.
-
-AVX-512 — optimization, не semantic difference.
-
----
-
-## 3.20. Simulation fidelity / rate
-
-Разные systems не обязаны работать на одной частоте.
-
-Пример baseline:
-
-| System | Typical policy |
-|---|---|
-| free orbital coast | adaptive, large steps |
-| powered vacuum flight | adaptive medium/high |
-| atmospheric 6-DoF | 20–100+ Hz equivalent + substeps |
-| active structural solve | coupled/adaptive |
-| contacts | fixed/substepped local |
-| factory | event/low-rate deterministic |
-| script VM | event-driven |
-| guidance | configurable 5–50+ Hz |
-| rendering | independent client frame rate |
-
-Warp multiplies simulated time, но fidelity переключается по error/active regime, а не по расстоянию от камеры.
-
----
-
-## 3.21. Determinism
-
-Цель — deterministic enough для authoritative server/replay, не обязательно bit-identical cross-ISA в каждом floating operation на первом prototype.
-
-Обязательные шаги:
-
-- deterministic event ordering;
-- stable IDs;
-- no hash iteration dependency;
-- explicit random seeds;
-- fixed content ephemerides;
-- canonical server result;
-- snapshot/replay regression tests.
-
-Если AVX2/AVX-512 дают небольшие float divergence, клиентский prediction обязан уметь correction. Server build выбирает один target.
-
----
-
-## 3.22. Validation suite
-
-Минимум до gameplay production:
-
-### Gravity/orbit
-
-- two-body ellipse conservation;
-- hyperbolic escape;
-- restricted three-body Lagrange equilibrium checks;
-- known J2 nodal precession;
-- sun-synchronous target case;
-- gravity-assist energy/frame sanity.
-
-### 6-DoF
-
-- torque-free rigid rotation;
-- constant off-axis force;
-- actuator reaction torque;
-- changing mass/CoM.
-
-### Aero
-
-- symmetric craft zero side force at beta=0;
-- lift/drag reference curves;
-- stall;
-- control surface sign/authority;
-- occlusion test;
-- belly-flop qualitative benchmark;
-- lifting-body/spaceplane benchmark.
-
-### Thermal
-
-- two-node conduction analytic case;
-- black-body cooling;
-- equilibrium solar/radiative case;
-- heat-shield/ablation regression.
-
-### Structure
-
-- cantilever beam reduced-order check;
-- temperature-dependent failure;
-- split into connected components conserves mass/momentum.
-
-### Performance
-
-Bench target batches:
-
-- 1k / 5k / 10k vehicle gravity states;
-- 100k / 1M aero zones;
-- thermal graphs;
-- contact active set;
-- warp stress scenarios.
+The current physics slice does not provide final planetary ephemerides, J2/Jn
+harmonics, CFD, full aeroelasticity, structural fracture, thermal propagation,
+factory/logistics simulation, or production networking. Each of those needs an
+explicit state contract, error/validation plan, and benchmark before it should
+be called implemented.

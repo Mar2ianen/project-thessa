@@ -1,0 +1,13 @@
+[package]
+name = "thessa-rcbt-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Safe optional runtime adapter over the vendored upstream libcbt"
+
+[dependencies]
+
+[build-dependencies]
+cc = "1.2"

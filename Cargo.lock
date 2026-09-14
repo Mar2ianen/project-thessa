@@ -4473,6 +4473,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "pollster"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
+
+[[package]]
 name = "portable-atomic"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5376,6 +5382,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "thessa-bevy-rcbt"
+version = "0.0.1"
+dependencies = [
+ "bevy",
+ "bevy_core_pipeline",
+ "naga",
+ "thessa-rcbt-core",
+]
+
+[[package]]
 name = "thessa-client"
 version = "0.0.1"
 dependencies = [
@@ -5383,11 +5399,13 @@ dependencies = [
  "bevy_brp_extras",
  "serde",
  "thessa-atmosphere",
+ "thessa-bevy-rcbt",
  "thessa-flight-authority",
  "thessa-flight-net",
  "thessa-graphics",
  "thessa-perf",
  "thessa-protocol",
+ "thessa-rcbt-core",
  "thessa-sim-core",
  "thessa-worldgen-rocky",
  "toml",
@@ -5436,6 +5454,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "thessa-maneuver"
+version = "0.0.1"
+dependencies = [
+ "glam",
+ "serde",
+ "thessa-sim-core",
+ "toml",
+]
+
+[[package]]
 name = "thessa-perf"
 version = "0.0.1"
 dependencies = [
@@ -5449,6 +5477,45 @@ version = "0.0.1"
 dependencies = [
  "postcard",
  "serde",
+]
+
+[[package]]
+name = "thessa-rcbt-core"
+version = "0.0.1"
+dependencies = [
+ "thessa-rcbt-ffi",
+ "thessa-rcbt-large-ffi",
+ "thessa-rcbt-ref",
+]
+
+[[package]]
+name = "thessa-rcbt-ffi"
+version = "0.0.1"
+dependencies = [
+ "cc",
+]
+
+[[package]]
+name = "thessa-rcbt-large-ffi"
+version = "0.0.1"
+dependencies = [
+ "cc",
+]
+
+[[package]]
+name = "thessa-rcbt-ref"
+version = "0.0.1"
+
+[[package]]
+name = "thessa-rcbt-wgpu"
+version = "0.0.1"
+dependencies = [
+ "naga",
+ "pollster",
+ "thessa-rcbt-core",
+ "thessa-rcbt-ffi",
+ "thessa-rcbt-large-ffi",
+ "wgpu",
 ]
 
 [[package]]
@@ -5512,6 +5579,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thessa-perf",
+ "thessa-rcbt-core",
  "toml",
 ]
 
@@ -6134,12 +6202,14 @@ dependencies = [
  "js-sys",
  "log",
  "naga",
+ "parking_lot",
  "portable-atomic",
  "profiling",
  "raw-window-handle",
  "smallvec",
  "static_assertions",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "wgpu-core",
  "wgpu-hal",
@@ -6172,6 +6242,7 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.20",
  "wgpu-core-deps-apple",
+ "wgpu-core-deps-emscripten",
  "wgpu-core-deps-wasm",
  "wgpu-core-deps-windows-linux-android",
  "wgpu-hal",
@@ -6184,6 +6255,15 @@ name = "wgpu-core-deps-apple"
 version = "29.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5e39e26c4c0e07589e67d18546cf79ff45383659fc72fca4dd293358a0347f3"
+dependencies = [
+ "wgpu-hal",
+]
+
+[[package]]
+name = "wgpu-core-deps-emscripten"
+version = "29.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01e09be551dc939498bdd5f6b2c66e55ab275dad25825267a08605a80fc9f0af"
 dependencies = [
  "wgpu-hal",
 ]

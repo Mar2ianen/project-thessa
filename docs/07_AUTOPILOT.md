@@ -1,150 +1,150 @@
-# 07 — Autopilot, guidance graphs and automation
+# 07 — Autopilot, guidance graphs, and automation
 
-## 7.1. Goal
+## Status
 
-Сохранить сильную UX-идею MechJeb: типовая сложная операция доступна как понятный high-level autopilot action. При этом убрать ограничение «каждый autopilot — отдельное окно/режим»: actions должны свободно комбинироваться в один graph и работать тем же механизмом, что industrial logistics automation.
+**Implemented prototype.** The current graph IR, server runner, QuickJS bridge,
+typed guidance, wait scheduler, and maneuver-plan execution are in
+`crates/autopilot`, `crates/autopilot-js`, `crates/flight-control`,
+`crates/flight-net`, `crates/maneuver`, and `apps/server`. The complete game
+standard library and logistics automation remain future work.
 
-Reference vocabulary: MechJeb Ascent Guidance, Maneuver Planner/Node Executor, Landing Guidance, Rendezvous/Docking Guidance, SmartASS-like attitude targeting. Это UX/reference vocabulary, не code dependency.
-
-## 7.2. Layering
-
-```text
-visual graph
-  ↓ compile/validate
-typed automation IR
-  ↓
-event-driven VM / scheduler
-  ↓
-planner + guidance laws
-  ↓
-FBW/control allocator
-  ↓
-physical actuators
-  ↓
-physics
-```
-
-Script никогда не добавляет магическую силу/момент. Даже `LandAt` в итоге выдаёт guidance targets, а control allocator управляет реальными engines/surfaces/RCS.
-
-## 7.3. Standard-library blocks
-
-### Attitude / control
-
-- `Point(direction/frame)`
-- `HoldAttitude`
-- `HoldRate`
-- `HoldAoA`
-- `HoldG`
-- `SetThrottle`
-- `Translate`
-
-### Orbital planning / execution
-
-- `TargetOrbit`
-- `Circularize`
-- `ChangePlane`
-- `PlanTransfer`
-- `ExecuteManeuver`
-- `MatchVelocity`
-- `Rendezvous`
-- `Dock`
-
-### Flight phases
-
-- `Ascent`
-- `Stage/Separate`
-- `Boostback`
-- `AtmosphericEntry`
-- `LandAt`
-- `RecoverBooster`
-
-### Logistics
-
-- `WaitForWindow`
-- `WaitForCargo`
-- `Load` / `Unload`
-- `Refuel`
-- `DepartRoute`
-- `SetAlarm`
-- `WarpRequest`
-
-## 7.4. Composition primitives
-
-Graph language requires:
-
-- `Sequence`;
-- `If/Switch`;
-- `WaitUntil/Event`;
-- `Loop`;
-- `Retry`;
-- `Fallback`;
-- `Parallel/Fork`;
-- `Join`;
-- parameterized reusable `Subgraph`;
-- explicit error/abort path.
-
-Blocks have typed ports and contracts. Examples: `VehicleId`, `Target`, `OrbitGoal`, `PadId`, `CargoFilter`, `ManeuverPlan`, `Window`.
-
-## 7.5. Staging and parallel vehicles
-
-Staging changes world topology. A block such as:
+## 7.1. Authority pipeline
 
 ```text
-Stage
+pilot input / native graph / QuickJS block
+                    ↓
+              typed graph IR
+                    ↓
+          server-owned scheduler
+                    ↓
+        planner and guidance intent
+                    ↓
+             control law/policy
+                    ↓
+             physical allocator
+                    ↓
+                actuators
+                    ↓
+                 physics
 ```
 
-may return:
+An autopilot block emits typed intent or a physical demand request. It does not
+add a hidden force, moment, velocity change, or direct craft rotation.
 
-```text
-{ parent_or_upper: VehicleId, detached: [VehicleId...] }
+## 7.2. Current graph model
+
+`AutopilotGraph` has typed nodes and ports. The validator checks port types,
+required inputs, controller ownership conflicts, bounded names, and cycles that
+do not cross a wait boundary. The runner supports stable sequence order,
+parallel branches, join behavior, event/time waits, and explicit failure or
+abort outcomes.
+
+The current wire layer can submit validated graph IR to the authoritative
+server. The server executes it against the same guidance/control path as manual
+input and wakes waits from `SimTime` or named domain events.
+
+## 7.3. Typed guidance
+
+`GuidanceIntent` currently represents:
+
+- manual pilot axes;
+- angular-rate targets;
+- attitude targets;
+- velocity-direction targets in inertial, surface, flight-path, or target
+  frames;
+- flight-path targets;
+- trajectory-plan references.
+
+The flight-control layer resolves guidance through aircraft, spacecraft, or
+direct control laws, applies flight policy, allocates force/moment/propulsion
+to real effectors, and applies actuator limits.
+
+## 7.4. Current standard-library surface
+
+The current server/QuickJS bridge includes typed constructors for direction and
+target-frame guidance, translation guidance, flight-path targets, maneuver
+plans, physical burn commands, landing sites, impact sites, simulation-time
+sleep, named events, and plan guards. Pure plans cannot silently contain live
+event waits; the scheduler owns those waits.
+
+The following names remain the intended UX vocabulary and are not all shipped
+as complete blocks yet:
+
+- attitude: `Point`, `HoldAttitude`, `HoldRate`, `HoldAoA`, `HoldG`, `Translate`;
+- orbital: `TargetOrbit`, `Circularize`, `ChangePlane`, `PlanTransfer`,
+  `ExecuteManeuver`, `MatchVelocity`, `Rendezvous`, `Dock`;
+- flight: `Ascent`, `Stage/Separate`, `Boostback`, `AtmosphericEntry`,
+  `LandAt`, `RecoverBooster`;
+- logistics: `WaitForWindow`, `WaitForCargo`, `Load`, `Unload`, `Refuel`,
+  `DepartRoute`, `SetAlarm`, `WarpRequest`.
+
+## 7.5. Maneuver planning boundary
+
+`thessa-maneuver` is intentionally below the graph VM and above low-level
+control. It provides typed `ManeuverPlan` values and helpers for circularization,
+Hohmann transfers, Lambert rendezvous, plane changes, velocity matching, and
+candidate search.
+
+The planner uses a central two-body model for cheap operations/search. It is not
+authoritative. Candidate plans are revalidated through the exact multi-body
+field, and execution produces finite-time guidance/propulsion demands through
+the authority rather than teleporting velocity.
+
+## 7.6. Event-driven waits
+
+Sleeping work is parked in the scheduler rather than polled each physics tick.
+Wake sources include:
+
+- an exact `SimTime` deadline;
+- a named domain event;
+- a composite wait condition;
+- plan guard or guidance completion/failure;
+- future cargo, staging, docking, or contact events.
+
+The scheduler remembers events needed by composite waits and preserves event
+order. A future graph compiler must reject unbounded busy loops and provide an
+explicit abort path.
+
+## 7.7. Staging and ownership
+
+Staging is a topology-changing operation. The intended graph result is a set of
+new `VehicleId` branches, each with an explicit controller owner. A booster
+recovery branch and an upper-stage transfer branch must be independently
+schedulable. The current graph validator already prevents ambiguous controller
+ownership; complete physical separation and multi-body vehicle topology are
+future work.
+
+## 7.8. JavaScript boundary
+
+QuickJS is a high-level producer of typed values. The host exposes deterministic
+constructors and denies ambient capabilities. It receives no mutable authority,
+rigid-body handle, actuator reference, filesystem, network, or wall-clock
+capability.
+
+Source size, execution time, continuation, and wait limits are enforced. The
+server owns the simulation-time scheduler; QuickJS continuations are parked and
+resumed by the host.
+
+## 7.9. User-facing levels
+
+One runtime should support:
+
+1. presets such as `Launch to orbit` or `Land at pad`;
+2. visual graphs built from standard blocks;
+3. advanced typed graphs and low-level sensors/actuators.
+
+The implementation is complete enough for the graph/plan vertical slice, not
+for the final editor UX or logistics library.
+
+## 7.10. Validation
+
+Current tests cover graph type checking, ownership, wait boundaries, sequence/
+parallel execution, event memory, scheduler wake/repark, script limits,
+guidance parsing, plan validation, stale-plan aborts, wire round trips, and
+server execution through the authority.
+
+```bash
+cargo test -p thessa-autopilot
+cargo test -p thessa-autopilot-js
+cargo test -p thessa-server
 ```
-
-The graph can immediately fork:
-
-```text
-Ascent
-→ Stage
-  ├ booster -> RecoverBooster(PadA)
-  └ upper   -> TargetOrbit(120 km)
-              -> WaitForWindow(Pelagos)
-              -> PlanTransfer
-              -> ExecuteManeuver
-```
-
-This is required for physical reusable launch cadence: booster recovery is not a background inventory operation.
-
-## 7.6. Event-driven execution
-
-Do not poll every graph every physics tick. `WaitUntil` should compile to the cheapest valid wake source:
-
-- exact `SimTime`;
-- scheduled orbital event;
-- threshold watcher with known next-check policy;
-- cargo/inventory event;
-- contact/staging/docking event;
-- guidance completion/failure event.
-
-High-rate controller loops are separate guidance/control systems activated only while needed.
-
-## 7.7. User-facing complexity
-
-Three levels share one runtime:
-
-1. **preset:** choose `Launch to orbit` / `Land at pad`;
-2. **graph:** compose standard blocks;
-3. **low-level:** math/sensors/controllers/direct actuator commands.
-
-A normal player should automate a reusable booster without writing PID math. An advanced player must be able to replace high-level blocks with their own subgraphs/controllers.
-
-## 7.8. Validation
-
-Before run, graph compiler checks where possible:
-
-- type compatibility;
-- missing target/vehicle handles;
-- impossible obvious resource requirements;
-- branch ownership conflicts (two controllers commanding the same actuator set);
-- cycles without wait/yield where relevant;
-- unavailable technology/sensors.
-
-Runtime failures remain possible because physics is real: insufficient thrust, actuator saturation, thermal damage, missed window, collision, etc.

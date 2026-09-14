@@ -2,6 +2,81 @@
 //! Tiles cache the field; they never define the terrain or own its random seed.
 use crate::{appearance::surface_appearance, field::PlanetField};
 use serde::{Deserialize, Serialize};
+use thessa_rcbt_core::{HeightPage, HeightPageError, Node};
+
+/// The CBT domain adapter reserves three binary path bits for a cube face.
+/// Six of the eight depth-three leaves are used by faces 0..=5; the two
+/// remaining leaves are intentionally inert. A quadtree level appends an
+/// `(x_bit, y_bit)` Morton pair, so a tile at level `L` maps to CBT depth
+/// `3 + 2L` without a hash or a camera-dependent identifier.
+pub const CBT_FACE_DEPTH: u8 = 3;
+
+pub fn cbt_node_for_tile(key: TileKey) -> Option<Node> {
+    if key.face >= 6 || CBT_FACE_DEPTH.checked_add(key.level.checked_mul(2)?)? > 58 {
+        return None;
+    }
+    let mut id = (1_u64 << CBT_FACE_DEPTH) | key.face as u64;
+    for bit in (0..key.level).rev() {
+        id = (id << 1) | ((key.x as u64 >> bit) & 1);
+        id = (id << 1) | ((key.y as u64 >> bit) & 1);
+    }
+    Node::new(id, CBT_FACE_DEPTH + key.level * 2).ok()
+}
+
+/// Return the cube tile represented by an even-depth CBT leaf. Odd-depth
+/// leaves are valid binary topology but are only half-way through a quadtree
+/// split and therefore have no complete tile address.
+pub fn tile_for_cbt_node(node: Node) -> Option<TileKey> {
+    if node.depth() < CBT_FACE_DEPTH || !(node.depth() - CBT_FACE_DEPTH).is_multiple_of(2) {
+        return None;
+    }
+    let tile_level = (node.depth() - CBT_FACE_DEPTH) / 2;
+    let path_bits = node.depth() - CBT_FACE_DEPTH;
+    let path_mask = (1_u64 << path_bits).saturating_sub(1);
+    let face = ((node.id() - (1_u64 << node.depth())) >> path_bits) as u8;
+    if face >= 6 {
+        return None;
+    }
+    let morton = (node.id() - (1_u64 << node.depth())) & path_mask;
+    let mut x = 0_u32;
+    let mut y = 0_u32;
+    for bit in 0..tile_level {
+        let shift = (tile_level - bit - 1) * 2;
+        x = (x << 1) | ((morton >> (shift + 1)) & 1) as u32;
+        y = (y << 1) | ((morton >> shift) & 1) as u32;
+    }
+    Some(TileKey {
+        face,
+        level: tile_level,
+        x,
+        y,
+    })
+}
+
+/// Bake a compact non-negative surface-height page from the canonical field.
+/// This matches the visible tile path, which clamps below-datum samples to
+/// the spherical datum. The page has no address or renderer dependency; the
+/// caller owns the `TileKey` next to the payload.
+pub fn bake_height_page(
+    field: &PlanetField,
+    key: TileKey,
+    grid_size: u32,
+    max_error_m: f64,
+) -> Result<HeightPage, HeightPageError> {
+    let cells = grid_size.saturating_sub(1).max(1) as usize;
+    let wavelength = (key.span_m(field.params.radius_m) / cells as f64).max(32.0);
+    let grid = grid_size as usize;
+    let samples = (0..grid)
+        .flat_map(|y| {
+            (0..grid).map(move |x| {
+                let u = x as f64 / cells as f64;
+                let v = y as f64 / cells as f64;
+                field.height_m(key.direction(u, v), wavelength).max(0.0)
+            })
+        })
+        .collect::<Vec<_>>();
+    HeightPage::bake(&samples, grid_size, max_error_m)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TileKey {
@@ -219,6 +294,7 @@ pub fn select_tiles_with_height_and_frustum(
 pub struct TerrainTile {
     pub key: TileKey,
     pub anchor_m: [f64; 3],
+    pub height_page: HeightPage,
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub colors: Vec<[f32; 4]>,
@@ -255,9 +331,21 @@ pub fn build_tile(field: &PlanetField, key: TileKey, cells: usize) -> TerrainTil
             apron.push(dir.map(|v| v * (radius + h)));
         }
     }
+    let mut height_samples = Vec::with_capacity((cells + 1) * (cells + 1));
+    for y in 0..=cells {
+        for x in 0..=cells {
+            let pos = apron[(y + 1) * stride + x + 1];
+            height_samples.push(
+                (pos.iter().map(|value| value * value).sum::<f64>().sqrt() - radius).max(0.0),
+            );
+        }
+    }
+    let height_page = HeightPage::bake(&height_samples, (cells + 1) as u32, 0.5)
+        .expect("tile height page must fit its error budget");
     let mut tile = TerrainTile {
         key,
         anchor_m: anchor,
+        height_page,
         // Exact counts: no reallocation churn on the worker pool.
         positions: Vec::with_capacity((cells + 1) * (cells + 1) + 4 * cells),
         normals: Vec::with_capacity((cells + 1) * (cells + 1) + 4 * cells),
@@ -369,6 +457,28 @@ mod tests {
             near,
             select_tiles([3_201_000.0, 0.0, 0.0], 3_200_000.0, 17, 384)
         );
+    }
+
+    #[test]
+    fn cbt_morton_mapping_round_trips_cube_tiles() {
+        for key in [
+            TileKey::root(0),
+            TileKey {
+                face: 5,
+                level: 1,
+                x: 1,
+                y: 0,
+            },
+            TileKey {
+                face: 2,
+                level: 7,
+                x: 93,
+                y: 41,
+            },
+        ] {
+            let node = cbt_node_for_tile(key).expect("valid cube tile CBT address");
+            assert_eq!(tile_for_cbt_node(node), Some(key));
+        }
     }
 }
 
@@ -667,6 +777,29 @@ mod surface_regressions {
                 .any(|p| p != &[128, 128, 255, 255]),
             "coarse tile lost its relief normals"
         );
+    }
+
+    #[test]
+    fn gpu_height_page_matches_the_canonical_tile_domain() {
+        let field = field();
+        let key = TileKey {
+            face: 4,
+            level: 12,
+            x: 1777,
+            y: 2041,
+        };
+        let page = bake_height_page(&field, key, 33, 0.5).expect("page quantization budget");
+        assert_eq!(page.grid_size(), 33);
+        assert!(page.max_residual_error_m() <= 0.5);
+        for (u, v) in [(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)] {
+            let expected = field
+                .height_m(
+                    key.direction(u, v),
+                    key.span_m(field.params.radius_m) / 32.0,
+                )
+                .max(0.0);
+            assert!((f64::from(page.sample(u as f32, v as f32)) - expected).abs() <= 0.5);
+        }
     }
     #[test]
     fn priority_refinement_covers_the_camera_instead_of_a_distant_face() {

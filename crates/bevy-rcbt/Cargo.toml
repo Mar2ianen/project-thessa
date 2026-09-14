@@ -1,0 +1,20 @@
+[package]
+name = "thessa-bevy-rcbt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Thin Bevy client adapter for the backend-neutral RCBT runtime"
+
+[features]
+default = []
+render = ["bevy/bevy_render", "dep:bevy_core_pipeline"]
+
+[dependencies]
+bevy = { version = "0.19.1", default-features = false }
+bevy_core_pipeline = { version = "0.19.1", default-features = false, optional = true }
+thessa-rcbt-core = { path = "../rcbt-core" }
+
+[dev-dependencies]
+naga = { version = "29.0.4", features = ["wgsl-in"] }

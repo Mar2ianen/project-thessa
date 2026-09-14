@@ -1,132 +1,99 @@
 # Project Thessa
 
-> Factory, logistics and aerospace engineering tied together by one physical world.
+> Factory, logistics, and aerospace engineering in one physical world.
 
 [![CI](https://github.com/Mar2ianen/project-thessa/actions/workflows/ci.yml/badge.svg)](https://github.com/Mar2ianen/project-thessa/actions/workflows/ci.yml)
 ![Rust](https://img.shields.io/badge/Rust-1.95%2B-000000?logo=rust&logoColor=white)
 ![Engine license](https://img.shields.io/badge/engine-MIT-blue)
 ![Game license](https://img.shields.io/badge/game-GPL--3.0--or--later-blue)
 
-**Project Thessa** — кроссплатформенный factory / aerospace sandbox на Rust.
-Игрок начинает с промышленной инфраструктуры на спутнике газового гиганта,
-строит локальную логистику, проектирует транспорт, выходит на орбиту и
-постепенно связывает производством всю систему.
+Project Thessa is a cross-platform Rust prototype for a factory and aerospace
+sandbox. The intended game loop connects production, surface logistics, vehicle
+design, atmospheric flight, orbital mechanics, and interplanetary logistics.
 
-Главная идея: **орбитальная механика — часть логистики, а не отдельная
-мини-игра**. Масса, объём, время перелёта, топливо, launch cadence, transfer
-windows, atmosphere и управление аппаратом должны образовывать одну систему.
+The repository is currently a **pre-alpha engineering prototype**. Internal APIs,
+data formats, and design values may change before `0.1.0`; no compatibility
+promise is made for them.
 
-Проект находится в **pre-alpha / engineering prototype**. Форматы данных,
-internal API и design numbers до `0.1.0` могут меняться без compatibility
-promise.
+## Current implementation
 
----
+The checked-in vertical slice currently contains:
 
-## Что отличает Thessa
+- `thessa-sim-core`: deterministic baked ephemerides, full multi-body
+  test-particle gravity, atmosphere, panel aerodynamics, rigid-body flight,
+  on-rails coast caches, cohort gravity patches, and piecewise analytic affine
+  propagation;
+- `thessa-flight-control` and `thessa-flight-authority`: typed guidance,
+  aircraft/spacecraft/direct control laws, policy limits, physical allocation,
+  actuator dynamics, and the authoritative flight stepper;
+- `thessa-autopilot` and `thessa-autopilot-js`: validated typed graph IR,
+  sequence/parallel/wait execution, simulation-time scheduling, sandboxed
+  QuickJS blocks, and typed trajectory-plan execution;
+- `thessa-maneuver`: two-body planning helpers (circularization, Hohmann,
+  Lambert, plane change, velocity matching) plus candidate search. Planning
+  approximations are revalidated through the exact field before execution;
+- `thessa-flight-net` and `thessa-protocol`: versioned framed input/snapshot
+  transport with strict validation;
+- `apps/server`: headless authoritative simulation over stdio or TCP;
+- `apps/client`: Bevy 0.19 map, pilot HUD, atmospheric rendering, terrain
+  streaming, and an embedded authoritative-server path;
+- `thessa-worldgen-rocky`: deterministic rocky-world fields, geology, climate,
+  landmarks, LOD, obstacle reports, and client texture export;
+- `thessa-rcbt-core`, `thessa-rcbt-ffi`, `thessa-bevy-rcbt`, and
+  `thessa-rcbt-large-ffi`, `thessa-bevy-rcbt`, and `thessa-rcbt-wgpu`:
+  backend-neutral adaptive terrain topology, a fast pure Rust implementation,
+  optional verified upstream `libcbt` and `large_cbt` OCBT implementations,
+  universal Bevy frame scheduling, compact height pages, and a portable GPU
+  adapter. The client currently keeps the CPU terrain renderer as the visual
+  fallback while CBT topology is exercised against live terrain selection;
+- isolated validation harnesses for orbital and aerodynamic reference checks.
 
-- **Одна физика вместо SOI-магии.** Корабли одновременно чувствуют гравитацию
-  всех движущихся источников; sphere of influence остаётся UI/optimization
-  concept, а не законом мира.
-- **Factory + aerospace.** Интересный throughput находится не в бесконечном
-  апгрейде conveyor tier, а в mass/volume, loading, launch vehicles, времени
-  перелёта, окнах и инфраструктуре.
-- **Aircraft и spaceplanes — first-class.** Атмосфера, AoA, Mach, q,
-  control surfaces и 6-DoF dynamics находятся в том же simulation kernel,
-  что и orbital flight.
-- **Automation без отдельной “магической” физики.** Будущий autopilot,
-  planner и scripting должны управлять теми же actuators и trajectory model,
-  которыми пользуется игрок.
-- **Linux-first, но не Linux-only.** Gameplay/simulation API не знает о
-  DirectX; client построен на Bevy/wgpu. CI собирает и тестирует workspace на
-  Linux, macOS и Windows.
-- **Reference solvers — только validation.** Nyx/ANISE, JSBSim, RocketPy,
-  AVL, VSPAERO, SU2 и OpenRocket не становятся runtime dependencies.
+Factory gameplay, structural fracture, thermal networks, save persistence, and
+production multiplayer are still design/future work. The design documents keep
+these areas explicitly marked as planned rather than presenting them as shipped.
 
----
+## Physical and architectural invariants
 
-## Текущий vertical slice
+- There is one gravity model: physical sources contribute simultaneously;
+  sphere-of-influence boundaries are UI or optimization hints, never physics.
+- The server is authoritative. Clients send commands and consume snapshots;
+  they do not send arbitrary world state.
+- `sim-core` is independent of Bevy, Tokio, networking, and renderer APIs.
+- Authoritative spatial state uses `f64` SI values and `SimTime` rather than
+  wall-clock time.
+- Guidance produces physical demands. Control laws, policies, allocators, and
+  actuators realize those demands; no hidden yaw/stability/drag multipliers or
+  direct craft rotation are used to fake control authority.
+- CPU geometry/BVH queries are the canonical server path. Hardware ray tracing
+  may accelerate client work but is never the only authoritative path.
+- Engine and reusable tooling crates are MIT; game-specific crates and apps are
+  GPL-3.0-or-later. See [`LICENSING.md`](LICENSING.md).
 
-| Подсистема | Что уже есть |
-| --- | --- |
-| Celestial runtime | deterministic baked ephemerides, multi-body test-particle gravity, Lagrange/reference validation |
-| Integrators | adaptive Dormand–Prince 5(4), velocity-Verlet, deterministic rigid-body stepping |
-| Aerodynamics | O(panels) analytic model, local flow, stall, transonic/supersonic corrections, dynamic damping, coefficient tables |
-| Atmosphere | deterministic `T/p/rho`, viscosity, speed of sound, rotating-atmosphere boundary |
-| Vehicle runtime | serializable geometry, mass/inertia, control surfaces, `vehicle-baker` |
-| Pilot mode | Bevy PFD/navball, live X-15 test adapter, throttle/SAS/RCS/manual controls, flight tracing |
-| Validation | Nyx/ANISE gravity/orbit harness, RocketPy apples-to-apples fin checks, JSBSim aircraft proxy checks |
-
-### Последние numerical checks
-
-| Сценарий | Результат |
-| --- | ---: |
-| L1–L3 circular restricted three-body residual | `8.8e-16–1.2e-18` |
-| L4/L5 drift за 5 периодов | `2.8–3.0 mm`, около `9e-7 m/s` |
-| 8 burns против Nyx DP7/8 | `0.52 m`, `5.49e-4 m/s` |
-| Design system | 24 тела, 22 gravity sources |
-| RocketPy fin-set `CL_alpha`, `M=0.95` | error `0.000002%` |
-| RocketPy fin-set center of pressure | error `0.000%` |
-| X-15-like 5 s proxy vs JSBSim | Mach `0.246%`, altitude `0.905%` |
-
-X-15 comparison намеренно остаётся **proxy validation**, а не заявлением о
-reference-grade X-15 fidelity: bundled JSBSim aircraft содержит полный корпус,
-хвост, trim/control logic и табличные коэффициенты, которых нет у компактного
-owned geometry proxy.
-
----
-
-## Архитектура
+## Repository layout
 
 ```text
-                      data/system.toml
-                             │
-                             ▼
-                     thessa-system-baker
-                             │
-                             ▼
-                   data/system.baked.json
-                             │
-                             ▼
-┌────────────────────── thessa-sim-core ──────────────────────┐
-│                                                             │
-│  baked ephemerides ──► multi-body gravity                   │
-│          │                       │                           │
-│          └──────────────┬────────┘                           │
-│                         ▼                                    │
-│                  vehicle dynamics                            │
-│             ┌───────────┼───────────┐                        │
-│             ▼           ▼           ▼                        │
-│        atmosphere      aero      propulsion                  │
-│             └───────────┴───────────┘                        │
-│                         │                                    │
-│                         ▼                                    │
-│                 authoritative f64/SI                         │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-               ┌──────────┴──────────┐
-               ▼                     ▼
-         apps/client             apps/server
-         Bevy / wgpu          authoritative shell
+apps/client/             GPL Bevy client
+apps/server/             GPL authoritative server shell
+crates/sim-core/         MIT numerical and physics kernel
+crates/simd/             MIT optional numeric kernels
+crates/flight-*          GPL flight authority, control, and transport
+crates/autopilot*        GPL graph and JavaScript automation
+crates/maneuver/         MIT trajectory planning primitives
+crates/protocol/         MIT shared wire framing
+crates/graphics/         MIT renderer-independent graphics settings
+crates/atmosphere/       MIT shared visual atmosphere optics
+crates/perf/             MIT performance capture model
+crates/rcbt-*            MIT adaptive terrain topology and backend adapters
+tools/                   MIT offline bakers and world generation
+data/                    system, vehicle, aero, material, and worldgen inputs
+docs/                    current architecture, design, validation, and ADRs
+validation/              isolated external-reference workspaces
+logs/                    intentionally preserved diagnostic captures
 ```
 
-### Жёсткие границы
+## Build and test
 
-- `crates/sim-core` не зависит от Bevy/Tokio и хранит authoritative state в
-  `f64` / SI.
-- `Transform` и UI telemetry не являются источником physics state.
-- Runtime не вызывает CFD/astrodynamics reference solvers.
-- Engine/tooling crates — MIT; game-specific applications — GPL-3.0-or-later.
-- GPU-specific interfaces не протекают в gameplay/domain API.
-
-Подробнее: [`docs/03_PHYSICS_ENGINE.md`](docs/03_PHYSICS_ENGINE.md),
-[`docs/04_RUNTIME_ARCHITECTURE.md`](docs/04_RUNTIME_ARCHITECTURE.md) и
-[`LICENSING.md`](LICENSING.md).
-
----
-
-## Быстрый старт
-
-Требуется Rust `1.95+`.
+Rust `1.95+` is required by the workspace.
 
 ```bash
 cargo fmt --all -- --check
@@ -135,7 +102,7 @@ cargo test --workspace
 cargo test -p thessa-sim-core --release
 ```
 
-Запуск baker-ов:
+Build the checked-in system and vehicle descriptors:
 
 ```bash
 cargo run -p thessa-system-baker -- \
@@ -147,58 +114,57 @@ cargo run -p thessa-vehicle-baker -- \
   --output /tmp/example_aircraft.baked.json
 ```
 
-Запуск клиента:
+Run the client:
 
 ```bash
 cargo run -p thessa-client
 ```
 
-### Pilot controls
+The client normally starts an embedded authoritative server process. Use
+`--local` only when you specifically need the legacy in-process stepping path.
+The headless server also supports stdio and TCP transports; run
+`cargo run -p thessa-server -- --help` for the current CLI.
 
-| Клавиша | Действие |
+## Pilot controls
+
+| Key | Action |
 | --- | --- |
-| `M` | Map ↔ Pilot |
-| `W/S` | нос вниз / вверх |
-| `A/D` | yaw влево / вправо |
-| `Q/E` | roll влево / вправо |
-| `Caps Lock` | точное управление (25% команды) |
-| `Shift/Ctrl` | throttle up/down |
+| `M` | Map / Pilot |
+| `W/S` | pitch down / up |
+| `A/D` | yaw left / right |
+| `Q/E` | roll left / right |
+| `Caps Lock` | precision control, 25% input |
+| `Shift/Ctrl` | throttle up / down |
 | `Z` / `X` | full throttle / cutoff |
-| `Space` | engine on/off |
-| `T` / hold `F` | переключить SAS / временно инвертировать SAS |
-| `R` / `G` | RCS / gear state |
-| `V` | свободная / следящая камера |
-| `` ` `` | сброс камеры |
-| `Escape` / `F8` / `Pause` | пауза |
-| `F1` | все подсказки и схема интерфейса |
-| `F2` | скрыть / показать интерфейс |
-| `F3` | дополнительная телеметрия |
-| RMB / MMB / wheel | свободное вращение / pan / zoom |
+| `Space` | engine on / off |
+| `T` / hold `F` | toggle / invert SAS |
+| `R` / `G` | RCS / landing gear |
+| `V` | free / follow camera |
+| `` ` `` | reset camera |
+| `Escape` / `F8` / `Pause` | pause |
+| `F1` | controls and HUD legend |
+| `F2` | hide / show UI |
+| `F3` | extra telemetry |
+| RMB / MMB / wheel | orbit / pan / zoom |
 
-Режим управления выбирается кнопкой справа сверху. Клик по скорости на навболе
-переключает speed frame; клик по высотомеру — datum/AGL. SAS, RCS, шасси,
-двигатель, камера, карта и пауза имеют кнопки; зелёный цвет означает включённое
-состояние. Дополнительные данные скрыты по умолчанию.
+The pilot interface contract is documented in
+[`docs/10_PILOT_INTERFACE.md`](docs/10_PILOT_INTERFACE.md).
 
-Pilot/PFD contract: [`docs/10_PILOT_INTERFACE.md`](docs/10_PILOT_INTERFACE.md).
+## Validation and benchmarks
 
----
-
-## Validation и benchmarks
-
-Gravity/orbit reference harness:
+Orbital reference harness:
 
 ```bash
 cargo run --manifest-path validation/nyx-compare/Cargo.toml --release
 ```
 
-Aero comparison harness без обязательных external packages:
+Aerodynamic comparison without external packages:
 
 ```bash
 cargo run --manifest-path validation/aero-compare/Cargo.toml --release
 ```
 
-Для локального JSBSim/RocketPy comparison:
+Optional local JSBSim/RocketPy comparison:
 
 ```bash
 python -m venv .venv-aero
@@ -209,102 +175,73 @@ THESSA_AERO_PYTHON=.venv-aero/bin/python \
   --require-external
 ```
 
-Benchmarks:
+Selected benchmarks:
 
 ```bash
 cargo bench -p thessa-sim-core --bench gravity
+cargo bench -p thessa-sim-core --bench affine_prop
 cargo bench -p thessa-sim-core --bench aero
 cargo bench -p thessa-sim-core --bench flight
+cargo bench -p thessa-maneuver --bench porkchop
 ```
 
-CI выполняет formatting/Clippy, cross-platform build/tests, release sim-core
-checks, benchmark compilation и isolated reference validation.
+The CI workflow runs formatting, Clippy, cross-platform builds/tests, release
+simulation checks, benchmark compilation, and isolated reference validation.
 
----
+## Documentation map
 
-## Структура репозитория
+Start here:
 
-```text
-apps/client/             GPL Bevy client
-apps/server/             GPL authoritative server shell
-crates/sim-core/         MIT numerical/physics kernel
-crates/protocol/         MIT shared protocol boundary
-tools/system-baker/      MIT system TOML → baked JSON
-tools/vehicle-baker/     MIT vehicle TOML → baked JSON
-data/                    system, resources and vehicle design data
-docs/                    design, physics, runtime, pilot and aero docs
-validation/nyx-compare/  isolated astrodynamics reference workspace
-validation/aero-compare/ isolated aero reference workspace
-logs/flight-traces/      intentionally preserved diagnostic captures
-```
+1. [`docs/36_DOCUMENTATION_AUDIT_2026_09_14.md`](docs/36_DOCUMENTATION_AUDIT_2026_09_14.md)
+   — implementation status and known documentation boundaries.
+2. [`docs/37_CBT_INTEGRATION_STATUS_2026_09_14.md`](docs/37_CBT_INTEGRATION_STATUS_2026_09_14.md)
+   — current CBT workspace and client integration status.
+3. [`docs/03_PHYSICS_ENGINE.md`](docs/03_PHYSICS_ENGINE.md) — physics contracts
+   and implemented numerical paths.
+4. [`docs/04_RUNTIME_ARCHITECTURE.md`](docs/04_RUNTIME_ARCHITECTURE.md) — current
+   process, crate, threading, and transport boundaries.
+5. [`docs/07_AUTOPILOT.md`](docs/07_AUTOPILOT.md) — current graph and scripting
+   layer plus future standard-library work.
+6. [`docs/08_NUMERICAL_VERTICAL_SLICE.md`](docs/08_NUMERICAL_VERTICAL_SLICE.md)
+   — numerical validation and known limits.
+7. [`docs/10_PILOT_INTERFACE.md`](docs/10_PILOT_INTERFACE.md) — pilot HUD and
+   control contract.
+8. [`docs/11_AERODYNAMICS.md`](docs/11_AERODYNAMICS.md) — aero model and
+   reference matrix.
+9. [`docs/21_TERRAIN_STREAMING_THROUGHPUT.md`](docs/21_TERRAIN_STREAMING_THROUGHPUT.md)
+   — current terrain streaming and CBT boundary.
+10. [`docs/22_RCBT_GPU_TERRAIN.md`](docs/22_RCBT_GPU_TERRAIN.md) — CBT GPU
+    boundary and replacement gates.
+11. [`docs/05_ROADMAP.md`](docs/05_ROADMAP.md) — dependency-ordered future work.
+12. [`CHANGELOG.md`](CHANGELOG.md) — notable changes.
 
-### Документы, с которых стоит начать
+ADRs live in [`docs/adr/`](docs/adr/). Design-only documents are labelled as
+vision, proposal, or future work; implemented behavior is described in the
+current implementation documents and source-level API comments.
 
-1. [`docs/01_CELESTIAL_SYSTEM.md`](docs/01_CELESTIAL_SYSTEM.md) — система и стартовый мир.
-2. [`docs/03_PHYSICS_ENGINE.md`](docs/03_PHYSICS_ENGINE.md) — physics contracts.
-3. [`docs/04_RUNTIME_ARCHITECTURE.md`](docs/04_RUNTIME_ARCHITECTURE.md) — runtime boundaries.
-4. [`docs/05_ROADMAP.md`](docs/05_ROADMAP.md) — dependency-ordered roadmap.
-5. [`docs/07_AUTOPILOT.md`](docs/07_AUTOPILOT.md) — composable automation/autopilot direction.
-6. [`docs/08_NUMERICAL_VERTICAL_SLICE.md`](docs/08_NUMERICAL_VERTICAL_SLICE.md) — current numerical slice.
-7. [`docs/10_PILOT_INTERFACE.md`](docs/10_PILOT_INTERFACE.md) — PFD/navball/control contract.
-8. [`docs/11_AERODYNAMICS.md`](docs/11_AERODYNAMICS.md) — aero fidelity tiers and validation.
-9. [`CHANGELOG.md`](CHANGELOG.md) — notable changes.
+## Rocky world generator
 
----
-
-## Roadmap
-
-```text
-M0  numerical kernel
-      ↓
-M1  controllable vehicle / propulsion / contact
-      ↓
-M2  aero + spaceplanes + thermal/structural systems
-      ↓
-M3  factory + local logistics
-      ↓
-M4  orbital/intermoon logistics + automation
-      ↓
-M5  server-authoritative multiplayer and fleet operations
-```
-
-Приоритет — не количество контента, а доказательство одного цельного loop:
-
-```text
-factory → logistics → vehicle design → flight → orbital logistics → factory
-```
-
----
-
-## Лицензирование
-
-- reusable engine/tooling — [MIT](LICENSES/MIT.txt);
-- game applications и game-specific code —
-  [GPL-3.0-or-later](LICENSES/GPL-3.0-or-later.txt);
-- assets, музыка, fonts и external validation data лицензируются отдельно.
-
-Перед добавлением новой dependency см. [`LICENSING.md`](LICENSING.md).
-AGPL/LGPL code не должен случайно протекать в MIT runtime boundary.
-
-## Участие
-
-Перед изменениями simulation code прочитай [`AGENTS.md`](AGENTS.md) и
-[`CONTRIBUTING.md`](CONTRIBUTING.md). Для physics changes желательно добавлять
-не только unit test, но и инвариант/reference vector, который объясняет,
-**какую физическую ошибку этот тест не даёт вернуть**.
-
-### Rocky world generator
-
-The `dev/worldgen-rocky-tool` branch is integrated into this checkout.
-`thessa-worldgen-rocky` builds with the workspace, and its 16384×8192 Thessa v2
-texture is shared by the orbital map and flight view. Fetch LFS assets after
-cloning (`git lfs pull`). The field generator remains an offline tool; the
-current runtime surface mesh/contact boundary is still spherical.
+`thessa-worldgen-rocky` is part of the workspace. It generates deterministic
+rocky-world fields and exports client textures; the current runtime contact
+boundary remains spherical.
 
 ```bash
-cargo run -p thessa-worldgen-rocky -- check --manifest data/worldgen/thessa_demo.toml
-cargo run --release -p thessa-worldgen-rocky -- export-client-texture --recipe data/worldgen/worldgen_recipe.toml --body-file data/worldgen/thessa_v02.toml --out /tmp/thessa-preview.png --width 2048
+cargo run -p thessa-worldgen-rocky -- \
+  check --manifest data/worldgen/thessa_demo.toml
+
+cargo run --release -p thessa-worldgen-rocky -- \
+  export-client-texture \
+  --recipe data/worldgen/worldgen_recipe.toml \
+  --body-file data/worldgen/thessa_v02.toml \
+  --out /tmp/thessa-preview.png --width 2048
 ```
 
-Flight instruments form a compact bottom dock. The SVG icon sources and their
-4x PNG exports live in `assets/ui/flight/`; F1 includes their illustrated legend.
+Flight instrument SVG sources and their 4x PNG exports are in
+`assets/ui/flight/`; F1 includes their illustrated legend.
+
+## Contributing
+
+Read [`AGENTS.md`](AGENTS.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md) before
+changing simulation code. Physics changes should include a known-case test,
+an error envelope against a decision-relevant scale, and a benchmark when the
+change affects a hot path.

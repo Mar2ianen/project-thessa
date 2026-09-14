@@ -156,6 +156,13 @@ fn main() {
         .add_plugins(PilotHudPlugin)
         .add_plugins(PerfMonitorPlugin)
         .add_plugins(AtmospherePlugin)
+        .add_plugins(thessa_bevy_rcbt::CbtPlugin {
+            // The terrain adapter reserves three binary levels for the six
+            // cube faces; each quadtree level then consumes two Morton bits.
+            max_depth: 37,
+            initial_depth: 3,
+            ..default()
+        })
         .add_plugins(terrain::TerrainPlugin)
         .add_plugins(water::WaterPlugin)
         .add_plugins(BrpExtrasPlugin::default())

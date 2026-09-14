@@ -1,0 +1,14 @@
+Repository: https://github.com/AnisB/large_cbt
+Revision: 7351e6fc603b9b2c2ab4da399b13a9ab0f327398
+Reference: main HEAD resolved 2026-09-14
+License: public-domain status supplied by the project owner; preserve this
+         provenance with the vendored source.
+
+Vendored CPU OCBT layout sources:
+- third_party/large_cbt/cbt.h
+- third_party/large_cbt/ocbt_generic.h
+- third_party/large_cbt/ocbt_{128k,256k,512k,1m}.{h,cpp}
+
+The original repository also contains a DirectX 12 demo and HLSL shaders.
+Those are not copied into the engine boundary. Their GPU memory-pool and
+indirect-draw algorithm is being reimplemented behind wgpu/WGSL contracts.

@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/sim-core",
     "crates/simd",
+    "crates/maneuver",
     "crates/protocol",
     "crates/perf",
     "crates/graphics",
@@ -12,6 +13,12 @@ members = [
     "crates/autopilot-js",
     "crates/flight-authority",
     "crates/atmosphere",
+    "crates/rcbt-core",
+    "crates/rcbt-ref",
+    "crates/rcbt-ffi",
+    "crates/rcbt-large-ffi",
+    "crates/rcbt-wgpu",
+    "crates/bevy-rcbt",
     "apps/server",
     "apps/client",
     "tools/system-baker",
@@ -27,6 +34,7 @@ rust-version = "1.95"
 [workspace.dependencies]
 # Match Bevy's glam line in 0.19.x to make adapter boundaries cheap.
 glam = { version = "0.32", features = ["serde"] }
+wgpu = "29.0.4"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.9"

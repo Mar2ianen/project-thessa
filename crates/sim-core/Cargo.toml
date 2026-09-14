@@ -50,3 +50,11 @@ harness = false
 [[bench]]
 name = "ephemeris_batch"
 harness = false
+
+[[bench]]
+name = "flock"
+harness = false
+
+[[bench]]
+name = "fleet_prop"
+harness = false

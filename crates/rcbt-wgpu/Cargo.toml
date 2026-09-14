@@ -14,6 +14,7 @@ wgpu.workspace = true
 [dev-dependencies]
 naga = { version = "29.0.4", features = ["wgsl-in"] }
 pollster = "0.4"
+thessa-rcbt-ffi = { path = "../rcbt-ffi" }
 
 [[bench]]
 name = "gpu_cbt"

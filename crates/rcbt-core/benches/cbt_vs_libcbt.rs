@@ -523,26 +523,35 @@ fn main() {
 
     // 5. OpenMP scaling of the C reduce path (refine to d16, fitted heap).
     // A flat line means the toolchain built the MT archive without OpenMP.
+    // Five repeats per level: the 16t point is known-bimodal on some boxes,
+    // so the table reports median + spread, never a single sample.
     let scale_batches = gen_refine(16);
     let scale_ops: usize = scale_batches.iter().map(Vec::len).sum();
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
-    println!("| scale-refine/d16 | impl | leaves | ops | ms | ops_per_s |");
+    println!("| scale-refine/d16 | impl | leaves | ops | median_ms | spread_ms | ops_per_s |");
     for t in [1_usize, 2, 4, 8, 16]
         .into_iter()
         .take_while(|t| *t <= threads.max(1))
     {
-        set_mt_threads(t as u32);
-        let mut mt = MtCbtTree::new(16).unwrap();
-        let started = Instant::now();
-        let ops = apply_libcbt_like(&mut mt, &scale_batches);
-        let ms = started.elapsed().as_secs_f64() * 1000.0;
-        assert_eq!(ops, scale_ops);
-        assert_eq!(mt.node_count(), 65536, "mt scaling parity");
+        let mut samples = Vec::with_capacity(5);
+        for _ in 0..5 {
+            set_mt_threads(t as u32);
+            let mut mt = MtCbtTree::new(16).unwrap();
+            let started = Instant::now();
+            let ops = apply_libcbt_like(&mut mt, &scale_batches);
+            let ms = started.elapsed().as_secs_f64() * 1000.0;
+            assert_eq!(ops, scale_ops);
+            assert_eq!(mt.node_count(), 65536, "mt scaling parity");
+            samples.push(ms);
+        }
+        samples.sort_by(|a, b| a.total_cmp(b));
+        let median = samples[2];
+        let spread = samples[4] - samples[0];
         println!(
-            "| scale-refine/d16 | libcbt-mt/{t}t | 65536 | {ops} | {ms:.1} | {:.0} |",
-            ops as f64 / ms.max(1e-9) * 1000.0
+            "| scale-refine/d16 | libcbt-mt/{t}t | 65536 | {scale_ops} | {median:.1} | {spread:.1} | {:.0} |",
+            scale_ops as f64 / median.max(1e-9) * 1000.0
         );
     }
     set_mt_threads(1);

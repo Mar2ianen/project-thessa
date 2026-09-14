@@ -662,22 +662,32 @@ The current code slice provides:
   x300; the x300 number compares raw local mutations against a full
   decode+reduce per frame, which is a different commit model, not a
   different CPU. Full refinement holds at ~x4-6 native, full decode at
-  ~x9-14. OpenMP scaling of the C reduce path on a 65k-leaf refine is clean
-  from 1 to 8 threads (~x3.4, plateau at 4-8); 16 threads are bimodal
-  across runs on this box (5 ms vs ~450 ms, runtime/scheduler noise outside
-  our code) and need an isolated-box retest before any claim.   Rerun every
-  table on your own machine before quoting it;
+  ~x9-14. OpenMP scaling of the C reduce path on a 65k-leaf refine, five
+  repeats per level (median + spread, never a single sample): 1t 29.8+-0.4,
+  2t 15.8+-1.0, 4t 8.7+-0.6, 8t 6.3+-4.0, 16t 606+-672 ms. Scaling is clean
+  to 8 threads (~x4.7, and 8t already matches native bulk-refine pace);
+  16t is confirmed bimodal, not a one-off: oversubscribed GOMP pool on this
+  box, outside our code, needs an isolated-box retest before any claim.
+  Rerun every table on your own machine before quoting it;
 - a GPU sparse-commit implementation (`rcbt-wgpu` heap layout + `apply_ops`
   / `decode_all` WGSL kernels, `u32` atomics only, no extensions) measured on
   real hardware (`cargo bench -p thessa-rcbt-wgpu --bench gpu_cbt`, AMD 780M
   via Vulkan): mixed split/merge parity asserted against the CPU oracle,
-  then refine columns gpu / gpu+readback / cpu-native. Current tune: 4k
-  leaves go to the CPU (~0.4 ms vs ~2-4 ms GPU, launch overhead dominates),
-  16k leaves are contested at a few ms on both sides, 65k leaves go to the
-  GPU (~3.5 ms vs ~7.4 ms CPU, roughly x2). The GPU number still contains
-  per-batch CPU-side buffer and bind-group creation, which a real
-  integration reuses instead of rebuilding, so treat it as a pessimistic
-  bound, not a ceiling;
+  then refine columns cpu-native / libcbt-public / libcbt-sparse / gpu /
+  gpu+readback / gpu-uma on IDENTICAL batches (d12-d18, all parities OK).
+  Current tune: libcbt-sparse beats the GPU at 4-16k (0.1/0.6 ms vs ~2 ms,
+  launch overhead dominates there) and roughly ties at 65k (2.7-2.8 ms);
+  at 262k the GPU leads (8 vs 13 ms) while cpu-native trails both (34 ms).
+  UMA verdict, measured not claimed: phase breakdown shows host transfers
+  as the biggest GPU slice, but the single-submit `gpu-uma` path (one
+  encoder, one final decode, reusable staging, integrated-GPU gate, never a
+  vendor check) lands within noise of the per-batch pipelined path on every
+  depth — batching does not win here because per-batch submits overlap CPU
+  prep with GPU execution. Per the repo rule (no win, no API change) the UMA
+  path stays bench-only; portable wgpu also forbids the true zero-copy
+  (MAP_READ cannot combine with STORAGE, mapped_at_creation is
+  MAP_WRITE|COPY_SRC-only), so on unified memory the remaining copy is
+  already a plain memcpy with nothing left to take;
 - a terrain-level `legacy-cpu vs rcbt-pages` comparison on shared selections
   (`cargo bench -p thessa-worldgen-rocky --bench compare`);
 - a shipped-asset anchor (`cargo bench -p thessa-worldgen-rocky --bench

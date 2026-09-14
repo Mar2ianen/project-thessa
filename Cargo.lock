@@ -5419,6 +5419,7 @@ dependencies = [
  "naga",
  "pollster",
  "thessa-rcbt-core",
+ "thessa-rcbt-ffi",
  "wgpu",
 ]
 

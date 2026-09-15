@@ -260,10 +260,16 @@ pub fn select_tiles_with_height_and_frustum(
             let ground_edge = ((ground_axis - angular_radius) / 0.85).clamp(0.0, 1.0);
             let edge = camera_edge.min(ground_edge);
             let bias = detail_bias.clamp(1.0, 32.0);
+            // Keep the visual ground under a fast pilot at full-ish detail;
+            // spend the velocity reduction on the distant field instead.
+            // Applying the full bias to every near tile made a 400 m/s flight
+            // look like a low-resolution globe even though the fixed tile
+            // budget still had enough candidates for L14/L15.
+            let near_bias = 1.0 + (bias - 1.0) * 0.35;
             let base = if distance > 100_000.0 {
-                1.0 / 10.0
+                1.0 / 10.0 * bias
             } else {
-                1.0 / 48.0 * bias
+                1.0 / 48.0 * near_bias
             };
             base * (1.0 + 24.0 * edge * edge)
         } else {
@@ -923,19 +929,20 @@ mod velocity_bias_tests {
         let max_level = |keys: &[TileKey]| keys.iter().map(|k| k.level).max().unwrap_or(0);
         let sharp_max = max_level(&sharp);
         let coarse_max = max_level(&coarse);
-        eprintln!("bias 1 -> L{sharp_max}, bias 8 -> L{coarse_max}");
-        let mut hist = std::collections::BTreeMap::new();
-        for k in &coarse {
-            *hist.entry(k.level).or_insert(0) += 1;
-        }
-        eprintln!("coarse leaves={} hist={:?}", coarse.len(), hist);
+        let refinement_score =
+            |keys: &[TileKey]| keys.iter().map(|key| u32::from(key.level)).sum::<u32>();
+        let sharp_score = refinement_score(&sharp);
+        let coarse_score = refinement_score(&coarse);
+        eprintln!(
+            "bias 1 -> L{sharp_max}, score {sharp_score}; bias 8 -> L{coarse_max}, score {coarse_score}"
+        );
         assert!(
             sharp_max >= 15,
             "unbiased near field must refine, got L{sharp_max}"
         );
         assert!(
-            coarse_max < sharp_max,
-            "bias must relax refinement ({coarse_max} vs {sharp_max})"
+            coarse_score < sharp_score,
+            "bias must relax aggregate refinement (score {coarse_score} vs {sharp_score})"
         );
         assert!(!coarse.is_empty(), "biased selection must still cover");
     }

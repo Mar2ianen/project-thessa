@@ -21,12 +21,11 @@ use bevy::{
             BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry, BindingResource, BindingType,
             Buffer, BufferBindingType, BufferUsages, ColorTargetState, ColorWrites,
             CompareFunction, ComputePassDescriptor, ComputePipeline, DepthBiasState,
-            DepthStencilState, DownlevelFlags, IndexFormat, MultisampleState, PipelineLayout,
+            DepthStencilState, DownlevelFlags, MultisampleState, PipelineLayout,
             PipelineLayoutDescriptor, PrimitiveState, PrimitiveTopology, RawBufferVec,
             RawComputePipelineDescriptor, RawFragmentState, RawRenderPipelineDescriptor,
-            RawVertexBufferLayout, RawVertexState, RenderPassDescriptor, RenderPipeline,
-            ShaderModule, ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp,
-            TextureFormat, VertexAttribute, VertexFormat, VertexStepMode, WgpuFeatures,
+            RawVertexState, RenderPassDescriptor, RenderPipeline, ShaderModule,
+            ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp, TextureFormat,
         },
         renderer::{
             RenderAdapter, RenderContext, RenderDevice, RenderGraph, RenderGraphSystems,
@@ -38,11 +37,13 @@ use bevy::{
 
 use thessa_rcbt_core::HeightPage;
 
+#[cfg(feature = "mesh-shaders")]
+use bevy::render::render_resource::WgpuFeatures;
+
 use super::{CbtLeafRecord, CbtRenderPages, CbtRenderSurface, CbtRenderTopology};
 
 const GPU_GRID_SIZE: usize = 33;
 const GPU_VERTEX_COUNT_PER_PATCH: usize = GPU_GRID_SIZE * GPU_GRID_SIZE;
-const DRAW_INDEXED_INDIRECT_STRIDE_BYTES: u64 = 5 * std::mem::size_of::<u32>() as u64;
 #[cfg(feature = "mesh-shaders")]
 const MESHLET_CELLS: u32 = 8;
 #[cfg(feature = "mesh-shaders")]
@@ -82,8 +83,10 @@ impl ExtractResource for CbtRenderSurface {
 /// world.
 ///
 /// The vertex buffer stores two `vec4<f32>` values per vertex: position and
-/// normal. The index buffer is shared by every 33x33 patch. `draw_list` is a
-/// standard `DrawIndexedIndirect` array with one command per CBT leaf.
+/// normal. The raster consumer uses one procedural indirect draw with one
+/// instance per leaf; the GPU reconstructs the shared 32x32 cell index pattern
+/// in the vertex shader. This keeps the leaf stream depth-agnostic without
+/// issuing one draw command per leaf.
 #[derive(Resource)]
 pub struct CbtGpuBuffers {
     leaf_records: RawBufferVec<CbtLeafRecord>,
@@ -91,8 +94,7 @@ pub struct CbtGpuBuffers {
     page_metadata: RawBufferVec<[u32; 4]>,
     page_residuals: RawBufferVec<u32>,
     vertices: RawBufferVec<[f32; 8]>,
-    indices: RawBufferVec<u32>,
-    draw_list: RawBufferVec<[u32; 5]>,
+    draw_list: RawBufferVec<[u32; 4]>,
     params: RawBufferVec<[u32; 4]>,
     surface_transform: RawBufferVec<[f32; 16]>,
     topology_generation: u64,
@@ -117,8 +119,6 @@ impl FromWorld for CbtGpuBuffers {
         page_residuals.set_label(Some("thessa-cbt-height-page-residuals"));
         let mut vertices = RawBufferVec::new(BufferUsages::STORAGE | BufferUsages::VERTEX);
         vertices.set_label(Some("thessa-cbt-generated-vertices"));
-        let mut indices = RawBufferVec::new(BufferUsages::INDEX);
-        indices.set_label(Some("thessa-cbt-generated-indices"));
         let mut draw_list = RawBufferVec::new(BufferUsages::STORAGE | BufferUsages::INDIRECT);
         draw_list.set_label(Some("thessa-cbt-indirect-draw-list"));
         let mut params = RawBufferVec::new(BufferUsages::UNIFORM);
@@ -131,7 +131,6 @@ impl FromWorld for CbtGpuBuffers {
             page_metadata,
             page_residuals,
             vertices,
-            indices,
             draw_list,
             params,
             surface_transform,
@@ -174,13 +173,8 @@ impl CbtGpuBuffers {
         self.vertices.buffer()
     }
 
-    /// Shared 33x33 grid index buffer.
-    pub fn index_buffer(&self) -> Option<&Buffer> {
-        self.indices.buffer()
-    }
-
-    /// One `DrawIndexedIndirect` command per leaf. Missing pages have zero
-    /// `index_count` and are harmless to the optional raster consumer.
+    /// One `DrawIndirect` command. Its `instance_count` is the exact leaf
+    /// count; missing pages become degenerate instances in the shader.
     pub fn draw_list_buffer(&self) -> Option<&Buffer> {
         self.draw_list.buffer()
     }
@@ -253,10 +247,9 @@ struct Params {
 };
 
 struct DrawCommand {
-    index_count: u32,
+    vertex_count: u32,
     instance_count: u32,
-    first_index: u32,
-    base_vertex: i32,
+    first_vertex: u32,
     first_instance: u32,
 };
 
@@ -370,11 +363,12 @@ fn build_geometry(@builtin(global_invocation_id) gid: vec3<u32>) {
     let page = page_metadata[ordinal];
     if (local == 0u) {
         patches[ordinal] = leaves[ordinal];
-        draw_list[ordinal] = DrawCommand(
-            select(0u, 6144u, page.z != 0u),
-            select(0u, 1u, page.z != 0u),
+    }
+    if (index == 0u) {
+        draw_list[0] = DrawCommand(
+            6144u,
+            params.leaf_count,
             0u,
-            i32(ordinal * params.vertices_per_patch),
             0u,
         );
     }
@@ -401,33 +395,63 @@ fn build_geometry(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
-/// Minimal direct raster consumer for the generated GPU geometry. It uses the
-/// standard Bevy view uniform and a separately uploaded body-to-render-local
-/// matrix, so the compute output stays independent of camera precision.
+/// Procedural direct raster consumer for the generated GPU geometry. It uses
+/// one indirect draw and one instance per leaf, matching the important draw
+/// submission property of large_cbt while retaining the current page format.
 const CBT_RASTER_WGSL: &str = r#"
+struct Params {
+    leaf_count: u32,
+    vertices_per_patch: u32,
+    radius_bits: u32,
+    _padding: u32,
+};
+
 struct ViewUniforms {
     clip_from_world: mat4x4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> view: ViewUniforms;
 @group(0) @binding(1) var<uniform> render_from_body: mat4x4<f32>;
-
-struct VertexInput {
-    @location(0) position: vec4<f32>,
-    @location(1) normal: vec4<f32>,
-};
+@group(0) @binding(2) var<storage, read> generated_vertices: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read> page_metadata: array<vec4<u32>>;
+@group(0) @binding(4) var<uniform> params: Params;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) normal: vec3<f32>,
 };
 
+fn grid_vertex(local: u32) -> u32 {
+    let cell = local / 6u;
+    let corner = local % 6u;
+    let x = cell % 32u;
+    let y = cell / 32u;
+    let a = y * 33u + x;
+    let b = a + 1u;
+    let c = a + 33u;
+    let d = c + 1u;
+    if (corner == 0u) { return a; }
+    if (corner == 1u) { return b; }
+    if (corner == 2u) { return c; }
+    if (corner == 3u) { return b; }
+    if (corner == 4u) { return d; }
+    return c;
+}
+
 @vertex
-fn vertex(input: VertexInput) -> VertexOutput {
+fn vertex(
+    @builtin(vertex_index) vertex_index: u32,
+    @builtin(instance_index) instance_index: u32,
+) -> VertexOutput {
     var output: VertexOutput;
-    let render_position = render_from_body * input.position;
+    let page = page_metadata[instance_index];
+    let local = grid_vertex(vertex_index);
+    let generated_index = instance_index * params.vertices_per_patch + local;
+    let position = generated_vertices[generated_index * 2u];
+    let normal = generated_vertices[generated_index * 2u + 1u];
+    let render_position = select(vec4(0.0), render_from_body * position, page.z != 0u);
     output.clip_position = view.clip_from_world * render_position;
-    output.normal = normalize((render_from_body * vec4(input.normal.xyz, 0.0)).xyz);
+    output.normal = normalize((render_from_body * vec4(normal.xyz, 0.0)).xyz);
     return output;
 }
 
@@ -739,6 +763,36 @@ fn init_cbt_gpu_pipeline(mut commands: bevy::prelude::Commands, device: Res<Rend
                 },
                 count: None,
             },
+            BindGroupLayoutEntry {
+                binding: 2,
+                visibility: ShaderStages::VERTEX,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            BindGroupLayoutEntry {
+                binding: 3,
+                visibility: ShaderStages::VERTEX,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            BindGroupLayoutEntry {
+                binding: 4,
+                visibility: ShaderStages::VERTEX,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
         ],
     );
     let raster_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -966,19 +1020,6 @@ fn prepare_cbt_gpu_buffers(
     gpu.page_residuals.write_buffer(&device, &queue);
 
     if !surface.gpu_mesh_enabled() {
-        if gpu.indices.is_empty() {
-            for y in 0..GPU_GRID_SIZE - 1 {
-                for x in 0..GPU_GRID_SIZE - 1 {
-                    let a = (y * GPU_GRID_SIZE + x) as u32;
-                    let b = a + 1;
-                    let c = a + GPU_GRID_SIZE as u32;
-                    let d = c + 1;
-                    gpu.indices.extend([a, b, c, b, d, c]);
-                }
-            }
-            gpu.indices.write_buffer(&device, &queue);
-        }
-
         gpu.vertices.clear();
         gpu.vertices.extend(std::iter::repeat_n(
             [0.0; 8],
@@ -987,8 +1028,7 @@ fn prepare_cbt_gpu_buffers(
         gpu.vertices.write_buffer(&device, &queue);
 
         gpu.draw_list.clear();
-        gpu.draw_list
-            .extend(std::iter::repeat_n([0; 5], records.len()));
+        gpu.draw_list.push([0; 4]);
         gpu.draw_list.write_buffer(&device, &queue);
     }
 
@@ -1124,12 +1164,20 @@ fn draw_cbt_geometry(
         return;
     }
     let (camera, extracted_view, target, depth, view_uniform_offset) = view.into_inner();
-    let (Some(vertex_buffer), Some(index_buffer), Some(draw_buffer), Some(surface_buffer)) = (
+    let (
+        Some(vertex_buffer),
+        Some(metadata_buffer),
+        Some(draw_buffer),
+        Some(params_buffer),
+        Some(surface_buffer),
+    ) = (
         gpu.vertex_buffer(),
-        gpu.index_buffer(),
+        gpu.page_metadata_buffer(),
         gpu.draw_list_buffer(),
+        gpu.params_buffer(),
         gpu.surface_transform_buffer(),
-    ) else {
+    )
+    else {
         return;
     };
     let Some(view_binding) = view_uniforms.uniforms.binding() else {
@@ -1137,23 +1185,6 @@ fn draw_cbt_geometry(
     };
     let format = extracted_view.target_format;
     if !raster.pipelines.contains_key(&format) {
-        let vertex_attributes = [
-            VertexAttribute {
-                format: VertexFormat::Float32x4,
-                offset: 0,
-                shader_location: 0,
-            },
-            VertexAttribute {
-                format: VertexFormat::Float32x4,
-                offset: 16,
-                shader_location: 1,
-            },
-        ];
-        let vertex_buffers = [RawVertexBufferLayout {
-            array_stride: 32,
-            step_mode: VertexStepMode::Vertex,
-            attributes: &vertex_attributes,
-        }];
         let color_targets = [Some(ColorTargetState {
             format,
             blend: None,
@@ -1169,7 +1200,7 @@ fn draw_cbt_geometry(
                         module: &raster.shader,
                         entry_point: Some("vertex"),
                         compilation_options: Default::default(),
-                        buffers: &vertex_buffers,
+                        buffers: &[],
                     },
                     fragment: Some(RawFragmentState {
                         module: &raster.shader,
@@ -1215,6 +1246,18 @@ fn draw_cbt_geometry(
                 binding: 1,
                 resource: BindingResource::Buffer(surface_buffer.as_entire_buffer_binding()),
             },
+            BindGroupEntry {
+                binding: 2,
+                resource: BindingResource::Buffer(vertex_buffer.as_entire_buffer_binding()),
+            },
+            BindGroupEntry {
+                binding: 3,
+                resource: BindingResource::Buffer(metadata_buffer.as_entire_buffer_binding()),
+            },
+            BindGroupEntry {
+                binding: 4,
+                resource: BindingResource::Buffer(params_buffer.as_entire_buffer_binding()),
+            },
         ],
     );
     let supports_indirect = render_adapter
@@ -1224,10 +1267,6 @@ fn draw_cbt_geometry(
     if !supports_indirect {
         return;
     }
-    let use_native_multi_draw = context
-        .render_device()
-        .features()
-        .contains(WgpuFeatures::MULTI_DRAW_INDIRECT_COUNT);
     let color_attachments = [Some(target.get_color_attachment())];
     let mut pass = context.begin_tracked_render_pass(RenderPassDescriptor {
         label: Some("thessa-cbt-raster-pass"),
@@ -1242,23 +1281,9 @@ fn draw_cbt_geometry(
     }
     pass.set_render_pipeline(pipeline);
     pass.set_bind_group(0, &bind_group, &[view_uniform_offset.offset]);
-    pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-    pass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
-    if use_native_multi_draw {
-        // wgpu exposes no separate non-count multi-draw feature: this native
-        // feature is the capability bit that guarantees the call is not
-        // internally emulated as one draw per command.
-        pass.multi_draw_indexed_indirect(draw_buffer, 0, gpu.leaf_count());
-    } else {
-        // Portable fallback for adapters that expose indirect execution but
-        // not native multi-draw. Every command is 5 tightly-packed u32s.
-        for ordinal in 0..gpu.leaf_count() {
-            pass.draw_indexed_indirect(
-                draw_buffer,
-                u64::from(ordinal) * DRAW_INDEXED_INDIRECT_STRIDE_BYTES,
-            );
-        }
-    }
+    // One procedural indirect draw, with the leaf ordinal carried by
+    // `instance_index`; the vertex shader reconstructs the shared grid index.
+    pass.draw_indirect(draw_buffer, 0);
 }
 
 #[cfg(feature = "mesh-shaders")]

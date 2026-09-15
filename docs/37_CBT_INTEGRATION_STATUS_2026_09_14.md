@@ -17,7 +17,7 @@ at the scheduling/topology boundary.
 - optional Bevy render-world extraction of exact depth-37-safe CBT leaf
   records and quantized height pages into GPU storage/metadata buffers;
 - generation-gated WGSL page sampling and 33x33 position/normal vertex
-  expansion with one indexed indirect draw command per leaf;
+  expansion with one procedural indirect draw and one instance per leaf;
 - an isolated native wgpu mesh-shader experiment kept outside the normal
   client build;
 - explicit cube-sphere `TileKey` ↔ CBT Morton address mapping;
@@ -31,12 +31,13 @@ at the scheduling/topology boundary.
 
 The visible client mesh is still the legacy CPU fallback by default. The
 render-world bridge transfers the committed topology and finished client pages
-into GPU buffers, produces exact page-sampled vertices and an indexed indirect
-draw-list, and now has an opt-in Bevy `Core3d` raster consumer with correct
-reverse-Z depth ordering. The remaining gate is visible-cover draw selection,
-material parity, and a visual/numeric comparison against the CPU path at the
-same camera views. Until those checks pass, the fallback remains the default
-and authoritative surface queries stay on the canonical field.
+into GPU buffers, produces exact page-sampled vertices, and now has an opt-in
+Bevy `Core3d` raster consumer with one procedural indirect draw, correct
+reverse-Z depth ordering, and no per-leaf render-pass loop. The remaining gate
+is visible-cover draw selection, material parity, and a visual/numeric
+comparison against the CPU path at the same camera views. Until those checks
+pass, the fallback remains the default and authoritative surface queries stay
+on the canonical field.
 
 The indexed raster path is selected explicitly with
 `[renderer] terrain = "gpu_indexed"` in `graphics.toml`. The default remains
@@ -55,18 +56,11 @@ pure Rust because its client configuration reaches depth 37, beyond the
 foreign backend's explicit 24-level bound; this is a deployment constraint,
 not a benchmark-only classification.
 
-The performance track now has a third reference: `large_cbt`'s OCBT dense
-bitfield/rank layout. The first local baseline shows the current dirty-path
-Rust implementation ahead on sparse commits, while using more memory. The
-next optimization is to retain that incremental CPU path and port the OCBT
-buffer contract plus GPU allocation/propagation stages behind portable
-wgpu/WGSL, rather than importing the upstream DirectX renderer. The first
-byte-compatible mirror benchmark is 12.36M incremental OCBT operations/s
-versus 0.201M operations/s for upstream full reduction at the same 1M-bit
-capacity and footprint; it remains a local workload baseline. The variable-
-depth `CompactTree` now measures 786,456 bytes versus 8,650,752 bytes for the
-current scalar packed tree, at 15.4M versus 46.5M CPU operations/s. It remains
-an opt-in format until GPU-side packed updates recover the scalar-path latency.
-
-The license status of the vendored `large_cbt` source is unresolved; provenance
-and redistribution require a separate review.
+The performance track also studied the upstream `large_cbt` demo. Its useful
+lesson is not a DirectX renderer dependency: it keeps the CBT update state and
+active triangle stream on the GPU, submits one procedural indirect draw, and
+shades a visibility buffer in a screen-sized material pass. Our portable path
+now adopts the single-draw submission shape, while retaining CPU topology and
+the exact CPU field as fallback authority. The next step is portable GPU
+screen-space classification and active-triangle compaction; no DirectX API is
+part of the project boundary.

@@ -561,6 +561,7 @@ fn update_terrain(
     let active = survey.active
         || (pilot.view_mode == ClientViewMode::Pilot
             && runtime.render_terrain_origin_m().length() - world.field.params.radius_m < 80000.0);
+    let gpu_raster = cbt.surface.gpu_raster_enabled();
     world.counters.terrain_patches_generated = 0;
     if !active {
         world.render_center = None;
@@ -642,7 +643,11 @@ fn update_terrain(
         transform.translation = (-origin).as_vec3();
         transform.rotation = rotation.as_quat() * SPHERE_POLE_TO_WORLD_UP;
         transform.scale = Vec3::splat((radius - 16000.0) as f32);
-        *visibility = Visibility::Visible;
+        *visibility = if gpu_raster || world.visible.is_empty() {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
     }
     if !survey.active {
         let globe_eye = rotation.inverse() * (origin + camera.0.translation.as_dvec3());
@@ -890,7 +895,6 @@ fn update_terrain(
         .into_iter()
         .take(8_usize.saturating_sub(world.jobs.len()))
         .collect();
-    let gpu_raster = cbt.surface.gpu_raster_enabled();
     for key in pending {
         let field = world.field.clone();
         let tile_mesh_cells = if gpu_raster {
@@ -994,6 +998,16 @@ fn update_terrain(
             world.counters.terrain_cache_hits += desired.len() as u64;
             world.visible = desired;
         }
+    }
+    // The closed sphere is only a bootstrap/GPU fallback. Keeping it visible
+    // behind CPU tiles makes incomplete cover show a second, low-detail
+    // coastline and produces large stepped land/water transitions.
+    for (_, mut visibility) in &mut backdrop {
+        *visibility = if gpu_raster || world.visible.is_empty() {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
     }
     for (_, tile, mut transform) in &mut tiles {
         if let Some(cached) = world.cache.get(&tile.0) {

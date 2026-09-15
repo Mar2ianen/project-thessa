@@ -1,9 +1,9 @@
 # 22 — RCBT GPU terrain
 
 Status: logical core, game scheduling, exact render-world leaf transport,
-generation-gated GPU page transport, and opt-in Bevy `Core3d` indexed consumer
-are integrated, 2026-09-15. The legacy CPU mesh remains the default until
-visible-cover draw selection and material parity are validated.
+generation-gated GPU page transport, and opt-in Bevy `Core3d` procedural
+indirect consumer are integrated, 2026-09-15. The legacy CPU mesh remains the
+default until visible-cover draw selection and material parity are validated.
 
 ## Boundary
 
@@ -55,8 +55,11 @@ The workspace contains:
   `[node_id_lo, node_id_hi, depth, ordinal]` records and matching
   quantized `HeightPage` payloads into Bevy render-world storage buffers;
 - a generation-gated WGSL geometry pass that samples the packed signed-16
-  residual pages, expands each available leaf to a 33x33 cube-sphere vertex
-  grid with normals, and writes one indexed indirect command per leaf;
+  residual pages and expands each available leaf to a 33x33 cube-sphere vertex
+  grid with normals;
+- a portable procedural raster consumer that submits one indirect draw with
+  one instance per leaf; the vertex shader reconstructs the shared grid index
+  pattern, so the render pass does not loop over leaf draw commands;
 - an isolated optional native wgpu mesh-shader experiment in the Bevy bridge
   crate;
   it is not compiled into the normal client and is not part of the portable
@@ -75,11 +78,37 @@ texture LOD policy. Close tiles also receive deterministic filtered material
 grain and normal detail; that layer is visual-only and does not alter the
 authoritative height field or collision queries.
 
-The indexed GPU bridge does height-page sampling, produces position/normal
-vertices plus a standard `DrawIndexedIndirect` list, and can consume those
-buffers in a reverse-Z Bevy `Core3d` pass. The indexed compute pass runs only when
-topology, page payloads, or surface radius changes; camera-origin changes
-upload only the affine body-to-render-local matrix.
+The GPU bridge does height-page sampling and produces position/normal vertices
+for the available leaves. Its reverse-Z Bevy `Core3d` consumer uses one
+`DrawIndirect` command with `instance_count = leaf_count`; camera-origin
+changes upload only the affine body-to-render-local matrix. This is a draw
+submission improvement, not yet the screen-space triangle representation used
+by the reference demo.
+
+## Reference demo study
+
+The upstream `large_cbt` demo is a useful architecture reference, but it is
+not a portable renderer to copy: its README explicitly targets DX12 and Shader
+Model 6.6. The important performance properties are representation-level:
+
+- CBT topology, classification, split/merge, balancing, allocation, and
+  propagation stay in persistent GPU buffers and are driven by indirect
+  dispatches;
+- the visible mesh is a compact active-bisector/triangle stream, rendered by a
+  single procedural indirect draw rather than by one patch/entity/material per
+  leaf;
+- a visibility buffer is shaded in a screen-sized material pass, so planet
+  material work does not multiply with terrain patch count;
+- planet-space calculations retain double-precision camera/planet coordinates
+  and convert to camera-relative floats only at the raster boundary.
+
+Our current path now shares only the single-draw submission property. It still
+has CPU-owned topology, one fixed 33x33 page expansion per leaf, and a simple
+raster material. That explains why fixing the old multi-draw call alone could
+not reproduce the reference performance or visual quality. The next portable
+milestones are GPU screen-space classification plus an active triangle stream,
+then a visibility/material pass; the CPU topology and authoritative field stay
+as the fallback and query authority throughout.
 
 For launch-time visual smoke tests:
 
@@ -166,7 +195,7 @@ claim.
 Before making GPU CBT the default renderer, the implementation must provide:
 
 1. visible-cover draw selection and a launch-time fallback around the existing
-   Bevy raster consumer; **consumer done, parity gate open**
+   Bevy raster consumer; **single-draw consumer done, parity gate open**
 2. page upload and vertex generation from `HeightPage`; **done**
 3. cube-face seam and skirt handling equivalent to the current path;
 4. an authoritative CPU readback/query path that does not require GPU RT;

@@ -16,15 +16,22 @@
 //! `GuidanceIntent` by the runtime adapter.
 
 mod execute;
+mod flyby;
 mod lambert;
 mod ops;
+mod patch;
 mod plan;
 mod search;
 
 pub use execute::{ExecutionCommand, ExecutorOutput, NodeExecutor};
+pub use flyby::{
+    FlybyConfig, candidate_flyby_bodies, flyby_search, max_bend_angle_rad, powered_flyby_burn_mps,
+};
 pub use lambert::{LambertArc, LambertError, solve_lambert, solve_lambert_prograde};
 pub use ops::{
     circularize_at_apse, hohmann_transfer, lambert_rendezvous, match_velocity, plane_change_dv,
 };
-pub use plan::{ManeuverNode, ManeuverPlan, PlanError, PlanValidation};
-pub use search::{RankedPlan, SearchConfig, SearchStats, porkchop_search};
+pub use plan::{FlybyEvent, ManeuverNode, ManeuverPlan, PlanError, PlanValidation};
+pub use search::{
+    BroadRoute, RankedPlan, SearchConfig, SearchStats, broad_survey, porkchop_search,
+};

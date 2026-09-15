@@ -7,7 +7,7 @@
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
-use thessa_sim_core::SimTime;
+use thessa_sim_core::{BodyId, SimTime};
 
 /// One impulsive node: burn `delta_v_mps` (inertial frame) at `epoch`.
 /// Nodes must order non-decreasing in time; simultaneous nodes are merged
@@ -31,6 +31,20 @@ impl ManeuverNode {
     }
 }
 
+/// A gravity-assist encounter on the flown route: informational only, never
+/// executed (an unpowered flyby needs no burn; a powered one carries its
+/// burn as a regular node at the same epoch). Lets the executor, telemetry
+/// and downstream blocks see WHERE the free bend happened.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FlybyEvent {
+    pub body: BodyId,
+    pub epoch: SimTime,
+    /// Periapsis radius the route was corrected to (m).
+    pub periapsis_m: f64,
+    /// Powered-flyby burn applied at periapsis (m/s), 0 when unpowered.
+    pub burn_mps: f64,
+}
+
 /// Ordered burn schedule plus the departure state it was planned from, so
 /// execution can verify it is still flying the right plan.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,6 +57,8 @@ pub struct ManeuverPlan {
     /// the producing search performed one. Plans built by pure two-body
     /// ops carry `None`: unvalidated, fly only after `search` revalidates.
     pub predicted_miss_m: Option<f64>,
+    /// Gravity assists on the route (empty for direct transfers).
+    pub flybys: Vec<FlybyEvent>,
 }
 
 impl ManeuverPlan {
@@ -69,7 +85,14 @@ impl ManeuverPlan {
             departure_velocity_mps,
             departure_epoch,
             predicted_miss_m: None,
+            flybys: Vec::new(),
         })
+    }
+
+    /// Attach the flown gravity-assist encounters (in time order).
+    pub fn with_flybys(mut self, flybys: Vec<FlybyEvent>) -> Self {
+        self.flybys = flybys;
+        self
     }
 
     pub fn total_dv_mps(&self) -> f64 {

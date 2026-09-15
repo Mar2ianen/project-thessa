@@ -30,7 +30,11 @@ use thessa_sim_core::{
     SimTime, TestParticleState, propagate_adaptive_with_burns,
 };
 
-use crate::{ManeuverNode, ManeuverPlan, lambert::solve_lambert_prograde};
+use crate::{
+    ManeuverNode, ManeuverPlan,
+    lambert::solve_lambert_prograde,
+    patch::{planet_arrival_match_mag, planet_escape_moon_vinf, planet_of},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SearchConfig {
@@ -99,6 +103,82 @@ pub struct RankedPlan {
     pub exact_miss_m: f64,
 }
 
+/// One broad-phase route: pure two-body scouting with NO exact revalidation
+/// and NO arrival-miss measurement. This is route selection (which windows
+/// and geometries close, at what energy), not a flyable plan: convert to a
+/// plan only through exact correction (`porkchop_search` / `flyby_search`),
+/// which sets `predicted_miss_m`. The type boundary is the execution gate —
+/// a `BroadRoute` cannot be fed to the executor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BroadRoute {
+    pub departure_epoch: SimTime,
+    pub time_of_flight_s: f64,
+    pub broad_total_dv_mps: f64,
+    pub departure_burn_mag_mps: f64,
+    pub arrival_burn_mag_mps: f64,
+}
+
+/// Broad survey: phases 1–2 of the porkchop (grid + refinement) without
+/// phase 3 (no phasing, no correction, no N-body propagation at all).
+/// Works at ANY scale — including inter-body transfers (moons of different
+/// planets around the star) whose year-long arcs make full correction
+/// cost-prohibitive: the survey prices the route energy honestly while
+/// marking it unvalidated. Deterministic like the full search.
+pub fn broad_survey(
+    ephemeris: &BakedEphemeris,
+    config: SearchConfig,
+) -> Result<(Vec<BroadRoute>, SearchStats), SearchError> {
+    config.validate()?;
+    let central = ephemeris
+        .body(config.central_body)
+        .map_err(SearchError::Ephemeris)?;
+    if !central.mu.is_finite() || central.mu <= 0.0 {
+        return Err(SearchError::InvalidConfig);
+    }
+    let depot = ephemeris
+        .body(config.departure_body)
+        .map_err(SearchError::Ephemeris)?;
+    let ctx = BroadCtx {
+        ephemeris,
+        config,
+        central_mu: central.mu,
+        central_radius_m: central.radius_m,
+        depot_mu: depot.mu,
+        depot_radius_m: depot.radius_m,
+        departure_planet: planet_of(ephemeris, config.central_body, config.departure_body),
+        arrival_planet: planet_of(ephemeris, config.central_body, config.arrival_body),
+    };
+    let mut stats = SearchStats::default();
+    let mut best = Vec::new();
+    grid_best(
+        &ctx,
+        GridWindow {
+            start_s: config.window_start.0,
+            span_s: config.departure_span_s,
+            steps: config.departure_steps,
+            tof_min: config.tof_min_s,
+            tof_max: config.tof_max_s,
+            tof_steps: config.tof_steps,
+        },
+        &mut stats,
+        &mut best,
+    );
+    if best.is_empty() {
+        return Err(SearchError::NoViableTransfer { stats });
+    }
+    let routes = best
+        .into_iter()
+        .map(|cell| BroadRoute {
+            departure_epoch: cell.departure_epoch,
+            time_of_flight_s: cell.time_of_flight_s,
+            broad_total_dv_mps: cell.total_dv,
+            departure_burn_mag_mps: cell.departure_burn_mag_mps,
+            arrival_burn_mag_mps: cell.total_dv - cell.departure_burn_mag_mps,
+        })
+        .collect();
+    Ok((routes, stats))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct SearchStats {
     pub broad_evaluations: usize,
@@ -162,6 +242,10 @@ struct BroadCtx<'a> {
     central_radius_m: f64,
     depot_mu: f64,
     depot_radius_m: f64,
+    /// Intermediate planet wells (None for direct-central moons — the
+    /// bit-identical lunar path). Precomputed: hierarchy is static.
+    departure_planet: Option<BodyId>,
+    arrival_planet: Option<BodyId>,
 }
 
 fn lambert_cell(
@@ -217,25 +301,105 @@ fn lambert_cell(
         return None;
     }
     let park_radius = ctx.depot_radius_m + ctx.config.standoff_m;
-    let v_circ = (ctx.depot_mu / park_radius).sqrt();
-    let v_esc_sq = 2.0 * ctx.depot_mu / park_radius;
-    let v_inf_vec = arc.departure_velocity_mps - v1;
-    let v_inf = v_inf_vec.length();
-    if !v_circ.is_finite() || !v_inf.is_finite() {
-        stats.degenerate_cells += 1;
-        return None;
-    }
-    let dep_mag = (v_inf * v_inf + v_esc_sq).sqrt() - v_circ;
-    if !dep_mag.is_finite() || dep_mag < 0.0 {
-        stats.degenerate_cells += 1;
-        return None;
-    }
-    let arr_burn = v2 - arc.arrival_velocity_mps;
-    if !arr_burn.is_finite() {
-        stats.degenerate_cells += 1;
-        return None;
-    }
-    let total_dv = dep_mag + arr_burn.length();
+    // Departure pricing: an endpoint moon behind a planet well flies the
+    // planet patch (moon escape on the asymptote-matching v_inf — a
+    // moon-only burn cannot leave a Nereid-class well); a direct-central
+    // moon keeps moon-only pricing (bit-identical lunar path).
+    let dep_mag = match ctx.departure_planet {
+        None => {
+            let v_inf = (arc.departure_velocity_mps - v1).length();
+            match patched_escape_mag(ctx.depot_mu, park_radius, v_inf) {
+                Some(mag) => mag,
+                None => {
+                    stats.degenerate_cells += 1;
+                    return None;
+                }
+            }
+        }
+        Some(planet) => {
+            let planet_state = match ephemeris.body_state(planet, departure_epoch) {
+                Ok(state) => state,
+                Err(_) => {
+                    stats.degenerate_cells += 1;
+                    return None;
+                }
+            };
+            let planet_mu = match ephemeris.body(planet) {
+                Ok(body) => body.mu,
+                Err(_) => {
+                    stats.degenerate_cells += 1;
+                    return None;
+                }
+            };
+            let moon_rel_pos = departure.position_inertial - planet_state.position_inertial;
+            let moon_rel_vel = departure.velocity_inertial - planet_state.velocity_inertial;
+            let v_inf_planet = arc.departure_velocity_mps - planet_state.velocity_inertial;
+            match planet_escape_moon_vinf(v_inf_planet, moon_rel_pos, moon_rel_vel, planet_mu) {
+                Some(v_inf_moon) => {
+                    match patched_escape_mag(ctx.depot_mu, park_radius, v_inf_moon.length()) {
+                        Some(mag) => mag,
+                        None => {
+                            stats.degenerate_cells += 1;
+                            return None;
+                        }
+                    }
+                }
+                None => {
+                    stats.degenerate_cells += 1;
+                    return None;
+                }
+            }
+        }
+    };
+    // Arrival pricing: symmetric patch (planet-well AND moon-well
+    // inclusive rendezvous price) or the direct match.
+    let arr_mag = match ctx.arrival_planet {
+        None => {
+            let arr_burn = v2 - arc.arrival_velocity_mps;
+            if !arr_burn.is_finite() {
+                stats.degenerate_cells += 1;
+                return None;
+            }
+            arr_burn.length()
+        }
+        Some(planet) => {
+            let planet_state = match ephemeris.body_state(planet, arrival_epoch) {
+                Ok(state) => state,
+                Err(_) => {
+                    stats.degenerate_cells += 1;
+                    return None;
+                }
+            };
+            let (planet_mu, moon_mu, moon_radius) =
+                match (ephemeris.body(planet), ephemeris.body(config.arrival_body)) {
+                    (Ok(planet_body), Ok(moon_body)) => {
+                        (planet_body.mu, moon_body.mu, moon_body.radius_m)
+                    }
+                    _ => {
+                        stats.degenerate_cells += 1;
+                        return None;
+                    }
+                };
+            let moon_rel_pos = arrival.position_inertial - planet_state.position_inertial;
+            let moon_rel_vel = arrival.velocity_inertial - planet_state.velocity_inertial;
+            let v_inf_planet = arc.arrival_velocity_mps - planet_state.velocity_inertial;
+            match planet_arrival_match_mag(
+                v_inf_planet,
+                moon_rel_pos,
+                moon_rel_vel,
+                planet_mu,
+                moon_mu,
+                moon_radius + config.standoff_m,
+            ) {
+                Some(mag) => mag,
+                None => {
+                    stats.degenerate_cells += 1;
+                    return None;
+                }
+            }
+        }
+    };
+    let total_dv = dep_mag + arr_mag;
     if total_dv > config.max_broad_dv_mps {
         return None;
     }
@@ -253,9 +417,25 @@ fn lambert_cell(
     })
 }
 
+/// Patched-conic escape magnitude from a circular parking orbit: the energy
+/// needed to leave with `v_inf_mps` at infinity. Shared by the direct and
+/// flyby broad phases (same depot physics, one formula).
+pub(crate) fn patched_escape_mag(depot_mu: f64, park_radius_m: f64, v_inf_mps: f64) -> Option<f64> {
+    let v_circ = (depot_mu / park_radius_m).sqrt();
+    let v_esc_sq = 2.0 * depot_mu / park_radius_m;
+    if !v_circ.is_finite() || !v_inf_mps.is_finite() {
+        return None;
+    }
+    let mag = (v_inf_mps * v_inf_mps + v_esc_sq).sqrt() - v_circ;
+    if !mag.is_finite() || mag < 0.0 {
+        return None;
+    }
+    Some(mag)
+}
+
 /// Transfer-ellipse perigee from one state vector (also correct for
 /// hyperbolic energy via the same `a(1-e)` form).
-fn transfer_perigee_m(position: DVec3, velocity: DVec3, mu: f64) -> f64 {
+pub(crate) fn transfer_perigee_m(position: DVec3, velocity: DVec3, mu: f64) -> f64 {
     let radius = position.length();
     if radius <= 0.0 {
         return 0.0;
@@ -348,6 +528,8 @@ pub fn porkchop_search(
             .body(config.departure_body)
             .map_err(SearchError::Ephemeris)?
             .radius_m,
+        departure_planet: planet_of(ephemeris, config.central_body, config.departure_body),
+        arrival_planet: planet_of(ephemeris, config.central_body, config.arrival_body),
     };
     let mut stats = SearchStats::default();
     // Phase 1: broad grid.
@@ -441,7 +623,7 @@ fn loose_config() -> AdaptiveIntegratorConfig {
 /// afterwards measures truth. Returns inertial departure point, parking
 /// velocity and burn vector.
 #[allow(clippy::too_many_arguments)]
-fn phase_departure(
+pub(crate) fn phase_departure(
     field: &GravityField<'_>,
     depot_epoch: SimTime,
     depot: &BodyState,
@@ -532,6 +714,13 @@ fn best_anomaly_of(
     let offset = (point - depot.position_inertial) / park_radius;
     offset.dot(tangent0).atan2(offset.dot(radial_unit))
 }
+/// Midcourse epoch: past depot-escape, with margin on both sides. Shared
+/// by direct and flyby legs (same correction architecture).
+pub(crate) fn midcourse_time_s(time_of_flight_s: f64) -> f64 {
+    (time_of_flight_s / 4.0)
+        .max(3_600.0)
+        .min((time_of_flight_s - 3_600.0).max(3_600.0))
+}
 /// Midcourse differential correction on the full N-body dynamics.
 ///
 /// Architecture (measured, not assumed): correcting the DEPARTURE burn
@@ -549,7 +738,7 @@ fn best_anomaly_of(
 /// departure burn (unchanged), midcourse burn, end state and miss; None
 /// only on total failure (no finite evaluation at all).
 #[allow(clippy::too_many_arguments)]
-fn correct_shooting(
+pub(crate) fn correct_shooting(
     field: &GravityField<'_>,
     start_pos: DVec3,
     park_velocity: DVec3,
@@ -558,6 +747,7 @@ fn correct_shooting(
     time_of_flight_s: f64,
     mid_time_s: f64,
     aim_point_m: DVec3,
+    initial_mid_burn: DVec3,
     stats: &mut SearchStats,
 ) -> Option<(DVec3, DVec3, TestParticleState, f64)> {
     const TARGET_MISS_M: f64 = 2_000.0;
@@ -585,10 +775,19 @@ fn correct_shooting(
         .ok()
         .map(|result| result.state)
     };
-    let mut mid_burn = DVec3::ZERO;
+    let mut mid_burn = if initial_mid_burn.is_finite() {
+        initial_mid_burn
+    } else {
+        DVec3::ZERO
+    };
     let mut best: Option<(DVec3, TestParticleState, f64)> = None;
+    // The current-point evaluation is carried between iterations so the
+    // backtracking trial below is not paid twice. Success-path behavior is
+    // intentionally identical to plain accept-always Newton (same
+    // trajectories, same count): backtracking only engages on evaluation
+    // failure, which previously killed the whole run.
+    let mut end = shoot(mid_burn)?;
     for _ in 0..MAX_ITERS {
-        let end = shoot(mid_burn)?;
         let miss_vec = aim_point_m - end.position;
         let miss = miss_vec.length();
         if !miss.is_finite() {
@@ -600,7 +799,13 @@ fn correct_shooting(
         if miss <= TARGET_MISS_M {
             break;
         }
-        let h = 0.5_f64;
+        // Finite-difference step scaled for CONSTANT ~1e5 m displacement at
+        // the target: h = 0.5 m/s resolves lunar legs (proven); year-long
+        // inter-body arcs need ~1e-3, otherwise the perturbation spans
+        // nonlinear encounter regimes and the Jacobian is garbage. Capped
+        // at the proven 0.5 so short legs follow bit-identical paths.
+        let leverage_s = (time_of_flight_s - mid_time_s).max(1.0);
+        let h = (1.0e5 / leverage_s).min(0.5);
         let mut columns = [DVec3::ZERO; 3];
         let mut ok = true;
         for (column, axis) in [DVec3::X, DVec3::Y, DVec3::Z].iter().enumerate() {
@@ -625,7 +830,29 @@ fn correct_shooting(
         if step.length() > TRUST_MPS {
             step *= TRUST_MPS / step.length();
         }
-        mid_burn += step;
+        // Backtracking line search on evaluation failure ONLY: a full
+        // Newton step near a deep well can capture into a MaxSteps orbit
+        // or impact, while a halved step stays in the escaping regime.
+        // Finite steps are accepted exactly as before, so smooth runs pay
+        // nothing and follow the identical path.
+        let mut trial = step;
+        let mut next_end = None;
+        for _ in 0..4 {
+            match shoot(mid_burn + trial) {
+                Some(state) => {
+                    next_end = Some(state);
+                    break;
+                }
+                None => trial *= 0.5,
+            }
+        }
+        match next_end {
+            Some(state) => {
+                mid_burn += trial;
+                end = state;
+            }
+            None => break,
+        }
         if !mid_burn.is_finite() || mid_burn.length() > 50_000.0 {
             break;
         }
@@ -694,10 +921,7 @@ fn revalidate(
     // Phase 3: midcourse correction on full N-body dynamics (departure
     // fixed at its phased value — correcting it stalls in the escape
     // turn). The converged trajectory IS the revalidation.
-    // Midcourse epoch: past depot-escape, with margin on both sides.
-    let mid_time_s = (cell.time_of_flight_s / 4.0)
-        .max(3_600.0)
-        .min((cell.time_of_flight_s - 3_600.0).max(3_600.0));
+    let mid_time_s = midcourse_time_s(cell.time_of_flight_s);
     // Diagnostic: how hot is the phased (uncorrected) arrival?
     let (dep_burn, tcm_burn, end, miss) = match correct_shooting(
         field,
@@ -708,6 +932,7 @@ fn revalidate(
         cell.time_of_flight_s,
         mid_time_s,
         aim,
+        DVec3::ZERO,
         stats,
     ) {
         Some(corrected) => corrected,

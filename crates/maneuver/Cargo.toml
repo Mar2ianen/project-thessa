@@ -17,3 +17,11 @@ toml.workspace = true
 [[bench]]
 name = "porkchop"
 harness = false
+
+[[bench]]
+name = "flyby"
+harness = false
+
+[[bench]]
+name = "interbody"
+harness = false

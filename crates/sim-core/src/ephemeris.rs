@@ -395,6 +395,11 @@ impl BakedEphemeris {
             .map(|body| body.id)
     }
 
+    /// All baked bodies (route surveys enumerate flyby candidates from it).
+    pub fn bodies(&self) -> &[BakedBody] {
+        &self.bodies
+    }
+
     pub fn body_state(&self, id: BodyId, time: SimTime) -> Result<BodyState, EphemerisError> {
         self.body_state_with_stack(id, time, &mut Vec::new())
     }

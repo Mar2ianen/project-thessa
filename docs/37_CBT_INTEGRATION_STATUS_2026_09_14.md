@@ -64,3 +64,6 @@ capacity and footprint; it remains a local workload baseline. The variable-
 depth `CompactTree` now measures 786,456 bytes versus 8,650,752 bytes for the
 current scalar packed tree, at 15.4M versus 46.5M CPU operations/s. It remains
 an opt-in format until GPU-side packed updates recover the scalar-path latency.
+
+The license status of the vendored `large_cbt` source is unresolved; provenance
+and redistribution require a separate review.

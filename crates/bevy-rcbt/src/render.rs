@@ -21,15 +21,16 @@ use bevy::{
             BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry, BindingResource, BindingType,
             Buffer, BufferBindingType, BufferUsages, ColorTargetState, ColorWrites,
             CompareFunction, ComputePassDescriptor, ComputePipeline, DepthBiasState,
-            DepthStencilState, IndexFormat, MultisampleState, PipelineLayout,
+            DepthStencilState, DownlevelFlags, IndexFormat, MultisampleState, PipelineLayout,
             PipelineLayoutDescriptor, PrimitiveState, PrimitiveTopology, RawBufferVec,
             RawComputePipelineDescriptor, RawFragmentState, RawRenderPipelineDescriptor,
             RawVertexBufferLayout, RawVertexState, RenderPassDescriptor, RenderPipeline,
             ShaderModule, ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp,
-            TextureFormat, VertexAttribute, VertexFormat, VertexStepMode,
+            TextureFormat, VertexAttribute, VertexFormat, VertexStepMode, WgpuFeatures,
         },
         renderer::{
-            RenderContext, RenderDevice, RenderGraph, RenderGraphSystems, RenderQueue, ViewQuery,
+            RenderAdapter, RenderContext, RenderDevice, RenderGraph, RenderGraphSystems,
+            RenderQueue, ViewQuery,
         },
         view::{ExtractedView, ViewDepthTexture, ViewTarget, ViewUniformOffset, ViewUniforms},
     },
@@ -41,6 +42,7 @@ use super::{CbtLeafRecord, CbtRenderPages, CbtRenderSurface, CbtRenderTopology};
 
 const GPU_GRID_SIZE: usize = 33;
 const GPU_VERTEX_COUNT_PER_PATCH: usize = GPU_GRID_SIZE * GPU_GRID_SIZE;
+const DRAW_INDEXED_INDIRECT_STRIDE_BYTES: u64 = 5 * std::mem::size_of::<u32>() as u64;
 
 impl ExtractResource for CbtRenderTopology {
     type Source = Self;
@@ -789,6 +791,7 @@ fn draw_cbt_geometry(
         &ViewDepthTexture,
         &ViewUniformOffset,
     )>,
+    render_adapter: Res<RenderAdapter>,
     view_uniforms: Res<ViewUniforms>,
     mut context: RenderContext,
 ) {
@@ -892,6 +895,17 @@ fn draw_cbt_geometry(
             },
         ],
     );
+    let supports_indirect = render_adapter
+        .get_downlevel_capabilities()
+        .flags
+        .contains(DownlevelFlags::INDIRECT_EXECUTION);
+    if !supports_indirect {
+        return;
+    }
+    let use_native_multi_draw = context
+        .render_device()
+        .features()
+        .contains(WgpuFeatures::MULTI_DRAW_INDIRECT_COUNT);
     let color_attachments = [Some(target.get_color_attachment())];
     let mut pass = context.begin_tracked_render_pass(RenderPassDescriptor {
         label: Some("thessa-cbt-raster-pass"),
@@ -908,7 +922,21 @@ fn draw_cbt_geometry(
     pass.set_bind_group(0, &bind_group, &[view_uniform_offset.offset]);
     pass.set_vertex_buffer(0, vertex_buffer.slice(..));
     pass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
-    pass.draw_indexed_indirect(draw_buffer, 0);
+    if use_native_multi_draw {
+        // wgpu exposes no separate non-count multi-draw feature: this native
+        // feature is the capability bit that guarantees the call is not
+        // internally emulated as one draw per command.
+        pass.multi_draw_indexed_indirect(draw_buffer, 0, gpu.leaf_count());
+    } else {
+        // Portable fallback for adapters that expose indirect execution but
+        // not native multi-draw. Every command is 5 tightly-packed u32s.
+        for ordinal in 0..gpu.leaf_count() {
+            pass.draw_indexed_indirect(
+                draw_buffer,
+                u64::from(ordinal) * DRAW_INDEXED_INDIRECT_STRIDE_BYTES,
+            );
+        }
+    }
 }
 
 #[cfg(test)]

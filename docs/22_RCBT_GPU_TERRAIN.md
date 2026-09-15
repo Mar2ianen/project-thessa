@@ -96,7 +96,9 @@ to serial compilation when the toolchain cannot provide OpenMP.
 drop-in sparse topology API: the upstream OCBT contract is a dense bitfield
 plus packed rank/sum buffers, with reduction semantics intended for GPU
 parallelism. Its raw buffers are therefore bound directly for comparison and
-for the later wgpu memory-pool port.
+for the later wgpu memory-pool port. The license status of the vendored
+`large_cbt` snapshot is unresolved; redistribution requires a separate
+provenance review.
 
 The current universal Bevy plugin selects the pure Rust implementation by
 default. The FFI backend is intentionally exposed as a separate runtime

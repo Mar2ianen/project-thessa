@@ -9,6 +9,8 @@ use atmosphere::{
     AtmospherePlugin, GraphicsRequested, GraphicsResolved, PrimaryStarLight, RayTracingActive,
 };
 mod terrain;
+mod water;
+mod beauty;
 use map_ui::*;
 use navigation::*;
 use orbits::*;
@@ -158,6 +160,8 @@ fn main() {
         .add_plugins(PerfMonitorPlugin)
         .add_plugins(AtmospherePlugin)
         .add_plugins(terrain::TerrainPlugin)
+        .add_plugins(water::WaterPlugin)
+        .add_plugins(beauty::BeautyPlugin)
         .add_plugins(BrpExtrasPlugin::default())
         .insert_resource(SimulationClock::default())
         .insert_resource(NavigationState::default())

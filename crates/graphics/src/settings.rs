@@ -65,6 +65,20 @@ pub enum BackendRequest {
     Webgpu,
 }
 
+/// Terrain raster consumer used by the normal client.
+///
+/// The CPU path remains the portable default. The indexed GPU path consumes
+/// the same CBT pages without requiring experimental mesh-shader features;
+/// hardware mesh shaders stay an isolated crate-level experiment rather than
+/// a normal game setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerrainRenderRequest {
+    #[default]
+    Cpu,
+    GpuIndexed,
+}
+
 /// Requested ray-tracing mode (spec section 18). Avoid a single boolean:
 /// `local` buys RT where it has the highest local visual value, `full`
 /// enables everything within budget, `auto` resolves by capability.
@@ -100,6 +114,12 @@ pub struct RendererSettings {
     pub backend: BackendRequest,
     #[serde(default)]
     pub ray_tracing: RayTracingRequest,
+    #[serde(default)]
+    pub terrain: TerrainRenderRequest,
+    /// CPU terrain vertices per tile edge. The indexed GPU path has a fixed
+    /// 33x33 page contract and therefore uses 32 internally.
+    #[serde(default = "default_terrain_mesh_cells")]
+    pub terrain_mesh_cells: u32,
     #[serde(default = "default_resolution_scale")]
     pub resolution_scale: f32,
     #[serde(default = "default_true")]
@@ -122,11 +142,17 @@ fn default_resolution_scale() -> f32 {
     1.0
 }
 
+fn default_terrain_mesh_cells() -> u32 {
+    24
+}
+
 impl Default for RendererSettings {
     fn default() -> Self {
         Self {
             backend: BackendRequest::Auto,
             ray_tracing: RayTracingRequest::Auto,
+            terrain: TerrainRenderRequest::Cpu,
+            terrain_mesh_cells: default_terrain_mesh_cells(),
             resolution_scale: 1.0,
             vsync: true,
             hdr: true,
@@ -203,10 +229,34 @@ pub struct CloudSettings {
     pub ray_steps: u32,
     #[serde(default)]
     pub cast_shadows: bool,
+    /// Cheap shell layers: 1 = single deck, 2 = low deck + cirrus.
+    #[serde(default = "default_cloud_layers")]
+    pub layers: u32,
+    /// Coverage threshold over the procedural fBm field (0 = overcast, 1 = clear).
+    #[serde(default = "default_cloud_coverage")]
+    pub coverage: f32,
+    /// Alpha gain over the shell texture.
+    #[serde(default = "default_cloud_opacity")]
+    pub opacity: f32,
+    /// Rotate decks differentially; off = static (cheapest, still shaded).
+    #[serde(default = "default_true")]
+    pub animate: bool,
 }
 
 fn default_cloud_steps() -> u32 {
     16
+}
+
+fn default_cloud_layers() -> u32 {
+    1
+}
+
+fn default_cloud_coverage() -> f32 {
+    0.45
+}
+
+fn default_cloud_opacity() -> f32 {
+    0.9
 }
 
 impl Default for CloudSettings {
@@ -217,6 +267,10 @@ impl Default for CloudSettings {
             volumetric: false,
             ray_steps: 16,
             cast_shadows: false,
+            layers: default_cloud_layers(),
+            coverage: default_cloud_coverage(),
+            opacity: default_cloud_opacity(),
+            animate: true,
         }
     }
 }
@@ -239,6 +293,16 @@ pub struct UpperAtmosphereSettings {
     pub aurora_quality: AuroraQuality,
     #[serde(default)]
     pub aurora_lighting: bool,
+    /// Emission gain over the analytic oval model (appearance only).
+    #[serde(default = "default_aurora_intensity")]
+    pub aurora_intensity: f32,
+    /// Slide curtains with sim time; off = static oval (cheapest).
+    #[serde(default = "default_true")]
+    pub aurora_animate: bool,
+}
+
+fn default_aurora_intensity() -> f32 {
+    1.0
 }
 
 impl Default for UpperAtmosphereSettings {
@@ -248,6 +312,66 @@ impl Default for UpperAtmosphereSettings {
             aurora: true,
             aurora_quality: AuroraQuality::Low,
             aurora_lighting: false,
+            aurora_intensity: default_aurora_intensity(),
+            aurora_animate: true,
+        }
+    }
+}
+
+/// Cheap gas-giant look: procedural band textures baked once on the CPU,
+/// no custom shader, no per-frame cost beyond a slow mesh spin.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GasGiantSettings {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub quality: Quality,
+    /// Slow band drift / storm rotation; off = static (cheapest).
+    #[serde(default = "default_true")]
+    pub animate_bands: bool,
+    /// Boost belt/zone contrast baked into the texture (appearance only).
+    #[serde(default = "default_true")]
+    pub limb_darkening: bool,
+}
+
+impl Default for GasGiantSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            quality: Quality::Medium,
+            animate_bands: true,
+            limb_darkening: true,
+        }
+    }
+}
+
+/// Cheap realistic plume: cone mesh + baked gradient/Mach-diamond texture +
+/// flicker + one optional point light. No particles, no volumetrics.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnginePlumeSettings {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub quality: Quality,
+    /// Mach-diamond bands baked into the emissive texture.
+    #[serde(default = "default_true")]
+    pub mach_diamonds: bool,
+    /// Throttle-driven flicker; off = steady plume (cheapest).
+    #[serde(default = "default_true")]
+    pub flicker: bool,
+    /// One point light at the nozzle; off saves a forward light.
+    #[serde(default = "default_true")]
+    pub light: bool,
+}
+
+impl Default for EnginePlumeSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            quality: Quality::Medium,
+            mach_diamonds: true,
+            flicker: true,
+            light: true,
         }
     }
 }
@@ -293,6 +417,61 @@ pub struct DebugSettings {
     pub show_rt_proxies: bool,
 }
 
+/// Sun shadow map cascade coverage. The engine default ends at 150 m, so a
+/// survey camera at kilometres would see no self-shadowing at all; these
+/// bounds carry planetary-scale cover explicitly instead of magic numbers
+/// in the client.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShadowSettings {
+    /// Master switch for the raster shadow path (RT lighting ignores it).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub quality: Quality,
+    /// Cascade count, 1..=4.
+    #[serde(default = "default_shadow_cascades")]
+    pub cascades: u32,
+    /// Far end of cascade cover in metres. Near stays sub-metre for pilot
+    /// detail; the first cascade ends at max/40.
+    #[serde(default = "default_shadow_distance")]
+    pub max_distance_m: f64,
+    /// Shadow texel grid per cascade (power of two, 512..=8192).
+    #[serde(default = "default_shadow_map_size")]
+    pub map_size: u32,
+    /// Normal offset in metres against acne on 32 m mesh cells.
+    #[serde(default = "default_shadow_normal_bias")]
+    pub normal_bias_m: f64,
+}
+
+fn default_shadow_cascades() -> u32 {
+    4
+}
+
+fn default_shadow_distance() -> f64 {
+    12_000.0
+}
+
+fn default_shadow_map_size() -> u32 {
+    4096
+}
+
+fn default_shadow_normal_bias() -> f64 {
+    1.5
+}
+
+impl Default for ShadowSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            quality: Quality::High,
+            cascades: default_shadow_cascades(),
+            max_distance_m: default_shadow_distance(),
+            map_size: default_shadow_map_size(),
+            normal_bias_m: default_shadow_normal_bias(),
+        }
+    }
+}
+
 /// Requested graphics configuration as parsed from `graphics.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestedGraphics {
@@ -311,6 +490,12 @@ pub struct RequestedGraphics {
     #[serde(default)]
     pub raytracing: RaytracingParticipation,
     #[serde(default)]
+    pub shadows: ShadowSettings,
+    #[serde(default)]
+    pub gas_giant: GasGiantSettings,
+    #[serde(default)]
+    pub engine_plume: EnginePlumeSettings,
+    #[serde(default)]
     pub debug: DebugSettings,
 }
 
@@ -328,6 +513,9 @@ impl Default for RequestedGraphics {
             clouds: CloudSettings::default(),
             upper_atmosphere: UpperAtmosphereSettings::default(),
             raytracing: RaytracingParticipation::default(),
+            shadows: ShadowSettings::default(),
+            gas_giant: GasGiantSettings::default(),
+            engine_plume: EnginePlumeSettings::default(),
             debug: DebugSettings::default(),
         }
     }
@@ -378,6 +566,12 @@ impl RequestedGraphics {
                 ),
             });
         }
+        if !(8..=64).contains(&self.renderer.terrain_mesh_cells) {
+            return Err(ConfigError::InvalidValue {
+                path: "renderer.terrain_mesh_cells",
+                detail: format!("expected 8..=64, got {}", self.renderer.terrain_mesh_cells),
+            });
+        }
         if !(1.0..=20.0).contains(&self.renderer.exposure_ev100) {
             return Err(ConfigError::InvalidValue {
                 path: "renderer.exposure_ev100",
@@ -390,10 +584,72 @@ impl RequestedGraphics {
                 detail: format!("expected 4..=128, got {}", self.atmosphere.ray_steps),
             });
         }
+        if !(4..=128).contains(&self.clouds.ray_steps) {
+            return Err(ConfigError::InvalidValue {
+                path: "clouds.ray_steps",
+                detail: format!("expected 4..=128, got {}", self.clouds.ray_steps),
+            });
+        }
+        if !(1..=2).contains(&self.clouds.layers) {
+            return Err(ConfigError::InvalidValue {
+                path: "clouds.layers",
+                detail: format!("expected 1..=2, got {}", self.clouds.layers),
+            });
+        }
+        if !(0.0..=1.0).contains(&self.clouds.coverage) {
+            return Err(ConfigError::InvalidValue {
+                path: "clouds.coverage",
+                detail: format!("expected 0..=1, got {}", self.clouds.coverage),
+            });
+        }
+        if !(0.0..=1.0).contains(&self.clouds.opacity) {
+            return Err(ConfigError::InvalidValue {
+                path: "clouds.opacity",
+                detail: format!("expected 0..=1, got {}", self.clouds.opacity),
+            });
+        }
+        if !(0.0..=4.0).contains(&self.upper_atmosphere.aurora_intensity) {
+            return Err(ConfigError::InvalidValue {
+                path: "upper_atmosphere.aurora_intensity",
+                detail: format!(
+                    "expected 0..=4, got {}",
+                    self.upper_atmosphere.aurora_intensity
+                ),
+            });
+        }
         if self.raytracing.max_distance_m < 0.0 {
             return Err(ConfigError::InvalidValue {
                 path: "raytracing.max_distance_m",
                 detail: "expected >= 0".to_string(),
+            });
+        }
+        if !(1..=4).contains(&self.shadows.cascades) {
+            return Err(ConfigError::InvalidValue {
+                path: "shadows.cascades",
+                detail: format!("expected 1..=4, got {}", self.shadows.cascades),
+            });
+        }
+        if !(100.0..=100_000.0).contains(&self.shadows.max_distance_m) {
+            return Err(ConfigError::InvalidValue {
+                path: "shadows.max_distance_m",
+                detail: format!("expected 100..=100000, got {}", self.shadows.max_distance_m),
+            });
+        }
+        if !(512..=8192).contains(&self.shadows.map_size)
+            || !self.shadows.map_size.is_power_of_two()
+        {
+            return Err(ConfigError::InvalidValue {
+                path: "shadows.map_size",
+                detail: format!(
+                    "expected a power of two in 512..=8192, got {}",
+                    self.shadows.map_size
+                ),
+            });
+        }
+        if !(0.0..=50.0).contains(&self.shadows.normal_bias_m) {
+            return Err(ConfigError::InvalidValue {
+                path: "shadows.normal_bias_m",
+                detail: format!("expected 0..=50, got {}", self.shadows.normal_bias_m),
             });
         }
         Ok(())
@@ -407,40 +663,100 @@ impl RequestedGraphics {
             Preset::Low => {
                 self.renderer.resolution_scale = 0.75;
                 self.renderer.ray_tracing = RayTracingRequest::Off;
+                self.renderer.terrain_mesh_cells = 16;
                 self.atmosphere.quality = Quality::Low;
                 self.atmosphere.ray_steps = 8;
                 self.atmosphere.aerial_perspective = false;
                 self.atmosphere.limb_scattering = true;
                 self.clouds.enabled = false;
+                self.clouds.layers = 1;
+                self.clouds.animate = false;
+                self.gas_giant.quality = Quality::Low;
+                self.gas_giant.animate_bands = false;
+                self.engine_plume.quality = Quality::Low;
+                self.engine_plume.light = false;
+                self.engine_plume.mach_diamonds = false;
+                self.engine_plume.flicker = false;
+                self.shadows.quality = Quality::Low;
+                self.shadows.cascades = 2;
+                self.shadows.max_distance_m = 3000.0;
+                self.shadows.map_size = 1024;
+                self.shadows.normal_bias_m = 2.0;
                 self.upper_atmosphere.aurora_quality = AuroraQuality::Low;
                 self.upper_atmosphere.aurora_lighting = false;
             }
             Preset::Medium => {
                 self.renderer.resolution_scale = 1.0;
                 self.renderer.ray_tracing = RayTracingRequest::Auto;
+                self.renderer.terrain_mesh_cells = 20;
                 self.atmosphere.quality = Quality::Medium;
                 self.atmosphere.ray_steps = 16;
                 self.atmosphere.aerial_perspective = true;
                 self.clouds.enabled = false;
+                self.clouds.layers = 1;
+                self.clouds.animate = true;
+                self.gas_giant.quality = Quality::Medium;
+                self.gas_giant.animate_bands = true;
+                self.engine_plume.quality = Quality::Medium;
+                self.engine_plume.light = true;
+                self.engine_plume.mach_diamonds = true;
+                self.engine_plume.flicker = true;
+                self.shadows.quality = Quality::Medium;
+                self.shadows.cascades = 4;
+                self.shadows.max_distance_m = 6000.0;
+                self.shadows.map_size = 2048;
+                self.shadows.normal_bias_m = 1.5;
                 self.upper_atmosphere.aurora_quality = AuroraQuality::Low;
             }
             Preset::High => {
                 self.renderer.resolution_scale = 1.0;
                 self.renderer.ray_tracing = RayTracingRequest::Auto;
+                self.renderer.terrain_mesh_cells = 24;
                 self.atmosphere.quality = Quality::High;
                 self.atmosphere.ray_steps = 24;
                 self.atmosphere.aerial_perspective = true;
                 self.clouds.enabled = false;
+                self.clouds.layers = 1;
+                self.clouds.animate = true;
+                self.gas_giant.quality = Quality::High;
+                self.gas_giant.animate_bands = true;
+                self.engine_plume.quality = Quality::High;
+                self.engine_plume.light = true;
+                self.engine_plume.mach_diamonds = true;
+                self.engine_plume.flicker = true;
+                self.shadows.quality = Quality::High;
+                self.shadows.cascades = 4;
+                self.shadows.max_distance_m = 12_000.0;
+                self.shadows.map_size = 4096;
+                self.shadows.normal_bias_m = 1.5;
                 self.upper_atmosphere.aurora_quality = AuroraQuality::Low;
+                self.upper_atmosphere.aurora_intensity = 1.0;
+                self.upper_atmosphere.aurora_animate = true;
             }
             Preset::Ultra => {
                 self.renderer.resolution_scale = 1.0;
                 self.renderer.ray_tracing = RayTracingRequest::Auto;
+                self.renderer.terrain_mesh_cells = 32;
                 self.atmosphere.quality = Quality::High;
                 self.atmosphere.ray_steps = 32;
                 self.atmosphere.aerial_perspective = true;
                 self.clouds.enabled = false;
+                self.clouds.layers = 2;
+                self.clouds.animate = true;
+                self.gas_giant.quality = Quality::High;
+                self.gas_giant.animate_bands = true;
+                self.engine_plume.quality = Quality::High;
+                self.engine_plume.light = true;
+                self.engine_plume.mach_diamonds = true;
+                self.engine_plume.flicker = true;
+                self.shadows.quality = Quality::High;
+                self.shadows.cascades = 4;
+                self.shadows.max_distance_m = 20_000.0;
+                self.shadows.map_size = 4096;
+                self.shadows.normal_bias_m = 1.0;
                 self.upper_atmosphere.aurora_quality = AuroraQuality::High;
+                self.upper_atmosphere.aurora_intensity = 1.2;
+                self.upper_atmosphere.aurora_animate = true;
             }
             Preset::Custom => {}
         }
@@ -458,8 +774,10 @@ impl RequestedGraphics {
         expanded.preset = Preset::Custom;
         let mut current = self.clone();
         current.preset = Preset::Custom;
-        // Backend request is intent, not budget: ignore it for custom detection.
+        // Backend and terrain requests are intent, not preset budgets: ignore
+        // them for custom detection.
         current.renderer.backend = expanded.renderer.backend;
+        current.renderer.terrain = expanded.renderer.terrain;
         current != expanded
     }
 
@@ -482,6 +800,7 @@ mod tests {
         let text = include_str!("../../../graphics.toml");
         let config = RequestedGraphics::from_toml(text).unwrap();
         assert_eq!(config.version, 1);
+        assert_eq!(config.renderer.terrain, TerrainRenderRequest::Cpu);
     }
 
     #[test]
@@ -501,6 +820,36 @@ mod tests {
         assert!(RequestedGraphics::from_toml(bad).is_err());
         let bad_steps = "preset = \"high\"\n[atmosphere]\nray_steps = 2\n";
         assert!(RequestedGraphics::from_toml(bad_steps).is_err());
+        let bad_cloud_steps = "preset = \"high\"\n[clouds]\nray_steps = 2\n";
+        assert!(RequestedGraphics::from_toml(bad_cloud_steps).is_err());
+        let bad_terrain_cells = "preset = \"high\"\n[renderer]\nterrain_mesh_cells = 4\n";
+        assert!(RequestedGraphics::from_toml(bad_terrain_cells).is_err());
+    }
+
+    #[test]
+    fn shadow_budgets_expand_with_presets_and_validate() {
+        let mut config = RequestedGraphics::default();
+        config.apply_preset(Preset::Low);
+        assert_eq!(config.shadows.cascades, 2);
+        assert_eq!(config.shadows.map_size, 1024);
+        assert!(!config.is_custom());
+        config.apply_preset(Preset::High);
+        assert_eq!(config.shadows.cascades, 4);
+        assert_eq!(config.shadows.max_distance_m, 12_000.0);
+        assert!(!config.is_custom());
+        for bad in [
+            "preset = \"high\"\n[shadows]\ncascades = 9\n",
+            "preset = \"high\"\n[shadows]\nmap_size = 1000\n",
+            "preset = \"high\"\n[shadows]\nmax_distance_m = -5.0\n",
+            "preset = \"high\"\n[shadows]\nnormal_bias_m = 500.0\n",
+        ] {
+            assert!(RequestedGraphics::from_toml(bad).is_err(), "{bad}");
+        }
+        // Missing section still parses (old configs without shadows).
+        let legacy = "preset = \"high\"\n[renderer]\nresolution_scale = 1.0\n";
+        let parsed = RequestedGraphics::from_toml(legacy).unwrap();
+        assert_eq!(parsed.shadows.cascades, 4);
+        assert!(parsed.shadows.enabled);
     }
 
     #[test]

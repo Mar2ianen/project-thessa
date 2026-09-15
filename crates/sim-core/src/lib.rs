@@ -56,8 +56,9 @@ pub use gravity_tree::{
 };
 pub use integrator::{
     AdaptiveIntegratorConfig, ImpulsiveBurn, IntegratorError, IntegratorStats, PropagationResult,
-    SampledPath, SampledPathEnd, TestParticleState, VerletConfig, propagate_adaptive,
-    propagate_adaptive_with_burns, propagate_sampled_extend, propagate_sampled_verlet,
+    SampledPath, SampledPathEnd, TestParticleState, ThrustArc, ThrustDirection,
+    ThrustPropagationResult, VerletConfig, propagate_adaptive, propagate_adaptive_with_burns,
+    propagate_adaptive_with_thrust, propagate_sampled_extend, propagate_sampled_verlet,
     propagate_sampled_verlet_fast, propagate_sampled_verlet_scaled, propagate_velocity_verlet,
 };
 pub use onrails::{

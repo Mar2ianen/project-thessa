@@ -22,8 +22,9 @@ mod ops;
 mod patch;
 mod plan;
 mod search;
+mod thrust;
 
-pub use execute::{ExecutionCommand, ExecutorOutput, NodeExecutor};
+pub use execute::{ExecutionCommand, ExecutorOutput, NodeExecutor, SegmentExecutor, SegmentOutput};
 pub use flyby::{
     FlybyConfig, candidate_flyby_bodies, flyby_search, max_bend_angle_rad, powered_flyby_burn_mps,
 };
@@ -34,4 +35,8 @@ pub use ops::{
 pub use plan::{FlybyEvent, ManeuverNode, ManeuverPlan, PlanError, PlanValidation};
 pub use search::{
     BroadRoute, RankedPlan, SearchConfig, SearchStats, broad_survey, porkchop_search,
+};
+pub use thrust::{
+    BurnSegment, BurnValidation, EngineSpec, FiniteBurnPlan, SegmentDirection, SplitMode,
+    ThrustPlanError, orbit_period, realize_impulsive, validate_finite_burn,
 };

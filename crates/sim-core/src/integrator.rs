@@ -1083,6 +1083,395 @@ fn validate_burn_schedule(duration_s: f64, burns: &[ImpulsiveBurn]) -> Result<()
     Ok(())
 }
 
+/// Thrust direction for a finite-burn arc.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ThrustDirection {
+    /// Fixed unit vector, inertial frame.
+    Inertial(DVec3),
+    /// Along the instantaneous inertial velocity.
+    Prograde,
+    /// Against the instantaneous inertial velocity.
+    Retrograde,
+}
+
+/// One finite-thrust arc; times relative to propagation start. Thrust and
+/// mass flow are full-throttle ratings scaled by `throttle_01`. Mass
+/// depletes in closed form inside the arc (`m(t) = m0 - mdot*t` — no extra
+/// ODE state); the adaptive stepper sees only the smooth time-dependent
+/// acceleration. Arcs must be ordered and non-overlapping; everything
+/// between arcs coasts ballistically on the proven path.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThrustArc {
+    pub start_s: f64,
+    pub duration_s: f64,
+    pub direction: ThrustDirection,
+    pub throttle_01: f64,
+    pub thrust_n: f64,
+    pub mass_flow_kgs: f64,
+}
+
+/// Result of thrust propagation: end state plus remaining mass.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThrustPropagationResult {
+    pub state: TestParticleState,
+    pub end_time: SimTime,
+    pub final_mass_kg: f64,
+    pub stats: IntegratorStats,
+}
+
+fn validate_thrust_schedule(
+    duration_s: f64,
+    arcs: &[ThrustArc],
+    initial_mass_kg: f64,
+) -> Result<(), IntegratorError> {
+    if !initial_mass_kg.is_finite() || initial_mass_kg <= 0.0 {
+        return Err(IntegratorError::InvalidConfig(
+            "initial mass must be finite and positive".into(),
+        ));
+    }
+    let mut previous_end_s = 0.0;
+    for (index, arc) in arcs.iter().enumerate() {
+        if !arc.start_s.is_finite()
+            || !arc.duration_s.is_finite()
+            || !arc.throttle_01.is_finite()
+            || !arc.thrust_n.is_finite()
+            || !arc.mass_flow_kgs.is_finite()
+            || arc.start_s < 0.0
+            || arc.duration_s < 0.0
+            || arc.start_s + arc.duration_s > duration_s
+            || arc.start_s < previous_end_s
+            || arc.throttle_01 < 0.0
+            || arc.throttle_01 > 1.0
+            || arc.thrust_n < 0.0
+            || arc.mass_flow_kgs < 0.0
+        {
+            return Err(IntegratorError::InvalidConfig(format!(
+                "thrust arc {index} is outside the ordered propagation interval"
+            )));
+        }
+        if let ThrustDirection::Inertial(direction) = arc.direction {
+            if !direction.is_finite() {
+                return Err(IntegratorError::InvalidConfig(format!(
+                    "thrust arc {index} has non-finite inertial direction"
+                )));
+            }
+            if arc.throttle_01 > 0.0 && arc.thrust_n > 0.0 && direction.length_squared() <= 0.0 {
+                return Err(IntegratorError::InvalidConfig(format!(
+                    "thrust arc {index} has zero direction with a live engine"
+                )));
+            }
+        }
+        previous_end_s = arc.start_s + arc.duration_s;
+    }
+    Ok(())
+}
+
+/// Thrust acceleration vector (inertial) at the current state and mass.
+/// Dead arcs (zero throttle or zero thrust) coast exactly, without
+/// touching the direction (so parked zero directions are legal).
+fn thrust_vector(
+    direction: ThrustDirection,
+    velocity_mps: DVec3,
+    throttle_01: f64,
+    thrust_n: f64,
+    mass_kg: f64,
+) -> Result<DVec3, IntegratorError> {
+    let newtons = throttle_01 * thrust_n;
+    if newtons <= 0.0 {
+        return Ok(DVec3::ZERO);
+    }
+    let unit = match direction {
+        ThrustDirection::Inertial(fixed) => fixed.normalize(),
+        ThrustDirection::Prograde => {
+            if velocity_mps.length_squared() <= 0.0 {
+                return Err(IntegratorError::InvalidConfig(
+                    "prograde steering needs nonzero velocity".into(),
+                ));
+            }
+            velocity_mps.normalize()
+        }
+        ThrustDirection::Retrograde => {
+            if velocity_mps.length_squared() <= 0.0 {
+                return Err(IntegratorError::InvalidConfig(
+                    "retrograde steering needs nonzero velocity".into(),
+                ));
+            }
+            -velocity_mps.normalize()
+        }
+    };
+    Ok(unit * (newtons / mass_kg))
+}
+
+fn thrust_derivative(
+    field: &GravityField<'_>,
+    state: TestParticleState,
+    time: SimTime,
+    mass_kg: f64,
+    arc: &ThrustArc,
+) -> Result<Derivative, IntegratorError> {
+    let mut acceleration = field.acceleration(state.position, time)?;
+    acceleration += thrust_vector(
+        arc.direction,
+        state.velocity,
+        arc.throttle_01,
+        arc.thrust_n,
+        mass_kg,
+    )?;
+    Ok(Derivative {
+        position: state.velocity,
+        velocity: acceleration,
+    })
+}
+
+/// Evaluation context for one thrust-arc step: closed-form mass needs the
+/// arc start mass and the propagation-relative arc start time.
+struct ThrustStepCtx<'a> {
+    arc: &'a ThrustArc,
+    mass_at_arc_start_kg: f64,
+    arc_start_elapsed_s: f64,
+    step_start_elapsed_s: f64,
+}
+
+impl ThrustStepCtx<'_> {
+    fn mass_at(&self, elapsed_s: f64) -> f64 {
+        self.mass_at_arc_start_kg
+            - self.arc.mass_flow_kgs * self.arc.throttle_01 * (elapsed_s - self.arc_start_elapsed_s)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dormand_prince_thrust_step(
+    field: &GravityField<'_>,
+    state: TestParticleState,
+    time: SimTime,
+    h: f64,
+    ctx: &ThrustStepCtx<'_>,
+) -> Result<(TestParticleState, TestParticleState), IntegratorError> {
+    // Same DP5 tableau as the ballistic core; only the derivative carries
+    // thrust (time-dependent through closed-form mass, state-dependent
+    // through velocity-aligned steering). The ballistic path is untouched.
+    let thrust_at = |state: TestParticleState, time: SimTime, elapsed_s: f64| {
+        thrust_derivative(field, state, time, ctx.mass_at(elapsed_s), ctx.arc)
+    };
+    let k1 = thrust_at(state, time, ctx.step_start_elapsed_s)?;
+    let k2 = thrust_at(
+        combine(state, h, &[(1.0 / 5.0, k1)]),
+        time.offset(h * 1.0 / 5.0),
+        ctx.step_start_elapsed_s + h * 1.0 / 5.0,
+    )?;
+    let k3 = thrust_at(
+        combine(state, h, &[(3.0 / 40.0, k1), (9.0 / 40.0, k2)]),
+        time.offset(h * 3.0 / 10.0),
+        ctx.step_start_elapsed_s + h * 3.0 / 10.0,
+    )?;
+    let k4 = thrust_at(
+        combine(
+            state,
+            h,
+            &[(44.0 / 45.0, k1), (-56.0 / 15.0, k2), (32.0 / 9.0, k3)],
+        ),
+        time.offset(h * 4.0 / 5.0),
+        ctx.step_start_elapsed_s + h * 4.0 / 5.0,
+    )?;
+    let k5 = thrust_at(
+        combine(
+            state,
+            h,
+            &[
+                (19372.0 / 6561.0, k1),
+                (-25360.0 / 2187.0, k2),
+                (64448.0 / 6561.0, k3),
+                (-212.0 / 729.0, k4),
+            ],
+        ),
+        time.offset(h * 8.0 / 9.0),
+        ctx.step_start_elapsed_s + h * 8.0 / 9.0,
+    )?;
+    let k6 = thrust_at(
+        combine(
+            state,
+            h,
+            &[
+                (9017.0 / 3168.0, k1),
+                (-355.0 / 33.0, k2),
+                (46732.0 / 5247.0, k3),
+                (49.0 / 176.0, k4),
+                (-5103.0 / 18656.0, k5),
+            ],
+        ),
+        time.offset(h),
+        ctx.step_start_elapsed_s + h,
+    )?;
+    let k7 = thrust_at(
+        combine(
+            state,
+            h,
+            &[
+                (35.0 / 384.0, k1),
+                (500.0 / 1113.0, k3),
+                (125.0 / 192.0, k4),
+                (-2187.0 / 6784.0, k5),
+                (11.0 / 84.0, k6),
+            ],
+        ),
+        time.offset(h),
+        ctx.step_start_elapsed_s + h,
+    )?;
+    let fifth = combine(
+        state,
+        h,
+        &[
+            (35.0 / 384.0, k1),
+            (500.0 / 1113.0, k3),
+            (125.0 / 192.0, k4),
+            (-2187.0 / 6784.0, k5),
+            (11.0 / 84.0, k6),
+        ],
+    );
+    let fourth = combine(
+        state,
+        h,
+        &[
+            (5179.0 / 57600.0, k1),
+            (7571.0 / 16695.0, k3),
+            (393.0 / 640.0, k4),
+            (-92097.0 / 339200.0, k5),
+            (187.0 / 2100.0, k6),
+            (1.0 / 40.0, k7),
+        ],
+    );
+    Ok((
+        fifth,
+        TestParticleState {
+            position: fifth.position - fourth.position,
+            velocity: fifth.velocity - fourth.velocity,
+        },
+    ))
+}
+
+/// Integrate one thrust arc; returns end state and end mass.
+fn propagate_thrust_arc(
+    field: &GravityField<'_>,
+    initial: TestParticleState,
+    mass_at_arc_start_kg: f64,
+    start_time: SimTime,
+    arc_start_elapsed_s: f64,
+    arc: &ThrustArc,
+    config: AdaptiveIntegratorConfig,
+) -> Result<(TestParticleState, f64, IntegratorStats), IntegratorError> {
+    let mut state = initial;
+    let mut elapsed_s = arc_start_elapsed_s;
+    let mut remaining = arc.duration_s;
+    let mut step_s = config.initial_step_s.min(config.max_step_s);
+    let mut stats = IntegratorStats::default();
+    while remaining > 0.0 {
+        if stats.accepted_steps + stats.rejected_steps >= config.max_steps {
+            return Err(IntegratorError::MaxSteps);
+        }
+        let h = step_s.min(remaining);
+        if h < config.min_step_s && remaining > config.min_step_s {
+            return Err(IntegratorError::StepUnderflow { step_s: h });
+        }
+        let ctx = ThrustStepCtx {
+            arc,
+            mass_at_arc_start_kg,
+            arc_start_elapsed_s,
+            step_start_elapsed_s: elapsed_s,
+        };
+        let time = start_time.offset(elapsed_s - arc_start_elapsed_s);
+        let (candidate, error_state) = dormand_prince_thrust_step(field, state, time, h, &ctx)?;
+        let error = normalized_error(error_state, candidate, config);
+        if error <= 1.0 || h <= config.min_step_s {
+            if error > 1.0 {
+                return Err(IntegratorError::StepUnderflow { step_s: h });
+            }
+            state = candidate;
+            elapsed_s += h;
+            remaining -= h;
+            stats.accepted_steps += 1;
+            step_s = next_step(h, error, config.max_step_s);
+        } else {
+            stats.rejected_steps += 1;
+            step_s = (h * (0.9 * error.powf(-0.2)).clamp(0.1, 0.5)).max(config.min_step_s);
+        }
+    }
+    let mass_end_kg = mass_at_arc_start_kg - arc.mass_flow_kgs * arc.throttle_01 * arc.duration_s;
+    Ok((state, mass_end_kg, stats))
+}
+
+/// Propagate ballistic coasts and finite-thrust arcs over one horizon.
+///
+/// Arcs split the horizon exactly like impulsive burns do; coasts reuse
+/// the proven ballistic stepper. Propellant is checked BEFORE each arc
+/// (an arc that would empty the tanks is a planning error, not a silent
+/// coast). Returns the end state and remaining mass.
+pub fn propagate_adaptive_with_thrust(
+    field: &GravityField<'_>,
+    initial: TestParticleState,
+    initial_mass_kg: f64,
+    start_time: SimTime,
+    duration_s: f64,
+    arcs: &[ThrustArc],
+    config: AdaptiveIntegratorConfig,
+) -> Result<ThrustPropagationResult, IntegratorError> {
+    validate_duration(duration_s)?;
+    validate_adaptive_config(config)?;
+    validate_thrust_schedule(duration_s, arcs, initial_mass_kg)?;
+
+    let mut state = initial;
+    let mut mass_kg = initial_mass_kg;
+    let mut elapsed_s = 0.0;
+    let mut stats = IntegratorStats::default();
+    for arc in arcs {
+        if arc.start_s > elapsed_s {
+            let coast = propagate_adaptive(
+                field,
+                state,
+                start_time.offset(elapsed_s),
+                arc.start_s - elapsed_s,
+                config,
+            )?;
+            state = coast.state;
+            stats.accepted_steps += coast.stats.accepted_steps;
+            stats.rejected_steps += coast.stats.rejected_steps;
+            elapsed_s = arc.start_s;
+        }
+        if arc.duration_s > 0.0 {
+            let consumption = arc.mass_flow_kgs * arc.throttle_01 * arc.duration_s;
+            if mass_kg - consumption <= 0.0 {
+                return Err(IntegratorError::InvalidConfig(
+                    "thrust arc depletes propellant".into(),
+                ));
+            }
+            let (end, mass_end, arc_stats) =
+                propagate_thrust_arc(field, state, mass_kg, start_time, elapsed_s, arc, config)?;
+            state = end;
+            mass_kg = mass_end;
+            stats.accepted_steps += arc_stats.accepted_steps;
+            stats.rejected_steps += arc_stats.rejected_steps;
+            elapsed_s += arc.duration_s;
+        }
+    }
+    if duration_s > elapsed_s {
+        let coast = propagate_adaptive(
+            field,
+            state,
+            start_time.offset(elapsed_s),
+            duration_s - elapsed_s,
+            config,
+        )?;
+        state = coast.state;
+        stats.accepted_steps += coast.stats.accepted_steps;
+        stats.rejected_steps += coast.stats.rejected_steps;
+    }
+    Ok(ThrustPropagationResult {
+        state,
+        end_time: start_time.offset(duration_s),
+        final_mass_kg: mass_kg,
+        stats,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum IntegratorError {
     Gravity(GravityError),

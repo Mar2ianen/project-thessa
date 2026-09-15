@@ -25,3 +25,7 @@ harness = false
 [[bench]]
 name = "interbody"
 harness = false
+
+[[bench]]
+name = "low_thrust"
+harness = false

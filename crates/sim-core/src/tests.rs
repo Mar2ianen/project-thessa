@@ -4383,3 +4383,300 @@ fn profile_scalar_vs_soa_dev() {
     eprintln!("scalar: {:?} total, {:?}/eval", scalar, scalar / iters);
     eprintln!("soa+sync: {:?} total, {:?}/eval", soa, soa / iters);
 }
+
+// ---- Finite-thrust propagation (integrator thrust arcs) ----
+
+fn circular_state(mu: f64, radius: f64) -> TestParticleState {
+    TestParticleState {
+        position: DVec3::new(radius, 0.0, 0.0),
+        velocity: DVec3::new(0.0, (mu / radius).sqrt(), 0.0),
+    }
+}
+
+fn orbital_energy(mu: f64, state: TestParticleState) -> f64 {
+    state.velocity.length_squared() / 2.0 - mu / state.position.length()
+}
+
+#[test]
+fn thrust_arc_depletes_mass_in_closed_form() {
+    let mu = 1.2e17;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let arc = ThrustArc {
+        start_s: 100.0,
+        duration_s: 1_000.0,
+        direction: ThrustDirection::Inertial(DVec3::Y),
+        throttle_01: 0.8,
+        thrust_n: 1_000.0,
+        mass_flow_kgs: 0.05,
+    };
+    let result = propagate_adaptive_with_thrust(
+        &field,
+        circular_state(mu, 1.1e9),
+        20_000.0,
+        SimTime::EPOCH,
+        2_000.0,
+        &[arc],
+        AdaptiveIntegratorConfig::default(),
+    )
+    .expect("thrust arc propagates");
+    // Closed form (the integrator never touches mass): m = m0 - mdot*t.
+    assert!((result.final_mass_kg - (20_000.0 - 0.05 * 0.8 * 1_000.0)).abs() < 1e-9);
+    assert!((result.end_time.seconds() - (SimTime::EPOCH.seconds() + 2_000.0)).abs() < 1e-6);
+    assert!(result.state.position.is_finite());
+}
+
+#[test]
+fn dead_thrust_arc_matches_ballistic() {
+    // Zero throttle over the WHOLE horizon: the thrust stepper must
+    // reproduce the ballistic stepper (same tableau, +0.0 thrust) — guards
+    // the duplicated core. (A mid-horizon dead arc restarts the stepper
+    // at the boundary, so it only agrees to tolerance — see below.)
+    let mu = 1.2e17;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let initial = circular_state(mu, 1.1e9);
+    let arc = ThrustArc {
+        start_s: 0.0,
+        duration_s: 50_000.0,
+        direction: ThrustDirection::Inertial(DVec3::Y),
+        throttle_01: 0.0,
+        thrust_n: 1_000.0,
+        mass_flow_kgs: 0.05,
+    };
+    let thrust = propagate_adaptive_with_thrust(
+        &field,
+        initial,
+        20_000.0,
+        SimTime::EPOCH,
+        50_000.0,
+        &[arc],
+        AdaptiveIntegratorConfig::default(),
+    )
+    .expect("dead arc propagates");
+    let ballistic = propagate_adaptive(
+        &field,
+        initial,
+        SimTime::EPOCH,
+        50_000.0,
+        AdaptiveIntegratorConfig::default(),
+    )
+    .expect("ballistic propagates");
+    assert_eq!(thrust.state, ballistic.state);
+    assert_eq!(thrust.final_mass_kg, 20_000.0);
+}
+
+#[test]
+fn segmented_dead_arcs_match_ballistic_to_tolerance() {
+    // Mid-horizon dead arcs restart the adaptive stepper at boundaries
+    // (fresh initial step), so agreement is to integration tolerance —
+    // this guards the segmentation plumbing, not the tableau.
+    let mu = 1.2e17;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let initial = circular_state(mu, 1.1e9);
+    let arcs = [
+        ThrustArc {
+            start_s: 500.0,
+            duration_s: 10_000.0,
+            direction: ThrustDirection::Inertial(DVec3::Y),
+            throttle_01: 0.0,
+            thrust_n: 1_000.0,
+            mass_flow_kgs: 0.05,
+        },
+        ThrustArc {
+            start_s: 20_000.0,
+            duration_s: 5_000.0,
+            direction: ThrustDirection::Prograde,
+            throttle_01: 0.0,
+            thrust_n: 1_000.0,
+            mass_flow_kgs: 0.05,
+        },
+    ];
+    let thrust = propagate_adaptive_with_thrust(
+        &field,
+        initial,
+        20_000.0,
+        SimTime::EPOCH,
+        50_000.0,
+        &arcs,
+        AdaptiveIntegratorConfig::default(),
+    )
+    .expect("dead arcs propagate");
+    let ballistic = propagate_adaptive(
+        &field,
+        initial,
+        SimTime::EPOCH,
+        50_000.0,
+        AdaptiveIntegratorConfig::default(),
+    )
+    .expect("ballistic propagates");
+    assert!(thrust.state.position.distance(ballistic.state.position) < 1.0);
+    assert_eq!(thrust.final_mass_kg, 20_000.0);
+}
+
+#[test]
+fn prograde_arc_gains_orbital_energy() {
+    // Five-day full-throttle prograde arc: energy must rise (spiral out),
+    // mass must match closed form exactly.
+    let mu = 1.2e17;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let initial = circular_state(mu, 1.1e9);
+    let duration = 5.0 * 86_400.0;
+    let arc = ThrustArc {
+        start_s: 0.0,
+        duration_s: duration,
+        direction: ThrustDirection::Prograde,
+        throttle_01: 1.0,
+        thrust_n: 2.0,
+        mass_flow_kgs: 2.0 / 30_000.0,
+    };
+    let result = propagate_adaptive_with_thrust(
+        &field,
+        initial,
+        2_000.0,
+        SimTime::EPOCH,
+        duration,
+        &[arc],
+        AdaptiveIntegratorConfig::default(),
+    )
+    .expect("spiral propagates");
+    assert!(orbital_energy(mu, result.state) > orbital_energy(mu, initial));
+    assert!(result.state.position.length() > 1.1e9);
+    let expected_mass = 2_000.0 - (2.0 / 30_000.0) * duration;
+    assert!((result.final_mass_kg - expected_mass).abs() / expected_mass < 1e-12);
+}
+
+#[test]
+fn thrust_schedule_validation_rejects_garbage() {
+    let mu = 1.2e17;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let live = ThrustArc {
+        start_s: 0.0,
+        duration_s: 100.0,
+        direction: ThrustDirection::Inertial(DVec3::X),
+        throttle_01: 1.0,
+        thrust_n: 1_000.0,
+        mass_flow_kgs: 0.05,
+    };
+    // Propellant depleted by the arc.
+    let thirsty = ThrustArc {
+        mass_flow_kgs: 10.0,
+        ..live
+    };
+    assert!(
+        propagate_adaptive_with_thrust(
+            &field,
+            circular_state(mu, 1.1e9),
+            100.0,
+            SimTime::EPOCH,
+            200.0,
+            &[thirsty],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .is_err()
+    );
+    // Unordered arcs.
+    let late = ThrustArc {
+        start_s: 150.0,
+        ..live
+    };
+    let early = ThrustArc {
+        start_s: 50.0,
+        ..live
+    };
+    assert!(
+        propagate_adaptive_with_thrust(
+            &field,
+            circular_state(mu, 1.1e9),
+            20_000.0,
+            SimTime::EPOCH,
+            500.0,
+            &[late, early],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .is_err()
+    );
+    // Zero direction with a live engine.
+    let blind = ThrustArc {
+        direction: ThrustDirection::Inertial(DVec3::ZERO),
+        ..live
+    };
+    assert!(
+        propagate_adaptive_with_thrust(
+            &field,
+            circular_state(mu, 1.1e9),
+            20_000.0,
+            SimTime::EPOCH,
+            200.0,
+            &[blind],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .is_err()
+    );
+    // Arc past the horizon, non-positive mass.
+    let past = ThrustArc {
+        start_s: 150.0,
+        duration_s: 100.0,
+        ..live
+    };
+    assert!(
+        propagate_adaptive_with_thrust(
+            &field,
+            circular_state(mu, 1.1e9),
+            20_000.0,
+            SimTime::EPOCH,
+            200.0,
+            &[past],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .is_err()
+    );
+    assert!(
+        propagate_adaptive_with_thrust(
+            &field,
+            circular_state(mu, 1.1e9),
+            0.0,
+            SimTime::EPOCH,
+            200.0,
+            &[live],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn prograde_steering_at_rest_is_an_error() {
+    // Steering is undefined at zero velocity: honest error, never a
+    // silent coast in an arbitrary direction.
+    let mu = 1.2e17;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let rest = TestParticleState {
+        position: DVec3::new(1.1e9, 0.0, 0.0),
+        velocity: DVec3::ZERO,
+    };
+    let arc = ThrustArc {
+        start_s: 0.0,
+        duration_s: 100.0,
+        direction: ThrustDirection::Prograde,
+        throttle_01: 1.0,
+        thrust_n: 1_000.0,
+        mass_flow_kgs: 0.05,
+    };
+    assert!(
+        propagate_adaptive_with_thrust(
+            &field,
+            rest,
+            20_000.0,
+            SimTime::EPOCH,
+            100.0,
+            &[arc],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .is_err()
+    );
+}

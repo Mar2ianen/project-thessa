@@ -18,7 +18,10 @@ use glam::DVec3;
 use serde::{Deserialize, Serialize};
 use thessa_sim_core::SimTime;
 
-use crate::{ManeuverNode, ManeuverPlan, PlanError};
+use crate::{
+    ManeuverNode, ManeuverPlan, PlanError,
+    thrust::{BurnSegment, FiniteBurnPlan, SegmentDirection, ThrustPlanError},
+};
 
 /// Settle time before each node: point first, burn on time.
 pub const SETTLE_LEAD_S: f64 = 30.0;
@@ -173,9 +176,186 @@ impl NodeExecutor {
     }
 }
 
+/// Executor state snapshot for arc telemetry.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SegmentOutput {
+    pub command: ExecutionCommand,
+    pub done: bool,
+    pub active_segment: Option<usize>,
+    /// Accumulated Δv on the active segment (m/s, accelerometer-closed).
+    pub accumulated_mps: f64,
+    /// Planned-minus-accumulated on the last completed segment (m/s,
+    /// positive = underburn). Arcs cut off ON TIME (phasing-critical);
+    /// shortfall is reported for the graph's retry/fallback path, never
+    /// burned through.
+    pub last_shortfall_mps: f64,
+}
+
+/// Time-schedule segment executor for [`FiniteBurnPlan`]: points per
+/// segment (inertial fixed, or velocity-aligned at poll time for
+/// prograde/retrograde steering), burns the scheduled throttle over the
+/// scheduled window, cuts off on time. Unlike nodes, an underperforming
+/// engine does NOT stretch the arc — multi-day phasing would break.
+/// Owns no clock and no vehicle.
+#[derive(Debug, Clone)]
+pub struct SegmentExecutor {
+    segments: Vec<BurnSegment>,
+    index: usize,
+    accumulated_mps: f64,
+    last_time_s: Option<f64>,
+    last_shortfall_mps: f64,
+    last_point: DVec3,
+}
+
+impl SegmentExecutor {
+    pub fn new(plan: &FiniteBurnPlan) -> Result<Self, ThrustPlanError> {
+        Ok(Self {
+            segments: plan.segments.clone(),
+            index: 0,
+            accumulated_mps: 0.0,
+            last_time_s: None,
+            last_shortfall_mps: 0.0,
+            last_point: DVec3::ZERO,
+        })
+    }
+
+    /// `(start, end)` scheduler windows for every segment.
+    pub fn to_scheduler_events(&self) -> Vec<(SimTime, SimTime)> {
+        self.segments
+            .iter()
+            .map(|segment| (segment.start, segment.end()))
+            .collect()
+    }
+
+    /// Resolve the pointing direction now (velocity-aligned steering needs
+    /// the live velocity; a degenerate velocity holds the last attitude
+    /// instead of erroring mid-burn).
+    fn resolve_point(&mut self, segment: &BurnSegment, velocity_inertial_mps: DVec3) -> DVec3 {
+        let point = match segment.direction {
+            SegmentDirection::Inertial(fixed) => fixed,
+            SegmentDirection::Prograde => {
+                if velocity_inertial_mps.length_squared() > 0.0 {
+                    velocity_inertial_mps.normalize()
+                } else {
+                    self.last_point
+                }
+            }
+            SegmentDirection::Retrograde => {
+                if velocity_inertial_mps.length_squared() > 0.0 {
+                    -velocity_inertial_mps.normalize()
+                } else {
+                    self.last_point
+                }
+            }
+        };
+        if point.length_squared() > 0.0 {
+            self.last_point = point;
+        }
+        point
+    }
+
+    pub fn poll(
+        &mut self,
+        now: SimTime,
+        measured_accel_inertial_mps2: DVec3,
+        velocity_inertial_mps: DVec3,
+    ) -> Result<SegmentOutput, ThrustPlanError> {
+        if !now.0.is_finite()
+            || !measured_accel_inertial_mps2.is_finite()
+            || !velocity_inertial_mps.is_finite()
+        {
+            return Err(ThrustPlanError::InvalidSegment);
+        }
+        // Skip exhausted and zero-duration segments without burning.
+        while self.index < self.segments.len() && self.segments[self.index].duration_s == 0.0 {
+            self.index += 1;
+        }
+        if self.index >= self.segments.len() {
+            return Ok(SegmentOutput {
+                command: ExecutionCommand {
+                    point_inertial: DVec3::ZERO,
+                    throttle_01: 0.0,
+                },
+                done: true,
+                active_segment: None,
+                accumulated_mps: 0.0,
+                last_shortfall_mps: self.last_shortfall_mps,
+            });
+        }
+        let segment = self.segments[self.index];
+        let end = segment.end();
+        if now.0 >= end.0 {
+            // Time cutoff (never Δv-stretched): record shortfall, advance.
+            self.last_shortfall_mps = segment.planned_dv_mps - self.accumulated_mps;
+            self.index += 1;
+            self.accumulated_mps = 0.0;
+            self.last_time_s = Some(now.0);
+            let finished = self.index >= self.segments.len();
+            return Ok(SegmentOutput {
+                command: ExecutionCommand {
+                    point_inertial: DVec3::ZERO,
+                    throttle_01: 0.0,
+                },
+                done: finished,
+                active_segment: if finished { None } else { Some(self.index) },
+                accumulated_mps: 0.0,
+                last_shortfall_mps: self.last_shortfall_mps,
+            });
+        }
+        let point = self.resolve_point(&segment, velocity_inertial_mps);
+        if now.0 < segment.start.0 - SETTLE_LEAD_S {
+            self.last_time_s = Some(now.0);
+            return Ok(SegmentOutput {
+                command: ExecutionCommand {
+                    point_inertial: DVec3::ZERO,
+                    throttle_01: 0.0,
+                },
+                done: false,
+                active_segment: Some(self.index),
+                accumulated_mps: 0.0,
+                last_shortfall_mps: self.last_shortfall_mps,
+            });
+        }
+        if now.0 < segment.start.0 {
+            self.last_time_s = Some(now.0);
+            return Ok(SegmentOutput {
+                command: ExecutionCommand {
+                    point_inertial: point,
+                    throttle_01: 0.0,
+                },
+                done: false,
+                active_segment: Some(self.index),
+                accumulated_mps: 0.0,
+                last_shortfall_mps: self.last_shortfall_mps,
+            });
+        }
+        // Burn window: schedule throttle, accumulate along-track.
+        let dt = match self.last_time_s {
+            Some(last) => (now.0 - last).max(0.0),
+            None => 0.0,
+        };
+        self.last_time_s = Some(now.0);
+        if point.length_squared() > 0.0 {
+            self.accumulated_mps +=
+                (measured_accel_inertial_mps2.dot(point.normalize())).max(0.0) * dt;
+        }
+        Ok(SegmentOutput {
+            command: ExecutionCommand {
+                point_inertial: point,
+                throttle_01: segment.throttle_01,
+            },
+            done: false,
+            active_segment: Some(self.index),
+            accumulated_mps: self.accumulated_mps,
+            last_shortfall_mps: self.last_shortfall_mps,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::thrust::EngineSpec;
 
     fn single_node_plan() -> ManeuverPlan {
         ManeuverPlan::new(
@@ -276,5 +456,123 @@ mod tests {
         let output = executor.poll(SimTime(0.0), DVec3::ZERO).unwrap();
         assert!(output.done);
         assert_eq!(output.command.throttle_01, 0.0);
+    }
+
+    fn chem_engine() -> EngineSpec {
+        EngineSpec {
+            thrust_n: 100_000.0,
+            exhaust_velocity_mps: 4_400.0,
+        }
+    }
+
+    fn single_segment_plan() -> FiniteBurnPlan {
+        FiniteBurnPlan::new(
+            vec![BurnSegment {
+                start: SimTime(100.0),
+                duration_s: 50.0,
+                planned_dv_mps: 100.0,
+                direction: SegmentDirection::Inertial(DVec3::X),
+                throttle_01: 1.0,
+            }],
+            chem_engine(),
+            20_000.0,
+            DVec3::ZERO,
+            DVec3::X,
+            SimTime(0.0),
+        )
+        .unwrap()
+    }
+
+    /// Timed segment: settle window points, burn window burns at schedule,
+    /// cutoff lands exactly on the end tick (never Δv-stretched).
+    #[test]
+    fn timed_segment_cuts_off_on_schedule() {
+        let plan = single_segment_plan();
+        let mut executor = SegmentExecutor::new(&plan).unwrap();
+        assert_eq!(executor.to_scheduler_events().len(), 1);
+        // 2 m/s^2 for 50 s realizes exactly the planned 100 m/s.
+        let mut time = 0.0;
+        let mut accel = DVec3::ZERO;
+        let mut burn_ticks = 0;
+        let mut done_at = None;
+        for _ in 0..500 {
+            let output = executor
+                .poll(SimTime(time), accel, DVec3::X * 1_000.0)
+                .unwrap();
+            if time < 70.0 {
+                assert_eq!(output.command.throttle_01, 0.0);
+                assert_eq!(output.command.point_inertial, DVec3::ZERO);
+            } else if time < 100.0 {
+                assert_eq!(output.command.throttle_01, 0.0);
+                assert_eq!(output.command.point_inertial, DVec3::X);
+            } else if time < 150.0 {
+                assert_eq!(output.command.throttle_01, 1.0);
+                assert_eq!(output.command.point_inertial, DVec3::X);
+                burn_ticks += 1;
+            }
+            accel = if output.command.throttle_01 > 0.0 {
+                DVec3::X * 2.0
+            } else {
+                DVec3::ZERO
+            };
+            time += 1.0;
+            if output.done {
+                done_at = Some(time);
+                break;
+            }
+        }
+        assert_eq!(done_at, Some(151.0));
+        assert_eq!(burn_ticks, 50);
+        // Perfect engine: zero shortfall.
+        let shortfall = executor.last_shortfall_mps;
+        assert!(shortfall.abs() <= 2.0, "shortfall {shortfall}");
+    }
+
+    /// Underperforming engine (half thrust): the arc still cuts off on
+    /// time, and the shortfall is reported, not burned through.
+    #[test]
+    fn underburn_cuts_off_on_time_with_shortfall() {
+        let plan = single_segment_plan();
+        let mut executor = SegmentExecutor::new(&plan).unwrap();
+        let mut time = 0.0;
+        let mut accel = DVec3::ZERO;
+        loop {
+            let output = executor
+                .poll(SimTime(time), accel, DVec3::X * 1_000.0)
+                .unwrap();
+            accel = if output.command.throttle_01 > 0.0 {
+                DVec3::X * 1.0
+            } else {
+                DVec3::ZERO
+            };
+            time += 1.0;
+            if output.done {
+                break;
+            }
+            assert!(time < 500.0, "must finish on schedule");
+        }
+        // Realized ~50 of planned 100: shortfall ~+50, arc NOT stretched.
+        let shortfall = executor.last_shortfall_mps;
+        assert!((45.0..=55.0).contains(&shortfall), "shortfall {shortfall}");
+    }
+
+    /// Prograde steering follows the live velocity; a degenerate velocity
+    /// holds the last attitude instead of erroring mid-burn.
+    #[test]
+    fn prograde_steering_tracks_velocity() {
+        let mut plan = single_segment_plan();
+        plan.segments[0].direction = SegmentDirection::Prograde;
+        let mut executor = SegmentExecutor::new(&plan).unwrap();
+        let out = executor
+            .poll(SimTime(120.0), DVec3::ZERO, DVec3::Y * 5_000.0)
+            .unwrap();
+        assert_eq!(out.command.point_inertial, DVec3::Y);
+        assert_eq!(out.command.throttle_01, 1.0);
+        // Degenerate velocity: holds +Y, keeps burning on schedule.
+        let out = executor
+            .poll(SimTime(121.0), DVec3::ZERO, DVec3::ZERO)
+            .unwrap();
+        assert_eq!(out.command.point_inertial, DVec3::Y);
+        assert_eq!(out.command.throttle_01, 1.0);
     }
 }

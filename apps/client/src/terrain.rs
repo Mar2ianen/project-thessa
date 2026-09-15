@@ -125,18 +125,21 @@ fn setup_terrain(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     assets: Res<AssetServer>,
+    graphics: Option<Res<GraphicsResolved>>,
 ) {
     let started = Instant::now();
-    let gpu_mesh = std::env::var_os("THESSA_CBT_GPU_MESH").is_some();
-    let gpu_raster = gpu_mesh || std::env::var_os("THESSA_CBT_GPU_RASTER").is_some();
-    cbt_surface.set_gpu_mesh_enabled(gpu_mesh);
+    let gpu_raster = graphics
+        .as_deref()
+        .is_some_and(|settings| settings.0.terrain.is_gpu());
+    // Hardware mesh shaders are intentionally not part of the normal client
+    // path. The optional crate feature remains available for isolated adapter
+    // experiments, while the game uses CPU or portable indexed raster here.
+    cbt_surface.set_gpu_mesh_enabled(false);
     cbt_surface.set_gpu_raster_enabled(gpu_raster);
     info!(
         "CBT terrain raster mode: {}",
-        if gpu_mesh {
-            "experimental hardware mesh shader"
-        } else if gpu_raster {
-            "experimental GPU indexed"
+        if gpu_raster {
+            "GPU indexed"
         } else {
             "CPU fallback"
         }

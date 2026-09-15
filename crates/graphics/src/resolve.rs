@@ -16,7 +16,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::settings::{BackendRequest, Quality, RayTracingRequest, RequestedGraphics};
+use crate::settings::{
+    BackendRequest, Quality, RayTracingRequest, RequestedGraphics, TerrainRenderRequest,
+};
 
 /// Resolved ray-tracing mode. There is no single boolean: `local` buys RT
 /// where it has the highest visual value first (spec section 18).
@@ -50,6 +52,28 @@ pub struct ResolvedBackend {
     pub name: String,
 }
 
+/// Terrain raster path selected for this client run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolvedTerrainRender {
+    #[default]
+    Cpu,
+    GpuIndexed,
+}
+
+impl ResolvedTerrainRender {
+    pub fn is_gpu(self) -> bool {
+        matches!(self, Self::GpuIndexed)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::GpuIndexed => "gpu_indexed",
+        }
+    }
+}
+
 /// Runtime capability input for resolution.
 ///
 /// Adapter details are only known after renderer init, which happens after
@@ -79,6 +103,7 @@ impl Capabilities {
 pub struct ResolvedGraphicsSettings {
     pub preset_label: String,
     pub backend: ResolvedBackend,
+    pub terrain: ResolvedTerrainRender,
     pub ray_tracing: ResolvedRayTracing,
     pub resolution_scale: f32,
     pub vsync: bool,
@@ -140,20 +165,7 @@ impl ResolvedGraphicsSettings {
             }
         };
 
-        // `THESSA_RAY_TRACING` overrides the TOML mode for experiments.
-        let mut mode = requested.renderer.ray_tracing;
-        if let Some(env) = std::env::var("THESSA_RAY_TRACING")
-            .ok()
-            .and_then(|v| RayTracingRequest::from_str_name(v.trim().to_lowercase().as_str()))
-        {
-            notes.push(format!(
-                "ray_tracing mode {:?} overridden by THESSA_RAY_TRACING",
-                requested.renderer.ray_tracing
-            ));
-            mode = env;
-        }
-
-        let ray_tracing = match mode {
+        let ray_tracing = match requested.renderer.ray_tracing {
             RayTracingRequest::Off => ResolvedRayTracing::Off,
             RayTracingRequest::Local => {
                 Self::note_explicit_rt(caps, &mut notes);
@@ -192,6 +204,10 @@ impl ResolvedGraphicsSettings {
         Self {
             preset_label: requested.effective_preset_label().to_string(),
             backend: ResolvedBackend { name: backend_name },
+            terrain: match requested.renderer.terrain {
+                TerrainRenderRequest::Cpu => ResolvedTerrainRender::Cpu,
+                TerrainRenderRequest::GpuIndexed => ResolvedTerrainRender::GpuIndexed,
+            },
             ray_tracing,
             resolution_scale: requested.renderer.resolution_scale,
             vsync: requested.renderer.vsync,
@@ -246,6 +262,7 @@ impl ResolvedGraphicsSettings {
         map.insert("auto_exposure".into(), self.auto_exposure.to_string());
         map.insert("preset".to_string(), self.preset_label.clone());
         map.insert("backend".to_string(), self.backend.name.clone());
+        map.insert("terrain".to_string(), self.terrain.as_str().to_string());
         map.insert(
             "ray_tracing".to_string(),
             self.ray_tracing.as_str().to_string(),
@@ -368,5 +385,16 @@ mod tests {
         let meta = resolved.as_meta_map();
         assert_eq!(meta["shadows"], "true");
         assert_eq!(meta["shadow_cascades"], "4");
+    }
+
+    #[test]
+    fn terrain_mode_is_resolved_without_mesh_shader_features() {
+        let mut requested = RequestedGraphics::default();
+        requested.renderer.terrain = TerrainRenderRequest::GpuIndexed;
+        let resolved =
+            ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+        assert_eq!(resolved.terrain, ResolvedTerrainRender::GpuIndexed);
+        assert!(resolved.terrain.is_gpu());
+        assert_eq!(resolved.as_meta_map()["terrain"], "gpu_indexed");
     }
 }

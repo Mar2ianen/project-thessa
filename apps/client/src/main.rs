@@ -20,10 +20,11 @@ use std::{f32::consts::TAU, path::Path};
 
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::render::RenderPlugin;
-use bevy::render::settings::{RenderCreation, WgpuFeatures, WgpuSettings};
+use bevy::render::settings::{Backends, RenderCreation, WgpuFeatures, WgpuSettings};
 use bevy::solari::prelude::SolariPlugins;
 use bevy::{
     asset::AssetPlugin,
+    camera::Hdr,
     core_pipeline::tonemapping::Tonemapping,
     input::mouse::{AccumulatedMouseMotion, MouseScrollUnit, MouseWheel},
     post_process::bloom::Bloom,
@@ -106,14 +107,8 @@ fn main() {
     });
     let resolved = ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
     let rt_active = resolved.ray_tracing.is_active();
-    let mesh_shader_active = std::env::var_os("THESSA_CBT_GPU_MESH").is_some();
     if rt_active {
         eprintln!("[graphics] experimental Solari RT path requested; needs RT-capable Vulkan");
-    }
-    if mesh_shader_active {
-        eprintln!(
-            "[graphics] experimental wgpu mesh-shader path requested; unsupported adapters may fail device creation"
-        );
     }
 
     let mut app = App::new();
@@ -137,21 +132,25 @@ fn main() {
             }),
             ..default()
         });
-    if rt_active || mesh_shader_active {
+    let requested_backends = match resolved.backend.name.as_str() {
+        "vulkan" => Some(Backends::VULKAN),
+        "metal" => Some(Backends::METAL),
+        "webgpu" => Some(Backends::BROWSER_WEBGPU),
+        _ => None,
+    };
+    if rt_active || requested_backends.is_some() {
         // `WgpuSettings` travels inside `RenderPlugin::render_creation` in
-        // 0.19. Explicit experimental features are requested only when their
-        // matching environment switch is set; unsupported hardware may fail
-        // device creation rather than silently changing the selected path.
+        // Bevy 0.19. The normal client only requests explicit backend and RT
+        // settings from graphics.toml; experimental mesh features are not
+        // part of this production path.
         default_plugins = default_plugins.set(RenderPlugin {
             render_creation: RenderCreation::Automatic(Box::new({
                 let mut features = WgpuFeatures::default();
                 if rt_active {
                     features |= SolariPlugins::required_wgpu_features();
                 }
-                if mesh_shader_active {
-                    features |= WgpuFeatures::EXPERIMENTAL_MESH_SHADER;
-                }
                 WgpuSettings {
+                    backends: requested_backends,
                     features,
                     ..default()
                 }
@@ -294,33 +293,38 @@ fn setup(
         ..default()
     });
 
-    commands.spawn((
-        Camera3d::default(),
-        // Keep these across RT toggles: required components are not removed
-        // automatically with SolariLighting, and deferred needs MSAA off.
-        Msaa::Off,
-        bevy::core_pipeline::prepass::DepthPrepass,
-        bevy::core_pipeline::prepass::DeferredPrepass,
-        Projection::Perspective(PerspectiveProjection {
-            far: 1_000_000.0,
-            ..default()
-        }),
-        Camera {
-            clear_color: ClearColorConfig::Custom(Color::srgb(0.001, 0.002, 0.008)),
-            ..default()
-        },
-        Tonemapping::TonyMcMapface,
-        Bloom {
-            intensity: 0.14,
-            ..Bloom::NATURAL
-        },
-        OrbitCamera {
-            orbit: Quat::from_rotation_y(0.42) * Quat::from_rotation_x(-0.72),
-            distance: 420.0,
-            target: Vec3::ZERO,
-        },
-        Transform::from_xyz(129.0, 276.0, 287.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
+    let camera = commands
+        .spawn((
+            Camera3d::default(),
+            // Keep these across RT toggles: required components are not removed
+            // automatically with SolariLighting, and deferred needs MSAA off.
+            Msaa::Off,
+            bevy::core_pipeline::prepass::DepthPrepass,
+            bevy::core_pipeline::prepass::DeferredPrepass,
+            Projection::Perspective(PerspectiveProjection {
+                far: 1_000_000.0,
+                ..default()
+            }),
+            Camera {
+                clear_color: ClearColorConfig::Custom(Color::srgb(0.001, 0.002, 0.008)),
+                ..default()
+            },
+            Tonemapping::TonyMcMapface,
+            Bloom {
+                intensity: 0.14,
+                ..Bloom::NATURAL
+            },
+            OrbitCamera {
+                orbit: Quat::from_rotation_y(0.42) * Quat::from_rotation_x(-0.72),
+                distance: 420.0,
+                target: Vec3::ZERO,
+            },
+            Transform::from_xyz(129.0, 276.0, 287.0).looking_at(Vec3::ZERO, Vec3::Y),
+        ))
+        .id();
+    if graphics.as_deref().is_none_or(|g| g.0.hdr) {
+        commands.entity(camera).insert(Hdr);
+    }
     // Asterion's illumination is represented by direction, not by a fake
     // nearby star whose size would make the local map physically misleading.
     // Neutral spawn values: the atmosphere plugin derives exact illuminance,

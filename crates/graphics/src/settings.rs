@@ -65,6 +65,20 @@ pub enum BackendRequest {
     Webgpu,
 }
 
+/// Terrain raster consumer used by the normal client.
+///
+/// The CPU path remains the portable default. The indexed GPU path consumes
+/// the same CBT pages without requiring experimental mesh-shader features;
+/// hardware mesh shaders stay an isolated crate-level experiment rather than
+/// a normal game setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerrainRenderRequest {
+    #[default]
+    Cpu,
+    GpuIndexed,
+}
+
 /// Requested ray-tracing mode (spec section 18). Avoid a single boolean:
 /// `local` buys RT where it has the highest local visual value, `full`
 /// enables everything within budget, `auto` resolves by capability.
@@ -100,6 +114,8 @@ pub struct RendererSettings {
     pub backend: BackendRequest,
     #[serde(default)]
     pub ray_tracing: RayTracingRequest,
+    #[serde(default)]
+    pub terrain: TerrainRenderRequest,
     #[serde(default = "default_resolution_scale")]
     pub resolution_scale: f32,
     #[serde(default = "default_true")]
@@ -127,6 +143,7 @@ impl Default for RendererSettings {
         Self {
             backend: BackendRequest::Auto,
             ray_tracing: RayTracingRequest::Auto,
+            terrain: TerrainRenderRequest::Cpu,
             resolution_scale: 1.0,
             vsync: true,
             hdr: true,
@@ -448,6 +465,12 @@ impl RequestedGraphics {
                 detail: format!("expected 4..=128, got {}", self.atmosphere.ray_steps),
             });
         }
+        if !(4..=128).contains(&self.clouds.ray_steps) {
+            return Err(ConfigError::InvalidValue {
+                path: "clouds.ray_steps",
+                detail: format!("expected 4..=128, got {}", self.clouds.ray_steps),
+            });
+        }
         if self.raytracing.max_distance_m < 0.0 {
             return Err(ConfigError::InvalidValue {
                 path: "raytracing.max_distance_m",
@@ -565,8 +588,10 @@ impl RequestedGraphics {
         expanded.preset = Preset::Custom;
         let mut current = self.clone();
         current.preset = Preset::Custom;
-        // Backend request is intent, not budget: ignore it for custom detection.
+        // Backend and terrain requests are intent, not preset budgets: ignore
+        // them for custom detection.
         current.renderer.backend = expanded.renderer.backend;
+        current.renderer.terrain = expanded.renderer.terrain;
         current != expanded
     }
 
@@ -589,6 +614,7 @@ mod tests {
         let text = include_str!("../../../graphics.toml");
         let config = RequestedGraphics::from_toml(text).unwrap();
         assert_eq!(config.version, 1);
+        assert_eq!(config.renderer.terrain, TerrainRenderRequest::Cpu);
     }
 
     #[test]
@@ -608,6 +634,8 @@ mod tests {
         assert!(RequestedGraphics::from_toml(bad).is_err());
         let bad_steps = "preset = \"high\"\n[atmosphere]\nray_steps = 2\n";
         assert!(RequestedGraphics::from_toml(bad_steps).is_err());
+        let bad_cloud_steps = "preset = \"high\"\n[clouds]\nray_steps = 2\n";
+        assert!(RequestedGraphics::from_toml(bad_cloud_steps).is_err());
     }
 
     #[test]

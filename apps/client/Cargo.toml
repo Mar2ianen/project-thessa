@@ -15,7 +15,7 @@ thessa-flight-net = { path = "../../crates/flight-net" }
 thessa-perf = { path = "../../crates/perf" }
 thessa-graphics = { path = "../../crates/graphics" }
 thessa-atmosphere = { path = "../../crates/atmosphere" }
-thessa-bevy-rcbt = { path = "../../crates/bevy-rcbt", features = ["render", "mesh-shaders"] }
+thessa-bevy-rcbt = { path = "../../crates/bevy-rcbt", features = ["render"] }
 thessa-rcbt-core = { path = "../../crates/rcbt-core" }
 bevy = { workspace = true, features = ["bevy_solari"] }
 bevy_brp_extras = "0.22.0"

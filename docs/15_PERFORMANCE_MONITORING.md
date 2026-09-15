@@ -558,7 +558,9 @@ Illustrative only:
     "width": 1920,
     "height": 1080,
     "resolution_scale": 1.0,
-    "vsync": false
+    "vsync": false,
+    "hdr": true,
+    "terrain": "cpu"
   },
   "graphics": {
     "preset": "custom",

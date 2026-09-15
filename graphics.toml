@@ -8,13 +8,13 @@
 #                  -> ResolvedGraphicsSettings -> renderer + perf metadata
 #
 # The future GUI edits THIS file (typed editor over the same TOML), never a
-# second independent settings system. Unknown future keys are preserved on
-# load; physics and world state are never affected by this file.
+# second independent settings system. Unknown future keys are ignored by older
+# builds; physics and world state are never affected by this file.
 #
 # Ray tracing is experimental (Bevy Solari). `ray_tracing = "local"|"full"`
 # requests RT device features and fails fast at startup when the GPU/driver
-# cannot provide them. `"auto"` currently resolves to raster; enable RT
-# explicitly or via `THESSA_RAY_TRACING=local|full`.
+# cannot provide them. `"auto"` currently resolves to raster until adapter
+# capabilities are available to the launcher.
 
 version = 1
 preset = "high" # low | medium | high | ultra | custom (auto-shown when values diverge)
@@ -22,6 +22,7 @@ preset = "high" # low | medium | high | ultra | custom (auto-shown when values d
 [renderer]
 backend = "auto" # auto | vulkan | metal | webgpu (dx12 deferred pending ADR)
 ray_tracing = "auto" # off | local | full | auto
+terrain = "cpu" # cpu | gpu_indexed; no mesh-shader requirement
 resolution_scale = 1.0
 vsync = true
 hdr = true

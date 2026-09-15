@@ -55,6 +55,23 @@ pub enum Command {
     /// survey, so this event carries no world state — only player intent,
     /// like staging. Forces a prompt snapshot like staging does.
     Reset,
+    /// Execute a maneuver plan: node epochs (sim seconds) with inertial
+    /// Δv vectors. Event-like (ordered, never coalesced, takes over
+    /// controls like staging). The server validates against now
+    /// (empty/stale/all-oversize refused), arms one scheduler wake per
+    /// node and hands guidance to the node executor. Plain data on the
+    /// wire; domain validation lives server-side.
+    ExecuteManeuver {
+        nodes: Vec<ManeuverNodeCommand>,
+    },
+}
+
+/// One maneuver node on the wire: epoch plus inertial Δv. Smallest
+/// explicit schema (no domain types leak onto the transport).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ManeuverNodeCommand {
+    pub epoch_s: f64,
+    pub delta_v_mps: [f64; 3],
 }
 
 /// Per-tick pilot input. The server applies the latest input per client;

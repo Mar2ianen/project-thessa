@@ -132,13 +132,18 @@ impl NodeExecutor {
                 last_residual_mps: self.last_residual_mps,
             });
         }
-        // Burn phase: integrate what the accelerometer reports.
+        // Burn phase: integrate what the accelerometer reports ALONG the
+        // burn direction. Magnitude would also swallow drag/lift during
+        // the transition polls (in-band coast drag alone can exceed a
+        // small node); the along-track projection counts thrust minus
+        // drag, which is exactly the realized Δv. Clamped per tick:
+        // expended Δv never un-accumulates.
         let dt = match self.last_time_s {
             Some(last) => (now.0 - last).max(0.0),
             None => 0.0,
         };
         self.last_time_s = Some(now.0);
-        self.accumulated_mps += measured_accel_inertial_mps2.length() * dt;
+        self.accumulated_mps += (measured_accel_inertial_mps2.dot(direction)).max(0.0) * dt;
         if self.accumulated_mps >= target {
             self.last_residual_mps = self.accumulated_mps - target;
             self.index += 1;
@@ -220,7 +225,7 @@ mod tests {
         let done_at = done_at.expect("burn completes");
         assert!((done_at - 151.0).abs() <= 2.0, "cutoff at {done_at}");
         let residual = executor.last_residual_mps;
-        assert!(residual >= 0.0 && residual <= 2.0, "residual {residual}");
+        assert!((0.0..=2.0).contains(&residual), "residual {residual}");
     }
 
     #[test]

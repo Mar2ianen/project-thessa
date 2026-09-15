@@ -5530,6 +5530,7 @@ dependencies = [
  "thessa-flight-authority",
  "thessa-flight-control",
  "thessa-flight-net",
+ "thessa-maneuver",
  "thessa-protocol",
  "thessa-sim-core",
  "tokio",

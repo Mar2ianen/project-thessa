@@ -1,14 +1,28 @@
-//! Staged porkchop search: broad Lambert grid, local refinement, exact
-//! N-body revalidation (docs/23 §12, 24 §7 pattern).
+//! Staged porkchop search: broad Lambert grid, local refinement, phasing,
+//! midcourse correction, exact ranking (docs/23 §12, 24 §7 pattern).
 //!
 //! Phase 1 (broad, loose): two-body Lambert arcs on osculating endpoint
-//! states with patched-conic departure burns (parking-orbit escape around
-//! the depot moon — the depot well is NOT ignored), plus a perigee impact
-//! screen. Phase 2 (narrow): local grid refinement around the best cell.
-//! Phase 3 (final): full N-body propagation of survivors from the depot
-//! standoff point, arrival miss measured against the target, arrival burn
-//! to match. Pruning approximations never define physical truth: only
-//! revalidated plans with measured miss execute.
+//! states with patched-conic departure energies (parking-orbit escape
+//! around the depot moon — the depot well is NOT ignored), prograde branch
+//! per cell, perigee impact screen, Δv cap. All endpoint states share one
+//! epoch convention: arrival-minus-central-AT-arrival (mixing epochs
+//! injects billions of metres of fictitious displacement).
+//! Phase 2 (narrow): local grid refinement around the best cell, then
+//! parking-orbit anomaly phasing against loose full-N-body screens.
+//! Phase 3 (final): midcourse differential correction on full N-body
+//! dynamics — the departure burn stays at its phased value (correcting it
+//! stalls in the escape turn), a post-escape TCM absorbs everything
+//! downstream. The converged trajectory IS the revalidation. Plans carry
+//! departure + TCM (+ arrival match) nodes with measured miss.
+//! Arrival-match semantics (rendezvous/landing price, NOT orbit-joining):
+//! the match nulls the full N-body arrival velocity at the standoff aim
+//! point, so it includes the fall into the target well — its floor is the
+//! local escape velocity (v_esc-scale for massive moons: Pelagos->Thessa
+//! prices ~5.5 km/s against vesc_aim ~5.5 km/s, while the SOI-edge v_inf is
+//! Hohmann-like ~1.5 km/s). Capture-into-orbit / flyby-tour arrival modes
+//! are follow-ups, not this node's job.
+//! Pruning approximations never define physical truth: only corrected
+//! plans with measured miss execute.
 
 use glam::{DMat3, DVec3};
 use thessa_sim_core::{
@@ -264,28 +278,35 @@ fn transfer_perigee_m(position: DVec3, velocity: DVec3, mu: f64) -> f64 {
     semi_major * (1.0 - ecc_vector.length())
 }
 
-fn grid_best(
-    ctx: &BroadCtx<'_>,
+/// One Lambert grid patch: departure window plus time-of-flight range.
+#[derive(Debug, Clone, Copy)]
+struct GridWindow {
     start_s: f64,
     span_s: f64,
     steps: usize,
     tof_min: f64,
     tof_max: f64,
     tof_steps: usize,
+}
+
+fn grid_best(
+    ctx: &BroadCtx<'_>,
+    window: GridWindow,
     stats: &mut SearchStats,
     best: &mut Vec<Cell>,
 ) {
-    for i in 0..steps {
-        let epoch = SimTime(if steps == 1 {
-            start_s
+    for i in 0..window.steps {
+        let epoch = SimTime(if window.steps == 1 {
+            window.start_s
         } else {
-            start_s + span_s * i as f64 / (steps - 1) as f64
+            window.start_s + window.span_s * i as f64 / (window.steps - 1) as f64
         });
-        for j in 0..tof_steps {
-            let tof = if tof_steps == 1 {
-                tof_min
+        for j in 0..window.tof_steps {
+            let tof = if window.tof_steps == 1 {
+                window.tof_min
             } else {
-                tof_min + (tof_max - tof_min) * j as f64 / (tof_steps - 1) as f64
+                window.tof_min
+                    + (window.tof_max - window.tof_min) * j as f64 / (window.tof_steps - 1) as f64
             };
             stats.broad_evaluations += 1;
             if let Some(cell) = lambert_cell(ctx, epoch, tof, stats) {
@@ -333,12 +354,14 @@ pub fn porkchop_search(
     let mut best = Vec::new();
     grid_best(
         &ctx,
-        config.window_start.0,
-        config.departure_span_s,
-        config.departure_steps,
-        config.tof_min_s,
-        config.tof_max_s,
-        config.tof_steps,
+        GridWindow {
+            start_s: config.window_start.0,
+            span_s: config.departure_span_s,
+            steps: config.departure_steps,
+            tof_min: config.tof_min_s,
+            tof_max: config.tof_max_s,
+            tof_steps: config.tof_steps,
+        },
         &mut stats,
         &mut best,
     );
@@ -353,12 +376,14 @@ pub fn porkchop_search(
         let tof_span = (config.tof_max_s - config.tof_min_s).max(1.0) * 0.125;
         grid_best(
             &ctx,
-            focus.departure_epoch.0 - span,
-            span * 2.0,
-            5,
-            (focus.time_of_flight_s - tof_span).max(config.tof_min_s),
-            (focus.time_of_flight_s + tof_span).min(config.tof_max_s),
-            5,
+            GridWindow {
+                start_s: focus.departure_epoch.0 - span,
+                span_s: span * 2.0,
+                steps: 5,
+                tof_min: (focus.time_of_flight_s - tof_span).max(config.tof_min_s),
+                tof_max: (focus.time_of_flight_s + tof_span).min(config.tof_max_s),
+                tof_steps: 5,
+            },
             &mut stats,
             &mut local,
         );
@@ -507,7 +532,6 @@ fn best_anomaly_of(
     let offset = (point - depot.position_inertial) / park_radius;
     offset.dot(tangent0).atan2(offset.dot(radial_unit))
 }
-#[allow(clippy::too_many_arguments)]
 /// Midcourse differential correction on the full N-body dynamics.
 ///
 /// Architecture (measured, not assumed): correcting the DEPARTURE burn
@@ -538,7 +562,10 @@ fn correct_shooting(
 ) -> Option<(DVec3, DVec3, TestParticleState, f64)> {
     const TARGET_MISS_M: f64 = 2_000.0;
     const MAX_ITERS: usize = 30;
-    const DAMPING: f64 = 0.5;
+    // Trust cap, not damping: starting steps above ~300 m/s overshoot the
+    // gentle basin into hot regimes the correction then cannot leave
+    // (measured: 2000 m/s first steps converged 5+ km/s hot). Inside the
+    // cap, plain Newton finishes quadratically on its own.
     let mut shoot = |mid_burn: DVec3| -> Option<TestParticleState> {
         stats.newton_propagations += 1;
         propagate_adaptive_with_burns(
@@ -590,11 +617,15 @@ fn correct_shooting(
         if !ok {
             break;
         }
-        let step = DMat3::from_cols(columns[0], columns[1], columns[2]).inverse() * miss_vec;
+        let mut step = DMat3::from_cols(columns[0], columns[1], columns[2]).inverse() * miss_vec;
         if !step.is_finite() {
             break;
         }
-        mid_burn += step * DAMPING;
+        const TRUST_MPS: f64 = 300.0;
+        if step.length() > TRUST_MPS {
+            step *= TRUST_MPS / step.length();
+        }
+        mid_burn += step;
         if !mid_burn.is_finite() || mid_burn.length() > 50_000.0 {
             break;
         }
@@ -667,6 +698,7 @@ fn revalidate(
     let mid_time_s = (cell.time_of_flight_s / 4.0)
         .max(3_600.0)
         .min((cell.time_of_flight_s - 3_600.0).max(3_600.0));
+    // Diagnostic: how hot is the phased (uncorrected) arrival?
     let (dep_burn, tcm_burn, end, miss) = match correct_shooting(
         field,
         point,

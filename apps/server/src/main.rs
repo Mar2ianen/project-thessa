@@ -27,10 +27,11 @@ use thessa_flight_authority::{
     ControlMode, FlightAuthority, FlightPolicy, GuidanceIntent, ObstacleReport, PropulsionDemand,
     canonical_launch_setup,
 };
-use thessa_flight_control::ControlDemand;
+use thessa_flight_control::{ControlDemand, DirectionFrame, DirectionTarget, RollPolicy};
 use thessa_flight_net::{
     AutopilotCommand, AutopilotInput, ClientInput, Command, GuidanceInput, Snapshot,
 };
+use thessa_maneuver::{ManeuverPlan, NodeExecutor, PlanValidation};
 use thessa_protocol::{FrameDecoder, kind};
 use thessa_sim_core::{BakedEphemeris, BodyId, ScheduledKind, SimTime, SystemConfig};
 use thread_bake::ThreadBakeQueue;
@@ -186,7 +187,7 @@ fn client_input_takes_over(previous: Option<&ClientInput>, input: &ClientInput) 
     if input.commands.iter().any(|command| {
         matches!(
             command,
-            Command::Stage | Command::Engine { .. } | Command::Reset
+            Command::Stage | Command::Engine { .. } | Command::Reset | Command::ExecuteManeuver { .. }
         )
     }) {
         return true;
@@ -223,6 +224,10 @@ struct Sim {
     impact_site: Option<ImpactSite>,
     impact_obstacles: Option<ObstacleReport>,
     plan_runner: Option<TrajectoryPlanRunner>,
+    /// Active maneuver-plan execution (ExecuteManeuver block). Drives
+    /// `guidance` through a `NodeExecutor`; cleared on completion/abort,
+    /// after latching a zero-throttle hold so handoff is never abrupt.
+    maneuver_execution: Option<NodeExecutor>,
     clients: std::collections::HashMap<String, ClientVote>,
     /// Connection-order pilot lease. The first registered client owns all
     /// vehicle controls; on departure the lease moves to the earliest client
@@ -385,6 +390,7 @@ impl Sim {
             impact_site: None,
             impact_obstacles: None,
             plan_runner: None,
+            maneuver_execution: None,
             clients: std::collections::HashMap::new(),
             pilot_owner: None,
             client_order: Vec::new(),
@@ -586,6 +592,57 @@ impl Sim {
                     self.authority.engine_active = *active;
                     if became_ready {
                         self.autopilot_events.push_back(AutopilotEvent::EngineReady);
+                    }
+                }
+                Command::ExecuteManeuver { nodes } => {
+                    // Wire cap: node vectors are unbounded on the transport.
+                    const MAX_MANEUVER_NODES: usize = 16;
+                    let rejected = |sim: &mut Self, reason: String| {
+                        sim.authority.wake_notice =
+                            Some(format!("maneuver rejected: {reason}"));
+                    };
+                    if nodes.len() > MAX_MANEUVER_NODES {
+                        rejected(
+                            self,
+                            format!("{} nodes over cap {MAX_MANEUVER_NODES}", nodes.len()),
+                        );
+                        continue;
+                    }
+                    let mut plan_nodes = Vec::with_capacity(nodes.len());
+                    let mut bad_node = false;
+                    for node in nodes {
+                        match thessa_maneuver::ManeuverNode::new(
+                            SimTime(node.epoch_s),
+                            DVec3::from_array(node.delta_v_mps),
+                        ) {
+                            Ok(node) => plan_nodes.push(node),
+                            Err(_) => {
+                                bad_node = true;
+                                break;
+                            }
+                        }
+                    }
+                    if bad_node {
+                        rejected(self, "non-finite node".into());
+                        continue;
+                    }
+                    let plan = match ManeuverPlan::new(
+                        plan_nodes,
+                        self.authority.state.position_inertial_m,
+                        self.authority.state.velocity_inertial_mps,
+                        SimTime(self.authority.flight_time_s),
+                    ) {
+                        Ok(plan) => plan,
+                        Err(error) => {
+                            rejected(self, format!("invalid plan: {error}"));
+                            continue;
+                        }
+                    };
+                    match self.start_maneuver_execution(plan) {
+                        Ok(()) => {
+                            force_snapshot = true;
+                        }
+                        Err(error) => rejected(self, error),
                     }
                 }
                 Command::Pause { paused } => {
@@ -909,6 +966,95 @@ impl Sim {
         }
     }
 
+    /// Start maneuver-plan execution (ExecuteManeuver block): validate the
+    /// plan against now, arm one scheduler wake per node, and hand
+    /// `guidance` to the executor on every tick until done/aborted.
+    /// Refuses when a trajectory `plan_demand` is active rather than
+    /// silently fighting it; legacy client input clears `guidance` as
+    /// usual, which also preempts an in-flight execution.
+    /// Invoked from tests and the `ExecuteManeuver` wire command.
+    fn start_maneuver_execution(&mut self, plan: ManeuverPlan) -> Result<(), String> {
+        let now = SimTime(self.authority.flight_time_s);
+        match plan.validate_for_execution(now) {
+            PlanValidation::Executable => {}
+            PlanValidation::Empty => return Err("maneuver plan is empty".into()),
+            PlanValidation::Stale {
+                now_s,
+                first_node_s,
+            } => {
+                return Err(format!(
+                    "maneuver plan is stale (now {now_s:.1}, first node {first_node_s:.1})"
+                ));
+            }
+        }
+        if self.plan_demand.is_some() {
+            return Err("trajectory plan demand is active; clear it first".into());
+        }
+        let executor =
+            NodeExecutor::new(&plan).map_err(|error| format!("maneuver plan: {error}"))?;
+        for (epoch, delta_v) in executor.to_scheduler_events() {
+            self.authority.scheduler.arm(
+                ScheduledKind::ManeuverNode {
+                    delta_v_mps: delta_v,
+                },
+                epoch,
+            );
+        }
+        self.maneuver_execution = Some(executor);
+        Ok(())
+    }
+
+    /// Poll the active execution before stepping: integrate measured thrust
+    /// acceleration (total minus gravity, same tick) and map the command to
+    /// typed guidance. Idle/done latch a zero-throttle attitude hold, never
+    /// an abrupt handoff.
+    fn poll_maneuver_execution(&mut self) -> Result<(), String> {
+        let Some(executor) = self.maneuver_execution.as_mut() else {
+            return Ok(());
+        };
+        let now = SimTime(self.authority.flight_time_s);
+        let thrust_accel = match &self.authority.last_forces {
+            Some(forces) => {
+                forces.acceleration_inertial_mps2
+                    - self.authority.last_gravity_acceleration_inertial_mps2
+            }
+            None => DVec3::ZERO,
+        };
+        let output = executor
+            .poll(now, thrust_accel)
+            .map_err(|error| format!("maneuver poll: {error}"))?;
+        let hold = || GuidanceIntent::Attitude {
+            target_body_to_inertial: self.authority.state.orientation_body_to_inertial,
+            roll_policy: RollPolicy::Hold,
+        };
+        if output.done {
+            self.guidance = Some((hold(), PropulsionDemand::new(0.0).unwrap()));
+            self.maneuver_execution = None;
+            self.authority.wake_notice = Some("maneuver complete".into());
+            return Ok(());
+        }
+        let direction = output.command.point_inertial;
+        let intent = if direction == DVec3::ZERO {
+            hold()
+        } else {
+            let target =
+                DirectionTarget::new(direction, DirectionFrame::Inertial).map_err(|error| {
+                    self.maneuver_execution = None;
+                    format!("maneuver direction: {error}")
+                })?;
+            GuidanceIntent::VelocityDirection {
+                direction: target,
+                roll_policy: RollPolicy::Hold,
+            }
+        };
+        let propulsion = PropulsionDemand::new(output.command.throttle_01).map_err(|error| {
+            self.maneuver_execution = None;
+            format!("maneuver throttle: {error}")
+        })?;
+        self.guidance = Some((intent, propulsion));
+        Ok(())
+    }
+
     fn start_plan(&mut self, plan: TrajectoryPlan, host: &mut AutopilotHost) -> bool {
         host.scheduler.cancel_all();
         self.graph_runner = None;
@@ -992,6 +1138,9 @@ impl Sim {
     fn clear_autopilot_controls(&mut self) {
         self.plan_demand = None;
         self.guidance = None;
+        // Manual takeover disengages an in-flight maneuver execution, same
+        // as any other automation (MechJeb-style disengage on stick input).
+        self.maneuver_execution = None;
         self.control_mode = ControlMode::Direct;
         self.authority.control_input = DVec3::ZERO;
         self.authority.sas_enabled = false;
@@ -1091,6 +1240,9 @@ impl Sim {
         if self.paused() || self.authority.flight_error.is_some() {
             return Ok(0.0);
         }
+        // Maneuver execution polls before stepping so commands ride the
+        // freshest thrust measurement from the previous tick.
+        self.poll_maneuver_execution()?;
         let mut chunk_s = chunk_s;
         if self.plan_runner.is_some() {
             let now = SimTime(self.authority.flight_time_s);
@@ -1880,7 +2032,7 @@ impl IngressReceiver {
 fn is_edge_command(command: &Command) -> bool {
     matches!(
         command,
-        Command::Stage | Command::Engine { .. } | Command::Reset
+        Command::Stage | Command::Engine { .. } | Command::Reset | Command::ExecuteManeuver { .. }
     )
 }
 
@@ -2761,6 +2913,186 @@ mod tests {
             }],
             edges: Vec::new(),
         }
+    }
+
+    #[test]
+    fn maneuver_execution_flies_plan_to_completion() {
+        use thessa_maneuver::ManeuverNode;
+
+        // Control-subtracted Dv measured AT CUTOFF: the same flight with
+        // and without execution, sampled at the same sim time, so orbital
+        // dynamics cancel and the burn remains. Raw inertial Dvx is
+        // meaningless (orbital rotation adds hundreds of m/s per minute);
+        // engine spool-down tail after handoff is vehicle physics,
+        // explicitly out of executor scope.
+        fn fly(with_execution: bool, until_s: Option<f64>) -> (f64, bool, f64, bool, f64) {
+            let config: SystemConfig =
+                toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+            let ephemeris = config.bake().expect("bake");
+            let reference_body = ephemeris.body_id("thessa").expect("thessa");
+            // Drift mode (declared vacuum): no aerodynamic forces at all,
+            // so attitude differences between the runs cannot leak drag
+            // into the Δv metric. The engine auto-arms on first throttle
+            // via the guidance path; cold rails bakes stall chunks until
+            // the worker serves them (bounded retries below).
+            let mut sim = Sim::new(ephemeris, reference_body, false, true).expect("sim");
+            sim.register("pilot");
+            // One 100 m/s node along +X inertial at t=10 s (settle window
+            // covers the initial slew). Chunk size matters: the executor
+            // polls once per chunk, so chunks must resolve the burn (tens
+            // of ms here) — production driver quanta (20 ms) do; 1 s chunks
+            // would overshoot any small burn by a full chunk of thrust.
+            let plan = ManeuverPlan::new(
+                vec![ManeuverNode::new(SimTime(40.0), glam::DVec3::new(100.0, 0.0, 0.0)).unwrap()],
+                sim.authority.state.position_inertial_m,
+                sim.authority.state.velocity_inertial_mps,
+                SimTime(0.0),
+            )
+            .unwrap();
+            if with_execution {
+                sim.start_maneuver_execution(plan).expect("starts");
+                assert!(!sim.authority.scheduler.is_empty());
+            }
+            let initial_vx = sim.authority.state.velocity_inertial_mps.x;
+            let mut saw_burn = false;
+            let mut max_thrust = 0.0_f64;
+            // 70 sim-seconds in 0.05 s chunks: settle, burn, cutoff, latch.
+            // Stalled chunks (cold rails bake) retry briefly instead of
+            // silently contributing zero time.
+            for _ in 0..1400 {
+                let mut advanced = 0.0;
+                for _ in 0..200 {
+                    advanced += sim.advance_chunk(0.05).expect("advance");
+                    if advanced > 0.0
+                        || sim.authority.flight_error.is_some()
+                        || !sim.authority.bake.has_pending()
+                    {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                let t = sim.authority.flight_time_s;
+                if let Some((_, propulsion)) = &sim.guidance {
+                    if propulsion.normalized > 0.5 {
+                        saw_burn = true;
+                    }
+                }
+                max_thrust = max_thrust.max(sim.authority.thrust_n());
+                if with_execution && sim.maneuver_execution.is_none() {
+                    break;
+                }
+                if let Some(until) = until_s {
+                    if t >= until {
+                        break;
+                    }
+                }
+            }
+            (
+                sim.authority.state.velocity_inertial_mps.x - initial_vx,
+                saw_burn,
+                max_thrust,
+                with_execution && sim.maneuver_execution.is_none(),
+                sim.authority.flight_time_s,
+            )
+        }
+        // Exec run first (finds the cutoff time), then the control run
+        // sampled at the same sim time.
+        let (exec_dvx, saw_burn, max_thrust, done, t_done) = fly(true, None);
+        assert!(done, "execution must complete and hand off");
+        assert!(
+            saw_burn,
+            "executor must command full throttle during the burn"
+        );
+        assert!(max_thrust > 0.0, "engine must produce thrust");
+        let (ctrl_dvx, _, _, _, _) = fly(false, Some(t_done));
+        let burn_dvx = exec_dvx - ctrl_dvx;
+        assert!(
+            (85.0..=130.0).contains(&burn_dvx),
+            "burn-attributed dvx {burn_dvx} for a 100 m/s node"
+        );
+    }
+
+    #[test]
+    fn maneuver_execution_rejects_bad_plans() {
+        use thessa_maneuver::ManeuverNode;
+
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let mut sim = Sim::new(ephemeris, reference_body, false, false).expect("sim");
+        sim.register("pilot");
+        let empty =
+            ManeuverPlan::new(vec![], glam::DVec3::ZERO, glam::DVec3::X, SimTime(0.0)).unwrap();
+        assert!(sim.start_maneuver_execution(empty).is_err());
+        let stale = ManeuverPlan::new(
+            vec![ManeuverNode::new(SimTime(5.0), glam::DVec3::X).unwrap()],
+            glam::DVec3::ZERO,
+            glam::DVec3::X,
+            SimTime(0.0),
+        )
+        .unwrap();
+        for _ in 0..10 {
+            sim.advance_chunk(1.0).expect("advance");
+        }
+        assert!(sim.start_maneuver_execution(stale).is_err());
+        assert!(sim.maneuver_execution.is_none());
+    }
+
+    #[test]
+    fn execute_maneuver_command_starts_and_rejects() {
+        use thessa_flight_net::ManeuverNodeCommand;
+
+        fn fresh_sim() -> Sim {
+            let config: SystemConfig =
+                toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+            let ephemeris = config.bake().expect("bake");
+            let reference_body = ephemeris.body_id("thessa").expect("thessa");
+            let mut sim = Sim::new(ephemeris, reference_body, false, false).expect("sim");
+            sim.register("pilot");
+            sim
+        }
+        // Valid command starts execution and arms the wake.
+        let mut sim = fresh_sim();
+        let command = Command::ExecuteManeuver {
+            nodes: vec![ManeuverNodeCommand {
+                epoch_s: 30.0,
+                delta_v_mps: [10.0, 0.0, 0.0],
+            }],
+        };
+        assert!(sim.apply_input("pilot", &input(vec![command])));
+        assert!(sim.maneuver_execution.is_some());
+        assert!(!sim.authority.scheduler.is_empty());
+        // Oversize is refused with a wake notice, nothing starts.
+        // (apply_input returns its snapshot flag, not acceptance.)
+        let mut sim = fresh_sim();
+        let big = Command::ExecuteManeuver {
+            nodes: vec![
+                ManeuverNodeCommand {
+                    epoch_s: 30.0,
+                    delta_v_mps: [1.0, 0.0, 0.0],
+                };
+                17
+            ],
+        };
+        let _ = sim.apply_input("pilot", &input(vec![big]));
+        assert!(sim.maneuver_execution.is_none());
+        assert!(sim
+            .authority
+            .wake_notice
+            .as_ref()
+            .is_some_and(|notice| notice.contains("cap")));
+        // Non-finite node is refused the same way.
+        let mut sim = fresh_sim();
+        let bad = Command::ExecuteManeuver {
+            nodes: vec![ManeuverNodeCommand {
+                epoch_s: f64::NAN,
+                delta_v_mps: [1.0, 0.0, 0.0],
+            }],
+        };
+        let _ = sim.apply_input("pilot", &input(vec![bad]));
+        assert!(sim.maneuver_execution.is_none());
+        assert!(sim.authority.wake_notice.is_some());
     }
 
     #[test]

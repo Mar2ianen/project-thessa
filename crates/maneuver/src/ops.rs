@@ -117,7 +117,7 @@ pub fn hohmann_transfer(
     let ecc_vector =
         (departure_position_m * energy_term - departure_velocity_mps * radial) / mu_m3_s2;
     let eccentricity = ecc_vector.length();
-    if !(eccentricity <= 0.05) {
+    if eccentricity.is_nan() || eccentricity > 0.05 {
         return Err(OpsError::NotCircular { eccentricity });
     }
     let semi = 0.5 * (r1 + target_radius_m);

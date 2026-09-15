@@ -79,6 +79,10 @@ For launch-time visual smoke tests:
 - leave it at `"cpu"` for the default legacy tile path. No environment switch
   requests hardware mesh features in the normal client.
 
+For the CPU path, `[renderer] terrain_mesh_cells` controls tile grid density
+(8..64; the checked-in high preset uses 24). The indexed CBT path keeps its
+fixed 33x33 page contract and ignores this CPU-only density setting.
+
 The indexed mode hides CPU tile entities and keeps the closed backdrop as a
 low-resolution fallback. The optional mesh-shader experiment remains
 crate-local and requires an explicitly built experimental feature.

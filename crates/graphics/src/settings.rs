@@ -116,6 +116,10 @@ pub struct RendererSettings {
     pub ray_tracing: RayTracingRequest,
     #[serde(default)]
     pub terrain: TerrainRenderRequest,
+    /// CPU terrain vertices per tile edge. The indexed GPU path has a fixed
+    /// 33x33 page contract and therefore uses 32 internally.
+    #[serde(default = "default_terrain_mesh_cells")]
+    pub terrain_mesh_cells: u32,
     #[serde(default = "default_resolution_scale")]
     pub resolution_scale: f32,
     #[serde(default = "default_true")]
@@ -138,12 +142,17 @@ fn default_resolution_scale() -> f32 {
     1.0
 }
 
+fn default_terrain_mesh_cells() -> u32 {
+    24
+}
+
 impl Default for RendererSettings {
     fn default() -> Self {
         Self {
             backend: BackendRequest::Auto,
             ray_tracing: RayTracingRequest::Auto,
             terrain: TerrainRenderRequest::Cpu,
+            terrain_mesh_cells: default_terrain_mesh_cells(),
             resolution_scale: 1.0,
             vsync: true,
             hdr: true,
@@ -453,6 +462,12 @@ impl RequestedGraphics {
                 ),
             });
         }
+        if !(8..=64).contains(&self.renderer.terrain_mesh_cells) {
+            return Err(ConfigError::InvalidValue {
+                path: "renderer.terrain_mesh_cells",
+                detail: format!("expected 8..=64, got {}", self.renderer.terrain_mesh_cells),
+            });
+        }
         if !(1.0..=20.0).contains(&self.renderer.exposure_ev100) {
             return Err(ConfigError::InvalidValue {
                 path: "renderer.exposure_ev100",
@@ -517,6 +532,7 @@ impl RequestedGraphics {
             Preset::Low => {
                 self.renderer.resolution_scale = 0.75;
                 self.renderer.ray_tracing = RayTracingRequest::Off;
+                self.renderer.terrain_mesh_cells = 16;
                 self.atmosphere.quality = Quality::Low;
                 self.atmosphere.ray_steps = 8;
                 self.atmosphere.aerial_perspective = false;
@@ -533,6 +549,7 @@ impl RequestedGraphics {
             Preset::Medium => {
                 self.renderer.resolution_scale = 1.0;
                 self.renderer.ray_tracing = RayTracingRequest::Auto;
+                self.renderer.terrain_mesh_cells = 20;
                 self.atmosphere.quality = Quality::Medium;
                 self.atmosphere.ray_steps = 16;
                 self.atmosphere.aerial_perspective = true;
@@ -547,6 +564,7 @@ impl RequestedGraphics {
             Preset::High => {
                 self.renderer.resolution_scale = 1.0;
                 self.renderer.ray_tracing = RayTracingRequest::Auto;
+                self.renderer.terrain_mesh_cells = 24;
                 self.atmosphere.quality = Quality::High;
                 self.atmosphere.ray_steps = 24;
                 self.atmosphere.aerial_perspective = true;
@@ -561,6 +579,7 @@ impl RequestedGraphics {
             Preset::Ultra => {
                 self.renderer.resolution_scale = 1.0;
                 self.renderer.ray_tracing = RayTracingRequest::Auto;
+                self.renderer.terrain_mesh_cells = 32;
                 self.atmosphere.quality = Quality::High;
                 self.atmosphere.ray_steps = 32;
                 self.atmosphere.aerial_perspective = true;
@@ -636,6 +655,8 @@ mod tests {
         assert!(RequestedGraphics::from_toml(bad_steps).is_err());
         let bad_cloud_steps = "preset = \"high\"\n[clouds]\nray_steps = 2\n";
         assert!(RequestedGraphics::from_toml(bad_cloud_steps).is_err());
+        let bad_terrain_cells = "preset = \"high\"\n[renderer]\nterrain_mesh_cells = 4\n";
+        assert!(RequestedGraphics::from_toml(bad_terrain_cells).is_err());
     }
 
     #[test]

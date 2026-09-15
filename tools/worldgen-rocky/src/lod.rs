@@ -396,7 +396,12 @@ pub fn build_tile(field: &PlanetField, key: TileKey, cells: usize) -> TerrainTil
         edge.push(y * n);
     }
     let skirt_start = tile.positions.len() as u32;
-    let depth = (key.span_m(radius) / cells as f64 * 1.5).max(24.0);
+    // A coarse tile used to extrude its skirt by the full cell width. At the
+    // horizon that produced kilometre-deep walls: they hid gaps, but also
+    // projected dark LOD seams into the sun-shadow map. Keep enough cover for
+    // the neighbouring-level height delta while bounding the shadow-casting
+    // geometry to a local apron.
+    let depth = (key.span_m(radius) / cells as f64 * 1.5).clamp(24.0, 256.0);
     for &i in &edge {
         let i = i as usize;
         let global: [f64; 3] = std::array::from_fn(|j| anchor[j] + tile.positions[i][j] as f64);

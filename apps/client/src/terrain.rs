@@ -29,6 +29,7 @@ struct CbtTerrain<'w> {
     input: ResMut<'w, CbtFrameInput>,
     pages: ResMut<'w, CbtRenderPages>,
     surface: ResMut<'w, CbtRenderSurface>,
+    graphics: Option<Res<'w, GraphicsResolved>>,
 }
 
 #[derive(Resource)]
@@ -307,12 +308,7 @@ fn survey_input(
     }
 }
 
-/// Mesh grid density per tile edge. 32 (was 24): ~1.8x verts for sharper
-/// silhouettes up close; texture/normals already resolve sub-metre detail.
-const TILE_CELLS: usize = 32;
-
-fn mesh_from_tile(tile: &TerrainTile, texture_size: usize) -> Mesh {
-    let cells = TILE_CELLS;
+fn mesh_from_tile(tile: &TerrainTile, texture_size: usize, cells: usize) -> Mesh {
     let n = cells + 1;
     let cells_f = cells as f32;
     let texture_cells = (texture_size - 3) as f32;
@@ -353,26 +349,26 @@ fn mesh_from_tile(tile: &TerrainTile, texture_size: usize) -> Mesh {
     // along the skirt makes mikktspace tangents degenerate (stripes in both
     // raster normal-mapping and RT). Overwrite skirt tangents with their
     // source edge tangents instead.
-    const GRID: usize = (TILE_CELLS + 1) * (TILE_CELLS + 1);
-    let mut edge_grid = Vec::with_capacity(4 * TILE_CELLS);
-    for x in 0..TILE_CELLS {
+    let grid = (cells + 1) * (cells + 1);
+    let mut edge_grid = Vec::with_capacity(4 * cells);
+    for x in 0..cells {
         edge_grid.push(x);
     }
-    for y in 0..TILE_CELLS {
-        edge_grid.push(y * (TILE_CELLS + 1) + TILE_CELLS);
+    for y in 0..cells {
+        edge_grid.push(y * (cells + 1) + cells);
     }
-    for x in (1..=TILE_CELLS).rev() {
-        edge_grid.push(TILE_CELLS * (TILE_CELLS + 1) + x);
+    for x in (1..=cells).rev() {
+        edge_grid.push(cells * (cells + 1) + x);
     }
-    for y in (1..=TILE_CELLS).rev() {
-        edge_grid.push(y * (TILE_CELLS + 1));
+    for y in (1..=cells).rev() {
+        edge_grid.push(y * (cells + 1));
     }
     if let Some(bevy::mesh::VertexAttributeValues::Float32x4(data)) =
         mesh.attribute_mut(Mesh::ATTRIBUTE_TANGENT)
-        && data.len() == GRID + edge_grid.len()
+        && data.len() == grid + edge_grid.len()
     {
         for (i, &src) in edge_grid.iter().enumerate() {
-            data[GRID + i] = data[src];
+            data[grid + i] = data[src];
         }
     }
     mesh
@@ -534,6 +530,19 @@ fn update_terrain(
 ) {
     let (mut readout, mut backdrop) = display;
     let started = Instant::now();
+    let terrain_mesh_cells = cbt
+        .graphics
+        .as_deref()
+        .map(|settings| {
+            if settings.0.terrain.is_gpu() {
+                // The indexed CBT consumer has a fixed 33x33 GPU page and
+                // index-buffer contract. CPU-only density is configurable.
+                32
+            } else {
+                settings.0.terrain_mesh_cells as usize
+            }
+        })
+        .unwrap_or(24);
     let active = survey.active
         || (pilot.view_mode == ClientViewMode::Pilot
             && runtime.render_terrain_origin_m().length() - world.field.params.radius_m < 80000.0);
@@ -835,7 +844,7 @@ fn update_terrain(
             key,
             AsyncComputeTaskPool::get().spawn(async move {
                 let start = Instant::now();
-                let tile = lod::build_tile(&field, key, TILE_CELLS);
+                let tile = lod::build_tile(&field, key, terrain_mesh_cells);
                 let mesh_s = start.elapsed().as_secs_f64();
                 // The direct GPU smoke path needs only the quantized height
                 // page. Avoid paying for CPU mesh assembly, mip generation,
@@ -848,13 +857,13 @@ fn update_terrain(
                         &field,
                         key,
                         lod::texture_cells_for_level(key.level),
-                        TILE_CELLS,
+                        terrain_mesh_cells,
                     );
                     let material_s = texture_start.elapsed().as_secs_f64();
                     // Mesh assembly (tangents) and image upload prep (mipmaps:
                     // ~65k sRGB powf per 128 px tile) stay on the pool: per
                     // finished tile the frame thread only inserts handles.
-                    let mesh = mesh_from_tile(&tile, texture.size);
+                    let mesh = mesh_from_tile(&tile, texture.size, terrain_mesh_cells);
                     let images = [
                         surface_image(texture.size, texture.albedo.clone(), true),
                         surface_image(texture.size, texture.roughness.clone(), false),

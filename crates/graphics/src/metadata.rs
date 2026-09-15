@@ -81,6 +81,17 @@ pub fn describe() -> Vec<SettingMeta> {
             description: "Choose the portable CPU tile path or the indexed CBT page consumer; mesh shaders are not required.",
         },
         SettingMeta {
+            path: "renderer.terrain_mesh_cells",
+            label: "Terrain mesh cells",
+            kind: SettingKind::Int,
+            range: "8..=64",
+            step: "4",
+            unit: "cells/tile",
+            advanced: true,
+            restart_required: true,
+            description: "CPU terrain grid density per tile edge; higher values cost more CPU/GPU time. Indexed CBT keeps its fixed 32-cell page contract.",
+        },
+        SettingMeta {
             path: "renderer.resolution_scale",
             label: "Resolution scale",
             kind: SettingKind::Float,
@@ -500,6 +511,7 @@ mod tests {
         let paths: Vec<_> = metas.iter().map(|m| m.path).collect();
         assert!(paths.contains(&"renderer.ray_tracing"));
         assert!(paths.contains(&"renderer.terrain"));
+        assert!(paths.contains(&"renderer.terrain_mesh_cells"));
         assert!(paths.contains(&"renderer.hdr"));
         assert!(paths.contains(&"clouds.cast_shadows"));
         assert!(paths.contains(&"raytracing.terrain"));

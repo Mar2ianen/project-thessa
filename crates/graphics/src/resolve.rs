@@ -104,6 +104,7 @@ pub struct ResolvedGraphicsSettings {
     pub preset_label: String,
     pub backend: ResolvedBackend,
     pub terrain: ResolvedTerrainRender,
+    pub terrain_mesh_cells: u32,
     pub ray_tracing: ResolvedRayTracing,
     pub resolution_scale: f32,
     pub vsync: bool,
@@ -208,6 +209,7 @@ impl ResolvedGraphicsSettings {
                 TerrainRenderRequest::Cpu => ResolvedTerrainRender::Cpu,
                 TerrainRenderRequest::GpuIndexed => ResolvedTerrainRender::GpuIndexed,
             },
+            terrain_mesh_cells: requested.renderer.terrain_mesh_cells.clamp(8, 64),
             ray_tracing,
             resolution_scale: requested.renderer.resolution_scale,
             vsync: requested.renderer.vsync,
@@ -263,6 +265,10 @@ impl ResolvedGraphicsSettings {
         map.insert("preset".to_string(), self.preset_label.clone());
         map.insert("backend".to_string(), self.backend.name.clone());
         map.insert("terrain".to_string(), self.terrain.as_str().to_string());
+        map.insert(
+            "terrain_mesh_cells".to_string(),
+            self.terrain_mesh_cells.to_string(),
+        );
         map.insert(
             "ray_tracing".to_string(),
             self.ray_tracing.as_str().to_string(),
@@ -394,7 +400,9 @@ mod tests {
         let resolved =
             ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
         assert_eq!(resolved.terrain, ResolvedTerrainRender::GpuIndexed);
+        assert_eq!(resolved.terrain_mesh_cells, 24);
         assert!(resolved.terrain.is_gpu());
         assert_eq!(resolved.as_meta_map()["terrain"], "gpu_indexed");
+        assert_eq!(resolved.as_meta_map()["terrain_mesh_cells"], "24");
     }
 }

@@ -23,6 +23,7 @@ preset = "high" # low | medium | high | ultra | custom (auto-shown when values d
 backend = "auto" # auto | vulkan | metal | webgpu (dx12 deferred pending ADR)
 ray_tracing = "auto" # off | local | full | auto
 terrain = "cpu" # cpu | gpu_indexed; no mesh-shader requirement
+terrain_mesh_cells = 24 # CPU grid density per tile edge; 8..64
 resolution_scale = 1.0
 vsync = true
 hdr = true

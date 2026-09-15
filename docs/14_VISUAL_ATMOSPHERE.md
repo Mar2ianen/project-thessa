@@ -446,6 +446,7 @@ preset = "high"
 backend = "auto"            # auto | vulkan | metal | webgpu
 ray_tracing = "auto"        # off | local | full | auto
 terrain = "cpu"             # cpu | gpu_indexed
+terrain_mesh_cells = 24      # CPU grid density per tile edge, 8..64
 resolution_scale = 1.0
 vsync = true
 hdr = true

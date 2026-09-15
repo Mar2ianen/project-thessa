@@ -11,6 +11,20 @@
 
 ### Added
 
+- Дешёвые атмосферные красоты (`apps/client/src/beauty.rs`, всё за настройками
+  графики): процедурные полосы газовых гигантов (Нереида/Веспер, bake на CPU),
+  1–2 облачных shell-дек для океанических миров, конус факела двигателя с
+  Mach diamonds/фликером/точечным светом, аврора-shell по аналитическому овалу.
+  Новые секции `graphics.toml`: `[gas_giant]`, `[engine_plume]`, расширенные
+  `[clouds]` и `[upper_atmosphere]` (интенсивность/анимация авроры).
+  Факел читает данные через `EnginePlumeInput`: движкового сима пока нет,
+  провайдером станет engine-sim без смены рендера.
+- Подтянут минимальный CBT-набор из `origin/feat/rcbt-terrain-pipeline`:
+  `rcbt-core::compact`, `lod::{CBT_FACE_DEPTH, cbt_node_for_tile,
+  tile_for_cbt_node}` (один LOD-адрес для террейна и beauty-импосторов),
+  расширение графики (terrain path, mesh cells, shadows), `water::WaterPlugin`.
+  Полный GPU terrain pipeline (`bevy-rcbt/render.rs`) осознанно отложен.
+
 - Общая запечённая траектория свободного полёта и карты, таблица эфемерид,
   планировщик событий по времени симуляции; запекание вынесено в compute worker.
 - Проверки точности coast на горизонте 200000 с и benchmark запекания / 256 кешей;

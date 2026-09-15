@@ -8,13 +8,13 @@
 #                  -> ResolvedGraphicsSettings -> renderer + perf metadata
 #
 # The future GUI edits THIS file (typed editor over the same TOML), never a
-# second independent settings system. Unknown future keys are preserved on
-# load; physics and world state are never affected by this file.
+# second independent settings system. Unknown future keys are ignored by older
+# builds; physics and world state are never affected by this file.
 #
 # Ray tracing is experimental (Bevy Solari). `ray_tracing = "local"|"full"`
 # requests RT device features and fails fast at startup when the GPU/driver
-# cannot provide them. `"auto"` currently resolves to raster; enable RT
-# explicitly or via `THESSA_RAY_TRACING=local|full`.
+# cannot provide them. `"auto"` currently resolves to raster until adapter
+# capabilities are available to the launcher.
 
 version = 1
 preset = "high" # low | medium | high | ultra | custom (auto-shown when values diverge)
@@ -22,6 +22,8 @@ preset = "high" # low | medium | high | ultra | custom (auto-shown when values d
 [renderer]
 backend = "auto" # auto | vulkan | metal | webgpu (dx12 deferred pending ADR)
 ray_tracing = "auto" # off | local | full | auto
+terrain = "cpu" # cpu | gpu_indexed; no mesh-shader requirement
+terrain_mesh_cells = 24 # CPU middle-field density; adaptive per tile; 8..64
 resolution_scale = 1.0
 vsync = true
 hdr = true
@@ -32,7 +34,10 @@ exposure_ev100 = 13.0 # manual EV100 when auto_exposure = false
 enabled = true
 quality = "high" # low | medium | high (budgets only, never physics)
 aerial_perspective = false
-density_scale = 0.55 # visual optical-depth gain; simulation pressure is unchanged
+density_scale = 0.3 # visual optical-depth gain; simulation pressure is unchanged
+# (0.55 washed terrain contrast: measured +100 shadow lift vs no-atmosphere
+# reference; 0.3 keeps the blue sky while restoring ground contrast. Revisit
+# when the aerial LUT sampling is refined.)
 multiple_scattering = false # single-scattering first slice; LUT/MS later
 eclipses = true
 multi_star = true
@@ -41,19 +46,44 @@ sky_dome = true
 ray_steps = 24 # view-march steps for CPU queries (4..128)
 
 [clouds]
-# Clouds are a separate future subsystem (spec section 10). Section kept so
-# presets and the future GUI share one schema from the start.
-enabled = false
-quality = "medium" # low | medium | high
-volumetric = false
+# Cheap shell decks (spec section 10, first slice): procedural RGBA baked once
+# on CPU, 1-2 transparent shells, no volumetrics. CBT tile keys share the
+# terrain LOD address space (see tools/worldgen-rocky lod::cbt_node_for_tile).
+enabled = true
+quality = "medium" # low = 512px, medium = 1024px, high = 2048px bake
+volumetric = false # reserved; shell path ignores it
 ray_steps = 16
 cast_shadows = false
+layers = 1 # 1 = low deck, 2 = low + cirrus
+coverage = 0.45 # 0 overcast .. 1 clear
+opacity = 0.9
+animate = true # differential deck drift; off = static
 
 [upper_atmosphere]
 airglow = true
 aurora = true
-aurora_quality = "low" # low = emissive shell; high = volumetric curtains (later)
+aurora_quality = "low" # low = static emissive shell; high = animated curtains
 aurora_lighting = false # RT emissive proxy (later)
+aurora_intensity = 1.0 # 0..4 emission gain over the analytic oval
+aurora_animate = true # slide curtains with sim time; off = static oval
+
+[gas_giant]
+# Procedural Nereid/Vesper bands baked once on CPU; no shader, no per-frame cost.
+enabled = true
+quality = "medium" # low = 512x256, medium = 1024x512, high = 2048x1024
+animate_bands = true # slow storm drift; off = static
+limb_darkening = true # belt/zone contrast baked into the texture
+
+[engine_plume]
+# Cone + baked gradient/Mach diamonds + flicker + 1 optional point light.
+# NOTE (engines): no engine-sim exists yet. The client reads plume input via
+# EnginePlumeInput (see apps/client/src/beauty.rs); when engine-sim lands it
+# becomes the provider and this section stays unchanged.
+enabled = true
+quality = "medium" # low = untextured cone, medium/high = baked diamonds
+mach_diamonds = true
+flicker = true
+light = true
 
 [raytracing]
 # Participation flags for the experimental Solari path. The single mode
@@ -64,6 +94,17 @@ landmarks = false
 atmosphere = true # ray-aware transmittance/sky queries where supported
 clouds = false
 max_distance_m = 500000.0
+
+[shadows]
+# Sun shadow cascade cover for the raster path (RT lighting ignores it).
+# Engine default ends at 150 m; planetary cover is explicit here instead
+# of magic numbers in the client.
+enabled = true
+quality = "high" # low | medium | high (expands the numbers below on preset apply)
+cascades = 4 # 1..=4
+max_distance_m = 12000.0 # far end of cover in metres; first cascade ends at max/40
+map_size = 4096 # per-cascade texel grid, power of two 512..=8192
+normal_bias_m = 1.5 # normal offset in metres against acne on 32 m mesh cells
 
 [debug]
 show_atmosphere_bounds = false

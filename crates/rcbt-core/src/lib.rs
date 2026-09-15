@@ -16,6 +16,7 @@ const ENCODING_VERSION: u8 = 1;
 const PAGE_ENCODING_VERSION: u8 = 1;
 
 pub mod packed;
+pub mod compact;
 
 /// A heap-addressed binary-tree node.
 ///

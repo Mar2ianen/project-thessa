@@ -15,9 +15,13 @@ mod resolve;
 mod settings;
 
 pub use metadata::{SettingKind, SettingMeta, describe};
-pub use resolve::{Capabilities, ResolvedBackend, ResolvedGraphicsSettings, ResolvedRayTracing};
+pub use resolve::{
+    Capabilities, ResolvedBackend, ResolvedGraphicsSettings, ResolvedRayTracing,
+    ResolvedTerrainRender,
+};
 pub use settings::{
-    AuroraQuality, BackendRequest, CloudSettings, ConfigError, DebugSettings, Preset, Quality,
-    RayTracingRequest, RaytracingParticipation, RendererSettings, RequestedGraphics,
-    UpperAtmosphereSettings,
+    AtmosphereSettings, AuroraQuality, BackendRequest, CloudSettings, ConfigError, DebugSettings,
+    EnginePlumeSettings, GasGiantSettings, Preset, Quality, RayTracingRequest,
+    RaytracingParticipation, RendererSettings, RequestedGraphics, ShadowSettings,
+    TerrainRenderRequest, UpperAtmosphereSettings,
 };

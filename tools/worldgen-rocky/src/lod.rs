@@ -2,7 +2,55 @@
 //! Tiles cache the field; they never define the terrain or own its random seed.
 use crate::{appearance::surface_appearance, field::PlanetField};
 use serde::{Deserialize, Serialize};
-use thessa_rcbt_core::{HeightPage, HeightPageError};
+use thessa_rcbt_core::{HeightPage, HeightPageError, Node};
+
+/// CBT domain adapter: three binary path bits reserved for a cube face.
+/// Six of eight depth-3 leaves map to faces 0..=5; two stay inert.
+/// Quadtree level L -> CBT depth 3+2L via Morton (x_bit, y_bit) pairs.
+/// Pulled from origin/feat/rcbt-terrain-pipeline (20cbcee): lets clouds,
+/// gas-giant bands and aurora shells share one LOD address space with terrain.
+pub const CBT_FACE_DEPTH: u8 = 3;
+
+pub fn cbt_node_for_tile(key: TileKey) -> Option<Node> {
+    if key.face >= 6 || CBT_FACE_DEPTH.checked_add(key.level.checked_mul(2)?)? > 58 {
+        return None;
+    }
+    let mut id = (1_u64 << CBT_FACE_DEPTH) | key.face as u64;
+    for bit in (0..key.level).rev() {
+        id = (id << 1) | ((key.x as u64 >> bit) & 1);
+        id = (id << 1) | ((key.y as u64 >> bit) & 1);
+    }
+    Node::new(id, CBT_FACE_DEPTH + key.level * 2).ok()
+}
+
+/// Even-depth CBT leaf -> cube tile. Odd-depth leaves are valid binary
+/// topology (half quadtree split) with no complete tile address.
+pub fn tile_for_cbt_node(node: Node) -> Option<TileKey> {
+    if node.depth() < CBT_FACE_DEPTH || (node.depth() - CBT_FACE_DEPTH) % 2 != 0 {
+        return None;
+    }
+    let tile_level = (node.depth() - CBT_FACE_DEPTH) / 2;
+    let path_bits = node.depth() - CBT_FACE_DEPTH;
+    let path_mask = (1_u64 << path_bits).saturating_sub(1);
+    let face = ((node.id() - (1_u64 << node.depth())) >> path_bits) as u8;
+    if face >= 6 {
+        return None;
+    }
+    let morton = (node.id() - (1_u64 << node.depth())) & path_mask;
+    let mut x = 0_u32;
+    let mut y = 0_u32;
+    for bit in 0..tile_level {
+        let shift = (tile_level - bit - 1) * 2;
+        x = (x << 1) | ((morton >> (shift + 1)) & 1) as u32;
+        y = (y << 1) | ((morton >> shift) & 1) as u32;
+    }
+    Some(TileKey {
+        face,
+        level: tile_level,
+        x,
+        y,
+    })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TileKey {

@@ -3,6 +3,10 @@
 use super::*;
 
 const NAVBALL_SIZE: f32 = 256.0;
+// Keep the logical 256 px instrument, but generate a filtered 128 px source:
+// rebuilding the procedural navball is CPU work and the HUD does not resolve
+// a source texel one-to-one at normal display scale.
+pub(super) const NAVBALL_TEXTURE_SIZE: u32 = 128;
 const PANEL: Color = Color::srgba(0.035, 0.052, 0.074, 0.94);
 const EDGE: Color = Color::srgba(0.48, 0.60, 0.69, 0.40);
 
@@ -48,6 +52,7 @@ pub(super) struct VectorMarker {
 pub(super) struct NavballTexture {
     image: Handle<Image>,
     last_up: DVec3,
+    last_update_s: f64,
 }
 
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
@@ -467,6 +472,7 @@ pub(super) fn spawn_pilot_hud(
     commands.insert_resource(NavballTexture {
         image: texture.clone(),
         last_up: DVec3::Z,
+        last_update_s: 0.0,
     });
     commands
         .spawn((
@@ -1024,6 +1030,7 @@ fn marker_position(direction: DVec3) -> Option<Vec2> {
 pub(super) fn update_pilot_hud(
     state: Res<PilotHudState>,
     clock: Res<SimulationClock>,
+    time: Res<Time>,
     window: Single<&Window, With<PrimaryWindow>>,
     camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
     mut texture: ResMut<NavballTexture>,
@@ -1040,7 +1047,9 @@ pub(super) fn update_pilot_hud(
         Query<(&mut Node, &PitchLabel)>,
         Query<&mut Node, With<RollPointer>>,
     )>,
+    mut perf: ResMut<perf::PerfMonitor>,
 ) {
+    let started = std::time::Instant::now();
     let visible = state.view_mode == ClientViewMode::Pilot && !state.ui_hidden;
     for mut root in &mut roots {
         *root = if visible {
@@ -1050,15 +1059,22 @@ pub(super) fn update_pilot_hud(
         };
     }
     if !visible {
+        perf.record_scope("client.pilot_hud", started.elapsed().as_secs_f64());
         return;
     }
     let flight = &state.flight;
-    // Do not regenerate/upload 256x256 pixels on every paused render frame.
-    if texture.last_up.distance_squared(flight.local_up_body) > 1.0e-8 {
+    // The texture is filtered to the 256 px instrument. A small angular
+    // hysteresis avoids rebuilding it for sub-pixel attitude changes while
+    // still tracking real pitch/roll motion promptly.
+    let now_s = time.elapsed_secs_f64();
+    if now_s - texture.last_update_s >= 1.0 / 30.0
+        && texture.last_up.distance_squared(flight.local_up_body) > 4.0e-6
+    {
         if let Some(mut image) = images.get_mut(&texture.image) {
             update_navball_image(&mut image, flight.local_up_body);
         }
         texture.last_up = flight.local_up_body;
+        texture.last_update_s = now_s;
     }
     for mut node in &mut nodes.p0() {
         node.display = if state.show_help {
@@ -1220,6 +1236,7 @@ pub(super) fn update_pilot_hud(
             ),
         };
     }
+    perf.record_scope("client.pilot_hud", started.elapsed().as_secs_f64());
 }
 
 #[cfg(test)]

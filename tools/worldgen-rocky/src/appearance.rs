@@ -20,6 +20,47 @@ pub(crate) fn smooth(a: f64, b: f64, v: f64) -> f64 {
     let t = ((v - a) / (b - a)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
+
+/// Deterministic material-only grain. This is deliberately separate from the
+/// canonical height field: it gives close terrain a readable surface pattern
+/// without inventing collision relief or changing authoritative queries.
+pub(crate) fn surface_grain(field: &PlanetField, dir: [f64; 3]) -> f64 {
+    [(8.0, 0.42), (32.0, 0.32), (128.0, 0.20), (512.0, 0.10)]
+        .into_iter()
+        .enumerate()
+        .map(|(band, (scale, weight))| {
+            weight
+                * rng::value_noise3(
+                    field.params.seed,
+                    741 + band as u32 * 17,
+                    dir[0] * field.params.radius_m / scale,
+                    dir[1] * field.params.radius_m / scale,
+                    dir[2] * field.params.radius_m / scale,
+                )
+        })
+        .sum()
+}
+
+/// The normal-map path must discard grain finer than two texels, otherwise a
+/// low-resolution tile aliases its own detail instead of filtering it.
+pub(crate) fn surface_grain_height(
+    field: &PlanetField,
+    dir: [f64; 3],
+    texel_wavelength_m: f64,
+) -> f64 {
+    [(8.0, 0.42), (32.0, 0.32), (128.0, 0.20), (512.0, 0.10)]
+        .into_iter()
+        .enumerate()
+        .filter(|(_, (scale, _))| *scale >= texel_wavelength_m * 2.0)
+        .map(|(band, (scale, weight))| {
+            let q = dir.map(|v| v * field.params.radius_m / scale);
+            weight
+                * 2.0
+                * rng::value_noise3(field.params.seed, 741 + band as u32 * 17, q[0], q[1], q[2])
+        })
+        .sum()
+}
+
 pub fn surface_appearance(
     field: &PlanetField,
     sample: &TerrainSample,
@@ -37,6 +78,7 @@ pub fn surface_appearance(
     };
     let regional = noise(731, 360_000.0, 3);
     let variation = noise(733, 65_000.0, 3);
+    let grain = surface_grain(field, dir);
     let h = sample.height_m;
     let snow = smooth(
         276.0,
@@ -49,7 +91,8 @@ pub fn surface_appearance(
         let c = mix(c, [0.014, 0.044, 0.11], smooth(600.0, 6000.0, -h));
         let ice = smooth(263.0, 253.0, sample.temperature_k + regional * 6.0);
         return SurfaceAppearance {
-            albedo_srgb: mix(c, [0.75, 0.84, 0.86], ice).map(|x| x as f32),
+            albedo_srgb: mix(c, [0.75, 0.84, 0.86], ice)
+                .map(|x| (x * (1.0 + grain * 0.10)).clamp(0.0, 1.0) as f32),
             roughness: (0.16 + 0.58 * ice) as f32,
             vegetation: 0.0,
             snow: ice as f32,
@@ -74,7 +117,7 @@ pub fn surface_appearance(
     color = mix(color, [0.36, 0.37, 0.36], rock);
     // Beach is a height band, not a circular feature footprint.
     color = mix([0.66, 0.64, 0.48], color, smooth(3.0, 45.0, h));
-    color = color.map(|c| c * (1.0 + variation * 0.14 + regional * 0.08));
+    color = color.map(|c| c * (1.0 + variation * 0.14 + regional * 0.08 + grain * 0.24));
     color = mix(
         color,
         [0.88, 0.92, 0.94],

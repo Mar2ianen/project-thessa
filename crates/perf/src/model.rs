@@ -197,6 +197,32 @@ pub struct WorldCounters {
     pub active_vehicles: u32,
     pub active_aero_panels: u32,
     pub terrain_patches_visible: u32,
+    /// Number of selected terrain leaves for the current view, including
+    /// leaves that are still being built.
+    #[serde(default)]
+    pub terrain_patches_wanted: u32,
+    /// CPU terrain jobs currently in flight on the async worker pool.
+    #[serde(default)]
+    pub terrain_jobs_in_flight: u32,
+    /// Smoothed render-eye speed used by the streaming policy, rounded to m/s.
+    #[serde(default)]
+    pub terrain_eye_speed_mps: u32,
+    /// Current velocity detail bias times 100 (`100` is full near-field detail).
+    #[serde(default)]
+    pub terrain_detail_bias_x100: u32,
+    /// Finest/coarsest visible LOD level in the current cover. Zero means no
+    /// terrain is visible; the full histogram below disambiguates level 0.
+    #[serde(default)]
+    pub terrain_lod_min: u32,
+    #[serde(default)]
+    pub terrain_lod_max: u32,
+    /// Finest selected LOD level, including tiles waiting for generation.
+    #[serde(default)]
+    pub terrain_wanted_lod_max: u32,
+    /// Visible-leaf histogram for levels 0..=17. Fixed-size data keeps the
+    /// capture schema stable while still exposing the actual LOD distribution.
+    #[serde(default)]
+    pub terrain_lod_histogram: [u32; 18],
     pub terrain_patches_generated: u32,
     pub terrain_vertices: u64,
     pub terrain_triangles: u64,

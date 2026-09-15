@@ -829,7 +829,9 @@ fn update_starfield(
     survey: Res<terrain::SurfaceSurvey>,
     pilot: Res<PilotHudState>,
     mut stars: Query<(&mut Transform, &StarMarker, &mut Visibility)>,
+    mut perf: ResMut<perf::PerfMonitor>,
 ) {
+    let started = std::time::Instant::now();
     // Local stars must lie behind terrain, not 500 metres in front of it.
     let local = survey.active || pilot.view_mode == ClientViewMode::Pilot;
     let radius = if local { 5_000_000.0 } else { 500.0 };
@@ -842,8 +844,10 @@ fn update_starfield(
         transform.translation = camera.translation + star.direction * radius * star.radius_factor;
         transform.scale = Vec3::splat(star.size * radius / 60.0);
     }
+    perf.record_scope("client.starfield", started.elapsed().as_secs_f64());
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_celestial_visuals(
     clock: Res<SimulationClock>,
     runtime: Res<RuntimeEphemeris>,
@@ -852,7 +856,9 @@ fn update_celestial_visuals(
     pilot: Option<Res<PilotHudState>>,
     cameras: Query<&Transform, (With<Camera3d>, Without<CelestialVisual>)>,
     mut visuals: Query<(&mut Transform, &mut Visibility, &CelestialVisual)>,
+    mut perf: ResMut<perf::PerfMonitor>,
 ) {
+    let started = std::time::Instant::now();
     let time = SimTime(clock.sim_seconds);
     let pilot_active = pilot
         .as_ref()
@@ -889,6 +895,7 @@ fn update_celestial_visuals(
             *visibility = Visibility::Hidden;
         }
     }
+    perf.record_scope("client.celestial_visuals", started.elapsed().as_secs_f64());
 }
 
 fn map_position(

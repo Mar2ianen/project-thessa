@@ -233,7 +233,9 @@ pub(super) fn update_camera(
     mut mouse_wheel: MessageReader<MouseWheel>,
     mut navigation: ResMut<NavigationState>,
     mut query: Query<(&mut Transform, &mut OrbitCamera, &mut Projection), With<Camera3d>>,
+    mut perf: ResMut<perf::PerfMonitor>,
 ) {
+    let started = std::time::Instant::now();
     let delta = time.delta_secs().clamp(0.0, 0.1);
     let mouse_delta = mouse_motion.delta;
     let pilot_active = pilot
@@ -256,6 +258,7 @@ pub(super) fn update_camera(
     // updates the camera around the preview vehicle; the map camera must not
     // overwrite that transform later in the frame.
     if pilot_active || survey.active {
+        perf.record_scope("client.camera", started.elapsed().as_secs_f64());
         return;
     }
 
@@ -450,6 +453,7 @@ pub(super) fn update_camera(
     navigation.last_mode = Some(map.mode);
     navigation.last_focus = Some(map.focus);
     navigation.last_selected = Some(map.selected);
+    perf.record_scope("client.camera", started.elapsed().as_secs_f64());
 }
 
 pub(super) fn visible_physical_body_ids(ephemeris: &BakedEphemeris, map: &MapState) -> Vec<BodyId> {

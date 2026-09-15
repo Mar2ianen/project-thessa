@@ -64,8 +64,14 @@ impl PerfMonitor {
 
 impl Default for PerfMonitor {
     fn default() -> Self {
+        let mut collector = PerfCollector::with_default_capacity();
+        match std::env::var("THESSA_PROFILE").as_deref() {
+            Ok("off") => collector.set_level(ProfilingLevel::Off),
+            Ok("detailed") => collector.set_level(ProfilingLevel::Detailed),
+            _ => {}
+        }
         Self {
-            collector: PerfCollector::with_default_capacity(),
+            collector,
             overlay_visible: false,
             capturing: false,
             capture_frames: 0,
@@ -188,6 +194,24 @@ fn perf_handle_keys(
             );
         }
     }
+    if keys.just_pressed(KeyCode::F5) {
+        let level = match monitor.collector.level() {
+            ProfilingLevel::Detailed => ProfilingLevel::Normal,
+            ProfilingLevel::Off | ProfilingLevel::Normal => ProfilingLevel::Detailed,
+        };
+        monitor.collector.set_level(level);
+        monitor.last_status = format!(
+            "PERF: {} profiling; Shift+F4 capture",
+            match level {
+                ProfilingLevel::Off => "off",
+                ProfilingLevel::Normal => "normal",
+                ProfilingLevel::Detailed => "detailed",
+            }
+        );
+        monitor
+            .collector
+            .push_event("profiling level changed", Some(format!("{level:?}")));
+    }
 }
 
 /// Begin a short capture: shared by the Shift+F4 key binding and the
@@ -215,6 +239,7 @@ struct Autobench {
     rung: usize,
     rung_started: Option<Instant>,
     boot: Option<Instant>,
+    view_initialized: bool,
 }
 
 /// (requested warp, dwell in wall seconds). Warmup precedes rung 0.
@@ -228,14 +253,32 @@ fn perf_autobench(
     mut clock: Option<ResMut<SimulationClock>>,
     window: Single<&Window, With<PrimaryWindow>>,
     map: Option<Res<MapState>>,
-    pilot: Res<PilotHudState>,
-    survey: Res<terrain::SurfaceSurvey>,
+    mut pilot: ResMut<PilotHudState>,
+    mut survey: ResMut<terrain::SurfaceSurvey>,
     graphics: Option<Res<GraphicsResolved>>,
     mut app_exit: MessageWriter<AppExit>,
 ) {
     let Some(bench) = bench.as_deref_mut() else {
         return;
     };
+    if !bench.view_initialized {
+        match std::env::var("THESSA_AUTOBENCH_VIEW").as_deref() {
+            Ok("pilot") => {
+                pilot.view_mode = ClientViewMode::Pilot;
+            }
+            Ok("surface") => {
+                survey.active = true;
+                pilot.view_mode = ClientViewMode::Map;
+            }
+            _ => {}
+        }
+        if std::env::var_os("THESSA_AUTOBENCH_PAUSED").is_some()
+            && let Some(clock) = clock.as_deref_mut()
+        {
+            clock.paused = true;
+        }
+        bench.view_initialized = true;
+    }
     // The export task outlives the capture: poll it here exactly like the
     // key handler does, and exit only after the files land on disk.
     if let Some(task) = monitor.export_task.as_mut()
@@ -283,14 +326,16 @@ fn perf_autobench(
         // Fresh rung: stamp it and apply its warp vote.
         None => {
             bench.rung_started = Some(now);
-            let warp = AUTOBENCH_LADDER[bench.rung].0;
-            if let Some(clock) = clock.as_deref_mut()
-                && clock.multiplier != warp
-            {
-                clock.multiplier = warp;
-                monitor
-                    .collector
-                    .push_event("autobench warp", Some(format!("requested warp x{warp}")));
+            if std::env::var_os("THESSA_AUTOBENCH_STATIC").is_none() {
+                let warp = AUTOBENCH_LADDER[bench.rung].0;
+                if let Some(clock) = clock.as_deref_mut()
+                    && clock.multiplier != warp
+                {
+                    clock.multiplier = warp;
+                    monitor
+                        .collector
+                        .push_event("autobench warp", Some(format!("requested warp x{warp}")));
+                }
             }
         }
         // Mid-rung: hold the vote (the ferry sends it every frame anyway).
@@ -559,10 +604,17 @@ fn build_overlay_text(
     };
     let world_line = match latest {
         Some(f) => format!(
-            "bodies {:>2} vehicles {} visible {} new/frame {} tris {} queue {} assets {}/{} RT {}",
+            "bodies {:>2} vehicles {} visible {}/{} jobs {} v{:.0} bias {:.1} L{}-{} wanted L{} new/frame {} tris {} queue {} assets {}/{} RT {}",
             f.world.active_bodies,
             f.world.active_vehicles,
             f.world.terrain_patches_visible,
+            f.world.terrain_patches_wanted,
+            f.world.terrain_jobs_in_flight,
+            f.world.terrain_eye_speed_mps,
+            f.world.terrain_detail_bias_x100 as f64 / 100.0,
+            f.world.terrain_lod_min,
+            f.world.terrain_lod_max,
+            f.world.terrain_wanted_lod_max,
             f.world.terrain_patches_generated,
             f.world.terrain_triangles,
             f.world.streaming_queued,
@@ -587,12 +639,35 @@ fn build_overlay_text(
     } else {
         "Shift+F4 capture".to_string()
     };
+    let scope_line = if monitor.collector.level() == ProfilingLevel::Detailed {
+        let mut scopes: Vec<_> = latest
+            .into_iter()
+            .flat_map(|frame| frame.cpu_scopes.iter())
+            .filter(|(name, seconds)| *name != "frame.cpu" && **seconds >= 0.000_01)
+            .map(|(name, seconds)| (name.as_str(), *seconds))
+            .collect();
+        scopes.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let scopes = scopes
+            .into_iter()
+            .take(7)
+            .map(|(name, seconds)| format!("{name} {:.2}ms", seconds * 1000.0))
+            .collect::<Vec<_>>()
+            .join("  ");
+        format!("scopes {scopes}\n")
+    } else {
+        String::new()
+    };
+    let level_line = match monitor.collector.level() {
+        ProfilingLevel::Off => "off",
+        ProfilingLevel::Normal => "normal",
+        ProfilingLevel::Detailed => "detailed",
+    };
     let _ = warp_flag;
     let status = stop_reason
         .map(|reason| format!("\nSIM: {reason}"))
         .unwrap_or_default();
     format!(
-        "PERF  {}  {}x{}  [F4] overlay  [{}]  [Shift+F12 RT:{}]\nFRAME {:5.2}ms {:5.0}fps cpu {:5.2}ms gpu unavailable\n  p50 {:5.2} p95 {:5.2} p99 {:5.2} max {:5.2}ms (n={})\nSIM {}\n  sim.total {:5.2}ms\nWORLD {}\nMEM {}\n{}{status}",
+        "PERF  {}  {}x{}  [F4] overlay  [F5] profile  [{}]  [RT:{}]\nFRAME {:5.2}ms {:5.0}fps cpu {:5.2}ms gpu unavailable\n  p50 {:5.2} p95 {:5.2} p99 {:5.2} max {:5.2}ms (n={})\nSIM {}\n  sim.total {:5.2}ms\nWORLD {}\nMEM {}\n{}level {}{status}",
         view,
         window.resolution.physical_width(),
         window.resolution.physical_height(),
@@ -610,11 +685,8 @@ fn build_overlay_text(
         sim_scope.map(|s| s.current * 1000.0).unwrap_or(0.0),
         world_line,
         mem_line,
-        if monitor.collector.level() == ProfilingLevel::Detailed {
-            "level detailed"
-        } else {
-            "level normal"
-        },
+        scope_line,
+        level_line,
     )
 }
 

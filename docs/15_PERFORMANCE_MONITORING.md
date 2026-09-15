@@ -1,9 +1,10 @@
 # Performance Monitoring and Profiling
 
-Status: partial implementation. The capture model, scopes, rolling statistics,
-JSON/CSV export, memory samples, server/on-rails accounting, and tests are
-implemented in `crates/perf`; the complete client overlay and every proposed
-counter remain implementation work.
+Status: active implementation. The capture model, named scopes, rolling
+statistics, JSON/CSV export, memory samples, client overlay, terrain workload
+counters, server/on-rails accounting, and tests are implemented. GPU timing is
+reported as unavailable when the active backend does not expose a trustworthy
+timestamp path; the overlay does not synthesize it.
 
 Scope: client rendering, authoritative simulation, time warp, world/terrain runtime, memory, and capture tooling.
 
@@ -319,6 +320,28 @@ process / caches / GPU if available
 The overlay should be cheap enough to leave enabled while diagnosing a problem.
 
 Avoid rendering enormous scrolling profiler trees in the normal flight HUD.
+
+The current client controls are:
+
+- `F4` toggles the overlay;
+- `F5` toggles detailed named-scope profiling;
+- `Shift+F4` starts/stops a short JSON/CSV capture.
+
+For repeatable terrain runs, the client also accepts:
+
+```text
+THESSA_PROFILE=detailed
+THESSA_AUTOBENCH=1
+THESSA_AUTOBENCH_VIEW=pilot|surface
+THESSA_AUTOBENCH_STATIC=1
+THESSA_AUTOBENCH_PAUSED=1
+```
+
+The terrain counters include visible/wanted patches, jobs in flight, eye
+speed, detail bias, visible and wanted LOD bounds, and an `L0..L17` histogram.
+Named scopes split selection, CBT submission, worker polling, asset upload,
+entity synchronization, counters, and total streaming work. This makes a
+quality regression distinguishable from a CPU scheduling or upload stall.
 
 ---
 

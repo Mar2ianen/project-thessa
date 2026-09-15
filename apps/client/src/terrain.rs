@@ -374,6 +374,21 @@ fn mesh_from_tile(tile: &TerrainTile, texture_size: usize, cells: usize) -> Mesh
     mesh
 }
 
+/// CPU terrain uses an adaptive grid while keeping the graphics setting as a
+/// stable mid-field baseline. Far cover is silhouette-only, the middle field
+/// keeps the configured density, and the tiles that can actually carry the
+/// pilot view get extra vertices for relief instead of spending the same
+/// budget on the horizon.
+fn mesh_cells_for_tile(base: usize, key: TileKey) -> usize {
+    let base = base.clamp(8, 64);
+    match key.level {
+        0..=8 => (base / 3).max(8),
+        9..=11 => (base * 2 / 3).max(8),
+        12 => base,
+        _ => (base * 2).min(64),
+    }
+}
+
 // Keep existing coverage until every overlapping replacement is ready. New
 // disjoint tiles can appear immediately; no parent/child meshes overlap.
 fn tiles_overlap(a: TileKey, b: TileKey) -> bool {
@@ -557,6 +572,14 @@ fn update_terrain(
         }
         world.visible.clear();
         world.counters.terrain_patches_visible = 0;
+        world.counters.terrain_patches_wanted = 0;
+        world.counters.terrain_jobs_in_flight = 0;
+        world.counters.terrain_eye_speed_mps = 0;
+        world.counters.terrain_detail_bias_x100 = 100;
+        world.counters.terrain_lod_min = 0;
+        world.counters.terrain_lod_max = 0;
+        world.counters.terrain_wanted_lod_max = 0;
+        world.counters.terrain_lod_histogram = [0; 18];
         for mut text in &mut readout {
             text.0.clear();
         }
@@ -664,7 +687,9 @@ fn update_terrain(
     // Movement trigger (standard streaming practice): fast flight covers
     // hundreds of metres per selection period, so a pure timer always lags
     // behind the view. Reselect when the eye moved >300 m or the view swung
-    // >~7°, besides the 0.35 s timer.
+    // >~7°, besides the slower 0.75 s safety timer. The movement trigger
+    // handles a fast craft; the timer is only a guard for a stationary camera
+    // and must not run the full selection walk three times per second.
     let mut moved = !world.selected_valid;
     if world.selected_valid {
         let dt = (now_s - world.selection_at).max(1e-3);
@@ -683,8 +708,9 @@ fn update_terrain(
     // drops to ≈174/s (500 m) and ≈10/s (5 km). Detail the viewer crosses
     // in one frame is motion-blurred anyway.
     let detail_bias = (1.0 + world.eye_speed_mps.max(0.0) / 100.0).clamp(1.0, 32.0);
+    let selection_started = Instant::now();
     let mut selection_changed = false;
-    if now_s - world.selection_at > 0.35 || moved || world.wanted.is_empty() {
+    if now_s - world.selection_at > 0.75 || moved || world.wanted.is_empty() {
         // Reselect when workers are nearly drained. Existing coverage is
         // retained until its overlapping replacements are ready; disjoint
         // completed tiles appear without waiting for the entire selection.
@@ -725,25 +751,48 @@ fn update_terrain(
             selection_changed = true;
         }
     }
+    perf.record_scope(
+        "world.terrain_selection",
+        selection_started.elapsed().as_secs_f64(),
+    );
     let fov_rad = match &*camera.1 {
         Projection::Perspective(projection) => f64::from(projection.fov),
         _ => 0.0,
     };
-    cbt.input.submit(
-        Some(RenderView {
-            eye_body_m: eye.to_array(),
-            forward_body: forward_body.to_array(),
-            velocity_body_mps: [0.0; 3],
-            fov_rad,
-            pixel_error_target: 1.0,
-        }),
-        cbt_candidates_for_tiles(cbt.state.topology(), &world.wanted),
+    let cbt_submit_started = Instant::now();
+    // The CBT plugin consumes topology work in PostUpdate and keeps the last
+    // committed view/topology. Rebuilding the full candidate set every render
+    // frame was pure CPU churn: at ~180 leaves it cost several milliseconds
+    // even when the camera and wanted set had not changed. Submit only when a
+    // new selection is actually available; pages and CPU mesh transforms do
+    // not require a no-op CBT transaction.
+    if selection_changed {
+        cbt.input.submit(
+            Some(RenderView {
+                eye_body_m: eye.to_array(),
+                forward_body: forward_body.to_array(),
+                velocity_body_mps: [0.0; 3],
+                fov_rad,
+                pixel_error_target: 1.0,
+            }),
+            cbt_candidates_for_tiles(cbt.state.topology(), &world.wanted),
+        );
+    }
+    perf.record_scope(
+        "world.terrain_cbt_submit",
+        cbt_submit_started.elapsed().as_secs_f64(),
     );
+    let poll_started = Instant::now();
     let finished: Vec<_> = world
         .jobs
         .iter_mut()
         .filter_map(|(key, task)| block_on(poll_once(task)).map(|result| (*key, result)))
         .collect();
+    perf.record_scope(
+        "world.terrain_job_poll",
+        poll_started.elapsed().as_secs_f64(),
+    );
+    let asset_upload_started = Instant::now();
     for (key, output) in finished {
         world.jobs.remove(&key);
         let TerrainBuildOutput {
@@ -800,6 +849,10 @@ fn update_terrain(
         );
         world.counters.terrain_patches_generated += 1;
     }
+    perf.record_scope(
+        "world.terrain_asset_upload",
+        asset_upload_started.elapsed().as_secs_f64(),
+    );
     // Build order: coarse cover (L7-) first so holes close immediately,
     // then nearest-first for detail. Key order is arbitrary — without this
     // the near field waits behind hundreds of far tiles, and without the
@@ -840,11 +893,16 @@ fn update_terrain(
     let gpu_raster = cbt.surface.gpu_raster_enabled();
     for key in pending {
         let field = world.field.clone();
+        let tile_mesh_cells = if gpu_raster {
+            32
+        } else {
+            mesh_cells_for_tile(terrain_mesh_cells, key)
+        };
         world.jobs.insert(
             key,
             AsyncComputeTaskPool::get().spawn(async move {
                 let start = Instant::now();
-                let tile = lod::build_tile(&field, key, terrain_mesh_cells);
+                let tile = lod::build_tile(&field, key, tile_mesh_cells);
                 let mesh_s = start.elapsed().as_secs_f64();
                 // The direct GPU smoke path needs only the quantized height
                 // page. Avoid paying for CPU mesh assembly, mip generation,
@@ -857,13 +915,13 @@ fn update_terrain(
                         &field,
                         key,
                         lod::texture_cells_for_level(key.level),
-                        terrain_mesh_cells,
+                        tile_mesh_cells,
                     );
                     let material_s = texture_start.elapsed().as_secs_f64();
                     // Mesh assembly (tangents) and image upload prep (mipmaps:
                     // ~65k sRGB powf per 128 px tile) stay on the pool: per
                     // finished tile the frame thread only inserts handles.
-                    let mesh = mesh_from_tile(&tile, texture.size, terrain_mesh_cells);
+                    let mesh = mesh_from_tile(&tile, texture.size, tile_mesh_cells);
                     let images = [
                         surface_image(texture.size, texture.albedo.clone(), true),
                         surface_image(texture.size, texture.roughness.clone(), false),
@@ -890,6 +948,7 @@ fn update_terrain(
         );
         world.counters.terrain_cache_misses += 1;
     }
+    let entity_sync_started = Instant::now();
     if selection_changed || world.counters.terrain_patches_generated > 0 {
         let desired = ready_terrain_cover(&world.wanted, &world.visible, |key| {
             world.cache.contains_key(key)
@@ -942,6 +1001,10 @@ fn update_terrain(
             transform.rotation = rotation.as_quat();
         }
     }
+    perf.record_scope(
+        "world.terrain_entity_sync",
+        entity_sync_started.elapsed().as_secs_f64(),
+    );
     if !world.visible.is_empty() {
         for mut visibility in &mut celestial {
             *visibility = Visibility::Hidden;
@@ -974,9 +1037,37 @@ fn update_terrain(
             }
         }
     }
+    let counters_started = Instant::now();
     world.counters.assets_loaded = world.cache.len() as u32 * 5;
     world.counters.assets_pending = world.jobs.len() as u32 * 5;
     world.counters.terrain_patches_visible = world.visible.len() as u32;
+    world.counters.terrain_patches_wanted = world.wanted.len() as u32;
+    world.counters.terrain_jobs_in_flight = world.jobs.len() as u32;
+    world.counters.terrain_eye_speed_mps = world.eye_speed_mps.round().max(0.0) as u32;
+    world.counters.terrain_detail_bias_x100 = (detail_bias * 100.0).round() as u32;
+    let mut visible_lod_histogram = [0_u32; 18];
+    for key in &world.visible {
+        visible_lod_histogram[usize::from(key.level.min(17))] += 1;
+    }
+    world.counters.terrain_lod_histogram = visible_lod_histogram;
+    world.counters.terrain_lod_min = world
+        .visible
+        .iter()
+        .map(|key| u32::from(key.level))
+        .min()
+        .unwrap_or(0);
+    world.counters.terrain_lod_max = world
+        .visible
+        .iter()
+        .map(|key| u32::from(key.level))
+        .max()
+        .unwrap_or(0);
+    world.counters.terrain_wanted_lod_max = world
+        .wanted
+        .iter()
+        .map(|key| u32::from(key.level))
+        .max()
+        .unwrap_or(0);
     world.counters.streaming_queued = world
         .wanted
         .iter()
@@ -999,6 +1090,10 @@ fn update_terrain(
         .values()
         .map(|t| t.vertices * 48 + t.triangles * 12 + t.texture_bytes)
         .sum();
+    perf.record_scope(
+        "world.terrain_counters",
+        counters_started.elapsed().as_secs_f64(),
+    );
     perf.record_scope("world.streaming", started.elapsed().as_secs_f64());
 }
 

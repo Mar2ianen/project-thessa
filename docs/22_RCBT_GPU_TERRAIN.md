@@ -65,10 +65,19 @@ The workspace contains:
 - client terrain integration that submits the live body-frame view and
   cube-sphere split/merge candidates.
 
-The current visible mesh remains the CPU tile path by default. The indexed GPU
-bridge does height-page sampling, produces position/normal vertices plus a
-standard `DrawIndexedIndirect` list, and can consume those buffers in a
-reverse-Z Bevy `Core3d` pass. The indexed compute pass runs only when
+The current visible mesh remains the CPU tile path by default. It is an
+adaptive fallback rather than one fixed grid: `[renderer] terrain_mesh_cells`
+is the middle-field baseline, cover levels use a coarse 8..16-cell grid, and
+L13+ tiles use up to twice the baseline (capped at 64 cells). This moves
+geometry budget from the horizon into the ground that can affect the pilot
+view; texture resolution remains controlled independently by the terrain
+texture LOD policy. Close tiles also receive deterministic filtered material
+grain and normal detail; that layer is visual-only and does not alter the
+authoritative height field or collision queries.
+
+The indexed GPU bridge does height-page sampling, produces position/normal
+vertices plus a standard `DrawIndexedIndirect` list, and can consume those
+buffers in a reverse-Z Bevy `Core3d` pass. The indexed compute pass runs only when
 topology, page payloads, or surface radius changes; camera-origin changes
 upload only the affine body-to-render-local matrix.
 
@@ -79,9 +88,12 @@ For launch-time visual smoke tests:
 - leave it at `"cpu"` for the default legacy tile path. No environment switch
   requests hardware mesh features in the normal client.
 
-For the CPU path, `[renderer] terrain_mesh_cells` controls tile grid density
-(8..64; the checked-in high preset uses 24). The indexed CBT path keeps its
-fixed 33x33 page contract and ignores this CPU-only density setting.
+For the CPU path, `[renderer] terrain_mesh_cells` controls the middle-field
+tile grid density (8..64; the checked-in high preset uses 24). The actual
+per-tile density is selected from the CBT/L0..L20 tile level: coarse cover is
+cheaper, L12 keeps the configured baseline, and L13+ receives the near-detail
+multiplier. The indexed CBT path keeps its fixed 33x33 page contract and
+ignores this CPU-only density setting.
 
 The indexed mode hides CPU tile entities and keeps the closed backdrop as a
 low-resolution fallback. The optional mesh-shader experiment remains

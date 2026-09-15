@@ -568,7 +568,9 @@ fn update_pilot_preview(
             Without<PilotCraftVisual>,
         ),
     >,
+    mut perf: ResMut<perf::PerfMonitor>,
 ) {
+    let started = std::time::Instant::now();
     let active = state.view_mode == ClientViewMode::Pilot;
     ambient.brightness = if active { 500.0 } else { 55.0 };
     ambient.color = if active {
@@ -654,10 +656,11 @@ fn update_pilot_preview(
             transform.scale = Vec3::splat(plume as f32);
         }
     }
+    perf.record_scope("client.pilot_preview", started.elapsed().as_secs_f64());
 }
 
 fn make_navball_image(local_up_body: DVec3) -> Image {
-    const SIZE: u32 = 256;
+    const SIZE: u32 = hud::NAVBALL_TEXTURE_SIZE;
     let pixels = make_navball_pixels(local_up_body);
 
     Image::new(
@@ -674,7 +677,7 @@ fn make_navball_image(local_up_body: DVec3) -> Image {
 }
 
 fn make_navball_pixels(local_up_body: DVec3) -> Vec<u8> {
-    const SIZE: u32 = 256;
+    const SIZE: u32 = hud::NAVBALL_TEXTURE_SIZE;
     let center = SIZE as f64 * 0.5;
     let radius = center - 1.0;
     let local_up = local_up_body.try_normalize().unwrap_or(DVec3::Z);
@@ -827,6 +830,7 @@ fn simulate_pilot_flight(
     mut perf: ResMut<crate::perf::PerfMonitor>,
     link: Option<Res<crate::embedded::EmbeddedLink>>,
 ) {
+    let system_started = std::time::Instant::now();
     runtime.steps_this_frame = 0;
     runtime.rails_advanced_this_frame = 0.0;
     clock.sim_seconds = runtime.flight_time_s;
@@ -861,6 +865,10 @@ fn simulate_pilot_flight(
         }
         clock.sim_seconds = runtime.flight_time_s;
         clock.tick = runtime.world_tick;
+        perf.record_scope(
+            "client.pilot_simulation",
+            system_started.elapsed().as_secs_f64(),
+        );
         return;
     }
     if clock.paused {
@@ -895,6 +903,10 @@ fn simulate_pilot_flight(
         perf.record_scope("simulation.coast_bake", seconds);
         perf.push_event("Coast trajectory baked", Some(format!("{seconds:.3} s")));
     }
+    perf.record_scope(
+        "client.pilot_simulation",
+        system_started.elapsed().as_secs_f64(),
+    );
 }
 
 /// The checked-in GLB scene (before Blender's Y-up -> Z-up import conversion)
@@ -1605,7 +1617,8 @@ mod tests {
     fn navball_is_a_dynamic_sphere_projection() {
         let level = make_navball_pixels(DVec3::Z);
         let pitched = make_navball_pixels(DVec3::X);
-        assert_eq!(level.len(), 256 * 256 * 4);
+        let size = hud::NAVBALL_TEXTURE_SIZE as usize;
+        assert_eq!(level.len(), size * size * 4);
         assert_ne!(level, pitched);
         // The projected disk keeps transparent corners, so it remains a
         // sphere-shaped instrument when rendered inside the circular frame.

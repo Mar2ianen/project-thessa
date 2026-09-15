@@ -57,8 +57,11 @@ impl PerfCapture {
 
         let mut out = String::new();
         out.push_str(
-            "frame,wall_s,sim_time_s,frame_ms,cpu_ms,gpu_ms,gpu_available,steps,fixed_dt_s,sim_cpu_ms,sim_advanced_s,requested_warp,effective_warp,backlog_ms,bodies,vehicles,patches_visible,patches_generated,triangles,cache_hits,cache_misses,streaming_queued,assets_pending,rss_bytes,rails_advanced_s,server_compute_s,server_wall_s,server_effective_warp",
+            "frame,wall_s,sim_time_s,frame_ms,cpu_ms,gpu_ms,gpu_available,steps,fixed_dt_s,sim_cpu_ms,sim_advanced_s,requested_warp,effective_warp,backlog_ms,bodies,vehicles,patches_visible,patches_wanted,jobs_in_flight,eye_speed_mps,detail_bias,lod_min,lod_max,wanted_lod_max,patches_generated,triangles,cache_hits,cache_misses,streaming_queued,assets_pending,rss_bytes,rails_advanced_s,server_compute_s,server_wall_s,server_effective_warp",
         );
+        for level in 0..18 {
+            let _ = write!(out, ",lod_l{level}");
+        }
         for name in &scope_names {
             let _ = write!(out, ",scope:{name}_ms");
         }
@@ -77,7 +80,7 @@ impl PerfCapture {
                 .unwrap_or_else(|| "unknown".to_string());
             let _ = write!(
                 out,
-                "{},{:.4},{:.4},{:.4},{:.4},{},{},{},{:.6},{:.4},{:.4},{:.2},{:.2},{:.4},{},{},{},{},{},{},{},{},{},{}",
+                "{},{:.4},{:.4},{:.4},{:.4},{},{},{},{:.6},{:.4},{:.4},{:.2},{:.2},{:.4}",
                 frame.frame_index,
                 frame.wall_timestamp_s,
                 frame.sim_time_s,
@@ -92,9 +95,20 @@ impl PerfCapture {
                 frame.sim.requested_warp,
                 frame.sim.effective_warp,
                 frame.sim.backlog_s * 1000.0,
+            );
+            let _ = write!(
+                out,
+                ",{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 frame.world.active_bodies,
                 frame.world.active_vehicles,
                 frame.world.terrain_patches_visible,
+                frame.world.terrain_patches_wanted,
+                frame.world.terrain_jobs_in_flight,
+                frame.world.terrain_eye_speed_mps,
+                frame.world.terrain_detail_bias_x100,
+                frame.world.terrain_lod_min,
+                frame.world.terrain_lod_max,
+                frame.world.terrain_wanted_lod_max,
                 frame.world.terrain_patches_generated,
                 frame.world.terrain_triangles,
                 frame.world.terrain_cache_hits,
@@ -111,6 +125,9 @@ impl PerfCapture {
                 frame.sim.server_wall_s,
                 frame.sim.server_effective_warp
             );
+            for count in frame.world.terrain_lod_histogram {
+                let _ = write!(out, ",{count}");
+            }
             for name in &scope_names {
                 let ms = frame.cpu_scopes.get(name).copied().unwrap_or(0.0) * 1000.0;
                 let _ = write!(out, ",{ms:.4}");

@@ -1,6 +1,9 @@
 //! Deterministic cube-sphere surface addresses and bounded camera LOD.
 //! Tiles cache the field; they never define the terrain or own its random seed.
-use crate::{appearance::surface_appearance, field::PlanetField};
+use crate::{
+    appearance::{surface_appearance, surface_grain_height},
+    field::PlanetField,
+};
 use serde::{Deserialize, Serialize};
 use thessa_rcbt_core::{HeightPage, HeightPageError, Node};
 
@@ -224,15 +227,13 @@ pub fn select_tiles_with_height_and_frustum(
         // angular span spends the budget on peripheral tiles that already
         // satisfy their relaxed target, starving the center of the view.
         //
-        // Mild overlap-aware foveation (max x3 at the cone edge): focuses
-        // the fixed budget toward the view center so it reaches L15-16
-        // there instead of uniform L13 everywhere. References rank by
-        // angular size alone, but with a hard 320 budget some focusing is
-        // mandatory. Calibrated live: x9 froze chase-view ground (90°
-        // off-axis nadir) at L11 — x3 keeps it at L12-13 while preserving
-        // center depth. Overlap-aware (closest approach, not center):
-        // center-scored huge tiles covering the fovea ate the full penalty
-        // and starved their own subtrees.
+        // Overlap-aware foveation focuses the fixed budget toward two useful
+        // regions: the camera look direction and the nearby ground below a
+        // pilot/chase camera. The minimum of the two edge scores avoids the
+        // old failure mode where one horizontal cone refined the horizon but
+        // left the terrain under the aircraft at cover LOD. The edge weight
+        // is deliberately bounded; it changes selection priority, not the
+        // physical height field or the authoritative surface query.
         // Velocity bias relaxes ONLY the near rule: fast flight is near
         // the ground, where the near rule governs; the far field keeps
         // its own fixed target.
@@ -243,18 +244,21 @@ pub fn select_tiles_with_height_and_frustum(
                 .acos();
             let angular_radius = (key.span_m(radius) / distance).clamp(-1.0, 1.0).asin();
             let half_cone = frustum.cos_limit.clamp(-1.0, 1.0).acos().max(1e-3);
-            let edge = ((off_axis - angular_radius) / half_cone).clamp(0.0, 1.0);
-            // Overlap-aware fovea (up to x25 at the cone edge) concentrates
-            // the fixed budget toward the view center: uniform targets
-            // spread 320 leaves evenly and stall everything at L13, and
-            // even x9 leaves the mid-ring eating the depth budget. Edge
-            // tiles sit in fog and peripheral vision; the center keeps the
-            // tight rule. Overlap-aware (closest approach, not center) is
-            // what makes strong foveation safe: tiles covering the fovea
-            // score edge ~0 no matter how far their centers are.
+            // Keep two small foveas: the camera look direction for the
+            // horizon/forward field, and the ray from the eye toward the
+            // nearby surface for a chase/pilot view. A single horizontal
+            // fovea makes the ground below the aircraft look like fog and
+            // spends the fixed budget on distant tiles instead. The minimum
+            // edge score protects both useful regions without changing the
+            // conservative horizon visibility test.
             // Cap 32: beyond it coarser tiles churn harder at tile borders
             // than they save (measured U-curve at 10 km/s), so depth alone
             // is not the answer there — hysteresis is (separate change).
+            let camera_edge = ((off_axis - angular_radius) / half_cone).clamp(0.0, 1.0);
+            let ground_focal = eye_dir.map(|v| -v);
+            let ground_axis = dot(to_tile, ground_focal).clamp(-1.0, 1.0).acos();
+            let ground_edge = ((ground_axis - angular_radius) / 0.85).clamp(0.0, 1.0);
+            let edge = camera_edge.min(ground_edge);
             let bias = detail_bias.clamp(1.0, 32.0);
             let base = if distance > 100_000.0 {
                 1.0 / 10.0
@@ -603,6 +607,7 @@ pub fn build_surface_texture_for_mesh(
     // Directions are pure function of (x, y): compute once, reuse in the
     // residual loop below instead of re-normalizing per texel.
     let mut dirs = Vec::with_capacity(size * size);
+    let mut grain_heights = Vec::with_capacity(size * size);
     for y in 0..size {
         for x in 0..size {
             let dir = key.direction(
@@ -610,6 +615,7 @@ pub fn build_surface_texture_for_mesh(
                 (y as f64 - 1.0) / cells as f64,
             );
             dirs.push(dir);
+            grain_heights.push(surface_grain_height(field, dir, wavelength));
             let (prefix, macro_h) = at(x, y);
             samples.push(field.sample_surface_from_prefix(
                 dir,
@@ -694,7 +700,13 @@ pub fn build_surface_texture_for_mesh(
             let dy = (residual[(y + 1).min(size - 1) * size + x]
                 - residual[y.saturating_sub(1) * size + x])
                 / (2.0 * wavelength);
-            let normal = normalize([-dx, -dy, 1.0]);
+            let grain_dx = (grain_heights[y * size + (x + 1).min(size - 1)]
+                - grain_heights[y * size + x.saturating_sub(1)])
+                / (2.0 * wavelength);
+            let grain_dy = (grain_heights[(y + 1).min(size - 1) * size + x]
+                - grain_heights[y.saturating_sub(1) * size + x])
+                / (2.0 * wavelength);
+            let normal = normalize([-dx - grain_dx, -dy - grain_dy, 1.0]);
             let i = (y * size + x) * 4;
             for (j, n) in normal.into_iter().enumerate() {
                 result.normal[i + j] = ((n * 0.5 + 0.5) * 255.0).round() as u8;
@@ -737,12 +749,12 @@ mod surface_regressions {
         assert!(mesh.positions.iter().flatten().all(|v| v.is_finite()));
     }
     #[test]
-    fn deep_tile_material_normals_are_flat_and_coarse_ones_are_not() {
-        // At/below the detail cutoff both residual sides run identical
-        // bands, so the residual is exactly zero and the builder skips the
-        // second evaluation: L14 normals are flat +Z by model, not by
-        // accident. A coarse tile (mesh wavelength above the cutoff) must
-        // keep real relief, guarding against an over-eager skip.
+    fn deep_tile_material_normals_keep_grain_and_coarse_relief() {
+        // At/below the detail cutoff the canonical residual is exactly zero.
+        // The material layer nevertheless carries filtered, non-authoritative
+        // grain normals so close ground does not render as a flat green sheet.
+        // A coarse tile (mesh wavelength above the cutoff) must also keep real
+        // field relief, guarding against an over-eager skip.
         let field = field();
         let deep = build_surface_texture_for_mesh(
             &field,
@@ -755,12 +767,13 @@ mod surface_regressions {
             128,
             32,
         );
+        assert!(deep.normal.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
         assert!(
             deep.normal
                 .as_chunks::<4>()
                 .0
                 .iter()
-                .all(|p| p == &[128, 128, 255, 255])
+                .any(|p| p != &[128, 128, 255, 255])
         );
         let coarse = build_surface_texture_for_mesh(
             &field,
@@ -933,12 +946,12 @@ mod pilot_frustum_tests {
     use super::*;
     #[test]
     fn horizontal_forward_refines_ground_below() {
-        // Pilot chase view: eye 3 km up, camera looking horizontal (+Z
+        // Pilot chase view: eye 500 m up, camera looking horizontal (+Z
         // tangent). The ground filling the frame bottom sits 60-90° off
         // the view axis; cone culling must keep it, or the pilot view
         // never refines past coarse cover (live L7-only bug).
         let radius = 3_200_000.0;
-        let eye = [radius + 3000.0, 0.0, 0.0];
+        let eye = [radius + 500.0, 0.0, 0.0];
         let frustum = SelectionFrustum {
             forward: normalize([0.0, 0.0, 1.0]),
             cos_limit: (1.0_f64).cos(),
@@ -960,7 +973,7 @@ mod pilot_frustum_tests {
             keys.len()
         );
         assert!(
-            max_in_view >= 12,
+            max_in_view >= 14,
             "pilot ground culled: L{max_in_view} below-forward"
         );
     }

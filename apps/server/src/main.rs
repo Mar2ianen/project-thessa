@@ -29,11 +29,15 @@ use thessa_flight_authority::{
 };
 use thessa_flight_control::{ControlDemand, DirectionFrame, DirectionTarget, RollPolicy};
 use thessa_flight_net::{
-    AutopilotCommand, AutopilotInput, ClientInput, Command, GuidanceInput, Snapshot,
+    AutopilotCommand, AutopilotInput, BurnDirectionCommand, ClientInput, Command, GuidanceInput,
+    Snapshot,
 };
-use thessa_maneuver::{ManeuverPlan, NodeExecutor, PlanValidation};
+use thessa_maneuver::{
+    BurnSegment, EngineSpec, FiniteBurnPlan, ManeuverPlan, NodeExecutor, PlanValidation,
+    SegmentDirection, SegmentExecutor, SteeringSample,
+};
 use thessa_protocol::{FrameDecoder, kind};
-use thessa_sim_core::{BakedEphemeris, BodyId, ScheduledKind, SimTime, SystemConfig};
+use thessa_sim_core::{BakedEphemeris, BodyId, BodyState, ScheduledKind, SimTime, SystemConfig};
 use thread_bake::ThreadBakeQueue;
 
 /// Wall-time quantum for the authoritative driver. It bounds how long the
@@ -178,6 +182,7 @@ impl From<ScheduledKind> for AutopilotEvent {
             ScheduledKind::RailsImpact { .. } => Self::Impact,
             ScheduledKind::RailsHorizon => Self::Horizon,
             ScheduledKind::ManeuverNode { .. } => Self::Node,
+            ScheduledKind::BurnSegment { .. } => Self::Node,
             ScheduledKind::Alarm => Self::Alarm,
         }
     }
@@ -187,7 +192,11 @@ fn client_input_takes_over(previous: Option<&ClientInput>, input: &ClientInput) 
     if input.commands.iter().any(|command| {
         matches!(
             command,
-            Command::Stage | Command::Engine { .. } | Command::Reset | Command::ExecuteManeuver { .. }
+            Command::Stage
+                | Command::Engine { .. }
+                | Command::Reset
+                | Command::ExecuteManeuver { .. }
+                | Command::ExecuteBurnPlan { .. }
         )
     }) {
         return true;
@@ -228,6 +237,11 @@ struct Sim {
     /// `guidance` through a `NodeExecutor`; cleared on completion/abort,
     /// after latching a zero-throttle hold so handoff is never abrupt.
     maneuver_execution: Option<NodeExecutor>,
+    /// Active finite-burn execution (ExecuteBurnPlan block). Drives
+    /// `guidance` through a `SegmentExecutor` with the same handoff
+    /// contract. Mutually exclusive with `maneuver_execution`: starting
+    /// one refuses while the other is active rather than fighting it.
+    burn_execution: Option<SegmentExecutor>,
     clients: std::collections::HashMap<String, ClientVote>,
     /// Connection-order pilot lease. The first registered client owns all
     /// vehicle controls; on departure the lease moves to the earliest client
@@ -391,6 +405,7 @@ impl Sim {
             impact_obstacles: None,
             plan_runner: None,
             maneuver_execution: None,
+            burn_execution: None,
             clients: std::collections::HashMap::new(),
             pilot_owner: None,
             client_order: Vec::new(),
@@ -639,6 +654,89 @@ impl Sim {
                         }
                     };
                     match self.start_maneuver_execution(plan) {
+                        Ok(()) => {
+                            force_snapshot = true;
+                        }
+                        Err(error) => rejected(self, error),
+                    }
+                }
+                Command::ExecuteBurnPlan {
+                    engine_thrust_n,
+                    engine_exhaust_velocity_mps,
+                    initial_mass_kg,
+                    segments,
+                } => {
+                    // Wire cap: segments are unbounded on the transport;
+                    // scaled up from the node cap for split burns.
+                    const MAX_BURN_SEGMENTS: usize = 64;
+                    let rejected = |sim: &mut Self, reason: String| {
+                        sim.authority.wake_notice =
+                            Some(format!("burn plan rejected: {reason}"));
+                    };
+                    if segments.len() > MAX_BURN_SEGMENTS {
+                        rejected(
+                            self,
+                            format!("{} segments over cap {MAX_BURN_SEGMENTS}", segments.len()),
+                        );
+                        continue;
+                    }
+                    let mut plan_segments = Vec::with_capacity(segments.len());
+                    let mut bad_segment = false;
+                    for segment in segments {
+                        let direction = match &segment.direction {
+                            BurnDirectionCommand::Inertial { unit } => {
+                                SegmentDirection::Inertial(DVec3::from_array(*unit))
+                            }
+                            BurnDirectionCommand::Prograde => SegmentDirection::Prograde,
+                            BurnDirectionCommand::Retrograde => SegmentDirection::Retrograde,
+                            BurnDirectionCommand::Rtn {
+                                central,
+                                radial,
+                                transverse,
+                                normal,
+                            } => match self.ephemeris.body_id(central.as_str()) {
+                                Some(id) => SegmentDirection::Rtn {
+                                    central: id,
+                                    radial: *radial,
+                                    transverse: *transverse,
+                                    normal: *normal,
+                                },
+                                None => {
+                                    bad_segment = true;
+                                    break;
+                                }
+                            },
+                        };
+                        plan_segments.push(BurnSegment {
+                            start: SimTime(segment.start_s),
+                            duration_s: segment.duration_s,
+                            planned_dv_mps: segment.planned_dv_mps,
+                            direction,
+                            throttle_01: segment.throttle_01,
+                        });
+                    }
+                    if bad_segment {
+                        rejected(self, "unknown rtn central body".into());
+                        continue;
+                    }
+                    let plan = match FiniteBurnPlan::new(
+                        plan_segments,
+                        EngineSpec {
+                            thrust_n: *engine_thrust_n,
+                            exhaust_velocity_mps: *engine_exhaust_velocity_mps,
+                        },
+                        *initial_mass_kg,
+                        self.authority.state.position_inertial_m,
+                        self.authority.state.velocity_inertial_mps,
+                        SimTime(self.authority.flight_time_s),
+                    ) {
+                        Ok(plan) => plan,
+                        Err(error) => {
+                            rejected(self, format!("invalid burn plan: {error}"));
+                            continue;
+                        }
+                    };
+                    match self.start_burn_execution(plan) {
                         Ok(()) => {
                             force_snapshot = true;
                         }
@@ -990,6 +1088,9 @@ impl Sim {
         if self.plan_demand.is_some() {
             return Err("trajectory plan demand is active; clear it first".into());
         }
+        if self.burn_execution.is_some() {
+            return Err("burn plan execution is active; clear it first".into());
+        }
         let executor =
             NodeExecutor::new(&plan).map_err(|error| format!("maneuver plan: {error}"))?;
         for (epoch, delta_v) in executor.to_scheduler_events() {
@@ -1053,6 +1154,144 @@ impl Sim {
         })?;
         self.guidance = Some((intent, propulsion));
         Ok(())
+    }
+
+    /// Map an executor direction+throttle command to typed guidance (shared
+    /// by node and segment execution: both executors resolve their frames
+    /// to inertial before emitting). Zero direction latches an attitude
+    /// hold, never an abrupt handoff.
+    fn execution_guidance(
+        &self,
+        command: thessa_maneuver::ExecutionCommand,
+    ) -> Result<
+        (
+            thessa_flight_control::GuidanceIntent,
+            thessa_flight_control::PropulsionDemand,
+        ),
+        String,
+    > {
+        use thessa_flight_control::{GuidanceIntent, PropulsionDemand};
+        let hold = || GuidanceIntent::Attitude {
+            target_body_to_inertial: self.authority.state.orientation_body_to_inertial,
+            roll_policy: RollPolicy::Hold,
+        };
+        let direction = command.point_inertial;
+        let intent = if direction == DVec3::ZERO {
+            hold()
+        } else {
+            let target =
+                DirectionTarget::new(direction, DirectionFrame::Inertial).map_err(|error| {
+                    format!("maneuver direction: {error}")
+                })?;
+            GuidanceIntent::VelocityDirection {
+                direction: target,
+                roll_policy: RollPolicy::Hold,
+            }
+        };
+        let propulsion =
+            PropulsionDemand::new(command.throttle_01).map_err(|error| {
+                format!("maneuver throttle: {error}")
+            })?;
+        Ok((intent, propulsion))
+    }
+
+    /// Start finite-burn execution (ExecuteBurnPlan block): same contract
+    /// as node execution (validate against now, refuse while another
+    /// execution or plan demand is active, arm one scheduler wake per
+    /// segment start). Invoked from tests and the wire command.
+    fn start_burn_execution(&mut self, plan: FiniteBurnPlan) -> Result<(), String> {
+        let now = SimTime(self.authority.flight_time_s);
+        match plan.validate_for_execution(now) {
+            PlanValidation::Executable => {}
+            PlanValidation::Empty => return Err("burn plan is empty".into()),
+            PlanValidation::Stale {
+                now_s,
+                first_node_s,
+            } => {
+                return Err(format!(
+                    "burn plan is stale (now {now_s:.1}, first segment {first_node_s:.1})"
+                ));
+            }
+        }
+        if self.plan_demand.is_some() {
+            return Err("trajectory plan demand is active; clear it first".into());
+        }
+        if self.maneuver_execution.is_some() {
+            return Err("maneuver node execution is active; clear it first".into());
+        }
+        let executor =
+            SegmentExecutor::new(&plan).map_err(|error| format!("burn plan: {error}"))?;
+        for (start, _, planned_dv_mps) in executor.to_scheduler_events() {
+            self.authority.scheduler.arm(
+                ScheduledKind::BurnSegment { planned_dv_mps },
+                start,
+            );
+        }
+        self.burn_execution = Some(executor);
+        Ok(())
+    }
+
+    /// Poll the active burn execution before stepping: same thrust
+    /// measurement as node execution, plus the flight sample (inertial
+    /// velocity/position and the LVLH central state for RTN segments,
+    /// resolved per active segment). Idle/done latch a zero-throttle
+    /// attitude hold.
+    fn poll_burn_execution(&mut self) -> Result<(), String> {
+        let Some(executor) = self.burn_execution.as_mut() else {
+            return Ok(());
+        };
+        let now = SimTime(self.authority.flight_time_s);
+        let thrust_accel = match &self.authority.last_forces {
+            Some(forces) => {
+                forces.acceleration_inertial_mps2
+                    - self.authority.last_gravity_acceleration_inertial_mps2
+            }
+            None => DVec3::ZERO,
+        };
+        // LVLH central state for the active segment (ORIGIN when the
+        // segment steers inertially — the executor ignores it there).
+        let mut central = BodyState::ORIGIN;
+        if let Some(segment) = executor.active_segment() {
+            if let thessa_maneuver::SegmentDirection::Rtn { central: body, .. } =
+                segment.direction
+            {
+                central = self
+                    .ephemeris
+                    .body_state(body, now)
+                    .map_err(|error| format!("burn central body: {error}"))?;
+            }
+        }
+        let sample = SteeringSample {
+            velocity_inertial_mps: self.authority.state.velocity_inertial_mps,
+            position_inertial_m: self.authority.state.position_inertial_m,
+            central,
+        };
+        let output = executor
+            .poll(now, thrust_accel, &sample)
+            .map_err(|error| format!("burn poll: {error}"))?;
+        if output.done {
+            let hold = thessa_flight_control::GuidanceIntent::Attitude {
+                target_body_to_inertial: self.authority.state.orientation_body_to_inertial,
+                roll_policy: RollPolicy::Hold,
+            };
+            self.guidance = Some((
+                hold,
+                thessa_flight_control::PropulsionDemand::new(0.0).unwrap(),
+            ));
+            self.burn_execution = None;
+            self.authority.wake_notice = Some("burn plan complete".into());
+            return Ok(());
+        }
+        match self.execution_guidance(output.command) {
+            Ok((intent, propulsion)) => {
+                self.guidance = Some((intent, propulsion));
+                Ok(())
+            }
+            Err(error) => {
+                self.burn_execution = None;
+                Err(error)
+            }
+        }
     }
 
     fn start_plan(&mut self, plan: TrajectoryPlan, host: &mut AutopilotHost) -> bool {
@@ -1138,9 +1377,10 @@ impl Sim {
     fn clear_autopilot_controls(&mut self) {
         self.plan_demand = None;
         self.guidance = None;
-        // Manual takeover disengages an in-flight maneuver execution, same
-        // as any other automation (MechJeb-style disengage on stick input).
+        // Manual takeover disengages in-flight executions, same as any
+        // other automation (MechJeb-style disengage on stick input).
         self.maneuver_execution = None;
+        self.burn_execution = None;
         self.control_mode = ControlMode::Direct;
         self.authority.control_input = DVec3::ZERO;
         self.authority.sas_enabled = false;
@@ -1240,9 +1480,10 @@ impl Sim {
         if self.paused() || self.authority.flight_error.is_some() {
             return Ok(0.0);
         }
-        // Maneuver execution polls before stepping so commands ride the
+        // Maneuver executions poll before stepping so commands ride the
         // freshest thrust measurement from the previous tick.
         self.poll_maneuver_execution()?;
+        self.poll_burn_execution()?;
         let mut chunk_s = chunk_s;
         if self.plan_runner.is_some() {
             let now = SimTime(self.authority.flight_time_s);
@@ -3092,6 +3333,258 @@ mod tests {
         };
         let _ = sim.apply_input("pilot", &input(vec![bad]));
         assert!(sim.maneuver_execution.is_none());
+        assert!(sim.authority.wake_notice.is_some());
+    }
+
+    #[test]
+    fn burn_execution_flies_plan_to_completion() {
+        use thessa_maneuver::{BurnSegment, EngineSpec, FiniteBurnPlan, SegmentDirection};
+
+        // Same control-subtracted harness as the node test: exec run finds
+        // the cutoff time, the control run sampled there cancels orbital
+        // dynamics, the burn remains.
+        fn fly(with_execution: bool, until_s: Option<f64>) -> (f64, bool, f64, bool, f64) {
+            let config: SystemConfig =
+                toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+            let ephemeris = config.bake().expect("bake");
+            let reference_body = ephemeris.body_id("thessa").expect("thessa");
+            let mut sim = Sim::new(ephemeris, reference_body, false, true).expect("sim");
+            sim.register("pilot");
+            // Two 5 s full-throttle +X segments at t=40/60 s.
+            let engine = EngineSpec {
+                thrust_n: 100_000.0,
+                exhaust_velocity_mps: 4_400.0,
+            };
+            let segment = |start: f64| BurnSegment {
+                start: SimTime(start),
+                duration_s: 5.0,
+                planned_dv_mps: 50.0,
+                direction: SegmentDirection::Inertial(glam::DVec3::X),
+                throttle_01: 1.0,
+            };
+            let plan = FiniteBurnPlan::new(
+                vec![segment(40.0), segment(60.0)],
+                engine,
+                20_000.0,
+                sim.authority.state.position_inertial_m,
+                sim.authority.state.velocity_inertial_mps,
+                SimTime(0.0),
+            )
+            .unwrap();
+            if with_execution {
+                sim.start_burn_execution(plan).expect("starts");
+                assert!(!sim.authority.scheduler.is_empty());
+            }
+            let initial_vx = sim.authority.state.velocity_inertial_mps.x;
+            let mut saw_burn = false;
+            let mut max_thrust = 0.0_f64;
+            for _ in 0..1400 {
+                let mut advanced = 0.0;
+                for _ in 0..200 {
+                    advanced += sim.advance_chunk(0.05).expect("advance");
+                    if advanced > 0.0
+                        || sim.authority.flight_error.is_some()
+                        || !sim.authority.bake.has_pending()
+                    {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                if let Some((_, propulsion)) = &sim.guidance {
+                    if propulsion.normalized > 0.5 {
+                        saw_burn = true;
+                    }
+                }
+                max_thrust = max_thrust.max(sim.authority.thrust_n());
+                if with_execution && sim.burn_execution.is_none() {
+                    break;
+                }
+                if let Some(until) = until_s {
+                    if sim.authority.flight_time_s >= until {
+                        break;
+                    }
+                }
+            }
+            (
+                sim.authority.state.velocity_inertial_mps.x - initial_vx,
+                saw_burn,
+                max_thrust,
+                with_execution && sim.burn_execution.is_none(),
+                sim.authority.flight_time_s,
+            )
+        }
+        let (exec_dvx, saw_burn, max_thrust, done, t_done) = fly(true, None);
+        assert!(done, "burn execution must complete and hand off");
+        assert!(saw_burn, "executor must command throttle during arcs");
+        assert!(max_thrust > 0.0, "engine must produce thrust");
+        let (ctrl_dvx, _, _, _, _) = fly(false, Some(t_done));
+        let burn_dvx = exec_dvx - ctrl_dvx;
+        assert!(
+            burn_dvx > 0.5,
+            "burn-attributed dvx {burn_dvx} for two 5 s arcs"
+        );
+    }
+
+    #[test]
+    fn burn_execution_rejects_bad_plans() {
+        use thessa_maneuver::{BurnSegment, EngineSpec, FiniteBurnPlan, SegmentDirection};
+        use thessa_maneuver::ManeuverNode;
+
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let mut sim = Sim::new(ephemeris, reference_body, false, false).expect("sim");
+        sim.register("pilot");
+        let engine = EngineSpec {
+            thrust_n: 100_000.0,
+            exhaust_velocity_mps: 4_400.0,
+        };
+        let segment = BurnSegment {
+            start: SimTime(40.0),
+            duration_s: 5.0,
+            planned_dv_mps: 50.0,
+            direction: SegmentDirection::Inertial(glam::DVec3::X),
+            throttle_01: 1.0,
+        };
+        let empty = FiniteBurnPlan::new(
+            vec![],
+            engine,
+            20_000.0,
+            sim.authority.state.position_inertial_m,
+            sim.authority.state.velocity_inertial_mps,
+            SimTime(0.0),
+        )
+        .unwrap();
+        assert!(sim.start_burn_execution(empty).is_err());
+        let stale = FiniteBurnPlan::new(
+            vec![BurnSegment {
+                start: SimTime(5.0),
+                ..segment
+            }],
+            engine,
+            20_000.0,
+            sim.authority.state.position_inertial_m,
+            sim.authority.state.velocity_inertial_mps,
+            SimTime(10.0),
+        )
+        .unwrap();
+        // Flight clock starts at 0: a plan starting at t=5 is... fresh
+        // here; force staleness by advancing the clock past the segment.
+        sim.authority.flight_time_s = 50.0;
+        assert!(sim.start_burn_execution(stale).is_err());
+        assert!(sim.burn_execution.is_none());
+        // Mutual exclusion with node execution (both directions).
+        sim.authority.flight_time_s = 0.0;
+        let live = FiniteBurnPlan::new(
+            vec![segment],
+            engine,
+            20_000.0,
+            sim.authority.state.position_inertial_m,
+            sim.authority.state.velocity_inertial_mps,
+            SimTime(0.0),
+        )
+        .unwrap();
+        sim.start_burn_execution(live).expect("burn starts");
+        let node_plan = ManeuverPlan::new(
+            vec![ManeuverNode::new(SimTime(40.0), glam::DVec3::X).unwrap()],
+            sim.authority.state.position_inertial_m,
+            sim.authority.state.velocity_inertial_mps,
+            SimTime(0.0),
+        )
+        .unwrap();
+        assert!(sim.start_maneuver_execution(node_plan).is_err());
+        sim.clear_autopilot_controls();
+        assert!(sim.burn_execution.is_none());
+    }
+
+    #[test]
+    fn execute_burn_plan_command_starts_and_rejects() {
+        use thessa_flight_net::{BurnDirectionCommand, BurnSegmentCommand};
+
+        fn fresh_sim() -> Sim {
+            let config: SystemConfig =
+                toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+            let ephemeris = config.bake().expect("bake");
+            let reference_body = ephemeris.body_id("thessa").expect("thessa");
+            let mut sim = Sim::new(ephemeris, reference_body, false, false).expect("sim");
+            sim.register("pilot");
+            sim
+        }
+        fn segment(start_s: f64) -> BurnSegmentCommand {
+            BurnSegmentCommand {
+                start_s,
+                duration_s: 5.0,
+                planned_dv_mps: 50.0,
+                direction: BurnDirectionCommand::Inertial { unit: [1.0, 0.0, 0.0] },
+                throttle_01: 1.0,
+            }
+        }
+        // Valid command (inertial + RTN segments) starts execution.
+        let mut sim = fresh_sim();
+        let command = Command::ExecuteBurnPlan {
+            engine_thrust_n: 100_000.0,
+            engine_exhaust_velocity_mps: 4_400.0,
+            initial_mass_kg: 20_000.0,
+            segments: vec![
+                segment(30.0),
+                BurnSegmentCommand {
+                    direction: BurnDirectionCommand::Rtn {
+                        central: "thessa".into(),
+                        radial: 0.0,
+                        transverse: 1.0,
+                        normal: 0.0,
+                    },
+                    ..segment(60.0)
+                },
+            ],
+        };
+        assert!(sim.apply_input("pilot", &input(vec![command])));
+        assert!(sim.burn_execution.is_some());
+        assert!(!sim.authority.scheduler.is_empty());
+        // Oversize is refused with a wake notice, nothing starts.
+        let mut sim = fresh_sim();
+        let big = Command::ExecuteBurnPlan {
+            engine_thrust_n: 100_000.0,
+            engine_exhaust_velocity_mps: 4_400.0,
+            initial_mass_kg: 20_000.0,
+            segments: vec![segment(30.0); 65],
+        };
+        let _ = sim.apply_input("pilot", &input(vec![big]));
+        assert!(sim.burn_execution.is_none());
+        assert!(sim
+            .authority
+            .wake_notice
+            .as_ref()
+            .is_some_and(|notice| notice.contains("cap")));
+        // Unknown RTN central and dead engine are refused the same way.
+        let mut sim = fresh_sim();
+        let lost = Command::ExecuteBurnPlan {
+            engine_thrust_n: 100_000.0,
+            engine_exhaust_velocity_mps: 4_400.0,
+            initial_mass_kg: 20_000.0,
+            segments: vec![BurnSegmentCommand {
+                direction: BurnDirectionCommand::Rtn {
+                    central: "nope".into(),
+                    radial: 0.0,
+                    transverse: 1.0,
+                    normal: 0.0,
+                },
+                ..segment(30.0)
+            }],
+        };
+        let _ = sim.apply_input("pilot", &input(vec![lost]));
+        assert!(sim.burn_execution.is_none());
+        assert!(sim.authority.wake_notice.is_some());
+        let mut sim = fresh_sim();
+        let dead = Command::ExecuteBurnPlan {
+            engine_thrust_n: 0.0,
+            engine_exhaust_velocity_mps: 4_400.0,
+            initial_mass_kg: 20_000.0,
+            segments: vec![segment(30.0)],
+        };
+        let _ = sim.apply_input("pilot", &input(vec![dead]));
+        assert!(sim.burn_execution.is_none());
         assert!(sim.authority.wake_notice.is_some());
     }
 

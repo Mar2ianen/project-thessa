@@ -1092,6 +1092,42 @@ pub enum ThrustDirection {
     Prograde,
     /// Against the instantaneous inertial velocity.
     Retrograde,
+    /// LVLH components (radial outward, in-track, orbit-normal) in the
+    /// spacecraft-centered RTN frame around `central`, normalized at use.
+    /// R = r̂ (outward), C = ĥ (orbit normal), T = C×R (in-track, equals
+    /// prograde on circular orbits). Needs non-degenerate orbit geometry
+    /// (nonzero radius, non-radial flight) — honest errors otherwise.
+    Rtn {
+        central: BodyId,
+        radial: f64,
+        transverse: f64,
+        normal: f64,
+    },
+}
+
+/// Spacecraft-centered RTN basis (right-handed R/T/C) from
+/// central-relative position/velocity. Single definition shared by the
+/// propagation RHS and the maneuver executor — frames must agree exactly.
+/// `None` on degenerate geometry (at the center, or radial flight with no
+/// orbit plane).
+pub fn rtn_basis(
+    position_rel_central_m: DVec3,
+    velocity_rel_central_mps: DVec3,
+) -> Option<(DVec3, DVec3, DVec3)> {
+    if !position_rel_central_m.is_finite() || !velocity_rel_central_mps.is_finite() {
+        return None;
+    }
+    if position_rel_central_m.length_squared() <= 0.0 {
+        return None;
+    }
+    let radial = position_rel_central_m.normalize();
+    let momentum = position_rel_central_m.cross(velocity_rel_central_mps);
+    if momentum.length_squared() <= 0.0 {
+        return None;
+    }
+    let cross_track = momentum.normalize();
+    let transverse = cross_track.cross(radial);
+    Some((radial, transverse, cross_track))
 }
 
 /// One finite-thrust arc; times relative to propagation start. Thrust and
@@ -1168,10 +1204,14 @@ fn validate_thrust_schedule(
 
 /// Thrust acceleration vector (inertial) at the current state and mass.
 /// Dead arcs (zero throttle or zero thrust) coast exactly, without
-/// touching the direction (so parked zero directions are legal).
+/// touching the direction (so parked zero directions are legal). LVLH
+/// steering resolves its central body through the field (exact at every
+/// stage — validation-time cost, never per-tick flight cost).
 fn thrust_vector(
+    field: &GravityField<'_>,
+    state: TestParticleState,
+    time: SimTime,
     direction: ThrustDirection,
-    velocity_mps: DVec3,
     throttle_01: f64,
     thrust_n: f64,
     mass_kg: f64,
@@ -1183,20 +1223,42 @@ fn thrust_vector(
     let unit = match direction {
         ThrustDirection::Inertial(fixed) => fixed.normalize(),
         ThrustDirection::Prograde => {
-            if velocity_mps.length_squared() <= 0.0 {
+            if state.velocity.length_squared() <= 0.0 {
                 return Err(IntegratorError::InvalidConfig(
                     "prograde steering needs nonzero velocity".into(),
                 ));
             }
-            velocity_mps.normalize()
+            state.velocity.normalize()
         }
         ThrustDirection::Retrograde => {
-            if velocity_mps.length_squared() <= 0.0 {
+            if state.velocity.length_squared() <= 0.0 {
                 return Err(IntegratorError::InvalidConfig(
                     "retrograde steering needs nonzero velocity".into(),
                 ));
             }
-            -velocity_mps.normalize()
+            -state.velocity.normalize()
+        }
+        ThrustDirection::Rtn {
+            central,
+            radial,
+            transverse,
+            normal,
+        } => {
+            let center = field
+                .body_state(central, time)
+                .map_err(|error| IntegratorError::InvalidConfig(format!("rtn central: {error}")))?;
+            let position_rel = state.position - center.position_inertial;
+            let velocity_rel = state.velocity - center.velocity_inertial;
+            let (basis_r, basis_t, basis_c) = rtn_basis(position_rel, velocity_rel).ok_or(
+                IntegratorError::InvalidConfig("rtn steering needs orbit geometry".into()),
+            )?;
+            let blended = basis_r * radial + basis_t * transverse + basis_c * normal;
+            if !blended.is_finite() || blended.length_squared() <= 0.0 {
+                return Err(IntegratorError::InvalidConfig(
+                    "rtn steering needs nonzero components".into(),
+                ));
+            }
+            blended.normalize()
         }
     };
     Ok(unit * (newtons / mass_kg))
@@ -1211,8 +1273,10 @@ fn thrust_derivative(
 ) -> Result<Derivative, IntegratorError> {
     let mut acceleration = field.acceleration(state.position, time)?;
     acceleration += thrust_vector(
+        field,
+        state,
+        time,
         arc.direction,
-        state.velocity,
         arc.throttle_01,
         arc.thrust_n,
         mass_kg,

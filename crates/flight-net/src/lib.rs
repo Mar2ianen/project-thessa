@@ -64,6 +64,48 @@ pub enum Command {
     ExecuteManeuver {
         nodes: Vec<ManeuverNodeCommand>,
     },
+    /// Execute a finite-burn plan: throttle schedule over time windows
+    /// (low-thrust arcs, segmented chemical burns). Event-like like
+    /// ExecuteManeuver. The server validates against now (empty/stale
+    /// refused), arms one scheduler wake per segment start and hands
+    /// guidance to the segment executor. Engine ratings and mass ride
+    /// along for plan reconstruction (the executor itself is
+    /// accelerometer-closed and time-scheduled). Segment cap mirrors the
+    /// node cap scaled for split burns.
+    ExecuteBurnPlan {
+        engine_thrust_n: f64,
+        engine_exhaust_velocity_mps: f64,
+        initial_mass_kg: f64,
+        segments: Vec<BurnSegmentCommand>,
+    },
+}
+
+/// Steering direction of one burn segment on the wire: extensible enum so
+/// new frames (RTN and beyond) never break the transport schema.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum BurnDirectionCommand {
+    Inertial {
+        unit: [f64; 3],
+    },
+    Prograde,
+    Retrograde,
+    Rtn {
+        central: String,
+        radial: f64,
+        transverse: f64,
+        normal: f64,
+    },
+}
+
+/// One burn segment on the wire: schedule window plus throttle/direction.
+/// Smallest explicit schema (no domain types leak onto the transport).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BurnSegmentCommand {
+    pub start_s: f64,
+    pub duration_s: f64,
+    pub planned_dv_mps: f64,
+    pub direction: BurnDirectionCommand,
+    pub throttle_01: f64,
 }
 
 /// One maneuver node on the wire: epoch plus inertial Δv. Smallest

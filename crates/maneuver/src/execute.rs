@@ -16,7 +16,7 @@
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
-use thessa_sim_core::SimTime;
+use thessa_sim_core::{BodyState, SimTime};
 
 use crate::{
     ManeuverNode, ManeuverPlan, PlanError,
@@ -191,6 +191,17 @@ pub struct SegmentOutput {
     pub last_shortfall_mps: f64,
 }
 
+/// Live flight sample for segment steering: inertial velocity always,
+/// plus position and the LVLH reference body for RTN segments (ignored
+/// by inertial/prograde/retrograde segments — pass `BodyState::ORIGIN`
+/// when the plan has none).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SteeringSample {
+    pub velocity_inertial_mps: DVec3,
+    pub position_inertial_m: DVec3,
+    pub central: BodyState,
+}
+
 /// Time-schedule segment executor for [`FiniteBurnPlan`]: points per
 /// segment (inertial fixed, or velocity-aligned at poll time for
 /// prograde/retrograde steering), burns the scheduled throttle over the
@@ -219,32 +230,55 @@ impl SegmentExecutor {
         })
     }
 
-    /// `(start, end)` scheduler windows for every segment.
-    pub fn to_scheduler_events(&self) -> Vec<(SimTime, SimTime)> {
+    /// `(start, end, planned Δv)` scheduler windows for every segment.
+    pub fn to_scheduler_events(&self) -> Vec<(SimTime, SimTime, f64)> {
         self.segments
             .iter()
-            .map(|segment| (segment.start, segment.end()))
+            .map(|segment| (segment.start, segment.end(), segment.planned_dv_mps))
             .collect()
     }
 
+    /// Currently active segment (copied): lets the runtime resolve
+    /// per-segment data (e.g., the LVLH central body state) before polling.
+    pub fn active_segment(&self) -> Option<BurnSegment> {
+        self.segments.get(self.index).copied()
+    }
+
     /// Resolve the pointing direction now (velocity-aligned steering needs
-    /// the live velocity; a degenerate velocity holds the last attitude
-    /// instead of erroring mid-burn).
-    fn resolve_point(&mut self, segment: &BurnSegment, velocity_inertial_mps: DVec3) -> DVec3 {
+    /// the live velocity, RTN needs position plus the central state; a
+    /// degenerate sample holds the last attitude instead of erroring
+    /// mid-burn).
+    fn resolve_point(&mut self, segment: &BurnSegment, sample: &SteeringSample) -> DVec3 {
+        let velocity = sample.velocity_inertial_mps;
         let point = match segment.direction {
             SegmentDirection::Inertial(fixed) => fixed,
             SegmentDirection::Prograde => {
-                if velocity_inertial_mps.length_squared() > 0.0 {
-                    velocity_inertial_mps.normalize()
+                if velocity.length_squared() > 0.0 {
+                    velocity.normalize()
                 } else {
                     self.last_point
                 }
             }
             SegmentDirection::Retrograde => {
-                if velocity_inertial_mps.length_squared() > 0.0 {
-                    -velocity_inertial_mps.normalize()
+                if velocity.length_squared() > 0.0 {
+                    -velocity.normalize()
                 } else {
                     self.last_point
+                }
+            }
+            SegmentDirection::Rtn {
+                central: _,
+                radial,
+                transverse,
+                normal,
+            } => {
+                let position_rel = sample.position_inertial_m - sample.central.position_inertial;
+                let velocity_rel = velocity - sample.central.velocity_inertial;
+                match thessa_sim_core::rtn_basis(position_rel, velocity_rel) {
+                    Some((basis_r, basis_t, basis_c)) => {
+                        basis_r * radial + basis_t * transverse + basis_c * normal
+                    }
+                    None => self.last_point,
                 }
             }
         };
@@ -258,11 +292,12 @@ impl SegmentExecutor {
         &mut self,
         now: SimTime,
         measured_accel_inertial_mps2: DVec3,
-        velocity_inertial_mps: DVec3,
+        sample: &SteeringSample,
     ) -> Result<SegmentOutput, ThrustPlanError> {
         if !now.0.is_finite()
             || !measured_accel_inertial_mps2.is_finite()
-            || !velocity_inertial_mps.is_finite()
+            || !sample.velocity_inertial_mps.is_finite()
+            || !sample.position_inertial_m.is_finite()
         {
             return Err(ThrustPlanError::InvalidSegment);
         }
@@ -302,7 +337,7 @@ impl SegmentExecutor {
                 last_shortfall_mps: self.last_shortfall_mps,
             });
         }
-        let point = self.resolve_point(&segment, velocity_inertial_mps);
+        let point = self.resolve_point(&segment, sample);
         if now.0 < segment.start.0 - SETTLE_LEAD_S {
             self.last_time_s = Some(now.0);
             return Ok(SegmentOutput {
@@ -356,6 +391,15 @@ impl SegmentExecutor {
 mod tests {
     use super::*;
     use crate::thrust::EngineSpec;
+    use thessa_sim_core::{BodyId, BodyState};
+
+    fn cruise_sample() -> SteeringSample {
+        SteeringSample {
+            velocity_inertial_mps: DVec3::X * 1_000.0,
+            position_inertial_m: DVec3::X * 1.1e9,
+            central: BodyState::ORIGIN,
+        }
+    }
 
     fn single_node_plan() -> ManeuverPlan {
         ManeuverPlan::new(
@@ -497,7 +541,7 @@ mod tests {
         let mut done_at = None;
         for _ in 0..500 {
             let output = executor
-                .poll(SimTime(time), accel, DVec3::X * 1_000.0)
+                .poll(SimTime(time), accel, &cruise_sample())
                 .unwrap();
             if time < 70.0 {
                 assert_eq!(output.command.throttle_01, 0.0);
@@ -538,7 +582,7 @@ mod tests {
         let mut accel = DVec3::ZERO;
         loop {
             let output = executor
-                .poll(SimTime(time), accel, DVec3::X * 1_000.0)
+                .poll(SimTime(time), accel, &cruise_sample())
                 .unwrap();
             accel = if output.command.throttle_01 > 0.0 {
                 DVec3::X * 1.0
@@ -563,16 +607,48 @@ mod tests {
         let mut plan = single_segment_plan();
         plan.segments[0].direction = SegmentDirection::Prograde;
         let mut executor = SegmentExecutor::new(&plan).unwrap();
-        let out = executor
-            .poll(SimTime(120.0), DVec3::ZERO, DVec3::Y * 5_000.0)
-            .unwrap();
+        let mut sample = cruise_sample();
+        sample.velocity_inertial_mps = DVec3::Y * 5_000.0;
+        let out = executor.poll(SimTime(120.0), DVec3::ZERO, &sample).unwrap();
         assert_eq!(out.command.point_inertial, DVec3::Y);
         assert_eq!(out.command.throttle_01, 1.0);
         // Degenerate velocity: holds +Y, keeps burning on schedule.
-        let out = executor
-            .poll(SimTime(121.0), DVec3::ZERO, DVec3::ZERO)
-            .unwrap();
+        sample.velocity_inertial_mps = DVec3::ZERO;
+        let out = executor.poll(SimTime(121.0), DVec3::ZERO, &sample).unwrap();
         assert_eq!(out.command.point_inertial, DVec3::Y);
         assert_eq!(out.command.throttle_01, 1.0);
+    }
+
+    /// RTN steering resolves the same basis as the propagation RHS: a pure
+    /// in-track component on a circular orbit points prograde; radial
+    /// flight (no orbit plane) holds attitude instead of erroring.
+    #[test]
+    fn rtn_steering_matches_propagation_basis() {
+        let mut plan = single_segment_plan();
+        plan.segments[0].direction = SegmentDirection::Rtn {
+            central: BodyId(0),
+            radial: 0.0,
+            transverse: 1.0,
+            normal: 0.0,
+        };
+        let mut executor = SegmentExecutor::new(&plan).unwrap();
+        // Circular-orbit sample around an origin central body.
+        let sample = SteeringSample {
+            velocity_inertial_mps: DVec3::Y * 5_000.0,
+            position_inertial_m: DVec3::X * 1.1e9,
+            central: BodyState::ORIGIN,
+        };
+        let out = executor.poll(SimTime(120.0), DVec3::ZERO, &sample).unwrap();
+        assert_eq!(out.command.point_inertial, DVec3::Y);
+        // Radial flight: no plane, hold last (+Y from the previous poll).
+        let radial_sample = SteeringSample {
+            velocity_inertial_mps: DVec3::X * 5_000.0,
+            position_inertial_m: DVec3::X * 1.1e9,
+            central: BodyState::ORIGIN,
+        };
+        let out = executor
+            .poll(SimTime(121.0), DVec3::ZERO, &radial_sample)
+            .unwrap();
+        assert_eq!(out.command.point_inertial, DVec3::Y);
     }
 }

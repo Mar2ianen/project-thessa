@@ -24,7 +24,9 @@ mod plan;
 mod search;
 mod thrust;
 
-pub use execute::{ExecutionCommand, ExecutorOutput, NodeExecutor, SegmentExecutor, SegmentOutput};
+pub use execute::{
+    ExecutionCommand, ExecutorOutput, NodeExecutor, SegmentExecutor, SegmentOutput, SteeringSample,
+};
 pub use flyby::{
     FlybyConfig, candidate_flyby_bodies, flyby_search, max_bend_angle_rad, powered_flyby_burn_mps,
 };
@@ -38,5 +40,6 @@ pub use search::{
 };
 pub use thrust::{
     BurnSegment, BurnValidation, EngineSpec, FiniteBurnPlan, SegmentDirection, SplitMode,
-    ThrustPlanError, orbit_period, realize_impulsive, validate_finite_burn,
+    ThrustPlanError, node_osculating_periods, orbit_period, realize_impulsive,
+    validate_finite_burn,
 };

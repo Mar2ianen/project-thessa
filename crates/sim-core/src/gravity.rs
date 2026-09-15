@@ -3,7 +3,7 @@ use std::{error::Error, fmt};
 use glam::DVec3;
 use rayon::prelude::*;
 
-use crate::{BakedEphemeris, BodyId, SimTime};
+use crate::{BakedEphemeris, BodyId, BodyState, SimTime};
 
 /// Runtime gravity view. The ephemeris remains the sole source of moving-body
 /// positions; no SOI switching is performed.
@@ -24,6 +24,13 @@ impl<'a> GravityField<'a> {
 
     pub fn source_count(&self) -> usize {
         self.source_ids.len()
+    }
+
+    /// Ephemeris state for LVLH steering frames: thrust arcs reference a
+    /// central body, and the field owns the ephemeris borrow. Transparent
+    /// passthrough (same errors as direct ephemeris reads).
+    pub fn body_state(&self, id: BodyId, time: SimTime) -> Result<BodyState, GravityError> {
+        Ok(self.ephemeris.body_state(id, time)?)
     }
 
     pub fn acceleration(&self, position: DVec3, time: SimTime) -> Result<DVec3, GravityError> {

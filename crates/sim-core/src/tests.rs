@@ -4649,6 +4649,135 @@ fn thrust_schedule_validation_rejects_garbage() {
 }
 
 #[test]
+fn rtn_basis_matches_circular_orbit() {
+    // Circular orbit in the XY plane: R=+X, C=+Z, T=+Y (prograde).
+    let (radial, transverse, cross) =
+        rtn_basis(DVec3::new(1.1e9, 0.0, 0.0), DVec3::new(0.0, 10_460.0, 0.0))
+            .expect("healthy orbit geometry");
+    assert!((radial - DVec3::X).length() < 1e-12);
+    assert!((transverse - DVec3::Y).length() < 1e-12);
+    assert!((cross - DVec3::Z).length() < 1e-12);
+    // Degenerate: at the center, or radial flight with no orbit plane.
+    assert!(rtn_basis(DVec3::ZERO, DVec3::X).is_none());
+    assert!(rtn_basis(DVec3::X, DVec3::X * 100.0).is_none());
+    assert!(rtn_basis(DVec3::new(f64::NAN, 0.0, 0.0), DVec3::X).is_none());
+}
+
+#[test]
+fn rtn_normal_arc_conserves_energy_turning_plane() {
+    // Pure orbit-normal thrust does no work (a ⊥ v always): energy must be
+    // conserved while the plane rotates. Proves the frame is truly normal,
+    // not a mislabeled prograde.
+    let mu = 1.2e17;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let initial = circular_state(mu, 1.1e9);
+    let duration = 3.0 * 86_400.0;
+    let arc = ThrustArc {
+        start_s: 0.0,
+        duration_s: duration,
+        direction: ThrustDirection::Rtn {
+            central: BodyId(0),
+            radial: 0.0,
+            transverse: 0.0,
+            normal: 1.0,
+        },
+        throttle_01: 1.0,
+        thrust_n: 5.0,
+        mass_flow_kgs: 5.0 / 30_000.0,
+    };
+    let result = propagate_adaptive_with_thrust(
+        &field,
+        initial,
+        2_000.0,
+        SimTime::EPOCH,
+        duration,
+        &[arc],
+        AdaptiveIntegratorConfig::default(),
+    )
+    .expect("normal arc propagates");
+    let energy_before = orbital_energy(mu, initial);
+    let energy_after = orbital_energy(mu, result.state);
+    assert!(
+        ((energy_after - energy_before) / energy_before).abs() < 1e-6,
+        "energy drift {energy_before} -> {energy_after}"
+    );
+    // ...while the orbit normal genuinely moved (plane change happened).
+    let normal_before = initial.position.cross(initial.velocity).normalize();
+    let normal_after = result
+        .state
+        .position
+        .cross(result.state.velocity)
+        .normalize();
+    let plane_change = normal_before.dot(normal_after).clamp(-1.0, 1.0).acos();
+    assert!(plane_change > 1e-4, "plane must rotate, got {plane_change}");
+}
+
+#[test]
+fn rtn_arc_validation_rejects_garbage() {
+    let mu = 1.2e17;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let live = ThrustArc {
+        start_s: 0.0,
+        duration_s: 100.0,
+        direction: ThrustDirection::Rtn {
+            central: BodyId(0),
+            radial: 0.0,
+            transverse: 1.0,
+            normal: 0.0,
+        },
+        throttle_01: 1.0,
+        thrust_n: 1_000.0,
+        mass_flow_kgs: 0.05,
+    };
+    // Unknown central body.
+    let lost = ThrustArc {
+        direction: ThrustDirection::Rtn {
+            central: BodyId(99),
+            radial: 0.0,
+            transverse: 1.0,
+            normal: 0.0,
+        },
+        ..live
+    };
+    assert!(
+        propagate_adaptive_with_thrust(
+            &field,
+            circular_state(mu, 1.1e9),
+            20_000.0,
+            SimTime::EPOCH,
+            100.0,
+            &[lost],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .is_err()
+    );
+    // All-zero components with a live engine.
+    let bland = ThrustArc {
+        direction: ThrustDirection::Rtn {
+            central: BodyId(0),
+            radial: 0.0,
+            transverse: 0.0,
+            normal: 0.0,
+        },
+        ..live
+    };
+    assert!(
+        propagate_adaptive_with_thrust(
+            &field,
+            circular_state(mu, 1.1e9),
+            20_000.0,
+            SimTime::EPOCH,
+            100.0,
+            &[bland],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn prograde_steering_at_rest_is_an_error() {
     // Steering is undefined at zero velocity: honest error, never a
     // silent coast in an arbitrary direction.

@@ -25,11 +25,15 @@
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 use thessa_sim_core::{
-    AdaptiveIntegratorConfig, GravityField, ImpulsiveBurn, SimTime, TestParticleState, ThrustArc,
-    ThrustDirection, propagate_adaptive_with_burns, propagate_adaptive_with_thrust,
+    AdaptiveIntegratorConfig, BakedEphemeris, BodyId, GravityField, ImpulsiveBurn, SimTime,
+    TestParticleState, ThrustArc, ThrustDirection, propagate_adaptive,
+    propagate_adaptive_with_burns, propagate_adaptive_with_thrust,
 };
 
-use crate::{ManeuverPlan, plan::ManeuverNode};
+use crate::{
+    ManeuverPlan,
+    plan::{ManeuverNode, PlanValidation},
+};
 
 /// Engine ratings (SI): full-throttle thrust and exhaust velocity
 /// (`ve = isp * g0`; stored directly so the planner never depends on g0).
@@ -113,6 +117,15 @@ pub enum SegmentDirection {
     Prograde,
     /// Against the instantaneous inertial velocity.
     Retrograde,
+    /// LVLH components (radial outward, in-track, orbit-normal) in the
+    /// spacecraft-centered RTN frame around `central` — same basis as the
+    /// propagation RHS (single definition, frames agree exactly).
+    Rtn {
+        central: BodyId,
+        radial: f64,
+        transverse: f64,
+        normal: f64,
+    },
 }
 
 /// One finite burn: throttle schedule over `[start, start + duration)`.
@@ -186,6 +199,20 @@ impl FiniteBurnPlan {
             {
                 return Err(ThrustPlanError::InvalidSegment);
             }
+            if let SegmentDirection::Rtn {
+                radial,
+                transverse,
+                normal,
+                ..
+            } = segment.direction
+            {
+                if !radial.is_finite() || !transverse.is_finite() || !normal.is_finite() {
+                    return Err(ThrustPlanError::InvalidSegment);
+                }
+                if radial == 0.0 && transverse == 0.0 && normal == 0.0 {
+                    return Err(ThrustPlanError::InvalidSegment);
+                }
+            }
             if segment.start.0 < previous_end {
                 return Err(ThrustPlanError::OverlappingSegments);
             }
@@ -222,17 +249,41 @@ impl FiniteBurnPlan {
         self.final_mass_kg = Some(validation.final_mass_kg);
         self
     }
+
+    /// Validation outcome for server admission: either executable or a
+    /// named reason the block must take its abort path. Mirrors the node
+    /// plan gate (same enum, same stale semantics against the first
+    /// segment start).
+    pub fn validate_for_execution(&self, now: SimTime) -> PlanValidation {
+        if self.segments.is_empty() {
+            return PlanValidation::Empty;
+        }
+        match self.segments.first() {
+            Some(segment) if segment.start.0 < now.0 => PlanValidation::Stale {
+                now_s: now.0,
+                first_node_s: segment.start.0,
+            },
+            Some(_) => PlanValidation::Executable,
+            None => PlanValidation::Empty,
+        }
+    }
 }
 
 /// How a node burn longer than the segment cap is split.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SplitMode {
     /// Equal-Δv burns at the same orbital phase on successive orbits
-    /// (efficient phasing for bound orbits). The caller owns frames:
-    /// pass the osculating period around the relevant central body
-    /// (see [`orbit_period`]) — the plan state itself is system-frame
-    /// and must NOT be differenced against a bare μ here.
+    /// (efficient phasing). The caller owns frames: pass the osculating
+    /// period around the relevant central body (see [`orbit_period`]) —
+    /// the plan state itself is system-frame and must NOT be differenced
+    /// against a bare μ here. One period for every node (departure-period
+    /// phasing — fine when one orbit dominates the plan).
     PerOrbit { orbit_period_s: f64 },
+    /// Same phasing with an exact period per nonzero node in plan order
+    /// (see [`node_osculating_periods`]): later nodes on changed orbits
+    /// phase on their own period, not the departure one. Length must
+    /// match the nonzero-node count.
+    PerOrbitNodes { periods_s: Vec<f64> },
     /// Contiguous chop with `cooldown_s` coasts between pieces
     /// (thermal/duty constraint); works on any trajectory.
     Contiguous { cooldown_s: f64 },
@@ -258,19 +309,39 @@ pub fn realize_impulsive(
     if !max_segment_s.is_finite() || max_segment_s <= 0.0 {
         return Err(ThrustPlanError::InvalidSegment);
     }
-    // Per-orbit spacing is caller-provided (frames are the caller's job).
-    let orbit_period_s = match split {
+    // Spacing source: one caller period for every node, an exact period
+    // per nonzero node, or contiguous chop (frames are the caller's job).
+    let nonzero_nodes = plan
+        .nodes
+        .iter()
+        .filter(|node| node.magnitude_mps() > 0.0)
+        .count();
+    enum Spacing {
+        Periods(std::vec::IntoIter<f64>),
+        Chop(f64),
+    }
+    let mut spacing = match &split {
         SplitMode::PerOrbit { orbit_period_s } => {
-            if !orbit_period_s.is_finite() || orbit_period_s <= 0.0 {
+            if !orbit_period_s.is_finite() || *orbit_period_s <= 0.0 {
                 return Err(ThrustPlanError::InvalidSegment);
             }
-            Some(orbit_period_s)
+            Spacing::Periods(vec![*orbit_period_s; nonzero_nodes].into_iter())
+        }
+        SplitMode::PerOrbitNodes { periods_s } => {
+            if periods_s.len() != nonzero_nodes
+                || periods_s
+                    .iter()
+                    .any(|period| !period.is_finite() || *period <= 0.0)
+            {
+                return Err(ThrustPlanError::InvalidSegment);
+            }
+            Spacing::Periods(periods_s.clone().into_iter())
         }
         SplitMode::Contiguous { cooldown_s } => {
-            if !cooldown_s.is_finite() || cooldown_s < 0.0 {
+            if !cooldown_s.is_finite() || *cooldown_s < 0.0 {
                 return Err(ThrustPlanError::InvalidSegment);
             }
-            None
+            Spacing::Chop(*cooldown_s)
         }
     };
     let mut mass_kg = initial_mass_kg;
@@ -316,13 +387,13 @@ pub fn realize_impulsive(
                 .propellant_kg(piece_dv, chain)
                 .ok_or(ThrustPlanError::PropellantExceeded)?;
         }
-        match orbit_period_s {
-            Some(period) => {
-                // Symmetric phasing around the node epoch (documented
-                // approximation: departure-period spacing for all nodes;
-                // exact per-node phasing is future work). Pieces longer
-                // than one orbit (or nodes closer than their spans) fail
-                // honestly at plan construction with Overlap.
+        match &mut spacing {
+            Spacing::Periods(periods) => {
+                // Symmetric phasing around the node epoch on this node's
+                // own period (departure-period for the single-period mode).
+                // Pieces longer than one orbit (or nodes closer than their
+                // spans) fail honestly at plan construction with Overlap.
+                let period = periods.next().ok_or(ThrustPlanError::InvalidSegment)?;
                 for (k, duration) in durations.iter().enumerate() {
                     let center = node.epoch.0 + (k as f64 - (pieces as f64 - 1.0) / 2.0) * period;
                     segments.push(BurnSegment {
@@ -334,12 +405,10 @@ pub fn realize_impulsive(
                     });
                 }
             }
-            None => {
+            Spacing::Chop(cooldown_s) => {
                 // Contiguous chop from a centered first piece (works on any
                 // trajectory, including hyperbolic escapes).
-                let SplitMode::Contiguous { cooldown_s } = split else {
-                    unreachable!("period is None only for Contiguous")
-                };
+                let cooldown_s = *cooldown_s;
                 let mut start = (node.epoch.0 - durations[0] / 2.0).max(plan.departure_epoch.0);
                 for duration in &durations {
                     segments.push(BurnSegment {
@@ -416,6 +485,56 @@ fn centered_segment(
         direction,
         throttle_01: 1.0,
     }
+}
+
+/// Exact osculating period per nonzero node in plan order: propagate
+/// impulsively node to node (cumulative burns, exact N-body states),
+/// relativize to `central` at each node epoch, and take the period of the
+/// POST-burn (outbound) orbit — the orbit the later pieces actually fly.
+/// Hyperbolic nodes rejected (cannot phase). Pair with
+/// [`SplitMode::PerOrbitNodes`].
+pub fn node_osculating_periods(
+    field: &GravityField<'_>,
+    ephemeris: &BakedEphemeris,
+    central: BodyId,
+    plan: &ManeuverPlan,
+) -> Result<Vec<f64>, ThrustPlanError> {
+    let central_mu = ephemeris
+        .body(central)
+        .map_err(|error| ThrustPlanError::Ephemeris(error.to_string()))?
+        .mu;
+    if !central_mu.is_finite() || central_mu <= 0.0 {
+        return Err(ThrustPlanError::InvalidSegment);
+    }
+    let config = AdaptiveIntegratorConfig::default();
+    let mut state = TestParticleState {
+        position: plan.departure_position_m,
+        velocity: plan.departure_velocity_mps,
+    };
+    let mut now = plan.departure_epoch;
+    let mut periods = Vec::new();
+    for node in &plan.nodes {
+        let horizon = (node.epoch.0 - now.0).max(0.0);
+        if horizon > 0.0 {
+            state = propagate_adaptive(field, state, now, horizon, config)
+                .map_err(ThrustPlanError::Propagation)?
+                .state;
+            now = node.epoch;
+        }
+        if node.magnitude_mps() == 0.0 {
+            continue;
+        }
+        state.velocity += node.delta_v_mps;
+        let center = ephemeris
+            .body_state(central, node.epoch)
+            .map_err(|error| ThrustPlanError::Ephemeris(error.to_string()))?;
+        periods.push(orbit_period(
+            state.position - center.position_inertial,
+            state.velocity - center.velocity_inertial,
+            central_mu,
+        )?);
+    }
+    Ok(periods)
 }
 
 /// Piece count for an equal-Δv split: from the entry-mass estimate, then
@@ -515,6 +634,17 @@ pub fn validate_finite_burn(
                 SegmentDirection::Inertial(fixed) => ThrustDirection::Inertial(fixed),
                 SegmentDirection::Prograde => ThrustDirection::Prograde,
                 SegmentDirection::Retrograde => ThrustDirection::Retrograde,
+                SegmentDirection::Rtn {
+                    central,
+                    radial,
+                    transverse,
+                    normal,
+                } => ThrustDirection::Rtn {
+                    central,
+                    radial,
+                    transverse,
+                    normal,
+                },
             },
             throttle_01: segment.throttle_01,
             thrust_n: plan.engine.thrust_n,
@@ -570,6 +700,7 @@ pub enum ThrustPlanError {
     OverlappingSegments,
     RequiresBoundOrbit,
     PropellantExceeded,
+    Ephemeris(String),
     Propagation(thessa_sim_core::IntegratorError),
 }
 
@@ -584,6 +715,7 @@ impl std::fmt::Display for ThrustPlanError {
             Self::PropellantExceeded => {
                 write!(formatter, "maneuver exceeds propellant capacity")
             }
+            Self::Ephemeris(error) => write!(formatter, "ephemeris: {error}"),
             Self::Propagation(error) => write!(formatter, "propagation failed: {error}"),
         }
     }
@@ -787,6 +919,48 @@ mod tests {
     }
 
     #[test]
+    fn burn_plan_execution_gate_mirrors_nodes() {
+        use crate::plan::PlanValidation;
+        let engine = chem_engine();
+        let future = FiniteBurnPlan::new(
+            vec![BurnSegment {
+                start: SimTime(100.0),
+                duration_s: 10.0,
+                planned_dv_mps: 10.0,
+                direction: SegmentDirection::Prograde,
+                throttle_01: 1.0,
+            }],
+            engine,
+            20_000.0,
+            DVec3::new(RADIUS, 0.0, 0.0),
+            circular_velocity(),
+            SimTime(0.0),
+        )
+        .unwrap();
+        assert_eq!(
+            future.validate_for_execution(SimTime(50.0)),
+            PlanValidation::Executable
+        );
+        assert!(matches!(
+            future.validate_for_execution(SimTime(150.0)),
+            PlanValidation::Stale { .. }
+        ));
+        let empty = FiniteBurnPlan::new(
+            vec![],
+            engine,
+            20_000.0,
+            DVec3::new(RADIUS, 0.0, 0.0),
+            circular_velocity(),
+            SimTime(0.0),
+        )
+        .unwrap();
+        assert_eq!(
+            empty.validate_for_execution(SimTime(0.0)),
+            PlanValidation::Empty
+        );
+    }
+
+    #[test]
     fn propellant_exceeded_and_bad_inputs_rejected() {
         let engine = chem_engine();
         assert_eq!(
@@ -922,5 +1096,97 @@ mod tests {
         let expected_mass = 2_000.0 - engine.mass_flow_kgs() * duration;
         assert!((validation.final_mass_kg - expected_mass).abs() / expected_mass < 1e-12);
         assert!(validation.divergence_m.is_finite());
+    }
+
+    #[test]
+    fn per_node_periods_follow_raised_orbits() {
+        // Two prograde nodes a full orbit apart: each burn raises the
+        // orbit, so each period exceeds the previous one. Same anomaly
+        // (single static body = exact Kepler return), so the fixed +Y
+        // node direction is prograde both times.
+        let ephemeris = single_body_ephemeris();
+        let field = GravityField::from_ephemeris(&ephemeris);
+        let one = ManeuverPlan::new(
+            vec![ManeuverNode::new(SimTime(1_000.0), DVec3::Y * 800.0).unwrap()],
+            DVec3::new(RADIUS, 0.0, 0.0),
+            circular_velocity(),
+            SimTime(0.0),
+        )
+        .unwrap();
+        let first =
+            node_osculating_periods(&field, &ephemeris, BodyId(0), &one).expect("periods")[0];
+        let two = ManeuverPlan::new(
+            vec![
+                ManeuverNode::new(SimTime(1_000.0), DVec3::Y * 800.0).unwrap(),
+                ManeuverNode::new(SimTime(1_000.0 + first), DVec3::Y * 800.0).unwrap(),
+            ],
+            DVec3::new(RADIUS, 0.0, 0.0),
+            circular_velocity(),
+            SimTime(0.0),
+        )
+        .unwrap();
+        let periods =
+            node_osculating_periods(&field, &ephemeris, BodyId(0), &two).expect("periods");
+        assert_eq!(periods.len(), 2);
+        assert!((periods[0] - first).abs() / first < 1e-9);
+        assert!(periods[0] > period());
+        assert!(periods[1] > periods[0]);
+    }
+
+    #[test]
+    fn per_node_split_phases_each_node_on_its_period() {
+        let engine = chem_engine();
+        let ephemeris = single_body_ephemeris();
+        let field = GravityField::from_ephemeris(&ephemeris);
+        // Node 1 (800 m/s) splits in two on periods[0]; node 2 (3000 m/s)
+        // splits on its own (longer) periods[1].
+        let two = ManeuverPlan::new(
+            vec![
+                ManeuverNode::new(SimTime(2_000_000.0), DVec3::Y * 800.0).unwrap(),
+                ManeuverNode::new(SimTime(4_000_000.0), DVec3::Y * 3_000.0).unwrap(),
+            ],
+            DVec3::new(RADIUS, 0.0, 0.0),
+            circular_velocity(),
+            SimTime(0.0),
+        )
+        .unwrap();
+        let periods =
+            node_osculating_periods(&field, &ephemeris, BodyId(0), &two).expect("periods");
+        assert_eq!(periods.len(), 2);
+        let plan = realize_impulsive(
+            &two,
+            &engine,
+            20_000.0,
+            120.0,
+            SplitMode::PerOrbitNodes {
+                periods_s: periods.clone(),
+            },
+        )
+        .expect("splits per node");
+        // Node-1 pieces (first two segments) space on periods[0], node-2
+        // pieces on periods[1].
+        assert!(plan.segments.len() >= 4);
+        let gap_node1 = plan.segments[1].start.0 - plan.segments[0].start.0;
+        assert!((gap_node1 - periods[0]).abs() < 120.0);
+        let tail = &plan.segments[2..];
+        for window in tail.windows(2) {
+            // All tail pieces belong to node 2 (node-1 span is ~1 period,
+            // nodes are 2e6 s apart): spacing must match periods[1].
+            let gap = window[1].start.0 - window[0].start.0;
+            assert!((gap - periods[1]).abs() < 120.0, "gap {gap}");
+        }
+        // Length mismatch refused.
+        assert!(
+            realize_impulsive(
+                &two,
+                &engine,
+                20_000.0,
+                120.0,
+                SplitMode::PerOrbitNodes {
+                    periods_s: vec![periods[0]],
+                },
+            )
+            .is_err()
+        );
     }
 }

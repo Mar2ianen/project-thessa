@@ -10,9 +10,10 @@ use std::{hint::black_box, time::Instant};
 
 use thessa_maneuver::{
     BurnSegment, EngineSpec, FiniteBurnPlan, ManeuverNode, ManeuverPlan, SegmentDirection,
-    SegmentExecutor, SplitMode, orbit_period, realize_impulsive, validate_finite_burn,
+    SegmentExecutor, SplitMode, SteeringSample, node_osculating_periods, orbit_period,
+    realize_impulsive, validate_finite_burn,
 };
-use thessa_sim_core::{BakedEphemeris, GravityField, SimTime, SystemConfig};
+use thessa_sim_core::{BakedEphemeris, BodyState, GravityField, SimTime, SystemConfig};
 
 const ORBIT_RADIUS: f64 = 1.1e9;
 
@@ -170,16 +171,80 @@ fn main() {
         started.elapsed(),
     );
 
+    // E: per-node phasing on a two-node plan (each node phases on its own
+    // exact outbound period around Nereid, not the departure one).
+    let two_impulsive = ManeuverPlan::new(
+        vec![
+            ManeuverNode::new(SimTime(SimTime::EPOCH.0 + 3_600.0), glam::DVec3::Y * 800.0).unwrap(),
+            ManeuverNode::new(
+                SimTime(SimTime::EPOCH.0 + 2_000_000.0),
+                glam::DVec3::Y * 1_500.0,
+            )
+            .unwrap(),
+        ],
+        start_pos,
+        start_vel,
+        SimTime::EPOCH,
+    )
+    .unwrap();
+    let started = Instant::now();
+    let periods = node_osculating_periods(
+        black_box(&field),
+        black_box(&ephemeris),
+        nereid,
+        &two_impulsive,
+    )
+    .expect("periods");
+    let flat = realize_impulsive(
+        &two_impulsive,
+        &engine,
+        20_000.0,
+        120.0,
+        SplitMode::PerOrbit {
+            orbit_period_s: period,
+        },
+    )
+    .expect("realizes flat");
+    let rephased = realize_impulsive(
+        &two_impulsive,
+        &engine,
+        20_000.0,
+        120.0,
+        SplitMode::PerOrbitNodes {
+            periods_s: periods.clone(),
+        },
+    )
+    .expect("realizes rephased");
+    let flat_validation =
+        validate_finite_burn(black_box(&field), &flat, &two_impulsive).expect("validates");
+    let rephased_validation =
+        validate_finite_burn(black_box(&field), &rephased, &two_impulsive).expect("validates");
+    println!(
+        "per-node phasing: periods {:.2}d + {:.2}d, flat {} segs div {:.3e} m, rephased {} segs div {:.3e} m in {:?}",
+        periods[0] / 86_400.0,
+        periods[1] / 86_400.0,
+        flat.segments.len(),
+        flat_validation.divergence_m,
+        rephased.segments.len(),
+        rephased_validation.divergence_m,
+        started.elapsed(),
+    );
+
     // D: drive the segment executor over the chemical plan (near-ideal
     // 5.5 m/s^2 engine against a plan timed for 5.0-6.0: cutoff stays on
     // schedule, the small residual is reported, not burned through).
     let started = Instant::now();
     let mut executor = SegmentExecutor::new(&plan).unwrap();
+    let sample = SteeringSample {
+        velocity_inertial_mps: start_vel,
+        position_inertial_m: start_pos,
+        central: BodyState::ORIGIN,
+    };
     let mut time = SimTime::EPOCH.0;
     let mut accel = glam::DVec3::ZERO;
     let mut polls = 0;
     loop {
-        let output = executor.poll(SimTime(time), accel, start_vel).unwrap();
+        let output = executor.poll(SimTime(time), accel, &sample).unwrap();
         accel = if output.command.throttle_01 > 0.0 {
             output.command.point_inertial * 5.5
         } else {
@@ -195,7 +260,7 @@ fn main() {
     println!(
         "executor: {polls} polls, shortfall {:.2} m/s in {:?}",
         executor
-            .poll(SimTime(time), glam::DVec3::ZERO, start_vel)
+            .poll(SimTime(time), glam::DVec3::ZERO, &sample)
             .unwrap()
             .last_shortfall_mps,
         started.elapsed(),

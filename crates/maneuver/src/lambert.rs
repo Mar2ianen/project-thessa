@@ -348,20 +348,14 @@ mod tests {
                 continue;
             }
             let r1 = DVec3::new(radius, 0.0, next() * 1.0e6);
-            let r2 = DVec3::new(
-                radius * angle.cos(),
-                radius * angle.sin(),
-                next() * 1.0e6,
-            );
+            let r2 = DVec3::new(radius * angle.cos(), radius * angle.sin(), next() * 1.0e6);
             let dt = 1_000.0 + next() * 20_000.0;
             let short_way = angle <= std::f64::consts::PI;
             let Ok(arc) = solve_lambert(r1, r2, dt, MU, short_way) else {
                 continue;
             };
-            let energy_dep =
-                arc.departure_velocity_mps.length_squared() / 2.0 - MU / r1.length();
-            let energy_arr =
-                arc.arrival_velocity_mps.length_squared() / 2.0 - MU / r2.length();
+            let energy_dep = arc.departure_velocity_mps.length_squared() / 2.0 - MU / r1.length();
+            let energy_arr = arc.arrival_velocity_mps.length_squared() / 2.0 - MU / r2.length();
             let scale = energy_dep.abs().max(1.0);
             assert!(
                 (energy_dep - energy_arr).abs() / scale <= 1.0e-8,
@@ -427,7 +421,10 @@ mod tests {
         // Prograde costs a small plane/phase correction, not a reversal.
         let raw_cost = (raw.departure_velocity_mps - v1).length();
         let pro_cost = (pro.departure_velocity_mps - v1).length();
-        assert!(pro_cost < 0.2 * raw_cost, "pro {pro_cost} vs raw {raw_cost}");
+        assert!(
+            pro_cost < 0.2 * raw_cost,
+            "pro {pro_cost} vs raw {raw_cost}"
+        );
         // And it still satisfies the shared-orbit identities.
         let energy = pro.departure_velocity_mps.length_squared() / 2.0 - mu / r;
         let energy2 = pro.arrival_velocity_mps.length_squared() / 2.0 - mu / r;

@@ -2,23 +2,21 @@
 //! N-body revalidation (docs/23 §12, 24 §7 pattern).
 //!
 //! Phase 1 (broad, loose): two-body Lambert arcs on osculating endpoint
-//! states — analytic, thousands of cells, no force evaluations. Phase 2
-//! (narrow): local grid refinement around the best cell. Phase 3 (final):
-//! full N-body propagation of survivors with the departure burn, arrival
-//! miss measured against the target ephemeris, arrival burn to match.
-//! Pruning approximations never define physical truth: only revalidated
-//! plans with measured miss execute.
+//! states with patched-conic departure burns (parking-orbit escape around
+//! the depot moon — the depot well is NOT ignored), plus a perigee impact
+//! screen. Phase 2 (narrow): local grid refinement around the best cell.
+//! Phase 3 (final): full N-body propagation of survivors from the depot
+//! standoff point, arrival miss measured against the target, arrival burn
+//! to match. Pruning approximations never define physical truth: only
+//! revalidated plans with measured miss execute.
 
-use glam::DVec3;
+use glam::{DMat3, DVec3};
 use thessa_sim_core::{
-    AdaptiveIntegratorConfig, BakedEphemeris, BodyId, GravityField, ImpulsiveBurn, SimTime,
-    TestParticleState, propagate_adaptive_with_burns,
+    AdaptiveIntegratorConfig, BakedEphemeris, BodyId, BodyState, GravityField, ImpulsiveBurn,
+    SimTime, TestParticleState, propagate_adaptive_with_burns,
 };
 
-use crate::{
-    ManeuverNode, ManeuverPlan,
-    lambert::solve_lambert_prograde,
-};
+use crate::{ManeuverNode, ManeuverPlan, lambert::solve_lambert_prograde};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SearchConfig {
@@ -38,6 +36,10 @@ pub struct SearchConfig {
     pub tof_steps: usize,
     /// Survivors carried into exact revalidation.
     pub keep_candidates: usize,
+    /// Parking-orbit / rendezvous-approach altitude (m) at both ends:
+    /// departure starts there (never at the depot center — point-mass
+    /// singularity), arrival is measured there. Typical 50–500 km.
+    pub standoff_m: f64,
     /// Broad cells above this total Δv are pruned, not ranked: a 50 km/s
     /// "optimum" through the planet is grid noise, not a transfer.
     pub max_broad_dv_mps: f64,
@@ -57,6 +59,8 @@ impl SearchConfig {
             || self.tof_max_s < self.tof_min_s
             || self.tof_steps == 0
             || self.keep_candidates == 0
+            || !self.standoff_m.is_finite()
+            || self.standoff_m <= 0.0
             || !self.max_broad_dv_mps.is_finite()
             || self.max_broad_dv_mps <= 0.0
             || !self.max_miss_m.is_finite()
@@ -86,6 +90,8 @@ pub struct SearchStats {
     pub broad_evaluations: usize,
     pub degenerate_cells: usize,
     pub impact_cells: usize,
+    pub phase_screens: usize,
+    pub newton_propagations: usize,
     pub exact_revalidations: usize,
     pub failed_revalidations: usize,
     pub filtered_by_miss: usize,
@@ -97,7 +103,9 @@ pub enum SearchError {
     Ephemeris(thessa_sim_core::EphemerisError),
     /// No transfer survived, with the counters showing why (all cells
     /// degenerate vs all survivors filtered by miss).
-    NoViableTransfer { stats: SearchStats },
+    NoViableTransfer {
+        stats: SearchStats,
+    },
 }
 
 impl std::fmt::Display for SearchError {
@@ -107,10 +115,12 @@ impl std::fmt::Display for SearchError {
             Self::Ephemeris(error) => write!(formatter, "ephemeris error: {error}"),
             Self::NoViableTransfer { stats } => write!(
                 formatter,
-                "no viable transfer (broad {}, degenerate {}, impact {}, revalidated {}/{}, miss-filtered {})",
+                "no viable transfer (broad {}, degenerate {}, impact {}, screens {}, newton props {}, revalidated {}/{}, miss-filtered {})",
                 stats.broad_evaluations,
                 stats.degenerate_cells,
                 stats.impact_cells,
+                stats.phase_screens,
+                stats.newton_propagations,
                 stats.exact_revalidations,
                 stats.failed_revalidations,
                 stats.filtered_by_miss,
@@ -125,7 +135,8 @@ impl std::error::Error for SearchError {}
 struct Cell {
     departure_epoch: SimTime,
     time_of_flight_s: f64,
-    departure_burn: DVec3,
+    /// Patched escape magnitude (energy); direction comes from phasing.
+    departure_burn_mag_mps: f64,
     total_dv: f64,
 }
 
@@ -135,6 +146,8 @@ struct BroadCtx<'a> {
     config: SearchConfig,
     central_mu: f64,
     central_radius_m: f64,
+    depot_mu: f64,
+    depot_radius_m: f64,
 }
 
 fn lambert_cell(
@@ -147,14 +160,29 @@ fn lambert_cell(
     let config = &ctx.config;
     let central_mu = ctx.central_mu;
     let central_radius_m = ctx.central_radius_m;
-    let central = ephemeris.body_state(config.central_body, departure_epoch).ok()?;
     let arrival_epoch = SimTime(departure_epoch.0 + time_of_flight_s);
-    let departure = ephemeris.body_state(config.departure_body, departure_epoch).ok()?;
-    let arrival = ephemeris.body_state(config.arrival_body, arrival_epoch).ok()?;
-    let r1 = departure.position_inertial - central.position_inertial;
-    let v1 = departure.velocity_inertial - central.velocity_inertial;
-    let r2 = arrival.position_inertial - central.position_inertial;
-    let v2 = arrival.velocity_inertial - central.velocity_inertial;
+    // Central states at BOTH epochs: r2 must be arrival-minus-central-at-
+    // arrival, not minus-central-at-departure (the central body itself
+    // moves ~37 km/s around the star; mixing epochs injects billions of
+    // metres of fictitious displacement and prices every cell at tens of
+    // km/s — caught by the shoot-the-arc audit reading 0.0 km miss on
+    // garbage geometry).
+    let central_dep = ephemeris
+        .body_state(config.central_body, departure_epoch)
+        .ok()?;
+    let central_arr = ephemeris
+        .body_state(config.central_body, arrival_epoch)
+        .ok()?;
+    let departure = ephemeris
+        .body_state(config.departure_body, departure_epoch)
+        .ok()?;
+    let arrival = ephemeris
+        .body_state(config.arrival_body, arrival_epoch)
+        .ok()?;
+    let r1 = departure.position_inertial - central_dep.position_inertial;
+    let v1 = departure.velocity_inertial - central_dep.velocity_inertial;
+    let r2 = arrival.position_inertial - central_arr.position_inertial;
+    let v2 = arrival.velocity_inertial - central_arr.velocity_inertial;
     // Prograde branch per cell: the cheap side is short-way on one side
     // of the sky and long-way on the other; a fixed flag would price half
     // the grid as retrograde.
@@ -165,28 +193,48 @@ fn lambert_cell(
             return None;
         }
     };
-    let dep_burn = arc.departure_velocity_mps - v1;
-    let arr_burn = v2 - arc.arrival_velocity_mps;
-    if !dep_burn.is_finite() || !arr_burn.is_finite() {
+    // Patched escape magnitude (energy fixed here); the burn direction and
+    // parking-orbit anomaly come from phasing against screened flights.
+    // Depot momentum sanity stays: a radial depot trajectory has no
+    // parking-orbit plane to phase in.
+    let depot_momentum = r1.cross(v1);
+    if depot_momentum.length_squared() <= 0.0 {
         stats.degenerate_cells += 1;
         return None;
     }
-    let total_dv = dep_burn.length() + arr_burn.length();
+    let park_radius = ctx.depot_radius_m + ctx.config.standoff_m;
+    let v_circ = (ctx.depot_mu / park_radius).sqrt();
+    let v_esc_sq = 2.0 * ctx.depot_mu / park_radius;
+    let v_inf_vec = arc.departure_velocity_mps - v1;
+    let v_inf = v_inf_vec.length();
+    if !v_circ.is_finite() || !v_inf.is_finite() {
+        stats.degenerate_cells += 1;
+        return None;
+    }
+    let dep_mag = (v_inf * v_inf + v_esc_sq).sqrt() - v_circ;
+    if !dep_mag.is_finite() || dep_mag < 0.0 {
+        stats.degenerate_cells += 1;
+        return None;
+    }
+    let arr_burn = v2 - arc.arrival_velocity_mps;
+    if !arr_burn.is_finite() {
+        stats.degenerate_cells += 1;
+        return None;
+    }
+    let total_dv = dep_mag + arr_burn.length();
     if total_dv > config.max_broad_dv_mps {
         return None;
     }
     // Perigee impact screen on the departure arc: arcs through the central
     // body are grid noise (the exact propagator would just hit singularity).
-    if transfer_perigee_m(r1, arc.departure_velocity_mps, central_mu)
-        < central_radius_m * 1.05
-    {
+    if transfer_perigee_m(r1, arc.departure_velocity_mps, central_mu) < central_radius_m * 1.05 {
         stats.impact_cells += 1;
         return None;
     }
     Some(Cell {
         departure_epoch,
         time_of_flight_s,
-        departure_burn: dep_burn,
+        departure_burn_mag_mps: dep_mag,
         total_dv,
     })
 }
@@ -203,17 +251,16 @@ fn transfer_perigee_m(position: DVec3, velocity: DVec3, mu: f64) -> f64 {
         // Unbound: still report the pericenter radius honestly.
         let momentum = position.cross(velocity);
         let semi_latus = momentum.length_squared() / mu;
-        let ecc_vector =
-            (position * (velocity.length_squared() - mu / radius) - velocity * position.dot(velocity))
-                / mu;
+        let ecc_vector = (position * (velocity.length_squared() - mu / radius)
+            - velocity * position.dot(velocity))
+            / mu;
         let eccentricity = ecc_vector.length();
         return semi_latus / (1.0 + eccentricity);
     }
     let semi_major = -mu / (2.0 * energy);
-    let momentum = position.cross(velocity);
-    let ecc_vector =
-        (position * (velocity.length_squared() - mu / radius) - velocity * position.dot(velocity))
-            / mu;
+    let ecc_vector = (position * (velocity.length_squared() - mu / radius)
+        - velocity * position.dot(velocity))
+        / mu;
     semi_major * (1.0 - ecc_vector.length())
 }
 
@@ -272,6 +319,14 @@ pub fn porkchop_search(
         config,
         central_mu,
         central_radius_m: central.radius_m,
+        depot_mu: ephemeris
+            .body(config.departure_body)
+            .map_err(SearchError::Ephemeris)?
+            .mu,
+        depot_radius_m: ephemeris
+            .body(config.departure_body)
+            .map_err(SearchError::Ephemeris)?
+            .radius_m,
     };
     let mut stats = SearchStats::default();
     // Phase 1: broad grid.
@@ -320,7 +375,7 @@ pub fn porkchop_search(
     }
     best.sort_by(|a, b| a.total_dv.total_cmp(&b.total_dv));
     best.truncate(config.keep_candidates);
-    // Phase 3: exact N-body revalidation of survivors.
+    // Phase 3: phase the departure anomaly, then correct and rank.
     let mut ranked = Vec::new();
     for cell in &best {
         if let Some(plan) = revalidate(ephemeris, field, config, cell, &mut stats)? {
@@ -338,6 +393,214 @@ pub fn porkchop_search(
     Ok((ranked, stats))
 }
 
+/// Loose propagation config for anomaly screening: 1e5x looser than the
+/// exact pass, so screens run in a fraction of the time while keeping the
+/// full N-body model (wells, moons, moving central body) — unlike a
+/// fixed-central screen, which omits the depot-well turn entirely and
+/// ranks anomalies by fiction.
+fn loose_config() -> AdaptiveIntegratorConfig {
+    AdaptiveIntegratorConfig {
+        initial_step_s: 60.0,
+        min_step_s: 1.0e-6,
+        max_step_s: 3_600.0,
+        absolute_position_tolerance_m: 100.0,
+        absolute_velocity_tolerance_mps: 1.0e-3,
+        relative_tolerance: 1.0e-8,
+        max_steps: 100_000,
+    }
+}
+
+/// Departure-anomaly phasing: scan parking-orbit true anomalies with
+/// loose-tolerance FULL N-body screens and keep the best departure state.
+/// Screens rank candidates against each other; exact N-body correction
+/// afterwards measures truth. Returns inertial departure point, parking
+/// velocity and burn vector.
+#[allow(clippy::too_many_arguments)]
+fn phase_departure(
+    field: &GravityField<'_>,
+    depot_epoch: SimTime,
+    depot: &BodyState,
+    central: &BodyState,
+    arrival: &BodyState,
+    depot_mu: f64,
+    park_radius: f64,
+    burn_magnitude_mps: f64,
+    time_of_flight_s: f64,
+    stats: &mut SearchStats,
+) -> Option<(DVec3, DVec3, DVec3)> {
+    let radial = depot.position_inertial - central.position_inertial;
+    let momentum = radial.cross(depot.velocity_inertial - central.velocity_inertial);
+    let normal = momentum.normalize();
+    let radial_unit = radial.normalize();
+    if !normal.is_finite() || !radial_unit.is_finite() {
+        return None;
+    }
+    let tangent0 = normal.cross(radial_unit);
+    let v_circ = (depot_mu / park_radius).sqrt();
+    if !v_circ.is_finite() {
+        return None;
+    }
+    let mut best: Option<(f64, DVec3, DVec3, DVec3)> = None;
+    // Coarse sweep plus one refinement round around the winner.
+    let mut center_angle = 0.0;
+    for round in 0..2 {
+        let mut local_best: Option<(f64, DVec3, DVec3, DVec3)> = None;
+        let (span, steps) = if round == 0 {
+            (std::f64::consts::TAU, 12)
+        } else {
+            (std::f64::consts::TAU / 6.0, 8)
+        };
+        for i in 0..steps {
+            let anomaly = if round == 0 {
+                span * i as f64 / steps as f64
+            } else {
+                center_angle - span / 2.0 + span * i as f64 / (steps - 1) as f64
+            };
+            let (point_dir, tangent) = (
+                radial_unit * anomaly.cos() + tangent0 * anomaly.sin(),
+                tangent0 * anomaly.cos() - radial_unit * anomaly.sin(),
+            );
+            let point = depot.position_inertial + point_dir * park_radius;
+            let park_velocity = depot.velocity_inertial + tangent * v_circ;
+            let burn = tangent * burn_magnitude_mps;
+            stats.phase_screens += 1;
+            let Ok(flow) = propagate_adaptive_with_burns(
+                field,
+                TestParticleState {
+                    position: point,
+                    velocity: park_velocity + burn,
+                },
+                depot_epoch,
+                time_of_flight_s,
+                &[],
+                loose_config(),
+            ) else {
+                continue;
+            };
+            let miss = (flow.state.position - arrival.position_inertial).length();
+            if !miss.is_finite() {
+                continue;
+            }
+            if local_best.is_none_or(|(best_miss, _, _, _)| miss < best_miss) {
+                local_best = Some((miss, point, park_velocity, burn));
+            }
+        }
+        match local_best {
+            Some((_, point, _, _)) => {
+                center_angle = best_anomaly_of(point, depot, radial_unit, tangent0, park_radius);
+                best = local_best;
+            }
+            None => break,
+        }
+    }
+    best.map(|(_, point, park_velocity, burn)| (point, park_velocity, burn))
+}
+
+/// Recover the anomaly angle of a chosen departure point for refinement.
+fn best_anomaly_of(
+    point: DVec3,
+    depot: &BodyState,
+    radial_unit: DVec3,
+    tangent0: DVec3,
+    park_radius: f64,
+) -> f64 {
+    let offset = (point - depot.position_inertial) / park_radius;
+    offset.dot(tangent0).atan2(offset.dot(radial_unit))
+}
+#[allow(clippy::too_many_arguments)]
+/// Midcourse differential correction on the full N-body dynamics.
+///
+/// Architecture (measured, not assumed): correcting the DEPARTURE burn
+/// stalls — the escape turn off the parking orbit makes departure-burn
+/// targeting ill-conditioned (narrow valley, trust collapse, ~2%/iter
+/// crawl). Correcting a MIDCOURSE burn placed post-escape in clean cruise
+/// converges smoothly with plain damped Newton (~2x/iter): the departure
+/// burn stays at its phased patched-conic value, the midcourse burn
+/// absorbs everything downstream. The plan gains a TCM node, exactly like
+/// flown missions.
+///
+/// Varies the midcourse burn (3 DOF) to drive the arrival miss to ~km
+/// with a finite-difference STM. Each iteration is exact propagation, so
+/// the converged trajectory needs no separate revalidation pass. Returns
+/// departure burn (unchanged), midcourse burn, end state and miss; None
+/// only on total failure (no finite evaluation at all).
+#[allow(clippy::too_many_arguments)]
+fn correct_shooting(
+    field: &GravityField<'_>,
+    start_pos: DVec3,
+    park_velocity: DVec3,
+    departure_burn: DVec3,
+    departure_epoch: SimTime,
+    time_of_flight_s: f64,
+    mid_time_s: f64,
+    aim_point_m: DVec3,
+    stats: &mut SearchStats,
+) -> Option<(DVec3, DVec3, TestParticleState, f64)> {
+    const TARGET_MISS_M: f64 = 2_000.0;
+    const MAX_ITERS: usize = 30;
+    const DAMPING: f64 = 0.5;
+    let mut shoot = |mid_burn: DVec3| -> Option<TestParticleState> {
+        stats.newton_propagations += 1;
+        propagate_adaptive_with_burns(
+            field,
+            TestParticleState {
+                position: start_pos,
+                velocity: park_velocity + departure_burn,
+            },
+            departure_epoch,
+            time_of_flight_s,
+            &[ImpulsiveBurn {
+                time_s: mid_time_s,
+                delta_v_mps: mid_burn,
+            }],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .ok()
+        .map(|result| result.state)
+    };
+    let mut mid_burn = DVec3::ZERO;
+    let mut best: Option<(DVec3, TestParticleState, f64)> = None;
+    for _ in 0..MAX_ITERS {
+        let end = shoot(mid_burn)?;
+        let miss_vec = aim_point_m - end.position;
+        let miss = miss_vec.length();
+        if !miss.is_finite() {
+            break;
+        }
+        if best.is_none_or(|(_, _, best_miss)| miss < best_miss) {
+            best = Some((mid_burn, end, miss));
+        }
+        if miss <= TARGET_MISS_M {
+            break;
+        }
+        let h = 0.5_f64;
+        let mut columns = [DVec3::ZERO; 3];
+        let mut ok = true;
+        for (column, axis) in [DVec3::X, DVec3::Y, DVec3::Z].iter().enumerate() {
+            match shoot(mid_burn + *axis * h) {
+                Some(perturbed) => {
+                    columns[column] = (perturbed.position - end.position) / h;
+                }
+                None => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if !ok {
+            break;
+        }
+        let step = DMat3::from_cols(columns[0], columns[1], columns[2]).inverse() * miss_vec;
+        if !step.is_finite() {
+            break;
+        }
+        mid_burn += step * DAMPING;
+        if !mid_burn.is_finite() || mid_burn.length() > 50_000.0 {
+            break;
+        }
+    }
+    best.map(|(burn1, end, miss)| (departure_burn, burn1, end, miss))
+}
 fn revalidate(
     ephemeris: &BakedEphemeris,
     field: &GravityField<'_>,
@@ -345,63 +608,127 @@ fn revalidate(
     cell: &Cell,
     stats: &mut SearchStats,
 ) -> Result<Option<RankedPlan>, SearchError> {
-    let departure = ephemeris
-        .body_state(config.departure_body, cell.departure_epoch)
-        .map_err(SearchError::Ephemeris)?;
     let arrival_epoch = SimTime(cell.departure_epoch.0 + cell.time_of_flight_s);
     let arrival = ephemeris
         .body_state(config.arrival_body, arrival_epoch)
         .map_err(SearchError::Ephemeris)?;
-    let burns = [ImpulsiveBurn {
-        time_s: 0.0,
-        delta_v_mps: cell.departure_burn,
-    }];
-    let result = match propagate_adaptive_with_burns(
+    let target = ephemeris
+        .body(config.arrival_body)
+        .map_err(SearchError::Ephemeris)?;
+    let depot = ephemeris
+        .body_state(config.departure_body, cell.departure_epoch)
+        .map_err(SearchError::Ephemeris)?;
+    let central = ephemeris
+        .body_state(config.central_body, cell.departure_epoch)
+        .map_err(SearchError::Ephemeris)?;
+    let depot_mu = ephemeris
+        .body(config.departure_body)
+        .map_err(SearchError::Ephemeris)?
+        .mu;
+    let park_radius = ephemeris
+        .body(config.departure_body)
+        .map_err(SearchError::Ephemeris)?
+        .radius_m
+        + config.standoff_m;
+    // Phase 2.5: pick the parking-orbit anomaly whose loose-tolerance
+    // full N-body screen comes closest to the arrival body.
+    let (point, park_velocity, phased_burn) = match phase_departure(
         field,
-        TestParticleState {
-            position: departure.position_inertial,
-            velocity: departure.velocity_inertial,
-        },
+        cell.departure_epoch,
+        &depot,
+        &central,
+        &arrival,
+        depot_mu,
+        park_radius,
+        cell.departure_burn_mag_mps,
+        cell.time_of_flight_s,
+        stats,
+    ) {
+        Some(phased) => phased,
+        None => return Ok(None),
+    };
+    // Aim at the standoff point (target center plus radial offset): the
+    // correction converges there without ever integrating into the
+    // point-mass singularity, and the miss is measured against a physical
+    // rendezvous sphere rather than a mathematical point.
+    let central_arr = ephemeris
+        .body_state(config.central_body, arrival_epoch)
+        .map_err(SearchError::Ephemeris)?;
+    let aim_dir = (arrival.position_inertial - central_arr.position_inertial).normalize();
+    if !aim_dir.is_finite() {
+        stats.failed_revalidations += 1;
+        return Ok(None);
+    }
+    let aim = arrival.position_inertial + aim_dir * (target.radius_m + config.standoff_m);
+    // Phase 3: midcourse correction on full N-body dynamics (departure
+    // fixed at its phased value — correcting it stalls in the escape
+    // turn). The converged trajectory IS the revalidation.
+    // Midcourse epoch: past depot-escape, with margin on both sides.
+    let mid_time_s = (cell.time_of_flight_s / 4.0)
+        .max(3_600.0)
+        .min((cell.time_of_flight_s - 3_600.0).max(3_600.0));
+    let (dep_burn, tcm_burn, end, miss) = match correct_shooting(
+        field,
+        point,
+        park_velocity,
+        phased_burn,
         cell.departure_epoch,
         cell.time_of_flight_s,
-        &burns,
-        AdaptiveIntegratorConfig::default(),
+        mid_time_s,
+        aim,
+        stats,
     ) {
-        Ok(result) => result,
-        // A survivor that hits a singularity (or otherwise fails exact
-        // propagation) is a rejected candidate, not a search failure:
-        // other survivors may still validate.
-        Err(_) => {
+        Some(corrected) => corrected,
+        None => {
             stats.failed_revalidations += 1;
             return Ok(None);
         }
     };
     stats.exact_revalidations += 1;
-    let miss = (result.state.position - arrival.position_inertial).length();
-    if !miss.is_finite() || miss > config.max_miss_m {
+    // Lithobraking is not rendezvous: trajectories ending inside the target
+    // body are filtered, not ranked (and never integrated further). Note
+    // the impact guard compares distance-to-CENTER against the body radius;
+    // `miss` is measured against the standoff aim point, so comparing it
+    // against R would eat every converged trajectory.
+    let dist_center = (end.position - arrival.position_inertial).length();
+    if !miss.is_finite() || miss > config.max_miss_m || dist_center < target.radius_m {
         stats.filtered_by_miss += 1;
         return Ok(None);
     }
-    let arrival_burn = arrival.velocity_inertial - result.state.velocity;
+    let arrival_burn = arrival.velocity_inertial - end.velocity;
     if !arrival_burn.is_finite() {
         stats.filtered_by_miss += 1;
         return Ok(None);
     }
+    // Three-node plan (departure, TCM, arrival-match); a sub-1 m/s TCM is
+    // omitted for clean plans (the executor skips zero nodes anyway).
+    let tcm_epoch = SimTime(cell.departure_epoch.0 + mid_time_s);
+    let mut nodes = vec![
+        ManeuverNode::new(cell.departure_epoch, dep_burn)
+            .map_err(|_| SearchError::NoViableTransfer { stats: *stats })?,
+    ];
+    if tcm_burn.length() >= 1.0 {
+        nodes.push(
+            ManeuverNode::new(tcm_epoch, tcm_burn)
+                .map_err(|_| SearchError::NoViableTransfer { stats: *stats })?,
+        );
+    }
+    nodes.push(
+        ManeuverNode::new(arrival_epoch, arrival_burn)
+            .map_err(|_| SearchError::NoViableTransfer { stats: *stats })?,
+    );
     let mut plan = ManeuverPlan::new(
-        vec![
-            ManeuverNode::new(cell.departure_epoch, cell.departure_burn)
-                .map_err(|_| SearchError::NoViableTransfer { stats: *stats })?,
-            ManeuverNode::new(arrival_epoch, arrival_burn)
-                .map_err(|_| SearchError::NoViableTransfer { stats: *stats })?,
-        ],
-        departure.position_inertial,
-        departure.velocity_inertial,
+        nodes,
+        // The plan describes what actually flies: phased parking-orbit
+        // departure state with the escape burn applied.
+        point,
+        park_velocity + dep_burn,
         cell.departure_epoch,
     )
     .map_err(|_| SearchError::NoViableTransfer { stats: *stats })?;
     plan.predicted_miss_m = Some(miss);
     Ok(Some(RankedPlan {
-        exact_total_dv_mps: cell.departure_burn.length() + arrival_burn.length(),
+        exact_total_dv_mps: plan.total_dv_mps(),
         departure_epoch: cell.departure_epoch,
         time_of_flight_s: cell.time_of_flight_s,
         broad_total_dv_mps: cell.total_dv,
@@ -411,194 +738,85 @@ fn revalidate(
 }
 
 #[cfg(test)]
-mod probe_tests {
+mod tests {
     use super::*;
-    use thessa_sim_core::SystemConfig;
-#[test]
-fn probe_single_cell() {
-    use crate::lambert::{solve_lambert, solve_lambert_prograde};
-    let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml")).unwrap();
-    let ephemeris = config.bake().unwrap();
-    let t_dep = SimTime::EPOCH;
-    let tof = 72.0 * 3600.0;
-    for name in ["nereid", "pelagos", "thessa"] {
-        let id = ephemeris.body_id(name).unwrap();
-        let body = ephemeris.body(id).unwrap();
-        let state = ephemeris.body_state(id, t_dep).unwrap();
-        eprintln!("{name}: mu={:e} r={} pos={:?} vel={:?}", body.mu, body.radius_m, state.position_inertial, state.velocity_inertial);
-    }
-    let central = ephemeris.body_state(ephemeris.body_id("nereid").unwrap(), t_dep).unwrap();
-    let dep = ephemeris.body_state(ephemeris.body_id("pelagos").unwrap(), t_dep).unwrap();
-    let arr = ephemeris.body_state(ephemeris.body_id("thessa").unwrap(), SimTime(tof)).unwrap();
-    let r1 = dep.position_inertial - central.position_inertial;
-    let v1 = dep.velocity_inertial - central.velocity_inertial;
-    let r2 = arr.position_inertial - central.position_inertial;
-    let v2 = arr.velocity_inertial - central.velocity_inertial;
-    eprintln!("r1={r1:?} v1={v1:?}\nr2={r2:?} v2={v2:?}");
-    match solve_lambert(r1, r2, tof, ephemeris.body(ephemeris.body_id("nereid").unwrap()).unwrap().mu, true) {
-        Ok(arc) => eprintln!("arc dep={:?} arr={:?}", arc.departure_velocity_mps, arc.arrival_velocity_mps),
-        Err(e) => eprintln!("lambert err: {e:?}"),
-    }
-    // Mini grid diagnostic: distribution of broad totals.
-    let mu_c = ephemeris.body(ephemeris.body_id("nereid").unwrap()).unwrap().mu;
-    let mut totals: Vec<f64> = Vec::new();
-    for i in 0..10 {
-        for j in 0..10 {
-            let t = SimTime(i as f64 * 86_400.0);
-            let dt = 20.0 * 3_600.0 + j as f64 * 10.0 * 3_600.0;
-            let c = ephemeris.body_state(ephemeris.body_id("nereid").unwrap(), t).unwrap();
-            let d = ephemeris.body_state(ephemeris.body_id("pelagos").unwrap(), t).unwrap();
-            let a = ephemeris.body_state(ephemeris.body_id("thessa").unwrap(), SimTime(t.0 + dt)).unwrap();
-            let q1 = d.position_inertial - c.position_inertial;
-            let w1 = d.velocity_inertial - c.velocity_inertial;
-            let q2 = a.position_inertial - c.position_inertial;
-            let w2 = a.velocity_inertial - c.velocity_inertial;
-            if let Ok(arc) = solve_lambert(q1, q2, dt, mu_c, true) {
-                totals.push((arc.departure_velocity_mps - w1).length() + (w2 - arc.arrival_velocity_mps).length());
-            }
-        }
-    }
-    totals.sort_by(f64::total_cmp);
-    eprintln!("grid totals: n={} best5={:?}", totals.len(), &totals[..totals.len().min(5)]);
-    // Same grid, prograde branch selection.
-    let mut pro: Vec<f64> = Vec::new();
-    for i in 0..10 {
-        for j in 0..10 {
-            let t = SimTime(i as f64 * 86_400.0);
-            let dt = 20.0 * 3_600.0 + j as f64 * 10.0 * 3_600.0;
-            let c = ephemeris.body_state(ephemeris.body_id("nereid").unwrap(), t).unwrap();
-            let d = ephemeris.body_state(ephemeris.body_id("pelagos").unwrap(), t).unwrap();
-            let a = ephemeris.body_state(ephemeris.body_id("thessa").unwrap(), SimTime(t.0 + dt)).unwrap();
-            let q1 = d.position_inertial - c.position_inertial;
-            let w1 = d.velocity_inertial - c.velocity_inertial;
-            let q2 = a.position_inertial - c.position_inertial;
-            let w2 = a.velocity_inertial - c.velocity_inertial;
-            if let Ok(arc) = solve_lambert_prograde(q1, w1, q2, dt, mu_c) {
-                pro.push((arc.departure_velocity_mps - w1).length() + (w2 - arc.arrival_velocity_mps).length());
-            }
-        }
-    }
-    pro.sort_by(f64::total_cmp);
-    eprintln!("pro grid: n={} best5={:?}", pro.len(), &pro[..pro.len().min(5)]);
-    // Thessa orbit audit: parent, elements, Nereid-relative distance over time.
-    {
-        let th = ephemeris.body_id("thessa").unwrap();
-        let body = ephemeris.body(th).unwrap();
-        eprintln!("thessa parent={:?} mu={:e} orbit={:?}", body.parent, body.mu, body.orbit.map(|o| (o.semi_major_axis_m, o.eccentricity)));
-        let ne = ephemeris.body_id("nereid").unwrap();
-        for h in [0.0, 20.0, 40.0, 60.0, 80.0] {
-            let t = SimTime(h * 3_600.0);
-            let a = ephemeris.body_state(th, t).unwrap();
-            let c = ephemeris.body_state(ne, t).unwrap();
-            eprintln!(
-                "t={h}h thessa-nereid dist={:.3e} relvel={:.0}",
-                (a.position_inertial - c.position_inertial).length(),
-                (a.velocity_inertial - c.velocity_inertial).length(),
-            );
-        }
-    }
-    // Best-cell anatomy: full geometry dump.
-    {
-        let mut cells: Vec<(f64, f64, f64)> = Vec::new();
-        for i in 0..25 {
-            for j in 0..25 {
-                let t = SimTime(i as f64 * 10.0 * 3_600.0);
-                let dt = 20.0 * 3_600.0 + j as f64 * (100.0 * 3_600.0 / 24.0);
-                let c = ephemeris.body_state(ephemeris.body_id("nereid").unwrap(), t).unwrap();
-                let d = ephemeris.body_state(ephemeris.body_id("pelagos").unwrap(), t).unwrap();
-                let a = ephemeris.body_state(ephemeris.body_id("thessa").unwrap(), SimTime(t.0 + dt)).unwrap();
-                let q1 = d.position_inertial - c.position_inertial;
-                let w1 = d.velocity_inertial - c.velocity_inertial;
-                let q2 = a.position_inertial - c.position_inertial;
-                let w2 = a.velocity_inertial - c.velocity_inertial;
-                if let Ok(arc) = solve_lambert_prograde(q1, w1, q2, dt, mu_c) {
-                    let total = (arc.departure_velocity_mps - w1).length() + (w2 - arc.arrival_velocity_mps).length();
-                    cells.push((total, t.0, dt));
-                }
-            }
-        }
-        cells.sort_by(|a, b| a.0.total_cmp(&b.0));
-        for (total, t, dt) in cells.iter().take(3) {
-            let tt = SimTime(*t);
-            let c = ephemeris.body_state(ephemeris.body_id("nereid").unwrap(), tt).unwrap();
-            let d = ephemeris.body_state(ephemeris.body_id("pelagos").unwrap(), tt).unwrap();
-            let a = ephemeris.body_state(ephemeris.body_id("thessa").unwrap(), SimTime(t + dt)).unwrap();
-            let q1 = d.position_inertial - c.position_inertial;
-            let q2 = a.position_inertial - c.position_inertial;
-            let cosang = (q1.dot(q2) / (q1.length() * q2.length())).clamp(-1.0, 1.0);
-            eprintln!("cell t={:.1}h tof={:.1}h total={:.0} angle={:.1}deg r1={:.3e} r2={:.3e}",
-                t / 3600.0, dt / 3600.0, total, cosang.acos().to_degrees(), q1.length(), q2.length());
-        }
-    }
-    // Shoot-the-arc audit: propagate the solved departure velocity under
-    // pure two-body gravity and measure the actual arrival miss. If the
-    // solver is right, the miss is ~integrator tolerance; if the geometry
-    // is just expensive, the miss is small AND the dv huge.
-    {
-        use thessa_sim_core::{
-            AdaptiveIntegratorConfig, BakedBody, BakedEphemeris, BodyId, GravityField,
-            TestParticleState, propagate_adaptive,
-        };
-        let t = SimTime(60.0 * 3_600.0);
-        let dt = 58.0 * 3_600.0;
-        let c = ephemeris.body_state(ephemeris.body_id("nereid").unwrap(), t).unwrap();
-        let d = ephemeris.body_state(ephemeris.body_id("pelagos").unwrap(), t).unwrap();
-        let a = ephemeris.body_state(ephemeris.body_id("thessa").unwrap(), SimTime(t.0 + dt)).unwrap();
-        let q1 = d.position_inertial - c.position_inertial;
-        let w1 = d.velocity_inertial - c.velocity_inertial;
-        let q2 = a.position_inertial - c.position_inertial;
-        let solo = BakedEphemeris::new(
-            "PROBE",
-            vec![BakedBody::fixed(BodyId(0), "center", mu_c, 0.0)],
-        )
-        .unwrap();
-        let field = GravityField::from_ephemeris(&solo);
-        // NOTE: fixed center at origin, but q1 is Nereid-centered while
-        // Nereid itself sits at ~4.8e12 m: shift r1/r2/q-frame consistently
-        // by solving in Nereid-centered coords (origin = Nereid center).
-        match solve_lambert_prograde(q1, w1, q2, dt, mu_c) {
-            Ok(arc) => {
-                let flown = propagate_adaptive(
-                    &field,
-                    TestParticleState {
-                        position: q1,
-                        velocity: arc.departure_velocity_mps,
-                    },
-                    SimTime(0.0),
-                    dt,
-                    AdaptiveIntegratorConfig::default(),
-                )
-                .unwrap();
-                eprintln!(
-                    "shoot: miss={:.1} km depdv={:.0}",
-                    (flown.state.position - q2).length() / 1000.0,
-                    (arc.departure_velocity_mps - w1).length(),
-                );
-            }
-            Err(e) => eprintln!("shoot: {e:?}"),
-        }
-    }
-    for (t_dep_h, tof_h) in [(60.0, 58.0), (140.0, 58.0), (60.0, 40.0)] {
-        let t = SimTime(t_dep_h * 3_600.0);
-        let dt = tof_h * 3_600.0;
-        let c = ephemeris.body_state(ephemeris.body_id("nereid").unwrap(), t).unwrap();
-        let d = ephemeris.body_state(ephemeris.body_id("pelagos").unwrap(), t).unwrap();
-        let a = ephemeris.body_state(ephemeris.body_id("thessa").unwrap(), SimTime(t.0 + dt)).unwrap();
-        let q1 = d.position_inertial - c.position_inertial;
-        let w1 = d.velocity_inertial - c.velocity_inertial;
-        let q2 = a.position_inertial - c.position_inertial;
-        let w2 = a.velocity_inertial - c.velocity_inertial;
-        match solve_lambert_prograde(q1, w1, q2, dt, mu_c) {
-            Ok(arc) => eprintln!(
-                "hand t={t_dep_h}h tof={tof_h}h: depdv={:.0} arrdv={:.0} total={:.0}",
-                (arc.departure_velocity_mps - w1).length(),
-                (w2 - arc.arrival_velocity_mps).length(),
-                (arc.departure_velocity_mps - w1).length()
-                    + (w2 - arc.arrival_velocity_mps).length(),
-            ),
-            Err(e) => eprintln!("hand t={t_dep_h}h tof={tof_h}h: {e:?}"),
-        }
-    }
-}
+    use thessa_sim_core::{BakedBody, BodyId, KeplerOrbit};
 
+    fn mini_system() -> BakedEphemeris {
+        let orbit = |a: f64, m0: f64| {
+            KeplerOrbit::new(1.0e14, a, 0.0, 0.0, 0.0, 0.0, m0).expect("valid test orbit")
+        };
+        BakedEphemeris::new(
+            "TEST_MINI",
+            vec![
+                BakedBody::fixed(BodyId(0), "center", 1.0e14, 0.0),
+                BakedBody::orbital(
+                    BodyId(1),
+                    "depot",
+                    1.0e12,
+                    0.0,
+                    BodyId(0),
+                    orbit(1.0e7, 0.0),
+                ),
+                BakedBody::orbital(
+                    BodyId(2),
+                    "target",
+                    1.0e12,
+                    0.0,
+                    BodyId(0),
+                    orbit(1.5e7, 2.0),
+                ),
+            ],
+        )
+        .expect("valid test system")
+    }
+
+    fn mini_config() -> SearchConfig {
+        SearchConfig {
+            central_body: BodyId(0),
+            departure_body: BodyId(1),
+            arrival_body: BodyId(2),
+            window_start: SimTime(0.0),
+            departure_span_s: 40_000.0,
+            departure_steps: 6,
+            tof_min_s: 8_000.0,
+            tof_max_s: 20_000.0,
+            tof_steps: 6,
+            keep_candidates: 1,
+            standoff_m: 100_000.0,
+            max_broad_dv_mps: 20_000.0,
+            max_miss_m: 1.0e6,
+        }
+    }
+
+    #[test]
+    fn porkchop_finds_validated_plan() {
+        let ephemeris = mini_system();
+        let field = GravityField::from_ephemeris(&ephemeris);
+        let (ranked, stats) =
+            porkchop_search(&ephemeris, &field, mini_config()).expect("search finds");
+        assert_eq!(ranked.len(), 1);
+        let winner = &ranked[0];
+        assert!(winner.plan.nodes.len() >= 2);
+        assert!(winner.exact_miss_m <= 1.0e6);
+        assert!(winner.exact_total_dv_mps.is_finite() && winner.exact_total_dv_mps > 0.0);
+        assert!(winner.plan.predicted_miss_m.is_some());
+        assert!(stats.exact_revalidations >= 1);
+        // Deterministic: same inputs, same winner.
+        let (ranked2, _) =
+            porkchop_search(&ephemeris, &field, mini_config()).expect("search finds");
+        assert_eq!(ranked, ranked2);
+    }
+
+    #[test]
+    fn invalid_config_rejected() {
+        let ephemeris = mini_system();
+        let field = GravityField::from_ephemeris(&ephemeris);
+        let mut bad = mini_config();
+        bad.departure_steps = 0;
+        assert_eq!(
+            porkchop_search(&ephemeris, &field, bad),
+            Err(SearchError::InvalidConfig)
+        );
+    }
 }

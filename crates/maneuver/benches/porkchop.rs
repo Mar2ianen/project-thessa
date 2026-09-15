@@ -26,6 +26,7 @@ fn main() {
         tof_max_s: 120.0 * 3_600.0,
         tof_steps: 25,
         keep_candidates: 3,
+        standoff_m: 100_000.0,
         max_broad_dv_mps: 5_000.0,
         max_miss_m: 1.0e6,
     };

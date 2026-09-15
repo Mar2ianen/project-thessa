@@ -31,7 +31,10 @@ impl std::fmt::Display for OpsError {
             Self::Lambert(error) => write!(formatter, "lambert error: {error}"),
             Self::NonFiniteInput => write!(formatter, "non-finite op input"),
             Self::NotCircular { eccentricity } => {
-                write!(formatter, "hohmann needs a near-circular orbit, e={eccentricity}")
+                write!(
+                    formatter,
+                    "hohmann needs a near-circular orbit, e={eccentricity}"
+                )
             }
         }
     }
@@ -131,8 +134,7 @@ pub fn hohmann_transfer(
     let arrival_tangent = (momentum.cross(arrival_position)).normalize();
     let node2 = ManeuverNode::new(
         SimTime(departure_epoch.0 + dt),
-        arrival_tangent * (mu_m3_s2 / target_radius_m).sqrt()
-            - arrival_tangent * arr_speed,
+        arrival_tangent * (mu_m3_s2 / target_radius_m).sqrt() - arrival_tangent * arr_speed,
     )?;
     ManeuverPlan::new(
         vec![node1, node2],
@@ -159,8 +161,7 @@ pub fn match_velocity(
     epoch: SimTime,
 ) -> Result<ManeuverNode, OpsError> {
     check_finite_vectors(&[current_velocity_mps, target_velocity_mps], epoch.0, 1.0)?;
-    ManeuverNode::new(epoch, target_velocity_mps - current_velocity_mps)
-        .map_err(OpsError::from)
+    ManeuverNode::new(epoch, target_velocity_mps - current_velocity_mps).map_err(OpsError::from)
 }
 
 /// Lambert rendezvous: departure burn from the current state plus arrival

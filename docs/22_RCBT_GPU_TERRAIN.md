@@ -1,9 +1,10 @@
 # 22 — RCBT GPU terrain
 
 Status: logical core, game scheduling, exact render-world leaf transport,
-generation-gated GPU page-to-geometry expansion, and an opt-in Bevy `Core3d`
-raster consumer are integrated, 2026-09-15. The legacy CPU mesh remains the
-default until visible-cover draw selection and material parity are validated.
+generation-gated GPU page transport, and opt-in Bevy `Core3d` indexed and
+hardware mesh-shader consumers are integrated, 2026-09-15. The legacy CPU
+mesh remains the default until visible-cover draw selection and material parity
+are validated.
 
 ## Boundary
 
@@ -16,8 +17,8 @@ thessa-rcbt-core
 
 thessa-bevy-rcbt
     = Bevy frame input/output, bounded topology commit, render-world leaf/page
-      storage, GPU vertex expansion, indexed indirect draw-list generation, and
-      an opt-in `Core3d` raster pass
+      storage, GPU page expansion, indexed indirect draw-list generation, and
+      opt-in `Core3d` indexed or hardware mesh-shader passes
 
 thessa-rcbt-wgpu
     = optional portable wgpu adapter
@@ -57,25 +58,36 @@ The workspace contains:
 - a generation-gated WGSL geometry pass that samples the packed signed-16
   residual pages, expands each available leaf to a 33x33 cube-sphere vertex
   grid with normals, and writes one indexed indirect command per leaf;
+- an opt-in native wgpu mesh-shader pass that emits the same 33x33 patch as
+  sixteen 8x8 meshlets directly from the quantized pages, without allocating
+  the intermediate vertex/index buffers; the pass is capability- and limit-
+  gated and keeps the indexed path as fallback;
 - a portable `wgpu` adapter with WGSL validation and capability reporting;
 - client terrain integration that submits the live body-frame view and
   cube-sphere split/merge candidates.
 
-The current visible mesh remains the CPU tile path by default. The GPU bridge
-does height-page sampling, produces position/normal vertices plus a standard
-`DrawIndexedIndirect` list, and can consume those buffers in a reverse-Z Bevy
-`Core3d` pass. `CbtRenderSurface::set_gpu_raster_enabled(true)` is an explicit
-experimental switch; it is intentionally not enabled by the client yet because
-the pass still needs visible-cover draw selection and material parity. Missing
-pages become zero-count commands, so streaming can overlap the fallback
-without holes. The compute pass runs only when topology, page payloads, or
-surface radius changes; camera-origin changes upload only the affine
+The current visible mesh remains the CPU tile path by default. The indexed GPU
+bridge does height-page sampling, produces position/normal vertices plus a
+standard `DrawIndexedIndirect` list, and can consume those buffers in a
+reverse-Z Bevy `Core3d` pass. The hardware mesh path samples the same page
+representation directly and emits sixteen meshlets per leaf; missing pages
+become zero-output mesh workgroups. Both paths are explicit experimental
+switches because visible-cover draw selection and material parity still need
+validation. The indexed compute pass runs only when topology, page payloads,
+or surface radius changes; camera-origin changes upload only the affine
 body-to-render-local matrix.
 
-For a launch-time visual smoke test, set `THESSA_CBT_GPU_RASTER=1` before
-starting `thessa-client`. That mode hides the CPU tile entities, keeps the
-closed backdrop as a low-resolution fallback, and is intentionally marked
-experimental; it is not yet the default performance claim.
+For launch-time visual smoke tests:
+
+- `THESSA_CBT_GPU_RASTER=1` enables the indexed indirect path;
+- `THESSA_CBT_GPU_MESH=1` requests wgpu's experimental native mesh-shader
+  feature and enables the direct mesh path.
+
+Both modes hide CPU tile entities and keep the closed backdrop as a
+low-resolution fallback. The mesh mode must be used only on an adapter that
+exposes the requested wgpu feature; wgpu feature requests happen before device
+creation, so an unsupported explicit request may fail startup. Without either
+variable the normal cross-platform CPU path is unchanged.
 
 The client reaches binary CBT depth 37 (`3 + 2 * tile_level`). A dense
 `CompactTree` is capped at depth 20, so the client transport intentionally

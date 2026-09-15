@@ -43,6 +43,16 @@ use super::{CbtLeafRecord, CbtRenderPages, CbtRenderSurface, CbtRenderTopology};
 const GPU_GRID_SIZE: usize = 33;
 const GPU_VERTEX_COUNT_PER_PATCH: usize = GPU_GRID_SIZE * GPU_GRID_SIZE;
 const DRAW_INDEXED_INDIRECT_STRIDE_BYTES: u64 = 5 * std::mem::size_of::<u32>() as u64;
+#[cfg(feature = "mesh-shaders")]
+const MESHLET_CELLS: u32 = 8;
+#[cfg(feature = "mesh-shaders")]
+const MESHLET_GRID_SIZE: u32 = MESHLET_CELLS + 1;
+#[cfg(feature = "mesh-shaders")]
+const MESHLET_VERTEX_COUNT: u32 = MESHLET_GRID_SIZE * MESHLET_GRID_SIZE;
+#[cfg(feature = "mesh-shaders")]
+const MESHLET_PRIMITIVE_COUNT: u32 = MESHLET_CELLS * MESHLET_CELLS * 2;
+#[cfg(feature = "mesh-shaders")]
+const MESHLETS_PER_PATCH: u32 = 4 * 4;
 
 impl ExtractResource for CbtRenderTopology {
     type Source = Self;
@@ -216,6 +226,16 @@ struct CbtGpuPipeline {
 #[derive(Resource)]
 struct CbtGpuRasterPipeline {
     bind_group_layout: BindGroupLayout,
+    pipeline_layout: PipelineLayout,
+    shader: ShaderModule,
+    pipelines: HashMap<TextureFormat, RenderPipeline>,
+}
+
+#[cfg(feature = "mesh-shaders")]
+#[derive(Resource)]
+struct CbtGpuMeshPipeline {
+    bind_group_layout: BindGroupLayout,
+    view_bind_group_layout: BindGroupLayout,
     pipeline_layout: PipelineLayout,
     shader: ShaderModule,
     pipelines: HashMap<TextureFormat, RenderPipeline>,
@@ -419,6 +439,198 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Hardware mesh-shader consumer for the same quantized CBT pages. A 33x33
+/// patch is emitted as sixteen 8x8 meshlets, so the shader stays within the
+/// recommended 256-vertex / 256-primitive minimum while preserving exact page
+/// sampling. There is deliberately no task shader yet: a single direct mesh
+/// dispatch covers all leaves and the page metadata turns missing pages into
+/// zero-output workgroups.
+#[cfg(feature = "mesh-shaders")]
+const CBT_MESH_WGSL: &str = r#"
+enable wgpu_mesh_shader;
+
+struct Params {
+    leaf_count: u32,
+    vertices_per_patch: u32,
+    radius_bits: u32,
+    _padding: u32,
+};
+
+struct ViewUniforms {
+    clip_from_world: mat4x4<f32>,
+};
+
+struct MeshVertex {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) normal: vec3<f32>,
+};
+
+struct MeshPrimitive {
+    @builtin(triangle_indices) indices: vec3<u32>,
+};
+
+struct MeshOutput {
+    @builtin(vertex_count) vertex_count: u32,
+    @builtin(primitive_count) primitive_count: u32,
+    @builtin(vertices) vertices: array<MeshVertex, 81>,
+    @builtin(primitives) primitives: array<MeshPrimitive, 128>,
+};
+
+@group(0) @binding(0) var<storage, read> leaves: array<vec4<u32>>;
+@group(0) @binding(2) var<storage, read> page_metadata: array<vec4<u32>>;
+@group(0) @binding(3) var<storage, read> page_residuals: array<u32>;
+@group(0) @binding(6) var<uniform> params: Params;
+@group(1) @binding(0) var<uniform> view: ViewUniforms;
+@group(1) @binding(1) var<uniform> render_from_body: mat4x4<f32>;
+
+var<workgroup> mesh_output: MeshOutput;
+
+fn residual(page: vec4<u32>, sample_index: u32) -> i32 {
+    let word = page_residuals[page.w + sample_index / 2u];
+    let raw = (word >> ((sample_index & 1u) * 16u)) & 0xffffu;
+    return select(i32(raw), i32(raw) - 65536, raw >= 32768u);
+}
+
+fn page_sample(page: vec4<u32>, u: f32, v: f32) -> f32 {
+    if (page.z == 0u) {
+        return 0.0;
+    }
+    let max_coord = f32(page.z - 1u);
+    let px = clamp(u, 0.0, 1.0) * max_coord;
+    let py = clamp(v, 0.0, 1.0) * max_coord;
+    let x = u32(floor(px));
+    let y = u32(floor(py));
+    let x1 = min(x + 1u, page.z - 1u);
+    let y1 = min(y + 1u, page.z - 1u);
+    let grid = page.z;
+    let h00 = bitcast<f32>(page.x) + f32(residual(page, y * grid + x)) * bitcast<f32>(page.y);
+    let h10 = bitcast<f32>(page.x) + f32(residual(page, y * grid + x1)) * bitcast<f32>(page.y);
+    let h01 = bitcast<f32>(page.x) + f32(residual(page, y1 * grid + x)) * bitcast<f32>(page.y);
+    let h11 = bitcast<f32>(page.x) + f32(residual(page, y1 * grid + x1)) * bitcast<f32>(page.y);
+    let top = h00 + (h10 - h00) * (px - f32(x));
+    let bottom = h01 + (h11 - h01) * (px - f32(x));
+    return top + (bottom - top) * (py - f32(y));
+}
+
+fn payload_bit(low: u32, high: u32, bit: u32) -> u32 {
+    if (bit < 32u) {
+        return (low >> bit) & 1u;
+    }
+    return (high >> (bit - 32u)) & 1u;
+}
+
+fn tile_coordinates(record: vec4<u32>) -> vec4<u32> {
+    let depth = record.z;
+    if (depth < 3u || ((depth - 3u) & 1u) != 0u) {
+        return vec4(0u);
+    }
+    var low = record.x;
+    var high = record.y;
+    if (depth < 32u) {
+        low = low - (1u << depth);
+    } else {
+        high = high - (1u << (depth - 32u));
+    }
+    let path_bits = depth - 3u;
+    var face = 0u;
+    if (path_bits < 32u) {
+        face = (low >> path_bits) | (high << (32u - path_bits));
+    } else if (path_bits == 32u) {
+        face = high;
+    } else {
+        face = high >> (path_bits - 32u);
+    }
+    let level = path_bits / 2u;
+    var tile_x = 0u;
+    var tile_y = 0u;
+    for (var i = 0u; i < 17u; i = i + 1u) {
+        if (i < level) {
+            let shift = (level - i - 1u) * 2u;
+            tile_x = tile_x * 2u + payload_bit(low, high, shift + 1u);
+            tile_y = tile_y * 2u + payload_bit(low, high, shift);
+        }
+    }
+    return vec4(tile_x, tile_y, level, face & 7u);
+}
+
+fn face_direction(face: u32, a: f32, b: f32) -> vec3<f32> {
+    var raw = vec3(a, b, 1.0);
+    if (face == 0u) { raw = vec3(1.0, b, -a); }
+    if (face == 1u) { raw = vec3(-1.0, b, a); }
+    if (face == 2u) { raw = vec3(a, 1.0, -b); }
+    if (face == 3u) { raw = vec3(a, -1.0, b); }
+    if (face == 4u) { raw = vec3(a, b, 1.0); }
+    if (face == 5u) { raw = vec3(-a, b, -1.0); }
+    return normalize(raw);
+}
+
+fn surface_position(tile: vec4<u32>, u: f32, v: f32, height: f32, radius: f32) -> vec3<f32> {
+    let scale = exp2(f32(tile.z));
+    let a = 2.0 * (f32(tile.x) + u) / scale - 1.0;
+    let b = 2.0 * (f32(tile.y) + v) / scale - 1.0;
+    return face_direction(tile.w, a, b) * (radius + height);
+}
+
+@mesh(mesh_output) @workgroup_size(64)
+fn build_mesh(
+    @builtin(local_invocation_index) invocation: u32,
+    @builtin(workgroup_id) workgroup: vec3<u32>,
+) {
+    let leaf = workgroup.y;
+    let meshlet = workgroup.x;
+    let page = page_metadata[leaf];
+    let valid = page.z != 0u;
+    mesh_output.vertex_count = select(0u, 81u, valid);
+    mesh_output.primitive_count = select(0u, 128u, valid);
+    if (!valid) {
+        return;
+    }
+
+    let tile = tile_coordinates(leaves[leaf]);
+    let radius = bitcast<f32>(params.radius_bits);
+    if (invocation < 81u) {
+        let local_x = invocation % 9u;
+        let local_y = invocation / 9u;
+        let patch_x = (meshlet % 4u) * 8u + local_x;
+        let patch_y = (meshlet / 4u) * 8u + local_y;
+        let uv = vec2(f32(patch_x) / 32.0, f32(patch_y) / 32.0);
+        let p = surface_position(tile, uv.x, uv.y, page_sample(page, uv.x, uv.y), radius);
+        let du = 1.0 / 32.0;
+        let puv = vec2(min(uv.x + du, 1.0), uv.y);
+        let pvv = vec2(uv.x, min(uv.y + du, 1.0));
+        let pu = surface_position(tile, puv.x, puv.y, page_sample(page, puv.x, puv.y), radius);
+        let pv = surface_position(tile, pvv.x, pvv.y, page_sample(page, pvv.x, pvv.y), radius);
+        let normal = normalize(cross(pu - p, pv - p));
+        mesh_output.vertices[invocation].clip_position =
+            view.clip_from_world * render_from_body * vec4(p, 1.0);
+        mesh_output.vertices[invocation].normal =
+            normalize((render_from_body * vec4(normal, 0.0)).xyz);
+    }
+    if (invocation < 128u) {
+        let cell = invocation / 2u;
+        let triangle = invocation & 1u;
+        let cell_x = cell % 8u;
+        let cell_y = cell / 8u;
+        let base = cell_y * 9u + cell_x;
+        let right = base + 1u;
+        let down = base + 9u;
+        let diagonal = down + 1u;
+        mesh_output.primitives[invocation].indices = select(
+            vec3(base, right, down),
+            vec3(right, diagonal, down),
+            triangle == 1u,
+        );
+    }
+}
+
+@fragment
+fn fragment(input: MeshVertex) -> @location(0) vec4<f32> {
+    let light = normalize(vec3(0.35, 0.8, 0.45));
+    let diffuse = 0.24 + 0.76 * max(dot(normalize(input.normal), light), 0.0);
+    return vec4(vec3(0.20, 0.34, 0.17) * diffuse, 1.0);
+}
+"#;
+
 /// Installs extraction and GPU preparation for the universal CBT plugin.
 pub(super) struct CbtRenderPlugin;
 
@@ -450,6 +662,13 @@ impl Plugin for CbtRenderPlugin {
                 render_app.add_systems(
                     bevy_core_pipeline::Core3d,
                     draw_cbt_geometry
+                        .after(bevy_core_pipeline::core_3d::main_opaque_pass_3d)
+                        .before(bevy_core_pipeline::core_3d::main_transparent_pass_3d),
+                );
+                #[cfg(feature = "mesh-shaders")]
+                render_app.add_systems(
+                    bevy_core_pipeline::Core3d,
+                    draw_cbt_mesh_geometry
                         .after(bevy_core_pipeline::core_3d::main_opaque_pass_3d)
                         .before(bevy_core_pipeline::core_3d::main_transparent_pass_3d),
                 );
@@ -531,6 +750,103 @@ fn init_cbt_gpu_pipeline(mut commands: bevy::prelude::Commands, device: Res<Rend
         label: Some("thessa-cbt-raster-shader"),
         source: ShaderSource::Wgsl(Cow::Borrowed(CBT_RASTER_WGSL)),
     });
+
+    #[cfg(feature = "mesh-shaders")]
+    if device
+        .features()
+        .contains(WgpuFeatures::EXPERIMENTAL_MESH_SHADER)
+    {
+        let mesh_bind_group_layout = device.create_bind_group_layout(
+            "thessa-cbt-mesh-layout",
+            &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::MESH,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::MESH,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::MESH,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: ShaderStages::MESH,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        );
+        let mesh_view_bind_group_layout = device.create_bind_group_layout(
+            "thessa-cbt-mesh-view-layout",
+            &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::MESH,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::MESH,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        );
+        let mesh_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("thessa-cbt-mesh-pipeline-layout"),
+            bind_group_layouts: &[
+                Some(&mesh_bind_group_layout),
+                Some(&mesh_view_bind_group_layout),
+            ],
+            immediate_size: 0,
+        });
+        let mesh_shader = device.create_and_validate_shader_module(ShaderModuleDescriptor {
+            label: Some("thessa-cbt-mesh-shader"),
+            source: ShaderSource::Wgsl(Cow::Borrowed(CBT_MESH_WGSL)),
+        });
+        commands.insert_resource(CbtGpuMeshPipeline {
+            bind_group_layout: mesh_bind_group_layout,
+            view_bind_group_layout: mesh_view_bind_group_layout,
+            pipeline_layout: mesh_pipeline_layout,
+            shader: mesh_shader,
+            pipelines: HashMap::default(),
+        });
+    }
+
     commands.insert_resource(CbtGpuPipeline {
         bind_group_layout,
         pipeline,
@@ -649,30 +965,32 @@ fn prepare_cbt_gpu_buffers(
     gpu.page_residuals.extend(residuals);
     gpu.page_residuals.write_buffer(&device, &queue);
 
-    if gpu.indices.is_empty() {
-        for y in 0..GPU_GRID_SIZE - 1 {
-            for x in 0..GPU_GRID_SIZE - 1 {
-                let a = (y * GPU_GRID_SIZE + x) as u32;
-                let b = a + 1;
-                let c = a + GPU_GRID_SIZE as u32;
-                let d = c + 1;
-                gpu.indices.extend([a, b, c, b, d, c]);
+    if !surface.gpu_mesh_enabled() {
+        if gpu.indices.is_empty() {
+            for y in 0..GPU_GRID_SIZE - 1 {
+                for x in 0..GPU_GRID_SIZE - 1 {
+                    let a = (y * GPU_GRID_SIZE + x) as u32;
+                    let b = a + 1;
+                    let c = a + GPU_GRID_SIZE as u32;
+                    let d = c + 1;
+                    gpu.indices.extend([a, b, c, b, d, c]);
+                }
             }
+            gpu.indices.write_buffer(&device, &queue);
         }
-        gpu.indices.write_buffer(&device, &queue);
+
+        gpu.vertices.clear();
+        gpu.vertices.extend(std::iter::repeat_n(
+            [0.0; 8],
+            records.len() * GPU_VERTEX_COUNT_PER_PATCH,
+        ));
+        gpu.vertices.write_buffer(&device, &queue);
+
+        gpu.draw_list.clear();
+        gpu.draw_list
+            .extend(std::iter::repeat_n([0; 5], records.len()));
+        gpu.draw_list.write_buffer(&device, &queue);
     }
-
-    gpu.vertices.clear();
-    gpu.vertices.extend(std::iter::repeat_n(
-        [0.0; 8],
-        records.len() * GPU_VERTEX_COUNT_PER_PATCH,
-    ));
-    gpu.vertices.write_buffer(&device, &queue);
-
-    gpu.draw_list.clear();
-    gpu.draw_list
-        .extend(std::iter::repeat_n([0; 5], records.len()));
-    gpu.draw_list.write_buffer(&device, &queue);
 
     gpu.params.clear();
     gpu.params.push([
@@ -693,13 +1011,17 @@ fn prepare_cbt_gpu_buffers(
 }
 
 fn dispatch_cbt_geometry(
+    surface: Option<Res<CbtRenderSurface>>,
     pipeline: Option<Res<CbtGpuPipeline>>,
     mut gpu: ResMut<CbtGpuBuffers>,
     mut context: RenderContext,
 ) {
-    let Some(pipeline) = pipeline else {
+    let (Some(surface), Some(pipeline)) = (surface, pipeline) else {
         return;
     };
+    if surface.gpu_mesh_enabled() {
+        return;
+    }
     if gpu.leaf_count == 0
         || (gpu.generated_topology_generation == gpu.topology_generation
             && gpu.generated_pages_generation == gpu.pages_generation
@@ -798,7 +1120,7 @@ fn draw_cbt_geometry(
     let (Some(surface), Some(gpu), Some(mut raster)) = (surface, gpu, raster) else {
         return;
     };
-    if !surface.gpu_raster_enabled() || gpu.leaf_count() == 0 {
+    if !surface.gpu_raster_enabled() || surface.gpu_mesh_enabled() || gpu.leaf_count() == 0 {
         return;
     }
     let (camera, extracted_view, target, depth, view_uniform_offset) = view.into_inner();
@@ -939,6 +1261,184 @@ fn draw_cbt_geometry(
     }
 }
 
+#[cfg(feature = "mesh-shaders")]
+fn draw_cbt_mesh_geometry(
+    surface: Option<Res<CbtRenderSurface>>,
+    gpu: Option<Res<CbtGpuBuffers>>,
+    mesh: Option<ResMut<CbtGpuMeshPipeline>>,
+    view: ViewQuery<(
+        &ExtractedCamera,
+        &ExtractedView,
+        &ViewTarget,
+        &ViewDepthTexture,
+        &ViewUniformOffset,
+    )>,
+    view_uniforms: Res<ViewUniforms>,
+    mut context: RenderContext,
+) {
+    let (Some(surface), Some(gpu), Some(mut mesh)) = (surface, gpu, mesh) else {
+        return;
+    };
+    if !surface.gpu_mesh_enabled() || gpu.leaf_count() == 0 {
+        return;
+    }
+
+    let device = context.render_device();
+    if !device
+        .features()
+        .contains(WgpuFeatures::EXPERIMENTAL_MESH_SHADER)
+    {
+        return;
+    }
+    let limits = device.limits();
+    if MESHLET_VERTEX_COUNT > limits.max_mesh_output_vertices
+        || MESHLET_PRIMITIVE_COUNT > limits.max_mesh_output_primitives
+        || 64 > limits.max_mesh_invocations_per_workgroup
+        || 64 > limits.max_mesh_invocations_per_dimension
+        || MESHLETS_PER_PATCH > limits.max_task_mesh_workgroups_per_dimension
+        || gpu.leaf_count() > limits.max_task_mesh_workgroups_per_dimension
+        || u64::from(gpu.leaf_count()) * u64::from(MESHLETS_PER_PATCH)
+            > u64::from(limits.max_task_mesh_workgroup_total_count)
+    {
+        return;
+    }
+
+    let (camera, extracted_view, target, depth, view_uniform_offset) = view.into_inner();
+    let (
+        Some(leaf_buffer),
+        Some(metadata_buffer),
+        Some(residual_buffer),
+        Some(params_buffer),
+        Some(surface_buffer),
+    ) = (
+        gpu.leaf_buffer(),
+        gpu.page_metadata_buffer(),
+        gpu.page_residual_buffer(),
+        gpu.params_buffer(),
+        gpu.surface_transform_buffer(),
+    )
+    else {
+        return;
+    };
+    let Some(view_binding) = view_uniforms.uniforms.binding() else {
+        return;
+    };
+
+    let format = extracted_view.target_format;
+    if !mesh.pipelines.contains_key(&format) {
+        let color_targets = [Some(ColorTargetState {
+            format,
+            blend: None,
+            write_mask: ColorWrites::ALL,
+        })];
+        let pipeline = device
+            .wgpu_device()
+            .create_mesh_pipeline(&wgpu::MeshPipelineDescriptor {
+                label: Some("thessa-cbt-mesh-pipeline"),
+                layout: Some(&mesh.pipeline_layout),
+                task: None,
+                mesh: wgpu::MeshState {
+                    module: &mesh.shader,
+                    entry_point: Some("build_mesh"),
+                    compilation_options: Default::default(),
+                },
+                primitive: PrimitiveState {
+                    topology: PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: bevy::render::render_resource::FrontFace::Ccw,
+                    cull_mode: None,
+                    unclipped_depth: false,
+                    polygon_mode: bevy::render::render_resource::PolygonMode::Fill,
+                    conservative: false,
+                },
+                depth_stencil: Some(DepthStencilState {
+                    format: bevy_core_pipeline::core_3d::CORE_3D_DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(CompareFunction::GreaterEqual),
+                    stencil: Default::default(),
+                    bias: DepthBiasState::default(),
+                }),
+                multisample: MultisampleState::default(),
+                fragment: Some(RawFragmentState {
+                    module: &mesh.shader,
+                    entry_point: Some("fragment"),
+                    compilation_options: Default::default(),
+                    targets: &color_targets,
+                }),
+                multiview: None,
+                cache: None,
+            });
+        mesh.pipelines
+            .insert(format, RenderPipeline::from(pipeline));
+    }
+    let pipeline = mesh
+        .pipelines
+        .get(&format)
+        .expect("CBT mesh pipeline inserted above");
+    let bind_group = device.create_bind_group(
+        "thessa-cbt-mesh-bind-group",
+        &mesh.bind_group_layout,
+        &[
+            BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::Buffer(leaf_buffer.as_entire_buffer_binding()),
+            },
+            BindGroupEntry {
+                binding: 2,
+                resource: BindingResource::Buffer(metadata_buffer.as_entire_buffer_binding()),
+            },
+            BindGroupEntry {
+                binding: 3,
+                resource: BindingResource::Buffer(residual_buffer.as_entire_buffer_binding()),
+            },
+            BindGroupEntry {
+                binding: 6,
+                resource: BindingResource::Buffer(params_buffer.as_entire_buffer_binding()),
+            },
+        ],
+    );
+    let view_bind_group = device.create_bind_group(
+        "thessa-cbt-mesh-view-bind-group",
+        &mesh.view_bind_group_layout,
+        &[
+            BindGroupEntry {
+                binding: 0,
+                resource: view_binding,
+            },
+            BindGroupEntry {
+                binding: 1,
+                resource: BindingResource::Buffer(surface_buffer.as_entire_buffer_binding()),
+            },
+        ],
+    );
+
+    let color_attachments = [Some(target.get_color_attachment())];
+    let mut pass = context
+        .command_encoder()
+        .begin_render_pass(&RenderPassDescriptor {
+            label: Some("thessa-cbt-mesh-pass"),
+            color_attachments: &color_attachments,
+            depth_stencil_attachment: Some(depth.get_attachment(StoreOp::Store)),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+    if let Some(viewport) = camera.viewport.as_ref() {
+        pass.set_viewport(
+            viewport.physical_position.x as f32,
+            viewport.physical_position.y as f32,
+            viewport.physical_size.x as f32,
+            viewport.physical_size.y as f32,
+            viewport.depth.start,
+            viewport.depth.end,
+        );
+    }
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, &*bind_group, &[]);
+    pass.set_bind_group(1, &*view_bind_group, &[view_uniform_offset.offset]);
+    pass.draw_mesh_tasks(MESHLETS_PER_PATCH, gpu.leaf_count(), 1);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -959,6 +1459,16 @@ mod tests {
         naga::valid::Validator::new(Default::default(), Default::default())
             .validate(&module)
             .expect("CBT raster shader must validate");
+    }
+
+    #[cfg(feature = "mesh-shaders")]
+    #[test]
+    fn mesh_shader_is_validated_with_explicit_native_capability() {
+        let module = naga::front::wgsl::parse_str(CBT_MESH_WGSL)
+            .expect("CBT mesh shader must parse with wgpu_mesh_shader enabled");
+        naga::valid::Validator::new(Default::default(), naga::valid::Capabilities::MESH_SHADER)
+            .validate(&module)
+            .expect("CBT mesh shader must validate with mesh capability");
     }
 
     #[test]

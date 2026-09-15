@@ -106,8 +106,14 @@ fn main() {
     });
     let resolved = ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
     let rt_active = resolved.ray_tracing.is_active();
+    let mesh_shader_active = std::env::var_os("THESSA_CBT_GPU_MESH").is_some();
     if rt_active {
         eprintln!("[graphics] experimental Solari RT path requested; needs RT-capable Vulkan");
+    }
+    if mesh_shader_active {
+        eprintln!(
+            "[graphics] experimental wgpu mesh-shader path requested; unsupported adapters may fail device creation"
+        );
     }
 
     let mut app = App::new();
@@ -131,14 +137,24 @@ fn main() {
             }),
             ..default()
         });
-    if rt_active {
+    if rt_active || mesh_shader_active {
         // `WgpuSettings` travels inside `RenderPlugin::render_creation` in
-        // 0.19. Forcing RT features makes device creation fail fast on
-        // incapable hardware (explicit opt-in only, never `auto`).
+        // 0.19. Explicit experimental features are requested only when their
+        // matching environment switch is set; unsupported hardware may fail
+        // device creation rather than silently changing the selected path.
         default_plugins = default_plugins.set(RenderPlugin {
-            render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
-                features: WgpuFeatures::default() | SolariPlugins::required_wgpu_features(),
-                ..default()
+            render_creation: RenderCreation::Automatic(Box::new({
+                let mut features = WgpuFeatures::default();
+                if rt_active {
+                    features |= SolariPlugins::required_wgpu_features();
+                }
+                if mesh_shader_active {
+                    features |= WgpuFeatures::EXPERIMENTAL_MESH_SHADER;
+                }
+                WgpuSettings {
+                    features,
+                    ..default()
+                }
             })),
             ..default()
         });

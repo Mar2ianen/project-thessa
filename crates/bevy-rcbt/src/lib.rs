@@ -129,6 +129,7 @@ pub struct CbtRenderSurface {
     render_from_body: [f32; 16],
     transform_generation: u64,
     gpu_raster_enabled: bool,
+    gpu_mesh_enabled: bool,
 }
 
 impl Default for CbtRenderSurface {
@@ -141,6 +142,7 @@ impl Default for CbtRenderSurface {
             ],
             transform_generation: 0,
             gpu_raster_enabled: false,
+            gpu_mesh_enabled: false,
         }
     }
 }
@@ -175,6 +177,18 @@ impl CbtRenderSurface {
 
     pub fn gpu_raster_enabled(&self) -> bool {
         self.gpu_raster_enabled
+    }
+
+    /// Opt into the experimental hardware mesh-shader consumer. This is a
+    /// separate switch from the indexed GPU raster path because wgpu requires
+    /// requesting the experimental mesh feature before the device is created.
+    /// The caller must set the matching `WgpuSettings` feature at startup.
+    pub fn set_gpu_mesh_enabled(&mut self, enabled: bool) {
+        self.gpu_mesh_enabled = enabled;
+    }
+
+    pub fn gpu_mesh_enabled(&self) -> bool {
+        self.gpu_mesh_enabled
     }
 
     /// Opt into the experimental direct raster path. It is disabled by

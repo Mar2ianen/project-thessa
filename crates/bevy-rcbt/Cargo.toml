@@ -10,11 +10,13 @@ description = "Thin Bevy client adapter for the backend-neutral RCBT runtime"
 [features]
 default = []
 render = ["bevy/bevy_render", "dep:bevy_core_pipeline"]
+mesh-shaders = ["render", "dep:wgpu"]
 
 [dependencies]
 bevy = { version = "0.19.1", default-features = false }
 bevy_core_pipeline = { version = "0.19.1", default-features = false, optional = true }
 thessa-rcbt-core = { path = "../rcbt-core" }
+wgpu = { version = "29.0.4", optional = true }
 
 [dev-dependencies]
 naga = { version = "29.0.4", features = ["wgsl-in"] }

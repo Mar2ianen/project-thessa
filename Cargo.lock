@@ -5389,6 +5389,7 @@ dependencies = [
  "bevy_core_pipeline",
  "naga",
  "thessa-rcbt-core",
+ "wgpu",
 ]
 
 [[package]]

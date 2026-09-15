@@ -127,12 +127,16 @@ fn setup_terrain(
     assets: Res<AssetServer>,
 ) {
     let started = Instant::now();
-    let gpu_raster = std::env::var_os("THESSA_CBT_GPU_RASTER").is_some();
+    let gpu_mesh = std::env::var_os("THESSA_CBT_GPU_MESH").is_some();
+    let gpu_raster = gpu_mesh || std::env::var_os("THESSA_CBT_GPU_RASTER").is_some();
+    cbt_surface.set_gpu_mesh_enabled(gpu_mesh);
     cbt_surface.set_gpu_raster_enabled(gpu_raster);
     info!(
         "CBT terrain raster mode: {}",
-        if gpu_raster {
-            "experimental GPU"
+        if gpu_mesh {
+            "experimental hardware mesh shader"
+        } else if gpu_raster {
+            "experimental GPU indexed"
         } else {
             "CPU fallback"
         }

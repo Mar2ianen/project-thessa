@@ -18,6 +18,9 @@ at the scheduling/topology boundary.
   records and quantized height pages into GPU storage/metadata buffers;
 - generation-gated WGSL page sampling and 33x33 position/normal vertex
   expansion with one indexed indirect draw command per leaf;
+- opt-in native wgpu mesh-shader rasterization of the same patch as sixteen
+  bounded 8x8 meshlets per leaf, with capability/limit gating and indexed
+  fallback;
 - explicit cube-sphere `TileKey` ↔ CBT Morton address mapping;
 - live client submission of camera view and terrain split/merge candidates;
 - compact `HeightPage` baking API in worldgen;
@@ -36,9 +39,12 @@ material parity, and a visual/numeric comparison against the CPU path at the
 same camera views. Until those checks pass, the fallback remains the default
 and authoritative surface queries stay on the canonical field.
 
-The direct raster smoke path can be launched explicitly with
-`THESSA_CBT_GPU_RASTER=1`; it keeps the closed backdrop underneath missing
-pages and is not enabled by default.
+The indexed raster smoke path can be launched explicitly with
+`THESSA_CBT_GPU_RASTER=1`. The hardware mesh-shader experiment uses
+`THESSA_CBT_GPU_MESH=1`; it requests `EXPERIMENTAL_MESH_SHADER` before Bevy
+creates the device and therefore is intentionally a local, adapter-specific
+opt-in. Both keep the closed backdrop underneath missing pages and are not
+enabled by default.
 
 The client deliberately does not use the dense `CompactTree` buffer directly:
 its cube-sphere address contract reaches depth 37, while the dense layout is

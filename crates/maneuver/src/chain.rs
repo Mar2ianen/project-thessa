@@ -39,8 +39,8 @@ use crate::lambert::solve_lambert_prograde;
 use crate::patch::{planet_arrival_match_mag, planet_escape_moon_vinf, planet_of};
 use crate::plan::{FlybyEvent, ManeuverNode, ManeuverPlan};
 use crate::search::{
-    RankedPlan, SearchError, SearchStats, correct_shooting, midcourse_time_s, patched_escape_mag,
-    phase_departure_topk, transfer_perigee_m,
+    RankedPlan, SearchError, SearchStats, correct_bplane_shooting, correct_shooting,
+    midcourse_time_s, patched_escape_mag, phase_departure_topk, transfer_perigee_m,
 };
 
 /// How a chain encounter is treated at exact level.
@@ -164,6 +164,10 @@ struct ChainCell {
     leg_tofs_s: Vec<f64>,
     encounter_bodies: Vec<BodyId>,
     departure_burn_mag_mps: f64,
+    /// Broad incoming asymptotes per encounter (free vectors): leg-k
+    /// arrival minus encounter-k motion. Seeds B-plane directions (the
+    /// side of the well matters as much as the point).
+    v_in_frames_mps: Vec<DVec3>,
     /// Desired outgoing asymptotes per intermediate flyby (broad seeds).
     v_out_frames_mps: Vec<DVec3>,
     turn_mags_mps: Vec<f64>,
@@ -351,6 +355,12 @@ fn chain_cell(
     };
     // Bend pass over consecutive arc pairs: incoming vs outgoing asymptote
     // in each intermediate encounter frame, periapsis-energy floored.
+    // Incoming asymptotes are kept for every encounter: they seed the
+    // B-plane directions of the exact leg solves.
+    let mut incomings = Vec::with_capacity(legs);
+    for encounter in 0..legs {
+        incomings.push(arcs_arr[encounter] - rel_vel[encounter + 1]);
+    }
     let mut turns = Vec::with_capacity(legs.saturating_sub(1));
     let mut seeds = Vec::with_capacity(legs.saturating_sub(1));
     for leg in 1..legs {
@@ -452,6 +462,7 @@ fn chain_cell(
             .map(|encounter| encounter.body)
             .collect(),
         departure_burn_mag_mps: dep_mag,
+        v_in_frames_mps: incomings,
         v_out_frames_mps: seeds,
         turn_mags_mps: turns,
         arrival_mag_mps: arrival_mag,
@@ -693,6 +704,9 @@ fn revalidate_chain_from_start(
     .map_err(SearchError::Ephemeris)?;
     let first_body = ephemeris.body(first.body).map_err(SearchError::Ephemeris)?;
     let mid1_s = midcourse_time_s(cell.leg_tofs_s[0]);
+    // Leg 1 stays exact-3D (measured: 2D plane targeting here filters 9/9
+    // on the Nereid tour — downstream legs amplify handoff along-track
+    // slop, so leg 1 must deliver a crisp position).
     let (dep_burn, tcm1_burn, mut leg_end, miss1) = match correct_shooting(
         field,
         point,
@@ -776,22 +790,73 @@ fn revalidate_chain_from_start(
             stats.filtered_by_miss += 1;
             return Ok(None);
         }
-        let (_, flyby_burn, end, miss) = match correct_shooting(
-            field,
-            leg_end.position,
-            leg_end.velocity,
-            DVec3::ZERO,
-            flyby_epoch,
-            cell.leg_tofs_s[leg],
-            0.0,
-            next_aim,
-            flyby_seed,
-            stats,
-        ) {
-            Some(corrected) => corrected,
-            None => {
-                stats.failed_revalidations += 1;
-                return Ok(None);
+        // Flyby targets solve in two stages. First the encounter PLANE
+        // (2D, minimum-norm): an assist needs the right B-plane crossing
+        // at the right epoch, and the underdetermined solve keeps burns
+        // small by construction, positioning the right basin. Then an
+        // exact 3D polish from the 2D burn trims the along-track remainder
+        // (N-body drift the plane cannot see). Rendezvous targets keep the
+        // single exact 3D solve (the arrival null is evaluated AT the
+        // sphere, so there is no along-track freedom to exploit).
+        let broad_incoming = cell.v_in_frames_mps[leg];
+        let use_plane = next.kind == EncounterKind::Flyby
+            && broad_incoming.is_finite()
+            && broad_incoming.length_squared() > 0.0;
+        let (flyby_burn, end, miss) = if use_plane {
+            let (plane_burn, _plane_end, _) = match correct_bplane_shooting(
+                field,
+                leg_end.position,
+                leg_end.velocity,
+                flyby_epoch,
+                cell.leg_tofs_s[leg],
+                0.0,
+                next_aim,
+                broad_incoming,
+                flyby_seed,
+                stats,
+            ) {
+                Some(solved) => solved,
+                None => {
+                    stats.failed_revalidations += 1;
+                    return Ok(None);
+                }
+            };
+            match correct_shooting(
+                field,
+                leg_end.position,
+                leg_end.velocity,
+                DVec3::ZERO,
+                flyby_epoch,
+                cell.leg_tofs_s[leg],
+                0.0,
+                next_aim,
+                plane_burn,
+                stats,
+            ) {
+                Some((_, burn, end, miss)) => (burn, end, miss),
+                None => {
+                    stats.failed_revalidations += 1;
+                    return Ok(None);
+                }
+            }
+        } else {
+            match correct_shooting(
+                field,
+                leg_end.position,
+                leg_end.velocity,
+                DVec3::ZERO,
+                flyby_epoch,
+                cell.leg_tofs_s[leg],
+                0.0,
+                next_aim,
+                flyby_seed,
+                stats,
+            ) {
+                Some((_, burn, end, miss)) => (burn, end, miss),
+                None => {
+                    stats.failed_revalidations += 1;
+                    return Ok(None);
+                }
             }
         };
         // Lithobraking is not a flyby: the end state must stay outside

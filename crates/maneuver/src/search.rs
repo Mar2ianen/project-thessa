@@ -1145,6 +1145,183 @@ pub(crate) fn correct_shooting(
     }
     best.map(|(burn1, end, miss)| (departure_burn, burn1, end, miss))
 }
+
+/// B-plane differential correction for flyby encounters: vary one burn
+/// (3 DOF) against the 2D encounter-plane miss, minimum-norm.
+///
+/// A flyby needs the right B-plane crossing at the right epoch, not an
+/// exact 3D point hit: along-track slop at fixed epoch just shifts the
+/// encounter slightly, while forcing an arbitrary sphere point can demand
+/// absurd burns (measured 35 km/s at Jupiter for a broad 0.4 km/s bend —
+/// the 3D aim over-constrains what the assist actually needs). Two
+/// constraints with three controls gives an underdetermined system, so
+/// the minimum-norm step keeps burns small BY CONSTRUCTION (Δ =
+/// Jᵀ(JJᵀ)⁻¹·r with an explicit 2x2 inverse — no new solver machinery).
+/// The S axis (incoming asymptote direction, broad-stable) is fixed for
+/// the solve; callers keep the honest 3D miss for gates and reporting.
+///
+/// Returns burn, end state and the 2D miss; None only on total failure.
+/// Callers must check the 3D miss themselves.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn correct_bplane_shooting(
+    field: &GravityField<'_>,
+    start_pos: DVec3,
+    start_vel: DVec3,
+    departure_epoch: SimTime,
+    time_of_flight_s: f64,
+    mid_time_s: f64,
+    aim_point_m: DVec3,
+    s_dir: DVec3,
+    initial_burn: DVec3,
+    stats: &mut SearchStats,
+) -> Option<(DVec3, TestParticleState, f64)> {
+    const TARGET_MISS_M: f64 = 2_000.0;
+    const MAX_ITERS: usize = 30;
+    const TRUST_MPS: f64 = 300.0;
+    // Encounter-plane basis: T ⊥ S, R = S × T. Fixed for the solve
+    // (broad-stable, not re-estimated from noisy exact states).
+    let s = s_dir.try_normalize()?;
+    if !s.is_finite() {
+        return None;
+    }
+    let reference = if s.x.abs() < 0.9 && s.y.abs() < 0.9 {
+        DVec3::Z
+    } else {
+        DVec3::X
+    };
+    let t_axis = s.cross(reference).normalize();
+    let r_axis = s.cross(t_axis).normalize();
+    if !t_axis.is_finite() || !r_axis.is_finite() {
+        return None;
+    }
+    let project = |point: DVec3| -> (f64, f64) {
+        let relative = aim_point_m - point;
+        (relative.dot(t_axis), relative.dot(r_axis))
+    };
+    let mut shoot = |burn: DVec3| -> Option<TestParticleState> {
+        stats.newton_propagations += 1;
+        propagate_adaptive_with_burns(
+            field,
+            TestParticleState {
+                position: start_pos,
+                velocity: start_vel,
+            },
+            departure_epoch,
+            time_of_flight_s,
+            &[ImpulsiveBurn {
+                time_s: mid_time_s,
+                delta_v_mps: burn,
+            }],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .ok()
+        .map(|result| result.state)
+    };
+    let mut burn = if initial_burn.is_finite() {
+        initial_burn
+    } else {
+        DVec3::ZERO
+    };
+    let mut end = shoot(burn)?;
+    let mut best: Option<(DVec3, TestParticleState, f64)> = None;
+    for _ in 0..MAX_ITERS {
+        let (miss_t, miss_r) = project(end.position);
+        let miss = (miss_t * miss_t + miss_r * miss_r).sqrt();
+        if !miss.is_finite() {
+            break;
+        }
+        if best.is_none_or(|(_, _, best_miss)| miss < best_miss) {
+            best = Some((burn, end, miss));
+        }
+        if miss <= TARGET_MISS_M {
+            break;
+        }
+        let leverage_s = (time_of_flight_s - mid_time_s).max(1.0);
+        let h = (1.0e5 / leverage_s).min(0.5);
+        // 2x3 Jacobian of END POSITION (NOT of the miss): with
+        // miss = aim − end the step solves J·Δ = miss exactly like
+        // single-leg shooting. Differentiating (aim − end) instead
+        // negates every step into an ascent while magnitudes look sane.
+        let mut jac = [[0.0f64; 3]; 2];
+        let mut ok = true;
+        for (axis_n, axis) in [DVec3::X, DVec3::Y, DVec3::Z].iter().enumerate() {
+            match shoot(burn + *axis * h) {
+                Some(perturbed) => {
+                    let slope = (perturbed.position - end.position) / h;
+                    jac[0][axis_n] = slope.dot(t_axis);
+                    jac[1][axis_n] = slope.dot(r_axis);
+                }
+                None => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if !ok {
+            break;
+        }
+        // Minimum-norm step via explicit 2x2 (JJᵀ)⁻¹.
+        let jjt = [
+            [
+                jac[0][0] * jac[0][0] + jac[0][1] * jac[0][1] + jac[0][2] * jac[0][2],
+                jac[0][0] * jac[1][0] + jac[0][1] * jac[1][1] + jac[0][2] * jac[1][2],
+            ],
+            [
+                jac[0][0] * jac[1][0] + jac[0][1] * jac[1][1] + jac[0][2] * jac[1][2],
+                jac[1][0] * jac[1][0] + jac[1][1] * jac[1][1] + jac[1][2] * jac[1][2],
+            ],
+        ];
+        let det = jjt[0][0] * jjt[1][1] - jjt[0][1] * jjt[1][0];
+        if !det.is_finite() || det.abs() <= 0.0 {
+            break;
+        }
+        let inv = [
+            [jjt[1][1] / det, -jjt[0][1] / det],
+            [-jjt[1][0] / det, jjt[0][0] / det],
+        ];
+        let lambda_t = inv[0][0] * miss_t + inv[0][1] * miss_r;
+        let lambda_r = inv[1][0] * miss_t + inv[1][1] * miss_r;
+        // Δ = Jᵀλ: burn-axis j gets T-col[j]·λt + R-col[j]·λr.
+        let axes = [DVec3::X, DVec3::Y, DVec3::Z];
+        let mut step = DVec3::ZERO;
+        for (axis_n, axis) in axes.iter().enumerate() {
+            step += *axis * (jac[0][axis_n] * lambda_t + jac[1][axis_n] * lambda_r);
+        }
+        if !step.is_finite() {
+            break;
+        }
+        if step.length() > TRUST_MPS {
+            step *= TRUST_MPS / step.length();
+        }
+        // Merit acceptance on the 2D miss (coupled-leg lesson: never
+        // accept a worsening step blindly). Halve to a genuinely better
+        // point or give up with the best seen.
+        let mut trial = step;
+        let mut next: Option<(DVec3, TestParticleState, f64)> = None;
+        for _ in 0..6 {
+            if let Some(state) = shoot(burn + trial) {
+                let (ct, cr) = project(state.position);
+                let candidate = (ct * ct + cr * cr).sqrt();
+                if candidate.is_finite() && candidate < miss {
+                    next = Some((burn + trial, state, candidate));
+                    break;
+                }
+            }
+            trial *= 0.5;
+        }
+        match next {
+            Some((candidate, state, _)) => {
+                burn = candidate;
+                end = state;
+            }
+            None => break,
+        }
+        if !burn.is_finite() || burn.length() > 50_000.0 {
+            break;
+        }
+    }
+    best
+}
 fn revalidate(
     ephemeris: &BakedEphemeris,
     field: &GravityField<'_>,

@@ -28,12 +28,14 @@ pub struct OpticalMaterial {
 
 /// Axial hue ramp shared by the CPU builder and the GPU volume pass
 /// (single source of truth for hues; absolute scale comes from the profile):
-/// hot core hues near the nozzle blending to mid, then cool edge hues
-/// downstream. `axial_01` is 0 at the nozzle, 1 at the visible tail.
-/// Constants are mirrored in `assets/shaders/plume_volume.wgsl`.
+/// hot core hues in the first metres blending fast to mid, then cool edge
+/// hues downstream. `axial_01` is 0 at the nozzle, 1 at the visible tail.
+/// The steep core falloff is deliberate: references show a white-blue core
+/// confined to the first diameters, not a gradual wash. Constants are
+/// mirrored in `assets/shaders/plume_volume.wgsl`.
 pub fn ramp_rgb(material: OpticalMaterial, axial_01: f64) -> [f64; 3] {
     let zn = axial_01.clamp(0.0, 1.0);
-    let core_bias = (-3.0 * zn).exp();
+    let core_bias = (-6.0 * zn).exp();
     let edge_bias = 1.0 - (-2.0 * zn).exp();
     let edge_mix = (edge_bias * 0.45).min(0.6);
     let no_edge = 1.0 - edge_mix;
@@ -45,6 +47,20 @@ pub fn ramp_rgb(material: OpticalMaterial, axial_01: f64) -> [f64; 3] {
         (material.core_rgb[2] * core_bias + material.mid_rgb[2] * (1.0 - core_bias)) * no_edge
             + material.edge_rgb[2] * edge_mix,
     ]
+}
+/// Shared hue divisor: max channel over core/mid/edge (guaranteed > 0).
+/// The axial builder and the GPU both divide hues by this ONE divisor, so
+/// the ramp stays linear and CPU/GPU agree exactly while every channel
+/// stays in 0..=1 (absolute brightness lives in the profile emission
+/// scale, never in the hues). Prevents hue x luminosity double-counting.
+pub fn hue_divisor(material: OpticalMaterial) -> f64 {
+    let peak = material
+        .core_rgb
+        .into_iter()
+        .chain(material.mid_rgb)
+        .chain(material.edge_rgb)
+        .fold(0.0_f64, f64::max);
+    peak.max(0.05)
 }
 /// Render hues for an exhaust family. Every family is covered; every value
 /// is finite and non-negative (pinned by test).

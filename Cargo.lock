@@ -5324,7 +5324,11 @@ name = "thessa-bevy-rcbt"
 version = "0.0.1"
 dependencies = [
  "bevy",
+ "bevy_core_pipeline",
+ "naga",
+ "pollster",
  "thessa-rcbt-core",
+ "wgpu",
 ]
 
 [[package]]
@@ -5342,6 +5346,7 @@ dependencies = [
  "thessa-perf",
  "thessa-plume-core",
  "thessa-protocol",
+ "thessa-rcbt-core",
  "thessa-sim-core",
  "thessa-worldgen-rocky",
  "toml",
@@ -5389,6 +5394,9 @@ dependencies = [
 [[package]]
 name = "thessa-plume-core"
 version = "0.0.1"
+dependencies = [
+ "thessa-rcbt-core",
+]
 
 [[package]]
 name = "thessa-protocol"

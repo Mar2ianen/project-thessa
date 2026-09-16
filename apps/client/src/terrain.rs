@@ -13,10 +13,23 @@ use std::{
 };
 use thessa_worldgen_rocky::{
     field::{PlanetField, field_from_manifest},
-    lod::{self, TerrainTile, TileKey},
+    lod::{self, TerrainTile, TileKey, cbt_node_for_tile},
     spec_recipe::{SpecRecipe, manifest_from_spec},
     sphere::dir_from_latlon,
 };
+use thessa_bevy_rcbt::{CbtFrameInput, CbtRenderPages, CbtRenderState, CbtRenderSurface};
+use thessa_rcbt_core::{CandidateAction, FrameBudget, LeafCandidate, WorkClass};
+use bevy::ecs::system::SystemParam;
+
+/// CBT bridge access for the terrain adapter: topology submissions and
+/// height-page publication travel here while CPU meshes stay authoritative.
+#[derive(SystemParam)]
+struct CbtTerrain<'w> {
+    state: Res<'w, CbtRenderState>,
+    input: ResMut<'w, CbtFrameInput>,
+    pages: ResMut<'w, CbtRenderPages>,
+    surface: ResMut<'w, CbtRenderSurface>,
+}
 
 #[derive(Resource)]
 pub(super) struct WorldTerrain {
@@ -400,6 +413,91 @@ fn tiles_overlap(a: TileKey, b: TileKey) -> bool {
     parent.face == child.face && parent.x == child.x >> shift && parent.y == child.y >> shift
 }
 
+fn cbt_is_prefix(prefix: thessa_rcbt_core::Node, node: thessa_rcbt_core::Node) -> bool {
+    node.depth() >= prefix.depth()
+        && (node.id() >> (node.depth() - prefix.depth())) == prefix.id()
+}
+
+/// Mirror the CPU tile cover into the backend-neutral CBT bridge (GH
+/// universal pipeline, main-world side only): wanted tiles become ancestor
+/// split paths, committed leaves outside the cover become merges. Bounded
+/// per selection; the CPU mesh cover stays authoritative and visible, the
+/// bridge accumulates exact topology + height pages for future GPU/raster
+/// consumers without changing a single rendered pixel today.
+fn submit_cbt_cover(
+    wanted: &[TileKey],
+    state: &CbtRenderState,
+    input: &mut CbtFrameInput,
+) {
+    let mut candidates: Vec<LeafCandidate> = Vec::new();
+    for key in wanted.iter().take(384) {
+        let Some(target) = cbt_node_for_tile(*key) else {
+            continue;
+        };
+        let mut chain = Vec::new();
+        let mut node = target;
+        while !state.topology().contains(node) {
+            let Some(parent) = node.parent() else {
+                break;
+            };
+            chain.push(parent);
+            node = parent;
+        }
+        for node in chain.into_iter().rev().take(4) {
+            candidates.push(LeafCandidate {
+                node,
+                action: CandidateAction::Split,
+                class: WorkClass::CoverageRepair,
+                projected_error_px: 0.0,
+                predicted_error_px: 0.0,
+                time_to_needed_s: f32::INFINITY,
+            });
+        }
+        if candidates.len() >= 384 {
+            break;
+        }
+    }
+    for leaf in state.topology().leaves().iter().take(512) {
+        let Some(parent) = leaf.parent() else {
+            continue;
+        };
+        if parent.depth() < lod::CBT_FACE_DEPTH {
+            continue;
+        }
+        let Some(sibling) = leaf.sibling() else {
+            continue;
+        };
+        if !state.topology().contains(sibling) {
+            continue;
+        }
+        let keep = wanted
+            .iter()
+            .filter_map(|key| cbt_node_for_tile(*key))
+            .any(|target| cbt_is_prefix(parent, target) || cbt_is_prefix(target, parent));
+        if !keep {
+            candidates.push(LeafCandidate {
+                node: parent,
+                action: CandidateAction::Merge,
+                class: WorkClass::Cosmetic,
+                projected_error_px: 0.0,
+                predicted_error_px: 0.0,
+                time_to_needed_s: f32::INFINITY,
+            });
+            if candidates.len() >= 512 {
+                break;
+            }
+        }
+    }
+    input.set_budget(Some(FrameBudget { max_operations: 24 }));
+    let submitted = candidates.len();
+    input.submit(None, candidates);
+    info!(
+        "[cbt] cover submit: {} candidates, topology leaves={}",
+        submitted,
+        state.topology().leaf_count()
+    );
+}
+
 /// Display cover: retain old visible tiles overlapped only by unready
 /// wanted tiles (a parent stays until ALL its children are ready — never a
 /// hole, never overlap), then add ready wanted tiles that overlap nothing
@@ -451,6 +549,7 @@ fn update_terrain(
         (Entity, &SurfaceTile, &mut Transform),
         (Without<Camera3d>, Without<TerrainBackdrop>),
     >,
+    mut cbt: CbtTerrain<'_>,
     mut celestial: Query<
         &mut Visibility,
         Or<(With<CelestialVisual>, With<pilot::PilotPlanetVisual>)>,
@@ -492,6 +591,7 @@ fn update_terrain(
         return;
     }
     let radius = world.field.params.radius_m;
+    cbt.surface.set_radius_m(radius as f32);
     let (origin, rotation, eye) = if survey.active {
         let (dir, label) = survey.sites[survey.site];
         let spin = DQuat::from_rotation_y(runtime.terrain_spin());
@@ -645,6 +745,9 @@ fn update_terrain(
             selection_changed = true;
         }
     }
+    if selection_changed {
+        submit_cbt_cover(&world.wanted, &cbt.state, &mut cbt.input);
+    }
     let finished: Vec<_> = world
         .jobs
         .iter_mut()
@@ -689,6 +792,14 @@ fn update_terrain(
                 images: [albedo, roughness, normal],
             },
         );
+        // Feed the CBT bridge an immutable height page for the finished tile
+        // (amortized: one 33x33 field bake per finished tile; failures only
+        // starve future GPU consumers, never the CPU cover).
+        if let Some(node) = cbt_node_for_tile(key) {
+            if let Ok(page) = lod::bake_height_page(&world.field, key, 33, 0.5) {
+                cbt.pages.set_page(node.id(), page);
+            }
+        }
         world.counters.terrain_patches_generated += 1;
     }
     // Build order: coarse cover (L7-) first so holes close immediately,
@@ -816,6 +927,9 @@ fn update_terrain(
                 materials.remove(tile.material.id());
                 for image in tile.images {
                     images.remove(image.id());
+                }
+                if let Some(node) = cbt_node_for_tile(key) {
+                    cbt.pages.remove_page(node.id());
                 }
             }
         }

@@ -148,7 +148,13 @@ fn main() {
     app.add_plugins(default_plugins);
     // RCBT is an opt-in visual topology path. The existing CPU terrain
     // renderer remains authoritative for this slice until page/error parity.
-    app.add_plugins(thessa_bevy_rcbt::CbtPlugin { max_depth: 16 });
+    // Depth-37 game tiles need a matching topology contract; the tree is
+    // sparse (one root leaf at startup), so depth costs nothing until tiles
+    // actually split. CPU meshes stay the visible cover (GPU raster off).
+    app.add_plugins(thessa_bevy_rcbt::CbtPlugin {
+        max_depth: 37,
+        ..Default::default()
+    });
     // Solari selects deferred opaque materials globally, including while
     // disabled. Every camera therefore retains a valid deferred raster path.
     // Plugin finish checks device features; unsupported GPUs keep raster.
@@ -244,6 +250,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
     rt_active: Option<Res<RayTracingActive>>,
+    graphics: Option<Res<GraphicsResolved>>,
 ) {
     let rt_active = rt_active.is_some_and(|flag| flag.0);
     let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml"))
@@ -269,7 +276,7 @@ fn setup(
         ..default()
     });
 
-    commands.spawn((
+    let camera = commands.spawn((
         Camera3d::default(),
         // Keep these across RT toggles: required components are not removed
         // automatically with SolariLighting, and deferred needs MSAA off.
@@ -285,17 +292,22 @@ fn setup(
             ..default()
         },
         Tonemapping::TonyMcMapface,
-        Bloom {
-            intensity: 0.14,
-            ..Bloom::NATURAL
-        },
         OrbitCamera {
             orbit: Quat::from_rotation_y(0.42) * Quat::from_rotation_x(-0.72),
             distance: 420.0,
             target: Vec3::ZERO,
         },
         Transform::from_xyz(129.0, 276.0, 287.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
+    ))
+    .id();
+    // Bloom is opt-in (graphics.toml): it costs a full mip-chain and does
+    // not improve terrain detail. HDR plume cores still exceed 1.0 without it.
+    if graphics.as_deref().is_some_and(|g| g.0.bloom) {
+        commands.entity(camera).insert(Bloom {
+            intensity: 0.14,
+            ..Bloom::NATURAL
+        });
+    }
     // Asterion's illumination is represented by direction, not by a fake
     // nearby star whose size would make the local map physically misleading.
     // Neutral spawn values: the atmosphere plugin derives exact illuminance,

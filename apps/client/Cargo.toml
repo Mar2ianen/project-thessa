@@ -17,6 +17,7 @@ thessa-graphics = { path = "../../crates/graphics" }
 thessa-atmosphere = { path = "../../crates/atmosphere" }
 thessa-plume-core = { path = "../../crates/plume-core" }
 thessa-bevy-rcbt = { path = "../../crates/bevy-rcbt" }
+thessa-rcbt-core = { path = "../../crates/rcbt-core" }
 bevy = { workspace = true, features = ["bevy_solari"] }
 bevy_brp_extras = "0.22.0"
 serde.workspace = true

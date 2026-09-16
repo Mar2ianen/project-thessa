@@ -192,6 +192,12 @@ pub fn build_axial_profile(
     let length = length.clamp(diameter * 2.0, 4000.0);
 
     let spread = 0.12 + 0.10 * (1.0 - 1.0 / pi.max(1.0));
+    // Near-lip expansion fan (reduced Prandtl-Meyer form): a fixed nozzle
+    // venting into falling ambient pressure balloons just past the lip and
+    // the bulge saturates downstream. `fan` is the extra exit-radii of
+    // bulge at full underexpansion; matched flow has none. Mirrored in the
+    // GPU pass (same formula, same constants); tests pin direction only.
+    let fan = 1.2 * (1.0 - 1.0 / pi.max(1.0));
     let cell = shock_cell_spacing_m(diameter, source.exit_mach, pi);
     let amp = shock_amplitude(pi);
     let material = optical_material(source.exhaust);
@@ -216,9 +222,11 @@ pub fn build_axial_profile(
         let heat = (temp / exit_temp.max(1.0)).clamp(0.0, 1.0);
         // Station emission carries hue (shared ramp) and decay, but NOT the
         // shock factor: shock applies once downstream (sampler / shader),
-        // never squared by baking it here too.
+        // never squared by baking it here too. Hues are normalized by the
+        // shared divisor so absolute brightness lives only in `e`.
         let e = lum * (0.15 + 0.85 * heat) * decay.max(0.02);
         let hue = crate::optics::ramp_rgb(material, zn);
+        let inv_divisor = 1.0 / crate::optics::hue_divisor(material);
         stations.push(AxialStation {
             z_m: z,
             radius_m: radius,
@@ -226,9 +234,9 @@ pub fn build_axial_profile(
             center_temp_k: temp,
             extinction_per_m: (density * (0.5 + material.soot)).max(0.0),
             emission_rgb: [
-                (hue[0] * e).max(0.0),
-                (hue[1] * e).max(0.0),
-                (hue[2] * e).max(0.0),
+                (hue[0] * inv_divisor * e).max(0.0),
+                (hue[1] * inv_divisor * e).max(0.0),
+                (hue[2] * inv_divisor * e).max(0.0),
             ],
             shock,
         });

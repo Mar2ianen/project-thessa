@@ -19,14 +19,15 @@
   `[upper_atmosphere]` (aurora intensity/animation). The plume reads data via
   `EnginePlumeInput`: no engine-sim exists yet, engine-sim will become the
   provider without renderer changes.
-- New `plume-core` crate (`docs/38` migration slices 2-3): backend-neutral
-  `PlumeSource`/`PlumeEnvironment` contract, analytic axial mean profile
-  (pressure-ratio regime, Tam shock-cell spacing, budget-independent
-  sampling), participating-medium CPU oracle (`sample_medium`,
-  `integrate_ray`, `radiant_power`), exhaust optical material table with a
-  shared CPU/GPU hue ramp, 20 semantic tests, and a `profile` bench (~1 us
-  per 48-station build). The `beauty.rs` cone stays
-  the documented Low/fallback impostor; no engine state is invented.
+- New `plume-core` crate (`docs/38` migration slices 2-3, 7-foundation):
+  backend-neutral `PlumeSource`/`PlumeEnvironment` contract, analytic axial
+  mean profile (pressure-ratio regime, Tam shock-cell spacing,
+  budget-independent sampling), participating-medium CPU oracle
+  (`sample_medium`, `integrate_ray`, `radiant_power`), exhaust optical
+  material table with a shared CPU/GPU hue ramp, and a plume-local RCBT
+  adapter (longest-axis binary subdivision, nested deterministic node
+  addresses, refinement error heuristic; residual bricks later).
+  25 semantic tests and a `profile` bench (~1 us per 48-station build).
 - Field-first plume renderer (`docs/38` section 8, Medium/High): a
   camera-facing ribbon carries coverage only while
   `assets/shaders/plume_volume.wgsl` marches view rays through the round
@@ -34,6 +35,11 @@
   (6/10 evals per pixel). Diamonds emerge from the shared shock factor,
   lighting proxies from the field integral, ambient from the flight
   atmosphere model. Cone impostor kept for Low; pilot-view gating kept.
+- Ported the universal RCBT Bevy bridge from `origin/feat/rcbt-terrain-pipeline`
+  (`bevy-rcbt` topology/pages/surface state, render-world leaf stream, GPU
+  raster + ocean + precision modules, `bisector_pool` core): builds and tests
+  clean with default, `render`, and `mesh-shaders` features. Full terrain-GPU
+  wiring (terrain.rs transplant, field backend) stays a separate slice.
 - Minimal CBT pull from `origin/feat/rcbt-terrain-pipeline`:
   `rcbt-core::compact`, `lod::{CBT_FACE_DEPTH, cbt_node_for_tile,
   tile_for_cbt_node}` (one LOD address space for terrain and beauty impostors),

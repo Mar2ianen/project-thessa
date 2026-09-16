@@ -53,9 +53,14 @@ fn vnoise(p: vec2<f32>) -> f32 {
     return a + (b - a) * u.x + (c - a) * u.y + (a - b - c + d) * u.x * u.y;
 }
 
-// Same axial decay as plume-core `axial_decay`: 1 / (1 + 6 z_n^2).
-fn axial_decay(zn: f32) -> f32 {
-    return 1.0 / (1.0 + 6.0 * zn * zn);
+// Same steep core falloff as plume-core `ramp_rgb`: white-blue confined
+// to the first diameters, then violet/pink, then transparent edge.
+fn axial_ramp(zn: f32, core_rgb: vec3<f32>, mid_rgb: vec3<f32>, edge_rgb: vec3<f32>) -> vec3<f32> {
+    let core_bias = exp(-6.0 * zn);
+    let edge_bias = 1.0 - exp(-2.0 * zn);
+    let col = core_rgb * core_bias + mid_rgb * (1.0 - core_bias);
+    let edge_mix = min(edge_bias * 0.45, 0.6);
+    return col * (1.0 - edge_mix) + edge_rgb * edge_mix;
 }
 
 @fragment

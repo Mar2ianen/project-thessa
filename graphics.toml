@@ -27,6 +27,7 @@ terrain_mesh_cells = 24 # CPU middle-field density; adaptive per tile; 8..64
 resolution_scale = 1.0
 vsync = true
 hdr = true
+bloom = false # bright-light glow; off by default to preserve terrain contrast
 auto_exposure = false # AE metering curve untuned; deterministic manual EV for now
 exposure_ev100 = 13.0 # manual EV100 when auto_exposure = false
 

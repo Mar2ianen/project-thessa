@@ -541,6 +541,9 @@ fn drive_volume(
         0.0 // debug override (doc section 9): representation switch only
     };
     let material = optical_material(cache.source.exhaust);
+    // Same shared divisor as the builder: uniforms carry chromaticity,
+    // absolute brightness lives in the gain uniform (no double count).
+    let inv_divisor = 1.0 / thessa_plume_core::hue_divisor(material) as f32;
     let gain = emission_gain(&cache.source) as f32;
     let ext_mean = profile
         .stations
@@ -590,21 +593,21 @@ fn drive_volume(
                     cache.source.exhaust_velocity_mps as f32 * 0.1,
                 ),
                 core_rgb: Vec4::new(
-                    material.core_rgb[0] as f32,
-                    material.core_rgb[1] as f32,
-                    material.core_rgb[2] as f32,
-                    0.4,
+                    material.core_rgb[0] as f32 * inv_divisor,
+                    material.core_rgb[1] as f32 * inv_divisor,
+                    material.core_rgb[2] as f32 * inv_divisor,
+                    0.55,
                 ),
                 mid_rgb: Vec4::new(
-                    material.mid_rgb[0] as f32,
-                    material.mid_rgb[1] as f32,
-                    material.mid_rgb[2] as f32,
+                    material.mid_rgb[0] as f32 * inv_divisor,
+                    material.mid_rgb[1] as f32 * inv_divisor,
+                    material.mid_rgb[2] as f32 * inv_divisor,
                     0.0,
                 ),
                 edge_rgb: Vec4::new(
-                    material.edge_rgb[0] as f32,
-                    material.edge_rgb[1] as f32,
-                    material.edge_rgb[2] as f32,
+                    material.edge_rgb[0] as f32 * inv_divisor,
+                    material.edge_rgb[1] as f32 * inv_divisor,
+                    material.edge_rgb[2] as f32 * inv_divisor,
                     0.0,
                 ),
             };

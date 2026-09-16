@@ -22,6 +22,7 @@ The 6–10 ly radius is a **maximum useful neighborhood**, not a promise that ev
 Preferred structure:
 
 - Asterion as the starting triple system and densest early/mid-game environment;
+- the ultra-wide Asterion companion at ~0.5–1.0 ly as the first expansion target;
 - several nearby stellar systems with deliberately different formation histories;
 - sparse minor stars / brown dwarfs / rogue bodies where they create useful routing or science gameplay;
 - optional deep-space objects and infrastructure nodes between major systems;
@@ -50,10 +51,11 @@ The final radius should be locked only after the propulsion model gives a useful
 Required benchmark table before canon lock:
 
 - 0.1 ly;
+- 0.5–1.0 ly first-expansion companion;
 - 1 ly;
 - 3 ly;
 - 6 ly;
-- 10 ly;
+- 10 ly.
 
 For each distance, benchmark at least:
 
@@ -63,6 +65,8 @@ For each distance, benchmark at least:
 - cargo-optimized low-acceleration freighter.
 
 The benchmark must include acceleration limits, propellant fraction, waste heat and realistic flip/deceleration rather than only ideal constant-acceleration travel time.
+
+The **0.5–1.0 ly far companion is intentionally a pre-Epstein target**: a mature non-Epstein fusion craft must be capable of reaching it in a strategically useful timescale, even if the trip is measured in decades.
 
 ## 5. Asterion formation implication
 
@@ -77,3 +81,18 @@ This should be treated as a formation hypothesis until an N-body history is cons
 - the desired captured-body history of Thessa.
 
 The hypothesis is valuable because it gives a physical reason for the A and BC planetary families to differ strongly in composition and architecture.
+
+## 6. Ultra-wide Asterion companion — first expansion layer
+
+A working additional component lies on an orbit of order **0.5–1.0 ly** around the Asterion ABC barycenter. Preferred identity: a **captured brown dwarf**; an ultra-faint late-M dwarf remains an alternate.
+
+This object is intentionally much farther away than any ordinary Asterion planet, so the logistics transition is real:
+
+- planetary-system craft cannot casually reach it;
+- mature fusion ships can;
+- Epstein-class propulsion is not required;
+- the route introduces long-duration reliability, autonomous maintenance, closed-loop life support and fleet scheduling before true multi-light-year expansion.
+
+The nominal working orbit is ~0.7 ly semimajor axis with enough eccentricity to range roughly between 0.5 and 0.9 ly. At this scale the orbital period is of order several million years, so the object is effectively stationary on gameplay timescales while still being only weakly bound dynamically.
+
+Its detailed captured-body system and physical model live in `02C_FAR_COMPANION.md`.

@@ -40,7 +40,7 @@ use crate::patch::{planet_arrival_match_mag, planet_escape_moon_vinf, planet_of}
 use crate::plan::{FlybyEvent, ManeuverNode, ManeuverPlan};
 use crate::search::{
     RankedPlan, SearchError, SearchStats, correct_shooting, midcourse_time_s, patched_escape_mag,
-    phase_departure, transfer_perigee_m,
+    phase_departure_topk, transfer_perigee_m,
 };
 
 /// How a chain encounter is treated at exact level.
@@ -607,14 +607,16 @@ fn revalidate_chain(
         .map_err(SearchError::Ephemeris)?
         .radius_m
         + config.standoff_m;
-    // Leg 1: phase the departure anomaly against the first encounter,
-    // then correct to its aim point (periapsis for a flyby, standoff
-    // sphere for a lone rendezvous).
     let first = &config.encounters[0];
     let first_state = ephemeris
         .body_state(first.body, epochs[1])
         .map_err(SearchError::Ephemeris)?;
-    let (point, park_velocity, phased_burn) = match phase_departure(
+    // Departure shortlist, not a single winner: loose screens rank by
+    // arrival POSITION only, so distinct anomalies can carry wildly
+    // different arrival VELOCITIES (measured ~5 km/s spreads on the V1
+    // window) — and the next leg's seed lives or dies by that velocity.
+    // The exact stage below arbitrates every start; cheapest total wins.
+    let starts = phase_departure_topk(
         field,
         cell.departure_epoch,
         &depot,
@@ -624,11 +626,63 @@ fn revalidate_chain(
         park_radius,
         cell.departure_burn_mag_mps,
         cell.leg_tofs_s[0],
+        PHASING_BRANCHES,
         stats,
-    ) {
-        Some(phased) => phased,
-        None => return Ok(None),
-    };
+    );
+    if starts.is_empty() {
+        return Ok(None);
+    }
+    let mut best: Option<RankedPlan> = None;
+    for (point, park_velocity, phased_burn) in starts {
+        if let Some(plan) =
+            revalidate_chain_from_start(ephemeris, field, ctx, cell, &epochs, point, park_velocity, phased_burn, stats)?
+        {
+            let better = match &best {
+                None => true,
+                Some(current) => {
+                    plan.exact_total_dv_mps < current.exact_total_dv_mps
+                        || (plan.exact_total_dv_mps == current.exact_total_dv_mps
+                            && plan.exact_miss_m < current.exact_miss_m)
+                }
+            };
+            if better {
+                best = Some(plan);
+            }
+        }
+    }
+    Ok(best)
+}
+
+/// Departure starts kept per chain cell: enough arrival-asymptote
+/// diversity to matter, few enough to keep exact budgets sane (each start
+/// costs a full chain correction).
+const PHASING_BRANCHES: usize = 3;
+
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+fn revalidate_chain_from_start(
+    ephemeris: &BakedEphemeris,
+    field: &GravityField<'_>,
+    ctx: &ChainCtx<'_>,
+    cell: &ChainCell,
+    epochs: &[SimTime],
+    point: DVec3,
+    park_velocity: DVec3,
+    phased_burn: DVec3,
+    stats: &mut SearchStats,
+) -> Result<Option<RankedPlan>, SearchError> {
+    let config = &ctx.config;
+    let legs = config.legs();
+    // Leg 1: correct the phased departure to its aim point (periapsis
+    // for a flyby, standoff sphere for a lone rendezvous) with the
+    // departure FROZEN at its phased broad value: correcting the escape
+    // burn itself is ill-conditioned (measured JJᵀ cond ~1e18 on the V1
+    // leg — normal equations square it), so only the cruise TCM varies.
+    // Arrival-velocity diversity across handoffs comes from the top-K
+    // starts above, not from freeing the departure.
+    let first = &config.encounters[0];
+    let first_state = ephemeris
+        .body_state(first.body, epochs[1])
+        .map_err(SearchError::Ephemeris)?;
     let aim1 = aim_point(
         ephemeris,
         config.central_body,

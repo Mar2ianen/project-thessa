@@ -889,6 +889,117 @@ pub(crate) fn phase_departure(
     best.map(|(_, _, _, point, park_velocity, burn)| (point, park_velocity, burn))
 }
 
+/// Departure phasing with a diverse shortlist: same round-0 tilt x anomaly
+/// grid as [`phase_departure`], but keep the top-K DISTINCT starts instead
+/// of refining a single winner.
+///
+/// Motivation (measured on the Voyager-1-class chain): loose screens rank
+/// by arrival POSITION miss only, so the single winner can carry an
+/// arrival VELOCITY several km/s off broad's — and the next leg's seed
+/// (broad outgoing minus true handoff velocity) then starts ~6 AU off
+/// with no recovery. Distinct parking anomalies give distinct arrival
+/// asymptotes; the exact stage arbitrates which handoff actually flies.
+/// Deterministic: grid order, miss order, angular separation greed.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn phase_departure_topk(
+    field: &GravityField<'_>,
+    depot_epoch: SimTime,
+    depot: &BodyState,
+    central: &BodyState,
+    arrival: &BodyState,
+    depot_mu: f64,
+    park_radius: f64,
+    burn_magnitude_mps: f64,
+    time_of_flight_s: f64,
+    keep: usize,
+    stats: &mut SearchStats,
+) -> Vec<(DVec3, DVec3, DVec3)> {
+    if keep == 0 {
+        return Vec::new();
+    }
+    let radial_raw = depot.position_inertial - central.position_inertial;
+    let (radial_unit, normal) = if radial_raw.length_squared() > 0.0 {
+        let momentum = radial_raw.cross(depot.velocity_inertial - central.velocity_inertial);
+        let normal = momentum.normalize();
+        let radial_unit = radial_raw.normalize();
+        if !normal.is_finite() || !radial_unit.is_finite() {
+            return Vec::new();
+        }
+        (radial_unit, normal)
+    } else {
+        let to_arrival = arrival.position_inertial - central.position_inertial;
+        let arrival_plane = to_arrival.cross(arrival.velocity_inertial - central.velocity_inertial);
+        if to_arrival.length_squared() <= 0.0 || arrival_plane.length_squared() <= 0.0 {
+            return Vec::new();
+        }
+        (to_arrival.normalize(), arrival_plane.normalize())
+    };
+    let tangent0 = normal.cross(radial_unit);
+    let v_circ = (depot_mu / park_radius).sqrt();
+    if !v_circ.is_finite() {
+        return Vec::new();
+    }
+    let mut scored: Vec<(f64, f64, f64, DVec3, DVec3, DVec3)> = Vec::new();
+    for tilt_deg in [-30.0f64, -15.0, -7.5, 0.0, 7.5, 15.0, 30.0] {
+        let tilt = tilt_deg.to_radians();
+        let (sin_t, cos_t) = tilt.sin_cos();
+        let tilted_tangent = tangent0 * cos_t - normal * sin_t;
+        for i in 0..12 {
+            let anomaly = std::f64::consts::TAU * i as f64 / 12.0;
+            let (point_dir, tangent) = (
+                radial_unit * anomaly.cos() + tilted_tangent * anomaly.sin(),
+                tilted_tangent * anomaly.cos() - radial_unit * anomaly.sin(),
+            );
+            let point = depot.position_inertial + point_dir * park_radius;
+            let park_velocity = depot.velocity_inertial + tangent * v_circ;
+            let burn = tangent * burn_magnitude_mps;
+            stats.phase_screens += 1;
+            let Ok(flow) = propagate_adaptive_with_burns(
+                field,
+                TestParticleState {
+                    position: point,
+                    velocity: park_velocity + burn,
+                },
+                depot_epoch,
+                time_of_flight_s,
+                &[],
+                loose_config(),
+            ) else {
+                continue;
+            };
+            let miss = (flow.state.position - arrival.position_inertial).length();
+            if !miss.is_finite() {
+                continue;
+            }
+            scored.push((miss, tilt, anomaly, point, park_velocity, burn));
+        }
+    }
+    scored.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // Greedy distinct pick: a new start must differ in anomaly (>30 deg
+    // around the parking circle) or tilt (>5 deg) from every accepted one.
+    // Nearby grid twins would waste exact budgets on the same handoff.
+    let mut kept: Vec<(f64, f64, f64, DVec3, DVec3, DVec3)> = Vec::new();
+    for candidate in scored {
+        if kept.len() >= keep {
+            break;
+        }
+        let (_, tilt, anomaly, _, _, _) = candidate;
+        let distinct = kept.iter().all(|(_, kept_tilt, kept_anomaly, _, _, _)| {
+            let mut delta_angle = (anomaly - kept_anomaly).abs() % std::f64::consts::TAU;
+            if delta_angle > std::f64::consts::PI {
+                delta_angle = std::f64::consts::TAU - delta_angle;
+            }
+            delta_angle > 30.0f64.to_radians() || (tilt - kept_tilt).abs() > 5.0f64.to_radians()
+        });
+        if distinct {
+            kept.push(candidate);
+        }
+    }
+    kept.into_iter()
+        .map(|(_, _, _, point, park_velocity, burn)| (point, park_velocity, burn))
+        .collect()
+}
+
 /// Midcourse epoch: past depot-escape, with margin on both sides. Shared
 /// by direct and flyby legs (same correction architecture).
 pub(crate) fn midcourse_time_s(time_of_flight_s: f64) -> f64 {

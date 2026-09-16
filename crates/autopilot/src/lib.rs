@@ -4,7 +4,11 @@
 //! native block, a future QuickJS block, and a UI-created graph all compile
 //! to the same validated representation before they can control a vehicle.
 
-use std::{collections::BTreeMap, error::Error, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fmt,
+};
 
 use serde::{Deserialize, Serialize};
 use thessa_flight_control::{
@@ -820,6 +824,13 @@ impl Error for GraphExecutionError {}
 /// Deterministic graph scheduler for native blocks. Nodes are considered in
 /// ascending `NodeId` order, so independent parallel-ready blocks execute in
 /// a stable order while a Join naturally waits for all incoming edges.
+///
+/// Wait-bounded cycles (accepted by validation) execute in a single pass:
+/// a cycle-closing edge into a wait-capable node is cut for ordering, so the
+/// wait runs first without the loop-back value, parks, fires, and lets the
+/// downstream body run once. Loop-back inputs must therefore be optional;
+/// a required loop-back port fails with `MissingOutput`, not `Deadlock`.
+/// Acyclic graphs have no cut edges and behave exactly as before.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphRunner {
     graph: AutopilotGraph,
@@ -828,11 +839,66 @@ pub struct GraphRunner {
     waiting: BTreeMap<NodeId, WaitCondition>,
     waiting_events: BTreeMap<NodeId, std::collections::BTreeSet<String>>,
     terminal: Option<GraphRunState>,
+    /// Cycle-closing `(from, to)` edges whose target is wait-capable and can
+    /// reach the source. Ignored by readiness and input wiring (see above).
+    loopback: BTreeSet<(NodeId, NodeId)>,
+}
+
+/// An edge `from -> to` closes a wait-bounded cycle when its wait-capable
+/// target can reach its source along directed edges. Cutting exactly these
+/// edges keeps normal (acyclic) ordering intact: a DAG has no such edge.
+fn loopback_edges(graph: &AutopilotGraph) -> BTreeSet<(NodeId, NodeId)> {
+    let wait_capable: BTreeSet<NodeId> = graph
+        .nodes
+        .iter()
+        .filter(|node| node.kind.wait_capable())
+        .map(|node| node.id)
+        .collect();
+    let mut adjacency: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+    for node in &graph.nodes {
+        adjacency.insert(node.id, Vec::new());
+    }
+    for edge in &graph.edges {
+        if let Some(neighbors) = adjacency.get_mut(&edge.from.node) {
+            neighbors.push(edge.to.node);
+        }
+    }
+    let mut cut = BTreeSet::new();
+    for edge in &graph.edges {
+        if wait_capable.contains(&edge.to.node)
+            && reachable(&adjacency, edge.to.node, edge.from.node)
+        {
+            cut.insert((edge.from.node, edge.to.node));
+        }
+    }
+    cut
+}
+
+fn reachable(
+    adjacency: &BTreeMap<NodeId, Vec<NodeId>>,
+    from: NodeId,
+    to: NodeId,
+) -> bool {
+    let mut visited = BTreeSet::new();
+    let mut stack = vec![from];
+    while let Some(node) = stack.pop() {
+        if node == to {
+            return true;
+        }
+        if !visited.insert(node) {
+            continue;
+        }
+        if let Some(neighbors) = adjacency.get(&node) {
+            stack.extend(neighbors.iter().copied());
+        }
+    }
+    false
 }
 
 impl GraphRunner {
     pub fn new(graph: AutopilotGraph) -> Result<Self, Vec<GraphError>> {
         graph.validate()?;
+        let loopback = loopback_edges(&graph);
         Ok(Self {
             graph,
             statuses: BTreeMap::new(),
@@ -840,6 +906,7 @@ impl GraphRunner {
             waiting: BTreeMap::new(),
             waiting_events: BTreeMap::new(),
             terminal: None,
+            loopback,
         })
     }
 
@@ -996,6 +1063,9 @@ impl GraphRunner {
                     .edges
                     .iter()
                     .filter(|edge| edge.to.node == node.id)
+                    .filter(|edge| {
+                        !self.loopback.contains(&(edge.from.node, edge.to.node))
+                    })
                     .all(|edge| {
                         self.statuses
                             .get(&edge.from.node)
@@ -1012,6 +1082,12 @@ impl GraphRunner {
     ) -> Result<BTreeMap<String, GraphValue>, GraphExecutionError> {
         let mut inputs = BTreeMap::new();
         for edge in self.graph.edges.iter().filter(|edge| edge.to.node == node) {
+            if self.loopback.contains(&(edge.from.node, edge.to.node)) {
+                // Cut loop-back value: the producer runs after the target
+                // on the single pass, so there is nothing to deliver yet.
+                // The port must be optional (see `GraphRunner` docs).
+                continue;
+            }
             let key = (edge.from.node, edge.from.port.clone());
             let Some(value) = self.outputs.get(&key).cloned() else {
                 return Err(GraphExecutionError::MissingOutput {
@@ -1079,6 +1155,19 @@ pub enum WaitCondition {
 impl WaitCondition {
     pub fn at(time: SimTime) -> Self {
         Self::At(time)
+    }
+
+    /// Event names referenced anywhere in this condition. Used for
+    /// per-wait consumption: when a plan wait completes, exactly these
+    /// names are retired so a later wait needs a fresh generation.
+    fn event_names(&self) -> Vec<String> {
+        match self {
+            Self::At(_) => Vec::new(),
+            Self::Event(name) => vec![name.clone()],
+            Self::Any(conditions) | Self::All(conditions) => {
+                conditions.iter().flat_map(Self::event_names).collect()
+            }
+        }
     }
 
     pub fn validate(&self) -> Result<(), WaitError> {
@@ -1476,11 +1565,17 @@ impl TrajectoryPlanRunner {
 
     /// Return the current action, park on a guard, or advance through all
     /// segments that are already complete at `now`.
+    ///
+    /// Event generations are consumed per wait: completing a `Wait` retires
+    /// the event names it referenced, so a later wait for the same name
+    /// needs a fresh delivery rather than observing the stale occurrence.
+    /// One delivery therefore satisfies exactly one sequential wait.
     pub fn poll(&mut self, now: SimTime, event: Option<&str>) -> Result<PlanPoll, PlanError> {
         validate_plan_time(now)?;
         if let Some(event) = event {
             self.seen_events.insert(event.to_owned());
         }
+        let mut pending = event;
         loop {
             let Some(segment) = self.plan.segments.get(self.segment_index) else {
                 return Ok(PlanPoll::Complete { mode: self.mode });
@@ -1529,7 +1624,11 @@ impl TrajectoryPlanRunner {
                     });
                 }
                 TrajectorySegment::Wait { condition } => {
-                    if condition.is_due_with_seen(now, event, Some(&self.seen_events)) {
+                    if condition.is_due_with_seen(now, pending, Some(&self.seen_events)) {
+                        for name in condition.event_names() {
+                            self.seen_events.remove(&name);
+                        }
+                        pending = None;
                         self.segment_index += 1;
                         self.segment_start = now;
                         continue;
@@ -2426,5 +2525,166 @@ mod tests {
             runner.poll(SimTime(1.0), Some("engine-ready")).unwrap(),
             PlanPoll::Action { .. }
         ));
+    }
+
+    /// docs/07 §7.12 bug 1: a wait-bounded cycle validates but the runner
+    /// deadlocks before the first iteration — neither node ever has an
+    /// already-`Ok` predecessor. The wait boundary must cut the dependency
+    /// cycle so the loop body executes (single pass; each node runs once
+    /// the wait fires) instead of returning `Deadlock`.
+    #[test]
+    fn wait_bounded_cycle_executes_instead_of_deadlocking() {
+        let graph = AutopilotGraph {
+            nodes: vec![
+                GraphNode {
+                    id: NodeId(1),
+                    name: "tick".into(),
+                    kind: NodeKind::Wait,
+                    ports: vec![
+                        // Optional: the loop-back value does not exist yet
+                        // on the first pass; the cut edge carries nothing.
+                        Port::input("fb", PortType::Unit, false),
+                        Port::output("tick", PortType::Unit),
+                    ],
+                    config: None,
+                },
+                GraphNode {
+                    id: NodeId(2),
+                    name: "work".into(),
+                    kind: NodeKind::Sequence,
+                    ports: vec![
+                        Port::input("tick", PortType::Unit, true),
+                        Port::output("fb", PortType::Unit),
+                    ],
+                    config: None,
+                },
+            ],
+            edges: vec![
+                GraphEdge {
+                    from: PortRef {
+                        node: NodeId(1),
+                        port: "tick".into(),
+                    },
+                    to: PortRef {
+                        node: NodeId(2),
+                        port: "tick".into(),
+                    },
+                },
+                GraphEdge {
+                    from: PortRef {
+                        node: NodeId(2),
+                        port: "fb".into(),
+                    },
+                    to: PortRef {
+                        node: NodeId(1),
+                        port: "fb".into(),
+                    },
+                },
+            ],
+        };
+        // The validator accepts the wait-bounded cycle, so the runner must
+        // execute it rather than report a deadlock.
+        graph.validate().expect("wait-bounded cycle validates");
+        let mut runner = GraphRunner::new(graph).unwrap();
+        let mut block = TestBlock::default();
+        assert!(matches!(
+            runner.poll(SimTime(0.0), None, &mut block),
+            Ok(GraphRunState::Waiting { node, .. }) if node == NodeId(1)
+        ));
+        assert_eq!(
+            runner
+                .poll(SimTime(10.0), None, &mut block)
+                .unwrap(),
+            GraphRunState::Complete
+        );
+        assert!(runner.is_complete());
+        assert_eq!(block.calls.get(&NodeId(1)), Some(&2));
+        assert_eq!(block.calls.get(&NodeId(2)), Some(&1));
+    }
+
+    /// docs/07 §7.12 bug 2: `TrajectoryPlanRunner` remembers an event for
+    /// the whole plan, so a later wait for the same name observes the stale
+    /// earlier occurrence. Waits need per-wait consumption: the second
+    /// `stage` wait must park until a fresh generation arrives.
+    #[test]
+    fn plan_repeated_event_wait_needs_a_fresh_generation() {
+        let plan = TrajectoryPlan {
+            id: TrajectoryPlanId(13),
+            segments: vec![
+                TrajectorySegment::Wait {
+                    condition: WaitCondition::Event("stage".into()),
+                },
+                TrajectorySegment::Coast { duration_s: 5.0 },
+                TrajectorySegment::Wait {
+                    condition: WaitCondition::Event("stage".into()),
+                },
+            ],
+            bakeability: Bakeability::Guarded,
+        };
+        let mut runner = TrajectoryPlanRunner::new(plan, SimTime(0.0)).unwrap();
+        // First delivery satisfies the first wait; the cursor advances to
+        // the coast, not past the second wait.
+        assert!(matches!(
+            runner.poll(SimTime(0.0), Some("stage")).unwrap(),
+            PlanPoll::Action { .. }
+        ));
+        assert_eq!(runner.segment_index(), 1);
+        // Coast elapses; the second wait parks on the same name.
+        assert!(matches!(
+            runner.poll(SimTime(5.0), None).unwrap(),
+            PlanPoll::Waiting { .. }
+        ));
+        assert_eq!(runner.segment_index(), 2);
+        // No new delivery: the stale first `stage` must not complete it.
+        assert!(matches!(
+            runner.poll(SimTime(6.0), None).unwrap(),
+            PlanPoll::Waiting { .. }
+        ));
+        assert!(matches!(
+            runner.poll(SimTime(6.0), Some("other")).unwrap(),
+            PlanPoll::Waiting { .. }
+        ));
+        // A fresh generation completes it.
+        assert_eq!(
+            runner.poll(SimTime(7.0), Some("stage")).unwrap(),
+            PlanPoll::Complete {
+                mode: PlanExecutionMode::Baked
+            }
+        );
+    }
+
+    /// Same-poll form of the generation rule: one delivery satisfies exactly
+    /// one sequential wait. Back-to-back waits for one name park the second
+    /// even when both are evaluated in the poll that delivers the event.
+    #[test]
+    fn plan_back_to_back_waits_need_separate_deliveries() {
+        let plan = TrajectoryPlan {
+            id: TrajectoryPlanId(14),
+            segments: vec![
+                TrajectorySegment::Wait {
+                    condition: WaitCondition::Event("stage".into()),
+                },
+                TrajectorySegment::Wait {
+                    condition: WaitCondition::Event("stage".into()),
+                },
+            ],
+            bakeability: Bakeability::Guarded,
+        };
+        let mut runner = TrajectoryPlanRunner::new(plan, SimTime(0.0)).unwrap();
+        assert!(matches!(
+            runner.poll(SimTime(0.0), Some("stage")).unwrap(),
+            PlanPoll::Waiting { .. }
+        ));
+        assert_eq!(runner.segment_index(), 1);
+        assert!(matches!(
+            runner.poll(SimTime(1.0), None).unwrap(),
+            PlanPoll::Waiting { .. }
+        ));
+        assert_eq!(
+            runner.poll(SimTime(2.0), Some("stage")).unwrap(),
+            PlanPoll::Complete {
+                mode: PlanExecutionMode::Baked
+            }
+        );
     }
 }

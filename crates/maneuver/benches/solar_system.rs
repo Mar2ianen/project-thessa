@@ -150,8 +150,10 @@ fn main() {
     // Earth->Mars C3 ~8-15 / vinf-arr ~2.5-3.3, TOF ~259 d;
     // Earth->Venus ~3.5 + vinf ~2.7, TOF ~146 d;
     // Earth->Jupiter C3 ~80-100, TOF ~2.7 yr;
-    // Earth->Mercury direct C3 ~40 (expensive) vs Venus-swingby ~18;
-    // Earth->Saturn direct ~6 yr (Cassini flew VVEJ instead);
+    // Earth->Mercury Hohmann total ~15.4k (dep ~5.5-7 + arr vinf ~9-10,
+    // TOF ~105 d) — the handbook C3 ~40 is departure-only for an
+    // aphelion arrival (arrival pays more); the planner minimizes total;
+    // Earth->Saturn Hohmann total ~12.8k, TOF ~6 yr (Cassini flew VVEJ);
     // Apollo TLI ~3033 (bound) + LOI ~954, TOF ~2.75-3 d.
     report_route(
         "earth->mars",
@@ -183,9 +185,12 @@ fn main() {
         ),
         true,
     );
-    // Mariner-class legs: direct Mercury (expensive reference) and Saturn
-    // direct (shows why outer missions fly assists). Mercury moves fast
-    // (88 d period): needs a fine departure grid or windows step over.
+    // Mariner-class legs: direct Mercury (Hohmann-total reference ~15.4k;
+    // the Venus swingby's prize is the DEPARTURE side: swingby C3 ~18 vs
+    // direct min-departure C3 ~40 for aphelion arrival) and Saturn direct
+    // (Hohmann total ~12.8k — shows why outer missions fly assists).
+    // Mercury moves fast (88 d period): needs a fine departure grid or
+    // windows step over.
     report_route(
         "earth->mercury-direct",
         &ephemeris,

@@ -1,12 +1,16 @@
-# Solar System design data for maneuver-planner validation (v0.1).
-# Real masses, sizes, and orbit shapes (semi-major axis, eccentricity,
-# inclination); phases are APPROXIMATE J2000 mean anomalies (mean
-# longitude minus longitude of perihelion, nodes/apsides aligned to the
-# reference direction). Good enough to validate transfer ENERGIES against
-# flown missions (Hohmann classes, C3, arrival v_inf); window DATES are
-# design-relative, not launch commit dates. Units mirror system.toml.
-# Sources: JPL/NASA fact sheets (rounded to the precision the planner can
-# resolve — mass to ~0.1%, angles to ~0.01 deg).
+# Solar System design data for maneuver-planner validation (v0.2).
+# Real masses, sizes, and full Kepler orientations (semi-major axis,
+# eccentricity, inclination, longitude of ascending node, argument of
+# periapsis); phases are APPROXIMATE J2000 mean anomalies M = L - ϖ.
+# Orientation source: JPL Keplerian Elements Table 1 (mean ecliptic and
+# equinox of J2000, valid 1800-2050; Standish). a/e/i match that table to
+# file precision; node/perihelion are exact J2000 (v0.1 aligned them all
+# to the reference direction, which priced Mercury-class windows ~2.5x
+# hot and hid free-assist geometry). Good enough to validate transfer
+# ENERGIES against flown missions (Hohmann classes, C3, arrival v_inf);
+# window DATES are design-relative, not launch commit dates. Units mirror
+# system.toml. Moon elements are Meeus Ch.47 J2000 means (node regresses
+# 19.3 deg/yr in reality; pinned here like all other J2000 osculations).
 
 [meta]
 epoch_name = "J2000_APPROX"
@@ -27,6 +31,8 @@ host = "sol"
 semi_major_axis_au = 0.38710
 eccentricity = 0.20563
 inclination_deg = 7.005
+longitude_of_ascending_node_deg = 48.331
+argument_of_periapsis_deg = 29.127
 mean_longitude_offset_deg = 174.795
 mass_earth = 0.05527
 radius_km = 2439.7
@@ -37,6 +43,8 @@ host = "sol"
 semi_major_axis_au = 0.72333
 eccentricity = 0.00677
 inclination_deg = 3.395
+longitude_of_ascending_node_deg = 76.680
+argument_of_periapsis_deg = 54.923
 mean_longitude_offset_deg = 50.416
 mass_earth = 0.81500
 radius_km = 6051.8
@@ -47,6 +55,8 @@ host = "sol"
 semi_major_axis_au = 1.00000
 eccentricity = 0.01671
 inclination_deg = 0.00005
+longitude_of_ascending_node_deg = 0.0
+argument_of_periapsis_deg = 102.938
 mean_longitude_offset_deg = 357.527
 mass_earth = 1.0
 radius_km = 6378.0
@@ -59,6 +69,8 @@ host = "earth"
 semi_major_axis_km = 384400.0
 eccentricity = 0.05490
 inclination_deg = 5.145
+longitude_of_ascending_node_deg = 125.045
+argument_of_periapsis_deg = 318.309
 mean_longitude_offset_deg = 135.270
 mass_earth = 0.01230
 radius_km = 1737.4
@@ -70,6 +82,8 @@ host = "sol"
 semi_major_axis_au = 1.52368
 eccentricity = 0.09340
 inclination_deg = 1.850
+longitude_of_ascending_node_deg = 49.560
+argument_of_periapsis_deg = 286.497
 mean_longitude_offset_deg = 19.393
 mass_earth = 0.10745
 radius_km = 3389.5
@@ -82,6 +96,8 @@ host = "sol"
 semi_major_axis_au = 5.20260
 eccentricity = 0.04839
 inclination_deg = 1.303
+longitude_of_ascending_node_deg = 100.474
+argument_of_periapsis_deg = 274.255
 mean_longitude_offset_deg = 20.064
 mass_jupiter = 1.0
 radius_km = 69911.0
@@ -93,6 +109,8 @@ host = "sol"
 semi_major_axis_au = 9.55491
 eccentricity = 0.05415
 inclination_deg = 2.489
+longitude_of_ascending_node_deg = 113.662
+argument_of_periapsis_deg = 338.936
 mean_longitude_offset_deg = 317.093
 mass_jupiter = 0.29942
 radius_km = 58232.0
@@ -104,6 +122,8 @@ host = "sol"
 semi_major_axis_au = 19.21845
 eccentricity = 0.04717
 inclination_deg = 0.773
+longitude_of_ascending_node_deg = 74.017
+argument_of_periapsis_deg = 96.937
 mean_longitude_offset_deg = 142.274
 mass_jupiter = 0.04573
 radius_km = 25362.0
@@ -115,6 +135,8 @@ host = "sol"
 semi_major_axis_au = 30.11039
 eccentricity = 0.00859
 inclination_deg = 1.770
+longitude_of_ascending_node_deg = 131.784
+argument_of_periapsis_deg = 273.181
 mean_longitude_offset_deg = 259.909
 mass_jupiter = 0.05395
 radius_km = 24622.0

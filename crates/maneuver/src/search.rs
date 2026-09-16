@@ -760,6 +760,15 @@ fn loose_config() -> AdaptiveIntegratorConfig {
 /// Screens rank candidates against each other; exact N-body correction
 /// afterwards measures truth. Returns inertial departure point, parking
 /// velocity and burn vector.
+///
+/// The scan covers parking-PLANE tilt as well as anomaly (launch-plane
+/// selection). An in-plane-only departure forces the single midcourse TCM
+/// to pay 100% of the plane change: measured on the Earth->Venus window, a
+/// 93%-out-of-plane 1092 m/s TCM plus a 6.7 km/s-normal arrival mismatch,
+/// while the Mars window from the same code pays 75% out-of-plane on a
+/// smaller bill. Real launches pick the parking plane with the transfer;
+/// the tilt scan (deg-scale, inner-planet inclinations are 0-7 deg) lets
+/// the departure burn carry the declination instead of the TCM.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn phase_departure(
     field: &GravityField<'_>,
@@ -800,73 +809,86 @@ pub(crate) fn phase_departure(
     if !v_circ.is_finite() {
         return None;
     }
-    let mut best: Option<(f64, DVec3, DVec3, DVec3)> = None;
-    // Coarse sweep plus one refinement round around the winner.
+    // Evaluate one (tilt, anomaly) departure candidate with a loose
+    // full-N-body screen; returns miss and departure state on success.
+    // Tilt rotates the parking plane around the radial axis so the burn
+    // can carry transfer declination, not just in-plane direction.
+    let screen = |tilt_rad: f64, anomaly: f64, stats: &mut SearchStats| -> Option<(f64, DVec3, DVec3, DVec3)> {
+        let (sin_t, cos_t) = tilt_rad.sin_cos();
+        let tilted_tangent = tangent0 * cos_t - normal * sin_t;
+        let (point_dir, tangent) = (
+            radial_unit * anomaly.cos() + tilted_tangent * anomaly.sin(),
+            tilted_tangent * anomaly.cos() - radial_unit * anomaly.sin(),
+        );
+        let point = depot.position_inertial + point_dir * park_radius;
+        let park_velocity = depot.velocity_inertial + tangent * v_circ;
+        let burn = tangent * burn_magnitude_mps;
+        stats.phase_screens += 1;
+        let flow = propagate_adaptive_with_burns(
+            field,
+            TestParticleState {
+                position: point,
+                velocity: park_velocity + burn,
+            },
+            depot_epoch,
+            time_of_flight_s,
+            &[],
+            loose_config(),
+        )
+        .ok()?;
+        let miss = (flow.state.position - arrival.position_inertial).length();
+        if !miss.is_finite() {
+            return None;
+        }
+        Some((miss, point, park_velocity, burn))
+    };
+    // Round 0: coarse tilt x anomaly grid. Round 1: refine around the
+    // winner in both axes.
+    let mut best: Option<(f64, f64, f64, DVec3, DVec3, DVec3)> = None;
+    let mut center_tilt = 0.0;
     let mut center_angle = 0.0;
     for round in 0..2 {
-        let mut local_best: Option<(f64, DVec3, DVec3, DVec3)> = None;
-        let (span, steps) = if round == 0 {
-            (std::f64::consts::TAU, 12)
-        } else {
-            (std::f64::consts::TAU / 6.0, 8)
-        };
-        for i in 0..steps {
-            let anomaly = if round == 0 {
-                span * i as f64 / steps as f64
-            } else {
-                center_angle - span / 2.0 + span * i as f64 / (steps - 1) as f64
-            };
-            let (point_dir, tangent) = (
-                radial_unit * anomaly.cos() + tangent0 * anomaly.sin(),
-                tangent0 * anomaly.cos() - radial_unit * anomaly.sin(),
-            );
-            let point = depot.position_inertial + point_dir * park_radius;
-            let park_velocity = depot.velocity_inertial + tangent * v_circ;
-            let burn = tangent * burn_magnitude_mps;
-            stats.phase_screens += 1;
-            let Ok(flow) = propagate_adaptive_with_burns(
-                field,
-                TestParticleState {
-                    position: point,
-                    velocity: park_velocity + burn,
-                },
-                depot_epoch,
-                time_of_flight_s,
-                &[],
-                loose_config(),
-            ) else {
-                continue;
-            };
-            let miss = (flow.state.position - arrival.position_inertial).length();
-            if !miss.is_finite() {
-                continue;
+        let mut local_best: Option<(f64, f64, f64, DVec3, DVec3, DVec3)> = None;
+        if round == 0 {
+            for tilt_deg in [-30.0f64, -15.0, -7.5, 0.0, 7.5, 15.0, 30.0] {
+                let tilt = tilt_deg.to_radians();
+                for i in 0..12 {
+                    let anomaly = std::f64::consts::TAU * i as f64 / 12.0;
+                    if let Some((miss, point, park_velocity, burn)) =
+                        screen(tilt, anomaly, stats)
+                        && local_best.is_none_or(|(best_miss, _, _, _, _, _)| miss < best_miss)
+                    {
+                        local_best = Some((miss, tilt, anomaly, point, park_velocity, burn));
+                    }
+                }
             }
-            if local_best.is_none_or(|(best_miss, _, _, _)| miss < best_miss) {
-                local_best = Some((miss, point, park_velocity, burn));
+        } else {
+            for tilt_step in [-4.0f64, 0.0, 4.0] {
+                let tilt = center_tilt + tilt_step.to_radians();
+                for i in 0..8 {
+                    let span = std::f64::consts::TAU / 6.0;
+                    let anomaly = center_angle - span / 2.0 + span * i as f64 / 7.0;
+                    if let Some((miss, point, park_velocity, burn)) =
+                        screen(tilt, anomaly, stats)
+                        && local_best.is_none_or(|(best_miss, _, _, _, _, _)| miss < best_miss)
+                    {
+                        local_best = Some((miss, tilt, anomaly, point, park_velocity, burn));
+                    }
+                }
             }
         }
         match local_best {
-            Some((_, point, _, _)) => {
-                center_angle = best_anomaly_of(point, depot, radial_unit, tangent0, park_radius);
+            Some((_, tilt, anomaly, _, _, _)) => {
+                center_tilt = tilt;
+                center_angle = anomaly;
                 best = local_best;
             }
             None => break,
         }
     }
-    best.map(|(_, point, park_velocity, burn)| (point, park_velocity, burn))
+    best.map(|(_, _, _, point, park_velocity, burn)| (point, park_velocity, burn))
 }
 
-/// Recover the anomaly angle of a chosen departure point for refinement.
-fn best_anomaly_of(
-    point: DVec3,
-    depot: &BodyState,
-    radial_unit: DVec3,
-    tangent0: DVec3,
-    park_radius: f64,
-) -> f64 {
-    let offset = (point - depot.position_inertial) / park_radius;
-    offset.dot(tangent0).atan2(offset.dot(radial_unit))
-}
 /// Midcourse epoch: past depot-escape, with margin on both sides. Shared
 /// by direct and flyby legs (same correction architecture).
 pub(crate) fn midcourse_time_s(time_of_flight_s: f64) -> f64 {

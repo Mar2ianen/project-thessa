@@ -31,7 +31,11 @@
 //! handbook vinf/C3); exact arrival = rendezvous null at the standoff
 //! sphere (sqrt(vinf^2 + vesc^2), compares to low-orbit capture + vcirc).
 //! A km/s-scale exact TCM means the broad geometry missed (cf. Mariner
-//! 122 m/s budget) — Mars TCM ~460 is borderline, Venus ~3.3k is a miss.
+//! 122 m/s budget) — Mars TCM ~300-450 is borderline, Venus best ~1000
+//! (93% plane change: departure phasing now scans parking-plane tilt so
+//! the burn carries declination, but a single TCM still pays most of the
+//! inclined-rendezvous plane price; arrival null itself matches
+//! sqrt(vinf^2 + vesc^2) within ~4%).
 use std::{env, hint::black_box, time::Instant};
 
 use thessa_maneuver::{FlybyConfig, SearchConfig, broad_survey, flyby_search, porkchop_search};

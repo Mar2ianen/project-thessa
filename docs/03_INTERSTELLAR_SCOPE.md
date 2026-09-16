@@ -76,9 +76,38 @@ Useful contrasts include:
 - free brown dwarfs and rogue planets;
 - systems currently undergoing or recovering from close stellar encounters.
 
+The authored stellar cloud should **not reproduce the real Solar neighborhood**. Real nearby stars can inspire individual objects, but Alpha Centauri / Barnard's Star / Sirius / etc. should not be copied as the local map around the Solar System.
+
 ---
 
-## 5. Travel-model requirement
+## 5. Cosmic epoch
+
+Working setting epoch: **~13.6 billion years after the Big Bang**.
+
+This is a cosmological timestamp, not a statement that the game reproduces present-day real astronomy. It provides a common age reference for stellar evolution, metallicity, system histories and long-lived populations across the authored cloud.
+
+If the Solar System easter egg is retained, its bodies should be interpreted at the game's chosen epoch rather than automatically as a modern-2020s historical snapshot.
+
+---
+
+## 6. Solar System / RSS easter egg
+
+A single near-literal **Real Solar System (RSS)** recreation is allowed as an easter egg somewhere inside the broader playable neighborhood.
+
+Design rules:
+
+- use real Solar System masses, radii and major architectural relationships as closely as practical;
+- preserve the recognizable order and identities of the major planets and moons;
+- do not use the real neighboring stellar map around it;
+- do not make RSS a mandatory progression hub or uniquely privileged resource location;
+- discovery should feel optional and slightly uncanny: the player recognizes the system from its architecture rather than being led there by the campaign;
+- historical / biological surface state of Earth is separate from the celestial RSS reconstruction and should be locked only after the cosmological epoch is finalized.
+
+RSS is the exception, not a template for other systems.
+
+---
+
+## 7. Travel-model requirement
 
 The final playable radius should be locked only after propulsion models produce useful travel-time curves for representative craft classes.
 
@@ -112,7 +141,7 @@ Scalar `distance / cruise_speed` is not sufficient for moving targets in the clo
 
 ---
 
-## 6. First expansion layer — independent brown-dwarf encounter
+## 8. First expansion layer — independent brown-dwarf encounter
 
 The current preferred first interstellar target is an **independent brown dwarf system** passing of order **0.5–1.0 ly** from Asterion.
 
@@ -130,7 +159,7 @@ Detailed body design lives in `02C_FAR_COMPANION.md` even though the historical 
 
 ---
 
-## 7. Asterion formation implication
+## 9. Asterion formation implication
 
 Working hypothesis: **Asterion B–C formed as the original close binary, while A joined later through an early dynamical interaction / capture-like event in the same broader stellar environment.**
 
@@ -146,7 +175,7 @@ The same cloud that makes Asterion's assembly plausible must also be reflected i
 
 ---
 
-## 8. Canon-lock questions
+## 10. Canon-lock questions
 
 1. choose stellar-cloud number / mass density;
 2. choose velocity dispersion and age;
@@ -155,4 +184,5 @@ The same cloud that makes Asterion's assembly plausible must also be reflected i
 5. pick the brown-dwarf first-expansion encounter from the same realization;
 6. benchmark travel against actual state vectors;
 7. confirm that system density gives interesting routing without turning the sky into an unrealistically packed globular-cluster core;
-8. lock the playable radius only after propulsion and cloud dynamics work together.
+8. lock the playable radius only after propulsion and cloud dynamics work together;
+9. lock the exact cosmological epoch and decide what the RSS easter egg looks like at that epoch.

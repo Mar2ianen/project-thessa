@@ -678,7 +678,14 @@ fn revalidate_chain(
         );
     }
     let mut flybys = Vec::new();
-    // Intermediate legs: solve each flyby burn to the next aim point.
+    // Intermediate legs: solve each flyby burn to the next aim point,
+    // starting from the previous leg's converged handoff. Greedy
+    // leg-by-leg correction (not joint): it converges crisply where it
+    // converges (Nereid 0.3 km). Its blind spot is velocity: a converged
+    // leg-1 handoff with the wrong arrival asymptote forces the next leg
+    // hot (measured 35 km/s at Jupiter) or stalls it. Cooling that needs
+    // joint multiple shooting (docs/07 §7.14 L4), not a better seed.
+    // Encounter burns and events in chain order.
     for leg in 1..legs {
         let encounter = &config.encounters[leg - 1];
         let flyby_epoch = epochs[leg];
@@ -699,11 +706,8 @@ fn revalidate_chain(
             encounter_standoff(config, next),
         )
         .map_err(SearchError::Ephemeris)?;
-        // Burn seed: prefer a Lambert arc from the TRUE handoff state to
-        // the next aim point (what onboard nav would do) over the broad
-        // outgoing asymptote (which assumes broad's arrival velocity —
-        // after an exact leg-1 reshape that can be tens of km/s off).
-        // Broad seed stays as the fallback.
+        // Burn seed from the broad outgoing asymptote with periapsis
+        // energy against the TRUE handoff velocity.
         let v_in_exact = leg_end.velocity - flyby_state.velocity_inertial;
         let seed_dir = cell.v_out_frames_mps[leg - 1];
         let naive_seed = seed_dir - v_in_exact;
@@ -714,10 +718,6 @@ fn revalidate_chain(
             Some(seed) if seed.is_finite() => seed,
             _ => naive_seed,
         };
-        if !flyby_seed.is_finite() {
-            stats.filtered_by_miss += 1;
-            return Ok(None);
-        }
         if !flyby_seed.is_finite() {
             stats.filtered_by_miss += 1;
             return Ok(None);
@@ -896,6 +896,9 @@ mod tests {
     use thessa_sim_core::{BakedBody, KeplerOrbit};
 
     /// Center + depot + two swing bodies + target on nested orbits.
+    /// Bodies carry real radii: pinpoint aims above point masses are
+    /// singular terminal problems (100 km over mu-5e11 filtered at 2e6
+    /// even jointly); physical radii keep the test about chaining.
     fn chain_system() -> BakedEphemeris {
         let orbit = |a: f64, m0: f64| {
             KeplerOrbit::new(1.0e14, a, 0.0, 0.0, 0.0, 0.0, m0).expect("valid test orbit")
@@ -908,7 +911,7 @@ mod tests {
                     BodyId(1),
                     "depot",
                     1.0e12,
-                    0.0,
+                    1.0e6,
                     BodyId(0),
                     orbit(1.0e7, 0.0),
                 ),
@@ -916,7 +919,7 @@ mod tests {
                     BodyId(2),
                     "swing1",
                     5.0e11,
-                    0.0,
+                    1.0e6,
                     BodyId(0),
                     orbit(1.25e7, 1.0),
                 ),
@@ -924,7 +927,7 @@ mod tests {
                     BodyId(3),
                     "swing2",
                     5.0e11,
-                    0.0,
+                    1.0e6,
                     BodyId(0),
                     orbit(1.4e7, 2.2),
                 ),
@@ -932,7 +935,7 @@ mod tests {
                     BodyId(4),
                     "target",
                     1.0e12,
-                    0.0,
+                    1.0e6,
                     BodyId(0),
                     orbit(1.6e7, 3.0),
                 ),
@@ -1032,6 +1035,29 @@ mod tests {
         assert!(stats.exact_revalidations >= 1);
         let (ranked2, _) = chain_search(&ephemeris, &field, chain_config()).expect("search finds");
         assert_eq!(ranked, ranked2);
+    }
+
+    #[test]
+    fn chain_search_handles_single_rendezvous() {
+        // One-encounter rendezvous chain: degenerate chain that must
+        // behave like a direct transfer with an arrival match.
+        let ephemeris = chain_system();
+        let field = GravityField::from_ephemeris(&ephemeris);
+        let mut config = chain_config();
+        config.encounters = vec![ChainEncounter {
+            body: BodyId(4),
+            kind: EncounterKind::Rendezvous,
+            standoff_m: None,
+        }];
+        config.leg_tof_min_s = vec![8_000.0];
+        config.leg_tof_max_s = vec![12_000.0];
+        config.leg_tof_steps = vec![3];
+        config.keep_routes = 1;
+        let (ranked, _) = chain_search(&ephemeris, &field, config).expect("search finds");
+        let winner = &ranked[0];
+        assert!(winner.exact_miss_m <= 1.0e6);
+        assert!(winner.plan.flybys.is_empty());
+        assert!(winner.plan.nodes.len() >= 2);
     }
 
     #[test]

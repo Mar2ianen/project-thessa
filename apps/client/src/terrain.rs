@@ -3,7 +3,7 @@ use super::*;
 use bevy::{
     asset::RenderAssetUsages,
     ecs::system::SystemParam,
-    math::{DQuat, DVec3, Mat4},
+    math::{DQuat, DVec3},
     mesh::{Indices, PrimitiveTopology},
     tasks::{AsyncComputeTaskPool, Task, block_on, poll_once},
 };
@@ -13,7 +13,8 @@ use std::{
     time::Instant,
 };
 use thessa_bevy_rcbt::{
-    CbtFrameInput, CbtRenderPages, CbtRenderState, CbtRenderSurface, RenderView,
+    CbtFrameInput, CbtRenderMaterial, CbtRenderPages, CbtRenderState, CbtRenderSurface,
+    CbtRenderTopology, RenderView,
 };
 use thessa_rcbt_core::{
     CandidateAction, HeightPage, LeafCandidate, Node as CbtNode, Tree, WorkClass,
@@ -27,8 +28,11 @@ use thessa_worldgen_rocky::{
 struct CbtTerrain<'w> {
     state: Res<'w, CbtRenderState>,
     input: ResMut<'w, CbtFrameInput>,
+    topology: ResMut<'w, CbtRenderTopology>,
     pages: ResMut<'w, CbtRenderPages>,
+    material_pages: ResMut<'w, thessa_bevy_rcbt::CbtRenderMaterialPages>,
     surface: ResMut<'w, CbtRenderSurface>,
+    material: Option<Res<'w, CbtRenderMaterial>>,
     graphics: Option<Res<'w, GraphicsResolved>>,
 }
 
@@ -41,9 +45,12 @@ pub(super) struct WorldTerrain {
     pub render_origin_m: DVec3,
     cache: BTreeMap<TileKey, CachedTile>,
     jobs: BTreeMap<TileKey, Task<TerrainBuildOutput>>,
+    material_jobs: BTreeMap<TileKey, Task<thessa_bevy_rcbt::CbtMaterialPage>>,
     wanted: Vec<TileKey>,
     visible: BTreeSet<TileKey>,
     selection_at: f64,
+    /// A bounded CBT plan may take several PostUpdate frames to converge.
+    topology_pending: bool,
     /// Selection-frame eye (body frame) and camera forward driving the
     /// movement trigger and the velocity LOD bias below.
     selected_eye: DVec3,
@@ -102,9 +109,14 @@ pub(super) struct TerrainPlugin;
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SurfaceSurvey>()
+            .init_resource::<thessa_bevy_rcbt::CbtRenderMaterialPages>()
             .register_type::<SurfaceSurvey>()
             .add_systems(Startup, setup_terrain)
             .add_systems(PostStartup, initialize_launch_site)
+            .add_systems(
+                PostUpdate,
+                sync_cbt_lighting.after(bevy::transform::TransformSystems::Propagate),
+            )
             .add_systems(
                 Update,
                 survey_input.after(pilot::PilotUpdate).before(update_camera),
@@ -119,6 +131,53 @@ impl Plugin for TerrainPlugin {
             );
     }
 }
+/// Share the same stellar directions, lux and ambient light as the Bevy
+/// scene. A fixed shader-space sun made GPU terrain disagree with the craft.
+fn sync_cbt_lighting(
+    mut material: ResMut<CbtRenderMaterial>,
+    ambient: Res<GlobalAmbientLight>,
+    clock: Res<SimulationClock>,
+    lights: Query<(&DirectionalLight, &GlobalTransform)>,
+) {
+    // Bound each phase in f64 before narrowing; no long-session timer drift
+    // or discontinuity at an arbitrary time wrap. Pausing freezes both.
+    let phases = [0.7, -0.917]
+        .map(|speed| (clock.sim_seconds * speed).rem_euclid(std::f64::consts::TAU) as f32);
+    if material.ocean_wave_phases != phases {
+        material.ocean_wave_phases = phases;
+    }
+    let mut ordered: Vec<_> = lights.iter().collect();
+    ordered.sort_by(|a, b| b.0.illuminance.total_cmp(&a.0.illuminance));
+    let mut directions = [[0.0; 4]; 3];
+    let mut colors = [[0.0; 4]; 3];
+    for (index, (light, transform)) in ordered.into_iter().take(3).enumerate() {
+        let direction = transform.back();
+        directions[index] = [direction.x, direction.y, direction.z, 0.0];
+        let color = light.color.to_linear();
+        colors[index] = [
+            color.red * light.illuminance,
+            color.green * light.illuminance,
+            color.blue * light.illuminance,
+            0.0,
+        ];
+    }
+    let color = ambient.color.to_linear();
+    let ambient_lux = [
+        color.red * ambient.brightness,
+        color.green * ambient.brightness,
+        color.blue * ambient.brightness,
+        0.0,
+    ];
+    if material.light_directions != directions
+        || material.light_colors_lux != colors
+        || material.ambient_lux != ambient_lux
+    {
+        material.light_directions = directions;
+        material.light_colors_lux = colors;
+        material.ambient_lux = ambient_lux;
+    }
+}
+
 fn setup_terrain(
     mut commands: Commands,
     mut survey: ResMut<SurfaceSurvey>,
@@ -145,15 +204,25 @@ fn setup_terrain(
             "CPU fallback"
         }
     );
+    let albedo = load_albedo_image(&assets, "worlds/thessa-v3/albedo.png");
+    let normal = load_linear_image(&assets, "worlds/thessa-v3/normal.png");
+    commands.insert_resource(CbtRenderMaterial {
+        albedo: albedo.clone(),
+        roughness: Some(load_linear_image(&assets, "worlds/thessa-v3/roughness.png")),
+        ocean: (!(std::env::var_os("THESSA_AUTOBENCH").is_some()
+            && std::env::var("THESSA_AUTOBENCH_OCEAN").as_deref() == Ok("off")))
+        .then(thessa_bevy_rcbt::CbtOceanMaterial::default),
+        ..default()
+    });
     commands.spawn((
         TerrainBackdrop,
         Mesh3d(meshes.add(Sphere::new(1.0).mesh().uv(192, 96))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::WHITE,
-            base_color_texture: Some(load_albedo_image(&assets, "worlds/thessa-v3/albedo.png")),
+            base_color_texture: Some(albedo),
             // Same canonical maps as the tiles so the far field behind tile
             // coverage shades continuously instead of going flat.
-            normal_map_texture: Some(load_linear_image(&assets, "worlds/thessa-v3/normal.png")),
+            normal_map_texture: Some(normal),
             metallic_roughness_texture: Some(load_linear_image(
                 &assets,
                 "worlds/thessa-v3/roughness.png",
@@ -180,6 +249,27 @@ fn setup_terrain(
         .collect();
     survey.distance = 5000.0;
     survey.orbit = Quat::IDENTITY;
+    if std::env::var_os("THESSA_AUTOBENCH").is_some() {
+        survey.site = std::env::var("THESSA_AUTOBENCH_SITE")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|index| *index < survey.sites.len())
+            .unwrap_or(0);
+        if let Some(distance) = std::env::var("THESSA_AUTOBENCH_SURVEY_DISTANCE_M")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|v| v.is_finite())
+        {
+            survey.distance = distance.clamp(80.0, 2_000_000.0);
+        }
+        if let Some(pitch) = std::env::var("THESSA_AUTOBENCH_SURVEY_PITCH_RAD")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|v| v.is_finite())
+        {
+            survey.orbit = Quat::from_rotation_x(pitch.clamp(-1.3, 1.3));
+        }
+    }
     info!(
         "world field and survey bookmarks ready in {:.3}s",
         started.elapsed().as_secs_f64()
@@ -192,9 +282,11 @@ fn setup_terrain(
         render_origin_m: DVec3::ZERO,
         cache: BTreeMap::new(),
         jobs: BTreeMap::new(),
+        material_jobs: BTreeMap::new(),
         wanted: vec![],
         visible: BTreeSet::new(),
         selection_at: -1.0,
+        topology_pending: false,
         selected_eye: DVec3::ZERO,
         selected_forward: DVec3::NEG_Z,
         selected_valid: false,
@@ -397,6 +489,39 @@ fn tiles_overlap(a: TileKey, b: TileKey) -> bool {
     parent.face == child.face && parent.x == child.x >> shift && parent.y == child.y >> shift
 }
 
+/// Partition the union of both LOD selections into complete, disjoint tiles.
+/// Dropping a coarse tile after finding one fine descendant loses the rest
+/// of its area. Split it along the refinement path and retain every sibling.
+fn complete_terrain_cover(wanted: &[TileKey]) -> Vec<TileKey> {
+    fn visit(key: TileKey, wanted: &[TileKey], cover: &mut Vec<TileKey>) {
+        if wanted
+            .iter()
+            .any(|fine| fine.level > key.level && tiles_overlap(key, *fine))
+        {
+            for child in key.children() {
+                visit(child, wanted, cover);
+            }
+        } else {
+            cover.push(key);
+        }
+    }
+    let roots: BTreeSet<_> = wanted
+        .iter()
+        .copied()
+        .filter(|key| {
+            !wanted
+                .iter()
+                .any(|other| other.level < key.level && tiles_overlap(*key, *other))
+        })
+        .collect();
+    let mut cover = Vec::new();
+    for root in roots {
+        visit(root, wanted, &mut cover);
+    }
+    cover.sort();
+    cover
+}
+
 fn node_is_prefix(prefix: CbtNode, node: CbtNode) -> bool {
     node.depth() >= prefix.depth() && (node.id() >> (node.depth() - prefix.depth())) == prefix.id()
 }
@@ -459,7 +584,7 @@ fn cbt_candidates_for_tiles(topology: &Tree, wanted: &[TileKey]) -> Vec<LeafCand
         if !topology.contains(sibling)
             || desired
                 .iter()
-                .any(|target| node_is_prefix(parent, *target) || node_is_prefix(*target, parent))
+                .any(|target| parent != *target && node_is_prefix(parent, *target))
         {
             continue;
         }
@@ -562,6 +687,48 @@ fn update_terrain(
         || (pilot.view_mode == ClientViewMode::Pilot
             && runtime.render_terrain_origin_m().length() - world.field.params.radius_m < 80000.0);
     let gpu_raster = cbt.surface.gpu_raster_enabled();
+    // The GPU raster consumer must not draw its fallback 1x1 texture over a
+    // valid bootstrap sphere: that fallback is intentionally neutral grey and
+    // was the source of the giant grey rectangles seen while the canonical
+    // albedo was still streaming.
+    let gpu_albedo_ready = !gpu_raster
+        || cbt.material.as_deref().is_some_and(|material| {
+            images.get(&material.albedo).is_some()
+                && material
+                    .roughness
+                    .as_ref()
+                    .is_none_or(|map| images.get(map).is_some())
+        });
+    // Every disjoint requested tile must be an exact resident leaf. Partial
+    // overlap is not coverage: a single descendant cannot cover its parent.
+    let cover_current = world.visible.len() == world.wanted.len()
+        && world.wanted.iter().all(|key| world.visible.contains(key));
+    let replacement_ready = !cover_current
+        && gpu_raster
+        && gpu_albedo_ready
+        && !world.wanted.is_empty()
+        && world.wanted.iter().all(|key| {
+            lod::cbt_node_for_tile(*key).is_some_and(|node| {
+                cbt.state.topology().contains(node) && cbt.pages.contains_page(node.id())
+            })
+        });
+    if active && replacement_ready {
+        let nodes: Vec<_> = world
+            .wanted
+            .iter()
+            .filter_map(|key| lod::cbt_node_for_tile(*key))
+            .collect();
+        if cbt
+            .topology
+            .publish_ready_leaves(cbt.state.topology(), &nodes)
+        {
+            world.visible = world.wanted.iter().copied().collect();
+        }
+    }
+    // Keep the last complete draw snapshot and its pages while workers and
+    // the planning tree converge. Never flash the bootstrap on each LOD change.
+    let gpu_cover_ready = gpu_raster && gpu_albedo_ready && !world.visible.is_empty();
+    cbt.surface.set_gpu_surface_ready(active && gpu_cover_ready);
     world.counters.terrain_patches_generated = 0;
     if !active {
         world.render_center = None;
@@ -581,6 +748,7 @@ fn update_terrain(
         world.counters.terrain_lod_max = 0;
         world.counters.terrain_wanted_lod_max = 0;
         world.counters.terrain_lod_histogram = [0; 18];
+        world.topology_pending = false;
         for mut text in &mut readout {
             text.0.clear();
         }
@@ -636,14 +804,24 @@ fn update_terrain(
             spin.inverse() * (origin + camera.0.translation.as_dvec3()),
         )
     };
-    cbt.surface.set_render_from_body(
-        Mat4::from_rotation_translation(rotation.as_quat(), (-origin).as_vec3()).to_cols_array(),
+    cbt.surface.set_render_from_body_f64(
+        bevy::math::DMat4::from_rotation_translation(rotation, -origin).to_cols_array(),
     );
     for (mut transform, mut visibility) in &mut backdrop {
         transform.translation = (-origin).as_vec3();
         transform.rotation = rotation.as_quat() * SPHERE_POLE_TO_WORLD_UP;
         transform.scale = Vec3::splat((radius - 16000.0) as f32);
-        *visibility = if gpu_raster || world.visible.is_empty() {
+        // GPU terrain uses the closed sphere while the requested cover is
+        // incomplete. Keeping it behind the complete GPU cover costs a full
+        // planet pass and is not part of the large_cbt-style single-surface
+        // path, but hiding it after only the first page would expose holes.
+        let gpu_bootstrap = gpu_raster && !gpu_cover_ready;
+        let show_backdrop = if gpu_raster {
+            gpu_bootstrap
+        } else {
+            world.visible.is_empty()
+        };
+        *visibility = if show_backdrop {
             Visibility::Visible
         } else {
             Visibility::Hidden
@@ -719,7 +897,11 @@ fn update_terrain(
         // Reselect when workers are nearly drained. Existing coverage is
         // retained until its overlapping replacements are ready; disjoint
         // completed tiles appear without waiting for the entire selection.
-        if world.jobs.len() <= 2 {
+        if world.jobs.len() <= 2
+            && (!gpu_raster
+                || world.wanted.is_empty()
+                || world.wanted.iter().all(|key| world.visible.contains(key)))
+        {
             // Two-tier selection: a coarse horizon cover WITHOUT frustum
             // culling (L7, ~96 tiles) guarantees no holes ever — frustum
             // swings between selections used to cull visible regions faster
@@ -748,11 +930,18 @@ fn update_terrain(
             wanted.append(&mut fine);
             wanted.sort();
             wanted.dedup();
-            world.wanted = wanted;
+            // GPU draws exact leaves; fill coarse siblings before requesting
+            // pages so the render tree and page cache describe the same cover.
+            world.wanted = if gpu_raster {
+                complete_terrain_cover(&wanted)
+            } else {
+                wanted
+            };
             world.selection_at = now_s;
             world.selected_eye = eye;
             world.selected_forward = forward_body.normalize_or_zero();
             world.selected_valid = true;
+            world.topology_pending = true;
             selection_changed = true;
         }
     }
@@ -764,24 +953,30 @@ fn update_terrain(
         Projection::Perspective(projection) => f64::from(projection.fov),
         _ => 0.0,
     };
+    let render_view = RenderView {
+        eye_body_m: eye.to_array(),
+        forward_body: forward_body.to_array(),
+        velocity_body_mps: [0.0; 3],
+        fov_rad,
+        pixel_error_target: 1.0,
+    };
+    cbt.surface.set_view_state(
+        render_view.eye_body_m,
+        render_view.forward_body,
+        render_view.fov_rad,
+    );
     let cbt_submit_started = Instant::now();
-    // The CBT plugin consumes topology work in PostUpdate and keeps the last
-    // committed view/topology. Rebuilding the full candidate set every render
-    // frame was pure CPU churn: at ~180 leaves it cost several milliseconds
-    // even when the camera and wanted set had not changed. Submit only when a
-    // new selection is actually available; pages and CPU mesh transforms do
-    // not require a no-op CBT transaction.
-    if selection_changed {
-        cbt.input.submit(
-            Some(RenderView {
-                eye_body_m: eye.to_array(),
-                forward_body: forward_body.to_array(),
-                velocity_body_mps: [0.0; 3],
-                fov_rad,
-                pixel_error_target: 1.0,
-            }),
-            cbt_candidates_for_tiles(cbt.state.topology(), &world.wanted),
-        );
+    // The CBT plugin commits only one bounded plan per PostUpdate. A large
+    // wanted cover therefore needs several submissions; otherwise the first
+    // partial tree was left visible forever and the GPU path mixed a few
+    // active slabs with the bootstrap sphere. Rebuild candidates only while
+    // convergence is pending, not on every steady-state render frame.
+    if selection_changed || world.topology_pending {
+        let candidates = cbt_candidates_for_tiles(cbt.state.topology(), &world.wanted);
+        world.topology_pending = !candidates.is_empty();
+        if world.topology_pending {
+            cbt.input.submit(Some(render_view), candidates);
+        }
     }
     perf.record_scope(
         "world.terrain_cbt_submit",
@@ -906,14 +1101,36 @@ fn update_terrain(
             key,
             AsyncComputeTaskPool::get().spawn(async move {
                 let start = Instant::now();
-                let tile = lod::build_tile(&field, key, tile_mesh_cells);
-                let mesh_s = start.elapsed().as_secs_f64();
-                // The direct GPU smoke path needs only the quantized height
-                // page. Avoid paying for CPU mesh assembly, mip generation,
-                // and material uploads when those entities will not be drawn.
-                let (mesh, images, texture_bytes, material_s) = if gpu_raster {
-                    (None, None, 0, 0.0)
+                // The direct GPU path needs only the quantized height page.
+                // Do not build CPU positions, normals, skirts, or material
+                // images for a surface that will never create a Bevy entity.
+                let (
+                    height_page,
+                    anchor,
+                    vertices,
+                    triangles,
+                    mesh,
+                    images,
+                    texture_bytes,
+                    mesh_s,
+                    material_s,
+                ) = if gpu_raster {
+                    let page = lod::bake_height_page(&field, key, 33, 0.5)
+                        .expect("GPU terrain height page must fit its error budget");
+                    (
+                        page,
+                        DVec3::ZERO,
+                        0,
+                        0,
+                        None,
+                        None,
+                        0,
+                        start.elapsed().as_secs_f64(),
+                        0.0,
+                    )
                 } else {
+                    let tile = lod::build_tile(&field, key, tile_mesh_cells);
+                    let mesh_s = start.elapsed().as_secs_f64();
                     let texture_start = Instant::now();
                     let texture = lod::build_surface_texture_for_mesh(
                         &field,
@@ -932,18 +1149,23 @@ fn update_terrain(
                         surface_image(texture.size, texture.normal.clone(), false),
                     ];
                     (
+                        tile.height_page,
+                        DVec3::from_array(tile.anchor_m),
+                        tile.positions.len() as u64,
+                        (tile.indices.len() / 3) as u64,
                         Some(mesh),
                         Some(images),
                         mip_bytes(texture.size) * 3,
+                        mesh_s,
                         material_s,
                     )
                 };
                 TerrainBuildOutput {
                     mesh,
-                    height_page: tile.height_page,
-                    anchor: DVec3::from_array(tile.anchor_m),
-                    vertices: tile.positions.len() as u64,
-                    triangles: (tile.indices.len() / 3) as u64,
+                    height_page,
+                    anchor,
+                    vertices,
+                    triangles,
                     texture_bytes,
                     images,
                     seconds: [mesh_s, material_s],
@@ -952,8 +1174,54 @@ fn update_terrain(
         );
         world.counters.terrain_cache_misses += 1;
     }
+    // Material refinement has its own two-worker budget. Height/cover jobs
+    // never wait for it; a resident canonical globe map remains the fallback.
+    if gpu_raster {
+        let finished: Vec<_> = world
+            .material_jobs
+            .iter_mut()
+            .filter_map(|(key, task)| block_on(poll_once(task)).map(|page| (*key, page)))
+            .collect();
+        for (key, page) in finished {
+            world.material_jobs.remove(&key);
+            if world.cache.contains_key(&key)
+                && let Some(node) = lod::cbt_node_for_tile(key)
+            {
+                cbt.material_pages.set_page(node.id(), page);
+            }
+        }
+        let mut material_wanted: Vec<_> = world.visible.iter().copied().collect();
+        material_wanted.sort_by_key(|key| {
+            (
+                std::cmp::Reverse(key.level),
+                lod::cbt_node_for_tile(*key).map_or(0, |node| node.id()),
+            )
+        });
+        material_wanted.truncate(256);
+        for key in material_wanted {
+            if world.material_jobs.len() >= 2 {
+                break;
+            }
+            let Some(node) = lod::cbt_node_for_tile(key) else {
+                continue;
+            };
+            if cbt.material_pages.contains_page(node.id()) || world.material_jobs.contains_key(&key)
+            {
+                continue;
+            }
+            let field = world.field.clone();
+            world.material_jobs.insert(
+                key,
+                AsyncComputeTaskPool::get().spawn(async move {
+                    let page = lod::build_gpu_material_page(&field, key);
+                    thessa_bevy_rcbt::CbtMaterialPage::from_rgba8(page.rgba)
+                        .expect("fixed material page layout")
+                }),
+            );
+        }
+    }
     let entity_sync_started = Instant::now();
-    if selection_changed || world.counters.terrain_patches_generated > 0 {
+    if !gpu_raster && (selection_changed || world.counters.terrain_patches_generated > 0) {
         let desired = ready_terrain_cover(&world.wanted, &world.visible, |key| {
             world.cache.contains_key(key)
         });
@@ -1002,8 +1270,16 @@ fn update_terrain(
     // The closed sphere is only a bootstrap/GPU fallback. Keeping it visible
     // behind CPU tiles makes incomplete cover show a second, low-detail
     // coastline and produces large stepped land/water transitions.
+    // In GPU mode `visible` tracks the retained complete draw snapshot,
+    // independently of the planning tree and its in-flight replacement.
+    let gpu_bootstrap = gpu_raster && !gpu_cover_ready;
     for (_, mut visibility) in &mut backdrop {
-        *visibility = if gpu_raster || world.visible.is_empty() {
+        let show_backdrop = if gpu_raster {
+            gpu_bootstrap
+        } else {
+            world.visible.is_empty()
+        };
+        *visibility = if show_backdrop {
             Visibility::Visible
         } else {
             Visibility::Hidden
@@ -1019,7 +1295,12 @@ fn update_terrain(
         "world.terrain_entity_sync",
         entity_sync_started.elapsed().as_secs_f64(),
     );
-    if !world.visible.is_empty() {
+    let terrain_surface_ready = if gpu_raster {
+        gpu_cover_ready
+    } else {
+        !world.visible.is_empty()
+    };
+    if terrain_surface_ready {
         for mut visibility in &mut celestial {
             *visibility = Visibility::Hidden;
         }
@@ -1036,6 +1317,7 @@ fn update_terrain(
             if let Some(tile) = world.cache.remove(&key) {
                 if let Some(node) = lod::cbt_node_for_tile(key) {
                     cbt.pages.remove_page(node.id());
+                    cbt.material_pages.remove_page(node.id());
                 }
                 if let Some(mesh) = tile.mesh {
                     meshes.remove(mesh.id());
@@ -1103,7 +1385,8 @@ fn update_terrain(
         .cache
         .values()
         .map(|t| t.vertices * 48 + t.triangles * 12 + t.texture_bytes)
-        .sum();
+        .sum::<u64>()
+        + cbt.material_pages.byte_len() as u64;
     perf.record_scope(
         "world.terrain_counters",
         counters_started.elapsed().as_secs_f64(),
@@ -1280,6 +1563,47 @@ fn update_local_sky(
 mod streaming_tests {
     use super::*;
     use thessa_rcbt_core::{FrameBudget, plan_frame};
+
+    #[test]
+    fn mixed_lod_cover_preserves_parent_area_and_fine_detail() {
+        let root = TileKey::root(0);
+        let fine = root.children()[0].children()[3];
+        let cover = complete_terrain_cover(&[root, fine]);
+        assert!(cover.contains(&fine));
+        assert_eq!(cover.len(), 7);
+        let area: f64 = cover
+            .iter()
+            .map(|key| 4.0_f64.powi(-(key.level as i32)))
+            .sum();
+        assert_eq!(area, 1.0);
+        for (i, a) in cover.iter().enumerate() {
+            assert!(cover[i + 1..].iter().all(|b| !tiles_overlap(*a, *b)));
+        }
+        assert_eq!(complete_terrain_cover(&cover), cover);
+    }
+
+    #[test]
+    fn cbt_cover_converges_after_refining_and_coarsening() {
+        let root = TileKey::root(0);
+        let fine = root.children()[0].children()[3];
+        let mut tree = Tree::at_depth(12, lod::CBT_FACE_DEPTH).unwrap();
+        for wanted in [complete_terrain_cover(&[root, fine]), vec![root]] {
+            for _ in 0..64 {
+                let candidates = cbt_candidates_for_tiles(&tree, &wanted);
+                if candidates.is_empty() {
+                    break;
+                }
+                let plan = plan_frame(&tree, candidates, FrameBudget { max_operations: 2 });
+                tree.apply_batch(plan.updates()).unwrap();
+            }
+            assert!(cbt_candidates_for_tiles(&tree, &wanted).is_empty());
+            assert!(
+                wanted
+                    .iter()
+                    .all(|key| tree.contains(lod::cbt_node_for_tile(*key).unwrap()))
+            );
+        }
+    }
 
     #[test]
     fn refinement_retains_parent_until_all_children_are_ready() {

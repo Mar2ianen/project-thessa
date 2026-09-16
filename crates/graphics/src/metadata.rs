@@ -125,6 +125,17 @@ pub fn describe() -> Vec<SettingMeta> {
             description: "Use an intermediate high-dynamic-range camera target for lighting and tone mapping.",
         },
         SettingMeta {
+            path: "renderer.bloom",
+            label: "Bloom",
+            kind: SettingKind::Bool,
+            range: "true | false",
+            step: "-",
+            unit: "-",
+            advanced: false,
+            restart_required: false,
+            description: "Add a bright-light glow post-process; disabled by default to preserve terrain contrast and frame time.",
+        },
+        SettingMeta {
             path: "renderer.auto_exposure",
             label: "Adaptive exposure",
             kind: SettingKind::Bool,
@@ -512,6 +523,7 @@ mod tests {
         assert!(paths.contains(&"renderer.ray_tracing"));
         assert!(paths.contains(&"renderer.terrain"));
         assert!(paths.contains(&"renderer.terrain_mesh_cells"));
+        assert!(paths.contains(&"renderer.bloom"));
         assert!(paths.contains(&"renderer.hdr"));
         assert!(paths.contains(&"clouds.cast_shadows"));
         assert!(paths.contains(&"raytracing.terrain"));

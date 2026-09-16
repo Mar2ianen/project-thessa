@@ -109,6 +109,7 @@ pub struct ResolvedGraphicsSettings {
     pub resolution_scale: f32,
     pub vsync: bool,
     pub hdr: bool,
+    pub bloom: bool,
     pub exposure_ev100: f32,
     pub auto_exposure: bool,
     pub atmosphere_enabled: bool,
@@ -214,6 +215,7 @@ impl ResolvedGraphicsSettings {
             resolution_scale: requested.renderer.resolution_scale,
             vsync: requested.renderer.vsync,
             hdr: requested.renderer.hdr,
+            bloom: requested.renderer.bloom,
             exposure_ev100: requested.renderer.exposure_ev100,
             auto_exposure: requested.renderer.auto_exposure && requested.renderer.hdr,
             atmosphere_enabled: requested.atmosphere.enabled,
@@ -279,6 +281,7 @@ impl ResolvedGraphicsSettings {
         );
         map.insert("vsync".to_string(), self.vsync.to_string());
         map.insert("hdr".to_string(), self.hdr.to_string());
+        map.insert("bloom".to_string(), self.bloom.to_string());
         map.insert(
             "exposure_ev100".to_string(),
             format!("{:.1}", self.exposure_ev100),

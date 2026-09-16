@@ -7,6 +7,8 @@
 //! indirect-draw buffers and no authoritative state crosses that boundary.
 
 use bevy::prelude::{App, Plugin, PostUpdate, ResMut, Resource};
+#[cfg(feature = "render")]
+use bevy::prelude::{Handle, Image};
 use std::collections::BTreeMap;
 use thessa_rcbt_core::{
     CbtCapabilities, FrameBudget, HeightPage, LeafCandidate, LeafList, Tree, TreeError, Update,
@@ -20,6 +22,67 @@ use thessa_rcbt_core::{
 /// consumer never has to infer precision-sensitive data from buffer layout.
 pub type CbtLeafRecord = [u32; 4];
 
+#[cfg(feature = "render")]
+pub mod material_cache;
+#[cfg(feature = "render")]
+mod material_pages;
+#[cfg(feature = "render")]
+pub mod precision;
+#[cfg(feature = "render")]
+pub use material_pages::{CbtMaterialPage, CbtRenderMaterialPages};
+
+/// Canonical surface maps consumed by the portable GPU CBT raster path.
+///
+/// The resource contains handles only; the render-world adapter resolves them
+/// to `GpuImage`s; the adapter retains bootstrap coverage while assets stream.
+/// Keeping this separate from [`CbtRenderSurface`] leaves the topology/geometry
+/// contract independent of any particular game's material set.
+#[cfg(feature = "render")]
+#[derive(Debug, Clone, Default, Resource)]
+pub struct CbtRenderMaterial {
+    pub albedo: Handle<Image>,
+    /// Optional linear metallic/roughness map: green is perceptual roughness.
+    /// Ocean shading is disabled when this map is absent.
+    pub roughness: Option<Handle<Image>>,
+    /// Visual animation follows simulation time; a paused scene stays still.
+    pub ocean_wave_phases: [f32; 2],
+    pub ocean: Option<CbtOceanMaterial>,
+    /// Render-world directions toward up to three scene lights and their
+    /// linear RGB illuminance in lux. The adapter supplies physical lighting.
+    pub light_directions: [[f32; 4]; 3],
+    pub light_colors_lux: [[f32; 4]; 3],
+    pub ambient_lux: [f32; 4],
+}
+
+/// Low-cost visual ocean controls. These affect normals/reflection only;
+/// simulation and height pages remain authoritative and unchanged.
+#[cfg(feature = "render")]
+#[derive(Debug, Clone, Copy)]
+pub struct CbtOceanMaterial {
+    pub wave_slope: f32,
+    pub wavelength_m: f32,
+    pub secondary_frequency_ratio: f32,
+    pub secondary_slope_ratio: f32,
+    pub reflectance: f32,
+    /// Fraction of incident stellar illuminance redistributed into the
+    /// analytic sky approximation (not a replacement for atmosphere physics).
+    pub sky_scatter_fraction: f32,
+}
+
+#[cfg(feature = "render")]
+impl Default for CbtOceanMaterial {
+    fn default() -> Self {
+        Self {
+            wave_slope: 0.06,
+            wavelength_m: 128.0,
+            secondary_frequency_ratio: 1.73,
+            secondary_slope_ratio: 0.5,
+            reflectance: 0.0204,
+            sky_scatter_fraction: 0.08,
+        }
+    }
+}
+
 /// Main-world snapshot consumed by the optional render-world integration.
 ///
 /// This is deliberately a leaf stream rather than a dense bitfield: the game
@@ -31,6 +94,7 @@ pub struct CbtRenderTopology {
     generation: u64,
     max_depth: u8,
     records: Vec<CbtLeafRecord>,
+    adapter_managed: bool,
 }
 
 impl CbtRenderTopology {
@@ -55,7 +119,37 @@ impl CbtRenderTopology {
             generation,
             max_depth,
             records,
+            adapter_managed: false,
         }
+    }
+
+    /// Atomically publish a page-ready subset of committed leaves. After the
+    /// first publication, planning commits no longer replace this snapshot:
+    /// the adapter retains the old cover until its replacement pages arrive.
+    /// Returns false if any requested node is not a leaf of the supplied tree.
+    pub fn publish_ready_leaves(&mut self, tree: &Tree, nodes: &[thessa_rcbt_core::Node]) -> bool {
+        if nodes.iter().any(|node| !tree.contains(*node)) {
+            return false;
+        }
+        let records: Vec<_> = nodes
+            .iter()
+            .enumerate()
+            .map(|(ordinal, node)| {
+                [
+                    node.id() as u32,
+                    (node.id() >> 32) as u32,
+                    u32::from(node.depth()),
+                    ordinal as u32,
+                ]
+            })
+            .collect();
+        self.adapter_managed = true;
+        if self.records != records || self.max_depth != tree.max_depth() {
+            self.records = records;
+            self.max_depth = tree.max_depth();
+            self.generation = self.generation.saturating_add(1);
+        }
+        true
     }
 
     pub fn generation(&self) -> u64 {
@@ -113,6 +207,13 @@ impl CbtRenderPages {
         self.pages.is_empty()
     }
 
+    /// Whether the page for an exact CBT leaf is resident in the current
+    /// render-page cache. Terrain adapters use this to keep a coarse
+    /// bootstrap surface behind an incomplete GPU cover.
+    pub fn contains_page(&self, node_id: u64) -> bool {
+        self.pages.contains_key(&node_id)
+    }
+
     #[cfg(feature = "render")]
     pub(crate) fn get(&self, node_id: u64) -> Option<&HeightPage> {
         self.pages.get(&node_id)
@@ -127,10 +228,24 @@ pub struct CbtRenderSurface {
     radius_m: f32,
     generation: u64,
     render_from_body: [f32; 16],
+    render_from_body_f64: [f64; 16],
     transform_generation: u64,
+    view_generation: u64,
+    view_eye_body_m: [f64; 3],
+    view_forward_body: [f64; 3],
+    view_fov_rad: f64,
     gpu_raster_enabled: bool,
+    gpu_surface_ready: bool,
     gpu_mesh_enabled: bool,
 }
+
+// Reclassifying every sub-pixel camera jitter wastes a full GPU compaction
+// pass. These explicit render-only hysteresis bounds keep stale visibility
+// below a fraction of a 33x33 page while preserving prompt updates for real
+// camera motion.
+const VIEW_RECLASSIFY_EYE_M: f64 = 0.5;
+const VIEW_RECLASSIFY_FORWARD_DELTA: f64 = 0.002;
+const VIEW_RECLASSIFY_FOV_RAD: f64 = 0.0001;
 
 impl Default for CbtRenderSurface {
     fn default() -> Self {
@@ -140,8 +255,16 @@ impl Default for CbtRenderSurface {
             render_from_body: [
                 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
             ],
+            render_from_body_f64: [
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
             transform_generation: 0,
+            view_generation: 0,
+            view_eye_body_m: [f64::NAN; 3],
+            view_forward_body: [f64::NAN; 3],
+            view_fov_rad: f64::NAN,
             gpu_raster_enabled: false,
+            gpu_surface_ready: false,
             gpu_mesh_enabled: false,
         }
     }
@@ -169,14 +292,56 @@ impl CbtRenderSurface {
     /// optional GPU raster consumer. The matrix is column-major, matching
     /// `Mat4::to_cols_array`.
     pub fn set_render_from_body(&mut self, matrix: [f32; 16]) {
-        if matrix.iter().all(|value| value.is_finite()) && self.render_from_body != matrix {
-            self.render_from_body = matrix;
+        self.set_render_from_body_f64(matrix.map(f64::from));
+    }
+
+    /// Preserve the floating-origin subtraction in f64 until each tile's
+    /// anchor is transformed. The GPU consumes a small local vertex offset.
+    pub fn set_render_from_body_f64(&mut self, matrix: [f64; 16]) {
+        if matrix.iter().all(|value| value.is_finite()) && self.render_from_body_f64 != matrix {
+            self.render_from_body = matrix.map(|value| value as f32);
+            self.render_from_body_f64 = matrix;
             self.transform_generation = self.transform_generation.saturating_add(1);
+        }
+    }
+
+    /// Publish the camera state used by the GPU visibility/triangle pass.
+    /// The render-world classifier can then reuse its compact stream while
+    /// the camera and floating origin remain unchanged.
+    pub fn set_view_state(&mut self, eye_body_m: [f64; 3], forward_body: [f64; 3], fov_rad: f64) {
+        let eye_delta_sq = self
+            .view_eye_body_m
+            .into_iter()
+            .zip(eye_body_m)
+            .map(|(old, new)| (old - new) * (old - new))
+            .sum::<f64>();
+        let forward_delta_sq = self
+            .view_forward_body
+            .into_iter()
+            .zip(forward_body)
+            .map(|(old, new)| (old - new) * (old - new))
+            .sum::<f64>();
+        if !self.view_fov_rad.is_finite()
+            || eye_delta_sq > VIEW_RECLASSIFY_EYE_M * VIEW_RECLASSIFY_EYE_M
+            || forward_delta_sq > VIEW_RECLASSIFY_FORWARD_DELTA * VIEW_RECLASSIFY_FORWARD_DELTA
+            || (self.view_fov_rad - fov_rad).abs() > VIEW_RECLASSIFY_FOV_RAD
+        {
+            self.view_eye_body_m = eye_body_m;
+            self.view_forward_body = forward_body;
+            self.view_fov_rad = fov_rad;
+            self.view_generation = self.view_generation.saturating_add(1);
         }
     }
 
     pub fn gpu_raster_enabled(&self) -> bool {
         self.gpu_raster_enabled
+    }
+
+    /// Whether the adapter has published an atomic, complete GPU cover for
+    /// the current view. Render consumers use this to avoid mixing partial
+    /// GPU leaves with the bootstrap surface.
+    pub fn gpu_surface_ready(&self) -> bool {
+        self.gpu_surface_ready
     }
 
     /// Opt into the experimental hardware mesh-shader consumer. This is a
@@ -196,7 +361,16 @@ impl CbtRenderSurface {
     /// cover; callers should enable it only after their draw-list policy
     /// avoids drawing the same cover twice.
     pub fn set_gpu_raster_enabled(&mut self, enabled: bool) {
+        if self.gpu_raster_enabled != enabled {
+            self.gpu_surface_ready = false;
+        }
         self.gpu_raster_enabled = enabled;
+    }
+
+    /// Publish an atomic GPU-cover readiness state. A false value means the
+    /// bootstrap surface remains responsible for visible coverage.
+    pub fn set_gpu_surface_ready(&mut self, ready: bool) {
+        self.gpu_surface_ready = ready;
     }
 
     #[cfg(feature = "render")]
@@ -212,6 +386,10 @@ impl CbtRenderSurface {
     #[cfg(feature = "render")]
     pub(crate) fn transform_generation(&self) -> u64 {
         self.transform_generation
+    }
+
+    pub(crate) fn view_generation(&self) -> u64 {
+        self.view_generation
     }
 }
 
@@ -409,11 +587,13 @@ fn apply_cbt_frame(
     let leaf_list = state.leaf_list();
     if result.is_ok() && !plan.is_empty() {
         output.topology_generation = output.topology_generation.saturating_add(1);
-        *render_topology = CbtRenderTopology::from_leaf_list(
-            output.topology_generation,
-            state.topology.max_depth(),
-            &leaf_list,
-        );
+        if !render_topology.adapter_managed {
+            *render_topology = CbtRenderTopology::from_leaf_list(
+                output.topology_generation,
+                state.topology.max_depth(),
+                &leaf_list,
+            );
+        }
     }
     output.leaf_list = leaf_list;
 }
@@ -442,6 +622,40 @@ mod tests {
             predicted_error_px: 0.0,
             time_to_needed_s: 1.0,
         }
+    }
+
+    #[test]
+    fn ready_snapshot_survives_planning_commits_until_replacement_is_published() {
+        let mut app = App::new();
+        app.add_plugins(CbtPlugin::default());
+        let root_tree = Tree::new(16).unwrap();
+        {
+            let mut snapshot = app.world_mut().resource_mut::<CbtRenderTopology>();
+            assert!(snapshot.publish_ready_leaves(&root_tree, &[Node::root()]));
+        }
+        let before = app
+            .world()
+            .resource::<CbtRenderTopology>()
+            .records()
+            .to_vec();
+        app.world_mut()
+            .resource_mut::<CbtFrameInput>()
+            .submit(None, [split_root()]);
+        app.update();
+        assert_eq!(
+            app.world().resource::<CbtRenderTopology>().records(),
+            before
+        );
+        let mut split_tree = root_tree;
+        split_tree.split(Node::root()).unwrap();
+        let mut snapshot = app.world_mut().resource_mut::<CbtRenderTopology>();
+        assert!(!snapshot.publish_ready_leaves(&split_tree, &[Node::root()]));
+        assert_eq!(snapshot.records(), before);
+        assert!(snapshot.publish_ready_leaves(&split_tree, &Node::root().children().unwrap()));
+        assert_eq!(snapshot.leaf_count(), 2);
+        let generation = snapshot.generation();
+        assert!(snapshot.publish_ready_leaves(&split_tree, &Node::root().children().unwrap()));
+        assert_eq!(snapshot.generation(), generation);
     }
 
     #[test]
@@ -506,5 +720,16 @@ mod tests {
         pages.remove_page(17);
         assert_eq!(pages.generation(), 2);
         assert!(pages.is_empty());
+    }
+
+    #[test]
+    fn view_generation_ignores_subpixel_jitter_but_tracks_camera_motion() {
+        let mut surface = CbtRenderSurface::default();
+        surface.set_view_state([10.0, 20.0, 30.0], [0.0, 0.0, -1.0], 1.0);
+        let first = surface.view_generation();
+        surface.set_view_state([10.25, 20.0, 30.0], [0.0, 0.0005, -1.0], 1.0);
+        assert_eq!(surface.view_generation(), first);
+        surface.set_view_state([10.75, 20.0, 30.0], [0.0, 0.003, -1.0], 1.0);
+        assert_eq!(surface.view_generation(), first + 1);
     }
 }

@@ -277,18 +277,142 @@ fn lambert_cell(
     let arrival = ephemeris
         .body_state(config.arrival_body, arrival_epoch)
         .ok()?;
-    let r1 = departure.position_inertial - central_dep.position_inertial;
-    let v1 = departure.velocity_inertial - central_dep.velocity_inertial;
     let r2 = arrival.position_inertial - central_arr.position_inertial;
     let v2 = arrival.velocity_inertial - central_arr.velocity_inertial;
+    // Depot == central (Apollo-class departure from the central body's own
+    // parking orbit): the Lambert arc starts at the parking point ANTI-
+    // facing the target — the Hohmann half-ellipse geometry (perigee burn
+    // opposite the arrival, ~180° transfer; the target's own motion during
+    // flight keeps the arc well-conditioned). Facing-side starts force
+    // expensive loop/fast-chord arcs or degenerate Lambert pairs. The burn
+    // is the direct vector change (no patch — depot IS the well); both
+    // tangential senses price it while exact anomaly phasing (full 360°
+    // scan) refines the true asymptote.
+    let depot_is_central = config.departure_body == config.central_body;
+    let park_radius = ctx.depot_radius_m + ctx.config.standoff_m;
+    // Depot == central needs a parking-orbit start direction BEFORE the
+    // Lambert solve (r1 lives on the parking circle: depot == central
+    // would give r1 = 0). Candidates: anti-facing DEPARTURE (robust,
+    // always solves, but 40-65 deg off Hohmann — measured Luna 4725 vs
+    // Apollo 3033) plus anti-facing ARRIVAL nudged +-12 deg in-plane
+    // (near-Hohmann 168 deg, well-conditioned; exact 180 deg is a
+    // singularity). Price the cheapest solved side. Cost: up to 3 Lambert
+    // solves per broad cell on this lunar-class path only.
+    let depot_central_candidates: Option<Vec<(DVec3, DVec3)>> = if depot_is_central {
+        let target_dep = ephemeris
+            .body_state(config.arrival_body, departure_epoch)
+            .ok()?;
+        let facing_dep_raw = target_dep.position_inertial - central_dep.position_inertial;
+        let facing_arr_raw = arrival.position_inertial - central_arr.position_inertial;
+        if facing_dep_raw.length_squared() <= 0.0 || facing_arr_raw.length_squared() <= 0.0 {
+            stats.degenerate_cells += 1;
+            return None;
+        }
+        let facing_dep = facing_dep_raw.normalize();
+        let facing_arr = facing_arr_raw.normalize();
+        let plane_raw = r2.cross(v2);
+        if !facing_dep.is_finite()
+            || !facing_arr.is_finite()
+            || plane_raw.length_squared() <= 0.0
+        {
+            stats.degenerate_cells += 1;
+            return None;
+        }
+        let plane_normal = plane_raw.normalize();
+        let v_circ = (ctx.depot_mu / park_radius).sqrt();
+        if !v_circ.is_finite() {
+            stats.degenerate_cells += 1;
+            return None;
+        }
+        let mut cands = Vec::with_capacity(3);
+        // 1) departure-facing (robust fallback).
+        {
+            let start_dir = -facing_dep;
+            let prograde = plane_normal.cross(start_dir).normalize();
+            if prograde.is_finite() {
+                cands.push((start_dir * park_radius, prograde * v_circ));
+            }
+        }
+        // 2-3) arrival-nudged +-12 deg (near-Hohmann).
+        for sign in [1.0, -1.0] {
+            let delta = sign * 12.0_f64.to_radians();
+            let anti = -facing_arr;
+            let in_plane = plane_normal.cross(anti);
+            if !in_plane.is_finite() || in_plane.length_squared() <= 0.0 {
+                continue;
+            }
+            let start_dir = (anti * delta.cos() + in_plane.normalize() * delta.sin()).normalize();
+            if !start_dir.is_finite() {
+                continue;
+            }
+            let prograde = plane_normal.cross(start_dir).normalize();
+            if !prograde.is_finite() {
+                continue;
+            }
+            cands.push((start_dir * park_radius, prograde * v_circ));
+        }
+        if cands.is_empty() {
+            stats.degenerate_cells += 1;
+            return None;
+        }
+        Some(cands)
+    } else {
+        None
+    };
+    let (r1, v1) = if let Some(ref cands) = depot_central_candidates {
+        // Placeholder; the real solve tries each candidate below.
+        cands[0]
+    } else {
+        (
+            departure.position_inertial - central_dep.position_inertial,
+            departure.velocity_inertial - central_dep.velocity_inertial,
+        )
+    };
     // Prograde branch per cell: the cheap side is short-way on one side
     // of the sky and long-way on the other; a fixed flag would price half
     // the grid as retrograde.
-    let arc = match solve_lambert_prograde(r1, v1, r2, time_of_flight_s, central_mu) {
-        Ok(arc) => arc,
-        Err(_) => {
-            stats.degenerate_cells += 1;
-            return None;
+    // Depot == central: solve each start, keep the cheaper TOTAL
+    // (dep + arrival proxy). Selecting on dep alone prefers hot
+    // departures with cool arrivals over balanced Hohmann-like arcs.
+    let (arc, r1, v1) = if let Some(cands) = depot_central_candidates {
+        let mut best: Option<(crate::lambert::LambertArc, DVec3, DVec3, f64)> = None;
+        for (try_r1, try_v1) in cands {
+            let Ok(try_arc) =
+                solve_lambert_prograde(try_r1, try_v1, r2, time_of_flight_s, central_mu)
+            else {
+                continue;
+            };
+            let pro = (try_arc.departure_velocity_mps - try_v1).length();
+            let retro = (try_arc.departure_velocity_mps + try_v1).length();
+            if !pro.is_finite() || !retro.is_finite() {
+                continue;
+            }
+            let dep = pro.min(retro);
+            // Arrival proxy: direct match (exact for Luna-class where
+            // arrival_planet is None; patched arrivals refine below).
+            let arr_proxy = (v2 - try_arc.arrival_velocity_mps).length();
+            if !arr_proxy.is_finite() {
+                continue;
+            }
+            let total = dep + arr_proxy;
+            if best.is_none_or(|(_, _, _, best_total)| total < best_total) {
+                best = Some((try_arc, try_r1, try_v1, total));
+            }
+        }
+        match best {
+            Some((arc, r1, v1, _)) => (arc, r1, v1),
+            None => {
+                stats.degenerate_cells += 1;
+                return None;
+            }
+        }
+    } else {
+        match solve_lambert_prograde(r1, v1, r2, time_of_flight_s, central_mu) {
+            Ok(arc) => (arc, r1, v1),
+            Err(_) => {
+                stats.degenerate_cells += 1;
+                return None;
+            }
         }
     };
     // Patched escape magnitude (energy fixed here); the burn direction and
@@ -300,53 +424,63 @@ fn lambert_cell(
         stats.degenerate_cells += 1;
         return None;
     }
-    let park_radius = ctx.depot_radius_m + ctx.config.standoff_m;
-    // Departure pricing: an endpoint moon behind a planet well flies the
-    // planet patch (moon escape on the asymptote-matching v_inf — a
-    // moon-only burn cannot leave a Nereid-class well); a direct-central
+    // Departure pricing: depot == central prices the direct vector change
+    // from the parking orbit (both senses, cheaper seeds); an endpoint
+    // moon behind a planet well flies the planet patch; a direct-central
     // moon keeps moon-only pricing (bit-identical lunar path).
-    let dep_mag = match ctx.departure_planet {
-        None => {
-            let v_inf = (arc.departure_velocity_mps - v1).length();
-            match patched_escape_mag(ctx.depot_mu, park_radius, v_inf) {
-                Some(mag) => mag,
-                None => {
-                    stats.degenerate_cells += 1;
-                    return None;
-                }
-            }
+    let dep_mag = if depot_is_central {
+        // v1 is the prograde parking velocity; retrograde is its negation.
+        let prograde = (arc.departure_velocity_mps - v1).length();
+        let retrograde = (arc.departure_velocity_mps + v1).length();
+        if !prograde.is_finite() || !retrograde.is_finite() {
+            stats.degenerate_cells += 1;
+            return None;
         }
-        Some(planet) => {
-            let planet_state = match ephemeris.body_state(planet, departure_epoch) {
-                Ok(state) => state,
-                Err(_) => {
-                    stats.degenerate_cells += 1;
-                    return None;
-                }
-            };
-            let planet_mu = match ephemeris.body(planet) {
-                Ok(body) => body.mu,
-                Err(_) => {
-                    stats.degenerate_cells += 1;
-                    return None;
-                }
-            };
-            let moon_rel_pos = departure.position_inertial - planet_state.position_inertial;
-            let moon_rel_vel = departure.velocity_inertial - planet_state.velocity_inertial;
-            let v_inf_planet = arc.departure_velocity_mps - planet_state.velocity_inertial;
-            match planet_escape_moon_vinf(v_inf_planet, moon_rel_pos, moon_rel_vel, planet_mu) {
-                Some(v_inf_moon) => {
-                    match patched_escape_mag(ctx.depot_mu, park_radius, v_inf_moon.length()) {
-                        Some(mag) => mag,
-                        None => {
-                            stats.degenerate_cells += 1;
-                            return None;
-                        }
+        prograde.min(retrograde)
+    } else {
+        match ctx.departure_planet {
+            None => {
+                let v_inf = (arc.departure_velocity_mps - v1).length();
+                match patched_escape_mag(ctx.depot_mu, park_radius, v_inf) {
+                    Some(mag) => mag,
+                    None => {
+                        stats.degenerate_cells += 1;
+                        return None;
                     }
                 }
-                None => {
-                    stats.degenerate_cells += 1;
-                    return None;
+            }
+            Some(planet) => {
+                let planet_state = match ephemeris.body_state(planet, departure_epoch) {
+                    Ok(state) => state,
+                    Err(_) => {
+                        stats.degenerate_cells += 1;
+                        return None;
+                    }
+                };
+                let planet_mu = match ephemeris.body(planet) {
+                    Ok(body) => body.mu,
+                    Err(_) => {
+                        stats.degenerate_cells += 1;
+                        return None;
+                    }
+                };
+                let moon_rel_pos = departure.position_inertial - planet_state.position_inertial;
+                let moon_rel_vel = departure.velocity_inertial - planet_state.velocity_inertial;
+                let v_inf_planet = arc.departure_velocity_mps - planet_state.velocity_inertial;
+                match planet_escape_moon_vinf(v_inf_planet, moon_rel_pos, moon_rel_vel, planet_mu) {
+                    Some(v_inf_moon) => {
+                        match patched_escape_mag(ctx.depot_mu, park_radius, v_inf_moon.length()) {
+                            Some(mag) => mag,
+                            None => {
+                                stats.degenerate_cells += 1;
+                                return None;
+                            }
+                        }
+                    }
+                    None => {
+                        stats.degenerate_cells += 1;
+                        return None;
+                    }
                 }
             }
         }
@@ -405,7 +539,11 @@ fn lambert_cell(
     }
     // Perigee impact screen on the departure arc: arcs through the central
     // body are grid noise (the exact propagator would just hit singularity).
-    if transfer_perigee_m(r1, arc.departure_velocity_mps, central_mu) < central_radius_m * 1.05 {
+    // Skipped for depot == central: the arc starts at the parking orbit by
+    // construction, so the screen would eat every valid cell.
+    if !depot_is_central
+        && transfer_perigee_m(r1, arc.departure_velocity_mps, central_mu) < central_radius_m * 1.05
+    {
         stats.impact_cells += 1;
         return None;
     }
@@ -635,13 +773,28 @@ pub(crate) fn phase_departure(
     time_of_flight_s: f64,
     stats: &mut SearchStats,
 ) -> Option<(DVec3, DVec3, DVec3)> {
-    let radial = depot.position_inertial - central.position_inertial;
-    let momentum = radial.cross(depot.velocity_inertial - central.velocity_inertial);
-    let normal = momentum.normalize();
-    let radial_unit = radial.normalize();
-    if !normal.is_finite() || !radial_unit.is_finite() {
-        return None;
-    }
+    // Phasing basis: the depot orbit around the central body — or, when
+    // depot == central (Apollo-class departure from the central body's own
+    // parking orbit), the arrival orbit plane around the same body. The
+    // anomaly scan below is identical either way: a circular parking orbit
+    // of park_radius around `depot.position_inertial`.
+    let radial_raw = depot.position_inertial - central.position_inertial;
+    let (radial_unit, normal) = if radial_raw.length_squared() > 0.0 {
+        let momentum = radial_raw.cross(depot.velocity_inertial - central.velocity_inertial);
+        let normal = momentum.normalize();
+        let radial_unit = radial_raw.normalize();
+        if !normal.is_finite() || !radial_unit.is_finite() {
+            return None;
+        }
+        (radial_unit, normal)
+    } else {
+        let to_arrival = arrival.position_inertial - central.position_inertial;
+        let arrival_plane = to_arrival.cross(arrival.velocity_inertial - central.velocity_inertial);
+        if to_arrival.length_squared() <= 0.0 || arrival_plane.length_squared() <= 0.0 {
+            return None;
+        }
+        (to_arrival.normalize(), arrival_plane.normalize())
+    };
     let tangent0 = normal.cross(radial_unit);
     let v_circ = (depot_mu / park_radius).sqrt();
     if !v_circ.is_finite() {

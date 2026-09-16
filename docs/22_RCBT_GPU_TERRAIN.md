@@ -1,9 +1,10 @@
 # 22 — RCBT GPU terrain
 
 Status: logical core, game scheduling, exact render-world leaf transport,
-generation-gated GPU page transport, and opt-in Bevy `Core3d` procedural
-indirect consumer are integrated, 2026-09-15. The legacy CPU mesh remains the
-default until visible-cover draw selection and material parity are validated.
+generation-gated GPU page transport, GPU screen-space active-triangle
+classification, portable skirts, and opt-in Bevy `Core3d` procedural indirect
+consumer are integrated, 2026-09-15. The legacy CPU mesh remains the default
+until the GPU visual regression is accepted by the project owner.
 
 ## Boundary
 
@@ -57,9 +58,13 @@ The workspace contains:
 - a generation-gated WGSL geometry pass that samples the packed signed-16
   residual pages and expands each available leaf to a 33x33 cube-sphere vertex
   grid with normals;
-- a portable procedural raster consumer that submits one indirect draw with
-  one instance per leaf; the vertex shader reconstructs the shared grid index
-  pattern, so the render pass does not loop over leaf draw commands;
+- a portable GPU classifier that rejects leaves outside the clip volume,
+  selects a screen-space grid step (1/2/4/8), compacts surface triangles plus
+  bounded edge skirts into a persistent active-triangle buffer, and writes one
+  indirect draw command;
+- a procedural raster consumer that executes that one indirect draw. Its
+  fragment stage samples the canonical body-fixed albedo map, and the draw
+  path has no per-leaf render-pass loop;
 - an isolated optional native wgpu mesh-shader experiment in the Bevy bridge
   crate;
   it is not compiled into the normal client and is not part of the portable
@@ -80,10 +85,16 @@ authoritative height field or collision queries.
 
 The GPU bridge does height-page sampling and produces position/normal vertices
 for the available leaves. Its reverse-Z Bevy `Core3d` consumer uses one
-`DrawIndirect` command with `instance_count = leaf_count`; camera-origin
-changes upload only the affine body-to-render-local matrix. This is a draw
-submission improvement, not yet the screen-space triangle representation used
-by the reference demo.
+`DrawIndirect` command with one instance and three vertices per GPU-compacted
+triangle. Camera-origin changes upload only the affine body-to-render-local
+matrix; classification also checks the actual render matrix for roll and
+viewport changes. The closed sphere is used for initial bootstrap; after the
+first complete cover, the renderer retains that snapshot until every page of
+its replacement is ready. Coarse/fine selection is partitioned without losing
+unrefined siblings. See [the render audit](38_CBT_RENDER_AUDIT_2026_09_15.md). The
+current topology and page residency are still CPU-owned, and every leaf still
+gets a 33x33 working page, so this is a portable active-triangle consumer,
+not yet a full persistent GPU CBT implementation.
 
 ## Reference demo study
 
@@ -102,13 +113,17 @@ Model 6.6. The important performance properties are representation-level:
 - planet-space calculations retain double-precision camera/planet coordinates
   and convert to camera-relative floats only at the raster boundary.
 
-Our current path now shares only the single-draw submission property. It still
-has CPU-owned topology, one fixed 33x33 page expansion per leaf, and a simple
-raster material. That explains why fixing the old multi-draw call alone could
-not reproduce the reference performance or visual quality. The next portable
-milestones are GPU screen-space classification plus an active triangle stream,
-then a visibility/material pass; the CPU topology and authoritative field stay
-as the fallback and query authority throughout.
+Our current path shares the single-draw and active-triangle submission shape,
+but it still has CPU-owned topology, one fixed 33x33 page expansion per leaf,
+and local material pages with scene lighting, camera exposure and analytic
+ocean reflection. It does not claim parity with the reference demo's persistent GPU topology, visibility buffer, or material pass.
+The next portable milestones are persistent dirty-path GPU topology updates,
+GPU-managed geometry residency and a screen-sized visibility/material pass. Numeric
+GPU readback regression now checks page interpolation, all six faces through
+L17, finite edge normals, classification and the map projection; its tested
+local L17 projection tolerance is one millimetre on Earth/Moon/Thessa fixtures;
+this is separate from the 0.5 m terrain-page sampling budget. The CPU topology
+and authoritative field stay as fallback and query authority throughout.
 
 For launch-time visual smoke tests:
 
@@ -125,8 +140,11 @@ multiplier. The indexed CBT path keeps its fixed 33x33 page contract and
 ignores this CPU-only density setting.
 
 The indexed mode hides CPU tile entities and keeps the closed backdrop as a
-low-resolution fallback. The optional mesh-shader experiment remains
-crate-local and requires an explicitly built experimental feature.
+low-resolution fallback while pages stream. Its material uses the global
+equirectangular albedo with the project's east-positive longitude convention;
+LOD transitions receive bounded radial skirts. The optional mesh-shader
+experiment remains crate-local and requires an explicitly built experimental
+feature.
 
 The client reaches binary CBT depth 37 (`3 + 2 * tile_level`). A dense
 `CompactTree` is capped at depth 20, so the client transport intentionally
@@ -195,7 +213,8 @@ claim.
 Before making GPU CBT the default renderer, the implementation must provide:
 
 1. visible-cover draw selection and a launch-time fallback around the existing
-   Bevy raster consumer; **single-draw consumer done, parity gate open**
+   Bevy raster consumer; **GPU classifier, active triangles, skirts and
+   fallback done; owner visual gate open**
 2. page upload and vertex generation from `HeightPage`; **done**
 3. cube-face seam and skirt handling equivalent to the current path;
 4. an authoritative CPU readback/query path that does not require GPU RT;
@@ -206,3 +225,7 @@ Before making GPU CBT the default renderer, the implementation must provide:
 
 No vendor check or DirectX-specific API is part of this design. Backend choice
 is capability-driven and remains behind wgpu/native rendering boundaries.
+
+The follow-up also adds f64 tile anchors, bounded 256-layer material streaming,
+and a filtered ocean material; see `38_CBT_RENDER_AUDIT_2026_09_15.md` for
+implementation limits and reproduction commands.

@@ -29,3 +29,7 @@ harness = false
 [[bench]]
 name = "low_thrust"
 harness = false
+
+[[bench]]
+name = "solar_system"
+harness = false

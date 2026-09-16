@@ -20,6 +20,7 @@ use bevy::tasks::{IoTaskPool, Task, block_on, poll_once};
 use std::time::Instant;
 
 use super::atmosphere::{GraphicsResolved, RayTracingActive};
+use thessa_bevy_rcbt::CbtRenderSurface;
 use thessa_perf::{
     CaptureMetadata, GpuFrame, MemorySample, PerfCollector, ProfilingLevel, SimBudget,
     WorldCounters, capture_stem, current_rss_bytes, default_capture_metadata,
@@ -240,6 +241,7 @@ struct Autobench {
     rung_started: Option<Instant>,
     boot: Option<Instant>,
     view_initialized: bool,
+    screenshot_requested: bool,
 }
 
 /// (requested warp, dwell in wall seconds). Warmup precedes rung 0.
@@ -248,6 +250,7 @@ const AUTOBENCH_WARMUP_S: f64 = 6.0;
 
 #[allow(clippy::too_many_arguments)]
 fn perf_autobench(
+    mut commands: Commands,
     mut bench: Option<ResMut<Autobench>>,
     mut monitor: ResMut<PerfMonitor>,
     mut clock: Option<ResMut<SimulationClock>>,
@@ -291,6 +294,15 @@ fn perf_autobench(
     let boot = *bench.boot.get_or_insert_with(Instant::now);
     if boot.elapsed().as_secs_f64() < AUTOBENCH_WARMUP_S {
         return;
+    }
+    if !bench.screenshot_requested && boot.elapsed().as_secs_f64() >= 25.0 {
+        bench.screenshot_requested = true;
+        if let Some(path) = std::env::var_os("THESSA_AUTOBENCH_SCREENSHOT") {
+            use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+            commands
+                .spawn(Screenshot::primary_window())
+                .observe(save_to_disk(std::path::PathBuf::from(path)));
+        }
     }
     if bench.rung >= AUTOBENCH_LADDER.len() {
         if monitor.capturing {
@@ -364,8 +376,10 @@ fn perf_end_frame(
     survey: Res<terrain::SurfaceSurvey>,
     visible_tiles: Query<(&ViewVisibility, &Mesh3d), With<terrain::SurfaceTile>>,
     meshes: Res<Assets<Mesh>>,
+    cbt_surface: Option<Res<CbtRenderSurface>>,
     rt_instances: Query<(), With<bevy::solari::prelude::RaytracingMesh3d>>,
     rt_active: Option<Res<RayTracingActive>>,
+    diagnostics: Option<Res<bevy::diagnostic::DiagnosticsStore>>,
     mut monitor: ResMut<PerfMonitor>,
     mut overlay: Query<(&mut Text, &mut Visibility), With<PerfOverlayText>>,
 ) {
@@ -452,24 +466,42 @@ fn perf_end_frame(
         } else {
             0
         },
-        // Terrain / streaming / RT counters stay zero until those systems land;
-        // zero with explicit scope names beats a missing column in captures.
+        // Terrain / streaming / RT counters are copied from the authoritative
+        // client resources below. GPU CBT has no Mesh3d entities by design.
         ..terrain.as_deref().map(|w| w.counters).unwrap_or_default()
     };
-    world.terrain_patches_visible = 0;
-    world.terrain_vertices = 0;
-    world.terrain_triangles = 0;
-    for (visibility, mesh) in &visible_tiles {
-        if !visibility.get() {
-            continue;
-        }
-        world.terrain_patches_visible += 1;
-        if let Some(mesh) = meshes.get(&mesh.0) {
-            world.terrain_vertices += mesh.count_vertices() as u64;
-            world.terrain_triangles += mesh.indices().map(|i| i.len() / 3).unwrap_or(0) as u64;
+    if !cbt_surface
+        .as_deref()
+        .is_some_and(CbtRenderSurface::gpu_raster_enabled)
+    {
+        world.terrain_patches_visible = 0;
+        world.terrain_vertices = 0;
+        world.terrain_triangles = 0;
+        for (visibility, mesh) in &visible_tiles {
+            if !visibility.get() {
+                continue;
+            }
+            world.terrain_patches_visible += 1;
+            if let Some(mesh) = meshes.get(&mesh.0) {
+                world.terrain_vertices += mesh.count_vertices() as u64;
+                world.terrain_triangles += mesh.indices().map(|i| i.len() / 3).unwrap_or(0) as u64;
+            }
         }
     }
     world.rt_instances = rt_instances.iter().count() as u32;
+    if cbt_surface
+        .as_deref()
+        .is_some_and(|surface| surface.gpu_raster_enabled() && surface.gpu_surface_ready())
+    {
+        if let Some(value) = diagnostics.as_ref().and_then(|store| {
+            store
+                .iter()
+                .find(|diagnostic| diagnostic.path().as_str() == "render/terrain_triangles")
+                .and_then(|diagnostic| diagnostic.value())
+        }) {
+            world.terrain_triangles = value as u64;
+        }
+    }
     monitor.collector.set_world_counters(world);
 
     // --- memory (spec section 9) ---
@@ -481,9 +513,48 @@ fn perf_end_frame(
     });
 
     // --- GPU (spec section 5) ---
-    // wgpu timestamp queries are not wired yet. Report unavailable explicitly
-    // rather than presenting CPU submit time as GPU time.
-    monitor.collector.set_gpu_frame(GpuFrame::unavailable());
+    // RenderDiagnosticsPlugin publishes asynchronous GPU timestamp spans. The
+    // latest completed sample can belong to the previous frame, which is fine:
+    // captures use it as a diagnostic stream and never mix it into CPU frame
+    // time. Without the opt-in plugin this remains explicitly unavailable.
+    let mut gpu = GpuFrame::unavailable();
+    if let Some(diagnostics) = diagnostics {
+        // Bevy retains the last measurement of passes that stopped running.
+        // Export only the newest completed render batch; otherwise a cached
+        // geometry pass appears to consume GPU time on every later frame.
+        let newest = diagnostics
+            .iter()
+            .filter(|d| {
+                d.path().as_str().starts_with("render/")
+                    && d.path().as_str().ends_with("/elapsed_gpu")
+            })
+            .filter_map(|d| d.measurement().map(|m| m.time))
+            .max();
+        for diagnostic in diagnostics.iter() {
+            if diagnostic.measurement().map(|m| m.time) != newest {
+                continue;
+            }
+            let path = diagnostic.path().as_str();
+            let Some(scope) = path
+                .strip_prefix("render/")
+                .and_then(|path| path.strip_suffix("/elapsed_gpu"))
+            else {
+                continue;
+            };
+            let Some(value_ms) = diagnostic.value() else {
+                continue;
+            };
+            if !value_ms.is_finite() {
+                continue;
+            }
+            gpu.available = true;
+            gpu.scopes.insert(
+                format!("render.{}", scope.replace('/', ".")),
+                value_ms / 1000.0,
+            );
+        }
+    }
+    monitor.collector.set_gpu_frame(gpu);
 
     // Elapsed main-app schedule interval, excludes vsync between frames.
     // This is wall duration of CPU work, not OS per-thread CPU utilization.
@@ -662,12 +733,22 @@ fn build_overlay_text(
         ProfilingLevel::Normal => "normal",
         ProfilingLevel::Detailed => "detailed",
     };
+    let gpu_line = latest
+        .map(|frame| &frame.gpu)
+        .filter(|gpu| gpu.available)
+        .map(|gpu| {
+            gpu.scopes
+                .get("render.terrain")
+                .map(|seconds| format!("gpu terrain {:.2}ms", seconds * 1000.0))
+                .unwrap_or_else(|| "gpu timestamps available".into())
+        })
+        .unwrap_or_else(|| "gpu unavailable".into());
     let _ = warp_flag;
     let status = stop_reason
         .map(|reason| format!("\nSIM: {reason}"))
         .unwrap_or_default();
     format!(
-        "PERF  {}  {}x{}  [F4] overlay  [F5] profile  [{}]  [RT:{}]\nFRAME {:5.2}ms {:5.0}fps cpu {:5.2}ms gpu unavailable\n  p50 {:5.2} p95 {:5.2} p99 {:5.2} max {:5.2}ms (n={})\nSIM {}\n  sim.total {:5.2}ms\nWORLD {}\nMEM {}\n{}level {}{status}",
+        "PERF  {}  {}x{}  [F4] overlay  [F5] profile  [{}]  [RT:{}]\nFRAME {:5.2}ms {:5.0}fps cpu {:5.2}ms {gpu_line}\n  p50 {:5.2} p95 {:5.2} p99 {:5.2} max {:5.2}ms (n={})\nSIM {}\n  sim.total {:5.2}ms\nWORLD {}\nMEM {}\n{}level {}{status}",
         view,
         window.resolution.physical_width(),
         window.resolution.physical_height(),

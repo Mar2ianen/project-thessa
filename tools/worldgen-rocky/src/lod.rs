@@ -521,6 +521,98 @@ pub fn build_surface_texture(field: &PlanetField, key: TileKey, cells: usize) ->
     build_surface_texture_for_mesh(field, key, cells, 24)
 }
 
+/// Fixed-size material page consumed by the GPU texture-array path.
+///
+/// The RGB channels are the canonical surface albedo in sRGB bytes. Alpha is
+/// the canonical perceptual roughness encoded from its linear 0..1 value.
+/// Pages are always 128x128: texels 1..=126 cover the 125-cell tile span and
+/// the outer texels form a one-texel sampling border. The raster shader maps a
+/// tile-local coordinate `local_uv` with
+/// `(1.5 + local_uv * 125.0) / 128.0`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpuMaterialPage {
+    pub size: u32,
+    pub rgba: Vec<u8>,
+}
+
+pub const GPU_MATERIAL_PAGE_SIZE: u32 = 128;
+const GPU_MATERIAL_PAGE_CELLS: usize = 125;
+const GPU_MATERIAL_PAGE_PREFIX_STEP: usize = 4;
+
+/// Build the fixed 128x128 material page for one canonical cube-sphere tile.
+///
+/// This deliberately shares the surface prefix path with
+/// [`build_surface_texture_for_mesh`], but does not build mesh positions,
+/// normals, residuals, or a second fine-field sample. A single cached-prefix
+/// sample per texel is enough to derive the material's local slope from its
+/// neighbouring heights. The border samples use the same field coordinates as
+/// adjacent pages, so filtering across same-level tile edges is continuous.
+pub fn build_gpu_material_page(field: &PlanetField, key: TileKey) -> GpuMaterialPage {
+    let size = GPU_MATERIAL_PAGE_SIZE as usize;
+    let cells = GPU_MATERIAL_PAGE_CELLS;
+    let wavelength = (key.span_m(field.params.radius_m) / cells as f64).max(2.0);
+    let (prefix_grid, prefix_size) =
+        coarse_prefix_grid(field, key, cells, size, GPU_MATERIAL_PAGE_PREFIX_STEP);
+    let sample_prefix = |x: usize, y: usize| {
+        sample_prefix_grid(
+            &prefix_grid,
+            prefix_size,
+            GPU_MATERIAL_PAGE_PREFIX_STEP,
+            x,
+            y,
+        )
+    };
+
+    let mut dirs = Vec::with_capacity(size * size);
+    let mut samples = Vec::with_capacity(size * size);
+    for y in 0..size {
+        for x in 0..size {
+            // Texture centres are x+0.5; inverting the shader transform puts
+            // the first interior centre at local_uv=0 and the last at 1.
+            let local_u = (x as f64 - 1.0) / cells as f64;
+            let local_v = (y as f64 - 1.0) / cells as f64;
+            let dir = key.direction(local_u, local_v);
+            let (prefix, macro_h) = sample_prefix(x, y);
+            dirs.push(dir);
+            samples.push(field.sample_surface_from_prefix(
+                dir,
+                prefix,
+                macro_h,
+                TEXTURE_DETAIL_MIN_WL_M,
+            ));
+        }
+    }
+
+    let mut rgba = Vec::with_capacity(size * size * 4);
+    for y in 0..size {
+        for x in 0..size {
+            let index = y * size + x;
+            let dhx = (samples[y * size + (x + 1).min(size - 1)].height_m
+                - samples[y * size + x.saturating_sub(1)].height_m)
+                / (2.0 * wavelength);
+            let dhy = (samples[(y + 1).min(size - 1) * size + x].height_m
+                - samples[y.saturating_sub(1) * size + x].height_m)
+                / (2.0 * wavelength);
+            let slope = dhx.hypot(dhy);
+            let material = {
+                let sample = &mut samples[index];
+                sample.slope_hint = slope;
+                surface_appearance(field, sample, dirs[index])
+            };
+            rgba.extend(
+                material
+                    .albedo_srgb
+                    .map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8),
+            );
+            rgba.push((material.roughness.clamp(0.0, 1.0) * 255.0).round() as u8);
+        }
+    }
+    GpuMaterialPage {
+        size: GPU_MATERIAL_PAGE_SIZE,
+        rgba,
+    }
+}
+
 /// Macro prefix evaluated on a coarse grid (`step` texels) covering the
 /// tile plus one node past each far edge, so every texel bilinearly
 /// interpolates between bracketing nodes with uniform weights.
@@ -753,6 +845,99 @@ mod surface_regressions {
         assert!(a.albedo.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
         let mesh = build_tile(&field, key, 24);
         assert!(mesh.positions.iter().flatten().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn gpu_material_page_has_fixed_layout_and_continuous_inner_edges() {
+        let field = field();
+        let key = TileKey {
+            face: 0,
+            level: 10,
+            x: 510,
+            y: 511,
+        };
+        let a = build_gpu_material_page(&field, key);
+        let b = build_gpu_material_page(&field, TileKey { x: 511, ..key });
+        assert_eq!(a.size, GPU_MATERIAL_PAGE_SIZE);
+        assert_eq!(
+            a.rgba.len(),
+            (GPU_MATERIAL_PAGE_SIZE * GPU_MATERIAL_PAGE_SIZE * 4) as usize
+        );
+        // The inner endpoint of a is x=126 (local_u=1), and the inner start
+        // of b is x=1 (local_u=0); the outer texels remain their padding.
+        for y in 1..127 {
+            let ai = (y * a.size as usize + 126) * 4;
+            let bi = (y * b.size as usize + 1) * 4;
+            assert_eq!(&a.rgba[ai..ai + 4], &b.rgba[bi..bi + 4], "y={y}");
+        }
+    }
+
+    #[test]
+    fn gpu_material_page_preserves_canonical_ocean_and_land_appearance() {
+        let field = field();
+        let key = TileKey::root(0);
+        let page = build_gpu_material_page(&field, key);
+        let size = page.size as usize;
+        let cells = 125.0;
+        let wavelength = (key.span_m(field.params.radius_m) / cells).max(2.0);
+        let mut ocean = None;
+        let mut land = None;
+        for y in 1..127 {
+            for x in 1..127 {
+                let dir = key.direction((x as f64 - 1.0) / cells, (y as f64 - 1.0) / cells);
+                let mut sample = field.sample_surface(dir, TEXTURE_DETAIL_MIN_WL_M);
+                if sample.height_m < -100.0 {
+                    let material = surface_appearance(&field, &sample, dir);
+                    if material.roughness < 0.3 {
+                        ocean = Some((x, y, material));
+                    }
+                } else if sample.height_m > 1000.0 {
+                    let dhx = (field.height_m(
+                        key.direction((x as f64) / cells, (y as f64 - 1.0) / cells),
+                        TEXTURE_DETAIL_MIN_WL_M,
+                    ) - field.height_m(
+                        key.direction((x as f64 - 2.0) / cells, (y as f64 - 1.0) / cells),
+                        TEXTURE_DETAIL_MIN_WL_M,
+                    )) / (2.0 * wavelength);
+                    let dhy = (field.height_m(
+                        key.direction((x as f64 - 1.0) / cells, (y as f64) / cells),
+                        TEXTURE_DETAIL_MIN_WL_M,
+                    ) - field.height_m(
+                        key.direction((x as f64 - 1.0) / cells, (y as f64 - 2.0) / cells),
+                        TEXTURE_DETAIL_MIN_WL_M,
+                    )) / (2.0 * wavelength);
+                    sample.slope_hint = dhx.hypot(dhy);
+                    land = Some((x, y, surface_appearance(&field, &sample, dir)));
+                }
+            }
+        }
+        let (ox, oy, ocean) = ocean.expect("reference page must contain warm ocean");
+        let (lx, ly, land) = land.expect("reference page must contain land");
+        let ocean_pixel = &page.rgba[(oy * size + ox) * 4..(oy * size + ox) * 4 + 4];
+        let land_pixel = &page.rgba[(ly * size + lx) * 4..(ly * size + lx) * 4 + 4];
+        assert_eq!(ocean_pixel[3], (ocean.roughness * 255.0).round() as u8);
+        assert_eq!(land_pixel[3], (land.roughness * 255.0).round() as u8);
+        for (actual, expected) in ocean_pixel[..3].iter().zip(
+            ocean
+                .albedo_srgb
+                .into_iter()
+                .map(|v| (v * 255.0).round() as u8),
+        ) {
+            assert!(
+                (*actual as i16 - expected as i16).abs() <= 8,
+                "ocean channel: actual={actual}, expected={expected}, at=({ox},{oy})"
+            );
+        }
+        for (actual, expected) in land_pixel[..3].iter().zip(
+            land.albedo_srgb
+                .into_iter()
+                .map(|v| (v * 255.0).round() as u8),
+        ) {
+            assert!(
+                (*actual as i16 - expected as i16).abs() <= 8,
+                "land channel: actual={actual}, expected={expected}, at=({lx},{ly})"
+            );
+        }
     }
     #[test]
     fn deep_tile_material_normals_keep_grain_and_coarse_relief() {

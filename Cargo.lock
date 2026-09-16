@@ -5388,6 +5388,7 @@ dependencies = [
  "bevy",
  "bevy_core_pipeline",
  "naga",
+ "pollster",
  "thessa-rcbt-core",
  "wgpu",
 ]

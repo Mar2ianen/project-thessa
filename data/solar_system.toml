@@ -1,0 +1,121 @@
+# Solar System design data for maneuver-planner validation (v0.1).
+# Real masses, sizes, and orbit shapes (semi-major axis, eccentricity,
+# inclination); phases are APPROXIMATE J2000 mean anomalies (mean
+# longitude minus longitude of perihelion, nodes/apsides aligned to the
+# reference direction). Good enough to validate transfer ENERGIES against
+# flown missions (Hohmann classes, C3, arrival v_inf); window DATES are
+# design-relative, not launch commit dates. Units mirror system.toml.
+# Sources: JPL/NASA fact sheets (rounded to the precision the planner can
+# resolve — mass to ~0.1%, angles to ~0.01 deg).
+
+[meta]
+epoch_name = "J2000_APPROX"
+status = "validation-target-not-canonical"
+runtime_body_motion = "baked_ephemerides"
+vehicle_gravity = "multi_body_test_particle"
+
+[[star]]
+id = "sol"
+mass_solar = 1.0
+radius_solar = 1.0
+temperature_k = 5778.0
+luminosity_solar = 1.0
+
+[[planet]]
+id = "mercury"
+host = "sol"
+semi_major_axis_au = 0.38710
+eccentricity = 0.20563
+inclination_deg = 7.005
+mean_longitude_offset_deg = 174.795
+mass_earth = 0.05527
+radius_km = 2439.7
+
+[[planet]]
+id = "venus"
+host = "sol"
+semi_major_axis_au = 0.72333
+eccentricity = 0.00677
+inclination_deg = 3.395
+mean_longitude_offset_deg = 50.416
+mass_earth = 0.81500
+radius_km = 6051.8
+
+[[planet]]
+id = "earth"
+host = "sol"
+semi_major_axis_au = 1.00000
+eccentricity = 0.01671
+inclination_deg = 0.00005
+mean_longitude_offset_deg = 357.527
+mass_earth = 1.0
+radius_km = 6378.0
+atmosphere_bar = 1.0
+atmosphere = "N2/O2/Ar/CO2"
+
+[[moon]]
+id = "luna"
+host = "earth"
+semi_major_axis_km = 384400.0
+eccentricity = 0.05490
+inclination_deg = 5.145
+mean_longitude_offset_deg = 135.270
+mass_earth = 0.01230
+radius_km = 1737.4
+tidal_lock = true
+
+[[planet]]
+id = "mars"
+host = "sol"
+semi_major_axis_au = 1.52368
+eccentricity = 0.09340
+inclination_deg = 1.850
+mean_longitude_offset_deg = 19.393
+mass_earth = 0.10745
+radius_km = 3389.5
+atmosphere_bar = 0.006
+atmosphere = "CO2/Ar/N2"
+
+[[planet]]
+id = "jupiter"
+host = "sol"
+semi_major_axis_au = 5.20260
+eccentricity = 0.04839
+inclination_deg = 1.303
+mean_longitude_offset_deg = 20.064
+mass_jupiter = 1.0
+radius_km = 69911.0
+atmosphere = "H2/He"
+
+[[planet]]
+id = "saturn"
+host = "sol"
+semi_major_axis_au = 9.55491
+eccentricity = 0.05415
+inclination_deg = 2.489
+mean_longitude_offset_deg = 317.093
+mass_jupiter = 0.29942
+radius_km = 58232.0
+atmosphere = "H2/He"
+
+[[planet]]
+id = "uranus"
+host = "sol"
+semi_major_axis_au = 19.21845
+eccentricity = 0.04717
+inclination_deg = 0.773
+mean_longitude_offset_deg = 142.274
+mass_jupiter = 0.04573
+radius_km = 25362.0
+atmosphere = "H2/He/CH4"
+
+[[planet]]
+id = "neptune"
+host = "sol"
+semi_major_axis_au = 30.11039
+eccentricity = 0.00859
+inclination_deg = 1.770
+mean_longitude_offset_deg = 259.909
+mass_jupiter = 0.05395
+radius_km = 24622.0
+atmosphere = "H2/He/CH4"

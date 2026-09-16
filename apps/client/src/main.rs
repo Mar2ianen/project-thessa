@@ -20,6 +20,7 @@ use std::{f32::consts::TAU, path::Path};
 
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::render::RenderPlugin;
+use bevy::render::diagnostic::RenderDiagnosticsPlugin;
 use bevy::render::settings::{Backends, RenderCreation, WgpuFeatures, WgpuSettings};
 use bevy::solari::prelude::SolariPlugins;
 use bevy::{
@@ -112,6 +113,7 @@ fn main() {
     }
 
     let mut app = App::new();
+    let benchmark_fullscreen = std::env::var_os("THESSA_AUTOBENCH_FULLSCREEN").is_some();
     let mut default_plugins = DefaultPlugins
         .set(AssetPlugin {
             // Bevy resolves the asset root relative to this package's
@@ -123,6 +125,13 @@ fn main() {
             primary_window: Some(Window {
                 title: "Project Thessa — Nereid System".into(),
                 resolution: WindowResolution::new(1280, 720),
+                mode: if benchmark_fullscreen {
+                    bevy::window::WindowMode::BorderlessFullscreen(
+                        bevy::window::MonitorSelection::Current,
+                    )
+                } else {
+                    bevy::window::WindowMode::Windowed
+                },
                 present_mode: if resolved.vsync {
                     bevy::window::PresentMode::AutoVsync
                 } else {
@@ -160,10 +169,20 @@ fn main() {
     }
 
     app.add_plugins(default_plugins);
-    // Solari selects deferred opaque materials globally, including while
-    // disabled. Every camera therefore retains a valid deferred raster path.
-    // Plugin finish checks device features; unsupported GPUs keep raster.
-    app.add_plugins(SolariPlugins);
+    if std::env::var_os("THESSA_AUTOBENCH").is_some() {
+        // Window focus must not switch an unattended measurement to the
+        // default 60 Hz low-power event loop. This is independent of VSync.
+        app.insert_resource(bevy::winit::WinitSettings::continuous());
+    }
+    if std::env::var_os("THESSA_GPU_PROFILE").is_some() {
+        app.add_plugins(RenderDiagnosticsPlugin);
+    }
+    // Solari is an RT/deferred path. Keep the default raster client on Bevy's
+    // regular forward pipeline; registering Solari while RT is disabled still
+    // selects the expensive deferred opaque path globally.
+    if rt_active {
+        app.add_plugins(SolariPlugins);
+    }
     app.insert_resource(GraphicsRequested(requested))
         .insert_resource(GraphicsResolved(resolved))
         .insert_resource(RayTracingActive(rt_active))
@@ -300,7 +319,6 @@ fn setup(
             // automatically with SolariLighting, and deferred needs MSAA off.
             Msaa::Off,
             bevy::core_pipeline::prepass::DepthPrepass,
-            bevy::core_pipeline::prepass::DeferredPrepass,
             Projection::Perspective(PerspectiveProjection {
                 far: 1_000_000.0,
                 ..default()
@@ -310,10 +328,6 @@ fn setup(
                 ..default()
             },
             Tonemapping::TonyMcMapface,
-            Bloom {
-                intensity: 0.14,
-                ..Bloom::NATURAL
-            },
             OrbitCamera {
                 orbit: Quat::from_rotation_y(0.42) * Quat::from_rotation_x(-0.72),
                 distance: 420.0,
@@ -322,6 +336,17 @@ fn setup(
             Transform::from_xyz(129.0, 276.0, 287.0).looking_at(Vec3::ZERO, Vec3::Y),
         ))
         .id();
+    if graphics.as_deref().is_some_and(|g| g.0.bloom) {
+        commands.entity(camera).insert(Bloom {
+            intensity: 0.14,
+            ..Bloom::NATURAL
+        });
+    }
+    if rt_active {
+        commands
+            .entity(camera)
+            .insert(bevy::core_pipeline::prepass::DeferredPrepass);
+    }
     if graphics.as_deref().is_none_or(|g| g.0.hdr) {
         commands.entity(camera).insert(Hdr);
     }

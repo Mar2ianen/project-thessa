@@ -126,6 +126,9 @@ pub struct RendererSettings {
     pub vsync: bool,
     #[serde(default = "default_true")]
     pub hdr: bool,
+    /// Bloom is an optional post-process; terrain readability wins by default.
+    #[serde(default)]
+    pub bloom: bool,
     /// Adapt the camera to day/night/eclipses using scene luminance.
     #[serde(default = "default_true")]
     pub auto_exposure: bool,
@@ -156,6 +159,7 @@ impl Default for RendererSettings {
             resolution_scale: 1.0,
             vsync: true,
             hdr: true,
+            bloom: false,
             exposure_ev100: 13.0,
             // Deterministic manual exposure until the AE metering curve is
             // tuned against real HDR scenes (a constant -2.47 curve only
@@ -528,6 +532,9 @@ impl RequestedGraphics {
     /// budget meaning are overwritten; the preset label is stored as-is.
     pub fn apply_preset(&mut self, preset: Preset) {
         self.preset = preset;
+        // Bloom is deliberately opt-in for every preset: it costs a full
+        // mip-chain at native resolution and does not improve terrain detail.
+        self.renderer.bloom = false;
         match preset {
             Preset::Low => {
                 self.renderer.resolution_scale = 0.75;

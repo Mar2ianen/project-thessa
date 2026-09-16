@@ -1277,6 +1277,9 @@ impl FlightAuthority {
                 ScheduledKind::ManeuverNode { .. } => {
                     format!("WAKE NODE T+{:.0}s", event.time.seconds())
                 }
+                ScheduledKind::BurnSegment { .. } => {
+                    format!("WAKE BURN T+{:.0}s", event.time.seconds())
+                }
                 ScheduledKind::Alarm => {
                     format!("WAKE ALARM T+{:.0}s", event.time.seconds())
                 }

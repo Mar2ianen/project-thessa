@@ -8,9 +8,9 @@
 //! rebuilds its packed sums from the dense bitfield. The GPU port will use the
 //! same two upstream buffers but move allocation/propagation to WGSL.
 
-use std::{hint::black_box, time::Instant};
+use std::{collections::HashMap, hint::black_box, time::Instant};
 
-use thessa_rcbt_core::{Node, compact::CompactTree, packed::PackedTree};
+use thessa_rcbt_core::{BisectorPool, Node, Tree, compact::CompactTree, packed::PackedTree};
 use thessa_rcbt_ffi::LibcbtTree;
 use thessa_rcbt_large_ffi::{LargeOcbt, Variant};
 
@@ -81,6 +81,10 @@ fn report(name: &str, started: Instant, operations: usize) {
     );
 }
 
+fn node_key(node: Node) -> u64 {
+    (node.id() << 6) | u64::from(node.depth())
+}
+
 fn main() {
     println!("| implementation | operations | ms | operations/s |");
     println!("|---|---:|---:|---:|");
@@ -110,6 +114,62 @@ fn main() {
     );
 
     let workloads = sparse_nodes();
+
+    // Compare the existing BTreeSet topology with the fixed-capacity pool on
+    // the same bounded split/merge sequence. The pool benchmark uses cached
+    // handles, as an adapter would; resolving a node by scanning every slot
+    // is intentionally a separate convenience API and is not the hot path.
+    let mut tree = Tree::at_depth(20, 12).unwrap();
+    let started = Instant::now();
+    let mut tree_operations = 0;
+    for frame in &workloads {
+        for &(node, split) in frame {
+            if split {
+                tree.split(node).unwrap();
+            } else {
+                tree.merge(node).unwrap();
+            }
+            tree_operations += 1;
+        }
+        black_box(tree.leaf_count());
+    }
+    report("thessa Tree BTreeSet topology", started, tree_operations);
+
+    let mut pool = BisectorPool::from_tree(&Tree::at_depth(20, 12).unwrap(), 32_768).unwrap();
+    let mut handles = HashMap::with_capacity(pool.active_count() * 2);
+    for handle in pool.handles() {
+        let node = pool.get(handle).expect("active pool handle").node();
+        handles.insert(node_key(node), handle);
+    }
+    let started = Instant::now();
+    let mut pool_operations = 0;
+    for frame in &workloads {
+        for &(node, split) in frame {
+            if split {
+                let handle = handles.remove(&node_key(node)).expect("split handle");
+                let [left_handle, right_handle] = pool.split(handle).unwrap();
+                let [left, right] = node.children().unwrap();
+                handles.insert(node_key(left), left_handle);
+                handles.insert(node_key(right), right_handle);
+            } else {
+                let [left, right] = node.children().unwrap();
+                let left_handle = handles.remove(&node_key(left)).expect("left handle");
+                let right_handle = handles.remove(&node_key(right)).expect("right handle");
+                let parent_handle = pool.merge_handles(node, left_handle, right_handle).unwrap();
+                handles.insert(node_key(node), parent_handle);
+            }
+            pool_operations += 1;
+        }
+        black_box(pool.active_count());
+    }
+    report(
+        "thessa BisectorPool fixed slots + cached handles",
+        started,
+        pool_operations,
+    );
+    assert_eq!(pool.nodes(), tree.leaves());
+    assert!(pool.is_valid_partition());
+
     let mut libcbt = LibcbtTree::at_depth(20, 12).unwrap();
     let started = Instant::now();
     let mut libcbt_operations = 0;

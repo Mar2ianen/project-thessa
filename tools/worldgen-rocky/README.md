@@ -50,6 +50,46 @@ Resolution-agnostic: gores are normalized fractions with overlap, all scales
 in metres (macro 100-2000 km, meso 5-200 km, micro cm-km). Regenerate GPT
 maps at any valid 2.5 size later without changing the manifest schema.
 
+## Inhabited-world readability
+
+Some rocky worlds are inhabited rather than pristine terrain. Civilization is
+a **derived world layer and visual/navigation context**, not a city-building
+simulation.
+
+For the inhabited moon target, use a total population on the order of
+**150 million**. That is large enough that the moon must not read as empty from
+orbit or during atmospheric/low-altitude flight, even though individual cities
+are not simulated at parcel/building-management fidelity.
+
+The intended footprint is globally sparse but globally present:
+
+- settlements and a limited number of major urban regions follow water,
+  terrain, resources, ports and transport access rather than uniform random
+  placement;
+- long-distance infrastructure connects population centres: roads/rail or
+  equivalent surface corridors, power/utility routes, ports, landing sites and
+  industrial/resource nodes;
+- night-side emissive patterns and large-scale developed regions provide
+  orbital readability without requiring every building to exist as gameplay
+  state;
+- progressively closer LODs may resolve coarse developed-region masks into
+  road graphs, blocks, landmark structures and deterministic local scatter;
+- the world generator owns the stable causal placement fields, while the
+  renderer/runtime chooses how much of that infrastructure to materialize for
+  the current scale.
+
+This layer should answer "why is infrastructure here?" from existing world
+state (hydrology, slope, biome/climate, geology/minerals and authored
+landmarks). It should not turn `worldgen-rocky` into a demographic or traffic
+simulator. Detailed city growth, zoning, economics and per-building agents are
+explicitly out of scope for the near-term terrain/worldgen stack.
+
+Vegetation follows the same rule: biome/climate/hydrology produce ecological
+coverage fields, and close-range renderers materialize deterministic local
+instances. A Carboniferous-inspired vegetation set is a desired inhabited-moon
+art direction, with dense wet lowlands/floodplains and sparser vegetation where
+climate, elevation or substrate suppress it.
+
 ## Usage
 
 ```bash

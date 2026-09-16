@@ -15,6 +15,7 @@
 //! direction+throttle commands with explicit frames, mapped to
 //! `GuidanceIntent` by the runtime adapter.
 
+mod chain;
 mod execute;
 mod flyby;
 mod lambert;
@@ -24,6 +25,9 @@ mod plan;
 mod search;
 mod thrust;
 
+pub use chain::{
+    BroadChainRoute, ChainConfig, ChainEncounter, EncounterKind, broad_chain_survey, chain_search,
+};
 pub use execute::{
     ExecutionCommand, ExecutorOutput, NodeExecutor, SegmentExecutor, SegmentOutput, SteeringSample,
 };

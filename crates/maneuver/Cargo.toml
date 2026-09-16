@@ -33,3 +33,7 @@ harness = false
 [[bench]]
 name = "solar_system"
 harness = false
+
+[[bench]]
+name = "chain"
+harness = false

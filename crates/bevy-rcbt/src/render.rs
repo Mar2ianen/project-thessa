@@ -39,7 +39,14 @@ use bevy::{
     },
 };
 
-use crate::CbtRenderMaterialPages;
+use crate::{CbtGpuPresentation, CbtRenderMaterialPages};
+
+impl ExtractResource for CbtGpuPresentation {
+    type Source = Self;
+    fn extract_resource(source: &Self) -> Self {
+        source.clone()
+    }
+}
 use thessa_rcbt_core::HeightPage;
 #[path = "material_render.rs"]
 mod material_render;
@@ -139,6 +146,7 @@ pub struct CbtGpuBuffers {
     generated_pages_generation: u64,
     generated_surface_generation: u64,
     leaf_count: u32,
+    complete_pages: bool,
 }
 
 impl FromWorld for CbtGpuBuffers {
@@ -188,6 +196,7 @@ impl FromWorld for CbtGpuBuffers {
             generated_pages_generation: u64::MAX,
             generated_surface_generation: u64::MAX,
             leaf_count: 0,
+            complete_pages: false,
         }
     }
 }
@@ -306,6 +315,7 @@ struct CbtGpuMeshPipeline {
 const CBT_GEOMETRY_WGSL: &str = concat!(
     include_str!("precision.wgsl"),
     include_str!("tile_frame.wgsl"),
+    include_str!("surface_sample.wgsl"),
     r#"
 struct Params {
     leaf_count: u32,
@@ -329,96 +339,6 @@ struct DrawCommand {
 @group(0) @binding(5) var<uniform> params: Params;
 @group(0) @binding(6) var<storage, read> tile_frames: array<CbtTileFrame>;
 
-fn residual(page: vec4<u32>, sample_index: u32) -> i32 {
-    let word = page_residuals[page.w + sample_index / 2u];
-    let raw = (word >> ((sample_index & 1u) * 16u)) & 0xffffu;
-    return select(i32(raw), i32(raw) - 65536, raw >= 32768u);
-}
-
-fn page_sample(page: vec4<u32>, u: f32, v: f32) -> f32 {
-    if (page.z == 0u) {
-        return 0.0;
-    }
-    let max_coord = f32(page.z - 1u);
-    let px = clamp(u, 0.0, 1.0) * max_coord;
-    let py = clamp(v, 0.0, 1.0) * max_coord;
-    let x = u32(floor(px));
-    let y = u32(floor(py));
-    let x1 = min(x + 1u, page.z - 1u);
-    let y1 = min(y + 1u, page.z - 1u);
-    let tx = px - f32(x);
-    let ty = py - f32(y);
-    let grid = page.z;
-    let h00 = bitcast<f32>(page.x) + f32(residual(page, y * grid + x)) * bitcast<f32>(page.y);
-    let h10 = bitcast<f32>(page.x) + f32(residual(page, y * grid + x1)) * bitcast<f32>(page.y);
-    let h01 = bitcast<f32>(page.x) + f32(residual(page, y1 * grid + x)) * bitcast<f32>(page.y);
-    let h11 = bitcast<f32>(page.x) + f32(residual(page, y1 * grid + x1)) * bitcast<f32>(page.y);
-    let top = h00 + (h10 - h00) * tx;
-    let bottom = h01 + (h11 - h01) * tx;
-    return top + (bottom - top) * ty;
-}
-
-fn payload_bit(low: u32, high: u32, bit: u32) -> u32 {
-    if (bit < 32u) {
-        return (low >> bit) & 1u;
-    }
-    return (high >> (bit - 32u)) & 1u;
-}
-
-// Decode the cube-face and Morton coordinates from the exact heap id without
-// using a shader u64. The CPU record stores the id as two u32 words.
-fn tile_coordinates(record: vec4<u32>) -> vec4<u32> {
-    let depth = record.z;
-    if (depth < 3u || ((depth - 3u) & 1u) != 0u) {
-        return vec4(0u);
-    }
-    var low = record.x;
-    var high = record.y;
-    if (depth < 32u) {
-        low = low - (1u << depth);
-    } else {
-        high = high - (1u << (depth - 32u));
-    }
-    let path_bits = depth - 3u;
-    var face = 0u;
-    if (path_bits < 32u) {
-        face = (low >> path_bits) | (high << (32u - path_bits));
-    } else if (path_bits == 32u) {
-        face = high;
-    } else {
-        face = high >> (path_bits - 32u);
-    }
-    let level = path_bits / 2u;
-    var tile_x = 0u;
-    var tile_y = 0u;
-    for (var i = 0u; i < 17u; i = i + 1u) {
-        if (i < level) {
-            let shift = (level - i - 1u) * 2u;
-            tile_x = tile_x * 2u + payload_bit(low, high, shift + 1u);
-            tile_y = tile_y * 2u + payload_bit(low, high, shift);
-        }
-    }
-    return vec4(tile_x, tile_y, level, face & 7u);
-}
-
-fn face_direction(face: u32, a: f32, b: f32) -> vec3<f32> {
-    var raw = vec3(a, b, 1.0);
-    if (face == 0u) { raw = vec3(1.0, b, -a); }
-    if (face == 1u) { raw = vec3(-1.0, b, a); }
-    if (face == 2u) { raw = vec3(a, 1.0, -b); }
-    if (face == 3u) { raw = vec3(a, -1.0, b); }
-    if (face == 4u) { raw = vec3(a, b, 1.0); }
-    if (face == 5u) { raw = vec3(-a, b, -1.0); }
-    return normalize(raw);
-}
-
-fn surface_position(tile: vec4<u32>, u: f32, v: f32, height: f32, radius: f32) -> vec3<f32> {
-    let scale = exp2(f32(tile.z));
-    let a = 2.0 * (f32(tile.x) + u) / scale - 1.0;
-    let b = 2.0 * (f32(tile.y) + v) / scale - 1.0;
-    return face_direction(tile.w, a, b) * (radius + height);
-}
-
 @compute @workgroup_size(64)
 fn build_geometry(@builtin(global_invocation_id) gid: vec3<u32>) {
     let index = gid.x;
@@ -437,40 +357,12 @@ fn build_geometry(@builtin(global_invocation_id) gid: vec3<u32>) {
         vertices[index * 2u + 1u] = vec4(0.0);
         return;
     }
-    let tile = tile_coordinates(leaves[ordinal]);
     let gx = local % 33u;
     let gy = local / 33u;
     let uv = vec2(f32(gx) / 32.0, f32(gy) / 32.0);
-    let radius = bitcast<f32>(params.radius_bits);
-    let h = page_sample(page, uv.x, uv.y);
-    let p = cbt_local_offset(tile_frames[ordinal].geometry, uv, h);
-    let du = 1.0 / 32.0;
-    let u0 = max(uv.x - du, 0.0);
-    let u1 = min(uv.x + du, 1.0);
-    let v0 = max(uv.y - du, 0.0);
-    let v1 = min(uv.y + du, 1.0);
-    // Differentiate the normalized cube face analytically. Subtracting two
-    // radius-sized f32 positions turns sub-metre rounding into false slopes
-    // on deep tiles, especially visible under grazing light.
-    let scale = exp2(f32(tile.z));
-    let a = 2.0 * (f32(tile.x) + uv.x) / scale - 1.0;
-    let b = 2.0 * (f32(tile.y) + uv.y) / scale - 1.0;
-    let direction = face_direction(tile.w, a, b);
-    var axis_u = vec3(1.0, 0.0, 0.0);
-    var axis_v = vec3(0.0, 1.0, 0.0);
-    if (tile.w == 0u) { axis_u = vec3(0.0, 0.0, -1.0); }
-    if (tile.w == 1u) { axis_u = vec3(0.0, 0.0, 1.0); }
-    if (tile.w == 2u) { axis_v = vec3(0.0, 0.0, -1.0); }
-    if (tile.w == 3u) { axis_v = vec3(0.0, 0.0, 1.0); }
-    if (tile.w == 5u) { axis_u = vec3(-1.0, 0.0, 0.0); }
-    let metric = (radius + h) * (2.0 / scale) / sqrt(1.0 + a * a + b * b);
-    let dh_du = (page_sample(page, u1, uv.y) - page_sample(page, u0, uv.y)) / (u1 - u0);
-    let dh_dv = (page_sample(page, uv.x, v1) - page_sample(page, uv.x, v0)) / (v1 - v0);
-    let tangent_u = (axis_u - direction * dot(direction, axis_u)) * metric + direction * dh_du;
-    let tangent_v = (axis_v - direction * dot(direction, axis_v)) * metric + direction * dh_dv;
-    let normal = normalize(cross(tangent_u, tangent_v));
-    vertices[index * 2u] = vec4(p, 1.0);
-    vertices[index * 2u + 1u] = vec4(normal, h);
+    let sample = cbt_surface_sample(tile_frames[ordinal].geometry, page, uv);
+    vertices[index * 2u] = vec4(sample.local_position, 1.0);
+    vertices[index * 2u + 1u] = vec4(sample.normal, sample.height);
 }
 "#
 );
@@ -733,7 +625,7 @@ struct VertexOutput {
 @group(0) @binding(10) var roughness_texture: texture_2d<f32>;
 @group(0) @binding(12) var material_texture: texture_2d_array<f32>;
 @group(0) @binding(13) var material_sampler: sampler;
-@group(0) @binding(14) var<storage, read> material_slots: array<u32>;
+@group(0) @binding(14) var<storage, read> material_slots: array<vec4<u32>>;
 
 
 fn surface_uv(position: vec3<f32>) -> vec2<f32> {
@@ -791,8 +683,11 @@ fn vertex(
     output.body_direction = body_direction;
     output.render_position = render_position.xyz;
     output.height_m = select(normal.w, 1e9, skirt);
-    output.material_uv = (vec2(f32(local % 33u), f32(local / 33u)) / 32.0 * 125.0 + 1.5) / 128.0;
-    output.material_slot = material_slots[ordinal];
+    let material = material_slots[ordinal];
+    let tile_uv = vec2(f32(local % 33u), f32(local / 33u)) / 32.0;
+    let page_uv = tile_uv * bitcast<f32>(material.y) + bitcast<vec2<f32>>(material.zw);
+    output.material_uv = (page_uv * 125.0 + 1.5) / 128.0;
+    output.material_slot = material.x;
     return output;
 }
 
@@ -868,8 +763,12 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
 /// dispatch covers all leaves and the page metadata turns missing pages into
 /// zero-output workgroups.
 #[cfg(feature = "mesh-shaders")]
-const CBT_MESH_WGSL: &str = r#"
-enable wgpu_mesh_shader;
+const CBT_MESH_WGSL: &str = concat!(
+    "enable wgpu_mesh_shader;\n",
+    include_str!("precision.wgsl"),
+    include_str!("tile_frame.wgsl"),
+    include_str!("surface_sample.wgsl"),
+    r#"
 
 struct Params {
     leaf_count: u32,
@@ -902,96 +801,11 @@ struct MeshOutput {
 @group(0) @binding(2) var<storage, read> page_metadata: array<vec4<u32>>;
 @group(0) @binding(3) var<storage, read> page_residuals: array<u32>;
 @group(0) @binding(6) var<uniform> params: Params;
+@group(0) @binding(4) var<storage, read> tile_frames: array<CbtTileFrame>;
 @group(1) @binding(0) var<uniform> view: ViewUniforms;
 @group(1) @binding(1) var<uniform> render_from_body: mat4x4<f32>;
 
 var<workgroup> mesh_output: MeshOutput;
-
-fn residual(page: vec4<u32>, sample_index: u32) -> i32 {
-    let word = page_residuals[page.w + sample_index / 2u];
-    let raw = (word >> ((sample_index & 1u) * 16u)) & 0xffffu;
-    return select(i32(raw), i32(raw) - 65536, raw >= 32768u);
-}
-
-fn page_sample(page: vec4<u32>, u: f32, v: f32) -> f32 {
-    if (page.z == 0u) {
-        return 0.0;
-    }
-    let max_coord = f32(page.z - 1u);
-    let px = clamp(u, 0.0, 1.0) * max_coord;
-    let py = clamp(v, 0.0, 1.0) * max_coord;
-    let x = u32(floor(px));
-    let y = u32(floor(py));
-    let x1 = min(x + 1u, page.z - 1u);
-    let y1 = min(y + 1u, page.z - 1u);
-    let grid = page.z;
-    let h00 = bitcast<f32>(page.x) + f32(residual(page, y * grid + x)) * bitcast<f32>(page.y);
-    let h10 = bitcast<f32>(page.x) + f32(residual(page, y * grid + x1)) * bitcast<f32>(page.y);
-    let h01 = bitcast<f32>(page.x) + f32(residual(page, y1 * grid + x)) * bitcast<f32>(page.y);
-    let h11 = bitcast<f32>(page.x) + f32(residual(page, y1 * grid + x1)) * bitcast<f32>(page.y);
-    let top = h00 + (h10 - h00) * (px - f32(x));
-    let bottom = h01 + (h11 - h01) * (px - f32(x));
-    return top + (bottom - top) * (py - f32(y));
-}
-
-fn payload_bit(low: u32, high: u32, bit: u32) -> u32 {
-    if (bit < 32u) {
-        return (low >> bit) & 1u;
-    }
-    return (high >> (bit - 32u)) & 1u;
-}
-
-fn tile_coordinates(record: vec4<u32>) -> vec4<u32> {
-    let depth = record.z;
-    if (depth < 3u || ((depth - 3u) & 1u) != 0u) {
-        return vec4(0u);
-    }
-    var low = record.x;
-    var high = record.y;
-    if (depth < 32u) {
-        low = low - (1u << depth);
-    } else {
-        high = high - (1u << (depth - 32u));
-    }
-    let path_bits = depth - 3u;
-    var face = 0u;
-    if (path_bits < 32u) {
-        face = (low >> path_bits) | (high << (32u - path_bits));
-    } else if (path_bits == 32u) {
-        face = high;
-    } else {
-        face = high >> (path_bits - 32u);
-    }
-    let level = path_bits / 2u;
-    var tile_x = 0u;
-    var tile_y = 0u;
-    for (var i = 0u; i < 17u; i = i + 1u) {
-        if (i < level) {
-            let shift = (level - i - 1u) * 2u;
-            tile_x = tile_x * 2u + payload_bit(low, high, shift + 1u);
-            tile_y = tile_y * 2u + payload_bit(low, high, shift);
-        }
-    }
-    return vec4(tile_x, tile_y, level, face & 7u);
-}
-
-fn face_direction(face: u32, a: f32, b: f32) -> vec3<f32> {
-    var raw = vec3(a, b, 1.0);
-    if (face == 0u) { raw = vec3(1.0, b, -a); }
-    if (face == 1u) { raw = vec3(-1.0, b, a); }
-    if (face == 2u) { raw = vec3(a, 1.0, -b); }
-    if (face == 3u) { raw = vec3(a, -1.0, b); }
-    if (face == 4u) { raw = vec3(a, b, 1.0); }
-    if (face == 5u) { raw = vec3(-a, b, -1.0); }
-    return normalize(raw);
-}
-
-fn surface_position(tile: vec4<u32>, u: f32, v: f32, height: f32, radius: f32) -> vec3<f32> {
-    let scale = exp2(f32(tile.z));
-    let a = 2.0 * (f32(tile.x) + u) / scale - 1.0;
-    let b = 2.0 * (f32(tile.y) + v) / scale - 1.0;
-    return face_direction(tile.w, a, b) * (radius + height);
-}
 
 @mesh(mesh_output) @workgroup_size(64)
 fn build_mesh(
@@ -1002,42 +816,37 @@ fn build_mesh(
     let meshlet = workgroup.x;
     let page = page_metadata[leaf];
     let valid = page.z != 0u;
-    mesh_output.vertex_count = select(0u, 81u, valid);
-    mesh_output.primitive_count = select(0u, 128u, valid);
+    if (invocation == 0u) {
+        mesh_output.vertex_count = select(0u, 81u, valid);
+        mesh_output.primitive_count = select(0u, 128u, valid);
+    }
     if (!valid) {
         return;
     }
 
-    let tile = tile_coordinates(leaves[leaf]);
-    let radius = bitcast<f32>(params.radius_bits);
-    if (invocation < 81u) {
-        let local_x = invocation % 9u;
-        let local_y = invocation / 9u;
+    let frame = tile_frames[leaf];
+    for (var i = invocation; i < 81u; i += 64u) {
+        let local_x = i % 9u;
+        let local_y = i / 9u;
         let patch_x = (meshlet % 4u) * 8u + local_x;
         let patch_y = (meshlet / 4u) * 8u + local_y;
         let uv = vec2(f32(patch_x) / 32.0, f32(patch_y) / 32.0);
-        let p = surface_position(tile, uv.x, uv.y, page_sample(page, uv.x, uv.y), radius);
-        let du = 1.0 / 32.0;
-        let puv = vec2(min(uv.x + du, 1.0), uv.y);
-        let pvv = vec2(uv.x, min(uv.y + du, 1.0));
-        let pu = surface_position(tile, puv.x, puv.y, page_sample(page, puv.x, puv.y), radius);
-        let pv = surface_position(tile, pvv.x, pvv.y, page_sample(page, pvv.x, pvv.y), radius);
-        let normal = normalize(cross(pu - p, pv - p));
-        mesh_output.vertices[invocation].clip_position =
-            view.clip_from_world * render_from_body * vec4(p, 1.0);
-        mesh_output.vertices[invocation].normal =
-            normalize((render_from_body * vec4(normal, 0.0)).xyz);
+        let sample = cbt_surface_sample(frame.geometry, page, uv);
+        mesh_output.vertices[i].clip_position =
+            view.clip_from_world * cbt_render_position(frame, sample.local_position, render_from_body);
+        mesh_output.vertices[i].normal =
+            normalize((render_from_body * vec4(sample.normal, 0.0)).xyz);
     }
-    if (invocation < 128u) {
-        let cell = invocation / 2u;
-        let triangle = invocation & 1u;
+    for (var i = invocation; i < 128u; i += 64u) {
+        let cell = i / 2u;
+        let triangle = i & 1u;
         let cell_x = cell % 8u;
         let cell_y = cell / 8u;
         let base = cell_y * 9u + cell_x;
         let right = base + 1u;
         let down = base + 9u;
         let diagonal = down + 1u;
-        mesh_output.primitives[invocation].indices = select(
+        mesh_output.primitives[i].indices = select(
             vec3(base, right, down),
             vec3(right, diagonal, down),
             triangle == 1u,
@@ -1051,21 +860,24 @@ fn fragment(input: MeshVertex) -> @location(0) vec4<f32> {
     let diffuse = 0.24 + 0.76 * max(dot(normalize(input.normal), light), 0.0);
     return vec4(vec3(0.20, 0.34, 0.17) * diffuse, 1.0);
 }
-"#;
+"#
+);
 
 /// Installs extraction and GPU preparation for the universal CBT plugin.
 pub(super) struct CbtRenderPlugin;
 
 impl Plugin for CbtRenderPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CbtRenderMaterialPages>();
+        app.init_resource::<CbtRenderMaterialPages>()
+            .init_resource::<CbtGpuPresentation>();
         let has_render_app = app.get_sub_app_mut(RenderApp).is_some();
         if has_render_app {
             app.add_plugins(ExtractResourcePlugin::<CbtRenderTopology>::default())
                 .add_plugins(ExtractResourcePlugin::<CbtRenderPages>::default())
                 .add_plugins(ExtractResourcePlugin::<CbtRenderSurface>::default())
                 .add_plugins(ExtractResourcePlugin::<CbtRenderMaterial>::default())
-                .add_plugins(ExtractResourcePlugin::<CbtRenderMaterialPages>::default());
+                .add_plugins(ExtractResourcePlugin::<CbtRenderMaterialPages>::default())
+                .add_plugins(ExtractResourcePlugin::<CbtGpuPresentation>::default());
         }
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app.init_gpu_resource::<CbtGpuBuffers>();
@@ -1413,6 +1225,16 @@ fn init_cbt_gpu_pipeline(mut commands: bevy::prelude::Commands, device: Res<Rend
                     count: None,
                 },
                 BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::MESH,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
                     binding: 6,
                     visibility: ShaderStages::MESH,
                     ty: BindingType::Buffer {
@@ -1530,6 +1352,11 @@ fn prepare_cbt_gpu_buffers(
     let (Some(topology), Some(pages), Some(surface)) = (topology, pages, surface) else {
         return;
     };
+    gpu.complete_pages = !topology.records().is_empty()
+        && topology.records().iter().all(|r| {
+            let id = u64::from(r[0]) | (u64::from(r[1]) << 32);
+            r[2] >= 3 && r[2] <= 37 && (r[2] - 3).is_multiple_of(2) && pages.contains_page(id)
+        });
     if surface.gpu_raster_enabled() {
         gpu.material_array
             .get_or_insert_with(|| material_render::MaterialArray::new(&device))
@@ -1835,6 +1662,7 @@ fn dispatch_cbt_geometry(
 }
 
 fn draw_cbt_geometry(
+    presentation: Res<CbtGpuPresentation>,
     surface: Option<Res<CbtRenderSurface>>,
     material: Option<Res<CbtRenderMaterial>>,
     gpu: Option<Res<CbtGpuBuffers>>,
@@ -1862,6 +1690,10 @@ fn draw_cbt_geometry(
         || surface.gpu_mesh_enabled()
         || gpu.leaf_count() == 0
     {
+        return;
+    }
+    let mut draw_attempt = presentation.attempt(&surface, material.as_deref());
+    if !gpu.complete_pages {
         return;
     }
     let (camera, extracted_view, target, depth, view_uniform_offset) = view.into_inner();
@@ -1944,9 +1776,8 @@ fn draw_cbt_geometry(
         .get(&format)
         .expect("CBT raster pipeline inserted above");
     // Do not submit grey fallback-textured CBT patches while the canonical
-    // albedo is still loading. The main-world backdrop remains visible until
-    // the same handle is resident, so this is a clean bootstrap rather than
-    // a frame of untextured terrain.
+    // albedo is still loading. Main-world visibility waits for the successful
+    // draw acknowledgement below, not merely for the CPU image asset.
     let Some(material) = material.as_ref() else {
         return;
     };
@@ -2185,6 +2016,7 @@ fn draw_cbt_geometry(
     // Match the reference's linear vertex stream: one instance, three
     // vertices per active triangle, with vertex_index / 3 selecting the record.
     pass.draw_indirect(draw_buffer, 0);
+    draw_attempt.submitted = true;
     if let Some(pass_span) = pass_span {
         pass_span.end(&mut pass);
     }
@@ -2192,6 +2024,8 @@ fn draw_cbt_geometry(
 
 #[cfg(feature = "mesh-shaders")]
 fn draw_cbt_mesh_geometry(
+    presentation: Res<CbtGpuPresentation>,
+    material: Option<Res<CbtRenderMaterial>>,
     surface: Option<Res<CbtRenderSurface>>,
     gpu: Option<Res<CbtGpuBuffers>>,
     mesh: Option<ResMut<CbtGpuMeshPipeline>>,
@@ -2208,10 +2042,18 @@ fn draw_cbt_mesh_geometry(
     let (Some(surface), Some(gpu), Some(mut mesh)) = (surface, gpu, mesh) else {
         return;
     };
-    if !surface.gpu_mesh_enabled() || gpu.leaf_count() == 0 {
+    if !surface.gpu_raster_enabled()
+        || !surface.gpu_surface_ready()
+        || !surface.gpu_mesh_enabled()
+        || gpu.leaf_count() == 0
+    {
         return;
     }
 
+    let mut draw_attempt = presentation.attempt(&surface, material.as_deref());
+    if !gpu.complete_pages {
+        return;
+    }
     let device = context.render_device();
     if !device
         .features()
@@ -2239,12 +2081,14 @@ fn draw_cbt_mesh_geometry(
         Some(residual_buffer),
         Some(params_buffer),
         Some(surface_buffer),
+        Some(frames_buffer),
     ) = (
         gpu.leaf_buffer(),
         gpu.page_metadata_buffer(),
         gpu.page_residual_buffer(),
         gpu.params_buffer(),
         gpu.surface_transform_buffer(),
+        gpu.tile_frames.buffer(),
     )
     else {
         return;
@@ -2321,6 +2165,10 @@ fn draw_cbt_mesh_geometry(
                 resource: BindingResource::Buffer(residual_buffer.as_entire_buffer_binding()),
             },
             BindGroupEntry {
+                binding: 4,
+                resource: BindingResource::Buffer(frames_buffer.as_entire_buffer_binding()),
+            },
+            BindGroupEntry {
                 binding: 6,
                 resource: BindingResource::Buffer(params_buffer.as_entire_buffer_binding()),
             },
@@ -2366,6 +2214,7 @@ fn draw_cbt_mesh_geometry(
     pass.set_bind_group(0, &*bind_group, &[]);
     pass.set_bind_group(1, &*view_bind_group, &[view_uniform_offset.offset]);
     pass.draw_mesh_tasks(MESHLETS_PER_PATCH, gpu.leaf_count(), 1);
+    draw_attempt.submitted = true;
 }
 
 #[cfg(test)]

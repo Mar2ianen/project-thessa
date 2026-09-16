@@ -279,3 +279,56 @@ mod tests {
         assert_eq!(cache.iter().count(), 0);
     }
 }
+
+/// Resolve a resident cube-tile ancestor and map child UVs into that page.
+/// Two heap bits encode one quadtree level (x then y); depth three is a face.
+/// This keeps local materials visible while replacement geometry refines.
+pub fn resolve_material_ancestor(
+    mut node_id: u64,
+    mut resident: impl FnMut(u64) -> bool,
+) -> Option<(u64, [f32; 3])> {
+    let mut scale = 1.0;
+    let mut offset = [0.0, 0.0];
+    while node_id >= 8 {
+        if resident(node_id) {
+            return Some((node_id, [scale, offset[0], offset[1]]));
+        }
+        offset[0] = (offset[0] + ((node_id >> 1) & 1) as f32) * 0.5;
+        offset[1] = (offset[1] + (node_id & 1) as f32) * 0.5;
+        scale *= 0.5;
+        node_id >>= 2;
+    }
+    None
+}
+
+#[cfg(test)]
+mod ancestor_tests {
+    use super::*;
+    #[test]
+    fn child_quadrants_reuse_resident_parent_until_exact_page_arrives() {
+        let parent = 12u64;
+        for quadrant in 0..4 {
+            let child = parent * 4 + quadrant;
+            let (_, uv) = resolve_material_ancestor(child, |id| id == parent).unwrap();
+            assert_eq!(
+                uv,
+                [
+                    0.5,
+                    (quadrant >> 1) as f32 * 0.5,
+                    (quadrant & 1) as f32 * 0.5
+                ]
+            );
+            assert_eq!(
+                resolve_material_ancestor(child, |id| id == parent || id == child),
+                Some((child, [1.0, 0.0, 0.0]))
+            );
+        }
+        // Face 4, child (1,0), grandchild (0,1): x in [.5,.75], y in [.25,.5].
+        let grandchild = (parent * 4 + 2) * 4 + 1;
+        assert_eq!(
+            resolve_material_ancestor(grandchild, |id| id == parent),
+            Some((parent, [0.25, 0.5, 0.25]))
+        );
+        assert!(resolve_material_ancestor(grandchild, |id| id == 11).is_none());
+    }
+}

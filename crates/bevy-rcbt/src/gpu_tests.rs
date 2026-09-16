@@ -511,3 +511,133 @@ fn check() { result[0] = cbt_render_position(frames[0], vec3(12.25, -2.125, 33.0
         "actual={actual} expected={expected}"
     );
 }
+
+/// Execute the actual mesh entry body as compute, replacing only its stage IO.
+/// This tests all lanes/outputs even on adapters without native mesh shaders.
+#[cfg(feature = "mesh-shaders")]
+#[test]
+#[ignore = "requires a wgpu adapter; run with --include-ignored"]
+fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
+    let gpu = Gpu::new();
+    let mut shader = CBT_MESH_WGSL.split("@fragment").next().unwrap().to_owned();
+    shader = shader.replace("enable wgpu_mesh_shader;", "");
+    for attribute in [
+        "@builtin(position)",
+        "@location(0)",
+        "@builtin(triangle_indices)",
+        "@builtin(vertex_count)",
+        "@builtin(primitive_count)",
+        "@builtin(vertices)",
+        "@builtin(primitives)",
+    ] {
+        shader = shader.replace(attribute, "");
+    }
+    shader = shader
+        .replace("@mesh(mesh_output)", "@compute")
+        .replace(
+            "var<workgroup> mesh_output: MeshOutput;",
+            "@group(0) @binding(7) var<storage, read_write> mesh_output: MeshOutput;",
+        )
+        .replace("@group(1) @binding(0)", "@group(0) @binding(1)")
+        .replace("@group(1) @binding(1)", "@group(0) @binding(5)")
+        .replace(
+            "let meshlet = workgroup.x;",
+            "let meshlet = params._padding;",
+        );
+    let radius = 6_371_000.0f32;
+    let anchor = crate::precision::TileAnchor::new(
+        crate::precision::TileKey::new(4, 17, 65537, 65539).unwrap(),
+        radius as f64,
+    )
+    .unwrap();
+    let frames = gpu.buffer(
+        &anchor
+            .to_gpu(anchor.anchor_body_m)
+            .unwrap()
+            .words()
+            .into_iter()
+            .flatten()
+            .map(f32::to_bits)
+            .collect::<Vec<_>>(),
+        false,
+    );
+    let identity = [
+        1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.,
+    ]
+    .map(f32::to_bits);
+    let matrix = gpu.buffer(&identity, true);
+    let leaves = gpu.buffer(&[0; 4], false);
+    let residuals = gpu.buffer(&[0; 2], false);
+    let metadata = gpu.buffer(&[120.0f32.to_bits(), 1.0f32.to_bits(), 2, 0], false);
+    // vec3 members align to 16 bytes: header16, vertex32, primitive16.
+    let sentinel = 0x7fc00001;
+    let words = 4 + 81 * 8 + 128 * 4;
+    for meshlet in 0..16 {
+        let output = gpu.buffer(&vec![sentinel; words], false);
+        let params = gpu.buffer(&[1, 1089, radius.to_bits(), meshlet], true);
+        gpu.dispatch(
+            &shader,
+            &[("build_mesh", 1)],
+            &[
+                &leaves, &matrix, &metadata, &residuals, &frames, &matrix, &params, &output,
+            ],
+            &[1, 5, 6],
+            &[7],
+        );
+        let result = gpu.read(&output);
+        assert_eq!(&result[..2], &[81, 128]);
+        for i in 0..81 {
+            let vertex: Vec<_> = result[4 + i * 8..4 + i * 8 + 7]
+                .iter()
+                .copied()
+                .map(f32::from_bits)
+                .collect();
+            assert!(vertex.iter().all(|v| v.is_finite()), "unwritten vertex {i}");
+            let uv = [
+                ((meshlet % 4) * 8 + i as u32 % 9) as f64 / 32.,
+                ((meshlet / 4) * 8 + i as u32 / 9) as f64 / 32.,
+            ];
+            let expected = anchor.project_body_m(uv, 120.0);
+            for axis in 0..3 {
+                assert!(
+                    (vertex[axis] as f64 - (expected[axis] - anchor.anchor_body_m[axis])).abs()
+                        < 0.001,
+                    "meshlet {meshlet} vertex {i} axis {axis}: {}",
+                    vertex[axis]
+                );
+            }
+            assert!((vertex[4..7].iter().map(|v| v * v).sum::<f32>() - 1.).abs() < 1e-5);
+        }
+        let mut area = 0.;
+        for i in 0..128 {
+            let tri = &result[4 + 81 * 8 + i * 4..4 + 81 * 8 + i * 4 + 3];
+            assert!(
+                tri.iter().all(|v| *v < 81),
+                "unwritten primitive {i}: {tri:?}"
+            );
+            let xy: Vec<_> = tri
+                .iter()
+                .map(|v| [(v % 9) as f32, (v / 9) as f32])
+                .collect();
+            let signed = (xy[1][0] - xy[0][0]) * (xy[2][1] - xy[0][1])
+                - (xy[1][1] - xy[0][1]) * (xy[2][0] - xy[0][0]);
+            assert_eq!(signed, 1.);
+            area += signed * 0.5;
+        }
+        assert_eq!(area, 64.);
+    }
+    // Missing height data must emit zero counts rather than partially valid IO.
+    let absent = gpu.buffer(&[0; 4], false);
+    let output = gpu.buffer(&vec![sentinel; words], false);
+    let params = gpu.buffer(&[1, 1089, radius.to_bits(), 0], true);
+    gpu.dispatch(
+        &shader,
+        &[("build_mesh", 1)],
+        &[
+            &leaves, &matrix, &absent, &residuals, &frames, &matrix, &params, &output,
+        ],
+        &[1, 5, 6],
+        &[7],
+    );
+    assert_eq!(&gpu.read(&output)[..2], &[0, 0]);
+}

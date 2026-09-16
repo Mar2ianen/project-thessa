@@ -292,6 +292,12 @@ fn perf_autobench(
         monitor.export_task = None;
     }
     let boot = *bench.boot.get_or_insert_with(Instant::now);
+    // Reproducible disocclusion/orbit regression with the craft held on screen.
+    if std::env::var_os("THESSA_AUTOBENCH_CAMERA_ORBIT").is_some() {
+        let phase = (boot.elapsed().as_secs_f32() - AUTOBENCH_WARMUP_S as f32).max(0.0);
+        pilot.pilot_camera_orbit =
+            Quat::from_rotation_y(phase * 0.6) * Quat::from_rotation_x(-0.18);
+    }
     if boot.elapsed().as_secs_f64() < AUTOBENCH_WARMUP_S {
         return;
     }

@@ -29,7 +29,11 @@ mod material_pages;
 #[cfg(feature = "render")]
 pub mod precision;
 #[cfg(feature = "render")]
+mod presentation;
+#[cfg(feature = "render")]
 pub use material_pages::{CbtMaterialPage, CbtRenderMaterialPages};
+#[cfg(feature = "render")]
+pub use presentation::CbtGpuPresentation;
 
 /// Canonical surface maps consumed by the portable GPU CBT raster path.
 ///
@@ -236,6 +240,7 @@ pub struct CbtRenderSurface {
     view_fov_rad: f64,
     gpu_raster_enabled: bool,
     gpu_surface_ready: bool,
+    presentation_epoch: u64,
     gpu_mesh_enabled: bool,
 }
 
@@ -265,6 +270,7 @@ impl Default for CbtRenderSurface {
             view_fov_rad: f64::NAN,
             gpu_raster_enabled: false,
             gpu_surface_ready: false,
+            presentation_epoch: 0,
             gpu_mesh_enabled: false,
         }
     }
@@ -362,7 +368,7 @@ impl CbtRenderSurface {
     /// avoids drawing the same cover twice.
     pub fn set_gpu_raster_enabled(&mut self, enabled: bool) {
         if self.gpu_raster_enabled != enabled {
-            self.gpu_surface_ready = false;
+            self.set_gpu_surface_ready(false);
         }
         self.gpu_raster_enabled = enabled;
     }
@@ -370,6 +376,9 @@ impl CbtRenderSurface {
     /// Publish an atomic GPU-cover readiness state. A false value means the
     /// bootstrap surface remains responsible for visible coverage.
     pub fn set_gpu_surface_ready(&mut self, ready: bool) {
+        if self.gpu_surface_ready != ready {
+            self.presentation_epoch = self.presentation_epoch.wrapping_add(1);
+        }
         self.gpu_surface_ready = ready;
     }
 

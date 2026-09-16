@@ -1,7 +1,7 @@
 //! Persistent bounded GPU material array. The topology only carries layer IDs.
 use super::*;
 use crate::{
-    material_cache::SlotCache,
+    material_cache::{SlotCache, resolve_material_ancestor},
     material_pages::{CbtRenderMaterialPages, MATERIAL_PAGE_SIZE},
 };
 use bevy::render::render_resource::{
@@ -13,7 +13,7 @@ use bevy::render::render_resource::{
 pub(super) struct MaterialArray {
     pub view: TextureView,
     pub sampler: Sampler,
-    pub slots: RawBufferVec<u32>,
+    pub slots: RawBufferVec<[u32; 4]>,
     texture: Texture,
     cache: SlotCache,
     topology_generation: u64,
@@ -85,10 +85,9 @@ impl MaterialArray {
             .iter()
             .filter_map(|r| {
                 let id = u64::from(r[0]) | (u64::from(r[1]) << 32);
-                pages
-                    .pages
-                    .get(&id)
-                    .map(|(generation, _)| (id, *generation))
+                let (source, _) =
+                    resolve_material_ancestor(id, |key| pages.pages.contains_key(&key))?;
+                Some((source, pages.pages[&source].0))
             })
             .collect();
         for change in self.cache.update(&desired) {
@@ -123,10 +122,18 @@ impl MaterialArray {
         self.slots.clear();
         self.slots.extend(topology.records().iter().map(|r| {
             let id = u64::from(r[0]) | (u64::from(r[1]) << 32);
-            self.cache.slot(id).unwrap_or(u32::MAX)
+            match resolve_material_ancestor(id, |key| self.cache.slot(key).is_some()) {
+                Some((source, uv)) => [
+                    self.cache.slot(source).unwrap(),
+                    uv[0].to_bits(),
+                    uv[1].to_bits(),
+                    uv[2].to_bits(),
+                ],
+                None => [u32::MAX, 1.0f32.to_bits(), 0, 0],
+            }
         }));
         if topology.records().is_empty() {
-            self.slots.push(u32::MAX);
+            self.slots.push([u32::MAX, 1.0f32.to_bits(), 0, 0]);
         }
         self.slots.write_buffer(device, queue);
         self.topology_generation = topology.generation();

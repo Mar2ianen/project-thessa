@@ -403,7 +403,7 @@ pub(super) struct PilotHudState {
     pointer_over_ui: bool,
     show_help: bool,
     show_telemetry: bool,
-    pilot_camera_orbit: Quat,
+    pub(super) pilot_camera_orbit: Quat,
     pilot_camera_chase: bool,
     ui_hidden: bool,
     precision_controls: bool,

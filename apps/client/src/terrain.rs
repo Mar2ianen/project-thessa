@@ -27,6 +27,7 @@ use thessa_worldgen_rocky::{
 #[derive(SystemParam)]
 struct CbtTerrain<'w> {
     state: Res<'w, CbtRenderState>,
+    presentation: Res<'w, thessa_bevy_rcbt::CbtGpuPresentation>,
     input: ResMut<'w, CbtFrameInput>,
     topology: ResMut<'w, CbtRenderTopology>,
     pages: ResMut<'w, CbtRenderPages>,
@@ -54,6 +55,7 @@ pub(super) struct WorldTerrain {
     /// Selection-frame eye (body frame) and camera forward driving the
     /// movement trigger and the velocity LOD bias below.
     selected_eye: DVec3,
+    selected_stream_origin: DVec3,
     selected_forward: DVec3,
     selected_valid: bool,
     /// Smoothed eye speed (m/s) for the velocity detail bias.
@@ -288,6 +290,7 @@ fn setup_terrain(
         selection_at: -1.0,
         topology_pending: false,
         selected_eye: DVec3::ZERO,
+        selected_stream_origin: DVec3::ZERO,
         selected_forward: DVec3::NEG_Z,
         selected_valid: false,
         eye_speed_mps: 0.0,
@@ -727,8 +730,13 @@ fn update_terrain(
     }
     // Keep the last complete draw snapshot and its pages while workers and
     // the planning tree converge. Never flash the bootstrap on each LOD change.
-    let gpu_cover_ready = gpu_raster && gpu_albedo_ready && !world.visible.is_empty();
-    cbt.surface.set_gpu_surface_ready(active && gpu_cover_ready);
+    let cpu_cover_ready = gpu_raster && gpu_albedo_ready && !world.visible.is_empty();
+    // Enable draw preparation first. Hide the bootstrap only after the render
+    // world has actually bound the GPU images and submitted this surface.
+    cbt.surface.set_gpu_surface_ready(active && cpu_cover_ready);
+    let gpu_cover_ready = cbt
+        .presentation
+        .is_ready(&cbt.surface, cbt.material.as_deref());
     world.counters.terrain_patches_generated = 0;
     if !active {
         world.render_center = None;
@@ -873,10 +881,13 @@ fn update_terrain(
     // >~7°, besides the slower 0.75 s safety timer. The movement trigger
     // handles a fast craft; the timer is only a guard for a stationary camera
     // and must not run the full selection walk three times per second.
+    // Streaming pressure follows translation of the focus (craft or survey
+    // centre). Orbiting/zooming a camera must not degrade the material LOD.
+    let stream_origin = rotation.inverse() * origin;
     let mut moved = !world.selected_valid;
     if world.selected_valid {
         let dt = (now_s - world.selection_at).max(1e-3);
-        let eye_speed = (eye - world.selected_eye).length() / dt;
+        let eye_speed = (stream_origin - world.selected_stream_origin).length() / dt;
         // Smoothed: single-frame hitches must not whip the LOD bias.
         world.eye_speed_mps += (eye_speed - world.eye_speed_mps).clamp(-2000.0, 2000.0) * 0.25;
         let swing = (forward_body.normalize_or_zero() - world.selected_forward).length();
@@ -888,8 +899,8 @@ fn update_terrain(
     // ~3 km/s the tile demand at full depth (≈970 new tiles/s at 500 m,
     // measured) outruns worker throughput (~200/s) by 5x, so the curve
     // keeps climbing to the LOD-internal cap of 32: at 3.7 km/s demand
-    // drops to ≈174/s (500 m) and ≈10/s (5 km). Detail the viewer crosses
-    // in one frame is motion-blurred anyway.
+    // drops to ≈174/s (500 m) and ≈10/s (5 km). This is a streaming budget
+    // tradeoff; the renderer does not currently apply motion blur.
     let detail_bias = (1.0 + world.eye_speed_mps.max(0.0) / 100.0).clamp(1.0, 32.0);
     let selection_started = Instant::now();
     let mut selection_changed = false;
@@ -939,6 +950,7 @@ fn update_terrain(
             };
             world.selection_at = now_s;
             world.selected_eye = eye;
+            world.selected_stream_origin = stream_origin;
             world.selected_forward = forward_body.normalize_or_zero();
             world.selected_valid = true;
             world.topology_pending = true;
@@ -1307,10 +1319,28 @@ fn update_terrain(
     }
     // Bounded cache, retaining visible and in-flight selection only.
     if world.cache.len() > 512 {
+        // A geometry parent can still supply a child's material while its
+        // finer page is baking. Keep those dependencies through cache eviction.
+        let material_sources: BTreeSet<_> = world
+            .visible
+            .iter()
+            .filter_map(|key| {
+                let node = lod::cbt_node_for_tile(*key)?;
+                thessa_bevy_rcbt::material_cache::resolve_material_ancestor(node.id(), |id| {
+                    cbt.material_pages.contains_page(id)
+                })
+                .map(|(id, _)| id)
+            })
+            .collect();
         let stale: Vec<_> = world
             .cache
             .keys()
-            .filter(|k| !world.visible.contains(k) && !world.wanted.contains(k))
+            .filter(|k| {
+                !world.visible.contains(k)
+                    && !world.wanted.contains(k)
+                    && lod::cbt_node_for_tile(**k)
+                        .is_none_or(|node| !material_sources.contains(&node.id()))
+            })
             .copied()
             .collect();
         for key in stale {

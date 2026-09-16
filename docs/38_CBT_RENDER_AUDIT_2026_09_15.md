@@ -200,3 +200,73 @@ final autobench path explicitly sets `WinitSettings::continuous()` for both
 focus states; normal launches retain the existing behavior. Earlier mixed-focus
 whole-frame results are therefore not used to claim an FPS gain. GPU pass
 timings remain scoped measurements, not summed estimates of whole-frame GPU time.
+
+## Follow-up: mesh emission, presentation acknowledgement, camera motion
+
+The 2026-09-16 review found four real defects in the optional mesh consumer and
+bootstrap handoff. They are addressed as follows:
+
+- A 64-lane mesh workgroup now writes all 81 vertices and 128 primitives with
+  strided loops. Only lane zero writes the output counts.
+- Indexed compute and mesh emission share `surface_sample.wgsl`, including
+  quantized heights, tile-local precision and analytic sphere derivatives.
+  Mesh output uses the same CPU f64 tile frames and camera-relative hi/lo
+  anchors. The duplicate absolute-position and forward-difference path is gone.
+- `CbtGpuPresentation` acknowledges an actual recorded draw after required GPU
+  bindings exist. CPU Image residency only enables preparation. Main-world
+  backdrop visibility waits for that acknowledgement. Activation epochs and
+  material identities prevent reusing acknowledgements across restarts or
+  material changes; ordinary complete LOD swaps do not rearm the backdrop.
+- Both consumers require the adapter's complete-cover flag and complete height
+  pages. The mesh consumer can no longer bypass the presentation fence.
+
+The mesh shader remains an **optional diagnostic consumer** with its original
+simple shading; it is not enabled by the game and does not have indexed-path
+material/lighting parity. Native mesh-stage drawing has not been visually
+validated on this adapter. Naga validates the native shader; a GPU regression
+executes its production entry body with compute IO to read back every output
+of all sixteen meshlets. It checks counts, triangle coverage, finite normals,
+L17 Earth-radius positions against f64 (<1 mm in this fixture), and missing-page
+zero counts. This specifically catches the previous uninitialized tails.
+
+Two causes of camera-related detail loss are also addressed:
+
+- Streaming speed now follows the translated craft/survey focus in the body
+  frame. Camera orbit and zoom still trigger view selection, but do not inflate
+  the velocity LOD bias. The existing high-speed flight budget remains in place.
+- A missing child material page reuses the nearest resident ancestor with an
+  exact UV subrectangle, including through terrain-cache eviction. It returns
+  to the exact child when available. A global-map fallback is still needed when
+  neither child nor ancestor fits the bounded material cache.
+
+`THESSA_AUTOBENCH_CAMERA_ORBIT=1` adds a repeatable pilot camera orbit. Combined
+with `THESSA_AUTOBENCH_PAUSED=1`, it isolates camera/aircraft disocclusion from
+flight. These fixes do not establish that every reported blur at the aircraft
+silhouette has been eliminated; there is no temporal AA or motion-blur pass in
+this terrain path, and image comparisons must distinguish mip filtering from
+streaming fallback.
+
+Migration boundary: these changes repair the existing disposable Bevy bridge.
+The shared WGSL geometry and material-ancestor mapping contain no Bevy API.
+The acknowledgement resource itself belongs to the bridge, not engine topology.
+No Solari, scheduler or new render-graph architecture was introduced.
+
+### Follow-up validation results
+
+`cargo test -p thessa-bevy-rcbt --features mesh-shaders --lib -- --include-ignored`:
+29 passed (including six GPU executions). Client tests: 61 passed. Release build
+and both 2560×1600 Vulkan runs completed without GPU validation errors.
+
+| Scenario | Frame p50 / p95 / p99, ms | GPU terrain median, ms |
+| --- | --- | --- |
+| camera-orbit-paused | 15.42 / 17.06 / 18.23 | 2.42 |
+| pilot-moving-fixed | 15.39 / 17.63 / 19.47 | 2.79 |
+
+Each capture retained 1,800 frames. A separate CPU trajectory benchmark was
+running concurrently, so these whole-frame figures are observations, not an
+isolated performance comparison. The paused orbit maintained simulation time
+0, streaming speed 0 m/s and detail bias exactly 1.00 throughout. Terrain had
+349–351 published patches; the moving-flight run had 382–385. Screenshots show
+continuous terrain in the checked frames; residual horizon stepping and distant
+material/filtering limitations remain. The reported silhouette-specific blur
+has not been proven fully resolved by these captures.

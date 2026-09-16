@@ -185,8 +185,10 @@ pub fn build_axial_profile(
     // Effective deck at throttle (linear provisional, see module notes).
     let mass_flow = source.mass_flow_kg_s * source.throttle;
     let exit_temp = source.exit_temperature_k;
-    // Visible length: momentum vs ambient. Constant 2.2 is provisional.
-    let length = diameter * source.exit_mach * pi.max(0.05).sqrt() * 2.2;
+    // Visible length: momentum vs ambient. The leading constant is
+    // provisional (reference-like flames run ~10-15 nozzle diameters);
+    // tests pin direction (longer with Pi, M, D), never metres.
+    let length = diameter * source.exit_mach * pi.max(0.05).sqrt() * 3.0;
     let length = length.clamp(diameter * 2.0, 4000.0);
 
     let spread = 0.12 + 0.10 * (1.0 - 1.0 / pi.max(1.0));

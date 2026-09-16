@@ -74,16 +74,18 @@ fn read_plume_input(runtime: &PilotFlightRuntime, clock: &SimulationClock) -> En
 }
 
 /// PROVISIONAL nozzle deck (order-of-magnitude methalox rocket values, NOT a
-/// measured engine deck). Stands in for compiled vehicle/engine data, which
-/// does not exist yet. Affects plume SHAPE (impostor and volume alike);
-/// flagged for replacement, never presented as calibration.
+/// measured engine deck). Exit pressure is set mildly underexpanded at sea
+/// level on purpose so the diamond-chain path gets exercised; a matched or
+/// overexpanded deck would hide it. Stands in for compiled vehicle/engine
+/// data, which does not exist yet. Affects plume SHAPE (impostor and volume
+/// alike); flagged for replacement, never presented as calibration.
 fn provisional_rocket_source(throttle: f64) -> PlumeSource {
     PlumeSource {
         nozzle_to_vehicle: RigidTransform::IDENTITY,
         exit_radius_m: 0.55,
         mass_flow_kg_s: 480.0,
         exhaust_velocity_mps: 3550.0,
-        exit_pressure_pa: 62_000.0,
+        exit_pressure_pa: 120_000.0,
         exit_temperature_k: 1850.0,
         exit_mach: 3.5,
         throttle: throttle.clamp(0.0, 1.0),

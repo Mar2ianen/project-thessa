@@ -5340,6 +5340,7 @@ dependencies = [
  "thessa-flight-net",
  "thessa-graphics",
  "thessa-perf",
+ "thessa-plume-core",
  "thessa-protocol",
  "thessa-sim-core",
  "thessa-worldgen-rocky",
@@ -5384,6 +5385,10 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "thessa-plume-core"
+version = "0.0.1"
 
 [[package]]
 name = "thessa-protocol"

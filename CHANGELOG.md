@@ -11,19 +11,35 @@
 
 ### Added
 
-- Дешёвые атмосферные красоты (`apps/client/src/beauty.rs`, всё за настройками
-  графики): процедурные полосы газовых гигантов (Нереида/Веспер, bake на CPU),
-  1–2 облачных shell-дек для океанических миров, конус факела двигателя с
-  Mach diamonds/фликером/точечным светом, аврора-shell по аналитическому овалу.
-  Новые секции `graphics.toml`: `[gas_giant]`, `[engine_plume]`, расширенные
-  `[clouds]` и `[upper_atmosphere]` (интенсивность/анимация авроры).
-  Факел читает данные через `EnginePlumeInput`: движкового сима пока нет,
-  провайдером станет engine-sim без смены рендера.
-- Подтянут минимальный CBT-набор из `origin/feat/rcbt-terrain-pipeline`:
+- Cheap atmospheric beauties (`apps/client/src/beauty.rs`, all behind graphics
+  settings): procedural gas-giant bands (Nereid/Vesper, CPU-baked), 1-2 cloud
+  shell decks for ocean worlds, engine-plume cone with Mach diamonds/flicker/
+  point light, aurora shell over the analytic oval. New `graphics.toml`
+  sections: `[gas_giant]`, `[engine_plume]`, extended `[clouds]` and
+  `[upper_atmosphere]` (aurora intensity/animation). The plume reads data via
+  `EnginePlumeInput`: no engine-sim exists yet, engine-sim will become the
+  provider without renderer changes.
+- New `plume-core` crate (`docs/38` migration slices 2-3): backend-neutral
+  `PlumeSource`/`PlumeEnvironment` contract, analytic axial mean profile
+  (pressure-ratio regime, Tam shock-cell spacing, budget-independent
+  sampling), participating-medium CPU oracle (`sample_medium`,
+  `integrate_ray`, `radiant_power`), exhaust optical material table with a
+  shared CPU/GPU hue ramp, 20 semantic tests, and a `profile` bench (~1 us
+  per 48-station build). The `beauty.rs` cone stays
+  the documented Low/fallback impostor; no engine state is invented.
+- Field-first plume renderer (`docs/38` section 8, Medium/High): a
+  camera-facing ribbon carries coverage only while
+  `assets/shaders/plume_volume.wgsl` marches view rays through the round
+  cross-section and Beer-Lambert-integrates the `plume-core` mean field
+  (6/10 evals per pixel). Diamonds emerge from the shared shock factor,
+  lighting proxies from the field integral, ambient from the flight
+  atmosphere model. Cone impostor kept for Low; pilot-view gating kept.
+- Minimal CBT pull from `origin/feat/rcbt-terrain-pipeline`:
   `rcbt-core::compact`, `lod::{CBT_FACE_DEPTH, cbt_node_for_tile,
-  tile_for_cbt_node}` (один LOD-адрес для террейна и beauty-импосторов),
-  расширение графики (terrain path, mesh cells, shadows), `water::WaterPlugin`.
-  Полный GPU terrain pipeline (`bevy-rcbt/render.rs`) осознанно отложен.
+  tile_for_cbt_node}` (one LOD address space for terrain and beauty impostors),
+  graphics expansion (terrain path, mesh cells, shadows), `water::WaterPlugin`.
+  The full GPU terrain pipeline (`bevy-rcbt/render.rs`) is deliberately
+  deferred.
 
 - Общая запечённая траектория свободного полёта и карты, таблица эфемерид,
   планировщик событий по времени симуляции; запекание вынесено в compute worker.

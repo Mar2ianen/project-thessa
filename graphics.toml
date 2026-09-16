@@ -75,13 +75,15 @@ animate_bands = true # slow storm drift; off = static
 limb_darkening = true # belt/zone contrast baked into the texture
 
 [engine_plume]
-# Cone + baked gradient/Mach diamonds + flicker + 1 optional point light.
-# NOTE (engines): no engine-sim exists yet. The client reads plume input via
-# EnginePlumeInput (see apps/client/src/beauty.rs); when engine-sim lands it
-# becomes the provider and this section stays unchanged.
+# Field-first plume (docs/38): analytic mean field + RCBT residual (later).
+# Low = baked cone impostor (fallback artifact); Medium/High = analytic
+# volume ribbon (camera-facing bound, per-pixel Beer-Lambert march).
+# NOTE (engines): no engine-sim exists yet. The client builds a provisional
+# source from throttle + ambient pressure; engine-sim/vehicle data will
+# become the provider without renderer changes.
 enabled = true
-quality = "medium" # low = untextured cone, medium/high = baked diamonds
-mach_diamonds = true
+quality = "medium" # low = cone impostor; medium = volume/6 steps; high = volume/10 steps
+mach_diamonds = true # debug override (doc section 9), not physics
 flicker = true
 light = true
 

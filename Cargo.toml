@@ -9,6 +9,7 @@ members = [
     "crates/flight-net",
     "crates/flight-authority",
     "crates/atmosphere",
+    "crates/plume-core",
     "crates/rcbt-core",
     "crates/rcbt-ref",
     "crates/rcbt-ffi",

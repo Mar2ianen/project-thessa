@@ -11,6 +11,7 @@ use atmosphere::{
 mod terrain;
 mod water;
 mod beauty;
+mod plume;
 use map_ui::*;
 use navigation::*;
 use orbits::*;
@@ -162,6 +163,7 @@ fn main() {
         .add_plugins(terrain::TerrainPlugin)
         .add_plugins(water::WaterPlugin)
         .add_plugins(beauty::BeautyPlugin)
+        .add_plugins(plume::PlumePlugin)
         .add_plugins(BrpExtrasPlugin::default())
         .insert_resource(SimulationClock::default())
         .insert_resource(NavigationState::default())

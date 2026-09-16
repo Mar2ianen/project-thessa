@@ -1,26 +1,21 @@
-//! Cheap atmospheric beauties: gas giants, cloud decks, engine plume, aurora.
+//! Cheap atmospheric beauties: gas giants, cloud decks, aurora.
 //!
-//! All four are raster-portable (no custom shader, no RT, no particles):
-//! procedural RGBA baked once on the CPU into ordinary Bevy `Image`s, then
-//! ordinary `StandardMaterial`s (alpha-blend shells, emissive plume/aurora,
-//! opaque band textures). Per-frame cost is a few transform copies plus one
-//! optional point light; texture re-bakes (storm drift, aurora curtains)
-//! run at 0.1-2 Hz and only on higher qualities.
+//! Raster-portable (no RT, no particles): procedural RGBA baked once on the
+//! CPU into ordinary Bevy `Image`s, then ordinary `StandardMaterial`s
+//! (alpha-blend shells, additive aurora, opaque band textures). Per-frame
+//! cost is a few transform copies; texture re-bakes (storm drift, aurora
+//! curtains) run at 0.1-2 Hz and only on higher qualities.
 //!
 //! Every effect is gated by `graphics.toml` (`[gas_giant]`, `[clouds]`,
-//! `[engine_plume]`, `[upper_atmosphere]`); quality selects bake size and
-//! re-bake rate, never physics.
+//! `[upper_atmosphere]`); quality selects bake size and re-bake rate, never
+//! physics. The engine plume lives in `super::plume` (field-first volume
+//! path per `docs/38`, cone impostor only on Low).
 //!
 //! CBT note: cloud decks and gas-giant detail share the terrain LOD address
 //! space (`thessa_worldgen_rocky::lod::{cbt_node_for_tile, tile_for_cbt_node}`).
 //! Shells are whole-sphere impostors, so the CBT is used for what it is good
 //! at here — a deterministic LOD address (`TileKey <-> Node` round-trip,
 //! tested below) that picks bake size and re-bake cadence — not for geometry.
-//!
-//! NOTE (engines): no engine-sim exists yet. Plume input flows through
-//! [`EnginePlumeInput`], currently read from `PilotFlightRuntime`
-//! throttle/`engine_active` + [`SimulationClock`]. When engine-sim lands it
-//! becomes the provider of this struct; the renderer side stays unchanged.
 
 use super::*;
 use bevy::{
@@ -89,38 +84,6 @@ fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
         a[1] + (b[1] - a[1]) * t,
         a[2] + (b[2] - a[2]) * t,
     ]
-}
-
-// ---------------------------------------------------------------------------
-// Engine input abstraction (see module NOTE).
-
-/// Plume renderer input. Today: throttle/active from the flight authority,
-/// time from [`SimulationClock`]. Tomorrow: engine-sim provides exhaust
-/// velocity, pressure ratio, nozzle state — this struct grows, systems below
-/// do not change shape.
-#[derive(Debug, Clone, Copy)]
-pub struct EnginePlumeInput {
-    pub throttle: f64,
-    pub engine_active: bool,
-    pub sim_time_s: f64,
-}
-
-impl EnginePlumeInput {
-    pub fn active_amount(self) -> f64 {
-        if !self.engine_active {
-            0.0
-        } else {
-            self.throttle.clamp(0.0, 1.0)
-        }
-    }
-}
-
-fn read_plume_input(runtime: &PilotFlightRuntime, clock: &SimulationClock) -> EnginePlumeInput {
-    EnginePlumeInput {
-        throttle: runtime.throttle,
-        engine_active: runtime.engine_active,
-        sim_time_s: clock.sim_seconds,
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -314,51 +277,6 @@ fn bake_clouds(seed: u64, w: u32, h: u32, coverage: f32, opacity: f32) -> Vec<u8
 }
 
 // ---------------------------------------------------------------------------
-// Plume.
-
-/// Vertical gradient RGBA: hot core at nozzle (v=0) -> transparent tail.
-/// Mach diamonds multiply bright bands along the axis when enabled.
-fn bake_plume(w: u32, h: u32, diamonds: bool) -> Vec<u8> {
-    let mut px = Vec::with_capacity((w * h * 4) as usize);
-    for y in 0..h {
-        let v = y as f64 / (h - 1).max(1) as f64; // 0 nozzle .. 1 tail
-        let width = (1.0 - v * 0.75).max(0.15); // cone narrows to tail
-        for x in 0..w {
-            let u = (x as f64 + 0.5) / w as f64 * 2.0 - 1.0; // -1..1 across
-            let r = (u.abs() / width).min(1.0);
-            let body = (1.0 - r * r).max(0.0);
-            let axial = (-v * 3.2).exp();
-            let mut bright = body * axial;
-            if diamonds {
-                // Shock bands: ~5 bright cells decaying downstream.
-                let cells = (0.5 + 0.5 * (v * 5.0 * std::f64::consts::PI * 2.0).sin()).powi(2);
-                bright *= 0.55 + 0.45 * cells * (-v * 2.0).exp();
-            }
-            // White-yellow core -> orange rim -> smoke.
-            let core = (bright * 1.6).min(1.0);
-            let r_c = (1.0f64).min(0.35 + core);
-            let g_c = (0.85 * core + 0.15 * body) as f64;
-            let b_c = (0.55 * core * core) as f64;
-            let a = (bright * 1.25).clamp(0.0, 1.0);
-            px.extend_from_slice(&[
-                (r_c.clamp(0.0, 1.0) * 255.0) as u8,
-                (g_c.clamp(0.0, 1.0) * 255.0) as u8,
-                (b_c.clamp(0.0, 1.0) * 255.0) as u8,
-                (a * 255.0) as u8,
-            ]);
-        }
-    }
-    px
-}
-
-/// Deterministic flicker in [0.82, 1.12] from sim time + throttle.
-fn plume_flicker(sim_time_s: f64, throttle: f64) -> f64 {
-    let t = sim_time_s;
-    1.0 + 0.10 * (t * 37.0).sin() * throttle
-        + 0.06 * (t * 61.0 + 1.3).sin() * throttle
-        - 0.04 * throttle
-}
-
 // ---------------------------------------------------------------------------
 // Aurora.
 
@@ -425,7 +343,6 @@ struct BeautyImages {
     vesper_size: (u32, u32),
     cloud_low: Handle<Image>,
     cloud_high: Option<Handle<Image>>,
-    plume: Handle<Image>,
     aurora: Handle<Image>,
     aurora_size: (u32, u32),
 }
@@ -443,12 +360,6 @@ struct AuroraShell {
     body: &'static str,
     scale_factor: f32,
 }
-
-#[derive(Component)]
-struct PlumeCone;
-
-#[derive(Component)]
-struct PlumeLight;
 
 #[derive(Resource, Default)]
 struct BeautyTimers {
@@ -468,7 +379,6 @@ impl Plugin for BeautyPlugin {
                     swap_gas_giant_materials,
                     follow_cloud_shells,
                     follow_aurora_shell,
-                    update_plume,
                     rebake_animated,
                 ),
             );
@@ -487,7 +397,7 @@ fn setup_beauty(
         .map(|g| g.0.clone())
         .unwrap_or_default();
     info!(
-        "[beauty] resolved: gas={} clouds={}(layers={} cov={:.2} op={:.2} anim={}) aurora={}(q={:?} i={:.2} anim={}) plume={}(diamonds={} flicker={} light={})",
+        "[beauty] resolved: gas={} clouds={}(layers={} cov={:.2} op={:.2} anim={}) aurora={}(q={:?} i={:.2} anim={})",
         r.gas_giant_enabled,
         r.clouds_enabled,
         r.clouds_layers,
@@ -498,10 +408,6 @@ fn setup_beauty(
         r.aurora_quality,
         r.aurora_intensity,
         r.aurora_animate,
-        r.plume_enabled,
-        r.plume_diamonds,
-        r.plume_flicker,
-        r.plume_light,
     );
 
     // --- Gas giants: bake band textures now, swap onto planet entities later
@@ -533,10 +439,6 @@ fn setup_beauty(
         images.add(rgba_image(cw / 2, ch / 2, hi_px))
     });
 
-    // --- Plume gradient.
-    let plume_px = bake_plume(32, 256, r.plume_diamonds);
-    let plume = images.add(rgba_image(32, 256, plume_px));
-
     // --- Aurora curtain base.
     let (aw, ah) = match r.aurora_quality {
         thessa_graphics::AuroraQuality::Low => (256, 128),
@@ -552,7 +454,6 @@ fn setup_beauty(
         vesper_size: (vw, vh),
         cloud_low,
         cloud_high,
-        plume,
         aurora,
         aurora_size: (aw, ah),
     });
@@ -596,34 +497,6 @@ fn setup_beauty(
             body: "thessa",
             scale_factor: 1.045,
         },
-    ));
-
-    // Plume cone + light (pilot view; follows the X-15 craft transform).
-    let cone_h = 7.0;
-    let cone = meshes.add(Cone {
-        radius: 1.1,
-        height: cone_h,
-        ..default()
-    });
-    commands.spawn((
-        Mesh3d(cone),
-        MeshMaterial3d(materials.add(StandardMaterial::default())),
-        Transform::default(),
-        Visibility::Hidden,
-        Name::new("beauty plume cone"),
-        PlumeCone,
-    ));
-    commands.spawn((
-        PointLight {
-            intensity: 0.0,
-            range: 60.0,
-            color: Color::srgb(1.0, 0.62, 0.25),
-            ..default()
-        },
-        Transform::default(),
-        Visibility::Hidden,
-        Name::new("beauty plume light"),
-        PlumeLight,
     ));
 }
 
@@ -860,117 +733,6 @@ fn follow_aurora_shell(
     }
 }
 
-fn update_plume(
-    imgs: Option<Res<BeautyImages>>,
-    graphics: Option<Res<GraphicsResolved>>,
-    clock: Option<Res<SimulationClock>>,
-    runtime: Option<Res<PilotFlightRuntime>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    craft: Query<(&Name, &GlobalTransform, &Visibility), (Without<PlumeCone>, Without<PlumeLight>)>,
-    mut cone: Query<(&mut Transform, &mut Visibility, &MeshMaterial3d<StandardMaterial>), (With<PlumeCone>, Without<PlumeLight>)>,
-    mut light: Query<(&mut Transform, &mut Visibility, &mut PointLight), With<PlumeLight>>,
-    pilot: Option<Res<PilotHudState>>,
-    mut dbg: Local<u32>,
-) {
-    let (Some(imgs), Some(clock), Some(runtime)) =
-        (imgs.as_deref(), clock.as_deref(), runtime.as_deref())
-    else {
-        return;
-    };
-    let r = graphics
-        .as_deref()
-        .map(|g| g.0.clone())
-        .unwrap_or_default();
-    let input = read_plume_input(runtime, clock);
-    let amount = input.active_amount();
-
-    // Craft frame from the pilot preview craft entity (map mode: hidden).
-    let mut craft_frame: Option<(GlobalTransform, bool)> = None;
-    for (name, g, v) in &craft {
-        if name.as_str() == "PFD North American X-15" {
-            craft_frame = Some((*g, *v != Visibility::Hidden));
-            break;
-        }
-    }
-    let show = r.plume_enabled
-        && amount > 0.005
-        && craft_frame.is_some_and(|(_, v)| v)
-        // The plume lives in pilot (metre) space: never draw it in map view,
-        // where its metre transform is meaningless next to compressed-AU
-        // visuals (this was the giant-cone-across-the-map bug).
-        && pilot
-            .as_deref()
-            .is_some_and(|s| s.view_mode == ClientViewMode::Pilot);
-    if *dbg < 5 {
-        info!(
-            "[beauty] plume: enabled={} throttle={:.2} active={} craft={} show={}",
-            r.plume_enabled,
-            input.throttle,
-            input.engine_active,
-            craft_frame.is_some(),
-            show
-        );
-        *dbg += 1;
-    }
-    let (Ok((mut ct, mut cvis, cmat)), Ok((mut lt, mut lvis, mut pl))) =
-        (cone.single_mut(), light.single_mut())
-    else {
-        return;
-    };
-    if !show {
-        *cvis = Visibility::Hidden;
-        *lvis = Visibility::Hidden;
-        pl.intensity = 0.0;
-        return;
-    }
-    let (frame, _) = craft_frame.unwrap();
-    if let Some(mut mat) = materials.get_mut(&cmat.0) {
-        if mat.emissive_texture.is_none() {
-            // Additive glow: emission adds light over the sky/craft, so the
-            // near-zero diffuse alpha of a Blend setup can never hide it.
-            mat.base_color = Color::WHITE;
-            mat.base_color_texture = Some(imgs.plume.clone());
-            mat.emissive_texture = Some(imgs.plume.clone());
-            mat.emissive = LinearRgba::WHITE;
-            mat.alpha_mode = AlphaMode::Add;
-            mat.cull_mode = None;
-            mat.unlit = true;
-        }
-    }
-    // Craft space (pilot::x15_asset_to_craft_rotation): nose +Y, top -Z,
-    // lateral +X, so exhaust points -Y. Cone mesh axis is +Y with origin at
-    // centre; a half-turn about Z sends the apex downstream, then the centre
-    // sits half a plume-length behind the tail.
-    let flick = if r.plume_flicker {
-        plume_flicker(input.sim_time_s, amount)
-    } else {
-        1.0
-    };
-    let len = (2.0 + 6.5 * amount) * flick;
-    let local_rot = Quat::from_rotation_z(std::f32::consts::PI);
-    let craft_rot = Quat::from_mat4(&frame.to_matrix());
-    ct.rotation = craft_rot * local_rot;
-    let girth = ((0.35 + 0.65 * amount) * flick.clamp(0.8, 1.2)) as f32;
-    ct.scale = Vec3::new(girth, (len / 7.0) as f32, girth);
-    let tail_local = Vec3::new(0.0, -7.5, 0.0);
-    let centre_local = tail_local + Vec3::new(0.0, -(len as f32) / 2.0, 0.0);
-    ct.translation = frame.transform_point(centre_local);
-    if let Some(mut mat) = materials.get_mut(&cmat.0) {
-        let e = ((0.6 + 2.6 * amount) * flick) as f32;
-        mat.emissive = LinearRgba::new(e, e * 0.75, e * 0.45, 1.0);
-    }
-    *cvis = Visibility::Visible;
-    // Nozzle light.
-    lt.translation = frame.transform_point(tail_local);
-    if r.plume_light {
-        pl.intensity = (1800.0 * amount * flick) as f32;
-        *lvis = Visibility::Visible;
-    } else {
-        pl.intensity = 0.0;
-        *lvis = Visibility::Hidden;
-    }
-}
-
 /// Low-frequency re-bakes: storm drift (gas giants) and curtain slide (aurora).
 fn rebake_animated(
     time: Res<Time>,
@@ -1049,16 +811,6 @@ mod tests {
     }
 
     #[test]
-    fn plume_alpha_decays_downstream() {
-        let px = bake_plume(16, 64, true);
-        let row_alpha = |y: u32| {
-            let row = &px[(y * 16 * 4) as usize..((y + 1) * 16 * 4) as usize];
-            row.chunks(4).map(|c| c[3] as u32).sum::<u32>() as f64 / 16.0
-        };
-        assert!(row_alpha(2) > row_alpha(60));
-    }
-
-    #[test]
     fn aurora_oval_emits_and_equator_does_not_bake() {
         let px = bake_aurora(128, 64, 67.0, 3.0, 0.0, false);
         let at = |lat_deg: f64| {
@@ -1094,22 +846,5 @@ mod tests {
             let key = TileKey { face: 0, level, x: 0, y: 0 };
             assert!(cbt_node_for_tile(key).is_some(), "w={w}");
         }
-    }
-
-    #[test]
-    fn plume_input_contract_inactive_hides() {
-        let off = EnginePlumeInput {
-            throttle: 1.0,
-            engine_active: false,
-            sim_time_s: 10.0,
-        };
-        assert_eq!(off.active_amount(), 0.0);
-        let on = EnginePlumeInput {
-            throttle: 0.8,
-            engine_active: true,
-            sim_time_s: 10.0,
-        };
-        assert!((on.active_amount() - 0.8).abs() < 1e-12);
-        assert!((plume_flicker(10.0, 0.8) - 1.0).abs() < 0.25);
     }
 }

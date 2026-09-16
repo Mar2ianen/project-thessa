@@ -1,197 +1,191 @@
-# Project Thessa — Far Asterion Companion
+# Project Thessa — Nearby Brown-Dwarf Interloper
 
-> Working design document for the ultra-wide substellar companion / first-expansion target. The object is intentionally much farther from the ABC hierarchy than any ordinary planet: of order **0.5–1.0 light-year** from the Asterion barycenter.
+> Working design document for the first true off-system expansion target. The object is **not an ultra-wide Asterion companion**. It is a separate substellar system moving through the same dense stellar cloud, currently passing of order **0.5–1.0 light-year** from Asterion.
 
 ## 1. Core concept
 
-The preferred concept is not an ordinary fourth star formed quietly with Asterion. It is a **former flyby object that became only weakly bound** during the early dynamical history of the system or the dissolution of the birth cluster.
+Preferred identity: a **free / cluster-member brown dwarf** rather than an ordinary red dwarf.
 
-Working preference: a **brown dwarf** rather than an ordinary red dwarf.
+The important distinction is dynamical:
 
-Reasons:
+- it does not orbit the Asterion ABC barycenter;
+- its current proximity is set by the phase-space structure of the local stellar cloud and its own trajectory;
+- it can remain a nearby target for the game timescale without requiring an implausibly fragile ~30,000–60,000 AU binary;
+- its local satellite system is bound to the brown dwarf itself.
 
-- it makes the target visually and thermally distinct from a normal stellar system;
-- it is luminous enough in the infrared to shape very close satellites while remaining extremely faint at interstellar distances;
-- it can plausibly carry a compact satellite system even though it lies far outside the ordinary planetary architecture of Asterion;
-- its weak binding to ABC makes the system feel like the first step into interstellar space rather than merely another outer planet;
-- it is a natural first expansion target before true multi-light-year travel.
+This makes it the first real expansion beyond Asterion rather than an absurdly wide fourth component.
 
-An ultra-faint late-M red dwarf remains an alternate option if later gameplay requires more local stellar power.
+A very faint late-M dwarf remains an alternate if later gameplay needs more local stellar power, but a brown dwarf is preferred because it makes the environment visibly and thermally unlike an ordinary star system.
 
 ---
 
-## 2. Orbit around Asterion ABC
+## 2. Current encounter geometry
 
-Working wide orbit:
+Working target:
 
 | Parameter | Working target |
 |---|---:|
-| host | Asterion ABC barycenter |
-| object class | captured brown dwarf / ultra-wide companion |
+| relation to Asterion | unbound / independent cloud member |
+| object class | brown dwarf system |
 | mass | ~25–45 MJ |
 | radius | ~1 RJ |
-| semi-major axis | ~0.7 ly (~44,000 AU) |
-| eccentricity | ~0.3 |
-| periapsis | ~0.49 ly |
-| apoapsis | ~0.91 ly |
-| orbital period | ~5 Myr order of magnitude |
+| present distance from Asterion | ~0.5–1.0 ly |
+| preferred current distance | ~0.6–0.8 ly |
+| relative velocity | TBD from stellar-cloud model |
+| closest approach | TBD |
+| encounter duration | long compared with normal campaign logistics, but not an orbital period |
 
-This orbit is deliberately fragile on Galactic timescales. It should be treated as a weakly bound outer companion whose orbit can be perturbed by stellar encounters and the Galactic tide.
+Do **not** assign a Keplerian orbit around Asterion.
 
-At 0.5–1 ly the ABC stars are visually a bright compact group but provide negligible thermal input to local worlds. The brown dwarf's own infrared luminosity dominates the environment of its close satellites.
+The final trajectory must be generated as part of the local stellar-cloud phase-space model. The object may be approaching, near closest passage, or receding at game epoch depending on what creates the best navigation and expansion gameplay.
+
+At this distance the Asterion ABC stars are visually a compact bright group but thermally irrelevant to the local worlds. The brown dwarf's own infrared luminosity and internal heat dominate its close satellite environment.
 
 ---
 
-## 3. Brown dwarf physical target
+## 3. Why the old ultra-wide orbit was rejected
+
+The previous concept placed this object on a ~0.7 ly (~44,000 AU) orbit around Asterion. That does not fit the intended **dense stellar-cloud environment**.
+
+Design rule going forward:
+
+- objects at ~0.5–1 ly are independent cloud members / flyby systems unless a dedicated N-body model proves otherwise;
+- any genuinely bound outer companion of Asterion must be dramatically closer and should be treated as outer-system content rather than the first interstellar expansion target;
+- the local stellar environment must participate in long-horizon dynamics instead of assuming an isolated field-star system.
+
+---
+
+## 4. Brown dwarf physical target
 
 Working range rather than hard canon:
 
 - mass: ~25–45 MJ;
 - radius: near Jupiter-sized;
-- effective temperature: roughly late-L / T-dwarf regime depending age and final mass;
-- spectrum: strongly infrared, methane / water absorption important if cool enough;
-- no fusion-like stellar photosphere; luminosity is residual cooling plus contraction;
-- strong magnetic / auroral activity is allowed if supported by the final rotation and atmospheric model.
+- effective temperature: late-L / T-dwarf regime depending age and final mass;
+- spectrum: strongly infrared, with H2O / CH4 absorption if cool enough;
+- luminosity: residual cooling and contraction rather than sustained hydrogen fusion;
+- strong magnetic / auroral activity is allowed if supported by the final rotation and atmosphere model.
 
-The object should be visually almost invisible at normal human-visible-light exposure except for reflected/scattered light from nearby infrastructure and occasional auroral emission. In thermal / IR views it becomes the dominant object in the sky.
-
----
-
-## 4. Origin hypothesis
-
-Preferred history:
-
-1. the brown dwarf formed independently, probably as a low-mass member of the same young stellar environment or a nearby one;
-2. it carried a compact primordial satellite / debris system;
-3. a low-velocity encounter with the evolving Asterion multiple system or cluster potential placed it onto a very wide weakly bound orbit;
-4. the capture event stripped its most distant original companions and disturbed the survivors;
-5. subsequent encounters allowed it to retain a mixture of **primordial close satellites, captured minor worlds, and collision fragments**.
-
-This mixed origin is important: the local bodies should not look like a clean regular moon chain.
+The brown dwarf should be extremely faint visually at interstellar distance. In IR navigation / science views it becomes an obvious local primary.
 
 ---
 
-## 5. Satellite-system design rule
+## 5. Origin and local-system history
 
-The far companion is a good place for bodies that would be awkward elsewhere because almost every surviving object can have a capture / scattering history.
+The brown dwarf formed independently of Asterion and belongs dynamically to the same broader stellar cloud.
 
-The system should contain only a handful of authored major bodies, each with a different dynamical signature:
+Its own local bodies can have a mixed history:
 
-- one close, heavily tidally processed rocky body;
+- primordial close satellites formed in a circum-substellar disk;
+- captured minor bodies acquired during earlier passages through the cloud;
+- collision fragments from destabilized satellites;
+- outer bodies stripped by old encounters.
+
+The present system should therefore **not** look like a pristine Galilean resonance chain.
+
+---
+
+## 6. Satellite-system design rule
+
+Keep only a handful of authored major bodies, each with a different dynamical and environmental signature:
+
+- one close, heavily tidally processed rocky/refractory body;
 - one large volatile-rich captured dwarf world with active internal heating;
 - one irregular binary/contact object;
-- one distant weakly bound captured body on a strongly inclined or retrograde orbit;
-- optional debris arcs / dust torus from stripped former satellites.
+- optional debris arcs / dust torus from disrupted satellites;
+- at most one weakly bound outer survivor, only if local stellar-cloud integrations show that it survives repeated encounters.
 
-Avoid a neat Galilean-like resonance chain. The visual language should be **survivors of capture**, not orderly in-situ formation.
+The outermost satellites must be validated against perturbations from passing stars. The cloud environment is part of the system design, not background decoration.
 
 ---
 
-## 6. Candidate major bodies
+## 7. Candidate major bodies
 
 Names are intentionally not locked.
 
-### 6.1. Close refractory moon
-
-Working identity: dense rocky/metal-rich satellite on a close orbit, tidally locked to the brown dwarf.
-
-Suggested scale:
+### 7.1. Close refractory moon
 
 - radius: ~500–900 km;
 - atmosphere: none;
-- surface: dark refractory plains, metal-rich scarps, old melt provinces;
-- heating: brown-dwarf infrared irradiation plus tidal dissipation;
-- resource role: refractory metals and compact early outpost.
+- dense rocky/metal-rich composition;
+- tidally locked;
+- dark refractory plains, metal-rich scarps, old melt provinces;
+- heating from brown-dwarf IR plus tidal dissipation.
 
-This body should feel warm despite being nearly a light-year from the stars.
-
-### 6.2. Large captured volatile world
-
-Working identity: former free minor planet / dwarf planet captured by the brown dwarf.
-
-Suggested scale:
+### 7.2. Large volatile world
 
 - radius: ~1500–2300 km;
-- orbit: eccentric and moderately inclined;
-- bulk composition: ice + rock, differentiated;
-- atmosphere: tenuous N2/CH4/CO/Ar family, strongly seasonal or partly collapsed depending final thermal model;
-- interior: subsurface ocean or deep brine layer maintained primarily by tidal heating;
-- biomes: ancient dark ice, young cryovolcanic resurfacing, fracture provinces, evaporite / salt-rich regions around old vent systems.
+- eccentric / inclined orbit;
+- differentiated ice + rock body;
+- tenuous N2 / CH4 / CO / Ar atmosphere if the thermal model permits;
+- subsurface ocean or brine layer maintained mainly by tidal heating;
+- dark ancient ice, young cryovolcanic terrain, fractures and salt-rich deposits.
 
-This is the natural science centerpiece of the first expansion target.
+This is the main science / settlement world of the first expansion target.
 
-### 6.3. Irregular binary / contact body
+### 7.3. Irregular binary or contact object
 
-Working identity: two captured rubble piles or a contact binary surviving from a disrupted outer population.
-
-Suggested scale:
-
-- characteristic dimensions: tens to low hundreds of km;
-- strongly irregular shapes;
+- dimensions: tens to low hundreds of km;
+- strongly non-spherical;
 - complex spin state;
-- low density / high porosity;
-- compositionally heterogeneous surfaces.
+- porous rubble-pile composition;
+- heterogeneous surface materials.
 
-Gameplay: low-gravity construction, mining and navigation around a genuinely non-spherical multi-lobed body.
+Gameplay focus: navigation, anchoring, mining and construction in a genuinely non-spherical low-gravity environment.
 
-### 6.4. Distant retrograde survivor
+### 7.4. Outer survivor — optional
 
-Working identity: very loosely bound captured body on a high-inclination or retrograde orbit.
+If long-horizon cloud integrations permit it:
 
-Suggested scale:
+- radius: ~100–400 km;
+- strongly inclined or retrograde orbit;
+- volatile-rich or carbon-rich;
+- may be a remnant of a once larger outer satellite population.
 
-- radius: ~200–600 km;
-- distance from brown dwarf: many AU to tens of AU, final value from stability integration;
-- volatile-rich or carbon-rich composition;
-- no atmosphere or only transient sublimation exosphere;
-- potentially the remnant of the population stripped during brown-dwarf capture.
-
-This should be dynamically validation-sensitive and may be omitted if long-horizon integrations reject it.
+This body is **not canon until survival is demonstrated** under repeated stellar perturbations.
 
 ---
 
-## 7. Gameplay role — first expansion target
+## 8. Gameplay role — first expansion target
 
-This object is intentionally positioned between ordinary interplanetary and full interstellar gameplay.
+The brown dwarf is the bridge between planetary and full interstellar gameplay.
 
-At **0.5–1.0 ly** it is:
+At ~0.5–1.0 ly current separation it is:
 
-- far outside the Asterion planetary system in every practical logistics sense;
-- reachable with mature conventional fusion propulsion before Epstein-class drives are available;
-- close enough that the first off-system expedition can still be built around decades rather than centuries;
-- a natural location for the first autonomous industrial colony, fusion-fuel depot, observatory and interstellar shipyard;
-- an ideal proving ground for reliability, closed-loop life support, long-duration reactor operation and high-velocity navigation.
+- genuinely outside Asterion rather than an outer planet or companion;
+- reachable with mature non-Epstein fusion propulsion;
+- close enough for a first long-duration expedition without requiring the full endgame torch-drive economy;
+- a natural first autonomous colony, fusion-fuel depot, observatory and interstellar shipyard;
+- a practical tutorial for stellar-cloud navigation, moving targets and long-horizon trajectory planning.
 
-It should not be merely a stepping stone. Its captured-body system needs enough unique geology and resources to justify permanent settlement.
-
----
-
-## 8. Travel-design target
-
-Do not hard-code travel time until engine models are final.
-
-For scale only, an ideal symmetric acceleration/deceleration trajectory over ~0.7 ly gives approximate Newtonian travel times:
-
-| constant acceleration | ideal travel time | midpoint speed |
-|---:|---:|---:|
-| 0.001 g | ~52 y | ~0.027 c |
-| 0.003 g | ~30 y | ~0.047 c |
-| 0.01 g | ~16.5 y | ~0.085 c |
-
-Real fusion craft will generally coast, carry finite reaction mass and operate below those ideal duty cycles, so these are **scale references only**, not balance targets.
-
-The first-expansion propulsion benchmark should therefore explicitly include a non-Epstein fusion ship capable of reaching this companion in a useful gameplay timescale.
+Unlike a bound target, its ephemeris matters: launch windows and future closest-approach geometry can change strategic value over decades or centuries.
 
 ---
 
-## 9. Canon-lock questions
+## 9. Travel-design target
 
-Before locking the object:
+Do not hard-code travel times until engine models are final.
 
-1. choose brown dwarf vs ultra-faint late-M dwarf;
-2. choose mass/age/Teff from one consistent substellar evolution grid;
-3. integrate the ~0.5–1 ly outer orbit under ABC gravity plus Galactic tide / stellar-encounter assumptions;
-4. determine which local captured satellites survive the original capture event;
-5. build a local irradiation model using the brown dwarf's evolving IR luminosity;
-6. define the first-generation fusion transport envelope and confirm that this target is reachable before Epstein-class propulsion;
-7. decide whether the far companion is permanently bound or on a metastable orbit likely to escape on Gyr timescales.
+Benchmark this target using its **actual relative state vector**, not only scalar distance.
+
+Required propulsion cases:
+
+- mature pulsed-fusion craft;
+- high-Isp low-thrust cargo fusion craft;
+- early torch drive;
+- Epstein-class craft as a later comparison.
+
+The design intent remains that the first expedition is possible before Epstein-class propulsion, while regular high-throughput logistics becomes much easier later.
+
+---
+
+## 10. Canon-lock questions
+
+1. choose brown dwarf mass / age / Teff from one consistent evolution model;
+2. define the stellar cloud's density, velocity dispersion and age;
+3. generate a self-consistent current state vector and closest-approach history relative to Asterion;
+4. integrate the brown dwarf's local satellite system under repeated stellar perturbations;
+5. choose which outer satellites survive and which historical bodies were stripped;
+6. build the local IR irradiation / magnetic-environment model;
+7. benchmark non-Epstein travel to the moving target;
+8. ensure the target remains nearby for a useful gameplay era without pretending it is permanently bound to Asterion.

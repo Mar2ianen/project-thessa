@@ -155,10 +155,32 @@ struct FlybyCell {
     tof_leg2_s: f64,
     flyby_body: BodyId,
     departure_burn_mag_mps: f64,
+    /// Powered-bend price at periapsis (periapsis-energy floored lower
+    /// bound; the exact solver prices truth for ranking).
+    turn_burn_mag_mps: f64,
+    /// Rendezvous-match price at the arrival standoff sphere.
+    arrival_burn_mag_mps: f64,
     /// Desired leg-2 departure asymptote in the flyby-body frame (broad);
     /// the exact flyby burn is recomputed against the corrected leg 1.
     v_out_flyby_frame_mps: DVec3,
     total_dv: f64,
+}
+
+/// One broad-phase tour route: pure patched-conic scouting with NO exact
+/// revalidation and NO miss measurement — the [`BroadRoute`] counterpart
+/// for gravity-assist tours. Route selection only; flyable plans come
+/// from [`flyby_search`]. The type boundary is the same execution gate:
+/// a `BroadFlybyRoute` cannot feed the executor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BroadFlybyRoute {
+    pub departure_epoch: SimTime,
+    pub flyby_body: BodyId,
+    pub tof_leg1_s: f64,
+    pub tof_leg2_s: f64,
+    pub departure_burn_mag_mps: f64,
+    pub turn_burn_mag_mps: f64,
+    pub arrival_burn_mag_mps: f64,
+    pub broad_total_dv_mps: f64,
 }
 
 struct FlybyCtx<'a> {
@@ -383,19 +405,47 @@ fn flyby_cell(
         tof_leg2_s,
         flyby_body,
         departure_burn_mag_mps: dep_mag,
+        turn_burn_mag_mps: turn_price,
+        arrival_burn_mag_mps: arr_mag,
         v_out_flyby_frame_mps: v_out_f,
         total_dv,
     })
 }
 
-/// Single-flyby tour search. Returns validated plans ranked by exact total
-/// Δv, best first. Deterministic: config body order, grid order,
-/// total_cmp ordering.
-pub fn flyby_search(
+/// Broad tour survey: the departure x leg1 x leg2 Lambert grid behind
+/// [`flyby_search`] without any exact revalidation (no phasing, no
+/// correction, no N-body propagation at all). Millisecond-class route
+/// scouting for CI replay fixtures (docs/07 §7.14 L0-L2): which
+/// encounter orders close geometrically and at what patched-conic
+/// energy. Deterministic like the full search.
+pub fn broad_flyby_survey(
     ephemeris: &BakedEphemeris,
-    field: &GravityField<'_>,
     config: FlybyConfig,
-) -> Result<(Vec<RankedPlan>, SearchStats), SearchError> {
+) -> Result<(Vec<BroadFlybyRoute>, SearchStats), SearchError> {
+    let (cells, stats, _) = flyby_grid_full(ephemeris, &config)?;
+    let routes = cells
+        .into_iter()
+        .map(|cell| BroadFlybyRoute {
+            departure_epoch: cell.departure_epoch,
+            flyby_body: cell.flyby_body,
+            tof_leg1_s: cell.tof_leg1_s,
+            tof_leg2_s: cell.tof_leg2_s,
+            departure_burn_mag_mps: cell.departure_burn_mag_mps,
+            turn_burn_mag_mps: cell.turn_burn_mag_mps,
+            arrival_burn_mag_mps: cell.arrival_burn_mag_mps,
+            broad_total_dv_mps: cell.total_dv,
+        })
+        .collect();
+    Ok((routes, stats))
+}
+
+/// Shared broad grid: departure x leg1 x leg2 cells per flyby body,
+/// ranked by patched-conic total and truncated to `keep_routes`.
+/// Both the cheap survey and the exact search rank the same cells.
+fn flyby_grid_full<'a>(
+    ephemeris: &'a BakedEphemeris,
+    config: &FlybyConfig,
+) -> Result<(Vec<FlybyCell>, SearchStats, FlybyCtx<'a>), SearchError> {
     config.validate()?;
     let central = ephemeris
         .body(config.central_body)
@@ -461,6 +511,19 @@ pub fn flyby_search(
     if best.is_empty() {
         return Err(SearchError::NoViableTransfer { stats });
     }
+    Ok((best, stats, ctx))
+}
+
+/// Single-flyby tour search. Returns validated plans ranked by exact total
+/// Δv, best first. Deterministic: config body order, grid order,
+/// total_cmp ordering. Ranks the same broad cells as
+/// [`broad_flyby_survey`]; only survivors are exactly revalidated.
+pub fn flyby_search(
+    ephemeris: &BakedEphemeris,
+    field: &GravityField<'_>,
+    config: FlybyConfig,
+) -> Result<(Vec<RankedPlan>, SearchStats), SearchError> {
+    let (best, mut stats, ctx) = flyby_grid_full(ephemeris, &config)?;
     let mut ranked = Vec::new();
     for cell in &best {
         if let Some(plan) = revalidate_flyby(ephemeris, field, &ctx, cell, &mut stats)? {

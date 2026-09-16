@@ -1,0 +1,178 @@
+# Mission replay fixtures: docs/07 section 7.14, fidelity L0-L2.
+#
+# Data-driven qualification for the maneuver planner on the real Solar
+# System (data/solar_system.toml, APPROXIMATE J2000 phases). Windows are
+# design-relative (days past EPOCH), never historical dates; the anchors
+# are mission ARCHITECTURE (encounter order, leg time-of-flight class)
+# and transfer ENERGY (departure, arrival v_inf, totals). Exact N-body
+# revalidation and live-authority agreement are L3-L4 (slower jobs); these
+# fixtures are broad-survey only and must stay millisecond-class for CI.
+#
+# Rule: a fixture pins what flown missions teach (sequence, TOF class,
+# energy class), never planner internals. Caps carry ~10% headroom over
+# measured deterministic winners so genuine regressions trip while grid
+# noise does not.
+
+[[direct]]
+name = "apollo-earth-luna"
+central = "earth"
+departure = "earth"
+arrival = "luna"
+departure_span_d = 30.0
+departure_steps = 120
+tof_min_d = 3.0
+tof_max_d = 7.0
+tof_steps = 40
+keep = 4
+max_broad_dv_mps = 15000.0
+# Apollo: TLI 3033 + LOI 954 = 3987. The planner prices the LEO vector
+# change plus lunar v_inf (rendezvous-null vs capture differs by ~vcirc,
+# asserted at exact level elsewhere, not here).
+max_winner_total_dv_mps = 4400.0
+max_winner_departure_dv_mps = 3550.0
+max_winner_arrival_vinf_mps = 900.0
+winner_tof_min_d = 3.0
+winner_tof_max_d = 7.0
+
+[[direct]]
+name = "earth-mars-hohmann"
+central = "sol"
+departure = "earth"
+arrival = "mars"
+departure_span_d = 800.0
+departure_steps = 40
+tof_min_d = 150.0
+tof_max_d = 320.0
+tof_steps = 30
+keep = 8
+max_broad_dv_mps = 12000.0
+# Handbook 2026-2045 optima: C3 7.8-14.8, arrival v_inf 2.5-3.3 km/s.
+max_winner_total_dv_mps = 7900.0
+max_winner_departure_dv_mps = 4000.0
+max_winner_arrival_vinf_mps = 3850.0
+winner_tof_min_d = 180.0
+winner_tof_max_d = 320.0
+
+[[direct]]
+name = "earth-venus-hohmann"
+central = "sol"
+departure = "earth"
+arrival = "venus"
+departure_span_d = 600.0
+departure_steps = 40
+tof_min_d = 100.0
+tof_max_d = 220.0
+tof_steps = 30
+keep = 8
+max_broad_dv_mps = 12000.0
+max_winner_total_dv_mps = 7100.0
+max_winner_departure_dv_mps = 4100.0
+max_winner_arrival_vinf_mps = 3000.0
+winner_tof_min_d = 100.0
+winner_tof_max_d = 220.0
+
+[[direct]]
+name = "mars-earth-return"
+central = "sol"
+departure = "mars"
+arrival = "earth"
+departure_span_d = 800.0
+departure_steps = 40
+tof_min_d = 150.0
+tof_max_d = 320.0
+tof_steps = 30
+keep = 8
+max_broad_dv_mps = 12000.0
+max_winner_total_dv_mps = 6400.0
+max_winner_departure_dv_mps = 2350.0
+max_winner_arrival_vinf_mps = 4000.0
+winner_tof_min_d = 180.0
+winner_tof_max_d = 320.0
+
+[[direct]]
+name = "earth-jupiter-hohmann"
+central = "sol"
+departure = "earth"
+arrival = "jupiter"
+departure_span_d = 800.0
+departure_steps = 30
+tof_min_d = 700.0
+tof_max_d = 1100.0
+tof_steps = 30
+keep = 8
+max_broad_dv_mps = 20000.0
+# Hohmann: C3 ~80-100, arrival v_inf ~5.6 km/s, TOF ~2.7 yr.
+max_winner_total_dv_mps = 13500.0
+max_winner_departure_dv_mps = 7450.0
+max_winner_arrival_vinf_mps = 6050.0
+winner_tof_min_d = 700.0
+winner_tof_max_d = 1100.0
+
+[[direct]]
+name = "earth-mercury-direct"
+central = "sol"
+departure = "earth"
+arrival = "mercury"
+departure_span_d = 600.0
+departure_steps = 80
+tof_min_d = 80.0
+tof_max_d = 200.0
+tof_steps = 40
+keep = 8
+max_broad_dv_mps = 25000.0
+# Hohmann total ~15.4k (dep ~5.5-7k + arrival v_inf ~9-10k). The handbook
+# C3 ~40 is departure-only for an aphelion arrival; the planner prices
+# the total, so the anchor here is the Hohmann total, not C3 40.
+max_winner_total_dv_mps = 17000.0
+max_winner_departure_dv_mps = 7500.0
+max_winner_arrival_vinf_mps = 9550.0
+winner_tof_min_d = 80.0
+winner_tof_max_d = 200.0
+
+[[direct]]
+name = "earth-saturn-direct"
+central = "sol"
+departure = "earth"
+arrival = "saturn"
+departure_span_d = 1200.0
+departure_steps = 30
+tof_min_d = 1800.0
+tof_max_d = 2500.0
+tof_steps = 30
+keep = 4
+max_broad_dv_mps = 30000.0
+# Hohmann total ~12.8k over ~6 yr: the reference for why outer missions
+# fly assists (Cassini VVEJ) instead of direct transfers.
+max_winner_total_dv_mps = 14500.0
+max_winner_departure_dv_mps = 8100.0
+max_winner_arrival_vinf_mps = 6400.0
+winner_tof_min_d = 1800.0
+winner_tof_max_d = 2500.0
+
+[[tour]]
+name = "mariner10-earth-venus-mercury"
+central = "sol"
+departure = "earth"
+flyby = ["venus"]
+arrival = "mercury"
+departure_span_d = 600.0
+departure_steps = 24
+leg1_min_d = 80.0
+leg1_max_d = 220.0
+leg1_steps = 8
+leg2_min_d = 40.0
+leg2_max_d = 200.0
+leg2_steps = 8
+keep = 3
+max_broad_dv_mps = 25000.0
+# Mariner 10 class: ~90 d Earth->Venus leg, ~52 d Venus->Mercury leg,
+# Venus encounter UNPOWERED (free bend). Broad turn price is a floored
+# lower bound, so the cap is on the turn share, not zero: the exact
+# free-vs-powered verdict belongs to L3+.
+max_winner_total_dv_mps = 20000.0
+max_winner_departure_dv_mps = 7100.0
+max_winner_turn_dv_mps = 3550.0
+winner_leg1_min_d = 80.0
+winner_leg1_max_d = 220.0
+winner_leg2_min_d = 40.0
+winner_leg2_max_d = 200.0

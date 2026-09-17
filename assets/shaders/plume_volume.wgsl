@@ -148,24 +148,42 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let radius = mean_radius(r0, spread, fan, z);
         // Turbulence deforms the SHELL (radius), not just opacity: advected
         // noise offsets the sample radius before the weight is evaluated,
-        // so edges wobble instead of merely flickering.
-        let n = vnoise(vec2<f32>(z * 2.6 - time * advect, zn * 9.0));
-        let n2 = vnoise(vec2<f32>(z * 5.8 - time * advect * 1.7, 4.2 + zn * 13.0));
-        let deform = (n * 0.65 + n2 * 0.35 - 0.5) * erosion * radius;
+        // so edges wobble instead of merely flickering. The noise spans the
+        // azimuth (fixed frame from the axis), so structure varies around
+        // the circumference instead of forming axisymmetric rings that read
+        // as flat stripes from the side. Frequencies stay low (wavelengths
+        // >> march step) to avoid aliasing shimmer; the fine octave fades
+        // with camera distance (pixel footprint).
         let radial = p - axis * z;
-        let r = length(radial) + deform * smoothstep(0.1, 0.9, length(radial) / max(radius, 1e-4));
+        let r_len = length(radial);
+        let ref_up = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(axis.y) > 0.9);
+        let u1 = normalize(cross(axis, ref_up));
+        let u2 = cross(axis, u1);
+        let az = atan2(dot(radial, u2), dot(radial, u1)) * 0.15915494 + 0.5;
+        let dist_cam = length(ro - (origin + axis * (len * 0.5)));
+        let fine_fade = exp(-dist_cam / 120.0);
+        let n = vnoise(vec2<f32>(z * 1.6 - time * advect, az * 3.0));
+        let n2 = vnoise(vec2<f32>(z * 3.1 + 7.3 - time * advect * 1.6, az * 6.0 + 2.0));
+        let nblend = n * 0.72 + n2 * 0.28 * fine_fade;
+        let ncenter = nblend - (0.72 + 0.28 * fine_fade) * 0.5;
+        let deform = ncenter * erosion * radius;
+        let r = r_len + deform * smoothstep(0.1, 0.9, r_len / max(radius, 1e-4));
         let u = min(r / max(radius, 1e-4), 3.0);
         // Radial weight mirrors medium.rs exactly.
         var w = exp(-2.2 * u * u) + 0.18 * exp(-0.7 * u * u);
+        // Hard surface clip: outside the true barrel the medium is exactly
+        // zero, so long march paths through the (generous) bound cylinder
+        // cannot accumulate into milky sheets wider than the plume.
+        w *= 1.0 - smoothstep(1.0, 1.15, u);
         // Residual alpha erosion on top of the geometric deformation.
-        let turb = (n * 0.65 + n2 * 0.35 - 0.5) * erosion * smoothstep(0.35, 1.0, u);
+        let turb = ncenter * erosion * smoothstep(0.35, 1.0, u);
         w = max(w * (1.0 - turb), 0.0);
-        // Peaked shock cells (not arcade-perfect diamonds, but periodic
-        // compression): pow-shaping concentrates the modulation into bands
-        // so supersonic structure reads through the march.
+        // Gentle shock cells (periodic compression brightness): softer
+        // shaping than peaked bands, so supersonic structure reads without
+        // striping into aliased noise on long march paths.
         let span = max(spacing, len * 0.05);
-        let cell = pow(0.5 + 0.5 * cos(6.2831853 * z / spacing), 1.5);
-        let shock = 1.0 + amp * 0.75 * (2.0 * cell - 1.0)
+        let cell = pow(0.5 + 0.5 * cos(6.2831853 * z / spacing), 1.25);
+        let shock = 1.0 + amp * 0.6 * (2.0 * cell - 1.0)
             * exp(-z / (3.0 * span));
         let col = axial_ramp(zn, plume.core_rgb.rgb, plume.mid_rgb.rgb, plume.edge_rgb.rgb);
         let decay = max(axial_decay(zn), 0.02);

@@ -10,9 +10,12 @@
 //!   throttle scale, sine flicker). Documented fallback artifact.
 //! - Medium/High: analytic-volume ribbon. A camera-facing quad is COVERAGE
 //!   ONLY; every pixel marches a view ray through the round cross-section
-//!   and Beer-Lambert-integrates the `plume-core` mean field (4-8 evals on
-//!   Medium, 8-12 on High). Shock diamonds emerge from the volume via the
-//!   same shock factor as the CPU oracle, never from a decal.
+//!   and Beer-Lambert-integrates the `plume-core` mean field (8 evals on
+//!   Medium, 14 on High). Shock diamonds emerge from the volume via the
+//!   same shock factor as the CPU oracle, never from a decal. Turbulence
+//!   spans the azimuth (fixed frame from the axis) and hard-clips outside
+//!   the true barrel, so the bound cylinder can never render as a milky
+//!   sheet wider than the plume.
 //!
 //! Lighting proxies derive from the field integral (`radiant_power`), not
 //! from bare throttle (doc section 13).
@@ -554,8 +557,8 @@ fn drive_volume(
         / profile.stations.len().max(1) as f32;
     let steps = match r.plume_quality {
         thessa_graphics::Quality::Low => 4,
-        thessa_graphics::Quality::Medium => 6,
-        thessa_graphics::Quality::High => 10,
+        thessa_graphics::Quality::Medium => 8,
+        thessa_graphics::Quality::High => 14,
     } as f32;
     let time = if r.plume_flicker {
         sim_time_s as f32
@@ -597,7 +600,7 @@ fn drive_volume(
                     material.core_rgb[0] as f32 * inv_divisor,
                     material.core_rgb[1] as f32 * inv_divisor,
                     material.core_rgb[2] as f32 * inv_divisor,
-                    0.55,
+                    0.40,
                 ),
                 mid_rgb: Vec4::new(
                     material.mid_rgb[0] as f32 * inv_divisor,

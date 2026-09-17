@@ -238,6 +238,11 @@ struct Cell {
     time_of_flight_s: f64,
     /// Patched escape magnitude (energy); direction comes from phasing.
     departure_burn_mag_mps: f64,
+    /// Central-relative Lambert departure velocity: the broad outgoing
+    /// asymptote. Phasing compares N-body escape states against it, so
+    /// long-arc screens can prune on the departure cone instead of
+    /// integrating every candidate to the target.
+    broad_departure_velocity_mps: DVec3,
     total_dv: f64,
 }
 
@@ -555,6 +560,7 @@ fn lambert_cell(
         departure_epoch,
         time_of_flight_s,
         departure_burn_mag_mps: dep_mag,
+        broad_departure_velocity_mps: arc.departure_velocity_mps,
         total_dv,
     })
 }
@@ -789,6 +795,133 @@ fn exact_config() -> AdaptiveIntegratorConfig {
     }
 }
 
+/// Escape-pruned phasing thresholds. Full-arc screens cost the whole
+/// transfer (500–1800 d of N-body per candidate); the departure decision
+/// only needs the outgoing asymptote, which settles days after launch.
+/// Candidates fly full N-body through the escape region alone, are ranked
+/// on the departure cone, and only the shortlist plus the non-escaped
+/// (bound or failed — never dropped sight unseen) pay full arcs.
+const DAY_S: f64 = 86_400.0;
+/// Legs shorter than this skip escape pruning: the whole flight costs
+/// about as much as the escape itself (Luna-class, Nereid tours).
+const ESCAPE_MIN_TOF_S: f64 = 30.0 * DAY_S;
+/// Escape integration budget: Earth-SOI exit at 3 km/s takes ~3.5 d;
+/// bound candidates burn the full budget and fall through to full arcs.
+const ESCAPE_MAX_DUR_S: f64 = 30.0 * DAY_S;
+/// Escape segment: ratio checks ride segment boundaries.
+const ESCAPE_SEG_S: f64 = 21_600.0;
+/// Depot gravity share below which the craft has left the well, confirmed
+/// over successive segments so a single quiet sample cannot end the run.
+const ESCAPE_RATIO: f64 = 0.05;
+const ESCAPE_CONFIRM: u32 = 3;
+/// Stage-2 shortlist size: top escape-cone matches pay full arcs.
+const ESCAPE_TOP_N: usize = 8;
+
+/// Propagate a departure candidate through the escape region only.
+/// Returns the escape state (position, velocity, epoch) plus the segment
+/// count once the depot gravity share stays below [`ESCAPE_RATIO`] for
+/// [`ESCAPE_CONFIRM`] segments, or `None` when the candidate never leaves
+/// (bound orbit, impact, integrator failure) — which routes it to
+/// full-arc screening, never to the bin. Segments use the loose screen
+/// config. Pure function of its inputs (no stats mutation — the caller
+/// sums segment counts after the parallel collect), so stage-1 grids run
+/// on rayon like full-arc screens do.
+fn escape_state(
+    field: &GravityField<'_>,
+    start: TestParticleState,
+    epoch: SimTime,
+    depot_body: BodyId,
+    depot_mu: f64,
+    max_dur_s: f64,
+) -> Option<(DVec3, DVec3, SimTime, usize)> {
+    let mut state = start;
+    let mut elapsed = 0.0;
+    let mut below = 0u32;
+    let mut segments = 0usize;
+    loop {
+        let seg = (max_dur_s - elapsed).min(ESCAPE_SEG_S);
+        if !(seg > 0.0) {
+            return None;
+        }
+        let res = propagate_adaptive_with_burns(
+            field,
+            state,
+            epoch.offset(elapsed),
+            seg,
+            &[],
+            loose_config(),
+        )
+        .ok()?;
+        segments += 1;
+        state = res.state;
+        elapsed += seg;
+        let now = epoch.offset(elapsed);
+        let ratio = match (
+            field.body_state(depot_body, now),
+            field.acceleration(state.position, now),
+        ) {
+            (Ok(depot), Ok(total)) => {
+                let offset = depot.position_inertial - state.position;
+                let d2 = offset.length_squared();
+                let a_tot = total.length();
+                if d2 > 0.0 && d2.is_finite() && a_tot > 0.0 && a_tot.is_finite() {
+                    depot_mu / d2 / a_tot
+                } else {
+                    f64::INFINITY
+                }
+            }
+            _ => f64::INFINITY,
+        };
+        if ratio.is_finite() && ratio < ESCAPE_RATIO {
+            below += 1;
+            if below >= ESCAPE_CONFIRM {
+                return Some((state.position, state.velocity, now, segments));
+            }
+        } else {
+            below = 0;
+        }
+        if elapsed >= max_dur_s {
+            return None;
+        }
+    }
+}
+
+/// Departure-cone mismatch (dimensionless): angle between the N-body
+/// escape asymptote and the broad Lambert outgoing asymptote (both
+/// depot-relative) plus the relative speed error. Ranks escape screens
+/// against each other; the exact stage still arbitrates full arcs.
+fn escape_score(
+    escape_vel: DVec3,
+    escape_epoch: SimTime,
+    depot_body: BodyId,
+    field: &GravityField<'_>,
+    broad_outgoing: DVec3,
+    depot_epoch: SimTime,
+) -> Option<f64> {
+    let depot_esc = field.body_state(depot_body, escape_epoch).ok()?;
+    let depot_dep = field.body_state(depot_body, depot_epoch).ok()?;
+    let v_esc = escape_vel - depot_esc.velocity_inertial;
+    let v_broad = broad_outgoing - depot_dep.velocity_inertial;
+    let broad_len = v_broad.length();
+    if !v_esc.is_finite() || !broad_len.is_finite() || broad_len <= 0.0 {
+        return None;
+    }
+    let angle = v_esc
+        .try_normalize()
+        .and_then(|a| {
+            v_broad
+                .try_normalize()
+                .map(|b| a.dot(b).clamp(-1.0, 1.0).acos())
+        })
+        .unwrap_or(std::f64::consts::PI);
+    let mag = ((v_esc - v_broad).length() / broad_len).max(0.0);
+    if angle.is_finite() && mag.is_finite() {
+        Some(angle + mag)
+    } else {
+        None
+    }
+}
+
 /// Departure-anomaly phasing: scan parking-orbit true anomalies with
 /// loose-tolerance FULL N-body screens and keep the best departure state.
 /// Screens rank candidates against each other; exact N-body correction
@@ -803,6 +936,10 @@ fn exact_config() -> AdaptiveIntegratorConfig {
 /// smaller bill. Real launches pick the parking plane with the transfer;
 /// the tilt scan (deg-scale, inner-planet inclinations are 0-7 deg) lets
 /// the departure burn carry the declination instead of the TCM.
+///
+/// Like [`phase_departure_topk`], long legs prune round 0 on the departure
+/// cone (`broad_outgoing` + `depot_body`); round 1 always refines with full
+/// arcs around the winner.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn phase_departure(
     field: &GravityField<'_>,
@@ -814,6 +951,8 @@ pub(crate) fn phase_departure(
     park_radius: f64,
     burn_magnitude_mps: f64,
     time_of_flight_s: f64,
+    broad_outgoing: DVec3,
+    depot_body: BodyId,
     stats: &mut SearchStats,
 ) -> Option<(DVec3, DVec3, DVec3)> {
     // Phasing basis: the depot orbit around the central body — or, when
@@ -843,16 +982,10 @@ pub(crate) fn phase_departure(
     if !v_circ.is_finite() {
         return None;
     }
-    // Evaluate one (tilt, anomaly) departure candidate with a loose
-    // full-N-body screen; returns miss and departure state on success.
-    // Tilt rotates the parking plane around the radial axis so the burn
-    // can carry transfer declination, not just in-plane direction.
-    // Pure function of its inputs (no stats mutation — the caller counts
-    // the grid size once), so round grids below run on rayon. Minimum
-    // selection stays a strict left-to-right fold over input order, hence
-    // bit-identical to the serial loop on any worker count.
-    let screen = |tilt_rad: f64, anomaly: f64| -> Option<(f64, DVec3, DVec3, DVec3)> {
-        let (sin_t, cos_t) = tilt_rad.sin_cos();
+    // Departure-state builder shared by every stage: pure function of
+    // (tilt, anomaly), safe to call from rayon workers.
+    let build = |(tilt, anomaly): (f64, f64)| {
+        let (sin_t, cos_t) = tilt.sin_cos();
         let tilted_tangent = tangent0 * cos_t - normal * sin_t;
         let (point_dir, tangent) = (
             radial_unit * anomaly.cos() + tilted_tangent * anomaly.sin(),
@@ -860,7 +993,16 @@ pub(crate) fn phase_departure(
         );
         let point = depot.position_inertial + point_dir * park_radius;
         let park_velocity = depot.velocity_inertial + tangent * v_circ;
-        let burn = tangent * burn_magnitude_mps;
+        (point, park_velocity, tangent * burn_magnitude_mps)
+    };
+    // Evaluate one departure candidate with a loose full-N-body screen;
+    // returns miss and departure state on success.
+    // Pure function of its inputs (no stats mutation — the caller counts
+    // grids and segments after each parallel collect), so round grids
+    // below run on rayon. Minimum
+    // selection stays a strict left-to-right fold over input order, hence
+    // bit-identical to the serial loop on any worker count.
+    let screen = |(point, park_velocity, burn): (DVec3, DVec3, DVec3)| {
         let flow = propagate_adaptive_with_burns(
             field,
             TestParticleState {
@@ -886,6 +1028,9 @@ pub(crate) fn phase_departure(
     let mut center_angle = 0.0;
     for round in 0..2 {
         // Input grid in serial-loop order; rayon collect preserves it.
+        // Round 0 on long legs prunes on the departure cone first (same
+        // escape shortlist as the top-K path); round 1 always refines
+        // with full arcs around the winner.
         let grid: Vec<(f64, f64)> = if round == 0 {
             [-30.0f64, -15.0, -7.5, 0.0, 7.5, 15.0, 30.0]
                 .into_iter()
@@ -906,11 +1051,67 @@ pub(crate) fn phase_departure(
                 })
                 .collect()
         };
-        stats.phase_screens += grid.len();
+        // Full-arc candidate set for the min fold: the whole grid, except
+        // round 0 on long legs, where escape pruning selects the top cone
+        // matches plus every non-escaped candidate.
+        let full_set: Vec<(f64, f64)> =
+            if round == 0 && time_of_flight_s > ESCAPE_MIN_TOF_S {
+                let staged: Vec<_> = grid
+                    .par_iter()
+                    .map(|&pair| {
+                        let (point, park_velocity, burn) = build(pair);
+                        let max_dur = time_of_flight_s.min(ESCAPE_MAX_DUR_S);
+                        let esc = escape_state(
+                            field,
+                            TestParticleState {
+                                position: point,
+                                velocity: park_velocity + burn,
+                            },
+                            depot_epoch,
+                            depot_body,
+                            depot_mu,
+                            max_dur,
+                        );
+                        let score = esc.as_ref().and_then(|(_, vel, at, _)| {
+                            escape_score(*vel, *at, depot_body, field, broad_outgoing, depot_epoch)
+                        });
+                        let segments = esc.as_ref().map(|s| s.3).unwrap_or(0);
+                        (pair, score, segments)
+                    })
+                    .collect();
+                stats.phase_screens += staged.iter().map(|s| s.2).sum::<usize>();
+                let mut escaped: Vec<(f64, usize)> = staged
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, s)| s.1.map(|score| (score, i)))
+                    .collect();
+                escaped.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mut selected = vec![false; staged.len()];
+                for (_, i) in escaped.into_iter().take(ESCAPE_TOP_N) {
+                    selected[i] = true;
+                }
+                for (i, s) in staged.iter().enumerate() {
+                    if s.1.is_none() {
+                        selected[i] = true;
+                    }
+                }
+                stats.phase_screens += selected.iter().filter(|b| **b).count();
+                grid.into_iter()
+                    .enumerate()
+                    .filter(|(i, _)| selected[*i])
+                    .map(|(_, pair)| pair)
+                    .collect()
+            } else {
+                stats.phase_screens += grid.len();
+                grid
+            };
         let mut local_best: Option<(f64, f64, f64, DVec3, DVec3, DVec3)> = None;
-        for (tilt, anomaly, miss, point, park_velocity, burn) in grid
+        for (tilt, anomaly, miss, point, park_velocity, burn) in full_set
             .par_iter()
-            .map(|(tilt, anomaly)| screen(*tilt, *anomaly).map(|s| (*tilt, *anomaly, s)))
+            .map(|&pair| {
+                let triple = build(pair);
+                screen(triple).map(|s| (pair.0, pair.1, s))
+            })
             .collect::<Vec<_>>()
             .into_iter()
             .flatten()
@@ -953,6 +1154,12 @@ pub(crate) fn phase_departure(
 /// comparing raw velocities would drown in well fall-in instead, so only
 /// plane NORMALS are compared (conserved, fall-in-free). Deterministic:
 /// grid order, score order, angular separation greed.
+///
+/// `broad_outgoing` is the central-relative Lambert departure velocity
+/// (broad outgoing asymptote) and `depot_body` its well: on legs longer
+/// than [`ESCAPE_MIN_TOF_S`] stage 1 screens the escape region only and
+/// ranks the departure cone, paying full arcs solely for the top matches
+/// plus the non-escaped. Short legs screen full arcs exactly as before.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn phase_departure_topk(
     field: &GravityField<'_>,
@@ -969,6 +1176,8 @@ pub(crate) fn phase_departure_topk(
     aim_point_m: DVec3,
     encounter_template: Option<EncounterTemplate>,
     keep: usize,
+    broad_outgoing: DVec3,
+    depot_body: BodyId,
     stats: &mut SearchStats,
 ) -> Vec<(DVec3, DVec3, DVec3)> {
     if keep == 0 {
@@ -996,13 +1205,106 @@ pub(crate) fn phase_departure_topk(
     if !v_circ.is_finite() {
         return Vec::new();
     }
+    // Departure-state builder shared by every stage below: pure function
+    // of (tilt, anomaly), safe to call from rayon workers.
+    let build = |(tilt, anomaly): (f64, f64)| {
+        let (sin_t, cos_t) = tilt.sin_cos();
+        let tilted_tangent = tangent0 * cos_t - normal * sin_t;
+        let (point_dir, tangent) = (
+            radial_unit * anomaly.cos() + tilted_tangent * anomaly.sin(),
+            tilted_tangent * anomaly.cos() - radial_unit * anomaly.sin(),
+        );
+        let point = depot.position_inertial + point_dir * park_radius;
+        let park_velocity = depot.velocity_inertial + tangent * v_circ;
+        (point, park_velocity, tangent * burn_magnitude_mps)
+    };
+    // Full-arc screen + fingerprint score. Shared by the legacy path and
+    // escape stage 2, so both rank the same quantity.
+    let full_screen = |(point, park_velocity, burn): (DVec3, DVec3, DVec3)| {
+        let flow = propagate_adaptive_with_burns(
+            field,
+            TestParticleState {
+                position: point,
+                velocity: park_velocity + burn,
+            },
+            depot_epoch,
+            time_of_flight_s,
+            &[],
+            loose_config(),
+        )
+        .ok()?;
+        let miss = (flow.state.position - aim_point_m).length();
+        if !miss.is_finite() {
+            return None;
+        }
+        // Encounter-relative state for the fingerprint below.
+        let rel_pos = flow.state.position - arrival.position_inertial;
+        let rel_vel = flow.state.velocity - arrival.velocity_inertial;
+        // Plane term: encounter-relative angular-momentum direction
+        // vs broad's encounter plane. Degenerate screens score neutral.
+        let plane_angle = (rel_pos.cross(rel_vel).try_normalize())
+            .map(|screen_normal| {
+                screen_normal
+                    .dot(target_plane_normal)
+                    .clamp(-1.0, 1.0)
+                    .acos()
+            })
+            .unwrap_or(std::f64::consts::FRAC_PI_2);
+        // Periapsis-direction term: in-plane orientation of the
+        // encounter hyperbola vs broad's. Energy-adjacent trajectories
+        // can still arrive 90° off; only the full (plane, shape,
+        // orientation) fingerprint sees that. Degenerate: neutral.
+        let (screen_e, peri_angle) = match &encounter_template {
+            Some(template) => {
+                let r = rel_pos.length();
+                let v2 = rel_vel.length_squared();
+                let e_vec = if r.is_finite() && r > 0.0 && v2.is_finite() {
+                    ((v2 - template.mu / r) * rel_pos - rel_pos.dot(rel_vel) * rel_vel)
+                        / template.mu
+                } else {
+                    DVec3::NAN
+                };
+                let e = e_vec.length();
+                let peri = if e.is_finite() && e > 1.0 {
+                    e_vec
+                        .normalize()
+                        .dot(template.periapsis_dir)
+                        .clamp(-1.0, 1.0)
+                        .acos()
+                } else {
+                    std::f64::consts::FRAC_PI_2
+                };
+                (
+                    if e.is_finite() { e } else { f64::NAN },
+                    if peri.is_finite() {
+                        peri
+                    } else {
+                        std::f64::consts::FRAC_PI_2
+                    },
+                )
+            }
+            None => (f64::NAN, 0.0),
+        };
+        let score = if plane_angle.is_finite() {
+            miss + time_of_flight_s * plane_speed_mps * (plane_angle + peri_angle)
+        } else {
+            return None;
+        };
+        Some((score, screen_e))
+    };
     // Round-0 tilt x anomaly grid, evaluated in parallel: the 84 screens
-    // are independent full-arc propagations (embarrassingly parallel —
-    // parallelism belongs here, across independent jobs, never inside the
-    // gravity kernel). rayon `collect` preserves input order, and every
-    // step below (score sort, class filter, greedy distinct pick) is the
-    // same deterministic sequence as the serial loop, so the shortlist is
+    // are independent propagations (embarrassingly parallel — parallelism
+    // belongs here, across independent jobs, never inside the gravity
+    // kernel). rayon `collect` preserves input order, and every step below
+    // (score sort, class filter, greedy distinct pick) is the same
+    // deterministic sequence as the serial loop, so the shortlist is
     // identical bit-for-bit on any worker count.
+    //
+    // Long legs first prune on the departure cone: 84 escape-only screens
+    // (days of N-body each instead of the whole transfer), full arcs only
+    // for the top escape matches plus the non-escaped — which are never
+    // dropped sight unseen (bound orbits and propagator failures route to
+    // full arcs, not to the bin).
     let grid: Vec<(f64, f64)> = [-30.0f64, -15.0, -7.5, 0.0, 7.5, 15.0, 30.0]
         .into_iter()
         .flat_map(|tilt_deg| {
@@ -1010,93 +1312,80 @@ pub(crate) fn phase_departure_topk(
             (0..12).map(move |i| (tilt, std::f64::consts::TAU * i as f64 / 12.0))
         })
         .collect();
-    let screened: Vec<_> = grid
-        .par_iter()
-        .map(|(tilt, anomaly)| {
-            let (sin_t, cos_t) = tilt.sin_cos();
-            let tilted_tangent = tangent0 * cos_t - normal * sin_t;
-            let (point_dir, tangent) = (
-                radial_unit * anomaly.cos() + tilted_tangent * anomaly.sin(),
-                tilted_tangent * anomaly.cos() - radial_unit * anomaly.sin(),
-            );
-            let point = depot.position_inertial + point_dir * park_radius;
-            let park_velocity = depot.velocity_inertial + tangent * v_circ;
-            let burn = tangent * burn_magnitude_mps;
-            let flow = propagate_adaptive_with_burns(
-                field,
-                TestParticleState {
-                    position: point,
-                    velocity: park_velocity + burn,
-                },
-                depot_epoch,
-                time_of_flight_s,
-                &[],
-                loose_config(),
-            )
-            .ok()?;
-            let miss = (flow.state.position - aim_point_m).length();
-            if !miss.is_finite() {
-                return None;
-            }
-            // Encounter-relative state for the fingerprint below.
-            let rel_pos = flow.state.position - arrival.position_inertial;
-            let rel_vel = flow.state.velocity - arrival.velocity_inertial;
-            // Plane term: encounter-relative angular-momentum direction
-            // vs broad's encounter plane. Degenerate screens score neutral.
-            let plane_angle = (rel_pos.cross(rel_vel).try_normalize())
-                .map(|screen_normal| {
-                    screen_normal
-                        .dot(target_plane_normal)
-                        .clamp(-1.0, 1.0)
-                        .acos()
-                })
-                .unwrap_or(std::f64::consts::FRAC_PI_2);
-            // Periapsis-direction term: in-plane orientation of the
-            // encounter hyperbola vs broad's. Energy-adjacent trajectories
-            // can still arrive 90° off; only the full (plane, shape,
-            // orientation) fingerprint sees that. Degenerate: neutral.
-            let (screen_e, peri_angle) = match &encounter_template {
-                Some(template) => {
-                    let r = rel_pos.length();
-                    let v2 = rel_vel.length_squared();
-                    let e_vec = if r.is_finite() && r > 0.0 && v2.is_finite() {
-                        ((v2 - template.mu / r) * rel_pos - rel_pos.dot(rel_vel) * rel_vel)
-                            / template.mu
-                    } else {
-                        DVec3::NAN
-                    };
-                    let e = e_vec.length();
-                    let peri = if e.is_finite() && e > 1.0 {
-                        e_vec
-                            .normalize()
-                            .dot(template.periapsis_dir)
-                            .clamp(-1.0, 1.0)
-                            .acos()
-                    } else {
-                        std::f64::consts::FRAC_PI_2
-                    };
-                    (
-                        if e.is_finite() { e } else { f64::NAN },
-                        if peri.is_finite() {
-                            peri
-                        } else {
-                            std::f64::consts::FRAC_PI_2
-                        },
-                    )
-                }
-                None => (f64::NAN, 0.0),
-            };
-            let score = if plane_angle.is_finite() {
-                miss + time_of_flight_s * plane_speed_mps * (plane_angle + peri_angle)
-            } else {
-                return None;
-            };
-            Some((score, screen_e, *tilt, *anomaly, point, park_velocity, burn))
-        })
-        .collect();
-    stats.phase_screens += grid.len();
     let mut scored: Vec<(f64, f64, f64, f64, DVec3, DVec3, DVec3)> =
-        screened.into_iter().flatten().collect();
+        if time_of_flight_s <= ESCAPE_MIN_TOF_S {
+            let screened: Vec<_> = grid
+                .par_iter()
+                .map(|&pair| {
+                    let (point, park_velocity, burn) = build(pair);
+                    full_screen((point, park_velocity, burn)).map(|(score, e)| {
+                        (score, e, pair.0, pair.1, point, park_velocity, burn)
+                    })
+                })
+                .collect();
+            stats.phase_screens += grid.len();
+            screened.into_iter().flatten().collect()
+        } else {
+            // Stage 1: escape-only screens + departure-cone scores.
+            let staged: Vec<_> = grid
+                .par_iter()
+                .map(|&pair| {
+                    let (point, park_velocity, burn) = build(pair);
+                    let start = TestParticleState {
+                        position: point,
+                        velocity: park_velocity + burn,
+                    };
+                    let max_dur = time_of_flight_s.min(ESCAPE_MAX_DUR_S);
+                    match escape_state(field, start, depot_epoch, depot_body, depot_mu, max_dur)
+                    {
+                        Some((pos, vel, at, segments)) => {
+                            let score = escape_score(
+                                vel,
+                                at,
+                                depot_body,
+                                field,
+                                broad_outgoing,
+                                depot_epoch,
+                            );
+                            (pair, point, park_velocity, burn, Some((pos, vel)), score, segments)
+                        }
+                        None => (pair, point, park_velocity, burn, None, None, 0),
+                    }
+                })
+                .collect();
+            stats.phase_screens += staged.iter().map(|s| s.6).sum::<usize>();
+            // Stage-2 set: top escape matches plus every non-escaped
+            // candidate, in grid order (downstream sorts by score anyway).
+            let mut escaped: Vec<(f64, usize)> = staged
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| s.5.map(|score| (score, i)))
+                .collect();
+            escaped.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut stage2: Vec<bool> = vec![false; staged.len()];
+            for (_, i) in escaped.into_iter().take(ESCAPE_TOP_N) {
+                stage2[i] = true;
+            }
+            for (i, s) in staged.iter().enumerate() {
+                if s.5.is_none() {
+                    stage2[i] = true;
+                }
+            }
+            // Stage 2: full arcs with the shared fingerprint score.
+            let rescored: Vec<_> = staged
+                .par_iter()
+                .enumerate()
+                .filter(|(i, _)| stage2[*i])
+                .map(|(_, s)| {
+                    let (pair, point, park_velocity, burn, _, _, _) = s;
+                    full_screen((*point, *park_velocity, *burn)).map(|(score, e)| {
+                        (score, e, pair.0, pair.1, *point, *park_velocity, *burn)
+                    })
+                })
+                .collect();
+            stats.phase_screens += stage2.iter().filter(|b| **b).count();
+            rescored.into_iter().flatten().collect()
+        };
     scored.sort_by(|a, b| a.0.total_cmp(&b.0));
     // Encounter-class filter: keep screens whose osculating eccentricity
     // is within 5x of broad's (graze vs dive is an order-of-magnitude
@@ -1577,6 +1866,8 @@ fn revalidate(
         park_radius,
         cell.departure_burn_mag_mps,
         cell.time_of_flight_s,
+        cell.broad_departure_velocity_mps,
+        config.departure_body,
         stats,
     ) {
         Some(phased) => phased,

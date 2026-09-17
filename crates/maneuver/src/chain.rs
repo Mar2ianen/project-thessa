@@ -165,6 +165,8 @@ struct ChainCell {
     leg_tofs_s: Vec<f64>,
     encounter_bodies: Vec<BodyId>,
     departure_burn_mag_mps: f64,
+    /// Central-relative Lambert departure velocity of leg 1 (see above).
+    broad_departure_velocity_mps: DVec3,
     /// Broad incoming asymptotes per encounter (free vectors): leg-k
     /// arrival minus encounter-k motion. Seeds B-plane directions (the
     /// side of the well matters as much as the point).
@@ -463,6 +465,7 @@ fn chain_cell(
             .map(|encounter| encounter.body)
             .collect(),
         departure_burn_mag_mps: dep_mag,
+        broad_departure_velocity_mps: arcs_dep[0],
         v_in_frames_mps: incomings,
         v_out_frames_mps: seeds,
         turn_mags_mps: turns,
@@ -675,6 +678,8 @@ fn revalidate_chain(
         aim1,
         template,
         PHASING_BRANCHES,
+        cell.broad_departure_velocity_mps,
+        config.departure_body,
         stats,
     );
     if starts.is_empty() {

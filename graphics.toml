@@ -83,7 +83,7 @@ limb_darkening = true # belt/zone contrast baked into the texture
 # source from throttle + ambient pressure; engine-sim/vehicle data will
 # become the provider without renderer changes.
 enabled = true
-quality = "medium" # low = cone impostor; medium = volume/6 steps; high = volume/10 steps
+quality = "medium" # low = cone impostor; medium = volume/8 steps; high = volume/14 steps
 mach_diamonds = true # debug override (doc section 9), not physics
 flicker = true
 light = true

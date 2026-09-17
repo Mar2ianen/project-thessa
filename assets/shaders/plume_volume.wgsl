@@ -159,7 +159,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let ref_up = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(axis.y) > 0.9);
         let u1 = normalize(cross(axis, ref_up));
         let u2 = cross(axis, u1);
-        let az = atan2(dot(radial, u2), dot(radial, u1)) * 0.15915494 + 0.5;
+        // atan2(0, 0) is undefined (NaN on strict drivers) for rays through
+        // the axis: nudge the frame x off exact zero (noise coords only).
+        let az = atan2(dot(radial, u2), dot(radial, u1) + 1e-6) * 0.15915494 + 0.5;
         let dist_cam = length(ro - (origin + axis * (len * 0.5)));
         let fine_fade = exp(-dist_cam / 120.0);
         let n = vnoise(vec2<f32>(z * 1.6 - time * advect, az * 3.0));
@@ -178,6 +180,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         // Residual alpha erosion on top of the geometric deformation.
         let turb = ncenter * erosion * smoothstep(0.35, 1.0, u);
         w = max(w * (1.0 - turb), 0.0);
+        // Tail dissolve: the analytic barrel must evaporate, never slice
+        // off at z = len (a hard planar cap reads as a flat 2D end face,
+        // especially from behind-above). Render-side representation detail;
+        // the CPU oracle keeps the undissolved integral for lighting.
+        w *= 1.0 - smoothstep(0.70, 1.0, zn);
         // Gentle shock cells (periodic compression brightness): softer
         // shaping than peaked bands, so supersonic structure reads without
         // striping into aliased noise on long march paths.

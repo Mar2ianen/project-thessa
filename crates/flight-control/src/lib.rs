@@ -120,6 +120,23 @@ impl DirectionTarget {
         target.target_body = Some(target_body);
         Ok(target)
     }
+
+    /// Trust-boundary check: direction shape plus the frame/body invariant
+    /// (`Target` carries a body, every other frame carries none). Note
+    /// `new` alone cannot enforce this — it always leaves the body unset,
+    /// so even `Target` built through `new` fails here until resolved
+    /// through `for_target` or deserialized with the body attached.
+    pub fn validate(&self) -> Result<(), ControlError> {
+        if !self.direction.is_finite() || self.direction.length_squared() <= 1.0e-12 {
+            return Err(ControlError::InvalidDirection);
+        }
+        match self.frame {
+            DirectionFrame::Target if self.target_body.is_some() => Ok(()),
+            DirectionFrame::Target => Err(ControlError::InvalidTargetBody),
+            _ if self.target_body.is_none() => Ok(()),
+            _ => Err(ControlError::InvalidTargetBody),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -169,12 +186,8 @@ impl GuidanceIntent {
             {
                 Err(ControlError::InvalidAttitude)
             }
-            Self::VelocityDirection { direction, .. } => {
-                DirectionTarget::new(direction.direction, direction.frame).map(|_| ())
-            }
-            Self::FlightPath { target } => {
-                DirectionTarget::new(target.direction.direction, target.direction.frame).map(|_| ())
-            }
+            Self::VelocityDirection { direction, .. } => direction.validate(),
+            Self::FlightPath { target } => target.direction.validate(),
             _ => Ok(()),
         }
     }
@@ -791,6 +804,7 @@ pub enum ControlError {
     },
     InvalidDirection,
     InvalidAttitude,
+    InvalidTargetBody,
     InvalidEffector,
     InvalidController,
     MismatchedControlState,
@@ -811,6 +825,10 @@ impl fmt::Display for ControlError {
             }
             Self::InvalidDirection => write!(formatter, "direction must be finite and non-zero"),
             Self::InvalidAttitude => write!(formatter, "attitude target must be a unit quaternion"),
+            Self::InvalidTargetBody => write!(
+                formatter,
+                "direction target frame and target body mismatch"
+            ),
             Self::InvalidEffector => write!(formatter, "effector contribution is invalid"),
             Self::InvalidController => write!(formatter, "control-law parameters are invalid"),
             Self::MismatchedControlState => {
@@ -850,6 +868,52 @@ mod tests {
         .validate()
         .expect_err("non-unit target must fail");
         assert_eq!(error, ControlError::InvalidAttitude);
+    }
+
+    #[test]
+    fn target_frame_without_body_fails_validation() {
+        // The wire trust boundary: a deserialized Target frame with no
+        // body must fail here, not later at runtime resolution.
+        let bare = DirectionTarget {
+            direction: DVec3::X,
+            frame: DirectionFrame::Target,
+            target_body: None,
+        };
+        assert_eq!(bare.validate(), Err(ControlError::InvalidTargetBody));
+        let intent = GuidanceIntent::VelocityDirection {
+            direction: bare,
+            roll_policy: RollPolicy::Hold,
+        };
+        assert_eq!(intent.validate(), Err(ControlError::InvalidTargetBody));
+        let path = GuidanceIntent::FlightPath {
+            target: FlightPathTarget {
+                direction: bare,
+                roll_policy: RollPolicy::Hold,
+            },
+        };
+        assert_eq!(path.validate(), Err(ControlError::InvalidTargetBody));
+    }
+
+    #[test]
+    fn target_frame_with_body_and_plain_frames_validate() {
+        let resolved =
+            DirectionTarget::for_target(DVec3::X, 7).expect("resolved target builds");
+        assert!(resolved.validate().is_ok());
+        assert!(GuidanceIntent::VelocityDirection {
+            direction: resolved,
+            roll_policy: RollPolicy::Hold,
+        }
+        .validate()
+        .is_ok());
+        // A stray body on a non-target frame is equally ambiguous.
+        let mut stray = DirectionTarget::new(DVec3::X, DirectionFrame::Inertial)
+            .expect("inertial builds");
+        stray.target_body = Some(7);
+        assert_eq!(stray.validate(), Err(ControlError::InvalidTargetBody));
+        // Serde round trip preserves the invariant both ways.
+        let json = serde_json::to_string(&resolved).expect("serializes");
+        let back: DirectionTarget = serde_json::from_str(&json).expect("deserializes");
+        assert!(back.validate().is_ok());
     }
 
     #[test]

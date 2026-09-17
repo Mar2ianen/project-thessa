@@ -112,6 +112,20 @@ impl PilotFlightRuntime {
         self.render_time_s = self.flight_time_s;
     }
 
+    pub(super) fn initialize_circular_orbit_benchmark(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        altitude_m: f64,
+    ) -> Result<(), String> {
+        self.authority
+            .initialize_circular_orbit(ephemeris, altitude_m, DVec3::Y)
+            .map_err(|error| error.to_string())?;
+        self.input_throttle = 0.0;
+        self.input_engine_active = false;
+        self.sync_view();
+        Ok(())
+    }
+
     /// Apply only the presentation pose from an interpolated network sample.
     /// `authority` stays on the newest validated snapshot for input ticks and
     /// prediction; a visual sample can never advance server state.
@@ -436,6 +450,14 @@ impl Default for PilotHudState {
             pilot_camera_pan: Vec2::ZERO,
             desired_direction: -Vec3::Z,
         }
+    }
+}
+
+impl PilotHudState {
+    pub(super) fn set_benchmark_chase_view(&mut self) {
+        self.view_mode = ClientViewMode::Pilot;
+        self.pilot_camera_chase = true;
+        self.pilot_camera_orbit = Quat::from_rotation_x(-0.65);
     }
 }
 

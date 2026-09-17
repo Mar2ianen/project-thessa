@@ -132,6 +132,7 @@ pub struct CbtGpuBuffers {
     draw_list: RawBufferVec<[u32; 4]>,
     active_triangles: RawBufferVec<[u32; 4]>,
     active_count: RawBufferVec<[u32; 4]>,
+    grid_history: RawBufferVec<[u32; 4]>,
     params: RawBufferVec<[u32; 4]>,
     surface_transform: RawBufferVec<[f32; 16]>,
     lighting: RawBufferVec<[f32; 4]>,
@@ -169,6 +170,8 @@ impl FromWorld for CbtGpuBuffers {
         active_triangles.set_label(Some("thessa-cbt-active-triangles"));
         let mut active_count = RawBufferVec::new(BufferUsages::STORAGE | BufferUsages::COPY_SRC);
         active_count.set_label(Some("thessa-cbt-active-leaf-count"));
+        let mut grid_history = RawBufferVec::new(BufferUsages::STORAGE);
+        grid_history.set_label(Some("thessa-cbt-grid-step-history"));
         let mut params = RawBufferVec::new(BufferUsages::UNIFORM);
         params.set_label(Some("thessa-cbt-geometry-params"));
         let mut surface_transform = RawBufferVec::new(BufferUsages::UNIFORM);
@@ -182,6 +185,7 @@ impl FromWorld for CbtGpuBuffers {
             draw_list,
             active_triangles,
             active_count,
+            grid_history,
             params,
             surface_transform,
             lighting: RawBufferVec::new(BufferUsages::UNIFORM),
@@ -242,6 +246,11 @@ impl CbtGpuBuffers {
     /// Uniform-compatible `[leaf_count, vertices_per_patch, radius_bits, 0]`.
     pub fn params_buffer(&self) -> Option<&Buffer> {
         self.params.buffer()
+    }
+
+    /// Persistent per-leaf `[node_id_lo, node_id_hi, grid_step, 0]` history.
+    pub fn grid_history_buffer(&self) -> Option<&Buffer> {
+        self.grid_history.buffer()
     }
 
     /// Body-space to Bevy render-local transform used by the raster shader.
@@ -405,6 +414,7 @@ struct ViewUniforms {
 @group(0) @binding(7) var<uniform> params: Params;
 @group(0) @binding(8) var<storage, read> leaves: array<vec4<u32>>;
 @group(0) @binding(9) var<storage, read> tile_frames: array<CbtTileFrame>;
+@group(0) @binding(10) var<storage, read_write> grid_history: array<vec4<u32>>;
 
 fn corner_index(corner: u32) -> u32 {
     if (corner == 0u) { return 0u; }
@@ -449,22 +459,41 @@ fn ndc(position: vec4<f32>) -> vec2<f32> {
     return position.xy / max(position.w, 0.000001);
 }
 
-fn screen_grid_step(ordinal: u32) -> u32 {
+fn screen_grid_span(ordinal: u32) -> f32 {
     let top_left = clip_position(ordinal, 0u);
     let top_right = clip_position(ordinal, 1u);
     let bottom_left = clip_position(ordinal, 2u);
     let bottom_right = clip_position(ordinal, 3u);
     if (top_left.w <= 0.0 || top_right.w <= 0.0 || bottom_left.w <= 0.0 || bottom_right.w <= 0.0) {
-        return 1u;
+        return 0.1;
     }
     var span = distance(ndc(top_left), ndc(top_right));
     span = max(span, distance(ndc(top_left), ndc(bottom_left)));
     span = max(span, distance(ndc(top_right), ndc(bottom_right)));
     span = max(span, distance(ndc(bottom_left), ndc(bottom_right)));
+    return span;
+}
+
+fn classify_grid_span(span: f32) -> u32 {
     if (span < 0.015) { return 8u; }
     if (span < 0.040) { return 4u; }
     if (span < 0.100) { return 2u; }
     return 1u;
+}
+
+fn screen_grid_step(ordinal: u32) -> u32 {
+    let span = screen_grid_span(ordinal);
+    let current = classify_grid_span(span);
+    let history = grid_history[ordinal];
+    let leaf = leaves[ordinal];
+    let valid = history.x == leaf.x && history.y == leaf.y
+        && (history.z == 1u || history.z == 2u || history.z == 4u || history.z == 8u);
+    if (!valid) { return current; }
+    let refine = classify_grid_span(span / 1.2);
+    let coarsen = classify_grid_span(span / 0.8);
+    if (refine < history.z) { return refine; }
+    if (coarsen > history.z) { return coarsen; }
+    return history.z;
 }
 
 fn edge_vertex(edge: u32, segment: u32, side: u32, step: u32) -> u32 {
@@ -504,6 +533,12 @@ fn classify_active(
         if (ordinal < params.leaf_count && page_metadata[ordinal].z != 0u) {
             if (intersects_clip(ordinal)) {
                 selected_step = screen_grid_step(ordinal);
+                grid_history[ordinal] = vec4(
+                    leaves[ordinal].x,
+                    leaves[ordinal].y,
+                    selected_step,
+                    0u,
+                );
                 let cells = 32u / selected_step;
                 selected_count = cells * cells * 2u + cells * 8u;
                 selected_offset = atomicAdd(&active_count[0], selected_count);
@@ -705,23 +740,33 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     var dy = dpdy(uv);
     dx.x -= round(dx.x);
     dy.x -= round(dy.x);
+    // Pages resolve material bands down to 32 m. Once a pixel spans that
+    // scale, use the continuous planet map rather than aliasing those bands
+    // into different colours in each geometry LOD. The blend follows the
+    // physical footprint, never a flat per-tile level or residency flag.
+    let direction = normalize(input.body_direction);
+    let footprint = max(length(dpdx(direction)), length(dpdy(direction)));
+    let footprint_m = footprint * bitcast<f32>(params.radius_bits);
+    var detail_weight = 1.0 - smoothstep(16.0, 32.0, footprint_m);
+    if (input.material_slot == 0xffffffffu) { detail_weight = 0.0; }
     var albedo = vec3(0.0);
-    var roughness = 1.0;
+    var roughness = 0.0;
     let page_dx = dpdx(input.material_uv);
     let page_dy = dpdy(input.material_uv);
-    if (input.material_slot != 0xffffffffu) {
+    if (detail_weight > 0.0) {
         let detail = textureSampleGrad(material_texture, material_sampler,
             input.material_uv, i32(input.material_slot), page_dx, page_dy);
-        albedo = detail.rgb;
-        roughness = detail.a;
-    } else {
-        albedo = textureSampleGrad(albedo_texture, surface_sampler, uv, dx, dy).rgb;
-        roughness = textureSampleGrad(roughness_texture, surface_sampler, uv, dx, dy).g;
+        albedo = detail.rgb * detail_weight;
+        roughness = detail.a * detail_weight;
+    }
+    if (detail_weight < 1.0) {
+        albedo += textureSampleGrad(albedo_texture, surface_sampler, uv, dx, dy).rgb
+            * (1.0 - detail_weight);
+        roughness += textureSampleGrad(roughness_texture, surface_sampler, uv, dx, dy).g
+            * (1.0 - detail_weight);
     }
     var radiance = albedo * illuminance / OCEAN_PI;
     // Derivatives must be evaluated outside the non-uniform water branch.
-    let direction = normalize(input.body_direction);
-    let footprint = max(length(dpdx(direction)), length(dpdy(direction)));
     // Canonical pages clamp ocean to datum; the material map excludes ice.
     let water = (1.0 - smoothstep(0.22, 0.65, roughness))
         * (1.0 - smoothstep(0.25, 1.0, input.height_m))
@@ -993,6 +1038,7 @@ fn init_cbt_gpu_pipeline(mut commands: bevy::prelude::Commands, device: Res<Rend
             },
             storage_binding(8, true),
             storage_binding(9, true),
+            storage_binding(10, false),
         ],
     );
     let classifier_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -1074,7 +1120,9 @@ fn init_cbt_gpu_pipeline(mut commands: bevy::prelude::Commands, device: Res<Rend
             },
             BindGroupLayoutEntry {
                 binding: 4,
-                visibility: ShaderStages::VERTEX,
+                // The fragment stage uses radius_bits to convert the
+                // direction derivative into a physical material footprint.
+                visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -1524,6 +1572,9 @@ fn prepare_cbt_gpu_buffers(
     // Compute owns these outputs. Reserve GPU storage without constructing
     // and uploading a CPU mirror of zeros on each streamed page batch.
     gpu.patch_records.reserve(records.len().max(1), &device);
+    // This buffer is GPU-owned state. New capacity is zero initialized by
+    // wgpu, while existing ordinals retain their history across view changes.
+    gpu.grid_history.reserve(records.len().max(1), &device);
 
     gpu.page_metadata.clear();
     gpu.page_metadata.extend(metadata);
@@ -1704,6 +1755,7 @@ fn draw_cbt_geometry(
         Some(draw_buffer),
         Some(active_triangles_buffer),
         Some(active_count_buffer),
+        Some(grid_history_buffer),
         Some(params_buffer),
         Some(surface_buffer),
         Some(frames_buffer),
@@ -1714,6 +1766,7 @@ fn draw_cbt_geometry(
         gpu.draw_list_buffer(),
         gpu.active_triangles_buffer(),
         gpu.active_count.buffer(),
+        gpu.grid_history_buffer(),
         gpu.params_buffer(),
         gpu.surface_transform_buffer(),
         gpu.tile_frames.buffer(),
@@ -1940,6 +1993,10 @@ fn draw_cbt_geometry(
                 BindGroupEntry {
                     binding: 9,
                     resource: BindingResource::Buffer(frames_buffer.as_entire_buffer_binding()),
+                },
+                BindGroupEntry {
+                    binding: 10,
+                    resource: BindingResource::Buffer(grid_history_buffer.as_entire_buffer_binding()),
                 },
             ],
         );

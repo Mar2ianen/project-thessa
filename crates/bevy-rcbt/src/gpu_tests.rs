@@ -334,6 +334,7 @@ fn gpu_classifier_uses_position_stride_for_every_leaf() {
     );
     let leaves = gpu.buffer(&[8, 0, 3, 0, 9, 0, 3, 1, 10, 0, 3, 2], false);
     let frames = gpu.buffer(&[0; 3 * 28], false);
+    let history = gpu.buffer(&[0; 3 * 4], false);
     gpu.dispatch(
         CBT_CLASSIFY_WGSL,
         &[
@@ -343,10 +344,10 @@ fn gpu_classifier_uses_position_stride_for_every_leaf() {
         ],
         &[
             &metadata, &vertices, &triangles, &count, &draw, &view, &transform, &params, &leaves,
-            &frames,
+            &frames, &history,
         ],
         &[5, 6, 7],
-        &[2, 3, 4],
+        &[2, 3, 4, 10],
     );
     // A zero-span patch uses step 8: 4x4x2 surface + 4x4x2 skirt triangles.
     assert_eq!(gpu.read(&draw), [192, 1, 0, 0]);
@@ -360,6 +361,74 @@ fn gpu_classifier_uses_position_stride_for_every_leaf() {
                 .all(|index| (index & 0x7fffffff) < GPU_VERTEX_COUNT_PER_PATCH as u32)
         );
     }
+}
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+fn gpu_classifier_grid_step_history_has_hysteresis_and_identity_reset() {
+    let gpu = Gpu::new();
+    let metadata = gpu.buffer(&[0, 0, 33, 0], false);
+    let identity = [
+        1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.,
+    ]
+    .map(f32::to_bits);
+    let view = gpu.buffer(&identity, true);
+    let transform = gpu.buffer(&identity, true);
+    let params = gpu.buffer(&[1, GPU_VERTEX_COUNT_PER_PATCH as u32, 1_f32.to_bits(), 0], true);
+    let frames = gpu.buffer(&[0; 28], false);
+    let history = gpu.buffer(&[0; 4], false);
+
+    let vertices_for = |span: f32| {
+        let mut words = Vec::with_capacity(GPU_VERTEX_COUNT_PER_PATCH * 8);
+        for y in 0..33 {
+            for x in 0..33 {
+                words.extend([
+                    x as f32 / 32.0 * span,
+                    y as f32 / 32.0 * span,
+                    0.5,
+                    1.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                ].map(f32::to_bits));
+            }
+        }
+        gpu.buffer(&words, false)
+    };
+    let dispatch = |vertices: &wgpu::Buffer, leaf_id: u32| {
+        let leaves = gpu.buffer(&[leaf_id, 0, 3, 0], false);
+        let triangles = gpu.buffer(&vec![0; 3 * GPU_TRIANGLE_COUNT_PER_PATCH * 4], false);
+        let count = gpu.buffer(&[0; 4], false);
+        let draw = gpu.buffer(&[0; 4], false);
+        gpu.dispatch(
+            CBT_CLASSIFY_WGSL,
+            &[("reset_active", 1), ("classify_active", 1), ("finalize_active", 1)],
+            &[
+                &metadata, vertices, &triangles, &count, &draw, &view, &transform, &params,
+                &leaves, &frames, &history,
+            ],
+            &[5, 6, 7],
+            &[2, 3, 4, 10],
+        );
+        (draw, leaves)
+    };
+
+    let (draw, _) = dispatch(&vertices_for(0.039), 8);
+    assert_eq!(gpu.read(&draw)[0], 576, "initial step 4");
+    assert_eq!(gpu.read(&history), [8, 0, 4, 0]);
+
+    let (draw, _) = dispatch(&vertices_for(0.041), 8);
+    assert_eq!(gpu.read(&draw)[0], 576, "jitter must retain step 4");
+    assert_eq!(gpu.read(&history), [8, 0, 4, 0]);
+
+    let (draw, _) = dispatch(&vertices_for(0.2), 8);
+    assert_eq!(gpu.read(&draw)[0], 6912, "meaningful crossing refines to step 1");
+    assert_eq!(gpu.read(&history), [8, 0, 1, 0]);
+
+    let (draw, _) = dispatch(&vertices_for(0.039), 9);
+    assert_eq!(gpu.read(&draw)[0], 576, "new leaf identity must reset history");
+    assert_eq!(gpu.read(&history), [9, 0, 4, 0]);
 }
 
 #[test]

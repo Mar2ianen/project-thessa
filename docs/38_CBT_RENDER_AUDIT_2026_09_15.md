@@ -270,3 +270,65 @@ isolated performance comparison. The paused orbit maintained simulation time
 continuous terrain in the checked frames; residual horizon stepping and distant
 material/filtering limitations remain. The reported silhouette-specific blur
 has not been proven fully resolved by these captures.
+
+## Follow-up: residency, stable materials and physical orbit captures
+
+The next investigation found three independent sources of tile-shaped changes:
+stateless split decisions around LOD thresholds, immediate eviction of inactive
+pages, and material classification that depended on the requesting tile's texel
+spacing. A distant local page also replaced the globe map abruptly even when
+its 32 m material bands were smaller than a screen pixel.
+
+Implemented changes:
+
+- The backend-neutral selector retains previous splits through a 20% coarsening
+  band. The GPU triangle classifier has a matching hysteresis policy with
+  per-leaf identity checks; changing an ordinal cannot inherit another leaf's
+  grid step.
+- Camera-demand selection no longer waits for obsolete workers to drain.
+  Ready sibling families can advance independently through a complete,
+  non-overlapping resident cover, separate from planning-tree convergence.
+- CPU height/material residency uses an excess-only LRU budget (1,024 entries
+  for GPU terrain, 512 for CPU meshes), pinning presentation, current requests,
+  worker results and material ancestors. Material GPU layers retain inactive
+  pages until pressure requires eviction; the hardware-clamped upper bound is
+  512 layers, about 42.67 MiB including mips.
+- Material jobs prioritize the view and can build a shared parent before four
+  missing child pages. The existing temporary worker queue allows four material
+  jobs when geometry pressure is low, otherwise two.
+- GPU material generation evaluates the canonical field at each texel rather
+  than interpolating a tile-local macro grid. Material slope uses a fixed 256 m
+  scale and spherical tangent offsets. Matching coordinates now produce the
+  same bytes across adjacent levels. This costs more CPU per cold material page;
+  `cargo bench -p thessa-worldgen-rocky --bench tiles` measures that cost.
+- Indexed shading fades local material into the globe map over a continuous
+  16–32 m physical pixel footprint. This filters the 32 m detail bands at orbital
+  distances without using a flat tile LOD as a colour switch. It is not a full
+  virtual-texture implementation: cold nearby pages can still show a global-map
+  fallback, and coarse mip borders remain a limitation.
+- The GPU cover remains active in pilot orbit; the old 80 km whole-surface
+  switch is removed. The existing complete-cover presentation fence still owns
+  bootstrap visibility.
+
+Reproducible **physical** orbit capture (run from the repository root):
+
+```sh
+THESSA_AUTOBENCH=1 THESSA_AUTOBENCH_STATIC=1 \
+THESSA_AUTOBENCH_VIEW=pilot THESSA_AUTOBENCH_ORBIT_ALTITUDE_M=1000000 \
+THESSA_AUTOBENCH_SCREENSHOT_DIR=/tmp/thessa-orbit \
+target/release/thessa-client --local
+```
+
+This sets an initial inertial spacecraft position and circular velocity from
+its reference body's ephemeris and gravitational parameter, then advances the
+normal authority/physics path at 1x. The camera follows the spacecraft. It is an
+orbital initial-condition fixture, not a simulated launch/ascent. At 100 km,
+atmospheric drag is still allowed to perturb the initial circle. Embedded mode
+rejects this local-only initializer rather than overwriting server authority.
+The eight native screenshots have companion `*.state.json` files with sim time,
+position, velocity, altitude and pause state. These are sampled when the image
+request is queued, so they can precede the captured GPU frame by one frame.
+
+Autobench keeps up to 12,000 frames so the first turn is not lost from the ring.
+The paused camera-sweep utility remains available for isolated cache regression,
+but its images are not evidence of physical spacecraft travel.

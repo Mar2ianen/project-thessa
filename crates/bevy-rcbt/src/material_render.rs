@@ -22,7 +22,7 @@ pub(super) struct MaterialArray {
 
 impl MaterialArray {
     pub fn new(device: &RenderDevice) -> Self {
-        let layers = device.limits().max_texture_array_layers.min(256);
+        let layers = device.limits().max_texture_array_layers.min(512);
         let texture = device.create_texture(&TextureDescriptor {
             label: Some("cbt-material-array"),
             size: Extent3d {
@@ -81,16 +81,23 @@ impl MaterialArray {
                 u64::from(r[0]) | (u64::from(r[1]) << 32),
             )
         });
-        let desired: Vec<_> = records
-            .iter()
-            .filter_map(|r| {
-                let id = u64::from(r[0]) | (u64::from(r[1]) << 32);
+        let sources: Vec<_> = if pages.priority.is_empty() {
+            records
+                .iter()
+                .map(|r| u64::from(r[0]) | (u64::from(r[1]) << 32))
+                .collect()
+        } else {
+            pages.priority.clone()
+        };
+        let desired: Vec<_> = sources
+            .into_iter()
+            .filter_map(|id| {
                 let (source, _) =
                     resolve_material_ancestor(id, |key| pages.pages.contains_key(&key))?;
                 Some((source, pages.pages[&source].0))
             })
             .collect();
-        for change in self.cache.update(&desired) {
+        for change in self.cache.update_retaining(&desired) {
             let (_, page) = &pages.pages[&change.node_id];
             for (level, data) in page.mips.iter().enumerate() {
                 let size = MATERIAL_PAGE_SIZE >> level;
@@ -122,7 +129,17 @@ impl MaterialArray {
         self.slots.clear();
         self.slots.extend(topology.records().iter().map(|r| {
             let id = u64::from(r[0]) | (u64::from(r[1]) << 32);
-            match resolve_material_ancestor(id, |key| self.cache.slot(key).is_some()) {
+            match resolve_material_ancestor(id, |key| {
+                self.cache
+                    .slot(key)
+                    .and_then(|slot| self.cache.entry(slot))
+                    .is_some_and(|entry| {
+                        pages
+                            .pages
+                            .get(&key)
+                            .is_some_and(|(generation, _)| *generation == entry.generation)
+                    })
+            }) {
                 Some((source, uv)) => [
                     self.cache.slot(source).unwrap(),
                     uv[0].to_bits(),

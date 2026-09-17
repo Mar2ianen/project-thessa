@@ -226,6 +226,18 @@ pub struct WorldCounters {
     pub terrain_patches_generated: u32,
     pub terrain_vertices: u64,
     pub terrain_triangles: u64,
+    /// Resident CPU terrain entries (including warm reusable pages).
+    #[serde(default)]
+    pub terrain_cache_entries: u32,
+    #[serde(default)]
+    pub terrain_cache_evictions: u64,
+    #[serde(default)]
+    pub terrain_material_jobs: u32,
+    /// Visible exact pages still missing; an ancestor may provide fallback.
+    #[serde(default)]
+    pub terrain_material_missing: u32,
+    #[serde(default)]
+    pub terrain_selection_changes: u64,
     pub terrain_cache_hits: u64,
     pub terrain_cache_misses: u64,
     pub landmark_zones: u32,

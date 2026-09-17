@@ -28,6 +28,8 @@ pub struct SlotEntry {
 struct Occupied {
     node_id: u64,
     generation: u64,
+    /// Monotonic request epoch used only by the warm retention policy.
+    last_requested: u64,
 }
 
 /// Construction errors for [`SlotCache`].
@@ -69,6 +71,7 @@ impl std::error::Error for SlotCacheError {}
 #[derive(Debug, Clone)]
 pub struct SlotCache {
     slots: Vec<Option<Occupied>>,
+    request_epoch: u64,
 }
 
 impl SlotCache {
@@ -79,6 +82,7 @@ impl SlotCache {
         }
         Ok(Self {
             slots: vec![None; capacity],
+            request_epoch: 0,
         })
     }
 
@@ -124,6 +128,7 @@ impl SlotCache {
 
     /// Retains the highest-priority distinct pages and reports page uploads.
     pub fn update(&mut self, requested: &[(u64, u64)]) -> Vec<SlotChange> {
+        let epoch = self.next_request_epoch();
         // Deduplicate in priority order. Node id 0 is the CBT null node and is
         // ignored so it can never accidentally claim a material layer.
         let mut selected = Vec::with_capacity(self.capacity().min(requested.len()));
@@ -146,6 +151,10 @@ impl SlotCache {
                 continue;
             };
             retained[slot] = true;
+            self.slots[slot]
+                .as_mut()
+                .expect("slot lookup is occupied")
+                .last_requested = epoch;
         }
 
         // Evict pages outside the selected prefix before allocating newcomers.
@@ -180,6 +189,7 @@ impl SlotCache {
             self.slots[slot] = Some(Occupied {
                 node_id,
                 generation,
+                last_requested: epoch,
             });
             changes.push(SlotChange {
                 slot: slot as u32,
@@ -188,6 +198,79 @@ impl SlotCache {
             });
         }
         changes
+    }
+
+    /// Update the requested pages while keeping inactive residents warm.
+    ///
+    /// The first `capacity` distinct, non-zero IDs are protected for this
+    /// update. Existing protected IDs retain their layers and refresh their
+    /// recency. Unrequested residents remain in the cache while there is a
+    /// free layer; when a new ID needs a full cache, the least recently
+    /// requested inactive resident is evicted (slot index breaks ties).
+    pub fn update_retaining(&mut self, requested: &[(u64, u64)]) -> Vec<SlotChange> {
+        let epoch = self.next_request_epoch();
+        let mut selected = Vec::with_capacity(self.capacity().min(requested.len()));
+        for &(node_id, generation) in requested {
+            if node_id == 0 || selected.iter().any(|(id, _)| *id == node_id) {
+                continue;
+            }
+            selected.push((node_id, generation));
+            if selected.len() == self.capacity() {
+                break;
+            }
+        }
+
+        let mut changes = Vec::with_capacity(selected.len());
+        for &(node_id, generation) in &selected {
+            if let Some(slot) = self.slot(node_id).map(|slot| slot as usize) {
+                let occupied = self.slots[slot].as_mut().expect("slot lookup is occupied");
+                occupied.last_requested = epoch;
+                if occupied.generation != generation {
+                    occupied.generation = generation;
+                    changes.push(SlotChange {
+                        slot: slot as u32,
+                        node_id,
+                        generation,
+                    });
+                }
+                continue;
+            }
+
+            let slot = self.slots.iter().position(Option::is_none).or_else(|| {
+                self.slots
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(slot, entry)| {
+                        let occupied = entry.as_ref()?;
+                        (!selected.iter().any(|(id, _)| *id == occupied.node_id))
+                            .then_some((slot, occupied.last_requested))
+                    })
+                    .min_by_key(|&(slot, last_requested)| (last_requested, slot))
+                    .map(|(slot, _)| slot)
+            });
+            let Some(slot) = slot else {
+                // This can only occur if the capacity invariant is violated;
+                // selected is bounded by capacity and all selected IDs were
+                // already processed as residents.
+                continue;
+            };
+            self.slots[slot] = Some(Occupied {
+                node_id,
+                generation,
+                last_requested: epoch,
+            });
+            changes.push(SlotChange {
+                slot: slot as u32,
+                node_id,
+                generation,
+            });
+        }
+        changes
+    }
+
+    fn next_request_epoch(&mut self) -> u64 {
+        self.request_epoch = self.request_epoch.saturating_add(1);
+        self.request_epoch
     }
 }
 
@@ -277,6 +360,53 @@ mod tests {
         assert!(cache.update(&[]).is_empty());
         assert!(cache.is_empty());
         assert_eq!(cache.iter().count(), 0);
+    }
+
+    #[test]
+    fn warm_revisit_causes_no_upload() {
+        let mut cache = SlotCache::new(2).unwrap();
+        cache.update_retaining(&[(11, 1), (22, 1)]);
+        assert!(cache.update_retaining(&[(11, 1)]).is_empty());
+        assert_eq!(cache.slot(22), Some(1));
+        assert!(cache.update_retaining(&[(22, 1)]).is_empty());
+    }
+
+    #[test]
+    fn full_cache_evicts_only_the_oldest_inactive_entry() {
+        let mut cache = SlotCache::new(2).unwrap();
+        cache.update_retaining(&[(11, 1), (22, 1)]);
+        cache.update_retaining(&[(11, 1)]);
+        let changes = cache.update_retaining(&[(33, 1)]);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(cache.slot(11), Some(0));
+        assert_eq!(cache.slot(22), None);
+        assert_eq!(cache.slot(33), Some(1));
+    }
+
+    #[test]
+    fn warm_requested_generation_change_reuploads_in_place() {
+        let mut cache = SlotCache::new(2).unwrap();
+        cache.update_retaining(&[(11, 4), (22, 8)]);
+        let slot = cache.slot(11).unwrap();
+        assert_eq!(
+            cache.update_retaining(&[(11, 5)]),
+            vec![SlotChange {
+                slot,
+                node_id: 11,
+                generation: 5,
+            }]
+        );
+        assert_eq!(cache.slot(11), Some(slot));
+    }
+
+    #[test]
+    fn warm_duplicate_requests_are_distinct_and_capacity_bounded() {
+        let mut cache = SlotCache::new(2).unwrap();
+        let changes = cache.update_retaining(&[(11, 1), (11, 9), (22, 2), (33, 3)]);
+        assert_eq!(changes.len(), 2);
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.entry(cache.slot(11).unwrap()).unwrap().generation, 1);
+        assert_eq!(cache.slot(33), None);
     }
 }
 

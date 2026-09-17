@@ -388,13 +388,41 @@ impl PlanetField {
             + crate::terrain::eval_meso_m(self.params.seed, knobs, lat, lon, self.params.radius_m)
     }
 
-    fn slope_hint(&self, dir: [f64; 3], wavelength_m: f64) -> f64 {
-        // Offset along two tangent axes by half a wavelength.
-        let (lat, lon) = latlon_from_dir(dir);
-        let d_deg = (wavelength_m * 0.5 / self.params.radius_m).to_degrees();
+    /// Estimate the material slope at a physical scale.  Keeping this scale
+    /// independent of the requesting tile makes biome transitions stable as
+    /// a tile crosses an LOD boundary.
+    pub(crate) fn slope_hint(&self, dir: [f64; 3], wavelength_m: f64) -> f64 {
+        // Offset along two orthonormal tangent axes by half a wavelength.
+        // Latitude/longitude offsets are ill-conditioned near the poles:
+        // longitude's metres-per-degree tends to zero there and used to make
+        // the material slope latitude-dependent.
+        let up = [0.0, 1.0, 0.0];
+        let mut east = [
+            up[1] * dir[2] - up[2] * dir[1],
+            up[2] * dir[0] - up[0] * dir[2],
+            up[0] * dir[1] - up[1] * dir[0],
+        ];
+        let east_norm = (east[0] * east[0] + east[1] * east[1] + east[2] * east[2]).sqrt();
+        if east_norm < 1.0e-12 {
+            east = [1.0, 0.0, 0.0];
+        } else {
+            east = east.map(|v| v / east_norm);
+        }
+        let mut north = [
+            dir[1] * east[2] - dir[2] * east[1],
+            dir[2] * east[0] - dir[0] * east[2],
+            dir[0] * east[1] - dir[1] * east[0],
+        ];
+        let north_norm = (north[0] * north[0] + north[1] * north[1] + north[2] * north[2]).sqrt();
+        north = north.map(|v| v / north_norm);
+        let angle = (wavelength_m * 0.5 / self.params.radius_m).max(1.0 / self.params.radius_m);
+        let (sin_angle, cos_angle) = angle.sin_cos();
+        let offset = |tangent: [f64; 3]| {
+            std::array::from_fn(|i| dir[i] * cos_angle + tangent[i] * sin_angle)
+        };
         let h0 = self.base_height(dir);
-        let hx = self.base_height(dir_from_latlon(lat, lon + d_deg));
-        let hy = self.base_height(dir_from_latlon((lat + d_deg).clamp(-90.0, 90.0), lon));
+        let hx = self.base_height(offset(east));
+        let hy = self.base_height(offset(north));
         let dx = (wavelength_m * 0.5).max(1.0);
         (((hx - h0) / dx).powi(2) + ((hy - h0) / dx).powi(2)).sqrt()
     }
@@ -714,6 +742,15 @@ mod tests {
             let p = field.sample(dir_from_latlon(90.0, lon), 100.0);
             assert_eq!(p0.height_m, p.height_m, "lon {lon}");
         }
+    }
+
+    #[test]
+    fn material_slope_is_finite_and_coordinate_stable_at_pole() {
+        let field = test_field();
+        let a = field.slope_hint(dir_from_latlon(90.0, 0.0), 256.0);
+        let b = field.slope_hint(dir_from_latlon(90.0, 137.0), 256.0);
+        assert!(a.is_finite() && b.is_finite());
+        assert!((a - b).abs() < 1.0e-10, "a={a}, b={b}");
     }
 
     #[test]

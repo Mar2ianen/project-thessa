@@ -135,6 +135,36 @@ impl CbtRenderTopology {
         if nodes.iter().any(|node| !tree.contains(*node)) {
             return false;
         }
+        self.publish_leaf_records(tree.max_depth(), nodes)
+    }
+
+    /// Publish a page-resident presentation partition independently of the
+    /// planning tree. The adapter owns completeness and page residency; this
+    /// boundary rejects duplicates and ancestor/descendant overlap atomically.
+    pub fn publish_resident_leaves(&mut self, nodes: &[thessa_rcbt_core::Node]) -> bool {
+        let ids: std::collections::BTreeSet<_> = nodes.iter().map(|node| node.id()).collect();
+        if ids.len() != nodes.len() {
+            return false;
+        }
+        for node in nodes {
+            let mut parent = node.parent();
+            while let Some(ancestor) = parent {
+                if ids.contains(&ancestor.id()) {
+                    return false;
+                }
+                parent = ancestor.parent();
+            }
+        }
+        let depth = nodes
+            .iter()
+            .map(|node| node.depth())
+            .max()
+            .unwrap_or(0)
+            .max(self.max_depth);
+        self.publish_leaf_records(depth, nodes)
+    }
+
+    fn publish_leaf_records(&mut self, max_depth: u8, nodes: &[thessa_rcbt_core::Node]) -> bool {
         let records: Vec<_> = nodes
             .iter()
             .enumerate()
@@ -148,9 +178,9 @@ impl CbtRenderTopology {
             })
             .collect();
         self.adapter_managed = true;
-        if self.records != records || self.max_depth != tree.max_depth() {
+        if self.records != records || self.max_depth != max_depth {
             self.records = records;
-            self.max_depth = tree.max_depth();
+            self.max_depth = max_depth;
             self.generation = self.generation.saturating_add(1);
         }
         true
@@ -715,6 +745,23 @@ mod tests {
         let id = u64::from(record[0]) | (u64::from(record[1]) << 32);
         assert_eq!(id, node.id());
         assert_eq!(record[3] as usize, tree.encode_leaf(node).unwrap());
+    }
+
+    #[test]
+    fn resident_presentation_accepts_history_but_rejects_overlap_atomically() {
+        let tree = Tree::at_depth(12, 3).unwrap();
+        let parent = Node::new(8, 3).unwrap();
+        let children = parent.children().unwrap();
+        let mut snapshot = CbtRenderTopology::from_tree(&tree);
+        assert!(!snapshot.publish_ready_leaves(&tree, &children));
+        assert!(snapshot.publish_resident_leaves(&children));
+        let before = snapshot.records().to_vec();
+        let generation = snapshot.generation();
+        assert!(!snapshot.publish_resident_leaves(&[parent, children[0]]));
+        assert!(!snapshot.publish_resident_leaves(&[children[0], children[0]]));
+        assert_eq!(snapshot.records(), before);
+        assert_eq!(snapshot.generation(), generation);
+        assert!(snapshot.publish_resident_leaves(&[parent]));
     }
 
     #[test]

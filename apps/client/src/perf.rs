@@ -65,7 +65,12 @@ impl PerfMonitor {
 
 impl Default for PerfMonitor {
     fn default() -> Self {
-        let mut collector = PerfCollector::with_default_capacity();
+        let mut collector = if std::env::var_os("THESSA_AUTOBENCH").is_some() {
+            // Keep the whole camera/flight sequence, including the first turn.
+            PerfCollector::new(12_000)
+        } else {
+            PerfCollector::with_default_capacity()
+        };
         match std::env::var("THESSA_PROFILE").as_deref() {
             Ok("off") => collector.set_level(ProfilingLevel::Off),
             Ok("detailed") => collector.set_level(ProfilingLevel::Detailed),
@@ -242,6 +247,7 @@ struct Autobench {
     boot: Option<Instant>,
     view_initialized: bool,
     screenshot_requested: bool,
+    screenshot_step: usize,
 }
 
 /// (requested warp, dwell in wall seconds). Warmup precedes rung 0.
@@ -257,6 +263,9 @@ fn perf_autobench(
     window: Single<&Window, With<PrimaryWindow>>,
     map: Option<Res<MapState>>,
     mut pilot: ResMut<PilotHudState>,
+    mut flight: Option<ResMut<PilotFlightRuntime>>,
+    ephemeris: Option<Res<RuntimeEphemeris>>,
+    embedded: Option<Res<crate::embedded::EmbeddedLink>>,
     mut survey: ResMut<terrain::SurfaceSurvey>,
     graphics: Option<Res<GraphicsResolved>>,
     mut app_exit: MessageWriter<AppExit>,
@@ -280,6 +289,39 @@ fn perf_autobench(
         {
             clock.paused = true;
         }
+        if let Ok(value) = std::env::var("THESSA_AUTOBENCH_ORBIT_ALTITUDE_M") {
+            match (value.parse::<f64>(), flight.as_deref_mut(), ephemeris.as_deref()) {
+                (Ok(altitude_m), Some(flight), Some(ephemeris)) if embedded.is_none() => {
+                    if let Err(error) = flight.initialize_circular_orbit_benchmark(
+                        &ephemeris.ephemeris,
+                        altitude_m,
+                    ) {
+                        monitor.push_event("orbit benchmark initialization failed", Some(error));
+                    } else {
+                        pilot.set_benchmark_chase_view();
+                        survey.active = false;
+                        if let Some(clock) = clock.as_deref_mut() {
+                            clock.paused = false;
+                            clock.multiplier = 1.0;
+                        }
+                        monitor.push_event(
+                            "orbit benchmark initialized",
+                            Some(format!("altitude_m={altitude_m:.0}")),
+                        );
+                    }
+                }
+                (_, _, _) if embedded.is_some() => {
+                    monitor.push_event(
+                        "orbit benchmark requires local authority",
+                        Some("unset the embedded-server mode before starting the capture".into()),
+                    );
+                }
+                _ => monitor.push_event(
+                    "orbit benchmark initialization failed",
+                    Some("altitude must be a finite number and the client authority must be ready".into()),
+                ),
+            }
+        }
         bench.view_initialized = true;
     }
     // The export task outlives the capture: poll it here exactly like the
@@ -297,6 +339,59 @@ fn perf_autobench(
         let phase = (boot.elapsed().as_secs_f32() - AUTOBENCH_WARMUP_S as f32).max(0.0);
         pilot.pilot_camera_orbit =
             Quat::from_rotation_y(phase * 0.6) * Quat::from_rotation_x(-0.18);
+    }
+    if std::env::var_os("THESSA_AUTOBENCH_CAMERA_SWEEP").is_some() {
+        let t = (boot.elapsed().as_secs_f32() - AUTOBENCH_WARMUP_S as f32).max(0.0);
+        let yaw = if t < 6.0 {
+            0.0
+        } else if t < 8.0 {
+            (t - 6.0) * 0.7
+        } else if t < 14.0 {
+            1.4
+        } else if t < 16.0 {
+            (16.0 - t) * 0.7
+        } else if t < 22.0 {
+            0.0
+        } else if t < 24.0 {
+            (t - 22.0) * 0.7
+        } else {
+            1.4
+        };
+        let orbit = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-0.65);
+        pilot.pilot_camera_orbit = orbit;
+        survey.orbit = orbit;
+    }
+    const SHOTS: [f64; 8] = [11.0, 14.0, 19.0, 22.0, 27.0, 30.0, 35.0, 39.0];
+    if let Some(directory) = std::env::var_os("THESSA_AUTOBENCH_SCREENSHOT_DIR")
+        && bench.screenshot_step < SHOTS.len()
+        && boot.elapsed().as_secs_f64() >= SHOTS[bench.screenshot_step]
+    {
+        use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+        let directory = std::path::PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).expect("benchmark screenshot directory");
+        let path = directory.join(format!(
+            "{:02}-{:02}s.png",
+            bench.screenshot_step, SHOTS[bench.screenshot_step] as u32
+        ));
+        if let Some(flight) = flight.as_deref() {
+            // Pair each native image with authoritative state at request time;
+            // moving a camera cannot be mistaken for moving the spacecraft.
+            let state = format!(
+                "{{\"flight_time_s\":{},\"relative_position_m\":{:?},\"position_inertial_m\":{:?},\"velocity_inertial_mps\":{:?},\"altitude_m\":{},\"paused\":{}}}\n",
+                flight.flight_time_s,
+                flight.relative_position_m.to_array(),
+                flight.state.position_inertial_m.to_array(),
+                flight.state.velocity_inertial_mps.to_array(),
+                flight.relative_position_m.length() - flight.planet_radius_m,
+                clock.as_deref().is_some_and(|clock| clock.paused),
+            );
+            std::fs::write(path.with_extension("state.json"), state)
+                .expect("benchmark spacecraft state");
+        }
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(path));
+        bench.screenshot_step += 1;
     }
     if boot.elapsed().as_secs_f64() < AUTOBENCH_WARMUP_S {
         return;

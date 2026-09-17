@@ -48,6 +48,9 @@ pub(super) struct WorldTerrain {
     jobs: BTreeMap<TileKey, Task<TerrainBuildOutput>>,
     material_jobs: BTreeMap<TileKey, Task<thessa_bevy_rcbt::CbtMaterialPage>>,
     wanted: Vec<TileKey>,
+    fine_selection: Vec<TileKey>,
+    selection_epoch: u64,
+    cover_dirty: bool,
     visible: BTreeSet<TileKey>,
     selection_at: f64,
     /// A bounded CBT plan may take several PostUpdate frames to converge.
@@ -62,6 +65,7 @@ pub(super) struct WorldTerrain {
     eye_speed_mps: f64,
 }
 struct CachedTile {
+    last_used: u64,
     mesh: Option<Handle<Mesh>>,
     anchor: DVec3,
     vertices: u64,
@@ -94,7 +98,7 @@ pub(super) struct SurfaceSurvey {
     site: usize,
     #[reflect(ignore)]
     sites: Vec<([f64; 3], &'static str)>,
-    orbit: Quat,
+    pub(super) orbit: Quat,
     look: Quat,
     distance: f32,
 }
@@ -286,6 +290,9 @@ fn setup_terrain(
         jobs: BTreeMap::new(),
         material_jobs: BTreeMap::new(),
         wanted: vec![],
+        fine_selection: Vec::new(),
+        selection_epoch: 0,
+        cover_dirty: true,
         visible: BTreeSet::new(),
         selection_at: -1.0,
         topology_pending: false,
@@ -686,9 +693,10 @@ fn update_terrain(
             }
         })
         .unwrap_or(24);
-    let active = survey.active
-        || (pilot.view_mode == ClientViewMode::Pilot
-            && runtime.render_terrain_origin_m().length() - world.field.params.radius_m < 80000.0);
+    // The same coarse-to-fine cover remains valid in orbit. An altitude gate
+    // swapped the whole surface to a different sphere at 80 km and bypassed
+    // the presentation fence during physical ascents/descents.
+    let active = survey.active || pilot.view_mode == ClientViewMode::Pilot;
     let gpu_raster = cbt.surface.gpu_raster_enabled();
     // The GPU raster consumer must not draw its fallback 1x1 texture over a
     // valid bootstrap sphere: that fallback is intentionally neutral grey and
@@ -702,30 +710,26 @@ fn update_terrain(
                     .as_ref()
                     .is_none_or(|map| images.get(map).is_some())
         });
-    // Every disjoint requested tile must be an exact resident leaf. Partial
-    // overlap is not coverage: a single descendant cannot cover its parent.
-    let cover_current = world.visible.len() == world.wanted.len()
-        && world.wanted.iter().all(|key| world.visible.contains(key));
-    let replacement_ready = !cover_current
-        && gpu_raster
-        && gpu_albedo_ready
-        && !world.wanted.is_empty()
-        && world.wanted.iter().all(|key| {
-            lod::cbt_node_for_tile(*key).is_some_and(|node| {
-                cbt.state.topology().contains(node) && cbt.pages.contains_page(node.id())
+    // Presentation advances ready families independently of planning-tree
+    // convergence. Every published partition still covers the requested area.
+    if active && gpu_raster && gpu_albedo_ready && world.cover_dirty && !world.wanted.is_empty() {
+        world.cover_dirty = false;
+        let previous: Vec<_> = world.visible.iter().copied().collect();
+        if let Some(cover) =
+            thessa_worldgen_rocky::streaming::resident_cover(&world.wanted, &previous, |key| {
+                lod::cbt_node_for_tile(key).is_some_and(|node| cbt.pages.contains_page(node.id()))
             })
-        });
-    if active && replacement_ready {
-        let nodes: Vec<_> = world
-            .wanted
-            .iter()
-            .filter_map(|key| lod::cbt_node_for_tile(*key))
-            .collect();
-        if cbt
-            .topology
-            .publish_ready_leaves(cbt.state.topology(), &nodes)
         {
-            world.visible = world.wanted.iter().copied().collect();
+            let cover: BTreeSet<_> = cover.into_iter().collect();
+            if !cover.is_empty() && cover != world.visible {
+                let nodes: Vec<_> = cover
+                    .iter()
+                    .filter_map(|key| lod::cbt_node_for_tile(*key))
+                    .collect();
+                if cbt.topology.publish_resident_leaves(&nodes) {
+                    world.visible = cover;
+                }
+            }
         }
     }
     // Keep the last complete draw snapshot and its pages while workers and
@@ -905,14 +909,10 @@ fn update_terrain(
     let selection_started = Instant::now();
     let mut selection_changed = false;
     if now_s - world.selection_at > 0.75 || moved || world.wanted.is_empty() {
-        // Reselect when workers are nearly drained. Existing coverage is
-        // retained until its overlapping replacements are ready; disjoint
-        // completed tiles appear without waiting for the entire selection.
-        if world.jobs.len() <= 2
-            && (!gpu_raster
-                || world.wanted.is_empty()
-                || world.wanted.iter().all(|key| world.visible.contains(key)))
-        {
+        // Camera demand must not wait behind an obsolete worker queue.
+        // Coalesce input changes to at most ~7 selections/s; workers finish
+        // into the warm cache while free slots follow the newest request.
+        if now_s - world.selection_at >= 0.15 || world.wanted.is_empty() {
             // Two-tier selection: a coarse horizon cover WITHOUT frustum
             // culling (L7, ~96 tiles) guarantees no holes ever — frustum
             // swings between selections used to cull visible regions faster
@@ -929,7 +929,7 @@ fn update_terrain(
                 None,
                 detail_bias,
             );
-            let mut fine = lod::select_tiles_with_height_and_frustum(
+            let fine = lod::select_tiles_with_history(
                 eye.to_array(),
                 radius,
                 17,
@@ -937,8 +937,10 @@ fn update_terrain(
                 |dir| world.field.height_m(dir, 32.0),
                 frustum,
                 detail_bias,
+                &world.fine_selection,
             );
-            wanted.append(&mut fine);
+            world.fine_selection = fine.clone();
+            wanted.extend(fine);
             wanted.sort();
             wanted.dedup();
             // GPU draws exact leaves; fill coarse siblings before requesting
@@ -948,6 +950,13 @@ fn update_terrain(
             } else {
                 wanted
             };
+            world.counters.terrain_cache_hits += world
+                .wanted
+                .iter()
+                .filter(|key| world.cache.contains_key(key))
+                .count() as u64;
+            world.selection_epoch = world.selection_epoch.saturating_add(1);
+            world.cover_dirty = true;
             world.selection_at = now_s;
             world.selected_eye = eye;
             world.selected_stream_origin = stream_origin;
@@ -1047,9 +1056,11 @@ fn update_terrain(
             (None, None) => (None, None, None),
             _ => unreachable!("terrain output mesh/material payload must be paired"),
         };
+        let last_used = world.selection_epoch;
         world.cache.insert(
             key,
             CachedTile {
+                last_used,
                 mesh,
                 anchor,
                 vertices,
@@ -1060,6 +1071,7 @@ fn update_terrain(
             },
         );
         world.counters.terrain_patches_generated += 1;
+        world.cover_dirty = true;
     }
     perf.record_scope(
         "world.terrain_asset_upload",
@@ -1069,8 +1081,22 @@ fn update_terrain(
     // then nearest-first for detail. Key order is arbitrary — without this
     // the near field waits behind hundreds of far tiles, and without the
     // coarse-first rule a fresh selection shows sky through missing cover.
-    let mut pending: Vec<_> = world
-        .wanted
+    // Intermediate height pages enable progressive complete covers. Stop
+    // walking at an already resident ancestor; never rebuild warm parents.
+    let mut dependencies: BTreeSet<_> = world.wanted.iter().copied().collect();
+    if gpu_raster {
+        for key in &world.wanted {
+            let mut ancestor = key.parent();
+            while let Some(parent) = ancestor {
+                dependencies.insert(parent);
+                if world.cache.contains_key(&parent) {
+                    break;
+                }
+                ancestor = parent.parent();
+            }
+        }
+    }
+    let mut pending: Vec<_> = dependencies
         .iter()
         .filter(|key| !world.cache.contains_key(key) && !world.jobs.contains_key(key))
         .copied()
@@ -1093,6 +1119,10 @@ fn update_terrain(
         // Coarse cover sorts before everything (level is the major key).
         (
             key.level.min(8),
+            ((DVec3::from_array(key.direction(0.5, 0.5)) * radius - eye)
+                .normalize_or_zero()
+                .dot(forward_body)
+                < -0.15),
             std::cmp::Reverse(priority(&world.field, eye, radius, *key).to_bits()),
         )
     });
@@ -1202,16 +1232,53 @@ fn update_terrain(
                 cbt.material_pages.set_page(node.id(), page);
             }
         }
-        let mut material_wanted: Vec<_> = world.visible.iter().copied().collect();
-        material_wanted.sort_by_key(|key| {
+        let mut material_wanted: Vec<_> = world
+            .visible
+            .iter()
+            .copied()
+            .chain(
+                world
+                    .wanted
+                    .iter()
+                    .copied()
+                    .filter(|key| world.cache.contains_key(key)),
+            )
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        material_wanted.sort_by_cached_key(|key| {
+            let delta = DVec3::from_array(key.direction(0.5, 0.5)) * radius - eye;
             (
+                delta.normalize_or_zero().dot(forward_body) < -0.15,
                 std::cmp::Reverse(key.level),
-                lod::cbt_node_for_tile(*key).map_or(0, |node| node.id()),
+                delta.length_squared().to_bits(),
+                *key,
             )
         });
         material_wanted.truncate(256);
+        cbt.material_pages.set_priority(
+            material_wanted
+                .iter()
+                .filter_map(|key| lod::cbt_node_for_tile(*key).map(|node| node.id()))
+                .collect(),
+        );
         for key in material_wanted {
-            if world.material_jobs.len() >= 2 {
+            // One coarse material can cover four children while fine pages
+            // bake. Produce that shared source first when no ancestor exists.
+            let key = if lod::cbt_node_for_tile(key).is_some_and(|node| {
+                thessa_bevy_rcbt::material_cache::resolve_material_ancestor(node.id(), |id| {
+                    cbt.material_pages.contains_page(id)
+                })
+                .is_none()
+            }) {
+                key.parent()
+                    .filter(|parent| world.cache.contains_key(parent))
+                    .unwrap_or(key)
+            } else {
+                key
+            };
+            let material_budget = if world.jobs.len() < 4 { 4 } else { 2 };
+            if world.material_jobs.len() >= material_budget {
                 break;
             }
             let Some(node) = lod::cbt_node_for_tile(key) else {
@@ -1317,53 +1384,76 @@ fn update_terrain(
             *visibility = Visibility::Hidden;
         }
     }
-    // Bounded cache, retaining visible and in-flight selection only.
-    if world.cache.len() > 512 {
-        // A geometry parent can still supply a child's material while its
-        // finer page is baking. Keep those dependencies through cache eviction.
-        let material_sources: BTreeSet<_> = world
-            .visible
-            .iter()
-            .filter_map(|key| {
-                let node = lod::cbt_node_for_tile(*key)?;
-                thessa_bevy_rcbt::material_cache::resolve_material_ancestor(node.id(), |id| {
-                    cbt.material_pages.contains_page(id)
-                })
-                .map(|(id, _)| id)
+    // Warm LRU: a camera turn is not a reason to discard previously built
+    // pages. Keep current cover, current demand and material ancestors pinned;
+    // evict only the excess, oldest first. GPU pages are much smaller than the
+    // CPU mesh/material bundle, so their cache gets a separate entry budget.
+    let material_sources: BTreeSet<_> = world
+        .visible
+        .iter()
+        .filter_map(|key| {
+            let node = lod::cbt_node_for_tile(*key)?;
+            thessa_bevy_rcbt::material_cache::resolve_material_ancestor(node.id(), |id| {
+                cbt.material_pages.contains_page(id)
             })
-            .collect();
-        let stale: Vec<_> = world
-            .cache
-            .keys()
-            .filter(|k| {
-                !world.visible.contains(k)
-                    && !world.wanted.contains(k)
-                    && lod::cbt_node_for_tile(**k)
-                        .is_none_or(|node| !material_sources.contains(&node.id()))
-            })
-            .copied()
-            .collect();
-        for key in stale {
-            if let Some(tile) = world.cache.remove(&key) {
-                if let Some(node) = lod::cbt_node_for_tile(key) {
-                    cbt.pages.remove_page(node.id());
-                    cbt.material_pages.remove_page(node.id());
-                }
-                if let Some(mesh) = tile.mesh {
-                    meshes.remove(mesh.id());
-                }
-                if let Some(material) = tile.material {
-                    materials.remove(material.id());
-                }
-                if let Some(tile_images) = tile.images {
-                    for image in tile_images {
-                        images.remove(image.id());
-                    }
+            .map(|(id, _)| id)
+        })
+        .collect();
+    let protected: BTreeSet<_> = world
+        .visible
+        .iter()
+        .copied()
+        .chain(dependencies)
+        .chain(world.jobs.keys().copied())
+        .chain(world.material_jobs.keys().copied())
+        .chain(world.cache.keys().copied().filter(|key| {
+            lod::cbt_node_for_tile(*key).is_some_and(|node| material_sources.contains(&node.id()))
+        }))
+        .collect();
+    let epoch = world.selection_epoch;
+    for key in &protected {
+        if let Some(tile) = world.cache.get_mut(key) {
+            tile.last_used = epoch;
+        }
+    }
+    let entries: Vec<_> = world
+        .cache
+        .iter()
+        .map(|(key, tile)| (*key, tile.last_used))
+        .collect();
+    let capacity = if gpu_raster { 1024 } else { 512 };
+    for key in thessa_worldgen_rocky::streaming::lru_evictions(&entries, &protected, capacity) {
+        if let Some(tile) = world.cache.remove(&key) {
+            world.counters.terrain_cache_evictions += 1;
+            if let Some(node) = lod::cbt_node_for_tile(key) {
+                cbt.pages.remove_page(node.id());
+                cbt.material_pages.remove_page(node.id());
+            }
+            if let Some(mesh) = tile.mesh {
+                meshes.remove(mesh.id());
+            }
+            if let Some(material) = tile.material {
+                materials.remove(material.id());
+            }
+            if let Some(tile_images) = tile.images {
+                for image in tile_images {
+                    images.remove(image.id());
                 }
             }
         }
     }
     let counters_started = Instant::now();
+    world.counters.terrain_cache_entries = world.cache.len() as u32;
+    world.counters.terrain_material_jobs = world.material_jobs.len() as u32;
+    world.counters.terrain_selection_changes = world.selection_epoch;
+    world.counters.terrain_material_missing = world
+        .visible
+        .iter()
+        .filter(|key| {
+            lod::cbt_node_for_tile(**key)
+                .is_none_or(|node| !cbt.material_pages.contains_page(node.id()))
+        })
+        .count() as u32;
     world.counters.assets_loaded = world.cache.len() as u32 * 5;
     world.counters.assets_pending = world.jobs.len() as u32 * 5;
     world.counters.terrain_patches_visible = world.visible.len() as u32;

@@ -70,10 +70,19 @@ impl CbtMaterialPage {
 #[derive(Debug, Clone, Default, Resource)]
 pub struct CbtRenderMaterialPages {
     pub(crate) generation: u64,
+    pub(crate) priority: Vec<u64>,
     pub(crate) pages: BTreeMap<u64, (u64, CbtMaterialPage)>,
 }
 
 impl CbtRenderMaterialPages {
+    /// Ordered visible/prefetch sources, independent from topology ordering.
+    pub fn set_priority(&mut self, priority: Vec<u64>) {
+        if self.priority != priority {
+            self.priority = priority;
+            self.generation = self.generation.saturating_add(1);
+        }
+    }
+
     pub fn byte_len(&self) -> usize {
         self.pages.values().map(|(_, page)| page.byte_len()).sum()
     }

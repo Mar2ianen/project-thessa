@@ -27,6 +27,7 @@ pub mod rng;
 pub mod scatter;
 pub mod spec_recipe;
 pub mod sphere;
+pub mod streaming;
 pub mod system_body;
 pub mod tectonics;
 pub mod terrain;

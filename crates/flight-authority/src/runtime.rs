@@ -394,6 +394,60 @@ pub struct FlightAuthority {
 }
 
 impl FlightAuthority {
+    /// Initialize an opt-in, physically consistent circular orbit benchmark.
+    /// Position and velocity are inertial and include the reference body's
+    /// ephemeris translation; no render transform or camera state is touched.
+    pub fn initialize_circular_orbit(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        altitude_m: f64,
+        plane_normal: DVec3,
+    ) -> Result<(), FlightError> {
+        if !altitude_m.is_finite() || altitude_m < 0.0 {
+            return Err(FlightError::InvalidInput(
+                "orbit altitude must be finite and non-negative".into(),
+            ));
+        }
+        let normal = normalize_direction(plane_normal, "orbit plane normal")?;
+        let body = ephemeris
+            .body(self.reference_body)
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+        let radius = body.radius_m + altitude_m;
+        if !radius.is_finite() || radius <= 0.0 || !body.mu.is_finite() || body.mu <= 0.0 {
+            return Err(FlightError::InvalidInput(
+                "reference body has invalid orbit parameters".into(),
+            ));
+        }
+        let body_state = ephemeris
+            .body_state(self.reference_body, SimTime(self.flight_time_s))
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+        let helper = if normal.z.abs() < 0.9 { DVec3::Z } else { DVec3::X };
+        let radial = normalize_direction(normal.cross(helper), "orbit radial")?;
+        let prograde = normalize_direction(normal.cross(radial), "orbit prograde")?;
+        let lateral = radial.cross(prograde);
+        let relative_position = radial * radius;
+        let state = RigidBodyState::new(
+            body_state.position_inertial + relative_position,
+            body_state.velocity_inertial + prograde * (body.mu / radius).sqrt(),
+            DQuat::from_mat3(&DMat3::from_cols(prograde, lateral, radial)),
+            DVec3::ZERO,
+        )?;
+        self.state = state;
+        self.sas_target_orientation = state.orientation_body_to_inertial;
+        self.relative_position_m = relative_position;
+        self.launch_site_dir = None;
+        self.throttle = 0.0;
+        self.engine_active = false;
+        self.control_input = DVec3::ZERO;
+        self.surface_input = DVec3::ZERO;
+        self.accumulator_s = 0.0;
+        self.flight_error = None;
+        self.regime = FlightRegime::Aero;
+        self.rails.invalidate();
+        self.bake.reset();
+        Ok(())
+    }
+
     pub fn initialize_world_site(
         &mut self,
         field: Arc<PlanetField>,
@@ -3008,6 +3062,26 @@ mod tests {
         flight.throttle = 0.0;
         flight.control_input = DVec3::ZERO;
         (ephemeris, flight)
+    }
+
+    #[test]
+    fn circular_orbit_initializer_sets_body_relative_circular_state() {
+        let (ephemeris, mut flight) = fixture();
+        let altitude_m = 1_000_000.0;
+        flight
+            .initialize_circular_orbit(&ephemeris, altitude_m, DVec3::Y)
+            .unwrap();
+        let body = ephemeris.body(flight.reference_body).unwrap();
+        let body_state = ephemeris
+            .body_state(flight.reference_body, SimTime::EPOCH)
+            .unwrap();
+        let relative = flight.state.position_inertial_m - body_state.position_inertial;
+        let relative_velocity = flight.state.velocity_inertial_mps - body_state.velocity_inertial;
+        assert!((relative.length() - (body.radius_m + altitude_m)).abs() < 1.0e-6);
+        assert!((relative_velocity.length() - (body.mu / relative.length()).sqrt()).abs() < 1.0e-9);
+        assert!(relative.dot(relative_velocity).abs() < 1.0e-6);
+        assert_eq!(flight.relative_position_m, relative);
+        assert!(!flight.engine_active);
     }
 
     #[test]

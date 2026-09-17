@@ -195,9 +195,52 @@ pub fn select_tiles_with_height_and_frustum(
     frustum: Option<SelectionFrustum>,
     detail_bias: f64,
 ) -> Vec<TileKey> {
+    select_tiles_with_history(
+        eye,
+        radius,
+        max_level,
+        budget,
+        height,
+        frustum,
+        detail_bias,
+        &[],
+    )
+}
+
+/// History-aware variant of [`select_tiles_with_height_and_frustum`].
+///
+/// A node that was previously split gets a lower split threshold, which keeps
+/// small camera/distance oscillations from repeatedly replacing its children.
+/// The previous state is used only as a deterministic priority bias; the
+/// returned set is still rebuilt from the current eye and remains bounded by
+/// `budget`.
+pub fn select_tiles_with_history(
+    eye: [f64; 3],
+    radius: f64,
+    max_level: u8,
+    budget: usize,
+    height: impl Fn([f64; 3]) -> f64,
+    frustum: Option<SelectionFrustum>,
+    detail_bias: f64,
+    previous: &[TileKey],
+) -> Vec<TileKey> {
     let eye_r = dot(eye, eye).sqrt();
     let eye_dir = normalize(eye);
     let horizon = (radius / eye_r.max(radius)).clamp(0.0, 1.0).acos();
+    let previously_split: std::collections::BTreeSet<_> = previous
+        .iter()
+        .filter_map(|key| {
+            let mut ancestor = key.parent()?;
+            let mut ancestors = Vec::with_capacity(usize::from(key.level));
+            ancestors.push(ancestor);
+            while let Some(parent) = ancestor.parent() {
+                ancestors.push(parent);
+                ancestor = parent;
+            }
+            Some(ancestors)
+        })
+        .flatten()
+        .collect();
     // Coverage culling is horizon-only, deliberately NOT frustum-culled:
     // hard culling by view cone deletes regions the frame still shows
     // (a forward-looking chase camera sees ground up to ~90° off-axis at
@@ -286,11 +329,28 @@ pub fn select_tiles_with_height_and_frustum(
             .iter()
             .enumerate()
             .filter(|(_, key)| key.level < max_level.min(20))
-            .max_by(|(_, a), (_, b)| priority(**a).total_cmp(&priority(**b)));
+            .max_by(|(_, a), (_, b)| {
+                let a_threshold = if previously_split.contains(a) {
+                    0.8
+                } else {
+                    1.0
+                };
+                let b_threshold = if previously_split.contains(b) {
+                    0.8
+                } else {
+                    1.0
+                };
+                (priority(**a) / a_threshold).total_cmp(&(priority(**b) / b_threshold))
+            });
         let Some((index, key)) = candidate else {
             break;
         };
-        if priority(*key) <= 1.0 {
+        let threshold = if previously_split.contains(key) {
+            0.8
+        } else {
+            1.0
+        };
+        if priority(*key) / threshold <= 1.0 {
             break;
         }
         let children = key.children();
@@ -475,6 +535,98 @@ mod tests {
     }
 
     #[test]
+    fn history_same_view_is_stable() {
+        let eye = [3_201_000.0, 0.0, 0.0];
+        let first = select_tiles_with_history(eye, 3_200_000.0, 17, 192, |_| 0.0, None, 1.0, &[]);
+        let second =
+            select_tiles_with_history(eye, 3_200_000.0, 17, 192, |_| 0.0, None, 1.0, &first);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn history_reduces_small_oscillation_churn() {
+        use std::collections::BTreeSet;
+        let eye = |y| [3_201_000.0, y, 0.0];
+        let positions = [0.0, 2.0, -2.0, 2.0, -2.0];
+        let stateless: Vec<_> = positions
+            .iter()
+            .map(|&y| select_tiles(eye(y), 3_200_000.0, 17, 192))
+            .collect();
+        let mut history = Vec::new();
+        let mut previous = Vec::new();
+        for &y in &positions {
+            previous = select_tiles_with_history(
+                eye(y),
+                3_200_000.0,
+                17,
+                192,
+                |_| 0.0,
+                None,
+                1.0,
+                &previous,
+            );
+            history.push(previous.clone());
+        }
+        let churn = |sets: &[Vec<TileKey>]| {
+            sets.windows(2)
+                .map(|pair| {
+                    let a: BTreeSet<_> = pair[0].iter().copied().collect();
+                    let b: BTreeSet<_> = pair[1].iter().copied().collect();
+                    a.symmetric_difference(&b).count()
+                })
+                .sum::<usize>()
+        };
+        assert!(churn(&history) <= churn(&stateless));
+    }
+
+    #[test]
+    fn history_large_view_change_remains_bounded_and_refines_new_side() {
+        let first = select_tiles_with_history(
+            [3_201_000.0, 0.0, 0.0],
+            3_200_000.0,
+            17,
+            192,
+            |_| 0.0,
+            None,
+            1.0,
+            &[],
+        );
+        let second = select_tiles_with_history(
+            [0.0, 3_201_000.0, 0.0],
+            3_200_000.0,
+            17,
+            192,
+            |_| 0.0,
+            None,
+            1.0,
+            &first,
+        );
+        assert!(second.len() <= 195);
+        for (i, a) in second.iter().enumerate() {
+            for b in &second[i + 1..] {
+                assert!(!is_ancestor(*a, *b) && !is_ancestor(*b, *a));
+            }
+        }
+        let new_dir = normalize([0.0, 1.0, 0.0]);
+        assert!(
+            second
+                .iter()
+                .filter(|key| dot(key.direction(0.5, 0.5), new_dir) > 0.99)
+                .map(|key| key.level)
+                .max()
+                .unwrap_or(0)
+                >= 10
+        );
+    }
+
+    fn is_ancestor(ancestor: TileKey, descendant: TileKey) -> bool {
+        ancestor.face == descendant.face
+            && ancestor.level <= descendant.level
+            && (ancestor.x == descendant.x >> (descendant.level - ancestor.level))
+            && (ancestor.y == descendant.y >> (descendant.level - ancestor.level))
+    }
+
+    #[test]
     fn cbt_morton_mapping_round_trips_cube_tiles() {
         for key in [
             TileKey::root(0),
@@ -537,32 +689,23 @@ pub struct GpuMaterialPage {
 
 pub const GPU_MATERIAL_PAGE_SIZE: u32 = 128;
 const GPU_MATERIAL_PAGE_CELLS: usize = 125;
-const GPU_MATERIAL_PAGE_PREFIX_STEP: usize = 4;
+// Material classification must not depend on the page's LOD.  This is long
+// enough to reject unresolved grain while retaining the slope that drives
+// rock/vegetation/snow transitions.
+const MATERIAL_SLOPE_WAVELENGTH_M: f64 = 256.0;
 
 /// Build the fixed 128x128 material page for one canonical cube-sphere tile.
 ///
 /// This deliberately shares the surface prefix path with
 /// [`build_surface_texture_for_mesh`], but does not build mesh positions,
-/// normals, residuals, or a second fine-field sample. A single cached-prefix
-/// sample per texel is enough to derive the material's local slope from its
-/// neighbouring heights. The border samples use the same field coordinates as
-/// adjacent pages, so filtering across same-level tile edges is continuous.
+/// normals, residuals, or a second fine-field sample. A single canonical
+/// prefix sample per texel is paired with a fixed-scale material slope, so the
+/// result is independent of tile LOD. The border samples use the same field
+/// coordinates as adjacent pages, so filtering across tile edges is
+/// continuous.
 pub fn build_gpu_material_page(field: &PlanetField, key: TileKey) -> GpuMaterialPage {
     let size = GPU_MATERIAL_PAGE_SIZE as usize;
     let cells = GPU_MATERIAL_PAGE_CELLS;
-    let wavelength = (key.span_m(field.params.radius_m) / cells as f64).max(2.0);
-    let (prefix_grid, prefix_size) =
-        coarse_prefix_grid(field, key, cells, size, GPU_MATERIAL_PAGE_PREFIX_STEP);
-    let sample_prefix = |x: usize, y: usize| {
-        sample_prefix_grid(
-            &prefix_grid,
-            prefix_size,
-            GPU_MATERIAL_PAGE_PREFIX_STEP,
-            x,
-            y,
-        )
-    };
-
     let mut dirs = Vec::with_capacity(size * size);
     let mut samples = Vec::with_capacity(size * size);
     for y in 0..size {
@@ -572,7 +715,13 @@ pub fn build_gpu_material_page(field: &PlanetField, key: TileKey) -> GpuMaterial
             let local_u = (x as f64 - 1.0) / cells as f64;
             let local_v = (y as f64 - 1.0) / cells as f64;
             let dir = key.direction(local_u, local_v);
-            let (prefix, macro_h) = sample_prefix(x, y);
+            // Evaluate the canonical prefix at the actual direction.  A
+            // tile-local interpolated prefix changes phase at LOD boundaries
+            // and produces square blocks when a page is sampled beside a
+            // page from another level.  This is one prefix evaluation per
+            // texel; the fixed-scale slope uses three lightweight base-height
+            // evaluations and does not run five full semantic samples.
+            let (prefix, macro_h) = field.height_prefix_m(dir);
             dirs.push(dir);
             samples.push(field.sample_surface_from_prefix(
                 dir,
@@ -587,13 +736,7 @@ pub fn build_gpu_material_page(field: &PlanetField, key: TileKey) -> GpuMaterial
     for y in 0..size {
         for x in 0..size {
             let index = y * size + x;
-            let dhx = (samples[y * size + (x + 1).min(size - 1)].height_m
-                - samples[y * size + x.saturating_sub(1)].height_m)
-                / (2.0 * wavelength);
-            let dhy = (samples[(y + 1).min(size - 1) * size + x].height_m
-                - samples[y.saturating_sub(1) * size + x].height_m)
-                / (2.0 * wavelength);
-            let slope = dhx.hypot(dhy);
+            let slope = field.slope_hint(dirs[index], MATERIAL_SLOPE_WAVELENGTH_M);
             let material = {
                 let sample = &mut samples[index];
                 sample.slope_hint = slope;
@@ -873,13 +1016,40 @@ mod surface_regressions {
     }
 
     #[test]
+    fn gpu_material_page_is_identical_on_parent_child_shared_edges() {
+        let field = field();
+        let parent = TileKey {
+            face: 2,
+            level: 9,
+            x: 173,
+            y: 211,
+        };
+        let child = TileKey {
+            face: parent.face,
+            level: parent.level + 1,
+            x: parent.x * 2,
+            y: parent.y * 2,
+        };
+        let a = build_gpu_material_page(&field, parent);
+        let b = build_gpu_material_page(&field, child);
+        let size = GPU_MATERIAL_PAGE_SIZE as usize;
+        // The child's left edge covers the first half of the parent's left
+        // edge. Their texel centres are the same directions at every other
+        // parent row (including the apron endpoint).
+        for y in 1..=63 {
+            let ai = (y * size + 1) * 4;
+            let bi = ((1 + 2 * (y - 1)) * size + 1) * 4;
+            assert_eq!(&a.rgba[ai..ai + 4], &b.rgba[bi..bi + 4], "y={y}");
+        }
+    }
+
+    #[test]
     fn gpu_material_page_preserves_canonical_ocean_and_land_appearance() {
         let field = field();
         let key = TileKey::root(0);
         let page = build_gpu_material_page(&field, key);
         let size = page.size as usize;
         let cells = 125.0;
-        let wavelength = (key.span_m(field.params.radius_m) / cells).max(2.0);
         let mut ocean = None;
         let mut land = None;
         for y in 1..127 {
@@ -892,21 +1062,8 @@ mod surface_regressions {
                         ocean = Some((x, y, material));
                     }
                 } else if sample.height_m > 1000.0 {
-                    let dhx = (field.height_m(
-                        key.direction((x as f64) / cells, (y as f64 - 1.0) / cells),
-                        TEXTURE_DETAIL_MIN_WL_M,
-                    ) - field.height_m(
-                        key.direction((x as f64 - 2.0) / cells, (y as f64 - 1.0) / cells),
-                        TEXTURE_DETAIL_MIN_WL_M,
-                    )) / (2.0 * wavelength);
-                    let dhy = (field.height_m(
-                        key.direction((x as f64 - 1.0) / cells, (y as f64) / cells),
-                        TEXTURE_DETAIL_MIN_WL_M,
-                    ) - field.height_m(
-                        key.direction((x as f64 - 1.0) / cells, (y as f64 - 2.0) / cells),
-                        TEXTURE_DETAIL_MIN_WL_M,
-                    )) / (2.0 * wavelength);
-                    sample.slope_hint = dhx.hypot(dhy);
+                    sample.slope_hint =
+                        field.slope_hint(dir, MATERIAL_SLOPE_WAVELENGTH_M);
                     land = Some((x, y, surface_appearance(&field, &sample, dir)));
                 }
             }

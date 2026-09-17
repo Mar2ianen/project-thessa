@@ -766,6 +766,22 @@ fn loose_config() -> AdaptiveIntegratorConfig {
     }
 }
 
+/// Exact correction config: same tight tolerances as the integrator
+/// default, but a 6-hour ceiling instead of one hour. Deep-cruise arcs
+/// are smooth on day scales (the error controller proves it by growing
+/// the step itself); the hour cap forced >=4 steps/day of pure overhead
+/// (500 d = 2k minimum steps). Near a well the controller shrinks below
+/// the ceiling on its own, so encounter resolution is untouched.
+/// Validated by unchanged cold-trajectory digits on the replay corpus,
+/// not by the ceiling value. Deliberately maneuver-local: the global
+/// default stays conservative for the authoritative flight loop.
+fn exact_config() -> AdaptiveIntegratorConfig {
+    AdaptiveIntegratorConfig {
+        max_step_s: 21_600.0,
+        ..AdaptiveIntegratorConfig::default()
+    }
+}
+
 /// Departure-anomaly phasing: scan parking-orbit true anomalies with
 /// loose-tolerance FULL N-body screens and keep the best departure state.
 /// Screens rank candidates against each other; exact N-body correction
@@ -1223,7 +1239,7 @@ pub(crate) fn correct_shooting(
                 time_s: mid_time_s,
                 delta_v_mps: mid_burn,
             }],
-            AdaptiveIntegratorConfig::default(),
+            exact_config(),
         )
         .ok()
         .map(|result| result.state)
@@ -1403,7 +1419,7 @@ pub(crate) fn correct_bplane_shooting(
                 time_s: mid_time_s,
                 delta_v_mps: burn,
             }],
-            AdaptiveIntegratorConfig::default(),
+            exact_config(),
         )
         .ok()
         .map(|result| result.state)

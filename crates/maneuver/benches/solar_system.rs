@@ -128,7 +128,11 @@ fn earth_c3_note(ephemeris: &BakedEphemeris, winner: &thessa_maneuver::BroadRout
         return " [bound ellipse, C3<0, Apollo-class]".to_string();
     }
     let vinf = vinf_sq.sqrt();
-    format!(" [vinf {:.2} km/s, C3 {:.1}]", vinf / 1000.0, vinf * vinf / 1.0e6)
+    format!(
+        " [vinf {:.2} km/s, C3 {:.1}]",
+        vinf / 1000.0,
+        vinf * vinf / 1.0e6
+    )
 }
 
 fn main() {
@@ -203,16 +207,7 @@ fn main() {
         &ephemeris,
         &field,
         survey_config(
-            sun,
-            earth,
-            saturn,
-            1_200.0,
-            30,
-            1_800.0,
-            2_500.0,
-            30,
-            4,
-            30_000.0,
+            sun, earth, saturn, 1_200.0, 30, 1_800.0, 2_500.0, 30, 4, 30_000.0,
         ),
         true,
     );

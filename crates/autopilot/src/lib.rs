@@ -874,11 +874,7 @@ fn loopback_edges(graph: &AutopilotGraph) -> BTreeSet<(NodeId, NodeId)> {
     cut
 }
 
-fn reachable(
-    adjacency: &BTreeMap<NodeId, Vec<NodeId>>,
-    from: NodeId,
-    to: NodeId,
-) -> bool {
+fn reachable(adjacency: &BTreeMap<NodeId, Vec<NodeId>>, from: NodeId, to: NodeId) -> bool {
     let mut visited = BTreeSet::new();
     let mut stack = vec![from];
     while let Some(node) = stack.pop() {
@@ -1063,9 +1059,7 @@ impl GraphRunner {
                     .edges
                     .iter()
                     .filter(|edge| edge.to.node == node.id)
-                    .filter(|edge| {
-                        !self.loopback.contains(&(edge.from.node, edge.to.node))
-                    })
+                    .filter(|edge| !self.loopback.contains(&(edge.from.node, edge.to.node)))
                     .all(|edge| {
                         self.statuses
                             .get(&edge.from.node)
@@ -2592,9 +2586,7 @@ mod tests {
             Ok(GraphRunState::Waiting { node, .. }) if node == NodeId(1)
         ));
         assert_eq!(
-            runner
-                .poll(SimTime(10.0), None, &mut block)
-                .unwrap(),
+            runner.poll(SimTime(10.0), None, &mut block).unwrap(),
             GraphRunState::Complete
         );
         assert!(runner.is_complete());

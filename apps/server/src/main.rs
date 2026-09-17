@@ -613,8 +613,7 @@ impl Sim {
                     // Wire cap: node vectors are unbounded on the transport.
                     const MAX_MANEUVER_NODES: usize = 16;
                     let rejected = |sim: &mut Self, reason: String| {
-                        sim.authority.wake_notice =
-                            Some(format!("maneuver rejected: {reason}"));
+                        sim.authority.wake_notice = Some(format!("maneuver rejected: {reason}"));
                     };
                     if nodes.len() > MAX_MANEUVER_NODES {
                         rejected(
@@ -670,8 +669,7 @@ impl Sim {
                     // scaled up from the node cap for split burns.
                     const MAX_BURN_SEGMENTS: usize = 64;
                     let rejected = |sim: &mut Self, reason: String| {
-                        sim.authority.wake_notice =
-                            Some(format!("burn plan rejected: {reason}"));
+                        sim.authority.wake_notice = Some(format!("burn plan rejected: {reason}"));
                     };
                     if segments.len() > MAX_BURN_SEGMENTS {
                         rejected(
@@ -1179,19 +1177,15 @@ impl Sim {
         let intent = if direction == DVec3::ZERO {
             hold()
         } else {
-            let target =
-                DirectionTarget::new(direction, DirectionFrame::Inertial).map_err(|error| {
-                    format!("maneuver direction: {error}")
-                })?;
+            let target = DirectionTarget::new(direction, DirectionFrame::Inertial)
+                .map_err(|error| format!("maneuver direction: {error}"))?;
             GuidanceIntent::VelocityDirection {
                 direction: target,
                 roll_policy: RollPolicy::Hold,
             }
         };
-        let propulsion =
-            PropulsionDemand::new(command.throttle_01).map_err(|error| {
-                format!("maneuver throttle: {error}")
-            })?;
+        let propulsion = PropulsionDemand::new(command.throttle_01)
+            .map_err(|error| format!("maneuver throttle: {error}"))?;
         Ok((intent, propulsion))
     }
 
@@ -1222,10 +1216,9 @@ impl Sim {
         let executor =
             SegmentExecutor::new(&plan).map_err(|error| format!("burn plan: {error}"))?;
         for (start, _, planned_dv_mps) in executor.to_scheduler_events() {
-            self.authority.scheduler.arm(
-                ScheduledKind::BurnSegment { planned_dv_mps },
-                start,
-            );
+            self.authority
+                .scheduler
+                .arm(ScheduledKind::BurnSegment { planned_dv_mps }, start);
         }
         self.burn_execution = Some(executor);
         Ok(())
@@ -1252,8 +1245,7 @@ impl Sim {
         // segment steers inertially — the executor ignores it there).
         let mut central = BodyState::ORIGIN;
         if let Some(segment) = executor.active_segment() {
-            if let thessa_maneuver::SegmentDirection::Rtn { central: body, .. } =
-                segment.direction
+            if let thessa_maneuver::SegmentDirection::Rtn { central: body, .. } = segment.direction
             {
                 central = self
                     .ephemeris
@@ -3318,11 +3310,12 @@ mod tests {
         };
         let _ = sim.apply_input("pilot", &input(vec![big]));
         assert!(sim.maneuver_execution.is_none());
-        assert!(sim
-            .authority
-            .wake_notice
-            .as_ref()
-            .is_some_and(|notice| notice.contains("cap")));
+        assert!(
+            sim.authority
+                .wake_notice
+                .as_ref()
+                .is_some_and(|notice| notice.contains("cap"))
+        );
         // Non-finite node is refused the same way.
         let mut sim = fresh_sim();
         let bad = Command::ExecuteManeuver {
@@ -3427,8 +3420,8 @@ mod tests {
 
     #[test]
     fn burn_execution_rejects_bad_plans() {
-        use thessa_maneuver::{BurnSegment, EngineSpec, FiniteBurnPlan, SegmentDirection};
         use thessa_maneuver::ManeuverNode;
+        use thessa_maneuver::{BurnSegment, EngineSpec, FiniteBurnPlan, SegmentDirection};
 
         let config: SystemConfig =
             toml::from_str(include_str!("../../../data/system.toml")).expect("system");
@@ -3516,7 +3509,9 @@ mod tests {
                 start_s,
                 duration_s: 5.0,
                 planned_dv_mps: 50.0,
-                direction: BurnDirectionCommand::Inertial { unit: [1.0, 0.0, 0.0] },
+                direction: BurnDirectionCommand::Inertial {
+                    unit: [1.0, 0.0, 0.0],
+                },
                 throttle_01: 1.0,
             }
         }
@@ -3552,11 +3547,12 @@ mod tests {
         };
         let _ = sim.apply_input("pilot", &input(vec![big]));
         assert!(sim.burn_execution.is_none());
-        assert!(sim
-            .authority
-            .wake_notice
-            .as_ref()
-            .is_some_and(|notice| notice.contains("cap")));
+        assert!(
+            sim.authority
+                .wake_notice
+                .as_ref()
+                .is_some_and(|notice| notice.contains("cap"))
+        );
         // Unknown RTN central and dead engine are refused the same way.
         let mut sim = fresh_sim();
         let lost = Command::ExecuteBurnPlan {

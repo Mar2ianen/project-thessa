@@ -434,10 +434,7 @@ fn add_config_body(
             .longitude_of_ascending_node_deg
             .unwrap_or(0.0)
             .to_radians(),
-        argument_of_periapsis_rad: config
-            .argument_of_periapsis_deg
-            .unwrap_or(0.0)
-            .to_radians(),
+        argument_of_periapsis_rad: config.argument_of_periapsis_deg.unwrap_or(0.0).to_radians(),
         mean_anomaly_at_epoch_rad: config.mean_longitude_offset_deg.unwrap_or(0.0).to_radians(),
         mean_motion_rad_s: None,
     });
@@ -645,9 +642,7 @@ radius_km = 6378.0
         let id = ephemeris.body_id("tilted").expect("tilted exists");
         // A 7-degree inclined orbit with M=10 deg must sit off the
         // reference plane; the aligned baker would keep z == 0.
-        let state = ephemeris
-            .body_state(id, SimTime::EPOCH)
-            .expect("state");
+        let state = ephemeris.body_state(id, SimTime::EPOCH).expect("state");
         assert!(
             state.position_inertial.z.abs() > 1.0e9,
             "oriented orbit leaves the plane, z={}",

@@ -311,10 +311,7 @@ fn lambert_cell(
         let facing_dep = facing_dep_raw.normalize();
         let facing_arr = facing_arr_raw.normalize();
         let plane_raw = r2.cross(v2);
-        if !facing_dep.is_finite()
-            || !facing_arr.is_finite()
-            || plane_raw.length_squared() <= 0.0
-        {
+        if !facing_dep.is_finite() || !facing_arr.is_finite() || plane_raw.length_squared() <= 0.0 {
             stats.degenerate_cells += 1;
             return None;
         }
@@ -813,7 +810,10 @@ pub(crate) fn phase_departure(
     // full-N-body screen; returns miss and departure state on success.
     // Tilt rotates the parking plane around the radial axis so the burn
     // can carry transfer declination, not just in-plane direction.
-    let screen = |tilt_rad: f64, anomaly: f64, stats: &mut SearchStats| -> Option<(f64, DVec3, DVec3, DVec3)> {
+    let screen = |tilt_rad: f64,
+                  anomaly: f64,
+                  stats: &mut SearchStats|
+     -> Option<(f64, DVec3, DVec3, DVec3)> {
         let (sin_t, cos_t) = tilt_rad.sin_cos();
         let tilted_tangent = tangent0 * cos_t - normal * sin_t;
         let (point_dir, tangent) = (
@@ -854,8 +854,7 @@ pub(crate) fn phase_departure(
                 let tilt = tilt_deg.to_radians();
                 for i in 0..12 {
                     let anomaly = std::f64::consts::TAU * i as f64 / 12.0;
-                    if let Some((miss, point, park_velocity, burn)) =
-                        screen(tilt, anomaly, stats)
+                    if let Some((miss, point, park_velocity, burn)) = screen(tilt, anomaly, stats)
                         && local_best.is_none_or(|(best_miss, _, _, _, _, _)| miss < best_miss)
                     {
                         local_best = Some((miss, tilt, anomaly, point, park_velocity, burn));
@@ -868,8 +867,7 @@ pub(crate) fn phase_departure(
                 for i in 0..8 {
                     let span = std::f64::consts::TAU / 6.0;
                     let anomaly = center_angle - span / 2.0 + span * i as f64 / 7.0;
-                    if let Some((miss, point, park_velocity, burn)) =
-                        screen(tilt, anomaly, stats)
+                    if let Some((miss, point, park_velocity, burn)) = screen(tilt, anomaly, stats)
                         && local_best.is_none_or(|(best_miss, _, _, _, _, _)| miss < best_miss)
                     {
                         local_best = Some((miss, tilt, anomaly, point, park_velocity, burn));
@@ -893,13 +891,21 @@ pub(crate) fn phase_departure(
 /// grid as [`phase_departure`], but keep the top-K DISTINCT starts instead
 /// of refining a single winner.
 ///
-/// Motivation (measured on the Voyager-1-class chain): loose screens rank
-/// by arrival POSITION miss only, so the single winner can carry an
-/// arrival VELOCITY several km/s off broad's — and the next leg's seed
-/// (broad outgoing minus true handoff velocity) then starts ~6 AU off
-/// with no recovery. Distinct parking anomalies give distinct arrival
-/// asymptotes; the exact stage arbitrates which handoff actually flies.
-/// Deterministic: grid order, miss order, angular separation greed.
+/// Screens rank by miss against the AIM POINT (not the body center):
+/// ranking against the center systematically prefers deep divers that
+/// thread the singularity over grazers that bend near the aim sphere —
+/// while the exact stage targets the sphere. Same reason the eccentricity
+/// class filter below is meaningful: ranked screens end near the aim
+/// (gentle dynamics), so their osculating e is well-defined instead of
+/// periapsis garbage.
+/// Ranking is position miss PLUS encounter-plane mismatch scaled to
+/// meters (time of flight × broad encounter speed × plane angle). Loose
+/// screens that arrive near the body but in the wrong plane poison the
+/// next leg (a 30° plane error at 10 km/s costs kilometers per second to
+/// fix downstream, while position errors are routine TCM work) — and
+/// comparing raw velocities would drown in well fall-in instead, so only
+/// plane NORMALS are compared (conserved, fall-in-free). Deterministic:
+/// grid order, score order, angular separation greed.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn phase_departure_topk(
     field: &GravityField<'_>,
@@ -911,6 +917,10 @@ pub(crate) fn phase_departure_topk(
     park_radius: f64,
     burn_magnitude_mps: f64,
     time_of_flight_s: f64,
+    target_plane_normal: DVec3,
+    plane_speed_mps: f64,
+    aim_point_m: DVec3,
+    encounter_class: Option<(f64, f64)>,
     keep: usize,
     stats: &mut SearchStats,
 ) -> Vec<(DVec3, DVec3, DVec3)> {
@@ -939,7 +949,7 @@ pub(crate) fn phase_departure_topk(
     if !v_circ.is_finite() {
         return Vec::new();
     }
-    let mut scored: Vec<(f64, f64, f64, DVec3, DVec3, DVec3)> = Vec::new();
+    let mut scored: Vec<(f64, f64, f64, f64, DVec3, DVec3, DVec3)> = Vec::new();
     for tilt_deg in [-30.0f64, -15.0, -7.5, 0.0, 7.5, 15.0, 30.0] {
         let tilt = tilt_deg.to_radians();
         let (sin_t, cos_t) = tilt.sin_cos();
@@ -967,24 +977,72 @@ pub(crate) fn phase_departure_topk(
             ) else {
                 continue;
             };
-            let miss = (flow.state.position - arrival.position_inertial).length();
+            let miss = (flow.state.position - aim_point_m).length();
             if !miss.is_finite() {
                 continue;
             }
-            scored.push((miss, tilt, anomaly, point, park_velocity, burn));
+            // Plane term: encounter-relative angular-momentum direction
+            // of the screened trajectory vs broad's encounter plane.
+            // Degenerate (near-radial) screens score a neutral quarter
+            // turn rather than poisoning the ranking with NaN.
+            let rel_pos = flow.state.position - arrival.position_inertial;
+            let rel_vel = flow.state.velocity - arrival.velocity_inertial;
+            let plane_angle = (rel_pos.cross(rel_vel).try_normalize())
+                .map(|screen_normal| {
+                    screen_normal
+                        .dot(target_plane_normal)
+                        .clamp(-1.0, 1.0)
+                        .acos()
+                })
+                .unwrap_or(std::f64::consts::FRAC_PI_2);
+            let score = if plane_angle.is_finite() {
+                miss + time_of_flight_s * plane_speed_mps * plane_angle
+            } else {
+                continue;
+            };
+            // Encounter-class eccentricity from the screen end state
+            // (kept for the class filter below, not the score).
+            let screen_e = encounter_eccentricity(
+                rel_pos,
+                rel_vel,
+                encounter_class.map(|(_, mu)| mu).unwrap_or(f64::NAN),
+            );
+            scored.push((score, screen_e, tilt, anomaly, point, park_velocity, burn));
         }
     }
     scored.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // Encounter-class filter: keep screens whose osculating eccentricity
+    // is within 5x of broad's (graze vs dive is an order-of-magnitude
+    // distinction; a 44x-off dive needs a different burn architecture,
+    // not a better seed). Falls back to the unfiltered pool when nothing
+    // passes, so exotic-but-valid windows still fly.
+    let pool: Vec<(f64, f64, f64, f64, DVec3, DVec3, DVec3)> = match encounter_class {
+        Some((e_broad, _)) if e_broad.is_finite() && e_broad > 1.0 => {
+            let kept: Vec<_> = scored
+                .iter()
+                .filter(|(_, e, _, _, _, _, _)| {
+                    e.is_finite() && *e > 1.0 && *e <= 5.0 * e_broad && *e >= e_broad / 5.0
+                })
+                .cloned()
+                .collect();
+            if kept.is_empty() {
+                scored.clone()
+            } else {
+                kept
+            }
+        }
+        _ => scored.clone(),
+    };
     // Greedy distinct pick: a new start must differ in anomaly (>30 deg
     // around the parking circle) or tilt (>5 deg) from every accepted one.
     // Nearby grid twins would waste exact budgets on the same handoff.
-    let mut kept: Vec<(f64, f64, f64, DVec3, DVec3, DVec3)> = Vec::new();
-    for candidate in scored {
+    let mut kept: Vec<(f64, f64, f64, f64, DVec3, DVec3, DVec3)> = Vec::new();
+    for candidate in pool {
         if kept.len() >= keep {
             break;
         }
-        let (_, tilt, anomaly, _, _, _) = candidate;
-        let distinct = kept.iter().all(|(_, kept_tilt, kept_anomaly, _, _, _)| {
+        let (_, _, tilt, anomaly, _, _, _) = candidate;
+        let distinct = kept.iter().all(|(_, _, kept_tilt, kept_anomaly, _, _, _)| {
             let mut delta_angle = (anomaly - kept_anomaly).abs() % std::f64::consts::TAU;
             if delta_angle > std::f64::consts::PI {
                 delta_angle = std::f64::consts::TAU - delta_angle;
@@ -996,8 +1054,28 @@ pub(crate) fn phase_departure_topk(
         }
     }
     kept.into_iter()
-        .map(|(_, _, _, point, park_velocity, burn)| (point, park_velocity, burn))
+        .map(|(_, _, _, _, point, park_velocity, burn)| (point, park_velocity, burn))
         .collect()
+}
+/// Osculating eccentricity of an encounter-relative state, or NaN for
+/// degenerate inputs. Used to keep phasing starts in broad's encounter
+/// class (graze vs dive) instead of trusting position miss alone.
+fn encounter_eccentricity(rel_pos_m: DVec3, rel_vel_mps: DVec3, mu: f64) -> f64 {
+    if !mu.is_finite() || mu <= 0.0 {
+        return f64::NAN;
+    }
+    let r = rel_pos_m.length();
+    let v2 = rel_vel_mps.length_squared();
+    if !r.is_finite() || r <= 0.0 || !v2.is_finite() {
+        return f64::NAN;
+    }
+    let e_vec = ((v2 - mu / r) * rel_pos_m - rel_pos_m.dot(rel_vel_mps) * rel_vel_mps) / mu;
+    let e = e_vec.length();
+    if e.is_finite() {
+        e
+    } else {
+        f64::NAN
+    }
 }
 
 /// Midcourse epoch: past depot-escape, with margin on both sides. Shared

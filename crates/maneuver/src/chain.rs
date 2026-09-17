@@ -626,7 +626,57 @@ fn revalidate_chain(
     // arrival POSITION only, so distinct anomalies can carry wildly
     // different arrival VELOCITIES (measured ~5 km/s spreads on the V1
     // window) — and the next leg's seed lives or dies by that velocity.
+    // Ranking adds the encounter-PLANE mismatch (time × broad speed ×
+    // angle, in meters): plane errors are fatal downstream while
+    // position errors are routine TCM work. Normals only (fall-in-free).
     // The exact stage below arbitrates every start; cheapest total wins.
+    // Broad encounter plane for leg 1 from its own asymptotes (absent
+    // for single-encounter chains: nothing downstream to align with, so
+    // fall back to position-only ranking with zero plane weight).
+    // Broad encounter class (eccentricity from the turn angle) for the
+    // e-filter: graze vs dive selection. Skipped for single encounters
+    // and near-straight encounters (no meaningful class).
+    let (plane_normal, plane_speed, e_filter) = if cell.v_out_frames_mps.is_empty() {
+        (DVec3::Y, 0.0, None)
+    } else {
+        let broad_v_in = cell.v_in_frames_mps[0];
+        let broad_v_out = cell.v_out_frames_mps[0];
+        let plane = match broad_v_in.cross(broad_v_out).try_normalize() {
+            Some(normal) if normal.is_finite() => (normal, broad_v_in.length()),
+            _ => (DVec3::Y, 0.0),
+        };
+        let cos_turn = broad_v_in
+            .normalize()
+            .dot(broad_v_out.normalize())
+            .clamp(-1.0, 1.0);
+        let class = if cos_turn.is_finite() && cos_turn < 1.0 {
+            let delta = cos_turn.acos();
+            let e_broad = 1.0 / (delta / 2.0).sin();
+            if e_broad.is_finite() && e_broad > 1.0 && e_broad <= 20.0 {
+                Some((
+                    e_broad,
+                    ephemeris.body(first.body).map_err(SearchError::Ephemeris)?.mu,
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        (plane.0, plane.1, class)
+    };
+    // Screens rank against the leg-1 AIM (standoff sphere), not the
+    // body center: center-ranked screens are deep divers threading the
+    // singularity, while the exact stage targets the sphere (grazers bend
+    // near it). Aim point computed once here, shared by screens and solve.
+    let aim1 = aim_point(
+        ephemeris,
+        config.central_body,
+        first.body,
+        epochs[1],
+        encounter_standoff(config, first),
+    )
+    .map_err(SearchError::Ephemeris)?;
     let starts = phase_departure_topk(
         field,
         cell.departure_epoch,
@@ -637,6 +687,10 @@ fn revalidate_chain(
         park_radius,
         cell.departure_burn_mag_mps,
         cell.leg_tofs_s[0],
+        plane_normal,
+        plane_speed,
+        aim1,
+        e_filter,
         PHASING_BRANCHES,
         stats,
     );
@@ -645,9 +699,9 @@ fn revalidate_chain(
     }
     let mut best: Option<RankedPlan> = None;
     for (point, park_velocity, phased_burn) in starts {
-        if let Some(plan) =
-            revalidate_chain_from_start(ephemeris, field, ctx, cell, &epochs, point, park_velocity, phased_burn, stats)?
-        {
+        if let Some(plan) = revalidate_chain_from_start(
+            ephemeris, field, ctx, cell, &epochs, aim1, point, park_velocity, phased_burn, stats,
+        )? {
             let better = match &best {
                 None => true,
                 Some(current) => {
@@ -847,6 +901,7 @@ fn revalidate_chain_from_start(
     ctx: &ChainCtx<'_>,
     cell: &ChainCell,
     epochs: &[SimTime],
+    aim1: DVec3,
     point: DVec3,
     park_velocity: DVec3,
     phased_burn: DVec3,
@@ -865,14 +920,6 @@ fn revalidate_chain_from_start(
     let first_state = ephemeris
         .body_state(first.body, epochs[1])
         .map_err(SearchError::Ephemeris)?;
-    let aim1 = aim_point(
-        ephemeris,
-        config.central_body,
-        first.body,
-        epochs[1],
-        encounter_standoff(config, first),
-    )
-    .map_err(SearchError::Ephemeris)?;
     let first_body = ephemeris.body(first.body).map_err(SearchError::Ephemeris)?;
     let mid1_s = midcourse_time_s(cell.leg_tofs_s[0]);
     // Leg 1 stays exact-3D (measured: 2D plane targeting here filters 9/9

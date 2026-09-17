@@ -281,6 +281,8 @@ struct ChainFixture {
     central: String,
     departure: String,
     encounters: Vec<ChainFixtureEncounter>,
+    #[serde(default)]
+    window_start_d: Option<f64>,
     departure_span_d: f64,
     departure_steps: usize,
     leg_tof_min_d: Vec<f64>,
@@ -319,7 +321,9 @@ fn check_chain(ephemeris: &BakedEphemeris, fixture: &ChainFixture) {
             central_body: ids[&fixture.central],
             departure_body: ids[&fixture.departure],
             encounters,
-            window_start: SimTime::EPOCH,
+            window_start: SimTime(
+                SimTime::EPOCH.0 + fixture.window_start_d.unwrap_or(0.0) * DAY,
+            ),
             departure_span_s: fixture.departure_span_d * DAY,
             departure_steps: fixture.departure_steps,
             leg_tof_min_s: fixture.leg_tof_min_d.iter().map(|days| days * DAY).collect(),

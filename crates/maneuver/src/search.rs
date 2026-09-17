@@ -757,17 +757,20 @@ fn loose_config() -> AdaptiveIntegratorConfig {
         // of paying 24 forced steps per day (500 d = 12k minimum steps at
         // an hour cap); near a well the error controller shrinks the step
         // itself. Validated by unchanged cold-trajectory digits, not by
-        // the tolerance name.
-        max_step_s: 86_400.0,
+        // the tolerance name. A dynamical cap (eta/32 of the local
+        // sqrt(d^3/mu)) rides along as the well-safety rail, so the
+        // week-long ceiling only ever binds in smooth deep cruise.
+        max_step_s: 604_800.0,
         absolute_position_tolerance_m: 100.0,
         absolute_velocity_tolerance_mps: 1.0e-3,
         relative_tolerance: 1.0e-8,
         max_steps: 100_000,
+        dynamical_eta: Some(1.0 / 8.0),
     }
 }
 
 /// Exact correction config: same tight tolerances as the integrator
-/// default, but a 6-hour ceiling instead of one hour. Deep-cruise arcs
+/// default, but a 3-day ceiling instead of one hour. Deep-cruise arcs
 /// are smooth on day scales (the error controller proves it by growing
 /// the step itself); the hour cap forced >=4 steps/day of pure overhead
 /// (500 d = 2k minimum steps). Near a well the controller shrinks below
@@ -777,7 +780,11 @@ fn loose_config() -> AdaptiveIntegratorConfig {
 /// default stays conservative for the authoritative flight loop.
 fn exact_config() -> AdaptiveIntegratorConfig {
     AdaptiveIntegratorConfig {
-        max_step_s: 21_600.0,
+        // 3-day ceiling with the dynamical well-safety rail (eta/8):
+        // cruise strides at the controller's natural accuracy-limited
+        // pace, wells shrink the cap automatically. See loose_config.
+        max_step_s: 259_200.0,
+        dynamical_eta: Some(1.0 / 8.0),
         ..AdaptiveIntegratorConfig::default()
     }
 }

@@ -8,3 +8,4 @@ These notes define stable design intent and cross-system invariants. Exact balan
 
 - [Docking ports](01_DOCKING_PORTS.md) — standard androgynous pressurized docking interfaces and compact utility attachment points.
 - [Procedural aerodynamic surfaces](02_PROCEDURAL_AERO_SURFACES.md) — spline-authored wings/fins, mechanization, nested control surfaces, and hangar compilation into solver-ready aerodynamic panels.
+- [Procedural fuselages and body modules](03_PROCEDURAL_FUSELAGES.md) — revolve/loft body authoring, derived structure/interior volume, semantic modules and presets, with a constrained path toward future cutouts.

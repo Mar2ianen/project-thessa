@@ -42,10 +42,13 @@ Remaining:
 
 Implemented: rocky world generator, deterministic geology/climate/landmark
 fields, client texture export, terrain streaming, obstacle reports, pilot
-render origin, atmosphere visuals, and basic water raster effects.
+render origin, atmosphere visuals, basic water raster effects, and
+authoritative streamed terrain contact via `thessa-collision`
+(Rapier: static trimesh, kinematic terrain, fixed joints, contact
+activation hysteresis, load evidence).
 
-Remaining: authoritative streamed terrain contact, player movement, resource
-nodes, construction, power, storage, save/load, and a first factory loop.
+Remaining: player movement, resource nodes, construction, power,
+storage, save/load, and a first factory loop.
 
 ## M4 — Surface logistics and automation — partial
 

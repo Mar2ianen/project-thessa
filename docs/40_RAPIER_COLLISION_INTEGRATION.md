@@ -317,8 +317,7 @@ Serial wins on settled scenes: Rayon overhead exceeds the gain once bodies
 sleep, exactly the §8 caveat. Keep `parallel` switchable and re-measure on
 awake/constraint-heavy scenes before choosing scheduler granularity.
 
-Not implemented yet (update 2026-09-17, fourth slice — joints, broad
-phase, replay, gizmos, damage seam):
+Not implemented yet (update 2026-09-17):
 
 - terrain streaming beyond the single-vehicle producer: the 120 Hz loop
   re-poses one kinematic patch from worldgen every tick and evicts on
@@ -326,8 +325,31 @@ phase, replay, gizmos, damage seam):
   work (`attach/evict` carry it);
 - structural failure mapping: no structural graph exists in sim-core yet,
   so there is nothing to map onto. The seam is ready — see §13;
-- Bevy gizmos beyond the contact layer (per-part wireframes stay out;
-  patch boxes + body markers + normal arrows are in).
+- per-part wireframe gizmos (craft-anchored patch boxes + body markers +
+  normal arrows are in §13 fourth-slice items below and are implemented
+  in `apps/client/src/contact_gizmos.rs`).
+
+#### Fourth slice — completed in this branch
+
+The following were listed as future work in earlier drafts and are now
+implemented in this branch:
+
+- fixed-joint docking in the backend (`attach_fixed_joint` with local
+  port frames, contacts between the joined bodies off) plus
+  `ContactRuntime` partners (`sync_partner`, `dock_partner`, `undock`,
+  `step_many`) so an upper stage or visitor shares the scene; undock is
+  impulse-free and removing a body drops its joints;
+- solver-free `ContactBroadPhase` for fleets: conservative
+  surface-to-surface distance over a bounded horizon, per-pair
+  hysteresis, uncertain evidence stays active;
+- same-binary replay gate (identical wrench tape, identical snapshot
+  JSON) backing the `enhanced-determinism` story — verified by
+  `identical_input_sequences_replay_identically`;
+- client contact gizmos (`ContactGizmoPlugin`): craft-anchored patch
+  boxes, body markers, and contact normal arrows from the authoritative
+  snapshot, drawn only while contact-active;
+- `CollisionDebugSnapshot` carries patch boxes (live pose +
+  extents, trimesh as AABB) and capped contact summaries.
 
 ## 13. Contact load evidence and the damage boundary
 
@@ -359,7 +381,8 @@ from the next-tick ephemeris. Verified by a live landing: belly-down X-15
 from 2 m settles at the 0.65 m keel with a touching pair, and free-fall
 ticks never touch rails.
 
-Fourth slice (docking, fleet screen, replay, gizmos):
+Completed fourth-slice items (docking, fleet screen, replay, gizmos) —
+see §11 "Fourth slice — completed in this branch":
 
 - fixed-joint docking in the backend (`attach_fixed_joint` with local
   port frames, contacts between the joined bodies off) plus
@@ -393,26 +416,17 @@ tests, both worth re-checking on Rapier upgrades):
   no follow-frame. The constant-velocity origin option stays valid for
   future use but must never carry prescriptions.
 
-## 12. Next implementation slice
+## 12. Completed implementation slice
 
-The smallest production-shaped continuation is:
+All items from the §11 MVP and §13 fourth slice are now implemented in this branch:
 
-1. make vehicle compilation emit a `CollisionGeometry` asset (do not invent
-   X-15 dimensions in runtime code merely to exercise Rapier);
-2. add a kinematic terrain/body representation to `thessa-collision` whose
-   pose at tick `n+1` comes from the canonical ephemeris/body-rotation model;
-3. add `ContactRuntime` to `flight-authority` holding the transient
-   `CollisionWorld`, stable Thessa body mapping, activation hysteresis and
-   terrain patch set;
-4. split the current flight step into `evaluate external loads` and `integrate`
-   so contact-active mode reuses exactly the same force evaluation without
-   calling `integrate_rigid_body_step_soa`;
-5. compare free Rapier motion to the existing custom integrator for a vacuum
-   force/torque fixture before enabling contacts;
-6. add floor/landing and fast-impact regression fixtures;
-7. benchmark 1, 8, 64, 256 and 1024 active dynamic bodies, with both crate
-   `parallel` settings, before choosing scheduler granularity.
+1. ✅ vehicle compilation emits a `CollisionGeometry` asset — `x15_contact_geometry()` in `thessa-sim-core`; `data/vehicles/example_aircraft.toml` carries four primitives at its panel stations;
+2. ✅ kinematic terrain/body representation — `insert_kinematic_cuboid`, `insert_kinematic_trimesh`, `set_next_kinematic_pose` in `thessa-collision`;
+3. ✅ `ContactRuntime` in `thessa-flight-authority` — transient `CollisionWorld`, stable Thessa body mapping, activation hysteresis, terrain patch set;
+4. ✅ flight step split into `evaluate external loads` and `integrate` — `ContactRuntime::evaluate_wrench` reuses the flight step's force evaluation;
+5. ✅ free Rapier motion compared to custom integrator — `free_rapier_motion_matches_symplectic_euler_envelope` regression test;
+6. ✅ floor/landing and fast-impact regression fixtures — `rapier_resolves_gravity_driven_ground_contact`, `fast_body_does_not_tunnel_through_floor`, `kinematic_terrain_carries_a_landed_body`;
+7. ✅ benchmark — `contacts` bench sweeps 1/8/64/256/1024 active bodies with both `parallel` settings.
 
-That sequence preserves one physical model, one authoritative tick order, and
-one owner of CPU scheduling while still letting Rapier do what it is good at:
-contact detection, constraints, CCD, sleeping and rigid-body contact dynamics.
+The production-shaped continuation is now:
+

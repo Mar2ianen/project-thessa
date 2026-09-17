@@ -186,14 +186,44 @@ or reshape a demand, but it cannot bypass the actuator path.
 
 ## 3.10. Contacts and terrain
 
-The current terrain adapter supports spherical contact/altitude boundaries,
-sampled obstacle reports, and geometric track certification for unattended
-paths. The world generator can produce rich rocky fields and client textures,
-but the authoritative contact boundary is not yet a full streamed terrain
-mesh/BVH.
+The authoritative contact backend is `thessa-collision` using
+`rapier3d-f64` 0.35 behind `CollisionWorld` (see
+[`docs/40_RAPIER_COLLISION_INTEGRATION.md`](40_RAPIER_COLLISION_INTEGRATION.md)).
 
-Wheels, structural collision topology, fracture, slosh, and debris bodies are
-future work.
+The runtime supports:
+
+- static colliders: cuboids (pads, test floors, coarse terrain
+  proxies) and localized triangle meshes streamed from worldgen;
+- kinematic bodies: position-based terrain patches whose pose at
+  tick `n+1` is prescribed from the canonical ephemeris and
+  body-rotation model — Rapier derives the surface velocity that
+  enters contacts, so a landed body rides a moving/rotating body;
+- dynamic bodies: rigid-body contact objects with full CCD,
+  sleep, and zero-density colliders (mass/inertia come from
+  sim-core authority);
+- fixed joints: docking/seamless staging connections with
+  contacts between joined bodies disabled;
+- contact activation hysteresis: a body enters contact-active
+  mode at a conservative distance and leaves only past a larger
+  threshold; uncertain evidence keeps the body active;
+- contact load evidence: `ContactSummary` per pair with normal,
+  penetration, and approach speed in the inertial frame, capped at
+  64 pairs — loads only, never damage verdicts.
+
+The 120 Hz contact phase follows §7 order: force sampling,
+regime classification, Rapier step with external wrenches,
+authoritative state readback. Rapier gravity is zero; gravity is
+sampled separately by sim-core. Rapier runs on the Rayon pool
+when the `parallel` feature is enabled; no dedicated Rapier pool
+is created.
+
+Still future work:
+
+- terrain streaming beyond a single-vehicle producer
+  (fleet layer with multiple resident patches);
+- structural failure mapping onto collision body rebuild
+  (requires a structural graph in sim-core);
+- wheels, debris bodies, and fluid-surface interactions.
 
 ## 3.11. Thermal, structural, and fluid systems
 

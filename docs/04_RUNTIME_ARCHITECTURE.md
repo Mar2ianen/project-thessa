@@ -64,6 +64,13 @@ crates/flight-net/        GPL game input/snapshot messages
 crates/autopilot/         GPL typed graph IR and runner
 crates/autopilot-js/      GPL sandboxed QuickJS blocks
 crates/maneuver/          MIT typed maneuver planning prototype
+crates/collision/         MIT Rapier contact backend (no Bevy dependency)
+crates/bevy-rcbt/         MIT thin Bevy client adapter for RCBT runtime
+crates/rcbt-core/         MIT backend-agnostic RCBT topology runtime
+crates/rcbt-ref/          MIT independent RCBT topology oracle (tests)
+crates/rcbt-ffi/          MIT optional vendored libcbt backend adapter
+crates/rcbt-large-ffi/    MIT optional vendored large CBT backend adapter
+crates/rcbt-wgpu/         MIT portable wgpu RCBT compute backend
 
 apps/client/              GPL Bevy client
 apps/server/              GPL headless authoritative shell

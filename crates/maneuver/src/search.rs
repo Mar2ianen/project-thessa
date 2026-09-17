@@ -920,7 +920,7 @@ pub(crate) fn phase_departure_topk(
     target_plane_normal: DVec3,
     plane_speed_mps: f64,
     aim_point_m: DVec3,
-    encounter_class: Option<(f64, f64)>,
+    encounter_template: Option<EncounterTemplate>,
     keep: usize,
     stats: &mut SearchStats,
 ) -> Vec<(DVec3, DVec3, DVec3)> {
@@ -981,12 +981,11 @@ pub(crate) fn phase_departure_topk(
             if !miss.is_finite() {
                 continue;
             }
-            // Plane term: encounter-relative angular-momentum direction
-            // of the screened trajectory vs broad's encounter plane.
-            // Degenerate (near-radial) screens score a neutral quarter
-            // turn rather than poisoning the ranking with NaN.
+            // Encounter-relative state for the fingerprint below.
             let rel_pos = flow.state.position - arrival.position_inertial;
             let rel_vel = flow.state.velocity - arrival.velocity_inertial;
+            // Plane term: encounter-relative angular-momentum direction
+            // vs broad's encounter plane. Degenerate screens score neutral.
             let plane_angle = (rel_pos.cross(rel_vel).try_normalize())
                 .map(|screen_normal| {
                     screen_normal
@@ -995,18 +994,46 @@ pub(crate) fn phase_departure_topk(
                         .acos()
                 })
                 .unwrap_or(std::f64::consts::FRAC_PI_2);
+            // Periapsis-direction term: in-plane orientation of the
+            // encounter hyperbola vs broad's. Energy-adjacent trajectories
+            // can still arrive 90° off; only the full (plane, shape,
+            // orientation) fingerprint sees that. Degenerate: neutral.
+            let (screen_e, peri_angle) = match &encounter_template {
+                Some(template) => {
+                    let r = rel_pos.length();
+                    let v2 = rel_vel.length_squared();
+                    let e_vec = if r.is_finite() && r > 0.0 && v2.is_finite() {
+                        ((v2 - template.mu / r) * rel_pos - rel_pos.dot(rel_vel) * rel_vel)
+                            / template.mu
+                    } else {
+                        DVec3::NAN
+                    };
+                    let e = e_vec.length();
+                    let peri = if e.is_finite() && e > 1.0 {
+                        e_vec
+                            .normalize()
+                            .dot(template.periapsis_dir)
+                            .clamp(-1.0, 1.0)
+                            .acos()
+                    } else {
+                        std::f64::consts::FRAC_PI_2
+                    };
+                    (
+                        if e.is_finite() { e } else { f64::NAN },
+                        if peri.is_finite() {
+                            peri
+                        } else {
+                            std::f64::consts::FRAC_PI_2
+                        },
+                    )
+                }
+                None => (f64::NAN, 0.0),
+            };
             let score = if plane_angle.is_finite() {
-                miss + time_of_flight_s * plane_speed_mps * plane_angle
+                miss + time_of_flight_s * plane_speed_mps * (plane_angle + peri_angle)
             } else {
                 continue;
             };
-            // Encounter-class eccentricity from the screen end state
-            // (kept for the class filter below, not the score).
-            let screen_e = encounter_eccentricity(
-                rel_pos,
-                rel_vel,
-                encounter_class.map(|(_, mu)| mu).unwrap_or(f64::NAN),
-            );
             scored.push((score, screen_e, tilt, anomaly, point, park_velocity, burn));
         }
     }
@@ -1016,8 +1043,11 @@ pub(crate) fn phase_departure_topk(
     // distinction; a 44x-off dive needs a different burn architecture,
     // not a better seed). Falls back to the unfiltered pool when nothing
     // passes, so exotic-but-valid windows still fly.
-    let pool: Vec<(f64, f64, f64, f64, DVec3, DVec3, DVec3)> = match encounter_class {
-        Some((e_broad, _)) if e_broad.is_finite() && e_broad > 1.0 => {
+    let pool: Vec<(f64, f64, f64, f64, DVec3, DVec3, DVec3)> = match encounter_template {
+        Some(template)
+            if template.eccentricity.is_finite() && template.eccentricity > 1.0 =>
+        {
+            let e_broad = template.eccentricity;
             let kept: Vec<_> = scored
                 .iter()
                 .filter(|(_, e, _, _, _, _, _)| {
@@ -1025,6 +1055,9 @@ pub(crate) fn phase_departure_topk(
                 })
                 .cloned()
                 .collect();
+            if std::env::var("THESSA_E_DBG").is_ok() {
+                eprintln!("EFILTER e_broad={e_broad:.1} scored={} kept={}", scored.len(), kept.len());
+            }
             if kept.is_empty() {
                 scored.clone()
             } else {
@@ -1057,24 +1090,43 @@ pub(crate) fn phase_departure_topk(
         .map(|(_, _, _, _, point, park_velocity, burn)| (point, park_velocity, burn))
         .collect()
 }
-/// Osculating eccentricity of an encounter-relative state, or NaN for
-/// degenerate inputs. Used to keep phasing starts in broad's encounter
-/// class (graze vs dive) instead of trusting position miss alone.
-fn encounter_eccentricity(rel_pos_m: DVec3, rel_vel_mps: DVec3, mu: f64) -> f64 {
-    if !mu.is_finite() || mu <= 0.0 {
-        return f64::NAN;
-    }
-    let r = rel_pos_m.length();
-    let v2 = rel_vel_mps.length_squared();
-    if !r.is_finite() || r <= 0.0 || !v2.is_finite() {
-        return f64::NAN;
-    }
-    let e_vec = ((v2 - mu / r) * rel_pos_m - rel_pos_m.dot(rel_vel_mps) * rel_vel_mps) / mu;
-    let e = e_vec.length();
-    if e.is_finite() {
-        e
-    } else {
-        f64::NAN
+/// Broad encounter fingerprint for phasing selection: eccentricity
+/// (graze vs dive energy class), periapsis direction (in-plane
+/// orientation), and body mu. Screens match against it instead of trusting
+/// position miss alone. All free vectors (frame-independent).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct EncounterTemplate {
+    pub eccentricity: f64,
+    pub periapsis_dir: DVec3,
+    pub mu: f64,
+}
+
+impl EncounterTemplate {
+    /// Build from broad incoming/outgoing asymptotes (encounter frame).
+    /// Returns `None` for degenerate/straight encounters with no
+    /// meaningful class to enforce.
+    pub(crate) fn from_bend(v_in: DVec3, v_out: DVec3, mu: f64) -> Option<Self> {
+        if !mu.is_finite() || mu <= 0.0 {
+            return None;
+        }
+        let cos_turn = v_in.normalize().dot(v_out.normalize()).clamp(-1.0, 1.0);
+        if !cos_turn.is_finite() || cos_turn >= 1.0 {
+            return None;
+        }
+        let delta = cos_turn.acos();
+        let eccentricity = 1.0 / (delta / 2.0).sin();
+        let periapsis_dir = (v_out.normalize() - v_in.normalize()).try_normalize()?;
+        if !eccentricity.is_finite()
+            || eccentricity <= 1.0
+            || !periapsis_dir.is_finite()
+        {
+            return None;
+        }
+        Some(Self {
+            eccentricity,
+            periapsis_dir,
+            mu,
+        })
     }
 }
 

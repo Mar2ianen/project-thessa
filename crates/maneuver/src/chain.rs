@@ -39,8 +39,9 @@ use crate::lambert::solve_lambert_prograde;
 use crate::patch::{planet_arrival_match_mag, planet_escape_moon_vinf, planet_of};
 use crate::plan::{FlybyEvent, ManeuverNode, ManeuverPlan};
 use crate::search::{
-    RankedPlan, SearchError, SearchStats, correct_bplane_shooting, correct_shooting,
-    midcourse_time_s, patched_escape_mag, phase_departure_topk, transfer_perigee_m,
+    EncounterTemplate, RankedPlan, SearchError, SearchStats, correct_bplane_shooting,
+    correct_shooting, midcourse_time_s, patched_escape_mag, phase_departure_topk,
+    transfer_perigee_m,
 };
 
 /// How a chain encounter is treated at exact level.
@@ -633,10 +634,9 @@ fn revalidate_chain(
     // Broad encounter plane for leg 1 from its own asymptotes (absent
     // for single-encounter chains: nothing downstream to align with, so
     // fall back to position-only ranking with zero plane weight).
-    // Broad encounter class (eccentricity from the turn angle) for the
-    // e-filter: graze vs dive selection. Skipped for single encounters
-    // and near-straight encounters (no meaningful class).
-    let (plane_normal, plane_speed, e_filter) = if cell.v_out_frames_mps.is_empty() {
+    // Broad encounter template (eccentricity + periapsis direction) for
+    // class/orientation selection. Skipped for single encounters.
+    let (plane_normal, plane_speed, template) = if cell.v_out_frames_mps.is_empty() {
         (DVec3::Y, 0.0, None)
     } else {
         let broad_v_in = cell.v_in_frames_mps[0];
@@ -645,25 +645,8 @@ fn revalidate_chain(
             Some(normal) if normal.is_finite() => (normal, broad_v_in.length()),
             _ => (DVec3::Y, 0.0),
         };
-        let cos_turn = broad_v_in
-            .normalize()
-            .dot(broad_v_out.normalize())
-            .clamp(-1.0, 1.0);
-        let class = if cos_turn.is_finite() && cos_turn < 1.0 {
-            let delta = cos_turn.acos();
-            let e_broad = 1.0 / (delta / 2.0).sin();
-            if e_broad.is_finite() && e_broad > 1.0 && e_broad <= 20.0 {
-                Some((
-                    e_broad,
-                    ephemeris.body(first.body).map_err(SearchError::Ephemeris)?.mu,
-                ))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        (plane.0, plane.1, class)
+        let mu = ephemeris.body(first.body).map_err(SearchError::Ephemeris)?.mu;
+        (plane.0, plane.1, EncounterTemplate::from_bend(broad_v_in, broad_v_out, mu))
     };
     // Screens rank against the leg-1 AIM (standoff sphere), not the
     // body center: center-ranked screens are deep divers threading the
@@ -690,7 +673,7 @@ fn revalidate_chain(
         plane_normal,
         plane_speed,
         aim1,
-        e_filter,
+        template,
         PHASING_BRANCHES,
         stats,
     );
@@ -921,38 +904,78 @@ fn revalidate_chain_from_start(
         .body_state(first.body, epochs[1])
         .map_err(SearchError::Ephemeris)?;
     let first_body = ephemeris.body(first.body).map_err(SearchError::Ephemeris)?;
-    let mid1_s = midcourse_time_s(cell.leg_tofs_s[0]);
-    // Leg 1 stays exact-3D (measured: 2D plane targeting here filters 9/9
-    // on the Nereid tour — downstream legs amplify handoff along-track
-    // slop, so leg 1 must deliver a crisp position).
-    let (dep_burn, tcm1_burn, mut leg_end, miss1) = match correct_shooting(
-        field,
-        point,
-        park_velocity,
-        phased_burn,
-        cell.departure_epoch,
-        cell.leg_tofs_s[0],
-        mid1_s,
-        aim1,
-        DVec3::ZERO,
-        stats,
-    ) {
-        Some(corrected) => corrected,
-        None => {
-            stats.failed_revalidations += 1;
-            return Ok(None);
+    // Leg-1 TCM timing sweep (multi-leg chains only): an early TCM acts
+    // like a departure tweak and reshapes the arrival asymptote, a late
+    // one is terminal guidance that barely touches it. Same aim, same
+    // frozen departure — different arrival velocities. Keep the
+    // gate-passing handoff closest to broad's arrival (position miss plus
+    // TOF-scaled velocity mismatch, the top-K scoring twin). The default
+    // TOF/4 runs FIRST so ties keep the historical behavior bit-identical.
+    // Single-encounter chains skip the sweep (no downstream leg needs the
+    // asymptote, and their validated numbers stay untouched).
+    let tof1_s = cell.leg_tofs_s[0];
+    let mid_candidates: Vec<f64> = if legs > 1 {
+        let mut mids = vec![midcourse_time_s(tof1_s)];
+        for fraction in [1.0 / 8.0, 1.0 / 2.0] {
+            let candidate = (tof1_s * fraction).max(3_600.0).min((tof1_s - 3_600.0).max(3_600.0));
+            if (candidate - mids[0]).abs() > 1.0
+                && mids.iter().all(|prior| (candidate - prior).abs() > 1.0)
+            {
+                mids.push(candidate);
+            }
         }
+        mids
+    } else {
+        vec![midcourse_time_s(tof1_s)]
     };
+    let broad_arrival_velocity =
+        first_state.velocity_inertial + cell.v_in_frames_mps[0];
+    let mut leg1_best: Option<(f64, DVec3, DVec3, TestParticleState, f64)> = None;
+    let mut leg1_best_score = f64::INFINITY;
+    for mid1_s in mid_candidates {
+        let solved = correct_shooting(
+            field,
+            point,
+            park_velocity,
+            phased_burn,
+            cell.departure_epoch,
+            tof1_s,
+            mid1_s,
+            aim1,
+            DVec3::ZERO,
+            stats,
+        );
+        let Some((dep_burn, tcm_burn, end, miss)) = solved else {
+            stats.failed_revalidations += 1;
+            continue;
+        };
+        // Gates identical to the single-timing path below.
+        if !miss.is_finite() || miss > config.max_miss_m {
+            stats.filtered_by_miss += 1;
+            continue;
+        }
+        if (end.position - first_state.position_inertial).length() < first_body.radius_m {
+            stats.filtered_by_miss += 1;
+            continue;
+        }
+        // Score prefers broad-compatible arrival velocity; position miss
+        // breaks near-ties the same way the phasing screens rank.
+        let velocity_part = (end.velocity - broad_arrival_velocity).length() * tof1_s;
+        let score = if velocity_part.is_finite() {
+            miss + velocity_part
+        } else {
+            continue;
+        };
+        if score < leg1_best_score {
+            leg1_best_score = score;
+            leg1_best = Some((mid1_s, dep_burn, tcm_burn, end, miss));
+        }
+    }
+    let Some((mid1_s, dep_burn, tcm1_burn, leg_end, miss1)) = leg1_best else {
+        return Ok(None);
+    };
+    let mut leg_end = leg_end;
     stats.exact_revalidations += 1;
-    // Leg-1 gates: must reach the encounter without lithobraking it.
-    if !miss1.is_finite() || miss1 > config.max_miss_m {
-        stats.filtered_by_miss += 1;
-        return Ok(None);
-    }
-    if (leg_end.position - first_state.position_inertial).length() < first_body.radius_m {
-        stats.filtered_by_miss += 1;
-        return Ok(None);
-    }
     let mut nodes = vec![
         ManeuverNode::new(cell.departure_epoch, dep_burn)
             .map_err(|_| SearchError::NoViableTransfer { stats: *stats })?,

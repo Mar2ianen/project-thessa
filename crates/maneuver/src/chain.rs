@@ -33,7 +33,7 @@
 //!   two separate transfers, not a chain (rejected as invalid config).
 
 use glam::DVec3;
-use thessa_sim_core::{BakedEphemeris, BodyId, GravityField, SimTime};
+use thessa_sim_core::{BakedEphemeris, BodyId, GravityField, SimTime, TestParticleState};
 
 use crate::lambert::solve_lambert_prograde;
 use crate::patch::{planet_arrival_match_mag, planet_escape_moon_vinf, planet_of};
@@ -669,6 +669,177 @@ fn revalidate_chain(
 /// costs a full chain correction).
 const PHASING_BRANCHES: usize = 3;
 
+/// One solved flyby leg: burn nodes (encounter burn, then cruise TCM),
+/// the encounter burn for the event log, and the gated end state.
+struct LegSolution {
+    nodes: Vec<(SimTime, DVec3)>,
+    event_burn: DVec3,
+    end: TestParticleState,
+    miss: f64,
+}
+
+/// Solve one intermediate flyby leg, cooler valid result wins.
+/// Legacy path (2D B-plane stage plus exact 3D polish) always runs.
+/// The analytic path (patched turn now, cruise TCM for the remainder)
+/// runs only when legacy is missing or HOT — hotter than both an
+/// absolute 2 km/s floor and 3x its broad turn expectation — so cool
+/// validated legs keep bit-identical behavior and skip the extra cruise
+/// solve. Returns `None` when neither passes the gates.
+#[allow(clippy::too_many_arguments)]
+fn solve_flyby_leg(
+    ephemeris: &BakedEphemeris,
+    field: &GravityField<'_>,
+    config: &ChainConfig,
+    next: &ChainEncounter,
+    next_epoch: SimTime,
+    next_aim: DVec3,
+    handoff: TestParticleState,
+    flyby_epoch: SimTime,
+    tof_s: f64,
+    flyby_seed: DVec3,
+    broad_incoming: DVec3,
+    broad_turn_mag_mps: f64,
+    stats: &mut SearchStats,
+) -> Option<LegSolution> {
+/// Gate one solved leg: finite miss within budget and no lithobrake.
+/// Counts filtered revalidations like every other gate.
+fn gate_leg(
+    ephemeris: &BakedEphemeris,
+    config: &ChainConfig,
+    next: &ChainEncounter,
+    next_epoch: SimTime,
+    end: &TestParticleState,
+    miss: f64,
+    stats: &mut SearchStats,
+) -> bool {
+    if !miss.is_finite() || miss > config.max_miss_m {
+        stats.filtered_by_miss += 1;
+        return false;
+    }
+    let Ok(next_state) = ephemeris.body_state(next.body, next_epoch) else {
+        return false;
+    };
+    let Ok(target) = ephemeris.body(next.body) else {
+        return false;
+    };
+    if (end.position - next_state.position_inertial).length() < target.radius_m {
+        stats.filtered_by_miss += 1;
+        return false;
+    }
+    true
+}
+    // Legacy path: 2D stage + 3D polish.
+    let legacy: Option<(DVec3, TestParticleState, f64)> = (|| {
+        let (plane_burn, _, _) = correct_bplane_shooting(
+            field,
+            handoff.position,
+            handoff.velocity,
+            flyby_epoch,
+            tof_s,
+            0.0,
+            next_aim,
+            broad_incoming,
+            flyby_seed,
+            stats,
+        )?;
+        let (_, burn, end, miss) = correct_shooting(
+            field,
+            handoff.position,
+            handoff.velocity,
+            DVec3::ZERO,
+            flyby_epoch,
+            tof_s,
+            0.0,
+            next_aim,
+            plane_burn,
+            stats,
+        )?;
+        gate_leg(ephemeris, config, next, next_epoch, &end, miss, stats).then_some((burn, end, miss))
+    })();
+    // Analytic path (gated): patched turn now, cruise TCM for the
+    // remainder. Only attempted when legacy is missing or hot, so the
+    // extra cruise solve is never spent on already-cool legs.
+    const HOT_BURN_FLOOR_MPS: f64 = 2_000.0;
+    let hot = match &legacy {
+        None => true,
+        Some((burn, _, _)) => {
+            burn.length() > HOT_BURN_FLOOR_MPS.max(3.0 * broad_turn_mag_mps)
+        }
+    };
+    let analytic: Option<(DVec3, TestParticleState, f64)> = if hot {
+        (|| {
+            let mid2_s = midcourse_time_s(tof_s);
+            let (_, tcm, end, miss) = correct_shooting(
+                field,
+                handoff.position,
+                handoff.velocity,
+                flyby_seed,
+                flyby_epoch,
+                tof_s,
+                mid2_s,
+                next_aim,
+                DVec3::ZERO,
+                stats,
+            )?;
+            gate_leg(ephemeris, config, next, next_epoch, &end, miss, stats)
+                .then_some((tcm, end, miss))
+        })()
+    } else {
+        None
+    };
+    // Cooler gate-passing burn sum wins; ties go legacy (proven path).
+    // Analytic nodes rebuild the turn (fixed departure of the cruise
+    // solve) plus the solved trim, both trimmed like every node.
+    let build_analytic =
+        |tcm: DVec3, end: TestParticleState, miss: f64| -> LegSolution {
+        let mut nodes = Vec::new();
+        if flyby_seed.length() >= 1.0 {
+            nodes.push((flyby_epoch, flyby_seed));
+        }
+        if tcm.length() >= 1.0 {
+            nodes.push((SimTime(flyby_epoch.0 + midcourse_time_s(tof_s)), tcm));
+        }
+        LegSolution {
+            nodes,
+            event_burn: flyby_seed,
+            end,
+            miss,
+        }
+    };
+    let build_legacy =
+        |burn: DVec3, end: TestParticleState, miss: f64| -> LegSolution {
+        LegSolution {
+            nodes: vec![(flyby_epoch, burn)]
+                .into_iter()
+                .filter(|(_, node_burn)| node_burn.length() >= 1.0)
+                .collect(),
+            event_burn: burn,
+            end,
+            miss,
+        }
+    };
+    match (legacy, analytic) {
+        (Some((legacy_burn, legacy_end, legacy_miss)), Some((tcm, analytic_end, analytic_miss))) => {
+            let analytic_total = flyby_seed.length() + tcm.length();
+            if analytic_total < legacy_burn.length() {
+                Some(build_analytic(tcm, analytic_end, analytic_miss))
+            } else {
+                Some(build_legacy(legacy_burn, legacy_end, legacy_miss))
+            }
+        }
+        (Some((legacy_burn, legacy_end, legacy_miss)), None) => {
+            Some(build_legacy(legacy_burn, legacy_end, legacy_miss))
+        }
+        (None, Some((tcm, analytic_end, analytic_miss))) => {
+            Some(build_analytic(tcm, analytic_end, analytic_miss))
+        }
+        (None, None) => {
+            stats.failed_revalidations += 1;
+            None
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn revalidate_chain_from_start(
     ephemeris: &BakedEphemeris,
@@ -790,54 +961,45 @@ fn revalidate_chain_from_start(
             stats.filtered_by_miss += 1;
             return Ok(None);
         }
-        // Flyby targets solve in two stages. First the encounter PLANE
-        // (2D, minimum-norm): an assist needs the right B-plane crossing
-        // at the right epoch, and the underdetermined solve keeps burns
-        // small by construction, positioning the right basin. Then an
-        // exact 3D polish from the 2D burn trims the along-track remainder
-        // (N-body drift the plane cannot see). Rendezvous targets keep the
-        // single exact 3D solve (the arrival null is evaluated AT the
-        // sphere, so there is no along-track freedom to exploit).
+        // Flyby legs run TWO candidate paths and keep the cooler
+        // gate-passing one (deterministic: lower local burn sum wins,
+        // ties go to the legacy path):
+        // - legacy: 2D B-plane stage (small burns by construction) plus
+        //   exact 3D polish from the 2D burn;
+        // - analytic: the broad-seeded turn applied as-is (patched turn
+        //   at the encounter), then a cruise TCM solves only the N-body
+        //   drift remainder — the flown-mission architecture (conic arcs
+        //   plus trim burns) instead of one giant solved burn.
+        // Rendezvous targets keep the single exact 3D solve (the arrival
+        // null is evaluated AT the sphere, so there is no along-track
+        // freedom to exploit).
         let broad_incoming = cell.v_in_frames_mps[leg];
         let use_plane = next.kind == EncounterKind::Flyby
             && broad_incoming.is_finite()
             && broad_incoming.length_squared() > 0.0;
-        let (flyby_burn, end, miss) = if use_plane {
-            let (plane_burn, _plane_end, _) = match correct_bplane_shooting(
+        let (leg_nodes, event_burn, end, miss) = if use_plane {
+            match solve_flyby_leg(
+                ephemeris,
                 field,
-                leg_end.position,
-                leg_end.velocity,
+                config,
+                next,
+                next_epoch,
+                next_aim,
+                leg_end,
                 flyby_epoch,
                 cell.leg_tofs_s[leg],
-                0.0,
-                next_aim,
-                broad_incoming,
                 flyby_seed,
+                broad_incoming,
+                cell.turn_mags_mps[leg - 1],
                 stats,
             ) {
-                Some(solved) => solved,
-                None => {
-                    stats.failed_revalidations += 1;
-                    return Ok(None);
-                }
-            };
-            match correct_shooting(
-                field,
-                leg_end.position,
-                leg_end.velocity,
-                DVec3::ZERO,
-                flyby_epoch,
-                cell.leg_tofs_s[leg],
-                0.0,
-                next_aim,
-                plane_burn,
-                stats,
-            ) {
-                Some((_, burn, end, miss)) => (burn, end, miss),
-                None => {
-                    stats.failed_revalidations += 1;
-                    return Ok(None);
-                }
+                Some(solution) => (
+                    solution.nodes,
+                    solution.event_burn,
+                    solution.end,
+                    solution.miss,
+                ),
+                None => return Ok(None),
             }
         } else {
             match correct_shooting(
@@ -852,7 +1014,7 @@ fn revalidate_chain_from_start(
                 flyby_seed,
                 stats,
             ) {
-                Some((_, burn, end, miss)) => (burn, end, miss),
+                Some((_, burn, end, miss)) => (vec![(flyby_epoch, burn)], burn, end, miss),
                 None => {
                     stats.failed_revalidations += 1;
                     return Ok(None);
@@ -873,17 +1035,19 @@ fn revalidate_chain_from_start(
             stats.filtered_by_miss += 1;
             return Ok(None);
         }
-        if flyby_burn.length() >= 1.0 {
-            nodes.push(
-                ManeuverNode::new(flyby_epoch, flyby_burn)
-                    .map_err(|_| SearchError::NoViableTransfer { stats: *stats })?,
-            );
+        for (epoch, burn) in leg_nodes {
+            if burn.length() >= 1.0 {
+                nodes.push(
+                    ManeuverNode::new(epoch, burn)
+                        .map_err(|_| SearchError::NoViableTransfer { stats: *stats })?,
+                );
+            }
         }
         flybys.push(FlybyEvent {
             body: encounter.body,
             epoch: flyby_epoch,
             periapsis_m,
-            burn_mps: flyby_burn.length(),
+            burn_mps: event_burn.length(),
         });
         // Final rendezvous: null the arrival velocity at the aim sphere.
         if leg + 1 == legs && next.kind == EncounterKind::Rendezvous {
@@ -1178,7 +1342,6 @@ mod tests {
         assert!(winner.plan.flybys.is_empty());
         assert!(winner.plan.nodes.len() >= 2);
     }
-
     #[test]
     fn chain_search_reports_escape_outgoing_speed() {
         let ephemeris = chain_system();

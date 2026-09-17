@@ -95,6 +95,7 @@ fn kepler_orbit_returns_analytic_periodic_state() {
             absolute_velocity_tolerance_mps: 1.0e-7,
             relative_tolerance: 1.0e-11,
             max_steps: 100_000,
+            dynamical_eta: None,
         },
     )
     .expect("circular orbit should propagate");
@@ -128,6 +129,7 @@ fn eccentric_kepler_orbit_matches_analytic_periapsis_after_one_period() {
             absolute_velocity_tolerance_mps: 1.0e-6,
             relative_tolerance: 1.0e-10,
             max_steps: 100_000,
+            dynamical_eta: None,
         },
     )
     .expect("eccentric orbit should propagate");
@@ -221,6 +223,7 @@ fn moving_secondary_enables_three_body_energy_exchange() {
             absolute_velocity_tolerance_mps: 1.0e-5,
             relative_tolerance: 1.0e-9,
             max_steps: 100_000,
+            dynamical_eta: None,
         },
     )
     .expect("three-body trajectory should propagate");
@@ -284,6 +287,7 @@ fn replay_and_parallel_batch_are_deterministic_and_ordered() {
         absolute_velocity_tolerance_mps: 1.0e-6,
         relative_tolerance: 1.0e-10,
         max_steps: 100_000,
+        dynamical_eta: None,
     };
     let first = propagate_adaptive(&field, initial, SimTime::EPOCH, 10_000.0, config)
         .expect("first replay");

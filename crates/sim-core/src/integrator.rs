@@ -2,7 +2,7 @@ use std::{error::Error, fmt};
 
 use glam::DVec3;
 
-use crate::{BakedEphemeris, BodyId, EphemerisFrame, GravityError, GravityField, SimTime};
+use crate::{BakedEphemeris, BodyId, BodyState, EphemerisFrame, GravityError, GravityField, SimTime};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TestParticleState {
@@ -43,6 +43,18 @@ pub struct AdaptiveIntegratorConfig {
     pub absolute_velocity_tolerance_mps: f64,
     pub relative_tolerance: f64,
     pub max_steps: u64,
+    /// Optional physics-aware step ceiling: each step is additionally
+    /// capped at `eta` times the local dynamical time `sqrt(d^3/mu)` to
+    /// the nearest gravity source. `None` keeps the legacy behavior
+    /// (constant `max_step_s` only). The cap is a safety rail, not a
+    /// driver: on smooth cruise the error controller picks smaller steps
+    /// on its own, while near a well the cap shrinks below any constant
+    /// ceiling before the controller even notices. States used for the
+    /// timescale lag the step start by at most one RK stage (the frame
+    /// already evaluated); with a conservative `eta` that staleness is
+    /// negligible next to the margin, and near wells the accuracy
+    /// controller dominates anyway.
+    pub dynamical_eta: Option<f64>,
 }
 
 impl Default for AdaptiveIntegratorConfig {
@@ -55,6 +67,7 @@ impl Default for AdaptiveIntegratorConfig {
             absolute_velocity_tolerance_mps: 1.0e-6,
             relative_tolerance: 1.0e-10,
             max_steps: 1_000_000,
+            dynamical_eta: None,
         }
     }
 }
@@ -799,12 +812,23 @@ pub fn propagate_adaptive(
     // chains per source (see `acceleration_with_frame`). Buffers grow to
     // the body count on first use, then no per-step allocation.
     let mut frame = EphemerisFrame::new();
+    // Source mus resolved once, in field order, for the dynamical cap.
+    let cap_mus: Option<Vec<(f64, BodyId)>> = config.dynamical_eta.map(|_| field.cap_sources());
 
     while remaining > 0.0 {
         if stats.accepted_steps + stats.rejected_steps >= config.max_steps {
             return Err(IntegratorError::MaxSteps);
         }
-        let h = step_s.min(remaining);
+        let mut h = step_s.min(remaining);
+        if let (Some(eta), Some(sources)) = (config.dynamical_eta, cap_mus.as_ref()) {
+            h = h.min(dynamical_cap(
+                state.position,
+                frame.states(),
+                sources,
+                eta,
+                config.max_step_s,
+            ));
+        }
         if h < config.min_step_s && remaining > config.min_step_s {
             return Err(IntegratorError::StepUnderflow { step_s: h });
         }
@@ -1049,6 +1073,39 @@ fn next_step(step_s: f64, error: f64, max_step_s: f64) -> f64 {
     (step_s * factor).min(max_step_s)
 }
 
+/// Physics-aware step ceiling: `eta` times the local dynamical time
+/// `sqrt(d^3/mu)` to the nearest gravity source. An empty `states` slice
+/// (frame not yet evaluated on the first step) disables the cap by
+/// returning `max_step_s` — the accuracy controller owns the first step.
+/// Sources with non-positive `mu` or missing states are skipped; when
+/// nothing contributes, the constant ceiling applies.
+fn dynamical_cap(
+    position: DVec3,
+    states: &[BodyState],
+    sources: &[(f64, BodyId)],
+    eta: f64,
+    max_step_s: f64,
+) -> f64 {
+    let mut tau = f64::INFINITY;
+    for (mu, id) in sources {
+        if *mu <= 0.0 {
+            continue;
+        }
+        let Some(state) = states.get(id.index()) else {
+            continue;
+        };
+        let d = (state.position_inertial - position).length();
+        if d > 0.0 && d.is_finite() {
+            tau = tau.min((d * d * d / mu).sqrt());
+        }
+    }
+    if tau.is_finite() {
+        (eta * tau).min(max_step_s)
+    } else {
+        max_step_s
+    }
+}
+
 fn validate_duration(duration_s: f64) -> Result<(), IntegratorError> {
     if !duration_s.is_finite() || duration_s < 0.0 {
         Err(IntegratorError::InvalidConfig(
@@ -1070,6 +1127,9 @@ fn validate_adaptive_config(config: AdaptiveIntegratorConfig) -> Result<(), Inte
         || config.absolute_velocity_tolerance_mps <= 0.0
         || config.relative_tolerance <= 0.0
         || config.max_steps == 0
+        || config
+            .dynamical_eta
+            .is_some_and(|eta| !eta.is_finite() || eta <= 0.0)
     {
         return Err(IntegratorError::InvalidConfig(
             "adaptive integrator configuration is invalid".into(),

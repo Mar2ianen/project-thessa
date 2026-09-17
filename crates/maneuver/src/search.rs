@@ -25,6 +25,7 @@
 //! plans with measured miss execute.
 
 use glam::{DMat3, DVec3};
+use rayon::prelude::*;
 use thessa_sim_core::{
     AdaptiveIntegratorConfig, BakedEphemeris, BodyId, BodyState, GravityField, ImpulsiveBurn,
     SimTime, TestParticleState, propagate_adaptive_with_burns,
@@ -189,6 +190,12 @@ pub struct SearchStats {
     pub exact_revalidations: usize,
     pub failed_revalidations: usize,
     pub filtered_by_miss: usize,
+    /// Differential corrections stopped by the hot-stall guard (burn past
+    /// the hot floor with no miss improvement) rather than by convergence
+    /// or by an integrator failure. A hot stall is "this start cannot
+    /// close cheaply", not "the propagator broke" — kept separate so
+    /// failure triage does not conflate the two.
+    pub hot_stall_exits: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -744,7 +751,14 @@ fn loose_config() -> AdaptiveIntegratorConfig {
     AdaptiveIntegratorConfig {
         initial_step_s: 60.0,
         min_step_s: 1.0e-6,
-        max_step_s: 3_600.0,
+        // Screens rank candidates against each other; the exact correction
+        // afterwards measures truth with the tight config. A day-long
+        // ceiling lets the adaptive controller stride deep cruise instead
+        // of paying 24 forced steps per day (500 d = 12k minimum steps at
+        // an hour cap); near a well the error controller shrinks the step
+        // itself. Validated by unchanged cold-trajectory digits, not by
+        // the tolerance name.
+        max_step_s: 86_400.0,
         absolute_position_tolerance_m: 100.0,
         absolute_velocity_tolerance_mps: 1.0e-3,
         relative_tolerance: 1.0e-8,
@@ -810,10 +824,11 @@ pub(crate) fn phase_departure(
     // full-N-body screen; returns miss and departure state on success.
     // Tilt rotates the parking plane around the radial axis so the burn
     // can carry transfer declination, not just in-plane direction.
-    let screen = |tilt_rad: f64,
-                  anomaly: f64,
-                  stats: &mut SearchStats|
-     -> Option<(f64, DVec3, DVec3, DVec3)> {
+    // Pure function of its inputs (no stats mutation — the caller counts
+    // the grid size once), so round grids below run on rayon. Minimum
+    // selection stays a strict left-to-right fold over input order, hence
+    // bit-identical to the serial loop on any worker count.
+    let screen = |tilt_rad: f64, anomaly: f64| -> Option<(f64, DVec3, DVec3, DVec3)> {
         let (sin_t, cos_t) = tilt_rad.sin_cos();
         let tilted_tangent = tangent0 * cos_t - normal * sin_t;
         let (point_dir, tangent) = (
@@ -823,7 +838,6 @@ pub(crate) fn phase_departure(
         let point = depot.position_inertial + point_dir * park_radius;
         let park_velocity = depot.velocity_inertial + tangent * v_circ;
         let burn = tangent * burn_magnitude_mps;
-        stats.phase_screens += 1;
         let flow = propagate_adaptive_with_burns(
             field,
             TestParticleState {
@@ -848,31 +862,41 @@ pub(crate) fn phase_departure(
     let mut center_tilt = 0.0;
     let mut center_angle = 0.0;
     for round in 0..2 {
-        let mut local_best: Option<(f64, f64, f64, DVec3, DVec3, DVec3)> = None;
-        if round == 0 {
-            for tilt_deg in [-30.0f64, -15.0, -7.5, 0.0, 7.5, 15.0, 30.0] {
-                let tilt = tilt_deg.to_radians();
-                for i in 0..12 {
-                    let anomaly = std::f64::consts::TAU * i as f64 / 12.0;
-                    if let Some((miss, point, park_velocity, burn)) = screen(tilt, anomaly, stats)
-                        && local_best.is_none_or(|(best_miss, _, _, _, _, _)| miss < best_miss)
-                    {
-                        local_best = Some((miss, tilt, anomaly, point, park_velocity, burn));
-                    }
-                }
-            }
+        // Input grid in serial-loop order; rayon collect preserves it.
+        let grid: Vec<(f64, f64)> = if round == 0 {
+            [-30.0f64, -15.0, -7.5, 0.0, 7.5, 15.0, 30.0]
+                .into_iter()
+                .flat_map(|tilt_deg| {
+                    let tilt = tilt_deg.to_radians();
+                    (0..12).map(move |i| (tilt, std::f64::consts::TAU * i as f64 / 12.0))
+                })
+                .collect()
         } else {
-            for tilt_step in [-4.0f64, 0.0, 4.0] {
-                let tilt = center_tilt + tilt_step.to_radians();
-                for i in 0..8 {
-                    let span = std::f64::consts::TAU / 6.0;
-                    let anomaly = center_angle - span / 2.0 + span * i as f64 / 7.0;
-                    if let Some((miss, point, park_velocity, burn)) = screen(tilt, anomaly, stats)
-                        && local_best.is_none_or(|(best_miss, _, _, _, _, _)| miss < best_miss)
-                    {
-                        local_best = Some((miss, tilt, anomaly, point, park_velocity, burn));
-                    }
-                }
+            [-4.0f64, 0.0, 4.0]
+                .into_iter()
+                .flat_map(|tilt_step| {
+                    let tilt = center_tilt + tilt_step.to_radians();
+                    (0..8).map(move |i| {
+                        let span = std::f64::consts::TAU / 6.0;
+                        (tilt, center_angle - span / 2.0 + span * i as f64 / 7.0)
+                    })
+                })
+                .collect()
+        };
+        stats.phase_screens += grid.len();
+        let mut local_best: Option<(f64, f64, f64, DVec3, DVec3, DVec3)> = None;
+        for (tilt, anomaly, miss, point, park_velocity, burn) in grid
+            .par_iter()
+            .map(|(tilt, anomaly)| screen(*tilt, *anomaly).map(|s| (*tilt, *anomaly, s)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .flatten()
+            .map(|(tilt, anomaly, (miss, point, park_velocity, burn))| {
+                (tilt, anomaly, miss, point, park_velocity, burn)
+            })
+        {
+            if local_best.is_none_or(|(best_miss, _, _, _, _, _)| miss < best_miss) {
+                local_best = Some((miss, tilt, anomaly, point, park_velocity, burn));
             }
         }
         match local_best {
@@ -949,13 +973,25 @@ pub(crate) fn phase_departure_topk(
     if !v_circ.is_finite() {
         return Vec::new();
     }
-    let mut scored: Vec<(f64, f64, f64, f64, DVec3, DVec3, DVec3)> = Vec::new();
-    for tilt_deg in [-30.0f64, -15.0, -7.5, 0.0, 7.5, 15.0, 30.0] {
-        let tilt = tilt_deg.to_radians();
-        let (sin_t, cos_t) = tilt.sin_cos();
-        let tilted_tangent = tangent0 * cos_t - normal * sin_t;
-        for i in 0..12 {
-            let anomaly = std::f64::consts::TAU * i as f64 / 12.0;
+    // Round-0 tilt x anomaly grid, evaluated in parallel: the 84 screens
+    // are independent full-arc propagations (embarrassingly parallel —
+    // parallelism belongs here, across independent jobs, never inside the
+    // gravity kernel). rayon `collect` preserves input order, and every
+    // step below (score sort, class filter, greedy distinct pick) is the
+    // same deterministic sequence as the serial loop, so the shortlist is
+    // identical bit-for-bit on any worker count.
+    let grid: Vec<(f64, f64)> = [-30.0f64, -15.0, -7.5, 0.0, 7.5, 15.0, 30.0]
+        .into_iter()
+        .flat_map(|tilt_deg| {
+            let tilt = tilt_deg.to_radians();
+            (0..12).map(move |i| (tilt, std::f64::consts::TAU * i as f64 / 12.0))
+        })
+        .collect();
+    let screened: Vec<_> = grid
+        .par_iter()
+        .map(|(tilt, anomaly)| {
+            let (sin_t, cos_t) = tilt.sin_cos();
+            let tilted_tangent = tangent0 * cos_t - normal * sin_t;
             let (point_dir, tangent) = (
                 radial_unit * anomaly.cos() + tilted_tangent * anomaly.sin(),
                 tilted_tangent * anomaly.cos() - radial_unit * anomaly.sin(),
@@ -963,8 +999,7 @@ pub(crate) fn phase_departure_topk(
             let point = depot.position_inertial + point_dir * park_radius;
             let park_velocity = depot.velocity_inertial + tangent * v_circ;
             let burn = tangent * burn_magnitude_mps;
-            stats.phase_screens += 1;
-            let Ok(flow) = propagate_adaptive_with_burns(
+            let flow = propagate_adaptive_with_burns(
                 field,
                 TestParticleState {
                     position: point,
@@ -974,12 +1009,11 @@ pub(crate) fn phase_departure_topk(
                 time_of_flight_s,
                 &[],
                 loose_config(),
-            ) else {
-                continue;
-            };
+            )
+            .ok()?;
             let miss = (flow.state.position - aim_point_m).length();
             if !miss.is_finite() {
-                continue;
+                return None;
             }
             // Encounter-relative state for the fingerprint below.
             let rel_pos = flow.state.position - arrival.position_inertial;
@@ -1032,11 +1066,14 @@ pub(crate) fn phase_departure_topk(
             let score = if plane_angle.is_finite() {
                 miss + time_of_flight_s * plane_speed_mps * (plane_angle + peri_angle)
             } else {
-                continue;
+                return None;
             };
-            scored.push((score, screen_e, tilt, anomaly, point, park_velocity, burn));
-        }
-    }
+            Some((score, screen_e, *tilt, *anomaly, point, park_velocity, burn))
+        })
+        .collect();
+    stats.phase_screens += grid.len();
+    let mut scored: Vec<(f64, f64, f64, f64, DVec3, DVec3, DVec3)> =
+        screened.into_iter().flatten().collect();
     scored.sort_by(|a, b| a.0.total_cmp(&b.0));
     // Encounter-class filter: keep screens whose osculating eccentricity
     // is within 5x of broad's (graze vs dive is an order-of-magnitude
@@ -1236,6 +1273,7 @@ pub(crate) fn correct_shooting(
             break;
         }
         if mid_burn.length() > HOT_BURN_MPS && stall_iters >= STALL_ITERS {
+            stats.hot_stall_exits += 1;
             break;
         }
         // Finite-difference step scaled for CONSTANT ~1e5 m displacement at

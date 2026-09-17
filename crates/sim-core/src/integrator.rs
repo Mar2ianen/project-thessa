@@ -814,6 +814,14 @@ pub fn propagate_adaptive(
     let mut frame = EphemerisFrame::new();
     // Source mus resolved once, in field order, for the dynamical cap.
     let cap_mus: Option<Vec<(f64, BodyId)>> = config.dynamical_eta.map(|_| field.cap_sources());
+    // FSAL cache: Dormand–Prince 5(4) evaluates its last stage at the
+    // accepted endpoint, which is exactly the next step's first stage
+    // (First Same As Last) — one RHS evaluation saved per accepted step.
+    // A rejected step leaves (state, time) untouched, so its first stage
+    // stays valid for the retried smaller step and is kept as well.
+    // Reuse is bitwise-exact (same values, skipped recomputation), hence
+    // trajectories do not change, only the evaluation count does.
+    let mut cached_k1: Option<Derivative> = None;
 
     while remaining > 0.0 {
         if stats.accepted_steps + stats.rejected_steps >= config.max_steps {
@@ -832,7 +840,8 @@ pub fn propagate_adaptive(
         if h < config.min_step_s && remaining > config.min_step_s {
             return Err(IntegratorError::StepUnderflow { step_s: h });
         }
-        let (candidate, error_state) = dormand_prince_step(field, state, time, h, &mut frame)?;
+        let (candidate, error_state, used_k1, k7) =
+            dormand_prince_step(field, state, time, h, cached_k1.take(), &mut frame)?;
         let error = normalized_error(error_state, candidate, config);
         if error <= 1.0 || h <= config.min_step_s {
             if error > 1.0 {
@@ -843,9 +852,11 @@ pub fn propagate_adaptive(
             remaining -= h;
             stats.accepted_steps += 1;
             step_s = next_step(h, error, config.max_step_s);
+            cached_k1 = Some(k7);
         } else {
             stats.rejected_steps += 1;
             step_s = (h * (0.9 * error.powf(-0.2)).clamp(0.1, 0.5)).max(config.min_step_s);
+            cached_k1 = Some(used_k1);
         }
     }
     Ok(PropagationResult {
@@ -947,9 +958,24 @@ fn dormand_prince_step(
     state: TestParticleState,
     time: SimTime,
     h: f64,
+    k1: Option<Derivative>,
     frame: &mut EphemerisFrame,
-) -> Result<(TestParticleState, TestParticleState), IntegratorError> {
-    let k1 = derivative(field, state, time, frame)?;
+) -> Result<
+    (
+        TestParticleState,
+        TestParticleState,
+        Derivative,
+        Derivative,
+    ),
+    IntegratorError,
+> {
+    // FSAL: reuse the previous accepted step's last stage when the caller
+    // hands it in; otherwise evaluate. The returned `used_k1` lets the
+    // caller keep it across a rejected retry (same state and time).
+    let k1 = match k1 {
+        Some(k1) => k1,
+        None => derivative(field, state, time, frame)?,
+    };
     let k2 = derivative(
         field,
         combine(state, h, &[(1.0 / 5.0, k1)]),
@@ -1048,6 +1074,8 @@ fn dormand_prince_step(
             position: fifth.position - fourth.position,
             velocity: fifth.velocity - fourth.velocity,
         },
+        k1,
+        k7,
     ))
 }
 

@@ -2184,6 +2184,32 @@ fn aero_batch_preserves_order_and_replay() {
 }
 
 #[test]
+fn x15_starter_profile_ships_compiled_contact_geometry() {
+    let starter = X15StarterProfile::new().expect("X-15 starter profile");
+    let geometry = &starter.vehicle.collision_geometry;
+    assert!(!geometry.is_empty());
+    geometry
+        .validate()
+        .expect("X-15 contact geometry validates");
+    assert_eq!(geometry.parts.len(), 4);
+    // The compound must cover the flown stations: fuselage capsule along the
+    // body X axis plus wing/tail cuboids at the aero panel stations.
+    let has_capsule = geometry.parts.iter().any(|part| {
+        matches!(
+            part.shape,
+            crate::CollisionShape::Capsule {
+                axis: crate::CollisionAxis::X,
+                ..
+            }
+        )
+    });
+    assert!(
+        has_capsule,
+        "X-15 contact geometry needs a fuselage capsule"
+    );
+}
+
+#[test]
 fn x15_starter_profile_provides_surface_acceleration_margin() {
     let starter = X15StarterProfile::new().expect("X-15 starter profile");
     let model = PanelAeroModel::new(starter.aero_config).expect("X-15 aero model");

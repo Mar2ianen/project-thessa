@@ -19,7 +19,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("vehicle: {}", vehicle.name);
     println!("panels: {}", vehicle.aero_geometry.panels.len());
     println!("control surfaces: {}", vehicle.control_surfaces.len());
-    println!("collision parts: {}", vehicle.collision_geometry.parts.len());
+    println!(
+        "collision parts: {}",
+        vehicle.collision_geometry.parts.len()
+    );
     println!("mass: {:.3} kg", vehicle.mass_properties.mass_kg);
     if let Some(output) = options.output {
         let json = serde_json::to_string_pretty(&vehicle)?;
@@ -65,10 +68,10 @@ impl VehicleAsset {
                 .map(CollisionPartAsset::bake)
                 .collect::<Result<Vec<_>, _>>()?,
         )?;
-        Ok(VehicleDefinition::new(
-            self.name, geometry, properties, controls,
-        )?
-        .with_collision_geometry(collision_geometry)?)
+        Ok(
+            VehicleDefinition::new(self.name, geometry, properties, controls)?
+                .with_collision_geometry(collision_geometry)?,
+        )
     }
 }
 
@@ -328,7 +331,8 @@ mod tests {
         let vehicle = asset.bake().expect("vehicle asset should bake");
         assert_eq!(vehicle.aero_geometry.panels.len(), 4);
         assert_eq!(vehicle.control_surfaces.len(), 2);
-        assert!(vehicle.collision_geometry.is_empty());
+        assert_eq!(vehicle.collision_geometry.parts.len(), 4);
+        assert!(vehicle.collision_geometry.validate().is_ok());
         assert_eq!(vehicle.mass_properties.mass_kg, 1_000.0);
         let json = serde_json::to_string(&vehicle).expect("vehicle JSON should serialize");
         let round_trip: VehicleDefinition =

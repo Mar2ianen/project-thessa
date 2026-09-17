@@ -7,6 +7,7 @@ license = "GPL-3.0-or-later"
 publish = false
 
 [dependencies]
+thessa-collision = { path = "../collision" }
 thessa-flight-control = { path = "../flight-control" }
 thessa-sim-core = { path = "../sim-core" }
 thessa-worldgen-rocky = { path = "../../tools/worldgen-rocky" }

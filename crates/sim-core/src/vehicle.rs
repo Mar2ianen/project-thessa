@@ -1,10 +1,11 @@
 use std::{error::Error, fmt};
 
-use glam::DVec3;
+use glam::{DQuat, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AeroConfig, AeroError, AeroGeometry, AeroPanel, CollisionError, CollisionGeometry, FlightError,
+    AeroConfig, AeroError, AeroGeometry, AeroPanel, CollisionAxis, CollisionError,
+    CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, FlightError,
     RigidBodyProperties,
 };
 
@@ -199,7 +200,8 @@ impl X15StarterProfile {
                 geometry,
                 mass_properties,
                 control_surfaces,
-            )?,
+            )?
+            .with_collision_geometry(x15_contact_geometry()?)?,
             aero_config: AeroConfig {
                 lift_slope_per_rad: 4.6,
                 control_effectiveness: 0.82,
@@ -229,6 +231,59 @@ impl X15StarterProfile {
         }
         Ok(DVec3::X * (throttle * self.max_thrust_n))
     }
+}
+
+/// Solver-neutral contact geometry for the X-15 flight-test article.
+///
+/// Every primitive is placed at the same body stations as the aerodynamic
+/// panels compiled above: the fuselage capsule spans the wing/tail stations
+/// with nose/tail overhang from the real 15.45 m airframe length, the wing
+/// cuboid covers the 6.8 m span at the wing station, and the tail cuboids sit
+/// at the tail stations. No dimension is invented to exercise a solver; the
+/// compound is the minimal convex cover of the flown shape for runway and
+/// terrain contact.
+pub fn x15_contact_geometry() -> Result<CollisionGeometry, VehicleError> {
+    let material = CollisionMaterial::new(0.7, 0.0).map_err(VehicleError::Collision)?;
+    let fuselage = CollisionPart::new(
+        DVec3::new(0.75, 0.0, 0.1),
+        DQuat::IDENTITY,
+        CollisionShape::Capsule {
+            axis: CollisionAxis::X,
+            half_segment_m: 5.5,
+            radius_m: 0.75,
+        },
+        material,
+    )
+    .map_err(VehicleError::Collision)?;
+    let wing = CollisionPart::new(
+        DVec3::new(0.20, 0.0, 0.0),
+        DQuat::IDENTITY,
+        CollisionShape::Cuboid {
+            half_extents_m: DVec3::new(1.55, 3.4, 0.12),
+        },
+        material,
+    )
+    .map_err(VehicleError::Collision)?;
+    let horizontal_tail = CollisionPart::new(
+        DVec3::new(-4.15, 0.0, 0.12),
+        DQuat::IDENTITY,
+        CollisionShape::Cuboid {
+            half_extents_m: DVec3::new(0.55, 1.6, 0.08),
+        },
+        material,
+    )
+    .map_err(VehicleError::Collision)?;
+    let vertical_tail = CollisionPart::new(
+        DVec3::new(-3.75, 0.0, 0.72),
+        DQuat::IDENTITY,
+        CollisionShape::Cuboid {
+            half_extents_m: DVec3::new(0.85, 0.10, 1.18),
+        },
+        material,
+    )
+    .map_err(VehicleError::Collision)?;
+    CollisionGeometry::new(vec![fuselage, wing, horizontal_tail, vertical_tail])
+        .map_err(VehicleError::Collision)
 }
 
 impl VehicleDefinition {
@@ -340,7 +395,9 @@ impl fmt::Display for VehicleError {
         match self {
             Self::InvalidVehicle(message) => write!(formatter, "invalid vehicle: {message}"),
             Self::Geometry(error) => write!(formatter, "vehicle geometry error: {error}"),
-            Self::Collision(error) => write!(formatter, "vehicle collision geometry error: {error}"),
+            Self::Collision(error) => {
+                write!(formatter, "vehicle collision geometry error: {error}")
+            }
             Self::MassProperties(error) => {
                 write!(formatter, "invalid vehicle mass properties: {error}")
             }

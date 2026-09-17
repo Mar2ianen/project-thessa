@@ -257,7 +257,7 @@ state divergence envelope.
 
 ## 11. Current MVP in this branch
 
-Implemented:
+Implemented (update 2026-09-17, second slice):
 
 - workspace `thessa-collision` crate using `rapier3d-f64` 0.35.3;
 - backend-neutral f64/SI collision primitives in `thessa-sim-core`;
@@ -271,25 +271,70 @@ Implemented:
 - full-CCD/sleep policy hooks;
 - Rapier step + authoritative `RigidBodyState` readback;
 - regression test for astronomical-origin state round-trip;
-- known-case test for a gravity-loaded sphere settling on a floor at 120 Hz.
+- known-case test for a gravity-loaded sphere settling on a floor at 120 Hz;
+- position-based **kinematic terrain seam** (`insert_kinematic_cuboid`,
+  `insert_kinematic_trimesh`, `set_next_kinematic_pose`): the caller
+  prescribes the ephemeris/body-rotation-derived pose at tick `n+1` and
+  Rapier derives the surface velocity that enters contacts — a landed body
+  rides a rising platform in the regression test;
+- body/patch **removal** (`remove_dynamic_body`, `remove_static_collider`,
+  `remove_kinematic_body`) so topology changes and terrain streaming evict
+  stale backend state instead of leaking it;
+- `ContactRuntime` + `ContactActivation` in `thessa-flight-authority`:
+  transient `CollisionWorld` ownership, stable Thessa body mapping with
+  rebuild on geometry change, hysteresis activation (uncertain evidence
+  stays contact-active), rising-edge reporting for rails invalidation, and
+  a wrench seam (`evaluate_wrench`) that reuses exactly the flight step's
+  force evaluation without calling the free-flight integrator;
+- compiled `CollisionGeometry` assets: `x15_contact_geometry()` (fuselage
+  capsule + wing/tail cuboids at the flown aero stations) ships in every
+  `X15StarterProfile`, and `data/vehicles/example_aircraft.toml` carries
+  four primitives at its panel stations;
+- free-flight parity fixture: a vacuum force/torque load tracks the
+  authoritative symplectic-Euler translation inside a 0.10 m / 0.05 m/s
+  envelope over 1 s at 120 Hz;
+- fast-impact CCD fixture (60 m/s sphere, no tunnelling) and a kinematic
+  carry fixture;
+- `CollisionDebugSnapshot` telemetry (per-body inertial pose/velocity,
+  sleep state, active/touching pair counts, JSON-serializable) plus the
+  `contact_debug` probe that lands the X-15 compound on a runway
+  (settles belly-down at the 0.65 m fuselage keel, sleeps, one touching
+  pair);
+- `contacts` bench sweeps 1/8/64/256/1024 active bodies and reports
+  throughput plus touching/sleeping counts for both `parallel` settings.
+
+Measured 2026-09-17 (settled sleeping piles, 120 Hz, release):
+
+| bodies | parallel body-steps/s | serial body-steps/s |
+| -----: | --------------------: | ------------------: |
+|      1 |             1 347 322 |           2 276 081 |
+|      8 |             3 285 922 |           4 210 441 |
+|     64 |             6 293 599 |           6 775 096 |
+|    256 |             5 625 426 |           6 512 705 |
+|   1024 |             4 676 810 |           4 116 704 |
+
+Serial wins on settled scenes: Rayon overhead exceeds the gain once bodies
+sleep, exactly the §8 caveat. Keep `parallel` switchable and re-measure on
+awake/constraint-heavy scenes before choosing scheduler granularity.
 
 Not implemented yet:
 
-- `FlightAuthority` regime switch to the collision path;
-- kinematic rotating planetary terrain;
-- collision geometry emitted by `vehicle-baker`/vehicle assets;
+- `FlightAuthority` regime switch wiring the contact path into the live
+  120 Hz step (the `step` split into `evaluate external loads` +
+  `integrate` exists as `evaluate_forces` reuse + `ContactRuntime::step`;
+  the loop call site is still the free-flight integrator);
+- terrain collision streaming from worldgen (patch attach/evict API
+  exists; the producer side is not wired);
+- multi-vehicle contact activation broad phase;
 - contact event -> structural failure/damage mapping;
 - joints/docking API;
-- terrain collision streaming and eviction;
-- multi-vehicle contact activation broad phase;
-- benchmark harness and numerical comparison against the old free-flight
-  integrator in the no-contact limit;
-- collision debug rendering/telemetry.
+- replay test for the `enhanced-determinism` envelope;
+- collision debug rendering (Bevy gizmos; telemetry side is done).
 
-The absence of the `FlightAuthority` switch is deliberate: wiring static
-terrain into live Thessa surface flight would be physically wrong for a rotating
-body. Add the kinematic terrain seam first, then make Rapier the sole rigid-body
-integrator for contact-active ticks.
+The absence of the live-loop `FlightAuthority` switch is deliberate:
+static terrain stays out of live Thessa surface flight on a rotating body.
+Wire the switch only through the kinematic terrain seam, with the
+free-flight parity envelope as the gate.
 
 ## 12. Next implementation slice
 

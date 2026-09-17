@@ -5644,6 +5644,8 @@ version = "0.0.1"
 dependencies = [
  "glam 0.32.1",
  "rapier3d-f64",
+ "serde",
+ "serde_json",
  "thessa-sim-core",
 ]
 
@@ -5653,6 +5655,7 @@ version = "0.0.1"
 dependencies = [
  "glam 0.32.1",
  "serde",
+ "thessa-collision",
  "thessa-flight-control",
  "thessa-sim-core",
  "thessa-worldgen-rocky",

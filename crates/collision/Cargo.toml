@@ -14,7 +14,11 @@ enhanced-determinism = ["rapier3d-f64/enhanced-determinism"]
 [dependencies]
 glam.workspace = true
 rapier3d-f64.workspace = true
+serde.workspace = true
 thessa-sim-core = { path = "../sim-core" }
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [[bench]]
 name = "contacts"

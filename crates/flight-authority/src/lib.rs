@@ -13,6 +13,7 @@
 //! green.
 
 pub mod bake;
+pub mod contact;
 pub(crate) mod control;
 pub mod launch_site;
 pub mod mode;
@@ -27,6 +28,7 @@ pub use thessa_flight_control::{
 };
 
 pub use bake::{BakeQueue, BakedRails, InlineBakeQueue, RailsBakeRequest};
+pub use contact::{ContactActivation, ContactRuntime};
 pub use launch_site::{canonical_launch_setup, canonical_world_field, survey_bookmarks};
 pub use mode::{ControlMode, FlightRegime};
 pub use runtime::{

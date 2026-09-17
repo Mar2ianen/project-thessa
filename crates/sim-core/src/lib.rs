@@ -82,7 +82,10 @@ pub use table::{EphemerisTable, TABLE_NODE_EVERY_STEPS, TableSnapshot};
 pub use tick_integrator::{TickIntegratorConfig, propagate_tick_adaptive};
 pub use time::{SimTime, WORLD_TICK_HZ, WORLD_TICK_S, WorldTick};
 pub use units::{AU_M, DAY_S, EARTH_MASS_KG, G, JUPITER_MASS_KG, SOLAR_MASS_KG, TAU};
-pub use vehicle::{ControlSurfaceDefinition, VehicleDefinition, VehicleError, X15StarterProfile};
+pub use vehicle::{
+    ControlSurfaceDefinition, VehicleDefinition, VehicleError, X15StarterProfile,
+    x15_contact_geometry,
+};
 
 #[cfg(test)]
 mod tests;

@@ -1,4 +1,4 @@
-/* FFI shim over vendored libcbt (see cbt.h and ../libcbt.REVISION).
+/* Bench-only FFI shim over vendored libcbt (see cbt.h and ../libcbt.REVISION).
  *
  * The shim exposes plain-integer functions so Rust never passes the
  * bitfield `cbt_Node` struct by value across the ABI boundary. Semantics
@@ -14,9 +14,9 @@
  * The default build is WITHOUT OpenMP, so the primary comparison measures
  * serial bitfield updates against the serial Rust tree, not thread-pool
  * effects. A second build with THESSA_MT renames every entry point with a
- * `thessa_mt_` prefix and enables OpenMP. The serial entry points are
- * suitable for an explicitly selected runtime backend; the OpenMP entry
- * points are optional and can be selected where a parallel handle is safe.
+ * `thessa_mt_` prefix and enables OpenMP, purely for thread-scaling
+ * experiments. This file is bench/test tooling only and is never linked
+ * into the game runtime or server.
  */
 
 #include <stdint.h>

@@ -1,34 +1,31 @@
-# ADR 0011 — RCBT logical boundary
+# ADR-0011 — RCBT logical and backend boundary
 
-Status: accepted and implemented in part, 2026-09-14.
+Status: accepted.
 
 ## Decision
 
-Keep adaptive binary-tree topology independent from terrain semantics and
-graphics APIs.
+The first RCBT implementation is split into three packages:
 
-- `thessa-rcbt-core` owns logical nodes, split/merge validation, frame
-  planning, compact height pages, serialization, and backend contracts.
-- `thessa-bevy-rcbt` owns only Bevy resources and the `PostUpdate` commit
-  boundary. It accepts domain candidates and returns bounded updates plus a
-  leaf snapshot.
-- Terrain code owns cube-face addressing, `PlanetField` sampling, material
-  policy, and the CPU fallback.
-- `thessa-rcbt-wgpu` owns wgpu handles and WGSL dispatch.
-- `thessa-rcbt-ref` remains a test oracle. `thessa-rcbt-ffi` is an optional
-  topology backend: it may be selected by a client/tool/runtime build, but it
-  is never required by the server or by `rcbt-core`.
+- `thessa-rcbt-core`: pure Rust node addressing, observable topology,
+  deterministic update planning, serialization, and backend-neutral contracts;
+- `thessa-rcbt-ref`: an independent, portable observable-semantics oracle for
+  differential tests. The pinned upstream `libcbt` revision remains a reference
+  and benchmark target, not a runtime dependency;
+- `thessa-rcbt-wgpu`: the portable compute adapter, owning all wgpu handles and
+  WGSL kernels.
 
-## Rationale
+`PlanetField`, cube-sphere addressing, baked height pages, and Bevy extraction
+remain adapters outside `thessa-rcbt-core`. The current CPU tile renderer is a
+fallback until topology, seams, height error, and frame metrics reach parity.
 
-CBT is a visual representation, not authoritative physics. Keeping this
-boundary means a server can answer surface queries without a GPU, a client can
-retain a safe CPU path, and another renderer can consume the same topology
-contracts without importing Bevy or wgpu into simulation code.
+The initial core uses a sorted leaf set deliberately. Packed bitplanes and
+parallel mutation are optimization candidates, not observable API contracts;
+they require workload benchmarks before adoption.
 
 ## Consequences
 
-The first integrated client milestone intentionally runs both the established
-CPU terrain renderer and CBT scheduling. GPU draw-list extraction is a follow-up
-implementation, gated by parity, error, and benchmark evidence rather than by
-the existence of a compute shader.
+- Dedicated/headless server builds do not pull in Bevy, wgpu, or a GPU.
+- A native backend can implement the same `CbtBackend` contract later.
+- The wgpu prototype can validate dispatch and shader portability before it is
+  allowed to replace the existing terrain path.
+- Logical topology snapshots are stable across internal representation changes.

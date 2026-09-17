@@ -1,16 +1,6 @@
 # Unified control, guidance, and autopilot architecture
 
-Status: partially implemented design record.
-
-The original refactor is now represented by `thessa-flight-control`,
-`thessa-flight-authority`, `thessa-autopilot`, `thessa-autopilot-js`,
-`thessa-flight-net`, and `thessa-maneuver`. Guidance intents, aircraft/
-spacecraft/direct laws, policy, allocation, actuator dynamics, typed graph
-execution, simulation-time waits, QuickJS limits, and plan execution are
-implemented prototypes. This document retains the detailed design rationale;
-the current behavior and missing pieces are summarized in
-[`07_AUTOPILOT.md`](07_AUTOPILOT.md) and
-[`04_RUNTIME_ARCHITECTURE.md`](04_RUNTIME_ARCHITECTURE.md).
+Status: design target.
 
 This document defines the control refactor that collapses the current SAS/assist split into one guidance-and-control stack, separates aircraft and spacecraft control laws, and adds a MechJeb-like programmable automation layer backed by QuickJS.
 
@@ -58,7 +48,7 @@ The architecture should:
 - park automation at `await` boundaries in the Rust scheduler rather than polling scripts every physics tick;
 - preserve the server-authoritative model and remain compatible with trajectory certification / baking.
 
-## 2. Original problem statement
+## 2. Current problem
 
 The current `ControlMode` combines concepts from different layers:
 
@@ -614,10 +604,7 @@ The authoritative server owns:
 
 Clients send pilot intent and graph-edit / command operations, never authoritative actuator state or world state.
 
-The legacy wire representation still carries implementation details such as
-`ControlMode`, `sas_target_xyzw`, and `sas_enabled` for compatibility. Typed
-guidance and autopilot messages now exist alongside it; a later cleanup may
-remove the legacy fields after migration coverage is complete.
+The current wire representation leaks implementation details through fields such as `ControlMode`, `sas_target_xyzw`, and `sas_enabled`. A later protocol version should replace them with the new guidance/control command model.
 
 The client may still locally render guidance targets, modes, diagnostics, and graph state, but simulation decisions remain server-side.
 
@@ -664,11 +651,7 @@ The exact crate split is not normative; the dependency direction is.
 
 `sim-core` must not depend on QuickJS or UI. JavaScript must not own physics state.
 
-## 15. Remaining work and historical refactor plan
-
-Phases 1–7 below are implemented to prototype depth. They remain useful as a
-checklist for missing edge cases and production hardening; phase 8 and the
-complete graph/editor/library integration are future work.
+## 15. Refactor plan
 
 The refactor should be behavior-preserving before new features are added.
 

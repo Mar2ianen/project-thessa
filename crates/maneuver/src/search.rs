@@ -1203,6 +1203,19 @@ pub(crate) fn correct_shooting(
     // trajectories, same count): backtracking only engages on evaluation
     // failure, which previously killed the whole run.
     let mut end = shoot(mid_burn)?;
+    // Hot-stall early exit (Voyager lesson): a converged leg improves its
+    // miss by orders of magnitude per iteration, so five straight
+    // iterations without even a 1% gain mean Newton is wandering, not
+    // converging. Past a 2 km/s midcourse burn (cold TCMs measure <= ~900
+    // on Luna/Mars/Venus legs) that wander is a hot leg: quit and return
+    // the best seen instead of burning the remaining iterations (each
+    // costs four full-arc N-body propagations — minutes on 1000 d legs).
+    // Cold trajectories never trip this: they either converge (exiting
+    // above) or improve by orders per step (resetting the stall count),
+    // so their paths stay bit-identical.
+    const HOT_BURN_MPS: f64 = 2_000.0;
+    const STALL_ITERS: u32 = 5;
+    let mut stall_iters: u32 = 0;
     for _ in 0..MAX_ITERS {
         let miss_vec = aim_point_m - end.position;
         let miss = miss_vec.length();
@@ -1210,9 +1223,19 @@ pub(crate) fn correct_shooting(
             break;
         }
         if best.is_none_or(|(_, _, best_miss)| miss < best_miss) {
+            let improved = match best {
+                Some((_, _, best_miss)) => miss < 0.99 * best_miss,
+                None => true,
+            };
             best = Some((mid_burn, end, miss));
+            stall_iters = if improved { 0 } else { stall_iters.saturating_add(1) };
+        } else {
+            stall_iters = stall_iters.saturating_add(1);
         }
         if miss <= TARGET_MISS_M {
+            break;
+        }
+        if mid_burn.length() > HOT_BURN_MPS && stall_iters >= STALL_ITERS {
             break;
         }
         // Finite-difference step scaled for CONSTANT ~1e5 m displacement at

@@ -199,4 +199,21 @@ mod tests {
         assert!(m.core_rgb[2] > m.core_rgb[0]);
         assert!(m.mid_rgb[0] > m.mid_rgb[2]);
     }
+
+    #[test]
+    fn shared_divisor_bounds_tinted_ramp() {
+        // Hues divided by the shared divisor stay in 0..=1: absolute
+        // brightness lives only in the profile emission scale.
+        for family in all_families() {
+            let m = optical_material(family);
+            let divisor = hue_divisor(m);
+            assert!(divisor > 0.0);
+            for t in [0.0, 0.05, 0.25, 0.6, 1.0] {
+                for channel in ramp_rgb(m, t) {
+                    assert!(channel / divisor <= 1.0 + 1e-9);
+                    assert!(channel / divisor >= 0.0);
+                }
+            }
+        }
+    }
 }

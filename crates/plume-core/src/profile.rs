@@ -163,6 +163,34 @@ pub fn emission_gain(source: &PlumeSource) -> f64 {
         * source.throttle;
     material.luminosity * (power / 1.0e6).clamp(0.0, 40.0)
 }
+
+/// Near-lip expansion-fan factor 0..1.2 from the pressure ratio: matched
+/// flow has none, underexpanded flow balloons past the lip (reduced
+/// Prandtl-Meyer form, direction-tested). Single source for the builder
+/// and the GPU uniform fill.
+pub fn expansion_fan(pi: f64) -> f64 {
+    if !pi.is_finite() || pi <= 0.0 {
+        return 0.0;
+    }
+    1.2 * (1.0 - 1.0 / pi.max(1.0))
+}
+
+/// Linear spread rate with mismatch (documented reduced form).
+pub fn spread_rate(pi: f64) -> f64 {
+    0.12 + 0.10 * (1.0 - 1.0 / pi.max(1.0))
+}
+
+/// Mean plume radius at axial `z_m`: linear spread plus the saturating
+/// near-lip fan bulge. Single source for the builder and the GPU pass
+/// (mirrored constants); `R(0) == exit_radius_m` exactly.
+pub fn mean_radius(exit_radius_m: f64, spread: f64, fan: f64, z_m: f64) -> f64 {
+    let diameter = (2.0 * exit_radius_m).max(1e-6);
+    exit_radius_m * (1.0 + spread * z_m.max(0.0) / diameter)
+        + exit_radius_m * fan * (1.0 - (-z_m.max(0.0) / (2.0 * diameter)).exp())
+}
+
+/// Build the mean axial profile. `max_samples` is a representation budget
+/// (2..=64, clamped): physics is budget-independent (tested).
 ///
 /// Returns an empty profile (not an error) when `throttle <= 0`: a shut-down
 /// engine contributes zero visible/lighting output.
@@ -191,13 +219,8 @@ pub fn build_axial_profile(
     let length = diameter * source.exit_mach * pi.max(0.05).sqrt() * 3.0;
     let length = length.clamp(diameter * 2.0, 4000.0);
 
-    let spread = 0.12 + 0.10 * (1.0 - 1.0 / pi.max(1.0));
-    // Near-lip expansion fan (reduced Prandtl-Meyer form): a fixed nozzle
-    // venting into falling ambient pressure balloons just past the lip and
-    // the bulge saturates downstream. `fan` is the extra exit-radii of
-    // bulge at full underexpansion; matched flow has none. Mirrored in the
-    // GPU pass (same formula, same constants); tests pin direction only.
-    let fan = 1.2 * (1.0 - 1.0 / pi.max(1.0));
+    let spread = spread_rate(pi);
+    let fan = expansion_fan(pi);
     let cell = shock_cell_spacing_m(diameter, source.exit_mach, pi);
     let amp = shock_amplitude(pi);
     let material = optical_material(source.exhaust);
@@ -208,7 +231,7 @@ pub fn build_axial_profile(
     for i in 0..samples {
         let z = length * i as f64 / (samples - 1) as f64;
         let zn = z / length;
-        let radius = source.exit_radius_m * (1.0 + spread * z / diameter.max(1e-6));
+        let radius = mean_radius(source.exit_radius_m, spread, fan, z);
         let decay = 1.0 / (1.0 + 6.0 * zn * zn);
         let density = (mass_flow
             / (source.exhaust_velocity_mps * std::f64::consts::PI * radius * radius).max(1e-9))
@@ -356,8 +379,22 @@ mod tests {
     }
 
     #[test]
-    fn invalid_source_is_an_error_not_a_profile() {
-        let mut source = sample_source();
+    fn fan_and_radius_grow_with_underexpansion() {
+        // NASA direction: fixed nozzle, falling ambient -> the lip fan
+        // balloons and the plume widens.
+        assert_eq!(expansion_fan(1.0), 0.0);
+        assert!(expansion_fan(4.0) > expansion_fan(1.5));
+        assert!((0.0..=1.2).contains(&expansion_fan(1.0e9)));
+        let exit = 0.55;
+        assert_eq!(mean_radius(exit, 0.15, 0.8, 0.0), exit);
+        let z = 6.0;
+        let over = mean_radius(exit, spread_rate(0.7), expansion_fan(0.7), z);
+        let under = mean_radius(exit, spread_rate(6.0), expansion_fan(6.0), z);
+        assert!(under > over);
+    }
+
+    #[test]
+    fn invalid_source_is_an_error_not_a_profile() {        let mut source = sample_source();
         source.exit_radius_m = 0.0;
         assert!(build_axial_profile(&source, &sample_env_sea_level(), 32).is_err());
     }

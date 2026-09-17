@@ -36,7 +36,7 @@ pub use medium::{
 pub use optics::{OpticalMaterial, hue_divisor, optical_material, ramp_rgb};
 pub use source::ExhaustFamily;
 pub use profile::{
-    AxialProfile, AxialStation, ExpansionRegime, emission_gain, expansion_regime,
-    shock_cell_spacing_m,
+    AxialProfile, AxialStation, ExpansionRegime, emission_gain, expansion_fan, expansion_regime,
+    mean_radius, shock_cell_spacing_m, spread_rate,
 };
 pub use source::{PlumeEnvironment, PlumeSource, RigidTransform};

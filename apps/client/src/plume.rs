@@ -34,7 +34,8 @@ use bevy::{
 use thessa_plume_core::medium::radiant_power;
 use thessa_plume_core::optics::optical_material;
 use thessa_plume_core::profile::{
-    AxialProfile, build_axial_profile, emission_gain, shock_amplitude, shock_cell_spacing_m,
+    AxialProfile, build_axial_profile, emission_gain, expansion_fan, shock_amplitude,
+    shock_cell_spacing_m, spread_rate,
 };
 use thessa_plume_core::source::{
     ExhaustFamily, PlumeEnvironment, PlumeSource, RigidTransform, pressure_ratio,
@@ -602,13 +603,13 @@ fn drive_volume(
                     material.mid_rgb[0] as f32 * inv_divisor,
                     material.mid_rgb[1] as f32 * inv_divisor,
                     material.mid_rgb[2] as f32 * inv_divisor,
-                    0.0,
+                    spread_rate(pi) as f32,
                 ),
                 edge_rgb: Vec4::new(
                     material.edge_rgb[0] as f32 * inv_divisor,
                     material.edge_rgb[1] as f32 * inv_divisor,
                     material.edge_rgb[2] as f32 * inv_divisor,
-                    0.0,
+                    expansion_fan(pi) as f32,
                 ),
             };
         }

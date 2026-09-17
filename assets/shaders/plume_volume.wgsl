@@ -7,8 +7,10 @@
 // shock modulation, axial decay); the CPU `integrate_ray` is the oracle and
 // this pass must agree with it within representation error.
 //
-// AxialRadius/decay note: the CPU profile is the single source of truth; the
-// uniforms carry its fitted params (see `axial_decay` in plume-core).
+// AxialRadius/decay note: the CPU profile is the single source of truth;
+// uniforms carry its fitted params (`mean_radius`, `ramp_rgb`, axial decay
+// `1/(1+6zn^2)`). The CPU `integrate_ray` is the oracle; representation
+// detail (noise deformation, near fade) stays inside tolerance.
 
 #import bevy_pbr::{
     mesh_view_bindings::view,
@@ -63,6 +65,19 @@ fn axial_ramp(zn: f32, core_rgb: vec3<f32>, mid_rgb: vec3<f32>, edge_rgb: vec3<f
     return col * (1.0 - edge_mix) + edge_rgb * edge_mix;
 }
 
+// Same axial decay as the CPU builder: 1 / (1 + 6 z_n^2).
+fn axial_decay(zn: f32) -> f32 {
+    return 1.0 / (1.0 + 6.0 * zn * zn);
+}
+
+// Same mean radius as plume-core `mean_radius`: linear spread plus the
+// saturating near-lip fan bulge; R(0) == r0 exactly.
+fn mean_radius(r0: f32, spread: f32, fan: f32, z: f32) -> f32 {
+    let d = max(2.0 * r0, 1e-6);
+    let zc = max(z, 0.0);
+    return r0 * (1.0 + spread * zc / d) + r0 * fan * (1.0 - exp(-zc / (2.0 * d)));
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let origin = plume.origin_len.xyz;
@@ -110,8 +125,18 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let steps_f = f32(steps);
     let dt = (t1 - t0) / steps_f;
+    // Camera-inside fade: marching the full bound with the eye inside the
+    // plume whites out the frame (vacuum barrels are huge). Fade out as the
+    // eye penetrates the bound cylinder; outside it stays 1.
+    let z_cam = dot(oc, axis);
+    let d_lat = length(oc - axis * z_cam);
+    let axial_in = step(0.0, z_cam) * step(z_cam, len);
+    let penetration = axial_in * clamp(1.0 - d_lat / max(rmax, 1e-3), 0.0, 1.0);
+    let near_fade = 1.0 - 0.92 * smoothstep(0.0, 0.55, penetration);
     var transmittance = 1.0;
     var rgb = vec3<f32>(0.0);
+    let spread = plume.mid_rgb.w;
+    let fan = plume.edge_rgb.w;
     for (var i = 0; i < 16; i += 1) {
         if (i >= steps) {
             break;
@@ -120,31 +145,29 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let p = ro + rd * t - origin;
         let z = clamp(dot(p, axis), 0.0, len);
         let zn = z / len;
-        // Local mean radius: same spread form as the CPU profile.
-        let radius = mix(r0, r1, pow(zn, 0.75));
+        let radius = mean_radius(r0, spread, fan, z);
+        // Turbulence deforms the SHELL (radius), not just opacity: advected
+        // noise offsets the sample radius before the weight is evaluated,
+        // so edges wobble instead of merely flickering.
+        let n = vnoise(vec2<f32>(z * 2.6 - time * advect, zn * 9.0));
+        let n2 = vnoise(vec2<f32>(z * 5.8 - time * advect * 1.7, 4.2 + zn * 13.0));
+        let deform = (n * 0.65 + n2 * 0.35 - 0.5) * erosion * radius;
         let radial = p - axis * z;
-        let r = length(radial);
+        let r = length(radial) + deform * smoothstep(0.1, 0.9, length(radial) / max(radius, 1e-4));
         let u = min(r / max(radius, 1e-4), 3.0);
         // Radial weight mirrors medium.rs exactly.
         var w = exp(-2.2 * u * u) + 0.18 * exp(-0.7 * u * u);
-        // Turbulent edge erosion (representation detail only): fbm-ish
-        // noise advected downstream, bites hardest at the skirt.
-        let n = vnoise(vec2<f32>(z * 1.7 - time * advect, f32(i) * 0.61 + zn * 5.0));
-        let n2 = vnoise(vec2<f32>(z * 3.9 - time * advect * 1.7, 7.3 - f32(i) * 0.37));
+        // Residual alpha erosion on top of the geometric deformation.
         let turb = (n * 0.65 + n2 * 0.35 - 0.5) * erosion * smoothstep(0.35, 1.0, u);
-        w = max(w * (1.0 - turb * 2.0), 0.0);
-        // Shock modulation mirrors profile.rs (radius/density/temperature/
-        // emission together through one factor, never a decal).
+        w = max(w * (1.0 - turb), 0.0);
+        // Peaked shock cells (not arcade-perfect diamonds, but periodic
+        // compression): pow-shaping concentrates the modulation into bands
+        // so supersonic structure reads through the march.
         let span = max(spacing, len * 0.05);
-        let shock = 1.0 + amp * 0.55 * cos(6.2831853 * z / spacing)
+        let cell = pow(0.5 + 0.5 * cos(6.2831853 * z / spacing), 1.5);
+        let shock = 1.0 + amp * 0.75 * (2.0 * cell - 1.0)
             * exp(-z / (3.0 * span));
-        // Axial color ramp mirrors sample_medium.
-        let core_bias = exp(-3.0 * zn);
-        let edge_bias = 1.0 - exp(-2.0 * zn);
-        var col = plume.core_rgb.rgb * core_bias
-            + plume.mid_rgb.rgb * (1.0 - core_bias);
-        let edge_mix = min(edge_bias * 0.45, 0.6);
-        col = col * (1.0 - edge_mix) + plume.edge_rgb.rgb * edge_mix;
+        let col = axial_ramp(zn, plume.core_rgb.rgb, plume.mid_rgb.rgb, plume.edge_rgb.rgb);
         let decay = max(axial_decay(zn), 0.02);
         let emission = col * (gain * decay * max(w * max(shock, 0.15), 0.0));
         // Extinction mirrors the CPU oracle (station mean x weight x shock).
@@ -156,5 +179,5 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let alpha = clamp(1.0 - transmittance, 0.0, 1.0);
     // Premultiplied-style HDR output for the Add blend path.
-    return vec4<f32>(rgb, alpha);
+    return vec4<f32>(rgb * near_fade, alpha * near_fade);
 }

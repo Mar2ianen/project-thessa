@@ -2,7 +2,7 @@ use std::{error::Error, fmt};
 
 use glam::DVec3;
 
-use crate::{BakedEphemeris, BodyId, GravityError, GravityField, SimTime};
+use crate::{BakedEphemeris, BodyId, EphemerisFrame, GravityError, GravityField, SimTime};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TestParticleState {
@@ -794,6 +794,11 @@ pub fn propagate_adaptive(
     let mut remaining = duration_s;
     let mut step_s = config.initial_step_s.min(config.max_step_s);
     let mut stats = IntegratorStats::default();
+    // One frame per propagation: each of the seven RK stages evaluates the
+    // ephemeris once per timestamp instead of re-walking shared parent
+    // chains per source (see `acceleration_with_frame`). Buffers grow to
+    // the body count on first use, then no per-step allocation.
+    let mut frame = EphemerisFrame::new();
 
     while remaining > 0.0 {
         if stats.accepted_steps + stats.rejected_steps >= config.max_steps {
@@ -803,7 +808,7 @@ pub fn propagate_adaptive(
         if h < config.min_step_s && remaining > config.min_step_s {
             return Err(IntegratorError::StepUnderflow { step_s: h });
         }
-        let (candidate, error_state) = dormand_prince_step(field, state, time, h)?;
+        let (candidate, error_state) = dormand_prince_step(field, state, time, h, &mut frame)?;
         let error = normalized_error(error_state, candidate, config);
         if error <= 1.0 || h <= config.min_step_s {
             if error > 1.0 {
@@ -890,10 +895,11 @@ fn derivative(
     field: &GravityField<'_>,
     state: TestParticleState,
     time: SimTime,
+    frame: &mut EphemerisFrame,
 ) -> Result<Derivative, IntegratorError> {
     Ok(Derivative {
         position: state.velocity,
-        velocity: field.acceleration(state.position, time)?,
+        velocity: field.acceleration_with_frame(state.position, time, frame)?,
     })
 }
 
@@ -917,17 +923,20 @@ fn dormand_prince_step(
     state: TestParticleState,
     time: SimTime,
     h: f64,
+    frame: &mut EphemerisFrame,
 ) -> Result<(TestParticleState, TestParticleState), IntegratorError> {
-    let k1 = derivative(field, state, time)?;
+    let k1 = derivative(field, state, time, frame)?;
     let k2 = derivative(
         field,
         combine(state, h, &[(1.0 / 5.0, k1)]),
         time.offset(h * 1.0 / 5.0),
+        frame,
     )?;
     let k3 = derivative(
         field,
         combine(state, h, &[(3.0 / 40.0, k1), (9.0 / 40.0, k2)]),
         time.offset(h * 3.0 / 10.0),
+        frame,
     )?;
     let k4 = derivative(
         field,
@@ -937,6 +946,7 @@ fn dormand_prince_step(
             &[(44.0 / 45.0, k1), (-56.0 / 15.0, k2), (32.0 / 9.0, k3)],
         ),
         time.offset(h * 4.0 / 5.0),
+        frame,
     )?;
     let k5 = derivative(
         field,
@@ -951,6 +961,7 @@ fn dormand_prince_step(
             ],
         ),
         time.offset(h * 8.0 / 9.0),
+        frame,
     )?;
     let k6 = derivative(
         field,
@@ -966,6 +977,7 @@ fn dormand_prince_step(
             ],
         ),
         time.offset(h),
+        frame,
     )?;
     let k7 = derivative(
         field,
@@ -981,6 +993,7 @@ fn dormand_prince_step(
             ],
         ),
         time.offset(h),
+        frame,
     )?;
     let fifth = combine(
         state,

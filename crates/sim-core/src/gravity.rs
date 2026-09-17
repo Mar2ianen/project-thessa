@@ -58,6 +58,24 @@ impl<'a> GravityField<'a> {
         }
     }
 
+    /// Frame-evaluating twin of [`GravityField::acceleration`]: the frame is
+    /// evaluated once at `time`, then accumulation runs from the slice via
+    /// [`GravityField::acceleration_from_states`]. Bitwise identical to
+    /// [`GravityField::acceleration`] for the same timestamp; the win is
+    /// that a Dormand–Prince step needs seven RHS evaluations at seven
+    /// nearby timestamps, and without the frame each one re-walks every
+    /// shared parent chain (58 Kepler solves per call vs 23 per frame on
+    /// the 24-body design system). Keep one frame per stepping context.
+    pub fn acceleration_with_frame(
+        &self,
+        position: DVec3,
+        time: SimTime,
+        frame: &mut crate::EphemerisFrame,
+    ) -> Result<DVec3, GravityError> {
+        let states = frame.evaluate(self.ephemeris, time)?;
+        self.acceleration_from_states(position, states)
+    }
+
     /// Gravity from a precomputed [`EphemerisFrame`] slice instead of fresh
     /// per-body lookups. Same source order, same checks, same summation —
     /// bitwise identical to [`GravityField::acceleration`] for the same

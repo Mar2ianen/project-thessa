@@ -399,6 +399,56 @@ impl CollisionWorld {
         Ok(id)
     }
 
+    /// Re-mirror an existing backend body from fresh authoritative data
+    /// without rebuilding its compound. Pose and velocity are teleported
+    /// (regime entry, never a mid-contact correction), mass/inertia are
+    /// reinstalled, and the CCD policy is updated. A changed sleep policy
+    /// still requires remove + insert through the caller.
+    pub fn resync_dynamic_body(
+        &mut self,
+        id: CollisionBodyId,
+        state: RigidBodyState,
+        properties: RigidBodyProperties,
+        config: DynamicBodyConfig,
+    ) -> Result<(), CollisionBackendError> {
+        validate_properties(properties)?;
+        let entry = self
+            .dynamic
+            .get(&id)
+            .ok_or(CollisionBackendError::UnknownBody(id))?;
+        let handle = entry.rapier;
+        let body = self
+            .bodies
+            .get_mut(handle)
+            .ok_or(CollisionBackendError::BackendStateLost(id))?;
+        let local_position = self.frame.position_to_local(state.position_inertial_m);
+        let local_orientation =
+            (self.frame.local_from_inertial() * state.orientation_body_to_inertial).normalize();
+        let local_linear_velocity = self.frame.velocity_to_local(state.velocity_inertial_mps);
+        let angular_velocity_inertial =
+            state.orientation_body_to_inertial * state.angular_velocity_body_rps;
+        let local_angular_velocity = self.frame.vector_to_local(angular_velocity_inertial);
+        body.set_position(
+            Pose::from_parts(
+                to_rapier_vector(local_position),
+                to_rapier_rotation(local_orientation),
+            ),
+            true,
+        );
+        body.set_linvel(to_rapier_vector(local_linear_velocity), true);
+        body.set_angvel(to_rapier_vector(local_angular_velocity), true);
+        body.set_additional_mass_properties(
+            MassProperties::with_inertia_matrix(
+                Vector::ZERO,
+                properties.mass_kg,
+                to_rapier_matrix(properties.inertia_body_kg_m2),
+            ),
+            true,
+        );
+        body.enable_ccd(config.full_ccd);
+        Ok(())
+    }
+
     /// Fixed cuboid convenience path for pads, test floors and coarse terrain
     /// proxies. Production rotating terrain should use a kinematic world-body
     /// integration so its ephemeris-derived surface velocity participates in
@@ -456,6 +506,7 @@ impl CollisionWorld {
                 "terrain triangle mesh contains a non-finite vertex".into(),
             ));
         }
+        validate_trimesh_indices(&vertices_local_m, &indices)?;
         material
             .validate()
             .map_err(|error| CollisionBackendError::InvalidGeometry(error.to_string()))?;
@@ -548,6 +599,9 @@ impl CollisionWorld {
     /// Insert a position-based kinematic terrain triangle mesh. The vertices
     /// are already localized by the terrain system; the returned body carries
     /// the patch so streaming/eviction moves one handle per patch.
+    ///
+    /// The mesh is fully validated and built before the backend body is
+    /// created, so a rejected patch never leaves an untracked body behind.
     pub fn insert_kinematic_trimesh(
         &mut self,
         vertices_local_m: Vec<DVec3>,
@@ -564,9 +618,24 @@ impl CollisionWorld {
                 "terrain triangle mesh contains a non-finite vertex".into(),
             ));
         }
+        validate_trimesh_indices(&vertices_local_m, &indices)?;
         material
             .validate()
             .map_err(|error| CollisionBackendError::InvalidGeometry(error.to_string()))?;
+        let vertices = vertices_local_m
+            .into_iter()
+            .map(to_rapier_vector)
+            .collect::<Vec<_>>();
+        // Fallible build first: only a valid collider earns a backend body.
+        let collider = ColliderBuilder::trimesh(vertices, indices)
+            .map_err(|error| {
+                CollisionBackendError::InvalidGeometry(format!(
+                    "invalid terrain triangle mesh: {error:?}"
+                ))
+            })?
+            .friction(material.friction)
+            .restitution(material.restitution)
+            .build();
         let id = KinematicBodyId(self.next_kinematic_id);
         self.next_kinematic_id = self
             .next_kinematic_id
@@ -576,23 +645,8 @@ impl CollisionWorld {
             .user_data(id.raw() as u128)
             .build();
         let handle = self.bodies.insert(body);
-        let vertices = vertices_local_m
-            .into_iter()
-            .map(to_rapier_vector)
-            .collect::<Vec<_>>();
-        let builder = ColliderBuilder::trimesh(vertices, indices).map_err(|error| {
-            CollisionBackendError::InvalidGeometry(format!(
-                "invalid terrain triangle mesh: {error:?}"
-            ))
-        })?;
-        self.colliders.insert_with_parent(
-            builder
-                .friction(material.friction)
-                .restitution(material.restitution)
-                .build(),
-            handle,
-            &mut self.bodies,
-        );
+        self.colliders
+            .insert_with_parent(collider, handle, &mut self.bodies);
         self.kinematic
             .insert(id, KinematicBodyEntry { rapier: handle });
         Ok(id)
@@ -926,6 +980,22 @@ fn validate_local_pose(position: DVec3, orientation: DQuat) -> Result<(), Collis
     if (orientation.length_squared() - 1.0).abs() > QUATERNION_TOLERANCE {
         return Err(CollisionBackendError::InvalidGeometry(
             "local collider orientation must be a unit quaternion".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Reject out-of-range triangle indices before touching the mesh builder:
+/// the underlying geometry crate indexes vertices directly and panics on a
+/// bad index instead of returning an error.
+fn validate_trimesh_indices(
+    vertices: &[DVec3],
+    indices: &[[u32; 3]],
+) -> Result<(), CollisionBackendError> {
+    let vertex_count = vertices.len() as u32;
+    if indices.iter().flatten().any(|index| *index >= vertex_count) {
+        return Err(CollisionBackendError::InvalidGeometry(
+            "terrain triangle mesh references a missing vertex".into(),
         ));
     }
     Ok(())
@@ -1384,6 +1454,19 @@ mod tests {
         );
         let json = serde_json::to_string(&snapshot).expect("snapshot must serialize");
         assert!(json.contains("touching_contact_pairs"));
+    }
+
+    #[test]
+    fn rejected_trimesh_leaves_no_untracked_body() {
+        let frame = CollisionFrame::inertial_at(DVec3::ZERO, DVec3::ZERO);
+        let mut world = CollisionWorld::new(frame).unwrap();
+        // Out-of-range triangle index fails the mesh build.
+        let vertices = vec![DVec3::ZERO, DVec3::X, DVec3::Y];
+        let result =
+            world.insert_kinematic_trimesh(vertices, vec![[0, 1, 7]], CollisionMaterial::default());
+        assert!(result.is_err(), "bad trimesh indices must be rejected");
+        assert_eq!(world.kinematic_body_count(), 0);
+        assert!(world.debug_snapshot().unwrap().kinematic_bodies.is_empty());
     }
 
     #[test]

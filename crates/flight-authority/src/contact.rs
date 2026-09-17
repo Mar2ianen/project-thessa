@@ -111,6 +111,8 @@ pub struct ContactRuntime {
 struct ContactBody {
     id: CollisionBodyId,
     geometry: CollisionGeometry,
+    properties: RigidBodyProperties,
+    config: DynamicBodyConfig,
 }
 
 impl ContactRuntime {
@@ -143,9 +145,13 @@ impl ContactRuntime {
         (active, active && !was_active)
     }
 
-    /// Ensure the backend body mirrors the authoritative vehicle. A geometry
-    /// change (structural failure, staging, docking) rebuilds the backend
-    /// body so no stale compound survives a topology change.
+    /// Ensure the backend body mirrors the authoritative vehicle.
+    ///
+    /// A geometry change (structural failure, staging, docking) or a mass /
+    /// sleep-policy change rebuilds the backend body so no stale compound
+    /// survives a topology change. Fresh state with unchanged geometry,
+    /// mass, and policy re-mirrors the backend pose/velocity in place, so a
+    /// re-entry never integrates from a stale pose.
     pub fn sync_body(
         &mut self,
         state: RigidBodyState,
@@ -158,10 +164,22 @@ impl ContactRuntime {
                 "contact-active body needs compiled collision geometry",
             ));
         }
-        if let Some(body) = &self.body
-            && body.geometry == *geometry
-        {
-            return Ok(body.id);
+        let rebuild = match &self.body {
+            None => true,
+            Some(body) => {
+                body.geometry != *geometry || body.properties != properties || body.config != config
+            }
+        };
+        if !rebuild {
+            let id = self
+                .body
+                .as_ref()
+                .map(|body| body.id)
+                .ok_or_else(|| invalid("contact sync lost its backend body".to_string()))?;
+            self.world
+                .resync_dynamic_body(id, state, properties, config)
+                .map_err(|error| invalid(format!("contact resync: {error}")))?;
+            return Ok(id);
         }
         if let Some(previous) = self.body.take() {
             self.world
@@ -175,6 +193,8 @@ impl ContactRuntime {
         self.body = Some(ContactBody {
             id,
             geometry: geometry.clone(),
+            properties,
+            config,
         });
         Ok(id)
     }
@@ -291,6 +311,17 @@ impl ContactRuntime {
             .remove_static_collider(id)
             .map_err(|error| invalid(format!("contact patch eviction: {error}")))?;
         self.static_patches.retain(|patch| *patch != id);
+        Ok(())
+    }
+
+    /// Evict a kinematic terrain patch that left the contact-active
+    /// envelope. Streaming calls this when a patch scrolls out of range so
+    /// the backend never accumulates stale moving geometry.
+    pub fn evict_kinematic_terrain(&mut self, id: KinematicBodyId) -> Result<(), FlightError> {
+        self.world
+            .remove_kinematic_body(id)
+            .map_err(|error| invalid(format!("contact terrain eviction: {error}")))?;
+        self.kinematic_terrain.retain(|terrain| *terrain != id);
         Ok(())
     }
 
@@ -425,6 +456,63 @@ mod tests {
     }
 
     #[test]
+    fn resync_re_mirrors_state_and_rebuilds_on_mass_or_policy_change() {
+        let mut runtime = runtime();
+        let geometry = x15_contact_geometry().unwrap();
+        let properties = test_properties();
+        let config = DynamicBodyConfig::default();
+        let id = runtime
+            .sync_body(
+                RigidBodyState::stationary(DVec3::new(0.0, 5.0, 0.0)),
+                properties,
+                &geometry,
+                config,
+            )
+            .unwrap();
+        // Fresh state with unchanged geometry/mass/policy keeps the id but
+        // must move the backend body: re-entry never integrates stale pose.
+        let moved = RigidBodyState::new(
+            DVec3::new(10.0, 6.0, -3.0),
+            DVec3::new(1.0, 2.0, 3.0),
+            DQuat::from_rotation_z(0.4),
+            DVec3::new(0.01, -0.02, 0.03),
+        )
+        .unwrap();
+        assert_eq!(
+            runtime
+                .sync_body(moved, properties, &geometry, config)
+                .unwrap(),
+            id
+        );
+        let mirrored = runtime.world.body_state(id).unwrap();
+        assert!((mirrored.position_inertial_m - moved.position_inertial_m).length() < 1.0e-9);
+        assert!((mirrored.velocity_inertial_mps - moved.velocity_inertial_mps).length() < 1.0e-9);
+        // Changed mass properties rebuild the backend body.
+        let heavier =
+            RigidBodyProperties::new(250.0, DMat3::from_diagonal(DVec3::splat(900.0))).unwrap();
+        let rebuilt = runtime
+            .sync_body(moved, heavier, &geometry, config)
+            .unwrap();
+        assert_ne!(id, rebuilt, "mass change must rebuild the backend body");
+        // Changed sleep policy rebuilds as well.
+        let no_sleep = runtime
+            .sync_body(
+                moved,
+                heavier,
+                &geometry,
+                DynamicBodyConfig {
+                    full_ccd: true,
+                    can_sleep: false,
+                },
+            )
+            .unwrap();
+        assert_ne!(
+            rebuilt, no_sleep,
+            "solver-policy change must rebuild the backend body"
+        );
+    }
+
+    #[test]
     fn kinematic_terrain_patch_participates_in_contacts() {
         let mut runtime = runtime();
         let patch = runtime
@@ -450,7 +538,9 @@ mod tests {
         assert_eq!(snapshot.fixed_collider_count, 1);
         assert_eq!(snapshot.kinematic_bodies.len(), 1);
         runtime.evict_static_patch(patch).unwrap();
+        runtime.evict_kinematic_terrain(platform).unwrap();
         let snapshot = runtime.debug_snapshot().unwrap();
         assert_eq!(snapshot.fixed_collider_count, 0);
+        assert!(snapshot.kinematic_bodies.is_empty());
     }
 }

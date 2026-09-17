@@ -28,7 +28,7 @@ use glam::{DMat3, DVec3};
 use rayon::prelude::*;
 use thessa_sim_core::{
     AdaptiveIntegratorConfig, BakedEphemeris, BodyId, BodyState, GravityField, ImpulsiveBurn,
-    SimTime, TestParticleState, propagate_adaptive_with_burns,
+    SimTime, TestParticleState, propagate_adaptive, propagate_adaptive_with_burns,
 };
 
 use crate::{
@@ -840,7 +840,7 @@ fn escape_state(
     let mut segments = 0usize;
     loop {
         let seg = (max_dur_s - elapsed).min(ESCAPE_SEG_S);
-        if !(seg > 0.0) {
+        if seg <= 0.0 || !seg.is_finite() {
             return None;
         }
         let res = propagate_adaptive_with_burns(
@@ -1521,7 +1521,17 @@ pub(crate) fn correct_shooting(
     // gentle basin into hot regimes the correction then cannot leave
     // (measured: 2000 m/s first steps converged 5+ km/s hot). Inside the
     // cap, plain Newton finishes quadratically on its own.
-    let mut shoot = |mid_burn: DVec3| -> Option<TestParticleState> {
+    //
+    // Cached TCM prefix: departure→midcourse is identical for every Newton
+    // evaluation (only the midcourse burn varies), so the prefix integrates
+    // once and every iteration coasts from the TCM point. Same mathematics
+    // as one segmented propagation — the joint differs only in ulp-level
+    // endpoint bookkeeping, validated by unchanged corpus digits — while
+    // ~mid_time/tof of every evaluation (typically a quarter) disappears.
+    // A degenerate mid time (outside the arc) falls back to the whole-arc
+    // evaluation rather than inventing a prefix.
+    let prefix_valid = mid_time_s >= 0.0 && mid_time_s < time_of_flight_s;
+    let prefix: Option<(TestParticleState, SimTime)> = if prefix_valid {
         stats.newton_propagations += 1;
         propagate_adaptive_with_burns(
             field,
@@ -1530,15 +1540,50 @@ pub(crate) fn correct_shooting(
                 velocity: park_velocity + departure_burn,
             },
             departure_epoch,
-            time_of_flight_s,
-            &[ImpulsiveBurn {
-                time_s: mid_time_s,
-                delta_v_mps: mid_burn,
-            }],
+            mid_time_s,
+            &[],
             exact_config(),
         )
         .ok()
-        .map(|result| result.state)
+        .map(|result| (result.state, departure_epoch.offset(mid_time_s)))
+    } else {
+        None
+    };
+    let mut shoot = |mid_burn: DVec3| -> Option<TestParticleState> {
+        stats.newton_propagations += 1;
+        match prefix {
+            Some((tcm_state, tcm_epoch)) => {
+                let kicked = TestParticleState {
+                    position: tcm_state.position,
+                    velocity: tcm_state.velocity + mid_burn,
+                };
+                propagate_adaptive(
+                    field,
+                    kicked,
+                    tcm_epoch,
+                    time_of_flight_s - mid_time_s,
+                    exact_config(),
+                )
+                .ok()
+                .map(|result| result.state)
+            }
+            None => propagate_adaptive_with_burns(
+                field,
+                TestParticleState {
+                    position: start_pos,
+                    velocity: park_velocity + departure_burn,
+                },
+                departure_epoch,
+                time_of_flight_s,
+                &[ImpulsiveBurn {
+                    time_s: mid_time_s,
+                    delta_v_mps: mid_burn,
+                }],
+                exact_config(),
+            )
+            .ok()
+            .map(|result| result.state),
+        }
     };
     let mut mid_burn = if initial_mid_burn.is_finite() {
         initial_mid_burn
@@ -1701,7 +1746,11 @@ pub(crate) fn correct_bplane_shooting(
         let relative = aim_point_m - point;
         (relative.dot(t_axis), relative.dot(r_axis))
     };
-    let mut shoot = |burn: DVec3| -> Option<TestParticleState> {
+    // Cached TCM prefix, same contract as in `correct_shooting`: the
+    // departure→midcourse arc never sees the solved burn, so it integrates
+    // once and every iteration coasts from the burn point.
+    let prefix_valid = mid_time_s >= 0.0 && mid_time_s < time_of_flight_s;
+    let prefix: Option<(TestParticleState, SimTime)> = if prefix_valid {
         stats.newton_propagations += 1;
         propagate_adaptive_with_burns(
             field,
@@ -1710,15 +1759,50 @@ pub(crate) fn correct_bplane_shooting(
                 velocity: start_vel,
             },
             departure_epoch,
-            time_of_flight_s,
-            &[ImpulsiveBurn {
-                time_s: mid_time_s,
-                delta_v_mps: burn,
-            }],
+            mid_time_s,
+            &[],
             exact_config(),
         )
         .ok()
-        .map(|result| result.state)
+        .map(|result| (result.state, departure_epoch.offset(mid_time_s)))
+    } else {
+        None
+    };
+    let mut shoot = |burn: DVec3| -> Option<TestParticleState> {
+        stats.newton_propagations += 1;
+        match prefix {
+            Some((burn_state, burn_epoch)) => {
+                let kicked = TestParticleState {
+                    position: burn_state.position,
+                    velocity: burn_state.velocity + burn,
+                };
+                propagate_adaptive(
+                    field,
+                    kicked,
+                    burn_epoch,
+                    time_of_flight_s - mid_time_s,
+                    exact_config(),
+                )
+                .ok()
+                .map(|result| result.state)
+            }
+            None => propagate_adaptive_with_burns(
+                field,
+                TestParticleState {
+                    position: start_pos,
+                    velocity: start_vel,
+                },
+                departure_epoch,
+                time_of_flight_s,
+                &[ImpulsiveBurn {
+                    time_s: mid_time_s,
+                    delta_v_mps: burn,
+                }],
+                exact_config(),
+            )
+            .ok()
+            .map(|result| result.state),
+        }
     };
     let mut burn = if initial_burn.is_finite() {
         initial_burn

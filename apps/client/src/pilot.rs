@@ -954,7 +954,7 @@ fn render_orientation(orientation: DQuat) -> Quat {
     Quat::from_mat3(&Mat3::from_cols(lateral, forward, -up))
 }
 
-fn pilot_render_offset(relative_delta_m: DVec3) -> Vec3 {
+pub(super) fn pilot_render_offset(relative_delta_m: DVec3) -> Vec3 {
     // Pilot mode deliberately uses metres around the launch site. The map
     // uses a compressed astronomical unit; reusing that conversion here was
     // the source of the oversized planet and inconsistent craft altitude.

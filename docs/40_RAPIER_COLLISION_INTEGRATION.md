@@ -317,15 +317,34 @@ Serial wins on settled scenes: Rayon overhead exceeds the gain once bodies
 sleep, exactly the §8 caveat. Keep `parallel` switchable and re-measure on
 awake/constraint-heavy scenes before choosing scheduler granularity.
 
-Not implemented yet (update 2026-09-17, third slice — live-loop switch wired):
+Not implemented yet (update 2026-09-17, fourth slice — joints, broad
+phase, replay, gizmos, damage seam):
 
-- terrain collision streaming from worldgen (patch attach/evict API
-  exists; the producer side is not wired);
-- multi-vehicle contact activation broad phase;
-- contact event -> structural failure/damage mapping;
-- joints/docking API;
-- replay test for the `enhanced-determinism` envelope;
-- collision debug rendering (Bevy gizmos; telemetry side is done).
+- terrain streaming beyond the single-vehicle producer: the 120 Hz loop
+  re-poses one kinematic patch from worldgen every tick and evicts on
+  regime exit; a fleet layer with multiple resident patches is future
+  work (`attach/evict` carry it);
+- structural failure mapping: no structural graph exists in sim-core yet,
+  so there is nothing to map onto. The seam is ready — see §13;
+- Bevy gizmos beyond the contact layer (per-part wireframes stay out;
+  patch boxes + body markers + normal arrows are in).
+
+## 13. Contact load evidence and the damage boundary
+
+`CollisionWorld::contact_summaries` reduces every touching pair to
+`(parties, normal, penetration, approach speed)` in the inertial frame,
+capped at 64 pairs; `step` records them and `drain_contact_events`
+hands them out once per tick. `ContactRuntime` and `FlightAuthority`
+delegate the drain. Contact *points* are deliberately omitted: the
+pair-local point frame is solver-internal, while normal, penetration,
+and approach speed are exact.
+
+The backend reports loads, never damage verdicts. When a structural
+graph lands in sim-core, its failure pass consumes the drained summaries
+at the explicit topology/failure boundary of the tick order (§7 step 10)
+and rebuilds the affected backend bodies — the same rebuild path staging
+already uses. No exploding/despawning on damage: AGENTS.md §6 stays in
+force.
 
 Wired since the third slice: `FlightAuthority::enable_contact_mode`
 arms the switch with an explicit hysteresis boundary. Each 120 Hz `step`
@@ -339,6 +358,24 @@ inside-planet guard stay). A 25 m kinematic patch is re-posed every tick
 from the next-tick ephemeris. Verified by a live landing: belly-down X-15
 from 2 m settles at the 0.65 m keel with a touching pair, and free-fall
 ticks never touch rails.
+
+Fourth slice (docking, fleet screen, replay, gizmos):
+
+- fixed-joint docking in the backend (`attach_fixed_joint` with local
+  port frames, contacts between the joined bodies off) plus
+  `ContactRuntime` partners (`sync_partner`, `dock_partner`, `undock`,
+  `step_many`) so an upper stage or visitor shares the scene; undock is
+  impulse-free and removing a body drops its joints;
+- solver-free `ContactBroadPhase` for fleets: conservative
+  surface-to-surface distance over a bounded horizon, per-pair
+  hysteresis, uncertain evidence stays active;
+- same-binary replay gate (identical wrench tape, identical snapshot
+  JSON) backing the `enhanced-determinism` story;
+- client contact gizmos (`ContactGizmoPlugin`): craft-anchored patch
+  boxes, body markers, and contact normal arrows from the authoritative
+  snapshot, drawn only while contact-active;
+- `CollisionDebugSnapshot` now carries patch boxes (live pose +
+  extents, trimesh as AABB) and the capped contact summaries above.
 
 Two integration traps found while wiring (both covered by regression
 tests, both worth re-checking on Rapier upgrades):

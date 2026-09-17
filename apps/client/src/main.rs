@@ -1,4 +1,5 @@
 mod atmosphere;
+mod contact_gizmos;
 mod embedded;
 mod map_ui;
 mod navigation;
@@ -188,6 +189,7 @@ fn main() {
         .insert_resource(RayTracingActive(rt_active))
         .add_plugins(OrbitGizmoPlugin)
         .add_plugins(PilotHudPlugin)
+        .add_plugins(contact_gizmos::ContactGizmoPlugin)
         .add_plugins(PerfMonitorPlugin)
         .add_plugins(AtmospherePlugin)
         .add_plugins(thessa_bevy_rcbt::CbtPlugin {

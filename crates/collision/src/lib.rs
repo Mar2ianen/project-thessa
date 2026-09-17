@@ -23,9 +23,9 @@ use glam::{DMat3, DQuat, DVec3};
 use rapier3d_f64::dynamics::MassProperties;
 use rapier3d_f64::math::{Matrix, Pose, Rotation, Vector};
 use rapier3d_f64::prelude::{
-    BroadPhaseBvh, CCDSolver, ColliderBuilder, ColliderHandle, ColliderSet, ImpulseJointSet,
-    IntegrationParameters, IslandManager, MultibodyJointSet, NarrowPhase, PhysicsPipeline,
-    RigidBodyBuilder, RigidBodyHandle, RigidBodySet,
+    BroadPhaseBvh, CCDSolver, ColliderBuilder, ColliderHandle, ColliderSet, FixedJointBuilder,
+    ImpulseJointHandle, ImpulseJointSet, IntegrationParameters, IslandManager, MultibodyJointSet,
+    NarrowPhase, PhysicsPipeline, RigidBodyBuilder, RigidBodyHandle, RigidBodySet,
 };
 use thessa_sim_core::{
     CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionShape, FlightForces,
@@ -70,6 +70,23 @@ impl KinematicBodyId {
     pub const fn raw(self) -> u64 {
         self.0
     }
+}
+
+/// Stable Thessa-side identifier for a docking (fixed) joint between two
+/// dynamic contact bodies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct JointId(u64);
+
+impl JointId {
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+}
+
+struct JointEntry {
+    rapier: ImpulseJointHandle,
+    a: CollisionBodyId,
+    b: CollisionBodyId,
 }
 
 /// A small inertial frame used by the contact scene.
@@ -235,11 +252,64 @@ impl Default for DynamicBodyConfig {
 
 struct DynamicBodyEntry {
     rapier: RigidBodyHandle,
+    colliders: Vec<ColliderHandle>,
     last_wrench: ExternalWrench,
 }
 
 struct KinematicBodyEntry {
     rapier: RigidBodyHandle,
+    collider: ColliderHandle,
+    /// AABB of the attached patch in body coordinates: cuboid patches sit at
+    /// the origin, trimesh patches carry their precomputed AABB offset.
+    shape_offset_m: DVec3,
+    half_extents_m: DVec3,
+}
+
+struct StaticEntry {
+    handle: ColliderHandle,
+    center_local_m: DVec3,
+    orientation_local: DQuat,
+    half_extents_m: DVec3,
+}
+
+/// Which side of a contact pair a collider belongs to, in stable Thessa ids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+pub enum ContactPartyKind {
+    Dynamic,
+    KinematicTerrain,
+    StaticTerrain,
+}
+
+/// One attributed side of a contact pair. No Rapier handles cross the API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+pub struct ContactParty {
+    pub kind: ContactPartyKind,
+    pub id_raw: u64,
+}
+
+/// One touching pair reduced to physical load evidence: deepest penetration,
+/// world normal, and approach speed along it. This is the explicit boundary
+/// where a future structural/damage model consumes solver output: the
+/// backend reports loads, never damage verdicts.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct ContactSummary {
+    pub a: ContactParty,
+    pub b: ContactParty,
+    pub normal_inertial: [f64; 3],
+    pub penetration_m: f64,
+    /// `(v_a - v_b) . normal`, positive while the pair closes. Static sides
+    /// contribute zero velocity.
+    pub approach_speed_mps: f64,
+}
+
+/// One terrain patch reduced to a debug box: live inertial center,
+/// orientation, and half extents. Trimesh patches report their AABB.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct PatchDebug {
+    pub party: ContactParty,
+    pub center_inertial_m: [f64; 3],
+    pub half_extents_m: [f64; 3],
+    pub orientation_xyzw: [f64; 4],
 }
 
 /// Debug snapshot of one solved body, expressed in authoritative Thessa terms.
@@ -264,9 +334,16 @@ pub struct CollisionDebugSnapshot {
     pub dynamic_bodies: Vec<CollisionBodyDebug>,
     pub kinematic_bodies: Vec<CollisionBodyDebug>,
     pub fixed_collider_count: usize,
+    pub patches: Vec<PatchDebug>,
+    pub contacts: Vec<ContactSummary>,
     pub active_contact_pairs: usize,
     pub touching_contact_pairs: usize,
 }
+
+/// Maximum contact summaries per snapshot/drain. Pair counts are unbounded
+/// telemetry; per-pair details are capped so a debris pile cannot turn
+/// debug output into a memory event.
+pub const MAX_CONTACT_SUMMARIES: usize = 64;
 
 /// Transient local contact scene.
 ///
@@ -286,11 +363,14 @@ pub struct CollisionWorld {
     multibody_joints: MultibodyJointSet,
     ccd_solver: CCDSolver,
     dynamic: BTreeMap<CollisionBodyId, DynamicBodyEntry>,
-    fixed: BTreeMap<StaticColliderId, ColliderHandle>,
+    fixed: BTreeMap<StaticColliderId, StaticEntry>,
     kinematic: BTreeMap<KinematicBodyId, KinematicBodyEntry>,
+    joints: BTreeMap<JointId, JointEntry>,
+    last_contacts: Vec<ContactSummary>,
     next_body_id: u64,
     next_static_id: u64,
     next_kinematic_id: u64,
+    next_joint_id: u64,
 }
 
 impl CollisionWorld {
@@ -320,9 +400,12 @@ impl CollisionWorld {
             dynamic: BTreeMap::new(),
             fixed: BTreeMap::new(),
             kinematic: BTreeMap::new(),
+            joints: BTreeMap::new(),
+            last_contacts: Vec::new(),
             next_body_id: 0,
             next_static_id: 0,
             next_kinematic_id: 0,
+            next_joint_id: 0,
         })
     }
 
@@ -340,6 +423,10 @@ impl CollisionWorld {
 
     pub fn kinematic_body_count(&self) -> usize {
         self.kinematic.len()
+    }
+
+    pub fn joint_count(&self) -> usize {
+        self.joints.len()
     }
 
     /// Insert one authoritative rigid body and attach its backend-neutral
@@ -397,6 +484,7 @@ impl CollisionWorld {
             .build();
         let handle = self.bodies.insert(rigid_body);
 
+        let mut colliders = Vec::with_capacity(geometry.parts.len());
         for part in &geometry.parts {
             let collider = collider_builder(part.shape)
                 .density(0.0)
@@ -407,14 +495,17 @@ impl CollisionWorld {
                     to_rapier_rotation(part.local_orientation),
                 ))
                 .build();
-            self.colliders
-                .insert_with_parent(collider, handle, &mut self.bodies);
+            colliders.push(
+                self.colliders
+                    .insert_with_parent(collider, handle, &mut self.bodies),
+            );
         }
 
         self.dynamic.insert(
             id,
             DynamicBodyEntry {
                 rapier: handle,
+                colliders,
                 last_wrench: ExternalWrench::ZERO,
             },
         );
@@ -506,7 +597,7 @@ impl CollisionWorld {
                 ))
                 .build();
         let handle = self.colliders.insert(collider);
-        self.register_fixed(handle)
+        self.register_fixed(handle, center_local_m, orientation_local, half_extents_m)
     }
 
     /// Insert an already-localized terrain triangle mesh. Keep terrain
@@ -532,6 +623,7 @@ impl CollisionWorld {
         material
             .validate()
             .map_err(|error| CollisionBackendError::InvalidGeometry(error.to_string()))?;
+        let (aabb_center_m, aabb_half_m) = trimesh_aabb(&vertices_local_m);
         let vertices = vertices_local_m
             .into_iter()
             .map(to_rapier_vector)
@@ -547,19 +639,30 @@ impl CollisionWorld {
                 .restitution(material.restitution)
                 .build(),
         );
-        self.register_fixed(handle)
+        self.register_fixed(handle, aabb_center_m, DQuat::IDENTITY, aabb_half_m)
     }
 
     fn register_fixed(
         &mut self,
         handle: ColliderHandle,
+        center_local_m: DVec3,
+        orientation_local: DQuat,
+        half_extents_m: DVec3,
     ) -> Result<StaticColliderId, CollisionBackendError> {
         let id = StaticColliderId(self.next_static_id);
         self.next_static_id = self
             .next_static_id
             .checked_add(1)
             .ok_or(CollisionBackendError::IdentifierExhausted)?;
-        self.fixed.insert(id, handle);
+        self.fixed.insert(
+            id,
+            StaticEntry {
+                handle,
+                center_local_m,
+                orientation_local,
+                half_extents_m,
+            },
+        );
         Ok(id)
     }
 
@@ -611,10 +714,18 @@ impl CollisionWorld {
                 .friction(material.friction)
                 .restitution(material.restitution)
                 .build();
-        self.colliders
+        let collider = self
+            .colliders
             .insert_with_parent(collider, handle, &mut self.bodies);
-        self.kinematic
-            .insert(id, KinematicBodyEntry { rapier: handle });
+        self.kinematic.insert(
+            id,
+            KinematicBodyEntry {
+                rapier: handle,
+                collider,
+                shape_offset_m: DVec3::ZERO,
+                half_extents_m,
+            },
+        );
         Ok(id)
     }
 
@@ -644,6 +755,7 @@ impl CollisionWorld {
         material
             .validate()
             .map_err(|error| CollisionBackendError::InvalidGeometry(error.to_string()))?;
+        let (aabb_center_m, aabb_half_m) = trimesh_aabb(&vertices_local_m);
         let vertices = vertices_local_m
             .into_iter()
             .map(to_rapier_vector)
@@ -667,10 +779,18 @@ impl CollisionWorld {
             .user_data(id.raw() as u128)
             .build();
         let handle = self.bodies.insert(body);
-        self.colliders
+        let collider = self
+            .colliders
             .insert_with_parent(collider, handle, &mut self.bodies);
-        self.kinematic
-            .insert(id, KinematicBodyEntry { rapier: handle });
+        self.kinematic.insert(
+            id,
+            KinematicBodyEntry {
+                rapier: handle,
+                collider,
+                shape_offset_m: aabb_center_m,
+                half_extents_m: aabb_half_m,
+            },
+        );
         Ok(id)
     }
 
@@ -740,7 +860,8 @@ impl CollisionWorld {
 
     /// Remove a dynamic body and its attached colliders. Structural topology
     /// changes, staging, and docking call this before rebuilding the backend
-    /// body so no stale compound survives a configuration change.
+    /// body so no stale compound survives a configuration change. Docking
+    /// joints attached to the body are removed with it.
     pub fn remove_dynamic_body(
         &mut self,
         id: CollisionBodyId,
@@ -757,6 +878,8 @@ impl CollisionWorld {
             &mut self.multibody_joints,
             true,
         );
+        self.joints
+            .retain(|_, joint| joint.a != id && joint.b != id);
         Ok(())
     }
 
@@ -766,12 +889,12 @@ impl CollisionWorld {
         &mut self,
         id: StaticColliderId,
     ) -> Result<(), CollisionBackendError> {
-        let handle = self
+        let entry = self
             .fixed
             .remove(&id)
             .ok_or(CollisionBackendError::UnknownStaticCollider(id))?;
         self.colliders
-            .remove(handle, &mut self.islands, &mut self.bodies, true);
+            .remove(entry.handle, &mut self.islands, &mut self.bodies, true);
         Ok(())
     }
 
@@ -792,6 +915,80 @@ impl CollisionWorld {
             &mut self.multibody_joints,
             true,
         );
+        Ok(())
+    }
+
+    /// Rigidly dock two dynamic bodies at their local port frames: the
+    /// docking/undocking primitive the flight layer drives around
+    /// staging and docking events. Contacts between the joined bodies are
+    /// disabled so the constraint never fights contact response; contacts
+    /// with everything else are unaffected. Undock with
+    /// [`remove_joint`](Self::remove_joint); removing either body drops the
+    /// joint with it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn attach_fixed_joint(
+        &mut self,
+        a: CollisionBodyId,
+        b: CollisionBodyId,
+        frame_a_local_position_m: DVec3,
+        frame_a_local_orientation: DQuat,
+        frame_b_local_position_m: DVec3,
+        frame_b_local_orientation: DQuat,
+    ) -> Result<JointId, CollisionBackendError> {
+        if a == b {
+            return Err(CollisionBackendError::InvalidGeometry(
+                "docking joint needs two distinct bodies".into(),
+            ));
+        }
+        validate_local_pose(frame_a_local_position_m, frame_a_local_orientation).map_err(|_| {
+            CollisionBackendError::InvalidGeometry(
+                "docking frame on body A contains a non-finite value".into(),
+            )
+        })?;
+        validate_local_pose(frame_b_local_position_m, frame_b_local_orientation).map_err(|_| {
+            CollisionBackendError::InvalidGeometry(
+                "docking frame on body B contains a non-finite value".into(),
+            )
+        })?;
+        let handle_a = self
+            .dynamic
+            .get(&a)
+            .ok_or(CollisionBackendError::UnknownBody(a))?
+            .rapier;
+        let handle_b = self
+            .dynamic
+            .get(&b)
+            .ok_or(CollisionBackendError::UnknownBody(b))?
+            .rapier;
+        let joint = FixedJointBuilder::new()
+            .local_frame1(Pose::from_parts(
+                to_rapier_vector(frame_a_local_position_m),
+                to_rapier_rotation(frame_a_local_orientation),
+            ))
+            .local_frame2(Pose::from_parts(
+                to_rapier_vector(frame_b_local_position_m),
+                to_rapier_rotation(frame_b_local_orientation),
+            ))
+            .contacts_enabled(false)
+            .build();
+        let rapier = self.impulse_joints.insert(handle_a, handle_b, joint, true);
+        let id = JointId(self.next_joint_id);
+        self.next_joint_id = self
+            .next_joint_id
+            .checked_add(1)
+            .ok_or(CollisionBackendError::IdentifierExhausted)?;
+        self.joints.insert(id, JointEntry { rapier, a, b });
+        Ok(id)
+    }
+
+    /// Undock a fixed joint. Both bodies keep their solved pose/velocity;
+    /// the flight layer re-owns them as independent clusters from here.
+    pub fn remove_joint(&mut self, id: JointId) -> Result<(), CollisionBackendError> {
+        let entry = self
+            .joints
+            .remove(&id)
+            .ok_or(CollisionBackendError::UnknownJoint(id))?;
+        self.impulse_joints.remove(entry.rapier, true);
         Ok(())
     }
 
@@ -863,9 +1060,138 @@ impl CollisionWorld {
             dynamic_bodies,
             kinematic_bodies,
             fixed_collider_count: self.fixed.len(),
+            patches: self.patch_debug()?,
+            contacts: self.contact_summaries(),
             active_contact_pairs: self.active_contact_pair_count(),
             touching_contact_pairs: self.touching_contact_pair_count(),
         })
+    }
+
+    /// Attribute a narrow-phase collider to its stable Thessa party.
+    fn party_of(&self, handle: ColliderHandle) -> Option<ContactParty> {
+        for (id, entry) in &self.dynamic {
+            if entry.colliders.contains(&handle) {
+                return Some(ContactParty {
+                    kind: ContactPartyKind::Dynamic,
+                    id_raw: id.raw(),
+                });
+            }
+        }
+        for (id, entry) in &self.kinematic {
+            if entry.collider == handle {
+                return Some(ContactParty {
+                    kind: ContactPartyKind::KinematicTerrain,
+                    id_raw: id.raw(),
+                });
+            }
+        }
+        for (id, entry) in &self.fixed {
+            if entry.handle == handle {
+                return Some(ContactParty {
+                    kind: ContactPartyKind::StaticTerrain,
+                    id_raw: id.raw(),
+                });
+            }
+        }
+        None
+    }
+
+    fn party_velocity_inertial_mps(&self, party: ContactParty) -> DVec3 {
+        match party.kind {
+            ContactPartyKind::Dynamic => self
+                .dynamic
+                .iter()
+                .find(|(id, _)| id.raw() == party.id_raw)
+                .and_then(|(id, _)| self.body_state(*id).ok())
+                .map(|state| state.velocity_inertial_mps)
+                .unwrap_or(DVec3::ZERO),
+            ContactPartyKind::KinematicTerrain => self
+                .kinematic
+                .iter()
+                .find(|(id, _)| id.raw() == party.id_raw)
+                .and_then(|(id, _)| self.kinematic_body_state(*id).ok())
+                .map(|state| state.velocity_inertial_mps)
+                .unwrap_or(DVec3::ZERO),
+            ContactPartyKind::StaticTerrain => DVec3::ZERO,
+        }
+    }
+
+    /// Reduce every touching pair to physical load evidence, capped at
+    /// [`MAX_CONTACT_SUMMARIES`]. Contact points are deliberately omitted:
+    /// the pair-local point frame is solver-internal, while normal,
+    /// penetration, and approach speed are exact in the inertial frame.
+    pub fn contact_summaries(&self) -> Vec<ContactSummary> {
+        let mut summaries = Vec::new();
+        for pair in self.narrow_phase.contact_pairs() {
+            if summaries.len() >= MAX_CONTACT_SUMMARIES {
+                break;
+            }
+            if !pair.has_any_active_contact() {
+                continue;
+            }
+            let Some((manifold, contact)) = pair.find_deepest_contact() else {
+                continue;
+            };
+            let (Some(a), Some(b)) = (self.party_of(pair.collider1), self.party_of(pair.collider2))
+            else {
+                continue;
+            };
+            let normal_inertial = self
+                .frame
+                .vector_to_inertial(from_rapier_vector(manifold.data.normal));
+            let velocity_a = self.party_velocity_inertial_mps(a);
+            let velocity_b = self.party_velocity_inertial_mps(b);
+            summaries.push(ContactSummary {
+                a,
+                b,
+                normal_inertial: normal_inertial.to_array(),
+                penetration_m: (-contact.dist).max(0.0),
+                approach_speed_mps: (velocity_a - velocity_b).dot(normal_inertial),
+            });
+        }
+        summaries
+    }
+
+    /// Take the contact summaries recorded at the last step. A damage or
+    /// telemetry consumer drains once per tick; undrained summaries are
+    /// replaced, never accumulated.
+    pub fn drain_contact_events(&mut self) -> Vec<ContactSummary> {
+        std::mem::take(&mut self.last_contacts)
+    }
+
+    fn patch_debug(&self) -> Result<Vec<PatchDebug>, CollisionBackendError> {
+        let mut patches = Vec::with_capacity(self.fixed.len() + self.kinematic.len());
+        for (id, entry) in &self.fixed {
+            let orientation = entry.orientation_local;
+            patches.push(PatchDebug {
+                party: ContactParty {
+                    kind: ContactPartyKind::StaticTerrain,
+                    id_raw: id.raw(),
+                },
+                center_inertial_m: self
+                    .frame
+                    .position_to_inertial(entry.center_local_m)
+                    .to_array(),
+                half_extents_m: entry.half_extents_m.to_array(),
+                orientation_xyzw: [orientation.x, orientation.y, orientation.z, orientation.w],
+            });
+        }
+        for (id, entry) in &self.kinematic {
+            let state = self.kinematic_body_state(*id)?;
+            let center_inertial_m = state.position_inertial_m
+                + state.orientation_body_to_inertial * entry.shape_offset_m;
+            let orientation = state.orientation_body_to_inertial;
+            patches.push(PatchDebug {
+                party: ContactParty {
+                    kind: ContactPartyKind::KinematicTerrain,
+                    id_raw: id.raw(),
+                },
+                center_inertial_m: center_inertial_m.to_array(),
+                half_extents_m: entry.half_extents_m.to_array(),
+                orientation_xyzw: [orientation.x, orientation.y, orientation.z, orientation.w],
+            });
+        }
+        Ok(patches)
     }
 
     /// Advance one contact step with an explicit per-body external wrench.
@@ -928,6 +1254,7 @@ impl CollisionWorld {
             &(),
         );
         self.frame.origin_inertial_m += self.frame.origin_velocity_inertial_mps * step_s;
+        self.last_contacts = self.contact_summaries();
         Ok(())
     }
 
@@ -1023,6 +1350,20 @@ fn validate_trimesh_indices(
     Ok(())
 }
 
+/// Axis-aligned bounding box of a terrain mesh: (center, half extents).
+/// Debug boxes and gizmos draw this instead of the full mesh.
+fn trimesh_aabb(vertices: &[DVec3]) -> (DVec3, DVec3) {
+    let mut min = DVec3::splat(f64::INFINITY);
+    let mut max = DVec3::splat(f64::NEG_INFINITY);
+    for vertex in vertices {
+        min = min.min(*vertex);
+        max = max.max(*vertex);
+    }
+    let center = (min + max) * 0.5;
+    let half = ((max - min) * 0.5).max(DVec3::splat(1.0e-6));
+    (center, half)
+}
+
 fn wrench_materially_changed(previous: ExternalWrench, next: ExternalWrench) -> bool {
     vector_materially_changed(previous.force_inertial_n, next.force_inertial_n)
         || vector_materially_changed(previous.torque_inertial_nm, next.torque_inertial_nm)
@@ -1068,6 +1409,7 @@ pub enum CollisionBackendError {
     UnknownBody(CollisionBodyId),
     UnknownKinematicBody(KinematicBodyId),
     UnknownStaticCollider(StaticColliderId),
+    UnknownJoint(JointId),
     DuplicateWrench(CollisionBodyId),
     BackendStateLost(CollisionBodyId),
     BackendStateLostKinematic(KinematicBodyId),
@@ -1093,6 +1435,9 @@ impl fmt::Display for CollisionBackendError {
             }
             Self::UnknownStaticCollider(id) => {
                 write!(formatter, "unknown static collider {}", id.raw())
+            }
+            Self::UnknownJoint(id) => {
+                write!(formatter, "unknown docking joint {}", id.raw())
             }
             Self::DuplicateWrench(id) => {
                 write!(
@@ -1572,5 +1917,234 @@ mod tests {
         assert_eq!(world.fixed_collider_count(), 0);
         assert_eq!(world.kinematic_body_count(), 0);
         assert!(world.debug_snapshot().unwrap().dynamic_bodies.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod joint_and_replay_tests {
+    use super::*;
+    use thessa_sim_core::{CollisionPart, CollisionShape};
+
+    fn sphere_geometry(radius_m: f64) -> CollisionGeometry {
+        CollisionGeometry::new(vec![
+            CollisionPart::new(
+                DVec3::ZERO,
+                DQuat::IDENTITY,
+                CollisionShape::Sphere { radius_m },
+                CollisionMaterial::default(),
+            )
+            .unwrap(),
+        ])
+        .unwrap()
+    }
+
+    fn two_spheres() -> (CollisionWorld, CollisionBodyId, CollisionBodyId) {
+        let frame = CollisionFrame::inertial_at(DVec3::ZERO, DVec3::ZERO);
+        let mut world = CollisionWorld::new(frame).unwrap();
+        let properties =
+            RigidBodyProperties::new(5.0, DMat3::from_diagonal(DVec3::splat(0.5))).unwrap();
+        let geometry = sphere_geometry(0.5);
+        let a = world
+            .insert_dynamic_body(
+                RigidBodyState::stationary(DVec3::new(-2.0, 0.0, 0.0)),
+                properties,
+                &geometry,
+                DynamicBodyConfig::default(),
+            )
+            .unwrap();
+        let b = world
+            .insert_dynamic_body(
+                RigidBodyState::stationary(DVec3::new(2.0, 0.0, 0.0)),
+                properties,
+                &geometry,
+                DynamicBodyConfig::default(),
+            )
+            .unwrap();
+        (world, a, b)
+    }
+
+    #[test]
+    fn docked_bodies_move_as_one_and_undock_cleanly() {
+        let (mut world, a, b) = two_spheres();
+        // Dock nose to nose: A's +X port meets B's -X port at the origin.
+        let joint = world
+            .attach_fixed_joint(
+                a,
+                b,
+                DVec3::new(2.0, 0.0, 0.0),
+                DQuat::IDENTITY,
+                DVec3::new(-2.0, 0.0, 0.0),
+                DQuat::IDENTITY,
+            )
+            .unwrap();
+        assert_eq!(world.joint_count(), 1);
+        // Shove A; the joint must drag B along.
+        let push = ExternalWrench {
+            force_inertial_n: DVec3::new(500.0, 0.0, 0.0),
+            torque_inertial_nm: DVec3::ZERO,
+        };
+        for _ in 0..120 {
+            world
+                .step(1.0 / 120.0, [(a, push), (b, ExternalWrench::ZERO)])
+                .unwrap();
+        }
+        let state_a = world.body_state(a).unwrap();
+        let state_b = world.body_state(b).unwrap();
+        let separation = (state_b.position_inertial_m - state_a.position_inertial_m).length();
+        assert!(
+            (separation - 4.0).abs() < 0.05,
+            "docked separation must hold, got {separation}"
+        );
+        assert!(
+            state_b.velocity_inertial_mps.x > 1.0,
+            "docked partner must be dragged along"
+        );
+        // Undock with no wrenches anywhere: both clusters coast at their
+        // solved velocities (A would otherwise ram B from behind and the
+        // contact, not the joint, would do work).
+        world.remove_joint(joint).unwrap();
+        assert_eq!(world.joint_count(), 0);
+        let sep_before = (world.body_state(b).unwrap().position_inertial_m
+            - world.body_state(a).unwrap().position_inertial_m)
+            .length();
+        let v_before = world.body_state(b).unwrap().velocity_inertial_mps;
+        for _ in 0..60 {
+            world
+                .step(
+                    1.0 / 120.0,
+                    [(a, ExternalWrench::ZERO), (b, ExternalWrench::ZERO)],
+                )
+                .unwrap();
+        }
+        let after_b = world.body_state(b).unwrap();
+        let sep_after = (after_b.position_inertial_m
+            - world.body_state(a).unwrap().position_inertial_m)
+            .length();
+        assert!(
+            (after_b.velocity_inertial_mps - v_before).length() < 1.0e-6,
+            "undocked partner must coast force-free"
+        );
+        assert!(
+            (sep_after - sep_before).abs() < 1.0e-6,
+            "undock must not kick the clusters: separation {sep_before} -> {sep_after}"
+        );
+    }
+
+    #[test]
+    fn removing_a_body_drops_its_joints() {
+        let (mut world, a, b) = two_spheres();
+        world
+            .attach_fixed_joint(
+                a,
+                b,
+                DVec3::X,
+                DQuat::IDENTITY,
+                DVec3::NEG_X,
+                DQuat::IDENTITY,
+            )
+            .unwrap();
+        world.remove_dynamic_body(a).unwrap();
+        assert_eq!(world.joint_count(), 0);
+    }
+
+    #[test]
+    fn settled_contact_reports_load_evidence_and_drains_once() {
+        let frame = CollisionFrame::inertial_at(DVec3::ZERO, DVec3::ZERO);
+        let mut world = CollisionWorld::new(frame).unwrap();
+        world
+            .insert_static_cuboid(
+                DVec3::new(0.0, -0.5, 0.0),
+                DQuat::IDENTITY,
+                DVec3::new(10.0, 0.5, 10.0),
+                CollisionMaterial::default(),
+            )
+            .unwrap();
+        let mass_kg = 5.0;
+        let properties =
+            RigidBodyProperties::new(mass_kg, DMat3::from_diagonal(DVec3::splat(0.5))).unwrap();
+        let id = world
+            .insert_dynamic_body(
+                RigidBodyState::stationary(DVec3::new(0.0, 2.0, 0.0)),
+                properties,
+                &sphere_geometry(0.5),
+                DynamicBodyConfig::default(),
+            )
+            .unwrap();
+        let gravity = ExternalWrench {
+            force_inertial_n: DVec3::new(0.0, -9.81 * mass_kg, 0.0),
+            torque_inertial_nm: DVec3::ZERO,
+        };
+        for _ in 0..360 {
+            world.step(1.0 / 120.0, [(id, gravity)]).unwrap();
+        }
+        let snapshot = world.debug_snapshot().unwrap();
+        assert_eq!(snapshot.contacts.len(), 1);
+        let contact = snapshot.contacts[0];
+        assert!(contact.penetration_m >= 0.0);
+        assert!(contact.penetration_m < 0.05);
+        assert!(contact.approach_speed_mps.abs() < 0.2);
+        assert_eq!(snapshot.patches.len(), 1);
+        // Drain semantics: first drain takes the step's events, the second
+        // is empty until another step records.
+        let drained = world.drain_contact_events();
+        assert_eq!(drained.len(), 1);
+        assert!(world.drain_contact_events().is_empty());
+    }
+
+    #[test]
+    fn identical_input_sequences_replay_identically() {
+        // Same-binary replay gate for the determinism story: two worlds from
+        // the same setup and wrench tape must produce identical snapshots.
+        fn run_tape() -> String {
+            let frame = CollisionFrame::inertial_at(DVec3::ZERO, DVec3::ZERO);
+            let mut world = CollisionWorld::new(frame).unwrap();
+            world
+                .insert_static_cuboid(
+                    DVec3::new(0.0, -0.5, 0.0),
+                    DQuat::IDENTITY,
+                    DVec3::new(10.0, 0.5, 10.0),
+                    CollisionMaterial::default(),
+                )
+                .unwrap();
+            let mass_kg = 5.0;
+            let properties =
+                RigidBodyProperties::new(mass_kg, DMat3::from_diagonal(DVec3::splat(0.5))).unwrap();
+            let id = world
+                .insert_dynamic_body(
+                    RigidBodyState::new(
+                        DVec3::new(0.5, 3.0, -0.25),
+                        DVec3::new(2.0, -1.0, 0.5),
+                        DQuat::from_rotation_y(0.4),
+                        DVec3::new(0.5, -0.3, 0.2),
+                    )
+                    .unwrap(),
+                    properties,
+                    &sphere_geometry(0.5),
+                    DynamicBodyConfig::default(),
+                )
+                .unwrap();
+            for step in 0..180 {
+                let thrust = if step < 60 {
+                    DVec3::new(30.0, 5.0, -10.0)
+                } else {
+                    DVec3::ZERO
+                };
+                world
+                    .step(
+                        1.0 / 120.0,
+                        [(
+                            id,
+                            ExternalWrench {
+                                force_inertial_n: DVec3::new(0.0, -9.81 * mass_kg, 0.0) + thrust,
+                                torque_inertial_nm: DVec3::new(0.0, 0.0, 1.5),
+                            },
+                        )],
+                    )
+                    .unwrap();
+            }
+            let snapshot = world.debug_snapshot().unwrap();
+            serde_json::to_string(&snapshot).unwrap()
+        }
+        assert_eq!(run_tape(), run_tape());
     }
 }

@@ -16,7 +16,7 @@ use std::{
 
 use glam::{DMat3, DQuat, DVec3};
 use thessa_collision::{
-    CollisionDebugSnapshot, CollisionFrame, DynamicBodyConfig, KinematicBodyId,
+    CollisionDebugSnapshot, CollisionFrame, ContactSummary, DynamicBodyConfig, KinematicBodyId,
 };
 use thessa_flight_control::{
     ActuatorDynamics, ControlDemand, DirectionFrame, DirectionTarget, GuidanceIntent,
@@ -1236,6 +1236,15 @@ impl FlightAuthority {
             .as_ref()
             .ok_or_else(|| FlightError::InvalidInput("contact mode is not enabled".into()))?
             .debug_snapshot()
+    }
+
+    /// Take this tick's contact load evidence for the damage/telemetry
+    /// boundary. Returns an empty vector when contact mode is not enabled.
+    pub fn drain_contact_events(&mut self) -> Vec<ContactSummary> {
+        self.contact
+            .as_mut()
+            .map(ContactRuntime::drain_contact_events)
+            .unwrap_or_default()
     }
 
     /// Observe terrain evidence and maintain the contact regime. Returns true

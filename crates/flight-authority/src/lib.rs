@@ -28,7 +28,9 @@ pub use thessa_flight_control::{
 };
 
 pub use bake::{BakeQueue, BakedRails, InlineBakeQueue, RailsBakeRequest};
-pub use contact::{ContactActivation, ContactRuntime};
+pub use contact::{
+    BroadPhasePair, ContactActivation, ContactBroadPhase, ContactCandidate, ContactRuntime,
+};
 pub use launch_site::{canonical_launch_setup, canonical_world_field, survey_bookmarks};
 pub use mode::{ControlMode, FlightRegime};
 pub use runtime::{
@@ -36,4 +38,5 @@ pub use runtime::{
     TerrainTrackCoverage, X15_STALL_ANGLE_DEG, conventional_angle_of_attack_deg,
     local_air_kinematics,
 };
+pub use thessa_collision::{ContactPartyKind, ContactSummary, JointId};
 pub use thessa_worldgen_rocky::field::{ObstacleReport, ObstacleWithstandProof};

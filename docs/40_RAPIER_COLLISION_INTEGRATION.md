@@ -317,12 +317,8 @@ Serial wins on settled scenes: Rayon overhead exceeds the gain once bodies
 sleep, exactly the §8 caveat. Keep `parallel` switchable and re-measure on
 awake/constraint-heavy scenes before choosing scheduler granularity.
 
-Not implemented yet:
+Not implemented yet (update 2026-09-17, third slice — live-loop switch wired):
 
-- `FlightAuthority` regime switch wiring the contact path into the live
-  120 Hz step (the `step` split into `evaluate external loads` +
-  `integrate` exists as `evaluate_forces` reuse + `ContactRuntime::step`;
-  the loop call site is still the free-flight integrator);
 - terrain collision streaming from worldgen (patch attach/evict API
   exists; the producer side is not wired);
 - multi-vehicle contact activation broad phase;
@@ -331,10 +327,34 @@ Not implemented yet:
 - replay test for the `enhanced-determinism` envelope;
 - collision debug rendering (Bevy gizmos; telemetry side is done).
 
-The absence of the live-loop `FlightAuthority` switch is deliberate:
-static terrain stays out of live Thessa surface flight on a rotating body.
-Wire the switch only through the kinematic terrain seam, with the
-free-flight parity envelope as the gate.
+Wired since the third slice: `FlightAuthority::enable_contact_mode`
+arms the switch with an explicit hysteresis boundary. Each 120 Hz `step`
+polls terrain evidence (field surface clearance, else datum clearance),
+invalidates rails on the rising edge, and integrates contact-active ticks
+through `ContactRuntime::step` with the same sampled loads as the powered
+step (`powered_step_input` is shared; only the integrator differs). Rails
+coast is guarded from both directions, and the free-flight terrain-stop
+and datum clamp are bypassed while contact-active (solver bounds and the
+inside-planet guard stay). A 25 m kinematic patch is re-posed every tick
+from the next-tick ephemeris. Verified by a live landing: belly-down X-15
+from 2 m settles at the 0.65 m keel with a touching pair, and free-fall
+ticks never touch rails.
+
+Two integration traps found while wiring (both covered by regression
+tests, both worth re-checking on Rapier upgrades):
+
+- Rapier's `IntegrationParameters` defaults
+  `normalized_max_linear_velocity` to 400 m/s. Thessa co-moves at orbital
+  velocities (50 km/s here), so the clamp silently rewrote authoritative
+  state and tripped the flight solver bounds. The backend sets it to
+  `f64::MAX`: no solver-imposed speed limit, tunnelling stays on CCD.
+- Kinematic prescriptions are converted with the pre-step frame origin
+  but take effect in the post-step one, so a translating collision origin
+  stales every prescription by `origin_velocity * dt` (one tick of orbital
+  motion: the patch trailed the craft by 424 m with zero contacts).
+  Contact mode therefore anchors a fixed-origin inertial frame; f64 needs
+  no follow-frame. The constant-velocity origin option stays valid for
+  future use but must never carry prescriptions.
 
 ## 12. Next implementation slice
 

@@ -131,7 +131,9 @@ impl CollisionFrame {
         self.orientation_local_to_inertial.inverse()
     }
 
-    fn position_to_local(self, inertial_m: DVec3) -> DVec3 {
+    /// Authoritative inertial point into contact-local coordinates. The
+    /// flight loop uses this to place ephemeris-derived terrain patches.
+    pub fn position_to_local(self, inertial_m: DVec3) -> DVec3 {
         self.local_from_inertial() * (inertial_m - self.origin_inertial_m)
     }
 
@@ -149,6 +151,17 @@ impl CollisionFrame {
 
     fn vector_to_local(self, inertial: DVec3) -> DVec3 {
         self.local_from_inertial() * inertial
+    }
+
+    /// Authoritative inertial direction into contact-local axes.
+    pub fn direction_to_local(self, inertial: DVec3) -> DVec3 {
+        self.vector_to_local(inertial)
+    }
+
+    /// Authoritative body-to-inertial orientation into contact-local
+    /// orientation. Mirrors the conversion applied on body insertion.
+    pub fn orientation_to_local(self, orientation_body_to_inertial: DQuat) -> DQuat {
+        (self.local_from_inertial() * orientation_body_to_inertial).normalize()
     }
 
     fn vector_to_inertial(self, local: DVec3) -> DVec3 {
@@ -283,10 +296,19 @@ pub struct CollisionWorld {
 impl CollisionWorld {
     pub fn new(frame: CollisionFrame) -> Result<Self, CollisionBackendError> {
         frame.validate()?;
+        // Rapier's game-tuned default clamps linear velocity to 400 m/s.
+        // Thessa flies co-moving orbital velocities far above that, so the
+        // clamp would silently rewrite authoritative state (and trip the
+        // flight solver bounds). SI/f64 needs no solver-imposed speed limit:
+        // disable it. Tunnelling stays covered by CCD, not by a cap.
+        let integration = IntegrationParameters {
+            normalized_max_linear_velocity: f64::MAX,
+            ..Default::default()
+        };
         Ok(Self {
             frame,
             pipeline: PhysicsPipeline::new(),
-            integration: IntegrationParameters::default(),
+            integration,
             islands: IslandManager::new(),
             broad_phase: BroadPhaseBvh::new(),
             narrow_phase: NarrowPhase::new(),
@@ -1454,6 +1476,47 @@ mod tests {
         );
         let json = serde_json::to_string(&snapshot).expect("snapshot must serialize");
         assert!(json.contains("touching_contact_pairs"));
+    }
+
+    #[test]
+    fn orbital_scale_velocity_survives_a_step() {
+        // Rapier's default 400 m/s velocity clamp would silently rewrite a
+        // co-moving orbital velocity. The backend disables it: a fast body
+        // with no contacts and no wrench must keep its velocity through a
+        // step, with position advancing by the full displacement.
+        let frame = CollisionFrame::inertial_at(DVec3::ZERO, DVec3::ZERO);
+        let mut world = CollisionWorld::new(frame).unwrap();
+        let properties =
+            RigidBodyProperties::new(5.0, DMat3::from_diagonal(DVec3::splat(2.0))).unwrap();
+        let initial = RigidBodyState::new(
+            DVec3::new(1.0e9, 2.0e9, 3.0e9),
+            DVec3::new(1200.0, 51_000.0, -300.0),
+            DQuat::IDENTITY,
+            DVec3::ZERO,
+        )
+        .unwrap();
+        let id = world
+            .insert_dynamic_body(
+                initial,
+                properties,
+                &sphere_geometry(0.5),
+                DynamicBodyConfig::default(),
+            )
+            .unwrap();
+        let dt = 1.0 / 120.0;
+        world.step(dt, [(id, ExternalWrench::ZERO)]).unwrap();
+        let solved = world.body_state(id).unwrap();
+        assert!(
+            (solved.velocity_inertial_mps - initial.velocity_inertial_mps).length() < 1.0e-6,
+            "orbital velocity was clamped: {:?}",
+            solved.velocity_inertial_mps
+        );
+        let expected_position = initial.position_inertial_m + initial.velocity_inertial_mps * dt;
+        assert!(
+            (solved.position_inertial_m - expected_position).length() < 1.0e-3,
+            "orbital displacement is wrong: {:?}",
+            solved.position_inertial_m
+        );
     }
 
     #[test]

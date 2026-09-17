@@ -15,6 +15,9 @@ use std::{
 };
 
 use glam::{DMat3, DQuat, DVec3};
+use thessa_collision::{
+    CollisionDebugSnapshot, CollisionFrame, DynamicBodyConfig, KinematicBodyId,
+};
 use thessa_flight_control::{
     ActuatorDynamics, ControlDemand, DirectionFrame, DirectionTarget, GuidanceIntent,
     PropulsionDemand, RollPolicy, SpacecraftControlLaw,
@@ -22,15 +25,17 @@ use thessa_flight_control::{
 use thessa_sim_core::{
     AeroConfig, AeroModel, AeroSimdScratch, AeroState, AtmosphereConfig, AtmosphereError,
     BakedEphemeris, BodyId, BodyState, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_VELOCITY_TOL_MPS,
-    EphemerisFrame, EventScheduler, FlightError, FlightForces, FlightStepInput, GravityField,
-    OnRailsCache, PanelAeroModel, PanelSoA, RigidBodyState, ScheduledEvent, ScheduledKind, SimTime,
-    TestParticleState, TickIntegratorConfig, VehicleDefinition, WORLD_TICK_S, X15StarterProfile,
-    evaluate_flight_forces_soa, integrate_attitude_step, integrate_rigid_body_step_soa,
+    CollisionMaterial, EphemerisFrame, EventScheduler, FlightError, FlightForces, FlightStepInput,
+    GravityField, OnRailsCache, PanelAeroModel, PanelSoA, RigidBodyState, ScheduledEvent,
+    ScheduledKind, SimTime, TestParticleState, TickIntegratorConfig, VehicleDefinition,
+    WORLD_TICK_S, X15StarterProfile, evaluate_flight_forces_soa, integrate_attitude_step,
+    integrate_rigid_body_step_soa,
 };
 use thessa_worldgen_rocky::field::{ObstacleReport, ObstacleTrackCertificate, PlanetField};
 
 use crate::{
     BakeQueue, BakedRails, ControlMode, FlightRegime, InlineBakeQueue, RailsBakeRequest,
+    contact::{ContactActivation, ContactRuntime},
     control::{
         PILOT_ATTITUDE_COMMAND_RATE_RAD_S, SURFACE_COMMAND_RATE_S, allocate_rcs,
         allocate_rcs_force, attitude_demand, slew_surface_command, solve_aero_trim,
@@ -64,6 +69,12 @@ const PILOT_START_ALTITUDE_M: f64 = 500.0;
 const MAX_PILOT_ALTITUDE_M: f64 = 2.0e10;
 const MAX_PILOT_RELATIVE_SPEED_MPS: f64 = 50_000.0;
 const MAX_PILOT_ANGULAR_RATE_RPS: f64 = 25.0;
+/// Half-size of the kinematic terrain patch maintained under a
+/// contact-active craft. Covers 120 Hz travel plus vehicle radius with
+/// margin; the patch is a locally-flat approximation of the field, not the
+/// full terrain, and is re-posed from the ephemeris every tick.
+const CONTACT_PATCH_HALF_M: f64 = 25.0;
+const CONTACT_PATCH_HALF_THICK_M: f64 = 1.0;
 
 fn normalize_direction(vector: DVec3, label: &str) -> Result<DVec3, FlightError> {
     if !vector.is_finite() {
@@ -83,6 +94,51 @@ fn surface_tangent_basis(up: DVec3) -> Result<(DVec3, DVec3), FlightError> {
     let east = normalize_direction(helper.cross(up), "surface east")?;
     let north = normalize_direction(up.cross(east), "surface north")?;
     Ok((east, north))
+}
+
+/// Body-fixed ground direction for terrain sampling. This is the exact
+/// mapping the endpoint guard uses: inertial relative position into the
+/// rotating body frame through the `x/z/-y` axis convention. Sharing it
+/// keeps the activation evidence and the guard on the same terrain sample.
+fn ground_dir_body_fixed(
+    relative_position_inertial_m: DVec3,
+    flight_time_s: f64,
+    body_rotation_period_s: f64,
+) -> DVec3 {
+    DQuat::from_rotation_y(-(flight_time_s * std::f64::consts::TAU / body_rotation_period_s))
+        * DVec3::new(
+            relative_position_inertial_m.x,
+            relative_position_inertial_m.z,
+            -relative_position_inertial_m.y,
+        )
+        .normalize()
+}
+
+/// Assemble the flight-step load input shared by the free-flight integrator
+/// and the contact-active tick. Both paths sample identical loads; only the
+/// integrator differs.
+#[allow(clippy::too_many_arguments)]
+fn powered_step_input(
+    state: RigidBodyState,
+    kinematics: LocalAirKinematics,
+    body_velocity_inertial_mps: DVec3,
+    gravity: DVec3,
+    jet_moment: DVec3,
+    rcs_force_body_n: DVec3,
+    thrust_n: f64,
+    band_drag_body_n: DVec3,
+    skip_aero: bool,
+) -> FlightStepInput {
+    FlightStepInput {
+        altitude_m: kinematics.altitude_m.max(0.0),
+        gravity_acceleration_inertial_mps2: gravity,
+        position_body_m: kinematics.relative_position_body_m,
+        wind_velocity_body_mps: state.orientation_body_to_inertial.inverse()
+            * body_velocity_inertial_mps,
+        extra_force_body_n: DVec3::X * thrust_n + rcs_force_body_n + band_drag_body_n,
+        extra_moment_body_nm: jet_moment,
+        skip_aero,
+    }
 }
 
 /// Result of asking the rails fast path to serve the current accumulator.
@@ -343,6 +399,13 @@ pub struct FlightAuthority {
     pub rails: OnRailsCache,
     pub bake: Box<dyn BakeQueue>,
     pub rails_bake_seconds: Option<f64>,
+    /// Opt-in contact-active solver. `None` (default) is pure free flight;
+    /// `Some` observes terrain evidence with hysteresis and integrates
+    /// contact-active ticks through Rapier instead of the free-flight
+    /// integrator. Exactly one integrator owns a body per tick.
+    contact: Option<ContactRuntime>,
+    /// Kinematic terrain patch tracked by `contact`, if any.
+    contact_patch: Option<KinematicBodyId>,
     /// Simulation-time event queue: the rails bake arms its wake here, and
     /// `advance` drains due events instead of polling them every tick.
     pub scheduler: EventScheduler,
@@ -421,7 +484,11 @@ impl FlightAuthority {
         let body_state = ephemeris
             .body_state(self.reference_body, SimTime(self.flight_time_s))
             .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
-        let helper = if normal.z.abs() < 0.9 { DVec3::Z } else { DVec3::X };
+        let helper = if normal.z.abs() < 0.9 {
+            DVec3::Z
+        } else {
+            DVec3::X
+        };
         let radial = normalize_direction(normal.cross(helper), "orbit radial")?;
         let prograde = normalize_direction(normal.cross(radial), "orbit prograde")?;
         let lateral = radial.cross(prograde);
@@ -735,6 +802,8 @@ impl FlightAuthority {
             rails: OnRailsCache::new(),
             bake: Box::new(InlineBakeQueue::new()),
             rails_bake_seconds: None,
+            contact: None,
+            contact_patch: None,
             scheduler: EventScheduler::new(),
             wake_notice: None,
             wake_events: Vec::new(),
@@ -1118,6 +1187,189 @@ impl FlightAuthority {
         }
     }
 
+    /// Arm the contact-active solver. Distances are the explicit hysteresis
+    /// boundary (enter earlier than exit): the craft integrates through
+    /// Rapier at or below `enter_distance_m` of terrain evidence and returns
+    /// to free flight past `exit_distance_m`. Arming invalidates rails so no
+    /// coast batch can span the regime change. The collision frame is
+    /// anchored at the current craft pose/velocity.
+    pub fn enable_contact_mode(
+        &mut self,
+        enter_distance_m: f64,
+        exit_distance_m: f64,
+    ) -> Result<(), FlightError> {
+        let activation = ContactActivation::new(enter_distance_m, exit_distance_m)?;
+        // Fixed origin: kinematic prescriptions and body resyncs are
+        // converted with the pre-step origin but take effect in the post-step
+        // one, so a translating origin would stale every prescription by
+        // origin_velocity * dt (one tick of orbital motion here). The frame
+        // stays inertial either way; f64 needs no follow-frame.
+        let frame =
+            CollisionFrame::new(self.state.position_inertial_m, DVec3::ZERO, DQuat::IDENTITY)
+                .map_err(|error| FlightError::InvalidInput(format!("contact frame: {error}")))?;
+        self.contact = Some(ContactRuntime::new(frame, activation)?);
+        self.contact_patch = None;
+        self.rails.invalidate();
+        self.scheduler.clear_rails_wakes();
+        Ok(())
+    }
+
+    /// Disarm the contact solver and drop its transient scene. Rails are
+    /// invalidated so free flight never resumes on a forecast that spanned
+    /// contact-active ticks.
+    pub fn disable_contact_mode(&mut self) {
+        self.contact = None;
+        self.contact_patch = None;
+        self.rails.invalidate();
+        self.scheduler.clear_rails_wakes();
+    }
+
+    /// Whether the current tick must integrate through the contact solver.
+    pub fn contact_active(&self) -> bool {
+        self.contact.as_ref().is_some_and(ContactRuntime::is_active)
+    }
+
+    /// Debug telemetry for the contact scene. Errors when contact mode is
+    /// not enabled.
+    pub fn contact_snapshot(&self) -> Result<CollisionDebugSnapshot, FlightError> {
+        self.contact
+            .as_ref()
+            .ok_or_else(|| FlightError::InvalidInput("contact mode is not enabled".into()))?
+            .debug_snapshot()
+    }
+
+    /// Observe terrain evidence and maintain the contact regime. Returns true
+    /// when this tick must integrate through Rapier. A rising edge
+    /// invalidates rails; a falling edge drops the backend body and patch so
+    /// no stale backend state survives the return to free flight.
+    fn poll_contact_activation(
+        &mut self,
+        kinematics: LocalAirKinematics,
+    ) -> Result<bool, FlightError> {
+        if self.contact.is_none() || self.vehicle.collision_geometry.is_empty() {
+            return Ok(false);
+        }
+        let clearance_m = match &self.terrain_field {
+            Some(field) => {
+                let dir = ground_dir_body_fixed(
+                    kinematics.relative_position_inertial_m,
+                    self.flight_time_s,
+                    self.body_rotation_period_s,
+                );
+                let surface = field.params.radius_m + field.height_m(dir.to_array(), 32.0).max(0.0);
+                kinematics.relative_position_inertial_m.length() - surface
+            }
+            None => kinematics.relative_position_inertial_m.length() - self.planet_radius_m,
+        };
+        let runtime = self
+            .contact
+            .as_mut()
+            .ok_or_else(|| FlightError::InvalidInput("contact mode is not enabled".into()))?;
+        let was_active = runtime.is_active();
+        let (active, just_activated) = runtime.observe_distance(clearance_m);
+        if just_activated {
+            self.rails.invalidate();
+            self.scheduler.clear_rails_wakes();
+        }
+        if was_active && !active {
+            runtime.remove_body()?;
+            if let Some(patch) = self.contact_patch.take() {
+                runtime.evict_kinematic_terrain(patch)?;
+            }
+        }
+        Ok(active)
+    }
+
+    /// One contact-active tick: the same sampled loads as the powered step,
+    /// integrated by Rapier instead of `integrate_rigid_body_step_soa`. The
+    /// kinematic terrain patch is re-posed from the next-tick ephemeris so
+    /// the position-based body carries the surface velocity into this step.
+    #[allow(clippy::too_many_arguments)]
+    fn step_contact_active(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        body_state: BodyState,
+        gravity: DVec3,
+        kinematics: LocalAirKinematics,
+        jet_moment: DVec3,
+        rcs_force_body_n: DVec3,
+        thrust_n: f64,
+        band_drag_body_n: DVec3,
+        skip_aero: bool,
+    ) -> Result<(RigidBodyState, FlightForces), FlightError> {
+        let state = self.state;
+        let properties = self.vehicle.mass_properties;
+        let geometry = self.vehicle.collision_geometry.clone();
+        let input = powered_step_input(
+            state,
+            kinematics,
+            body_state.velocity_inertial,
+            gravity,
+            jet_moment,
+            rcs_force_body_n,
+            thrust_n,
+            band_drag_body_n,
+            skip_aero,
+        );
+        let forces = self.evaluate_forces(state, input)?;
+        let wrench = ContactRuntime::evaluate_wrench(state, properties, gravity, &forces)?;
+
+        let next_time = self.time_after_ticks(1)?;
+        let next_home = ephemeris
+            .body_state(self.reference_body, next_time)
+            .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+        let up = kinematics.radial_up;
+        let (east, north) = surface_tangent_basis(up)?;
+        // Right-handed patch basis with the thickness axis on the radial:
+        // east x up = -north, so the third column is -north.
+        let orientation = DQuat::from_mat3(&DMat3::from_cols(east, up, -north));
+        let terrain_height_m = match &self.terrain_field {
+            Some(field) => {
+                let dir = ground_dir_body_fixed(
+                    kinematics.relative_position_inertial_m,
+                    self.flight_time_s,
+                    self.body_rotation_period_s,
+                );
+                field.height_m(dir.to_array(), 32.0).max(0.0)
+            }
+            None => 0.0,
+        };
+        let surface_point =
+            next_home.position_inertial + up * (self.planet_radius_m + terrain_height_m);
+        let center_inertial = surface_point - up * CONTACT_PATCH_HALF_THICK_M;
+        let half_extents = DVec3::new(
+            CONTACT_PATCH_HALF_M,
+            CONTACT_PATCH_HALF_THICK_M,
+            CONTACT_PATCH_HALF_M,
+        );
+        let existing_patch = self.contact_patch;
+        let (next, patch) = {
+            let runtime = self
+                .contact
+                .as_mut()
+                .ok_or_else(|| FlightError::InvalidInput("contact mode is not enabled".into()))?;
+            let frame = runtime.frame();
+            let center_local = frame.position_to_local(center_inertial);
+            let orientation_local = frame.orientation_to_local(orientation);
+            let patch = match existing_patch {
+                Some(id) => id,
+                None => runtime.attach_kinematic_terrain(
+                    center_local,
+                    orientation_local,
+                    half_extents,
+                    CollisionMaterial::default(),
+                )?,
+            };
+            runtime.move_kinematic_terrain(patch, center_local, orientation_local)?;
+            runtime.sync_body(state, properties, &geometry, DynamicBodyConfig::default())?;
+            (runtime.step(FLIGHT_STEP_S, wrench)?, patch)
+        };
+        if existing_patch.is_none() {
+            self.contact_patch = Some(patch);
+        }
+        Ok((next, forces))
+    }
+
     fn evaluate_forces(
         &mut self,
         state: RigidBodyState,
@@ -1400,15 +1652,17 @@ impl FlightAuthority {
             ));
         }
         if let Some(field) = &self.terrain_field {
-            let body_dir = DQuat::from_rotation_y(
-                -(time.0 * std::f64::consts::TAU / self.body_rotation_period_s),
-            ) * DVec3::new(relative.x, relative.z, -relative.y).normalize();
-            let surface =
-                field.params.radius_m + field.height_m(body_dir.to_array(), 32.0).max(0.0);
-            if relative.length() < surface + PILOT_SURFACE_CLEARANCE_M {
-                return Err(FlightError::InvalidInput(
-                    "terrain impact; contact dynamics are not implemented".into(),
-                ));
+            // Contact-active ticks resolve terrain through Rapier; the
+            // stop-before-penetration error below only guards free flight.
+            if !self.contact_active() {
+                let body_dir = ground_dir_body_fixed(relative, time.0, self.body_rotation_period_s);
+                let surface =
+                    field.params.radius_m + field.height_m(body_dir.to_array(), 32.0).max(0.0);
+                if relative.length() < surface + PILOT_SURFACE_CLEARANCE_M {
+                    return Err(FlightError::InvalidInput(
+                        "terrain impact; contact dynamics are not implemented".into(),
+                    ));
+                }
             }
         }
         if guard_radius > 0.0 && guard_relative.length() <= guard_radius {
@@ -1419,7 +1673,11 @@ impl FlightAuthority {
             )));
         }
         // Existing spherical contact boundary; no invented angular damping.
-        if relative.length() < self.planet_radius_m + PILOT_SURFACE_CLEARANCE_M {
+        // Skipped while contact-active: Rapier owns the contact response and
+        // the clamp would fight the solver by rewriting its solved pose.
+        if !self.contact_active()
+            && relative.length() < self.planet_radius_m + PILOT_SURFACE_CLEARANCE_M
+        {
             let up = relative.normalize();
             next.position_inertial_m = next_body.position_inertial
                 + up * (self.planet_radius_m + PILOT_SURFACE_CLEARANCE_M);
@@ -1514,6 +1772,12 @@ impl FlightAuthority {
         mode: ControlMode,
         requested_s: f64,
     ) -> Result<CoastAdvance, FlightError> {
+        // A contact-active craft never rides baked translation: Rapier owns
+        // its pose every tick, so a rails batch would integrate a second,
+        // divergent trajectory through the same interval.
+        if self.contact_active() {
+            return Ok(CoastAdvance::NotEligible);
+        }
         if self.guidance_state_dependent {
             return Ok(CoastAdvance::NotEligible);
         }
@@ -1885,6 +2149,17 @@ impl FlightAuthority {
         self.aero_panels
             .sync_deflections(&self.vehicle.aero_geometry)
             .map_err(FlightError::Aero)?;
+        let input = powered_step_input(
+            self.state,
+            kinematics,
+            body_state.velocity_inertial,
+            gravity,
+            jet_moment,
+            rcs_force_body_n,
+            thrust_n,
+            band_drag_body_n,
+            skip_aero,
+        );
         integrate_rigid_body_step_soa(
             &self.aero_model,
             &self.aero_panels,
@@ -1892,16 +2167,7 @@ impl FlightAuthority {
             self.atmosphere,
             self.state,
             self.vehicle.mass_properties,
-            FlightStepInput {
-                altitude_m: kinematics.altitude_m.max(0.0),
-                gravity_acceleration_inertial_mps2: gravity,
-                position_body_m: kinematics.relative_position_body_m,
-                wind_velocity_body_mps: self.state.orientation_body_to_inertial.inverse()
-                    * body_state.velocity_inertial,
-                extra_force_body_n: DVec3::X * thrust_n + rcs_force_body_n + band_drag_body_n,
-                extra_moment_body_nm: jet_moment,
-                skip_aero,
-            },
+            input,
             FLIGHT_STEP_S,
         )
     }
@@ -2173,13 +2439,25 @@ impl FlightAuthority {
         let skip_aero = vacuum || band.is_some();
         let (band_drag_body_n, band_q_pa) = band.unwrap_or((DVec3::ZERO, 0.0));
         let thrust_n = self.thrust_n();
-        // Unpowered vacuum coast rides the single baked trajectory instead
-        // of integrating translation per tick; the map prediction draws the
-        // same path. Attitude (RCS) still integrates at full rate below.
-        let (mut next, mut forces) = if self.regime == FlightRegime::Coast
-            && thrust_n == 0.0
-            && skip_aero
-        {
+        // Contact-active ticks integrate through Rapier with the same
+        // sampled loads; the free-flight integrator never runs for them.
+        // The rails coast below is additionally guarded, so no baked batch
+        // can span the regime change from either direction.
+        let contact_active = self.poll_contact_activation(kinematics)?;
+        let (mut next, mut forces) = if contact_active {
+            self.scheduler.clear_rails_wakes();
+            self.step_contact_active(
+                ephemeris,
+                body_state,
+                gravity,
+                kinematics,
+                jet_moment,
+                rcs_force_body_n,
+                thrust_n,
+                band_drag_body_n,
+                skip_aero,
+            )?
+        } else if self.regime == FlightRegime::Coast && thrust_n == 0.0 && skip_aero {
             match self.try_coast_step_on_rails(ephemeris, time, jet_moment, body_state, gravity)? {
                 Some(coasted) => coasted,
                 None => self.integrate_powered_step(
@@ -2735,6 +3013,109 @@ mod tests {
             bounded.steps_this_frame
         );
         assert!(bounded.steps_this_frame < full.steps_this_frame);
+    }
+
+    #[test]
+    fn contact_mode_falls_without_rails_batches() {
+        let (ephemeris, mut flight) = fixture();
+        flight.set_legacy_propulsion(0.0, false);
+        // Hover start: kill the 180 m/s launch airspeed so gravity is the
+        // only load and the craft must fall straight down.
+        let home = ephemeris
+            .body_state(flight.reference_body, SimTime(flight.flight_time_s))
+            .unwrap();
+        flight.state.velocity_inertial_mps = home.velocity_inertial;
+        flight
+            .enable_contact_mode(1_000.0, 2_000.0)
+            .expect("contact mode arms");
+        let initial_altitude = flight.relative_position_m.length() - flight.planet_radius_m;
+        flight
+            .advance(&ephemeris, ControlMode::Direct, 60.0 * FLIGHT_STEP_S)
+            .expect("contact-active advance");
+        assert!(flight.contact_active(), "craft must stay contact-active");
+        assert_eq!(
+            flight.rails_advanced_this_frame, 0.0,
+            "no rails batch may span contact-active ticks"
+        );
+        assert!(flight.last_forces.is_some());
+        assert!(flight.flight_error.is_none());
+        let body = ephemeris
+            .body_state(flight.reference_body, SimTime(flight.flight_time_s))
+            .unwrap();
+        let altitude = (flight.state.position_inertial_m - body.position_inertial).length()
+            - flight.planet_radius_m;
+        assert!(
+            altitude < initial_altitude - 0.5,
+            "contact-active craft must fall, was {initial_altitude:.2} m now {altitude:.2} m"
+        );
+        let snapshot = flight.contact_snapshot().expect("contact telemetry");
+        assert_eq!(snapshot.dynamic_bodies.len(), 1);
+    }
+
+    #[test]
+    fn contact_mode_lands_on_the_kinematic_terrain_patch() {
+        let (ephemeris, mut flight) = fixture();
+        let recipe: thessa_worldgen_rocky::spec_recipe::SpecRecipe =
+            toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml")).unwrap();
+        let field = std::sync::Arc::new(
+            thessa_worldgen_rocky::field::field_from_manifest(
+                &thessa_worldgen_rocky::spec_recipe::manifest_from_spec(&recipe).unwrap(),
+            )
+            .unwrap(),
+        );
+        let dir = [1.0, 0.0, 0.0];
+        flight.initialize_world_site(field.clone(), dir, &ephemeris);
+        // Belly-down hover 2 m above the sampled surface: body +Z (up) onto
+        // the radial, gentle 1 m/s descent, no spin, engine off.
+        let home = ephemeris
+            .body_state(flight.reference_body, SimTime::EPOCH)
+            .unwrap();
+        let up = DVec3::X;
+        let surface = flight.planet_radius_m + field.height_m(dir, 32.0).max(0.0);
+        let (east, north) = surface_tangent_basis(up).unwrap();
+        flight.state = RigidBodyState::new(
+            home.position_inertial + up * (surface + 2.0),
+            home.velocity_inertial - up * 1.0,
+            DQuat::from_mat3(&DMat3::from_cols(east, north, up)),
+            DVec3::ZERO,
+        )
+        .unwrap();
+        flight.relative_position_m = up * (surface + 2.0);
+        flight.set_legacy_propulsion(0.0, false);
+        flight
+            .enable_contact_mode(100.0, 200.0)
+            .expect("contact mode arms");
+        flight
+            .advance(&ephemeris, ControlMode::Direct, 480.0 * FLIGHT_STEP_S)
+            .expect("contact-active landing");
+        assert!(flight.flight_error.is_none(), "{:?}", flight.flight_error);
+        assert!(flight.contact_active(), "craft must stay contact-active");
+        let home = ephemeris
+            .body_state(flight.reference_body, SimTime(flight.flight_time_s))
+            .unwrap();
+        let relative = flight.state.position_inertial_m - home.position_inertial;
+        let ground = ground_dir_body_fixed(
+            relative,
+            flight.flight_time_s,
+            flight.body_rotation_period_s,
+        );
+        let clearance = relative.length()
+            - (flight.planet_radius_m + field.height_m(ground.to_array(), 32.0).max(0.0));
+        let radial_speed =
+            (flight.state.velocity_inertial_mps - home.velocity_inertial).dot(relative.normalize());
+        assert!(
+            (0.2..=1.2).contains(&clearance),
+            "landed clearance {clearance:.3} m must match the fuselage keel envelope"
+        );
+        assert!(
+            radial_speed.abs() < 0.3,
+            "landed craft must rest, radial speed {radial_speed:.3} m/s"
+        );
+        let snapshot = flight.contact_snapshot().expect("contact telemetry");
+        assert!(
+            snapshot.touching_contact_pairs >= 1,
+            "landed craft must report a touching pair: {snapshot:?}"
+        );
     }
 
     #[test]

@@ -132,6 +132,10 @@ impl ContactRuntime {
         self.activation.is_active()
     }
 
+    pub const fn frame(&self) -> CollisionFrame {
+        self.world.frame()
+    }
+
     pub const fn activation(&self) -> ContactActivation {
         self.activation
     }

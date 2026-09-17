@@ -3,7 +3,10 @@ use std::{error::Error, fmt};
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
-use crate::{AeroConfig, AeroError, AeroGeometry, AeroPanel, FlightError, RigidBodyProperties};
+use crate::{
+    AeroConfig, AeroError, AeroGeometry, AeroPanel, CollisionError, CollisionGeometry, FlightError,
+    RigidBodyProperties,
+};
 
 /// One user-configurable aerodynamic control channel.
 ///
@@ -91,6 +94,13 @@ pub struct VehicleDefinition {
     pub aero_geometry: AeroGeometry,
     pub mass_properties: RigidBodyProperties,
     pub control_surfaces: Vec<ControlSurfaceDefinition>,
+    /// Solver-neutral contact geometry compiled from the same vehicle asset.
+    ///
+    /// Empty is a supported migration state for legacy assets that have not
+    /// received collision geometry yet. Contact-active runtime code must refuse
+    /// to create a dynamic collision body until this is populated.
+    #[serde(default)]
+    pub collision_geometry: CollisionGeometry,
 }
 
 /// Physical starter data for the first powered flight profile.
@@ -233,9 +243,23 @@ impl VehicleDefinition {
             aero_geometry,
             mass_properties,
             control_surfaces,
+            collision_geometry: CollisionGeometry::default(),
         };
         definition.validate()?;
         Ok(definition)
+    }
+
+    /// Attach collision geometry produced by a vehicle compiler/baker without
+    /// exposing any collision-backend type in the vehicle asset.
+    pub fn with_collision_geometry(
+        mut self,
+        collision_geometry: CollisionGeometry,
+    ) -> Result<Self, VehicleError> {
+        collision_geometry
+            .validate()
+            .map_err(VehicleError::Collision)?;
+        self.collision_geometry = collision_geometry;
+        Ok(self)
     }
 
     pub fn validate(&self) -> Result<(), VehicleError> {
@@ -252,6 +276,9 @@ impl VehicleDefinition {
             self.mass_properties.inertia_body_kg_m2,
         )
         .map_err(VehicleError::MassProperties)?;
+        self.collision_geometry
+            .validate()
+            .map_err(VehicleError::Collision)?;
 
         let mut claimed_panels = std::collections::HashSet::new();
         for surface in &self.control_surfaces {
@@ -300,6 +327,7 @@ impl VehicleDefinition {
 pub enum VehicleError {
     InvalidVehicle(String),
     Geometry(AeroError),
+    Collision(CollisionError),
     MassProperties(FlightError),
     InvalidControlSurface(String),
     InvalidControlCommand { surface: String, command: f64 },
@@ -312,8 +340,9 @@ impl fmt::Display for VehicleError {
         match self {
             Self::InvalidVehicle(message) => write!(formatter, "invalid vehicle: {message}"),
             Self::Geometry(error) => write!(formatter, "vehicle geometry error: {error}"),
+            Self::Collision(error) => write!(formatter, "vehicle collision geometry error: {error}"),
             Self::MassProperties(error) => {
-                write!(formatter, "vehicle mass properties error: {error}")
+                write!(formatter, "invalid vehicle mass properties: {error}")
             }
             Self::InvalidControlSurface(message) => {
                 write!(formatter, "invalid control surface: {message}")
@@ -343,6 +372,12 @@ impl Error for VehicleError {}
 impl From<AeroError> for VehicleError {
     fn from(error: AeroError) -> Self {
         Self::Geometry(error)
+    }
+}
+
+impl From<CollisionError> for VehicleError {
+    fn from(error: CollisionError) -> Self {
+        Self::Collision(error)
     }
 }
 

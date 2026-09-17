@@ -1,9 +1,10 @@
 use std::{env, error::Error, fs, path::PathBuf};
 
-use glam::{DMat3, DVec3};
+use glam::{DMat3, DQuat, DVec3};
 use serde::Deserialize;
 use thessa_sim_core::{
-    AeroGeometry, AeroPanel, ControlSurfaceDefinition, RigidBodyProperties, VehicleDefinition,
+    AeroGeometry, AeroPanel, CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionPart,
+    CollisionShape, ControlSurfaceDefinition, RigidBodyProperties, VehicleDefinition,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -18,6 +19,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("vehicle: {}", vehicle.name);
     println!("panels: {}", vehicle.aero_geometry.panels.len());
     println!("control surfaces: {}", vehicle.control_surfaces.len());
+    println!("collision parts: {}", vehicle.collision_geometry.parts.len());
     println!("mass: {:.3} kg", vehicle.mass_properties.mass_kg);
     if let Some(output) = options.output {
         let json = serde_json::to_string_pretty(&vehicle)?;
@@ -36,6 +38,10 @@ struct VehicleAsset {
     panels: Vec<PanelAsset>,
     #[serde(default)]
     control_surfaces: Vec<ControlSurfaceAsset>,
+    /// Solver-neutral contact primitives. Legacy assets may omit this while
+    /// collision geometry is migrated; contact-active runtime code must not.
+    #[serde(default)]
+    collision_parts: Vec<CollisionPartAsset>,
 }
 
 impl VehicleAsset {
@@ -53,9 +59,16 @@ impl VehicleAsset {
             .into_iter()
             .map(ControlSurfaceAsset::bake)
             .collect::<Result<Vec<_>, _>>()?;
+        let collision_geometry = CollisionGeometry::new(
+            self.collision_parts
+                .into_iter()
+                .map(CollisionPartAsset::bake)
+                .collect::<Result<Vec<_>, _>>()?,
+        )?;
         Ok(VehicleDefinition::new(
             self.name, geometry, properties, controls,
-        )?)
+        )?
+        .with_collision_geometry(collision_geometry)?)
     }
 }
 
@@ -139,6 +152,101 @@ impl ControlSurfaceAsset {
     }
 }
 
+/// One body-local collision primitive from the source vehicle asset.
+///
+/// Example TOML:
+///
+/// ```text
+/// [[collision_parts]]
+/// shape = "capsule"
+/// position_body_m = [0.0, 0.0, 0.0]
+/// orientation_body_xyzw = [0.0, 0.0, 0.0, 1.0]
+/// axis = "x"
+/// half_segment_m = 2.0
+/// radius_m = 0.5
+/// friction = 0.7
+/// restitution = 0.0
+/// ```
+#[derive(Debug, Deserialize)]
+struct CollisionPartAsset {
+    #[serde(default)]
+    position_body_m: [f64; 3],
+    #[serde(default = "identity_quaternion")]
+    orientation_body_xyzw: [f64; 4],
+    #[serde(default = "default_friction")]
+    friction: f64,
+    #[serde(default)]
+    restitution: f64,
+    #[serde(flatten)]
+    shape: CollisionShapeAsset,
+}
+
+impl CollisionPartAsset {
+    fn bake(self) -> Result<CollisionPart, Box<dyn Error>> {
+        let [x, y, z, w] = self.orientation_body_xyzw;
+        Ok(CollisionPart::new(
+            vector(self.position_body_m),
+            DQuat::from_xyzw(x, y, z, w),
+            self.shape.bake(),
+            CollisionMaterial::new(self.friction, self.restitution)?,
+        )?)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "shape", rename_all = "kebab-case")]
+enum CollisionShapeAsset {
+    Sphere {
+        radius_m: f64,
+    },
+    Cuboid {
+        half_extents_m: [f64; 3],
+    },
+    Capsule {
+        axis: CollisionAxisAsset,
+        half_segment_m: f64,
+        radius_m: f64,
+    },
+}
+
+impl CollisionShapeAsset {
+    fn bake(self) -> CollisionShape {
+        match self {
+            Self::Sphere { radius_m } => CollisionShape::Sphere { radius_m },
+            Self::Cuboid { half_extents_m } => CollisionShape::Cuboid {
+                half_extents_m: vector(half_extents_m),
+            },
+            Self::Capsule {
+                axis,
+                half_segment_m,
+                radius_m,
+            } => CollisionShape::Capsule {
+                axis: axis.into(),
+                half_segment_m,
+                radius_m,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum CollisionAxisAsset {
+    X,
+    Y,
+    Z,
+}
+
+impl From<CollisionAxisAsset> for CollisionAxis {
+    fn from(value: CollisionAxisAsset) -> Self {
+        match value {
+            CollisionAxisAsset::X => Self::X,
+            CollisionAxisAsset::Y => Self::Y,
+            CollisionAxisAsset::Z => Self::Z,
+        }
+    }
+}
+
 fn vector(values: [f64; 3]) -> DVec3 {
     DVec3::from_array(values)
 }
@@ -153,6 +261,14 @@ fn rows_to_matrix(rows: [[f64; 3]; 3]) -> DMat3 {
 
 fn one() -> f64 {
     1.0
+}
+
+fn identity_quaternion() -> [f64; 4] {
+    [0.0, 0.0, 0.0, 1.0]
+}
+
+fn default_friction() -> f64 {
+    CollisionMaterial::default().friction
 }
 
 struct Options {
@@ -212,10 +328,37 @@ mod tests {
         let vehicle = asset.bake().expect("vehicle asset should bake");
         assert_eq!(vehicle.aero_geometry.panels.len(), 4);
         assert_eq!(vehicle.control_surfaces.len(), 2);
+        assert!(vehicle.collision_geometry.is_empty());
         assert_eq!(vehicle.mass_properties.mass_kg, 1_000.0);
         let json = serde_json::to_string(&vehicle).expect("vehicle JSON should serialize");
         let round_trip: VehicleDefinition =
             serde_json::from_str(&json).expect("vehicle JSON should deserialize");
         assert_eq!(round_trip, vehicle);
+    }
+
+    #[test]
+    fn collision_part_asset_bakes_without_backend_types() {
+        let part: CollisionPartAsset = toml::from_str(
+            r#"
+shape = "capsule"
+axis = "x"
+half_segment_m = 2.0
+radius_m = 0.5
+friction = 0.8
+"#,
+        )
+        .expect("collision part TOML should parse");
+        let baked = part.bake().expect("collision part should validate");
+        assert_eq!(baked.local_position_m, DVec3::ZERO);
+        assert_eq!(baked.local_orientation, DQuat::IDENTITY);
+        assert_eq!(baked.material.friction, 0.8);
+        assert!(matches!(
+            baked.shape,
+            CollisionShape::Capsule {
+                axis: CollisionAxis::X,
+                half_segment_m: 2.0,
+                radius_m: 0.5,
+            }
+        ));
     }
 }

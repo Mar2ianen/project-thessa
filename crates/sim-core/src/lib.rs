@@ -9,6 +9,7 @@
 mod aero;
 mod affine_propagator;
 mod atmosphere;
+mod collision;
 mod ephemeris;
 mod flight;
 mod frames;
@@ -35,6 +36,10 @@ pub use affine_propagator::{
     PiecewiseReport, PropagatorError, StepCoefficients, propagate_piecewise,
 };
 pub use atmosphere::{AtmosphereConfig, AtmosphereError, AtmosphereSample, BakedAtmosphere};
+pub use collision::{
+    CollisionAxis, CollisionError, CollisionGeometry, CollisionMaterial, CollisionPart,
+    CollisionShape,
+};
 pub use ephemeris::{
     BakedBody, BakedEphemeris, BodyId, BodyState, EphemerisError, EphemerisFrame, EphemerisScratch,
     KeplerOrbit, OsculatingElements,

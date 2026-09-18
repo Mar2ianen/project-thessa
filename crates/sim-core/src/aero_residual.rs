@@ -8,9 +8,9 @@
 //! interpolated exactly like `AeroCoefficientTable::sample`.
 //!
 //! Each 4x4 tile stores four f64 corner predictors plus per-coefficient scales.
-//! Residual8 and Residual16 encode signed residuals around the bilinear
-//! predictor; tiles that cannot satisfy the requested coefficient-space error
-//! budget fall back to verbatim Raw64 samples.
+//! Residual4/6/8/16 encode signed residuals around the bilinear predictor;
+//! tiles that cannot satisfy the requested coefficient-space error budget fall
+//! back to verbatim Raw64 samples.
 //!
 //! The current implementation is deliberately scalar. It exists as a
 //! correctness/error oracle before AVX2/AVX-512 fused decode paths are added.
@@ -234,8 +234,9 @@ pub struct AeroResidualTable {
 }
 
 impl AeroResidualTable {
-    /// Encode a validated canonical table with cheapest-first R8 -> R16 ->
-    /// Raw64 selection under the requested coefficient-space budget.
+    /// Encode a validated canonical table with cheapest-first R4 -> R6 ->
+    /// R8 -> R16 -> Raw64 selection under the requested coefficient-space
+    /// budget.
     pub fn encode(
         table: &AeroCoefficientTable,
         budget: AeroResidualBudget,

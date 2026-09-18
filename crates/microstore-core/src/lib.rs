@@ -47,8 +47,10 @@ pub mod color;
 pub mod fixtures;
 pub mod metrics;
 pub mod pgm;
+pub mod residency;
 pub mod wgsl;
 
 pub use codec::{CodecError, EncodeMode, EncodedBlock, EncodedPage, MicroCodec, ScalarField};
 pub use color::{ColorField, ColorPage};
 pub use metrics::{ErrorStats, LinearErrorStats, measure, measure_linear, srgb_to_linear};
+pub use residency::{CacheTelemetry, DirtyRange, ResidencyCache, ResidencyError};

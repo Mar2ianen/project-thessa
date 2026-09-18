@@ -10,3 +10,7 @@ description = "Backend-neutral microscaled residual codec for surface/material p
 [[bench]]
 name = "codec"
 harness = false
+
+[[bench]]
+name = "residency"
+harness = false

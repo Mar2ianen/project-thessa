@@ -125,6 +125,24 @@ pub struct ResolvedGraphicsSettings {
     pub airglow: bool,
     pub aurora_shell: bool,
     pub aurora_lighting: bool,
+    pub aurora_quality: crate::settings::AuroraQuality,
+    pub aurora_intensity: f32,
+    pub aurora_animate: bool,
+    pub clouds_enabled: bool,
+    pub clouds_quality: Quality,
+    pub clouds_layers: u32,
+    pub clouds_coverage: f32,
+    pub clouds_opacity: f32,
+    pub clouds_animate: bool,
+    pub gas_giant_enabled: bool,
+    pub gas_giant_quality: Quality,
+    pub gas_giant_animate: bool,
+    pub gas_giant_limb: bool,
+    pub plume_enabled: bool,
+    pub plume_quality: Quality,
+    pub plume_diamonds: bool,
+    pub plume_flicker: bool,
+    pub plume_light: bool,
     pub rt_terrain: bool,
     pub rt_vehicles: bool,
     pub rt_landmarks: bool,
@@ -231,6 +249,24 @@ impl ResolvedGraphicsSettings {
             airglow: requested.upper_atmosphere.airglow,
             aurora_shell: requested.upper_atmosphere.aurora,
             aurora_lighting: requested.upper_atmosphere.aurora_lighting && rt_on,
+            aurora_quality: requested.upper_atmosphere.aurora_quality,
+            aurora_intensity: requested.upper_atmosphere.aurora_intensity.clamp(0.0, 4.0),
+            aurora_animate: requested.upper_atmosphere.aurora_animate,
+            clouds_enabled: requested.clouds.enabled,
+            clouds_quality: requested.clouds.quality,
+            clouds_layers: requested.clouds.layers.clamp(1, 2),
+            clouds_coverage: requested.clouds.coverage.clamp(0.0, 1.0),
+            clouds_opacity: requested.clouds.opacity.clamp(0.0, 1.0),
+            clouds_animate: requested.clouds.animate,
+            gas_giant_enabled: requested.gas_giant.enabled,
+            gas_giant_quality: requested.gas_giant.quality,
+            gas_giant_animate: requested.gas_giant.animate_bands,
+            gas_giant_limb: requested.gas_giant.limb_darkening,
+            plume_enabled: requested.engine_plume.enabled,
+            plume_quality: requested.engine_plume.quality,
+            plume_diamonds: requested.engine_plume.mach_diamonds,
+            plume_flicker: requested.engine_plume.flicker,
+            plume_light: requested.engine_plume.light,
             rt_terrain: requested.raytracing.terrain && rt_on,
             rt_vehicles: requested.raytracing.vehicles && rt_on,
             rt_landmarks: requested.raytracing.landmarks && rt_on,
@@ -308,6 +344,18 @@ impl ResolvedGraphicsSettings {
         map.insert(
             "shadow_map_size".to_string(),
             self.shadow_map_size.to_string(),
+        );
+        map.insert("clouds".to_string(), self.clouds_enabled.to_string());
+        map.insert(
+            "cloud_layers".to_string(),
+            self.clouds_layers.to_string(),
+        );
+        map.insert("gas_giant".to_string(), self.gas_giant_enabled.to_string());
+        map.insert("plume".to_string(), self.plume_enabled.to_string());
+        map.insert("aurora".to_string(), self.aurora_shell.to_string());
+        map.insert(
+            "aurora_intensity".to_string(),
+            format!("{:.2}", self.aurora_intensity),
         );
         for (i, note) in self.notes.iter().enumerate() {
             map.insert(format!("note_{i}"), note.clone());

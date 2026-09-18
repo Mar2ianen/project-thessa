@@ -57,6 +57,24 @@ APIs, data formats, and save files are not stable before `0.1.0`.
   implementations, a universal Bevy frame plugin, cube-sphere Morton mapping,
   and an optional portable wgpu adapter. The client runs CBT scheduling beside
   the existing CPU terrain renderer while GPU geometry parity is validated.
+- Cheap atmospheric beauties (`apps/client/src/beauty.rs`, all behind graphics
+  settings): procedural gas-giant bands (CPU-baked), 1-2 cloud shell decks for
+  ocean worlds, engine-plume cone with Mach diamonds/flicker/point light,
+  aurora shell over the analytic oval. New `graphics.toml` sections
+  `[gas_giant]`, `[engine_plume]`, extended `[clouds]` and `[upper_atmosphere]`
+  (aurora intensity/animation). The plume reads data via `EnginePlumeInput`:
+  no engine-sim exists yet, engine-sim will become the provider without
+  renderer changes.
+- New `plume-core` crate: backend-neutral `PlumeSource`/`PlumeEnvironment`
+  contract, analytic axial mean profile (pressure-ratio regime, shock-cell
+  spacing), participating-medium CPU oracle (`sample_medium`, `integrate_ray`,
+  `radiant_power`), exhaust optical material table with a shared CPU/GPU hue
+  ramp, and a plume-local RCBT adapter. 25 semantic tests and a `profile`
+  bench.
+- Field-first plume renderer (Medium/High): a camera-facing ribbon carries
+  coverage while `assets/shaders/plume_volume.wgsl` marches view rays through
+  the round cross-section and Beer-Lambert-integrates the `plume-core` mean
+  field. Cone impostor kept for Low; pilot-view gating kept.
 
 ### Changed
 
@@ -104,6 +122,12 @@ APIs, data formats, and save files are not stable before `0.1.0`.
   map/metre coordinate mixing, and non-finite flight states were corrected.
 - Atmosphere rotation now converts `omega` to craft coordinates before
   evaluating `omega x r`.
+- Volumetric plume no longer draws a milky sheet wider than the jet body:
+  medium weight is hard-clipped outside the true barrel radius, turbulence
+  runs azimuthally (fixed axis basis) at low frequencies instead of
+  axisymmetric rings, shock cells are softened, march steps 8/14
+  (Medium/High). The tail dissolves toward `z = len` instead of a flat cut,
+  `atan2` at the axis is guarded against NaN on strict drivers.
 
 ### Validation
 

@@ -5633,6 +5633,7 @@ dependencies = [
  "thessa-flight-net",
  "thessa-graphics",
  "thessa-perf",
+ "thessa-plume-core",
  "thessa-protocol",
  "thessa-rcbt-core",
  "thessa-sim-core",
@@ -5712,6 +5713,13 @@ version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "thessa-plume-core"
+version = "0.0.1"
+dependencies = [
+ "thessa-rcbt-core",
 ]
 
 [[package]]

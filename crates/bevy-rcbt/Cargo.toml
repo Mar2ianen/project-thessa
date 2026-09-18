@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license = "MIT"
 publish = false
-description = "Thin Bevy client adapter for the backend-neutral RCBT runtime"
+description = "Universal Bevy scheduling adapter for the backend-neutral RCBT runtime"
 
 [features]
 default = []
@@ -13,7 +13,10 @@ render = ["bevy/bevy_render", "dep:bevy_core_pipeline"]
 mesh-shaders = ["render", "dep:wgpu"]
 
 [dependencies]
-bevy = { version = "0.19.1", default-features = false }
+# Workspace Bevy (full features incl. render/Solari): the `render` feature
+# only gates the render-world bridge, not the dependency itself. This keeps
+# one Bevy build across the workspace instead of a second default-off copy.
+bevy.workspace = true
 bevy_core_pipeline = { version = "0.19.1", default-features = false, optional = true }
 thessa-rcbt-core = { path = "../rcbt-core" }
 wgpu = { version = "29.0.4", optional = true }

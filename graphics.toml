@@ -22,7 +22,7 @@ preset = "high" # low | medium | high | ultra | custom (auto-shown when values d
 [renderer]
 backend = "auto" # auto | vulkan | metal | webgpu (dx12 deferred pending ADR)
 ray_tracing = "auto" # off | local | full | auto
-terrain = "gpu_indexed" # cpu | gpu_indexed; no mesh-shader requirement
+terrain = "cpu" # cpu | gpu_indexed; no mesh-shader requirement
 terrain_mesh_cells = 24 # CPU middle-field density; adaptive per tile; 8..64
 resolution_scale = 1.0
 vsync = false
@@ -47,19 +47,46 @@ sky_dome = true
 ray_steps = 24 # view-march steps for CPU queries (4..128)
 
 [clouds]
-# Clouds are a separate future subsystem (spec section 10). Section kept so
-# presets and the future GUI share one schema from the start.
-enabled = false
-quality = "medium" # low | medium | high
-volumetric = false
+# Cheap shell decks (spec section 10, first slice): procedural RGBA baked once
+# on CPU, 1-2 transparent shells, no volumetrics. CBT tile keys share the
+# terrain LOD address space (see tools/worldgen-rocky lod::cbt_node_for_tile).
+enabled = true
+quality = "medium" # low = 512px, medium = 1024px, high = 2048px bake
+volumetric = false # reserved; shell path ignores it
 ray_steps = 16
 cast_shadows = false
+layers = 1 # 1 = low deck, 2 = low + cirrus
+coverage = 0.45 # 0 overcast .. 1 clear
+opacity = 0.9
+animate = true # differential deck drift; off = static
 
 [upper_atmosphere]
 airglow = true
 aurora = true
-aurora_quality = "low" # low = emissive shell; high = volumetric curtains (later)
+aurora_quality = "low" # low = static emissive shell; high = animated curtains
 aurora_lighting = false # RT emissive proxy (later)
+aurora_intensity = 1.0 # 0..4 emission gain over the analytic oval
+aurora_animate = true # slide curtains with sim time; off = static oval
+
+[gas_giant]
+# Procedural Nereid/Vesper bands baked once on CPU; no shader, no per-frame cost.
+enabled = true
+quality = "medium" # low = 512x256, medium = 1024x512, high = 2048x1024
+animate_bands = true # slow storm drift; off = static
+limb_darkening = true # belt/zone contrast baked into the texture
+
+[engine_plume]
+# Field-first plume (docs/38): analytic mean field + RCBT residual (later).
+# Low = baked cone impostor (fallback artifact); Medium/High = analytic
+# volume ribbon (camera-facing bound, per-pixel Beer-Lambert march).
+# NOTE (engines): no engine-sim exists yet. The client builds a provisional
+# source from throttle + ambient pressure; engine-sim/vehicle data will
+# become the provider without renderer changes.
+enabled = true
+quality = "medium" # low = cone impostor; medium = volume/8 steps; high = volume/14 steps
+mach_diamonds = true # debug override (doc section 9), not physics
+flicker = true
+light = true
 
 [raytracing]
 # Participation flags for the experimental Solari path. The single mode

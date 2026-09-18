@@ -233,10 +233,34 @@ pub struct CloudSettings {
     pub ray_steps: u32,
     #[serde(default)]
     pub cast_shadows: bool,
+    /// Cheap shell layers: 1 = single deck, 2 = low deck + cirrus.
+    #[serde(default = "default_cloud_layers")]
+    pub layers: u32,
+    /// Coverage threshold over the procedural fBm field (0 = overcast, 1 = clear).
+    #[serde(default = "default_cloud_coverage")]
+    pub coverage: f32,
+    /// Alpha gain over the shell texture.
+    #[serde(default = "default_cloud_opacity")]
+    pub opacity: f32,
+    /// Rotate decks differentially; off = static (cheapest, still shaded).
+    #[serde(default = "default_true")]
+    pub animate: bool,
 }
 
 fn default_cloud_steps() -> u32 {
     16
+}
+
+fn default_cloud_layers() -> u32 {
+    1
+}
+
+fn default_cloud_coverage() -> f32 {
+    0.45
+}
+
+fn default_cloud_opacity() -> f32 {
+    0.9
 }
 
 impl Default for CloudSettings {
@@ -247,6 +271,10 @@ impl Default for CloudSettings {
             volumetric: false,
             ray_steps: 16,
             cast_shadows: false,
+            layers: default_cloud_layers(),
+            coverage: default_cloud_coverage(),
+            opacity: default_cloud_opacity(),
+            animate: true,
         }
     }
 }
@@ -269,6 +297,16 @@ pub struct UpperAtmosphereSettings {
     pub aurora_quality: AuroraQuality,
     #[serde(default)]
     pub aurora_lighting: bool,
+    /// Emission gain over the analytic oval model (appearance only).
+    #[serde(default = "default_aurora_intensity")]
+    pub aurora_intensity: f32,
+    /// Slide curtains with sim time; off = static oval (cheapest).
+    #[serde(default = "default_true")]
+    pub aurora_animate: bool,
+}
+
+fn default_aurora_intensity() -> f32 {
+    1.0
 }
 
 impl Default for UpperAtmosphereSettings {
@@ -278,6 +316,66 @@ impl Default for UpperAtmosphereSettings {
             aurora: true,
             aurora_quality: AuroraQuality::Low,
             aurora_lighting: false,
+            aurora_intensity: default_aurora_intensity(),
+            aurora_animate: true,
+        }
+    }
+}
+
+/// Cheap gas-giant look: procedural band textures baked once on the CPU,
+/// no custom shader, no per-frame cost beyond a slow mesh spin.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GasGiantSettings {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub quality: Quality,
+    /// Slow band drift / storm rotation; off = static (cheapest).
+    #[serde(default = "default_true")]
+    pub animate_bands: bool,
+    /// Boost belt/zone contrast baked into the texture (appearance only).
+    #[serde(default = "default_true")]
+    pub limb_darkening: bool,
+}
+
+impl Default for GasGiantSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            quality: Quality::Medium,
+            animate_bands: true,
+            limb_darkening: true,
+        }
+    }
+}
+
+/// Cheap realistic plume: cone mesh + baked gradient/Mach-diamond texture +
+/// flicker + one optional point light. No particles, no volumetrics.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnginePlumeSettings {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub quality: Quality,
+    /// Mach-diamond bands baked into the emissive texture.
+    #[serde(default = "default_true")]
+    pub mach_diamonds: bool,
+    /// Throttle-driven flicker; off = steady plume (cheapest).
+    #[serde(default = "default_true")]
+    pub flicker: bool,
+    /// One point light at the nozzle; off saves a forward light.
+    #[serde(default = "default_true")]
+    pub light: bool,
+}
+
+impl Default for EnginePlumeSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            quality: Quality::Medium,
+            mach_diamonds: true,
+            flicker: true,
+            light: true,
         }
     }
 }
@@ -398,6 +496,10 @@ pub struct RequestedGraphics {
     #[serde(default)]
     pub shadows: ShadowSettings,
     #[serde(default)]
+    pub gas_giant: GasGiantSettings,
+    #[serde(default)]
+    pub engine_plume: EnginePlumeSettings,
+    #[serde(default)]
     pub debug: DebugSettings,
 }
 
@@ -416,6 +518,8 @@ impl Default for RequestedGraphics {
             upper_atmosphere: UpperAtmosphereSettings::default(),
             raytracing: RaytracingParticipation::default(),
             shadows: ShadowSettings::default(),
+            gas_giant: GasGiantSettings::default(),
+            engine_plume: EnginePlumeSettings::default(),
             debug: DebugSettings::default(),
         }
     }
@@ -490,6 +594,33 @@ impl RequestedGraphics {
                 detail: format!("expected 4..=128, got {}", self.clouds.ray_steps),
             });
         }
+        if !(1..=2).contains(&self.clouds.layers) {
+            return Err(ConfigError::InvalidValue {
+                path: "clouds.layers",
+                detail: format!("expected 1..=2, got {}", self.clouds.layers),
+            });
+        }
+        if !(0.0..=1.0).contains(&self.clouds.coverage) {
+            return Err(ConfigError::InvalidValue {
+                path: "clouds.coverage",
+                detail: format!("expected 0..=1, got {}", self.clouds.coverage),
+            });
+        }
+        if !(0.0..=1.0).contains(&self.clouds.opacity) {
+            return Err(ConfigError::InvalidValue {
+                path: "clouds.opacity",
+                detail: format!("expected 0..=1, got {}", self.clouds.opacity),
+            });
+        }
+        if !(0.0..=4.0).contains(&self.upper_atmosphere.aurora_intensity) {
+            return Err(ConfigError::InvalidValue {
+                path: "upper_atmosphere.aurora_intensity",
+                detail: format!(
+                    "expected 0..=4, got {}",
+                    self.upper_atmosphere.aurora_intensity
+                ),
+            });
+        }
         if self.raytracing.max_distance_m < 0.0 {
             return Err(ConfigError::InvalidValue {
                 path: "raytracing.max_distance_m",
@@ -545,6 +676,14 @@ impl RequestedGraphics {
                 self.atmosphere.aerial_perspective = false;
                 self.atmosphere.limb_scattering = true;
                 self.clouds.enabled = false;
+                self.clouds.layers = 1;
+                self.clouds.animate = false;
+                self.gas_giant.quality = Quality::Low;
+                self.gas_giant.animate_bands = false;
+                self.engine_plume.quality = Quality::Low;
+                self.engine_plume.light = false;
+                self.engine_plume.mach_diamonds = false;
+                self.engine_plume.flicker = false;
                 self.shadows.quality = Quality::Low;
                 self.shadows.cascades = 2;
                 self.shadows.max_distance_m = 3000.0;
@@ -561,6 +700,14 @@ impl RequestedGraphics {
                 self.atmosphere.ray_steps = 16;
                 self.atmosphere.aerial_perspective = true;
                 self.clouds.enabled = false;
+                self.clouds.layers = 1;
+                self.clouds.animate = true;
+                self.gas_giant.quality = Quality::Medium;
+                self.gas_giant.animate_bands = true;
+                self.engine_plume.quality = Quality::Medium;
+                self.engine_plume.light = true;
+                self.engine_plume.mach_diamonds = true;
+                self.engine_plume.flicker = true;
                 self.shadows.quality = Quality::Medium;
                 self.shadows.cascades = 4;
                 self.shadows.max_distance_m = 6000.0;
@@ -576,12 +723,22 @@ impl RequestedGraphics {
                 self.atmosphere.ray_steps = 24;
                 self.atmosphere.aerial_perspective = true;
                 self.clouds.enabled = false;
+                self.clouds.layers = 1;
+                self.clouds.animate = true;
+                self.gas_giant.quality = Quality::High;
+                self.gas_giant.animate_bands = true;
+                self.engine_plume.quality = Quality::High;
+                self.engine_plume.light = true;
+                self.engine_plume.mach_diamonds = true;
+                self.engine_plume.flicker = true;
                 self.shadows.quality = Quality::High;
                 self.shadows.cascades = 4;
                 self.shadows.max_distance_m = 12_000.0;
                 self.shadows.map_size = 4096;
                 self.shadows.normal_bias_m = 1.5;
                 self.upper_atmosphere.aurora_quality = AuroraQuality::Low;
+                self.upper_atmosphere.aurora_intensity = 1.0;
+                self.upper_atmosphere.aurora_animate = true;
             }
             Preset::Ultra => {
                 self.renderer.resolution_scale = 1.0;
@@ -591,12 +748,22 @@ impl RequestedGraphics {
                 self.atmosphere.ray_steps = 32;
                 self.atmosphere.aerial_perspective = true;
                 self.clouds.enabled = false;
+                self.clouds.layers = 2;
+                self.clouds.animate = true;
+                self.gas_giant.quality = Quality::High;
+                self.gas_giant.animate_bands = true;
+                self.engine_plume.quality = Quality::High;
+                self.engine_plume.light = true;
+                self.engine_plume.mach_diamonds = true;
+                self.engine_plume.flicker = true;
                 self.shadows.quality = Quality::High;
                 self.shadows.cascades = 4;
                 self.shadows.max_distance_m = 20_000.0;
                 self.shadows.map_size = 4096;
                 self.shadows.normal_bias_m = 1.0;
                 self.upper_atmosphere.aurora_quality = AuroraQuality::High;
+                self.upper_atmosphere.aurora_intensity = 1.2;
+                self.upper_atmosphere.aurora_animate = true;
             }
             Preset::Custom => {}
         }

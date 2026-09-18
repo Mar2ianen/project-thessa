@@ -1,0 +1,15 @@
+[package]
+name = "thessa-plume-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Backend-neutral rocket-plume semantic field: source, analytic mean profile, optics"
+
+[dependencies]
+thessa-rcbt-core = { path = "../rcbt-core" }
+
+[[bench]]
+name = "profile"
+harness = false

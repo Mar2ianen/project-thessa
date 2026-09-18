@@ -79,7 +79,8 @@ pub enum MicroCodec {
 }
 
 impl MicroCodec {
-    fn tag(self) -> u8 {
+    /// Wire tag byte (`0` Raw8, `1` Residual8, `2` Residual4).
+    pub fn tag(self) -> u8 {
         match self {
             MicroCodec::Raw8 => TAG_RAW8,
             MicroCodec::Residual8 => TAG_RESIDUAL8,

@@ -58,4 +58,4 @@ pub use height::{
     verify,
 };
 pub use metrics::{ErrorStats, LinearErrorStats, measure, measure_linear, srgb_to_linear};
-pub use residency::{CacheTelemetry, DirtyRange, ResidencyCache, ResidencyError};
+pub use residency::{CacheTelemetry, DirtyRange, FlushPayload, ResidencyCache, ResidencyError};

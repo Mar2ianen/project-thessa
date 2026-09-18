@@ -46,8 +46,61 @@ struct Slot {
     page: EncodedPage,
     /// Block indices changed since the last [`ResidencyCache::flush`].
     dirty: Vec<u32>,
+    /// Page layout as of the last flush (or mark_clean): wire offsets of
+    /// per-block patches are only valid while the layout is unchanged.
+    /// `None` means the backend has never seen this page.
+    flushed: Option<LayoutSig>,
+    /// Eviction currency in bytes. Defaults to the wire image; a backend
+    /// whose residency costs more (offset tables, decode targets, padding)
+    /// reports its own cost via [`ResidencyCache::set_page_cost`].
+    /// Updates reset it to the fresh wire image until re-reported.
+    cost_bytes: u64,
     /// Monotonic access stamp for LRU (ties broken by key order).
     stamp: u64,
+}
+
+/// Block-grid layout signature: block payload lengths (and therefore every
+/// wire offset) derive from exactly these fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LayoutSig {
+    width: u32,
+    height: u32,
+    blocks_x: u32,
+    blocks_y: u32,
+    tags: Vec<u8>,
+}
+
+fn layout_of(page: &EncodedPage) -> LayoutSig {
+    LayoutSig {
+        width: page.width,
+        height: page.height,
+        blocks_x: page.blocks_x,
+        blocks_y: page.blocks_y,
+        tags: page.blocks.iter().map(|b| b.codec.tag()).collect(),
+    }
+}
+
+/// What a [`ResidencyCache::flush`] hands to the backend.
+///
+/// Block sizes are codec-dependent (R2 7 B .. Raw8 19 B), so a codec-rung
+/// or extent change shifts every later wire offset *and* the offset table.
+/// Per-block patches are only valid while the layout is unchanged;
+/// otherwise the whole page plus its table must go up together.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FlushPayload {
+    /// Full page wire image plus the fresh block offset table. Required
+    /// after insert and after any layout change.
+    Full {
+        /// `page.to_bytes()` snapshot.
+        page_bytes: Vec<u8>,
+        /// Fresh [`block_base_table`](crate::wgsl::block_base_table).
+        table: Vec<u32>,
+    },
+    /// Wire-image patches, valid against the previously uploaded layout.
+    Incremental {
+        /// Changed-block patches (possibly empty).
+        patches: Vec<DirtyRange>,
+    },
 }
 
 /// Byte-cost residency cache over encoded scalar pages.
@@ -162,10 +215,7 @@ impl ResidencyCache {
     }
 
     fn resident_bytes(&self) -> u64 {
-        self.slots
-            .values()
-            .map(|s| s.page.encoded_bytes() as u64)
-            .sum()
+        self.slots.values().map(|s| s.cost_bytes).sum()
     }
 
     fn evict_until_fit(&mut self) {
@@ -181,27 +231,45 @@ impl ResidencyCache {
             }
             let slot = self.slots.remove(&victim).expect("victim is resident");
             self.evictions += 1;
-            self.evicted_bytes += slot.page.encoded_bytes() as u64;
+            self.evicted_bytes += slot.cost_bytes;
         }
     }
 
     /// Insert (or replace) a page. The whole page counts as fresh upload
     /// bytes; updates via [`ResidencyCache::update`] count dirty ranges
-    /// instead. Evicts LRU victims until the budget fits.
+    /// instead. Evicts LRU victims until the budget fits. Cost resets to
+    /// the wire image; backends re-report via [`ResidencyCache::set_page_cost`].
     pub fn insert(&mut self, key: u64, page: EncodedPage) {
         self.uploaded_bytes += page.encoded_bytes() as u64;
         self.clock += 1;
         let stamp = self.clock;
         let blocks = page.blocks.len() as u32;
+        let cost_bytes = page.encoded_bytes() as u64;
         self.slots.insert(
             key,
             Slot {
                 page,
                 dirty: (0..blocks).collect(),
+                flushed: None,
+                cost_bytes,
                 stamp,
             },
         );
         self.evict_until_fit();
+    }
+
+    /// Override the eviction cost of one resident page with the backend's
+    /// true residency number (wire + tables + padding + decode targets).
+    /// The cache evicts and reports in this currency until the next
+    /// [`ResidencyCache::update`], which resets it to the fresh wire image.
+    pub fn set_page_cost(&mut self, key: u64, cost_bytes: u64) -> Result<(), ResidencyError> {
+        let slot = self
+            .slots
+            .get_mut(&key)
+            .ok_or(ResidencyError::NotResident(key))?;
+        slot.cost_bytes = cost_bytes;
+        self.evict_until_fit();
+        Ok(())
     }
 
     /// Look up a resident page. Hits refresh LRU; misses only count.
@@ -243,45 +311,65 @@ impl ResidencyCache {
         let count = dirty.len();
         slot.page = fresh;
         slot.dirty = dirty;
+        // A new wire image invalidates any backend-reported cost: the
+        // backend re-reports after the next flush.
+        slot.cost_bytes = slot.page.encoded_bytes() as u64;
         self.touch(key);
         self.evict_until_fit();
         Ok(count)
     }
 
-    /// Drain pending dirty ranges for one page as wire-image patches.
-    /// Refreshes LRU; an empty vec means nothing changed since the last
-    /// flush (or since insert, which reports the full page once — use
-    /// [`ResidencyCache::mark_clean`] to skip the initial upload).
-    pub fn flush(&mut self, key: u64) -> Result<Vec<DirtyRange>, ResidencyError> {
+    /// Drain pending changes for one page.
+    ///
+    /// Returns [`FlushPayload::Full`] after insert and whenever the block
+    /// layout changed (codec-rung or extent change shifts every later wire
+    /// offset, so per-block patches would land on the wrong bytes);
+    /// otherwise returns [`FlushPayload::Incremental`] patches against the
+    /// previously uploaded layout. Refreshes LRU.
+    pub fn flush(&mut self, key: u64) -> Result<FlushPayload, ResidencyError> {
         let slot = self
             .slots
             .get_mut(&key)
             .ok_or(ResidencyError::NotResident(key))?;
-        let wire = slot.page.to_bytes();
-        let table = block_base_table(&slot.page);
-        let mut ranges = Vec::with_capacity(slot.dirty.len());
-        for index in slot.dirty.drain(..) {
-            let block = &slot.page.blocks[index as usize];
-            let base = table[index as usize] as usize;
-            let len = 3 + block.codec.payload_len();
-            ranges.push(DirtyRange {
-                byte_offset: base as u32,
-                bytes: wire[base..base + len].to_vec(),
-            });
-        }
-        self.uploaded_bytes += ranges.iter().map(|r| r.bytes.len() as u64).sum::<u64>();
+        let layout = layout_of(&slot.page);
+        let layout_changed = slot.flushed.as_ref() != Some(&layout);
+        let payload = if layout_changed {
+            let page_bytes = slot.page.to_bytes();
+            let table = block_base_table(&slot.page);
+            self.uploaded_bytes += page_bytes.len() as u64 + table.len() as u64 * 4;
+            FlushPayload::Full { page_bytes, table }
+        } else {
+            let wire = slot.page.to_bytes();
+            let table = block_base_table(&slot.page);
+            let mut patches = Vec::with_capacity(slot.dirty.len());
+            for index in slot.dirty.drain(..) {
+                let block = &slot.page.blocks[index as usize];
+                let base = table[index as usize] as usize;
+                let len = 3 + block.codec.payload_len();
+                patches.push(DirtyRange {
+                    byte_offset: base as u32,
+                    bytes: wire[base..base + len].to_vec(),
+                });
+            }
+            self.uploaded_bytes += patches.iter().map(|r| r.bytes.len() as u64).sum::<u64>();
+            FlushPayload::Incremental { patches }
+        };
+        slot.dirty.clear();
+        slot.flushed = Some(layout);
         self.touch(key);
-        Ok(ranges)
+        Ok(payload)
     }
 
     /// Drop pending dirty flags without uploading (caller already holds
-    /// the bytes, e.g. right after [`ResidencyCache::insert`]).
+    /// the bytes, e.g. right after [`ResidencyCache::insert`]). Records
+    /// the current layout as uploaded.
     pub fn mark_clean(&mut self, key: u64) -> Result<(), ResidencyError> {
         let slot = self
             .slots
             .get_mut(&key)
             .ok_or(ResidencyError::NotResident(key))?;
         slot.dirty.clear();
+        slot.flushed = Some(layout_of(&slot.page));
         Ok(())
     }
 
@@ -292,7 +380,7 @@ impl ResidencyCache {
             .remove(&key)
             .ok_or(ResidencyError::NotResident(key))?;
         self.evictions += 1;
-        self.evicted_bytes += slot.page.encoded_bytes() as u64;
+        self.evicted_bytes += slot.cost_bytes;
         Ok(slot.page)
     }
 
@@ -390,7 +478,10 @@ mod tests {
             .update(1, &field, EncodeMode::Adaptive { max_abs_error: 2.0 })
             .unwrap();
         assert_eq!(changed, 0);
-        assert!(cache.flush(1).unwrap().is_empty());
+        assert_eq!(
+            cache.flush(1).unwrap(),
+            FlushPayload::Incremental { patches: vec![] }
+        );
     }
 
     #[test]
@@ -411,7 +502,10 @@ mod tests {
         let field = crate::ScalarField::new(16, 16, data).unwrap();
         let changed = cache.update(1, &field, EncodeMode::Residual4).unwrap();
         assert_eq!(changed, 1);
-        let ranges = cache.flush(1).unwrap();
+        let ranges = match cache.flush(1).unwrap() {
+            FlushPayload::Incremental { patches } => patches,
+            FlushPayload::Full { .. } => panic!("same layout must patch incrementally"),
+        };
         assert_eq!(ranges.len(), 1);
         // Range bytes match the wire image at the reported offset.
         let wire = cache.get(1).unwrap().to_bytes();
@@ -420,20 +514,73 @@ mod tests {
                 ..ranges[0].byte_offset as usize + ranges[0].bytes.len()],
             ranges[0].bytes[..]
         );
-        // Second flush is empty: flags drained.
-        assert!(cache.flush(1).unwrap().is_empty());
+        // Second flush is empty: flags drained, layout unchanged.
+        assert_eq!(
+            cache.flush(1).unwrap(),
+            FlushPayload::Incremental { patches: vec![] }
+        );
     }
 
     #[test]
     fn insert_reports_full_page_then_mark_clean_skips() {
         let mut cache = ResidencyCache::new(1 << 20);
         cache.insert(4, page_at(4));
-        let blocks = cache.get(4).unwrap().blocks.len();
-        assert_eq!(cache.flush(4).unwrap().len(), blocks);
+        match cache.flush(4).unwrap() {
+            FlushPayload::Full { page_bytes, table } => {
+                let page = cache.get(4).unwrap();
+                assert_eq!(page_bytes, page.to_bytes());
+                assert_eq!(table, crate::wgsl::block_base_table(page));
+            }
+            FlushPayload::Incremental { .. } => panic!("first flush after insert is Full"),
+        }
         // Re-insert and skip the initial upload instead.
         cache.insert(4, page_at(4));
         cache.mark_clean(4).unwrap();
-        assert!(cache.flush(4).unwrap().is_empty());
+        assert_eq!(
+            cache.flush(4).unwrap(),
+            FlushPayload::Incremental { patches: vec![] }
+        );
+    }
+
+    #[test]
+    fn rung_change_forces_full_page_and_table_reupload() {
+        // Insert lossless Residual8, then re-encode lossy: every block
+        // changes size, so per-block patches would land on shifted offsets.
+        let mut cache = ResidencyCache::new(1 << 20);
+        let field = fixtures::noise(16, 16, 0xBEAD);
+        cache.insert(1, EncodedPage::encode(&field, EncodeMode::Residual8));
+        cache.mark_clean(1).unwrap();
+        let changed = cache.update(1, &field, EncodeMode::Residual4).unwrap();
+        assert_eq!(changed, 16);
+        match cache.flush(1).unwrap() {
+            FlushPayload::Full { page_bytes, table } => {
+                let page = cache.get(1).unwrap();
+                assert_eq!(page_bytes, page.to_bytes());
+                assert_eq!(table.len(), page.blocks.len());
+                assert_eq!(table, crate::wgsl::block_base_table(page));
+            }
+            FlushPayload::Incremental { .. } => panic!("rung change must go Full"),
+        }
+        // Steady state again: the next identical update patches nothing.
+        cache
+            .update(1, &field, EncodeMode::Residual4)
+            .expect("resident");
+        assert_eq!(
+            cache.flush(1).unwrap(),
+            FlushPayload::Incremental { patches: vec![] }
+        );
+    }
+
+    #[test]
+    fn extent_change_forces_full_reupload() {
+        let mut cache = ResidencyCache::new(1 << 20);
+        cache.insert(2, page_at(4));
+        cache.mark_clean(2).unwrap();
+        cache
+            .update(2, &fixtures::noise(8, 8, 9), EncodeMode::Residual4)
+            .expect("resident");
+        assert!(matches!(cache.flush(2).unwrap(), FlushPayload::Full { .. }));
+        assert_eq!(cache.get(2).unwrap().width, 8);
     }
 
     #[test]
@@ -455,6 +602,43 @@ mod tests {
             ResidencyError::NotResident(3).to_string(),
             "no resident page 3"
         );
+    }
+
+    #[test]
+    fn backend_cost_override_drives_eviction_and_telemetry() {
+        let mut cache = ResidencyCache::new(u64::MAX);
+        let page = page_at(31);
+        let wire = page.encoded_bytes() as u64;
+        cache.insert(1, page.clone());
+        cache.insert(2, page);
+        // Backend reports wire + table + decode target as its true cost.
+        let gpu_cost = wire + 1024 + 4096;
+        cache.set_page_cost(1, gpu_cost).unwrap();
+        cache.set_page_cost(2, gpu_cost).unwrap();
+        assert_eq!(cache.telemetry().resident_bytes, 2 * gpu_cost);
+        // A budget holding one gpu-cost page but not two evicts the LRU
+        // victim on cost, not on wire bytes.
+        cache.budget_bytes = gpu_cost + wire;
+        cache.evict_until_fit();
+        assert_eq!(cache.keys(), vec![2]);
+        assert_eq!(cache.telemetry().evicted_bytes, gpu_cost);
+        assert_eq!(
+            cache.set_page_cost(9, 10),
+            Err(ResidencyError::NotResident(9))
+        );
+    }
+
+    #[test]
+    fn update_resets_cost_to_fresh_wire() {
+        let mut cache = ResidencyCache::new(u64::MAX);
+        let field = fixtures::noise(16, 16, 0xC0DE);
+        cache.insert(1, EncodedPage::encode(&field, EncodeMode::Residual8));
+        cache.set_page_cost(1, 1_000_000).unwrap();
+        cache
+            .update(1, &field, EncodeMode::Residual8)
+            .expect("resident");
+        let wire = cache.get(1).unwrap().encoded_bytes() as u64;
+        assert_eq!(cache.telemetry().resident_bytes, wire);
     }
 
     #[test]

@@ -121,8 +121,12 @@ pub fn block_base_table(page: &EncodedPage) -> Vec<u32> {
 }
 
 /// Wire bytes zero-padded to a u32 multiple for `array<u32>` upload.
-/// Returns the padded bytes; the `MIN` trailer is never read because every
-/// block length is known from its tag.
+/// Returns the padded bytes.
+///
+/// Note for uploaders: the Residual6 path reads the byte after the last
+/// payload byte for the final code, so backends must additionally
+/// guarantee slack past this buffer (the wgpu backend appends one zero
+/// word). The padded length itself stays exact here.
 pub fn padded_upload_bytes(page: &EncodedPage) -> Vec<u8> {
     let mut bytes = page.to_bytes();
     while !bytes.len().is_multiple_of(4) {
@@ -134,25 +138,51 @@ pub fn padded_upload_bytes(page: &EncodedPage) -> Vec<u8> {
 /// Exact upload accounting for one page (doc §9 telemetry): wire bytes,
 /// offset-table bytes, and 16 params bytes. The padded page buffer is what
 /// the GPU allocation must fit.
+///
+/// Three currencies are deliberately separate (they answer different
+/// questions, and mixing them overstates wins):
+///
+/// - `wire_bytes`: canonical `to_bytes` length (residency payload);
+///
+/// - [`MicrostoreUpload::gpu_upload_bytes`]: padded page + offset table +
+///   params actually transferred;
+///
+/// - [`MicrostoreUpload::gpu_resident_bytes`]: upload plus the
+///   u32-per-texel decode target a sampler would read.
 pub struct MicrostoreUpload {
     /// `to_bytes` length (residency-relevant payload).
-    pub page_bytes: usize,
+    pub wire_bytes: usize,
     /// Padded buffer size actually uploaded.
     pub padded_bytes: usize,
     /// Offset-table buffer size (`4 * block count`).
     pub table_bytes: usize,
     /// Uniform params buffer size (always 16).
     pub params_bytes: usize,
+    /// Decode-target size (`4 * texels`, u32 per texel).
+    pub expanded_bytes: usize,
+}
+
+impl MicrostoreUpload {
+    /// Bytes transferred for one page: padded wire + table + params.
+    pub fn gpu_upload_bytes(&self) -> usize {
+        self.padded_bytes + self.table_bytes + self.params_bytes
+    }
+
+    /// Bytes resident for one decoded page: upload plus decode target.
+    pub fn gpu_resident_bytes(&self) -> usize {
+        self.gpu_upload_bytes() + self.expanded_bytes
+    }
 }
 
 /// Upload accounting for a page without touching a GPU.
 pub fn upload_size(page: &EncodedPage) -> MicrostoreUpload {
-    let page_bytes = page.encoded_bytes();
+    let wire_bytes = page.encoded_bytes();
     MicrostoreUpload {
-        page_bytes,
-        padded_bytes: page_bytes.div_ceil(4) * 4,
+        wire_bytes,
+        padded_bytes: wire_bytes.div_ceil(4) * 4,
         table_bytes: page.blocks.len() * 4,
         params_bytes: 16,
+        expanded_bytes: page.width as usize * page.height as usize * 4,
     }
 }
 
@@ -211,10 +241,13 @@ mod tests {
         let field = fixtures::uniform(8, 8, 3);
         let page = EncodedPage::encode(&field, EncodeMode::Residual4);
         let up = upload_size(&page);
-        assert_eq!(up.page_bytes, 21 + 4 * 11);
+        assert_eq!(up.wire_bytes, 21 + 4 * 11);
         assert_eq!(up.padded_bytes, 65 + 3);
         assert_eq!(up.table_bytes, 16);
         assert_eq!(up.params_bytes, 16);
+        assert_eq!(up.expanded_bytes, 64 * 4);
+        assert_eq!(up.gpu_upload_bytes(), 68 + 16 + 16);
+        assert_eq!(up.gpu_resident_bytes(), 100 + 256);
     }
 
     #[test]

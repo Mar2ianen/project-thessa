@@ -120,6 +120,23 @@ impl DirectionTarget {
         target.target_body = Some(target_body);
         Ok(target)
     }
+
+    /// Trust-boundary check: direction shape plus the frame/body invariant
+    /// (`Target` carries a body, every other frame carries none). Note
+    /// `new` alone cannot enforce this — it always leaves the body unset,
+    /// so even `Target` built through `new` fails here until resolved
+    /// through `for_target` or deserialized with the body attached.
+    pub fn validate(&self) -> Result<(), ControlError> {
+        if !self.direction.is_finite() || self.direction.length_squared() <= 1.0e-12 {
+            return Err(ControlError::InvalidDirection);
+        }
+        match self.frame {
+            DirectionFrame::Target if self.target_body.is_some() => Ok(()),
+            DirectionFrame::Target => Err(ControlError::InvalidTargetBody),
+            _ if self.target_body.is_none() => Ok(()),
+            _ => Err(ControlError::InvalidTargetBody),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -169,12 +186,8 @@ impl GuidanceIntent {
             {
                 Err(ControlError::InvalidAttitude)
             }
-            Self::VelocityDirection { direction, .. } => {
-                DirectionTarget::new(direction.direction, direction.frame).map(|_| ())
-            }
-            Self::FlightPath { target } => {
-                DirectionTarget::new(target.direction.direction, target.direction.frame).map(|_| ())
-            }
+            Self::VelocityDirection { direction, .. } => direction.validate(),
+            Self::FlightPath { target } => target.direction.validate(),
             _ => Ok(()),
         }
     }
@@ -569,6 +582,25 @@ pub struct FlightPolicyContext {
     pub load_factor_g: f64,
 }
 
+/// Outer fraction of an envelope limit over which a pushing-outward
+/// demand ramps to zero instead of switching off discontinuously.
+const ENVELOPE_RAMP_FRACTION: f64 = 0.10;
+
+/// Smooth barrier scale for one envelope axis: full demand inside the
+/// ramp band, linear ramp across its outer fraction, zero at and past
+/// the limit. Callers guarantee finite `value_abs` and positive finite
+/// `limit` (see `validate_optional_limit`).
+fn envelope_scale(value_abs: f64, limit: f64) -> f64 {
+    let band_start = limit * (1.0 - ENVELOPE_RAMP_FRACTION);
+    if value_abs >= limit {
+        0.0
+    } else if value_abs <= band_start {
+        1.0
+    } else {
+        (limit - value_abs) / (limit - band_start)
+    }
+}
+
 impl FlightPolicy {
     /// Apply policy at the guidance/control boundary.  The policy owns
     /// permission checks while the returned demand remains a pure value: no
@@ -584,9 +616,17 @@ impl FlightPolicy {
     }
 
     /// Apply propulsion permissions and aircraft envelope protections to a
-    /// complete demand. At an active AoA or load-factor limit, pitch torque
-    /// is removed while the allocator remains free to realize roll/yaw and
-    /// any still-permitted translation.
+    /// complete demand. At an active AoA or load-factor limit, outward
+    /// pitch torque ramps down smoothly instead of switching off, while
+    /// the allocator remains free to realize roll/yaw and any
+    /// still-permitted translation.
+    ///
+    /// A hard zero at the boundary chatters (limit crossed -> torque 0 ->
+    /// recover slightly -> torque back -> crossed again, every tick). The
+    /// ramp is a continuous function of the state, so no chatter is
+    /// possible; hysteresis would need last-tick engagement plumbed
+    /// through the authority, while smoothness gives the same stability
+    /// statelessly — and this function stays a pure value mapping.
     pub fn constrain_demand_with_context(
         self,
         mut demand: ControlDemand,
@@ -601,24 +641,35 @@ impl FlightPolicy {
         validate_optional_limit(self.max_positive_g)?;
         validate_optional_limit(self.max_negative_g)?;
         demand = self.constrain_demand(demand, airborne, in_atmosphere);
-        let pitch_pushes_aoa_outward = self.max_aoa_rad.is_some_and(|limit| {
-            context.angle_of_attack_rad.abs() >= limit
-                && ((context.angle_of_attack_rad > 0.0 && demand.moment_body_nm.y < 0.0)
-                    || (context.angle_of_attack_rad < 0.0 && demand.moment_body_nm.y > 0.0))
-        });
-        // With +X forward and +Z up, +Y is nose-down. Positive load factor
-        // is reduced by nose-down torque; negative load factor is reduced by
-        // nose-up torque. Keep the recovery direction available at either
-        // envelope edge instead of zeroing the whole pitch channel.
-        let pitch_pushes_g_outward = self
-            .max_positive_g
-            .is_some_and(|limit| context.load_factor_g >= limit && demand.moment_body_nm.y < 0.0)
-            || self.max_negative_g.is_some_and(|limit| {
-                context.load_factor_g <= -limit && demand.moment_body_nm.y > 0.0
-            });
-        if pitch_pushes_aoa_outward || pitch_pushes_g_outward {
-            demand.moment_body_nm.y = 0.0;
-        }
+        let aoa_scale = match self.max_aoa_rad {
+            // With +X forward and +Z up, +Y is nose-down; outward means
+            // pushing away from zero AoA on the current side.
+            Some(limit)
+                if (context.angle_of_attack_rad > 0.0 && demand.moment_body_nm.y < 0.0)
+                    || (context.angle_of_attack_rad < 0.0 && demand.moment_body_nm.y > 0.0) =>
+            {
+                envelope_scale(context.angle_of_attack_rad.abs(), limit)
+            }
+            _ => 1.0,
+        };
+        // Positive load factor is reduced by nose-down torque; negative
+        // load factor is reduced by nose-up torque. Keep the recovery
+        // direction available at either envelope edge instead of touching
+        // the whole pitch channel.
+        let g_scale = match (
+            self.max_positive_g,
+            self.max_negative_g,
+            demand.moment_body_nm.y,
+        ) {
+            (Some(limit), _, moment) if moment < 0.0 => {
+                envelope_scale(context.load_factor_g.max(0.0), limit)
+            }
+            (_, Some(limit), moment) if moment > 0.0 => {
+                envelope_scale((-context.load_factor_g).max(0.0), limit)
+            }
+            _ => 1.0,
+        };
+        demand.moment_body_nm.y *= aoa_scale.min(g_scale);
         Ok(demand)
     }
 
@@ -736,10 +787,15 @@ pub struct AllocationResult {
     pub saturated: bool,
 }
 
-/// Deterministic first allocator implementation. It greedily projects the
-/// remaining wrench onto each available effector in declaration order. The
-/// contract is intentionally generic; the runtime may replace this policy
-/// with a constrained least-squares solver without changing control laws.
+/// Deterministic bounded least-squares allocator. It solves the coupled
+/// 6-DOF problem `min ||A u - b||² + Σ (u_i / weight_i)² * reg` subject to
+/// `0 <= u_i <= max_command` via an active-set loop, so the result does not
+/// depend on effector declaration order. `weight` is a preference (larger =
+/// cheaper) that only breaks ties in redundant directions; on a determined
+/// axis the demand is met exactly up to the bound. Force (N) and moment (Nm)
+/// rows share one norm, matching the previous greedy metric; callers that
+/// mix them should keep their scales comparable (the RCS plant does).
+/// The contract is intentionally generic; control laws are unchanged.
 pub fn allocate_wrench(
     demand: ControlDemand,
     effectors: &[EffectorContribution],
@@ -748,25 +804,154 @@ pub fn allocate_wrench(
     for effector in effectors {
         effector.validate()?;
     }
-    let mut commands = vec![0.0; effectors.len()];
+    let count = effectors.len();
+    let mut columns = Vec::with_capacity(count);
+    for effector in effectors {
+        columns.push([
+            effector.force_per_command_n.x,
+            effector.force_per_command_n.y,
+            effector.force_per_command_n.z,
+            effector.moment_per_command_nm.x,
+            effector.moment_per_command_nm.y,
+            effector.moment_per_command_nm.z,
+        ]);
+    }
+    let target = [
+        demand.force_body_n.x,
+        demand.force_body_n.y,
+        demand.force_body_n.z,
+        demand.moment_body_nm.x,
+        demand.moment_body_nm.y,
+        demand.moment_body_nm.z,
+    ];
+    if count == 0 {
+        let saturated = target.iter().map(|v| v * v).sum::<f64>() > 1.0e-12;
+        return Ok(AllocationResult {
+            commands: Vec::new(),
+            achieved_force_body_n: DVec3::ZERO,
+            achieved_moment_body_nm: DVec3::ZERO,
+            residual_force_body_n: demand.force_body_n,
+            residual_moment_body_nm: demand.moment_body_nm,
+            saturated,
+        });
+    }
+    // Regularization is a fallback for rank-deficient free sets only
+    // (opposed RCS pairs, duplicate columns): it splits redundant
+    // authority by weight instead of declaration order. Determined axes
+    // solve exactly with no penalty, so decoupled plants stay bit-exact.
+    let max_col_norm_sq = columns
+        .iter()
+        .map(|col| col.iter().map(|v| v * v).sum::<f64>())
+        .fold(0.0_f64, f64::max);
+    let reg_scale = 1.0e-12 * max_col_norm_sq.max(1.0);
+    let mut commands = vec![0.0; count];
+    let mut free = vec![true; count];
+    // Active-set loop: solve the free subsystem, fix the worst bound
+    // violator, repeat. At most `count` fixes, so this always terminates.
+    let mut solved_free: Vec<(usize, f64)> = Vec::new();
+    for _ in 0..=count {
+        let free_indices: Vec<usize> =
+            (0..count).filter(|&i| free[i]).collect();
+        if free_indices.is_empty() {
+            solved_free.clear();
+            break;
+        }
+        // Residual demand after fixed contributions (index-order sum for
+        // determinism).
+        let mut residual_target = target;
+        for i in 0..count {
+            if !free[i] && commands[i] != 0.0 {
+                for row in 0..6 {
+                    residual_target[row] -= columns[i][row] * commands[i];
+                }
+            }
+        }
+        let dim = free_indices.len();
+        let mut matrix = vec![vec![0.0; dim]; dim];
+        let mut rhs = vec![0.0; dim];
+        for (a, &col_a) in free_indices.iter().enumerate() {
+            let mut dot_b = 0.0;
+            for row in 0..6 {
+                dot_b += columns[col_a][row] * residual_target[row];
+            }
+            rhs[a] = dot_b;
+            for (b, &col_b) in free_indices.iter().enumerate() {
+                let mut dot = 0.0;
+                for row in 0..6 {
+                    dot += columns[col_a][row] * columns[col_b][row];
+                }
+                matrix[a][b] = dot;
+            }
+        }
+        // Exact solve first; only a (near-)singular free set retries with
+        // the weight-scaled diagonal.
+        let mut matrix_exact = matrix.clone();
+        let mut rhs_exact = rhs.clone();
+        let solution = match solve_dense_system(&mut matrix_exact, &mut rhs_exact) {
+            Some(exact) => exact,
+            None => {
+                for (a, &col_a) in free_indices.iter().enumerate() {
+                    let weight = effectors[col_a].weight;
+                    matrix[a][a] += reg_scale / (weight * weight);
+                }
+                match solve_dense_system(&mut matrix, &mut rhs) {
+                    Some(regularized) => regularized,
+                    None => {
+                        // Singular despite regularization: hold the free set
+                        // at zero and report the residual, never NaN.
+                        for &i in &free_indices {
+                            commands[i] = 0.0;
+                        }
+                        solved_free.clear();
+                        break;
+                    }
+                }
+            }
+        };
+        // Worst violator first keeps the path deterministic; ties resolve
+        // to the lowest declaration index.
+        let mut worst: Option<(usize, f64, f64)> = None;
+        for (a, &col) in free_indices.iter().enumerate() {
+            let value = solution[a];
+            let bound = if value < 0.0 {
+                Some(0.0)
+            } else if value > effectors[col].max_command {
+                Some(effectors[col].max_command)
+            } else {
+                None
+            };
+            if let Some(clamped) = bound {
+                let distance = (value - clamped).abs();
+                let replace = match worst {
+                    None => true,
+                    Some((_, best_distance, _)) => distance > best_distance,
+                };
+                if replace {
+                    worst = Some((col, distance, clamped));
+                }
+            }
+        }
+        if let Some((col, _, clamped)) = worst {
+            free[col] = false;
+            commands[col] = clamped;
+            solved_free.clear();
+        } else {
+            solved_free = free_indices
+                .iter()
+                .enumerate()
+                .map(|(a, &col)| (col, solution[a]))
+                .collect();
+            break;
+        }
+    }
+    for (col, value) in solved_free {
+        commands[col] = value.clamp(0.0, effectors[col].max_command);
+    }
     let mut achieved_force = DVec3::ZERO;
     let mut achieved_moment = DVec3::ZERO;
     for (index, effector) in effectors.iter().enumerate() {
-        let remaining_force = demand.force_body_n - achieved_force;
-        let remaining_moment = demand.moment_body_nm - achieved_moment;
-        let force_scale = effector.force_per_command_n.length_squared();
-        let moment_scale = effector.moment_per_command_nm.length_squared();
-        let denominator = force_scale + moment_scale;
-        if denominator <= 1.0e-24 {
-            continue;
-        }
-        let projection = (remaining_force.dot(effector.force_per_command_n)
-            + remaining_moment.dot(effector.moment_per_command_nm))
-            / denominator;
-        let command = (projection * effector.weight).clamp(0.0, effector.max_command);
-        commands[index] = command;
-        achieved_force += effector.force_per_command_n * command;
-        achieved_moment += effector.moment_per_command_nm * command;
+        achieved_force += effector.force_per_command_n * commands[index];
+        achieved_moment += effector.moment_per_command_nm * commands[index];
     }
     let residual_force = demand.force_body_n - achieved_force;
     let residual_moment = demand.moment_body_nm - achieved_moment;
@@ -780,6 +965,61 @@ pub fn allocate_wrench(
     })
 }
 
+/// Small dense solver with partial pivoting for the allocator's free
+/// subsystem. Returns `None` on (near-)singularity instead of NaN. Pivot
+/// ties keep the lowest row so repeated calls stay deterministic.
+fn solve_dense_system(matrix: &mut [Vec<f64>], rhs: &mut [f64]) -> Option<Vec<f64>> {
+    let dim = rhs.len();
+    if matrix.len() != dim || matrix.iter().any(|row| row.len() != dim) {
+        return None;
+    }
+    for pivot in 0..dim {
+        let mut best_row = pivot;
+        let mut best_mag = matrix[pivot][pivot].abs();
+        for row in (pivot + 1)..dim {
+            let mag = matrix[row][pivot].abs();
+            if mag > best_mag {
+                best_mag = mag;
+                best_row = row;
+            }
+        }
+        if !best_mag.is_finite() || best_mag <= 1.0e-24 {
+            return None;
+        }
+        if best_row != pivot {
+            matrix.swap(pivot, best_row);
+            rhs.swap(pivot, best_row);
+        }
+        let diagonal = matrix[pivot][pivot];
+        for row in (pivot + 1)..dim {
+            let factor = matrix[row][pivot] / diagonal;
+            if factor != 0.0 {
+                for col in pivot..dim {
+                    matrix[row][col] -= factor * matrix[pivot][col];
+                }
+                rhs[row] -= factor * rhs[pivot];
+            }
+        }
+    }
+    let mut solution = vec![0.0; dim];
+    for row in (0..dim).rev() {
+        let mut sum = rhs[row];
+        for col in (row + 1)..dim {
+            sum -= matrix[row][col] * solution[col];
+        }
+        let diagonal = matrix[row][row];
+        if !diagonal.is_finite() || diagonal.abs() <= 1.0e-24 {
+            return None;
+        }
+        let value = sum / diagonal;
+        if !value.is_finite() {
+            return None;
+        }
+        solution[row] = value;
+    }
+    Some(solution)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ControlError {
     NonFinite(&'static str),
@@ -791,6 +1031,7 @@ pub enum ControlError {
     },
     InvalidDirection,
     InvalidAttitude,
+    InvalidTargetBody,
     InvalidEffector,
     InvalidController,
     MismatchedControlState,
@@ -811,6 +1052,10 @@ impl fmt::Display for ControlError {
             }
             Self::InvalidDirection => write!(formatter, "direction must be finite and non-zero"),
             Self::InvalidAttitude => write!(formatter, "attitude target must be a unit quaternion"),
+            Self::InvalidTargetBody => write!(
+                formatter,
+                "direction target frame and target body mismatch"
+            ),
             Self::InvalidEffector => write!(formatter, "effector contribution is invalid"),
             Self::InvalidController => write!(formatter, "control-law parameters are invalid"),
             Self::MismatchedControlState => {
@@ -850,6 +1095,52 @@ mod tests {
         .validate()
         .expect_err("non-unit target must fail");
         assert_eq!(error, ControlError::InvalidAttitude);
+    }
+
+    #[test]
+    fn target_frame_without_body_fails_validation() {
+        // The wire trust boundary: a deserialized Target frame with no
+        // body must fail here, not later at runtime resolution.
+        let bare = DirectionTarget {
+            direction: DVec3::X,
+            frame: DirectionFrame::Target,
+            target_body: None,
+        };
+        assert_eq!(bare.validate(), Err(ControlError::InvalidTargetBody));
+        let intent = GuidanceIntent::VelocityDirection {
+            direction: bare,
+            roll_policy: RollPolicy::Hold,
+        };
+        assert_eq!(intent.validate(), Err(ControlError::InvalidTargetBody));
+        let path = GuidanceIntent::FlightPath {
+            target: FlightPathTarget {
+                direction: bare,
+                roll_policy: RollPolicy::Hold,
+            },
+        };
+        assert_eq!(path.validate(), Err(ControlError::InvalidTargetBody));
+    }
+
+    #[test]
+    fn target_frame_with_body_and_plain_frames_validate() {
+        let resolved =
+            DirectionTarget::for_target(DVec3::X, 7).expect("resolved target builds");
+        assert!(resolved.validate().is_ok());
+        assert!(GuidanceIntent::VelocityDirection {
+            direction: resolved,
+            roll_policy: RollPolicy::Hold,
+        }
+        .validate()
+        .is_ok());
+        // A stray body on a non-target frame is equally ambiguous.
+        let mut stray = DirectionTarget::new(DVec3::X, DirectionFrame::Inertial)
+            .expect("inertial builds");
+        stray.target_body = Some(7);
+        assert_eq!(stray.validate(), Err(ControlError::InvalidTargetBody));
+        // Serde round trip preserves the invariant both ways.
+        let json = serde_json::to_string(&resolved).expect("serializes");
+        let back: DirectionTarget = serde_json::from_str(&json).expect("deserializes");
+        assert!(back.validate().is_ok());
     }
 
     #[test]
@@ -938,6 +1229,99 @@ mod tests {
         assert_eq!(result.commands, vec![2.0]);
         assert!(result.saturated);
         assert_eq!(result.achieved_moment_body_nm, DVec3::X * 2.0);
+    }
+
+    #[test]
+    fn allocator_is_order_invariant_on_coupled_demand() {
+        // Two diagonal effectors couple X/Y force: a greedy allocator in
+        // declaration order starves the second axis, the joint solve does
+        // not. Permuting the inputs must permute the commands and keep the
+        // achieved wrench identical.
+        let demand = ControlDemand {
+            force_body_n: DVec3::new(10.0, 10.0, 0.0),
+            ..ControlDemand::zero()
+        };
+        let first = EffectorContribution {
+            group: ActuatorGroup::Rcs,
+            force_per_command_n: DVec3::new(1.0, 0.9, 0.0),
+            moment_per_command_nm: DVec3::ZERO,
+            max_command: 10.0,
+            weight: 1.0,
+        };
+        let second = EffectorContribution {
+            group: ActuatorGroup::Rcs,
+            force_per_command_n: DVec3::new(0.9, 1.0, 0.0),
+            moment_per_command_nm: DVec3::ZERO,
+            max_command: 10.0,
+            weight: 1.0,
+        };
+        let forward = allocate_wrench(demand, &[first, second]).unwrap();
+        let reversed = allocate_wrench(demand, &[second, first]).unwrap();
+        assert!(!forward.saturated);
+        assert!(!reversed.saturated);
+        assert!((forward.achieved_force_body_n - demand.force_body_n).length() < 1.0e-6);
+        assert!((reversed.achieved_force_body_n - demand.force_body_n).length() < 1.0e-6);
+        assert!((forward.commands[0] - reversed.commands[1]).abs() < 1.0e-9);
+        assert!((forward.commands[1] - reversed.commands[0]).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn allocator_uses_only_the_correct_side_of_an_opposed_pair() {
+        // Starter-vehicle pattern: +X and -X jets as separate entries.
+        // A +800 N request must not fire the opposing jet.
+        let demand = ControlDemand {
+            force_body_n: DVec3::X * 400.0,
+            ..ControlDemand::zero()
+        };
+        let pair = [
+            EffectorContribution {
+                group: ActuatorGroup::Rcs,
+                force_per_command_n: DVec3::X * 800.0,
+                moment_per_command_nm: DVec3::ZERO,
+                max_command: 1.0,
+                weight: 1.0,
+            },
+            EffectorContribution {
+                group: ActuatorGroup::Rcs,
+                force_per_command_n: DVec3::X * -800.0,
+                moment_per_command_nm: DVec3::ZERO,
+                max_command: 1.0,
+                weight: 1.0,
+            },
+        ];
+        let result = allocate_wrench(demand, &pair).unwrap();
+        assert!(!result.saturated);
+        assert!((result.commands[0] - 0.5).abs() < 1.0e-9);
+        assert_eq!(result.commands[1], 0.0);
+        assert!((result.achieved_force_body_n - demand.force_body_n).length() < 1.0e-6);
+    }
+
+    #[test]
+    fn allocator_prefers_higher_weight_when_redundant() {
+        // Identical columns: residual is zero either way, so the cheaper
+        // (higher-weight) effector must take the load.
+        let demand = ControlDemand {
+            force_body_n: DVec3::X * 100.0,
+            ..ControlDemand::zero()
+        };
+        let cheap = EffectorContribution {
+            group: ActuatorGroup::Rcs,
+            force_per_command_n: DVec3::X * 100.0,
+            moment_per_command_nm: DVec3::ZERO,
+            max_command: 2.0,
+            weight: 4.0,
+        };
+        let pricey = EffectorContribution {
+            group: ActuatorGroup::Rcs,
+            force_per_command_n: DVec3::X * 100.0,
+            moment_per_command_nm: DVec3::ZERO,
+            max_command: 2.0,
+            weight: 1.0,
+        };
+        let result = allocate_wrench(demand, &[cheap, pricey]).unwrap();
+        assert!(!result.saturated);
+        assert!(result.commands[0] > result.commands[1]);
+        assert!((result.achieved_force_body_n - demand.force_body_n).length() < 1.0e-6);
     }
 
     #[test]
@@ -1087,6 +1471,56 @@ mod tests {
         assert_eq!(demand(-2.0, 0.0, 3.0).y, 0.0);
         assert_eq!(demand(-2.0, 0.0, -3.0).y, -2.0);
         assert_eq!(demand(2.0, 0.0, -3.0).y, 0.0);
+    }
+
+    #[test]
+    fn envelope_ramp_is_continuous_and_hits_both_endpoints() {
+        // Outer 10% of each limit ramps outward torque to zero instead of
+        // switching: with limit 0.1 the band is [0.09, 0.1].
+        let policy = FlightPolicy {
+            max_aoa_rad: Some(0.1),
+            max_positive_g: Some(2.0),
+            max_negative_g: Some(2.0),
+            ..FlightPolicy::default()
+        };
+        let pitch_at_aoa = |moment: f64, aoa: f64| {
+            policy
+                .constrain_demand_with_context(
+                    ControlDemand {
+                        moment_body_nm: DVec3::new(0.0, moment, 0.0),
+                        ..ControlDemand::zero()
+                    },
+                    true,
+                    true,
+                    FlightPolicyContext {
+                        angle_of_attack_rad: aoa,
+                        load_factor_g: 0.0,
+                    },
+                )
+                .unwrap()
+                .moment_body_nm
+                .y
+        };
+        // Deep inside: untouched; at/past the limit: zero (old endpoints).
+        assert_eq!(pitch_at_aoa(-2.0, 0.05), -2.0);
+        assert_eq!(pitch_at_aoa(-2.0, 0.09), -2.0);
+        assert_eq!(pitch_at_aoa(-2.0, 0.1), 0.0);
+        assert_eq!(pitch_at_aoa(-2.0, 0.2), 0.0);
+        // Mid-band: half torque; recovery direction never touched.
+        assert!((pitch_at_aoa(-2.0, 0.095) + 1.0).abs() < 1.0e-9);
+        assert_eq!(pitch_at_aoa(2.0, 0.095), 2.0);
+        // Monotone magnitude across the band: no discrete jump means no
+        // boundary chatter by construction.
+        let mut previous = pitch_at_aoa(-2.0, 0.085).abs();
+        for step in 1..=30 {
+            let aoa = 0.085 + 0.001 * step as f64;
+            let current = pitch_at_aoa(-2.0, aoa).abs();
+            assert!(
+                current <= previous + 1.0e-9,
+                "outward torque magnitude must not grow toward the limit"
+            );
+            previous = current;
+        }
     }
 
     #[test]

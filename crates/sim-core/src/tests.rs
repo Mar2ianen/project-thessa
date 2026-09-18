@@ -95,6 +95,7 @@ fn kepler_orbit_returns_analytic_periodic_state() {
             absolute_velocity_tolerance_mps: 1.0e-7,
             relative_tolerance: 1.0e-11,
             max_steps: 100_000,
+            dynamical_eta: None,
         },
     )
     .expect("circular orbit should propagate");
@@ -128,6 +129,7 @@ fn eccentric_kepler_orbit_matches_analytic_periapsis_after_one_period() {
             absolute_velocity_tolerance_mps: 1.0e-6,
             relative_tolerance: 1.0e-10,
             max_steps: 100_000,
+            dynamical_eta: None,
         },
     )
     .expect("eccentric orbit should propagate");
@@ -221,6 +223,7 @@ fn moving_secondary_enables_three_body_energy_exchange() {
             absolute_velocity_tolerance_mps: 1.0e-5,
             relative_tolerance: 1.0e-9,
             max_steps: 100_000,
+            dynamical_eta: None,
         },
     )
     .expect("three-body trajectory should propagate");
@@ -284,6 +287,7 @@ fn replay_and_parallel_batch_are_deterministic_and_ordered() {
         absolute_velocity_tolerance_mps: 1.0e-6,
         relative_tolerance: 1.0e-10,
         max_steps: 100_000,
+        dynamical_eta: None,
     };
     let first = propagate_adaptive(&field, initial, SimTime::EPOCH, 10_000.0, config)
         .expect("first replay");
@@ -4834,4 +4838,167 @@ fn prograde_steering_at_rest_is_an_error() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn sensitivity_matches_finite_difference_jacobian() {
+    // Variational STM vs brute-force perturbations on a half-period LEO
+    // arc: columns of Sr must equal d(r_end)/d(v0) within the
+    // finite-difference truncation error. The analytic STM is the more
+    // accurate side; the tolerance budgets the FD error, not the STM.
+    let mu = 3.986_004_418e14;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let radius = 7_000_000.0;
+    let initial = TestParticleState {
+        position: DVec3::new(radius, 0.0, 0.0),
+        velocity: DVec3::new(0.0, (mu / radius).sqrt(), 500.0),
+    };
+    let config = AdaptiveIntegratorConfig {
+        initial_step_s: 30.0,
+        min_step_s: 1.0e-6,
+        max_step_s: 300.0,
+        absolute_position_tolerance_m: 1.0e-4,
+        absolute_velocity_tolerance_mps: 1.0e-7,
+        relative_tolerance: 1.0e-11,
+        max_steps: 100_000,
+        dynamical_eta: None,
+    };
+    let duration = 3_000.0;
+    let sens = propagate_adaptive_sensitivity(
+        &field,
+        initial,
+        VelocitySensitivity::identity(),
+        SimTime::EPOCH,
+        duration,
+        config,
+    )
+    .expect("sensitivity propagation");
+    // The augmented trajectory must match the plain one bit-for-bit: same
+    // coefficients, same step logic, same error control.
+    let plain =
+        propagate_adaptive(&field, initial, SimTime::EPOCH, duration, config)
+            .expect("plain propagation");
+    assert_eq!(sens.state, plain.state);
+    assert_eq!(sens.stats, plain.stats);
+    // Columns of Sr vs central differences (O(h^2) truncation, so the
+    // comparison budgets the FD error, not the STM).
+    let h = 0.5;
+    for (axis, column) in [DVec3::X, DVec3::Y, DVec3::Z]
+        .iter()
+        .zip(sens.sensitivity.position.iter())
+    {
+        let plus = TestParticleState {
+            position: initial.position,
+            velocity: initial.velocity + *axis * h,
+        };
+        let minus = TestParticleState {
+            position: initial.position,
+            velocity: initial.velocity - *axis * h,
+        };
+        let end_plus = propagate_adaptive(&field, plus, SimTime::EPOCH, duration, config)
+            .expect("perturbed propagation")
+            .state
+            .position;
+        let end_minus = propagate_adaptive(&field, minus, SimTime::EPOCH, duration, config)
+            .expect("perturbed propagation")
+            .state
+            .position;
+        let fd = (end_plus - end_minus) / (2.0 * h);
+        let scale = fd.length().max(1.0);
+        assert!(
+            (*column - fd).length() / scale < 1.0e-7,
+            "stm column vs fd mismatch: {column:?} vs {fd:?}"
+        );
+    }
+}
+
+#[test]
+fn dop853_converges_at_eighth_order() {
+    // Order proof for the DOP853 tableau: on a smooth circular orbit with
+    // the error controller parked (loose tolerances so steps ride the max
+    // ceiling), halving the step must cut the period-closure error by ~2^8.
+    // A mistyped coefficient would collapse this to a low order.
+    // Accepts a wide band (64..1024) around 256 for higher-order terms.
+    let mu = 3.986_004_418e14;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let radius = 7_000_000.0;
+    let initial = TestParticleState {
+        position: DVec3::new(radius, 0.0, 0.0),
+        velocity: DVec3::new(0.0, (mu / radius).sqrt(), 0.0),
+    };
+    let period = TAU * (radius.powi(3) / mu).sqrt();
+    let run = |max_step: f64| {
+        propagate_adaptive_dop853(
+            &field,
+            initial,
+            SimTime::EPOCH,
+            period,
+            AdaptiveIntegratorConfig {
+                initial_step_s: max_step,
+                min_step_s: 1.0e-6,
+                max_step_s: max_step,
+                absolute_position_tolerance_m: 1.0e6,
+                absolute_velocity_tolerance_mps: 1.0e3,
+                relative_tolerance: 1.0,
+                max_steps: 100_000,
+                dynamical_eta: None,
+            },
+        )
+        .expect("dop853 fixed-step run")
+        .state
+        .position
+        .distance(initial.position)
+    };
+    let coarse = run(200.0);
+    let fine = run(100.0);
+    assert!(
+        coarse.is_finite() && fine.is_finite() && fine > 0.0,
+        "both runs must close with finite nonzero error: {coarse:e} {fine:e}"
+    );
+    let ratio = coarse / fine;
+    eprintln!("dop853 order check: err200={coarse:e} err100={fine:e} ratio={ratio:.1}");
+    assert!(
+        (64.0..=1024.0).contains(&ratio),
+        "eighth-order halving must land near 256, got {ratio:.1}"
+    );
+}
+
+#[test]
+fn dop853_matches_dp5_on_a_transfer_arc() {
+    // Cross-method agreement: DOP853 at tight tolerances must reproduce
+    // the proven DP5 trajectory within the looser of the two error
+    // budgets on a perturbed three-body arc.
+    let mu_primary = 1.0e14;
+    let mu_secondary = 1.0e12;
+    let separation = 1.0e8;
+    let ephemeris = two_body_binary(mu_primary, mu_secondary, separation);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let initial = TestParticleState {
+        position: DVec3::new(1.8e8, -2.5e7, 0.0),
+        velocity: DVec3::new(120.0, 560.0, 0.0),
+    };
+    let config = AdaptiveIntegratorConfig {
+        initial_step_s: 100.0,
+        min_step_s: 1.0e-5,
+        max_step_s: 2_000.0,
+        absolute_position_tolerance_m: 1.0e-2,
+        absolute_velocity_tolerance_mps: 1.0e-5,
+        relative_tolerance: 1.0e-9,
+        max_steps: 100_000,
+        dynamical_eta: None,
+    };
+    let duration = 200_000.0;
+    let dp5 = propagate_adaptive(&field, initial, SimTime::EPOCH, duration, config)
+        .expect("dp5 reference")
+        .state;
+    let dop = propagate_adaptive_dop853(&field, initial, SimTime::EPOCH, duration, config)
+        .expect("dop853 candidate")
+        .state;
+    let pos_err = (dop.position - dp5.position).length();
+    let vel_err = (dop.velocity - dp5.velocity).length();
+    eprintln!("dop853-vs-dp5: dpos={pos_err:e} dvel={vel_err:e}");
+    assert!(pos_err < 1.0, "position agreement within 1 m, got {pos_err:e}");
+    assert!(vel_err < 1.0e-3, "velocity agreement within 1 mm/s, got {vel_err:e}");
 }

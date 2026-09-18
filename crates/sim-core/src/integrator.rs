@@ -2,7 +2,7 @@ use std::{error::Error, fmt};
 
 use glam::DVec3;
 
-use crate::{BakedEphemeris, BodyId, GravityError, GravityField, SimTime};
+use crate::{BakedEphemeris, BodyId, BodyState, EphemerisFrame, GravityError, GravityField, SimTime};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TestParticleState {
@@ -43,6 +43,18 @@ pub struct AdaptiveIntegratorConfig {
     pub absolute_velocity_tolerance_mps: f64,
     pub relative_tolerance: f64,
     pub max_steps: u64,
+    /// Optional physics-aware step ceiling: each step is additionally
+    /// capped at `eta` times the local dynamical time `sqrt(d^3/mu)` to
+    /// the nearest gravity source. `None` keeps the legacy behavior
+    /// (constant `max_step_s` only). The cap is a safety rail, not a
+    /// driver: on smooth cruise the error controller picks smaller steps
+    /// on its own, while near a well the cap shrinks below any constant
+    /// ceiling before the controller even notices. States used for the
+    /// timescale lag the step start by at most one RK stage (the frame
+    /// already evaluated); with a conservative `eta` that staleness is
+    /// negligible next to the margin, and near wells the accuracy
+    /// controller dominates anyway.
+    pub dynamical_eta: Option<f64>,
 }
 
 impl Default for AdaptiveIntegratorConfig {
@@ -55,6 +67,7 @@ impl Default for AdaptiveIntegratorConfig {
             absolute_velocity_tolerance_mps: 1.0e-6,
             relative_tolerance: 1.0e-10,
             max_steps: 1_000_000,
+            dynamical_eta: None,
         }
     }
 }
@@ -794,16 +807,41 @@ pub fn propagate_adaptive(
     let mut remaining = duration_s;
     let mut step_s = config.initial_step_s.min(config.max_step_s);
     let mut stats = IntegratorStats::default();
+    // One frame per propagation: each of the seven RK stages evaluates the
+    // ephemeris once per timestamp instead of re-walking shared parent
+    // chains per source (see `acceleration_with_frame`). Buffers grow to
+    // the body count on first use, then no per-step allocation.
+    let mut frame = EphemerisFrame::new();
+    // Source mus resolved once, in field order, for the dynamical cap.
+    let cap_mus: Option<Vec<(f64, BodyId)>> = config.dynamical_eta.map(|_| field.cap_sources());
+    // FSAL cache: Dormand–Prince 5(4) evaluates its last stage at the
+    // accepted endpoint, which is exactly the next step's first stage
+    // (First Same As Last) — one RHS evaluation saved per accepted step.
+    // A rejected step leaves (state, time) untouched, so its first stage
+    // stays valid for the retried smaller step and is kept as well.
+    // Reuse is bitwise-exact (same values, skipped recomputation), hence
+    // trajectories do not change, only the evaluation count does.
+    let mut cached_k1: Option<Derivative> = None;
 
     while remaining > 0.0 {
         if stats.accepted_steps + stats.rejected_steps >= config.max_steps {
             return Err(IntegratorError::MaxSteps);
         }
-        let h = step_s.min(remaining);
+        let mut h = step_s.min(remaining);
+        if let (Some(eta), Some(sources)) = (config.dynamical_eta, cap_mus.as_ref()) {
+            h = h.min(dynamical_cap(
+                state.position,
+                frame.states(),
+                sources,
+                eta,
+                config.max_step_s,
+            ));
+        }
         if h < config.min_step_s && remaining > config.min_step_s {
             return Err(IntegratorError::StepUnderflow { step_s: h });
         }
-        let (candidate, error_state) = dormand_prince_step(field, state, time, h)?;
+        let (candidate, error_state, used_k1, k7) =
+            dormand_prince_step(field, state, time, h, cached_k1.take(), &mut frame)?;
         let error = normalized_error(error_state, candidate, config);
         if error <= 1.0 || h <= config.min_step_s {
             if error > 1.0 {
@@ -814,9 +852,11 @@ pub fn propagate_adaptive(
             remaining -= h;
             stats.accepted_steps += 1;
             step_s = next_step(h, error, config.max_step_s);
+            cached_k1 = Some(k7);
         } else {
             stats.rejected_steps += 1;
             step_s = (h * (0.9 * error.powf(-0.2)).clamp(0.1, 0.5)).max(config.min_step_s);
+            cached_k1 = Some(used_k1);
         }
     }
     Ok(PropagationResult {
@@ -880,6 +920,279 @@ pub fn propagate_adaptive_with_burns(
     })
 }
 
+/// Sensitivity of the trajectory to its initial velocity (the 3-DOF
+/// control of a midcourse burn): columns of `position`/`velocity` are
+/// ∂(r, v)/∂v0_j. Start from [`VelocitySensitivity::identity`] at the burn
+/// point (`Sr = 0`, `Sv = I`); the arrival `position` matrix is then the
+/// miss Jacobian for differential correction — one augmented propagation
+/// per Newton iteration instead of nominal plus three finite-difference
+/// perturbations.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VelocitySensitivity {
+    pub position: [DVec3; 3],
+    pub velocity: [DVec3; 3],
+}
+
+impl VelocitySensitivity {
+    pub fn identity() -> Self {
+        Self {
+            position: [DVec3::ZERO; 3],
+            velocity: [DVec3::X, DVec3::Y, DVec3::Z],
+        }
+    }
+}
+
+/// Augmented trajectory plus sensitivity at the end of
+/// [`propagate_adaptive_sensitivity`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SensitivityPropagation {
+    pub state: TestParticleState,
+    pub sensitivity: VelocitySensitivity,
+    pub end_time: SimTime,
+    pub stats: IntegratorStats,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AugmentedDerivative {
+    state: Derivative,
+    sens_position: [DVec3; 3],
+    sens_velocity: [DVec3; 3],
+}
+
+fn augmented_derivative(
+    field: &GravityField<'_>,
+    state: TestParticleState,
+    sens: VelocitySensitivity,
+    time: SimTime,
+    frame: &mut EphemerisFrame,
+) -> Result<AugmentedDerivative, IntegratorError> {
+    let (acceleration, gradient) = field.gravity_with_gradient(state.position, time, frame)?;
+    let mut sens_velocity = [DVec3::ZERO; 3];
+    for (slot, column) in sens_velocity.iter_mut().zip(sens.position.iter()) {
+        *slot = gradient * *column;
+    }
+    Ok(AugmentedDerivative {
+        state: Derivative {
+            position: state.velocity,
+            velocity: acceleration,
+        },
+        sens_position: sens.velocity,
+        sens_velocity,
+    })
+}
+
+fn add_scaled_sens(
+    sens: VelocitySensitivity,
+    derivative: AugmentedDerivative,
+    scale: f64,
+) -> VelocitySensitivity {
+    let mut out = sens;
+    for i in 0..3 {
+        out.position[i] += derivative.sens_position[i] * scale;
+        out.velocity[i] += derivative.sens_velocity[i] * scale;
+    }
+    out
+}
+
+fn combine_augmented(
+    state: TestParticleState,
+    sens: VelocitySensitivity,
+    h: f64,
+    terms: &[(f64, AugmentedDerivative)],
+) -> (TestParticleState, VelocitySensitivity) {
+    let mut next_state = state;
+    let mut next_sens = sens;
+    for (coefficient, derivative) in terms {
+        next_state = add_scaled(next_state, derivative.state, h * *coefficient);
+        next_sens = add_scaled_sens(next_sens, *derivative, h * *coefficient);
+    }
+    (next_state, next_sens)
+}
+
+/// Variational twin of [`propagate_adaptive`]: the trajectory and its
+/// initial-velocity sensitivity ride the same Dormand–Prince steps (same
+/// step sequence logic, same FSAL reuse, same dynamical cap). The error
+/// controller watches the trajectory alone — sensitivity obeys the linear
+/// variational equation driven by that trajectory, so it needs no
+/// separate tolerance. Returns the end state plus the end sensitivity.
+pub fn propagate_adaptive_sensitivity(
+    field: &GravityField<'_>,
+    initial: TestParticleState,
+    sensitivity: VelocitySensitivity,
+    start_time: SimTime,
+    duration_s: f64,
+    config: AdaptiveIntegratorConfig,
+) -> Result<SensitivityPropagation, IntegratorError> {
+    validate_duration(duration_s)?;
+    validate_adaptive_config(config)?;
+    let mut state = initial;
+    let mut sens = sensitivity;
+    let mut time = start_time;
+    let mut remaining = duration_s;
+    let mut step_s = config.initial_step_s.min(config.max_step_s);
+    let mut stats = IntegratorStats::default();
+    let mut frame = EphemerisFrame::new();
+    let cap_mus: Option<Vec<(f64, BodyId)>> = config.dynamical_eta.map(|_| field.cap_sources());
+    let mut cached_k1: Option<AugmentedDerivative> = None;
+
+    while remaining > 0.0 {
+        if stats.accepted_steps + stats.rejected_steps >= config.max_steps {
+            return Err(IntegratorError::MaxSteps);
+        }
+        let mut h = step_s.min(remaining);
+        if let (Some(eta), Some(sources)) = (config.dynamical_eta, cap_mus.as_ref()) {
+            h = h.min(dynamical_cap(
+                state.position,
+                frame.states(),
+                sources,
+                eta,
+                config.max_step_s,
+            ));
+        }
+        if h < config.min_step_s && remaining > config.min_step_s {
+            return Err(IntegratorError::StepUnderflow { step_s: h });
+        }
+        let (candidate, candidate_sens, error_state, used_k1, k7) =
+            augmented_dp_step(field, state, sens, time, h, cached_k1.take(), &mut frame)?;
+        let error = normalized_error(error_state, candidate, config);
+        if error <= 1.0 || h <= config.min_step_s {
+            if error > 1.0 {
+                return Err(IntegratorError::StepUnderflow { step_s: h });
+            }
+            state = candidate;
+            sens = candidate_sens;
+            time = time.offset(h);
+            remaining -= h;
+            stats.accepted_steps += 1;
+            step_s = next_step(h, error, config.max_step_s);
+            cached_k1 = Some(k7);
+        } else {
+            stats.rejected_steps += 1;
+            step_s = (h * (0.9 * error.powf(-0.2)).clamp(0.1, 0.5)).max(config.min_step_s);
+            cached_k1 = Some(used_k1);
+        }
+    }
+    Ok(SensitivityPropagation {
+        state,
+        sensitivity: sens,
+        end_time: time,
+        stats,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn augmented_stage(
+    field: &GravityField<'_>,
+    state: TestParticleState,
+    sens: VelocitySensitivity,
+    h: f64,
+    time: SimTime,
+    terms: &[(f64, AugmentedDerivative)],
+    frame: &mut EphemerisFrame,
+) -> Result<AugmentedDerivative, IntegratorError> {
+    let (next_state, next_sens) = combine_augmented(state, sens, h, terms);
+    augmented_derivative(field, next_state, next_sens, time, frame)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn augmented_dp_step(
+    field: &GravityField<'_>,
+    state: TestParticleState,
+    sens: VelocitySensitivity,
+    time: SimTime,
+    h: f64,
+    k1: Option<AugmentedDerivative>,
+    frame: &mut EphemerisFrame,
+) -> Result<
+    (
+        TestParticleState,
+        VelocitySensitivity,
+        TestParticleState,
+        AugmentedDerivative,
+        AugmentedDerivative,
+    ),
+    IntegratorError,
+> {
+    // FSAL: reuse the previous accepted step's last stage when the caller
+    // hands it in; otherwise evaluate. The returned `used_k1` lets the
+    // caller keep it across a rejected retry (same state and time).
+    let k1 = match k1 {
+        Some(k1) => k1,
+        None => augmented_derivative(field, state, sens, time, frame)?,
+    };
+    let k2 = augmented_stage(field, state, sens, h, time.offset(h * 1.0 / 5.0), &[(1.0 / 5.0, k1)], frame)?;
+    let k3 = augmented_stage(
+        field, state, sens, h, time.offset(h * 3.0 / 10.0),
+        &[(3.0 / 40.0, k1), (9.0 / 40.0, k2)], frame,
+    )?;
+    let k4 = augmented_stage(
+        field, state, sens, h, time.offset(h * 4.0 / 5.0),
+        &[(44.0 / 45.0, k1), (-56.0 / 15.0, k2), (32.0 / 9.0, k3)], frame,
+    )?;
+    let k5 = augmented_stage(
+        field, state, sens, h, time.offset(h * 8.0 / 9.0),
+        &[
+            (19372.0 / 6561.0, k1),
+            (-25360.0 / 2187.0, k2),
+            (64448.0 / 6561.0, k3),
+            (-212.0 / 729.0, k4),
+        ], frame,
+    )?;
+    let k6 = augmented_stage(
+        field, state, sens, h, time.offset(h),
+        &[
+            (9017.0 / 3168.0, k1),
+            (-355.0 / 33.0, k2),
+            (46732.0 / 5247.0, k3),
+            (49.0 / 176.0, k4),
+            (-5103.0 / 18656.0, k5),
+        ], frame,
+    )?;
+    let k7 = augmented_stage(
+        field, state, sens, h, time.offset(h),
+        &[
+            (35.0 / 384.0, k1),
+            (500.0 / 1113.0, k3),
+            (125.0 / 192.0, k4),
+            (-2187.0 / 6784.0, k5),
+            (11.0 / 84.0, k6),
+        ], frame,
+    )?;
+    let (fifth, fifth_sens) = combine_augmented(
+        state,
+        sens,
+        h,
+        &[
+            (35.0 / 384.0, k1),
+            (500.0 / 1113.0, k3),
+            (125.0 / 192.0, k4),
+            (-2187.0 / 6784.0, k5),
+            (11.0 / 84.0, k6),
+        ],
+    );
+    // Fourth-order companion for the error estimate: trajectory only.
+    // Sensitivity obeys the linear variational equation driven by that
+    // trajectory, so it inherits the step sequence without its own
+    // tolerance — no sensitivity error is estimated.
+    let fourth = combine(
+        state,
+        h,
+        &[
+            (5179.0 / 57600.0, k1.state),
+            (7571.0 / 16695.0, k3.state),
+            (393.0 / 640.0, k4.state),
+            (-92097.0 / 339200.0, k5.state),
+            (187.0 / 2100.0, k6.state),
+            (1.0 / 40.0, k7.state),
+        ],
+    );
+    let error = TestParticleState {
+        position: fifth.position - fourth.position,
+        velocity: fifth.velocity - fourth.velocity,
+    };
+    Ok((fifth, fifth_sens, error, k1, k7))
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Derivative {
     position: DVec3,
@@ -890,10 +1203,11 @@ fn derivative(
     field: &GravityField<'_>,
     state: TestParticleState,
     time: SimTime,
+    frame: &mut EphemerisFrame,
 ) -> Result<Derivative, IntegratorError> {
     Ok(Derivative {
         position: state.velocity,
-        velocity: field.acceleration(state.position, time)?,
+        velocity: field.acceleration_with_frame(state.position, time, frame)?,
     })
 }
 
@@ -917,17 +1231,35 @@ fn dormand_prince_step(
     state: TestParticleState,
     time: SimTime,
     h: f64,
-) -> Result<(TestParticleState, TestParticleState), IntegratorError> {
-    let k1 = derivative(field, state, time)?;
+    k1: Option<Derivative>,
+    frame: &mut EphemerisFrame,
+) -> Result<
+    (
+        TestParticleState,
+        TestParticleState,
+        Derivative,
+        Derivative,
+    ),
+    IntegratorError,
+> {
+    // FSAL: reuse the previous accepted step's last stage when the caller
+    // hands it in; otherwise evaluate. The returned `used_k1` lets the
+    // caller keep it across a rejected retry (same state and time).
+    let k1 = match k1 {
+        Some(k1) => k1,
+        None => derivative(field, state, time, frame)?,
+    };
     let k2 = derivative(
         field,
         combine(state, h, &[(1.0 / 5.0, k1)]),
         time.offset(h * 1.0 / 5.0),
+        frame,
     )?;
     let k3 = derivative(
         field,
         combine(state, h, &[(3.0 / 40.0, k1), (9.0 / 40.0, k2)]),
         time.offset(h * 3.0 / 10.0),
+        frame,
     )?;
     let k4 = derivative(
         field,
@@ -937,6 +1269,7 @@ fn dormand_prince_step(
             &[(44.0 / 45.0, k1), (-56.0 / 15.0, k2), (32.0 / 9.0, k3)],
         ),
         time.offset(h * 4.0 / 5.0),
+        frame,
     )?;
     let k5 = derivative(
         field,
@@ -951,6 +1284,7 @@ fn dormand_prince_step(
             ],
         ),
         time.offset(h * 8.0 / 9.0),
+        frame,
     )?;
     let k6 = derivative(
         field,
@@ -966,6 +1300,7 @@ fn dormand_prince_step(
             ],
         ),
         time.offset(h),
+        frame,
     )?;
     let k7 = derivative(
         field,
@@ -981,6 +1316,7 @@ fn dormand_prince_step(
             ],
         ),
         time.offset(h),
+        frame,
     )?;
     let fifth = combine(
         state,
@@ -1011,6 +1347,8 @@ fn dormand_prince_step(
             position: fifth.position - fourth.position,
             velocity: fifth.velocity - fourth.velocity,
         },
+        k1,
+        k7,
     ))
 }
 
@@ -1028,12 +1366,313 @@ fn normalized_error(
 }
 
 fn next_step(step_s: f64, error: f64, max_step_s: f64) -> f64 {
+    next_step_order(step_s, error, max_step_s, 5.0)
+}
+
+/// Dormand–Prince 8(5,3) tableau (Hairer & Wanner; numeric values as in
+/// SciPy's BSD-licensed `dop853_coefficients` — the tableau is a
+/// mathematical fact, the stepping code around it is ours). 12 stages
+/// with FSAL: stage 12 evaluated at the 8th-order endpoint doubles as
+/// the next step's first stage. `E5` estimates the 8th-vs-5th difference
+/// for step control; stiffness detection and dense output are omitted
+/// (endpoint-only propagation). Rows list `(stage, coefficient)` pairs.
+const DOP853_C: [f64; 12] = [
+    0.0,
+    0.05260015195876773,
+    0.0789002279381516,
+    0.1183503419072274,
+    0.2816496580927726,
+    0.3333333333333333,
+    0.25,
+    0.3076923076923077,
+    0.6512820512820513,
+    0.6,
+    0.8571428571428571,
+    1.0,
+];
+
+const DOP853_A1: [(usize, f64); 1] = [(0, 0.05260015195876773)];
+const DOP853_A2: [(usize, f64); 2] = [
+    (0, 0.0197250569845379),
+    (1, 0.0591751709536137),
+];
+const DOP853_A3: [(usize, f64); 2] = [
+    (0, 0.02958758547680685),
+    (2, 0.08876275643042054),
+];
+const DOP853_A4: [(usize, f64); 3] = [
+    (0, 0.2413651341592667),
+    (2, -0.8845494793282861),
+    (3, 0.924834003261792),
+];
+const DOP853_A5: [(usize, f64); 3] = [
+    (0, 0.037037037037037035),
+    (3, 0.17082860872947386),
+    (4, 0.12546768756682242),
+];
+const DOP853_A6: [(usize, f64); 4] = [
+    (0, 3.7109375e-2),
+    (3, 0.17025221101954405),
+    (4, 0.06021653898045596),
+    (5, -1.7578125e-2),
+];
+const DOP853_A7: [(usize, f64); 5] = [
+    (0, 0.03709200011850479),
+    (3, 0.17038392571223998),
+    (4, 0.10726203044637328),
+    (5, -0.015319437748624402),
+    (6, 0.008273789163814023),
+];
+const DOP853_A8: [(usize, f64); 6] = [
+    (0, 0.6241109587160757),
+    (3, -3.3608926294469414),
+    (4, -0.868219346841726),
+    (5, 27.59209969944671),
+    (6, 20.154067550477894),
+    (7, -43.48988418106996),
+];
+const DOP853_A9: [(usize, f64); 7] = [
+    (0, 0.47766253643826434),
+    (3, -2.4881146199716677),
+    (4, -0.590290826836843),
+    (5, 21.230051448181193),
+    (6, 15.279233632882423),
+    (7, -33.28821096898486),
+    (8, -0.020331201708508627),
+];
+const DOP853_A10: [(usize, f64); 8] = [
+    (0, -0.9371424300859873),
+    (3, 5.186372428844064),
+    (4, 1.0914373489967295),
+    (5, -8.149787010746927),
+    (6, -18.52006565999696),
+    (7, 22.739487099350505),
+    (8, 2.4936055526796523),
+    (9, -3.0467644718982196),
+];
+const DOP853_A11: [(usize, f64); 9] = [
+    (0, 2.273310147516538),
+    (3, -10.53449546673725),
+    (4, -2.0008720582248625),
+    (5, -17.9589318631188),
+    (6, 27.94888452941996),
+    (7, -2.8589982771350235),
+    (8, -8.87285693353063),
+    (9, 12.360567175794303),
+    (10, 0.6433927460157636),
+];
+/// 8th-order endpoint combination (also the FSAL stage location).
+const DOP853_B: [(usize, f64); 8] = [
+    (0, 0.054293734116568765),
+    (5, 4.450312892752409),
+    (6, 1.8915178993145003),
+    (7, -5.801203960010585),
+    (8, 0.3111643669578199),
+    (9, -0.1521609496625161),
+    (10, 0.20136540080403034),
+    (11, 0.04471061572777259),
+];
+/// 8th-vs-5th error estimator weights over stages 0..11.
+const DOP853_E5: [f64; 12] = [
+    0.01312004499419488,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -1.2251564463762044,
+    -0.4957589496572502,
+    1.6643771824549864,
+    -0.35032884874997366,
+    0.3341791187130175,
+    0.08192320648511571,
+    -0.022355307863886294,
+];
+
+/// Combine previously computed stages by an indexed coefficient row.
+fn combine_indexed(
+    state: TestParticleState,
+    h: f64,
+    stages: &[Derivative; 12],
+    row: &[(usize, f64)],
+) -> TestParticleState {
+    let mut result = state;
+    for (index, coefficient) in row {
+        result = add_scaled(result, stages[*index], h * *coefficient);
+    }
+    result
+}
+
+fn dop853_step(
+    field: &GravityField<'_>,
+    state: TestParticleState,
+    time: SimTime,
+    h: f64,
+    k1: Option<Derivative>,
+    frame: &mut EphemerisFrame,
+) -> Result<
+    (
+        TestParticleState,
+        TestParticleState,
+        Derivative,
+        Derivative,
+    ),
+    IntegratorError,
+> {
+    let mut k = [Derivative {
+        position: DVec3::ZERO,
+        velocity: DVec3::ZERO,
+    }; 12];
+    k[0] = match k1 {
+        Some(k1) => k1,
+        None => derivative(field, state, time, frame)?,
+    };
+    const ROWS: [&[(usize, f64)]; 11] = [
+        &DOP853_A1,
+        &DOP853_A2,
+        &DOP853_A3,
+        &DOP853_A4,
+        &DOP853_A5,
+        &DOP853_A6,
+        &DOP853_A7,
+        &DOP853_A8,
+        &DOP853_A9,
+        &DOP853_A10,
+        &DOP853_A11,
+    ];
+    for (i, row) in ROWS.iter().enumerate() {
+        let stage = i + 1;
+        let at = combine_indexed(state, h, &k, row);
+        k[stage] = derivative(field, at, time.offset(h * DOP853_C[stage]), frame)?;
+    }
+    let eighth = combine_indexed(state, h, &k, &DOP853_B);
+    // FSAL stage at the endpoint; doubles as the next step's k1.
+    let k_fsal = derivative(field, eighth, time.offset(h), frame)?;
+    let mut error_position = DVec3::ZERO;
+    let mut error_velocity = DVec3::ZERO;
+    for (stage, weight) in DOP853_E5.iter().enumerate() {
+        error_position += k[stage].position * *weight;
+        error_velocity += k[stage].velocity * *weight;
+    }
+    Ok((
+        eighth,
+        TestParticleState {
+            position: error_position,
+            velocity: error_velocity,
+        },
+        k[0],
+        k_fsal,
+    ))
+}
+
+/// 8th-order twin of [`propagate_adaptive`]: same configuration type,
+/// same validation, same FSAL reuse, same dynamical cap, same statistics.
+/// Fewer, larger steps on smooth arcs at ~11 RHS evaluations per accepted
+/// step (vs 6 for DP5 with FSAL) — the trade pays off where the error
+/// controller, not the ceiling, sets the pace.
+pub fn propagate_adaptive_dop853(
+    field: &GravityField<'_>,
+    initial: TestParticleState,
+    start_time: SimTime,
+    duration_s: f64,
+    config: AdaptiveIntegratorConfig,
+) -> Result<PropagationResult, IntegratorError> {
+    validate_duration(duration_s)?;
+    validate_adaptive_config(config)?;
+    let mut state = initial;
+    let mut time = start_time;
+    let mut remaining = duration_s;
+    let mut step_s = config.initial_step_s.min(config.max_step_s);
+    let mut stats = IntegratorStats::default();
+    let mut frame = EphemerisFrame::new();
+    let cap_mus: Option<Vec<(f64, BodyId)>> = config.dynamical_eta.map(|_| field.cap_sources());
+    let mut cached_k1: Option<Derivative> = None;
+
+    while remaining > 0.0 {
+        if stats.accepted_steps + stats.rejected_steps >= config.max_steps {
+            return Err(IntegratorError::MaxSteps);
+        }
+        let mut h = step_s.min(remaining);
+        if let (Some(eta), Some(sources)) = (config.dynamical_eta, cap_mus.as_ref()) {
+            h = h.min(dynamical_cap(
+                state.position,
+                frame.states(),
+                sources,
+                eta,
+                config.max_step_s,
+            ));
+        }
+        if h < config.min_step_s && remaining > config.min_step_s {
+            return Err(IntegratorError::StepUnderflow { step_s: h });
+        }
+        let (candidate, error_state, used_k1, k_fsal) =
+            dop853_step(field, state, time, h, cached_k1.take(), &mut frame)?;
+        let error = normalized_error(error_state, candidate, config);
+        if error <= 1.0 || h <= config.min_step_s {
+            if error > 1.0 {
+                return Err(IntegratorError::StepUnderflow { step_s: h });
+            }
+            state = candidate;
+            time = time.offset(h);
+            remaining -= h;
+            stats.accepted_steps += 1;
+            step_s = next_step_order(h, error, config.max_step_s, 8.0);
+            cached_k1 = Some(k_fsal);
+        } else {
+            stats.rejected_steps += 1;
+            step_s = (h * (0.9 * error.powf(-1.0 / 8.0)).clamp(0.1, 0.5)).max(config.min_step_s);
+            cached_k1 = Some(used_k1);
+        }
+    }
+    Ok(PropagationResult {
+        state,
+        end_time: time,
+        stats,
+    })
+}
+
+/// Error-controller growth factor for a method of the given order: the
+/// local error scales as `h^(order+1)`, so the step rescales by
+/// `error^(-1/order)` (0.9 safety, clamped like the DP5 path).
+fn next_step_order(step_s: f64, error: f64, max_step_s: f64, order: f64) -> f64 {
     let factor = if error == 0.0 {
         5.0
     } else {
-        (0.9 * error.powf(-0.2)).clamp(0.2, 5.0)
+        (0.9 * error.powf(-1.0 / order)).clamp(0.2, 5.0)
     };
     (step_s * factor).min(max_step_s)
+}
+
+/// Physics-aware step ceiling: `eta` times the local dynamical time
+/// `sqrt(d^3/mu)` to the nearest gravity source. An empty `states` slice
+/// (frame not yet evaluated on the first step) disables the cap by
+/// returning `max_step_s` — the accuracy controller owns the first step.
+/// Sources with non-positive `mu` or missing states are skipped; when
+/// nothing contributes, the constant ceiling applies.
+fn dynamical_cap(
+    position: DVec3,
+    states: &[BodyState],
+    sources: &[(f64, BodyId)],
+    eta: f64,
+    max_step_s: f64,
+) -> f64 {
+    let mut tau = f64::INFINITY;
+    for (mu, id) in sources {
+        if *mu <= 0.0 {
+            continue;
+        }
+        let Some(state) = states.get(id.index()) else {
+            continue;
+        };
+        let d = (state.position_inertial - position).length();
+        if d > 0.0 && d.is_finite() {
+            tau = tau.min((d * d * d / mu).sqrt());
+        }
+    }
+    if tau.is_finite() {
+        (eta * tau).min(max_step_s)
+    } else {
+        max_step_s
+    }
 }
 
 fn validate_duration(duration_s: f64) -> Result<(), IntegratorError> {
@@ -1057,6 +1696,9 @@ fn validate_adaptive_config(config: AdaptiveIntegratorConfig) -> Result<(), Inte
         || config.absolute_velocity_tolerance_mps <= 0.0
         || config.relative_tolerance <= 0.0
         || config.max_steps == 0
+        || config
+            .dynamical_eta
+            .is_some_and(|eta| !eta.is_finite() || eta <= 0.0)
     {
         return Err(IntegratorError::InvalidConfig(
             "adaptive integrator configuration is invalid".into(),

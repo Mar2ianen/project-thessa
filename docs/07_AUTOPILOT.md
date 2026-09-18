@@ -124,6 +124,13 @@ as complete blocks yet:
 - logistics: `WaitForWindow`, `WaitForCargo`, `Load`, `Unload`, `Refuel`,
   `DepartRoute`, `SetAlarm`, `WarpRequest`.
 
+Shipped as parameterized native subgraphs in `thessa-autopilot` (each with
+its event contract, pure guidance math, and runner coverage): `Ascent`
+(`ascent`), `LandAt` (`landing`), `ExecuteManeuver` (`execute`), and
+`Rendezvous` approach (`rendezvous`). `Rendezvous` ends at a guarded hold:
+`Dock` stays unshipped until docking ports exist as vehicle hardware (no
+capture mechanism, no docked topology may be promised before that).
+
 ## 7.5. Maneuver planning boundary
 
 `thessa-maneuver` is intentionally below the graph VM and above low-level

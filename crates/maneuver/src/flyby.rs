@@ -155,6 +155,9 @@ struct FlybyCell {
     tof_leg2_s: f64,
     flyby_body: BodyId,
     departure_burn_mag_mps: f64,
+    /// Central-relative Lambert departure velocity of leg 1 (broad
+    /// outgoing asymptote for escape-pruned phasing).
+    broad_departure_velocity_mps: DVec3,
     /// Powered-bend price at periapsis (periapsis-energy floored lower
     /// bound; the exact solver prices truth for ranking).
     turn_burn_mag_mps: f64,
@@ -405,6 +408,7 @@ fn flyby_cell(
         tof_leg2_s,
         flyby_body,
         departure_burn_mag_mps: dep_mag,
+        broad_departure_velocity_mps: arc1.departure_velocity_mps,
         turn_burn_mag_mps: turn_price,
         arrival_burn_mag_mps: arr_mag,
         v_out_flyby_frame_mps: v_out_f,
@@ -583,6 +587,8 @@ fn revalidate_flyby(
         park_radius,
         cell.departure_burn_mag_mps,
         cell.tof_leg1_s,
+        cell.broad_departure_velocity_mps,
+        config.departure_body,
         stats,
     ) {
         Some(phased) => phased,

@@ -16,6 +16,11 @@ use thessa_flight_control::{
 };
 use thessa_sim_core::SimTime;
 
+pub mod ascent;
+pub mod execute;
+pub mod landing;
+pub mod rendezvous;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct NodeId(pub u32);
 
@@ -248,6 +253,18 @@ pub enum GraphNodeConfig {
     Wait {
         condition: WaitCondition,
     },
+    AscentPhase {
+        phase: ascent::AscentPhase,
+    },
+    LandingPhase {
+        phase: landing::LandingPhase,
+    },
+    ExecutePhase {
+        phase: execute::ExecutePhase,
+    },
+    RendezvousPhase {
+        phase: rendezvous::RendezvousPhase,
+    },
 }
 
 impl GraphNodeConfig {
@@ -264,6 +281,31 @@ impl GraphNodeConfig {
             }
             Self::Demand { demand } => demand.validate().map_err(|error| error.to_string()),
             Self::Wait { condition } => condition.validate().map_err(|error| error.to_string()),
+            Self::AscentPhase { phase } => match phase {
+                ascent::AscentPhase::VerticalRise { throttle }
+                    if !throttle.is_finite() || !(0.0..=1.2).contains(throttle) =>
+                {
+                    Err("ascent vertical-rise throttle must be in [0, 1.2]".into())
+                }
+                _ => Ok(()),
+            },
+            Self::LandingPhase { phase } => match phase {
+                landing::LandingPhase::DeorbitBurn { throttle }
+                    if !throttle.is_finite() || !(0.0..=1.2).contains(throttle) =>
+                {
+                    Err("landing deorbit throttle must be in [0, 1.2]".into())
+                }
+                _ => Ok(()),
+            },
+            Self::ExecutePhase { phase } => match phase {
+                execute::ExecutePhase::Burn { delta_v_mps, .. }
+                    if delta_v_mps.iter().any(|v| !v.is_finite()) =>
+                {
+                    Err("execute burn delta-v must be finite".into())
+                }
+                _ => Ok(()),
+            },
+            Self::RendezvousPhase { .. } => Ok(()),
             _ => Ok(()),
         }
     }

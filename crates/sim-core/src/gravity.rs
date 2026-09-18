@@ -58,6 +58,42 @@ impl<'a> GravityField<'a> {
         }
     }
 
+    /// Frame-evaluating twin of [`GravityField::acceleration`]: the frame is
+    /// evaluated once at `time`, then accumulation runs from the slice via
+    /// [`GravityField::acceleration_from_states`]. Bitwise identical to
+    /// [`GravityField::acceleration`] for the same timestamp; the win is
+    /// that a Dormand–Prince step needs seven RHS evaluations at seven
+    /// nearby timestamps, and without the frame each one re-walks every
+    /// shared parent chain (58 Kepler solves per call vs 23 per frame on
+    /// the 24-body design system). Keep one frame per stepping context.
+    pub fn acceleration_with_frame(
+        &self,
+        position: DVec3,
+        time: SimTime,
+        frame: &mut crate::EphemerisFrame,
+    ) -> Result<DVec3, GravityError> {
+        let states = frame.evaluate(self.ephemeris, time)?;
+        self.acceleration_from_states(position, states)
+    }
+
+    /// Acceleration plus gravity gradient from one frame evaluation, for
+    /// variational propagation: the ephemeris slice serves both
+    /// accumulations, so the augmented RHS costs a single Kepler set per
+    /// stage like the plain one. Same errors and summation discipline as
+    /// the separate calls.
+    pub fn gravity_with_gradient(
+        &self,
+        position: DVec3,
+        time: SimTime,
+        frame: &mut crate::EphemerisFrame,
+    ) -> Result<(DVec3, glam::DMat3), GravityError> {
+        let states = frame.evaluate(self.ephemeris, time)?;
+        Ok((
+            self.acceleration_from_states(position, states)?,
+            self.gravity_gradient_from_states(position, states)?,
+        ))
+    }
+
     /// Gravity from a precomputed [`EphemerisFrame`] slice instead of fresh
     /// per-body lookups. Same source order, same checks, same summation —
     /// bitwise identical to [`GravityField::acceleration`] for the same
@@ -166,6 +202,74 @@ impl<'a> GravityField<'a> {
             *slot = accumulate_frame(*position, states, &sources)?;
         }
         Ok(())
+    }
+
+    /// `(mu, id)` pairs in accumulation order for the integrator's
+    /// dynamical step cap. A body that fails lookup reports `mu = 0` and
+    /// is skipped by the cap (same effect as a non-contributing source).
+    pub(crate) fn cap_sources(&self) -> Vec<(f64, BodyId)> {
+        self.source_ids
+            .iter()
+            .map(|id| {
+                (
+                    self.ephemeris.body(*id).map(|body| body.mu).unwrap_or(0.0),
+                    *id,
+                )
+            })
+            .collect()
+    }
+
+    /// Gravity gradient `G = ∂a/∂r` from a precomputed frame slice, for
+    /// variational (state-transition-matrix) propagation:
+    ///
+    /// ```text
+    /// G = Σ μ (3·d·dᵀ/|d|⁵ − I/|d|³),  d = R_body − r
+    /// ```
+    ///
+    /// Same source order, checks and summation discipline as
+    /// [`GravityField::acceleration_from_states`]: singular or non-finite
+    /// lanes report the same errors instead of NaNs. Sensitivity dynamics
+    /// (`Ṡr = Sv`, `Ṡv = G·Sr`) integrated alongside the trajectory give
+    /// the exact arrival Jacobian for differential correction — one
+    /// augmented propagation per Newton iteration instead of nominal plus
+    /// three finite-difference perturbations.
+    pub fn gravity_gradient_from_states(
+        &self,
+        position: DVec3,
+        states: &[crate::BodyState],
+    ) -> Result<glam::DMat3, GravityError> {
+        let mut total = glam::DMat3::ZERO;
+        for body_id in &self.source_ids {
+            let body = self.ephemeris.body(*body_id)?;
+            let state = states
+                .get(body_id.index())
+                .ok_or(crate::EphemerisError::UnknownBody(*body_id))?;
+            let offset = state.position_inertial - position;
+            let distance_squared = offset.length_squared();
+            if !distance_squared.is_finite() {
+                return Err(GravityError::NonFinite { body_id: *body_id });
+            }
+            if distance_squared == 0.0 {
+                return Err(GravityError::Singularity { body_id: *body_id });
+            }
+            let inv = distance_squared.sqrt().recip();
+            let inv3 = inv * inv * inv;
+            let outer_scale = 3.0 * body.mu * inv3 * inv * inv;
+            let trace_scale = body.mu * inv3;
+            // μ·(3·d·dᵀ/|d|⁵ − I/|d|³), columns of the outer product.
+            total += glam::DMat3::from_cols(
+                offset * (outer_scale * offset.x),
+                offset * (outer_scale * offset.y),
+                offset * (outer_scale * offset.z),
+            ) - glam::DMat3::IDENTITY * trace_scale;
+        }
+        if total.is_finite() {
+            Ok(total)
+        } else {
+            Err(GravityError::NonFinite {
+                body_id: self.source_ids[0],
+            })
+        }
     }
 
     /// Resolve `(mu, state index)` for every source in accumulation order.

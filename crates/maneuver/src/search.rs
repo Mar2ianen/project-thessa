@@ -27,8 +27,9 @@
 use glam::{DMat3, DVec3};
 use rayon::prelude::*;
 use thessa_sim_core::{
-    AdaptiveIntegratorConfig, BakedEphemeris, BodyId, BodyState, GravityField, ImpulsiveBurn,
-    SimTime, TestParticleState, propagate_adaptive, propagate_adaptive_with_burns,
+    AdaptiveIntegratorConfig, BakedEphemeris, BodyId, BodyState, GravityField, SimTime,
+    TestParticleState, VelocitySensitivity, propagate_adaptive, propagate_adaptive_sensitivity,
+    propagate_adaptive_with_burns,
 };
 
 use crate::{
@@ -1502,6 +1503,72 @@ pub(crate) fn midcourse_time_s(time_of_flight_s: f64) -> f64 {
 /// the converged trajectory needs no separate revalidation pass. Returns
 /// departure burn (unchanged), midcourse burn, end state and miss; None
 /// only on total failure (no finite evaluation at all).
+/// Plain suffix evaluation from a cached TCM prefix (differential
+/// correction trials). Module-level so the variational twin can share the
+/// caller's `&mut stats` — two mut closures cannot.
+fn suffix_shoot(
+    field: &GravityField<'_>,
+    prefix: Option<(TestParticleState, SimTime)>,
+    time_of_flight_s: f64,
+    mid_time_s: f64,
+    mid_burn: DVec3,
+    stats: &mut SearchStats,
+) -> Option<TestParticleState> {
+    stats.newton_propagations += 1;
+    let (tcm_state, tcm_epoch) = prefix?;
+    let kicked = TestParticleState {
+        position: tcm_state.position,
+        velocity: tcm_state.velocity + mid_burn,
+    };
+    propagate_adaptive(
+        field,
+        kicked,
+        tcm_epoch,
+        time_of_flight_s - mid_time_s,
+        exact_config(),
+    )
+    .ok()
+    .map(|result| result.state)
+}
+
+/// Variational suffix evaluation: one augmented propagation gives the end
+/// state plus Sr = d(end_pos)/d(mid_burn), the Newton Jacobian with no
+/// finite-difference perturbations.
+fn suffix_shoot_aug(
+    field: &GravityField<'_>,
+    prefix: Option<(TestParticleState, SimTime)>,
+    time_of_flight_s: f64,
+    mid_time_s: f64,
+    mid_burn: DVec3,
+    stats: &mut SearchStats,
+) -> Option<(TestParticleState, DMat3)> {
+    stats.newton_propagations += 1;
+    let (tcm_state, tcm_epoch) = prefix?;
+    let kicked = TestParticleState {
+        position: tcm_state.position,
+        velocity: tcm_state.velocity + mid_burn,
+    };
+    propagate_adaptive_sensitivity(
+        field,
+        kicked,
+        VelocitySensitivity::identity(),
+        tcm_epoch,
+        time_of_flight_s - mid_time_s,
+        exact_config(),
+    )
+    .ok()
+    .map(|result| {
+        (
+            result.state,
+            DMat3::from_cols(
+                result.sensitivity.position[0],
+                result.sensitivity.position[1],
+                result.sensitivity.position[2],
+            ),
+        )
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn correct_shooting(
     field: &GravityField<'_>,
@@ -1528,8 +1595,9 @@ pub(crate) fn correct_shooting(
     // as one segmented propagation — the joint differs only in ulp-level
     // endpoint bookkeeping, validated by unchanged corpus digits — while
     // ~mid_time/tof of every evaluation (typically a quarter) disappears.
-    // A degenerate mid time (outside the arc) falls back to the whole-arc
-    // evaluation rather than inventing a prefix.
+    // A degenerate mid time (outside the arc) yields no prefix, and every
+    // evaluation then fails exactly as the whole-arc schedule validation
+    // would fail it — no silent fallback path.
     let prefix_valid = mid_time_s >= 0.0 && mid_time_s < time_of_flight_s;
     let prefix: Option<(TestParticleState, SimTime)> = if prefix_valid {
         stats.newton_propagations += 1;
@@ -1549,42 +1617,14 @@ pub(crate) fn correct_shooting(
     } else {
         None
     };
-    let mut shoot = |mid_burn: DVec3| -> Option<TestParticleState> {
-        stats.newton_propagations += 1;
-        match prefix {
-            Some((tcm_state, tcm_epoch)) => {
-                let kicked = TestParticleState {
-                    position: tcm_state.position,
-                    velocity: tcm_state.velocity + mid_burn,
-                };
-                propagate_adaptive(
-                    field,
-                    kicked,
-                    tcm_epoch,
-                    time_of_flight_s - mid_time_s,
-                    exact_config(),
-                )
-                .ok()
-                .map(|result| result.state)
-            }
-            None => propagate_adaptive_with_burns(
-                field,
-                TestParticleState {
-                    position: start_pos,
-                    velocity: park_velocity + departure_burn,
-                },
-                departure_epoch,
-                time_of_flight_s,
-                &[ImpulsiveBurn {
-                    time_s: mid_time_s,
-                    delta_v_mps: mid_burn,
-                }],
-                exact_config(),
-            )
-            .ok()
-            .map(|result| result.state),
-        }
-    };
+    // Plain suffix evaluation from the prefix (backtracking trials only).
+    // Module-level helper (not a closure): the variational evaluator below
+    // needs the same &mut stats, and two mut closures cannot share it.
+    //
+    // Variational evaluation: one augmented propagation gives the end
+    // state plus Sr = d(end_pos)/d(mid_burn) — the Newton Jacobian with
+    // no finite-difference perturbations (one ~2x-cost propagation
+    // instead of four full ones per iteration).
     let mut mid_burn = if initial_mid_burn.is_finite() {
         initial_mid_burn
     } else {
@@ -1596,7 +1636,14 @@ pub(crate) fn correct_shooting(
     // intentionally identical to plain accept-always Newton (same
     // trajectories, same count): backtracking only engages on evaluation
     // failure, which previously killed the whole run.
-    let mut end = shoot(mid_burn)?;
+    let (mut end, mut jacobian) = suffix_shoot_aug(
+        field,
+        prefix,
+        time_of_flight_s,
+        mid_time_s,
+        mid_burn,
+        stats,
+    )?;
     // Hot-stall early exit (Voyager lesson): a converged leg improves its
     // miss by orders of magnitude per iteration, so five straight
     // iterations without even a 1% gain mean Newton is wandering, not
@@ -1633,30 +1680,10 @@ pub(crate) fn correct_shooting(
             stats.hot_stall_exits += 1;
             break;
         }
-        // Finite-difference step scaled for CONSTANT ~1e5 m displacement at
-        // the target: h = 0.5 m/s resolves lunar legs (proven); year-long
-        // inter-body arcs need ~1e-3, otherwise the perturbation spans
-        // nonlinear encounter regimes and the Jacobian is garbage. Capped
-        // at the proven 0.5 so short legs follow bit-identical paths.
-        let leverage_s = (time_of_flight_s - mid_time_s).max(1.0);
-        let h = (1.0e5 / leverage_s).min(0.5);
-        let mut columns = [DVec3::ZERO; 3];
-        let mut ok = true;
-        for (column, axis) in [DVec3::X, DVec3::Y, DVec3::Z].iter().enumerate() {
-            match shoot(mid_burn + *axis * h) {
-                Some(perturbed) => {
-                    columns[column] = (perturbed.position - end.position) / h;
-                }
-                None => {
-                    ok = false;
-                    break;
-                }
-            }
-        }
-        if !ok {
-            break;
-        }
-        let mut step = DMat3::from_cols(columns[0], columns[1], columns[2]).inverse() * miss_vec;
+        // Variational Jacobian from the current augmented evaluation —
+        // no perturbations, no step-size heuristics. After a backtracking
+        // accept the next evaluation refreshes both state and Jacobian.
+        let mut step = jacobian.inverse() * miss_vec;
         if !step.is_finite() {
             break;
         }
@@ -1672,7 +1699,14 @@ pub(crate) fn correct_shooting(
         let mut trial = step;
         let mut next_end = None;
         for _ in 0..4 {
-            match shoot(mid_burn + trial) {
+            match suffix_shoot(
+                field,
+                prefix,
+                time_of_flight_s,
+                mid_time_s,
+                mid_burn + trial,
+                stats,
+            ) {
                 Some(state) => {
                     next_end = Some(state);
                     break;
@@ -1681,9 +1715,24 @@ pub(crate) fn correct_shooting(
             }
         }
         match next_end {
-            Some(state) => {
+            Some(_) => {
                 mid_burn += trial;
-                end = state;
+                // Refresh state and Jacobian at the accepted point (one
+                // augmented evaluation; the trial state itself carries no
+                // sensitivity).
+                let (fresh_end, fresh_jac) = match suffix_shoot_aug(
+                    field,
+                    prefix,
+                    time_of_flight_s,
+                    mid_time_s,
+                    mid_burn,
+                    stats,
+                ) {
+                    Some(next) => next,
+                    None => break,
+                };
+                end = fresh_end;
+                jacobian = fresh_jac;
             }
             None => break,
         }
@@ -1748,7 +1797,8 @@ pub(crate) fn correct_bplane_shooting(
     };
     // Cached TCM prefix, same contract as in `correct_shooting`: the
     // departure→midcourse arc never sees the solved burn, so it integrates
-    // once and every iteration coasts from the burn point.
+    // once and every iteration coasts from the burn point. A degenerate mid
+    // time fails every evaluation exactly as schedule validation would.
     let prefix_valid = mid_time_s >= 0.0 && mid_time_s < time_of_flight_s;
     let prefix: Option<(TestParticleState, SimTime)> = if prefix_valid {
         stats.newton_propagations += 1;
@@ -1768,48 +1818,21 @@ pub(crate) fn correct_bplane_shooting(
     } else {
         None
     };
-    let mut shoot = |burn: DVec3| -> Option<TestParticleState> {
-        stats.newton_propagations += 1;
-        match prefix {
-            Some((burn_state, burn_epoch)) => {
-                let kicked = TestParticleState {
-                    position: burn_state.position,
-                    velocity: burn_state.velocity + burn,
-                };
-                propagate_adaptive(
-                    field,
-                    kicked,
-                    burn_epoch,
-                    time_of_flight_s - mid_time_s,
-                    exact_config(),
-                )
-                .ok()
-                .map(|result| result.state)
-            }
-            None => propagate_adaptive_with_burns(
-                field,
-                TestParticleState {
-                    position: start_pos,
-                    velocity: start_vel,
-                },
-                departure_epoch,
-                time_of_flight_s,
-                &[ImpulsiveBurn {
-                    time_s: mid_time_s,
-                    delta_v_mps: burn,
-                }],
-                exact_config(),
-            )
-            .ok()
-            .map(|result| result.state),
-        }
-    };
     let mut burn = if initial_burn.is_finite() {
         initial_burn
     } else {
         DVec3::ZERO
     };
-    let mut end = shoot(burn)?;
+    // Variational first evaluation: end state plus Sr; the 2x3 encounter
+    // Jacobian is Sr projected on the (T, R) basis — no perturbations.
+    let (mut end, mut sensitivity) = suffix_shoot_aug(
+        field,
+        prefix,
+        time_of_flight_s,
+        mid_time_s,
+        burn,
+        stats,
+    )?;
     let mut best: Option<(DVec3, TestParticleState, f64)> = None;
     for _ in 0..MAX_ITERS {
         let (miss_t, miss_r) = project(end.position);
@@ -1823,30 +1846,25 @@ pub(crate) fn correct_bplane_shooting(
         if miss <= TARGET_MISS_M {
             break;
         }
-        let leverage_s = (time_of_flight_s - mid_time_s).max(1.0);
-        let h = (1.0e5 / leverage_s).min(0.5);
         // 2x3 Jacobian of END POSITION (NOT of the miss): with
         // miss = aim − end the step solves J·Δ = miss exactly like
         // single-leg shooting. Differentiating (aim − end) instead
         // negates every step into an ascent while magnitudes look sane.
-        let mut jac = [[0.0f64; 3]; 2];
-        let mut ok = true;
-        for (axis_n, axis) in [DVec3::X, DVec3::Y, DVec3::Z].iter().enumerate() {
-            match shoot(burn + *axis * h) {
-                Some(perturbed) => {
-                    let slope = (perturbed.position - end.position) / h;
-                    jac[0][axis_n] = slope.dot(t_axis);
-                    jac[1][axis_n] = slope.dot(r_axis);
-                }
-                None => {
-                    ok = false;
-                    break;
-                }
-            }
-        }
-        if !ok {
-            break;
-        }
+        // Columns of Sr dotted with the encounter basis — the same
+        // quantity the finite differences estimated, without the step
+        // heuristic.
+        let jac = [
+            [
+                sensitivity.col(0).dot(t_axis),
+                sensitivity.col(1).dot(t_axis),
+                sensitivity.col(2).dot(t_axis),
+            ],
+            [
+                sensitivity.col(0).dot(r_axis),
+                sensitivity.col(1).dot(r_axis),
+                sensitivity.col(2).dot(r_axis),
+            ],
+        ];
         // Minimum-norm step via explicit 2x2 (JJᵀ)⁻¹.
         let jjt = [
             [
@@ -1882,11 +1900,19 @@ pub(crate) fn correct_bplane_shooting(
         }
         // Merit acceptance on the 2D miss (coupled-leg lesson: never
         // accept a worsening step blindly). Halve to a genuinely better
-        // point or give up with the best seen.
+        // point or give up with the best seen. Trials are plain suffix
+        // evaluations; the accept refreshes state and sensitivity together.
         let mut trial = step;
         let mut next: Option<(DVec3, TestParticleState, f64)> = None;
         for _ in 0..6 {
-            if let Some(state) = shoot(burn + trial) {
+            if let Some(state) = suffix_shoot(
+                field,
+                prefix,
+                time_of_flight_s,
+                mid_time_s,
+                burn + trial,
+                stats,
+            ) {
                 let (ct, cr) = project(state.position);
                 let candidate = (ct * ct + cr * cr).sqrt();
                 if candidate.is_finite() && candidate < miss {
@@ -1897,9 +1923,21 @@ pub(crate) fn correct_bplane_shooting(
             trial *= 0.5;
         }
         match next {
-            Some((candidate, state, _)) => {
+            Some((candidate, _, _)) => {
                 burn = candidate;
-                end = state;
+                let (fresh_end, fresh_jac) = match suffix_shoot_aug(
+                    field,
+                    prefix,
+                    time_of_flight_s,
+                    mid_time_s,
+                    burn,
+                    stats,
+                ) {
+                    Some(next) => next,
+                    None => break,
+                };
+                end = fresh_end;
+                sensitivity = fresh_jac;
             }
             None => break,
         }

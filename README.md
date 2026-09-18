@@ -212,8 +212,10 @@ Start here:
    — current terrain streaming and CBT boundary.
 10. [`docs/22_RCBT_GPU_TERRAIN.md`](docs/22_RCBT_GPU_TERRAIN.md) — CBT GPU
     boundary and replacement gates.
-11. [`docs/05_ROADMAP.md`](docs/05_ROADMAP.md) — dependency-ordered future work.
-12. [`CHANGELOG.md`](CHANGELOG.md) — notable changes.
+11. [`docs/42_EPHEMERIS_RESIDUAL_STORAGE.md`](docs/42_EPHEMERIS_RESIDUAL_STORAGE.md)
+    — bounded residual compression for ephemeris/gravity caches.
+12. [`docs/05_ROADMAP.md`](docs/05_ROADMAP.md) — dependency-ordered future work.
+13. [`CHANGELOG.md`](CHANGELOG.md) — notable changes.
 
 ADRs live in [`docs/adr/`](docs/adr/). Design-only documents are labelled as
 vision, proposal, or future work; implemented behavior is described in the

@@ -350,6 +350,27 @@ impl AeroResidualTable {
         (sample, error)
     }
 
+    /// Sample and convert the local coefficient envelope directly into a
+    /// conservative physical force/moment error bound for one panel.
+    pub fn sample_with_physical_bound(
+        &self,
+        mach: f64,
+        alpha_rad: f64,
+        dynamic_pressure_pa: f64,
+        area_m2: f64,
+        reference_chord_m: f64,
+        moment_arm_m: f64,
+    ) -> Result<(AeroCoefficients, AeroPhysicalErrorBound), AeroError> {
+        let (sample, error) = self.sample_with_error(mach, alpha_rad);
+        let bound = error.physical_bound(
+            dynamic_pressure_pa,
+            area_m2,
+            reference_chord_m,
+            moment_arm_m,
+        )?;
+        Ok((sample, bound))
+    }
+
     /// Worst grid-point coefficient error across all tiles.
     pub const fn max_error(&self) -> AeroCoefficientError {
         self.max_error
@@ -789,6 +810,33 @@ mod tests {
                 error,
             );
         }
+    }
+
+    #[test]
+    fn sample_physical_bound_contains_actual_force_error() {
+        let source = table_from(13, 11, nonlinear_coefficients);
+        let packed =
+            AeroResidualTable::encode(&source, AeroResidualBudget::uniform(1.0e-4)).unwrap();
+        let mach = 0.73;
+        let alpha = 0.11;
+        let q = 18_000.0;
+        let area = 2.4;
+        let chord = 1.3;
+        let arm = 2.7;
+        let (got, bound) = packed
+            .sample_with_physical_bound(mach, alpha, q, area, chord, arm)
+            .unwrap();
+        let exact = source.sample(mach, alpha);
+        let actual_force_error = q
+            * area
+            * ((got.lift - exact.lift).abs()
+                + (got.drag - exact.drag).abs()
+                + (got.side_force - exact.side_force).abs());
+        let actual_moment_error =
+            q * area * chord * (got.pitching_moment - exact.pitching_moment).abs()
+                + arm * actual_force_error;
+        assert!(actual_force_error <= bound.force_n + 1.0e-12);
+        assert!(actual_moment_error <= bound.moment_nm + 1.0e-12);
     }
 
     #[test]

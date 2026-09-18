@@ -78,8 +78,10 @@ fn main() {
         stats.raw_coefficient_bytes as f64 / stats.logical_resident_bytes as f64,
     );
     println!(
-        "tiles={} r8={} r16={} raw64={} encode={:?} max_err={:?}",
+        "tiles={} r4={} r6={} r8={} r16={} raw64={} encode={:?} max_err={:?}",
         stats.tiles,
+        stats.residual4_tiles,
+        stats.residual6_tiles,
         stats.residual8_tiles,
         stats.residual16_tiles,
         stats.raw64_tiles,

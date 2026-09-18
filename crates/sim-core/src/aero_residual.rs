@@ -22,12 +22,18 @@ use crate::{AeroCoefficientTable, AeroCoefficients, AeroError};
 /// Logical tile edge in Mach/alpha grid points.
 pub const AERO_RESIDUAL_TILE_EDGE: usize = 4;
 const COEFFICIENTS: usize = 4;
+const R4_MAX: f64 = 7.0;
+const R6_MAX: f64 = 31.0;
 const R8_MAX: f64 = i8::MAX as f64;
 const R16_MAX: f64 = i16::MAX as f64;
 
 /// Storage rung selected independently for every tile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AeroResidualCodec {
+    /// Four signed 4-bit residuals packed into two bytes per sample.
+    Residual4,
+    /// Four signed 6-bit residuals packed into three bytes per sample.
+    Residual6,
     /// Signed 8-bit residual per coefficient.
     Residual8,
     /// Signed 16-bit residual per coefficient.
@@ -40,10 +46,26 @@ impl AeroResidualCodec {
     /// Payload bytes per grid sample.
     pub const fn bytes_per_sample(self) -> usize {
         match self {
+            Self::Residual4 => 2,
+            Self::Residual6 => 3,
             Self::Residual8 => COEFFICIENTS,
             Self::Residual16 => COEFFICIENTS * 2,
             Self::Raw64 => COEFFICIENTS * 8,
         }
+    }
+
+    const fn qmax(self) -> f64 {
+        match self {
+            Self::Residual4 => R4_MAX,
+            Self::Residual6 => R6_MAX,
+            Self::Residual8 => R8_MAX,
+            Self::Residual16 => R16_MAX,
+            Self::Raw64 => 0.0,
+        }
+    }
+
+    const fn is_quantized(self) -> bool {
+        !matches!(self, Self::Raw64)
     }
 }
 
@@ -183,6 +205,8 @@ impl AeroResidualTile {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AeroResidualStats {
     pub tiles: usize,
+    pub residual4_tiles: usize,
+    pub residual6_tiles: usize,
     pub residual8_tiles: usize,
     pub residual16_tiles: usize,
     pub raw64_tiles: usize,
@@ -243,38 +267,35 @@ impl AeroResidualTable {
                     (table.alpha_grid_rad.len() - alpha_start).min(AERO_RESIDUAL_TILE_EDGE);
                 let corners = tile_corners(table, mach_start, alpha_start, mach_len, alpha_len);
 
-                let r8 = encode_quantized_tile(
-                    table,
-                    mach_start,
-                    alpha_start,
-                    mach_len,
-                    alpha_len,
-                    corners,
+                let mut selected = None;
+                for codec in [
+                    AeroResidualCodec::Residual4,
+                    AeroResidualCodec::Residual6,
                     AeroResidualCodec::Residual8,
-                );
-                let (codec, scales, error, bytes) = if budget.contains(r8.1) {
-                    (AeroResidualCodec::Residual8, r8.0, r8.1, r8.2)
-                } else {
-                    let r16 = encode_quantized_tile(
+                    AeroResidualCodec::Residual16,
+                ] {
+                    let encoded = encode_quantized_tile(
                         table,
                         mach_start,
                         alpha_start,
                         mach_len,
                         alpha_len,
                         corners,
-                        AeroResidualCodec::Residual16,
+                        codec,
                     );
-                    if budget.contains(r16.1) {
-                        (AeroResidualCodec::Residual16, r16.0, r16.1, r16.2)
-                    } else {
-                        (
-                            AeroResidualCodec::Raw64,
-                            zero_coefficients(),
-                            AeroCoefficientError::default(),
-                            encode_raw_tile(table, mach_start, alpha_start, mach_len, alpha_len),
-                        )
+                    if budget.contains(encoded.1) {
+                        selected = Some((codec, encoded.0, encoded.1, encoded.2));
+                        break;
                     }
-                };
+                }
+                let (codec, scales, error, bytes) = selected.unwrap_or_else(|| {
+                    (
+                        AeroResidualCodec::Raw64,
+                        zero_coefficients(),
+                        AeroCoefficientError::default(),
+                        encode_raw_tile(table, mach_start, alpha_start, mach_len, alpha_len),
+                    )
+                });
 
                 let payload_offset = payload.len();
                 let payload_len = bytes.len();
@@ -380,11 +401,15 @@ impl AeroResidualTable {
     /// current Rust tile structs, and the contiguous payload. It intentionally
     /// excludes Vec allocator bookkeeping/capacity slack.
     pub fn stats(&self) -> AeroResidualStats {
+        let mut r4 = 0;
+        let mut r6 = 0;
         let mut r8 = 0;
         let mut r16 = 0;
         let mut raw = 0;
         for tile in &self.tiles {
             match tile.codec {
+                AeroResidualCodec::Residual4 => r4 += 1,
+                AeroResidualCodec::Residual6 => r6 += 1,
                 AeroResidualCodec::Residual8 => r8 += 1,
                 AeroResidualCodec::Residual16 => r16 += 1,
                 AeroResidualCodec::Raw64 => raw += 1,
@@ -397,6 +422,8 @@ impl AeroResidualTable {
         let logical_resident_bytes = self.payload.len() + tile_metadata_bytes + grid_bytes;
         AeroResidualStats {
             tiles: self.tiles.len(),
+            residual4_tiles: r4,
+            residual6_tiles: r6,
             residual8_tiles: r8,
             residual16_tiles: r16,
             raw64_tiles: raw,
@@ -435,29 +462,14 @@ impl AeroResidualTable {
                 }
                 coefficients_from_array(values)
             }
-            AeroResidualCodec::Residual8 => {
+            codec => {
+                debug_assert!(codec.is_quantized());
                 let predictor = predictor_at(tile, local_mach, local_alpha);
                 let mut values = coefficients_array(predictor);
                 let scales = coefficients_array(tile.scales);
-                let base = local_index * COEFFICIENTS;
+                let quantized = decode_quantized_sample(bytes, codec, local_index);
                 for component in 0..COEFFICIENTS {
-                    let q = bytes[base + component] as i8 as f64;
-                    values[component] += q * scales[component];
-                }
-                coefficients_from_array(values)
-            }
-            AeroResidualCodec::Residual16 => {
-                let predictor = predictor_at(tile, local_mach, local_alpha);
-                let mut values = coefficients_array(predictor);
-                let scales = coefficients_array(tile.scales);
-                let base = local_index * COEFFICIENTS * 2;
-                for component in 0..COEFFICIENTS {
-                    let start = base + component * 2;
-                    let raw: [u8; 2] = bytes[start..start + 2]
-                        .try_into()
-                        .expect("residual16 tile payload validated at encode time");
-                    let q = i16::from_le_bytes(raw) as f64;
-                    values[component] += q * scales[component];
+                    values[component] += quantized[component] as f64 * scales[component];
                 }
                 coefficients_from_array(values)
             }
@@ -524,10 +536,7 @@ fn encode_quantized_tile(
     corners: [AeroCoefficients; 4],
     codec: AeroResidualCodec,
 ) -> (AeroCoefficients, AeroCoefficientError, Vec<u8>) {
-    debug_assert!(matches!(
-        codec,
-        AeroResidualCodec::Residual8 | AeroResidualCodec::Residual16
-    ));
+    debug_assert!(codec.is_quantized());
     let mut maxima = [0.0f64; COEFFICIENTS];
     for local_mach in 0..mach_len {
         for local_alpha in 0..alpha_len {
@@ -548,11 +557,7 @@ fn encode_quantized_tile(
         }
     }
 
-    let qmax = match codec {
-        AeroResidualCodec::Residual8 => R8_MAX,
-        AeroResidualCodec::Residual16 => R16_MAX,
-        AeroResidualCodec::Raw64 => unreachable!(),
-    };
+    let qmax = codec.qmax();
     let scales = maxima.map(|max| if max == 0.0 { 0.0 } else { max / qmax });
     let mut payload = Vec::with_capacity(mach_len * alpha_len * codec.bytes_per_sample());
     let mut error = [0.0f64; COEFFICIENTS];
@@ -569,6 +574,7 @@ fn encode_quantized_tile(
                 normalized_local(local_mach, mach_len),
                 normalized_local(local_alpha, alpha_len),
             ));
+            let mut quantized = [0i16; COEFFICIENTS];
             for component in 0..COEFFICIENTS {
                 let residual = actual[component] - predicted[component];
                 let scale = scales[component];
@@ -577,16 +583,11 @@ fn encode_quantized_tile(
                 } else {
                     (residual / scale).round().clamp(-qmax, qmax)
                 };
+                quantized[component] = q as i16;
                 let decoded = predicted[component] + q * scale;
                 error[component] = error[component].max((decoded - actual[component]).abs());
-                match codec {
-                    AeroResidualCodec::Residual8 => payload.push((q as i8) as u8),
-                    AeroResidualCodec::Residual16 => {
-                        payload.extend_from_slice(&(q as i16).to_le_bytes())
-                    }
-                    AeroResidualCodec::Raw64 => unreachable!(),
-                }
             }
+            encode_quantized_sample(&mut payload, codec, quantized);
         }
     }
 
@@ -595,6 +596,100 @@ fn encode_quantized_tile(
         AeroCoefficientError::from_array(error),
         payload,
     )
+}
+
+fn encode_quantized_sample(
+    payload: &mut Vec<u8>,
+    codec: AeroResidualCodec,
+    quantized: [i16; COEFFICIENTS],
+) {
+    match codec {
+        AeroResidualCodec::Residual4 => {
+            let q = quantized.map(|value| (value as u16 & 0x0f) as u8);
+            payload.push(q[0] | (q[1] << 4));
+            payload.push(q[2] | (q[3] << 4));
+        }
+        AeroResidualCodec::Residual6 => {
+            let q = quantized.map(|value| value as u32 & 0x3f);
+            let packed = q[0] | (q[1] << 6) | (q[2] << 12) | (q[3] << 18);
+            payload.push(packed as u8);
+            payload.push((packed >> 8) as u8);
+            payload.push((packed >> 16) as u8);
+        }
+        AeroResidualCodec::Residual8 => {
+            for value in quantized {
+                payload.push((value as i8) as u8);
+            }
+        }
+        AeroResidualCodec::Residual16 => {
+            for value in quantized {
+                payload.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        AeroResidualCodec::Raw64 => unreachable!(),
+    }
+}
+
+fn decode_quantized_sample(
+    payload: &[u8],
+    codec: AeroResidualCodec,
+    sample_index: usize,
+) -> [i16; COEFFICIENTS] {
+    match codec {
+        AeroResidualCodec::Residual4 => {
+            let base = sample_index * 2;
+            let a = payload[base];
+            let b = payload[base + 1];
+            [
+                sign_extend_4(a & 0x0f) as i16,
+                sign_extend_4(a >> 4) as i16,
+                sign_extend_4(b & 0x0f) as i16,
+                sign_extend_4(b >> 4) as i16,
+            ]
+        }
+        AeroResidualCodec::Residual6 => {
+            let base = sample_index * 3;
+            let packed = payload[base] as u32
+                | ((payload[base + 1] as u32) << 8)
+                | ((payload[base + 2] as u32) << 16);
+            [
+                sign_extend_6((packed & 0x3f) as u8) as i16,
+                sign_extend_6(((packed >> 6) & 0x3f) as u8) as i16,
+                sign_extend_6(((packed >> 12) & 0x3f) as u8) as i16,
+                sign_extend_6(((packed >> 18) & 0x3f) as u8) as i16,
+            ]
+        }
+        AeroResidualCodec::Residual8 => {
+            let base = sample_index * COEFFICIENTS;
+            [
+                payload[base] as i8 as i16,
+                payload[base + 1] as i8 as i16,
+                payload[base + 2] as i8 as i16,
+                payload[base + 3] as i8 as i16,
+            ]
+        }
+        AeroResidualCodec::Residual16 => {
+            let base = sample_index * COEFFICIENTS * 2;
+            let read = |component: usize| {
+                let start = base + component * 2;
+                i16::from_le_bytes(
+                    payload[start..start + 2]
+                        .try_into()
+                        .expect("residual16 payload validated at encode time"),
+                )
+            };
+            [read(0), read(1), read(2), read(3)]
+        }
+        AeroResidualCodec::Raw64 => unreachable!(),
+    }
+}
+
+fn sign_extend_4(value: u8) -> i8 {
+    ((value << 4) as i8) >> 4
+}
+
+fn sign_extend_6(value: u8) -> i8 {
+    ((value << 2) as i8) >> 2
 }
 
 fn encode_raw_tile(
@@ -732,7 +827,9 @@ mod tests {
         let packed =
             AeroResidualTable::encode(&source, AeroResidualBudget::uniform(1.0e-12)).unwrap();
         let stats = packed.stats();
-        assert_eq!(stats.residual8_tiles, stats.tiles);
+        assert_eq!(stats.residual4_tiles, stats.tiles);
+        assert_eq!(stats.residual6_tiles, 0);
+        assert_eq!(stats.residual8_tiles, 0);
         assert_eq!(stats.residual16_tiles, 0);
         assert_eq!(stats.raw64_tiles, 0);
         for mach in 0..source.mach_grid.len() {
@@ -852,6 +949,21 @@ mod tests {
         let expected_moment = 20_000.0 * 2.0 * 1.5 * 4.0e-3 + 3.0 * expected_force;
         assert!((bound.force_n - expected_force).abs() < 1.0e-12);
         assert!((bound.moment_nm - expected_moment).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn packed_signed_rungs_round_trip_extremes() {
+        for (codec, values) in [
+            (AeroResidualCodec::Residual4, [-7, -1, 0, 7]),
+            (AeroResidualCodec::Residual6, [-31, -1, 0, 31]),
+            (AeroResidualCodec::Residual8, [-127, -1, 0, 127]),
+            (AeroResidualCodec::Residual16, [i16::MIN + 1, -1, 0, i16::MAX]),
+        ] {
+            let mut payload = Vec::new();
+            encode_quantized_sample(&mut payload, codec, values);
+            assert_eq!(payload.len(), codec.bytes_per_sample());
+            assert_eq!(decode_quantized_sample(&payload, codec, 0), values);
+        }
     }
 
     #[test]

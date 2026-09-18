@@ -135,7 +135,9 @@ impl ColorPage {
             return Err(CodecError::BadMagic);
         }
         if take(&mut cursor, 1)?[0] != COLOR_VERSION {
-            return Err(CodecError::UnsupportedVersion(COLOR_VERSION));
+            return Err(CodecError::UnsupportedVersion(
+                bytes.get(4).copied().unwrap_or(255),
+            ));
         }
         let width = u32::from_le_bytes(take(&mut cursor, 4)?[..4].try_into().expect("4 bytes"));
         let height = u32::from_le_bytes(take(&mut cursor, 4)?[..4].try_into().expect("4 bytes"));

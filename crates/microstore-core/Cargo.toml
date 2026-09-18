@@ -12,5 +12,9 @@ name = "codec"
 harness = false
 
 [[bench]]
+name = "height"
+harness = false
+
+[[bench]]
 name = "residency"
 harness = false

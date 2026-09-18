@@ -33,8 +33,9 @@ pub use aero::{
     PanelAeroModel, PanelSoA, evaluate_batch,
 };
 pub use aero_residual::{
-    AERO_RESIDUAL_TILE_EDGE, AeroCoefficientError, AeroPhysicalErrorBound, AeroResidualBudget,
-    AeroResidualCodec, AeroResidualStats, AeroResidualTable, AeroResidualTile,
+    AERO_RESIDUAL_TILE_EDGE, AeroCoefficientError, AeroPhysicalBudget, AeroPhysicalErrorBound,
+    AeroResidualBudget, AeroResidualCodec, AeroResidualStats, AeroResidualTable,
+    AeroResidualTile,
 };
 pub use affine_propagator::{
     AffinePropagator, AnalyticError, AnalyticFallback, AnalyticStep, ModeCoefficients,

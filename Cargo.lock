@@ -5767,6 +5767,7 @@ version = "0.0.1"
 dependencies = [
  "naga",
  "pollster",
+ "thessa-microstore-core",
  "thessa-rcbt-core",
  "thessa-rcbt-ffi",
  "thessa-rcbt-large-ffi",

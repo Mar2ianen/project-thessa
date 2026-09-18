@@ -24,10 +24,11 @@
 //! ```
 //!
 //! Decode is uniform: `value = offset + residual` for 8-bit forms, and
-//! `value = offset + round(q * scale / 15)` for 4-bit nibbles `q`.
-//! `Raw8` and `Residual8` are lossless; `Residual4` has a measured error
-//! bounded by `range / 30 + 0.5` per texel (half of one 4-bit step plus
-//! output rounding), i.e. at most 9.0 for a full-range block.
+//! `value = offset + round(q * scale / steps)` for packed codes.
+//! `Raw8` and `Residual8` are lossless; packed forms have measured errors
+//! bounded by `range / (2 * steps) + 0.5` per texel (half of one code step
+//! plus output rounding): at most 9.0 for `Residual4`, 2.6 for
+//! `Residual6`, and 43.0 for `Residual2` on a full-range block.
 //!
 //! # Example
 //!
@@ -42,10 +43,12 @@
 //! ```
 
 pub mod codec;
+pub mod color;
 pub mod fixtures;
 pub mod metrics;
 pub mod pgm;
 pub mod wgsl;
 
 pub use codec::{CodecError, EncodeMode, EncodedBlock, EncodedPage, MicroCodec, ScalarField};
-pub use metrics::{ErrorStats, measure};
+pub use color::{ColorField, ColorPage};
+pub use metrics::{ErrorStats, LinearErrorStats, measure, measure_linear, srgb_to_linear};

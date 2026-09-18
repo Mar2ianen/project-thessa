@@ -42,6 +42,55 @@ pub fn measure(original: &ScalarField, decoded: &ScalarField) -> ErrorStats {
     }
 }
 
+/// Exact sRGB opto-electronic transfer function (IEC 61966-2-1): byte to
+/// linear light in `0..=1`.
+pub fn srgb_to_linear(value: u8) -> f64 {
+    let s = value as f64 / 255.0;
+    if s <= 0.04045 {
+        s / 12.92
+    } else {
+        ((s + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Linear-light error summary over three channels (doc §5.1: the error
+/// metric for color must not be raw byte equality).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LinearErrorStats {
+    /// Worst per-texel-per-channel `|linear(decoded) - linear(original)|`.
+    pub max_abs: f64,
+    /// RMS over all texels and channels.
+    pub rms: f64,
+    /// Compared texel count per channel.
+    pub texels: u64,
+}
+
+/// Measure linear-light decode error across R, G, B planes. Panics on
+/// extent mismatch like [`measure`].
+pub fn measure_linear(original: &[ScalarField; 3], decoded: &[ScalarField; 3]) -> LinearErrorStats {
+    let mut worst = 0.0f64;
+    let mut sum_sq = 0.0f64;
+    let mut texels = 0u64;
+    for (a, b) in original.iter().zip(decoded.iter()) {
+        assert_eq!(
+            (a.width, a.height),
+            (b.width, b.height),
+            "linear error metrics need identical extents"
+        );
+        for (x, y) in a.data.iter().zip(b.data.iter()) {
+            let d = (srgb_to_linear(*x) - srgb_to_linear(*y)).abs();
+            worst = worst.max(d);
+            sum_sq += d * d;
+        }
+        texels += a.data.len() as u64;
+    }
+    LinearErrorStats {
+        max_abs: worst,
+        rms: (sum_sq / texels as f64).sqrt(),
+        texels: texels / 3,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

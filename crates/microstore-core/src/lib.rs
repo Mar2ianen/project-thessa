@@ -47,15 +47,17 @@ pub mod color;
 pub mod fixtures;
 pub mod height;
 pub mod metrics;
+pub mod mips;
 pub mod pgm;
 pub mod residency;
 pub mod wgsl;
 
 pub use codec::{CodecError, EncodeMode, EncodedBlock, EncodedPage, MicroCodec, ScalarField};
-pub use color::{ColorField, ColorPage};
+pub use color::{ColorBudget, ColorField, ColorPage};
 pub use height::{
     HeightBlock, HeightCodec, HeightGrid, HeightMode, HeightPage, HeightVerify, shared_edge_error,
     verify,
 };
 pub use metrics::{ErrorStats, LinearErrorStats, measure, measure_linear, srgb_to_linear};
+pub use mips::{MipChain, downsample_box};
 pub use residency::{CacheTelemetry, DirtyRange, FlushPayload, ResidencyCache, ResidencyError};

@@ -98,7 +98,7 @@ fn main() {
         cache.mark_clean(0).expect("resident");
     }
     let full = pages[0].encoded_bytes();
-    let dirty = {
+    let dirty: usize = {
         cache.insert(0, pages[0].clone());
         cache.mark_clean(0).expect("resident");
         cache.update(0, &field, MODE).expect("resident");
@@ -106,8 +106,11 @@ fn main() {
             thessa_microstore_core::FlushPayload::Incremental { patches } => {
                 patches.iter().map(|r| r.bytes.len()).sum()
             }
-            thessa_microstore_core::FlushPayload::Full { page_bytes, table } => {
-                page_bytes.len() + table.len() * 4
+            thessa_microstore_core::FlushPayload::Relocated { .. } => {
+                panic!("same layout must patch incrementally")
+            }
+            thessa_microstore_core::FlushPayload::Full { .. } => {
+                panic!("same layout must patch incrementally")
             }
         }
     };
@@ -117,8 +120,8 @@ fn main() {
         full as f64 / dirty.max(1) as f64,
     );
 
-    // Rung change (lossless insert, lossy update): layout shifts, so the
-    // flush must fall back to a full page + table reupload.
+    // Rung change (lossless insert, lossy update): same grid, new rung
+    // mix, so the flush relocates changed blocks plus the fresh table.
     let mut cache = ResidencyCache::new(u64::MAX);
     let raw = thessa_microstore_core::EncodedPage::encode(
         &field,
@@ -128,15 +131,21 @@ fn main() {
     cache.mark_clean(0).expect("resident");
     cache.update(0, &field, MODE).expect("resident");
     match cache.flush(0).expect("resident") {
-        thessa_microstore_core::FlushPayload::Full { page_bytes, table } => {
+        thessa_microstore_core::FlushPayload::Relocated {
+            block_patches,
+            table,
+        } => {
+            let relocated: usize =
+                block_patches.iter().map(|p| p.bytes.len()).sum::<usize>() + table.len() * 4;
             println!(
-                "rung-change update: Full fallback {} B page + {} B table",
-                page_bytes.len(),
+                "rung-change update: Relocated {} B blocks + {} B table (full page would be {} B)",
+                relocated - table.len() * 4,
                 table.len() * 4,
+                pages[0].encoded_bytes() + table.len() * 4,
             );
         }
-        thessa_microstore_core::FlushPayload::Incremental { .. } => {
-            println!("rung-change update: ERROR, expected Full fallback");
+        other => {
+            println!("rung-change update: ERROR, expected Relocated, got {other:?}");
         }
     }
 }

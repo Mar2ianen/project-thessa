@@ -172,7 +172,8 @@ pub enum EncodeMode {
 }
 
 /// Cheapest-first lossy ladder for [`EncodeMode::Adaptive`].
-const ADAPTIVE_LADDER: [MicroCodec; 3] = [
+/// Crate-visible: color selection walks the same rungs.
+pub(crate) const ADAPTIVE_LADDER: [MicroCodec; 3] = [
     MicroCodec::Residual2,
     MicroCodec::Residual4,
     MicroCodec::Residual6,
@@ -286,7 +287,9 @@ pub fn blocks_for_extent(extent: u32) -> u32 {
     extent.div_ceil(BLOCK_EDGE)
 }
 
-fn block_texels(field: &ScalarField, bx: u32, by: u32) -> [u8; BLOCK_TEXELS] {
+/// Extract one 4x4 block with edge replication (crate-internal: the color
+/// module reuses block addressing for metric-pluggable selection).
+pub(crate) fn block_texels(field: &ScalarField, bx: u32, by: u32) -> [u8; BLOCK_TEXELS] {
     let mut out = [0u8; BLOCK_TEXELS];
     for y in 0..BLOCK_EDGE {
         for x in 0..BLOCK_EDGE {
@@ -448,7 +451,19 @@ fn decode_packed6(payload: &[u8], index: usize) -> u32 {
     ((lo >> shift) | (hi << (8 - shift))) & 63
 }
 
-fn decode_block(block: &EncodedBlock) -> [u8; BLOCK_TEXELS] {
+/// Encode one block with an explicit codec (crate-internal selection).
+pub(crate) fn encode_block_for(texels: [u8; BLOCK_TEXELS], codec: MicroCodec) -> EncodedBlock {
+    match codec {
+        MicroCodec::Raw8 => encode_raw8(texels),
+        MicroCodec::Residual8 => encode_residual8(texels),
+        MicroCodec::Residual4 => encode_residual4(texels),
+        MicroCodec::Residual6 => encode_residual6(texels),
+        MicroCodec::Residual2 => encode_residual2(texels),
+    }
+}
+
+/// Decode one block (crate-internal: metric-pluggable selection).
+pub(crate) fn decode_block(block: &EncodedBlock) -> [u8; BLOCK_TEXELS] {
     let mut out = [0u8; BLOCK_TEXELS];
     match block.codec {
         MicroCodec::Raw8 => out.copy_from_slice(&block.payload),
@@ -488,6 +503,20 @@ fn decode_block(block: &EncodedBlock) -> [u8; BLOCK_TEXELS] {
 }
 
 impl EncodedPage {
+    /// Assemble a page from pre-encoded blocks (crate-internal: metric-
+    /// pluggable selection in the color module). The grid must match the
+    /// true extent; use [`EncodedPage::validate`] before uploading pages
+    /// built this way.
+    pub(crate) fn from_blocks(width: u32, height: u32, blocks: Vec<EncodedBlock>) -> Self {
+        Self {
+            width,
+            height,
+            blocks_x: blocks_for_extent(width),
+            blocks_y: blocks_for_extent(height),
+            blocks,
+        }
+    }
+
     /// Encode a field with the given mode.
     ///
     /// `Adaptive` walks [`ADAPTIVE_LADDER`] cheapest-first and takes the

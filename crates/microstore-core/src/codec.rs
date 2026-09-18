@@ -14,14 +14,24 @@ pub const BLOCK_TEXELS: usize = 16;
 pub const PAYLOAD_RAW_LEN: usize = 16;
 /// Payload bytes for the packed 4-bit form (two nibbles per byte).
 pub const PAYLOAD_R4_LEN: usize = 8;
+/// Payload bytes for the packed 6-bit form (four 6-bit codes per 3 bytes).
+pub const PAYLOAD_R6_LEN: usize = 12;
+/// Payload bytes for the packed 2-bit form (four 2-bit codes per byte).
+pub const PAYLOAD_R2_LEN: usize = 4;
 /// 4-bit quantizer steps.
 pub const R4_STEPS: u32 = 15;
+/// 6-bit quantizer steps.
+pub const R6_STEPS: u32 = 63;
+/// 2-bit quantizer steps.
+pub const R2_STEPS: u32 = 3;
 
 const MAGIC: [u8; 4] = *b"MICR";
 const VERSION: u8 = 1;
 const TAG_RAW8: u8 = 0;
 const TAG_RESIDUAL8: u8 = 1;
 const TAG_RESIDUAL4: u8 = 2;
+const TAG_RESIDUAL6: u8 = 3;
+const TAG_RESIDUAL2: u8 = 4;
 
 /// One scalar `u8` channel, row-major.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,26 +75,39 @@ impl ScalarField {
 }
 
 /// Block codec tag.
+///
+/// Wire tags are stable: `0` Raw8, `1` Residual8, `2` Residual4 (Phase A),
+/// `3` Residual6, `4` Residual2 (Phase C). The version stays 1 because the
+/// extension only adds tags the old parser rejects explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MicroCodec {
-    /// 16 verbatim bytes. Lossless baseline (doc §16 "raw baseline").
+    /// 16 verbatim bytes. Lossless baseline (doc §16 "raw baseline"), and
+    /// the adaptive pathological-block fallback (doc §4).
     Raw8,
     /// `offset = min` plus 16 `value - min` bytes. Lossless, with the same
-    /// offset-based decode shape as [`MicroCodec::Residual4`] so a future
+    /// offset-based decode shape as the packed forms so a future
     /// sample-time decoder can share one path.
     Residual8,
     /// `offset = min`, `scale = max - min`, plus 16 packed 4-bit residuals.
     /// Lossy; per-texel error is at most `scale / 30 + 0.5`.
     Residual4,
+    /// `offset = min`, `scale = max - min`, plus 16 packed 6-bit residuals
+    /// (12 bytes). Lossy; per-texel error is at most `scale / 126 + 0.5`.
+    Residual6,
+    /// `offset = min`, `scale = max - min`, plus 16 packed 2-bit residuals
+    /// (4 bytes). Lossy; per-texel error is at most `scale / 6 + 0.5`.
+    Residual2,
 }
 
 impl MicroCodec {
-    /// Wire tag byte (`0` Raw8, `1` Residual8, `2` Residual4).
+    /// Wire tag byte.
     pub fn tag(self) -> u8 {
         match self {
             MicroCodec::Raw8 => TAG_RAW8,
             MicroCodec::Residual8 => TAG_RESIDUAL8,
             MicroCodec::Residual4 => TAG_RESIDUAL4,
+            MicroCodec::Residual6 => TAG_RESIDUAL6,
+            MicroCodec::Residual2 => TAG_RESIDUAL2,
         }
     }
 
@@ -93,6 +116,8 @@ impl MicroCodec {
             TAG_RAW8 => Ok(MicroCodec::Raw8),
             TAG_RESIDUAL8 => Ok(MicroCodec::Residual8),
             TAG_RESIDUAL4 => Ok(MicroCodec::Residual4),
+            TAG_RESIDUAL6 => Ok(MicroCodec::Residual6),
+            TAG_RESIDUAL2 => Ok(MicroCodec::Residual2),
             other => Err(CodecError::BadCodecTag(other)),
         }
     }
@@ -102,12 +127,24 @@ impl MicroCodec {
         match self {
             MicroCodec::Raw8 | MicroCodec::Residual8 => PAYLOAD_RAW_LEN,
             MicroCodec::Residual4 => PAYLOAD_R4_LEN,
+            MicroCodec::Residual6 => PAYLOAD_R6_LEN,
+            MicroCodec::Residual2 => PAYLOAD_R2_LEN,
         }
     }
 
     /// Whether decode reproduces the input bit-exactly.
     pub fn is_lossless(self) -> bool {
-        !matches!(self, MicroCodec::Residual4)
+        matches!(self, MicroCodec::Raw8 | MicroCodec::Residual8)
+    }
+
+    /// Quantizer steps (`0` for the verbatim forms).
+    pub fn steps(self) -> u32 {
+        match self {
+            MicroCodec::Raw8 | MicroCodec::Residual8 => 0,
+            MicroCodec::Residual4 => R4_STEPS,
+            MicroCodec::Residual6 => R6_STEPS,
+            MicroCodec::Residual2 => R2_STEPS,
+        }
     }
 }
 
@@ -118,15 +155,28 @@ pub enum EncodeMode {
     Raw8,
     /// Every block as offset + 8-bit residuals (lossless).
     Residual8,
-    /// Every block as offset + scale + packed nibbles (lossy).
+    /// Every block as offset + scale + packed 4-bit nibbles (lossy).
     Residual4,
-    /// Per block: `Residual4` when its max error fits `max_abs_error`,
-    /// otherwise lossless `Residual8`. Negative budgets clamp to zero.
+    /// Every block as offset + scale + packed 6-bit codes (lossy).
+    Residual6,
+    /// Every block as offset + scale + packed 2-bit codes (lossy).
+    Residual2,
+    /// Per block (doc §4, cheapest first): `Residual2`, then `Residual4`,
+    /// then `Residual6`, each when its worst error fits `max_abs_error`;
+    /// otherwise verbatim `Raw8`. Negative/NaN budgets clamp to zero
+    /// (strict), `+inf` takes the cheapest lossy form everywhere.
     Adaptive {
         /// Allowed per-texel absolute error in `u8` levels.
         max_abs_error: f64,
     },
 }
+
+/// Cheapest-first lossy ladder for [`EncodeMode::Adaptive`].
+const ADAPTIVE_LADDER: [MicroCodec; 3] = [
+    MicroCodec::Residual2,
+    MicroCodec::Residual4,
+    MicroCodec::Residual6,
+];
 
 /// One encoded 4x4 block: header plus payload bytes.
 ///
@@ -270,26 +320,41 @@ fn encode_residual8(texels: [u8; BLOCK_TEXELS]) -> EncodedBlock {
     }
 }
 
+/// Quantize one texel against `[min, min + range]` to `steps` levels.
+///
+/// Returns the code in `0..=steps` minimizing
+/// `|q * range / steps - (v - min)|` with ties going up (deterministic).
+fn quantize(value: u8, min: u8, range: u32, steps: u32) -> u32 {
+    debug_assert!(steps > 0);
+    if range == 0 {
+        return 0;
+    }
+    let v = (value - min) as u32;
+    // round(steps * v / range), clamped to the code range.
+    ((steps * v + range / 2) / range).min(steps)
+}
+
+/// Decode one code with integer rounding: `min + round(q * range / steps)`.
+fn dequantize(q: u32, min: u8, range: u32, steps: u32) -> u8 {
+    debug_assert!(steps > 0);
+    if range == 0 {
+        return min;
+    }
+    (min as u32 + (q * range + steps / 2) / steps).min(255) as u8
+}
+
 /// Quantize one texel to 4 bits against `[min, min + range]`.
 ///
 /// Returns the nibble `q` in `0..=15` minimizing `|q * range / 15 - (v - min)|`
 /// with ties going up (deterministic).
 fn quantize_nibble(value: u8, min: u8, range: u32) -> u8 {
-    if range == 0 {
-        return 0;
-    }
-    let v = (value - min) as u32;
-    // round(15 * v / range), clamped to the nibble range.
-    ((15 * v + range / 2) / range).min(15) as u8
+    quantize(value, min, range, R4_STEPS) as u8
 }
 
 /// Decode one 4-bit nibble with integer rounding:
 /// `min + round(q * range / 15)`.
 fn dequantize_nibble(q: u8, min: u8, range: u32) -> u8 {
-    if range == 0 {
-        return min;
-    }
-    (min as u32 + (q as u32 * range + R4_STEPS / 2) / R4_STEPS).min(255) as u8
+    dequantize(q as u32, min, range, R4_STEPS)
 }
 
 fn encode_residual4(texels: [u8; BLOCK_TEXELS]) -> EncodedBlock {
@@ -312,17 +377,65 @@ fn encode_residual4(texels: [u8; BLOCK_TEXELS]) -> EncodedBlock {
     }
 }
 
-/// Worst per-texel absolute error of the 4-bit form on these texels.
-fn residual4_block_error(texels: [u8; BLOCK_TEXELS]) -> f64 {
+/// Pack sixteen 6-bit codes into 12 bytes, little-endian bit stream:
+/// texel `i` occupies bits `[6i, 6i + 6)`.
+fn encode_residual6(texels: [u8; BLOCK_TEXELS]) -> EncodedBlock {
+    let (min, max) = block_min_max(texels);
+    let range = (max - min) as u32;
+    let mut bits: u128 = 0;
+    for (i, v) in texels.iter().enumerate() {
+        bits |= (quantize(*v, min, range, R6_STEPS) as u128) << (i * 6);
+    }
+    let mut payload = [0u8; PAYLOAD_RAW_LEN];
+    payload[..PAYLOAD_R6_LEN].copy_from_slice(&bits.to_le_bytes()[..PAYLOAD_R6_LEN]);
+    EncodedBlock {
+        codec: MicroCodec::Residual6,
+        offset: min,
+        scale: range as u8,
+        payload,
+    }
+}
+
+/// Pack sixteen 2-bit codes into 4 bytes: texel `i` occupies bits
+/// `[2i, 2i + 2)` of byte `i / 4`.
+fn encode_residual2(texels: [u8; BLOCK_TEXELS]) -> EncodedBlock {
+    let (min, max) = block_min_max(texels);
+    let range = (max - min) as u32;
+    let mut payload = [0u8; PAYLOAD_RAW_LEN];
+    for (i, v) in texels.iter().enumerate() {
+        payload[i / 4] |= (quantize(*v, min, range, R2_STEPS) as u8) << ((i % 4) * 2);
+    }
+    EncodedBlock {
+        codec: MicroCodec::Residual2,
+        offset: min,
+        scale: range as u8,
+        payload,
+    }
+}
+
+/// Worst per-texel absolute error of one lossy codec on these texels.
+fn lossy_block_error(texels: [u8; BLOCK_TEXELS], codec: MicroCodec) -> f64 {
+    let steps = codec.steps();
+    debug_assert!(steps > 0);
     let (min, max) = block_min_max(texels);
     let range = (max - min) as u32;
     let mut worst = 0u32;
     for v in texels {
-        let q = quantize_nibble(v, min, range);
-        let got = dequantize_nibble(q, min, range);
+        let q = quantize(v, min, range, steps);
+        let got = dequantize(q, min, range, steps);
         worst = worst.max(v.abs_diff(got) as u32);
     }
     worst as f64
+}
+
+fn decode_packed6(payload: &[u8], index: usize) -> u32 {
+    // 6-bit code spanning at most two bytes of the little-endian stream.
+    let bit = index * 6;
+    let byte = bit / 8;
+    let shift = bit % 8;
+    let lo = payload[byte] as u32;
+    let hi = payload.get(byte + 1).copied().unwrap_or(0) as u32;
+    ((lo >> shift) | (hi << (8 - shift))) & 63
 }
 
 fn decode_block(block: &EncodedBlock) -> [u8; BLOCK_TEXELS] {
@@ -342,6 +455,24 @@ fn decode_block(block: &EncodedBlock) -> [u8; BLOCK_TEXELS] {
                 *slot = dequantize_nibble(q, block.offset, range);
             }
         }
+        MicroCodec::Residual6 => {
+            let range = block.scale as u32;
+            for (i, slot) in out.iter_mut().enumerate() {
+                *slot = dequantize(
+                    decode_packed6(&block.payload, i),
+                    block.offset,
+                    range,
+                    R6_STEPS,
+                );
+            }
+        }
+        MicroCodec::Residual2 => {
+            let range = block.scale as u32;
+            for (i, slot) in out.iter_mut().enumerate() {
+                let q = (block.payload[i / 4] >> ((i % 4) * 2)) & 0x03;
+                *slot = dequantize(q as u32, block.offset, range, R2_STEPS);
+            }
+        }
     }
     out
 }
@@ -349,8 +480,9 @@ fn decode_block(block: &EncodedBlock) -> [u8; BLOCK_TEXELS] {
 impl EncodedPage {
     /// Encode a field with the given mode.
     ///
-    /// `Adaptive` picks `Residual4` per block when the block's worst error
-    /// fits the budget, else lossless `Residual8`.
+    /// `Adaptive` walks [`ADAPTIVE_LADDER`] cheapest-first and takes the
+    /// first codec whose worst block error fits the budget, else verbatim
+    /// `Raw8` (doc §4 pathological fallback).
     pub fn encode(field: &ScalarField, mode: EncodeMode) -> Self {
         let blocks_x = blocks_for_extent(field.width);
         let blocks_y = blocks_for_extent(field.height);
@@ -362,14 +494,24 @@ impl EncodedPage {
                     EncodeMode::Raw8 => encode_raw8(texels),
                     EncodeMode::Residual8 => encode_residual8(texels),
                     EncodeMode::Residual4 => encode_residual4(texels),
+                    EncodeMode::Residual6 => encode_residual6(texels),
+                    EncodeMode::Residual2 => encode_residual2(texels),
                     EncodeMode::Adaptive { max_abs_error } => {
                         // `f64::max` maps negative to 0.0 and NaN to 0.0
                         // (strict), while +inf stays infinite (all lossy).
                         let budget = max_abs_error.max(0.0);
-                        if residual4_block_error(texels) <= budget {
-                            encode_residual4(texels)
-                        } else {
-                            encode_residual8(texels)
+                        let mut pick = None;
+                        for codec in ADAPTIVE_LADDER {
+                            if lossy_block_error(texels, codec) <= budget {
+                                pick = Some(codec);
+                                break;
+                            }
+                        }
+                        match pick {
+                            Some(MicroCodec::Residual2) => encode_residual2(texels),
+                            Some(MicroCodec::Residual4) => encode_residual4(texels),
+                            Some(MicroCodec::Residual6) => encode_residual6(texels),
+                            _ => encode_raw8(texels),
                         }
                     }
                 };
@@ -426,9 +568,26 @@ impl EncodedPage {
         self.encoded_bytes() as f64 / (self.width as f64 * self.height as f64)
     }
 
-    /// Codec histogram over blocks, indexable by [`MicroCodec`] tag.
-    pub fn codec_histogram(&self) -> [usize; 3] {
-        let mut hist = [0usize; 3];
+    /// Metadata overhead split (doc §18 Phase C: "measure block metadata
+    /// overhead"): `(header_bytes, payload_bytes)`. Headers are the page
+    /// header plus one 3-byte block header per block; everything else is
+    /// payload.
+    pub fn overhead_bytes(&self) -> (usize, usize) {
+        let header = Self::HEADER_LEN + self.blocks.len() * Self::BLOCK_HEADER_LEN;
+        let total = self.encoded_bytes();
+        (header, total - header)
+    }
+
+    /// Fraction of wire bytes spent on headers rather than residuals.
+    pub fn header_fraction(&self) -> f64 {
+        let (header, payload) = self.overhead_bytes();
+        header as f64 / (header + payload) as f64
+    }
+
+    /// Codec histogram over blocks, indexable by [`MicroCodec::tag`]
+    /// (`[Raw8, Residual8, Residual4, Residual6, Residual2]`).
+    pub fn codec_histogram(&self) -> [usize; 5] {
+        let mut hist = [0usize; 5];
         for block in &self.blocks {
             hist[block.codec.tag() as usize] += 1;
         }
@@ -526,6 +685,8 @@ mod tests {
             EncodeMode::Raw8,
             EncodeMode::Residual8,
             EncodeMode::Residual4,
+            EncodeMode::Residual6,
+            EncodeMode::Residual2,
             EncodeMode::Adaptive { max_abs_error: 2.0 },
         ]
     }
@@ -570,22 +731,55 @@ mod tests {
     }
 
     #[test]
-    fn residual4_error_bounded_on_adversarial() {
-        // Full-range checker is the worst case: range 255 everywhere.
+    fn packed_error_bounds_hold_on_adversarial() {
+        // Full-range checker is the worst case for every packed form.
         let field = fixtures::checker(32, 32, 1);
-        let page = EncodedPage::encode(&field, EncodeMode::Residual4);
-        let stats = measure(&field, &page.decode());
-        // Half of one 4-bit step (255/30) plus output rounding.
-        assert!(
-            stats.max_abs <= 9.0,
-            "worst Residual4 error {} > 9.0",
-            stats.max_abs
-        );
-        // And the bound holds on every other fixture too.
-        for (name, field) in fixtures::all(64, 64) {
-            let page = EncodedPage::encode(&field, EncodeMode::Residual4);
+        for (mode, bound) in [
+            (EncodeMode::Residual4, 9.0),
+            (EncodeMode::Residual6, 2.6),
+            (EncodeMode::Residual2, 43.0),
+        ] {
+            let page = EncodedPage::encode(&field, mode);
             let stats = measure(&field, &page.decode());
-            assert!(stats.max_abs <= 9.0, "{name}: {}", stats.max_abs);
+            assert!(
+                stats.max_abs <= bound,
+                "{mode:?}: worst error {} > {bound}",
+                stats.max_abs
+            );
+        }
+        // And the bounds hold on every other fixture too.
+        for (name, field) in fixtures::all(64, 64) {
+            for (mode, bound) in [
+                (EncodeMode::Residual4, 9.0),
+                (EncodeMode::Residual6, 2.6),
+                (EncodeMode::Residual2, 43.0),
+            ] {
+                let page = EncodedPage::encode(&field, mode);
+                let stats = measure(&field, &page.decode());
+                assert!(stats.max_abs <= bound, "{name} {mode:?}: {}", stats.max_abs);
+            }
+        }
+    }
+
+    #[test]
+    fn quantizer_error_bound_is_tight_for_all_ranges() {
+        // Exhaustive per-(value, range) check of the documented bound
+        // `range / (2 * steps) + 0.5` behind every packed codec.
+        for (steps, divisor) in [(R4_STEPS, 30.0), (R6_STEPS, 126.0), (R2_STEPS, 6.0)] {
+            for range in [1u32, 7, 63, 200, 255] {
+                for v in 0..=255u8 {
+                    let min = 0u8;
+                    let value = ((v as u32).min(range)) as u8;
+                    let q = quantize(value, min, range, steps);
+                    assert!(q <= steps);
+                    let got = dequantize(q, min, range, steps);
+                    let err = value.abs_diff(got) as f64;
+                    assert!(
+                        err <= range as f64 / divisor + 0.5 + 1e-9,
+                        "steps={steps} range={range} v={value} err={err}"
+                    );
+                }
+            }
         }
     }
 
@@ -593,7 +787,7 @@ mod tests {
     fn residual4_uniform_block_is_exact_and_compact() {
         let field = fixtures::uniform(128, 128, 200);
         let page = EncodedPage::encode(&field, EncodeMode::Residual4);
-        assert_eq!(page.codec_histogram(), [0, 0, 1024]);
+        assert_eq!(page.codec_histogram(), [0, 0, 1024, 0, 0]);
         let stats = measure(&field, &page.decode());
         assert_eq!(stats.max_abs, 0.0);
         // Header (21 B) + 1024 blocks x (3 B header + 8 B payload).
@@ -603,26 +797,68 @@ mod tests {
 
     #[test]
     fn adaptive_zero_budget_selects_lossless_on_texture() {
-        // White noise never lands exactly on the 4-bit grid, so every
-        // block misses a zero budget and falls back to Residual8.
-        // (A two-level checker would be exact in 4 bits and is the wrong
-        // probe for the fallback path.)
+        // White noise never lands exactly on any packed grid, so every
+        // block misses a zero budget and falls back to verbatim Raw8.
         let noise = fixtures::noise(16, 16, 0xABCD);
         let page = EncodedPage::encode(&noise, EncodeMode::Adaptive { max_abs_error: 0.0 });
-        assert_eq!(page.codec_histogram(), [0, 16, 0]);
+        assert_eq!(page.codec_histogram(), [16, 0, 0, 0, 0]);
         assert_eq!(page.decode(), noise);
 
+        // A flat block is exact in 2 bits, the cheapest rung.
         let flat = fixtures::uniform(16, 16, 90);
         let page = EncodedPage::encode(&flat, EncodeMode::Adaptive { max_abs_error: 0.0 });
-        assert_eq!(page.codec_histogram(), [0, 0, 16]);
+        assert_eq!(page.codec_histogram(), [0, 0, 0, 0, 16]);
         assert_eq!(page.decode(), flat);
     }
 
     #[test]
-    fn adaptive_huge_budget_selects_residual4_everywhere() {
+    fn adaptive_huge_budget_selects_cheapest_everywhere() {
         let checker = fixtures::checker(16, 16, 1);
         let page = EncodedPage::encode(&checker, EncodeMode::Adaptive { max_abs_error: 1e9 });
-        assert_eq!(page.codec_histogram(), [0, 0, 16]);
+        assert_eq!(page.codec_histogram(), [0, 0, 0, 0, 16]);
+    }
+
+    #[test]
+    fn adaptive_global_error_never_exceeds_finite_budget() {
+        // Every block is either within budget (packed rungs) or exact
+        // (Raw8 fallback), so the page error is bounded by construction.
+        for (_, field) in fixtures::all(40, 32) {
+            for budget in [0.0, 1.0, 2.0, 5.0, 40.0] {
+                let page = EncodedPage::encode(
+                    &field,
+                    EncodeMode::Adaptive {
+                        max_abs_error: budget,
+                    },
+                );
+                let stats = measure(&field, &page.decode());
+                assert!(
+                    stats.max_abs <= budget,
+                    "budget {budget}: error {}",
+                    stats.max_abs
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn adaptive_bytes_shrink_monotonically_with_budget() {
+        // Looser budgets can only move blocks to cheaper rungs.
+        let noise = fixtures::noise(32, 32, 0x5EED);
+        let mut prev = usize::MAX;
+        for budget in [0.0, 1.0, 2.0, 5.0, 10.0, 50.0, 1e9] {
+            let page = EncodedPage::encode(
+                &noise,
+                EncodeMode::Adaptive {
+                    max_abs_error: budget,
+                },
+            );
+            assert!(
+                page.encoded_bytes() <= prev,
+                "budget {budget}: {} > {prev}",
+                page.encoded_bytes()
+            );
+            prev = page.encoded_bytes();
+        }
     }
 
     #[test]
@@ -636,10 +872,10 @@ mod tests {
         };
         let zero = EncodeMode::Adaptive { max_abs_error: 0.0 };
         // Negative and NaN budgets behave as zero (strict): textured blocks
-        // fall back to lossless.
+        // fall back to verbatim.
         assert_eq!(
             EncodedPage::encode(&texture, strict).codec_histogram(),
-            [0, 4, 0]
+            [4, 0, 0, 0, 0]
         );
         assert_eq!(
             EncodedPage::encode(&texture, strict).codec_histogram(),
@@ -654,14 +890,14 @@ mod tests {
         };
         assert_eq!(
             EncodedPage::encode(&texture, inf).codec_histogram(),
-            [0, 0, 4]
+            [0, 0, 0, 0, 4]
         );
     }
 
     #[test]
     fn adaptive_mixed_page_histogram() {
-        // Left half uniform (Residual4), right half white noise (Residual8
-        // at zero budget): 8x8 field -> 2x2 blocks.
+        // Left half constant (cheapest Residual2 rung at zero budget),
+        // right half white noise (verbatim Raw8): 8x8 field -> 2x2 blocks.
         let noisy = fixtures::noise(8, 8, 0x1234);
         let mut data = vec![0u8; 64];
         for y in 0..8 {
@@ -671,7 +907,7 @@ mod tests {
         }
         let field = ScalarField::new(8, 8, data).unwrap();
         let page = EncodedPage::encode(&field, EncodeMode::Adaptive { max_abs_error: 0.0 });
-        assert_eq!(page.codec_histogram(), [0, 2, 2]);
+        assert_eq!(page.codec_histogram(), [2, 0, 0, 0, 2]);
     }
 
     #[test]
@@ -830,7 +1066,7 @@ mod tests {
         let block = encode_residual4(texels);
         assert_eq!((block.offset, block.scale), (77, 0));
         assert_eq!(decode_block(&block), texels);
-        assert_eq!(residual4_block_error(texels), 0.0);
+        assert_eq!(lossy_block_error(texels, MicroCodec::Residual4), 0.0);
     }
 
     #[test]
@@ -838,21 +1074,74 @@ mod tests {
         assert!(MicroCodec::Raw8.is_lossless());
         assert!(MicroCodec::Residual8.is_lossless());
         assert!(!MicroCodec::Residual4.is_lossless());
+        assert!(!MicroCodec::Residual6.is_lossless());
+        assert!(!MicroCodec::Residual2.is_lossless());
         assert_eq!(MicroCodec::Raw8.payload_len(), 16);
         assert_eq!(MicroCodec::Residual8.payload_len(), 16);
         assert_eq!(MicroCodec::Residual4.payload_len(), 8);
+        assert_eq!(MicroCodec::Residual6.payload_len(), 12);
+        assert_eq!(MicroCodec::Residual2.payload_len(), 4);
+        assert_eq!(MicroCodec::Raw8.steps(), 0);
+        assert_eq!(MicroCodec::Residual8.steps(), 0);
+        assert_eq!(MicroCodec::Residual4.steps(), 15);
+        assert_eq!(MicroCodec::Residual6.steps(), 63);
+        assert_eq!(MicroCodec::Residual2.steps(), 3);
         for (tag, codec) in [
             (0, MicroCodec::Raw8),
             (1, MicroCodec::Residual8),
             (2, MicroCodec::Residual4),
+            (3, MicroCodec::Residual6),
+            (4, MicroCodec::Residual2),
         ] {
             assert_eq!(MicroCodec::from_tag(tag), Ok(codec));
             assert_eq!(codec.tag(), tag);
         }
+        // Tags stop at 4: the next tag is a future codec, not a silent alias.
+        assert_eq!(MicroCodec::from_tag(5), Err(CodecError::BadCodecTag(5)));
         assert_eq!(blocks_for_extent(1), 1);
         assert_eq!(blocks_for_extent(4), 1);
         assert_eq!(blocks_for_extent(5), 2);
         assert_eq!(blocks_for_extent(128), 32);
+    }
+
+    #[test]
+    fn residual6_bit_layout_spans_byte_pairs() {
+        // Two-level {0, 63} block: codes alternate 0 and 63 exactly.
+        let mut texels = [0u8; BLOCK_TEXELS];
+        for (i, v) in texels.iter_mut().enumerate() {
+            *v = if i % 2 == 0 { 0 } else { 63 };
+        }
+        let block = encode_residual6(texels);
+        assert_eq!((block.offset, block.scale), (0, 63));
+        // Texel 0: bits 0..6 = 0; texel 1: bits 6..12 = all ones.
+        assert_eq!(block.payload[0], 0xC0);
+        assert_eq!(block.payload[1], 0x0F);
+        assert_eq!(decode_block(&block), texels);
+    }
+
+    #[test]
+    fn residual2_byte_layout_packs_four_codes() {
+        // Levels {0, 85, 170, 255} quantize to codes 0..=3 exactly.
+        let texels: [u8; BLOCK_TEXELS] = std::array::from_fn(|i| [0, 85, 170, 255][i % 4]);
+        let block = encode_residual2(texels);
+        assert_eq!((block.offset, block.scale), (0, 255));
+        // Byte 0: q0 | q1<<2 | q2<<4 | q3<<6 = 0xE4, repeated.
+        assert_eq!(&block.payload[..4], &[0xE4; 4]);
+        assert_eq!(decode_block(&block), texels);
+    }
+
+    #[test]
+    fn overhead_split_accounts_headers_and_payload() {
+        // 8x8 uniform Residual4: 21 B page header + 4 x 3 B block headers
+        // = 33 B metadata over 4 x 8 B payload.
+        let field = fixtures::uniform(8, 8, 3);
+        let page = EncodedPage::encode(&field, EncodeMode::Residual4);
+        assert_eq!(page.overhead_bytes(), (33, 32));
+        assert!((page.header_fraction() - 33.0 / 65.0).abs() < 1e-12);
+        // Metadata share shrinks as blocks get denser: Raw8 carries more
+        // payload per the same 3-byte header.
+        let raw = EncodedPage::encode(&field, EncodeMode::Raw8);
+        assert!(raw.header_fraction() < page.header_fraction());
     }
 
     #[test]

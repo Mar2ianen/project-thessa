@@ -57,6 +57,12 @@ fn decode_page(@builtin(global_invocation_id) gid: vec3<u32>) {
     let block = by * params.blocks_x + bx;
     let base = block_base[block];
     let tag = load_byte(base);
+    if (tag > 4u) {
+        // Unreachable through the CPU parser (tags 0..=4 only); a visual
+        // corruption sentinel instead of silent garbage.
+        out_texels[texel] = 0xDEADu;
+        return;
+    }
     let offset = load_byte(base + 1u);
     var value = 0u;
     if (tag == 0u) {
@@ -65,7 +71,7 @@ fn decode_page(@builtin(global_invocation_id) gid: vec3<u32>) {
     } else if (tag == 1u) {
         // Residual8: offset + stored (value - offset).
         value = offset + load_byte(base + 3u + ly * 4u + lx);
-    } else {
+    } else if (tag == 2u) {
         // Residual4: offset + round(q * scale / 15). Integer math
         // mirrors the CPU reference decoder exactly.
         let scale = load_byte(base + 2u);
@@ -76,6 +82,25 @@ fn decode_page(@builtin(global_invocation_id) gid: vec3<u32>) {
             q = packed >> 4u;
         }
         value = offset + (q * scale + 7u) / 15u;
+    } else if (tag == 3u) {
+        // Residual6: 12 payload bytes, texel i occupies bits [6i, 6i+6)
+        // of the little-endian bit stream.
+        let scale = load_byte(base + 2u);
+        let cell = ly * 4u + lx;
+        let bit = cell * 6u;
+        let byte = bit / 8u;
+        let shift = bit % 8u;
+        let lo = load_byte(base + 3u + byte);
+        let hi = load_byte(base + 3u + byte + 1u);
+        let q = ((lo >> shift) | (hi << (8u - shift))) & 63u;
+        value = offset + (q * scale + 31u) / 63u;
+    } else {
+        // Residual2: 4 payload bytes, texel i occupies bits [2i, 2i+2).
+        let scale = load_byte(base + 2u);
+        let cell = ly * 4u + lx;
+        let packed = load_byte(base + 3u + cell / 4u);
+        let q = (packed >> ((cell % 4u) * 2u)) & 3u;
+        value = offset + (q * scale + 1u) / 3u;
     }
     out_texels[texel] = min(value, 255u);
 }
@@ -142,7 +167,9 @@ mod tests {
             for mode in [
                 EncodeMode::Raw8,
                 EncodeMode::Residual8,
+                EncodeMode::Residual6,
                 EncodeMode::Residual4,
+                EncodeMode::Residual2,
                 EncodeMode::Adaptive { max_abs_error: 1.5 },
             ] {
                 let page = EncodedPage::encode(&field, mode);

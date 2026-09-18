@@ -2,6 +2,24 @@
 
 Status: **design / prototype target**.
 
+Implementation status (branch `feat/microstorage-phase-a`):
+
+- Phase A done in `thessa-microstore-core`: scalar 4x4 codec (Raw8,
+  Residual8/4), deterministic wire format, error metrics, 7 seeded
+  fixtures, PGM comparison dumps.
+- Phase B done in `thessa-microstore-core::wgsl` (sample-time WGSL
+  decoder) + `thessa-rcbt-wgpu::microstore` (upload + compute decode,
+  GPU==CPU parity on all fixtures); the RGBA material path is untouched.
+- Phase C done in `thessa-microstore-core`: Residual6/Residual2,
+  cheapest-first adaptive ladder (2/4/6-bit, Raw8 fallback), per-channel
+  color pages with linear-light error, header/payload overhead
+  accounting, 128/256 extents in benches.
+- Measured so far (128x128): R4 0.689 B/tex (err <= 8), R6 0.938 B/tex
+  (err <= 2.6), R2 0.438 B/tex (err <= 43, headers 43% of bytes);
+  adaptive@2.0 holds the budget by construction; GPU decode ~0.1-0.3 ms
+  per page on a Radeon 780M; 4 adaptive channels ~= 0.94-1.19x one RGBA
+  page upload — the density win lands with higher texel counts (Phase D).
+
 This document defines a reusable microscaled storage layer for render-side and
 streamed surface data. The immediate target is terrain material pages. Height
 pages are a secondary target after the codec and error metrics are proven on

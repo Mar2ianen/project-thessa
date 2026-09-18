@@ -270,6 +270,8 @@ mod tests {
                 EncodeMode::Raw8,
                 EncodeMode::Residual8,
                 EncodeMode::Residual4,
+                EncodeMode::Residual6,
+                EncodeMode::Residual2,
                 EncodeMode::Adaptive { max_abs_error: 2.0 },
             ] {
                 let page = EncodedPage::encode(&field, mode);

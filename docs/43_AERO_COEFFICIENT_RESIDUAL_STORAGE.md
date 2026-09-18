@@ -8,8 +8,9 @@ Implementation status (branch `feat/aero-residual-prototype`):
   `AeroCoefficientTable`;
 - 4x4 Mach/alpha tiles use a bilinear f64 corner predictor with independent
   per-coefficient residual scales;
-- cheapest-first `Residual8 -> Residual16 -> Raw64` selection is measured
-  against explicit per-coefficient max-absolute-error budgets;
+- cheapest-first `Residual4 -> Residual6 -> Residual8 -> Residual16 -> Raw64`
+  selection is measured against explicit per-coefficient max-absolute-error
+  budgets;
 - payload is contiguous across tiles; edge-partial tiles and canonical
   clamping/bilinear sampling semantics are covered;
 - `sample_with_error` returns a local interpolation-safe coefficient envelope
@@ -22,8 +23,8 @@ Implementation status (branch `feat/aero-residual-prototype`):
   decode/interpolation overhead on a 257x257 synthetic stall/transonic field.
 
 Still open: integration into `PanelAeroModel`, physical-budget-driven codec
-selection, lower-bit R4/R6 rungs, AVX2/AVX-512 fused decode, real VLM/CFD
-fixtures, and higher-dimensional coefficient fields.
+selection, AVX2/AVX-512 fused decode, real VLM/CFD fixtures, and
+higher-dimensional coefficient fields.
 
 This document applies the same local-reference / bounded-residual principle used
 by surface microstorage and ephemeris residual storage to aerodynamic coefficient

@@ -34,8 +34,7 @@ pub use aero::{
 };
 pub use aero_residual::{
     AERO_RESIDUAL_TILE_EDGE, AeroCoefficientError, AeroPhysicalBudget, AeroPhysicalErrorBound,
-    AeroResidualBudget, AeroResidualCodec, AeroResidualStats, AeroResidualTable,
-    AeroResidualTile,
+    AeroResidualBudget, AeroResidualCodec, AeroResidualStats, AeroResidualTable, AeroResidualTile,
 };
 pub use affine_propagator::{
     AffinePropagator, AnalyticError, AnalyticFallback, AnalyticStep, ModeCoefficients,

@@ -16,6 +16,8 @@ use thessa_flight_control::{
 };
 use thessa_sim_core::SimTime;
 
+pub mod ascent;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct NodeId(pub u32);
 
@@ -248,6 +250,9 @@ pub enum GraphNodeConfig {
     Wait {
         condition: WaitCondition,
     },
+    AscentPhase {
+        phase: ascent::AscentPhase,
+    },
 }
 
 impl GraphNodeConfig {
@@ -264,6 +269,14 @@ impl GraphNodeConfig {
             }
             Self::Demand { demand } => demand.validate().map_err(|error| error.to_string()),
             Self::Wait { condition } => condition.validate().map_err(|error| error.to_string()),
+            Self::AscentPhase { phase } => match phase {
+                ascent::AscentPhase::VerticalRise { throttle }
+                    if !throttle.is_finite() || !(0.0..=1.2).contains(throttle) =>
+                {
+                    Err("ascent vertical-rise throttle must be in [0, 1.2]".into())
+                }
+                _ => Ok(()),
+            },
             _ => Ok(()),
         }
     }

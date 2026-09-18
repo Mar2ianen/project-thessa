@@ -19,6 +19,11 @@ Implementation status (branch `feat/microstorage-phase-a`):
   adaptive@2.0 holds the budget by construction; GPU decode ~0.1-0.3 ms
   per page on a Radeon 780M; 4 adaptive channels ~= 0.94-1.19x one RGBA
   page upload — the density win lands with higher texel counts (Phase D).
+- Phase D done in `thessa-microstore-core::residency`: key-addressed
+  stable slots, dirty-block upload ranges, LRU eviction by encoded byte
+  cost, telemetry (resident bytes/texels, hit rate, texels/MiB).
+  Measured: one-texel update uploads 15 B vs 3861 B full page (257x);
+  cyclic scan over 4x cache converges to exactly 0.25 hit rate.
 
 This document defines a reusable microscaled storage layer for render-side and
 streamed surface data. The immediate target is terrain material pages. Height

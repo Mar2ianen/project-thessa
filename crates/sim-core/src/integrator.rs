@@ -1366,10 +1366,278 @@ fn normalized_error(
 }
 
 fn next_step(step_s: f64, error: f64, max_step_s: f64) -> f64 {
+    next_step_order(step_s, error, max_step_s, 5.0)
+}
+
+/// Dormand–Prince 8(5,3) tableau (Hairer & Wanner; numeric values as in
+/// SciPy's BSD-licensed `dop853_coefficients` — the tableau is a
+/// mathematical fact, the stepping code around it is ours). 12 stages
+/// with FSAL: stage 12 evaluated at the 8th-order endpoint doubles as
+/// the next step's first stage. `E5` estimates the 8th-vs-5th difference
+/// for step control; stiffness detection and dense output are omitted
+/// (endpoint-only propagation). Rows list `(stage, coefficient)` pairs.
+const DOP853_C: [f64; 12] = [
+    0.0,
+    0.05260015195876773,
+    0.0789002279381516,
+    0.1183503419072274,
+    0.2816496580927726,
+    0.3333333333333333,
+    0.25,
+    0.3076923076923077,
+    0.6512820512820513,
+    0.6,
+    0.8571428571428571,
+    1.0,
+];
+
+const DOP853_A1: [(usize, f64); 1] = [(0, 0.05260015195876773)];
+const DOP853_A2: [(usize, f64); 2] = [
+    (0, 0.0197250569845379),
+    (1, 0.0591751709536137),
+];
+const DOP853_A3: [(usize, f64); 2] = [
+    (0, 0.02958758547680685),
+    (2, 0.08876275643042054),
+];
+const DOP853_A4: [(usize, f64); 3] = [
+    (0, 0.2413651341592667),
+    (2, -0.8845494793282861),
+    (3, 0.924834003261792),
+];
+const DOP853_A5: [(usize, f64); 3] = [
+    (0, 0.037037037037037035),
+    (3, 0.17082860872947386),
+    (4, 0.12546768756682242),
+];
+const DOP853_A6: [(usize, f64); 4] = [
+    (0, 3.7109375e-2),
+    (3, 0.17025221101954405),
+    (4, 0.06021653898045596),
+    (5, -1.7578125e-2),
+];
+const DOP853_A7: [(usize, f64); 5] = [
+    (0, 0.03709200011850479),
+    (3, 0.17038392571223998),
+    (4, 0.10726203044637328),
+    (5, -0.015319437748624402),
+    (6, 0.008273789163814023),
+];
+const DOP853_A8: [(usize, f64); 6] = [
+    (0, 0.6241109587160757),
+    (3, -3.3608926294469414),
+    (4, -0.868219346841726),
+    (5, 27.59209969944671),
+    (6, 20.154067550477894),
+    (7, -43.48988418106996),
+];
+const DOP853_A9: [(usize, f64); 7] = [
+    (0, 0.47766253643826434),
+    (3, -2.4881146199716677),
+    (4, -0.590290826836843),
+    (5, 21.230051448181193),
+    (6, 15.279233632882423),
+    (7, -33.28821096898486),
+    (8, -0.020331201708508627),
+];
+const DOP853_A10: [(usize, f64); 8] = [
+    (0, -0.9371424300859873),
+    (3, 5.186372428844064),
+    (4, 1.0914373489967295),
+    (5, -8.149787010746927),
+    (6, -18.52006565999696),
+    (7, 22.739487099350505),
+    (8, 2.4936055526796523),
+    (9, -3.0467644718982196),
+];
+const DOP853_A11: [(usize, f64); 9] = [
+    (0, 2.273310147516538),
+    (3, -10.53449546673725),
+    (4, -2.0008720582248625),
+    (5, -17.9589318631188),
+    (6, 27.94888452941996),
+    (7, -2.8589982771350235),
+    (8, -8.87285693353063),
+    (9, 12.360567175794303),
+    (10, 0.6433927460157636),
+];
+/// 8th-order endpoint combination (also the FSAL stage location).
+const DOP853_B: [(usize, f64); 8] = [
+    (0, 0.054293734116568765),
+    (5, 4.450312892752409),
+    (6, 1.8915178993145003),
+    (7, -5.801203960010585),
+    (8, 0.3111643669578199),
+    (9, -0.1521609496625161),
+    (10, 0.20136540080403034),
+    (11, 0.04471061572777259),
+];
+/// 8th-vs-5th error estimator weights over stages 0..11.
+const DOP853_E5: [f64; 12] = [
+    0.01312004499419488,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -1.2251564463762044,
+    -0.4957589496572502,
+    1.6643771824549864,
+    -0.35032884874997366,
+    0.3341791187130175,
+    0.08192320648511571,
+    -0.022355307863886294,
+];
+
+/// Combine previously computed stages by an indexed coefficient row.
+fn combine_indexed(
+    state: TestParticleState,
+    h: f64,
+    stages: &[Derivative; 12],
+    row: &[(usize, f64)],
+) -> TestParticleState {
+    let mut result = state;
+    for (index, coefficient) in row {
+        result = add_scaled(result, stages[*index], h * *coefficient);
+    }
+    result
+}
+
+fn dop853_step(
+    field: &GravityField<'_>,
+    state: TestParticleState,
+    time: SimTime,
+    h: f64,
+    k1: Option<Derivative>,
+    frame: &mut EphemerisFrame,
+) -> Result<
+    (
+        TestParticleState,
+        TestParticleState,
+        Derivative,
+        Derivative,
+    ),
+    IntegratorError,
+> {
+    let mut k = [Derivative {
+        position: DVec3::ZERO,
+        velocity: DVec3::ZERO,
+    }; 12];
+    k[0] = match k1 {
+        Some(k1) => k1,
+        None => derivative(field, state, time, frame)?,
+    };
+    const ROWS: [&[(usize, f64)]; 11] = [
+        &DOP853_A1,
+        &DOP853_A2,
+        &DOP853_A3,
+        &DOP853_A4,
+        &DOP853_A5,
+        &DOP853_A6,
+        &DOP853_A7,
+        &DOP853_A8,
+        &DOP853_A9,
+        &DOP853_A10,
+        &DOP853_A11,
+    ];
+    for (i, row) in ROWS.iter().enumerate() {
+        let stage = i + 1;
+        let at = combine_indexed(state, h, &k, row);
+        k[stage] = derivative(field, at, time.offset(h * DOP853_C[stage]), frame)?;
+    }
+    let eighth = combine_indexed(state, h, &k, &DOP853_B);
+    // FSAL stage at the endpoint; doubles as the next step's k1.
+    let k_fsal = derivative(field, eighth, time.offset(h), frame)?;
+    let mut error_position = DVec3::ZERO;
+    let mut error_velocity = DVec3::ZERO;
+    for (stage, weight) in DOP853_E5.iter().enumerate() {
+        error_position += k[stage].position * *weight;
+        error_velocity += k[stage].velocity * *weight;
+    }
+    Ok((
+        eighth,
+        TestParticleState {
+            position: error_position,
+            velocity: error_velocity,
+        },
+        k[0],
+        k_fsal,
+    ))
+}
+
+/// 8th-order twin of [`propagate_adaptive`]: same configuration type,
+/// same validation, same FSAL reuse, same dynamical cap, same statistics.
+/// Fewer, larger steps on smooth arcs at ~11 RHS evaluations per accepted
+/// step (vs 6 for DP5 with FSAL) — the trade pays off where the error
+/// controller, not the ceiling, sets the pace.
+pub fn propagate_adaptive_dop853(
+    field: &GravityField<'_>,
+    initial: TestParticleState,
+    start_time: SimTime,
+    duration_s: f64,
+    config: AdaptiveIntegratorConfig,
+) -> Result<PropagationResult, IntegratorError> {
+    validate_duration(duration_s)?;
+    validate_adaptive_config(config)?;
+    let mut state = initial;
+    let mut time = start_time;
+    let mut remaining = duration_s;
+    let mut step_s = config.initial_step_s.min(config.max_step_s);
+    let mut stats = IntegratorStats::default();
+    let mut frame = EphemerisFrame::new();
+    let cap_mus: Option<Vec<(f64, BodyId)>> = config.dynamical_eta.map(|_| field.cap_sources());
+    let mut cached_k1: Option<Derivative> = None;
+
+    while remaining > 0.0 {
+        if stats.accepted_steps + stats.rejected_steps >= config.max_steps {
+            return Err(IntegratorError::MaxSteps);
+        }
+        let mut h = step_s.min(remaining);
+        if let (Some(eta), Some(sources)) = (config.dynamical_eta, cap_mus.as_ref()) {
+            h = h.min(dynamical_cap(
+                state.position,
+                frame.states(),
+                sources,
+                eta,
+                config.max_step_s,
+            ));
+        }
+        if h < config.min_step_s && remaining > config.min_step_s {
+            return Err(IntegratorError::StepUnderflow { step_s: h });
+        }
+        let (candidate, error_state, used_k1, k_fsal) =
+            dop853_step(field, state, time, h, cached_k1.take(), &mut frame)?;
+        let error = normalized_error(error_state, candidate, config);
+        if error <= 1.0 || h <= config.min_step_s {
+            if error > 1.0 {
+                return Err(IntegratorError::StepUnderflow { step_s: h });
+            }
+            state = candidate;
+            time = time.offset(h);
+            remaining -= h;
+            stats.accepted_steps += 1;
+            step_s = next_step_order(h, error, config.max_step_s, 8.0);
+            cached_k1 = Some(k_fsal);
+        } else {
+            stats.rejected_steps += 1;
+            step_s = (h * (0.9 * error.powf(-1.0 / 8.0)).clamp(0.1, 0.5)).max(config.min_step_s);
+            cached_k1 = Some(used_k1);
+        }
+    }
+    Ok(PropagationResult {
+        state,
+        end_time: time,
+        stats,
+    })
+}
+
+/// Error-controller growth factor for a method of the given order: the
+/// local error scales as `h^(order+1)`, so the step rescales by
+/// `error^(-1/order)` (0.9 safety, clamped like the DP5 path).
+fn next_step_order(step_s: f64, error: f64, max_step_s: f64, order: f64) -> f64 {
     let factor = if error == 0.0 {
         5.0
     } else {
-        (0.9 * error.powf(-0.2)).clamp(0.2, 5.0)
+        (0.9 * error.powf(-1.0 / order)).clamp(0.2, 5.0)
     };
     (step_s * factor).min(max_step_s)
 }

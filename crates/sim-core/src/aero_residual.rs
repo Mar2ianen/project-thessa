@@ -137,6 +137,76 @@ pub struct AeroPhysicalErrorBound {
     pub moment_nm: f64,
 }
 
+/// Worst-case panel operating envelope used to derive a conservative uniform
+/// coefficient-space encode budget.
+///
+/// This is intentionally a simple baseline policy: all four coefficient
+/// channels receive the same epsilon. It is conservative under both the force
+/// and moment limits and leaves channel-specific budget allocation for a later
+/// optimizer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AeroPhysicalBudget {
+    pub dynamic_pressure_pa: f64,
+    pub area_m2: f64,
+    pub reference_chord_m: f64,
+    pub moment_arm_m: f64,
+    pub max_force_error_n: f64,
+    pub max_moment_error_nm: f64,
+}
+
+impl AeroPhysicalBudget {
+    /// Convert the physical envelope into one uniform per-coefficient budget.
+    ///
+    /// With `eps` on CL/CD/CY/Cm:
+    ///
+    /// `dF <= q*S*3*eps`
+    ///
+    /// `dM <= q*S*(c + 3*r)*eps`
+    pub fn uniform_coefficient_budget(self) -> Result<AeroResidualBudget, AeroError> {
+        let values = [
+            self.dynamic_pressure_pa,
+            self.area_m2,
+            self.reference_chord_m,
+            self.moment_arm_m,
+            self.max_force_error_n,
+            self.max_moment_error_nm,
+        ];
+        if values
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err(AeroError::InvalidModel(
+                "aero residual physical budget must be finite and non-negative".into(),
+            ));
+        }
+
+        let q_area = self.dynamic_pressure_pa * self.area_m2;
+        if q_area == 0.0 {
+            return Ok(AeroResidualBudget::uniform(f64::MAX));
+        }
+        if !q_area.is_finite() {
+            return Err(AeroError::InvalidModel(
+                "aero residual physical budget q*S overflowed".into(),
+            ));
+        }
+
+        let force_eps = self.max_force_error_n / (3.0 * q_area);
+        let moment_scale = q_area * (self.reference_chord_m + 3.0 * self.moment_arm_m);
+        let moment_eps = if moment_scale == 0.0 {
+            f64::MAX
+        } else {
+            self.max_moment_error_nm / moment_scale
+        };
+        let epsilon = force_eps.min(moment_eps);
+        if !epsilon.is_finite() || epsilon < 0.0 {
+            return Err(AeroError::InvalidModel(
+                "aero residual physical budget produced an invalid coefficient budget".into(),
+            ));
+        }
+        Ok(AeroResidualBudget::uniform(epsilon))
+    }
+}
+
 /// Per-coefficient encode budget. A tile takes the cheapest rung whose
 /// measured decoded grid-point error is within every component budget.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -325,6 +395,17 @@ impl AeroResidualTable {
             tile_alpha_count,
             max_error: global_error,
         })
+    }
+
+    /// Encode against a declared worst-case physical panel envelope.
+    ///
+    /// The initial policy maps force/moment limits to one conservative uniform
+    /// coefficient epsilon, then reuses the normal adaptive codec ladder.
+    pub fn encode_for_physical_budget(
+        table: &AeroCoefficientTable,
+        budget: AeroPhysicalBudget,
+    ) -> Result<Self, AeroError> {
+        Self::encode(table, budget.uniform_coefficient_budget()?)
     }
 
     /// Decode one canonical grid point. Returns None for out-of-range indices.
@@ -987,6 +1068,33 @@ mod tests {
                 + arm * actual_force_error;
         assert!(actual_force_error <= bound.force_n + 1.0e-12);
         assert!(actual_moment_error <= bound.moment_nm + 1.0e-12);
+    }
+
+    #[test]
+    fn physical_budget_maps_to_safe_uniform_codec_budget() {
+        let source = table_from(13, 11, nonlinear_coefficients);
+        let physical = AeroPhysicalBudget {
+            dynamic_pressure_pa: 25_000.0,
+            area_m2: 3.0,
+            reference_chord_m: 1.4,
+            moment_arm_m: 2.2,
+            max_force_error_n: 20.0,
+            max_moment_error_nm: 50.0,
+        };
+        let coefficient_budget = physical.uniform_coefficient_budget().unwrap();
+        let packed = AeroResidualTable::encode_for_physical_budget(&source, physical).unwrap();
+        let error = packed.max_error();
+        assert!(coefficient_budget.contains(error));
+        let bound = error
+            .physical_bound(
+                physical.dynamic_pressure_pa,
+                physical.area_m2,
+                physical.reference_chord_m,
+                physical.moment_arm_m,
+            )
+            .unwrap();
+        assert!(bound.force_n <= physical.max_force_error_n + 1.0e-12);
+        assert!(bound.moment_nm <= physical.max_moment_error_nm + 1.0e-12);
     }
 
     #[test]

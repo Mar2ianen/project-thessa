@@ -97,18 +97,16 @@ impl AeroCoefficientError {
             reference_chord_m,
             moment_arm_m,
         ];
-        if inputs.iter().any(|value| !value.is_finite() || *value < 0.0) {
+        if inputs
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        {
             return Err(AeroError::InvalidModel(
                 "aero residual physical-bound inputs must be finite and non-negative".into(),
             ));
         }
-        let force_n = dynamic_pressure_pa
-            * area_m2
-            * (self.lift + self.drag + self.side_force);
-        let moment_nm = dynamic_pressure_pa
-            * area_m2
-            * reference_chord_m
-            * self.pitching_moment
+        let force_n = dynamic_pressure_pa * area_m2 * (self.lift + self.drag + self.side_force);
+        let moment_nm = dynamic_pressure_pa * area_m2 * reference_chord_m * self.pitching_moment
             + moment_arm_m * force_n;
         Ok(AeroPhysicalErrorBound { force_n, moment_nm })
     }
@@ -235,24 +233,19 @@ impl AeroResidualTable {
         }
 
         let tile_mach_count = table.mach_grid.len().div_ceil(AERO_RESIDUAL_TILE_EDGE);
-        let tile_alpha_count = table
-            .alpha_grid_rad
-            .len()
-            .div_ceil(AERO_RESIDUAL_TILE_EDGE);
+        let tile_alpha_count = table.alpha_grid_rad.len().div_ceil(AERO_RESIDUAL_TILE_EDGE);
         let mut tiles = Vec::with_capacity(tile_mach_count * tile_alpha_count);
         let mut payload = Vec::new();
         let mut global_error = AeroCoefficientError::default();
 
         for tile_mach in 0..tile_mach_count {
             let mach_start = tile_mach * AERO_RESIDUAL_TILE_EDGE;
-            let mach_len =
-                (table.mach_grid.len() - mach_start).min(AERO_RESIDUAL_TILE_EDGE);
+            let mach_len = (table.mach_grid.len() - mach_start).min(AERO_RESIDUAL_TILE_EDGE);
             for tile_alpha in 0..tile_alpha_count {
                 let alpha_start = tile_alpha * AERO_RESIDUAL_TILE_EDGE;
-                let alpha_len = (table.alpha_grid_rad.len() - alpha_start)
-                    .min(AERO_RESIDUAL_TILE_EDGE);
-                let corners =
-                    tile_corners(table, mach_start, alpha_start, mach_len, alpha_len);
+                let alpha_len =
+                    (table.alpha_grid_rad.len() - alpha_start).min(AERO_RESIDUAL_TILE_EDGE);
+                let corners = tile_corners(table, mach_start, alpha_start, mach_len, alpha_len);
 
                 let r8 = encode_quantized_tile(
                     table,
@@ -264,12 +257,7 @@ impl AeroResidualTable {
                     AeroResidualCodec::Residual8,
                 );
                 let (codec, scales, error, bytes) = if budget.contains(r8.1) {
-                    (
-                        AeroResidualCodec::Residual8,
-                        r8.0,
-                        r8.1,
-                        r8.2,
-                    )
+                    (AeroResidualCodec::Residual8, r8.0, r8.1, r8.2)
                 } else {
                     let r16 = encode_quantized_tile(
                         table,
@@ -281,24 +269,13 @@ impl AeroResidualTable {
                         AeroResidualCodec::Residual16,
                     );
                     if budget.contains(r16.1) {
-                        (
-                            AeroResidualCodec::Residual16,
-                            r16.0,
-                            r16.1,
-                            r16.2,
-                        )
+                        (AeroResidualCodec::Residual16, r16.0, r16.1, r16.2)
                     } else {
                         (
                             AeroResidualCodec::Raw64,
                             zero_coefficients(),
                             AeroCoefficientError::default(),
-                            encode_raw_tile(
-                                table,
-                                mach_start,
-                                alpha_start,
-                                mach_len,
-                                alpha_len,
-                            ),
+                            encode_raw_tile(table, mach_start, alpha_start, mach_len, alpha_len),
                         )
                     }
                 };
@@ -333,11 +310,7 @@ impl AeroResidualTable {
     }
 
     /// Decode one canonical grid point. Returns None for out-of-range indices.
-    pub fn grid_sample(
-        &self,
-        mach_index: usize,
-        alpha_index: usize,
-    ) -> Option<AeroCoefficients> {
+    pub fn grid_sample(&self, mach_index: usize, alpha_index: usize) -> Option<AeroCoefficients> {
         if mach_index >= self.mach_grid.len() || alpha_index >= self.alpha_grid_rad.len() {
             return None;
         }
@@ -350,16 +323,8 @@ impl AeroResidualTable {
         let (mach_lo, mach_hi, mach_t) = bracket(&self.mach_grid, mach);
         let (alpha_lo, alpha_hi, alpha_t) = bracket(&self.alpha_grid_rad, alpha_rad);
         let at = |mi: usize, ai: usize| self.decode_grid_point(mi, ai);
-        let low = interpolate_coefficients(
-            at(mach_lo, alpha_lo),
-            at(mach_lo, alpha_hi),
-            alpha_t,
-        );
-        let high = interpolate_coefficients(
-            at(mach_hi, alpha_lo),
-            at(mach_hi, alpha_hi),
-            alpha_t,
-        );
+        let low = interpolate_coefficients(at(mach_lo, alpha_lo), at(mach_lo, alpha_hi), alpha_t);
+        let high = interpolate_coefficients(at(mach_hi, alpha_lo), at(mach_hi, alpha_hi), alpha_t);
         interpolate_coefficients(low, high, mach_t)
     }
 
@@ -497,11 +462,7 @@ fn normalized_local(index: usize, len: usize) -> f64 {
     }
 }
 
-fn bilinear_predict(
-    corners: [AeroCoefficients; 4],
-    mach_t: f64,
-    alpha_t: f64,
-) -> AeroCoefficients {
+fn bilinear_predict(corners: [AeroCoefficients; 4], mach_t: f64, alpha_t: f64) -> AeroCoefficients {
     let low_mach = interpolate_coefficients(corners[0], corners[1], alpha_t);
     let high_mach = interpolate_coefficients(corners[2], corners[3], alpha_t);
     interpolate_coefficients(low_mach, high_mach, mach_t)
@@ -547,8 +508,7 @@ fn encode_quantized_tile(
         AeroResidualCodec::Raw64 => unreachable!(),
     };
     let scales = maxima.map(|max| if max == 0.0 { 0.0 } else { max / qmax });
-    let mut payload =
-        Vec::with_capacity(mach_len * alpha_len * codec.bytes_per_sample());
+    let mut payload = Vec::with_capacity(mach_len * alpha_len * codec.bytes_per_sample());
     let mut error = [0.0f64; COEFFICIENTS];
 
     for local_mach in 0..mach_len {
@@ -598,8 +558,7 @@ fn encode_raw_tile(
     mach_len: usize,
     alpha_len: usize,
 ) -> Vec<u8> {
-    let mut payload =
-        Vec::with_capacity(mach_len * alpha_len * COEFFICIENTS * size_of::<f64>());
+    let mut payload = Vec::with_capacity(mach_len * alpha_len * COEFFICIENTS * size_of::<f64>());
     for local_mach in 0..mach_len {
         for local_alpha in 0..alpha_len {
             for value in coefficients_array(source_at(
@@ -676,9 +635,7 @@ mod tests {
         alpha_count: usize,
         f: impl Fn(f64, f64) -> AeroCoefficients,
     ) -> AeroCoefficientTable {
-        let mach_grid = (0..mach_count)
-            .map(|i| i as f64 * 0.17)
-            .collect::<Vec<_>>();
+        let mach_grid = (0..mach_count).map(|i| i as f64 * 0.17).collect::<Vec<_>>();
         let alpha_grid_rad = (0..alpha_count)
             .map(|i| -0.45 + i as f64 * 0.09)
             .collect::<Vec<_>>();
@@ -716,9 +673,7 @@ mod tests {
     ) {
         assert!((got.lift - expected.lift).abs() <= error.lift + 2.0e-14);
         assert!((got.drag - expected.drag).abs() <= error.drag + 2.0e-14);
-        assert!(
-            (got.side_force - expected.side_force).abs() <= error.side_force + 2.0e-14
-        );
+        assert!((got.side_force - expected.side_force).abs() <= error.side_force + 2.0e-14);
         assert!(
             (got.pitching_moment - expected.pitching_moment).abs()
                 <= error.pitching_moment + 2.0e-14
@@ -774,7 +729,11 @@ mod tests {
         for i in 0..97 {
             let mach = -0.1 + i as f64 * 0.027;
             let alpha = -0.6 + (i * 37 % 101) as f64 * 0.012;
-            assert_coeff_error_le(packed.sample(mach, alpha), source.sample(mach, alpha), error);
+            assert_coeff_error_le(
+                packed.sample(mach, alpha),
+                source.sample(mach, alpha),
+                error,
+            );
         }
     }
 
@@ -803,13 +762,12 @@ mod tests {
         let packed =
             AeroResidualTable::encode(&source, AeroResidualBudget::uniform(1.0e-5)).unwrap();
         let error = packed.max_error();
-        for (mach, alpha) in [
-            (-10.0, -10.0),
-            (0.0, -0.45),
-            (0.38, -0.17),
-            (2.0, 4.0),
-        ] {
-            assert_coeff_error_le(packed.sample(mach, alpha), source.sample(mach, alpha), error);
+        for (mach, alpha) in [(-10.0, -10.0), (0.0, -0.45), (0.38, -0.17), (2.0, 4.0)] {
+            assert_coeff_error_le(
+                packed.sample(mach, alpha),
+                source.sample(mach, alpha),
+                error,
+            );
         }
     }
 

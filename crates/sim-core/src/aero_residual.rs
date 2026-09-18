@@ -66,10 +66,6 @@ impl AeroCoefficientError {
         }
     }
 
-    fn as_array(self) -> [f64; COEFFICIENTS] {
-        [self.lift, self.drag, self.side_force, self.pitching_moment]
-    }
-
     fn component_max(self, other: Self) -> Self {
         Self {
             lift: self.lift.max(other.lift),

@@ -918,6 +918,17 @@ fn revalidate_chain_from_start(
     // TOF/4 runs FIRST so ties keep the historical behavior bit-identical.
     // Single-encounter chains skip the sweep (no downstream leg needs the
     // asymptote, and their validated numbers stay untouched).
+    //
+    // Known limit (measured on the V1 window): single-TCM handoffs can
+    // match the aim point to metres while entering 50°+ off the broad
+    // asymptote at the same energy — and the velocity-mismatch score
+    // cannot tell, because broad hands an asymptote at infinity while
+    // exact arrives deep in the well. A two-burn eccentricity-vector
+    // targeting attempt (6-DOF Newton, staged start) was tried and
+    // reverted: position and encounter-shape targets through one fixed
+    // aim point fight each other past the trust region. Cooling V1-class
+    // handoffs wants joint epoch/asymptote search (docs/07 §7.14 L4),
+    // not a better single-leg seed.
     let tof1_s = cell.leg_tofs_s[0];
     let mid_candidates: Vec<f64> = if legs > 1 {
         let mut mids = vec![midcourse_time_s(tof1_s)];

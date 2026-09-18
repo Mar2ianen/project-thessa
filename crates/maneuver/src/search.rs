@@ -1498,11 +1498,6 @@ pub(crate) fn midcourse_time_s(time_of_flight_s: f64) -> f64 {
 /// absorbs everything downstream. The plan gains a TCM node, exactly like
 /// flown missions.
 ///
-/// Varies the midcourse burn (3 DOF) to drive the arrival miss to ~km
-/// with a finite-difference STM. Each iteration is exact propagation, so
-/// the converged trajectory needs no separate revalidation pass. Returns
-/// departure burn (unchanged), midcourse burn, end state and miss; None
-/// only on total failure (no finite evaluation at all).
 /// Plain suffix evaluation from a cached TCM prefix (differential
 /// correction trials). Module-level so the variational twin can share the
 /// caller's `&mut stats` — two mut closures cannot.
@@ -1569,6 +1564,11 @@ fn suffix_shoot_aug(
     })
 }
 
+/// Varies the midcourse burn (3 DOF) to drive the arrival miss to ~km
+/// with a variational STM. Each iteration is exact propagation, so
+/// the converged trajectory needs no separate revalidation pass. Returns
+/// departure burn (unchanged), midcourse burn, end state and miss; None
+/// only on total failure (no finite evaluation at all).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn correct_shooting(
     field: &GravityField<'_>,

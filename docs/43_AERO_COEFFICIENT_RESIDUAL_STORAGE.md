@@ -12,8 +12,10 @@ Implementation status (branch `feat/aero-residual-prototype`):
   against explicit per-coefficient max-absolute-error budgets;
 - payload is contiguous across tiles; edge-partial tiles and canonical
   clamping/bilinear sampling semantics are covered;
-- `AeroCoefficientError::physical_bound` converts coefficient error into
-  conservative force and moment envelopes using q/S/c/moment-arm inputs;
+- `sample_with_error` returns a local interpolation-safe coefficient envelope
+  from the four contributing tile bounds; `AeroCoefficientError::physical_bound`
+  converts it into conservative force and moment envelopes using
+  q/S/c/moment-arm inputs;
 - unit tests cover adaptive selection, interpolation-space error, odd extents,
   zero-budget fallback, and physical error conversion;
 - `aero_residual` benchmark reports storage density plus scalar

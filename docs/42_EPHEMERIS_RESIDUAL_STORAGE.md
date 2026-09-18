@@ -575,3 +575,19 @@ shared gravity error budget
 That keeps the optimization representation-driven rather than physics-changing:
 Thessa still evaluates the same gravitational field, but cached source samples
 do not need full global precision when a local bounded delta is sufficient.
+
+
+---
+
+## 16. Related bounded-residual domains
+
+This gravity-specific design is one instance of a broader project pattern.
+
+The aerodynamic analogue is documented separately in
+[`docs/43_AERO_COEFFICIENT_RESIDUAL_STORAGE.md`](43_AERO_COEFFICIENT_RESIDUAL_STORAGE.md):
+large Mach/alpha/beta/Re/control coefficient fields can use local predictors,
+adaptive packed residuals, and explicit conversion from coefficient-space error
+to force/moment error.
+
+Keep the domains separate in code. Reuse the representation principles and
+error-budget discipline, not a renderer- or gravity-specific container type.

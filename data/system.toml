@@ -51,11 +51,13 @@ semi_major_axis_au = 0.220
 eccentricity = 0.030
 inclination_deg = 1.2
 period_days_design = 41.621461
-mass_earth = 0.35
-radius_km = 4400.0
-rotation_period_hours = 31.5
+# Atlas §1.1: tidally locked hot rocky world, ~3000 km, ~0.080 Mearth
+# (~0.36 g). Global ~0.06-0.08 bar; cold-trap basin floor up to ~0.8 bar.
+mass_earth = 0.080
+radius_km = 3000.0
+rotation_period_hours = 998.915064
 axial_tilt_deg = 11.0
-atmosphere_bar = 0.04
+atmosphere_bar = 0.07
 atmosphere = "CO2/SO2/Ar/N2"
 resources = ["sulfur", "nickel_cobalt_refractory", "iron_ore", "bulk_silicates", "fissile_ore"]
 
@@ -82,13 +84,20 @@ semi_major_axis_au = 2.150
 eccentricity = 0.025
 inclination_deg = 1.1
 period_days_design = 1271.572094
-mass_earth = 2.40
-radius_km = 9000.0
+# Atlas §3.1: cold heavy terrestrial, ~8200 km, ~1.8 Mearth (~1.09 g),
+# mutually tidally locked double planet with Mira. Koro is gone: it was
+# captured, disrupted, and now survives as a young clumpy ring system.
+mass_earth = 1.8
+radius_km = 8200.0
 rotation_period_hours = 27.8
 axial_tilt_deg = 19.0
 atmosphere_bar = 2.8
 atmosphere = "N2/CO2/Ar"
 resources = ["iron_ore", "nickel_cobalt_refractory", "fissile_ore", "bulk_silicates", "aluminium_ore", "water_ice"]
+# Working estimate for the Koro-remnant rings (not yet in the atlas):
+# clumpy young debris, shepherd fragments, Mira-perturbed.
+ring_inner_radius_km = 12000.0
+ring_outer_radius_km = 30000.0
 
 [[planet]]
 id = "vesper"
@@ -212,38 +221,45 @@ semi_major_axis_km = 5800000.0
 period_days_design = 92.5935
 eccentricity = 0.08
 inclination_deg = 162.0
-radius_km = 65.0
+# Atlas §2.8: unmistakably non-spherical Fe/Ni shard, working target
+# ~180x110x70 km. radius_km is the volumetric-equivalent sphere used by
+# point-mass gravity; the true triaxial shape lives in dimensions_km.
+radius_km = 56.0
+shape = "irregular_triaxial_shard"
+dimensions_km = [180.0, 110.0, 70.0]
 density_kg_m3 = 3200.0
 resources = ["nickel_cobalt_refractory", "iron_ore"]
 
-# Orthea moons.
-[[moon]]
-id = "koro"
-host = "orthea"
-semi_major_axis_km = 55000.0
-period_hours_design = 23.016843
-eccentricity = 0.01
-inclination_deg = 0.5
-radius_km = 18.0
-density_kg_m3 = 1200.0
-resources = ["water_ice"]
+# Orthea moons. Koro was removed per Atlas §3.1: the captured body was
+# tidally/collisionally fragmented and now forms Orthea's young ring
+# system (see ring_inner/outer_radius_km above), not a standalone moon.
+# Mira is the mutually-locked double-planet companion (~4100 km,
+# ~0.22 Mearth, separation ~190000 km; barycenter outside Orthea).
 
 [[moon]]
 id = "mira"
 host = "orthea"
 semi_major_axis_km = 190000.0
-period_hours_design = 147.785599
+period_hours_design = 161.085285
 eccentricity = 0.008
 inclination_deg = 1.0
-mass_earth = 0.012
-radius_km = 1450.0
+mass_earth = 0.22
+radius_km = 4100.0
+tidal_lock = true
+# Thin; exact target TBD per atlas (parser accepts only known gases +
+# LOCAL/EXOSPHERE/PROVISIONAL/TRACE qualifiers, so nuance lives here).
 atmosphere_bar = 0.08
-atmosphere = "N2/CO2"
+atmosphere = "N2/CO2 provisional"
 resources = ["bulk_silicates", "iron_ore", "water_ice", "nickel_cobalt_refractory"]
 
 [[moon]]
 id = "dey"
 host = "orthea"
+# Atlas §3.3 working redesign: move Dey to a distant circumbinary orbit
+# around the Orthea-Mira pair if long-horizon integrations support it.
+# 420000 km from Orthea center (~2.1x the pair separation) is the
+# current working slot; host stays Orthea until a pair-barycenter
+# anchor exists in the baker schema.
 semi_major_axis_km = 420000.0
 period_hours_design = 485.708439
 eccentricity = 0.03
@@ -260,7 +276,9 @@ semi_major_axis_km = 210000.0
 period_hours_design = 43.077436
 eccentricity = 0.01
 inclination_deg = 0.5
-mass_earth = 0.002
+# Atlas §4.2: previous 0.002 Mearth implied implausible density for an
+# icy body; 0.0005 Mearth at 720 km gives ~0.039 g (range 0.035-0.047 g).
+mass_earth = 0.0005
 radius_km = 720.0
 atmosphere_bar = 0.01
 atmosphere = "N2/CH4 trace"
@@ -300,8 +318,172 @@ semi_major_axis_km = 210000.0
 period_hours_design = 148.717230
 eccentricity = 0.006
 inclination_deg = 1.0
+# Atlas §6.2: evaporite/dying-ocean moon. Mid-range working values:
+# ~1900 km, ~0.0175 Mearth (~0.20 g), residual ~0.25 bar N2/CO2.
+mass_earth = 0.0175
+radius_km = 1900.0
+# Residual N2/CO2 atmosphere; H2O vapor strongly localized at surviving
+# brines (nuance in comment: the composition parser only accepts known
+# gases + LOCAL/EXOSPHERE/PROVISIONAL/TRACE qualifiers).
+atmosphere_bar = 0.25
+atmosphere = "N2/CO2/H2O provisional"
+resources = ["evaporite_salts", "lithium_brine", "bulk_silicates", "water_ice", "iron_ore"]
+
+# ---------------------------------------------------------------------------
+# Asterion BC subsystem (docs/02B_BC_SUBSYSTEM.md). Same design-target
+# status as the rest of this file: working values, integrations before
+# canon lock. Orbits marked "working slot" are plausible placements, not
+# stability-proven solutions.
+# ---------------------------------------------------------------------------
+
+# 02B §1.1: BC-I, stripped iron/refractory remnant on a tight S-type orbit
+# around Asterion B. ~2000 km, ~0.042 Mearth (~0.43 g), no atmosphere,
+# synchronous rotation (5.30 d period sits inside the 4.8-5.8 d window).
+[[planet]]
+id = "bc_i"
+host = "asterion_b"
+semi_major_axis_au = 0.075
+eccentricity = 0.0
+inclination_deg = 0.0
+period_days_design = 5.304797
+mass_earth = 0.042
+radius_km = 2000.0
+rotation_period_hours = 127.315125
+tidal_lock = true
+axial_tilt_deg = 0.0
+resources = ["iron_ore", "nickel_cobalt_refractory", "bulk_silicates"]
+
+# 02B §2.2: Janus inner fragment moon, probably impact-derived. Working
+# slot ~80000 km: well inside Mora (210000 km), well outside the ~25000 km
+# rubble Roche limit. Midpoint 225 km of the 150-300 km range.
+[[moon]]
+id = "janus_inner"
+host = "janus"
+semi_major_axis_km = 80000.0
+period_hours_design = 34.967223
+eccentricity = 0.005
+inclination_deg = 1.0
+radius_km = 225.0
+density_kg_m3 = 3000.0
+resources = ["bulk_silicates", "iron_ore", "nickel_cobalt_refractory"]
+
+# 02B §2.4: Janus outer haze moon. Titan-like photochemistry but warmer;
+# no stable methane seas assumed. Mid-range working values.
+[[moon]]
+id = "janus_haze"
+host = "janus"
+semi_major_axis_km = 1150000.0
+period_hours_design = 1905.780700
+eccentricity = 0.005
+inclination_deg = 1.5
 mass_earth = 0.025
-radius_km = 1700.0
-atmosphere_bar = 0.02
-atmosphere = "CO2/N2 trace"
-resources = ["bulk_silicates", "water_ice", "iron_ore"]
+radius_km = 2600.0
+tidal_lock = true
+atmosphere_bar = 1.75
+atmosphere = "N2/CH4/CO2 provisional"
+resources = ["nitrogen_volatiles", "carbon_feedstock", "water_ice"]
+
+# 02B §3.1: BC-Outer, cold Neptune/sub-Neptune around the BC barycenter.
+# Mid-range working values: 11.5 AU of the 10-13 AU window, 27 Mearth,
+# 31500 km. Faint collision-fed rings are expected but unparameterized
+# (no radii in 02B); rotation/tilt stay open. Atmosphere is composition
+# metadata until a pressure target exists.
+[[planet]]
+id = "bc_outer"
+host = "bc_barycenter"
+semi_major_axis_au = 11.5
+eccentricity = 0.03
+inclination_deg = 2.0
+period_days_design = 9233.155346
+mass_earth = 27.0
+radius_km = 31500.0
+atmosphere = "H2/He/CH4 provisional"
+resources = ["hydrogen_helium_atmosphere", "carbon_feedstock"]
+
+# 02B §4.1: captured retrograde major moon (Triton archetype). Working
+# slot ~450000 km (~14 BC-Outer radii, cf. Triton at ~14 Neptune radii),
+# inclination 157 deg retrograde. Atmosphere TBD: composition metadata
+# only, no pressure until the thermal model lands.
+[[moon]]
+id = "bc_outer_retro"
+host = "bc_outer"
+semi_major_axis_km = 450000.0
+period_hours_design = 160.597227
+eccentricity = 0.002
+inclination_deg = 157.0
+radius_km = 1600.0
+density_kg_m3 = 2100.0
+tidal_lock = true
+atmosphere = "N2/CH4 provisional"
+resources = ["water_ice", "nitrogen_volatiles", "bulk_silicates"]
+
+# 02B §4.2: patchwork tectonic moon (Miranda archetype), second-generation
+# reaccreted body. Working slot ~160000 km (~5 BC-Outer radii).
+[[moon]]
+id = "bc_outer_corona"
+host = "bc_outer"
+semi_major_axis_km = 160000.0
+period_hours_design = 34.048599
+eccentricity = 0.003
+inclination_deg = 1.0
+radius_km = 400.0
+density_kg_m3 = 1400.0
+tidal_lock = true
+resources = ["water_ice", "bulk_silicates"]
+
+# 02B §4.3: two-tone ridge moon (Iapetus archetype). Working slot
+# ~1800000 km (~57 BC-Outer radii, cf. Iapetus at ~59 Saturn radii).
+[[moon]]
+id = "bc_outer_ridge"
+host = "bc_outer"
+semi_major_axis_km = 1800000.0
+period_hours_design = 1284.777815
+eccentricity = 0.01
+inclination_deg = 3.0
+radius_km = 750.0
+density_kg_m3 = 1100.0
+tidal_lock = true
+resources = ["water_ice", "carbon_feedstock", "bulk_silicates"]
+
+# 02B §4.4: chaotic rubble moon (Hyperion archetype). Characteristic size
+# 200-350 km; radius_km is the volumetric equivalent, true porous shape
+# in dimensions_km. Chaotic rotation: no rotation period is set.
+[[moon]]
+id = "bc_outer_rubble"
+host = "bc_outer"
+semi_major_axis_km = 2400000.0
+period_hours_design = 1978.044846
+eccentricity = 0.1
+inclination_deg = 2.0
+radius_km = 100.0
+shape = "irregular_porous_rubble"
+dimensions_km = [270.0, 190.0, 140.0]
+density_kg_m3 = 600.0
+resources = ["water_ice", "bulk_silicates"]
+
+# 02B §4.5: active plume moon (Enceladus archetype). Working slot
+# ~300000 km (~9.5 BC-Outer radii). Plume-fed transient exosphere:
+# composition metadata only, no surface pressure — it is not a stable
+# atmosphere. Subsurface saline ocean preferred (see comment).
+[[moon]]
+id = "bc_outer_plume"
+host = "bc_outer"
+semi_major_axis_km = 300000.0
+period_hours_design = 87.418058
+eccentricity = 0.004
+inclination_deg = 0.5
+radius_km = 325.0
+density_kg_m3 = 1600.0
+tidal_lock = true
+atmosphere = "H2O provisional"
+resources = ["water_ice", "bulk_silicates"]
+
+# ---------------------------------------------------------------------------
+# Brown-dwarf interloper (docs/02C_FAR_COMPANION.md). Deliberately NOT a
+# live entry: 02C §2 forbids assigning it a Keplerian orbit around
+# Asterion — it is an unbound cloud member at ~0.5-1.0 ly (~25-45 MJ).
+# It enters the baked system only together with the stellar-cloud
+# phase-space model. Working targets when that model lands: mass ~35 MJ,
+# radius ~1 RJ, present distance ~0.7 ly; moons ~700 km refractory,
+# ~1900 km volatile, contact-binary rubble, optional outer survivor.
+# ---------------------------------------------------------------------------

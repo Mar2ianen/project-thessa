@@ -113,8 +113,12 @@ mod tests {
         let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml"))
             .expect("design system TOML should parse");
         let ephemeris = config.bake().expect("design system should bake");
-        assert_eq!(ephemeris.bodies.len(), 24);
-        assert_eq!(ephemeris.gravity_sources().count(), 22);
+        // 3 stars + 2 barycenters + 7 planets + 17 moons + 3 minor bodies.
+        // Koro was removed per the atlas (fragmented into Orthea's rings);
+        // the BC subsystem (02B) added BC-I, two Janus moons, BC-Outer and
+        // its five moons.
+        assert_eq!(ephemeris.bodies.len(), 32);
+        assert_eq!(ephemeris.gravity_sources().count(), 30);
         let thessa = ephemeris.body_id("thessa").expect("Thessa body");
         let state = ephemeris
             .body_state(thessa, SimTime::EPOCH)

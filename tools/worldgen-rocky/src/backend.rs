@@ -217,14 +217,18 @@ impl TerrainBackend for RcbtBackend {
                 .expect("page bake within budget");
             payload_bytes += page.to_bytes().len() as u64;
             // Probe page centres against the canonical field at the same
-            // wavelength the page was baked from.
+            // wavelength the page was baked from. Bake clamps
+            // below-datum samples to the spherical datum (visible tile
+            // path renders ocean as datum), so the probe must clamp the
+            // reference identically or ocean tiles report metres of
+            // phantom error.
             let cells = req.page_grid.saturating_sub(1).max(1) as f64;
             let wavelength = (key.span_m(field.params.radius_m) / cells).max(32.0);
             let grid = req.page_grid as usize;
             for y in 0..grid {
                 for x in 0..grid {
                     let dir = key.direction(x as f64 / cells, y as f64 / cells);
-                    let reference = field.height_m(dir, wavelength);
+                    let reference = field.height_m(dir, wavelength).max(0.0);
                     let got = page
                         .decoded_sample(x as u32, y as u32)
                         .expect("in-grid sample") as f64;

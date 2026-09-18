@@ -1,8 +1,7 @@
-//! Chained-assist demo on the fictional system: Pelagos -> (Thessa
-//! flyby) -> (Auron flyby) -> Koro rendezvous is inter-body; this bench
-//! stays inside one central body (Nereid): Pelagos -> Thessa flyby ->
-//! Auron rendezvous, i.e. the two-leg chain form of the single-tour
-//! `flyby` bench. Broad survey (milliseconds) plus exact revalidation.
+//! Chained-assist demo on the fictional system. This bench stays inside
+//! one central body (Nereid): Pelagos -> Thessa flyby -> Auron rendezvous,
+//! i.e. the two-leg chain form of the single-tour `flyby` bench. Broad
+//! survey (milliseconds) plus exact revalidation.
 use std::{hint::black_box, time::Instant};
 
 use thessa_maneuver::{

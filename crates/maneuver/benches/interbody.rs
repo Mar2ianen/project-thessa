@@ -1,8 +1,9 @@
-//! Inter-body route survey: Pelagos (a moon of Nereid) -> Koro (a moon of
-//! Orthea) around Asterion A. Broad Lambert scouting over a 400-day window
-//! prices route energy and geometry; year-long arcs make full N-body
-//! correction cost-prohibitive, so routes are reported UNVALIDATED (no
-//! miss measurement, no executor admission — see `BroadRoute` docs).
+//! Inter-body route survey: Pelagos (a moon of Nereid) -> Mira (the
+//! double-planet companion of Orthea) around Asterion A. Broad Lambert
+//! scouting over a 400-day window prices route energy and geometry;
+//! year-long arcs make full N-body correction cost-prohibitive, so routes
+//! are reported UNVALIDATED (no miss measurement, no executor admission
+//! — see `BroadRoute` docs).
 //! With THESSA_INTERBODY_EXACT=1, attempts one exact revalidation to
 //! characterize its cost (slow: budget minutes, run with `timeout`).
 use std::{env, hint::black_box, time::Instant};
@@ -18,7 +19,7 @@ fn main() {
     let search = SearchConfig {
         central_body: ephemeris.body_id("asterion_a").expect("asterion_a"),
         departure_body: ephemeris.body_id("pelagos").expect("pelagos"),
-        arrival_body: ephemeris.body_id("koro").expect("koro"),
+        arrival_body: ephemeris.body_id("mira").expect("mira"),
         window_start: SimTime::EPOCH,
         departure_span_s: 400.0 * 86_400.0,
         departure_steps: 40,
@@ -33,7 +34,7 @@ fn main() {
     let started = Instant::now();
     let (routes, stats) = broad_survey(black_box(&ephemeris), search).expect("survey finds routes");
     println!(
-        "survey pelagos->koro: {} broad cells in {elapsed:?} (UNVALIDATED broad estimates)",
+        "survey pelagos->mira: {} broad cells in {elapsed:?} (UNVALIDATED broad estimates)",
         stats.broad_evaluations,
         elapsed = started.elapsed(),
     );
@@ -48,11 +49,12 @@ fn main() {
         );
     }
     if env::var("THESSA_INTERBODY_EXACT").is_ok() {
-        // Route A (recommended): fly Pelagos -> Orthea periapsis -> Koro.
+        // Route A (recommended): fly Pelagos -> Orthea periapsis -> Mira.
         // The cruise TCM targets the PLANET (big, smooth) and the short
-        // terminal leg threads the moonlet with proven lunar-like
-        // shooting. A single cruise TCM cannot thread a moonlet next to a
-        // 2.4-Earth planet from 2 AU away (route B below measures that).
+        // terminal leg threads the 4100 km companion with proven
+        // lunar-like shooting. A single cruise TCM cannot thread a small
+        // body next to a 1.8-Earth planet from 2 AU away (route B below
+        // measures that).
         let orthea = ephemeris.body_id("orthea").expect("orthea");
         let started = Instant::now();
         match flyby_search(
@@ -88,7 +90,7 @@ fn main() {
                     .map(|node| format!("{:.0}", node.magnitude_mps()))
                     .collect();
                 println!(
-                    "exact pelagos->orthea->koro: dv {:.0} m/s [{}], miss {:.1} km, {} newton props in {elapsed:?}",
+                    "exact pelagos->orthea->mira: dv {:.0} m/s [{}], miss {:.1} km, {} newton props in {elapsed:?}",
                     winner.exact_total_dv_mps,
                     nodes.join("+"),
                     winner.exact_miss_m / 1_000.0,
@@ -96,9 +98,9 @@ fn main() {
                     elapsed = started.elapsed(),
                 );
             }
-            Err(error) => println!("exact pelagos->orthea->koro failed: {error}"),
+            Err(error) => println!("exact pelagos->orthea->mira failed: {error}"),
         }
-        // Route B (documented hard): single cruise TCM straight to Koro.
+        // Route B (documented hard): single cruise TCM straight to Mira.
         // Scale-appropriate miss filter: 1e8 m (terminal rendezvous
         // corrects the rest on approach) instead of the lunar 1e6 m.
         let started = Instant::now();
@@ -120,7 +122,7 @@ fn main() {
                     .map(|node| format!("{:.0}", node.magnitude_mps()))
                     .collect();
                 println!(
-                    "exact pelagos->koro: dv {:.0} m/s [{}], miss {:.1} km, {} newton props in {elapsed:?}",
+                    "exact pelagos->mira: dv {:.0} m/s [{}], miss {:.1} km, {} newton props in {elapsed:?}",
                     winner.exact_total_dv_mps,
                     nodes.join("+"),
                     winner.exact_miss_m / 1_000.0,
@@ -128,7 +130,7 @@ fn main() {
                     elapsed = started.elapsed(),
                 );
             }
-            Err(error) => println!("exact pelagos->koro failed: {error}"),
+            Err(error) => println!("exact pelagos->mira failed: {error}"),
         }
     } else {
         println!("exact revalidation skipped (set THESSA_INTERBODY_EXACT=1 to attempt)");

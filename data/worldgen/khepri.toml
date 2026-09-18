@@ -1,0 +1,28 @@
+# Khepri generator-facing recipe stub (World Atlas §1.1).
+# Basic markup only: physical data (radius/mass/orbit/atmosphere) resolves
+# by body id from data/system.toml; this file keeps worldgen/art values.
+# datum_radius_m MUST agree with system.toml (see `check` below).
+#
+# Verify with:
+#   cargo run -p thessa-worldgen-rocky -- check \
+#     --system data/system.toml --body khepri \
+#     --recipe data/worldgen/khepri.toml
+
+[planet]
+id = "khepri"
+seed = 11
+datum_radius_m = 3000000.0
+# Working relief envelope: ~25 km deep cold-trap basin, substellar
+# highlands, terminator relief. Refine after first bakes.
+height_min_m = -25000.0
+height_max_m = 15000.0
+
+[terrain]
+mountain_coverage = 0.15
+crater_density = 0.30
+volcanism = 0.50
+erosion_strength = 0.15
+glaciation = 0.25
+rift_activity = 0.40
+roughness_macro = 0.60
+plateau_coverage = 0.10

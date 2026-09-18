@@ -12,6 +12,7 @@ description = "Backend-agnostic concurrent binary tree contracts for adaptive te
 [dev-dependencies]
 thessa-rcbt-ref = { path = "../rcbt-ref" }
 thessa-rcbt-ffi = { path = "../rcbt-ffi" }
+thessa-rcbt-large-ffi = { path = "../rcbt-large-ffi" }
 
 [[bench]]
 name = "tree"
@@ -27,4 +28,8 @@ harness = false
 
 [[bench]]
 name = "dynamic"
+harness = false
+
+[[bench]]
+name = "cbt_vs_large"
 harness = false

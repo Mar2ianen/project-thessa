@@ -6,10 +6,13 @@
 //! [`heap`] is the CPU mirror of the GPU heap layout (pure Rust, shared init
 //! and verification code). [`shaders`] holds the real sparse-commit CBT
 //! WGSL kernels (`apply_ops` + `decode_all`); the legacy `RCBT_WGSL` touch
-//! kernels below stay only as a dispatch bring-up target.
+//! kernels below stay only as a dispatch bring-up target. [`ocbt`] and the
+//! compact core buffers are transport layouts; they do not replace the
+//! authoritative CPU topology.
 
 pub mod bench_support;
 pub mod heap;
+pub mod ocbt;
 pub mod shaders;
 
 use std::borrow::Cow;
@@ -18,7 +21,7 @@ use std::sync::Arc;
 
 use thessa_rcbt_core::{
     BufferBinding, BufferDesc, BufferUsage, CbtBackend, CbtBarrier, CbtBindings, CbtCapabilities,
-    CbtKernel, CbtMetrics, DispatchSize, HeightPage,
+    CbtKernel, CbtMetrics, DispatchSize, HeightPage, compact::CompactTree,
 };
 
 const WORKGROUP_SIZE: u32 = 64;
@@ -136,6 +139,31 @@ impl WgpuBackend {
         page: &HeightPage,
     ) -> Result<(), WgpuError> {
         self.upload(buffer, offset_bytes, &page.to_bytes())
+    }
+
+    /// Upload the exact precision-reduced CBT buffers. The scalar tree stays
+    /// authoritative; this is a render/GPU transport operation and writes the
+    /// active bitset plus concatenated per-level rank buffer.
+    pub fn upload_compact_tree(
+        &self,
+        active_buffer: &WgpuBuffer,
+        sums_buffer: &WgpuBuffer,
+        tree: &CompactTree,
+    ) -> Result<(), WgpuError> {
+        self.upload(active_buffer, 0, &tree.active_buffer_bytes())?;
+        self.upload(sums_buffer, 0, &tree.sums_buffer_bytes())
+    }
+
+    /// Upload the two raw buffers of the byte-compatible large_cbt OCBT
+    /// memory-pool layout.
+    pub fn upload_ocbt_pool(
+        &self,
+        tree_buffer: &WgpuBuffer,
+        bitfield_buffer: &WgpuBuffer,
+        mirror: &crate::ocbt::OcbtPoolMirror,
+    ) -> Result<(), WgpuError> {
+        self.upload(tree_buffer, 0, &mirror.tree_bytes())?;
+        self.upload(bitfield_buffer, 0, &mirror.bitfield_bytes())
     }
 
     fn entry_point(kernel: CbtKernel) -> &'static str {

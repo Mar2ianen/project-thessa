@@ -1,231 +1,237 @@
 # AGENTS.md
 
-Правила для code/design agents, работающих с Project Thessa.
+Rules for code and design agents working on Project Thessa.
 
-## 1. Главный инвариант
+## 1. Main invariant
 
-**Не подменять физическую причинность игровыми коэффициентами, если эффект можно получить из геометрии, материала, поля или исполнительного органа.**
+**Do not replace physical causality with game coefficients when the effect can
+be obtained from geometry, material, a field, or an actuator.**
 
-Примеры:
+Examples:
 
-- запрещено: `yaw_power`, `magic_drag`, `stability_bonus`, прямой поворот craft;
-- допустимо: площадь руля, положение шарнира, момент привода, локальный поток, сила, плечо, FBW allocator;
-- запрещено: телепорт груза между космопортами;
-- допустимо: физический транспорт + расписание + буферы + warp.
+- forbidden: `yaw_power`, `magic_drag`, `stability_bonus`, or directly rotating
+  the craft;
+- allowed: control-surface area, hinge position, actuator moment, local flow,
+  force, lever arm, and an FBW allocator;
+- forbidden: teleporting cargo between spaceports;
+- allowed: physical transport plus schedules, buffers, and warp.
 
-## 2. Границы модулей
+## 2. Module boundaries
 
 ### `sim-core`
 
-- authoritative simulation state;
-- **не зависит от Bevy, Tokio, Lightyear, Avian**;
-- допускаются math/serialization/data-parallel crates после review;
-- все пространственные состояния authoritative simulation — `f64`;
-- canonical units — SI;
-- physics time — `SimTime`, не `Instant`/`SystemTime`.
-
+- owns authoritative simulation state;
+- has no dependency on Bevy, Tokio, Lightyear, or Avian;
+- may use reviewed math, serialization, or data-parallel crates;
+- stores authoritative spatial state as `f64`;
+- uses SI as the canonical unit system;
+- uses `SimTime` for physics time, never `Instant` or `SystemTime`.
 
 ## 2.1. Cross-platform invariant
 
-- никакого DirectX/Vulkan/Metal/wgpu-specific API в domain/simulation/gameplay code;
-- shaders и render data не проектируются вокруг DX-only semantics;
-- current native client integration — Bevy + wgpu, но reusable GPU algorithm core **не обязан и не должен** экспортировать Bevy/wgpu types;
-- для reusable GPU subsystem preferred layering: backend-agnostic core -> portable wgpu backend -> optional measured native backend -> Bevy adapter;
-- допустимые backend families: Vulkan, Metal, WebGPU и backend, который wgpu выбирает на поддерживаемой платформе;
-- direct Vulkan backend допустим внутри isolated renderer/GPU subsystem после профилирования; он не меняет simulation/gameplay API;
-- использование D3D12 самим wgpu на Windows не делает DirectX частью архитектурного API; прямые DX12/DXR calls требуют отдельного ADR и по умолчанию запрещены;
-- capability checks предпочтительнее vendor checks (`if AMD/NVIDIA/...`);
-- Linux является first-class dev/runtime target, не портом после Windows;
-- WASM/WebGPU компилируемость portable client/render path должна регулярно проверяться CI после появления web target.
+- no DirectX-specific API in domain, simulation, or gameplay code;
+- shaders and render data must not be designed around DX-only semantics;
+- the native rendering boundary is Bevy/wgpu;
+- supported backend families are Vulkan, Metal, WebGPU, and the backend chosen
+  by wgpu on a supported platform;
+- wgpu choosing D3D12 internally on Windows does not make DirectX part of the
+  architecture API; direct DX12/DXR calls require a separate ADR and are
+  forbidden by default;
+- Linux is a first-class development and runtime target, not a post-Windows
+  port;
+- the client layer must regularly be compile-checked for WASM/WebGPU after a
+  web target exists.
 
 ### Bevy client
 
-Bevy отвечает за текущую client integration:
+Bevy owns:
 
-- rendering integration / default wgpu backend;
+- rendering and wgpu;
 - input;
 - UI;
 - assets;
 - client ECS;
-- debug gizmos/tooling;
-- visual interpolation/extraction.
+- debug gizmos and tooling;
+- visual interpolation and extraction.
 
-Bevy не владеет semantic API reusable renderer algorithms. Если subsystem можно использовать вне Bevy (`rcbt`, compression/streaming kernels и т.п.), его core types/traits не должны принимать `Entity`, `RenderWorld`, `wgpu::Device` и подобные integration handles как domain API.
-
-`bevy::Transform` никогда не является authoritative космической координатой.
+`bevy::Transform` is never an authoritative astronomical coordinate.
 
 ### Server
 
-- Tokio: networking, async I/O, persistence orchestration, admin/metrics;
-- Rayon/custom fixed worker pool: CPU-heavy simulation batches;
-- CPU-heavy solver не запускается как обычный `tokio::spawn` future;
-- simulation tick имеет один authoritative порядок фаз.
+- Tokio owns networking, async I/O, persistence orchestration, and
+  administration/metrics;
+- Rayon or a custom fixed worker pool owns CPU-heavy simulation batches;
+- a CPU-heavy solver is not launched as an ordinary `tokio::spawn` future;
+- the simulation tick has one authoritative phase order.
 
-## 3. Небесная механика
+## 3. Celestial mechanics
 
-- звёзды, планеты, луны и canonical minor bodies следуют baked deterministic ephemerides;
-- runtime не интегрирует их взаимную динамику;
-- корабли, станции, обломки и временные объекты получают сумму гравитационных ускорений от релевантных тел;
-- никаких SOI-switch как части физики;
-- SOI может существовать только как UI/optimization hint;
-- gravity harmonics вычисляются в body-fixed frame;
-- Lagrange points не хардкодятся: они являются следствием полей и эфемерид.
+- stars, planets, moons, and canonical minor bodies follow baked deterministic
+  ephemerides;
+- runtime does not integrate their mutual dynamics;
+- ships, stations, debris, and temporary objects receive the sum of gravity
+  from all relevant bodies;
+- SOI switching is never part of physics;
+- SOI may exist only as a UI or optimization hint;
+- gravity harmonics are evaluated in a body-fixed frame;
+- Lagrange points are not hard-coded: they emerge from fields and ephemerides.
 
-## 4. Аппараты
+## 4. Vehicles
 
-`VehicleDesign` компилируется как минимум в:
+`VehicleDesign` should compile at least into:
 
 - render representation;
 - collision representation;
-- aerodynamic zones/panels;
+- aerodynamic zones or panels;
 - structural graph;
 - thermal graph;
-- mass/inertia model;
+- mass and inertia model;
 - actuator graph;
-- fluid/electrical connectivity.
+- fluid and electrical connectivity.
 
-Не хранить сотни fixed parts только ради того, чтобы потом агрегировать их обратно.
+Do not store hundreds of fixed parts only to aggregate them back later.
 
 ### Rigid-body policy
 
-Один connected structural cluster может интегрироваться как один rigid body, пока деформации допускают это приближение. Подвижные шарниры/створки могут иметь явные DOF. При разрушении structural graph разбивается на connected components, каждая становится отдельным cluster/body.
+One connected structural cluster may be integrated as one rigid body while that
+approximation remains valid. Moving hinges and doors may have explicit DOFs.
+When the structural graph fails, split it into connected components and make
+each component a separate cluster/body.
 
-## 5. Аэродинамика и управление
+## 5. Aerodynamics and control
 
-- силы считаются локально по aero zones/panels;
-- локальная скорость учитывает translational velocity, atmospheric motion и `omega x r`;
-- control surfaces имеют hinge geometry, limits, rate и actuator torque;
-- actuator может не достигнуть command deflection под аэродинамической нагрузкой;
-- FBW выдаёт команды исполнительным органам, но не добавляет момент в craft напрямую;
-- low-level/manual control обязан оставаться возможным.
+- compute forces locally for aerodynamic zones or panels;
+- local velocity includes translational velocity, atmospheric motion, and
+  `omega x r`;
+- control surfaces have hinge geometry, limits, rate, and actuator torque;
+- an actuator may fail to reach a commanded deflection under aerodynamic load;
+- FBW emits actuator commands and does not add a craft moment directly;
+- low-level/manual control must remain possible.
 
-## 6. Температура и разрушения
+## 6. Temperature and failure
 
-- температура не сводится к одной цифре на весь craft;
-- thermal nodes связаны conductance/radiation edges;
-- aerodynamic/engine/solar heating входит в тот же thermal graph;
-- прочность материалов может зависеть от температуры;
-- damage не должен автоматически означать explosion/despawn;
-- structural failure меняет topology, mass, inertia, aero и thermal graph.
+- temperature is not reduced to one value for the whole craft;
+- thermal nodes are connected by conductance and radiation edges;
+- aerodynamic, engine, and solar heating enter the same thermal graph;
+- material strength may depend on temperature;
+- damage must not automatically mean explosion or despawn;
+- structural failure changes topology, mass, inertia, aero, and thermal graphs.
 
 ## 7. Ray queries
 
-Physics ray tracing означает **геометрические ray/BVH queries**, а не обязательный DXR/Vulkan RT.
+Physics ray tracing means **geometric ray/BVH queries**, not necessarily
+DXR/Vulkan RT.
 
-Canonical server path должен работать без GPU. Hardware RT/compute может ускорять клиентские/локальные расчёты, но не должен быть единственным способом получить authoritative результат.
+The canonical server path must work without a GPU. Hardware RT or compute may
+accelerate client/local calculations but must not be the only way to obtain an
+authoritative result.
 
-## 8. Мультиплеер и warp
+## 8. Multiplayer and warp
 
-- server authoritative;
-- клиент отправляет input/commands, не произвольный world state;
-- controlling client может предсказывать свой craft;
-- остальные interpolate snapshots;
-- warp — единый server time scale;
-- изменение warp — consensual/shared policy;
-- alarm/autopilot event scheduler работает в simulation time.
+- the server is authoritative;
+- clients send inputs/commands, not arbitrary world state;
+- the controlling client may predict its own craft;
+- other craft interpolate snapshots;
+- warp is one server simulation time scale;
+- warp changes follow a consensual/shared policy;
+- alarm and autopilot event schedulers operate in simulation time.
 
-## 9. Скрипты автопилота
+## 9. Autopilot scripts
 
-UX reference: MechJeb-подобные готовые операции (`Ascent Guidance`, `Maneuver Planner`, `Landing Guidance`, `Rendezvous`, `Docking`, attitude helpers), но в Thessa они **не являются изолированными режимами**. Любой high-level action — блок с typed inputs/outputs, который можно вкладывать в reusable graph/subprogram.
+The UX reference is MechJeb-like ready operations (`Ascent Guidance`,
+`Maneuver Planner`, `Landing Guidance`, `Rendezvous`, `Docking`, and attitude
+helpers), but they are not isolated modes in Thessa. Every high-level action
+is a typed block with inputs and outputs that can be nested in a reusable graph
+or subprogram.
 
-Обязательные combinators:
+Required combinators:
 
 - sequence;
-- condition / switch;
+- condition or switch;
 - wait/event;
 - loop/retry/fallback;
 - parallel/fork/join;
 - reusable parameterized subgraph;
 - explicit abort/failure path.
 
-`stage/separate` может породить несколько `VehicleId`; graph обязан уметь передать разные ветки управления booster/upper stage.
+`stage/separate` may create multiple `VehicleId` values; the graph must be
+able to route different control branches to the booster and upper stage.
 
-Предпочтение event-driven VM:
+Prefer an event-driven VM:
 
-- `WAIT UNTIL` компилируется в wake condition;
-- спящие программы не poll'ятся каждый physics tick;
-- high-level блоки (`point prograde`, `land at pad`, `target orbit`) используют штатные guidance/control systems;
-- low-level sensors/actuators доступны для продвинутых программ;
-- один и тот же script layer используется для логистики и flight automation.
+- `WAIT UNTIL` compiles to a wake condition;
+- sleeping programs are not polled every physics tick;
+- high-level blocks (`point prograde`, `land at pad`, `target orbit`) use the
+  standard guidance/control systems;
+- low-level sensors and actuators remain available to advanced programs;
+- the same script layer serves logistics and flight automation.
 
-## 10. Производительность
+## 10. Performance
 
-Оптимизировать representation, а не физические законы. Но там, где эффект доказуемо пренебрежим (§13), — редуцировать модель, а не интегрировать шум.
+Optimize representation, not physical laws. Where the effect is demonstrably
+negligible under the policy in §10.1, reduce the model instead of integrating
+noise.
 
-Для low-level CPU/GPU code performance является частью architecture, но unsafe/layout/platform tricks допускаются только с benchmark и понятным fallback. «Idiomatic» не является целью, если измеримо мешает throughput; «грязный» layout trick не является целью, если counters не показывают проблему.
+### 10.1. Bounded model reduction
 
-## 10.1. Политика редукции модели (bounded model reduction)
+The main invariant forbids replacing causality with coefficients when the
+effect changes a decision (trajectory, control, or failure). Where an error
+envelope is demonstrably bounded, reduction is allowed and preferred,
+especially for large fleets. Every reduction needs:
 
-Главный инвариант (§1) запрещает подменять причинность коэффициентами **там, где эффект влияет на решения** (траектория, управление, разрушения). Где влияние ограничено доказуемой огибающей ошибки — редукция разрешена и предпочтительна, особенно для множества аппаратов. Каждое упрощение обязано иметь:
+- an explicit config boundary (density, altitude, or mode), not a magic number;
+- calibration against the full model;
+- an absolute error envelope against a decision-relevant scale (weight, thrust,
+  or batch tolerance), not a misleading relative error;
+- a regression test pinning the envelope;
+- a benchmark showing the gain.
 
-- **явную границу** в конфиге (плотность/высота/режим), а не магическое число в коде;
-- **калибровку** reference-параметров измерением против полной модели;
-- **абсолютную огибающую ошибки** против decision-relevant масштаба (вес, тяга, допуски батча), а не относительную (относительная врёт на малых величинах);
-- **regression test**, пинящий огибающую;
-- **benchmark** выигрыша.
+Current reductions include:
 
-Примеры действующей редукции:
+- `vacuum_cutoff_density_kg_m3`: below the threshold, the medium is declared
+  vacuum exactly and vacuum fast paths/rails batches may run;
+- upper-band drag (`cutoff < rho < COAST`) uses reference-area drag instead of
+  the panel loop and sets aerodynamic moment to zero where RCS dominates;
+- batches run only in declared vacuum and cap the coast jump at
+  `MAX_COAST_BATCH_JUMP_S` for responsiveness and wake latency;
+- batch proximity checks sample the exact ephemerides at five craft/body
+  points and revalidate the current state within 5 m before each jump.
 
-- `vacuum_cutoff_density_kg_m3`: ниже порога среда — declared vacuum (точно 0.0), включаются exact-vacuum fast paths и rails-батчи;
-- верхние слои (`cutoff < ρ < COAST`): эталонно-площадное сопротивление вместо панельного цикла, нулевой аэромомент (RCS доминирует на порядки);
-- батчи летают только в declared vacuum; длина прыжка капирована (`MAX_COAST_BATCH_JUMP_S`) под responsiveness/wake latency;
-- проверка близости в батчах — точная по эфемеридам (5 сэмплов craft–body), а не worst-case margin по цепной скорости: margin считал планету враждебной (подлёт на полной орбитальной скорости) и душил все околопланетные батчи; точная проверка плюс revalidation текущего состояния в допуске 5 м перед каждым прыжком даёт ту же безопасность без ложных отказов.
+Prefer:
 
-Предпочтения:
+- SoA/AoSoA for mass numeric kernels;
+- batch gravity, aero, atmosphere, and thermal evaluation;
+- AVX2 as the native baseline and optional AVX-512 builds;
+- adaptive rates/steps for different modes;
+- expensive contacts only where actual contacts exist;
+- profiling and benchmarks before hand-written intrinsics.
 
-- SoA/AoSoA для массовых численных kernels;
-- batch gravity/aero/atmosphere/thermal evaluation;
-- AVX2 native baseline, optional AVX-512 build;
-- adaptive simulation rate/step для разных режимов;
-- expensive contacts включаются там, где реально есть контакты;
-- profiler/benchmarks обязательны до ручных intrinsics;
-- packed bitsets/bitplanes и word-wise operations допустимы для topology/state machines, если это улучшает measured workload;
-- false sharing проверяется отдельно: per-thread hot mutable state можно cache-pad/align, но padding не добавляется blanket-правилом;
-- `#[repr(C)]` используется для FFI/GPU ABI/layout contracts, а не как универсальная performance annotation;
-- `#[repr(align(N))]`/padded wrapper требует benchmark на target workload и оценки working-set cost;
-- hot read-only state и frequently-written counters/queue heads по возможности разделяются;
-- native GPU fast path обязан сравниваться с portable backend на одинаковой telemetry.
+## 11. Licenses
 
-## 10.2. Reusable GPU algorithms
+Until the project license decision changes:
 
-Для `rcbt` и будущих reusable GPU subsystems:
-
-- core semantic API не зависит от Bevy/wgpu/Vulkan;
-- backend trait описывает operations/capabilities, а не thin wrappers над `Device`/`CommandEncoder`;
-- wgpu/WGSL — portable default;
-- native Vulkan/SPIR-V path допустим как optional backend при измеримой причине;
-- subgroup/bit operations предпочтительнее искусственного использования matrix units для bit-tree work;
-- cooperative/matrix hardware может использоваться optional decoder'ом compressed data только после отдельного benchmark;
-- upstream/reference implementation можно bind'ить как oracle/benchmark baseline, но production path не обязан сохранять его internal layout;
-- performance target может быть агрессивнее reference: observable semantics важнее внутренней compatibility;
-- см. `docs/22_RCBT_GPU_TERRAIN.md`.
-
-## 11. Лицензии
-
-До решения по лицензии проекта:
-
-- не добавлять AGPL dependencies в runtime;
-- LGPL Rust dependencies требуют отдельного осознанного решения;
-- не копировать код из `nyx-space` / `avian_fdm` в проект;
-- их документацию/алгоритмические идеи можно использовать как reference с самостоятельной реализацией и первичными источниками.
-
-## 12. Definition of done для physics feature
-
-Фича не считается готовой без:
-
-1. формального описания state/inputs/outputs;
-2. теста известного частного случая;
-3. regression case;
-4. численной оценки ошибки;
-5. benchmark хотя бы на target-size batch;
-6. debug visualization/telemetry, если эффект невозможно проверить глазами иначе.
-
+- do not add AGPL dependencies to runtime;
+- LGPL Rust dependencies require an explicit decision;
+- do not copy code from `nyx-space` or `avian_fdm` into the project;
+- their documentation and algorithmic ideas may be used as references, with an
+  independent implementation and primary sources.
 
 ## 12. Licensing boundary
 
-- engine/reusable crates: SPDX `MIT`;
-- game apps/game-specific crates: SPDX `GPL-3.0-or-later`;
-- не переносить GPL-only game code в MIT engine crates;
-- permissive dependencies предпочтительны для engine; copyleft dependency в engine требует ADR с анализом redistribution/linking boundary;
-- generated code/asset licenses сохраняются явно;
-- см. `LICENSING.md`.
+- engine and reusable crates: SPDX `MIT`;
+- game apps and game-specific crates: SPDX `GPL-3.0-or-later`;
+- do not move GPL-only game code into MIT engine crates;
+- preserve generated-code and asset licenses explicitly;
+- see [`LICENSING.md`](LICENSING.md).
+
+## 13. Definition of done for a physics feature
+
+A physics feature is not complete without:
+
+1. a formal description of state, inputs, and outputs;
+2. a known-case test;
+3. a regression case;
+4. a numerical error estimate;
+5. a benchmark at target batch size;
+6. debug visualization or telemetry when the effect cannot otherwise be
+   inspected directly.

@@ -3,8 +3,8 @@ use std::{collections::BTreeMap, error::Error, fmt};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AU_M, BakedBody, BakedEphemeris, BodyId, DAY_S, EARTH_MASS_KG, EphemerisError, G,
-    JUPITER_MASS_KG, KeplerOrbit, SOLAR_MASS_KG,
+    AU_M, BakedAtmosphere, BakedBody, BakedEphemeris, BodyId, DAY_S, EARTH_MASS_KG, EphemerisError,
+    G, JUPITER_MASS_KG, KeplerOrbit, SOLAR_MASS_KG,
 };
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -68,6 +68,13 @@ pub struct CelestialConfig {
     pub period_hours_design: Option<f64>,
     pub eccentricity: Option<f64>,
     pub inclination_deg: Option<f64>,
+    /// J2000 longitude of the ascending node (deg, ecliptic). Absent means
+    /// 0 (reference direction): fine for fictional systems, wrong for real
+    /// ones — Mercury-class windows need the true node (e.g. 48.33).
+    pub longitude_of_ascending_node_deg: Option<f64>,
+    /// J2000 argument of periapsis (deg, = longitude of perihelion minus
+    /// node). Absent means 0, same caveat as above (Mercury needs 29.13).
+    pub argument_of_periapsis_deg: Option<f64>,
     pub mean_longitude_offset_deg: Option<f64>,
     pub mass_solar: Option<f64>,
     pub mass_jupiter: Option<f64>,
@@ -77,6 +84,11 @@ pub struct CelestialConfig {
     pub rotation_period_hours: Option<f64>,
     pub axial_tilt_deg: Option<f64>,
     pub tidal_lock: bool,
+    /// Surface pressure in bar. A composition without pressure is retained
+    /// as design metadata, but cannot create a playable atmosphere provider.
+    pub atmosphere_bar: Option<f64>,
+    /// Slash/plus-separated gas names, for example `N2/O2/Ar/CO2`.
+    pub atmosphere: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +102,7 @@ struct RawBody {
     rotation_period_s: Option<f64>,
     tidal_lock: bool,
     axial_tilt_rad: f64,
+    atmosphere: Option<BakedAtmosphere>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +111,8 @@ struct RawOrbit {
     semi_major_axis_m: f64,
     eccentricity: f64,
     inclination_rad: f64,
+    longitude_of_ascending_node_rad: f64,
+    argument_of_periapsis_rad: f64,
     mean_anomaly_at_epoch_rad: f64,
     /// Synthetic barycentre entries already include the orbiting component's
     /// mass; ordinary body entries derive `mu_host + mu_body` later.
@@ -138,6 +153,7 @@ impl SystemConfig {
                 rotation_period_s: None,
                 tidal_lock: false,
                 axial_tilt_rad: 0.0,
+                atmosphere: None,
             },
         )?;
         for star in &self.star {
@@ -165,6 +181,7 @@ impl SystemConfig {
                     rotation_period_s: None,
                     tidal_lock: false,
                     axial_tilt_rad: 0.0,
+                    atmosphere: None,
                 },
             )?;
         }
@@ -201,6 +218,7 @@ impl SystemConfig {
                     rotation_period_s: None,
                     tidal_lock: false,
                     axial_tilt_rad: 0.0,
+                    atmosphere: None,
                 },
             )?;
             let relative_a = required_positive(
@@ -222,6 +240,8 @@ impl SystemConfig {
                     semi_major_axis_m: first_a,
                     eccentricity,
                     inclination_rad: inclination,
+                    longitude_of_ascending_node_rad: 0.0,
+                    argument_of_periapsis_rad: 0.0,
                     mean_anomaly_at_epoch_rad: 0.0,
                     central_mu: Some(bc_mu),
                     mean_motion_rad_s: Some(inner_mean_motion),
@@ -235,6 +255,8 @@ impl SystemConfig {
                     semi_major_axis_m: second_a,
                     eccentricity,
                     inclination_rad: inclination,
+                    longitude_of_ascending_node_rad: 0.0,
+                    argument_of_periapsis_rad: 0.0,
                     mean_anomaly_at_epoch_rad: std::f64::consts::PI,
                     central_mu: Some(bc_mu),
                     mean_motion_rad_s: Some(inner_mean_motion),
@@ -276,6 +298,8 @@ impl SystemConfig {
                         semi_major_axis_m: a_a,
                         eccentricity: outer.eccentricity.unwrap_or(0.0),
                         inclination_rad: 0.0,
+                        longitude_of_ascending_node_rad: 0.0,
+                        argument_of_periapsis_rad: 0.0,
                         mean_anomaly_at_epoch_rad: 0.0,
                         central_mu: Some(stellar_mu),
                         mean_motion_rad_s: Some(outer_mean_motion),
@@ -289,6 +313,8 @@ impl SystemConfig {
                         semi_major_axis_m: bc_a,
                         eccentricity: outer.eccentricity.unwrap_or(0.0),
                         inclination_rad: 0.0,
+                        longitude_of_ascending_node_rad: 0.0,
+                        argument_of_periapsis_rad: 0.0,
                         mean_anomaly_at_epoch_rad: std::f64::consts::PI,
                         central_mu: Some(stellar_mu),
                         mean_motion_rad_s: Some(outer_mean_motion),
@@ -322,8 +348,8 @@ impl SystemConfig {
                     orbit.semi_major_axis_m,
                     orbit.eccentricity,
                     orbit.inclination_rad,
-                    0.0,
-                    0.0,
+                    orbit.longitude_of_ascending_node_rad,
+                    orbit.argument_of_periapsis_rad,
                     orbit.mean_anomaly_at_epoch_rad,
                 )?;
                 let kepler = match orbit.mean_motion_rad_s {
@@ -346,6 +372,7 @@ impl SystemConfig {
                 tidal_lock: raw.tidal_lock,
                 axial_tilt_rad: raw.axial_tilt_rad,
                 gravity_source: raw.gravity_source,
+                atmosphere: raw.atmosphere,
             });
         }
         Ok(BakedEphemeris::new(
@@ -403,6 +430,11 @@ fn add_config_body(
         semi_major_axis_m,
         eccentricity: config.eccentricity.unwrap_or(0.0),
         inclination_rad: config.inclination_deg.unwrap_or(0.0).to_radians(),
+        longitude_of_ascending_node_rad: config
+            .longitude_of_ascending_node_deg
+            .unwrap_or(0.0)
+            .to_radians(),
+        argument_of_periapsis_rad: config.argument_of_periapsis_deg.unwrap_or(0.0).to_radians(),
         mean_anomaly_at_epoch_rad: config.mean_longitude_offset_deg.unwrap_or(0.0).to_radians(),
         mean_motion_rad_s: None,
     });
@@ -433,6 +465,23 @@ fn add_config_body(
             config.id
         )));
     }
+    let atmosphere = match (&config.atmosphere, config.atmosphere_bar) {
+        (Some(composition), surface_pressure_bar) => Some(
+            BakedAtmosphere::from_design(composition, surface_pressure_bar).map_err(|error| {
+                SystemSpecError::Invalid(format!(
+                    "body {} has invalid atmosphere: {error}",
+                    config.id
+                ))
+            })?,
+        ),
+        (None, Some(_)) => {
+            return Err(SystemSpecError::Invalid(format!(
+                "body {} has atmosphere_bar but no atmosphere composition",
+                config.id
+            )));
+        }
+        (None, None) => None,
+    };
     if ids.contains_key(&config.id) {
         return Err(SystemSpecError::DuplicateId(config.id.clone()));
     }
@@ -448,6 +497,7 @@ fn add_config_body(
         rotation_period_s,
         tidal_lock: config.tidal_lock,
         axial_tilt_rad,
+        atmosphere,
     });
     Ok(id)
 }
@@ -528,5 +578,75 @@ impl Error for SystemSpecError {}
 impl From<EphemerisError> for SystemSpecError {
     fn from(error: EphemerisError) -> Self {
         Self::Ephemeris(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ORIENTED_TOML: &str = r#"
+[meta]
+epoch_name = "TEST_ORIENTED"
+
+[[star]]
+id = "sol"
+mass_solar = 1.0
+radius_solar = 1.0
+temperature_k = 5778.0
+luminosity_solar = 1.0
+
+[[planet]]
+id = "tilted"
+host = "sol"
+semi_major_axis_au = 1.0
+eccentricity = 0.1
+inclination_deg = 7.0
+longitude_of_ascending_node_deg = 48.0
+argument_of_periapsis_deg = 29.0
+mean_longitude_offset_deg = 10.0
+mass_earth = 1.0
+radius_km = 6378.0
+"#;
+
+    #[test]
+    fn node_and_periapsis_survive_the_toml_bake() {
+        let config: SystemConfig = toml::from_str(ORIENTED_TOML).expect("test toml parses");
+        let ephemeris = config.bake().expect("test system bakes");
+        let id = ephemeris.body_id("tilted").expect("tilted exists");
+        let orbit = ephemeris.body(id).expect("body").orbit.expect("has orbit");
+        assert!((orbit.inclination_rad - 7.0f64.to_radians()).abs() < 1.0e-12);
+        assert!((orbit.longitude_of_ascending_node_rad - 48.0f64.to_radians()).abs() < 1.0e-12);
+        assert!((orbit.argument_of_periapsis_rad - 29.0f64.to_radians()).abs() < 1.0e-12);
+        assert!((orbit.mean_anomaly_at_epoch_rad - 10.0f64.to_radians()).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn absent_orientation_defaults_to_the_reference_direction() {
+        let minimal = ORIENTED_TOML
+            .replace("longitude_of_ascending_node_deg = 48.0\n", "")
+            .replace("argument_of_periapsis_deg = 29.0\n", "");
+        let config: SystemConfig = toml::from_str(&minimal).expect("test toml parses");
+        let ephemeris = config.bake().expect("test system bakes");
+        let id = ephemeris.body_id("tilted").expect("tilted exists");
+        let orbit = ephemeris.body(id).expect("body").orbit.expect("has orbit");
+        assert_eq!(orbit.longitude_of_ascending_node_rad, 0.0);
+        assert_eq!(orbit.argument_of_periapsis_rad, 0.0);
+    }
+
+    #[test]
+    fn orientation_moves_the_body_off_the_reference_plane() {
+        use crate::SimTime;
+        let config: SystemConfig = toml::from_str(ORIENTED_TOML).expect("test toml parses");
+        let ephemeris = config.bake().expect("test system bakes");
+        let id = ephemeris.body_id("tilted").expect("tilted exists");
+        // A 7-degree inclined orbit with M=10 deg must sit off the
+        // reference plane; the aligned baker would keep z == 0.
+        let state = ephemeris.body_state(id, SimTime::EPOCH).expect("state");
+        assert!(
+            state.position_inertial.z.abs() > 1.0e9,
+            "oriented orbit leaves the plane, z={}",
+            state.position_inertial.z
+        );
     }
 }

@@ -10,6 +10,261 @@ const AIR_GAMMA: f64 = 1.4;
 const SUTHERLAND_REFERENCE_TEMPERATURE_K: f64 = 273.15;
 const SUTHERLAND_CONSTANT_K: f64 = 110.4;
 const SUTHERLAND_REFERENCE_VISCOSITY_PA_S: f64 = 1.716e-5;
+const UNIVERSAL_GAS_CONSTANT_J_MOL_K: f64 = 8.314_462_618;
+const BAR_TO_PA: f64 = 100_000.0;
+
+/// Gas properties baked from the composition string in the system design
+/// data. Mole fractions are intentionally equal when the design string does
+/// not specify fractions (for example, `N2/O2/Ar/CO2`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BakedAtmosphere {
+    pub composition: String,
+    /// `None` means the design describes a composition but does not define a
+    /// playable surface pressure (for example a gas giant entry).
+    #[serde(default)]
+    pub surface_pressure_pa: Option<f64>,
+    pub gas_constant_j_kg_k: f64,
+    pub heat_capacity_ratio: f64,
+    pub sutherland_reference_temperature_k: f64,
+    pub sutherland_constant_k: f64,
+    pub sutherland_reference_viscosity_pa_s: f64,
+}
+
+impl BakedAtmosphere {
+    /// Resolve a human-readable design composition into deterministic mixture
+    /// properties. The catalog is deliberately small and explicit: unknown
+    /// gases fail during baking instead of silently becoming Earth air.
+    pub fn from_design(
+        composition: &str,
+        surface_pressure_bar: Option<f64>,
+    ) -> Result<Self, AtmosphereError> {
+        let species = parse_composition(composition)?;
+        let (
+            gas_constant_j_kg_k,
+            heat_capacity_ratio,
+            reference_viscosity_pa_s,
+            sutherland_constant_k,
+        ) = mixture_properties(&species);
+        let surface_pressure_pa = match surface_pressure_bar {
+            Some(bar) if bar.is_finite() && bar >= 0.0 && (bar * BAR_TO_PA).is_finite() => {
+                Some(bar * BAR_TO_PA)
+            }
+            Some(_) => {
+                return Err(AtmosphereError::InvalidConfig(
+                    "atmosphere surface pressure must be finite and non-negative".into(),
+                ));
+            }
+            None => None,
+        };
+        let baked = Self {
+            composition: composition.trim().into(),
+            surface_pressure_pa,
+            gas_constant_j_kg_k,
+            heat_capacity_ratio,
+            sutherland_reference_temperature_k: SUTHERLAND_REFERENCE_TEMPERATURE_K,
+            sutherland_constant_k,
+            sutherland_reference_viscosity_pa_s: reference_viscosity_pa_s,
+        };
+        if !baked.gas_constant_j_kg_k.is_finite()
+            || !baked.heat_capacity_ratio.is_finite()
+            || !baked.sutherland_constant_k.is_finite()
+            || !baked.sutherland_reference_viscosity_pa_s.is_finite()
+            || baked.gas_constant_j_kg_k <= 0.0
+            || baked.heat_capacity_ratio <= 1.0
+            || baked.sutherland_constant_k < 0.0
+            || baked.sutherland_reference_viscosity_pa_s <= 0.0
+        {
+            return Err(AtmosphereError::InvalidConfig(
+                "atmosphere composition resolved to invalid gas properties".into(),
+            ));
+        }
+        Ok(baked)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GasSpecies {
+    molar_mass_kg_mol: f64,
+    gamma: f64,
+    reference_viscosity_pa_s: f64,
+    sutherland_constant_k: f64,
+    mole_fraction: f64,
+}
+
+fn parse_composition(composition: &str) -> Result<Vec<GasSpecies>, AtmosphereError> {
+    let mut components = Vec::new();
+    for raw_token in composition.split(|character: char| {
+        character == '/' || character == '+' || character == ',' || character.is_whitespace()
+    }) {
+        let token = raw_token.trim_matches(|character: char| !character.is_ascii_alphanumeric());
+        if token.is_empty() {
+            continue;
+        }
+        let normalized = token.to_ascii_uppercase();
+        if matches!(
+            normalized.as_str(),
+            "LOCAL" | "EXOSPHERE" | "PROVISIONAL" | "TRACE" | "TRACES"
+        ) {
+            continue;
+        }
+        let gas = match normalized.as_str() {
+            "N2" => GasSpecies {
+                molar_mass_kg_mol: 0.028_013_4,
+                gamma: 1.400,
+                reference_viscosity_pa_s: 1.663e-5,
+                sutherland_constant_k: 111.0,
+                mole_fraction: 0.0,
+            },
+            "O2" => GasSpecies {
+                molar_mass_kg_mol: 0.031_998_8,
+                gamma: 1.395,
+                reference_viscosity_pa_s: 1.919e-5,
+                sutherland_constant_k: 127.0,
+                mole_fraction: 0.0,
+            },
+            "AR" => GasSpecies {
+                molar_mass_kg_mol: 0.039_948,
+                gamma: 1.667,
+                reference_viscosity_pa_s: 2.117e-5,
+                sutherland_constant_k: 144.0,
+                mole_fraction: 0.0,
+            },
+            "CO2" => GasSpecies {
+                molar_mass_kg_mol: 0.044_009_5,
+                gamma: 1.294,
+                reference_viscosity_pa_s: 1.370e-5,
+                sutherland_constant_k: 222.0,
+                mole_fraction: 0.0,
+            },
+            "SO2" => GasSpecies {
+                molar_mass_kg_mol: 0.064_066,
+                gamma: 1.290,
+                reference_viscosity_pa_s: 1.250e-5,
+                sutherland_constant_k: 416.0,
+                mole_fraction: 0.0,
+            },
+            "H2" => GasSpecies {
+                molar_mass_kg_mol: 0.002_015_88,
+                gamma: 1.405,
+                reference_viscosity_pa_s: 8.76e-6,
+                sutherland_constant_k: 72.0,
+                mole_fraction: 0.0,
+            },
+            "HE" => GasSpecies {
+                molar_mass_kg_mol: 0.004_002_6,
+                gamma: 1.667,
+                reference_viscosity_pa_s: 1.96e-5,
+                sutherland_constant_k: 79.4,
+                mole_fraction: 0.0,
+            },
+            "CH4" => GasSpecies {
+                molar_mass_kg_mol: 0.016_042_5,
+                gamma: 1.300,
+                reference_viscosity_pa_s: 1.10e-5,
+                sutherland_constant_k: 170.0,
+                mole_fraction: 0.0,
+            },
+            "NH3" => GasSpecies {
+                molar_mass_kg_mol: 0.017_030_5,
+                gamma: 1.310,
+                reference_viscosity_pa_s: 9.82e-6,
+                sutherland_constant_k: 370.0,
+                mole_fraction: 0.0,
+            },
+            "H2O" => GasSpecies {
+                molar_mass_kg_mol: 0.018_015_3,
+                gamma: 1.330,
+                reference_viscosity_pa_s: 1.00e-5,
+                sutherland_constant_k: 1_064.0,
+                mole_fraction: 0.0,
+            },
+            _ => {
+                return Err(AtmosphereError::InvalidConfig(format!(
+                    "unsupported atmosphere gas {token} in composition {composition:?}"
+                )));
+            }
+        };
+        components.push((normalized, gas));
+    }
+    if components.is_empty() {
+        return Err(AtmosphereError::InvalidConfig(
+            "atmosphere composition contains no recognized gases".into(),
+        ));
+    }
+    let component_count = components.len();
+    let thessa_profile = component_count == 4
+        && ["N2", "O2", "AR", "CO2"]
+            .iter()
+            .all(|name| components.iter().any(|(candidate, _)| candidate == name));
+    let species = components
+        .into_iter()
+        .map(|(name, gas)| {
+            let mole_fraction = if thessa_profile {
+                // Design values from data/worldgen/thessa_v02.toml.
+                match name.as_str() {
+                    "N2" => 0.735,
+                    "O2" => 0.250,
+                    "AR" => 0.012,
+                    "CO2" => 0.003,
+                    _ => unreachable!("validated Thessa composition profile"),
+                }
+            } else {
+                1.0 / component_count as f64
+            };
+            GasSpecies {
+                mole_fraction,
+                ..gas
+            }
+        })
+        .collect();
+    Ok(species)
+}
+
+fn mixture_properties(species: &[GasSpecies]) -> (f64, f64, f64, f64) {
+    let mean_molar_mass = species
+        .iter()
+        .map(|gas| gas.molar_mass_kg_mol * gas.mole_fraction)
+        .sum::<f64>();
+    let gas_constant = UNIVERSAL_GAS_CONSTANT_J_MOL_K / mean_molar_mass;
+    let cp_molar = species
+        .iter()
+        .map(|gas| {
+            gas.mole_fraction * gas.gamma / (gas.gamma - 1.0) * UNIVERSAL_GAS_CONSTANT_J_MOL_K
+        })
+        .sum::<f64>();
+    let heat_capacity_ratio = cp_molar / (cp_molar - UNIVERSAL_GAS_CONSTANT_J_MOL_K);
+
+    // Wilke's mixture rule gives a stable composition-dependent transport
+    // coefficient while retaining the same one-parameter Sutherland model in
+    // AtmosphereConfig.
+    let reference_viscosity_pa_s = species
+        .iter()
+        .map(|left| {
+            let denominator = species
+                .iter()
+                .map(|right| {
+                    let phi = (1.0
+                        + (left.reference_viscosity_pa_s / right.reference_viscosity_pa_s).sqrt()
+                            * (right.molar_mass_kg_mol / left.molar_mass_kg_mol).powf(0.25))
+                    .powi(2)
+                        / (8.0 * (1.0 + left.molar_mass_kg_mol / right.molar_mass_kg_mol)).sqrt();
+                    right.mole_fraction * phi
+                })
+                .sum::<f64>();
+            left.mole_fraction * left.reference_viscosity_pa_s / denominator
+        })
+        .sum();
+    let sutherland_constant_k = species
+        .iter()
+        .map(|gas| gas.sutherland_constant_k * gas.mole_fraction)
+        .sum::<f64>();
+    (
+        gas_constant,
+        heat_capacity_ratio,
+        reference_viscosity_pa_s,
+        sutherland_constant_k,
+    )
+}
 
 /// A deterministic, hydrostatic atmosphere profile with SI/f64 outputs.
 ///
@@ -82,6 +337,46 @@ impl AtmosphereConfig {
         };
         config.validate()?;
         Ok(config)
+    }
+
+    /// Build a runtime provider from baked body composition data.
+    pub fn from_baked(
+        baked: &BakedAtmosphere,
+        sea_level_temperature_k: f64,
+        gravity_mps2: f64,
+    ) -> Result<Self, AtmosphereError> {
+        let sea_level_pressure_pa = baked.surface_pressure_pa.ok_or_else(|| {
+            AtmosphereError::InvalidConfig(format!(
+                "atmosphere {} has no playable surface pressure",
+                baked.composition
+            ))
+        })?;
+        let config = Self {
+            sea_level_temperature_k,
+            sea_level_pressure_pa,
+            gas_constant_j_kg_k: baked.gas_constant_j_kg_k,
+            heat_capacity_ratio: baked.heat_capacity_ratio,
+            gravity_mps2,
+            sutherland_reference_temperature_k: baked.sutherland_reference_temperature_k,
+            sutherland_constant_k: baked.sutherland_constant_k,
+            sutherland_reference_viscosity_pa_s: baked.sutherland_reference_viscosity_pa_s,
+            ..Self::default()
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Convenience entry point for callers that have not gone through the
+    /// system baker yet.
+    pub fn from_composition(
+        composition: &str,
+        sea_level_temperature_k: f64,
+        sea_level_pressure_pa: f64,
+        gravity_mps2: f64,
+    ) -> Result<Self, AtmosphereError> {
+        let baked =
+            BakedAtmosphere::from_design(composition, Some(sea_level_pressure_pa / BAR_TO_PA))?;
+        Self::from_baked(&baked, sea_level_temperature_k, gravity_mps2)
     }
 
     pub fn validate(self) -> Result<(), AtmosphereError> {
@@ -485,6 +780,32 @@ mod tests {
 
     fn thessa_like() -> AtmosphereConfig {
         AtmosphereConfig::new(288.15, 120_000.0, 287.05287, 1.4, 9.0).expect("valid")
+    }
+
+    #[test]
+    fn composition_bakes_pressure_and_gas_properties() {
+        let thessa = BakedAtmosphere::from_design("N2/O2/Ar/CO2 provisional", Some(1.20))
+            .expect("Thessa composition");
+        assert_eq!(thessa.surface_pressure_pa, Some(120_000.0));
+        assert!((thessa.gas_constant_j_kg_k - 284.7326).abs() < 0.01);
+        assert!(thessa.heat_capacity_ratio > 1.4);
+        assert!(thessa.sutherland_reference_viscosity_pa_s > 0.0);
+
+        let carbon_dioxide =
+            BakedAtmosphere::from_design("CO2", Some(1.20)).expect("CO2 composition");
+        assert!(carbon_dioxide.gas_constant_j_kg_k < thessa.gas_constant_j_kg_k);
+        assert_ne!(
+            carbon_dioxide.sutherland_reference_viscosity_pa_s,
+            thessa.sutherland_reference_viscosity_pa_s
+        );
+        let config = AtmosphereConfig::from_baked(&thessa, 288.15, 4.9).expect("runtime config");
+        assert_eq!(config.sea_level_pressure_pa, 120_000.0);
+        assert_eq!(config.gravity_mps2, 4.9);
+    }
+
+    #[test]
+    fn composition_rejects_unknown_gas_instead_of_using_air() {
+        assert!(BakedAtmosphere::from_design("N2/Unobtanium", Some(1.0)).is_err());
     }
 
     #[test]

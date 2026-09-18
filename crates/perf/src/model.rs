@@ -50,9 +50,26 @@ pub struct SimBudget {
     /// Requested time-warp factor.
     pub requested_warp: f64,
     /// Resolved/effective warp actually achieved.
+    ///
+    /// In embedded/server mode this is overwritten with the authoritative
+    /// server value (advanced sim time per real elapsed second); `sim_cpu_s`
+    /// stays the local client cost. Server timings below are telemetry only
+    /// and never added to frame latency.
     pub effective_warp: f64,
     /// Unprocessed simulation backlog in seconds.
     pub backlog_s: f64,
+    /// Cumulative authoritative-server compute seconds (telemetry only).
+    /// Zero when flying locally without an embedded/linked server.
+    #[serde(default)]
+    pub server_compute_s: f64,
+    /// Cumulative authoritative-server wall seconds since its start.
+    #[serde(default)]
+    pub server_wall_s: f64,
+    /// Authoritative server effective warp (`advanced / wall`), copied
+    /// verbatim from the latest snapshot. Equals `effective_warp` in
+    /// embedded mode; zero locally.
+    #[serde(default)]
+    pub server_effective_warp: f64,
 }
 
 impl Default for SimBudget {
@@ -66,6 +83,9 @@ impl Default for SimBudget {
             requested_warp: 1.0,
             effective_warp: 1.0,
             backlog_s: 0.0,
+            server_compute_s: 0.0,
+            server_wall_s: 0.0,
+            server_effective_warp: 0.0,
         }
     }
 }
@@ -96,6 +116,9 @@ impl SimBudget {
             requested_warp,
             effective_warp: effective.max(0.0),
             backlog_s: backlog_s.max(0.0),
+            server_compute_s: 0.0,
+            server_wall_s: 0.0,
+            server_effective_warp: 0.0,
         }
     }
 
@@ -117,9 +140,53 @@ impl SimBudget {
 
     /// True when the simulation could not keep up with requested warp.
     pub fn is_warp_limited(&self) -> bool {
+        if self.has_server_sample() {
+            return self.is_server_warp_limited();
+        }
         self.requested_warp > 1.0
             && self.effective_warp < self.requested_warp * 0.95
             && self.backlog_s > 0.0
+    }
+
+    /// Attach a cumulative authoritative-server sample (telemetry only).
+    ///
+    /// `sim_cpu_s` and `backlog_s` stay local; `effective_warp` becomes the
+    /// server value so the overlay/capture report one honest warp instead of
+    /// a per-client-frame recomputation from a single server quantum. A
+    /// cooperative budget that drops unserved demand shows up here as
+    /// `server_effective < requested`, never as a catch-up backlog.
+    pub fn with_server_sample(
+        mut self,
+        server_compute_s: f64,
+        server_wall_s: f64,
+        server_effective_warp: f64,
+    ) -> Self {
+        let sanitize = |v: f64| {
+            if v.is_finite() { v.max(0.0) } else { 0.0 }
+        };
+        self.server_compute_s = sanitize(server_compute_s);
+        self.server_wall_s = sanitize(server_wall_s);
+        self.server_effective_warp = sanitize(server_effective_warp);
+        if self.server_wall_s > 1.0e-9 {
+            self.effective_warp = self.server_effective_warp;
+        }
+        self
+    }
+
+    /// True when an attached server sample exists (cumulative wall > 0).
+    pub fn has_server_sample(&self) -> bool {
+        self.server_wall_s > 1.0e-9
+    }
+
+    /// Server-side warp limit: cumulative effective below requested once the
+    /// server wall is steady. The 1 s gate avoids flagging startup noise;
+    /// local `backlog_s` is meaningless in embedded mode (adopt clears the
+    /// accumulator), so it is deliberately not consulted here.
+    pub fn is_server_warp_limited(&self) -> bool {
+        self.has_server_sample()
+            && self.server_wall_s >= 1.0
+            && self.requested_warp > 1.0
+            && self.server_effective_warp < self.requested_warp * 0.95
     }
 }
 
@@ -130,9 +197,47 @@ pub struct WorldCounters {
     pub active_vehicles: u32,
     pub active_aero_panels: u32,
     pub terrain_patches_visible: u32,
+    /// Number of selected terrain leaves for the current view, including
+    /// leaves that are still being built.
+    #[serde(default)]
+    pub terrain_patches_wanted: u32,
+    /// CPU terrain jobs currently in flight on the async worker pool.
+    #[serde(default)]
+    pub terrain_jobs_in_flight: u32,
+    /// Smoothed render-eye speed used by the streaming policy, rounded to m/s.
+    #[serde(default)]
+    pub terrain_eye_speed_mps: u32,
+    /// Current velocity detail bias times 100 (`100` is full near-field detail).
+    #[serde(default)]
+    pub terrain_detail_bias_x100: u32,
+    /// Finest/coarsest visible LOD level in the current cover. Zero means no
+    /// terrain is visible; the full histogram below disambiguates level 0.
+    #[serde(default)]
+    pub terrain_lod_min: u32,
+    #[serde(default)]
+    pub terrain_lod_max: u32,
+    /// Finest selected LOD level, including tiles waiting for generation.
+    #[serde(default)]
+    pub terrain_wanted_lod_max: u32,
+    /// Visible-leaf histogram for levels 0..=17. Fixed-size data keeps the
+    /// capture schema stable while still exposing the actual LOD distribution.
+    #[serde(default)]
+    pub terrain_lod_histogram: [u32; 18],
     pub terrain_patches_generated: u32,
     pub terrain_vertices: u64,
     pub terrain_triangles: u64,
+    /// Resident CPU terrain entries (including warm reusable pages).
+    #[serde(default)]
+    pub terrain_cache_entries: u32,
+    #[serde(default)]
+    pub terrain_cache_evictions: u64,
+    #[serde(default)]
+    pub terrain_material_jobs: u32,
+    /// Visible exact pages still missing; an ancestor may provide fallback.
+    #[serde(default)]
+    pub terrain_material_missing: u32,
+    #[serde(default)]
+    pub terrain_selection_changes: u64,
     pub terrain_cache_hits: u64,
     pub terrain_cache_misses: u64,
     pub landmark_zones: u32,
@@ -331,5 +436,26 @@ mod tests {
         let gpu = GpuFrame::unavailable();
         assert!(!gpu.available);
         assert!(gpu.frame_s.is_none());
+    }
+
+    #[test]
+    fn server_sample_overrides_effective_warp_without_touching_local_cpu() {
+        let budget = super::SimBudget::from_steps(1.0 / 120.0, 12, 0.0, 100.0, 0.0, 1.0 / 60.0)
+            .with_server_sample(2.5, 10.0, 80.0);
+        assert!(budget.has_server_sample());
+        assert_eq!(budget.effective_warp, 80.0);
+        assert_eq!(budget.sim_cpu_s, 0.0);
+        assert_eq!(budget.server_compute_s, 2.5);
+        assert_eq!(budget.server_wall_s, 10.0);
+        assert!(budget.is_warp_limited());
+        // Startup noise: wall under a second never flags.
+        let warming = super::SimBudget::from_steps(1.0 / 120.0, 0, 0.0, 100.0, 0.0, 1.0 / 60.0)
+            .with_server_sample(0.01, 0.2, 10.0);
+        assert!(!warming.is_warp_limited());
+        // Non-finite telemetry sanitizes to zero instead of poisoning captures.
+        let poisoned = super::SimBudget::from_steps(1.0 / 120.0, 0, 0.0, 1.0, 0.0, 1.0 / 60.0)
+            .with_server_sample(f64::NAN, f64::INFINITY, f64::NEG_INFINITY);
+        assert!(!poisoned.has_server_sample());
+        assert_eq!(poisoned.server_compute_s, 0.0);
     }
 }

@@ -1,0 +1,243 @@
+# Mission replay fixtures: docs/07 section 7.14, fidelity L0-L2.
+#
+# Data-driven qualification for the maneuver planner on the real Solar
+# System (data/solar_system.toml, APPROXIMATE J2000 phases). Windows are
+# design-relative (days past EPOCH), never historical dates; the anchors
+# are mission ARCHITECTURE (encounter order, leg time-of-flight class)
+# and transfer ENERGY (departure, arrival v_inf, totals). Exact N-body
+# revalidation and live-authority agreement are L3-L4 (slower jobs); these
+# fixtures are broad-survey only and must stay millisecond-class for CI.
+#
+# Rule: a fixture pins what flown missions teach (sequence, TOF class,
+# energy class), never planner internals. Caps carry ~10% headroom over
+# measured deterministic winners so genuine regressions trip while grid
+# noise does not.
+
+[[direct]]
+name = "apollo-earth-luna"
+central = "earth"
+departure = "earth"
+arrival = "luna"
+departure_span_d = 30.0
+departure_steps = 120
+tof_min_d = 3.0
+tof_max_d = 7.0
+tof_steps = 40
+keep = 4
+max_broad_dv_mps = 15000.0
+# Apollo: TLI 3033 + LOI 954 = 3987. The planner prices the LEO vector
+# change plus lunar v_inf (rendezvous-null vs capture differs by ~vcirc,
+# asserted at exact level elsewhere, not here).
+max_winner_total_dv_mps = 4400.0
+max_winner_departure_dv_mps = 3550.0
+max_winner_arrival_vinf_mps = 900.0
+winner_tof_min_d = 3.0
+winner_tof_max_d = 7.0
+
+[[direct]]
+name = "earth-mars-hohmann"
+central = "sol"
+departure = "earth"
+arrival = "mars"
+departure_span_d = 800.0
+departure_steps = 40
+tof_min_d = 150.0
+tof_max_d = 320.0
+tof_steps = 30
+keep = 8
+max_broad_dv_mps = 12000.0
+# Handbook 2026-2045 optima: C3 7.8-14.8, arrival v_inf 2.5-3.3 km/s.
+max_winner_total_dv_mps = 7900.0
+max_winner_departure_dv_mps = 4000.0
+max_winner_arrival_vinf_mps = 3850.0
+winner_tof_min_d = 180.0
+winner_tof_max_d = 320.0
+
+[[direct]]
+name = "earth-venus-hohmann"
+central = "sol"
+departure = "earth"
+arrival = "venus"
+departure_span_d = 600.0
+departure_steps = 40
+tof_min_d = 100.0
+tof_max_d = 220.0
+tof_steps = 30
+keep = 8
+max_broad_dv_mps = 12000.0
+max_winner_total_dv_mps = 7100.0
+max_winner_departure_dv_mps = 4100.0
+max_winner_arrival_vinf_mps = 3000.0
+winner_tof_min_d = 100.0
+winner_tof_max_d = 220.0
+
+[[direct]]
+name = "mars-earth-return"
+central = "sol"
+departure = "mars"
+arrival = "earth"
+departure_span_d = 800.0
+departure_steps = 40
+tof_min_d = 150.0
+tof_max_d = 320.0
+tof_steps = 30
+keep = 8
+max_broad_dv_mps = 12000.0
+max_winner_total_dv_mps = 6400.0
+max_winner_departure_dv_mps = 2350.0
+max_winner_arrival_vinf_mps = 4000.0
+winner_tof_min_d = 180.0
+winner_tof_max_d = 320.0
+
+[[direct]]
+name = "earth-jupiter-hohmann"
+central = "sol"
+departure = "earth"
+arrival = "jupiter"
+departure_span_d = 800.0
+departure_steps = 30
+tof_min_d = 700.0
+tof_max_d = 1100.0
+tof_steps = 30
+keep = 8
+max_broad_dv_mps = 20000.0
+# Hohmann: C3 ~80-100, arrival v_inf ~5.6 km/s, TOF ~2.7 yr.
+max_winner_total_dv_mps = 13500.0
+max_winner_departure_dv_mps = 7450.0
+max_winner_arrival_vinf_mps = 6050.0
+winner_tof_min_d = 700.0
+winner_tof_max_d = 1100.0
+
+[[direct]]
+name = "earth-mercury-direct"
+central = "sol"
+departure = "earth"
+arrival = "mercury"
+departure_span_d = 600.0
+departure_steps = 80
+tof_min_d = 80.0
+tof_max_d = 200.0
+tof_steps = 40
+keep = 8
+max_broad_dv_mps = 25000.0
+# Hohmann total ~15.4k (dep ~5.5-7k + arrival v_inf ~9-10k). The handbook
+# C3 ~40 is departure-only for an aphelion arrival; the planner prices
+# the total, so the anchor here is the Hohmann total, not C3 40.
+max_winner_total_dv_mps = 17000.0
+max_winner_departure_dv_mps = 7500.0
+max_winner_arrival_vinf_mps = 9550.0
+winner_tof_min_d = 80.0
+winner_tof_max_d = 200.0
+
+[[direct]]
+name = "earth-saturn-direct"
+central = "sol"
+departure = "earth"
+arrival = "saturn"
+departure_span_d = 1200.0
+departure_steps = 30
+tof_min_d = 1800.0
+tof_max_d = 2500.0
+tof_steps = 30
+keep = 4
+max_broad_dv_mps = 30000.0
+# Hohmann total ~12.8k over ~6 yr: the reference for why outer missions
+# fly assists (Cassini VVEJ) instead of direct transfers.
+max_winner_total_dv_mps = 14500.0
+max_winner_departure_dv_mps = 8100.0
+max_winner_arrival_vinf_mps = 6400.0
+winner_tof_min_d = 1800.0
+winner_tof_max_d = 2500.0
+
+[[tour]]
+name = "mariner10-earth-venus-mercury"
+central = "sol"
+departure = "earth"
+flyby = ["venus"]
+arrival = "mercury"
+departure_span_d = 600.0
+departure_steps = 24
+leg1_min_d = 80.0
+leg1_max_d = 220.0
+leg1_steps = 8
+leg2_min_d = 40.0
+leg2_max_d = 200.0
+leg2_steps = 8
+keep = 3
+max_broad_dv_mps = 25000.0
+# Mariner 10 class: ~90 d Earth->Venus leg, ~52 d Venus->Mercury leg,
+# Venus encounter UNPOWERED (free bend). Broad turn price is a floored
+# lower bound, so the cap is on the turn share, not zero: the exact
+# free-vs-powered verdict belongs to L3+.
+max_winner_total_dv_mps = 20000.0
+max_winner_departure_dv_mps = 7100.0
+max_winner_turn_dv_mps = 3550.0
+winner_leg1_min_d = 80.0
+winner_leg1_max_d = 220.0
+winner_leg2_min_d = 40.0
+winner_leg2_max_d = 200.0
+
+[[chain]]
+name = "voyager1-earth-jupiter-saturn"
+central = "sol"
+departure = "earth"
+# Discovered unprompted by the planner: ~20 yr span covers the full
+# Jupiter-Saturn synodic beat (19.86 yr), so an alignment season exists
+# somewhere by construction. Winner found at T+220d: 511 d Earth->Jupiter
+# leg (V1 flew 546 d), C3 ~111 (V1: 105), near-free Jupiter bend.
+# Slow-drift Saturn flavor (1833 d leg, V1 sprinted 620 d): the grid
+# minimizes total dv, not time. Cool multi-leg EXACT needs joint
+# multiple shooting (L4); this fixture pins broad discovery (L0-L2).
+encounters = [
+  { body = "jupiter", kind = "flyby", standoff_m = 210000000.0 },
+  { body = "saturn", kind = "flyby", standoff_m = 124000000.0 },
+]
+departure_span_d = 7300.0
+departure_steps = 300
+leg_tof_min_d = [400.0, 300.0]
+leg_tof_max_d = [900.0, 2600.0]
+leg_tof_steps = [10, 10]
+keep = 4
+max_broad_dv_mps = 40000.0
+max_winner_total_dv_mps = 9000.0
+max_winner_departure_dv_mps = 8200.0
+max_winner_turn_dv_mps = 1500.0
+winner_leg_tof_min_d = [400.0, 300.0]
+winner_leg_tof_max_d = [900.0, 2600.0]
+
+[[chain]]
+name = "voyager2-grand-tour"
+central = "sol"
+departure = "earth"
+# Voyager 2 class: launch Sep 1977 -> Jupiter Jul 1979 (~670 d) ->
+# Saturn Aug 1981 (~780 d) -> Uranus Jan 1986 (~1610 d) -> Neptune
+# Aug 1989 (~1310 d); CAs from planet centers: 722/161/107/29 Mm
+# (standoffs below = CA minus body radius, i.e. periapsis classes).
+# Grand-Tour-class alignments recur ~175 yr (1977 flown). Wide scans
+# find NOTHING sub-40k in 2000-2080 and a 64k-monster family at C3 200k
+# caps in 2000-2020 (documented negative controls); the next
+# discoverable season in this ephemeris sits ~2155-2165, so the domain
+# covers T+52000d..T+64000d with margin. The planner still discovers
+# epochs, TOFs and bends inside — no dates are fed.
+# Slow-drift flavor (dv-optimum, like the V1 fixture): legs run longer
+# than flown (sprint costs dv). Cool multi-leg EXACT needs joint
+# arrival-velocity control (L4); this fixture pins broad discovery.
+encounters = [
+  { body = "jupiter", kind = "flyby", standoff_m = 650000000.0 },
+  { body = "saturn", kind = "flyby", standoff_m = 103000000.0 },
+  { body = "uranus", kind = "flyby", standoff_m = 82000000.0 },
+  { body = "neptune", kind = "flyby", standoff_m = 5000000.0 },
+]
+window_start_d = 52000.0
+departure_span_d = 12000.0
+departure_steps = 150
+leg_tof_min_d = [400.0, 300.0, 800.0, 600.0]
+leg_tof_max_d = [1100.0, 2600.0, 3600.0, 2600.0]
+leg_tof_steps = [5, 5, 5, 5]
+keep = 4
+max_broad_dv_mps = 40000.0
+max_winner_total_dv_mps = 27000.0
+max_winner_departure_dv_mps = 8400.0
+max_winner_turn_dv_mps = 18000.0
+winner_leg_tof_min_d = [400.0, 300.0, 800.0, 600.0]
+winner_leg_tof_max_d = [1100.0, 2600.0, 3600.0, 2600.0]

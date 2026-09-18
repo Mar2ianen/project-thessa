@@ -15,7 +15,11 @@ pub const MAX_SUPPORTED_DEPTH: u8 = 58;
 const ENCODING_VERSION: u8 = 1;
 const PAGE_ENCODING_VERSION: u8 = 1;
 
+pub mod bisector_pool;
+pub mod compact;
 pub mod packed;
+
+pub use bisector_pool::{Bisector, BisectorHandle, BisectorPool, BisectorPoolError};
 
 /// A heap-addressed binary-tree node.
 ///

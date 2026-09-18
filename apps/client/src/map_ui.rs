@@ -72,7 +72,9 @@ pub(super) fn update_hud(
     flight: Res<PilotFlightRuntime>,
     cameras: Query<&Transform, With<Camera3d>>,
     mut query: Query<(&mut Text, &mut Visibility), With<Hud>>,
+    mut perf: ResMut<perf::PerfMonitor>,
 ) {
+    let started = std::time::Instant::now();
     let pilot_visible = pilot
         .as_ref()
         .is_some_and(|state| state.view_mode == ClientViewMode::Pilot);
@@ -121,6 +123,7 @@ pub(super) fn update_hud(
         }
         **text = content.clone();
     }
+    perf.record_scope("client.hud", started.elapsed().as_secs_f64());
 }
 
 /// Camera-vs-body notice for the map HUD: entering a body reads as approach

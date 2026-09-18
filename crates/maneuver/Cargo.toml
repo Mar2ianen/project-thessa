@@ -1,0 +1,39 @@
+[package]
+name = "thessa-maneuver"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+
+[dependencies]
+glam.workspace = true
+serde.workspace = true
+thessa-sim-core = { path = "../sim-core" }
+
+[dev-dependencies]
+toml.workspace = true
+
+[[bench]]
+name = "porkchop"
+harness = false
+
+[[bench]]
+name = "flyby"
+harness = false
+
+[[bench]]
+name = "interbody"
+harness = false
+
+[[bench]]
+name = "low_thrust"
+harness = false
+
+[[bench]]
+name = "solar_system"
+harness = false
+
+[[bench]]
+name = "chain"
+harness = false

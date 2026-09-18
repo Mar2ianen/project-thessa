@@ -418,6 +418,7 @@ pub(super) fn craft_orbit_summary(
             thessa_sim_core::ScheduledKind::RailsHorizon => "HORIZON",
             thessa_sim_core::ScheduledKind::ManeuverNode { .. } => "NODE",
             thessa_sim_core::ScheduledKind::Alarm => "ALARM",
+            thessa_sim_core::ScheduledKind::BurnSegment { .. } => "BURN",
         };
         wake = format!("  WKE {label} T-{}", format_countdown(countdown));
     }

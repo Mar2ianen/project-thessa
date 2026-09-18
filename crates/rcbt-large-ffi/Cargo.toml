@@ -1,0 +1,13 @@
+[package]
+name = "thessa-rcbt-large-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Safe Rust binding to the vendored large_cbt OCBT CPU layout"
+
+[dependencies]
+
+[build-dependencies]
+cc = "1.2"

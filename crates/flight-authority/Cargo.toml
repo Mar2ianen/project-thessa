@@ -7,10 +7,13 @@ license = "GPL-3.0-or-later"
 publish = false
 
 [dependencies]
+thessa-collision = { path = "../collision" }
+thessa-flight-control = { path = "../flight-control" }
 thessa-sim-core = { path = "../sim-core" }
 thessa-worldgen-rocky = { path = "../../tools/worldgen-rocky" }
 glam.workspace = true
 serde.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 toml.workspace = true

@@ -8,13 +8,13 @@
 #                  -> ResolvedGraphicsSettings -> renderer + perf metadata
 #
 # The future GUI edits THIS file (typed editor over the same TOML), never a
-# second independent settings system. Unknown future keys are preserved on
-# load; physics and world state are never affected by this file.
+# second independent settings system. Unknown future keys are ignored by older
+# builds; physics and world state are never affected by this file.
 #
 # Ray tracing is experimental (Bevy Solari). `ray_tracing = "local"|"full"`
 # requests RT device features and fails fast at startup when the GPU/driver
-# cannot provide them. `"auto"` currently resolves to raster; enable RT
-# explicitly or via `THESSA_RAY_TRACING=local|full`.
+# cannot provide them. `"auto"` currently resolves to raster until adapter
+# capabilities are available to the launcher.
 
 version = 1
 preset = "high" # low | medium | high | ultra | custom (auto-shown when values diverge)
@@ -22,9 +22,12 @@ preset = "high" # low | medium | high | ultra | custom (auto-shown when values d
 [renderer]
 backend = "auto" # auto | vulkan | metal | webgpu (dx12 deferred pending ADR)
 ray_tracing = "auto" # off | local | full | auto
+terrain = "gpu_indexed" # cpu | gpu_indexed; no mesh-shader requirement
+terrain_mesh_cells = 24 # CPU middle-field density; adaptive per tile; 8..64
 resolution_scale = 1.0
-vsync = true
+vsync = false
 hdr = true
+bloom = false # bright-light glow; off by default to preserve terrain contrast
 auto_exposure = false # AE metering curve untuned; deterministic manual EV for now
 exposure_ev100 = 13.0 # manual EV100 when auto_exposure = false
 
@@ -32,7 +35,10 @@ exposure_ev100 = 13.0 # manual EV100 when auto_exposure = false
 enabled = true
 quality = "high" # low | medium | high (budgets only, never physics)
 aerial_perspective = false
-density_scale = 0.55 # visual optical-depth gain; simulation pressure is unchanged
+density_scale = 0.3 # visual optical-depth gain; simulation pressure is unchanged
+# (0.55 washed terrain contrast: measured +100 shadow lift vs no-atmosphere
+# reference; 0.3 keeps the blue sky while restoring ground contrast. Revisit
+# when the aerial LUT sampling is refined.)
 multiple_scattering = false # single-scattering first slice; LUT/MS later
 eclipses = true
 multi_star = true
@@ -64,6 +70,17 @@ landmarks = false
 atmosphere = true # ray-aware transmittance/sky queries where supported
 clouds = false
 max_distance_m = 500000.0
+
+[shadows]
+# Sun shadow cascade cover for the raster path (RT lighting ignores it).
+# Engine default ends at 150 m; planetary cover is explicit here instead
+# of magic numbers in the client.
+enabled = true
+quality = "high" # low | medium | high (expands the numbers below on preset apply)
+cascades = 4 # 1..=4
+max_distance_m = 12000.0 # far end of cover in metres; first cascade ends at max/40
+map_size = 4096 # per-cascade texel grid, power of two 512..=8192
+normal_bias_m = 1.5 # normal offset in metres against acne on 32 m mesh cells
 
 [debug]
 show_atmosphere_bounds = false

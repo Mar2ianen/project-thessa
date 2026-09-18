@@ -1,0 +1,12 @@
+[package]
+name = "thessa-autopilot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "GPL-3.0-or-later"
+publish = false
+
+[dependencies]
+thessa-flight-control = { path = "../flight-control" }
+thessa-sim-core = { path = "../sim-core" }
+serde.workspace = true

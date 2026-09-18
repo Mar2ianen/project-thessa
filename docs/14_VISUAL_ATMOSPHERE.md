@@ -1,6 +1,12 @@
 # Visual Atmosphere Architecture
 
-Status: design document / implementation target.
+Status: partial implementation. Shared optics and graphics-settings crates are
+implemented; the sections below describe the remaining rendering direction.
+
+Current source of truth: `crates/atmosphere`, `crates/graphics`, and
+`apps/client/src/atmosphere.rs`. The client currently uses Bevy raster/LUT
+atmosphere paths plus shared CPU-side optical inputs. Full cloud/weather
+coupling and every ray-aware mode described below are not shipped.
 
 Scope: rocky planets and rocky moons first. Gas giants may reuse parts of the same optical model later, but are not a requirement for the first implementation.
 
@@ -430,36 +436,40 @@ The proxy must never become the physical source of truth.
 
 Graphics settings should be represented by TOML first. The future GUI is a typed editor/view of that TOML, not a second independent settings system.
 
-Suggested structure:
+The checked-in implementation currently uses this structure:
 
 ```toml
 version = 1
 preset = "high"
 
 [renderer]
-backend = "auto"            # auto | raster | hybrid | raytraced
+backend = "auto"            # auto | vulkan | metal | webgpu
 ray_tracing = "auto"        # off | local | full | auto
+terrain = "cpu"             # cpu | gpu_indexed
+terrain_mesh_cells = 24      # CPU middle-field density; adaptive per tile, 8..64
 resolution_scale = 1.0
+vsync = true
 hdr = true
+auto_exposure = false
+exposure_ev100 = 13.0
 
 [atmosphere]
 enabled = true
-quality = "high"
-aerial_perspective = true
-multiple_scattering = true
+quality = "high"             # low | medium | high
+aerial_perspective = false
+density_scale = 0.3
+multiple_scattering = false
 eclipses = true
 multi_star = true
 limb_scattering = true
 ray_steps = 24
 
 [clouds]
-enabled = true
-quality = "high"
-volumetric = true
-ray_steps = 32
-shadow_steps = 8
-cast_shadows = true
-temporal_reprojection = true
+enabled = false
+quality = "medium"
+volumetric = false
+ray_steps = 16
+cast_shadows = false
 
 [upper_atmosphere]
 airglow = true
@@ -468,23 +478,22 @@ aurora_quality = "high"
 aurora_lighting = true
 
 [raytracing]
-enabled = "auto"
 terrain = true
 vehicles = true
-landmarks = true
+landmarks = false
 atmosphere = true
 clouds = false
-plume_lighting = true
-aurora_lighting = true
 max_distance_m = 500000.0
 
 [debug]
 show_atmosphere_bounds = false
 show_rt_proxies = false
-show_cloud_bounds = false
 ```
 
-The schema is illustrative; implementation may refine names.
+`multiple_scattering`, upper-atmosphere emission, clouds and some debug
+switches are parsed and exposed through GUI metadata even where the current
+renderer reports them as reserved follow-up work. Unknown keys are ignored by
+older builds; they are not a second hidden settings system.
 
 Presets are only bulk writes/default expansions over the same settings. They are not hidden alternative state.
 

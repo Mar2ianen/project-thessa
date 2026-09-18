@@ -16,7 +16,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::settings::{BackendRequest, Quality, RayTracingRequest, RequestedGraphics};
+use crate::settings::{
+    BackendRequest, Quality, RayTracingRequest, RequestedGraphics, TerrainRenderRequest,
+};
 
 /// Resolved ray-tracing mode. There is no single boolean: `local` buys RT
 /// where it has the highest visual value first (spec section 18).
@@ -50,6 +52,28 @@ pub struct ResolvedBackend {
     pub name: String,
 }
 
+/// Terrain raster path selected for this client run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolvedTerrainRender {
+    #[default]
+    Cpu,
+    GpuIndexed,
+}
+
+impl ResolvedTerrainRender {
+    pub fn is_gpu(self) -> bool {
+        matches!(self, Self::GpuIndexed)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::GpuIndexed => "gpu_indexed",
+        }
+    }
+}
+
 /// Runtime capability input for resolution.
 ///
 /// Adapter details are only known after renderer init, which happens after
@@ -79,10 +103,13 @@ impl Capabilities {
 pub struct ResolvedGraphicsSettings {
     pub preset_label: String,
     pub backend: ResolvedBackend,
+    pub terrain: ResolvedTerrainRender,
+    pub terrain_mesh_cells: u32,
     pub ray_tracing: ResolvedRayTracing,
     pub resolution_scale: f32,
     pub vsync: bool,
     pub hdr: bool,
+    pub bloom: bool,
     pub exposure_ev100: f32,
     pub auto_exposure: bool,
     pub atmosphere_enabled: bool,
@@ -104,6 +131,11 @@ pub struct ResolvedGraphicsSettings {
     pub rt_atmosphere_queries: bool,
     pub rt_clouds: bool,
     pub rt_max_distance_m: f64,
+    pub shadow_enabled: bool,
+    pub shadow_cascades: u32,
+    pub shadow_max_distance_m: f64,
+    pub shadow_map_size: u32,
+    pub shadow_normal_bias_m: f64,
     /// Human-readable fallback notes, also stored in captures.
     #[serde(default)]
     pub notes: Vec<String>,
@@ -135,20 +167,7 @@ impl ResolvedGraphicsSettings {
             }
         };
 
-        // `THESSA_RAY_TRACING` overrides the TOML mode for experiments.
-        let mut mode = requested.renderer.ray_tracing;
-        if let Some(env) = std::env::var("THESSA_RAY_TRACING")
-            .ok()
-            .and_then(|v| RayTracingRequest::from_str_name(v.trim().to_lowercase().as_str()))
-        {
-            notes.push(format!(
-                "ray_tracing mode {:?} overridden by THESSA_RAY_TRACING",
-                requested.renderer.ray_tracing
-            ));
-            mode = env;
-        }
-
-        let ray_tracing = match mode {
+        let ray_tracing = match requested.renderer.ray_tracing {
             RayTracingRequest::Off => ResolvedRayTracing::Off,
             RayTracingRequest::Local => {
                 Self::note_explicit_rt(caps, &mut notes);
@@ -187,10 +206,16 @@ impl ResolvedGraphicsSettings {
         Self {
             preset_label: requested.effective_preset_label().to_string(),
             backend: ResolvedBackend { name: backend_name },
+            terrain: match requested.renderer.terrain {
+                TerrainRenderRequest::Cpu => ResolvedTerrainRender::Cpu,
+                TerrainRenderRequest::GpuIndexed => ResolvedTerrainRender::GpuIndexed,
+            },
+            terrain_mesh_cells: requested.renderer.terrain_mesh_cells.clamp(8, 64),
             ray_tracing,
             resolution_scale: requested.renderer.resolution_scale,
             vsync: requested.renderer.vsync,
             hdr: requested.renderer.hdr,
+            bloom: requested.renderer.bloom,
             exposure_ev100: requested.renderer.exposure_ev100,
             auto_exposure: requested.renderer.auto_exposure && requested.renderer.hdr,
             atmosphere_enabled: requested.atmosphere.enabled,
@@ -212,6 +237,11 @@ impl ResolvedGraphicsSettings {
             rt_atmosphere_queries: requested.raytracing.atmosphere && rt_on,
             rt_clouds: requested.raytracing.clouds && rt_on,
             rt_max_distance_m: requested.raytracing.max_distance_m,
+            shadow_enabled: requested.shadows.enabled,
+            shadow_cascades: requested.shadows.cascades.clamp(1, 4),
+            shadow_max_distance_m: requested.shadows.max_distance_m.clamp(100.0, 100_000.0),
+            shadow_map_size: requested.shadows.map_size.clamp(512, 8192),
+            shadow_normal_bias_m: requested.shadows.normal_bias_m.clamp(0.0, 50.0),
             notes,
         }
     }
@@ -236,6 +266,11 @@ impl ResolvedGraphicsSettings {
         map.insert("auto_exposure".into(), self.auto_exposure.to_string());
         map.insert("preset".to_string(), self.preset_label.clone());
         map.insert("backend".to_string(), self.backend.name.clone());
+        map.insert("terrain".to_string(), self.terrain.as_str().to_string());
+        map.insert(
+            "terrain_mesh_cells".to_string(),
+            self.terrain_mesh_cells.to_string(),
+        );
         map.insert(
             "ray_tracing".to_string(),
             self.ray_tracing.as_str().to_string(),
@@ -246,6 +281,7 @@ impl ResolvedGraphicsSettings {
         );
         map.insert("vsync".to_string(), self.vsync.to_string());
         map.insert("hdr".to_string(), self.hdr.to_string());
+        map.insert("bloom".to_string(), self.bloom.to_string());
         map.insert(
             "exposure_ev100".to_string(),
             format!("{:.1}", self.exposure_ev100),
@@ -263,6 +299,15 @@ impl ResolvedGraphicsSettings {
         map.insert(
             "rt_max_distance_m".to_string(),
             format!("{:.0}", self.rt_max_distance_m),
+        );
+        map.insert("shadows".to_string(), self.shadow_enabled.to_string());
+        map.insert(
+            "shadow_cascades".to_string(),
+            self.shadow_cascades.to_string(),
+        );
+        map.insert(
+            "shadow_map_size".to_string(),
+            self.shadow_map_size.to_string(),
         );
         for (i, note) in self.notes.iter().enumerate() {
             map.insert(format!("note_{i}"), note.clone());
@@ -335,5 +380,32 @@ mod tests {
             ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
         assert_eq!(resolved.backend.name, "auto");
         assert!(resolved.notes.iter().any(|n| n.contains("dx12")));
+    }
+
+    #[test]
+    fn shadow_budgets_resolve_with_defensive_clamps() {
+        let requested = RequestedGraphics::default();
+        let resolved =
+            ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+        assert!(resolved.shadow_enabled);
+        assert_eq!(resolved.shadow_cascades, 4);
+        assert_eq!(resolved.shadow_map_size, 4096);
+        assert!((resolved.shadow_max_distance_m - 12_000.0).abs() < 1e-9);
+        let meta = resolved.as_meta_map();
+        assert_eq!(meta["shadows"], "true");
+        assert_eq!(meta["shadow_cascades"], "4");
+    }
+
+    #[test]
+    fn terrain_mode_is_resolved_without_mesh_shader_features() {
+        let mut requested = RequestedGraphics::default();
+        requested.renderer.terrain = TerrainRenderRequest::GpuIndexed;
+        let resolved =
+            ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+        assert_eq!(resolved.terrain, ResolvedTerrainRender::GpuIndexed);
+        assert_eq!(resolved.terrain_mesh_cells, 24);
+        assert!(resolved.terrain.is_gpu());
+        assert_eq!(resolved.as_meta_map()["terrain"], "gpu_indexed");
+        assert_eq!(resolved.as_meta_map()["terrain_mesh_cells"], "24");
     }
 }

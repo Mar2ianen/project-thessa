@@ -8,7 +8,6 @@
 //! advance; stepping never reads them).
 
 use std::{
-    f32::consts::TAU,
     fs::{File, create_dir_all},
     io::{BufWriter, Write},
     path::Path,
@@ -16,17 +15,33 @@ use std::{
 };
 
 use glam::{DMat3, DQuat, DVec3};
-use thessa_sim_core::{
-    AeroConfig, AeroModel, AeroState, AtmosphereConfig, AtmosphereError, BakedEphemeris, BodyId,
-    BodyState, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_VELOCITY_TOL_MPS, EventScheduler,
-    FlightError, FlightForces, FlightStepInput, GravityField, OnRailsCache, PanelAeroModel,
-    RigidBodyState, ScheduledKind, SimTime, TestParticleState, TickIntegratorConfig,
-    VehicleDefinition, WORLD_TICK_S, X15StarterProfile, evaluate_flight_forces,
-    integrate_attitude_step,
+use thessa_collision::{
+    CollisionDebugSnapshot, CollisionFrame, ContactSummary, DynamicBodyConfig, KinematicBodyId,
 };
-use thessa_worldgen_rocky::field::PlanetField;
+use thessa_flight_control::{
+    ActuatorDynamics, ControlDemand, DirectionFrame, DirectionTarget, GuidanceIntent,
+    PropulsionDemand, RollPolicy, SpacecraftControlLaw,
+};
+use thessa_sim_core::{
+    AeroConfig, AeroModel, AeroSimdScratch, AeroState, AtmosphereConfig, AtmosphereError,
+    BakedEphemeris, BodyId, BodyState, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_VELOCITY_TOL_MPS,
+    CollisionMaterial, EphemerisFrame, EventScheduler, FlightError, FlightForces, FlightStepInput,
+    GravityField, OnRailsCache, PanelAeroModel, PanelSoA, RigidBodyState, ScheduledEvent,
+    ScheduledKind, SimTime, TestParticleState, TickIntegratorConfig, VehicleDefinition,
+    WORLD_TICK_S, X15StarterProfile, evaluate_flight_forces_soa, integrate_attitude_step,
+    integrate_rigid_body_step_soa,
+};
+use thessa_worldgen_rocky::field::{ObstacleReport, ObstacleTrackCertificate, PlanetField};
 
-use crate::{BakeQueue, BakedRails, ControlMode, FlightRegime, InlineBakeQueue, RailsBakeRequest};
+use crate::{
+    BakeQueue, BakedRails, ControlMode, FlightRegime, InlineBakeQueue, RailsBakeRequest,
+    contact::{ContactActivation, ContactRuntime},
+    control::{
+        PILOT_ATTITUDE_COMMAND_RATE_RAD_S, SURFACE_COMMAND_RATE_S, allocate_rcs,
+        allocate_rcs_force, attitude_demand, slew_surface_command, solve_aero_trim,
+        surface_commands,
+    },
+};
 
 /// Advance the exact production flight path at a fixed physics cadence.
 /// Render frames only contribute elapsed time; they never set solver dt.
@@ -34,7 +49,6 @@ pub const FLIGHT_STEP_S: f64 = WORLD_TICK_S;
 /// Baked coverage ahead (s) below which a fresh worker bake starts while
 /// riding, so sustained warp never stalls at the horizon end.
 const PROACTIVE_REBAKE_AHEAD_S: f64 = 86_400.0;
-const SURFACE_COMMAND_RATE_S: f64 = 2.4; // 60 deg/s for the 25-degree elevator
 
 /// Trim-conditioning threshold, not a force cutoff. At low density the
 /// surface-response matrix becomes ill-conditioned; RCS handles attitude.
@@ -46,12 +60,6 @@ pub const COAST_DENSITY_KG_M3: f64 = 1.0e-7;
 // forces periodic cache revalidation on long horizons.
 pub const MAX_COAST_BATCH_JUMP_S: f64 = 3600.0;
 
-// Requested sim time above which an async bake cannot converge: beyond
-// ~a minute of requested flight the sim drifts past the adoption gate
-// before any worker finishes, so the cache bakes blocking once instead
-// of re-requesting forever.
-pub const ASYNC_BAKE_FOLLOW_S: f64 = 60.0;
-
 pub const X15_STALL_ANGLE_DEG: f64 = 22.0;
 const PILOT_SURFACE_CLEARANCE_M: f64 = 5.0;
 const PILOT_START_ALTITUDE_M: f64 = 500.0;
@@ -61,8 +69,87 @@ const PILOT_START_ALTITUDE_M: f64 = 500.0;
 const MAX_PILOT_ALTITUDE_M: f64 = 2.0e10;
 const MAX_PILOT_RELATIVE_SPEED_MPS: f64 = 50_000.0;
 const MAX_PILOT_ANGULAR_RATE_RPS: f64 = 25.0;
-// KSP-style attitude keys change the SAS target at a pilotable rate.
-const PILOT_ATTITUDE_COMMAND_RATE_RAD_S: f64 = 0.16;
+/// Half-size of the kinematic terrain patch maintained under a
+/// contact-active craft. Covers 120 Hz travel plus vehicle radius with
+/// margin; the patch is a locally-flat approximation of the field, not the
+/// full terrain, and is re-posed from the ephemeris every tick.
+const CONTACT_PATCH_HALF_M: f64 = 25.0;
+const CONTACT_PATCH_HALF_THICK_M: f64 = 1.0;
+
+fn normalize_direction(vector: DVec3, label: &str) -> Result<DVec3, FlightError> {
+    if !vector.is_finite() {
+        return Err(FlightError::InvalidInput(format!("{label} must be finite")));
+    }
+    let length = vector.length();
+    if !length.is_finite() || length <= 1.0e-12 {
+        return Err(FlightError::InvalidInput(format!(
+            "{label} must be nonzero"
+        )));
+    }
+    Ok(vector / length)
+}
+
+fn surface_tangent_basis(up: DVec3) -> Result<(DVec3, DVec3), FlightError> {
+    let helper = if up.z.abs() < 0.9 { DVec3::Z } else { DVec3::X };
+    let east = normalize_direction(helper.cross(up), "surface east")?;
+    let north = normalize_direction(up.cross(east), "surface north")?;
+    Ok((east, north))
+}
+
+/// Body-fixed ground direction for terrain sampling. This is the exact
+/// mapping the endpoint guard uses: inertial relative position into the
+/// rotating body frame through the `x/z/-y` axis convention. Sharing it
+/// keeps the activation evidence and the guard on the same terrain sample.
+fn ground_dir_body_fixed(
+    relative_position_inertial_m: DVec3,
+    flight_time_s: f64,
+    body_rotation_period_s: f64,
+) -> DVec3 {
+    DQuat::from_rotation_y(-(flight_time_s * std::f64::consts::TAU / body_rotation_period_s))
+        * DVec3::new(
+            relative_position_inertial_m.x,
+            relative_position_inertial_m.z,
+            -relative_position_inertial_m.y,
+        )
+        .normalize()
+}
+
+/// Assemble the flight-step load input shared by the free-flight integrator
+/// and the contact-active tick. Both paths sample identical loads; only the
+/// integrator differs.
+#[allow(clippy::too_many_arguments)]
+fn powered_step_input(
+    state: RigidBodyState,
+    kinematics: LocalAirKinematics,
+    body_velocity_inertial_mps: DVec3,
+    gravity: DVec3,
+    jet_moment: DVec3,
+    rcs_force_body_n: DVec3,
+    thrust_n: f64,
+    band_drag_body_n: DVec3,
+    skip_aero: bool,
+) -> FlightStepInput {
+    FlightStepInput {
+        altitude_m: kinematics.altitude_m.max(0.0),
+        gravity_acceleration_inertial_mps2: gravity,
+        position_body_m: kinematics.relative_position_body_m,
+        wind_velocity_body_mps: state.orientation_body_to_inertial.inverse()
+            * body_velocity_inertial_mps,
+        extra_force_body_n: DVec3::X * thrust_n + rcs_force_body_n + band_drag_body_n,
+        extra_moment_body_nm: jet_moment,
+        skip_aero,
+    }
+}
+
+/// Result of asking the rails fast path to serve the current accumulator.
+/// `WaitingForBake` is deliberately distinct from `NotEligible`: the former
+/// must yield to the worker instead of falling back to a long per-tick replay.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CoastAdvance {
+    NotEligible,
+    WaitingForBake,
+    Advanced(f64),
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct LocalAirKinematics {
@@ -73,6 +160,17 @@ pub struct LocalAirKinematics {
     pub surface_velocity_inertial_mps: DVec3,
     pub radial_up: DVec3,
     pub altitude_m: f64,
+}
+
+/// Terrain evidence for a sampled flight track. The obstacle reports prove
+/// geometric coverage of the piecewise track and provide a conservative
+/// sampled terrain ceiling. Vehicle-clearance evidence is available through
+/// the worldgen obstacle report's explicit withstand proof.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TerrainTrackCoverage {
+    pub obstacles: ObstacleTrackCertificate,
+    pub min_altitude_m: f64,
+    pub min_obstacle_clearance_m: f64,
 }
 
 /// Sample all local flight kinematics from one rigid-body state and one
@@ -244,16 +342,31 @@ pub fn conventional_angle_of_attack_deg(air_velocity_body: DVec3) -> f64 {
 pub struct FlightAuthority {
     pub reference_body: BodyId,
     pub planet_radius_m: f64,
+    /// Spin period used by both terrain orientation and atmospheric rotation.
+    /// Tidally locked bodies fall back to their design orbital period.
+    body_rotation_period_s: f64,
     pub terrain_field: Option<Arc<PlanetField>>,
+    /// Recipe-declared maximum elevation in metres (baked-in data, no field
+    /// build). Upper-bounds every baked height by construction (the baker
+    /// clamps into `[height_min_m, height_max_m]`), so batch certification
+    /// stays sound before terrain loads and for craft that never will.
+    pub recipe_max_elevation_m: f64,
     pub launch_site_dir: Option<[f64; 3]>,
     pub vehicle: VehicleDefinition,
     pub aero_model: PanelAeroModel,
+    /// Compiled SoA geometry and reusable SIMD scratch for the authoritative
+    /// per-step aero evaluation. Control inputs only refresh deflections.
+    aero_panels: PanelSoA,
+    aero_scratch: AeroSimdScratch,
     pub atmosphere: AtmosphereConfig,
     pub state: RigidBodyState,
     pub sas_target_orientation: DQuat,
     pub relative_position_m: DVec3,
     pub flight_time_s: f64,
     pub world_tick: thessa_sim_core::WorldTick,
+    /// Requested normalized propulsion command exposed in snapshots. The
+    /// physical command is kept separately below so typed/autopilot paths can
+    /// model spool response without changing the legacy wire semantics.
     pub throttle: f64,
     pub engine_active: bool,
     pub sas_enabled: bool,
@@ -267,6 +380,14 @@ pub struct FlightAuthority {
     pub accumulator_s: f64,
     pub steps_this_frame: u32,
     pub rails_advanced_this_frame: f64,
+    /// True when the optional cooperative wall budget stopped this call.
+    /// The server uses this only as a yield point: a saturated call is
+    /// followed immediately by another call, so the budget is not a duty
+    /// cycle or a global CPU/TPS cap.
+    pub work_budget_exhausted: bool,
+    /// The last advance yielded because an eligible unpowered vacuum coast
+    /// is waiting for its background rails bake.
+    pub waiting_for_rails_bake: bool,
     pub flight_error: Option<String>,
     pub last_gravity_acceleration_inertial_mps2: DVec3,
     pub last_forces: Option<FlightForces>,
@@ -278,14 +399,122 @@ pub struct FlightAuthority {
     pub rails: OnRailsCache,
     pub bake: Box<dyn BakeQueue>,
     pub rails_bake_seconds: Option<f64>,
+    /// Opt-in contact-active solver. `None` (default) is pure free flight;
+    /// `Some` observes terrain evidence with hysteresis and integrates
+    /// contact-active ticks through Rapier instead of the free-flight
+    /// integrator. Exactly one integrator owns a body per tick.
+    contact: Option<ContactRuntime>,
+    /// Kinematic terrain patch tracked by `contact`, if any.
+    contact_patch: Option<KinematicBodyId>,
     /// Simulation-time event queue: the rails bake arms its wake here, and
     /// `advance` drains due events instead of polling them every tick.
     pub scheduler: EventScheduler,
     /// Last fired wake, for the HUD orbit line.
     pub wake_notice: Option<String>,
+    /// Every authoritative wake emitted by the scheduler, retained in due
+    /// order for the server/autopilot bridge. The HUD keeps only the latest
+    /// string, but event consumers must not lose simultaneous or repeated
+    /// domain events.
+    pub wake_events: Vec<ScheduledEvent>,
+    /// Test hook: force the residual-driven second trim pass every tick.
+    /// Production runs adaptive (a singular first pass still breaks exact —
+    /// its replay would be identical). The A/B regression test pins the
+    /// adaptive path against this reference.
+    pub(crate) force_trim_two_pass: bool,
+    /// Trim solver telemetry: ticks that entered the Newton solve and ticks
+    /// that ran the second pass. The gap is skipped cooperative work, never
+    /// dropped physics — every served tick still flies a converged command.
+    pub(crate) trim_solves: u64,
+    pub(crate) trim_second_passes: u64,
+    /// Reusable per-timestamp ephemeris frame. One memoized evaluation per
+    /// tick serves the reference body, gravity and guard reads; buffers grow
+    /// once and are then reused allocation-free. Telemetry only in the sense
+    /// that it never changes physics values — see `EphemerisFrame`.
+    ephemeris_frame: EphemerisFrame,
+    /// Sum of panel reference areas, compiled once. The upper-band drag
+    /// model reads it every tick; the geometry shape never changes at
+    /// runtime (control surfaces rotate in place).
+    reference_area_m2: f64,
+    /// Explicit translation demand supplied by a declarative plan. It is
+    /// realized by bounded paired RCS force effectors on the fixed-step path.
+    explicit_force_demand_body_n: Option<DVec3>,
+    /// Explicit moment demand supplied by a declarative plan. It is consumed
+    /// by the same trim/RCS allocator as typed guidance and cleared by the
+    /// public demand entry point after its cooperative advance returns.
+    explicit_moment_demand_nm: Option<DVec3>,
+    /// State-dependent direction guidance must refresh its target before
+    /// every physical tick. It also disables the free-translation rails
+    /// batch, whose constant-attitude shortcut cannot observe a moving
+    /// surface/orbit frame.
+    guidance_state_dependent: bool,
+    /// Physical propulsion command after the actuator layer. Legacy pilot
+    /// input keeps this path immediate; typed guidance enables the response
+    /// model explicitly at its boundary.
+    propulsion_actual: f64,
+    propulsion_target: f64,
+    propulsion_dynamics_active: bool,
+    propulsion_dynamics: ActuatorDynamics,
 }
 
 impl FlightAuthority {
+    /// Initialize an opt-in, physically consistent circular orbit benchmark.
+    /// Position and velocity are inertial and include the reference body's
+    /// ephemeris translation; no render transform or camera state is touched.
+    pub fn initialize_circular_orbit(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        altitude_m: f64,
+        plane_normal: DVec3,
+    ) -> Result<(), FlightError> {
+        if !altitude_m.is_finite() || altitude_m < 0.0 {
+            return Err(FlightError::InvalidInput(
+                "orbit altitude must be finite and non-negative".into(),
+            ));
+        }
+        let normal = normalize_direction(plane_normal, "orbit plane normal")?;
+        let body = ephemeris
+            .body(self.reference_body)
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+        let radius = body.radius_m + altitude_m;
+        if !radius.is_finite() || radius <= 0.0 || !body.mu.is_finite() || body.mu <= 0.0 {
+            return Err(FlightError::InvalidInput(
+                "reference body has invalid orbit parameters".into(),
+            ));
+        }
+        let body_state = ephemeris
+            .body_state(self.reference_body, SimTime(self.flight_time_s))
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+        let helper = if normal.z.abs() < 0.9 {
+            DVec3::Z
+        } else {
+            DVec3::X
+        };
+        let radial = normalize_direction(normal.cross(helper), "orbit radial")?;
+        let prograde = normalize_direction(normal.cross(radial), "orbit prograde")?;
+        let lateral = radial.cross(prograde);
+        let relative_position = radial * radius;
+        let state = RigidBodyState::new(
+            body_state.position_inertial + relative_position,
+            body_state.velocity_inertial + prograde * (body.mu / radius).sqrt(),
+            DQuat::from_mat3(&DMat3::from_cols(prograde, lateral, radial)),
+            DVec3::ZERO,
+        )?;
+        self.state = state;
+        self.sas_target_orientation = state.orientation_body_to_inertial;
+        self.relative_position_m = relative_position;
+        self.launch_site_dir = None;
+        self.throttle = 0.0;
+        self.engine_active = false;
+        self.control_input = DVec3::ZERO;
+        self.surface_input = DVec3::ZERO;
+        self.accumulator_s = 0.0;
+        self.flight_error = None;
+        self.regime = FlightRegime::Aero;
+        self.rails.invalidate();
+        self.bake.reset();
+        Ok(())
+    }
+
     pub fn initialize_world_site(
         &mut self,
         field: Arc<PlanetField>,
@@ -293,8 +522,11 @@ impl FlightAuthority {
         ephemeris: &BakedEphemeris,
     ) {
         let up = DQuat::from_rotation_z(self.terrain_spin()) * DVec3::new(dir[0], -dir[2], dir[1]);
-        let north = (DVec3::Z - up * up.z).normalize();
-        let east = north.cross(up).normalize();
+        // Pole-safe: the old `(Z - up*up.z).normalize()` divides by ~0 when
+        // `up ≈ Z` (polar survey bookmark) and spawns NaN state. The shared
+        // helper switches reference axis near the poles; identical to the
+        // old basis elsewhere. Fallback is unreachable for unit `up`.
+        let (east, north) = surface_tangent_basis(up).unwrap_or((DVec3::X, DVec3::Y));
         let relative = up * (self.planet_radius_m + field.height_m(dir, 32.0).max(0.0) + 500.0);
         let body = ephemeris
             .body_state(self.reference_body, SimTime(self.flight_time_s))
@@ -324,16 +556,18 @@ impl FlightAuthority {
             .ok_or("no terrain field for reset")?;
         let dir = self.launch_site_dir.ok_or("no launch site for reset")?;
         self.flight_error = None;
-        self.engine_active = true;
-        self.throttle = 0.0;
+        self.set_legacy_propulsion(0.0, true);
         self.control_input = DVec3::ZERO;
         self.surface_input = DVec3::ZERO;
+        self.explicit_force_demand_body_n = None;
+        self.explicit_moment_demand_nm = None;
         self.regime = FlightRegime::Aero;
         self.accumulator_s = 0.0;
         self.rails.invalidate();
         self.bake.reset();
         self.scheduler = EventScheduler::new();
         self.wake_notice = None;
+        self.wake_events.clear();
         self.initialize_world_site(field, dir, ephemeris);
         Ok(())
     }
@@ -349,7 +583,7 @@ impl FlightAuthority {
         )
     }
     pub fn terrain_spin(&self) -> f64 {
-        self.flight_time_s * std::f64::consts::TAU / (80.0 * 3600.0)
+        self.flight_time_s * std::f64::consts::TAU / self.body_rotation_period_s
     }
     pub fn stop_reason(&self) -> Option<&str> {
         self.flight_error.as_deref()
@@ -358,11 +592,99 @@ impl FlightAuthority {
     pub fn backlog_s(&self) -> f64 {
         self.accumulator_s
     }
+
+    pub fn take_wake_events(&mut self) -> Vec<ScheduledEvent> {
+        std::mem::take(&mut self.wake_events)
+    }
     pub fn regime(&self) -> FlightRegime {
         self.regime
     }
     pub fn panel_count(&self) -> u32 {
         self.vehicle.aero_geometry.panels.len() as u32
+    }
+
+    /// Turn an inertial position track into ground directions, declare the
+    /// obstacle discs that cover it, and return the sampled terrain margin.
+    /// The report radius is half the largest ground spacing plus the normal
+    /// surface clearance, so the returned coverage proof is tied to this
+    /// exact track rather than to an arbitrary fixed radius.
+    pub fn certify_terrain_track(
+        &self,
+        ephemeris: &BakedEphemeris,
+        track: &[(SimTime, DVec3)],
+    ) -> Result<TerrainTrackCoverage, String> {
+        let field = self
+            .terrain_field
+            .as_ref()
+            .ok_or_else(|| "terrain track certification requires a loaded field".to_string())?;
+        if track.is_empty() {
+            return Err("terrain track must contain at least one sample".into());
+        }
+        let mut ground_dirs = Vec::with_capacity(track.len());
+        let mut altitudes = Vec::with_capacity(track.len());
+        for (time, position) in track {
+            if !time.0.is_finite() || !position.is_finite() {
+                return Err("terrain track contains non-finite time or position".into());
+            }
+            let body_state = ephemeris
+                .body_state(self.reference_body, *time)
+                .map_err(|error| format!("terrain track body state: {error}"))?;
+            let relative = *position - body_state.position_inertial;
+            let distance = relative.length();
+            if !distance.is_finite() || distance <= 0.0 {
+                return Err("terrain track contains a degenerate body-relative position".into());
+            }
+            ground_dirs.push((relative / distance).to_array());
+            altitudes.push(distance - self.planet_radius_m);
+        }
+        let field_radius_m = field.params.radius_m;
+        let mut max_spacing_m: f64 = 0.0;
+        for pair in ground_dirs.windows(2) {
+            let dot = (pair[0][0] * pair[1][0] + pair[0][1] * pair[1][1] + pair[0][2] * pair[1][2])
+                .clamp(-1.0, 1.0);
+            max_spacing_m = max_spacing_m.max(field_radius_m * dot.acos());
+        }
+        let desired_geodesic_radius_m = 0.5 * max_spacing_m + PILOT_SURFACE_CLEARANCE_M;
+        if desired_geodesic_radius_m >= 0.5 * std::f64::consts::PI * field_radius_m {
+            return Err("terrain track spacing is too large for a finite tangent report".into());
+        }
+        // declare_obstacles takes a tangent-plane radius. Convert the desired
+        // spherical radius back through atan so the coverage proof remains
+        // valid for large, but still representable, track gaps.
+        let report_radius_m =
+            (field_radius_m * (desired_geodesic_radius_m / field_radius_m).tan()).max(32.0);
+        let obstacles = field
+            .certify_obstacle_track(&ground_dirs, report_radius_m)
+            .map_err(|error| format!("terrain obstacle coverage: {error}"))?;
+        let min_altitude_m = altitudes.iter().copied().fold(f64::INFINITY, f64::min);
+        let min_obstacle_clearance_m = altitudes
+            .iter()
+            .zip(&obstacles.reports)
+            .map(|(altitude, report)| altitude - report.max_height_m)
+            .fold(f64::INFINITY, f64::min);
+        Ok(TerrainTrackCoverage {
+            obstacles,
+            min_altitude_m,
+            min_obstacle_clearance_m,
+        })
+    }
+
+    /// Declare one landing or impact footprint against the canonical field.
+    /// `None` means terrain is not loaded in this authority instance; the
+    /// caller can retain the site and resolve it when an observed field is
+    /// available without inventing a zero-height fallback.
+    pub fn obstacle_report(
+        &self,
+        center_dir: [f64; 3],
+        radius_m: f64,
+    ) -> Result<Option<ObstacleReport>, String> {
+        let Some(field) = self.terrain_field.as_ref() else {
+            return Ok(None);
+        };
+        field
+            .declare_obstacles(center_dir, radius_m)
+            .map(Some)
+            .map_err(|error| format!("terrain obstacle report: {error}"))
     }
 
     pub fn new(ephemeris: &BakedEphemeris, reference_body: BodyId) -> Result<Self, String> {
@@ -373,9 +695,19 @@ impl FlightAuthority {
             .body_state(reference_body, SimTime::EPOCH)
             .map_err(|error| format!("reference body state is unavailable: {error}"))?;
         let gravity = body.mu / body.radius_m.powi(2);
-        let mut atmosphere = AtmosphereConfig::new(288.15, 120_000.0, 287.05287, 1.4, gravity)
-            .map_err(|error| format!("Thessa atmosphere is invalid: {error}"))?;
-        atmosphere.body_rotation_rad_s = DVec3::new(0.0, 0.0, TAU as f64 / (80.0 * 3_600.0));
+        let mut atmosphere = match body.atmosphere.as_ref() {
+            Some(baked) => AtmosphereConfig::from_baked(baked, 288.15, gravity),
+            // Compatibility path for hand-built test ephemerides and old
+            // baked JSON. New system data always carries composition here.
+            None => AtmosphereConfig::new(288.15, 120_000.0, 287.05287, 1.4, gravity),
+        }
+        .map_err(|error| format!("{} atmosphere is invalid: {error}", body.name))?;
+        let rotation_period_s = body
+            .rotation_period_s
+            .or_else(|| body.tidal_lock.then_some(body.design_period_s).flatten())
+            .unwrap_or(80.0 * 3_600.0);
+        atmosphere.body_rotation_rad_s =
+            DVec3::new(0.0, 0.0, std::f64::consts::TAU / rotation_period_s);
 
         // Start just above the playable body's spherical datum. Give the X-15
         // a small nose-up launch attitude so its live engine start has a
@@ -396,6 +728,12 @@ impl FlightAuthority {
         )
         .map_err(|error| format!("X-15 initial state is invalid: {error}"))?;
         let vehicle = x15_vehicle()?;
+        let recipe_max_elevation_m: f64 = {
+            let recipe: thessa_worldgen_rocky::spec_recipe::SpecRecipe =
+                toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml"))
+                    .map_err(|error| format!("world recipe is invalid: {error}"))?;
+            recipe.planet.height_max_m
+        };
         let aero_model = PanelAeroModel::new(AeroConfig {
             lift_slope_per_rad: 4.6,
             control_effectiveness: 0.82,
@@ -417,14 +755,26 @@ impl FlightAuthority {
             ..AeroConfig::default()
         })
         .map_err(|error| format!("X-15 aero model is invalid: {error}"))?;
+        let reference_area_m2: f64 = vehicle
+            .aero_geometry
+            .panels
+            .iter()
+            .map(|panel| panel.area_m2)
+            .sum();
+        let aero_panels = PanelSoA::from_geometry(&vehicle.aero_geometry)
+            .map_err(|error| format!("X-15 SoA aero geometry is invalid: {error}"))?;
 
         Ok(Self {
             reference_body,
             planet_radius_m: body.radius_m,
+            body_rotation_period_s: rotation_period_s,
             terrain_field: None,
+            recipe_max_elevation_m,
             launch_site_dir: None,
             vehicle,
             aero_model,
+            aero_panels,
+            aero_scratch: AeroSimdScratch::default(),
             atmosphere,
             state,
             sas_target_orientation: orientation_body_to_inertial,
@@ -443,6 +793,8 @@ impl FlightAuthority {
             accumulator_s: 0.0,
             steps_this_frame: 0,
             rails_advanced_this_frame: 0.0,
+            work_budget_exhausted: false,
+            waiting_for_rails_bake: false,
             flight_error: None,
             last_gravity_acceleration_inertial_mps2: DVec3::ZERO,
             last_forces: None,
@@ -450,8 +802,28 @@ impl FlightAuthority {
             rails: OnRailsCache::new(),
             bake: Box::new(InlineBakeQueue::new()),
             rails_bake_seconds: None,
+            contact: None,
+            contact_patch: None,
             scheduler: EventScheduler::new(),
             wake_notice: None,
+            wake_events: Vec::new(),
+            force_trim_two_pass: false,
+            trim_solves: 0,
+            trim_second_passes: 0,
+            ephemeris_frame: EphemerisFrame::new(),
+            reference_area_m2,
+            explicit_force_demand_body_n: None,
+            explicit_moment_demand_nm: None,
+            guidance_state_dependent: false,
+            propulsion_actual: 1.0,
+            propulsion_target: 1.0,
+            propulsion_dynamics_active: false,
+            propulsion_dynamics: ActuatorDynamics {
+                response_s: 0.12,
+                max_rate_per_s: Some(8.0),
+                min_command: 0.0,
+                max_command: 1.0,
+            },
         })
     }
 
@@ -468,22 +840,562 @@ impl FlightAuthority {
     }
 
     pub fn command_controls(&mut self, pitch: f64, yaw: f64, roll: f64) {
-        // Elevator, rudder, left aileron, right aileron. The split ailerons
-        // preserve roll authority without assigning a panel to two channels.
+        // Body +X forward, +Z up implies physical right = -Y.
+        // r x F: aft-tail downforce raises the nose (-Y); downforce at -Y
+        // rolls right (+X); aft-tail +Y force yaws right (-Z).
         let _ = self
             .vehicle
-            // Body +X forward, +Z up implies physical right = -Y.
-            // r x F: aft-tail downforce raises the nose (-Y); downforce
-            // at -Y rolls right (+X); aft-tail +Y force yaws right (-Z).
-            .apply_control_inputs(&[-pitch, yaw, -roll, roll]);
+            .apply_control_inputs(&surface_commands(pitch, yaw, roll));
+    }
+
+    /// Apply a legacy pilot/compatibility command with immediate actuator
+    /// semantics. This is used by the old wire representation and by tests
+    /// that directly exercise the original X-15 path.
+    pub fn set_legacy_propulsion(&mut self, throttle: f64, active: bool) {
+        self.throttle = if throttle.is_finite() {
+            throttle.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        self.propulsion_target = self.throttle;
+        self.propulsion_actual = self.throttle;
+        self.propulsion_dynamics_active = false;
+        self.engine_active = active;
+    }
+
+    /// Set a typed/autopilot propulsion target. Allocation produces this
+    /// target; the fixed-step loop advances the physical command below it.
+    pub fn set_propulsion_target(
+        &mut self,
+        propulsion: PropulsionDemand,
+    ) -> Result<(), FlightError> {
+        if !propulsion.normalized.is_finite() || !(0.0..=1.0).contains(&propulsion.normalized) {
+            return Err(FlightError::InvalidInput(
+                "starter propulsion actuator accepts nominal demand in [0, 1]".into(),
+            ));
+        }
+        self.throttle = propulsion.normalized;
+        self.propulsion_target = propulsion.normalized;
+        self.propulsion_dynamics_active = true;
+        if propulsion.normalized > 0.0 {
+            self.engine_active = true;
+        }
+        Ok(())
+    }
+
+    /// Safety cutoff for cancellation, contact, and manual takeover. A hard
+    /// cutoff is intentional here: a disabled engine must not keep producing
+    /// force while the high-level owner is being replaced.
+    pub fn stop_propulsion(&mut self) {
+        self.throttle = 0.0;
+        self.propulsion_target = 0.0;
+        self.propulsion_actual = 0.0;
+        self.propulsion_dynamics_active = false;
+        self.engine_active = false;
+    }
+
+    fn advance_propulsion_actuator(&mut self) -> Result<(), FlightError> {
+        if !self.propulsion_dynamics_active {
+            return Ok(());
+        }
+        self.propulsion_actual = self
+            .propulsion_dynamics
+            .advance(
+                self.propulsion_actual,
+                self.propulsion_target,
+                FLIGHT_STEP_S,
+            )
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+        self.engine_active = self.propulsion_actual > 1.0e-8 || self.propulsion_target > 0.0;
+        Ok(())
+    }
+
+    fn direction_to_inertial(
+        &self,
+        ephemeris: &BakedEphemeris,
+        target: DirectionTarget,
+        roll_policy: RollPolicy,
+    ) -> Result<(DVec3, DVec3), FlightError> {
+        let body_direction = match target.frame {
+            DirectionFrame::Body => self.state.orientation_body_to_inertial * target.direction,
+            DirectionFrame::Inertial => target.direction,
+            DirectionFrame::Surface => {
+                let body = ephemeris
+                    .body_state(self.reference_body, SimTime(self.flight_time_s))
+                    .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+                let up = normalize_direction(
+                    self.state.position_inertial_m - body.position_inertial,
+                    "surface up",
+                )?;
+                let (east, north) = surface_tangent_basis(up)?;
+                east * target.direction.x + north * target.direction.y + up * target.direction.z
+            }
+            DirectionFrame::Orbit => {
+                let body = ephemeris
+                    .body_state(self.reference_body, SimTime(self.flight_time_s))
+                    .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+                let radial = normalize_direction(
+                    self.state.position_inertial_m - body.position_inertial,
+                    "orbit radial",
+                )?;
+                let prograde = normalize_direction(
+                    self.state.velocity_inertial_mps - body.velocity_inertial,
+                    "orbit prograde",
+                )?;
+                let normal = normalize_direction(radial.cross(prograde), "orbit normal")?;
+                prograde * target.direction.x
+                    + normal * target.direction.y
+                    + radial * target.direction.z
+            }
+            DirectionFrame::Target => {
+                let target_body = target.target_body.ok_or_else(|| {
+                    FlightError::InvalidInput(
+                        "target-frame guidance requires a resolved target body".into(),
+                    )
+                })?;
+                let body = ephemeris
+                    .body_state(BodyId(target_body), SimTime(self.flight_time_s))
+                    .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+                body.orientation * target.direction
+            }
+        };
+        let forward = normalize_direction(body_direction, "guidance direction")?;
+        let current_up = normalize_direction(
+            self.state.orientation_body_to_inertial * DVec3::Z,
+            "current up",
+        )?;
+        let roll_up = match target.frame {
+            DirectionFrame::Surface => {
+                let body = ephemeris
+                    .body_state(self.reference_body, SimTime(self.flight_time_s))
+                    .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+                normalize_direction(
+                    self.state.position_inertial_m - body.position_inertial,
+                    "surface up",
+                )?
+            }
+            _ => current_up,
+        };
+        let mut up_reference = match roll_policy {
+            RollPolicy::Fixed => roll_up,
+            RollPolicy::Free | RollPolicy::Hold => current_up,
+        };
+        if up_reference.cross(forward).length_squared() <= 1.0e-12 {
+            up_reference = if forward.z.abs() < 0.9 {
+                DVec3::Z
+            } else {
+                DVec3::Y
+            };
+        }
+        let side = normalize_direction(up_reference.cross(forward), "guidance roll basis")?;
+        let up = normalize_direction(forward.cross(side), "guidance up basis")?;
+        Ok((forward, up))
+    }
+
+    fn direction_target_orientation(
+        &self,
+        ephemeris: &BakedEphemeris,
+        target: DirectionTarget,
+        roll_policy: RollPolicy,
+    ) -> Result<DQuat, FlightError> {
+        let (forward, up) = self.direction_to_inertial(ephemeris, target, roll_policy)?;
+        let side = normalize_direction(up.cross(forward), "guidance side basis")?;
+        Ok(DQuat::from_mat3(&DMat3::from_cols(forward, side, up)))
+    }
+
+    /// Apply a typed guidance intent through the compatibility control path.
+    /// The returned mode is an execution detail for the legacy stepper; no
+    /// caller gets mutable access to physics or actuator state.
+    pub fn apply_guidance_intent(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        intent: &GuidanceIntent,
+    ) -> Result<ControlMode, FlightError> {
+        intent
+            .validate()
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+        match intent {
+            GuidanceIntent::ManualAxes(axes) => {
+                self.control_input = DVec3::new(axes.pitch, axes.yaw, axes.roll)
+                    .clamp(DVec3::splat(-1.0), DVec3::ONE);
+                self.sas_enabled = false;
+                Ok(ControlMode::Direct)
+            }
+            GuidanceIntent::AngularRate { rate_body_rps } => {
+                // The compatibility rate law consumes normalized control
+                // axes and applies its native 0.16 rad/s scale. Preserve the
+                // requested body-rate signs through the inverse mapping and
+                // clamp only at the physical legacy input boundary.
+                let input = DVec3::new(
+                    -rate_body_rps.y / PILOT_ATTITUDE_COMMAND_RATE_RAD_S,
+                    -rate_body_rps.z / PILOT_ATTITUDE_COMMAND_RATE_RAD_S,
+                    rate_body_rps.x / PILOT_ATTITUDE_COMMAND_RATE_RAD_S,
+                );
+                self.control_input = input.clamp(DVec3::splat(-1.0), DVec3::ONE);
+                self.sas_enabled = false;
+                Ok(ControlMode::Rate)
+            }
+            GuidanceIntent::Attitude {
+                target_body_to_inertial,
+                ..
+            } => {
+                self.sas_target_orientation = *target_body_to_inertial;
+                self.control_input = DVec3::ZERO;
+                self.sas_enabled = true;
+                Ok(ControlMode::Navball)
+            }
+            GuidanceIntent::VelocityDirection {
+                direction,
+                roll_policy,
+            } => {
+                self.sas_target_orientation = self.direction_target_orientation(
+                    ephemeris,
+                    DirectionTarget {
+                        direction: direction.direction,
+                        frame: direction.frame,
+                        target_body: direction.target_body,
+                    },
+                    *roll_policy,
+                )?;
+                self.control_input = DVec3::ZERO;
+                self.sas_enabled = true;
+                Ok(ControlMode::Navball)
+            }
+            GuidanceIntent::FlightPath { target } => {
+                self.sas_target_orientation = self.direction_target_orientation(
+                    ephemeris,
+                    DirectionTarget {
+                        direction: target.direction.direction,
+                        frame: target.direction.frame,
+                        target_body: target.direction.target_body,
+                    },
+                    target.roll_policy,
+                )?;
+                self.control_input = DVec3::ZERO;
+                self.sas_enabled = true;
+                Ok(ControlMode::Navball)
+            }
+            GuidanceIntent::Trajectory { .. } => Err(FlightError::InvalidInput(
+                "trajectory guidance requires an active plan runner".into(),
+            )),
+        }
+    }
+
+    /// Execute one typed-guidance quantum. Starter propulsion currently
+    /// realizes nominal demand only; reverse/augmentation are validated by
+    /// the policy/vehicle layer before they can reach this physical model.
+    pub fn advance_guidance(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        intent: &GuidanceIntent,
+        propulsion: PropulsionDemand,
+        elapsed_s: f64,
+    ) -> Result<(), FlightError> {
+        self.advance_guidance_with_budget(ephemeris, intent, propulsion, elapsed_s, None)
+    }
+
+    /// Budgeted typed-guidance entry point used by the server driver. It keeps
+    /// the same cooperative pacing guarantees as legacy `ControlMode` input.
+    pub fn advance_guidance_with_budget(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        intent: &GuidanceIntent,
+        propulsion: PropulsionDemand,
+        elapsed_s: f64,
+        budget: Option<std::time::Duration>,
+    ) -> Result<(), FlightError> {
+        let mode = self.apply_guidance_intent(ephemeris, intent)?;
+        self.set_propulsion_target(propulsion)?;
+        let state_dependent = matches!(
+            intent,
+            GuidanceIntent::VelocityDirection {
+                direction: DirectionTarget {
+                    frame: DirectionFrame::Surface | DirectionFrame::Orbit | DirectionFrame::Target,
+                    ..
+                },
+                ..
+            } | GuidanceIntent::FlightPath {
+                target: thessa_flight_control::FlightPathTarget {
+                    direction: DirectionTarget {
+                        frame: DirectionFrame::Surface
+                            | DirectionFrame::Orbit
+                            | DirectionFrame::Target,
+                        ..
+                    },
+                    ..
+                },
+            }
+        );
+        self.guidance_state_dependent = state_dependent;
+        let translation_force = match intent {
+            GuidanceIntent::ManualAxes(axes) => {
+                axes.translation * SpacecraftControlLaw::default().max_translation_force_n
+            }
+            _ => DVec3::ZERO,
+        };
+        self.explicit_force_demand_body_n =
+            (translation_force.length_squared() > 1.0e-24).then_some(translation_force);
+        let result =
+            self.advance_with_budget_hook(ephemeris, mode, elapsed_s, budget, |authority| {
+                if state_dependent {
+                    authority.apply_guidance_intent(ephemeris, intent)?;
+                }
+                Ok(())
+            });
+        self.guidance_state_dependent = false;
+        self.explicit_force_demand_body_n = None;
+        result
+    }
+
+    /// Advance a declarative wrench through the native actuator path. The
+    /// starter vehicle realizes translation through bounded paired RCS force
+    /// effectors while propulsion remains the physical axial effector.
+    /// Moments use the existing aerodynamic trim plus RCS residual allocator
+    /// and retain its saturation semantics.
+    pub fn advance_control_demand_with_budget(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        demand: ControlDemand,
+        elapsed_s: f64,
+        budget: Option<std::time::Duration>,
+    ) -> Result<(), FlightError> {
+        demand
+            .validate()
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+        self.set_propulsion_target(demand.propulsion)?;
+        if demand.force_body_n.length_squared() > 1.0e-24
+            || demand.moment_body_nm.length_squared() > 1.0e-24
+        {
+            self.rails.invalidate();
+            self.scheduler.clear_rails_wakes();
+        }
+        self.explicit_force_demand_body_n = Some(demand.force_body_n);
+        self.explicit_moment_demand_nm = Some(demand.moment_body_nm);
+        let result = self.advance_with_budget(ephemeris, ControlMode::Direct, elapsed_s, budget);
+        self.explicit_force_demand_body_n = None;
+        self.explicit_moment_demand_nm = None;
+        result
     }
 
     pub fn thrust_n(&self) -> f64 {
-        if self.engine_active {
+        if self.propulsion_dynamics_active {
+            self.propulsion_actual * 254_000.0
+        } else if self.engine_active {
             self.throttle * 254_000.0
         } else {
             0.0
         }
+    }
+
+    /// Arm the contact-active solver. Distances are the explicit hysteresis
+    /// boundary (enter earlier than exit): the craft integrates through
+    /// Rapier at or below `enter_distance_m` of terrain evidence and returns
+    /// to free flight past `exit_distance_m`. Arming invalidates rails so no
+    /// coast batch can span the regime change. The collision frame is
+    /// anchored at the current craft pose/velocity.
+    pub fn enable_contact_mode(
+        &mut self,
+        enter_distance_m: f64,
+        exit_distance_m: f64,
+    ) -> Result<(), FlightError> {
+        let activation = ContactActivation::new(enter_distance_m, exit_distance_m)?;
+        // Fixed origin: kinematic prescriptions and body resyncs are
+        // converted with the pre-step origin but take effect in the post-step
+        // one, so a translating origin would stale every prescription by
+        // origin_velocity * dt (one tick of orbital motion here). The frame
+        // stays inertial either way; f64 needs no follow-frame.
+        let frame =
+            CollisionFrame::new(self.state.position_inertial_m, DVec3::ZERO, DQuat::IDENTITY)
+                .map_err(|error| FlightError::InvalidInput(format!("contact frame: {error}")))?;
+        self.contact = Some(ContactRuntime::new(frame, activation)?);
+        self.contact_patch = None;
+        self.rails.invalidate();
+        self.scheduler.clear_rails_wakes();
+        Ok(())
+    }
+
+    /// Disarm the contact solver and drop its transient scene. Rails are
+    /// invalidated so free flight never resumes on a forecast that spanned
+    /// contact-active ticks.
+    pub fn disable_contact_mode(&mut self) {
+        self.contact = None;
+        self.contact_patch = None;
+        self.rails.invalidate();
+        self.scheduler.clear_rails_wakes();
+    }
+
+    /// Whether the current tick must integrate through the contact solver.
+    pub fn contact_active(&self) -> bool {
+        self.contact.as_ref().is_some_and(ContactRuntime::is_active)
+    }
+
+    /// Debug telemetry for the contact scene. Errors when contact mode is
+    /// not enabled.
+    pub fn contact_snapshot(&self) -> Result<CollisionDebugSnapshot, FlightError> {
+        self.contact
+            .as_ref()
+            .ok_or_else(|| FlightError::InvalidInput("contact mode is not enabled".into()))?
+            .debug_snapshot()
+    }
+
+    /// Take this tick's contact load evidence for the damage/telemetry
+    /// boundary. Returns an empty vector when contact mode is not enabled.
+    pub fn drain_contact_events(&mut self) -> Vec<ContactSummary> {
+        self.contact
+            .as_mut()
+            .map(ContactRuntime::drain_contact_events)
+            .unwrap_or_default()
+    }
+
+    /// Observe terrain evidence and maintain the contact regime. Returns true
+    /// when this tick must integrate through Rapier. A rising edge
+    /// invalidates rails; a falling edge drops the backend body and patch so
+    /// no stale backend state survives the return to free flight.
+    fn poll_contact_activation(
+        &mut self,
+        kinematics: LocalAirKinematics,
+    ) -> Result<bool, FlightError> {
+        if self.contact.is_none() || self.vehicle.collision_geometry.is_empty() {
+            return Ok(false);
+        }
+        let clearance_m = match &self.terrain_field {
+            Some(field) => {
+                let dir = ground_dir_body_fixed(
+                    kinematics.relative_position_inertial_m,
+                    self.flight_time_s,
+                    self.body_rotation_period_s,
+                );
+                let surface = field.params.radius_m + field.height_m(dir.to_array(), 32.0).max(0.0);
+                kinematics.relative_position_inertial_m.length() - surface
+            }
+            None => kinematics.relative_position_inertial_m.length() - self.planet_radius_m,
+        };
+        let runtime = self
+            .contact
+            .as_mut()
+            .ok_or_else(|| FlightError::InvalidInput("contact mode is not enabled".into()))?;
+        let was_active = runtime.is_active();
+        let (active, just_activated) = runtime.observe_distance(clearance_m);
+        if just_activated {
+            self.rails.invalidate();
+            self.scheduler.clear_rails_wakes();
+        }
+        if was_active && !active {
+            runtime.remove_body()?;
+            if let Some(patch) = self.contact_patch.take() {
+                runtime.evict_kinematic_terrain(patch)?;
+            }
+        }
+        Ok(active)
+    }
+
+    /// One contact-active tick: the same sampled loads as the powered step,
+    /// integrated by Rapier instead of `integrate_rigid_body_step_soa`. The
+    /// kinematic terrain patch is re-posed from the next-tick ephemeris so
+    /// the position-based body carries the surface velocity into this step.
+    #[allow(clippy::too_many_arguments)]
+    fn step_contact_active(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        body_state: BodyState,
+        gravity: DVec3,
+        kinematics: LocalAirKinematics,
+        jet_moment: DVec3,
+        rcs_force_body_n: DVec3,
+        thrust_n: f64,
+        band_drag_body_n: DVec3,
+        skip_aero: bool,
+    ) -> Result<(RigidBodyState, FlightForces), FlightError> {
+        let state = self.state;
+        let properties = self.vehicle.mass_properties;
+        let geometry = self.vehicle.collision_geometry.clone();
+        let input = powered_step_input(
+            state,
+            kinematics,
+            body_state.velocity_inertial,
+            gravity,
+            jet_moment,
+            rcs_force_body_n,
+            thrust_n,
+            band_drag_body_n,
+            skip_aero,
+        );
+        let forces = self.evaluate_forces(state, input)?;
+        let wrench = ContactRuntime::evaluate_wrench(state, properties, gravity, &forces)?;
+
+        let next_time = self.time_after_ticks(1)?;
+        let next_home = ephemeris
+            .body_state(self.reference_body, next_time)
+            .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+        let up = kinematics.radial_up;
+        let (east, north) = surface_tangent_basis(up)?;
+        // Right-handed patch basis with the thickness axis on the radial:
+        // east x up = -north, so the third column is -north.
+        let orientation = DQuat::from_mat3(&DMat3::from_cols(east, up, -north));
+        let terrain_height_m = match &self.terrain_field {
+            Some(field) => {
+                let dir = ground_dir_body_fixed(
+                    kinematics.relative_position_inertial_m,
+                    self.flight_time_s,
+                    self.body_rotation_period_s,
+                );
+                field.height_m(dir.to_array(), 32.0).max(0.0)
+            }
+            None => 0.0,
+        };
+        let surface_point =
+            next_home.position_inertial + up * (self.planet_radius_m + terrain_height_m);
+        let center_inertial = surface_point - up * CONTACT_PATCH_HALF_THICK_M;
+        let half_extents = DVec3::new(
+            CONTACT_PATCH_HALF_M,
+            CONTACT_PATCH_HALF_THICK_M,
+            CONTACT_PATCH_HALF_M,
+        );
+        let existing_patch = self.contact_patch;
+        let (next, patch) = {
+            let runtime = self
+                .contact
+                .as_mut()
+                .ok_or_else(|| FlightError::InvalidInput("contact mode is not enabled".into()))?;
+            let frame = runtime.frame();
+            let center_local = frame.position_to_local(center_inertial);
+            let orientation_local = frame.orientation_to_local(orientation);
+            let patch = match existing_patch {
+                Some(id) => id,
+                None => runtime.attach_kinematic_terrain(
+                    center_local,
+                    orientation_local,
+                    half_extents,
+                    CollisionMaterial::default(),
+                )?,
+            };
+            runtime.move_kinematic_terrain(patch, center_local, orientation_local)?;
+            runtime.sync_body(state, properties, &geometry, DynamicBodyConfig::default())?;
+            (runtime.step(FLIGHT_STEP_S, wrench)?, patch)
+        };
+        if existing_patch.is_none() {
+            self.contact_patch = Some(patch);
+        }
+        Ok((next, forces))
+    }
+
+    fn evaluate_forces(
+        &mut self,
+        state: RigidBodyState,
+        input: FlightStepInput,
+    ) -> Result<FlightForces, FlightError> {
+        self.aero_panels
+            .sync_deflections(&self.vehicle.aero_geometry)
+            .map_err(FlightError::Aero)?;
+        evaluate_flight_forces_soa(
+            &self.aero_model,
+            &self.aero_panels,
+            &mut self.aero_scratch,
+            self.atmosphere,
+            state,
+            self.vehicle.mass_properties,
+            input,
+        )
     }
 
     /// Display-only load evaluation for embedded clients: replicates the
@@ -522,12 +1434,8 @@ impl FlightAuthority {
         let band = self.upper_band_drag(kinematics, density_kg_m3);
         let skip_aero = vacuum || band.is_some();
         let (band_drag_body_n, band_q_pa) = band.unwrap_or((DVec3::ZERO, 0.0));
-        let mut forces = evaluate_flight_forces(
-            &self.aero_model,
-            &self.vehicle.aero_geometry,
-            self.atmosphere,
+        let mut forces = self.evaluate_forces(
             self.state,
-            self.vehicle.mass_properties,
             FlightStepInput {
                 altitude_m: kinematics.altitude_m.max(0.0),
                 gravity_acceleration_inertial_mps2: gravity,
@@ -550,29 +1458,6 @@ fn x15_vehicle() -> Result<VehicleDefinition, String> {
     X15StarterProfile::new()
         .map(|profile| profile.vehicle)
         .map_err(|error| error.to_string())
-}
-
-fn body_axes(command: DVec3) -> DVec3 {
-    DVec3::new(command.z, -command.x, -command.y)
-}
-
-// Each opposed pair has zero net force. Locations and force directions are
-// expressed in body metres/newtons; these are prototype jets, not X-15 data.
-fn rcs_couples() -> [DVec3; 3] {
-    [
-        2.0 * DVec3::new(0.0, 1.4, 0.0).cross(DVec3::Z * 400.0),
-        2.0 * DVec3::new(-5.0, 0.0, 0.0).cross(DVec3::Z * 400.0),
-        2.0 * DVec3::new(5.0, 0.0, 0.0).cross(DVec3::Y * 400.0),
-    ]
-}
-
-fn rcs_moment(request: DVec3, enabled: bool) -> DVec3 {
-    if !enabled {
-        return DVec3::ZERO;
-    }
-    rcs_couples().into_iter().fold(DVec3::ZERO, |sum, couple| {
-        sum + couple * (request.dot(couple) / couple.length_squared()).clamp(-1.0, 1.0)
-    })
 }
 
 impl FlightAuthority {
@@ -622,27 +1507,64 @@ impl FlightAuthority {
         elapsed_s: f64,
         budget: Option<std::time::Duration>,
     ) -> Result<(), FlightError> {
+        self.advance_with_budget_hook(ephemeris, mode, elapsed_s, budget, |_| Ok(()))
+    }
+
+    fn advance_with_budget_hook<F>(
+        &mut self,
+        ephemeris: &BakedEphemeris,
+        mode: ControlMode,
+        elapsed_s: f64,
+        budget: Option<std::time::Duration>,
+        mut before_physical_step: F,
+    ) -> Result<(), FlightError>
+    where
+        F: FnMut(&mut Self) -> Result<(), FlightError>,
+    {
         self.sync_world_tick()?;
         let started = std::time::Instant::now();
         self.steps_this_frame = 0;
         self.rails_advanced_this_frame = 0.0;
+        self.work_budget_exhausted = false;
+        self.waiting_for_rails_bake = false;
         self.accumulator_s += elapsed_s;
         let gravity_field = GravityField::from_ephemeris(ephemeris);
         while self.accumulator_s + 1.0e-12 >= FLIGHT_STEP_S {
-            let coast = self.try_advance_cached_coast(ephemeris, mode, self.accumulator_s)?;
-            if coast > 0.0 {
-                self.accumulator_s = (self.accumulator_s - coast).max(0.0);
-                self.rails_advanced_this_frame += coast;
-                // Wake at the event boundary, allowing the owner to react
-                // before any further physical work in this frame.
-                if self
-                    .scheduler
-                    .next()
-                    .is_some_and(|event| event.time.0 <= self.flight_time_s + FLIGHT_STEP_S)
-                {
+            before_physical_step(self)?;
+            self.advance_propulsion_actuator()?;
+            match self.try_advance_cached_coast(ephemeris, mode, self.accumulator_s)? {
+                CoastAdvance::Advanced(coast) => {
+                    self.accumulator_s = (self.accumulator_s - coast).max(0.0);
+                    self.rails_advanced_this_frame += coast;
+                    // Wake at the event boundary, allowing the owner to react
+                    // before any further physical work in this frame.
+                    if self
+                        .scheduler
+                        .next()
+                        .is_some_and(|event| event.time.0 <= self.flight_time_s + FLIGHT_STEP_S)
+                    {
+                        break;
+                    }
+                    if budget.is_some_and(|limit| started.elapsed() >= limit) {
+                        // A rails batch is one cooperative unit. If it used
+                        // the current work quantum, discard only the unserved
+                        // whole ticks; never turn a transient bake/CPU delay
+                        // into a catch-up queue that starves later input.
+                        self.discard_unserved_whole_ticks();
+                        self.work_budget_exhausted = true;
+                        break;
+                    }
+                    continue;
+                }
+                CoastAdvance::WaitingForBake => {
+                    // The worker owns the expensive forecast. Preserve only
+                    // the fractional lattice remainder while it finishes;
+                    // later wall slices will request fresh demand.
+                    self.discard_unserved_whole_ticks();
+                    self.waiting_for_rails_bake = true;
                     break;
                 }
-                continue;
+                CoastAdvance::NotEligible => {}
             }
             self.step(ephemeris, &gravity_field, mode)?;
             self.steps_this_frame += 1;
@@ -651,14 +1573,15 @@ impl FlightAuthority {
                 // Excess requested warp is unserved wall-time demand, not
                 // elapsed simulation time. Keep only the fractional tick;
                 // don't build a catch-up queue that delays later inputs.
-                let whole_ticks = ((self.accumulator_s + 1.0e-12) / FLIGHT_STEP_S).floor();
-                self.accumulator_s = (self.accumulator_s - whole_ticks * FLIGHT_STEP_S).max(0.0);
+                self.discard_unserved_whole_ticks();
+                self.work_budget_exhausted = true;
                 break;
             }
         }
         // Event-driven wakes: due scheduler events fire here instead of being
         // polled every physics tick.
         for event in self.scheduler.drain_due(SimTime(self.flight_time_s)) {
+            self.wake_events.push(event);
             self.wake_notice = Some(match event.kind {
                 ScheduledKind::RailsImpact { .. } => {
                     format!("WAKE IMPACT T+{:.0}s", event.time.seconds())
@@ -669,12 +1592,19 @@ impl FlightAuthority {
                 ScheduledKind::ManeuverNode { .. } => {
                     format!("WAKE NODE T+{:.0}s", event.time.seconds())
                 }
+                ScheduledKind::BurnSegment { .. } => {
+                    format!("WAKE BURN T+{:.0}s", event.time.seconds())
+                }
                 ScheduledKind::Alarm => {
                     format!("WAKE ALARM T+{:.0}s", event.time.seconds())
                 }
             });
         }
         Ok(())
+    }
+
+    fn discard_unserved_whole_ticks(&mut self) {
+        self.accumulator_s = self.accumulator_s.rem_euclid(FLIGHT_STEP_S);
     }
 
     fn validate_endpoint(
@@ -684,11 +1614,9 @@ impl FlightAuthority {
         next_body: BodyState,
         time: SimTime,
     ) -> Result<(), FlightError> {
-        // Solver guard rails read in the display (dominant-pull) frame, not
-        // the launch frame: a Nereid escape at 33 km/s is routine flight,
-        // while the same speed against the launch body would be nonsense.
-        // Statically bounding against the launch world stopped every real
-        // interlunar coast at the first handoff.
+        // Batch path: one validation per rails jump, so naive guard lookups
+        // are amortized. The per-tick `step` below serves the same reads
+        // from its memoized frame and calls `validate_endpoint_with_guard`.
         let guard_body = ephemeris
             .dominant_body(next.position_inertial_m, time)
             .unwrap_or(self.reference_body);
@@ -697,6 +1625,30 @@ impl FlightAuthority {
             .body(guard_body)
             .map(|body| body.radius_m)
             .unwrap_or(self.planet_radius_m);
+        self.validate_endpoint_with_guard(
+            next,
+            next_body,
+            time,
+            guard_body,
+            guard_state,
+            guard_radius,
+        )
+    }
+
+    fn validate_endpoint_with_guard(
+        &mut self,
+        next: &mut RigidBodyState,
+        next_body: BodyState,
+        time: SimTime,
+        guard_body: BodyId,
+        guard_state: BodyState,
+        guard_radius: f64,
+    ) -> Result<(), FlightError> {
+        // Solver guard rails read in the display (dominant-pull) frame, not
+        // the launch frame: a Nereid escape at 33 km/s is routine flight,
+        // while the same speed against the launch body would be nonsense.
+        // Statically bounding against the launch world stopped every real
+        // interlunar coast at the first handoff.
         let relative = next.position_inertial_m - next_body.position_inertial;
         let guard_relative = next.position_inertial_m - guard_state.position_inertial;
         if (guard_relative.length() - guard_radius).abs() > MAX_PILOT_ALTITUDE_M
@@ -709,15 +1661,17 @@ impl FlightAuthority {
             ));
         }
         if let Some(field) = &self.terrain_field {
-            let body_dir =
-                DQuat::from_rotation_y(-(time.0 * std::f64::consts::TAU / (80.0 * 3600.0)))
-                    * DVec3::new(relative.x, relative.z, -relative.y).normalize();
-            let surface =
-                field.params.radius_m + field.height_m(body_dir.to_array(), 32.0).max(0.0);
-            if relative.length() < surface + PILOT_SURFACE_CLEARANCE_M {
-                return Err(FlightError::InvalidInput(
-                    "terrain impact; contact dynamics are not implemented".into(),
-                ));
+            // Contact-active ticks resolve terrain through Rapier; the
+            // stop-before-penetration error below only guards free flight.
+            if !self.contact_active() {
+                let body_dir = ground_dir_body_fixed(relative, time.0, self.body_rotation_period_s);
+                let surface =
+                    field.params.radius_m + field.height_m(body_dir.to_array(), 32.0).max(0.0);
+                if relative.length() < surface + PILOT_SURFACE_CLEARANCE_M {
+                    return Err(FlightError::InvalidInput(
+                        "terrain impact; contact dynamics are not implemented".into(),
+                    ));
+                }
             }
         }
         if guard_radius > 0.0 && guard_relative.length() <= guard_radius {
@@ -728,7 +1682,11 @@ impl FlightAuthority {
             )));
         }
         // Existing spherical contact boundary; no invented angular damping.
-        if relative.length() < self.planet_radius_m + PILOT_SURFACE_CLEARANCE_M {
+        // Skipped while contact-active: Rapier owns the contact response and
+        // the clamp would fight the solver by rewriting its solved pose.
+        if !self.contact_active()
+            && relative.length() < self.planet_radius_m + PILOT_SURFACE_CLEARANCE_M
+        {
             let up = relative.normalize();
             next.position_inertial_m = next_body.position_inertial
                 + up * (self.planet_radius_m + PILOT_SURFACE_CLEARANCE_M);
@@ -740,6 +1698,22 @@ impl FlightAuthority {
             self.rails.invalidate();
         }
         Ok(())
+    }
+
+    /// Declared obstacle ceiling for rails batch certification, in metres
+    /// above the datum. Live field maximum when terrain is loaded, else the
+    /// baked-in recipe maximum: the bake clamps every height into
+    /// `[height_min_m, height_max_m]`, so the recipe bound is a sound upper
+    /// bound with no field build required. A missing field used to certify
+    /// against bare datum (0 m) — low batches could ghost through unmapped
+    /// mountains. Unobserved craft declare this ceiling instead of visual
+    /// tiles; physics stays identical, only mesh/texture synthesis is
+    /// skipped.
+    fn rails_terrain_bound_m(&self) -> f64 {
+        self.terrain_field
+            .as_ref()
+            .map(|field| field.params.height_max_m.max(0.0))
+            .unwrap_or(self.recipe_max_elevation_m)
     }
 
     /// One read of a valid coast instead of replaying every translation tick.
@@ -768,32 +1742,6 @@ impl FlightAuthority {
             COAST_RAILS_POSITION_TOL_M,
             COAST_RAILS_VELOCITY_TOL_MPS,
         )
-    }
-
-    /// Synchronous bake from live state, adopted on arrival: the blocking
-    /// catch-up for warp starts (and the no-worker fallback everywhere).
-    /// Runs inline regardless of queue flavor; a pending async bake is the
-    /// caller's responsibility to check first.
-    fn bake_now(&mut self, ephemeris: &BakedEphemeris) {
-        let initial = TestParticleState {
-            position: self.state.position_inertial_m,
-            velocity: self.state.velocity_inertial_mps,
-        };
-        let request = RailsBakeRequest {
-            initial,
-            time: SimTime(self.flight_time_s),
-            config: TickIntegratorConfig::default(),
-            impact_bodies: ephemeris
-                .bodies
-                .iter()
-                .filter(|b| b.radius_m > 0.0)
-                .map(|b| b.id)
-                .collect(),
-            ephemeris: ephemeris.clone(),
-        };
-        if let Ok(baked) = crate::bake::run_bake(&request) {
-            self.adopt_rails_bake(ephemeris, baked);
-        }
     }
 
     /// Shared adoption: integrity check (this bake, this universe) plus
@@ -832,31 +1780,41 @@ impl FlightAuthority {
         ephemeris: &BakedEphemeris,
         mode: ControlMode,
         requested_s: f64,
-    ) -> Result<f64, FlightError> {
-        if self.thrust_n() != 0.0 || self.trace.is_some() {
-            return Ok(0.0);
+    ) -> Result<CoastAdvance, FlightError> {
+        // A contact-active craft never rides baked translation: Rapier owns
+        // its pose every tick, so a rails batch would integrate a second,
+        // divergent trajectory through the same interval.
+        if self.contact_active() {
+            return Ok(CoastAdvance::NotEligible);
         }
-        // Collect a worker bake that finished while earlier batches flew;
-        // the batch loop otherwise never polls, and coverage would stall.
-        self.poll_rails_bake(ephemeris);
-        // Warp catch-up: an async bake can never converge when the request
-        // outruns the worker (the sim drifts past the 5 m adoption gate
-        // before the worker finishes, so the loop would re-request
-        // forever). Above the threshold an unusable cache bakes blocking
-        // once, then rides unlimited; a pending bake is left alone.
-        if requested_s > ASYNC_BAKE_FOLLOW_S
-            && !self.bake.has_pending()
-            && !self.rails_usable_now(ephemeris)
+        if self.guidance_state_dependent {
+            return Ok(CoastAdvance::NotEligible);
+        }
+        // A declarative moment is an active actuator demand. The rails path
+        // only integrates free translation and constant-spin attitude, so a
+        // non-zero explicit moment must stay on the fixed-step allocator path.
+        if self
+            .explicit_moment_demand_nm
+            .is_some_and(|moment| moment.length_squared() > 1.0e-24)
         {
-            self.bake_now(ephemeris);
+            return Ok(CoastAdvance::NotEligible);
         }
-        if self.rails.is_empty() {
-            return Ok(0.0);
+        if self
+            .explicit_force_demand_body_n
+            .is_some_and(|force| force.length_squared() > 1.0e-24)
+        {
+            return Ok(CoastAdvance::NotEligible);
         }
-        // A zero controller moment at the first instant is not a promise
-        // that SAS stays idle while a spinning craft turns away from target.
-        // Do not run the stateful allocator speculatively either: a failed
-        // batch would otherwise advance its actuator slew twice in one tick.
+        if self.thrust_n() != 0.0
+            || (self.propulsion_dynamics_active
+                && (self.propulsion_target > 1.0e-8 || self.propulsion_actual > 1.0e-8))
+            || self.trace.is_some()
+        {
+            return Ok(CoastAdvance::NotEligible);
+        }
+        // A controlled coast must stay on the fixed-step path so RCS/SAS can
+        // update attitude. Check this before touching the bake queue: a cold
+        // forecast must never delay responsive maneuver input.
         let attitude_hold =
             self.sas_enabled && matches!(mode, ControlMode::Navball | ControlMode::MouseAim);
         if self.rcs_enabled
@@ -867,8 +1825,45 @@ impl FlightAuthority {
                     && self.sas_target_orientation != self.state.orientation_body_to_inertial
                     && self.sas_target_orientation != -self.state.orientation_body_to_inertial))
         {
-            return Ok(0.0);
+            return Ok(CoastAdvance::NotEligible);
         }
+        // The exact declared-vacuum boundary is the contract that makes
+        // translation batching physically valid. Do not prepare or wait for
+        // a forecast while the craft is still in sampled atmosphere.
+        let body_state = ephemeris
+            .body_state(self.reference_body, SimTime(self.flight_time_s))
+            .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+        let altitude_m = (self.state.position_inertial_m - body_state.position_inertial).length()
+            - self.planet_radius_m;
+        let density_kg_m3 = self
+            .atmosphere
+            .sample(altitude_m.max(0.0))
+            .map_err(|e| FlightError::InvalidInput(e.to_string()))?
+            .density_kg_m3;
+        if density_kg_m3 != 0.0 {
+            return Ok(CoastAdvance::NotEligible);
+        }
+        // Collect a worker bake that finished while earlier batches flew;
+        // the batch loop otherwise never polls, and coverage would stall.
+        self.poll_rails_bake(ephemeris);
+        // A cold or stale cache is a cooperative wait, never a synchronous
+        // bake and never a fallback replay of the whole requested warp.
+        // Inline queues finish during poll (useful for deterministic tests);
+        // worker queues return WaitingForBake until the next driver quantum.
+        if !self.rails_usable_now(ephemeris) {
+            if !self.bake.has_pending() {
+                self.spawn_rails_bake(ephemeris);
+                self.poll_rails_bake(ephemeris);
+            }
+            if !self.rails_usable_now(ephemeris) {
+                return if self.bake.has_pending() {
+                    Ok(CoastAdvance::WaitingForBake)
+                } else {
+                    Ok(CoastAdvance::NotEligible)
+                };
+            }
+        }
+        self.arm_rails_wake();
         let time = SimTime(self.flight_time_s);
         let mut duration = ((requested_s + 1.0e-12) / FLIGHT_STEP_S).floor() * FLIGHT_STEP_S;
         // Capped jumps: vacuum batches are drag-free by construction
@@ -889,10 +1884,7 @@ impl FlightAuthority {
             );
         }
         if duration < 2.0 * FLIGHT_STEP_S {
-            return Ok(0.0);
-        }
-        if !self.rails_usable_now(ephemeris) {
-            return Ok(0.0);
+            return Ok(CoastAdvance::NotEligible);
         }
         // Proactive JIT preparation for sustained warp: when baked coverage
         // ahead drops under a day, start a fresh full-horizon worker bake
@@ -908,8 +1900,34 @@ impl FlightAuthority {
         let end = self.time_after_ticks(ticks)?;
         // Coverage guard only; separation is certified per-sample below.
         if self.rails.position_bounds(time, end).is_none() {
-            return Ok(0.0);
+            return Ok(CoastAdvance::NotEligible);
         }
+        // A live field can replace the global recipe ceiling with a track
+        // report, but only when the five-point batch is close enough to
+        // terrain for that distinction to matter. Above the known ceiling the
+        // recipe bound is already a proof and avoids rebuilding obstacle grids
+        // on every high-warp batch.
+        let terrain_track = if self.terrain_field.is_some() {
+            let mut track = Vec::with_capacity(5);
+            let mut near_terrain = false;
+            for point in 0..5 {
+                let sample_time = SimTime(time.0 + (end.0 - time.0) * f64::from(point) / 4.0);
+                let Some((position, _)) = self.rails.sample_at(sample_time) else {
+                    return Ok(CoastAdvance::NotEligible);
+                };
+                let body_state = ephemeris
+                    .body_state(self.reference_body, sample_time)
+                    .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+                let altitude_m =
+                    (position - body_state.position_inertial).length() - self.planet_radius_m;
+                near_terrain |=
+                    altitude_m <= self.rails_terrain_bound_m() + PILOT_SURFACE_CLEARANCE_M;
+                track.push((sample_time, position));
+            }
+            near_terrain.then_some(track)
+        } else {
+            None
+        };
         for body in ephemeris
             .bodies
             .iter()
@@ -923,25 +1941,25 @@ impl FlightAuthority {
             // between-sample curvature error is sub-meter, far inside the
             // surface clearance. Geometry keeps a hard refuse; only the
             // margin heuristic is gone.
-            let terrain_bound = if body.id == self.reference_body {
-                self.terrain_field
-                    .as_ref()
-                    .map_or(0.0, |field| field.params.height_max_m.max(0.0))
+            let terrain_bound = if body.id == self.reference_body && terrain_track.is_none() {
+                self.rails_terrain_bound_m()
             } else {
                 0.0
             };
             for point in 0..5 {
                 let sample_time = SimTime(time.0 + (end.0 - time.0) * f64::from(point) / 4.0);
                 let Some((position, _)) = self.rails.sample_at(sample_time) else {
-                    return Ok(0.0);
+                    return Ok(CoastAdvance::NotEligible);
                 };
                 let body_state = ephemeris
                     .body_state(body.id, sample_time)
                     .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
                 let clearance_m =
                     (position - body_state.position_inertial).length() - body.radius_m;
-                if clearance_m <= terrain_bound + PILOT_SURFACE_CLEARANCE_M {
-                    return Ok(0.0);
+                if clearance_m <= terrain_bound + PILOT_SURFACE_CLEARANCE_M
+                    && !(body.id == self.reference_body && terrain_track.is_some())
+                {
+                    return Ok(CoastAdvance::NotEligible);
                 }
                 if body.id == self.reference_body {
                     let altitude_m =
@@ -952,9 +1970,20 @@ impl FlightAuthority {
                         .map(|sample| sample.density_kg_m3)
                         .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
                     if density_kg_m3 != 0.0 {
-                        return Ok(0.0);
+                        return Ok(CoastAdvance::NotEligible);
                     }
                 }
+            }
+        }
+        if let Some(track) = terrain_track {
+            let Ok(coverage) = self.certify_terrain_track(ephemeris, &track) else {
+                return Ok(CoastAdvance::NotEligible);
+            };
+            // Coverage is proven by the obstacle report; this sampled margin
+            // is the current gate. A sub-grid withstand bound is deliberately
+            // left for the next certification layer.
+            if coverage.min_obstacle_clearance_m <= PILOT_SURFACE_CLEARANCE_M {
+                return Ok(CoastAdvance::NotEligible);
             }
         }
         let Some(orientation) = thessa_sim_core::constant_spin_orientation(
@@ -963,7 +1992,7 @@ impl FlightAuthority {
             self.vehicle.mass_properties.inertia_body_kg_m2,
             duration,
         ) else {
-            return Ok(0.0);
+            return Ok(CoastAdvance::NotEligible);
         };
         self.regime = FlightRegime::Coast;
         let (position, velocity) = self.rails.sample_at(end).expect("bounded coast interval");
@@ -983,12 +2012,8 @@ impl FlightAuthority {
             .acceleration(position, end)
             .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
         self.last_gravity_acceleration_inertial_mps2 = gravity;
-        self.last_forces = Some(evaluate_flight_forces(
-            &self.aero_model,
-            &self.vehicle.aero_geometry,
-            self.atmosphere,
+        self.last_forces = Some(self.evaluate_forces(
             next,
-            self.vehicle.mass_properties,
             FlightStepInput {
                 altitude_m: (position - next_home.position_inertial).length()
                     - self.planet_radius_m,
@@ -1003,7 +2028,7 @@ impl FlightAuthority {
         self.state = next;
         self.commit_ticks(ticks)?;
         self.relative_position_m = position - next_home.position_inertial;
-        Ok(duration)
+        Ok(CoastAdvance::Advanced(duration))
     }
 
     fn allocate_controls(
@@ -1011,64 +2036,33 @@ impl FlightAuthority {
         kinematics: LocalAirKinematics,
         mode: ControlMode,
     ) -> Result<DVec3, FlightError> {
-        let axes = body_axes(self.control_input);
-        let assisted = mode != ControlMode::Direct;
-        let attitude_hold =
-            self.sas_enabled && matches!(mode, ControlMode::Navball | ControlMode::MouseAim);
-        let desired_rate = if attitude_hold && axes.length_squared() > 1.0e-8 {
-            // Manual input overrides attitude hold. Capture the achieved
-            // attitude, so a long turn cannot wind an unreachable target past
-            // 180 degrees and make shortest-path SAS reverse the manoeuvre.
-            self.sas_target_orientation = self.state.orientation_body_to_inertial;
-            axes * PILOT_ATTITUDE_COMMAND_RATE_RAD_S
-        } else if attitude_hold {
-            let mut error =
-                self.state.orientation_body_to_inertial.inverse() * self.sas_target_orientation;
-            // q and -q represent the same attitude; use the short rotation.
-            if error.w < 0.0 {
-                error = -error;
-            }
-            let angle = error.to_scaled_axis();
-            let couples = rcs_couples();
-            let inertia = self.vehicle.mass_properties.inertia_body_kg_m2;
-            let acceleration = DVec3::new(
-                couples[0].x / inertia.x_axis.x,
-                couples[1].y / inertia.y_axis.y,
-                couples[2].z / inertia.z_axis.z,
-            );
-            // Brake early enough for the finite jets. A fixed high-gain
-            // attitude loop saturates in vacuum and keeps overshooting.
-            let braking_rate = (acceleration * angle.abs() * 0.5).sqrt();
-            (angle * 1.6)
-                .clamp(-braking_rate, braking_rate)
-                .clamp_length_max(0.35)
-        } else {
-            // Capturing here avoids a jump to an old SAS target when re-enabled.
-            self.sas_target_orientation = self.state.orientation_body_to_inertial;
-            axes * PILOT_ATTITUDE_COMMAND_RATE_RAD_S
-        };
-        let inertia = self.vehicle.mass_properties.inertia_body_kg_m2;
-        let omega = self.state.angular_velocity_body_rps;
-        let requested = inertia * ((desired_rate - omega) / 0.35) + omega.cross(inertia * omega);
+        let attitude = attitude_demand(
+            mode,
+            self.sas_enabled,
+            self.control_input,
+            self.state,
+            self.sas_target_orientation,
+            self.vehicle.mass_properties.inertia_body_kg_m2,
+        );
+        let explicit_moment = self.explicit_moment_demand_nm;
+        if explicit_moment.is_none() {
+            self.sas_target_orientation = attitude.target_orientation;
+        }
+        let axes = explicit_moment.map_or(attitude.axes, |_| DVec3::ZERO);
+        let assisted = explicit_moment.is_some() || mode != ControlMode::Direct;
+        let requested = explicit_moment.unwrap_or(attitude.requested_moment_nm);
         // Vacuum fast path: no air load exists, so the trim solve and the
         // response evaluation are skipped outright (exactly zero aero
         // moment); attitude flies on RCS alone.
         if self.regime == FlightRegime::Coast {
-            let jets = if assisted {
-                rcs_moment(requested, self.rcs_enabled)
-            } else {
-                let couples = rcs_couples();
-                rcs_moment(
-                    DVec3::new(couples[0].x, couples[1].y, couples[2].z) * axes,
-                    self.rcs_enabled,
-                )
-            };
-            self.actuator_saturated = assisted && (requested - jets).length() > 1_000.0;
-            return Ok(jets);
+            let allocation = allocate_rcs(requested, DVec3::ZERO, axes, assisted, self.rcs_enabled);
+            self.actuator_saturated = allocation.saturated;
+            return Ok(allocation.moment_body_nm);
         }
         let environment = self
             .atmosphere
             .aero_environment(kinematics.altitude_m.max(0.0), DVec3::ZERO)?;
+        let omega = self.state.angular_velocity_body_rps;
         let aero_state = AeroState::new(kinematics.air_velocity_body_mps, omega);
         let mut command = if assisted {
             self.surface_input
@@ -1081,37 +2075,21 @@ impl FlightAuthority {
         // raw passthrough, so only the assisted solve is gated.
         let solve_trim = assisted && self.regime == FlightRegime::Aero;
         if solve_trim {
-            // Linearize actual panel response at this flow/deflection. Two
-            // bounded Newton passes handle cross-axis coupling near stall.
-            for _ in 0..2 {
-                self.command_controls(command.x, command.y, command.z);
-                let baseline = self
-                    .aero_model
-                    .evaluate_state(aero_state, environment, &self.vehicle.aero_geometry)?
-                    .moment_body_nm;
-                let mut columns = [DVec3::ZERO; 3];
-                for axis in 0..3 {
-                    let mut probe = command;
-                    let delta = if command[axis] > 0.9 { -0.02 } else { 0.02 };
-                    probe[axis] += delta;
-                    self.command_controls(probe.x, probe.y, probe.z);
-                    columns[axis] = (self
-                        .aero_model
-                        .evaluate_state(aero_state, environment, &self.vehicle.aero_geometry)?
-                        .moment_body_nm
-                        - baseline)
-                        / delta;
-                }
-                let effectiveness = DMat3::from_cols(columns[0], columns[1], columns[2]);
-                if effectiveness.determinant().abs() > 1.0e-6 {
-                    command = (command + effectiveness.inverse() * (requested - baseline))
-                        .clamp(DVec3::splat(-1.0), DVec3::ONE);
-                }
-            }
+            self.trim_solves += 1;
+            let result = solve_aero_trim(
+                &mut self.vehicle,
+                &self.aero_model,
+                aero_state,
+                environment,
+                requested,
+                command,
+                self.force_trim_two_pass,
+            )?;
+            command = result.command;
+            self.trim_second_passes += result.second_passes;
         }
         let max_change = SURFACE_COMMAND_RATE_S * FLIGHT_STEP_S;
-        self.surface_input += (command - self.surface_input)
-            .clamp(DVec3::splat(-max_change), DVec3::splat(max_change));
+        self.surface_input = slew_surface_command(self.surface_input, command, max_change);
         self.command_controls(
             self.surface_input.x,
             self.surface_input.y,
@@ -1121,17 +2099,18 @@ impl FlightAuthority {
             .aero_model
             .evaluate_state(aero_state, environment, &self.vehicle.aero_geometry)?
             .moment_body_nm;
-        let jets = if assisted {
-            rcs_moment(requested - actual_aero, self.rcs_enabled)
-        } else {
-            let couples = rcs_couples();
-            rcs_moment(
-                DVec3::new(couples[0].x, couples[1].y, couples[2].z) * axes,
-                self.rcs_enabled,
-            )
+        let allocation = allocate_rcs(requested, actual_aero, axes, assisted, self.rcs_enabled);
+        self.actuator_saturated = allocation.saturated;
+        Ok(allocation.moment_body_nm)
+    }
+
+    fn allocate_explicit_force(&mut self) -> DVec3 {
+        let Some(request) = self.explicit_force_demand_body_n else {
+            return DVec3::ZERO;
         };
-        self.actuator_saturated = assisted && (requested - actual_aero - jets).length() > 1_000.0;
-        Ok(jets)
+        let allocation = allocate_rcs_force(request, self.rcs_enabled);
+        self.actuator_saturated |= allocation.saturated;
+        allocation.force_body_n
     }
 
     /// Upper-atmosphere band model: between the vacuum cutoff and the
@@ -1156,17 +2135,10 @@ impl FlightAuthority {
             return Some((DVec3::ZERO, 0.0));
         }
         let dynamic_pressure_pa = 0.5 * density_kg_m3 * airspeed_mps * airspeed_mps;
-        let reference_area_m2: f64 = self
-            .vehicle
-            .aero_geometry
-            .panels
-            .iter()
-            .map(|panel| panel.area_m2)
-            .sum();
         let drag_body_n = -kinematics.air_velocity_body_mps / airspeed_mps
             * (dynamic_pressure_pa
                 * self.aero_model.config.upper_atmosphere_drag_coefficient
-                * reference_area_m2);
+                * self.reference_area_m2);
         Some((drag_body_n, dynamic_pressure_pa))
     }
 
@@ -1178,26 +2150,33 @@ impl FlightAuthority {
         kinematics: LocalAirKinematics,
         body_state: BodyState,
         jet_moment: DVec3,
+        rcs_force_body_n: DVec3,
         thrust_n: f64,
         band_drag_body_n: DVec3,
         skip_aero: bool,
     ) -> Result<(RigidBodyState, FlightForces), FlightError> {
-        thessa_sim_core::integrate_rigid_body_step(
+        self.aero_panels
+            .sync_deflections(&self.vehicle.aero_geometry)
+            .map_err(FlightError::Aero)?;
+        let input = powered_step_input(
+            self.state,
+            kinematics,
+            body_state.velocity_inertial,
+            gravity,
+            jet_moment,
+            rcs_force_body_n,
+            thrust_n,
+            band_drag_body_n,
+            skip_aero,
+        );
+        integrate_rigid_body_step_soa(
             &self.aero_model,
-            &self.vehicle.aero_geometry,
+            &self.aero_panels,
+            &mut self.aero_scratch,
             self.atmosphere,
             self.state,
             self.vehicle.mass_properties,
-            FlightStepInput {
-                altitude_m: kinematics.altitude_m.max(0.0),
-                gravity_acceleration_inertial_mps2: gravity,
-                position_body_m: kinematics.relative_position_body_m,
-                wind_velocity_body_mps: self.state.orientation_body_to_inertial.inverse()
-                    * body_state.velocity_inertial,
-                extra_force_body_n: DVec3::X * thrust_n + band_drag_body_n,
-                extra_moment_body_nm: jet_moment,
-                skip_aero,
-            },
+            input,
             FLIGHT_STEP_S,
         )
     }
@@ -1327,6 +2306,11 @@ impl FlightAuthority {
         }) = self.rails.wake()
             && impact_time.0 <= next_time.0
         {
+            self.wake_events.push(ScheduledEvent {
+                id: 0,
+                time: impact_time,
+                kind: ScheduledKind::RailsImpact { body },
+            });
             self.wake_notice = Some(format!("WAKE IMPACT {body:?} T+{:.3}s", impact_time.0));
             self.rails.invalidate();
             self.scheduler.clear_rails_wakes();
@@ -1340,6 +2324,19 @@ impl FlightAuthority {
             // Ordinary physics handles the next step; a future request can
             // build a new horizon on the worker.
             if let Some(wake) = self.rails.wake() {
+                let event = match wake {
+                    thessa_sim_core::OnRailsWake::Impact { time, body } => ScheduledEvent {
+                        id: 0,
+                        time,
+                        kind: ScheduledKind::RailsImpact { body },
+                    },
+                    thessa_sim_core::OnRailsWake::HorizonEnd { time } => ScheduledEvent {
+                        id: 0,
+                        time,
+                        kind: ScheduledKind::RailsHorizon,
+                    },
+                };
+                self.wake_events.push(event);
                 self.wake_notice = Some(format!("WAKE {wake:?}"));
             }
             self.rails.invalidate();
@@ -1372,12 +2369,8 @@ impl FlightAuthority {
             body_state,
             self.planet_radius_m,
         )?;
-        let forces = match evaluate_flight_forces(
-            &self.aero_model,
-            &self.vehicle.aero_geometry,
-            self.atmosphere,
+        let forces = match self.evaluate_forces(
             self.state,
-            self.vehicle.mass_properties,
             FlightStepInput {
                 altitude_m: kinematics.altitude_m.max(0.0),
                 gravity_acceleration_inertial_mps2: gravity,
@@ -1406,9 +2399,25 @@ impl FlightAuthority {
     ) -> Result<(), FlightError> {
         self.sync_world_tick()?;
         let time = self.world_tick.time();
-        let body_state = ephemeris
-            .body_state(self.reference_body, time)
-            .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+        // One memoized frame per tick serves the reference body and gravity.
+        // Values are bitwise identical to individual lookups (see
+        // `EphemerisFrame`); the borrow ends before any `&mut self` use.
+        let position_inertial_m = self.state.position_inertial_m;
+        let (body_state, gravity) = {
+            let states = self
+                .ephemeris_frame
+                .evaluate(ephemeris, time)
+                .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+            let body_state = *states.get(self.reference_body.index()).ok_or_else(|| {
+                FlightError::InvalidInput(
+                    thessa_sim_core::EphemerisError::UnknownBody(self.reference_body).to_string(),
+                )
+            })?;
+            let gravity = gravity_field
+                .acceleration_from_states(position_inertial_m, states)
+                .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+            (body_state, gravity)
+        };
         let kinematics = local_air_kinematics(
             self.atmosphere,
             self.state,
@@ -1427,10 +2436,8 @@ impl FlightAuthority {
         } else {
             FlightRegime::Aero
         };
-        let gravity = gravity_field
-            .acceleration(self.state.position_inertial_m, time)
-            .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
         let jet_moment = self.allocate_controls(kinematics, mode)?;
+        let rcs_force_body_n = self.allocate_explicit_force();
         // Only an exactly empty sampled medium permits zero force; the
         // vacuum cutoff guarantees exactness below its threshold.
         let vacuum = density_kg_m3 == 0.0;
@@ -1441,13 +2448,25 @@ impl FlightAuthority {
         let skip_aero = vacuum || band.is_some();
         let (band_drag_body_n, band_q_pa) = band.unwrap_or((DVec3::ZERO, 0.0));
         let thrust_n = self.thrust_n();
-        // Unpowered vacuum coast rides the single baked trajectory instead
-        // of integrating translation per tick; the map prediction draws the
-        // same path. Attitude (RCS) still integrates at full rate below.
-        let (mut next, mut forces) = if self.regime == FlightRegime::Coast
-            && thrust_n == 0.0
-            && skip_aero
-        {
+        // Contact-active ticks integrate through Rapier with the same
+        // sampled loads; the free-flight integrator never runs for them.
+        // The rails coast below is additionally guarded, so no baked batch
+        // can span the regime change from either direction.
+        let contact_active = self.poll_contact_activation(kinematics)?;
+        let (mut next, mut forces) = if contact_active {
+            self.scheduler.clear_rails_wakes();
+            self.step_contact_active(
+                ephemeris,
+                body_state,
+                gravity,
+                kinematics,
+                jet_moment,
+                rcs_force_body_n,
+                thrust_n,
+                band_drag_body_n,
+                skip_aero,
+            )?
+        } else if self.regime == FlightRegime::Coast && thrust_n == 0.0 && skip_aero {
             match self.try_coast_step_on_rails(ephemeris, time, jet_moment, body_state, gravity)? {
                 Some(coasted) => coasted,
                 None => self.integrate_powered_step(
@@ -1455,6 +2474,7 @@ impl FlightAuthority {
                     kinematics,
                     body_state,
                     jet_moment,
+                    rcs_force_body_n,
                     thrust_n,
                     band_drag_body_n,
                     skip_aero,
@@ -1467,6 +2487,7 @@ impl FlightAuthority {
                 kinematics,
                 body_state,
                 jet_moment,
+                rcs_force_body_n,
                 thrust_n,
                 band_drag_body_n,
                 skip_aero,
@@ -1477,10 +2498,42 @@ impl FlightAuthority {
         if band_q_pa > 0.0 {
             forces.aero.dynamic_pressure_pa = band_q_pa;
         }
-        let next_body = ephemeris
-            .body_state(self.reference_body, self.time_after_ticks(1)?)
-            .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
-        self.validate_endpoint(ephemeris, &mut next, next_body, self.time_after_ticks(1)?)?;
+        // Guard reads come from the same memoized frame at the endpoint
+        // time: dominant-pull scan plus reference/ guard states, no chains.
+        let next_time = self.time_after_ticks(1)?;
+        let next_position_inertial_m = next.position_inertial_m;
+        let reference_body = self.reference_body;
+        let (next_body, guard_body, guard_state, guard_radius) = {
+            let states = self
+                .ephemeris_frame
+                .evaluate(ephemeris, next_time)
+                .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
+            let missing = |id: BodyId| {
+                FlightError::InvalidInput(
+                    thessa_sim_core::EphemerisError::UnknownBody(id).to_string(),
+                )
+            };
+            let next_body = *states
+                .get(reference_body.index())
+                .ok_or_else(|| missing(reference_body))?;
+            let guard_body = ephemeris
+                .dominant_body_from_states(next_position_inertial_m, states)
+                .unwrap_or(reference_body);
+            let guard_state = *states.get(guard_body.index()).unwrap_or(&next_body);
+            let guard_radius = ephemeris
+                .body(guard_body)
+                .map(|body| body.radius_m)
+                .unwrap_or(self.planet_radius_m);
+            (next_body, guard_body, guard_state, guard_radius)
+        };
+        self.validate_endpoint_with_guard(
+            &mut next,
+            next_body,
+            next_time,
+            guard_body,
+            guard_state,
+            guard_radius,
+        )?;
         if let Some(trace) = self.trace.as_mut() {
             trace.record(
                 self.flight_time_s,
@@ -1512,7 +2565,30 @@ impl FlightAuthority {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use thessa_sim_core::AeroModel;
     use thessa_sim_core::SystemConfig;
+
+    struct NeverReadyBakeQueue {
+        pending: bool,
+    }
+
+    impl BakeQueue for NeverReadyBakeQueue {
+        fn request_bake(&mut self, _request: RailsBakeRequest) {
+            self.pending = true;
+        }
+
+        fn poll_bake(&mut self) -> Option<Result<BakedRails, String>> {
+            None
+        }
+
+        fn has_pending(&self) -> bool {
+            self.pending
+        }
+
+        fn reset(&mut self) {
+            self.pending = false;
+        }
+    }
 
     fn fixture() -> (BakedEphemeris, FlightAuthority) {
         let config: SystemConfig =
@@ -1521,6 +2597,264 @@ mod tests {
         let runtime =
             FlightAuthority::new(&ephemeris, ephemeris.body_id("thessa").unwrap()).unwrap();
         (ephemeris, runtime)
+    }
+
+    #[test]
+    fn authority_uses_baked_body_atmosphere() {
+        let (ephemeris, flight) = fixture();
+        let body = ephemeris.body(flight.reference_body).unwrap();
+        let baked = body.atmosphere.as_ref().expect("baked atmosphere");
+        assert_eq!(flight.atmosphere.sea_level_pressure_pa, 120_000.0);
+        assert_eq!(
+            flight.atmosphere.gas_constant_j_kg_k,
+            baked.gas_constant_j_kg_k
+        );
+        assert_eq!(
+            flight.atmosphere.heat_capacity_ratio,
+            baked.heat_capacity_ratio
+        );
+        assert_eq!(
+            flight.atmosphere.sutherland_reference_viscosity_pa_s,
+            baked.sutherland_reference_viscosity_pa_s
+        );
+        assert_eq!(
+            flight.atmosphere.body_rotation_rad_s.z,
+            std::f64::consts::TAU / (80.0 * 3_600.0)
+        );
+    }
+
+    #[test]
+    fn typed_guidance_executes_through_the_legacy_authority_adapter() {
+        let (ephemeris, mut flight) = fixture();
+        let intent = GuidanceIntent::Attitude {
+            target_body_to_inertial: DQuat::from_rotation_y(0.1),
+            roll_policy: thessa_flight_control::RollPolicy::Hold,
+        };
+        flight
+            .advance_guidance(
+                &ephemeris,
+                &intent,
+                PropulsionDemand::new(0.0).unwrap(),
+                FLIGHT_STEP_S,
+            )
+            .unwrap();
+        assert_eq!(flight.sas_target_orientation, DQuat::from_rotation_y(0.1));
+        assert!(flight.state.position_inertial_m.is_finite());
+        assert!(flight.last_forces.is_some());
+    }
+
+    #[test]
+    fn typed_propulsion_uses_the_post_allocator_actuator_response() {
+        let (ephemeris, mut flight) = fixture();
+        let intent = GuidanceIntent::AngularRate {
+            rate_body_rps: DVec3::ZERO,
+        };
+        flight
+            .advance_guidance(
+                &ephemeris,
+                &intent,
+                PropulsionDemand::new(0.0).unwrap(),
+                FLIGHT_STEP_S,
+            )
+            .unwrap();
+        assert_eq!(flight.throttle, 0.0);
+        assert!(flight.thrust_n() > 0.0);
+        assert!(flight.thrust_n() < 254_000.0);
+
+        for _ in 0..32 {
+            flight
+                .advance_guidance(
+                    &ephemeris,
+                    &intent,
+                    PropulsionDemand::new(1.0).unwrap(),
+                    FLIGHT_STEP_S,
+                )
+                .unwrap();
+        }
+        assert_eq!(flight.throttle, 1.0);
+        assert!(flight.thrust_n() > 200_000.0);
+    }
+
+    #[test]
+    fn direction_guidance_resolves_inertial_surface_orbit_and_flight_path_frames() {
+        let (ephemeris, mut flight) = fixture();
+        let body = ephemeris
+            .body_state(flight.reference_body, SimTime(flight.flight_time_s))
+            .unwrap();
+        flight.state.position_inertial_m = body.position_inertial + DVec3::Z * 1.0e7;
+        flight.state.velocity_inertial_mps = body.velocity_inertial + DVec3::X;
+
+        flight
+            .apply_guidance_intent(
+                &ephemeris,
+                &GuidanceIntent::VelocityDirection {
+                    direction: DirectionTarget::new(DVec3::Y, DirectionFrame::Inertial).unwrap(),
+                    roll_policy: RollPolicy::Hold,
+                },
+            )
+            .unwrap();
+        assert!((flight.sas_target_orientation * DVec3::X).dot(DVec3::Y) > 1.0 - 1.0e-12);
+
+        let surface =
+            DirectionTarget::new(DVec3::new(0.0, 1.0, 0.0), DirectionFrame::Surface).unwrap();
+        flight
+            .apply_guidance_intent(
+                &ephemeris,
+                &GuidanceIntent::VelocityDirection {
+                    direction: surface,
+                    roll_policy: RollPolicy::Fixed,
+                },
+            )
+            .unwrap();
+        let up = normalize_direction(
+            flight.state.position_inertial_m - body.position_inertial,
+            "test surface up",
+        )
+        .unwrap();
+        let (_east, north) = surface_tangent_basis(up).unwrap();
+        assert!((flight.sas_target_orientation * DVec3::X).dot(north) > 1.0 - 1.0e-12);
+        assert!((flight.sas_target_orientation * DVec3::Z).dot(up) > 1.0 - 1.0e-12);
+
+        flight
+            .apply_guidance_intent(
+                &ephemeris,
+                &GuidanceIntent::VelocityDirection {
+                    direction: DirectionTarget::new(DVec3::X, DirectionFrame::Orbit).unwrap(),
+                    roll_policy: RollPolicy::Hold,
+                },
+            )
+            .unwrap();
+        let prograde = normalize_direction(
+            flight.state.velocity_inertial_mps - body.velocity_inertial,
+            "test prograde",
+        )
+        .unwrap();
+        assert!((flight.sas_target_orientation * DVec3::X).dot(prograde) > 1.0 - 1.0e-12);
+
+        flight
+            .apply_guidance_intent(
+                &ephemeris,
+                &GuidanceIntent::FlightPath {
+                    target: thessa_flight_control::FlightPathTarget {
+                        direction: DirectionTarget::new(DVec3::Z, DirectionFrame::Surface).unwrap(),
+                        roll_policy: RollPolicy::Fixed,
+                    },
+                },
+            )
+            .unwrap();
+        assert!((flight.sas_target_orientation * DVec3::X).dot(up) > 1.0 - 1.0e-12);
+        assert!(flight.sas_target_orientation.is_finite());
+    }
+
+    #[test]
+    fn state_dependent_guidance_is_partition_invariant_and_does_not_ride_rails() {
+        let (ephemeris, mut chunked) = fixture();
+        let (_, mut per_tick) = fixture();
+        let body = ephemeris
+            .body_state(chunked.reference_body, SimTime::EPOCH)
+            .unwrap();
+        let position = body.position_inertial + DVec3::Z * 1.0e7;
+        let velocity = body.velocity_inertial + DVec3::X * 1_000.0;
+        for flight in [&mut chunked, &mut per_tick] {
+            flight.state.position_inertial_m = position;
+            flight.state.velocity_inertial_mps = velocity;
+            flight.relative_position_m = position - body.position_inertial;
+            flight.set_legacy_propulsion(0.0, false);
+        }
+        let intent = GuidanceIntent::VelocityDirection {
+            direction: DirectionTarget::new(DVec3::X, DirectionFrame::Orbit).unwrap(),
+            roll_policy: RollPolicy::Hold,
+        };
+        let propulsion = PropulsionDemand::new(0.0).unwrap();
+        let ticks = 12;
+        chunked
+            .advance_guidance(
+                &ephemeris,
+                &intent,
+                propulsion,
+                FLIGHT_STEP_S * f64::from(ticks),
+            )
+            .unwrap();
+        for _ in 0..ticks {
+            per_tick
+                .advance_guidance(&ephemeris, &intent, propulsion, FLIGHT_STEP_S)
+                .unwrap();
+        }
+        assert_eq!(chunked.flight_time_s, per_tick.flight_time_s);
+        assert!(
+            (chunked.state.position_inertial_m - per_tick.state.position_inertial_m).length()
+                < 1e-9
+        );
+        assert!(
+            (chunked.state.velocity_inertial_mps - per_tick.state.velocity_inertial_mps).length()
+                < 1e-9
+        );
+        assert!(
+            (chunked.sas_target_orientation * DVec3::X)
+                .dot(per_tick.sas_target_orientation * DVec3::X)
+                > 1.0 - 1.0e-12
+        );
+        assert_eq!(chunked.rails_advanced_this_frame, 0.0);
+    }
+
+    #[test]
+    fn target_frame_guidance_fails_until_a_target_body_is_resolved() {
+        let (ephemeris, mut flight) = fixture();
+        let result = flight.apply_guidance_intent(
+            &ephemeris,
+            &GuidanceIntent::VelocityDirection {
+                direction: DirectionTarget::new(DVec3::X, DirectionFrame::Target).unwrap(),
+                roll_policy: RollPolicy::Hold,
+            },
+        );
+        assert!(
+            matches!(result, Err(FlightError::InvalidInput(message)) if message.contains("target body"))
+        );
+    }
+
+    #[test]
+    fn target_frame_guidance_uses_the_target_body_orientation() {
+        let (ephemeris, mut flight) = fixture();
+        let target_body = ephemeris.body_id("nereid").unwrap();
+        let target_state = ephemeris
+            .body_state(target_body, SimTime(flight.flight_time_s))
+            .unwrap();
+        let direction = DirectionTarget::for_target(DVec3::X, target_body.0).unwrap();
+        flight
+            .apply_guidance_intent(
+                &ephemeris,
+                &GuidanceIntent::VelocityDirection {
+                    direction,
+                    roll_policy: RollPolicy::Hold,
+                },
+            )
+            .unwrap();
+        let forward = flight.sas_target_orientation * DVec3::X;
+        assert!(forward.dot(target_state.orientation * DVec3::X) > 1.0 - 1.0e-12);
+    }
+
+    #[test]
+    fn explicit_control_demand_uses_the_native_moment_allocator() {
+        let (ephemeris, mut flight) = fixture();
+        flight.engine_active = false;
+        flight.throttle = 0.0;
+        flight.rcs_enabled = true;
+        let before = flight.state.angular_velocity_body_rps;
+        flight
+            .advance_control_demand_with_budget(
+                &ephemeris,
+                ControlDemand {
+                    force_body_n: DVec3::ZERO,
+                    moment_body_nm: DVec3::X * 100.0,
+                    propulsion: PropulsionDemand::new(0.0).unwrap(),
+                },
+                FLIGHT_STEP_S,
+                None,
+            )
+            .expect("explicit moment demand");
+        assert!(flight.state.angular_velocity_body_rps.x > before.x);
+        assert!(flight.last_forces.is_some());
+        assert!(flight.explicit_moment_demand_nm.is_none());
     }
 
     #[test]
@@ -1597,6 +2931,71 @@ mod tests {
     }
 
     #[test]
+    fn cold_vacuum_bake_yields_without_replaying_high_warp_ticks() {
+        let (ephemeris, mut flight) = fixture();
+        let origin = ephemeris
+            .body_state(flight.reference_body, SimTime::EPOCH)
+            .unwrap();
+        flight.state.position_inertial_m = origin.position_inertial + DVec3::Z * 1.0e9;
+        flight.state.velocity_inertial_mps = origin.velocity_inertial + DVec3::X * 100.0;
+        flight.state.orientation_body_to_inertial = DQuat::IDENTITY;
+        flight.state.angular_velocity_body_rps = DVec3::ZERO;
+        flight.sas_target_orientation = DQuat::IDENTITY;
+        flight.engine_active = false;
+        flight.throttle = 0.0;
+        flight.sas_enabled = false;
+        flight.rcs_enabled = false;
+        flight.control_input = DVec3::ZERO;
+        flight.bake = Box::new(NeverReadyBakeQueue { pending: false });
+
+        flight
+            .advance_with_budget(
+                &ephemeris,
+                ControlMode::Direct,
+                3_600.0,
+                Some(std::time::Duration::from_millis(1)),
+            )
+            .unwrap();
+
+        assert_eq!(flight.steps_this_frame, 0);
+        assert_eq!(flight.rails_advanced_this_frame, 0.0);
+        assert_eq!(flight.flight_time_s, 0.0);
+        assert!(flight.waiting_for_rails_bake);
+        assert!(flight.bake.has_pending());
+        assert!(flight.accumulator_s < FLIGHT_STEP_S);
+    }
+
+    #[test]
+    fn controlled_vacuum_coast_does_not_wait_for_unrelated_bake() {
+        let (ephemeris, mut flight) = fixture();
+        let origin = ephemeris
+            .body_state(flight.reference_body, SimTime::EPOCH)
+            .unwrap();
+        flight.state.position_inertial_m = origin.position_inertial + DVec3::Z * 1.0e9;
+        flight.state.velocity_inertial_mps = origin.velocity_inertial + DVec3::X * 100.0;
+        flight.state.orientation_body_to_inertial = DQuat::IDENTITY;
+        flight.state.angular_velocity_body_rps = DVec3::ZERO;
+        flight.sas_target_orientation = DQuat::IDENTITY;
+        flight.engine_active = false;
+        flight.throttle = 0.0;
+        flight.control_input = DVec3::Y;
+        flight.bake = Box::new(NeverReadyBakeQueue { pending: false });
+
+        flight
+            .advance_with_budget(
+                &ephemeris,
+                ControlMode::Navball,
+                3.2,
+                Some(std::time::Duration::ZERO),
+            )
+            .unwrap();
+
+        assert!(flight.steps_this_frame > 0);
+        assert!(!flight.waiting_for_rails_bake);
+        assert!(flight.flight_time_s >= FLIGHT_STEP_S);
+    }
+
+    #[test]
     #[ignore = "wall-clock diagnostic; run with --ignored --nocapture"]
     fn profile_warp_frame_budget() {
         let (ephemeris, mut full) = fixture();
@@ -1623,6 +3022,109 @@ mod tests {
             bounded.steps_this_frame
         );
         assert!(bounded.steps_this_frame < full.steps_this_frame);
+    }
+
+    #[test]
+    fn contact_mode_falls_without_rails_batches() {
+        let (ephemeris, mut flight) = fixture();
+        flight.set_legacy_propulsion(0.0, false);
+        // Hover start: kill the 180 m/s launch airspeed so gravity is the
+        // only load and the craft must fall straight down.
+        let home = ephemeris
+            .body_state(flight.reference_body, SimTime(flight.flight_time_s))
+            .unwrap();
+        flight.state.velocity_inertial_mps = home.velocity_inertial;
+        flight
+            .enable_contact_mode(1_000.0, 2_000.0)
+            .expect("contact mode arms");
+        let initial_altitude = flight.relative_position_m.length() - flight.planet_radius_m;
+        flight
+            .advance(&ephemeris, ControlMode::Direct, 60.0 * FLIGHT_STEP_S)
+            .expect("contact-active advance");
+        assert!(flight.contact_active(), "craft must stay contact-active");
+        assert_eq!(
+            flight.rails_advanced_this_frame, 0.0,
+            "no rails batch may span contact-active ticks"
+        );
+        assert!(flight.last_forces.is_some());
+        assert!(flight.flight_error.is_none());
+        let body = ephemeris
+            .body_state(flight.reference_body, SimTime(flight.flight_time_s))
+            .unwrap();
+        let altitude = (flight.state.position_inertial_m - body.position_inertial).length()
+            - flight.planet_radius_m;
+        assert!(
+            altitude < initial_altitude - 0.5,
+            "contact-active craft must fall, was {initial_altitude:.2} m now {altitude:.2} m"
+        );
+        let snapshot = flight.contact_snapshot().expect("contact telemetry");
+        assert_eq!(snapshot.dynamic_bodies.len(), 1);
+    }
+
+    #[test]
+    fn contact_mode_lands_on_the_kinematic_terrain_patch() {
+        let (ephemeris, mut flight) = fixture();
+        let recipe: thessa_worldgen_rocky::spec_recipe::SpecRecipe =
+            toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml")).unwrap();
+        let field = std::sync::Arc::new(
+            thessa_worldgen_rocky::field::field_from_manifest(
+                &thessa_worldgen_rocky::spec_recipe::manifest_from_spec(&recipe).unwrap(),
+            )
+            .unwrap(),
+        );
+        let dir = [1.0, 0.0, 0.0];
+        flight.initialize_world_site(field.clone(), dir, &ephemeris);
+        // Belly-down hover 2 m above the sampled surface: body +Z (up) onto
+        // the radial, gentle 1 m/s descent, no spin, engine off.
+        let home = ephemeris
+            .body_state(flight.reference_body, SimTime::EPOCH)
+            .unwrap();
+        let up = DVec3::X;
+        let surface = flight.planet_radius_m + field.height_m(dir, 32.0).max(0.0);
+        let (east, north) = surface_tangent_basis(up).unwrap();
+        flight.state = RigidBodyState::new(
+            home.position_inertial + up * (surface + 2.0),
+            home.velocity_inertial - up * 1.0,
+            DQuat::from_mat3(&DMat3::from_cols(east, north, up)),
+            DVec3::ZERO,
+        )
+        .unwrap();
+        flight.relative_position_m = up * (surface + 2.0);
+        flight.set_legacy_propulsion(0.0, false);
+        flight
+            .enable_contact_mode(100.0, 200.0)
+            .expect("contact mode arms");
+        flight
+            .advance(&ephemeris, ControlMode::Direct, 480.0 * FLIGHT_STEP_S)
+            .expect("contact-active landing");
+        assert!(flight.flight_error.is_none(), "{:?}", flight.flight_error);
+        assert!(flight.contact_active(), "craft must stay contact-active");
+        let home = ephemeris
+            .body_state(flight.reference_body, SimTime(flight.flight_time_s))
+            .unwrap();
+        let relative = flight.state.position_inertial_m - home.position_inertial;
+        let ground = ground_dir_body_fixed(
+            relative,
+            flight.flight_time_s,
+            flight.body_rotation_period_s,
+        );
+        let clearance = relative.length()
+            - (flight.planet_radius_m + field.height_m(ground.to_array(), 32.0).max(0.0));
+        let radial_speed =
+            (flight.state.velocity_inertial_mps - home.velocity_inertial).dot(relative.normalize());
+        assert!(
+            (0.2..=1.2).contains(&clearance),
+            "landed clearance {clearance:.3} m must match the fuselage keel envelope"
+        );
+        assert!(
+            radial_speed.abs() < 0.3,
+            "landed craft must rest, radial speed {radial_speed:.3} m/s"
+        );
+        let snapshot = flight.contact_snapshot().expect("contact telemetry");
+        assert!(
+            snapshot.touching_contact_pairs >= 1,
+            "landed craft must report a touching pair: {snapshot:?}"
+        );
     }
 
     #[test]
@@ -1685,13 +3187,16 @@ mod tests {
                 .unwrap()
                 .moment_body_nm;
             assert!(
-                (moment - base).dot(body_axes(command)) > 0.0,
+                (moment - base).dot(crate::control::body_axes(command)) > 0.0,
                 "wrong surface sign for {command:?}"
             );
         }
-        assert_eq!(rcs_moment(DVec3::splat(1.0e9), false), DVec3::ZERO);
         assert_eq!(
-            rcs_moment(DVec3::splat(1.0e9), true),
+            crate::control::rcs_moment(DVec3::splat(1.0e9), false),
+            DVec3::ZERO
+        );
+        assert_eq!(
+            crate::control::rcs_moment(DVec3::splat(1.0e9), true),
             DVec3::new(1120.0, 4000.0, 4000.0)
         );
     }
@@ -1947,6 +3452,26 @@ mod tests {
         flight.throttle = 0.0;
         flight.control_input = DVec3::ZERO;
         (ephemeris, flight)
+    }
+
+    #[test]
+    fn circular_orbit_initializer_sets_body_relative_circular_state() {
+        let (ephemeris, mut flight) = fixture();
+        let altitude_m = 1_000_000.0;
+        flight
+            .initialize_circular_orbit(&ephemeris, altitude_m, DVec3::Y)
+            .unwrap();
+        let body = ephemeris.body(flight.reference_body).unwrap();
+        let body_state = ephemeris
+            .body_state(flight.reference_body, SimTime::EPOCH)
+            .unwrap();
+        let relative = flight.state.position_inertial_m - body_state.position_inertial;
+        let relative_velocity = flight.state.velocity_inertial_mps - body_state.velocity_inertial;
+        assert!((relative.length() - (body.radius_m + altitude_m)).abs() < 1.0e-6);
+        assert!((relative_velocity.length() - (body.mu / relative.length()).sqrt()).abs() < 1.0e-9);
+        assert!(relative.dot(relative_velocity).abs() < 1.0e-6);
+        assert_eq!(flight.relative_position_m, relative);
+        assert!(!flight.engine_active);
     }
 
     #[test]
@@ -2236,7 +3761,7 @@ mod tests {
             flight
                 .try_advance_cached_coast(&ephemeris, ControlMode::Navball, 3.2)
                 .unwrap(),
-            0.0
+            CoastAdvance::NotEligible
         );
         assert_eq!(flight.state, before);
         assert_eq!(flight.surface_input, surface_input);
@@ -2250,5 +3775,150 @@ mod tests {
             flight.rails_advanced_this_frame == 0.0 && flight.steps_this_frame > 0,
             "thrust must disable riding the gravity forecast"
         );
+    }
+}
+
+#[cfg(test)]
+mod trim_adaptive_tests {
+    use super::*;
+    use thessa_sim_core::SystemConfig;
+
+    #[test]
+    fn trim_adaptive_second_pass_matches_full_solve_within_envelope() {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let mut full = FlightAuthority::new(&ephemeris, reference_body).expect("authority");
+        let mut adaptive = FlightAuthority::new(&ephemeris, reference_body).expect("authority");
+        full.force_trim_two_pass = true;
+        // Sustained maneuvering climb: attitude-hold capture plus steady
+        // manual rate commands exercise the trim loop under load, including
+        // transients where the second pass must still fire.
+        for flight in [&mut full, &mut adaptive] {
+            flight.control_input = DVec3::new(0.3, 0.1, -0.2);
+            flight.throttle = 0.8;
+        }
+        full.advance(&ephemeris, ControlMode::Navball, 10.0)
+            .expect("full flight");
+        adaptive
+            .advance(&ephemeris, ControlMode::Navball, 10.0)
+            .expect("adaptive flight");
+        assert!(full.flight_error.is_none(), "{:?}", full.flight_error);
+        assert!(
+            adaptive.flight_error.is_none(),
+            "{:?}",
+            adaptive.flight_error
+        );
+        assert_eq!(full.steps_this_frame, adaptive.steps_this_frame);
+        assert!(adaptive.trim_solves > 0);
+        assert!(
+            adaptive.trim_second_passes < adaptive.trim_solves,
+            "no skip fired: {}/{}",
+            adaptive.trim_second_passes,
+            adaptive.trim_solves,
+        );
+        let position_drift =
+            (full.state.position_inertial_m - adaptive.state.position_inertial_m).length();
+        let velocity_drift =
+            (full.state.velocity_inertial_mps - adaptive.state.velocity_inertial_mps).length();
+        let attitude_drift = (full.state.orientation_body_to_inertial.inverse()
+            * adaptive.state.orientation_body_to_inertial)
+            .to_scaled_axis()
+            .length();
+        // Envelope vs decision scales: 1 cm is 500x below the 5 m batch
+        // adoption gate and terrain clearance; 1e-6 rad is 1000x below one
+        // tick of SAS attitude command (1.3e-3 rad). Calibrated drift over
+        // this 10 s maneuvering climb: 3.7e-5 m, 6.3e-7 m/s, 0 rad.
+        assert!(position_drift <= 1.0e-2, "pos drift {position_drift:.6e} m");
+        assert!(
+            velocity_drift <= 1.0e-4,
+            "vel drift {velocity_drift:.6e} m/s"
+        );
+        assert!(
+            attitude_drift <= 1.0e-6,
+            "att drift {attitude_drift:.6e} rad"
+        );
+        eprintln!(
+            "trim A/B: solves={} second_passes={} skip_rate={:.2} pos_drift={:.6e} m vel_drift={:.6e} m/s att_drift={:.6e} rad",
+            adaptive.trim_solves,
+            adaptive.trim_second_passes,
+            1.0 - adaptive.trim_second_passes as f64 / adaptive.trim_solves as f64,
+            position_drift,
+            velocity_drift,
+            attitude_drift,
+        );
+    }
+}
+
+#[cfg(test)]
+mod rails_terrain_bound_tests {
+    use super::*;
+    use crate::canonical_launch_setup;
+    use thessa_sim_core::SystemConfig;
+
+    fn authority() -> (BakedEphemeris, FlightAuthority) {
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system");
+        let ephemeris = config.bake().expect("bake");
+        let reference_body = ephemeris.body_id("thessa").expect("thessa");
+        let flight = FlightAuthority::new(&ephemeris, reference_body).expect("authority");
+        (ephemeris, flight)
+    }
+
+    #[test]
+    fn obstacle_ceiling_declared_without_field() {
+        // No field, no ghost batches: the recipe ceiling still refuses low
+        // coasts over unmapped mountains, and the live field maximum can
+        // only tighten it (the baker clamps into recipe bounds).
+        let (ephemeris, mut flight) = authority();
+        assert!(flight.terrain_field.is_none());
+        assert_eq!(
+            flight
+                .obstacle_report([0.0, 1.0, 0.0], 100.0)
+                .expect("terrain-free report lookup"),
+            None
+        );
+        assert_eq!(flight.recipe_max_elevation_m, 12_000.0);
+        assert_eq!(flight.rails_terrain_bound_m(), 12_000.0);
+        let (field, sites) = canonical_launch_setup(&ephemeris).expect("launch setup");
+        flight.initialize_world_site(field, sites[0], &ephemeris);
+        let live = flight.rails_terrain_bound_m();
+        assert!((0.0..=12_000.0).contains(&live), "live bound {live}");
+    }
+
+    #[test]
+    fn terrain_track_certification_returns_coverage_evidence() {
+        let (ephemeris, mut flight) = authority();
+        let (field, sites) = canonical_launch_setup(&ephemeris).expect("launch setup");
+        flight.initialize_world_site(field, sites[0], &ephemeris);
+        let track = vec![
+            (SimTime::EPOCH, flight.state.position_inertial_m),
+            (SimTime::EPOCH, flight.state.position_inertial_m),
+        ];
+        let coverage = flight
+            .certify_terrain_track(&ephemeris, &track)
+            .expect("covered terrain track");
+        assert!(coverage.obstacles.covers_track());
+        assert_eq!(coverage.obstacles.coverage.track_points, 2);
+        assert!(coverage.obstacles.coverage.sample_cover_radius_m >= 0.0);
+        // Clearance is reported as evidence; the sub-grid withstand gate is
+        // deliberately a separate follow-up proof.
+        assert!(coverage.min_obstacle_clearance_m.is_finite());
+    }
+
+    #[test]
+    fn site_obstacle_report_uses_the_loaded_canonical_field() {
+        let (ephemeris, mut flight) = authority();
+        let (field, sites) = canonical_launch_setup(&ephemeris).expect("launch setup");
+        flight.initialize_world_site(field, sites[0], &ephemeris);
+        let report = flight
+            .obstacle_report(sites[0], 300.0)
+            .expect("site report")
+            .expect("loaded field report");
+        assert_eq!(report.center_dir, sites[0]);
+        assert_eq!(report.radius_m, 300.0);
+        assert!(report.max_height_m >= report.min_height_m);
+        assert!(report.max_slope.is_finite());
     }
 }

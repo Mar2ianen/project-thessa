@@ -1,0 +1,29 @@
+# Janus outer haze moon generator-facing recipe stub
+# (docs/02B_BC_SUBSYSTEM.md §2.4).
+# Basic markup only: physical data resolves by body id from
+# data/system.toml; this file keeps worldgen/art values.
+# datum_radius_m MUST agree with system.toml (see `check` below).
+#
+# Verify with:
+#   cargo run -p thessa-worldgen-rocky -- check \
+#     --system data/system.toml --body janus_haze \
+#     --recipe data/worldgen/janus_haze.toml
+
+[planet]
+id = "janus_haze"
+seed = 16
+datum_radius_m = 2600000.0
+# Working relief envelope: organic dune seas and haze plains are flat;
+# water-ice bedrock highlands and cryovolcanic provinces add relief.
+height_min_m = -6000.0
+height_max_m = 9000.0
+
+[terrain]
+mountain_coverage = 0.20
+crater_density = 0.20
+volcanism = 0.25
+erosion_strength = 0.50
+glaciation = 0.20
+rift_activity = 0.20
+roughness_macro = 0.40
+plateau_coverage = 0.10

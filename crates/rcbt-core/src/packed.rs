@@ -12,6 +12,8 @@
 //! [`crate::Tree`]; the crossover bench picks the implementation by measured
 //! cost, and this cap is part of that contract.
 
+use std::collections::HashMap;
+
 use crate::{Node, TreeError};
 
 /// Depth cap from the dense-sums footprint (8 MiB at 20, 32 MiB at 21).
@@ -178,11 +180,93 @@ impl PackedTree {
 
     pub fn apply_batch(&mut self, updates: &[crate::Update]) -> Result<(), TreeError> {
         let mut candidate = self.clone();
+        let mut ancestor_deltas = HashMap::<u64, i32>::new();
         for update in updates {
-            candidate.apply_one(*update)?;
+            candidate.apply_one_batched(*update, &mut ancestor_deltas)?;
+        }
+        for (id, delta) in ancestor_deltas {
+            let value = candidate.sums[id as usize] as i32 + delta;
+            debug_assert!(value >= 0);
+            candidate.sums[id as usize] = value as u32;
         }
         *self = candidate;
         Ok(())
+    }
+
+    fn apply_one_batched(
+        &mut self,
+        update: crate::Update,
+        ancestor_deltas: &mut HashMap<u64, i32>,
+    ) -> Result<(), TreeError> {
+        match update {
+            crate::Update::Split(node) => {
+                if node.depth() >= self.max_depth {
+                    return Err(TreeError::AtMaximumDepth(node));
+                }
+                if !self.is_active(node.id()) {
+                    return Err(TreeError::NotALeaf(node));
+                }
+                let [left, right] = node.children().expect("depth checked above");
+                self.set_bit(left.id());
+                self.set_bit(right.id());
+                self.clear_bit(node.id());
+                Self::materialize_sum(&mut self.sums, left, 1, ancestor_deltas);
+                Self::materialize_sum(&mut self.sums, right, 1, ancestor_deltas);
+                Self::materialize_sum(&mut self.sums, node, 2, ancestor_deltas);
+                self.record_ancestor_delta(node, 1, ancestor_deltas);
+                Ok(())
+            }
+            crate::Update::Merge(parent) => {
+                if parent.is_root() {
+                    return Err(TreeError::CannotMergeRoot);
+                }
+                let Some([left, right]) = parent.children() else {
+                    return Err(TreeError::ChildrenNotLeaves(parent));
+                };
+                if !self.is_active(left.id())
+                    || !self.is_active(right.id())
+                    || Self::effective_sum(&self.sums, left, ancestor_deltas) != 1
+                    || Self::effective_sum(&self.sums, right, ancestor_deltas) != 1
+                {
+                    return Err(TreeError::ChildrenNotLeaves(parent));
+                }
+                self.clear_bit(left.id());
+                self.clear_bit(right.id());
+                self.set_bit(parent.id());
+                Self::materialize_sum(&mut self.sums, left, 0, ancestor_deltas);
+                Self::materialize_sum(&mut self.sums, right, 0, ancestor_deltas);
+                Self::materialize_sum(&mut self.sums, parent, 1, ancestor_deltas);
+                self.record_ancestor_delta(parent, -1, ancestor_deltas);
+                Ok(())
+            }
+        }
+    }
+
+    fn record_ancestor_delta(
+        &self,
+        node: Node,
+        delta: i32,
+        ancestor_deltas: &mut HashMap<u64, i32>,
+    ) {
+        let mut ancestor = node.parent();
+        while let Some(current) = ancestor {
+            *ancestor_deltas.entry(current.id()).or_default() += delta;
+            ancestor = current.parent();
+        }
+    }
+
+    fn effective_sum(sums: &[u32], node: Node, ancestor_deltas: &HashMap<u64, i32>) -> i32 {
+        sums[node.id() as usize] as i32 + ancestor_deltas.get(&node.id()).copied().unwrap_or(0)
+    }
+
+    fn materialize_sum(
+        sums: &mut [u32],
+        node: Node,
+        value: u32,
+        ancestor_deltas: &mut HashMap<u64, i32>,
+    ) {
+        ancestor_deltas.remove(&node.id());
+        sums[node.id() as usize] = value;
     }
 
     /// Ordered leaf list, same left-to-right order as [`crate::Tree::leaves`].
@@ -290,6 +374,27 @@ mod tests {
         let mut b = PackedTree::new(12).unwrap();
         b.reset_to_depth(6).unwrap();
         assert_eq!(a.leaves(), b.leaves());
+    }
+
+    #[test]
+    fn packed_batched_ancestor_deltas_match_sequential_commit() {
+        let updates = [
+            crate::Update::Split(Node::new(32, 5).unwrap()),
+            crate::Update::Split(Node::new(64, 6).unwrap()),
+            crate::Update::Merge(Node::new(64, 6).unwrap()),
+            crate::Update::Merge(Node::new(32, 5).unwrap()),
+            crate::Update::Split(Node::new(33, 5).unwrap()),
+            crate::Update::Merge(Node::new(33, 5).unwrap()),
+            crate::Update::Merge(Node::new(16, 4).unwrap()),
+        ];
+        let mut sequential = PackedTree::at_depth(12, 5).unwrap();
+        for update in updates {
+            sequential.apply_one(update).unwrap();
+        }
+        let mut batched = PackedTree::at_depth(12, 5).unwrap();
+        batched.apply_batch(&updates).unwrap();
+        assert_eq!(batched.leaves(), sequential.leaves());
+        assert_eq!(batched.leaf_count(), sequential.leaf_count());
     }
 
     /// Wave-like dynamic load: 60 frames of alternating full split-all and

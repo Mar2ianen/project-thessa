@@ -1,7 +1,17 @@
-use glam::{DQuat, DVec3};
+use glam::{DMat3, DQuat, DVec3};
 use std::io::Cursor;
 
 use super::*;
+
+/// Largest absolute entry of a 3x3 for test tolerances.
+fn max_abs_entry(matrix: DMat3) -> f64 {
+    matrix
+        .col(0)
+        .abs()
+        .max(matrix.col(1).abs())
+        .max(matrix.col(2).abs())
+        .max_element()
+}
 
 fn central_ephemeris(mu: f64) -> BakedEphemeris {
     BakedEphemeris::new(
@@ -295,6 +305,1196 @@ fn replay_and_parallel_batch_are_deterministic_and_ordered() {
             field.acceleration(*position, SimTime::EPOCH).unwrap()
         );
     }
+}
+
+#[test]
+fn frame_batch_accelerations_match_direct_accumulation_bitwise() {
+    let ephemeris = chain_ephemeris();
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let positions = vec![
+        DVec3::new(8.0e6, 0.0, 0.0),
+        DVec3::new(0.0, 9.0e6, 0.0),
+        DVec3::new(-10.0e6, 0.0, 1.0e6),
+    ];
+    let mut frame = EphemerisFrame::new();
+    for seconds in [0.0, 8.0 / 120.0, 1_000_000.0] {
+        let time = SimTime(seconds);
+        let direct = field
+            .accelerations(&positions, time)
+            .expect("direct batch gravity");
+        let states = frame.evaluate(&ephemeris, time).expect("frame states");
+        let framed = field
+            .accelerations_from_frame(&positions, states)
+            .expect("frame batch gravity");
+        assert_eq!(direct, framed, "frame batch must match at {seconds}s");
+    }
+}
+
+fn two_binaries() -> BakedEphemeris {
+    // Barycenter with two planet+moon pairs on opposite sides: the tree has
+    // two internal children (one per pair), so a mid-range budget opens the
+    // root while both pairs compete for the remaining budget.
+    let orbit = |mu: f64, a: f64, m0: f64| {
+        KeplerOrbit::new(mu, a, 0.0, 0.1, 0.2, 0.3, m0).expect("valid test orbit")
+    };
+    BakedEphemeris::new(
+        "TEST_TWO_BINARIES",
+        vec![
+            BakedBody::synthetic_barycenter(BodyId(0), "barycenter", 4.4e14, None, None),
+            BakedBody::orbital(
+                BodyId(1),
+                "planet-a",
+                2.0e14,
+                0.0,
+                BodyId(0),
+                orbit(4.4e14, 2.0e8, 0.0),
+            ),
+            BakedBody::orbital(
+                BodyId(2),
+                "moon-a",
+                2.0e13,
+                0.0,
+                BodyId(1),
+                orbit(2.2e14, 1.0e7, 0.0),
+            ),
+            BakedBody::orbital(
+                BodyId(3),
+                "planet-b",
+                2.0e14,
+                0.0,
+                BodyId(0),
+                orbit(4.4e14, 2.0e8, std::f64::consts::PI),
+            ),
+            BakedBody::orbital(
+                BodyId(4),
+                "moon-b",
+                2.0e13,
+                0.0,
+                BodyId(3),
+                orbit(2.2e14, 1.0e7, std::f64::consts::PI),
+            ),
+        ],
+    )
+    .expect("valid two-binaries ephemeris")
+}
+
+#[test]
+fn tree_rejects_mismatched_frames_slice() {
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let tree = GravitySourceTree::build(&ephemeris).expect("tree builds");
+    let mut frame = EphemerisFrame::new();
+    let states = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame states");
+    let frames = tree.resolve(states).expect("node frames");
+    let position = DVec3::new(4.0e9, 0.0, 0.0);
+    // Full frames evaluate fine.
+    tree.evaluate(&frames, states, position, 1.0e-6)
+        .expect("full frames evaluate");
+    // A short slice (or one from another tree) fails open, never panics.
+    let short = &frames[..frames.len() - 1];
+    assert!(tree.evaluate(short, states, position, 1.0e-6).is_err());
+    assert!(tree.evaluate(&[], states, position, 1.0e-6).is_err());
+}
+
+#[test]
+fn tree_groups_binary_children_under_barycenter_node() {
+    let mu_primary = 3.0e14;
+    let mu_secondary = 1.0e14;
+    let ephemeris = two_body_binary(mu_primary, mu_secondary, 1.0e8);
+    let tree = GravitySourceTree::build(&ephemeris).expect("tree builds");
+    // Barycenter aggregate + two source leaves.
+    assert_eq!(tree.node_count(), 3);
+    let root = &tree.nodes()[tree.roots()[0] as usize];
+    assert_eq!(root.children.len(), 2);
+    assert!((root.mu_total - (mu_primary + mu_secondary)).abs() <= 1.0);
+    assert_eq!(root.own_mu, 0.0);
+}
+
+#[test]
+fn tree_spends_remaining_budget_across_sibling_aggregates() {
+    // Two planet+moon pairs: at a mid-range budget the root opens while
+    // each pair alone would fit. The first pair spends most of the budget,
+    // forcing the second open — the total posted bound must still hold.
+    // (Per-node gating would accept both and post ~2x the budget.)
+    let ephemeris = two_binaries();
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let tree = GravitySourceTree::build(&ephemeris).expect("tree builds");
+    assert_eq!(tree.node_count(), 5);
+    let mut frame = EphemerisFrame::new();
+    let time = SimTime::EPOCH;
+    let states = frame.evaluate(&ephemeris, time).expect("frame states");
+    let frames = tree.resolve(states).expect("node frames");
+    let budget = 6.0e-9;
+    let position = DVec3::new(1.0e10, 3.0e9, 0.0);
+    let eval = tree
+        .evaluate(&frames, states, position, budget)
+        .expect("tree eval");
+    assert!(
+        eval.error_bound_mps2 <= budget,
+        "posted {:e} exceeds allocated {budget:e}",
+        eval.error_bound_mps2,
+    );
+    assert!(eval.terms_exact >= 1, "root must open at this budget");
+    let exact = field.acceleration(position, time).expect("exact");
+    let measured = (eval.acceleration - exact).length();
+    assert!(
+        measured <= eval.error_bound_mps2 * (1.0 + 1.0e-9),
+        "measured {measured:e} exceeds posted {:e}",
+        eval.error_bound_mps2,
+    );
+}
+
+#[test]
+fn monopole_matches_explicit_children_within_posted_bound() {
+    let mu_primary = 3.0e14;
+    let mu_secondary = 1.0e14;
+    let ephemeris = two_body_binary(mu_primary, mu_secondary, 1.0e8);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let tree = GravitySourceTree::build(&ephemeris).expect("tree builds");
+    let mut frame = EphemerisFrame::new();
+    let time = SimTime::EPOCH;
+    let states = frame.evaluate(&ephemeris, time).expect("frame states");
+    let frames = tree.resolve(states).expect("node frames");
+    // Far-field points: the aggregate must be accepted and stay within its
+    // own posted error bound (doc 23 sections 4, 17). The bound is
+    // conservative by design (no cancellation accounting): at D/R ~ 20 it
+    // already exceeds a 1e-6 budget and the node opens — that is covered by
+    // the zero-budget case below. What the test pins is safety
+    // (measured <= posted) plus the scaling law (bound/field shrinks with
+    // distance) where acceptance happens.
+    let mut last_ratio = f64::INFINITY;
+    for distance in [5.0e9, 2.0e10] {
+        let position = DVec3::new(distance, distance * 0.3, -distance * 0.17);
+        let exact = field.acceleration(position, time).expect("exact gravity");
+        let eval = tree
+            .evaluate(&frames, states, position, 1.0e-6)
+            .expect("tree gravity");
+        assert_eq!(eval.terms_exact, 0, "far aggregate must be accepted");
+        let measured = (eval.acceleration - exact).length();
+        assert!(
+            measured <= eval.error_bound_mps2 * (1.0 + 1.0e-9),
+            "measured {measured:e} exceeds posted bound {:e} at {distance:e} m",
+            eval.error_bound_mps2,
+        );
+        let ratio = eval.error_bound_mps2 / exact.length();
+        assert!(
+            ratio <= 0.05,
+            "vacuous bound: ratio {ratio:e} at {distance:e} m",
+        );
+        assert!(
+            ratio < last_ratio,
+            "bound/field ratio must shrink with distance: {ratio:e} after {last_ratio:e}",
+        );
+        last_ratio = ratio;
+    }
+    // Zero budget opens everything: same physics as the exact path up to
+    // summation order.
+    let position = DVec3::new(4.0e9, 0.0, 0.0);
+    let exact = field.acceleration(position, time).expect("exact gravity");
+    let eval = tree
+        .evaluate(&frames, states, position, 0.0)
+        .expect("tree gravity");
+    assert_eq!(eval.error_bound_mps2, 0.0);
+    assert_eq!(eval.terms_exact, 2);
+    assert!((eval.acceleration - exact).length() <= 1.0e-12);
+}
+
+#[test]
+fn tree_opens_aggregate_ball_for_close_targets() {
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let tree = GravitySourceTree::build(&ephemeris).expect("tree builds");
+    let mut frame = EphemerisFrame::new();
+    let states = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame states");
+    let frames = tree.resolve(states).expect("node frames");
+    // Sit on top of the secondary: inside the aggregate ball, so the tree
+    // must open and evaluate both bodies exactly.
+    let secondary = states[2].position_inertial + DVec3::new(1.0e6, 0.0, 0.0);
+    let eval = tree
+        .evaluate(&frames, states, secondary, 1.0e-6)
+        .expect("tree gravity");
+    assert_eq!(eval.error_bound_mps2, 0.0);
+    assert_eq!(eval.terms_exact, 2);
+    assert!(eval.nodes_visited >= 3);
+}
+
+#[test]
+fn hessian_norm_matches_closed_form() {
+    // Pins the HESSIAN_FROBENIUS_NORM derivation independently of the
+    // tidal-tensor code: S = sum_ijk [3(d_ij n_k + d_ik n_j + d_jk n_i)
+    // - 15 n_i n_j n_k]^2 must equal 90 for every unit direction.
+    for direction in [
+        DVec3::X,
+        DVec3::Y,
+        DVec3::Z,
+        DVec3::new(1.0, 2.0, 3.0).normalize(),
+        DVec3::new(-0.3, 0.8, 0.55).normalize(),
+    ] {
+        let n = [direction.x, direction.y, direction.z];
+        let mut sum = 0.0;
+        for i in 0..3 {
+            for j in 0..3 {
+                for k in 0..3 {
+                    let delta = |a: usize, b: usize| f64::from(a == b);
+                    let a = delta(i, j) * n[k] + delta(i, k) * n[j] + delta(j, k) * n[i];
+                    let term = 3.0 * a - 15.0 * n[i] * n[j] * n[k];
+                    sum += term * term;
+                }
+            }
+        }
+        assert!(
+            (sum - 90.0).abs() <= 1.0e-9,
+            "Frobenius sum {sum} != 90 for {direction:?}"
+        );
+    }
+    assert!((HESSIAN_FROBENIUS_NORM * HESSIAN_FROBENIUS_NORM - 90.0).abs() <= 1.0e-9);
+    assert!((HESSIAN_REMAINDER * 2.0 - HESSIAN_FROBENIUS_NORM).abs() == 0.0);
+}
+
+#[test]
+fn patch_matches_exact_within_posted_bound() {
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let mut frame = EphemerisFrame::new();
+    let time = SimTime::EPOCH;
+    let states = frame.evaluate(&ephemeris, time).expect("frame states");
+    // Compact ball far from both bodies: everything absorbed, one patch.
+    let center = DVec3::new(3.0e9, 1.0e9, 0.0);
+    let positions: Vec<_> = (0..64)
+        .map(|index| {
+            let i = index as f64;
+            center
+                + DVec3::new((i * 12.9898).sin(), (i * 78.233).sin(), (i * 37.719).sin()) * 20_000.0
+        })
+        .collect();
+    let config = CohortConfig {
+        error_budget_mps2: 1.0e-9,
+        ..Default::default()
+    };
+    let report = evaluate_cohorts(&ephemeris, states, &positions, config).expect("cohorts");
+    assert_eq!(report.cohort_count, 1);
+    assert_eq!(report.split_count, 0);
+    assert!(report.error_bound_mps2 <= config.error_budget_mps2);
+    let exact = field.accelerations(&positions, time).expect("exact batch");
+    for (computed, reference) in report.accelerations.iter().zip(&exact) {
+        let measured = (*computed - *reference).length();
+        assert!(
+            measured <= report.error_bound_mps2 * (1.0 + 1.0e-6),
+            "patch error {measured:e} exceeds posted {:e}",
+            report.error_bound_mps2,
+        );
+    }
+}
+
+#[test]
+fn cohorts_split_before_bound_is_violated() {
+    // Equal masses so each source contributes half the whole-ball bound:
+    // at 60% of it both stay absorbed while their sum violates it.
+    let ephemeris = two_body_binary(2.0e14, 2.0e14, 1.0e8);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let mut frame = EphemerisFrame::new();
+    let time = SimTime::EPOCH;
+    let states = frame.evaluate(&ephemeris, time).expect("frame states");
+    // Stretched group in a smooth field: every source fits the budget
+    // alone, but the summed remainder over the +-1e9 ball does not — so the
+    // cohort must split (not go exact) until the child balls satisfy it.
+    // Budget is calibrated at 60% of the whole-ball bound measured with an
+    // effectively infinite budget.
+    let center = DVec3::new(3.0e10, 0.0, 0.0);
+    let positions: Vec<_> = (0..48)
+        .map(|index| center + DVec3::new((index as f64 - 24.0 + 0.5) * 4.0e7, 0.0, 0.0))
+        .collect();
+    let probe = compile_patch(
+        &ephemeris,
+        states,
+        &positions,
+        CohortConfig {
+            error_budget_mps2: 1.0e300,
+            ..Default::default()
+        },
+    )
+    .expect("probe patch compiles");
+    assert!(
+        probe.exact.is_empty(),
+        "probe must absorb everything, got {:?}",
+        probe.exact
+    );
+    let config = CohortConfig {
+        error_budget_mps2: probe.error_bound_mps2 * 0.6,
+        ..Default::default()
+    };
+    let report = evaluate_cohorts(&ephemeris, states, &positions, config).expect("cohorts");
+    assert!(report.split_count > 0, "stretched group must split");
+    assert!(report.error_bound_mps2 <= config.error_budget_mps2);
+    let exact = field.accelerations(&positions, time).expect("exact batch");
+    for (computed, reference) in report.accelerations.iter().zip(&exact) {
+        let measured = (*computed - *reference).length();
+        // The subsystem's whole point is a provable conservative bound:
+        // hold the measured error to the posted bound, not 10x budget.
+        assert!(
+            measured <= report.error_bound_mps2 * (1.0 + 1.0e-6) + 1.0e-15,
+            "cohort error {measured:e} escapes posted {:e}",
+            report.error_bound_mps2,
+        );
+    }
+}
+
+#[test]
+fn window_reuse_matches_fresh_within_budget() {
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let config = CohortConfig {
+        error_budget_mps2: 1.0e-9,
+        ..Default::default()
+    };
+    let center = DVec3::new(3.0e9, 1.0e9, 0.0);
+    let positions: Vec<_> = (0..32)
+        .map(|index| {
+            let i = index as f64;
+            center + DVec3::new((i * 12.9898).sin(), (i * 78.233).sin(), 0.0) * 20_000.0
+        })
+        .collect();
+    let mut frame = EphemerisFrame::new();
+    let mut evaluator = CohortEvaluator::new();
+    let states0 = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame t0")
+        .to_vec();
+    let first = evaluator
+        .evaluate(&ephemeris, &states0, &positions, config)
+        .expect("first eval builds window");
+    assert!(!first.reused_window);
+    // Sources moved for 10 s; the window must hold with a tighter achieved
+    // bound, and stay within budget against the exact field at t1.
+    let states1 = frame
+        .evaluate(&ephemeris, SimTime(10.0))
+        .expect("frame t1")
+        .to_vec();
+    let second = evaluator
+        .evaluate(&ephemeris, &states1, &positions, config)
+        .expect("second eval reuses window");
+    let reused = second.reused_window;
+    let bound = second.error_bound_mps2;
+    let computed: Vec<_> = second.accelerations.to_vec();
+    assert!(reused);
+    assert_eq!(evaluator.reuses, 1);
+    let exact = field
+        .accelerations(&positions, SimTime(10.0))
+        .expect("exact batch");
+    for (computed, reference) in computed.iter().zip(&exact) {
+        // Posted bound, not budget: the subsystem promises this number.
+        let measured = (*computed - *reference).length();
+        assert!(
+            measured <= bound * (1.0 + 1.0e-6) + 1.0e-15,
+            "reused window error {measured:e} escapes posted {bound:e}"
+        );
+    }
+}
+
+#[test]
+fn window_rebuilds_when_group_leaves_ball() {
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let config = CohortConfig {
+        error_budget_mps2: 1.0e-9,
+        ..Default::default()
+    };
+    let mut frame = EphemerisFrame::new();
+    let states = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame states")
+        .to_vec();
+    let mut evaluator = CohortEvaluator::new();
+    let near: Vec<_> = (0..16)
+        .map(|index| DVec3::new(3.0e9 + index as f64 * 1_000.0, 0.0, 0.0))
+        .collect();
+    let first = evaluator
+        .evaluate(&ephemeris, &states, &near, config)
+        .expect("first eval");
+    assert!(!first.reused_window);
+    // Teleport the group across the system: the old ball cannot cover it,
+    // so the evaluator must rebuild — and stay correct.
+    let far: Vec<_> = (0..16)
+        .map(|index| DVec3::new(-4.0e9 - index as f64 * 1_000.0, 0.0, 0.0))
+        .collect();
+    let second = evaluator
+        .evaluate(&ephemeris, &states, &far, config)
+        .expect("rebuild eval");
+    let reused = second.reused_window;
+    let bound = second.error_bound_mps2;
+    let computed: Vec<_> = second.accelerations.to_vec();
+    assert!(!reused);
+    assert_eq!(evaluator.rebuilds, 2);
+    let exact = field.accelerations(&far, SimTime::EPOCH).expect("exact");
+    for (computed, reference) in computed.iter().zip(&exact) {
+        let measured = (*computed - *reference).length();
+        assert!(
+            measured <= bound * (1.0 + 1.0e-6) + 1.0e-15,
+            "rebuilt error {measured:e} escapes posted {bound:e}"
+        );
+    }
+}
+
+#[test]
+fn classify_routes_near_host_to_exact() {
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let mut frame = EphemerisFrame::new();
+    let states = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame states");
+    // Ball around the secondary: it is inside, so it must be exact.
+    let secondary = states[2].position_inertial;
+    let group: Vec<_> = (0..8)
+        .map(|index| secondary + DVec3::new(index as f64 * 100_000.0, 0.0, 0.0))
+        .collect();
+    let patch =
+        compile_patch(&ephemeris, states, &group, CohortConfig::default()).expect("patch compiles");
+    let exact_ids: Vec<_> = patch.exact.iter().map(|(body, _)| *body).collect();
+    assert!(
+        exact_ids.contains(&BodyId(2)),
+        "secondary must be exact-near, got {exact_ids:?}"
+    );
+}
+
+#[test]
+fn evaluator_telemetry_sane_on_real_system() {
+    let config_toml: SystemConfig =
+        toml::from_str(include_str!("../../../data/system.toml")).expect("system config");
+    let ephemeris = config_toml.bake().expect("baked system");
+    let home = ephemeris
+        .body_state(ephemeris.body_id("thessa").unwrap(), SimTime::EPOCH)
+        .unwrap();
+    let center = home.position_inertial + DVec3::Z * 1e9;
+    let positions: Vec<_> = (0..300)
+        .map(|index| {
+            let i = index as f64;
+            center
+                + DVec3::new(
+                    (i * 12.9898).sin() * 50_000.0,
+                    (i * 78.233).sin() * 50_000.0,
+                    (i * 37.719).sin() * 50_000.0,
+                )
+        })
+        .collect();
+    let config = CohortConfig {
+        error_budget_mps2: 1.0e-9,
+        ..Default::default()
+    };
+    let mut frame = EphemerisFrame::new();
+    let states = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame")
+        .to_vec();
+    let mut evaluator = CohortEvaluator::new();
+    let first = evaluator
+        .evaluate(&ephemeris, &states, &positions, config)
+        .expect("first");
+    let (reused, cohorts, splits, bound, exact, radius) = (
+        first.reused_window,
+        first.cohort_count,
+        first.split_count,
+        first.error_bound_mps2,
+        first.exact_terms,
+        first.max_radius_m,
+    );
+    assert!(!reused);
+    assert_eq!((cohorts, splits), (1, 0));
+    assert!(
+        bound <= config.error_budget_mps2,
+        "bound {bound:e} exceeds budget"
+    );
+    assert!(
+        exact <= 300 * 22,
+        "exact terms {exact} exceed 300 targets x 22 sources"
+    );
+    assert!(
+        radius < 1.0e6,
+        "radius {radius} insane for a +-50 km convoy"
+    );
+    let second = evaluator
+        .evaluate(&ephemeris, &states, &positions, config)
+        .expect("second");
+    assert!(second.reused_window, "identical tick must reuse");
+}
+
+#[test]
+fn window_reuse_holds_while_sources_drift_slowly() {
+    // Controlled dynamics (binary period ~3e5 s, 10 s ticks): source drift
+    // per tick is metres, so the temporal bound holds and nearly every tick
+    // reuses the window — each one verified against exact. (On the real
+    // system at 0.5 s ticks, fast-moon motion alone shifts the far field by
+    // ~1e-8..1e-6 per tick, so a 1e-9 window correctly rebuilds instead.)
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let config = CohortConfig {
+        error_budget_mps2: 1.0e-9,
+        ..Default::default()
+    };
+    let center = DVec3::new(3.0e9, 1.0e9, 0.0);
+    let mut positions: Vec<_> = (0..32)
+        .map(|index| {
+            let i = index as f64;
+            center + DVec3::new((i * 12.9898).sin(), (i * 78.233).sin(), 0.0) * 20_000.0
+        })
+        .collect();
+    let mut velocities: Vec<_> = (0..32)
+        .map(|index| {
+            let i = index as f64;
+            DVec3::new((i * 3.17).sin(), (i * 5.71).sin(), 0.0) * 2.0
+        })
+        .collect();
+    let mut frame = EphemerisFrame::new();
+    let mut evaluator = CohortEvaluator::new();
+    for tick in 0..50 {
+        let time = SimTime(tick as f64 * 10.0);
+        let states = frame.evaluate(&ephemeris, time).expect("frame").to_vec();
+        let eval = evaluator
+            .evaluate(&ephemeris, &states, &positions, config)
+            .expect("eval");
+        let exact = field.accelerations(&positions, time).expect("exact");
+        for (computed, reference) in eval.accelerations.iter().zip(&exact) {
+            // Posted bound again — including on reused ticks, where the
+            // temporal Lipschitz term is part of what is being checked.
+            let measured = (*computed - *reference).length();
+            assert!(
+                measured <= eval.error_bound_mps2 * (1.0 + 1.0e-6) + 1.0e-15,
+                "tick {tick}: measured {measured:e} escapes posted {:e}",
+                eval.error_bound_mps2,
+            );
+        }
+        let accels = eval.accelerations.to_vec();
+        for (index, acceleration) in accels.iter().enumerate() {
+            velocities[index] += *acceleration * 10.0;
+            positions[index] += velocities[index] * 10.0;
+        }
+    }
+    // Temporal staleness grows linearly to the budget, then a rebuild resets
+    // the sawtooth: most ticks reuse, but the bound must actually bite.
+    assert!(
+        evaluator.reuses >= 35,
+        "slow drift must reuse most ticks, got {}",
+        evaluator.reuses
+    );
+    assert!(
+        evaluator.rebuilds >= 5,
+        "temporal bound must bite periodically, got {}",
+        evaluator.rebuilds
+    );
+}
+
+/// Deterministic xorshift64* for property tests: no new dependencies,
+/// fixed seed, reproducible across runs and workers.
+struct TestRng(u64);
+
+impl TestRng {
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn range(&mut self, lo: f64, hi: f64) -> f64 {
+        lo + (self.next_u64() as f64 / u64::MAX as f64) * (hi - lo)
+    }
+
+    fn unit(&mut self) -> DVec3 {
+        loop {
+            let direction = DVec3::new(
+                self.range(-1.0, 1.0),
+                self.range(-1.0, 1.0),
+                self.range(-1.0, 1.0),
+            );
+            if direction.length_squared() > 1.0e-6 {
+                return direction.normalize();
+            }
+        }
+    }
+}
+
+#[test]
+fn cohorts_hold_posted_bound_over_random_geometries() {
+    // Dozens of deterministic source/target geometries across three
+    // systems: every served acceleration must sit inside its posted bound,
+    // and the posted bound inside the budget. Balls stay far from all
+    // bodies (shell >= 1e9, radius <= 3e7, members within ~3e8), so no
+    // singularities are possible by construction.
+    let systems = [
+        two_body_binary(2.0e14, 2.0e14, 1.0e8),
+        two_body_binary(3.0e14, 1.0e14, 1.0e8),
+        chain_ephemeris(),
+    ];
+    let config = CohortConfig {
+        error_budget_mps2: 1.0e-9,
+        ..Default::default()
+    };
+    let mut rng = TestRng(0x1234_5678_9ABC_DEF0);
+    for (system_index, ephemeris) in systems.iter().enumerate() {
+        let field = GravityField::from_ephemeris(ephemeris);
+        let mut frame = EphemerisFrame::new();
+        let states = frame
+            .evaluate(ephemeris, SimTime::EPOCH)
+            .expect("frame states");
+        for case in 0..16 {
+            let shell = 10.0_f64.powf(rng.range(9.0, 10.5));
+            let center = rng.unit() * shell;
+            let radius = 10.0_f64.powf(rng.range(3.0, 7.5));
+            let count = 1 + (rng.next_u64() % 48) as usize;
+            let positions: Vec<_> = (0..count)
+                .map(|_| center + rng.unit() * rng.range(0.0, radius))
+                .collect();
+            let report =
+                evaluate_cohorts(ephemeris, states, &positions, config).expect("cohorts evaluate");
+            assert!(
+                report.error_bound_mps2 <= config.error_budget_mps2,
+                "system {system_index} case {case}: posted {:e} exceeds budget",
+                report.error_bound_mps2,
+            );
+            let exact = field
+                .accelerations(&positions, SimTime::EPOCH)
+                .expect("exact batch");
+            for (computed, reference) in report.accelerations.iter().zip(&exact) {
+                let measured = (*computed - *reference).length();
+                assert!(
+                    measured <= report.error_bound_mps2 * (1.0 + 1.0e-6) + 1.0e-15,
+                    "system {system_index} case {case}: measured {measured:e} escapes posted {:e}",
+                    report.error_bound_mps2,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn validate_rejects_parent_cycle() {
+    let orbit = |m0: f64| KeplerOrbit::new(1.0e14, 1.0e8, 0.0, 0.1, 0.2, 0.3, m0).unwrap();
+    // 0 <-> 1 passes every per-body check (parents exist, orbits present)
+    // yet would hang any parent-walking consumer: must fail fast here.
+    let cyclic = BakedEphemeris::new(
+        "TEST_CYCLE",
+        vec![
+            BakedBody::orbital(BodyId(0), "a", 1.0e13, 0.0, BodyId(1), orbit(0.0)),
+            BakedBody::orbital(BodyId(1), "b", 1.0e13, 0.0, BodyId(0), orbit(1.0)),
+        ],
+    );
+    assert!(matches!(cyclic, Err(EphemerisError::Cycle(_))));
+    let self_loop = BakedEphemeris::new(
+        "TEST_SELF_LOOP",
+        vec![BakedBody::orbital(
+            BodyId(0),
+            "a",
+            1.0e13,
+            0.0,
+            BodyId(0),
+            orbit(0.0),
+        )],
+    );
+    assert!(matches!(self_loop, Err(EphemerisError::Cycle(_))));
+}
+
+#[test]
+fn validate_rejects_orbit_without_parent() {
+    let orbit = KeplerOrbit::new(1.0e14, 1.0e8, 0.0, 0.1, 0.2, 0.3, 0.0).unwrap();
+    let mut body = BakedBody::fixed(BodyId(0), "a", 1.0e13, 0.0);
+    body.orbit = Some(orbit);
+    let orphan = BakedEphemeris::new("TEST_ORPHAN_ORBIT", vec![body]);
+    assert!(matches!(orphan, Err(EphemerisError::InvalidBody(_))));
+}
+
+#[test]
+fn reuse_holds_posted_bound_over_random_epochs() {
+    // Temporal twin of the static 48-geometry property test: random balls
+    // evaluated at two epochs (sources drift between them), checking the
+    // posted bound — fresh or reused — against exact at each epoch. Half
+    // the cases use small epoch gaps (reuse likely), half large ones
+    // (rebuild likely); the invariant holds on both paths.
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let config = CohortConfig {
+        error_budget_mps2: 1.0e-9,
+        ..Default::default()
+    };
+    let mut rng = TestRng(0x0BAD_F00D_CAFE_1234);
+    let mut frame = EphemerisFrame::new();
+    for case in 0..24 {
+        let shell = 10.0_f64.powf(rng.range(9.0, 10.0));
+        let center = rng.unit() * shell;
+        let radius = 10.0_f64.powf(rng.range(3.0, 5.0));
+        let count = 1 + (rng.next_u64() % 24) as usize;
+        let positions: Vec<_> = (0..count)
+            .map(|_| center + rng.unit() * rng.range(0.0, radius))
+            .collect();
+        let t0 = rng.range(0.0, 200_000.0);
+        let gap = if case % 2 == 0 {
+            rng.range(5.0, 200.0)
+        } else {
+            rng.range(2_000.0, 20_000.0)
+        };
+        let mut evaluator = CohortEvaluator::new();
+        for (epoch, label) in [(t0, "t0"), (t0 + gap, "t1")] {
+            let states = frame
+                .evaluate(&ephemeris, SimTime(epoch))
+                .expect("frame states")
+                .to_vec();
+            let eval = evaluator
+                .evaluate(&ephemeris, &states, &positions, config)
+                .expect("eval");
+            let bound = eval.error_bound_mps2;
+            let computed: Vec<_> = eval.accelerations.to_vec();
+            let exact = field
+                .accelerations(&positions, SimTime(epoch))
+                .expect("exact batch");
+            for (computed, reference) in computed.iter().zip(&exact) {
+                let measured = (*computed - *reference).length();
+                assert!(
+                    measured <= bound * (1.0 + 1.0e-6) + 1.0e-15,
+                    "case {case} {label}: measured {measured:e} escapes posted {bound:e}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn jacobi_eigen_is_orthonormal_reconstructing_and_deterministic() {
+    // Symmetric indefinite tidal-tensor shape (traceless, mixed signs).
+    let jacobian = DMat3::from_cols(
+        DVec3::new(2.0e-6, 0.5e-6, -0.3e-6),
+        DVec3::new(0.5e-6, -1.0e-6, 0.2e-6),
+        DVec3::new(-0.3e-6, 0.2e-6, -1.0e-6),
+    );
+    let first = AffinePropagator::compile(jacobian).expect("propagator compiles");
+    let second = AffinePropagator::compile(jacobian).expect("propagator compiles");
+    assert_eq!(first, second, "same input must give the same basis");
+    let basis = first.basis();
+    let identity = basis.transpose() * basis;
+    assert!(
+        max_abs_entry(identity - DMat3::IDENTITY) <= 1.0e-14,
+        "basis must be orthonormal"
+    );
+    let lambda = first.eigenvalues();
+    assert!(
+        lambda.x >= lambda.y && lambda.y >= lambda.z,
+        "modes must sort descending, got {lambda:?}"
+    );
+    let rebuilt = basis * DMat3::from_diagonal(lambda) * basis.transpose();
+    let scale = 2.0e-6;
+    assert!(
+        max_abs_entry(rebuilt - jacobian) <= 1.0e-12 * scale,
+        "Q Lambda Q^T must rebuild J"
+    );
+    // Traceless: eigenvalues of vacuum gravity sum to zero.
+    assert!(lambda.x + lambda.y + lambda.z <= 1.0e-9 * scale);
+}
+
+#[test]
+fn propagator_rejects_bad_input() {
+    let asymmetric = DMat3::from_cols(DVec3::X, DVec3::Y, DVec3::new(0.0, 1.0e-3, 1.0));
+    assert_eq!(
+        AffinePropagator::compile(asymmetric),
+        Err(PropagatorError::AsymmetricJacobian)
+    );
+    let stretched = DMat3::from_diagonal(DVec3::new(1.0, -0.5, -0.5));
+    let propagator = AffinePropagator::compile(stretched).expect("diagonal compiles");
+    assert_eq!(
+        propagator.coefficients(60.0),
+        Err(PropagatorError::IntervalTooLong)
+    );
+    assert!(propagator.coefficients(10.0).is_ok());
+    assert_eq!(
+        propagator.coefficients(f64::NAN),
+        Err(PropagatorError::NonFiniteStep)
+    );
+}
+
+/// Independent RK4 reference on a frozen affine field: the STM must match a
+/// converged numerical integration, not just its own closed form.
+fn rk4_frozen_affine(
+    jacobian: DMat3,
+    constant: DVec3,
+    mut position: DVec3,
+    mut velocity: DVec3,
+    duration_s: f64,
+    step_s: f64,
+) -> (DVec3, DVec3) {
+    let accel = |position: DVec3| jacobian * position + constant;
+    let mut time = 0.0;
+    while time < duration_s {
+        let step = step_s.min(duration_s - time);
+        let a1v = velocity;
+        let a1a = accel(position);
+        let a2v = velocity + a1a * (step * 0.5);
+        let a2a = accel(position + a1v * (step * 0.5));
+        let a3v = velocity + a2a * (step * 0.5);
+        let a3a = accel(position + a2v * (step * 0.5));
+        let a4v = velocity + a3a * step;
+        let a4a = accel(position + a3v * step);
+        position += (a1v + a2v * 2.0 + a3v * 2.0 + a4v) * (step / 6.0);
+        velocity += (a1a + a2a * 2.0 + a3a * 2.0 + a4a) * (step / 6.0);
+        time += step;
+    }
+    (position, velocity)
+}
+
+#[test]
+fn stm_matches_converged_rk4_on_frozen_field() {
+    // Mixed-sign indefinite tensor at orbital magnitude plus a constant term
+    // (absolute form, not just the homogeneous STM).
+    let jacobian = DMat3::from_cols(
+        DVec3::new(2.0e-6, 0.5e-6, -0.3e-6),
+        DVec3::new(0.5e-6, -1.0e-6, 0.2e-6),
+        DVec3::new(-0.3e-6, 0.2e-6, -1.0e-6),
+    );
+    let constant = DVec3::new(0.11, -0.07, 0.05);
+    let propagator = AffinePropagator::compile(jacobian).expect("propagator compiles");
+    for (position, velocity, duration) in [
+        (
+            DVec3::new(1.0e5, 0.0, 0.0),
+            DVec3::new(0.0, 500.0, 10.0),
+            120.0,
+        ),
+        (DVec3::new(-2.0e5, 1.0e5, 3.0e4), DVec3::ZERO, 60.0),
+        (
+            DVec3::new(5.0e4, -5.0e4, 5.0e4),
+            DVec3::new(100.0, -200.0, 50.0),
+            300.0,
+        ),
+    ] {
+        let coeffs = propagator.coefficients(duration).expect("coeffs");
+        let (analytic_x, analytic_v) = propagator.propagate(&coeffs, position, velocity, constant);
+        let (numeric_x, numeric_v) =
+            rk4_frozen_affine(jacobian, constant, position, velocity, duration, 0.01);
+        let scale_x = analytic_x.length().max(1.0);
+        let scale_v = analytic_v.length().max(1.0);
+        assert!(
+            (analytic_x - numeric_x).length() <= 1.0e-9 * scale_x,
+            "position mismatch over {duration}s"
+        );
+        assert!(
+            (analytic_v - numeric_v).length() <= 1.0e-9 * scale_v,
+            "velocity mismatch over {duration}s"
+        );
+    }
+}
+
+#[test]
+fn taylor_branch_matches_series_expansion() {
+    // |lambda| dt^2 far below the threshold: pin the Taylor branch against
+    // an independent second-order expansion, both signs.
+    for lambda in [1.0e-13, -1.0e-13] {
+        let jacobian = DMat3::from_diagonal(DVec3::new(lambda, 2.0 * lambda, -3.0 * lambda));
+        let propagator = AffinePropagator::compile(jacobian).expect("propagator compiles");
+        let dt = 10.0;
+        let coeffs = propagator.coefficients(dt).expect("coeffs");
+        let position = DVec3::new(1.0e4, -2.0e4, 3.0e4);
+        let velocity = DVec3::new(100.0, 50.0, -80.0);
+        let constant = DVec3::new(0.01, -0.02, 0.03);
+        let (x, v) = propagator.propagate(&coeffs, position, velocity, constant);
+        // Independent reference, third order in t so it matches the branch
+        // expansion: x + v t + a t^2/2 + j t^3/6 with a = Jx + c and
+        // jerk j = Jv; v + a t + j t^2/2.
+        let accel = jacobian * position + constant;
+        let jerk = jacobian * velocity;
+        let reference_x =
+            position + velocity * dt + accel * (dt * dt / 2.0) + jerk * (dt * dt * dt / 6.0);
+        let reference_v = velocity + accel * dt + jerk * (dt * dt / 2.0);
+        assert!((x - reference_x).length() <= 1.0e-9);
+        assert!((v - reference_v).length() <= 1.0e-9);
+    }
+}
+
+#[test]
+fn real_patch_jacobian_is_traceless_and_propagatable() {
+    // Cross-checks tidal_tensor assembly: vacuum point-mass Jacobians are
+    // traceless, and the propagator accepts a real compiled patch tensor.
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let mut frame = EphemerisFrame::new();
+    let states = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame states");
+    let center = DVec3::new(3.0e9, 1.0e9, 0.0);
+    let positions = vec![center, center + DVec3::new(10_000.0, 0.0, 0.0)];
+    let patch = compile_patch(&ephemeris, states, &positions, CohortConfig::default())
+        .expect("patch compiles");
+    let trace = patch.jacobian.x_axis.x + patch.jacobian.y_axis.y + patch.jacobian.z_axis.z;
+    let scale = patch.jacobian.col(0).length().max(1.0e-300);
+    assert!(
+        trace.abs() <= 1.0e-9 * scale,
+        "vacuum tidal tensor must be traceless, got {trace:e}"
+    );
+    let propagator = AffinePropagator::compile(patch.jacobian).expect("propagator compiles");
+    // Vacuum saddle: eigenvalues cannot be all-negative (sum is zero), so a
+    // hyperbolic direction must exist.
+    let lambda = propagator.eigenvalues();
+    assert!(
+        lambda.x > 0.0,
+        "unstable direction must exist, got {lambda:?}"
+    );
+    assert!(
+        lambda.z < 0.0,
+        "stable direction must exist, got {lambda:?}"
+    );
+    let coeffs = propagator.coefficients(60.0).expect("minute coeffs");
+    let (delta, _) = propagator.propagate(&coeffs, DVec3::ZERO, DVec3::ZERO, patch.g0);
+    assert!((center + delta).is_finite());
+}
+
+#[test]
+fn analytic_segment_stays_inside_posted_propagation_bound() {
+    // The accuracy-idea verification: a frozen far-only patch propagated
+    // analytically must stay inside field-spatial + temporal remainder
+    // (converted to metres by double integration: bound * dt^2 / 2, valid
+    // here since sigma * dt << 1 throughout).
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let mut frame = EphemerisFrame::new();
+    let states = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame states")
+        .to_vec();
+    let center = DVec3::new(3.0e9, 1.0e9, 0.0);
+    let positions = vec![center, center + DVec3::new(10_000.0, 0.0, 0.0)];
+    let patch = compile_patch(&ephemeris, &states, &positions, CohortConfig::default())
+        .expect("patch compiles");
+    assert!(patch.exact.is_empty());
+    let propagator = AffinePropagator::compile(patch.jacobian).expect("propagator compiles");
+    // Anchor formulation: the patch is compiled at `center`, so the
+    // constant is g0 itself (never g0 - J*center — that belongs to the
+    // origin-anchored form).
+    let velocity = DVec3::new(0.0, 5_000.0, 100.0);
+    for duration in [60.0, 600.0] {
+        let coeffs = propagator.coefficients(duration).expect("coeffs");
+        let (delta, _) = propagator.propagate(&coeffs, DVec3::ZERO, velocity, patch.g0);
+        let analytic = center + delta;
+        // Excursion: max anchor distance over sub-samples (conservative max
+        // for the spatial remainder, not just the endpoint).
+        let mut excursion = 0.0_f64;
+        for quarter in 1..=4 {
+            let sub = propagator
+                .coefficients(duration * quarter as f64 / 4.0)
+                .expect("sub coeffs");
+            let (sub_delta, _) = propagator.propagate(&sub, DVec3::ZERO, velocity, patch.g0);
+            excursion = excursion.max(sub_delta.length());
+        }
+        let field_bound = affine_segment_bound(&ephemeris, &states, &patch, excursion, duration)
+            .expect("segment bound");
+        assert!(
+            field_bound.is_finite(),
+            "segment must be inside the validity envelope at {duration}s"
+        );
+        let bound_m = field_bound * duration * duration / 2.0;
+        // Honest exact reference: classic RK4 for the second-order system
+        // with per-stage frames (bodies move during the step), 0.5 s steps.
+        // Its own error is far below the bound under test.
+        let mut x = center;
+        let mut v = velocity;
+        let steps = (duration / 0.5) as usize;
+        for step in 0..steps {
+            let base = step as f64 * 0.5;
+            let mut accel_at = |position: DVec3, time: SimTime| {
+                let sub = frame.evaluate(&ephemeris, time).expect("frame").to_vec();
+                field
+                    .accelerations_from_frame(std::slice::from_ref(&position), &sub)
+                    .expect("exact accel")[0]
+            };
+            let k1v = accel_at(x, SimTime(base));
+            let k1x = v;
+            let k2v = accel_at(x + k1x * 0.25, SimTime(base + 0.25));
+            let k2x = v + k1v * 0.25;
+            let k3v = accel_at(x + k2x * 0.25, SimTime(base + 0.25));
+            let k3x = v + k2v * 0.25;
+            let k4v = accel_at(x + k3x * 0.5, SimTime(base + 0.5));
+            let k4x = v + k3v * 0.5;
+            x += (k1x + k2x * 2.0 + k3x * 2.0 + k4x) * (0.5 / 6.0);
+            v += (k1v + k2v * 2.0 + k3v * 2.0 + k4v) * (0.5 / 6.0);
+        }
+        let divergence = (analytic - x).length();
+        assert!(
+            divergence <= bound_m,
+            "analytic divergence {divergence:e} m exceeds posted {bound_m:e} m over {duration}s"
+        );
+    }
+}
+
+#[test]
+fn analytic_bound_expires_and_refuses_honestly() {
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let mut frame = EphemerisFrame::new();
+    let states = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame states")
+        .to_vec();
+    let center = DVec3::new(3.0e9, 1.0e9, 0.0);
+    let positions = vec![center, center + DVec3::new(10_000.0, 0.0, 0.0)];
+    let patch = compile_patch(&ephemeris, &states, &positions, CohortConfig::default())
+        .expect("patch compiles");
+    // A 10-hour excursion leaves the ball far behind a source: INFINITY is
+    // the rebuild signal, not an error.
+    assert_eq!(
+        affine_segment_bound(&ephemeris, &states, &patch, 1.0e10, 36_000.0),
+        Ok(f64::INFINITY)
+    );
+    // A ball containing the secondary off-center: it is inside, so it must
+    // be exact, and the patch refuses analytic propagation instead of
+    // silently dropping the point-mass terms. (Centered exactly on the
+    // body would be a field singularity, not a patch.)
+    let secondary = states[2].position_inertial;
+    let near = vec![
+        secondary + DVec3::new(1.5e6, 0.0, 0.0),
+        secondary - DVec3::new(0.5e6, 0.0, 0.0),
+    ];
+    let near_patch = compile_patch(&ephemeris, &states, &near, CohortConfig::default())
+        .expect("near patch compiles");
+    assert!(!near_patch.exact.is_empty());
+    assert_eq!(
+        affine_segment_bound(&ephemeris, &states, &near_patch, 1.0e5, 60.0),
+        Err(PatchError::AnalyticNeedsFarField)
+    );
+}
+
+#[test]
+fn piecewise_converges_with_budget_and_stays_deterministic() {
+    // Budget-driven convergence: a tighter budget takes shorter segments
+    // and lands closer to exact. Deep-space 1200 s horizon, verified
+    // against per-stage-frame RK4 at the endpoint. (At 1e-12 and below the
+    // driver honestly refuses instead: per-tick source motion alone exceeds
+    // the budget — see the DtFloor case below.)
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let center = DVec3::new(3.0e9, 1.0e9, 0.0);
+    let velocity = DVec3::new(0.0, 5_000.0, 100.0);
+    let run = |budget: f64, horizon: f64| {
+        let mut frame = EphemerisFrame::new();
+        let report = propagate_piecewise(
+            &ephemeris,
+            &mut frame,
+            center,
+            velocity,
+            SimTime::EPOCH,
+            CohortConfig {
+                error_budget_mps2: budget,
+                ..Default::default()
+            },
+            horizon,
+            60.0,
+        )
+        .expect("piecewise runs");
+        assert_eq!(report.fallback, None);
+        // Reference endpoint: exact RK4, 0.5 s steps, per-stage frames.
+        let mut x = center;
+        let mut v = velocity;
+        for step in 0..(horizon / 0.5) as usize {
+            let base = step as f64 * 0.5;
+            let mut accel_at = |position: DVec3, time: SimTime| {
+                let sub = frame.evaluate(&ephemeris, time).expect("frame").to_vec();
+                field
+                    .accelerations_from_frame(std::slice::from_ref(&position), &sub)
+                    .expect("exact")[0]
+            };
+            let k1v = accel_at(x, SimTime(base));
+            let k1x = v;
+            let k2v = accel_at(x + k1x * 0.25, SimTime(base + 0.25));
+            let k2x = v + k1v * 0.25;
+            let k3v = accel_at(x + k2x * 0.25, SimTime(base + 0.25));
+            let k3x = v + k2v * 0.25;
+            let k4v = accel_at(x + k3x * 0.5, SimTime(base + 0.5));
+            let k4x = v + k3v * 0.5;
+            x += (k1x + k2x * 2.0 + k3x * 2.0 + k4x) * (0.5 / 6.0);
+            v += (k1v + k2v * 2.0 + k3v * 2.0 + k4v) * (0.5 / 6.0);
+        }
+        let last = report.steps.last().expect("at least one step");
+        let error = (last.position - x).length();
+        (report.steps.len(), error)
+    };
+    let (loose_steps, loose_error) = run(1.0e-9, 1_200.0);
+    let (tight_steps, tight_error) = run(1.0e-10, 1_200.0);
+    assert!(
+        tight_steps >= loose_steps,
+        "tighter budget must not take fewer segments"
+    );
+    assert!(
+        tight_error < loose_error,
+        "tighter budget must land closer: {tight_error:e} vs {loose_error:e}"
+    );
+    assert!(loose_error <= 1.0, "loose run must stay sane");
+    // Determinism: same inputs, identical report.
+    let mut frame = EphemerisFrame::new();
+    let first = propagate_piecewise(
+        &ephemeris,
+        &mut frame,
+        center,
+        velocity,
+        SimTime::EPOCH,
+        CohortConfig::default(),
+        600.0,
+        60.0,
+    )
+    .expect("first run");
+    let mut frame = EphemerisFrame::new();
+    let second = propagate_piecewise(
+        &ephemeris,
+        &mut frame,
+        center,
+        velocity,
+        SimTime::EPOCH,
+        CohortConfig::default(),
+        600.0,
+        60.0,
+    )
+    .expect("second run");
+    assert_eq!(first, second);
+}
+
+#[test]
+fn piecewise_falls_back_near_body_and_on_zero_budget() {
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let mut frame = EphemerisFrame::new();
+    let states = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame")
+        .to_vec();
+    // 5 km from the secondary with a slow drift: the segment ball reaches
+    // the body on the first attempt → immediate exact-near fallback.
+    let secondary = states[2].position_inertial;
+    let report = propagate_piecewise(
+        &ephemeris,
+        &mut frame,
+        secondary + DVec3::new(5_000.0, 0.0, 0.0),
+        DVec3::new(0.0, 100.0, 0.0),
+        SimTime::EPOCH,
+        CohortConfig::default(),
+        600.0,
+        60.0,
+    )
+    .expect("fallback runs");
+    assert_eq!(report.steps.len(), 1);
+    assert_eq!(
+        report.fallback,
+        Some(AnalyticFallback::ExactNear { body: BodyId(2) })
+    );
+    // Zero budget overflows every source: grind to the dt floor, then hand
+    // the remainder to exact integration.
+    let center = DVec3::new(3.0e9, 1.0e9, 0.0);
+    let report = propagate_piecewise(
+        &ephemeris,
+        &mut frame,
+        center,
+        DVec3::new(0.0, 5_000.0, 0.0),
+        SimTime::EPOCH,
+        CohortConfig {
+            error_budget_mps2: 0.0,
+            ..Default::default()
+        },
+        600.0,
+        60.0,
+    )
+    .expect("zero-budget runs");
+    assert_eq!(report.steps.len(), 1);
+    assert_eq!(report.fallback, Some(AnalyticFallback::DtFloor));
 }
 
 #[test]
@@ -981,6 +2181,32 @@ fn aero_batch_preserves_order_and_replay() {
         let expected = model.evaluate(case).expect("single result");
         assert_eq!(result.expect("batch result"), expected);
     }
+}
+
+#[test]
+fn x15_starter_profile_ships_compiled_contact_geometry() {
+    let starter = X15StarterProfile::new().expect("X-15 starter profile");
+    let geometry = &starter.vehicle.collision_geometry;
+    assert!(!geometry.is_empty());
+    geometry
+        .validate()
+        .expect("X-15 contact geometry validates");
+    assert_eq!(geometry.parts.len(), 4);
+    // The compound must cover the flown stations: fuselage capsule along the
+    // body X axis plus wing/tail cuboids at the aero panel stations.
+    let has_capsule = geometry.parts.iter().any(|part| {
+        matches!(
+            part.shape,
+            crate::CollisionShape::Capsule {
+                axis: crate::CollisionAxis::X,
+                ..
+            }
+        )
+    });
+    assert!(
+        has_capsule,
+        "X-15 contact geometry needs a fuselage capsule"
+    );
 }
 
 #[test]
@@ -2925,4 +4151,687 @@ fn aero_soa_simd_matches_oracle_and_panel_loop() {
         assert_eq!(fresh.moment_body_nm, oracle.moment_body_nm);
         assert_eq!(fresh.panel_loads.expect("loads").len(), 10);
     }
+}
+
+fn chain_ephemeris() -> BakedEphemeris {
+    // Barycenter -> planet -> moon -> submoon: every lookup below the top
+    // re-walks shared parents, which is exactly the redundancy the batch
+    // evaluator removes. Radii are nonzero so the bodies also serve as
+    // gravity sources alongside the hierarchy.
+    let mu = 3.986_004_418e14;
+    let orbit = |a: f64, e: f64, m0: f64| {
+        KeplerOrbit::new(mu, a, e, 0.1, 0.2, 0.3, m0).expect("valid test orbit")
+    };
+    BakedEphemeris::new(
+        "TEST_CHAIN_EPOCH",
+        vec![
+            BakedBody::synthetic_barycenter(BodyId(0), "barycenter", mu, None, None),
+            BakedBody::orbital(
+                BodyId(1),
+                "planet",
+                mu * 0.1,
+                6_000_000.0,
+                BodyId(0),
+                orbit(50_000_000.0, 0.05, 0.0),
+            ),
+            BakedBody::orbital(
+                BodyId(2),
+                "moon",
+                mu * 0.01,
+                1_000_000.0,
+                BodyId(1),
+                orbit(5_000_000.0, 0.1, 1.0),
+            ),
+            BakedBody::orbital(
+                BodyId(3),
+                "submoon",
+                mu * 0.001,
+                100_000.0,
+                BodyId(2),
+                orbit(500_000.0, 0.2, 2.0),
+            ),
+        ],
+    )
+    .expect("valid chain ephemeris")
+}
+
+#[test]
+fn batch_states_match_individual_lookups_bitwise() {
+    let ephemeris = chain_ephemeris();
+    let mut frame = EphemerisFrame::new();
+    for seconds in [0.0, 1.0, 8.0 / 120.0, 1_000_000.0, -12_345.678] {
+        let time = SimTime(seconds);
+        let batch = frame
+            .evaluate(&ephemeris, time)
+            .expect("batch evaluation")
+            .to_vec();
+        assert_eq!(batch.len(), ephemeris.bodies.len());
+        for body in &ephemeris.bodies {
+            let single = ephemeris.body_state(body.id, time).expect("single lookup");
+            let batched = batch[body.id.index()];
+            assert_eq!(
+                batched.position_inertial, single.position_inertial,
+                "pos {:?}",
+                body.id
+            );
+            assert_eq!(
+                batched.velocity_inertial, single.velocity_inertial,
+                "vel {:?}",
+                body.id
+            );
+            assert_eq!(batched, single, "full state {:?}", body.id);
+        }
+        // Re-evaluating the same frame at a new time must not leak the old
+        // generation's completion tags into the new pass.
+        assert!(frame.states().len() == ephemeris.bodies.len());
+    }
+}
+
+#[test]
+fn batch_reports_cycles_and_rejects_short_buffers() {
+    let mut cyclic = chain_ephemeris();
+    cyclic.bodies[1].parent = Some(BodyId(3));
+    let mut frame = EphemerisFrame::new();
+    assert!(matches!(
+        frame.evaluate(&cyclic, SimTime::EPOCH),
+        Err(EphemerisError::Cycle(_))
+    ));
+    // A poisoned frame must still serve a healthy universe afterwards.
+    let healthy = chain_ephemeris();
+    assert!(frame.evaluate(&healthy, SimTime::EPOCH).is_ok());
+
+    let mut states = vec![BodyState::ORIGIN; 2];
+    let mut scratch = EphemerisScratch::new();
+    assert!(
+        healthy
+            .body_states_into(SimTime::EPOCH, &mut states, &mut scratch)
+            .is_err()
+    );
+}
+
+#[test]
+fn gravity_and_dominant_from_states_match_naive_paths() {
+    let ephemeris = chain_ephemeris();
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let mut frame = EphemerisFrame::new();
+    let positions = [
+        DVec3::new(56_000_000.0, 0.0, 0.0),
+        DVec3::new(0.0, -49_000_000.0, 1_000_000.0),
+    ];
+    for seconds in [0.0, 40_000.0] {
+        let time = SimTime(seconds);
+        let states = frame.evaluate(&ephemeris, time).expect("batch").to_vec();
+        for position in positions {
+            let naive = field.acceleration(position, time).expect("naive gravity");
+            let batched = field
+                .acceleration_from_states(position, &states)
+                .expect("batched gravity");
+            assert_eq!(batched, naive);
+            assert_eq!(
+                ephemeris.dominant_body_from_states(position, &states),
+                ephemeris.dominant_body(position, time),
+            );
+        }
+    }
+    // A short slice names the missing body instead of panicking.
+    let short = &frame.states()[..2];
+    assert!(field.acceleration_from_states(positions[0], short).is_err());
+}
+
+#[test]
+fn soa_scratch_matches_scalar_panel_loop_within_envelope() {
+    // Gate for routing the per-tick flight path through the vectorized SoA
+    // kernels. The kernels transcribe the analytic model with a different
+    // association order (up to a few ulps on 1e4-scale forces), so this pins
+    // an absolute envelope instead of bitwise equality, per AGENTS 10.1:
+    // 1e-6 N / 1e-6 N m sit ~9 orders below the decision-relevant scales
+    // (254 kN thrust, ~1e3 N m RCS couples and saturation flag) while
+    // relative metrics would lie on near-zero loads. The X-15 layout
+    // (5 panels) exercises both the 4-wide kernel and the scalar tail.
+    let profile = X15StarterProfile::new().expect("x15 profile");
+    let mut vehicle = profile.vehicle.clone();
+    let model = PanelAeroModel::new(profile.aero_config).expect("aero model");
+    let mut panels = PanelSoA::from_geometry(&vehicle.aero_geometry).expect("soa layout");
+    let mut scratch = AeroSimdScratch::default();
+    let env = |density: f64| AeroEnvironment::new(density, 340.294, 1.81e-5, DVec3::ZERO);
+    let flow = |vx: f64, vy: f64, omega: DVec3| AeroState::new(DVec3::new(vx, vy, 0.0), omega);
+    let cases: Vec<(AeroState, AeroEnvironment, [f64; 4])> = vec![
+        (
+            flow(180.0, 0.0, DVec3::ZERO),
+            env(1.0),
+            [0.0, 0.0, 0.0, 0.0],
+        ),
+        (
+            flow(180.0, -8.0, DVec3::ZERO),
+            env(1.0),
+            [-0.5, 0.3, 0.2, -0.2],
+        ),
+        // Past the 22-degree stall angle with rate: separation + omega x r.
+        (
+            flow(150.0, -70.0, DVec3::new(1.0, 0.5, 0.2)),
+            env(0.9),
+            [0.8, -0.6, 1.0, -1.0],
+        ),
+        // Transonic handoff and supersonic thin air with full deflection.
+        (
+            flow(340.0, 5.0, DVec3::ZERO),
+            env(0.8),
+            [0.2, 0.0, 0.5, -0.5],
+        ),
+        (
+            flow(680.0, 20.0, DVec3::new(0.1, -0.2, 0.3)),
+            env(0.4),
+            [1.0, 1.0, -1.0, 1.0],
+        ),
+        // Declared vacuum parks every lane; still air parks them too.
+        (
+            flow(7000.0, 0.0, DVec3::ZERO),
+            env(0.0),
+            [0.4, 0.0, 0.0, 0.0],
+        ),
+        (flow(0.0, 0.0, DVec3::ZERO), env(1.0), [0.0, 0.0, 0.0, 0.0]),
+    ];
+    for (state, environment, commands) in cases {
+        vehicle
+            .apply_control_inputs(&commands)
+            .expect("control inputs");
+        let geometry = &vehicle.aero_geometry;
+        panels.sync_deflections(geometry).expect("deflection sync");
+        let scalar = model
+            .evaluate_state(state, environment, geometry)
+            .expect("scalar evaluation");
+        let vector = model
+            .evaluate_soa_simd_scratch(state, environment, &panels, false, &mut scratch)
+            .expect("soa evaluation");
+        assert!(
+            (vector.force_body_n - scalar.force_body_n).length() <= 1.0e-6,
+            "force envelope {state:?}: {:?} vs {:?}",
+            vector.force_body_n,
+            scalar.force_body_n,
+        );
+        assert!(
+            (vector.moment_body_nm - scalar.moment_body_nm).length() <= 1.0e-6,
+            "moment envelope {state:?}: {:?} vs {:?}",
+            vector.moment_body_nm,
+            scalar.moment_body_nm,
+        );
+        assert!(
+            (vector.dynamic_pressure_pa - scalar.dynamic_pressure_pa).abs() <= 1.0e-9,
+            "q envelope"
+        );
+        assert!(
+            (vector.mach - scalar.mach).abs() <= 1.0e-12,
+            "mach envelope"
+        );
+        assert!(
+            (vector.reynolds_number - scalar.reynolds_number).abs() <= 1.0e-6,
+            "re envelope"
+        );
+        assert_eq!(vector.panel_count, scalar.panel_count, "panel count");
+    }
+}
+
+#[test]
+#[ignore = "wall-clock diagnostic; run with --ignored --nocapture"]
+fn profile_scalar_vs_soa_dev() {
+    let profile = X15StarterProfile::new().expect("x15 profile");
+    let vehicle = profile.vehicle.clone();
+    let geometry = &vehicle.aero_geometry;
+    let model = PanelAeroModel::new(profile.aero_config).expect("aero model");
+    let mut panels = PanelSoA::from_geometry(geometry).expect("soa");
+    let mut scratch = AeroSimdScratch::default();
+    let env = AeroEnvironment::new(1.0, 340.294, 1.81e-5, DVec3::ZERO);
+    let state = AeroState::new(DVec3::new(180.0, -8.0, 0.0), DVec3::ZERO);
+    // Warmup.
+    for _ in 0..200 {
+        let _ = model.evaluate_state(state, env, geometry).expect("scalar");
+        panels.sync_deflections(geometry).expect("sync");
+        let _ = model
+            .evaluate_soa_simd_scratch(state, env, &panels, false, &mut scratch)
+            .expect("soa");
+    }
+    let iters = 2000;
+    let now = std::time::Instant::now();
+    for _ in 0..iters {
+        std::hint::black_box(model.evaluate_state(state, env, geometry).expect("scalar"));
+    }
+    let scalar = now.elapsed();
+    let now = std::time::Instant::now();
+    for _ in 0..iters {
+        panels.sync_deflections(geometry).expect("sync");
+        std::hint::black_box(
+            model
+                .evaluate_soa_simd_scratch(state, env, &panels, false, &mut scratch)
+                .expect("soa"),
+        );
+    }
+    let soa = now.elapsed();
+    eprintln!("scalar: {:?} total, {:?}/eval", scalar, scalar / iters);
+    eprintln!("soa+sync: {:?} total, {:?}/eval", soa, soa / iters);
+}
+
+// ---- Finite-thrust propagation (integrator thrust arcs) ----
+
+fn circular_state(mu: f64, radius: f64) -> TestParticleState {
+    TestParticleState {
+        position: DVec3::new(radius, 0.0, 0.0),
+        velocity: DVec3::new(0.0, (mu / radius).sqrt(), 0.0),
+    }
+}
+
+fn orbital_energy(mu: f64, state: TestParticleState) -> f64 {
+    state.velocity.length_squared() / 2.0 - mu / state.position.length()
+}
+
+#[test]
+fn thrust_arc_depletes_mass_in_closed_form() {
+    let mu = 1.2e17;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let arc = ThrustArc {
+        start_s: 100.0,
+        duration_s: 1_000.0,
+        direction: ThrustDirection::Inertial(DVec3::Y),
+        throttle_01: 0.8,
+        thrust_n: 1_000.0,
+        mass_flow_kgs: 0.05,
+    };
+    let result = propagate_adaptive_with_thrust(
+        &field,
+        circular_state(mu, 1.1e9),
+        20_000.0,
+        SimTime::EPOCH,
+        2_000.0,
+        &[arc],
+        AdaptiveIntegratorConfig::default(),
+    )
+    .expect("thrust arc propagates");
+    // Closed form (the integrator never touches mass): m = m0 - mdot*t.
+    assert!((result.final_mass_kg - (20_000.0 - 0.05 * 0.8 * 1_000.0)).abs() < 1e-9);
+    assert!((result.end_time.seconds() - (SimTime::EPOCH.seconds() + 2_000.0)).abs() < 1e-6);
+    assert!(result.state.position.is_finite());
+}
+
+#[test]
+fn dead_thrust_arc_matches_ballistic() {
+    // Zero throttle over the WHOLE horizon: the thrust stepper must
+    // reproduce the ballistic stepper (same tableau, +0.0 thrust) — guards
+    // the duplicated core. (A mid-horizon dead arc restarts the stepper
+    // at the boundary, so it only agrees to tolerance — see below.)
+    let mu = 1.2e17;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let initial = circular_state(mu, 1.1e9);
+    let arc = ThrustArc {
+        start_s: 0.0,
+        duration_s: 50_000.0,
+        direction: ThrustDirection::Inertial(DVec3::Y),
+        throttle_01: 0.0,
+        thrust_n: 1_000.0,
+        mass_flow_kgs: 0.05,
+    };
+    let thrust = propagate_adaptive_with_thrust(
+        &field,
+        initial,
+        20_000.0,
+        SimTime::EPOCH,
+        50_000.0,
+        &[arc],
+        AdaptiveIntegratorConfig::default(),
+    )
+    .expect("dead arc propagates");
+    let ballistic = propagate_adaptive(
+        &field,
+        initial,
+        SimTime::EPOCH,
+        50_000.0,
+        AdaptiveIntegratorConfig::default(),
+    )
+    .expect("ballistic propagates");
+    assert_eq!(thrust.state, ballistic.state);
+    assert_eq!(thrust.final_mass_kg, 20_000.0);
+}
+
+#[test]
+fn segmented_dead_arcs_match_ballistic_to_tolerance() {
+    // Mid-horizon dead arcs restart the adaptive stepper at boundaries
+    // (fresh initial step), so agreement is to integration tolerance —
+    // this guards the segmentation plumbing, not the tableau.
+    let mu = 1.2e17;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let initial = circular_state(mu, 1.1e9);
+    let arcs = [
+        ThrustArc {
+            start_s: 500.0,
+            duration_s: 10_000.0,
+            direction: ThrustDirection::Inertial(DVec3::Y),
+            throttle_01: 0.0,
+            thrust_n: 1_000.0,
+            mass_flow_kgs: 0.05,
+        },
+        ThrustArc {
+            start_s: 20_000.0,
+            duration_s: 5_000.0,
+            direction: ThrustDirection::Prograde,
+            throttle_01: 0.0,
+            thrust_n: 1_000.0,
+            mass_flow_kgs: 0.05,
+        },
+    ];
+    let thrust = propagate_adaptive_with_thrust(
+        &field,
+        initial,
+        20_000.0,
+        SimTime::EPOCH,
+        50_000.0,
+        &arcs,
+        AdaptiveIntegratorConfig::default(),
+    )
+    .expect("dead arcs propagate");
+    let ballistic = propagate_adaptive(
+        &field,
+        initial,
+        SimTime::EPOCH,
+        50_000.0,
+        AdaptiveIntegratorConfig::default(),
+    )
+    .expect("ballistic propagates");
+    assert!(thrust.state.position.distance(ballistic.state.position) < 1.0);
+    assert_eq!(thrust.final_mass_kg, 20_000.0);
+}
+
+#[test]
+fn prograde_arc_gains_orbital_energy() {
+    // Five-day full-throttle prograde arc: energy must rise (spiral out),
+    // mass must match closed form exactly.
+    let mu = 1.2e17;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let initial = circular_state(mu, 1.1e9);
+    let duration = 5.0 * 86_400.0;
+    let arc = ThrustArc {
+        start_s: 0.0,
+        duration_s: duration,
+        direction: ThrustDirection::Prograde,
+        throttle_01: 1.0,
+        thrust_n: 2.0,
+        mass_flow_kgs: 2.0 / 30_000.0,
+    };
+    let result = propagate_adaptive_with_thrust(
+        &field,
+        initial,
+        2_000.0,
+        SimTime::EPOCH,
+        duration,
+        &[arc],
+        AdaptiveIntegratorConfig::default(),
+    )
+    .expect("spiral propagates");
+    assert!(orbital_energy(mu, result.state) > orbital_energy(mu, initial));
+    assert!(result.state.position.length() > 1.1e9);
+    let expected_mass = 2_000.0 - (2.0 / 30_000.0) * duration;
+    assert!((result.final_mass_kg - expected_mass).abs() / expected_mass < 1e-12);
+}
+
+#[test]
+fn thrust_schedule_validation_rejects_garbage() {
+    let mu = 1.2e17;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let live = ThrustArc {
+        start_s: 0.0,
+        duration_s: 100.0,
+        direction: ThrustDirection::Inertial(DVec3::X),
+        throttle_01: 1.0,
+        thrust_n: 1_000.0,
+        mass_flow_kgs: 0.05,
+    };
+    // Propellant depleted by the arc.
+    let thirsty = ThrustArc {
+        mass_flow_kgs: 10.0,
+        ..live
+    };
+    assert!(
+        propagate_adaptive_with_thrust(
+            &field,
+            circular_state(mu, 1.1e9),
+            100.0,
+            SimTime::EPOCH,
+            200.0,
+            &[thirsty],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .is_err()
+    );
+    // Unordered arcs.
+    let late = ThrustArc {
+        start_s: 150.0,
+        ..live
+    };
+    let early = ThrustArc {
+        start_s: 50.0,
+        ..live
+    };
+    assert!(
+        propagate_adaptive_with_thrust(
+            &field,
+            circular_state(mu, 1.1e9),
+            20_000.0,
+            SimTime::EPOCH,
+            500.0,
+            &[late, early],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .is_err()
+    );
+    // Zero direction with a live engine.
+    let blind = ThrustArc {
+        direction: ThrustDirection::Inertial(DVec3::ZERO),
+        ..live
+    };
+    assert!(
+        propagate_adaptive_with_thrust(
+            &field,
+            circular_state(mu, 1.1e9),
+            20_000.0,
+            SimTime::EPOCH,
+            200.0,
+            &[blind],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .is_err()
+    );
+    // Arc past the horizon, non-positive mass.
+    let past = ThrustArc {
+        start_s: 150.0,
+        duration_s: 100.0,
+        ..live
+    };
+    assert!(
+        propagate_adaptive_with_thrust(
+            &field,
+            circular_state(mu, 1.1e9),
+            20_000.0,
+            SimTime::EPOCH,
+            200.0,
+            &[past],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .is_err()
+    );
+    assert!(
+        propagate_adaptive_with_thrust(
+            &field,
+            circular_state(mu, 1.1e9),
+            0.0,
+            SimTime::EPOCH,
+            200.0,
+            &[live],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn rtn_basis_matches_circular_orbit() {
+    // Circular orbit in the XY plane: R=+X, C=+Z, T=+Y (prograde).
+    let (radial, transverse, cross) =
+        rtn_basis(DVec3::new(1.1e9, 0.0, 0.0), DVec3::new(0.0, 10_460.0, 0.0))
+            .expect("healthy orbit geometry");
+    assert!((radial - DVec3::X).length() < 1e-12);
+    assert!((transverse - DVec3::Y).length() < 1e-12);
+    assert!((cross - DVec3::Z).length() < 1e-12);
+    // Degenerate: at the center, or radial flight with no orbit plane.
+    assert!(rtn_basis(DVec3::ZERO, DVec3::X).is_none());
+    assert!(rtn_basis(DVec3::X, DVec3::X * 100.0).is_none());
+    assert!(rtn_basis(DVec3::new(f64::NAN, 0.0, 0.0), DVec3::X).is_none());
+}
+
+#[test]
+fn rtn_normal_arc_conserves_energy_turning_plane() {
+    // Pure orbit-normal thrust does no work (a ⊥ v always): energy must be
+    // conserved while the plane rotates. Proves the frame is truly normal,
+    // not a mislabeled prograde.
+    let mu = 1.2e17;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let initial = circular_state(mu, 1.1e9);
+    let duration = 3.0 * 86_400.0;
+    let arc = ThrustArc {
+        start_s: 0.0,
+        duration_s: duration,
+        direction: ThrustDirection::Rtn {
+            central: BodyId(0),
+            radial: 0.0,
+            transverse: 0.0,
+            normal: 1.0,
+        },
+        throttle_01: 1.0,
+        thrust_n: 5.0,
+        mass_flow_kgs: 5.0 / 30_000.0,
+    };
+    let result = propagate_adaptive_with_thrust(
+        &field,
+        initial,
+        2_000.0,
+        SimTime::EPOCH,
+        duration,
+        &[arc],
+        AdaptiveIntegratorConfig::default(),
+    )
+    .expect("normal arc propagates");
+    let energy_before = orbital_energy(mu, initial);
+    let energy_after = orbital_energy(mu, result.state);
+    assert!(
+        ((energy_after - energy_before) / energy_before).abs() < 1e-6,
+        "energy drift {energy_before} -> {energy_after}"
+    );
+    // ...while the orbit normal genuinely moved (plane change happened).
+    let normal_before = initial.position.cross(initial.velocity).normalize();
+    let normal_after = result
+        .state
+        .position
+        .cross(result.state.velocity)
+        .normalize();
+    let plane_change = normal_before.dot(normal_after).clamp(-1.0, 1.0).acos();
+    assert!(plane_change > 1e-4, "plane must rotate, got {plane_change}");
+}
+
+#[test]
+fn rtn_arc_validation_rejects_garbage() {
+    let mu = 1.2e17;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let live = ThrustArc {
+        start_s: 0.0,
+        duration_s: 100.0,
+        direction: ThrustDirection::Rtn {
+            central: BodyId(0),
+            radial: 0.0,
+            transverse: 1.0,
+            normal: 0.0,
+        },
+        throttle_01: 1.0,
+        thrust_n: 1_000.0,
+        mass_flow_kgs: 0.05,
+    };
+    // Unknown central body.
+    let lost = ThrustArc {
+        direction: ThrustDirection::Rtn {
+            central: BodyId(99),
+            radial: 0.0,
+            transverse: 1.0,
+            normal: 0.0,
+        },
+        ..live
+    };
+    assert!(
+        propagate_adaptive_with_thrust(
+            &field,
+            circular_state(mu, 1.1e9),
+            20_000.0,
+            SimTime::EPOCH,
+            100.0,
+            &[lost],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .is_err()
+    );
+    // All-zero components with a live engine.
+    let bland = ThrustArc {
+        direction: ThrustDirection::Rtn {
+            central: BodyId(0),
+            radial: 0.0,
+            transverse: 0.0,
+            normal: 0.0,
+        },
+        ..live
+    };
+    assert!(
+        propagate_adaptive_with_thrust(
+            &field,
+            circular_state(mu, 1.1e9),
+            20_000.0,
+            SimTime::EPOCH,
+            100.0,
+            &[bland],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn prograde_steering_at_rest_is_an_error() {
+    // Steering is undefined at zero velocity: honest error, never a
+    // silent coast in an arbitrary direction.
+    let mu = 1.2e17;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let rest = TestParticleState {
+        position: DVec3::new(1.1e9, 0.0, 0.0),
+        velocity: DVec3::ZERO,
+    };
+    let arc = ThrustArc {
+        start_s: 0.0,
+        duration_s: 100.0,
+        direction: ThrustDirection::Prograde,
+        throttle_01: 1.0,
+        thrust_n: 1_000.0,
+        mass_flow_kgs: 0.05,
+    };
+    assert!(
+        propagate_adaptive_with_thrust(
+            &field,
+            rest,
+            20_000.0,
+            SimTime::EPOCH,
+            100.0,
+            &[arc],
+            AdaptiveIntegratorConfig::default(),
+        )
+        .is_err()
+    );
 }

@@ -1,8 +1,9 @@
-//! Safe wrapper over the vendored upstream `libcbt`.
+//! Optional safe runtime adapter over the vendored upstream `libcbt`.
 //!
-//! BENCH AND TEST TOOLING ONLY. This crate must never become a dependency of
-//! the game runtime, the server, or `thessa-rcbt-core`: the C library is an
-//! oracle and benchmark target, not the production topology implementation.
+//! The pure Rust tree remains the default portable implementation. This crate
+//! provides a second, independently implemented topology backend for builds
+//! that prefer the upstream bitfield implementation and its conformance
+//! history. It is also used by differential tests and performance benches.
 //! The API mirrors `thessa-rcbt-core::Tree` one to one (split takes a leaf,
 //! merge takes the parent) so both implementations can replay identical
 //! operation sequences.
@@ -67,9 +68,10 @@ unsafe extern "C" {
 }
 
 /// Upstream requires `max_depth >= 5`; the heap grows as `2^(depth-1)` bytes,
-/// so bench scales are capped to keep the reference allocation bounded.
+/// so the supported runtime depth is capped to keep the foreign allocation
+/// bounded. The pure Rust implementation supports deeper trees.
 pub const MIN_DEPTH: u8 = 5;
-pub const MAX_BENCH_DEPTH: u8 = 24;
+pub const MAX_SUPPORTED_DEPTH: u8 = 24;
 
 #[derive(Debug)]
 pub enum FfiError {
@@ -82,7 +84,7 @@ impl std::fmt::Display for FfiError {
         match self {
             Self::NullTree => f.write_str("libcbt returned a null tree"),
             Self::DepthOutOfRange { depth } => {
-                write!(f, "libcbt bench depth {depth} outside 5..=24")
+                write!(f, "libcbt depth {depth} outside 5..=24")
             }
         }
     }
@@ -112,7 +114,7 @@ macro_rules! impl_tree {
             }
 
             pub fn at_depth(max_depth: u8, depth: u8) -> Result<Self, FfiError> {
-                if !(MIN_DEPTH..=MAX_BENCH_DEPTH).contains(&max_depth) || depth > max_depth {
+                if !(MIN_DEPTH..=MAX_SUPPORTED_DEPTH).contains(&max_depth) || depth > max_depth {
                     return Err(FfiError::DepthOutOfRange { depth: max_depth });
                 }
                 // SAFETY: valid depths; null is checked below.
@@ -253,7 +255,7 @@ impl_tree!(
 
 impl_tree!(
     MtCbtTree,
-    "Owned handle to the OpenMP build. Scaling experiments only.",
+    "Owned handle to the optional OpenMP build. Deliberately `!Send + !Sync`.",
     thessa_mt_cbt_create,
     thessa_mt_cbt_release,
     thessa_mt_cbt_reset_to_depth,

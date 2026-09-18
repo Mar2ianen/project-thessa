@@ -13,12 +13,30 @@
 //! green.
 
 pub mod bake;
+pub mod contact;
+pub(crate) mod control;
+pub mod launch_site;
 pub mod mode;
 pub mod runtime;
 
+pub use thessa_flight_control::{
+    ActuatorDynamics, ActuatorGroup, AircraftControlLaw, AircraftState, AllocationResult,
+    AttitudeState, ControlDemand, ControlError, ControlLawState, DirectControlLaw, DirectionFrame,
+    DirectionTarget, EffectorContribution, FlightControlLaw, FlightPolicy, FlightPolicyContext,
+    GuidanceIntent, InputScheme, PilotAxes, PropulsionDemand, RollPolicy, SpacecraftControlLaw,
+    TrajectoryPlanId, allocate_wrench,
+};
+
 pub use bake::{BakeQueue, BakedRails, InlineBakeQueue, RailsBakeRequest};
+pub use contact::{
+    BroadPhasePair, ContactActivation, ContactBroadPhase, ContactCandidate, ContactRuntime,
+};
+pub use launch_site::{canonical_launch_setup, canonical_world_field, survey_bookmarks};
 pub use mode::{ControlMode, FlightRegime};
 pub use runtime::{
     COAST_DENSITY_KG_M3, FlightAuthority, FlightTraceWriter, LocalAirKinematics,
-    X15_STALL_ANGLE_DEG, conventional_angle_of_attack_deg, local_air_kinematics,
+    TerrainTrackCoverage, X15_STALL_ANGLE_DEG, conventional_angle_of_attack_deg,
+    local_air_kinematics,
 };
+pub use thessa_collision::{ContactPartyKind, ContactSummary, JointId};
+pub use thessa_worldgen_rocky::field::{ObstacleReport, ObstacleWithstandProof};

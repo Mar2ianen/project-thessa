@@ -15,6 +15,7 @@ wgpu.workspace = true
 naga = { version = "29.0.4", features = ["wgsl-in"] }
 pollster = "0.4"
 thessa-rcbt-ffi = { path = "../rcbt-ffi" }
+thessa-rcbt-large-ffi = { path = "../rcbt-large-ffi" }
 
 [[bench]]
 name = "gpu_cbt"
@@ -22,4 +23,8 @@ harness = false
 
 [[bench]]
 name = "crossover"
+harness = false
+
+[[bench]]
+name = "ocbt_vs_reduce"
 harness = false

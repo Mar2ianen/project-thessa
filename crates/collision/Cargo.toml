@@ -1,0 +1,25 @@
+[package]
+name = "thessa-collision"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+
+[features]
+default = ["parallel"]
+parallel = ["rapier3d-f64/parallel"]
+enhanced-determinism = ["rapier3d-f64/enhanced-determinism"]
+
+[dependencies]
+glam.workspace = true
+rapier3d-f64.workspace = true
+serde.workspace = true
+thessa-sim-core = { path = "../sim-core" }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[[bench]]
+name = "contacts"
+harness = false

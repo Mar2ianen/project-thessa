@@ -1,0 +1,29 @@
+# BC-I generator-facing recipe stub (docs/02B_BC_SUBSYSTEM.md §1.1).
+# Basic markup only: physical data resolves by body id from
+# data/system.toml; this file keeps worldgen/art values.
+# datum_radius_m MUST agree with system.toml (see `check` below).
+#
+# Verify with:
+#   cargo run -p thessa-worldgen-rocky -- check \
+#     --system data/system.toml --body bc_i \
+#     --recipe data/worldgen/bc_i.toml
+
+[planet]
+id = "bc_i"
+seed = 15
+datum_radius_m = 2000000.0
+# Working relief envelope for a stripped refractory remnant: giant
+# impact faces excavating deep layers, terminator fracture belts,
+# substellar melt scars. No volatiles, no smoothing by atmosphere.
+height_min_m = -8000.0
+height_max_m = 12000.0
+
+[terrain]
+mountain_coverage = 0.20
+crater_density = 0.35
+volcanism = 0.45
+erosion_strength = 0.05
+glaciation = 0.00
+rift_activity = 0.50
+roughness_macro = 0.65
+plateau_coverage = 0.10

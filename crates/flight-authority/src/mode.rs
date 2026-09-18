@@ -1,6 +1,8 @@
 //! Pilot input modes and solver regimes (moved verbatim from the client).
 
+use glam::DQuat;
 use serde::{Deserialize, Serialize};
+use thessa_flight_control::{GuidanceIntent, PilotAxes, RollPolicy};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ControlMode {
@@ -38,6 +40,27 @@ impl ControlMode {
             Self::Navball => "direct attitude target control",
             Self::Rate => "command angular rates",
             Self::Direct => "raw actuator input",
+        }
+    }
+
+    /// Compatibility adapter for the legacy UI/wire enum. New callers should
+    /// produce [`GuidanceIntent`] directly; this keeps old clients on the same
+    /// authority direction while the protocol migrates away from SAS fields.
+    pub fn into_guidance_intent(
+        self,
+        axes: PilotAxes,
+        sas_target_orientation: DQuat,
+        sas_enabled: bool,
+    ) -> GuidanceIntent {
+        match self {
+            Self::MouseAim | Self::Navball if sas_enabled => GuidanceIntent::Attitude {
+                target_body_to_inertial: sas_target_orientation,
+                roll_policy: RollPolicy::Hold,
+            },
+            Self::Rate => GuidanceIntent::AngularRate {
+                rate_body_rps: glam::DVec3::new(axes.pitch, axes.yaw, axes.roll),
+            },
+            _ => GuidanceIntent::ManualAxes(axes),
         }
     }
 }

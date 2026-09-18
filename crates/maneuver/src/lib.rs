@@ -1,0 +1,50 @@
+//! Maneuver planning and node execution (Project Thessa automation layer).
+//!
+//! UX reference: MechJeb-style `Maneuver Planner` / `Node Executor`
+//! (`Circularize`, `Hohmann transfer`, rendezvous) and the `ManeuverPlan`
+//! typed port from docs/07. This is reference vocabulary, not a clone:
+//! every high-level action is a composable block with typed inputs/outputs,
+//! planning approximations are always revalidated against the exact
+//! authoritative path before execution, and burns execute through real
+//! propulsion over time — never as teleported velocity.
+//!
+//! Layering (docs/07 §7.2): this crate sits at "planner", between the
+//! event-driven graph VM above and guidance/control laws below. It depends
+//! only on `thessa-sim-core` (ephemerides, exact propagation, patches) and
+//! never on vehicle control code: execution outputs are plain
+//! direction+throttle commands with explicit frames, mapped to
+//! `GuidanceIntent` by the runtime adapter.
+
+mod chain;
+mod execute;
+mod flyby;
+mod lambert;
+mod ops;
+mod patch;
+mod plan;
+mod search;
+mod thrust;
+
+pub use chain::{
+    BroadChainRoute, ChainConfig, ChainEncounter, EncounterKind, broad_chain_survey, chain_search,
+};
+pub use execute::{
+    ExecutionCommand, ExecutorOutput, NodeExecutor, SegmentExecutor, SegmentOutput, SteeringSample,
+};
+pub use flyby::{
+    BroadFlybyRoute, FlybyConfig, broad_flyby_survey, candidate_flyby_bodies, flyby_search,
+    max_bend_angle_rad, powered_flyby_burn_mps,
+};
+pub use lambert::{LambertArc, LambertError, solve_lambert, solve_lambert_prograde};
+pub use ops::{
+    circularize_at_apse, hohmann_transfer, lambert_rendezvous, match_velocity, plane_change_dv,
+};
+pub use plan::{FlybyEvent, ManeuverNode, ManeuverPlan, PlanError, PlanValidation};
+pub use search::{
+    BroadRoute, RankedPlan, SearchConfig, SearchStats, broad_survey, porkchop_search,
+};
+pub use thrust::{
+    BurnSegment, BurnValidation, EngineSpec, FiniteBurnPlan, SegmentDirection, SplitMode,
+    ThrustPlanError, node_osculating_periods, orbit_period, realize_impulsive,
+    validate_finite_burn,
+};

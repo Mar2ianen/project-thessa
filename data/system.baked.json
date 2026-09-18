@@ -106,11 +106,11 @@
     {
       "id": 5,
       "name": "khepri",
-      "mu": 139510890609999.98,
-      "radius_m": 4400000.0,
+      "mu": 31888203567999.996,
+      "radius_m": 3000000.0,
       "parent": 1,
       "orbit": {
-        "central_mu": 1.088276311430906e+20,
+        "central_mu": 1.0882752352040355e+20,
         "semi_major_axis_m": 32911531554.0,
         "eccentricity": 0.03,
         "inclination_rad": 0.020943951023931952,
@@ -120,10 +120,19 @@
         "mean_motion_rad_s": null
       },
       "design_period_s": 3596094.2304,
-      "rotation_period_s": 113400.0,
+      "rotation_period_s": 3596094.2304000002,
       "tidal_lock": false,
       "axial_tilt_rad": 0.19198621771937624,
-      "gravity_source": true
+      "gravity_source": true,
+      "atmosphere": {
+        "composition": "CO2/SO2/Ar/N2",
+        "surface_pressure_pa": 7000.000000000001,
+        "gas_constant_j_kg_k": 188.9254495619953,
+        "heat_capacity_ratio": 1.368701423538564,
+        "sutherland_reference_temperature_k": 273.15,
+        "sutherland_constant_k": 223.25,
+        "sutherland_reference_viscosity_pa_s": 0.00001535219247584369
+      }
     },
     {
       "id": 6,
@@ -145,16 +154,25 @@
       "rotation_period_s": 65520.0,
       "tidal_lock": false,
       "axial_tilt_rad": 0.10471975511965978,
-      "gravity_source": true
+      "gravity_source": true,
+      "atmosphere": {
+        "composition": "H2/He + CH4/NH3/H2O traces",
+        "surface_pressure_pa": null,
+        "gas_constant_j_kg_k": 727.975086145638,
+        "heat_capacity_ratio": 1.3687906081980012,
+        "sutherland_reference_temperature_k": 273.15,
+        "sutherland_constant_k": 351.08000000000004,
+        "sutherland_reference_viscosity_pa_s": 0.000011286209163736646
+      }
     },
     {
       "id": 7,
       "name": "orthea",
-      "mu": 956646107039999.9,
-      "radius_m": 9000000.0,
+      "mu": 717484580280000.0,
+      "radius_m": 8200000.0,
       "parent": 1,
       "orbit": {
-        "central_mu": 1.0882844827830703e+20,
+        "central_mu": 1.0882820911678027e+20,
         "semi_major_axis_m": 321635422005.0,
         "eccentricity": 0.025,
         "inclination_rad": 0.019198621771937627,
@@ -167,7 +185,16 @@
       "rotation_period_s": 100080.0,
       "tidal_lock": false,
       "axial_tilt_rad": 0.33161255787892263,
-      "gravity_source": true
+      "gravity_source": true,
+      "atmosphere": {
+        "composition": "N2/CO2/Ar",
+        "surface_pressure_pa": 280000.0,
+        "gas_constant_j_kg_k": 222.7666996871509,
+        "heat_capacity_ratio": 1.4053719392659407,
+        "sutherland_reference_temperature_k": 273.15,
+        "sutherland_constant_k": 159.0,
+        "sutherland_reference_viscosity_pa_s": 0.000016821544560578997
+      }
     },
     {
       "id": 8,
@@ -189,7 +216,16 @@
       "rotation_period_s": 70560.0,
       "tidal_lock": false,
       "axial_tilt_rad": 0.06981317007977318,
-      "gravity_source": true
+      "gravity_source": true,
+      "atmosphere": {
+        "composition": "H2/He/CH4",
+        "surface_pressure_pa": null,
+        "gas_constant_j_kg_k": 1130.6563830799903,
+        "heat_capacity_ratio": 1.4108621257826561,
+        "sutherland_reference_temperature_k": 273.15,
+        "sutherland_constant_k": 107.13333333333333,
+        "sutherland_reference_viscosity_pa_s": 0.000012848005453769858
+      }
     },
     {
       "id": 9,
@@ -211,7 +247,16 @@
       "rotation_period_s": 91440.0,
       "tidal_lock": false,
       "axial_tilt_rad": 0.13962634015954636,
-      "gravity_source": true
+      "gravity_source": true,
+      "atmosphere": {
+        "composition": "N2/CO2/Ar provisional",
+        "surface_pressure_pa": 140000.0,
+        "gas_constant_j_kg_k": 222.7666996871509,
+        "heat_capacity_ratio": 1.4053719392659407,
+        "sutherland_reference_temperature_k": 273.15,
+        "sutherland_constant_k": 159.0,
+        "sutherland_reference_viscosity_pa_s": 0.000016821544560578997
+      }
     },
     {
       "id": 10,
@@ -233,7 +278,16 @@
       "rotation_period_s": null,
       "tidal_lock": true,
       "axial_tilt_rad": 0.0,
-      "gravity_source": true
+      "gravity_source": true,
+      "atmosphere": {
+        "composition": "SO2 local exosphere",
+        "surface_pressure_pa": 0.0,
+        "gas_constant_j_kg_k": 129.77964314925234,
+        "heat_capacity_ratio": 1.29,
+        "sutherland_reference_temperature_k": 273.15,
+        "sutherland_constant_k": 416.0,
+        "sutherland_reference_viscosity_pa_s": 0.0000125
+      }
     },
     {
       "id": 11,
@@ -255,7 +309,16 @@
       "rotation_period_s": null,
       "tidal_lock": true,
       "axial_tilt_rad": 0.0,
-      "gravity_source": true
+      "gravity_source": true,
+      "atmosphere": {
+        "composition": "N2/O2/Ar/CO2 provisional",
+        "surface_pressure_pa": 120000.0,
+        "gas_constant_j_kg_k": 284.7325727908166,
+        "heat_capacity_ratio": 1.4002230877853723,
+        "sutherland_reference_temperature_k": 273.15,
+        "sutherland_constant_k": 115.72899999999998,
+        "sutherland_reference_viscosity_pa_s": 0.00001731959041932531
+      }
     },
     {
       "id": 12,
@@ -277,7 +340,16 @@
       "rotation_period_s": null,
       "tidal_lock": true,
       "axial_tilt_rad": 0.0,
-      "gravity_source": true
+      "gravity_source": true,
+      "atmosphere": {
+        "composition": "N2/CO2/H2O/Ar",
+        "surface_pressure_pa": 170000.0,
+        "gas_constant_j_kg_k": 255.8567791965609,
+        "heat_capacity_ratio": 1.3834755055433718,
+        "sutherland_reference_temperature_k": 273.15,
+        "sutherland_constant_k": 385.25,
+        "sutherland_reference_viscosity_pa_s": 0.000015390629872756576
+      }
     },
     {
       "id": 13,
@@ -299,7 +371,16 @@
       "rotation_period_s": null,
       "tidal_lock": true,
       "axial_tilt_rad": 0.0,
-      "gravity_source": true
+      "gravity_source": true,
+      "atmosphere": {
+        "composition": "CO2/Ar trace",
+        "surface_pressure_pa": 600.0,
+        "gas_constant_j_kg_k": 198.06360641991486,
+        "heat_capacity_ratio": 1.4081123829344433,
+        "sutherland_reference_temperature_k": 273.15,
+        "sutherland_constant_k": 183.0,
+        "sutherland_reference_viscosity_pa_s": 0.000016821289285797787
+      }
     },
     {
       "id": 14,
@@ -321,38 +402,25 @@
       "rotation_period_s": null,
       "tidal_lock": true,
       "axial_tilt_rad": 0.0,
-      "gravity_source": true
+      "gravity_source": true,
+      "atmosphere": {
+        "composition": "N2/CH4/Ar",
+        "surface_pressure_pa": 55000.00000000001,
+        "gas_constant_j_kg_k": 296.93130740358487,
+        "heat_capacity_ratio": 1.4091327313000512,
+        "sutherland_reference_temperature_k": 273.15,
+        "sutherland_constant_k": 141.66666666666666,
+        "sutherland_reference_viscosity_pa_s": 0.00001674033179892126
+      }
     },
     {
       "id": 15,
-      "name": "koro",
-      "mu": 1956559.6565869853,
-      "radius_m": 18000.0,
-      "parent": 7,
-      "orbit": {
-        "central_mu": 956646108996559.5,
-        "semi_major_axis_m": 55000000.0,
-        "eccentricity": 0.01,
-        "inclination_rad": 0.008726646259971648,
-        "longitude_of_ascending_node_rad": 0.0,
-        "argument_of_periapsis_rad": 0.0,
-        "mean_anomaly_at_epoch_rad": 0.0,
-        "mean_motion_rad_s": null
-      },
-      "design_period_s": 82860.6348,
-      "rotation_period_s": null,
-      "tidal_lock": false,
-      "axial_tilt_rad": 0.0,
-      "gravity_source": true
-    },
-    {
-      "id": 16,
       "name": "mira",
-      "mu": 4783230535200.0,
-      "radius_m": 1450000.0,
+      "mu": 87692559812000.0,
+      "radius_m": 4100000.0,
       "parent": 7,
       "orbit": {
-        "central_mu": 961429337575199.9,
+        "central_mu": 805177140092000.0,
         "semi_major_axis_m": 190000000.0,
         "eccentricity": 0.008,
         "inclination_rad": 0.017453292519943295,
@@ -361,20 +429,29 @@
         "mean_anomaly_at_epoch_rad": 0.0,
         "mean_motion_rad_s": null
       },
-      "design_period_s": 532028.1564,
+      "design_period_s": 579907.026,
       "rotation_period_s": null,
-      "tidal_lock": false,
+      "tidal_lock": true,
       "axial_tilt_rad": 0.0,
-      "gravity_source": true
+      "gravity_source": true,
+      "atmosphere": {
+        "composition": "N2/CO2 provisional",
+        "surface_pressure_pa": 8000.0,
+        "gas_constant_j_kg_k": 230.88386104974947,
+        "heat_capacity_ratio": 1.3389048991354466,
+        "sutherland_reference_temperature_k": 273.15,
+        "sutherland_constant_k": 166.5,
+        "sutherland_reference_viscosity_pa_s": 0.000014942858811341817
+      }
     },
     {
-      "id": 17,
+      "id": 16,
       "name": "dey",
       "mu": 307529.6671018639,
       "radius_m": 10000.0,
       "parent": 7,
       "orbit": {
-        "central_mu": 956646107347529.5,
+        "central_mu": 717484580587529.6,
         "semi_major_axis_m": 420000000.0,
         "eccentricity": 0.03,
         "inclination_rad": 0.12217304763960307,
@@ -390,13 +467,13 @@
       "gravity_source": true
     },
     {
-      "id": 18,
+      "id": 17,
       "name": "skadi",
-      "mu": 797205089200.0,
+      "mu": 199301272300.0,
       "radius_m": 720000.0,
       "parent": 8,
       "orbit": {
-        "central_mu": 1.5203224075889198e+16,
+        "central_mu": 1.5202626172072298e+16,
         "semi_major_axis_m": 210000000.0,
         "eccentricity": 0.01,
         "inclination_rad": 0.008726646259971648,
@@ -409,10 +486,19 @@
       "rotation_period_s": null,
       "tidal_lock": false,
       "axial_tilt_rad": 0.0,
-      "gravity_source": true
+      "gravity_source": true,
+      "atmosphere": {
+        "composition": "N2/CH4 trace",
+        "surface_pressure_pa": 1000.0,
+        "gas_constant_j_kg_k": 377.45058518836294,
+        "heat_capacity_ratio": 1.342857142857143,
+        "sutherland_reference_temperature_k": 273.15,
+        "sutherland_constant_k": 140.5,
+        "sutherland_reference_viscosity_pa_s": 0.000014040845079252002
+      }
     },
     {
-      "id": 19,
+      "id": 18,
       "name": "mote",
       "mu": 6115646.788957519,
       "radius_m": 25000.0,
@@ -434,13 +520,13 @@
       "gravity_source": true
     },
     {
-      "id": 20,
+      "id": 19,
       "name": "mora",
-      "mu": 9965063615000.0,
-      "radius_m": 1700000.0,
+      "mu": 6975544530500.0,
+      "radius_m": 1900000.0,
       "parent": 9,
       "orbit": {
-        "central_mu": 1285493206335000.0,
+        "central_mu": 1282503687250500.0,
         "semi_major_axis_m": 210000000.0,
         "eccentricity": 0.006,
         "inclination_rad": 0.017453292519943295,
@@ -453,10 +539,19 @@
       "rotation_period_s": null,
       "tidal_lock": false,
       "axial_tilt_rad": 0.0,
-      "gravity_source": true
+      "gravity_source": true,
+      "atmosphere": {
+        "composition": "N2/CO2/H2O provisional",
+        "surface_pressure_pa": 25000.0,
+        "gas_constant_j_kg_k": 277.0311695924619,
+        "heat_capacity_ratio": 1.3358836766487796,
+        "sutherland_reference_temperature_k": 273.15,
+        "sutherland_constant_k": 465.66666666666663,
+        "sutherland_reference_viscosity_pa_s": 0.000013596063719721116
+      }
     },
     {
-      "id": 21,
+      "id": 20,
       "name": "nix",
       "mu": 1201287.7621166557,
       "radius_m": 12500.0,
@@ -478,7 +573,7 @@
       "gravity_source": true
     },
     {
-      "id": 22,
+      "id": 21,
       "name": "halo",
       "mu": 13587219.837409621,
       "radius_m": 30000.0,
@@ -500,13 +595,13 @@
       "gravity_source": true
     },
     {
-      "id": 23,
+      "id": 22,
       "name": "cinder",
-      "mu": 245688246.77192542,
-      "radius_m": 65000.0,
+      "mu": 157111650.96075904,
+      "radius_m": 56000.0,
       "parent": 6,
       "orbit": {
-        "central_mu": 1.2035254630618822e+17,
+        "central_mu": 1.2035254621761163e+17,
         "semi_major_axis_m": 5800000000.0,
         "eccentricity": 0.08,
         "inclination_rad": 2.827433388230814,

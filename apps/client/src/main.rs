@@ -1,4 +1,5 @@
 mod atmosphere;
+mod contact_gizmos;
 mod embedded;
 mod map_ui;
 mod navigation;
@@ -9,6 +10,7 @@ use atmosphere::{
     AtmospherePlugin, GraphicsRequested, GraphicsResolved, PrimaryStarLight, RayTracingActive,
 };
 mod terrain;
+mod water;
 use map_ui::*;
 use navigation::*;
 use orbits::*;
@@ -17,11 +19,14 @@ use pilot::*;
 
 use std::{f32::consts::TAU, path::Path};
 
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::render::RenderPlugin;
-use bevy::render::settings::{RenderCreation, WgpuFeatures, WgpuSettings};
+use bevy::render::diagnostic::RenderDiagnosticsPlugin;
+use bevy::render::settings::{Backends, RenderCreation, WgpuFeatures, WgpuSettings};
 use bevy::solari::prelude::SolariPlugins;
 use bevy::{
     asset::AssetPlugin,
+    camera::Hdr,
     core_pipeline::tonemapping::Tonemapping,
     input::mouse::{AccumulatedMouseMotion, MouseScrollUnit, MouseWheel},
     post_process::bloom::Bloom,
@@ -109,6 +114,7 @@ fn main() {
     }
 
     let mut app = App::new();
+    let benchmark_fullscreen = std::env::var_os("THESSA_AUTOBENCH_FULLSCREEN").is_some();
     let mut default_plugins = DefaultPlugins
         .set(AssetPlugin {
             // Bevy resolves the asset root relative to this package's
@@ -120,6 +126,13 @@ fn main() {
             primary_window: Some(Window {
                 title: "Project Thessa — Nereid System".into(),
                 resolution: WindowResolution::new(1280, 720),
+                mode: if benchmark_fullscreen {
+                    bevy::window::WindowMode::BorderlessFullscreen(
+                        bevy::window::MonitorSelection::Current,
+                    )
+                } else {
+                    bevy::window::WindowMode::Windowed
+                },
                 present_mode: if resolved.vsync {
                     bevy::window::PresentMode::AutoVsync
                 } else {
@@ -129,35 +142,65 @@ fn main() {
             }),
             ..default()
         });
-    if rt_active {
+    let requested_backends = match resolved.backend.name.as_str() {
+        "vulkan" => Some(Backends::VULKAN),
+        "metal" => Some(Backends::METAL),
+        "webgpu" => Some(Backends::BROWSER_WEBGPU),
+        _ => None,
+    };
+    if rt_active || requested_backends.is_some() {
         // `WgpuSettings` travels inside `RenderPlugin::render_creation` in
-        // 0.19. Forcing RT features makes device creation fail fast on
-        // incapable hardware (explicit opt-in only, never `auto`).
+        // Bevy 0.19. The normal client only requests explicit backend and RT
+        // settings from graphics.toml; experimental mesh features are not
+        // part of this production path.
         default_plugins = default_plugins.set(RenderPlugin {
-            render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
-                features: WgpuFeatures::default() | SolariPlugins::required_wgpu_features(),
-                ..default()
+            render_creation: RenderCreation::Automatic(Box::new({
+                let mut features = WgpuFeatures::default();
+                if rt_active {
+                    features |= SolariPlugins::required_wgpu_features();
+                }
+                WgpuSettings {
+                    backends: requested_backends,
+                    features,
+                    ..default()
+                }
             })),
             ..default()
         });
     }
 
     app.add_plugins(default_plugins);
-    // RCBT is an opt-in visual topology path. The existing CPU terrain
-    // renderer remains authoritative for this slice until page/error parity.
-    app.add_plugins(thessa_bevy_rcbt::CbtPlugin { max_depth: 16 });
-    // Solari selects deferred opaque materials globally, including while
-    // disabled. Every camera therefore retains a valid deferred raster path.
-    // Plugin finish checks device features; unsupported GPUs keep raster.
-    app.add_plugins(SolariPlugins);
+    if std::env::var_os("THESSA_AUTOBENCH").is_some() {
+        // Window focus must not switch an unattended measurement to the
+        // default 60 Hz low-power event loop. This is independent of VSync.
+        app.insert_resource(bevy::winit::WinitSettings::continuous());
+    }
+    if std::env::var_os("THESSA_GPU_PROFILE").is_some() {
+        app.add_plugins(RenderDiagnosticsPlugin);
+    }
+    // Solari is an RT/deferred path. Keep the default raster client on Bevy's
+    // regular forward pipeline; registering Solari while RT is disabled still
+    // selects the expensive deferred opaque path globally.
+    if rt_active {
+        app.add_plugins(SolariPlugins);
+    }
     app.insert_resource(GraphicsRequested(requested))
         .insert_resource(GraphicsResolved(resolved))
         .insert_resource(RayTracingActive(rt_active))
         .add_plugins(OrbitGizmoPlugin)
         .add_plugins(PilotHudPlugin)
+        .add_plugins(contact_gizmos::ContactGizmoPlugin)
         .add_plugins(PerfMonitorPlugin)
         .add_plugins(AtmospherePlugin)
+        .add_plugins(thessa_bevy_rcbt::CbtPlugin {
+            // The terrain adapter reserves three binary levels for the six
+            // cube faces; each quadtree level then consumes two Morton bits.
+            max_depth: 37,
+            initial_depth: 3,
+            ..default()
+        })
         .add_plugins(terrain::TerrainPlugin)
+        .add_plugins(water::WaterPlugin)
         .add_plugins(BrpExtrasPlugin::default())
         .insert_resource(SimulationClock::default())
         .insert_resource(NavigationState::default())
@@ -238,6 +281,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
     rt_active: Option<Res<RayTracingActive>>,
+    graphics: Option<Res<GraphicsResolved>>,
 ) {
     let rt_active = rt_active.is_some_and(|flag| flag.0);
     let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml"))
@@ -256,6 +300,13 @@ fn setup(
         focus: system_focus,
         selected: ephemeris.body_id("thessa").expect("starting world"),
     });
+    // Shadow texel grid follows the TOML budget (power of two, validated
+    // at parse; resolve clamps defensively).
+    if let Some(graphics) = graphics.as_deref() {
+        commands.insert_resource(DirectionalLightShadowMap {
+            size: graphics.0.shadow_map_size as usize,
+        });
+    }
 
     commands.insert_resource(GlobalAmbientLight {
         color: Color::srgb(0.18, 0.22, 0.32),
@@ -263,33 +314,44 @@ fn setup(
         ..default()
     });
 
-    commands.spawn((
-        Camera3d::default(),
-        // Keep these across RT toggles: required components are not removed
-        // automatically with SolariLighting, and deferred needs MSAA off.
-        Msaa::Off,
-        bevy::core_pipeline::prepass::DepthPrepass,
-        bevy::core_pipeline::prepass::DeferredPrepass,
-        Projection::Perspective(PerspectiveProjection {
-            far: 1_000_000.0,
-            ..default()
-        }),
-        Camera {
-            clear_color: ClearColorConfig::Custom(Color::srgb(0.001, 0.002, 0.008)),
-            ..default()
-        },
-        Tonemapping::TonyMcMapface,
-        Bloom {
+    let camera = commands
+        .spawn((
+            Camera3d::default(),
+            // Keep these across RT toggles: required components are not removed
+            // automatically with SolariLighting, and deferred needs MSAA off.
+            Msaa::Off,
+            bevy::core_pipeline::prepass::DepthPrepass,
+            Projection::Perspective(PerspectiveProjection {
+                far: 1_000_000.0,
+                ..default()
+            }),
+            Camera {
+                clear_color: ClearColorConfig::Custom(Color::srgb(0.001, 0.002, 0.008)),
+                ..default()
+            },
+            Tonemapping::TonyMcMapface,
+            OrbitCamera {
+                orbit: Quat::from_rotation_y(0.42) * Quat::from_rotation_x(-0.72),
+                distance: 420.0,
+                target: Vec3::ZERO,
+            },
+            Transform::from_xyz(129.0, 276.0, 287.0).looking_at(Vec3::ZERO, Vec3::Y),
+        ))
+        .id();
+    if graphics.as_deref().is_some_and(|g| g.0.bloom) {
+        commands.entity(camera).insert(Bloom {
             intensity: 0.14,
             ..Bloom::NATURAL
-        },
-        OrbitCamera {
-            orbit: Quat::from_rotation_y(0.42) * Quat::from_rotation_x(-0.72),
-            distance: 420.0,
-            target: Vec3::ZERO,
-        },
-        Transform::from_xyz(129.0, 276.0, 287.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
+        });
+    }
+    if rt_active {
+        commands
+            .entity(camera)
+            .insert(bevy::core_pipeline::prepass::DeferredPrepass);
+    }
+    if graphics.as_deref().is_none_or(|g| g.0.hdr) {
+        commands.entity(camera).insert(Hdr);
+    }
     // Asterion's illumination is represented by direction, not by a fake
     // nearby star whose size would make the local map physically misleading.
     // Neutral spawn values: the atmosphere plugin derives exact illuminance,
@@ -299,8 +361,35 @@ fn setup(
         DirectionalLight {
             illuminance: 88_000.0,
             color: Color::WHITE,
-            shadow_maps_enabled: !rt_active,
+            shadow_maps_enabled: !rt_active
+                && graphics.as_deref().is_none_or(|g| g.0.shadow_enabled),
+            shadow_depth_bias: 0.02,
+            shadow_normal_bias: graphics
+                .as_deref()
+                .map(|g| g.0.shadow_normal_bias_m as f32)
+                .unwrap_or(1.5),
             ..default()
+        },
+        // Planetary cascade cover from the TOML budget (engine default ends
+        // at 150 m). Near stays sub-metre for pilot detail; first cascade
+        // ends at max/40. Tuned by screenshot, budgeted by preset.
+        {
+            let (cascades, max_m) = graphics
+                .as_deref()
+                .map(|g| {
+                    (
+                        g.0.shadow_cascades as usize,
+                        g.0.shadow_max_distance_m as f32,
+                    )
+                })
+                .unwrap_or((4, 12_000.0));
+            Into::<CascadeShadowConfig>::into(CascadeShadowConfigBuilder {
+                num_cascades: cascades.clamp(1, 4),
+                minimum_distance: 0.5,
+                maximum_distance: max_m,
+                first_cascade_far_bound: max_m / 40.0,
+                overlap_proportion: 0.2,
+            })
         },
         bevy::light::SunDisk::OFF,
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -1.12, -0.70, -0.24)),
@@ -379,7 +468,14 @@ fn setup(
         )));
     commands.insert_resource(RuntimeEphemeris { ephemeris });
     commands.insert_resource(flight_runtime);
-    if std::env::args().any(|arg| arg == "--embedded") {
+    // The flight solver runs in a dedicated server process by default, so
+    // simulation and rendering never compete for the same CPU: snapshots
+    // cross the pipe, inputs go down, the frame stays render-bound.
+    // `--local` keeps the legacy in-frame stepping (blocking sim budget
+    // inside Update) for debugging without the server binary.
+    if std::env::args().any(|arg| arg == "--local") {
+        eprintln!("[client] local simulation (--local); sim shares the frame CPU");
+    } else {
         match embedded::EmbeddedLink::spawn(std::time::Duration::from_secs(15)) {
             Ok(link) => {
                 eprintln!("[client] embedded server linked; flight steps remotely");
@@ -760,7 +856,9 @@ fn update_starfield(
     survey: Res<terrain::SurfaceSurvey>,
     pilot: Res<PilotHudState>,
     mut stars: Query<(&mut Transform, &StarMarker, &mut Visibility)>,
+    mut perf: ResMut<perf::PerfMonitor>,
 ) {
+    let started = std::time::Instant::now();
     // Local stars must lie behind terrain, not 500 metres in front of it.
     let local = survey.active || pilot.view_mode == ClientViewMode::Pilot;
     let radius = if local { 5_000_000.0 } else { 500.0 };
@@ -773,8 +871,10 @@ fn update_starfield(
         transform.translation = camera.translation + star.direction * radius * star.radius_factor;
         transform.scale = Vec3::splat(star.size * radius / 60.0);
     }
+    perf.record_scope("client.starfield", started.elapsed().as_secs_f64());
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_celestial_visuals(
     clock: Res<SimulationClock>,
     runtime: Res<RuntimeEphemeris>,
@@ -783,7 +883,9 @@ fn update_celestial_visuals(
     pilot: Option<Res<PilotHudState>>,
     cameras: Query<&Transform, (With<Camera3d>, Without<CelestialVisual>)>,
     mut visuals: Query<(&mut Transform, &mut Visibility, &CelestialVisual)>,
+    mut perf: ResMut<perf::PerfMonitor>,
 ) {
+    let started = std::time::Instant::now();
     let time = SimTime(clock.sim_seconds);
     let pilot_active = pilot
         .as_ref()
@@ -820,6 +922,7 @@ fn update_celestial_visuals(
             *visibility = Visibility::Hidden;
         }
     }
+    perf.record_scope("client.celestial_visuals", started.elapsed().as_secs_f64());
 }
 
 fn map_position(

@@ -57,3 +57,32 @@ name = "rudder"
 panel_indices = [3]
 minimum_deflection_rad = -0.45
 maximum_deflection_rad = 0.45
+
+# Solver-neutral contact primitives at the same body stations as the panels
+# above: fuselage capsule along X plus wing/tail cuboids. Contact-active
+# runtime refuses dynamic bodies until this section is populated.
+[[collision_parts]]
+shape = "capsule"
+position_body_m = [-0.5, 0.0, 0.0]
+axis = "x"
+half_segment_m = 2.6
+radius_m = 0.4
+friction = 0.7
+
+[[collision_parts]]
+shape = "cuboid"
+position_body_m = [0.5, 0.0, 0.0]
+half_extents_m = [0.75, 4.0, 0.10]
+friction = 0.7
+
+[[collision_parts]]
+shape = "cuboid"
+position_body_m = [-2.5, 0.0, 0.0]
+half_extents_m = [0.5, 1.0, 0.06]
+friction = 0.7
+
+[[collision_parts]]
+shape = "cuboid"
+position_body_m = [-2.5, 0.0, 0.3]
+half_extents_m = [0.4, 0.06, 0.65]
+friction = 0.7

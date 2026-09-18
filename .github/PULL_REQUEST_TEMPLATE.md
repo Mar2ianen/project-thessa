@@ -1,17 +1,17 @@
-## Что меняется
+## What changes
 
-<!-- Коротко опишите изменение и зачем оно нужно. -->
+<!-- Describe the change and why it is needed. -->
 
-## Проверки
+## Checks
 
 - [ ] `cargo fmt --all -- --check`
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - [ ] `cargo test --workspace`
-- [ ] Проверены численные tolerances / conserved quantities, если менялась физика
-- [ ] Обновлены docs/ADR, если изменился контракт или лицензирование
+- [ ] Numerical tolerances or conserved quantities were checked when physics changed
+- [ ] Current documentation/ADR was updated when a contract or license changed
 
-## Лицензия и границы
+## License and boundaries
 
-- [ ] Новые зависимости совместимы с лицензией целевого crate
-- [ ] Код не протекает из GPL game crates в MIT engine crates
-- [ ] Platform-specific API не попал в domain/simulation code
+- [ ] New dependencies are compatible with the target crate license
+- [ ] Code does not flow from GPL game crates into MIT engine crates
+- [ ] Platform-specific APIs did not enter domain or simulation code

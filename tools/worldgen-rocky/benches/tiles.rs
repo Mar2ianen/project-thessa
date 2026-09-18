@@ -3,7 +3,7 @@
 use std::{hint::black_box, time::Instant};
 use thessa_worldgen_rocky::{
     field::field_from_manifest,
-    lod::{TileKey, build_surface_texture, build_tile},
+    lod::{TileKey, build_gpu_material_page, build_surface_texture, build_tile},
     spec_recipe::{SpecRecipe, manifest_from_spec},
 };
 
@@ -68,5 +68,24 @@ fn main() {
             tile.positions.len() as f64 / 1000.0,
         );
         black_box(tex);
+    }
+    for level in [10u8, 17] {
+        let key = TileKey {
+            face: 1,
+            level,
+            x: 100,
+            y: 200,
+        };
+        let started = Instant::now();
+        let n = 3;
+        for _ in 0..n {
+            black_box(build_gpu_material_page(&field, key));
+        }
+        let elapsed = started.elapsed().as_secs_f64();
+        println!(
+            "gpu material L{level}: {:.2} ms/page ({:.2} pages/s)",
+            elapsed * 1000.0 / n as f64,
+            n as f64 / elapsed
+        );
     }
 }

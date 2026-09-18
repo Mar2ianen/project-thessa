@@ -1,128 +1,72 @@
-# References / fact-check notes
+# References and provenance
 
-Accessed: 2026-09-07 unless stated otherwise.
+These sources support external technical facts and validation workflows. Values
+for the fictional system are design values calculated and stored separately.
 
-Эти источники подтверждают **внешние технические факты**. Числа fictional system являются design values и вычислены отдельно.
+## Orbital mechanics and ephemerides
 
-## Bevy / Rust ecosystem
+- NASA/JPL Solar System Dynamics: https://ssd.jpl.nasa.gov/
+- Nyx Space documentation: https://nyxspace.com/
+- ANISE documentation: https://nyxspace.com/anise/
+- Vallado, *Fundamentals of Astrodynamics and Applications*.
+- Battin, *An Introduction to the Mathematics and Methods of Astrodynamics*.
 
-1. **Bevy 0.19 release** — current 0.19 line, renderer/task/WASM changes, GPU-driven renderer, Solari status.  
-   https://bevy.org/news/bevy-0-19/
+Nyx/ANISE are isolated validation references. Their code is not copied into
+the MIT runtime and their packages are not root runtime dependencies.
 
-2. **Bevy 0.18 -> 0.19 migration guide** — 0.19 has breaking changes; pinning version is intentional.  
-   https://bevy.org/learn/migration-guides/0-18-to-0-19/
+## Gravity fields and bounded approximation
 
-3. **Bevy WebGPU examples** — official examples running in browser via WASM + WebGPU.  
-   https://bevy.org/examples-webgpu/
+- Binney and Tremaine, *Galactic Dynamics*, for multipole/field reasoning.
+- Greengard and Rokhlin, fast multipole method foundations.
+- Classical tidal-tensor and state-transition formulations for a frozen affine
+  field.
 
-4. **Bevy ComputeTaskPool** — CPU-intensive work that must complete for next frame.  
-   https://docs.rs/bevy/latest/bevy/tasks/struct.ComputeTaskPool.html
+The repository implementation is independent and carries its own tests,
+absolute error envelopes, and fallback rules.
 
-5. **Bevy AsyncComputeTaskPool** — CPU-intensive work that may span frames.  
-   https://docs.rs/bevy/latest/bevy/tasks/struct.AsyncComputeTaskPool.html
+## Aerodynamics and flight
 
-6. **Tokio `spawn_blocking` docs** — large CPU-bound workloads may be better served by Rayon/dedicated pool.  
-   https://docs.rs/tokio/latest/tokio/task/fn.spawn_blocking.html
+- JSBSim: https://github.com/JSBSim-Team/jsbsim
+- RocketPy: https://github.com/RocketPy-Team/RocketPy
+- AVL: https://web.mit.edu/drela/Public/web/avl/
+- OpenVSP/VSPAERO: https://openvsp.org/
+- SU2: https://su2code.github.io/
+- OpenRocket: https://openrocket.info/
+- NASA X-15 technical reports and aerodynamic data where cited by a specific
+  validation case.
 
-7. **Rayon 1.12** — data-parallel work-stealing library.  
-   https://docs.rs/crate/rayon/latest
+External solvers and data remain reference-only. Imported coefficient tables
+must preserve geometry, reference area, units, sign conventions, source, and
+license provenance.
 
-8. **Lightyear 0.29** — Bevy 0.19 support, server-authoritative replication, client prediction, interpolation, interest management, WASM/WebTransport.  
-   https://docs.rs/crate/lightyear/latest
+## Rendering and atmosphere
 
-9. **Avian 0.7** — Bevy 0.19 compatibility, rigid bodies/collision, f32/f64 modes.  
-   https://docs.rs/crate/avian3d/latest
+- Bevy: https://bevyengine.org/
+- wgpu: https://wgpu.rs/
+- GPU Gems and standard Rayleigh/Mie/absorption scattering literature for
+  visual atmosphere reasoning.
 
-10. **Parry 0.30 / parry3d-f64** — standalone geometry/collision query library with f64 variant.  
-    https://docs.rs/crate/parry3d/latest  
-    https://docs.rs/crate/parry3d-f64/latest
-
-11. **avian_fdm 0.2** — current zone-based 6-DoF Bevy/Avian FDM; documented limitations include no compressibility, aeroelasticity, fuel burn, autopilot or physical detachment; LGPL-3.0-or-later.  
-    https://docs.rs/avian_fdm/latest/avian_fdm/  
-    https://docs.rs/crate/avian_fdm/latest/source/README.md
-
-12. **nyx-space 2.5.1** — high-fidelity astrodynamics including multibody dynamics, spherical harmonics, finite burns, visibility/eclipses; core AGPLv3.  
-    https://rustdoc.nyxspace.com/nyx_space/  
-    https://docs.rs/crate/nyx-space/latest/source/README.md
-
-## Orbital / celestial design references
-
-13. **Holman & Wiegert (1999), Long-Term Stability of Planets in Binary Systems** — empirical S-type/P-type critical semimajor-axis fits used only as first-pass sanity checks.  
-    https://ui.adsabs.harvard.edu/abs/1999AJ....117..621H/abstract
-
-14. **NASA Europa facts** — Io/Europa/Ganymede 4:2:1 Laplace resonance and tidal lock context.  
-    https://science.nasa.gov/jupiter/jupiter-moons/europa/europa-facts/
-
-15. **Kollmeier & Raymond, “Can Moons Have Moons?”** — long-lived submoon constraints; cites low-e prograde stability fraction around ~0.4895 Hill radius and emphasizes tidal survival.  
-    https://academic.oup.com/mnrasl/article/483/1/L80/5195537
-
-## Notes on fictional calculations
-
-- Stellar/planetary orbital periods use Kepler's third law with design masses.
-- Surface gravity/escape velocity use Newtonian point/spherical mass formulas.
-- Nereid moon chain semimajor axes are chosen to give exact nominal 40/80/160/320/640 h Kepler periods around a 0.95 MJ host.
-- Hohmann times/phase angles in the system document are ideal two-body reference values around Nereid, not route guarantees.
-- Holman–Wiegert numbers are screening estimates, not proof of stability. Canonical system must pass offline integration.
-
+Visual atmosphere code is renderer-independent at the shared optics boundary;
+Bevy/wgpu adapters are client implementation details.
 
 ## Autopilot UX references
 
-- MechJeb2 source/module inventory: https://github.com/MuMech/MechJeb2
-- MechJeb localization/module names expose Ascent Guidance, Maneuver Planner, Landing Guidance, Docking/Rendezvous and SmartASS-like helpers; used only as UX/functionality reference, not source dependency.
+- MechJeb documentation and user-facing vocabulary for ascent, maneuver,
+  landing, rendezvous, and docking workflows.
+- Scratch/dataflow graph concepts for visual composition.
+
+These are UX references, not copied code or runtime dependencies.
 
 ## Cross-platform rendering
 
-- Bevy + WebGPU / wgpu backend overview: https://bevy.org/news/bevy-webgpu/
-- Bevy 0.19 release: https://bevy.org/news/bevy-0-19/
+- WebGPU: https://www.w3.org/TR/webgpu/
+- Vulkan: https://www.khronos.org/vulkan/
+- Metal: https://developer.apple.com/metal/
 
-## Aerodynamics and validation
+DirectX-specific APIs are not part of the gameplay or simulation contract.
 
-15. **JSBSim** — cross-platform C++ nonlinear 6-DoF flight-dynamics model with
-    configurable aircraft/rocket forces, moments, propulsion and atmosphere.
-    LGPL-2.1; validation-only for the MIT runtime.
-    https://github.com/JSBSim-Team/jsbsim
-    https://jsbsim-team.github.io/jsbsim-reference-manual/
+## Licensing rule
 
-16. **SU2** — open-source multiphysics/CFD suite with compressible flow
-    solvers; used for offline single-point and sweep checks, not realtime
-    vehicle integration.
-    https://su2code.github.io/docs/
-    https://github.com/su2code/SU2
-
-17. **OpenVSP / VSPAERO** — NASA open-source parametric aircraft geometry and
-    VLM/panel aerodynamic analysis. Its official V&V examples include
-    subsonic wing and supersonic delta-wing studies.
-    https://github.com/OpenVSP/OpenVSP
-    https://github.com/OpenVSP/OpenVSP/blob/main/examples/scripts/python_scripts/report.md
-    https://github.com/OpenVSP/OpenVSP/blob/main/LICENSE
-
-18. **AVL** — Mark Drela/Harold Youngren vortex-lattice tool for thin lifting
-    surfaces, slender bodies, trim and stability derivatives; suitable as a
-    low-order subsonic baseline, not a separated-flow or hypersonic oracle.
-    https://web.mit.edu/drela/Public/web/avl/
-    https://web.mit.edu/drela/Public/web/avl/AVL_User_Primer.pdf
-
-19. **OpenRocket** — GPL model-rocket simulator with 6-DoF, staging, drag
-    curves and trajectory output. It is a validation executable/data source,
-    never a dependency of the MIT engine.
-    https://github.com/openrocket/openrocket
-    https://github.com/openrocket/openrocket/blob/unstable/LICENSE.TXT
-
-20. **RocketPy** — MIT rocket simulator with Barrowman surfaces and custom
-    coefficient curves, useful for rocket trajectory and coefficient-table
-    cross-checks.
-    https://github.com/RocketPy-Team/RocketPy
-    https://docs.rocketpy.org/en/latest/user/aerodynamics/surfaces.html
-    https://docs.rocketpy.org/en/latest/user/rocket/generic_surface.html
-
-21. **NASA Common Research Model** — public aircraft geometry and experimental
-    validation material for common CFD/VLM comparisons.
-    https://www.nasa.gov/common_research_model/
-    https://commonresearchmodel.larc.nasa.gov/home-2/
-
-22. **NASA Space Shuttle Operational Aerodynamic Data Book** — public report
-    containing the operational aerodynamic data basis for the Shuttle Vehicle;
-    used as a source for future lifting-body coefficient tables, not vendored
-    into the runtime.
-    https://ntrs.nasa.gov/search.jsp?R=19880072608
-    https://ntrs.nasa.gov/api/citations/19880072608/downloads/19880072608.pdf
+Before adding a reference implementation, model, texture, coefficient table,
+or dataset, record its license and provenance. Do not copy code into an MIT
+engine crate without a compatible license review.

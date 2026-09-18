@@ -113,14 +113,29 @@ mod tests {
         let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml"))
             .expect("design system TOML should parse");
         let ephemeris = config.bake().expect("design system should bake");
-        assert_eq!(ephemeris.bodies.len(), 24);
-        assert_eq!(ephemeris.gravity_sources().count(), 22);
+        // 3 stars + 2 barycenters + 7 planets + 17 moons + 3 minor bodies.
+        // Koro was removed per the atlas (fragmented into Orthea's rings);
+        // the BC subsystem (02B) added BC-I, two Janus moons, BC-Outer and
+        // its five moons.
+        assert_eq!(ephemeris.bodies.len(), 32);
+        assert_eq!(ephemeris.gravity_sources().count(), 30);
         let thessa = ephemeris.body_id("thessa").expect("Thessa body");
         let state = ephemeris
             .body_state(thessa, SimTime::EPOCH)
             .expect("Thessa epoch state");
         assert!(state.position_inertial.is_finite());
         assert!(state.velocity_inertial.is_finite());
+        let thessa_atmosphere = ephemeris
+            .body(thessa)
+            .expect("Thessa descriptor")
+            .atmosphere
+            .as_ref()
+            .expect("Thessa atmosphere");
+        assert_eq!(thessa_atmosphere.composition, "N2/O2/Ar/CO2 provisional");
+        assert_eq!(thessa_atmosphere.surface_pressure_pa, Some(120_000.0));
+        assert!((280.0..290.0).contains(&thessa_atmosphere.gas_constant_j_kg_k));
+        assert!(thessa_atmosphere.heat_capacity_ratio > 1.0);
+        assert!(thessa_atmosphere.sutherland_reference_viscosity_pa_s > 0.0);
 
         let nereid = ephemeris.body_id("nereid").expect("Nereid body");
         let borea = ephemeris.body_id("borea").expect("Borea body");

@@ -12,7 +12,11 @@ use serde::{Deserialize, Serialize};
 pub struct ProtocolVersion(pub u16);
 
 impl ProtocolVersion {
-    pub const CURRENT: Self = Self(2);
+    // Snapshot v3 adds authoritative server timing fields. Command Reset
+    // (v4) relaunches the craft at the canonical site from the wire.
+    // Postcard structs are not a negotiated schema, so old peers must fail
+    // the handshake instead of decoding a partially compatible payload.
+    pub const CURRENT: Self = Self(4);
 }
 
 /// Numeric message kind. Game payloads assign their own registry in the
@@ -24,6 +28,12 @@ pub mod kind {
     pub const SNAPSHOT: u32 = 4;
     pub const COMMAND: u32 = 5;
     pub const EVENT: u32 = 6;
+    /// Typed guidance intent. Legacy CLIENT_INPUT remains available during
+    /// the protocol migration and can be retired after both peers migrate.
+    pub const GUIDANCE_COMMAND: u32 = 7;
+    /// Server-owned graph / trajectory commands. The payload contains intent
+    /// or sandboxed source, never authoritative world or actuator state.
+    pub const AUTOPILOT_COMMAND: u32 = 8;
 }
 
 /// Versioned envelope around one postcard-encoded game payload.

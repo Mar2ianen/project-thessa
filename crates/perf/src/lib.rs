@@ -384,15 +384,25 @@ impl PerfCollector {
             _ => "GPU unavailable on this backend".to_string(),
         };
         let sim_line = match latest {
-            Some(f) => format!(
-                "SIM steps {:>2} cpu {:5.2}ms rails {:.3}s warp x{:.1}/x{:.1} backlog {:5.2}ms",
-                f.sim.steps_this_frame,
-                f.sim.sim_cpu_s * 1000.0,
-                f.sim.rails_time_advanced_s,
-                f.sim.requested_warp,
-                f.sim.effective_warp,
-                f.sim.backlog_s * 1000.0
-            ),
+            Some(f) => {
+                let base = format!(
+                    "SIM steps {:>2} cpu {:5.2}ms rails {:.3}s warp x{:.1}/x{:.1} backlog {:5.2}ms",
+                    f.sim.steps_this_frame,
+                    f.sim.sim_cpu_s * 1000.0,
+                    f.sim.rails_time_advanced_s,
+                    f.sim.requested_warp,
+                    f.sim.effective_warp,
+                    f.sim.backlog_s * 1000.0
+                );
+                if f.sim.has_server_sample() {
+                    format!(
+                        "{base} srv cpu {:.1}s wall {:.1}s",
+                        f.sim.server_compute_s, f.sim.server_wall_s,
+                    )
+                } else {
+                    base
+                }
+            }
             None => "SIM n/a".to_string(),
         };
         format!(
@@ -482,6 +492,9 @@ mod tests {
             requested_warp: 100.0,
             effective_warp: 96.0,
             backlog_s: 0.0041,
+            server_compute_s: 0.0,
+            server_wall_s: 0.0,
+            server_effective_warp: 0.0,
         };
         assert!((budget.sim_time_advanced_s - 12.0 / 120.0).abs() < 1e-9);
         assert!(budget.effective_warp <= budget.requested_warp);

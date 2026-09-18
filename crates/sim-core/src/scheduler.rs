@@ -20,6 +20,9 @@ pub enum ScheduledKind {
     /// Impulsive maneuver node (reserved for the maneuver planner; the flight
     /// loop does not execute it yet).
     ManeuverNode { delta_v_mps: DVec3 },
+    /// Finite-burn segment start (same reservation): carries the planned
+    /// Δv for graph/script telemetry.
+    BurnSegment { planned_dv_mps: f64 },
     /// Generic autopilot/script alarm.
     Alarm,
 }

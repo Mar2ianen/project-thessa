@@ -1,11 +1,13 @@
-//! Compiles the vendored libcbt shim for bench/test comparison only.
+//! Compiles the vendored libcbt shim for the optional foreign topology backend
+//! and for conformance/performance comparisons.
 //!
 //! Two variants from the same upstream source: serial (primary honest
-//! baseline) and OpenMP (thread-scaling experiments only). The upstream
+//! baseline) and OpenMP (parallel backend). The upstream
 //! header emits its helpers as global symbols, so the scaling TU is built
 //! from a build-time renamed copy (`cbt_` -> `cbtmt_`) in OUT_DIR; the
 //! vendored file on disk is never modified. Neither archive is ever linked
-//! into the game runtime.
+//! unless a consumer includes this package and explicitly selects this
+//! backend.
 
 use std::path::PathBuf;
 
@@ -14,8 +16,8 @@ fn main() {
     println!("cargo::rerun-if-changed=../../third_party/libcbt/cbt.h");
     println!("cargo::rerun-if-changed=build.rs");
 
-    // Serial baseline: no OpenMP, so the primary comparison measures
-    // data-structure cost, not thread-pool effects.
+    // Serial implementation: deterministic and available on toolchains with
+    // no OpenMP support.
     cc::Build::new()
         .file("../../third_party/libcbt/cbt_shim.c")
         .include("../../third_party/libcbt")
@@ -24,11 +26,9 @@ fn main() {
         .opt_level(3)
         .compile("thessa_cbt_shim");
 
-    // Scaling variant: same source with upstream symbols renamed so both
-    // archives link into one binary without clashing. OpenMP is attempted,
-    // but a toolchain without it falls back to serial code: the scaling
-    // bench then reports a flat line instead of breaking the build on any
-    // platform.
+    // Parallel implementation: the same source with upstream symbols renamed
+    // so both variants can coexist. OpenMP is attempted, but a toolchain
+    // without it falls back to the serial implementation.
     let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     let header: String = std::fs::read_to_string("../../third_party/libcbt/cbt.h")
         .expect("vendored cbt.h")

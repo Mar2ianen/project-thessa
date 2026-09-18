@@ -1,199 +1,107 @@
-# 05 — Roadmap: от формул до игры
+# 05 — Roadmap: from equations to game
 
-Это **dependency order**, не календарный план.
+This is a dependency order, not a calendar. A milestone is not complete until
+its state contract, tests, error evidence, and benchmark exist.
 
-Несколько архитектурных boundaries являются cross-cutting и не откладываются до соответствующего gameplay milestone:
+## M0 — Numerical kernel — implemented prototype
 
-- server-authoritative semantic model существует с ранних vertical slices; M6 означает multiplayer/network hardening, а не первое появление authority;
-- canonical surface/query path существует независимо от renderer;
-- Bevy/wgpu — текущая client integration, но reusable GPU algorithms не должны принимать Bevy/wgpu types как свой domain API;
-- terrain renderer может меняться независимо от `PlanetField`, contact representation и headless server.
+- `SimTime`, frame-labelled `f64` state, and deterministic baked ephemerides;
+- point-mass multi-body gravity and ordered batch evaluation;
+- adaptive Dormand–Prince, velocity-Verlet, on-rails caches, gravity cohorts,
+  and bounded affine propagation;
+- atmosphere, panel aero, rigid-body flight, contacts, and SIMD helpers;
+- system baker, validation harnesses, and physics regression suite.
 
-## M0 — numerical kernel
+Remaining M0 work includes higher-fidelity ephemeris fitting, body harmonics,
+hyperbolic/parabolic segments, and broader reference-vector coverage.
 
-Цель: доказать, что математика и representations работают без Bevy gameplay.
+## M1 — Controllable vehicle and flight lab — partial/implemented prototype
 
-- `SimTime`, frames, f64 state;
-- baked two-body ephemeris prototype;
-- point-mass multi-body gravity;
-- adaptive orbit integrator;
-- J2;
-- tests: ellipse, Lagrange, nodal precession;
-- benchmark 1k/10k test particles;
-- offline Nereid resonant-system validation tool.
+Implemented: serializable vehicle definitions, 6-DoF starter vehicle, control
+surfaces, actuator dynamics, RCS/propulsion demand, authority runtime, Bevy
+pilot HUD, server snapshots, reset path, and flight traces.
 
-**Exit:** headless binary умеет стабильно прогнать craft вокруг Nereid и показать реальные perturbations/Lagrange behavior.
+Remaining: complete staging, richer propulsion catalogs, full contact/wheels,
+vehicle editor, and production asset workflow.
 
-## M1 — rocket physics lab
+## M2 — Aero, spaceplane, thermal, and structure — partial
 
-- Bevy client visualization shell; reusable numerical/render subsystems keep their own engine-independent boundaries;
-- procedural cylinder/tank sections;
-- chemical engine parameterization;
-- 6-DoF rigid cluster;
-- staging;
-- atmosphere profile;
-- basic drag/aero zones;
-- FBW for TVC/RCS;
-- first MechJeb-like composable blocks: HoldAttitude -> Ascent -> Stage -> booster recovery;
-- simple launch/landing;
-- telemetry/gizmos.
+Implemented: local panel aero, atmosphere rotation, stall/transonic/supersonic
+reduced-order branches, coefficient tables, control laws, and actuator limits.
 
-**Exit:** можно собрать двухступенчатую ракету, выйти с Thessa-like test body на орбиту и посадить booster physically.
+Remaining:
 
-## M2 — serious aero / spaceplane / belly-flop
+- expanded wing/flap/spoiler/grid-fin geometry;
+- wake/occlusion compiler;
+- structural graph and fracture into multiple bodies;
+- thermal graph, entry heating, and material strength coupling;
+- water contact and buoyancy;
+- high-fidelity offline reference tables.
 
-- wing/control-surface geometry;
-- local panel forces;
-- Mach/post-stall model;
-- hinge torque/actuator limits;
-- aero occlusion;
-- lifting body support;
-- structural graph baseline;
-- thermal graph + entry heating;
-- fracture into multiple clusters.
+## M3 — Thessa surface slice — partial
 
-**Exit:** один solver способен разумно воспроизводить conventional aircraft, spaceplane и Starship-like belly-flop/flip/landing без vehicle-class hacks.
+Implemented: rocky world generator, deterministic geology/climate/landmark
+fields, client texture export, terrain streaming, obstacle reports, pilot
+render origin, atmosphere visuals, basic water raster effects, and
+authoritative streamed terrain contact via `thessa-collision`
+(Rapier: static trimesh, kinematic terrain, fixed joints, contact
+activation hysteresis, load evidence).
 
-## M2.5 — canonical surface + adaptive terrain architecture
+Remaining: player movement, resource nodes, construction, power,
+storage, save/load, and a first factory loop.
 
-Это отдельный dependency milestone перед большим surface gameplay, потому что terrain больше не является одной фичей renderer'а.
+## M4 — Surface logistics and automation — partial
 
-### Authoritative surface
+Implemented: typed event-driven graph IR, sequence/parallel/wait/failure paths,
+server-owned continuations, QuickJS sandbox, typed guidance, typed maneuver
+plans, server execution, and obstacle/site declarations.
 
-- сохранить observer-independent `PlanetField`/surface-query contract;
-- сильнее bake'ить low/mid-frequency canonical height в hierarchical cube-sphere pages;
-- хранить per-page conservative `min/max height`, error/slope bounds и compact quantized residuals;
-- оставить bounded procedural short-wave residual только там, где он дешевле хранения;
-- headless query/landing/contact path не зависит от render mesh/GPU;
-- local contact patches материализуются по physics need, а не camera LOD.
+Remaining: trucks/trains/aircraft logistics, physical stations and cargo,
+complete guidance standard library, reusable route certification, alarms,
+resource events, and factory integration.
 
-### Client adaptive geometry
+## M5 — Nereid system gameplay — future
 
-- current CPU tile builder остаётся measured baseline/fallback;
-- `rcbt` prototype: pure Rust logical CBT/LEB layer + differential oracle against upstream `libcbt`;
-- performance goal — materially beat reference workload, а не просто сделать порт без regression;
-- packed/batched tree representation, false-sharing/scaling measurements, cache padding only where measured;
-- portable `rcbt-wgpu` backend;
-- thin `bevy-rcbt` integration;
-- optional native Vulkan backend behind the same semantic backend API when profiling gives a concrete reason;
-- no Bevy/wgpu/Vulkan types in `rcbt-core` public API;
-- GPU split/merge + compact/indirect draw replaces CPU topology churn when parity is proven;
-- cooperative/matrix hardware рассматривается только как optional compressed-height-page decoder, не как обязательный CBT primitive.
+- canonical ephemeris version and long-horizon system validation;
+- system map and transfer-window UX;
+- orbital depots, resource differentiation, and reusable routes;
+- gravity-assist planning using exact revalidation;
+- eclipse/planetshine gameplay and additional moon content.
 
-Подробности: `docs/21_TERRAIN_STREAMING_THROUGHPUT.md` и `docs/22_RCBT_GPU_TERRAIN.md`.
+## M6 — Production multiplayer — partial foundation
 
-**Exit:** одинаковая canonical surface доступна headless server и client; server surface queries используют baked hierarchy/error bounds; client умеет рендерить ту же поверхность через measured GPU adaptive topology path без зависимости core algorithm от Bevy/wgpu.
+The authoritative server, validated commands/snapshots, TCP/stdio transport,
+and shared warp vote policy exist as a prototype. Future work includes:
 
-## M3 — Thessa vertical slice
-
-- terrain + floating origin поверх M2.5 representation split;
-- player movement;
-- authoritative local surface/contact integration для player/vehicles;
-- resource nodes;
-- building placement;
-- power;
-- miner/smelter/assembler/storage;
-- belts/pipes;
-- first vehicle depot;
-- save/load.
-
-**Exit:** игра уже является маленьким first-person factory builder даже без других moons, а renderer terrain representation можно заменить без изменения canonical surface/save/server semantics.
-
-## M4 — surface logistics + automation
-
-- trucks;
-- recorded/planned routes;
-- trains;
-- physical station load/unload;
-- event-driven typed graph/VM;
-- MechJeb-like high-level guidance standard library;
-- sequence/condition/wait/retry/parallel/reusable subgraphs;
-- alarms;
-- basic time warp in singleplayer/server.
-
-**Exit:** фабрика может работать автономно и пережить несколько игровых суток warp.
-
-## M5 — Nereid system gameplay
-
-- canonical baked ephemeris v1;
-- system map;
-- transfer planner;
-- orbital depots;
-- reusable route automation;
-- Pyra/Pelagos/Auron/Borea/Nix content;
-- resource differentiation;
-- gravity-assist route planning;
-- eclipses/planetshine/multi-star solar.
-
-**Exit:** реальная multi-moon industrial network.
-
-## M6 — multiplayer hardening
-
-Server authority к этому моменту уже существует. Здесь добавляется именно multi-user networking/productization:
-
-- commands/snapshots over network;
-- prediction/interpolation/rollback policy;
-- interest management;
-- shared warp consensus;
+- authentication and permissions;
+- prediction/interpolation for remote craft;
+- interest management and fleet replication;
 - persistent server saves;
-- multiple unobserved surface vehicles using the same canonical baked/query representation;
-- Lightyear spike/decision;
-- web dashboard/spectator prototype;
-- Linux + Windows + macOS native packaging smoke tests;
-- WASM/WebGPU build smoke test.
+- transport/replication decision and packaging;
+- native cross-platform and WASM/WebGPU smoke coverage.
 
-**Exit:** несколько игроков могут строить, летать и warp'ить один causal world; подключение/отключение spectator/client не меняет physical terrain or landing result.
+## M7 — Nuclear age — future
 
-## M7 — nuclear age
+Fission power, nuclear thermal and electric propulsion, radiators, cryogenics,
+maintenance, and the Orthea/Vesper content layer.
 
-- fission power;
-- nuclear thermal;
-- nuclear electric/ion;
-- radiator depth;
-- cryogenics/boil-off;
-- maintenance/reliability;
-- Orthea + moons;
-- Vesper + moons.
+## M8 — Fusion industrialization — future
 
-**Exit:** logistics topology меняется из-за новых propulsion Pareto frontiers.
+Isotope separation, breeding chains, pulsed fusion, D–He3, high-power thermal
+systems, and late-game torch-class propulsion.
 
-## M8 — fusion industrialization
+## M9 — BC endgame — future
 
-- D separation;
-- Li/T breeding chain;
-- pulsed fusion prototype engines;
-- D-He3;
-- Nereid atmospheric skimmers;
-- isotope separation;
-- high-power thermal/radiator systems;
-- torch-class late game.
+Long-distance A–BC flight, Janus/Mora content, binary-star lighting and
+eclipse gameplay, circumbinary planning, and long-haul automation.
 
-**Exit:** быстрый interplanetary fleet существует, но только после реальной supply chain.
+## Do not build early
 
-## M9 — BC endgame
-
-- inter-component flight at outer-star scale;
-- Janus/Mora content;
-- binary-star lighting/eclipses up close;
-- circumbinary trajectory planning;
-- long-haul automation.
-
-**Exit:** внешний binary перестаёт быть sky object и становится industrial destination.
-
----
-
-## Не делать раньше времени
-
-- full weather CFD;
-- full FEM;
-- planet formation simulator;
-- procedural galaxy;
+- full weather CFD or FEM;
+- a planet-formation simulator or procedural galaxy;
 - FTL;
-- photorealistic renderer;
-- сотни raw resource types;
-- economy/market simulator;
-- complicated NPC civilization;
-- native Vulkan backend только ради самого факта Vulkan, без measured limitation wgpu path;
-- neural/cooperative-matrix terrain decoder до доказанного page bandwidth bottleneck.
+- photorealistic rendering before the causal loop is proven;
+- hundreds of raw resource types or a market simulator;
+- complex NPC civilization systems.
 
-Сначала доказать главный loop и массовую физическую логистику.
+First prove a mass-scale physical logistics loop with honest error bounds.

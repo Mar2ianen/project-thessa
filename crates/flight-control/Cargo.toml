@@ -1,0 +1,11 @@
+[package]
+name = "thessa-flight-control"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "GPL-3.0-or-later"
+publish = false
+
+[dependencies]
+glam.workspace = true
+serde.workspace = true

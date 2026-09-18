@@ -6,7 +6,9 @@
 //! `thessa-protocol`; this crate only owns the game payload registry.
 
 use serde::{Deserialize, Serialize};
+use thessa_autopilot::{AutopilotGraph, PlanDeoptimizationReason, TrajectoryPlan};
 use thessa_flight_authority::ControlMode;
+use thessa_flight_control::{GuidanceIntent, PropulsionDemand};
 use thessa_protocol::{CodecError, Envelope, kind};
 use thessa_sim_core::RigidBodyState;
 
@@ -24,13 +26,94 @@ pub struct Welcome {
     pub flight_time_s: f64,
 }
 
+/// Wire-level size caps: `MAX_FRAME_BYTES` (8 MiB) alone still allows a
+/// single packet to force `O(N log N)` validation + clone + runner build.
+/// These caps run before domain validation so a hostile peer cannot burn
+/// the driver thread with one frame.
+pub const MAX_COMMANDS_PER_INPUT: usize = 64;
+pub const MAX_GRAPH_NODES: usize = 256;
+pub const MAX_GRAPH_EDGES: usize = 1024;
+pub const MAX_PLAN_SEGMENTS: usize = 256;
+/// Must match `ScriptLimits::default().max_source_bytes`.
+pub const MAX_SCRIPT_SOURCE_BYTES: usize = 64 * 1024;
+
 /// Discrete commands bundled with an input (warp votes, staging, toggles).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Command {
-    SetWarp { factor: f64 },
+    SetWarp {
+        factor: f64,
+    },
     Stage,
-    Engine { active: bool },
-    Pause { paused: bool },
+    Engine {
+        active: bool,
+    },
+    Pause {
+        paused: bool,
+    },
+    /// Relaunch at the canonical survey site, preserving the clock. The
+    /// server derives the site from the same baked-in recipe as the client
+    /// survey, so this event carries no world state — only player intent,
+    /// like staging. Forces a prompt snapshot like staging does.
+    Reset,
+    /// Execute a maneuver plan: node epochs (sim seconds) with inertial
+    /// Δv vectors. Event-like (ordered, never coalesced, takes over
+    /// controls like staging). The server validates against now
+    /// (empty/stale/all-oversize refused), arms one scheduler wake per
+    /// node and hands guidance to the node executor. Plain data on the
+    /// wire; domain validation lives server-side.
+    ExecuteManeuver {
+        nodes: Vec<ManeuverNodeCommand>,
+    },
+    /// Execute a finite-burn plan: throttle schedule over time windows
+    /// (low-thrust arcs, segmented chemical burns). Event-like like
+    /// ExecuteManeuver. The server validates against now (empty/stale
+    /// refused), arms one scheduler wake per segment start and hands
+    /// guidance to the segment executor. Engine ratings and mass ride
+    /// along for plan reconstruction (the executor itself is
+    /// accelerometer-closed and time-scheduled). Segment cap mirrors the
+    /// node cap scaled for split burns.
+    ExecuteBurnPlan {
+        engine_thrust_n: f64,
+        engine_exhaust_velocity_mps: f64,
+        initial_mass_kg: f64,
+        segments: Vec<BurnSegmentCommand>,
+    },
+}
+
+/// Steering direction of one burn segment on the wire: extensible enum so
+/// new frames (RTN and beyond) never break the transport schema.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum BurnDirectionCommand {
+    Inertial {
+        unit: [f64; 3],
+    },
+    Prograde,
+    Retrograde,
+    Rtn {
+        central: String,
+        radial: f64,
+        transverse: f64,
+        normal: f64,
+    },
+}
+
+/// One burn segment on the wire: schedule window plus throttle/direction.
+/// Smallest explicit schema (no domain types leak onto the transport).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BurnSegmentCommand {
+    pub start_s: f64,
+    pub duration_s: f64,
+    pub planned_dv_mps: f64,
+    pub direction: BurnDirectionCommand,
+    pub throttle_01: f64,
+}
+
+/// One maneuver node on the wire: epoch plus inertial Δv. Smallest
+/// explicit schema (no domain types leak onto the transport).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ManeuverNodeCommand {
+    pub epoch_s: f64,
+    pub delta_v_mps: [f64; 3],
 }
 
 /// Per-tick pilot input. The server applies the latest input per client;
@@ -54,6 +137,73 @@ pub struct ClientInput {
     pub commands: Vec<Command>,
 }
 
+impl ClientInput {
+    /// Validate the complete wire payload before it reaches authoritative
+    /// state.  This is intentionally all-or-nothing: a malformed state field
+    /// or command must not be allowed to apply the otherwise valid fields in
+    /// the same packet.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.commands.len() > MAX_COMMANDS_PER_INPUT {
+            return Err(format!(
+                "too many commands: {} > {MAX_COMMANDS_PER_INPUT}",
+                self.commands.len()
+            ));
+        }
+        if self.control_input.iter().any(|value| !value.is_finite()) {
+            return Err("control axes must be finite".into());
+        }
+        if self
+            .control_input
+            .iter()
+            .any(|value| !(-1.0..=1.0).contains(value))
+        {
+            return Err("control axes must be in [-1, 1]".into());
+        }
+        if !self.throttle.is_finite() || !(0.0..=1.0).contains(&self.throttle) {
+            return Err("throttle must be finite and in [0, 1]".into());
+        }
+        if self.sas_target_xyzw.iter().any(|value| !value.is_finite()) {
+            return Err("SAS quaternion must be finite".into());
+        }
+        let quaternion_norm_sq = self
+            .sas_target_xyzw
+            .iter()
+            .map(|value| value * value)
+            .sum::<f64>();
+        if !quaternion_norm_sq.is_finite() || quaternion_norm_sq <= 1.0e-12 {
+            return Err("SAS quaternion must be nonzero".into());
+        }
+        for command in &self.commands {
+            match command {
+                Command::SetWarp { factor }
+                    if !factor.is_finite() || *factor < 0.0 || *factor > 131_072.0 =>
+                {
+                    return Err("warp vote must be finite and in [0, 131072]".into());
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Typed guidance command introduced beside [`ClientInput`] so peers can
+/// migrate without making the legacy SAS representation permanent. The
+/// server still validates and realizes it through native control laws.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GuidanceInput {
+    pub tick: u64,
+    pub intent: GuidanceIntent,
+    pub propulsion: PropulsionDemand,
+}
+
+impl GuidanceInput {
+    pub fn validate(&self) -> Result<(), thessa_flight_control::ControlError> {
+        self.intent.validate()?;
+        PropulsionDemand::new(self.propulsion.normalized).map(|_| ())
+    }
+}
+
 /// Authoritative per-tick snapshot for one vehicle. Lean by design: render
 ///-only derivations (regime labels, map projections) stay client-side.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -65,6 +215,11 @@ pub struct Snapshot {
     pub engine_active: bool,
     pub paused: bool,
     pub effective_warp: f64,
+    /// Cumulative authoritative-server wall durations. These are separate
+    /// from the client render/simulation CPU timings and make the reported
+    /// warp reproducible as advanced sim time per real elapsed second.
+    pub server_compute_s: f64,
+    pub server_wall_s: f64,
     pub steps_this_frame: u32,
     pub rails_advanced_s: f64,
     pub wake_notice: Option<String>,
@@ -91,8 +246,100 @@ pub fn encode_input(input: &ClientInput) -> Result<Vec<u8>, CodecError> {
     encode_frame(kind::CLIENT_INPUT, input)
 }
 
+pub fn encode_guidance(input: &GuidanceInput) -> Result<Vec<u8>, CodecError> {
+    encode_frame(kind::GUIDANCE_COMMAND, input)
+}
+
+/// High-level automation operations. The authoritative server owns execution
+/// and validates every plan/script before it can affect a vehicle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AutopilotCommand {
+    SubmitGraph { graph: AutopilotGraph },
+    ClearGraph,
+    StartScript { source: String },
+    SubmitPlan { plan: TrajectoryPlan },
+    Cancel,
+    Deoptimize { reason: PlanDeoptimizationReason },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutopilotInput {
+    pub tick: u64,
+    pub command: AutopilotCommand,
+}
+
+impl AutopilotInput {
+    pub fn validate(&self) -> Result<(), String> {
+        match &self.command {
+            AutopilotCommand::SubmitGraph { graph } => {
+                if graph.nodes.len() > MAX_GRAPH_NODES {
+                    return Err(format!(
+                        "too many graph nodes: {} > {MAX_GRAPH_NODES}",
+                        graph.nodes.len()
+                    ));
+                }
+                if graph.edges.len() > MAX_GRAPH_EDGES {
+                    return Err(format!(
+                        "too many graph edges: {} > {MAX_GRAPH_EDGES}",
+                        graph.edges.len()
+                    ));
+                }
+                graph.validate().map(|_| ()).map_err(|errors| {
+                    errors
+                        .into_iter()
+                        .map(|error| error.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                })?;
+                // Trust boundary: raw wrenches from the wire must fit the
+                // authority envelope (internal laws saturate instead).
+                for node in &graph.nodes {
+                    if let Some(thessa_autopilot::GraphNodeConfig::Demand { demand }) = &node.config
+                    {
+                        demand
+                            .validate_envelope()
+                            .map_err(|error| error.to_string())?;
+                    }
+                }
+                Ok(())
+            }
+            AutopilotCommand::StartScript { source } if source.trim().is_empty() => {
+                Err("autopilot script must not be empty".into())
+            }
+            AutopilotCommand::StartScript { source } if source.len() > MAX_SCRIPT_SOURCE_BYTES => {
+                Err(format!(
+                    "autopilot script too large: {} > {MAX_SCRIPT_SOURCE_BYTES}",
+                    source.len()
+                ))
+            }
+            AutopilotCommand::SubmitPlan { plan } => {
+                if plan.segments.len() > MAX_PLAN_SEGMENTS {
+                    return Err(format!(
+                        "too many plan segments: {} > {MAX_PLAN_SEGMENTS}",
+                        plan.segments.len()
+                    ));
+                }
+                plan.validate().map_err(|error| error.to_string())?;
+                for segment in &plan.segments {
+                    if let thessa_autopilot::TrajectorySegment::Burn { demand, .. } = segment {
+                        demand
+                            .validate_envelope()
+                            .map_err(|error| error.to_string())?;
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 pub fn encode_snapshot(snapshot: &Snapshot) -> Result<Vec<u8>, CodecError> {
     encode_frame(kind::SNAPSHOT, snapshot)
+}
+
+pub fn encode_autopilot(input: &AutopilotInput) -> Result<Vec<u8>, CodecError> {
+    encode_frame(kind::AUTOPILOT_COMMAND, input)
 }
 
 pub fn encode_hello(hello: &Hello) -> Result<Vec<u8>, CodecError> {
@@ -124,6 +371,57 @@ mod tests {
         }
     }
 
+    #[test]
+    fn client_input_rejects_nonfinite_wire_values() {
+        let mut input = sample_input();
+        input.control_input[1] = f64::NAN;
+        assert!(input.validate().is_err());
+
+        let mut input = sample_input();
+        input.throttle = f64::INFINITY;
+        assert!(input.validate().is_err());
+
+        let mut input = sample_input();
+        input.sas_target_xyzw[3] = f64::NAN;
+        assert!(input.validate().is_err());
+
+        let mut input = sample_input();
+        input.commands = vec![Command::SetWarp { factor: f64::NAN }];
+        assert!(input.validate().is_err());
+    }
+
+    #[test]
+    fn client_input_rejects_command_flood() {
+        let mut input = sample_input();
+        input.commands = vec![Command::Stage; MAX_COMMANDS_PER_INPUT + 1];
+        assert!(input.validate().is_err());
+    }
+
+    #[test]
+    fn autopilot_input_rejects_oversized_payloads() {
+        let big_script = AutopilotInput {
+            tick: 1,
+            command: AutopilotCommand::StartScript {
+                source: "x".repeat(MAX_SCRIPT_SOURCE_BYTES + 1),
+            },
+        };
+        assert!(big_script.validate().is_err());
+        let big_plan = AutopilotInput {
+            tick: 1,
+            command: AutopilotCommand::SubmitPlan {
+                plan: thessa_autopilot::TrajectoryPlan {
+                    id: thessa_flight_control::TrajectoryPlanId(99),
+                    segments: vec![
+                        thessa_autopilot::TrajectorySegment::Coast { duration_s: 1.0 };
+                        MAX_PLAN_SEGMENTS + 1
+                    ],
+                    bakeability: thessa_autopilot::Bakeability::Pure,
+                },
+            },
+        };
+        assert!(big_plan.validate().is_err());
+    }
+
     fn sample_snapshot() -> Snapshot {
         Snapshot {
             tick: 7200,
@@ -139,11 +437,103 @@ mod tests {
             engine_active: true,
             paused: false,
             effective_warp: 35.2,
+            server_compute_s: 0.042,
+            server_wall_s: 1.705,
             steps_this_frame: 181,
             rails_advanced_s: 0.0,
             wake_notice: None,
             flight_error: None,
         }
+    }
+
+    #[test]
+    fn typed_autopilot_plan_roundtrips() {
+        let input = AutopilotInput {
+            tick: 41,
+            command: AutopilotCommand::SubmitPlan {
+                plan: TrajectoryPlan {
+                    id: thessa_flight_control::TrajectoryPlanId(12),
+                    segments: vec![thessa_autopilot::TrajectorySegment::Coast { duration_s: 4.0 }],
+                    bakeability: thessa_autopilot::Bakeability::Pure,
+                },
+            },
+        };
+        input.validate().expect("valid plan");
+        let frame = encode_autopilot(&input).expect("frame");
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.push(&frame).expect("framed envelope");
+        let envelope = decode_frame(&frames[0]).expect("envelope");
+        assert_eq!(envelope.kind, kind::AUTOPILOT_COMMAND);
+        let back: AutopilotInput = decode_payload(&envelope).expect("payload");
+        assert_eq!(back, input);
+    }
+
+    #[test]
+    fn typed_autopilot_graph_validates_and_roundtrips() {
+        let input = AutopilotInput {
+            tick: 42,
+            command: AutopilotCommand::SubmitGraph {
+                graph: thessa_autopilot::AutopilotGraph {
+                    nodes: vec![
+                        thessa_autopilot::GraphNode {
+                            id: thessa_autopilot::NodeId(1),
+                            name: "source".into(),
+                            kind: thessa_autopilot::NodeKind::Source,
+                            ports: vec![thessa_autopilot::Port::output(
+                                "value",
+                                thessa_autopilot::PortType::Number,
+                            )],
+                            config: None,
+                        },
+                        thessa_autopilot::GraphNode {
+                            id: thessa_autopilot::NodeId(2),
+                            name: "sink".into(),
+                            kind: thessa_autopilot::NodeKind::Sink,
+                            ports: vec![thessa_autopilot::Port::input(
+                                "value",
+                                thessa_autopilot::PortType::Number,
+                                true,
+                            )],
+                            config: None,
+                        },
+                    ],
+                    edges: vec![thessa_autopilot::GraphEdge {
+                        from: thessa_autopilot::PortRef {
+                            node: thessa_autopilot::NodeId(1),
+                            port: "value".into(),
+                        },
+                        to: thessa_autopilot::PortRef {
+                            node: thessa_autopilot::NodeId(2),
+                            port: "value".into(),
+                        },
+                    }],
+                },
+            },
+        };
+        input.validate().expect("valid graph");
+        let frame = encode_autopilot(&input).expect("frame");
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.push(&frame).expect("framed envelope");
+        let envelope = decode_frame(&frames[0]).expect("envelope");
+        let back: AutopilotInput = decode_payload(&envelope).expect("payload");
+        assert_eq!(back, input);
+    }
+
+    #[test]
+    fn typed_guidance_input_roundtrips_alongside_legacy_input() {
+        let input = GuidanceInput {
+            tick: 12,
+            intent: GuidanceIntent::ManualAxes(Default::default()),
+            propulsion: PropulsionDemand::new(1.0).unwrap(),
+        };
+        let frame = encode_guidance(&input).expect("encode");
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.push(&frame).expect("split");
+        let envelope = decode_frame(&frames[0]).expect("envelope");
+        assert_eq!(envelope.kind, kind::GUIDANCE_COMMAND);
+        let back: GuidanceInput = decode_payload(&envelope).expect("payload");
+        assert_eq!(back, input);
+        back.validate().expect("valid guidance");
     }
 
     #[test]
@@ -222,5 +612,38 @@ mod tests {
             decode_payload(&decode_frame(&at_client[0]).expect("env")).expect("snapshot");
         assert_eq!(back.tick, input.tick);
         assert_eq!(back, snapshot);
+    }
+}
+
+#[cfg(test)]
+mod reset_command_tests {
+    use super::*;
+    use thessa_protocol::FrameDecoder;
+
+    #[test]
+    fn reset_command_roundtrips_and_preserves_order() {
+        let input = ClientInput {
+            tick: 99,
+            control_input: [0.0; 3],
+            control_mode: ControlMode::Direct,
+            sas_target_xyzw: [0.0, 0.0, 0.0, 1.0],
+            throttle: 0.0,
+            engine_active: false,
+            sas_enabled: false,
+            rcs_enabled: false,
+            gear_down: false,
+            commands: vec![
+                Command::Stage,
+                Command::Reset,
+                Command::SetWarp { factor: 8.0 },
+            ],
+        };
+        let frame = encode_input(&input).expect("encode");
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.push(&frame).expect("split");
+        let back: ClientInput =
+            decode_payload(&decode_frame(&frames[0]).expect("env")).expect("payload");
+        assert_eq!(back, input);
+        assert_eq!(back.commands[1], Command::Reset);
     }
 }

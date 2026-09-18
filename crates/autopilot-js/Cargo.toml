@@ -1,0 +1,16 @@
+[package]
+name = "thessa-autopilot-js"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "GPL-3.0-or-later"
+publish = false
+
+[dependencies]
+glam.workspace = true
+thessa-autopilot = { path = "../autopilot" }
+thessa-flight-control = { path = "../flight-control" }
+thessa-sim-core = { path = "../sim-core" }
+rquickjs = "0.13.0"
+serde.workspace = true
+serde_json.workspace = true

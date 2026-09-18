@@ -1,150 +1,423 @@
-# 07 — Autopilot, guidance graphs and automation
+# 07 — Autopilot, guidance graphs, and automation
 
-## 7.1. Goal
+## Status
 
-Сохранить сильную UX-идею MechJeb: типовая сложная операция доступна как понятный high-level autopilot action. При этом убрать ограничение «каждый autopilot — отдельное окно/режим»: actions должны свободно комбинироваться в один graph и работать тем же механизмом, что industrial logistics automation.
+**Implemented vertical slice; not yet a finished subsystem.** The current tree has a
+working typed graph IR and validator, deterministic native graph runner,
+server-owned event/time waits, QuickJS sandbox and async continuation bridge,
+typed guidance/control integration, trajectory-plan execution, maneuver search,
+and authoritative server/wire integration.
 
-Reference vocabulary: MechJeb Ascent Guidance, Maneuver Planner/Node Executor, Landing Guidance, Rendezvous/Docking Guidance, SmartASS-like attitude targeting. Это UX/reference vocabulary, не code dependency.
+The implemented pieces live primarily in `crates/autopilot`,
+`crates/autopilot-js`, `crates/flight-control`, `crates/flight-authority`,
+`crates/flight-net`, `crates/maneuver`, and `apps/server`.
 
-## 7.2. Layering
+The major remaining work is no longer proving that the architecture works. It is
+production hardening and breadth: graph-loop runtime semantics, event-generation
+semantics, a complete standard library/editor, physical staging and topology
+changes, logistics automation, opportunistic powered-trajectory baking, and a
+real-mission qualification suite.
 
-```text
-visual graph
-  ↓ compile/validate
-typed automation IR
-  ↓
-event-driven VM / scheduler
-  ↓
-planner + guidance laws
-  ↓
-FBW/control allocator
-  ↓
-physical actuators
-  ↓
-physics
-```
-
-Script никогда не добавляет магическую силу/момент. Даже `LandAt` в итоге выдаёт guidance targets, а control allocator управляет реальными engines/surfaces/RCS.
-
-## 7.3. Standard-library blocks
-
-### Attitude / control
-
-- `Point(direction/frame)`
-- `HoldAttitude`
-- `HoldRate`
-- `HoldAoA`
-- `HoldG`
-- `SetThrottle`
-- `Translate`
-
-### Orbital planning / execution
-
-- `TargetOrbit`
-- `Circularize`
-- `ChangePlane`
-- `PlanTransfer`
-- `ExecuteManeuver`
-- `MatchVelocity`
-- `Rendezvous`
-- `Dock`
-
-### Flight phases
-
-- `Ascent`
-- `Stage/Separate`
-- `Boostback`
-- `AtmosphericEntry`
-- `LandAt`
-- `RecoverBooster`
-
-### Logistics
-
-- `WaitForWindow`
-- `WaitForCargo`
-- `Load` / `Unload`
-- `Refuel`
-- `DepartRoute`
-- `SetAlarm`
-- `WarpRequest`
-
-## 7.4. Composition primitives
-
-Graph language requires:
-
-- `Sequence`;
-- `If/Switch`;
-- `WaitUntil/Event`;
-- `Loop`;
-- `Retry`;
-- `Fallback`;
-- `Parallel/Fork`;
-- `Join`;
-- parameterized reusable `Subgraph`;
-- explicit error/abort path.
-
-Blocks have typed ports and contracts. Examples: `VehicleId`, `Target`, `OrbitGoal`, `PadId`, `CargoFilter`, `ManeuverPlan`, `Window`.
-
-## 7.5. Staging and parallel vehicles
-
-Staging changes world topology. A block such as:
+## 7.1. Authority pipeline
 
 ```text
-Stage
+pilot input / native graph / QuickJS block
+                    ↓
+              typed graph IR
+                    ↓
+          server-owned scheduler
+                    ↓
+        planner and guidance intent
+                    ↓
+             control law/policy
+                    ↓
+             physical allocator
+                    ↓
+                actuators
+                    ↓
+                 physics
 ```
 
-may return:
+An autopilot block emits typed intent or a physical demand request. It does not
+add a hidden force, moment, velocity change, or direct craft rotation.
+
+The same authority path is used by manual flight, native graph blocks, QuickJS,
+and maneuver-plan execution. This is intentional: automation does not get a
+second physics API.
+
+## 7.2. Current graph model
+
+`AutopilotGraph` has typed nodes and ports. The validator currently checks:
+
+- duplicate nodes and ports;
+- required inputs and multiple drivers;
+- port direction and type compatibility;
+- bounded node/port/event names;
+- controller ownership conflicts by `ActuatorGroup`;
+- cycles that do not cross a wait-capable node.
+
+`GraphRunner` executes ready nodes in deterministic `NodeId` order, keeps
+independent branches runnable around parked waits, supports joins, stores typed
+outputs, and exposes explicit complete/wait/fail/abort states.
+
+The wire layer can submit validated graph IR to the authoritative server. The
+server executes it against the same guidance/control path as manual input and
+wakes waits from `SimTime` or named domain events.
+
+### Known graph-loop gap
+
+The validator deliberately allows a cycle when the strongly connected path
+contains a wait/yield boundary, but the current runner still treats every
+incoming edge as a same-epoch dependency. A graph such as:
 
 ```text
-{ parent_or_upper: VehicleId, detached: [VehicleId...] }
+A(wait) -> B -> A
 ```
 
-The graph can immediately fork:
+can therefore validate successfully and then deadlock before its first
+iteration because neither node has an already-`Ok` predecessor.
+
+The runtime needs iteration/epoch or token semantics so a wait boundary cuts the
+dependency cycle between iterations instead of merely making the SCC legal at
+validation time. Until that exists, cyclic graphs must not be treated as a
+finished runtime feature.
+
+## 7.3. Typed guidance and control
+
+`GuidanceIntent` currently represents:
+
+- manual pilot axes;
+- angular-rate targets;
+- attitude targets;
+- velocity-direction targets in body, inertial, surface, orbit, and target
+  frames;
+- flight-path targets;
+- trajectory-plan references.
+
+The flight-control layer resolves guidance through aircraft, spacecraft, or
+direct control laws, applies flight policy, allocates force/moment/propulsion
+to real effectors, and applies actuator limits/dynamics.
+
+The authority also supports typed propulsion targets with physical actuator
+response rather than treating an autopilot throttle request as an instantaneous
+force mutation.
+
+## 7.4. Current standard-library surface
+
+The current server/QuickJS bridge includes typed constructors for direction and
+target-frame guidance, translation guidance, flight-path targets, maneuver
+plans, physical burn commands, landing sites, impact sites, simulation-time
+sleep, named events, and plan guards. QuickJS can return typed guidance, plans,
+landing/impact sites, waits, and diagnostics.
+
+Pure plans cannot silently contain live domain-event waits; the scheduler owns
+those waits.
+
+The following names remain the intended UX vocabulary and are not all shipped
+as complete blocks yet:
+
+- attitude: `Point`, `HoldAttitude`, `HoldRate`, `HoldAoA`, `HoldG`, `Translate`;
+- orbital: `TargetOrbit`, `Circularize`, `ChangePlane`, `PlanTransfer`,
+  `ExecuteManeuver`, `MatchVelocity`, `Rendezvous`, `Dock`;
+- flight: `Ascent`, `Stage/Separate`, `Boostback`, `AtmosphericEntry`,
+  `LandAt`, `RecoverBooster`;
+- logistics: `WaitForWindow`, `WaitForCargo`, `Load`, `Unload`, `Refuel`,
+  `DepartRoute`, `SetAlarm`, `WarpRequest`.
+
+## 7.5. Maneuver planning boundary
+
+`thessa-maneuver` is intentionally below the graph VM and above low-level
+control. It provides typed `ManeuverPlan` values and helpers for
+circularization, Hohmann-class transfers, Lambert rendezvous, plane changes,
+velocity matching, and candidate search.
+
+The current porkchop path is staged rather than pretending one model is truth:
 
 ```text
-Ascent
-→ Stage
-  ├ booster -> RecoverBooster(PadA)
-  └ upper   -> TargetOrbit(120 km)
-              -> WaitForWindow(Pelagos)
-              -> PlanTransfer
-              -> ExecuteManeuver
+broad Lambert grid
+        ↓
+local refinement / patched-conic energy pricing
+        ↓
+parking-orbit anomaly phasing
+        ↓
+full N-body propagation + differential correction
+        ↓
+corrected executable ManeuverPlan with measured miss
 ```
 
-This is required for physical reusable launch cadence: booster recovery is not a background inventory operation.
+Broad search results are represented as `BroadRoute` and cannot be fed directly
+to the executor. The cheap two-body/patched-conic stages scout candidate windows
+and energies; only the corrected full-N-body result is an executable plan.
 
-## 7.6. Event-driven execution
+The current search also handles the central-body/depot case explicitly instead
+of starting a Lambert arc from the body's point-mass center, and uses the
+central body state at the correct departure and arrival epochs when building
+relative endpoints.
 
-Do not poll every graph every physics tick. `WaitUntil` should compile to the cheapest valid wake source:
+This separation is important for future interplanetary and interstellar
+planners: pruning approximations may be aggressive, but physical truth remains
+with authoritative propagation/certification.
 
-- exact `SimTime`;
-- scheduled orbital event;
-- threshold watcher with known next-check policy;
-- cargo/inventory event;
-- contact/staging/docking event;
-- guidance completion/failure event.
+## 7.6. Event-driven waits
 
-High-rate controller loops are separate guidance/control systems activated only while needed.
+Sleeping work is parked in the scheduler rather than polled each physics tick.
+Wake sources include:
 
-## 7.7. User-facing complexity
+- an exact `SimTime` deadline;
+- a named domain event;
+- `Any` / `All` composite wait conditions;
+- plan guard or guidance completion/failure;
+- future cargo, staging, docking, or contact events.
 
-Three levels share one runtime:
+`WaitSet` and `GraphRunner` remember events needed by a parked composite wait,
+so an `All(time, event)` can observe the event first and later wake exactly at
+the time deadline. QuickJS continuations are parked behind the same native wait
+machinery.
 
-1. **preset:** choose `Launch to orbit` / `Land at pad`;
-2. **graph:** compose standard blocks;
-3. **low-level:** math/sensors/controllers/direct actuator commands.
+### Known plan-event lifetime bug
 
-A normal player should automate a reusable booster without writing PID math. An advanced player must be able to replace high-level blocks with their own subgraphs/controllers.
+`TrajectoryPlanRunner` currently keeps one `seen_events` set for the lifetime of
+the whole plan. After one wait consumes an event name, a later wait for the same
+name can observe the stale earlier occurrence.
 
-## 7.8. Validation
+For example:
 
-Before run, graph compiler checks where possible:
+```text
+Wait(Event("stage"))
+Burn(...)
+Wait(Event("stage"))
+```
 
-- type compatibility;
-- missing target/vehicle handles;
-- impossible obvious resource requirements;
-- branch ownership conflicts (two controllers commanding the same actuator set);
-- cycles without wait/yield where relevant;
-- unavailable technology/sensors.
+can allow the second wait to complete from the first `stage` event.
 
-Runtime failures remain possible because physics is real: insufficient thrust, actuator saturation, thermal damage, missed window, collision, etc.
+Plan waits need per-wait consumption or, preferably, monotonic event generations
+/ sequence numbers. A guard should be able to express "wait for `stage`
+generation > N" rather than "has an event named `stage` ever happened during
+this plan?" This also gives baked/speculative execution a clean invalidation
+token.
+
+## 7.7. Staging and ownership
+
+Staging is a topology-changing operation. The intended graph result is a set of
+new `VehicleId` branches, each with an explicit controller owner. A booster
+recovery branch and an upper-stage transfer branch must be independently
+schedulable.
+
+The graph validator already prevents ambiguous controller ownership. Complete
+physical separation, topology mutation, child-vehicle ownership transfer, and
+multi-vehicle continuation are still future work.
+
+## 7.8. JavaScript boundary
+
+QuickJS is a high-level producer of typed values. The host exposes deterministic
+constructors and denies ambient capabilities. It receives no mutable authority,
+rigid-body handle, actuator reference, filesystem, network, or wall-clock
+capability.
+
+The current defaults bound source size, VM memory and stack, and synchronous
+execution time. Async `sim.sleep` / event waits park a QuickJS promise in the
+Rust scheduler; they do not sleep a worker or poll JS at the physics cadence.
+
+The runtime owns continuation wakeup and can cancel pending tasks. The sandbox
+therefore remains useful for large fleets: thousands of dormant scripts do not
+imply thousands of active loops.
+
+## 7.9. Trajectory plans, bakeability, and deoptimization
+
+`TrajectoryPlan` currently contains declarative `Coast`, `Burn`, `Guidance`, and
+`Wait` segments and advertises one of three bakeability classes:
+
+```text
+Pure     deterministic; intended to be fully bakeable
+Guarded  bakeable while declared assumptions remain valid
+Live     requires live execution
+```
+
+`TrajectoryPlanRunner` executes `Pure`/`Guarded` plans in `Baked` mode and can
+`deoptimize(...)` to `Live` without losing its segment cursor. Existing reasons
+include guard invalidation, manual override, and live interrupt.
+
+That is already the control-flow boundary needed for certified future
+execution: a baked future is an optimization, not authority. When an assumption
+fails, execution falls back to the live control path at the same declarative
+plan position.
+
+## 7.10. Opportunistic powered-trajectory baking
+
+The next major scaling feature should generalize "rails" from "unpowered vacuum
+coast" to "a future state evolution that has already been computed and
+certified".
+
+When server CPU is idle and a deterministic or guarded maneuver is scheduled in
+the future, a background worker may execute the expensive finite-burn physics
+ahead of simulation time and cache a compact trajectory representation:
+
+```text
+future plan segment
+      ↓
+background exact integration while CPU is idle
+      ↓
+state / mass / attitude curve + error bounds + dependency certificate
+      ↓
+segment reaches authoritative SimTime
+      ↓
+validate certificate
+  ┌───┴────────────┐
+valid            invalid
+  ↓                 ↓
+serve baked        discard/deopt
+trajectory         and execute live
+```
+
+This is deliberately opportunistic. Wasted precomputation is acceptable if it
+uses otherwise-idle CPU; incorrect authority is not.
+
+A powered baked segment should depend on at least the initial vehicle state,
+vehicle/topology revision, mass/propellant state, relevant body/ephemeris
+revision, maneuver-plan revision, actuator/engine availability, and any guard
+event generations. Topology-changing or externally visible actions such as
+staging, docking, cargo transfer, or vehicle creation remain commit boundaries
+unless they are represented as deferred effects and revalidated at their
+simulation time.
+
+The important performance result is temporal load shifting. A server can use
+quiet wall-clock periods to integrate tomorrow's burns, then serve hundreds of
+simultaneous scheduled maneuvers as baked trajectories instead of forcing every
+craft back onto per-tick live integration at the same instant.
+
+The existing `BakeQueue`, coast rails, plan bakeability, guard/deoptimization
+model, and exact maneuver propagation provide the pieces; powered rails should
+reuse them rather than create a second autopilot runtime.
+
+## 7.11. User-facing levels
+
+One runtime should support:
+
+1. presets such as `Launch to orbit` or `Land at pad`;
+2. visual graphs built from standard blocks;
+3. advanced typed graphs and low-level sensors/actuators.
+
+The implementation is complete enough for the graph/plan vertical slice, not
+for the final editor UX or logistics library.
+
+## 7.12. Known correctness work before calling the runtime finished
+
+The two concrete bugs currently identified in the autopilot core are:
+
+1. **wait-containing cycles validate but can deadlock at first execution.** The
+   validator understands a wait as a legal cycle boundary; `GraphRunner` does
+   not yet have iteration/token semantics and still waits for all incoming
+   predecessors to be `Ok` in the current epoch.
+2. **trajectory-plan event memory is too broad.** `TrajectoryPlanRunner` keeps
+   named events for the whole plan, so a later wait can consume an earlier
+   event with the same name.
+
+Both need regression tests that fail against the current behavior before the
+runtime loop/event model is expanded further.
+
+## 7.13. Current validation
+
+Current tests cover graph type checking, ownership, wait boundaries, stable
+sequence/parallel execution, event memory, scheduler wake/repark, QuickJS
+limits and continuations, guidance parsing, plan validation/deoptimization,
+wire round trips, and server execution through the authority.
+
+The core local test entry points remain:
+
+```bash
+cargo test -p thessa-autopilot
+cargo test -p thessa-autopilot-js
+cargo test -p thessa-maneuver
+cargo test -p thessa-server
+```
+
+Unit tests are necessary but not sufficient for the final maneuver/autopilot
+stack. The final qualification target should include real deep-space mission
+replays.
+
+## 7.14. Real-mission replay qualification suite
+
+The final autopilot/maneuver qualification should include Solar-System scenarios
+that are close to real missions rather than only synthetic Hohmann/Lambert unit
+cases. The goal is not to reproduce every historical trajectory-correction
+maneuver or DSN navigation estimate exactly. The goal is to reproduce the
+mission architecture with real ephemerides and realistic event ordering closely
+enough that the planner must solve the same class of problem.
+
+Each replay should pin mission milestones such as encounter body, encounter
+order, epoch/window tolerance, closest-approach or target-orbit class, arrival
+`v_inf` / C3 where meaningful, total correction budget, final capture/escape
+state, and accumulated miss. The same scenario should be runnable through
+broad search, exact correction, declarative plan execution, live authority, and
+powered-rails replay; those paths must agree within declared tolerances.
+
+### Core replay set
+
+| Mission | Reference sequence | What it qualifies |
+| --- | --- | --- |
+| Pioneer 10 | launch -> Jupiter flyby -> solar escape | minimal outer-planet flyby, high-energy escape, long coast |
+| Pioneer 11 | launch -> Jupiter -> Saturn -> solar escape | sequential gravity assists and retargeting after the first encounter |
+| Voyager 1 | launch -> Jupiter -> Saturn -> escape | high-energy two-assist transfer with long interplanetary coasts |
+| Voyager 2 | launch -> Jupiter -> Saturn -> Uranus -> Neptune -> escape | flagship Grand Tour: four planetary encounters whose errors compound across twelve years |
+| New Horizons | launch -> Jupiter gravity assist -> Pluto -> Arrokoth | very high launch energy, one major assist, multi-year coast, distant small-body targeting |
+| Galileo | launch -> Venus -> Earth -> Earth -> Jupiter orbit insertion | repeated assists at the same body, resonant return geometry, final capture |
+| Cassini-Huygens | launch -> Venus -> Venus -> Earth -> Jupiter -> Saturn orbit insertion | VVEJGA chain, mixed inner/outer Solar-System assists, final giant-planet capture |
+| MESSENGER | launch -> Earth -> Venus -> Venus -> Mercury -> Mercury -> Mercury -> Mercury orbit insertion | repeated energy-removing assists into a deep solar gravity well, then capture |
+| BepiColombo | launch -> Earth -> Venus x2 -> Mercury x6 -> Mercury capture | nine planetary flybys plus solar-electric low-thrust cruise; strongest combined assist/low-thrust qualification |
+| Juno | launch -> deep-space maneuvers -> Earth gravity assist -> Jupiter orbit insertion | planned deep-space burns, Earth assist, long coast, large capture burn |
+| Solar Orbiter | launch -> Venus/Earth assists -> repeated Venus assists | repeated gravity assists used primarily to reshape perihelion and increase heliocentric inclination |
+| Lucy | launch -> repeated Earth assists -> main-belt/Trojan encounters -> Earth return -> opposite Trojan swarm | resonant Earth returns, deterministic DSMs, multiple small-body targets, long-lived multi-encounter plan |
+
+Voyager 2 should be the canonical "does the whole gravity-assist planner actually
+work?" acceptance case. BepiColombo should be the canonical hybrid
+low-thrust + repeated-flyby case. Galileo/Cassini/MESSENGER are especially useful
+because they force repeated encounters with Earth/Venus/Mercury instead of
+letting the planner succeed with one lucky slingshot.
+
+### Fidelity levels
+
+A useful progression is:
+
+```text
+L0  event order only
+L1  historical encounter windows and bodies
+L2  realistic flyby altitude / v_inf / C3 / capture class
+L3  approximate deterministic deep-space maneuvers and finite burns
+L4  historical ephemerides + powered-rails bake/replay equivalence
+```
+
+L0-L2 should be cheap CI scenarios. L3-L4 can run as slower qualification or
+benchmark jobs. Exact historical reconstruction may use published SPICE kernels
+or equivalent source ephemerides later; the autopilot architecture should not
+depend on hard-coded mission scripts.
+
+### Reference sources for scenario construction
+
+Use primary mission sources when turning these scenarios into fixtures:
+
+- NASA Voyager mission and Voyager 2 timeline:
+  <https://voyager.gsfc.nasa.gov/mission.html> and
+  <https://science.nasa.gov/mission/voyager/voyager-2/>
+- NASA Pioneer 10 and Pioneer 11:
+  <https://science.nasa.gov/mission/pioneer-10/> and
+  <https://science.nasa.gov/mission/pioneer-11/>
+- NASA New Horizons:
+  <https://science.nasa.gov/mission/new-horizons/>
+- NASA Galileo:
+  <https://science.nasa.gov/mission/galileo/>
+- NASA Cassini trajectory:
+  <https://science.nasa.gov/resource/interplanetary-trajectory/>
+- NASA MESSENGER:
+  <https://science.nasa.gov/mission/messenger/>
+- ESA BepiColombo journey/factsheet:
+  <https://www.esa.int/Science_Exploration/Space_Science/BepiColombo/BepiColombo_factsheet>
+- NASA Juno:
+  <https://www.jpl.nasa.gov/missions/juno/>
+- ESA Solar Orbiter flybys:
+  <https://www.esa.int/Science_Exploration/Space_Science/Solar_Orbiter/Solar_Orbiter_perihelia_and_flybys>
+- NASA Lucy mission planning/timeline:
+  <https://science.nasa.gov/mission/lucy/>
+
+The replay suite should remain data-driven. A mission fixture declares bodies,
+epoch windows, burns/encounters and tolerances; it must not be a one-off code
+path named `voyager2_special_case`.

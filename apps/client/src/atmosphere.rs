@@ -148,8 +148,50 @@ impl Plugin for AtmospherePlugin {
                 PostUpdate,
                 sync_solari_meshes
                     .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
-            );
+            )
+            .add_systems(PostUpdate, photo_sun_elevation);
     }
+}
+
+/// Photo-only sun elevation override (`THESSA_SUN_ELEVATION_DEG`): rotates
+/// the primary light to the given elevation above the horizon AFTER the
+/// ephemeris updater ran, for shadow/relief assessment screenshots. The
+/// sky/sun disk stay on ephemeris truth — only the direct-light angle is
+/// staged, so this never affects physics, saves, or normal runs (unset =
+/// compiled to a single env read that misses). Golden-hour previews for
+/// art direction, not a time control.
+fn photo_sun_elevation(
+    mut lights: Query<&mut Transform, With<PrimaryStarLight>>,
+    mut cached: Local<Option<Option<f32>>>,
+) {
+    let target = *cached.get_or_insert_with(|| {
+        std::env::var("THESSA_SUN_ELEVATION_DEG")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|v| (2.0..=80.0).contains(v))
+    });
+    let Some(elevation_deg) = target else {
+        return;
+    };
+    let Ok(mut transform) = lights.single_mut() else {
+        return;
+    };
+    // Travel direction the updater aimed; keep its azimuth, pin elevation.
+    let travel = (transform.rotation * Vec3::NEG_Z).normalize_or_zero();
+    if travel == Vec3::ZERO {
+        return;
+    }
+    let mut horizontal = travel - Vec3::Y * travel.dot(Vec3::Y);
+    if horizontal.normalize_or_zero() == Vec3::ZERO {
+        horizontal = Vec3::X;
+    }
+    let horizontal = horizontal.normalize();
+    let elevation = elevation_deg.to_radians();
+    let staged = (-horizontal * elevation.cos() - Vec3::Y * elevation.sin()).normalize_or_zero();
+    if staged == Vec3::ZERO {
+        return;
+    }
+    transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, staged);
 }
 
 /// Solari 0.19's fixed 1 mm secondary-ray epsilon is smaller than f32
@@ -894,7 +936,7 @@ fn update_atmosphere_visuals(
             .as_deref()
             .filter(|w| w.render_center.is_some())
             .map(|w| w.render_origin_m)
-            .unwrap_or_else(|| bevy::math::DVec3::from_array(flight_runtime.terrain_origin()));
+            .unwrap_or_else(|| flight_runtime.render_terrain_origin_m());
         let camera = camera_settings
             .iter()
             .next()
@@ -996,8 +1038,12 @@ fn update_atmosphere_visuals(
     } else if in_pilot {
         // Metre-scale pilot scene: the preview/flight planet entity carries
         // the exact datum offset, so read it instead of recomputing.
+        // Render pose (frame rate), not the snapshot-stepped authority.
         let center = Some(-Vec3::from_array(
-            flight_runtime.terrain_origin().map(|x| x as f32),
+            flight_runtime
+                .render_terrain_origin_m()
+                .to_array()
+                .map(|x| x as f32),
         ));
         if let Some(center) = center {
             set_shell_radii(

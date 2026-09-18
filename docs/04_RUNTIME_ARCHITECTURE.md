@@ -1,432 +1,248 @@
 # 04 — Runtime architecture
 
+## Status
+
+**Implemented prototype, with explicit future boundaries.** This document
+describes the current workspace as of 2026-09-14. Sections labelled future do
+not describe a shipped subsystem.
 
 ## 4.0. Cross-platform contract
 
-Cross-platform — исходное ограничение, не post-release port.
+Cross-platform support is an architectural constraint, not a post-release port.
 
-- simulation, protocol, persistence и gameplay code не знают DirectX/Vulkan/Metal/wgpu;
-- текущий native client shell — Bevy + wgpu, но это **integration boundary**, не обязательный API reusable GPU algorithms;
-- reusable GPU subsystems (`rcbt` и аналогичные) определяют собственный semantic backend trait и не экспортируют Bevy/wgpu types из core;
-- Linux/Vulkan, macOS/Metal, browser/WebGPU — first-class architecture targets;
-- wgpu остаётся default portable backend; direct Vulkan backend допустим за render/backend adapter boundary, если profiling показывает measurable overhead или отсутствующую capability;
-- Windows по умолчанию поддерживается через backend wgpu без DX-specific game code; wgpu может внутренне выбрать D3D12, но никакие DirectX types/calls не проходят за render adapter boundary;
-- physics ray/BVH path не зависит от DXR/Vulkan RT;
-- portable shader/kernel semantics предпочтительнее platform forks; WGSL — хороший default source, но measured native SPIR-V specialization допустима внутри native Vulkan backend;
-- platform-specific optimization допускается только за feature/capability boundary и после профилирования.
+- simulation, protocol, persistence, and gameplay code do not know DirectX;
+- the native renderer boundary is Bevy/wgpu;
+- Linux/Vulkan, macOS/Metal, and browser/WebGPU remain first-class targets;
+- Windows may use the backend selected internally by wgpu, including D3D12,
+  but no DirectX types or calls cross the renderer boundary;
+- physics ray/BVH queries have a CPU path and do not require DXR;
+- WGSL and Bevy render abstractions are preferred to platform shader forks;
+- platform-specific optimization requires an adapter/feature boundary and a
+  benchmark.
 
-Если позже принимается политика `Vulkan-only on Windows` или отдельный native Vulkan client path, это packaging/render-backend ADR, а не изменение simulation API.
+A future Vulkan-only Windows packaging policy would require a separate ADR and
+would not change the simulation API.
 
----
-
-## 4.1. High-level split
-
-```text
-                     ┌──────────────────────────────┐
-                     │      native / web client     │
-                     │ Bevy UI/ECS + render adapter │
-                     │ wgpu default / native GPU opt│
-                     └──────────────┬───────────────┘
-                                    │ commands/snapshots
-                                    ▼
-┌────────────────────────────────────────────────────────────┐
-│                     authoritative server                    │
-│                                                            │
-│ Tokio: network / persistence / admin / async I/O           │
-│                   │                                        │
-│                   ▼                                        │
-│            simulation coordinator                          │
-│                   │                                        │
-│                   ▼                                        │
-│      fixed CPU pool / Rayon / custom batches               │
-│ gravity | aero | thermal | structure | factory | guidance  │
-└────────────────────────────────────────────────────────────┘
-```
-
-Single-player может запускать server in-process или рядом отдельным process; semantic model остаётся server-authoritative.
-
-Renderer implementation может меняться без изменения authoritative server/domain APIs.
-
----
-
-## 4.2. Workspace boundary
-
-Планируемая декомпозиция после prototype:
+## 4.1. Current process split
 
 ```text
-crates/
-  sim-core/          IDs, time, state, schedule, shared primitives
-  sim-ephemeris/     baked celestial states / frames
-  sim-orbit/         gravity, integrators, trajectory tools
-  sim-flight/        6-DoF, atmosphere, aero, propulsion
-  sim-structure/     structural graph, fracture
-  sim-thermal/       thermal graph
-  sim-factory/       production/logistics state
-  sim-script/        event-driven VM
-  vehicle-design/    parametric design + compiler
-  protocol/          network protocol / snapshots / commands
-  persistence/       save format / migrations
-  graphics/          reusable render settings/metadata/adapters
-
-  # terrain/GPU adaptive geometry, когда prototype boundary стабилизируется:
-  rcbt-core/         backend-agnostic CBT logic/layout contracts
-  rcbt-ref/          reference/oracle binding for tests/benchmarks only
-  rcbt-wgpu/         portable GPU backend
-  rcbt-vulkan/       optional native Vulkan backend
-  bevy-rcbt/         thin Bevy integration only
-
-apps/
-  client/            native Bevy client shell
-  server/            headless authoritative server
-  web-client/        optional WASM packaging/features
-
-tools/
-  system-baker/      offline celestial integration/fitting
-  physics-lab/       standalone test/debug scene
-  benchmarks/        batch kernels
+┌──────────────────────────────┐
+│ apps/client                  │
+│ Bevy render, input, UI, map  │
+└───────────────┬──────────────┘
+                │ framed commands/snapshots
+                ▼
+┌──────────────────────────────┐
+│ apps/server                  │
+│ authoritative driver         │
+│ Tokio transport/orchestration│
+│ dedicated simulation thread  │
+└───────────────┬──────────────┘
+                ▼
+       flight-authority
+                ▼
+   sim-core / flight-control
 ```
 
-В v0.1 scaffold создан только минимальный subset, чтобы не делать архитектуру фиктивным количеством crates раньше кода. Имена выше — boundary target, а не требование немедленно дробить workspace.
+The normal client path starts a separate local server process and exchanges
+framed messages over stdio. The server also has a TCP transport. `--local`
+keeps an in-process legacy path for diagnostics; it is not the architectural
+authority model.
 
----
+## 4.2. Current workspace boundary
+
+```text
+crates/sim-core/          MIT numerical state, time, gravity, aero, flight
+crates/simd/              MIT optional numeric kernels
+crates/atmosphere/        MIT shared atmosphere optics
+crates/graphics/          MIT graphics settings resolution
+crates/perf/              MIT performance capture model
+crates/protocol/          MIT wire envelope and framing
+crates/flight-control/    GPL guidance, control laws, policy, allocation
+crates/flight-authority/  GPL authoritative vehicle runtime adapter
+crates/flight-net/        GPL game input/snapshot messages
+crates/autopilot/         GPL typed graph IR and runner
+crates/autopilot-js/      GPL sandboxed QuickJS blocks
+crates/maneuver/          MIT typed maneuver planning prototype
+crates/collision/         MIT Rapier contact backend (no Bevy dependency)
+crates/bevy-rcbt/         MIT thin Bevy client adapter for RCBT runtime
+crates/rcbt-core/         MIT backend-agnostic RCBT topology runtime
+crates/rcbt-ref/          MIT independent RCBT topology oracle (tests)
+crates/rcbt-ffi/          MIT optional vendored libcbt backend adapter
+crates/rcbt-large-ffi/    MIT optional vendored large CBT backend adapter
+crates/rcbt-wgpu/         MIT portable wgpu RCBT compute backend
+
+apps/client/              GPL Bevy client
+apps/server/              GPL headless authoritative shell
+
+tools/system-baker/       MIT system TOML to baked JSON
+tools/vehicle-baker/      MIT vehicle TOML to baked JSON
+tools/worldgen-rocky/     MIT offline rocky-world generator
+```
+
+`validation/nyx-compare` and `validation/aero-compare` are separate Cargo
+workspaces. Their reference dependencies do not enter the root runtime graph.
+The RCBT boundary is intentionally different: `thessa-rcbt-core` is the
+portable pure-Rust runtime implementation, while `thessa-rcbt-ffi` is an
+optional vendored `libcbt` backend that may be selected by a client or tool
+that accepts its single-threaded handle and depth limit. Neither backend is
+required by the authoritative server simulation.
+
+The following boundaries are future work rather than missing hidden crates:
+factory/logistics state, persistence/migrations, structural fracture, thermal
+networks, fluid/electrical networks, and an optional web client.
 
 ## 4.3. Threading
 
 ### Server
 
-Предпочтительная модель:
-
 ```text
-Tokio runtime threads
-  ├ network receive/send
-  ├ persistence
-  ├ HTTP/admin/metrics
+Tokio runtime
+  ├ stdio/TCP receive and send
+  ├ connection lifecycle
   └ async orchestration
 
-Simulation coordinator (dedicated thread or tightly controlled task)
-  └ Rayon/custom pool
-       ├ gravity batches
-       ├ aero batches
-       ├ thermal batches
-       ├ structural batches
-       └ planning batches
+Authoritative driver thread
+  ├ input coalescing and ordered edge events
+  ├ simulation-time waits and autopilot execution
+  ├ flight authority tick
+  └ bounded worker/bake requests
 ```
 
-Не спамить `spawn_blocking` на каждую aero job. Tokio blocking pool оптимизирован под bounded blocking tasks и имеет большой default limit; для постоянного CPU-heavy workload нужен отдельный bounded pool.
+CPU-heavy flight and gravity work stays in the authority/core path or in a
+bounded worker operation. Do not spawn one blocking task per aero job.
+
+The current server loop uses a wall-time driver quantum to service inputs and
+snapshots. That quantum is a responsiveness budget, not a physics-rate limit.
+Requested warp is capped and the effective warp reports work actually served;
+on-rails batches provide the high-throughput path.
 
 ### Client
 
-Bevy schedules client state and current render integration. Background design compilation/trajectory previews могут использовать Bevy `AsyncComputeTaskPool`, но authoritative numerical core и reusable GPU algorithm cores от него не зависят.
+Bevy owns render/client ECS schedules, input, visual interpolation, map state,
+terrain streaming, atmosphere presentation, and the HUD. Background previews
+may use Bevy task pools, but authoritative numerical state is not owned by
+`bevy::Transform` or a render task.
 
-GPU-driven subsystems должны по возможности получать compact frame inputs (`camera`, `error target`, resource handles), а не Bevy ECS types как persistent domain state.
+## 4.4. Authoritative tick and time
 
----
+The current authority advances `SimTime` on a fixed 120 Hz lattice for active
+flight. A bounded duration can contain deterministic substeps. The driver
+services commands, schedules, and snapshots around those steps; it does not
+replace them with wall-clock integration.
 
-## 4.4. Server tick
-
-Simulation coordinator имеет явные фазы. Пример:
-
-```text
-1. collect commands for tick/time interval
-2. advance celestial ephemeris handles
-3. wake scheduled scripts/events
-4. update factory/logistics discrete events
-5. run active vehicle dynamics batches
-6. contacts / fracture / topology changes
-7. commit state transitions
-8. generate snapshots/events
-9. advance SimTime
-```
-
-Реальная последовательность может меняться после solver prototype, но должна быть детерминированной и документированной.
-
----
-
-## 4.5. Warp scheduling
-
-`SimTime` не привязан к wall clock.
-
-Server выбирает chunk simulated time с учётом:
-
-- requested shared warp;
-- ближайшего alarm/event boundary;
-- active atmospheric/contact vehicles;
-- integrator error estimates;
-- compute budget.
-
-Важный принцип: **не обязательно глобально резать весь мир до 50 Hz**, если только один craft делает landing. Системы работают с собственными schedules, а coordinator синхронизирует causal boundaries.
-
----
-
-## 4.6. Networking
-
-### Authority
-
-Client sends:
-
-- pilot inputs;
-- build commands;
-- script edits;
-- route/schedule commands;
-- inventory/logistics intents where allowed;
-- warp request/vote.
-
-Client не сообщает серверу authoritative `position = ...` для управляемого craft.
-
-### Replication tiers
-
-Пример interest policy:
+The conceptual order is:
 
 ```text
-local active bubble         high-rate transforms/state
-same surface region         lower-rate + interpolation
-same celestial body         coarse logistics/telemetry
-other moon/planet           events + summaries
-far BC/A-system             only subscribed telemetry/events
+1. accept and validate ordered client commands
+2. wake simulation-time graph/script/plan waits
+3. resolve guidance and flight policy
+4. allocate physical control demands to actuators
+5. advance flight dynamics and contacts
+6. update on-rails/terrain wake state and bake requests
+7. commit events and snapshot state
 ```
 
-### Prediction
+Some subsystems still have their own internal phase details. New phases must
+preserve one deterministic authority order.
 
-Controlling client может запускать тот же local flight model и rollback/correction. Remote craft обычно snapshot interpolation.
+## 4.5. Warp and on-rails scheduling
 
-Lightyear 0.29 — сильный prototype candidate: Bevy 0.19 compatibility, prediction, interpolation, interest management, WebTransport/WASM.
+`SimTime` is independent of `Instant`. Warp is a shared server policy. When
+multiple clients vote, the effective value is constrained by the most
+restrictive vote; a pause vote pauses the simulation.
 
----
+The authority may switch an unpowered, vacuum-safe craft to a cached sampled or
+piecewise analytic path. The path has explicit horizon, contact, atmosphere,
+obstacle, and wake conditions. It is invalidated by control/thrust or other
+state changes and revalidated before a jump. A failed or expired approximation
+falls back to exact stepping; it must not silently continue outside its bound.
 
-## 4.7. Native / WASM
+Autopilot waits use simulation time or named domain events. Sleeping programs
+are held in a scheduler and are not polled at every physics tick.
 
-### Native client
+## 4.6. Networking and authority
 
-Full feature set:
+The client sends validated commands and guidance/autopilot submissions. It does
+not submit arbitrary craft transforms. The server owns craft state, time warp,
+script continuations, plan cursors, and event order.
 
-- local prediction;
-- full 3D scene;
-- editor;
-- high-quality telemetry/debug;
-- local server option;
-- optional native GPU backend for isolated reusable subsystems when justified by profiling.
+Snapshots use a versioned envelope and bounded framed transport. Continuous
+pilot input is latest-value-wins per client; edge commands remain ordered, and
+leave cleanup is retained even when an input queue is saturated. Outbound
+snapshots use a latest-wins slot while reliable welcome/control frames stay
+ordered.
 
-### WASM/Web client
+The current protocol is designed for a local/server prototype. Production
+prediction, interpolation policy for remote craft, authentication, persistence,
+and fleet replication tiers are future work.
 
-Не обязан исполнять весь `sim-core`.
+## 4.7. Rendering coordinates
 
-Target scopes по нарастающей:
+Authoritative spatial values remain `f64` SI. The client maps them into an
+anchored render-local frame near the camera or selected body. The render origin
+may move and visual radii may be exaggerated for readability, but neither
+`Transform` nor the HUD feeds coordinates back into physics.
 
-1. system map / factory dashboard / alarms;
-2. spectator client;
-3. vehicle editor;
-4. light gameplay;
-5. full client only if performance/security/threads allow.
+Terrain and atmosphere rendering consume interpolated visual poses. Telemetry,
+control, and contact decisions use authority snapshots/state.
 
-Bevy 0.19 официально демонстрирует browser examples через WASM + WebGPU; WebGL2 fallback остаётся полезным compatibility path. Web target не должен диктовать ограничения native simulation.
+## 4.8. Persistence
 
-Portable wgpu/WebGPU path остаётся обязательным fallback для reusable renderer subsystems, даже если native Vulkan backend становится быстрее на desktop Linux.
+No production save database or migration system is implemented yet. Current
+persisted-like inputs are checked-in TOML/JSON design data and diagnostic
+captures. A future save layer must version formats, keep simulation time
+explicit, and preserve the MIT/GPL boundary.
 
----
+## 4.9. Vehicle design and duplication
 
-## 4.8. Rendering coordinates
+The implemented `VehicleDefinition`/`vehicle-baker` path compiles a serializable
+vehicle asset with mass/inertia, geometry, aero panels, control surfaces, and
+starter propulsion/control data. The active flight slice uses this compiled
+definition and the X-15 adapter.
 
-Authoritative:
+The full parametric editor, shared immutable design storage for large fleets,
+structural graph compilation, thermal graph compilation, and fluid/electrical
+connectivity remain future work.
 
-```text
-f64 inertial/body-centered coordinates
-```
+## 4.10. Autopilot and planning boundary
 
-Renderer:
+`thessa-autopilot` defines typed graph values, ports, graph validation,
+sequence/parallel/wait behavior, and failure/abort paths. `thessa-autopilot-js`
+produces those values through a capability-restricted QuickJS host. The server
+owns continuations and wakes them from `SimTime` or domain events.
 
-```text
-render_pos_f32 = (sim_pos_f64 - render_origin_f64).as_f32()
-```
+`thessa-maneuver` produces typed plans and plain physical guidance commands. A
+two-body planner is allowed to prune/search candidates, but plan execution
+revalidates against the exact multi-body field and realizes burns through the
+authority/allocator path. No planner teleports velocity or craft state.
 
-Для surface scenes render origin следует за игроком/камерой. Для orbital/system map используются отдельные scale/frame representations.
+## 4.11. Build targets
 
-Bevy hierarchy не должна зеркалить реальную celestial hierarchy буквально, если это мешает precision/culling.
+The root workspace is tested on the CI matrix documented in `.github/workflows`.
+Native Linux is the development baseline. Windows/macOS builds are supported
+through Bevy/wgpu. A WASM/WebGPU client target is not yet part of the workspace;
+it must be added with compile checks before being called shipped.
 
----
+## 4.12. Dependency and license policy
 
-## 4.9. Persistence
+Reusable engine/tooling packages are MIT. Game-specific control, automation,
+network, authority, client, and server packages are GPL-3.0-or-later. Reference
+solvers remain in isolated validation workspaces. See `LICENSING.md` and the
+ADR index before adding a dependency. The optional `libcbt` adapter is the
+explicit exception for RCBT: it is kept in the root workspace as a selectable
+runtime backend, with the foreign code and its boundary documented separately.
 
-Save format должен хранить:
+## 4.13. Observability
 
-- content/system ephemeris version;
-- simulation time;
-- factories/buildings;
-- vehicle designs (deduplicated by stable hash/ID);
-- vehicle instance states;
-- scripts;
-- inventories;
-- routes;
-- alarms;
-- damage/thermal state;
-- RNG seeds/weather state;
-- server rules.
+`thessa-perf` records frame, CPU scope, GPU availability, memory, world, server,
+and on-rails metrics. The client can export JSON/CSV captures and the server
+reports effective warp separately from requested warp. Physics reductions expose
+error/coverage information in tests and benchmark reports.
 
-Не хранить canonical positions планет как mutable save data: они восстанавливаются из `ephemeris_version + SimTime`.
+## 4.14. What this document does not promise
 
----
-
-## 4.10. Vehicle design deduplication
-
-```text
-DesignId(hash)
-  ├ geometry
-  ├ aero tables/model
-  ├ structural graph template
-  ├ thermal graph template
-  ├ collision representation
-  └ render assets
-
-VehicleInstance
-  ├ DesignId
-  ├ rigid cluster states
-  ├ fuel/cargo
-  ├ damage
-  ├ temperatures
-  └ autopilot state
-```
-
-Это критично для fleet scale и network bandwidth.
-
----
-
-## 4.11. Protocol design
-
-Не сериализовать Bevy `Entity` IDs как network identity.
-
-Использовать stable domain IDs:
-
-- `VehicleId`;
-- `DesignId`;
-- `BuildingId`;
-- `BodyId`;
-- `RouteId`;
-- `ProgramId`.
-
-Protocol crate не зависит от renderer/client-only types.
-
----
-
-## 4.12. Build targets
-
-Proposal:
-
-```text
-client-native-avx2
-client-native-avx512
-server-avx2
-server-avx512
-client-wasm-webgpu
-client-wasm-webgl2 (optional compatibility)
-```
-
-Optional measured renderer experiments may add a native Vulkan feature/build, but это не отдельная simulation/gameplay target family.
-
-Bootstrap launcher на x86_64 может CPUID-select AVX2/AVX-512 binary. Никакой причины заставлять consumer Intel поддерживать отсутствующий AVX-512; это отдельный optimized target.
-
----
-
-## 4.13. Dependency policy
-
-### Accepted direction
-
-- mixed repository licensing: engine MIT, game GPL-3.0-or-later;
-- Rust edition 2024;
-- Bevy 0.19.x client shell;
-- wgpu through Bevy as default portable render backend;
-- Tokio current 1.x server async;
-- Rayon current 1.x compute;
-- Serde for content/protocol prototypes;
-- math crate compatible with Bevy adapter (initially glam 0.32 line).
-
-### Candidate / spike first
-
-- Lightyear;
-- Parry f64;
-- Avian f64 local contacts;
-- native Vulkan backend for isolated reusable GPU subsystems;
-- `rcbt` adaptive terrain stack (see `docs/22_RCBT_GPU_TERRAIN.md`).
-
-### Reference / license-sensitive
-
-- avian_fdm (LGPL-3.0-or-later);
-- nyx-space (AGPLv3).
-
-Новые foundational dependencies принимаются ADR после prototype measurement.
-
----
-
-## 4.14. Observability
-
-Server должен уметь отдавать breakdown:
-
-```text
-sim_time
-requested/effective warp
-active vehicles by regime
-step counts
-solver reject counts
-physics ms by subsystem
-factory event count
-script wakeups
-snapshot bytes/sec
-interest sets
-```
-
-В debug client нужны force/aero/thermal/structural overlays. Без этого физический sandbox невозможно нормально отлаживать.
-
-Reusable GPU subsystems дополнительно должны отдавать backend-neutral metrics: update/dispatch time, active elements, bytes touched/uploaded, working-set size и backend/capability selection. Сравнение wgpu/native backend без одинаковой telemetry не считается benchmark.
-
-
-## 4.15. License/package boundary
-
-Workspace package defaults не задают одну лицензию всему repository. Каждый package объявляет SPDX license сам.
-
-```text
-MIT:
-  sim-*
-  vehicle-design
-  protocol (если остаётся generic)
-  reusable tools/libraries
-  reusable GPU algorithm crates / adapters where possible
-
-GPL-3.0-or-later:
-  client game app
-  authoritative game server app
-  game-specific content/rules crates
-```
-
-Game code может зависеть от MIT engine. Обратная зависимость запрещена. Это сохраняет engine пригодным для переиспользования вне GPL game.
-
----
-
-## 4.16. Reusable GPU subsystem ownership
-
-Низкоуровневый renderer algorithm не должен принадлежать Bevy только потому, что первый consumer — Bevy client.
-
-Target layering:
-
-```text
-algorithm/core
-    owns logical state, layouts, scheduling contracts, capability model
-         |
-         +--> portable backend (wgpu/WGSL)
-         `--> optional native backend (Vulkan/SPIR-V)
-                    |
-                    v
-             engine adapter (Bevy)
-                    |
-                    v
-               game/client
-```
-
-Правила:
-
-- core public API не возвращает `wgpu::Device`, `wgpu::Buffer`, Bevy `Entity`, `RenderWorld` и platform handles;
-- backend trait описывает semantic operations/resources, а не является thin rename конкретного API;
-- native backend не должен протекать в domain/gameplay code;
-- engine adapter может быть удалён/заменён без переписывания logical algorithm;
-- capability checks предпочтительнее vendor checks;
-- native fast path обязан иметь portable fallback и repeatable benchmark;
-- shader/kernel specialization допустима при одинаковых observable semantics.
-
-Первый concrete subsystem с этим контрактом — `rcbt` для adaptive terrain (`docs/22_RCBT_GPU_TERRAIN.md`).
+It does not claim that the complete game loop, factory, thermal/structural
+failure, production persistence, internet multiplayer, or web client already
+exists. Those systems belong in the roadmap and design documents until their
+crate/API/test paths land in the workspace.

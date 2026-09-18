@@ -1,118 +1,70 @@
 # Bevy visual slice
 
-Текущий клиентский срез запускает отдельное окно Bevy 0.19 и показывает
-иерархическую карту всей design-системы. На старте клиент разбирает тот же
-`data/system.toml`, вызывает `SystemConfig::bake()` из `sim-core` и использует
-его `BakedEphemeris` для положений и периодов. Это ещё не сетевой
-authoritative snapshot из server runtime, но визуальный слой уже не содержит
-отдельной копии орбитальной математики.
+## Status
 
-## Что есть
+**Implemented prototype.** The client is a Bevy 0.19 application that reads the
+same design system as the baker and uses `BakedEphemeris` for body positions and
+periods. It is not yet a networked production client, but the default local
+path already consumes snapshots from an embedded authoritative server process.
 
-- тёмная 3D-сцена с процедурным детерминированным звёздным полем;
-- все 22 физических тела из baked descriptor: Asterion A/B/C, пять планет,
-  луны и малые тела; `system_barycenter` и `bc_barycenter` остаются
-  координатными якорями без фальшивого радиуса;
-- базовые текстуры крупных миров: Khepri, Nereid, Thessa, Pelagos, Borea,
-  Orthea, Vesper и Janus; малые тела используют согласованные процедурные
-  PBR-материалы;
-- подписи тел, цветовые группы орбит и вложенная иерархия `parent` из
-  ephemeris;
-- навигационный target-слой: выбор тела клавишами `Tab`/`Shift+Tab`, кликом
-  мыши или жёлтым маркером; выбор не меняет authoritative map focus;
-- орбитальные линии для всех видимых `KeplerOrbit` с их
-  eccentricity/inclination, включая B/C и вложенные луны;
-- пять рабочих локальных режимов поверх полного обзора: Asterion A, Nereid,
-  Orthea, Vesper и B/C binary;
-- отдельная шкала расстояний (`1u = 125 000 km`) и нелинейная шкала радиусов
-  только для читаемости, явно показанная в HUD;
-- плавное simulation time: на скорости `1x` проходит один симуляционный час
-  за одну реальную секунду;
-- bloom, тонемаппинг, направленный свет и детерминированное звёздное поле;
-- детерминированное вращение тел из baked metadata; луны с `tidal_lock` держат
-  один меридиан направленным на родителя;
-- HUD с эпохой, временем симуляции и текущим режимом.
-- локальный Bevy Remote Protocol (BRP) для dev-инспекции сущностей, скриншотов,
-  ввода и диагностики; тела названы через `Name`, поэтому их можно находить по
-  `thessa`, `nereid` и другим идентификаторам.
+## Current features
 
-## Запуск
+- dark 3D hierarchical system map with deterministic star field;
+- physical design bodies and barycentric coordinate anchors;
+- checked-in textures and procedural PBR material fallbacks;
+- body labels, parent hierarchy, orbit lines, and target selection;
+- full-system overview plus local Asterion A, Nereid, Orthea, Vesper, and B/C
+  binary modes;
+- explicit map scale and readable visual radius scaling;
+- smooth simulation-time display and map camera navigation;
+- atmosphere optics shared with the `thessa-atmosphere` crate;
+- pilot scene with X-15 visual asset, navball/PFD, flight HUD, terrain, water,
+  performance overlay, and flight tracing;
+- streamed rocky terrain tiles with parent retention during refinement;
+- raster water reflection baseline and optional graphics-setting resolution;
+- render-local anchoring so large barycentric coordinates do not jitter.
 
-Для Arch Linux с системным Rust:
+## Coordinate contract
+
+Authoritative positions remain `f64` SI values from the simulation/server. The
+client converts them to a render-local frame near the camera or selected body.
+`bevy::Transform` is visual output only. Visual radius exaggeration is allowed
+for map readability and blends toward true scale near the camera.
+
+The client interpolates visual poses between snapshots. HUD telemetry and
+control decisions retain the authoritative metadata and are not recomputed
+from the interpolated transform.
+
+## Launch
 
 ```bash
-PATH=/usr/bin:/bin cargo run -p thessa-client
+cargo run -p thessa-client
+cargo run -p thessa-client -- --local
 ```
 
-Для подключения внешнего MCP-моста один раз установите dev-инструмент:
+The regular path starts a local server process and communicates over framed
+stdio. `--local` is a legacy diagnostic path that steps the authority in the
+client process.
+
+## Known limits
+
+- the visible system uses design-target analytic ephemerides;
+- full online multiplayer, authentication, persistent saves, and production
+  interest management are not implemented;
+- the authoritative terrain contact boundary is spherical/sampled even though
+  the client can render richer generated terrain;
+- atmosphere, water, clouds, and RT effects are visual reduced-order systems;
+- rendering backends must continue to go through Bevy/wgpu abstractions;
+- a WASM/WebGPU client target is future work.
+
+## Verification
+
+Client tests cover render-frame mapping, body selection, map modes, visual
+radius blending, camera anchoring, atmosphere material data, terrain streaming,
+water cubemaps, pilot frames, navball projection, and X-15 axis/orientation
+contracts.
 
 ```bash
-PATH=/usr/bin:/bin cargo install bevy_brp_mcp --version 0.22.5 --locked
+cargo test -p thessa-client
+cargo test --workspace
 ```
-
-Клиент добавляет `BrpExtrasPlugin` и Bevy Remote на локальном порту `15702`.
-Мост умеет использовать BRP для поиска сущностей, чтения компонентов,
-снимков окна, отправки клавиш/мыши и диагностики. Это только инструментальная
-зависимость клиентского приложения и не попадает в `sim-core`/runtime crates.
-
-Управление в окне:
-
-- `Space` — пауза;
-- `↑/↓` — масштаб времени от `0.125x` до `32x`;
-- `ПКМ + drag` — вращение карты вокруг текущего фокуса, как в KSP;
-- `СКМ + drag` — сдвиг карты (панорамирование);
-- колесо мыши — приближение и отдаление вокруг выбранного тела, если включён
-  режим frame/follow;
-- `0` — полный system overview;
-- `1` — Asterion A и его планеты;
-- `2` — Nereid и его resonant moon chain;
-- `3` — Orthea и Koro/Mira/Dey;
-- `4` — Vesper и Skadi/Mote;
-- `5` — B/C binary, Janus и Mora;
-- `Tab` — выбрать следующее видимое физическое тело и автоматически
-  центрировать карту;
-- `Shift+Tab` — выбрать предыдущее тело;
-- `Enter` — вернуть камеру к выбранному телу без смены масштаба;
-- `LMB` — выбрать тело под курсором;
-- `Q/E` — вращение камеры вокруг системы;
-- `R/F` — наклон камеры;
-- `W/S` — приближение и отдаление;
-- `T` — возврат к эпохе;
-- `Home` — сброс камеры.
-
-После `Enter`, двойного клика или выбора через `Tab` камера следует за
-движущимся выбранным телом: зум и вращение сохраняют этот якорь, а `СКМ + drag`
-намеренно отпускает его для свободной панорамы.
-
-Для текстурных сфер сохранено явное соглашение адаптера: у Bevy UV-сферы
-текстурный полюс находится на локальной оси `Z`, поэтому visual transform
-сначала совмещает её с физической вертикалью `Y-up`, а уже затем применяет
-spin/tilt. Это не меняет `sim-core` reference frame и не поворачивает сами
-орбиты.
-
-Полный обзор сохраняет реальные относительные позиции из `BakedEphemeris`, но
-использует увеличенный предел камеры и readability curve для радиусов. Локальные
-режимы меняют только focus/visibility и масштаб камеры; authoritative `f64`
-state в engine не изменяется.
-
-## Известные ограничения
-
-- texture maps — временные ImageGen prototype assets, не canon surface science;
-- периоды вращения планет пока design targets; для тел без заданного spin
-  используется детерминированный fallback, а tidal locking ориентирует только
-  визуальный body mesh;
-- lighting, eclipses, planetshine и atmospheric shells пока представлены
-  базовым directional light/material model;
-- render labels и radius readability не являются физическим масштабом;
-- серверный authoritative snapshot и terrain/surface layers пока не подключены;
-- текущий Codex-сеанс не подхватывает новые MCP-серверы динамически: после
-  установки моста его нужно добавить в конфигурацию хоста и перезапустить
-  MCP-клиент.
-
-## Следующий шаг
-
-Следующий шаг — вынести render model (`CelestialBodySnapshot`, orbit trail и
-labels) в отдельный client-facing adapter и заменить локально встроенный
-`include_str!` на версионированный runtime descriptor. После этого сервер
-сможет отдавать тот же snapshot клиенту, а trajectory overlays будут
-показывать уже положение корабля поверх этой карты.

@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license = "MIT"
 publish = false
-description = "Bench-only safe wrapper over the vendored upstream libcbt (never linked into the game runtime)"
+description = "Safe optional runtime adapter over the vendored upstream libcbt"
 
 [dependencies]
 

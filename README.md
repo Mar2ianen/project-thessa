@@ -214,8 +214,10 @@ Start here:
     boundary and replacement gates.
 11. [`docs/42_EPHEMERIS_RESIDUAL_STORAGE.md`](docs/42_EPHEMERIS_RESIDUAL_STORAGE.md)
     — bounded residual compression for ephemeris/gravity caches.
-12. [`docs/05_ROADMAP.md`](docs/05_ROADMAP.md) — dependency-ordered future work.
-13. [`CHANGELOG.md`](CHANGELOG.md) — notable changes.
+12. [`docs/43_AERO_COEFFICIENT_RESIDUAL_STORAGE.md`](docs/43_AERO_COEFFICIENT_RESIDUAL_STORAGE.md)
+    — bounded residual storage for large aerodynamic coefficient fields.
+13. [`docs/05_ROADMAP.md`](docs/05_ROADMAP.md) — dependency-ordered future work.
+14. [`CHANGELOG.md`](CHANGELOG.md) — notable changes.
 
 ADRs live in [`docs/adr/`](docs/adr/). Design-only documents are labelled as
 vision, proposal, or future work; implemented behavior is described in the

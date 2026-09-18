@@ -320,12 +320,38 @@ impl AeroResidualTable {
     /// Sample with the same bracketing/clamping and bilinear order as the
     /// canonical `AeroCoefficientTable`.
     pub fn sample(&self, mach: f64, alpha_rad: f64) -> AeroCoefficients {
+        self.sample_with_error(mach, alpha_rad).0
+    }
+
+    /// Sample plus a conservative local coefficient-error envelope.
+    ///
+    /// Bilinear interpolation is a convex combination of its four decoded
+    /// grid points, so the interpolated error in each coefficient cannot
+    /// exceed the componentwise maximum bound of those four source tiles.
+    /// This is tighter than `max_error()` when only a small sharp region
+    /// forced high-error/Raw64 choices elsewhere in the table.
+    pub fn sample_with_error(
+        &self,
+        mach: f64,
+        alpha_rad: f64,
+    ) -> (AeroCoefficients, AeroCoefficientError) {
         let (mach_lo, mach_hi, mach_t) = bracket(&self.mach_grid, mach);
         let (alpha_lo, alpha_hi, alpha_t) = bracket(&self.alpha_grid_rad, alpha_rad);
         let at = |mi: usize, ai: usize| self.decode_grid_point(mi, ai);
         let low = interpolate_coefficients(at(mach_lo, alpha_lo), at(mach_lo, alpha_hi), alpha_t);
         let high = interpolate_coefficients(at(mach_hi, alpha_lo), at(mach_hi, alpha_hi), alpha_t);
-        interpolate_coefficients(low, high, mach_t)
+        let sample = interpolate_coefficients(low, high, mach_t);
+
+        let mut error = AeroCoefficientError::default();
+        for (mi, ai) in [
+            (mach_lo, alpha_lo),
+            (mach_lo, alpha_hi),
+            (mach_hi, alpha_lo),
+            (mach_hi, alpha_hi),
+        ] {
+            error = error.component_max(self.tile_for_grid_point(mi, ai).error);
+        }
+        (sample, error)
     }
 
     /// Worst grid-point coefficient error across all tiles.
@@ -366,11 +392,14 @@ impl AeroResidualTable {
         }
     }
 
-    fn decode_grid_point(&self, mach_index: usize, alpha_index: usize) -> AeroCoefficients {
+    fn tile_for_grid_point(&self, mach_index: usize, alpha_index: usize) -> &AeroResidualTile {
         let tile_mach = mach_index / AERO_RESIDUAL_TILE_EDGE;
         let tile_alpha = alpha_index / AERO_RESIDUAL_TILE_EDGE;
-        let tile_index = tile_mach * self.tile_alpha_count + tile_alpha;
-        let tile = &self.tiles[tile_index];
+        &self.tiles[tile_mach * self.tile_alpha_count + tile_alpha]
+    }
+
+    fn decode_grid_point(&self, mach_index: usize, alpha_index: usize) -> AeroCoefficients {
+        let tile = self.tile_for_grid_point(mach_index, alpha_index);
         let local_mach = mach_index - tile.mach_start;
         let local_alpha = alpha_index - tile.alpha_start;
         let local_index = local_mach * tile.alpha_len + local_alpha;
@@ -724,16 +753,16 @@ mod tests {
         let source = table_from(13, 11, nonlinear_coefficients);
         let packed =
             AeroResidualTable::encode(&source, AeroResidualBudget::uniform(1.0e-4)).unwrap();
-        let error = packed.max_error();
 
         for i in 0..97 {
             let mach = -0.1 + i as f64 * 0.027;
             let alpha = -0.6 + (i * 37 % 101) as f64 * 0.012;
-            assert_coeff_error_le(
-                packed.sample(mach, alpha),
-                source.sample(mach, alpha),
-                error,
-            );
+            let (sample, local_error) = packed.sample_with_error(mach, alpha);
+            assert_coeff_error_le(sample, source.sample(mach, alpha), local_error);
+            assert!(local_error.lift <= packed.max_error().lift);
+            assert!(local_error.drag <= packed.max_error().drag);
+            assert!(local_error.side_force <= packed.max_error().side_force);
+            assert!(local_error.pitching_moment <= packed.max_error().pitching_moment);
         }
     }
 
@@ -746,12 +775,7 @@ mod tests {
             for alpha in 0..source.alpha_grid_rad.len() {
                 let got = packed.grid_sample(mach, alpha).unwrap();
                 let expected = source.samples[mach * source.alpha_grid_rad.len() + alpha];
-                if got != expected {
-                    let tile = &packed.tiles[(mach / AERO_RESIDUAL_TILE_EDGE)
-                        * packed.tile_alpha_count
-                        + alpha / AERO_RESIDUAL_TILE_EDGE];
-                    assert_ne!(tile.codec, AeroResidualCodec::Raw64);
-                }
+                assert_eq!(got, expected);
             }
         }
     }

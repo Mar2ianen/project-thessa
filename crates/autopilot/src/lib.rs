@@ -17,7 +17,9 @@ use thessa_flight_control::{
 use thessa_sim_core::SimTime;
 
 pub mod ascent;
+pub mod execute;
 pub mod landing;
+pub mod rendezvous;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct NodeId(pub u32);
@@ -257,6 +259,12 @@ pub enum GraphNodeConfig {
     LandingPhase {
         phase: landing::LandingPhase,
     },
+    ExecutePhase {
+        phase: execute::ExecutePhase,
+    },
+    RendezvousPhase {
+        phase: rendezvous::RendezvousPhase,
+    },
 }
 
 impl GraphNodeConfig {
@@ -289,6 +297,15 @@ impl GraphNodeConfig {
                 }
                 _ => Ok(()),
             },
+            Self::ExecutePhase { phase } => match phase {
+                execute::ExecutePhase::Burn { delta_v_mps, .. }
+                    if delta_v_mps.iter().any(|v| !v.is_finite()) =>
+                {
+                    Err("execute burn delta-v must be finite".into())
+                }
+                _ => Ok(()),
+            },
+            Self::RendezvousPhase { .. } => Ok(()),
             _ => Ok(()),
         }
     }

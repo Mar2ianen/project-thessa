@@ -42,6 +42,7 @@
 //! assert_eq!(back.decode(), field);
 //! ```
 
+pub mod alloc;
 pub mod codec;
 pub mod color;
 pub mod fixtures;
@@ -50,8 +51,10 @@ pub mod metrics;
 pub mod mips;
 pub mod pgm;
 pub mod residency;
+pub mod sample;
 pub mod wgsl;
 
+pub use alloc::{AllocError, SlabAllocator, SlabMove, SlabStats};
 pub use codec::{CodecError, EncodeMode, EncodedBlock, EncodedPage, MicroCodec, ScalarField};
 pub use color::{ColorBudget, ColorField, ColorPage};
 pub use height::{
@@ -61,3 +64,4 @@ pub use height::{
 pub use metrics::{ErrorStats, LinearErrorStats, measure, measure_linear, srgb_to_linear};
 pub use mips::{MipChain, downsample_box};
 pub use residency::{CacheTelemetry, DirtyRange, FlushPayload, ResidencyCache, ResidencyError};
+pub use sample::{sample_bilinear, sample_rounded};

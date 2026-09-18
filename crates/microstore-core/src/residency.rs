@@ -429,6 +429,13 @@ impl ResidencyCache {
     pub fn keys(&self) -> Vec<u64> {
         self.slots.keys().copied().collect()
     }
+
+    /// Peek at a resident page without touching LRU or hit/miss counters.
+    /// Drivers use this for read-only reconciliation (allocator sync,
+    /// invariant checks); gameplay lookups go through [`ResidencyCache::get`].
+    pub fn get_ref(&self, key: u64) -> Option<&EncodedPage> {
+        self.slots.get(&key).map(|slot| &slot.page)
+    }
 }
 
 #[cfg(test)]

@@ -65,6 +65,14 @@ Implementation status (branch `feat/microstorage-phase-a`):
   backend applying the table first); CPU mip chains as plain page
   vectors (8-level 128x128 chain = 1.32x the base page, geometric
   series made explicit; GPU mip sampling stays open).
+- Second follow-up: slab allocator (first-fit, realloc grow/move/shrink,
+  coalescing, deterministic slide-down compaction, `check_invariants`)
+  with a 1500-step cache+allocator integration workload asserting
+  cross-structure invariants after every op; GPU scattered-layout decode
+  (allocator offsets, fragmented buffer) bit-exact on hardware; GPU mip
+  chain bit-exact level by level; packed sample-time bilinear filtering
+  at 2.7-3.0 M samples/s with zero observed drift vs the CPU mirror
+  (tolerance: one code level).
 
 This document defines a reusable microscaled storage layer for render-side and
 streamed surface data. The immediate target is terrain material pages. Height

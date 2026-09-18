@@ -186,6 +186,150 @@ pub fn upload_size(page: &EncodedPage) -> MicrostoreUpload {
     }
 }
 
+/// Box-downsample kernel over u32-per-texel buffers: one thread per
+/// destination texel averages a clamped 2x2 quad with `(a+b+c+d+2)/4`
+/// integer math, bit-exact with [`crate::mips`] box filtering.
+/// Operates on decoded (not packed) data: the chain is
+/// decode -> mip -> sample, each stage independently testable.
+pub const MICROSTORE_MIP_WGSL: &str = r#"
+struct MipParams {
+    src_w: u32,
+    src_h: u32,
+    dst_w: u32,
+    dst_h: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: MipParams;
+@group(0) @binding(1) var<storage, read> src_texels: array<u32>;
+@group(0) @binding(2) var<storage, read_write> dst_texels: array<u32>;
+
+@compute @workgroup_size(64)
+fn mip_downsample(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = gid.x;
+    let count = params.dst_w * params.dst_h;
+    if (t >= count) {
+        return;
+    }
+    let dx = t % params.dst_w;
+    let dy = t / params.dst_w;
+    let sx = min(dx * 2u + 1u, params.src_w - 1u);
+    let sy = min(dy * 2u + 1u, params.src_h - 1u);
+    let x0 = dx * 2u;
+    let y0 = dy * 2u;
+    let a = src_texels[y0 * params.src_w + x0];
+    let b = src_texels[y0 * params.src_w + sx];
+    let c = src_texels[sy * params.src_w + x0];
+    let d = src_texels[sy * params.src_w + sx];
+    dst_texels[t] = (a + b + c + d + 2u) / 4u;
+}
+"#;
+
+/// True sample-time kernel: normalized UVs in, filtered bytes out. Each
+/// thread decodes its four neighbours straight from the packed page
+/// (offset table + block headers, no expanded cache) and bilinearly
+/// mixes them in f32.
+///
+/// The decode logic duplicates `decode_page` per sample on purpose: that
+/// duplication IS the sample-time access pattern under test. CPU mirror:
+/// [`crate::sample_bilinear`]. Outputs round to bytes; expect at most one
+/// code level of f32-vs-f64 rounding drift against the CPU mirror.
+/// True sample-time kernel: normalized UVs in, filtered bytes out. Each
+/// thread decodes its four neighbours straight from the packed page
+/// (offset table + block headers, no expanded cache) and bilinearly
+/// mixes them in f32.
+///
+/// The decode logic duplicates `decode_page` per sample on purpose: that
+/// duplication IS the sample-time access pattern under test. CPU mirror:
+/// [`crate::sample_bilinear`]. Outputs round to bytes; expect at most one
+/// code level of f32-vs-f64 rounding drift against the CPU mirror.
+pub const MICROSTORE_SAMPLE_WGSL: &str = r#"
+struct Params {
+    width: u32,
+    height: u32,
+    blocks_x: u32,
+    blocks_y: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> page_words: array<u32>;
+@group(0) @binding(2) var<storage, read> block_base: array<u32>;
+@group(0) @binding(3) var<storage, read> sample_uv: array<vec2<f32>>;
+@group(0) @binding(4) var<storage, read_write> out_texels: array<u32>;
+
+fn load_byte(byte_index: u32) -> u32 {
+    return (page_words[byte_index / 4u] >> ((byte_index % 4u) * 8u)) & 0xFFu;
+}
+
+fn decode_texel(tx: u32, ty: u32) -> u32 {
+    let bx = tx / 4u;
+    let by = ty / 4u;
+    let lx = tx % 4u;
+    let ly = ty % 4u;
+    let base = block_base[by * params.blocks_x + bx];
+    let tag = load_byte(base);
+    if (tag > 4u) {
+        return 0xDEADu;
+    }
+    let offset = load_byte(base + 1u);
+    if (tag == 0u) {
+        return load_byte(base + 3u + ly * 4u + lx);
+    }
+    if (tag == 1u) {
+        return min(offset + load_byte(base + 3u + ly * 4u + lx), 255u);
+    }
+    let scale = load_byte(base + 2u);
+    if (tag == 2u) {
+        let cell = ly * 4u + lx;
+        let packed = load_byte(base + 3u + cell / 2u);
+        var q = packed & 15u;
+        if (cell % 2u == 1u) {
+            q = packed >> 4u;
+        }
+        return min(offset + (q * scale + 7u) / 15u, 255u);
+    }
+    if (tag == 3u) {
+        let cell = ly * 4u + lx;
+        let bit = cell * 6u;
+        let byte = bit / 8u;
+        let shift = bit % 8u;
+        let lo = load_byte(base + 3u + byte);
+        let hi = load_byte(base + 3u + byte + 1u);
+        let q = ((lo >> shift) | (hi << (8u - shift))) & 63u;
+        return min(offset + (q * scale + 31u) / 63u, 255u);
+    }
+    let cell = ly * 4u + lx;
+    let packed = load_byte(base + 3u + cell / 4u);
+    let q = (packed >> ((cell % 4u) * 2u)) & 3u;
+    return min(offset + (q * scale + 1u) / 3u, 255u);
+}
+
+@compute @workgroup_size(64)
+fn sample_packed(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let s = gid.x;
+    if (s >= arrayLength(&sample_uv)) {
+        return;
+    }
+    let w = f32(params.width);
+    let h = f32(params.height);
+    let uv = sample_uv[s];
+    let x = clamp(uv.x, 0.0, 1.0) * (w - 1.0);
+    let y = clamp(uv.y, 0.0, 1.0) * (h - 1.0);
+    let x0 = u32(floor(x));
+    let y0 = u32(floor(y));
+    let x1 = min(x0 + 1u, params.width - 1u);
+    let y1 = min(y0 + 1u, params.height - 1u);
+    let fx = x - f32(x0);
+    let fy = y - f32(y0);
+    let a = f32(decode_texel(x0, y0));
+    let b = f32(decode_texel(x1, y0));
+    let c = f32(decode_texel(x0, y1));
+    let d = f32(decode_texel(x1, y1));
+    let mixed = a * (1.0 - fx) * (1.0 - fy) + b * fx * (1.0 - fy)
+        + c * (1.0 - fx) * fy + d * fx * fy;
+    out_texels[s] = u32(mixed + 0.5);
+}
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +400,11 @@ mod tests {
         assert!(MICROSTORE_DECODE_WGSL.contains("@workgroup_size(64)"));
         // No vendor-specific or subgroup constructs in the baseline.
         assert!(!MICROSTORE_DECODE_WGSL.contains("subgroup"));
+        assert!(MICROSTORE_MIP_WGSL.contains("fn mip_downsample"));
+        assert!(MICROSTORE_SAMPLE_WGSL.contains("fn sample_packed"));
+        for src in [MICROSTORE_MIP_WGSL, MICROSTORE_SAMPLE_WGSL] {
+            assert!(src.contains("@workgroup_size(64)"));
+            assert!(!src.contains("subgroup"));
+        }
     }
 }

@@ -771,6 +771,8 @@ fn lerp(low: f64, high: f64, t: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AeroCase, AeroConfig, AeroEnvironment, AeroGeometry, AeroModel, AeroPanel, AeroState, PanelAeroModel};
+    use glam::DVec3;
 
     fn table_from(
         mach_count: usize,
@@ -908,6 +910,56 @@ mod tests {
                 error,
             );
         }
+    }
+
+    #[test]
+    fn panel_model_can_sample_residual_table_without_expansion() {
+        let source = table_from(25, 25, nonlinear_coefficients);
+        let packed =
+            AeroResidualTable::encode(&source, AeroResidualBudget::uniform(1.0e-4)).unwrap();
+
+        let config = AeroConfig {
+            control_effectiveness: 0.0,
+            side_force_slope_per_rad: 0.0,
+            roll_damping_coefficient: 0.0,
+            pitch_damping_coefficient: 0.0,
+            yaw_damping_coefficient: 0.0,
+            ..AeroConfig::default()
+        };
+        let exact_model = PanelAeroModel::from_table(config, source.clone()).unwrap();
+        let packed_model = PanelAeroModel::from_residual_table(config, packed.clone()).unwrap();
+
+        let panel = AeroPanel::flat_plate(DVec3::new(2.0, 0.0, 0.0), 2.4, 1.3).unwrap();
+        let area = panel.area_m2;
+        let chord = panel.chord_m;
+        let moment_arm = panel.center_of_pressure_body_m.length();
+        let geometry = AeroGeometry::new(vec![panel]).unwrap();
+        let environment = AeroEnvironment::standard_sea_level();
+        let case = AeroCase::new(
+            AeroState::new(DVec3::new(220.0, 0.0, -24.0), DVec3::ZERO),
+            environment,
+            geometry,
+        )
+        .unwrap();
+
+        let exact = exact_model.evaluate_detailed(&case).unwrap();
+        let got = packed_model.evaluate_detailed(&case).unwrap();
+        let exact_load = &exact.panel_loads.as_ref().unwrap()[0];
+        let (_, bound) = packed
+            .sample_with_physical_bound(
+                exact_load.mach,
+                exact_load.angle_of_attack_rad,
+                exact_load.dynamic_pressure_pa,
+                area,
+                chord,
+                moment_arm,
+            )
+            .unwrap();
+
+        assert!((got.force_body_n - exact.force_body_n).length() <= bound.force_n + 1.0e-9);
+        assert!((got.moment_body_nm - exact.moment_body_nm).length() <= bound.moment_nm + 1.0e-9);
+        assert!(packed_model.residual_coefficient_table().is_some());
+        assert!(packed_model.coefficient_table.is_none());
     }
 
     #[test]

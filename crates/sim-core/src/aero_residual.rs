@@ -852,7 +852,10 @@ fn lerp(low: f64, high: f64, t: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AeroCase, AeroConfig, AeroEnvironment, AeroGeometry, AeroModel, AeroPanel, AeroState, PanelAeroModel};
+    use crate::{
+        AeroCase, AeroConfig, AeroEnvironment, AeroGeometry, AeroModel, AeroPanel, AeroState,
+        PanelAeroModel,
+    };
     use glam::DVec3;
 
     fn table_from(
@@ -1118,7 +1121,10 @@ mod tests {
             (AeroResidualCodec::Residual4, [-7, -1, 0, 7]),
             (AeroResidualCodec::Residual6, [-31, -1, 0, 31]),
             (AeroResidualCodec::Residual8, [-127, -1, 0, 127]),
-            (AeroResidualCodec::Residual16, [i16::MIN + 1, -1, 0, i16::MAX]),
+            (
+                AeroResidualCodec::Residual16,
+                [i16::MIN + 1, -1, 0, i16::MAX],
+            ),
         ] {
             let mut payload = Vec::new();
             encode_quantized_sample(&mut payload, codec, values);

@@ -4839,3 +4839,76 @@ fn prograde_steering_at_rest_is_an_error() {
         .is_err()
     );
 }
+
+#[test]
+fn sensitivity_matches_finite_difference_jacobian() {
+    // Variational STM vs brute-force perturbations on a half-period LEO
+    // arc: columns of Sr must equal d(r_end)/d(v0) within the
+    // finite-difference truncation error. The analytic STM is the more
+    // accurate side; the tolerance budgets the FD error, not the STM.
+    let mu = 3.986_004_418e14;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let radius = 7_000_000.0;
+    let initial = TestParticleState {
+        position: DVec3::new(radius, 0.0, 0.0),
+        velocity: DVec3::new(0.0, (mu / radius).sqrt(), 500.0),
+    };
+    let config = AdaptiveIntegratorConfig {
+        initial_step_s: 30.0,
+        min_step_s: 1.0e-6,
+        max_step_s: 300.0,
+        absolute_position_tolerance_m: 1.0e-4,
+        absolute_velocity_tolerance_mps: 1.0e-7,
+        relative_tolerance: 1.0e-11,
+        max_steps: 100_000,
+        dynamical_eta: None,
+    };
+    let duration = 3_000.0;
+    let sens = propagate_adaptive_sensitivity(
+        &field,
+        initial,
+        VelocitySensitivity::identity(),
+        SimTime::EPOCH,
+        duration,
+        config,
+    )
+    .expect("sensitivity propagation");
+    // The augmented trajectory must match the plain one bit-for-bit: same
+    // coefficients, same step logic, same error control.
+    let plain =
+        propagate_adaptive(&field, initial, SimTime::EPOCH, duration, config)
+            .expect("plain propagation");
+    assert_eq!(sens.state, plain.state);
+    assert_eq!(sens.stats, plain.stats);
+    // Columns of Sr vs central differences (O(h^2) truncation, so the
+    // comparison budgets the FD error, not the STM).
+    let h = 0.5;
+    for (axis, column) in [DVec3::X, DVec3::Y, DVec3::Z]
+        .iter()
+        .zip(sens.sensitivity.position.iter())
+    {
+        let plus = TestParticleState {
+            position: initial.position,
+            velocity: initial.velocity + *axis * h,
+        };
+        let minus = TestParticleState {
+            position: initial.position,
+            velocity: initial.velocity - *axis * h,
+        };
+        let end_plus = propagate_adaptive(&field, plus, SimTime::EPOCH, duration, config)
+            .expect("perturbed propagation")
+            .state
+            .position;
+        let end_minus = propagate_adaptive(&field, minus, SimTime::EPOCH, duration, config)
+            .expect("perturbed propagation")
+            .state
+            .position;
+        let fd = (end_plus - end_minus) / (2.0 * h);
+        let scale = fd.length().max(1.0);
+        assert!(
+            (*column - fd).length() / scale < 1.0e-7,
+            "stm column vs fd mismatch: {column:?} vs {fd:?}"
+        );
+    }
+}

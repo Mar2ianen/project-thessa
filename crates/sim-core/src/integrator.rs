@@ -920,6 +920,279 @@ pub fn propagate_adaptive_with_burns(
     })
 }
 
+/// Sensitivity of the trajectory to its initial velocity (the 3-DOF
+/// control of a midcourse burn): columns of `position`/`velocity` are
+/// ∂(r, v)/∂v0_j. Start from [`VelocitySensitivity::identity`] at the burn
+/// point (`Sr = 0`, `Sv = I`); the arrival `position` matrix is then the
+/// miss Jacobian for differential correction — one augmented propagation
+/// per Newton iteration instead of nominal plus three finite-difference
+/// perturbations.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VelocitySensitivity {
+    pub position: [DVec3; 3],
+    pub velocity: [DVec3; 3],
+}
+
+impl VelocitySensitivity {
+    pub fn identity() -> Self {
+        Self {
+            position: [DVec3::ZERO; 3],
+            velocity: [DVec3::X, DVec3::Y, DVec3::Z],
+        }
+    }
+}
+
+/// Augmented trajectory plus sensitivity at the end of
+/// [`propagate_adaptive_sensitivity`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SensitivityPropagation {
+    pub state: TestParticleState,
+    pub sensitivity: VelocitySensitivity,
+    pub end_time: SimTime,
+    pub stats: IntegratorStats,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AugmentedDerivative {
+    state: Derivative,
+    sens_position: [DVec3; 3],
+    sens_velocity: [DVec3; 3],
+}
+
+fn augmented_derivative(
+    field: &GravityField<'_>,
+    state: TestParticleState,
+    sens: VelocitySensitivity,
+    time: SimTime,
+    frame: &mut EphemerisFrame,
+) -> Result<AugmentedDerivative, IntegratorError> {
+    let (acceleration, gradient) = field.gravity_with_gradient(state.position, time, frame)?;
+    let mut sens_velocity = [DVec3::ZERO; 3];
+    for (slot, column) in sens_velocity.iter_mut().zip(sens.position.iter()) {
+        *slot = gradient * *column;
+    }
+    Ok(AugmentedDerivative {
+        state: Derivative {
+            position: state.velocity,
+            velocity: acceleration,
+        },
+        sens_position: sens.velocity,
+        sens_velocity,
+    })
+}
+
+fn add_scaled_sens(
+    sens: VelocitySensitivity,
+    derivative: AugmentedDerivative,
+    scale: f64,
+) -> VelocitySensitivity {
+    let mut out = sens;
+    for i in 0..3 {
+        out.position[i] += derivative.sens_position[i] * scale;
+        out.velocity[i] += derivative.sens_velocity[i] * scale;
+    }
+    out
+}
+
+fn combine_augmented(
+    state: TestParticleState,
+    sens: VelocitySensitivity,
+    h: f64,
+    terms: &[(f64, AugmentedDerivative)],
+) -> (TestParticleState, VelocitySensitivity) {
+    let mut next_state = state;
+    let mut next_sens = sens;
+    for (coefficient, derivative) in terms {
+        next_state = add_scaled(next_state, derivative.state, h * *coefficient);
+        next_sens = add_scaled_sens(next_sens, *derivative, h * *coefficient);
+    }
+    (next_state, next_sens)
+}
+
+/// Variational twin of [`propagate_adaptive`]: the trajectory and its
+/// initial-velocity sensitivity ride the same Dormand–Prince steps (same
+/// step sequence logic, same FSAL reuse, same dynamical cap). The error
+/// controller watches the trajectory alone — sensitivity obeys the linear
+/// variational equation driven by that trajectory, so it needs no
+/// separate tolerance. Returns the end state plus the end sensitivity.
+pub fn propagate_adaptive_sensitivity(
+    field: &GravityField<'_>,
+    initial: TestParticleState,
+    sensitivity: VelocitySensitivity,
+    start_time: SimTime,
+    duration_s: f64,
+    config: AdaptiveIntegratorConfig,
+) -> Result<SensitivityPropagation, IntegratorError> {
+    validate_duration(duration_s)?;
+    validate_adaptive_config(config)?;
+    let mut state = initial;
+    let mut sens = sensitivity;
+    let mut time = start_time;
+    let mut remaining = duration_s;
+    let mut step_s = config.initial_step_s.min(config.max_step_s);
+    let mut stats = IntegratorStats::default();
+    let mut frame = EphemerisFrame::new();
+    let cap_mus: Option<Vec<(f64, BodyId)>> = config.dynamical_eta.map(|_| field.cap_sources());
+    let mut cached_k1: Option<AugmentedDerivative> = None;
+
+    while remaining > 0.0 {
+        if stats.accepted_steps + stats.rejected_steps >= config.max_steps {
+            return Err(IntegratorError::MaxSteps);
+        }
+        let mut h = step_s.min(remaining);
+        if let (Some(eta), Some(sources)) = (config.dynamical_eta, cap_mus.as_ref()) {
+            h = h.min(dynamical_cap(
+                state.position,
+                frame.states(),
+                sources,
+                eta,
+                config.max_step_s,
+            ));
+        }
+        if h < config.min_step_s && remaining > config.min_step_s {
+            return Err(IntegratorError::StepUnderflow { step_s: h });
+        }
+        let (candidate, candidate_sens, error_state, used_k1, k7) =
+            augmented_dp_step(field, state, sens, time, h, cached_k1.take(), &mut frame)?;
+        let error = normalized_error(error_state, candidate, config);
+        if error <= 1.0 || h <= config.min_step_s {
+            if error > 1.0 {
+                return Err(IntegratorError::StepUnderflow { step_s: h });
+            }
+            state = candidate;
+            sens = candidate_sens;
+            time = time.offset(h);
+            remaining -= h;
+            stats.accepted_steps += 1;
+            step_s = next_step(h, error, config.max_step_s);
+            cached_k1 = Some(k7);
+        } else {
+            stats.rejected_steps += 1;
+            step_s = (h * (0.9 * error.powf(-0.2)).clamp(0.1, 0.5)).max(config.min_step_s);
+            cached_k1 = Some(used_k1);
+        }
+    }
+    Ok(SensitivityPropagation {
+        state,
+        sensitivity: sens,
+        end_time: time,
+        stats,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn augmented_stage(
+    field: &GravityField<'_>,
+    state: TestParticleState,
+    sens: VelocitySensitivity,
+    h: f64,
+    time: SimTime,
+    terms: &[(f64, AugmentedDerivative)],
+    frame: &mut EphemerisFrame,
+) -> Result<AugmentedDerivative, IntegratorError> {
+    let (next_state, next_sens) = combine_augmented(state, sens, h, terms);
+    augmented_derivative(field, next_state, next_sens, time, frame)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn augmented_dp_step(
+    field: &GravityField<'_>,
+    state: TestParticleState,
+    sens: VelocitySensitivity,
+    time: SimTime,
+    h: f64,
+    k1: Option<AugmentedDerivative>,
+    frame: &mut EphemerisFrame,
+) -> Result<
+    (
+        TestParticleState,
+        VelocitySensitivity,
+        TestParticleState,
+        AugmentedDerivative,
+        AugmentedDerivative,
+    ),
+    IntegratorError,
+> {
+    // FSAL: reuse the previous accepted step's last stage when the caller
+    // hands it in; otherwise evaluate. The returned `used_k1` lets the
+    // caller keep it across a rejected retry (same state and time).
+    let k1 = match k1 {
+        Some(k1) => k1,
+        None => augmented_derivative(field, state, sens, time, frame)?,
+    };
+    let k2 = augmented_stage(field, state, sens, h, time.offset(h * 1.0 / 5.0), &[(1.0 / 5.0, k1)], frame)?;
+    let k3 = augmented_stage(
+        field, state, sens, h, time.offset(h * 3.0 / 10.0),
+        &[(3.0 / 40.0, k1), (9.0 / 40.0, k2)], frame,
+    )?;
+    let k4 = augmented_stage(
+        field, state, sens, h, time.offset(h * 4.0 / 5.0),
+        &[(44.0 / 45.0, k1), (-56.0 / 15.0, k2), (32.0 / 9.0, k3)], frame,
+    )?;
+    let k5 = augmented_stage(
+        field, state, sens, h, time.offset(h * 8.0 / 9.0),
+        &[
+            (19372.0 / 6561.0, k1),
+            (-25360.0 / 2187.0, k2),
+            (64448.0 / 6561.0, k3),
+            (-212.0 / 729.0, k4),
+        ], frame,
+    )?;
+    let k6 = augmented_stage(
+        field, state, sens, h, time.offset(h),
+        &[
+            (9017.0 / 3168.0, k1),
+            (-355.0 / 33.0, k2),
+            (46732.0 / 5247.0, k3),
+            (49.0 / 176.0, k4),
+            (-5103.0 / 18656.0, k5),
+        ], frame,
+    )?;
+    let k7 = augmented_stage(
+        field, state, sens, h, time.offset(h),
+        &[
+            (35.0 / 384.0, k1),
+            (500.0 / 1113.0, k3),
+            (125.0 / 192.0, k4),
+            (-2187.0 / 6784.0, k5),
+            (11.0 / 84.0, k6),
+        ], frame,
+    )?;
+    let (fifth, fifth_sens) = combine_augmented(
+        state,
+        sens,
+        h,
+        &[
+            (35.0 / 384.0, k1),
+            (500.0 / 1113.0, k3),
+            (125.0 / 192.0, k4),
+            (-2187.0 / 6784.0, k5),
+            (11.0 / 84.0, k6),
+        ],
+    );
+    // Fourth-order companion for the error estimate: trajectory only.
+    // Sensitivity obeys the linear variational equation driven by that
+    // trajectory, so it inherits the step sequence without its own
+    // tolerance — no sensitivity error is estimated.
+    let fourth = combine(
+        state,
+        h,
+        &[
+            (5179.0 / 57600.0, k1.state),
+            (7571.0 / 16695.0, k3.state),
+            (393.0 / 640.0, k4.state),
+            (-92097.0 / 339200.0, k5.state),
+            (187.0 / 2100.0, k6.state),
+            (1.0 / 40.0, k7.state),
+        ],
+    );
+    let error = TestParticleState {
+        position: fifth.position - fourth.position,
+        velocity: fifth.velocity - fourth.velocity,
+    };
+    Ok((fifth, fifth_sens, error, k1, k7))
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Derivative {
     position: DVec3,

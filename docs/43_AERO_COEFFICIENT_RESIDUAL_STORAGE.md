@@ -17,6 +17,9 @@ Implementation status (branch `feat/aero-residual-prototype`):
   from the four contributing tile bounds; `AeroCoefficientError::physical_bound`
   converts it into conservative force and moment envelopes using
   q/S/c/moment-arm inputs;
+- `AeroPhysicalBudget` provides a conservative first policy for encoding from
+  declared worst-case force/moment limits by deriving one uniform coefficient
+  epsilon, then reusing the adaptive codec ladder;
 - `PanelAeroModel::from_residual_table` samples the packed table directly; the
   table-backed SIMD fast path correctly falls back to the scalar table oracle
   instead of expanding the table;
@@ -26,8 +29,8 @@ Implementation status (branch `feat/aero-residual-prototype`):
 - `aero_residual` benchmark reports storage density plus scalar
   decode/interpolation overhead on a 257x257 synthetic stall/transonic field.
 
-Still open: physical-budget-driven codec selection, AVX2/AVX-512 fused decode,
-real VLM/CFD fixtures, and higher-dimensional coefficient fields.
+Still open: channel-specific physical budget allocation, AVX2/AVX-512 fused
+decode, real VLM/CFD fixtures, and higher-dimensional coefficient fields.
 
 This document applies the same local-reference / bounded-residual principle used
 by surface microstorage and ephemeris residual storage to aerodynamic coefficient

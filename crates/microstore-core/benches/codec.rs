@@ -107,6 +107,78 @@ fn bench_color(size: u32) {
             worst_byte,
         );
     }
+
+    // Pluggable metric: same field, linear-light budget.
+    {
+        use thessa_microstore_core::ColorBudget;
+        let page = ColorPage::encode_with_budget(&field, ColorBudget::Linear(0.01));
+        let decoded = page.decode();
+        let linear = measure_linear(&field.channels, &decoded);
+        let started = Instant::now();
+        for _ in 0..ITERS {
+            let page = ColorPage::encode_with_budget(black_box(&field), ColorBudget::Linear(0.01));
+            black_box(page);
+        }
+        let enc_ms = started.elapsed().as_secs_f64() * 1000.0 / ITERS as f64;
+        println!(
+            "{:>10} {:>10.3} {:>10.3} {:>10.4} {:>10.4} {:>10.1}",
+            "lin0.01",
+            enc_ms,
+            page.bytes_per_texel(),
+            linear.max_abs,
+            linear.rms,
+            field
+                .channels
+                .iter()
+                .zip(decoded.iter())
+                .map(|(a, b)| measure(a, b).max_abs)
+                .fold(0.0f64, f64::max),
+        );
+    }
+}
+
+fn bench_mips(size: u32) {
+    // Full chain cost: build + adaptive encode + total bytes vs base.
+    let field = fixtures::noise(size, size, 0x51AB);
+    let chain = thessa_microstore_core::MipChain::build(&field, 8);
+    let started = Instant::now();
+    for _ in 0..ITERS {
+        let chain = thessa_microstore_core::MipChain::build(black_box(&field), 8);
+        let pages: Vec<_> = chain
+            .levels
+            .iter()
+            .map(|level| {
+                EncodedPage::encode(
+                    level,
+                    EncodeMode::Adaptive {
+                        max_abs_error: ADAPTIVE_BUDGET,
+                    },
+                )
+            })
+            .collect();
+        black_box(pages);
+    }
+    let ms = started.elapsed().as_secs_f64() * 1000.0 / ITERS as f64;
+    let pages: Vec<_> = chain
+        .levels
+        .iter()
+        .map(|level| {
+            EncodedPage::encode(
+                level,
+                EncodeMode::Adaptive {
+                    max_abs_error: ADAPTIVE_BUDGET,
+                },
+            )
+        })
+        .collect();
+    let total: usize = pages.iter().map(EncodedPage::encoded_bytes).sum();
+    println!(
+        "mips {} levels @ {size}x{size}: build+encode {:.3} ms, chain {total} B vs base {} B ({:.2}x)",
+        pages.len(),
+        ms,
+        pages[0].encoded_bytes(),
+        total as f64 / pages[0].encoded_bytes() as f64,
+    );
 }
 
 fn main() {
@@ -125,5 +197,6 @@ fn main() {
             },
         );
         bench_color(size);
+        bench_mips(size);
     }
 }

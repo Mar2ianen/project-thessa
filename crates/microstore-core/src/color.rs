@@ -9,7 +9,25 @@
 //! The error metric for color is linear-light (§5.1), not raw byte
 //! equality — see [`crate::metrics::measure_linear`].
 
-use crate::codec::{CodecError, EncodeMode, EncodedPage, ScalarField};
+use crate::codec::{
+    ADAPTIVE_LADDER, BLOCK_TEXELS, CodecError, EncodeMode, EncodedBlock, EncodedPage, MicroCodec,
+    ScalarField, block_texels, blocks_for_extent, decode_block, encode_block_for,
+};
+use crate::metrics::srgb_to_linear;
+
+/// Selection metric for adaptive color encoding.
+///
+/// Scalar adaptive (`EncodeMode::Adaptive`) always budgets in code levels.
+/// Color additionally offers linear-light budgets: a 2-level error near
+/// white is a far bigger visual error than the same 2 levels near black,
+/// so the honest color policy selects rungs in linear light.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ColorBudget {
+    /// Per-texel absolute error in sRGB code levels (matches scalar).
+    Levels(f64),
+    /// Per-texel absolute error in linear light (`0..=1`).
+    Linear(f64),
+}
 
 const COLOR_MAGIC: [u8; 4] = *b"MICC";
 const COLOR_VERSION: u8 = 1;
@@ -74,6 +92,34 @@ impl ColorPage {
                 EncodedPage::encode(g, mode),
                 EncodedPage::encode(b, mode),
             ],
+        }
+    }
+
+    /// Encode all channels with one adaptive budget.
+    ///
+    /// `Levels` behaves exactly like [`EncodeMode::Adaptive`]. `Linear`
+    /// selects rungs per block in linear light: each candidate block is
+    /// decoded and both sides are linearized before comparing, so bright
+    /// regions (where one code level spans more light) automatically get
+    /// finer rungs than dark ones at the same nominal budget.
+    pub fn encode_with_budget(field: &ColorField, budget: ColorBudget) -> Self {
+        match budget {
+            ColorBudget::Levels(max_abs_error) => {
+                Self::encode(field, EncodeMode::Adaptive { max_abs_error })
+            }
+            ColorBudget::Linear(max_abs_error) => {
+                let budget = max_abs_error.max(0.0);
+                let mut channels = Vec::with_capacity(3);
+                for plane in &field.channels {
+                    channels.push(encode_plane_linear(plane, budget));
+                }
+                let channels: [EncodedPage; 3] = channels.try_into().expect("three channels");
+                Self {
+                    width: field.width,
+                    height: field.height,
+                    channels,
+                }
+            }
         }
     }
 
@@ -173,6 +219,38 @@ impl ColorPage {
     }
 }
 
+/// Worst linear-light error of one candidate block against its source.
+fn linear_block_error(texels: [u8; BLOCK_TEXELS], candidate: &EncodedBlock) -> f64 {
+    let decoded = decode_block(candidate);
+    let mut worst = 0.0f64;
+    for (a, b) in texels.iter().zip(decoded.iter()) {
+        worst = worst.max((srgb_to_linear(*a) - srgb_to_linear(*b)).abs());
+    }
+    worst
+}
+
+/// Encode one plane with per-block linear-light rung selection.
+fn encode_plane_linear(plane: &ScalarField, budget: f64) -> EncodedPage {
+    let blocks_x = blocks_for_extent(plane.width);
+    let blocks_y = blocks_for_extent(plane.height);
+    let mut blocks = Vec::with_capacity((blocks_x * blocks_y) as usize);
+    for by in 0..blocks_y {
+        for bx in 0..blocks_x {
+            let texels = block_texels(plane, bx, by);
+            let mut pick = None;
+            for codec in ADAPTIVE_LADDER {
+                let candidate = encode_block_for(texels, codec);
+                if linear_block_error(texels, &candidate) <= budget {
+                    pick = Some(codec);
+                    break;
+                }
+            }
+            blocks.push(encode_block_for(texels, pick.unwrap_or(MicroCodec::Raw8)));
+        }
+    }
+    EncodedPage::from_blocks(plane.width, plane.height, blocks)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,6 +263,55 @@ mod tests {
             fixtures::gradient(width, height),
         ])
         .expect("fixture planes share extent")
+    }
+
+    #[test]
+    fn levels_budget_matches_scalar_adaptive() {
+        // Levels selection must be byte-identical to the scalar adaptive
+        // mode: same ladder, same budget, same tie-breaks.
+        let field = rgb_fixture(24, 24);
+        let a = ColorPage::encode_with_budget(&field, ColorBudget::Levels(2.0));
+        let b = ColorPage::encode(&field, EncodeMode::Adaptive { max_abs_error: 2.0 });
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn linear_budget_respected_on_real_albedo() {
+        use crate::height::thessa_albedo_coast;
+        let rgb = thessa_albedo_coast();
+        let field = ColorField::new(rgb).expect("planes");
+        let page = ColorPage::encode_with_budget(&field, ColorBudget::Linear(0.01));
+        let stats = measure_linear(&field.channels, &page.decode());
+        assert!(stats.max_abs <= 0.01, "linear {}", stats.max_abs);
+    }
+
+    #[test]
+    fn linear_and_levels_select_differently_on_bright_fields() {
+        // On bright ramps one code level spans more light, so a linear
+        // budget spends more bytes than the same-named levels budget.
+        let bright = ColorField::new([
+            fixtures::gradient(32, 32),
+            fixtures::gradient(32, 32),
+            fixtures::gradient(32, 32),
+        ])
+        .expect("planes");
+        let levels = ColorPage::encode_with_budget(&bright, ColorBudget::Levels(2.0));
+        let linear = ColorPage::encode_with_budget(&bright, ColorBudget::Linear(0.008));
+        assert!(linear.encoded_bytes() > levels.encoded_bytes());
+        let linear_stats = measure_linear(&bright.channels, &linear.decode());
+        assert!(linear_stats.max_abs <= 0.008);
+    }
+
+    #[test]
+    fn srgb_transfer_known_values() {
+        use crate::srgb_to_linear;
+        assert_eq!(srgb_to_linear(0), 0.0);
+        assert_eq!(srgb_to_linear(255), 1.0);
+        assert!((srgb_to_linear(128) - 0.2158).abs() < 1e-4);
+        // Continuous across the linear/gamma junction at 0.04045.
+        let below = srgb_to_linear(10);
+        let above = srgb_to_linear(11);
+        assert!((above - below).abs() < 0.01);
     }
 
     #[test]

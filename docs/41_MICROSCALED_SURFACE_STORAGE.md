@@ -57,6 +57,14 @@ Implementation status (branch `feat/microstorage-phase-a`):
   baked-format adoption stay blocked on a boundary strategy (lossless
   border strip or global-lattice references) plus material/lighting
   review of the normal-angle sensitivity.
+- Follow-up hardening (same branch): pluggable selection metric
+  (`ColorBudget::Levels` matches scalar adaptive byte-for-byte,
+  `ColorBudget::Linear` selects rungs in linear light and measurably
+  spends more bytes on bright ramps); `Relocated` flushes (changed
+  blocks + fresh table instead of full pages on rung changes, with the
+  backend applying the table first); CPU mip chains as plain page
+  vectors (8-level 128x128 chain = 1.32x the base page, geometric
+  series made explicit; GPU mip sampling stays open).
 
 This document defines a reusable microscaled storage layer for render-side and
 streamed surface data. The immediate target is terrain material pages. Height

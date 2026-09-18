@@ -83,17 +83,29 @@ fn layout_of(page: &EncodedPage) -> LayoutSig {
 /// What a [`ResidencyCache::flush`] hands to the backend.
 ///
 /// Block sizes are codec-dependent (R2 7 B .. Raw8 19 B), so a codec-rung
-/// or extent change shifts every later wire offset *and* the offset table.
-/// Per-block patches are only valid while the layout is unchanged;
-/// otherwise the whole page plus its table must go up together.
+/// change shifts every later wire offset *and* the offset table.
+/// Per-block patches are only valid while the layout is unchanged, so a
+/// rung change re-sends the changed blocks plus the whole new table
+/// instead of the full page: the backend applies the table first, then
+/// the patches at the new offsets. Only extent changes (new grid, new
+/// table size, every block dirty anyway) still need [`FlushPayload::Full`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FlushPayload {
-    /// Full page wire image plus the fresh block offset table. Required
-    /// after insert and after any layout change.
+    /// Full page wire image plus the fresh block offset table. Emitted
+    /// after insert (never uploaded before) and on extent changes.
     Full {
         /// `page.to_bytes()` snapshot.
         page_bytes: Vec<u8>,
         /// Fresh [`block_base_table`](crate::wgsl::block_base_table).
+        table: Vec<u32>,
+    },
+    /// Changed blocks plus the full new table, for codec-rung changes on
+    /// an unchanged grid. Cheaper than [`FlushPayload::Full`] whenever
+    /// fewer than all blocks changed.
+    Relocated {
+        /// Changed-block patches at new-layout offsets.
+        block_patches: Vec<DirtyRange>,
+        /// Fresh offset table (applies before the patches).
         table: Vec<u32>,
     },
     /// Wire-image patches, valid against the previously uploaded layout.
@@ -321,23 +333,52 @@ impl ResidencyCache {
 
     /// Drain pending changes for one page.
     ///
-    /// Returns [`FlushPayload::Full`] after insert and whenever the block
-    /// layout changed (codec-rung or extent change shifts every later wire
-    /// offset, so per-block patches would land on the wrong bytes);
-    /// otherwise returns [`FlushPayload::Incremental`] patches against the
-    /// previously uploaded layout. Refreshes LRU.
+    /// Returns [`FlushPayload::Full`] after insert and on extent changes,
+    /// [`FlushPayload::Relocated`] on codec-rung changes (changed blocks
+    /// plus the new table), and [`FlushPayload::Incremental`] patches
+    /// against the previously uploaded layout otherwise. Refreshes LRU.
     pub fn flush(&mut self, key: u64) -> Result<FlushPayload, ResidencyError> {
         let slot = self
             .slots
             .get_mut(&key)
             .ok_or(ResidencyError::NotResident(key))?;
         let layout = layout_of(&slot.page);
-        let layout_changed = slot.flushed.as_ref() != Some(&layout);
-        let payload = if layout_changed {
+        let grid_same = slot.flushed.as_ref().is_some_and(|old| {
+            old.width == layout.width
+                && old.height == layout.height
+                && old.blocks_x == layout.blocks_x
+                && old.blocks_y == layout.blocks_y
+        });
+        let payload = if slot.flushed.as_ref() != Some(&layout) && !grid_same {
+            // Never uploaded, or a new grid: everything goes up.
             let page_bytes = slot.page.to_bytes();
             let table = block_base_table(&slot.page);
             self.uploaded_bytes += page_bytes.len() as u64 + table.len() as u64 * 4;
             FlushPayload::Full { page_bytes, table }
+        } else if slot.flushed.as_ref() != Some(&layout) {
+            // Same grid, new rung mix: changed blocks at new offsets plus
+            // the fresh table (applies first on the backend).
+            let wire = slot.page.to_bytes();
+            let table = block_base_table(&slot.page);
+            let mut block_patches = Vec::with_capacity(slot.dirty.len());
+            for index in slot.dirty.drain(..) {
+                let block = &slot.page.blocks[index as usize];
+                let base = table[index as usize] as usize;
+                let len = 3 + block.codec.payload_len();
+                block_patches.push(DirtyRange {
+                    byte_offset: base as u32,
+                    bytes: wire[base..base + len].to_vec(),
+                });
+            }
+            self.uploaded_bytes += block_patches
+                .iter()
+                .map(|r| r.bytes.len() as u64)
+                .sum::<u64>()
+                + table.len() as u64 * 4;
+            FlushPayload::Relocated {
+                block_patches,
+                table,
+            }
         } else {
             let wire = slot.page.to_bytes();
             let table = block_base_table(&slot.page);
@@ -505,6 +546,7 @@ mod tests {
         let ranges = match cache.flush(1).unwrap() {
             FlushPayload::Incremental { patches } => patches,
             FlushPayload::Full { .. } => panic!("same layout must patch incrementally"),
+            FlushPayload::Relocated { .. } => panic!("same layout must patch incrementally"),
         };
         assert_eq!(ranges.len(), 1);
         // Range bytes match the wire image at the reported offset.
@@ -532,6 +574,7 @@ mod tests {
                 assert_eq!(table, crate::wgsl::block_base_table(page));
             }
             FlushPayload::Incremental { .. } => panic!("first flush after insert is Full"),
+            FlushPayload::Relocated { .. } => panic!("first flush after insert is Full"),
         }
         // Re-insert and skip the initial upload instead.
         cache.insert(4, page_at(4));
@@ -543,9 +586,11 @@ mod tests {
     }
 
     #[test]
-    fn rung_change_forces_full_page_and_table_reupload() {
+    fn rung_change_relocates_blocks_plus_table() {
         // Insert lossless Residual8, then re-encode lossy: every block
-        // changes size, so per-block patches would land on shifted offsets.
+        // changes size, so patches alone would land on shifted offsets.
+        // The flush re-sends the changed blocks plus the fresh table —
+        // cheaper than the full page whenever blocks survive unchanged.
         let mut cache = ResidencyCache::new(1 << 20);
         let field = fixtures::noise(16, 16, 0xBEAD);
         cache.insert(1, EncodedPage::encode(&field, EncodeMode::Residual8));
@@ -553,13 +598,30 @@ mod tests {
         let changed = cache.update(1, &field, EncodeMode::Residual4).unwrap();
         assert_eq!(changed, 16);
         match cache.flush(1).unwrap() {
-            FlushPayload::Full { page_bytes, table } => {
+            FlushPayload::Relocated {
+                block_patches,
+                table,
+            } => {
                 let page = cache.get(1).unwrap();
-                assert_eq!(page_bytes, page.to_bytes());
-                assert_eq!(table.len(), page.blocks.len());
+                assert_eq!(block_patches.len(), 16);
                 assert_eq!(table, crate::wgsl::block_base_table(page));
+                // Patches address the new wire image, not the old one.
+                let wire = page.to_bytes();
+                for (i, patch) in block_patches.iter().enumerate() {
+                    let base = table[i] as usize;
+                    assert_eq!(patch.byte_offset as usize, base);
+                    assert_eq!(&wire[base..base + patch.bytes.len()], &patch.bytes[..]);
+                }
+                // All blocks changed: relocation costs the blocks plus the
+                // table — exactly the full image minus the unchanged
+                // 21-byte page header, hence strictly cheaper than Full.
+                let relocated: usize =
+                    block_patches.iter().map(|p| p.bytes.len()).sum::<usize>() + table.len() * 4;
+                let full = wire.len() + table.len() * 4;
+                assert!(relocated < full, "{relocated} < {full}");
+                assert_eq!(relocated + 21, full);
             }
-            FlushPayload::Incremental { .. } => panic!("rung change must go Full"),
+            other => panic!("rung change must relocate, got {other:?}"),
         }
         // Steady state again: the next identical update patches nothing.
         cache
@@ -569,6 +631,43 @@ mod tests {
             cache.flush(1).unwrap(),
             FlushPayload::Incremental { patches: vec![] }
         );
+    }
+
+    #[test]
+    fn partial_rung_change_relocates_only_flipped_blocks() {
+        // One block flips rung (R6 to Raw8 under a bright spike) while
+        // fifteen survive: relocation sends 1 patch + table, far less
+        // than the full image.
+        let mut cache = ResidencyCache::new(1 << 20);
+        let mode = EncodeMode::Adaptive { max_abs_error: 2.0 };
+        let field = fixtures::noise(16, 16, 0xBEEF);
+        cache.insert(1, EncodedPage::encode(&field, mode));
+        cache.mark_clean(1).unwrap();
+        let mut data = field.data.clone();
+        // Spike every texel of block (0, 0): rows 0..4, cols 0..4.
+        for y in 0..4 {
+            for x in 0..4 {
+                data[y * 16 + x] = 255;
+            }
+        }
+        let spiked = crate::ScalarField::new(16, 16, data).unwrap();
+        let changed = cache.update(1, &spiked, mode).unwrap();
+        assert_eq!(changed, 1);
+        match cache.flush(1).unwrap() {
+            FlushPayload::Relocated {
+                block_patches,
+                table,
+            } => {
+                assert_eq!(block_patches.len(), 1);
+                let page = cache.get(1).unwrap();
+                let wire = page.to_bytes();
+                let full = wire.len() + table.len() * 4;
+                let relocated: usize =
+                    block_patches.iter().map(|p| p.bytes.len()).sum::<usize>() + table.len() * 4;
+                assert!(relocated < full, "{relocated} < {full}");
+            }
+            other => panic!("partial rung change must relocate, got {other:?}"),
+        }
     }
 
     #[test]

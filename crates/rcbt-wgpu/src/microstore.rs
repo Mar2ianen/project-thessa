@@ -1,0 +1,296 @@
+//! Phase B sample-time decode of microscaled pages on the portable wgpu
+//! backend (doc 41 §18).
+//!
+//! The adapter owns all wgpu handles; the WGSL text and the offset-table
+//! layout live in backend-neutral `thessa-microstore-core::wgsl`. This
+//! module uploads one [`EncodedPage`] (headers + packed payload, plus the
+//! CPU-built block offset table) and runs the `decode_page` kernel with one
+//! thread per texel — the exact shape a material shader will use later.
+//!
+//! The current RGBA material path is untouched: this is an additive A/B
+//! experiment, and every GPU result is checked against the CPU reference
+//! decoder texel-for-texel.
+
+use std::borrow::Cow;
+use std::sync::Arc;
+
+use thessa_microstore_core::{
+    EncodedPage,
+    wgsl::{MICROSTORE_DECODE_WGSL, block_base_table, padded_upload_bytes, upload_size},
+};
+
+use crate::WgpuError;
+
+const WORKGROUP: u32 = 64;
+const ENTRY: &str = "decode_page";
+
+fn layout_entry(binding: u32, read_only: bool, uniform: bool) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: if uniform {
+                wgpu::BufferBindingType::Uniform
+            } else {
+                wgpu::BufferBindingType::Storage { read_only }
+            },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+/// Decode pipeline for microscaled pages: uniform params, read-only page
+/// words, read-only block offsets, read-write texel output.
+pub struct MicrostoreDecode {
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    layout: wgpu::BindGroupLayout,
+    pipeline: wgpu::ComputePipeline,
+}
+
+impl MicrostoreDecode {
+    /// Compile the sample-time decoder. Shader-module creation validates
+    /// the WGSL on the driver; use the naga test for driver-free checks.
+    pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("microstore-decode-layout"),
+            entries: &[
+                layout_entry(0, true, true),
+                layout_entry(1, true, false),
+                layout_entry(2, true, false),
+                layout_entry(3, false, false),
+            ],
+        });
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("microstore-decode-shader"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(MICROSTORE_DECODE_WGSL)),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("microstore-decode-pl"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(ENTRY),
+            layout: Some(&pipeline_layout),
+            module: &module,
+            entry_point: Some(ENTRY),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        Self {
+            device,
+            queue,
+            layout,
+            pipeline,
+        }
+    }
+
+    fn storage(&self, label: &str, size: u64, copy_src: bool) -> wgpu::Buffer {
+        let mut usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
+        if copy_src {
+            usage |= wgpu::BufferUsages::COPY_SRC;
+        }
+        self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: size.max(4),
+            usage,
+            mapped_at_creation: false,
+        })
+    }
+
+    /// Upload one page and decode it on the GPU. Returns row-major decoded
+    /// bytes over the true extent, directly comparable with
+    /// [`EncodedPage::decode`].
+    pub fn decode_page(&self, page: &EncodedPage) -> Result<Vec<u8>, WgpuError> {
+        let texels = page.width as usize * page.height as usize;
+        let words = padded_upload_bytes(page);
+        let table = block_base_table(page);
+        let table_bytes = words_to_bytes(&table);
+        let params = words_to_bytes(&[page.width, page.height, page.blocks_x, page.blocks_y]);
+
+        let page_buf = self.storage("microstore-page", words.len() as u64, false);
+        let table_buf = self.storage("microstore-table", table_bytes.len() as u64, false);
+        let params_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("microstore-params"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let out_buf = self.storage("microstore-out", (texels * 4) as u64, true);
+        self.queue.write_buffer(&page_buf, 0, &words);
+        self.queue.write_buffer(&table_buf, 0, &table_bytes);
+        self.queue.write_buffer(&params_buf, 0, &params);
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("microstore-decode-bg"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: page_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: table_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: out_buf.as_entire_binding(),
+                },
+            ],
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("microstore-decode-enc"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("microstore-decode-pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(texels.div_ceil(WORKGROUP as usize) as u32, 1, 1);
+        }
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("microstore-staging"),
+            size: (texels * 4).max(4) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_buffer_to_buffer(&out_buf, 0, &staging, 0, (texels * 4) as u64);
+        self.queue.submit(Some(encoder.finish()));
+
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| WgpuError::Device(format!("device poll failed: {e:?}")))?;
+        rx.recv()
+            .map_err(|_| WgpuError::Device("staging map channel closed".into()))?
+            .map_err(|e| WgpuError::Device(format!("staging map failed: {e:?}")))?;
+        let view = slice.get_mapped_range();
+        let mut out = Vec::with_capacity(texels);
+        let (chunks, _) = view.as_chunks::<4>();
+        for chunk in chunks {
+            out.push(chunk[0]);
+        }
+        drop(view);
+        staging.unmap();
+        Ok(out)
+    }
+}
+
+fn words_to_bytes(words: &[u32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(words.len() * 4);
+    for w in words {
+        out.extend_from_slice(&w.to_le_bytes());
+    }
+    out
+}
+
+/// CPU-side upload accounting for telemetry (doc §9): no GPU needed.
+pub fn upload_accounting(page: &EncodedPage) -> (usize, usize, usize) {
+    let up = upload_size(page);
+    (up.padded_bytes, up.table_bytes, up.params_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use thessa_microstore_core::{EncodeMode, fixtures};
+
+    #[test]
+    fn decode_wgsl_parses_with_naga() {
+        // Driver-free shader check: the kernel must be valid WGSL before
+        // any GPU ever sees it.
+        let module =
+            naga::front::wgsl::parse_str(MICROSTORE_DECODE_WGSL).expect("microstore WGSL parses");
+        let entry = module
+            .entry_points
+            .iter()
+            .find(|e| e.name == ENTRY)
+            .expect("decode_page entry point");
+        assert_eq!(entry.workgroup_size, [64, 1, 1]);
+    }
+
+    #[test]
+    fn upload_accounting_matches_wire() {
+        for (_, field) in fixtures::all(24, 16) {
+            let page = EncodedPage::encode(&field, EncodeMode::Adaptive { max_abs_error: 2.0 });
+            let (padded, table, params) = upload_accounting(&page);
+            assert_eq!(padded, page.encoded_bytes().div_ceil(4) * 4);
+            assert_eq!(table, page.blocks.len() * 4);
+            assert_eq!(params, 16);
+        }
+    }
+
+    fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, String)> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }))
+        .ok()?;
+        let name = adapter.get_info().name;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("microstore-test"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            experimental_features: wgpu::ExperimentalFeatures::default(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            trace: wgpu::Trace::Off,
+        }))
+        .ok()?;
+        Some((Arc::new(device), Arc::new(queue), name))
+    }
+
+    #[test]
+    fn gpu_decode_matches_cpu_on_all_fixtures_and_modes() {
+        let Some((device, queue, name)) = try_device() else {
+            eprintln!("SKIP: no GPU adapter for microstore decode test");
+            return;
+        };
+        eprintln!("microstore decode on {name}");
+        let decoder = MicrostoreDecode::new(device, queue);
+        for (fixture_name, field) in fixtures::all(64, 64) {
+            for mode in [
+                EncodeMode::Raw8,
+                EncodeMode::Residual8,
+                EncodeMode::Residual4,
+                EncodeMode::Adaptive { max_abs_error: 2.0 },
+            ] {
+                let page = EncodedPage::encode(&field, mode);
+                let gpu = decoder.decode_page(&page).expect("gpu decode");
+                assert_eq!(gpu, page.decode().data, "{fixture_name} {mode:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn gpu_decode_handles_odd_extents() {
+        let Some((device, queue, _)) = try_device() else {
+            eprintln!("SKIP: no GPU adapter for microstore odd-extent test");
+            return;
+        };
+        let decoder = MicrostoreDecode::new(device, queue);
+        for (w, h) in [(1, 1), (5, 7), (13, 29)] {
+            let field = fixtures::noise(w, h, 0xBEEF);
+            let page = EncodedPage::encode(&field, EncodeMode::Residual4);
+            let gpu = decoder.decode_page(&page).expect("gpu decode");
+            assert_eq!(gpu, page.decode().data, "{w}x{h}");
+        }
+    }
+}

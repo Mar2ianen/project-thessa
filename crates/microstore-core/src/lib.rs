@@ -45,6 +45,7 @@ pub mod codec;
 pub mod fixtures;
 pub mod metrics;
 pub mod pgm;
+pub mod wgsl;
 
 pub use codec::{CodecError, EncodeMode, EncodedBlock, EncodedPage, MicroCodec, ScalarField};
 pub use metrics::{ErrorStats, measure};

@@ -404,6 +404,22 @@ impl HeightPage {
         hist
     }
 
+    /// Whether every border block is verbatim. Only then can a neighbor
+    /// page sharing an edge decode it identically: lossy border blocks
+    /// quantize shared samples under different references and crack.
+    /// Interior lossy blocks do not affect shared edges.
+    pub fn border_is_lossless(&self) -> bool {
+        for (index, block) in self.blocks.iter().enumerate() {
+            let bx = index as u32 % self.blocks_x;
+            let by = index as u32 / self.blocks_x;
+            let border = bx == 0 || by == 0 || bx + 1 == self.blocks_x || by + 1 == self.blocks_y;
+            if border && block.codec != HeightCodec::Raw32 {
+                return false;
+            }
+        }
+        true
+    }
+
     const HEADER_LEN: usize = 4 + 1 + 4 + 4 + 4 + 4 + 4 + 4;
     const BLOCK_HEADER_LEN: usize = 1 + 4 + 4;
 
@@ -467,21 +483,48 @@ impl HeightPage {
                 samples: 0,
             });
         }
-        let count = blocks_x as usize * blocks_y as usize;
-        let mut blocks = Vec::with_capacity(count);
+        let count = blocks_x as u64 * blocks_y as u64;
+        // Same allocation guard as the scalar parser: every block needs
+        // at least its 9-byte header plus the smallest payload (16 bytes,
+        // Residual8). Refuse first, allocate after.
+        let min_needed = count
+            .checked_mul((Self::BLOCK_HEADER_LEN + H_PAYLOAD_R8_LEN) as u64)
+            .and_then(|payload| payload.checked_add(Self::HEADER_LEN as u64));
+        if min_needed.is_none_or(|need| (bytes.len() as u64) < need) {
+            return Err(CodecError::Truncated);
+        }
+        let mut blocks = Vec::with_capacity(count as usize);
         for _ in 0..count {
             let head = take(&mut cursor, Self::BLOCK_HEADER_LEN)?;
             let codec = HeightCodec::from_tag(head[0])?;
             let offset = f32_of(head[1..5].to_vec());
             let scale = f32_of(head[5..9].to_vec());
             if !offset.is_finite() || !scale.is_finite() || scale < 0.0 {
-                return Err(CodecError::BadExtent {
-                    width,
-                    height,
-                    samples: 0,
-                });
+                return Err(CodecError::NonFiniteFloat);
+            }
+            // The block range must sit inside the page-declared bounds.
+            // `offset + scale` gets an f32 rounding slack: honest encoders
+            // compute both from the same samples, but the addition can
+            // round one ulp past the ceiling.
+            let slack = 8.0 * f32::EPSILON * base.abs().max(ceiling.abs()).max(1.0);
+            if offset < base || offset + scale > ceiling + slack {
+                return Err(CodecError::OutOfBoundsSample);
             }
             let payload = take(&mut cursor, codec.payload_len())?;
+            if codec == HeightCodec::Raw32 {
+                // Verbatim floats are trusted bytes: reject NaN/Inf and
+                // anything outside the declared conservative bounds, so a
+                // strict parse never smuggles non-geometry past `verify`.
+                for sample in payload.as_chunks::<4>().0 {
+                    let v = f32_of(sample.to_vec());
+                    if !v.is_finite() {
+                        return Err(CodecError::NonFiniteFloat);
+                    }
+                    if v < base || v > ceiling {
+                        return Err(CodecError::OutOfBoundsSample);
+                    }
+                }
+            }
             let mut raw = [0u8; H_PAYLOAD_RAW_LEN];
             raw[..payload.len()].copy_from_slice(&payload);
             blocks.push(HeightBlock {
@@ -532,26 +575,56 @@ fn normal_angle(a: [f32; 3], b: [f32; 3]) -> f64 {
     (dot / (na * nb)).clamp(-1.0, 1.0).acos().to_degrees()
 }
 
-fn grid_normal(h: &[f32], width: u32, x: u32, y: u32) -> [f32; 3] {
+fn grid_normal(h: &[f32], width: u32, x: u32, y: u32, sx_m: f32, sy_m: f32) -> [f32; 3] {
     let w = width as usize;
     let at = |xx: u32, yy: u32| h[yy as usize * w + xx as usize];
-    let dx = (at(x + 1, y) - at(x - 1, y)) * 0.5;
-    let dy = (at(x, y + 1) - at(x, y - 1)) * 0.5;
+    // Physical slopes: height delta over metres, not texels. Unit-texel
+    // spacing would silently claim metres-wide texels are 1 m wide and
+    // inflate every angle on real pages.
+    let dx = (at(x + 1, y) - at(x - 1, y)) / (2.0 * sx_m);
+    let dy = (at(x, y + 1) - at(x, y - 1)) / (2.0 * sy_m);
     [-dx, -dy, 1.0]
 }
 
+/// Texel spacing in metres for an equirectangular lat/lon window:
+/// `[x_spacing, y_spacing]`. Longitude spacing shrinks with latitude;
+/// callers must pass the window's own geometry (see the fixture README
+/// for the vendored windows).
+pub fn latlon_window_spacing_m(
+    center_lat_deg: f64,
+    span_deg: f64,
+    samples: u32,
+    radius_m: f64,
+) -> [f32; 2] {
+    assert!(samples >= 2, "spacing needs at least two samples");
+    let span_m = span_deg.to_radians() * radius_m / (samples - 1) as f64;
+    [
+        (span_m * center_lat_deg.to_radians().cos()) as f32,
+        span_m as f32,
+    ]
+}
+
 /// Verify a decoded grid against the original and the page-declared
-/// conservative bounds.
+/// conservative bounds, with physical texel spacing in metres
+/// (`[x, y]`, longitude/latitude for lat/lon windows).
 pub fn verify(
     original: &HeightGrid,
     decoded: &HeightGrid,
     declared_min: f32,
     declared_max: f32,
+    spacing_m: [f32; 2],
 ) -> HeightVerify {
     assert_eq!(
         (original.width, original.height),
         (decoded.width, decoded.height),
         "height verify needs identical extents"
+    );
+    assert!(
+        spacing_m[0] > 0.0
+            && spacing_m[1] > 0.0
+            && spacing_m[0].is_finite()
+            && spacing_m[1].is_finite(),
+        "physical texel spacing must be positive and finite"
     );
     let mut worst = 0.0f64;
     let mut slack = 0.0f64;
@@ -560,12 +633,29 @@ pub fn verify(
         slack = slack.max((declared_min - *b).max(0.0) as f64);
         slack = slack.max((*b - declared_max).max(0.0) as f64);
     }
+    // No interior texels on degenerate grids: nothing to angle.
     let mut angle = 0.0f64;
-    for y in 1..original.height - 1 {
-        for x in 1..original.width - 1 {
-            let a = grid_normal(&original.heights, original.width, x, y);
-            let b = grid_normal(&decoded.heights, decoded.width, x, y);
-            angle = angle.max(normal_angle(a, b));
+    if original.width >= 3 && original.height >= 3 {
+        for y in 1..original.height - 1 {
+            for x in 1..original.width - 1 {
+                let a = grid_normal(
+                    &original.heights,
+                    original.width,
+                    x,
+                    y,
+                    spacing_m[0],
+                    spacing_m[1],
+                );
+                let b = grid_normal(
+                    &decoded.heights,
+                    decoded.width,
+                    x,
+                    y,
+                    spacing_m[0],
+                    spacing_m[1],
+                );
+                angle = angle.max(normal_angle(a, b));
+            }
         }
     }
     HeightVerify {
@@ -730,6 +820,58 @@ mod tests {
         }
     }
 
+    /// Physical texel spacing for a real window (see tests/assets
+    /// README for coordinates): 2x2 deg windows at 65 samples on a
+    /// 3200 km datum.
+    fn spacing(name: &str) -> [f32; 2] {
+        let lat = match name {
+            "ocean" => -60.0,
+            "coast" => -60.0,
+            "mountain" => -54.0,
+            _ => panic!("known fixture window"),
+        };
+        latlon_window_spacing_m(lat, 2.0, 65, 3_200_000.0)
+    }
+
+    #[test]
+    fn window_spacing_math() {
+        // Equator: isotropic. At -60 deg longitude halves.
+        let eq = latlon_window_spacing_m(0.0, 2.0, 65, 3_200_000.0);
+        assert!((eq[0] - eq[1]).abs() < 1e-3);
+        assert!((eq[1] - 1745.3).abs() < 0.5, "{eq:?}");
+        let s60 = latlon_window_spacing_m(-60.0, 2.0, 65, 3_200_000.0);
+        assert!((s60[0] - eq[0] * 0.5).abs() < 0.5, "{s60:?}");
+        assert!((s60[1] - eq[1]).abs() < 1e-3);
+    }
+
+    #[test]
+    #[should_panic(expected = "at least two samples")]
+    fn window_spacing_rejects_single_sample() {
+        latlon_window_spacing_m(0.0, 2.0, 1, 3_200_000.0);
+    }
+
+    #[test]
+    fn verify_rejects_nonphysical_spacing() {
+        let grid = thessa_height_coast();
+        let back = grid.clone();
+        for spacing in [[0.0, 1745.0], [872.0, -1.0], [f32::NAN, 1.0]] {
+            let r = std::panic::catch_unwind(|| verify(&grid, &back, 0.0, 1.0, spacing));
+            assert!(r.is_err(), "{spacing:?}");
+        }
+    }
+
+    #[test]
+    fn degenerate_grids_have_no_interior_angle() {
+        // 1x1 and 2x2 grids have no interior texels: must not underflow,
+        // angle is defined as zero.
+        for (w, h) in [(1, 1), (2, 2), (1, 5), (5, 1)] {
+            let grid = HeightGrid::new(w, h, vec![10.0; w as usize * h as usize]).unwrap();
+            let v = verify(&grid, &grid, 10.0, 10.0, [100.0, 100.0]);
+            assert_eq!(v.normal_max_angle_deg, 0.0);
+            assert_eq!(v.max_abs_error_m, 0.0);
+        }
+    }
+
     #[test]
     fn adaptive_respects_budget_on_real_grids() {
         for (name, grid) in real_grids() {
@@ -741,7 +883,7 @@ mod tests {
                     },
                 );
                 let back = page.decode();
-                let v = verify(&grid, &back, page.base, page.ceiling);
+                let v = verify(&grid, &back, page.base, page.ceiling, spacing(name));
                 assert!(
                     v.max_abs_error_m <= budget,
                     "{name}@{budget}: {}",
@@ -762,10 +904,16 @@ mod tests {
         // 16-bit over a ~14 km range: half-step ~0.11 m plus f32 rounding.
         let grid = thessa_height_mountain();
         let page = HeightPage::encode(&grid, HeightMode::Residual16);
-        let v = verify(&grid, &page.decode(), page.base, page.ceiling);
+        let v = verify(
+            &grid,
+            &page.decode(),
+            page.base,
+            page.ceiling,
+            spacing("mountain"),
+        );
         assert!(v.max_abs_error_m <= 0.5, "r16 {}", v.max_abs_error_m);
         assert!(
-            v.normal_max_angle_deg <= 2.0,
+            v.normal_max_angle_deg <= 0.05,
             "r16 angle {}",
             v.normal_max_angle_deg
         );
@@ -780,77 +928,108 @@ mod tests {
                 max_abs_error_m: 10.0,
             },
         );
-        let v = verify(&grid, &page.decode(), page.base, page.ceiling);
-        // Worst texel sits on the steepest quantized slope; measured 5.03.
+        let v = verify(
+            &grid,
+            &page.decode(),
+            page.base,
+            page.ceiling,
+            spacing("coast"),
+        );
         assert!(
-            v.normal_max_angle_deg <= 6.0,
+            v.normal_max_angle_deg <= 0.5,
             "angle {}",
             v.normal_max_angle_deg
         );
     }
 
     #[test]
-    fn shared_edge_between_independent_pages_stays_tight() {
-        // Split the coast grid into left/right pages sharing column 32,
-        // encode separately (different block references), compare.
+    fn independent_lossy_pages_crack_on_shared_edges() {
+        // Split the coast grid into left/right pages sharing column 32 and
+        // encode separately: the shared samples land in blocks with
+        // different offset/scale references, so the edge diverges. This
+        // test pins the phenomenon (it is nonzero), not an acceptance
+        // bound: a nonzero crack FAILS the geometry bar, which is why
+        // only border-lossless pages qualify as geometry sources.
         let grid = thessa_height_coast();
-        let left = HeightGrid::new(
-            33,
-            65,
-            grid.heights
-                .as_chunks::<65>()
+        let split = |lo: usize| {
+            HeightGrid::new(
+                33,
+                65,
+                grid.heights
+                    .as_chunks::<65>()
+                    .0
+                    .iter()
+                    .flat_map(|row| row[lo..lo + 33].to_vec())
+                    .collect(),
+            )
+            .unwrap()
+        };
+        let (left, right) = (split(0), split(32));
+        let mode = HeightMode::Adaptive {
+            max_abs_error_m: 10.0,
+        };
+        let a = HeightPage::encode(&left, mode).decode();
+        let b = HeightPage::encode(&right, mode).decode();
+        let edge = |h: &[f32], col: usize| {
+            h.as_chunks::<33>()
                 .0
                 .iter()
-                .flat_map(|row| row[..33].to_vec())
-                .collect(),
-        )
-        .unwrap();
-        let right = HeightGrid::new(
-            33,
-            65,
-            grid.heights
-                .as_chunks::<65>()
+                .map(|row| row[col])
+                .collect::<Vec<_>>()
+        };
+        let crack = shared_edge_error(&edge(&a.heights, 32), &edge(&b.heights, 0));
+        assert!(crack > 0.0, "independent references must diverge");
+        assert!(crack <= 20.0 + 1e-3, "runaway crack {crack}");
+    }
+
+    #[test]
+    fn lossless_pages_share_exact_edges() {
+        // Sufficiency direction: verbatim pages decode shared samples
+        // bit-exactly, so the crack is exactly zero.
+        let grid = thessa_height_coast();
+        let split = |lo: usize| {
+            HeightGrid::new(
+                33,
+                65,
+                grid.heights
+                    .as_chunks::<65>()
+                    .0
+                    .iter()
+                    .flat_map(|row| row[lo..lo + 33].to_vec())
+                    .collect(),
+            )
+            .unwrap()
+        };
+        let (left, right) = (split(0), split(32));
+        let a = HeightPage::encode(&left, HeightMode::Raw32).decode();
+        let b = HeightPage::encode(&right, HeightMode::Raw32).decode();
+        let edge = |h: &[f32], col: usize| {
+            h.as_chunks::<33>()
                 .0
                 .iter()
-                .flat_map(|row| row[32..].to_vec())
-                .collect(),
-        )
-        .unwrap();
-        for budget in [1.0, 10.0] {
-            let a = HeightPage::encode(
-                &left,
-                HeightMode::Adaptive {
-                    max_abs_error_m: budget,
-                },
-            );
-            let b = HeightPage::encode(
-                &right,
-                HeightMode::Adaptive {
-                    max_abs_error_m: budget,
-                },
-            );
-            let da = a.decode();
-            let db = b.decode();
-            let edge_a: Vec<f32> = da
-                .heights
-                .as_chunks::<33>()
-                .0
-                .iter()
-                .map(|row| row[32])
-                .collect();
-            let edge_b: Vec<f32> = db
-                .heights
-                .as_chunks::<33>()
-                .0
-                .iter()
-                .map(|row| row[0])
-                .collect();
-            let crack = shared_edge_error(&edge_a, &edge_b);
-            assert!(
-                crack <= 2.0 * budget + 1e-3,
-                "budget {budget}: crack {crack}"
-            );
-        }
+                .map(|row| row[col])
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            shared_edge_error(&edge(&a.heights, 32), &edge(&b.heights, 0)),
+            0.0
+        );
+    }
+
+    #[test]
+    fn border_lossless_flags_geometry_suitability() {
+        let grid = thessa_height_coast();
+        let raw = HeightPage::encode(&grid, HeightMode::Raw32);
+        assert!(raw.border_is_lossless());
+        let adaptive = HeightPage::encode(
+            &grid,
+            HeightMode::Adaptive {
+                max_abs_error_m: 10.0,
+            },
+        );
+        // Real coast data puts lossy blocks on the border.
+        assert!(!adaptive.border_is_lossless());
+        assert_eq!(adaptive.codec_histogram().iter().sum::<usize>(), 289);
     }
 
     #[test]
@@ -879,6 +1058,63 @@ mod tests {
                 assert_eq!(back.decode(), HeightPage::encode(&grid, mode).decode());
             }
         }
+    }
+
+    #[test]
+    fn absurd_dimensions_fail_cleanly_without_allocating() {
+        // Same allocation guard as the scalar parser, with the taller
+        // height header (29 bytes) and minimum block (25 bytes).
+        let mut header = Vec::new();
+        header.extend_from_slice(b"MICH");
+        header.push(1);
+        for v in [u32::MAX, u32::MAX, 1 << 30, 1 << 30] {
+            header.extend_from_slice(&v.to_le_bytes());
+        }
+        header.extend_from_slice(&0.0f32.to_le_bytes());
+        header.extend_from_slice(&1.0f32.to_le_bytes());
+        assert_eq!(HeightPage::from_bytes(&header), Err(CodecError::Truncated));
+    }
+
+    #[test]
+    fn raw32_rejects_nonfinite_and_out_of_bounds_samples() {
+        let grid = HeightGrid::new(8, 8, vec![100.0; 64]).unwrap();
+        let page = HeightPage::encode(&grid, HeightMode::Raw32);
+        let (min, max) = (page.base, page.ceiling);
+        // NaN payload.
+        let mut bad = page.to_bytes();
+        bad[29 + 9 + 4..29 + 9 + 8].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert_eq!(
+            HeightPage::from_bytes(&bad),
+            Err(CodecError::NonFiniteFloat)
+        );
+        // Infinite payload.
+        let mut bad = page.to_bytes();
+        bad[29 + 9..29 + 9 + 4].copy_from_slice(&f32::INFINITY.to_le_bytes());
+        assert_eq!(
+            HeightPage::from_bytes(&bad),
+            Err(CodecError::NonFiniteFloat)
+        );
+        // Finite but outside the declared conservative bounds.
+        let mut bad = page.to_bytes();
+        bad[29 + 9..29 + 9 + 4].copy_from_slice(&(max + 100.0).to_le_bytes());
+        assert_eq!(
+            HeightPage::from_bytes(&bad),
+            Err(CodecError::OutOfBoundsSample)
+        );
+        let _ = min;
+    }
+
+    #[test]
+    fn block_range_escaping_bounds_is_rejected() {
+        let grid = HeightGrid::new(8, 8, vec![100.0; 64]).unwrap();
+        let page = HeightPage::encode(&grid, HeightMode::Residual16);
+        // Inflate the first block's scale far past the page ceiling.
+        let mut bad = page.to_bytes();
+        bad[29 + 5..29 + 9].copy_from_slice(&1.0e9f32.to_le_bytes());
+        assert_eq!(
+            HeightPage::from_bytes(&bad),
+            Err(CodecError::OutOfBoundsSample)
+        );
     }
 
     #[test]
@@ -946,7 +1182,7 @@ mod tests {
     fn verify_bounds_and_angles_on_identity() {
         let grid = thessa_height_coast();
         let (min, max) = grid.min_max();
-        let v = verify(&grid, &grid, min, max);
+        let v = verify(&grid, &grid, min, max, spacing("coast"));
         assert_eq!(v.max_abs_error_m, 0.0);
         // Identical f32 normals agree up to dot-product rounding.
         assert!(v.normal_max_angle_deg <= 1e-4, "{}", v.normal_max_angle_deg);

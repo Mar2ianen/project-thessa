@@ -10,6 +10,11 @@ Implementation status (branch `feat/microstorage-phase-a`):
 - Phase B done in `thessa-microstore-core::wgsl` (sample-time WGSL
   decoder) + `thessa-rcbt-wgpu::microstore` (upload + compute decode,
   GPU==CPU parity on all fixtures); the RGBA material path is untouched.
+  Honest scope: this is a GPU decode *parity prototype* (whole-page
+  dispatch + sync readback), not a measured material-shader sample —
+  bilinear/aniso/mips, which the RGBA path gets from hardware, are still
+  open, as is the R6 tail-byte upload slack now guaranteed by the
+  backend.
 - Phase C done in `thessa-microstore-core`: Residual6/Residual2,
   cheapest-first adaptive ladder (2/4/6-bit, Raw8 fallback), per-channel
   color pages with linear-light error, header/payload overhead
@@ -19,11 +24,20 @@ Implementation status (branch `feat/microstorage-phase-a`):
   adaptive@2.0 holds the budget by construction; GPU decode ~0.1-0.3 ms
   per page on a Radeon 780M; 4 adaptive channels ~= 0.94-1.19x one RGBA
   page upload — the density win lands with higher texel counts (Phase D).
+  Accounting is split three ways (wire vs gpu-upload vs gpu-resident);
+  the A/B baseline is the full 87,380 B mip chain (4 adaptive noise
+  channels upload 77,984 B = 0.89x of full-mip RGBA but 1.19x of the
+  65,536 B base level alone), with the no-mips-yet caveat stated in the
+  bench output.
 - Phase D done in `thessa-microstore-core::residency`: key-addressed
   stable slots, dirty-block upload ranges, LRU eviction by encoded byte
   cost, telemetry (resident bytes/texels, hit rate, texels/MiB).
   Measured: one-texel update uploads 15 B vs 3861 B full page (257x);
   cyclic scan over 4x cache converges to exactly 0.25 hit rate.
+  Per-block patches are only emitted while the block layout is unchanged;
+  codec-rung or extent changes fall back to a full page + table reupload
+  (variable block sizes shift every later offset). Eviction cost is
+  backend-reportable per page instead of assumed wire-equal.
 - Fixture 8 done: `worldgen-rocky --example dump_microstore_fixtures`
   vendors real Thessa bytes into `microstore-core/tests/assets`
   (65x65 height ocean/coast/mountain, 128x128 coast albedo+roughness);
@@ -34,13 +48,15 @@ Implementation status (branch `feat/microstorage-phase-a`):
   conservative bound slack, normal angle) and a shared-edge crack metric
   for independently encoded neighbor pages.
   Measured on real grids (raw f32 = 4.000 B/tex): R16 2.811 B/tex with
-  err <= 0.11 m and normals <= 0.04 deg; R8 1.717 B/tex; mountain
-  adaptive@1m mixes rungs at 2.152 B/tex; shared-edge crack on the coast
-  split is 0.262 m at every budget (same R8 rung both sides); ocean R8
-  shows the documented normal amplification (5.8 deg worst texel on
-  gentle slopes). Verdict: residency-only use is safe within the
-  measured budgets; canonical baked format adoption needs the
-  normal-angle question settled per material/lighting sensitivity.
+  err <= 0.11 m and physical-space normals <= 0.05 deg (texel spacing in
+  metres, anisotropic); shared-edge crack on the coast split is 0.262 m —
+  recorded as a crack, not a pass: independent lossy pages provably
+  diverge on shared edges, lossless pages share them bit-exactly, and
+  `border_is_lossless` gates geometry suitability. Verdict: safe as an
+  experimental lossy residency cache; crack-free geometry and canonical
+  baked-format adoption stay blocked on a boundary strategy (lossless
+  border strip or global-lattice references) plus material/lighting
+  review of the normal-angle sensitivity.
 
 This document defines a reusable microscaled storage layer for render-side and
 streamed surface data. The immediate target is terrain material pages. Height

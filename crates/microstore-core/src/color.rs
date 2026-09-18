@@ -50,6 +50,8 @@ impl ColorField {
 }
 
 /// One encoded color page: one scalar [`EncodedPage`] per channel.
+/// The fixed three-element array (not a `Vec`) is the invariant: R, G, B
+/// are always all present, so `decode` never needs `expect` calls.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColorPage {
     /// Texels per row.
@@ -57,31 +59,28 @@ pub struct ColorPage {
     /// Rows.
     pub height: u32,
     /// Encoded R, G, B planes.
-    pub channels: Vec<EncodedPage>,
+    pub channels: [EncodedPage; 3],
 }
 
 impl ColorPage {
     /// Encode every channel with the same mode.
     pub fn encode(field: &ColorField, mode: EncodeMode) -> Self {
+        let [r, g, b] = &field.channels;
         Self {
             width: field.width,
             height: field.height,
-            channels: field
-                .channels
-                .iter()
-                .map(|plane| EncodedPage::encode(plane, mode))
-                .collect(),
+            channels: [
+                EncodedPage::encode(r, mode),
+                EncodedPage::encode(g, mode),
+                EncodedPage::encode(b, mode),
+            ],
         }
     }
 
     /// Decode all channels.
     pub fn decode(&self) -> [ScalarField; 3] {
-        let mut iter = self.channels.iter().map(EncodedPage::decode);
-        [
-            iter.next().expect("red plane"),
-            iter.next().expect("green plane"),
-            iter.next().expect("blue plane"),
-        ]
+        let [r, g, b] = &self.channels;
+        [r.decode(), g.decode(), b.decode()]
     }
 
     /// Exact wire size in bytes.
@@ -165,6 +164,7 @@ impl ColorPage {
         if !cursor.is_empty() {
             return Err(CodecError::TrailingBytes(cursor.len()));
         }
+        let channels: [EncodedPage; 3] = channels.try_into().expect("three channels");
         Ok(Self {
             width,
             height,

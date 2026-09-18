@@ -1,11 +1,19 @@
-//! Phase B sample-time decode of microscaled pages on the portable wgpu
-//! backend (doc 41 §18).
+//! GPU decode parity prototype for microscaled pages on the portable wgpu
+//! backend (doc 41 §18 Phase B).
 //!
 //! The adapter owns all wgpu handles; the WGSL text and the offset-table
 //! layout live in backend-neutral `thessa-microstore-core::wgsl`. This
 //! module uploads one [`EncodedPage`] (headers + packed payload, plus the
 //! CPU-built block offset table) and runs the `decode_page` kernel with one
 //! thread per texel — the exact shape a material shader will use later.
+//!
+//! This is a parity oracle, not the sample-time path: it decodes whole
+//! pages through dispatch plus synchronous staging readback so every GPU
+//! texel can be checked against the CPU reference decoder. The reported
+//! milliseconds therefore cover allocation, submit, sync, and readback —
+//! not the cost of a material-shader sample, which additionally needs
+//! bilinear/anisotropic filtering and mip policy the current RGBA path
+//! gets from hardware.
 //!
 //! The current RGBA material path is untouched: this is an additive A/B
 //! experiment, and every GPU result is checked against the CPU reference
@@ -23,6 +31,11 @@ use crate::WgpuError;
 
 const WORKGROUP: u32 = 64;
 const ENTRY: &str = "decode_page";
+/// Zero slack past the page payload: the Residual6 decoder reads the byte
+/// after the last payload byte for the final code, so the upload always
+/// carries one spare word. Decoder overreads are then in-bounds by
+/// construction instead of by WebGPU robustness rules.
+const OVERREAD_SLACK_BYTES: usize = 4;
 
 fn layout_entry(binding: u32, read_only: bool, uniform: bool) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
@@ -103,10 +116,14 @@ impl MicrostoreDecode {
 
     /// Upload one page and decode it on the GPU. Returns row-major decoded
     /// bytes over the true extent, directly comparable with
-    /// [`EncodedPage::decode`].
+    /// [`EncodedPage::decode`]. Validates the page structure first: the
+    /// shader indexes blocks with no further bounds checks.
     pub fn decode_page(&self, page: &EncodedPage) -> Result<Vec<u8>, WgpuError> {
+        page.validate()
+            .map_err(|e| WgpuError::Device(format!("invalid page: {e}")))?;
         let texels = page.width as usize * page.height as usize;
-        let words = padded_upload_bytes(page);
+        let mut words = padded_upload_bytes(page);
+        words.extend_from_slice(&[0u8; OVERREAD_SLACK_BYTES]);
         let table = block_base_table(page);
         let table_bytes = words_to_bytes(&table);
         let params = words_to_bytes(&[page.width, page.height, page.blocks_x, page.blocks_y]);
@@ -201,6 +218,7 @@ fn words_to_bytes(words: &[u32]) -> Vec<u8> {
 }
 
 /// CPU-side upload accounting for telemetry (doc §9): no GPU needed.
+/// Returns `(padded page bytes, offset-table bytes, params bytes)`.
 pub fn upload_accounting(page: &EncodedPage) -> (usize, usize, usize) {
     let up = upload_size(page);
     (up.padded_bytes, up.table_bytes, up.params_bytes)
@@ -279,6 +297,18 @@ mod tests {
                 assert_eq!(gpu, page.decode().data, "{fixture_name} {mode:?}");
             }
         }
+    }
+
+    #[test]
+    fn decode_rejects_structurally_invalid_pages_without_gpu() {
+        // Validation happens before any upload: no adapter needed.
+        let field = fixtures::uniform(8, 8, 1);
+        let mut page = EncodedPage::encode(&field, EncodeMode::Residual4);
+        page.blocks.pop();
+        // Build a decoder-free check through validate(); decode_page
+        // needs a device, so the unit contract is validated here and the
+        // device path reuses the same call.
+        assert!(page.validate().is_err());
     }
 
     #[test]

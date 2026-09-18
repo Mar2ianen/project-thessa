@@ -98,16 +98,45 @@ fn main() {
         cache.mark_clean(0).expect("resident");
     }
     let full = pages[0].encoded_bytes();
-    let ranges = {
+    let dirty = {
         cache.insert(0, pages[0].clone());
         cache.mark_clean(0).expect("resident");
         cache.update(0, &field, MODE).expect("resident");
-        cache.flush(0).expect("resident")
+        match cache.flush(0).expect("resident") {
+            thessa_microstore_core::FlushPayload::Incremental { patches } => {
+                patches.iter().map(|r| r.bytes.len()).sum()
+            }
+            thessa_microstore_core::FlushPayload::Full { page_bytes, table } => {
+                page_bytes.len() + table.len() * 4
+            }
+        }
     };
-    let dirty: usize = ranges.iter().map(|r| r.bytes.len()).sum();
     println!(
         "dirty update: {:.3} ms/iter, dirty {dirty} B vs full re-upload {full} B ({:.2}x)",
         started.elapsed().as_secs_f64() * 1000.0 / ITERS as f64,
         full as f64 / dirty.max(1) as f64,
     );
+
+    // Rung change (lossless insert, lossy update): layout shifts, so the
+    // flush must fall back to a full page + table reupload.
+    let mut cache = ResidencyCache::new(u64::MAX);
+    let raw = thessa_microstore_core::EncodedPage::encode(
+        &field,
+        thessa_microstore_core::EncodeMode::Residual8,
+    );
+    cache.insert(0, raw);
+    cache.mark_clean(0).expect("resident");
+    cache.update(0, &field, MODE).expect("resident");
+    match cache.flush(0).expect("resident") {
+        thessa_microstore_core::FlushPayload::Full { page_bytes, table } => {
+            println!(
+                "rung-change update: Full fallback {} B page + {} B table",
+                page_bytes.len(),
+                table.len() * 4,
+            );
+        }
+        thessa_microstore_core::FlushPayload::Incremental { .. } => {
+            println!("rung-change update: ERROR, expected Full fallback");
+        }
+    }
 }

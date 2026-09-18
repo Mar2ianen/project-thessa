@@ -240,6 +240,12 @@ pub enum CodecError {
     BadCodecTag(u8),
     /// Block grid does not match the declared extent.
     InconsistentGrid,
+    /// A float that must be finite (header bound or verbatim sample) is
+    /// NaN or infinite.
+    NonFiniteFloat,
+    /// A verbatim sample or block range escapes the page-declared
+    /// conservative bounds.
+    OutOfBoundsSample,
 }
 
 impl fmt::Display for CodecError {
@@ -264,6 +270,10 @@ impl fmt::Display for CodecError {
             CodecError::BadCodecTag(t) => write!(f, "unknown block codec tag {t}"),
             CodecError::InconsistentGrid => {
                 write!(f, "block grid does not match field extent")
+            }
+            CodecError::NonFiniteFloat => write!(f, "non-finite float in page"),
+            CodecError::OutOfBoundsSample => {
+                write!(f, "sample escapes declared page bounds")
             }
         }
     }
@@ -594,6 +604,27 @@ impl EncodedPage {
         hist
     }
 
+    /// Check the structural invariant the GPU backend relies on: the block
+    /// grid matches the true extent and holds exactly
+    /// `blocks_x * blocks_y` blocks. Backends must call this on any page
+    /// they did not encode themselves (hand-built or FFI pages) before
+    /// uploading: block indexing does `by * blocks_x + bx` with no
+    /// further bounds checks on the hot path.
+    pub fn validate(&self) -> Result<(), CodecError> {
+        if self.width == 0 || self.height == 0 {
+            return Err(CodecError::EmptyField);
+        }
+        if self.blocks_x != blocks_for_extent(self.width)
+            || self.blocks_y != blocks_for_extent(self.height)
+        {
+            return Err(CodecError::InconsistentGrid);
+        }
+        if self.blocks.len() != self.blocks_x as usize * self.blocks_y as usize {
+            return Err(CodecError::InconsistentGrid);
+        }
+        Ok(())
+    }
+
     const HEADER_LEN: usize = 4 + 1 + 4 * 4;
     const BLOCK_HEADER_LEN: usize = 3;
 
@@ -647,8 +678,18 @@ impl EncodedPage {
         if blocks_x != blocks_for_extent(width) || blocks_y != blocks_for_extent(height) {
             return Err(CodecError::InconsistentGrid);
         }
-        let count = blocks_x as usize * blocks_y as usize;
-        let mut blocks = Vec::with_capacity(count);
+        let count = blocks_x as u64 * blocks_y as u64;
+        // Refuse absurd grids before allocating: every block needs at
+        // least its 3-byte header plus the smallest payload (4 bytes,
+        // Residual2). A u32::MAX extent would otherwise turn
+        // `with_capacity` into an OOM instead of a clean Truncated.
+        let min_needed = count
+            .checked_mul(3 + PAYLOAD_R2_LEN as u64)
+            .and_then(|payload| payload.checked_add(Self::HEADER_LEN as u64));
+        if min_needed.is_none_or(|need| (bytes.len() as u64) < need) {
+            return Err(CodecError::Truncated);
+        }
+        let mut blocks = Vec::with_capacity(count as usize);
         for _ in 0..count {
             let head = take(&mut cursor, Self::BLOCK_HEADER_LEN)?;
             let codec = MicroCodec::from_tag(head[0])?;
@@ -943,6 +984,19 @@ mod tests {
     }
 
     #[test]
+    fn absurd_dimensions_fail_cleanly_without_allocating() {
+        // u32::MAX extents would need ~2^60 blocks: the parser must answer
+        // Truncated from checked arithmetic, never attempt the allocation.
+        let mut header = Vec::new();
+        header.extend_from_slice(b"MICR");
+        header.push(1);
+        for v in [u32::MAX, u32::MAX, 1 << 30, 1 << 30] {
+            header.extend_from_slice(&v.to_le_bytes());
+        }
+        assert_eq!(EncodedPage::from_bytes(&header), Err(CodecError::Truncated));
+    }
+
+    #[test]
     fn wire_rejects_bad_magic() {
         let field = fixtures::uniform(8, 8, 1);
         let mut bytes = EncodedPage::encode(&field, EncodeMode::Raw8).to_bytes();
@@ -1142,6 +1196,20 @@ mod tests {
         // payload per the same 3-byte header.
         let raw = EncodedPage::encode(&field, EncodeMode::Raw8);
         assert!(raw.header_fraction() < page.header_fraction());
+    }
+
+    #[test]
+    fn validate_accepts_encoded_pages_and_rejects_structural_lies() {
+        let field = fixtures::uniform(8, 8, 1);
+        let mut page = EncodedPage::encode(&field, EncodeMode::Residual4);
+        assert!(page.validate().is_ok());
+        // Dropped block.
+        page.blocks.pop();
+        assert_eq!(page.validate(), Err(CodecError::InconsistentGrid));
+        // Wrong grid for the extent.
+        let mut page = EncodedPage::encode(&field, EncodeMode::Residual4);
+        page.blocks_x = 3;
+        assert_eq!(page.validate(), Err(CodecError::InconsistentGrid));
     }
 
     #[test]

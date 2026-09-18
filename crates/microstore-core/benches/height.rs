@@ -9,13 +9,19 @@ use std::{hint::black_box, time::Instant};
 use thessa_microstore_core::{
     HeightGrid, HeightMode, HeightPage,
     height::{
-        shared_edge_error, thessa_height_coast, thessa_height_mountain, thessa_height_ocean, verify,
+        latlon_window_spacing_m, shared_edge_error, thessa_height_coast, thessa_height_mountain,
+        thessa_height_ocean, verify,
     },
 };
 
 const ITERS: usize = 100;
 
-fn bench_grid(name: &str, grid: &HeightGrid) {
+/// Physical spacing for a vendored window (see tests/assets README).
+fn spacing(lat: f64) -> [f32; 2] {
+    latlon_window_spacing_m(lat, 2.0, 65, 3_200_000.0)
+}
+
+fn bench_grid(name: &str, lat_deg: f64, grid: &HeightGrid) {
     println!("height {name} {}x{}:", grid.width, grid.height);
     println!(
         "{:>10} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}",
@@ -47,7 +53,7 @@ fn bench_grid(name: &str, grid: &HeightGrid) {
     for (mode_name, mode) in &modes {
         let page = HeightPage::encode(grid, *mode);
         let decoded = page.decode();
-        let v = verify(grid, &decoded, page.base, page.ceiling);
+        let v = verify(grid, &decoded, page.base, page.ceiling, spacing(lat_deg));
 
         let started = Instant::now();
         for _ in 0..ITERS {
@@ -136,8 +142,8 @@ fn main() {
     println!(
         "microstore Phase E: real 65x65 Thessa height grids, {ITERS} iters (raw f32 = 4.000 B/tex)"
     );
-    bench_grid("ocean", &thessa_height_ocean());
-    bench_grid("coast", &thessa_height_coast());
-    bench_grid("mountain", &thessa_height_mountain());
+    bench_grid("ocean", -60.0, &thessa_height_ocean());
+    bench_grid("coast", -60.0, &thessa_height_coast());
+    bench_grid("mountain", -54.0, &thessa_height_mountain());
     bench_crack();
 }

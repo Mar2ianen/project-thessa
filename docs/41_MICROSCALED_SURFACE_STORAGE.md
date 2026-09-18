@@ -24,6 +24,23 @@ Implementation status (branch `feat/microstorage-phase-a`):
   cost, telemetry (resident bytes/texels, hit rate, texels/MiB).
   Measured: one-texel update uploads 15 B vs 3861 B full page (257x);
   cyclic scan over 4x cache converges to exactly 0.25 hit rate.
+- Fixture 8 done: `worldgen-rocky --example dump_microstore_fixtures`
+  vendors real Thessa bytes into `microstore-core/tests/assets`
+  (65x65 height ocean/coast/mountain, 128x128 coast albedo+roughness);
+  material color tests and the color bench row run on the real albedo.
+- Phase E done in `thessa-microstore-core::height`: f32 micro-codec
+  (page min/max header, per-block offset/scale, adaptive 8/16-bit with
+  Raw32 fallback) plus the three demanded verifiers (absolute error,
+  conservative bound slack, normal angle) and a shared-edge crack metric
+  for independently encoded neighbor pages.
+  Measured on real grids (raw f32 = 4.000 B/tex): R16 2.811 B/tex with
+  err <= 0.11 m and normals <= 0.04 deg; R8 1.717 B/tex; mountain
+  adaptive@1m mixes rungs at 2.152 B/tex; shared-edge crack on the coast
+  split is 0.262 m at every budget (same R8 rung both sides); ocean R8
+  shows the documented normal amplification (5.8 deg worst texel on
+  gentle slopes). Verdict: residency-only use is safe within the
+  measured budgets; canonical baked format adoption needs the
+  normal-angle question settled per material/lighting sensitivity.
 
 This document defines a reusable microscaled storage layer for render-side and
 streamed surface data. The immediate target is terrain material pages. Height

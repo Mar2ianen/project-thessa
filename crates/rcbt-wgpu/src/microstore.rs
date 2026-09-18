@@ -121,12 +121,55 @@ impl MicrostoreDecode {
     pub fn decode_page(&self, page: &EncodedPage) -> Result<Vec<u8>, WgpuError> {
         page.validate()
             .map_err(|e| WgpuError::Device(format!("invalid page: {e}")))?;
-        let texels = page.width as usize * page.height as usize;
         let mut words = padded_upload_bytes(page);
         words.extend_from_slice(&[0u8; OVERREAD_SLACK_BYTES]);
         let table = block_base_table(page);
+        self.decode_raw(
+            &words,
+            &table,
+            page.width,
+            page.height,
+            page.blocks_x,
+            page.blocks_y,
+        )
+    }
+
+    /// Decode from caller-arranged upload bytes: `words` holds block
+    /// images at arbitrary byte offsets listed by `table` (one u32 per
+    /// block, row-major), exactly the shape a slab allocator produces for
+    /// incremental variable-size updates. `words` must cover every byte
+    /// the table addresses (plus slack for the final code); the buffer is
+    /// zero-padded to a u32 multiple internally.
+    pub fn decode_scattered(
+        &self,
+        words: &[u8],
+        table: &[u32],
+        width: u32,
+        height: u32,
+        blocks_x: u32,
+        blocks_y: u32,
+    ) -> Result<Vec<u8>, WgpuError> {
+        let mut padded = words.to_vec();
+        while !padded.len().is_multiple_of(4) {
+            padded.push(0);
+        }
+        padded.extend_from_slice(&[0u8; OVERREAD_SLACK_BYTES]);
+        self.decode_raw(&padded, table, width, height, blocks_x, blocks_y)
+    }
+
+    fn decode_raw(
+        &self,
+        words: &[u8],
+        table: &[u32],
+        width: u32,
+        height: u32,
+        blocks_x: u32,
+        blocks_y: u32,
+    ) -> Result<Vec<u8>, WgpuError> {
+        let texels = width as usize * height as usize;
+        let table = table.to_vec();
         let table_bytes = words_to_bytes(&table);
-        let params = words_to_bytes(&[page.width, page.height, page.blocks_x, page.blocks_y]);
+        let params = words_to_bytes(&[width, height, blocks_x, blocks_y]);
 
         let page_buf = self.storage("microstore-page", words.len() as u64, false);
         let table_buf = self.storage("microstore-table", table_bytes.len() as u64, false);
@@ -137,7 +180,7 @@ impl MicrostoreDecode {
             mapped_at_creation: false,
         });
         let out_buf = self.storage("microstore-out", (texels * 4) as u64, true);
-        self.queue.write_buffer(&page_buf, 0, &words);
+        self.queue.write_buffer(&page_buf, 0, words);
         self.queue.write_buffer(&table_buf, 0, &table_bytes);
         self.queue.write_buffer(&params_buf, 0, &params);
 
@@ -324,5 +367,50 @@ mod tests {
             let gpu = decoder.decode_page(&page).expect("gpu decode");
             assert_eq!(gpu, page.decode().data, "{w}x{h}");
         }
+    }
+
+    #[test]
+    fn gpu_decode_scattered_allocator_layout() {
+        // End-to-end variable-size story on hardware: blocks placed at
+        // slab-allocator offsets in scrambled order (fragmented buffer,
+        // not the compact wire image), decoded through the offset table.
+        // Must match the CPU reference bit-exactly.
+        use thessa_microstore_core::{SlabAllocator, wgsl::block_base_table};
+        let Some((device, queue, name)) = try_device() else {
+            eprintln!("SKIP: no GPU adapter for scattered layout test");
+            return;
+        };
+        eprintln!("scattered layout on {name}");
+        let decoder = MicrostoreDecode::new(device, queue);
+        let field = fixtures::coast(64, 64, 0x5CA7);
+        let page = EncodedPage::encode(&field, EncodeMode::Adaptive { max_abs_error: 2.0 });
+        page.validate().expect("encodes valid");
+        let wire = page.to_bytes();
+        let bases = block_base_table(&page);
+        // Scrambled placement order fragments the buffer on purpose.
+        let mut order: Vec<usize> = (0..page.blocks.len()).collect();
+        order.reverse();
+        let mut slab = SlabAllocator::new(wire.len() as u64 + 4096);
+        let mut scattered = vec![0u8; wire.len() + 4096];
+        let mut table = vec![0u32; page.blocks.len()];
+        for i in order {
+            let base = bases[i] as usize;
+            let len = 3 + page.blocks[i].codec.payload_len();
+            let at = slab.alloc(i as u64, len as u64).expect("slab fits") as usize;
+            scattered[at..at + len].copy_from_slice(&wire[base..base + len]);
+            table[i] = at as u32;
+        }
+        slab.check_invariants();
+        let gpu = decoder
+            .decode_scattered(
+                &scattered,
+                &table,
+                page.width,
+                page.height,
+                page.blocks_x,
+                page.blocks_y,
+            )
+            .expect("scattered decode");
+        assert_eq!(gpu, page.decode().data);
     }
 }

@@ -15,6 +15,7 @@ members = [
     "crates/flight-authority",
     "crates/atmosphere",
     "crates/plume-core",
+    "crates/microstore-core",
     "crates/rcbt-core",
     "crates/rcbt-ref",
     "crates/rcbt-ffi",

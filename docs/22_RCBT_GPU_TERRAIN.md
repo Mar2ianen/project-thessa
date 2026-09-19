@@ -1,5 +1,10 @@
 # 22 — `rcbt`: GPU-driven adaptive terrain and baked surface hierarchy
 
+Status: architecture baseline (§§1–18) normative; §19 baseline and §20
+follow-ups archival as of 2026-09-15 — indexed raster, page provider,
+extraction, and indirect draw shipped opt-in; persistent GPU topology and
+neighbor propagation remain future.
+
 Статус: **implementation baseline / performance target**.
 
 В workspace уже добавлены первые packages: `thessa-rcbt-core` (pure Rust

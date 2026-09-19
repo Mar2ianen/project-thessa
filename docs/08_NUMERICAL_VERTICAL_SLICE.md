@@ -15,9 +15,12 @@ target rather than canonical celestial data.
 - `BakedEphemeris` builds the A–BC, binary, planet, moon, and minor-body design
   hierarchy;
 - `GravityField` sums physical point-mass sources simultaneously;
-- ordered Rayon/SIMD batch evaluation preserves input order;
-- adaptive Dormand–Prince 5(4), velocity-Verlet, sampled coast, gravity
-  cohorts, and piecewise affine propagation are available;
+- ordered batch evaluation preserves input order (direct path Rayon-parallel,
+  `EphemerisFrame` path deliberately serial);
+- adaptive Dormand–Prince 5(4) with FSAL plus 8(5,3), variational sensitivity,
+  velocity-Verlet, sampled coast, single-tick gravity cohorts, monopole source
+  tree, `EphemerisFrame`, thrust arcs, and piecewise affine propagation
+  are available;
 - atmosphere, panel aero, rigid-body flight, actuator response, and contacts
   are connected through the authority layer;
 - `thessa-system-baker` validates TOML and writes format-1 JSON output.
@@ -84,14 +87,18 @@ diagnostic until their epoch/frame/version assumptions are isolated.
 - velocity-Verlet is second-order in a time-dependent moving-source field;
 - identical binary/source order provides replay stability, not cross-ISA bit
   identity;
-- J2/Jn, hyperbolic/parabolic segments, full terrain contact, thermal,
-  structural, and factory systems are not complete.
+- J2/Jn, full terrain contact, thermal,
+  structural, and factory systems are not complete. Hyperbolic/parabolic
+  osculating-element readout has landed (`sim-core` ephemeris); fitted
+  hyperbolic/parabolic baker segments are still open.
 
 ## 8.6. Next numerical work
 
 1. versioned fitted ephemeris segments and hyperbolic/parabolic support;
 2. body-fixed harmonics and precession reference vectors;
-3. tighter planner/authority integration for finite burns;
+3. tighter planner/authority integration for finite burns (partially landed:
+   thrust arcs + variational search with TCM cache; joint multi-leg shooting
+   still open);
 4. wider fleet benchmarks and error envelopes;
 5. structural/thermal state contracts after the flight kernel boundary is
    stable.

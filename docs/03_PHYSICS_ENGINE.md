@@ -59,16 +59,24 @@ anchors and do not duplicate their children’s gravitational contribution.
 
 The core provides scalar, ordered batch, Rayon, SIMD-assisted, and hierarchy/
 cohort paths. The order of returned targets is preserved and deterministic.
+Direct `accelerations` evaluation is Rayon-parallel; the `EphemerisFrame`
+batch path is deliberately serial (measured faster); SIMD kernels live in the
+ephemeris-table Hermite/gravity path, not in gravity accumulation.
 
 ### Gravity hierarchy and cohort patches
 
-`gravity_patch.rs` provides:
+`gravity_patch.rs` provides (single-tick ball patches; no time span, no stored
+hessian, no quadrupole — those remain future):
 
-- `CohortConfig` with explicit spatial/temporal/error boundaries;
-- `GravityPatch` with affine far-field coefficients and exact-near terms;
+- `CohortConfig` with `{error_budget_mps2, near_open_factor, max_depth}`;
+- `GravityPatch` with `{center, radius_m, g0, jacobian, exact, error_bound}`;
 - `CohortEvaluator` for many target states;
 - `affine_segment_bound` for a posted absolute propagation bound;
 - deterministic split/fallback behavior when a patch cannot satisfy its bound.
+
+The monopole-only `GravitySourceTree` aggregates baked parents; quadrupole is
+explicitly deferred. A shared `EphemerisFrame` compiles one Kepler solution
+per propagation for all targets.
 
 The affine approximation is:
 
@@ -86,11 +94,16 @@ or the error bound is not met.
 
 Implemented paths include:
 
-- adaptive Dormand–Prince 5(4) for general test-particle propagation;
+- adaptive Dormand–Prince 5(4) with FSAL stage reuse, plus Dormand–Prince
+  8(5,3) (`propagate_adaptive_dop853`) for general test-particle propagation;
+- variational sensitivity propagation (`propagate_adaptive_sensitivity`) feeding
+  maneuver correction without finite differences;
 - velocity-Verlet for fixed-step conservative coast checks;
 - deterministic bounded substeps for rigid-body flight;
 - sampled Verlet/on-rails caches with Hermite position/velocity interpolation;
-- piecewise analytic affine propagation via `AffinePropagator`.
+- piecewise analytic affine propagation via `AffinePropagator` (far-only
+  Regime A, caller-provided `EphemerisFrame`, 0.5–3600 s segment floors);
+- finite-thrust arcs with RTN basis (`propagate_adaptive_with_thrust`).
 
 `propagate_piecewise` compiles a patch around the current trajectory point,
 propagates an analytic frozen-field segment, and rebuilds or stops when the
@@ -179,7 +192,9 @@ direction, flight path, or a trajectory plan. A `ControlDemand` contains body
 force, body moment, and propulsion demand. Aircraft and spacecraft laws may be
 selected or blended by flight condition; neither law directly rotates the
 craft. The allocator reports saturation/residuals and actuator dynamics limit
-the realized response.
+the realized response. Concretely: `validate_envelope` wires a 50 MN / 50 MN·m
+envelope, a smooth barrier ramps demands within 10% of the boundary, and a
+deterministic bounded least-squares active set solves the wrench allocation.
 
 RCS, control surfaces, and propulsion are physical effectors. Policy may limit
 or reshape a demand, but it cannot bypass the actuator path.

@@ -1,5 +1,10 @@
 # CBT integration status — 2026-09-15
 
+Status: integrated opt-in as of 2026-09-15 (default `cpu`, `gpu_indexed` via
+`graphics.toml`). CPU fallback, indexed raster, and material pages shipped;
+owner visual acceptance and CPU-vs-GPU numeric comparison remain gates;
+persistent GPU topology stays future.
+
 The CBT branch is now integrated into the workspace and the interactive client
 at the scheduling/topology boundary.
 

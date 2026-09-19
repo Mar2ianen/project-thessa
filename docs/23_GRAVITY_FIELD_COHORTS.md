@@ -1,5 +1,11 @@
 # 23 — Baked gravity hierarchy and target-cohort field cache
 
+Status: partially implemented — monopole `GravitySourceTree`, single-tick
+affine `GravityPatch` / `CohortEvaluator` with Hessian spatial bound landed;
+time-span patches, quadrupole, cohort keys, planner-patch reuse, and GPU
+backends remain design targets. Struct sketches below are the target API and
+do not all compile against the current single-tick types.
+
 Статус: **architecture / performance design target**.
 
 Эта дока фиксирует следующий major gravity optimization layer поверх уже существующих baked ephemerides, adaptive integration и SIMD-oriented ephemeris tables.

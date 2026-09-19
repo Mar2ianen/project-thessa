@@ -1,5 +1,7 @@
 # 02 — Gameplay vision and current boundary
 
+Status: design baseline; §§2.7–2.8 partially implemented (shipped maneuver/autopilot subsets noted inline).
+
 ## Status
 
 **Design / future work.** This document describes the intended factory,
@@ -94,6 +96,9 @@ windows, depots, reusable stages, transfer planning, gravity assists,
 refuelling, and physical finite burns. The current maneuver crate implements
 planning helpers and typed plans; two-body calculations are search
 approximations and must be revalidated through the exact multi-body field.
+Shipped since: staged broad→refinement→phasing→full-N-body correction with
+variational-STM Newton, B-plane targeting, chain/flyby surveys, and L0–L2
+mission-replay fixtures (`docs/07 §§7.5,7.14`).
 
 Warp changes simulation time globally under server policy. It may batch a
 craft only when explicit atmosphere, contact, obstacle, control, and error
@@ -107,9 +112,11 @@ produce typed graph values inside a restricted host.
 
 The intended standard library contains reusable blocks such as `Ascent`,
 `TargetOrbit`, `Circularize`, `PlanTransfer`, `ExecuteManeuver`, `LandAt`,
-`Rendezvous`, `Dock`, `Load`, `Unload`, `Refuel`, and `SetAlarm`. Several
-guidance/plan primitives exist; the complete flight and logistics standard
-library does not.
+`Rendezvous`, `Dock`, `Load`, `Unload`, `Refuel`, and `SetAlarm`. Shipped as
+parameterized native subgraphs with event contracts and runner coverage:
+`Ascent`, `LandAt`, `ExecuteManeuver`, and `Rendezvous`-approach (guarded
+hold; `Dock` waits on docking-port hardware). The complete flight and
+logistics standard library does not exist yet.
 
 Staging must be able to create multiple `VehicleId` branches. A detached
 booster remains a physical vehicle that can be routed to recovery, while the

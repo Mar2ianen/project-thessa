@@ -1,5 +1,8 @@
 # Project Thessa — Atmosphere Model & Tracking Table
 
+Status: partial implementation. A-system/Janus/Mora rows match `data/system.toml`
+pressures; BC-subsystem rows added from the 02B bake; TBD cells stay future.
+
 > Companion to `02_WORLD_ATLAS.md`.
 >
 > **Canonical atmospheric inputs are composition + pressure profile + temperature profile.** Density is derived from them and must not be stored as an independent simulation truth.
@@ -41,17 +44,20 @@ Each atmosphere should eventually define:
 | **Halo** | none | — | — | 0 | — |
 | **Cinder** | none | — | — | 0 | — |
 | **Orthea** | ~2–3 bar | N₂ + substantial CO₂ + Ar | ~200–230 K target | roughly ~4–6 kg/m³ | exact CO₂ partial pressure must be climate-driven |
-| **Mira** | thin, TBD | TBD | cold | TBD | reopen from previous 0.08-bar moon concept after double-planet redesign |
+| **Mira** | ~0.08 bar N₂/CO₂ provisional | N₂/CO₂ | cold | TBD | reopened from previous moon concept; exact target still TBD |
 | **Dey** | none | — | — | 0 | — |
 | **Vesper** | profile, no surface datum | H₂/He/CH₄; deeper NH₃/H₂O chemistry | altitude-dependent | profile only | pressure-level atmosphere model |
 | **Skadi** | trace | N₂/CH₄ | cryogenic | TBD | mass and atmosphere both reopened |
 | **Mote** | none | — | — | 0 | — |
 | **Janus** | ~1.4 bar | N₂/CO₂/Ar, H₂O variable | ~260–290 K | ~1.7–2.0 kg/m³ | stronger UV-driven chemistry under B |
-| **Janus inner moon** | none / trace TBD | TBD | TBD | TBD | impact-derived concept |
+| **janus_inner** | none | — | — | 0 | impact-derived concept |
 | **Mora** | ~0.15–0.35 bar | residual N₂/CO₂; localized H₂O | dry/cool, local brine microclimates | TBD | dying-ocean / evaporite moon |
-| **Janus outer Titan-like moon** | ~1.5–2.0 bar | N₂ dominant; CH₄, minor CO₂, organic haze | warm relative to Titan | TBD | Titan-like atmospheric architecture, not Titan surface thermodynamics |
-| **BC inner circumbinary world** | TBD | likely mineral-vapor / trace volatile atmosphere | extremely hot | TBD | composition should emerge from surface vapor equilibrium |
-| **BC outer planet** | TBD | TBD | cold | TBD | planet class not locked |
+| **janus_haze** | ~1.75 bar | N₂ dominant; CH₄, minor CO₂, organic haze | warm relative to Titan | TBD | Titan-like atmospheric architecture, not Titan surface thermodynamics |
+| **bc_i** | TBD | likely mineral-vapor / trace volatile atmosphere | extremely hot | TBD | composition should emerge from surface vapor equilibrium |
+| **bc_outer** | TBD (H₂/He/CH₄ provisional, no pressure) | H₂/He/CH₄ | cold | TBD | planet class working pick, pressures open |
+| **bc_outer_retro** | TBD (N₂/CH₄ provisional, no pressure) | N₂/CH₄ | cold | TBD | pressures open |
+| **bc_outer_corona / ridge / rubble** | none | — | — | 0 | airless |
+| **bc_outer_plume** | transient H₂O provisional | H₂O | cold | TBD | cryovolcanic transient |
 
 ## 3. Khepri local-atmosphere rule
 

@@ -1,5 +1,9 @@
 # 19 — Flight-aware alerting and aural warning system
 
+Status: design target — `FlightRegime`/`ControlMode` context accurately
+described; `FlightPhase`, alert/event protocol, manager, and Slices A–D
+not implemented.
+
 Статус: **design target**.
 
 Эта дока задаёт архитектуру предупреждений для пилотируемых аппаратов Thessa: от stall/overspeed/terrain до конфигурационных, двигательных, тепловых и орбитальных предупреждений. Главный принцип: alerting не является набором `if` в HUD и не должен угадывать контекст на клиенте. Условия, inhibition, debounce, latch и priority вычисляются из авторитетного состояния полёта; клиент только визуализирует и воспроизводит звук.

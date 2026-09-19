@@ -260,6 +260,59 @@
     },
     {
       "id": 10,
+      "name": "bc_i",
+      "mu": 16741306873200.0,
+      "radius_m": 2000000.0,
+      "parent": 2,
+      "orbit": {
+        "central_mu": 2.6543292316130682e+20,
+        "semi_major_axis_m": 11219840302.5,
+        "eccentricity": 0.0,
+        "inclination_rad": 0.0,
+        "longitude_of_ascending_node_rad": 0.0,
+        "argument_of_periapsis_rad": 0.0,
+        "mean_anomaly_at_epoch_rad": 0.0,
+        "mean_motion_rad_s": null
+      },
+      "design_period_s": 458334.4608,
+      "rotation_period_s": 458334.44999999995,
+      "tidal_lock": true,
+      "axial_tilt_rad": 0.0,
+      "gravity_source": true
+    },
+    {
+      "id": 11,
+      "name": "bc_outer",
+      "mu": 1.07622687042e+16,
+      "radius_m": 31500000.0,
+      "parent": 4,
+      "orbit": {
+        "central_mu": 3.1587592090850414e+20,
+        "semi_major_axis_m": 1720375513050.0,
+        "eccentricity": 0.03,
+        "inclination_rad": 0.03490658503988659,
+        "longitude_of_ascending_node_rad": 0.0,
+        "argument_of_periapsis_rad": 0.0,
+        "mean_anomaly_at_epoch_rad": 0.0,
+        "mean_motion_rad_s": null
+      },
+      "design_period_s": 797744621.8944,
+      "rotation_period_s": null,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.0,
+      "gravity_source": true,
+      "atmosphere": {
+        "composition": "H2/He/CH4 provisional",
+        "surface_pressure_pa": null,
+        "gas_constant_j_kg_k": 1130.6563830799903,
+        "heat_capacity_ratio": 1.4108621257826561,
+        "sutherland_reference_temperature_k": 273.15,
+        "sutherland_constant_k": 107.13333333333333,
+        "sutherland_reference_viscosity_pa_s": 0.000012848005453769858
+      }
+    },
+    {
+      "id": 12,
       "name": "pyra",
       "mu": 2391615267600.0,
       "radius_m": 1050000.0,
@@ -290,7 +343,7 @@
       }
     },
     {
-      "id": 11,
+      "id": 13,
       "name": "thessa",
       "mu": 50210049251047.914,
       "radius_m": 3200000.0,
@@ -321,7 +374,7 @@
       }
     },
     {
-      "id": 12,
+      "id": 14,
       "name": "pelagos",
       "mu": 21923139953000.0,
       "radius_m": 2500000.0,
@@ -352,7 +405,7 @@
       }
     },
     {
-      "id": 13,
+      "id": 15,
       "name": "auron",
       "mu": 7972050891999.999,
       "radius_m": 1700000.0,
@@ -383,7 +436,7 @@
       }
     },
     {
-      "id": 14,
+      "id": 16,
       "name": "borea",
       "mu": 8769255981199.998,
       "radius_m": 2100000.0,
@@ -414,7 +467,7 @@
       }
     },
     {
-      "id": 15,
+      "id": 17,
       "name": "mira",
       "mu": 87692559812000.0,
       "radius_m": 4100000.0,
@@ -445,7 +498,7 @@
       }
     },
     {
-      "id": 16,
+      "id": 18,
       "name": "dey",
       "mu": 307529.6671018639,
       "radius_m": 10000.0,
@@ -467,7 +520,7 @@
       "gravity_source": true
     },
     {
-      "id": 17,
+      "id": 19,
       "name": "skadi",
       "mu": 199301272300.0,
       "radius_m": 720000.0,
@@ -498,7 +551,7 @@
       }
     },
     {
-      "id": 18,
+      "id": 20,
       "name": "mote",
       "mu": 6115646.788957519,
       "radius_m": 25000.0,
@@ -520,7 +573,7 @@
       "gravity_source": true
     },
     {
-      "id": 19,
+      "id": 21,
       "name": "mora",
       "mu": 6975544530500.0,
       "radius_m": 1900000.0,
@@ -551,11 +604,192 @@
       }
     },
     {
-      "id": 20,
+      "id": 22,
+      "name": "janus_inner",
+      "mu": 9553513948.178638,
+      "radius_m": 225000.0,
+      "parent": 9,
+      "orbit": {
+        "central_mu": 1275537696233948.2,
+        "semi_major_axis_m": 80000000.0,
+        "eccentricity": 0.005,
+        "inclination_rad": 0.017453292519943295,
+        "longitude_of_ascending_node_rad": 0.0,
+        "argument_of_periapsis_rad": 0.0,
+        "mean_anomaly_at_epoch_rad": 0.0,
+        "mean_motion_rad_s": null
+      },
+      "design_period_s": 125882.00279999999,
+      "rotation_period_s": null,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.0,
+      "gravity_source": true
+    },
+    {
+      "id": 23,
+      "name": "janus_haze",
+      "mu": 9965063615000.0,
+      "radius_m": 2600000.0,
+      "parent": 9,
+      "orbit": {
+        "central_mu": 1285493206335000.0,
+        "semi_major_axis_m": 1150000000.0,
+        "eccentricity": 0.005,
+        "inclination_rad": 0.026179938779914945,
+        "longitude_of_ascending_node_rad": 0.0,
+        "argument_of_periapsis_rad": 0.0,
+        "mean_anomaly_at_epoch_rad": 0.0,
+        "mean_motion_rad_s": null
+      },
+      "design_period_s": 6860810.5200000005,
+      "rotation_period_s": null,
+      "tidal_lock": true,
+      "axial_tilt_rad": 0.0,
+      "gravity_source": true,
+      "atmosphere": {
+        "composition": "N2/CH4/CO2 provisional",
+        "surface_pressure_pa": 175000.0,
+        "gas_constant_j_kg_k": 283.23709259255054,
+        "heat_capacity_ratio": 1.3248618784530386,
+        "sutherland_reference_temperature_k": 273.15,
+        "sutherland_constant_k": 167.66666666666666,
+        "sutherland_reference_viscosity_pa_s": 0.000014036285184087089
+      }
+    },
+    {
+      "id": 24,
+      "name": "bc_outer_retro",
+      "mu": 2404770167766.72,
+      "radius_m": 1600000.0,
+      "parent": 11,
+      "orbit": {
+        "central_mu": 1.0764673474367766e+16,
+        "semi_major_axis_m": 450000000.0,
+        "eccentricity": 0.002,
+        "inclination_rad": 2.7401669256310974,
+        "longitude_of_ascending_node_rad": 0.0,
+        "argument_of_periapsis_rad": 0.0,
+        "mean_anomaly_at_epoch_rad": 0.0,
+        "mean_motion_rad_s": null
+      },
+      "design_period_s": 578150.0172,
+      "rotation_period_s": null,
+      "tidal_lock": true,
+      "axial_tilt_rad": 0.0,
+      "gravity_source": true,
+      "atmosphere": {
+        "composition": "N2/CH4 provisional",
+        "surface_pressure_pa": null,
+        "gas_constant_j_kg_k": 377.45058518836294,
+        "heat_capacity_ratio": 1.342857142857143,
+        "sutherland_reference_temperature_k": 273.15,
+        "sutherland_constant_k": 140.5,
+        "sutherland_reference_viscosity_pa_s": 0.000014040845079252002
+      }
+    },
+    {
+      "id": 25,
+      "name": "bc_outer_corona",
+      "mu": 25049689247.57,
+      "radius_m": 400000.0,
+      "parent": 11,
+      "orbit": {
+        "central_mu": 1.0762293753889248e+16,
+        "semi_major_axis_m": 160000000.0,
+        "eccentricity": 0.003,
+        "inclination_rad": 0.017453292519943295,
+        "longitude_of_ascending_node_rad": 0.0,
+        "argument_of_periapsis_rad": 0.0,
+        "mean_anomaly_at_epoch_rad": 0.0,
+        "mean_motion_rad_s": null
+      },
+      "design_period_s": 122574.95640000001,
+      "rotation_period_s": null,
+      "tidal_lock": true,
+      "axial_tilt_rad": 0.0,
+      "gravity_source": true
+    },
+    {
+      "id": 26,
+      "name": "bc_outer_ridge",
+      "mu": 129739078308.5988,
+      "radius_m": 750000.0,
+      "parent": 11,
+      "orbit": {
+        "central_mu": 1.0762398443278308e+16,
+        "semi_major_axis_m": 1800000000.0,
+        "eccentricity": 0.01,
+        "inclination_rad": 0.05235987755982989,
+        "longitude_of_ascending_node_rad": 0.0,
+        "argument_of_periapsis_rad": 0.0,
+        "mean_anomaly_at_epoch_rad": 0.0,
+        "mean_motion_rad_s": null
+      },
+      "design_period_s": 4625200.134,
+      "rotation_period_s": null,
+      "tidal_lock": true,
+      "axial_tilt_rad": 0.0,
+      "gravity_source": true
+    },
+    {
+      "id": 27,
+      "name": "bc_outer_rubble",
+      "mu": 167743454.7828348,
+      "radius_m": 100000.0,
+      "parent": 11,
+      "orbit": {
+        "central_mu": 1.0762268871943454e+16,
+        "semi_major_axis_m": 2400000000.0,
+        "eccentricity": 0.1,
+        "inclination_rad": 0.03490658503988659,
+        "longitude_of_ascending_node_rad": 0.0,
+        "argument_of_periapsis_rad": 0.0,
+        "mean_anomaly_at_epoch_rad": 0.0,
+        "mean_motion_rad_s": null
+      },
+      "design_period_s": 7120961.4456,
+      "rotation_period_s": null,
+      "tidal_lock": false,
+      "axial_tilt_rad": 0.0,
+      "gravity_source": true
+    },
+    {
+      "id": 28,
+      "name": "bc_outer_plume",
+      "mu": 15355515423.245338,
+      "radius_m": 325000.0,
+      "parent": 11,
+      "orbit": {
+        "central_mu": 1.0762284059715424e+16,
+        "semi_major_axis_m": 300000000.0,
+        "eccentricity": 0.004,
+        "inclination_rad": 0.008726646259971648,
+        "longitude_of_ascending_node_rad": 0.0,
+        "argument_of_periapsis_rad": 0.0,
+        "mean_anomaly_at_epoch_rad": 0.0,
+        "mean_motion_rad_s": null
+      },
+      "design_period_s": 314705.0088,
+      "rotation_period_s": null,
+      "tidal_lock": true,
+      "axial_tilt_rad": 0.0,
+      "gravity_source": true,
+      "atmosphere": {
+        "composition": "H2O provisional",
+        "surface_pressure_pa": null,
+        "gas_constant_j_kg_k": 461.5222959373421,
+        "heat_capacity_ratio": 1.33,
+        "sutherland_reference_temperature_k": 273.15,
+        "sutherland_constant_k": 1064.0,
+        "sutherland_reference_viscosity_pa_s": 0.00001
+      }
+    },
+    {
+      "id": 29,
       "name": "nix",
       "mu": 1201287.7621166557,
       "radius_m": 12500.0,
-      "parent": 14,
+      "parent": 16,
       "orbit": {
         "central_mu": 8769257182487.76,
         "semi_major_axis_m": 14000000.0,
@@ -573,7 +807,7 @@
       "gravity_source": true
     },
     {
-      "id": 21,
+      "id": 30,
       "name": "halo",
       "mu": 13587219.837409621,
       "radius_m": 30000.0,
@@ -595,7 +829,7 @@
       "gravity_source": true
     },
     {
-      "id": 22,
+      "id": 31,
       "name": "cinder",
       "mu": 157111650.96075904,
       "radius_m": 56000.0,

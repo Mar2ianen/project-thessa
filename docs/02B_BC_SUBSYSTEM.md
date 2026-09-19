@@ -1,5 +1,8 @@
 # Project Thessa — Asterion BC Subsystem
 
+Status: implemented reference. Working ranges contain the baked
+`data/system.toml` midpoints; orbits are working slots, not stability-proven.
+
 > Working world-design supplement for the Asterion B–C subsystem. Values are provisional unless explicitly marked otherwise. Orbital integrations must be run before canon lock.
 
 ## 0. Design identity

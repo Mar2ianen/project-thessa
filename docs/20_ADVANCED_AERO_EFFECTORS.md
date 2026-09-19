@@ -1,5 +1,8 @@
 # 20 — Advanced aerodynamic effectors: flaps, spoilers, grid fins, body flaps
 
+Status: design target — flaps/spoilers/hinged-panels/grid-fins, neutral bounds,
+and `AeroEffectorModel` not implemented; incidence-only control is the runtime.
+
 Статус: **design target**.
 
 Эта дока описывает следующий слой realtime-aero поверх существующего `PanelAeroModel`: high-lift devices, spoilers/speedbrakes, grid fins и большие hinged body flaps уровня Starship. Цель — расширить уже работающий O(panels) solver, не превращая runtime в CFD и не вводя отдельные классы `Aircraft`, `Rocket` или `Starship`.

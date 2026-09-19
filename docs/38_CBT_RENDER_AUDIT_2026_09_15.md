@@ -1,5 +1,10 @@
 # CBT render audit — 2026-09-15
 
+Status: source-level audit + regression results as of 2026-09-16 (follow-ups
+included). Indexed raster, residency, hysteresis, and material pages shipped
+opt-in; GPU bisector pool, PBR shadow parity, FFT ocean, and full
+virtual-texture remain future.
+
 ## Scope and reference
 
 Branch: `feat/rcbt-terrain-pipeline`. Fixes were applied on top of the existing

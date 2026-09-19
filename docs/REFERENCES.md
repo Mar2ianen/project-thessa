@@ -1,5 +1,7 @@
 # References and provenance
 
+Status: reference list (values for the fictional system live in `data/` + `01`/`02*`).
+
 These sources support external technical facts and validation workflows. Values
 for the fictional system are design values calculated and stored separately.
 

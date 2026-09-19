@@ -1,5 +1,8 @@
 # 01 — Celestial system
 
+Status: implemented reference. Normative numbers for `data/system.toml`;
+re-bake `data/system.baked.json` after any `system.toml` edit.
+
 ## Status
 
 **Implemented design-target dataset.** `data/system.toml` and its baked output

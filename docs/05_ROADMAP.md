@@ -1,5 +1,9 @@
 # 05 — Roadmap: from equations to game
 
+Status: dependency order, not a calendar (M0–M1/M3–M4/M6 partial prototypes;
+M4 stdlib minimum partially shipped; M5 gravity-assist exact-revalidation
+prototype exists, canonical ephemeris and UX still future).
+
 This is a dependency order, not a calendar. A milestone is not complete until
 its state contract, tests, error evidence, and benchmark exist.
 
@@ -57,15 +61,19 @@ server-owned continuations, QuickJS sandbox, typed guidance, typed maneuver
 plans, server execution, and obstacle/site declarations.
 
 Remaining: trucks/trains/aircraft logistics, physical stations and cargo,
-complete guidance standard library, reusable route certification, alarms,
-resource events, and factory integration.
+rest of the guidance standard library past the shipped `Ascent`/`LandAt`/
+`ExecuteManeuver`/`Rendezvous`-approach minimum, reusable route certification,
+alarms, resource events, and factory integration.
 
-## M5 — Nereid system gameplay — future
+## M5 — Nereid system gameplay — partial prototype
+
+Implemented: broad chain/flyby survey, B-plane targeting, variational
+midcourse correction, and L0–L2 mission-replay fixtures in CI. Remaining:
 
 - canonical ephemeris version and long-horizon system validation;
 - system map and transfer-window UX;
 - orbital depots, resource differentiation, and reusable routes;
-- gravity-assist planning using exact revalidation;
+- remaining gravity-assist UX (planner core exists; map/window/assist UX future);
 - eclipse/planetshine gameplay and additional moon content.
 
 ## M6 — Production multiplayer — partial foundation

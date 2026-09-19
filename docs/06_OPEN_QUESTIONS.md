@@ -1,5 +1,9 @@
 # 06 — Open questions
 
+Status: living index. Items close by landing the decision in the relevant
+implementation document or ADR and striking them here (see `docs/00_STATUS.md`
+for the implemented/future map).
+
 These items are intentionally not locked in the current prototype. Accepted
 decisions belong in the relevant implementation document or ADR.
 
@@ -33,8 +37,12 @@ The current `data/system.toml` target for Thessa (`R=3200 km`, approximately
 - player death and vehicle-loss rules;
 - whether contracts/economy exist;
 - how much manual flight is required before route certification;
-- minimum standard library for MechJeb-like guidance blocks;
-- graph ownership semantics across staging and docking;
+- minimum standard library for MechJeb-like guidance blocks (minimum shipped:
+  `Ascent`, `LandAt`, `ExecuteManeuver`, `Rendezvous`-approach as parameterized
+  native subgraphs — `docs/07_AUTOPILOT.md`; completion of the rest still open);
+- graph ownership semantics across staging and docking (validator already
+  rejects ambiguous controller ownership; physical separation, topology
+  mutation, and child-vehicle ownership transfer still open — `docs/07 §7.7`);
 - whether route automation requires a successful manual/reference flight.
 
 ## Vehicle editor
@@ -60,16 +68,21 @@ prototypes rather than open architecture choices. Remaining physics questions:
 - atmospheric heating and ablative heat shield model;
 - CPU ray-sampling budget;
 - deterministic tolerance policy across AVX builds;
-- J2/Jn and hyperbolic/parabolic ephemeris coverage.
+- J2/Jn coefficients and body-fixed rotations (hyperbolic/parabolic osculating
+  coverage has landed in `sim-core`; J2/Jn evaluation still open).
 
 ## Runtime
 
-- Avian versus a Parry-only local contact implementation;
+Decided: Rapier is the local contact/constraint solver (zero global gravity,
+Thessa-sampled wrenches, authoritative readback — `docs/40_RAPIER_COLLISION_INTEGRATION.md`).
+Avian versus Parry-only is no longer an open choice. Remaining runtime questions:
+
 - Lightyear or another production replication layer after a spike;
 - save database and migration format;
 - web client scope;
 - prediction model for remote craft;
-- production transport choice (UDP/QUIC/WebTransport/etc.);
+- production transport choice (UDP/QUIC/WebTransport/etc. — stdio/TCP headless
+  transport is the current spike, not the production decision);
 - Windows packaging policy for the internal wgpu backend.
 
 ## Performance targets

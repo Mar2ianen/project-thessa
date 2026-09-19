@@ -1,5 +1,9 @@
 # Project Thessa — World Atlas
 
+Status: partial implementation. §§1–4 and §6.2 describe baked working values
+(`data/system.toml`); §5.1 and §7 are superseded by `02B_BC_SUBSYSTEM.md`
+(working values below are kept for history, normative numbers live in 02B).
+
 > Working design document. This file tracks **body identity, bulk composition, atmosphere, climate, biomes, resources, and origin notes**. Orbital mechanics and long-horizon stability remain in `01_CELESTIAL_SYSTEM.md`.
 >
 > Values marked **working** are design targets, not locked canon.
@@ -538,6 +542,10 @@ The previous 0.002 M⊕ target implied an implausibly high density for an icy/vo
 
 BC should be a **full planetary subsystem**, not a late-game backdrop with one planet.
 
+> Superseded by `02B_BC_SUBSYSTEM.md` + `data/system.toml`: the BC architecture
+> is now 3 planets (`bc_i`, Janus, `bc_outer`) + 8 moons. The paragraphs below
+> record the pre-02B design direction and are kept for history.
+
 The exact planet count is open, but the current design direction is:
 
 1. a hot inner circumbinary rocky world near the stable inner region;
@@ -546,7 +554,11 @@ The exact planet count is open, but the current design direction is:
 
 This leaves room for additional minor planets, captured bodies and debris populations.
 
-## 5.1. Inner circumbinary world — TBD
+## 5.1. Inner circumbinary world — BC-I (was TBD)
+
+> Resolved as S-type circum-B remnant `bc_i`: 0.075 AU, 2000 km, 0.042 M⊕,
+> synchronous (`system.toml`, `02B §1.1`). The ~0.8–1.0 AU P-type family below
+> is the superseded pre-02B direction.
 
 **Identity target:** intensely irradiated rocky / refractory world under two moving suns.
 
@@ -600,11 +612,12 @@ The central identity is not resource richness: it is the **binary sky and the lo
 
 # 6. Janus moon system
 
-## 6.1. Inner moon — TBD
+## 6.1. Inner moon — janus_inner (was TBD)
 
 **Identity:** small close irregular / heavily fractured moon, possibly impact-derived.
 
-Working size: **~150–300 km radius**.
+Working size: **~150–300 km radius**; baked pick 225 km at 80 000 km
+(`system.toml`, `02B §2.2`).
 
 ### Biomes
 
@@ -650,9 +663,12 @@ Exceptionally rich in **Li, Na, K, Mg and Cl salts**, plus borates and other eva
 
 ---
 
-## 6.3. Titan-like outer moon — TBD
+## 6.3. Titan-like outer moon — janus_haze (was TBD)
 
 **Identity:** thick-atmosphere organic moon; analogous to Titan in atmospheric architecture, not in surface temperature.
+
+Baked pick: 2600 km, 0.025 M⊕, 1.75 bar, 1 150 000 km (`system.toml`, `02B §2.4`).
+Original working target for history:
 
 | Parameter | Working target |
 |---|---:|
@@ -685,9 +701,13 @@ No stable Titan-style surface methane seas are assumed at the current irradiatio
 
 ---
 
-# 7. Outer BC planet — TBD
+# 7. Outer BC planet — BC-Outer (was TBD)
 
 **Identity target:** colder giant / sub-Neptune giving BC a second major moon system and a different formation history from Nereid.
+
+> Resolved working values: 11.5 AU, 27 M⊕, 31 500 km, range 10–13 AU /
+> 20–35 M⊕ / 28 000–35 000 km (`system.toml`, `02B §3.1`). Preferred
+> architecture below is kept as design guidance.
 
 Preferred architecture:
 
@@ -697,7 +717,7 @@ Preferred architecture:
 - volatile-rich cold environments;
 - visibly different ring/moon chemistry from the Asterion-A subsystem.
 
-Exact planet mass, radius and orbit remain open.
+Exact planet mass, radius and orbit: see resolved values above (`02B §3.1`); moon-system details in `02B §§4.1–4.5`.
 
 ---
 

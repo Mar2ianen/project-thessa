@@ -1,5 +1,8 @@
 # Bevy visual slice
 
+Status: implemented prototype (CPU fallback default; GPU-indexed CBT plus
+baked beauty/plume opt-in via `graphics.toml`).
+
 ## Status
 
 **Implemented prototype.** The client is a Bevy 0.19 application that reads the
@@ -20,8 +23,12 @@ path already consumes snapshots from an embedded authoritative server process.
 - atmosphere optics shared with the `thessa-atmosphere` crate;
 - pilot scene with X-15 visual asset, navball/PFD, flight HUD, terrain, water,
   performance overlay, and flight tracing;
-- streamed rocky terrain tiles with parent retention during refinement;
+- streamed rocky terrain tiles with parent retention during refinement (CPU
+  fallback path; `terrain=gpu_indexed` selects the opt-in CBT raster with
+  material pages instead);
 - raster water reflection baseline and optional graphics-setting resolution;
+- baked beauty shells (cloud decks, gas-giant bands, aurora) and field-first
+  engine plume, all gated by `graphics.toml`;
 - render-local anchoring so large barycentric coordinates do not jitter.
 
 ## Coordinate contract
@@ -53,8 +60,11 @@ client process.
   interest management are not implemented;
 - the authoritative terrain contact boundary is spherical/sampled even though
   the client can render richer generated terrain;
-- atmosphere, water, clouds, and RT effects are visual reduced-order systems;
-- rendering backends must continue to go through Bevy/wgpu abstractions;
+- atmosphere, water, clouds, and RT effects are visual reduced-order systems
+  (clouds/aurora/gas-giants/plume ship as cheap CPU-baked shells plus a
+  camera-facing volume ribbon; volumetric clouds and full RT remain future);
+- rendering backends for the current client must continue to go through
+  Bevy/wgpu abstractions (see `docs/39` for the longer-term migration plan);
 - a WASM/WebGPU client target is future work.
 
 ## Verification

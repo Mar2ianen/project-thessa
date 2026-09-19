@@ -5,7 +5,8 @@
 **Implemented client prototype.** The pilot HUD, navball, camera, command
 mapping, telemetry frames, and server snapshot path are implemented in
 `apps/client`. The visual contract is deliberately separate from authoritative
-simulation state.
+simulation state. Contact debug visualization lives in
+`apps/client/src/contact_gizmos.rs`.
 
 ## 10.1. Modes and controls
 

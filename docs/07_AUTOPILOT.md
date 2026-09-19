@@ -1,5 +1,10 @@
 # 07 — Autopilot, guidance graphs, and automation
 
+Status: implemented vertical slice (typed IR, runner with wait-bounded-cycle
+support, per-wait event generations, 4-block stdlib minimum, staged + B-plane
++ variational correction, L0–L2 replay fixtures in CI); L3–L4 replays, full
+stdlib/editor, staging topology, and powered rails still future.
+
 ## Status
 
 **Implemented vertical slice; not yet a finished subsystem.** The current tree has a
@@ -64,23 +69,14 @@ The wire layer can submit validated graph IR to the authoritative server. The
 server executes it against the same guidance/control path as manual input and
 wakes waits from `SimTime` or named domain events.
 
-### Known graph-loop gap
+### Wait-bounded cycles (shipped)
 
 The validator deliberately allows a cycle when the strongly connected path
-contains a wait/yield boundary, but the current runner still treats every
-incoming edge as a same-epoch dependency. A graph such as:
-
-```text
-A(wait) -> B -> A
-```
-
-can therefore validate successfully and then deadlock before its first
-iteration because neither node has an already-`Ok` predecessor.
-
-The runtime needs iteration/epoch or token semantics so a wait boundary cuts the
-dependency cycle between iterations instead of merely making the SCC legal at
-validation time. Until that exists, cyclic graphs must not be treated as a
-finished runtime feature.
+contains a wait/yield boundary, and the runner executes it in a single pass:
+a cycle-closing edge into a wait-capable node is cut (`loopback_edges`),
+readiness wiring ignores cut edges, and each iteration boundary is a parked
+wait (`GraphRunner`, `lib.rs`). Cyclic graphs with wait boundaries are a
+finished runtime feature with regression coverage.
 
 ## 7.3. Typed guidance and control
 
@@ -155,6 +151,10 @@ corrected executable ManeuverPlan with measured miss
 Broad search results are represented as `BroadRoute` and cannot be fed directly
 to the executor. The cheap two-body/patched-conic stages scout candidate windows
 and energies; only the corrected full-N-body result is an executable plan.
+Correction uses variational-STM Newton Jacobians (no finite differences) with
+a TCM prefix cache, plus 2D B-plane minimum-norm targeting per encounter
+(`correct_shooting`, `correct_bplane_shooting`; legacy B-plane plus exact 3D
+polish in chain legs).
 
 The current search also handles the central-body/depot case explicitly instead
 of starting a Lambert arc from the body's point-mass center, and uses the
@@ -181,27 +181,13 @@ so an `All(time, event)` can observe the event first and later wake exactly at
 the time deadline. QuickJS continuations are parked behind the same native wait
 machinery.
 
-### Known plan-event lifetime bug
+### Per-wait event generations (shipped)
 
-`TrajectoryPlanRunner` currently keeps one `seen_events` set for the lifetime of
-the whole plan. After one wait consumes an event name, a later wait for the same
-name can observe the stale earlier occurrence.
-
-For example:
-
-```text
-Wait(Event("stage"))
-Burn(...)
-Wait(Event("stage"))
-```
-
-can allow the second wait to complete from the first `stage` event.
-
-Plan waits need per-wait consumption or, preferably, monotonic event generations
-/ sequence numbers. A guard should be able to express "wait for `stage`
-generation > N" rather than "has an event named `stage` ever happened during
-this plan?" This also gives baked/speculative execution a clean invalidation
-token.
+`TrajectoryPlanRunner` consumes event generations per wait: each wait observes
+one generation of its event name, retired on wait completion. A second wait
+for the same name therefore cannot complete from an earlier occurrence. Guards
+can express "wait for `stage` generation > N", which also gives
+baked/speculative execution a clean invalidation token.
 
 ## 7.7. Staging and ownership
 
@@ -307,20 +293,19 @@ One runtime should support:
 The implementation is complete enough for the graph/plan vertical slice, not
 for the final editor UX or logistics library.
 
-## 7.12. Known correctness work before calling the runtime finished
+## 7.12. Correctness record (both known bugs fixed)
 
-The two concrete bugs currently identified in the autopilot core are:
+Two runtime bugs were identified and fixed, with regression coverage:
 
-1. **wait-containing cycles validate but can deadlock at first execution.** The
-   validator understands a wait as a legal cycle boundary; `GraphRunner` does
-   not yet have iteration/token semantics and still waits for all incoming
-   predecessors to be `Ok` in the current epoch.
-2. **trajectory-plan event memory is too broad.** `TrajectoryPlanRunner` keeps
-   named events for the whole plan, so a later wait can consume an earlier
-   event with the same name.
+1. **wait-containing cycles deadlocked at first execution** — fixed by cutting
+   cycle-closing edges into wait-capable nodes (`loopback_edges`; single-pass
+   execution, §7.2).
+2. **trajectory-plan event memory too broad** — fixed by per-wait event
+   generations (`seen_events` retired on wait completion, §7.6; multi-generation
+   burnout test in `execute`).
 
-Both need regression tests that fail against the current behavior before the
-runtime loop/event model is expanded further.
+No further open loop/event-model bugs are known; expanding the runtime no
+longer waits on this section.
 
 ## 7.13. Current validation
 
@@ -339,8 +324,9 @@ cargo test -p thessa-server
 ```
 
 Unit tests are necessary but not sufficient for the final maneuver/autopilot
-stack. The final qualification target should include real deep-space mission
-replays.
+stack. L0–L2 mission replays now run in CI (`mission_replays.rs`,
+`mission_replays.toml`; millisecond-class); L3–L4 remain the slower
+qualification target.
 
 ## 7.14. Real-mission replay qualification suite
 
@@ -358,7 +344,22 @@ state, and accumulated miss. The same scenario should be runnable through
 broad search, exact correction, declarative plan execution, live authority, and
 powered-rails replay; those paths must agree within declared tolerances.
 
-### Core replay set
+### Shipped fixtures (L0–L2)
+
+Data-driven fixtures in `data/mission_replays.toml`, run by
+`crates/maneuver/tests/mission_replays.rs` (must stay millisecond-class for
+CI): Apollo Earth–Luna, Earth–Mars/Venus/Mars-return/Jupiter/Mercury/Saturn
+Hohmann-class directs, Mariner-10 Earth–Venus–Mercury tour, Voyager-1
+Earth–Jupiter–Saturn chain, Voyager-2 Grand Tour chain. Fixtures use
+design-relative windows with ~10% headroom caps and declare bodies, windows,
+and miss budgets — no hard-coded mission scripts.
+
+The 12-mission table below stays the target set: Pioneer 10/11, New Horizons,
+Galileo, Cassini, MESSENGER, BepiColombo, Juno, Solar Orbiter, and Lucy have
+no fixtures yet, and L3–L4 (deterministic DSMs, finite burns, powered-rails
+equivalence) remain future.
+
+### Core replay set (target)
 
 | Mission | Reference sequence | What it qualifies |
 | --- | --- | --- |
@@ -393,7 +394,7 @@ L3  approximate deterministic deep-space maneuvers and finite burns
 L4  historical ephemerides + powered-rails bake/replay equivalence
 ```
 
-L0-L2 should be cheap CI scenarios. L3-L4 can run as slower qualification or
+L0-L2 are cheap CI scenarios (shipped, §Shipped fixtures). L3-L4 can run as slower qualification or
 benchmark jobs. Exact historical reconstruction may use published SPICE kernels
 or equivalent source ephemerides later; the autopilot architecture should not
 depend on hard-coded mission scripts.

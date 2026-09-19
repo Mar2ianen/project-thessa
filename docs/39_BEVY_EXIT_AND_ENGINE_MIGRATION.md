@@ -2,10 +2,14 @@
 
 **Status:** Active migration  
 **Language:** English  
-**Updated:** 2026-09-16  
-**Review snapshot:** repository architecture known through commit `40aed83`, plus renderer/RCBT/Vulkan decisions made through 2026-09-16.
+**Updated:** 2026-09-18  
+**Review snapshot:** repository architecture known through the full-stack merge (`main` past `40aed83`), plus renderer/RCBT/Vulkan decisions made through 2026-09-16.
 
 > This document is intentionally operational. The goal is to stop adding Bevy-specific work that will have to be rewritten during the engine extraction.
+>
+> Carve-out: the `docs/38` indexed-terrain repairs are disposable-bridge work
+> (shared WGSL/geometry and material-ancestor mapping contain no Bevy API;
+> acknowledgement belongs to the bridge) — see §38:249-252.
 
 ## 1. Decision
 

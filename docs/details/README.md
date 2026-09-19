@@ -1,5 +1,7 @@
 # Detail design notes
 
+Status: design baselines (families defined; balance values TBD).
+
 This directory contains focused engineering/gameplay specifications for concrete vehicle, station, infrastructure, and interaction details that are too narrow for the top-level architecture documents.
 
 These notes define stable design intent and cross-system invariants. Exact balance values and implementation details may remain TBD until the relevant simulation subsystem is implemented.

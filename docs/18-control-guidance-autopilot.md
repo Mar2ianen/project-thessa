@@ -1,6 +1,10 @@
 # Unified control, guidance, and autopilot architecture
 
-Status: design target.
+Status: partial implementation baseline — §§1–11, 13 (authority, guidance,
+laws, policy, allocator, actuators, graph, QuickJS, waits, server ownership)
+shipped as a vertical slice; generalized allocator past surfaces+RCS,
+wire-protocol replacement, full stdlib, staging topology, and powered-rails
+certification (§12 warm-up, §15 Phases 4–5) remain design targets.
 
 This document defines the control refactor that collapses the current SAS/assist split into one guidance-and-control stack, separates aircraft and spacecraft control laws, and adds a MechJeb-like programmable automation layer backed by QuickJS.
 
@@ -654,6 +658,8 @@ The exact crate split is not normative; the dependency direction is.
 ## 15. Refactor plan
 
 The refactor should be behavior-preserving before new features are added.
+Phases 1–3 and 6–8 are substantially implemented (behavior-preserving
+extraction done); Phases 4–5 remain future.
 
 ### Phase 1: extract existing control behavior
 

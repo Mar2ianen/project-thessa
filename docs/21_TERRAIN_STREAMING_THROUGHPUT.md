@@ -1,5 +1,9 @@
 # 21 — Terrain streaming throughput and representation split
 
+Status: design baseline; invariants normative. Throughput phasing is archival:
+GPU-indexed CBT is implemented opt-in (`terrain=gpu_indexed`); the CPU baking
+description below applies to the fallback path only.
+
 Статус: **design target / performance follow-up**.
 
 Цель этой доки — увеличить скорость перемещения, при которой realtime terrain успевает корректно прогружаться, не ухудшая continuity и не превращая `PlanetField` в набор заранее запечённых растров.

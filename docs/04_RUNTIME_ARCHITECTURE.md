@@ -3,7 +3,7 @@
 ## Status
 
 **Implemented prototype, with explicit future boundaries.** This document
-describes the current workspace as of 2026-09-14. Sections labelled future do
+describes the current workspace as of 2026-09-18. Sections labelled future do
 not describe a shipped subsystem.
 
 ## 4.0. Cross-platform contract
@@ -65,14 +65,17 @@ crates/autopilot/         GPL typed graph IR and runner
 crates/autopilot-js/      GPL sandboxed QuickJS blocks
 crates/maneuver/          MIT typed maneuver planning prototype
 crates/collision/         MIT Rapier contact backend (no Bevy dependency)
-crates/bevy-rcbt/         MIT thin Bevy client adapter for RCBT runtime
+crates/bevy-rcbt/         MIT universal Bevy scheduling adapter for RCBT
+                          (render-world bridge + material pages + presentation)
+crates/plume-core/        MIT backend-neutral engine-plume field/medium model
 crates/rcbt-core/         MIT backend-agnostic RCBT topology runtime
 crates/rcbt-ref/          MIT independent RCBT topology oracle (tests)
 crates/rcbt-ffi/          MIT optional vendored libcbt backend adapter
 crates/rcbt-large-ffi/    MIT optional vendored large CBT backend adapter
 crates/rcbt-wgpu/         MIT portable wgpu RCBT compute backend
 
-apps/client/              GPL Bevy client
+apps/client/              GPL Bevy client (terrain, water, beauty, plume,
+                          contact gizmos)
 apps/server/              GPL headless authoritative shell
 
 tools/system-baker/       MIT system TOML to baked JSON

@@ -16,18 +16,20 @@ use thessa_graphics::ResolvedMaterialStorage;
 
 /// CPU-only compact residency for the microstore storage path.
 ///
-/// Holds encoded pages once per generation and builds decoded shadow pages
-/// for the shared texture-upload path. No GPU/Bevy types cross this
-/// boundary, so the render-world tests below pin it without an adapter.
-/// Sampling never sees which storage produced the bytes: texture format,
-/// mips, and filtering stay identical.
+/// Holds encoded pages once per generation plus their decoded shadow pages
+/// for the shared texture-upload path. Decode happens once per encoded
+/// generation — not once per upload batch — so a streaming frame costs
+/// O(changed pages), never O(residency). Shadow clones are `Arc` flips.
+/// No GPU/Bevy types cross this boundary, so the render-world tests below
+/// pin it without an adapter. Sampling never sees which storage produced
+/// the bytes: texture format, mips, and filtering stay identical.
 #[derive(Debug, Default)]
 pub(crate) struct MicrostoreResidency {
-    /// node id -> (page generation, encoded mip levels).
-    pages: BTreeMap<u64, (u64, Vec<EncodedMaterialLevel>)>,
+    /// node id -> (page generation, encoded mip levels, decoded shadow page).
+    pages: BTreeMap<u64, (u64, Vec<EncodedMaterialLevel>, crate::material_pages::CbtMaterialPage)>,
     /// Current compact residency in wire bytes (gauge, not lifetime).
     pub wire_bytes: u64,
-    /// Lifetime RGBA bytes decoded at upload time.
+    /// Lifetime RGBA bytes decoded at encode time (once per generation).
     pub decoded_bytes: u64,
     /// Lifetime CPU encode seconds (page -> compact form, once per generation).
     pub encode_secs: f64,
@@ -41,21 +43,25 @@ impl MicrostoreResidency {
     pub fn update(&mut self, pages: &CbtRenderMaterialPages) -> CbtRenderMaterialPages {
         self.pages.retain(|id, _| pages.pages.contains_key(id));
         for (id, (generation, page)) in pages.pages.iter() {
-            if let Some((g, _)) = self.pages.get(id) {
+            if let Some((g, _, _)) = self.pages.get(id) {
                 if *g == *generation {
                     continue;
                 }
             }
             let started = Instant::now();
             let levels = MaterialArray::encode_page_levels(page);
+            let decoded = MaterialArray::decode_material_levels(&levels);
             self.encode_secs += started.elapsed().as_secs_f64();
             self.pages_encoded += 1;
-            self.pages.insert(*id, (*generation, levels));
+            self.decoded_bytes += decoded.iter().map(Vec::len).sum::<usize>() as u64;
+            let shadow = crate::material_pages::CbtMaterialPage::from_decoded_mips(decoded)
+                .expect("decoded levels keep mip shapes");
+            self.pages.insert(*id, (*generation, levels, shadow));
         }
         self.wire_bytes = self
             .pages
             .values()
-            .flat_map(|(_, levels)| levels.iter())
+            .flat_map(|(_, levels, _)| levels.iter())
             .map(EncodedMaterialLevel::encoded_bytes)
             .sum::<usize>() as u64;
         let mut shadow = CbtRenderMaterialPages {
@@ -63,12 +69,8 @@ impl MicrostoreResidency {
             priority: pages.priority.clone(),
             pages: BTreeMap::new(),
         };
-        for (id, (_, levels)) in self.pages.iter() {
-            let decoded = MaterialArray::decode_material_levels(levels);
-            self.decoded_bytes += decoded.iter().map(Vec::len).sum::<usize>() as u64;
-            let page = crate::material_pages::CbtMaterialPage::from_decoded_mips(decoded)
-                .expect("decoded levels keep mip shapes");
-            shadow.pages.insert(*id, (pages.pages[id].0, page));
+        for (id, (generation, _, page)) in self.pages.iter() {
+            shadow.pages.insert(*id, (*generation, page.clone()));
         }
         shadow
     }
@@ -380,10 +382,17 @@ mod residency_tests {
         let wire_once = cache.wire_bytes;
         assert!(wire_once > 0);
         assert!(cache.decoded_bytes > 0);
-        // Same generations: no re-encode, gauge stable.
+        // Same generations: no re-encode, gauge stable, and — the fps fix —
+        // no re-decode either: a clean upload batch must cost O(1), not
+        // O(residency).
+        let decoded_once = cache.decoded_bytes;
         let shadow2 = cache.update(&pages);
         assert_eq!(cache.pages_encoded, 2, "must not re-encode clean pages");
         assert_eq!(cache.wire_bytes, wire_once, "wire gauge must be stable");
+        assert_eq!(
+            cache.decoded_bytes, decoded_once,
+            "clean batch must not re-decode residency"
+        );
         assert_eq!(shadow2.pages.len(), 2);
         // Evict one page: residency shrinks, shadow follows.
         let mut fewer = pages.clone();

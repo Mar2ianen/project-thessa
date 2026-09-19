@@ -5,6 +5,8 @@ use glam::DVec3;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::aero_residual::AeroResidualTable;
+
 const EPS_SPEED_MPS: f64 = 1.0e-9;
 
 /// Freestream properties expressed in the vehicle body frame.
@@ -1066,6 +1068,7 @@ fn parked_load(lane: &LaneFlow) -> AeroPanelLoad {
 pub struct PanelAeroModel {
     pub config: AeroConfig,
     pub coefficient_table: Option<AeroCoefficientTable>,
+    residual_coefficient_table: Option<AeroResidualTable>,
 }
 
 impl PanelAeroModel {
@@ -1074,6 +1077,7 @@ impl PanelAeroModel {
         Ok(Self {
             config,
             coefficient_table: None,
+            residual_coefficient_table: None,
         })
     }
 
@@ -1085,7 +1089,27 @@ impl PanelAeroModel {
         Ok(Self {
             config,
             coefficient_table: Some(coefficient_table),
+            residual_coefficient_table: None,
         })
+    }
+
+    /// Build a table-backed panel model that samples a bounded residual
+    /// coefficient field directly without expanding it back to f64 storage.
+    pub fn from_residual_table(
+        config: AeroConfig,
+        coefficient_table: AeroResidualTable,
+    ) -> Result<Self, AeroError> {
+        config.validate()?;
+        Ok(Self {
+            config,
+            coefficient_table: None,
+            residual_coefficient_table: Some(coefficient_table),
+        })
+    }
+
+    /// Borrow the packed coefficient table when this model uses one.
+    pub fn residual_coefficient_table(&self) -> Option<&AeroResidualTable> {
+        self.residual_coefficient_table.as_ref()
     }
 
     fn evaluate_internal(
@@ -1420,7 +1444,7 @@ impl PanelAeroModel {
         record_panel_loads: bool,
         scratch: &mut AeroSimdScratch,
     ) -> Result<AeroResult, AeroError> {
-        if self.coefficient_table.is_some() {
+        if self.coefficient_table.is_some() || self.residual_coefficient_table.is_some() {
             return self.evaluate_soa_parts(state, environment, panels, record_panel_loads);
         }
         state.validate()?;
@@ -1741,11 +1765,16 @@ impl PanelAeroModel {
         beta: f64,
         control_deflection: f64,
     ) -> AeroCoefficients {
-        if let Some(table) = &self.coefficient_table {
-            let mut coefficients = table.sample(
-                mach,
-                alpha + self.config.control_effectiveness * control_deflection,
-            );
+        let table_alpha = alpha + self.config.control_effectiveness * control_deflection;
+        let table_coefficients = if let Some(table) = &self.residual_coefficient_table {
+            Some(table.sample(mach, table_alpha))
+        } else {
+            self.coefficient_table
+                .as_ref()
+                .map(|table| table.sample(mach, table_alpha))
+        };
+
+        if let Some(mut coefficients) = table_coefficients {
             coefficients.lift *= panel.lift_coefficient_sign;
             coefficients.side_force += self.config.side_force_slope_per_rad * beta;
             coefficients

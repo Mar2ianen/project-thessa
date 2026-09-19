@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod aero;
+mod aero_residual;
 mod affine_propagator;
 mod atmosphere;
 mod collision;
@@ -30,6 +31,10 @@ pub use aero::{
     AeroCase, AeroCoefficientTable, AeroCoefficients, AeroConfig, AeroEnvironment, AeroError,
     AeroGeometry, AeroModel, AeroPanel, AeroPanelLoad, AeroResult, AeroSimdScratch, AeroState,
     PanelAeroModel, PanelSoA, evaluate_batch,
+};
+pub use aero_residual::{
+    AERO_RESIDUAL_TILE_EDGE, AeroCoefficientError, AeroPhysicalBudget, AeroPhysicalErrorBound,
+    AeroResidualBudget, AeroResidualCodec, AeroResidualStats, AeroResidualTable, AeroResidualTile,
 };
 pub use affine_propagator::{
     AffinePropagator, AnalyticError, AnalyticFallback, AnalyticStep, ModeCoefficients,

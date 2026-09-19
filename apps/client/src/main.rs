@@ -1171,13 +1171,18 @@ mod tests {
                 .filter(|body| is_visible_in_view(&ephemeris, map, body.id))
                 .count()
         };
+        // Counts follow the world-atlas sync (02B BC subsystem): Koro was
+        // fragmented into Orthea's rings (-1 under Orthea/Asterion) and the
+        // B/C subsystem added Janus+3 companions, BC-Outer+5 moons, BC-I and
+        // the B/C stars under bc_barycenter. Any world edit must update these
+        // together with docs/02_WORLD_ATLAS.md.
         for (mode, expected_count) in [
-            (MapMode::SystemOverview, 22),
-            (MapMode::Asterion, 18),
+            (MapMode::SystemOverview, 30),
+            (MapMode::Asterion, 17),
             (MapMode::Nereid, 9),
-            (MapMode::Orthea, 4),
+            (MapMode::Orthea, 3),
             (MapMode::Vesper, 3),
-            (MapMode::Binary, 4),
+            (MapMode::Binary, 13),
         ] {
             let focus = ephemeris
                 .body_id(mode.focus_name())

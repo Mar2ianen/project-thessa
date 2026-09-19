@@ -66,6 +66,12 @@ impl CbtMaterialPage {
         self.mips.iter().map(Vec::len).sum()
     }
 
+    /// Mip levels, finest first. Level 0 is the full 128x128 RGBA page;
+    /// each next level halves both extents down to 1x1.
+    pub fn mips(&self) -> &[Vec<u8>] {
+        &self.mips
+    }
+
     /// Rebuild a page from already-sized mip levels (microstore decode
     /// path): validates the 128-halving shape instead of averaging.
     /// Returns `None` on shape mismatch, like [`CbtMaterialPage::from_rgba8`].

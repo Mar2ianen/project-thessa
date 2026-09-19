@@ -158,3 +158,91 @@ pub fn surface_appearance(
         snow: snow as f32,
     }
 }
+
+#[cfg(test)]
+mod frost_tests {
+    use super::*;
+    use crate::biomes::{Biome, FeatureTag, Geology};
+
+    fn field() -> PlanetField {
+        let recipe =
+            toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml")).unwrap();
+        crate::field::field_from_manifest(&crate::spec_recipe::manifest_from_spec(&recipe).unwrap())
+            .unwrap()
+    }
+
+    fn sample(temperature_k: f64, moisture01: f64) -> TerrainSample {
+        TerrainSample {
+            height_m: 500.0,
+            macro_height_m: 500.0,
+            procedural_height_m: 0.0,
+            biome: Biome::RockyPlain,
+            geology: Geology::ContinentalCrust,
+            tag0: None,
+            tag1: None,
+            slope_hint: 0.1,
+            geothermal_flux_w_m2: 0.08,
+            moisture01,
+            temperature_k,
+            continentality01: 0.5,
+            eclipse_exposure01: 1.0,
+        }
+    }
+
+    fn dirs() -> Vec<[f64; 3]> {
+        // Fixed spread of unit directions: noise is identical across samples
+        // at the same dir, so temperature/moisture differences are pure.
+        (0..8)
+            .map(|i| {
+                let a = i as f64 * std::f64::consts::TAU / 8.0;
+                [a.cos(), 0.2, a.sin()]
+            })
+            .map(|d| {
+                let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                [d[0] / l, d[1] / l, d[2] / l]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn frost_settles_only_in_the_subzero_band_and_leaves_classification() {
+        let field = field();
+        for dir in dirs() {
+            // Warm and deep-cold: no frost band, baseline roughness exactly.
+            for temp in [300.0, 240.0] {
+                let out = surface_appearance(&field, &sample(temp, 1.0), dir);
+                assert_eq!(out.roughness, 0.92, "no frost outside the band at {temp} K");
+            }
+            // Classification inputs untouched by the visual frost.
+            assert_eq!(surface_appearance(&field, &sample(300.0, 1.0), dir).snow, 0.0);
+            assert_eq!(surface_appearance(&field, &sample(240.0, 1.0), dir).snow, 1.0);
+        }
+        // In the band (-7 C morning) frost must actually settle: compare
+        // moist vs dry at the same dirs. Snow cover is moisture-independent,
+        // so the means differ only through the frost moisture gate
+        // (0.25 + 0.75 * moisture) — a 4x cleaner signal than an absolute
+        // threshold against the noisy snow edge.
+        // Probe at the warm edge of the band (270 K): the frost band is
+        // still fully 1 there while the snow edge (~270 K center) has only
+        // half closed, so the moisture gate reads through snow suppression.
+        let mean = |moisture: f64| {
+            dirs()
+                .iter()
+                .map(|dir| surface_appearance(&field, &sample(270.0, moisture), *dir).roughness as f64)
+                .sum::<f64>()
+                / 8.0
+        };
+        let (moist, dry) = (mean(1.0), mean(0.0));
+        assert!(
+            moist < dry - 0.01,
+            "moisture must gate frost glitter, moist={moist:.4} dry={dry:.4}"
+        );
+        // Frost never raises roughness anywhere.
+        for dir in dirs() {
+            for temp in [250.0, 260.0, 266.0, 272.0, 280.0] {
+                let out = surface_appearance(&field, &sample(temp, 1.0), dir);
+                assert!(out.roughness <= 0.92, "frost only lowers roughness at {temp} K");
+            }
+        }
+    }
+}

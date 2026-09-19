@@ -73,6 +73,16 @@ Implementation status (branch `feat/microstorage-phase-a`):
   chain bit-exact level by level; packed sample-time bilinear filtering
   at 2.7-3.0 M samples/s with zero observed drift vs the CPU mirror
   (tolerance: one code level).
+- Sample-time completion: CPU footprint LOD selection
+  (`lod_level`, `aniso_ratio`, `sample_aniso` with 1/2/4/8 taps) plus
+  `lod_select` and `sample_aniso_packed` WGSL kernels. Measured on
+  hardware: LOD exact 256/256 footprints (446 ns/select); aniso taps
+  2.4/2.3/1.9/1.7 M samples/s with 96-100% of samples within one code
+  level of the CPU mirror and bounded tails (worst 22) from texel-
+  boundary floor() flips under f32/FMA divergence — pinned
+  statistically, with bit-exactness on uniform fields. Combined
+  LOD+mip-fetch (per-sample level buffers) stays engine-integration
+  work.
 
 This document defines a reusable microscaled storage layer for render-side and
 streamed surface data. The immediate target is terrain material pages. Height

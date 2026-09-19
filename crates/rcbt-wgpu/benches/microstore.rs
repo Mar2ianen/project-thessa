@@ -13,7 +13,7 @@ use std::{hint::black_box, sync::Arc, time::Instant};
 use thessa_microstore_core::{EncodeMode, EncodedPage, fixtures, measure};
 use thessa_microstore_core::{MipChain, sample_rounded};
 use thessa_rcbt_wgpu::microstore::MicrostoreDecode;
-use thessa_rcbt_wgpu::microstore_sample::{GpuMips, PackedSampler};
+use thessa_rcbt_wgpu::microstore_sample::{AnisoSampler, GpuMips, LodSelector, PackedSampler};
 
 const ITERS: usize = 30;
 const ADAPTIVE_BUDGET: f64 = 2.0;
@@ -212,6 +212,114 @@ fn main() {
             "  {mode_name:>6}: {:.3} ms / 256 samples ({:.1} M samples/s), worst drift {worst} level",
             ms,
             256.0 / (ms / 1000.0) / 1e6,
+        );
+    }
+
+    // LOD selection + anisotropic taps on the same coast page.
+    let lod_page = EncodedPage::encode(
+        &coast,
+        EncodeMode::Adaptive {
+            max_abs_error: ADAPTIVE_BUDGET,
+        },
+    );
+    let mut s = 0xBEEFu64;
+    let mut bench_jacs = Vec::with_capacity(256);
+    for _ in 0..256 {
+        let mut row = [0.0f32; 4];
+        for v in row.iter_mut() {
+            s = s.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = s;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            // Footprints from sub-texel to ~16 texels on 64-wide data.
+            let exp = ((z ^ (z >> 31)) as f64 / u64::MAX as f64) * 5.0 - 1.0;
+            *v = (2f64.powf(exp) as f32 / 64.0) * if s & 1 == 1 { -1.0 } else { 1.0 };
+        }
+        bench_jacs.push(row);
+    }
+    bench_lod_aniso(&device, &queue, &lod_page, &uvs, &bench_jacs);
+}
+
+fn bench_lod_aniso(
+    device: &Arc<wgpu::Device>,
+    queue: &Arc<wgpu::Queue>,
+    page: &EncodedPage,
+    uvs: &[[f32; 2]],
+    jacs: &[[f32; 4]],
+) {
+    use thessa_microstore_core::{UvJacobian, lod_level, sample_aniso};
+    // LOD selection throughput + exactness note.
+    let selector = LodSelector::new(device.clone(), queue.clone());
+    let started = Instant::now();
+    for _ in 0..ITERS {
+        let out = selector
+            .select(black_box(jacs), black_box(64), black_box(64), black_box(7))
+            .expect("lod");
+        black_box(out);
+    }
+    let ms = started.elapsed().as_secs_f64() * 1000.0 / ITERS as f64;
+    let gpu = selector.select(jacs, 64, 64, 7).expect("lod");
+    let exact = jacs
+        .iter()
+        .zip(gpu.iter())
+        .filter(|(j, got)| {
+            let jac = UvJacobian {
+                dudx: j[0],
+                dudy: j[1],
+                dvdx: j[2],
+                dvdy: j[3],
+            };
+            lod_level(&jac, [64.0, 64.0], 7) == **got
+        })
+        .count();
+    println!(
+        "lod select {} footprints: {:.3} ms ({:.1} ns/select), exact {exact}/{}",
+        jacs.len(),
+        ms,
+        ms * 1e6 / jacs.len() as f64,
+        jacs.len(),
+    );
+
+    // Anisotropic taps throughput per tap count, with drift column.
+    println!("aniso sample-time filtering (256 UVs, coast 64x64):");
+    let sampler = AnisoSampler::new(device.clone(), queue.clone());
+    let decoded = page.decode();
+    for taps in [1u32, 2, 4, 8] {
+        let gpu = sampler.sample(page, uvs, jacs, taps).expect("aniso sample");
+        let mut within_one = 0usize;
+        let mut worst = 0i32;
+        for ((uv, j), got) in uvs.iter().zip(jacs.iter()).zip(gpu.iter()) {
+            let jac = UvJacobian {
+                dudx: j[0],
+                dudy: j[1],
+                dvdx: j[2],
+                dvdy: j[3],
+            };
+            let want = sample_aniso(&decoded, uv[0], uv[1], &jac, taps)
+                .round()
+                .clamp(0.0, 255.0) as i32;
+            let diff = (*got as i32 - want).abs();
+            worst = worst.max(diff);
+            within_one += (diff <= 1) as usize;
+        }
+        let started = Instant::now();
+        for _ in 0..ITERS {
+            let out = sampler
+                .sample(
+                    black_box(page),
+                    black_box(uvs),
+                    black_box(jacs),
+                    black_box(taps),
+                )
+                .expect("aniso sample");
+            black_box(out);
+        }
+        let ms = started.elapsed().as_secs_f64() * 1000.0 / ITERS as f64;
+        println!(
+            "  taps {taps}: {:.3} ms / 256 samples ({:.1} M samples/s), {within_one}/{} within 1, worst {worst}",
+            ms,
+            256.0 / (ms / 1000.0) / 1e6,
+            uvs.len(),
         );
     }
 }

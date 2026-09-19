@@ -899,3 +899,264 @@ mod lod_aniso_tests {
         }
     }
 }
+
+/// Plain-buffer bilinear sampler over u32-per-texel data (one mip level).
+struct PlainSampler {
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    layout: wgpu::BindGroupLayout,
+    pipeline: wgpu::ComputePipeline,
+}
+
+impl PlainSampler {
+    fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("microstore-plain-layout"),
+            entries: &[
+                entry(0, true, true),
+                entry(1, true, false),
+                entry(2, true, false),
+                entry(3, false, false),
+            ],
+        });
+        let pipeline = compute_pipeline(
+            &device,
+            &layout,
+            thessa_microstore_core::wgsl::MICROSTORE_PLAIN_SAMPLE_WGSL,
+            "sample_plain",
+        );
+        Self {
+            device,
+            queue,
+            layout,
+            pipeline,
+        }
+    }
+
+    /// Bilinear-filter `uvs` against one u32-per-texel level buffer.
+    fn sample_level(
+        &self,
+        level: &[u32],
+        width: u32,
+        height: u32,
+        uvs: &[[f32; 2]],
+    ) -> Result<Vec<u32>, WgpuError> {
+        let src_buf = storage(&self.device, "plain-src", (level.len() * 4) as u64, false);
+        let mut uv_bytes = Vec::with_capacity(uvs.len() * 8);
+        for uv in uvs {
+            uv_bytes.extend_from_slice(&uv[0].to_le_bytes());
+            uv_bytes.extend_from_slice(&uv[1].to_le_bytes());
+        }
+        let uv_buf = storage(
+            &self.device,
+            "plain-uv",
+            uv_bytes.len().max(4) as u64,
+            false,
+        );
+        let params_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("plain-params"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let out_buf = storage(&self.device, "plain-out", (uvs.len() * 4) as u64, true);
+        self.queue.write_buffer(&src_buf, 0, &words_to_bytes(level));
+        if !uv_bytes.is_empty() {
+            self.queue.write_buffer(&uv_buf, 0, &uv_bytes);
+        }
+        self.queue
+            .write_buffer(&params_buf, 0, &words_to_bytes(&[width, height, 0, 0]));
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("plain-bg"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: src_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uv_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: out_buf.as_entire_binding(),
+                },
+            ],
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("plain-enc"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("plain-pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(uvs.len().div_ceil(WORKGROUP as usize).max(1) as u32, 1, 1);
+        }
+        self.queue.submit(Some(encoder.finish()));
+        readback_u32(&self.device, &self.queue, &out_buf, uvs.len())
+    }
+}
+
+/// Integrated LOD + mip-fetch + filter path: decode once, build the GPU
+/// mip chain, select levels per footprint, and bilinear-sample each level
+/// for its samples.
+///
+/// The decode→level-0 hop round-trips through the CPU reference decoder
+/// (documented extra upload; a production backend would chain device
+/// buffers with no roundtrip). Everything after that stays on the GPU
+/// except the tiny level-index readback used for sample grouping.
+pub struct LodMipSampler {
+    decoder: super::microstore::MicrostoreDecode,
+    mips: GpuMips,
+    lod: LodSelector,
+    plain: PlainSampler,
+}
+
+impl LodMipSampler {
+    /// Compile all four stages.
+    pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
+        Self {
+            decoder: super::microstore::MicrostoreDecode::new(device.clone(), queue.clone()),
+            mips: GpuMips::new(device.clone(), queue.clone()),
+            lod: LodSelector::new(device.clone(), queue.clone()),
+            plain: PlainSampler::new(device, queue),
+        }
+    }
+
+    /// Filter `uvs` with per-sample Jacobians through the full chain.
+    /// Returns rounded bytes in sample order, comparable with
+    /// [`thessa_microstore_core::sample_lod_rounded`] on the CPU mip
+    /// chain within one code level (bilinear f32-vs-f64 rounding; LOD
+    /// selection itself held exactly on every probed footprint).
+    pub fn sample_chain(
+        &self,
+        page: &EncodedPage,
+        uvs: &[[f32; 2]],
+        jacs: &[[f32; 4]],
+        max_level: u32,
+    ) -> Result<Vec<u32>, WgpuError> {
+        assert_eq!(uvs.len(), jacs.len(), "uvs and jacobians pair up");
+        page.validate()
+            .map_err(|e| WgpuError::Device(format!("invalid page: {e}")))?;
+        // Stage 1+2: GPU decode, then the CPU reference re-uploads the
+        // decoded bytes as the level-0 u32 buffer (documented extra hop).
+        let decoded = self.decoder.decode_page(page)?;
+        let level0: Vec<u32> = decoded.iter().map(|v| *v as u32).collect();
+        // Stage 3: GPU mip chain from level 0.
+        let mut levels: Vec<(u32, u32, Vec<u32>)> = vec![(page.width, page.height, level0)];
+        while levels.len() as u32 <= max_level {
+            let (w, h, data) = levels.last().expect("nonempty chain");
+            if *w == 1 && *h == 1 {
+                break;
+            }
+            let (dw, dh, out) = self.mips.downsample(data, *w, *h)?;
+            levels.push((dw, dh, out));
+        }
+        // Stage 4: GPU level selection per footprint.
+        let selected = self.lod.select(jacs, page.width, page.height, max_level)?;
+        // Stage 5: group sample indices by level, filter each group from
+        // its level buffer, reassemble in sample order.
+        let mut by_level: Vec<Vec<usize>> = vec![Vec::new(); levels.len()];
+        for (i, level) in selected.iter().enumerate() {
+            by_level[(*level as usize).min(levels.len() - 1)].push(i);
+        }
+        let mut out = vec![0u32; uvs.len()];
+        for (level, indices) in by_level.iter().enumerate() {
+            if indices.is_empty() {
+                continue;
+            }
+            let (w, h, data) = &levels[level];
+            let group_uvs: Vec<[f32; 2]> = indices.iter().map(|i| uvs[*i]).collect();
+            let group = self.plain.sample_level(data, *w, *h, &group_uvs)?;
+            for (slot, value) in indices.iter().zip(group.iter()) {
+                out[*slot] = *value;
+            }
+        }
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod lod_mip_tests {
+    use super::LodMipSampler;
+    use super::try_device;
+    use thessa_microstore_core::{EncodeMode, MipChain, UvJacobian, fixtures, sample_lod_rounded};
+
+    #[test]
+    fn integrated_chain_matches_cpu_reference() {
+        let Some((device, queue, name)) = try_device() else {
+            eprintln!("SKIP: no GPU adapter for integrated chain test");
+            return;
+        };
+        eprintln!("integrated chain on {name}");
+        let sampler = LodMipSampler::new(device, queue);
+        // Seeded UVs plus Jacobian magnitudes from sub-texel to 16 texels
+        // so samples route across several mip levels.
+        let mut uvs = vec![[0.0f32, 0.0], [1.0, 1.0], [0.5, 0.5]];
+        let mut jacs = vec![[1.0 / 64.0, 0.0, 0.0, 1.0 / 64.0]; 3];
+        let mut s = 0x1E4Eu64;
+        let mut next = || {
+            s = s.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = s;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            (z ^ (z >> 31)) as f64 / u64::MAX as f64
+        };
+        while uvs.len() < 128 {
+            let exp = next() * 5.0 - 1.0;
+            let m = 2f64.powf(exp) as f32 / 64.0;
+            uvs.push([next() as f32, next() as f32]);
+            jacs.push([m, 0.0, 0.0, m]);
+        }
+        for (fixture_name, field) in fixtures::all(64, 64) {
+            let page = thessa_microstore_core::EncodedPage::encode(
+                &field,
+                EncodeMode::Adaptive { max_abs_error: 2.0 },
+            );
+            let gpu = sampler
+                .sample_chain(&page, &uvs, &jacs, 6)
+                .expect("integrated sample");
+            // CPU reference: same chain from the same decoded bytes.
+            let decoded = page.decode();
+            let decoded_field =
+                thessa_microstore_core::ScalarField::new(64, 64, decoded.data.clone())
+                    .expect("extent");
+            let chain = MipChain::build(&decoded_field, 6);
+            let mut within_one = 0usize;
+            let mut worst = 0i32;
+            for ((uv, j), got) in uvs.iter().zip(jacs.iter()).zip(gpu.iter()) {
+                let jac = UvJacobian {
+                    dudx: j[0],
+                    dudy: j[1],
+                    dvdx: j[2],
+                    dvdy: j[3],
+                };
+                let want =
+                    sample_lod_rounded(&chain.levels, [64.0, 64.0], uv[0], uv[1], &jac, 6) as i32;
+                let diff = (*got as i32 - want).abs();
+                worst = worst.max(diff);
+                within_one += (diff <= 1) as usize;
+            }
+            eprintln!(
+                "{fixture_name}: {within_one}/{} within 1, worst {worst}",
+                uvs.len()
+            );
+            assert!(
+                within_one * 20 >= uvs.len() * 19,
+                "{fixture_name}: only {within_one}/{} within 1",
+                uvs.len()
+            );
+            assert!(worst <= 16, "{fixture_name}: runaway drift {worst}");
+        }
+    }
+}

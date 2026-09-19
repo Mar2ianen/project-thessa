@@ -65,5 +65,6 @@ pub use metrics::{ErrorStats, LinearErrorStats, measure, measure_linear, srgb_to
 pub use mips::{MipChain, downsample_box};
 pub use residency::{CacheTelemetry, DirtyRange, FlushPayload, ResidencyCache, ResidencyError};
 pub use sample::{
-    UvJacobian, aniso_ratio, lod_level, sample_aniso, sample_bilinear, sample_rounded,
+    UvJacobian, aniso_ratio, lod_level, sample_aniso, sample_bilinear, sample_lod,
+    sample_lod_rounded, sample_rounded,
 };

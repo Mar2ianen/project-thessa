@@ -505,6 +505,51 @@ fn sample_aniso_packed(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+/// Plain-buffer bilinear sampler over u32-per-texel data: the mip-level
+/// fetch half of the integrated path. Normalized UVs in, rounded bytes
+/// out, one thread per sample, edge-clamped exactly like
+/// [`crate::sample_bilinear`]. Operates on decoded levels (never packed),
+/// so mip chains built by `mip_downsample` plug in directly.
+pub const MICROSTORE_PLAIN_SAMPLE_WGSL: &str = r#"
+struct PlainParams {
+    width: u32,
+    height: u32,
+    _p0: u32,
+    _p1: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: PlainParams;
+@group(0) @binding(1) var<storage, read> src_texels: array<u32>;
+@group(0) @binding(2) var<storage, read> sample_uv: array<vec2<f32>>;
+@group(0) @binding(3) var<storage, read_write> out_texels: array<u32>;
+
+@compute @workgroup_size(64)
+fn sample_plain(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let s = gid.x;
+    if (s >= arrayLength(&sample_uv)) {
+        return;
+    }
+    let w = f32(params.width);
+    let h = f32(params.height);
+    let uv = sample_uv[s];
+    let x = clamp(uv.x, 0.0, 1.0) * (w - 1.0);
+    let y = clamp(uv.y, 0.0, 1.0) * (h - 1.0);
+    let x0 = u32(floor(x));
+    let y0 = u32(floor(y));
+    let x1 = min(x0 + 1u, params.width - 1u);
+    let y1 = min(y0 + 1u, params.height - 1u);
+    let fx = x - f32(x0);
+    let fy = y - f32(y0);
+    let a = f32(src_texels[y0 * params.width + x0]);
+    let b = f32(src_texels[y0 * params.width + x1]);
+    let c = f32(src_texels[y1 * params.width + x0]);
+    let d = f32(src_texels[y1 * params.width + x1]);
+    let mixed = a * (1.0 - fx) * (1.0 - fy) + b * fx * (1.0 - fy)
+        + c * (1.0 - fx) * fy + d * fx * fy;
+    out_texels[s] = u32(mixed + 0.5);
+}
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -579,11 +624,13 @@ mod tests {
         assert!(MICROSTORE_SAMPLE_WGSL.contains("fn sample_packed"));
         assert!(MICROSTORE_LOD_WGSL.contains("fn lod_select"));
         assert!(MICROSTORE_ANISO_WGSL.contains("fn sample_aniso_packed"));
+        assert!(MICROSTORE_PLAIN_SAMPLE_WGSL.contains("fn sample_plain"));
         for src in [
             MICROSTORE_MIP_WGSL,
             MICROSTORE_SAMPLE_WGSL,
             MICROSTORE_LOD_WGSL,
             MICROSTORE_ANISO_WGSL,
+            MICROSTORE_PLAIN_SAMPLE_WGSL,
         ] {
             assert!(src.contains("@workgroup_size(64)"));
             assert!(!src.contains("subgroup"));

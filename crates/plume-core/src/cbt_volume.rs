@@ -38,6 +38,9 @@ impl PlumeBound {
         }
     }
 
+    // Validity guards must reject NaN: `!(x > 0.0)` catches NaN while the lint's
+    // suggested `x <= 0.0` would accept it. The negated form is deliberate.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn is_degenerate(self) -> bool {
         !(self.length_m > 0.0) || !(self.max_radius_m > 0.0)
     }

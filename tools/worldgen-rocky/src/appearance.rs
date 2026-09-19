@@ -162,7 +162,7 @@ pub fn surface_appearance(
 #[cfg(test)]
 mod frost_tests {
     use super::*;
-    use crate::biomes::{Biome, FeatureTag, Geology};
+    use crate::biomes::{Biome, Geology};
 
     fn field() -> PlanetField {
         let recipe =

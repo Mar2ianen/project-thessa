@@ -214,6 +214,7 @@ pub fn select_tiles_with_height_and_frustum(
 /// The previous state is used only as a deterministic priority bias; the
 /// returned set is still rebuilt from the current eye and remains bounded by
 /// `budget`.
+#[allow(clippy::too_many_arguments)]
 pub fn select_tiles_with_history(
     eye: [f64; 3],
     radius: f64,
@@ -1134,17 +1135,33 @@ mod surface_regressions {
         fn channel_stats(rgba: &[u8], channel: usize) -> (f64, u8, u8) {
             let n = rgba.len() / 4;
             let mean = rgba
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|px| px[channel] as f64)
                 .sum::<f64>()
                 / n as f64;
             let var = rgba
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|px| (px[channel] as f64 - mean).powi(2))
                 .sum::<f64>()
                 / n as f64;
-            let min = rgba.chunks_exact(4).map(|px| px[channel]).min().unwrap();
-            let max = rgba.chunks_exact(4).map(|px| px[channel]).max().unwrap();
+            let min = rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|px| px[channel])
+                .min()
+                .unwrap();
+            let max = rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|px| px[channel])
+                .max()
+                .unwrap();
             (var.sqrt(), min, max)
         }
         let field = field();

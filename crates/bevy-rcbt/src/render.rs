@@ -1696,6 +1696,7 @@ fn write_height_slot(gpu: &mut CbtGpuBuffers, pages: &CbtRenderPages, node_id: u
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare_cbt_gpu_buffers(
     topology: Option<Res<CbtRenderTopology>>,
     material: Option<Res<CbtRenderMaterial>>,
@@ -1808,10 +1809,14 @@ fn prepare_cbt_gpu_buffers(
                 let relative = transform
                     .transform_point3(bevy::math::DVec3::from_array(anchor.anchor_body_m))
                     .to_array();
-                for axis in 0..3 {
-                    frame.anchor_hi_m[axis] = relative[axis] as f32;
-                    frame.anchor_lo_m[axis] =
-                        (relative[axis] - f64::from(frame.anchor_hi_m[axis])) as f32;
+                for (axis, (hi, rel)) in frame
+                    .anchor_hi_m
+                    .iter_mut()
+                    .zip(relative.iter())
+                    .enumerate()
+                {
+                    *hi = *rel as f32;
+                    frame.anchor_lo_m[axis] = (*rel - f64::from(*hi)) as f32;
                 }
                 [
                     frame.anchor_hi_m,
@@ -2010,6 +2015,7 @@ fn dispatch_cbt_geometry(
     gpu.generated_surface_generation = gpu.surface_generation;
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_cbt_geometry(
     presentation: Res<CbtGpuPresentation>,
     surface: Option<Res<CbtRenderSurface>>,
@@ -2441,6 +2447,7 @@ fn draw_cbt_geometry(
 }
 
 #[cfg(feature = "mesh-shaders")]
+#[allow(clippy::too_many_arguments)]
 fn draw_cbt_mesh_geometry(
     presentation: Res<CbtGpuPresentation>,
     material: Option<Res<CbtRenderMaterial>>,

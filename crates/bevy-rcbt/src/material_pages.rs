@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn mips_average_color_in_linear_light_and_keep_roughness_linear() {
         let mut bytes = vec![0; 128 * 128 * 4];
-        for (i, p) in bytes.chunks_exact_mut(4).enumerate() {
+        for (i, p) in bytes.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let value = if i % 2 == 0 { 0 } else { 255 };
             p.copy_from_slice(&[value; 4]);
         }

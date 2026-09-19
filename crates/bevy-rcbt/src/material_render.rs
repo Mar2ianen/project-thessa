@@ -50,10 +50,10 @@ impl MicrostoreResidency {
     pub fn update(&mut self, pages: &CbtRenderMaterialPages) -> CbtRenderMaterialPages {
         self.pages.retain(|id, _| pages.pages.contains_key(id));
         for (id, (generation, page)) in pages.pages.iter() {
-            if let Some((g, _, _)) = self.pages.get(id) {
-                if *g == *generation {
-                    continue;
-                }
+            if let Some((g, _, _)) = self.pages.get(id)
+                && *g == *generation
+            {
+                continue;
             }
             let started = Instant::now();
             let levels = MaterialArray::encode_page_levels(page);

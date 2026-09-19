@@ -158,8 +158,8 @@ fn bake_plume(w: u32, h: u32, diamonds: bool) -> Vec<u8> {
             }
             let core = (bright * 1.6).min(1.0);
             let r_c = (1.0f64).min(0.35 + core);
-            let g_c = (0.85 * core + 0.15 * body) as f64;
-            let b_c = (0.55 * core * core) as f64;
+            let g_c = 0.85 * core + 0.15 * body;
+            let b_c = 0.55 * core * core;
             let a = (bright * 1.25).clamp(0.0, 1.0);
             px.extend_from_slice(&[
                 (r_c.clamp(0.0, 1.0) * 255.0) as u8,
@@ -268,7 +268,6 @@ fn setup_plume(
     let cone = meshes.add(Cone {
         radius: 1.1,
         height: cone_h,
-        ..default()
     });
     commands.spawn((
         Mesh3d(cone),
@@ -410,7 +409,7 @@ fn update_plume_field(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn drive_plume_consumers(
     cache: Res<PlumeFieldCache>,
     graphics: Option<Res<GraphicsResolved>>,
@@ -527,6 +526,7 @@ fn drive_plume_consumers(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 fn drive_volume(
     r: &ResolvedGraphicsSettings,
     cache: &PlumeFieldCache,
@@ -597,52 +597,49 @@ fn drive_volume(
     vol_t.scale = Vec3::new(diameter * 0.5 + r_tail * 1.6, len, 1.0);
     *vol_v = Visibility::Visible;
 
-    if let Some(handle) = volume_mat.single().ok() {
-        if let Some(mut mat) = volume_materials.get_mut(&handle.0) {
-            mat.uniforms = PlumeUniforms {
-                origin_len: Vec4::new(nozzle.x, nozzle.y, nozzle.z, len),
-                axis_r0: Vec4::new(
-                    exhaust.x,
-                    exhaust.y,
-                    exhaust.z,
-                    cache.source.exit_radius_m as f32,
-                ),
-                shape_time: Vec4::new(
-                    r_tail,
-                    shock_cell_spacing_m(
-                        2.0 * cache.source.exit_radius_m,
-                        cache.source.exit_mach,
-                        pi,
-                    ) as f32,
-                    amp,
-                    time,
-                ),
-                march: Vec4::new(
-                    gain,
-                    ext_mean,
-                    steps,
-                    cache.source.exhaust_velocity_mps as f32 * 0.1,
-                ),
-                core_rgb: Vec4::new(
-                    material.core_rgb[0] as f32 * inv_divisor,
-                    material.core_rgb[1] as f32 * inv_divisor,
-                    material.core_rgb[2] as f32 * inv_divisor,
-                    0.40,
-                ),
-                mid_rgb: Vec4::new(
-                    material.mid_rgb[0] as f32 * inv_divisor,
-                    material.mid_rgb[1] as f32 * inv_divisor,
-                    material.mid_rgb[2] as f32 * inv_divisor,
-                    spread_rate(pi) as f32,
-                ),
-                edge_rgb: Vec4::new(
-                    material.edge_rgb[0] as f32 * inv_divisor,
-                    material.edge_rgb[1] as f32 * inv_divisor,
-                    material.edge_rgb[2] as f32 * inv_divisor,
-                    expansion_fan(pi) as f32,
-                ),
-            };
-        }
+    if let Ok(handle) = volume_mat.single()
+        && let Some(mut mat) = volume_materials.get_mut(&handle.0)
+    {
+        mat.uniforms = PlumeUniforms {
+            origin_len: Vec4::new(nozzle.x, nozzle.y, nozzle.z, len),
+            axis_r0: Vec4::new(
+                exhaust.x,
+                exhaust.y,
+                exhaust.z,
+                cache.source.exit_radius_m as f32,
+            ),
+            shape_time: Vec4::new(
+                r_tail,
+                shock_cell_spacing_m(2.0 * cache.source.exit_radius_m, cache.source.exit_mach, pi)
+                    as f32,
+                amp,
+                time,
+            ),
+            march: Vec4::new(
+                gain,
+                ext_mean,
+                steps,
+                cache.source.exhaust_velocity_mps as f32 * 0.1,
+            ),
+            core_rgb: Vec4::new(
+                material.core_rgb[0] as f32 * inv_divisor,
+                material.core_rgb[1] as f32 * inv_divisor,
+                material.core_rgb[2] as f32 * inv_divisor,
+                0.40,
+            ),
+            mid_rgb: Vec4::new(
+                material.mid_rgb[0] as f32 * inv_divisor,
+                material.mid_rgb[1] as f32 * inv_divisor,
+                material.mid_rgb[2] as f32 * inv_divisor,
+                spread_rate(pi) as f32,
+            ),
+            edge_rgb: Vec4::new(
+                material.edge_rgb[0] as f32 * inv_divisor,
+                material.edge_rgb[1] as f32 * inv_divisor,
+                material.edge_rgb[2] as f32 * inv_divisor,
+                expansion_fan(pi) as f32,
+            ),
+        };
     }
 }
 
@@ -655,6 +652,7 @@ fn craft_lateral_fallback(exhaust: Vec3) -> Vec3 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn drive_cone(
     r: &ResolvedGraphicsSettings,
     cache: &PlumeFieldCache,

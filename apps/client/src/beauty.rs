@@ -425,7 +425,7 @@ fn setup_beauty(
             y: 0,
         };
         debug_assert_eq!(
-            cbt_node_for_tile(key).and_then(|n| tile_for_cbt_node(n)),
+            cbt_node_for_tile(key).and_then(tile_for_cbt_node),
             Some(key)
         );
     }
@@ -551,6 +551,7 @@ fn swap_gas_giant_materials(
 }
 
 /// Find a planet visual transform by body name (map view) or PFD name (pilot).
+#[allow(clippy::type_complexity)]
 fn planet_transform(
     body: &str,
     visuals: &Query<(&Name, &Transform, &Visibility), (Without<CloudShell>, Without<AuroraShell>)>,
@@ -588,19 +589,20 @@ fn cloud_material(
     tex: Handle<Image>,
     opacity: f32,
 ) {
-    if let Some(mut mat) = materials.get_mut(handle) {
-        if mat.base_color_texture.is_none() {
-            mat.base_color = Color::WHITE;
-            mat.base_color_texture = Some(tex);
-            mat.alpha_mode = AlphaMode::Blend;
-            mat.cull_mode = None;
-            mat.perceptual_roughness = 1.0;
-            mat.metallic = 0.0;
-            mat.base_color.set_alpha(opacity);
-        }
+    if let Some(mut mat) = materials.get_mut(handle)
+        && mat.base_color_texture.is_none()
+    {
+        mat.base_color = Color::WHITE;
+        mat.base_color_texture = Some(tex);
+        mat.alpha_mode = AlphaMode::Blend;
+        mat.cull_mode = None;
+        mat.perceptual_roughness = 1.0;
+        mat.metallic = 0.0;
+        mat.base_color.set_alpha(opacity);
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn follow_cloud_shells(
     imgs: Option<Res<BeautyImages>>,
     graphics: Option<Res<GraphicsResolved>>,
@@ -669,6 +671,7 @@ fn follow_cloud_shells(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn follow_aurora_shell(
     imgs: Option<Res<BeautyImages>>,
     graphics: Option<Res<GraphicsResolved>>,

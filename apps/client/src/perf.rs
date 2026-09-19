@@ -481,6 +481,7 @@ struct PerfMode<'w> {
     graphics: Option<Res<'w, GraphicsResolved>>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn perf_end_frame(
     time: Res<Time<Real>>,
     window: Single<&Window, With<PrimaryWindow>>,
@@ -608,15 +609,14 @@ fn perf_end_frame(
     if cbt_surface
         .as_deref()
         .is_some_and(|surface| surface.gpu_raster_enabled() && surface.gpu_surface_ready())
-    {
-        if let Some(value) = diagnostics.as_ref().and_then(|store| {
+        && let Some(value) = diagnostics.as_ref().and_then(|store| {
             store
                 .iter()
                 .find(|diagnostic| diagnostic.path().as_str() == "render/terrain_triangles")
                 .and_then(|diagnostic| diagnostic.value())
-        }) {
-            world.terrain_triangles = value as u64;
-        }
+        })
+    {
+        world.terrain_triangles = value as u64;
     }
     monitor.collector.set_world_counters(world);
 

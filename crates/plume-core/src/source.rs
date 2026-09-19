@@ -105,6 +105,9 @@ pub fn pressure_ratio(source: &PlumeSource, env: &PlumeEnvironment) -> f64 {
 
 /// Validation for profile building. Returns a static reason when the source
 /// cannot produce a meaningful field (uninited data, not a physics regime).
+// Validity guards must reject NaN: `!(x > 0.0)` catches NaN while the lint's
+// suggested `x <= 0.0` would accept it. The negated form is deliberate.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn validation_error(source: &PlumeSource, env: &PlumeEnvironment) -> Option<&'static str> {
     if !(source.exit_radius_m > 0.0) {
         return Some("exit_radius_m must be > 0");

@@ -50,6 +50,9 @@ pub fn expansion_regime(source: &PlumeSource, env: &PlumeEnvironment) -> Expansi
 /// First shock-cell spacing (m) from exit diameter, exit Mach, and ambient
 /// mismatch direction. Spacing grows with `D` and `M` (Tam); the pressure
 /// ratio feeds amplitude separately via [`shock_amplitude`].
+// Validity guards must reject NaN: `!(x > 0.0)` catches NaN while the lint's
+// suggested `x <= 0.0` would accept it. The negated form is deliberate.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn shock_cell_spacing_m(exit_diameter_m: f64, exit_mach: f64, pi: f64) -> f64 {
     if !(exit_diameter_m > 0.0) || !(exit_mach > 1.0) || !pi.is_finite() || pi <= 0.0 {
         return 0.0;

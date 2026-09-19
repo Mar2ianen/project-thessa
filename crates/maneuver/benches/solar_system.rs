@@ -43,6 +43,7 @@ use thessa_sim_core::{BakedEphemeris, BodyId, GravityField, SimTime, SystemConfi
 
 const DAY: f64 = 86_400.0;
 
+#[allow(clippy::too_many_arguments)]
 fn survey_config(
     central: BodyId,
     departure: BodyId,

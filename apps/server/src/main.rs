@@ -1244,14 +1244,13 @@ impl Sim {
         // LVLH central state for the active segment (ORIGIN when the
         // segment steers inertially — the executor ignores it there).
         let mut central = BodyState::ORIGIN;
-        if let Some(segment) = executor.active_segment() {
-            if let thessa_maneuver::SegmentDirection::Rtn { central: body, .. } = segment.direction
-            {
-                central = self
-                    .ephemeris
-                    .body_state(body, now)
-                    .map_err(|error| format!("burn central body: {error}"))?;
-            }
+        if let Some(segment) = executor.active_segment()
+            && let thessa_maneuver::SegmentDirection::Rtn { central: body, .. } = segment.direction
+        {
+            central = self
+                .ephemeris
+                .body_state(body, now)
+                .map_err(|error| format!("burn central body: {error}"))?;
         }
         let sample = SteeringSample {
             velocity_inertial_mps: self.authority.state.velocity_inertial_mps,
@@ -1894,10 +1893,13 @@ enum ConnectionState {
     Closed,
 }
 
+/// Latest-value continuous-input slots, one bounded deque per client.
+type ContinuousInputLog = Arc<Mutex<BTreeMap<String, VecDeque<(u64, ClientInput)>>>>;
+
 #[derive(Clone)]
 struct IngressSender {
     events: tokio::sync::mpsc::Sender<Upstream>,
-    latest_inputs: Arc<Mutex<BTreeMap<String, VecDeque<(u64, ClientInput)>>>>,
+    latest_inputs: ContinuousInputLog,
     leaves: Arc<Mutex<BTreeSet<String>>>,
     connections: Arc<Mutex<BTreeMap<String, ConnectionState>>>,
     next_connection: Arc<AtomicU64>,
@@ -1908,7 +1910,7 @@ struct IngressSender {
 
 struct IngressReceiver {
     events: tokio::sync::mpsc::Receiver<Upstream>,
-    latest_inputs: Arc<Mutex<BTreeMap<String, VecDeque<(u64, ClientInput)>>>>,
+    latest_inputs: ContinuousInputLog,
     leaves: Arc<Mutex<BTreeSet<String>>>,
     connections: Arc<Mutex<BTreeMap<String, ConnectionState>>>,
     reliable_fences: Arc<Mutex<BTreeMap<String, u64>>>,
@@ -3219,19 +3221,19 @@ mod tests {
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }
                 let t = sim.authority.flight_time_s;
-                if let Some((_, propulsion)) = &sim.guidance {
-                    if propulsion.normalized > 0.5 {
-                        saw_burn = true;
-                    }
+                if let Some((_, propulsion)) = &sim.guidance
+                    && propulsion.normalized > 0.5
+                {
+                    saw_burn = true;
                 }
                 max_thrust = max_thrust.max(sim.authority.thrust_n());
                 if with_execution && sim.maneuver_execution.is_none() {
                     break;
                 }
-                if let Some(until) = until_s {
-                    if t >= until {
-                        break;
-                    }
+                if let Some(until) = until_s
+                    && t >= until
+                {
+                    break;
                 }
             }
             (
@@ -3397,19 +3399,19 @@ mod tests {
                     }
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }
-                if let Some((_, propulsion)) = &sim.guidance {
-                    if propulsion.normalized > 0.5 {
-                        saw_burn = true;
-                    }
+                if let Some((_, propulsion)) = &sim.guidance
+                    && propulsion.normalized > 0.5
+                {
+                    saw_burn = true;
                 }
                 max_thrust = max_thrust.max(sim.authority.thrust_n());
                 if with_execution && sim.burn_execution.is_none() {
                     break;
                 }
-                if let Some(until) = until_s {
-                    if sim.authority.flight_time_s >= until {
-                        break;
-                    }
+                if let Some(until) = until_s
+                    && sim.authority.flight_time_s >= until
+                {
+                    break;
                 }
             }
             (

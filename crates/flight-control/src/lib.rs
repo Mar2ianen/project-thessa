@@ -875,10 +875,11 @@ pub fn allocate_wrench(
             }
             rhs[a] = dot_b;
             for (b, &col_b) in free_indices.iter().enumerate() {
-                let mut dot = 0.0;
-                for row in 0..6 {
-                    dot += columns[col_a][row] * columns[col_b][row];
-                }
+                let dot = columns[col_a]
+                    .iter()
+                    .zip(columns[col_b].iter())
+                    .map(|(a, b)| a * b)
+                    .sum();
                 matrix[a][b] = dot;
             }
         }
@@ -975,8 +976,8 @@ fn solve_dense_system(matrix: &mut [Vec<f64>], rhs: &mut [f64]) -> Option<Vec<f6
     for pivot in 0..dim {
         let mut best_row = pivot;
         let mut best_mag = matrix[pivot][pivot].abs();
-        for row in (pivot + 1)..dim {
-            let mag = matrix[row][pivot].abs();
+        for (row, candidate) in matrix.iter().enumerate().skip(pivot + 1) {
+            let mag = candidate[pivot].abs();
             if mag > best_mag {
                 best_mag = mag;
                 best_row = row;
@@ -993,8 +994,10 @@ fn solve_dense_system(matrix: &mut [Vec<f64>], rhs: &mut [f64]) -> Option<Vec<f6
         for row in (pivot + 1)..dim {
             let factor = matrix[row][pivot] / diagonal;
             if factor != 0.0 {
-                for col in pivot..dim {
-                    matrix[row][col] -= factor * matrix[pivot][col];
+                let (before, rest) = matrix.split_at_mut(row);
+                let (target, source) = (&mut rest[0], &before[pivot]);
+                for (col, slot) in target.iter_mut().enumerate().skip(pivot) {
+                    *slot -= factor * source[col];
                 }
                 rhs[row] -= factor * rhs[pivot];
             }

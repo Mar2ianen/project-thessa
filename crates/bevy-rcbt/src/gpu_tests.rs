@@ -136,8 +136,10 @@ impl Gpu {
         let words = staging
             .slice(..)
             .get_mapped_range()
-            .chunks_exact(4)
-            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| u32::from_le_bytes(*bytes))
             .collect();
         staging.unmap();
         words
@@ -353,7 +355,7 @@ fn gpu_classifier_uses_position_stride_for_every_leaf() {
     assert_eq!(gpu.read(&draw), [192, 1, 0, 0]);
     assert_eq!(gpu.read(&count)[0], 64);
     let triangles = gpu.read(&triangles);
-    for record in triangles[..64 * 4].chunks_exact(4) {
+    for record in triangles[..64 * 4].as_chunks::<4>().0.iter() {
         assert_eq!(record[0], 1, "only the middle leaf is visible");
         assert!(
             record[1..]
@@ -549,9 +551,14 @@ fn gpu_tile_transform_keeps_near_camera_precision_after_body_rotation() {
     let transform = DMat4::from_rotation_translation(rotation, -origin);
     let relative = transform.transform_point3(anchor_body).to_array();
     let mut frame = anchor.to_gpu([0.0; 3]).unwrap();
-    for i in 0..3 {
-        frame.anchor_hi_m[i] = relative[i] as f32;
-        frame.anchor_lo_m[i] = (relative[i] - f64::from(frame.anchor_hi_m[i])) as f32;
+    for (i, (hi, rel)) in frame
+        .anchor_hi_m
+        .iter_mut()
+        .zip(relative.iter())
+        .enumerate()
+    {
+        *hi = *rel as f32;
+        frame.anchor_lo_m[i] = (*rel - f64::from(*hi)) as f32;
     }
     let frames = gpu.buffer(
         &frame
@@ -760,7 +767,12 @@ fn game_material_mips_decode_on_hardware() {
             "level {level}"
         );
         for channel in 0..4 {
-            let plane: Vec<u8> = mip.chunks_exact(4).map(|px| px[channel]).collect();
+            let plane: Vec<u8> = mip
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|px| px[channel])
+                .collect();
             let field = ScalarField::new(size, size, plane).expect("plane extent");
             let encoded = EncodedPage::encode(&field, EncodeMode::Adaptive { max_abs_error: 2.0 });
             total_wire += encoded.encoded_bytes();

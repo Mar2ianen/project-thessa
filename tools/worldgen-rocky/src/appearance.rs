@@ -24,7 +24,9 @@ pub(crate) fn smooth(a: f64, b: f64, v: f64) -> f64 {
 /// Deterministic material-only grain. This is deliberately separate from the
 /// canonical height field: it gives close terrain a readable surface pattern
 /// without inventing collision relief or changing authoritative queries.
-pub(crate) fn surface_grain(field: &PlanetField, dir: [f64; 3]) -> f64 {
+///
+/// Range is roughly [-1, 1] (sum of weighted value-noise octaves).
+pub fn surface_grain(field: &PlanetField, dir: [f64; 3]) -> f64 {
     [(8.0, 0.42), (32.0, 0.32), (128.0, 0.20), (512.0, 0.10)]
         .into_iter()
         .enumerate()
@@ -78,12 +80,21 @@ pub fn surface_appearance(
     };
     let regional = noise(731, 360_000.0, 3);
     let variation = noise(733, 65_000.0, 3);
+    // Independent micro-relief noise (24 m + 12 m octaves): deliberately NOT
+    // the cover grain — sharing one signal for threshold patches and final
+    // brightness partially cancels (opposite signs), muting both.
+    let micro = noise(739, 24.0, 2);
     let grain = surface_grain(field, dir);
     let h = sample.height_m;
+    // Snow cover breaks into drifts and thaw patches: the grain rides the
+    // threshold (±0.7 grain ~= ±4 K) so a uniform sub-zero plain still reads
+    // as structured snow instead of a flat fill. Classification inputs
+    // (height/moisture/temperature/slope) are untouched — only the visual
+    // coverage and the final albedo carry the pattern.
     let snow = smooth(
         276.0,
         264.0,
-        sample.temperature_k + regional * 5.0 + variation * 2.0,
+        sample.temperature_k + regional * 5.0 + variation * 2.0 + grain * 6.0,
     );
     if h < 0.0 {
         let shelf = (-h / 500.0).clamp(0.0, 1.0).sqrt();
@@ -118,11 +129,13 @@ pub fn surface_appearance(
     // Beach is a height band, not a circular feature footprint.
     color = mix([0.66, 0.64, 0.48], color, smooth(3.0, 45.0, h));
     color = color.map(|c| c * (1.0 + variation * 0.14 + regional * 0.08 + grain * 0.24));
-    color = mix(
-        color,
-        [0.88, 0.92, 0.94],
-        snow * (1.0 - smooth(0.7, 1.4, sample.slope_hint) * 0.8),
-    );
+    let snow_cover = snow * (1.0 - smooth(0.7, 1.4, sample.slope_hint) * 0.8);
+    color = mix(color, [0.88, 0.92, 0.94], snow_cover);
+    // Micro-relief brightness on the final albedo: overlapping covers (snow,
+    // rock) would otherwise mute the pre-mix grain to invisibility. Uses the
+    // independent micro signal, so it adds instead of fighting the patches.
+    // ±8% stays clear of the sRGB ceiling on bright snow.
+    color = color.map(|c| (c * (1.0 + micro * 0.08)).clamp(0.0, 1.0));
     SurfaceAppearance {
         albedo_srgb: color.map(|c| c.clamp(0.0, 1.0) as f32),
         roughness: 0.92,

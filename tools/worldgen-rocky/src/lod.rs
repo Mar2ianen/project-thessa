@@ -1097,6 +1097,75 @@ mod surface_regressions {
         }
     }
     #[test]
+    fn material_pages_carry_readable_close_up_variation() {
+        // Regression pin for flat close terrain: snow used to cover as an
+        // exact constant (std 0.0) and tundra varied by ~1 LSB. Both now
+        // carry patch + micro-relief structure; this fails if appearance
+        // ever collapses back to a fill.
+        fn tile_containing(dir: [f64; 3], level: u8) -> TileKey {
+            let ax = dir[0].abs();
+            let ay = dir[1].abs();
+            let az = dir[2].abs();
+            let (face, u, v) = if ax >= ay && ax >= az {
+                if dir[0] > 0.0 {
+                    (0u8, -dir[2] / dir[0], dir[1] / dir[0])
+                } else {
+                    (1u8, dir[2] / -dir[0], dir[1] / -dir[0])
+                }
+            } else if ay >= ax && ay >= az {
+                if dir[1] > 0.0 {
+                    (2u8, dir[0] / dir[1], -dir[2] / dir[1])
+                } else {
+                    (3u8, dir[0] / -dir[1], dir[2] / -dir[1])
+                }
+            } else if dir[2] > 0.0 {
+                (4u8, dir[0] / dir[2], dir[1] / dir[2])
+            } else {
+                (5u8, dir[0] / dir[2], dir[1] / dir[2])
+            };
+            let n = 1u64 << level;
+            let q = |t: f64| (((t + 1.0) * 0.5 * n as f64) as u32).min(n as u32 - 1);
+            TileKey {
+                face,
+                level,
+                x: q(u),
+                y: q(v),
+            }
+        }
+        fn channel_stats(rgba: &[u8], channel: usize) -> (f64, u8, u8) {
+            let n = rgba.len() / 4;
+            let mean = rgba
+                .chunks_exact(4)
+                .map(|px| px[channel] as f64)
+                .sum::<f64>()
+                / n as f64;
+            let var = rgba
+                .chunks_exact(4)
+                .map(|px| (px[channel] as f64 - mean).powi(2))
+                .sum::<f64>()
+                / n as f64;
+            let min = rgba.chunks_exact(4).map(|px| px[channel]).min().unwrap();
+            let max = rgba.chunks_exact(4).map(|px| px[channel]).max().unwrap();
+            (var.sqrt(), min, max)
+        }
+        let field = field();
+        // High snowfield (h ~= 2117 m) and low tundra (h ~= 217 m).
+        for dir in [
+            [-0.5735764363510462, -0.8191520442889918, 7.024285468436542e-17],
+            [-0.44575261109709685, -0.8191520442889918, 0.36096334722141254],
+        ] {
+            let page = build_gpu_material_page(&field, tile_containing(dir, 14));
+            let (std_r, _, _) = channel_stats(&page.rgba, 0);
+            let (_, lo_b, hi_b) = channel_stats(&page.rgba, 2);
+            eprintln!("dir={dir:?} std_r={std_r:.1} b_range={}", hi_b - lo_b);
+            assert!(std_r > 3.0, "snow/tundra page must vary, std_r={std_r:.1}");
+            assert!(
+                hi_b - lo_b > 15,
+                "snow/tundra page needs tonal range, b={lo_b}..{hi_b}"
+            );
+        }
+    }
+    #[test]
     fn deep_tile_material_normals_keep_grain_and_coarse_relief() {
         // At/below the detail cutoff the canonical residual is exactly zero.
         // The material layer nevertheless carries filtered, non-authoritative

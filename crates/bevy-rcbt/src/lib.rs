@@ -25,6 +25,8 @@ pub type CbtLeafRecord = [u32; 4];
 #[cfg(feature = "render")]
 pub mod material_cache;
 #[cfg(feature = "render")]
+pub mod material_microstore;
+#[cfg(feature = "render")]
 mod material_pages;
 #[cfg(feature = "render")]
 pub mod precision;
@@ -642,7 +644,6 @@ mod render;
 
 #[cfg(feature = "render")]
 use render::CbtRenderPlugin;
-
 #[cfg(feature = "render")]
 pub use render::CbtGpuBuffers;
 

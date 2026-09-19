@@ -117,14 +117,21 @@ Implementation status (branch `feat/microstorage-phase-a`):
   0.16 ms/page, ~113 MiB/s raw-equivalent, wire 0.62x raw, worst drift 2 in
   both batches. Upload-time cost lands only on streaming frames (generation
   guard); resident frames return early with zero work.
-- Client A/B (debug, 75 s runs, no panics either way): `cpu` terrain never
-  reaches the array path in either storage mode (correct — the array serves
-  the GPU raster); `gpu_indexed` + `rgba_array` stays silent (raw default);
-  `gpu_indexed` + `microstore_compact` emits the `[material-storage]` line
-  through the real `prepare_storage` wiring. Debug startup is too slow to
-  stream nonzero pages in 75 s, so nonzero-page residency in the live client
-  stays a follow-up; correctness of the upload content is pinned by the
-  CPU + hardware tests above.
+- Client A/B (release autobench `THESSA_AUTOBENCH=1 THESSA_AUTOBENCH_VIEW=pilot`,
+  gpu raster, Radeon 780M): compact 3374 frames wall p50 9.94 / p95 14.88 /
+  p99 17.50 / max 138.52 ms vs raw 3628 frames p50 8.92 / p95 13.99 /
+  p99 16.77 / max 166.88 ms — ~1 ms p50 cost for the encode at streaming
+  time, comparable tails. Live compact residency reached 270 pages at
+  0.45x wire (10.62 MB vs 23.59 MB raw); real game content compresses
+  better than the synthetic bench pages (0.62x). Release encode on live
+  pages measured 1.5 ms/page (bench synthetic: 0.58 + 0.16 ms).
+- FPS-spike fix: the first live runs exposed an O(residency) re-decode —
+  every streaming batch re-decoded all held pages (1.07 GB lifetime for
+  270 pages). `MicrostoreResidency` now caches the decoded shadow page per
+  entry (`Arc` clone on upload), so a clean batch costs O(1); a test pins
+  `decoded_bytes` stable across no-change updates. Debug streaming spikes
+  (12–18 ms/page encode, unoptimized) are not representative; release
+  numbers above are the honest baseline.
 
 This document defines a reusable microscaled storage layer for render-side and
 streamed surface data. The immediate target is terrain material pages. Height

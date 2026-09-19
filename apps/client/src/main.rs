@@ -110,6 +110,7 @@ fn main() {
         RequestedGraphics::default()
     });
     let resolved = ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+    let resolved_material_storage = resolved.material_storage;
     let rt_active = resolved.ray_tracing.is_active();
     if rt_active {
         eprintln!("[graphics] experimental Solari RT path requested; needs RT-capable Vulkan");
@@ -189,6 +190,9 @@ fn main() {
     app.insert_resource(GraphicsRequested(requested))
         .insert_resource(GraphicsResolved(resolved))
         .insert_resource(RayTracingActive(rt_active))
+        .insert_resource(thessa_bevy_rcbt::MaterialStorageSetting(
+            resolved_material_storage,
+        ))
         .add_plugins(OrbitGizmoPlugin)
         .add_plugins(PilotHudPlugin)
         .add_plugins(contact_gizmos::ContactGizmoPlugin)

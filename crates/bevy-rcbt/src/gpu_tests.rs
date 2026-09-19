@@ -374,7 +374,10 @@ fn gpu_classifier_grid_step_history_has_hysteresis_and_identity_reset() {
     .map(f32::to_bits);
     let view = gpu.buffer(&identity, true);
     let transform = gpu.buffer(&identity, true);
-    let params = gpu.buffer(&[1, GPU_VERTEX_COUNT_PER_PATCH as u32, 1_f32.to_bits(), 0], true);
+    let params = gpu.buffer(
+        &[1, GPU_VERTEX_COUNT_PER_PATCH as u32, 1_f32.to_bits(), 0],
+        true,
+    );
     let frames = gpu.buffer(&[0; 28], false);
     let history = gpu.buffer(&[0; 4], false);
 
@@ -382,16 +385,19 @@ fn gpu_classifier_grid_step_history_has_hysteresis_and_identity_reset() {
         let mut words = Vec::with_capacity(GPU_VERTEX_COUNT_PER_PATCH * 8);
         for y in 0..33 {
             for x in 0..33 {
-                words.extend([
-                    x as f32 / 32.0 * span,
-                    y as f32 / 32.0 * span,
-                    0.5,
-                    1.0,
-                    0.0,
-                    0.0,
-                    1.0,
-                    0.0,
-                ].map(f32::to_bits));
+                words.extend(
+                    [
+                        x as f32 / 32.0 * span,
+                        y as f32 / 32.0 * span,
+                        0.5,
+                        1.0,
+                        0.0,
+                        0.0,
+                        1.0,
+                        0.0,
+                    ]
+                    .map(f32::to_bits),
+                );
             }
         }
         gpu.buffer(&words, false)
@@ -403,7 +409,11 @@ fn gpu_classifier_grid_step_history_has_hysteresis_and_identity_reset() {
         let draw = gpu.buffer(&[0; 4], false);
         gpu.dispatch(
             CBT_CLASSIFY_WGSL,
-            &[("reset_active", 1), ("classify_active", 1), ("finalize_active", 1)],
+            &[
+                ("reset_active", 1),
+                ("classify_active", 1),
+                ("finalize_active", 1),
+            ],
             &[
                 &metadata, vertices, &triangles, &count, &draw, &view, &transform, &params,
                 &leaves, &frames, &history,
@@ -423,11 +433,19 @@ fn gpu_classifier_grid_step_history_has_hysteresis_and_identity_reset() {
     assert_eq!(gpu.read(&history), [8, 0, 4, 0]);
 
     let (draw, _) = dispatch(&vertices_for(0.2), 8);
-    assert_eq!(gpu.read(&draw)[0], 6912, "meaningful crossing refines to step 1");
+    assert_eq!(
+        gpu.read(&draw)[0],
+        6912,
+        "meaningful crossing refines to step 1"
+    );
     assert_eq!(gpu.read(&history), [8, 0, 1, 0]);
 
     let (draw, _) = dispatch(&vertices_for(0.039), 9);
-    assert_eq!(gpu.read(&draw)[0], 576, "new leaf identity must reset history");
+    assert_eq!(
+        gpu.read(&draw)[0],
+        576,
+        "new leaf identity must reset history"
+    );
     assert_eq!(gpu.read(&history), [9, 0, 4, 0]);
 }
 
@@ -726,8 +744,7 @@ fn game_material_mips_decode_on_hardware() {
     let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
         .expect("material GPU test requires a wgpu adapter");
     eprintln!("material regression adapter: {:?}", adapter.get_info());
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let decoder = MicrostoreDecode::new(std::sync::Arc::new(device), std::sync::Arc::new(queue));
 
     let rgba = rock_rgba(crate::material_pages::MATERIAL_PAGE_SIZE, 0x9A7E);
@@ -737,14 +754,15 @@ fn game_material_mips_decode_on_hardware() {
     let mut worst = 0u8;
     for (level, mip) in page.mips.iter().enumerate() {
         let size = crate::material_pages::MATERIAL_PAGE_SIZE >> level;
-        assert_eq!(mip.len(), size as usize * size as usize * 4, "level {level}");
+        assert_eq!(
+            mip.len(),
+            size as usize * size as usize * 4,
+            "level {level}"
+        );
         for channel in 0..4 {
             let plane: Vec<u8> = mip.chunks_exact(4).map(|px| px[channel]).collect();
             let field = ScalarField::new(size, size, plane).expect("plane extent");
-            let encoded = EncodedPage::encode(
-                &field,
-                EncodeMode::Adaptive { max_abs_error: 2.0 },
-            );
+            let encoded = EncodedPage::encode(&field, EncodeMode::Adaptive { max_abs_error: 2.0 });
             total_wire += encoded.encoded_bytes();
             let gpu = decoder.decode_page(&encoded).expect("gpu decode");
             let cpu = encoded.decode();
@@ -756,4 +774,69 @@ fn game_material_mips_decode_on_hardware() {
         }
     }
     eprintln!("8 game mips x 4 channels on hardware: {total_wire} B wire, worst drift {worst}");
+}
+
+/// Compact storage path on hardware: the exact `encode_material_level`
+/// (ColorPage RGB + roughness) + `MaterialArray::decode_material_levels`
+/// pre-decode used by `material_storage = "microstore_compact"`, with every
+/// underlying `EncodedPage` verified bit-exact against the GPU decoder.
+/// Sampling stays identical because the texture upload sees only the
+/// decoded RGBA; this pins the residency bytes are GPU-decodable.
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+#[test]
+fn microstore_compact_levels_match_gpu_decode() {
+    use crate::material_microstore::{encode_material_level, rock_rgba};
+    use thessa_rcbt_wgpu::microstore::MicrostoreDecode;
+
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
+        .expect("compact storage GPU test requires a wgpu adapter");
+    eprintln!("compact storage adapter: {:?}", adapter.get_info());
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let decoder = MicrostoreDecode::new(std::sync::Arc::new(device), std::sync::Arc::new(queue));
+
+    let rgba = rock_rgba(crate::material_pages::MATERIAL_PAGE_SIZE, 0xC0FFEE);
+    let page = crate::material_pages::CbtMaterialPage::from_rgba8(rgba).expect("real page");
+    let mut wire = 0usize;
+    let mut worst_vs_orig = 0u8;
+    for (level, mip) in page.mips.iter().enumerate() {
+        let size = crate::material_pages::MATERIAL_PAGE_SIZE >> level;
+        let encoded = encode_material_level(mip, size, size, 2.0).expect("encodes");
+        wire += encoded.encoded_bytes();
+        // Every stored page must GPU-decode bit-exact vs CPU.
+        let cpu_planes = [
+            encoded.color.channels[0].decode(),
+            encoded.color.channels[1].decode(),
+            encoded.color.channels[2].decode(),
+            encoded.roughness.decode(),
+        ];
+        let gpu_planes = [
+            decoder
+                .decode_page(&encoded.color.channels[0])
+                .expect("gpu r"),
+            decoder
+                .decode_page(&encoded.color.channels[1])
+                .expect("gpu g"),
+            decoder
+                .decode_page(&encoded.color.channels[2])
+                .expect("gpu b"),
+            decoder.decode_page(&encoded.roughness).expect("gpu a"),
+        ];
+        for (ch, (gpu, cpu)) in gpu_planes.iter().zip(cpu_planes.iter()).enumerate() {
+            assert_eq!(gpu.len(), cpu.data.len(), "level {level} ch {ch} len");
+            assert_eq!(gpu, &cpu.data, "level {level} ch {ch} bit-exact");
+        }
+        // The pre-decode upload path interleaves those exact planes.
+        let decoded = material_render::MaterialArray::decode_material_levels(&[encoded]);
+        assert_eq!(decoded.len(), 1);
+        let back = &decoded[0];
+        assert_eq!(back.len(), mip.len(), "level {level} rgba len");
+        for (i, (o, d)) in mip.iter().zip(back.iter()).enumerate() {
+            worst_vs_orig = worst_vs_orig.max(o.abs_diff(*d));
+            assert!(o.abs_diff(*d) <= 2, "level {level} byte {i}: {o} vs {d}");
+        }
+    }
+    let raw: usize = page.mips.iter().map(Vec::len).sum();
+    eprintln!("compact storage on hardware: {wire} B wire vs {raw} B raw, worst {worst_vs_orig}");
+    assert!(wire < raw, "compact must beat raw RGBA");
 }

@@ -107,7 +107,24 @@ Implementation status (branch `feat/microstorage-phase-a`):
   `EncodedPage` (ColorPage RGB + roughness) bit-exact vs the GPU decoder.
   Measured on Radeon 780M (RADV, Vulkan): 54,024 B wire vs 87,380 B raw
   (0.62x), worst drift 2. Telemetry: `CbtGpuBuffers::material_microstore_stats`
-  (wire gauge + decoded lifetime + encode secs + pages encoded).
+  (wire gauge + decoded lifetime + encode secs + pages encoded), one
+  `[material-storage]` log line per streaming upload batch, `[MAT:...]` mode
+  tag in the perf overlay, and `material_storage` in capture metadata.
+- Batch benchmark (`cargo bench -p thessa-bevy-rcbt --bench material_storage
+  --features render`): real `CbtMaterialPage` batches — 4 pages is one
+  streaming frame (`material_budget` in `apps/client/src/terrain.rs`), 32 is
+  a scene cover. Release on this machine: encode 0.58 ms/page, decode
+  0.16 ms/page, ~113 MiB/s raw-equivalent, wire 0.62x raw, worst drift 2 in
+  both batches. Upload-time cost lands only on streaming frames (generation
+  guard); resident frames return early with zero work.
+- Client A/B (debug, 75 s runs, no panics either way): `cpu` terrain never
+  reaches the array path in either storage mode (correct — the array serves
+  the GPU raster); `gpu_indexed` + `rgba_array` stays silent (raw default);
+  `gpu_indexed` + `microstore_compact` emits the `[material-storage]` line
+  through the real `prepare_storage` wiring. Debug startup is too slow to
+  stream nonzero pages in 75 s, so nonzero-page residency in the live client
+  stays a follow-up; correctness of the upload content is pinned by the
+  CPU + hardware tests above.
 
 This document defines a reusable microscaled storage layer for render-side and
 streamed surface data. The immediate target is terrain material pages. Height

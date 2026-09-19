@@ -28,3 +28,8 @@ naga = { version = "29.0.4", features = ["wgsl-in"] }
 wgpu.workspace = true
 pollster = "0.4"
 thessa-rcbt-wgpu = { path = "../rcbt-wgpu" }
+
+[[bench]]
+name = "material_storage"
+harness = false
+required-features = ["render"]

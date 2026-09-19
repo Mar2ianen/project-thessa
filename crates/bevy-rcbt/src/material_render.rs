@@ -293,8 +293,20 @@ impl MaterialArray {
         {
             return;
         }
+        // Only streaming frames reach here (generation guard above), so one
+        // line per upload batch is the A/B signal: compact residency held
+        // vs RGBA decoded for the shared upload, plus lifetime encode cost.
         let shadow = self.microstore.update(pages);
         self.prepare(topology, &shadow, device, queue);
+        eprintln!(
+            "[material-storage] microstore_compact: {} pages, wire {} B, decoded {} B lifetime, \
+             encode {:.2} ms lifetime, {} pages encoded lifetime",
+            self.microstore.pages.len(),
+            self.microstore.wire_bytes,
+            self.microstore.decoded_bytes,
+            self.microstore.encode_secs * 1000.0,
+            self.microstore.pages_encoded,
+        );
     }
 
     /// Encode every mip of one page with the sample-time budget (2.0 code

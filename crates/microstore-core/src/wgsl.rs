@@ -330,6 +330,181 @@ fn sample_packed(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+/// LOD selection kernel: one thread per footprint outputs the mip level
+/// for the max-footprint rule (`floor(log2(max_axis) / 2)` clamped).
+/// Integer-exact away from power-of-two boundaries; CPU mirror
+/// [`crate::lod_level`]. Boundary-adjacent footprints may differ by one
+/// level between f32 log2 implementations (GPUs vary here too), which the
+/// tests pin explicitly instead of pretending exactness.
+pub const MICROSTORE_LOD_WGSL: &str = r#"
+struct LodParams {
+    width: u32,
+    height: u32,
+    max_level: u32,
+    _p0: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: LodParams;
+@group(0) @binding(1) var<storage, read> jac: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read_write> out_level: array<u32>;
+
+@compute @workgroup_size(64)
+fn lod_select(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= arrayLength(&jac)) {
+        return;
+    }
+    let j = jac[i];
+    let px = j.x * f32(params.width);
+    let py = j.y * f32(params.width);
+    let qx = j.z * f32(params.height);
+    let qy = j.w * f32(params.height);
+    let rho_sq = max(px * px + py * py, qx * qx + qy * qy);
+    var level = 0u;
+    if (rho_sq > 1.0) {
+        level = u32(floor(0.5 * log2(rho_sq)));
+    }
+    out_level[i] = min(level, params.max_level);
+}
+"#;
+
+/// Anisotropic sample-time kernel: normalized UV plus Jacobian in,
+/// filtered bytes out. Each thread spreads taps across one pixel
+/// footprint along the major axis (1/2/4/8 by the `taps` uniform),
+/// decoding every tap straight from the packed page. CPU mirror:
+/// [`crate::sample_aniso`]. Outputs round to bytes; expect small
+/// f32-vs-f64 drift (pinned by tests, not assumed zero).
+pub const MICROSTORE_ANISO_WGSL: &str = r#"
+struct AnisoParams {
+    width: u32,
+    height: u32,
+    blocks_x: u32,
+    blocks_y: u32,
+    taps: u32,
+    _p0: u32,
+    _p1: u32,
+    _p2: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: AnisoParams;
+@group(0) @binding(1) var<storage, read> page_words: array<u32>;
+@group(0) @binding(2) var<storage, read> block_base: array<u32>;
+@group(0) @binding(3) var<storage, read> sample_uv: array<vec2<f32>>;
+@group(0) @binding(4) var<storage, read> sample_jac: array<vec4<f32>>;
+@group(0) @binding(5) var<storage, read_write> out_texels: array<u32>;
+
+fn load_byte(byte_index: u32) -> u32 {
+    return (page_words[byte_index / 4u] >> ((byte_index % 4u) * 8u)) & 0xFFu;
+}
+
+fn decode_texel(tx: u32, ty: u32) -> u32 {
+    let bx = tx / 4u;
+    let by = ty / 4u;
+    let lx = tx % 4u;
+    let ly = ty % 4u;
+    let base = block_base[by * params.blocks_x + bx];
+    let tag = load_byte(base);
+    if (tag > 4u) {
+        return 0xDEADu;
+    }
+    let offset = load_byte(base + 1u);
+    if (tag == 0u) {
+        return load_byte(base + 3u + ly * 4u + lx);
+    }
+    if (tag == 1u) {
+        return min(offset + load_byte(base + 3u + ly * 4u + lx), 255u);
+    }
+    let scale = load_byte(base + 2u);
+    if (tag == 2u) {
+        let cell = ly * 4u + lx;
+        let packed = load_byte(base + 3u + cell / 2u);
+        var q = packed & 15u;
+        if (cell % 2u == 1u) {
+            q = packed >> 4u;
+        }
+        return min(offset + (q * scale + 7u) / 15u, 255u);
+    }
+    if (tag == 3u) {
+        let cell = ly * 4u + lx;
+        let bit = cell * 6u;
+        let byte = bit / 8u;
+        let shift = bit % 8u;
+        let lo = load_byte(base + 3u + byte);
+        let hi = load_byte(base + 3u + byte + 1u);
+        let q = ((lo >> shift) | (hi << (8u - shift))) & 63u;
+        return min(offset + (q * scale + 31u) / 63u, 255u);
+    }
+    let cell = ly * 4u + lx;
+    let packed = load_byte(base + 3u + cell / 4u);
+    let q = (packed >> ((cell % 4u) * 2u)) & 3u;
+    return min(offset + (q * scale + 1u) / 3u, 255u);
+}
+
+fn sample_bilinear_texel(x: f32, y: f32) -> f32 {
+    let w = f32(params.width);
+    let h = f32(params.height);
+    let xc = clamp(x, 0.0, w - 1.0);
+    let yc = clamp(y, 0.0, h - 1.0);
+    let x0 = u32(floor(xc));
+    let y0 = u32(floor(yc));
+    let x1 = min(x0 + 1u, params.width - 1u);
+    let y1 = min(y0 + 1u, params.height - 1u);
+    let fx = xc - f32(x0);
+    let fy = yc - f32(y0);
+    let a = f32(decode_texel(x0, y0));
+    let b = f32(decode_texel(x1, y0));
+    let c = f32(decode_texel(x0, y1));
+    let d = f32(decode_texel(x1, y1));
+    return a * (1.0 - fx) * (1.0 - fy) + b * fx * (1.0 - fy)
+        + c * (1.0 - fx) * fy + d * fx * fy;
+}
+
+@compute @workgroup_size(64)
+fn sample_aniso_packed(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let s = gid.x;
+    if (s >= arrayLength(&sample_uv)) {
+        return;
+    }
+    let w = f32(params.width);
+    let h = f32(params.height);
+    let uv = sample_uv[s];
+    let j = sample_jac[s];
+    var taps = 1u;
+    if (params.taps >= 8u) {
+        taps = 8u;
+    } else if (params.taps >= 4u) {
+        taps = 4u;
+    } else if (params.taps >= 2u) {
+        taps = 2u;
+    }
+    if (taps == 1u) {
+        let x = clamp(uv.x, 0.0, 1.0) * (w - 1.0);
+        let y = clamp(uv.y, 0.0, 1.0) * (h - 1.0);
+        out_texels[s] = u32(sample_bilinear_texel(x, y) + 0.5);
+        return;
+    }
+    let a_len_sq = j.x * j.x + j.y * j.y;
+    let b_len_sq = j.z * j.z + j.w * j.w;
+    var dx = j.x;
+    var dy = j.y;
+    if (b_len_sq > a_len_sq) {
+        dx = j.z;
+        dy = j.w;
+    }
+    let len = max(sqrt(dx * dx + dy * dy), 1e-12);
+    dx = dx / len;
+    dy = dy / len;
+    var sum = 0.0;
+    for (var i = 0u; i < taps; i++) {
+        let t = (f32(i) + 0.5) / f32(taps) - 0.5;
+        let x = clamp(uv.x + dx * t * len, 0.0, 1.0) * (w - 1.0);
+        let y = clamp(uv.y + dy * t * len, 0.0, 1.0) * (h - 1.0);
+        sum += sample_bilinear_texel(x, y);
+    }
+    out_texels[s] = u32(sum / f32(taps) + 0.5);
+}
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,7 +577,14 @@ mod tests {
         assert!(!MICROSTORE_DECODE_WGSL.contains("subgroup"));
         assert!(MICROSTORE_MIP_WGSL.contains("fn mip_downsample"));
         assert!(MICROSTORE_SAMPLE_WGSL.contains("fn sample_packed"));
-        for src in [MICROSTORE_MIP_WGSL, MICROSTORE_SAMPLE_WGSL] {
+        assert!(MICROSTORE_LOD_WGSL.contains("fn lod_select"));
+        assert!(MICROSTORE_ANISO_WGSL.contains("fn sample_aniso_packed"));
+        for src in [
+            MICROSTORE_MIP_WGSL,
+            MICROSTORE_SAMPLE_WGSL,
+            MICROSTORE_LOD_WGSL,
+            MICROSTORE_ANISO_WGSL,
+        ] {
             assert!(src.contains("@workgroup_size(64)"));
             assert!(!src.contains("subgroup"));
         }

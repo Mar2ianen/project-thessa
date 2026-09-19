@@ -83,6 +83,12 @@ Implementation status (branch `feat/microstorage-phase-a`):
   statistically, with bit-exactness on uniform fields. Combined
   LOD+mip-fetch (per-sample level buffers) stays engine-integration
   work.
+- Integrated LOD+mip path (`LodMipSampler`): GPU decode, GPU mip chain,
+  GPU level selection, grouped plain sampling per level, reassembled in
+  sample order — with a CPU `sample_lod` mirror. Measured end-to-end on
+  hardware across all 7 fixtures: 128/128 samples within one code level,
+  worst drift 0 (1.18 ms / 128 samples incl. per-stage readbacks; a
+  production backend would chain device buffers with no roundtrips).
 
 This document defines a reusable microscaled storage layer for render-side and
 streamed surface data. The immediate target is terrain material pages. Height

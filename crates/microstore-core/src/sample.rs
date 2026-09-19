@@ -111,6 +111,37 @@ pub fn sample_aniso(field: &ScalarField, u: f32, v: f32, jac: &UvJacobian, taps:
     sum / taps as f32
 }
 
+/// Integrated LOD + mip-fetch reference: select the level for a footprint,
+/// then bilinear-sample that chain level. `chain` holds level 0 first;
+/// levels past the end clamp to the coarsest. Level 0 has `base_size`.
+/// This is the CPU mirror of the GPU `LodMipSampler` path.
+pub fn sample_lod(
+    chain: &[ScalarField],
+    base_size: [f32; 2],
+    u: f32,
+    v: f32,
+    jac: &UvJacobian,
+    max_level: u32,
+) -> f32 {
+    assert!(!chain.is_empty(), "mip chain needs level 0");
+    let level = lod_level(jac, base_size, max_level).min(chain.len() as u32 - 1) as usize;
+    sample_bilinear(&chain[level], u, v)
+}
+
+/// Rounded integrated sample (the GPU output shape).
+pub fn sample_lod_rounded(
+    chain: &[ScalarField],
+    base_size: [f32; 2],
+    u: f32,
+    v: f32,
+    jac: &UvJacobian,
+    max_level: u32,
+) -> u8 {
+    sample_lod(chain, base_size, u, v, jac, max_level)
+        .round()
+        .clamp(0.0, 255.0) as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,5 +264,70 @@ mod tests {
             (100.0..=155.0).contains(&filtered),
             "antialiased {filtered}"
         );
+    }
+}
+
+#[cfg(test)]
+mod lod_tests {
+    use super::*;
+    use crate::fixtures;
+
+    #[test]
+    fn lod_routing_hits_coarser_levels() {
+        let field = fixtures::checker(64, 64, 1);
+        let chain = crate::MipChain::build(&field, 3);
+        assert_eq!(chain.levels.len(), 4);
+        // Unit footprint samples level 0 exactly.
+        let unit = UvJacobian {
+            dudx: 1.0 / 64.0,
+            dudy: 0.0,
+            dvdx: 0.0,
+            dvdy: 1.0 / 64.0,
+        };
+        assert_eq!(
+            sample_lod(&chain.levels, [64.0, 64.0], 0.5, 0.5, &unit, 7),
+            sample_bilinear(&chain.levels[0], 0.5, 0.5)
+        );
+        // 8-texel footprint routes to level 3 (8x8 texels).
+        let wide = UvJacobian {
+            dudx: 8.0 / 64.0,
+            dudy: 0.0,
+            dvdx: 0.0,
+            dvdy: 8.0 / 64.0,
+        };
+        assert_eq!(lod_level(&wide, [64.0, 64.0], 7), 3);
+        assert_eq!(
+            sample_lod(&chain.levels, [64.0, 64.0], 0.5, 0.5, &wide, 7),
+            sample_bilinear(&chain.levels[3], 0.5, 0.5)
+        );
+    }
+
+    #[test]
+    fn lod_clamps_past_chain_end() {
+        let field = fixtures::gradient(16, 16);
+        let chain = crate::MipChain::build(&field, 1);
+        let huge = UvJacobian {
+            dudx: 4.0,
+            dudy: 0.0,
+            dvdx: 0.0,
+            dvdy: 4.0,
+        };
+        // max_level far past the chain: coarsest level serves.
+        assert_eq!(
+            sample_lod(&chain.levels, [16.0, 16.0], 0.25, 0.75, &huge, 9),
+            sample_bilinear(&chain.levels[1], 0.25, 0.75)
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "mip chain needs level 0")]
+    fn lod_rejects_empty_chain() {
+        let jac = UvJacobian {
+            dudx: 0.1,
+            dudy: 0.0,
+            dvdx: 0.0,
+            dvdy: 0.1,
+        };
+        sample_lod(&[], [64.0, 64.0], 0.5, 0.5, &jac, 7);
     }
 }

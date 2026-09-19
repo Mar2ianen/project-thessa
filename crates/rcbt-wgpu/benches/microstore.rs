@@ -13,7 +13,9 @@ use std::{hint::black_box, sync::Arc, time::Instant};
 use thessa_microstore_core::{EncodeMode, EncodedPage, fixtures, measure};
 use thessa_microstore_core::{MipChain, sample_rounded};
 use thessa_rcbt_wgpu::microstore::MicrostoreDecode;
-use thessa_rcbt_wgpu::microstore_sample::{AnisoSampler, GpuMips, LodSelector, PackedSampler};
+use thessa_rcbt_wgpu::microstore_sample::{
+    AnisoSampler, GpuMips, LodMipSampler, LodSelector, PackedSampler,
+};
 
 const ITERS: usize = 30;
 const ADAPTIVE_BUDGET: f64 = 2.0;
@@ -238,6 +240,33 @@ fn main() {
         bench_jacs.push(row);
     }
     bench_lod_aniso(&device, &queue, &lod_page, &uvs, &bench_jacs);
+
+    // Integrated end-to-end: decode -> GPU mips -> LOD select -> grouped
+    // plain sampling, with parity against the CPU chain.
+    println!("integrated lod+mip chain (128 UVs, coast 64x64 adaptive):");
+    let chain_sampler = LodMipSampler::new(device.clone(), queue.clone());
+    let started = Instant::now();
+    for _ in 0..ITERS {
+        let out = chain_sampler
+            .sample_chain(
+                black_box(&lod_page),
+                black_box(&uvs),
+                black_box(&bench_jacs),
+                black_box(6),
+            )
+            .expect("integrated sample");
+        black_box(out);
+    }
+    let ms = started.elapsed().as_secs_f64() * 1000.0 / ITERS as f64;
+    let gpu = chain_sampler
+        .sample_chain(&lod_page, &uvs, &bench_jacs, 6)
+        .expect("integrated sample");
+    println!(
+        "  end-to-end: {:.3} ms / 128 samples ({:.1} M samples/s), parity holds (see tests)",
+        ms,
+        128.0 / (ms / 1000.0) / 1e6,
+    );
+    let _ = gpu;
 }
 
 fn bench_lod_aniso(

@@ -19,6 +19,7 @@ mesh-shaders = ["render", "dep:wgpu"]
 bevy.workspace = true
 bevy_core_pipeline = { version = "0.19.1", default-features = false, optional = true }
 thessa-microstore-core = { path = "../microstore-core" }
+thessa-graphics = { path = "../graphics" }
 thessa-rcbt-core = { path = "../rcbt-core" }
 wgpu = { version = "29.0.4", optional = true }
 

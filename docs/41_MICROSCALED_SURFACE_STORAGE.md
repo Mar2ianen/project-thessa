@@ -95,6 +95,19 @@ Implementation status (branch `feat/microstorage-phase-a`):
   8 game mips encode to 53,940 B vs 87,380 B RGBA (0.62x). Hardware test
   decodes all 8 levels x 4 channels on-adapter bit-exact (worst drift 0);
   GPU tests follow the repo `#[ignore]` convention for adapter-less CI.
+- Render-world storage A/B (`material_storage = "rgba_array" |
+  "microstore_compact"`, default raw): requested/resolved graphics setting
+  with `rgba_array` default, extracted as `MaterialStorageSetting` into the
+  render world. The compact path holds `MicrostoreResidency`-encoded pages
+  (once per generation, evicted with the stream) and pre-decodes to RGBA
+  shadow pages through the identical texture/sampler/mip/slot upload, so
+  sampling is byte-identical by construction — a storage/upload tradeoff,
+  never a visual mode. CPU tests pin decode within the 2.0 budget and
+  encode-once/evict semantics; hardware test pins every stored
+  `EncodedPage` (ColorPage RGB + roughness) bit-exact vs the GPU decoder.
+  Measured on Radeon 780M (RADV, Vulkan): 54,024 B wire vs 87,380 B raw
+  (0.62x), worst drift 2. Telemetry: `CbtGpuBuffers::material_microstore_stats`
+  (wire gauge + decoded lifetime + encode secs + pages encoded).
 
 This document defines a reusable microscaled storage layer for render-side and
 streamed surface data. The immediate target is terrain material pages. Height

@@ -65,6 +65,23 @@ impl CbtMaterialPage {
     pub fn byte_len(&self) -> usize {
         self.mips.iter().map(Vec::len).sum()
     }
+
+    /// Rebuild a page from already-sized mip levels (microstore decode
+    /// path): validates the 128-halving shape instead of averaging.
+    /// Returns `None` on shape mismatch, like [`CbtMaterialPage::from_rgba8`].
+    pub fn from_decoded_mips(mips: Vec<Vec<u8>>) -> Option<Self> {
+        if mips.is_empty() || mips.len() > 8 {
+            return None;
+        }
+        let mut size = MATERIAL_PAGE_SIZE as usize;
+        for mip in &mips {
+            if mip.len() != size * size * 4 {
+                return None;
+            }
+            size = (size / 2).max(1);
+        }
+        Some(Self { mips: mips.into() })
+    }
 }
 
 #[derive(Debug, Clone, Default, Resource)]

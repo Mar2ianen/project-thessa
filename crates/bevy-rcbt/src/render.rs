@@ -63,7 +63,16 @@ use bevy::render::render_resource::WgpuFeatures;
 
 use super::{
     CbtLeafRecord, CbtRenderMaterial, CbtRenderPages, CbtRenderSurface, CbtRenderTopology,
+    MaterialStorageSetting,
 };
+
+impl ExtractResource for MaterialStorageSetting {
+    type Source = Self;
+
+    fn extract_resource(source: &Self::Source) -> Self {
+        *source
+    }
+}
 
 impl ExtractResource for CbtRenderMaterial {
     type Source = Self;
@@ -264,6 +273,20 @@ impl CbtGpuBuffers {
 
     pub fn leaf_count(&self) -> u32 {
         self.leaf_count
+    }
+
+    /// Compact material storage telemetry: `(wire_bytes, decoded_bytes,
+    /// encode_secs, pages_encoded)`. `None` before the material array is
+    /// created; wire is a residency gauge, the rest are lifetimes.
+    pub fn material_microstore_stats(&self) -> Option<(u64, u64, f64, u64)> {
+        self.material_array.as_ref().map(|array| {
+            (
+                array.microstore_wire_bytes(),
+                array.microstore_decoded_bytes(),
+                array.microstore_encode_secs(),
+                array.microstore_pages_encoded(),
+            )
+        })
     }
 
     pub fn patches_generated_for(&self) -> Option<u64> {
@@ -922,7 +945,8 @@ impl Plugin for CbtRenderPlugin {
                 .add_plugins(ExtractResourcePlugin::<CbtRenderSurface>::default())
                 .add_plugins(ExtractResourcePlugin::<CbtRenderMaterial>::default())
                 .add_plugins(ExtractResourcePlugin::<CbtRenderMaterialPages>::default())
-                .add_plugins(ExtractResourcePlugin::<CbtGpuPresentation>::default());
+                .add_plugins(ExtractResourcePlugin::<CbtGpuPresentation>::default())
+                .add_plugins(ExtractResourcePlugin::<MaterialStorageSetting>::default());
         }
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app.init_gpu_resource::<CbtGpuBuffers>();
@@ -1393,6 +1417,7 @@ fn prepare_cbt_gpu_buffers(
     material_pages: Res<CbtRenderMaterialPages>,
     pages: Option<Res<CbtRenderPages>>,
     surface: Option<Res<CbtRenderSurface>>,
+    storage: Option<Res<MaterialStorageSetting>>,
     mut gpu: ResMut<CbtGpuBuffers>,
     device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
@@ -1406,9 +1431,10 @@ fn prepare_cbt_gpu_buffers(
             r[2] >= 3 && r[2] <= 37 && (r[2] - 3).is_multiple_of(2) && pages.contains_page(id)
         });
     if surface.gpu_raster_enabled() {
+        let policy = storage.map(|s| s.0).unwrap_or_default();
         gpu.material_array
             .get_or_insert_with(|| material_render::MaterialArray::new(&device))
-            .prepare(&topology, &material_pages, &device, &queue);
+            .prepare_storage(&topology, &material_pages, &device, &queue, policy);
     }
     if let Some(material) = material {
         let values: Vec<_> = std::iter::once(material.ambient_lux)

@@ -2,6 +2,7 @@
 use super::*;
 use crate::{
     material_cache::{SlotCache, resolve_material_ancestor},
+    material_microstore::{EncodedMaterialLevel, encode_material_level},
     material_pages::{CbtRenderMaterialPages, MATERIAL_PAGE_SIZE},
 };
 use bevy::render::render_resource::{
@@ -9,6 +10,69 @@ use bevy::render::render_resource::{
     TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect, TextureDescriptor,
     TextureDimension, TextureUsages, TextureView, TextureViewDescriptor,
 };
+use std::collections::BTreeMap;
+use std::time::Instant;
+use thessa_graphics::ResolvedMaterialStorage;
+
+/// CPU-only compact residency for the microstore storage path.
+///
+/// Holds encoded pages once per generation and builds decoded shadow pages
+/// for the shared texture-upload path. No GPU/Bevy types cross this
+/// boundary, so the render-world tests below pin it without an adapter.
+/// Sampling never sees which storage produced the bytes: texture format,
+/// mips, and filtering stay identical.
+#[derive(Debug, Default)]
+pub(crate) struct MicrostoreResidency {
+    /// node id -> (page generation, encoded mip levels).
+    pages: BTreeMap<u64, (u64, Vec<EncodedMaterialLevel>)>,
+    /// Current compact residency in wire bytes (gauge, not lifetime).
+    pub wire_bytes: u64,
+    /// Lifetime RGBA bytes decoded at upload time.
+    pub decoded_bytes: u64,
+    /// Lifetime CPU encode seconds (page -> compact form, once per generation).
+    pub encode_secs: f64,
+    /// Pages ever encoded through the compact path.
+    pub pages_encoded: u64,
+}
+
+impl MicrostoreResidency {
+    /// Encode changed generations once, drop evicted pages, and return
+    /// decoded shadow pages for the shared upload path.
+    pub fn update(&mut self, pages: &CbtRenderMaterialPages) -> CbtRenderMaterialPages {
+        self.pages.retain(|id, _| pages.pages.contains_key(id));
+        for (id, (generation, page)) in pages.pages.iter() {
+            if let Some((g, _)) = self.pages.get(id) {
+                if *g == *generation {
+                    continue;
+                }
+            }
+            let started = Instant::now();
+            let levels = MaterialArray::encode_page_levels(page);
+            self.encode_secs += started.elapsed().as_secs_f64();
+            self.pages_encoded += 1;
+            self.pages.insert(*id, (*generation, levels));
+        }
+        self.wire_bytes = self
+            .pages
+            .values()
+            .flat_map(|(_, levels)| levels.iter())
+            .map(EncodedMaterialLevel::encoded_bytes)
+            .sum::<usize>() as u64;
+        let mut shadow = CbtRenderMaterialPages {
+            generation: pages.generation,
+            priority: pages.priority.clone(),
+            pages: BTreeMap::new(),
+        };
+        for (id, (_, levels)) in self.pages.iter() {
+            let decoded = MaterialArray::decode_material_levels(levels);
+            self.decoded_bytes += decoded.iter().map(Vec::len).sum::<usize>() as u64;
+            let page = crate::material_pages::CbtMaterialPage::from_decoded_mips(decoded)
+                .expect("decoded levels keep mip shapes");
+            shadow.pages.insert(*id, (pages.pages[id].0, page));
+        }
+        shadow
+    }
+}
 
 pub(super) struct MaterialArray {
     pub view: TextureView,
@@ -18,6 +82,7 @@ pub(super) struct MaterialArray {
     cache: SlotCache,
     topology_generation: u64,
     pages_generation: u64,
+    microstore: MicrostoreResidency,
 }
 
 impl MaterialArray {
@@ -59,7 +124,22 @@ impl MaterialArray {
             cache: SlotCache::new(layers as usize).expect("wgpu supports texture array layers"),
             topology_generation: u64::MAX,
             pages_generation: u64::MAX,
+            microstore: MicrostoreResidency::default(),
         }
+    }
+
+    /// Telemetry accessors for the compact path (gauge + lifetimes).
+    pub fn microstore_wire_bytes(&self) -> u64 {
+        self.microstore.wire_bytes
+    }
+    pub fn microstore_decoded_bytes(&self) -> u64 {
+        self.microstore.decoded_bytes
+    }
+    pub fn microstore_encode_secs(&self) -> f64 {
+        self.microstore.encode_secs
+    }
+    pub fn microstore_pages_encoded(&self) -> u64 {
+        self.microstore.pages_encoded
     }
 
     pub fn prepare(
@@ -155,5 +235,153 @@ impl MaterialArray {
         self.slots.write_buffer(device, queue);
         self.topology_generation = topology.generation();
         self.pages_generation = pages.generation;
+    }
+}
+
+impl MaterialArray {
+    /// Upload entry point with the resolved storage policy. The raw array
+    /// path is the default; the compact path encodes pages once, holds
+    /// the compact form in residency, and decodes to RGBA at upload time
+    /// through the identical texture, sampler, mips, and slot logic.
+    pub fn prepare_storage(
+        &mut self,
+        topology: &CbtRenderTopology,
+        pages: &CbtRenderMaterialPages,
+        device: &RenderDevice,
+        queue: &RenderQueue,
+        storage: ResolvedMaterialStorage,
+    ) {
+        match storage {
+            ResolvedMaterialStorage::RgbaArray => self.prepare(topology, pages, device, queue),
+            ResolvedMaterialStorage::MicrostoreCompact => {
+                self.prepare_compact(topology, pages, device, queue)
+            }
+        }
+    }
+
+    /// Decode encoded mip levels back to interleaved RGBA bytes, one vec
+    /// per level. Pure function of the encoded data: the render-world test
+    /// pins decoded == original within the encode budget without a GPU.
+    pub fn decode_material_levels(levels: &[EncodedMaterialLevel]) -> Vec<Vec<u8>> {
+        levels
+            .iter()
+            .map(|level| {
+                let [r, g, b] = level.color.decode();
+                let a = level.roughness.decode();
+                let n = r.data.len();
+                debug_assert_eq!(g.data.len(), n);
+                debug_assert_eq!(b.data.len(), n);
+                debug_assert_eq!(a.data.len(), n);
+                let mut rgba = Vec::with_capacity(n * 4);
+                for i in 0..n {
+                    rgba.extend_from_slice(&[r.data[i], g.data[i], b.data[i], a.data[i]]);
+                }
+                rgba
+            })
+            .collect()
+    }
+
+    fn prepare_compact(
+        &mut self,
+        topology: &CbtRenderTopology,
+        pages: &CbtRenderMaterialPages,
+        device: &RenderDevice,
+        queue: &RenderQueue,
+    ) {
+        if self.topology_generation == topology.generation()
+            && self.pages_generation == pages.generation
+        {
+            return;
+        }
+        let shadow = self.microstore.update(pages);
+        self.prepare(topology, &shadow, device, queue);
+    }
+
+    /// Encode every mip of one page with the sample-time budget (2.0 code
+    /// levels). Shared by the render path and the CPU-only tests.
+    pub(crate) fn encode_page_levels(
+        page: &crate::material_pages::CbtMaterialPage,
+    ) -> Vec<EncodedMaterialLevel> {
+        let (mut w, mut h) = (MATERIAL_PAGE_SIZE, MATERIAL_PAGE_SIZE);
+        let mut levels = Vec::with_capacity(page.mips.len());
+        for mip in page.mips.iter() {
+            if let Some(encoded) = encode_material_level(mip, w, h, 2.0) {
+                levels.push(encoded);
+            }
+            w = (w / 2).max(1);
+            h = (h / 2).max(1);
+        }
+        levels
+    }
+}
+
+#[cfg(test)]
+mod residency_tests {
+    use super::*;
+    use crate::material_microstore::rock_rgba;
+    use crate::material_pages::CbtMaterialPage;
+
+    fn real_pages(ids: &[u64], seed: u64) -> CbtRenderMaterialPages {
+        let mut out = CbtRenderMaterialPages::default();
+        for (i, id) in ids.iter().enumerate() {
+            let rgba = rock_rgba(MATERIAL_PAGE_SIZE, seed + i as u64 * 0x9E37);
+            let page = CbtMaterialPage::from_rgba8(rgba).expect("real page builds");
+            out.set_page(*id, page);
+        }
+        out
+    }
+
+    #[test]
+    fn decode_round_trips_within_encode_budget() {
+        let rgba = rock_rgba(MATERIAL_PAGE_SIZE, 0xC0FFEE);
+        let page = CbtMaterialPage::from_rgba8(rgba.clone()).expect("real page builds");
+        let levels = MaterialArray::encode_page_levels(&page);
+        assert_eq!(levels.len(), 8);
+        let decoded = MaterialArray::decode_material_levels(&levels);
+        assert_eq!(decoded.len(), 8);
+        let mut worst = 0u8;
+        for (level, (orig, back)) in page.mips.iter().zip(decoded.iter()).enumerate() {
+            assert_eq!(orig.len(), back.len(), "level {level} len");
+            for (i, (o, d)) in orig.iter().zip(back.iter()).enumerate() {
+                worst = worst.max(o.abs_diff(*d));
+                assert!(o.abs_diff(*d) <= 2, "level {level} byte {i}: {o} vs {d}");
+            }
+        }
+        // Compact residency must beat the raw 87,380 B mip chain.
+        let wire: usize = levels.iter().map(EncodedMaterialLevel::encoded_bytes).sum();
+        let raw: usize = page.mips.iter().map(Vec::len).sum();
+        eprintln!("compact {wire} B vs raw {raw} B, worst drift {worst}");
+        assert!(wire < raw, "microstore must beat raw RGBA");
+        // Shadow pages keep the exact mip shapes for the shared upload path.
+        let rebuilt = CbtMaterialPage::from_decoded_mips(decoded).expect("shape holds");
+        assert_eq!(rebuilt.mips.len(), 8);
+        assert!(CbtMaterialPage::from_decoded_mips(vec![vec![0u8; 3]]).is_none());
+    }
+
+    #[test]
+    fn residency_encodes_once_and_evicts() {
+        let pages = real_pages(&[11, 22], 0x5EED);
+        let mut cache = MicrostoreResidency::default();
+        let shadow = cache.update(&pages);
+        assert_eq!(shadow.pages.len(), 2);
+        assert_eq!(cache.pages_encoded, 2);
+        let wire_once = cache.wire_bytes;
+        assert!(wire_once > 0);
+        assert!(cache.decoded_bytes > 0);
+        // Same generations: no re-encode, gauge stable.
+        let shadow2 = cache.update(&pages);
+        assert_eq!(cache.pages_encoded, 2, "must not re-encode clean pages");
+        assert_eq!(cache.wire_bytes, wire_once, "wire gauge must be stable");
+        assert_eq!(shadow2.pages.len(), 2);
+        // Evict one page: residency shrinks, shadow follows.
+        let mut fewer = pages.clone();
+        fewer.remove_page(11);
+        let shadow3 = cache.update(&fewer);
+        assert_eq!(shadow3.pages.len(), 1);
+        assert!(
+            cache.wire_bytes < wire_once,
+            "eviction must shrink residency"
+        );
+        assert!(!cache.pages.contains_key(&11));
     }
 }

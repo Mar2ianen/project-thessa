@@ -638,136 +638,312 @@ fn ready_terrain_cover(
     cover
 }
 
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-fn update_terrain(
-    mut commands: Commands,
-    time: Res<Time>,
-    pilot: Res<PilotHudState>,
-    runtime: Res<PilotFlightRuntime>,
-    survey: Res<SurfaceSurvey>,
-    mut world: ResMut<WorldTerrain>,
-    mut cbt: CbtTerrain<'_>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut perf: ResMut<perf::PerfMonitor>,
-    mut camera: Single<
-        (&mut Transform, &mut Projection),
-        (With<Camera3d>, Without<TerrainBackdrop>),
+// ---------------------------------------------------------------------------
+// Terrain dataflow stages.
+//
+// `update_terrain` below is only the wiring between these stages:
+// selection -> requests -> streaming -> ready pages -> presentation, with the
+// CPU-mesh fallback isolated in `sync_tile_entities`. Each stage takes narrow
+// borrows (a `&CbtRenderPages` here does not trip Bevy change detection, a
+// `&mut WorldTerrain` there does not alias the render snapshot), so the
+// stages can move one by one from the Bevy schedule into a dedicated
+// scheduler without untangling a mega-system again.
+//
+
+/// Engine-neutral handoff for one finished height build.
+///
+/// The worker pool produces plain data (`HeightPage` is `rcbt-core`, no Bevy
+/// types); the frame thread only publishes it. The GPU path consumes exactly
+/// this. The CPU fallback converts the sibling mesh/material payload through
+/// `present_cpu_tile` — the single bridge that may touch `Assets`/`Handle`.
+struct TerrainPageReady {
+    key: TileKey,
+    height_page: HeightPage,
+}
+
+/// Publish one finished height page to the render snapshot.
+fn present_height_page(pages: &mut CbtRenderPages, ready: TerrainPageReady) {
+    if let Some(node) = lod::cbt_node_for_tile(ready.key) {
+        pages.set_page(node.id(), ready.height_page);
+    }
+}
+
+/// CPU-fallback half of a finished build: turn pool-built mesh/images into
+/// asset handles and insert the tile record. The record insert runs on both
+/// paths (the GPU path inserts an empty record for residency/cover
+/// tracking); only the `Assets`/`Handle` creation is CPU-path-only. This is
+/// the only place (besides eviction) allowed to touch
+/// `Assets<Mesh/Image/StandardMaterial>`.
+#[allow(clippy::too_many_arguments)]
+fn present_cpu_tile(
+    meshes: &mut Assets<Mesh>,
+    images: &mut Assets<Image>,
+    materials: &mut Assets<StandardMaterial>,
+    world: &mut WorldTerrain,
+    key: TileKey,
+    built_mesh: Option<Mesh>,
+    built_images: Option<[Image; 3]>,
+    anchor: DVec3,
+    vertices: u64,
+    triangles: u64,
+    texture_bytes: u64,
+) {
+    let (mesh, material, image_handles) = match (built_mesh, built_images) {
+        (Some(built_mesh), Some([albedo_image, roughness_image, normal_image])) => {
+            let mesh = meshes.add(built_mesh);
+            let albedo = images.add(albedo_image);
+            let roughness = images.add(roughness_image);
+            let normal = images.add(normal_image);
+            let material = materials.add(StandardMaterial {
+                base_color: Color::WHITE,
+                base_color_texture: Some(albedo.clone()),
+                metallic_roughness_texture: Some(roughness.clone()),
+                normal_map_texture: Some(normal.clone()),
+                // Match the Thessa/backdrop roughness so tile borders do not
+                // shade darker/lighter than the far field behind them.
+                perceptual_roughness: 0.92,
+                ..default()
+            });
+            (
+                Some(mesh),
+                Some(material),
+                Some([albedo, roughness, normal]),
+            )
+        }
+        (None, None) => (None, None, None),
+        _ => unreachable!("terrain output mesh/material payload must be paired"),
+    };
+    let last_used = world.selection_epoch;
+    world.cache.insert(
+        key,
+        CachedTile {
+            last_used,
+            mesh,
+            anchor,
+            vertices,
+            triangles,
+            texture_bytes,
+            material,
+            images: image_handles,
+        },
+    );
+}
+
+/// Executor seam for CPU tile builds. The signature is pool-agnostic
+/// (`TileKey` + shared field in, `TerrainBuildOutput` out) so the backend
+/// can move from `AsyncComputeTaskPool` to Rayon + bounded result channel
+/// without touching selection or presentation; `WorldTerrain.jobs` is the
+/// only place that names the current backend's handle type.
+fn spawn_height_job(
+    field: &Arc<PlanetField>,
+    key: TileKey,
+    tile_mesh_cells: usize,
+    gpu_raster: bool,
+) -> Task<TerrainBuildOutput> {
+    let field = field.clone();
+    AsyncComputeTaskPool::get().spawn(async move {
+        let start = Instant::now();
+        // The direct GPU path needs only the quantized height page.
+        // Do not build CPU positions, normals, skirts, or material
+        // images for a surface that will never create a Bevy entity.
+        let (
+            height_page,
+            anchor,
+            vertices,
+            triangles,
+            mesh,
+            images,
+            texture_bytes,
+            mesh_s,
+            material_s,
+        ) = if gpu_raster {
+            let page = lod::bake_height_page(&field, key, 33, 0.5)
+                .expect("GPU terrain height page must fit its error budget");
+            (
+                page,
+                DVec3::ZERO,
+                0,
+                0,
+                None,
+                None,
+                0,
+                start.elapsed().as_secs_f64(),
+                0.0,
+            )
+        } else {
+            let tile = lod::build_tile(&field, key, tile_mesh_cells);
+            let mesh_s = start.elapsed().as_secs_f64();
+            let texture_start = Instant::now();
+            let texture = lod::build_surface_texture_for_mesh(
+                &field,
+                key,
+                lod::texture_cells_for_level(key.level),
+                tile_mesh_cells,
+            );
+            let material_s = texture_start.elapsed().as_secs_f64();
+            // Mesh assembly (tangents) and image upload prep (mipmaps:
+            // ~65k sRGB powf per 128 px tile) stay on the pool: per
+            // finished tile the frame thread only inserts handles.
+            let mesh = mesh_from_tile(&tile, texture.size, tile_mesh_cells);
+            let images = [
+                surface_image(texture.size, texture.albedo.clone(), true),
+                surface_image(texture.size, texture.roughness.clone(), false),
+                surface_image(texture.size, texture.normal.clone(), false),
+            ];
+            (
+                tile.height_page,
+                DVec3::from_array(tile.anchor_m),
+                tile.positions.len() as u64,
+                (tile.indices.len() / 3) as u64,
+                Some(mesh),
+                Some(images),
+                mip_bytes(texture.size) * 3,
+                mesh_s,
+                material_s,
+            )
+        };
+        TerrainBuildOutput {
+            mesh,
+            height_page,
+            anchor,
+            vertices,
+            triangles,
+            texture_bytes,
+            images,
+            seconds: [mesh_s, material_s],
+        }
+    })
+}
+
+/// Executor seam for material-page builds (same backend note as above).
+fn spawn_material_job(
+    field: &Arc<PlanetField>,
+    key: TileKey,
+) -> Task<thessa_bevy_rcbt::CbtMaterialPage> {
+    let field = field.clone();
+    AsyncComputeTaskPool::get().spawn(async move {
+        let page = lod::build_gpu_material_page(&field, key);
+        thessa_bevy_rcbt::CbtMaterialPage::from_rgba8(page.rgba).expect("fixed material page layout")
+    })
+}
+
+/// Presentation stage: advance ready page families independently of
+/// planning-tree convergence. Every published partition still covers the
+/// requested area; takes only the render snapshot borrows it needs.
+fn publish_resident_cover(
+    world: &mut WorldTerrain,
+    topology: &mut CbtRenderTopology,
+    pages: &CbtRenderPages,
+) {
+    if !world.cover_dirty || world.wanted.is_empty() {
+        return;
+    }
+    world.cover_dirty = false;
+    let previous: Vec<_> = world.visible.iter().copied().collect();
+    if let Some(cover) =
+        thessa_worldgen_rocky::streaming::resident_cover(&world.wanted, &previous, |key| {
+            lod::cbt_node_for_tile(key).is_some_and(|node| pages.contains_page(node.id()))
+        })
+    {
+        let cover: BTreeSet<_> = cover.into_iter().collect();
+        if !cover.is_empty() && cover != world.visible {
+            let nodes: Vec<_> = cover
+                .iter()
+                .filter_map(|key| lod::cbt_node_for_tile(*key))
+                .collect();
+            if topology.publish_resident_leaves(&nodes) {
+                world.visible = cover;
+            }
+        }
+    }
+}
+
+/// Presentation teardown for the inactive view mode. Hides the surface,
+/// despawns tile entities and zeroes frame counters. Returns `true` when it
+/// ran, in which case the caller has nothing else to do this frame.
+#[allow(clippy::type_complexity)]
+fn teardown_inactive_surface(
+    commands: &mut Commands,
+    world: &mut WorldTerrain,
+    backdrop: &mut Query<
+        (&mut Transform, &mut Visibility),
+        (
+            With<TerrainBackdrop>,
+            Without<Camera3d>,
+            Without<SurfaceTile>,
+            Without<CelestialVisual>,
+            Without<pilot::PilotPlanetVisual>,
+        ),
     >,
-    mut tiles: Query<
+    tiles: &mut Query<
         (Entity, &SurfaceTile, &mut Transform),
         (Without<Camera3d>, Without<TerrainBackdrop>),
     >,
-    mut celestial: Query<
-        &mut Visibility,
-        Or<(With<CelestialVisual>, With<pilot::PilotPlanetVisual>)>,
+    readout: &mut Query<&mut Text, With<SurveyReadout>>,
+) -> bool {
+    world.render_center = None;
+    for (_, mut visibility) in backdrop {
+        *visibility = Visibility::Hidden;
+    }
+    for (entity, _, _) in tiles {
+        commands.entity(entity).despawn();
+    }
+    world.visible.clear();
+    world.counters.terrain_patches_visible = 0;
+    world.counters.terrain_patches_wanted = 0;
+    world.counters.terrain_jobs_in_flight = 0;
+    world.counters.terrain_eye_speed_mps = 0;
+    world.counters.terrain_detail_bias_x100 = 100;
+    world.counters.terrain_lod_min = 0;
+    world.counters.terrain_lod_max = 0;
+    world.counters.terrain_wanted_lod_max = 0;
+    world.counters.terrain_lod_histogram = [0; 18];
+    world.topology_pending = false;
+    for mut text in readout {
+        text.0.clear();
+    }
+    true
+}
+
+/// Frame view computed from survey/runtime state: eye, orientation, render
+/// origin and selection frustum. Pure camera work — no tile selection, no
+/// streaming; the returned view feeds the selection stage.
+#[derive(Debug, Clone, Copy)]
+struct FrameView {
+    origin: DVec3,
+    rotation: DQuat,
+    eye: DVec3,
+    forward_body: DVec3,
+    frustum: Option<lod::SelectionFrustum>,
+    radius: f64,
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn update_frame_camera(
+    world: &mut WorldTerrain,
+    surface: &mut CbtRenderSurface,
+    survey: &SurfaceSurvey,
+    runtime: &PilotFlightRuntime,
+    camera: &mut Single<
+        (&mut Transform, &mut Projection),
+        (With<Camera3d>, Without<TerrainBackdrop>),
     >,
-    display: (
-        Query<&mut Text, With<SurveyReadout>>,
-        Query<
-            (&mut Transform, &mut Visibility),
-            (
-                With<TerrainBackdrop>,
-                Without<Camera3d>,
-                Without<SurfaceTile>,
-                Without<CelestialVisual>,
-                Without<pilot::PilotPlanetVisual>,
-            ),
-        >,
-    ),
-    sky: Option<Res<water::WaterSky>>,
-) {
-    let (mut readout, mut backdrop) = display;
-    let started = Instant::now();
-    let terrain_mesh_cells = cbt
-        .graphics
-        .as_deref()
-        .map(|settings| {
-            if settings.0.terrain.is_gpu() {
-                // The indexed CBT consumer has a fixed 33x33 GPU page and
-                // index-buffer contract. CPU-only density is configurable.
-                32
-            } else {
-                settings.0.terrain_mesh_cells as usize
-            }
-        })
-        .unwrap_or(24);
-    // The same coarse-to-fine cover remains valid in orbit. An altitude gate
-    // swapped the whole surface to a different sphere at 80 km and bypassed
-    // the presentation fence during physical ascents/descents.
-    let active = survey.active || pilot.view_mode == ClientViewMode::Pilot;
-    let gpu_raster = cbt.surface.gpu_raster_enabled();
-    // The GPU raster consumer must not draw its fallback 1x1 texture over a
-    // valid bootstrap sphere: that fallback is intentionally neutral grey and
-    // was the source of the giant grey rectangles seen while the canonical
-    // albedo was still streaming.
-    let gpu_albedo_ready = !gpu_raster
-        || cbt.material.as_deref().is_some_and(|material| {
-            images.get(&material.albedo).is_some()
-                && material
-                    .roughness
-                    .as_ref()
-                    .is_none_or(|map| images.get(map).is_some())
-        });
-    // Presentation advances ready families independently of planning-tree
-    // convergence. Every published partition still covers the requested area.
-    if active && gpu_raster && gpu_albedo_ready && world.cover_dirty && !world.wanted.is_empty() {
-        world.cover_dirty = false;
-        let previous: Vec<_> = world.visible.iter().copied().collect();
-        if let Some(cover) =
-            thessa_worldgen_rocky::streaming::resident_cover(&world.wanted, &previous, |key| {
-                lod::cbt_node_for_tile(key).is_some_and(|node| cbt.pages.contains_page(node.id()))
-            })
-        {
-            let cover: BTreeSet<_> = cover.into_iter().collect();
-            if !cover.is_empty() && cover != world.visible {
-                let nodes: Vec<_> = cover
-                    .iter()
-                    .filter_map(|key| lod::cbt_node_for_tile(*key))
-                    .collect();
-                if cbt.topology.publish_resident_leaves(&nodes) {
-                    world.visible = cover;
-                }
-            }
-        }
-    }
-    // Keep the last complete draw snapshot and its pages while workers and
-    // the planning tree converge. Never flash the bootstrap on each LOD change.
-    let cpu_cover_ready = gpu_raster && gpu_albedo_ready && !world.visible.is_empty();
-    // Enable draw preparation first. Hide the bootstrap only after the render
-    // world has actually bound the GPU images and submitted this surface.
-    cbt.surface.set_gpu_surface_ready(active && cpu_cover_ready);
-    let gpu_cover_ready = cbt
-        .presentation
-        .is_ready(&cbt.surface, cbt.material.as_deref());
-    world.counters.terrain_patches_generated = 0;
-    if !active {
-        world.render_center = None;
-        for (_, mut visibility) in &mut backdrop {
-            *visibility = Visibility::Hidden;
-        }
-        for (entity, _, _) in &mut tiles {
-            commands.entity(entity).despawn();
-        }
-        world.visible.clear();
-        world.counters.terrain_patches_visible = 0;
-        world.counters.terrain_patches_wanted = 0;
-        world.counters.terrain_jobs_in_flight = 0;
-        world.counters.terrain_eye_speed_mps = 0;
-        world.counters.terrain_detail_bias_x100 = 100;
-        world.counters.terrain_lod_min = 0;
-        world.counters.terrain_lod_max = 0;
-        world.counters.terrain_wanted_lod_max = 0;
-        world.counters.terrain_lod_histogram = [0; 18];
-        world.topology_pending = false;
-        for mut text in &mut readout {
-            text.0.clear();
-        }
-        return;
-    }
+    readout: &mut Query<&mut Text, With<SurveyReadout>>,
+    backdrop: &mut Query<
+        (&mut Transform, &mut Visibility),
+        (
+            With<TerrainBackdrop>,
+            Without<Camera3d>,
+            Without<SurfaceTile>,
+            Without<CelestialVisual>,
+            Without<pilot::PilotPlanetVisual>,
+        ),
+    >,
+    gpu_raster: bool,
+    gpu_cover_ready: bool,
+) -> FrameView {
     let radius = world.field.params.radius_m;
-    cbt.surface.set_radius_m(radius as f32);
+    surface.set_radius_m(radius as f32);
     let (origin, rotation, eye) = if survey.active {
         let (dir, label) = survey.sites[survey.site];
         let spin = DQuat::from_rotation_y(runtime.render_spin());
@@ -800,12 +976,12 @@ fn update_terrain(
         }
         // Sky and ambient stay owned by the atmosphere plugin: hardcoded
         // replacements here would fight the LUT sky and night side.
-        for mut text in &mut readout {
+        for mut text in readout {
             text.0 = format!("THESSA  /  {label}     {:.1} km", survey.distance / 1000.0);
         }
         (center, spin, spin.inverse() * (center + offset.as_dvec3()))
     } else {
-        for mut text in &mut readout {
+        for mut text in readout {
             text.0.clear();
         }
         let origin = runtime.render_terrain_origin_m();
@@ -816,10 +992,10 @@ fn update_terrain(
             spin.inverse() * (origin + camera.0.translation.as_dvec3()),
         )
     };
-    cbt.surface.set_render_from_body_f64(
+    surface.set_render_from_body_f64(
         bevy::math::DMat4::from_rotation_translation(rotation, -origin).to_cols_array(),
     );
-    for (mut transform, mut visibility) in &mut backdrop {
+    for (mut transform, mut visibility) in backdrop {
         transform.translation = (-origin).as_vec3();
         transform.rotation = rotation.as_quat() * SPHERE_POLE_TO_WORLD_UP;
         transform.scale = Vec3::splat((radius - 16000.0) as f32);
@@ -878,7 +1054,42 @@ fn update_terrain(
     // Camera-frame forward for the frustum and the movement trigger.
     let forward_render = (camera.0.rotation * Vec3::NEG_Z).as_dvec3();
     let forward_body = rotation.inverse() * forward_render;
-    let now_s = time.elapsed_secs_f64();
+    FrameView {
+        origin,
+        rotation,
+        eye,
+        forward_body,
+        frustum,
+        radius,
+    }
+}
+
+/// Selection stage: movement trigger -> tile demand -> CBT planning input.
+///
+/// Reads the frame view and the warm cache, writes `world.wanted` and
+/// submits planning candidates. Returns `(selection_changed, detail_bias)`.
+/// Takes only the planning borrows it needs; streaming and presentation
+/// never observe its internals.
+#[allow(clippy::too_many_arguments)]
+fn run_tile_selection(
+    world: &mut WorldTerrain,
+    topology: &Tree,
+    input: &mut CbtFrameInput,
+    surface: &mut CbtRenderSurface,
+    camera_projection: &Projection,
+    perf: &mut perf::PerfMonitor,
+    now_s: f64,
+    gpu_raster: bool,
+    view: &FrameView,
+) -> (bool, f64) {
+    let FrameView {
+        origin,
+        rotation,
+        eye,
+        radius,
+        forward_body,
+        frustum,
+    } = *view;
     // Movement trigger (standard streaming practice): fast flight covers
     // hundreds of metres per selection period, so a pure timer always lags
     // behind the view. Reselect when the eye moved >300 m or the view swung
@@ -970,7 +1181,7 @@ fn update_terrain(
         "world.terrain_selection",
         selection_started.elapsed().as_secs_f64(),
     );
-    let fov_rad = match &*camera.1 {
+    let fov_rad = match camera_projection {
         Projection::Perspective(projection) => f64::from(projection.fov),
         _ => 0.0,
     };
@@ -981,7 +1192,7 @@ fn update_terrain(
         fov_rad,
         pixel_error_target: 1.0,
     };
-    cbt.surface.set_view_state(
+    surface.set_view_state(
         render_view.eye_body_m,
         render_view.forward_body,
         render_view.fov_rad,
@@ -993,16 +1204,36 @@ fn update_terrain(
     // active slabs with the bootstrap sphere. Rebuild candidates only while
     // convergence is pending, not on every steady-state render frame.
     if selection_changed || world.topology_pending {
-        let candidates = cbt_candidates_for_tiles(cbt.state.topology(), &world.wanted);
+        let candidates = cbt_candidates_for_tiles(topology, &world.wanted);
         world.topology_pending = !candidates.is_empty();
         if world.topology_pending {
-            cbt.input.submit(Some(render_view), candidates);
+            input.submit(Some(render_view), candidates);
         }
     }
     perf.record_scope(
         "world.terrain_cbt_submit",
         cbt_submit_started.elapsed().as_secs_f64(),
     );
+    (selection_changed, detail_bias)
+}
+
+/// Pure demand computation shared by job spawning and cache pinning: the
+/// wanted cover plus cached ancestors (coarse material can cover four
+/// children while fine pages bake). Reads only; callers pass the result on.
+/// Streaming stage: poll finished height builds and publish ready pages.
+///
+/// Finished pool outputs arrive as engine-neutral [`TerrainPageReady`]
+/// handoffs; the CPU payload (if any) crosses the [`present_cpu_tile`]
+/// bridge. Sets `cover_dirty` so presentation re-examines the cover.
+#[allow(clippy::too_many_arguments)]
+fn poll_finished_pages(
+    world: &mut WorldTerrain,
+    pages: &mut CbtRenderPages,
+    meshes: &mut Assets<Mesh>,
+    images: &mut Assets<Image>,
+    materials: &mut Assets<StandardMaterial>,
+    perf: &mut perf::PerfMonitor,
+) {
     let poll_started = Instant::now();
     let finished: Vec<_> = world
         .jobs
@@ -1026,49 +1257,23 @@ fn update_terrain(
             images: built_images,
             seconds,
         } = output;
-        if let Some(node) = lod::cbt_node_for_tile(key) {
-            cbt.pages.set_page(node.id(), height_page);
-        }
+        // Render snapshot first (engine-neutral handoff); the CPU fallback
+        // bridge below only runs for the mesh path.
+        present_height_page(pages, TerrainPageReady { key, height_page });
         perf.record_scope("world.terrain_meshing", seconds[0]);
         perf.record_scope("world.terrain_materials", seconds[1]);
-        let (mesh, material, image_handles) = match (built_mesh, built_images) {
-            (Some(built_mesh), Some([albedo_image, roughness_image, normal_image])) => {
-                let mesh = meshes.add(built_mesh);
-                let albedo = images.add(albedo_image);
-                let roughness = images.add(roughness_image);
-                let normal = images.add(normal_image);
-                let material = materials.add(StandardMaterial {
-                    base_color: Color::WHITE,
-                    base_color_texture: Some(albedo.clone()),
-                    metallic_roughness_texture: Some(roughness.clone()),
-                    normal_map_texture: Some(normal.clone()),
-                    // Match the Thessa/backdrop roughness so tile borders do not
-                    // shade darker/lighter than the far field behind them.
-                    perceptual_roughness: 0.92,
-                    ..default()
-                });
-                (
-                    Some(mesh),
-                    Some(material),
-                    Some([albedo, roughness, normal]),
-                )
-            }
-            (None, None) => (None, None, None),
-            _ => unreachable!("terrain output mesh/material payload must be paired"),
-        };
-        let last_used = world.selection_epoch;
-        world.cache.insert(
+        present_cpu_tile(
+            meshes,
+            images,
+            materials,
+            world,
             key,
-            CachedTile {
-                last_used,
-                mesh,
-                anchor,
-                vertices,
-                triangles,
-                texture_bytes,
-                material,
-                images: image_handles,
-            },
+            built_mesh,
+            built_images,
+            anchor,
+            vertices,
+            triangles,
+            texture_bytes,
         );
         world.counters.terrain_patches_generated += 1;
         world.cover_dirty = true;
@@ -1077,25 +1282,21 @@ fn update_terrain(
         "world.terrain_asset_upload",
         asset_upload_started.elapsed().as_secs_f64(),
     );
-    // Build order: coarse cover (L7-) first so holes close immediately,
-    // then nearest-first for detail. Key order is arbitrary — without this
-    // the near field waits behind hundreds of far tiles, and without the
-    // coarse-first rule a fresh selection shows sky through missing cover.
-    // Intermediate height pages enable progressive complete covers. Stop
-    // walking at an already resident ancestor; never rebuild warm parents.
-    let mut dependencies: BTreeSet<_> = world.wanted.iter().copied().collect();
-    if gpu_raster {
-        for key in &world.wanted {
-            let mut ancestor = key.parent();
-            while let Some(parent) = ancestor {
-                dependencies.insert(parent);
-                if world.cache.contains_key(&parent) {
-                    break;
-                }
-                ancestor = parent.parent();
-            }
-        }
-    }
+}
+
+/// Requests stage: order the demand cover and spawn height builds up to the
+/// in-flight budget. Demand comes from [`compute_spawn_dependencies`];
+/// spawning goes through the [`spawn_height_job`] executor seam.
+fn spawn_height_jobs(
+    world: &mut WorldTerrain,
+    dependencies: &BTreeSet<TileKey>,
+    terrain_mesh_cells: usize,
+    gpu_raster: bool,
+    view: &FrameView,
+) {
+    let FrameView {
+        eye, radius, forward_body, ..
+    } = *view;
     let mut pending: Vec<_> = dependencies
         .iter()
         .filter(|key| !world.cache.contains_key(key) && !world.jobs.contains_key(key))
@@ -1133,186 +1334,164 @@ fn update_terrain(
         .take(8_usize.saturating_sub(world.jobs.len()))
         .collect();
     for key in pending {
-        let field = world.field.clone();
         let tile_mesh_cells = if gpu_raster {
             32
         } else {
             mesh_cells_for_tile(terrain_mesh_cells, key)
         };
-        world.jobs.insert(
-            key,
-            AsyncComputeTaskPool::get().spawn(async move {
-                let start = Instant::now();
-                // The direct GPU path needs only the quantized height page.
-                // Do not build CPU positions, normals, skirts, or material
-                // images for a surface that will never create a Bevy entity.
-                let (
-                    height_page,
-                    anchor,
-                    vertices,
-                    triangles,
-                    mesh,
-                    images,
-                    texture_bytes,
-                    mesh_s,
-                    material_s,
-                ) = if gpu_raster {
-                    let page = lod::bake_height_page(&field, key, 33, 0.5)
-                        .expect("GPU terrain height page must fit its error budget");
-                    (
-                        page,
-                        DVec3::ZERO,
-                        0,
-                        0,
-                        None,
-                        None,
-                        0,
-                        start.elapsed().as_secs_f64(),
-                        0.0,
-                    )
-                } else {
-                    let tile = lod::build_tile(&field, key, tile_mesh_cells);
-                    let mesh_s = start.elapsed().as_secs_f64();
-                    let texture_start = Instant::now();
-                    let texture = lod::build_surface_texture_for_mesh(
-                        &field,
-                        key,
-                        lod::texture_cells_for_level(key.level),
-                        tile_mesh_cells,
-                    );
-                    let material_s = texture_start.elapsed().as_secs_f64();
-                    // Mesh assembly (tangents) and image upload prep (mipmaps:
-                    // ~65k sRGB powf per 128 px tile) stay on the pool: per
-                    // finished tile the frame thread only inserts handles.
-                    let mesh = mesh_from_tile(&tile, texture.size, tile_mesh_cells);
-                    let images = [
-                        surface_image(texture.size, texture.albedo.clone(), true),
-                        surface_image(texture.size, texture.roughness.clone(), false),
-                        surface_image(texture.size, texture.normal.clone(), false),
-                    ];
-                    (
-                        tile.height_page,
-                        DVec3::from_array(tile.anchor_m),
-                        tile.positions.len() as u64,
-                        (tile.indices.len() / 3) as u64,
-                        Some(mesh),
-                        Some(images),
-                        mip_bytes(texture.size) * 3,
-                        mesh_s,
-                        material_s,
-                    )
-                };
-                TerrainBuildOutput {
-                    mesh,
-                    height_page,
-                    anchor,
-                    vertices,
-                    triangles,
-                    texture_bytes,
-                    images,
-                    seconds: [mesh_s, material_s],
-                }
-            }),
-        );
+        let field = world.field.clone();
+        world
+            .jobs
+            .insert(key, spawn_height_job(&field, key, tile_mesh_cells, gpu_raster));
         world.counters.terrain_cache_misses += 1;
     }
-    // Material refinement has its own two-worker budget. Height/cover jobs
-    // never wait for it; a resident canonical globe map remains the fallback.
-    if gpu_raster {
-        let finished: Vec<_> = world
-            .material_jobs
-            .iter_mut()
-            .filter_map(|(key, task)| block_on(poll_once(task)).map(|page| (*key, page)))
-            .collect();
-        for (key, page) in finished {
-            world.material_jobs.remove(&key);
-            if world.cache.contains_key(&key)
-                && let Some(node) = lod::cbt_node_for_tile(key)
-            {
-                cbt.material_pages.set_page(node.id(), page);
-            }
-        }
-        let mut material_wanted: Vec<_> = world
-            .visible
-            .iter()
-            .copied()
-            .chain(
-                world
-                    .wanted
-                    .iter()
-                    .copied()
-                    .filter(|key| world.cache.contains_key(key)),
-            )
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        material_wanted.sort_by_cached_key(|key| {
-            let delta = DVec3::from_array(key.direction(0.5, 0.5)) * radius - eye;
-            (
-                delta.normalize_or_zero().dot(forward_body) < -0.15,
-                std::cmp::Reverse(key.level),
-                delta.length_squared().to_bits(),
-                *key,
-            )
-        });
-        material_wanted.truncate(256);
-        cbt.material_pages.set_priority(
-            material_wanted
-                .iter()
-                .filter_map(|key| lod::cbt_node_for_tile(*key).map(|node| node.id()))
-                .collect(),
-        );
-        for key in material_wanted {
-            // One coarse material can cover four children while fine pages
-            // bake. Produce that shared source first when no ancestor exists.
-            let key = if lod::cbt_node_for_tile(key).is_some_and(|node| {
-                thessa_bevy_rcbt::material_cache::resolve_material_ancestor(node.id(), |id| {
-                    cbt.material_pages.contains_page(id)
-                })
-                .is_none()
-            }) {
-                key.parent()
-                    .filter(|parent| world.cache.contains_key(parent))
-                    .unwrap_or(key)
-            } else {
-                key
-            };
-            let material_budget = if world.jobs.len() < 4 { 4 } else { 2 };
-            if world.material_jobs.len() >= material_budget {
-                break;
-            }
-            let Some(node) = lod::cbt_node_for_tile(key) else {
-                continue;
-            };
-            if cbt.material_pages.contains_page(node.id()) || world.material_jobs.contains_key(&key)
-            {
-                continue;
-            }
-            let field = world.field.clone();
-            world.material_jobs.insert(
-                key,
-                AsyncComputeTaskPool::get().spawn(async move {
-                    let page = lod::build_gpu_material_page(&field, key);
-                    thessa_bevy_rcbt::CbtMaterialPage::from_rgba8(page.rgba)
-                        .expect("fixed material page layout")
-                }),
-            );
+}
+
+/// Streaming stage for material pages (GPU path only): poll finished pages,
+/// refresh the wanted set and spawn builds through the
+/// [`spawn_material_job`] executor seam. Height/cover jobs never wait for
+/// it; a resident canonical globe map remains the fallback.
+fn run_material_streaming(
+    world: &mut WorldTerrain,
+    material_pages: &mut thessa_bevy_rcbt::CbtRenderMaterialPages,
+    gpu_raster: bool,
+    view: &FrameView,
+) {
+    if !gpu_raster {
+        return;
+    }
+    let FrameView {
+        eye, radius, forward_body, ..
+    } = *view;
+    let finished: Vec<_> = world
+        .material_jobs
+        .iter_mut()
+        .filter_map(|(key, task)| block_on(poll_once(task)).map(|page| (*key, page)))
+        .collect();
+    for (key, page) in finished {
+        world.material_jobs.remove(&key);
+        if world.cache.contains_key(&key)
+            && let Some(node) = lod::cbt_node_for_tile(key)
+        {
+            material_pages.set_page(node.id(), page);
         }
     }
+    let mut material_wanted: Vec<_> = world
+        .visible
+        .iter()
+        .copied()
+        .chain(
+            world
+                .wanted
+                .iter()
+                .copied()
+                .filter(|key| world.cache.contains_key(key)),
+        )
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    material_wanted.sort_by_cached_key(|key| {
+        let delta = DVec3::from_array(key.direction(0.5, 0.5)) * radius - eye;
+        (
+            delta.normalize_or_zero().dot(forward_body) < -0.15,
+            std::cmp::Reverse(key.level),
+            delta.length_squared().to_bits(),
+            *key,
+        )
+    });
+    material_wanted.truncate(256);
+    // Guard the mutable borrow: `set_priority(&mut self)` via `ResMut`
+    // marks the resource changed (Bevy `DerefMut`) even when the Vec is
+    // identical, forcing an extract snapshot every frame. The `priority()`
+    // check below borrows shared and leaves the change flag alone.
+    let wanted_ids: Vec<u64> = material_wanted
+        .iter()
+        .filter_map(|key| lod::cbt_node_for_tile(*key).map(|node| node.id()))
+        .collect();
+    if material_pages.priority() != wanted_ids.as_slice() {
+        material_pages.set_priority(wanted_ids);
+    }
+    for key in material_wanted {
+        // One coarse material can cover four children while fine pages
+        // bake. Produce that shared source first when no ancestor exists.
+        let key = if lod::cbt_node_for_tile(key).is_some_and(|node| {
+            thessa_bevy_rcbt::material_cache::resolve_material_ancestor(node.id(), |id| {
+                material_pages.contains_page(id)
+            })
+            .is_none()
+        }) {
+            key.parent()
+                .filter(|parent| world.cache.contains_key(parent))
+                .unwrap_or(key)
+        } else {
+            key
+        };
+        let material_budget = if world.jobs.len() < 4 { 4 } else { 2 };
+        if world.material_jobs.len() >= material_budget {
+            break;
+        }
+        let Some(node) = lod::cbt_node_for_tile(key) else {
+            continue;
+        };
+        if material_pages.contains_page(node.id()) || world.material_jobs.contains_key(&key) {
+            continue;
+        }
+        let field = world.field.clone();
+        world
+            .material_jobs
+            .insert(key, spawn_material_job(&field, key));
+    }
+}
+
+/// CPU-fallback presentation bridge — the only stage that spawns Bevy tile
+/// entities. Syncs the mesh-path entity cover, the bootstrap backdrop, tile
+/// transforms and celestial visibility. The GPU path never creates entities
+/// here: `world.visible` is the retained complete draw snapshot.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn sync_tile_entities(
+    commands: &mut Commands,
+    world: &mut WorldTerrain,
+    tiles: &mut Query<
+        (Entity, &SurfaceTile, &mut Transform),
+        (Without<Camera3d>, Without<TerrainBackdrop>),
+    >,
+    backdrop: &mut Query<
+        (&mut Transform, &mut Visibility),
+        (
+            With<TerrainBackdrop>,
+            Without<Camera3d>,
+            Without<SurfaceTile>,
+            Without<CelestialVisual>,
+            Without<pilot::PilotPlanetVisual>,
+        ),
+    >,
+    celestial: &mut Query<
+        &mut Visibility,
+        Or<(With<CelestialVisual>, With<pilot::PilotPlanetVisual>)>,
+    >,
+    sky: Option<&water::WaterSky>,
+    surface_raster_enabled: bool,
+    gpu_raster: bool,
+    gpu_cover_ready: bool,
+    selection_changed: bool,
+    view: &FrameView,
+    perf: &mut perf::PerfMonitor,
+) {
+    let FrameView { origin, rotation, .. } = *view;
     let entity_sync_started = Instant::now();
     if !gpu_raster && (selection_changed || world.counters.terrain_patches_generated > 0) {
         let desired = ready_terrain_cover(&world.wanted, &world.visible, |key| {
             world.cache.contains_key(key)
         });
         if desired != world.visible {
-            for (entity, tile, _) in &mut tiles {
+            for (entity, tile, _) in &mut *tiles {
                 if !desired.contains(&tile.0) {
                     commands.entity(entity).despawn();
                 }
             }
             for key in desired.difference(&world.visible) {
                 let tile = &world.cache[key];
-                if cbt.surface.gpu_raster_enabled() {
+                if surface_raster_enabled {
                     continue;
                 }
                 let (Some(mesh), Some(material)) = (&tile.mesh, &tile.material) else {
@@ -1328,7 +1507,7 @@ fn update_terrain(
                 ));
                 // Shared sky probe at spawn (atomic with creation: no
                 // query/insert race when cover churns under warp).
-                if let Some(sky) = sky.as_deref() {
+                if let Some(sky) = sky {
                     // The probe must not share the mesh entity's transform:
                     // scaling that transform would scale the terrain. Its
                     // child uses the tile's physical cube-sphere span, with
@@ -1352,7 +1531,7 @@ fn update_terrain(
     // In GPU mode `visible` tracks the retained complete draw snapshot,
     // independently of the planning tree and its in-flight replacement.
     let gpu_bootstrap = gpu_raster && !gpu_cover_ready;
-    for (_, mut visibility) in &mut backdrop {
+    for (_, mut visibility) in backdrop {
         let show_backdrop = if gpu_raster {
             gpu_bootstrap
         } else {
@@ -1364,7 +1543,7 @@ fn update_terrain(
             Visibility::Hidden
         };
     }
-    for (_, tile, mut transform) in &mut tiles {
+    for (_, tile, mut transform) in &mut *tiles {
         if let Some(cached) = world.cache.get(&tile.0) {
             transform.translation = (rotation * cached.anchor - origin).as_vec3();
             transform.rotation = rotation.as_quat();
@@ -1380,10 +1559,26 @@ fn update_terrain(
         !world.visible.is_empty()
     };
     if terrain_surface_ready {
-        for mut visibility in &mut celestial {
+        for mut visibility in celestial {
             *visibility = Visibility::Hidden;
         }
     }
+}
+
+/// Cache stage: pin the live cover, the demand set and in-flight jobs, then
+/// evict the oldest excess. Page removals flow back to both render-page
+/// snapshots; asset removals stay in this bridge next to `present_cpu_tile`.
+#[allow(clippy::too_many_arguments)]
+fn evict_stale_tiles(
+    world: &mut WorldTerrain,
+    pages: &mut CbtRenderPages,
+    material_pages: &mut thessa_bevy_rcbt::CbtRenderMaterialPages,
+    meshes: &mut Assets<Mesh>,
+    images: &mut Assets<Image>,
+    materials: &mut Assets<StandardMaterial>,
+    dependencies: &BTreeSet<TileKey>,
+    gpu_raster: bool,
+) {
     // Warm LRU: a camera turn is not a reason to discard previously built
     // pages. Keep current cover, current demand and material ancestors pinned;
     // evict only the excess, oldest first. GPU pages are much smaller than the
@@ -1394,7 +1589,7 @@ fn update_terrain(
         .filter_map(|key| {
             let node = lod::cbt_node_for_tile(*key)?;
             thessa_bevy_rcbt::material_cache::resolve_material_ancestor(node.id(), |id| {
-                cbt.material_pages.contains_page(id)
+                material_pages.contains_page(id)
             })
             .map(|(id, _)| id)
         })
@@ -1403,7 +1598,7 @@ fn update_terrain(
         .visible
         .iter()
         .copied()
-        .chain(dependencies)
+        .chain(dependencies.iter().copied())
         .chain(world.jobs.keys().copied())
         .chain(world.material_jobs.keys().copied())
         .chain(world.cache.keys().copied().filter(|key| {
@@ -1426,8 +1621,8 @@ fn update_terrain(
         if let Some(tile) = world.cache.remove(&key) {
             world.counters.terrain_cache_evictions += 1;
             if let Some(node) = lod::cbt_node_for_tile(key) {
-                cbt.pages.remove_page(node.id());
-                cbt.material_pages.remove_page(node.id());
+                pages.remove_page(node.id());
+                material_pages.remove_page(node.id());
             }
             if let Some(mesh) = tile.mesh {
                 meshes.remove(mesh.id());
@@ -1442,6 +1637,18 @@ fn update_terrain(
             }
         }
     }
+}
+
+/// Telemetry stage: roll cache/streaming/selection state into counters.
+/// Reads only (plus the counters themselves); runs last so every stage's
+/// work is reflected in the same frame's numbers.
+fn record_terrain_counters(
+    world: &mut WorldTerrain,
+    material_pages: &thessa_bevy_rcbt::CbtRenderMaterialPages,
+    detail_bias: f64,
+    perf: &mut perf::PerfMonitor,
+    started: Instant,
+) {
     let counters_started = Instant::now();
     world.counters.terrain_cache_entries = world.cache.len() as u32;
     world.counters.terrain_material_jobs = world.material_jobs.len() as u32;
@@ -1451,7 +1658,7 @@ fn update_terrain(
         .iter()
         .filter(|key| {
             lod::cbt_node_for_tile(**key)
-                .is_none_or(|node| !cbt.material_pages.contains_page(node.id()))
+                .is_none_or(|node| !material_pages.contains_page(node.id()))
         })
         .count() as u32;
     world.counters.assets_loaded = world.cache.len() as u32 * 5;
@@ -1506,12 +1713,189 @@ fn update_terrain(
         .values()
         .map(|t| t.vertices * 48 + t.triangles * 12 + t.texture_bytes)
         .sum::<u64>()
-        + cbt.material_pages.byte_len() as u64;
+        + material_pages.byte_len() as u64;
     perf.record_scope(
         "world.terrain_counters",
         counters_started.elapsed().as_secs_f64(),
     );
     perf.record_scope("world.streaming", started.elapsed().as_secs_f64());
+}
+
+fn compute_spawn_dependencies(world: &WorldTerrain, gpu_raster: bool) -> BTreeSet<TileKey> {
+    let mut dependencies: BTreeSet<_> = world.wanted.iter().copied().collect();
+    if gpu_raster {
+        for key in &world.wanted {
+            let mut ancestor = key.parent();
+            while let Some(parent) = ancestor {
+                dependencies.insert(parent);
+                if world.cache.contains_key(&parent) {
+                    break;
+                }
+                ancestor = parent.parent();
+            }
+        }
+    }
+    dependencies
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn update_terrain(
+    mut commands: Commands,
+    time: Res<Time>,
+    pilot: Res<PilotHudState>,
+    runtime: Res<PilotFlightRuntime>,
+    survey: Res<SurfaceSurvey>,
+    mut world: ResMut<WorldTerrain>,
+    mut cbt: CbtTerrain<'_>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut perf: ResMut<perf::PerfMonitor>,
+    mut camera: Single<
+        (&mut Transform, &mut Projection),
+        (With<Camera3d>, Without<TerrainBackdrop>),
+    >,
+    mut tiles: Query<
+        (Entity, &SurfaceTile, &mut Transform),
+        (Without<Camera3d>, Without<TerrainBackdrop>),
+    >,
+    mut celestial: Query<
+        &mut Visibility,
+        Or<(With<CelestialVisual>, With<pilot::PilotPlanetVisual>)>,
+    >,
+    display: (
+        Query<&mut Text, With<SurveyReadout>>,
+        Query<
+            (&mut Transform, &mut Visibility),
+            (
+                With<TerrainBackdrop>,
+                Without<Camera3d>,
+                Without<SurfaceTile>,
+                Without<CelestialVisual>,
+                Without<pilot::PilotPlanetVisual>,
+            ),
+        >,
+    ),
+    sky: Option<Res<water::WaterSky>>,
+) {
+    let (mut readout, mut backdrop) = display;
+    let started = Instant::now();
+    let terrain_mesh_cells = cbt
+        .graphics
+        .as_deref()
+        .map(|settings| {
+            if settings.0.terrain.is_gpu() {
+                // The indexed CBT consumer has a fixed 33x33 GPU page and
+                // index-buffer contract. CPU-only density is configurable.
+                32
+            } else {
+                settings.0.terrain_mesh_cells as usize
+            }
+        })
+        .unwrap_or(24);
+    // The same coarse-to-fine cover remains valid in orbit. An altitude gate
+    // swapped the whole surface to a different sphere at 80 km and bypassed
+    // the presentation fence during physical ascents/descents.
+    let active = survey.active || pilot.view_mode == ClientViewMode::Pilot;
+    let gpu_raster = cbt.surface.gpu_raster_enabled();
+    // The GPU raster consumer must not draw its fallback 1x1 texture over a
+    // valid bootstrap sphere: that fallback is intentionally neutral grey and
+    // was the source of the giant grey rectangles seen while the canonical
+    // albedo was still streaming.
+    let gpu_albedo_ready = !gpu_raster
+        || cbt.material.as_deref().is_some_and(|material| {
+            images.get(&material.albedo).is_some()
+                && material
+                    .roughness
+                    .as_ref()
+                    .is_none_or(|map| images.get(map).is_some())
+        });
+    // Presentation advances ready families independently of planning-tree
+    // convergence. Every published partition still covers the requested area.
+    if active && gpu_raster && gpu_albedo_ready {
+        publish_resident_cover(&mut world, &mut cbt.topology, &cbt.pages);
+    }
+    // Keep the last complete draw snapshot and its pages while workers and
+    // the planning tree converge. Never flash the bootstrap on each LOD change.
+    let cpu_cover_ready = gpu_raster && gpu_albedo_ready && !world.visible.is_empty();
+    // Enable draw preparation first. Hide the bootstrap only after the render
+    // world has actually bound the GPU images and submitted this surface.
+    cbt.surface.set_gpu_surface_ready(active && cpu_cover_ready);
+    let gpu_cover_ready = cbt
+        .presentation
+        .is_ready(&cbt.surface, cbt.material.as_deref());
+    world.counters.terrain_patches_generated = 0;
+    if !active {
+        teardown_inactive_surface(&mut commands, &mut world, &mut backdrop, &mut tiles, &mut readout);
+        return;
+    }
+    let view = update_frame_camera(
+        &mut world,
+        &mut cbt.surface,
+        &survey,
+        &runtime,
+        &mut camera,
+        &mut readout,
+        &mut backdrop,
+        gpu_raster,
+        gpu_cover_ready,
+    );
+    let now_s = time.elapsed_secs_f64();
+    // Selection stage: movement trigger -> tile demand -> CBT planning.
+    let (selection_changed, detail_bias) = run_tile_selection(
+        &mut world,
+        cbt.state.topology(),
+        &mut cbt.input,
+        &mut cbt.surface,
+        &camera.1,
+        &mut perf,
+        now_s,
+        gpu_raster,
+        &view,
+    );
+    // Streaming stage: poll finished builds, publish ready pages.
+    poll_finished_pages(
+        &mut world,
+        &mut cbt.pages,
+        &mut meshes,
+        &mut images,
+        &mut materials,
+        &mut perf,
+    );
+    // Requests stage: order the demand cover, spawn height builds.
+    // The same demand set pins warm pages in the eviction stage below.
+    let dependencies = compute_spawn_dependencies(&world, gpu_raster);
+    spawn_height_jobs(&mut world, &dependencies, terrain_mesh_cells, gpu_raster, &view);
+    // Material streaming stage (GPU path only).
+    run_material_streaming(&mut world, &mut cbt.material_pages, gpu_raster, &view);
+    // CPU-fallback presentation bridge: entities, backdrop, transforms.
+    sync_tile_entities(
+        &mut commands,
+        &mut world,
+        &mut tiles,
+        &mut backdrop,
+        &mut celestial,
+        sky.as_deref(),
+        cbt.surface.gpu_raster_enabled(),
+        gpu_raster,
+        gpu_cover_ready,
+        selection_changed,
+        &view,
+        &mut perf,
+    );
+    // Cache stage: pin the live set, evict the oldest excess.
+    evict_stale_tiles(
+        &mut world,
+        &mut cbt.pages,
+        &mut cbt.material_pages,
+        &mut meshes,
+        &mut images,
+        &mut materials,
+        &dependencies,
+        gpu_raster,
+    );
+    // Telemetry stage: counters for this frame.
+    record_terrain_counters(&mut world, &cbt.material_pages, detail_bias, &mut perf, started);
 }
 
 fn mip_bytes(mut size: usize) -> u64 {

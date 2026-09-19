@@ -1997,12 +1997,16 @@ impl IngressSender {
         }
         let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
         if input.commands.iter().any(is_edge_command) {
-            // Fairness: the event queue is shared by all clients. A full
-            // queue means someone (possibly another client) is flooding;
-            // dropping this edge with a warning keeps the victim's
-            // connection alive instead of disconnecting whoever failed
-            // to enqueue last. The driver drains every iteration, so a
-            // transient full is recoverable.
+            // Edge commands (Stage/Engine/Reset/ExecuteManeuver) are
+            // reliable: silently dropping one while reporting success
+            // desyncs client intent from authoritative state (e.g. a
+            // staging event the client believes was delivered). On a full
+            // shared event queue report backpressure (`false`) so the
+            // caller tears the connection down loudly instead of
+            // pretending the packet was handled. The driver drains every
+            // iteration, so callers that observe `false` only on a truly
+            // saturated queue; transient pressure surfaces as an explicit
+            // disconnect/retry rather than a lost stage.
             match self.events.try_send(Upstream::Input {
                 id: id.to_string(),
                 input,
@@ -2015,8 +2019,10 @@ impl IngressSender {
                     true
                 }
                 Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                    eprintln!("[server] ingress full; dropping edge input from {id}");
-                    true
+                    eprintln!(
+                        "[server] ingress full; rejecting edge input from {id} (backpressure, not delivered)"
+                    );
+                    false
                 }
                 Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => false,
             }
@@ -2066,8 +2072,12 @@ impl IngressSender {
                 true
             }
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                eprintln!("[server] ingress full; dropping guidance from {id}");
-                true
+                // Same reliability contract as edge inputs: never report
+                // success for a dropped command. Backpressure as `false`.
+                eprintln!(
+                    "[server] ingress full; rejecting guidance from {id} (backpressure, not delivered)"
+                );
+                false
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => false,
         }
@@ -2093,8 +2103,12 @@ impl IngressSender {
                 true
             }
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                eprintln!("[server] ingress full; dropping autopilot from {id}");
-                true
+                // Same reliability contract as edge inputs: never report
+                // success for a dropped command. Backpressure as `false`.
+                eprintln!(
+                    "[server] ingress full; rejecting autopilot from {id} (backpressure, not delivered)"
+                );
+                false
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => false,
         }
@@ -3884,14 +3898,19 @@ mod tests {
             .expect("execute explicit burn");
         assert!(sim.authority.flight_error.is_none());
         assert!(sim.authority.state.angular_velocity_body_rps.x > 0.0);
-        assert_eq!(
-            sim.authority
-                .last_forces
-                .as_ref()
-                .expect("explicit force sample")
-                .total_force_body_n
-                .y,
-            100.0
+        // Burn demand routes through the bounded least-squares RCS allocator,
+        // so the sampled force is the achieved wrench within solver tolerance,
+        // not the verbatim demand (allocator convention: 1e-6 N).
+        let sampled_force_y = sim
+            .authority
+            .last_forces
+            .as_ref()
+            .expect("explicit force sample")
+            .total_force_body_n
+            .y;
+        assert!(
+            (sampled_force_y - 100.0).abs() < 1.0e-6,
+            "achieved burn force {sampled_force_y} outside allocator tolerance of 100.0"
         );
         assert!(sim.authority.state.angular_velocity_body_rps.is_finite());
 
@@ -4448,10 +4467,11 @@ mod tests {
         for _ in 0..MAX_INGRESS_MESSAGES {
             assert!(ingress.send_input("pilot", input(vec![Command::Stage])));
         }
-        // Fairness: a full shared queue drops the edge with a warning but
-        // keeps the sender's connection alive (the flood may come from a
-        // different client). Only a closed connection refuses.
-        assert!(ingress.send_input("pilot", input(vec![Command::Stage])));
+        // Reliability: a full shared queue must NOT report success for a
+        // dropped edge (Stage/Engine/Reset/ExecuteManeuver). Backpressure
+        // (`false`) forces the caller to fail loudly (disconnect/retry)
+        // instead of desyncing client intent from authoritative state.
+        assert!(!ingress.send_input("pilot", input(vec![Command::Stage])));
         assert!(ingress.send_leave("pilot"));
         assert!(receiver.take_leaves().contains("pilot"));
     }

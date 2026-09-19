@@ -83,6 +83,17 @@ impl CbtRenderMaterialPages {
         }
     }
 
+    /// Immutable view of the current priority. Check this through a shared
+    /// (`Res`/`&`) borrow *before* taking a mutable borrow: calling any
+    /// `&mut self` method via Bevy `ResMut` marks the resource as changed
+    /// (via `DerefMut`) even when the bytes end up identical, which forces
+    /// `ExtractResourcePlugin` to snapshot `priority + BTreeMap` into the
+    /// render world every frame. The `&self` path uses `Deref` only and
+    /// leaves the change flag alone.
+    pub fn priority(&self) -> &[u64] {
+        &self.priority
+    }
+
     pub fn byte_len(&self) -> usize {
         self.pages.values().map(|(_, page)| page.byte_len()).sum()
     }

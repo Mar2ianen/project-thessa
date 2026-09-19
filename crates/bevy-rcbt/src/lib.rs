@@ -210,15 +210,29 @@ impl CbtRenderTopology {
 #[derive(Debug, Clone, Default, Resource)]
 pub struct CbtRenderPages {
     generation: u64,
-    pages: BTreeMap<u64, HeightPage>,
+    pages: BTreeMap<u64, (u64, HeightPage)>,
 }
 
 impl CbtRenderPages {
     /// Insert or replace the baked page for one CBT leaf.
+    ///
+    /// Content equality gates both generations: an identical re-publish is a
+    /// no-op. Otherwise the global generation advances (the render world
+    /// re-examines residency) and the page's own version advances (stable
+    /// GPU slot caches re-upload only this page's range).
     pub fn set_page(&mut self, node_id: u64, page: HeightPage) {
-        if self.pages.get(&node_id) != Some(&page) {
-            self.pages.insert(node_id, page);
-            self.generation = self.generation.saturating_add(1);
+        match self.pages.get(&node_id) {
+            Some((_, existing)) if existing == &page => {}
+            Some((version, _)) => {
+                let version = *version;
+                self.pages
+                    .insert(node_id, (version.saturating_add(1), page));
+                self.generation = self.generation.saturating_add(1);
+            }
+            None => {
+                self.pages.insert(node_id, (1, page));
+                self.generation = self.generation.saturating_add(1);
+            }
         }
     }
 
@@ -248,9 +262,16 @@ impl CbtRenderPages {
         self.pages.contains_key(&node_id)
     }
 
+    /// Per-page content version. Advances only when `set_page` stores
+    /// different bytes for the same node, so GPU slot caches can upload
+    /// exactly the changed slots instead of rebuilding every page.
+    pub fn page_version(&self, node_id: u64) -> Option<u64> {
+        self.pages.get(&node_id).map(|(version, _)| *version)
+    }
+
     #[cfg(feature = "render")]
     pub(crate) fn get(&self, node_id: u64) -> Option<&HeightPage> {
-        self.pages.get(&node_id)
+        self.pages.get(&node_id).map(|(_, page)| page)
     }
 }
 
@@ -776,6 +797,26 @@ mod tests {
         pages.remove_page(17);
         assert_eq!(pages.generation(), 2);
         assert!(pages.is_empty());
+    }
+
+    #[test]
+    fn render_page_versions_track_content_changes_only() {
+        let page = HeightPage::bake(&[10.0, 10.0, 11.0, 11.0], 2, 0.01).unwrap();
+        let other = HeightPage::bake(&[10.0, 10.0, 12.0, 12.0], 2, 0.01).unwrap();
+        let mut pages = CbtRenderPages::default();
+        assert_eq!(pages.page_version(17), None);
+        pages.set_page(17, page.clone());
+        let first = pages.page_version(17).expect("resident page has a version");
+        // Identical re-publish: neither generation moves, so slot caches
+        // observe zero changes on topology reorder / redundant streaming.
+        pages.set_page(17, page);
+        assert_eq!(pages.page_version(17), Some(first));
+        assert_eq!(pages.generation(), 1);
+        pages.set_page(17, other);
+        assert_ne!(pages.page_version(17), Some(first));
+        assert_eq!(pages.generation(), 2);
+        pages.remove_page(17);
+        assert_eq!(pages.page_version(17), None);
     }
 
     #[test]

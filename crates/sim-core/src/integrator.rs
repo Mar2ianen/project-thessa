@@ -181,9 +181,14 @@ pub fn propagate_sampled_verlet(
     let mut time = start_time;
     let mut stats = IntegratorStats::default();
     let mut end = SampledPathEnd::Completed;
+    // The initial acceleration is already evaluated above (and stored in
+    // `accelerations`). Reuse it as the first step's `acceleration_0`:
+    // otherwise the N-body field is evaluated twice per step (2N instead
+    // of N+1). Mirrors `run_table_loop`, which carries `acceleration_1`
+    // into the next step.
+    let mut acceleration_0 = *accelerations.last().expect("initial acceleration pushed");
     while stats.accepted_steps < config.max_steps {
         let h = config.step_s;
-        let acceleration_0 = field.acceleration(state.position, time)?;
         let next_position = state.position + state.velocity * h + acceleration_0 * (0.5 * h * h);
         let next_time = time.offset(h);
         // Test moving-body relative segments before sampling gravity at an
@@ -217,6 +222,9 @@ pub fn propagate_sampled_verlet(
         velocities.push(state.velocity);
         accelerations.push(acceleration_1);
         times.push(time);
+        // The accepted endpoint is exactly the next step's start state;
+        // carry its acceleration forward so N steps cost N+1 evaluations.
+        acceleration_0 = acceleration_1;
     }
     Ok(SampledPath {
         positions,

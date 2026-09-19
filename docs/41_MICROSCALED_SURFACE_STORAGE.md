@@ -89,6 +89,12 @@ Implementation status (branch `feat/microstorage-phase-a`):
   hardware across all 7 fixtures: 128/128 samples within one code level,
   worst drift 0 (1.18 ms / 128 samples incl. per-stage readbacks; a
   production backend would chain device buffers with no roundtrips).
+- Game integration (`bevy-rcbt::material_microstore`, render-gated):
+  real `CbtMaterialPage` bytes (linear-light mip averaging included)
+  split into channels and encoded through the Bevy schedule headlessly;
+  8 game mips encode to 53,940 B vs 87,380 B RGBA (0.62x). Hardware test
+  decodes all 8 levels x 4 channels on-adapter bit-exact (worst drift 0);
+  GPU tests follow the repo `#[ignore]` convention for adapter-less CI.
 
 This document defines a reusable microscaled storage layer for render-side and
 streamed surface data. The immediate target is terrain material pages. Height

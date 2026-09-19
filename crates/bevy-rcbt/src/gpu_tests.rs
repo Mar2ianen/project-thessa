@@ -710,3 +710,50 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
     );
     assert_eq!(&gpu.read(&output)[..2], &[0, 0]);
 }
+
+/// Full game-data roundtrip on hardware: a real `CbtMaterialPage` (linear-
+/// light mip averaging included) through microstore encode plus GPU decode
+/// for every mip level and every channel. This is the integration proof
+/// the prototype was built for: game constructor bytes on a real adapter.
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+#[test]
+fn game_material_mips_decode_on_hardware() {
+    use crate::material_microstore::rock_rgba;
+    use thessa_microstore_core::{EncodeMode, EncodedPage, ScalarField};
+    use thessa_rcbt_wgpu::microstore::MicrostoreDecode;
+
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
+        .expect("material GPU test requires a wgpu adapter");
+    eprintln!("material regression adapter: {:?}", adapter.get_info());
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let decoder = MicrostoreDecode::new(std::sync::Arc::new(device), std::sync::Arc::new(queue));
+
+    let rgba = rock_rgba(crate::material_pages::MATERIAL_PAGE_SIZE, 0x9A7E);
+    let page = crate::material_pages::CbtMaterialPage::from_rgba8(rgba).expect("real page");
+    assert_eq!(page.mips.len(), 8);
+    let mut total_wire = 0usize;
+    let mut worst = 0u8;
+    for (level, mip) in page.mips.iter().enumerate() {
+        let size = crate::material_pages::MATERIAL_PAGE_SIZE >> level;
+        assert_eq!(mip.len(), size as usize * size as usize * 4, "level {level}");
+        for channel in 0..4 {
+            let plane: Vec<u8> = mip.chunks_exact(4).map(|px| px[channel]).collect();
+            let field = ScalarField::new(size, size, plane).expect("plane extent");
+            let encoded = EncodedPage::encode(
+                &field,
+                EncodeMode::Adaptive { max_abs_error: 2.0 },
+            );
+            total_wire += encoded.encoded_bytes();
+            let gpu = decoder.decode_page(&encoded).expect("gpu decode");
+            let cpu = encoded.decode();
+            assert_eq!(gpu.len(), cpu.data.len(), "level {level} ch {channel} len");
+            for (g, c) in gpu.iter().zip(cpu.data.iter()) {
+                worst = worst.max(g.abs_diff(*c));
+            }
+            assert_eq!(gpu, cpu.data, "level {level} ch {channel} bit-exact");
+        }
+    }
+    eprintln!("8 game mips x 4 channels on hardware: {total_wire} B wire, worst drift {worst}");
+}

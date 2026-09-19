@@ -2,6 +2,137 @@
 
 Status: **design / prototype target**.
 
+Implementation status (branch `feat/microstorage-phase-a`):
+
+- Phase A done in `thessa-microstore-core`: scalar 4x4 codec (Raw8,
+  Residual8/4), deterministic wire format, error metrics, 7 seeded
+  fixtures, PGM comparison dumps.
+- Phase B done in `thessa-microstore-core::wgsl` (sample-time WGSL
+  decoder) + `thessa-rcbt-wgpu::microstore` (upload + compute decode,
+  GPU==CPU parity on all fixtures); the RGBA material path is untouched.
+  Honest scope: this is a GPU decode *parity prototype* (whole-page
+  dispatch + sync readback), not a measured material-shader sample —
+  bilinear/aniso/mips, which the RGBA path gets from hardware, are still
+  open, as is the R6 tail-byte upload slack now guaranteed by the
+  backend.
+- Phase C done in `thessa-microstore-core`: Residual6/Residual2,
+  cheapest-first adaptive ladder (2/4/6-bit, Raw8 fallback), per-channel
+  color pages with linear-light error, header/payload overhead
+  accounting, 128/256 extents in benches.
+- Measured so far (128x128): R4 0.689 B/tex (err <= 8), R6 0.938 B/tex
+  (err <= 2.6), R2 0.438 B/tex (err <= 43, headers 43% of bytes);
+  adaptive@2.0 holds the budget by construction; GPU decode ~0.1-0.3 ms
+  per page on a Radeon 780M; 4 adaptive channels ~= 0.94-1.19x one RGBA
+  page upload — the density win lands with higher texel counts (Phase D).
+  Accounting is split three ways (wire vs gpu-upload vs gpu-resident);
+  the A/B baseline is the full 87,380 B mip chain (4 adaptive noise
+  channels upload 77,984 B = 0.89x of full-mip RGBA but 1.19x of the
+  65,536 B base level alone), with the no-mips-yet caveat stated in the
+  bench output.
+- Phase D done in `thessa-microstore-core::residency`: key-addressed
+  stable slots, dirty-block upload ranges, LRU eviction by encoded byte
+  cost, telemetry (resident bytes/texels, hit rate, texels/MiB).
+  Measured: one-texel update uploads 15 B vs 3861 B full page (257x);
+  cyclic scan over 4x cache converges to exactly 0.25 hit rate.
+  Per-block patches are only emitted while the block layout is unchanged;
+  codec-rung or extent changes fall back to a full page + table reupload
+  (variable block sizes shift every later offset). Eviction cost is
+  backend-reportable per page instead of assumed wire-equal.
+- Fixture 8 done: `worldgen-rocky --example dump_microstore_fixtures`
+  vendors real Thessa bytes into `microstore-core/tests/assets`
+  (65x65 height ocean/coast/mountain, 128x128 coast albedo+roughness);
+  material color tests and the color bench row run on the real albedo.
+- Phase E done in `thessa-microstore-core::height`: f32 micro-codec
+  (page min/max header, per-block offset/scale, adaptive 8/16-bit with
+  Raw32 fallback) plus the three demanded verifiers (absolute error,
+  conservative bound slack, normal angle) and a shared-edge crack metric
+  for independently encoded neighbor pages.
+  Measured on real grids (raw f32 = 4.000 B/tex): R16 2.811 B/tex with
+  err <= 0.11 m and physical-space normals <= 0.05 deg (texel spacing in
+  metres, anisotropic); shared-edge crack on the coast split is 0.262 m —
+  recorded as a crack, not a pass: independent lossy pages provably
+  diverge on shared edges, lossless pages share them bit-exactly, and
+  `border_is_lossless` gates geometry suitability. Verdict: safe as an
+  experimental lossy residency cache; crack-free geometry and canonical
+  baked-format adoption stay blocked on a boundary strategy (lossless
+  border strip or global-lattice references) plus material/lighting
+  review of the normal-angle sensitivity.
+- Follow-up hardening (same branch): pluggable selection metric
+  (`ColorBudget::Levels` matches scalar adaptive byte-for-byte,
+  `ColorBudget::Linear` selects rungs in linear light and measurably
+  spends more bytes on bright ramps); `Relocated` flushes (changed
+  blocks + fresh table instead of full pages on rung changes, with the
+  backend applying the table first); CPU mip chains as plain page
+  vectors (8-level 128x128 chain = 1.32x the base page, geometric
+  series made explicit; GPU mip sampling stays open).
+- Second follow-up: slab allocator (first-fit, realloc grow/move/shrink,
+  coalescing, deterministic slide-down compaction, `check_invariants`)
+  with a 1500-step cache+allocator integration workload asserting
+  cross-structure invariants after every op; GPU scattered-layout decode
+  (allocator offsets, fragmented buffer) bit-exact on hardware; GPU mip
+  chain bit-exact level by level; packed sample-time bilinear filtering
+  at 2.7-3.0 M samples/s with zero observed drift vs the CPU mirror
+  (tolerance: one code level).
+- Sample-time completion: CPU footprint LOD selection
+  (`lod_level`, `aniso_ratio`, `sample_aniso` with 1/2/4/8 taps) plus
+  `lod_select` and `sample_aniso_packed` WGSL kernels. Measured on
+  hardware: LOD exact 256/256 footprints (446 ns/select); aniso taps
+  2.4/2.3/1.9/1.7 M samples/s with 96-100% of samples within one code
+  level of the CPU mirror and bounded tails (worst 22) from texel-
+  boundary floor() flips under f32/FMA divergence — pinned
+  statistically, with bit-exactness on uniform fields. Combined
+  LOD+mip-fetch (per-sample level buffers) stays engine-integration
+  work.
+- Integrated LOD+mip path (`LodMipSampler`): GPU decode, GPU mip chain,
+  GPU level selection, grouped plain sampling per level, reassembled in
+  sample order — with a CPU `sample_lod` mirror. Measured end-to-end on
+  hardware across all 7 fixtures: 128/128 samples within one code level,
+  worst drift 0 (1.18 ms / 128 samples incl. per-stage readbacks; a
+  production backend would chain device buffers with no roundtrips).
+- Game integration (`bevy-rcbt::material_microstore`, render-gated):
+  real `CbtMaterialPage` bytes (linear-light mip averaging included)
+  split into channels and encoded through the Bevy schedule headlessly;
+  8 game mips encode to 53,940 B vs 87,380 B RGBA (0.62x). Hardware test
+  decodes all 8 levels x 4 channels on-adapter bit-exact (worst drift 0);
+  GPU tests follow the repo `#[ignore]` convention for adapter-less CI.
+- Render-world storage A/B (`material_storage = "rgba_array" |
+  "microstore_compact"`, default raw): requested/resolved graphics setting
+  with `rgba_array` default, extracted as `MaterialStorageSetting` into the
+  render world. The compact path holds `MicrostoreResidency`-encoded pages
+  (once per generation, evicted with the stream) and pre-decodes to RGBA
+  shadow pages through the identical texture/sampler/mip/slot upload, so
+  sampling is byte-identical by construction — a storage/upload tradeoff,
+  never a visual mode. CPU tests pin decode within the 2.0 budget and
+  encode-once/evict semantics; hardware test pins every stored
+  `EncodedPage` (ColorPage RGB + roughness) bit-exact vs the GPU decoder.
+  Measured on Radeon 780M (RADV, Vulkan): 54,024 B wire vs 87,380 B raw
+  (0.62x), worst drift 2. Telemetry: `CbtGpuBuffers::material_microstore_stats`
+  (wire gauge + decoded lifetime + encode secs + pages encoded), one
+  `[material-storage]` log line per streaming upload batch, `[MAT:...]` mode
+  tag in the perf overlay, and `material_storage` in capture metadata.
+- Batch benchmark (`cargo bench -p thessa-bevy-rcbt --bench material_storage
+  --features render`): real `CbtMaterialPage` batches — 4 pages is one
+  streaming frame (`material_budget` in `apps/client/src/terrain.rs`), 32 is
+  a scene cover. Release on this machine: encode 0.58 ms/page, decode
+  0.16 ms/page, ~113 MiB/s raw-equivalent, wire 0.62x raw, worst drift 2 in
+  both batches. Upload-time cost lands only on streaming frames (generation
+  guard); resident frames return early with zero work.
+- Client A/B (release autobench `THESSA_AUTOBENCH=1 THESSA_AUTOBENCH_VIEW=pilot`,
+  gpu raster, Radeon 780M): compact 3374 frames wall p50 9.94 / p95 14.88 /
+  p99 17.50 / max 138.52 ms vs raw 3628 frames p50 8.92 / p95 13.99 /
+  p99 16.77 / max 166.88 ms — ~1 ms p50 cost for the encode at streaming
+  time, comparable tails. Live compact residency reached 270 pages at
+  0.45x wire (10.62 MB vs 23.59 MB raw); real game content compresses
+  better than the synthetic bench pages (0.62x). Release encode on live
+  pages measured 1.5 ms/page (bench synthetic: 0.58 + 0.16 ms).
+- FPS-spike fix: the first live runs exposed an O(residency) re-decode —
+  every streaming batch re-decoded all held pages (1.07 GB lifetime for
+  270 pages). `MicrostoreResidency` now caches the decoded shadow page per
+  entry (`Arc` clone on upload), so a clean batch costs O(1); a test pins
+  `decoded_bytes` stable across no-change updates. Debug streaming spikes
+  (12–18 ms/page encode, unoptimized) are not representative; release
+  numbers above are the honest baseline.
+
 This document defines a reusable microscaled storage layer for render-side and
 streamed surface data. The immediate target is terrain material pages. Height
 pages are a secondary target after the codec and error metrics are proven on

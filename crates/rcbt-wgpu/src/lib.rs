@@ -12,6 +12,8 @@
 
 pub mod bench_support;
 pub mod heap;
+pub mod microstore;
+pub mod microstore_sample;
 pub mod ocbt;
 pub mod shaders;
 

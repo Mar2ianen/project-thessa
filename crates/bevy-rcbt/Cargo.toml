@@ -18,6 +18,8 @@ mesh-shaders = ["render", "dep:wgpu"]
 # one Bevy build across the workspace instead of a second default-off copy.
 bevy.workspace = true
 bevy_core_pipeline = { version = "0.19.1", default-features = false, optional = true }
+thessa-microstore-core = { path = "../microstore-core" }
+thessa-graphics = { path = "../graphics" }
 thessa-rcbt-core = { path = "../rcbt-core" }
 wgpu = { version = "29.0.4", optional = true }
 
@@ -25,3 +27,9 @@ wgpu = { version = "29.0.4", optional = true }
 naga = { version = "29.0.4", features = ["wgsl-in"] }
 wgpu.workspace = true
 pollster = "0.4"
+thessa-rcbt-wgpu = { path = "../rcbt-wgpu" }
+
+[[bench]]
+name = "material_storage"
+harness = false
+required-features = ["render"]

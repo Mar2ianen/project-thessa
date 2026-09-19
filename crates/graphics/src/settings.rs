@@ -79,6 +79,30 @@ pub enum TerrainRenderRequest {
     GpuIndexed,
 }
 
+/// Material page storage for the CBT terrain path.
+///
+/// The CPU path remains the portable default. The compact path holds
+/// microstore-encoded pages in residency and decodes them at upload time;
+/// sampling (texture format, mips, filtering) is identical either way, so
+/// this is a storage/upload tradeoff, never a visual mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MaterialStorageRequest {
+    #[default]
+    RgbaArray,
+    MicrostoreCompact,
+}
+
+impl MaterialStorageRequest {
+    /// TOML name used in graphics.toml.
+    pub fn from_str_name(name: &str) -> Option<Self> {
+        match name {
+            "rgba_array" => Some(Self::RgbaArray),
+            "microstore_compact" => Some(Self::MicrostoreCompact),
+            _ => None,
+        }
+    }
+}
 /// Requested ray-tracing mode (spec section 18). Avoid a single boolean:
 /// `local` buys RT where it has the highest local visual value, `full`
 /// enables everything within budget, `auto` resolves by capability.
@@ -116,6 +140,10 @@ pub struct RendererSettings {
     pub ray_tracing: RayTracingRequest,
     #[serde(default)]
     pub terrain: TerrainRenderRequest,
+    /// Material page storage: raw RGBA array (default) or compact
+    /// microstore residency with decode at upload time.
+    #[serde(default)]
+    pub material_storage: MaterialStorageRequest,
     /// CPU terrain vertices per tile edge. The indexed GPU path has a fixed
     /// 33x33 page contract and therefore uses 32 internally.
     #[serde(default = "default_terrain_mesh_cells")]
@@ -155,6 +183,7 @@ impl Default for RendererSettings {
             backend: BackendRequest::Auto,
             ray_tracing: RayTracingRequest::Auto,
             terrain: TerrainRenderRequest::Cpu,
+            material_storage: MaterialStorageRequest::RgbaArray,
             terrain_mesh_cells: default_terrain_mesh_cells(),
             resolution_scale: 1.0,
             vsync: true,
@@ -863,5 +892,38 @@ mod tests {
     fn unknown_keys_ignored_for_forward_compat() {
         let text = "preset = \"high\"\n[renderer]\nray_tracing = \"auto\"\nflux_capacitor = true\n";
         assert!(RequestedGraphics::from_toml(text).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+
+    #[test]
+    fn storage_names_round_trip() {
+        assert_eq!(
+            MaterialStorageRequest::from_str_name("rgba_array"),
+            Some(MaterialStorageRequest::RgbaArray)
+        );
+        assert_eq!(
+            MaterialStorageRequest::from_str_name("microstore_compact"),
+            Some(MaterialStorageRequest::MicrostoreCompact)
+        );
+        assert_eq!(MaterialStorageRequest::from_str_name("bogus"), None);
+        assert_eq!(
+            MaterialStorageRequest::default(),
+            MaterialStorageRequest::RgbaArray
+        );
+    }
+
+    #[test]
+    fn storage_parses_from_toml() {
+        let config: RequestedGraphics =
+            toml::from_str("version = 1\n[renderer]\nmaterial_storage = \"microstore_compact\"\n")
+                .expect("parses");
+        assert_eq!(
+            config.renderer.material_storage,
+            MaterialStorageRequest::MicrostoreCompact
+        );
     }
 }

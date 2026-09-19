@@ -25,6 +25,8 @@ pub type CbtLeafRecord = [u32; 4];
 #[cfg(feature = "render")]
 pub mod material_cache;
 #[cfg(feature = "render")]
+pub mod material_microstore;
+#[cfg(feature = "render")]
 mod material_pages;
 #[cfg(feature = "render")]
 pub mod precision;
@@ -584,6 +586,12 @@ pub struct CbtFrameOutput {
     pub error: Option<String>,
 }
 
+/// Requested material storage policy (main world, extracted to render).
+/// Wraps the resolved graphics setting so the render-world upload path can
+/// branch without depending on the whole settings resource.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub struct MaterialStorageSetting(pub thessa_graphics::ResolvedMaterialStorage);
+
 /// Backend-neutral Bevy plugin. `max_depth` is a topology contract; the
 /// plugin never interprets it as terrain LOD or as a physical resolution.
 #[derive(Debug, Clone, Copy)]
@@ -662,10 +670,9 @@ fn apply_cbt_frame(
 mod render;
 
 #[cfg(feature = "render")]
-use render::CbtRenderPlugin;
-
-#[cfg(feature = "render")]
 pub use render::CbtGpuBuffers;
+#[cfg(feature = "render")]
+use render::CbtRenderPlugin;
 
 #[cfg(test)]
 mod tests {

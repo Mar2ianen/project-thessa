@@ -24,6 +24,9 @@ backend = "auto" # auto | vulkan | metal | webgpu (dx12 deferred pending ADR)
 ray_tracing = "auto" # off | local | full | auto
 terrain = "cpu" # cpu | gpu_indexed; no mesh-shader requirement
 terrain_mesh_cells = 24 # CPU middle-field density; adaptive per tile; 8..64
+material_storage = "rgba_array" # rgba_array | microstore_compact; compact holds
+# microstore-encoded pages in residency and decodes at upload time with identical
+# sampling (texture format, mips, filtering); storage/upload tradeoff, never visual
 resolution_scale = 1.0
 vsync = false
 hdr = true

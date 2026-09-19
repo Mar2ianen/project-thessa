@@ -1,0 +1,20 @@
+[package]
+name = "thessa-microstore-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Backend-neutral microscaled residual codec for surface/material pages (Phase A CPU experiment)"
+
+[[bench]]
+name = "codec"
+harness = false
+
+[[bench]]
+name = "height"
+harness = false
+
+[[bench]]
+name = "residency"
+harness = false

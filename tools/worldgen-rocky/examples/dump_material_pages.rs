@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 
 use thessa_worldgen_rocky::{
-    appearance::surface_grain,
+    appearance::{surface_appearance, surface_grain},
     field::{field_from_manifest, PlanetField},
     lod::{build_gpu_material_page, TileKey},
     spec_recipe::{manifest_from_spec, SpecRecipe},
@@ -97,9 +97,59 @@ fn main() {
         toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml")).unwrap();
     let field = field_from_manifest(&manifest_from_spec(&recipe).unwrap()).unwrap();
     let radius = field.params.radius_m;
+    // Vegetation survey: where (if anywhere) is there green on Thessa?
+    {
+        let mut best = (0.0f32, [1.0, 0.0, 0.0]);
+        for lat in (-55..55).step_by(2) {
+            for lon in (-180..180).step_by(2) {
+                let dir = dir_from_latlon(lat as f64, lon as f64);
+                let s = field.sample_surface(dir, 500.0);
+                if s.height_m <= 0.0 {
+                    continue;
+                }
+                let a = surface_appearance(&field, &s, dir);
+                if a.vegetation > best.0 {
+                    best = (a.vegetation, dir);
+                }
+            }
+        }
+        let s = field.sample_surface(best.1, 500.0);
+        println!(
+            "max vegetation {:.2} at h={:.0} T={:.1} moist={:.2}",
+            best.0, s.height_m, s.temperature_k, s.moisture01
+        );
+        // Frost frontier: partial vegetation + sub-zero, where frost on
+        // grass should read.
+        let mut found = false;
+        for lat in (-55..55).step_by(2) {
+            for lon in (-180..180).step_by(2) {
+                let dir = dir_from_latlon(lat as f64, lon as f64);
+                let s = field.sample_surface(dir, 500.0);
+                if s.height_m <= 0.0 {
+                    continue;
+                }
+                let a = surface_appearance(&field, &s, dir);
+                if (0.15..0.70).contains(&a.vegetation) && s.temperature_k < 272.0 {
+                    println!(
+                        "frost frontier veg={:.2} snow={:.2} at h={:.0} T={:.1} moist={:.2}",
+                        a.vegetation, a.snow, s.height_m, s.temperature_k, s.moisture01
+                    );
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                break;
+            }
+        }
+    }
     for (name, lo, hi) in [("high", 1500.0, 3000.0), ("low", 100.0, 800.0)] {
         let dir = find_land(&field, lo, hi);
-        println!("== {name} dir {dir:?} h={:.0}", field.height_m(dir, 500.0));
+        let probe = field.sample_surface(dir, 500.0);
+        println!(
+            "== {name} h={:.0} T={:.1} moist={:.2}",
+            probe.height_m, probe.temperature_k, probe.moisture01
+        );
         println!(
             "{:>5} {:>10} {:>8} {:>22} {:>22} {:>22} {:>22}",
             "level", "span_m", "texel_m", "R(mean/std/min/max)", "G(mean/std/min/max)",

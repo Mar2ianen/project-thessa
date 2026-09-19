@@ -131,6 +131,20 @@ pub fn surface_appearance(
     color = color.map(|c| c * (1.0 + variation * 0.14 + regional * 0.08 + grain * 0.24));
     let snow_cover = snow * (1.0 - smooth(0.7, 1.4, sample.slope_hint) * 0.8);
     color = mix(color, [0.88, 0.92, 0.94], snow_cover);
+    // Frost on grass: the sub-zero band where snow cover is partial or thin.
+    // Below ~258 K snow does the talking; above ~278 K there is nothing to
+    // freeze. In between, moisture-gated patches of pale crystals settle over
+    // whatever the cover left — the classic -7 C morning. Classification
+    // inputs are untouched; only the visual albedo/roughness carry it.
+    let frost_band = smooth(278.0, 270.0, sample.temperature_k)
+        * (1.0 - smooth(262.0, 254.0, sample.temperature_k));
+    let frost = frost_band
+        * (0.25 + 0.75 * sample.moisture01)
+        * smooth(-0.3, 0.5, micro)
+        // White on white is invisible: deep snow needs no frost, and the mix
+        // below would only iron out the snow's own micro-relief.
+        * (1.0 - snow_cover);
+    color = mix(color, [0.78, 0.83, 0.88], (frost * 0.75).clamp(0.0, 1.0));
     // Micro-relief brightness on the final albedo: overlapping covers (snow,
     // rock) would otherwise mute the pre-mix grain to invisibility. Uses the
     // independent micro signal, so it adds instead of fighting the patches.
@@ -138,7 +152,8 @@ pub fn surface_appearance(
     color = color.map(|c| (c * (1.0 + micro * 0.08)).clamp(0.0, 1.0));
     SurfaceAppearance {
         albedo_srgb: color.map(|c| c.clamp(0.0, 1.0) as f32),
-        roughness: 0.92,
+        // Frost crystals glitter: pull roughness down where they settle.
+        roughness: (0.92 - 0.30 * frost.clamp(0.0, 1.0)) as f32,
         vegetation: vegetation as f32,
         snow: snow as f32,
     }

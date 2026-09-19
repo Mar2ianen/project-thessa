@@ -185,9 +185,7 @@ mod tests {
             .collect();
         for i in 0..cores.len() {
             for j in (i + 1)..cores.len() {
-                let dist_sq: f64 = (0..3)
-                    .map(|c| (cores[i][c] - cores[j][c]).powi(2))
-                    .sum();
+                let dist_sq: f64 = (0..3).map(|c| (cores[i][c] - cores[j][c]).powi(2)).sum();
                 assert!(dist_sq > 0.05, "families {i} and {j} share a core look");
             }
         }

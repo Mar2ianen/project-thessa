@@ -214,8 +214,14 @@ mod frost_tests {
                 assert_eq!(out.roughness, 0.92, "no frost outside the band at {temp} K");
             }
             // Classification inputs untouched by the visual frost.
-            assert_eq!(surface_appearance(&field, &sample(300.0, 1.0), dir).snow, 0.0);
-            assert_eq!(surface_appearance(&field, &sample(240.0, 1.0), dir).snow, 1.0);
+            assert_eq!(
+                surface_appearance(&field, &sample(300.0, 1.0), dir).snow,
+                0.0
+            );
+            assert_eq!(
+                surface_appearance(&field, &sample(240.0, 1.0), dir).snow,
+                1.0
+            );
         }
         // In the band (-7 C morning) frost must actually settle: compare
         // moist vs dry at the same dirs. Snow cover is moisture-independent,
@@ -228,7 +234,9 @@ mod frost_tests {
         let mean = |moisture: f64| {
             dirs()
                 .iter()
-                .map(|dir| surface_appearance(&field, &sample(270.0, moisture), *dir).roughness as f64)
+                .map(|dir| {
+                    surface_appearance(&field, &sample(270.0, moisture), *dir).roughness as f64
+                })
                 .sum::<f64>()
                 / 8.0
         };
@@ -241,7 +249,10 @@ mod frost_tests {
         for dir in dirs() {
             for temp in [250.0, 260.0, 266.0, 272.0, 280.0] {
                 let out = surface_appearance(&field, &sample(temp, 1.0), dir);
-                assert!(out.roughness <= 0.92, "frost only lowers roughness at {temp} K");
+                assert!(
+                    out.roughness <= 0.92,
+                    "frost only lowers roughness at {temp} K"
+                );
             }
         }
     }

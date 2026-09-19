@@ -26,7 +26,14 @@ use thessa_graphics::ResolvedMaterialStorage;
 #[derive(Debug, Default)]
 pub(crate) struct MicrostoreResidency {
     /// node id -> (page generation, encoded mip levels, decoded shadow page).
-    pages: BTreeMap<u64, (u64, Vec<EncodedMaterialLevel>, crate::material_pages::CbtMaterialPage)>,
+    pages: BTreeMap<
+        u64,
+        (
+            u64,
+            Vec<EncodedMaterialLevel>,
+            crate::material_pages::CbtMaterialPage,
+        ),
+    >,
     /// Current compact residency in wire bytes (gauge, not lifetime).
     pub wire_bytes: u64,
     /// Lifetime RGBA bytes decoded at encode time (once per generation).

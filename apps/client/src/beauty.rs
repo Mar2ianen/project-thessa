@@ -115,7 +115,15 @@ fn cbt_level_for_width(width_px: u32) -> u8 {
     let need = (width_px / 4).max(1);
     let level = (32 - need.leading_zeros() as u8).min(12);
     // Keep the shared address space honest: every reported level must map.
-    debug_assert!(cbt_node_for_tile(TileKey { face: 0, level, x: 0, y: 0 }).is_some());
+    debug_assert!(
+        cbt_node_for_tile(TileKey {
+            face: 0,
+            level,
+            x: 0,
+            y: 0
+        })
+        .is_some()
+    );
     level
 }
 
@@ -128,16 +136,8 @@ const NEREID_ZONES: [[f32; 3]; 4] = [
     [0.82, 0.60, 0.38],
     [0.94, 0.84, 0.64],
 ];
-const NEREID_BELTS: [[f32; 3]; 3] = [
-    [0.72, 0.48, 0.28],
-    [0.62, 0.38, 0.22],
-    [0.78, 0.56, 0.34],
-];
-const VESPER_ZONES: [[f32; 3]; 3] = [
-    [0.62, 0.78, 0.82],
-    [0.52, 0.68, 0.74],
-    [0.70, 0.82, 0.84],
-];
+const NEREID_BELTS: [[f32; 3]; 3] = [[0.72, 0.48, 0.28], [0.62, 0.38, 0.22], [0.78, 0.56, 0.34]];
+const VESPER_ZONES: [[f32; 3]; 3] = [[0.62, 0.78, 0.82], [0.52, 0.68, 0.74], [0.70, 0.82, 0.84]];
 const VESPER_BELTS: [[f32; 3]; 2] = [[0.40, 0.56, 0.62], [0.34, 0.48, 0.56]];
 
 #[derive(Debug, Clone, Copy)]
@@ -300,7 +300,8 @@ fn bake_aurora(
             let lon = (x as f64 + 0.5) / w as f64 * std::f64::consts::TAU;
             let d = (lat.abs() - oval) / width;
             let band = (-d * d * 0.5).exp();
-            let curtain = 0.6 + 0.25 * (3.0 * lon + t * 0.05).sin() + 0.15 * (7.0 * lon - t * 0.11).sin();
+            let curtain =
+                0.6 + 0.25 * (3.0 * lon + t * 0.05).sin() + 0.15 * (7.0 * lon - t * 0.11).sin();
             let k = (band * curtain.max(0.0)) as f32;
             // Green 557.7nm bottom -> red/violet top; bake mixes by |lat| offset.
             let top = ((lat.abs() - oval) / width * 0.5 + 0.5).clamp(0.0, 1.0) as f32;
@@ -392,10 +393,7 @@ fn setup_beauty(
     mut materials: ResMut<Assets<StandardMaterial>>,
     graphics: Option<Res<GraphicsResolved>>,
 ) {
-    let r = graphics
-        .as_deref()
-        .map(|g| g.0.clone())
-        .unwrap_or_default();
+    let r = graphics.as_deref().map(|g| g.0.clone()).unwrap_or_default();
     info!(
         "[beauty] resolved: gas={} clouds={}(layers={} cov={:.2} op={:.2} anim={}) aurora={}(q={:?} i={:.2} anim={})",
         r.gas_giant_enabled,
@@ -420,7 +418,12 @@ fn setup_beauty(
     // must round-trip through a TileKey <-> Node mapping.
     for w in [nw, vw, cw] {
         let level = cbt_level_for_width(w);
-        let key = TileKey { face: 0, level, x: 0, y: 0 };
+        let key = TileKey {
+            face: 0,
+            level,
+            x: 0,
+            y: 0,
+        };
         debug_assert_eq!(
             cbt_node_for_tile(key).and_then(|n| tile_for_cbt_node(n)),
             Some(key)
@@ -435,7 +438,13 @@ fn setup_beauty(
     let low_px = bake_clouds(0xC10D, cw, ch, r.clouds_coverage, r.clouds_opacity);
     let cloud_low = images.add(rgba_image(cw, ch, low_px));
     let cloud_high = (r.clouds_layers >= 2).then(|| {
-        let hi_px = bake_clouds(0xC1225, cw / 2, ch / 2, (r.clouds_coverage + 0.25).min(0.9), r.clouds_opacity * 0.7);
+        let hi_px = bake_clouds(
+            0xC1225,
+            cw / 2,
+            ch / 2,
+            (r.clouds_coverage + 0.25).min(0.9),
+            r.clouds_opacity * 0.7,
+        );
         images.add(rgba_image(cw / 2, ch / 2, hi_px))
     });
 
@@ -544,10 +553,7 @@ fn swap_gas_giant_materials(
 /// Find a planet visual transform by body name (map view) or PFD name (pilot).
 fn planet_transform(
     body: &str,
-    visuals: &Query<
-        (&Name, &Transform, &Visibility),
-        (Without<CloudShell>, Without<AuroraShell>),
-    >,
+    visuals: &Query<(&Name, &Transform, &Visibility), (Without<CloudShell>, Without<AuroraShell>)>,
 ) -> Option<(Transform, bool)> {
     // Map view entity. Prefer a VISIBLE match: in pilot mode the map visual
     // still exists but is hidden while the PFD planet shows the same world.
@@ -600,18 +606,17 @@ fn follow_cloud_shells(
     graphics: Option<Res<GraphicsResolved>>,
     clock: Option<Res<SimulationClock>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    visuals: Query<
-        (&Name, &Transform, &Visibility),
-        (Without<CloudShell>, Without<AuroraShell>),
-    >,
-    mut shells: Query<(&CloudShell, &mut Transform, &mut Visibility, &MeshMaterial3d<StandardMaterial>)>,
+    visuals: Query<(&Name, &Transform, &Visibility), (Without<CloudShell>, Without<AuroraShell>)>,
+    mut shells: Query<(
+        &CloudShell,
+        &mut Transform,
+        &mut Visibility,
+        &MeshMaterial3d<StandardMaterial>,
+    )>,
     mut dbg: Local<u32>,
 ) {
     let Some(imgs) = imgs.as_deref() else { return };
-    let r = graphics
-        .as_deref()
-        .map(|g| g.0.clone())
-        .unwrap_or_default();
+    let r = graphics.as_deref().map(|g| g.0.clone()).unwrap_or_default();
     let t = clock.as_deref().map(|c| c.sim_seconds).unwrap_or(0.0);
     let log_now = *dbg < 3;
     *dbg += 1;
@@ -668,18 +673,17 @@ fn follow_aurora_shell(
     imgs: Option<Res<BeautyImages>>,
     graphics: Option<Res<GraphicsResolved>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    visuals: Query<
-        (&Name, &Transform, &Visibility),
-        (Without<CloudShell>, Without<AuroraShell>),
-    >,
-    mut shells: Query<(&AuroraShell, &mut Transform, &mut Visibility, &MeshMaterial3d<StandardMaterial>)>,
+    visuals: Query<(&Name, &Transform, &Visibility), (Without<CloudShell>, Without<AuroraShell>)>,
+    mut shells: Query<(
+        &AuroraShell,
+        &mut Transform,
+        &mut Visibility,
+        &MeshMaterial3d<StandardMaterial>,
+    )>,
     mut dbg: Local<u32>,
 ) {
     let Some(imgs) = imgs.as_deref() else { return };
-    let r = graphics
-        .as_deref()
-        .map(|g| g.0.clone())
-        .unwrap_or_default();
+    let r = graphics.as_deref().map(|g| g.0.clone()).unwrap_or_default();
     let log_now = *dbg < 3;
     *dbg += 1;
     for (shell, mut st, mut vis, mat3d) in &mut shells {
@@ -745,10 +749,7 @@ fn rebake_animated(
     let (Some(imgs), Some(clock)) = (imgs.as_deref(), clock.as_deref()) else {
         return;
     };
-    let r = graphics
-        .as_deref()
-        .map(|g| g.0.clone())
-        .unwrap_or_default();
+    let r = graphics.as_deref().map(|g| g.0.clone()).unwrap_or_default();
     timers.storm_rebake_s += time.delta_secs_f64();
     timers.aurora_rebake_s += time.delta_secs_f64();
 
@@ -756,17 +757,37 @@ fn rebake_animated(
         timers.storm_rebake_s = 0.0;
         let drift = clock.sim_seconds * 0.002;
         if let Some(mut img) = images.get_mut(&imgs.nereid) {
-            img.data = Some(bake_gas_giant(NEREID_STYLE, imgs.nereid_size.0, imgs.nereid_size.1, drift, r.gas_giant_limb));
+            img.data = Some(bake_gas_giant(
+                NEREID_STYLE,
+                imgs.nereid_size.0,
+                imgs.nereid_size.1,
+                drift,
+                r.gas_giant_limb,
+            ));
         }
         if let Some(mut img) = images.get_mut(&imgs.vesper) {
-            img.data = Some(bake_gas_giant(VESPER_STYLE, imgs.vesper_size.0, imgs.vesper_size.1, drift * 0.7, r.gas_giant_limb));
+            img.data = Some(bake_gas_giant(
+                VESPER_STYLE,
+                imgs.vesper_size.0,
+                imgs.vesper_size.1,
+                drift * 0.7,
+                r.gas_giant_limb,
+            ));
         }
     }
-    let aurora_fast = matches!(r.aurora_quality, thessa_graphics::AuroraQuality::High) && r.aurora_animate;
+    let aurora_fast =
+        matches!(r.aurora_quality, thessa_graphics::AuroraQuality::High) && r.aurora_animate;
     if r.aurora_shell && aurora_fast && timers.aurora_rebake_s > 0.5 {
         timers.aurora_rebake_s = 0.0;
         if let Some(mut img) = images.get_mut(&imgs.aurora) {
-            img.data = Some(bake_aurora(imgs.aurora_size.0, imgs.aurora_size.1, 67.0, 3.0, clock.sim_seconds, true));
+            img.data = Some(bake_aurora(
+                imgs.aurora_size.0,
+                imgs.aurora_size.1,
+                67.0,
+                3.0,
+                clock.sim_seconds,
+                true,
+            ));
         }
     }
 }
@@ -843,7 +864,12 @@ mod tests {
         }
         for w in [512, 1024, 2048] {
             let level = cbt_level_for_width(w);
-            let key = TileKey { face: 0, level, x: 0, y: 0 };
+            let key = TileKey {
+                face: 0,
+                level,
+                x: 0,
+                y: 0,
+            };
             assert!(cbt_node_for_tile(key).is_some(), "w={w}");
         }
     }

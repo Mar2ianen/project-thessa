@@ -11,9 +11,9 @@ use std::path::PathBuf;
 
 use thessa_worldgen_rocky::{
     appearance::{surface_appearance, surface_grain},
-    field::{field_from_manifest, PlanetField},
-    lod::{build_gpu_material_page, TileKey},
-    spec_recipe::{manifest_from_spec, SpecRecipe},
+    field::{PlanetField, field_from_manifest},
+    lod::{TileKey, build_gpu_material_page},
+    spec_recipe::{SpecRecipe, manifest_from_spec},
     sphere::dir_from_latlon,
 };
 
@@ -73,8 +73,10 @@ fn stats(data: &[u8], channel: usize) -> (f64, f64, u8, u8) {
         max = max.max(v);
     }
     let mean = sum as f64 / n as f64;
-    let var =
-        (0..n).map(|i| (data[i * 4 + channel] as f64 - mean).powi(2)).sum::<f64>() / n as f64;
+    let var = (0..n)
+        .map(|i| (data[i * 4 + channel] as f64 - mean).powi(2))
+        .sum::<f64>()
+        / n as f64;
     (mean, var.sqrt(), min, max)
 }
 
@@ -84,10 +86,7 @@ fn write_png(path: &std::path::Path, rgba: &[u8]) {
     let mut enc = Encoder::new(file, 128, 128);
     enc.set_color(ColorType::Rgba);
     enc.set_depth(BitDepth::Eight);
-    enc.write_header()
-        .unwrap()
-        .write_image_data(rgba)
-        .unwrap();
+    enc.write_header().unwrap().write_image_data(rgba).unwrap();
 }
 
 fn main() {
@@ -152,8 +151,13 @@ fn main() {
         );
         println!(
             "{:>5} {:>10} {:>8} {:>22} {:>22} {:>22} {:>22}",
-            "level", "span_m", "texel_m", "R(mean/std/min/max)", "G(mean/std/min/max)",
-            "B(mean/std/min/max)", "A(mean/std/min/max)"
+            "level",
+            "span_m",
+            "texel_m",
+            "R(mean/std/min/max)",
+            "G(mean/std/min/max)",
+            "B(mean/std/min/max)",
+            "A(mean/std/min/max)"
         );
         for level in 10u8..=16u8 {
             let key = tile_containing(dir, level);

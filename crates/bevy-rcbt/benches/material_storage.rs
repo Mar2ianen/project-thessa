@@ -64,10 +64,12 @@ fn bench_batch(pages: &[CbtMaterialPage], label: &str) {
                 .zip(b.data.iter().zip(a.data.iter()))
                 .enumerate()
             {
-                for (o, d) in [*rr, *gg, *bb, *aa]
-                    .iter()
-                    .zip([mip[i * 4], mip[i * 4 + 1], mip[i * 4 + 2], mip[i * 4 + 3]])
-                {
+                for (o, d) in [*rr, *gg, *bb, *aa].iter().zip([
+                    mip[i * 4],
+                    mip[i * 4 + 1],
+                    mip[i * 4 + 2],
+                    mip[i * 4 + 3],
+                ]) {
                     worst = worst.max(o.abs_diff(d));
                     assert!(o.abs_diff(d) <= 2, "over budget");
                 }

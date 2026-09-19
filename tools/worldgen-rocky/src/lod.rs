@@ -1062,8 +1062,7 @@ mod surface_regressions {
                         ocean = Some((x, y, material));
                     }
                 } else if sample.height_m > 1000.0 {
-                    sample.slope_hint =
-                        field.slope_hint(dir, MATERIAL_SLOPE_WAVELENGTH_M);
+                    sample.slope_hint = field.slope_hint(dir, MATERIAL_SLOPE_WAVELENGTH_M);
                     land = Some((x, y, surface_appearance(&field, &sample, dir)));
                 }
             }
@@ -1151,8 +1150,16 @@ mod surface_regressions {
         let field = field();
         // High snowfield (h ~= 2117 m) and low tundra (h ~= 217 m).
         for dir in [
-            [-0.5735764363510462, -0.8191520442889918, 7.024285468436542e-17],
-            [-0.44575261109709685, -0.8191520442889918, 0.36096334722141254],
+            [
+                -0.5735764363510462,
+                -0.8191520442889918,
+                7.024285468436542e-17,
+            ],
+            [
+                -0.44575261109709685,
+                -0.8191520442889918,
+                0.36096334722141254,
+            ],
         ] {
             let page = build_gpu_material_page(&field, tile_containing(dir, 14));
             let (std_r, _, _) = channel_stats(&page.rgba, 0);

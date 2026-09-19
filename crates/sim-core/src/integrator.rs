@@ -2,7 +2,9 @@ use std::{error::Error, fmt};
 
 use glam::DVec3;
 
-use crate::{BakedEphemeris, BodyId, BodyState, EphemerisFrame, GravityError, GravityField, SimTime};
+use crate::{
+    BakedEphemeris, BodyId, BodyState, EphemerisFrame, GravityError, GravityField, SimTime,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TestParticleState {
@@ -1128,43 +1130,76 @@ fn augmented_dp_step(
         Some(k1) => k1,
         None => augmented_derivative(field, state, sens, time, frame)?,
     };
-    let k2 = augmented_stage(field, state, sens, h, time.offset(h * 1.0 / 5.0), &[(1.0 / 5.0, k1)], frame)?;
+    let k2 = augmented_stage(
+        field,
+        state,
+        sens,
+        h,
+        time.offset(h * 1.0 / 5.0),
+        &[(1.0 / 5.0, k1)],
+        frame,
+    )?;
     let k3 = augmented_stage(
-        field, state, sens, h, time.offset(h * 3.0 / 10.0),
-        &[(3.0 / 40.0, k1), (9.0 / 40.0, k2)], frame,
+        field,
+        state,
+        sens,
+        h,
+        time.offset(h * 3.0 / 10.0),
+        &[(3.0 / 40.0, k1), (9.0 / 40.0, k2)],
+        frame,
     )?;
     let k4 = augmented_stage(
-        field, state, sens, h, time.offset(h * 4.0 / 5.0),
-        &[(44.0 / 45.0, k1), (-56.0 / 15.0, k2), (32.0 / 9.0, k3)], frame,
+        field,
+        state,
+        sens,
+        h,
+        time.offset(h * 4.0 / 5.0),
+        &[(44.0 / 45.0, k1), (-56.0 / 15.0, k2), (32.0 / 9.0, k3)],
+        frame,
     )?;
     let k5 = augmented_stage(
-        field, state, sens, h, time.offset(h * 8.0 / 9.0),
+        field,
+        state,
+        sens,
+        h,
+        time.offset(h * 8.0 / 9.0),
         &[
             (19372.0 / 6561.0, k1),
             (-25360.0 / 2187.0, k2),
             (64448.0 / 6561.0, k3),
             (-212.0 / 729.0, k4),
-        ], frame,
+        ],
+        frame,
     )?;
     let k6 = augmented_stage(
-        field, state, sens, h, time.offset(h),
+        field,
+        state,
+        sens,
+        h,
+        time.offset(h),
         &[
             (9017.0 / 3168.0, k1),
             (-355.0 / 33.0, k2),
             (46732.0 / 5247.0, k3),
             (49.0 / 176.0, k4),
             (-5103.0 / 18656.0, k5),
-        ], frame,
+        ],
+        frame,
     )?;
     let k7 = augmented_stage(
-        field, state, sens, h, time.offset(h),
+        field,
+        state,
+        sens,
+        h,
+        time.offset(h),
         &[
             (35.0 / 384.0, k1),
             (500.0 / 1113.0, k3),
             (125.0 / 192.0, k4),
             (-2187.0 / 6784.0, k5),
             (11.0 / 84.0, k6),
-        ], frame,
+        ],
+        frame,
     )?;
     let (fifth, fifth_sens) = combine_augmented(
         state,
@@ -1241,15 +1276,7 @@ fn dormand_prince_step(
     h: f64,
     k1: Option<Derivative>,
     frame: &mut EphemerisFrame,
-) -> Result<
-    (
-        TestParticleState,
-        TestParticleState,
-        Derivative,
-        Derivative,
-    ),
-    IntegratorError,
-> {
+) -> Result<(TestParticleState, TestParticleState, Derivative, Derivative), IntegratorError> {
     // FSAL: reuse the previous accepted step's last stage when the caller
     // hands it in; otherwise evaluate. The returned `used_k1` lets the
     // caller keep it across a rejected retry (same state and time).
@@ -1400,14 +1427,8 @@ const DOP853_C: [f64; 12] = [
 ];
 
 const DOP853_A1: [(usize, f64); 1] = [(0, 0.05260015195876773)];
-const DOP853_A2: [(usize, f64); 2] = [
-    (0, 0.0197250569845379),
-    (1, 0.0591751709536137),
-];
-const DOP853_A3: [(usize, f64); 2] = [
-    (0, 0.02958758547680685),
-    (2, 0.08876275643042054),
-];
+const DOP853_A2: [(usize, f64); 2] = [(0, 0.0197250569845379), (1, 0.0591751709536137)];
+const DOP853_A3: [(usize, f64); 2] = [(0, 0.02958758547680685), (2, 0.08876275643042054)];
 const DOP853_A4: [(usize, f64); 3] = [
     (0, 0.2413651341592667),
     (2, -0.8845494793282861),
@@ -1517,15 +1538,7 @@ fn dop853_step(
     h: f64,
     k1: Option<Derivative>,
     frame: &mut EphemerisFrame,
-) -> Result<
-    (
-        TestParticleState,
-        TestParticleState,
-        Derivative,
-        Derivative,
-    ),
-    IntegratorError,
-> {
+) -> Result<(TestParticleState, TestParticleState, Derivative, Derivative), IntegratorError> {
     let mut k = [Derivative {
         position: DVec3::ZERO,
         velocity: DVec3::ZERO,

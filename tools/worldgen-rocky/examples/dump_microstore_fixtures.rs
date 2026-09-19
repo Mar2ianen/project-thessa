@@ -78,7 +78,10 @@ fn main() {
     let recipe: SpecRecipe =
         toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml")).unwrap();
     let field = field_from_manifest(&manifest_from_spec(&recipe).unwrap()).unwrap();
-    println!("seed {}; datum_radius_m {:.0}", field.params.seed, field.params.radius_m);
+    println!(
+        "seed {}; datum_radius_m {:.0}",
+        field.params.seed, field.params.radius_m
+    );
 
     // Coarse survey for one window of each class.
     let mut ocean = None;
@@ -114,12 +117,21 @@ fn main() {
         ("coast", clat as f64, clon as f64),
         ("mountain", mlat as f64, mlon as f64),
     ] {
-        let hs = sample_window(&field, lat, lon, WINDOW_DEG, HEIGHT_GRID, HEIGHT_WAVELENGTH_M);
+        let hs = sample_window(
+            &field,
+            lat,
+            lon,
+            WINDOW_DEG,
+            HEIGHT_GRID,
+            HEIGHT_WAVELENGTH_M,
+        );
         let min = hs.iter().cloned().fold(f64::INFINITY, f64::min);
         let max = hs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
         println!("{name}: {HEIGHT_GRID}x{HEIGHT_GRID} min {min:.1} max {max:.1}");
         write_f32_grid(
-            &out.join(format!("thessa_height_{name}_{HEIGHT_GRID}x{HEIGHT_GRID}.f32")),
+            &out.join(format!(
+                "thessa_height_{name}_{HEIGHT_GRID}x{HEIGHT_GRID}.f32"
+            )),
             HEIGHT_GRID,
             HEIGHT_GRID,
             &hs.iter().map(|v| *v as f32).collect::<Vec<_>>(),

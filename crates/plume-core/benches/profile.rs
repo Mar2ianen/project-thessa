@@ -3,8 +3,8 @@
 
 use std::{hint::black_box, time::Instant};
 
-use thessa_plume_core::source::{ExhaustFamily, PlumeEnvironment, PlumeSource, RigidTransform};
 use thessa_plume_core::profile::build_axial_profile;
+use thessa_plume_core::source::{ExhaustFamily, PlumeEnvironment, PlumeSource, RigidTransform};
 
 fn main() {
     let source = PlumeSource {

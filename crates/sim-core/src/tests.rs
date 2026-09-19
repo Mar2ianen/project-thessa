@@ -4876,9 +4876,8 @@ fn sensitivity_matches_finite_difference_jacobian() {
     .expect("sensitivity propagation");
     // The augmented trajectory must match the plain one bit-for-bit: same
     // coefficients, same step logic, same error control.
-    let plain =
-        propagate_adaptive(&field, initial, SimTime::EPOCH, duration, config)
-            .expect("plain propagation");
+    let plain = propagate_adaptive(&field, initial, SimTime::EPOCH, duration, config)
+        .expect("plain propagation");
     assert_eq!(sens.state, plain.state);
     assert_eq!(sens.stats, plain.stats);
     // Columns of Sr vs central differences (O(h^2) truncation, so the
@@ -4999,6 +4998,12 @@ fn dop853_matches_dp5_on_a_transfer_arc() {
     let pos_err = (dop.position - dp5.position).length();
     let vel_err = (dop.velocity - dp5.velocity).length();
     eprintln!("dop853-vs-dp5: dpos={pos_err:e} dvel={vel_err:e}");
-    assert!(pos_err < 1.0, "position agreement within 1 m, got {pos_err:e}");
-    assert!(vel_err < 1.0e-3, "velocity agreement within 1 mm/s, got {vel_err:e}");
+    assert!(
+        pos_err < 1.0,
+        "position agreement within 1 m, got {pos_err:e}"
+    );
+    assert!(
+        vel_err < 1.0e-3,
+        "velocity agreement within 1 mm/s, got {vel_err:e}"
+    );
 }

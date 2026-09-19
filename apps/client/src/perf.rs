@@ -291,12 +291,15 @@ fn perf_autobench(
             clock.paused = true;
         }
         if let Ok(value) = std::env::var("THESSA_AUTOBENCH_ORBIT_ALTITUDE_M") {
-            match (value.parse::<f64>(), flight.as_deref_mut(), ephemeris.as_deref()) {
+            match (
+                value.parse::<f64>(),
+                flight.as_deref_mut(),
+                ephemeris.as_deref(),
+            ) {
                 (Ok(altitude_m), Some(flight), Some(ephemeris)) if embedded.is_none() => {
-                    if let Err(error) = flight.initialize_circular_orbit_benchmark(
-                        &ephemeris.ephemeris,
-                        altitude_m,
-                    ) {
+                    if let Err(error) =
+                        flight.initialize_circular_orbit_benchmark(&ephemeris.ephemeris, altitude_m)
+                    {
                         monitor.push_event("orbit benchmark initialization failed", Some(error));
                     } else {
                         pilot.set_benchmark_chase_view();
@@ -319,7 +322,10 @@ fn perf_autobench(
                 }
                 _ => monitor.push_event(
                     "orbit benchmark initialization failed",
-                    Some("altitude must be a finite number and the client authority must be ready".into()),
+                    Some(
+                        "altitude must be a finite number and the client authority must be ready"
+                            .into(),
+                    ),
                 ),
             }
         }

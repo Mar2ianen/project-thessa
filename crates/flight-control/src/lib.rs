@@ -850,8 +850,7 @@ pub fn allocate_wrench(
     // violator, repeat. At most `count` fixes, so this always terminates.
     let mut solved_free: Vec<(usize, f64)> = Vec::new();
     for _ in 0..=count {
-        let free_indices: Vec<usize> =
-            (0..count).filter(|&i| free[i]).collect();
+        let free_indices: Vec<usize> = (0..count).filter(|&i| free[i]).collect();
         if free_indices.is_empty() {
             solved_free.clear();
             break;
@@ -1052,10 +1051,9 @@ impl fmt::Display for ControlError {
             }
             Self::InvalidDirection => write!(formatter, "direction must be finite and non-zero"),
             Self::InvalidAttitude => write!(formatter, "attitude target must be a unit quaternion"),
-            Self::InvalidTargetBody => write!(
-                formatter,
-                "direction target frame and target body mismatch"
-            ),
+            Self::InvalidTargetBody => {
+                write!(formatter, "direction target frame and target body mismatch")
+            }
             Self::InvalidEffector => write!(formatter, "effector contribution is invalid"),
             Self::InvalidController => write!(formatter, "control-law parameters are invalid"),
             Self::MismatchedControlState => {
@@ -1123,18 +1121,19 @@ mod tests {
 
     #[test]
     fn target_frame_with_body_and_plain_frames_validate() {
-        let resolved =
-            DirectionTarget::for_target(DVec3::X, 7).expect("resolved target builds");
+        let resolved = DirectionTarget::for_target(DVec3::X, 7).expect("resolved target builds");
         assert!(resolved.validate().is_ok());
-        assert!(GuidanceIntent::VelocityDirection {
-            direction: resolved,
-            roll_policy: RollPolicy::Hold,
-        }
-        .validate()
-        .is_ok());
+        assert!(
+            GuidanceIntent::VelocityDirection {
+                direction: resolved,
+                roll_policy: RollPolicy::Hold,
+            }
+            .validate()
+            .is_ok()
+        );
         // A stray body on a non-target frame is equally ambiguous.
-        let mut stray = DirectionTarget::new(DVec3::X, DirectionFrame::Inertial)
-            .expect("inertial builds");
+        let mut stray =
+            DirectionTarget::new(DVec3::X, DirectionFrame::Inertial).expect("inertial builds");
         stray.target_body = Some(7);
         assert_eq!(stray.validate(), Err(ControlError::InvalidTargetBody));
         // Serde round trip preserves the invariant both ways.

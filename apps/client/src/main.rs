@@ -9,10 +9,10 @@ mod pilot;
 use atmosphere::{
     AtmospherePlugin, GraphicsRequested, GraphicsResolved, PrimaryStarLight, RayTracingActive,
 };
-mod terrain;
-mod water;
 mod beauty;
 mod plume;
+mod terrain;
+mod water;
 use map_ui::*;
 use navigation::*;
 use orbits::*;

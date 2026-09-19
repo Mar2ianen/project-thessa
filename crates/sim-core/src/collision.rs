@@ -195,7 +195,9 @@ pub enum CollisionError {
 impl fmt::Display for CollisionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidMaterial(message) => write!(formatter, "invalid collision material: {message}"),
+            Self::InvalidMaterial(message) => {
+                write!(formatter, "invalid collision material: {message}")
+            }
             Self::InvalidShape(message) => write!(formatter, "invalid collision shape: {message}"),
             Self::InvalidPose(message) => write!(formatter, "invalid collision pose: {message}"),
         }

@@ -648,8 +648,15 @@ fn revalidate_chain(
             Some(normal) if normal.is_finite() => (normal, broad_v_in.length()),
             _ => (DVec3::Y, 0.0),
         };
-        let mu = ephemeris.body(first.body).map_err(SearchError::Ephemeris)?.mu;
-        (plane.0, plane.1, EncounterTemplate::from_bend(broad_v_in, broad_v_out, mu))
+        let mu = ephemeris
+            .body(first.body)
+            .map_err(SearchError::Ephemeris)?
+            .mu;
+        (
+            plane.0,
+            plane.1,
+            EncounterTemplate::from_bend(broad_v_in, broad_v_out, mu),
+        )
     };
     // Screens rank against the leg-1 AIM (standoff sphere), not the
     // body center: center-ranked screens are deep divers threading the
@@ -688,7 +695,16 @@ fn revalidate_chain(
     let mut best: Option<RankedPlan> = None;
     for (point, park_velocity, phased_burn) in starts {
         if let Some(plan) = revalidate_chain_from_start(
-            ephemeris, field, ctx, cell, &epochs, aim1, point, park_velocity, phased_burn, stats,
+            ephemeris,
+            field,
+            ctx,
+            cell,
+            &epochs,
+            aim1,
+            point,
+            park_velocity,
+            phased_burn,
+            stats,
         )? {
             let better = match &best {
                 None => true,
@@ -743,33 +759,33 @@ fn solve_flyby_leg(
     broad_turn_mag_mps: f64,
     stats: &mut SearchStats,
 ) -> Option<LegSolution> {
-/// Gate one solved leg: finite miss within budget and no lithobrake.
-/// Counts filtered revalidations like every other gate.
-fn gate_leg(
-    ephemeris: &BakedEphemeris,
-    config: &ChainConfig,
-    next: &ChainEncounter,
-    next_epoch: SimTime,
-    end: &TestParticleState,
-    miss: f64,
-    stats: &mut SearchStats,
-) -> bool {
-    if !miss.is_finite() || miss > config.max_miss_m {
-        stats.filtered_by_miss += 1;
-        return false;
+    /// Gate one solved leg: finite miss within budget and no lithobrake.
+    /// Counts filtered revalidations like every other gate.
+    fn gate_leg(
+        ephemeris: &BakedEphemeris,
+        config: &ChainConfig,
+        next: &ChainEncounter,
+        next_epoch: SimTime,
+        end: &TestParticleState,
+        miss: f64,
+        stats: &mut SearchStats,
+    ) -> bool {
+        if !miss.is_finite() || miss > config.max_miss_m {
+            stats.filtered_by_miss += 1;
+            return false;
+        }
+        let Ok(next_state) = ephemeris.body_state(next.body, next_epoch) else {
+            return false;
+        };
+        let Ok(target) = ephemeris.body(next.body) else {
+            return false;
+        };
+        if (end.position - next_state.position_inertial).length() < target.radius_m {
+            stats.filtered_by_miss += 1;
+            return false;
+        }
+        true
     }
-    let Ok(next_state) = ephemeris.body_state(next.body, next_epoch) else {
-        return false;
-    };
-    let Ok(target) = ephemeris.body(next.body) else {
-        return false;
-    };
-    if (end.position - next_state.position_inertial).length() < target.radius_m {
-        stats.filtered_by_miss += 1;
-        return false;
-    }
-    true
-}
     // Legacy path: 2D stage + 3D polish.
     let legacy: Option<(DVec3, TestParticleState, f64)> = (|| {
         let (plane_burn, _, _) = correct_bplane_shooting(
@@ -796,7 +812,8 @@ fn gate_leg(
             plane_burn,
             stats,
         )?;
-        gate_leg(ephemeris, config, next, next_epoch, &end, miss, stats).then_some((burn, end, miss))
+        gate_leg(ephemeris, config, next, next_epoch, &end, miss, stats)
+            .then_some((burn, end, miss))
     })();
     // Analytic path (gated): patched turn now, cruise TCM for the
     // remainder. Only attempted when legacy is missing or hot, so the
@@ -804,9 +821,7 @@ fn gate_leg(
     const HOT_BURN_FLOOR_MPS: f64 = 2_000.0;
     let hot = match &legacy {
         None => true,
-        Some((burn, _, _)) => {
-            burn.length() > HOT_BURN_FLOOR_MPS.max(3.0 * broad_turn_mag_mps)
-        }
+        Some((burn, _, _)) => burn.length() > HOT_BURN_FLOOR_MPS.max(3.0 * broad_turn_mag_mps),
     };
     let analytic: Option<(DVec3, TestParticleState, f64)> = if hot {
         (|| {
@@ -832,8 +847,7 @@ fn gate_leg(
     // Cooler gate-passing burn sum wins; ties go legacy (proven path).
     // Analytic nodes rebuild the turn (fixed departure of the cruise
     // solve) plus the solved trim, both trimmed like every node.
-    let build_analytic =
-        |tcm: DVec3, end: TestParticleState, miss: f64| -> LegSolution {
+    let build_analytic = |tcm: DVec3, end: TestParticleState, miss: f64| -> LegSolution {
         let mut nodes = Vec::new();
         if flyby_seed.length() >= 1.0 {
             nodes.push((flyby_epoch, flyby_seed));
@@ -848,8 +862,7 @@ fn gate_leg(
             miss,
         }
     };
-    let build_legacy =
-        |burn: DVec3, end: TestParticleState, miss: f64| -> LegSolution {
+    let build_legacy = |burn: DVec3, end: TestParticleState, miss: f64| -> LegSolution {
         LegSolution {
             nodes: vec![(flyby_epoch, burn)]
                 .into_iter()
@@ -861,7 +874,10 @@ fn gate_leg(
         }
     };
     match (legacy, analytic) {
-        (Some((legacy_burn, legacy_end, legacy_miss)), Some((tcm, analytic_end, analytic_miss))) => {
+        (
+            Some((legacy_burn, legacy_end, legacy_miss)),
+            Some((tcm, analytic_end, analytic_miss)),
+        ) => {
             let analytic_total = flyby_seed.length() + tcm.length();
             if analytic_total < legacy_burn.length() {
                 Some(build_analytic(tcm, analytic_end, analytic_miss))
@@ -933,7 +949,9 @@ fn revalidate_chain_from_start(
     let mid_candidates: Vec<f64> = if legs > 1 {
         let mut mids = vec![midcourse_time_s(tof1_s)];
         for fraction in [1.0 / 8.0, 1.0 / 2.0] {
-            let candidate = (tof1_s * fraction).max(3_600.0).min((tof1_s - 3_600.0).max(3_600.0));
+            let candidate = (tof1_s * fraction)
+                .max(3_600.0)
+                .min((tof1_s - 3_600.0).max(3_600.0));
             if (candidate - mids[0]).abs() > 1.0
                 && mids.iter().all(|prior| (candidate - prior).abs() > 1.0)
             {
@@ -944,8 +962,7 @@ fn revalidate_chain_from_start(
     } else {
         vec![midcourse_time_s(tof1_s)]
     };
-    let broad_arrival_velocity =
-        first_state.velocity_inertial + cell.v_in_frames_mps[0];
+    let broad_arrival_velocity = first_state.velocity_inertial + cell.v_in_frames_mps[0];
     let mut leg1_best: Option<(f64, DVec3, DVec3, TestParticleState, f64)> = None;
     let mut leg1_best_score = f64::INFINITY;
     for mid1_s in mid_candidates {

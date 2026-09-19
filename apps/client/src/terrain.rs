@@ -823,7 +823,8 @@ fn spawn_material_job(
     let field = field.clone();
     AsyncComputeTaskPool::get().spawn(async move {
         let page = lod::build_gpu_material_page(&field, key);
-        thessa_bevy_rcbt::CbtMaterialPage::from_rgba8(page.rgba).expect("fixed material page layout")
+        thessa_bevy_rcbt::CbtMaterialPage::from_rgba8(page.rgba)
+            .expect("fixed material page layout")
     })
 }
 
@@ -1295,7 +1296,10 @@ fn spawn_height_jobs(
     view: &FrameView,
 ) {
     let FrameView {
-        eye, radius, forward_body, ..
+        eye,
+        radius,
+        forward_body,
+        ..
     } = *view;
     let mut pending: Vec<_> = dependencies
         .iter()
@@ -1340,9 +1344,10 @@ fn spawn_height_jobs(
             mesh_cells_for_tile(terrain_mesh_cells, key)
         };
         let field = world.field.clone();
-        world
-            .jobs
-            .insert(key, spawn_height_job(&field, key, tile_mesh_cells, gpu_raster));
+        world.jobs.insert(
+            key,
+            spawn_height_job(&field, key, tile_mesh_cells, gpu_raster),
+        );
         world.counters.terrain_cache_misses += 1;
     }
 }
@@ -1361,7 +1366,10 @@ fn run_material_streaming(
         return;
     }
     let FrameView {
-        eye, radius, forward_body, ..
+        eye,
+        radius,
+        forward_body,
+        ..
     } = *view;
     let finished: Vec<_> = world
         .material_jobs
@@ -1477,7 +1485,9 @@ fn sync_tile_entities(
     view: &FrameView,
     perf: &mut perf::PerfMonitor,
 ) {
-    let FrameView { origin, rotation, .. } = *view;
+    let FrameView {
+        origin, rotation, ..
+    } = *view;
     let entity_sync_started = Instant::now();
     if !gpu_raster && (selection_changed || world.counters.terrain_patches_generated > 0) {
         let desired = ready_terrain_cover(&world.wanted, &world.visible, |key| {
@@ -1826,7 +1836,13 @@ fn update_terrain(
         .is_ready(&cbt.surface, cbt.material.as_deref());
     world.counters.terrain_patches_generated = 0;
     if !active {
-        teardown_inactive_surface(&mut commands, &mut world, &mut backdrop, &mut tiles, &mut readout);
+        teardown_inactive_surface(
+            &mut commands,
+            &mut world,
+            &mut backdrop,
+            &mut tiles,
+            &mut readout,
+        );
         return;
     }
     let view = update_frame_camera(
@@ -1865,7 +1881,13 @@ fn update_terrain(
     // Requests stage: order the demand cover, spawn height builds.
     // The same demand set pins warm pages in the eviction stage below.
     let dependencies = compute_spawn_dependencies(&world, gpu_raster);
-    spawn_height_jobs(&mut world, &dependencies, terrain_mesh_cells, gpu_raster, &view);
+    spawn_height_jobs(
+        &mut world,
+        &dependencies,
+        terrain_mesh_cells,
+        gpu_raster,
+        &view,
+    );
     // Material streaming stage (GPU path only).
     run_material_streaming(&mut world, &mut cbt.material_pages, gpu_raster, &view);
     // CPU-fallback presentation bridge: entities, backdrop, transforms.
@@ -1895,7 +1917,13 @@ fn update_terrain(
         gpu_raster,
     );
     // Telemetry stage: counters for this frame.
-    record_terrain_counters(&mut world, &cbt.material_pages, detail_bias, &mut perf, started);
+    record_terrain_counters(
+        &mut world,
+        &cbt.material_pages,
+        detail_bias,
+        &mut perf,
+        started,
+    );
 }
 
 fn mip_bytes(mut size: usize) -> u64 {

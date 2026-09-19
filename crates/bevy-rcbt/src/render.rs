@@ -40,8 +40,8 @@ use bevy::{
 };
 
 use crate::{
-    material_cache::{SlotCache, SlotChange},
     CbtGpuPresentation, CbtRenderMaterialPages,
+    material_cache::{SlotCache, SlotChange},
 };
 
 impl ExtractResource for CbtGpuPresentation {
@@ -1566,8 +1566,7 @@ fn sync_height_slots(
             .next_power_of_two()
             .max(gpu.height_slots.capacity() * 2)
             .clamp(1, HEIGHT_SLOT_MAX_CAPACITY);
-        gpu.height_slots =
-            SlotCache::new(grown).expect("height slot capacity is non-zero");
+        gpu.height_slots = SlotCache::new(grown).expect("height slot capacity is non-zero");
         full_upload = true;
     }
     if stride != gpu.height_stride_words {
@@ -1583,7 +1582,8 @@ fn sync_height_slots(
     if gpu.page_residuals.len() != target_len {
         gpu.page_residuals.clear();
         gpu.page_residuals.reserve_internal(target_len);
-        gpu.page_residuals.extend(std::iter::repeat_n(0, target_len));
+        gpu.page_residuals
+            .extend(std::iter::repeat_n(0, target_len));
         full_upload = true;
     }
     let buffer_id_before = gpu.page_residuals.buffer().map(|buffer| buffer.id());
@@ -1660,8 +1660,7 @@ fn sync_height_slots(
             continue;
         }
         let node_id = height_leaf_node_id(record);
-        let (Some(page), Some(slot)) = (pages.get(node_id), gpu.height_slots.slot(node_id))
-        else {
+        let (Some(page), Some(slot)) = (pages.get(node_id), gpu.height_slots.slot(node_id)) else {
             metadata.push([0; 4]);
             continue;
         };
@@ -1679,12 +1678,7 @@ fn sync_height_slots(
 /// Pages larger than the stride cannot occur without a stride change first
 /// (which forces a full upload); the words are still truncated defensively
 /// so a slot never overlaps its neighbour.
-fn write_height_slot(
-    gpu: &mut CbtGpuBuffers,
-    pages: &CbtRenderPages,
-    node_id: u64,
-    slot: u32,
-) {
+fn write_height_slot(gpu: &mut CbtGpuBuffers, pages: &CbtRenderPages, node_id: u64, slot: u32) {
     let Some(page) = pages.get(node_id) else {
         return;
     };
@@ -2285,8 +2279,8 @@ fn draw_cbt_geometry(
         // The bind group itself is independent of the view matrix: view
         // changes ride the dynamic offset below. Rebuild only when a bound
         // buffer object is reallocated.
-        let classifier_key = view_uniform_buffer_id(&view_uniforms).map(|view_uniforms| {
-            ClassifierBindKey {
+        let classifier_key =
+            view_uniform_buffer_id(&view_uniforms).map(|view_uniforms| ClassifierBindKey {
                 view_uniforms,
                 metadata: metadata_buffer.id(),
                 vertex: vertex_buffer.id(),
@@ -2298,8 +2292,7 @@ fn draw_cbt_geometry(
                 leaf: leaf_buffer.id(),
                 frames: frames_buffer.id(),
                 grid_history: grid_history_buffer.id(),
-            }
-        });
+            });
         if let Some(key) = classifier_key
             && classifier.cached_bind_key != Some(key)
         {
@@ -2339,7 +2332,9 @@ fn draw_cbt_geometry(
                     },
                     BindGroupEntry {
                         binding: 6,
-                        resource: BindingResource::Buffer(surface_buffer.as_entire_buffer_binding()),
+                        resource: BindingResource::Buffer(
+                            surface_buffer.as_entire_buffer_binding(),
+                        ),
                     },
                     BindGroupEntry {
                         binding: 7,

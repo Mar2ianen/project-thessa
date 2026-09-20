@@ -1,6 +1,6 @@
 # Audio architecture and acoustic propagation
 
-Status: design baseline; no dedicated Thessa audio subsystem exists yet.
+Status: first semantic slice implemented; backend calibration and full source integration remain.
 
 This document defines the semantic boundary for sound before the current Bevy
 client host is replaced. Audio presentation must not become coupled to Bevy,
@@ -72,7 +72,7 @@ audio backend
 The current backend may be provided by the Bevy client. A later native client
 may use another library. Neither choice is part of the semantic API.
 
-A future reusable crate should therefore look conceptually like:
+The first reusable slice now follows this layering:
 
 ```text
 crates/audio-core          source + listener + propagation semantics
@@ -80,7 +80,8 @@ apps/client/audio          client policy, buses, assets, mixing decisions
 current backend            Bevy audio or another mixer
 ```
 
-Exact crate names are not committed by this document.
+`crates/audio-core` is now the backend-neutral layer. The current Bevy adapter
+lives in `apps/client/src/audio.rs` and is explicitly disposable.
 
 ## 4. Sound is not the event
 
@@ -524,18 +525,25 @@ Audio quality settings may change:
 
 They must not change authoritative physics.
 
-## 19. Suggested first slice
+## 19. First slice
 
-The first implementation should prove the boundary with a small set of sources:
+The first implementation proves the boundary with a small set of sources and
+keeps uncalibrated presentation tones out of the semantic crate:
 
-1. one continuous engine source with airborne and structure-borne channels;
-2. one RCS impulse;
-3. one docking/contact impact;
-4. GPWS or another cockpit warning;
-5. one exterior listener in atmosphere;
-6. one exterior listener in vacuum;
-7. one cabin listener;
-8. delayed sonic-boom arrival.
+1. continuous engine presentation is gated by resolved airborne versus
+   structure-borne path availability;
+2. RCS produces a short cabin structure-borne cue on a real control edge;
+3. the live D1 docking fixture publishes a capture-impact cue;
+4. the existing low-altitude/descending warning feeds a cockpit-only GPWS
+   prototype tone;
+5. exterior atmospheric and exact-vacuum listeners use the same
+   `resolve_airborne_path` primitive;
+6. a debug cabin listener (`--audio-cabin` or F8) exercises structural
+   propagation before IVA exists;
+7. `sonic_boom_arrival` solves the Mach-cone tangency and delayed arrival for
+   a straight supersonic segment;
+8. `--audio-demo` audibly exercises the delayed-boom path without committing
+   placeholder sound assets.
 
 Acceptance cases should include:
 

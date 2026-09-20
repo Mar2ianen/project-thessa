@@ -16,8 +16,9 @@ its state contract, tests, error evidence, and benchmark exist.
 - atmosphere, panel aero, rigid-body flight, contacts, and SIMD helpers;
 - system baker, validation harnesses, and physics regression suite.
 
-Remaining M0 work includes higher-fidelity ephemeris fitting, body harmonics,
-hyperbolic/parabolic segments, and broader reference-vector coverage.
+Remaining M0 work includes higher-fidelity ephemeris fitting, harmonics
+beyond degree 2 (J2/C22 evaluation landed, gated), hyperbolic/parabolic
+segments, and broader reference-vector coverage.
 
 ## M1 — Controllable vehicle and flight lab — partial/implemented prototype
 

@@ -22,7 +22,7 @@ decisions belong in the relevant implementation document or ADR.
 - final Cinder orbit;
 - Nereid obliquity and ring tilt;
 - body-specific atmosphere profiles and composition;
-- J2/Jn coefficients and body-fixed rotations;
+- spin periods and prime meridians for triaxial bodies; Jn beyond degree 2;
 - weather and climate fields;
 - a fully consistent Halo co-orbital solution.
 
@@ -68,8 +68,8 @@ prototypes rather than open architecture choices. Remaining physics questions:
 - atmospheric heating and ablative heat shield model;
 - CPU ray-sampling budget;
 - deterministic tolerance policy across AVX builds;
-- J2/Jn coefficients and body-fixed rotations (hyperbolic/parabolic osculating
-  coverage has landed in `sim-core`; J2/Jn evaluation still open).
+- spin periods and prime meridians for triaxial bodies (hyperbolic/parabolic osculating
+  coverage has landed in `sim-core`; J2/C22 evaluation landed too, higher-degree Jn still open).
 
 ## Runtime
 

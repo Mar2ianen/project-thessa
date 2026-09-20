@@ -13,9 +13,9 @@ do not update in place).
 
 | Doc | Status | Implemented | Future |
 | --- | --- | --- | --- |
-| `01_CELESTIAL_SYSTEM.md` | ✅ reference | baked ephemerides, summed gravity, 32-body working set | stability/Halo/co-orbital/J2 validation checklist |
+| `01_CELESTIAL_SYSTEM.md` | ✅ reference | baked ephemerides, summed gravity, 32-body working set | stability/Halo/co-orbital validation checklist |
 | `03_PHYSICS_ENGINE.md` | 🟡 prototype | DP5-FSAL + DP8-DOP853, variational STM, EphemerisFrame, monopole tree + single-tick cohorts, thrust/RTN arcs, envelope-barrier + active-set allocator, Rapier contact backend, gated J2/C22 harmonics | quadrupole, time-span patches, thermal/structural/fluid graphs, CFD, fracture |
-| `08_NUMERICAL_VERTICAL_SLICE.md` | 🟡 prototype | test-particle contract, baked hierarchy, on-rails/Verlet, harnesses | fitted segments, harmonics, joint multi-leg shooting, structural/thermal |
+| `08_NUMERICAL_VERTICAL_SLICE.md` | 🟡 prototype | test-particle contract, baked hierarchy, on-rails/Verlet, harnesses, gated J2/C22 | fitted segments, higher-degree harmonics, joint multi-leg shooting, structural/thermal |
 | `11_AERODYNAMICS.md` | ✅ runtime model | panel SoA/SIMD + tables + upper-band/vacuum reductions | body gas/weather/winds, full wake, hypersonics, arbitrary axes |
 | `20_ADVANCED_AERO_EFFECTORS.md` | 🔵 design target | background only (incidence-only control) | flaps/spoilers/hinged-panels/grid-fins, neutral bounds, `AeroEffectorModel`, high-speed plan (§§17–20: boom/buffet/plasma/vortex/ground-effect) |
 | `23_GRAVITY_FIELD_COHORTS.md` | 🟡 partial | monopole tree, single-tick patches, Hessian spatial bound | time-span patches, quadrupole, cohort keys, planner-patch reuse, GPU |
@@ -66,7 +66,7 @@ do not update in place).
 
 | Doc | Status | Notes |
 | --- | --- | --- |
-| `06_OPEN_QUESTIONS.md` | 🟡 living index | Rapier decided; stdlib/ownership/J2 narrowed; rest open |
+| `06_OPEN_QUESTIONS.md` | 🟡 living index | Rapier decided; stdlib/ownership narrowed; J2/C22 landed; rest open |
 | `35_BLAZE_AUDIT_2026_09_12.md` | 🕰️ record | scoped to base `45e0b79`; see 36 for current status |
 | `36_DOCUMENTATION_AUDIT_2026_09_14.md` | 🕰️ record | snapshot `e1454ac`; superseded by this file for post-merge state |
 | `details/01–04_*.md` | 🔵 design baselines | docking/aero/fuselage/propulsion families; values TBD |

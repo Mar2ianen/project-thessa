@@ -35,8 +35,9 @@ dv/dt = sum_i mu_i * (body_i(t).position - x) / |body_i(t).position - x|^3
 ```
 
 The body state comes from baked analytic segments. There is no SOI switch.
-Ship-to-ship gravity, J2/Jn harmonics, collisions, thrust, and thermal
+Ship-to-ship gravity, collisions, thrust, and thermal
 coupling are separate extensions rather than hidden terms in this contract.
+(Degree-2 harmonics are evaluated, gated, in the gravity field.)
 
 The atmosphere/flight slice adds `PanelAeroModel`, `AtmosphereConfig`,
 `evaluate_flight_forces`, and deterministic rigid-body duration integration.
@@ -87,7 +88,7 @@ diagnostic until their epoch/frame/version assumptions are isolated.
 - velocity-Verlet is second-order in a time-dependent moving-source field;
 - identical binary/source order provides replay stability, not cross-ISA bit
   identity;
-- J2/Jn, full terrain contact, thermal,
+- full terrain contact, thermal,
   structural, and factory systems are not complete. Hyperbolic/parabolic
   osculating-element readout has landed (`sim-core` ephemeris); fitted
   hyperbolic/parabolic baker segments are still open.
@@ -95,7 +96,8 @@ diagnostic until their epoch/frame/version assumptions are isolated.
 ## 8.6. Next numerical work
 
 1. versioned fitted ephemeris segments and hyperbolic/parabolic support;
-2. body-fixed harmonics and precession reference vectors;
+2. higher-degree harmonics and precession reference vectors (J2 nodal
+   regression pinned by test);
 3. tighter planner/authority integration for finite burns (partially landed:
    thrust arcs + variational search with TCM cache; joint multi-leg shooting
    still open);

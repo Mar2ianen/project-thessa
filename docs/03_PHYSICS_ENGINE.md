@@ -285,8 +285,8 @@ cargo bench -p thessa-sim-core --bench affine_prop
 
 ## 3.13. Non-goals of the current slice
 
-The current physics slice does not provide final planetary ephemerides, J2/Jn
-harmonics, CFD, full aeroelasticity, structural fracture, thermal propagation,
+The current physics slice does not provide final planetary ephemerides,
+CFD, full aeroelasticity, structural fracture, thermal propagation,
 factory/logistics simulation, or production networking. Each of those needs an
 explicit state contract, error/validation plan, and benchmark before it should
 be called implemented.

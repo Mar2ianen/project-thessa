@@ -126,7 +126,8 @@ Before calling this system canonical, validate:
 - long-horizon stability of the selected analytic segments;
 - phase and eccentricity consistency for the Nereid chain;
 - Halo’s co-orbital behavior with real eccentric/inclined inputs;
-- J2/Jn and body-fixed rotation data for bodies where they matter;
+- spin periods and prime meridians for non-spherical bodies, and Jn beyond
+  degree 2 where they matter (J2/C22 evaluation landed, gated);
 - atmosphere composition, weather, and climate parameters;
 - resource placement and gameplay throughput;
 - reference-frame and unit contracts against generated descriptors.

@@ -159,8 +159,30 @@ The following values and mechanics should be decided later with the structural a
 
 Until those values exist, code should depend on explicit port/interface capabilities rather than assuming that nominal diameter alone determines every behavior.
 
+## 10. Runtime integration slice
 
-## 10. Reference CAD assembly
+The first executable D1 slice is implemented at the CAD/runtime boundary:
+
+- `thessa-sim-core::DockingSession` owns the persisted protocol state and
+  validates compatible D1 port frames, capture speed, alignment tolerances and
+  pressure equalization progression;
+- `thessa-collision::CollisionWorld::attach_fixed_joint` is the Rapier hard
+  docking constraint, with contacts between the joined craft disabled so the
+  explicit structural constraint owns the interface;
+- `CollisionWorld::attach_revolute_joint` is the mechanism seam for the six
+  provisional soft-capture petals in the D1 asset;
+- solver gravity remains zero and craft mass/inertia remain authoritative
+  `RigidBodyProperties`, consistent with the Rapier integration contract;
+- the collision regression fixture creates two D1 craft, completes the full
+  docking state sequence, transfers an applied load through the dock, and
+  verifies a clean undock.
+
+The fixture is an integration proof, not a final structural calibration. Exact
+petal stiffness, seal loads, latch ratings and failure thresholds remain open
+design values until CAD feature recognition and contact calibration are done.
+
+
+## 11. Reference CAD assembly
 
 A D1 v2.2 FreeCAD/STEP assembly now exists as the first concrete geometry
 reference for this family. The supplied STEP fixture is approximately

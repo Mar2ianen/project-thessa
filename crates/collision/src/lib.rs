@@ -25,7 +25,8 @@ use rapier3d_f64::math::{Matrix, Pose, Rotation, Vector};
 use rapier3d_f64::prelude::{
     BroadPhaseBvh, CCDSolver, ColliderBuilder, ColliderHandle, ColliderSet, FixedJointBuilder,
     ImpulseJointHandle, ImpulseJointSet, IntegrationParameters, IslandManager, MultibodyJointSet,
-    NarrowPhase, PhysicsPipeline, RigidBodyBuilder, RigidBodyHandle, RigidBodySet,
+    NarrowPhase, PhysicsPipeline, RevoluteJointBuilder, RigidBodyBuilder, RigidBodyHandle,
+    RigidBodySet,
 };
 use thessa_sim_core::{
     CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionShape, FlightForces,
@@ -981,6 +982,58 @@ impl CollisionWorld {
         Ok(id)
     }
 
+    /// Attach a hinge for a moving mechanism such as a D1 soft-capture petal.
+    ///
+    /// The axis is expressed in both body-local frames and must therefore be
+    /// aligned in the asset's rest pose. The joint locks the two local anchor
+    /// points together while leaving rotation about that axis free. Contacts
+    /// between the mechanism bodies are disabled so explicit hinge kinematics
+    /// remain the sole owner of the mechanism constraint.
+    pub fn attach_revolute_joint(
+        &mut self,
+        a: CollisionBodyId,
+        b: CollisionBodyId,
+        anchor_a_local_m: DVec3,
+        anchor_b_local_m: DVec3,
+        axis_local_m: DVec3,
+    ) -> Result<JointId, CollisionBackendError> {
+        if a == b {
+            return Err(CollisionBackendError::InvalidGeometry(
+                "revolute joint needs two distinct bodies".into(),
+            ));
+        }
+        validate_local_vector(anchor_a_local_m, "revolute anchor on body A")?;
+        validate_local_vector(anchor_b_local_m, "revolute anchor on body B")?;
+        if !axis_local_m.is_finite() || axis_local_m.length_squared() <= QUATERNION_TOLERANCE {
+            return Err(CollisionBackendError::InvalidGeometry(
+                "revolute axis must be finite and non-zero".into(),
+            ));
+        }
+        let handle_a = self
+            .dynamic
+            .get(&a)
+            .ok_or(CollisionBackendError::UnknownBody(a))?
+            .rapier;
+        let handle_b = self
+            .dynamic
+            .get(&b)
+            .ok_or(CollisionBackendError::UnknownBody(b))?
+            .rapier;
+        let joint = RevoluteJointBuilder::new(to_rapier_vector(axis_local_m.normalize()))
+            .local_anchor1(to_rapier_vector(anchor_a_local_m))
+            .local_anchor2(to_rapier_vector(anchor_b_local_m))
+            .contacts_enabled(false)
+            .build();
+        let rapier = self.impulse_joints.insert(handle_a, handle_b, joint, true);
+        let id = JointId(self.next_joint_id);
+        self.next_joint_id = self
+            .next_joint_id
+            .checked_add(1)
+            .ok_or(CollisionBackendError::IdentifierExhausted)?;
+        self.joints.insert(id, JointEntry { rapier, a, b });
+        Ok(id)
+    }
+
     /// Undock a fixed joint. Both bodies keep their solved pose/velocity;
     /// the flight layer re-owns them as independent clusters from here.
     pub fn remove_joint(&mut self, id: JointId) -> Result<(), CollisionBackendError> {
@@ -1330,6 +1383,15 @@ fn validate_local_pose(position: DVec3, orientation: DQuat) -> Result<(), Collis
         return Err(CollisionBackendError::InvalidGeometry(
             "local collider orientation must be a unit quaternion".into(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_local_vector(value: DVec3, label: &str) -> Result<(), CollisionBackendError> {
+    if !value.is_finite() {
+        return Err(CollisionBackendError::InvalidGeometry(format!(
+            "{label} contains a non-finite value"
+        )));
     }
     Ok(())
 }
@@ -1923,7 +1985,10 @@ mod tests {
 #[cfg(test)]
 mod joint_and_replay_tests {
     use super::*;
-    use thessa_sim_core::{CollisionPart, CollisionShape};
+    use thessa_sim_core::{
+        CollisionPart, CollisionShape, DockingKinematics, DockingPortSpec, DockingPortState,
+        DockingSession,
+    };
 
     fn sphere_geometry(radius_m: f64) -> CollisionGeometry {
         CollisionGeometry::new(vec![
@@ -1961,6 +2026,43 @@ mod joint_and_replay_tests {
             )
             .unwrap();
         (world, a, b)
+    }
+
+    fn d1_craft_geometry() -> CollisionGeometry {
+        let material = CollisionMaterial {
+            friction: 0.45,
+            restitution: 0.0,
+        };
+        let mut parts = vec![
+            CollisionPart::new(
+                DVec3::ZERO,
+                DQuat::IDENTITY,
+                CollisionShape::Cuboid {
+                    half_extents_m: DVec3::new(0.35, 0.45, 0.45),
+                },
+                material,
+            )
+            .unwrap(),
+        ];
+        for index in 0..8 {
+            let angle = f64::from(index) * std::f64::consts::TAU / 8.0;
+            parts.push(
+                CollisionPart::new(
+                    DVec3::new(0.45, 0.55 * angle.cos(), 0.55 * angle.sin()),
+                    DQuat::from_rotation_x(angle),
+                    CollisionShape::Cuboid {
+                        half_extents_m: DVec3::new(0.08, 0.12, 0.12),
+                    },
+                    material,
+                )
+                .unwrap(),
+            );
+        }
+        CollisionGeometry::new(parts).unwrap()
+    }
+
+    fn port_frame_world(state: RigidBodyState, local_position_m: DVec3) -> DVec3 {
+        state.position_inertial_m + state.orientation_body_to_inertial * local_position_m
     }
 
     #[test]
@@ -2028,6 +2130,137 @@ mod joint_and_replay_tests {
             (sep_after - sep_before).abs() < 1.0e-6,
             "undock must not kick the clusters: separation {sep_before} -> {sep_after}"
         );
+    }
+
+    #[test]
+    fn two_d1_craft_progress_through_rapier_docking_and_undock() {
+        let frame = CollisionFrame::inertial_at(DVec3::ZERO, DVec3::ZERO);
+        let mut world = CollisionWorld::new(frame).unwrap();
+        let properties =
+            RigidBodyProperties::new(1_200.0, DMat3::from_diagonal(DVec3::splat(900.0))).unwrap();
+        let geometry = d1_craft_geometry();
+        let state_a = RigidBodyState::new(
+            DVec3::new(-0.805, 0.0, 0.0),
+            DVec3::new(0.01, 0.0, 0.0),
+            DQuat::IDENTITY,
+            DVec3::ZERO,
+        )
+        .unwrap();
+        let state_b = RigidBodyState::new(
+            DVec3::new(0.805, 0.0, 0.0),
+            DVec3::new(-0.01, 0.0, 0.0),
+            DQuat::IDENTITY,
+            DVec3::ZERO,
+        )
+        .unwrap();
+        let a = world
+            .insert_dynamic_body(state_a, properties, &geometry, DynamicBodyConfig::default())
+            .unwrap();
+        let b = world
+            .insert_dynamic_body(state_b, properties, &geometry, DynamicBodyConfig::default())
+            .unwrap();
+
+        let port_a =
+            DockingPortSpec::d1("craft-a-d1", DVec3::new(0.8, 0.0, 0.0), DQuat::IDENTITY).unwrap();
+        let port_b =
+            DockingPortSpec::d1("craft-b-d1", DVec3::new(-0.8, 0.0, 0.0), DQuat::IDENTITY).unwrap();
+        let mut docking = DockingSession::new(port_a.clone(), port_b.clone(), 0.25).unwrap();
+        let initial_relative_position = port_frame_world(state_b, port_b.local_position_m)
+            - port_frame_world(state_a, port_a.local_position_m);
+        docking.begin_soft_capture(0.02).unwrap();
+        world
+            .step(
+                1.0 / 120.0,
+                [(a, ExternalWrench::ZERO), (b, ExternalWrench::ZERO)],
+            )
+            .unwrap();
+        let solved_a = world.body_state(a).unwrap();
+        let solved_b = world.body_state(b).unwrap();
+        let relative_position = port_frame_world(solved_b, port_b.local_position_m)
+            - port_frame_world(solved_a, port_a.local_position_m);
+        docking
+            .align(
+                DockingKinematics::new(
+                    relative_position,
+                    solved_a.orientation_body_to_inertial.inverse()
+                        * solved_b.orientation_body_to_inertial,
+                    solved_b.velocity_inertial_mps - solved_a.velocity_inertial_mps,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(docking.state, DockingPortState::Aligned);
+
+        docking.hard_dock().unwrap();
+        let joint = world
+            .attach_fixed_joint(
+                a,
+                b,
+                port_a.local_position_m,
+                port_a.local_orientation,
+                port_b.local_position_m,
+                port_b.local_orientation,
+            )
+            .unwrap();
+        docking.engage_outer_structure().unwrap();
+        docking.advance_pressure_equalization(0.25).unwrap();
+        assert_eq!(docking.state, DockingPortState::PressureEqualized);
+        assert_eq!(world.joint_count(), 1);
+
+        let push = ExternalWrench {
+            force_inertial_n: DVec3::new(1_500.0, 0.0, 0.0),
+            torque_inertial_nm: DVec3::ZERO,
+        };
+        for _ in 0..120 {
+            world
+                .step(1.0 / 120.0, [(a, push), (b, ExternalWrench::ZERO)])
+                .unwrap();
+        }
+        let moved_a = world.body_state(a).unwrap();
+        let moved_b = world.body_state(b).unwrap();
+        let center_separation =
+            (moved_b.position_inertial_m - moved_a.position_inertial_m).length();
+        assert!((center_separation - 1.61).abs() < 0.05);
+        assert!(moved_b.velocity_inertial_mps.x > 0.5);
+        let solved_relative_position = port_frame_world(moved_b, port_b.local_position_m)
+            - port_frame_world(moved_a, port_a.local_position_m);
+        assert!(solved_relative_position.length() < 0.02);
+
+        docking.undock().unwrap();
+        world.remove_joint(joint).unwrap();
+        assert_eq!(docking.state, DockingPortState::Free);
+        assert!(initial_relative_position.length() < 0.02);
+        assert_eq!(world.joint_count(), 0);
+    }
+
+    #[test]
+    fn revolute_joint_keeps_d1_mechanism_anchor_and_allows_hinge_rotation() {
+        let (mut world, a, b) = two_spheres();
+        let joint = world
+            .attach_revolute_joint(a, b, DVec3::X, DVec3::NEG_X, DVec3::Z)
+            .unwrap();
+        let torque = ExternalWrench {
+            force_inertial_n: DVec3::ZERO,
+            torque_inertial_nm: DVec3::new(0.0, 0.0, 10.0),
+        };
+        for _ in 0..120 {
+            world
+                .step(1.0 / 120.0, [(a, torque), (b, ExternalWrench::ZERO)])
+                .unwrap();
+        }
+        let state_a = world.body_state(a).unwrap();
+        let state_b = world.body_state(b).unwrap();
+        let anchor_error = ((state_a.position_inertial_m
+            + state_a.orientation_body_to_inertial * DVec3::X)
+            - (state_b.position_inertial_m + state_b.orientation_body_to_inertial * DVec3::NEG_X))
+            .length();
+        assert!(
+            anchor_error < 0.02,
+            "hinge anchor drifted by {anchor_error} m"
+        );
+        assert!(state_a.angular_velocity_body_rps.z > 0.1);
+        assert_eq!(world.joint_count(), 1);
+        world.remove_joint(joint).unwrap();
     }
 
     #[test]

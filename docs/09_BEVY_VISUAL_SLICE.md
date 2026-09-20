@@ -47,11 +47,18 @@ from the interpolated transform.
 ```bash
 cargo run -p thessa-client
 cargo run -p thessa-client -- --local
+cargo run -p thessa-client -- --docking-demo --local
 ```
 
 The regular path starts a local server process and communicates over framed
 stdio. `--local` is a legacy diagnostic path that steps the authority in the
 client process.
+
+`--docking-demo` adds an opt-in live fixture to the real client window: two
+craft approach under Rapier, load the CAD-derived D1 port scenes, progress
+through capture/alignment/hard-dock/pressure equalization, apply a structural
+load, and undock. It is a validation fixture, not a gameplay command exposed
+in the normal HUD.
 
 ## Known limits
 

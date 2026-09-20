@@ -1,0 +1,43 @@
+{
+  "schema": "thessa.material_contract.v0",
+  "asset_id": "thessa.docking_port.d1.v2_2",
+  "coordinate_independent": true,
+  "materials": {
+    "structural_metal": {
+      "semantic_id": "d1.structural_metal",
+      "base_color_linear": [
+        0.22,
+        0.28,
+        0.34
+      ],
+      "metallic": 0.8,
+      "roughness": 0.32,
+      "contact_friction": 0.65,
+      "contact_restitution": 0.02
+    },
+    "capture_hardware": {
+      "semantic_id": "d1.capture_hardware",
+      "base_color_linear": [
+        0.82,
+        0.34,
+        0.08
+      ],
+      "metallic": 0.55,
+      "roughness": 0.38,
+      "contact_friction": 0.75,
+      "contact_restitution": 0.01
+    },
+    "seal_elastomer": {
+      "semantic_id": "d1.seal_elastomer",
+      "base_color_linear": [
+        0.04,
+        0.045,
+        0.05
+      ],
+      "metallic": 0.0,
+      "roughness": 0.72,
+      "contact_friction": 0.9,
+      "contact_restitution": 0.0
+    }
+  }
+}

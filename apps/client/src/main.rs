@@ -1,5 +1,6 @@
 mod atmosphere;
 mod contact_gizmos;
+mod docking_demo;
 mod embedded;
 mod map_ui;
 mod navigation;
@@ -99,6 +100,7 @@ struct MapState {
 }
 
 fn main() {
+    let docking_demo_enabled = docking_demo::requested();
     // Requested graphics first: the RT decision below must happen before
     // plugins register, while adapter capabilities only exist post-init.
     // Unknown capability + explicit RT request = fail fast at device creation
@@ -227,8 +229,12 @@ fn main() {
             )
                 .chain()
                 .after(pilot::PilotUpdate),
-        )
-        .run();
+        );
+    if docking_demo_enabled {
+        app.add_systems(Startup, docking_demo::setup.after(setup))
+            .add_systems(Update, docking_demo::step);
+    }
+    app.run();
 }
 
 /// Maximum time-warp factor (2^17). High warp only sustains on rails:
@@ -275,9 +281,9 @@ struct StarMarker {
 
 #[derive(Component)]
 struct OrbitCamera {
-    orbit: Quat,
-    distance: f32,
-    target: Vec3,
+    pub(crate) orbit: Quat,
+    pub(crate) distance: f32,
+    pub(crate) target: Vec3,
 }
 
 #[derive(Component)]

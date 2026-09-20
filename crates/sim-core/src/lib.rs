@@ -10,6 +10,7 @@ mod aero;
 mod affine_propagator;
 mod atmosphere;
 mod collision;
+mod docking;
 mod ephemeris;
 mod feed;
 mod flight;
@@ -42,6 +43,10 @@ pub use atmosphere::{AtmosphereConfig, AtmosphereError, AtmosphereSample, BakedA
 pub use collision::{
     CollisionAxis, CollisionError, CollisionGeometry, CollisionMaterial, CollisionPart,
     CollisionShape,
+};
+pub use docking::{
+    DockingError, DockingKinematics, DockingPortClass, DockingPortSpec, DockingPortState,
+    DockingSession,
 };
 pub use ephemeris::{
     BakedBody, BakedEphemeris, BodyId, BodyState, EphemerisError, EphemerisFrame, EphemerisScratch,

@@ -5629,10 +5629,12 @@ version = "0.0.1"
 dependencies = [
  "bevy",
  "bevy_brp_extras",
+ "glam 0.32.1",
  "rayon",
  "serde",
  "thessa-atmosphere",
  "thessa-bevy-rcbt",
+ "thessa-collision",
  "thessa-flight-authority",
  "thessa-flight-net",
  "thessa-graphics",

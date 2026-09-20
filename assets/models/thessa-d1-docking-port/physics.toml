@@ -1,0 +1,113 @@
+# Provisional Thessa D1 docking-port physics contract.
+# Units are SI metres / seconds / kilograms.
+# The values marked provisional are integration fixtures, not final load ratings.
+schema = "thessa.docking_port.physics.v0"
+asset_id = "thessa.docking_port.d1.v2_2"
+solver = "rapier3d-f64"
+status = "MVP contact and mechanism contract; calibrate against structural model"
+
+[rapier]
+gravity_scale = 0.0
+ccd_enabled = true
+can_sleep = true
+density_source = "Thessa RigidBodyProperties, not Rapier collider density"
+
+[docking_interface]
+id = "d1_pressurized_interface"
+family = "standard_pressurized"
+port_class = "D1"
+common_core = true
+local_position_m = [0.0, 0.0, 0.0]
+local_orientation_xyzw = [0.0, 0.0, 0.0, 1.0]
+capture_velocity_limit_mps = 0.05 # provisional
+alignment_tolerance_rad = 0.035 # provisional
+
+[collision_materials.structural_metal]
+friction = 0.65
+restitution = 0.02
+
+[collision_materials.capture_hardware]
+friction = 0.75
+restitution = 0.01
+
+[collision_materials.seal_elastomer]
+friction = 0.90
+restitution = 0.0
+
+# The eight convex blocks leave the common passage open. They are a
+# conservative contact proxy and must not define the final seal geometry.
+[[collision_parts]]
+id = "capture_ring_proxy_01"
+shape = "cuboid"
+position_body_m = [0.560000, 0.000000, -0.100000]
+orientation_body_xyzw = [0.0, 0.0, 0.000000000, 1.000000000]
+half_extents_m = [0.080000, 0.260000, 0.080000]
+material = "structural_metal"
+[[collision_parts]]
+id = "capture_ring_proxy_02"
+shape = "cuboid"
+position_body_m = [0.395980, 0.395980, -0.100000]
+orientation_body_xyzw = [0.0, 0.0, 0.382683432, 0.923879533]
+half_extents_m = [0.080000, 0.260000, 0.080000]
+material = "structural_metal"
+[[collision_parts]]
+id = "capture_ring_proxy_03"
+shape = "cuboid"
+position_body_m = [0.000000, 0.560000, -0.100000]
+orientation_body_xyzw = [0.0, 0.0, 0.707106781, 0.707106781]
+half_extents_m = [0.080000, 0.260000, 0.080000]
+material = "structural_metal"
+[[collision_parts]]
+id = "capture_ring_proxy_04"
+shape = "cuboid"
+position_body_m = [-0.395980, 0.395980, -0.100000]
+orientation_body_xyzw = [0.0, 0.0, 0.923879533, 0.382683432]
+half_extents_m = [0.080000, 0.260000, 0.080000]
+material = "structural_metal"
+[[collision_parts]]
+id = "capture_ring_proxy_05"
+shape = "cuboid"
+position_body_m = [-0.560000, 0.000000, -0.100000]
+orientation_body_xyzw = [0.0, 0.0, 1.000000000, 0.000000000]
+half_extents_m = [0.080000, 0.260000, 0.080000]
+material = "structural_metal"
+[[collision_parts]]
+id = "capture_ring_proxy_06"
+shape = "cuboid"
+position_body_m = [-0.395980, -0.395980, -0.100000]
+orientation_body_xyzw = [0.0, 0.0, 0.923879533, -0.382683432]
+half_extents_m = [0.080000, 0.260000, 0.080000]
+material = "structural_metal"
+[[collision_parts]]
+id = "capture_ring_proxy_07"
+shape = "cuboid"
+position_body_m = [-0.000000, -0.560000, -0.100000]
+orientation_body_xyzw = [0.0, 0.0, 0.707106781, -0.707106781]
+half_extents_m = [0.080000, 0.260000, 0.080000]
+material = "structural_metal"
+[[collision_parts]]
+id = "capture_ring_proxy_08"
+shape = "cuboid"
+position_body_m = [0.395980, -0.395980, -0.100000]
+orientation_body_xyzw = [0.0, 0.0, 0.382683432, -0.923879533]
+half_extents_m = [0.080000, 0.260000, 0.080000]
+material = "structural_metal"
+
+[moving_mechanism]
+id = "soft_capture_petals"
+joint_type = "revolute"
+count = 6
+source_solid_indices = [17, 20, 25, 28, 33, 36]
+hinge_angles_deg = [24.0, 36.0, 144.0, 156.0, -96.0, -84.0]
+hinge_radius_m = 0.550
+hinge_z_m = -0.068
+closed_angle_rad = 0.0
+open_angle_rad = 0.436332313
+actuator_authority = "Thessa mechanism/actuator graph"
+rapier_joint_authority = "future revolute-joint bridge; current public seam exposes fixed docking joints"
+
+[mechanical_limits]
+axial_force_limit_n = 0.0 # TBD
+shear_force_limit_n = 0.0 # TBD
+bending_moment_limit_nm = 0.0 # TBD
+torsional_moment_limit_nm = 0.0 # TBD

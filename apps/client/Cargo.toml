@@ -11,6 +11,7 @@ thessa-worldgen-rocky = { path = "../../tools/worldgen-rocky" }
 thessa-protocol = { path = "../../crates/protocol" }
 thessa-sim-core = { path = "../../crates/sim-core" }
 thessa-flight-authority = { path = "../../crates/flight-authority" }
+thessa-collision = { path = "../../crates/collision" }
 thessa-flight-net = { path = "../../crates/flight-net" }
 thessa-perf = { path = "../../crates/perf" }
 thessa-graphics = { path = "../../crates/graphics" }
@@ -20,6 +21,7 @@ thessa-bevy-rcbt = { path = "../../crates/bevy-rcbt", features = ["render"] }
 thessa-rcbt-core = { path = "../../crates/rcbt-core" }
 bevy = { workspace = true, features = ["bevy_solari"] }
 bevy_brp_extras = "0.22.0"
+glam.workspace = true
 rayon.workspace = true
 serde.workspace = true
 toml.workspace = true

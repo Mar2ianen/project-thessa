@@ -218,10 +218,7 @@ pub fn airborne_intensity_w_m2(
 /// A structure-borne path exists when source and listener share the same
 /// connected structural cluster. Attenuation is deliberately not guessed
 /// here; the future structural graph owns path length/material interfaces.
-pub fn structure_path_exists(
-    source_cluster: Option<u64>,
-    listener_cluster: Option<u64>,
-) -> bool {
+pub fn structure_path_exists(source_cluster: Option<u64>, listener_cluster: Option<u64>) -> bool {
     source_cluster.is_some() && source_cluster == listener_cluster
 }
 
@@ -295,26 +292,21 @@ pub fn sonic_boom_arrival(
     let direction = segment.velocity_mps / speed_mps;
     let to_listener = listener_position_m - segment.start_position_m;
     let longitudinal_m = to_listener.dot(direction);
-    let lateral_sq_m2 =
-        (to_listener.length_squared() - longitudinal_m * longitudinal_m).max(0.0);
+    let lateral_sq_m2 = (to_listener.length_squared() - longitudinal_m * longitudinal_m).max(0.0);
     let lateral_m = lateral_sq_m2.sqrt();
     let mach_denominator =
         (speed_mps * speed_mps - medium.speed_of_sound_mps * medium.speed_of_sound_mps).sqrt();
-    let longitudinal_at_emission_m =
-        medium.speed_of_sound_mps * lateral_m / mach_denominator;
-    let emission_offset_s =
-        (longitudinal_m - longitudinal_at_emission_m) / speed_mps;
+    let longitudinal_at_emission_m = medium.speed_of_sound_mps * lateral_m / mach_denominator;
+    let emission_offset_s = (longitudinal_m - longitudinal_at_emission_m) / speed_mps;
 
     if emission_offset_s < 0.0 || emission_offset_s > segment.duration_s {
         return Ok(None);
     }
 
-    let emission_position_m =
-        segment.start_position_m + segment.velocity_mps * emission_offset_s;
+    let emission_position_m = segment.start_position_m + segment.velocity_mps * emission_offset_s;
     let propagation_distance_m = (listener_position_m - emission_position_m).length();
     let emission_time_s = segment.start_time_s + emission_offset_s;
-    let arrival_time_s =
-        emission_time_s + propagation_distance_m / medium.speed_of_sound_mps;
+    let arrival_time_s = emission_time_s + propagation_distance_m / medium.speed_of_sound_mps;
 
     Ok(Some(SonicBoomArrival {
         emission_time_s,

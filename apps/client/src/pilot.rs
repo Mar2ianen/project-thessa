@@ -454,6 +454,14 @@ impl Default for PilotHudState {
 }
 
 impl PilotHudState {
+    pub(super) fn audio_camera_distance_m(&self) -> f64 {
+        f64::from(self.pilot_camera_distance)
+    }
+
+    pub(super) fn audio_warning_active(&self, warning: &str) -> bool {
+        self.flight.warnings.iter().any(|item| item == warning)
+    }
+
     pub(super) fn set_benchmark_chase_view(&mut self) {
         self.view_mode = ClientViewMode::Pilot;
         self.pilot_camera_chase = true;

@@ -14,6 +14,8 @@ members = [
     "crates/autopilot-js",
     "crates/flight-authority",
     "crates/atmosphere",
+    "crates/audio-core",
+    "crates/audio-synth",
     "crates/plume-core",
     "crates/microstore-core",
     "crates/rcbt-core",

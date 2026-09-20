@@ -5585,6 +5585,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "thessa-audio-core"
+version = "0.0.1"
+dependencies = [
+ "glam 0.32.1",
+ "serde",
+]
+
+[[package]]
+name = "thessa-audio-synth"
+version = "0.0.1"
+
+[[package]]
 name = "thessa-autopilot"
 version = "0.0.1"
 dependencies = [
@@ -5633,6 +5645,8 @@ dependencies = [
  "rayon",
  "serde",
  "thessa-atmosphere",
+ "thessa-audio-core",
+ "thessa-audio-synth",
  "thessa-bevy-rcbt",
  "thessa-collision",
  "thessa-flight-authority",

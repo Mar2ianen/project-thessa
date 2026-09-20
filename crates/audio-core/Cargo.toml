@@ -1,0 +1,12 @@
+[package]
+name = "thessa-audio-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Backend-neutral acoustic propagation semantics for Project Thessa"
+
+[dependencies]
+glam.workspace = true
+serde.workspace = true

@@ -1,0 +1,8 @@
+[package]
+name = "thessa-audio-synth"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+description = "Backend-neutral procedural audio synthesis for Project Thessa"

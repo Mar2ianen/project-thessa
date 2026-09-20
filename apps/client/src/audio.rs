@@ -12,8 +12,8 @@ use bevy::{
 };
 use glam::DVec3;
 use thessa_audio_core::{
-    AcousticMedium, AcousticPoint, SupersonicSegment, resolve_airborne_path,
-    sonic_boom_arrival, structure_path_exists,
+    AcousticMedium, AcousticPoint, SupersonicSegment, resolve_airborne_path, sonic_boom_arrival,
+    structure_path_exists,
 };
 
 use crate::pilot::{ClientViewMode, PilotFlightRuntime, PilotHudState};
@@ -98,8 +98,8 @@ fn setup_audio(
     ));
 
     if std::env::args().any(|arg| arg == "--audio-demo") {
-        let medium = AcousticMedium::gas(1.225, 340.0, 0.0)
-            .expect("audio demo atmosphere must be valid");
+        let medium =
+            AcousticMedium::gas(1.225, 340.0, 0.0).expect("audio demo atmosphere must be valid");
         let segment = SupersonicSegment {
             start_time_s: 0.0,
             duration_s: 4.0,
@@ -123,10 +123,7 @@ fn setup_audio(
     );
 }
 
-fn toggle_listener_mode(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    mut runtime: ResMut<AudioRuntime>,
-) {
+fn toggle_listener_mode(keyboard: Res<ButtonInput<KeyCode>>, mut runtime: ResMut<AudioRuntime>) {
     if !keyboard.just_pressed(KeyCode::F8) {
         return;
     }
@@ -155,12 +152,10 @@ fn update_engine_voice(
     let altitude_m = (runtime.relative_position_m.length() - runtime.planet_radius_m).max(0.0);
     let sample = runtime.atmosphere.sample(altitude_m).ok();
     let medium = match sample {
-        Some(sample) if sample.density_kg_m3 > 0.0 => AcousticMedium::gas(
-            sample.density_kg_m3,
-            sample.speed_of_sound_mps,
-            0.0,
-        )
-        .unwrap_or(AcousticMedium::VACUUM),
+        Some(sample) if sample.density_kg_m3 > 0.0 => {
+            AcousticMedium::gas(sample.density_kg_m3, sample.speed_of_sound_mps, 0.0)
+                .unwrap_or(AcousticMedium::VACUUM)
+        }
         _ => AcousticMedium::VACUUM,
     };
 
@@ -170,11 +165,8 @@ fn update_engine_voice(
     let audible = match audio.listener_mode {
         ListenerMode::Exterior => {
             let source = AcousticPoint::stationary(DVec3::ZERO);
-            let listener = AcousticPoint::stationary(DVec3::new(
-                hud.audio_camera_distance_m(),
-                0.0,
-                0.0,
-            ));
+            let listener =
+                AcousticPoint::stationary(DVec3::new(hud.audio_camera_distance_m(), 0.0, 0.0));
             resolve_airborne_path(source, listener, medium)
                 .ok()
                 .flatten()
@@ -280,10 +272,7 @@ fn spawn_tone(
     duration_ms: u64,
     volume: f32,
 ) {
-    let pitch = pitches.add(Pitch::new(
-        frequency_hz,
-        Duration::from_millis(duration_ms),
-    ));
+    let pitch = pitches.add(Pitch::new(frequency_hz, Duration::from_millis(duration_ms)));
     commands.spawn((
         AudioPlayer(pitch),
         PlaybackSettings::DESPAWN.with_volume(Volume::Linear(volume.clamp(0.0, 1.0))),

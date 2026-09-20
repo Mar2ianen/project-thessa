@@ -69,6 +69,7 @@ do not update in place).
 | `06_OPEN_QUESTIONS.md` | 🟡 living index | Rapier decided; stdlib/ownership narrowed; J2/C22 landed; rest open |
 | `35_BLAZE_AUDIT_2026_09_12.md` | 🕰️ record | scoped to base `45e0b79`; see 36 for current status |
 | `36_DOCUMENTATION_AUDIT_2026_09_14.md` | 🕰️ record | snapshot `e1454ac`; superseded by this file for post-merge state |
+| `44_KSA_TECHNICAL_COMPARISON_2026_09_20.md` | 🕰️ external audit | KSA comparison: warp, rings, glints, plume, instruments, body orientation |
 | `details/01–04_*.md` | 🔵 design baselines | docking/aero/fuselage/propulsion families; values TBD |
 | `REFERENCES.md` | 📚 reference | UX-only refs; Nyx/ANISE isolation; no copied code |
 | `adr/0007–0011` | ✅ accepted | licensing, render boundary, autopilot graphs, aero boundary, RCBT boundary |

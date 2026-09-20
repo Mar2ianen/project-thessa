@@ -21,6 +21,7 @@ fn methalox_spec() -> LiquidEngineSpec {
         contour: NozzleContour::Bell,
         chamber_material: ChamberMaterial::nickel_superalloy(),
         cooling: CoolingMode::Regenerative,
+        mixture_ratio: None,
         characteristic_length_m: None,
         gimbal_range_rad: 0.09,
         min_throttle: None,
@@ -45,6 +46,7 @@ fn apcp_spec() -> SolidMotorSpec {
         contour: NozzleContour::Conical,
         casing_material: ChamberMaterial::nickel_superalloy(),
         inhibited_ends: true,
+        segment_core_radii_m: None,
         gimbal_range_rad: 0.0,
         ignition_shots: 1,
     }

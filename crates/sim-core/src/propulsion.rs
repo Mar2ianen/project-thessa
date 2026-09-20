@@ -229,6 +229,96 @@ impl Propellant {
     pub fn is_solid(self) -> bool {
         matches!(self, Self::SolidApcp)
     }
+
+    /// Reference (design) oxidizer-to-fuel ratio for the pair.
+    pub fn reference_mixture_ratio(self) -> Option<f64> {
+        match self {
+            Self::LoxRp1 => Some(2.7),
+            Self::LoxMethane => Some(3.5),
+            Self::LoxHydrogen => Some(6.0),
+            Self::NtoMmh => Some(1.65),
+            Self::SolidApcp => None,
+        }
+    }
+
+    /// Mixture table: (oxidizer-to-fuel ratio, chamber temp K, gamma, gas
+    /// constant J/kg/K). Representative CEA-trend values bracketing the
+    /// reference point; refine with project CEA runs. The middle row always
+    /// reproduces [`Propellant::thermo`] exactly (pinned by test).
+    fn mixture_table(self) -> Option<&'static [(f64, f64, f64, f64)]> {
+        match self {
+            Self::LoxRp1 => Some(&[
+                (2.0, 3450.0, 1.25, 360.0),
+                (2.7, 3670.0, 1.24, 378.0),
+                (3.4, 3520.0, 1.23, 390.0),
+            ]),
+            Self::LoxMethane => Some(&[
+                (2.8, 3500.0, 1.23, 430.0),
+                (3.5, 3680.0, 1.22, 405.0),
+                (4.2, 3600.0, 1.21, 385.0),
+            ]),
+            Self::LoxHydrogen => Some(&[
+                (4.5, 3300.0, 1.24, 700.0),
+                (6.0, 3560.0, 1.22, 616.0),
+                (7.5, 3650.0, 1.20, 540.0),
+            ]),
+            Self::NtoMmh => Some(&[
+                (1.30, 3200.0, 1.26, 400.0),
+                (1.65, 3400.0, 1.25, 380.0),
+                (2.00, 3450.0, 1.24, 365.0),
+            ]),
+            Self::SolidApcp => None,
+        }
+    }
+
+    /// Chamber thermo at an oxidizer-to-fuel ratio: piecewise-linear
+    /// interpolation inside the mixture table, hard refusal outside it.
+    /// `None` selects the reference ratio.
+    pub fn thermo_at_mixture(
+        self,
+        mixture_ratio: Option<f64>,
+    ) -> Result<PropellantThermo, PropulsionError> {
+        let reference = self.thermo();
+        let Some(table) = self.mixture_table() else {
+            if mixture_ratio.is_some() {
+                return Err(PropulsionError::InvalidSpec(
+                    "solid grain chemistry is fixed; no mixture knob".into(),
+                ));
+            }
+            return Ok(reference);
+        };
+        let Some(ratio) = mixture_ratio else {
+            return Ok(reference);
+        };
+        if !ratio.is_finite() {
+            return Err(PropulsionError::InvalidSpec(
+                "mixture ratio must be finite".into(),
+            ));
+        }
+        if ratio < table.first().expect("non-empty table").0
+            || ratio > table.last().expect("non-empty table").0
+        {
+            return Err(PropulsionError::InvalidSpec(format!(
+                "mixture ratio {ratio} outside the modeled range [{}, {}]",
+                table.first().expect("non-empty table").0,
+                table.last().expect("non-empty table").0
+            )));
+        }
+        for window in table.windows(2) {
+            let (low, high) = (window[0], window[1]);
+            if ratio <= high.0 {
+                let span = (high.0 - low.0).max(1e-12);
+                let fraction = (ratio - low.0) / span;
+                return Ok(PropellantThermo {
+                    gamma: low.2 + (high.2 - low.2) * fraction,
+                    chamber_temp_k: low.1 + (high.1 - low.1) * fraction,
+                    gas_constant_j_kg_k: low.3 + (high.3 - low.3) * fraction,
+                    ..reference
+                });
+            }
+        }
+        Ok(reference)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -480,7 +570,7 @@ impl ChamberMaterial {
         }
     }
 
-    fn validate(self) -> Result<(), PropulsionError> {
+    pub(crate) fn validate(self) -> Result<(), PropulsionError> {
         require_positive(self.density_kg_m3, "material density")?;
         require_positive(self.yield_strength_pa, "material yield strength")?;
         require_positive(self.max_wall_temp_k, "material max wall temperature")?;
@@ -530,16 +620,23 @@ impl CoolingMode {
     }
 }
 
-/// Nozzle contour family. Both derive the divergence factor from actual
-/// wall geometry; the bell recovers half the residual divergence loss
+/// Nozzle contour family. Bell/cone derive the divergence factor from wall
+/// geometry; the bell recovers half the residual divergence loss
 /// (documented engineering approximation, thrust envelope +/-1% pinned
-/// by test).
+/// by test). The aerospike is altitude-compensating: the free jet boundary
+/// adapts to ambient, so the pressure term never goes overexpanded-wide;
+/// ambient eats only the documented base area (base drag).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum NozzleContour {
     Conical,
     Bell,
+    Aerospike,
 }
+
+/// Aerospike base area as a fraction of equivalent exit area (base drag,
+/// documented).
+const AEROSPIKE_BASE_FRACTION: f64 = 0.05;
 
 // ---------------------------------------------------------------------------
 // Liquid engine spec + compilation
@@ -562,6 +659,8 @@ pub struct LiquidEngineSpec {
     pub contour: NozzleContour,
     pub chamber_material: ChamberMaterial,
     pub cooling: CoolingMode,
+    /// Oxidizer-to-fuel ratio override; `None` = pair reference.
+    pub mixture_ratio: Option<f64>,
     /// Characteristic length override (m); `None` = propellant reference.
     pub characteristic_length_m: Option<f64>,
     /// Gimbal half-range (rad, 0 = fixed).
@@ -614,6 +713,8 @@ impl LiquidEngineSpec {
         if let Some(length) = self.characteristic_length_m {
             require_positive(length, "characteristic length")?;
         }
+        // Gates the mixture knob early (range refusal lives here too).
+        self.propellant.thermo_at_mixture(self.mixture_ratio)?;
         Ok(())
     }
 
@@ -639,7 +740,7 @@ impl LiquidEngineSpec {
                 cap / 1.0e6
             )));
         }
-        let thermo = self.propellant.thermo();
+        let thermo = self.propellant.thermo_at_mixture(self.mixture_ratio)?;
         let c_star = characteristic_velocity(&thermo);
         let throat_area_m2 = std::f64::consts::PI * self.throat_radius_m * self.throat_radius_m;
         let exit_radius_m = self.throat_radius_m * self.expansion_ratio.sqrt();
@@ -647,12 +748,14 @@ impl LiquidEngineSpec {
         let exit = nozzle_exit(&thermo, self.expansion_ratio)?;
 
         // Wall angle from real geometry; divergence from the angle.
+        // The aerospike exhaust leaves near-axially along the plug.
         let wall_slope = (exit_radius_m - self.throat_radius_m) / self.nozzle_length_m;
         let wall_angle_rad = wall_slope.atan();
         let conical_divergence = 0.5 * (1.0 + wall_angle_rad.cos());
         let divergence = match self.contour {
             NozzleContour::Conical => conical_divergence,
             NozzleContour::Bell => conical_divergence + (1.0 - conical_divergence) * 0.5,
+            NozzleContour::Aerospike => 0.99,
         };
 
         // Main chamber flow + optional gas-generator duct (same isentropic
@@ -748,8 +851,24 @@ impl LiquidEngineSpec {
         let nozzle_thickness_m = wall_thickness_m
             * (self.throat_radius_m / chamber_diameter_m).min(1.0)
             * self.cooling.nozzle_wall_factor();
-        let mut nozzle_kg =
-            nozzle_area_m2 * nozzle_thickness_m * self.chamber_material.density_kg_m3;
+        // Aerospike: outer cowl frustum at 0.7x plus the plug cone itself
+        // (base 0.6x exit radius over the spike length, same wall gauge).
+        let spike_area_m2 = match self.contour {
+            NozzleContour::Aerospike => {
+                let spike_base_m = 0.6 * exit_radius_m;
+                let spike_slant_m = (self.nozzle_length_m * self.nozzle_length_m
+                    + spike_base_m * spike_base_m)
+                    .sqrt();
+                std::f64::consts::PI * spike_base_m * spike_slant_m
+            }
+            _ => 0.0,
+        };
+        let cowl_area_m2 = match self.contour {
+            NozzleContour::Aerospike => nozzle_area_m2 * 0.7,
+            _ => nozzle_area_m2,
+        };
+        let mut nozzle_kg = cowl_area_m2 * nozzle_thickness_m * self.chamber_material.density_kg_m3
+            + spike_area_m2 * nozzle_thickness_m * self.chamber_material.density_kg_m3;
         if self.contour == NozzleContour::Bell {
             nozzle_kg *= 0.85;
         }
@@ -839,6 +958,12 @@ impl LiquidEngineSpec {
             restartable: self.restartable,
             gimbal_range_rad: self.gimbal_range_rad,
             cooling: self.cooling,
+            contour: self.contour,
+            aerospike_base_area_m2: match self.contour {
+                NozzleContour::Aerospike => AEROSPIKE_BASE_FRACTION * exit_area_m2,
+                _ => 0.0,
+            },
+            nozzle_wall_area_m2: cowl_area_m2 + spike_area_m2,
         })
     }
 }
@@ -878,6 +1003,9 @@ pub struct SolidMotorSpec {
     pub casing_material: ChamberMaterial,
     /// Inhibited segment ends (neutral trace); exposed ends burn too.
     pub inhibited_ends: bool,
+    /// Per-segment initial port radii (m) for a stepped channel
+    /// (boost-sustain shaping); `None` = uniform `core_radius_m`.
+    pub segment_core_radii_m: Option<Vec<f64>>,
     pub gimbal_range_rad: f64,
     /// Ignition shots carried (solids are single-shot by default).
     pub ignition_shots: u32,
@@ -931,6 +1059,21 @@ impl SolidMotorSpec {
         require_positive(self.nozzle_length_m, "nozzle length")?;
         self.casing_material.validate()?;
         require_non_negative(self.gimbal_range_rad, "gimbal range")?;
+        if let Some(radii) = &self.segment_core_radii_m {
+            if radii.len() != self.segments as usize {
+                return Err(PropulsionError::InvalidSpec(
+                    "segment port radii must match the segment count".into(),
+                ));
+            }
+            for radius_m in radii {
+                require_positive(*radius_m, "segment port radius")?;
+                if !(*radius_m < self.outer_radius_m) {
+                    return Err(PropulsionError::InvalidSpec(
+                        "segment port must be smaller than the outer radius".into(),
+                    ));
+                }
+            }
+        }
         if self.ignition_shots == 0 {
             return Err(PropulsionError::InvalidSpec(
                 "a solid motor with zero shots can never ignite".into(),
@@ -952,37 +1095,55 @@ impl SolidMotorSpec {
         let divergence = match self.contour {
             NozzleContour::Conical => conical_divergence,
             NozzleContour::Bell => conical_divergence + (1.0 - conical_divergence) * 0.5,
+            NozzleContour::Aerospike => 0.99,
         };
 
-        // Web-burn trace: equilibrium Pc(w) = [Ab(w) a rho c* / At]^(1/(1-n)).
-        const WEB_STEPS: usize = 64;
-        let web_m = self.outer_radius_m - self.core_radius_m;
+        // Web-burn trace: time-stepped equilibrium. Each segment regresses
+        // its own port (stepped channels shape boost-sustain traces); the
+        // common chamber pressure couples them through total burn area:
+        // Pc = [Ab(t) a rho c* / At]^(1/(1-n)). Sliver after burn-through
+        // is ignored (documented).
         let density = thermo.bulk_density_kg_m3;
-        let mut points = Vec::with_capacity(WEB_STEPS + 1);
-        let mut time_s = 0.0;
-        let mut peak_pressure_pa = 0.0_f64;
-        let mut peak_thrust_n = 0.0_f64;
-        for step in 0..=WEB_STEPS {
-            let burned_m = web_m * step as f64 / WEB_STEPS as f64;
-            let port_radius_m = self.core_radius_m + burned_m;
-            let port_area_m2 = std::f64::consts::PI
-                * (self.outer_radius_m * self.outer_radius_m - port_radius_m * port_radius_m);
-            let mut burn_area_m2 = self.segments as f64
-                * std::f64::consts::PI
-                * 2.0
-                * port_radius_m
-                * self.segment_length_m;
-            if !self.inhibited_ends {
-                burn_area_m2 += self.segments as f64 * 2.0 * port_area_m2;
+        let core_radii: Vec<f64> = match &self.segment_core_radii_m {
+            Some(radii) => radii.clone(),
+            None => vec![self.core_radius_m; self.segments as usize],
+        };
+        let webs: Vec<f64> = core_radii
+            .iter()
+            .map(|core_m| self.outer_radius_m - core_m)
+            .collect();
+        let burn_area_at = |burned: &[f64]| -> f64 {
+            let mut area_m2 = 0.0;
+            for (index, core_m) in core_radii.iter().enumerate() {
+                if burned[index] >= webs[index] {
+                    continue;
+                }
+                let port_m = core_m + burned[index];
+                area_m2 += std::f64::consts::PI * 2.0 * port_m * self.segment_length_m;
+                if !self.inhibited_ends {
+                    area_m2 += 2.0
+                        * std::f64::consts::PI
+                        * (self.outer_radius_m * self.outer_radius_m - port_m * port_m);
+                }
             }
-            let chamber_pa = (burn_area_m2 * self.burn_rate_coeff * density * c_star
-                / throat_area_m2)
+            area_m2
+        };
+        let pressure_at = |area_m2: f64| -> Result<f64, PropulsionError> {
+            let chamber_pa = (area_m2 * self.burn_rate_coeff * density * c_star / throat_area_m2)
                 .powf(1.0 / (1.0 - self.burn_rate_exponent));
             if !chamber_pa.is_finite() || chamber_pa <= 0.0 {
                 return Err(PropulsionError::InvalidSpec(
                     "grain equilibrium pressure is non-physical".into(),
                 ));
             }
+            Ok(chamber_pa)
+        };
+        let point_at = |time_s: f64,
+                        burned_now: &[f64],
+                        burned_max_m: f64|
+         -> Result<BurnPoint, PropulsionError> {
+            let burn_area_m2 = burn_area_at(burned_now);
+            let chamber_pa = pressure_at(burn_area_m2)?;
             let burn_rate_mps = self.burn_rate_coeff * chamber_pa.powf(self.burn_rate_exponent);
             let mass_flow_kg_s = density * burn_area_m2 * burn_rate_mps;
             let thrust_sl_n = thrust_coefficient(
@@ -1003,36 +1164,86 @@ impl SolidMotorSpec {
                 divergence,
             ) * chamber_pa
                 * throat_area_m2;
-            peak_pressure_pa = peak_pressure_pa.max(chamber_pa);
-            peak_thrust_n = peak_thrust_n.max(thrust_sl_n);
-            if step < WEB_STEPS {
-                time_s += (web_m / WEB_STEPS as f64) / burn_rate_mps;
-            }
-            points.push(BurnPoint {
-                time_s: if step == 0 { 0.0 } else { time_s },
-                web_burned_m: burned_m,
+            Ok(BurnPoint {
+                time_s,
+                web_burned_m: burned_max_m,
                 chamber_pa,
                 mass_flow_kg_s,
                 thrust_sl_n,
                 thrust_vac_n,
-            });
+            })
+        };
+        let initial_area_m2 = burn_area_at(&vec![0.0; core_radii.len()]);
+        let initial_rate_mps =
+            self.burn_rate_coeff * pressure_at(initial_area_m2)?.powf(self.burn_rate_exponent);
+        let max_web_m = webs.iter().cloned().fold(0.0_f64, f64::max);
+        let dt_s = max_web_m / initial_rate_mps / 400.0;
+        if !dt_s.is_finite() || dt_s <= 0.0 {
+            return Err(PropulsionError::InvalidSpec(
+                "grain step sizing is non-physical".into(),
+            ));
         }
-        // Re-time the trace: accumulate after the loop for exactness.
-        time_s = 0.0;
+        let mut burned = vec![0.0; core_radii.len()];
+        let mut time_s = 0.0;
+        let mut points = vec![point_at(0.0, &burned, 0.0)?];
+        let mut peak_pressure_pa = 0.0_f64;
+        let mut peak_thrust_n = 0.0_f64;
+        loop {
+            let burn_area_m2 = burn_area_at(&burned);
+            if burn_area_m2 <= 0.0 {
+                break;
+            }
+            let chamber_pa = pressure_at(burn_area_m2)?;
+            let burn_rate_mps = self.burn_rate_coeff * chamber_pa.powf(self.burn_rate_exponent);
+            let mut all_done = true;
+            let mut burned_max_m = 0.0_f64;
+            for (index, web_m) in webs.iter().enumerate() {
+                if burned[index] < *web_m {
+                    burned[index] = (burned[index] + burn_rate_mps * dt_s).min(*web_m);
+                }
+                burned_max_m = burned_max_m.max(burned[index]);
+                if burned[index] < *web_m {
+                    all_done = false;
+                }
+            }
+            time_s += dt_s;
+            // Burn-through: the trace terminates at zero thrust rather
+            // than erroring on the empty grain.
+            let point = if burn_area_at(&burned) <= 0.0 {
+                BurnPoint {
+                    time_s,
+                    web_burned_m: burned_max_m,
+                    chamber_pa: 0.0,
+                    mass_flow_kg_s: 0.0,
+                    thrust_sl_n: 0.0,
+                    thrust_vac_n: 0.0,
+                }
+            } else {
+                point_at(time_s, &burned, burned_max_m)?
+            };
+            peak_pressure_pa = peak_pressure_pa.max(point.chamber_pa);
+            peak_thrust_n = peak_thrust_n.max(point.thrust_sl_n);
+            points.push(point);
+            if all_done {
+                break;
+            }
+            if points.len() > 100_000 {
+                return Err(PropulsionError::InvalidSpec(
+                    "grain does not burn through".into(),
+                ));
+            }
+        }
+        peak_pressure_pa = peak_pressure_pa.max(points[0].chamber_pa);
+        peak_thrust_n = peak_thrust_n.max(points[0].thrust_sl_n);
+        // Integrate impulse and propellant over the recorded trace.
         let mut total_impulse_ns = 0.0;
         let mut propellant_kg = 0.0;
-        for index in 0..WEB_STEPS {
-            let rate =
-                self.burn_rate_coeff * points[index].chamber_pa.powf(self.burn_rate_exponent);
-            let dt = (web_m / WEB_STEPS as f64) / rate;
-            points[index].time_s = time_s;
-            total_impulse_ns +=
-                0.5 * (points[index].thrust_vac_n + points[index + 1].thrust_vac_n) * dt;
-            propellant_kg +=
-                0.5 * (points[index].mass_flow_kg_s + points[index + 1].mass_flow_kg_s) * dt;
-            time_s += dt;
+        for window in points.windows(2) {
+            let (a, b) = (window[0], window[1]);
+            let dt = b.time_s - a.time_s;
+            total_impulse_ns += 0.5 * (a.thrust_vac_n + b.thrust_vac_n) * dt;
+            propellant_kg += 0.5 * (a.mass_flow_kg_s + b.mass_flow_kg_s) * dt;
         }
-        points[WEB_STEPS].time_s = time_s;
         let burn_time_s = time_s;
         let avg_isp_s = total_impulse_ns / (propellant_kg * STANDARD_GRAVITY_MPS2);
 
@@ -1059,6 +1270,18 @@ impl SolidMotorSpec {
             * self.casing_material.density_kg_m3;
         if self.contour == NozzleContour::Bell {
             nozzle_kg *= 0.85;
+        }
+        if self.contour == NozzleContour::Aerospike {
+            let spike_base_m = 0.6 * exit_radius_m;
+            let spike_slant_m =
+                (self.nozzle_length_m * self.nozzle_length_m + spike_base_m * spike_base_m).sqrt();
+            nozzle_kg = nozzle_kg * 0.7
+                + std::f64::consts::PI
+                    * spike_base_m
+                    * spike_slant_m
+                    * case_thickness_m
+                    * 0.6
+                    * self.casing_material.density_kg_m3;
         }
         let gimbal_kg = if self.gimbal_range_rad > 0.0 {
             MASS_FIT_GIMBAL_BASE_KG + MASS_FIT_GIMBAL_KG_PER_N * peak_thrust_n
@@ -1099,6 +1322,13 @@ impl SolidMotorSpec {
             grain_length_m,
             ignition_shots: self.ignition_shots,
             gimbal_range_rad: self.gimbal_range_rad,
+            contour: self.contour,
+            aerospike_base_area_m2: match self.contour {
+                NozzleContour::Aerospike => {
+                    AEROSPIKE_BASE_FRACTION * throat_area_m2 * self.expansion_ratio
+                }
+                _ => 0.0,
+            },
         })
     }
 }
@@ -1167,6 +1397,11 @@ pub struct CompiledLiquid {
     pub restartable: bool,
     pub gimbal_range_rad: f64,
     pub cooling: CoolingMode,
+    pub contour: NozzleContour,
+    /// Aerospike base area exposed to ambient (m^2, 0 for bell/cone).
+    pub aerospike_base_area_m2: f64,
+    /// Nozzle wall area for thermal/radiation bookkeeping (m^2).
+    pub nozzle_wall_area_m2: f64,
 }
 
 /// Hangar-compiled solid motor with its equilibrium burn trace.
@@ -1198,6 +1433,9 @@ pub struct CompiledSolid {
     pub grain_length_m: f64,
     pub ignition_shots: u32,
     pub gimbal_range_rad: f64,
+    pub contour: NozzleContour,
+    /// Aerospike base area exposed to ambient (m^2, 0 for bell/cone).
+    pub aerospike_base_area_m2: f64,
 }
 
 /// Compiled engine, either family. One representation for simple-mode
@@ -1305,6 +1543,26 @@ impl CompiledEngine {
                 if throttle == 0.0 {
                     return Ok(EngineOperatingPoint::off(engine));
                 }
+                if engine.contour == NozzleContour::Aerospike {
+                    // Altitude compensation: the free jet boundary tracks
+                    // ambient, so the design vacuum thrust survives at any
+                    // altitude minus base drag on the plug base.
+                    let flow_kg_s = engine.full_flow_kg_s * throttle;
+                    let thrust_n = (engine.thrust_vac_n * throttle
+                        - ambient_pa * engine.aerospike_base_area_m2)
+                        .max(0.0);
+                    let isp_s = thrust_n / (flow_kg_s * STANDARD_GRAVITY_MPS2);
+                    return Ok(EngineOperatingPoint {
+                        thrust_n,
+                        mass_flow_kg_s: flow_kg_s,
+                        isp_s,
+                        exhaust_velocity_mps: engine.exhaust_velocity_mps,
+                        exit_pressure_pa: (engine.exit_pressure_pa * throttle).max(ambient_pa),
+                        exit_temp_k: engine.exit_temp_k,
+                        exit_mach: engine.exit_mach,
+                        separation_risk: false,
+                    });
+                }
                 let chamber_pa = engine.chamber_pressure_pa * throttle;
                 let exit_pressure_pa = engine.exit_pressure_pa * throttle;
                 let flow_kg_s = engine.full_flow_kg_s * throttle;
@@ -1348,6 +1606,20 @@ impl CompiledEngine {
                     return Ok(EngineOperatingPoint::burned_out(engine));
                 }
                 let point = engine.interpolate(burn_time_s);
+                if engine.contour == NozzleContour::Aerospike {
+                    let thrust_n =
+                        (point.thrust_vac_n - ambient_pa * engine.aerospike_base_area_m2).max(0.0);
+                    return Ok(EngineOperatingPoint {
+                        thrust_n,
+                        mass_flow_kg_s: point.mass_flow_kg_s,
+                        isp_s: thrust_n / (point.mass_flow_kg_s * STANDARD_GRAVITY_MPS2),
+                        exhaust_velocity_mps: engine.exhaust_velocity_mps,
+                        exit_pressure_pa: ambient_pa,
+                        exit_temp_k: engine.exit_temp_k,
+                        exit_mach: engine.exit_mach,
+                        separation_risk: false,
+                    });
+                }
                 let thermo = engine.thermo_ref();
                 let cf = thrust_coefficient(
                     &thermo,
@@ -1369,6 +1641,77 @@ impl CompiledEngine {
                     exit_mach: engine.exit_mach,
                     separation_risk: exit_pressure_pa < SEPARATION_PRESSURE_RATIO * ambient_pa,
                 })
+            }
+        }
+    }
+
+    /// Stagnation thermal power released at full throttle (W): mass flow
+    /// times cp times chamber temperature. The future thermal graph
+    /// consumes this; the nozzle converts part of it into exhaust kinetic
+    /// power (see below). Liquids use design flow; solids the burn average.
+    pub fn chamber_power_w(&self) -> f64 {
+        match self {
+            Self::Liquid(engine) => {
+                let cp = engine.gamma * engine.gas_constant_j_kg_k / (engine.gamma - 1.0);
+                engine.full_flow_kg_s * cp * engine.chamber_temp_k
+            }
+            Self::Solid(engine) => {
+                let cp = engine.gamma * engine.gas_constant_j_kg_k / (engine.gamma - 1.0);
+                let avg_flow_kg_s = engine.propellant_mass_kg / engine.burn_time_s;
+                avg_flow_kg_s * cp * engine.chamber_temp_k
+            }
+        }
+    }
+
+    /// Exhaust kinetic power at full throttle in vacuum (W). Always below
+    /// [`CompiledEngine::chamber_power_w`] (pinned by test): the difference
+    /// is residual exhaust enthalpy plus (for GG cycles) duct losses.
+    pub fn exhaust_kinetic_power_w(&self) -> f64 {
+        match self {
+            Self::Liquid(engine) => {
+                0.5 * engine.full_flow_kg_s
+                    * engine.exhaust_velocity_mps
+                    * engine.exhaust_velocity_mps
+            }
+            Self::Solid(engine) => {
+                let avg_flow_kg_s = engine.propellant_mass_kg / engine.burn_time_s;
+                0.5 * avg_flow_kg_s * engine.exhaust_velocity_mps * engine.exhaust_velocity_mps
+            }
+        }
+    }
+
+    /// Solid propellant remaining at a burn clock (kg). Liquids return
+    /// `None`: their propellant lives in tank parts (see `feed` module).
+    pub fn propellant_remaining_kg(&self, burn_time_s: f64) -> Option<f64> {
+        match self {
+            Self::Liquid(_) => None,
+            Self::Solid(engine) => {
+                if !burn_time_s.is_finite() || burn_time_s <= 0.0 {
+                    return Some(engine.propellant_mass_kg);
+                }
+                if burn_time_s >= engine.burn_time_s {
+                    return Some(0.0);
+                }
+                let mut consumed_kg = 0.0;
+                let mut prev = &engine.burn_curve[0];
+                for point in engine.burn_curve.iter().skip(1) {
+                    if point.time_s >= burn_time_s {
+                        // Partial interval with linear flow: exact integral.
+                        let span = (point.time_s - prev.time_s).max(1e-12);
+                        let fraction = ((burn_time_s - prev.time_s) / span).clamp(0.0, 1.0);
+                        let flow_now = prev.mass_flow_kg_s
+                            + (point.mass_flow_kg_s - prev.mass_flow_kg_s) * fraction;
+                        consumed_kg += 0.5
+                            * (prev.mass_flow_kg_s + flow_now)
+                            * (burn_time_s - prev.time_s).max(0.0);
+                        break;
+                    }
+                    consumed_kg += 0.5
+                        * (prev.mass_flow_kg_s + point.mass_flow_kg_s)
+                        * (point.time_s - prev.time_s);
+                    prev = point;
+                }
+                Some((engine.propellant_mass_kg - consumed_kg).max(0.0))
             }
         }
     }
@@ -1721,6 +2064,19 @@ pub fn analyze_altitude(
 // Vehicle mounts
 // ---------------------------------------------------------------------------
 
+/// One gimbal control effector for the flight allocator. A normalized
+/// command in [-1, 1] spans the gimbal range about `gimbal_axis`
+/// (right-hand rule); force/moment scale linearly with the command.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct GimbalEffector {
+    /// Unit gimbal rotation axis in body axes.
+    pub gimbal_axis: [f64; 3],
+    /// Force per unit command (N, body axes).
+    pub force_per_command_n: [f64; 3],
+    /// Moment about the body origin per unit command (N·m, body axes).
+    pub moment_per_command_nm: [f64; 3],
+}
+
 /// One engine installed on a vehicle: compiled data plus its mount station
 /// and thrust axis. Mass aggregates into the vehicle budget at bake time.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1778,6 +2134,53 @@ impl EngineMount {
             self.thrust_axis_body[2] * point.thrust_n,
         ])
     }
+
+    /// Gimbal range of the installed engine (rad, 0 = fixed).
+    pub fn gimbal_range_rad(&self) -> f64 {
+        match &self.engine {
+            CompiledEngine::Liquid(engine) => engine.gimbal_range_rad,
+            CompiledEngine::Solid(engine) => engine.gimbal_range_rad,
+        }
+    }
+
+    /// Gimbal control authority for the flight allocator: moment per gimbal
+    /// radian about the two body axes perpendicular to the thrust axis, at
+    /// an operating point. Moments are about the body origin (the allocator
+    /// translates to the CG); the two effectors share the gimbal range, so
+    /// the allocator must coordinate them. Fixed mounts return zero
+    /// moments (axes still well-defined).
+    pub fn gimbal_authority(
+        &self,
+        throttle: f64,
+        ambient_pa: f64,
+        burn_time_s: f64,
+    ) -> Result<[GimbalEffector; 2], PropulsionError> {
+        use glam::DVec3;
+        self.validate()?;
+        let thrust_n =
+            DVec3::from_array(self.thrust_vector_body_n(throttle, ambient_pa, burn_time_s)?);
+        let axis = DVec3::from_array(self.thrust_axis_body);
+        let reference = if axis.x.abs() < 0.9 {
+            DVec3::X
+        } else {
+            DVec3::Y
+        };
+        let gimbal_a = axis.cross(reference).normalize();
+        let gimbal_b = axis.cross(gimbal_a).normalize();
+        let position = DVec3::from_array(self.position_body_m);
+        let mut effectors = Vec::with_capacity(2);
+        for gimbal_axis in [gimbal_a, gimbal_b] {
+            // dF/ddelta = gimbal_axis x F; moment = r x dF/ddelta.
+            let force_per_rad = gimbal_axis.cross(thrust_n);
+            let moment_per_rad = position.cross(force_per_rad);
+            effectors.push(GimbalEffector {
+                gimbal_axis: gimbal_axis.to_array(),
+                force_per_command_n: (force_per_rad * self.gimbal_range_rad()).to_array(),
+                moment_per_command_nm: (moment_per_rad * self.gimbal_range_rad()).to_array(),
+            });
+        }
+        Ok([effectors[0], effectors[1]])
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1800,6 +2203,7 @@ mod tests {
             contour: NozzleContour::Bell,
             chamber_material: ChamberMaterial::nickel_superalloy(),
             cooling: CoolingMode::Regenerative,
+            mixture_ratio: None,
             characteristic_length_m: None,
             gimbal_range_rad: 0.09,
             min_throttle: None,
@@ -1908,6 +2312,40 @@ mod tests {
     }
 
     #[test]
+    fn aerospike_holds_thrust_across_altitudes() {
+        // Altitude compensation: an eps-35 aerospike keeps sea-level thrust
+        // within 3% of vacuum (a bell loses ~17% on the same geometry) and
+        // never flags separation; base drag is the only altitude term.
+        let spike = LiquidEngineSpec {
+            contour: NozzleContour::Aerospike,
+            ..merlin_like()
+        };
+        let spike = CompiledEngine::Liquid(spike.compile().expect("spike"));
+        let bell = CompiledEngine::Liquid(merlin_like().compile().expect("bell"));
+        let spike_sl = spike
+            .operating_point(1.0, 101_325.0, 0.0)
+            .expect("spike SL");
+        let spike_vac = spike.operating_point(1.0, 0.0, 0.0).expect("spike vac");
+        let bell_sl = bell.operating_point(1.0, 101_325.0, 0.0).expect("bell SL");
+        let bell_vac = bell.operating_point(1.0, 0.0, 0.0).expect("bell vac");
+        assert!(!spike_sl.separation_risk);
+        let spike_drop = (spike_vac.thrust_n - spike_sl.thrust_n) / spike_vac.thrust_n;
+        let bell_drop = (bell_vac.thrust_n - bell_sl.thrust_n) / bell_vac.thrust_n;
+        assert!(
+            spike_drop < 0.03,
+            "aerospike drop {spike_drop:.3} too large"
+        );
+        assert!(bell_drop > 0.05, "bell control must lose thrust at SL");
+        // Base drag accounting: SL loss equals ambient times base area.
+        let expected = 101_325.0
+            * match &spike {
+                CompiledEngine::Liquid(liquid) => liquid.aerospike_base_area_m2,
+                CompiledEngine::Solid(_) => 0.0,
+            };
+        assert!(((spike_vac.thrust_n - spike_sl.thrust_n) - expected).abs() / expected < 1e-9);
+    }
+
+    #[test]
     fn cycle_pressure_caps_and_cooling_gates_fire() {
         // Pressure-fed topology cannot hold Merlin pressures; radiative
         // walls refuse them too. The compiler refuses instead of derating.
@@ -1982,14 +2420,22 @@ mod tests {
             contour: NozzleContour::Conical,
             casing_material: ChamberMaterial::nickel_superalloy(),
             inhibited_ends: true,
+            segment_core_radii_m: None,
             gimbal_range_rad: 0.0,
             ignition_shots: 1,
         };
         let motor = spec.compile().expect("solid compiles");
         assert!(motor.burn_time_s > 1.0 && motor.burn_time_s < 60.0);
-        assert_eq!(motor.burn_curve.len(), 65);
-        // Progressive signature: vacuum thrust never decreases along the web.
+        // Time-stepped trace: resolved (hundreds of stations) with
+        // strictly increasing time.
+        assert!(motor.burn_curve.len() >= 100);
         for window in motor.burn_curve.windows(2) {
+            assert!(window[1].time_s > window[0].time_s);
+        }
+        // Progressive signature: vacuum thrust never decreases along the
+        // web (the terminal point is the zero-thrust burn-through).
+        let live = &motor.burn_curve[..motor.burn_curve.len() - 1];
+        for window in live.windows(2) {
             assert!(
                 window[1].thrust_vac_n >= window[0].thrust_vac_n,
                 "cylindrical-port trace must be progressive"
@@ -2023,6 +2469,71 @@ mod tests {
     }
 
     #[test]
+    fn stepped_ports_shape_boost_sustain() {
+        // Stepped channel: a thin-web segment burns out early (boost) and
+        // the thick-web segment sustains. The test pins the two-phase
+        // signature plus integrated-vs-geometric propellant agreement.
+        let (a, n) = SolidMotorSpec::apcp_ballistics();
+        let spec = SolidMotorSpec {
+            name: "boost-sustain".into(),
+            propellant: Propellant::SolidApcp,
+            outer_radius_m: 0.5,
+            core_radius_m: 0.15,
+            segment_length_m: 1.5,
+            segments: 2,
+            burn_rate_coeff: a,
+            burn_rate_exponent: n,
+            throat_radius_m: 0.12,
+            expansion_ratio: 10.0,
+            nozzle_length_m: 0.9,
+            contour: NozzleContour::Conical,
+            casing_material: ChamberMaterial::nickel_superalloy(),
+            inhibited_ends: true,
+            segment_core_radii_m: Some(vec![0.15, 0.35]),
+            gimbal_range_rad: 0.0,
+            ignition_shots: 1,
+        };
+        let motor = spec.compile().expect("stepped grain compiles");
+        let engine = CompiledEngine::Solid(motor.clone());
+        let peak = motor
+            .burn_curve
+            .iter()
+            .map(|point| point.thrust_vac_n)
+            .fold(0.0_f64, f64::max);
+        let peak_time = motor
+            .burn_curve
+            .iter()
+            .find(|point| point.thrust_vac_n >= peak * (1.0 - 1e-9))
+            .expect("peak station")
+            .time_s;
+        assert!(
+            peak_time < 0.4 * motor.burn_time_s,
+            "boost peak must sit in the first 40% of the burn"
+        );
+        let late = engine
+            .operating_point(1.0, 0.0, 0.85 * motor.burn_time_s)
+            .expect("late sustain")
+            .thrust_n;
+        assert!(
+            late < 0.55 * peak,
+            "sustain phase must drop below 55% of boost peak"
+        );
+        // Integrated propellant agrees with the geometric grain mass.
+        let geometric: f64 = [0.15, 0.35]
+            .iter()
+            .map(|core_m| std::f64::consts::PI * (0.5 * 0.5 - core_m * core_m) * 1.5 * 1770.0)
+            .sum();
+        let drift = (motor.propellant_mass_kg - geometric).abs() / geometric;
+        assert!(drift < 0.02, "propellant drift {drift:e} too large");
+        // Port-count mismatch is refused, not silently broadcast.
+        let bad = SolidMotorSpec {
+            segment_core_radii_m: Some(vec![0.2]),
+            ..spec
+        };
+        assert!(bad.compile().is_err());
+    }
+
+    #[test]
     fn unstable_burn_exponent_is_rejected() {
         let (a, _) = SolidMotorSpec::apcp_ballistics();
         let spec = SolidMotorSpec {
@@ -2040,10 +2551,101 @@ mod tests {
             contour: NozzleContour::Conical,
             casing_material: ChamberMaterial::nickel_superalloy(),
             inhibited_ends: true,
+            segment_core_radii_m: None,
             gimbal_range_rad: 0.0,
             ignition_shots: 1,
         };
         assert!(spec.compile().is_err());
+    }
+
+    #[test]
+    fn gimbal_authority_matches_lever_arm() {
+        // +X thrust at x = -3 m with 1 MN: gimbaling must produce ~3 MN·m
+        // per radian about the transverse axes and ~0 about the thrust
+        // axis; per-command values scale by the installed range.
+        let mount = EngineMount {
+            name: "lever probe".into(),
+            engine: CompiledEngine::Liquid(
+                LiquidEngineSpec {
+                    name: "lever".into(),
+                    gimbal_range_rad: 0.1,
+                    ..merlin_like()
+                }
+                .compile()
+                .expect("compile"),
+            ),
+            position_body_m: [-3.0, 0.0, 0.0],
+            thrust_axis_body: [1.0, 0.0, 0.0],
+        };
+        let authority = mount.gimbal_authority(1.0, 0.0, 0.0).expect("authority");
+        let full = mount
+            .engine
+            .operating_point(1.0, 0.0, 0.0)
+            .expect("point")
+            .thrust_n;
+        for effector in authority {
+            let moment = glam::DVec3::from_array(effector.moment_per_command_nm);
+            // Per radian (divide the range back out), transverse only.
+            let per_rad = moment / 0.1;
+            assert!(per_rad.x.abs() < full * 0.01, "no roll authority expected");
+            assert!(
+                (per_rad.length() - full * 3.0).abs() / (full * 3.0) < 1e-9,
+                "moment must equal thrust times lever arm"
+            );
+        }
+    }
+
+    #[test]
+    fn thermal_power_ordering_and_depletion() {
+        // Energy ordering: kinetic exhaust power stays below released
+        // chamber power (the gap is residual enthalpy + duct losses).
+        // Depletion: remaining grain falls monotonically to exactly zero.
+        let liquid = CompiledEngine::Liquid(merlin_like().compile().expect("compile"));
+        assert!(liquid.exhaust_kinetic_power_w() > 0.0);
+        assert!(liquid.exhaust_kinetic_power_w() < liquid.chamber_power_w());
+        assert_eq!(liquid.propellant_remaining_kg(10.0), None);
+
+        let (a, n) = SolidMotorSpec::apcp_ballistics();
+        let solid = CompiledEngine::Solid(
+            SolidMotorSpec {
+                name: "depletion probe".into(),
+                propellant: Propellant::SolidApcp,
+                outer_radius_m: 0.5,
+                core_radius_m: 0.32,
+                segment_length_m: 1.5,
+                segments: 2,
+                burn_rate_coeff: a,
+                burn_rate_exponent: n,
+                throat_radius_m: 0.12,
+                expansion_ratio: 8.0,
+                nozzle_length_m: 0.8,
+                contour: NozzleContour::Conical,
+                casing_material: ChamberMaterial::nickel_superalloy(),
+                inhibited_ends: true,
+                segment_core_radii_m: None,
+                gimbal_range_rad: 0.0,
+                ignition_shots: 1,
+            }
+            .compile()
+            .expect("solid"),
+        );
+        assert!(solid.exhaust_kinetic_power_w() < solid.chamber_power_w());
+        let burn_time = match &solid {
+            CompiledEngine::Solid(motor) => motor.burn_time_s,
+            _ => 0.0,
+        };
+        let total = solid.propellant_remaining_kg(0.0).expect("grain");
+        assert!(total > 0.0);
+        let mut last = total;
+        for step in 1..=10 {
+            let remaining = solid
+                .propellant_remaining_kg(burn_time * step as f64 / 10.0)
+                .expect("grain");
+            assert!(remaining <= last + total * 1e-9);
+            last = remaining;
+        }
+        assert_eq!(solid.propellant_remaining_kg(burn_time), Some(0.0));
+        assert_eq!(solid.propellant_remaining_kg(burn_time + 100.0), Some(0.0));
     }
 
     #[test]
@@ -2077,6 +2679,7 @@ mod tests {
             contour: NozzleContour::Conical,
             casing_material: ChamberMaterial::nickel_superalloy(),
             inhibited_ends: true,
+            segment_core_radii_m: None,
             gimbal_range_rad: 0.0,
             ignition_shots: 1,
         };
@@ -2088,6 +2691,89 @@ mod tests {
         state = advance_spool(&solid, state, 1.0, 1.0e6).expect("burnout");
         assert!(!state.running && state.throttle_actual == 0.0);
         assert!(advance_spool(&solid, state, 1.0, 0.1).is_ok());
+    }
+
+    #[test]
+    fn mixture_reference_reproduces_design_point() {
+        // The middle table row is the reference point exactly: an explicit
+        // reference ratio must compile to the same engine as `None`.
+        for propellant in [
+            Propellant::LoxRp1,
+            Propellant::LoxMethane,
+            Propellant::LoxHydrogen,
+            Propellant::NtoMmh,
+        ] {
+            let reference = propellant.reference_mixture_ratio().expect("ref ratio");
+            let at_ref = propellant
+                .thermo_at_mixture(Some(reference))
+                .expect("reference ratio compiles");
+            assert_eq!(at_ref, propellant.thermo());
+        }
+        let plain = merlin_like().compile().expect("plain");
+        let explicit = LiquidEngineSpec {
+            mixture_ratio: Some(2.7),
+            ..merlin_like()
+        }
+        .compile()
+        .expect("explicit ref");
+        assert!((explicit.thrust_vac_n - plain.thrust_vac_n).abs() / plain.thrust_vac_n < 1e-12);
+    }
+
+    #[test]
+    fn mixture_shifts_performance_in_documented_direction() {
+        // Fuel-rich hydrolox carries more light H2 in the products: higher
+        // gas constant wins over the cooler chamber, so c* rises. The test
+        // pins the direction and a bounded magnitude, not a point value.
+        let h2 = Propellant::LoxHydrogen;
+        let rich = h2.thermo_at_mixture(Some(4.5)).expect("fuel-rich");
+        let reference = h2.thermo();
+        assert!(characteristic_velocity(&rich) > characteristic_velocity(&reference));
+        let gain = (characteristic_velocity(&rich) - characteristic_velocity(&reference))
+            / characteristic_velocity(&reference);
+        assert!(
+            gain < 0.08,
+            "mixture c* gain {gain:.3} exceeds the table envelope"
+        );
+
+        // Oxidizer-rich methane cools and heavies the flow: Isp must drop
+        // a few percent relative to the reference compile.
+        let mk = |ratio: Option<f64>| {
+            CompiledEngine::Liquid(
+                LiquidEngineSpec {
+                    name: "mixture probe".into(),
+                    propellant: Propellant::LoxMethane,
+                    cycle: EngineCycle::StagedCombustion,
+                    chamber_pressure_pa: 20.0e6,
+                    throat_radius_m: 0.15,
+                    expansion_ratio: 35.0,
+                    nozzle_length_m: 1.8,
+                    contour: NozzleContour::Bell,
+                    chamber_material: ChamberMaterial::nickel_superalloy(),
+                    cooling: CoolingMode::Regenerative,
+                    mixture_ratio: ratio,
+                    characteristic_length_m: None,
+                    gimbal_range_rad: 0.0,
+                    min_throttle: None,
+                    restartable: true,
+                }
+                .compile()
+                .expect("methalox compiles"),
+            )
+        };
+        let ref_isp = mk(None)
+            .operating_point(1.0, 0.0, 0.0)
+            .expect("ref point")
+            .isp_s;
+        let ox_isp = mk(Some(4.2))
+            .operating_point(1.0, 0.0, 0.0)
+            .expect("ox-rich point")
+            .isp_s;
+        assert!(ox_isp < ref_isp, "oxidizer-rich methalox must lose Isp");
+        assert!((ref_isp - ox_isp) / ref_isp < 0.08);
+
+        // Outside the table and on solids: refusal, not extrapolation.
+        assert!(h2.thermo_at_mixture(Some(9.0)).is_err());
+        assert!(Propellant::SolidApcp.thermo_at_mixture(Some(1.0)).is_err());
     }
 
     #[test]

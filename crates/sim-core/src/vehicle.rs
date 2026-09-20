@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AeroConfig, AeroError, AeroGeometry, AeroPanel, CollisionAxis, CollisionError,
-    CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, EngineMount, FlightError,
-    PropulsionError, RigidBodyProperties,
+    CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine,
+    EngineMount, FlightError, PropulsionError, RigidBodyProperties, TankMount,
 };
 
 /// One user-configurable aerodynamic control channel.
@@ -107,6 +107,10 @@ pub struct VehicleDefinition {
     /// masses into `mass_properties` when mounts are present.
     #[serde(default)]
     pub engines: Vec<EngineMount>,
+    /// Installed propellant tanks (dry + full-fill mass aggregate at bake;
+    /// depletion wiring is future work).
+    #[serde(default)]
+    pub tanks: Vec<TankMount>,
 }
 
 /// Physical starter data for the first powered flight profile.
@@ -305,6 +309,7 @@ impl VehicleDefinition {
             control_surfaces,
             collision_geometry: CollisionGeometry::default(),
             engines: Vec::new(),
+            tanks: Vec::new(),
         };
         definition.validate()?;
         Ok(definition)
@@ -343,6 +348,9 @@ impl VehicleDefinition {
         for mount in &self.engines {
             mount.validate().map_err(VehicleError::Propulsion)?;
         }
+        for mount in &self.tanks {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
 
         let mut claimed_panels = std::collections::HashSet::new();
         for surface in &self.control_surfaces {
@@ -365,6 +373,34 @@ impl VehicleDefinition {
         }
         self.engines = engines;
         Ok(self)
+    }
+
+    /// Attach compiled tank mounts (baker path; validates the mounts).
+    pub fn with_tanks(mut self, tanks: Vec<TankMount>) -> Result<Self, VehicleError> {
+        for mount in &tanks {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        self.tanks = tanks;
+        Ok(self)
+    }
+
+    /// Aggregate installed tank masses (dry + full propellant fill) as
+    /// point masses at their stations. Called after
+    /// [`VehicleDefinition::bake_engine_masses`].
+    pub fn bake_tank_masses(&mut self) -> Result<(), VehicleError> {
+        let mut mass_kg = self.mass_properties.mass_kg;
+        let mut inertia = self.mass_properties.inertia_body_kg_m2;
+        for mount in &self.tanks {
+            let tank_mass_kg = mount.tank.dry_mass_kg + mount.tank.full_propellant_kg;
+            let position = DVec3::from_array(mount.position_body_m);
+            mass_kg += tank_mass_kg;
+            inertia += tank_mass_kg
+                * (glam::DMat3::IDENTITY * position.length_squared()
+                    - outer_product(position, position));
+        }
+        self.mass_properties =
+            RigidBodyProperties::new(mass_kg, inertia).map_err(VehicleError::MassProperties)?;
+        Ok(())
     }
 
     /// Aggregate installed engine masses into the mass properties. Each
@@ -419,6 +455,34 @@ impl VehicleDefinition {
             total += self.engine_thrust_body_n(index, throttle, ambient_pa, burn_time_s)?;
         }
         Ok(total)
+    }
+
+    /// Current vehicle mass with solid propellant burned off: baked mass
+    /// minus consumed grain per engine burn clock. `burn_times_s` must
+    /// carry one clock per mount (liquids ignore theirs). Inertia is left
+    /// at the baked value (documented approximation for the flight loop to
+    /// refine once off-axis depletion matters).
+    pub fn depleted_mass_kg(&self, burn_times_s: &[f64]) -> Result<f64, VehicleError> {
+        if burn_times_s.len() != self.engines.len() {
+            return Err(VehicleError::InvalidVehicle(format!(
+                "expected {} burn clocks, got {}",
+                self.engines.len(),
+                burn_times_s.len()
+            )));
+        }
+        let mut mass_kg = self.mass_properties.mass_kg;
+        for (mount, burn_time_s) in self.engines.iter().zip(burn_times_s) {
+            if let Some(remaining) = mount.engine.propellant_remaining_kg(*burn_time_s) {
+                let total = match &mount.engine {
+                    CompiledEngine::Solid(solid) => solid.propellant_mass_kg,
+                    _ => 0.0,
+                };
+                mass_kg -= (total - remaining).max(0.0);
+            }
+        }
+        RigidBodyProperties::new(mass_kg, self.mass_properties.inertia_body_kg_m2)
+            .map(|_| mass_kg)
+            .map_err(VehicleError::MassProperties)
     }
 
     /// Apply normalized control commands in `[-1, 1]` to this vehicle's

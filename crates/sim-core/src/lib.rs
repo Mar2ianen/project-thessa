@@ -11,6 +11,7 @@ mod affine_propagator;
 mod atmosphere;
 mod collision;
 mod ephemeris;
+mod feed;
 mod flight;
 mod frames;
 mod gravity;
@@ -46,6 +47,7 @@ pub use ephemeris::{
     BakedBody, BakedEphemeris, BodyId, BodyState, EphemerisError, EphemerisFrame, EphemerisScratch,
     KeplerOrbit, OsculatingElements,
 };
+pub use feed::{CompiledTank, FEED_MAX_VELOCITY_MPS, FeedLine, TankMount, TankShape, TankSpec};
 pub use flight::{
     FlightError, FlightForces, FlightStepInput, RigidBodyProperties, RigidBodyState,
     constant_spin_orientation, evaluate_flight_forces, evaluate_flight_forces_soa,
@@ -84,9 +86,9 @@ pub use onrails::{
 pub use propulsion::{
     AltitudePoint, BurnPoint, ChamberMaterial, CompiledEngine, CompiledLiquid, CompiledSolid,
     CoolingMode, CycleLimits, EngineCycle, EngineMount, EngineOperatingPoint, EnginePlumeState,
-    EngineSpool, LiquidEngineSpec, NozzleContour, NozzleExitState, Propellant, PropellantThermo,
-    PropulsionError, SEPARATION_PRESSURE_RATIO, STANDARD_GRAVITY_MPS2, SolidMotorSpec,
-    advance_spool, analyze_altitude, characteristic_velocity, mach_from_area_ratio,
+    EngineSpool, GimbalEffector, LiquidEngineSpec, NozzleContour, NozzleExitState, Propellant,
+    PropellantThermo, PropulsionError, SEPARATION_PRESSURE_RATIO, STANDARD_GRAVITY_MPS2,
+    SolidMotorSpec, advance_spool, analyze_altitude, characteristic_velocity, mach_from_area_ratio,
     thrust_coefficient,
 };
 pub use scheduler::{EventScheduler, ScheduledEvent, ScheduledKind};

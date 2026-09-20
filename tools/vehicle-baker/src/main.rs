@@ -3,10 +3,11 @@ use std::{env, error::Error, fs, path::PathBuf};
 use glam::{DMat3, DQuat, DVec3};
 use serde::Deserialize;
 use thessa_sim_core::{
-    AeroGeometry, AeroPanel, ChamberMaterial, CollisionAxis, CollisionGeometry, CollisionMaterial,
-    CollisionPart, CollisionShape, CompiledEngine, ControlSurfaceDefinition, CoolingMode,
-    EngineCycle, EngineMount, LiquidEngineSpec, NozzleContour, Propellant, RigidBodyProperties,
-    SolidMotorSpec, VehicleDefinition,
+    AeroGeometry, AeroPanel, AtmosphereConfig, ChamberMaterial, CollisionAxis, CollisionGeometry,
+    CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine, ControlSurfaceDefinition,
+    CoolingMode, EngineCycle, EngineMount, LiquidEngineSpec, NozzleContour, Propellant,
+    RigidBodyProperties, SolidMotorSpec, TankMount, TankShape, TankSpec, VehicleDefinition,
+    analyze_altitude,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -26,6 +27,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         vehicle.collision_geometry.parts.len()
     );
     println!("mass: {:.3} kg", vehicle.mass_properties.mass_kg);
+    for mount in &vehicle.tanks {
+        println!(
+            "tank: {:.3} m^3, dry {:.1} kg, full fill {:.0} kg",
+            mount.tank.volume_m3, mount.tank.dry_mass_kg, mount.tank.full_propellant_kg,
+        );
+    }
     for mount in &vehicle.engines {
         let (thrust_vac_n, kind) = match &mount.engine {
             CompiledEngine::Liquid(engine) => (engine.thrust_vac_n, "liquid"),
@@ -50,6 +57,70 @@ fn main() -> Result<(), Box<dyn Error>> {
         fs::write(&output, format!("{json}\n"))?;
         println!("wrote: {}", output.display());
     }
+    if options.analyze {
+        run_analyzer(
+            &vehicle,
+            options.throttle,
+            options.burn_time_s,
+            options.analyze_json,
+        )?;
+    }
+    Ok(())
+}
+
+/// Juno Performance Analyzer equivalent for the terminal: thrust/Isp over
+/// altitude per engine (plus the uniform-command vehicle total) at fixed
+/// throttle. `--analyze-json` emits the same rows as JSON for the future
+/// editor UI to consume.
+fn run_analyzer(
+    vehicle: &VehicleDefinition,
+    throttle: f64,
+    burn_time_s: f64,
+    as_json: bool,
+) -> Result<(), Box<dyn Error>> {
+    let atmosphere = AtmosphereConfig::default();
+    let altitudes: Vec<f64> = (0..=10).map(|k| k as f64 * 8000.0).collect();
+    if as_json {
+        let mut rows = Vec::new();
+        for mount in &vehicle.engines {
+            rows.push(serde_json::json!({
+                "engine": mount.name,
+                "points": analyze_altitude(
+                    &mount.engine,
+                    &atmosphere,
+                    &altitudes,
+                    throttle,
+                    burn_time_s,
+                )?,
+            }));
+        }
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
+    }
+    for mount in &vehicle.engines {
+        println!("--- analyzer: {} (throttle {throttle})", mount.name);
+        println!(
+            "{:>10} {:>10} {:>12} {:>10} {:>5}",
+            "alt_m", "p_amb", "thrust_kN", "isp_s", "sep"
+        );
+        let curve = analyze_altitude(
+            &mount.engine,
+            &atmosphere,
+            &altitudes,
+            throttle,
+            burn_time_s,
+        )?;
+        for point in &curve {
+            println!(
+                "{:>10.0} {:>10.0} {:>12.1} {:>10.1} {:>5}",
+                point.altitude_m,
+                point.ambient_pa,
+                point.thrust_n / 1000.0,
+                point.isp_s,
+                if point.separation_risk { "SEP" } else { "" },
+            );
+        }
+    }
     Ok(())
 }
 
@@ -71,6 +142,9 @@ struct VehicleAsset {
     /// without engines" once mounts are present.
     #[serde(default)]
     engines: Vec<EngineAsset>,
+    /// Propellant tanks (dry + full-fill mass aggregates at bake).
+    #[serde(default)]
+    tanks: Vec<TankAsset>,
 }
 
 impl VehicleAsset {
@@ -99,14 +173,42 @@ impl VehicleAsset {
             .into_iter()
             .map(EngineAsset::bake)
             .collect::<Result<Vec<_>, _>>()?;
+        let tank_mounts = self
+            .tanks
+            .into_iter()
+            .map(TankAsset::bake)
+            .collect::<Result<Vec<TankMount>, _>>()?;
+        // Feed cross-check: pressure-fed engines have no pump to hide
+        // behind, so a tank must hold their full feed pressure. Pump-fed
+        // cycles generate the rise themselves (chamber pressure is already
+        // gated by the cycle cap at compile time).
+        let strongest_tank_pa = tank_mounts
+            .iter()
+            .map(|mount| mount.tank.max_pressure_pa)
+            .fold(0.0_f64, f64::max);
+        for mount in &mounts {
+            if let CompiledEngine::Liquid(engine) = &mount.engine
+                && engine.cycle == EngineCycle::PressureFed
+                && strongest_tank_pa < engine.feed_pressure_required_pa
+            {
+                return Err(format!(
+                    "tank pressure {:.2} MPa cannot pressure-feed {} (needs {:.2} MPa)",
+                    strongest_tank_pa / 1.0e6,
+                    mount.name,
+                    engine.feed_pressure_required_pa / 1.0e6
+                )
+                .into());
+            }
+        }
         let mut vehicle = VehicleDefinition::new(self.name, geometry, properties, controls)?
             .with_collision_geometry(collision_geometry)?
-            .with_engines(mounts)?;
+            .with_engines(mounts)?
+            .with_tanks(tank_mounts)?;
         vehicle.bake_engine_masses()?;
+        vehicle.bake_tank_masses()?;
         Ok(vehicle)
     }
 }
-
 #[derive(Debug, Deserialize)]
 struct PanelAsset {
     position_body_m: [f64; 3],
@@ -242,6 +344,8 @@ struct EngineAsset {
     #[serde(default)]
     cooling: Option<CoolingMode>,
     #[serde(default)]
+    mixture_ratio: Option<f64>,
+    #[serde(default)]
     gimbal_range_rad: f64,
     #[serde(default)]
     min_throttle: Option<f64>,
@@ -256,6 +360,8 @@ struct EngineAsset {
     segment_length_m: Option<f64>,
     #[serde(default)]
     segments: Option<u32>,
+    #[serde(default)]
+    segment_core_radii_m: Option<Vec<f64>>,
     #[serde(default)]
     burn_rate_coeff: Option<f64>,
     #[serde(default)]
@@ -324,6 +430,7 @@ impl EngineAsset {
             contour: self.contour.unwrap_or(NozzleContour::Bell),
             chamber_material: self.material()?,
             cooling: self.cooling.unwrap_or(CoolingMode::Regenerative),
+            mixture_ratio: self.mixture_ratio,
             characteristic_length_m: None,
             gimbal_range_rad: self.gimbal_range_rad,
             min_throttle: self.min_throttle,
@@ -360,6 +467,7 @@ impl EngineAsset {
             contour: self.contour.unwrap_or(NozzleContour::Conical),
             casing_material: self.material()?,
             inhibited_ends: true,
+            segment_core_radii_m: self.segment_core_radii_m.clone(),
             gimbal_range_rad: self.gimbal_range_rad,
             ignition_shots: self.ignition_shots,
         })
@@ -387,6 +495,96 @@ fn default_true() -> bool {
 
 fn default_one_shot() -> u32 {
     1
+}
+
+/// One propellant tank from the source vehicle asset.
+///
+/// Example TOML:
+///
+/// ```text
+/// [[tanks]]
+/// name = "methane-tank"
+/// shape = "cylinder"
+/// diameter_m = 1.3
+/// length_m = 3.0
+/// pressure_mpa = 0.5
+/// material = "regen-alloy"
+/// position_body_m = [1.0, 0.0, 0.0]
+/// propellant = "lox-methane"
+/// ```
+#[derive(Debug, Deserialize)]
+struct TankAsset {
+    name: String,
+    shape: TankShapeAsset,
+    diameter_m: f64,
+    #[serde(default)]
+    length_m: Option<f64>,
+    pressure_mpa: f64,
+    material: MaterialAsset,
+    #[serde(default = "mount_position_default")]
+    position_body_m: [f64; 3],
+    /// Bulk density source: named propellant or an explicit value (one is
+    /// required so tank fill mass stays physical).
+    #[serde(default)]
+    propellant: Option<Propellant>,
+    #[serde(default)]
+    bulk_density_kg_m3: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum TankShapeAsset {
+    Sphere,
+    Cylinder,
+}
+
+impl TankAsset {
+    fn bake(self) -> Result<TankMount, Box<dyn Error>> {
+        if self.name.trim().is_empty() {
+            return Err("tank needs a name".into());
+        }
+        let shape = match self.shape {
+            TankShapeAsset::Sphere => TankShape::Sphere {
+                diameter_m: self.diameter_m,
+            },
+            TankShapeAsset::Cylinder => TankShape::Cylinder {
+                diameter_m: self.diameter_m,
+                length_m: self.length_m.ok_or("cylindrical tanks need length_m")?,
+            },
+        };
+        if !self.pressure_mpa.is_finite() || self.pressure_mpa <= 0.0 {
+            return Err("tank pressure_mpa must be finite and > 0".into());
+        }
+        let density = match (self.propellant, self.bulk_density_kg_m3) {
+            (_, Some(density)) if density.is_finite() && density > 0.0 => density,
+            (Some(propellant), None) => propellant.thermo().bulk_density_kg_m3,
+            _ => {
+                return Err(
+                    format!("tank {} needs propellant or bulk_density_kg_m3", self.name).into(),
+                );
+            }
+        };
+        let spec = TankSpec {
+            shape,
+            pressure_pa: self.pressure_mpa * 1.0e6,
+            material: match &self.material {
+                MaterialAsset::Custom(material) => *material,
+                MaterialAsset::Preset(name) => match name.as_str() {
+                    "regen-alloy" => ChamberMaterial::regen_alloy(),
+                    "nickel-superalloy" => ChamberMaterial::nickel_superalloy(),
+                    "radiative-niobium" => ChamberMaterial::radiative_niobium(),
+                    "ablative" => ChamberMaterial::ablative(),
+                    unknown => {
+                        return Err(format!("unknown material preset {unknown}").into());
+                    }
+                },
+            },
+        };
+        Ok(TankMount {
+            tank: spec.compile(density)?,
+            position_body_m: self.position_body_m,
+        })
+    }
 }
 
 /// One body-local collision primitive from the source vehicle asset.
@@ -512,6 +710,10 @@ struct Options {
     input: PathBuf,
     output: Option<PathBuf>,
     help: bool,
+    analyze: bool,
+    throttle: f64,
+    burn_time_s: f64,
+    analyze_json: bool,
 }
 
 impl Options {
@@ -519,12 +721,31 @@ impl Options {
         let mut input = PathBuf::from("data/vehicles/example_aircraft.toml");
         let mut output = None;
         let mut help = false;
+        let mut analyze = false;
+        let mut throttle = 1.0;
+        let mut burn_time_s = 0.0;
+        let mut analyze_json = false;
         let mut arguments = arguments.peekable();
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
                 "--input" => input = PathBuf::from(required_value(&mut arguments, "--input")?),
                 "--output" => {
                     output = Some(PathBuf::from(required_value(&mut arguments, "--output")?))
+                }
+                "--analyze" => analyze = true,
+                "--analyze-json" => {
+                    analyze = true;
+                    analyze_json = true;
+                }
+                "--throttle" => {
+                    throttle = required_value(&mut arguments, "--throttle")?
+                        .parse()
+                        .map_err(|_| "--throttle needs a number in [0, 1]")?;
+                }
+                "--burn-time" => {
+                    burn_time_s = required_value(&mut arguments, "--burn-time")?
+                        .parse()
+                        .map_err(|_| "--burn-time needs seconds >= 0")?;
                 }
                 "--help" | "-h" => help = true,
                 unknown => return Err(format!("unknown argument {unknown}; use --help").into()),
@@ -534,6 +755,10 @@ impl Options {
             input,
             output,
             help,
+            analyze,
+            throttle,
+            burn_time_s,
+            analyze_json,
         })
     }
 }
@@ -549,7 +774,7 @@ fn required_value(
 
 fn print_help() {
     println!(
-        "Usage: thessa-vehicle-baker [--input data/vehicles/example_aircraft.toml] [--output data/vehicles/example_aircraft.baked.json]"
+        "Usage: thessa-vehicle-baker [--input data/vehicles/example_aircraft.toml] [--output data/vehicles/example_aircraft.baked.json] [--analyze [--throttle 1.0] [--burn-time 0.0] [--analyze-json]]"
     );
 }
 
@@ -607,16 +832,22 @@ friction = 0.8
                 .expect("rocket TOML should parse");
         let vehicle = asset.bake().expect("rocket asset should bake");
         assert_eq!(vehicle.engines.len(), 2);
-        // Engine masses aggregate on top of the 2000 kg structure.
+        assert_eq!(vehicle.tanks.len(), 2);
+        // Engine + tank masses aggregate on top of the 2000 kg structure.
         assert!(vehicle.mass_properties.mass_kg > 2000.0);
         let engines_mass: f64 = vehicle
             .engines
             .iter()
             .map(|mount| mount.engine.bake_mass_kg())
             .sum();
+        let tanks_mass: f64 = vehicle
+            .tanks
+            .iter()
+            .map(|mount| mount.tank.dry_mass_kg + mount.tank.full_propellant_kg)
+            .sum();
         assert!(
-            (vehicle.mass_properties.mass_kg - 2000.0 - engines_mass).abs() < 1e-6,
-            "baked mass must equal structure plus engines"
+            (vehicle.mass_properties.mass_kg - 2000.0 - engines_mass - tanks_mass).abs() < 1e-6,
+            "baked mass must equal structure plus engines plus tanks"
         );
         // Uniform full-throttle command produces +X thrust at sea level.
         let thrust = vehicle
@@ -652,5 +883,49 @@ friction = 0.8
         let mut vehicle = asset.bake().expect("rocket asset should bake");
         vehicle.engines[0].thrust_axis_body = [2.0, 0.0, 0.0];
         assert!(vehicle.validate().is_err());
+    }
+
+    #[test]
+    fn pressure_fed_demands_tank_pressure() {
+        // A pressure-fed engine with only a 0.5 MPa tank must refuse: no
+        // pump hides the shortfall. Pump-fed engines pass the same tanks.
+        let doc = r#"
+name = "fed-test"
+mass_kg = 500.0
+inertia_body_kg_m2 = [[100.0, 0.0, 0.0], [0.0, 100.0, 0.0], [0.0, 0.0, 100.0]]
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 1.0
+chord_m = 1.0
+[[engines]]
+name = "fed"
+kind = "liquid"
+propellant = "lox-methane"
+cycle = "pressure-fed"
+chamber_pressure_mpa = 2.0
+throat_radius_m = 0.05
+expansion_ratio = 10.0
+nozzle_length_m = 0.5
+contour = "conical"
+material = "regen-alloy"
+cooling = "regenerative"
+[[tanks]]
+name = "weak-tank"
+shape = "sphere"
+diameter_m = 1.0
+pressure_mpa = 0.5
+material = "regen-alloy"
+propellant = "lox-methane"
+"#;
+        let asset: VehicleAsset = toml::from_str(doc).expect("TOML parses");
+        assert!(
+            asset.bake().is_err(),
+            "0.5 MPa tank cannot pressure-feed a 2.4 MPa circuit"
+        );
+        let strong = doc.replace("pressure_mpa = 0.5", "pressure_mpa = 3.0");
+        let asset: VehicleAsset = toml::from_str(&strong).expect("TOML parses");
+        assert!(asset.bake().is_ok());
     }
 }

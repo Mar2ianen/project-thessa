@@ -81,3 +81,24 @@ core_radius_m = 0.2
 segment_length_m = 1.0
 segments = 2
 ignition_shots = 1
+
+# Pump-fed tanks ride at low ullage pressure; the turbopumps (not the
+# tank walls) generate the 14.4 MPa feed the gas-generator circuit needs.
+[[tanks]]
+name = "methane-tank"
+shape = "cylinder"
+diameter_m = 1.3
+length_m = 3.0
+pressure_mpa = 0.5
+material = "regen-alloy"
+position_body_m = [1.0, 0.0, 0.0]
+propellant = "lox-methane"
+
+[[tanks]]
+name = "lox-tank"
+shape = "sphere"
+diameter_m = 1.4
+pressure_mpa = 0.5
+material = "regen-alloy"
+position_body_m = [-0.5, 0.0, 0.0]
+propellant = "lox-methane"

@@ -1,11 +1,11 @@
 # Procedural propulsion systems
 
-Status: design baseline with a shipped v1 backend (`thessa-sim-core::propulsion`):
-liquid chemical rockets + solid motors, isentropic nozzle core, cycle/feed
-bounds, geometry-derived mass, spool runtime, altitude analyzer, vehicle
-mounts, and the plume handoff. Mixture-ratio sensitivity, aerospikes,
-tank/pump parts, thermal-graph hookup, per-engine flight-loop allocation,
-and the editor UI are still TBD (see section 18).
+Status: design baseline with a shipped backend (`thessa-sim-core::propulsion`
++ `feed`): liquid chemical rockets + solid motors, isentropic nozzle core
+with mixture sensitivity, cycle/feed bounds, geometry-derived mass, spool
+runtime, altitude analyzer, vehicle mounts, tanks and feed lines, and the
+plume handoff. Star/finocyl grain burnback, tank depletion wiring, the
+flight-loop allocator, and the editor UI are still TBD (see section 18).
 
 ## 1. Design goal
 
@@ -582,6 +582,32 @@ Shipped in `crates/sim-core/src/propulsion.rs` (MIT engine crate, no Bevy/Tokio/
   `plume-core` `PlumeSource` through the single `engine_plume_source`
   choke point, with no new cross-crate dependency.
 
+### 18.2 Tails closed after v1
+
+- Mixture-ratio sensitivity: per-pair (ratio, chamber temp, gamma, gas
+  constant) tables with piecewise-linear interpolation, hard refusal
+  outside the modeled range, reference point reproduced exactly. Tables
+  are representative CEA trends; refine with project CEA runs.
+- Aerospike contour (linear): near-axial divergence, altitude
+  compensation down to base drag on the plug base, separation flag
+  never trips by design. Sea-level thrust holds within 3% of vacuum.
+- Shaped solid thrust: per-segment port radii (stepped channel) solved
+  on a coupled time-stepped trace; boost-sustain signature and
+  integrated-vs-geometric propellant agreement pinned by test.
+- Thermal interface data: chamber stagnation power, exhaust kinetic
+  power (ordering pinned), nozzle wall area; the graph hookup waits for
+  a runtime thermal graph to exist.
+- Solid depletion queries: remaining grain vs burn clock, vehicle mass
+  with grain burned off (inertia held, documented).
+- Tanks and feed lines: thin-wall vessels with weld/fixture allowance,
+  Darcy-Weisbach + minor-loss drops with a velocity gate (refusal, not
+  derating), baker `[[tanks]]` with mass aggregation and a
+  pressure-fed feed-pressure cross-check.
+- Gimbal authority for the allocator: per-command force/moment pairs
+  about the transverse axes from lever arms (thrust-times-arm pinned).
+- Editor-facing analyzer CLI: `vehicle-baker --analyze` prints the
+  Performance Analyzer table (JSON under `--analyze-json`).
+
 ### 18.2 Validation
 
 - Merlin-1D-class golden test: 845 kN / 914 kN and 282 s / 311 s within
@@ -592,10 +618,11 @@ Shipped in `crates/sim-core/src/propulsion.rs` (MIT engine crate, no Bevy/Tokio/
 - Bench `crates/sim-core/benches/propulsion.rs`: hangar compile
   ~20 us (liquid) / ~12 us (solid), analyzer and solid-replay sweeps.
 
-### 18.3 Deferred to later iterations
+### 18.3 Still deferred
 
-Mixture-ratio sensitivity, aerospike/plug nozzles, star/finocyl grains,
-tank/pump/valve vehicle parts, thermal-graph coupling (chemical power
-and wall state are exposed but unconsumed), per-engine allocation in the
-flight loop (uniform command only), solid mass depletion in flight, and
-the editor UI itself.
+Star/finocyl grain geometry (needs numerical perimeter burnback, not a
+tweak of the port solver), tank depletion wiring into the flight loop
+(the queries exist; the loop still flies baked mass), per-engine
+allocation in the flight loop (authority pairs exist; the allocator
+still sees one lever), and the editor UI itself (the CLI/JSON analyzer
+is its backend contract).

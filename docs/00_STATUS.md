@@ -45,7 +45,7 @@ do not update in place).
 | `14_VISUAL_ATMOSPHERE.md` | 🟡 partial | raster/LUT + shell clouds + gas-giant bands + aurora + field-first plume | volumetrics, weather coupling, full Solari |
 | `19_ALERTING_AND_FLIGHT_PHASES.md` | 🔵 design target | background only (regime/mode inputs) | `FlightPhase`, alerts, arbitration, Slices A–D |
 | `21_TERRAIN_STREAMING_THROUGHPUT.md` | 🔵 baseline | invariants normative | scheduler, geomorph, UMA fast path |
-| `22_RCBT_GPU_TERRAIN.md` | 🔵 baseline | §§1–18 normative | GPU bisector pool, incremental lists, native Vulkan, compressed pages |
+| `22_RCBT_GPU_TERRAIN.md` | 🟡 baseline | §§1–18 normative, stable height slots, dirty-ordinal geometry dispatch | GPU bisector pool, native Vulkan, compressed pages |
 | `37_CBT_INTEGRATION_STATUS_2026_09_14.md` | ✅ opt-in | fallback + indexed raster + material pages | visual acceptance, numeric comparison, persistent topology |
 | `38_CBT_RENDER_AUDIT_2026_09_15.md` | ✅ audit | defects fixed + follow-ups | bisector pool, shadow parity, FFT ocean, virtual texture |
 | `38_ENGINE_PLUME_RENDERING.md` | 🔵 design target | — (replaces `beauty.rs` smoke test) | residual bricks, RT lighting, Ultra |

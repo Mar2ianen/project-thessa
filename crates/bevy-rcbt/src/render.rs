@@ -150,6 +150,42 @@ struct GeometryBindKey {
     vertex: BufferId,
     params: BufferId,
     frames: BufferId,
+    dirty: BufferId,
+}
+
+/// Which leaf ordinals need (re)generation this prepare.
+///
+/// Pure function of the new metadata, the last published metadata, and the
+/// slot changes: an ordinal is dirty when its metadata word differs (covers
+/// reorder, eviction, and any residency change) or when its node just
+/// claimed/updated a slot (covers content changes whose packed header words
+/// happen to match, e.g. same base/scale/grid with different residuals).
+/// `node_to_ordinal` maps resident node ids to their current ordinals.
+fn compute_dirty_ordinals(
+    new_metadata: &[[u32; 4]],
+    prev_metadata: &[[u32; 4]],
+    slot_changes: &[SlotChange],
+    node_to_ordinal: &std::collections::BTreeMap<u64, u32>,
+    force_full: bool,
+) -> Vec<u32> {
+    if force_full || prev_metadata.len() != new_metadata.len() {
+        return (0..new_metadata.len() as u32).collect();
+    }
+    let mut dirty: Vec<u32> = new_metadata
+        .iter()
+        .enumerate()
+        .filter(|(ordinal, words)| prev_metadata.get(*ordinal) != Some(*words))
+        .map(|(ordinal, _)| ordinal as u32)
+        .collect();
+    for change in slot_changes {
+        if let Some(ordinal) = node_to_ordinal.get(&change.node_id)
+            && !dirty.contains(ordinal)
+        {
+            dirty.push(*ordinal);
+        }
+    }
+    dirty.sort_unstable();
+    dirty
 }
 
 /// Identity key for the cached classifier-compute bind group. The view
@@ -232,6 +268,15 @@ pub struct CbtGpuBuffers {
     /// Packed words reserved per height slot. `metadata.w` stays a word
     /// offset (`slot * stride`), so the shader contract is unchanged.
     height_stride_words: usize,
+    /// Leaf ordinals the geometry pass must (re)generate, in dispatch order.
+    /// Rebuilt every prepare: full cover after topology/surface changes,
+    /// otherwise exactly the ordinals whose metadata or slot changed.
+    dirty_ordinals: RawBufferVec<u32>,
+    /// Last published per-ordinal metadata, for dirty detection. Kept at
+    /// `records.len()`; empty until the first publish.
+    last_published_metadata: Vec<[u32; 4]>,
+    /// Cached count of pending dirty ordinals, consumed by the dispatch.
+    dirty_count: u32,
 }
 
 impl FromWorld for CbtGpuBuffers {
@@ -290,6 +335,13 @@ impl FromWorld for CbtGpuBuffers {
             height_slots: SlotCache::new(HEIGHT_SLOT_INITIAL_CAPACITY)
                 .expect("height slot capacity is non-zero"),
             height_stride_words: HEIGHT_SLOT_MIN_STRIDE_WORDS,
+            dirty_ordinals: {
+                let mut buffer = RawBufferVec::new(BufferUsages::STORAGE);
+                buffer.set_label(Some("thessa-cbt-dirty-ordinals"));
+                buffer
+            },
+            last_published_metadata: Vec::new(),
+            dirty_count: 0,
         }
     }
 }
@@ -332,7 +384,7 @@ impl CbtGpuBuffers {
         self.active_triangles.buffer()
     }
 
-    /// Uniform-compatible `[leaf_count, vertices_per_patch, radius_bits, 0]`.
+    /// Uniform-compatible `[leaf_count, vertices_per_patch, radius_bits, dirty_count]`.
     pub fn params_buffer(&self) -> Option<&Buffer> {
         self.params.buffer()
     }
@@ -437,7 +489,7 @@ struct Params {
     leaf_count: u32,
     vertices_per_patch: u32,
     radius_bits: u32,
-    _padding: u32,
+    dirty_count: u32,
 };
 
 struct DrawCommand {
@@ -454,31 +506,36 @@ struct DrawCommand {
 @group(0) @binding(4) var<storage, read_write> vertices: array<vec4<f32>>;
 @group(0) @binding(5) var<uniform> params: Params;
 @group(0) @binding(6) var<storage, read> tile_frames: array<CbtTileFrame>;
+@group(0) @binding(7) var<storage, read> dirty_ordinals: array<u32>;
 
 @compute @workgroup_size(64)
 fn build_geometry(@builtin(global_invocation_id) gid: vec3<u32>) {
     let index = gid.x;
-    let total = params.leaf_count * params.vertices_per_patch;
+    let total = params.dirty_count * params.vertices_per_patch;
     if (index >= total) {
         return;
     }
-    let ordinal = index / params.vertices_per_patch;
+    // Dirty-stream index -> leaf ordinal -> ordinal-indexed vertex slot.
+    // The vertex/patch/metadata buffers stay ordinal-indexed; only the
+    // dispatch iterates the dirty prefix.
+    let ordinal = dirty_ordinals[index / params.vertices_per_patch];
     let local = index % params.vertices_per_patch;
+    let vbase = ordinal * params.vertices_per_patch + local;
     let page = page_metadata[ordinal];
     if (local == 0u) {
         patches[ordinal] = leaves[ordinal];
     }
     if (page.z == 0u) {
-        vertices[index * 2u] = vec4(0.0);
-        vertices[index * 2u + 1u] = vec4(0.0);
+        vertices[vbase * 2u] = vec4(0.0);
+        vertices[vbase * 2u + 1u] = vec4(0.0);
         return;
     }
     let gx = local % 33u;
     let gy = local / 33u;
     let uv = vec2(f32(gx) / 32.0, f32(gy) / 32.0);
     let sample = cbt_surface_sample(tile_frames[ordinal].geometry, page, uv);
-    vertices[index * 2u] = vec4(sample.local_position, 1.0);
-    vertices[index * 2u + 1u] = vec4(sample.normal, sample.height);
+    vertices[vbase * 2u] = vec4(sample.local_position, 1.0);
+    vertices[vbase * 2u + 1u] = vec4(sample.normal, sample.height);
 }
 "#
 );
@@ -1077,6 +1134,7 @@ fn init_cbt_gpu_pipeline(mut commands: bevy::prelude::Commands, device: Res<Rend
             storage_binding(3, true),
             storage_binding(4, false),
             storage_binding(6, true),
+            storage_binding(7, true),
             BindGroupLayoutEntry {
                 binding: 5,
                 visibility: ShaderStages::COMPUTE,
@@ -1532,7 +1590,8 @@ fn height_leaf_renderable(depth: u32) -> bool {
 /// re-upload happens only when the slot table grows or the stride changes.
 /// `leaf_records` is rewritten only when the topology itself changed.
 ///
-/// Returns the per-ordinal metadata referencing stable word offsets.
+/// Returns the per-ordinal metadata referencing stable word offsets, plus
+/// the dirty ordinal list for the geometry dispatch.
 fn sync_height_slots(
     gpu: &mut CbtGpuBuffers,
     device: &RenderDevice,
@@ -1540,7 +1599,8 @@ fn sync_height_slots(
     records: &[CbtLeafRecord],
     pages: &CbtRenderPages,
     topology_changed: bool,
-) -> Vec<[u32; 4]> {
+    surface_changed: bool,
+) -> (Vec<[u32; 4]>, Vec<u32>) {
     // Desired resident pages in topology order with per-page versions.
     let mut desired: Vec<(u64, u64)> = Vec::with_capacity(records.len());
     let mut stride = HEIGHT_SLOT_MIN_STRIDE_WORDS;
@@ -1654,7 +1714,8 @@ fn sync_height_slots(
     // reference the stable slot offsets. Missing pages stay `[0; 4]` so the
     // shader culls those leaves exactly as before.
     let mut metadata = Vec::with_capacity(records.len());
-    for record in records {
+    let mut node_to_ordinal = std::collections::BTreeMap::new();
+    for (ordinal, record) in records.iter().enumerate() {
         if !height_leaf_renderable(record[2]) {
             metadata.push([0; 4]);
             continue;
@@ -1664,6 +1725,7 @@ fn sync_height_slots(
             metadata.push([0; 4]);
             continue;
         };
+        node_to_ordinal.insert(node_id, ordinal as u32);
         metadata.push([
             page.base_height_m().to_bits(),
             page.residual_scale_m().to_bits(),
@@ -1671,7 +1733,30 @@ fn sync_height_slots(
             (slot as usize * gpu.height_stride_words) as u32,
         ]);
     }
-    metadata
+
+    // Dirty ordinals drive the geometry dispatch: a topology or surface
+    // change moves every ordinal (full cover); otherwise exactly the
+    // ordinals whose metadata or slot changed. One arriving page therefore
+    // dispatches one patch, not the whole cover.
+    let force_full = topology_changed || surface_changed || full_upload;
+    let dirty = compute_dirty_ordinals(
+        &metadata,
+        &gpu.last_published_metadata,
+        &changes,
+        &node_to_ordinal,
+        force_full,
+    );
+    gpu.last_published_metadata = metadata.clone();
+    gpu.dirty_ordinals.clear();
+    if dirty.is_empty() {
+        // Keep the binding valid; the dispatch skips on `dirty_count == 0`.
+        gpu.dirty_ordinals.extend([0]);
+    } else {
+        gpu.dirty_ordinals.extend(dirty.iter().copied());
+    }
+    gpu.dirty_ordinals.write_buffer(device, queue);
+    gpu.dirty_count = dirty.len() as u32;
+    (metadata, dirty)
 }
 
 /// Pack one resident page into its slot range of the residuals mirror.
@@ -1854,10 +1939,19 @@ fn prepare_cbt_gpu_buffers(
 
     let records = topology.records();
     let topology_changed = gpu.topology_generation != topology.generation();
+    let surface_changed = gpu.surface_generation != surface.generation();
     // Stable slot upload: one arriving page rewrites a single slot range and
     // the small metadata; a topology reorder with unchanged pages uploads no
-    // height data at all.
-    let metadata = sync_height_slots(&mut gpu, &device, &queue, records, &pages, topology_changed);
+    // height data at all. The dirty ordinal list sizes the geometry dispatch.
+    let (metadata, _) = sync_height_slots(
+        &mut gpu,
+        &device,
+        &queue,
+        records,
+        &pages,
+        topology_changed,
+        surface_changed,
+    );
 
     // Compute owns these outputs. Reserve GPU storage without constructing
     // and uploading a CPU mirror of zeros on each streamed page batch.
@@ -1882,11 +1976,12 @@ fn prepare_cbt_gpu_buffers(
     }
 
     gpu.params.clear();
+    let dirty_count = gpu.dirty_count;
     gpu.params.push([
         records.len() as u32,
         GPU_VERTEX_COUNT_PER_PATCH as u32,
         surface.radius_m().to_bits(),
-        0,
+        dirty_count,
     ]);
     gpu.params.write_buffer(&device, &queue);
 
@@ -1912,6 +2007,7 @@ fn dispatch_cbt_geometry(
         return;
     }
     if gpu.leaf_count == 0
+        || gpu.dirty_count == 0
         || (gpu.generated_topology_generation == gpu.topology_generation
             && gpu.generated_pages_generation == gpu.pages_generation
             && gpu.generated_surface_generation == gpu.surface_generation)
@@ -1926,6 +2022,7 @@ fn dispatch_cbt_geometry(
         Some(vertex_buffer),
         Some(params_buffer),
         Some(frames_buffer),
+        Some(dirty_buffer),
     ) = (
         gpu.leaf_records.buffer(),
         gpu.patch_records.buffer(),
@@ -1934,6 +2031,7 @@ fn dispatch_cbt_geometry(
         gpu.vertices.buffer(),
         gpu.params.buffer(),
         gpu.tile_frames.buffer(),
+        gpu.dirty_ordinals.buffer(),
     )
     else {
         return;
@@ -1946,6 +2044,7 @@ fn dispatch_cbt_geometry(
         vertex: vertex_buffer.id(),
         params: params_buffer.id(),
         frames: frames_buffer.id(),
+        dirty: dirty_buffer.id(),
     };
     // Rebuild only when a buffer object was reallocated (new BufferId).
     // Contents changes via queue writes keep the same binding.
@@ -1982,6 +2081,10 @@ fn dispatch_cbt_geometry(
                     binding: 6,
                     resource: BindingResource::Buffer(frames_buffer.as_entire_buffer_binding()),
                 },
+                BindGroupEntry {
+                    binding: 7,
+                    resource: BindingResource::Buffer(dirty_buffer.as_entire_buffer_binding()),
+                },
             ],
         ));
         gpu.geometry_bind_key = Some(key);
@@ -2002,8 +2105,12 @@ fn dispatch_cbt_geometry(
             .map(|diagnostics| diagnostics.pass_span(&mut pass, "terrain_geometry"));
         pass.set_pipeline(&pipeline.pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
+        // Dirty-only dispatch: one arriving page regenerates one patch
+        // (1089 verts), not the whole cover. The shader guards on
+        // `dirty_count` (workgroups round up past it) and addresses the
+        // ordinal-indexed vertex buffer through the dirty list.
         let total = gpu
-            .leaf_count
+            .dirty_count
             .saturating_mul(GPU_VERTEX_COUNT_PER_PATCH as u32);
         pass.dispatch_workgroups(total.div_ceil(64), 1, 1);
         if let Some(pass_span) = pass_span {
@@ -2692,6 +2799,45 @@ mod tests {
         assert_eq!(words.len(), 2);
         assert_eq!(words[0] as u16, page.residuals()[0] as u16);
         assert_eq!((words[1] >> 16) as u16, page.residuals()[3] as u16);
+    }
+
+    fn slot_change_for(slot: u32, node_id: u64) -> SlotChange {
+        SlotChange {
+            slot,
+            node_id,
+            generation: 1,
+        }
+    }
+
+    #[test]
+    fn dirty_ordinals_cover_reorder_eviction_and_same_header_content_change() {
+        // Reorder with identical words: nothing is dirty (slots are stable,
+        // the reorder needs no height upload and no new vertices).
+        let words = [[1, 2, 33, 0], [3, 4, 33, 545]];
+        let nodes: std::collections::BTreeMap<u64, u32> = [(11, 0), (22, 1)].into_iter().collect();
+        assert!(compute_dirty_ordinals(&words, &words, &[], &nodes, false).is_empty());
+        // Ordinal content change (eviction, new page, moved leaf).
+        let changed = [[1, 2, 33, 0], [0, 0, 0, 0]];
+        assert_eq!(
+            compute_dirty_ordinals(&changed, &words, &[], &nodes, false),
+            vec![1]
+        );
+        // Same packed header words but fresh slot content: the SlotChange
+        // side-input still marks the ordinal dirty.
+        assert_eq!(
+            compute_dirty_ordinals(&words, &words, &[slot_change_for(0, 11)], &nodes, false),
+            vec![0]
+        );
+        // Topology or surface change regenerates the full cover.
+        assert_eq!(
+            compute_dirty_ordinals(&words, &words, &[], &nodes, true),
+            vec![0, 1]
+        );
+        // First publish (no previous metadata) is a full cover.
+        assert_eq!(
+            compute_dirty_ordinals(&words, &[], &[], &nodes, false),
+            vec![0, 1]
+        );
     }
 }
 

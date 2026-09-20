@@ -236,10 +236,13 @@ fn check_geometry(gpu: &Gpu, radius: f32) {
             count as u32,
             GPU_VERTEX_COUNT_PER_PATCH as u32,
             radius.to_bits(),
-            0,
+            count as u32,
         ],
         true,
     );
+    // Full-cover dispatch: every ordinal is dirty.
+    let dirty: Vec<u32> = (0..count as u32).collect();
+    let dirty_ordinals = gpu.buffer(&dirty, false);
     gpu.dispatch(
         CBT_GEOMETRY_WGSL,
         &[(
@@ -247,7 +250,14 @@ fn check_geometry(gpu: &Gpu, radius: f32) {
             (count as u32 * GPU_VERTEX_COUNT_PER_PATCH as u32).div_ceil(64),
         )],
         &[
-            &leaves, &patches, &metadata, &residuals, &vertices, &params, &frames,
+            &leaves,
+            &patches,
+            &metadata,
+            &residuals,
+            &vertices,
+            &params,
+            &frames,
+            &dirty_ordinals,
         ],
         &[5],
         &[1, 4],
@@ -305,6 +315,151 @@ fn check_geometry(gpu: &Gpu, radius: f32) {
                     );
                 }
             }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+fn gpu_geometry_dirty_dispatch_regenerates_only_dirty_leaves() {
+    // One arriving page must regenerate one patch: full-cover dispatch,
+    // then a single-ordinal dispatch over the same vertex buffer. Untouched
+    // leaves stay bit-identical; the dirty leaf moves with its new page.
+    let gpu = Gpu::new();
+    let radius = 6_371_000_f32;
+    let count = 3_usize;
+    let records: Vec<u32> = (0..count as u32)
+        .flat_map(|ordinal| [8 + ordinal, 0, 3, ordinal])
+        .collect();
+    let leaves = gpu.buffer(&records, false);
+    let patches = gpu.buffer(&vec![0; count * 4], false);
+    let anchors: Vec<_> = (0..3)
+        .map(|face| {
+            crate::precision::TileAnchor::new(
+                crate::precision::TileKey::new(face, 0, 0, 0).unwrap(),
+                f64::from(radius),
+            )
+            .unwrap()
+        })
+        .collect();
+    let frame_words: Vec<_> = anchors
+        .iter()
+        .flat_map(|anchor| {
+            let frame = anchor.to_gpu([0.0; 3]).unwrap();
+            [
+                frame.anchor_hi_m,
+                frame.anchor_lo_m,
+                frame.raw_center,
+                frame.raw_axis_u,
+                frame.raw_axis_v,
+                frame.normal,
+                frame.radius_half_extent_len,
+            ]
+            .into_iter()
+            .flatten()
+            .map(f32::to_bits)
+        })
+        .collect();
+    let frames = gpu.buffer(&frame_words, false);
+    // Leaf 1 starts flat at 100 m; the update lifts it to 110 m.
+    let flat = HeightPage::bake(&[100.0; 4], 2, 0.001).unwrap();
+    let lifted = HeightPage::bake(&[110.0; 4], 2, 0.001).unwrap();
+    let mut packed = Vec::new();
+    pack_page_residuals(&flat, &mut packed);
+    let lifted_offset = pack_page_residuals(&lifted, &mut packed);
+    let metadata_for = |lifted_active: bool| {
+        (0..count)
+            .flat_map(|ordinal| {
+                let page = if lifted_active && ordinal == 1 {
+                    &lifted
+                } else {
+                    &flat
+                };
+                let offset = if lifted_active && ordinal == 1 {
+                    lifted_offset
+                } else {
+                    0
+                };
+                [
+                    page.base_height_m().to_bits(),
+                    page.residual_scale_m().to_bits(),
+                    2,
+                    offset,
+                ]
+            })
+            .collect::<Vec<_>>()
+    };
+    let vertices = gpu.buffer(&vec![0; count * GPU_VERTEX_COUNT_PER_PATCH * 8], false);
+    let run_dispatch = |gpu: &Gpu,
+                        metadata: &wgpu::Buffer,
+                        residuals: &wgpu::Buffer,
+                        dirty: &[u32],
+                        vertices: &wgpu::Buffer| {
+        let dirty_ordinals = gpu.buffer(dirty, false);
+        // The dirty count sizes the dispatch guard; the ordinal list
+        // addresses the ordinal-indexed vertex buffer.
+        let params = gpu.buffer(
+            &[
+                count as u32,
+                GPU_VERTEX_COUNT_PER_PATCH as u32,
+                radius.to_bits(),
+                dirty.len() as u32,
+            ],
+            true,
+        );
+        gpu.dispatch(
+            CBT_GEOMETRY_WGSL,
+            &[(
+                "build_geometry",
+                (dirty.len() as u32 * GPU_VERTEX_COUNT_PER_PATCH as u32).div_ceil(64),
+            )],
+            &[
+                &leaves,
+                &patches,
+                metadata,
+                residuals,
+                vertices,
+                &params,
+                &frames,
+                &dirty_ordinals,
+            ],
+            &[5],
+            &[1, 4],
+        );
+    };
+    // Full cover first.
+    let metadata = gpu.buffer(&metadata_for(false), false);
+    let residuals = gpu.buffer(&packed, false);
+    let all: Vec<u32> = (0..count as u32).collect();
+    run_dispatch(&gpu, &metadata, &residuals, &all, &vertices);
+    let before = gpu.read(&vertices);
+    // Single-ordinal dispatch with the lifted page for leaf 1.
+    let metadata_lifted = gpu.buffer(&metadata_for(true), false);
+    run_dispatch(&gpu, &metadata_lifted, &residuals, &[1], &vertices);
+    let after = gpu.read(&vertices);
+    let span = GPU_VERTEX_COUNT_PER_PATCH * 8;
+    for ordinal in 0..count {
+        let (old, new) = (
+            &before[ordinal * span..(ordinal + 1) * span],
+            &after[ordinal * span..(ordinal + 1) * span],
+        );
+        if ordinal == 1 {
+            assert_ne!(old, new, "dirty leaf 1 must regenerate");
+            // Height channel (word 7 of each vertex) moves ~10 m.
+            let drift: f32 = old
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .zip(new.as_chunks::<8>().0.iter())
+                .map(|(a, b)| (f32::from_bits(b[7]) - f32::from_bits(a[7])).abs())
+                .sum::<f32>()
+                / GPU_VERTEX_COUNT_PER_PATCH as f32;
+            assert!(
+                (drift - 10.0).abs() < 0.5,
+                "leaf 1 height must follow its page, drift={drift}"
+            );
+        } else {
+            assert_eq!(old, new, "clean leaf {ordinal} must stay bit-identical");
         }
     }
 }

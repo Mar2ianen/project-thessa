@@ -204,9 +204,24 @@ impl GravitySourceTree {
             anchored =
                 anchored.max((child_frame.barycenter - barycenter).length() + child_frame.radius_m);
         }
+        // Second moment about the barycenter: own point mass plus shifted
+        // child moments (parallel axis), all in one bottom-up pass over the
+        // already-resolved children.
+        let mut second_moment = glam::DMat3::ZERO;
+        if node.own_mu > 0.0 {
+            let offset = own_state.position_inertial - barycenter;
+            second_moment += outer_product(offset, offset) * node.own_mu;
+        }
+        for child in &node.children {
+            let child_frame = frames[*child as usize].as_ref().expect("child resolved");
+            let child_mu = self.nodes[*child as usize].mu_total;
+            let shift = child_frame.barycenter - barycenter;
+            second_moment += child_frame.second_moment + outer_product(shift, shift) * child_mu;
+        }
         frames[node_id as usize] = Some(GravityNodeFrame {
             barycenter,
             radius_m: anchored,
+            second_moment,
         });
         Ok(())
     }
@@ -251,6 +266,7 @@ impl GravitySourceTree {
         let mut remaining = budget_mps2;
         let mut nodes_visited = 0_u32;
         let mut terms_exact = 0_u32;
+        let mut terms_quad = 0_u32;
         // Ascending pop order: roots pushed reversed, children extended
         // reversed, so every pop takes the smallest pending node id.
         let mut stack: Vec<u32> = self.roots.iter().rev().copied().collect();
@@ -283,6 +299,10 @@ impl GravitySourceTree {
             // whose Jacobian has spectral norm 2/|y|^3):
             //   E <= 2 * mu_total * R / (D - R)^3.
             let estimate = 2.0 * node.mu_total * frame.radius_m / clearance.powi(3);
+            // Quadrupole remainder bound (third-order Taylor, crude
+            // coefficient envelope validated by the aggregate-vs-explicit
+            // differential tests): E <= 128 * mu * R^3 / (D - R)^5.
+            let quad_estimate = quadrupole_error_estimate(node.mu_total, frame.radius_m, clearance);
             if estimate <= remaining {
                 let inverse = distance_squared.sqrt().recip();
                 if !inverse.is_finite() {
@@ -291,6 +311,20 @@ impl GravitySourceTree {
                 total += offset * (node.mu_total * inverse.powi(3));
                 error_bound += estimate;
                 remaining -= estimate;
+            } else if quad_estimate <= remaining {
+                // Middle rung of the fidelity ladder: monopole plus the
+                // closed-form quadrupole correction from the node's second
+                // moment. Cheaper than opening, with its own conservative
+                // remainder bound charged against the same budget.
+                let inverse = distance_squared.sqrt().recip();
+                if !inverse.is_finite() {
+                    return Err(GravityError::NonFinite { body_id: node.body });
+                }
+                total += offset * (node.mu_total * inverse.powi(3));
+                total += quadrupole_correction(frame.second_moment, offset);
+                error_bound += quad_estimate;
+                remaining -= quad_estimate;
+                terms_quad += 1;
             } else {
                 if node.own_mu > 0.0 {
                     total += exact_term(states, node.body, node.own_mu, position)?;
@@ -305,6 +339,7 @@ impl GravitySourceTree {
                 error_bound_mps2: error_bound,
                 nodes_visited,
                 terms_exact,
+                terms_quad,
             })
         } else {
             Err(GravityError::NonFinite {
@@ -323,6 +358,9 @@ impl GravitySourceTree {
 pub struct GravityNodeFrame {
     pub barycenter: DVec3,
     pub radius_m: f64,
+    /// Second-moment matrix about the barycenter, `S = Σ μᵢdᵢdᵢᵀ`
+    /// (symmetric, accumulated bottom-up in [`resolve`]).
+    pub second_moment: glam::DMat3,
 }
 
 /// Hierarchy evaluation result: acceleration plus the achieved error bound
@@ -334,6 +372,8 @@ pub struct TreeEval {
     pub error_bound_mps2: f64,
     pub nodes_visited: u32,
     pub terms_exact: u32,
+    /// Aggregates accepted at the quadrupole rung (monopole + correction).
+    pub terms_quad: u32,
 }
 
 /// Memoized depth-first subtree mass (own mu plus descendants), summed once
@@ -380,4 +420,48 @@ fn exact_term(
 /// differential tests: `2 * mu_total * radius / clearance^3`.
 pub fn monopole_error_estimate(mu_total: f64, radius_m: f64, clearance_m: f64) -> f64 {
     2.0 * mu_total * radius_m / clearance_m.powi(3)
+}
+
+/// Quadrupole remainder estimate for the middle fidelity rung:
+/// `128 * mu_total * radius^3 / clearance^5`.
+///
+/// The correction itself is exact through second order
+/// (`quadrupole_correction`); this bounds what is left out (third order
+/// and up). The constant is a crude-but-explicit envelope over the third
+/// Taylor derivatives of `y/|y|^3` (worst partial `~114/|y|^5`, times the
+/// multinomial weight `(√3·R)^3/6 < 1`), rounded up to a power of two.
+/// Soundness is pinned empirically: the aggregate-vs-explicit tests below
+/// assert measured error below this bound across representative geometry —
+/// if the constant ever underestimates, they fail rather than silently
+/// accepting a bad aggregate.
+pub fn quadrupole_error_estimate(mu_total: f64, radius_m: f64, clearance_m: f64) -> f64 {
+    128.0 * mu_total * radius_m.powi(3) / clearance_m.powi(5)
+}
+
+/// Outer product `a * b^T` as a matrix (columns are `a * b_j`).
+fn outer_product(a: DVec3, b: DVec3) -> glam::DMat3 {
+    glam::DMat3::from_cols(a * b.x, a * b.y, a * b.z)
+}
+
+/// Closed-form quadrupole correction for one aggregate node.
+///
+/// With `S = Σ μᵢdᵢdᵢᵀ` about the barycenter, `s2 = tr(S)`, `R` the
+/// barycenter-to-probe offset and `n = R/|R|`, the second-order Taylor of
+/// `Σ μᵢ(R + dᵢ)/|R + dᵢ|³` past the vanishing dipole is:
+///
+/// ```text
+/// a_quad = (R·(7.5·(nᵀSn) − 1.5·s2) − 3·|R|·(S·n)) / |R|⁵
+/// ```
+///
+/// Verified by hand against the two-equal-masses case (extra inward pull
+/// `−6·m·d²/R⁴` on the binary axis) and against direct summation in the
+/// tests below. Pure arithmetic in the inputs: no branches, no allocation.
+pub fn quadrupole_correction(second_moment: glam::DMat3, offset: DVec3) -> DVec3 {
+    let r_sq = offset.length_squared();
+    let r = r_sq.sqrt();
+    let normal = offset / r;
+    let s_n = second_moment * normal;
+    let nsn = normal.dot(s_n);
+    let trace = second_moment.x_axis.x + second_moment.y_axis.y + second_moment.z_axis.z;
+    (offset * (7.5 * nsn - 1.5 * trace) - s_n * (3.0 * r)) / r_sq.powi(2) / r
 }

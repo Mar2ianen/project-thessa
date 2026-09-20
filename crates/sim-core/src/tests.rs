@@ -543,21 +543,46 @@ fn tree_spends_remaining_budget_across_sibling_aggregates() {
     let frames = tree.resolve(states).expect("node frames");
     let budget = 6.0e-9;
     let position = DVec3::new(1.0e10, 3.0e9, 0.0);
+    let check_eval = |eval: &TreeEval, budget: f64| {
+        assert!(
+            eval.error_bound_mps2 <= budget,
+            "posted {:e} exceeds allocated {budget:e}",
+            eval.error_bound_mps2,
+        );
+        let exact = field.acceleration(position, time).expect("exact");
+        let measured = (eval.acceleration - exact).length();
+        assert!(
+            measured <= eval.error_bound_mps2 * (1.0 + 1.0e-9),
+            "measured {measured:e} exceeds posted {:e}",
+            eval.error_bound_mps2,
+        );
+    };
+    // Mid-range budget: with the quadrupole rung the root need not open —
+    // it may accept at quad while children compete for the remainder.
+    // Either way the posted bound holds and something nontrivial happens.
     let eval = tree
         .evaluate(&frames, states, position, budget)
         .expect("tree eval");
+    check_eval(&eval, budget);
     assert!(
-        eval.error_bound_mps2 <= budget,
-        "posted {:e} exceeds allocated {budget:e}",
-        eval.error_bound_mps2,
+        eval.terms_quad + eval.terms_exact >= 1,
+        "ladder must do real work at this budget"
     );
-    assert!(eval.terms_exact >= 1, "root must open at this budget");
-    let exact = field.acceleration(position, time).expect("exact");
-    let measured = (eval.acceleration - exact).length();
+    // Zero budget forces the full open: every source exact, zero posted.
+    // (Measured-vs-exact is ulp-level here, not bitwise: open leaves sum
+    // in traversal order while the field sums in source order.)
+    let open = tree
+        .evaluate(&frames, states, position, 0.0)
+        .expect("open eval");
+    assert_eq!(open.error_bound_mps2, 0.0);
     assert!(
-        measured <= eval.error_bound_mps2 * (1.0 + 1.0e-9),
-        "measured {measured:e} exceeds posted {:e}",
-        eval.error_bound_mps2,
+        open.nodes_visited >= 3,
+        "open must traverse root and children"
+    );
+    let exact = field.acceleration(position, time).expect("exact");
+    assert!(
+        (open.acceleration - exact).length() <= 1e-12,
+        "fully open tree must match the field to solver noise"
     );
 }
 
@@ -614,6 +639,226 @@ fn monopole_matches_explicit_children_within_posted_bound() {
     assert_eq!(eval.error_bound_mps2, 0.0);
     assert_eq!(eval.terms_exact, 2);
     assert!((eval.acceleration - exact).length() <= 1.0e-12);
+}
+
+mod quadrupole_tests {
+    use super::gravity_tree::{quadrupole_correction, quadrupole_error_estimate};
+    use super::*;
+
+    fn outer(a: DVec3, b: DVec3) -> DMat3 {
+        DMat3::from_cols(a * b.x, a * b.y, a * b.z)
+    }
+
+    #[test]
+    fn correction_matches_direct_summation() {
+        // Hand-built aggregates: exact sum minus monopole must equal the
+        // closed form to higher-order leftovers. Symmetric case kills odd
+        // orders (4th-order remainder); skewed case keeps 3rd order.
+        let mu = 1.0e12;
+        let pairs: Vec<(Vec<(DVec3, f64)>, DVec3)> = vec![
+            // Two equal masses on ±x: analytic extra pull -6md²/R⁴ on axis.
+            (
+                vec![
+                    (DVec3::new(1.0e7, 0.0, 0.0), mu),
+                    (DVec3::new(-1.0e7, 0.0, 0.0), mu),
+                ],
+                DVec3::new(2.0e8, 0.0, 0.0),
+            ),
+            (
+                vec![
+                    (DVec3::new(1.0e7, 0.0, 0.0), mu),
+                    (DVec3::new(-1.0e7, 0.0, 0.0), mu),
+                ],
+                DVec3::new(0.0, 2.0e8, 1.0e7),
+            ),
+            // Skewed triple: no symmetry to hide behind.
+            (
+                vec![
+                    (DVec3::new(3.0e6, 1.0e6, 0.0), mu),
+                    (DVec3::new(-2.0e6, 2.0e6, 1.0e6), 0.5 * mu),
+                    (DVec3::new(0.0, -1.0e6, -2.0e6), 0.25 * mu),
+                ],
+                DVec3::new(1.0e8, 2.0e7, -1.5e7),
+            ),
+        ];
+        for (members, probe) in pairs {
+            let total_mu: f64 = members.iter().map(|(_, m)| m).sum();
+            let barycenter = members.iter().map(|(pos, m)| *pos * *m).sum::<DVec3>() / total_mu;
+            let mut second = DMat3::ZERO;
+            let mut exact = DVec3::ZERO;
+            for (pos, m) in &members {
+                let offset = *pos - probe;
+                let r2 = offset.length_squared();
+                exact += offset * (*m / (r2 * r2.sqrt()));
+                let d = *pos - barycenter;
+                second += outer(d, d) * *m;
+            }
+            let offset = barycenter - probe;
+            let monopole = offset * (total_mu / offset.length_squared().powf(1.5));
+            let correction = quadrupole_correction(second, offset);
+            let residual = (exact - monopole - correction).length();
+            let scale = (exact - monopole).length().max(monopole.length() * 1e-12);
+            assert!(
+                residual / scale < 2e-2,
+                "quadrupole must explain the non-monopole field to 2%, got {}",
+                residual / scale
+            );
+            // And it must strictly improve over monopole alone.
+            assert!(
+                residual < (exact - monopole).length(),
+                "correction must reduce the error"
+            );
+        }
+    }
+
+    #[test]
+    fn two_mass_axis_matches_closed_form() {
+        // Pin the exact constant: extra inward pull -6·m·d²/R⁴ on axis.
+        let mu = 1.0e12;
+        let d = 1.0e7;
+        let second = outer(DVec3::new(d, 0.0, 0.0), DVec3::new(d, 0.0, 0.0)) * mu
+            + outer(DVec3::new(-d, 0.0, 0.0), DVec3::new(-d, 0.0, 0.0)) * mu;
+        let radius = 2.0e8;
+        let correction = quadrupole_correction(second, DVec3::new(-radius, 0.0, 0.0));
+        let expected = -6.0 * mu * d * d / radius.powi(4);
+        assert!((correction.x - expected).abs() / expected.abs() < 1e-12);
+        assert_eq!(correction.y, 0.0);
+        assert_eq!(correction.z, 0.0);
+    }
+
+    #[test]
+    fn node_frames_carry_exact_second_moments() {
+        // Leaves sit on their own mass: zero moment. Internal nodes match a
+        // hand accumulation from the same states.
+        let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+        let tree = GravitySourceTree::build(&ephemeris).expect("tree builds");
+        let mut frame = EphemerisFrame::new();
+        let states = frame
+            .evaluate(&ephemeris, SimTime::EPOCH)
+            .expect("frame states");
+        let frames = tree.resolve(states).expect("node frames");
+        for (node_id, node) in tree.nodes().iter().enumerate() {
+            let resolved = &frames[node_id];
+            if node.children.is_empty() {
+                assert_eq!(resolved.second_moment, DMat3::ZERO);
+                continue;
+            }
+            let mut expected = DMat3::ZERO;
+            // Walk the subtree masses directly from the ephemeris.
+            let mut stack = vec![node_id as u32];
+            while let Some(current) = stack.pop() {
+                let current_node = &tree.nodes()[current as usize];
+                if current_node.own_mu > 0.0 {
+                    let pos = states[current_node.body.index()].position_inertial;
+                    let d = pos - resolved.barycenter;
+                    expected += outer(d, d) * current_node.own_mu;
+                }
+                stack.extend(current_node.children.iter().copied());
+            }
+            let diff = (expected - resolved.second_moment).col(0).length()
+                + (expected - resolved.second_moment).col(1).length()
+                + (expected - resolved.second_moment).col(2).length();
+            let scale = expected
+                .col(0)
+                .length()
+                .max(expected.col(1).length())
+                .max(expected.col(2).length())
+                .max(1.0);
+            assert!(
+                diff / scale < 1e-12,
+                "second moment mismatch at node {node_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn quadrupole_rung_fires_between_monopole_and_open() {
+        // Budget engineered from the root's own estimates: monopole rung
+        // fails, quadrupole rung fits. The ladder must take the middle.
+        let ephemeris = two_binaries();
+        let field = GravityField::from_ephemeris(&ephemeris);
+        let tree = GravitySourceTree::build(&ephemeris).expect("tree builds");
+        let mut frame = EphemerisFrame::new();
+        let time = SimTime::EPOCH;
+        let states = frame.evaluate(&ephemeris, time).expect("frame states");
+        let frames = tree.resolve(states).expect("node frames");
+        let position = DVec3::new(1.0e10, 3.0e9, 0.0);
+        let root_id = tree.roots()[0] as usize;
+        let root = &tree.nodes()[root_id];
+        let root_frame = &frames[root_id];
+        let distance = (root_frame.barycenter - position).length();
+        let clearance = distance - root_frame.radius_m;
+        assert!(clearance > 0.0, "probe must stay outside the root ball");
+        let mono = crate::gravity_tree::monopole_error_estimate(
+            root.mu_total,
+            root_frame.radius_m,
+            clearance,
+        );
+        let quad = quadrupole_error_estimate(root.mu_total, root_frame.radius_m, clearance);
+        assert!(
+            quad < mono,
+            "test geometry must separate the rungs: mono={mono:e} quad={quad:e}"
+        );
+        let budget = (mono + quad) / 2.0;
+        let eval = tree
+            .evaluate(&frames, states, position, budget)
+            .expect("tree eval");
+        assert!(eval.terms_quad >= 1, "middle rung must fire");
+        assert!(
+            eval.error_bound_mps2 <= budget,
+            "posted {:e} exceeds {budget:e}",
+            eval.error_bound_mps2
+        );
+        let exact = field.acceleration(position, time).expect("exact");
+        assert!(
+            (eval.acceleration - exact).length() <= eval.error_bound_mps2 * (1.0 + 1e-9),
+            "measured exceeds posted"
+        );
+    }
+
+    #[test]
+    fn quadrupole_bound_holds_across_geometry() {
+        // Empirical soundness net for the K=128 remainder constant: sweep
+        // near/mid/far targets across budgets and assert measured <= posted
+        // <= budget everywhere. If the constant ever underestimates, this
+        // fails rather than silently accepting a bad aggregate.
+        let ephemeris = two_binaries();
+        let field = GravityField::from_ephemeris(&ephemeris);
+        let tree = GravitySourceTree::build(&ephemeris).expect("tree builds");
+        let mut frame = EphemerisFrame::new();
+        let time = SimTime::EPOCH;
+        let states = frame.evaluate(&ephemeris, time).expect("frame states");
+        let frames = tree.resolve(states).expect("node frames");
+        let positions = [
+            DVec3::new(4.0e9, 0.0, 0.0),
+            DVec3::new(1.0e10, 3.0e9, 0.0),
+            DVec3::new(-2.0e10, 1.0e10, 5.0e9),
+            DVec3::new(1.0e11, -3.0e10, 2.0e10),
+            DVec3::new(3.0e8, 1.0e8, 0.0),
+        ];
+        for position in positions {
+            let exact = field.acceleration(position, time).expect("exact");
+            for budget in [0.0, 1.0e-12, 1.0e-9, 1.0e-6, 1.0] {
+                let eval = tree
+                    .evaluate(&frames, states, position, budget)
+                    .expect("tree eval");
+                assert!(
+                    eval.error_bound_mps2 <= budget,
+                    "posted {:e} exceeds {budget:e} at {position:?}",
+                    eval.error_bound_mps2
+                );
+                let measured = (eval.acceleration - exact).length();
+                // Open leaves sum in traversal order (not source order):
+                // ulp-level difference, not a bound violation.
+                let tolerance = eval.error_bound_mps2.max(exact.length() * 1e-12);
+                assert!(
+                    measured <= tolerance * (1.0 + 1e-9),
+                    "measured {measured:e} exceeds posted {:e} at {position:?} budget {budget:e}",
+                    eval.error_bound_mps2
+                );
+            }
+        }
+    }
 }
 
 #[test]

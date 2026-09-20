@@ -59,6 +59,7 @@ pub use gravity_patch::{
 };
 pub use gravity_tree::{
     GravityNode, GravityNodeFrame, GravitySourceTree, TreeEval, monopole_error_estimate,
+    quadrupole_correction, quadrupole_error_estimate,
 };
 pub use high_speed::{
     BOOM_ANCHOR_PSF, BOOM_OVERPRESSURE_GAIN, BoomCarpet, HighSpeedError, boom_carpet,

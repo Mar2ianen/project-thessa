@@ -121,24 +121,29 @@ fn bench_gravity_scenario(
 
         // (e) tree opening pressure (doc 23 step 5 verdict input): serial
         // hierarchy traversals, nodes visited + exact terms per target.
+        // Quad terms ride along: the middle rung shows up here whenever a
+        // budget fits quadrupole but not monopole aggregates.
         let tree = GravitySourceTree::build(ephemeris).expect("source tree");
         for budget in [1.0e-9, 1.0e-12] {
             let states = frame.evaluate(ephemeris, time).expect("tree frame states");
             let frames = tree.resolve(states).expect("node frames");
             let mut visited = 0_u64;
             let mut exact_terms = 0_u64;
+            let mut quad_terms = 0_u64;
             for position in &positions {
                 let eval = tree
                     .evaluate(&frames, states, *position, budget)
                     .expect("tree eval");
                 visited += eval.nodes_visited as u64;
                 exact_terms += eval.terms_exact as u64;
+                quad_terms += eval.terms_quad as u64;
             }
             println!(
-                "{name} x{count} tree budget {budget:e}: nodes/target {:.1}, exact/target {:.1}/{}",
+                "{name} x{count} tree budget {budget:e}: nodes/target {:.1}, exact/target {:.1}/{}, quad/target {:.1}",
                 visited as f64 / count as f64,
                 exact_terms as f64 / count as f64,
                 tree.node_count(),
+                quad_terms as f64 / count as f64,
             );
         }
     }

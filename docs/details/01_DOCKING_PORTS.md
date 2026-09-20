@@ -158,3 +158,25 @@ The following values and mechanics should be decided later with the structural a
 - failure modes: latch loss, seal loss, partial outer-ring failure, complete joint failure.
 
 Until those values exist, code should depend on explicit port/interface capabilities rather than assuming that nominal diameter alone determines every behavior.
+
+
+## 10. Reference CAD assembly
+
+A D1 v2.2 FreeCAD/STEP assembly now exists as the first concrete geometry
+reference for this family. The supplied STEP fixture is approximately
+1252 x 1223 x 332 mm and contains 139 solids, 1744 faces and 4229 unique edges.
+
+The model already represents the soft-capture mechanism geometrically rather
+than as a decorative ring: guide petals, damper barrels/rods, fixed and moving
+clevises, rails/rollers, hard-latch hooks, pressure sealing hardware and service
+hardware are separate modeled components.
+
+The assembly is intentionally a reference fixture, not yet a locked production
+D1 envelope. Exact dimensions and load ratings in this document remain TBD
+until the mechanical model is validated.
+
+For rendering/asset architecture, this fixture is the first golden candidate for
+the CAD -> normalized BRep -> adaptive RCBT -> transient mesh pipeline described
+in 'docs/45_CAD_RCBT_GEOMETRY.md'. Docking physics must consume explicit
+mechanical semantics from the design; it must not depend on the current
+view-dependent render tessellation.

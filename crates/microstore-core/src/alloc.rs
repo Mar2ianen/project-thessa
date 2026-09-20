@@ -28,6 +28,9 @@ pub enum AllocError {
     },
     /// Unknown placement id.
     UnknownId(u64),
+    /// `alloc` on a live id: the existing placement is left untouched.
+    /// Replacement is [`SlabAllocator::realloc`], which rolls back.
+    AlreadyAllocated(u64),
 }
 
 impl std::fmt::Display for AllocError {
@@ -38,6 +41,9 @@ impl std::fmt::Display for AllocError {
                 "slab out of memory: want {want} B, largest free run {largest_free} B"
             ),
             AllocError::UnknownId(id) => write!(f, "unknown slab placement {id}"),
+            AllocError::AlreadyAllocated(id) => {
+                write!(f, "slab placement {id} is already allocated (use realloc)")
+            }
         }
     }
 }
@@ -125,8 +131,10 @@ impl SlabAllocator {
     }
 
     /// First-fit allocate `size` bytes for `id`. Zero-size placements are
-    /// rejected (they make free accounting ambiguous); re-allocating a
-    /// live id frees it first, which keeps ids stable across re-uploads.
+    /// rejected (they make free accounting ambiguous). Re-allocating a live
+    /// id is rejected without touching it — replacement is `realloc`, so a
+    /// failed re-upload can never lose the live placement (the old code
+    /// freed first and returned OOM with nothing left).
     pub fn alloc(&mut self, id: u64, size: u64) -> Result<u64, AllocError> {
         if size == 0 {
             return Err(AllocError::OutOfMemory {
@@ -135,7 +143,7 @@ impl SlabAllocator {
             });
         }
         if self.placed.contains_key(&id) {
-            self.free_id(id).expect("checked id is resident");
+            return Err(AllocError::AlreadyAllocated(id));
         }
         let run = self
             .free
@@ -346,6 +354,24 @@ mod tests {
                 largest_free: 0
             })
         );
+        slab.check_invariants();
+    }
+
+    #[test]
+    fn alloc_on_live_id_fails_without_touching_the_placement() {
+        // Full slab: even a fitting re-upload must not free-then-fail.
+        let mut slab = SlabAllocator::new(100);
+        assert_eq!(slab.alloc(1, 60), Ok(0));
+        assert_eq!(slab.alloc(2, 40), Ok(60));
+        assert_eq!(slab.alloc(1, 10), Err(AllocError::AlreadyAllocated(1)));
+        assert_eq!(slab.placement(1), Some((0, 60)));
+        // Same when nothing fits anywhere: placement still intact.
+        assert_eq!(slab.alloc(2, 100), Err(AllocError::AlreadyAllocated(2)));
+        assert_eq!(slab.placement(2), Some((60, 40)));
+        slab.check_invariants();
+        // Replacement goes through realloc, which keeps working.
+        slab.free_id(2).unwrap();
+        assert_eq!(slab.realloc(1, 80), Ok((0, false)));
         slab.check_invariants();
     }
 

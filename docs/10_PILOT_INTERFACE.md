@@ -128,3 +128,17 @@ cargo test -p thessa-server
 
 The tests cover control mappings, frames, navball projection, orientation,
 render anchoring, camera behavior, missing telemetry, and reset behavior.
+
+
+## 10.11. Instrument presentation variants
+
+The navball/reference-frame contract is semantic, not a mandatory visual skin.
+Future clients may expose selectable presentations (for example a compact
+spaceflight ball, Apollo/ADI-like presentation, aircraft PFD-style attitude
+display, minimal vector/tape mode, or IVA-specific instruments).
+
+Every presentation must consume the same attitude and reference-frame vectors.
+Changing the instrument style must not change speed-frame selection, guidance
+semantics, marker definitions, or authoritative physics state. See the dated KSA
+comparison in 44_KSA_TECHNICAL_COMPARISON_2026_09_20.md for the external
+reference that motivated making this distinction explicit.

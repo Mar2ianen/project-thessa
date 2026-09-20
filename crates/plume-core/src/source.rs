@@ -118,15 +118,18 @@ pub fn validation_error(source: &PlumeSource, env: &PlumeEnvironment) -> Option<
     if source.throttle < 0.0 || source.throttle > 1.0 || !source.throttle.is_finite() {
         return Some("throttle must be finite in 0..=1");
     }
-    if source.mass_flow_kg_s < 0.0
-        || source.exhaust_velocity_mps < 0.0
-        || source.exit_pressure_pa < 0.0
-        || source.exit_temperature_k < 0.0
+    if !(source.mass_flow_kg_s >= 0.0)
+        || !(source.exhaust_velocity_mps >= 0.0)
+        || !(source.exit_pressure_pa >= 0.0)
+        || !(source.exit_temperature_k >= 0.0)
     {
         return Some("negative engine state");
     }
-    if env.pressure_pa < 0.0 || env.density_kg_m3 < 0.0 || env.temperature_k < 0.0 {
+    if !(env.pressure_pa >= 0.0) || !(env.density_kg_m3 >= 0.0) || !(env.temperature_k >= 0.0) {
         return Some("negative environment state");
+    }
+    if env.flow_velocity_local_mps.iter().any(|v| !v.is_finite()) {
+        return Some("flow velocity must be finite");
     }
     if !(0.0..=1.0).contains(&env.oxygen_fraction) {
         return Some("oxygen_fraction must be in 0..=1");
@@ -204,5 +207,37 @@ pub mod tests {
         let mut source = sample_source();
         source.throttle = 2.0;
         assert!(validation_error(&source, &sample_env_sea_level()).is_some());
+    }
+
+    #[test]
+    fn nan_inputs_are_rejected_not_compared_past() {
+        // NaN defeats `< 0` range checks (every comparison is false), so
+        // each boundary scalar must fail closed. Flow velocity had no check
+        // at all before.
+        let env = sample_env_sea_level();
+        let mut source = sample_source();
+        source.mass_flow_kg_s = f64::NAN;
+        assert!(validation_error(&source, &env).is_some());
+        let mut source = sample_source();
+        source.exhaust_velocity_mps = f64::NAN;
+        assert!(validation_error(&source, &env).is_some());
+        let mut source = sample_source();
+        source.exit_pressure_pa = f64::NAN;
+        assert!(validation_error(&source, &env).is_some());
+        let mut source = sample_source();
+        source.exit_temperature_k = f64::NAN;
+        assert!(validation_error(&source, &env).is_some());
+        let mut bad_env = sample_env_sea_level();
+        bad_env.pressure_pa = f64::NAN;
+        assert!(validation_error(&sample_source(), &bad_env).is_some());
+        let mut bad_env = sample_env_sea_level();
+        bad_env.density_kg_m3 = f64::NAN;
+        assert!(validation_error(&sample_source(), &bad_env).is_some());
+        let mut bad_env = sample_env_sea_level();
+        bad_env.temperature_k = f64::NAN;
+        assert!(validation_error(&sample_source(), &bad_env).is_some());
+        let mut bad_flow = sample_env_sea_level();
+        bad_flow.flow_velocity_local_mps = [10.0, f64::NAN, -5.0];
+        assert!(validation_error(&sample_source(), &bad_flow).is_some());
     }
 }

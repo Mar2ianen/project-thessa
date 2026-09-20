@@ -16,6 +16,7 @@ mod frames;
 mod gravity;
 mod gravity_patch;
 mod gravity_tree;
+mod high_speed;
 mod integrator;
 mod onrails;
 mod scheduler;
@@ -58,6 +59,10 @@ pub use gravity_patch::{
 };
 pub use gravity_tree::{
     GravityNode, GravityNodeFrame, GravitySourceTree, TreeEval, monopole_error_estimate,
+};
+pub use high_speed::{
+    BOOM_ANCHOR_PSF, BOOM_OVERPRESSURE_GAIN, BoomCarpet, HighSpeedError, boom_carpet,
+    buffet_fluctuation, buffet_gain, vapor_cone_active,
 };
 pub use integrator::{
     AdaptiveIntegratorConfig, ImpulsiveBurn, IntegratorError, IntegratorStats, PropagationResult,

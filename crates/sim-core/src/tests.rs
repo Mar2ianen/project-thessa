@@ -4491,6 +4491,119 @@ fn soa_scratch_matches_scalar_panel_loop_within_envelope() {
     }
 }
 
+/// Transonic buffet (Slice F): opt-in lift loss through the panel solver.
+mod buffet_tests {
+    use super::*;
+
+    fn buffet_models(response: f64) -> (PanelAeroModel, X15StarterProfile) {
+        let profile = X15StarterProfile::new().expect("x15 profile");
+        let mut config = profile.aero_config;
+        config.buffet_response = response;
+        let model = PanelAeroModel::new(config).expect("buffet config validates");
+        (model, profile)
+    }
+
+    fn transonic_high_alpha() -> (AeroState, AeroEnvironment) {
+        // M ~ 0.99, body alpha ~26 deg (past the X-15 22 deg stall):
+        // deep inside the buffet band on lifting panels.
+        let state = AeroState::new(DVec3::new(300.0, 150.0, 0.0), DVec3::ZERO);
+        let environment = AeroEnvironment::new(0.8, 340.294, 1.81e-5, DVec3::ZERO);
+        (state, environment)
+    }
+
+    #[test]
+    fn buffet_response_rejects_invalid_range() {
+        let profile = X15StarterProfile::new().expect("x15 profile");
+        for bad in [f64::NAN, -0.1, 1.1, f64::INFINITY] {
+            let mut config = profile.aero_config;
+            config.buffet_response = bad;
+            assert!(
+                PanelAeroModel::new(config).is_err(),
+                "response {bad} must not validate"
+            );
+        }
+    }
+
+    #[test]
+    fn buffet_is_silent_subsonic_and_bounded_transonic() {
+        let (clean, profile) = buffet_models(0.0);
+        let (buffeted, _) = buffet_models(1.0);
+        let vehicle = profile.vehicle.clone();
+        let geometry = &vehicle.aero_geometry;
+        let total_area: f64 = geometry.panels.iter().map(|panel| panel.area_m2).sum();
+
+        // Subsonic cruise: no loss whatsoever (well below 1 ulp-scale).
+        let cruise = AeroState::new(DVec3::new(180.0, 0.0, 0.0), DVec3::ZERO);
+        let env = AeroEnvironment::new(1.0, 340.294, 1.81e-5, DVec3::ZERO);
+        let clean_force = clean
+            .evaluate_state(cruise, env, geometry)
+            .expect("cruise")
+            .force_body_n;
+        let buffet_force = buffeted
+            .evaluate_state(cruise, env, geometry)
+            .expect("cruise")
+            .force_body_n;
+        assert!(
+            (clean_force - buffet_force).length() <= 1e-9,
+            "subsonic must be untouched"
+        );
+
+        // Transonic high alpha: strictly positive loss, bounded by 5% of
+        // max lift times dynamic pressure times area (plus solver noise).
+        // Moments move with the lost lift through the CoP arms, so only
+        // the loss magnitude is pinned here.
+        let (state, environment) = transonic_high_alpha();
+        let clean = clean
+            .evaluate_state(state, environment, geometry)
+            .expect("transonic");
+        let buffeted = buffeted
+            .evaluate_state(state, environment, geometry)
+            .expect("transonic");
+        let loss = (clean.force_body_n - buffeted.force_body_n).length();
+        let speed = DVec3::new(300.0, 150.0, 0.0).length();
+        let q = 0.5 * 0.8 * speed * speed;
+        let max_lift = profile.aero_config.max_lift_coefficient;
+        let bound = 0.05 * max_lift * q * total_area + 1e-6;
+        assert!(loss > 1e-6, "band must bite, loss={loss:e}");
+        assert!(
+            loss <= bound,
+            "loss {loss:e} exceeds 5%-of-max-lift {bound:e}"
+        );
+    }
+
+    #[test]
+    fn buffet_soa_matches_scalar_with_response_on() {
+        // Response > 0 routes SoA lanes onto the reference scalar path, so
+        // parity holds by construction; this pins it instead of trusting
+        // the routing.
+        let (model, profile) = buffet_models(1.0);
+        let vehicle = profile.vehicle.clone();
+        let panels = PanelSoA::from_geometry(&vehicle.aero_geometry).expect("soa layout");
+        let mut scratch = AeroSimdScratch::default();
+        let env = |density: f64| AeroEnvironment::new(density, 340.294, 1.81e-5, DVec3::ZERO);
+        let cases = [
+            AeroState::new(DVec3::new(180.0, 0.0, 0.0), DVec3::ZERO),
+            AeroState::new(DVec3::new(300.0, 150.0, 0.0), DVec3::ZERO),
+            AeroState::new(DVec3::new(680.0, 20.0, 0.0), DVec3::new(0.1, -0.2, 0.3)),
+        ];
+        for state in cases {
+            let environment = env(0.8);
+            let scalar = model
+                .evaluate_state(state, environment, &vehicle.aero_geometry)
+                .expect("scalar");
+            let vector = model
+                .evaluate_soa_simd_scratch(state, environment, &panels, false, &mut scratch)
+                .expect("soa");
+            assert!(
+                (vector.force_body_n - scalar.force_body_n).length() <= 1.0e-6,
+                "buffet soa parity: {:?} vs {:?}",
+                vector.force_body_n,
+                scalar.force_body_n,
+            );
+        }
+    }
+}
+
 #[test]
 #[ignore = "wall-clock diagnostic; run with --ignored --nocapture"]
 fn profile_scalar_vs_soa_dev() {

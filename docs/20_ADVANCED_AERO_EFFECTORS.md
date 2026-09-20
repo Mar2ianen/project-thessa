@@ -551,6 +551,14 @@ dCL_buffet = buffet_gain(Mach, alpha) · pseudo_noise(t, seed)
 |dCL_buffet| <= buffet_envelope(Mach, alpha)   // hard cap, never diverges
 ```
 
+The quasi-steady gate is an analytic smoothstep (shock-band Mach ×
+high-alpha stall proximity, `buffet_gain` in `sim-core`), not a table —
+tables stay Tier B for airframes with measured buffet boundaries. The
+unsteady part is a stateless splitmix hash over `(seed, tick, lane)`.
+Panels opt in via `AeroConfig::buffet_response` (default 0 = bitwise
+legacy output); nonzero response routes SoA lanes onto the reference
+scalar path so parity holds by construction.
+
 - Onset boundary from a small table (Mach × alpha) calibrated against
   swept-wing buffet-onset references; outside the boundary gain is exactly 0.
 - Telemetry: vibration level feeds the pilot HUD and the alerting hooks

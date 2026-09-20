@@ -387,6 +387,13 @@ pub struct AeroConfig {
     /// the dedicated delta-wing mechanism and never weakens the general
     /// stall; 0.0 disables it (all legacy panels).
     pub vortex_lift_factor: f64,
+    /// Transonic buffet response, 0..=1. Scales the quasi-steady buffet
+    /// lift loss (see [`AeroConfig::buffet_lift_loss`]); 0.0 disables it
+    /// and keeps every legacy path bitwise identical. Nonzero response
+    /// additionally routes `evaluate_soa_simd_scratch` past the SIMD
+    /// kernels onto the reference scalar path, so scalar/SIMD parity
+    /// holds by construction.
+    pub buffet_response: f64,
     /// Hypersonic drag-only cutoff: above this Mach number lift (attached,
     /// separated and vortex) fades to zero over a fixed 1-Mach band,
     /// leaving pressure drag. INFINITY disables the cutoff. For ascent
@@ -428,6 +435,7 @@ impl Default for AeroConfig {
             separated_pitching_moment: 0.0,
             separated_control_factor: 0.3,
             vortex_lift_factor: 0.0,
+            buffet_response: 0.0,
             drag_only_above_mach: f64::INFINITY,
             upper_atmosphere_drag_coefficient: 1.0,
         }
@@ -459,6 +467,7 @@ impl AeroConfig {
             self.separated_pitching_moment,
             self.separated_control_factor,
             self.vortex_lift_factor,
+            self.buffet_response,
             self.upper_atmosphere_drag_coefficient,
         ];
         if finite.iter().any(|value| !value.is_finite()) {
@@ -491,6 +500,8 @@ impl AeroConfig {
             || self.separated_control_factor < 0.0
             || self.separated_control_factor > 1.0
             || self.vortex_lift_factor < 0.0
+            || self.buffet_response < 0.0
+            || self.buffet_response > 1.0
             || self.upper_atmosphere_drag_coefficient < 0.0
         {
             return Err(AeroError::InvalidModel(
@@ -498,6 +509,18 @@ impl AeroConfig {
             ));
         }
         Ok(())
+    }
+
+    /// Quasi-steady transonic buffet lift loss (Slice F): shock-band gain
+    /// times vehicle response times 5% of max lift. Bounded by construction
+    /// (`gain <= 1`, `response <= 1`); exactly 0.0 when the response is 0.
+    /// Callers branch on `buffet_response == 0.0` before subtracting so
+    /// legacy paths stay bitwise identical (`x - 0.0` would flip `-0.0`).
+    fn buffet_lift_loss(&self, normal_mach: f64, alpha_eff: f64) -> f64 {
+        crate::high_speed::buffet_gain(normal_mach, alpha_eff, self.stall_angle_rad)
+            * self.buffet_response
+            * 0.05
+            * self.max_lift_coefficient
     }
 
     fn analytic_coefficients(
@@ -622,9 +645,17 @@ impl AeroConfig {
             self.separated_pitching_moment,
             separation,
         );
+        // Transonic buffet quasi-steady loss (Slice F): the branch keeps
+        // legacy output bitwise identical when the response is 0.
+        let base_lift = (cl + cl_vortex) * lift_fade;
+        let lift = if self.buffet_response == 0.0 {
+            base_lift
+        } else {
+            base_lift - self.buffet_lift_loss(normal_mach, alpha_eff)
+        };
 
         AeroCoefficients {
-            lift: (cl + cl_vortex) * lift_fade,
+            lift,
             drag: reynolds_independent_drag + wave_drag,
             side_force: self.side_force_slope_per_rad * beta_rad,
             pitching_moment,
@@ -1504,87 +1535,94 @@ impl PanelAeroModel {
             drag_cut: self.config.drag_only_above_mach,
         };
         let mut body = 0;
-        while body + 8 <= n {
-            let done = thessa_simd::aero_coefficients_chunk(
-                &s.alpha_eff,
-                &s.beta_k,
-                &s.sin_e,
-                &s.cos_e,
-                &s.sep,
-                &s.mach_k,
-                &s.sweep_cos,
-                &panels.aspect_ratio,
-                &panels.interference,
-                &panels.thickness_ratio,
-                body,
-                &params,
-                &mut s.cl,
-                &mut s.cd,
-                &mut s.cy,
-                &mut s.cm,
-            );
-            if !done {
-                for half in [body, body + 4] {
-                    let done4 = thessa_simd::aero_coefficients_quad(
-                        &s.alpha_eff,
-                        &s.beta_k,
-                        &s.sin_e,
-                        &s.cos_e,
-                        &s.sep,
-                        &s.mach_k,
-                        &s.sweep_cos,
-                        &panels.aspect_ratio,
-                        &panels.interference,
-                        &panels.thickness_ratio,
-                        half,
-                        &params,
-                        &mut s.cl,
-                        &mut s.cd,
-                        &mut s.cy,
-                        &mut s.cm,
-                    );
-                    if !done4 {
-                        for index in half..half + 4 {
-                            let coefficients = self.analytic_lane(panels, &s.lanes[index], index);
-                            s.cl[index] = coefficients.lift;
-                            s.cd[index] = coefficients.drag;
-                            s.cy[index] = coefficients.side_force;
-                            s.cm[index] = coefficients.pitching_moment;
+        // Buffet vehicles bypass the SIMD kernels, which transcribe the
+        // buffet-free model: every lane runs the reference scalar path, so
+        // scalar/SIMD parity holds by construction at some per-tick cost.
+        // Legacy configs (response == 0) take the fast path unchanged.
+        if self.config.buffet_response == 0.0 {
+            while body + 8 <= n {
+                let done = thessa_simd::aero_coefficients_chunk(
+                    &s.alpha_eff,
+                    &s.beta_k,
+                    &s.sin_e,
+                    &s.cos_e,
+                    &s.sep,
+                    &s.mach_k,
+                    &s.sweep_cos,
+                    &panels.aspect_ratio,
+                    &panels.interference,
+                    &panels.thickness_ratio,
+                    body,
+                    &params,
+                    &mut s.cl,
+                    &mut s.cd,
+                    &mut s.cy,
+                    &mut s.cm,
+                );
+                if !done {
+                    for half in [body, body + 4] {
+                        let done4 = thessa_simd::aero_coefficients_quad(
+                            &s.alpha_eff,
+                            &s.beta_k,
+                            &s.sin_e,
+                            &s.cos_e,
+                            &s.sep,
+                            &s.mach_k,
+                            &s.sweep_cos,
+                            &panels.aspect_ratio,
+                            &panels.interference,
+                            &panels.thickness_ratio,
+                            half,
+                            &params,
+                            &mut s.cl,
+                            &mut s.cd,
+                            &mut s.cy,
+                            &mut s.cm,
+                        );
+                        if !done4 {
+                            for index in half..half + 4 {
+                                let coefficients =
+                                    self.analytic_lane(panels, &s.lanes[index], index);
+                                s.cl[index] = coefficients.lift;
+                                s.cd[index] = coefficients.drag;
+                                s.cy[index] = coefficients.side_force;
+                                s.cm[index] = coefficients.pitching_moment;
+                            }
                         }
                     }
                 }
+                body += 8;
             }
-            body += 8;
-        }
-        while body + 4 <= n {
-            let done4 = thessa_simd::aero_coefficients_quad(
-                &s.alpha_eff,
-                &s.beta_k,
-                &s.sin_e,
-                &s.cos_e,
-                &s.sep,
-                &s.mach_k,
-                &s.sweep_cos,
-                &panels.aspect_ratio,
-                &panels.interference,
-                &panels.thickness_ratio,
-                body,
-                &params,
-                &mut s.cl,
-                &mut s.cd,
-                &mut s.cy,
-                &mut s.cm,
-            );
-            if !done4 {
-                for index in body..body + 4 {
-                    let coefficients = self.analytic_lane(panels, &s.lanes[index], index);
-                    s.cl[index] = coefficients.lift;
-                    s.cd[index] = coefficients.drag;
-                    s.cy[index] = coefficients.side_force;
-                    s.cm[index] = coefficients.pitching_moment;
+            while body + 4 <= n {
+                let done4 = thessa_simd::aero_coefficients_quad(
+                    &s.alpha_eff,
+                    &s.beta_k,
+                    &s.sin_e,
+                    &s.cos_e,
+                    &s.sep,
+                    &s.mach_k,
+                    &s.sweep_cos,
+                    &panels.aspect_ratio,
+                    &panels.interference,
+                    &panels.thickness_ratio,
+                    body,
+                    &params,
+                    &mut s.cl,
+                    &mut s.cd,
+                    &mut s.cy,
+                    &mut s.cm,
+                );
+                if !done4 {
+                    for index in body..body + 4 {
+                        let coefficients = self.analytic_lane(panels, &s.lanes[index], index);
+                        s.cl[index] = coefficients.lift;
+                        s.cd[index] = coefficients.drag;
+                        s.cy[index] = coefficients.side_force;
+                        s.cm[index] = coefficients.pitching_moment;
+                    }
                 }
+                body += 4;
             }
-            body += 4;
         }
         for index in body..n {
             let coefficients = self.analytic_lane(panels, &s.lanes[index], index);
@@ -1742,12 +1780,22 @@ impl PanelAeroModel {
         control_deflection: f64,
     ) -> AeroCoefficients {
         if let Some(table) = &self.coefficient_table {
-            let mut coefficients = table.sample(
-                mach,
-                alpha + self.config.control_effectiveness * control_deflection,
-            );
+            let alpha_eff = alpha + self.config.control_effectiveness * control_deflection;
+            let mut coefficients = table.sample(mach, alpha_eff);
             coefficients.lift *= panel.lift_coefficient_sign;
             coefficients.side_force += self.config.side_force_slope_per_rad * beta;
+            // Buffet applies to table models too (same bounded loss, keyed
+            // to the sampled point with the sweep-corrected normal Mach);
+            // the branch keeps legacy output bitwise identical when the
+            // response is 0.
+            if self.config.buffet_response != 0.0 {
+                let normal_mach = if mach > 1.0 {
+                    mach * panel.planform_sweep_rad.cos()
+                } else {
+                    mach
+                };
+                coefficients.lift -= self.config.buffet_lift_loss(normal_mach, alpha_eff);
+            }
             coefficients
         } else {
             let mut coefficients =
@@ -2094,7 +2142,7 @@ fn lerp(low: f64, high: f64, t: f64) -> f64 {
     low + (high - low) * t
 }
 
-fn smoothstep(edge0: f64, edge1: f64, value: f64) -> f64 {
+pub(crate) fn smoothstep(edge0: f64, edge1: f64, value: f64) -> f64 {
     let t = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }

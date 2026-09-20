@@ -16,6 +16,7 @@ thessa-flight-net = { path = "../../crates/flight-net" }
 thessa-perf = { path = "../../crates/perf" }
 thessa-graphics = { path = "../../crates/graphics" }
 thessa-atmosphere = { path = "../../crates/atmosphere" }
+thessa-audio-core = { path = "../../crates/audio-core" }
 thessa-plume-core = { path = "../../crates/plume-core" }
 thessa-bevy-rcbt = { path = "../../crates/bevy-rcbt", features = ["render"] }
 thessa-rcbt-core = { path = "../../crates/rcbt-core" }

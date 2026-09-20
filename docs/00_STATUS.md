@@ -17,7 +17,7 @@ do not update in place).
 | `03_PHYSICS_ENGINE.md` | 🟡 prototype | DP5-FSAL + DP8-DOP853, variational STM, EphemerisFrame, monopole tree + single-tick cohorts, thrust/RTN arcs, envelope-barrier + active-set allocator, Rapier contact backend, gated J2/C22 harmonics | quadrupole, time-span patches, thermal/structural/fluid graphs, CFD, fracture |
 | `08_NUMERICAL_VERTICAL_SLICE.md` | 🟡 prototype | test-particle contract, baked hierarchy, on-rails/Verlet, harnesses | fitted segments, harmonics, joint multi-leg shooting, structural/thermal |
 | `11_AERODYNAMICS.md` | ✅ runtime model | panel SoA/SIMD + tables + upper-band/vacuum reductions | body gas/weather/winds, full wake, hypersonics, arbitrary axes |
-| `20_ADVANCED_AERO_EFFECTORS.md` | 🔵 design target | background only (incidence-only control) | flaps/spoilers/hinged-panels/grid-fins, neutral bounds, `AeroEffectorModel` |
+| `20_ADVANCED_AERO_EFFECTORS.md` | 🔵 design target | background only (incidence-only control) | flaps/spoilers/hinged-panels/grid-fins, neutral bounds, `AeroEffectorModel`, high-speed plan (§§17–20: boom/buffet/plasma/vortex/ground-effect) |
 | `23_GRAVITY_FIELD_COHORTS.md` | 🟡 partial | monopole tree, single-tick patches, Hessian spatial bound | time-span patches, quadrupole, cohort keys, planner-patch reuse, GPU |
 | `24_ANALYTIC_AFFINE_PROPAGATION.md` | ✅ prototype | far-only analytic STM on single-tick cohorts | atmosphere/thrust/contact integration, global proof |
 | `40_RAPIER_COLLISION_INTEGRATION.md` | ✅ baseline | local contact solver, zero-gravity Rapier, readback, regime switch | wheels, rich-terrain contact boundary, full PBR parity |

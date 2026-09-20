@@ -1,7 +1,9 @@
 # 20 — Advanced aerodynamic effectors: flaps, spoilers, grid fins, body flaps
 
 Status: design target — flaps/spoilers/hinged-panels/grid-fins, neutral bounds,
-and `AeroEffectorModel` not implemented; incidence-only control is the runtime.
+`AeroEffectorModel`, and the high-speed effects plan (§§17–20: sonic boom,
+buffet, vapor/cone/contrail visuals, plasma blackout, vortex lift, ground
+effect, icing hooks) not implemented; incidence-only control is the runtime.
 
 Статус: **design target**.
 
@@ -490,7 +492,208 @@ Grid fins и body flaps не являются причиной переводи�
 - jam/failure states;
 - alerting hooks (`ACTUATOR`, `CONTROL AUTHORITY`, configuration warnings).
 
+## 17. High-speed regime effects (transonic → hypersonic)
+
+> New section in English per `AGENTS.md §0` (no new non-English documentation).
+
+The M2 reduced-order branches already cover stall/transonic/supersonic
+coefficients for forces. This section plans everything *around* the force
+solver at high speed: acoustic footprint, unsteady buffet, condensation
+visuals, plasma blackout, vortex lift, and ground effect. The governing rule
+is the same as for effectors: every effect is computed from geometry, state,
+and field — never a magic multiplier — and every visual-only effect is
+explicitly marked as force-neutral so it cannot leak into flight dynamics.
+
+### 17.1 Where the current solver stops
+
+`PanelAeroModel` returns quasi-steady forces up to supersonic Mach. It does
+not produce: ground acoustic footprint, unsteady buffet loads, condensation
+or trail visuals, ionization/comm effects, nonlinear vortex lift, or
+height-dependent induced drag. All items below consume data the sim already
+has (Mach, `q`, alpha, altitude, attitude) plus small, explicit additions.
+
+### 17.2 Sonic boom carpet (Tier A analytic proxy)
+
+Physics sketch: a supersonic vehicle trails a Mach cone (half-angle
+`μ = asin(1/M)`); the ground intersection is the boom carpet, roughly
+`half_width ≈ altitude · cot(μ)` wide, swept along the ground track. The
+N-wave overpressure scales with weight, length, altitude, and Mach. Rather
+than a full Whitham F-function propagation, Tier A uses a calibrated scaling
+law anchored at public reference points (Concorde-class ~2 psf cruise,
+subsonic cutoff below which refraction turns the carpet around before it
+reaches the ground):
+
+```text
+inputs:  Mach, altitude, weight, length, ambient pressure, ground track
+output:  carpet polygon (map), peak Δp per ground cell, cutoff flag
+```
+
+- Cutoff is gameplay-relevant physics, not a hack: below cutoff Mach (a
+  function of the temperature profile the atmosphere model already owns) the
+  boom never reaches the ground — high-supersonic corridors vs low boom
+  approaches become a real routing decision.
+- Gameplay hooks, all derived from the footprint (never touching the flight
+  model): window-rattle events above ~1 psf, damage claims above a tuned
+  threshold, populated-area noise budget for career/contracts, ATC-style
+  supersonic corridors on the map.
+- Explicit non-goals: no CFD propagation, no focusing caustics in Tier A
+  (flagged for Tier B via ray-tracing tables if ever needed), no effect on
+  the generating vehicle's aerodynamics.
+
+### 17.3 Transonic buffet (bounded unsteady load)
+
+Shock-induced separation makes lift fluctuate near the buffet boundary.
+Model: a deterministic (seeded-RNG, replay-safe) unsteady increment on
+normal force plus control-effectiveness jitter, both strictly bounded:
+
+```text
+dCL_buffet = buffet_gain(Mach, alpha) · pseudo_noise(t, seed)
+|dCL_buffet| <= buffet_envelope(Mach, alpha)   // hard cap, never diverges
+```
+
+- Onset boundary from a small table (Mach × alpha) calibrated against
+  swept-wing buffet-onset references; outside the boundary gain is exactly 0.
+- Telemetry: vibration level feeds the pilot HUD and the alerting hooks
+  (`docs/19`), structural fatigue accumulates only through the existing
+  thermal/structural graphs once M2 lands them — no parallel damage model.
+- Validation: onset boundary shape, zero effect outside, bounded spectrum,
+  determinism across replays and worker counts.
+
+### 17.4 Vapor cone (force-neutral visual)
+
+Transonic condensation cloud (Prandtl–Glauert singularity visualization):
+rendered when local Mach ∈ [0.95, 1.05] over lifting surfaces AND humidity
+allows it. **Adds zero force by design** — it is a visualization of the
+pressure field the solver already computed, gated by an aloft-humidity
+profile (currently a gap: surface `moisture01` exists in worldgen, the
+aloft profile belongs to the `02A` TBD cells).
+
+### 17.5 Contrails (force-neutral visual + signature)
+
+Appleman criterion (cold + humid enough) evaluated per engine/wingTrail
+emitter from the atmosphere temperature/humidity profile. Gameplay value is
+signature, not physics: a visible trail is a detectable trail (traffic,
+screenshots, future stealth considerations). Zero force coupling.
+
+### 17.6 Plasma sheath and radio blackout (gameplay timer from physics)
+
+Entry heating (M2 thermal forbidden-zone work) plus ionization proxy yields
+an electron-density estimate along the trajectory; above threshold the
+link budget is zero:
+
+```text
+heating proxy (velocity, density, nose radius) -> ne estimate
+ne > ne_critical(link frequency) -> COMM BLACKOUT window
+```
+
+- Gameplay: autopilot/scripts must be able to fly blind through the window
+  (ties into `docs/07` waits and `docs/19` alerting); ground stations show
+  loss-of-signal honestly instead of freezing telemetry.
+- Visual: entry glow intensity from the same heating proxy (shared source,
+  no separate magic glow number).
+- Validation: blackout entry/exit altitudes vs Shuttle-class reference
+  corridors, order-of-magnitude only — Tier A is a window predictor, not a
+  plasma solver.
+
+### 17.7 Vortex lift for low-aspect/delta wings
+
+Attached-flow panels underpredict delta lift at high alpha. Add the Polhamus
+suction-analogy term, driven purely by geometry the asset already has
+(aspect ratio, sweep, area):
+
+```text
+CL = Kp·sinα·cos²α + Kv·sin²α·cosα
+```
+
+- `Kp` from the existing attached solver (no double count: the potential
+  part is the panel lift it already computes); `Kv` from aspect-ratio
+  correlation, bounded and documented.
+- Validation: delta-wing reference polars (e.g. 60–75° sweep datasets),
+  continuity with the attached branch at low alpha, stall blend unchanged.
+
+### 17.8 Ground effect (height-dependent induced drag)
+
+Within roughly one wingspan of the surface, induced drag drops (McCormick /
+Raymer-type factor over `h/b`, wingspan `b` from geometry). Affects flare
+and float distance on landing — and must vanish with altitude by
+construction (`factor → 1` for `h/b → ∞`, exact equality above cutoff, not
+asymptotic tail that pollutes cruise).
+
+### 17.9 Icing hooks (listed future, not sliced)
+
+Performance-degradation envelope (CL down, CD up, stall angle in) driven by
+visible-moisture + sub-zero exposure time, with anti-ice bleed-air gameplay
+hooks. Requires the aloft-moisture profile from §18 first; no slice assigned
+until M2 thermal exists.
+
+## 18. Data the sim has vs gaps
+
+| Effect | Already present | Gap to close |
+|---|---|---|
+| Boom carpet | Mach, altitude, weight, length, track, temperature profile | calibrated overpressure anchors (2 reference points to start) |
+| Buffet | Mach, alpha, q, seeded RNG harness | onset-boundary table (small, literature) |
+| Vapor cone | local Mach field | aloft-humidity profile (`02A` TBD) |
+| Contrails | temperature profile, emitters | aloft humidity (same gap) |
+| Plasma blackout | velocity, density, nose radius (M2 heating) | link-frequency thresholds per station |
+| Vortex lift | aspect ratio, sweep, area | Kv correlation constants + reference polars |
+| Ground effect | height AGL, wingspan | nothing (pure geometry + state) |
+| Icing | temperature, exposure time | aloft moisture (same gap), M2 thermal |
+
+The single highest-leverage data gap is the **aloft humidity profile** — it
+unblocks vapor, contrails, and icing at once, and `02A` already lists TBD
+cells for it.
+
+## 19. Validation plan (high-speed effects)
+
+- Boom: carpet width = `h·cot(asin(1/M))` exactly; cutoff respected (zero
+  footprint below cutoff Mach); overpressure monotonic in weight/altitude,
+  anchored within 2x of Concorde/Shuttle reference psf bands.
+- Buffet: exactly zero outside the onset table; bounded spectrum;
+  bit-identical across replays/worker counts (seeded).
+- Vapor/contrails: force parity — identical trajectories with visuals
+  on/off (bitwise, enforced by test).
+- Blackout: entry/exit window exists on a Shuttle-like profile, absent on a
+  low-speed descent; scripts survive it in replay fixtures.
+- Vortex lift: matches reference delta polars within posted envelope;
+  low-alpha continuity with attached solver.
+- Ground effect: factor exactly 1 above cutoff; flare distance increases vs
+  no-effect baseline on the same approach.
+- Perf (per AGENTS.md §10): per-effect scope counters; boom carpet update
+  O(track points), buffet O(panels) with the existing SIMD lanes, visuals
+  behind the graphics quality tiers (`crates/graphics`).
+
+## 20. Implementation order (continued)
+
+### Slice F — boom carpet + buffet + condensation visual
+
+- boom carpet polygon + Δp proxy + cutoff + map overlay + noise-budget hooks;
+- buffet gain/envelope tables + HUD vibration + replay determinism tests;
+- vapor-cone visual gated by Mach band (humidity gate stubbed to
+  always-false until the `02A` profile lands — visible code path, no fake data).
+
+### Slice G — plasma blackout + vortex lift + ground effect
+
+- heating-proxy → blackout windows + entry glow from one source;
+- Polhamus term behind aspect-ratio gating + reference-polar tests;
+- ground-effect factor with exact high-altitude cutoff + flare tests.
+
+### Slice H — icing + weather coupling (after M2 thermal)
+
+- visible-moisture exposure accumulator + degradation envelope;
+- anti-ice gameplay hooks; coupling point for any future weather model.
+
 ## References
+
+High-speed effects (§§17–20):
+
+- NASA Glenn, sonic boom basics (Mach cone, carpet, overpressure factors): https://www.grc.nasa.gov/www/k-12/airplane/sonic.html
+- NASA, Seebass-George sonic-boom minimization and Carlson simplified boom prediction (N-wave scaling, cutoff Mach): https://ntrs.nasa.gov/citations/19690023553
+- FAA, Noise levels for U.S. certificated and foreign aircraft (psf reference bands): https://www.faa.gov/regulations_policies/policy_guidance/noise/
+- Appleman contrail forecasting (temperature–humidity criterion): https://www.weather.gov/
+- Polhamus suction analogy for vortex lift on delta wings: https://ntrs.nasa.gov/citations/19660010884
+- McCormick / Raymer ground-effect induced-drag factor vs height-to-span ratio.
+
+Effector references (existing):
 
 - Existing aero design: `docs/11_AERODYNAMICS.md`
 - Unified control/allocator design: `docs/18-control-guidance-autopilot.md`

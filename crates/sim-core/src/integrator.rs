@@ -1568,11 +1568,15 @@ fn dop853_step(
     let eighth = combine_indexed(state, h, &k, &DOP853_B);
     // FSAL stage at the endpoint; doubles as the next step's k1.
     let k_fsal = derivative(field, eighth, time.offset(h), frame)?;
+    // The E5 weights combine stage *derivatives*; the error estimate is a
+    // state difference, so the combination needs the step factor `h` (the
+    // DP5 path gets this via `combine`). Without it the estimator is off by
+    // ~h (units m/s instead of m) and the controller flies blind.
     let mut error_position = DVec3::ZERO;
     let mut error_velocity = DVec3::ZERO;
     for (stage, weight) in DOP853_E5.iter().enumerate() {
-        error_position += k[stage].position * *weight;
-        error_velocity += k[stage].velocity * *weight;
+        error_position += k[stage].position * (*weight * h);
+        error_velocity += k[stage].velocity * (*weight * h);
     }
     Ok((
         eighth,

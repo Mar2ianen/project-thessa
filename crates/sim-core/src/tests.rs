@@ -105,8 +105,58 @@ fn kepler_orbit_returns_analytic_periodic_state() {
 }
 
 #[test]
-fn eccentric_kepler_orbit_matches_analytic_periapsis_after_one_period() {
+fn dop853_adaptive_controller_honors_tolerance() {
+    // Regression for the missing `* h` in the DOP853 error estimate: without
+    // it the controller underestimates the error by ~h and tightening the
+    // tolerance changes nothing. One circular period has analytic closure,
+    // so tighter tolerance must shrink the closure error and cost steps.
     let mu = 3.986_004_418e14;
+    let radius = 7_000_000.0;
+    let ephemeris = central_ephemeris(mu);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let initial = TestParticleState {
+        position: DVec3::new(radius, 0.0, 0.0),
+        velocity: DVec3::new(0.0, (mu / radius).sqrt(), 0.0),
+    };
+    let period = TAU * (radius.powi(3) / mu).sqrt();
+    let run = |pos_tol: f64, vel_tol: f64, rel: f64| {
+        propagate_adaptive_dop853(
+            &field,
+            initial,
+            SimTime::EPOCH,
+            period,
+            AdaptiveIntegratorConfig {
+                initial_step_s: 30.0,
+                min_step_s: 1.0e-5,
+                max_step_s: 120.0,
+                absolute_position_tolerance_m: pos_tol,
+                absolute_velocity_tolerance_mps: vel_tol,
+                relative_tolerance: rel,
+                max_steps: 100_000,
+                dynamical_eta: None,
+            },
+        )
+        .expect("circular orbit should propagate")
+    };
+    let loose = run(1.0e-1, 1.0e-4, 1.0e-8);
+    let tight = run(1.0e-4, 1.0e-7, 1.0e-11);
+    let loose_err = loose.state.position.distance(initial.position);
+    let tight_err = tight.state.position.distance(initial.position);
+    eprintln!("dop853 closure: loose={loose_err:.3} m, tight={tight_err:.6} m");
+    assert!(
+        tight_err < loose_err,
+        "tighter tolerance must shrink closure error"
+    );
+    assert!(tight_err < 2.0, "tight closure must be meters, got {tight_err}");
+    assert!(
+        tight.stats.accepted_steps + tight.stats.rejected_steps
+            > loose.stats.accepted_steps + loose.stats.rejected_steps,
+        "tighter tolerance must cost steps"
+    );
+}
+
+#[test]
+fn eccentric_kepler_orbit_matches_analytic_periapsis_after_one_period() {    let mu = 3.986_004_418e14;
     let semi_major_axis = 10_000_000.0;
     let eccentricity = 0.6;
     let orbit = KeplerOrbit::new(mu, semi_major_axis, eccentricity, 0.0, 0.0, 0.0, 0.0)

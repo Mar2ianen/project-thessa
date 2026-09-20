@@ -787,10 +787,26 @@ pub struct AllocationResult {
     pub saturated: bool,
 }
 
+/// Squared residual `||A u - b||²` over the allocator's 6-row layout.
+fn residual_sq_of(columns: &[[f64; 6]], target: &[f64; 6], commands: &[f64]) -> f64 {
+    let mut total = 0.0;
+    for row in 0..6 {
+        let mut achieved = 0.0;
+        for (col, command) in columns.iter().zip(commands.iter()) {
+            achieved += col[row] * command;
+        }
+        total += (target[row] - achieved) * (target[row] - achieved);
+    }
+    total
+}
+
 /// Deterministic bounded least-squares allocator. It solves the coupled
 /// 6-DOF problem `min ||A u - b||² + Σ (u_i / weight_i)² * reg` subject to
-/// `0 <= u_i <= max_command` via an active-set loop, so the result does not
-/// depend on effector declaration order. `weight` is a preference (larger =
+/// `0 <= u_i <= max_command` via a Lawson–Hanson style active-set loop with
+/// KKT release, so the result does not depend on effector declaration order
+/// and a pinned variable rejoins the free set when the residual pulls it
+/// back inside. A final guard never returns a solution worse than commanding
+/// nothing. `weight` is a preference (larger =
 /// cheaper) that only breaks ties in redundant directions; on a determined
 /// axis the demand is met exactly up to the bound. Force (N) and moment (Nm)
 /// rows share one norm, matching the previous greedy metric; callers that
@@ -845,107 +861,174 @@ pub fn allocate_wrench(
         .fold(0.0_f64, f64::max);
     let reg_scale = 1.0e-12 * max_col_norm_sq.max(1.0);
     let mut commands = vec![0.0; count];
-    let mut free = vec![true; count];
-    // Active-set loop: solve the free subsystem, fix the worst bound
-    // violator, repeat. At most `count` fixes, so this always terminates.
-    let mut solved_free: Vec<(usize, f64)> = Vec::new();
-    for _ in 0..=count {
-        let free_indices: Vec<usize> = (0..count).filter(|&i| free[i]).collect();
-        if free_indices.is_empty() {
-            solved_free.clear();
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Pin {
+        Free,
+        Lo,
+        Hi,
+    }
+    let mut pin = vec![Pin::Free; count];
+    // Lawson–Hanson style loop with KKT release. Fixing the worst bound
+    // violator alone is not BVLS: a pinned variable must rejoin the free
+    // set when the residual pulls it back inside (a 1-ulp tie-break once
+    // flipped a fix order and doubled a residual). Ties resolve to the
+    // lowest declaration index, so results stay order-deterministic.
+    // The accepted free solution is written into `commands` before the
+    // release check, so KKT always sees a consistent iterate — checking
+    // against stale free values churns fix/release forever.
+    // The loop is iteration-bounded so float edge cases terminate; the
+    // never-worse-than-zero guard below makes any exit safe.
+    let max_iters = 8 * (count + 1);
+    let mut iters = 0usize;
+    loop {
+        if iters >= max_iters {
             break;
         }
-        // Residual demand after fixed contributions (index-order sum for
-        // determinism).
-        let mut residual_target = target;
-        for i in 0..count {
-            if !free[i] && commands[i] != 0.0 {
-                for row in 0..6 {
-                    residual_target[row] -= columns[i][row] * commands[i];
-                }
-            }
-        }
-        let dim = free_indices.len();
-        let mut matrix = vec![vec![0.0; dim]; dim];
-        let mut rhs = vec![0.0; dim];
-        for (a, &col_a) in free_indices.iter().enumerate() {
-            let mut dot_b = 0.0;
-            for row in 0..6 {
-                dot_b += columns[col_a][row] * residual_target[row];
-            }
-            rhs[a] = dot_b;
-            for (b, &col_b) in free_indices.iter().enumerate() {
-                let dot = columns[col_a]
-                    .iter()
-                    .zip(columns[col_b].iter())
-                    .map(|(a, b)| a * b)
-                    .sum();
-                matrix[a][b] = dot;
-            }
-        }
-        // Exact solve first; only a (near-)singular free set retries with
-        // the weight-scaled diagonal.
-        let mut matrix_exact = matrix.clone();
-        let mut rhs_exact = rhs.clone();
-        let solution = match solve_dense_system(&mut matrix_exact, &mut rhs_exact) {
-            Some(exact) => exact,
-            None => {
-                for (a, &col_a) in free_indices.iter().enumerate() {
-                    let weight = effectors[col_a].weight;
-                    matrix[a][a] += reg_scale / (weight * weight);
-                }
-                match solve_dense_system(&mut matrix, &mut rhs) {
-                    Some(regularized) => regularized,
-                    None => {
-                        // Singular despite regularization: hold the free set
-                        // at zero and report the residual, never NaN.
-                        for &i in &free_indices {
-                            commands[i] = 0.0;
-                        }
-                        solved_free.clear();
-                        break;
+        iters += 1;
+        let free_indices: Vec<usize> = (0..count).filter(|&i| pin[i] == Pin::Free).collect();
+        if !free_indices.is_empty() {
+            // Residual demand after pinned contributions (index-order sum
+            // for determinism).
+            let mut residual_target = target;
+            for i in 0..count {
+                if pin[i] == Pin::Hi {
+                    for row in 0..6 {
+                        residual_target[row] -= columns[i][row] * commands[i];
                     }
                 }
             }
-        };
-        // Worst violator first keeps the path deterministic; ties resolve
-        // to the lowest declaration index.
-        let mut worst: Option<(usize, f64, f64)> = None;
-        for (a, &col) in free_indices.iter().enumerate() {
-            let value = solution[a];
-            let bound = if value < 0.0 {
-                Some(0.0)
-            } else if value > effectors[col].max_command {
-                Some(effectors[col].max_command)
-            } else {
-                None
+            let dim = free_indices.len();
+            let mut matrix = vec![vec![0.0; dim]; dim];
+            let mut rhs = vec![0.0; dim];
+            for (a, &col_a) in free_indices.iter().enumerate() {
+                let mut dot_b = 0.0;
+                for row in 0..6 {
+                    dot_b += columns[col_a][row] * residual_target[row];
+                }
+                rhs[a] = dot_b;
+                for (b, &col_b) in free_indices.iter().enumerate() {
+                    let dot = columns[col_a]
+                        .iter()
+                        .zip(columns[col_b].iter())
+                        .map(|(a, b)| a * b)
+                        .sum();
+                    matrix[a][b] = dot;
+                }
+            }
+            // Exact solve first; only a (near-)singular free set retries
+            // with the weight-scaled diagonal.
+            let mut matrix_exact = matrix.clone();
+            let mut rhs_exact = rhs.clone();
+            let solution = match solve_dense_system(&mut matrix_exact, &mut rhs_exact) {
+                Some(exact) => exact,
+                None => {
+                    for (a, &col_a) in free_indices.iter().enumerate() {
+                        let weight = effectors[col_a].weight;
+                        matrix[a][a] += reg_scale / (weight * weight);
+                    }
+                    match solve_dense_system(&mut matrix, &mut rhs) {
+                        Some(regularized) => regularized,
+                        None => {
+                            // Singular despite regularization: hold the free
+                            // set at zero and report the residual, never NaN.
+                            // Terminal: the KKT pass below could churn on a
+                            // set that cannot be solved, so exit to the guard.
+                            for &i in &free_indices {
+                                commands[i] = 0.0;
+                                pin[i] = Pin::Lo;
+                            }
+                            break;
+                        }
+                    }
+                }
             };
-            if let Some(clamped) = bound {
+            // Worst violator first keeps the path deterministic; ties
+            // resolve to the lowest declaration index.
+            let mut worst: Option<(usize, f64, f64, Pin)> = None;
+            for (a, &col) in free_indices.iter().enumerate() {
+                let value = solution[a];
+                let (pinned, clamped) = if value < 0.0 {
+                    (Pin::Lo, 0.0)
+                } else if value > effectors[col].max_command {
+                    (Pin::Hi, effectors[col].max_command)
+                } else {
+                    continue;
+                };
                 let distance = (value - clamped).abs();
                 let replace = match worst {
                     None => true,
-                    Some((_, best_distance, _)) => distance > best_distance,
+                    Some((_, best_distance, _, _)) => distance > best_distance,
                 };
                 if replace {
-                    worst = Some((col, distance, clamped));
+                    worst = Some((col, distance, clamped, pinned));
+                }
+            }
+            if let Some((col, _, clamped, pinned)) = worst {
+                pin[col] = pinned;
+                commands[col] = clamped;
+                continue;
+            }
+            // Feasible free solution: accept it as the current iterate so
+            // the KKT check below sees consistent commands.
+            for (a, &col) in free_indices.iter().enumerate() {
+                commands[col] = solution[a].clamp(0.0, effectors[col].max_command);
+            }
+        }
+        // KKT release check over pinned variables (also runs when the free
+        // set is empty). Objective f = ||Au - b||² has gradient component
+        // -2·A_i·r along variable i for residual r = b - Au: a Lo pin wants
+        // release when A_i·r > 0, a Hi pin when A_i·r < 0.
+        let mut residual = target;
+        for i in 0..count {
+            if commands[i] != 0.0 {
+                for row in 0..6 {
+                    residual[row] -= columns[i][row] * commands[i];
                 }
             }
         }
-        if let Some((col, _, clamped)) = worst {
-            free[col] = false;
-            commands[col] = clamped;
-            solved_free.clear();
-        } else {
-            solved_free = free_indices
-                .iter()
-                .enumerate()
-                .map(|(a, &col)| (col, solution[a]))
-                .collect();
-            break;
+        let residual_norm = residual.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let mut release: Option<(usize, f64)> = None;
+        for i in 0..count {
+            let pinned = pin[i];
+            if pinned == Pin::Free {
+                continue;
+            }
+            let mut gradient = 0.0;
+            let mut col_norm_sq = 0.0;
+            for row in 0..6 {
+                gradient += columns[i][row] * residual[row];
+                col_norm_sq += columns[i][row] * columns[i][row];
+            }
+            let tolerance = 1.0e-9 * (1.0 + col_norm_sq.sqrt() * residual_norm);
+            let violates = if pinned == Pin::Lo {
+                gradient > tolerance
+            } else {
+                gradient < -tolerance
+            };
+            if violates {
+                let magnitude = gradient.abs();
+                let replace = match release {
+                    None => true,
+                    Some((_, best)) => magnitude > best,
+                };
+                if replace {
+                    release = Some((i, magnitude));
+                }
+            }
         }
+        if let Some((col, _)) = release {
+            pin[col] = Pin::Free;
+            continue;
+        }
+        break;
     }
-    for (col, value) in solved_free {
-        commands[col] = value.clamp(0.0, effectors[col].max_command);
+    // Safety guard: allocation must never be worse than commanding nothing.
+    // A heuristic active set can otherwise fire an actuator that doubles the
+    // residual (observed [0,1]/50 where [0,0]/25 was optimal).
+    let residual_sq = residual_sq_of(&columns, &target, &commands);
+    let zero_sq = target.iter().map(|v| v * v).sum::<f64>();
+    if residual_sq > zero_sq {
+        commands.fill(0.0);
     }
     let mut achieved_force = DVec3::ZERO;
     let mut achieved_moment = DVec3::ZERO;
@@ -1265,6 +1348,161 @@ mod tests {
         assert!((reversed.achieved_force_body_n - demand.force_body_n).length() < 1.0e-6);
         assert!((forward.commands[0] - reversed.commands[1]).abs() < 1.0e-9);
         assert!((forward.commands[1] - reversed.commands[0]).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn allocator_releases_a_pinned_actuator_when_the_residual_pulls_it_back() {
+        // Add-only active sets can strand a fix: pinning u1 first leaves u0
+        // at zero with residual²=50 although [0,0] gives 25. KKT release
+        // must recover the optimum instead of firing the actuator.
+        let demand = ControlDemand {
+            force_body_n: DVec3::new(3.0, 4.0, 0.0),
+            ..ControlDemand::zero()
+        };
+        let pair = [
+            EffectorContribution {
+                group: ActuatorGroup::Rcs,
+                force_per_command_n: DVec3::new(-3.0, -2.0, 0.0),
+                moment_per_command_nm: DVec3::ZERO,
+                max_command: 1.0,
+                weight: 1.0,
+            },
+            EffectorContribution {
+                group: ActuatorGroup::Rcs,
+                force_per_command_n: DVec3::new(-2.0, -1.0, 0.0),
+                moment_per_command_nm: DVec3::ZERO,
+                max_command: 1.0,
+                weight: 1.0,
+            },
+        ];
+        let result = allocate_wrench(demand, &pair).unwrap();
+        assert_eq!(result.commands, vec![0.0, 0.0]);
+        let residual_sq = result.residual_force_body_n.length_squared()
+            + result.residual_moment_body_nm.length_squared();
+        assert!((residual_sq - 25.0).abs() < 1.0e-9, "residual²={residual_sq}");
+        assert!(result.saturated);
+    }
+
+    #[test]
+    fn allocator_never_returns_a_solution_worse_than_doing_nothing() {
+        // Deterministic fuzzer against brute force over all 3^N pin states:
+        // the allocator must match the optimum residual within tolerance on
+        // every draw, so no draw can be worse than the zero command.
+        fn splitmix64(state: &mut u64) -> u64 {
+            *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = *state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+        fn unit(state: &mut u64) -> f64 {
+            (splitmix64(state) >> 11) as f64 / (1u64 << 53) as f64
+        }
+        for seed in 1u64..=40 {
+            let mut rng = seed.wrapping_mul(0xD1B5_4D95_F272_7613).wrapping_add(1);
+            let count = 2 + (splitmix64(&mut rng) % 3) as usize;
+            let mut effectors = Vec::with_capacity(count);
+            for _ in 0..count {
+                effectors.push(EffectorContribution {
+                    group: ActuatorGroup::Rcs,
+                    force_per_command_n: DVec3::new(
+                        unit(&mut rng) * 4.0 - 2.0,
+                        unit(&mut rng) * 4.0 - 2.0,
+                        0.0,
+                    ),
+                    moment_per_command_nm: DVec3::ZERO,
+                    max_command: 0.5 + unit(&mut rng),
+                    weight: 0.5 + unit(&mut rng),
+                });
+            }
+            let demand = ControlDemand {
+                force_body_n: DVec3::new(
+                    unit(&mut rng) * 8.0 - 4.0,
+                    unit(&mut rng) * 8.0 - 4.0,
+                    0.0,
+                ),
+                ..ControlDemand::zero()
+            };
+            let result = allocate_wrench(demand, &effectors).unwrap();
+            let got = result.residual_force_body_n.length_squared()
+                + result.residual_moment_body_nm.length_squared();
+            // Brute force: every pin combination, exact free solve, keep the
+            // best feasible vertex (free values inside bounds).
+            let mut columns = vec![[0.0; 6]; count];
+            for (i, e) in effectors.iter().enumerate() {
+                columns[i][0] = e.force_per_command_n.x;
+                columns[i][1] = e.force_per_command_n.y;
+            }
+            let target = [demand.force_body_n.x, demand.force_body_n.y, 0.0, 0.0, 0.0, 0.0];
+            let zero_sq = target[0] * target[0] + target[1] * target[1];
+            let mut best = zero_sq;
+            let states = 3usize.pow(count as u32);
+            for mask in 0..states {
+                let mut tmp = mask;
+                let mut fixed = vec![0.0; count];
+                let mut free_idx = Vec::new();
+                for i in 0..count {
+                    match tmp % 3 {
+                        0 => fixed[i] = 0.0,
+                        1 => fixed[i] = effectors[i].max_command,
+                        _ => free_idx.push(i),
+                    }
+                    tmp /= 3;
+                }
+                let mut residual = target;
+                for i in 0..count {
+                    if !free_idx.contains(&i) {
+                        for row in 0..2 {
+                            residual[row] -= columns[i][row] * fixed[i];
+                        }
+                    }
+                }
+                let dim = free_idx.len();
+                let feasible = if dim == 0 {
+                    true
+                } else {
+                    let mut matrix = vec![vec![0.0; dim]; dim];
+                    let mut rhs = vec![0.0; dim];
+                    for (a, &ca) in free_idx.iter().enumerate() {
+                        rhs[a] = columns[ca][0] * residual[0] + columns[ca][1] * residual[1];
+                        for (b, &cb) in free_idx.iter().enumerate() {
+                            matrix[a][b] =
+                                columns[ca][0] * columns[cb][0] + columns[ca][1] * columns[cb][1];
+                        }
+                    }
+                    match solve_dense_system(&mut matrix, &mut rhs) {
+                        Some(solution) => {
+                            let mut ok = true;
+                            for (a, &i) in free_idx.iter().enumerate() {
+                                if solution[a] < -1.0e-9
+                                    || solution[a] > effectors[i].max_command + 1.0e-9
+                                {
+                                    ok = false;
+                                    break;
+                                }
+                                fixed[i] = solution[a].clamp(0.0, effectors[i].max_command);
+                            }
+                            ok
+                        }
+                        None => false,
+                    }
+                };
+                if !feasible {
+                    continue;
+                }
+                let mut achieved = [0.0; 2];
+                for i in 0..count {
+                    achieved[0] += columns[i][0] * fixed[i];
+                    achieved[1] += columns[i][1] * fixed[i];
+                }
+                let err = (target[0] - achieved[0]).powi(2) + (target[1] - achieved[1]).powi(2);
+                best = best.min(err);
+            }
+            assert!(
+                got <= best * (1.0 + 1.0e-6) + 1.0e-9,
+                "seed {seed}: allocator residual²={got} vs brute-force best={best}"
+            );
+        }
     }
 
     #[test]

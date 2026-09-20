@@ -822,6 +822,9 @@ pub fn propagate_adaptive(
     // chains per source (see `acceleration_with_frame`). Buffers grow to
     // the body count on first use, then no per-step allocation.
     let mut frame = EphemerisFrame::new();
+    // Dedicated cap cache: the RK scratch frame holds rejected stage
+    // timestamps past the retry point (see GravityField::cap_states).
+    let mut cap_frame = EphemerisFrame::new();
     // Source mus resolved once, in field order, for the dynamical cap.
     let cap_mus: Option<Vec<(f64, BodyId)>> = config.dynamical_eta.map(|_| field.cap_sources());
     // FSAL cache: Dormand–Prince 5(4) evaluates its last stage at the
@@ -839,9 +842,10 @@ pub fn propagate_adaptive(
         }
         let mut h = step_s.min(remaining);
         if let (Some(eta), Some(sources)) = (config.dynamical_eta, cap_mus.as_ref()) {
+            let states = field.cap_states(&mut cap_frame, time)?;
             h = h.min(dynamical_cap(
                 state.position,
-                frame.states(),
+                states,
                 sources,
                 eta,
                 config.max_step_s,
@@ -1042,6 +1046,9 @@ pub fn propagate_adaptive_sensitivity(
     let mut step_s = config.initial_step_s.min(config.max_step_s);
     let mut stats = IntegratorStats::default();
     let mut frame = EphemerisFrame::new();
+    // Dedicated cap cache: the RK scratch frame holds rejected stage
+    // timestamps past the retry point (see GravityField::cap_states).
+    let mut cap_frame = EphemerisFrame::new();
     let cap_mus: Option<Vec<(f64, BodyId)>> = config.dynamical_eta.map(|_| field.cap_sources());
     let mut cached_k1: Option<AugmentedDerivative> = None;
 
@@ -1051,9 +1058,10 @@ pub fn propagate_adaptive_sensitivity(
         }
         let mut h = step_s.min(remaining);
         if let (Some(eta), Some(sources)) = (config.dynamical_eta, cap_mus.as_ref()) {
+            let states = field.cap_states(&mut cap_frame, time)?;
             h = h.min(dynamical_cap(
                 state.position,
-                frame.states(),
+                states,
                 sources,
                 eta,
                 config.max_step_s,
@@ -1609,6 +1617,9 @@ pub fn propagate_adaptive_dop853(
     let mut step_s = config.initial_step_s.min(config.max_step_s);
     let mut stats = IntegratorStats::default();
     let mut frame = EphemerisFrame::new();
+    // Dedicated cap cache: the RK scratch frame holds rejected stage
+    // timestamps past the retry point (see GravityField::cap_states).
+    let mut cap_frame = EphemerisFrame::new();
     let cap_mus: Option<Vec<(f64, BodyId)>> = config.dynamical_eta.map(|_| field.cap_sources());
     let mut cached_k1: Option<Derivative> = None;
 
@@ -1618,9 +1629,10 @@ pub fn propagate_adaptive_dop853(
         }
         let mut h = step_s.min(remaining);
         if let (Some(eta), Some(sources)) = (config.dynamical_eta, cap_mus.as_ref()) {
+            let states = field.cap_states(&mut cap_frame, time)?;
             h = h.min(dynamical_cap(
                 state.position,
-                frame.states(),
+                states,
                 sources,
                 eta,
                 config.max_step_s,
@@ -2231,5 +2243,105 @@ impl Error for IntegratorError {}
 impl From<GravityError> for IntegratorError {
     fn from(error: GravityError) -> Self {
         Self::Gravity(error)
+    }
+}
+
+#[cfg(test)]
+mod cap_tests {
+    use super::*;
+    use crate::{BakedBody, KeplerOrbit};
+
+    fn binary_ephemeris() -> BakedEphemeris {
+        let (mu_primary, mu_secondary, separation): (f64, f64, f64) = (1.0e12, 2.0e11, 2.0e7);
+        let total_mu = mu_primary + mu_secondary;
+        let mean_motion = (total_mu / separation.powi(3)).sqrt();
+        let primary = KeplerOrbit::new(
+            total_mu,
+            separation * mu_secondary / total_mu,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+        .and_then(|orbit| orbit.with_mean_motion(mean_motion))
+        .expect("valid primary orbit");
+        let secondary = KeplerOrbit::new(
+            total_mu,
+            separation * mu_primary / total_mu,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            std::f64::consts::PI,
+        )
+        .and_then(|orbit| orbit.with_mean_motion(mean_motion))
+        .expect("valid secondary orbit");
+        BakedEphemeris::new(
+            "TEST_CAP_BINARY",
+            vec![
+                BakedBody::synthetic_barycenter(BodyId(0), "barycenter", total_mu, None, None),
+                BakedBody::orbital(BodyId(1), "primary", mu_primary, 0.0, BodyId(0), primary),
+                BakedBody::orbital(BodyId(2), "secondary", mu_secondary, 0.0, BodyId(0), secondary),
+            ],
+        )
+        .expect("valid binary ephemeris")
+    }
+
+    fn hand_cap(
+        ephemeris: &BakedEphemeris,
+        sources: &[(f64, BodyId)],
+        position: DVec3,
+        time: SimTime,
+        eta: f64,
+        max_step_s: f64,
+    ) -> f64 {
+        let mut tau = f64::INFINITY;
+        for (mu, id) in sources {
+            if *mu <= 0.0 {
+                continue;
+            }
+            let state = ephemeris.body_state(*id, time).expect("body state");
+            let d = (state.position_inertial - position).length();
+            if d > 0.0 && d.is_finite() {
+                tau = tau.min((d * d * d / mu).sqrt());
+            }
+        }
+        (eta * tau).min(max_step_s)
+    }
+
+    #[test]
+    fn cap_reads_current_positions_not_rejected_stage_positions() {
+        // A rejected RK step leaves the scratch frame holding stage
+        // timestamps past the retry point. The cap must not read body
+        // positions from it: with a moving source, stale positions give a
+        // different step cap, so the test pins the fresh value exactly.
+        let ephemeris = binary_ephemeris();
+        let field = GravityField::from_ephemeris(&ephemeris);
+        let sources = field.cap_sources();
+        let now = SimTime::EPOCH;
+        let future = SimTime(10_000.0);
+        let probe = DVec3::new(4.0e7, 0.0, 0.0);
+        let (eta, max_step_s) = (0.02, 1.0e6);
+        // Mimic rejected stages: scratch now holds FUTURE positions.
+        let mut scratch = EphemerisFrame::new();
+        field
+            .acceleration_with_frame(probe, future, &mut scratch)
+            .expect("stage evaluation succeeds");
+        // The source actually moved, so staleness is observable.
+        let stale = dynamical_cap(probe, scratch.states(), &sources, eta, max_step_s);
+        // The cap path evaluates its own frame at the current time.
+        let mut cap_frame = EphemerisFrame::new();
+        let states = field.cap_states(&mut cap_frame, now).expect("cap reads");
+        let got = dynamical_cap(probe, states, &sources, eta, max_step_s);
+        let expected = hand_cap(&ephemeris, &sources, probe, now, eta, max_step_s);
+        assert!(
+            (got - expected).abs() <= 1.0e-9 * expected.max(1.0),
+            "cap must match current-time positions, got={got} expected={expected}"
+        );
+        assert!(
+            (stale - got).abs() > 1.0e-6 * got.max(1.0),
+            "test needs a geometry where staleness matters, stale={stale} got={got}"
+        );
     }
 }

@@ -156,6 +156,57 @@ fn dop853_adaptive_controller_honors_tolerance() {
 }
 
 #[test]
+fn dynamical_cap_reads_current_body_positions_after_rejected_steps() {
+    // The RK scratch frame holds rejected stage timestamps past the retry
+    // point; the cap must not read body positions from it. Moving binary
+    // source, huge first step to force rejections, tight cap: completes,
+    // rejects along the way, and agrees with the uncapped reference.
+    let total_mu = 1.2e12;
+    let separation = 2.0e7;
+    let ephemeris = two_body_binary(1.0e12, 2.0e11, separation);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let radius = 4.0e7;
+    let initial = TestParticleState {
+        position: DVec3::new(radius, 0.0, 0.0),
+        velocity: DVec3::new(0.0, (total_mu / radius).sqrt(), 0.0),
+    };
+    let duration = 200_000.0;
+    let config = |eta: Option<f64>| AdaptiveIntegratorConfig {
+        initial_step_s: 200_000.0,
+        min_step_s: 1.0e-5,
+        max_step_s: 200_000.0,
+        absolute_position_tolerance_m: 1.0e-3,
+        absolute_velocity_tolerance_mps: 1.0e-6,
+        relative_tolerance: 1.0e-11,
+        max_steps: 100_000,
+        dynamical_eta: eta,
+    };
+    for propagate in [
+        propagate_adaptive as fn(&GravityField, TestParticleState, SimTime, f64, AdaptiveIntegratorConfig) -> Result<PropagationResult, IntegratorError>,
+        propagate_adaptive_dop853,
+    ] {
+        let capped = propagate(&field, initial, SimTime::EPOCH, duration, config(Some(0.5)))
+            .expect("capped propagation completes");
+        eprintln!(
+            "capped stats: accepted={} rejected={}",
+            capped.stats.accepted_steps, capped.stats.rejected_steps
+        );
+        assert!(
+            capped.stats.rejected_steps > 0,
+            "test must exercise the reject path"
+        );
+        let reference = propagate(&field, initial, SimTime::EPOCH, duration, config(None))
+            .expect("reference propagation completes");
+        let drift = capped.state.position.distance(reference.state.position);
+        eprintln!("cap-vs-reference drift: {drift:.4} m");
+        assert!(
+            drift < 5.0,
+            "capped run must track the reference, drift={drift}"
+        );
+    }
+}
+
+#[test]
 fn eccentric_kepler_orbit_matches_analytic_periapsis_after_one_period() {    let mu = 3.986_004_418e14;
     let semi_major_axis = 10_000_000.0;
     let eccentricity = 0.6;

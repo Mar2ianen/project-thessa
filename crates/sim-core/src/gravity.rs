@@ -218,6 +218,20 @@ impl<'a> GravityField<'a> {
         self.source_ids.len()
     }
 
+    /// Body states at `time` in a caller-owned frame, for the dynamical
+    /// step cap. The RK scratch frame must not serve as the cap cache:
+    /// after a rejected step it holds stage timestamps past the retry
+    /// point, and the cap would read future body positions. A dedicated
+    /// frame evaluated at the current step time keeps the cap honest, at
+    /// one extra ephemeris evaluation per capped step.
+    pub fn cap_states<'frame>(
+        &self,
+        frame: &'frame mut crate::EphemerisFrame,
+        time: SimTime,
+    ) -> Result<&'frame [crate::BodyState], GravityError> {
+        Ok(frame.evaluate(self.ephemeris, time)?)
+    }
+
     /// Ephemeris state for LVLH steering frames: thrust arcs reference a
     /// central body, and the field owns the ephemeris borrow. Transparent
     /// passthrough (same errors as direct ephemeris reads).

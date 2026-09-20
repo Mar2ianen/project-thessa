@@ -136,7 +136,12 @@ dependencies = [
  "glam",
  "rayon",
  "serde",
+ "thessa-simd",
 ]
+
+[[package]]
+name = "thessa-simd"
+version = "0.0.1"
 
 [[package]]
 name = "unicode-ident"

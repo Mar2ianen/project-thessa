@@ -5,17 +5,17 @@ follow-ups archival as of 2026-09-15 — indexed raster, page provider,
 extraction, and indirect draw shipped opt-in; persistent GPU topology and
 neighbor propagation remain future.
 
-Статус: **implementation baseline / performance target**.
+Status: **implementation baseline / performance target**.
 
-В workspace уже добавлены первые packages: `thessa-rcbt-core` (pure Rust
-logical tree и backend contract), `thessa-rcbt-ref` (portable differential
-oracle), `thessa-rcbt-wgpu` (WGSL/wgpu dispatch prototype) и
-`thessa-bevy-rcbt` (thin client resource/plugin adapter). Это ещё не замена
-текущего client terrain renderer: CPU tile path остаётся fallback до parity.
+In the workspace the first packages are already added: `thessa-rcbt-core` (pure Rust
+logical tree and backend contract), `thessa-rcbt-ref` (portable differential
+oracle), `thessa-rcbt-wgpu` (WGSL/wgpu dispatch prototype) and
+`thessa-bevy-rcbt` (thin client resource/plugin adapter). This is not yet a replacement
+for the current client terrain renderer: the CPU tile path remains the fallback until parity.
 
-Эта дока фиксирует следующий major terrain step после текущего очень быстрого CPU tile builder. Текущий cube-sphere path полезен как baseline и fallback: он доказал, что procedural geometry можно молотить на CPU со скоростью порядка километров в секунду и хорошо масштабировать по cores. Но fixed tile grid остаётся слишком грубой единицей refinement: при локальной потребности в нескольких дополнительных triangles строится целый tile, а CPU budget в итоге упирается в суммарное количество геометрии, которую вообще приходится производить.
+This doc records the next major terrain step after the current very fast CPU tile builder. The current cube-sphere path is useful as a baseline and fallback: it proved that procedural geometry can be churned on the CPU at a rate on the order of kilometers per second and scaled well across cores. But the fixed tile grid remains too coarse a refinement unit: when only a few additional triangles are locally needed, a whole tile is built, and the CPU budget ends up bounded by the total amount of geometry that has to be produced at all.
 
-Цель следующего этапа — **перестать генерировать ненужную topology на CPU**.
+The goal of the next stage is to **stop generating unneeded topology on the CPU**.
 
 ```text
 canonical physical surface
@@ -32,17 +32,17 @@ canonical physical surface
        render triangles / indirect draw
 ```
 
-`rcbt` — рабочее имя reusable Rust implementation Concurrent Binary Tree / LEB-style adaptive triangulation. Он не является Bevy-specific subsystem и не становится authoritative terrain.
+`rcbt` is the working name for a reusable Rust implementation of Concurrent Binary Tree / LEB-style adaptive triangulation. It is not a Bevy-specific subsystem and does not become the authoritative terrain.
 
 ---
 
-## 1. Главный архитектурный контракт
+## 1. Core architectural contract
 
-Три вещи не смешиваются:
+Three things are kept separate:
 
 ```text
 PlanetField / baked canonical surface
-    = физическая истина
+    = physical ground truth
 
 rcbt
     = topology / adaptive visual representation
@@ -51,21 +51,21 @@ Bevy / wgpu / Vulkan
     = integration/backend
 ```
 
-Следствия:
+Consequences:
 
-- dedicated server не зависит от `rcbt`, Bevy, wgpu или GPU;
-- renderer может заменить Bevy, не переписывая CBT algorithm;
-- wgpu может быть заменён direct Vulkan backend для CBT path без изменения public algorithm API;
-- CBT tree state не определяет физическую поверхность;
-- render triangulation и contact triangulation могут отличаться, если обе укладываются в declared physical error bound.
+- the dedicated server does not depend on `rcbt`, Bevy, wgpu, or the GPU;
+- the renderer can replace Bevy without rewriting the CBT algorithm;
+- wgpu can be replaced with a direct Vulkan backend for the CBT path without changing the public algorithm API;
+- CBT tree state does not define the physical surface;
+- render triangulation and contact triangulation may differ as long as both fit within the declared physical error bound.
 
-`wgpu` — хороший default portable backend, но не архитектурная зависимость `rcbt-core`.
+`wgpu` is a good default portable backend, but not an architectural dependency of `rcbt-core`.
 
 ---
 
-## 2. Почему CBT здесь ближе к Nanite по роли, но не по устройству
+## 2. Why CBT is closer to Nanite in role here, but not in construction
 
-Обе системы решают GPU-driven LOD/geometry selection, но исходная representation разная:
+Both systems solve GPU-driven LOD/geometry selection, but the source representation differs:
 
 ```text
 Nanite-like path
@@ -79,13 +79,13 @@ coarse continuous domain
     -> displacement/height field
 ```
 
-Для Thessa важна именно вторая модель: поверхность глобальная, непрерывная и процедурная/baked-hybrid, поэтому topology выгоднее поддерживать как compact adaptive tree, а не непрерывно создавать и уничтожать CPU mesh tiles.
+For Thessa the second model is the one that matters: the surface is global, continuous, and procedural/baked-hybrid, so it is cheaper to maintain topology as a compact adaptive tree than to continuously create and destroy CPU mesh tiles.
 
 ---
 
 ## 3. Planned crate split
 
-Target split, не требование немедленно создать все crates:
+Target split, not a requirement to create all crates immediately:
 
 ```text
 rcbt-core
@@ -109,13 +109,13 @@ Thessa terrain layer
     cube-sphere roots, body coordinates, height/page provider, material semantics
 ```
 
-Если crate count на раннем prototype мешает работе, физически это может временно жить меньшим числом packages. Boundary всё равно считается частью API design.
+If the crate count gets in the way on an early prototype, it may physically live temporarily as fewer packages. The boundary is still considered part of the API design.
 
 ---
 
 ## 4. Backend API must abstract CBT work, not repaint wgpu
 
-Запрещён псевдо-abstraction вида:
+The following pseudo-abstraction is forbidden:
 
 ```rust
 trait Backend {
@@ -124,9 +124,9 @@ trait Backend {
 }
 ```
 
-Он только протаскивает wgpu наружу.
+It merely leaks wgpu to the outside.
 
-`rcbt-core` должен оперировать собственными concepts:
+`rcbt-core` must operate on its own concepts:
 
 ```rust
 pub trait CbtBackend {
@@ -150,9 +150,9 @@ pub trait CbtBackend {
 }
 ```
 
-Точная форма trait определяется prototype/benchmarks. Смысл важнее сигнатур: public model описывает CBT operations/resources/capabilities, а не типы конкретного graphics API.
+The exact trait shape is determined by prototypes/benchmarks. Meaning matters more than signatures: the public model describes CBT operations/resources/capabilities, not the types of a specific graphics API.
 
-Capability model также свой:
+The capability model is likewise its own:
 
 ```rust
 pub struct CbtCapabilities {
@@ -168,15 +168,15 @@ pub struct CbtCapabilities {
 }
 ```
 
-Нельзя писать `if vendor == AMD/NVIDIA`. Fast paths выбираются по capabilities и измеренному workload.
+Do not write `if vendor == AMD/NVIDIA`. Fast paths are selected by capabilities and measured workload.
 
 ---
 
 ## 5. Shader/kernel boundary
 
-`rcbt-core` не должен считать WGSL частью semantic API.
+`rcbt-core` must not treat WGSL as part of the semantic API.
 
-Пример logical kernels:
+Example logical kernels:
 
 ```rust
 pub enum CbtKernel {
@@ -190,13 +190,13 @@ pub enum CbtKernel {
 }
 ```
 
-Default portable implementation может быть WGSL + Naga/wgpu. Native Vulkan backend может использовать SPIR-V-specialized kernels, если это измеримо быстрее или открывает нужные subgroup/device-address возможности.
+The default portable implementation may be WGSL + Naga/wgpu. A native Vulkan backend may use SPIR-V-specialized kernels if that is measurably faster or unlocks the needed subgroup/device-address capabilities.
 
-Шейдерный fork допустим только при наличии:
+A shader fork is allowed only given:
 
-- одинаковых observable tree semantics;
+- identical observable tree semantics;
 - differential/regression tests;
-- benchmark выигрыша;
+- a benchmarked win;
 - capability gate.
 
 ---
@@ -205,9 +205,9 @@ Default portable implementation может быть WGSL + Naga/wgpu. Native Vul
 
 Reference project: `jdupuy/libcbt`.
 
-Нужно сделать тонкий FFI/reference adapter, но **не строить production path через C FFI**.
+A thin FFI/reference adapter is needed, but **do not build the production path over C FFI**.
 
-Reference используется для:
+The reference is used for:
 
 ```text
 same initial tree
@@ -220,17 +220,17 @@ same split/merge workload
 compare logical state / encode-decode / leaf set / counts
 ```
 
-Там, где internal heap layout intentionally отличается, сравнивается observable topology, а не byte-for-byte representation.
+Where the internal heap layout intentionally differs, observable topology is compared, not the byte-for-byte representation.
 
-FFI wrapper должен быть маленьким и изолированным. Bindgen не обязан становиться build dependency всего workspace; для небольшого стабильного C surface ручные `extern "C"` declarations приемлемы.
+The FFI wrapper must be small and isolated. Bindgen does not have to become a build dependency of the whole workspace; for a small stable C surface, manual `extern "C"` declarations are acceptable.
 
-Главная цель performance work — не «не проиграть C». **Если новая representation может быть быстрее, compatibility с внутренним layout оригинала не является целью.**
+The main goal of performance work is not "don't lose to C". **If a new representation can be faster, compatibility with the original's internal layout is not a goal.**
 
 ---
 
 ## 7. Performance philosophy: beat the reference, not port it
 
-`rcbt` не считается успешным только потому, что Rust implementation находится в пределах нескольких процентов от reference.
+`rcbt` is not considered successful merely because the Rust implementation is within a few percent of the reference.
 
 Target mindset:
 
@@ -244,55 +244,55 @@ same mathematics / same observable tree semantics
  materially better latency / throughput / scaling
 ```
 
-Основные направления:
+Main directions:
 
-- packed bitsets / bitplanes вместо pointer-heavy node representation;
+- packed bitsets / bitplanes instead of pointer-heavy node representation;
 - dense `u64`/`u128` word processing;
 - branchless classification/decode where measured useful;
-- `popcnt`, `leading_zeros`, `trailing_zeros` и другие native bit ops;
-- SoA/AoSoA для metadata hot paths;
+- `popcnt`, `leading_zeros`, `trailing_zeros` and other native bit ops;
+- SoA/AoSoA for metadata hot paths;
 - batched split/merge decisions;
 - thread-local mutation queues + bounded commit instead of fine-grained shared mutation;
 - vectorized classification where it beats scalar bit tricks;
 - no allocation in steady-state frame update;
 - layout chosen for actual terrain update, not for a pretty object API.
 
-Одиночный `split(node)` benchmark недостаточен. Главный workload — moving-camera frame update, где большинство leaves остаётся stable, небольшой процент split/merge, затем строится compact active/draw list.
+A single `split(node)` benchmark is insufficient. The main workload is a moving-camera frame update, where most leaves stay stable, a small percentage splits/merges, then a compact active/draw list is built.
 
 ---
 
 ## 8. Rust-specific low-level rules: layout, padding, false sharing
 
-Rust не гарантирует layout обычных structs так, как иногда хочется low-level code. Для hot shared state придётся явно заниматься «грязью», но локально и измеримо.
+Rust does not guarantee the layout of ordinary structs the way low-level code sometimes wants. For hot shared state, explicit "dirty" work will be necessary, but locally and measurably.
 
-Правила:
+Rules:
 
-- `#[repr(C)]` использовать на FFI/GPU ABI boundaries, а не как blanket performance annotation;
-- `#[repr(align(N))]` / cache-padded wrappers допустимы для per-thread counters, queue heads и frequently-written state, если perf counters показывают false sharing;
-- не паддить каждый struct «на всякий случай» — лишний footprint может ухудшить cache residency сильнее, чем false sharing;
-- physical cache-line size не считать вечной универсальной константой API; platform-specific implementation может выбрать разумный alignment;
-- hot read-only arrays отделять от hot mutable counters;
-- per-worker state держать раздельно, commit делать крупными batches;
-- GPU ABI structs имеют отдельные explicit layout tests.
+- use `#[repr(C)]` on FFI/GPU ABI boundaries, not as a blanket performance annotation;
+- `#[repr(align(N))]` / cache-padded wrappers are allowed for per-thread counters, queue heads, and frequently-written state if perf counters show false sharing;
+- do not pad every struct "just in case" — extra footprint can hurt cache residency more than false sharing;
+- do not treat the physical cache-line size as an eternal universal API constant; a platform-specific implementation may choose a reasonable alignment;
+- separate hot read-only arrays from hot mutable counters;
+- keep per-worker state separate, commit in large batches;
+- GPU ABI structs have separate explicit layout tests.
 
-Пример implementation detail, не public contract:
+Example implementation detail, not a public contract:
 
 ```rust
 #[repr(align(64))]
 struct Padded<T>(T);
 ```
 
-Такой wrapper имеет смысл для измеренного x86-64 false-sharing case, но не должен протечь в logical tree API.
+Such a wrapper makes sense for a measured x86-64 false-sharing case, but must not leak into the logical tree API.
 
-Benchmark обязан включать single-thread и scaling: padding, которое «ускорило 16 threads», но замедлило 1 thread и раздуло working set, должно оцениваться по реальному frame workload.
+Benchmarks must include single-thread and scaling: padding that "sped up 16 threads" but slowed down 1 thread and bloated the working set must be judged by the real frame workload.
 
 ---
 
 ## 9. Baked canonical height hierarchy
 
-Server не обязан заново вычислять дорогой procedural field для каждого terrain query. Следующий surface format должен сильнее bake'ить canonical low/mid spatial frequencies, сохраняя procedural residual только там, где это выгоднее хранения.
+The server is not required to recompute the expensive procedural field for every terrain query. The next surface format should bake the canonical low/mid spatial frequencies more aggressively, keeping a procedural residual only where it is cheaper than storage.
 
-Не нужен глобальный fixed raster до 32 m. Нужна hierarchical cube-sphere/page representation:
+No global fixed raster down to 32 m is needed. A hierarchical cube-sphere/page representation is needed:
 
 ```text
 planet
@@ -301,7 +301,7 @@ planet
       child pages ...
 ```
 
-Каждая page может хранить:
+Each page may store:
 
 ```text
 base_height
@@ -314,7 +314,7 @@ max_slope_bound
 semantic summary / optional material weights
 ```
 
-Практичный compact format-кандидат:
+Practical compact format candidate:
 
 ```text
 per-page base: f32/f64
@@ -322,9 +322,9 @@ samples: i16 residuals
 scale/bias: f32
 ```
 
-Точная quantization выбирается по error budget, не заранее.
+Exact quantization is chosen by error budget, not up front.
 
-`PlanetField::height_m(dir, min_wavelength_m)` сохраняет semantic contract, но implementation может выбрать:
+`PlanetField::height_m(dir, min_wavelength_m)` keeps its semantic contract, but the implementation may choose:
 
 ```text
 coarse/far query
@@ -338,15 +338,15 @@ contact query
        + bounded short-wave analytic residual if required
 ```
 
-Таким образом source of truth становится hybrid: deterministic bake + deterministic residual, а не обязательное повторное вычисление всех macro/meso bands на каждом runtime query.
+In this way the source of truth becomes a hybrid: deterministic bake + deterministic residual, rather than mandatory recomputation of all macro/meso bands on every runtime query.
 
 ---
 
 ## 10. Why page bounds matter to the server
 
-Вместе с height нужно bake'ить conservative bounds.
+Conservative bounds need to be baked together with height.
 
-Это позволяет делать hierarchical rejection:
+This enables hierarchical rejection:
 
 ```text
 trajectory segment
@@ -356,15 +356,15 @@ trajectory segment
         refine/query children
 ```
 
-Landing search аналогично сначала работает по coarse slope/error bounds и только потом уточняет потенциальные зоны.
+Landing search likewise first works from coarse slope/error bounds and only then refines candidate zones.
 
-Это особенно важно для multiplayer/server scale: лучший query — тот, который не пришлось делать в тысячах точек.
+This is especially important for multiplayer/server scale: the best query is the one that never had to be made at thousands of points.
 
 ---
 
 ## 11. First CBT integration does not require porting all `PlanetField` math to GPU
 
-Первая версия может быть hybrid:
+The first version may be hybrid:
 
 ```text
 CPU/offline:
@@ -380,9 +380,9 @@ rcbt split/merge
 sample/displace generated vertices
 ```
 
-Это уже убирает CPU topology churn.
+This already removes CPU topology churn.
 
-Далее можно переносить renderer-only work по мере профилирования:
+Further renderer-only work can then be moved over as profiling dictates:
 
 ```text
 baked low/mid frequency canonical height
@@ -390,13 +390,13 @@ baked low/mid frequency canonical height
 + GPU cosmetic microdetail
 ```
 
-Authoritative server result при этом остаётся определён baked canonical representation + declared deterministic residual, а не renderer shader state.
+The authoritative server result remains defined by the baked canonical representation + declared deterministic residual, not by renderer shader state.
 
 ---
 
 ## 12. Cooperative/matrix units: not for the tree, maybe for page decoding
 
-Сам CBT hot path — плохой кандидат для tensor/matrix hardware. Его workload в основном:
+The CBT hot path itself is a poor candidate for tensor/matrix hardware. Its workload is mostly:
 
 - packed bits;
 - ballot/popcount;
@@ -405,11 +405,11 @@ Authoritative server result при этом остаётся определён 
 - address/neighbor decode;
 - split/merge decisions.
 
-Для этого subgroup/bit operations естественнее matrix multiply units.
+For this, subgroup/bit operations are more natural than matrix multiply units.
 
-Не надо превращать prefix sum или bit tree update в GEMM только ради галочки «tensor cores used».
+Do not turn a prefix sum or bit-tree update into GEMM just to tick the "tensor cores used" box.
 
-Но cooperative-matrix hardware может быть полезно **рядом** с CBT, если baked height pages позже будут храниться в сильно compressed representation.
+But cooperative-matrix hardware may be useful **next to** CBT if baked height pages are later stored in a highly compressed representation.
 
 Potential optional path:
 
@@ -426,15 +426,15 @@ height block in GPU cache
 rcbt
 ```
 
-Это имеет смысл только если profiling показывает, что page bandwidth/storage важнее decoder ALU cost и compression ratio действительно окупает complexity.
+This only makes sense if profiling shows that page bandwidth/storage matters more than decoder ALU cost and the compression ratio genuinely pays for the complexity.
 
-`cooperative_matrix` — optional capability. Core CBT correctness/performance contract не зависит от него.
+`cooperative_matrix` is an optional capability. The core CBT correctness/performance contract does not depend on it.
 
 ---
 
 ## 13. GPU update pipeline target
 
-Исходный target pipeline:
+Initial target pipeline:
 
 ```text
 camera + error parameters
@@ -458,9 +458,9 @@ sample height / generate vertex attributes
 indirect render
 ```
 
-Оптимизация должна рассматривать весь frame pipeline. Если два kernels можно безопасно слить и убрать global memory pass/barrier — это потенциально важнее, чем ускорить отдельный kernel на 5%.
+Optimization must consider the whole frame pipeline. If two kernels can be safely fused to remove a global memory pass/barrier, that is potentially more important than speeding up an individual kernel by 5%.
 
-Native Vulkan backend особенно интересен для экспериментов с:
+A native Vulkan backend is especially interesting for experiments with:
 
 - explicit barriers/synchronization;
 - subgroup features;
@@ -469,7 +469,7 @@ Native Vulkan backend особенно интересен для экспери�
 - indirect count / generated draw data;
 - vendor-neutral extensions, gated by capabilities.
 
-Наличие такого backend не отменяет portable wgpu path.
+Having such a backend does not cancel the portable wgpu path.
 
 ---
 
@@ -477,7 +477,7 @@ Native Vulkan backend особенно интересен для экспери�
 
 ### 14.1 CPU/reference micro + workload benches
 
-Сравнивать `libcbt` и `rcbt-core`:
+Compare `libcbt` and `rcbt-core`:
 
 ```text
 create/reset
@@ -491,7 +491,7 @@ full refinement stress
 compact leaf-list construction
 ```
 
-Размеры должны доходить до реального числа candidate leaves, а не toy trees.
+Sizes must reach the real number of candidate leaves, not toy trees.
 
 Metrics:
 
@@ -512,7 +512,7 @@ Linux benchmark path: custom harness/Criterion where appropriate + `perf stat`/`
 
 ### 14.2 Differential correctness
 
-После одинаковой sequence операций сравнивать:
+After an identical sequence of operations, compare:
 
 - leaf count;
 - active logical leaf set;
@@ -521,11 +521,11 @@ Linux benchmark path: custom harness/Criterion where appropriate + `perf stat`/`
 - neighbor/topology constraints;
 - serialized logical snapshot where defined.
 
-Fuzz/property tests должны генерировать длинные split/merge sequences и сравнивать с reference oracle.
+Fuzz/property tests must generate long split/merge sequences and compare against the reference oracle.
 
 ### 14.3 GPU benches
 
-Отдельно мерить:
+Measure separately:
 
 ```text
 classify
@@ -537,7 +537,7 @@ vertex generation
 full CBT frame
 ```
 
-И отдельно end-to-end terrain scenario:
+And separately, an end-to-end terrain scenario:
 
 ```text
 hover
@@ -549,13 +549,13 @@ low-AGL fast pass
 fast turn
 ```
 
-Главный KPI — не raw triangle count, а frame cost + projected error + absence of holes + bounded memory.
+The main KPI is not raw triangle count, but frame cost + projected error + absence of holes + bounded memory.
 
 ---
 
 ## 15. Integration into Bevy
 
-Bevy integration должна быть thin adapter:
+Bevy integration must be a thin adapter:
 
 ```text
 Bevy camera / extraction
@@ -567,7 +567,7 @@ bevy-rcbt adapter
 rcbt runtime/backend
 ```
 
-`bevy-rcbt` отвечает за:
+`bevy-rcbt` is responsible for:
 
 - extraction camera/view inputs;
 - render-world resource lifetime;
@@ -575,44 +575,44 @@ rcbt runtime/backend
 - integration with depth/material/shadows;
 - debug visualization/metrics.
 
-Он **не** владеет tree semantics, backend abstraction или canonical terrain.
+It does **not** own tree semantics, backend abstraction, or canonical terrain.
 
-Если Bevy позже получает подходящий native GPU-driven terrain primitive, adapter может стать тоньше или исчезнуть. Если Thessa уходит с Bevy, `rcbt-core` и backend crates остаются.
+If Bevy later gains a suitable native GPU-driven terrain primitive, the adapter may become thinner or disappear. If Thessa moves away from Bevy, `rcbt-core` and the backend crates remain.
 
 ---
 
 ## 16. UMA/mobile considerations
 
-UMA актуальна не только для desktop APU, но и для mobile SoC. Поэтому желательно:
+UMA matters not only for desktop APUs, but also for mobile SoCs. Hence it is desirable to:
 
-- минимизировать лишние CPU copies и staging;
-- не держать дублированные long-lived CPU/GPU payloads без consumer;
-- считать bytes touched и upload/copy bandwidth такими же KPI, как compute time;
-- capability-driven выбирать shared-memory fast paths;
-- не предполагать, что host-visible memory автоматически быстра для CPU reads;
-- не делать mobile path отдельной физикой/terrain semantics.
+- minimize extra CPU copies and staging;
+- avoid holding duplicated long-lived CPU/GPU payloads with no consumer;
+- treat bytes touched and upload/copy bandwidth as KPIs on par with compute time;
+- select shared-memory fast paths in a capability-driven way;
+- not assume that host-visible memory is automatically fast for CPU reads;
+- not make the mobile path a separate physics/terrain semantics.
 
-CBT сам по себе снижает churn topology, а baked compressed pages могут дополнительно уменьшить pressure на shared memory bandwidth.
+CBT by itself reduces topology churn, and baked compressed pages can further reduce pressure on shared memory bandwidth.
 
 ---
 
 ## 17. Acceptance criteria for the first serious `rcbt` milestone
 
-Фича не считается успешной просто потому, что картинка появилась.
+A feature is not considered successful merely because a picture appeared.
 
-Нужно одновременно:
+All of the following are required at once:
 
 - differential correctness against `libcbt` reference for supported semantics;
 - no Bevy/wgpu types in `rcbt-core` public API;
-- portable wgpu backend работает хотя бы на Linux/Vulkan;
-- native Vulkan prototype может использовать тот же logical runtime API;
-- current CPU tile renderer остаётся fallback до подтверждения parity;
+- portable wgpu backend works at least on Linux/Vulkan;
+- native Vulkan prototype can use the same logical runtime API;
+- current CPU tile renderer remains the fallback until parity is confirmed;
 - terrain visual error bounded and measurable;
 - no holes/cracks beyond declared fallback policy;
 - steady-state update allocation-free or effectively allocation-free;
-- real moving-camera workload materially быстрее reference CPU topology path;
-- full terrain path снимает CPU geometry generation as dominant bottleneck;
-- dedicated/headless server behavior не зависит от наличия `rcbt`.
+- real moving-camera workload materially faster than the reference CPU topology path;
+- full terrain path removes CPU geometry generation as the dominant bottleneck;
+- dedicated/headless server behavior does not depend on the presence of `rcbt`.
 
 Performance target intentionally aggressive: **reference implementation — baseline to beat, not a speed ceiling to imitate**.
 
@@ -620,20 +620,20 @@ Performance target intentionally aggressive: **reference implementation — base
 
 ## 18. Implementation order
 
-1. Зафиксировать reference `libcbt` revision/license and build tiny `rcbt-ref` oracle.
-2. Сделать differential test harness до агрессивной оптимизации.
-3. Реализовать минимальный pure-Rust logical tree.
-4. Снять single-thread/reference counters и найти real hot representation.
-5. Перейти на packed/batched layout; только затем добавлять parallel update.
-6. Добавить false-sharing/scaling probes и cache padding только там, где counters показывают необходимость.
-7. Реализовать portable GPU prototype (`rcbt-wgpu`) с synthetic height field.
-8. Подключить Bevy через thin adapter, не через types в core.
-9. Подключить baked height page provider и сравнить с current CPU tile renderer на одинаковых camera routes.
-10. Реализовать native Vulkan backend только после появления конкретной measurable причины, не ради самого факта Vulkan.
-11. После этого исследовать compressed page formats.
-12. Cooperative-matrix decoder — только отдельный spike, если memory/page bandwidth остаётся bottleneck.
+1. Pin the reference `libcbt` revision/license and build a tiny `rcbt-ref` oracle.
+2. Build the differential test harness before aggressive optimization.
+3. Implement a minimal pure-Rust logical tree.
+4. Collect single-thread/reference counters and find the real hot representation.
+5. Move to a packed/batched layout; only then add parallel update.
+6. Add false-sharing/scaling probes and cache padding only where counters show the need.
+7. Implement the portable GPU prototype (`rcbt-wgpu`) with a synthetic height field.
+8. Connect Bevy via a thin adapter, not via types in core.
+9. Connect the baked height page provider and compare against the current CPU tile renderer on identical camera routes.
+10. Implement the native Vulkan backend only after a concrete measurable reason appears, not for the sake of Vulkan itself.
+11. After that, explore compressed page formats.
+12. Cooperative-matrix decoder — only a separate spike if memory/page bandwidth remains the bottleneck.
 
-Не оптимизировать всё одновременно: reference oracle и repeatable workload должны существовать раньше архитектурных трюков.
+Do not optimize everything at once: the reference oracle and repeatable workload must exist before architectural tricks.
 
 ---
 

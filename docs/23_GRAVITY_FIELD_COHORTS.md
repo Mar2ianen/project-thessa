@@ -6,17 +6,17 @@ time-span patches, quadrupole, cohort keys, planner-patch reuse, and GPU
 backends remain design targets. Struct sketches below are the target API and
 do not all compile against the current single-tick types.
 
-Статус: **architecture / performance design target**.
+Status: **architecture / performance design target**.
 
-Эта дока фиксирует следующий major gravity optimization layer поверх уже существующих baked ephemerides, adaptive integration и SIMD-oriented ephemeris tables.
+This doc defines the next major gravity optimization layer on top of the already existing baked ephemerides, adaptive integration and SIMD-oriented ephemeris tables.
 
-Главная идея: runtime не должен каждый раз отвечать на вопрос
+The main idea: the runtime should not answer the question
 
-> «какова сумма гравитации всех тел в этой точке прямо сейчас?»
+> "what is the total gravity of all bodies at this point right now?"
 
-с нуля для каждого аппарата и каждого RK stage, если много объектов находятся в одной области пространства и времени, а дальние источники образуют гладкое поле.
+from scratch for every vehicle and every RK stage when many objects are in one region of space and time, and distant sources form a smooth field.
 
-Вместо этого нужны две независимые и совместимые формы sharing:
+Instead, two independent and compatible forms of sharing are needed:
 
 ```text
 source-side sharing
@@ -28,27 +28,27 @@ target-side sharing
     local field patch per spatial-temporal cohort
 ```
 
-Первая уменьшает число источников, которые нужно раскрывать. Вторая позволяет сотням близких targets переиспользовать уже скомпилированное локальное поле.
+The first reduces the number of sources that need to be opened. The second lets hundreds of nearby targets reuse an already compiled local field.
 
-Это **не SOI**, не patched conics и не «грузовые корабли получают дешёвую физику». Все физические источники продолжают существовать; approximation разрешается только при bounded error.
+This is **not SOI**, not patched conics, and not "cargo ships get cheap physics". All physical sources continue to exist; approximation is allowed only under bounded error.
 
 ---
 
 ## 1. Current baseline and missing sharing
 
-Текущий `GravityField::acceleration(position, time)` проходит по всем gravity sources, получает `body_state`, затем для каждого источника считает distance, reciprocal distance cubed и суммирует point-mass acceleration.
+The current `GravityField::acceleration(position, time)` walks over all gravity sources, obtains `body_state`, then for each source computes distance, reciprocal distance cubed and sums the point-mass acceleration.
 
-`EphemerisTable` уже решает важную часть стоимости:
+`EphemerisTable` already solves an important part of the cost:
 
-- sample'ит source motion один раз на horizon;
-- хранит component-major position/velocity arrays;
-- интерполирует source states вместо повторных Kepler solves;
-- имеет SIMD-friendly layout;
-- snapshot'ит все body centers на выбранный epoch.
+- samples source motion once per horizon;
+- stores component-major position/velocity arrays;
+- interpolates source states instead of repeated Kepler solves;
+- has a SIMD-friendly layout;
+- snapshots all body centers at the chosen epoch.
 
-Но даже после этого каждый target отдельно повторяет source accumulation.
+But even after that, each target separately repeats source accumulation.
 
-То есть текущий conceptual hot path остаётся близким к:
+That is, the current conceptual hot path remains close to:
 
 ```text
 for target in targets:
@@ -59,23 +59,23 @@ for target in targets:
         target.g += mu * dx / r^3
 ```
 
-Adaptive tick integration уменьшает количество accepted time steps, но каждое оставшееся RK force evaluation всё равно платит за source set.
+Adaptive tick integration reduces the number of accepted time steps, but each remaining RK force evaluation still pays for the source set.
 
-Experimental `gravity_interpolation` уже исследует temporal force reuse. Новый дизайн не заменяет эту работу, а делает approximation source-aware и target-shareable.
+Experimental `gravity_interpolation` already explores temporal force reuse. The new design does not replace that work; it makes approximation source-aware and target-shareable.
 
 ---
 
 ## 2. Design goals
 
-Основные цели:
+Main goals:
 
-- materially снизить gravity cost для fleet-scale simulation;
-- сделать `100–300` близких freighters намного дешевле `100–300 × one craft`;
-- сохранить exact/authoritative fallback;
-- использовать одну и ту же bounded approximation semantics в simulation, trajectory planning и autopilot candidate search;
-- сначала получить сильный CPU-only path;
-- оставить GPU/other accelerators как optional backend later;
-- не привязывать correctness к классу аппарата, vendor'у CPU/GPU или observer state.
+- materially reduce gravity cost for fleet-scale simulation;
+- make `100–300` nearby freighters much cheaper than `100–300 × one craft`;
+- keep an exact/authoritative fallback;
+- use the same bounded approximation semantics in simulation, trajectory planning and autopilot candidate search;
+- get a strong CPU-only path first;
+- leave GPU/other accelerators as an optional backend for later;
+- do not tie correctness to vehicle class, CPU/GPU vendor, or observer state.
 
 Target gameplay workload:
 
@@ -87,15 +87,15 @@ Target gameplay workload:
     share destination and much of the trajectory geometry
 ```
 
-Это почти идеальный target-side sharing case.
+This is an almost ideal target-side sharing case.
 
 ---
 
 ## 3. Source hierarchy is part of celestial representation
 
-В Thessa astronomical hierarchy известна заранее и стабильна по topology. Поэтому generic Barnes–Hut tree, перестраиваемый каждый tick, не нужен.
+In Thessa the astronomical hierarchy is known in advance and stable in topology. Therefore a generic Barnes–Hut tree rebuilt every tick is not needed.
 
-Пример logical tree:
+Example logical tree:
 
 ```text
 Asterion system root
@@ -114,7 +114,7 @@ Asterion system root
    └─ Janus system
 ```
 
-Inner node — не fake body. Это aggregate representation физически существующих children.
+An inner node is not a fake body. It is an aggregate representation of physically existing children.
 
 Candidate node data:
 
@@ -134,15 +134,15 @@ pub struct GravitySourceNode {
 }
 ```
 
-Точная storage форма определяется baker/runtime representation.
+The exact storage form is determined by the baker/runtime representation.
 
 ---
 
 ## 4. Bake the hierarchy because the source trajectories are already baked
 
-Поскольку canonical celestial trajectories уже deterministic/baked, source hierarchy тоже можно подготовить offline.
+Since canonical celestial trajectories are already deterministic/baked, the source hierarchy can also be prepared offline.
 
-Для каждого internal node можно заранее получить как функции `SimTime`:
+For each internal node the following can be obtained in advance as functions of `SimTime`:
 
 ```text
 mu_total
@@ -152,30 +152,30 @@ quadrupole(t)
 optional higher conservative bounds
 ```
 
-Для пары B+C это означает, что runtime не обязан сначала вычислить B(t), C(t), а потом каждый раз собирать aggregate заново.
+For the B+C pair this means the runtime is not obliged to first compute B(t), C(t) and then reassemble the aggregate from scratch every time.
 
-Можно хранить эти tracks через тот же класс representations, который применяется к ephemerides:
+These tracks can be stored through the same class of representations that is applied to ephemerides:
 
 - Hermite segments;
 - Chebyshev segments;
 - uniform sampled tracks where cheaper;
 - bounded interpolation error metadata.
 
-Source-tree topology должна быть versioned вместе с system ephemeris/content version.
+Source-tree topology must be versioned together with the system ephemeris/content version.
 
 ---
 
 ## 5. Far-field representation
 
-Для достаточно далёкого source node первый approximation — monopole at barycenter:
+For a sufficiently distant source node the first approximation is a monopole at the barycenter:
 
 \[
 \mathbf g(\mathbf x)=\mu\frac{\mathbf r}{|\mathbf r|^3}.
 \]
 
-Если monopole error budget уже недостаточен, следующий natural correction — quadrupole.
+If the monopole error budget is already insufficient, the next natural correction is the quadrupole.
 
-Barycentric expansion особенно удобна, потому что dipole term относительно barycenter исчезает.
+The barycentric expansion is especially convenient because the dipole term relative to the barycenter vanishes.
 
 Conceptual fidelity ladder:
 
@@ -193,7 +193,7 @@ very near
     exact body/source terms
 ```
 
-Opening decision не должен быть hardcoded как `s/r < theta` only. Предпочтительно использовать conservative acceleration-error estimate:
+The opening decision must not be hardcoded as `s/r < theta` only. It is preferable to use a conservative acceleration-error estimate:
 
 ```text
 if estimated_node_error <= allocated_gravity_error_budget:
@@ -202,15 +202,15 @@ else:
     descend
 ```
 
-Классический geometric ratio может быть cheap prefilter, но final policy должна быть tied to physical/numerical error budget.
+The classic geometric ratio can be a cheap prefilter, but the final policy must be tied to the physical/numerical error budget.
 
 ---
 
 ## 6. Target cohorts: share a local field, not one acceleration vector
 
-Два близких аппарата не имеют строго одинаковую acceleration. Поэтому нельзя просто вычислить `g(center)` и отдать всем.
+Two nearby vehicles do not have strictly identical acceleration. Therefore one cannot simply compute `g(center)` and give it to everyone.
 
-Но дальнее поле локально гладкое. Для target cohort вокруг anchor `x0`:
+But the far field is locally smooth. For a target cohort around anchor `x0`:
 
 \[
 \mathbf g(\mathbf x)
@@ -219,15 +219,15 @@ else:
 +J(\mathbf x-\mathbf x_0)
 \]
 
-где `J` — gravity gradient / tidal tensor.
+where `J` is the gravity gradient / tidal tensor.
 
-Для point-mass source:
+For a point-mass source:
 
 \[
 J = \mu\left(\frac{3\mathbf r\mathbf r^T}{r^5}-\frac{I}{r^3}\right).
 \]
 
-При необходимости следующий уровень:
+If needed, the next level:
 
 \[
 \mathbf g(\mathbf x)
@@ -237,7 +237,7 @@ J = \mu\left(\frac{3\mathbf r\mathbf r^T}{r^5}-\frac{I}{r^3}\right).
 +\frac12H[\Delta\mathbf x,\Delta\mathbf x].
 \]
 
-То есть одна expensive field compilation может обслуживать много targets через несколько FMA на объект.
+That is, one expensive field compilation can serve many targets with a few FMAs per object.
 
 Candidate runtime cache:
 
@@ -297,7 +297,7 @@ If the convoy approaches another body, the source tree naturally opens and the e
 
 ## 8. Cohort construction
 
-A cohort is not «all cargo ships».
+A cohort is not "all cargo ships".
 
 Class/role may define a requested error budget or scheduling policy, but spatial/temporal validity defines actual sharing.
 
@@ -740,7 +740,7 @@ First serious milestone is accepted when:
 - autopilot/planner can reuse the same bounded representation and exact-revalidate finalists;
 - performance counters show where the remaining cost lives before adding GPU/NPU/tensor complexity.
 
-Ключевой принцип:
+Key principle:
 
 ```text
 Do not solve the same slowly-varying gravity problem hundreds of times.

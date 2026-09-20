@@ -4,15 +4,15 @@ Status: design baseline; invariants normative. Throughput phasing is archival:
 GPU-indexed CBT is implemented opt-in (`terrain=gpu_indexed`); the CPU baking
 description below applies to the fallback path only.
 
-Статус: **design target / performance follow-up**.
+Status: **design target / performance follow-up**.
 
-Цель этой доки — увеличить скорость перемещения, при которой realtime terrain успевает корректно прогружаться, не ухудшая continuity и не превращая `PlanetField` в набор заранее запечённых растров.
+The goal of this doc is to increase the travel speed at which realtime terrain manages to load correctly, without degrading continuity and without turning `PlanetField` into a set of pre-baked rasters.
 
-Текущий vertical slice уже показывает важный результат: полностью процедурный terrain, включая geometry, albedo, roughness, normal maps, mip generation и upload preparation, успевает за аппаратом примерно до порядка **3 km/s** на текущей машине. Для first implementation это хороший baseline. Проблема не в том, что cube-sphere или canonical field сами по себе медленные; проблема в том, что client streaming frontier сейчас выполняет слишком много работы, часть которой вообще не обязана быть CPU tile-build work.
+The current vertical slice already demonstrates an important result: fully procedural terrain, including geometry, albedo, roughness, normal maps, mip generation and upload preparation, keeps up with the vehicle up to roughly **3 km/s** on the current machine. For a first implementation this is a good baseline. The problem is not that the cube-sphere or the canonical field are slow per se; the problem is that the client streaming frontier currently does too much work, some of which is not CPU tile-build work at all.
 
-Критичное уточнение: **render streaming, authoritative surface queries и contact representation — разные consumers одной canonical поверхности**. Dedicated/headless server не обязан иметь GPU или render mesh, но поверхность не исчезает без наблюдателя: она нужна автоматике, terrain avoidance, посадкам и contact dynamics.
+Critical clarification: **render streaming, authoritative surface queries and contact representation are different consumers of one canonical surface**. A dedicated/headless server is not required to have a GPU or a render mesh, but the surface does not disappear without an observer: it is needed for automation, terrain avoidance, landings and contact dynamics.
 
-Основная target-схема:
+Main target scheme:
 
 ```text
                          PlanetField
@@ -33,43 +33,43 @@ description below applies to the fallback path only.
 No camera is required for the left or middle branches.
 ```
 
-Для клиента цель остаётся простой:
+For the client the goal remains simple:
 
 ```text
 client streaming frontier = geometry bandwidth problem,
 not per-tile texture baking problem
 ```
 
-## 1. Что уже работает
+## 1. What already works
 
-Текущая система имеет правильные инварианты, их нельзя потерять ради скорости:
+The current system has the right invariants, they must not be lost for the sake of speed:
 
-- canonical terrain — чистая функция physical direction + wavelength, а tile только cache/address unit;
-- одна и та же physical point имеет одну и ту же поверхность независимо от camera, LOD, sampling order и наличия renderer;
-- cube-sphere исключает equirectangular seam и pole pinching;
-- coarse sample является frequency-prefix более fine sample, а не другой поверхностью;
-- global subtraction выполняется в `f64`, tile-local geometry хранится в `f32`;
-- parent удерживается до готовности replacement children, поэтому visual LOD transition не создаёт holes;
-- coarse horizon cover и fine camera-weighted selection разделены;
-- async workers не блокируют frame thread;
-- cache bounded;
-- authoritative geometry/semantics и renderer используют одну canonical физическую поверхность, а не независимые random fields;
-- `FlightAuthority` уже способен обращаться к `PlanetField` без renderer; текущий terrain-impact guard является первым headless consumer canonical surface.
+- canonical terrain is a pure function of physical direction + wavelength, and a tile is only a cache/address unit;
+- the same physical point has the same surface regardless of camera, LOD, sampling order and renderer presence;
+- cube-sphere eliminates equirectangular seam and pole pinching;
+- a coarse sample is a frequency-prefix of a finer sample, not a different surface;
+- global subtraction is performed in `f64`, tile-local geometry is stored in `f32`;
+- a parent is retained until replacement children are ready, so visual LOD transition does not create holes;
+- coarse horizon cover and fine camera-weighted selection are separated;
+- async workers do not block the frame thread;
+- cache is bounded;
+- authoritative geometry/semantics and the renderer use one canonical physical surface, not independent random fields;
+- `FlightAuthority` can already query `PlanetField` without a renderer; the current terrain-impact guard is the first headless consumer of the canonical surface.
 
-Эти свойства важнее конкретного implementation текущего renderer path.
+These properties matter more than the specific implementation of the current renderer path.
 
-Главное архитектурное правило:
+Main architectural rule:
 
 ```text
 camera visibility may control render work,
 but must never define whether physical terrain exists.
 ```
 
-## 2. Где сейчас тратится client streaming budget
+## 2. Where the client streaming budget is currently spent
 
-Один новый render tile сейчас означает существенно больше, чем quad mesh.
+A single new render tile currently means much more than a quad mesh.
 
-Упрощённо текущий worker выполняет:
+In simplified form the current worker does:
 
 ```text
 request TileKey
@@ -97,19 +97,19 @@ request TileKey
            ` CPU mip generation / upload-ready images
 ```
 
-На `L13+` texture tier сейчас 128 px plus apron. Следовательно один tile содержит порядка 17k material texels, каждый из которых выполняет несколько procedural evaluations. В flight streaming это легко становится существенно дороже самой mesh geometry.
+At `L13+` the texture tier is currently 128 px plus apron. Hence a single tile contains roughly 17k material texels, each of which runs several procedural evaluations. In flight streaming this easily becomes substantially more expensive than the mesh geometry itself.
 
-Увеличение worker count может улучшить throughput на свободных cores, но оно не меняет асимптотику и быстро начинает конкурировать с flight/server/client work за CPU и memory bandwidth.
+Increasing the worker count can improve throughput on free cores, but it does not change the asymptotics and quickly starts competing with flight/server/client work for CPU and memory bandwidth.
 
-Этот bottleneck относится прежде всего к **client visual streaming**. Его нельзя лечить переносом authoritative surface на GPU: server и automation всё равно должны иметь CPU-доступ к canonical field.
+This bottleneck concerns primarily **client visual streaming**. It cannot be fixed by moving the authoritative surface to the GPU: the server and automation still need CPU access to the canonical field.
 
-## 3. Representation bandwidth и wasted resolution
+## 3. Representation bandwidth and wasted resolution
 
-Canonical terrain height сейчас имеет physical micro bands до порядка десятков метров. При этом near tiles могут иметь mesh vertex spacing и texture texel spacing существенно меньше этой длины волны.
+Canonical terrain height currently has physical micro bands down to tens of meters. At the same time near tiles may have mesh vertex spacing and texture texel spacing substantially smaller than this wavelength.
 
-Это само по себе не ошибка: mesh subdivision нужен для projection, curvature, skirts и будущих более коротких bands. Но после того, как geometry resolution становится finer, чем canonical height bandwidth, дальнейшее увеличение subdivisions **не добавляет новую форму поверхности**.
+This is not a bug by itself: mesh subdivision is needed for projection, curvature, skirts and future shorter bands. But once geometry resolution becomes finer than the canonical height bandwidth, further increasing subdivisions **adds no new surface shape**.
 
-Нужно явно разделить spatial-frequency responsibilities:
+Spatial-frequency responsibilities need to be split explicitly:
 
 ```text
 large / medium scale
@@ -126,7 +126,7 @@ sub-object scale
     material normal / roughness only
 ```
 
-Ориентир, не hard contract:
+A guideline, not a hard contract:
 
 ```text
 > ~32 m          canonical geometric height
@@ -135,29 +135,29 @@ sub-object scale
 < ~1 m           material normal / roughness / albedo microstructure
 ```
 
-Если позже collision/gameplay требуют real geometry ниже 32 m, canonical field можно расширить дополнительными bands. Но renderer не должен требовать такого расширения только ради того, чтобы земля перестала выглядеть мыльной.
+If later collision/gameplay require real geometry below 32 m, the canonical field can be extended with additional bands. But the renderer should not require such an extension just to keep the ground from looking blurry.
 
-И наоборот: shader-only displacement ниже canonical cutoff не должен внезапно становиться препятствием для шасси. Если feature физически важен, он должен существовать в authoritative representation.
+Conversely: shader-only displacement below the canonical cutoff must not suddenly become an obstacle for the landing gear. If a feature is physically important, it must exist in the authoritative representation.
 
 ## 4. Target split: authoritative surface, contact materialization, render shading
 
 ### 4.1 CPU authoritative/query side
 
-`PlanetField` остаётся CPU-доступным canonical источником поверхности для server/gameplay независимо от renderer.
+`PlanetField` remains a CPU-accessible canonical source of the surface for server/gameplay regardless of the renderer.
 
-Типовые consumers:
+Typical consumers:
 
 - height at direction / position;
 - surface normal / slope estimate;
 - terrain clearance;
 - path/trajectory sampling;
 - landing-zone evaluation;
-- geology/biome/climate semantics, где они gameplay-relevant;
-- deterministic placement крупных physical surface features.
+- geology/biome/climate semantics where they are gameplay-relevant;
+- deterministic placement of large physical surface features.
 
-Это **query representation**, а не render mesh. Во многих случаях автоматика может работать напрямую с field samples без материализации сетки.
+This is a **query representation**, not a render mesh. In many cases automation can work directly with field samples without materializing a mesh.
 
-Пример API-направления:
+Example API direction:
 
 ```rust
 pub trait SurfaceQuery {
@@ -168,13 +168,13 @@ pub trait SurfaceQuery {
 }
 ```
 
-Не обязательно вводить именно такой trait сейчас; важна semantics: query fidelity задаётся физической задачей, а не camera LOD.
+It is not necessary to introduce exactly this trait now; the semantics matter: query fidelity is defined by the physical task, not by camera LOD.
 
 ### 4.2 CPU contact representation
 
-Для посадки одного `height_m(point)` недостаточно. Когда аппарат действительно взаимодействует с поверхностью, server должен уметь получить локальную геометрию/контактное представление для:
+For landing, a single `height_m(point)` is not enough. When a vehicle actually interacts with the surface, the server must be able to obtain a local geometry/contact representation for:
 
-- нескольких landing legs / wheels;
+- several landing legs / wheels;
 - hull/body contacts;
 - local surface normal;
 - uneven terrain;
@@ -200,15 +200,15 @@ contact solver
 craft leaves region -> patch may be evicted
 ```
 
-Этот patch создаётся **из physics need**, не из observer/camera need. На пустом dedicated server полностью автоматическая посадка должна работать с той же physical surface, что и при подключённом клиенте.
+This patch is created from **physics need**, not from observer/camera need. On an empty dedicated server a fully automatic landing must work with the same physical surface as with a connected client.
 
-Contact representation не обязано совпадать с client render triangulation. Обязано совпадать физическое поле высот/features в пределах заявленной error bound.
+Contact representation does not have to match client render triangulation. What must match is the physical height/feature field within the stated error bound.
 
 ### 4.3 Automation without an observer
 
-Автоматика является отдельным surface consumer и не должна зависеть от того, смотрит ли кто-то на аппарат.
+Automation is a separate surface consumer and must not depend on whether anyone is watching the vehicle.
 
-Примеры:
+Examples:
 
 ```text
 landing planner
@@ -226,7 +226,7 @@ unobserved scripted landing
     -> execute full authoritative contact dynamics
 ```
 
-Это и есть правильная версия «оптимизации когда никто не видит»:
+This is the correct version of "optimization for when nobody is watching":
 
 ```text
 no observer
@@ -241,7 +241,7 @@ no observer
 
 ### 4.4 Client render geometry side
 
-CPU client streaming должен в основном производить данные, которые нужны raster path и пока не вычисляются эффективнее на GPU:
+CPU client streaming should mostly produce data needed by the raster path and not yet computed more efficiently on the GPU:
 
 - tile anchor;
 - positions / displaced surface geometry;
@@ -249,11 +249,11 @@ CPU client streaming должен в основном производить д�
 - indices and skirts or replacement seam strategy;
 - optional compact semantic weights needed by the material;
 
-Новый render tile не должен по умолчанию создавать три уникальных CPU-generated texture assets.
+A new render tile should not by default create three unique CPU-generated texture assets.
 
 ### 4.5 GPU visual side
 
-Surface shader получает continuous world/body-fixed coordinates и вычисляет visual detail непосредственно в пространстве планеты:
+The surface shader receives continuous world/body-fixed coordinates and computes visual detail directly in planet space:
 
 ```text
 planet/body direction
@@ -264,20 +264,20 @@ semantic climate inputs (if needed)
 world seed / material parameters
 ```
 
-На GPU должны переехать в первую очередь:
+The first things to move to the GPU are:
 
-- regional/variation noise, используемый только для appearance;
+- regional/variation noise used only for appearance;
 - fine color grain;
 - small-scale normal perturbation;
 - roughness modulation;
-- biome/material blending, если его входы доступны без дорогого authoritative query;
+- biome/material blending, if its inputs are available without an expensive authoritative query;
 - near tiling / triplanar or spherical-coordinate detail layers.
 
-Это не требует превращать мир в repeated texture wallpaper. Deterministic procedural noise может оставаться continuous в physical coordinates; просто consumer меняется с CPU image baker на shader.
+This does not require turning the world into repeated texture wallpaper. Deterministic procedural noise can remain continuous in physical coordinates; only the consumer changes from a CPU image baker to a shader.
 
 ## 5. Canonical field vs renderer field
 
-Нужно сохранить чёткую границу:
+A clear boundary must be kept:
 
 ```text
 PlanetField authoritative outputs
@@ -292,13 +292,13 @@ SurfaceVisualField
     - shader-only blending detail
 ```
 
-`SurfaceVisualField` может быть производным от того же seed и физических координат, но **не должен менять collision/flight terrain height**.
+`SurfaceVisualField` may be derived from the same seed and physical coordinates, but it **must not change collision/flight terrain height**.
 
-Это позволяет renderer быть сильно более высокочастотным, не заставляя terrain queries, contact solver и server повторять shader workload.
+This allows the renderer to be much higher-frequency without forcing terrain queries, the contact solver and the server to repeat the shader workload.
 
-Если visual feature должен стать gameplay-relevant (например крупный валун или кратер), он перестаёт быть shader-only и получает deterministic object/geometry representation на authoritative side.
+If a visual feature must become gameplay-relevant (for example a large boulder or crater), it stops being shader-only and gets a deterministic object/geometry representation on the authoritative side.
 
-Нужно избегать скрытой третьей поверхности:
+A hidden third surface must be avoided:
 
 ```text
 BAD:
@@ -312,56 +312,56 @@ one canonical physical field
 
 ## 6. GPU/client implementation options
 
-Нет необходимости сразу выбирать одну технику для всего диапазона. Все варианты этого раздела — **renderer implementation**, не обязательная зависимость dedicated server.
+There is no need to pick one technique for the whole range right away. All options in this section are **renderer implementation**, not a required dependency of the dedicated server.
 
 ### Option A — procedural WGSL
 
-Портировать дешёвый deterministic noise и material functions в WGSL.
+Port cheap deterministic noise and material functions to WGSL.
 
-Плюсы:
+Pros:
 
 - no per-tile texture generation/upload;
 - continuous world-space coordinates;
 - unlimited effective material resolution near camera;
 - simple cache story.
 
-Минусы:
+Cons:
 
 - shader ALU cost;
-- CPU/GPU bitwise identity не гарантируется;
-- сложные climate/province calculations не стоит буквально дублировать на GPU.
+- CPU/GPU bitwise identity is not guaranteed;
+- complex climate/province calculations should not be duplicated literally on the GPU.
 
-Поэтому GPU path должен использовать только cosmetic subset или compact precomputed semantic inputs.
+Therefore the GPU path should use only a cosmetic subset or compact precomputed semantic inputs.
 
 ### Option B — shared material textures / arrays
 
-Использовать небольшое число reusable detail textures / texture arrays, tiled/triplanar/spherical blended по semantic weights.
+Use a small number of reusable detail textures / texture arrays, tiled/triplanar/spherical blended by semantic weights.
 
-Плюсы:
+Pros:
 
-- очень дешёвый runtime;
+- very cheap runtime;
 - hardware filtering/aniso/mips;
-- хорошо подходит для rock/soil/snow/ice microstructure.
+- well suited for rock/soil/snow/ice microstructure.
 
-Минусы:
+Cons:
 
-- нужны source assets;
-- repeated texture artifacts нужно ломать rotation/noise blending;
-- меньше procedural uniqueness.
+- source assets are needed;
+- repeated texture artifacts need to be broken up by rotation/noise blending;
+- less procedural uniqueness.
 
 ### Option C — hybrid virtual/detail cache
 
-Для дорогих visual functions GPU/compute или background worker может запекать reusable pages в virtual texture/cache, а не уникальные textures строго 1:1 на geometry tile.
+For expensive visual functions, GPU/compute or a background worker may bake reusable pages into a virtual texture/cache, rather than unique textures strictly 1:1 to a geometry tile.
 
-Это имеет смысл позже, если pure shader становится дорогим или нужны authored high-detail regions.
+This makes sense later, if pure shader becomes expensive or authored high-detail regions are needed.
 
-Первый target должен быть проще: **remove per-tile albedo/roughness/normal baking from the critical flight streaming path**.
+The first target should be simpler: **remove per-tile albedo/roughness/normal baking from the critical flight streaming path**.
 
 ### Option D — GPU adaptive terrain / CBT-like tessellation
 
-Concurrent Binary Tree / related GPU-driven adaptive triangulation интересен как возможная поздняя замена client-side cube-sphere render mesh streaming.
+Concurrent Binary Tree / related GPU-driven adaptive triangulation is interesting as a possible late replacement for client-side cube-sphere render mesh streaming.
 
-Архитектурная граница жёсткая:
+The architectural boundary is strict:
 
 ```text
 PlanetField / authoritative CPU surface
@@ -373,16 +373,16 @@ PlanetField / authoritative CPU surface
                     `--> GPU CBT / adaptive tessellation
 ```
 
-CBT не становится источником истины и не требуется на dedicated server. Он только отвечает на renderer-вопрос: **какой набор треугольников сейчас нужен для изображения canonical surface с заданной screen-space error**.
+CBT does not become the source of truth and is not required on a dedicated server. It only answers the renderer question: **which set of triangles is currently needed to depict the canonical surface with a given screen-space error**.
 
 Potential benefits:
 
 - continuous/adaptive visual triangulation instead of fixed tile mesh density;
 - GPU split/merge based on projected error;
-- меньше CPU geometry churn на быстром пролёте;
-- естественный путь к очень мелкой near-view triangulation без огромного количества independently built CPU meshes.
+- less CPU geometry churn on fast flyover;
+- natural path to very fine near-view triangulation without huge numbers of independently built CPU meshes.
 
-Но CBT не решает автоматически:
+But CBT does not automatically solve:
 
 - authoritative contact geometry;
 - automation terrain queries;
@@ -391,15 +391,15 @@ Potential benefits:
 - physical objects/scatter;
 - server CPU performance.
 
-Поэтому это **не Phase 1 optimization**. Сначала нужно убрать CPU material baking и измерить оставшийся geometry bottleneck.
+Therefore this is **not a Phase 1 optimization**. First the CPU material baking needs to be removed and the remaining geometry bottleneck measured.
 
 ## 7. High-speed visual streaming must be predictive, not only reactive
 
-Сейчас movement trigger быстро понимает, что камера ушла далеко, но selection/build pipeline в основном реагирует на текущий eye/frustum. При km/s скоростях аппарат проходит значительную дистанцию за один build latency.
+The movement trigger currently quickly realizes that the camera has moved far, but the selection/build pipeline mostly reacts to the current eye/frustum. At km/s speeds the vehicle covers a significant distance within one build latency.
 
-Этот раздел относится к client visual representation. Automation/physics prediction имеет собственные query horizons и не должна использовать camera streaming queue как источник поверхности.
+This section concerns client visual representation. Automation/physics prediction has its own query horizons and must not use the camera streaming queue as a source of the surface.
 
-Нужен bounded look-ahead в направлении camera/vehicle motion.
+A bounded look-ahead in the direction of camera/vehicle motion is needed.
 
 Target selection inputs:
 
@@ -413,7 +413,7 @@ pub struct TerrainStreamingView {
 }
 ```
 
-Из скорости и измеренного build latency вычисляется predicted eye:
+The predicted eye is computed from velocity and measured build latency:
 
 ```text
 lookahead_s = clamp(p95_tile_ready_latency * safety_factor,
@@ -423,11 +423,11 @@ lookahead_s = clamp(p95_tile_ready_latency * safety_factor,
 predicted_eye = eye + velocity * lookahead_s
 ```
 
-Selection должна резервировать часть tile budget под corridor между `eye` и `predicted_eye`, а не просто смещать весь frustum вперёд.
+Selection must reserve part of the tile budget for the corridor between `eye` and `predicted_eye`, not just shift the whole frustum forward.
 
-Иначе быстрый craft при резком pitch/yaw сможет иметь идеальный terrain впереди траектории, но hole/coarse ground в текущем кадре.
+Otherwise a fast craft during a sharp pitch/yaw may have perfect terrain ahead of the trajectory, but hole/coarse ground in the current frame.
 
-Пример budget split:
+Example budget split:
 
 ```text
 coarse guaranteed cover       fixed
@@ -436,15 +436,15 @@ predictive velocity corridor  ~25-40%
 turn / reserve                remainder
 ```
 
-Точные доли должны идти из benchmark, не из этой доки.
+Exact shares must come from benchmarks, not from this doc.
 
 ## 8. Selection generation must not wait for nearly empty workers
 
-Текущий guard вида `jobs.len() <= 2` полезен как backpressure, но при высокой скорости может задержать новый selection даже когда movement trigger уже знает, что старые jobs становятся менее ценными.
+The current guard of the form `jobs.len() <= 2` is useful as backpressure, but at high speed it may delay a new selection even when the movement trigger already knows that old jobs are becoming less valuable.
 
-Нужен priority scheduler, где queued work можно reprioritize или drop до начала исполнения.
+A priority scheduler is needed, where queued work can be reprioritized or dropped before execution starts.
 
-Не обязательно отменять уже работающий CPU job. Достаточно различать:
+There is no need to cancel an already running CPU job. It is enough to distinguish:
 
 ```text
 Running jobs     small bounded set; usually finish
@@ -452,7 +452,7 @@ Queued requests  mutable priority queue; stale requests may be discarded
 Ready cache      reusable if still spatially relevant
 ```
 
-Priority должна учитывать:
+Priority should account for:
 
 - coverage necessity;
 - current frame projected error;
@@ -462,11 +462,11 @@ Priority должна учитывать:
 - tile build cost estimate;
 - whether tile is already partially cached.
 
-Старая просьба на detail позади аппарата не должна блокировать coarse/fine tile впереди него только потому, что она попала в очередь на 200 ms раньше.
+An old request for detail behind the vehicle must not block a coarse/fine tile ahead of it just because it entered the queue 200 ms earlier.
 
 ## 9. Different work classes need different priorities
 
-Coarse coverage, geometry refinement и cosmetic detail имеют разную criticality.
+Coarse coverage, geometry refinement and cosmetic detail have different criticality.
 
 Client render classes:
 
@@ -479,15 +479,15 @@ P4  predicted cosmetic detail
 P5  render cache warming / optional work
 ```
 
-После GPU material split классы P3/P4 должны стать почти бесплатными для CPU, что как раз освобождает throughput для P0-P2.
+After the GPU material split, classes P3/P4 should become almost free for the CPU, which is exactly what frees throughput for P0-P2.
 
-Authoritative/contact jobs не должны конкурировать в этой очереди по тем же приоритетам. Server physics имеет отдельный scheduler/budget; contact preparation для imminent touchdown важнее любого cosmetic render work.
+Authoritative/contact jobs must not compete in this queue under the same priorities. Server physics has a separate scheduler/budget; contact preparation for an imminent touchdown is more important than any cosmetic render work.
 
 ## 10. Geometry build optimization after the representation split
 
-Только после удаления texture baking из client critical path имеет смысл серьёзно оптимизировать render mesh builder.
+Only after removing texture baking from the client critical path does it make sense to seriously optimize the render mesh builder.
 
-Кандидаты:
+Candidates:
 
 - batch evaluate height samples for several tiles;
 - SIMD-friendly noise sampling where profitable;
@@ -499,9 +499,9 @@ Authoritative/contact jobs не должны конкурировать в эт�
 - GPU compute mesh generation only if CPU remains bottleneck after simpler fixes;
 - later evaluate CBT-like adaptive GPU triangulation if fixed-tile mesh churn remains dominant.
 
-Особенно важно проверить tangents: если near terrain material уйдёт на world-space/triplanar normals, tangent-space may no longer justify CPU `generate_tangents()` for every tile.
+It is especially important to check tangents: if near terrain material moves to world-space/triplanar normals, tangent-space may no longer justify CPU `generate_tangents()` for every tile.
 
-Server-side optimization рассматривается отдельно:
+Server-side optimization is considered separately:
 
 - batch/SIMD field queries for automation;
 - cached local contact patches;
@@ -511,20 +511,20 @@ Server-side optimization рассматривается отдельно:
 
 ## 11. Parent/child visual transition
 
-Текущий finest-ready cover гарантирует отсутствие holes, но replacement всё ещё дискретный. После throughput work можно отдельно улучшить perceptual transition:
+The current finest-ready cover guarantees no holes, but replacement is still discrete. After the throughput work, the perceptual transition can be improved separately:
 
 - geomorph parent -> child;
 - short cross-fade/dither for material/detail only;
 - shared-edge displacement constraints;
-- skirts только как fallback, а не primary visual seam mechanism.
+- skirts only as a fallback, not as the primary visual seam mechanism.
 
-Но это **не должно блокировать throughput refactor**. Hole-free discrete replacement лучше красивого morph, который не успевает прогружаться.
+But this **must not block the throughput refactor**. Hole-free discrete replacement is better than a beautiful morph that does not manage to stream in time.
 
-Contact representation не обязана повторять этот visual transition: physics должна видеть устойчивую canonical поверхность, а не dither/morph state renderer'а.
+Contact representation does not have to repeat this visual transition: physics must see a stable canonical surface, not the dither/morph state of the renderer.
 
 ## 12. Instrumentation required before and after refactor
 
-Нельзя оценивать streaming только максимальной скоростью аппарата. Нужно писать client render metrics:
+Streaming cannot be judged by maximum vehicle speed alone. Client render metrics need to be recorded:
 
 ```text
 terrain.requested_tiles
@@ -547,15 +547,15 @@ terrain.max_projected_error
 terrain.visible_coarse_fallback_count
 ```
 
-Особенно полезна метрика:
+The following metric is especially useful:
 
 ```text
 time_to_needed = distance_to_future_view / viewer_speed
 ```
 
-Tile misses deadline, если `request_to_visible > time_to_needed`, даже если сам build benchmark выглядит быстрым.
+A tile misses its deadline if `request_to_visible > time_to_needed`, even if the build benchmark itself looks fast.
 
-Для headless/server surface нужны отдельные metrics:
+Separate metrics are needed for the headless/server surface:
 
 ```text
 surface.query_count
@@ -567,24 +567,24 @@ surface.automation_samples_per_sim_s
 surface.contact_refinement_deadline_misses
 ```
 
-Важно не смешивать `request_to_visible` с `request_to_contact_ready`: у них разные consumers и разные deadlines.
+It is important not to mix up `request_to_visible` with `request_to_contact_ready`: they have different consumers and different deadlines.
 
 ## 13. Benchmark scenarios
 
 ### 13.1 Client visual streaming
 
-Минимальный repeatable set:
+Minimal repeatable set:
 
-1. **Hover / survey** — почти нулевая скорость, aggressive near refinement.
-2. **Aircraft** — 200-400 m/s на 1-10 km AGL.
+1. **Hover / survey** — near-zero speed, aggressive near refinement.
+2. **Aircraft** — 200-400 m/s at 1-10 km AGL.
 3. **Fast atmospheric craft** — 1 km/s.
 4. **Current stress point** — 3 km/s.
-5. **Target supersonic/hypersonic** — 5 km/s и 8 km/s.
-6. **Low-altitude pathological pass** — высокая скорость + небольшой AGL.
-7. **Fast turn** — скорость высокая, camera/vehicle heading меняется резко.
-8. **Vertical descent/ascent** — projection footprint меняется быстрее, чем ground-track distance suggests.
+5. **Target supersonic/hypersonic** — 5 km/s and 8 km/s.
+6. **Low-altitude pathological pass** — high speed + low AGL.
+7. **Fast turn** — speed is high, camera/vehicle heading changes sharply.
+8. **Vertical descent/ascent** — projection footprint changes faster than ground-track distance suggests.
 
-Для каждого:
+For each:
 
 - no holes;
 - bounded cache/jobs;
@@ -592,11 +592,11 @@ surface.contact_refinement_deadline_misses
 - p95 request-to-visible latency;
 - CPU frame cost;
 - total worker utilization;
-- GPU material cost после split.
+- GPU material cost after split.
 
 ### 13.2 Headless authoritative surface
 
-Отдельный repeatable set без GPU и без client:
+Separate repeatable set without GPU and without client:
 
 1. automated descent from high altitude;
 2. terrain-following trajectory query;
@@ -607,7 +607,7 @@ surface.contact_refinement_deadline_misses
 7. multiple unobserved vehicles approaching different surface regions;
 8. high warp far from contact, then transition to full surface/contact fidelity before touchdown.
 
-Для каждого:
+For each:
 
 - identical canonical surface with and without connected client;
 - deterministic query results for fixed seed/state;
@@ -618,7 +618,7 @@ surface.contact_refinement_deadline_misses
 
 ## 14. Performance targets
 
-Не следует задавать target как «должно быть быстрее KSP», потому что world complexity, hardware, visual quality и architecture разные.
+The target should not be set as "must be faster than KSP", because world complexity, hardware, visual quality and architecture differ.
 
 ### 14.1 Client visual contract
 
@@ -628,15 +628,15 @@ terrain rendering must keep a complete visible cover and satisfy the
 projected-error target for the central view with bounded latency and memory.
 ```
 
-Первый practical target после GPU material split:
+First practical target after the GPU material split:
 
-- сохранить текущую визуальную/геометрическую fidelity;
-- минимум удвоить sustainable ground speed относительно current ~3 km/s baseline на той же машине;
-- не увеличивать tile cache bound только ради throughput;
-- не поднимать worker count как единственную оптимизацию;
-- удержать main-thread terrain insertion cost малым и bounded.
+- keep current visual/geometric fidelity;
+- at least double sustainable ground speed relative to the current ~3 km/s baseline on the same machine;
+- do not increase the tile cache bound just for throughput;
+- do not raise the worker count as the sole optimization;
+- keep main-thread terrain insertion cost small and bounded.
 
-После этого отдельно измерять 8-12 km/s atmospheric/near-surface stress cases.
+After that, separately measure 8-12 km/s atmospheric/near-surface stress cases.
 
 ### 14.2 Headless/server contract
 
@@ -645,89 +645,89 @@ Surface physics and automation must remain fully functional with no GPU,
 no renderer and zero connected observers.
 ```
 
-Дополнительно:
+Additionally:
 
-- far-from-surface automation использует bounded direct queries, а не materialized render terrain;
-- contact representation создаётся заранее по physics/trajectory need;
-- landing result не меняется из-за подключения/отключения spectator/client;
-- server не платит за cosmetic material detail;
-- fidelity transition определяется physical error/deadline, а не camera LOD.
+- far-from-surface automation uses bounded direct queries, not materialized render terrain;
+- contact representation is created in advance from physics/trajectory need;
+- landing result does not change due to spectator/client connecting/disconnecting;
+- server does not pay for cosmetic material detail;
+- fidelity transition is defined by physical error/deadline, not by camera LOD.
 
 ## 15. Suggested implementation order
 
 ### Phase 1 — measure actual client bottleneck
 
-1. Добавить отдельные p50/p95 timings geometry/material/mips/upload.
-2. Записать request -> visible latency.
-3. Сделать fixed 3 km/s и 5 km/s benchmark routes.
+1. Add separate p50/p95 timings for geometry/material/mips/upload.
+2. Record request -> visible latency.
+3. Make fixed 3 km/s and 5 km/s benchmark routes.
 
 ### Phase 2 — remove CPU material baking from client critical path
 
-4. Сделать prototype terrain shader с shared/procedural near detail.
-5. Убрать per-tile albedo/roughness/normal creation для prototype path.
-6. Проверить, нужен ли tangent generation после нового mapping.
-7. Сравнить tile throughput и total CPU.
+4. Make a prototype terrain shader with shared/procedural near detail.
+5. Remove per-tile albedo/roughness/normal creation for the prototype path.
+6. Check whether tangent generation is still needed after the new mapping.
+7. Compare tile throughput and total CPU.
 
 ### Phase 3 — predictive client scheduling
 
-8. Добавить velocity look-ahead corridor.
-9. Разделить queued vs running jobs.
-10. Разрешить discard/reprioritize stale queued requests.
-11. Сохранить guaranteed coarse cover независимо от prediction.
+8. Add velocity look-ahead corridor.
+9. Split queued vs running jobs.
+10. Allow discard/reprioritize of stale queued requests.
+11. Keep guaranteed coarse cover regardless of prediction.
 
 ### Phase 4 — formalize headless surface consumers
 
-12. Вынести/зафиксировать observer-independent surface query boundary для automation/flight.
-13. Добавить normal/slope/clearance helpers с explicit wavelength/error request.
-14. Спроектировать local contact patch representation и cache lifecycle.
-15. Prefetch contact patch по predicted time-to-contact, не по camera distance.
-16. Добавить headless landing/contact benchmarks без GPU.
+12. Extract/fix the observer-independent surface query boundary for automation/flight.
+13. Add normal/slope/clearance helpers with explicit wavelength/error request.
+14. Design the local contact patch representation and cache lifecycle.
+15. Prefetch contact patch by predicted time-to-contact, not by camera distance.
+16. Add headless landing/contact benchmarks without GPU.
 
 ### Phase 5 — geometry hot path
 
-17. Профилировать `PlanetField` height-only sampling отдельно для render и server query workloads.
-18. Добавить sample reuse / batching / SIMD только по measured hotspots.
-19. Проверить parent->child sample reuse на client и nearby-query reuse на server.
-20. Если client mesh churn остаётся bottleneck — spike GPU compute/CBT-like adaptive triangulation.
+17. Profile `PlanetField` height-only sampling separately for render and server query workloads.
+18. Add sample reuse / batching / SIMD only for measured hotspots.
+19. Check parent->child sample reuse on the client and nearby-query reuse on the server.
+20. If client mesh churn remains the bottleneck — spike GPU compute/CBT-like adaptive triangulation.
 
 ### Phase 6 — visual quality
 
-21. Добавить GPU micro-normal/material bands ниже geometric cutoff.
-22. Затем scatter/rocks.
-23. Только потом geomorph/cross-fade, если LOD replacement остаётся заметным.
+21. Add GPU micro-normal/material bands below the geometric cutoff.
+22. Then scatter/rocks.
+23. Only then geomorph/cross-fade, if LOD replacement remains noticeable.
 
 ## 16. Non-goals
 
-Этот refactor не должен:
+This refactor must not:
 
-- превращать canonical terrain в fixed global raster;
-- делать renderer или GPU-tessellation источником authoritative height;
-- требовать GPU на dedicated server;
-- считать отсутствие observer отсутствием physical terrain;
-- привязывать automation fidelity к camera position/LOD;
-- заставлять headless server строить visual terrain tiles для посадки;
-- синхронизировать cosmetic shader noise по сети;
-- генерировать весь future flight corridor заранее без bounded budget;
-- скрывать streaming failures гигантским cache;
-- увеличивать detail frequency в physics только ради картинки;
-- требовать, чтобы contact triangulation совпадала с render triangulation, если обе аппроксимируют одну canonical surface в заданной error bound.
+- turn canonical terrain into a fixed global raster;
+- make the renderer or GPU-tessellation the source of authoritative height;
+- require a GPU on a dedicated server;
+- treat absence of an observer as absence of physical terrain;
+- tie automation fidelity to camera position/LOD;
+- force a headless server to build visual terrain tiles for landing;
+- synchronize cosmetic shader noise over the network;
+- generate the whole future flight corridor upfront without a bounded budget;
+- hide streaming failures with a giant cache;
+- increase detail frequency in physics just for visuals;
+- require contact triangulation to match render triangulation if both approximate one canonical surface within the given error bound.
 
-## 17. Ключевой инвариант
+## 17. Key invariant
 
-Вместо старого разделения «CPU спрашивает физику, GPU спрашивает картинку» нужен чуть более точный контракт:
+Instead of the old split of "CPU asks physics, GPU asks picture", a slightly more precise contract is needed:
 
 ```text
 Authoritative physics asks:
-    "какая здесь физическая поверхность и как с ней контактировать?"
+    "what is the physical surface here and how to contact it?"
 
 Automation asks:
-    "какая поверхность будет по моей траектории/в зоне посадки?"
+    "what surface will be along my trajectory / in the landing zone?"
 
 Renderer asks:
-    "как эту же canonical поверхность представить на экране сейчас?"
+    "how to present this same canonical surface on screen right now?"
 ```
 
-Все три вопроса используют один `PlanetField`, но **не обязаны использовать одно representation**.
+All three questions use one `PlanetField`, but **do not have to use one representation**.
 
 ```text
 canonical field
@@ -737,44 +737,44 @@ canonical field
     + cosmetic shader detail  -> pixels only
 ```
 
-Это позволяет оптимизировать каждую задачу независимо:
+This allows optimizing each task independently:
 
 - nobody watches -> render branch costs zero;
 - automation still runs -> query branch remains active;
 - touchdown approaches -> contact representation materializes;
 - client connects -> visual representation builds without changing physics.
 
-Следующий шаг — не отказаться от процедурности, а **перенести каждый вид procedural work туда, где его стоимость соответствует его consumer: queries/contact на CPU server side, visual frequency/detail на GPU client side**.
+The next step is not to abandon procedurally, but to **move each kind of procedural work where its cost matches its consumer: queries/contact to CPU server side, visual frequency/detail to GPU client side**.
 
 ## 18. UMA / unified-memory asset residency follow-up
 
-Отдельно от алгоритма LOD и процедурного поля у текущего client path есть более низкоуровневая возможность: уменьшить число **логических копий render data**. На UMA это особенно важно, потому что CPU и GPU конкурируют за один DRAM pool и один memory bandwidth, но выигрыш полезен и на dGPU как экономия system RAM и memcpy.
+Apart from the LOD algorithm and the procedural field, the current client path has a lower-level opportunity: to reduce the number of **logical copies of render data**. On UMA this matters especially because CPU and GPU compete for one DRAM pool and one memory bandwidth, but the win is also useful on dGPU as system RAM and memcpy savings.
 
-Нужно различать три задачи:
+Three tasks need to be distinguished:
 
 ```text
 A. lifetime / residency
-   не держать CPU payload после того, как immutable asset подготовлен renderer'ом
+    do not retain CPU payload after the immutable asset has been prepared by the renderer
 
 B. transient build copies
-   не клонировать большие Vec между TerrainTile / SurfaceTexture / Mesh / Image
+    do not clone large Vecs between TerrainTile / SurfaceTexture / Mesh / Image
 
 C. true zero-copy / mapped GPU memory
-   отдельная поздняя оптимизация; не предполагать, что A или B автоматически
-   превращают Bevy/wgpu upload path в zero-copy
+    separate late optimization; do not assume that A or B automatically
+    turn the Bevy/wgpu upload path into zero-copy
 ```
 
 ### 18.1 Current code-specific opportunities
 
-Сейчас terrain textures уже создаются как `RenderAssetUsages::RENDER_WORLD`, то есть после extraction/preparation их CPU-side pixel payload можно выбросить. Terrain mesh при этом создаётся как:
+Terrain textures are already created as `RenderAssetUsages::RENDER_WORLD`, so after extraction/preparation their CPU-side pixel payload can be discarded. Terrain mesh is meanwhile created as:
 
 ```rust
 RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD
 ```
 
-Это оставляет vertex/index payload доступным в `Assets<Mesh>` даже после подготовки render representation. Для immutable terrain tile это выглядит лишним: `CachedTile` уже хранит `vertices` и `triangles`, а `WorldTerrain` уже считает visible counters из cache metadata.
+This leaves the vertex/index payload accessible in `Assets<Mesh>` even after the render representation is prepared. For an immutable terrain tile this looks redundant: `CachedTile` already stores `vertices` and `triangles`, and `WorldTerrain` already counts visible counters from cache metadata.
 
-Отдельный perf path пока снова проходит по `Assets<Mesh>` ради `count_vertices()` / `indices().len()`. Это не должно быть причиной держать полный CPU mesh resident. Эти counters можно брать из `WorldTerrain.visible + WorldTerrain.cache`, после чего terrain mesh может стать render-only asset:
+A separate perf path still walks `Assets<Mesh>` for `count_vertices()` / `indices().len()`. This should not be a reason to keep the full CPU mesh resident. These counters can be taken from `WorldTerrain.visible + WorldTerrain.cache`, after which the terrain mesh can become a render-only asset:
 
 ```rust
 Mesh::new(
@@ -783,7 +783,7 @@ Mesh::new(
 )
 ```
 
-Target lifecycle тогда такой:
+The target lifecycle then looks like:
 
 ```text
 worker builds tile
@@ -793,11 +793,11 @@ worker builds tile
     -> cache keeps Handle + anchor + vertex/triangle/byte metadata
 ```
 
-Это **не обещание zero-copy**. Render-world buffer/texture allocation всё ещё существует, а backend может выполнять staging/upload. Выигрыш здесь — не держать вторую долгоживущую CPU representation без consumer.
+This is **not a promise of zero-copy**. Render-world buffer/texture allocation still exists, and the backend may perform staging/upload. The win here is not keeping a second long-lived CPU representation without a consumer.
 
 ### 18.2 Avoid worker-local clones before touching renderer internals
 
-Текущий worker также делает копии ещё до Bevy asset extraction:
+The current worker also makes copies even before Bevy asset extraction:
 
 ```text
 TerrainTile.positions.clone() -> Mesh
@@ -809,7 +809,7 @@ SurfaceTexture.roughness.clone() -> Image
 SurfaceTexture.normal.clone()    -> Image
 ```
 
-После assembly исходные `TerrainTile` / `SurfaceTexture` больше не являются cache representation. Поэтому builder API стоит перестроить на ownership/move:
+After assembly, the original `TerrainTile` / `SurfaceTexture` are no longer the cache representation. So the builder API should be rebuilt around ownership/move:
 
 ```text
 build_tile() / build_surface_texture()
@@ -821,22 +821,22 @@ owned vectors
         `--> move into Image
 ```
 
-Для mesh это может означать `mesh_from_tile(tile: TerrainTile, ...)` либо destructuring с сохранением `anchor`, `vertices`, `triangles` metadata до move. Для texture — передавать owned channel vectors в `surface_image()` без `.clone()`.
+For mesh this may mean `mesh_from_tile(tile: TerrainTile, ...)` or destructuring that preserves `anchor`, `vertices`, `triangles` metadata before the move. For texture — pass owned channel vectors to `surface_image()` without `.clone()`.
 
-Это уменьшает transient allocation и memory traffic независимо от GPU architecture. На UMA выгода потенциально заметнее именно потому, что worker CPU traffic и renderer traffic делят один memory subsystem.
+This reduces transient allocation and memory traffic regardless of GPU architecture. On UMA the benefit is potentially more noticeable precisely because worker CPU traffic and renderer traffic share one memory subsystem.
 
 ### 18.3 Memory accounting must describe logical residency, not pretend UMA is discrete VRAM
 
-Текущий `world.cache_bytes` оценивает один mesh payload плюс texture bytes. Это полезный logical cache metric, но он не описывает:
+Current `world.cache_bytes` estimates one mesh payload plus texture bytes. This is a useful logical cache metric, but it does not describe:
 
 - retained CPU mesh payload;
 - render-world/GPU allocation;
 - temporary worker copies;
 - allocator overhead;
 - staging/upload buffers;
-- физическую residency UMA, где отдельного независимого VRAM pool может не быть.
+- physical UMA residency, where there may be no separate independent VRAM pool.
 
-Поэтому performance monitoring лучше разделить как минимум на:
+So performance monitoring is better split at least into:
 
 ```text
 terrain.cache_logical_bytes
@@ -845,11 +845,11 @@ terrain.build_transient_bytes_estimate
 terrain.upload_bytes_per_s
 ```
 
-`gpu_mem_bytes`/physical UMA residency не нужно синтезировать, если backend не даёт достоверной цифры. Logical byte counters всё равно позволяют проверить, что refactor реально убрал лишнюю representation.
+`gpu_mem_bytes`/physical UMA residency should not be synthesized if the backend does not provide a trustworthy number. Logical byte counters still make it possible to verify that the refactor really removed the redundant representation.
 
 ### 18.4 Capability-driven UMA fast path — only after profiling
 
-Если после material split, ownership cleanup и render-only assets измерения покажут, что bottleneck остаётся именно в CPU->GPU upload/copy, тогда можно отдельно исследовать shared-memory fast path:
+If after the material split, ownership cleanup and render-only assets the measurements show that the bottleneck remains specifically in CPU->GPU upload/copy, then a shared-memory fast path can be investigated separately:
 
 ```text
 capability detection
@@ -861,26 +861,26 @@ capability detection
             -> normal staging/upload path
 ```
 
-Это должен быть **capability-driven**, а не `if vendor == AMD`. Linux/Vulkan, Metal и другие wgpu backends остаются first-class; backend-specific shortcut не должен проникать в `PlanetField`, terrain semantics или server code.
+This must be **capability-driven**, not `if vendor == AMD`. Linux/Vulkan, Metal and other wgpu backends remain first-class; a backend-specific shortcut must not leak into `PlanetField`, terrain semantics or server code.
 
-В wgpu/Bevy такой путь может потребовать более глубокого render-asset/custom-buffer integration и явной синхронизации mapped vs GPU use. Поэтому он не должен предшествовать простым измеримым изменениям выше.
+In wgpu/Bevy such a path may require deeper render-asset/custom-buffer integration and explicit synchronization of mapped vs GPU use. So it must not precede the simple measurable changes above.
 
 ### 18.5 Suggested low-risk order
 
-До крупных renderer rewrites:
+Before major renderer rewrites:
 
-1. Перевести immutable terrain `Mesh` на `RenderAssetUsages::RENDER_WORLD`.
-2. Убрать perf dependency на CPU `Assets<Mesh>` и считать visible geometry из `CachedTile` metadata.
-3. Убрать `.clone()` больших mesh/texture vectors в worker assembly через ownership transfer.
-4. Добавить logical/transient/upload byte metrics.
-5. Снять одинаковые hover / 3 km/s / 5 km/s captures на UMA и dGPU, если доступны.
-6. Только если upload остаётся bottleneck — spike mapped/shared-memory path.
+1. Switch immutable terrain `Mesh` to `RenderAssetUsages::RENDER_WORLD`.
+2. Remove the perf dependency on CPU `Assets<Mesh>` and count visible geometry from `CachedTile` metadata.
+3. Remove `.clone()` of large mesh/texture vectors in worker assembly via ownership transfer.
+4. Add logical/transient/upload byte metrics.
+5. Take identical hover / 3 km/s / 5 km/s captures on UMA and dGPU, if available.
+6. Only if upload remains the bottleneck — spike the mapped/shared-memory path.
 
 Acceptance criteria:
 
 - identical visible terrain and canonical physics;
-- те же visible vertex/triangle counters;
-- меньше retained CPU payload и worker transient traffic;
-- RSS/peak memory не хуже, на UMA ожидается ниже;
-- p95 `request_to_visible` не ухудшается;
-- никакой vendor lock-in и никакой GPU requirement для authoritative terrain.
+- same visible vertex/triangle counters;
+- less retained CPU payload and worker transient traffic;
+- RSS/peak memory no worse, expected lower on UMA;
+- p95 `request_to_visible` does not regress;
+- no vendor lock-in and no GPU requirement for authoritative terrain.

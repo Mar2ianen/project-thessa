@@ -4,46 +4,44 @@ Status: design target — `FlightRegime`/`ControlMode` context accurately
 described; `FlightPhase`, alert/event protocol, manager, and Slices A–D
 not implemented.
 
-Статус: **design target**.
+This document defines the warning architecture for Thessa crewed vehicles: from stall/overspeed/terrain to configuration, propulsion, thermal, and orbital warnings. The core principle: alerting is not a set of `if`s in the HUD and must not guess context on the client. Conditions, inhibition, debounce, latch, and priority are computed from the authoritative flight state; the client only visualizes and plays sound.
 
-Эта дока задаёт архитектуру предупреждений для пилотируемых аппаратов Thessa: от stall/overspeed/terrain до конфигурационных, двигательных, тепловых и орбитальных предупреждений. Главный принцип: alerting не является набором `if` в HUD и не должен угадывать контекст на клиенте. Условия, inhibition, debounce, latch и priority вычисляются из авторитетного состояния полёта; клиент только визуализирует и воспроизводит звук.
+The system deliberately does not copy any specific Boeing/Airbus/Honeywell product. Aviation standards are used as a reference for warning/caution/advisory semantics and for minimizing nuisance alerts, while the texts, tones, and voice pack are the project's own asset data.
 
-Система намеренно не копирует конкретный Boeing/Airbus/Honeywell product. Авиационные стандарты используются как reference для семантики warning/caution/advisory и минимизации nuisance alerts, а тексты, тоны и voice pack являются собственными asset-данными проекта.
+## 1. What already exists
 
-## 1. Что уже есть
-
-`FlightAuthority` уже хранит почти все низкоуровневые входы, на которых должен строиться первый alerting slice:
+`FlightAuthority` already stores almost all low-level inputs on which the first alerting slice should be built:
 
 - `FlightRegime::{Aero, Coast}`;
 - altitude / local-air kinematics;
-- Mach, AoA и dynamic pressure через `last_forces`;
-- throttle и engine state;
+- Mach, AoA, and dynamic pressure via `last_forces`;
+- throttle and engine state;
 - `gear_down`;
-- control input и фактический `surface_input`;
+- control input and actual `surface_input`;
 - `actuator_saturated`;
 - SAS/RCS state;
 - authoritative `flight_error`;
-- ephemeris, gravity, terrain field и world tick.
+- ephemeris, gravity, terrain field, and world tick.
 
-`FlightRegime` сейчас означает **solver regime**, а не этап миссии: `Aero` выбирается при достаточно большой плотности, `Coast` — ниже `COAST_DENSITY_KG_M3`. Это полезный вход alerting, но его нельзя перегружать значениями вроде `Approach` или `Landing`.
+`FlightRegime` currently means a **solver regime**, not a mission stage: `Aero` is selected when density is sufficiently high, `Coast` — below `COAST_DENSITY_KG_M3`. This is a useful alerting input, but it must not be overloaded with values like `Approach` or `Landing`.
 
-Текущий `ControlMode` также не является flight phase: `MouseAim/Navball/Rate/Direct` описывают способ управления. После control/GNC refactor input mapping, guidance, control law, policy и allocator должны оставаться отдельными слоями.
+The current `ControlMode` is also not a flight phase: `MouseAim/Navball/Rate/Direct` describe the control method. After the control/GNC refactor, input mapping, guidance, control law, policy, and allocator must remain separate layers.
 
-## 2. Инварианты
+## 2. Invariants
 
-1. **Physics first.** Warning следует из физического состояния, envelope, capability и mission context; он не меняет состояние аппарата.
-2. **Server-authoritative state.** Для сетевой игры активный набор flight alerts одинаков у всех клиентов данного аппарата.
-3. **Sparse transitions.** По сети передаются переходы / текущий active set, а не аудиособытие на каждом physics tick.
-4. **No audio logic in physics.** Solver выдаёт значения и события. Alert manager решает, что активно. Client audio решает, чем это проиграть.
-5. **No nuisance spam.** Для каждого условия есть hysteresis/debounce/rearm semantics.
-6. **Priority is explicit.** `PULL UP` не должен ждать, пока закончит говорить advisory про конфигурацию.
-7. **Capability-gated.** Нет cabin-altitude warning у беспилотной болванки без pressurized cabin; нет `TOO LOW GEAR` у аппарата без шасси.
-8. **Data-driven vocabulary.** Набор alerts зависит от avionics package / vehicle definition, а не от `VehicleKind::Airliner`.
-9. **Deterministic.** Runtime TTS не участвует в authoritative path. Voice lines и tones заранее сгенерированы/поставляются как assets.
+1. **Physics first.** A warning follows from the physical state, envelope, capability, and mission context; it does not change the vehicle state.
+2. **Server-authoritative state.** In networked play, the active flight-alert set is identical across all clients of a given vehicle.
+3. **Sparse transitions.** Transitions / the current active set are transmitted over the network, not an audio event on every physics tick.
+4. **No audio logic in physics.** The solver produces values and events. The alert manager decides what is active. Client audio decides how to play it.
+5. **No nuisance spam.** Every condition has hysteresis/debounce/rearm semantics.
+6. **Priority is explicit.** `PULL UP` must not wait while a configuration advisory finishes speaking.
+7. **Capability-gated.** No cabin-altitude warning on an uncrewed shell without a pressurized cabin; no `TOO LOW GEAR` on a vehicle without landing gear.
+8. **Data-driven vocabulary.** The alert set depends on the avionics package / vehicle definition, not on `VehicleKind::Airliner`.
+9. **Deterministic.** Runtime TTS does not participate in the authoritative path. Voice lines and tones are pre-generated/supplied as assets.
 
 ## 3. Solver regime ≠ operational flight phase
 
-Для alert inhibition нужен ещё один ортогональный слой — operational phase. Он не должен менять физику и не должен быть единственным источником истины.
+Alert inhibition needs one more orthogonal layer — the operational phase. It must not change physics and must not be the single source of truth.
 
 ```rust
 pub enum FlightPhase {
@@ -62,7 +60,7 @@ pub enum FlightPhase {
 }
 ```
 
-Это **не обязательный финальный enum**. Важна архитектура: phase выводится из kinematics + guidance/mission intent + vehicle capability и используется только как контекст. Для гибридного spaceplane возможны, например:
+This is **not a mandatory final enum**. What matters is the architecture: phase is derived from kinematics + guidance/mission intent + vehicle capability and is used only as context. For a hybrid spaceplane, for example, the following are possible:
 
 ```text
 FlightRegime::Aero + FlightPhase::Entry
@@ -70,7 +68,7 @@ FlightRegime::Aero + FlightPhase::Approach
 FlightRegime::Coast + FlightPhase::Rendezvous
 ```
 
-Некоторые признаки лучше вообще не прятать в enum, а держать ортогональными:
+Some attributes are better kept orthogonal rather than hidden inside the enum at all:
 
 ```rust
 pub struct AlertFlightContext {
@@ -90,11 +88,11 @@ pub struct AlertFlightContext {
 }
 ```
 
-`FlightPhase` может быть explicit guidance state, автоматическим classifier или смесью обоих: intent определяет, что аппарат пытается делать, kinematics проверяет, что он действительно находится в соответствующем режиме.
+`FlightPhase` may be an explicit guidance state, an automatic classifier, or a mix of both: intent determines what the vehicle is trying to do, kinematics verifies that it is actually in the corresponding regime.
 
 ## 4. Alert data model
 
-Минимальный runtime объект:
+Minimal runtime object:
 
 ```rust
 pub enum AlertSeverity {
@@ -123,9 +121,9 @@ pub struct AlertDefinition {
 }
 ```
 
-Condition и inhibition лучше не хранить как closures в asset. Первый implementation может иметь native Rust evaluators по stable `AlertId`; позже data assets могут задавать пороги/варианты текста.
+Conditions and inhibitions are better not stored as closures in assets. The first implementation may have native Rust evaluators keyed by stable `AlertId`; later, data assets may define thresholds/text variants.
 
-Состояние одного alert:
+State of a single alert:
 
 ```text
 Inactive
@@ -135,13 +133,13 @@ Inactive
   -> Inactive        clear/rearm complete
 ```
 
-Для некоторых alerts `Latched` не нужен. Для critical warning acknowledgement не обязано глушить повторяющийся aural, пока hazardous condition остаётся активным.
+For some alerts, `Latched` is not needed. For a critical warning, acknowledgement is not required to mute the repeating aural while the hazardous condition remains active.
 
-## 5. Priority и audio arbitration
+## 5. Priority and audio arbitration
 
-Одновременно могут существовать десятки активных сообщений, но cockpit не должен превращаться в аудио-DDoS.
+Dozens of messages may be active simultaneously, but the cockpit must not turn into an audio DDoS.
 
-Рекомендуемая модель:
+Recommended model:
 
 ```text
 active conditions
@@ -149,40 +147,40 @@ active conditions
       v
 severity / priority ordering
       |
-      +-> visual annunciations: все релевантные
+      +-> visual annunciations: all relevant
       |
-      `-> aural arbiter: один foreground stream + tones with explicit policy
+      `-> aural arbiter: single foreground stream + tones with explicit policy
 ```
 
-Правила первой версии:
+First-version rules:
 
-- более высокий priority может preempt низкий voice line;
-- один и тот же alert не стартует заново каждый tick;
-- изменение параметра внутри активного condition не считается новым alert;
+- a higher priority may preempt a lower voice line;
+- the same alert does not restart on every tick;
+- a parameter change inside an active condition does not count as a new alert;
 - command warnings (`PULL UP`, collision/impact, catastrophic thermal/structural limit) preempt configuration advisories;
-- resolved warning не доигрывается, если его смысл уже ложен;
-- repeated voice использует minimum repeat interval;
-- aural silence/acknowledge является avionics action, не изменением physics condition.
+- a resolved warning is not played out if its meaning is already false;
+- repeated voice uses a minimum repeat interval;
+- aural silence/acknowledge is an avionics action, not a change of the physics condition.
 
-FAA AC 25.1322-1 используется только как reference на общую идею различимых warning/caution/advisory и своевременного, не перегружающего экипаж alerting.
+FAA AC 25.1322-1 is used only as a reference for the general idea of distinguishable warning/caution/advisory levels and timely alerting that does not overload the crew.
 
-## 6. Первый inventory
+## 6. Initial inventory
 
-Это не означает, что все пункты обязаны существовать у каждого craft.
+This does not mean that every item must exist on every craft.
 
-| Alert | Базовое условие | Context / inhibition |
+| Alert | Base condition | Context / inhibition |
 | --- | --- | --- |
-| `STALL` | AoA / stall margin вышел за envelope при достаточном `q` | только `FlightRegime::Aero`; hysteresis |
-| `OVERSPEED` | Mach/IAS/equivalent-speed envelope exceeded | `Aero`; порог задаёт vehicle envelope |
-| `HIGH_AOA` | приближение к AoA limit | `Aero`; advisory/caution до stall |
+| `STALL` | AoA / stall margin outside the envelope at sufficient `q` | `FlightRegime::Aero` only; hysteresis |
+| `OVERSPEED` | Mach/IAS/equivalent-speed envelope exceeded | `Aero`; threshold defined by the vehicle envelope |
+| `HIGH_AOA` | approaching the AoA limit | `Aero`; advisory/caution before stall |
 | `HIGH_G` | load factor / structural load margin | capability/envelope-specific |
-| `ACTUATOR_SATURATED` | allocator/runtime не может реализовать demand | suppress transient spikes; current `actuator_saturated` seed |
-| `TERRAIN` | predictive terrain clearance недостаточен | не на `Surface`; требует terrain/radar source |
+| `ACTUATOR_SATURATED` | allocator/runtime cannot realize the demand | suppress transient spikes; current `actuator_saturated` seed |
+| `TERRAIN` | predictive terrain clearance insufficient | not on `Surface`; requires a terrain/radar source |
 | `PULL_UP` | imminent terrain/impact trajectory | highest flight-path priority |
 | `SINK_RATE` | excessive descent near terrain | approach/landing/low-altitude context |
-| `DONT_SINK` | потеря высоты после takeoff/go-around | takeoff/go-around context |
-| `TOO_LOW_GEAR` | низко + landing intent + gear not deployed | craft with retractable gear only |
-| `TOO_LOW_FLAPS` | низко + landing intent + high-lift config insufficient | craft with high-lift devices only |
+| `DONT_SINK` | altitude loss after takeoff/go-around | takeoff/go-around context |
+| `TOO_LOW_GEAR` | low + landing intent + gear not deployed | craft with retractable gear only |
+| `TOO_LOW_FLAPS` | low + landing intent + high-lift config insufficient | craft with high-lift devices only |
 | `GEAR_OVERSPEED` | gear extended above deployment envelope | retractable gear only |
 | `CONFIG_TAKEOFF` | takeoff demand with invalid configuration | Surface/Takeoff only |
 | `CONFIG_LANDING` | landing intent with invalid configuration | Approach/Landing only |
@@ -196,13 +194,13 @@ FAA AC 25.1322-1 используется только как reference на о�
 | `COLLISION` | predicted conjunction / near-field collision | rendezvous/docking/general traffic |
 | `DOCKING_CLOSURE` | closure rate / alignment unsafe | Docking only |
 
-`GLIDESLOPE` и похожие navigation-specific warnings должны появляться только при наличии соответствующего guidance/navigation source. Нельзя делать их просто из altitude + vertical speed.
+`GLIDESLOPE` and similar navigation-specific warnings must appear only when the corresponding guidance/navigation source is present. They must not be derived from altitude + vertical speed alone.
 
 ## 7. Terrain / GPWS-like warnings
 
-Не надо реализовывать GPWS как копию конкретной сертифицированной коробки. Нужен функциональный набор проверок поверх собственного terrain model.
+GPWS should not be implemented as a copy of a specific certified box. A functional set of checks over the project's own terrain model is needed.
 
-Базовые входы:
+Base inputs:
 
 ```text
 terrain clearance
@@ -213,15 +211,15 @@ gear/high-lift configuration
 flight phase / landing intent
 ```
 
-Первый deterministic predictor может брать несколько будущих samples вдоль ballistic/local-velocity projection. Позже его можно заменить trajectory-aware envelope, не меняя alert ABI.
+The first deterministic predictor may take several future samples along a ballistic/local-velocity projection. Later it can be replaced with a trajectory-aware envelope without changing the alert ABI.
 
-Важный инвариант: terrain system предупреждает о **риске**, а не о номинальной высоте. Низкий полёт в landing configuration не должен постоянно орать `PULL UP`; быстро закрывающийся рельеф должен.
+Important invariant: the terrain system warns about **risk**, not about nominal altitude. Low flight in landing configuration must not constantly shout `PULL UP`; fast-closing terrain must.
 
-FAA TAWS guidance используется как reference на command-style terrain alerting и на необходимость раннего предупреждения с минимизацией unwanted alerts, но thresholds Thessa являются собственными игровыми/vehicle data.
+FAA TAWS guidance is used as a reference for command-style terrain alerting and for the need for early warning with minimized unwanted alerts, but Thessa thresholds are the project's own game/vehicle data.
 
 ## 8. Aural assets
 
-Aural system имеет стабильные semantic IDs:
+The aural system has stable semantic IDs:
 
 ```text
 warning.master
@@ -236,7 +234,7 @@ callout.altitude.500
 ...
 ```
 
-Voice и nonspeech assets отделены от кода:
+Voice and nonspeech assets are separated from code:
 
 ```text
 assets/audio/alerts/<pack>/manifest.toml
@@ -244,20 +242,20 @@ assets/audio/alerts/<pack>/voice/*.ogg
 assets/audio/alerts/<pack>/tones/*.ogg
 ```
 
-Рекомендуемая asset policy:
+Recommended asset policy:
 
-- speech генерируется offline TTS или записывается специально для проекта;
-- простые siren/chime/whoop assets синтезируются собственным generator tool;
-- runtime не зависит от облачного TTS;
-- manifest хранит provenance, generator version и лицензию каждого файла;
-- код может оставаться GPL/MIT split по текущей схеме, sound pack лицензируется отдельно;
-- чужой CC0 reference можно использовать для анализа, но если нужен единый NC asset pack, финальный waveform лучше генерировать самостоятельно.
+- speech is generated via offline TTS or recorded specifically for the project;
+- simple siren/chime/whoop assets are synthesized with the project's own generator tool;
+- runtime does not depend on cloud TTS;
+- the manifest stores provenance, generator version, and license of each file;
+- code may keep the GPL/MIT split under the current scheme; the sound pack is licensed separately;
+- third-party CC0 references may be used for analysis, but if a unified NC asset pack is needed, the final waveform is better generated independently.
 
-Локализация — другой voice pack с теми же `AuralId`. Authoritative alert ID от языка не зависит.
+Localization is a different voice pack with the same `AuralId`s. The authoritative alert ID does not depend on language.
 
 ## 9. Network boundary
 
-Authoritative server вычисляет condition state и transitions. Client получает:
+The authoritative server computes condition state and transitions. The client receives:
 
 ```rust
 pub struct AlertSnapshot {
@@ -272,19 +270,19 @@ pub enum AlertEvent {
 }
 ```
 
-Не обязательно слать event на каждый snapshot. Нужны:
+An event does not need to be sent on every snapshot. What is needed:
 
-- sparse events для немедленного audio response;
-- active set в periodic/full snapshot для reconnect/resync;
-- monotonic `instance/generation`, чтобы duplicate packet не переиграл warning.
+- sparse events for immediate audio response;
+- active set in a periodic/full snapshot for reconnect/resync;
+- monotonic `instance/generation` so that a duplicate packet does not replay a warning.
 
-Чисто локальные UI alerts (`controller disconnected`, `audio device lost`, `network jitter`) находятся в другом namespace и никогда не маскируются под flight warning.
+Purely local UI alerts (`controller disconnected`, `audio device lost`, `network jitter`) live in a different namespace and never masquerade as flight warnings.
 
-## 10. Scheduler и стоимость
+## 10. Scheduler and cost
 
-Большинство условий дешёвые и могут проверяться на fixed flight tick. Дорогие predictive alerts не обязаны работать на 120 Hz.
+Most conditions are cheap and can be checked on the fixed flight tick. Expensive predictive alerts do not need to run at 120 Hz.
 
-Пример budget:
+Example budget:
 
 ```text
 120 Hz: stall, overspeed, loads, actuator saturation
@@ -293,36 +291,36 @@ pub enum AlertEvent {
 1-5 Hz: long-horizon conjunction / mission advisories
 ```
 
-Alert manager должен получать уже вычисленные telemetry values, а не повторно вызывать аэродинамику, terrain solver или ephemeris без причины.
+The alert manager must receive already-computed telemetry values rather than re-invoking aerodynamics, the terrain solver, or ephemeris without reason.
 
-Для known-time events можно использовать существующий `EventScheduler`; alerting не должен создавать JS polling loop.
+For known-time events, the existing `EventScheduler` can be used; alerting must not create a JS polling loop.
 
 ## 11. Tests
 
-Минимальный suite:
+Minimal suite:
 
-1. condition crossing вызывает ровно один `Activated`;
-2. threshold jitter не создаёт spam благодаря hysteresis/debounce;
+1. condition crossing triggers exactly one `Activated`;
+2. threshold jitter does not create spam thanks to hysteresis/debounce;
 3. high-priority warning preempts low-priority voice;
-4. alert после clear/rearm может активироваться повторно;
-5. `TOO_LOW_GEAR` невозможен без landing/low-altitude context;
-6. `STALL` невозможен в exact vacuum независимо от orientation;
-7. capability-gated alert отсутствует на craft без соответствующей системы;
-8. snapshot resync не переигрывает уже активный aural;
-9. scalar/server replay даёт одинаковую sequence of `AlertEvent`;
-10. time-warp не пропускает critical transition: interval evaluation либо certified guard, либо boundary substep.
+4. an alert can activate again after clear/rearm;
+5. `TOO_LOW_GEAR` is impossible without landing/low-altitude context;
+6. `STALL` is impossible in exact vacuum regardless of orientation;
+7. a capability-gated alert is absent on a craft without the corresponding system;
+8. snapshot resync does not replay an already-active aural;
+9. scalar/server replay yields an identical sequence of `AlertEvent`;
+10. time-warp does not skip a critical transition: interval evaluation, either a certified guard or a boundary substep.
 
-## 12. Порядок реализации
+## 12. Implementation order
 
 ### Slice A — framework
 
 - `AlertId`, severity, state machine, debounce/latch/rearm;
-- alert manager внутри authoritative flight layer;
+- alert manager inside the authoritative flight layer;
 - protocol active-set + sparse transitions;
 - client annunciator + audio arbiter;
 - generated test tone/voice pack.
 
-### Slice B — существующая telemetry
+### Slice B — existing telemetry
 
 - stall/high-AoA;
 - overspeed;

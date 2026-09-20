@@ -4,15 +4,10 @@
 //! `thessa-audio-synth`. This module only adapts those layers to Bevy's
 //! current audio backend and can disappear with the Bevy host.
 
-use std::{
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use bevy::{
-    audio::{
-        AddAudioSource, ChannelCount, Decodable, SampleRate, Source, Volume,
-    },
+    audio::{AddAudioSource, ChannelCount, Decodable, SampleRate, Source, Volume},
     prelude::*,
     reflect::TypePath,
 };
@@ -229,10 +224,7 @@ fn update_engine_voice(
                 .ok()
                 .flatten()
                 .is_some();
-            (
-                if airborne { ENGINE_AIRBORNE_GAIN } else { 0.0 },
-                0.0,
-            )
+            (if airborne { ENGINE_AIRBORNE_GAIN } else { 0.0 }, 0.0)
         }
         ListenerMode::Cabin => (
             0.0,

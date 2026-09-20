@@ -193,8 +193,7 @@ impl EngineSynth {
         let target = self.control.snapshot();
         let active = if target.active { 1.0 } else { 0.0 };
         self.smooth_active += (active - self.smooth_active) * self.smoothing;
-        self.smooth_throttle +=
-            (target.throttle - self.smooth_throttle) * self.smoothing;
+        self.smooth_throttle += (target.throttle - self.smooth_throttle) * self.smoothing;
         self.smooth_airborne_gain +=
             (target.airborne_gain - self.smooth_airborne_gain) * self.smoothing;
         self.smooth_structure_gain +=
@@ -228,8 +227,8 @@ impl EngineSynth {
         let chamber = (tau * self.chamber_phase).sin()
             + 0.27 * (tau * (self.chamber_phase * 2.03).fract()).sin()
             + 0.11 * (tau * (self.chamber_phase * 3.01).fract()).sin();
-        let pump = (tau * self.pump_phase).sin()
-            + 0.18 * (tau * (self.pump_phase * 0.5).fract()).sin();
+        let pump =
+            (tau * self.pump_phase).sin() + 0.18 * (tau * (self.pump_phase * 0.5).fract()).sin();
         let rumble = (tau * self.rumble_phase).sin();
 
         // Airborne sound emphasizes plume/flow noise. Structure-borne sound
@@ -238,8 +237,7 @@ impl EngineSynth {
             * (self.profile.flow_noise_mix * flow_noise
                 + self.profile.chamber_mix * 0.55 * chamber
                 + self.profile.pump_mix * 0.20 * pump);
-        let structure = self.smooth_structure_gain
-            * (0.52 * chamber + 0.31 * pump + 0.17 * rumble);
+        let structure = self.smooth_structure_gain * (0.52 * chamber + 0.31 * pump + 0.17 * rumble);
 
         // At tiny throttle a real engine is not silent, but its acoustic
         // energy is much lower. sqrt gives useful dynamic range without
@@ -276,19 +274,17 @@ mod tests {
     use super::*;
 
     fn rms(samples: &[f32]) -> f32 {
-        (samples
-            .iter()
-            .map(|sample| sample * sample)
-            .sum::<f32>()
-            / samples.len() as f32)
-            .sqrt()
+        (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32).sqrt()
     }
 
     #[test]
     fn default_control_fades_to_silence() {
         let control = Arc::new(EngineSynthControl::default());
-        let mut synth =
-            EngineSynth::new(control, EngineSynthProfile::default(), DEFAULT_SAMPLE_RATE_HZ);
+        let mut synth = EngineSynth::new(
+            control,
+            EngineSynthProfile::default(),
+            DEFAULT_SAMPLE_RATE_HZ,
+        );
         let samples: Vec<_> = (0..4096).map(|_| synth.next_sample()).collect();
         assert!(rms(&samples) < 1.0e-6);
     }
@@ -323,14 +319,11 @@ mod tests {
         structure_control.set_structure_gain(0.8);
 
         let profile = EngineSynthProfile::default();
-        let mut air =
-            EngineSynth::new(air_control, profile, DEFAULT_SAMPLE_RATE_HZ);
-        let mut structure =
-            EngineSynth::new(structure_control, profile, DEFAULT_SAMPLE_RATE_HZ);
+        let mut air = EngineSynth::new(air_control, profile, DEFAULT_SAMPLE_RATE_HZ);
+        let mut structure = EngineSynth::new(structure_control, profile, DEFAULT_SAMPLE_RATE_HZ);
 
         let air_samples: Vec<_> = (0..4096).map(|_| air.next_sample()).collect();
-        let structure_samples: Vec<_> =
-            (0..4096).map(|_| structure.next_sample()).collect();
+        let structure_samples: Vec<_> = (0..4096).map(|_| structure.next_sample()).collect();
 
         let difference = air_samples
             .iter()

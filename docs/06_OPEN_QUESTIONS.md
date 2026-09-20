@@ -20,7 +20,7 @@ decisions belong in the relevant implementation document or ADR.
 - resonant offsets and libration amplitudes for the Nereid chain;
 - Nix tidal `Q/k2` and lifetime;
 - final Cinder orbit;
-- Nereid obliquity and ring tilt;
+- Nereid obliquity and ring tilt; frame-explicit spin-axis azimuth/definition and one canonical body-orientation contract shared by render, J2/C22, terrain and rings;
 - body-specific atmosphere profiles and composition;
 - spin periods and prime meridians for triaxial bodies; Jn beyond degree 2;
 - weather and climate fields;

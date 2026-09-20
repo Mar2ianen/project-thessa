@@ -147,7 +147,10 @@ fn dop853_adaptive_controller_honors_tolerance() {
         tight_err < loose_err,
         "tighter tolerance must shrink closure error"
     );
-    assert!(tight_err < 2.0, "tight closure must be meters, got {tight_err}");
+    assert!(
+        tight_err < 2.0,
+        "tight closure must be meters, got {tight_err}"
+    );
     assert!(
         tight.stats.accepted_steps + tight.stats.rejected_steps
             > loose.stats.accepted_steps + loose.stats.rejected_steps,
@@ -182,7 +185,14 @@ fn dynamical_cap_reads_current_body_positions_after_rejected_steps() {
         dynamical_eta: eta,
     };
     for propagate in [
-        propagate_adaptive as fn(&GravityField, TestParticleState, SimTime, f64, AdaptiveIntegratorConfig) -> Result<PropagationResult, IntegratorError>,
+        propagate_adaptive
+            as fn(
+                &GravityField,
+                TestParticleState,
+                SimTime,
+                f64,
+                AdaptiveIntegratorConfig,
+            ) -> Result<PropagationResult, IntegratorError>,
         propagate_adaptive_dop853,
     ] {
         let capped = propagate(&field, initial, SimTime::EPOCH, duration, config(Some(0.5)))
@@ -207,7 +217,8 @@ fn dynamical_cap_reads_current_body_positions_after_rejected_steps() {
 }
 
 #[test]
-fn eccentric_kepler_orbit_matches_analytic_periapsis_after_one_period() {    let mu = 3.986_004_418e14;
+fn eccentric_kepler_orbit_matches_analytic_periapsis_after_one_period() {
+    let mu = 3.986_004_418e14;
     let semi_major_axis = 10_000_000.0;
     let eccentricity = 0.6;
     let orbit = KeplerOrbit::new(mu, semi_major_axis, eccentricity, 0.0, 0.0, 0.0, 0.0)

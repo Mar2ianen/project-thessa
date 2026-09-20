@@ -2282,7 +2282,14 @@ mod cap_tests {
             vec![
                 BakedBody::synthetic_barycenter(BodyId(0), "barycenter", total_mu, None, None),
                 BakedBody::orbital(BodyId(1), "primary", mu_primary, 0.0, BodyId(0), primary),
-                BakedBody::orbital(BodyId(2), "secondary", mu_secondary, 0.0, BodyId(0), secondary),
+                BakedBody::orbital(
+                    BodyId(2),
+                    "secondary",
+                    mu_secondary,
+                    0.0,
+                    BodyId(0),
+                    secondary,
+                ),
             ],
         )
         .expect("valid binary ephemeris")

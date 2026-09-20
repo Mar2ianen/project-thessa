@@ -434,9 +434,13 @@ pub fn ascent_graph(profile: &AscentProfile) -> Result<AutopilotGraph, AscentBui
                     ]),
                 }),
             },
-            phase_node(10, "abort-cutoff", AscentPhase::Abort {
-                max_phase_time_s: profile.max_phase_time_s,
-            }),
+            phase_node(
+                10,
+                "abort-cutoff",
+                AscentPhase::Abort {
+                    max_phase_time_s: profile.max_phase_time_s,
+                },
+            ),
         ],
         edges: vec![
             edge(0, 1),
@@ -505,10 +509,7 @@ impl GraphBlock for AscentBlock {
                 use crate::GraphControlAction as Action;
                 use thessa_flight_control::{GuidanceIntent, PilotAxes, PropulsionDemand};
                 let action = match phase {
-                    AscentPhase::VerticalRise {
-                        throttle,
-                        ..
-                    } => {
+                    AscentPhase::VerticalRise { throttle, .. } => {
                         let Ok(propulsion) = PropulsionDemand::new(*throttle) else {
                             return GraphNodeOutcome::Fail {
                                 diagnostic: crate::Diagnostic {
@@ -546,13 +547,11 @@ impl GraphBlock for AscentBlock {
                     }
                     AscentPhase::GravityTurn { .. }
                     | AscentPhase::Coast { .. }
-                    | AscentPhase::Circularize { .. } => {
-                        Action::Guidance {
-                            intent: GuidanceIntent::ManualAxes(PilotAxes::default()),
-                            propulsion: PropulsionDemand::new(0.0)
-                                .expect("zero propulsion always builds"),
-                        }
-                    }
+                    | AscentPhase::Circularize { .. } => Action::Guidance {
+                        intent: GuidanceIntent::ManualAxes(PilotAxes::default()),
+                        propulsion: PropulsionDemand::new(0.0)
+                            .expect("zero propulsion always builds"),
+                    },
                 };
                 self.actions.push(action);
                 GraphNodeOutcome::Complete {

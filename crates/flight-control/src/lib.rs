@@ -1379,7 +1379,10 @@ mod tests {
         assert_eq!(result.commands, vec![0.0, 0.0]);
         let residual_sq = result.residual_force_body_n.length_squared()
             + result.residual_moment_body_nm.length_squared();
-        assert!((residual_sq - 25.0).abs() < 1.0e-9, "residual²={residual_sq}");
+        assert!(
+            (residual_sq - 25.0).abs() < 1.0e-9,
+            "residual²={residual_sq}"
+        );
         assert!(result.saturated);
     }
 
@@ -1433,7 +1436,14 @@ mod tests {
                 columns[i][0] = e.force_per_command_n.x;
                 columns[i][1] = e.force_per_command_n.y;
             }
-            let target = [demand.force_body_n.x, demand.force_body_n.y, 0.0, 0.0, 0.0, 0.0];
+            let target = [
+                demand.force_body_n.x,
+                demand.force_body_n.y,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ];
             let zero_sq = target[0] * target[0] + target[1] * target[1];
             let mut best = zero_sq;
             let states = 3usize.pow(count as u32);

@@ -294,9 +294,13 @@ pub fn rendezvous_graph(
                     ]),
                 }),
             },
-            phase_node(9, "back-away", RendezvousPhase::BackAway {
-                max_phase_time_s: profile.max_phase_time_s,
-            }),
+            phase_node(
+                9,
+                "back-away",
+                RendezvousPhase::BackAway {
+                    max_phase_time_s: profile.max_phase_time_s,
+                },
+            ),
         ],
         edges: vec![
             edge(0, 1),

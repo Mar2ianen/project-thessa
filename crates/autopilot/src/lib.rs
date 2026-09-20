@@ -375,8 +375,7 @@ impl GraphNodeConfig {
                     max_phase_time_s,
                 } => {
                     site.validate().map_err(|error| error.to_string())?;
-                    if !touchdown_speed_limit_mps.is_finite() || *touchdown_speed_limit_mps <= 0.0
-                    {
+                    if !touchdown_speed_limit_mps.is_finite() || *touchdown_speed_limit_mps <= 0.0 {
                         return Err("landing touchdown speed must be finite and positive".into());
                     }
                     check_throttle("landing terminal", *burn_throttle)?;

@@ -139,10 +139,7 @@ impl std::error::Error for ExecuteProfileError {}
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ExecutePhase {
     /// Arm node `index` for ignition (valves, gimbal unlock, settle).
-    Arm {
-        node: u32,
-        max_phase_time_s: f64,
-    },
+    Arm { node: u32, max_phase_time_s: f64 },
     /// Burn node `index` with the profiled delta-v. The authority
     /// executor realizes the impulse; the graph waits for `burn-complete`.
     Burn {
@@ -290,7 +287,9 @@ pub fn execute_graph(profile: &ExecuteProfile) -> Result<AutopilotGraph, Execute
     // Profile validation guarantees a finite non-negative miss, but the
     // verify node re-checks locally so a future caller cannot smuggle an
     // unrevalidated plan past the constructor.
-    let Some(predicted_miss_m) = profile.predicted_miss_m.filter(|m| m.is_finite() && *m >= 0.0)
+    let Some(predicted_miss_m) = profile
+        .predicted_miss_m
+        .filter(|m| m.is_finite() && *m >= 0.0)
     else {
         return Err(ExecuteBuildError::InvalidProfile(
             ExecuteProfileError::UnvalidatedPlan,
@@ -323,9 +322,13 @@ pub fn execute_graph(profile: &ExecuteProfile) -> Result<AutopilotGraph, Execute
             ]),
         }),
     });
-    nodes.push(phase_node(abort, "abort-cutoff", ExecutePhase::Abort {
-        max_phase_time_s: profile.max_phase_time_s,
-    }));
+    nodes.push(phase_node(
+        abort,
+        "abort-cutoff",
+        ExecutePhase::Abort {
+            max_phase_time_s: profile.max_phase_time_s,
+        },
+    ));
     edges.push(GraphEdge {
         from: PortRef {
             node: NodeId(previous_out),
@@ -408,11 +411,11 @@ impl GraphBlock for ExecuteBlock {
                         limit: None,
                     },
                 },
-                ExecutePhase::Arm { .. } | ExecutePhase::Burn { .. } | ExecutePhase::Verify { .. } => {
-                    GraphNodeOutcome::Complete {
-                        outputs: BTreeMap::from([("out".into(), GraphValue::Unit)]),
-                    }
-                }
+                ExecutePhase::Arm { .. }
+                | ExecutePhase::Burn { .. }
+                | ExecutePhase::Verify { .. } => GraphNodeOutcome::Complete {
+                    outputs: BTreeMap::from([("out".into(), GraphValue::Unit)]),
+                },
             },
             _ => GraphNodeOutcome::Complete {
                 outputs: BTreeMap::from([("out".into(), GraphValue::Unit)]),

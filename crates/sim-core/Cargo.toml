@@ -70,3 +70,7 @@ harness = false
 [[bench]]
 name = "affine_prop"
 harness = false
+
+[[bench]]
+name = "harmonics"
+harness = false

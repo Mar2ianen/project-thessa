@@ -84,6 +84,21 @@ pub struct CelestialConfig {
     pub rotation_period_hours: Option<f64>,
     pub axial_tilt_deg: Option<f64>,
     pub tidal_lock: bool,
+    /// Unnormalized degree-2 zonal coefficient (oblateness), optional.
+    /// Wins over `dimensions_km` when present. Absent with no dimensions
+    /// means a spherical point mass (current behavior, exactly).
+    pub j2: Option<f64>,
+    /// Unnormalized degree-2 sectorial coefficient (equatorial ellipticity).
+    /// Same precedence as `j2`.
+    pub c22: Option<f64>,
+    /// Full triaxial lengths `[a, b, c]` in km (not semi-axes). When `j2` /
+    /// `c22` are absent, homogeneous-ellipsoid estimates are derived from
+    /// these (sorted internally, so order is free). Absent means spherical.
+    pub dimensions_km: Option<[f64; 3]>,
+    /// Body-fixed prime meridian at the ephemeris epoch, degrees east of the
+    /// long (`a`) axis projection. Only orients the `c22` longitude; `j2` is
+    /// axisymmetric and needs no phase. Absent means 0.
+    pub prime_meridian_deg: Option<f64>,
     /// Surface pressure in bar. A composition without pressure is retained
     /// as design metadata, but cannot create a playable atmosphere provider.
     pub atmosphere_bar: Option<f64>,
@@ -103,6 +118,81 @@ struct RawBody {
     tidal_lock: bool,
     axial_tilt_rad: f64,
     atmosphere: Option<BakedAtmosphere>,
+    j2: f64,
+    c22: f64,
+    prime_meridian_rad: f64,
+}
+
+/// Homogeneous-ellipsoid degree-2 gravity coefficients from full triaxial
+/// lengths `[a, b, c]` (any consistent unit — only ratios enter).
+///
+/// Sorted internally to `a >= b >= c`; with semi-axes
+/// `α, β, γ` and principal moments `A = M(β²+γ²)/5` etc., the unnormalized
+/// coefficients for rotation about the short (`γ`) axis are
+/// `J2 = (C − (A+B)/2) / (M·R²)` and `C22 = (B − A) / (4·M·R²)` with the
+/// volumetric radius `R³ = α·β·γ`. A sphere yields exactly `(0, 0)`; an
+/// oblate spheroid yields `C22 = 0`. Homogeneous density is a working
+/// estimate (real differentiation shifts the moments); explicit `j2`/`c22`
+/// in the TOML always win over this derivation.
+pub fn ellipsoid_harmonics(dims: [f64; 3]) -> Option<(f64, f64)> {
+    if dims.iter().any(|d| !d.is_finite() || *d <= 0.0) {
+        return None;
+    }
+    let mut semi = [dims[0] / 2.0, dims[1] / 2.0, dims[2] / 2.0];
+    semi.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    let [alpha, beta, gamma] = semi;
+    let moment = |p: f64, q: f64| (p * p + q * q) / 5.0;
+    let (moment_a, moment_b, moment_c) = (
+        moment(beta, gamma),
+        moment(alpha, gamma),
+        moment(alpha, beta),
+    );
+    let ref_radius_sq = (alpha * beta * gamma).powf(2.0 / 3.0);
+    if !ref_radius_sq.is_finite() || ref_radius_sq <= 0.0 {
+        return None;
+    }
+    let j2 = (moment_c - 0.5 * (moment_a + moment_b)) / ref_radius_sq;
+    let c22 = (moment_b - moment_a) / (4.0 * ref_radius_sq);
+    if j2.is_finite() && c22.is_finite() {
+        Some((j2, c22))
+    } else {
+        None
+    }
+}
+
+/// Resolve a body's degree-2 gravity: explicit TOML wins, else the
+/// homogeneous-ellipsoid estimate from `dimensions_km`, else spherical.
+fn resolve_harmonics(config: &CelestialConfig) -> Result<(f64, f64, f64), SystemSpecError> {
+    let invalid =
+        |what: &str| SystemSpecError::Invalid(format!("body {} has invalid {what}", config.id));
+    let check_coeff = |value: f64, what: &str| {
+        if !value.is_finite() || value.abs() > 1.0 {
+            return Err(invalid(what));
+        }
+        Ok(value)
+    };
+    let prime_meridian_rad = config.prime_meridian_deg.unwrap_or(0.0).to_radians();
+    if !prime_meridian_rad.is_finite() {
+        return Err(invalid("prime_meridian_deg"));
+    }
+    if let (Some(j2), Some(c22)) = (config.j2, config.c22) {
+        return Ok((
+            check_coeff(j2, "j2")?,
+            check_coeff(c22, "c22")?,
+            prime_meridian_rad,
+        ));
+    }
+    if config.j2.is_some() || config.c22.is_some() {
+        // Half-specified gravity is a data bug, not a default: a lone J2
+        // with an implicit C22 = 0 (or vice versa) silently misstates a
+        // triaxial body. State both or neither.
+        return Err(invalid("j2/c22 (specify both or neither)"));
+    }
+    if let Some(dims) = config.dimensions_km {
+        let (j2, c22) = ellipsoid_harmonics(dims).ok_or_else(|| invalid("dimensions_km"))?;
+        return Ok((j2, c22, prime_meridian_rad));
+    }
+    Ok((0.0, 0.0, prime_meridian_rad))
 }
 
 #[derive(Debug, Clone)]
@@ -154,6 +244,9 @@ impl SystemConfig {
                 tidal_lock: false,
                 axial_tilt_rad: 0.0,
                 atmosphere: None,
+                j2: 0.0,
+                c22: 0.0,
+                prime_meridian_rad: 0.0,
             },
         )?;
         for star in &self.star {
@@ -182,6 +275,9 @@ impl SystemConfig {
                     tidal_lock: false,
                     axial_tilt_rad: 0.0,
                     atmosphere: None,
+                    j2: 0.0,
+                    c22: 0.0,
+                    prime_meridian_rad: 0.0,
                 },
             )?;
         }
@@ -219,6 +315,9 @@ impl SystemConfig {
                     tidal_lock: false,
                     axial_tilt_rad: 0.0,
                     atmosphere: None,
+                    j2: 0.0,
+                    c22: 0.0,
+                    prime_meridian_rad: 0.0,
                 },
             )?;
             let relative_a = required_positive(
@@ -373,6 +472,9 @@ impl SystemConfig {
                 axial_tilt_rad: raw.axial_tilt_rad,
                 gravity_source: raw.gravity_source,
                 atmosphere: raw.atmosphere,
+                j2: raw.j2,
+                c22: raw.c22,
+                prime_meridian_rad: raw.prime_meridian_rad,
             });
         }
         Ok(BakedEphemeris::new(
@@ -485,6 +587,7 @@ fn add_config_body(
     if ids.contains_key(&config.id) {
         return Err(SystemSpecError::DuplicateId(config.id.clone()));
     }
+    let (j2, c22, prime_meridian_rad) = resolve_harmonics(config)?;
     let id = BodyId(bodies.len() as u32);
     ids.insert(config.id.clone(), id);
     bodies.push(RawBody {
@@ -498,6 +601,9 @@ fn add_config_body(
         tidal_lock: config.tidal_lock,
         axial_tilt_rad,
         atmosphere,
+        j2,
+        c22,
+        prime_meridian_rad,
     });
     Ok(id)
 }

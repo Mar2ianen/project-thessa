@@ -10,15 +10,207 @@ use crate::{BakedEphemeris, BodyId, BodyState, SimTime};
 pub struct GravityField<'a> {
     ephemeris: &'a BakedEphemeris,
     source_ids: Vec<BodyId>,
+    harmonics: Vec<BodyHarmonics>,
+}
+
+/// Relative truncation for degree-2 harmonics: while
+/// `(R/r)² · max(|J2|, |C22|)` sits below this, the correction is skipped.
+/// Bounded-reduction boundary (§10.1): far-field cost is exactly zero (one
+/// multiply per source on the already-known `r²`), near-field keeps the full
+/// closed form. Strict-interior points (`r < R`) also stay monopole-only —
+/// the external expansion is not valid inside the reference sphere, and that
+/// path is bitwise identical to the old loop.
+pub const HARMONICS_TRUNCATION: f64 = 1e-9;
+
+/// Precomputed per-source harmonic data. Built once in `from_ephemeris`;
+/// the hot loop only reads it. Bodies with `j2 == c22 == 0` are flagged
+/// inactive and cost exactly one branch in the loop.
+#[derive(Debug, Clone, Copy)]
+pub struct BodyHarmonics {
+    pub active: bool,
+    pub j2: f64,
+    pub c22: f64,
+    pub ref_radius_sq: f64,
+    /// Inertial pole unit vector (body-fixed +Z), from `axial_tilt_rad`
+    /// about the engine X axis. Fixed over the bake horizon: pole
+    /// precession is not modeled (documented).
+    pub pole: DVec3,
+    /// Spin rate for the C22 longitude, if the TOML gives a period.
+    pub spin_rad_s: Option<f64>,
+    pub prime_meridian_rad: f64,
+    /// Tidally locked C22 bodies keep their long axis toward the host:
+    /// orientation is rebuilt from the host state at eval time.
+    pub locked_parent: Option<BodyId>,
+}
+
+impl BodyHarmonics {
+    /// Derive evaluation params from a baked body. Pole from axial tilt,
+    /// spin from the rotation period, locked orientation from the parent.
+    pub fn new(body: &crate::BakedBody) -> Self {
+        let tilt = body.axial_tilt_rad;
+        let pole = DVec3::new(0.0, -tilt.sin(), tilt.cos());
+        Self {
+            active: body.j2 != 0.0 || body.c22 != 0.0,
+            j2: body.j2,
+            c22: body.c22,
+            ref_radius_sq: body.radius_m * body.radius_m,
+            pole,
+            spin_rad_s: body
+                .rotation_period_s
+                .filter(|period| *period > 0.0)
+                .map(|period| std::f64::consts::TAU / period),
+            prime_meridian_rad: body.prime_meridian_rad,
+            locked_parent: (body.tidal_lock && body.c22 != 0.0)
+                .then_some(body.parent)
+                .flatten(),
+        }
+    }
+}
+
+/// Body-fixed frame axes `(x, y, z)` in inertial coordinates. `x` is the
+/// long axis (C22 longitude origin), `z` the pole. Right-handed throughout.
+fn harmonic_frame(
+    params: &BodyHarmonics,
+    time_s: f64,
+    locked_host_dir: Option<DVec3>,
+) -> (DVec3, DVec3, DVec3) {
+    let z = params.pole;
+    if let Some(host_dir) = locked_host_dir {
+        // Long axis toward the host; re-orthogonalize against the pole.
+        let x = (host_dir - z * host_dir.dot(z)).normalize_or_zero();
+        let x = if x == DVec3::ZERO {
+            orthogonal_to(z)
+        } else {
+            x
+        };
+        let y = z.cross(x);
+        return (y.cross(z), y, z);
+    }
+    let x0 = orthogonal_to(z);
+    let y0 = z.cross(x0);
+    match params.spin_rad_s {
+        Some(spin) => {
+            let phase = params.prime_meridian_rad + spin * time_s;
+            let (sin, cos) = phase.sin_cos();
+            (x0 * cos + y0 * sin, y0 * cos - x0 * sin, z)
+        }
+        // No spin data: triaxial bodies sit in a static frame (documented
+        // assumption — currently only Cinder-class shards, which have no
+        // measured period yet).
+        None => {
+            let (sin, cos) = params.prime_meridian_rad.sin_cos();
+            (x0 * cos + y0 * sin, y0 * cos - x0 * sin, z)
+        }
+    }
+}
+
+fn orthogonal_to(axis: DVec3) -> DVec3 {
+    let reference = if axis.z.abs() < 0.9 {
+        DVec3::Z
+    } else {
+        DVec3::X
+    };
+    (reference - axis * reference.dot(axis)).normalize_or_zero()
+}
+
+/// Truncation gate shared by the acceleration and potential lanes: false
+/// means monopole-only (inactive coefficients, interior points, or a
+/// far-field contribution below [`HARMONICS_TRUNCATION`]).
+fn harmonic_gate(params: &BodyHarmonics, distance_squared: f64) -> bool {
+    let magnitude = params.j2.abs().max(params.c22.abs());
+    magnitude != 0.0
+        && distance_squared >= params.ref_radius_sq
+        && (params.ref_radius_sq / distance_squared) * magnitude >= HARMONICS_TRUNCATION
+}
+/// Degree-2 potential terms (unnormalized J2/C22) at a body-fixed point,
+/// for gradient cross-checks and energy bookkeeping. Sign convention is the
+/// codebase one (`U` carries the negative monopole, `a = −∇U`) — NOT the
+/// geodesy convention: both terms are negated relative to e.g. Vallado.
+/// Matches [`harmonic_correction`] term by term.
+pub fn harmonic_potential_terms(
+    mu: f64,
+    ref_radius_m: f64,
+    j2: f64,
+    c22: f64,
+    bf: DVec3,
+) -> (f64, f64) {
+    let r_sq = bf.length_squared();
+    let r = r_sq.sqrt();
+    let ref_sq = ref_radius_m * ref_radius_m;
+    let u_j2 = mu * j2 * ref_sq * (3.0 * bf.z * bf.z - r_sq) / (2.0 * r_sq * r_sq * r);
+    let u_c22 = -3.0 * mu * c22 * ref_sq * (bf.x * bf.x - bf.y * bf.y) / (r_sq * r_sq * r);
+    (u_j2, u_c22)
+}
+
+/// Degree-2 acceleration correction in the inertial frame.
+///
+/// `offset` points from the evaluation point toward the body (the monopole
+/// loop's convention). Closed form for unnormalized J2/C22 with the
+/// body-fixed long axis on x (derivation in the commit notes; equatorial,
+/// polar and long/short-axis special cases pinned by unit tests):
+///
+/// ```text
+/// w = μR²/r⁵,  v = 3μC22R²/r⁷
+/// ax = 1.5·w·J2·x·(5z²−r²)/r² + v·x·(2r²−5(x²−y²))
+/// ay = 1.5·w·J2·y·(5z²−r²)/r² − v·y·(2r²+5(x²−y²))
+/// az = −1.5·w·J2·z·(3r²−5z²)/r² − 5·v·z·(x²−y²)
+/// ```
+///
+/// Returns `None` when the point is outside the truncation gate
+/// ([`HARMONICS_TRUNCATION`]) or inside the reference sphere — both cases
+/// stay monopole-only, exactly like the old loop.
+#[allow(clippy::too_many_arguments)]
+pub fn harmonic_correction(
+    mu: f64,
+    params: &BodyHarmonics,
+    offset_inertial: DVec3,
+    distance_squared: f64,
+    time_s: f64,
+    locked_host_dir: Option<DVec3>,
+) -> Option<DVec3> {
+    if !harmonic_gate(params, distance_squared) {
+        return None;
+    }
+    let (axis_x, axis_y, axis_z) = harmonic_frame(params, time_s, locked_host_dir);
+    // The closed form takes field-point coordinates p = probe − body, while
+    // the monopole loop hands us offset = body − probe. All correction terms
+    // are odd in position, so evaluating at the offset would flip the sign
+    // (the even potential is unaffected — which is why only the closed-form
+    // tests catch this). Negate once, here.
+    let x = -offset_inertial.dot(axis_x);
+    let y = -offset_inertial.dot(axis_y);
+    let z = -offset_inertial.dot(axis_z);
+    let r_sq = distance_squared;
+    let r = r_sq.sqrt();
+    let ref_sq = params.ref_radius_sq;
+    let w = mu * ref_sq / (r_sq * r_sq * r);
+    let v = 3.0 * mu * params.c22 * ref_sq / (r_sq * r_sq * r_sq * r);
+    let j2_common = 1.5 * w * params.j2 / r_sq;
+    let x_sq_minus_y_sq = x * x - y * y;
+    let ax = j2_common * x * (5.0 * z * z - r_sq) + v * x * (2.0 * r_sq - 5.0 * x_sq_minus_y_sq);
+    let ay = j2_common * y * (5.0 * z * z - r_sq) - v * y * (2.0 * r_sq + 5.0 * x_sq_minus_y_sq);
+    let az = -j2_common * z * (3.0 * r_sq - 5.0 * z * z) - 5.0 * v * z * x_sq_minus_y_sq;
+    let correction = DVec3::new(ax, ay, az);
+    if correction.is_finite() {
+        Some(axis_x * ax + axis_y * ay + axis_z * az)
+    } else {
+        None
+    }
 }
 
 impl<'a> GravityField<'a> {
     pub fn from_ephemeris(ephemeris: &'a BakedEphemeris) -> Self {
-        let mut source_ids: Vec<_> = ephemeris.gravity_sources().map(|body| body.id).collect();
-        source_ids.sort_unstable();
+        let mut sources: Vec<_> = ephemeris.gravity_sources().collect();
+        sources.sort_by_key(|body| body.id);
+        let source_ids = sources.iter().map(|body| body.id).collect();
+        let harmonics = sources
+            .iter()
+            .map(|body| BodyHarmonics::new(body))
+            .collect();
         Self {
             ephemeris,
             source_ids,
+            harmonics,
         }
     }
 
@@ -35,7 +227,7 @@ impl<'a> GravityField<'a> {
 
     pub fn acceleration(&self, position: DVec3, time: SimTime) -> Result<DVec3, GravityError> {
         let mut total = DVec3::ZERO;
-        for body_id in &self.source_ids {
+        for (index, body_id) in self.source_ids.iter().enumerate() {
             let body = self.ephemeris.body(*body_id)?;
             let state = self.ephemeris.body_state(*body_id, time)?;
             let offset = state.position_inertial - position;
@@ -48,6 +240,15 @@ impl<'a> GravityField<'a> {
             }
             let inverse_distance = distance_squared.sqrt().recip();
             total += offset * (body.mu * inverse_distance.powi(3));
+            total += self.harmonic_lane(
+                index,
+                body.mu,
+                offset,
+                state.position_inertial,
+                distance_squared,
+                time.0,
+                None,
+            )?;
         }
         if total.is_finite() {
             Ok(total)
@@ -56,6 +257,60 @@ impl<'a> GravityField<'a> {
                 body_id: self.source_ids[0],
             })
         }
+    }
+
+    /// Shared harmonic lane for both accumulation paths. Identical inputs
+    /// and op order keep `acceleration` and `acceleration_from_states`
+    /// bitwise identical. `body_pos` is the inertial body center;
+    /// `host_pos_override` carries a precomputed host center for the frame
+    /// path (the direct path reads it from the ephemeris instead, so one
+    /// evaluation never pays two Kepler solves for the same host).
+    /// Wide signature is deliberate: one call site per path, no struct
+    /// allocation in the hot loop.
+    #[allow(clippy::too_many_arguments)]
+    fn harmonic_lane(
+        &self,
+        index: usize,
+        body_mu: f64,
+        offset: DVec3,
+        body_pos: DVec3,
+        distance_squared: f64,
+        time_s: f64,
+        host_pos_override: Option<DVec3>,
+    ) -> Result<DVec3, GravityError> {
+        let params = &self.harmonics[index];
+        if !params.active {
+            return Ok(DVec3::ZERO);
+        }
+        let locked_host_dir = match params.locked_parent {
+            None => None,
+            Some(_) => {
+                let host_pos = match host_pos_override {
+                    Some(cached) => cached,
+                    None => {
+                        let parent = params.locked_parent.expect("locked lane has a parent");
+                        self.ephemeris
+                            .body_state(parent, SimTime(time_s))
+                            .map(|state| state.position_inertial)?
+                    }
+                };
+                Some(host_pos - body_pos)
+            }
+        };
+        // Without a host center a locked C22 frame cannot be built; stay
+        // monopole-only rather than fabricating orientation.
+        if params.locked_parent.is_some() && locked_host_dir.is_none() {
+            return Ok(DVec3::ZERO);
+        }
+        Ok(harmonic_correction(
+            body_mu,
+            params,
+            offset,
+            distance_squared,
+            time_s,
+            locked_host_dir,
+        )
+        .unwrap_or(DVec3::ZERO))
     }
 
     /// Frame-evaluating twin of [`GravityField::acceleration`]: the frame is
@@ -73,7 +328,7 @@ impl<'a> GravityField<'a> {
         frame: &mut crate::EphemerisFrame,
     ) -> Result<DVec3, GravityError> {
         let states = frame.evaluate(self.ephemeris, time)?;
-        self.acceleration_from_states(position, states)
+        self.acceleration_from_states(position, states, time)
     }
 
     /// Acceleration plus gravity gradient from one frame evaluation, for
@@ -89,7 +344,7 @@ impl<'a> GravityField<'a> {
     ) -> Result<(DVec3, glam::DMat3), GravityError> {
         let states = frame.evaluate(self.ephemeris, time)?;
         Ok((
-            self.acceleration_from_states(position, states)?,
+            self.acceleration_from_states(position, states, time)?,
             self.gravity_gradient_from_states(position, states)?,
         ))
     }
@@ -97,15 +352,17 @@ impl<'a> GravityField<'a> {
     /// Gravity from a precomputed [`EphemerisFrame`] slice instead of fresh
     /// per-body lookups. Same source order, same checks, same summation —
     /// bitwise identical to [`GravityField::acceleration`] for the same
-    /// timestamp. A short slice reports the missing body as unknown rather
-    /// than panicking on indexing.
+    /// timestamp (harmonics included: the shared lane runs here too, with
+    /// the host center read from the slice). A short slice reports the
+    /// missing body as unknown rather than panicking on indexing.
     pub fn acceleration_from_states(
         &self,
         position: DVec3,
         states: &[crate::BodyState],
+        time: SimTime,
     ) -> Result<DVec3, GravityError> {
         let mut total = DVec3::ZERO;
-        for body_id in &self.source_ids {
+        for (index, body_id) in self.source_ids.iter().enumerate() {
             let body = self.ephemeris.body(*body_id)?;
             let state = states
                 .get(body_id.index())
@@ -120,6 +377,19 @@ impl<'a> GravityField<'a> {
             }
             let inverse_distance = distance_squared.sqrt().recip();
             total += offset * (body.mu * inverse_distance.powi(3));
+            let host_pos = body
+                .parent
+                .and_then(|parent| states.get(parent.index()))
+                .map(|host| host.position_inertial);
+            total += self.harmonic_lane(
+                index,
+                body.mu,
+                offset,
+                state.position_inertial,
+                distance_squared,
+                time.0,
+                host_pos,
+            )?;
         }
         if total.is_finite() {
             Ok(total)
@@ -132,10 +402,11 @@ impl<'a> GravityField<'a> {
 
     pub fn potential(&self, position: DVec3, time: SimTime) -> Result<f64, GravityError> {
         let mut total = 0.0;
-        for body_id in &self.source_ids {
+        for (index, body_id) in self.source_ids.iter().enumerate() {
             let body = self.ephemeris.body(*body_id)?;
             let state = self.ephemeris.body_state(*body_id, time)?;
-            let distance = (state.position_inertial - position).length();
+            let offset = state.position_inertial - position;
+            let distance = offset.length();
             if !distance.is_finite() {
                 return Err(GravityError::NonFinite { body_id: *body_id });
             }
@@ -143,6 +414,26 @@ impl<'a> GravityField<'a> {
                 return Err(GravityError::Singularity { body_id: *body_id });
             }
             total -= body.mu / distance;
+            let params = &self.harmonics[index];
+            if harmonic_gate(params, distance * distance) {
+                let locked_host_dir = params
+                    .locked_parent
+                    .and_then(|parent| self.ephemeris.body_state(parent, time).ok())
+                    .map(|host| host.position_inertial - state.position_inertial);
+                let (axis_x, axis_y, axis_z) = harmonic_frame(params, time.0, locked_host_dir);
+                if params.locked_parent.is_some() && locked_host_dir.is_none() {
+                    continue;
+                }
+                let bf = DVec3::new(offset.dot(axis_x), offset.dot(axis_y), offset.dot(axis_z));
+                let (u_j2, u_c22) = harmonic_potential_terms(
+                    body.mu,
+                    params.ref_radius_sq.sqrt(),
+                    params.j2,
+                    params.c22,
+                    bf,
+                );
+                total += u_j2 + u_c22;
+            }
         }
         Ok(total)
     }

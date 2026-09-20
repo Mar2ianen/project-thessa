@@ -14,7 +14,7 @@ do not update in place).
 | Doc | Status | Implemented | Future |
 | --- | --- | --- | --- |
 | `01_CELESTIAL_SYSTEM.md` | ✅ reference | baked ephemerides, summed gravity, 32-body working set | stability/Halo/co-orbital/J2 validation checklist |
-| `03_PHYSICS_ENGINE.md` | 🟡 prototype | DP5-FSAL + DP8-DOP853, variational STM, EphemerisFrame, monopole tree + single-tick cohorts, thrust/RTN arcs, envelope-barrier + active-set allocator, Rapier contact backend | quadrupole, time-span patches, thermal/structural/fluid graphs, J2, CFD, fracture |
+| `03_PHYSICS_ENGINE.md` | 🟡 prototype | DP5-FSAL + DP8-DOP853, variational STM, EphemerisFrame, monopole tree + single-tick cohorts, thrust/RTN arcs, envelope-barrier + active-set allocator, Rapier contact backend, gated J2/C22 harmonics | quadrupole, time-span patches, thermal/structural/fluid graphs, CFD, fracture |
 | `08_NUMERICAL_VERTICAL_SLICE.md` | 🟡 prototype | test-particle contract, baked hierarchy, on-rails/Verlet, harnesses | fitted segments, harmonics, joint multi-leg shooting, structural/thermal |
 | `11_AERODYNAMICS.md` | ✅ runtime model | panel SoA/SIMD + tables + upper-band/vacuum reductions | body gas/weather/winds, full wake, hypersonics, arbitrary axes |
 | `20_ADVANCED_AERO_EFFECTORS.md` | 🔵 design target | background only (incidence-only control) | flaps/spoilers/hinged-panels/grid-fins, neutral bounds, `AeroEffectorModel` |

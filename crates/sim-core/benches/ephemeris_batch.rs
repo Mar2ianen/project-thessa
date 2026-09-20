@@ -45,10 +45,11 @@ fn main() {
             naive_total += started.elapsed();
             let started = std::time::Instant::now();
             for (i, position) in positions.iter().enumerate() {
-                let states = frame.evaluate(&ephemeris, tick(i)).expect("frame");
+                let time = tick(i);
+                let states = frame.evaluate(&ephemeris, time).expect("frame");
                 black_box(
                     field
-                        .acceleration_from_states(*position, states)
+                        .acceleration_from_states(*position, states, time)
                         .expect("gravity"),
                 );
                 black_box(ephemeris.dominant_body_from_states(*position, states));
@@ -57,10 +58,11 @@ fn main() {
         } else {
             let started = std::time::Instant::now();
             for (i, position) in positions.iter().enumerate() {
-                let states = frame.evaluate(&ephemeris, tick(i)).expect("frame");
+                let time = tick(i);
+                let states = frame.evaluate(&ephemeris, time).expect("frame");
                 black_box(
                     field
-                        .acceleration_from_states(*position, states)
+                        .acceleration_from_states(*position, states, time)
                         .expect("gravity"),
                 );
                 black_box(ephemeris.dominant_body_from_states(*position, states));

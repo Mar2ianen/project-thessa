@@ -283,6 +283,19 @@ pub struct BakedBody {
     /// Rotation-axis tilt relative to the engine's reference plane.
     #[serde(default)]
     pub axial_tilt_rad: f64,
+    /// Unnormalized degree-2 zonal (oblateness) coefficient. Zero means a
+    /// spherical point mass; derived from `dimensions_km` at bake time when
+    /// the TOML leaves it implicit (see `system::ellipsoid_harmonics`).
+    #[serde(default)]
+    pub j2: f64,
+    /// Unnormalized degree-2 sectorial (equatorial ellipticity) coefficient.
+    /// Same provenance as `j2`.
+    #[serde(default)]
+    pub c22: f64,
+    /// Body-fixed prime meridian at the ephemeris epoch, radians east of the
+    /// long axis. Orients the `c22` longitude; `j2` needs no phase.
+    #[serde(default)]
+    pub prime_meridian_rad: f64,
     /// Synthetic barycentres are useful for kinematics but must not be added
     /// to the gravity source list alongside their component bodies.
     pub gravity_source: bool,
@@ -308,6 +321,9 @@ impl BakedBody {
             axial_tilt_rad: 0.0,
             gravity_source: true,
             atmosphere: None,
+            j2: 0.0,
+            c22: 0.0,
+            prime_meridian_rad: 0.0,
         }
     }
 
@@ -332,6 +348,9 @@ impl BakedBody {
             axial_tilt_rad: 0.0,
             gravity_source: true,
             atmosphere: None,
+            j2: 0.0,
+            c22: 0.0,
+            prime_meridian_rad: 0.0,
         }
     }
 
@@ -355,6 +374,9 @@ impl BakedBody {
             axial_tilt_rad: 0.0,
             gravity_source: false,
             atmosphere: None,
+            j2: 0.0,
+            c22: 0.0,
+            prime_meridian_rad: 0.0,
         }
     }
 }

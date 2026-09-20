@@ -2414,7 +2414,7 @@ impl FlightAuthority {
                 )
             })?;
             let gravity = gravity_field
-                .acceleration_from_states(position_inertial_m, states)
+                .acceleration_from_states(position_inertial_m, states, time)
                 .map_err(|e| FlightError::InvalidInput(e.to_string()))?;
             (body_state, gravity)
         };

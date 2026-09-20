@@ -247,12 +247,12 @@ impl ResidencyCache {
         }
     }
 
-    /// Insert (or replace) a page. The whole page counts as fresh upload
-    /// bytes; updates via [`ResidencyCache::update`] count dirty ranges
-    /// instead. Evicts LRU victims until the budget fits. Cost resets to
-    /// the wire image; backends re-report via [`ResidencyCache::set_page_cost`].
+    /// Insert (or replace) a page. Upload bytes are counted when the page
+    /// is actually handed to the backend by [`ResidencyCache::flush`], not
+    /// here — counting at insert double-counted the initial Full upload.
+    /// Evicts LRU victims until the budget fits. Cost resets to the wire
+    /// image; backends re-report via [`ResidencyCache::set_page_cost`].
     pub fn insert(&mut self, key: u64, page: EncodedPage) {
-        self.uploaded_bytes += page.encoded_bytes() as u64;
         self.clock += 1;
         let stamp = self.clock;
         let blocks = page.blocks.len() as u32;
@@ -466,7 +466,21 @@ mod tests {
         assert_eq!(t.resident_bytes, bytes as u64);
         assert_eq!(t.resident_texels, 256);
         assert!(!t.over_budget);
-        assert_eq!(t.uploaded_bytes, bytes as u64);
+        // Nothing uploaded until flush hands the bytes over: insert must
+        // not pre-count the initial Full payload.
+        assert_eq!(t.uploaded_bytes, 0);
+        let payload = cache.flush(7).expect("flush resident page");
+        let flushed = match &payload {
+            FlushPayload::Full { page_bytes, table } => {
+                page_bytes.len() as u64 + table.len() as u64 * 4
+            }
+            _ => panic!("first flush must be Full, got {payload:?}"),
+        };
+        assert_eq!(cache.telemetry().uploaded_bytes, flushed);
+        // A clean re-flush emits no patches and counts nothing more.
+        let clean = cache.flush(7).expect("clean re-flush");
+        assert!(matches!(clean, FlushPayload::Incremental { patches } if patches.is_empty()));
+        assert_eq!(cache.telemetry().uploaded_bytes, flushed);
         assert!(t.texels_per_mib() > 0.0);
     }
 

@@ -1,6 +1,11 @@
 # Procedural propulsion systems
 
-Status: design baseline. Exact thermodynamic models, component catalog, material database, failure limits, editor UX, and balancing values are TBD.
+Status: design baseline with a shipped v1 backend (`thessa-sim-core::propulsion`):
+liquid chemical rockets + solid motors, isentropic nozzle core, cycle/feed
+bounds, geometry-derived mass, spool runtime, altitude analyzer, vehicle
+mounts, and the plume handoff. Mixture-ratio sensitivity, aerospikes,
+tank/pump parts, thermal-graph hookup, per-engine flight-loop allocation,
+and the editor UI are still TBD (see section 18).
 
 ## 1. Design goal
 
@@ -540,3 +545,57 @@ Initial non-goals may include:
 - full plasma kinetic simulation.
 
 The target is an engineering game model: component topology and geometry should create meaningful, physically interpretable trade-offs while remaining computationally tractable and editable by normal players.
+
+## 18. Backend implementation (v1)
+
+Shipped in `crates/sim-core/src/propulsion.rs` (MIT engine crate, no Bevy/Tokio/wgpu).
+
+### 18.1 What is modeled
+
+- Isentropic frozen-flow nozzle core: c* from chamber thermo, exit Mach
+  from expansion ratio (Newton + bisection fallback), thrust coefficient
+  with the ambient pressure term exact, mass flow from throat area.
+- Propellant pairs (LOX/RP-1, LOX/methane, LOX/hydrogen, NTO/MMH,
+  APCP solid) carrying gamma, chamber temperature, gas constant, bulk
+  density, and characteristic length. Performance is derived from these
+  properties; the c* calibration test pins each pair within 4% of its
+  published anchor.
+- Feed cycles as engineering bounds, not multipliers: chamber-pressure
+  caps per topology, a gas-generator bypass modeled as a second
+  isentropic duct at duct temperature/expansion, electric-pump power from
+  flow times pressure rise with a documented specific-power mass.
+- Materials as density/yield/temperature properties sizing thin-wall
+  chamber and nozzle mass; cooling modes gate pressure (radiative) or
+  burn duration (ablative) instead of derating silently.
+- Conical/bell nozzles with the divergence factor from wall geometry;
+  the bell recovers half the residual divergence loss (thrust envelope
+  +/-1% pinned by test).
+- Solid BATES grains: equilibrium pressure from the Saint-Robert law in
+  closed form over the web, progressive-trace signature pinned by test,
+  n >= 1 refused (no stable equilibrium exists).
+- Runtime spool state (first-order lag, ignition shots, solid burn
+  clock), altitude analyzer over any `AtmosphereConfig` (the Juno
+  Performance Analyzer backend: ~180 ns/point, a 21-row curve in under
+  4 us), and engine mounts in `VehicleDefinition` with point-mass bake
+  aggregation plus uniform-command thrust queries.
+- Plume handoff: `EnginePlumeState` maps field-for-field into
+  `plume-core` `PlumeSource` through the single `engine_plume_source`
+  choke point, with no new cross-crate dependency.
+
+### 18.2 Validation
+
+- Merlin-1D-class golden test: 845 kN / 914 kN and 282 s / 311 s within
+  5%, dry mass inside the published band with margin.
+- Sonic-throat and area-Mach round-trip special cases; vacuum/sea-level
+  ordering; throttle linearity pin; Summerfield separation flag;
+  cycle/cooling gate refusal tests; NaN-closed validation throughout.
+- Bench `crates/sim-core/benches/propulsion.rs`: hangar compile
+  ~20 us (liquid) / ~12 us (solid), analyzer and solid-replay sweeps.
+
+### 18.3 Deferred to later iterations
+
+Mixture-ratio sensitivity, aerospike/plug nozzles, star/finocyl grains,
+tank/pump/valve vehicle parts, thermal-graph coupling (chemical power
+and wall state are exposed but unconsumed), per-engine allocation in the
+flight loop (uniform command only), solid mass depletion in flight, and
+the editor UI itself.

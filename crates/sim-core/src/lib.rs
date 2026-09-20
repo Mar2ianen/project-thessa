@@ -19,6 +19,7 @@ mod gravity_tree;
 mod high_speed;
 mod integrator;
 mod onrails;
+mod propulsion;
 mod scheduler;
 mod system;
 mod table;
@@ -79,6 +80,14 @@ pub use onrails::{
     COAST_RAILS_MIN_AHEAD_S, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_STEP_S,
     COAST_RAILS_VELOCITY_TOL_MPS, DISPLAY_SCALED_ETA, DISPLAY_SCALED_H_MAX_S,
     DISPLAY_SCALED_H_MIN_S, DISPLAY_SCALED_MAX_SAMPLES, OnRailsCache, OnRailsWake,
+};
+pub use propulsion::{
+    AltitudePoint, BurnPoint, ChamberMaterial, CompiledEngine, CompiledLiquid, CompiledSolid,
+    CoolingMode, CycleLimits, EngineCycle, EngineMount, EngineOperatingPoint, EnginePlumeState,
+    EngineSpool, LiquidEngineSpec, NozzleContour, NozzleExitState, Propellant, PropellantThermo,
+    PropulsionError, SEPARATION_PRESSURE_RATIO, STANDARD_GRAVITY_MPS2, SolidMotorSpec,
+    advance_spool, analyze_altitude, characteristic_velocity, mach_from_area_ratio,
+    thrust_coefficient,
 };
 pub use scheduler::{EventScheduler, ScheduledEvent, ScheduledKind};
 pub use system::{

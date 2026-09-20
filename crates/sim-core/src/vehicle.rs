@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AeroConfig, AeroError, AeroGeometry, AeroPanel, CollisionAxis, CollisionError,
-    CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, FlightError,
-    RigidBodyProperties,
+    CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, EngineMount, FlightError,
+    PropulsionError, RigidBodyProperties,
 };
 
 /// One user-configurable aerodynamic control channel.
@@ -102,6 +102,11 @@ pub struct VehicleDefinition {
     /// to create a dynamic collision body until this is populated.
     #[serde(default)]
     pub collision_geometry: CollisionGeometry,
+    /// Installed procedural engines (compiled backend data + mount stations).
+    /// Empty keeps every legacy asset valid; the baker aggregates engine
+    /// masses into `mass_properties` when mounts are present.
+    #[serde(default)]
+    pub engines: Vec<EngineMount>,
 }
 
 /// Physical starter data for the first powered flight profile.
@@ -299,6 +304,7 @@ impl VehicleDefinition {
             mass_properties,
             control_surfaces,
             collision_geometry: CollisionGeometry::default(),
+            engines: Vec::new(),
         };
         definition.validate()?;
         Ok(definition)
@@ -334,6 +340,9 @@ impl VehicleDefinition {
         self.collision_geometry
             .validate()
             .map_err(VehicleError::Collision)?;
+        for mount in &self.engines {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
 
         let mut claimed_panels = std::collections::HashSet::new();
         for surface in &self.control_surfaces {
@@ -347,6 +356,69 @@ impl VehicleDefinition {
             }
         }
         Ok(())
+    }
+
+    /// Attach compiled engine mounts (baker path; validates the mounts).
+    pub fn with_engines(mut self, engines: Vec<EngineMount>) -> Result<Self, VehicleError> {
+        for mount in &engines {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        self.engines = engines;
+        Ok(self)
+    }
+
+    /// Aggregate installed engine masses into the mass properties. Each
+    /// engine rides as a point mass at its mount station (parallel-axis
+    /// terms added to the input inertia, which keeps describing the base
+    /// structure). The baker calls this after attaching mounts; input mass
+    /// semantics are "structure without engines".
+    pub fn bake_engine_masses(&mut self) -> Result<(), VehicleError> {
+        let mut mass_kg = self.mass_properties.mass_kg;
+        let mut inertia = self.mass_properties.inertia_body_kg_m2;
+        for mount in &self.engines {
+            let engine_mass_kg = mount.engine.bake_mass_kg();
+            let position = DVec3::from_array(mount.position_body_m);
+            mass_kg += engine_mass_kg;
+            inertia += engine_mass_kg
+                * (glam::DMat3::IDENTITY * position.length_squared()
+                    - outer_product(position, position));
+        }
+        self.mass_properties =
+            RigidBodyProperties::new(mass_kg, inertia).map_err(VehicleError::MassProperties)?;
+        Ok(())
+    }
+
+    /// Thrust vector of one mount in body axes (N).
+    pub fn engine_thrust_body_n(
+        &self,
+        index: usize,
+        throttle: f64,
+        ambient_pa: f64,
+        burn_time_s: f64,
+    ) -> Result<DVec3, VehicleError> {
+        let mount = self
+            .engines
+            .get(index)
+            .ok_or_else(|| VehicleError::InvalidVehicle(format!("no engine at index {index}")))?;
+        mount
+            .thrust_vector_body_n(throttle, ambient_pa, burn_time_s)
+            .map(DVec3::from_array)
+            .map_err(VehicleError::Propulsion)
+    }
+
+    /// Total installed thrust in body axes at a uniform command (editor
+    /// preview / single-lever path; per-engine allocation is later work).
+    pub fn total_thrust_body_n(
+        &self,
+        throttle: f64,
+        ambient_pa: f64,
+        burn_time_s: f64,
+    ) -> Result<DVec3, VehicleError> {
+        let mut total = DVec3::ZERO;
+        for index in 0..self.engines.len() {
+            total += self.engine_thrust_body_n(index, throttle, ambient_pa, burn_time_s)?;
+        }
+        Ok(total)
     }
 
     /// Apply normalized control commands in `[-1, 1]` to this vehicle's
@@ -384,6 +456,7 @@ pub enum VehicleError {
     Geometry(AeroError),
     Collision(CollisionError),
     MassProperties(FlightError),
+    Propulsion(PropulsionError),
     InvalidControlSurface(String),
     InvalidControlCommand { surface: String, command: f64 },
     ControlCount { expected: usize, actual: usize },
@@ -400,6 +473,9 @@ impl fmt::Display for VehicleError {
             }
             Self::MassProperties(error) => {
                 write!(formatter, "invalid vehicle mass properties: {error}")
+            }
+            Self::Propulsion(error) => {
+                write!(formatter, "vehicle engine error: {error}")
             }
             Self::InvalidControlSurface(message) => {
                 write!(formatter, "invalid control surface: {message}")
@@ -442,4 +518,9 @@ impl From<FlightError> for VehicleError {
     fn from(error: FlightError) -> Self {
         Self::MassProperties(error)
     }
+}
+
+/// Rank-one outer product for parallel-axis aggregation.
+fn outer_product(a: DVec3, b: DVec3) -> glam::DMat3 {
+    glam::DMat3::from_cols(a * b.x, a * b.y, a * b.z)
 }

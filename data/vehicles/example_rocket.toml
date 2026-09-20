@@ -1,0 +1,83 @@
+name = "example-methalox-rocket"
+# Structure without engines: the baker adds compiled engine masses on top.
+mass_kg = 2000.0
+# Symmetric positive-definite inertia tensor, written as rows.
+inertia_body_kg_m2 = [
+  [8000.0, 0.0, 0.0],
+  [0.0, 8000.0, 0.0],
+  [0.0, 0.0, 1500.0],
+]
+
+# Three stabilizing fins at the tail station.
+[[panels]]
+position_body_m = [-3.0, 0.0, 0.9]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 1.5
+chord_m = 1.0
+span_m = 1.5
+aspect_ratio = 1.5
+thickness_to_chord_ratio = 0.10
+
+[[panels]]
+position_body_m = [-3.0, 0.78, -0.45]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.87, 0.5]
+area_m2 = 1.5
+chord_m = 1.0
+span_m = 1.5
+aspect_ratio = 1.5
+thickness_to_chord_ratio = 0.10
+
+[[panels]]
+position_body_m = [-3.0, -0.78, -0.45]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, -0.87, 0.5]
+area_m2 = 1.5
+chord_m = 1.0
+span_m = 1.5
+aspect_ratio = 1.5
+thickness_to_chord_ratio = 0.10
+
+[[collision_parts]]
+shape = "capsule"
+position_body_m = [0.0, 0.0, 0.0]
+axis = "x"
+half_segment_m = 3.0
+radius_m = 0.65
+friction = 0.7
+
+# Juno-simple-mode engine authoring: methalox gas-generator, bell nozzle.
+[[engines]]
+name = "main"
+kind = "liquid"
+mount_position_body_m = [-3.2, 0.0, 0.0]
+thrust_axis_body = [1.0, 0.0, 0.0]
+propellant = "lox-methane"
+cycle = "gas-generator"
+chamber_pressure_mpa = 12.0
+throat_radius_m = 0.15
+expansion_ratio = 35.0
+nozzle_length_m = 1.8
+contour = "bell"
+material = "nickel-superalloy"
+cooling = "regenerative"
+gimbal_range_rad = 0.09
+restartable = true
+
+# Strap-on solid booster for the same airframe.
+[[engines]]
+name = "booster"
+kind = "solid"
+mount_position_body_m = [-2.5, 0.0, 1.1]
+thrust_axis_body = [1.0, 0.0, 0.0]
+throat_radius_m = 0.09
+expansion_ratio = 8.0
+nozzle_length_m = 0.6
+contour = "conical"
+material = "nickel-superalloy"
+outer_radius_m = 0.3
+core_radius_m = 0.2
+segment_length_m = 1.0
+segments = 2
+ignition_shots = 1

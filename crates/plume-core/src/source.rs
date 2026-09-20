@@ -51,6 +51,31 @@ pub enum ExhaustFamily {
     Ion,
 }
 
+/// Propellant family reported by the propulsion backend
+/// (`thessa-sim-core` `EnginePlumeState`). Kept as a separate small enum so
+/// neither engine crate depends on the other; the mapping below is total
+/// and pinned by test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PropellantFamily {
+    Hydrolox,
+    Kerolox,
+    Methalox,
+    Hypergolic,
+    Solid,
+}
+
+impl From<PropellantFamily> for ExhaustFamily {
+    fn from(family: PropellantFamily) -> Self {
+        match family {
+            PropellantFamily::Hydrolox => Self::Hydrolox,
+            PropellantFamily::Kerolox => Self::Kerolox,
+            PropellantFamily::Methalox => Self::Methalox,
+            PropellantFamily::Hypergolic => Self::Hypergolic,
+            PropellantFamily::Solid => Self::Solid,
+        }
+    }
+}
+
 /// Semantic plume input for one nozzle (doc section 5).
 ///
 /// All fields are SI. `throttle` is 0..=1; `throttle <= 0` means the engine
@@ -135,6 +160,37 @@ pub fn validation_error(source: &PlumeSource, env: &PlumeEnvironment) -> Option<
         return Some("oxygen_fraction must be in 0..=1");
     }
     None
+}
+
+/// Build a plume source from propulsion-backend state. This is the single
+/// game-side choke point between compiled engines and the renderer: callers
+/// pass the `EnginePlumeState` scalars through, never hand-roll a source.
+/// Mass flow and exhaust velocity are full-throttle design values scaled by
+/// the caller-supplied effective throttle outside (spool state lives in the
+/// propulsion backend); `throttle <= 0` contributes zero output.
+#[allow(clippy::too_many_arguments)]
+pub fn engine_plume_source(
+    nozzle_to_vehicle: RigidTransform,
+    exit_radius_m: f64,
+    mass_flow_kg_s: f64,
+    exhaust_velocity_mps: f64,
+    exit_pressure_pa: f64,
+    exit_temperature_k: f64,
+    exit_mach: f64,
+    throttle: f64,
+    family: PropellantFamily,
+) -> PlumeSource {
+    PlumeSource {
+        nozzle_to_vehicle,
+        exit_radius_m,
+        mass_flow_kg_s,
+        exhaust_velocity_mps,
+        exit_pressure_pa,
+        exit_temperature_k,
+        exit_mach,
+        throttle,
+        exhaust: ExhaustFamily::from(family),
+    }
 }
 
 impl fmt::Display for ExhaustFamily {
@@ -239,5 +295,32 @@ pub mod tests {
         let mut bad_flow = sample_env_sea_level();
         bad_flow.flow_velocity_local_mps = [10.0, f64::NAN, -5.0];
         assert!(validation_error(&sample_source(), &bad_flow).is_some());
+    }
+
+    #[test]
+    fn engine_handoff_maps_families_and_validates() {
+        // The propulsion-backend choke point must carry every scalar and
+        // map each propellant family to its optical family.
+        for (family, expected) in [
+            (PropellantFamily::Hydrolox, ExhaustFamily::Hydrolox),
+            (PropellantFamily::Kerolox, ExhaustFamily::Kerolox),
+            (PropellantFamily::Methalox, ExhaustFamily::Methalox),
+            (PropellantFamily::Hypergolic, ExhaustFamily::Hypergolic),
+            (PropellantFamily::Solid, ExhaustFamily::Solid),
+        ] {
+            let source = engine_plume_source(
+                RigidTransform::IDENTITY,
+                0.65,
+                520.0,
+                3560.0,
+                68_000.0,
+                1900.0,
+                3.4,
+                1.0,
+                family,
+            );
+            assert_eq!(source.exhaust, expected);
+            assert_eq!(validation_error(&source, &sample_env_sea_level()), None);
+        }
     }
 }

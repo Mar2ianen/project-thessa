@@ -250,13 +250,20 @@ impl AeroResidualBudget {
 }
 
 /// One logical 4x4 (or edge-partial) tile.
+///
+/// Layout fields are private: decode indexes the payload with
+/// `mach_start/alpha_start/len` and reads it with `codec`, so safe code
+/// must not be able to desynchronize them (a witness: setting
+/// `mach_start = 999` used to turn the next decode into a `usize`
+/// underflow/index panic). Read through the accessors; build through
+/// [`AeroResidualTable::encode`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct AeroResidualTile {
-    pub codec: AeroResidualCodec,
-    pub mach_start: usize,
-    pub alpha_start: usize,
-    pub mach_len: usize,
-    pub alpha_len: usize,
+    codec: AeroResidualCodec,
+    mach_start: usize,
+    alpha_start: usize,
+    mach_len: usize,
+    alpha_len: usize,
     /// Worst decoded grid-point error in this tile.
     pub error: AeroCoefficientError,
     corners: [AeroCoefficients; 4],
@@ -268,6 +275,26 @@ pub struct AeroResidualTile {
 impl AeroResidualTile {
     pub fn payload_len(&self) -> usize {
         self.payload_len
+    }
+
+    pub fn codec(&self) -> AeroResidualCodec {
+        self.codec
+    }
+
+    pub fn mach_start(&self) -> usize {
+        self.mach_start
+    }
+
+    pub fn alpha_start(&self) -> usize {
+        self.alpha_start
+    }
+
+    pub fn mach_len(&self) -> usize {
+        self.mach_len
+    }
+
+    pub fn alpha_len(&self) -> usize {
+        self.alpha_len
     }
 }
 
@@ -293,11 +320,16 @@ pub struct AeroResidualStats {
 /// The grid arrays are retained verbatim so clamping/bracketing semantics stay
 /// identical. Payload is a single contiguous byte buffer; tiles carry offsets
 /// into it, avoiding one heap allocation per tile.
+///
+/// Grids and tiles are private for the same reason as the tile layout:
+/// decode trusts them jointly (grid bracketing, tile lookup, payload
+/// slicing), so mutating one side through safe code could panic the other.
+/// Read through the accessors or `sample`/`grid_sample`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AeroResidualTable {
-    pub mach_grid: Vec<f64>,
-    pub alpha_grid_rad: Vec<f64>,
-    pub tiles: Vec<AeroResidualTile>,
+    mach_grid: Vec<f64>,
+    alpha_grid_rad: Vec<f64>,
+    tiles: Vec<AeroResidualTile>,
     payload: Vec<u8>,
     tile_alpha_count: usize,
     max_error: AeroCoefficientError,
@@ -414,6 +446,22 @@ impl AeroResidualTable {
             return None;
         }
         Some(self.decode_grid_point(mach_index, alpha_index))
+    }
+
+    /// Encoded tiles in row-major order. Read-only: layout and payload
+    /// stay consistent by construction.
+    pub fn tiles(&self) -> &[AeroResidualTile] {
+        &self.tiles
+    }
+
+    /// Retained Mach grid (verbatim copy of the source table).
+    pub fn mach_grid(&self) -> &[f64] {
+        &self.mach_grid
+    }
+
+    /// Retained alpha grid in radians (verbatim copy of the source table).
+    pub fn alpha_grid_rad(&self) -> &[f64] {
+        &self.alpha_grid_rad
     }
 
     /// Sample with the same bracketing/clamping and bilinear order as the
@@ -906,6 +954,35 @@ mod tests {
             (got.pitching_moment - expected.pitching_moment).abs()
                 <= error.pitching_moment + 2.0e-14
         );
+    }
+
+    #[test]
+    fn public_layout_views_tile_the_grid_exactly() {
+        // Encapsulation pin: layout is readable (tiles, grids, codec,
+        // starts, lengths) but only constructible via encode, so safe
+        // code cannot desynchronize decode from its payload. Every grid
+        // point decodes through the public API: no out-of-bounds access,
+// no arithmetic underflow, finite coefficients everywhere.
+        let source = table_from(13, 11, nonlinear_coefficients);
+        let packed =
+            AeroResidualTable::encode(&source, AeroResidualBudget::uniform(1.0e-4)).unwrap();
+        assert_eq!(packed.mach_grid(), source.mach_grid.as_slice());
+        assert_eq!(packed.alpha_grid_rad(), source.alpha_grid_rad.as_slice());
+        let (nm, na) = (source.mach_grid.len(), source.alpha_grid_rad.len());
+        let mut covered = vec![false; nm * na];
+        for tile in packed.tiles() {
+            assert!(tile.mach_len() > 0 && tile.alpha_len() > 0);
+            for mi in tile.mach_start()..tile.mach_start() + tile.mach_len() {
+                for ai in tile.alpha_start()..tile.alpha_start() + tile.alpha_len() {
+                    assert!(mi < nm && ai < na, "tile exceeds grid");
+                    assert!(!covered[mi * na + ai], "tiles overlap");
+                    covered[mi * na + ai] = true;
+                    let got = packed.grid_sample(mi, ai).unwrap();
+                    assert!(got.lift.is_finite() && got.drag.is_finite());
+                }
+            }
+        }
+        assert!(covered.iter().all(|c| *c), "tiles must cover the grid");
     }
 
     #[test]

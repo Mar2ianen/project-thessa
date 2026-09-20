@@ -5629,6 +5629,7 @@ version = "0.0.1"
 dependencies = [
  "bevy",
  "bevy_brp_extras",
+ "rayon",
  "serde",
  "thessa-atmosphere",
  "thessa-bevy-rcbt",

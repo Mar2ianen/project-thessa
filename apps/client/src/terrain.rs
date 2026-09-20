@@ -5,11 +5,13 @@ use bevy::{
     ecs::system::SystemParam,
     math::{DQuat, DVec3},
     mesh::{Indices, PrimitiveTopology},
-    tasks::{AsyncComputeTaskPool, Task, block_on, poll_once},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::Arc,
+    sync::{
+        Arc,
+        mpsc::{Receiver, TryRecvError, sync_channel},
+    },
     time::Instant,
 };
 use thessa_bevy_rcbt::{
@@ -45,8 +47,8 @@ pub(super) struct WorldTerrain {
     pub render_center: Option<Vec3>,
     pub render_origin_m: DVec3,
     cache: BTreeMap<TileKey, CachedTile>,
-    jobs: BTreeMap<TileKey, Task<TerrainBuildOutput>>,
-    material_jobs: BTreeMap<TileKey, Task<thessa_bevy_rcbt::CbtMaterialPage>>,
+    jobs: BTreeMap<TileKey, JobHandle<TerrainBuildOutput>>,
+    material_jobs: BTreeMap<TileKey, JobHandle<thessa_bevy_rcbt::CbtMaterialPage>>,
     wanted: Vec<TileKey>,
     fine_selection: Vec<TileKey>,
     selection_epoch: u64,
@@ -729,19 +731,42 @@ fn present_cpu_tile(
     );
 }
 
-/// Executor seam for CPU tile builds. The signature is pool-agnostic
-/// (`TileKey` + shared field in, `TerrainBuildOutput` out) so the backend
-/// can move from `AsyncComputeTaskPool` to Rayon + bounded result channel
-/// without touching selection or presentation; `WorldTerrain.jobs` is the
-/// only place that names the current backend's handle type.
+/// Finished-job handle: the pool owns the worker, the frame thread only
+/// polls. Rayon + bounded (capacity-1) channel: polling is non-blocking via
+/// `try_recv`, completion order follows the job map (deterministic
+/// presentation order — only completion *timing* may vary run to run), and
+/// a dead worker surfaces as `Disconnected` instead of a stuck task.
+/// The mutex exists only because Bevy resources must be `Sync`
+/// (`std Receiver` is `Send` but not `Sync`); it is never contended —
+/// workers send once, the frame thread polls once per frame.
+struct JobHandle<T> {
+    rx: std::sync::Mutex<Receiver<T>>,
+}
+
+impl<T> JobHandle<T> {
+    fn new(rx: Receiver<T>) -> Self {
+        Self {
+            rx: std::sync::Mutex::new(rx),
+        }
+    }
+
+    fn try_take(&self) -> Result<T, TryRecvError> {
+        self.rx.lock().expect("terrain job mailbox").try_recv()
+    }
+}
+
+/// Executor seam for CPU tile builds. `TileKey` + shared field in,
+/// [`TerrainBuildOutput`] out through the bounded channel; selection and
+/// presentation never name the backend.
 fn spawn_height_job(
     field: &Arc<PlanetField>,
     key: TileKey,
     tile_mesh_cells: usize,
     gpu_raster: bool,
-) -> Task<TerrainBuildOutput> {
+) -> JobHandle<TerrainBuildOutput> {
+    let (tx, rx) = sync_channel(1);
     let field = field.clone();
-    AsyncComputeTaskPool::get().spawn(async move {
+    rayon::spawn(move || {
         let start = Instant::now();
         // The direct GPU path needs only the quantized height page.
         // Do not build CPU positions, normals, skirts, or material
@@ -802,7 +827,7 @@ fn spawn_height_job(
                 material_s,
             )
         };
-        TerrainBuildOutput {
+        let built = TerrainBuildOutput {
             mesh,
             height_page,
             anchor,
@@ -811,21 +836,28 @@ fn spawn_height_job(
             texture_bytes,
             images,
             seconds: [mesh_s, material_s],
-        }
-    })
+        };
+        // The receiver is dropped on eviction: a late result is discarded,
+        // never applied.
+        let _ = tx.send(built);
+    });
+    JobHandle::new(rx)
 }
 
-/// Executor seam for material-page builds (same backend note as above).
+/// Executor seam for material-page builds (same backend as above).
 fn spawn_material_job(
     field: &Arc<PlanetField>,
     key: TileKey,
-) -> Task<thessa_bevy_rcbt::CbtMaterialPage> {
+) -> JobHandle<thessa_bevy_rcbt::CbtMaterialPage> {
+    let (tx, rx) = sync_channel(1);
     let field = field.clone();
-    AsyncComputeTaskPool::get().spawn(async move {
+    rayon::spawn(move || {
         let page = lod::build_gpu_material_page(&field, key);
-        thessa_bevy_rcbt::CbtMaterialPage::from_rgba8(page.rgba)
-            .expect("fixed material page layout")
-    })
+        let built = thessa_bevy_rcbt::CbtMaterialPage::from_rgba8(page.rgba)
+            .expect("fixed material page layout");
+        let _ = tx.send(built);
+    });
+    JobHandle::new(rx)
 }
 
 /// Presentation stage: advance ready page families independently of
@@ -1236,11 +1268,26 @@ fn poll_finished_pages(
     perf: &mut perf::PerfMonitor,
 ) {
     let poll_started = Instant::now();
-    let finished: Vec<_> = world
-        .jobs
-        .iter_mut()
-        .filter_map(|(key, task)| block_on(poll_once(task)).map(|result| (*key, result)))
-        .collect();
+    let mut finished = Vec::new();
+    let mut failed = Vec::new();
+    for (key, job) in &world.jobs {
+        match job.try_take() {
+            Ok(result) => finished.push((*key, result)),
+            Err(TryRecvError::Empty) => {}
+            // A dead worker must not wedge its slot: evict loudly. (The
+            // old task handle would have stayed pending forever instead.)
+            Err(TryRecvError::Disconnected) => failed.push(*key),
+        }
+    }
+    if !failed.is_empty() {
+        eprintln!(
+            "[terrain] {} height job(s) died before delivering",
+            failed.len()
+        );
+        for key in failed {
+            world.jobs.remove(&key);
+        }
+    }
     perf.record_scope(
         "world.terrain_job_poll",
         poll_started.elapsed().as_secs_f64(),
@@ -1371,13 +1418,22 @@ fn run_material_streaming(
         forward_body,
         ..
     } = *view;
-    let finished: Vec<_> = world
-        .material_jobs
-        .iter_mut()
-        .filter_map(|(key, task)| block_on(poll_once(task)).map(|page| (*key, page)))
-        .collect();
-    for (key, page) in finished {
+    let mut finished = Vec::new();
+    for (key, job) in &world.material_jobs {
+        match job.try_take() {
+            Ok(page) => finished.push((*key, Some(page))),
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                eprintln!("[terrain] material job for {key:?} died before delivering");
+                finished.push((*key, None));
+            }
+        }
+    }
+    for (key, maybe_page) in finished {
         world.material_jobs.remove(&key);
+        let Some(page) = maybe_page else {
+            continue;
+        };
         if world.cache.contains_key(&key)
             && let Some(node) = lod::cbt_node_for_tile(key)
         {

@@ -50,7 +50,7 @@ do not update in place).
 | `38_CBT_RENDER_AUDIT_2026_09_15.md` | ✅ audit | defects fixed + follow-ups | bisector pool, shadow parity, FFT ocean, virtual texture |
 | `38_ENGINE_PLUME_RENDERING.md` | 🔵 design target | — (replaces `beauty.rs` smoke test) | residual bricks, RT lighting, Ultra |
 | `39_BEVY_EXIT_AND_ENGINE_MIGRATION.md` | 🔵 migration plan | policy/freeze rules | §§4–20 migration phases |
-| `41_MICROSCALED_SURFACE_STORAGE.md` | 🔵 design target | — | codec, error metrics, material pages first |
+| `41_MICROSCALED_SURFACE_STORAGE.md` | 🟡 partial | codec A–E, allocator, residency, GPU LOD/mip path, game + render-world A/B, measured | crack-free geometry, baked-format adoption, height pages |
 
 ## Autopilot and roadmap
 

@@ -1,8 +1,14 @@
 # 41 — Microscaled surface storage
 
-Status: **design / prototype target**.
+Status: **partial implementation on main** (merged from
+`feat/microstorage-phase-a`): codec Phases A–E, slab allocator, residency
+cache, GPU LOD/mip/sample-time path with hardware parity, game integration
+(`material_microstore`, render-world A/B) all landed and measured — see the
+phase notes below. Open: crack-free geometry (blocked on a boundary
+strategy), canonical baked-format adoption, height pages as secondary
+target after visual-data proof.
 
-Implementation status (branch `feat/microstorage-phase-a`):
+Implementation status (landed on `main` from `feat/microstorage-phase-a`):
 
 - Phase A done in `thessa-microstore-core`: scalar 4x4 codec (Raw8,
   Residual8/4), deterministic wire format, error metrics, 7 seeded

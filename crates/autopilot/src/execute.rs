@@ -131,18 +131,32 @@ impl std::fmt::Display for ExecuteProfileError {
 
 impl std::error::Error for ExecuteProfileError {}
 
-/// One execute phase read by the authority executor.
+/// One execute phase read by the authority executor. Each variant carries
+/// the profile parameters its executor needs — the executable IR is
+/// self-contained, so an unrevalidated plan (no measured miss) can never
+/// build the same verify node as a validated one. `max_phase_time_s` rides
+/// every phase: the watchdog binds the executor, not the planner.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ExecutePhase {
     /// Arm node `index` for ignition (valves, gimbal unlock, settle).
-    Arm { node: u32 },
+    Arm {
+        node: u32,
+        max_phase_time_s: f64,
+    },
     /// Burn node `index` with the profiled delta-v. The authority
     /// executor realizes the impulse; the graph waits for `burn-complete`.
-    Burn { node: u32, delta_v_mps: [f64; 3] },
-    /// Post-plan verification against the predicted miss.
-    Verify,
+    Burn {
+        node: u32,
+        delta_v_mps: [f64; 3],
+        max_phase_time_s: f64,
+    },
+    /// Post-plan verification against the predicted miss carried here.
+    Verify {
+        predicted_miss_m: f64,
+        max_phase_time_s: f64,
+    },
     /// Engine cutoff and safeing after an abort trigger.
-    Abort,
+    Abort { max_phase_time_s: f64 },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -209,7 +223,10 @@ pub fn execute_graph(profile: &ExecuteProfile) -> Result<AutopilotGraph, Execute
         nodes.push(phase_node(
             arm,
             &format!("arm-node-{index}"),
-            ExecutePhase::Arm { node: index as u32 },
+            ExecutePhase::Arm {
+                node: index as u32,
+                max_phase_time_s: profile.max_phase_time_s,
+            },
         ));
         nodes.push(GraphNode {
             id: NodeId(wait_ignition),
@@ -229,6 +246,7 @@ pub fn execute_graph(profile: &ExecuteProfile) -> Result<AutopilotGraph, Execute
             ExecutePhase::Burn {
                 node: index as u32,
                 delta_v_mps: node.delta_v_mps,
+                max_phase_time_s: profile.max_phase_time_s,
             },
         ));
         nodes.push(GraphNode {
@@ -269,7 +287,23 @@ pub fn execute_graph(profile: &ExecuteProfile) -> Result<AutopilotGraph, Execute
     let abort_wait = next_id;
     next_id += 1;
     let abort = next_id;
-    nodes.push(phase_node(verify, "verify-plan", ExecutePhase::Verify));
+    // Profile validation guarantees a finite non-negative miss, but the
+    // verify node re-checks locally so a future caller cannot smuggle an
+    // unrevalidated plan past the constructor.
+    let Some(predicted_miss_m) = profile.predicted_miss_m.filter(|m| m.is_finite() && *m >= 0.0)
+    else {
+        return Err(ExecuteBuildError::InvalidProfile(
+            ExecuteProfileError::UnvalidatedPlan,
+        ));
+    };
+    nodes.push(phase_node(
+        verify,
+        "verify-plan",
+        ExecutePhase::Verify {
+            predicted_miss_m,
+            max_phase_time_s: profile.max_phase_time_s,
+        },
+    ));
     nodes.push(GraphNode {
         id: NodeId(sink),
         name: "plan-executed".into(),
@@ -289,7 +323,9 @@ pub fn execute_graph(profile: &ExecuteProfile) -> Result<AutopilotGraph, Execute
             ]),
         }),
     });
-    nodes.push(phase_node(abort, "abort-cutoff", ExecutePhase::Abort));
+    nodes.push(phase_node(abort, "abort-cutoff", ExecutePhase::Abort {
+        max_phase_time_s: profile.max_phase_time_s,
+    }));
     edges.push(GraphEdge {
         from: PortRef {
             node: NodeId(previous_out),
@@ -363,7 +399,7 @@ impl GraphBlock for ExecuteBlock {
         }
         match &node.config {
             Some(GraphNodeConfig::ExecutePhase { phase }) => match phase {
-                ExecutePhase::Abort => GraphNodeOutcome::Abort {
+                ExecutePhase::Abort { .. } => GraphNodeOutcome::Abort {
                     diagnostic: crate::Diagnostic {
                         kind: crate::DiagnosticKind::Warning,
                         code: "execute-abort".into(),
@@ -372,7 +408,7 @@ impl GraphBlock for ExecuteBlock {
                         limit: None,
                     },
                 },
-                ExecutePhase::Arm { .. } | ExecutePhase::Burn { .. } | ExecutePhase::Verify => {
+                ExecutePhase::Arm { .. } | ExecutePhase::Burn { .. } | ExecutePhase::Verify { .. } => {
                     GraphNodeOutcome::Complete {
                         outputs: BTreeMap::from([("out".into(), GraphValue::Unit)]),
                     }
@@ -455,6 +491,30 @@ mod tests {
         let json = serde_json::to_string(&first).expect("serializes");
         let back: AutopilotGraph = serde_json::from_str(&json).expect("deserializes");
         assert_eq!(first, back);
+    }
+
+    #[test]
+    fn distinct_miss_values_build_distinct_verify_nodes() {
+        // The measured miss is verify semantics: a revalidated plan and a
+        // stale one must not share the verify node.
+        let verify = |graph: &AutopilotGraph| {
+            graph
+                .nodes
+                .iter()
+                .find(|node| node.name == "verify-plan")
+                .expect("verify node exists")
+                .config
+                .clone()
+                .expect("verify node is configured")
+        };
+        let base = execute_graph(&test_profile()).expect("graph builds");
+        let other = execute_graph(&ExecuteProfile {
+            predicted_miss_m: Some(50.0),
+            ..test_profile()
+        })
+        .expect("graph builds");
+        assert_ne!(base, other);
+        assert_ne!(verify(&base), verify(&other));
     }
 
     #[test]

@@ -198,19 +198,37 @@ impl std::fmt::Display for AscentProfileError {
 impl std::error::Error for AscentProfileError {}
 
 /// One ascent phase executed by the authority. The graph sequences phases
-/// with event waits; each phase carries only what the executor needs.
+/// One ascent phase executed by the authority. Each variant carries the
+/// profile parameters its executor needs — the executable IR is
+/// self-contained, so two different profiles can never build the same
+/// graph. `max_phase_time_s` rides every phase: the watchdog binds the
+/// executor, not the planner.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum AscentPhase {
     /// Vertical rise at liftoff throttle until tower clearance.
-    VerticalRise { throttle: f64 },
-    /// Pitch-program gravity turn until MECO.
-    GravityTurn,
-    /// Unpowered coast to apoapsis.
-    Coast,
-    /// Circularization burn at apoapsis.
-    Circularize,
+    VerticalRise {
+        throttle: f64,
+        max_phase_time_s: f64,
+    },
+    /// Pitch-program gravity turn until MECO. The turn altitudes drive
+    /// [`pitch_program_rad`] — without them the node is not executable.
+    GravityTurn {
+        turn_start_altitude_m: f64,
+        turn_end_altitude_m: f64,
+        max_phase_time_s: f64,
+    },
+    /// Unpowered coast to the target apoapsis.
+    Coast {
+        target_apoapsis_m: f64,
+        max_phase_time_s: f64,
+    },
+    /// Circularization burn at apoapsis into the target periapsis.
+    Circularize {
+        target_periapsis_m: f64,
+        max_phase_time_s: f64,
+    },
     /// Engine cutoff and safeing after an abort trigger.
-    Abort,
+    Abort { max_phase_time_s: f64 },
 }
 
 /// Pitch above the local horizon (rad) for the gravity-turn program:
@@ -364,14 +382,37 @@ pub fn ascent_graph(profile: &AscentProfile) -> Result<AutopilotGraph, AscentBui
                 "vertical-rise",
                 AscentPhase::VerticalRise {
                     throttle: profile.liftoff_throttle,
+                    max_phase_time_s: profile.max_phase_time_s,
                 },
             ),
             wait_event_node(2, "wait-tower", event::TOWER_CLEARED),
-            phase_node(3, "gravity-turn", AscentPhase::GravityTurn),
+            phase_node(
+                3,
+                "gravity-turn",
+                AscentPhase::GravityTurn {
+                    turn_start_altitude_m: profile.turn_start_altitude_m,
+                    turn_end_altitude_m: profile.turn_end_altitude_m,
+                    max_phase_time_s: profile.max_phase_time_s,
+                },
+            ),
             wait_event_node(4, "wait-meco", event::MECO),
-            phase_node(5, "coast", AscentPhase::Coast),
+            phase_node(
+                5,
+                "coast",
+                AscentPhase::Coast {
+                    target_apoapsis_m: profile.target_apoapsis_m,
+                    max_phase_time_s: profile.max_phase_time_s,
+                },
+            ),
             wait_event_node(6, "wait-apoapsis", event::APOAPSIS_APPROACH),
-            phase_node(7, "circularize", AscentPhase::Circularize),
+            phase_node(
+                7,
+                "circularize",
+                AscentPhase::Circularize {
+                    target_periapsis_m: profile.target_periapsis_m,
+                    max_phase_time_s: profile.max_phase_time_s,
+                },
+            ),
             GraphNode {
                 id: NodeId(8),
                 name: "orbit-achieved".into(),
@@ -393,7 +434,9 @@ pub fn ascent_graph(profile: &AscentProfile) -> Result<AutopilotGraph, AscentBui
                     ]),
                 }),
             },
-            phase_node(10, "abort-cutoff", AscentPhase::Abort),
+            phase_node(10, "abort-cutoff", AscentPhase::Abort {
+                max_phase_time_s: profile.max_phase_time_s,
+            }),
         ],
         edges: vec![
             edge(0, 1),
@@ -462,7 +505,10 @@ impl GraphBlock for AscentBlock {
                 use crate::GraphControlAction as Action;
                 use thessa_flight_control::{GuidanceIntent, PilotAxes, PropulsionDemand};
                 let action = match phase {
-                    AscentPhase::VerticalRise { throttle } => {
+                    AscentPhase::VerticalRise {
+                        throttle,
+                        ..
+                    } => {
                         let Ok(propulsion) = PropulsionDemand::new(*throttle) else {
                             return GraphNodeOutcome::Fail {
                                 diagnostic: crate::Diagnostic {
@@ -482,7 +528,7 @@ impl GraphBlock for AscentBlock {
                             propulsion,
                         }
                     }
-                    AscentPhase::Abort => {
+                    AscentPhase::Abort { .. } => {
                         // Engine cutoff already commanded by the trigger
                         // event path; the abort outcome terminates the
                         // whole graph through the runner, not just this
@@ -498,7 +544,9 @@ impl GraphBlock for AscentBlock {
                             },
                         };
                     }
-                    AscentPhase::GravityTurn | AscentPhase::Coast | AscentPhase::Circularize => {
+                    AscentPhase::GravityTurn { .. }
+                    | AscentPhase::Coast { .. }
+                    | AscentPhase::Circularize { .. } => {
                         Action::Guidance {
                             intent: GuidanceIntent::ManualAxes(PilotAxes::default()),
                             propulsion: PropulsionDemand::new(0.0)
@@ -656,6 +704,44 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn distinct_profiles_build_distinct_executable_graphs() {
+        // The profile must survive into the IR: two profiles that differ
+        // only in turn altitudes or watchdog must not build the same nodes.
+        fn phase_config(graph: &AutopilotGraph, name: &str) -> GraphNodeConfig {
+            graph
+                .nodes
+                .iter()
+                .find(|node| node.name == name)
+                .expect("phase node exists")
+                .config
+                .clone()
+                .expect("phase node is configured")
+        }
+        let base = ascent_graph(&test_profile()).expect("graph builds");
+        let other = ascent_graph(&AscentProfile {
+            turn_end_altitude_m: 100_000.0,
+            max_phase_time_s: 1_800.0,
+            ..test_profile()
+        })
+        .expect("graph builds");
+        assert_ne!(base, other);
+        assert_ne!(
+            phase_config(&base, "gravity-turn"),
+            phase_config(&other, "gravity-turn")
+        );
+        // A hand-built node with a broken watchdog must fail validation.
+        let mut broken = base.clone();
+        broken.nodes[3].config = Some(GraphNodeConfig::AscentPhase {
+            phase: AscentPhase::GravityTurn {
+                turn_start_altitude_m: 1_000.0,
+                turn_end_altitude_m: 500.0,
+                max_phase_time_s: 3_600.0,
+            },
+        });
+        assert!(broken.validate().is_err());
     }
 
     #[test]

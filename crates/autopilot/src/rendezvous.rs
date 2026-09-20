@@ -108,17 +108,32 @@ impl std::fmt::Display for RendezvousProfileError {
 
 impl std::error::Error for RendezvousProfileError {}
 
-/// One rendezvous phase executed by the authority.
+/// One rendezvous phase executed by the authority. Each variant carries the
+/// profile parameters its executor needs — the executable IR is
+/// self-contained, so two different profiles can never build the same
+/// graph. `max_phase_time_s` rides every phase: the watchdog binds the
+/// executor, not the planner.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum RendezvousPhase {
     /// Close to the hold point within the closing-rate limit.
-    Approach,
+    Approach {
+        hold_distance_m: f64,
+        closing_rate_limit_mps: f64,
+        max_phase_time_s: f64,
+    },
     /// Null relative velocity against the target.
-    MatchVelocity,
+    MatchVelocity {
+        match_tolerance_mps: f64,
+        max_phase_time_s: f64,
+    },
     /// Hold station at the hold point for the dwell.
-    StationKeep,
+    StationKeep {
+        hold_distance_m: f64,
+        match_tolerance_mps: f64,
+        max_phase_time_s: f64,
+    },
     /// Back away along the approach corridor after an abort trigger.
-    BackAway,
+    BackAway { max_phase_time_s: f64 },
 }
 
 /// Velocity-match gate for tests and authority guards: relative speed at
@@ -134,13 +149,17 @@ pub fn velocity_matched(
     (current_velocity_mps - target_velocity_mps).length() <= tolerance_mps
 }
 
-/// Approach gate: inside the hold sphere and closing no faster than the
-/// profile limit. Range rate is negative on closing.
+/// Approach gate: inside the hold sphere and closing (or holding) no
+/// faster than the profile limit. Range rate is negative on closing: an
+/// opening drift fails however slow, and a -100 m/s plunge fails a 2 m/s
+/// limit that the old `rate <= +limit` comparison let straight through.
 pub fn approach_gate_ok(range_m: f64, range_rate_mps: f64, profile: &RendezvousProfile) -> bool {
     if !range_m.is_finite() || !range_rate_mps.is_finite() {
         return false;
     }
-    range_m <= profile.hold_distance_m && range_rate_mps <= profile.closing_rate_limit_mps
+    range_m <= profile.hold_distance_m
+        && range_rate_mps <= 0.0
+        && (-range_rate_mps) <= profile.closing_rate_limit_mps
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -225,11 +244,34 @@ pub fn rendezvous_graph(
                 ports: vec![Port::output("out", PortType::Unit)],
                 config: None,
             },
-            phase_node(1, "approach", RendezvousPhase::Approach),
+            phase_node(
+                1,
+                "approach",
+                RendezvousPhase::Approach {
+                    hold_distance_m: profile.hold_distance_m,
+                    closing_rate_limit_mps: profile.closing_rate_limit_mps,
+                    max_phase_time_s: profile.max_phase_time_s,
+                },
+            ),
             wait_event_node(2, "wait-proximity", event::PROXIMITY),
-            phase_node(3, "match-velocity", RendezvousPhase::MatchVelocity),
+            phase_node(
+                3,
+                "match-velocity",
+                RendezvousPhase::MatchVelocity {
+                    match_tolerance_mps: profile.match_tolerance_mps,
+                    max_phase_time_s: profile.max_phase_time_s,
+                },
+            ),
             wait_event_node(4, "wait-matched", event::VELOCITY_MATCHED),
-            phase_node(5, "station-keep", RendezvousPhase::StationKeep),
+            phase_node(
+                5,
+                "station-keep",
+                RendezvousPhase::StationKeep {
+                    hold_distance_m: profile.hold_distance_m,
+                    match_tolerance_mps: profile.match_tolerance_mps,
+                    max_phase_time_s: profile.max_phase_time_s,
+                },
+            ),
             wait_event_node(6, "wait-stable", event::KEEP_STABLE),
             GraphNode {
                 id: NodeId(7),
@@ -252,7 +294,9 @@ pub fn rendezvous_graph(
                     ]),
                 }),
             },
-            phase_node(9, "back-away", RendezvousPhase::BackAway),
+            phase_node(9, "back-away", RendezvousPhase::BackAway {
+                max_phase_time_s: profile.max_phase_time_s,
+            }),
         ],
         edges: vec![
             edge(0, 1),
@@ -313,7 +357,7 @@ impl GraphBlock for RendezvousBlock {
                 use crate::GraphControlAction as Action;
                 use thessa_flight_control::{GuidanceIntent, PilotAxes, PropulsionDemand};
                 match phase {
-                    RendezvousPhase::BackAway => GraphNodeOutcome::Abort {
+                    RendezvousPhase::BackAway { .. } => GraphNodeOutcome::Abort {
                         diagnostic: crate::Diagnostic {
                             kind: crate::DiagnosticKind::Warning,
                             code: "rendezvous-abort".into(),
@@ -322,9 +366,9 @@ impl GraphBlock for RendezvousBlock {
                             limit: None,
                         },
                     },
-                    RendezvousPhase::Approach
-                    | RendezvousPhase::MatchVelocity
-                    | RendezvousPhase::StationKeep => {
+                    RendezvousPhase::Approach { .. }
+                    | RendezvousPhase::MatchVelocity { .. }
+                    | RendezvousPhase::StationKeep { .. } => {
                         self.actions.push(Action::Guidance {
                             intent: GuidanceIntent::ManualAxes(PilotAxes::default()),
                             propulsion: PropulsionDemand::new(0.0)
@@ -398,12 +442,38 @@ mod tests {
             DVec3::new(1.0, 0.0, 0.0),
             -0.1
         ));
-        // Approach gate: inside the sphere and slow enough.
+        // Approach gate: negative range rate closes, positive opens.
         let profile = test_profile();
-        assert!(approach_gate_ok(50.0, 1.0, &profile));
-        assert!(!approach_gate_ok(150.0, 1.0, &profile));
-        assert!(!approach_gate_ok(50.0, 5.0, &profile));
-        assert!(!approach_gate_ok(f64::NAN, 1.0, &profile));
+        assert!(approach_gate_ok(50.0, -1.0, &profile));
+        assert!(approach_gate_ok(50.0, 0.0, &profile));
+        assert!(!approach_gate_ok(50.0, 1.0, &profile));
+        assert!(!approach_gate_ok(150.0, -1.0, &profile));
+        assert!(!approach_gate_ok(50.0, -5.0, &profile));
+        assert!(!approach_gate_ok(50.0, -100.0, &profile));
+        assert!(!approach_gate_ok(f64::NAN, -1.0, &profile));
+    }
+
+    #[test]
+    fn distinct_profiles_build_distinct_executable_graphs() {
+        let base = rendezvous_graph(&test_profile()).expect("graph builds");
+        let other = rendezvous_graph(&RendezvousProfile {
+            closing_rate_limit_mps: 0.5,
+            max_phase_time_s: 1_800.0,
+            ..test_profile()
+        })
+        .expect("graph builds");
+        assert_ne!(base, other);
+        let approach = |graph: &AutopilotGraph| {
+            graph
+                .nodes
+                .iter()
+                .find(|node| node.name == "approach")
+                .expect("approach node exists")
+                .config
+                .clone()
+                .expect("approach node is configured")
+        };
+        assert_ne!(approach(&base), approach(&other));
     }
 
     #[test]

@@ -157,20 +157,40 @@ impl std::fmt::Display for LandingProfileError {
 
 impl std::error::Error for LandingProfileError {}
 
-/// One landing phase executed by the authority. The graph sequences phases
-/// with event waits; each phase carries only what the executor needs.
+/// One landing phase executed by the authority. Each variant carries the
+/// profile parameters its executor needs — the executable IR is
+/// self-contained, so two different profiles can never build the same
+/// graph. `max_phase_time_s` rides every phase: the watchdog binds the
+/// executor, not the planner.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum LandingPhase {
     /// Retrograde deorbit burn until the entry interface is targeted.
-    DeorbitBurn { throttle: f64 },
-    /// Unpowered coast to the entry interface.
-    CoastToEntry,
+    DeorbitBurn {
+        throttle: f64,
+        max_phase_time_s: f64,
+    },
+    /// Unpowered coast to the entry interface altitude.
+    CoastToEntry {
+        entry_altitude_m: f64,
+        max_phase_time_s: f64,
+    },
     /// Suicide-burn braking at the gate altitude until the terminal gate.
-    BrakingBurn,
+    /// The gate distance comes from [`braking_distance_m`] evaluated on
+    /// the live rate; `net_braking_decel_mps2` sizes it.
+    BrakingBurn {
+        net_braking_decel_mps2: f64,
+        burn_throttle: f64,
+        max_phase_time_s: f64,
+    },
     /// Final vertical descent to the site at touchdown speed.
-    TerminalDescent,
+    TerminalDescent {
+        site: LandingSite,
+        touchdown_speed_limit_mps: f64,
+        burn_throttle: f64,
+        max_phase_time_s: f64,
+    },
     /// Engine cutoff and safeing after touchdown or an abort trigger.
-    AbortToOrbit,
+    AbortToOrbit { max_phase_time_s: f64 },
 }
 
 /// Braking distance (m) to shed `speed_mps` down to `target_mps` at
@@ -312,12 +332,30 @@ pub fn landing_graph(profile: &LandingProfile) -> Result<AutopilotGraph, Landing
                 "deorbit-burn",
                 LandingPhase::DeorbitBurn {
                     throttle: profile.burn_throttle,
+                    max_phase_time_s: profile.max_phase_time_s,
                 },
             ),
             wait_event_node(2, "wait-entry", event::ENTRY_INTERFACE),
-            phase_node(3, "braking-burn", LandingPhase::BrakingBurn),
+            phase_node(
+                3,
+                "braking-burn",
+                LandingPhase::BrakingBurn {
+                    net_braking_decel_mps2: profile.net_braking_decel_mps2,
+                    burn_throttle: profile.burn_throttle,
+                    max_phase_time_s: profile.max_phase_time_s,
+                },
+            ),
             wait_event_node(4, "wait-terminal", event::TOUCHDOWN_APPROACH),
-            phase_node(5, "terminal-descent", LandingPhase::TerminalDescent),
+            phase_node(
+                5,
+                "terminal-descent",
+                LandingPhase::TerminalDescent {
+                    site: profile.site,
+                    touchdown_speed_limit_mps: profile.touchdown_speed_limit_mps,
+                    burn_throttle: profile.burn_throttle,
+                    max_phase_time_s: profile.max_phase_time_s,
+                },
+            ),
             wait_event_node(6, "wait-touchdown", event::TOUCHDOWN),
             GraphNode {
                 id: NodeId(7),
@@ -341,7 +379,13 @@ pub fn landing_graph(profile: &LandingProfile) -> Result<AutopilotGraph, Landing
                     ]),
                 }),
             },
-            phase_node(9, "abort-to-orbit", LandingPhase::AbortToOrbit),
+            phase_node(
+                9,
+                "abort-to-orbit",
+                LandingPhase::AbortToOrbit {
+                    max_phase_time_s: profile.max_phase_time_s,
+                },
+            ),
         ],
         edges: vec![
             edge(0, 1),
@@ -409,7 +453,7 @@ impl GraphBlock for LandingBlock {
                 use crate::GraphControlAction as Action;
                 use thessa_flight_control::{GuidanceIntent, PilotAxes, PropulsionDemand};
                 let action = match phase {
-                    LandingPhase::DeorbitBurn { throttle } => {
+                    LandingPhase::DeorbitBurn { throttle, .. } => {
                         let Ok(propulsion) = PropulsionDemand::new(*throttle) else {
                             return GraphNodeOutcome::Fail {
                                 diagnostic: crate::Diagnostic {
@@ -429,7 +473,7 @@ impl GraphBlock for LandingBlock {
                             propulsion,
                         }
                     }
-                    LandingPhase::AbortToOrbit => {
+                    LandingPhase::AbortToOrbit { .. } => {
                         // Orbit climb already commanded by the trigger
                         // event path; the abort outcome terminates the
                         // whole graph through the runner — a half-aborted
@@ -445,9 +489,9 @@ impl GraphBlock for LandingBlock {
                             },
                         };
                     }
-                    LandingPhase::CoastToEntry
-                    | LandingPhase::BrakingBurn
-                    | LandingPhase::TerminalDescent => Action::Guidance {
+                    LandingPhase::CoastToEntry { .. }
+                    | LandingPhase::BrakingBurn { .. }
+                    | LandingPhase::TerminalDescent { .. } => Action::Guidance {
                         intent: GuidanceIntent::ManualAxes(PilotAxes::default()),
                         propulsion: PropulsionDemand::new(0.0)
                             .expect("zero propulsion always builds"),
@@ -582,6 +626,32 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn distinct_profiles_build_distinct_executable_graphs() {
+        // Site, touchdown speed and watchdog must survive into the IR:
+        // two landings at different sites can never share a graph.
+        let base = landing_graph(&test_profile()).expect("graph builds");
+        let other = landing_graph(&LandingProfile {
+            site: LandingSite::new([0.0, 1.0, 0.0], 250.0).expect("valid site"),
+            touchdown_speed_limit_mps: 1.0,
+            max_phase_time_s: 1_800.0,
+            ..test_profile()
+        })
+        .expect("graph builds");
+        assert_ne!(base, other);
+        let descent = |graph: &AutopilotGraph| {
+            graph
+                .nodes
+                .iter()
+                .find(|node| node.name == "terminal-descent")
+                .expect("descent node exists")
+                .config
+                .clone()
+                .expect("descent node is configured")
+        };
+        assert_ne!(descent(&base), descent(&other));
     }
 
     #[test]

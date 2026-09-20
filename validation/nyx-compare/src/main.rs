@@ -167,6 +167,7 @@ fn compare_case(case: Case, duration_s: f64) -> Result<Comparison, Box<dyn Error
             absolute_velocity_tolerance_mps: 1.0e-7,
             relative_tolerance: 1.0e-12,
             max_steps: 1_000_000,
+            dynamical_eta: None,
         },
     )?;
 
@@ -308,6 +309,7 @@ fn validate_lagrange_suite() -> Result<(), Box<dyn Error>> {
                 absolute_velocity_tolerance_mps: 1.0e-7,
                 relative_tolerance: 1.0e-11,
                 max_steps: 1_000_000,
+                dynamical_eta: None,
             },
         )?;
         let expected_position = rotate_z(initial_position, geometry.angular_rate * l4_l5_duration_s);
@@ -514,6 +516,7 @@ fn validate_maneuver_sequence() -> Result<(), Box<dyn Error>> {
             absolute_velocity_tolerance_mps: 1.0e-7,
             relative_tolerance: 1.0e-12,
             max_steps: 1_000_000,
+            dynamical_eta: None,
         },
     )?;
     let reference = propagate_nyx_with_burns(initial_orbit, duration_s, &burns)?;
@@ -672,6 +675,7 @@ fn validate_design_system() -> Result<(), Box<dyn Error>> {
         absolute_velocity_tolerance_mps: 1.0e-4,
         relative_tolerance: 1.0e-10,
         max_steps: 2_000_000,
+        dynamical_eta: None,
     };
     let first = propagate_adaptive_with_burns(
         &field,

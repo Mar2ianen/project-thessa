@@ -73,7 +73,6 @@ impl Plugin for ThessaAudioPlugin {
             .add_systems(
                 Update,
                 (
-                    toggle_listener_mode,
                     update_engine_voice,
                     emit_rcs_impulse,
                     emit_gpws_warning,
@@ -118,20 +117,9 @@ fn setup_audio(
     }
 
     eprintln!(
-        "[audio] listener={:?}; F8 toggles exterior/cabin semantic listener",
+        "[audio] listener={:?}; --audio-cabin selects the temporary cabin test listener",
         runtime.listener_mode
     );
-}
-
-fn toggle_listener_mode(keyboard: Res<ButtonInput<KeyCode>>, mut runtime: ResMut<AudioRuntime>) {
-    if !keyboard.just_pressed(KeyCode::F8) {
-        return;
-    }
-    runtime.listener_mode = match runtime.listener_mode {
-        ListenerMode::Exterior => ListenerMode::Cabin,
-        ListenerMode::Cabin => ListenerMode::Exterior,
-    };
-    eprintln!("[audio] listener={:?}", runtime.listener_mode);
 }
 
 fn update_engine_voice(

@@ -1,25 +1,34 @@
 //! Temporary Bevy adapter for Thessa's backend-neutral audio semantics.
 //!
-//! The semantic rules live in `thessa-audio-core`. This module is allowed to
-//! use Bevy audio handles because it is client presentation code and can be
-//! deleted when the Bevy host is replaced.
+//! Physical routing lives in `thessa-audio-core`; procedural DSP lives in
+//! `thessa-audio-synth`. This module only adapts those layers to Bevy's
+//! current audio backend and can disappear with the Bevy host.
 
-use std::time::Duration;
+use std::{
+    sync::Arc,
+    time::Duration,
+};
 
 use bevy::{
-    audio::{AudioSink, AudioSinkPlayback, Volume},
+    audio::{
+        AddAudioSource, ChannelCount, Decodable, SampleRate, Source, Volume,
+    },
     prelude::*,
+    reflect::TypePath,
 };
 use glam::DVec3;
 use thessa_audio_core::{
     AcousticMedium, AcousticPoint, SupersonicSegment, resolve_airborne_path, sonic_boom_arrival,
     structure_path_exists,
 };
+use thessa_audio_synth::{
+    DEFAULT_SAMPLE_RATE_HZ, EngineSynth, EngineSynthControl, EngineSynthProfile,
+};
 
 use crate::pilot::{ClientViewMode, PilotFlightRuntime, PilotHudState};
 
-const ENGINE_BASE_HZ: f32 = 72.0;
-const ENGINE_MAX_VOLUME: f32 = 0.18;
+const ENGINE_AIRBORNE_GAIN: f32 = 0.34;
+const ENGINE_STRUCTURE_GAIN: f32 = 0.28;
 const GPWS_HZ: f32 = 880.0;
 const RCS_HZ: f32 = 260.0;
 const DOCK_HZ: f32 = 110.0;
@@ -33,6 +42,7 @@ enum ListenerMode {
 #[derive(Resource)]
 struct AudioRuntime {
     listener_mode: ListenerMode,
+    engine_control: Arc<EngineSynthControl>,
     previous_rcs_commanded: bool,
     previous_gpws_warning: bool,
     demo_boom_remaining_s: Option<f64>,
@@ -46,6 +56,7 @@ impl Default for AudioRuntime {
             } else {
                 ListenerMode::Exterior
             },
+            engine_control: Arc::new(EngineSynthControl::default()),
             previous_rcs_commanded: false,
             previous_gpws_warning: false,
             demo_boom_remaining_s: None,
@@ -53,8 +64,61 @@ impl Default for AudioRuntime {
     }
 }
 
-#[derive(Component)]
-struct EngineVoice;
+/// Bevy-only wrapper around the backend-neutral procedural engine DSP.
+#[derive(Asset, TypePath)]
+struct ProceduralEngineAudio {
+    control: Arc<EngineSynthControl>,
+    profile: EngineSynthProfile,
+}
+
+struct ProceduralEngineDecoder {
+    synth: EngineSynth,
+    sample_rate: SampleRate,
+    channels: ChannelCount,
+}
+
+impl Iterator for ProceduralEngineDecoder {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        Some(self.synth.next_sample())
+    }
+}
+
+impl Source for ProceduralEngineDecoder {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn channels(&self) -> ChannelCount {
+        self.channels
+    }
+
+    fn sample_rate(&self) -> SampleRate {
+        self.sample_rate
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        None
+    }
+}
+
+impl Decodable for ProceduralEngineAudio {
+    type Decoder = ProceduralEngineDecoder;
+
+    fn decoder(&self) -> Self::Decoder {
+        ProceduralEngineDecoder {
+            synth: EngineSynth::new(
+                Arc::clone(&self.control),
+                self.profile,
+                DEFAULT_SAMPLE_RATE_HZ,
+            ),
+            sample_rate: SampleRate::new(DEFAULT_SAMPLE_RATE_HZ)
+                .expect("48 kHz procedural audio sample rate must be valid"),
+            channels: ChannelCount::new(1).expect("mono procedural audio must be valid"),
+        }
+    }
+}
 
 /// Semantic one-shot bridge used by client fixtures until their physical
 /// events are published by a shared gameplay/event layer.
@@ -67,7 +131,8 @@ pub(super) struct ThessaAudioPlugin;
 
 impl Plugin for ThessaAudioPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<AudioRuntime>()
+        app.add_audio_source::<ProceduralEngineAudio>()
+            .init_resource::<AudioRuntime>()
             .add_message::<AudioCue>()
             .add_systems(Startup, setup_audio)
             .add_systems(
@@ -85,15 +150,17 @@ impl Plugin for ThessaAudioPlugin {
 
 fn setup_audio(
     mut commands: Commands,
-    mut pitches: ResMut<Assets<Pitch>>,
+    mut engines: ResMut<Assets<ProceduralEngineAudio>>,
     mut runtime: ResMut<AudioRuntime>,
 ) {
-    let engine = pitches.add(Pitch::new(ENGINE_BASE_HZ, Duration::from_secs(2)));
+    let engine = engines.add(ProceduralEngineAudio {
+        control: Arc::clone(&runtime.engine_control),
+        profile: EngineSynthProfile::default(),
+    });
     commands.spawn((
-        EngineVoice,
         AudioPlayer(engine),
-        PlaybackSettings::LOOP.with_volume(Volume::SILENT),
-        Name::new("Thessa engine audio presentation voice"),
+        PlaybackSettings::LOOP.with_volume(Volume::Linear(1.0)),
+        Name::new("Thessa procedural engine voice"),
     ));
 
     if std::env::args().any(|arg| arg == "--audio-demo") {
@@ -126,14 +193,17 @@ fn update_engine_voice(
     runtime: Res<PilotFlightRuntime>,
     hud: Res<PilotHudState>,
     audio: Res<AudioRuntime>,
-    mut voices: Query<&mut AudioSink, With<EngineVoice>>,
 ) {
-    let Ok(mut sink) = voices.single_mut() else {
-        return;
-    };
+    let control = &audio.engine_control;
+    let engine_running =
+        hud.view_mode == ClientViewMode::Pilot && runtime.engine_active && runtime.throttle > 0.0;
 
-    if hud.view_mode != ClientViewMode::Pilot || !runtime.engine_active || runtime.throttle <= 0.0 {
-        sink.set_volume(Volume::SILENT);
+    control.set_throttle(runtime.throttle.clamp(0.0, 1.0) as f32);
+
+    if !engine_running {
+        control.set_active(false);
+        control.set_airborne_gain(0.0);
+        control.set_structure_gain(0.0);
         return;
     }
 
@@ -150,29 +220,33 @@ fn update_engine_voice(
     // The pilot camera is currently an exterior chase camera. Cabin mode is a
     // debug listener until true IVA exists; it exercises the same structural
     // route the future crew listener will use.
-    let audible = match audio.listener_mode {
+    let (airborne_gain, structure_gain) = match audio.listener_mode {
         ListenerMode::Exterior => {
             let source = AcousticPoint::stationary(DVec3::ZERO);
             let listener =
                 AcousticPoint::stationary(DVec3::new(hud.audio_camera_distance_m(), 0.0, 0.0));
-            resolve_airborne_path(source, listener, medium)
+            let airborne = resolve_airborne_path(source, listener, medium)
                 .ok()
                 .flatten()
-                .is_some()
+                .is_some();
+            (
+                if airborne { ENGINE_AIRBORNE_GAIN } else { 0.0 },
+                0.0,
+            )
         }
-        ListenerMode::Cabin => structure_path_exists(Some(1), Some(1)),
+        ListenerMode::Cabin => (
+            0.0,
+            if structure_path_exists(Some(1), Some(1)) {
+                ENGINE_STRUCTURE_GAIN
+            } else {
+                0.0
+            },
+        ),
     };
 
-    // Source acoustic power is not calibrated yet, so this is intentionally a
-    // presentation gain driven by the already-authoritative throttle. The
-    // physical routing decision above is not presentation-tuned.
-    let gain = if audible {
-        (runtime.throttle.clamp(0.0, 1.0) as f32).sqrt() * ENGINE_MAX_VOLUME
-    } else {
-        0.0
-    };
-    sink.set_volume(Volume::Linear(gain));
-    sink.set_speed(0.82 + 0.42 * runtime.throttle.clamp(0.0, 1.0) as f32);
+    control.set_airborne_gain(airborne_gain);
+    control.set_structure_gain(structure_gain);
+    control.set_active(airborne_gain > 0.0 || structure_gain > 0.0);
 }
 
 fn emit_rcs_impulse(

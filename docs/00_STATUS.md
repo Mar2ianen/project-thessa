@@ -52,7 +52,7 @@ do not update in place).
 | `39_BEVY_EXIT_AND_ENGINE_MIGRATION.md` | 🔵 migration plan | policy/freeze rules | §§4–20 migration phases |
 | `41_MICROSCALED_SURFACE_STORAGE.md` | 🟡 partial | codec A–E, allocator, residency, GPU LOD/mip path, game + render-world A/B, measured | crack-free geometry, baked-format adoption, height pages |
 | `45_CAD_RCBT_GEOMETRY.md` | 🔵 design baseline | D1 STEP/BRep fixture audited; existing RCBT + mesh-shader terrain path reused architecturally | CAD importer, normalized BRep runtime, crack-free adaptive face meshing, editor integration |
-| `46_AUDIO_AND_ACOUSTIC_PROPAGATION.md` | 🔵 design baseline | current Bevy host only; no dedicated semantic audio layer yet | backend-neutral events/sources, atmosphere/cabin/structure/suit/radio paths, delayed sonic boom, backend migration |
+| `46_AUDIO_AND_ACOUSTIC_PROPAGATION.md` | 🟡 first slice | `audio-core` path semantics, exact-vacuum gating, structural/direct paths, Mach-cone arrival, temporary Bevy engine/RCS/GPWS/docking/demo adapter | calibrated source power/spectra, structural attenuation graph, real IVA listener, occlusion/reverb/HRTF, post-Bevy backend |
 
 ## Autopilot and roadmap
 

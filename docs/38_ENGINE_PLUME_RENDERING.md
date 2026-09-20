@@ -439,3 +439,25 @@ engine/nozzle state + environment
 ```
 
 If a future renderer backend requires changing the physical meaning of `PlumeSource` or duplicating plume-shape logic in a renderer-specific shader, the boundary is wrong.
+
+
+## 20. External comparison guardrail: finite core is not finite exhaust
+
+The 2026-09-20 KSA audit in
+44_KSA_TECHNICAL_COMPARISON_2026_09_20.md found a useful failure mode to
+explicitly avoid. KSA's reduced-order plume model is physically informed
+(pressure-ratio behavior, Prandtl-Meyer expansion, volumetric rendering, later
+trail diffusion), but its bright near-field representation still has an
+explicit finite length and a gas-visibility length clamp. In motion this can
+read as a geometric end to the exhaust.
+
+For Thessa, finite renderer support must never imply finite physical exhaust.
+The hot-core representation may terminate only after its remaining
+optical-depth/emission contribution is below a declared error bound **and** its
+mass/energy/species contribution has been transferred into the downstream wake
+model.
+
+The same audit also reinforces the lighting rule in §13: visible plume radiance
+and scene illumination should share a causal source. Medium/high quality should
+derive radiance proxies from the field instead of tuning an independent nozzle
+light.

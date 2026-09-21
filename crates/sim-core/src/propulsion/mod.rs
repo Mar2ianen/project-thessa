@@ -31,7 +31,9 @@ mod liquid;
 mod material;
 mod mount;
 mod nozzle;
+mod nuclear;
 mod propellant;
+mod rcs;
 mod solid;
 mod spool;
 
@@ -46,7 +48,17 @@ pub use nozzle::{
     NozzleContour, NozzleExitState, characteristic_velocity, mach_from_area_ratio,
     thrust_coefficient,
 };
+pub use nuclear::{
+    NTR_COOLDOWN_FRACTION, NTR_DEFAULT_RATED_BURN_S, NTR_DEFAULT_SPECIFIC_MASS_KG_PER_MW,
+    NTR_DEFAULT_STARTUP_TAU_S, NTR_INLET_TEMP_K, NTR_KINETIC_EFFICIENCY,
+    NTR_MAX_CHAMBER_PRESSURE_PA, NtrFluid, NtrSupplement, NuclearThermalSpec,
+};
 pub use propellant::{Propellant, PropellantThermo};
+pub use rcs::{
+    ColdGasThrusterSpec, CompiledColdGas, CompiledMonoprop, MonopropThrusterSpec,
+    RCS_DEFAULT_MIN_ON_TIME_S, RCS_DEFAULT_RISE_TIME_S, RcsCluster, RcsMount, RcsPulse,
+    RcsThruster,
+};
 pub use solid::{BurnPoint, CompiledSolid, SolidMotorSpec};
 pub use spool::{EngineSpool, advance_spool};
 

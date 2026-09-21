@@ -608,6 +608,28 @@ Shipped in `crates/sim-core/src/propulsion.rs` (MIT engine crate, no Bevy/Tokio/
 - Editor-facing analyzer CLI: `vehicle-baker --analyze` prints the
   Performance Analyzer table (JSON under `--analyze-json`).
 
+### 18.3 Reaction control and nuclear thermal (v3)
+
+- RCS propellants: monopropellant hydrazine (catalytic chamber through
+  the shared pressure-fed liquid path, fixed full thrust) and cold-gas
+  nitrogen/helium (chamberless compile; runtime thrust tracks inlet
+  pressure exactly through choked flow).
+- Pulse physics: triangular valve rise with propellant booked over the
+  full open time, so short pulses lose effective Isp causally; minimum
+  impulse bit, hydrazine Isp band (210-235 s), and N2 Isp band (65-85 s)
+  pinned by test. Mounted `RcsCluster` delivers force/moment impulses
+  and PWM-average wrenches (opposed-pair pure couple pinned).
+- NTR: power-limited compile (mdot from reactor power balance, chamber
+  pressure from choked flow, expander cap refusal), hot-fluid properties
+  for H2/CH4/NH3/H2O, frozen-flow dissociation efficiency on
+  `kinetic_efficiency` (NERVA-pinned), reactor mass from specific power,
+  NERVA-class golden test (750-950 s, 150-350 kN, 8-20 t), startup tau
+  wired into spool, decay-heat cooldown tail. Compiled output reuses
+  `CompiledLiquid`, so spool/throttle/plume/analyzer paths just work.
+- Baker `kind = "nuclear"` plus monopropellant RCS assets; the
+  pressure-fed feed cross-check covers RCS tanks. `VehicleDefinition`
+  gains a per-mount force/moment `wrench_body_n` for clusters.
+
 ### 18.2 Validation
 
 - Merlin-1D-class golden test: 845 kN / 914 kN and 282 s / 311 s within
@@ -618,7 +640,7 @@ Shipped in `crates/sim-core/src/propulsion.rs` (MIT engine crate, no Bevy/Tokio/
 - Bench `crates/sim-core/benches/propulsion.rs`: hangar compile
   ~20 us (liquid) / ~12 us (solid), analyzer and solid-replay sweeps.
 
-### 18.3 Still deferred
+### 18.4 Still deferred
 
 Star/finocyl grain geometry (needs numerical perimeter burnback, not a
 tweak of the port solver), tank depletion wiring into the flight loop

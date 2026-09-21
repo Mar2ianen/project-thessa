@@ -89,12 +89,16 @@ pub use onrails::{
     DISPLAY_SCALED_H_MIN_S, DISPLAY_SCALED_MAX_SAMPLES, OnRailsCache, OnRailsWake,
 };
 pub use propulsion::{
-    AltitudePoint, BurnPoint, ChamberMaterial, CompiledEngine, CompiledLiquid, CompiledSolid,
-    CoolingMode, CycleLimits, EngineCycle, EngineMount, EngineOperatingPoint, EnginePlumeState,
-    EngineSpool, GimbalEffector, LiquidEngineSpec, NozzleContour, NozzleExitState, Propellant,
-    PropellantThermo, PropulsionError, SEPARATION_PRESSURE_RATIO, STANDARD_GRAVITY_MPS2,
-    SolidMotorSpec, advance_spool, analyze_altitude, characteristic_velocity, mach_from_area_ratio,
-    thrust_coefficient,
+    AltitudePoint, BurnPoint, ChamberMaterial, ColdGasThrusterSpec, CompiledColdGas,
+    CompiledEngine, CompiledLiquid, CompiledMonoprop, CompiledSolid, CoolingMode, CycleLimits,
+    EngineCycle, EngineMount, EngineOperatingPoint, EnginePlumeState, EngineSpool, GimbalEffector,
+    LiquidEngineSpec, MonopropThrusterSpec, NTR_COOLDOWN_FRACTION, NTR_DEFAULT_RATED_BURN_S,
+    NTR_DEFAULT_SPECIFIC_MASS_KG_PER_MW, NTR_DEFAULT_STARTUP_TAU_S, NTR_INLET_TEMP_K,
+    NTR_KINETIC_EFFICIENCY, NTR_MAX_CHAMBER_PRESSURE_PA, NozzleContour, NozzleExitState, NtrFluid,
+    NtrSupplement, NuclearThermalSpec, Propellant, PropellantThermo, PropulsionError,
+    RCS_DEFAULT_MIN_ON_TIME_S, RCS_DEFAULT_RISE_TIME_S, RcsCluster, RcsMount, RcsPulse,
+    RcsThruster, SEPARATION_PRESSURE_RATIO, STANDARD_GRAVITY_MPS2, SolidMotorSpec, advance_spool,
+    analyze_altitude, characteristic_velocity, mach_from_area_ratio, thrust_coefficient,
 };
 pub use scheduler::{EventScheduler, ScheduledEvent, ScheduledKind};
 pub use system::{

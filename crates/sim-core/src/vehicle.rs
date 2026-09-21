@@ -457,6 +457,36 @@ impl VehicleDefinition {
         Ok(total)
     }
 
+    /// Force/moment wrench in body axes at per-mount commands: force is the
+    /// thrust sum, moment the sum of mount-station cross thrust about the
+    /// body origin. `commands` carries one (throttle, burn clock) per
+    /// mount; RCS blocks and gimbaled clusters consume this.
+    pub fn wrench_body_n(
+        &self,
+        commands: &[(f64, f64)],
+        ambient_pa: f64,
+    ) -> Result<(DVec3, DVec3), VehicleError> {
+        if commands.len() != self.engines.len() {
+            return Err(VehicleError::InvalidVehicle(format!(
+                "expected {} commands, got {}",
+                self.engines.len(),
+                commands.len()
+            )));
+        }
+        let mut force = DVec3::ZERO;
+        let mut moment = DVec3::ZERO;
+        for (mount, (throttle, burn_time_s)) in self.engines.iter().zip(commands) {
+            let thrust = DVec3::from_array(
+                mount
+                    .thrust_vector_body_n(*throttle, ambient_pa, *burn_time_s)
+                    .map_err(VehicleError::Propulsion)?,
+            );
+            force += thrust;
+            moment += DVec3::from_array(mount.position_body_m).cross(thrust);
+        }
+        Ok((force, moment))
+    }
+
     /// Current vehicle mass with solid propellant burned off: baked mass
     /// minus consumed grain per engine burn clock. `burn_times_s` must
     /// carry one clock per mount (liquids ignore theirs). Inertia is left

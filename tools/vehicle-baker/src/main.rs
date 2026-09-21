@@ -5,9 +5,9 @@ use serde::Deserialize;
 use thessa_sim_core::{
     AeroGeometry, AeroPanel, AtmosphereConfig, ChamberMaterial, CollisionAxis, CollisionGeometry,
     CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine, ControlSurfaceDefinition,
-    CoolingMode, EngineCycle, EngineMount, LiquidEngineSpec, NozzleContour, Propellant,
-    RigidBodyProperties, SolidMotorSpec, TankMount, TankShape, TankSpec, VehicleDefinition,
-    analyze_altitude,
+    CoolingMode, EngineCycle, EngineMount, LiquidEngineSpec, NozzleContour, NtrFluid,
+    NuclearThermalSpec, Propellant, RigidBodyProperties, SolidMotorSpec, TankMount, TankShape,
+    TankSpec, VehicleDefinition, analyze_altitude,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -368,6 +368,17 @@ struct EngineAsset {
     burn_rate_exponent: Option<f64>,
     #[serde(default = "default_one_shot")]
     ignition_shots: u32,
+    // Nuclear thermal fields.
+    #[serde(default)]
+    fluid: Option<NtrFluid>,
+    #[serde(default)]
+    core_temp_k: Option<f64>,
+    #[serde(default)]
+    core_power_mw: Option<f64>,
+    #[serde(default)]
+    reactor_specific_mass_kg_per_mw: Option<f64>,
+    #[serde(default)]
+    startup_tau_s: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -375,6 +386,7 @@ struct EngineAsset {
 enum EngineKind {
     Liquid,
     Solid,
+    Nuclear,
 }
 
 #[derive(Debug, Deserialize)]
@@ -389,6 +401,18 @@ impl EngineAsset {
         let compiled = match self.kind {
             EngineKind::Liquid => CompiledEngine::Liquid(self.liquid_spec()?.compile()?),
             EngineKind::Solid => CompiledEngine::Solid(self.solid_spec()?.compile()?),
+            EngineKind::Nuclear => {
+                let (engine, supplement) = self.nuclear_spec()?.compile()?;
+                println!(
+                    "engine {} (ntr): {:.0} MWt at {:.0} K, reactor {:.0} kg, startup {:.0} s",
+                    self.name,
+                    supplement.core_power_mw,
+                    supplement.core_temp_k,
+                    supplement.reactor_mass_kg,
+                    supplement.startup_tau_s,
+                );
+                CompiledEngine::Liquid(engine)
+            }
         };
         Ok(EngineMount {
             name: self.name.clone(),
@@ -470,6 +494,33 @@ impl EngineAsset {
             segment_core_radii_m: self.segment_core_radii_m.clone(),
             gimbal_range_rad: self.gimbal_range_rad,
             ignition_shots: self.ignition_shots,
+        })
+    }
+
+    fn nuclear_spec(&self) -> Result<NuclearThermalSpec, Box<dyn Error>> {
+        Ok(NuclearThermalSpec {
+            name: self.name.clone(),
+            fluid: self.fluid.ok_or("nuclear engine needs fluid")?,
+            core_temp_k: self.core_temp_k.ok_or("nuclear engine needs core_temp_k")?,
+            core_power_mw: self
+                .core_power_mw
+                .ok_or("nuclear engine needs core_power_mw")?,
+            reactor_specific_mass_kg_per_mw: self.reactor_specific_mass_kg_per_mw,
+            throat_radius_m: self
+                .throat_radius_m
+                .ok_or("nuclear engine needs throat_radius_m")?,
+            expansion_ratio: self
+                .expansion_ratio
+                .ok_or("nuclear engine needs expansion_ratio")?,
+            nozzle_length_m: self
+                .nozzle_length_m
+                .ok_or("nuclear engine needs nozzle_length_m")?,
+            contour: self.contour.unwrap_or(NozzleContour::Bell),
+            material: self.material()?,
+            cooling: self.cooling.unwrap_or(CoolingMode::Regenerative),
+            gimbal_range_rad: self.gimbal_range_rad,
+            startup_tau_s: self.startup_tau_s,
+            min_throttle: self.min_throttle,
         })
     }
 }
@@ -927,5 +978,76 @@ propellant = "lox-methane"
         let strong = doc.replace("pressure_mpa = 0.5", "pressure_mpa = 3.0");
         let asset: VehicleAsset = toml::from_str(&strong).expect("TOML parses");
         assert!(asset.bake().is_ok());
+    }
+
+    #[test]
+    fn nuclear_and_rcs_assets_bake() {
+        // NTR upper stage plus a hydrazine RCS block on one airframe.
+        let doc = r#"
+name = "ntr-test"
+mass_kg = 8000.0
+inertia_body_kg_m2 = [[20000.0, 0.0, 0.0], [0.0, 20000.0, 0.0], [0.0, 0.0, 8000.0]]
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 1.0
+chord_m = 1.0
+[[engines]]
+name = "ntr-main"
+kind = "nuclear"
+mount_position_body_m = [-4.0, 0.0, 0.0]
+thrust_axis_body = [1.0, 0.0, 0.0]
+fluid = "hydrogen"
+core_temp_k = 2700.0
+core_power_mw = 600.0
+throat_radius_m = 0.09
+expansion_ratio = 60.0
+nozzle_length_m = 1.6
+contour = "bell"
+material = "nickel-superalloy"
+cooling = "regenerative"
+gimbal_range_rad = 0.05
+[[engines]]
+name = "rcs-a"
+kind = "liquid"
+mount_position_body_m = [2.0, 0.0, 1.0]
+thrust_axis_body = [0.0, 0.0, -1.0]
+propellant = "monoprop-hydrazine"
+cycle = "pressure-fed"
+chamber_pressure_mpa = 1.0
+throat_radius_m = 0.002
+expansion_ratio = 60.0
+nozzle_length_m = 0.06
+contour = "conical"
+material = "regen-alloy"
+cooling = "regenerative"
+min_throttle = 1.0
+[[tanks]]
+name = "hydrazine-tank"
+shape = "sphere"
+diameter_m = 0.6
+pressure_mpa = 2.0
+material = "regen-alloy"
+position_body_m = [1.0, 0.0, 0.0]
+propellant = "monoprop-hydrazine"
+"#;
+        let asset: VehicleAsset = toml::from_str(doc).expect("TOML parses");
+        let vehicle = asset.bake().expect("NTR+RCS bakes");
+        assert_eq!(vehicle.engines.len(), 2);
+        // Reactor-dominated mass far above the 8 t structure.
+        assert!(vehicle.mass_properties.mass_kg > 12_000.0);
+        // NTR thrust clears 100 kN in vacuum; the RCS block is a small
+        // transverse couple, not axial thrust.
+        let ntr = vehicle
+            .engine_thrust_body_n(0, 1.0, 0.0, 0.0)
+            .expect("ntr thrust");
+        assert!(ntr.x > 100_000.0);
+        let (force, moment) = vehicle
+            .wrench_body_n(&[(1.0, 0.0), (1.0, 0.0)], 0.0)
+            .expect("wrench");
+        assert!((force.x - ntr.x).abs() < 1.0, "axial thrust is the NTR");
+        assert!(force.z.abs() < 100.0, "RCS fires transversely");
+        assert!(moment.length() > 0.0, "offset RCS must couple");
     }
 }

@@ -57,6 +57,14 @@ impl LiquidEngineSpec {
                 "solid propellant needs a grain spec, not a liquid spec".into(),
             ));
         }
+        if matches!(
+            self.propellant,
+            Propellant::ColdGasNitrogen | Propellant::ColdGasHelium
+        ) {
+            return Err(PropulsionError::InvalidSpec(
+                "cold-gas propellant needs a cold-gas thruster spec (no chamber to size)".into(),
+            ));
+        }
         require_positive(self.chamber_pressure_pa, "chamber pressure")?;
         require_positive(self.throat_radius_m, "throat radius")?;
         if !(self.expansion_ratio >= 1.0) {
@@ -336,6 +344,7 @@ impl LiquidEngineSpec {
                 _ => 0.0,
             },
             nozzle_wall_area_m2: cowl_area_m2 + spike_area_m2,
+            kinetic_efficiency: 1.0,
         })
     }
 }
@@ -343,6 +352,11 @@ impl LiquidEngineSpec {
 struct OperatingDesign {
     thrust_sl_n: f64,
     thrust_vac_n: f64,
+}
+
+/// Default kinetic efficiency (no extra loss).
+fn full_kinetic_efficiency() -> f64 {
+    1.0
 }
 
 /// Hangar-compiled liquid engine: design point solved, mass/power/thermal
@@ -397,6 +411,11 @@ pub struct CompiledLiquid {
     pub aerospike_base_area_m2: f64,
     /// Nozzle wall area for thermal/radiation bookkeeping (m^2).
     pub nozzle_wall_area_m2: f64,
+    /// Kinetic efficiency of the expansion beyond [`super::NOZZLE_EFFICIENCY`]:
+    /// 1.0 for chemical kinetics; nuclear hydrogen sets ~0.9 for frozen-flow
+    /// dissociation losses (documented, NERVA-pinned).
+    #[serde(default = "full_kinetic_efficiency")]
+    pub kinetic_efficiency: f64,
 }
 
 // Reconstructed thermo/exit views for runtime evaluation (no re-solve).

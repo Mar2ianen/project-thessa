@@ -1654,4 +1654,16 @@ rocket_throat_radius_m = 0.09
         );
         assert!(vehicle.jets[1].engine.dry_mass_kg() > vehicle.jets[0].engine.dry_mass_kg());
     }
+
+    #[test]
+    fn analyzer_options_preserve_explicit_oxygen_fraction() {
+        let options = Options::parse(
+            ["--analyze", "--oxygen", "0.274"]
+                .into_iter()
+                .map(String::from),
+        )
+        .expect("options parse");
+        assert!(options.analyze);
+        assert!((options.oxygen_fraction - 0.274).abs() < f64::EPSILON);
+    }
 }

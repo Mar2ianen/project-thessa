@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AeroConfig, AeroError, AeroGeometry, AeroPanel, CollisionAxis, CollisionError,
     CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine,
-    EngineMount, EstocCommand, FlightCondition, FlightError, JetMount, PropulsionError,
+    EngineMount, EstocCommand, EstocPoint, FlightCondition, FlightError, JetMount, PropulsionError,
     RigidBodyProperties, SystemMount, TankMount,
 };
 
@@ -603,6 +603,27 @@ impl VehicleDefinition {
             .map_err(VehicleError::Propulsion)
     }
 
+    /// Evaluate one jet and return the command state for the next world tick.
+    /// Plain air-breathers still return an `EstocPoint`-shaped snapshot so a
+    /// vehicle caller can use one state-threading path for mixed jet mounts.
+    pub fn jet_estoc_point(
+        &self,
+        index: usize,
+        throttle: f64,
+        condition: &FlightCondition,
+        estoc: &EstocCommand,
+    ) -> Result<(EstocPoint, EstocCommand), VehicleError> {
+        let mount = self
+            .jets
+            .get(index)
+            .ok_or_else(|| VehicleError::InvalidVehicle(format!("no jet at index {index}")))?;
+        let (point, transient) = mount
+            .estoc_point(throttle, condition, estoc)
+            .map_err(VehicleError::Propulsion)?;
+        let next = estoc.with_state(&point, transient);
+        Ok((point, next))
+    }
+
     /// Force/moment wrench of all jets at per-mount (throttle, ESTOC
     /// command) pairs: engine-out and asymmetric-reheat steering fall out
     /// of the stations for free.
@@ -611,6 +632,18 @@ impl VehicleDefinition {
         commands: &[(f64, EstocCommand)],
         condition: &FlightCondition,
     ) -> Result<(DVec3, DVec3), VehicleError> {
+        self.jets_wrench_body_n_stateful(commands, condition)
+            .map(|(wrench, _)| wrench)
+    }
+
+    /// Stateful variant of [`VehicleDefinition::jets_wrench_body_n`]. The
+    /// returned commands contain each mount's updated ESTOC mode and full
+    /// transition snapshot and must be fed into the next world tick.
+    pub fn jets_wrench_body_n_stateful(
+        &self,
+        commands: &[(f64, EstocCommand)],
+        condition: &FlightCondition,
+    ) -> Result<((DVec3, DVec3), Vec<EstocCommand>), VehicleError> {
         if commands.len() != self.jets.len() {
             return Err(VehicleError::InvalidVehicle(format!(
                 "expected {} jet commands, got {}",
@@ -620,16 +653,17 @@ impl VehicleDefinition {
         }
         let mut force = DVec3::ZERO;
         let mut moment = DVec3::ZERO;
+        let mut next_commands = Vec::with_capacity(commands.len());
         for (mount, (throttle, estoc)) in self.jets.iter().zip(commands) {
-            let thrust = DVec3::from_array(
-                mount
-                    .thrust_vector_body_n(*throttle, condition, estoc)
-                    .map_err(VehicleError::Propulsion)?,
-            );
+            let (point, transient) = mount
+                .estoc_point(*throttle, condition, estoc)
+                .map_err(VehicleError::Propulsion)?;
+            let thrust = DVec3::from_array(mount.thrust_axis_body) * point.thrust_n;
             force += thrust;
             moment += DVec3::from_array(mount.position_body_m).cross(thrust);
+            next_commands.push(estoc.with_state(&point, transient));
         }
-        Ok((force, moment))
+        Ok(((force, moment), next_commands))
     }
 
     /// Force/moment wrench in body axes at per-mount commands: force is the
@@ -793,4 +827,97 @@ impl From<FlightError> for VehicleError {
 /// Rank-one outer product for parallel-axis aggregation.
 fn outer_product(a: DVec3, b: DVec3) -> glam::DMat3 {
     glam::DMat3::from_cols(a * b.x, a * b.y, a * b.z)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        AirCycle, AirbreathingSpec, ChamberMaterial, EstocMode, EstocSpec, IntakeKind, JetFuel,
+    };
+
+    fn test_vehicle() -> VehicleDefinition {
+        let geometry = AeroGeometry::new(vec![
+            AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+        ])
+        .expect("geometry");
+        let mass =
+            RigidBodyProperties::new(1000.0, glam::DMat3::from_diagonal(DVec3::splat(1000.0)))
+                .expect("mass");
+        let vehicle =
+            VehicleDefinition::new("jet-state-test", geometry, mass, vec![]).expect("vehicle");
+        let engine = EstocSpec {
+            name: "state-test-estoc".into(),
+            air: AirbreathingSpec {
+                name: "state-test-air".into(),
+                cycle: AirCycle::Turbojet,
+                fuel: JetFuel::Kerosene,
+                intake_area_m2: 0.9,
+                intake: IntakeKind::Pitot,
+                compressor_ratio: 12.0,
+                bypass_ratio: 0.0,
+                fan_pressure_ratio: 1.0,
+                turbine_inlet_temp_k: 1500.0,
+                afterburner: false,
+                reheat_temp_k: 0.0,
+                turbine_material: ChamberMaterial::nickel_superalloy(),
+                spool_tau_s: 5.0,
+            },
+            rocket_chamber_pressure_pa: 7.0e6,
+            rocket_throat_radius_m: 0.09,
+            oxidizer_fuel_ratio: None,
+            switch_mach_hi: None,
+            switch_mach_lo: None,
+            transition_tau_s: None,
+        }
+        .compile()
+        .expect("estoc");
+        vehicle
+            .with_jets(vec![JetMount {
+                name: "state-test-mount".into(),
+                engine: crate::CompiledJet::Estoc(Box::new(engine)),
+                position_body_m: [0.0, 1.0, 0.0],
+                thrust_axis_body: [1.0, 0.0, 0.0],
+                gimbal_range_rad: 0.0,
+            }])
+            .expect("jet mount")
+    }
+
+    fn high_mach_condition() -> FlightCondition {
+        let temperature_k = 288.15;
+        let speed_of_sound = (crate::AIR_GAMMA * 287.0 * temperature_k).sqrt();
+        FlightCondition {
+            mach: 4.0,
+            ambient_pa: 2_000.0,
+            ambient_temp_k: temperature_k,
+            airspeed_mps: 4.0 * speed_of_sound,
+            oxygen_fraction: crate::EARTH_OXYGEN_FRACTION,
+        }
+    }
+
+    #[test]
+    fn stateful_jet_wrench_returns_next_estoc_commands() {
+        let vehicle = test_vehicle();
+        let command = EstocCommand {
+            manual: None,
+            last_mode: EstocMode::Air,
+            prev: None,
+            dt_s: 1.0,
+        };
+        let ((force, moment), next) = vehicle
+            .jets_wrench_body_n_stateful(&[(1.0, command)], &high_mach_condition())
+            .expect("stateful wrench");
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].last_mode, EstocMode::Rocket);
+        assert!(next[0].prev.is_some());
+        assert!(force.x > 0.0);
+        assert!(moment.z.abs() > 0.0);
+
+        let ((continued_force, _), continued) = vehicle
+            .jets_wrench_body_n_stateful(&[(1.0, next[0])], &high_mach_condition())
+            .expect("continued wrench");
+        assert!(continued_force.x > 0.0);
+        assert_eq!(continued[0].last_mode, EstocMode::Rocket);
+        assert!(continued[0].prev.is_some());
+    }
 }

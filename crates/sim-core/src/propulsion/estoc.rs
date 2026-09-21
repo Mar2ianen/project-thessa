@@ -720,11 +720,11 @@ mod tests {
 
     #[test]
     fn fresh_command_evaluates_estoc_target() {
-        // `EstocCommand::fresh` uses +infinity as the editor/analyzer
-        // one-shot dt; with no previous snapshot the target is returned
-        // directly and the infinite dt must remain valid.
+        // A fresh command has no previous snapshot, so the target is
+        // returned directly. It remains JSON-safe for editor/network use.
         let engine = estoc_like().compile().expect("estoc compiles");
         let command = super::super::jet::EstocCommand::fresh();
+        assert!(command.dt_s.is_finite());
         let (point, _) = engine
             .operating_point(
                 &condition_at(4.0, 2000.0),

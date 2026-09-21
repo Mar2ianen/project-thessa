@@ -57,8 +57,8 @@ impl CompiledJet {
 }
 
 /// ESTOC command threading for stateless vehicle calls: manual override,
-/// last mode, previous thrust, and timestep. `dt_s = INFINITY` evaluates
-/// the fresh-start target (documented: editor/analyzer convention).
+/// last mode, previous transient, and timestep. A fresh command has no
+/// previous transient, so it evaluates the target directly.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EstocCommand {
     pub manual: Option<EstocMode>,
@@ -75,7 +75,18 @@ impl EstocCommand {
             manual: None,
             last_mode: EstocMode::Air,
             prev: None,
-            dt_s: f64::INFINITY,
+            dt_s: 0.0,
+        }
+    }
+
+    /// Return the command to use on the next world tick after an ESTOC
+    /// operating-point evaluation. Manual selection and timestep are caller
+    /// inputs; mode and the full transient snapshot are runtime state.
+    pub fn with_state(&self, point: &EstocPoint, transient: EstocTransient) -> Self {
+        Self {
+            last_mode: point.mode,
+            prev: Some(transient),
+            ..*self
         }
     }
 }

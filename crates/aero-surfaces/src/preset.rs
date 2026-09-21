@@ -16,19 +16,17 @@
 //! (left) surfaces negate the roll gain at mix time; the compiler records
 //! the chain so the mixer can address it.
 //!
-//! One-sided devices (spoiler, airbrake, slat) are deliberately NOT
-//! presets yet: `ControlSurfaceDefinition` requires `min < 0 < max`, so a
-//! pure one-way device needs a sim-core limit-model extension first. The
-//! flap preset carries a −1 deg reflex shim for the same reason,
-//! documented at the constructor; the mixer never commands it.
+//! One-sided devices (spoiler, airbrake, slat with minimum exactly 0)
+//! are presets since the sim-core limit model parks negative commands at
+//! zero; the flap preset keeps a documented −1 deg reflex shim.
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ControlRegion, SurfaceError};
+use crate::{ControlRegion, ControlRegionKind, SurfaceError};
 
 /// Channel mixing gains for one control region. The runtime command is
-/// `pitch*k_pitch + roll*k_roll + yaw*k_yaw + flap*k_flap`, saturated to
-/// `[-1, 1]` by [`mix_command`].
+/// `pitch*k_pitch + roll*k_roll + yaw*k_yaw + flap*k_flap +
+/// airbrake*k_airbrake`, saturated to `[-1, 1]` by [`mix_command`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ControlMixing {
     /// Pitch channel gain (elevator, elevon).
@@ -37,11 +35,14 @@ pub struct ControlMixing {
     pub roll: f64,
     /// Yaw channel gain (rudder).
     pub yaw: f64,
-    /// Flap deployment channel gain (flap, flaperon).
+    /// Flap deployment channel gain (flap, flaperon, slat).
     pub flap: f64,
+    /// Airbrake channel gain (spoiler panels, airbrake).
+    pub airbrake: f64,
 }
 
-/// Pilot/trim channel inputs, each in `[-1, 1]` (flap `0..=1` typical).
+/// Pilot/trim channel inputs, each in `[-1, 1]` (flap/airbrake `0..=1`
+/// typical).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ControlChannels {
     /// Pitch input, +1 trailing-edge-down on a right wing.
@@ -52,6 +53,8 @@ pub struct ControlChannels {
     pub yaw: f64,
     /// Flap deployment input, 1 fully deployed.
     pub flap: f64,
+    /// Airbrake input, 1 fully deployed.
+    pub airbrake: f64,
 }
 
 impl ControlChannels {
@@ -62,6 +65,7 @@ impl ControlChannels {
             roll: 0.0,
             yaw: 0.0,
             flap: 0.0,
+            airbrake: 0.0,
         }
     }
 }
@@ -76,6 +80,7 @@ pub fn mix_command(mixing: ControlMixing, channels: ControlChannels) -> f64 {
         ("roll", channels.roll),
         ("yaw", channels.yaw),
         ("flap", channels.flap),
+        ("airbrake", channels.airbrake),
     ] {
         assert!(
             value.is_finite() && (-1.0..=1.0).contains(&value),
@@ -85,7 +90,8 @@ pub fn mix_command(mixing: ControlMixing, channels: ControlChannels) -> f64 {
     (mixing.pitch * channels.pitch
         + mixing.roll * channels.roll
         + mixing.yaw * channels.yaw
-        + mixing.flap * channels.flap)
+        + mixing.flap * channels.flap
+        + mixing.airbrake * channels.airbrake)
         .clamp(-1.0, 1.0)
 }
 
@@ -102,11 +108,13 @@ pub fn aileron(
         -25.0_f64.to_radians(),
         25.0_f64.to_radians(),
         None,
+        ControlRegionKind::TrailingEdgeDevice,
         ControlMixing {
             pitch: 0.0,
             roll: 1.0,
             yaw: 0.0,
             flap: 0.0,
+            airbrake: 0.0,
         },
     )
 }
@@ -124,11 +132,13 @@ pub fn elevator(
         -25.0_f64.to_radians(),
         25.0_f64.to_radians(),
         None,
+        ControlRegionKind::TrailingEdgeDevice,
         ControlMixing {
             pitch: 1.0,
             roll: 0.0,
             yaw: 0.0,
             flap: 0.0,
+            airbrake: 0.0,
         },
     )
 }
@@ -147,11 +157,13 @@ pub fn rudder(
         -30.0_f64.to_radians(),
         30.0_f64.to_radians(),
         None,
+        ControlRegionKind::TrailingEdgeDevice,
         ControlMixing {
             pitch: 0.0,
             roll: 0.0,
             yaw: 1.0,
             flap: 0.0,
+            airbrake: 0.0,
         },
     )
 }
@@ -170,11 +182,13 @@ pub fn elevon(
         -25.0_f64.to_radians(),
         25.0_f64.to_radians(),
         None,
+        ControlRegionKind::TrailingEdgeDevice,
         ControlMixing {
             pitch: 1.0,
             roll: 1.0,
             yaw: 0.0,
             flap: 0.0,
+            airbrake: 0.0,
         },
     )
 }
@@ -192,11 +206,13 @@ pub fn flaperon(
         -5.0_f64.to_radians(),
         25.0_f64.to_radians(),
         None,
+        ControlRegionKind::TrailingEdgeDevice,
         ControlMixing {
             pitch: 0.0,
             roll: 1.0,
             yaw: 0.0,
             flap: 1.0,
+            airbrake: 0.0,
         },
     )
 }
@@ -216,11 +232,13 @@ pub fn flap(
         -1.0_f64.to_radians(),
         35.0_f64.to_radians(),
         None,
+        ControlRegionKind::TrailingEdgeDevice,
         ControlMixing {
             pitch: 0.0,
             roll: 0.0,
             yaw: 0.0,
             flap: 1.0,
+            airbrake: 0.0,
         },
     )
 }
@@ -242,11 +260,147 @@ pub fn trim_tab(
         -15.0_f64.to_radians(),
         15.0_f64.to_radians(),
         Some(parent),
+        ControlRegionKind::TrailingEdgeDevice,
         ControlMixing {
             pitch: 1.0,
             roll: 0.0,
             yaw: 0.0,
             flap: 0.0,
+            airbrake: 0.0,
+        },
+    )
+}
+
+/// Anti-servo tab: nested tab geared to move against the parent command
+/// (negative pitch gain), used on stabilators and weight-shift-correct
+/// tails. Sizing and gearing ratios are airframe data; the sign is the
+/// preset.
+pub fn anti_servo_tab(
+    name: impl Into<String>,
+    span: (f64, f64),
+    chord: (f64, f64),
+    parent: usize,
+) -> Result<(ControlRegion, ControlMixing), SurfaceError> {
+    region_with_mix(
+        name,
+        span,
+        chord,
+        chord.0,
+        -15.0_f64.to_radians(),
+        15.0_f64.to_radians(),
+        Some(parent),
+        ControlRegionKind::TrailingEdgeDevice,
+        ControlMixing {
+            pitch: -1.0,
+            roll: 0.0,
+            yaw: 0.0,
+            flap: 0.0,
+            airbrake: 0.0,
+        },
+    )
+}
+
+/// Spoiler: one-sided mid-chord panel (0 to +60 deg) for roll spoilers
+/// and glide-path control. Negative commands park at zero through the
+/// one-sided limit model.
+pub fn spoiler(
+    name: impl Into<String>,
+    span: (f64, f64),
+) -> Result<(ControlRegion, ControlMixing), SurfaceError> {
+    region_with_mix(
+        name,
+        span,
+        (0.35, 0.75),
+        0.35,
+        0.0,
+        60.0_f64.to_radians(),
+        None,
+        ControlRegionKind::TrailingEdgeDevice,
+        ControlMixing {
+            pitch: 0.0,
+            roll: 1.0,
+            yaw: 0.0,
+            flap: 0.0,
+            airbrake: 1.0,
+        },
+    )
+}
+
+/// Airbrake / speedbrake panel: one-sided symmetric device on the
+/// dedicated airbrake channel. Mount pairs on wings or fuselage sides;
+/// symmetric deployment is a mixer pairing rule, not geometry.
+pub fn airbrake(
+    name: impl Into<String>,
+    span: (f64, f64),
+    chord: (f64, f64),
+) -> Result<(ControlRegion, ControlMixing), SurfaceError> {
+    region_with_mix(
+        name,
+        span,
+        chord,
+        chord.0,
+        0.0,
+        55.0_f64.to_radians(),
+        None,
+        ControlRegionKind::TrailingEdgeDevice,
+        ControlMixing {
+            pitch: 0.0,
+            roll: 0.0,
+            yaw: 0.0,
+            flap: 0.0,
+            airbrake: 1.0,
+        },
+    )
+}
+
+/// Slat: leading-edge high-lift region on the flap channel. Slat motion
+/// is not a pure hinge rotation (translation presets are future
+/// kinematics); the region-on-parent authoring and deployment channel
+/// are the preset, matching the doc's slat clause.
+pub fn slat(
+    name: impl Into<String>,
+    span: (f64, f64),
+) -> Result<(ControlRegion, ControlMixing), SurfaceError> {
+    region_with_mix(
+        name,
+        span,
+        (0.0, 0.15),
+        0.0,
+        0.0,
+        25.0_f64.to_radians(),
+        None,
+        ControlRegionKind::TrailingEdgeDevice,
+        ControlMixing {
+            pitch: 0.0,
+            roll: 0.0,
+            yaw: 0.0,
+            flap: 1.0,
+            airbrake: 0.0,
+        },
+    )
+}
+
+/// Stabilator / all-moving tail: a region covering the full span and
+/// chord, marked [`ControlRegionKind::AllMovingSurface`] so the runtime
+/// rotates the whole surface instead of deflecting trailing-edge
+/// panels. Pivot placement and actuator rates are runtime data; the
+/// quarter-chord hinge reference here is the conventional default.
+pub fn stabilator(name: impl Into<String>) -> Result<(ControlRegion, ControlMixing), SurfaceError> {
+    region_with_mix(
+        name,
+        (0.0, 1.0),
+        (0.0, 1.0),
+        0.25,
+        -20.0_f64.to_radians(),
+        20.0_f64.to_radians(),
+        None,
+        ControlRegionKind::AllMovingSurface,
+        ControlMixing {
+            pitch: 1.0,
+            roll: 0.0,
+            yaw: 0.0,
+            flap: 0.0,
+            airbrake: 0.0,
         },
     )
 }
@@ -260,6 +414,7 @@ fn region_with_mix(
     min_deflection_rad: f64,
     max_deflection_rad: f64,
     parent: Option<usize>,
+    kind: ControlRegionKind,
     mixing: ControlMixing,
 ) -> Result<(ControlRegion, ControlMixing), SurfaceError> {
     let mut region = ControlRegion {
@@ -270,6 +425,7 @@ fn region_with_mix(
         min_deflection_rad,
         max_deflection_rad,
         parent: None,
+        kind,
     };
     // Standalone check covers bounds, hinge placement, and limits.
     // Nesting containment against the real parent is a surface-level

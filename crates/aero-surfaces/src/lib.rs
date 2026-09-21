@@ -69,11 +69,11 @@ pub use golden::{
     boeing_777x, boeing_777x_half_wing, concorde, concorde_wing, dream_chaser, dream_chaser_wing,
     pathfinder_wing, shuttle_orbiter, shuttle_orbiter_wing,
 };
-pub use mechanism::{ControlRegion, FoldJoint};
+pub use mechanism::{ControlRegion, ControlRegionKind, FoldJoint};
 pub use planform::{Planform, SpanStation};
 pub use preset::{
-    ControlChannels, ControlMixing, aileron, elevator, elevon, flap, flaperon, mix_command, rudder,
-    trim_tab,
+    ControlChannels, ControlMixing, aileron, airbrake, anti_servo_tab, elevator, elevon, flap,
+    flaperon, mix_command, rudder, slat, spoiler, stabilator, trim_tab,
 };
 pub use profile::{CruiseRequirement, Naca4, ProfilePick, recommend_cruise_profile};
 pub use section::{AeroProfileId, SectionData, SectionStation};

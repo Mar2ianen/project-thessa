@@ -2206,6 +2206,32 @@ fn vehicle_definition_supports_arbitrary_surfaces_and_control_channels() {
 }
 
 #[test]
+fn one_sided_spoiler_parks_negative_commands_at_zero() {
+    let panel = AeroPanel::flat_plate(DVec3::ZERO, 5.0, 2.0).expect("valid panel");
+    let geometry = AeroGeometry::new(vec![panel]).expect("valid geometry");
+    let properties =
+        RigidBodyProperties::new(1_000.0, glam::DMat3::from_diagonal(DVec3::splat(100.0)))
+            .expect("valid properties");
+    let spoiler = ControlSurfaceDefinition::new("spoiler", vec![0], 0.0, 60.0_f64.to_radians())
+        .expect("one-sided spoiler validates");
+    let mut vehicle = VehicleDefinition::new("spoiler-test", geometry, properties, vec![spoiler])
+        .expect("valid vehicle definition");
+    vehicle.apply_control_inputs(&[1.0]).expect("full deploy");
+    assert!(
+        (vehicle.aero_geometry.panels[0].control_deflection_rad - 60.0_f64.to_radians()).abs()
+            < 1.0e-12
+    );
+    vehicle
+        .apply_control_inputs(&[-1.0])
+        .expect("retract command");
+    assert!(vehicle.aero_geometry.panels[0].control_deflection_rad.abs() < 1.0e-12);
+    assert!(
+        ControlSurfaceDefinition::new("bad", vec![0], 0.1, 0.5).is_err(),
+        "strictly positive minima stay rejected"
+    );
+}
+
+#[test]
 fn aero_zero_flow_has_no_force_or_moment() {
     let case = aero_test_case(0.0, 0.0);
     let model = PanelAeroModel::new(AeroConfig::default()).expect("valid aero model");

@@ -4,8 +4,8 @@ use std::{hint::black_box, time::Instant};
 
 use glam::DVec3;
 use thessa_aero_surfaces::{
-    BendCurve, CompileOptions, ControlRegion, FoldJoint, MechanismState, Planform,
-    ProceduralSurface, SectionData, compile_surface,
+    BendCurve, CompileOptions, FoldJoint, MechanismState, Planform, ProceduralSurface, SectionData,
+    aileron, compile_surface,
 };
 
 /// Representative airliner-like wing: tapered swept planform, dihedral,
@@ -15,6 +15,7 @@ fn representative_surface() -> ProceduralSurface {
         name: "bench-wing".into(),
         span_m: 12.0,
         origin_body_m: DVec3::ZERO,
+        mount_roll_rad: 0.0,
         mirror_y: false,
         planform: Planform::tapered(3.0, 1.0, 2.5).unwrap(),
         bend: BendCurve::dihedral(12.0, 5.0_f64.to_radians()).unwrap(),
@@ -33,15 +34,7 @@ fn representative_surface() -> ProceduralSurface {
             },
         ])
         .unwrap(),
-        controls: vec![ControlRegion {
-            name: "aileron".into(),
-            span: (0.55, 0.95),
-            chord: (0.25, 1.0),
-            hinge_u: 0.25,
-            min_deflection_rad: -20.0_f64.to_radians(),
-            max_deflection_rad: 20.0_f64.to_radians(),
-            parent: None,
-        }],
+        controls: vec![aileron("aileron", (0.55, 0.95)).unwrap().0],
         folds: vec![FoldJoint {
             name: "tip-fold".into(),
             station_s: 0.85,

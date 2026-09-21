@@ -8,9 +8,9 @@
 use glam::DVec3;
 
 use crate::{
-    BendCurve, BendStation, CompileOptions, CompiledSurface, ControlRegion, FoldJoint,
-    MechanismState, Planform, ProceduralSurface, RefinementMode, SectionData, SpanStation,
-    SurfaceError, compile_surface,
+    BendCurve, BendStation, CompileOptions, CompiledSurface, ControlRegion, ControlRegionKind,
+    FoldJoint, MechanismState, Planform, ProceduralSurface, RefinementMode, SectionData,
+    SpanStation, SurfaceError, compile_surface,
 };
 
 fn tight_options() -> CompileOptions {
@@ -37,6 +37,7 @@ fn aileron(name: &str) -> ControlRegion {
         min_deflection_rad: -20.0_f64.to_radians(),
         max_deflection_rad: 20.0_f64.to_radians(),
         parent: None,
+        kind: ControlRegionKind::TrailingEdgeDevice,
     }
 }
 
@@ -84,6 +85,7 @@ fn tapered_swept_wing_matches_closed_form() {
         name: "tapered".into(),
         span_m: 10.0,
         origin_body_m: DVec3::ZERO,
+        mount_roll_rad: 0.0,
         mirror_y: false,
         planform: Planform::tapered(3.0, 1.0, 2.0).unwrap(),
         bend: BendCurve::flat(),
@@ -209,6 +211,7 @@ fn tolerance_tightening_refines_zones_without_moving_geometry() {
         name: "tapered".into(),
         span_m: 10.0,
         origin_body_m: DVec3::ZERO,
+        mount_roll_rad: 0.0,
         mirror_y: false,
         planform: Planform::tapered(3.0, 1.0, 2.0).unwrap(),
         bend: BendCurve::flat(),
@@ -291,6 +294,7 @@ fn nested_tab_keeps_parent_chain() {
         min_deflection_rad: -25.0_f64.to_radians(),
         max_deflection_rad: 25.0_f64.to_radians(),
         parent: None,
+        kind: ControlRegionKind::TrailingEdgeDevice,
     });
     surface.controls.push(ControlRegion {
         name: "trim-tab".into(),
@@ -300,6 +304,7 @@ fn nested_tab_keeps_parent_chain() {
         min_deflection_rad: -15.0_f64.to_radians(),
         max_deflection_rad: 15.0_f64.to_radians(),
         parent: Some(0),
+        kind: ControlRegionKind::TrailingEdgeDevice,
     });
     let compiled = compile_surface(
         &surface,
@@ -525,9 +530,9 @@ fn degenerate_authoring_fails_closed() {
         ]),
         Err(SurfaceError::InvalidChord(_))
     ));
-    // Control region with min >= 0.
+    // Control region with strictly positive min.
     let mut bad = aileron("bad");
-    bad.min_deflection_rad = 0.0;
+    bad.min_deflection_rad = 0.1;
     let mut surface = rectangular(8.0, 2.0);
     surface.controls.push(bad);
     assert!(matches!(
@@ -548,6 +553,7 @@ fn degenerate_authoring_fails_closed() {
         min_deflection_rad: -0.4,
         max_deflection_rad: 0.4,
         parent: None,
+        kind: ControlRegionKind::TrailingEdgeDevice,
     });
     surface.controls.push(ControlRegion {
         name: "tab".into(),
@@ -557,6 +563,7 @@ fn degenerate_authoring_fails_closed() {
         min_deflection_rad: -0.2,
         max_deflection_rad: 0.2,
         parent: Some(0),
+        kind: ControlRegionKind::TrailingEdgeDevice,
     });
     assert!(matches!(
         compile_surface(
@@ -998,6 +1005,7 @@ fn error_budget_yields_minimal_panels_at_certified_error() {
         name: "tapered".into(),
         span_m: 10.0,
         origin_body_m: DVec3::ZERO,
+        mount_roll_rad: 0.0,
         mirror_y: false,
         planform: Planform::tapered(3.0, 1.0, 2.0).unwrap(),
         bend: BendCurve::flat(),
@@ -1211,12 +1219,14 @@ fn control_presets_build_validated_regions_with_mixing() {
     let (_, elevon_mix) = elevon("ev", (0.3, 0.7), (0.2, 1.0)).unwrap();
     let pitch_only = ControlChannels {
         pitch: 0.5,
+        airbrake: 0.0,
         ..ControlChannels::neutral()
     };
     assert!((mix_command(elevon_mix, pitch_only) - 0.5).abs() < 1e-12);
     let combined = ControlChannels {
         pitch: 0.5,
         roll: 0.5,
+        airbrake: 0.0,
         ..ControlChannels::neutral()
     };
     assert!((mix_command(elevon_mix, combined) - 1.0).abs() < 1e-12);
@@ -1224,6 +1234,7 @@ fn control_presets_build_validated_regions_with_mixing() {
     let over = ControlChannels {
         pitch: 1.0,
         roll: 1.0,
+        airbrake: 0.0,
         ..ControlChannels::neutral()
     };
     assert_eq!(mix_command(elevon_mix, over), 1.0);
@@ -1231,12 +1242,14 @@ fn control_presets_build_validated_regions_with_mixing() {
     let deploy = ControlChannels {
         flap: 0.5,
         roll: 0.5,
+        airbrake: 0.0,
         ..ControlChannels::neutral()
     };
     assert!((mix_command(flaperon_mix, deploy) - 1.0).abs() < 1e-12);
     let (_, rudder_mix) = rudder("rud", (0.2, 0.8)).unwrap();
     let yaw = ControlChannels {
         yaw: -0.25,
+        airbrake: 0.0,
         ..ControlChannels::neutral()
     };
     assert!((mix_command(rudder_mix, yaw) + 0.25).abs() < 1e-12);
@@ -1248,6 +1261,7 @@ fn control_presets_build_validated_regions_with_mixing() {
     assert!((flap_region.min_deflection_rad + 1.0_f64.to_radians()).abs() < 1e-12);
     let full = ControlChannels {
         flap: 1.0,
+        airbrake: 0.0,
         ..ControlChannels::neutral()
     };
     assert!((mix_command(flap_mix, full) - 1.0).abs() < 1e-12);
@@ -1324,4 +1338,163 @@ fn compiled_surface_crosses_hangar_boundary_as_data() {
     let restored: CompiledSurface =
         postcard::from_bytes(&bytes).expect("compiled surface deserializes");
     assert_eq!(restored, compiled);
+}
+
+fn vertical_fin(roll_deg: f64) -> ProceduralSurface {
+    use crate::preset::rudder;
+    let (rudder, _) = rudder("rudder", (0.3, 0.95)).unwrap();
+    ProceduralSurface {
+        name: "fin".into(),
+        span_m: 3.0,
+        origin_body_m: DVec3::ZERO,
+        mount_roll_rad: roll_deg.to_radians(),
+        mirror_y: false,
+        planform: Planform::tapered(1.5, 0.8, 0.3).unwrap(),
+        bend: BendCurve::flat(),
+        sections: SectionData::uniform(0.0, 0.08).unwrap(),
+        controls: vec![rudder],
+        folds: Vec::new(),
+    }
+}
+
+#[test]
+fn vertical_fin_mounts_sideways_with_rudder() {
+    // +90 deg roll: span rises to +Z, section lift points sideways (-Y).
+    let surface = vertical_fin(90.0);
+    let compiled = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    for panel in &compiled.panels {
+        assert!(panel.position_body_m.z > -1e-9, "tip up");
+        assert!((panel.chord_axis_body - DVec3::X).length() < 1e-9);
+        assert!((panel.lift_axis_body + DVec3::Y).length() < 1e-9);
+    }
+    // Bounding box swaps axes: tall in z, thin in y.
+    let bbox = &compiled.summary;
+    assert!((bbox.bbox_max_m.z - bbox.bbox_min_m.z - 3.0).abs() < 1e-9);
+    assert!(bbox.bbox_max_m.y - bbox.bbox_min_m.y < 0.5);
+    // Rudder owns trailing-edge panels with recorded hinge.
+    assert_eq!(compiled.controls.len(), 1);
+    assert_eq!(compiled.controls[0].name, "rudder");
+    assert!(!compiled.controls[0].panel_indices.is_empty());
+    assert!((bbox.control_areas[0].hinge_u - 0.3).abs() < 1e-12);
+    // A centerline fin mirrors onto itself: identical areas.
+    let mut mirrored_surface = vertical_fin(90.0);
+    mirrored_surface.mirror_y = true;
+    let mirrored = compile_surface(
+        &mirrored_surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    assert!((mirrored.summary.material_area_m2 - bbox.material_area_m2).abs() < 1e-12);
+}
+
+#[test]
+fn ventral_keel_hangs_down() {
+    // -90 deg roll: span drops to -Z, lift points +Y.
+    let surface = vertical_fin(-90.0);
+    let compiled = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    for panel in &compiled.panels {
+        assert!(panel.position_body_m.z < 1e-9, "keel down");
+        assert!((panel.lift_axis_body - DVec3::Y).length() < 1e-9);
+    }
+    assert!(compiled.summary.bbox_min_m.z < -2.9);
+}
+
+#[test]
+fn one_sided_presets_compile_with_zero_minimum() {
+    use crate::preset::{ControlChannels, airbrake, anti_servo_tab, mix_command, slat, spoiler};
+
+    let mut surface = rectangular(10.0, 2.0);
+    let (spoiler, spoiler_mix) = spoiler("spoiler", (0.4, 0.7)).unwrap();
+    assert!((spoiler.min_deflection_rad - 0.0).abs() < 1e-12);
+    let (brake, brake_mix) = airbrake("brake", (0.2, 0.4), (0.3, 0.7)).unwrap();
+    let (slat, _) = slat("slat", (0.3, 0.8)).unwrap();
+    surface.controls.push(spoiler);
+    surface.controls.push(brake);
+    surface.controls.push(slat);
+    let compiled = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    assert_eq!(compiled.controls.len(), 3);
+    // One-sided limits survive into definitions (sim-core parks
+    // negative commands at zero, proven next door).
+    assert!((compiled.controls[0].minimum_deflection_rad - 0.0).abs() < 1e-12);
+    // Spoiler answers roll and airbrake channels, never pitch.
+    let roll = ControlChannels {
+        roll: 0.5,
+        airbrake: 0.0,
+        ..ControlChannels::neutral()
+    };
+    assert!((mix_command(spoiler_mix, roll) - 0.5).abs() < 1e-12);
+    let brake_cmd = ControlChannels {
+        roll: 0.0,
+        airbrake: 0.5,
+        ..ControlChannels::neutral()
+    };
+    assert!((mix_command(brake_mix, brake_cmd) - 0.5).abs() < 1e-12);
+    let pitch = ControlChannels {
+        pitch: 0.5,
+        airbrake: 0.0,
+        ..ControlChannels::neutral()
+    };
+    assert!(mix_command(spoiler_mix, pitch).abs() < 1e-12);
+
+    // Anti-servo tab moves against the pitch command.
+    let (_, anti_mix) = anti_servo_tab("anti", (0.7, 0.9), (0.5, 0.9), 0).unwrap();
+    let up = ControlChannels {
+        pitch: 0.5,
+        airbrake: 0.0,
+        ..ControlChannels::neutral()
+    };
+    assert!((mix_command(anti_mix, up) + 0.5).abs() < 1e-12);
+}
+
+#[test]
+fn stabilator_marks_whole_surface_rotation() {
+    use crate::preset::{ControlChannels, mix_command, stabilator};
+
+    let mut surface = rectangular(6.0, 1.5);
+    let (stab, stab_mix) = stabilator("stab").unwrap();
+    surface.controls.push(stab);
+    let compiled = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    // Full-span region owns every panel...
+    assert_eq!(compiled.controls.len(), 1);
+    assert_eq!(
+        compiled.controls[0].panel_indices.len(),
+        compiled.panels.len()
+    );
+    // ...and the kind marker tells runtime to rotate, not deflect.
+    assert_eq!(
+        compiled.summary.control_areas[0].kind,
+        ControlRegionKind::AllMovingSurface
+    );
+    let pitch = ControlChannels {
+        pitch: 0.5,
+        airbrake: 0.0,
+        ..ControlChannels::neutral()
+    };
+    assert!((mix_command(stab_mix, pitch) - 0.5).abs() < 1e-12);
+    // Ordinary devices keep the trailing-edge marker.
+    assert_eq!(
+        compiled.summary.control_areas[0].kind,
+        ControlRegionKind::AllMovingSurface
+    );
 }

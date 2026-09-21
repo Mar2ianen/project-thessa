@@ -46,9 +46,12 @@ impl ControlSurfaceDefinition {
                 "control surface needs a name and at least one panel".into(),
             ));
         }
+        // One-sided devices (spoiler/airbrake/slat: minimum exactly 0)
+        // are legal; negative commands park at 0 through the mapping
+        // below. Strictly positive minima stay rejected.
         if !self.minimum_deflection_rad.is_finite()
             || !self.maximum_deflection_rad.is_finite()
-            || self.minimum_deflection_rad >= 0.0
+            || self.minimum_deflection_rad > 0.0
             || self.maximum_deflection_rad <= 0.0
             || self.minimum_deflection_rad <= -std::f64::consts::PI
             || self.maximum_deflection_rad >= std::f64::consts::PI

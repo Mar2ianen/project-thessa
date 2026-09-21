@@ -294,7 +294,7 @@ pub fn compile_surface(
     surface.validate()?;
     options.validate()?;
     let fold_angles = mechanism.resolve(surface)?;
-    let compiler = Compiler::new(surface, options, fold_angles)?;
+    let compiler = Compiler::new(surface, options, fold_angles)?.with_aspect_ratio();
     compiler.compile()
 }
 
@@ -305,6 +305,10 @@ struct Compiler<'a> {
     fold_order: Vec<usize>,
     /// Arc-length rescale so the root-to-tip material length is `span_m`.
     bend_k: f64,
+    /// Whole-surface aspect ratio (span^2 / projected area), computed
+    /// once: every panel of the surface shares the physically meaningful
+    /// planform value for the finite-surface correlation.
+    surface_aspect_ratio: f64,
 }
 
 /// One spanwise refinement interval with its recursion depth.
@@ -404,7 +408,15 @@ impl<'a> Compiler<'a> {
             fold_angles,
             fold_order,
             bend_k: surface.bend.material_scale(surface.span_m),
+            surface_aspect_ratio: 0.0,
         })
+    }
+
+    /// Finish construction with the surface aspect ratio. Split out so
+    /// `new` stays infallible scaffolding around the fallible resolve.
+    fn with_aspect_ratio(mut self) -> Self {
+        self.surface_aspect_ratio = self.surface.span_m.powi(2) / self.projected_area_estimate();
+        self
     }
 
     /// Mapped spanwise position: horizontal projection after arc-length
@@ -823,7 +835,7 @@ impl<'a> Compiler<'a> {
                 "zone {a}..{b} leading-edge sweep {sweep} rad is too steep; add planform stations"
             )));
         }
-        let aspect = self.surface.span_m.powi(2) / self.projected_area_estimate();
+        let aspect = self.surface_aspect_ratio;
         let thickness = self.surface.sections.thickness(mid);
         let panel = AeroPanel::new(centroid, chord_dir, lift_dir, area, chord_m)
             .and_then(|panel| panel.with_planform(span_3d, aspect, sweep, 1.0))
@@ -925,9 +937,25 @@ impl<'a> Compiler<'a> {
             .collect()
     }
 
-    /// Mount surface-local output into the body frame: optional mirror
-    /// first (surface-local), then the origin offset.
+    /// Mount surface-local output into the body frame: mount roll first,
+    /// then the optional mirror, then the origin offset. A zero roll
+    /// skips the rotation exactly so unrolled surfaces keep bit-identical
+    /// golden geometry.
     fn mount(&self, mut compiled: CompiledSurface) -> CompiledSurface {
+        if self.surface.mount_roll_rad != 0.0 {
+            let roll = DQuat::from_axis_angle(DVec3::X, self.surface.mount_roll_rad);
+            for panel in &mut compiled.panels {
+                panel.position_body_m = roll * panel.position_body_m;
+                panel.center_of_pressure_body_m = roll * panel.center_of_pressure_body_m;
+                panel.chord_axis_body = (roll * panel.chord_axis_body).normalize();
+                panel.lift_axis_body = (roll * panel.lift_axis_body).normalize();
+            }
+            for fold in &mut compiled.folds {
+                fold.hinge_body_m = roll * fold.hinge_body_m;
+                fold.axis_body = (roll * fold.axis_body).normalize();
+            }
+            compiled.summary.rotate(roll);
+        }
         if self.surface.mirror_y {
             compiled = compiled.mirrored();
         }

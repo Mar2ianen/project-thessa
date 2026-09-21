@@ -8,7 +8,7 @@
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
-use crate::{CompiledSurface, ProceduralSurface};
+use crate::{CompiledSurface, ControlRegionKind, ProceduralSurface};
 
 /// One control region's compiled footprint: panel ownership, area, and
 /// hinge position (design doc section 12.3 golden record).
@@ -22,6 +22,8 @@ pub struct ControlSummary {
     pub area_m2: f64,
     /// Hinge line position as a chord fraction from authoring.
     pub hinge_u: f64,
+    /// Trailing-edge device or whole-surface rotation marker.
+    pub kind: ControlRegionKind,
 }
 
 /// Compact deterministic record of one compilation.
@@ -110,6 +112,7 @@ impl CompiledSurfaceSummary {
                 panel_count: count,
                 area_m2: area,
                 hinge_u: region.hinge_u,
+                kind: region.kind,
             });
         }
         let fold_states = compiled
@@ -175,6 +178,37 @@ impl CompiledSurfaceSummary {
     pub(crate) fn translate(&mut self, origin: DVec3) {
         self.bbox_min_m += origin;
         self.bbox_max_m += origin;
+    }
+
+    /// Rotate the bounding box by the mount roll: exact re-AABB over the
+    /// eight rotated corners (a rotated box is not a box).
+    pub(crate) fn rotate(&mut self, rotation: glam::DQuat) {
+        let mut min = DVec3::splat(f64::INFINITY);
+        let mut max = DVec3::splat(f64::NEG_INFINITY);
+        for corner in 0..8 {
+            let point = DVec3::new(
+                if corner & 1 == 0 {
+                    self.bbox_min_m.x
+                } else {
+                    self.bbox_max_m.x
+                },
+                if corner & 2 == 0 {
+                    self.bbox_min_m.y
+                } else {
+                    self.bbox_max_m.y
+                },
+                if corner & 4 == 0 {
+                    self.bbox_min_m.z
+                } else {
+                    self.bbox_max_m.z
+                },
+            );
+            let rotated = rotation * point;
+            min = min.min(rotated);
+            max = max.max(rotated);
+        }
+        self.bbox_min_m = min;
+        self.bbox_max_m = max;
     }
 }
 

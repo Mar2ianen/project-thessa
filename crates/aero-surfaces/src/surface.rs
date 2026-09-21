@@ -22,8 +22,18 @@ pub struct ProceduralSurface {
     pub span_m: f64,
     /// Body-frame position of the surface root (`s = 0`) in metres.
     pub origin_body_m: DVec3,
-    /// Mirror across the body `x/z` plane (`y -> -y`) at compile time.
-    /// One authored right wing plus the mirror flag yields the left wing.
+    /// Roll about the body `x` (chordwise) axis applied to the local
+    /// frame before the origin offset, in radians. `0` is a horizontal
+    /// wing; `+90` deg raises the span to a vertical fin (tip up, lift
+    /// pointing sideways); `-90` deg hangs a ventral keel. Fins, keels,
+    /// and canted tails mount through this angle; the compiler stays
+    /// orientation-agnostic otherwise.
+    #[serde(default)]
+    pub mount_roll_rad: f64,
+    /// Mirror across the body `x/z` plane (`y -> -y`) at compile time,
+    /// applied after the mount roll. One authored right wing plus the
+    /// mirror flag yields the left wing; a centerline fin mirrors onto
+    /// itself.
     #[serde(default)]
     pub mirror_y: bool,
     /// Flat planform splines `x_le(s)`, `x_te(s)`.
@@ -53,6 +63,7 @@ impl ProceduralSurface {
             name: name.into(),
             span_m,
             origin_body_m,
+            mount_roll_rad: 0.0,
             mirror_y: false,
             planform: Planform::rectangular(chord_m)?,
             bend: BendCurve::flat(),
@@ -80,6 +91,12 @@ impl ProceduralSurface {
         if !self.origin_body_m.is_finite() {
             return Err(SurfaceError::InvalidSurface(format!(
                 "surface '{}' has a non-finite body origin",
+                self.name
+            )));
+        }
+        if !self.mount_roll_rad.is_finite() {
+            return Err(SurfaceError::InvalidSurface(format!(
+                "surface '{}' has a non-finite mount roll",
                 self.name
             )));
         }

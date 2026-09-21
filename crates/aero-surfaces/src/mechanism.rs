@@ -12,6 +12,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::SurfaceError;
 
+/// What kind of mechanism a control region is.
+///
+/// A trailing-edge device deflects panels about the hinge line at runtime.
+/// An all-moving surface (stabilator, all-moving tail) rotates the whole
+/// surface rigidly instead; the region covers the full span and chord so
+/// the runtime can address every panel, and this marker tells it to rotate
+/// rather than deflect. Kinematics beyond the marker (pivot axis, actuator
+/// rate) are runtime/FBW concerns, recorded here only as data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ControlRegionKind {
+    /// Hinged trailing/leading-edge device (aileron, flap, slat, ...).
+    #[default]
+    TrailingEdgeDevice,
+    /// Whole-surface rotation (stabilator, all-moving tail).
+    AllMovingSurface,
+}
+
 /// A hinged control region drawn on the parent surface.
 ///
 /// Boundaries follow the parent geometry: span interval plus normalized
@@ -33,7 +50,9 @@ pub struct ControlRegion {
     /// `chord` for a plain hinge; slat-style translation presets may place
     /// it ahead of the region, which a future kinematic preset will own.
     pub hinge_u: f64,
-    /// Most negative deflection in radians (must be `< 0`).
+    /// Most negative deflection in radians (`<= 0`; exactly `0` is a
+    /// one-sided device such as a spoiler, legal since the sim-core limit
+    /// model parks negative commands at zero).
     pub min_deflection_rad: f64,
     /// Most positive deflection in radians (must be `> 0`).
     pub max_deflection_rad: f64,
@@ -41,6 +60,9 @@ pub struct ControlRegion {
     /// The child interval must sit inside the parent interval.
     #[serde(default)]
     pub parent: Option<usize>,
+    /// Trailing-edge device or whole-surface rotation marker.
+    #[serde(default)]
+    pub kind: ControlRegionKind,
 }
 
 /// A fold joint at one span station.
@@ -117,11 +139,11 @@ impl ControlRegion {
         }
         if !self.min_deflection_rad.is_finite()
             || !self.max_deflection_rad.is_finite()
-            || self.min_deflection_rad >= 0.0
+            || self.min_deflection_rad > 0.0
             || self.max_deflection_rad <= 0.0
         {
             return Err(SurfaceError::InvalidControlRegion(format!(
-                "control region '{}' needs min < 0 < max deflection limits",
+                "control region '{}' needs min <= 0 < max deflection limits",
                 self.name
             )));
         }

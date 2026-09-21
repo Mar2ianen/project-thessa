@@ -96,6 +96,7 @@ pub fn boeing_777x_half_wing() -> Result<ProceduralSurface, SurfaceError> {
         name: "b777x-half-wing-right".into(),
         span_m,
         origin_body_m: glam::DVec3::ZERO,
+        mount_roll_rad: 0.0,
         mirror_y: false,
         planform: Planform::tapered(root_chord_m, tip_chord_m, tip_le_offset_m)?,
         bend: BendCurve::dihedral(span_m, dihedral_rad)?,
@@ -149,6 +150,7 @@ pub fn shuttle_orbiter_wing() -> Result<ProceduralSurface, SurfaceError> {
         name: "shuttle-orbiter-wing-right".into(),
         span_m: semi_span_m,
         origin_body_m: glam::DVec3::ZERO,
+        mount_roll_rad: 0.0,
         mirror_y: false,
         planform: Planform::from_stations(vec![
             SpanStation {
@@ -202,6 +204,7 @@ pub fn concorde_wing() -> Result<ProceduralSurface, SurfaceError> {
         name: "concorde-wing-right".into(),
         span_m: semi_span_m,
         origin_body_m: glam::DVec3::ZERO,
+        mount_roll_rad: 0.0,
         mirror_y: false,
         planform: Planform::from_stations(vec![
             SpanStation {
@@ -275,6 +278,7 @@ pub fn dream_chaser_wing() -> Result<ProceduralSurface, SurfaceError> {
         name: "dream-chaser-wing-right".into(),
         span_m: semi_span_m,
         origin_body_m: glam::DVec3::ZERO,
+        mount_roll_rad: 0.0,
         mirror_y: false,
         planform: Planform::tapered(2.4, 1.0, 1.2)?,
         bend: BendCurve::flat(),
@@ -309,6 +313,7 @@ pub fn pathfinder_wing() -> Result<ProceduralSurface, SurfaceError> {
         name: "pathfinder-wing-right".into(),
         span_m: 6.0,
         origin_body_m: glam::DVec3::ZERO,
+        mount_roll_rad: 0.0,
         mirror_y: false,
         planform: Planform::tapered(2.0, 0.9, 0.8)?,
         bend: BendCurve::polyline(vec![

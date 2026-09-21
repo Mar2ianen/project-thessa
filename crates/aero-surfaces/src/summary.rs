@@ -52,16 +52,25 @@ pub struct CompiledSurfaceSummary {
     pub fold_states: Vec<(String, f64, f64)>,
     /// Panels carrying no control ownership.
     pub uncontrolled_panel_count: usize,
+    /// Certified error estimate over the compiled zones (m^2-equivalent):
+    /// the Richardson total the greedy budget refines under, or the
+    /// post-hoc certification pass for tolerance subdivision. Exact on
+    /// linear inputs up to floating-point summation; compare compilations
+    /// through it, never against a second call into the compiler.
+    pub estimated_error_m2: f64,
 }
 
 impl CompiledSurfaceSummary {
     /// Build the record from a freshly compiled surface. `bbox` corners are
     /// surface-local folded panel corners; mounting applies afterwards.
+    /// `estimated_error_m2` is the refinement total (budget mode) or the
+    /// post-hoc certification pass (tolerance mode).
     pub(crate) fn build(
         surface: &ProceduralSurface,
         compiled: &CompiledSurface,
         bbox_min: DVec3,
         bbox_max: DVec3,
+        estimated_error_m2: f64,
     ) -> Self {
         let mut material = 0.0;
         let mut projected = 0.0;
@@ -128,6 +137,7 @@ impl CompiledSurfaceSummary {
             control_areas,
             fold_states,
             uncontrolled_panel_count: uncontrolled,
+            estimated_error_m2,
         }
     }
 

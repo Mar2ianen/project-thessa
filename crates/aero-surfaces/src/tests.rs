@@ -276,7 +276,7 @@ fn control_region_splits_ownership_without_straddling() {
     assert!(owned.center_of_pressure_body_m.y < 9.0 + 1e-9);
     // Control area telemetry matches.
     assert_eq!(compiled.summary.control_areas.len(), 1);
-    assert!((compiled.summary.control_areas[0].2 - 4.5).abs() < 1e-9);
+    assert!((compiled.summary.control_areas[0].area_m2 - 4.5).abs() < 1e-9);
 }
 
 #[test]
@@ -694,19 +694,19 @@ fn boeing_777x_golden_envelope_and_fold() {
 #[test]
 fn boeing_777x_lift_holds_mtow_at_sane_cruise_alpha() {
     // End-to-end pipeline guard, not a performance claim: the compiled
-    // 777X wing run through the stock panel solver must hold MTOW weight
-    // at cruise dynamic pressure with a sane symmetric-section angle of
-    // attack. A broken compiler-to-solver contract (flipped frames, wrong
-    // aspect ratio, dropped panels) fails this loudly.
+    // 777X wing with its automatically picked cruise profile, run through
+    // the stock panel solver, must hold MTOW weight at cruise dynamic
+    // pressure near the real cruise attitude. A broken compiler-to-solver
+    // contract (flipped frames, wrong aspect ratio, dropped panels) or a
+    // broken selector fails this loudly.
     //
-    // Framing limits, all documented: the fixture is a symmetric
-    // zero-incidence wing with no camber, fuselage, tail, or high-lift
-    // devices, and the solver is an engineering panel model, not CFD. The
-    // real cambered aircraft cruises near 2-3 deg body alpha; the missing
-    // camber lift (CL0 ~ 0.3, worth ~4-5 deg at this slope) plus fuselage
-    // carryover explain the higher symmetric-wing angle below. No drag
-    // comparison is attempted: cruise L/D is set by config knobs and
-    // profile data this slice does not model.
+    // Framing limits, all documented: the fixture wing is untwisted with
+    // no fuselage, tail, or high-lift devices, and the solver is an
+    // engineering panel model, not CFD. The profile pick closes most of
+    // the symmetric-wing gap (7.2 deg trim without camber); the residual
+    // against the real ~2-3 deg is the documented downwash-plus-airframe
+    // delta. No drag comparison is attempted: cruise L/D is set by config
+    // knobs and profile data this slice does not model.
     use crate::{CompileOptions, MechanismState, boeing_777x_half_wing, compile_surface};
     use thessa_sim_core::{
         AeroConfig, AeroEnvironment, AeroGeometry, AeroModel, AeroState, PanelAeroModel,
@@ -755,25 +755,43 @@ fn boeing_777x_lift_holds_mtow_at_sane_cruise_alpha() {
     assert!((3.0..5.0).contains(&slope_per_rad));
 
     // Cruise weight probe: M 0.85 at 11 km ISA-ish, MTOW 351,534 kg.
+    // The automatic profile pick (NACA3412 for section Cl 0.58 at a 2 deg
+    // deck) feeds the solver through the config zero-lift angle, the
+    // vehicle-level camber proxy: symmetric trim sat near 7.2 deg, the
+    // picked camber shifts it by its deg alpha0.
+    use crate::{CruiseRequirement, recommend_cruise_profile};
+    let pick = recommend_cruise_profile(&CruiseRequirement {
+        target_section_cl: 0.58,
+        deck_angle_deg: 2.0,
+        max_thickness_ratio: 0.12,
+        reynolds_number: 5.0e7,
+    })
+    .unwrap();
+    assert_eq!(pick.profile_id().0, "NACA3412");
     let cruise_env = AeroEnvironment::new(0.364, 295.0, 1.42e-5, DVec3::ZERO);
     let cruise_speed = 0.85 * cruise_env.speed_of_sound_mps;
     let weight_n = 351_534.0 * 9.81;
+    let cambered_config = AeroConfig {
+        zero_lift_angle_rad: pick.zero_lift_angle_rad,
+        ..AeroConfig::default()
+    };
+    let cambered = PanelAeroModel::new(cambered_config).unwrap();
     let cruise_lift_at = |deg: f64| {
         let alpha = deg.to_radians();
         let state = AeroState::new(
             DVec3::new(cruise_speed * alpha.cos(), 0.0, -cruise_speed * alpha.sin()),
             DVec3::ZERO,
         );
-        model
+        cambered
             .evaluate_state(state, cruise_env, &geometry)
             .unwrap()
             .force_body_n
             .z
     };
     assert!(cruise_lift_at(2.0) < weight_n);
-    assert!(cruise_lift_at(10.0) > weight_n);
+    assert!(cruise_lift_at(6.0) > weight_n);
     let mut low = 2.0_f64;
-    let mut high = 10.0_f64;
+    let mut high = 6.0_f64;
     for _ in 0..32 {
         let mid = 0.5 * (low + high);
         if cruise_lift_at(mid) < weight_n {
@@ -783,9 +801,12 @@ fn boeing_777x_lift_holds_mtow_at_sane_cruise_alpha() {
         }
     }
     let trim_alpha_deg = 0.5 * (low + high);
-    // Symmetric-section 1g band: above the cambered-aircraft ~2-3 deg
-    // by the documented camber delta, below any high-alpha regime.
-    assert!((5.0..10.0).contains(&trim_alpha_deg));
+    // Profiled 1g band. Residual against the real ~2-3 deg cruise
+    // attitude: ~1 deg of 2D-vs-finite-wing downwash the section-level
+    // selector cannot see (CL/pi/AR ~= 1.06 deg, the documented lever for
+    // a future lifting-line correction) plus missing fuselage/tail lift
+    // and reference uncertainty on the real attitude itself.
+    assert!((3.0..6.0).contains(&trim_alpha_deg));
 }
 
 #[test]
@@ -856,10 +877,12 @@ fn shuttle_orbiter_golden_delta_and_elevons() {
     assert!((summary.sweep_rad - 1.2121).abs() < 1e-4);
     assert!((summary.mean_aerodynamic_chord_m - 13.0654).abs() < 1e-3);
     assert_eq!(summary.control_areas.len(), 2);
-    assert_eq!(summary.control_areas[0].1, 54);
-    assert!((summary.control_areas[0].2 - 17.615).abs() < 1e-3);
-    assert_eq!(summary.control_areas[1].1, 138);
-    assert!((summary.control_areas[1].2 - 10.815).abs() < 1e-3);
+    assert_eq!(summary.control_areas[0].panel_count, 54);
+    assert!((summary.control_areas[0].area_m2 - 17.615).abs() < 1e-3);
+    assert_eq!(summary.control_areas[1].panel_count, 138);
+    assert!((summary.control_areas[1].area_m2 - 10.815).abs() < 1e-3);
+    assert!((summary.control_areas[0].hinge_u - 0.55).abs() < 1e-12);
+    assert!((summary.control_areas[1].hinge_u - 0.6).abs() < 1e-12);
 
     // NASA envelope and area.
     assert!((2.0 * summary.projected_span_m - shuttle_orbiter::SPAN_M).abs() < 0.05);
@@ -1146,4 +1169,85 @@ fn cruise_selector_picks_least_camber_with_margin() {
         })
         .is_err()
     );
+}
+
+#[test]
+fn control_presets_build_validated_regions_with_mixing() {
+    use crate::preset::{
+        ControlChannels, aileron, elevator, elevon, flap, flaperon, mix_command, rudder, trim_tab,
+    };
+
+    // Every preset validates standalone and compiles on a plain wing.
+    let mut surface = rectangular(10.0, 2.0);
+    let (ail, ail_mix) = aileron("ail", (0.55, 0.95)).unwrap();
+    let (elev, elev_mix) = elevator("elev", (0.1, 0.9)).unwrap();
+    surface.controls.push(ail);
+    surface.controls.push(elev);
+    let (tab, _) = trim_tab("tab", (0.6, 0.8), (0.5, 0.9), 1).unwrap();
+    surface.controls.push(tab);
+    let compiled = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    assert_eq!(compiled.controls.len(), 3);
+    assert_eq!(
+        compiled
+            .tags
+            .iter()
+            .filter(|tag| tag.control == Some(2))
+            .count(),
+        1
+    );
+    assert_eq!(
+        compiled.tags[compiled.controls[2].panel_indices[0]].control_parent,
+        Some(1)
+    );
+
+    // Mixing formulas from the design doc: elevon = pitch + roll,
+    // flaperon = flap + roll, plain surfaces take one channel.
+    let (_, elevon_mix) = elevon("ev", (0.3, 0.7), (0.2, 1.0)).unwrap();
+    let pitch_only = ControlChannels {
+        pitch: 0.5,
+        ..ControlChannels::neutral()
+    };
+    assert!((mix_command(elevon_mix, pitch_only) - 0.5).abs() < 1e-12);
+    let combined = ControlChannels {
+        pitch: 0.5,
+        roll: 0.5,
+        ..ControlChannels::neutral()
+    };
+    assert!((mix_command(elevon_mix, combined) - 1.0).abs() < 1e-12);
+    // Saturation, not wraparound.
+    let over = ControlChannels {
+        pitch: 1.0,
+        roll: 1.0,
+        ..ControlChannels::neutral()
+    };
+    assert_eq!(mix_command(elevon_mix, over), 1.0);
+    let (_, flaperon_mix) = flaperon("fp", (0.5, 0.9)).unwrap();
+    let deploy = ControlChannels {
+        flap: 0.5,
+        roll: 0.5,
+        ..ControlChannels::neutral()
+    };
+    assert!((mix_command(flaperon_mix, deploy) - 1.0).abs() < 1e-12);
+    let (_, rudder_mix) = rudder("rud", (0.2, 0.8)).unwrap();
+    let yaw = ControlChannels {
+        yaw: -0.25,
+        ..ControlChannels::neutral()
+    };
+    assert!((mix_command(rudder_mix, yaw) + 0.25).abs() < 1e-12);
+    assert!((mix_command(ail_mix, pitch_only)).abs() < 1e-12);
+    assert!((mix_command(elev_mix, pitch_only) - 0.5).abs() < 1e-12);
+
+    // Flap preset documents its one-sided-limit shim openly.
+    let (flap_region, flap_mix) = flap("flap", (0.2, 0.8)).unwrap();
+    assert!((flap_region.min_deflection_rad + 1.0_f64.to_radians()).abs() < 1e-12);
+    let full = ControlChannels {
+        flap: 1.0,
+        ..ControlChannels::neutral()
+    };
+    assert!((mix_command(flap_mix, full) - 1.0).abs() < 1e-12);
 }

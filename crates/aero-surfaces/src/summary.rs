@@ -10,6 +10,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::{CompiledSurface, ProceduralSurface};
 
+/// One control region's compiled footprint: panel ownership, area, and
+/// hinge position (design doc section 12.3 golden record).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ControlSummary {
+    /// Region name from authoring.
+    pub name: String,
+    /// Panels owned innermost by the region.
+    pub panel_count: usize,
+    /// Owned area in m^2.
+    pub area_m2: f64,
+    /// Hinge line position as a chord fraction from authoring.
+    pub hinge_u: f64,
+}
+
 /// Compact deterministic record of one compilation.
 ///
 /// All lengths in metres, areas in square metres, angles in radians. The
@@ -46,8 +60,8 @@ pub struct CompiledSurfaceSummary {
     pub bbox_min_m: DVec3,
     /// Bounding-box maximum corner in body metres.
     pub bbox_max_m: DVec3,
-    /// Per control region: `(name, owned panel count, owned area)`.
-    pub control_areas: Vec<(String, usize, f64)>,
+    /// Per control region: owned panel count, area, and hinge position.
+    pub control_areas: Vec<ControlSummary>,
     /// Per fold joint: `(name, station, compiled angle)`.
     pub fold_states: Vec<(String, f64, f64)>,
     /// Panels carrying no control ownership.
@@ -91,7 +105,12 @@ impl CompiledSurfaceSummary {
                     area += panel.area_m2;
                 }
             }
-            control_areas.push((region.name.clone(), count, area));
+            control_areas.push(ControlSummary {
+                name: region.name.clone(),
+                panel_count: count,
+                area_m2: area,
+                hinge_u: region.hinge_u,
+            });
         }
         let fold_states = compiled
             .folds

@@ -3,12 +3,13 @@ use std::{env, error::Error, fs, path::PathBuf};
 use glam::{DMat3, DQuat, DVec3};
 use serde::Deserialize;
 use thessa_sim_core::{
-    AeroGeometry, AeroPanel, AtmosphereConfig, ChamberMaterial, ChamberSpec, CollisionAxis,
-    CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine,
-    ControlSurfaceDefinition, CoolingMode, EngineCycle, EngineMount, LiquidEngineSpec,
+    AeroGeometry, AeroPanel, AirCycle, AirbreathingSpec, AtmosphereConfig, ChamberMaterial,
+    ChamberSpec, CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionPart,
+    CollisionShape, CompiledEngine, CompiledJet, ControlSurfaceDefinition, CoolingMode,
+    EngineCycle, EngineMount, EstocSpec, IntakeKind, JetFuel, JetMount, LiquidEngineSpec,
     NozzleContour, NtrFluid, NuclearThermalSpec, Propellant, PropulsionSystemSpec,
     RigidBodyProperties, SolidMotorSpec, SystemMount, TankMount, TankShape, TankSpec,
-    VehicleDefinition, analyze_altitude,
+    VehicleDefinition, analyze_airbreathing, analyze_altitude,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -60,6 +61,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             mount.system.chambers.len(),
             mount.system.total_thrust_vac_n / 1000.0,
             mount.system.dry_mass_kg,
+        );
+    }
+    for mount in &vehicle.jets {
+        let (kind, static_thrust_n) = match &mount.engine {
+            CompiledJet::Air(engine) => ("jet", engine.design_static_thrust_n),
+            CompiledJet::Estoc(engine) => (
+                "estoc",
+                engine.air.design_static_thrust_n + engine.rocket_thrust_vac_n,
+            ),
+        };
+        println!(
+            "jet {} ({kind}): static thrust {:.1} kN, dry {:.1} kg",
+            mount.name,
+            static_thrust_n / 1000.0,
+            mount.engine.dry_mass_kg(),
         );
     }
     if let Some(output) = options.output {
@@ -115,6 +131,23 @@ fn run_analyzer(
                 )?,
             }));
         }
+        for mount in &vehicle.jets {
+            let air = match &mount.engine {
+                CompiledJet::Air(engine) => engine,
+                CompiledJet::Estoc(engine) => &engine.air,
+            };
+            rows.push(serde_json::json!({
+                "jet": mount.name,
+                "points": analyze_airbreathing(
+                    air,
+                    &atmosphere,
+                    &altitudes,
+                    &[0.0, 1.0, 2.0, 3.0],
+                    throttle,
+                    0.232,
+                )?,
+            }));
+        }
         println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(());
     }
@@ -167,6 +200,49 @@ fn run_analyzer(
             );
         }
     }
+    for mount in &vehicle.jets {
+        let air = match &mount.engine {
+            CompiledJet::Air(engine) => engine,
+            CompiledJet::Estoc(engine) => &engine.air,
+        };
+        println!(
+            "--- analyzer: {} (throttle {throttle}, air path)",
+            mount.name
+        );
+        println!(
+            "{:>10} {:>6} {:>10} {:>12} {:>10} {:>5}",
+            "alt_m", "mach", "p_amb", "thrust_kN", "isp_s", "flags"
+        );
+        let grid = analyze_airbreathing(
+            air,
+            &atmosphere,
+            &altitudes,
+            &[0.0, 1.0, 2.0, 3.0],
+            throttle,
+            0.232,
+        )?;
+        for point in &grid {
+            let mut flags = String::new();
+            if point.air_limited {
+                flags.push('A');
+            }
+            if point.oxygen_limited {
+                flags.push('O');
+            }
+            if point.separation_risk {
+                flags.push('S');
+            }
+            println!(
+                "{:>10.0} {:>6.1} {:>10.0} {:>12.1} {:>10.0} {:>5}",
+                point.altitude_m,
+                point.mach,
+                point.ambient_pa,
+                point.thrust_n / 1000.0,
+                point.isp_s,
+                flags,
+            );
+        }
+    }
     Ok(())
 }
 
@@ -194,6 +270,10 @@ struct VehicleAsset {
     /// Multi-chamber propulsion systems (shared feed, per-chamber nozzles).
     #[serde(default)]
     systems: Vec<SystemAsset>,
+    /// Air-breathing jets and ESTOCs (mass aggregates at bake; thrust
+    /// needs a flight condition at query time).
+    #[serde(default)]
+    jets: Vec<JetAsset>,
 }
 
 impl VehicleAsset {
@@ -271,10 +351,17 @@ impl VehicleAsset {
             .with_collision_geometry(collision_geometry)?
             .with_engines(mounts)?
             .with_tanks(tank_mounts)?
-            .with_systems(system_mounts)?;
+            .with_systems(system_mounts)?
+            .with_jets(
+                self.jets
+                    .into_iter()
+                    .map(JetAsset::bake)
+                    .collect::<Result<Vec<_>, _>>()?,
+            )?;
         vehicle.bake_engine_masses()?;
         vehicle.bake_tank_masses()?;
         vehicle.bake_system_masses()?;
+        vehicle.bake_jet_masses()?;
         Ok(vehicle)
     }
 }
@@ -829,6 +916,182 @@ impl SystemAsset {
     }
 }
 
+/// One air-breathing jet or ESTOC from the source vehicle asset.
+///
+/// Example TOML (turbojet):
+///
+/// ```text
+/// [[jets]]
+/// name = "cruise-jet"
+/// kind = "jet"
+/// mount_position_body_m = [2.0, 0.0, 0.0]
+/// thrust_axis_body = [1.0, 0.0, 0.0]
+/// fuel = "kerosene"
+/// intake_area_m2 = 0.5
+/// intake = "pitot"
+/// compressor_ratio = 8.0
+/// turbine_inlet_temp_k = 1400.0
+/// material = "nickel-superalloy"
+/// ```
+///
+/// Example TOML (ESTOC adds the rocket block):
+///
+/// ```text
+/// [[jets]]
+/// name = "estoc-1"
+/// kind = "estoc"
+/// mount_position_body_m = [0.0, 0.0, 0.0]
+/// thrust_axis_body = [1.0, 0.0, 0.0]
+/// fuel = "kerosene"
+/// intake_area_m2 = 0.9
+/// intake = "pitot"
+/// compressor_ratio = 12.0
+/// turbine_inlet_temp_k = 1500.0
+/// material = "nickel-superalloy"
+/// rocket_chamber_pressure_mpa = 7.0
+/// rocket_throat_radius_m = 0.09
+/// ```
+#[derive(Debug, Deserialize)]
+struct JetAsset {
+    name: String,
+    kind: JetKind,
+    #[serde(default = "mount_position_default")]
+    mount_position_body_m: [f64; 3],
+    #[serde(default = "thrust_axis_default")]
+    thrust_axis_body: [f64; 3],
+    #[serde(default)]
+    gimbal_range_rad: f64,
+    fuel: JetFuel,
+    intake_area_m2: f64,
+    #[serde(default = "pitot_intake")]
+    intake: IntakeKind,
+    #[serde(default = "default_compressor_ratio")]
+    compressor_ratio: f64,
+    #[serde(default)]
+    bypass_ratio: f64,
+    #[serde(default = "default_fan_ratio")]
+    fan_pressure_ratio: f64,
+    turbine_inlet_temp_k: f64,
+    #[serde(default)]
+    afterburner: bool,
+    #[serde(default)]
+    reheat_temp_k: f64,
+    material: MaterialAsset,
+    #[serde(default = "default_spool_tau")]
+    spool_tau_s: f64,
+    // ESTOC-only rocket block.
+    #[serde(default)]
+    rocket_chamber_pressure_mpa: Option<f64>,
+    #[serde(default)]
+    rocket_throat_radius_m: Option<f64>,
+    #[serde(default)]
+    oxidizer_fuel_ratio: Option<f64>,
+    #[serde(default)]
+    switch_mach_hi: Option<f64>,
+    #[serde(default)]
+    switch_mach_lo: Option<f64>,
+    #[serde(default)]
+    transition_tau_s: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum JetKind {
+    Jet,
+    Estoc,
+}
+
+fn pitot_intake() -> IntakeKind {
+    IntakeKind::Pitot
+}
+
+fn default_compressor_ratio() -> f64 {
+    8.0
+}
+
+fn default_fan_ratio() -> f64 {
+    1.6
+}
+
+fn default_spool_tau() -> f64 {
+    5.0
+}
+
+impl JetAsset {
+    fn air_spec(&self) -> Result<AirbreathingSpec, Box<dyn Error>> {
+        Ok(AirbreathingSpec {
+            name: self.name.clone(),
+            cycle: if self.bypass_ratio > 0.0 {
+                AirCycle::Turbofan
+            } else {
+                AirCycle::Turbojet
+            },
+            fuel: self.fuel,
+            intake_area_m2: self.intake_area_m2,
+            intake: self.intake,
+            compressor_ratio: self.compressor_ratio,
+            bypass_ratio: self.bypass_ratio,
+            fan_pressure_ratio: self.fan_pressure_ratio,
+            turbine_inlet_temp_k: self.turbine_inlet_temp_k,
+            afterburner: self.afterburner,
+            reheat_temp_k: self.reheat_temp_k,
+            turbine_material: self.material()?,
+            spool_tau_s: self.spool_tau_s,
+        })
+    }
+
+    fn material(&self) -> Result<ChamberMaterial, Box<dyn Error>> {
+        match &self.material {
+            MaterialAsset::Custom(material) => Ok(*material),
+            MaterialAsset::Preset(name) => match name.as_str() {
+                "regen-alloy" => Ok(ChamberMaterial::regen_alloy()),
+                "nickel-superalloy" => Ok(ChamberMaterial::nickel_superalloy()),
+                "radiative-niobium" => Ok(ChamberMaterial::radiative_niobium()),
+                "ablative" => Ok(ChamberMaterial::ablative()),
+                unknown => Err(format!("unknown material preset {unknown}").into()),
+            },
+        }
+    }
+
+    fn bake(self) -> Result<JetMount, Box<dyn Error>> {
+        let engine = match self.kind {
+            JetKind::Jet => CompiledJet::Air(self.air_spec()?.compile()?),
+            JetKind::Estoc => {
+                let spec = EstocSpec {
+                    name: self.name.clone(),
+                    air: self.air_spec()?,
+                    rocket_chamber_pressure_pa: required_mpa(
+                        self.rocket_chamber_pressure_mpa,
+                        "rocket_chamber_pressure_mpa",
+                    )?,
+                    rocket_throat_radius_m: self
+                        .rocket_throat_radius_m
+                        .ok_or("estoc needs rocket_throat_radius_m")?,
+                    oxidizer_fuel_ratio: self.oxidizer_fuel_ratio,
+                    switch_mach_hi: self.switch_mach_hi,
+                    switch_mach_lo: self.switch_mach_lo,
+                    transition_tau_s: self.transition_tau_s,
+                };
+                let compiled = spec.compile()?;
+                println!(
+                    "jet {} (estoc): rocket {:.0} kN vac, shared expansion {:.1}x",
+                    self.name,
+                    compiled.rocket_thrust_vac_n / 1000.0,
+                    compiled.rocket_expansion_ratio,
+                );
+                CompiledJet::Estoc(Box::new(compiled))
+            }
+        };
+        Ok(JetMount {
+            name: self.name,
+            engine,
+            position_body_m: self.mount_position_body_m,
+            thrust_axis_body: self.thrust_axis_body,
+            gimbal_range_rad: self.gimbal_range_rad,
+        })
+    }
+}
+
 /// One body-local collision primitive from the source vehicle asset.
 ///
 /// Example TOML:
@@ -1320,5 +1583,59 @@ gimbal_range_rad = 0.09
         assert!((force.x - expected).abs() / expected < 1e-12);
         assert!(moment.y.abs() > 0.0, "differential must couple");
         assert!(vehicle.system_wrench_body_n(0, &[1.0], 0.0).is_err());
+    }
+
+    #[test]
+    fn jet_and_estoc_assets_bake() {
+        // Turbojet plus an ESTOC sharing the airframe: jet mass lands in
+        // baked mass, static thrust is axial, ESTOC rocket branch compiles.
+        let doc = r#"
+name = "jet-test"
+mass_kg = 3000.0
+inertia_body_kg_m2 = [[8000.0, 0.0, 0.0], [0.0, 8000.0, 0.0], [0.0, 0.0, 4000.0]]
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 4.0
+chord_m = 1.0
+[[jets]]
+name = "cruise-jet"
+kind = "jet"
+mount_position_body_m = [1.0, -1.0, 0.0]
+thrust_axis_body = [1.0, 0.0, 0.0]
+fuel = "kerosene"
+intake_area_m2 = 0.5
+intake = "pitot"
+compressor_ratio = 8.0
+turbine_inlet_temp_k = 1400.0
+material = "nickel-superalloy"
+[[jets]]
+name = "estoc-1"
+kind = "estoc"
+mount_position_body_m = [0.0, 0.0, 0.0]
+thrust_axis_body = [1.0, 0.0, 0.0]
+fuel = "kerosene"
+intake_area_m2 = 0.9
+intake = "pitot"
+compressor_ratio = 12.0
+turbine_inlet_temp_k = 1500.0
+material = "nickel-superalloy"
+rocket_chamber_pressure_mpa = 7.0
+rocket_throat_radius_m = 0.09
+"#;
+        let asset: VehicleAsset = toml::from_str(doc).expect("TOML parses");
+        let vehicle = asset.bake().expect("jets bake");
+        assert_eq!(vehicle.jets.len(), 2);
+        let jets_mass: f64 = vehicle
+            .jets
+            .iter()
+            .map(|mount| mount.engine.dry_mass_kg())
+            .sum();
+        assert!(
+            (vehicle.mass_properties.mass_kg - 3000.0 - jets_mass).abs() < 1e-6,
+            "baked mass must equal structure plus jets"
+        );
+        assert!(vehicle.jets[1].engine.dry_mass_kg() > vehicle.jets[0].engine.dry_mass_kg());
     }
 }

@@ -23,10 +23,13 @@
 //! gimbal authority). Every public name from the former single-file module
 //! re-exports here unchanged.
 
+mod air;
 mod analyze;
 mod cycle;
 mod engine;
 mod error;
+mod estoc;
+mod jet;
 mod liquid;
 mod material;
 mod mount;
@@ -38,10 +41,21 @@ mod solid;
 mod spool;
 mod system;
 
+pub use air::{
+    AIR_CP_J_KG_K, AIR_GAMMA, AirAltitudePoint, AirCycle, AirOperatingPoint, AirbreathingSpec,
+    CompiledAirbreather, EARTH_OXYGEN_FRACTION, FlightCondition, IntakeKind, JetFuel,
+    analyze_airbreathing, flight_condition,
+};
 pub use analyze::{AltitudePoint, analyze_altitude};
 pub use cycle::{CycleLimits, EngineCycle};
 pub use engine::{CompiledEngine, EngineOperatingPoint, EnginePlumeState};
 pub use error::PropulsionError;
+pub use estoc::{
+    CompiledEstoc, ESTOC_DEFAULT_SWITCH_MACH_HI, ESTOC_DEFAULT_SWITCH_MACH_LO,
+    ESTOC_DEFAULT_TRANSITION_TAU_S, ESTOC_MAX_ROCKET_PC_PA, ESTOC_REINFORCEMENT_FRACTION,
+    EstocMode, EstocPoint, EstocSpec,
+};
+pub use jet::{CompiledJet, EstocCommand, JetMount};
 pub use liquid::{CompiledLiquid, LiquidEngineSpec};
 pub use material::{ChamberMaterial, CoolingMode};
 pub use mount::{EngineMount, GimbalEffector};

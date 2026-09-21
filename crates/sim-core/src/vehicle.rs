@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AeroConfig, AeroError, AeroGeometry, AeroPanel, CollisionAxis, CollisionError,
     CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine,
-    EngineMount, FlightError, PropulsionError, RigidBodyProperties, SystemMount, TankMount,
+    EngineMount, EstocCommand, FlightCondition, FlightError, JetMount, PropulsionError,
+    RigidBodyProperties, SystemMount, TankMount,
 };
 
 /// One user-configurable aerodynamic control channel.
@@ -115,6 +116,10 @@ pub struct VehicleDefinition {
     /// own stations; mass aggregates per chamber at bake).
     #[serde(default)]
     pub systems: Vec<SystemMount>,
+    /// Installed air-breathing jets (mass aggregates at bake; thrust
+    /// needs a flight condition at query time).
+    #[serde(default)]
+    pub jets: Vec<JetMount>,
 }
 
 /// Physical starter data for the first powered flight profile.
@@ -315,6 +320,7 @@ impl VehicleDefinition {
             engines: Vec::new(),
             tanks: Vec::new(),
             systems: Vec::new(),
+            jets: Vec::new(),
         };
         definition.validate()?;
         Ok(definition)
@@ -357,6 +363,9 @@ impl VehicleDefinition {
             mount.validate().map_err(VehicleError::Propulsion)?;
         }
         for mount in &self.systems {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        for mount in &self.jets {
             mount.validate().map_err(VehicleError::Propulsion)?;
         }
 
@@ -477,6 +486,33 @@ impl VehicleDefinition {
         Ok(())
     }
 
+    /// Attach installed jets (baker path).
+    pub fn with_jets(mut self, jets: Vec<JetMount>) -> Result<Self, VehicleError> {
+        for mount in &jets {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        self.jets = jets;
+        Ok(self)
+    }
+
+    /// Aggregate installed jet masses as point masses at their stations.
+    /// Called after [`VehicleDefinition::bake_system_masses`].
+    pub fn bake_jet_masses(&mut self) -> Result<(), VehicleError> {
+        let mut mass_kg = self.mass_properties.mass_kg;
+        let mut inertia = self.mass_properties.inertia_body_kg_m2;
+        for mount in &self.jets {
+            let jet_mass_kg = mount.engine.dry_mass_kg();
+            let position = DVec3::from_array(mount.position_body_m);
+            mass_kg += jet_mass_kg;
+            inertia += jet_mass_kg
+                * (glam::DMat3::IDENTITY * position.length_squared()
+                    - outer_product(position, position));
+        }
+        self.mass_properties =
+            RigidBodyProperties::new(mass_kg, inertia).map_err(VehicleError::MassProperties)?;
+        Ok(())
+    }
+
     /// Thrust vector of one mount in body axes (N).
     pub fn engine_thrust_body_n(
         &self,
@@ -546,6 +582,54 @@ impl VehicleDefinition {
             .system
             .wrench_body_n(throttles, ambient_pa)
             .map_err(VehicleError::Propulsion)
+    }
+
+    /// Thrust vector of one jet in body axes (N) at throttle, condition,
+    /// and ESTOC command.
+    pub fn jet_thrust_body_n(
+        &self,
+        index: usize,
+        throttle: f64,
+        condition: &FlightCondition,
+        estoc: &EstocCommand,
+    ) -> Result<DVec3, VehicleError> {
+        let mount = self
+            .jets
+            .get(index)
+            .ok_or_else(|| VehicleError::InvalidVehicle(format!("no jet at index {index}")))?;
+        mount
+            .thrust_vector_body_n(throttle, condition, estoc)
+            .map(DVec3::from_array)
+            .map_err(VehicleError::Propulsion)
+    }
+
+    /// Force/moment wrench of all jets at per-mount (throttle, ESTOC
+    /// command) pairs: engine-out and asymmetric-reheat steering fall out
+    /// of the stations for free.
+    pub fn jets_wrench_body_n(
+        &self,
+        commands: &[(f64, EstocCommand)],
+        condition: &FlightCondition,
+    ) -> Result<(DVec3, DVec3), VehicleError> {
+        if commands.len() != self.jets.len() {
+            return Err(VehicleError::InvalidVehicle(format!(
+                "expected {} jet commands, got {}",
+                self.jets.len(),
+                commands.len()
+            )));
+        }
+        let mut force = DVec3::ZERO;
+        let mut moment = DVec3::ZERO;
+        for (mount, (throttle, estoc)) in self.jets.iter().zip(commands) {
+            let thrust = DVec3::from_array(
+                mount
+                    .thrust_vector_body_n(*throttle, condition, estoc)
+                    .map_err(VehicleError::Propulsion)?,
+            );
+            force += thrust;
+            moment += DVec3::from_array(mount.position_body_m).cross(thrust);
+        }
+        Ok((force, moment))
     }
 
     /// Force/moment wrench in body axes at per-mount commands: force is the

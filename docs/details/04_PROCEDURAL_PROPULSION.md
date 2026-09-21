@@ -3,9 +3,11 @@
 Status: design baseline with a shipped backend (`thessa-sim-core::propulsion`
 + `feed`): liquid chemical rockets + solid motors, isentropic nozzle core
 with mixture sensitivity, cycle/feed bounds, geometry-derived mass, spool
-runtime, altitude analyzer, vehicle mounts, tanks and feed lines, and the
-plume handoff. Star/finocyl grain burnback, tank depletion wiring, the
-flight-loop allocator, and the editor UI are still TBD (see section 18).
+runtime, altitude analyzer, vehicle mounts, tanks and feed lines, RCS and
+nuclear thermal models, multi-chamber systems, air-breathing jets
+(turbojet/turbofan/ramjet), and the ESTOC combined-cycle engine. Star/finocyl
+grain burnback, tank depletion wiring, the flight-loop allocator, shaft-power
+propulsion, scramjets, and the editor UI are still TBD (see section 18).
 
 ## 1. Design goal
 
@@ -385,7 +387,10 @@ Performance should depend on inlet conditions, flight Mach number, geometry/mode
 
 ## 12. Combined-cycle engines
 
-RAPIER/SABRE-class or other combined-cycle propulsion should be represented as multi-mode graphs with shared hardware and alternate flow paths, not as a hard-coded `air mode / rocket mode` engine primitive.
+ESTOC-class combined-cycle propulsion (our implementation of the
+switchable air/rocket niche) is represented as multi-mode graphs with
+shared hardware and alternate flow paths, not as a hard-coded `air mode
+/ rocket mode` engine primitive.
 
 Conceptually:
 
@@ -496,7 +501,7 @@ Examples may include:
 - piston propeller engine;
 - electric propeller drive;
 - ramjet;
-- combined-cycle RAPIER/SABRE-like engine;
+- ESTOC combined-cycle engine;
 - Hall thruster;
 - ion thruster;
 - MPD/plasma thruster;
@@ -663,11 +668,55 @@ Shipped in `crates/sim-core/src/propulsion.rs` (MIT engine crate, no Bevy/Tokio/
   thrust, per-system differential wrench; baker `[[systems]]` with
   nested `[[systems.chambers]]` plus the pressure-fed feed check.
 
-### 18.5 Still deferred
+### 18.5 Air-breathing jets (v5)
+
+- `propulsion::air`: turbojet, turbofan, and ramjet from one Brayton
+  core. Juno-style sliders (intake area/recovery, compression and bypass
+  ratios, turbine temperature, fuel, afterburner, nozzle) plus the cycle
+  internals Juno hides: polytropic efficiencies, turbine cooling bleed
+  with rotor-bypass work split and mixing loss, customer bleed,
+  part-power TIT/pressure/flow schedules, and oxygen gating for
+  non-Earth atmospheres (Juno 1.4 scales jets with O2 the same way).
+- Turbine cycles run convergent nozzles; ramjets run fixed
+  convergent-divergent geometry adapted at the design point (Mach 2 sea
+  level) with a Summerfield separation check and a separated fallback to
+  convergent-at-throat behavior.
+- Fixed-geometry matching: the nozzle sets swallowed flow — demand
+  beyond choked capacity rescales the whole engine consistently instead
+  of booking fuel for unswallowed air (this exact inconsistency was
+  caught by the energy pin during development).
+- Validation: Olympus-593-class anchor bands (thrust, Isp, mass order,
+  design flow) with documented input uncertainty and no fitted
+  multipliers; ramjet static-zero and Mach-rise pins; vacuum/anoxic
+  flameout; fan-vs-jet efficiency ordering; reheat tradeoff; full first-
+  law energy pins (useful + exhaust KE vs fuel + inlet KE); hypersonic
+  drive-limit flameout; size-scaling and refusal tests; Mach × altitude
+  analyzer grid (the Juno Mach-table contract, computed from the cycle).
+
+### 18.6 ESTOC combined-cycle engine (v5)
+
+- `propulsion::estoc`: air-breathing turbojet path plus closed-cycle
+  rocket path sharing intake ducting, chamber, and nozzle hardware under
+  our own name (the switchable air/rocket gameplay niche, no borrowed
+  trademarks). Strict mode discipline: manual wins, vacuum always
+  rockets, Mach band with hysteresis, dead air path (stalled drive,
+  anoxic air) falls back to rocket — never blended.
+- Shared convergent nozzle caps rocket expansion (documented): rocket
+  mode buys thrust where air fails (vacuum Isp band 200-350 s), not
+  orbital efficiency. Rocket chamber from LOX-pair thermo at reference
+  mixture, OF-split oxidizer bookkeeping, pump-feed cap, throat-clearance
+  validation, reinforcement + feed mass only (nozzle books once).
+- Mode transitions smooth thrust first-order over the transition tau
+  (threaded prev/mode state; fresh-start convention for the editor);
+  per-nozzle plume states reuse the jet handoff; baker `[[jets]]` kinds
+  `jet`/`estoc` with analyzer Mach grids and JSON rows.
+
+### 18.7 Still deferred
 
 Star/finocyl grain geometry (needs numerical perimeter burnback, not a
 tweak of the port solver), tank depletion wiring into the flight loop
 (the queries exist; the loop still flies baked mass), per-engine
 allocation in the flight loop (authority pairs exist; the allocator
-still sees one lever), and the editor UI itself (the CLI/JSON analyzer
+still sees one lever), shaft-power propulsion (turboprop/piston/electric
+fans), scramjets, and the editor UI itself (the CLI/JSON analyzer
 is its backend contract).

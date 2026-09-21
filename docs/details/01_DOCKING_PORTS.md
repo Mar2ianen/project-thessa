@@ -171,6 +171,9 @@ The first executable D1 slice is implemented at the CAD/runtime boundary:
   explicit structural constraint owns the interface;
 - `CollisionWorld::attach_revolute_joint` is the mechanism seam for the six
   provisional soft-capture petals in the D1 asset;
+- the current `SoftCapture` transition is explicitly a logical MVP gate; the
+  petals/revolute bridge is available for mechanism integration, but latch
+  damping and capture stiffness are not yet calibrated physical behavior;
 - solver gravity remains zero and craft mass/inertia remain authoritative
   `RigidBodyProperties`, consistent with the Rapier integration contract;
 - the collision regression fixture creates two D1 craft, completes the full

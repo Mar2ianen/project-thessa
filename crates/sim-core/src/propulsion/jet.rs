@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use super::GimbalEffector;
 use super::mount::gimbal_pair;
 use super::{
-    CompiledAirbreather, CompiledEstoc, EnginePlumeState, EstocMode, FlightCondition,
-    PropulsionError,
+    CompiledAirbreather, CompiledEstoc, EnginePlumeState, EstocMode, EstocPoint, EstocTransient,
+    FlightCondition, PropulsionError,
 };
 
 /// One installed jet of either family.
@@ -37,12 +37,21 @@ impl CompiledJet {
         }
     }
 
-    /// Spool time constant (s): compressor spool, or ESTOC transition lag
-    /// for mode changes (air-path spool inside air mode).
+    /// Spool time constant (s): the air-path compressor spool in both
+    /// variants. Mode-transition lag is a separate dynamic (see
+    /// [`CompiledJet::transition_tau_s`]).
     pub fn spool_tau_s(&self) -> f64 {
         match self {
             Self::Air(engine) => engine.spool_tau_s,
-            Self::Estoc(engine) => engine.transition_tau_s,
+            Self::Estoc(engine) => engine.air.spool_tau_s,
+        }
+    }
+
+    /// ESTOC mode-transition lag (s); `None` for plain air-breathers.
+    pub fn transition_tau_s(&self) -> Option<f64> {
+        match self {
+            Self::Air(_) => None,
+            Self::Estoc(engine) => Some(engine.transition_tau_s),
         }
     }
 }
@@ -54,7 +63,8 @@ impl CompiledJet {
 pub struct EstocCommand {
     pub manual: Option<EstocMode>,
     pub last_mode: EstocMode,
-    pub prev_thrust_n: f64,
+    /// Previous transition snapshot; `None` evaluates the fresh target.
+    pub prev: Option<EstocTransient>,
     pub dt_s: f64,
 }
 
@@ -64,7 +74,7 @@ impl EstocCommand {
         Self {
             manual: None,
             last_mode: EstocMode::Air,
-            prev_thrust_n: 0.0,
+            prev: None,
             dt_s: f64::INFINITY,
         }
     }
@@ -126,23 +136,56 @@ impl JetMount {
         condition: &FlightCondition,
         estoc: &EstocCommand,
     ) -> Result<f64, PropulsionError> {
+        Ok(self.estoc_point(throttle, condition, estoc)?.0.thrust_n)
+    }
+
+    /// Full ESTOC point plus the updated transition snapshot (stateful
+    /// callers thread both forward; `thrust_n`/`plume_state` discard the
+    /// snapshot for one-shot calls).
+    pub fn estoc_point(
+        &self,
+        throttle: f64,
+        condition: &FlightCondition,
+        estoc: &EstocCommand,
+    ) -> Result<(EstocPoint, EstocTransient), PropulsionError> {
         self.validate()?;
         match &self.engine {
-            CompiledJet::Air(engine) => Ok(engine
-                .operating_point(condition, throttle)?
-                .thrust_n
-                .max(0.0)),
-            CompiledJet::Estoc(engine) => Ok(engine
-                .operating_point(
-                    condition,
-                    throttle,
-                    estoc.manual,
-                    estoc.last_mode,
-                    estoc.prev_thrust_n,
-                    estoc.dt_s,
-                )?
-                .thrust_n
-                .max(0.0)),
+            CompiledJet::Air(engine) => {
+                let point = engine.operating_point(condition, throttle)?;
+                let snapshot = EstocTransient {
+                    thrust_n: point.thrust_n.max(0.0),
+                    fuel_flow_kg_s: point.fuel_flow_kg_s,
+                    oxidizer_flow_kg_s: 0.0,
+                    air_flow_kg_s: point.air_flow_kg_s,
+                    exhaust_temp_k: point.exhaust_temp_k,
+                    exhaust_velocity_mps: point.exhaust_velocity_mps,
+                    exit_pressure_pa: point.exit_pressure_pa,
+                    exit_mach: point.exit_mach,
+                };
+                Ok((
+                    EstocPoint {
+                        mode: EstocMode::Air,
+                        thrust_n: snapshot.thrust_n,
+                        fuel_flow_kg_s: snapshot.fuel_flow_kg_s,
+                        oxidizer_flow_kg_s: 0.0,
+                        air_flow_kg_s: snapshot.air_flow_kg_s,
+                        isp_total_s: point.isp_s,
+                        exhaust_temp_k: snapshot.exhaust_temp_k,
+                        exhaust_velocity_mps: snapshot.exhaust_velocity_mps,
+                        exit_pressure_pa: snapshot.exit_pressure_pa,
+                        exit_mach: snapshot.exit_mach,
+                    },
+                    snapshot,
+                ))
+            }
+            CompiledJet::Estoc(engine) => engine.operating_point(
+                condition,
+                throttle,
+                estoc.manual,
+                estoc.last_mode,
+                estoc.prev.as_ref(),
+                estoc.dt_s,
+            ),
         }
     }
 
@@ -184,12 +227,12 @@ impl JetMount {
                 })
             }
             CompiledJet::Estoc(engine) => {
-                let point = engine.operating_point(
+                let (point, _) = engine.operating_point(
                     condition,
                     throttle,
                     estoc.manual,
                     estoc.last_mode,
-                    estoc.prev_thrust_n,
+                    estoc.prev.as_ref(),
                     estoc.dt_s,
                 )?;
                 Ok(EnginePlumeState {

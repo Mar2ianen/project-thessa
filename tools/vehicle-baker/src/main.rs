@@ -84,11 +84,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("wrote: {}", output.display());
     }
     if options.analyze {
+        if !(0.0..=1.0).contains(&options.oxygen_fraction) || !options.oxygen_fraction.is_finite() {
+            return Err("--oxygen needs a mass fraction in [0, 1]".into());
+        }
         run_analyzer(
             &vehicle,
             options.throttle,
             options.burn_time_s,
             options.analyze_json,
+            options.oxygen_fraction,
         )?;
     }
     Ok(())
@@ -103,6 +107,7 @@ fn run_analyzer(
     throttle: f64,
     burn_time_s: f64,
     as_json: bool,
+    oxygen_fraction: f64,
 ) -> Result<(), Box<dyn Error>> {
     let atmosphere = AtmosphereConfig::default();
     let altitudes: Vec<f64> = (0..=10).map(|k| k as f64 * 8000.0).collect();
@@ -144,7 +149,7 @@ fn run_analyzer(
                     &altitudes,
                     &[0.0, 1.0, 2.0, 3.0],
                     throttle,
-                    0.232,
+                    oxygen_fraction,
                 )?,
             }));
         }
@@ -219,7 +224,7 @@ fn run_analyzer(
             &altitudes,
             &[0.0, 1.0, 2.0, 3.0],
             throttle,
-            0.232,
+            oxygen_fraction,
         )?;
         for point in &grid {
             let mut flags = String::new();
@@ -1219,6 +1224,9 @@ struct Options {
     throttle: f64,
     burn_time_s: f64,
     analyze_json: bool,
+    /// Oxygen mass fraction for the jet analyzer (Earth 0.232 default;
+    /// Thessa runs ~0.274 — pass it explicitly, never assume).
+    oxygen_fraction: f64,
 }
 
 impl Options {
@@ -1230,6 +1238,7 @@ impl Options {
         let mut throttle = 1.0;
         let mut burn_time_s = 0.0;
         let mut analyze_json = false;
+        let mut oxygen_fraction = 0.232;
         let mut arguments = arguments.peekable();
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
@@ -1252,6 +1261,11 @@ impl Options {
                         .parse()
                         .map_err(|_| "--burn-time needs seconds >= 0")?;
                 }
+                "--oxygen" => {
+                    oxygen_fraction = required_value(&mut arguments, "--oxygen")?
+                        .parse()
+                        .map_err(|_| "--oxygen needs a mass fraction in [0, 1]")?;
+                }
                 "--help" | "-h" => help = true,
                 unknown => return Err(format!("unknown argument {unknown}; use --help").into()),
             }
@@ -1264,6 +1278,7 @@ impl Options {
             throttle,
             burn_time_s,
             analyze_json,
+            oxygen_fraction,
         })
     }
 }
@@ -1279,8 +1294,9 @@ fn required_value(
 
 fn print_help() {
     println!(
-        "Usage: thessa-vehicle-baker [--input data/vehicles/example_aircraft.toml] [--output data/vehicles/example_aircraft.baked.json] [--analyze [--throttle 1.0] [--burn-time 0.0] [--analyze-json]]"
+        "Usage: thessa-vehicle-baker [--input data/vehicles/example_aircraft.toml] [--output data/vehicles/example_aircraft.baked.json] [--analyze [--throttle 1.0] [--burn-time 0.0] [--analyze-json] [--oxygen 0.232]]"
     );
+    println!("--oxygen sets the jet analyzer O2 mass fraction (Earth 0.232, Thessa ~0.274).");
 }
 
 #[cfg(test)]

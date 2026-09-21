@@ -70,6 +70,10 @@ pub const INTAKE_DESIGN_CAPTURE_MACH: f64 = 0.5;
 pub const REHEAT_TEMP_CAP_K: f64 = 2200.0;
 /// Oxygen mass fraction of Earth air (reference point for O2 gating).
 pub const EARTH_OXYGEN_FRACTION: f64 = 0.232;
+/// Oxygen mass fraction of Thessa air: 25.0% molar converts to ~27.4% by
+/// mass for the current bulk mixture (world atlas, provisional until the
+/// biosphere canon locks; recompute if the mixture changes).
+pub const THESSA_OXYGEN_MASS_FRACTION: f64 = 0.274;
 
 /// Compressor mass fit (kg per (kg/s · ratio), Olympus-anchored order fit).
 pub const MASS_FIT_COMPRESSOR: f64 = 0.42;
@@ -333,11 +337,8 @@ impl AirbreathingSpec {
                     self.reheat_temp_k, REHEAT_TEMP_CAP_K
                 )));
             }
-            if self.reheat_temp_k < self.turbine_inlet_temp_k {
-                return Err(PropulsionError::InvalidSpec(
-                    "reheat must run hotter than the turbine exit".into(),
-                ));
-            }
+            // The reheat-vs-turbine-exit check needs the solved design
+            // state, so it lives in `compile`, not here.
         }
         Ok(())
     }
@@ -492,9 +493,10 @@ fn run_cycle(
     };
     let o2_avail_kg_s =
         mdot_core_kg_s * (1.0 - bleed - CUSTOMER_BLEED_FRACTION) * condition.oxygen_fraction;
+    let combustor_air_kg_s = mdot_core_kg_s * (1.0 - bleed - CUSTOMER_BLEED_FRACTION);
     let f_for_tit = AIR_CP_J_KG_K * (turbine_temp_k - t_comp_exit) / (COMBUSTOR_EFFICIENCY * lhv);
-    let f_o2_cap = if mdot_core_kg_s > 0.0 {
-        o2_avail_kg_s / (mdot_core_kg_s * (1.0 - bleed - CUSTOMER_BLEED_FRACTION) * o2_per_fuel)
+    let f_o2_cap = if combustor_air_kg_s > 0.0 {
+        o2_avail_kg_s / (combustor_air_kg_s * o2_per_fuel)
     } else {
         0.0
     };
@@ -562,20 +564,30 @@ fn run_cycle(
     let bleed_flow_ratio = bleed / rotor_flow_ratio.max(1e-12);
     let t_turb_exit = t_rotor_exit * (1.0 - bleed_flow_ratio) + t_comp_exit * bleed_flow_ratio;
     let p_turb_exit = p_rotor_exit * (1.0 - TURBINE_MIXING_DP_FRACTION);
-    // Afterburner with its own O2 cap on remaining oxygen.
+    // Afterburner with an explicit species O2 budget: combustor air
+    // arrives with its oxygen minus what the core burned; cooling bleed
+    // rejoins carrying its oxygen with it (burnable here); customer bleed
+    // left overboard and never returns. All terms are mass flows, one
+    // basis throughout.
     let mut fuel_ab_flow_kg_s = 0.0;
     let mut t_nozzle = t_turb_exit;
     let mut p_nozzle = p_turb_exit;
     let mut reheat_limited = false;
     if spec.afterburner && mdot_core_kg_s > 0.0 {
-        let o2_used_core = fuel_air * (1.0 - bleed - CUSTOMER_BLEED_FRACTION) * o2_per_fuel;
-        let o2_remaining = (condition.oxygen_fraction - o2_used_core).max(0.0);
+        let o2_used_core_kg_s = fuel_flow_kg_s * o2_per_fuel;
+        let o2_cooling_kg_s = mdot_core_kg_s * bleed * condition.oxygen_fraction;
+        let o2_for_ab_kg_s = (o2_avail_kg_s - o2_used_core_kg_s + o2_cooling_kg_s).max(0.0);
+        let ab_stream_kg_s = mdot_core_kg_s * (rotor_flow_ratio + bleed) + fuel_flow_kg_s;
         let f_ab_want =
             cp_b * (spec.reheat_temp_k - t_turb_exit).max(0.0) / (COMBUSTOR_EFFICIENCY * lhv);
-        let f_ab_cap = o2_remaining / o2_per_fuel;
+        let f_ab_cap = if ab_stream_kg_s > 0.0 {
+            o2_for_ab_kg_s / (ab_stream_kg_s * o2_per_fuel)
+        } else {
+            0.0
+        };
         let f_ab = f_ab_want.min(f_ab_cap);
         reheat_limited = f_ab_want > f_ab_cap && f_ab_want > 0.0;
-        fuel_ab_flow_kg_s = f_ab * mdot_core_kg_s * (rotor_flow_ratio + bleed);
+        fuel_ab_flow_kg_s = f_ab * ab_stream_kg_s;
         t_nozzle = t_turb_exit + f_ab * COMBUSTOR_EFFICIENCY * lhv / cp_b;
         p_nozzle = p_turb_exit * (1.0 - AFTERBURNER_DP_FRACTION);
     }
@@ -780,6 +792,11 @@ pub struct AirOperatingPoint {
     pub nozzle_limited: bool,
     /// True when a ramjet C-D nozzle separates (overexpanded).
     pub separation_risk: bool,
+    /// True when part of the airflow came from the static suction floor:
+    /// the steady-running assumption is active (an already-spinning
+    /// compressor; starter/shaft state is deferred to the shaft machine,
+    /// and the analyzer labels this per row).
+    pub suction_assisted: bool,
     /// True when the afterburner is lit.
     pub reheat_active: bool,
     /// True when O2 caps the reheat.
@@ -845,6 +862,15 @@ impl AirbreathingSpec {
             return Err(PropulsionError::UnsupportedCombination(
                 "turbine cannot drive the compressor at the design point".into(),
             ));
+        }
+        // Reheat must clear the solved design turbine-exit temperature
+        // (spec-level TIT comparison would reject valid targets between
+        // turbine exit and TIT).
+        if self.afterburner && self.reheat_temp_k <= state.core_total_temp_k {
+            return Err(PropulsionError::UnsupportedCombination(format!(
+                "reheat {:.0} K must exceed design turbine-exit {:.0} K",
+                self.reheat_temp_k, state.core_total_temp_k
+            )));
         }
         let (_, _, _, gamma_b, r_b, _) = fuel;
         let mdot_core_hot = state.nozzle_flow_kg_s;
@@ -1009,6 +1035,7 @@ impl CompiledAirbreather {
             drive_limited: false,
             nozzle_limited: false,
             separation_risk: false,
+            suction_assisted: false,
             reheat_active: false,
             reheat_limited: false,
         };
@@ -1049,10 +1076,12 @@ impl CompiledAirbreather {
             Some(self.design_corrected_flow_kg_s),
         )?;
         if state.drive_limited || state.mdot_air_kg_s <= 0.0 {
+            // Drive/work failure and intake starvation stay distinct
+            // flags: vacuum starves with a healthy drive.
             return Ok(AirOperatingPoint {
-                air_limited: true,
+                air_limited: state.mdot_air_kg_s <= 0.0 || state.air_starved,
                 oxygen_limited: state.oxygen_limited,
-                drive_limited: true,
+                drive_limited: state.drive_limited,
                 ..off
             });
         }
@@ -1138,6 +1167,19 @@ impl CompiledAirbreather {
         );
         let thrust_n = core.thrust_gross_n + fan.thrust_gross_n - mdot_air * condition.airspeed_mps;
         let fuel_total = fuel_flow + fuel_ab_flow;
+        // Suction-floor label: airflow above ram-only capture at low speed
+        // runs on the steady-running assumption (deferred shaft state).
+        let sound_speed_mps = (AIR_GAMMA * 287.0 * condition.ambient_temp_k).sqrt();
+        let suction_floor_mps = match self.cycle {
+            AirCycle::Ramjet => 0.0,
+            _ => INTAKE_DESIGN_CAPTURE_MACH * sound_speed_mps,
+        };
+        let ram_only_kg_s = condition.ambient_pa / (287.0 * condition.ambient_temp_k)
+            * self.intake_area_m2
+            * condition.airspeed_mps;
+        let suction_assisted = suction_floor_mps > 0.0
+            && condition.airspeed_mps < suction_floor_mps
+            && mdot_air > ram_only_kg_s + 1e-9;
         Ok(AirOperatingPoint {
             thrust_n,
             fuel_flow_kg_s: fuel_total,
@@ -1156,7 +1198,10 @@ impl CompiledAirbreather {
             drive_limited: false,
             nozzle_limited,
             separation_risk,
-            reheat_active: eff_reheat && fuel_total > state.fuel_flow_kg_s,
+            suction_assisted,
+            // Scaled AB flow directly: under nozzle limiting the unscaled
+            // core comparison would misreport a lit afterburner as off.
+            reheat_active: eff_reheat && fuel_ab_flow > 0.0,
             reheat_limited: state.reheat_limited,
         })
     }
@@ -1176,6 +1221,9 @@ pub struct AirAltitudePoint {
     pub oxygen_limited: bool,
     pub nozzle_limited: bool,
     pub separation_risk: bool,
+    /// True wherever the steady-running suction assumption is active
+    /// (explicit label per the shaft-state deferral).
+    pub suction_assisted: bool,
 }
 
 /// Thrust/Isp grid over altitudes × Mach numbers at fixed throttle and
@@ -1223,10 +1271,36 @@ pub fn analyze_airbreathing(
                 oxygen_limited: point.oxygen_limited,
                 nozzle_limited: point.nozzle_limited,
                 separation_risk: point.separation_risk,
+                suction_assisted: point.suction_assisted,
             });
         }
     }
     Ok(rows)
+}
+
+/// First-order throttle lag for jet spools: effective throttle approaches
+/// the target with time constant `tau_s`. v5 bridge until the shaft-state
+/// machine (§8.1/generator dynamics) lands — the flight loop owns the
+/// state, this owns the law. Pure function, physics seconds.
+pub fn advance_jet_spool(
+    current_effective: f64,
+    target: f64,
+    dt_s: f64,
+    tau_s: f64,
+) -> Result<f64, PropulsionError> {
+    if !current_effective.is_finite() || !target.is_finite() || !(0.0..=1.0).contains(&target) {
+        return Err(PropulsionError::InvalidCommand(
+            "spool throttle must be finite, target in [0, 1]".into(),
+        ));
+    }
+    if !dt_s.is_finite() || dt_s < 0.0 || !tau_s.is_finite() || tau_s <= 0.0 {
+        return Err(PropulsionError::InvalidCommand(
+            "spool dt/tau must be finite, dt >= 0, tau > 0".into(),
+        ));
+    }
+    let current = current_effective.clamp(0.0, 1.0);
+    let alpha = 1.0 - (-dt_s / tau_s).exp();
+    Ok((current + (target - current) * alpha).clamp(0.0, 1.0))
 }
 
 #[cfg(test)]
@@ -1511,5 +1585,53 @@ mod tests {
             .compile()
             .is_err()
         );
+    }
+
+    #[test]
+    fn suction_label_and_oxygen_composition() {
+        // Static sea-level rows run on the suction floor (labeled); fast
+        // rows do not. Thessa's 25%-molar (~27.4%-mass) O2 behaves exactly
+        // like Earth air here (no false gating: both clear the ~7% the
+        // combustor actually needs), while 5% O2 derates with the flag.
+        let engine = olympus_like().compile().expect("olympus compiles");
+        let sample = AtmosphereConfig::default().sample(0.0).expect("SL sample");
+        let rows = analyze_airbreathing(
+            &engine,
+            &AtmosphereConfig::default(),
+            &[0.0],
+            &[0.0, 2.0],
+            1.0,
+            EARTH_OXYGEN_FRACTION,
+        )
+        .expect("analyze");
+        assert!(rows[0].suction_assisted);
+        assert!(!rows[1].suction_assisted);
+        let rich =
+            flight_condition(&sample, 0.0, super::THESSA_OXYGEN_MASS_FRACTION).expect("thessa air");
+        let earth = flight_condition(&sample, 0.0, EARTH_OXYGEN_FRACTION).expect("earth air");
+        let p_rich = engine.operating_point(&rich, 0.8).expect("rich");
+        let p_earth = engine.operating_point(&earth, 0.8).expect("earth");
+        assert!(!p_rich.oxygen_limited);
+        assert!((p_rich.thrust_n - p_earth.thrust_n).abs() / p_earth.thrust_n < 1e-12);
+        let scarce = flight_condition(&sample, 0.0, 0.05).expect("scarce");
+        let p_scarce = engine.operating_point(&scarce, 0.8).expect("scarce");
+        assert!(p_scarce.oxygen_limited);
+        assert!(p_scarce.thrust_n < p_earth.thrust_n);
+    }
+
+    #[test]
+    fn jet_spool_lag_is_first_order() {
+        // v5 bridge until the shaft-state machine lands: effective
+        // throttle approaches the target first-order; the flight loop
+        // owns the state, this owns the law.
+        let tau = 5.0;
+        let advanced = advance_jet_spool(0.0, 1.0, 1.0e6, tau).expect("spool");
+        assert!((advanced - 1.0).abs() < 1e-9);
+        let step = advance_jet_spool(0.0, 1.0, tau, tau).expect("step");
+        assert!((step - (1.0 - (-1.0f64).exp())).abs() < 1e-12);
+        let held = advance_jet_spool(0.4, 0.4, 10.0, tau).expect("held");
+        assert!((held - 0.4).abs() < 1e-12);
+        assert!(advance_jet_spool(0.0, 2.0, 1.0, tau).is_err());
+        assert!(advance_jet_spool(f64::NAN, 1.0, 1.0, tau).is_err());
     }
 }

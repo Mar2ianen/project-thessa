@@ -9,7 +9,8 @@ until semantic feature recognition is available.
 
 import json
 import math
-import os
+import argparse
+import hashlib
 from pathlib import Path
 
 import FreeCAD as App
@@ -17,8 +18,9 @@ import MeshPart
 import Part
 
 
-REPO = Path('/home/chechulin/Projects/project-thessa')
-SOURCE = Path('/home/chechulin/Downloads/thessa_d1_v2_2_free.step')
+SCRIPT_PATH = Path(globals().get('__file__', 'tools/cad-import/build_d1_docking_port.py')).resolve()
+REPO = SCRIPT_PATH.parents[2]
+SOURCE = None
 OUT = REPO / 'assets/models/thessa-d1-docking-port'
 PETAL_INDICES = [17, 20, 25, 28, 33, 36]
 PETAL_ANGLES_DEG = [24.0, 36.0, 144.0, 156.0, -96.0, -84.0]
@@ -94,7 +96,8 @@ def make_document():
     for index, obj in enumerate(imported):
         obj.Label = f'STEP solid {index:03d}'
         if index in PETAL_INDICES:
-            obj.Label = f'Soft-capture petal {index - PETAL_INDICES[0] + 1:02d}'
+            petal_number = PETAL_INDICES.index(index) + 1
+            obj.Label = f'Soft-capture petal {petal_number:02d}'
             moving_group.addObject(obj)
             obj.addProperty('App::PropertyInteger', 'SourceSolidIndex', 'CAD')
             obj.SourceSolidIndex = index
@@ -221,7 +224,7 @@ id = "capture_ring_proxy_{i + 1:02d}"
 shape = "cuboid"
 position_body_m = [{ring_radius * math.cos(theta):.6f}, {ring_radius * math.sin(theta):.6f}, -0.100000]
 orientation_body_xyzw = [0.0, 0.0, {qz:.9f}, {qw:.9f}]
-half_extents_m = [0.080000, 0.260000, 0.080000]
+half_extents_m = [0.080000, 0.260000, 0.010000]
 material = "structural_metal"
 '''
         )
@@ -248,6 +251,8 @@ local_position_m = [0.0, 0.0, 0.0]
 local_orientation_xyzw = [0.0, 0.0, 0.0, 1.0]
 capture_velocity_limit_mps = 0.05 # provisional
 alignment_tolerance_rad = 0.035 # provisional
+alignment_angular_velocity_limit_rps = 0.05 # provisional
+soft_capture_model = "logical_alignment_gate; petal damping not calibrated"
 
 [collision_materials.structural_metal]
 friction = 0.65
@@ -275,7 +280,7 @@ hinge_z_m = -0.078
 closed_angle_rad = 0.0
 open_angle_rad = 0.436332313
 actuator_authority = "Thessa mechanism/actuator graph"
-rapier_joint_authority = "future revolute-joint bridge; current public seam exposes fixed docking joints"
+rapier_joint_authority = "CollisionWorld::attach_revolute_joint with explicit local axes"
 
 [mechanical_limits]
 axial_force_limit_n = 0.0 # TBD
@@ -327,6 +332,18 @@ torsional_moment_limit_nm = 0.0 # TBD
 
 
 def main():
+    global SOURCE, OUT
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--source', type=Path, required=True, help='source STEP fixture')
+    parser.add_argument(
+        '--output',
+        type=Path,
+        default=OUT,
+        help='asset output directory (default: repository assets/models/thessa-d1-docking-port)',
+    )
+    args = parser.parse_args()
+    SOURCE = args.source.resolve()
+    OUT = args.output.resolve()
     if not SOURCE.exists():
         raise FileNotFoundError(SOURCE)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -356,7 +373,6 @@ def main():
         f'bbox_max_mm={bb.XMax:.3f},{bb.YMax:.3f},{bb.ZMax:.3f}\n',
         encoding='utf-8',
     )
-    import hashlib
     source_sha256 = hashlib.sha256(SOURCE.read_bytes()).hexdigest()
     write_manifest(bb, source_sha256)
     write_physics_contract()

@@ -430,9 +430,13 @@ pub fn ascent_graph(profile: &AscentProfile) -> Result<AutopilotGraph, AscentBui
                 },
             ),
             wait_event_node(4, "wait-meco", event::MECO),
-            phase_node(5, "coast", AscentPhase::Coast {
-                max_phase_time_s: profile.max_phase_time_s,
-            }),
+            phase_node(
+                5,
+                "coast",
+                AscentPhase::Coast {
+                    max_phase_time_s: profile.max_phase_time_s,
+                },
+            ),
             wait_event_node(6, "wait-apoapsis", event::APOAPSIS_APPROACH),
             phase_node(
                 7,

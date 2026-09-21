@@ -394,13 +394,7 @@ impl GraphBlock for NativeGraphBlock {
 }
 
 impl NativeGraphBlock {
-    fn take_parked_phases(
-        &mut self,
-    ) -> Vec<(
-        thessa_autopilot::NodeId,
-        String,
-        GraphNodeConfig,
-    )> {
+    fn take_parked_phases(&mut self) -> Vec<(thessa_autopilot::NodeId, String, GraphNodeConfig)> {
         std::mem::take(&mut self.parked_phases)
     }
 }
@@ -1212,10 +1206,7 @@ impl Sim {
         // the executor owns guidance until it clears, then the burn
         // retires through the normal event path.
         if let GraphNodeConfig::ExecutePhase {
-            phase:
-                thessa_autopilot::execute::ExecutePhase::Burn {
-                    delta_v_mps, ..
-                },
+            phase: thessa_autopilot::execute::ExecutePhase::Burn { delta_v_mps, .. },
         } = &park.config
         {
             if !self.burn_delegated {
@@ -1264,8 +1255,7 @@ impl Sim {
             .map_err(|error| format!("phase law body state: {error}"))?;
         let live = laws::LiveState {
             position_m: self.authority.state.position_inertial_m - body_state.position_inertial,
-            velocity_mps: self.authority.state.velocity_inertial_mps
-                - body_state.velocity_inertial,
+            velocity_mps: self.authority.state.velocity_inertial_mps - body_state.velocity_inertial,
             orientation_body_to_inertial: self.authority.state.orientation_body_to_inertial,
             body_mu_m3_s2: body.mu,
             body_radius_m: body.radius_m,
@@ -5047,11 +5037,15 @@ mod reset_tests {
                 next_report = sim.authority.flight_time_s + 300.0;
                 let body_now = sim
                     .ephemeris
-                    .body_state(sim.authority.reference_body, SimTime(sim.authority.flight_time_s))
+                    .body_state(
+                        sim.authority.reference_body,
+                        SimTime(sim.authority.flight_time_s),
+                    )
                     .expect("body state");
                 let rel = sim.authority.state.position_inertial_m - body_now.position_inertial;
                 let r = rel.length();
-                let rel_vel = sim.authority.state.velocity_inertial_mps - body_now.velocity_inertial;
+                let rel_vel =
+                    sim.authority.state.velocity_inertial_mps - body_now.velocity_inertial;
                 let climb = if rel_vel.length_squared() > 1.0 {
                     rel.dot(rel_vel) / (r * rel_vel.length())
                 } else {
@@ -5062,7 +5056,8 @@ mod reset_tests {
                         direction,
                         ..
                     }) => {
-                        let nose = sim.authority.state.orientation_body_to_inertial * glam::DVec3::X;
+                        let nose =
+                            sim.authority.state.orientation_body_to_inertial * glam::DVec3::X;
                         let err = nose.angle_between(direction.direction);
                         let up = rel / r;
                         let cmd_up = direction.direction.dot(up);
@@ -5076,7 +5071,10 @@ mod reset_tests {
                         } else {
                             9.0
                         };
-                        (format!("cmd_up={cmd_up:.2} vel_up={vel_up:.2} cmd_vel={cmd_vel:.2}"), format!("{err:.2}"))
+                        (
+                            format!("cmd_up={cmd_up:.2} vel_up={vel_up:.2} cmd_vel={cmd_vel:.2}"),
+                            format!("{err:.2}"),
+                        )
                     }
                     other => (format!("{other:?}"), "-".into()),
                 };
@@ -5087,8 +5085,12 @@ mod reset_tests {
                     (r - radius) / 1000.0,
                     rel_vel.length(),
                     climb,
-                    thessa_autopilot::ascent::predict_apoapsis_m(mu, rel, rel_vel).map(|a| (a - radius) / 1000.0).unwrap_or(-1.0),
-                    thessa_autopilot::ascent::predict_periapsis_m(mu, rel, rel_vel).map(|p| (p - radius) / 1000.0).unwrap_or(-1.0),
+                    thessa_autopilot::ascent::predict_apoapsis_m(mu, rel, rel_vel)
+                        .map(|a| (a - radius) / 1000.0)
+                        .unwrap_or(-1.0),
+                    thessa_autopilot::ascent::predict_periapsis_m(mu, rel, rel_vel)
+                        .map(|p| (p - radius) / 1000.0)
+                        .unwrap_or(-1.0),
                     sim.guidance.as_ref().map(|(_, p)| p.normalized),
                     sim.authority.vehicle.mass_properties.mass_kg,
                 );
@@ -5128,10 +5130,8 @@ mod reset_tests {
             .expect("body state");
         let rel_pos = sim.authority.state.position_inertial_m - body_now.position_inertial;
         let rel_vel = sim.authority.state.velocity_inertial_mps - body_now.velocity_inertial;
-        let periapsis =
-            ascent_api::predict_periapsis_m(mu, rel_pos, rel_vel).expect("bound orbit");
-        let apoapsis =
-            ascent_api::predict_apoapsis_m(mu, rel_pos, rel_vel).expect("bound orbit");
+        let periapsis = ascent_api::predict_periapsis_m(mu, rel_pos, rel_vel).expect("bound orbit");
+        let apoapsis = ascent_api::predict_apoapsis_m(mu, rel_pos, rel_vel).expect("bound orbit");
         eprintln!(
             "achieved: peri {:.0} km, apo {:.0} km (targets {:.0}/{:.0})",
             (periapsis - radius) / 1000.0,

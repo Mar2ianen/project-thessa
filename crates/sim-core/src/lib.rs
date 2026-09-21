@@ -104,9 +104,9 @@ pub use propulsion::{
     NuclearThermalSpec, Propellant, PropellantThermo, PropulsionError, PropulsionSystemSpec,
     RCS_DEFAULT_MIN_ON_TIME_S, RCS_DEFAULT_RISE_TIME_S, RcsCluster, RcsMount, RcsPulse,
     RcsThruster, SEPARATION_PRESSURE_RATIO, STANDARD_GRAVITY_MPS2, SolidMotorSpec,
-    SystemAltitudePoint, SystemMount, SystemOperatingPoint, advance_spool, analyze_airbreathing,
-    analyze_altitude, characteristic_velocity, flight_condition, mach_from_area_ratio,
-    thrust_coefficient,
+    SystemAltitudePoint, SystemMount, SystemOperatingPoint, THESSA_OXYGEN_MASS_FRACTION,
+    advance_jet_spool, advance_spool, analyze_airbreathing, analyze_altitude,
+    characteristic_velocity, flight_condition, mach_from_area_ratio, thrust_coefficient,
 };
 pub use scheduler::{EventScheduler, ScheduledEvent, ScheduledKind};
 pub use system::{

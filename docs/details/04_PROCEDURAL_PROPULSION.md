@@ -831,7 +831,7 @@ Shipped in `crates/sim-core/src/propulsion.rs` (MIT engine crate, no Bevy/Tokio/
 - Turbine cycles run convergent nozzles; ramjets run fixed
   convergent-divergent geometry adapted at the design point (Mach 2 sea
   level) with a Summerfield separation check and a separated fallback to
-  convergent-at-throat behavior.
+  convergent-at-throat behavior (documented).
 - Fixed-geometry matching: the nozzle sets swallowed flow — demand
   beyond choked capacity rescales the whole engine consistently instead
   of booking fuel for unswallowed air (this exact inconsistency was
@@ -843,6 +843,24 @@ Shipped in `crates/sim-core/src/propulsion.rs` (MIT engine crate, no Bevy/Tokio/
   law energy pins (useful + exhaust KE vs fuel + inlet KE); hypersonic
   drive-limit flameout; size-scaling and refusal tests; Mach × altitude
   analyzer grid (the Juno Mach-table contract, computed from the cycle).
+
+Closed v5 debt (audited 2026-09-21):
+
+- Reheat gating compares against the solved design turbine-exit state,
+  not TIT; `reheat_active` reads the nozzle-scaled AB flow.
+- Afterburner oxygen is an explicit species budget (combustor inflow
+  minus core burn plus rejoining cooling-bleed O2; customer bleed
+  excluded on one basis throughout).
+- Drive/work failure and intake starvation are distinct flags (vacuum
+  starves with a healthy drive).
+- `CompiledJet::spool_tau_s()` returns the air-path spool in both
+  variants; ESTOC transition lag lives behind `transition_tau_s()`.
+- Analyzer rows label the steady-running suction assumption
+  (`suction_assisted`); a first-order jet spool helper bridges to the
+  future shaft-state machine.
+- Baker `--oxygen` overrides the analyzer O2 mass fraction (Earth 0.232
+  default; Thessa ~0.274); the scalar stays an explicit adapter until
+  the composition-aware atmosphere API lands.
 
 Known v5 airbreather correctness debt:
 

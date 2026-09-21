@@ -103,6 +103,22 @@ pub struct CompiledEstoc {
     pub min_throttle: f64,
 }
 
+/// Transition state: the full smoothed flow/thermodynamic snapshot the
+/// runtime threads across ticks (`prev`) so mode changes evolve every
+/// channel — thrust, fuel, oxidizer, air, exhaust state — instead of
+/// snapping one scalar while the rest jump.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct EstocTransient {
+    pub thrust_n: f64,
+    pub fuel_flow_kg_s: f64,
+    pub oxidizer_flow_kg_s: f64,
+    pub air_flow_kg_s: f64,
+    pub exhaust_temp_k: f64,
+    pub exhaust_velocity_mps: f64,
+    pub exit_pressure_pa: f64,
+    pub exit_mach: f64,
+}
+
 /// One ESTOC operating point (single active mode).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EstocPoint {
@@ -337,68 +353,136 @@ impl CompiledEstoc {
         })
     }
 
-    /// Operating point with mode discipline and transition smoothing: on a
-    /// mode change the thrust approaches the target first-order over
-    /// `transition_tau_s` (valve/flow transient, documented); otherwise
-    /// the target applies directly. Thread `point.mode` back as
-    /// `last_mode` and the previous thrust as `prev_thrust_n`.
+    /// Operating point with mode discipline and a self-consistent
+    /// transition state: the full flow/thermodynamic snapshot approaches
+    /// the selected mode's target first-order over `transition_tau_s`
+    /// (valve/flow transient, documented), and Isp is recomputed from the
+    /// smoothed flows so bookkeeping always holds. Thread the returned
+    /// transient and `point.mode` back as `prev`/`last_mode`; `None` starts
+    /// fresh at the exact target (editor/analyzer convention).
+    ///
+    /// Mode contract: manual selection always wins — including a manual
+    /// `Air` in vacuum, which is honored and flames out cleanly (zero
+    /// thrust, cause flags) rather than silently switching.
     pub fn operating_point(
         &self,
         condition: &FlightCondition,
         throttle: f64,
         manual: Option<EstocMode>,
         last_mode: EstocMode,
-        prev_thrust_n: f64,
+        prev: Option<&EstocTransient>,
         dt_s: f64,
-    ) -> Result<EstocPoint, PropulsionError> {
+    ) -> Result<(EstocPoint, EstocTransient), PropulsionError> {
         condition.validate()?;
         if !throttle.is_finite() || !(0.0..=1.0).contains(&throttle) {
             return Err(PropulsionError::InvalidCommand(
                 "throttle must be finite in [0, 1]".into(),
             ));
         }
-        if !dt_s.is_finite() || dt_s < 0.0 {
+        if dt_s.is_nan() || dt_s < 0.0 {
             return Err(PropulsionError::InvalidCommand(
-                "transition dt must be finite and >= 0".into(),
+                "transition dt must be >= 0 or +infinity".into(),
             ));
         }
         if throttle == 0.0 {
             let air_point = self.air.operating_point(condition, 0.0)?;
-            return Ok(EstocPoint {
-                mode: self.select_mode(condition, &air_point, last_mode, manual),
+            let mode = self.select_mode(condition, &air_point, last_mode, manual);
+            let transient = EstocTransient {
                 thrust_n: 0.0,
                 fuel_flow_kg_s: 0.0,
                 oxidizer_flow_kg_s: 0.0,
                 air_flow_kg_s: 0.0,
-                isp_total_s: 0.0,
                 exhaust_temp_k: condition.ambient_temp_k,
                 exhaust_velocity_mps: 0.0,
                 exit_pressure_pa: condition.ambient_pa,
                 exit_mach: 0.0,
-            });
+            };
+            return Ok((
+                EstocPoint {
+                    mode,
+                    thrust_n: 0.0,
+                    fuel_flow_kg_s: 0.0,
+                    oxidizer_flow_kg_s: 0.0,
+                    air_flow_kg_s: 0.0,
+                    isp_total_s: 0.0,
+                    exhaust_temp_k: condition.ambient_temp_k,
+                    exhaust_velocity_mps: 0.0,
+                    exit_pressure_pa: condition.ambient_pa,
+                    exit_mach: 0.0,
+                },
+                transient,
+            ));
         }
         let air_point = self.air.operating_point(condition, throttle)?;
         let mode = self.select_mode(condition, &air_point, last_mode, manual);
-        let mut target = match mode {
-            EstocMode::Air => EstocPoint {
-                mode,
+        let target = match mode {
+            EstocMode::Air => EstocTransient {
                 thrust_n: air_point.thrust_n.max(0.0),
                 fuel_flow_kg_s: air_point.fuel_flow_kg_s,
                 oxidizer_flow_kg_s: 0.0,
                 air_flow_kg_s: air_point.air_flow_kg_s,
-                isp_total_s: air_point.isp_s,
                 exhaust_temp_k: air_point.exhaust_temp_k,
                 exhaust_velocity_mps: air_point.exhaust_velocity_mps,
                 exit_pressure_pa: air_point.exit_pressure_pa,
                 exit_mach: air_point.exit_mach,
             },
-            EstocMode::Rocket => self.rocket_point(throttle, condition.ambient_pa)?,
+            EstocMode::Rocket => {
+                let rocket = self.rocket_point(throttle, condition.ambient_pa)?;
+                EstocTransient {
+                    thrust_n: rocket.thrust_n,
+                    fuel_flow_kg_s: rocket.fuel_flow_kg_s,
+                    oxidizer_flow_kg_s: rocket.oxidizer_flow_kg_s,
+                    air_flow_kg_s: 0.0,
+                    exhaust_temp_k: rocket.exhaust_temp_k,
+                    exhaust_velocity_mps: rocket.exhaust_velocity_mps,
+                    exit_pressure_pa: rocket.exit_pressure_pa,
+                    exit_mach: rocket.exit_mach,
+                }
+            }
         };
-        if mode != last_mode {
-            let alpha = 1.0 - (-dt_s / self.transition_tau_s).exp();
-            target.thrust_n = prev_thrust_n + (target.thrust_n - prev_thrust_n) * alpha;
-        }
-        Ok(target)
+        let smoothed = match prev {
+            None => target,
+            Some(previous) => {
+                let alpha = 1.0 - (-dt_s / self.transition_tau_s).exp();
+                let lerp = |old: f64, new: f64| old + (new - old) * alpha;
+                EstocTransient {
+                    thrust_n: lerp(previous.thrust_n, target.thrust_n),
+                    fuel_flow_kg_s: lerp(previous.fuel_flow_kg_s, target.fuel_flow_kg_s),
+                    oxidizer_flow_kg_s: lerp(
+                        previous.oxidizer_flow_kg_s,
+                        target.oxidizer_flow_kg_s,
+                    ),
+                    air_flow_kg_s: lerp(previous.air_flow_kg_s, target.air_flow_kg_s),
+                    exhaust_temp_k: lerp(previous.exhaust_temp_k, target.exhaust_temp_k),
+                    exhaust_velocity_mps: lerp(
+                        previous.exhaust_velocity_mps,
+                        target.exhaust_velocity_mps,
+                    ),
+                    exit_pressure_pa: lerp(previous.exit_pressure_pa, target.exit_pressure_pa),
+                    exit_mach: lerp(previous.exit_mach, target.exit_mach),
+                }
+            }
+        };
+        let propellant_flow = smoothed.fuel_flow_kg_s + smoothed.oxidizer_flow_kg_s;
+        Ok((
+            EstocPoint {
+                mode,
+                thrust_n: smoothed.thrust_n,
+                fuel_flow_kg_s: smoothed.fuel_flow_kg_s,
+                oxidizer_flow_kg_s: smoothed.oxidizer_flow_kg_s,
+                air_flow_kg_s: smoothed.air_flow_kg_s,
+                isp_total_s: if propellant_flow > 0.0 {
+                    smoothed.thrust_n / (propellant_flow * STANDARD_GRAVITY_MPS2)
+                } else {
+                    0.0
+                },
+                exhaust_temp_k: smoothed.exhaust_temp_k,
+                exhaust_velocity_mps: smoothed.exhaust_velocity_mps,
+                exit_pressure_pa: smoothed.exit_pressure_pa,
+                exit_mach: smoothed.exit_mach,
+            },
+            smoothed,
+        ))
     }
 }
 
@@ -535,17 +619,13 @@ mod tests {
                 1.0,
                 None,
                 EstocMode::Air,
-                0.0,
+                None,
                 1.0,
             )
             .expect("air");
-        assert_eq!(air_m2.mode, EstocMode::Air);
+        assert_eq!(air_m2.0.mode, EstocMode::Air);
         let rocket_m2 = engine.rocket_point(1.0, 101_325.0).expect("sl rocket");
-        eprintln!(
-            "DBG air_m2 isp={:.0} thrust={:.0} | rocket_sl isp={:.0} thrust={:.0}",
-            air_m2.isp_total_s, air_m2.thrust_n, rocket_m2.isp_total_s, rocket_m2.thrust_n
-        );
-        assert!(air_m2.isp_total_s > 3.0 * rocket_m2.isp_total_s);
+        assert!(air_m2.0.isp_total_s > 3.0 * rocket_m2.isp_total_s);
         // Oxidizer/fuel split respects the OF ratio.
         assert!(
             (vac.oxidizer_flow_kg_s / vac.fuel_flow_kg_s - engine.oxidizer_fuel_ratio).abs()
@@ -555,32 +635,130 @@ mod tests {
     }
 
     #[test]
-    fn transition_smooths_mode_steps() {
-        // A mode change approaches the target first-order over the
-        // transition tau; same mode applies the target directly.
+    fn transition_evolves_consistent_state() {
+        // Fresh evaluation hits the target exactly; a threaded transient
+        // approaches it first-order across EVERY channel (not just
+        // thrust), and the reported Isp always equals F/(mdot*g0) on the
+        // smoothed snapshot — bookkeeping can never break mid-transition.
+        // Long dt converges to the direct target.
         let engine = estoc_like().compile().expect("estoc compiles");
         let condition = condition_at(4.0, 2000.0);
-        let target = engine
-            .operating_point(&condition, 1.0, None, EstocMode::Air, 50_000.0, 1.0)
-            .expect("switch");
-        assert_eq!(target.mode, EstocMode::Rocket);
-        let direct = engine
+        let (fresh, fresh_state) = engine
+            .operating_point(&condition, 1.0, None, EstocMode::Rocket, None, 0.0)
+            .expect("fresh");
+        assert_eq!(fresh.mode, EstocMode::Rocket);
+        let (direct, _) = engine
             .operating_point(
                 &condition,
                 1.0,
                 Some(EstocMode::Rocket),
                 EstocMode::Rocket,
-                0.0,
+                None,
                 0.0,
             )
             .expect("direct");
-        // Smoothed thrust sits strictly between the previous value and the
-        // direct target (first-order approach, no step).
-        assert!(target.thrust_n > 50_000.0 && target.thrust_n < direct.thrust_n);
-        let settled = engine
-            .operating_point(&condition, 1.0, None, EstocMode::Rocket, 50_000.0, 1.0e6)
-            .expect("settled");
-        assert!((settled.thrust_n - direct.thrust_n).abs() / direct.thrust_n < 1e-9);
+        assert!((fresh.thrust_n - direct.thrust_n).abs() / direct.thrust_n < 1e-12);
+        // One tau from a cold snapshot: every channel partway, Isp exact.
+        let cold = EstocTransient {
+            thrust_n: 50_000.0,
+            fuel_flow_kg_s: 5.0,
+            oxidizer_flow_kg_s: 0.0,
+            air_flow_kg_s: 100.0,
+            exhaust_temp_k: 800.0,
+            exhaust_velocity_mps: 600.0,
+            exit_pressure_pa: 50_000.0,
+            exit_mach: 1.0,
+        };
+        let (mid, mid_state) = engine
+            .operating_point(
+                &condition,
+                1.0,
+                None,
+                EstocMode::Air,
+                Some(&cold),
+                engine.transition_tau_s,
+            )
+            .expect("mid");
+        assert_eq!(mid.mode, EstocMode::Rocket);
+        let alpha = 1.0 - (-1.0f64).exp();
+        assert!(
+            (mid.thrust_n - (50_000.0 + (direct.thrust_n - 50_000.0) * alpha)).abs()
+                / direct.thrust_n
+                < 1e-9
+        );
+        assert!(
+            (mid.fuel_flow_kg_s - (5.0 + (direct.fuel_flow_kg_s - 5.0) * alpha)).abs()
+                / direct.fuel_flow_kg_s.max(1e-9)
+                < 1e-9
+        );
+        let propellant = mid.fuel_flow_kg_s + mid.oxidizer_flow_kg_s;
+        assert!(
+            (mid.isp_total_s - mid.thrust_n / (propellant * 9.80665)).abs() / mid.isp_total_s
+                < 1e-12
+        );
+        // Converged: thread the snapshot until it lands on the target.
+        let mut state = mid_state;
+        let mut mode = mid.mode;
+        for _ in 0..200 {
+            let (point, next) = engine
+                .operating_point(
+                    &condition,
+                    1.0,
+                    None,
+                    mode,
+                    Some(&state),
+                    engine.transition_tau_s,
+                )
+                .expect("converge");
+            mode = point.mode;
+            state = next;
+        }
+        assert!((state.thrust_n - direct.thrust_n).abs() / direct.thrust_n < 1e-6);
+        assert_eq!(mode, EstocMode::Rocket);
+        let _ = fresh_state;
+    }
+
+    #[test]
+    fn fresh_command_evaluates_estoc_target() {
+        // `EstocCommand::fresh` uses +infinity as the editor/analyzer
+        // one-shot dt; with no previous snapshot the target is returned
+        // directly and the infinite dt must remain valid.
+        let engine = estoc_like().compile().expect("estoc compiles");
+        let command = super::super::jet::EstocCommand::fresh();
+        let (point, _) = engine
+            .operating_point(
+                &condition_at(4.0, 2000.0),
+                1.0,
+                command.manual,
+                command.last_mode,
+                command.prev.as_ref(),
+                command.dt_s,
+            )
+            .expect("fresh command evaluates");
+        assert_eq!(point.mode, EstocMode::Rocket);
+        assert!(point.thrust_n > 0.0);
+    }
+
+    #[test]
+    fn manual_air_in_vacuum_flames_out_cleanly() {
+        // Contract: manual selection always wins — including a manual Air
+        // in vacuum, which is honored and flames out (zero thrust, cause
+        // flags) rather than silently switching to rocket.
+        let engine = estoc_like().compile().expect("estoc compiles");
+        let vacuum = condition_at(0.0, 0.0);
+        let (point, _) = engine
+            .operating_point(
+                &vacuum,
+                1.0,
+                Some(EstocMode::Air),
+                EstocMode::Air,
+                None,
+                0.0,
+            )
+            .expect("manual air");
+        assert_eq!(point.mode, EstocMode::Air);
+        assert_eq!(point.thrust_n, 0.0);
+        assert_eq!(point.fuel_flow_kg_s, 0.0);
     }
 
     #[test]

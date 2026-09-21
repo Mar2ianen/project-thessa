@@ -248,6 +248,8 @@ pub fn concorde_wing() -> Result<ProceduralSurface, SurfaceError> {
     surface.validate()?;
     Ok(surface)
 }
+
+/// Dream Chaser cargo right wing reconstruction.
 ///
 /// Sources: Sierra Space Dream Chaser pages (9 m long, wings fold for
 /// launch inside a 5 m fairing, Wing Deployment System locks after
@@ -286,6 +288,38 @@ pub fn dream_chaser_wing() -> Result<ProceduralSurface, SurfaceError> {
             stowed_angle_rad: 65.0_f64.to_radians(),
             travel_limit_rad: 70.0_f64.to_radians(),
         }],
+    };
+    surface.validate()?;
+    Ok(surface)
+}
+
+/// Pathfinder fictional wing reconstruction.
+///
+/// Deliberately NOT real-world validation ground truth (design doc
+/// section 12.2): a single surface with smoothly rising canted tips and
+/// embedded controls, useful for feature coverage (bend-plus-controls
+/// interaction) without pretending to be a measured aircraft. Numbers
+/// below are authoring choices, not manufacturer dimensions.
+pub fn pathfinder_wing() -> Result<ProceduralSurface, SurfaceError> {
+    use crate::{BendStation, preset};
+
+    let (aileron, _) = preset::aileron("aileron", (0.55, 0.95))?;
+    let (flap, _) = preset::flap("flap", (0.15, 0.5))?;
+    let surface = ProceduralSurface {
+        name: "pathfinder-wing-right".into(),
+        span_m: 6.0,
+        origin_body_m: glam::DVec3::ZERO,
+        mirror_y: false,
+        planform: Planform::tapered(2.0, 0.9, 0.8)?,
+        bend: BendCurve::polyline(vec![
+            BendStation { s: 0.0, z_m: 0.0 },
+            BendStation { s: 0.5, z_m: 0.1 },
+            BendStation { s: 0.7, z_m: 0.35 },
+            BendStation { s: 1.0, z_m: 1.2 },
+        ])?,
+        sections: SectionData::uniform(1.0_f64.to_radians(), 0.09)?,
+        controls: vec![aileron, flap],
+        folds: Vec::new(),
     };
     surface.validate()?;
     Ok(surface)

@@ -2,6 +2,7 @@ use std::{env, error::Error, fs, path::PathBuf};
 
 use glam::{DMat3, DQuat, DVec3};
 use serde::Deserialize;
+use thessa_aero_surfaces::{CompileOptions, MechanismState, ProceduralSurface, compile_surface};
 use thessa_sim_core::{
     AeroGeometry, AeroPanel, AirCycle, AirbreathingSpec, AtmosphereConfig, ChamberMaterial,
     ChamberSpec, CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionPart,
@@ -260,6 +261,12 @@ struct VehicleAsset {
     panels: Vec<PanelAsset>,
     #[serde(default)]
     control_surfaces: Vec<ControlSurfaceAsset>,
+    /// Procedural wing surfaces compiled hangar-side into solver panels.
+    /// The compiler never runs in flight: it bakes `AeroPanel` zones plus
+    /// control definitions here, and the vehicle asset carries only the
+    /// compiled output. Empty keeps legacy hand-panel assets valid.
+    #[serde(default)]
+    procedural_surfaces: Vec<ProceduralSurface>,
     /// Solver-neutral contact primitives. Legacy assets may omit this while
     /// collision geometry is migrated; contact-active runtime code must not.
     #[serde(default)]
@@ -283,19 +290,50 @@ struct VehicleAsset {
 
 impl VehicleAsset {
     fn bake(self) -> Result<VehicleDefinition, Box<dyn Error>> {
-        let panels = self
+        let mut panels = self
             .panels
             .into_iter()
             .map(PanelAsset::bake)
             .collect::<Result<Vec<_>, _>>()?;
-        let geometry = AeroGeometry::new(panels)?;
-        let inertia = rows_to_matrix(self.inertia_body_kg_m2);
-        let properties = RigidBodyProperties::new(self.mass_kg, inertia)?;
-        let controls = self
+        let mut controls = self
             .control_surfaces
             .into_iter()
             .map(ControlSurfaceAsset::bake)
             .collect::<Result<Vec<_>, _>>()?;
+        // Hangar-side procedural compilation: each surface contributes
+        // its panels (appended after hand panels) with control indices
+        // rebased onto the merged panel list.
+        for surface in &self.procedural_surfaces {
+            let compiled = compile_surface(
+                surface,
+                &CompileOptions::default(),
+                &MechanismState::deployed(),
+            )
+            .map_err(|error| format!("surface '{}': {error}", surface.name))?;
+            println!(
+                "surface '{}': {} panels, estimated error {:.3e} m^2",
+                surface.name,
+                compiled.panels.len(),
+                compiled.summary.estimated_error_m2
+            );
+            let base = panels.len();
+            panels.extend(compiled.panels.iter().cloned());
+            for definition in &compiled.controls {
+                controls.push(ControlSurfaceDefinition::new(
+                    definition.name.clone(),
+                    definition
+                        .panel_indices
+                        .iter()
+                        .map(|index| base + index)
+                        .collect(),
+                    definition.minimum_deflection_rad,
+                    definition.maximum_deflection_rad,
+                )?);
+            }
+        }
+        let geometry = AeroGeometry::new(panels)?;
+        let inertia = rows_to_matrix(self.inertia_body_kg_m2);
+        let properties = RigidBodyProperties::new(self.mass_kg, inertia)?;
         let collision_geometry = CollisionGeometry::new(
             self.collision_parts
                 .into_iter()
@@ -1666,4 +1704,84 @@ rocket_throat_radius_m = 0.09
         assert!(options.analyze);
         assert!((options.oxygen_fraction - 0.274).abs() < f64::EPSILON);
     }
+}
+
+#[test]
+fn procedural_surface_bakes_into_merged_panels_and_rebased_controls() {
+    let asset: VehicleAsset = toml::from_str(
+        r#"
+name = "procedural-test"
+mass_kg = 1000.0
+inertia_body_kg_m2 = [[1000.0, 0.0, 0.0], [0.0, 1000.0, 0.0], [0.0, 0.0, 1000.0]]
+
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 2.0
+chord_m = 1.0
+
+[[control_surfaces]]
+name = "hand-elevator"
+panel_indices = [0]
+minimum_deflection_rad = -0.4
+maximum_deflection_rad = 0.4
+
+[[procedural_surfaces]]
+name = "wing-right"
+span_m = 8.0
+origin_body_m = [0.0, 0.0, 0.0]
+
+[procedural_surfaces.planform]
+[[procedural_surfaces.planform.stations]]
+s = 0.0
+x_le = 0.0
+x_te = 2.0
+[[procedural_surfaces.planform.stations]]
+s = 1.0
+x_le = 0.0
+x_te = 2.0
+
+[procedural_surfaces.bend]
+[[procedural_surfaces.bend.stations]]
+s = 0.0
+z_m = 0.0
+[[procedural_surfaces.bend.stations]]
+s = 1.0
+z_m = 0.0
+
+[procedural_surfaces.sections]
+[[procedural_surfaces.sections.stations]]
+s = 0.0
+incidence_rad = 0.0
+thickness_ratio = 0.0
+[[procedural_surfaces.sections.stations]]
+s = 1.0
+incidence_rad = 0.0
+thickness_ratio = 0.0
+
+[[procedural_surfaces.controls]]
+name = "aileron"
+span = [0.6, 0.9]
+chord = [0.25, 1.0]
+hinge_u = 0.25
+min_deflection_rad = -0.35
+max_deflection_rad = 0.35
+"#,
+    )
+    .expect("procedural vehicle TOML should parse");
+    let vehicle = asset.bake().expect("procedural asset should bake");
+    // One hand panel plus the rectangular compiled wing (no features:
+    // splits at 0.6/0.9 with one chord cut inside -> 4 zones).
+    assert_eq!(vehicle.aero_geometry.panels.len(), 1 + 4);
+    // Hand control keeps index 0; the compiled aileron rebases onto
+    // the merged list and owns exactly its region panel.
+    assert_eq!(vehicle.control_surfaces.len(), 2);
+    assert_eq!(vehicle.control_surfaces[0].panel_indices, vec![0]);
+    let aileron = &vehicle.control_surfaces[1];
+    assert_eq!(aileron.name, "aileron");
+    assert_eq!(aileron.panel_indices.len(), 1);
+    assert!(aileron.panel_indices[0] >= 1);
+    let owned = &vehicle.aero_geometry.panels[aileron.panel_indices[0]];
+    assert!((owned.area_m2 - 16.0 * 0.3 * 0.75).abs() < 1e-9);
 }

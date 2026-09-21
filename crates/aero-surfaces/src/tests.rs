@@ -8,8 +8,9 @@
 use glam::DVec3;
 
 use crate::{
-    BendCurve, BendStation, CompileOptions, ControlRegion, FoldJoint, MechanismState, Planform,
-    ProceduralSurface, RefinementMode, SectionData, SpanStation, SurfaceError, compile_surface,
+    BendCurve, BendStation, CompileOptions, CompiledSurface, ControlRegion, FoldJoint,
+    MechanismState, Planform, ProceduralSurface, RefinementMode, SectionData, SpanStation,
+    SurfaceError, compile_surface,
 };
 
 fn tight_options() -> CompileOptions {
@@ -1250,4 +1251,77 @@ fn control_presets_build_validated_regions_with_mixing() {
         ..ControlChannels::neutral()
     };
     assert!((mix_command(flap_mix, full) - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn pathfinder_fictional_cant_with_controls() {
+    use crate::pathfinder_wing;
+
+    // Fictional coverage fixture: pins behavior, never real-world truth.
+    let surface = pathfinder_wing().unwrap();
+    let compiled = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    let summary = &compiled.summary;
+    // Independent material reference, computed in-test from the authored
+    // stations (never through the compiler): per-segment trapezoids over
+    // arc-length-normalized 3D lengths. Uniform trapezoid rules do NOT
+    // apply once bend kinks redistribute length per unit s.
+    let bend_stations = &surface.bend.stations;
+    let mut raw_length = 0.0;
+    let mut seg_lengths = Vec::new();
+    for pair in bend_stations.windows(2) {
+        let length = ((pair[1].s - pair[0].s) * surface.span_m).hypot(pair[1].z_m - pair[0].z_m);
+        seg_lengths.push((pair[0].s, pair[1].s, length));
+        raw_length += length;
+    }
+    let scale = surface.span_m / raw_length;
+    let mut expected_area = 0.0;
+    for (a, b, length) in seg_lengths {
+        expected_area +=
+            0.5 * (surface.planform.chord(a) + surface.planform.chord(b)) * scale * length;
+    }
+    assert!((summary.material_area_m2 - expected_area).abs() < 1e-9);
+    // Canted tips: projected span shrinks, tip elevation dominates.
+    assert!(summary.projected_span_m < 6.0);
+    assert!(summary.projected_span_m > 5.4);
+    assert!(summary.bend_profile_m[4] > summary.bend_profile_m[2]);
+    // Both embedded controls own panels with recorded hinges.
+    assert_eq!(compiled.controls.len(), 2);
+    assert_eq!(summary.control_areas.len(), 2);
+    for record in &summary.control_areas {
+        assert!(record.panel_count > 0 && record.area_m2 > 0.0);
+    }
+}
+
+#[test]
+fn compiled_surface_crosses_hangar_boundary_as_data() {
+    // The hangar/flight contract: authoring types never reach flight.
+    // The compiled surface serializes to data and back losslessly, so
+    // the baker can ship it and flight can consume it without this
+    // crate. Folds, tags, controls, and the summary must all survive.
+    let mut surface = rectangular(8.0, 2.0);
+    surface.controls.push(aileron("aileron"));
+    surface.folds.push(FoldJoint {
+        name: "tip-fold".into(),
+        station_s: 0.7,
+        axis: DVec3::X,
+        deployed_angle_rad: 0.0,
+        stowed_angle_rad: 0.5,
+        travel_limit_rad: 1.0,
+    });
+    let compiled = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::stowed(&surface),
+    )
+    .unwrap();
+    // postcard, like the protocol wire: binary-exact f64 roundtrip.
+    let bytes = postcard::to_allocvec(&compiled).expect("compiled surface serializes");
+    let restored: CompiledSurface =
+        postcard::from_bytes(&bytes).expect("compiled surface deserializes");
+    assert_eq!(restored, compiled);
 }

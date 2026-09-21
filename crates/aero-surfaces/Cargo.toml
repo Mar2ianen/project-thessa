@@ -11,6 +11,9 @@ glam.workspace = true
 serde.workspace = true
 thessa-sim-core = { path = "../sim-core" }
 
+[dev-dependencies]
+postcard.workspace = true
+
 [[bench]]
 name = "compile"
 harness = false

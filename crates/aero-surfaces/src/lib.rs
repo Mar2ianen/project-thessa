@@ -32,6 +32,20 @@
 //!
 //! All geometry is `f64`, SI units, no global coefficients: areas, spans,
 //! sweeps, frames, and ownership are derived from the authored splines.
+//!
+//! # Architectural boundary: hangar entity, never flight code
+//!
+//! This crate is a hangar-side compiler. It runs in the editor, in
+//! `vehicle-baker`, and in tests; it never runs in the flight hot path.
+//! Flight consumes only compiled artifacts: [`AeroPanel`](thessa_sim_core::AeroPanel)
+//! zones inside
+//! [`AeroGeometry`](thessa_sim_core::AeroGeometry) plus
+//! [`ControlSurfaceDefinition`](thessa_sim_core::ControlSurfaceDefinition)
+//! entries, shipped across the boundary as serialized data (the roundtrip
+//! test below pins exactly that). Consequently this crate depends only on
+//! `glam`, `serde`, and `thessa-sim-core`: no Bevy, no Tokio, no render or
+//! physics-loop crates. Flight crates must never depend on it; the baker
+//! test next door proves the hangar-side wiring instead.
 
 mod bend;
 mod compile;
@@ -53,7 +67,7 @@ pub use compile::{
 pub use error::SurfaceError;
 pub use golden::{
     boeing_777x, boeing_777x_half_wing, concorde, concorde_wing, dream_chaser, dream_chaser_wing,
-    shuttle_orbiter, shuttle_orbiter_wing,
+    pathfinder_wing, shuttle_orbiter, shuttle_orbiter_wing,
 };
 pub use mechanism::{ControlRegion, FoldJoint};
 pub use planform::{Planform, SpanStation};

@@ -151,19 +151,14 @@ impl BendCurve {
     /// `span_m`: `Y(s) = k * s * span_m`, `Z(s) = k * elevation(s)`.
     ///
     /// Bending then changes projected span/area and local frames without
-    /// changing material surface area merely because of orientation. Flat
-    /// curves map to exactly `1.0`; smooth curves are length-integrated
-    /// with a fine deterministic trapezoid rule.
+    /// changing material surface area merely because of orientation. The
+    /// length integrates exactly over authored segments (piecewise-linear
+    /// hypotenuse sum, no sampling grid to misalign with kinks); flat
+    /// curves map to exactly `1.0`.
     pub(crate) fn material_scale(&self, span_m: f64) -> f64 {
-        const SAMPLES: usize = 1024;
         let mut raw = 0.0;
-        let (mut previous_y, mut previous_z) = (0.0, self.elevation(0.0));
-        for index in 1..=SAMPLES {
-            let s = index as f64 / SAMPLES as f64;
-            let (y, z) = (s * span_m, self.elevation(s));
-            raw += (y - previous_y).hypot(z - previous_z);
-            previous_y = y;
-            previous_z = z;
+        for pair in self.stations.windows(2) {
+            raw += ((pair[1].s - pair[0].s) * span_m).hypot(pair[1].z_m - pair[0].z_m);
         }
         if raw <= 0.0 { 1.0 } else { span_m / raw }
     }

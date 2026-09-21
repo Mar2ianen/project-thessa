@@ -73,7 +73,7 @@ pub use mechanism::{ControlRegion, ControlRegionKind, FoldJoint};
 pub use planform::{Planform, SpanStation};
 pub use preset::{
     ControlChannels, ControlMixing, aileron, airbrake, anti_servo_tab, elevator, elevon, flap,
-    flaperon, mix_command, rudder, slat, spoiler, stabilator, trim_tab,
+    flaperon, mix_command, rudder, ruddervator, slat, spoiler, stabilator, trim_tab,
 };
 pub use profile::{CruiseRequirement, Naca4, ProfilePick, recommend_cruise_profile};
 pub use section::{AeroProfileId, SectionData, SectionStation};

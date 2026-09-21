@@ -1,0 +1,681 @@
+//! Hangar compiler: authoring surface to solver-ready panels.
+//!
+//! The compiler samples the planform, bend, and section functions, splits at
+//! every geometric and mechanism boundary, subdivides smooth intervals to
+//! bound zone granularity, and derives per-zone solver inputs. Positions come
+//! from planform plus bend exactly; orientation folds section incidence in;
+//! ownership comes from the mechanism intervals.
+//!
+//! Error model: authoring stations are piecewise-linear splines, and every
+//! per-zone derivation (trapezoid area on the spanwise material extent,
+//! exact segment tangents, mid-interval frames, endpoint sweep) is exact on
+//! linear inputs. Base splits sit on every authored station, so zones never
+//! span kinks; compilation is exact with respect to the authored polylines
+//! up to floating-point summation, at any tolerance. Tolerances therefore
+//! bound zone granularity for solver locality (small flat zones track local
+//! flow better than large ones) without moving geometry — pinned by the
+//! stability test. Convergence toward an analytic reference comes from
+//! refining the authoring stations — pinned by the convergence test.
+
+use std::collections::BTreeMap;
+
+use glam::{DQuat, DVec3};
+use serde::{Deserialize, Serialize};
+use thessa_sim_core::{AeroPanel, ControlSurfaceDefinition};
+
+use crate::summary::CompiledSurfaceSummary;
+use crate::{ProceduralSurface, SurfaceError};
+
+/// Subdivision tolerances and mechanism state for one compilation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompileOptions {
+    /// Split a span interval while the chord changes by more than this
+    /// fraction across it.
+    pub max_chord_change_frac: f64,
+    /// Split while the bend tangent turns by more than this (radians).
+    pub max_bend_angle_rad: f64,
+    /// Split while the section incidence changes by more than this.
+    pub max_incidence_change_rad: f64,
+    /// Split while the leading-edge sweep changes by more than this.
+    pub max_sweep_change_rad: f64,
+    /// Hard recursion cap per base interval (interval count `<= 2^depth`).
+    pub max_depth: u32,
+}
+
+impl Default for CompileOptions {
+    fn default() -> Self {
+        Self {
+            max_chord_change_frac: 0.01,
+            max_bend_angle_rad: 0.5_f64.to_radians(),
+            max_incidence_change_rad: 0.5_f64.to_radians(),
+            max_sweep_change_rad: 0.5_f64.to_radians(),
+            max_depth: 12,
+        }
+    }
+}
+
+impl CompileOptions {
+    fn validate(&self) -> Result<(), SurfaceError> {
+        for (label, value) in [
+            ("max_chord_change_frac", self.max_chord_change_frac),
+            ("max_bend_angle_rad", self.max_bend_angle_rad),
+            ("max_incidence_change_rad", self.max_incidence_change_rad),
+            ("max_sweep_change_rad", self.max_sweep_change_rad),
+        ] {
+            if !value.is_finite() || value <= 0.0 {
+                return Err(SurfaceError::InvalidOptions(format!(
+                    "compile option {label} must be positive and finite (got {value})"
+                )));
+            }
+        }
+        if self.max_depth > 20 {
+            return Err(SurfaceError::InvalidOptions(format!(
+                "compile option max_depth must be at most 20 (got {})",
+                self.max_depth
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Which fold angles to compile. Angles are parallel to
+/// [`ProceduralSurface::folds`](crate::ProceduralSurface) in surface order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MechanismState {
+    /// Per-joint angle in radians. Missing entries fall back to the joint's
+    /// deployed angle; extra entries are rejected.
+    pub fold_angles_rad: Vec<f64>,
+}
+
+impl MechanismState {
+    /// Compile in the as-drawn flight configuration.
+    pub fn deployed() -> Self {
+        Self {
+            fold_angles_rad: Vec::new(),
+        }
+    }
+
+    /// Compile with every joint at its stowed angle.
+    pub fn stowed(surface: &ProceduralSurface) -> Self {
+        Self {
+            fold_angles_rad: surface
+                .folds
+                .iter()
+                .map(|joint| joint.stowed_angle_rad)
+                .collect(),
+        }
+    }
+
+    fn resolve(&self, surface: &ProceduralSurface) -> Result<Vec<f64>, SurfaceError> {
+        if self.fold_angles_rad.len() > surface.folds.len() {
+            return Err(SurfaceError::InvalidOptions(format!(
+                "mechanism state has {} fold angles for {} joints",
+                self.fold_angles_rad.len(),
+                surface.folds.len()
+            )));
+        }
+        surface
+            .folds
+            .iter()
+            .enumerate()
+            .map(|(index, joint)| {
+                let angle = self
+                    .fold_angles_rad
+                    .get(index)
+                    .copied()
+                    .unwrap_or(joint.deployed_angle_rad);
+                if !angle.is_finite() {
+                    return Err(SurfaceError::InvalidOptions(format!(
+                        "fold angle for joint '{}' must be finite",
+                        joint.name
+                    )));
+                }
+                if (angle - joint.deployed_angle_rad).abs() > joint.travel_limit_rad + 1e-9 {
+                    return Err(SurfaceError::InvalidOptions(format!(
+                        "fold angle for joint '{}' lies outside its travel limit",
+                        joint.name
+                    )));
+                }
+                Ok(angle)
+            })
+            .collect()
+    }
+}
+
+/// Ownership of one compiled panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelTag {
+    /// Innermost control region owning the panel (index into the surface's
+    /// `controls`), if any. A nested tab owns its panels, not the parent.
+    pub control: Option<usize>,
+    /// Direct parent region when `control` is a nested tab. Runtime
+    /// composition (tab rides parent deflection) is a mixer concern; the
+    /// compiler records the chain so the mixer can address it.
+    pub control_parent: Option<usize>,
+    /// Outboard-most fold joint outboard of whose station the panel sits
+    /// (index into the surface's `folds`), if any.
+    pub fold: Option<usize>,
+}
+
+/// One compiled fold joint: hinge placement plus compiled angle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompiledFold {
+    /// Joint name from authoring.
+    pub name: String,
+    /// Hinge point in body metres (fold-station section, mid-chord).
+    pub hinge_body_m: DVec3,
+    /// Hinge axis in body coordinates, unit length.
+    pub axis_body: DVec3,
+    /// Compiled angle in radians.
+    pub angle_rad: f64,
+}
+
+/// Compiled surface: runtime-consumable output of the hangar step.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompiledSurface {
+    /// Solver panels, one per aerodynamic zone.
+    pub panels: Vec<AeroPanel>,
+    /// Ownership parallel to `panels`.
+    pub tags: Vec<PanelTag>,
+    /// One definition per control region (tabs included), referencing the
+    /// panels each region owns innermost.
+    pub controls: Vec<ControlSurfaceDefinition>,
+    /// Compiled fold records in surface order.
+    pub folds: Vec<CompiledFold>,
+    /// Geometry-only telemetry record for goldens and debug views.
+    pub summary: CompiledSurfaceSummary,
+}
+
+impl CompiledSurface {
+    /// Mirror across the body `x/z` plane: right hand to left hand.
+    ///
+    /// Positions and axes map `y -> -y` with lift re-orthogonalized so it
+    /// stays up; fold angles negate so equivalent commands keep mirrored
+    /// surfaces mirrored. Areas and ownership are untouched.
+    pub fn mirrored(&self) -> Self {
+        let mirror_point = |point: DVec3| DVec3::new(point.x, -point.y, point.z);
+        let panels = self
+            .panels
+            .iter()
+            .map(|panel| {
+                let chord = mirror_point(panel.chord_axis_body).normalize();
+                let lifted = mirror_point(panel.lift_axis_body);
+                let lift = (lifted - chord * lifted.dot(chord)).normalize();
+                AeroPanel {
+                    position_body_m: mirror_point(panel.position_body_m),
+                    center_of_pressure_body_m: mirror_point(panel.center_of_pressure_body_m),
+                    chord_axis_body: chord,
+                    lift_axis_body: lift,
+                    ..*panel
+                }
+            })
+            .collect();
+        let folds = self
+            .folds
+            .iter()
+            .map(|fold| CompiledFold {
+                name: fold.name.clone(),
+                hinge_body_m: mirror_point(fold.hinge_body_m),
+                axis_body: mirror_point(fold.axis_body).normalize(),
+                angle_rad: -fold.angle_rad,
+            })
+            .collect();
+        let mirrored = Self {
+            panels,
+            tags: self.tags.clone(),
+            controls: self.controls.clone(),
+            folds,
+            summary: self.summary.mirrored(),
+        };
+        // Mirroring preserves panel order, so control definitions keep
+        // addressing the same panel indices untouched.
+        mirrored
+    }
+}
+
+/// Compile one surface with options and mechanism state.
+///
+/// Result panels plug straight into
+/// [`AeroGeometry`](thessa_sim_core::AeroGeometry); control definitions
+/// plug into
+/// [`VehicleDefinition`](thessa_sim_core::VehicleDefinition).
+pub fn compile_surface(
+    surface: &ProceduralSurface,
+    options: &CompileOptions,
+    mechanism: &MechanismState,
+) -> Result<CompiledSurface, SurfaceError> {
+    surface.validate()?;
+    options.validate()?;
+    let fold_angles = mechanism.resolve(surface)?;
+    let compiler = Compiler::new(surface, options, fold_angles)?;
+    compiler.compile()
+}
+
+struct Compiler<'a> {
+    surface: &'a ProceduralSurface,
+    options: &'a CompileOptions,
+    fold_angles: Vec<f64>,
+    fold_order: Vec<usize>,
+    /// Arc-length rescale so the root-to-tip material length is `span_m`.
+    bend_k: f64,
+}
+
+impl<'a> Compiler<'a> {
+    fn new(
+        surface: &'a ProceduralSurface,
+        options: &'a CompileOptions,
+        fold_angles: Vec<f64>,
+    ) -> Result<Self, SurfaceError> {
+        let mut fold_order: Vec<usize> = (0..surface.folds.len()).collect();
+        fold_order.sort_by(|&a, &b| {
+            surface.folds[b]
+                .station_s
+                .partial_cmp(&surface.folds[a].station_s)
+                .expect("validated finite")
+        });
+        Ok(Self {
+            surface,
+            options,
+            fold_angles,
+            fold_order,
+            bend_k: surface.bend.material_scale(surface.span_m),
+        })
+    }
+
+    /// Mapped spanwise position: horizontal projection after arc-length
+    /// normalization. Bending shrinks this from the authored `s * span_m`.
+    fn span_y(&self, s: f64) -> f64 {
+        self.bend_k * s * self.surface.span_m
+    }
+
+    /// Mapped elevation after arc-length normalization.
+    fn bend_z(&self, s: f64) -> f64 {
+        self.bend_k * self.surface.bend.elevation(s)
+    }
+
+    fn compile(&self) -> Result<CompiledSurface, SurfaceError> {
+        let splits = self.base_splits();
+        let mut leaves = Vec::new();
+        for pair in splits.windows(2) {
+            self.subdivide(pair[0], pair[1], 0, &mut leaves);
+        }
+        let mut compiled = CompiledSurface {
+            panels: Vec::new(),
+            tags: Vec::new(),
+            controls: Vec::new(),
+            folds: self.compiled_folds(),
+            summary: CompiledSurfaceSummary::default(),
+        };
+        let mut bbox_min = DVec3::splat(f64::INFINITY);
+        let mut bbox_max = DVec3::splat(f64::NEG_INFINITY);
+        for (a, b) in leaves {
+            for zone in self.chord_zones(a, b) {
+                let (panel, corners) = self.zone_panel(a, b, zone.0, zone.1)?;
+                for corner in &corners {
+                    bbox_min = bbox_min.min(*corner);
+                    bbox_max = bbox_max.max(*corner);
+                }
+                compiled.tags.push(zone.2);
+                compiled.panels.push(panel);
+            }
+        }
+        if compiled.panels.is_empty() {
+            return Err(SurfaceError::PanelRejected(
+                "compilation produced no panels".into(),
+            ));
+        }
+        compiled.controls = self.control_definitions(&compiled.tags)?;
+        compiled.summary =
+            CompiledSurfaceSummary::build(self.surface, &compiled, bbox_min, bbox_max);
+        Ok(self.mount(compiled))
+    }
+
+    /// Hard split stations: endpoints, every authored station list, every
+    /// control span bound, every fold station.
+    fn base_splits(&self) -> Vec<f64> {
+        let mut splits = vec![0.0, 1.0];
+        let push_stations = |splits: &mut Vec<f64>, stations: &[f64]| {
+            splits.extend(stations.iter().copied());
+        };
+        push_stations(
+            &mut splits,
+            &self
+                .surface
+                .planform
+                .stations
+                .iter()
+                .map(|station| station.s)
+                .collect::<Vec<_>>(),
+        );
+        push_stations(
+            &mut splits,
+            &self
+                .surface
+                .bend
+                .stations
+                .iter()
+                .map(|station| station.s)
+                .collect::<Vec<_>>(),
+        );
+        push_stations(
+            &mut splits,
+            &self
+                .surface
+                .sections
+                .stations
+                .iter()
+                .map(|station| station.s)
+                .collect::<Vec<_>>(),
+        );
+        for region in &self.surface.controls {
+            splits.push(region.span.0);
+            splits.push(region.span.1);
+        }
+        for joint in &self.surface.folds {
+            splits.push(joint.station_s);
+        }
+        splits.sort_by(|a, b| a.partial_cmp(b).expect("validated finite"));
+        let mut deduped: Vec<f64> = Vec::with_capacity(splits.len());
+        for split in splits {
+            if deduped
+                .last()
+                .is_none_or(|last: &f64| (split - *last).abs() > 1e-12)
+            {
+                deduped.push(split);
+            }
+        }
+        deduped
+    }
+
+    /// Recursively split `[a, b]` until the smooth-interval metrics pass.
+    fn subdivide(&self, a: f64, b: f64, depth: u32, leaves: &mut Vec<(f64, f64)>) {
+        if depth >= self.options.max_depth || !self.needs_split(a, b) {
+            leaves.push((a, b));
+            return;
+        }
+        let mid = 0.5 * (a + b);
+        self.subdivide(a, mid, depth + 1, leaves);
+        self.subdivide(mid, b, depth + 1, leaves);
+    }
+
+    fn needs_split(&self, a: f64, b: f64) -> bool {
+        if b - a <= 1e-12 {
+            return false;
+        }
+        let planform = &self.surface.planform;
+        let chord_a = planform.chord(a);
+        let chord_b = planform.chord(b);
+        let chord_ref = chord_a.max(chord_b).max(1e-9);
+        if (chord_b - chord_a).abs() / chord_ref > self.options.max_chord_change_frac {
+            return true;
+        }
+        let mid = 0.5 * (a + b);
+        let bend_turn = self
+            .span_tangent(a)
+            .angle_between(self.span_tangent(b))
+            .max(
+                self.span_tangent(a)
+                    .angle_between(self.span_tangent(mid))
+                    .max(self.span_tangent(mid).angle_between(self.span_tangent(b))),
+            );
+        if bend_turn > self.options.max_bend_angle_rad {
+            return true;
+        }
+        let sections = &self.surface.sections;
+        if (sections.incidence(b) - sections.incidence(a)).abs()
+            > self.options.max_incidence_change_rad
+        {
+            return true;
+        }
+        if (self.leading_sweep(b) - self.leading_sweep(a)).abs() > self.options.max_sweep_change_rad
+            && (b - a) * self.surface.span_m > 1e-9
+        {
+            return true;
+        }
+        let _ = mid;
+        false
+    }
+
+    /// Unit span tangent at `s` from the exact segment derivatives.
+    /// Finite differences would smear kink vertices into neighboring
+    /// zones; the piecewise-linear spline differentiates exactly.
+    fn span_tangent(&self, s: f64) -> DVec3 {
+        // dY/ds carries bend_k, dZ/ds carries bend_k: the scale cancels in
+        // the normalization, so the raw authored slopes suffice.
+        let tangent = DVec3::new(
+            0.0,
+            self.surface.span_m,
+            self.surface.bend.elevation_slope(s),
+        );
+        if tangent.length_squared() <= f64::EPSILON {
+            DVec3::Y
+        } else {
+            tangent.normalize()
+        }
+    }
+
+    /// Leading-edge sweep angle at `s` from the exact segment slope.
+    fn leading_sweep(&self, s: f64) -> f64 {
+        let dx = self.surface.planform.leading_slope(s);
+        let dy = self.bend_k * self.surface.span_m;
+        dx.atan2(dy)
+    }
+
+    /// Chordwise zones for one span leaf: split at covering control-region
+    /// chord bounds so no panel straddles independently moving regions.
+    /// Returns `(u0, u1, tag)` per zone.
+    fn chord_zones(&self, a: f64, b: f64) -> Vec<(f64, f64, PanelTag)> {
+        let mid_s = 0.5 * (a + b);
+        let mut cuts = vec![0.0, 1.0];
+        for region in &self.surface.controls {
+            if region.span.0 < mid_s && mid_s < region.span.1 {
+                cuts.push(region.chord.0);
+                cuts.push(region.chord.1);
+            }
+        }
+        cuts.sort_by(|x, y| x.partial_cmp(y).expect("validated finite"));
+        let mut deduped: Vec<f64> = Vec::new();
+        for cut in cuts {
+            if deduped
+                .last()
+                .is_none_or(|last: &f64| (cut - *last).abs() > 1e-9)
+            {
+                deduped.push(cut);
+            }
+        }
+        let fold = self
+            .surface
+            .folds
+            .iter()
+            .rposition(|joint| joint.station_s <= a + 1e-9);
+        deduped
+            .windows(2)
+            .map(|pair| {
+                let (u0, u1) = (pair[0], pair[1]);
+                let mid_u = 0.5 * (u0 + u1);
+                let owner = self
+                    .surface
+                    .controls
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, region)| {
+                        region.span.0 < mid_s
+                            && mid_s < region.span.1
+                            && region.chord.0 <= mid_u
+                            && mid_u <= region.chord.1
+                    })
+                    .max_by_key(|(_, region)| region.depth())
+                    .map(|(index, region)| (index, region.parent));
+                let (control, control_parent) = owner
+                    .map(|(index, parent)| (Some(index), parent))
+                    .unwrap_or((None, None));
+                (
+                    u0,
+                    u1,
+                    PanelTag {
+                        control,
+                        control_parent,
+                        fold,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Build one zone panel plus its four folded surface-local corners.
+    fn zone_panel(
+        &self,
+        a: f64,
+        b: f64,
+        u0: f64,
+        u1: f64,
+    ) -> Result<(AeroPanel, [DVec3; 4]), SurfaceError> {
+        let planform = &self.surface.planform;
+        let mid = 0.5 * (a + b);
+        let corners = [
+            self.fold_point(a, u0),
+            self.fold_point(a, u1),
+            self.fold_point(b, u0),
+            self.fold_point(b, u1),
+        ];
+        let centroid = corners.iter().sum::<DVec3>() / 4.0;
+        let chord_a = planform.chord(a) * (u1 - u0);
+        let chord_b = planform.chord(b) * (u1 - u0);
+        // Spanwise material extent: the mapped (Y, Z) distance. The
+        // chordwise edge slant (sweep) belongs to the planform shape, not
+        // to the strip width; using the slanted corner distance here
+        // would overstate swept-wing area by ~1/cos(sweep).
+        let span_3d = (self.span_y(b) - self.span_y(a)).hypot(self.bend_z(b) - self.bend_z(a));
+        let area = 0.5 * (chord_a + chord_b) * span_3d;
+        let chord_m = 0.5 * (chord_a + chord_b);
+        let incidence = self.surface.sections.incidence(mid);
+        let tangent = self.span_tangent(mid);
+        let chord_dir = (DQuat::from_axis_angle(tangent, incidence) * DVec3::X).normalize();
+        let lift_dir = chord_dir.cross(tangent).normalize();
+        let sweep = (planform.leading_edge(b) - planform.leading_edge(a))
+            .atan2(self.span_y(b) - self.span_y(a));
+        if sweep.abs() >= 89.0_f64.to_radians() {
+            return Err(SurfaceError::PanelRejected(format!(
+                "zone {a}..{b} leading-edge sweep {sweep} rad is too steep; add planform stations"
+            )));
+        }
+        let aspect = self.surface.span_m.powi(2) / self.projected_area_estimate();
+        let thickness = self.surface.sections.thickness(mid);
+        let panel = AeroPanel::new(centroid, chord_dir, lift_dir, area, chord_m)
+            .and_then(|panel| panel.with_planform(span_3d, aspect, sweep, 1.0))
+            .and_then(|panel| panel.with_center_of_pressure(centroid))
+            .and_then(|panel| panel.with_thickness_ratio(thickness))
+            .map_err(|error| SurfaceError::PanelRejected(error.to_string()))?;
+        Ok((panel, corners))
+    }
+
+    /// Projected (flat-plane) area estimate for the surface aspect ratio:
+    /// fine deterministic sampling, independent of subdivision.
+    fn projected_area_estimate(&self) -> f64 {
+        const SAMPLES: usize = 512;
+        let planform = &self.surface.planform;
+        let mut area = 0.0;
+        for index in 0..SAMPLES {
+            let a = index as f64 / SAMPLES as f64;
+            let b = (index + 1) as f64 / SAMPLES as f64;
+            let mid = 0.5 * (a + b);
+            let tangent = self.span_tangent(mid);
+            let lift_z = DVec3::X.cross(tangent).normalize().z.abs();
+            area += 0.5
+                * (planform.chord(a) + planform.chord(b))
+                * (self.span_y(b) - self.span_y(a))
+                * lift_z;
+        }
+        area.max(1e-12)
+    }
+
+    /// Surface-local point at `(s, u)`, folded by every outboard joint.
+    /// Joints apply outboard-first about their as-drawn hinges so an
+    /// inboard fold rigidly carries already-folded outboard geometry.
+    fn fold_point(&self, s: f64, u: f64) -> DVec3 {
+        let planform = &self.surface.planform;
+        let mut point = DVec3::new(
+            planform.leading_edge(s) + u * planform.chord(s),
+            self.span_y(s),
+            self.bend_z(s),
+        );
+        for &order in &self.fold_order {
+            let joint = &self.surface.folds[order];
+            if s > joint.station_s {
+                let hinge = DVec3::new(
+                    planform.leading_edge(joint.station_s) + 0.5 * planform.chord(joint.station_s),
+                    self.span_y(joint.station_s),
+                    self.bend_z(joint.station_s),
+                );
+                let axis = joint.axis.normalize();
+                let angle = self.fold_angles[order] - joint.deployed_angle_rad;
+                point = hinge + DQuat::from_axis_angle(axis, angle) * (point - hinge);
+            }
+        }
+        point
+    }
+
+    fn compiled_folds(&self) -> Vec<CompiledFold> {
+        let planform = &self.surface.planform;
+        self.surface
+            .folds
+            .iter()
+            .enumerate()
+            .map(|(index, joint)| CompiledFold {
+                name: joint.name.clone(),
+                hinge_body_m: DVec3::new(
+                    planform.leading_edge(joint.station_s) + 0.5 * planform.chord(joint.station_s),
+                    self.span_y(joint.station_s),
+                    self.bend_z(joint.station_s),
+                ),
+                axis_body: joint.axis.normalize(),
+                angle_rad: self.fold_angles[index],
+            })
+            .collect()
+    }
+
+    fn control_definitions(
+        &self,
+        tags: &[PanelTag],
+    ) -> Result<Vec<ControlSurfaceDefinition>, SurfaceError> {
+        let mut by_region: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (panel_index, tag) in tags.iter().enumerate() {
+            if let Some(region) = tag.control {
+                by_region.entry(region).or_default().push(panel_index);
+            }
+        }
+        self.surface
+            .controls
+            .iter()
+            .enumerate()
+            .map(|(index, region)| {
+                let panels = by_region.remove(&index).unwrap_or_default();
+                ControlSurfaceDefinition::new(
+                    region.name.clone(),
+                    panels,
+                    region.min_deflection_rad,
+                    region.max_deflection_rad,
+                )
+                .map_err(|error| SurfaceError::PanelRejected(error.to_string()))
+            })
+            .collect()
+    }
+
+    /// Mount surface-local output into the body frame: optional mirror
+    /// first (surface-local), then the origin offset.
+    fn mount(&self, mut compiled: CompiledSurface) -> CompiledSurface {
+        if self.surface.mirror_y {
+            compiled = compiled.mirrored();
+        }
+        let origin = self.surface.origin_body_m;
+        for panel in &mut compiled.panels {
+            panel.position_body_m += origin;
+            panel.center_of_pressure_body_m += origin;
+        }
+        for fold in &mut compiled.folds {
+            fold.hinge_body_m += origin;
+        }
+        compiled.summary.translate(origin);
+        compiled
+    }
+}

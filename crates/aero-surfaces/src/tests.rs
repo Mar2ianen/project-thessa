@@ -9,7 +9,7 @@ use glam::DVec3;
 
 use crate::{
     BendCurve, BendStation, CompileOptions, ControlRegion, FoldJoint, MechanismState, Planform,
-    ProceduralSurface, SectionData, SpanStation, SurfaceError, compile_surface,
+    ProceduralSurface, RefinementMode, SectionData, SpanStation, SurfaceError, compile_surface,
 };
 
 fn tight_options() -> CompileOptions {
@@ -19,6 +19,7 @@ fn tight_options() -> CompileOptions {
         max_incidence_change_rad: 0.01_f64.to_radians(),
         max_sweep_change_rad: 0.01_f64.to_radians(),
         max_depth: 16,
+        mode: RefinementMode::Tolerance,
     }
 }
 
@@ -950,5 +951,199 @@ fn concorde_golden_ogival_subdivision() {
     assert!(
         (refined.summary.material_area_m2 - summary.material_area_m2).abs()
             < 1e-9 * summary.material_area_m2
+    );
+}
+
+fn budget_options(budget_m2: f64, max_panels: usize) -> CompileOptions {
+    CompileOptions {
+        mode: RefinementMode::ErrorBudget {
+            budget_m2,
+            max_panels,
+        },
+        ..CompileOptions::default()
+    }
+}
+
+#[test]
+fn error_budget_yields_minimal_panels_at_certified_error() {
+    use crate::concorde_wing;
+    // The tapered wing is linear per piece: one zone is already exact,
+    // so the optimizer must stop at the base split instead of the
+    // 16k zones tight tolerances produce.
+    let tapered = ProceduralSurface {
+        name: "tapered".into(),
+        span_m: 10.0,
+        origin_body_m: DVec3::ZERO,
+        mirror_y: false,
+        planform: Planform::tapered(3.0, 1.0, 2.0).unwrap(),
+        bend: BendCurve::flat(),
+        sections: SectionData::uniform(0.0, 0.0).unwrap(),
+        controls: Vec::new(),
+        folds: Vec::new(),
+    };
+    let optimized = compile_surface(
+        &tapered,
+        &budget_options(1e-9, 100),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    assert_eq!(optimized.panels.len(), 1);
+    assert!((optimized.summary.material_area_m2 - 20.0).abs() < 1e-9);
+    assert!(optimized.summary.estimated_error_m2 <= 1e-9);
+
+    // Concorde: 516 default-tolerance zones collapse to the base
+    // intervals with identical area. This is the panel-count answer:
+    // tolerance subdivision buys solver locality, not accuracy.
+    let concorde = concorde_wing().unwrap();
+    let reference = compile_surface(
+        &concorde,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    let optimized = compile_surface(
+        &concorde,
+        &budget_options(1e-6, 4000),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    assert!(optimized.panels.len() < 20);
+    assert!(optimized.panels.len() < reference.panels.len() / 10);
+    assert!(
+        (optimized.summary.material_area_m2 - reference.summary.material_area_m2).abs()
+            < 1e-9 * reference.summary.material_area_m2
+    );
+    assert!(optimized.summary.estimated_error_m2 <= 1e-6);
+}
+
+#[test]
+fn error_budget_respects_cap_and_repeats_deterministically() {
+    use crate::concorde_wing;
+    let concorde = concorde_wing().unwrap();
+    // Zero budget forces refinement into the cap; the cap is hard.
+    let options = budget_options(0.0, 30);
+    let first = compile_surface(&concorde, &options, &MechanismState::deployed()).unwrap();
+    let second = compile_surface(&concorde, &options, &MechanismState::deployed()).unwrap();
+    assert!(first.panels.len() <= 30);
+    assert_eq!(first, second);
+    // The achieved error is reported even when the budget is missed.
+    assert!(first.summary.estimated_error_m2 >= 0.0);
+}
+
+#[test]
+fn tolerance_compilation_carries_error_telemetry() {
+    use crate::concorde_wing;
+    // Every compilation certifies itself, whatever the mode.
+    let rect = ProceduralSurface::rectangular("r", 8.0, 2.0, DVec3::ZERO).unwrap();
+    let compiled = compile_surface(
+        &rect,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    assert!(compiled.summary.estimated_error_m2 < 1e-9);
+    let concorde = concorde_wing().unwrap();
+    let compiled = compile_surface(
+        &concorde,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    assert!(compiled.summary.estimated_error_m2 < 1e-9);
+}
+
+#[test]
+fn naca_thickness_matches_textbook_shape() {
+    use crate::Naca4;
+    let symmetric = Naca4::new(0.0, 0.4, 0.12).unwrap();
+    // Symmetric section: zero camber line, zero zero-lift angle exactly.
+    assert_eq!(symmetric.camber_at(0.5), (0.0, 0.0));
+    assert_eq!(symmetric.zero_lift_angle_rad(), 0.0);
+    // Max 12 percent full thickness (0.06 half) sits at 30 percent
+    // chord (Abbott).
+    let mut max = (0.0, 0.0);
+    let mut x = 0.0;
+    while x <= 1.0 {
+        let t = symmetric.thickness_at(x);
+        if t > max.1 {
+            max = (x, t);
+        }
+        x += 0.001;
+    }
+    assert!((2.0 * max.1 - 0.12).abs() < 0.004);
+    assert!((max.0 - 0.30).abs() < 0.02);
+}
+
+#[test]
+fn naca_2412_zero_lift_matches_published_value() {
+    use crate::Naca4;
+    // Abbott/Von Doenhoff: NACA 2412 stalls with α0 ≈ -2.1 deg, Cl(α=0)
+    // ≈ 0.25. The integral below is thin-airfoil theory, the band is the
+    // published measurement.
+    let wing = Naca4::new(0.02, 0.4, 0.12).unwrap();
+    let alpha0_deg = wing.zero_lift_angle_rad().to_degrees();
+    assert!((alpha0_deg + 2.1).abs() < 0.3, "α0 = {alpha0_deg}");
+    let cl0 = -2.0 * std::f64::consts::PI * wing.zero_lift_angle_rad();
+    assert!((cl0 - 0.25).abs() < 0.04, "Cl0 = {cl0}");
+    // Zero-lift angle is linear in camber at fixed position.
+    let more = Naca4::new(0.04, 0.4, 0.12).unwrap();
+    let ratio = more.zero_lift_angle_rad() / wing.zero_lift_angle_rad();
+    assert!((ratio - 2.0).abs() < 0.02, "ratio = {ratio}");
+    // Cl-max bracket covers the published 1.6-1.7 stall.
+    let (low, high) = wing.cl_max_band();
+    assert!(low <= 1.55 && high >= 1.70, "band = {low}..{high}");
+}
+
+#[test]
+fn cruise_selector_picks_least_camber_with_margin() {
+    use crate::{CruiseRequirement, recommend_cruise_profile};
+    // Moderate cruise ask: 2-percent camber suffices, thickness rides
+    // the structural ceiling.
+    let pick = recommend_cruise_profile(&CruiseRequirement {
+        target_section_cl: 0.5,
+        deck_angle_deg: 2.0,
+        max_thickness_ratio: 0.15,
+        reynolds_number: 6.0e6,
+    })
+    .unwrap();
+    assert_eq!(pick.profile_id().0, "NACA2415");
+    assert!((pick.family.t - 0.15).abs() < 1e-12);
+    assert!(pick.stall_margin > 0.3);
+    // Harder ask: camber grows, never exceeds the grid.
+    let hard = recommend_cruise_profile(&CruiseRequirement {
+        target_section_cl: 0.8,
+        deck_angle_deg: 2.0,
+        max_thickness_ratio: 0.12,
+        reynolds_number: 6.0e6,
+    })
+    .unwrap();
+    assert!(hard.family.m >= 0.04);
+    assert!(hard.family.m <= 0.06);
+    assert!(hard.stall_margin > 0.0);
+    // The pick stamps sections consistently.
+    let mut sections = SectionData::uniform(0.0, 0.0).unwrap();
+    pick.apply_to_sections(&mut sections);
+    for station in &sections.stations {
+        assert!((station.thickness_ratio - 0.15).abs() < 1e-12);
+        assert_eq!(station.profile.as_ref().unwrap().0, "NACA2415");
+    }
+    // Degenerate requirements fail closed.
+    assert!(
+        recommend_cruise_profile(&CruiseRequirement {
+            target_section_cl: 0.0,
+            deck_angle_deg: 2.0,
+            max_thickness_ratio: 0.12,
+            reynolds_number: 6.0e6,
+        })
+        .is_err()
+    );
+    assert!(
+        recommend_cruise_profile(&CruiseRequirement {
+            target_section_cl: 0.5,
+            deck_angle_deg: 2.0,
+            max_thickness_ratio: 0.02,
+            reynolds_number: 6.0e6,
+        })
+        .is_err()
     );
 }

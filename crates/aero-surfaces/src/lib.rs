@@ -39,13 +39,15 @@ mod error;
 mod golden;
 mod mechanism;
 mod planform;
+mod profile;
 mod section;
 mod summary;
 mod surface;
 
 pub use bend::{BendCurve, BendStation};
 pub use compile::{
-    CompileOptions, CompiledFold, CompiledSurface, MechanismState, PanelTag, compile_surface,
+    CompileOptions, CompiledFold, CompiledSurface, MechanismState, PanelTag, RefinementMode,
+    compile_surface,
 };
 pub use error::SurfaceError;
 pub use golden::{
@@ -54,6 +56,7 @@ pub use golden::{
 };
 pub use mechanism::{ControlRegion, FoldJoint};
 pub use planform::{Planform, SpanStation};
+pub use profile::{CruiseRequirement, Naca4, ProfilePick, recommend_cruise_profile};
 pub use section::{AeroProfileId, SectionData, SectionStation};
 pub use summary::CompiledSurfaceSummary;
 pub use surface::ProceduralSurface;

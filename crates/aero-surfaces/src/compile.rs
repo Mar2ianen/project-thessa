@@ -26,6 +26,34 @@ use thessa_sim_core::{AeroPanel, ControlSurfaceDefinition};
 use crate::summary::CompiledSurfaceSummary;
 use crate::{ProceduralSurface, SurfaceError};
 
+/// How smooth span intervals become zones.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum RefinementMode {
+    /// Fixed per-interval variation tolerances (chord fraction, bend,
+    /// incidence, sweep angles). Zones are cheap and plentiful; the knob
+    /// bounds zone granularity for solver locality (small flat zones
+    /// track local flow better). This is the flight-surface default.
+    Tolerance,
+    /// Greedy error budget: starting from the hard-boundary intervals,
+    /// repeatedly split the span leaf with the largest Richardson error
+    /// estimate until the total estimate drops under `budget_m2` or the
+    /// panel count hits `max_panels`. The budget is best-effort under the
+    /// cap; the achieved total is reported as
+    /// [`CompiledSurfaceSummary::estimated_error_m2`]. Yields the minimal
+    /// panel set certified under the budget: batch, LOD, and background
+    /// use where per-panel flow locality does not matter. Not for flight
+    /// surfaces: a handful of huge exact-area zones still misstates local
+    /// flow.
+    ErrorBudget {
+        /// Total acceptable error estimate in m^2-equivalent
+        /// (area plus orientation/centroid penalties).
+        budget_m2: f64,
+        /// Hard panel cap bounding refinement (base boundary intervals
+        /// always survive; the cap binds splits, not existence).
+        max_panels: usize,
+    },
+}
+
 /// Subdivision tolerances and mechanism state for one compilation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompileOptions {
@@ -40,6 +68,8 @@ pub struct CompileOptions {
     pub max_sweep_change_rad: f64,
     /// Hard recursion cap per base interval (interval count `<= 2^depth`).
     pub max_depth: u32,
+    /// Tolerance subdivision or greedy error-budget optimization.
+    pub mode: RefinementMode,
 }
 
 impl Default for CompileOptions {
@@ -50,6 +80,7 @@ impl Default for CompileOptions {
             max_incidence_change_rad: 0.5_f64.to_radians(),
             max_sweep_change_rad: 0.5_f64.to_radians(),
             max_depth: 12,
+            mode: RefinementMode::Tolerance,
         }
     }
 }
@@ -73,6 +104,22 @@ impl CompileOptions {
                 "compile option max_depth must be at most 20 (got {})",
                 self.max_depth
             )));
+        }
+        if let RefinementMode::ErrorBudget {
+            budget_m2,
+            max_panels,
+        } = &self.mode
+        {
+            if !budget_m2.is_finite() || *budget_m2 < 0.0 {
+                return Err(SurfaceError::InvalidOptions(format!(
+                    "error budget must be finite and non-negative (got {budget_m2})"
+                )));
+            }
+            if *max_panels == 0 {
+                return Err(SurfaceError::InvalidOptions(
+                    "error budget max_panels must be at least 1".into(),
+                ));
+            }
         }
         Ok(())
     }
@@ -260,6 +307,84 @@ struct Compiler<'a> {
     bend_k: f64,
 }
 
+/// One spanwise refinement interval with its recursion depth.
+#[derive(Debug, Clone, Copy)]
+struct SpanLeaf {
+    a: f64,
+    b: f64,
+    depth: u32,
+}
+
+/// Heap entry for greedy budget refinement: max-error first, ties broken
+/// by span start so the split sequence is deterministic.
+#[derive(Debug, Clone, Copy)]
+struct HeapLeaf {
+    error: f64,
+    leaf: SpanLeaf,
+}
+
+impl HeapLeaf {
+    fn new(error: f64, leaf: SpanLeaf) -> Self {
+        Self { error, leaf }
+    }
+
+    fn sort_key(&self) -> (u64, u64, u64) {
+        (
+            self.error.to_bits(),
+            self.leaf.a.to_bits(),
+            self.leaf.b.to_bits(),
+        )
+    }
+}
+
+impl PartialEq for HeapLeaf {
+    fn eq(&self, other: &Self) -> bool {
+        self.sort_key() == other.sort_key()
+    }
+}
+
+impl Eq for HeapLeaf {}
+
+impl PartialOrd for HeapLeaf {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HeapLeaf {
+    // Max-heap on error with the span interval as deterministic tie-break:
+    // the greedy split sequence depends only on geometry, never on
+    // insertion order.
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.sort_key().cmp(&other.sort_key())
+    }
+}
+
+/// Area centroid of a quadrilateral by two-triangle decomposition.
+/// Exact on planar quads; a consistent higher-order center for
+/// Richardson whole-vs-halves comparison and honest moment arms.
+fn quad_centroid(corners: [DVec3; 4]) -> DVec3 {
+    let [p00, p01, p10, p11] = corners;
+    let area1 = (p10 - p00).cross(p11 - p00).length();
+    let area2 = (p11 - p00).cross(p01 - p00).length();
+    let total = area1 + area2;
+    if total <= 0.0 {
+        return (p00 + p01 + p10 + p11) / 4.0;
+    }
+    let centroid1 = (p00 + p10 + p11) / 3.0;
+    let centroid2 = (p00 + p11 + p01) / 3.0;
+    (centroid1 * area1 + centroid2 * area2) / total
+}
+
+/// Raw geometric quantities of one zone, backing both panels and the
+/// Richardson estimate from a single code path.
+#[derive(Debug, Clone, Copy)]
+struct ZoneQuantities {
+    area_m2: f64,
+    centroid: DVec3,
+    normal: DVec3,
+}
+
 impl<'a> Compiler<'a> {
     fn new(
         surface: &'a ProceduralSurface,
@@ -295,10 +420,24 @@ impl<'a> Compiler<'a> {
 
     fn compile(&self) -> Result<CompiledSurface, SurfaceError> {
         let splits = self.base_splits();
-        let mut leaves = Vec::new();
-        for pair in splits.windows(2) {
-            self.subdivide(pair[0], pair[1], 0, &mut leaves);
-        }
+        let (leaves, estimated_error_m2) = match &self.options.mode {
+            RefinementMode::Tolerance => {
+                let mut leaves = Vec::new();
+                for pair in splits.windows(2) {
+                    self.subdivide(pair[0], pair[1], 0, &mut leaves);
+                }
+                // Post-hoc certification pass over the final leaves.
+                let mut estimated = 0.0;
+                for leaf in &leaves {
+                    estimated += self.leaf_error(leaf.a, leaf.b)?;
+                }
+                (leaves, estimated)
+            }
+            RefinementMode::ErrorBudget {
+                budget_m2,
+                max_panels,
+            } => self.refine_by_budget(*budget_m2, *max_panels, &splits)?,
+        };
         let mut compiled = CompiledSurface {
             panels: Vec::new(),
             tags: Vec::new(),
@@ -308,9 +447,9 @@ impl<'a> Compiler<'a> {
         };
         let mut bbox_min = DVec3::splat(f64::INFINITY);
         let mut bbox_max = DVec3::splat(f64::NEG_INFINITY);
-        for (a, b) in leaves {
-            for zone in self.chord_zones(a, b) {
-                let (panel, corners) = self.zone_panel(a, b, zone.0, zone.1)?;
+        for leaf in &leaves {
+            for zone in self.chord_zones(leaf.a, leaf.b) {
+                let (panel, corners) = self.zone_panel(leaf.a, leaf.b, zone.0, zone.1)?;
                 for corner in &corners {
                     bbox_min = bbox_min.min(*corner);
                     bbox_max = bbox_max.max(*corner);
@@ -325,9 +464,131 @@ impl<'a> Compiler<'a> {
             ));
         }
         compiled.controls = self.control_definitions(&compiled.tags)?;
-        compiled.summary =
-            CompiledSurfaceSummary::build(self.surface, &compiled, bbox_min, bbox_max);
+        compiled.summary = CompiledSurfaceSummary::build(
+            self.surface,
+            &compiled,
+            bbox_min,
+            bbox_max,
+            estimated_error_m2,
+        );
         Ok(self.mount(compiled))
+    }
+
+    /// Greedy error-budget refinement: split the highest-error leaf until
+    /// the total estimate fits the budget or the panel cap binds.
+    ///
+    /// The heap orders by `(error, span start)` so ties break
+    /// deterministically; the emitted leaf order is re-sorted by span.
+    /// Returns the final leaves plus their total error estimate.
+    fn refine_by_budget(
+        &self,
+        budget_m2: f64,
+        max_panels: usize,
+        splits: &[f64],
+    ) -> Result<(Vec<SpanLeaf>, f64), SurfaceError> {
+        use std::collections::BinaryHeap;
+
+        let mut heap = BinaryHeap::new();
+        let mut total_error = 0.0;
+        let mut panel_count = 0;
+        for pair in splits.windows(2) {
+            let leaf = SpanLeaf {
+                a: pair[0],
+                b: pair[1],
+                depth: 0,
+            };
+            let error = self.leaf_error(leaf.a, leaf.b)?;
+            total_error += error;
+            panel_count += self.chord_zones(leaf.a, leaf.b).len();
+            heap.push(HeapLeaf::new(error, leaf));
+        }
+        let mut frozen: Vec<SpanLeaf> = Vec::new();
+        let mut frozen_error = 0.0;
+        while total_error > budget_m2 {
+            let Some(best) = heap.pop() else { break };
+            let split_panels = panel_count - self.chord_zones(best.leaf.a, best.leaf.b).len();
+            let mid = 0.5 * (best.leaf.a + best.leaf.b);
+            let left = SpanLeaf {
+                a: best.leaf.a,
+                b: mid,
+                depth: best.leaf.depth + 1,
+            };
+            let right = SpanLeaf {
+                a: mid,
+                b: best.leaf.b,
+                depth: best.leaf.depth + 1,
+            };
+            let new_panels = split_panels
+                + self.chord_zones(left.a, left.b).len()
+                + self.chord_zones(right.a, right.b).len();
+            if best.leaf.depth >= self.options.max_depth || new_panels > max_panels {
+                // Unsplittable: retire the leaf, keep its error, continue
+                // with the next-best candidate.
+                frozen.push(best.leaf);
+                frozen_error += best.error;
+                continue;
+            }
+            let left_error = self.leaf_error(left.a, left.b)?;
+            let right_error = self.leaf_error(right.a, right.b)?;
+            total_error = total_error - best.error + left_error + right_error;
+            panel_count = new_panels;
+            heap.push(HeapLeaf::new(left_error, left));
+            heap.push(HeapLeaf::new(right_error, right));
+        }
+        let mut leaves: Vec<SpanLeaf> = heap.into_iter().map(|entry| entry.leaf).collect();
+        leaves.extend(frozen);
+        leaves.sort_by(|x, y| {
+            x.a.partial_cmp(&y.a)
+                .expect("validated finite")
+                .then(x.b.partial_cmp(&y.b).expect("validated finite"))
+        });
+        Ok((leaves, total_error + frozen_error))
+    }
+
+    /// Richardson error estimate for one span leaf: the whole-leaf zone
+    /// quantities against the sum of its halves, over identical chord
+    /// segments. Exact on linear inputs (estimate ~0); the triangle
+    /// inequality makes the leaf sum a conservative total.
+    fn leaf_error(&self, a: f64, b: f64) -> Result<f64, SurfaceError> {
+        let mid = 0.5 * (a + b);
+        let mut error = 0.0;
+        for zone in self.chord_zones(a, b) {
+            let (u0, u1) = (zone.0, zone.1);
+            let whole = self.zone_quantities(a, b, u0, u1)?;
+            let left = self.zone_quantities(a, mid, u0, u1)?;
+            let right = self.zone_quantities(mid, b, u0, u1)?;
+            let area_halves = left.area_m2 + right.area_m2;
+            let area_error = (whole.area_m2 - area_halves).abs();
+            let normal_halves =
+                (left.normal * left.area_m2 + right.normal * right.area_m2).normalize();
+            let normal_error = whole.normal.angle_between(normal_halves);
+            let centroid_halves = if area_halves > 0.0 {
+                (left.centroid * left.area_m2 + right.centroid * right.area_m2) / area_halves
+            } else {
+                whole.centroid
+            };
+            let centroid_error = (whole.centroid - centroid_halves).length();
+            error +=
+                area_error + whole.area_m2 * normal_error + centroid_error * whole.area_m2.sqrt();
+        }
+        Ok(error)
+    }
+
+    /// Raw geometric quantities of one zone, backing both panels and the
+    /// Richardson estimate from a single code path.
+    fn zone_quantities(
+        &self,
+        a: f64,
+        b: f64,
+        u0: f64,
+        u1: f64,
+    ) -> Result<ZoneQuantities, SurfaceError> {
+        let (panel, _) = self.zone_panel(a, b, u0, u1)?;
+        Ok(ZoneQuantities {
+            area_m2: panel.area_m2,
+            centroid: panel.center_of_pressure_body_m,
+            normal: panel.lift_axis_body,
+        })
     }
 
     /// Hard split stations: endpoints, every authored station list, every
@@ -388,9 +649,9 @@ impl<'a> Compiler<'a> {
     }
 
     /// Recursively split `[a, b]` until the smooth-interval metrics pass.
-    fn subdivide(&self, a: f64, b: f64, depth: u32, leaves: &mut Vec<(f64, f64)>) {
+    fn subdivide(&self, a: f64, b: f64, depth: u32, leaves: &mut Vec<SpanLeaf>) {
         if depth >= self.options.max_depth || !self.needs_split(a, b) {
-            leaves.push((a, b));
+            leaves.push(SpanLeaf { a, b, depth });
             return;
         }
         let mid = 0.5 * (a + b);
@@ -432,10 +693,8 @@ impl<'a> Compiler<'a> {
         {
             return true;
         }
-        let _ = mid;
         false
     }
-
     /// Unit span tangent at `s` from the exact segment derivatives.
     /// Finite differences would smear kink vertices into neighboring
     /// zones; the piecewise-linear spline differentiates exactly.
@@ -538,7 +797,12 @@ impl<'a> Compiler<'a> {
             self.fold_point(b, u0),
             self.fold_point(b, u1),
         ];
-        let centroid = corners.iter().sum::<DVec3>() / 4.0;
+        // Area centroid via two triangles. A plain corner average is
+        // off-center on tapered zones (bias ~ taper/8 of chord), which
+        // both misstates moment arms and makes whole-vs-halves estimates
+        // inconsistent; the triangle centroid is exact on planar quads
+        // and triangulation-dependence is higher-order.
+        let centroid = quad_centroid(corners);
         let chord_a = planform.chord(a) * (u1 - u0);
         let chord_b = planform.chord(b) * (u1 - u0);
         // Spanwise material extent: the mapped (Y, Z) distance. The

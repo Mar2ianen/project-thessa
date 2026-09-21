@@ -133,7 +133,12 @@ pub enum RendezvousPhase {
         max_phase_time_s: f64,
     },
     /// Back away along the approach corridor after an abort trigger.
-    BackAway { max_phase_time_s: f64 },
+    /// Done at a multiple of the hold distance (no docking ports exist,
+    /// so "away" needs an explicit range to retire against).
+    BackAway {
+        hold_distance_m: f64,
+        max_phase_time_s: f64,
+    },
 }
 
 /// Velocity-match gate for tests and authority guards: relative speed at
@@ -154,12 +159,26 @@ pub fn velocity_matched(
 /// opening drift fails however slow, and a -100 m/s plunge fails a 2 m/s
 /// limit that the old `rate <= +limit` comparison let straight through.
 pub fn approach_gate_ok(range_m: f64, range_rate_mps: f64, profile: &RendezvousProfile) -> bool {
+    approach_gate_ok_params(
+        range_m,
+        range_rate_mps,
+        profile.hold_distance_m,
+        profile.closing_rate_limit_mps,
+    )
+}
+
+/// Scalar form of [`approach_gate_ok`] so phase laws can evaluate the gate
+/// from node parameters without reconstructing a profile.
+pub fn approach_gate_ok_params(
+    range_m: f64,
+    range_rate_mps: f64,
+    hold_distance_m: f64,
+    closing_rate_limit_mps: f64,
+) -> bool {
     if !range_m.is_finite() || !range_rate_mps.is_finite() {
         return false;
     }
-    range_m <= profile.hold_distance_m
-        && range_rate_mps <= 0.0
-        && (-range_rate_mps) <= profile.closing_rate_limit_mps
+    range_m <= hold_distance_m && range_rate_mps <= 0.0 && (-range_rate_mps) <= closing_rate_limit_mps
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -298,6 +317,7 @@ pub fn rendezvous_graph(
                 9,
                 "back-away",
                 RendezvousPhase::BackAway {
+                    hold_distance_m: profile.hold_distance_m,
                     max_phase_time_s: profile.max_phase_time_s,
                 },
             ),

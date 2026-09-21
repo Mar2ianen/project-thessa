@@ -225,6 +225,14 @@ struct Sim {
     plan_demand: Option<ControlDemand>,
     autopilot_graph: Option<AutopilotGraph>,
     graph_runner: Option<GraphRunner>,
+    /// Currently parked autopilot phase (node, name, config, park time).
+    /// The per-tick phase law steers from its IR parameters; completion
+    /// publishes the node-name event plus the domain event, the watchdog
+    /// fails the graph. Cleared on retire, takeover, and cancel.
+    phase_park: Option<PhasePark>,
+    /// A parked Execute burn delegated to `maneuver_execution`: the
+    /// executor owns guidance until it clears, then the burn retires.
+    burn_delegated: bool,
     graph_block: NativeGraphBlock,
     /// Declared autopilot targets stay data-only until a later landing/
     /// impact planner consumes them and asks the field for obstacle evidence.
@@ -271,6 +279,16 @@ struct AutopilotHost {
 struct NativeGraphBlock {
     waited: std::collections::BTreeSet<thessa_autopilot::NodeId>,
     control_actions: Vec<GraphControlAction>,
+    parked_phases: Vec<(thessa_autopilot::NodeId, String, GraphNodeConfig)>,
+}
+
+/// A parked autopilot phase node awaiting its law's completion.
+#[derive(Debug, Clone)]
+struct PhasePark {
+    node: thessa_autopilot::NodeId,
+    name: String,
+    config: GraphNodeConfig,
+    parked_at_s: f64,
 }
 
 impl GraphBlock for NativeGraphBlock {
@@ -288,6 +306,20 @@ impl GraphBlock for NativeGraphBlock {
                 }
             );
         if waiting_node && self.waited.insert(node.id) {
+            // Parked phase nodes report for the per-tick authority law;
+            // plain waits carry no steering parameters.
+            if let Some(config) = node.config.as_ref()
+                && matches!(
+                    config,
+                    GraphNodeConfig::AscentPhase { .. }
+                        | GraphNodeConfig::LandingPhase { .. }
+                        | GraphNodeConfig::RendezvousPhase { .. }
+                        | GraphNodeConfig::ExecutePhase { .. }
+                )
+            {
+                self.parked_phases
+                    .push((node.id, node.name.clone(), config.clone()));
+            }
             return GraphNodeOutcome::Wait {
                 condition: match node.config.as_ref() {
                     Some(GraphNodeConfig::Wait { condition }) => condition.clone(),
@@ -361,6 +393,18 @@ impl GraphBlock for NativeGraphBlock {
     }
 }
 
+impl NativeGraphBlock {
+    fn take_parked_phases(
+        &mut self,
+    ) -> Vec<(
+        thessa_autopilot::NodeId,
+        String,
+        GraphNodeConfig,
+    )> {
+        std::mem::take(&mut self.parked_phases)
+    }
+}
+
 impl AutopilotHost {
     fn new() -> Result<Self, String> {
         Ok(Self {
@@ -399,6 +443,8 @@ impl Sim {
             autopilot_graph: None,
             graph_runner: None,
             graph_block: NativeGraphBlock::default(),
+            phase_park: None,
+            burn_delegated: false,
             landing_site: None,
             landing_obstacles: None,
             impact_site: None,
@@ -932,6 +978,7 @@ impl Sim {
                     .unwrap_or_else(|| "native graph control action failed".into()));
             }
         }
+        self.reconcile_phase_park(&state);
         match state {
             thessa_autopilot::GraphRunState::Progress { .. } => Ok(()),
             thessa_autopilot::GraphRunState::Waiting { node, .. } => {
@@ -953,6 +1000,42 @@ impl Sim {
                 "autopilot graph {}: {}",
                 diagnostic.code, diagnostic.message
             )),
+        }
+    }
+
+    /// Adopt newly parked phases; retire the active one when the runner
+    /// moved past it or terminated, latching a zero-throttle attitude hold
+    /// so no stale full command rides the gap between phases.
+    fn reconcile_phase_park(&mut self, state: &thessa_autopilot::GraphRunState) {
+        for (node, name, config) in self.graph_block.take_parked_phases() {
+            self.phase_park = Some(PhasePark {
+                node,
+                name,
+                config,
+                parked_at_s: self.authority.flight_time_s,
+            });
+            self.burn_delegated = false;
+        }
+        let retired = match state {
+            thessa_autopilot::GraphRunState::Complete
+            | thessa_autopilot::GraphRunState::Failed { .. }
+            | thessa_autopilot::GraphRunState::Aborted { .. } => true,
+            thessa_autopilot::GraphRunState::Waiting { node, .. } => self
+                .phase_park
+                .as_ref()
+                .is_some_and(|park| park.node != *node),
+            thessa_autopilot::GraphRunState::Progress { .. } => false,
+        };
+        if retired && self.phase_park.is_some() {
+            self.phase_park = None;
+            self.burn_delegated = false;
+            self.guidance = Some((
+                GuidanceIntent::Attitude {
+                    target_body_to_inertial: self.authority.state.orientation_body_to_inertial,
+                    roll_policy: RollPolicy::Hold,
+                },
+                PropulsionDemand::new(0.0).expect("zero propulsion always builds"),
+            ));
         }
     }
 
@@ -1101,6 +1184,117 @@ impl Sim {
         }
         self.maneuver_execution = Some(executor);
         Ok(())
+    }
+
+    /// Drive the parked autopilot phase for one tick: steer from its IR
+    /// parameters, enforce its watchdog, publish completion. Runs before
+    /// physics alongside the maneuver executors so commands ride the
+    /// freshest state. Rendezvous flies without a target (single vehicle)
+    /// as a hold bounded by the watchdog; multi-vehicle targeting is the
+    /// missing server input, not a law gap.
+    fn poll_phase_law(&mut self) -> Result<(), String> {
+        use thessa_autopilot::authority as laws;
+        let Some(park) = self.phase_park.clone() else {
+            return Ok(());
+        };
+        if let Some(limit) = laws::phase_watchdog_s(&park.config)
+            && self.authority.flight_time_s - park.parked_at_s > limit
+        {
+            self.phase_park = None;
+            self.burn_delegated = false;
+            self.fail_autopilot(format!(
+                "phase {:?} exceeded watchdog {limit:.0}s",
+                park.node
+            ));
+            return Ok(());
+        }
+        // Execute burns delegate the impulse to the proven NodeExecutor:
+        // the executor owns guidance until it clears, then the burn
+        // retires through the normal event path.
+        if let GraphNodeConfig::ExecutePhase {
+            phase:
+                thessa_autopilot::execute::ExecutePhase::Burn {
+                    delta_v_mps, ..
+                },
+        } = &park.config
+        {
+            if !self.burn_delegated {
+                if self.maneuver_execution.is_some()
+                    || self.plan_demand.is_some()
+                    || self.burn_execution.is_some()
+                {
+                    self.phase_park = None;
+                    self.fail_autopilot("burn phase conflicts with an active execution");
+                    return Ok(());
+                }
+                let now = SimTime(self.authority.flight_time_s);
+                let node = thessa_maneuver::ManeuverNode::new(now, DVec3::from(*delta_v_mps))
+                    .map_err(|error| format!("burn phase node: {error}"))?;
+                let plan = ManeuverPlan::new(
+                    vec![node],
+                    self.authority.state.position_inertial_m,
+                    self.authority.state.velocity_inertial_mps,
+                    now,
+                )
+                .map_err(|error| format!("burn phase plan: {error}"))?;
+                self.maneuver_execution =
+                    Some(NodeExecutor::new(&plan).map_err(|error| format!("burn phase: {error}"))?);
+                self.burn_delegated = true;
+                return Ok(());
+            }
+            if self.maneuver_execution.is_none() {
+                self.burn_delegated = false;
+                self.poll_graph(Some(&park.name))?;
+                self.poll_graph(Some(thessa_autopilot::execute::event::BURN_COMPLETE))?;
+                self.latch_phase_hold();
+            }
+            return Ok(());
+        }
+        let body = self
+            .ephemeris
+            .body(self.authority.reference_body)
+            .map_err(|error| format!("phase law reference body: {error}"))?;
+        // Laws steer in the body frame: subtract the reference body's
+        // inertial motion (feeding inertial state straight in reads
+        // interplanetary distances as altitude).
+        let now = SimTime(self.authority.flight_time_s);
+        let body_state = self
+            .ephemeris
+            .body_state(self.authority.reference_body, now)
+            .map_err(|error| format!("phase law body state: {error}"))?;
+        let live = laws::LiveState {
+            position_m: self.authority.state.position_inertial_m - body_state.position_inertial,
+            velocity_mps: self.authority.state.velocity_inertial_mps
+                - body_state.velocity_inertial,
+            orientation_body_to_inertial: self.authority.state.orientation_body_to_inertial,
+            body_mu_m3_s2: body.mu,
+            body_radius_m: body.radius_m,
+            target: None,
+        };
+        let Some(tick) = laws::phase_tick(&park.config, &live) else {
+            return Ok(());
+        };
+        self.guidance = Some((tick.intent, tick.propulsion));
+        if tick.done {
+            self.poll_graph(Some(&park.name))?;
+            if let Some(event) = laws::completion_event(&park.config) {
+                self.poll_graph(Some(event))?;
+            }
+            self.latch_phase_hold();
+        }
+        Ok(())
+    }
+
+    /// Zero-throttle attitude hold: the safe latch between phases and on
+    /// retirement, so no stale full command rides a gap.
+    fn latch_phase_hold(&mut self) {
+        self.guidance = Some((
+            GuidanceIntent::Attitude {
+                target_body_to_inertial: self.authority.state.orientation_body_to_inertial,
+                roll_policy: RollPolicy::Hold,
+            },
+            PropulsionDemand::new(0.0).expect("zero propulsion always builds"),
+        ));
     }
 
     /// Poll the active execution before stepping: integrate measured thrust
@@ -1368,6 +1562,10 @@ impl Sim {
     fn clear_autopilot_controls(&mut self) {
         self.plan_demand = None;
         self.guidance = None;
+        // A parked phase owns guidance through its law; takeover retires
+        // it alongside every other automation handle.
+        self.phase_park = None;
+        self.burn_delegated = false;
         // Manual takeover disengages in-flight executions, same as any
         // other automation (MechJeb-style disengage on stick input).
         self.maneuver_execution = None;
@@ -1472,9 +1670,11 @@ impl Sim {
             return Ok(0.0);
         }
         // Maneuver executions poll before stepping so commands ride the
-        // freshest thrust measurement from the previous tick.
+        // freshest thrust measurement from the previous tick. Parked
+        // autopilot phases steer the same way through their IR laws.
         self.poll_maneuver_execution()?;
         self.poll_burn_execution()?;
+        self.poll_phase_law()?;
         let mut chunk_s = chunk_s;
         if self.plan_runner.is_some() {
             let now = SimTime(self.authority.flight_time_s);
@@ -4796,5 +4996,156 @@ mod reset_tests {
         assert_eq!(merged.commands.len(), 2);
         assert_eq!(merged.commands[0], Command::Reset);
         assert_eq!(merged.commands[1], Command::SetWarp { factor: 128.0 });
+    }
+
+    #[test]
+    fn ascent_graph_flies_to_orbit_through_phase_laws() {
+        use thessa_autopilot::ascent as ascent_api;
+        let mut sim = sim_with_terrain();
+        let body = sim
+            .ephemeris
+            .body(sim.authority.reference_body)
+            .expect("thessa body");
+        let (mu, radius) = (body.mu, body.radius_m);
+        eprintln!("thessa mu={mu:.3e} R={radius:.0}");
+        // Profile scales with the body: low orbit just above the surface,
+        // turn horizontal long before the apoapsis target.
+        let profile = ascent_api::AscentProfile {
+            target_apoapsis_m: 400_000.0,
+            target_periapsis_m: 300_000.0,
+            turn_start_altitude_m: 500.0,
+            turn_end_altitude_m: 80_000.0,
+            liftoff_throttle: 1.0,
+            max_phase_time_s: 3_600.0,
+        };
+        let graph = ascent_api::ascent_graph(&profile).expect("graph builds");
+        assert!(sim.submit_graph(graph));
+        let mut phases_seen = std::collections::BTreeSet::new();
+        // Vertical rise retires almost immediately (tower cleared from
+        // the pad altitude): catch it here, the loop observes the rest.
+        if let Some(park) = sim.phase_park.as_ref() {
+            phases_seen.insert(park.name.clone());
+        }
+        let deadline = sim.authority.flight_time_s + 3_000.0;
+        let mut next_report = 0.0;
+        while sim.authority.flight_time_s < deadline {
+            let mut advanced = 0.0;
+            for _ in 0..400 {
+                advanced += sim.advance_chunk(0.5).expect("advance");
+                if advanced > 0.0
+                    || sim.authority.flight_error.is_some()
+                    || !sim.authority.bake.has_pending()
+                {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            if let Some(park) = sim.phase_park.as_ref() {
+                phases_seen.insert(park.name.clone());
+            }
+            if sim.authority.flight_time_s >= next_report {
+                next_report = sim.authority.flight_time_s + 300.0;
+                let body_now = sim
+                    .ephemeris
+                    .body_state(sim.authority.reference_body, SimTime(sim.authority.flight_time_s))
+                    .expect("body state");
+                let rel = sim.authority.state.position_inertial_m - body_now.position_inertial;
+                let r = rel.length();
+                let rel_vel = sim.authority.state.velocity_inertial_mps - body_now.velocity_inertial;
+                let climb = if rel_vel.length_squared() > 1.0 {
+                    rel.dot(rel_vel) / (r * rel_vel.length())
+                } else {
+                    1.0
+                };
+                let (cmd, nose_err) = match sim.guidance.as_ref().map(|(i, _)| i) {
+                    Some(thessa_flight_control::GuidanceIntent::VelocityDirection {
+                        direction,
+                        ..
+                    }) => {
+                        let nose = sim.authority.state.orientation_body_to_inertial * glam::DVec3::X;
+                        let err = nose.angle_between(direction.direction);
+                        let up = rel / r;
+                        let cmd_up = direction.direction.dot(up);
+                        let vel_up = if rel_vel.length_squared() > 1.0 {
+                            rel_vel.normalize().dot(up)
+                        } else {
+                            9.0
+                        };
+                        let cmd_vel = if rel_vel.length_squared() > 1.0 {
+                            direction.direction.dot(rel_vel.normalize())
+                        } else {
+                            9.0
+                        };
+                        (format!("cmd_up={cmd_up:.2} vel_up={vel_up:.2} cmd_vel={cmd_vel:.2}"), format!("{err:.2}"))
+                    }
+                    other => (format!("{other:?}"), "-".into()),
+                };
+                eprintln!(
+                    "t={:.0} phase={:?} alt={:.1}km speed={:.0}m/s climb_sin={:+.2} apo={:.0}km peri={:.0}km [{cmd}] nose=[{nose_err}] thr={:?} mass={:.0}kg",
+                    sim.authority.flight_time_s,
+                    sim.phase_park.as_ref().map(|p| p.name.as_str()),
+                    (r - radius) / 1000.0,
+                    rel_vel.length(),
+                    climb,
+                    thessa_autopilot::ascent::predict_apoapsis_m(mu, rel, rel_vel).map(|a| (a - radius) / 1000.0).unwrap_or(-1.0),
+                    thessa_autopilot::ascent::predict_periapsis_m(mu, rel, rel_vel).map(|p| (p - radius) / 1000.0).unwrap_or(-1.0),
+                    sim.guidance.as_ref().map(|(_, p)| p.normalized),
+                    sim.authority.vehicle.mass_properties.mass_kg,
+                );
+            }
+            assert!(
+                sim.authority.flight_error.is_none(),
+                "flight error: {:?}",
+                sim.authority.flight_error
+            );
+            // Terminal state is Waiting on the armed abort watcher (node
+            // 9), not Complete: the sink (node 8) reached means orbit
+            // achieved under guard. See the ascent script test.
+            if sim.graph_runner.as_ref().is_some_and(|runner| {
+                runner.status(thessa_autopilot::NodeId(8))
+                    == Some(thessa_autopilot::BlockStatus::Ok)
+            }) {
+                break;
+            }
+        }
+        eprintln!("phases seen: {phases_seen:?}");
+        for phase in ["vertical-rise", "gravity-turn", "coast", "circularize"] {
+            assert!(phases_seen.contains(phase), "phase {phase} never parked");
+        }
+        assert!(
+            sim.graph_runner.as_ref().is_some_and(|runner| {
+                runner.status(thessa_autopilot::NodeId(8))
+                    == Some(thessa_autopilot::BlockStatus::Ok)
+            }),
+            "ascent graph must reach the orbit-achieved sink"
+        );
+        let body_now = sim
+            .ephemeris
+            .body_state(
+                sim.authority.reference_body,
+                SimTime(sim.authority.flight_time_s),
+            )
+            .expect("body state");
+        let rel_pos = sim.authority.state.position_inertial_m - body_now.position_inertial;
+        let rel_vel = sim.authority.state.velocity_inertial_mps - body_now.velocity_inertial;
+        let periapsis =
+            ascent_api::predict_periapsis_m(mu, rel_pos, rel_vel).expect("bound orbit");
+        let apoapsis =
+            ascent_api::predict_apoapsis_m(mu, rel_pos, rel_vel).expect("bound orbit");
+        eprintln!(
+            "achieved: peri {:.0} km, apo {:.0} km (targets {:.0}/{:.0})",
+            (periapsis - radius) / 1000.0,
+            (apoapsis - radius) / 1000.0,
+            profile.target_periapsis_m / 1000.0,
+            profile.target_apoapsis_m / 1000.0,
+        );
+        assert!(
+            periapsis >= radius + profile.target_periapsis_m * 0.9,
+            "must circularize near target periapsis"
+        );
+        assert!(
+            apoapsis <= radius + profile.target_apoapsis_m + 100_000.0,
+            "must not overshoot the target apoapsis wildly"
+        );
     }
 }

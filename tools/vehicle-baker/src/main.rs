@@ -253,6 +253,9 @@ struct VehicleAsset {
     mass_kg: f64,
     /// Matrix is written as rows in the TOML file for readability.
     inertia_body_kg_m2: [[f64; 3]; 3],
+    /// Hand-authored solver panels. Empty for all-procedural assets;
+    /// legacy assets may carry only these while panels are migrated.
+    #[serde(default)]
     panels: Vec<PanelAsset>,
     #[serde(default)]
     control_surfaces: Vec<ControlSurfaceAsset>,
@@ -1756,4 +1759,115 @@ max_deflection_rad = 0.35
     assert!(aileron.panel_indices[0] >= 1);
     let owned = &vehicle.aero_geometry.panels[aileron.panel_indices[0]];
     assert!((owned.area_m2 - 16.0 * 0.3 * 0.75).abs() < 1e-9);
+}
+
+#[test]
+fn full_procedural_aircraft_merges_wing_and_v_tail() {
+    // Hangar-side full-vehicle assembly: a wing plus a canted V-tail
+    // half (mount roll through TOML), each with its own controls.
+    let asset: VehicleAsset = toml::from_str(
+        r#"
+name = "v-tail-test"
+mass_kg = 500.0
+inertia_body_kg_m2 = [[500.0, 0.0, 0.0], [0.0, 500.0, 0.0], [0.0, 0.0, 500.0]]
+
+[[procedural_surfaces]]
+name = "wing-right"
+span_m = 6.0
+origin_body_m = [0.0, 0.0, 0.0]
+
+[procedural_surfaces.planform]
+[[procedural_surfaces.planform.stations]]
+s = 0.0
+x_le = 0.0
+x_te = 1.5
+[[procedural_surfaces.planform.stations]]
+s = 1.0
+x_le = 0.0
+x_te = 1.5
+
+[procedural_surfaces.bend]
+[[procedural_surfaces.bend.stations]]
+s = 0.0
+z_m = 0.0
+[[procedural_surfaces.bend.stations]]
+s = 1.0
+z_m = 0.0
+
+[procedural_surfaces.sections]
+[[procedural_surfaces.sections.stations]]
+s = 0.0
+incidence_rad = 0.0
+thickness_ratio = 0.0
+[[procedural_surfaces.sections.stations]]
+s = 1.0
+incidence_rad = 0.0
+thickness_ratio = 0.0
+
+[[procedural_surfaces.controls]]
+name = "aileron"
+span = [0.5, 0.9]
+chord = [0.25, 1.0]
+hinge_u = 0.25
+min_deflection_rad = -0.4
+max_deflection_rad = 0.4
+kind = "TrailingEdgeDevice"
+
+[[procedural_surfaces]]
+name = "v-tail-right"
+span_m = 2.0
+origin_body_m = [-2.5, 0.0, 0.2]
+mount_roll_rad = 0.7853981633974483
+
+[procedural_surfaces.planform]
+[[procedural_surfaces.planform.stations]]
+s = 0.0
+x_le = 0.0
+x_te = 1.0
+[[procedural_surfaces.planform.stations]]
+s = 1.0
+x_le = 0.0
+x_te = 1.0
+
+[procedural_surfaces.bend]
+[[procedural_surfaces.bend.stations]]
+s = 0.0
+z_m = 0.0
+[[procedural_surfaces.bend.stations]]
+s = 1.0
+z_m = 0.0
+
+[procedural_surfaces.sections]
+[[procedural_surfaces.sections.stations]]
+s = 0.0
+incidence_rad = 0.0
+thickness_ratio = 0.0
+[[procedural_surfaces.sections.stations]]
+s = 1.0
+incidence_rad = 0.0
+thickness_ratio = 0.0
+
+[[procedural_surfaces.controls]]
+name = "ruddervator"
+span = [0.3, 0.9]
+chord = [0.3, 1.0]
+hinge_u = 0.3
+min_deflection_rad = -0.4
+max_deflection_rad = 0.4
+"#,
+    )
+    .expect("v-tail vehicle TOML should parse");
+    let vehicle = asset.bake().expect("v-tail asset should bake");
+    // Wing: splits at 0.5/0.9 with a chord cut inside -> 1 + 2 + 1.
+    // V-tail: splits at 0.3/0.9 with a chord cut inside -> 1 + 2 + 1.
+    // Total 8 panels, 2 controls.
+    assert_eq!(vehicle.aero_geometry.panels.len(), 8);
+    assert_eq!(vehicle.control_surfaces.len(), 2);
+    assert_eq!(vehicle.control_surfaces[0].name, "aileron");
+    assert_eq!(vehicle.control_surfaces[1].name, "ruddervator");
+    // The canted tail panels sit up-out of the body axis.
+    let tail_panel = &vehicle.aero_geometry.panels[7];
+    assert!(tail_panel.position_body_m.z > 0.5);
+    assert!(tail_panel.position_body_m.y > 0.5);
+    assert!(tail_panel.lift_axis_body.z > 0.5);
 }

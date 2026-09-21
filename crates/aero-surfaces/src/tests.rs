@@ -1498,3 +1498,125 @@ fn stabilator_marks_whole_surface_rotation() {
         ControlRegionKind::AllMovingSurface
     );
 }
+
+fn v_tail_half(mirror: bool) -> ProceduralSurface {
+    use crate::preset::ruddervator;
+    let (rv, _) = ruddervator("ruddervator", (0.35, 0.95), (0.3, 1.0)).unwrap();
+    ProceduralSurface {
+        name: "v-tail-right".into(),
+        span_m: 2.5,
+        origin_body_m: DVec3::ZERO,
+        mount_roll_rad: 45.0_f64.to_radians(),
+        mirror_y: mirror,
+        planform: Planform::tapered(1.2, 0.7, 0.25).unwrap(),
+        bend: BendCurve::flat(),
+        sections: SectionData::uniform(0.0, 0.07).unwrap(),
+        controls: vec![rv],
+        folds: Vec::new(),
+    }
+}
+
+#[test]
+fn v_tail_pair_cants_with_ruddervator_mixing() {
+    use crate::preset::{ControlChannels, mix_command, ruddervator};
+
+    let right = v_tail_half(false);
+    let compiled_right = compile_surface(
+        &right,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    // +45 deg roll tips section lift sideways-down-out on the right half.
+    for panel in &compiled_right.panels {
+        assert!((panel.lift_axis_body - DVec3::new(0.0, -s, s)).length() < 1e-9);
+        assert!(panel.center_of_pressure_body_m.y > 0.0);
+        assert!(panel.center_of_pressure_body_m.z > 0.0);
+    }
+    // The mirrored half opens the V symmetrically.
+    let mut left = v_tail_half(false);
+    left.mirror_y = true;
+    let compiled_left = compile_surface(
+        &left,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    assert_eq!(compiled_left.panels.len(), compiled_right.panels.len());
+    for (left_panel, right_panel) in compiled_left
+        .panels
+        .iter()
+        .zip(compiled_right.panels.iter())
+    {
+        assert!((left_panel.lift_axis_body - DVec3::new(0.0, s, s)).length() < 1e-9);
+        assert!((left_panel.area_m2 - right_panel.area_m2).abs() < 1e-12);
+        assert!(
+            (left_panel.center_of_pressure_body_m.y + right_panel.center_of_pressure_body_m.y)
+                .abs()
+                < 1e-9
+        );
+    }
+    // Ruddervator mixing: pitch plus yaw on each half.
+    let (_, mixing) = ruddervator("rv", (0.35, 0.95), (0.3, 1.0)).unwrap();
+    let pitch = ControlChannels {
+        pitch: 0.5,
+        airbrake: 0.0,
+        ..ControlChannels::neutral()
+    };
+    assert!((mix_command(mixing, pitch) - 0.5).abs() < 1e-12);
+    let yaw = ControlChannels {
+        yaw: 0.5,
+        airbrake: 0.0,
+        ..ControlChannels::neutral()
+    };
+    assert!((mix_command(mixing, yaw) - 0.5).abs() < 1e-12);
+    let both = ControlChannels {
+        pitch: 0.25,
+        yaw: 0.25,
+        airbrake: 0.0,
+        ..ControlChannels::neutral()
+    };
+    assert!((mix_command(mixing, both) - 0.5).abs() < 1e-12);
+    // Ruddervator owns trailing-edge panels on each half.
+    assert_eq!(compiled_right.controls.len(), 1);
+    assert!(!compiled_right.controls[0].panel_indices.is_empty());
+}
+
+#[test]
+fn t_tail_stacks_stabilator_on_fin_tip() {
+    use crate::preset::stabilator;
+
+    // Fin as before, plus a stabilator ridden at the fin tip: position
+    // and all-moving kind compose with no special casing.
+    let fin = vertical_fin(90.0);
+    let mut tailplane = rectangular(4.0, 1.0);
+    tailplane.origin_body_m = DVec3::new(0.3, 0.0, 3.0);
+    let (stab, _) = stabilator("t-stab").unwrap();
+    tailplane.controls.push(stab);
+    let compiled_fin = compile_surface(
+        &fin,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    let compiled_tail = compile_surface(
+        &tailplane,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    // Fin tip reaches z = 3 where the tailplane lives flat.
+    assert!((compiled_fin.summary.bbox_max_m.z - 3.0).abs() < 1e-9);
+    for panel in &compiled_tail.panels {
+        assert!((panel.center_of_pressure_body_m.z - 3.0).abs() < 1e-9);
+        assert!((panel.lift_axis_body - DVec3::Z).length() < 1e-9);
+    }
+    assert_eq!(
+        compiled_tail.summary.control_areas[0].kind,
+        ControlRegionKind::AllMovingSurface
+    );
+    // Combined empennage area is the honest sum of both compilations.
+    let total = compiled_fin.summary.material_area_m2 + compiled_tail.summary.material_area_m2;
+    assert!(total > 0.0);
+}

@@ -13,8 +13,10 @@
 //! positive pitch/roll/yaw/flap channel values drive trailing-edge-down
 //! on a right wing for pitch/flap, right-wing-up for positive roll, and
 //! trailing-edge-right for positive yaw on a vertical tail. Mirrored
-//! (left) surfaces negate the roll gain at mix time; the compiler records
-//! the chain so the mixer can address it.
+//! (left) surfaces negate the roll AND yaw gains at mix time
+//! (symmetric-pair rule: ailerons, rudders, ruddervators);
+//! pitch/flap/airbrake gains stay put. The compiler records the parent
+//! chain so the mixer can address it.
 //!
 //! One-sided devices (spoiler, airbrake, slat with minimum exactly 0)
 //! are presets since the sim-core limit model parks negative commands at
@@ -294,6 +296,34 @@ pub fn anti_servo_tab(
             pitch: -1.0,
             roll: 0.0,
             yaw: 0.0,
+            flap: 0.0,
+            airbrake: 0.0,
+        },
+    )
+}
+
+/// Ruddervator: V-tail (or inverted-V) trailing-edge region driven by
+/// pitch plus yaw. Each V half authors the same preset; the mirrored
+/// half negates roll and yaw gains at mix time (symmetric-pair rule),
+/// pitch/flap/airbrake gains stay put.
+pub fn ruddervator(
+    name: impl Into<String>,
+    span: (f64, f64),
+    chord: (f64, f64),
+) -> Result<(ControlRegion, ControlMixing), SurfaceError> {
+    region_with_mix(
+        name,
+        span,
+        chord,
+        chord.0,
+        -25.0_f64.to_radians(),
+        25.0_f64.to_radians(),
+        None,
+        ControlRegionKind::TrailingEdgeDevice,
+        ControlMixing {
+            pitch: 1.0,
+            roll: 0.0,
+            yaw: 1.0,
             flap: 0.0,
             airbrake: 0.0,
         },

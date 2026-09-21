@@ -340,7 +340,9 @@ ignition state
 ```
 
 Starter hardware is an authoring choice with real mass/resource consequences.
-At minimum support these topologies:
+It is not synonymous with an electrical generator: start torque and generated
+electrical power are separate optional shaft accessories, though one reversible
+machine may implement both. At minimum support these starter topologies:
 
 ```text
 none / windmill-only
@@ -376,6 +378,36 @@ If wheel propulsion and the engine share an electrical bus, wheel-motor energy
 can start an engine at zero airspeed only when a starter-generator/cross-drive
 path actually connects that bus to the required core spool. Merely moving the
 aircraft on powered wheels does not mechanically spin an uncoupled compressor.
+
+Electrical generation is independently optional. A shafted turbine engine may
+carry no generator, a dedicated generator, or a reversible starter-generator.
+Authoring/runtime must expose at least:
+
+```text
+generator fitted / absent
+attached spool
+maximum electrical power
+maximum shaft torque draw
+efficiency map or bounded efficiency
+cut-in spool speed
+thermal limit
+bus connection
+motor capability (if reversible)
+generator mass
+```
+
+Generator load must appear in the shaft work balance. Drawing electrical power
+reduces available turbine margin; at low spool speed the generator may be
+offline, power-limited, or able to motor the shaft only if it is explicitly a
+starter-generator. Conversely, an engine with no generator must not create
+electrical bus power just because it is running.
+
+A ramjet has no compressor/turbine shaft, so `starter = none` is its normal
+topology and its static thrust remains zero. If a ramjet installation needs
+electrical power, it must obtain it from the vehicle bus or from a separately
+modelled source (battery, fuel cell, RAT/air-turbine generator, auxiliary
+turbogenerator, etc.). A rocket-ejector bootstrap is a separate combined-cycle
+path, not a hidden ramjet starter.
 
 The steady-state engine solver must not manufacture starter power. At zero
 shaft speed, compressor suction is zero unless an explicit starter, cross-drive,
@@ -885,6 +917,10 @@ Required v6 physical model:
   in flight from windmilling once the solved core spool reaches light-off
   speed; it must not start at rest merely because the steady-state intake model
   has a suction floor.
+- Electrical generation is independently optional: no generator, a dedicated
+  generator, or a reversible starter-generator attached to a chosen spool.
+  Generator shaft load, cut-in speed, efficiency, thermal limit, mass, and bus
+  connection must participate in the runtime power/shaft balance.
 - Multi-spool/gearbox authoring must keep mode-transition dynamics separate
   from shaft dynamics. LP/IP/HP spool inertia and coupling, starter attachment,
   and optional geared fan reduction are independent of the ESTOC

@@ -56,6 +56,7 @@ mod planform;
 mod preset;
 mod profile;
 mod section;
+mod structure;
 mod summary;
 mod surface;
 
@@ -77,6 +78,7 @@ pub use preset::{
 };
 pub use profile::{CruiseRequirement, Naca4, ProfilePick, recommend_cruise_profile};
 pub use section::{AeroProfileId, SectionData, SectionStation};
+pub use structure::{CompiledStructure, SolidMaterial, StructuralLayout};
 pub use summary::{CompiledSurfaceSummary, ControlSummary};
 pub use surface::ProceduralSurface;
 

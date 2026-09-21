@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use thessa_sim_core::{AeroPanel, ControlSurfaceDefinition};
 
 use crate::summary::CompiledSurfaceSummary;
-use crate::{ProceduralSurface, SurfaceError};
+use crate::{CompiledStructure, ProceduralSurface, StructuralLayout, SurfaceError};
 
 /// How smooth span intervals become zones.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -231,6 +231,9 @@ pub struct CompiledSurface {
     pub folds: Vec<CompiledFold>,
     /// Geometry-only telemetry record for goldens and debug views.
     pub summary: CompiledSurfaceSummary,
+    /// Structural mass and fuel volume, present when the surface authors
+    /// a [`StructuralLayout`].
+    pub structure: Option<CompiledStructure>,
 }
 
 impl CompiledSurface {
@@ -273,6 +276,7 @@ impl CompiledSurface {
             controls: self.controls.clone(),
             folds,
             summary: self.summary.mirrored(),
+            structure: self.structure.as_ref().map(CompiledStructure::mirrored),
         };
         // Mirroring preserves panel order, so control definitions keep
         // addressing the same panel indices untouched.
@@ -389,6 +393,85 @@ struct ZoneQuantities {
     normal: DVec3,
 }
 
+/// Local-frame structural accumulator over emitted zones: mass-weighted
+/// centers plus a point-mass inertia about the surface-local origin.
+/// The mount step carries the aggregates into the body frame afterwards.
+#[derive(Debug, Clone)]
+struct StructAcc {
+    mass_kg: f64,
+    skin_kg: f64,
+    spar_kg: f64,
+    com_numerator: DVec3,
+    inertia_local: glam::DMat3,
+    fuel_m3: f64,
+    fuel_numerator: DVec3,
+}
+
+impl Default for StructAcc {
+    fn default() -> Self {
+        // Explicit: glam matrix Default is identity, but an accumulator
+        // must start at zero (the +1.0 diagonal ghost bit us once).
+        Self {
+            mass_kg: 0.0,
+            skin_kg: 0.0,
+            spar_kg: 0.0,
+            com_numerator: DVec3::ZERO,
+            inertia_local: glam::DMat3::ZERO,
+            fuel_m3: 0.0,
+            fuel_numerator: DVec3::ZERO,
+        }
+    }
+}
+
+impl StructAcc {
+    fn add_zone(
+        &mut self,
+        layout: &StructuralLayout,
+        panel: &thessa_sim_core::AeroPanel,
+        u0: f64,
+        u1: f64,
+    ) {
+        let skin_kg = 2.0
+            * panel.area_m2
+            * (layout.skin_gauge_mm / 1000.0)
+            * layout.skin_material.density_kg_m3;
+        let web_height_m =
+            panel.thickness_to_chord_ratio * panel.chord_m * layout.spar_depth_fraction;
+        let web_kg = 2.0
+            * panel.span_m
+            * web_height_m
+            * (layout.spar_web_gauge_mm / 1000.0)
+            * layout.spar_material.density_kg_m3;
+        let spar_kg = web_kg * (1.0 + layout.spar_cap_fraction);
+        let primary_kg = skin_kg + spar_kg;
+        let mass_kg = primary_kg * (1.0 + layout.secondary_fraction);
+        let center = panel.center_of_pressure_body_m;
+        self.mass_kg += mass_kg;
+        self.skin_kg += skin_kg;
+        self.spar_kg += spar_kg;
+        self.com_numerator += center * mass_kg;
+        self.inertia_local += point_inertia(mass_kg, center);
+        let fuel_u0 = u0.max(layout.fuel_box_chord.0);
+        let fuel_u1 = u1.min(layout.fuel_box_chord.1);
+        if fuel_u1 > fuel_u0 {
+            let thickness_m = panel.thickness_to_chord_ratio * panel.chord_m;
+            let volume = panel.span_m
+                * (fuel_u1 - fuel_u0)
+                * panel.chord_m
+                * thickness_m
+                * layout.fuel_fill_efficiency;
+            self.fuel_m3 += volume;
+            self.fuel_numerator += center * volume;
+        }
+    }
+}
+
+/// Point-mass inertia about the origin: `m(|r|^2 I - r r^T)`.
+fn point_inertia(mass_kg: f64, center: DVec3) -> glam::DMat3 {
+    let outer = glam::DMat3::from_cols(center * center.x, center * center.y, center * center.z);
+    (glam::DMat3::from_diagonal(DVec3::splat(center.length_squared())) - outer) * mass_kg
+}
+
 impl<'a> Compiler<'a> {
     fn new(
         surface: &'a ProceduralSurface,
@@ -456,15 +539,21 @@ impl<'a> Compiler<'a> {
             controls: Vec::new(),
             folds: self.compiled_folds(),
             summary: CompiledSurfaceSummary::default(),
+            structure: None,
         };
         let mut bbox_min = DVec3::splat(f64::INFINITY);
         let mut bbox_max = DVec3::splat(f64::NEG_INFINITY);
+        let mut struct_acc = StructAcc::default();
+        let layout = self.surface.structure.clone();
         for leaf in &leaves {
             for zone in self.chord_zones(leaf.a, leaf.b) {
                 let (panel, corners) = self.zone_panel(leaf.a, leaf.b, zone.0, zone.1)?;
                 for corner in &corners {
                     bbox_min = bbox_min.min(*corner);
                     bbox_max = bbox_max.max(*corner);
+                }
+                if let Some(layout) = &layout {
+                    struct_acc.add_zone(layout, &panel, zone.0, zone.1);
                 }
                 compiled.tags.push(zone.2);
                 compiled.panels.push(panel);
@@ -483,7 +572,11 @@ impl<'a> Compiler<'a> {
             bbox_max,
             estimated_error_m2,
         );
-        Ok(self.mount(compiled))
+        let mut compiled = self.mount(compiled);
+        if layout.is_some() {
+            compiled.structure = Some(self.mount_structure(struct_acc));
+        }
+        Ok(compiled)
     }
 
     /// Greedy error-budget refinement: split the highest-error leaf until
@@ -969,5 +1062,64 @@ impl<'a> Compiler<'a> {
         }
         compiled.summary.translate(origin);
         compiled
+    }
+
+    /// Mount rotation as a matrix (roll about body x, identity at rest).
+    fn mount_matrix(&self) -> glam::DMat3 {
+        if self.surface.mount_roll_rad == 0.0 {
+            glam::DMat3::IDENTITY
+        } else {
+            glam::DMat3::from_quat(DQuat::from_axis_angle(
+                DVec3::X,
+                self.surface.mount_roll_rad,
+            ))
+        }
+    }
+
+    /// Map a surface-local point into the body frame through the exact
+    /// mount order: roll, mirror, origin offset.
+    fn mount_point(&self, point: DVec3) -> DVec3 {
+        let mut mapped = self.mount_matrix() * point;
+        if self.surface.mirror_y {
+            mapped.y = -mapped.y;
+        }
+        mapped + self.surface.origin_body_m
+    }
+
+    /// Carry the local structural aggregates into the body frame: mass
+    /// and volumes are invariant, centers map as points, the inertia
+    /// tensor rotates (plus mirror conjugation) and shifts to the body
+    /// origin by the parallel-axis term.
+    fn mount_structure(&self, acc: StructAcc) -> CompiledStructure {
+        let rotation = self.mount_matrix();
+        let mut inertia = rotation * acc.inertia_local * rotation.transpose();
+        if self.surface.mirror_y {
+            // Conjugation by diag(1,-1,1) flips the xy/xz off-diagonal signs.
+            inertia.y_axis.x = -inertia.y_axis.x;
+            inertia.x_axis.y = -inertia.x_axis.y;
+            inertia.y_axis.z = -inertia.y_axis.z;
+            inertia.z_axis.y = -inertia.z_axis.y;
+        }
+        let origin = self.surface.origin_body_m;
+        inertia += point_inertia(acc.mass_kg, origin);
+        let center_of_mass_body_m = if acc.mass_kg > 0.0 {
+            self.mount_point(acc.com_numerator / acc.mass_kg)
+        } else {
+            DVec3::ZERO
+        };
+        let fuel_centroid_body_m = if acc.fuel_m3 > 0.0 {
+            self.mount_point(acc.fuel_numerator / acc.fuel_m3)
+        } else {
+            DVec3::ZERO
+        };
+        CompiledStructure {
+            mass_kg: acc.mass_kg,
+            skin_mass_kg: acc.skin_kg,
+            spar_mass_kg: acc.spar_kg,
+            center_of_mass_body_m,
+            inertia_body_kg_m2: inertia,
+            fuel_volume_m3: acc.fuel_m3,
+            fuel_centroid_body_m,
+        }
     }
 }

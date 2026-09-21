@@ -110,6 +110,7 @@ pub fn boeing_777x_half_wing() -> Result<ProceduralSurface, SurfaceError> {
             stowed_angle_rad: 90.0_f64.to_radians(),
             travel_limit_rad: 95.0_f64.to_radians(),
         }],
+        structure: None,
     };
     surface.validate()?;
     Ok(surface)
@@ -173,6 +174,7 @@ pub fn shuttle_orbiter_wing() -> Result<ProceduralSurface, SurfaceError> {
         sections: SectionData::uniform(0.0, 0.08)?,
         controls: vec![elevon_inboard, elevon_outboard],
         folds: Vec::new(),
+        structure: None,
     };
     surface.validate()?;
     Ok(surface)
@@ -247,6 +249,7 @@ pub fn concorde_wing() -> Result<ProceduralSurface, SurfaceError> {
         sections: SectionData::uniform(0.0, 0.06)?,
         controls: Vec::new(),
         folds: Vec::new(),
+        structure: None,
     };
     surface.validate()?;
     Ok(surface)
@@ -292,6 +295,7 @@ pub fn dream_chaser_wing() -> Result<ProceduralSurface, SurfaceError> {
             stowed_angle_rad: 65.0_f64.to_radians(),
             travel_limit_rad: 70.0_f64.to_radians(),
         }],
+        structure: None,
     };
     surface.validate()?;
     Ok(surface)
@@ -325,6 +329,7 @@ pub fn pathfinder_wing() -> Result<ProceduralSurface, SurfaceError> {
         sections: SectionData::uniform(1.0_f64.to_radians(), 0.09)?,
         controls: vec![aileron, flap],
         folds: Vec::new(),
+        structure: None,
     };
     surface.validate()?;
     Ok(surface)

@@ -43,6 +43,7 @@ fn representative_surface() -> ProceduralSurface {
             stowed_angle_rad: 60.0_f64.to_radians(),
             travel_limit_rad: 70.0_f64.to_radians(),
         }],
+        structure: None,
     }
 }
 

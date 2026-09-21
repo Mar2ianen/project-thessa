@@ -124,16 +124,17 @@ pub fn boeing_777x_half_wing() -> Result<ProceduralSurface, SurfaceError> {
 /// 3.0 m tip) sized so the centerline trapezoid hits the public area;
 /// inner leading-edge sweep ~78 deg, outer ~45 deg (family-typical
 /// double-delta split, no public kink drawing tied to this fixture, so
-/// sweep bands are assumption-grade); flat (dihedral omitted);
-/// two elevon regions per wing with +/-20 deg limits; zero twist,
-/// uniform 8 percent thickness.
+/// sweep bands are assumption-grade); flat (dihedral omitted); two
+/// elevon preset regions per wing (inboard/outboard trailing-edge
+/// devices with pitch-plus-roll mixing data); zero twist, uniform 8
+/// percent thickness.
 ///
 /// What this fixture proves: the authoring model spans a kinked delta
 /// planform, compilation preserves span/area, elevon regions own exact
 /// panel groups with recorded hinges, and inner/outer sweep regimes
 /// survive compilation as distinct panel populations.
 pub fn shuttle_orbiter_wing() -> Result<ProceduralSurface, SurfaceError> {
-    use crate::{ControlRegion, SpanStation};
+    use crate::{SpanStation, preset};
 
     let semi_span_m = shuttle_orbiter::SPAN_M / 2.0;
     let kink_s = 0.45;
@@ -142,6 +143,8 @@ pub fn shuttle_orbiter_wing() -> Result<ProceduralSurface, SurfaceError> {
     let outer_le_sweep = 45.0_f64.to_radians();
     let kink_le = inner_le_sweep.tan() * kink_y;
     let tip_le = kink_le + outer_le_sweep.tan() * (semi_span_m - kink_y);
+    let (elevon_inboard, _) = preset::elevon("elevon-inboard", (0.35, 0.62), (0.55, 1.0))?;
+    let (elevon_outboard, _) = preset::elevon("elevon-outboard", (0.62, 0.95), (0.6, 1.0))?;
     let surface = ProceduralSurface {
         name: "shuttle-orbiter-wing-right".into(),
         span_m: semi_span_m,
@@ -166,26 +169,7 @@ pub fn shuttle_orbiter_wing() -> Result<ProceduralSurface, SurfaceError> {
         ])?,
         bend: BendCurve::flat(),
         sections: SectionData::uniform(0.0, 0.08)?,
-        controls: vec![
-            ControlRegion {
-                name: "elevon-inboard".into(),
-                span: (0.35, 0.62),
-                chord: (0.55, 1.0),
-                hinge_u: 0.55,
-                min_deflection_rad: -20.0_f64.to_radians(),
-                max_deflection_rad: 20.0_f64.to_radians(),
-                parent: None,
-            },
-            ControlRegion {
-                name: "elevon-outboard".into(),
-                span: (0.62, 0.95),
-                chord: (0.6, 1.0),
-                hinge_u: 0.6,
-                min_deflection_rad: -20.0_f64.to_radians(),
-                max_deflection_rad: 20.0_f64.to_radians(),
-                parent: None,
-            },
-        ],
+        controls: vec![elevon_inboard, elevon_outboard],
         folds: Vec::new(),
     };
     surface.validate()?;

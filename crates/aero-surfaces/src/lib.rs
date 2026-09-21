@@ -39,6 +39,7 @@ mod error;
 mod golden;
 mod mechanism;
 mod planform;
+mod preset;
 mod profile;
 mod section;
 mod summary;
@@ -56,9 +57,13 @@ pub use golden::{
 };
 pub use mechanism::{ControlRegion, FoldJoint};
 pub use planform::{Planform, SpanStation};
+pub use preset::{
+    ControlChannels, ControlMixing, aileron, elevator, elevon, flap, flaperon, mix_command, rudder,
+    trim_tab,
+};
 pub use profile::{CruiseRequirement, Naca4, ProfilePick, recommend_cruise_profile};
 pub use section::{AeroProfileId, SectionData, SectionStation};
-pub use summary::CompiledSurfaceSummary;
+pub use summary::{CompiledSurfaceSummary, ControlSummary};
 pub use surface::ProceduralSurface;
 
 #[cfg(test)]

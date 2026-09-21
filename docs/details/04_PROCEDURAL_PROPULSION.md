@@ -363,6 +363,32 @@ Hydrogen-rich atmosphere:
 
 A combustor therefore consumes reactants according to chemistry/composition rather than according to a hard-coded `intake air = oxidizer` rule.
 
+The atmosphere may also be useful when it supplies no chemical reactant at all.
+A rocket/ejector or air-augmented-rocket topology may inject onboard fuel and
+onboard oxidizer, then entrain atmospheric gas as additional working mass. The
+ambient gas is heated/mixed by the primary rocket flow and can improve
+propulsive efficiency or thrust in the regime where ingesting it is worth the
+intake/duct drag. This is a distinct RBCC/ejector topology, not permission for a
+normal turbojet combustor to run in an anoxic atmosphere for free.
+
+Therefore a vehicle on an anoxic world has three different cases:
+
+```text
+ordinary turbojet/ramjet:
+    no usable atmospheric oxidizer -> flameout
+
+air-augmented rocket / ejector mode:
+    onboard fuel + onboard oxidizer + ingested atmospheric working mass
+
+pure rocket:
+    onboard fuel + onboard oxidizer, intake closed/irrelevant
+```
+
+Propulsion must obtain species availability from the authoritative atmosphere
+sample. The current scalar `oxygen_fraction` interface is transitional; it
+must be replaced by composition-aware queries with explicit molar-vs-mass
+fraction semantics.
+
 This is important for Thessa's non-Earth environments and should apply consistently to turbojets, turbofans, ramjets, combined-cycle engines, and other atmospheric propulsion.
 
 ## 11. Ramjets and high-speed air-breathing engines
@@ -395,14 +421,41 @@ shared hardware and alternate flow paths, not as a hard-coded `air mode
 Conceptually:
 
 ```text
-                  +-- intake -> precooler/compressor --+
-fuel -------------+                                    +-> chamber -> nozzle
-onboard oxidizer --+----------- rocket path ------------+
+                                +-- compressor ----------+
+atmosphere -> intake -> precooler                         |
+                                +-- bypass / ejector -----+-> chamber/mixer -> nozzle
+                                      ^                   ^
+                                      |                   |
+bulk fuel ----------------------------+-------------------+
+boost/coolant fuel (optional) --------+
+onboard oxidizer ----------------------------------------+
 ```
 
-Valves/mode logic select which path is active. Components such as chamber, nozzle, pumps, heat exchangers, shafts, or compressors may be shared between modes.
+Valves/mode logic select which paths are active. Components such as chamber,
+nozzle, pumps, heat exchangers, shafts, or compressors may be shared between
+modes.
 
-This architecture should also permit turbo-rocket, ejector-rocket, and other hybrid cycles where future gameplay/physics justifies them.
+The Thessa reference ESTOC direction is a dense bulk fuel (especially methane)
+plus optional hydrogen used where its cryogenic heat sink is valuable. Hydrogen
+is not required to be the entire fuel load: a precooler may consume H2 only at
+high inlet heat load, then send the warmed H2 to the combustor instead of
+discarding it. Closed cycle uses onboard LOX. This keeps the physical reason for
+hydrogen without forcing the vehicle to devote SABRE-like tank volume to pure
+LH2.
+
+Automatic mode choice should ultimately be driven by the solved operating
+envelope (intake recovery, compressor-inlet temperature, precooler heat flux,
+shaft/work balance, useful atmospheric reactants, and net thrust), not by Mach
+number alone. A Mach hysteresis band remains a useful controller policy/fallback,
+not the primary law of nature.
+
+On worlds whose atmosphere does not contain usable oxidizer, the normal
+air-combustion ESTOC path must not work. A separately modelled air-augmented
+rocket/ejector path may still ingest the atmosphere as working mass while
+burning onboard fuel + onboard oxidizer.
+
+This architecture should also permit turbo-rocket, ejector-rocket, RBCC, and
+other hybrid cycles where future gameplay/physics justifies them.
 
 ## 13. Electric/plasma space propulsion
 
@@ -693,23 +746,62 @@ Shipped in `crates/sim-core/src/propulsion.rs` (MIT engine crate, no Bevy/Tokio/
   drive-limit flameout; size-scaling and refusal tests; Mach × altitude
   analyzer grid (the Juno Mach-table contract, computed from the cycle).
 
-### 18.6 ESTOC combined-cycle engine (v5)
+### 18.6 ESTOC combined-cycle engine (v5 shipped; v6 obligations)
+
+Shipped v5:
 
 - `propulsion::estoc`: air-breathing turbojet path plus closed-cycle
   rocket path sharing intake ducting, chamber, and nozzle hardware under
-  our own name (the switchable air/rocket gameplay niche, no borrowed
-  trademarks). Strict mode discipline: manual wins, vacuum always
-  rockets, Mach band with hysteresis, dead air path (stalled drive,
-  anoxic air) falls back to rocket — never blended.
-- Shared convergent nozzle caps rocket expansion (documented): rocket
-  mode buys thrust where air fails (vacuum Isp band 200-350 s), not
-  orbital efficiency. Rocket chamber from LOX-pair thermo at reference
-  mixture, OF-split oxidizer bookkeeping, pump-feed cap, throat-clearance
-  validation, reinforcement + feed mass only (nozzle books once).
-- Mode transitions smooth thrust first-order over the transition tau
-  (threaded prev/mode state; fresh-start convention for the editor);
-  per-nozzle plume states reuse the jet handoff; baker `[[jets]]` kinds
-  `jet`/`estoc` with analyzer Mach grids and JSON rows.
+  our own name. Shared convergent nozzle caps rocket expansion; rocket
+  chamber reuses LOX-pair thermo, OF bookkeeping, pump-feed cap,
+  throat-clearance validation, and books shared hardware once.
+- Automatic selection currently uses a Mach hysteresis band plus dead-air
+  fallback; manual mode can override it. Per-nozzle plume states reuse the
+  jet handoff; baker `[[jets]]` kinds `jet`/`estoc` expose analyzer
+  Mach grids and JSON rows.
+
+Required v6 physical model:
+
+- Add an explicit precooler/heat-exchanger component with heat-flow,
+  effectiveness, wall-temperature, coolant state, and compressor-inlet
+  temperature limits. High-Mach airbreathing capability must emerge from
+  this thermal budget rather than a renamed ordinary turbojet.
+- Split fuel roles: dense `bulk_fuel` (CH4 is the Thessa reference) and
+  optional `boost/coolant_fuel` (H2 reference). The H2 stream may be
+  scheduled from required heat sink, warmed in the precooler, and then
+  burned; it must have independent tank/flow bookkeeping. A pure-H2 ESTOC
+  remains expressible, but is not the only topology.
+- Select automatic air/rocket transition from solved envelope limits
+  (precooler saturation, compressor inlet temperature/work, intake
+  recovery, atmospheric reactant availability, and useful net thrust).
+  Mach thresholds remain controller hysteresis/policy only.
+- Add an optional air-augmented-rocket/ejector path. On an atmosphere with
+  no usable oxidizer, the ordinary air-combustion path flames out; an
+  ejector path may deliberately spend onboard fuel + oxidizer while using
+  ingested gas as extra reaction mass.
+- Replace the free-standing oxygen scalar with the richer atmosphere API.
+  Species basis must be explicit: Thessa's design O2 is 25% molar/volume,
+  about 27.4% by mass for the current bulk mixture. The vehicle-baker
+  analyzer must stop hard-coding Earth's 0.232 oxygen mass fraction.
+
+Known v5 correctness debt:
+
+- Transition smoothing currently applies only on the first tick for which
+  `mode != last_mode`; once the caller feeds back the new mode, thrust
+  snaps to steady target on the next tick instead of following the stated
+  first-order time constant. Transition state must live independently of
+  the selected mode or the low-pass must run until converged.
+- Only thrust is smoothed. Fuel, oxidizer, air flow, exhaust state, and
+  reported Isp jump immediately to the target mode, so a transition point
+  can violate its own `Isp = F / (mdot * g0)` bookkeeping. Transition
+  must evolve a self-consistent flow/thermodynamic state, not one scalar.
+- The current docs/comment say "vacuum always rockets", while manual
+  `Air` wins before the vacuum check. Choose and document one contract.
+  Allowing a manual impossible command and returning a clean flameout is
+  acceptable; silently contradicting the API contract is not.
+- v5 uses one `JetFuel` for both air and rocket paths and has no
+  precooler state, so it cannot yet represent the intended CH4 + H2
+  tripropellant/thermal architecture.
 
 ### 18.7 Still deferred
 

@@ -164,9 +164,11 @@ impl std::error::Error for LandingProfileError {}
 /// executor, not the planner.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum LandingPhase {
-    /// Retrograde deorbit burn until the entry interface is targeted.
+    /// Retrograde deorbit burn until the entry interface is targeted:
+    /// done when the predicted periapsis drops to the interface.
     DeorbitBurn {
         throttle: f64,
+        entry_altitude_m: f64,
         max_phase_time_s: f64,
     },
     /// Unpowered coast to the entry interface altitude.
@@ -174,11 +176,13 @@ pub enum LandingPhase {
         entry_altitude_m: f64,
         max_phase_time_s: f64,
     },
-    /// Suicide-burn braking at the gate altitude until the terminal gate.
+    /// Suicide-burn braking: coast until the gate opens, then burn
+    /// retrograde until the descent rate is inside the touchdown limit.
     /// The gate distance comes from [`braking_distance_m`] evaluated on
-    /// the live rate; `net_braking_decel_mps2` sizes it.
+    /// the live rate, so the node needs both the decel and the limit.
     BrakingBurn {
         net_braking_decel_mps2: f64,
+        touchdown_speed_limit_mps: f64,
         burn_throttle: f64,
         max_phase_time_s: f64,
     },
@@ -223,11 +227,13 @@ pub fn time_to_impact_s(altitude_m: f64, descent_rate_mps: f64) -> Option<f64> {
 
 /// Braking-gate predicate for tests and authority guards: braking must
 /// start when the remaining altitude reaches the suicide distance plus
-/// the profile margin.
+/// the profile margin. Scalar form so phase laws can evaluate it from
+/// node parameters without reconstructing a profile.
 pub fn braking_gate_open(
     altitude_m: f64,
     descent_rate_mps: f64,
-    profile: &LandingProfile,
+    touchdown_speed_limit_mps: f64,
+    net_braking_decel_mps2: f64,
     margin_m: f64,
 ) -> bool {
     if !margin_m.is_finite() || margin_m < 0.0 {
@@ -235,8 +241,8 @@ pub fn braking_gate_open(
     }
     braking_distance_m(
         descent_rate_mps,
-        profile.touchdown_speed_limit_mps,
-        profile.net_braking_decel_mps2,
+        touchdown_speed_limit_mps,
+        net_braking_decel_mps2,
     )
     .is_some_and(|distance| altitude_m <= distance + margin_m)
 }
@@ -332,6 +338,7 @@ pub fn landing_graph(profile: &LandingProfile) -> Result<AutopilotGraph, Landing
                 "deorbit-burn",
                 LandingPhase::DeorbitBurn {
                     throttle: profile.burn_throttle,
+                    entry_altitude_m: profile.entry_altitude_m,
                     max_phase_time_s: profile.max_phase_time_s,
                 },
             ),
@@ -341,6 +348,7 @@ pub fn landing_graph(profile: &LandingProfile) -> Result<AutopilotGraph, Landing
                 "braking-burn",
                 LandingPhase::BrakingBurn {
                     net_braking_decel_mps2: profile.net_braking_decel_mps2,
+                    touchdown_speed_limit_mps: profile.touchdown_speed_limit_mps,
                     burn_throttle: profile.burn_throttle,
                     max_phase_time_s: profile.max_phase_time_s,
                 },
@@ -582,9 +590,18 @@ mod tests {
         assert!(time_to_impact_s(-1.0, 10.0).is_none());
         // The gate opens exactly at distance plus margin.
         let profile = test_profile();
-        assert!(braking_gate_open(999.6 + 50.0, 100.0, &profile, 50.0));
-        assert!(!braking_gate_open(999.6 + 50.1, 100.0, &profile, 50.0));
-        assert!(!braking_gate_open(500.0, 100.0, &profile, f64::NAN));
+        let gate = |alt: f64, rate: f64, margin: f64| {
+            braking_gate_open(
+                alt,
+                rate,
+                profile.touchdown_speed_limit_mps,
+                profile.net_braking_decel_mps2,
+                margin,
+            )
+        };
+        assert!(gate(999.6 + 50.0, 100.0, 50.0));
+        assert!(!gate(999.6 + 50.1, 100.0, 50.0));
+        assert!(!gate(500.0, 100.0, f64::NAN));
     }
 
     #[test]

@@ -317,6 +317,72 @@ Potential procedural parameters include:
 
 Named engine families are presets over this common representation.
 
+### 8.1 Spools, gearboxes, starters, and relight
+
+Gas-turbine startup is part of the authored shaft topology, not a free state
+change. Multi-spool engines may have independent LP/IP/HP shafts, optional
+gearboxes, clutches, and motor-generators. Starter torque acts on a selected
+shaft (normally a core/HP spool); a geared fan or LP spool does not imply that
+the core is mechanically locked to it.
+
+The runtime state must therefore track enough shaft state to answer:
+
+```text
+shaft angular speed / normalized spool speed
+compressor/fan aerodynamic torque
+turbine torque
+starter torque and power
+gear/clutch coupling
+bearing/accessory losses
+minimum light-off speed
+minimum self-sustaining speed
+ignition state
+```
+
+Starter hardware is an authoring choice with real mass/resource consequences.
+At minimum support these topologies:
+
+```text
+none / windmill-only
+    no onboard starter hardware;
+    saves starter/generator mass and startup power infrastructure;
+    cannot self-start at rest;
+    airborne relight succeeds only when inlet-driven shaft torque reaches
+    light-off speed and combustion can accelerate the core to self-sustain
+
+electric starter-generator
+    electrical bus -> motor/generator -> selected spool;
+    supports zero-airspeed start;
+    after light-off the same machine may generate power
+
+pneumatic / air-turbine starter
+    APU, ground cart, or cross-bleed air -> starter turbine -> selected spool;
+    trades electrical demand for ducting/valves and an external or onboard
+    compressed-air source
+
+rocket / gas-generator bootstrap
+    onboard propellant drives a starter turbine or shared rocket machinery;
+    especially natural for combined-cycle engines;
+    consumes propellant but can start independently of ambient airspeed
+```
+
+A starterless aircraft is therefore a valid deliberate design. Wheel motors may
+accelerate the vehicle until ram/windmill torque can relight the core; the
+required speed is not a constant vehicle stat. It emerges from intake state,
+air density, shaft inertia, compressor map/drag, gearbox topology, and the
+chosen light-off/self-sustain thresholds.
+
+If wheel propulsion and the engine share an electrical bus, wheel-motor energy
+can start an engine at zero airspeed only when a starter-generator/cross-drive
+path actually connects that bus to the required core spool. Merely moving the
+aircraft on powered wheels does not mechanically spin an uncoupled compressor.
+
+The steady-state engine solver must not manufacture starter power. At zero
+shaft speed, compressor suction is zero unless an explicit starter, cross-drive,
+rocket ejector, or other modeled source creates flow/torque. A separate
+steady-state performance analyzer may continue to evaluate already-running
+static thrust, but it must label that assumption explicitly.
+
 ## 9. Piston, electric, and generic shaft-power propulsion
 
 Propellers/fans should be reusable thrust-producing components driven by different sources of shaft power.
@@ -746,6 +812,36 @@ Shipped in `crates/sim-core/src/propulsion.rs` (MIT engine crate, no Bevy/Tokio/
   drive-limit flameout; size-scaling and refusal tests; Mach × altitude
   analyzer grid (the Juno Mach-table contract, computed from the cycle).
 
+Known v5 airbreather correctness debt:
+
+- `spool_tau_s` is compiled and exposed but the jet runtime has no spool
+  state: `JetMount` feeds commanded throttle straight into the steady
+  `operating_point`. Startup, shutdown, relight, and transient compressor
+  work are therefore not actually modeled yet.
+- The static `INTAKE_DESIGN_CAPTURE_MACH` suction floor is a steady-running
+  calibration, but today it also creates airflow at zero vehicle speed with no
+  shaft-power source. Once shaft state lands, suction must scale from actual
+  compressor speed/torque; a stopped starterless engine at V=0 gets no free
+  intake flow.
+- `CompiledJet::spool_tau_s()` returns ESTOC mode-transition tau for an ESTOC
+  rather than the air-path spool tau. These are independent dynamics and need
+  separate fields/accessors.
+- The `drive_limited` early-return path currently forces
+  `air_limited = true` even when the intake supplied the requested flow.
+  Drive/work failure and intake starvation must remain distinct flags.
+- Afterburner validation says reheat must exceed turbine-exit temperature but
+  compares `reheat_temp_k` against turbine *inlet* temperature. This rejects
+  physically valid reheat targets between turbine exit and TIT; the constraint
+  must be evaluated against the solved turbine-exit state.
+- `reheat_active` compares nozzle-scaled total fuel against the unscaled core
+  fuel flow. Under nozzle limiting it can report the afterburner off despite
+  positive afterburner fuel flow; use the scaled AB flow directly.
+- Afterburner oxygen bookkeeping mixes bases: remaining O2 is computed per unit
+  initial core air, then applied as though it were a mass fraction of the
+  post-turbine mixed stream, and customer-bleed oxygen is not removed
+  consistently. Recompute available O2 as an explicit species mass flow through
+  the combustor/cooling-bleed merge before deriving the AB fuel cap.
+
 ### 18.6 ESTOC combined-cycle engine (v5 shipped; v6 obligations)
 
 Shipped v5:
@@ -783,6 +879,16 @@ Required v6 physical model:
   Species basis must be explicit: Thessa's design O2 is 25% molar/volume,
   about 27.4% by mass for the current bulk mixture. The vehicle-baker
   analyzer must stop hard-coding Earth's 0.232 oxygen mass fraction.
+- Adopt the starter/spool contract from section 8.1. ESTOC must be authorable
+  with an electric starter-generator, pneumatic start, rocket/gas-generator
+  bootstrap, or deliberately no starter at all. A starterless ESTOC may relight
+  in flight from windmilling once the solved core spool reaches light-off
+  speed; it must not start at rest merely because the steady-state intake model
+  has a suction floor.
+- Multi-spool/gearbox authoring must keep mode-transition dynamics separate
+  from shaft dynamics. LP/IP/HP spool inertia and coupling, starter attachment,
+  and optional geared fan reduction are independent of the ESTOC
+  air/rocket-valve transition.
 
 Known v5 correctness debt:
 

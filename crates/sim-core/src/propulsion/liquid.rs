@@ -272,8 +272,10 @@ impl LiquidEngineSpec {
         let head_kg = MASS_FIT_HEAD_BASE_KG + MASS_FIT_HEAD_KG_PER_M2 * throat_area_m2;
         let mount_kg = MASS_FIT_MOUNT_KG_PER_N * thrust_vac_n;
         let feed_kg = MASS_FIT_FEED_KG_PER_N * thrust_vac_n;
+        // Gimbal actuators vector their chamber, not the GG duct: size by
+        // main-chamber thrust (matches the multi-chamber path exactly).
         let gimbal_kg = if self.gimbal_range_rad > 0.0 {
-            MASS_FIT_GIMBAL_BASE_KG + MASS_FIT_GIMBAL_KG_PER_N * thrust_vac_n
+            MASS_FIT_GIMBAL_BASE_KG + MASS_FIT_GIMBAL_KG_PER_N * main.thrust_vac_n
         } else {
             0.0
         };

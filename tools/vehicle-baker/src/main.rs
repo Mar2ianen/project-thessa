@@ -3,11 +3,12 @@ use std::{env, error::Error, fs, path::PathBuf};
 use glam::{DMat3, DQuat, DVec3};
 use serde::Deserialize;
 use thessa_sim_core::{
-    AeroGeometry, AeroPanel, AtmosphereConfig, ChamberMaterial, CollisionAxis, CollisionGeometry,
-    CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine, ControlSurfaceDefinition,
-    CoolingMode, EngineCycle, EngineMount, LiquidEngineSpec, NozzleContour, NtrFluid,
-    NuclearThermalSpec, Propellant, RigidBodyProperties, SolidMotorSpec, TankMount, TankShape,
-    TankSpec, VehicleDefinition, analyze_altitude,
+    AeroGeometry, AeroPanel, AtmosphereConfig, ChamberMaterial, ChamberSpec, CollisionAxis,
+    CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine,
+    ControlSurfaceDefinition, CoolingMode, EngineCycle, EngineMount, LiquidEngineSpec,
+    NozzleContour, NtrFluid, NuclearThermalSpec, Propellant, PropulsionSystemSpec,
+    RigidBodyProperties, SolidMotorSpec, SystemMount, TankMount, TankShape, TankSpec,
+    VehicleDefinition, analyze_altitude,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -52,6 +53,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             mount.engine.bake_mass_kg(),
         );
     }
+    for mount in &vehicle.systems {
+        println!(
+            "system {} ({} chambers): vacuum thrust {:.1} kN, dry {:.1} kg",
+            mount.name,
+            mount.system.chambers.len(),
+            mount.system.total_thrust_vac_n / 1000.0,
+            mount.system.dry_mass_kg,
+        );
+    }
     if let Some(output) = options.output {
         let json = serde_json::to_string_pretty(&vehicle)?;
         fs::write(&output, format!("{json}\n"))?;
@@ -94,6 +104,17 @@ fn run_analyzer(
                 )?,
             }));
         }
+        for mount in &vehicle.systems {
+            let throttles = vec![throttle; mount.system.chambers.len()];
+            rows.push(serde_json::json!({
+                "system": mount.name,
+                "points": mount.system.analyze_system_altitude(
+                    &atmosphere,
+                    &altitudes,
+                    &throttles,
+                )?,
+            }));
+        }
         println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(());
     }
@@ -121,6 +142,31 @@ fn run_analyzer(
             );
         }
     }
+    for mount in &vehicle.systems {
+        println!(
+            "--- analyzer: {} (throttle {throttle}, {} chambers)",
+            mount.name,
+            mount.system.chambers.len()
+        );
+        println!(
+            "{:>10} {:>10} {:>12} {:>10} {:>5}",
+            "alt_m", "p_amb", "thrust_kN", "isp_s", "sep"
+        );
+        let throttles = vec![throttle; mount.system.chambers.len()];
+        let curve = mount
+            .system
+            .analyze_system_altitude(&atmosphere, &altitudes, &throttles)?;
+        for point in &curve {
+            println!(
+                "{:>10.0} {:>10.0} {:>12.1} {:>10.1} {:>5}",
+                point.altitude_m,
+                point.ambient_pa,
+                point.thrust_n / 1000.0,
+                point.isp_s,
+                if point.separation_any { "SEP" } else { "" },
+            );
+        }
+    }
     Ok(())
 }
 
@@ -145,6 +191,9 @@ struct VehicleAsset {
     /// Propellant tanks (dry + full-fill mass aggregates at bake).
     #[serde(default)]
     tanks: Vec<TankAsset>,
+    /// Multi-chamber propulsion systems (shared feed, per-chamber nozzles).
+    #[serde(default)]
+    systems: Vec<SystemAsset>,
 }
 
 impl VehicleAsset {
@@ -178,6 +227,11 @@ impl VehicleAsset {
             .into_iter()
             .map(TankAsset::bake)
             .collect::<Result<Vec<TankMount>, _>>()?;
+        let system_mounts = self
+            .systems
+            .into_iter()
+            .map(SystemAsset::bake)
+            .collect::<Result<Vec<SystemMount>, _>>()?;
         // Feed cross-check: pressure-fed engines have no pump to hide
         // behind, so a tank must hold their full feed pressure. Pump-fed
         // cycles generate the rise themselves (chamber pressure is already
@@ -200,12 +254,27 @@ impl VehicleAsset {
                 .into());
             }
         }
+        for mount in &system_mounts {
+            if mount.system.cycle == EngineCycle::PressureFed
+                && strongest_tank_pa < mount.system.feed_pressure_required_pa
+            {
+                return Err(format!(
+                    "tank pressure {:.2} MPa cannot pressure-feed {} (needs {:.2} MPa)",
+                    strongest_tank_pa / 1.0e6,
+                    mount.name,
+                    mount.system.feed_pressure_required_pa / 1.0e6
+                )
+                .into());
+            }
+        }
         let mut vehicle = VehicleDefinition::new(self.name, geometry, properties, controls)?
             .with_collision_geometry(collision_geometry)?
             .with_engines(mounts)?
-            .with_tanks(tank_mounts)?;
+            .with_tanks(tank_mounts)?
+            .with_systems(system_mounts)?;
         vehicle.bake_engine_masses()?;
         vehicle.bake_tank_masses()?;
+        vehicle.bake_system_masses()?;
         Ok(vehicle)
     }
 }
@@ -388,7 +457,6 @@ enum EngineKind {
     Solid,
     Nuclear,
 }
-
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum MaterialAsset {
@@ -634,6 +702,129 @@ impl TankAsset {
         Ok(TankMount {
             tank: spec.compile(density)?,
             position_body_m: self.position_body_m,
+        })
+    }
+}
+
+/// One chamber of a multi-chamber system from the source vehicle asset.
+///
+/// Example TOML:
+///
+/// ```text
+/// [[systems]]
+/// name = "quad"
+/// propellant = "lox-rp1"
+/// cycle = "gas-generator"
+/// chamber_pressure_mpa = 9.7
+/// material = "nickel-superalloy"
+/// cooling = "regenerative"
+///
+/// [[systems.chambers]]
+/// name = "a"
+/// throat_radius_m = 0.134
+/// expansion_ratio = 16.0
+/// nozzle_length_m = 1.5
+/// contour = "bell"
+/// position_body_m = [-3.0, 0.0, 0.5]
+/// thrust_axis_body = [1.0, 0.0, 0.0]
+/// gimbal_range_rad = 0.09
+/// ```
+#[derive(Debug, Deserialize)]
+struct ChamberAsset {
+    name: String,
+    throat_radius_m: f64,
+    expansion_ratio: f64,
+    nozzle_length_m: f64,
+    #[serde(default = "bell_contour")]
+    contour: NozzleContour,
+    #[serde(default = "mount_position_default")]
+    position_body_m: [f64; 3],
+    #[serde(default = "thrust_axis_default")]
+    thrust_axis_body: [f64; 3],
+    #[serde(default)]
+    gimbal_range_rad: f64,
+}
+
+fn bell_contour() -> NozzleContour {
+    NozzleContour::Bell
+}
+
+impl ChamberAsset {
+    fn bake(self) -> Result<ChamberSpec, Box<dyn Error>> {
+        Ok(ChamberSpec {
+            name: self.name,
+            throat_radius_m: self.throat_radius_m,
+            expansion_ratio: self.expansion_ratio,
+            nozzle_length_m: self.nozzle_length_m,
+            contour: self.contour,
+            position_body_m: self.position_body_m,
+            thrust_axis_body: self.thrust_axis_body,
+            gimbal_range_rad: self.gimbal_range_rad,
+        })
+    }
+}
+
+/// One multi-chamber propulsion system: shared feed plus chamber list.
+#[derive(Debug, Deserialize)]
+struct SystemAsset {
+    name: String,
+    propellant: Propellant,
+    cycle: EngineCycle,
+    chamber_pressure_mpa: f64,
+    #[serde(default)]
+    mixture_ratio: Option<f64>,
+    material: MaterialAsset,
+    #[serde(default = "regen_cooling")]
+    cooling: CoolingMode,
+    #[serde(default)]
+    characteristic_length_m: Option<f64>,
+    #[serde(default)]
+    min_throttle: Option<f64>,
+    #[serde(default = "default_true")]
+    restartable: bool,
+    chambers: Vec<ChamberAsset>,
+}
+
+fn regen_cooling() -> CoolingMode {
+    CoolingMode::Regenerative
+}
+
+impl SystemAsset {
+    fn bake(self) -> Result<SystemMount, Box<dyn Error>> {
+        if !self.chamber_pressure_mpa.is_finite() || self.chamber_pressure_mpa <= 0.0 {
+            return Err("system needs chamber_pressure_mpa in MPa".into());
+        }
+        let material = match &self.material {
+            MaterialAsset::Custom(material) => *material,
+            MaterialAsset::Preset(name) => match name.as_str() {
+                "regen-alloy" => ChamberMaterial::regen_alloy(),
+                "nickel-superalloy" => ChamberMaterial::nickel_superalloy(),
+                "radiative-niobium" => ChamberMaterial::radiative_niobium(),
+                "ablative" => ChamberMaterial::ablative(),
+                unknown => return Err(format!("unknown material preset {unknown}").into()),
+            },
+        };
+        let chambers = self
+            .chambers
+            .into_iter()
+            .map(ChamberAsset::bake)
+            .collect::<Result<Vec<_>, _>>()?;
+        let spec = PropulsionSystemSpec {
+            name: self.name.clone(),
+            propellant: self.propellant,
+            cycle: self.cycle,
+            chamber_pressure_pa: self.chamber_pressure_mpa * 1.0e6,
+            mixture_ratio: self.mixture_ratio,
+            chamber_material: material,
+            cooling: self.cooling,
+            characteristic_length_m: self.characteristic_length_m,
+            min_throttle: self.min_throttle,
+            restartable: self.restartable,
+            chambers,
+        };
+        Ok(SystemMount {
+            name: self.name,
+            system: spec.compile()?,
         })
     }
 }
@@ -1049,5 +1240,85 @@ propellant = "monoprop-hydrazine"
         assert!((force.x - ntr.x).abs() < 1.0, "axial thrust is the NTR");
         assert!(force.z.abs() < 100.0, "RCS fires transversely");
         assert!(moment.length() > 0.0, "offset RCS must couple");
+    }
+
+    #[test]
+    fn twin_chamber_system_bakes_with_shared_feed() {
+        // Two chambers on one GG feed: totals match the parts, system dry
+        // mass lands in the baked vehicle mass, differential throttle
+        // couples through the stations.
+        let doc = r#"
+name = "twin-test"
+mass_kg = 2000.0
+inertia_body_kg_m2 = [[8000.0, 0.0, 0.0], [0.0, 8000.0, 0.0], [0.0, 0.0, 1500.0]]
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 1.0
+chord_m = 1.0
+[[tanks]]
+name = "rp1-tank"
+shape = "sphere"
+diameter_m = 2.0
+pressure_mpa = 0.5
+material = "regen-alloy"
+position_body_m = [1.0, 0.0, 0.0]
+propellant = "lox-rp1"
+[[systems]]
+name = "twin"
+propellant = "lox-rp1"
+cycle = "gas-generator"
+chamber_pressure_mpa = 9.7
+material = "nickel-superalloy"
+cooling = "regenerative"
+[[systems.chambers]]
+name = "a"
+throat_radius_m = 0.134
+expansion_ratio = 16.0
+nozzle_length_m = 1.5
+contour = "bell"
+position_body_m = [-3.0, 0.0, 0.5]
+thrust_axis_body = [1.0, 0.0, 0.0]
+gimbal_range_rad = 0.09
+[[systems.chambers]]
+name = "b"
+throat_radius_m = 0.100
+expansion_ratio = 16.0
+nozzle_length_m = 1.2
+contour = "bell"
+position_body_m = [-3.0, 0.0, -0.5]
+thrust_axis_body = [1.0, 0.0, 0.0]
+gimbal_range_rad = 0.09
+"#;
+        let asset: VehicleAsset = toml::from_str(doc).expect("TOML parses");
+        let vehicle = asset.bake().expect("twin system bakes");
+        assert_eq!(vehicle.systems.len(), 1);
+        let system = &vehicle.systems[0].system;
+        assert_eq!(system.chambers.len(), 2);
+        // System dry (shared turbo booked once) sits inside baked mass.
+        let tanks_mass: f64 = vehicle
+            .tanks
+            .iter()
+            .map(|mount| mount.tank.dry_mass_kg + mount.tank.full_propellant_kg)
+            .sum();
+        assert!(
+            (vehicle.mass_properties.mass_kg - 2000.0 - tanks_mass - system.dry_mass_kg).abs()
+                < 1e-6
+        );
+        // Uniform full throttle matches the vacuum total; differential
+        // throttle steers about Y.
+        let total = vehicle.total_thrust_body_n(1.0, 0.0, 0.0).expect("total");
+        assert!((total.x - system.total_thrust_vac_n).abs() / system.total_thrust_vac_n < 1e-9);
+        let (force, moment) = vehicle
+            .system_wrench_body_n(0, &[1.0, 0.5], 0.0)
+            .expect("system wrench");
+        let expected = system
+            .operating_point(&[1.0, 0.5], 0.0)
+            .expect("system point")
+            .thrust_n;
+        assert!((force.x - expected).abs() / expected < 1e-12);
+        assert!(moment.y.abs() > 0.0, "differential must couple");
+        assert!(vehicle.system_wrench_body_n(0, &[1.0], 0.0).is_err());
     }
 }

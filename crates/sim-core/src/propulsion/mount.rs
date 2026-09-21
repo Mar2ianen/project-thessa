@@ -100,28 +100,47 @@ impl EngineMount {
         self.validate()?;
         let thrust_n =
             DVec3::from_array(self.thrust_vector_body_n(throttle, ambient_pa, burn_time_s)?);
-        let axis = DVec3::from_array(self.thrust_axis_body);
-        let reference = if axis.x.abs() < 0.9 {
-            DVec3::X
-        } else {
-            DVec3::Y
-        };
-        let gimbal_a = axis.cross(reference).normalize();
-        let gimbal_b = axis.cross(gimbal_a).normalize();
-        let position = DVec3::from_array(self.position_body_m);
-        let mut effectors = Vec::with_capacity(2);
-        for gimbal_axis in [gimbal_a, gimbal_b] {
-            // dF/ddelta = gimbal_axis x F; moment = r x dF/ddelta.
-            let force_per_rad = gimbal_axis.cross(thrust_n);
-            let moment_per_rad = position.cross(force_per_rad);
-            effectors.push(GimbalEffector {
-                gimbal_axis: gimbal_axis.to_array(),
-                force_per_command_n: (force_per_rad * self.gimbal_range_rad()).to_array(),
-                moment_per_command_nm: (moment_per_rad * self.gimbal_range_rad()).to_array(),
-            });
-        }
-        Ok([effectors[0], effectors[1]])
+        Ok(gimbal_pair(
+            self.position_body_m,
+            self.thrust_axis_body,
+            thrust_n.to_array(),
+            self.gimbal_range_rad(),
+        ))
     }
+}
+
+/// Shared gimbal-pair math: two effectors about the body axes perpendicular
+/// to the thrust axis. A normalized command spans `range_rad` about each
+/// gimbal axis; moments are about the body origin.
+pub(crate) fn gimbal_pair(
+    position_body_m: [f64; 3],
+    thrust_axis_body: [f64; 3],
+    thrust_vector_body_n: [f64; 3],
+    range_rad: f64,
+) -> [GimbalEffector; 2] {
+    use glam::DVec3;
+    let thrust_n = DVec3::from_array(thrust_vector_body_n);
+    let axis = DVec3::from_array(thrust_axis_body);
+    let reference = if axis.x.abs() < 0.9 {
+        DVec3::X
+    } else {
+        DVec3::Y
+    };
+    let gimbal_a = axis.cross(reference).normalize();
+    let gimbal_b = axis.cross(gimbal_a).normalize();
+    let position = DVec3::from_array(position_body_m);
+    let mut effectors = Vec::with_capacity(2);
+    for gimbal_axis in [gimbal_a, gimbal_b] {
+        // dF/ddelta = gimbal_axis x F; moment = r x dF/ddelta.
+        let force_per_rad = gimbal_axis.cross(thrust_n);
+        let moment_per_rad = position.cross(force_per_rad);
+        effectors.push(GimbalEffector {
+            gimbal_axis: gimbal_axis.to_array(),
+            force_per_command_n: (force_per_rad * range_rad).to_array(),
+            moment_per_command_nm: (moment_per_rad * range_rad).to_array(),
+        });
+    }
+    [effectors[0], effectors[1]]
 }
 
 #[cfg(test)]

@@ -36,6 +36,7 @@ mod propellant;
 mod rcs;
 mod solid;
 mod spool;
+mod system;
 
 pub use analyze::{AltitudePoint, analyze_altitude};
 pub use cycle::{CycleLimits, EngineCycle};
@@ -61,6 +62,10 @@ pub use rcs::{
 };
 pub use solid::{BurnPoint, CompiledSolid, SolidMotorSpec};
 pub use spool::{EngineSpool, advance_spool};
+pub use system::{
+    ChamberSpec, CompiledChamber, CompiledPropulsionSystem, MAX_SYSTEM_CHAMBERS,
+    PropulsionSystemSpec, SystemAltitudePoint, SystemMount, SystemOperatingPoint,
+};
 
 pub(crate) use error::{require_non_negative, require_positive, require_unit_interval};
 pub(crate) use nozzle::{AEROSPIKE_BASE_FRACTION, nozzle_exit};

@@ -640,7 +640,30 @@ Shipped in `crates/sim-core/src/propulsion.rs` (MIT engine crate, no Bevy/Tokio/
 - Bench `crates/sim-core/benches/propulsion.rs`: hangar compile
   ~20 us (liquid) / ~12 us (solid), analyzer and solid-replay sweeps.
 
-### 18.4 Still deferred
+### 18.4 Multi-chamber systems (v4)
+
+- `propulsion::system`: one shared feed (single turbopump set, single
+  GG duct on total bypass flow, common tanks) driving 1-16 chamber/nozzle
+  assemblies at their own stations — RD-170-style clustering.
+- Native compile (not N single compiles): shared hardware books once
+  from total flow; chambers carry walls, nozzles, injectors, heads, and
+  gimbals. A single-chamber system reproduces the standalone liquid
+  compile bit-for-bit (pinned); totals scale linearly, so clustering buys
+  runtime authority (differential throttle, per-chamber gimbals, one
+  plume source per nozzle), not mass magic.
+- Runtime: per-chamber throttles with the shared duct following total
+  flow, per-nozzle plume states, force/moment wrench with the GG duct
+  distributed proportionally (documented rule, shared with the vehicle
+  total), per-chamber gimbal authority, independent spool states under
+  the same first-order law, and a system altitude analyzer for the
+  editor. Gimbal actuators size by chamber thrust (the standalone liquid
+  path was corrected to match; Merlin band unaffected).
+- Vehicle integration: `systems` mounts with per-chamber bake mass
+  (shared hardware at the chamber-mass centroid), uniform-throttle total
+  thrust, per-system differential wrench; baker `[[systems]]` with
+  nested `[[systems.chambers]]` plus the pressure-fed feed check.
+
+### 18.5 Still deferred
 
 Star/finocyl grain geometry (needs numerical perimeter burnback, not a
 tweak of the port solver), tank depletion wiring into the flight loop

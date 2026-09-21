@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AeroConfig, AeroError, AeroGeometry, AeroPanel, CollisionAxis, CollisionError,
     CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine,
-    EngineMount, FlightError, PropulsionError, RigidBodyProperties, TankMount,
+    EngineMount, FlightError, PropulsionError, RigidBodyProperties, SystemMount, TankMount,
 };
 
 /// One user-configurable aerodynamic control channel.
@@ -111,6 +111,10 @@ pub struct VehicleDefinition {
     /// depletion wiring is future work).
     #[serde(default)]
     pub tanks: Vec<TankMount>,
+    /// Installed multi-chamber propulsion systems (chambers carry their
+    /// own stations; mass aggregates per chamber at bake).
+    #[serde(default)]
+    pub systems: Vec<SystemMount>,
 }
 
 /// Physical starter data for the first powered flight profile.
@@ -310,6 +314,7 @@ impl VehicleDefinition {
             collision_geometry: CollisionGeometry::default(),
             engines: Vec::new(),
             tanks: Vec::new(),
+            systems: Vec::new(),
         };
         definition.validate()?;
         Ok(definition)
@@ -349,6 +354,9 @@ impl VehicleDefinition {
             mount.validate().map_err(VehicleError::Propulsion)?;
         }
         for mount in &self.tanks {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        for mount in &self.systems {
             mount.validate().map_err(VehicleError::Propulsion)?;
         }
 
@@ -424,6 +432,51 @@ impl VehicleDefinition {
         Ok(())
     }
 
+    /// Attach compiled multi-chamber systems (baker path).
+    pub fn with_systems(mut self, systems: Vec<SystemMount>) -> Result<Self, VehicleError> {
+        for mount in &systems {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        self.systems = systems;
+        Ok(self)
+    }
+
+    /// Aggregate installed system masses: shared feed hardware rides at
+    /// the system centroid, each chamber at its own station (point masses).
+    /// Called after [`VehicleDefinition::bake_tank_masses`].
+    pub fn bake_system_masses(&mut self) -> Result<(), VehicleError> {
+        let mut mass_kg = self.mass_properties.mass_kg;
+        let mut inertia = self.mass_properties.inertia_body_kg_m2;
+        for mount in &self.systems {
+            let chambers_dry_kg: f64 = mount.system.chambers.iter().map(|c| c.dry_mass_kg).sum();
+            let shared_kg = (mount.system.dry_mass_kg - chambers_dry_kg).max(0.0);
+            let mut centroid = DVec3::ZERO;
+            let mut chamber_mass = 0.0;
+            for chamber in &mount.system.chambers {
+                let position = DVec3::from_array(chamber.position_body_m);
+                mass_kg += chamber.dry_mass_kg;
+                inertia += chamber.dry_mass_kg
+                    * (glam::DMat3::IDENTITY * position.length_squared()
+                        - outer_product(position, position));
+                centroid += position * chamber.dry_mass_kg;
+                chamber_mass += chamber.dry_mass_kg;
+            }
+            if shared_kg > 0.0 {
+                let at = if chamber_mass > 0.0 {
+                    centroid / chamber_mass
+                } else {
+                    DVec3::ZERO
+                };
+                mass_kg += shared_kg;
+                inertia += shared_kg
+                    * (glam::DMat3::IDENTITY * at.length_squared() - outer_product(at, at));
+            }
+        }
+        self.mass_properties =
+            RigidBodyProperties::new(mass_kg, inertia).map_err(VehicleError::MassProperties)?;
+        Ok(())
+    }
+
     /// Thrust vector of one mount in body axes (N).
     pub fn engine_thrust_body_n(
         &self,
@@ -444,6 +497,7 @@ impl VehicleDefinition {
 
     /// Total installed thrust in body axes at a uniform command (editor
     /// preview / single-lever path; per-engine allocation is later work).
+    /// Multi-chamber systems fire all chambers at the same throttle.
     pub fn total_thrust_body_n(
         &self,
         throttle: f64,
@@ -454,13 +508,51 @@ impl VehicleDefinition {
         for index in 0..self.engines.len() {
             total += self.engine_thrust_body_n(index, throttle, ambient_pa, burn_time_s)?;
         }
+        for mount in &self.systems {
+            let throttles = vec![throttle; mount.system.chambers.len()];
+            let point = mount
+                .system
+                .operating_point(&throttles, ambient_pa)
+                .map_err(VehicleError::Propulsion)?;
+            // The shared GG duct has no station of its own: distribute its
+            // thrust across chambers proportionally (documented).
+            let main: f64 = point.chambers.iter().map(|c| c.thrust_n).sum();
+            let scale = if main > 0.0 {
+                point.thrust_n / main
+            } else {
+                1.0
+            };
+            for (chamber, chamber_point) in mount.system.chambers.iter().zip(point.chambers.iter())
+            {
+                total +=
+                    DVec3::from_array(chamber.thrust_axis_body) * (chamber_point.thrust_n * scale);
+            }
+        }
         Ok(total)
+    }
+
+    /// Force/moment wrench of one multi-chamber system at per-chamber
+    /// throttles (differential authority for the allocator).
+    pub fn system_wrench_body_n(
+        &self,
+        index: usize,
+        throttles: &[f64],
+        ambient_pa: f64,
+    ) -> Result<(DVec3, DVec3), VehicleError> {
+        let mount = self.systems.get(index).ok_or_else(|| {
+            VehicleError::InvalidVehicle(format!("no propulsion system at index {index}"))
+        })?;
+        mount
+            .system
+            .wrench_body_n(throttles, ambient_pa)
+            .map_err(VehicleError::Propulsion)
     }
 
     /// Force/moment wrench in body axes at per-mount commands: force is the
     /// thrust sum, moment the sum of mount-station cross thrust about the
-    /// body origin. `commands` carries one (throttle, burn clock) per
-    /// mount; RCS blocks and gimbaled clusters consume this.
+    /// body origin. Covers single engines (`commands` carries one
+    /// (throttle, burn clock) per mount); multi-chamber systems ride
+    /// [`VehicleDefinition::system_wrench_body_n`].
     pub fn wrench_body_n(
         &self,
         commands: &[(f64, f64)],

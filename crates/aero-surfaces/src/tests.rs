@@ -92,6 +92,7 @@ fn tapered_swept_wing_matches_closed_form() {
         sections: SectionData::uniform(0.0, 0.0).unwrap(),
         controls: Vec::new(),
         folds: Vec::new(),
+        structure: None,
     };
     let compiled =
         compile_surface(&surface, &tight_options(), &MechanismState::deployed()).unwrap();
@@ -218,6 +219,7 @@ fn tolerance_tightening_refines_zones_without_moving_geometry() {
         sections: SectionData::uniform(0.0, 0.0).unwrap(),
         controls: Vec::new(),
         folds: Vec::new(),
+        structure: None,
     };
     let coarse = compile_surface(
         &tapered,
@@ -1012,6 +1014,7 @@ fn error_budget_yields_minimal_panels_at_certified_error() {
         sections: SectionData::uniform(0.0, 0.0).unwrap(),
         controls: Vec::new(),
         folds: Vec::new(),
+        structure: None,
     };
     let optimized = compile_surface(
         &tapered,
@@ -1354,6 +1357,7 @@ fn vertical_fin(roll_deg: f64) -> ProceduralSurface {
         sections: SectionData::uniform(0.0, 0.08).unwrap(),
         controls: vec![rudder],
         folds: Vec::new(),
+        structure: None,
     }
 }
 
@@ -1513,6 +1517,7 @@ fn v_tail_half(mirror: bool) -> ProceduralSurface {
         sections: SectionData::uniform(0.0, 0.07).unwrap(),
         controls: vec![rv],
         folds: Vec::new(),
+        structure: None,
     }
 }
 
@@ -1619,4 +1624,168 @@ fn t_tail_stacks_stabilator_on_fin_tip() {
     // Combined empennage area is the honest sum of both compilations.
     let total = compiled_fin.summary.material_area_m2 + compiled_tail.summary.material_area_m2;
     assert!(total > 0.0);
+}
+
+fn structured_rect(thickness: f64, material: crate::SolidMaterial) -> ProceduralSurface {
+    use crate::StructuralLayout;
+    let mut surface = rectangular(8.0, 2.0);
+    surface.sections = SectionData::uniform(0.0, thickness).unwrap();
+    let mut layout = StructuralLayout::metal_baseline();
+    layout.skin_material = material.clone();
+    layout.spar_material = material;
+    surface.structure = Some(layout);
+    surface
+}
+
+#[test]
+fn structural_mass_matches_hand_buildup() {
+    use crate::{SolidMaterial, StructuralLayout};
+
+    let _ = StructuralLayout::metal_baseline();
+    let surface = structured_rect(0.10, SolidMaterial::aluminum_7075());
+    let compiled = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    let structure = compiled.structure.as_ref().expect("structured");
+    // Skin 2*16*0.002*2810 = 179.84; webs 2*8*0.12*0.003*2810 = 16.1856
+    // plus 1.5x caps = 40.464 spar; primary 220.304 plus 20 percent.
+    assert!((structure.skin_mass_kg - 179.84).abs() < 0.05);
+    assert!((structure.spar_mass_kg - 40.464).abs() < 0.05);
+    assert!((structure.mass_kg - 264.3648).abs() < 0.1);
+    // Symmetric flat wing: center of mass at mid-chord, mid-span.
+    assert!((structure.center_of_mass_body_m - DVec3::new(1.0, 4.0, 0.0)).length() < 1e-9);
+    // Flat point-mass assembly: perpendicular-axis identity holds.
+    let inertia = structure.inertia_body_kg_m2;
+    let trace_gap = (inertia.z_axis.z - (inertia.x_axis.x + inertia.y_axis.y)).abs();
+    assert!(trace_gap < 1e-9 * inertia.z_axis.z);
+    // Single point mass: the radial direction is the exact null vector
+    // of the inertia tensor (rank 2 by construction, not a bug).
+    let radial = DVec3::new(1.0, 4.0, 0.0).normalize();
+    assert!((inertia * radial).length() < 1e-9 * structure.mass_kg);
+    // Fuel box 0.5 x chord 2 x span 8 x thickness 0.2 x fill 0.85.
+    assert!((structure.fuel_volume_m3 - 1.36).abs() < 1e-9);
+    assert!((structure.fuel_centroid_body_m - DVec3::new(1.0, 4.0, 0.0)).length() < 1e-6);
+}
+
+#[test]
+fn structural_mass_scales_with_material_density() {
+    use crate::SolidMaterial;
+
+    // Same gauges, different density: total mass ratio is exactly the
+    // density ratio. This is the material-variation proof.
+    let aluminum = structured_rect(0.10, SolidMaterial::aluminum_7075());
+    let carbon = structured_rect(0.10, SolidMaterial::carbon_fiber());
+    let mass_al = compile_surface(
+        &aluminum,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap()
+    .structure
+    .unwrap()
+    .mass_kg;
+    let mass_cf = compile_surface(
+        &carbon,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap()
+    .structure
+    .unwrap()
+    .mass_kg;
+    assert!((mass_cf / mass_al - 1600.0 / 2810.0).abs() < 1e-12);
+}
+
+#[test]
+fn fuel_volume_scales_with_thickness_while_skin_does_not() {
+    use crate::SolidMaterial;
+
+    // Thickness variation: box volume is linear in thickness (ratio 3
+    // for 0.05 -> 0.15); skin mass is gauge-driven and must not move;
+    // spar webs ride the section depth linearly.
+    let thin = structured_rect(0.05, SolidMaterial::aluminum_7075());
+    let thick = structured_rect(0.15, SolidMaterial::aluminum_7075());
+    let compile = |surface: &ProceduralSurface| {
+        compile_surface(
+            surface,
+            &CompileOptions::default(),
+            &MechanismState::deployed(),
+        )
+        .unwrap()
+        .structure
+        .unwrap()
+    };
+    let thin_structure = compile(&thin);
+    let thick_structure = compile(&thick);
+    assert!((thick_structure.fuel_volume_m3 / thin_structure.fuel_volume_m3 - 3.0).abs() < 1e-9);
+    assert!(
+        (thick_structure.skin_mass_kg - thin_structure.skin_mass_kg).abs()
+            < 1e-9 * thin_structure.skin_mass_kg
+    );
+    assert!((thick_structure.spar_mass_kg / thin_structure.spar_mass_kg - 3.0).abs() < 1e-9);
+}
+
+#[test]
+fn structural_output_mirrors_and_absents_cleanly() {
+    use crate::SolidMaterial;
+
+    // Mirrored surfaces carry identical mass with mirrored centers.
+    let mut surface = structured_rect(0.10, SolidMaterial::aluminum_7075());
+    surface.mirror_y = true;
+    let plain = structured_rect(0.10, SolidMaterial::aluminum_7075());
+    let compiled = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    let reference = compile_surface(
+        &plain,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    let mirrored = compiled.structure.as_ref().expect("structured");
+    let direct = reference.structure.as_ref().expect("structured");
+    assert!((mirrored.mass_kg - direct.mass_kg).abs() < 1e-12);
+    assert!((mirrored.fuel_volume_m3 - direct.fuel_volume_m3).abs() < 1e-12);
+    assert!((mirrored.center_of_mass_body_m.y + direct.center_of_mass_body_m.y).abs() < 1e-9);
+    assert!(
+        (mirrored.inertia_body_kg_m2.x_axis.x - direct.inertia_body_kg_m2.x_axis.x).abs()
+            < 1e-9 * direct.mass_kg
+    );
+    // No layout: no structure, geometry untouched (back-compat).
+    let bare = rectangular(8.0, 2.0);
+    let compiled = compile_surface(
+        &bare,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    assert!(compiled.structure.is_none());
+    assert_eq!(compiled.panels.len(), 1);
+    // Degenerate layouts fail closed.
+    let mut bad = structured_rect(0.10, SolidMaterial::aluminum_7075());
+    bad.structure.as_mut().unwrap().skin_gauge_mm = -1.0;
+    assert!(
+        compile_surface(
+            &bad,
+            &CompileOptions::default(),
+            &MechanismState::deployed()
+        )
+        .is_err()
+    );
+    let mut bad_box = structured_rect(0.10, SolidMaterial::aluminum_7075());
+    bad_box.structure.as_mut().unwrap().fuel_box_chord = (0.8, 0.2);
+    assert!(
+        compile_surface(
+            &bad_box,
+            &CompileOptions::default(),
+            &MechanismState::deployed()
+        )
+        .is_err()
+    );
 }

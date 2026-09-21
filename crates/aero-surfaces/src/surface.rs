@@ -6,7 +6,9 @@
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
-use crate::{BendCurve, ControlRegion, FoldJoint, Planform, SectionData, SurfaceError};
+use crate::{
+    BendCurve, ControlRegion, FoldJoint, Planform, SectionData, StructuralLayout, SurfaceError,
+};
 
 /// Authoring-side procedural aerodynamic surface.
 ///
@@ -49,6 +51,11 @@ pub struct ProceduralSurface {
     /// compiler sorts them by station.
     #[serde(default)]
     pub folds: Vec<FoldJoint>,
+    /// Structural layout for mass and fuel-volume estimation. `None`
+    /// skips the structural pass (geometry-only compilation stays
+    /// valid); `Some` is the operator's material and gauge choice.
+    #[serde(default)]
+    pub structure: Option<StructuralLayout>,
 }
 
 impl ProceduralSurface {
@@ -70,6 +77,7 @@ impl ProceduralSurface {
             sections: SectionData::uniform(0.0, 0.0)?,
             controls: Vec::new(),
             folds: Vec::new(),
+            structure: None,
         }
         .validated()
     }
@@ -103,6 +111,9 @@ impl ProceduralSurface {
         self.planform.validate()?;
         self.bend.validate()?;
         self.sections.validate()?;
+        if let Some(layout) = &self.structure {
+            layout.validate()?;
+        }
         for (index, region) in self.controls.iter().enumerate() {
             region.validate(&self.controls[..index])?;
         }

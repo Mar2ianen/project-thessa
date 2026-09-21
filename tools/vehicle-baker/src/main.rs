@@ -305,7 +305,13 @@ impl VehicleAsset {
             .collect::<Result<Vec<_>, _>>()?;
         // Hangar-side procedural compilation: each surface contributes
         // its panels (appended after hand panels) with control indices
-        // rebased onto the merged panel list.
+        // rebased onto the merged panel list. Structural mass and inertia
+        // aggregate about the body origin (all panels already live there);
+        // fuel volume is reported for tank placement (no TankShape fits a
+        // wing box, so mounts are not fabricated).
+        let mut surface_mass_kg = 0.0;
+        let mut surface_inertia = DMat3::ZERO;
+        let mut surface_fuel_m3 = 0.0;
         for surface in &self.procedural_surfaces {
             let compiled = compile_surface(
                 surface,
@@ -319,6 +325,18 @@ impl VehicleAsset {
                 compiled.panels.len(),
                 compiled.summary.estimated_error_m2
             );
+            if let Some(structure) = &compiled.structure {
+                println!(
+                    "surface '{}': structure {:.1} kg, fuel {:.3} m^3 at {:?}",
+                    surface.name,
+                    structure.mass_kg,
+                    structure.fuel_volume_m3,
+                    structure.fuel_centroid_body_m
+                );
+                surface_mass_kg += structure.mass_kg;
+                surface_inertia += structure.inertia_body_kg_m2;
+                surface_fuel_m3 += structure.fuel_volume_m3;
+            }
             let base = panels.len();
             panels.extend(compiled.panels.iter().cloned());
             for definition in &compiled.controls {
@@ -336,7 +354,11 @@ impl VehicleAsset {
         }
         let geometry = AeroGeometry::new(panels)?;
         let inertia = rows_to_matrix(self.inertia_body_kg_m2);
-        let properties = RigidBodyProperties::new(self.mass_kg, inertia)?;
+        let properties =
+            RigidBodyProperties::new(self.mass_kg + surface_mass_kg, inertia + surface_inertia)?;
+        if surface_fuel_m3 > 0.0 {
+            println!("wing fuel volume: {surface_fuel_m3:.3} m^3");
+        }
         let collision_geometry = CollisionGeometry::new(
             self.collision_parts
                 .into_iter()
@@ -1898,4 +1920,73 @@ max_deflection_rad = 0.4
     assert!(tail_panel.position_body_m.z > 0.5);
     assert!(tail_panel.position_body_m.y > 0.5);
     assert!(tail_panel.lift_axis_body.z > 0.5);
+}
+
+#[test]
+fn structured_surface_aggregates_mass_and_inertia() {
+    // Hand mass 1000 kg plus an 8x2 aluminum wing (264.3648 kg
+    // pinned in-crate); inertia sums about the body origin.
+    let asset: VehicleAsset = toml::from_str(
+        r#"
+name = "structured-test"
+mass_kg = 1000.0
+inertia_body_kg_m2 = [[1000.0, 0.0, 0.0], [0.0, 1000.0, 0.0], [0.0, 0.0, 1000.0]]
+
+[[procedural_surfaces]]
+name = "wing"
+span_m = 8.0
+origin_body_m = [0.0, 0.0, 0.0]
+
+[procedural_surfaces.planform]
+[[procedural_surfaces.planform.stations]]
+s = 0.0
+x_le = 0.0
+x_te = 2.0
+[[procedural_surfaces.planform.stations]]
+s = 1.0
+x_le = 0.0
+x_te = 2.0
+
+[procedural_surfaces.bend]
+[[procedural_surfaces.bend.stations]]
+s = 0.0
+z_m = 0.0
+[[procedural_surfaces.bend.stations]]
+s = 1.0
+z_m = 0.0
+
+[procedural_surfaces.sections]
+[[procedural_surfaces.sections.stations]]
+s = 0.0
+incidence_rad = 0.0
+thickness_ratio = 0.10
+[[procedural_surfaces.sections.stations]]
+s = 1.0
+incidence_rad = 0.0
+thickness_ratio = 0.10
+
+[procedural_surfaces.structure]
+skin_gauge_mm = 2.0
+spar_depth_fraction = 0.6
+spar_web_gauge_mm = 3.0
+spar_cap_fraction = 1.5
+secondary_fraction = 0.2
+fuel_box_chord = [0.15, 0.65]
+fuel_fill_efficiency = 0.85
+
+[procedural_surfaces.structure.skin_material]
+name = "Al-7075-T6"
+density_kg_m3 = 2810.0
+
+[procedural_surfaces.structure.spar_material]
+name = "Al-7075-T6"
+density_kg_m3 = 2810.0
+"#,
+    )
+    .expect("structured vehicle TOML should parse");
+    let vehicle = asset.bake().expect("structured asset should bake");
+    assert!((vehicle.mass_properties.mass_kg - 1264.3648).abs() < 0.2);
+    // Wing point mass at (1, 4, 0) adds m*x*y to the xy off-diagonal.
+    let expected_xy = -(1000.0 * 0.0 + 264.3648 * 1.0 * 4.0);
+    assert!((vehicle.mass_properties.inertia_body_kg_m2.x_axis.y - expected_xy).abs() < 1.0);
 }

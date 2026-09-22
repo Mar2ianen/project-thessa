@@ -8,7 +8,6 @@
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
-use crate::compile::projected_planform_area;
 use crate::{CompiledSurface, ControlRegionKind, ProceduralSurface};
 
 /// One control region's compiled footprint: panel ownership, area, and
@@ -81,13 +80,16 @@ impl CompiledSurfaceSummary {
     /// Build the record from a freshly compiled surface. `bbox` corners are
     /// surface-local folded panel corners; mounting applies afterwards.
     /// `estimated_error_m2` is the refinement total (budget mode) or the
-    /// post-hoc certification pass (tolerance mode).
+    /// post-hoc certification pass (tolerance mode). `projected_area_m2`
+    /// arrives fold-aware from the compiler (shadow envelope, never the
+    /// unfold-only integral).
     pub(crate) fn build(
         surface: &ProceduralSurface,
         compiled: &CompiledSurface,
         bbox_min: DVec3,
         bbox_max: DVec3,
         estimated_error_m2: f64,
+        projected_area_m2: f64,
     ) -> Self {
         let mut material = 0.0;
         let mut uncontrolled = 0;
@@ -97,10 +99,10 @@ impl CompiledSurfaceSummary {
                 uncontrolled += 1;
             }
         }
-        // Projection is planform-plus-bend geometry, independent of
-        // panelization and of section incidence (corners never tilt with
-        // incidence, so neither may the projected area).
-        let projected = projected_planform_area(surface);
+        // Projection is planform-plus-bend-plus-fold geometry,
+        // independent of panelization and of section incidence (corners
+        // never tilt with incidence, so neither may the projected area).
+        let projected = projected_area_m2;
         let mut control_areas = Vec::with_capacity(surface.controls.len());
         for (index, region) in surface.controls.iter().enumerate() {
             let (mut count, mut area) = (0, 0.0);
@@ -174,6 +176,10 @@ impl CompiledSurfaceSummary {
         let mirrored_max = mirror(self.bbox_max_m);
         mirrored.bbox_min_m = mirrored_min.min(mirrored_max);
         mirrored.bbox_max_m = mirrored_min.max(mirrored_max);
+        // Fold angles conjugate with the hinge axes, like the records.
+        for state in &mut mirrored.fold_states {
+            state.2 = -state.2;
+        }
         mirrored
     }
 

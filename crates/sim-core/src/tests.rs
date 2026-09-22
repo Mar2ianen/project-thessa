@@ -6034,6 +6034,7 @@ fn mechanism_metadata_validates_without_touching_forces() {
         deployment_rate_rad_s: 0.1,
         lock_window_rad: (-0.05, 0.05),
         max_dynamic_pressure_pa: None,
+        parent_joint: None,
     }])
     .expect("joints attach");
     assert_eq!(vehicle.fold_joints.len(), 1);
@@ -6049,9 +6050,40 @@ fn mechanism_metadata_validates_without_touching_forces() {
             deployment_rate_rad_s: 0.1,
             lock_window_rad: (-0.05, 0.05),
             max_dynamic_pressure_pa: None,
+            parent_joint: None,
         }
         .validate()
         .is_err(),
         "non-unit axis rejected"
     );
+}
+
+#[test]
+fn fold_parent_cycles_rejected() {
+    use glam::DVec3;
+
+    let panel = AeroPanel::flat_plate(DVec3::ZERO, 2.0, 1.0).expect("panel");
+    let geometry = AeroGeometry::new(vec![panel]).expect("geometry");
+    let properties =
+        RigidBodyProperties::new(100.0, glam::DMat3::from_diagonal(DVec3::splat(10.0)))
+            .expect("properties");
+    let joint = |name: &str, parent: Option<usize>| FoldJointRecord {
+        name: name.into(),
+        hinge_body_m: DVec3::ZERO,
+        axis_body: DVec3::X,
+        angle_rad: 0.0,
+        deployed_angle_rad: 0.0,
+        deployment_rate_rad_s: 0.1,
+        lock_window_rad: (-0.05, 0.05),
+        max_dynamic_pressure_pa: None,
+        parent_joint: parent,
+    };
+    let chained = VehicleDefinition::new("chained", geometry.clone(), properties, vec![])
+        .expect("base validates")
+        .with_fold_joints(vec![joint("root", None), joint("child", Some(0))]);
+    assert!(chained.is_ok());
+    let cyclic = VehicleDefinition::new("cyclic", geometry, properties, vec![])
+        .expect("base validates")
+        .with_fold_joints(vec![joint("a", Some(1)), joint("b", Some(0))]);
+    assert!(cyclic.is_err());
 }

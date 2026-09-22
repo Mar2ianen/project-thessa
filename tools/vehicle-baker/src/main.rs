@@ -388,10 +388,11 @@ impl VehicleAsset {
                     hinge_body_m: fold.hinge_body_m,
                     axis_body: fold.axis_body,
                     angle_rad: fold.angle_rad,
-                    deployed_angle_rad: joint.deployed_angle_rad,
+                    deployed_angle_rad: fold.deployed_angle_rad,
                     deployment_rate_rad_s: joint.deployment_rate_rad_s,
                     lock_window_rad: joint.lock_window_rad,
                     max_dynamic_pressure_pa: joint.max_dynamic_pressure_pa,
+                    parent_joint: fold.parent_joint.map(|parent| joint_base + parent),
                 });
             }
             if self.surface_collision {
@@ -402,14 +403,76 @@ impl VehicleAsset {
                 surface_collision_parts.extend(parts);
             }
         }
-        // Assembly center of mass: hand mass rides the authoring origin,
-        // surfaces contribute first moments. Flight integrates moments
-        // about the body origin, so the baker recenters the whole asset
-        // onto the assembly COM (legacy hand-only assets sit at zero and
-        // shift by nothing).
-        let total_mass_kg = self.mass_kg + surface_mass_kg;
+        // Bake mounts first (authoring stations): the single final COM
+        // below needs every mass contributor before anything shifts.
+        let mut collision_parts = self
+            .collision_parts
+            .into_iter()
+            .map(CollisionPartAsset::bake)
+            .collect::<Result<Vec<_>, _>>()?;
+        let mounts = self
+            .engines
+            .into_iter()
+            .map(EngineAsset::bake)
+            .collect::<Result<Vec<_>, _>>()?;
+        let tank_mounts = self
+            .tanks
+            .into_iter()
+            .map(TankAsset::bake)
+            .collect::<Result<Vec<TankMount>, _>>()?;
+        let system_mounts = self
+            .systems
+            .into_iter()
+            .map(SystemAsset::bake)
+            .collect::<Result<Vec<SystemMount>, _>>()?;
+        let jet_mounts = self
+            .jets
+            .into_iter()
+            .map(JetAsset::bake)
+            .collect::<Result<Vec<_>, _>>()?;
+        // Assembly center of mass over EVERYTHING: hand mass rides the
+        // authoring origin, surfaces/engine/tank/system/jet masses ride
+        // their stations. Flight integrates moments about the body
+        // origin, so the baker recenters the whole asset onto the final
+        // COM in one shift (legacy hand-only assets sit at zero and
+        // shift by nothing). Engine/tank/system/jet mass calls below
+        // then add point terms about already-centered stations, and the
+        // same accumulator shape serves future fuel-driven COM motion.
+        let mut total_mass_kg = self.mass_kg + surface_mass_kg;
+        let mut total_moment = surface_moment;
+        for mount in &mounts {
+            let mass = mount.engine.bake_mass_kg();
+            total_mass_kg += mass;
+            total_moment += DVec3::from_array(mount.position_body_m) * mass;
+        }
+        for mount in &tank_mounts {
+            let mass = mount.tank.dry_mass_kg + mount.tank.full_propellant_kg;
+            total_mass_kg += mass;
+            total_moment += DVec3::from_array(mount.position_body_m) * mass;
+        }
+        for mount in &system_mounts {
+            let mut chamber_mass = 0.0;
+            let mut centroid = DVec3::ZERO;
+            for chamber in &mount.system.chambers {
+                total_mass_kg += chamber.dry_mass_kg;
+                chamber_mass += chamber.dry_mass_kg;
+                let at = DVec3::from_array(chamber.position_body_m);
+                total_moment += at * chamber.dry_mass_kg;
+                centroid += at * chamber.dry_mass_kg;
+            }
+            let shared = (mount.system.dry_mass_kg - chamber_mass).max(0.0);
+            total_mass_kg += shared;
+            if chamber_mass > 0.0 {
+                total_moment += centroid / chamber_mass * shared;
+            }
+        }
+        for mount in &jet_mounts {
+            let mass = mount.engine.dry_mass_kg();
+            total_mass_kg += mass;
+            total_moment += DVec3::from_array(mount.position_body_m) * mass;
+        }
         let assembly_com = if total_mass_kg > 0.0 {
-            surface_moment / total_mass_kg
+            total_moment / total_mass_kg
         } else {
             DVec3::ZERO
         };
@@ -420,60 +483,20 @@ impl VehicleAsset {
             );
         }
         let shift = -assembly_com;
-        let shift_point = |point: DVec3| point + shift;
-        for panel in &mut panels {
-            panel.position_body_m = shift_point(panel.position_body_m);
-            panel.center_of_pressure_body_m = shift_point(panel.center_of_pressure_body_m);
-        }
-        for joint in &mut fold_joints {
-            joint.hinge_body_m = shift_point(joint.hinge_body_m);
-        }
         let geometry = AeroGeometry::new(panels)?;
+        // Properties stay in the authoring frame here (hand plus
+        // surfaces, always positive-definite); the single recenter to
+        // the final COM happens on the built vehicle below, after every
+        // mass contributor is attached. Recentering an intermediate sum
+        // that misses mount masses can go indefinite.
         let inertia = rows_to_matrix(self.inertia_body_kg_m2);
-        let recentered = inertia + surface_inertia - parallel_axis(total_mass_kg, assembly_com);
-        let properties = RigidBodyProperties::new(total_mass_kg, recentered)?;
+        let properties =
+            RigidBodyProperties::new(self.mass_kg + surface_mass_kg, inertia + surface_inertia)?;
         if surface_fuel_m3 > 0.0 {
             println!("wing fuel volume: {surface_fuel_m3:.3} m^3");
         }
-        let mut collision_parts = self
-            .collision_parts
-            .into_iter()
-            .map(CollisionPartAsset::bake)
-            .collect::<Result<Vec<_>, _>>()?;
-        for part in &mut collision_parts {
-            part.local_position_m = shift_point(part.local_position_m);
-        }
-        for part in &mut surface_collision_parts {
-            part.local_position_m = shift_point(part.local_position_m);
-        }
         collision_parts.extend(surface_collision_parts);
         let collision_geometry = CollisionGeometry::new(collision_parts)?;
-        let mut mounts = self
-            .engines
-            .into_iter()
-            .map(EngineAsset::bake)
-            .collect::<Result<Vec<_>, _>>()?;
-        for mount in &mut mounts {
-            shift_array(&mut mount.position_body_m, shift);
-        }
-        let mut tank_mounts = self
-            .tanks
-            .into_iter()
-            .map(TankAsset::bake)
-            .collect::<Result<Vec<TankMount>, _>>()?;
-        for mount in &mut tank_mounts {
-            shift_array(&mut mount.position_body_m, shift);
-        }
-        let mut system_mounts = self
-            .systems
-            .into_iter()
-            .map(SystemAsset::bake)
-            .collect::<Result<Vec<SystemMount>, _>>()?;
-        for mount in &mut system_mounts {
-            for chamber in &mut mount.system.chambers {
-                shift_array(&mut chamber.position_body_m, shift);
-            }
-        }
         // Feed cross-check: pressure-fed engines have no pump to hide
         // behind, so a tank must hold their full feed pressure. Pump-fed
         // cycles generate the rise themselves (chamber pressure is already
@@ -509,14 +532,6 @@ impl VehicleAsset {
                 .into());
             }
         }
-        let mut jet_mounts = self
-            .jets
-            .into_iter()
-            .map(JetAsset::bake)
-            .collect::<Result<Vec<_>, _>>()?;
-        for mount in &mut jet_mounts {
-            shift_array(&mut mount.position_body_m, shift);
-        }
         let mut vehicle = VehicleDefinition::new(self.name, geometry, properties, controls)?
             .with_collision_geometry(collision_geometry)?
             .with_engines(mounts)?
@@ -531,6 +546,39 @@ impl VehicleAsset {
         for (panel_index, joint) in parked_tags {
             vehicle.aero_geometry.panels[panel_index].fold_index = Some(joint);
         }
+        // Single final recenter onto the assembly COM: every station
+        // rides along, and the total inertia shifts by one parallel-axis
+        // term. Doing it here (all masses attached) instead of on an
+        // intermediate sum keeps every step positive-definite.
+        let shift_point = |point: DVec3| point + shift;
+        for panel in &mut vehicle.aero_geometry.panels {
+            panel.position_body_m = shift_point(panel.position_body_m);
+            panel.center_of_pressure_body_m = shift_point(panel.center_of_pressure_body_m);
+        }
+        for joint in &mut vehicle.fold_joints {
+            joint.hinge_body_m = shift_point(joint.hinge_body_m);
+        }
+        for part in &mut vehicle.collision_geometry.parts {
+            part.local_position_m = shift_point(part.local_position_m);
+        }
+        for mount in &mut vehicle.engines {
+            shift_array(&mut mount.position_body_m, shift);
+        }
+        for mount in &mut vehicle.tanks {
+            shift_array(&mut mount.position_body_m, shift);
+        }
+        for mount in &mut vehicle.systems {
+            for chamber in &mut mount.system.chambers {
+                shift_array(&mut chamber.position_body_m, shift);
+            }
+        }
+        for mount in &mut vehicle.jets {
+            shift_array(&mut mount.position_body_m, shift);
+        }
+        let total = vehicle.mass_properties.mass_kg;
+        let recentered =
+            vehicle.mass_properties.inertia_body_kg_m2 - parallel_axis(total, assembly_com);
+        vehicle.mass_properties = RigidBodyProperties::new(total, recentered)?;
         vehicle.validate()?;
         Ok(vehicle)
     }
@@ -2159,4 +2207,96 @@ allowable_stress_mpa = 503.0
     );
     let expected_xy = wing_mass * 1.0 * 4.0 + total * com.x * com.y;
     assert!((vehicle.mass_properties.inertia_body_kg_m2.x_axis.y - expected_xy).abs() < 1e-3);
+}
+
+#[test]
+fn engine_mass_joins_single_final_com() {
+    // Hand 1000 kg at the origin plus one engine at x = 10 m: the
+    // reviewer's trap (COM must land at 100*10/1100, not zero).
+    // Engine mass is measured back from the baked mount; the shift,
+    // recenter, and bake order are what this pins.
+    let asset: VehicleAsset = toml::from_str(
+        r#"
+name = "engine-com-test"
+mass_kg = 1000.0
+inertia_body_kg_m2 = [[1000.0, 0.0, 0.0], [0.0, 1000.0, 0.0], [0.0, 0.0, 1000.0]]
+
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 1.0
+chord_m = 1.0
+
+[[engines]]
+name = "main"
+kind = "liquid"
+mount_position_body_m = [10.0, 0.0, 0.0]
+thrust_axis_body = [1.0, 0.0, 0.0]
+propellant = "lox-methane"
+cycle = "gas-generator"
+chamber_pressure_mpa = 12.0
+throat_radius_m = 0.15
+expansion_ratio = 35.0
+nozzle_length_m = 1.8
+contour = "bell"
+material = "nickel-superalloy"
+"#,
+    )
+    .expect("engine TOML should parse");
+    let vehicle = asset.bake().expect("engine asset should bake");
+    let engine_mass = vehicle.engines[0].engine.bake_mass_kg();
+    assert!(engine_mass > 0.0);
+    let total = 1000.0 + engine_mass;
+    let com_x = 10.0 * engine_mass / total;
+    // Engine station rides the shift; the hand panel at the origin
+    // moves to minus the assembly COM.
+    assert!((vehicle.engines[0].position_body_m[0] - (10.0 - com_x)).abs() < 1e-9);
+    assert!(
+        (vehicle.aero_geometry.panels[0].position_body_m - DVec3::new(-com_x, 0.0, 0.0)).length()
+            < 1e-9
+    );
+    // Inertia: hand plus engine point term about the authoring
+    // station, minus the single total parallel-axis shift.
+    let hand = 1000.0;
+    let expected_yy = hand + engine_mass * 10.0 * 10.0 - total * com_x * com_x;
+    assert!((vehicle.mass_properties.mass_kg - total).abs() < 1e-9);
+    assert!(
+        (vehicle.mass_properties.inertia_body_kg_m2.y_axis.y - expected_yy).abs()
+            < 1e-6 * expected_yy.abs().max(1.0)
+    );
+}
+
+#[test]
+fn dbg_engine_com() {
+    let asset: VehicleAsset = toml::from_str(
+        r#"
+name = "engine-com-test"
+mass_kg = 1000.0
+inertia_body_kg_m2 = [[1000.0, 0.0, 0.0], [0.0, 1000.0, 0.0], [0.0, 0.0, 1000.0]]
+
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 1.0
+chord_m = 1.0
+
+[[engines]]
+name = "main"
+kind = "liquid"
+mount_position_body_m = [10.0, 0.0, 0.0]
+thrust_axis_body = [1.0, 0.0, 0.0]
+propellant = "lox-methane"
+cycle = "gas-generator"
+chamber_pressure_mpa = 12.0
+throat_radius_m = 0.15
+expansion_ratio = 35.0
+nozzle_length_m = 1.8
+contour = "bell"
+material = "nickel-superalloy"
+"#,
+    )
+    .expect("parse");
+    eprintln!("engines={}", asset.engines.len());
 }

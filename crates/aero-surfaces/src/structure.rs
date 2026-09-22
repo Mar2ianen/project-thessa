@@ -286,3 +286,9 @@ pub(crate) fn cap_area_m2(moment_nm: f64, allowable_pa: f64, depth_m: f64) -> f6
 pub(crate) fn rib_area_coefficient() -> f64 {
     Naca4::area_coefficient()
 }
+
+/// Partial plate coefficient over a chord-fraction interval, for rib
+/// displacement inside the fuel box only.
+pub(crate) fn rib_area_coefficient_range(u0: f64, u1: f64) -> f64 {
+    Naca4::area_coefficient_range(u0, u1)
+}

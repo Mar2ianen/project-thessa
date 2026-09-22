@@ -1699,8 +1699,12 @@ fn structural_mass_matches_hand_buildup() {
     );
     let radial = DVec3::new(-1.0, 4.0, 0.0).normalize();
     assert!((inertia * radial).length() < 1e-9 * structure.mass_kg);
-    // Fuel algebra: box minus sump minus rib displacement, exactly.
-    let rib_displacement = structure.rib_mass_kg / 2810.0;
+    // Fuel algebra: box minus sump minus IN-BOX rib displacement. Only
+    // rib plate inside the 15-65 percent box displaces fuel; the inbox
+    // fraction comes from the same integrated family shape.
+    let inbox_fraction = crate::structure::rib_area_coefficient_range(0.15, 0.65)
+        / crate::structure::rib_area_coefficient();
+    let rib_displacement = structure.rib_mass_kg / 2810.0 * inbox_fraction;
     assert!((structure.fuel_volume_m3 - (1.6 * 0.97 - rib_displacement)).abs() < 1e-9);
     assert!((structure.fuel_volume_m3 - 1.545).abs() < 0.01);
     assert!((structure.fuel_centroid_body_m - DVec3::new(-1.0, 4.0, 0.0)).length() < 1e-9);
@@ -2294,9 +2298,10 @@ fn fold_record_reproduces_stowed_geometry_at_runtime() {
     )
     .unwrap();
     // Baked record as the baker ships it (body frame, conjugated).
+    // The delta comes from the record alone: authoring is not consulted.
     let hinge = stowed.folds[0].hinge_body_m;
     let axis = stowed.folds[0].axis_body;
-    let delta = stowed.folds[0].angle_rad - surface.folds[0].deployed_angle_rad;
+    let delta = stowed.folds[0].angle_rad - stowed.folds[0].deployed_angle_rad;
     let rotation = DQuat::from_axis_angle(axis, delta);
     for ((deployed_panel, stowed_panel), tag) in deployed
         .panels
@@ -2467,4 +2472,226 @@ fn fold_operating_data_validates_and_compiles() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn control_regions_do_not_move_structural_mass() {
+    use crate::SolidMaterial;
+
+    // The headline regression: one physical wing, compiled with and
+    // without a full-span zero-mass aileron region. Aero panelization
+    // differs (chord cuts), structural mass, ribs, caps, and fuel must
+    // be bit-identical because structure integrates span strips, never
+    // aero chord zones.
+    fn structured_wing(with_aileron: bool) -> ProceduralSurface {
+        let mut surface = ProceduralSurface {
+            name: "control-mass-wing".into(),
+            span_m: 10.0,
+            origin_body_m: DVec3::ZERO,
+            mount_roll_rad: 0.0,
+            mirror_y: false,
+            topology: SurfaceTopology::Single,
+            planform: Planform::tapered(3.0, 1.0, 2.0).unwrap(),
+            bend: BendCurve::flat(),
+            sections: SectionData::uniform(2.0_f64.to_radians(), 0.10).unwrap(),
+            controls: Vec::new(),
+            folds: Vec::new(),
+            structure: None,
+        };
+        if with_aileron {
+            let (aileron, _) = crate::preset::aileron("aileron", (0.0, 1.0)).unwrap();
+            surface.controls.push(aileron);
+        }
+        let mut layout = crate::StructuralLayout::metal_baseline(100_000.0);
+        layout.skin_material = SolidMaterial::aluminum_7075();
+        layout.spar_material = SolidMaterial::aluminum_7075();
+        surface.structure = Some(layout);
+        surface
+    }
+    let plain = compile_surface(
+        &structured_wing(false),
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    let flapped = compile_surface(
+        &structured_wing(true),
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    // Aero discretization DOES differ (that is its job).
+    assert!(flapped.panels.len() > plain.panels.len());
+    let plain_structure = plain.structure.as_ref().unwrap();
+    let flapped_structure = flapped.structure.as_ref().unwrap();
+    assert!((flapped_structure.mass_kg - plain_structure.mass_kg).abs() < 1e-9);
+    assert!((flapped_structure.skin_mass_kg - plain_structure.skin_mass_kg).abs() < 1e-9);
+    assert!((flapped_structure.spar_web_mass_kg - plain_structure.spar_web_mass_kg).abs() < 1e-9);
+    assert!((flapped_structure.spar_cap_mass_kg - plain_structure.spar_cap_mass_kg).abs() < 1e-9);
+    assert!((flapped_structure.rib_mass_kg - plain_structure.rib_mass_kg).abs() < 1e-9);
+    assert!((flapped_structure.fuel_volume_m3 - plain_structure.fuel_volume_m3).abs() < 1e-9);
+    assert!(
+        (flapped_structure.center_of_mass_body_m - plain_structure.center_of_mass_body_m).length()
+            < 1e-9
+    );
+}
+
+#[test]
+fn fold_hierarchy_links_nested_joints_by_station() {
+    // Outer joint points at the nearest inboard joint regardless of
+    // authoring order; root joints point nowhere. Panels stay tagged
+    // with their deepest joint while the chain rides the records.
+    for in_order in [true, false] {
+        let surface = two_fold_wing(in_order);
+        let compiled = compile_surface(
+            &surface,
+            &CompileOptions::default(),
+            &MechanismState::deployed(),
+        )
+        .unwrap();
+        let by_name = |name: &str| {
+            compiled
+                .folds
+                .iter()
+                .find(|fold| fold.name == name)
+                .unwrap()
+        };
+        let inner_index = compiled
+            .folds
+            .iter()
+            .position(|fold| fold.name == "inner-fold")
+            .unwrap();
+        assert_eq!(by_name("inner-fold").parent_joint, None);
+        assert_eq!(by_name("outer-fold").parent_joint, Some(inner_index));
+    }
+}
+
+#[test]
+fn nonzero_deployed_angle_survives_reflection() {
+    // The reviewer's trap: deployed 10 deg, stowed 60 deg. The mount
+    // conjugates BOTH angles, so the runtime delta at the baked deployed
+    // state is exactly zero instead of -2d.
+    let mut surface = rectangular(8.0, 2.0);
+    surface.folds.push(FoldJoint {
+        name: "tip-fold".into(),
+        station_s: 0.7,
+        axis: DVec3::X,
+        deployed_angle_rad: 10.0_f64.to_radians(),
+        stowed_angle_rad: 60.0_f64.to_radians(),
+        travel_limit_rad: 70.0_f64.to_radians(),
+        deployment_rate_rad_s: 0.1,
+        lock_window_rad: (-0.05, 0.05),
+        max_dynamic_pressure_pa: None,
+    });
+    for mechanism in [MechanismState::deployed(), MechanismState::stowed(&surface)] {
+        let compiled =
+            compile_surface(&surface, &CompileOptions::default(), &mechanism).expect("compiles");
+        assert_eq!(compiled.folds.len(), 1);
+    }
+    let deployed = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    let stowed = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::stowed(&surface),
+    )
+    .unwrap();
+    // Conjugated pair: angles negate together, delta is invariant.
+    assert!((deployed.folds[0].angle_rad - deployed.folds[0].deployed_angle_rad).abs() < 1e-12);
+    assert!((deployed.folds[0].deployed_angle_rad + 10.0_f64.to_radians()).abs() < 1e-12);
+    assert!((stowed.folds[0].angle_rad + 60.0_f64.to_radians()).abs() < 1e-12);
+    // Runtime reproduction from the record alone lands on stowed.
+    use glam::DQuat;
+    let hinge = stowed.folds[0].hinge_body_m;
+    let axis = stowed.folds[0].axis_body;
+    let delta = stowed.folds[0].angle_rad - stowed.folds[0].deployed_angle_rad;
+    let rotation = DQuat::from_axis_angle(axis, delta);
+    for ((deployed_panel, stowed_panel), tag) in deployed
+        .panels
+        .iter()
+        .zip(stowed.panels.iter())
+        .zip(deployed.tags.iter())
+    {
+        if tag.fold == Some(0) {
+            let predicted = hinge + rotation * (deployed_panel.position_body_m - hinge);
+            assert!((predicted - stowed_panel.position_body_m).length() < 1e-9);
+        }
+    }
+}
+
+#[test]
+fn folded_state_shrinks_projection_and_aspect() {
+    // 777X-style tip fold to 90 deg: the folded shadow loses exactly
+    // the tip length per side, and the aspect ratio follows the folded
+    // state instead of the deployed correlation.
+    let mut surface = rectangular(8.0, 2.0);
+    surface.topology = SurfaceTopology::SymmetricHalf;
+    surface.folds.push(FoldJoint {
+        name: "tip-fold".into(),
+        station_s: 0.75,
+        axis: DVec3::X,
+        deployed_angle_rad: 0.0,
+        stowed_angle_rad: 90.0_f64.to_radians(),
+        travel_limit_rad: 95.0_f64.to_radians(),
+        deployment_rate_rad_s: 0.1,
+        lock_window_rad: (-0.05, 0.05),
+        max_dynamic_pressure_pa: None,
+    });
+    let deployed = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    let stowed = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::stowed(&surface),
+    )
+    .unwrap();
+    // Deployed half: 8 m shadow span over 16 m^2; pair AR 2*64/16 = 8.
+    assert!((deployed.summary.projected_span_m - 8.0).abs() < 1e-9);
+    assert!((deployed.summary.projected_area_m2 - 16.0).abs() < 1e-9);
+    assert!((deployed.panels[0].planform_aspect_ratio - 8.0).abs() < 1e-9);
+    // Folded: shadow loses the 2 m tip, area follows at 12 m^2...
+    assert!((stowed.summary.projected_span_m - 6.0).abs() < 1e-9);
+    assert!((stowed.summary.projected_area_m2 - 12.0).abs() < 1e-9);
+    // ...and the correlation follows: 2*36/12 = 6, not 8.
+    assert!((stowed.panels[0].planform_aspect_ratio - 6.0).abs() < 1e-9);
+    // Material area is untouched by the rigid fold in both states.
+    assert!((deployed.summary.material_area_m2 - 16.0).abs() < 1e-9);
+    assert!((stowed.summary.material_area_m2 - 16.0).abs() < 1e-9);
+}
+
+#[test]
+fn mirrored_summary_conjugates_fold_states() {
+    let mut surface = rectangular(8.0, 2.0);
+    surface.mirror_y = true;
+    surface.folds.push(FoldJoint {
+        name: "tip-fold".into(),
+        station_s: 0.7,
+        axis: DVec3::X,
+        deployed_angle_rad: 0.0,
+        stowed_angle_rad: 0.5,
+        travel_limit_rad: 1.0,
+        deployment_rate_rad_s: 0.1,
+        lock_window_rad: (-0.05, 0.05),
+        max_dynamic_pressure_pa: None,
+    });
+    let compiled = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::stowed(&surface),
+    )
+    .unwrap();
+    // Double conjugation (reflection then mirror) is a rotation: the
+    // mirrored record returns to the authored sign, and the summary
+    // telemetry must agree with the records, not the pre-mount value.
+    assert!((compiled.folds[0].angle_rad - 0.5).abs() < 1e-12);
+    assert_eq!(compiled.summary.fold_states.len(), 1);
+    assert!((compiled.summary.fold_states[0].2 - 0.5).abs() < 1e-12);
 }

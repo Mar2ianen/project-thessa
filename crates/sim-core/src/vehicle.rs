@@ -184,6 +184,13 @@ pub struct FoldJointRecord {
     /// tagged panels by `angle_rad - deployed_angle_rad`, so a vehicle
     /// baked deployed starts at the identity transform.
     pub deployed_angle_rad: f64,
+    /// Parent joint in the fold hierarchy (index into the same vehicle
+    /// joint list): panels tagged with this joint also ride every
+    /// ancestor up to the root. `None` for root joints. The runtime
+    /// builds the transform chain bone-style instead of storing chains
+    /// on panels.
+    #[serde(default)]
+    pub parent_joint: Option<usize>,
     /// Deployment rate limit in rad/s (actuator data for the runtime).
     pub deployment_rate_rad_s: f64,
     /// Lock engagement window in radians (the lock may only engage
@@ -524,6 +531,20 @@ impl VehicleDefinition {
         }
         for joint in &self.fold_joints {
             joint.validate()?;
+        }
+        // Fold hierarchy: parents exist, differ, and form no cycles.
+        for (joint_index, joint) in self.fold_joints.iter().enumerate() {
+            let mut chain = joint.parent_joint;
+            let mut seen = std::collections::HashSet::from([joint_index]);
+            while let Some(parent) = chain {
+                if parent >= self.fold_joints.len() || !seen.insert(parent) {
+                    return Err(VehicleError::InvalidControlSurface(format!(
+                        "fold joint '{}' has an invalid parent chain",
+                        joint.name
+                    )));
+                }
+                chain = self.fold_joints[parent].parent_joint;
+            }
         }
         for (panel_index, panel) in self.aero_geometry.panels.iter().enumerate() {
             if let Some(joint) = panel.fold_index

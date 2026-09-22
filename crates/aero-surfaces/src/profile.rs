@@ -122,18 +122,29 @@ impl Naca4 {
     /// midpoint rule. Thickness scales linearly, so one constant serves
     /// the whole 4-digit family (rib plates, computed, never assumed).
     pub(crate) fn area_coefficient() -> f64 {
+        Self::area_coefficient_range(0.0, 1.0)
+    }
+
+    /// Partial section area coefficient over a chord-fraction interval:
+    /// `∫_{u0}^{u1} 2·yt(x; t=1) dx`. Rib displacement inside the fuel
+    /// box integrates only the boxed plate fraction.
+    pub(crate) fn area_coefficient_range(u0: f64, u1: f64) -> f64 {
         let unit = Naca4 {
             m: 0.0,
             p: 0.4,
             t: 1.0,
         };
         const STEPS: usize = 1024;
+        let (lo, hi) = (u0.clamp(0.0, 1.0), u1.clamp(0.0, 1.0));
+        if hi <= lo {
+            return 0.0;
+        }
         let mut sum = 0.0;
         for index in 0..STEPS {
-            let x = (index as f64 + 0.5) / STEPS as f64;
+            let x = lo + (hi - lo) * (index as f64 + 0.5) / STEPS as f64;
             sum += 2.0 * unit.thickness_at(x);
         }
-        sum / STEPS as f64
+        sum * (hi - lo) / STEPS as f64
     }
 }
 

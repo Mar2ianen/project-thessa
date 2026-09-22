@@ -28,6 +28,8 @@ pub enum SurfaceError {
     /// compiler bug unless the message names an authoring value that slipped
     /// validation; it is surfaced rather than panicked on.
     PanelRejected(String),
+    /// Contact geometry or material failed validation.
+    InvalidCollision(String),
 }
 
 impl fmt::Display for SurfaceError {
@@ -41,7 +43,8 @@ impl fmt::Display for SurfaceError {
             | Self::InvalidFoldJoint(message)
             | Self::InvalidSurface(message)
             | Self::InvalidOptions(message)
-            | Self::PanelRejected(message) => write!(f, "{message}"),
+            | Self::PanelRejected(message)
+            | Self::InvalidCollision(message) => write!(f, "{message}"),
         }
     }
 }

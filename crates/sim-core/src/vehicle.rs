@@ -184,6 +184,14 @@ pub struct FoldJointRecord {
     /// tagged panels by `angle_rad - deployed_angle_rad`, so a vehicle
     /// baked deployed starts at the identity transform.
     pub deployed_angle_rad: f64,
+    /// Deployment rate limit in rad/s (actuator data for the runtime).
+    pub deployment_rate_rad_s: f64,
+    /// Lock engagement window in radians (the lock may only engage
+    /// inside it).
+    pub lock_window_rad: (f64, f64),
+    /// Flight-envelope gate in Pa: folding allowed at or below it,
+    /// `None` for no q-gate.
+    pub max_dynamic_pressure_pa: Option<f64>,
 }
 
 impl FoldJointRecord {
@@ -215,6 +223,27 @@ impl FoldJointRecord {
         if !self.deployed_angle_rad.is_finite() {
             return Err(VehicleError::InvalidControlSurface(format!(
                 "fold joint '{}' deployed angle must be finite",
+                self.name
+            )));
+        }
+        if !self.deployment_rate_rad_s.is_finite() || self.deployment_rate_rad_s <= 0.0 {
+            return Err(VehicleError::InvalidControlSurface(format!(
+                "fold joint '{}' needs a positive finite deployment rate",
+                self.name
+            )));
+        }
+        let (lock_min, lock_max) = self.lock_window_rad;
+        if !lock_min.is_finite() || !lock_max.is_finite() || lock_min >= lock_max {
+            return Err(VehicleError::InvalidControlSurface(format!(
+                "fold joint '{}' lock window must be ordered and finite",
+                self.name
+            )));
+        }
+        if let Some(max_q) = self.max_dynamic_pressure_pa
+            && (!max_q.is_finite() || max_q <= 0.0)
+        {
+            return Err(VehicleError::InvalidControlSurface(format!(
+                "fold joint '{}' envelope gate must be positive and finite",
                 self.name
             )));
         }

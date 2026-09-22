@@ -6031,6 +6031,9 @@ fn mechanism_metadata_validates_without_touching_forces() {
         axis_body: DVec3::X,
         angle_rad: 0.5,
         deployed_angle_rad: 0.0,
+        deployment_rate_rad_s: 0.1,
+        lock_window_rad: (-0.05, 0.05),
+        max_dynamic_pressure_pa: None,
     }])
     .expect("joints attach");
     assert_eq!(vehicle.fold_joints.len(), 1);
@@ -6043,6 +6046,9 @@ fn mechanism_metadata_validates_without_touching_forces() {
             axis_body: DVec3::new(1.0, 1.0, 0.0),
             angle_rad: 0.0,
             deployed_angle_rad: 0.0,
+            deployment_rate_rad_s: 0.1,
+            lock_window_rad: (-0.05, 0.05),
+            max_dynamic_pressure_pa: None,
         }
         .validate()
         .is_err(),

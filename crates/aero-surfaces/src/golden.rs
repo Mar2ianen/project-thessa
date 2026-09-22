@@ -112,6 +112,9 @@ pub fn boeing_777x_half_wing() -> Result<ProceduralSurface, SurfaceError> {
             deployed_angle_rad: 0.0,
             stowed_angle_rad: 90.0_f64.to_radians(),
             travel_limit_rad: 95.0_f64.to_radians(),
+            deployment_rate_rad_s: 0.05,
+            lock_window_rad: (-0.03, 0.03),
+            max_dynamic_pressure_pa: Some(2000.0),
         }],
         structure: None,
     };
@@ -300,6 +303,9 @@ pub fn dream_chaser_wing() -> Result<ProceduralSurface, SurfaceError> {
             deployed_angle_rad: 0.0,
             stowed_angle_rad: 65.0_f64.to_radians(),
             travel_limit_rad: 70.0_f64.to_radians(),
+            deployment_rate_rad_s: 0.1,
+            lock_window_rad: (-0.03, 0.03),
+            max_dynamic_pressure_pa: None,
         }],
         structure: None,
     };

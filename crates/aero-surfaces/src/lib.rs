@@ -55,6 +55,7 @@
 //! test next door proves the hangar-side wiring instead.
 
 mod bend;
+mod collision;
 mod compile;
 mod error;
 mod golden;
@@ -68,6 +69,7 @@ mod summary;
 mod surface;
 
 pub use bend::{BendCurve, BendStation};
+pub use collision::CollisionOptions;
 pub use compile::{
     CompileOptions, CompiledFold, CompiledSurface, MechanismState, PanelTag, RefinementMode,
     compile_surface,

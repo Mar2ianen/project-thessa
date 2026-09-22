@@ -91,6 +91,20 @@ pub struct FoldJoint {
     /// Hard rotation limit, symmetric about the deployed angle. The stowed
     /// angle must lie within it.
     pub travel_limit_rad: f64,
+    /// Deployment rate limit in rad/s (actuator data, e.g. ~0.05 for a
+    /// 60 deg tip in 20 s like the 777X wingtip drive).
+    pub deployment_rate_rad_s: f64,
+    /// Lock engagement window `(min, max)` in radians: the lock may only
+    /// engage inside it (normally straddling the deployed angle). Must
+    /// sit inside the travel limit.
+    pub lock_window_rad: (f64, f64),
+    /// Maximum dynamic pressure in Pa at which folding is allowed
+    /// (flight-envelope gate for in-flight variable geometry; ground
+    /// taxi at near-zero q always satisfies it). `None` means no
+    /// q-gate (space deployment, hangar queens); ground-only operation
+    /// is a CONOPS rule, not a mechanism limit.
+    #[serde(default)]
+    pub max_dynamic_pressure_pa: Option<f64>,
 }
 
 impl ControlRegion {
@@ -219,6 +233,32 @@ impl FoldJoint {
         if (self.stowed_angle_rad - self.deployed_angle_rad).abs() > self.travel_limit_rad {
             return Err(SurfaceError::InvalidFoldJoint(format!(
                 "fold joint '{}' stowed angle lies outside its travel limit",
+                self.name
+            )));
+        }
+        if !self.deployment_rate_rad_s.is_finite() || self.deployment_rate_rad_s <= 0.0 {
+            return Err(SurfaceError::InvalidFoldJoint(format!(
+                "fold joint '{}' needs a positive finite deployment rate",
+                self.name
+            )));
+        }
+        let (lock_min, lock_max) = self.lock_window_rad;
+        if !lock_min.is_finite()
+            || !lock_max.is_finite()
+            || lock_min >= lock_max
+            || (lock_min - self.deployed_angle_rad).abs() > self.travel_limit_rad
+            || (lock_max - self.deployed_angle_rad).abs() > self.travel_limit_rad
+        {
+            return Err(SurfaceError::InvalidFoldJoint(format!(
+                "fold joint '{}' lock window must be ordered inside travel",
+                self.name
+            )));
+        }
+        if let Some(max_q) = self.max_dynamic_pressure_pa
+            && (!max_q.is_finite() || max_q <= 0.0)
+        {
+            return Err(SurfaceError::InvalidFoldJoint(format!(
+                "fold joint '{}' envelope gate must be positive and finite",
                 self.name
             )));
         }

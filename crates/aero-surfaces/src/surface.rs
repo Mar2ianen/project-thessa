@@ -10,6 +10,23 @@ use crate::{
     BendCurve, ControlRegion, FoldJoint, Planform, SectionData, StructuralLayout, SurfaceError,
 };
 
+/// How the surface flies: alone or as half of a mirrored pair.
+///
+/// The finite-surface lift correlation needs the full-aircraft aspect
+/// ratio. A half-wing compiled alone only spans half the aircraft, so
+/// panels of a mirrored pair carry `AR = 2*span^2/area`; a standalone
+/// fin or keel keeps `span^2/area`. The flag exists because the
+/// compiler cannot tell a half wing from a whole small surface by
+/// geometry alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SurfaceTopology {
+    /// Standalone surface: fin, keel, asymmetric layout.
+    #[default]
+    Single,
+    /// Half of a left/right pair: wings, V-tails, paired stabilizers.
+    SymmetricHalf,
+}
+
 /// Authoring-side procedural aerodynamic surface.
 ///
 /// The flat planform is the parameter domain; bend maps it into 3D; sections
@@ -38,6 +55,10 @@ pub struct ProceduralSurface {
     /// itself.
     #[serde(default)]
     pub mirror_y: bool,
+    /// Half of a mirrored pair (wings, V-tails) or a standalone surface.
+    /// Pair halves carry the full-aircraft aspect ratio into the solver.
+    #[serde(default)]
+    pub topology: SurfaceTopology,
     /// Flat planform splines `x_le(s)`, `x_te(s)`.
     pub planform: Planform,
     /// Out-of-plane bend `z(s)`.
@@ -72,6 +93,7 @@ impl ProceduralSurface {
             origin_body_m,
             mount_roll_rad: 0.0,
             mirror_y: false,
+            topology: SurfaceTopology::Single,
             planform: Planform::rectangular(chord_m)?,
             bend: BendCurve::flat(),
             sections: SectionData::uniform(0.0, 0.0)?,

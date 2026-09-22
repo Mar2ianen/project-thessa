@@ -10,7 +10,7 @@ use glam::DVec3;
 use crate::{
     BendCurve, BendStation, CompileOptions, CompiledSurface, ControlRegion, ControlRegionKind,
     FoldJoint, MechanismState, Planform, ProceduralSurface, RefinementMode, SectionData,
-    SpanStation, SurfaceError, compile_surface,
+    SpanStation, SurfaceError, SurfaceTopology, compile_surface,
 };
 
 fn tight_options() -> CompileOptions {
@@ -62,8 +62,8 @@ fn rectangular_wing_matches_closed_form() {
     assert!((summary.tip_chord_m - 2.0).abs() < 1e-12);
     assert!((summary.mean_aerodynamic_chord_m - 2.0).abs() < 1e-9);
     assert!(summary.sweep_rad.abs() < 1e-12);
-    assert!((summary.bbox_min_m - DVec3::ZERO).length() < 1e-12);
-    assert!((summary.bbox_max_m - DVec3::new(2.0, 8.0, 0.0)).length() < 1e-12);
+    assert!((summary.bbox_min_m - DVec3::new(-2.0, 0.0, 0.0)).length() < 1e-12);
+    assert!((summary.bbox_max_m - DVec3::new(0.0, 8.0, 0.0)).length() < 1e-12);
     assert_eq!(summary.uncontrolled_panel_count, 1);
 
     let panel = &compiled.panels[0];
@@ -74,7 +74,7 @@ fn rectangular_wing_matches_closed_form() {
     assert!((panel.span_m - 8.0).abs() < 1e-12);
     assert!((panel.planform_aspect_ratio - 4.0).abs() < 1e-12);
     // COP is the zone centroid.
-    assert!((panel.center_of_pressure_body_m - DVec3::new(1.0, 4.0, 0.0)).length() < 1e-9);
+    assert!((panel.center_of_pressure_body_m - DVec3::new(-1.0, 4.0, 0.0)).length() < 1e-9);
 }
 
 #[test]
@@ -87,6 +87,7 @@ fn tapered_swept_wing_matches_closed_form() {
         origin_body_m: DVec3::ZERO,
         mount_roll_rad: 0.0,
         mirror_y: false,
+        topology: SurfaceTopology::SymmetricHalf,
         planform: Planform::tapered(3.0, 1.0, 2.0).unwrap(),
         bend: BendCurve::flat(),
         sections: SectionData::uniform(0.0, 0.0).unwrap(),
@@ -105,9 +106,10 @@ fn tapered_swept_wing_matches_closed_form() {
     assert!((summary.sweep_rad - (2.0_f64).atan2(10.0)).abs() < 1e-9);
     assert!((summary.root_chord_m - 3.0).abs() < 1e-12);
     assert!((summary.tip_chord_m - 1.0).abs() < 1e-12);
-    // Every panel carries the surface aspect ratio and the local sweep.
+    // Every panel carries the full-aircraft aspect ratio (pair doubled)
+    // and the local sweep.
     for panel in &compiled.panels {
-        assert!((panel.planform_aspect_ratio - 100.0 / 20.0).abs() < 1e-9);
+        assert!((panel.planform_aspect_ratio - 2.0 * 100.0 / 20.0).abs() < 1e-9);
         assert!((panel.planform_sweep_rad - (2.0_f64).atan2(10.0)).abs() < 1e-6);
     }
     // Panel areas telescope exactly to the trapezoid area.
@@ -214,6 +216,7 @@ fn tolerance_tightening_refines_zones_without_moving_geometry() {
         origin_body_m: DVec3::ZERO,
         mount_roll_rad: 0.0,
         mirror_y: false,
+        topology: SurfaceTopology::SymmetricHalf,
         planform: Planform::tapered(3.0, 1.0, 2.0).unwrap(),
         bend: BendCurve::flat(),
         sections: SectionData::uniform(0.0, 0.0).unwrap(),
@@ -381,8 +384,8 @@ fn fold_preserves_material_area_and_moves_envelope() {
     }
     // Fold record carries hinge placement and compiled angle.
     assert_eq!(stowed.folds.len(), 1);
-    assert!((stowed.folds[0].angle_rad - 60.0_f64.to_radians()).abs() < 1e-12);
-    assert!((stowed.folds[0].hinge_body_m - DVec3::new(1.0, 5.6, 0.0)).length() < 1e-9);
+    assert!((stowed.folds[0].angle_rad + 60.0_f64.to_radians()).abs() < 1e-12);
+    assert!((stowed.folds[0].hinge_body_m - DVec3::new(-1.0, 5.6, 0.0)).length() < 1e-9);
     assert_eq!(stowed.summary.fold_states.len(), 1);
 }
 
@@ -461,9 +464,9 @@ fn mount_offsets_positions_hinges_and_bbox() {
     .unwrap();
     assert!((compiled.panels[0].position_body_m - origin).length() > 0.0);
     assert!(
-        (compiled.folds[0].hinge_body_m - (origin + DVec3::new(1.0, 5.6, 0.0))).length() < 1e-9
+        (compiled.folds[0].hinge_body_m - (origin + DVec3::new(-1.0, 5.6, 0.0))).length() < 1e-9
     );
-    assert!((compiled.summary.bbox_min_m - origin).length() < 1e-12);
+    assert!((compiled.summary.bbox_min_m - (origin + DVec3::new(-2.0, 0.0, 0.0))).length() < 1e-12);
 }
 
 #[test]
@@ -704,19 +707,20 @@ fn boeing_777x_golden_envelope_and_fold() {
 #[test]
 fn boeing_777x_lift_holds_mtow_at_sane_cruise_alpha() {
     // End-to-end pipeline guard, not a performance claim: the compiled
-    // 777X wing with its automatically picked cruise profile, run through
-    // the stock panel solver, must hold MTOW weight at cruise dynamic
-    // pressure near the real cruise attitude. A broken compiler-to-solver
+    // 777X wing (mirrored pair topology, full-aircraft aspect ratio) with
+    // its automatically picked cruise profile, run through the stock
+    // panel solver, must hold MTOW weight at cruise dynamic pressure at
+    // essentially the real cruise attitude. A broken compiler-to-solver
     // contract (flipped frames, wrong aspect ratio, dropped panels) or a
     // broken selector fails this loudly.
     //
     // Framing limits, all documented: the fixture wing is untwisted with
     // no fuselage, tail, or high-lift devices, and the solver is an
-    // engineering panel model, not CFD. The profile pick closes most of
-    // the symmetric-wing gap (7.2 deg trim without camber); the residual
-    // against the real ~2-3 deg is the documented downwash-plus-airframe
-    // delta. No drag comparison is attempted: cruise L/D is set by config
-    // knobs and profile data this slice does not model.
+    // engineering panel model, not CFD. Those missing airframe terms are
+    // second-order and opposing (fuselage carryover lowers trim, tail
+    // download raises it), which is why the band stays honest rather
+    // than exact. No drag comparison is attempted: cruise L/D is set by
+    // config knobs and profile data this slice does not model.
     use crate::{CompileOptions, MechanismState, boeing_777x_half_wing, compile_surface};
     use thessa_sim_core::{
         AeroConfig, AeroEnvironment, AeroGeometry, AeroModel, AeroState, PanelAeroModel,
@@ -811,12 +815,10 @@ fn boeing_777x_lift_holds_mtow_at_sane_cruise_alpha() {
         }
     }
     let trim_alpha_deg = 0.5 * (low + high);
-    // Profiled 1g band. Residual against the real ~2-3 deg cruise
-    // attitude: ~1 deg of 2D-vs-finite-wing downwash the section-level
-    // selector cannot see (CL/pi/AR ~= 1.06 deg, the documented lever for
-    // a future lifting-line correction) plus missing fuselage/tail lift
-    // and reference uncertainty on the real attitude itself.
-    assert!((3.0..6.0).contains(&trim_alpha_deg));
+    // Profiled 1g band around the real ~2.5 deg cruise attitude. The
+    // half-AR bug used to sit near 4 deg here with camber compensating;
+    // with pair-doubled aspect ratio the trim lands on the aircraft.
+    assert!((1.5..3.5).contains(&trim_alpha_deg));
 }
 
 #[test]
@@ -883,11 +885,11 @@ fn shuttle_orbiter_golden_delta_and_elevons() {
     .unwrap();
     let summary = &compiled.summary;
     // Regression pins from the documented reconstruction inputs.
-    assert_eq!(compiled.panels.len(), 448);
+    assert_eq!(compiled.panels.len(), 434);
     assert!((summary.sweep_rad - 1.2121).abs() < 1e-4);
     assert!((summary.mean_aerodynamic_chord_m - 13.0654).abs() < 1e-3);
     assert_eq!(summary.control_areas.len(), 2);
-    assert_eq!(summary.control_areas[0].panel_count, 54);
+    assert_eq!(summary.control_areas[0].panel_count, 47);
     assert!((summary.control_areas[0].area_m2 - 17.615).abs() < 1e-3);
     assert_eq!(summary.control_areas[1].panel_count, 138);
     assert!((summary.control_areas[1].area_m2 - 10.815).abs() < 1e-3);
@@ -897,8 +899,11 @@ fn shuttle_orbiter_golden_delta_and_elevons() {
     // NASA envelope and area.
     assert!((2.0 * summary.projected_span_m - shuttle_orbiter::SPAN_M).abs() < 0.05);
     assert!((2.0 * summary.material_area_m2 - shuttle_orbiter::WING_AREA_M2).abs() < 5.0);
-    // Flat delta: material equals projected.
-    assert!((summary.material_area_m2 - summary.projected_area_m2).abs() < 1e-9);
+    // Flat delta: material equals projected (integral estimate tolerance).
+    assert!(
+        (summary.material_area_m2 - summary.projected_area_m2).abs()
+            < 1e-6 * summary.material_area_m2
+    );
     // Double-delta signature: inner panels steep, outer panels moderate.
     let kink_y = 0.45 * surface.span_m;
     let (mut inner, mut outer) = (0, 0);
@@ -956,7 +961,7 @@ fn concorde_golden_ogival_subdivision() {
     let summary = &compiled.summary;
     let total_area = 2.0 * summary.material_area_m2;
     // Regression pins from the documented station set.
-    assert_eq!(compiled.panels.len(), 516);
+    assert_eq!(compiled.panels.len(), 486);
     assert!((summary.sweep_rad - 1.1040).abs() < 1e-4);
     assert!((summary.mean_aerodynamic_chord_m - 18.4740).abs() < 1e-3);
     assert!((total_area - 358.581).abs() < 0.01);
@@ -1009,6 +1014,7 @@ fn error_budget_yields_minimal_panels_at_certified_error() {
         origin_body_m: DVec3::ZERO,
         mount_roll_rad: 0.0,
         mirror_y: false,
+        topology: SurfaceTopology::SymmetricHalf,
         planform: Planform::tapered(3.0, 1.0, 2.0).unwrap(),
         bend: BendCurve::flat(),
         sections: SectionData::uniform(0.0, 0.0).unwrap(),
@@ -1350,6 +1356,7 @@ fn vertical_fin(roll_deg: f64) -> ProceduralSurface {
         origin_body_m: DVec3::ZERO,
         mount_roll_rad: roll_deg.to_radians(),
         mirror_y: false,
+        topology: SurfaceTopology::Single,
         planform: Planform::tapered(1.5, 0.8, 0.3).unwrap(),
         bend: BendCurve::flat(),
         sections: SectionData::uniform(0.0, 0.08).unwrap(),
@@ -1510,6 +1517,7 @@ fn v_tail_half(mirror: bool) -> ProceduralSurface {
         origin_body_m: DVec3::ZERO,
         mount_roll_rad: 45.0_f64.to_radians(),
         mirror_y: mirror,
+        topology: SurfaceTopology::SymmetricHalf,
         planform: Planform::tapered(1.2, 0.7, 0.25).unwrap(),
         bend: BendCurve::flat(),
         sections: SectionData::uniform(0.0, 0.07).unwrap(),
@@ -1653,9 +1661,9 @@ fn structural_mass_matches_hand_buildup() {
     // Caps: single-zone root moment 12000*4 = 48000 Nm over the 0.12 m
     // spar arm at 503 MPa: 2810*2*(48000/(503e6*0.12))*8 = 35.757.
     assert!((structure.spar_cap_mass_kg - 35.757).abs() < 0.1);
-    // Ribs: 16 solid plates at 0.5 m pitch; absolute value pinned as a
+    // Ribs: section plates at 0.5 m pitch, absolute value pinned as a
     // regression, physics carried by the ratio tests below.
-    assert!((structure.rib_mass_kg - 18.433).abs() < 0.2);
+    assert!((structure.rib_mass_kg - 12.289).abs() < 0.1);
     // Bookkeeping identity: total is exactly the parts sum.
     assert!(
         (structure.mass_kg
@@ -1667,20 +1675,20 @@ fn structural_mass_matches_hand_buildup() {
             < 1e-9
     );
     // Symmetric flat wing: center of mass at mid-chord, mid-span.
-    assert!((structure.center_of_mass_body_m - DVec3::new(1.0, 4.0, 0.0)).length() < 1e-9);
+    assert!((structure.center_of_mass_body_m - DVec3::new(-1.0, 4.0, 0.0)).length() < 1e-9);
     // Flat point-mass assembly: perpendicular-axis identity holds, and
     // the radial direction is the exact null vector (rank 2, not a bug).
     let inertia = structure.inertia_body_kg_m2;
     assert!(
         (inertia.z_axis.z - (inertia.x_axis.x + inertia.y_axis.y)).abs() < 1e-9 * inertia.z_axis.z
     );
-    let radial = DVec3::new(1.0, 4.0, 0.0).normalize();
+    let radial = DVec3::new(-1.0, 4.0, 0.0).normalize();
     assert!((inertia * radial).length() < 1e-9 * structure.mass_kg);
     // Fuel algebra: box minus sump minus rib displacement, exactly.
     let rib_displacement = structure.rib_mass_kg / 2810.0;
     assert!((structure.fuel_volume_m3 - (1.6 * 0.97 - rib_displacement)).abs() < 1e-9);
     assert!((structure.fuel_volume_m3 - 1.545).abs() < 0.01);
-    assert!((structure.fuel_centroid_body_m - DVec3::new(1.0, 4.0, 0.0)).length() < 1e-9);
+    assert!((structure.fuel_centroid_body_m - DVec3::new(-1.0, 4.0, 0.0)).length() < 1e-9);
 }
 
 #[test]
@@ -1844,4 +1852,442 @@ fn structural_output_mirrors_and_absents_cleanly() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn frozen_leaves_count_once_in_error_total() {
+    use crate::concorde_wing;
+
+    // Zero budget with the cap pinned at the base panel count freezes
+    // every leaf without a single split; an infinite budget breaks
+    // before the first split. Both traverse zero splits and must report
+    // the identical initial-error sum. (Double counting made the frozen
+    // path report twice the break path.)
+    let surface = concorde_wing().unwrap();
+    let unbounded = CompileOptions {
+        mode: RefinementMode::ErrorBudget {
+            budget_m2: f64::MAX,
+            max_panels: usize::MAX,
+        },
+        ..CompileOptions::default()
+    };
+    let reference = compile_surface(&surface, &unbounded, &MechanismState::deployed()).unwrap();
+    let frozen = CompileOptions {
+        mode: RefinementMode::ErrorBudget {
+            budget_m2: 0.0,
+            max_panels: reference.panels.len(),
+        },
+        ..CompileOptions::default()
+    };
+    let retired = compile_surface(&surface, &frozen, &MechanismState::deployed()).unwrap();
+    assert_eq!(retired.panels.len(), reference.panels.len());
+    let scale = reference.summary.estimated_error_m2.abs().max(1e-300);
+    assert!(
+        (retired.summary.estimated_error_m2 - reference.summary.estimated_error_m2).abs()
+            < 1e-9 * scale
+    );
+}
+
+fn two_fold_wing(folds_in_order: bool) -> ProceduralSurface {
+    let (inner, outer) = (
+        FoldJoint {
+            name: "inner-fold".into(),
+            station_s: 0.4,
+            axis: DVec3::X,
+            deployed_angle_rad: 0.0,
+            stowed_angle_rad: 30.0_f64.to_radians(),
+            travel_limit_rad: 40.0_f64.to_radians(),
+        },
+        FoldJoint {
+            name: "outer-fold".into(),
+            station_s: 0.7,
+            axis: DVec3::X,
+            deployed_angle_rad: 0.0,
+            stowed_angle_rad: 60.0_f64.to_radians(),
+            travel_limit_rad: 70.0_f64.to_radians(),
+        },
+    );
+    let mut surface = rectangular(8.0, 2.0);
+    surface.folds = if folds_in_order {
+        vec![inner, outer]
+    } else {
+        vec![outer, inner]
+    };
+    surface
+}
+
+fn owner_names(surface: &ProceduralSurface, tags: &[crate::PanelTag]) -> Vec<Option<String>> {
+    tags.iter()
+        .map(|tag| tag.fold.map(|index| surface.folds[index].name.clone()))
+        .collect()
+}
+
+#[test]
+fn fold_order_does_not_change_compiled_semantics() {
+    // The API promises order-free folds: shuffled authoring must compile
+    // to identical geometry with identical ownership by joint name.
+    let ordered = two_fold_wing(true);
+    let shuffled = two_fold_wing(false);
+    let mechanism = MechanismState::stowed(&ordered);
+    let compiled_ordered =
+        compile_surface(&ordered, &CompileOptions::default(), &mechanism).unwrap();
+    // Shuffled surface needs its own angle vector in its own order.
+    let shuffled_mechanism = MechanismState {
+        fold_angles_rad: shuffled
+            .folds
+            .iter()
+            .map(|joint| {
+                if joint.name == "inner-fold" {
+                    30.0_f64.to_radians()
+                } else {
+                    60.0_f64.to_radians()
+                }
+            })
+            .collect(),
+    };
+    let compiled_shuffled =
+        compile_surface(&shuffled, &CompileOptions::default(), &shuffled_mechanism).unwrap();
+    assert_eq!(
+        owner_names(&ordered, &compiled_ordered.tags),
+        owner_names(&shuffled, &compiled_shuffled.tags)
+    );
+    // Geometry is identical up to the order-dependent local fold index
+    // (ownership by joint NAME already matched above).
+    let mut ordered_panels = compiled_ordered.panels.clone();
+    let mut shuffled_panels = compiled_shuffled.panels.clone();
+    for panel in ordered_panels.iter_mut().chain(shuffled_panels.iter_mut()) {
+        panel.fold_index = None;
+    }
+    assert_eq!(ordered_panels, shuffled_panels);
+    // Fold records match by name (hinges carried through nesting).
+    for record in &compiled_ordered.folds {
+        let other = compiled_shuffled
+            .folds
+            .iter()
+            .find(|fold| fold.name == record.name)
+            .expect("same joints");
+        assert!((other.hinge_body_m - record.hinge_body_m).length() < 1e-12);
+        assert!((other.axis_body - record.axis_body).length() < 1e-12);
+        assert!((other.angle_rad - record.angle_rad).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn nested_fold_carries_outer_hinge_through_inner_rotation() {
+    // Inner 30 deg about X at station 0.4 (hinge y 3.2) carries the
+    // outer hinge (as-drawn y 5.6) up and inboard; axis X is invariant
+    // under its own rotation, pinned exactly.
+    let surface = two_fold_wing(true);
+    let compiled = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::stowed(&surface),
+    )
+    .unwrap();
+    let outer = compiled
+        .folds
+        .iter()
+        .find(|fold| fold.name == "outer-fold")
+        .expect("outer joint");
+    let thirty = 30.0_f64.to_radians();
+    let expected = DVec3::new(-1.0, 3.2 + 2.4 * thirty.cos(), 2.4 * thirty.sin());
+    assert!((outer.hinge_body_m - expected).length() < 1e-9);
+    assert!((outer.axis_body + DVec3::X).length() < 1e-12);
+    assert!((outer.angle_rad + 60.0_f64.to_radians()).abs() < 1e-12);
+    let inner = compiled
+        .folds
+        .iter()
+        .find(|fold| fold.name == "inner-fold")
+        .expect("inner joint");
+    assert!((inner.hinge_body_m - DVec3::new(-1.0, 3.2, 0.0)).length() < 1e-9);
+}
+
+#[test]
+fn kink_vertices_do_not_spawn_phantom_subdivision() {
+    use crate::BendStation;
+
+    // Polyline kink at s = 0.5 with tight bend tolerance: secant metrics
+    // see two linear pieces and stop at the base split. The old one-sided
+    // endpoint derivatives hallucinated a gradient on the right interval
+    // and subdivided to max_depth (2^16 zones here).
+    let mut surface = rectangular(8.0, 2.0);
+    surface.bend = BendCurve::polyline(vec![
+        BendStation { s: 0.0, z_m: 0.0 },
+        BendStation { s: 0.5, z_m: 0.0 },
+        BendStation { s: 1.0, z_m: 2.0 },
+    ])
+    .unwrap();
+    let tight = CompileOptions {
+        max_bend_angle_rad: 0.01_f64.to_radians(),
+        max_depth: 16,
+        ..CompileOptions::default()
+    };
+    let compiled = compile_surface(&surface, &tight, &MechanismState::deployed()).unwrap();
+    assert_eq!(compiled.panels.len(), 2);
+    assert!((compiled.summary.material_area_m2 - 16.0).abs() < 1e-9);
+}
+
+#[test]
+fn projected_area_ignores_incidence_and_counts_single_cosine() {
+    // Corners never tilt with incidence, so neither may projection: a
+    // 30-deg-incidence flat wing reports the same projected area as the
+    // flat plate. Bend projection counts exactly one cosine (dihedral
+    // 10 deg shrinks by cos, not cos^2).
+    let flat = rectangular(8.0, 2.0);
+    let mut tilted = rectangular(8.0, 2.0);
+    tilted.sections = SectionData::uniform(30.0_f64.to_radians(), 0.0).unwrap();
+    let compiled_flat = compile_surface(
+        &flat,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    let compiled_tilted = compile_surface(
+        &tilted,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    assert!(
+        (compiled_tilted.summary.projected_area_m2 - compiled_flat.summary.projected_area_m2).abs()
+            < 1e-9
+    );
+    assert!((compiled_flat.summary.projected_area_m2 - 16.0).abs() < 1e-9);
+    let mut bent = rectangular(8.0, 2.0);
+    bent.bend = BendCurve::dihedral(8.0, 10.0_f64.to_radians()).unwrap();
+    let compiled_bent = compile_surface(
+        &bent,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    assert!(
+        (compiled_bent.summary.projected_area_m2 - 16.0 * 10.0_f64.to_radians().cos()).abs() < 1e-9
+    );
+}
+
+#[test]
+fn fuel_volume_ignores_panelization() {
+    use crate::SolidMaterial;
+
+    // The reviewer's 13 percent trap: a 12 -> 2.4 m taper as ONE zone
+    // must hold exactly the same fuel as the subdivided compilation.
+    // overline{c^2} = (144 + 28.8 + 5.76)/3 = 59.52 per metre of span,
+    // not the averaged-chord square 51.84.
+    let mut surface = ProceduralSurface {
+        name: "tapered-tank".into(),
+        span_m: 10.0,
+        origin_body_m: DVec3::ZERO,
+        mount_roll_rad: 0.0,
+        mirror_y: false,
+        topology: SurfaceTopology::Single,
+        planform: Planform::tapered(12.0, 2.4, 0.0).unwrap(),
+        bend: BendCurve::flat(),
+        sections: SectionData::uniform(0.0, 0.10).unwrap(),
+        controls: Vec::new(),
+        folds: Vec::new(),
+        structure: None,
+    };
+    let mut layout = crate::StructuralLayout::metal_baseline(200_000.0);
+    layout.skin_material = SolidMaterial::aluminum_7075();
+    layout.spar_material = SolidMaterial::aluminum_7075();
+    surface.structure = Some(layout);
+    let budgeted = CompileOptions {
+        mode: RefinementMode::ErrorBudget {
+            budget_m2: 1e-6,
+            max_panels: 100,
+        },
+        ..CompileOptions::default()
+    };
+    let coarse = compile_surface(&surface, &budgeted, &MechanismState::deployed()).unwrap();
+    let fine = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    assert!(fine.panels.len() > coarse.panels.len());
+    let coarse_fuel = coarse.structure.as_ref().unwrap().fuel_volume_m3;
+    let fine_fuel = fine.structure.as_ref().unwrap().fuel_volume_m3;
+    assert!((coarse_fuel - fine_fuel).abs() < 1e-9 * fine_fuel);
+    // Exact box is 0.5 x 59.52 x span 10 x thickness 0.1 = 29.76;
+    // usable fuel sits below it (sump plus rib displacement) but sane.
+    assert!(coarse_fuel < 0.5 * 59.52 * 10.0 * 0.10);
+    assert!(coarse_fuel > 0.9 * 0.5 * 59.52 * 10.0 * 0.10);
+}
+
+#[test]
+fn inertia_transport_keeps_origin_com_cross_terms() {
+    use crate::SolidMaterial;
+
+    // Same wing at origin ZERO and at (10, 2, 3): the mounted inertia
+    // must satisfy the full transport identity, cross terms included.
+    // Shifting by the bare origin drops them (the old bug, invisible at
+    // origin ZERO where every structural test sat).
+    let base = structured_rect(0.10, SolidMaterial::aluminum_7075());
+    let mut moved = structured_rect(0.10, SolidMaterial::aluminum_7075());
+    let offset = DVec3::new(10.0, 2.0, 3.0);
+    moved.origin_body_m = offset;
+    let compile = |surface: &ProceduralSurface| {
+        compile_surface(
+            surface,
+            &CompileOptions::default(),
+            &MechanismState::deployed(),
+        )
+        .unwrap()
+        .structure
+        .unwrap()
+    };
+    let base_structure = compile(&base);
+    let moved_structure = compile(&moved);
+    assert!(
+        (moved_structure.center_of_mass_body_m - (base_structure.center_of_mass_body_m + offset))
+            .length()
+            < 1e-9
+    );
+    let mass = base_structure.mass_kg;
+    assert!((moved_structure.mass_kg - mass).abs() < 1e-12 * mass);
+    let com = base_structure.center_of_mass_body_m;
+    let outer = |a: DVec3, b: DVec3| glam::DMat3::from_cols(a * b.x, a * b.y, a * b.z);
+    let expected = base_structure.inertia_body_kg_m2
+        + (glam::DMat3::from_diagonal(DVec3::splat(offset.length_squared()))
+            - outer(offset, offset))
+            * mass
+        + (glam::DMat3::from_diagonal(DVec3::splat(2.0 * com.dot(offset)))
+            - outer(com, offset)
+            - outer(offset, com))
+            * mass;
+    let diff = moved_structure.inertia_body_kg_m2 - expected;
+    let scale = moved_structure.inertia_body_kg_m2.x_axis.x.abs().max(1.0);
+    assert!(
+        diff.x_axis.length() < 1e-9 * scale
+            && diff.y_axis.length() < 1e-9 * scale
+            && diff.z_axis.length() < 1e-9 * scale
+    );
+}
+
+#[test]
+fn compiled_panels_carry_mechanism_metadata() {
+    use thessa_sim_core::ControlKind;
+
+    // Fold ownership rides into baked panels (local joint indices; the
+    // baker rebases onto the merged list).
+    let mut surface = rectangular(8.0, 2.0);
+    surface.folds.push(FoldJoint {
+        name: "tip-fold".into(),
+        station_s: 0.7,
+        axis: DVec3::X,
+        deployed_angle_rad: 0.0,
+        stowed_angle_rad: 0.5,
+        travel_limit_rad: 1.0,
+    });
+    let compiled = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    let mut tagged = 0;
+    for (panel, tag) in compiled.panels.iter().zip(compiled.tags.iter()) {
+        assert_eq!(panel.fold_index, tag.fold);
+        tagged += usize::from(tag.fold == Some(0));
+    }
+    assert!(tagged > 0);
+    // Stabilator definition carries the all-moving marker; nested tabs
+    // carry their parent definition index.
+    let mut stab_surface = rectangular(6.0, 1.5);
+    let (stab, _) = crate::preset::stabilator("stab").unwrap();
+    stab_surface.controls.push(stab);
+    let compiled_stab = compile_surface(
+        &stab_surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    assert_eq!(compiled_stab.controls[0].kind, ControlKind::AllMoving);
+    let mut tab_surface = rectangular(10.0, 2.0);
+    tab_surface.controls.push(ControlRegion {
+        name: "elevator".into(),
+        span: (0.5, 1.0),
+        chord: (0.2, 1.0),
+        hinge_u: 0.2,
+        min_deflection_rad: -0.4,
+        max_deflection_rad: 0.4,
+        parent: None,
+        kind: ControlRegionKind::TrailingEdgeDevice,
+    });
+    tab_surface.controls.push(ControlRegion {
+        name: "tab".into(),
+        span: (0.7, 0.9),
+        chord: (0.5, 0.9),
+        hinge_u: 0.5,
+        min_deflection_rad: -0.2,
+        max_deflection_rad: 0.2,
+        parent: Some(0),
+        kind: ControlRegionKind::TrailingEdgeDevice,
+    });
+    let compiled_tab = compile_surface(
+        &tab_surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    assert_eq!(compiled_tab.controls[0].kind, ControlKind::Hinge);
+    assert_eq!(compiled_tab.controls[0].parent_index, None);
+    assert_eq!(compiled_tab.controls[1].parent_index, Some(0));
+}
+
+#[test]
+fn fold_record_reproduces_stowed_geometry_at_runtime() {
+    use glam::DQuat;
+
+    // The runtime contract: rotating deployed panels about the baked
+    // record (hinge, axis, angle minus deployed) must land exactly on
+    // the stowed compilation. This closes the geometry/metadata gap:
+    // record and panels can no longer disagree.
+    let mut surface = rectangular(8.0, 2.0);
+    surface.folds.push(FoldJoint {
+        name: "tip-fold".into(),
+        station_s: 0.7,
+        axis: DVec3::X,
+        deployed_angle_rad: 0.0,
+        stowed_angle_rad: 60.0_f64.to_radians(),
+        travel_limit_rad: 70.0_f64.to_radians(),
+    });
+    let deployed = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    let stowed = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::stowed(&surface),
+    )
+    .unwrap();
+    // Baked record as the baker ships it (body frame, conjugated).
+    let hinge = stowed.folds[0].hinge_body_m;
+    let axis = stowed.folds[0].axis_body;
+    let delta = stowed.folds[0].angle_rad - surface.folds[0].deployed_angle_rad;
+    let rotation = DQuat::from_axis_angle(axis, delta);
+    for ((deployed_panel, stowed_panel), tag) in deployed
+        .panels
+        .iter()
+        .zip(stowed.panels.iter())
+        .zip(deployed.tags.iter())
+    {
+        if tag.fold == Some(0) {
+            let predicted = hinge + rotation * (deployed_panel.position_body_m - hinge);
+            assert!(
+                (predicted - stowed_panel.position_body_m).length() < 1e-9,
+                "outboard panel rides the record"
+            );
+        } else {
+            assert!(
+                (deployed_panel.position_body_m - stowed_panel.position_body_m).length() < 1e-12,
+                "inboard panel untouched"
+            );
+        }
+    }
 }

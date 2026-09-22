@@ -22,13 +22,20 @@
 //! # Frames
 //!
 //! Surface-local axes: `x` chordwise positive aft (leading edge towards
-//! trailing edge), `y` spanwise positive towards the tip, `z` up. A flat
-//! unmirrored surface therefore compiles to panels with chord axis `+X` and
-//! lift axis `+Z`, matching
-//! [`AeroPanel::flat_plate`](thessa_sim_core::AeroPanel::flat_plate).
-//! Mounting into the body frame is an origin offset plus an optional
-//! left/right mirror; full orientation mounts are out of scope for this
-//! slice and will arrive with the vehicle assembly step.
+//! trailing edge), `y` spanwise positive towards the tip, `z` up. The
+//! body frame is sim-core convention (`+X` forward, `+Y` right, `+Z`
+//! up), so mounting reflects chordwise positions (`body.x = -local.x`):
+//! the trailing edge lands aft. Solver axes are directions, not
+//! geometry: `chord_axis` stays `+X` as the solver's forward reference
+//! (it addresses the chord trailing-to-leading) and `lift_axis` stays
+//! near `+Z`; only points (panel positions, centers of pressure,
+//! hinges, bounding boxes) conjugate. Fold records conjugate fully
+//! (hinge point and axis reflect, stored angle negates under the
+//! orientation-reversing map) so the runtime reproduces compiled
+//! positions exactly. Mounting into the body frame is an origin offset
+//! plus an optional roll (`mount_roll_rad`, fins and keels) and an
+//! optional left/right mirror; full orientation mounts are out of scope
+//! for this slice and will arrive with the vehicle assembly step.
 //!
 //! All geometry is `f64`, SI units, no global coefficients: areas, spans,
 //! sweeps, frames, and ownership are derived from the authored splines.
@@ -80,7 +87,7 @@ pub use profile::{CruiseRequirement, Naca4, ProfilePick, recommend_cruise_profil
 pub use section::{AeroProfileId, SectionData, SectionStation};
 pub use structure::{CompiledStructure, SolidMaterial, StructuralLayout};
 pub use summary::{CompiledSurfaceSummary, ControlSummary};
-pub use surface::ProceduralSurface;
+pub use surface::{ProceduralSurface, SurfaceTopology};
 
 #[cfg(test)]
 mod tests;

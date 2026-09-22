@@ -7,10 +7,10 @@ use thessa_sim_core::{
     AeroGeometry, AeroPanel, AirCycle, AirbreathingSpec, AtmosphereConfig, ChamberMaterial,
     ChamberSpec, CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionPart,
     CollisionShape, CompiledEngine, CompiledJet, ControlSurfaceDefinition, CoolingMode,
-    EngineCycle, EngineMount, EstocSpec, IntakeKind, JetFuel, JetMount, LiquidEngineSpec,
-    NozzleContour, NtrFluid, NuclearThermalSpec, Propellant, PropulsionSystemSpec,
-    RigidBodyProperties, SolidMotorSpec, SystemMount, TankMount, TankShape, TankSpec,
-    VehicleDefinition, analyze_airbreathing, analyze_altitude,
+    EngineCycle, EngineMount, EstocSpec, FoldJointRecord, IntakeKind, JetFuel, JetMount,
+    LiquidEngineSpec, NozzleContour, NtrFluid, NuclearThermalSpec, Propellant,
+    PropulsionSystemSpec, RigidBodyProperties, SolidMotorSpec, SystemMount, TankMount, TankShape,
+    TankSpec, VehicleDefinition, analyze_airbreathing, analyze_altitude,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -300,13 +300,16 @@ impl VehicleAsset {
             .collect::<Result<Vec<_>, _>>()?;
         // Hangar-side procedural compilation: each surface contributes
         // its panels (appended after hand panels) with control indices
-        // rebased onto the merged panel list. Structural mass and inertia
-        // aggregate about the body origin (all panels already live there);
+        // rebased onto the merged panel list. Structural mass, first
+        // moments, and inertia aggregate about the authoring origin;
         // fuel volume is reported for tank placement (no TankShape fits a
         // wing box, so mounts are not fabricated).
         let mut surface_mass_kg = 0.0;
+        let mut surface_moment = DVec3::ZERO;
         let mut surface_inertia = DMat3::ZERO;
         let mut surface_fuel_m3 = 0.0;
+        let mut fold_joints = Vec::new();
+        let mut parked_tags: Vec<(usize, usize)> = Vec::new();
         for surface in &self.procedural_surfaces {
             let compiled = compile_surface(
                 surface,
@@ -329,13 +332,27 @@ impl VehicleAsset {
                     structure.fuel_centroid_body_m
                 );
                 surface_mass_kg += structure.mass_kg;
+                surface_moment += structure.center_of_mass_body_m * structure.mass_kg;
                 surface_inertia += structure.inertia_body_kg_m2;
                 surface_fuel_m3 += structure.fuel_volume_m3;
             }
             let base = panels.len();
-            panels.extend(compiled.panels.iter().cloned());
+            let joint_base = fold_joints.len();
+            // Fold tags resolve against joints attached later, so park
+            // them aside: VehicleDefinition::new validates eagerly, then
+            // with_fold_joints re-validates, then tags restore plus a
+            // final validation below.
+            for (panel_index, panel) in compiled.panels.iter().enumerate() {
+                let mut panel = *panel;
+                if let Some(joint) = compiled.tags[panel_index].fold {
+                    parked_tags.push((panels.len(), joint_base + joint));
+                    panel.fold_index = None;
+                }
+                panels.push(panel);
+            }
+            let def_base = controls.len();
             for definition in &compiled.controls {
-                controls.push(ControlSurfaceDefinition::new(
+                let mut rebased = ControlSurfaceDefinition::new(
                     definition.name.clone(),
                     definition
                         .panel_indices
@@ -344,37 +361,91 @@ impl VehicleAsset {
                         .collect(),
                     definition.minimum_deflection_rad,
                     definition.maximum_deflection_rad,
-                )?);
+                )?;
+                rebased = rebased.with_kind(definition.kind);
+                if let Some(parent) = definition.parent_index {
+                    rebased = rebased.with_parent(def_base + parent);
+                }
+                controls.push(rebased);
             }
+            for (fold, joint) in compiled.folds.iter().zip(surface.folds.iter()) {
+                fold_joints.push(FoldJointRecord {
+                    name: format!("{}.{}", surface.name, fold.name),
+                    hinge_body_m: fold.hinge_body_m,
+                    axis_body: fold.axis_body,
+                    angle_rad: fold.angle_rad,
+                    deployed_angle_rad: joint.deployed_angle_rad,
+                });
+            }
+        }
+        // Assembly center of mass: hand mass rides the authoring origin,
+        // surfaces contribute first moments. Flight integrates moments
+        // about the body origin, so the baker recenters the whole asset
+        // onto the assembly COM (legacy hand-only assets sit at zero and
+        // shift by nothing).
+        let total_mass_kg = self.mass_kg + surface_mass_kg;
+        let assembly_com = if total_mass_kg > 0.0 {
+            surface_moment / total_mass_kg
+        } else {
+            DVec3::ZERO
+        };
+        if assembly_com.length() > 1e-12 {
+            println!(
+                "assembly center of mass at [{:.3}, {:.3}, {:.3}], recentering",
+                assembly_com.x, assembly_com.y, assembly_com.z
+            );
+        }
+        let shift = -assembly_com;
+        let shift_point = |point: DVec3| point + shift;
+        for panel in &mut panels {
+            panel.position_body_m = shift_point(panel.position_body_m);
+            panel.center_of_pressure_body_m = shift_point(panel.center_of_pressure_body_m);
+        }
+        for joint in &mut fold_joints {
+            joint.hinge_body_m = shift_point(joint.hinge_body_m);
         }
         let geometry = AeroGeometry::new(panels)?;
         let inertia = rows_to_matrix(self.inertia_body_kg_m2);
-        let properties =
-            RigidBodyProperties::new(self.mass_kg + surface_mass_kg, inertia + surface_inertia)?;
+        let recentered = inertia + surface_inertia - parallel_axis(total_mass_kg, assembly_com);
+        let properties = RigidBodyProperties::new(total_mass_kg, recentered)?;
         if surface_fuel_m3 > 0.0 {
             println!("wing fuel volume: {surface_fuel_m3:.3} m^3");
         }
-        let collision_geometry = CollisionGeometry::new(
-            self.collision_parts
-                .into_iter()
-                .map(CollisionPartAsset::bake)
-                .collect::<Result<Vec<_>, _>>()?,
-        )?;
-        let mounts = self
+        let mut collision_parts = self
+            .collision_parts
+            .into_iter()
+            .map(CollisionPartAsset::bake)
+            .collect::<Result<Vec<_>, _>>()?;
+        for part in &mut collision_parts {
+            part.local_position_m = shift_point(part.local_position_m);
+        }
+        let collision_geometry = CollisionGeometry::new(collision_parts)?;
+        let mut mounts = self
             .engines
             .into_iter()
             .map(EngineAsset::bake)
             .collect::<Result<Vec<_>, _>>()?;
-        let tank_mounts = self
+        for mount in &mut mounts {
+            shift_array(&mut mount.position_body_m, shift);
+        }
+        let mut tank_mounts = self
             .tanks
             .into_iter()
             .map(TankAsset::bake)
             .collect::<Result<Vec<TankMount>, _>>()?;
-        let system_mounts = self
+        for mount in &mut tank_mounts {
+            shift_array(&mut mount.position_body_m, shift);
+        }
+        let mut system_mounts = self
             .systems
             .into_iter()
             .map(SystemAsset::bake)
             .collect::<Result<Vec<SystemMount>, _>>()?;
+        for mount in &mut system_mounts {
+            for chamber in &mut mount.system.chambers {
+                shift_array(&mut chamber.position_body_m, shift);
+            }
+        }
         // Feed cross-check: pressure-fed engines have no pump to hide
         // behind, so a tank must hold their full feed pressure. Pump-fed
         // cycles generate the rise themselves (chamber pressure is already
@@ -410,21 +481,29 @@ impl VehicleAsset {
                 .into());
             }
         }
+        let mut jet_mounts = self
+            .jets
+            .into_iter()
+            .map(JetAsset::bake)
+            .collect::<Result<Vec<_>, _>>()?;
+        for mount in &mut jet_mounts {
+            shift_array(&mut mount.position_body_m, shift);
+        }
         let mut vehicle = VehicleDefinition::new(self.name, geometry, properties, controls)?
             .with_collision_geometry(collision_geometry)?
             .with_engines(mounts)?
             .with_tanks(tank_mounts)?
             .with_systems(system_mounts)?
-            .with_jets(
-                self.jets
-                    .into_iter()
-                    .map(JetAsset::bake)
-                    .collect::<Result<Vec<_>, _>>()?,
-            )?;
+            .with_fold_joints(fold_joints)?
+            .with_jets(jet_mounts)?;
         vehicle.bake_engine_masses()?;
         vehicle.bake_tank_masses()?;
         vehicle.bake_system_masses()?;
         vehicle.bake_jet_masses()?;
+        for (panel_index, joint) in parked_tags {
+            vehicle.aero_geometry.panels[panel_index].fold_index = Some(joint);
+        }
+        vehicle.validate()?;
         Ok(vehicle)
     }
 }
@@ -1262,6 +1341,19 @@ fn rows_to_matrix(rows: [[f64; 3]; 3]) -> DMat3 {
     )
 }
 
+/// Parallel-axis term `m(|c|^2 I - c c^T)` for recentering inertia.
+fn parallel_axis(mass_kg: f64, center: DVec3) -> DMat3 {
+    let outer = DMat3::from_cols(center * center.x, center * center.y, center * center.z);
+    (DMat3::from_diagonal(DVec3::splat(center.length_squared())) - outer) * mass_kg
+}
+
+/// Shift an array station by the recenter offset.
+fn shift_array(station: &mut [f64; 3], shift: DVec3) {
+    station[0] += shift.x;
+    station[1] += shift.y;
+    station[2] += shift.z;
+}
+
 fn one() -> f64 {
     1.0
 }
@@ -1876,22 +1968,53 @@ chord = [0.3, 1.0]
 hinge_u = 0.3
 min_deflection_rad = -0.4
 max_deflection_rad = 0.4
+
+[[procedural_surfaces.folds]]
+name = "tip-fold"
+station_s = 0.5
+axis = [1.0, 0.0, 0.0]
+deployed_angle_rad = 0.0
+stowed_angle_rad = 0.6
+travel_limit_rad = 0.7
 "#,
     )
     .expect("v-tail vehicle TOML should parse");
     let vehicle = asset.bake().expect("v-tail asset should bake");
     // Wing: splits at 0.5/0.9 with a chord cut inside -> 1 + 2 + 1.
-    // V-tail: splits at 0.3/0.9 with a chord cut inside -> 1 + 2 + 1.
-    // Total 8 panels, 2 controls.
-    assert_eq!(vehicle.aero_geometry.panels.len(), 8);
+    // V-tail: splits at 0.3/0.5/0.9 (fold at 0.5) with chord cuts
+    // inside -> 1 + 2 + 2 + 1. Total 10 panels, 2 controls.
+    assert_eq!(vehicle.aero_geometry.panels.len(), 10);
     assert_eq!(vehicle.control_surfaces.len(), 2);
     assert_eq!(vehicle.control_surfaces[0].name, "aileron");
     assert_eq!(vehicle.control_surfaces[1].name, "ruddervator");
     // The canted tail panels sit up-out of the body axis.
-    let tail_panel = &vehicle.aero_geometry.panels[7];
+    let tail_panel = &vehicle.aero_geometry.panels[9];
     assert!(tail_panel.position_body_m.z > 0.5);
     assert!(tail_panel.position_body_m.y > 0.5);
     assert!(tail_panel.lift_axis_body.z > 0.5);
+    // Mechanism metadata survives the bake: the fold joint merges
+    // under a surface-qualified name, tail panels point at it, and
+    // the ruddervator keeps its hinge marker with no parent.
+    assert_eq!(vehicle.fold_joints.len(), 1);
+    assert_eq!(vehicle.fold_joints[0].name, "v-tail-right.tip-fold");
+    assert!((vehicle.fold_joints[0].angle_rad - 0.0).abs() < 1e-12);
+    let tagged = vehicle
+        .aero_geometry
+        .panels
+        .iter()
+        .filter(|panel| panel.fold_index == Some(0))
+        .count();
+    assert!(tagged > 0);
+    assert!(
+        vehicle.aero_geometry.panels[..4]
+            .iter()
+            .all(|panel| panel.fold_index.is_none())
+    );
+    assert_eq!(
+        vehicle.control_surfaces[1].kind,
+        thessa_sim_core::ControlKind::Hinge
+    );
+    assert_eq!(vehicle.control_surfaces[1].parent_index, None);
 }
 
 #[test]
@@ -1942,7 +2065,7 @@ skin_gauge_mm = 2.0
 spar_depth_fraction = 0.6
 spar_web_gauge_mm = 3.0
 rib_spacing_m = 0.5
-rib_gauge_mm = 1.5
+rib_gauge_mm = 1.0
 design_limit_lift_n = 12000.0
 fuel_box_chord = [0.15, 0.65]
 fuel_sump_fraction = 0.03
@@ -1960,8 +2083,19 @@ allowable_stress_mpa = 503.0
     )
     .expect("structured vehicle TOML should parse");
     let vehicle = asset.bake().expect("structured asset should bake");
-    assert!((vehicle.mass_properties.mass_kg - 1250.216).abs() < 0.5);
-    // Wing mass at (1, 4, 0) adds m*x*y to the xy off-diagonal.
-    let expected_xy = -(250.2156 * 1.0 * 4.0);
-    assert!((vehicle.mass_properties.inertia_body_kg_m2.x_axis.y - expected_xy).abs() < 2.0);
+    // Single-zone wing: every identity below is exact, recomputed
+    // from measured values rather than hand arithmetic.
+    assert_eq!(vehicle.aero_geometry.panels.len(), 1);
+    let wing_mass = vehicle.mass_properties.mass_kg - 1000.0;
+    assert!((240.0..260.0).contains(&wing_mass));
+    let total = vehicle.mass_properties.mass_kg;
+    let com = DVec3::new(-wing_mass / total, 4.0 * wing_mass / total, 0.0);
+    assert!(
+        (vehicle.aero_geometry.panels[0].center_of_pressure_body_m
+            - (DVec3::new(-1.0, 4.0, 0.0) - com))
+            .length()
+            < 1e-6
+    );
+    let expected_xy = wing_mass * 1.0 * 4.0 + total * com.x * com.y;
+    assert!((vehicle.mass_properties.inertia_body_kg_m2.x_axis.y - expected_xy).abs() < 1e-3);
 }

@@ -236,9 +236,26 @@ pub struct CompiledSurface {
     pub structure: Option<CompiledStructure>,
 }
 
+/// Projected planform area shared by the aspect-ratio computation and
+/// the summary record: chord integrated against the mapped (already
+/// projected) span extent. Single cosine by construction; incidence
+/// cannot move it because corners never see incidence.
+pub(crate) fn projected_planform_area(surface: &ProceduralSurface) -> f64 {
+    const SAMPLES: usize = 512;
+    let scale = surface.bend.material_scale(surface.span_m);
+    let span_y = |s: f64| scale * s * surface.span_m;
+    let planform = &surface.planform;
+    let mut area = 0.0;
+    for index in 0..SAMPLES {
+        let a = index as f64 / SAMPLES as f64;
+        let b = (index + 1) as f64 / SAMPLES as f64;
+        area += 0.5 * (planform.chord(a) + planform.chord(b)) * (span_y(b) - span_y(a));
+    }
+    area.max(1e-12)
+}
+
 impl CompiledSurface {
-    /// Mirror across the body `x/z` plane: right hand to left hand.
-    ///
+    /// Mirror across the body `x/z` plane: right hand to left hand.    ///
     /// Positions and axes map `y -> -y` with lift re-orthogonalized so it
     /// stays up; fold angles negate so equivalent commands keep mirrored
     /// surfaces mirrored. Areas and ownership are untouched.
@@ -436,7 +453,9 @@ impl StructAcc {
     }
 
     /// Zone record for the cap-sizing pass plus skin/web/rib/box sums.
-    /// Fuel uses the chordwise overlap with the authored spar box.
+    /// Fuel integrates chord squared exactly over linear planform
+    /// segments (`(ca^2 + ca*cb + cb^2)/3`, never the averaged-chord
+    /// square); thickness stays a mid-zone sample, documented O(h^2).
     fn add_zone(
         &mut self,
         layout: &StructuralLayout,
@@ -444,6 +463,7 @@ impl StructAcc {
         span: (f64, f64),
         chord: (f64, f64),
         span_y: (f64, f64),
+        end_chords: (f64, f64),
     ) {
         let (a, b, u0, u1) = (span.0, span.1, chord.0, chord.1);
         let s_mid = 0.5 * (a + b);
@@ -458,13 +478,21 @@ impl StructAcc {
             * web_height_m
             * (layout.spar_web_gauge_mm / 1000.0)
             * layout.spar_material.density_kg_m3;
-        let rib_plate_m2 = panel.chord_m.powi(2)
-            * panel.thickness_to_chord_ratio
-            * self.layout_rib_area_coefficient;
-        let rib_kg = (panel.span_m / layout.rib_spacing_m)
-            * rib_plate_m2
+        let (c_a, c_b) = end_chords;
+        // Exact chord-square integral for linear segments: rib plates
+        // and fuel boxes both scale with overline{c^2}, never the
+        // averaged-chord square (13 percent low on a 12->2.4 taper).
+        let chord_sq_integral = (c_a * c_a + c_a * c_b + c_b * c_b) / 3.0 * panel.span_m;
+        let rib_plate_integral =
+            chord_sq_integral * panel.thickness_to_chord_ratio * self.layout_rib_area_coefficient;
+        // Rib mass integrates plate-per-metre over the zone: ribs at the
+        // authored pitch, each a section-shape plate. (Multiplying a rib
+        // COUNT by the whole-zone plate double-counts the span; the
+        // integral carries it exactly once.)
+        let rib_kg = rib_plate_integral
             * (layout.rib_gauge_mm / 1000.0)
-            * layout.skin_material.density_kg_m3;
+            * layout.skin_material.density_kg_m3
+            / layout.rib_spacing_m;
         self.skin_kg += skin_kg;
         self.web_kg += web_kg;
         self.rib_kg += rib_kg;
@@ -472,8 +500,7 @@ impl StructAcc {
         let fuel_u0 = u0.max(layout.fuel_box_chord.0);
         let fuel_u1 = u1.min(layout.fuel_box_chord.1);
         if fuel_u1 > fuel_u0 {
-            let thickness_m = panel.thickness_to_chord_ratio * panel.chord_m;
-            let box_m3 = panel.span_m * (fuel_u1 - fuel_u0) * panel.chord_m * thickness_m;
+            let box_m3 = (fuel_u1 - fuel_u0) * chord_sq_integral * panel.thickness_to_chord_ratio;
             self.box_m3 += box_m3;
             self.box_numerator += panel.center_of_pressure_body_m * box_m3;
         }
@@ -590,11 +617,17 @@ impl<'a> Compiler<'a> {
             surface_aspect_ratio: 0.0,
         })
     }
-
     /// Finish construction with the surface aspect ratio. Split out so
     /// `new` stays infallible scaffolding around the fallible resolve.
+    /// A mirrored pair flies the full-aircraft ratio (twice the half);
+    /// a standalone surface keeps span^2 over its own area.
     fn with_aspect_ratio(mut self) -> Self {
-        self.surface_aspect_ratio = self.surface.span_m.powi(2) / self.projected_area_estimate();
+        let projected = self.projected_area_estimate();
+        let pair_factor = match self.surface.topology {
+            crate::SurfaceTopology::SymmetricHalf => 2.0,
+            crate::SurfaceTopology::Single => 1.0,
+        };
+        self.surface_aspect_ratio = pair_factor * self.surface.span_m.powi(2) / projected;
         self
     }
 
@@ -643,18 +676,26 @@ impl<'a> Compiler<'a> {
         let layout = self.surface.structure.clone();
         for leaf in &leaves {
             for zone in self.chord_zones(leaf.a, leaf.b) {
-                let (panel, corners) = self.zone_panel(leaf.a, leaf.b, zone.0, zone.1)?;
+                let (mut panel, corners) = self.zone_panel(leaf.a, leaf.b, zone.0, zone.1)?;
+                // Local fold ownership rides into the baked panel; the
+                // baker rebases it onto the merged joint list.
+                panel.fold_index = zone.2.fold;
                 for corner in &corners {
                     bbox_min = bbox_min.min(*corner);
                     bbox_max = bbox_max.max(*corner);
                 }
                 if let Some(layout) = &layout {
+                    let end_chords = (
+                        self.surface.planform.chord(leaf.a),
+                        self.surface.planform.chord(leaf.b),
+                    );
                     struct_acc.add_zone(
                         layout,
                         &panel,
                         (leaf.a, leaf.b),
                         (zone.0, zone.1),
                         (self.span_y(leaf.a), self.span_y(leaf.b)),
+                        end_chords,
                     );
                 }
                 compiled.tags.push(zone.2);
@@ -730,8 +771,10 @@ impl<'a> Compiler<'a> {
                 + self.chord_zones(left.a, left.b).len()
                 + self.chord_zones(right.a, right.b).len();
             if best.leaf.depth >= self.options.max_depth || new_panels > max_panels {
-                // Unsplittable: retire the leaf, keep its error, continue
-                // with the next-best candidate.
+                // Unsplittable: retire the leaf from play, carrying its
+                // error out of the running total into the frozen sum exactly
+                // once (double counting here inflates the reported total).
+                total_error -= best.error;
                 frozen.push(best.leaf);
                 frozen_error += best.error;
                 continue;
@@ -866,7 +909,6 @@ impl<'a> Compiler<'a> {
         self.subdivide(a, mid, depth + 1, leaves);
         self.subdivide(mid, b, depth + 1, leaves);
     }
-
     fn needs_split(&self, a: f64, b: f64) -> bool {
         if b - a <= 1e-12 {
             return false;
@@ -878,15 +920,15 @@ impl<'a> Compiler<'a> {
         if (chord_b - chord_a).abs() / chord_ref > self.options.max_chord_change_frac {
             return true;
         }
+        // Secant metrics on (a, mid, b): every evaluated slope lies
+        // strictly inside [a, b], so kink vertices at the endpoints can
+        // never impersonate interior curvature. One-sided endpoint
+        // derivatives did exactly that (right-of-kink intervals saw the
+        // left slope) and subdivided to max_depth for free.
         let mid = 0.5 * (a + b);
         let bend_turn = self
-            .span_tangent(a)
-            .angle_between(self.span_tangent(b))
-            .max(
-                self.span_tangent(a)
-                    .angle_between(self.span_tangent(mid))
-                    .max(self.span_tangent(mid).angle_between(self.span_tangent(b))),
-            );
+            .secant_tangent(a, mid)
+            .angle_between(self.secant_tangent(mid, b));
         if bend_turn > self.options.max_bend_angle_rad {
             return true;
         }
@@ -896,12 +938,34 @@ impl<'a> Compiler<'a> {
         {
             return true;
         }
-        if (self.leading_sweep(b) - self.leading_sweep(a)).abs() > self.options.max_sweep_change_rad
+        if (self.secant_sweep(a, mid) - self.secant_sweep(mid, b)).abs()
+            > self.options.max_sweep_change_rad
             && (b - a) * self.surface.span_m > 1e-9
         {
             return true;
         }
         false
+    }
+
+    /// Unit span secant from `p` to `q` in mapped `(Y, Z)`, embedded in
+    /// 3D. Spans a strictly interior segment: kink-safe by construction.
+    fn secant_tangent(&self, p: f64, q: f64) -> DVec3 {
+        let tangent = DVec3::new(
+            0.0,
+            self.span_y(q) - self.span_y(p),
+            self.bend_z(q) - self.bend_z(p),
+        );
+        if tangent.length_squared() <= f64::EPSILON {
+            DVec3::Y
+        } else {
+            tangent.normalize()
+        }
+    }
+
+    /// Leading-edge sweep of the secant from `p` to `q`.
+    fn secant_sweep(&self, p: f64, q: f64) -> f64 {
+        (self.surface.planform.leading_edge(q) - self.surface.planform.leading_edge(p))
+            .atan2(self.span_y(q) - self.span_y(p))
     }
     /// Unit span tangent at `s` from the exact segment derivatives.
     /// Finite differences would smear kink vertices into neighboring
@@ -919,13 +983,6 @@ impl<'a> Compiler<'a> {
         } else {
             tangent.normalize()
         }
-    }
-
-    /// Leading-edge sweep angle at `s` from the exact segment slope.
-    fn leading_sweep(&self, s: f64) -> f64 {
-        let dx = self.surface.planform.leading_slope(s);
-        let dy = self.bend_k * self.surface.span_m;
-        dx.atan2(dy)
     }
 
     /// Chordwise zones for one span leaf: split at covering control-region
@@ -950,11 +1007,14 @@ impl<'a> Compiler<'a> {
                 deduped.push(cut);
             }
         }
+        // fold_order sorts joints by station descending, so the first
+        // match is the outboard-most joint regardless of authoring order
+        // (rposition over the raw array would answer array order).
         let fold = self
-            .surface
-            .folds
+            .fold_order
             .iter()
-            .rposition(|joint| joint.station_s <= a + 1e-9);
+            .copied()
+            .find(|&order| self.surface.folds[order].station_s <= a + 1e-9);
         deduped
             .windows(2)
             .map(|pair| {
@@ -1042,23 +1102,13 @@ impl<'a> Compiler<'a> {
     }
 
     /// Projected (flat-plane) area estimate for the surface aspect ratio:
-    /// fine deterministic sampling, independent of subdivision.
+    /// fine deterministic sampling of chord times mapped span extent.
+    /// The mapped span already carries the bend projection, so no extra
+    /// cosine belongs here (multiplying by lift_z double-counted it);
+    /// incidence never enters: projection is pure planform-plus-bend
+    /// geometry.
     fn projected_area_estimate(&self) -> f64 {
-        const SAMPLES: usize = 512;
-        let planform = &self.surface.planform;
-        let mut area = 0.0;
-        for index in 0..SAMPLES {
-            let a = index as f64 / SAMPLES as f64;
-            let b = (index + 1) as f64 / SAMPLES as f64;
-            let mid = 0.5 * (a + b);
-            let tangent = self.span_tangent(mid);
-            let lift_z = DVec3::X.cross(tangent).normalize().z.abs();
-            area += 0.5
-                * (planform.chord(a) + planform.chord(b))
-                * (self.span_y(b) - self.span_y(a))
-                * lift_z;
-        }
-        area.max(1e-12)
+        projected_planform_area(self.surface)
     }
 
     /// Surface-local point at `(s, u)`, folded by every outboard joint.
@@ -1086,22 +1136,43 @@ impl<'a> Compiler<'a> {
         }
         point
     }
-
     fn compiled_folds(&self) -> Vec<CompiledFold> {
         let planform = &self.surface.planform;
+        let as_drawn_hinge = |station_s: f64| {
+            DVec3::new(
+                planform.leading_edge(station_s) + 0.5 * planform.chord(station_s),
+                self.span_y(station_s),
+                self.bend_z(station_s),
+            )
+        };
         self.surface
             .folds
             .iter()
             .enumerate()
-            .map(|(index, joint)| CompiledFold {
-                name: joint.name.clone(),
-                hinge_body_m: DVec3::new(
-                    planform.leading_edge(joint.station_s) + 0.5 * planform.chord(joint.station_s),
-                    self.span_y(joint.station_s),
-                    self.bend_z(joint.station_s),
-                ),
-                axis_body: joint.axis.normalize(),
-                angle_rad: self.fold_angles[index],
+            .map(|(index, joint)| {
+                // Carry the joint through every inboard fold, outboard
+                // first about as-drawn hinges: the runtime record must sit
+                // where the folded geometry actually is, not at the
+                // as-drawn station.
+                let mut hinge = as_drawn_hinge(joint.station_s);
+                let mut axis = joint.axis.normalize();
+                for &order in &self.fold_order {
+                    let carrier = &self.surface.folds[order];
+                    if carrier.station_s < joint.station_s {
+                        let carrier_hinge = as_drawn_hinge(carrier.station_s);
+                        let carrier_axis = carrier.axis.normalize();
+                        let angle = self.fold_angles[order] - carrier.deployed_angle_rad;
+                        let rotation = DQuat::from_axis_angle(carrier_axis, angle);
+                        hinge = carrier_hinge + rotation * (hinge - carrier_hinge);
+                        axis = rotation * axis;
+                    }
+                }
+                CompiledFold {
+                    name: joint.name.clone(),
+                    hinge_body_m: hinge,
+                    axis_body: axis,
+                    angle_rad: self.fold_angles[index],
+                }
             })
             .collect()
     }
@@ -1122,21 +1193,44 @@ impl<'a> Compiler<'a> {
             .enumerate()
             .map(|(index, region)| {
                 let panels = by_region.remove(&index).unwrap_or_default();
-                ControlSurfaceDefinition::new(
+                // Definitions emit in region order, so the region index
+                // doubles as the definition index for parent links; the
+                // kind marker rides along for the runtime mixer.
+                let kind = match region.kind {
+                    crate::ControlRegionKind::TrailingEdgeDevice => {
+                        thessa_sim_core::ControlKind::Hinge
+                    }
+                    crate::ControlRegionKind::AllMovingSurface => {
+                        thessa_sim_core::ControlKind::AllMoving
+                    }
+                };
+                let mut definition = ControlSurfaceDefinition::new(
                     region.name.clone(),
                     panels,
                     region.min_deflection_rad,
                     region.max_deflection_rad,
                 )
-                .map_err(|error| SurfaceError::PanelRejected(error.to_string()))
+                .map_err(|error| SurfaceError::PanelRejected(error.to_string()))?;
+                definition = definition.with_kind(kind);
+                if let Some(parent) = region.parent {
+                    definition = definition.with_parent(parent);
+                }
+                Ok(definition)
             })
             .collect()
     }
 
-    /// Mount surface-local output into the body frame: mount roll first,
-    /// then the optional mirror, then the origin offset. A zero roll
-    /// skips the rotation exactly so unrolled surfaces keep bit-identical
-    /// golden geometry.
+    /// Mount surface-local output into the body frame: mount roll, then
+    /// the chordwise reflection, then the optional mirror, then the
+    /// origin offset. A zero roll skips the rotation exactly so unrolled
+    /// surfaces keep bit-identical golden geometry.
+    ///
+    /// Frame contract: local +X runs aft (leading edge to trailing
+    /// edge) while body +X runs forward, so mounted POINTS map x to -x
+    /// and the trailing edge lands aft. Solver axes (chord/lift forward
+    /// and lift references) keep their body-frame meaning and skip the
+    /// reflection; fold records conjugate (axis and angle) so the
+    /// runtime reproduces compiled positions exactly.
     fn mount(&self, mut compiled: CompiledSurface) -> CompiledSurface {
         if self.surface.mount_roll_rad != 0.0 {
             let roll = DQuat::from_axis_angle(DVec3::X, self.surface.mount_roll_rad);
@@ -1152,6 +1246,16 @@ impl<'a> Compiler<'a> {
             }
             compiled.summary.rotate(roll);
         }
+        for panel in &mut compiled.panels {
+            panel.position_body_m.x = -panel.position_body_m.x;
+            panel.center_of_pressure_body_m.x = -panel.center_of_pressure_body_m.x;
+        }
+        for fold in &mut compiled.folds {
+            fold.hinge_body_m.x = -fold.hinge_body_m.x;
+            fold.axis_body.x = -fold.axis_body.x;
+            fold.angle_rad = -fold.angle_rad;
+        }
+        compiled.summary.reflect_x();
         if self.surface.mirror_y {
             compiled = compiled.mirrored();
         }
@@ -1180,9 +1284,10 @@ impl<'a> Compiler<'a> {
     }
 
     /// Map a surface-local point into the body frame through the exact
-    /// mount order: roll, mirror, origin offset.
+    /// mount order: roll, chordwise reflection, mirror, origin offset.
     fn mount_point(&self, point: DVec3) -> DVec3 {
         let mut mapped = self.mount_matrix() * point;
+        mapped.x = -mapped.x;
         if self.surface.mirror_y {
             mapped.y = -mapped.y;
         }
@@ -1190,27 +1295,38 @@ impl<'a> Compiler<'a> {
     }
 
     /// Carry the local structural aggregates into the body frame: mass
-    /// and volumes are invariant, centers map as points, the inertia
-    /// tensor rotates (plus mirror conjugation) and shifts to the body
-    /// origin by the parallel-axis term. Fuel fill derives here: one
-    /// minus sump minus rib displacement, floored at zero.
+    /// and volumes are invariant, centers map as points. Inertia goes
+    /// through the local center of mass first (reverse parallel axis),
+    /// then rotates (plus mirror conjugation), then shifts to the body
+    /// origin from the mounted center: shifting by the bare origin drops
+    /// the origin-COM cross terms whenever they differ. Fuel fill
+    /// derives here: one minus sump minus rib displacement, floored.
     fn mount_structure(&self, acc: StructAcc, layout: &StructuralLayout) -> CompiledStructure {
+        let center_local = if acc.mass_kg > 0.0 {
+            acc.com_numerator / acc.mass_kg
+        } else {
+            DVec3::ZERO
+        };
         let rotation = self.mount_matrix();
-        let mut inertia = rotation * acc.inertia_local * rotation.transpose();
+        let mut inertia = rotation
+            * (acc.inertia_local - point_inertia(acc.mass_kg, center_local))
+            * rotation.transpose();
+        // Conjugation by diag(-1,1,1) (chordwise reflection) flips the
+        // xy- and xz-product signs; the mirror step below conjugates by
+        // diag(1,-1,1) the same way. Together they are the full mount map.
+        inertia.y_axis.x = -inertia.y_axis.x;
+        inertia.x_axis.y = -inertia.x_axis.y;
+        inertia.z_axis.x = -inertia.z_axis.x;
+        inertia.x_axis.z = -inertia.x_axis.z;
         if self.surface.mirror_y {
-            // Conjugation by diag(1,-1,1) flips the xy/xz off-diagonal signs.
+            // Conjugation by diag(1,-1,1) flips the xy- and yz-product signs.
             inertia.y_axis.x = -inertia.y_axis.x;
             inertia.x_axis.y = -inertia.x_axis.y;
             inertia.y_axis.z = -inertia.y_axis.z;
             inertia.z_axis.y = -inertia.z_axis.y;
         }
-        let origin = self.surface.origin_body_m;
-        inertia += point_inertia(acc.mass_kg, origin);
-        let center_of_mass_body_m = if acc.mass_kg > 0.0 {
-            self.mount_point(acc.com_numerator / acc.mass_kg)
-        } else {
-            DVec3::ZERO
-        };
+        let center_of_mass_body_m = self.mount_point(center_local);
+        inertia += point_inertia(acc.mass_kg, center_of_mass_body_m);
         // Derived fill: box minus rib displacement minus sump, floored.
         let displacement = if acc.box_m3 > 0.0 {
             acc.rib_m3 / acc.box_m3

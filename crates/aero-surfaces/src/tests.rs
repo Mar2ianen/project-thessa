@@ -353,6 +353,9 @@ fn fold_preserves_material_area_and_moves_envelope() {
         deployed_angle_rad: 0.0,
         stowed_angle_rad: 60.0_f64.to_radians(),
         travel_limit_rad: 70.0_f64.to_radians(),
+        deployment_rate_rad_s: 1.0,
+        lock_window_rad: (-0.05, 0.05),
+        max_dynamic_pressure_pa: None,
     });
     let deployed = compile_surface(
         &surface,
@@ -455,6 +458,9 @@ fn mount_offsets_positions_hinges_and_bbox() {
         deployed_angle_rad: 0.0,
         stowed_angle_rad: 45.0_f64.to_radians(),
         travel_limit_rad: 50.0_f64.to_radians(),
+        deployment_rate_rad_s: 1.0,
+        lock_window_rad: (-0.05, 0.05),
+        max_dynamic_pressure_pa: None,
     });
     let compiled = compile_surface(
         &surface,
@@ -587,6 +593,9 @@ fn degenerate_authoring_fails_closed() {
         deployed_angle_rad: 0.0,
         stowed_angle_rad: 0.5,
         travel_limit_rad: 1.0,
+        deployment_rate_rad_s: 1.0,
+        lock_window_rad: (-0.05, 0.05),
+        max_dynamic_pressure_pa: None,
     });
     assert!(matches!(
         compile_surface(
@@ -605,6 +614,9 @@ fn degenerate_authoring_fails_closed() {
         deployed_angle_rad: 0.0,
         stowed_angle_rad: 2.0,
         travel_limit_rad: 1.0,
+        deployment_rate_rad_s: 1.0,
+        lock_window_rad: (-0.05, 0.05),
+        max_dynamic_pressure_pa: None,
     });
     assert!(matches!(
         compile_surface(
@@ -1333,6 +1345,9 @@ fn compiled_surface_crosses_hangar_boundary_as_data() {
         deployed_angle_rad: 0.0,
         stowed_angle_rad: 0.5,
         travel_limit_rad: 1.0,
+        deployment_rate_rad_s: 1.0,
+        lock_window_rad: (-0.05, 0.05),
+        max_dynamic_pressure_pa: None,
     });
     let compiled = compile_surface(
         &surface,
@@ -1897,6 +1912,9 @@ fn two_fold_wing(folds_in_order: bool) -> ProceduralSurface {
             deployed_angle_rad: 0.0,
             stowed_angle_rad: 30.0_f64.to_radians(),
             travel_limit_rad: 40.0_f64.to_radians(),
+            deployment_rate_rad_s: 1.0,
+            lock_window_rad: (-0.05, 0.05),
+            max_dynamic_pressure_pa: None,
         },
         FoldJoint {
             name: "outer-fold".into(),
@@ -1905,6 +1923,9 @@ fn two_fold_wing(folds_in_order: bool) -> ProceduralSurface {
             deployed_angle_rad: 0.0,
             stowed_angle_rad: 60.0_f64.to_radians(),
             travel_limit_rad: 70.0_f64.to_radians(),
+            deployment_rate_rad_s: 1.0,
+            lock_window_rad: (-0.05, 0.05),
+            max_dynamic_pressure_pa: None,
         },
     );
     let mut surface = rectangular(8.0, 2.0);
@@ -2180,6 +2201,9 @@ fn compiled_panels_carry_mechanism_metadata() {
         deployed_angle_rad: 0.0,
         stowed_angle_rad: 0.5,
         travel_limit_rad: 1.0,
+        deployment_rate_rad_s: 1.0,
+        lock_window_rad: (-0.05, 0.05),
+        max_dynamic_pressure_pa: None,
     });
     let compiled = compile_surface(
         &surface,
@@ -2253,6 +2277,9 @@ fn fold_record_reproduces_stowed_geometry_at_runtime() {
         deployed_angle_rad: 0.0,
         stowed_angle_rad: 60.0_f64.to_radians(),
         travel_limit_rad: 70.0_f64.to_radians(),
+        deployment_rate_rad_s: 1.0,
+        lock_window_rad: (-0.05, 0.05),
+        max_dynamic_pressure_pa: None,
     });
     let deployed = compile_surface(
         &surface,
@@ -2290,4 +2317,154 @@ fn fold_record_reproduces_stowed_geometry_at_runtime() {
             );
         }
     }
+}
+
+#[test]
+fn collision_boxes_cover_panels_by_ownership() {
+    use crate::CollisionOptions;
+
+    // Rectangular wing: merged output is exactly one box over the panel
+    // bounding box; unmerged output is one oriented cuboid per zone.
+    let surface = rectangular(8.0, 2.0);
+    let compiled = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    let merged = compiled
+        .collision_parts(&CollisionOptions::default())
+        .unwrap();
+    assert_eq!(merged.len(), 1);
+    let part = &merged[0];
+    match part.shape {
+        thessa_sim_core::CollisionShape::Cuboid { half_extents_m } => {
+            // Chord 2 (x now body-forward: -2..0), span 8, 1 mm floor.
+            assert!((half_extents_m.x - 1.0).abs() < 1e-9);
+            assert!((half_extents_m.y - 4.0).abs() < 1e-9);
+            assert!((half_extents_m.z - 1e-3).abs() < 1e-12);
+        }
+        ref other => panic!("expected cuboid, got {other:?}"),
+    }
+    assert!((part.local_position_m - DVec3::new(-1.0, 4.0, 0.0)).length() < 1e-9);
+    assert!((part.local_orientation - glam::DQuat::IDENTITY).length() < 1e-9);
+    let zones = compiled
+        .collision_parts(&CollisionOptions {
+            merge_regions: false,
+            ..CollisionOptions::default()
+        })
+        .unwrap();
+    assert_eq!(zones.len(), compiled.panels.len());
+    // Oriented box of the single flat zone: identity rotation, chord
+    // along body x, span along y.
+    assert!((zones[0].local_orientation - glam::DQuat::IDENTITY).length() < 1e-9);
+
+    // Folded wing merges into inboard/outboard boxes, never one.
+    let mut folded_surface = rectangular(8.0, 2.0);
+    folded_surface.folds.push(FoldJoint {
+        name: "tip-fold".into(),
+        station_s: 0.5,
+        axis: DVec3::X,
+        deployed_angle_rad: 0.0,
+        stowed_angle_rad: 0.5,
+        travel_limit_rad: 1.0,
+        deployment_rate_rad_s: 1.0,
+        lock_window_rad: (-0.05, 0.05),
+        max_dynamic_pressure_pa: None,
+    });
+    let compiled_folded = compile_surface(
+        &folded_surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    let merged_folded = compiled_folded
+        .collision_parts(&CollisionOptions::default())
+        .unwrap();
+    assert_eq!(merged_folded.len(), 2);
+    // Union of merged boxes covers the panel bounding box exactly.
+    let mut lo = DVec3::splat(f64::INFINITY);
+    let mut hi = DVec3::splat(f64::NEG_INFINITY);
+    for part in &merged_folded {
+        match part.shape {
+            thessa_sim_core::CollisionShape::Cuboid { half_extents_m } => {
+                lo = lo.min(part.local_position_m - half_extents_m);
+                hi = hi.max(part.local_position_m + half_extents_m);
+            }
+            ref other => panic!("expected cuboid, got {other:?}"),
+        }
+    }
+    assert!((lo.x - compiled_folded.summary.bbox_min_m.x).abs() < 1e-9);
+    assert!((hi.x - compiled_folded.summary.bbox_max_m.x).abs() < 1e-9);
+    assert!((lo.y - compiled_folded.summary.bbox_min_m.y).abs() < 1e-9);
+    assert!((hi.y - compiled_folded.summary.bbox_max_m.y).abs() < 1e-9);
+    // Thickness floor expands contact z by design (never shrinks it).
+    assert!(lo.z <= compiled_folded.summary.bbox_min_m.z + 1e-12);
+    assert!(hi.z >= compiled_folded.summary.bbox_max_m.z - 1e-12);
+    assert!(hi.z - lo.z < 0.01);
+    // Invalid contact material fails closed.
+    assert!(
+        compiled
+            .collision_parts(&CollisionOptions {
+                friction: -1.0,
+                ..CollisionOptions::default()
+            })
+            .is_err()
+    );
+}
+
+#[test]
+fn fold_operating_data_validates_and_compiles() {
+    // Rate, lock window, and envelope gate are required authoring data
+    // with closed validation;degenerate values fail before compilation.
+    let mut surface = rectangular(8.0, 2.0);
+    surface.folds.push(FoldJoint {
+        name: "tip-fold".into(),
+        station_s: 0.7,
+        axis: DVec3::X,
+        deployed_angle_rad: 0.0,
+        stowed_angle_rad: 0.5,
+        travel_limit_rad: 1.0,
+        deployment_rate_rad_s: 0.1,
+        lock_window_rad: (-0.05, 0.05),
+        max_dynamic_pressure_pa: Some(5000.0),
+    });
+    let compiled = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    assert_eq!(compiled.folds.len(), 1);
+
+    let mut bad_rate = surface.clone();
+    bad_rate.folds[0].deployment_rate_rad_s = 0.0;
+    assert!(
+        compile_surface(
+            &bad_rate,
+            &CompileOptions::default(),
+            &MechanismState::deployed()
+        )
+        .is_err()
+    );
+    let mut bad_lock = surface.clone();
+    bad_lock.folds[0].lock_window_rad = (0.2, 0.1);
+    assert!(
+        compile_surface(
+            &bad_lock,
+            &CompileOptions::default(),
+            &MechanismState::deployed()
+        )
+        .is_err()
+    );
+    let mut bad_gate = surface.clone();
+    bad_gate.folds[0].max_dynamic_pressure_pa = Some(-100.0);
+    assert!(
+        compile_surface(
+            &bad_gate,
+            &CompileOptions::default(),
+            &MechanismState::deployed()
+        )
+        .is_err()
+    );
 }

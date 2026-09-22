@@ -2,7 +2,9 @@ use std::{env, error::Error, fs, path::PathBuf};
 
 use glam::{DMat3, DQuat, DVec3};
 use serde::Deserialize;
-use thessa_aero_surfaces::{CompileOptions, MechanismState, ProceduralSurface, compile_surface};
+use thessa_aero_surfaces::{
+    CollisionOptions, CompileOptions, MechanismState, ProceduralSurface, compile_surface,
+};
 use thessa_sim_core::{
     AeroGeometry, AeroPanel, AirCycle, AirbreathingSpec, AtmosphereConfig, ChamberMaterial,
     ChamberSpec, CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionPart,
@@ -265,6 +267,12 @@ struct VehicleAsset {
     /// compiled output. Empty keeps legacy hand-panel assets valid.
     #[serde(default)]
     procedural_surfaces: Vec<ProceduralSurface>,
+    /// Compile contact boxes from procedural surfaces into the collision
+    /// geometry (one body-axis box per mechanism region). Default true:
+    /// the documented hangar pipeline; set false to keep hand-authored
+    /// contact geometry only.
+    #[serde(default = "default_true")]
+    surface_collision: bool,
     /// Solver-neutral contact primitives. Legacy assets may omit this while
     /// collision geometry is migrated; contact-active runtime code must not.
     #[serde(default)]
@@ -310,6 +318,7 @@ impl VehicleAsset {
         let mut surface_fuel_m3 = 0.0;
         let mut fold_joints = Vec::new();
         let mut parked_tags: Vec<(usize, usize)> = Vec::new();
+        let mut surface_collision_parts = Vec::new();
         for surface in &self.procedural_surfaces {
             let compiled = compile_surface(
                 surface,
@@ -375,7 +384,17 @@ impl VehicleAsset {
                     axis_body: fold.axis_body,
                     angle_rad: fold.angle_rad,
                     deployed_angle_rad: joint.deployed_angle_rad,
+                    deployment_rate_rad_s: joint.deployment_rate_rad_s,
+                    lock_window_rad: joint.lock_window_rad,
+                    max_dynamic_pressure_pa: joint.max_dynamic_pressure_pa,
                 });
+            }
+            if self.surface_collision {
+                let parts = compiled
+                    .collision_parts(&CollisionOptions::default())
+                    .map_err(|error| format!("surface '{}': {error}", surface.name))?;
+                println!("surface '{}': {} contact boxes", surface.name, parts.len());
+                surface_collision_parts.extend(parts);
             }
         }
         // Assembly center of mass: hand mass rides the authoring origin,
@@ -419,6 +438,10 @@ impl VehicleAsset {
         for part in &mut collision_parts {
             part.local_position_m = shift_point(part.local_position_m);
         }
+        for part in &mut surface_collision_parts {
+            part.local_position_m = shift_point(part.local_position_m);
+        }
+        collision_parts.extend(surface_collision_parts);
         let collision_geometry = CollisionGeometry::new(collision_parts)?;
         let mut mounts = self
             .engines
@@ -1976,6 +1999,8 @@ axis = [1.0, 0.0, 0.0]
 deployed_angle_rad = 0.0
 stowed_angle_rad = 0.6
 travel_limit_rad = 0.7
+deployment_rate_rad_s = 0.1
+lock_window_rad = [-0.05, 0.05]
 "#,
     )
     .expect("v-tail vehicle TOML should parse");
@@ -1998,6 +2023,10 @@ travel_limit_rad = 0.7
     assert_eq!(vehicle.fold_joints.len(), 1);
     assert_eq!(vehicle.fold_joints[0].name, "v-tail-right.tip-fold");
     assert!((vehicle.fold_joints[0].angle_rad - 0.0).abs() < 1e-12);
+    // Operating data rides along: rate, lock window, envelope gate.
+    assert!((vehicle.fold_joints[0].deployment_rate_rad_s - 0.1).abs() < 1e-12);
+    assert_eq!(vehicle.fold_joints[0].lock_window_rad, (-0.05, 0.05));
+    assert_eq!(vehicle.fold_joints[0].max_dynamic_pressure_pa, None);
     let tagged = vehicle
         .aero_geometry
         .panels
@@ -2015,6 +2044,10 @@ travel_limit_rad = 0.7
         thessa_sim_core::ControlKind::Hinge
     );
     assert_eq!(vehicle.control_surfaces[1].parent_index, None);
+    // Contact boxes: wing plain plus aileron regions, tail plain,
+    // ruddervator, folded, and folded-ruddervator regions.
+    assert_eq!(vehicle.collision_geometry.parts.len(), 6);
+    assert!(vehicle.collision_geometry.validate().is_ok());
 }
 
 #[test]

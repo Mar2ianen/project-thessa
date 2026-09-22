@@ -43,6 +43,9 @@ fn representative_surface() -> ProceduralSurface {
             deployed_angle_rad: 0.0,
             stowed_angle_rad: 60.0_f64.to_radians(),
             travel_limit_rad: 70.0_f64.to_radians(),
+            deployment_rate_rad_s: 0.1,
+            lock_window_rad: (-0.05, 0.05),
+            max_dynamic_pressure_pa: None,
         }],
         structure: None,
     }

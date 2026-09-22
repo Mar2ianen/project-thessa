@@ -135,7 +135,7 @@ pub struct StructuralLayout {
 
 impl StructuralLayout {
     /// Light metal baseline for a given sizing load: 2 mm 7075 skin,
-    /// 3 mm spar webs at 60 percent depth, 0.5 m rib pitch with 1.5 mm
+    /// 3 mm spar webs at 60 percent depth, 0.5 m rib pitch with 1.0 mm
     /// ribs, 15-65 percent fuel box, 3 percent sump.
     pub fn metal_baseline(design_limit_lift_n: f64) -> Self {
         Self {
@@ -145,7 +145,7 @@ impl StructuralLayout {
             spar_depth_fraction: 0.6,
             spar_web_gauge_mm: 3.0,
             rib_spacing_m: 0.5,
-            rib_gauge_mm: 1.5,
+            rib_gauge_mm: 1.0,
             design_limit_lift_n,
             fuel_box_chord: (0.15, 0.65),
             fuel_sump_fraction: 0.03,

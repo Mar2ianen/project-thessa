@@ -132,27 +132,6 @@ impl Planform {
         self.trailing_edge(s) - self.leading_edge(s)
     }
 
-    /// Leading-edge slope `dx_le/ds` of the planform segment containing `s`.
-    /// Exact on the piecewise-linear spline; no finite differences.
-    pub(crate) fn leading_slope(&self, s: f64) -> f64 {
-        let stations = &self.stations;
-        let s = s.clamp(0.0, 1.0);
-        for pair in stations.windows(2) {
-            let (a, b) = (&pair[0], &pair[1]);
-            // At an interior vertex this deterministically takes the left
-            // segment's slope; zones never evaluate exactly on vertices
-            // except in split metrics, where either side is consistent.
-            if s <= b.s {
-                let span = b.s - a.s;
-                if span <= 0.0 {
-                    return 0.0;
-                }
-                return (b.x_le - a.x_le) / span;
-            }
-        }
-        0.0
-    }
-
     fn interpolate(&self, s: f64, pick: impl Fn(&SpanStation) -> f64) -> f64 {
         let s = s.clamp(0.0, 1.0);
         let stations = &self.stations;

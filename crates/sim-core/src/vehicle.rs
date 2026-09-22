@@ -21,6 +21,27 @@ pub struct ControlSurfaceDefinition {
     pub panel_indices: Vec<usize>,
     pub minimum_deflection_rad: f64,
     pub maximum_deflection_rad: f64,
+    /// Hinge motion vs whole-surface rotation. The force solver treats
+    /// both identically today (per-panel deflections); the mechanism
+    /// mixer consumes the marker to rotate all-moving surfaces rigidly.
+    #[serde(default)]
+    pub kind: ControlKind,
+    /// Nested-tab parent: index into the vehicle's control-surface list
+    /// whose deflection this region rides. `None` for top-level regions.
+    #[serde(default)]
+    pub parent_index: Option<usize>,
+}
+
+/// Hinge motion (panels deflect about the hinge line) vs whole-surface
+/// rotation (stabilator: the runtime rotates every addressed panel
+/// rigidly instead).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ControlKind {
+    /// Panels deflect about their hinge lines.
+    #[default]
+    Hinge,
+    /// The whole addressed surface rotates rigidly.
+    AllMoving,
 }
 
 impl ControlSurfaceDefinition {
@@ -35,9 +56,24 @@ impl ControlSurfaceDefinition {
             panel_indices,
             minimum_deflection_rad,
             maximum_deflection_rad,
+            kind: ControlKind::Hinge,
+            parent_index: None,
         };
         definition.validate(usize::MAX)?;
         Ok(definition)
+    }
+
+    /// Mark an all-moving surface (stabilator): the runtime rotates the
+    /// addressed panels rigidly instead of deflecting them.
+    pub fn with_kind(mut self, kind: ControlKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// Attach a nested-tab parent (index into the vehicle control list).
+    pub fn with_parent(mut self, parent_index: usize) -> Self {
+        self.parent_index = Some(parent_index);
+        self
     }
 
     fn validate(&self, panel_count: usize) -> Result<(), VehicleError> {
@@ -123,6 +159,67 @@ pub struct VehicleDefinition {
     /// needs a flight condition at query time).
     #[serde(default)]
     pub jets: Vec<JetMount>,
+    /// Fold joints compiled from procedural surfaces (hinge placement in
+    /// the compiled mechanism state). The force solver ignores them; the
+    /// mechanism mixer transforms `fold_index`-tagged panels about these
+    /// hinges. Empty keeps every legacy asset valid.
+    #[serde(default)]
+    pub fold_joints: Vec<FoldJointRecord>,
+}
+
+/// One compiled fold joint: hinge placement plus compiled angle, in
+/// vehicle body metres. Panels tagged with this joint's index rotate
+/// rigidly about the hinge axis; untagged panels stay put.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FoldJointRecord {
+    /// Joint name (`surface.joint` qualified by the baker across surfaces).
+    pub name: String,
+    /// Hinge point in body metres for the compiled mechanism state.
+    pub hinge_body_m: DVec3,
+    /// Unit hinge axis in body coordinates.
+    pub axis_body: DVec3,
+    /// Compiled angle in radians.
+    pub angle_rad: f64,
+    /// As-drawn flight (deployed) angle in radians: the runtime rotates
+    /// tagged panels by `angle_rad - deployed_angle_rad`, so a vehicle
+    /// baked deployed starts at the identity transform.
+    pub deployed_angle_rad: f64,
+}
+
+impl FoldJointRecord {
+    /// Check finiteness, unit axis, and a named joint.
+    pub fn validate(&self) -> Result<(), VehicleError> {
+        if self.name.trim().is_empty() {
+            return Err(VehicleError::InvalidControlSurface(
+                "fold joint needs a non-empty name".into(),
+            ));
+        }
+        if !self.hinge_body_m.is_finite() || !self.axis_body.is_finite() {
+            return Err(VehicleError::InvalidControlSurface(format!(
+                "fold joint '{}' has non-finite hinge data",
+                self.name
+            )));
+        }
+        if (self.axis_body.length() - 1.0).abs() > 1e-9 {
+            return Err(VehicleError::InvalidControlSurface(format!(
+                "fold joint '{}' axis must be unit length",
+                self.name
+            )));
+        }
+        if !self.angle_rad.is_finite() {
+            return Err(VehicleError::InvalidControlSurface(format!(
+                "fold joint '{}' angle must be finite",
+                self.name
+            )));
+        }
+        if !self.deployed_angle_rad.is_finite() {
+            return Err(VehicleError::InvalidControlSurface(format!(
+                "fold joint '{}' deployed angle must be finite",
+                self.name
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Physical starter data for the first powered flight profile.
@@ -324,6 +421,7 @@ impl VehicleDefinition {
             tanks: Vec::new(),
             systems: Vec::new(),
             jets: Vec::new(),
+            fold_joints: Vec::new(),
         };
         definition.validate()?;
         Ok(definition)
@@ -373,7 +471,7 @@ impl VehicleDefinition {
         }
 
         let mut claimed_panels = std::collections::HashSet::new();
-        for surface in &self.control_surfaces {
+        for (surface_index, surface) in self.control_surfaces.iter().enumerate() {
             surface.validate(self.aero_geometry.panels.len())?;
             for panel_index in &surface.panel_indices {
                 if !claimed_panels.insert(*panel_index) {
@@ -381,6 +479,30 @@ impl VehicleDefinition {
                         "panel {panel_index} is assigned to more than one control surface"
                     )));
                 }
+            }
+            // Nested-tab parents must exist, differ, and form no cycles.
+            let mut chain = surface.parent_index;
+            let mut seen = std::collections::HashSet::from([surface_index]);
+            while let Some(parent) = chain {
+                if parent >= self.control_surfaces.len() || !seen.insert(parent) {
+                    return Err(VehicleError::InvalidControlSurface(format!(
+                        "control surface '{}' has an invalid parent chain",
+                        surface.name
+                    )));
+                }
+                chain = self.control_surfaces[parent].parent_index;
+            }
+        }
+        for joint in &self.fold_joints {
+            joint.validate()?;
+        }
+        for (panel_index, panel) in self.aero_geometry.panels.iter().enumerate() {
+            if let Some(joint) = panel.fold_index
+                && joint >= self.fold_joints.len()
+            {
+                return Err(VehicleError::InvalidControlSurface(format!(
+                    "panel {panel_index} references missing fold joint {joint}"
+                )));
             }
         }
         Ok(())
@@ -495,6 +617,17 @@ impl VehicleDefinition {
             mount.validate().map_err(VehicleError::Propulsion)?;
         }
         self.jets = jets;
+        Ok(self)
+    }
+
+    /// Attach compiled fold joints (baker path; validates records and
+    /// panel/joint references through full validation).
+    pub fn with_fold_joints(
+        mut self,
+        fold_joints: Vec<FoldJointRecord>,
+    ) -> Result<Self, VehicleError> {
+        self.fold_joints = fold_joints;
+        self.validate()?;
         Ok(self)
     }
 

@@ -11,7 +11,9 @@
 //! wide. A failure must read as either a compiler regression or a changed
 //! documented assumption, never a silently renormalized fit.
 
-use crate::{BendCurve, FoldJoint, Planform, ProceduralSurface, SectionData, SurfaceError};
+use crate::{
+    BendCurve, FoldJoint, Planform, ProceduralSurface, SectionData, SurfaceError, SurfaceTopology,
+};
 
 /// Public Boeing 777-9 reference values (manufacturer dimensions).
 pub mod boeing_777x {
@@ -98,6 +100,7 @@ pub fn boeing_777x_half_wing() -> Result<ProceduralSurface, SurfaceError> {
         origin_body_m: glam::DVec3::ZERO,
         mount_roll_rad: 0.0,
         mirror_y: false,
+        topology: SurfaceTopology::SymmetricHalf,
         planform: Planform::tapered(root_chord_m, tip_chord_m, tip_le_offset_m)?,
         bend: BendCurve::dihedral(span_m, dihedral_rad)?,
         sections: SectionData::uniform(0.0, 0.10)?,
@@ -153,6 +156,7 @@ pub fn shuttle_orbiter_wing() -> Result<ProceduralSurface, SurfaceError> {
         origin_body_m: glam::DVec3::ZERO,
         mount_roll_rad: 0.0,
         mirror_y: false,
+        topology: SurfaceTopology::SymmetricHalf,
         planform: Planform::from_stations(vec![
             SpanStation {
                 s: 0.0,
@@ -208,6 +212,7 @@ pub fn concorde_wing() -> Result<ProceduralSurface, SurfaceError> {
         origin_body_m: glam::DVec3::ZERO,
         mount_roll_rad: 0.0,
         mirror_y: false,
+        topology: SurfaceTopology::SymmetricHalf,
         planform: Planform::from_stations(vec![
             SpanStation {
                 s: 0.00,
@@ -283,6 +288,7 @@ pub fn dream_chaser_wing() -> Result<ProceduralSurface, SurfaceError> {
         origin_body_m: glam::DVec3::ZERO,
         mount_roll_rad: 0.0,
         mirror_y: false,
+        topology: SurfaceTopology::SymmetricHalf,
         planform: Planform::tapered(2.4, 1.0, 1.2)?,
         bend: BendCurve::flat(),
         sections: SectionData::uniform(0.0, 0.08)?,
@@ -319,6 +325,7 @@ pub fn pathfinder_wing() -> Result<ProceduralSurface, SurfaceError> {
         origin_body_m: glam::DVec3::ZERO,
         mount_roll_rad: 0.0,
         mirror_y: false,
+        topology: SurfaceTopology::SymmetricHalf,
         planform: Planform::tapered(2.0, 0.9, 0.8)?,
         bend: BendCurve::polyline(vec![
             BendStation { s: 0.0, z_m: 0.0 },

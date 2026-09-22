@@ -8,6 +8,7 @@
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
+use crate::compile::projected_planform_area;
 use crate::{CompiledSurface, ControlRegionKind, ProceduralSurface};
 
 /// One control region's compiled footprint: panel ownership, area, and
@@ -89,15 +90,17 @@ impl CompiledSurfaceSummary {
         estimated_error_m2: f64,
     ) -> Self {
         let mut material = 0.0;
-        let mut projected = 0.0;
         let mut uncontrolled = 0;
         for (panel, tag) in compiled.panels.iter().zip(compiled.tags.iter()) {
             material += panel.area_m2;
-            projected += panel.area_m2 * panel.lift_axis_body.z.abs();
             if tag.control.is_none() {
                 uncontrolled += 1;
             }
         }
+        // Projection is planform-plus-bend geometry, independent of
+        // panelization and of section incidence (corners never tilt with
+        // incidence, so neither may the projected area).
+        let projected = projected_planform_area(surface);
         let mut control_areas = Vec::with_capacity(surface.controls.len());
         for (index, region) in surface.controls.iter().enumerate() {
             let (mut count, mut area) = (0, 0.0);
@@ -178,6 +181,18 @@ impl CompiledSurfaceSummary {
     pub(crate) fn translate(&mut self, origin: DVec3) {
         self.bbox_min_m += origin;
         self.bbox_max_m += origin;
+    }
+
+    /// Reflect the record across the body `y/z` plane (local aft to body
+    /// forward map): bounding-box x swaps and fold angles negate with
+    /// the hinge axes.
+    pub(crate) fn reflect_x(&mut self) {
+        let (neg_max, neg_min) = (-self.bbox_max_m.x, -self.bbox_min_m.x);
+        self.bbox_min_m.x = neg_max;
+        self.bbox_max_m.x = neg_min;
+        for state in &mut self.fold_states {
+            state.2 = -state.2;
+        }
     }
 
     /// Rotate the bounding box by the mount roll: exact re-AABB over the

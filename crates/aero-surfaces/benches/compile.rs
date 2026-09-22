@@ -5,7 +5,7 @@ use std::{hint::black_box, time::Instant};
 use glam::DVec3;
 use thessa_aero_surfaces::{
     BendCurve, CompileOptions, FoldJoint, MechanismState, Planform, ProceduralSurface, SectionData,
-    aileron, compile_surface,
+    SurfaceTopology, aileron, compile_surface,
 };
 
 /// Representative airliner-like wing: tapered swept planform, dihedral,
@@ -17,6 +17,7 @@ fn representative_surface() -> ProceduralSurface {
         origin_body_m: DVec3::ZERO,
         mount_roll_rad: 0.0,
         mirror_y: false,
+        topology: SurfaceTopology::Single,
         planform: Planform::tapered(3.0, 1.0, 2.5).unwrap(),
         bend: BendCurve::dihedral(12.0, 5.0_f64.to_radians()).unwrap(),
         sections: SectionData::from_stations(vec![

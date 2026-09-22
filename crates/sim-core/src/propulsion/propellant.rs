@@ -20,6 +20,12 @@ pub enum Propellant {
     LoxHydrogen,
     /// NTO/MMH storable hypergolic, reference ratio ~1.65.
     NtoMmh,
+    /// Monopropellant hydrazine (catalytic decomposition, no ignition).
+    MonopropHydrazine,
+    /// Cold-gas nitrogen (unheated expansion from storage).
+    ColdGasNitrogen,
+    /// Cold-gas helium (unheated expansion from storage).
+    ColdGasHelium,
     /// Ammonium-perchlorate composite solid propellant.
     SolidApcp,
 }
@@ -79,6 +85,30 @@ impl Propellant {
                 characteristic_length_m: 0.9,
                 reference_c_star_mps: 1700.0,
             },
+            Self::MonopropHydrazine => PropellantThermo {
+                gamma: 1.25,
+                chamber_temp_k: 1320.0,
+                gas_constant_j_kg_k: 483.0,
+                bulk_density_kg_m3: 1008.0,
+                characteristic_length_m: 0.5,
+                reference_c_star_mps: 1210.0,
+            },
+            Self::ColdGasNitrogen => PropellantThermo {
+                gamma: 1.40,
+                chamber_temp_k: 300.0,
+                gas_constant_j_kg_k: 297.0,
+                bulk_density_kg_m3: 0.0,
+                characteristic_length_m: 0.0,
+                reference_c_star_mps: 436.0,
+            },
+            Self::ColdGasHelium => PropellantThermo {
+                gamma: 1.66,
+                chamber_temp_k: 300.0,
+                gas_constant_j_kg_k: 2077.0,
+                bulk_density_kg_m3: 0.0,
+                characteristic_length_m: 0.0,
+                reference_c_star_mps: 1088.0,
+            },
             Self::SolidApcp => PropellantThermo {
                 gamma: 1.20,
                 chamber_temp_k: 3400.0,
@@ -102,7 +132,10 @@ impl Propellant {
             Self::LoxMethane => Some(3.5),
             Self::LoxHydrogen => Some(6.0),
             Self::NtoMmh => Some(1.65),
-            Self::SolidApcp => None,
+            Self::MonopropHydrazine
+            | Self::ColdGasNitrogen
+            | Self::ColdGasHelium
+            | Self::SolidApcp => None,
         }
     }
 
@@ -132,7 +165,10 @@ impl Propellant {
                 (1.65, 3400.0, 1.25, 380.0),
                 (2.00, 3450.0, 1.24, 365.0),
             ]),
-            Self::SolidApcp => None,
+            Self::MonopropHydrazine
+            | Self::ColdGasNitrogen
+            | Self::ColdGasHelium
+            | Self::SolidApcp => None,
         }
     }
 
@@ -147,7 +183,7 @@ impl Propellant {
         let Some(table) = self.mixture_table() else {
             if mixture_ratio.is_some() {
                 return Err(PropulsionError::InvalidSpec(
-                    "solid grain chemistry is fixed; no mixture knob".into(),
+                    "this propellant has fixed chemistry; no mixture knob".into(),
                 ));
             }
             return Ok(reference);
@@ -200,6 +236,9 @@ mod tests {
             Propellant::LoxMethane,
             Propellant::LoxHydrogen,
             Propellant::NtoMmh,
+            Propellant::MonopropHydrazine,
+            Propellant::ColdGasNitrogen,
+            Propellant::ColdGasHelium,
             Propellant::SolidApcp,
         ] {
             let thermo = propellant.thermo();

@@ -100,35 +100,53 @@ impl EngineMount {
         self.validate()?;
         let thrust_n =
             DVec3::from_array(self.thrust_vector_body_n(throttle, ambient_pa, burn_time_s)?);
-        let axis = DVec3::from_array(self.thrust_axis_body);
-        let reference = if axis.x.abs() < 0.9 {
-            DVec3::X
-        } else {
-            DVec3::Y
-        };
-        let gimbal_a = axis.cross(reference).normalize();
-        let gimbal_b = axis.cross(gimbal_a).normalize();
-        let position = DVec3::from_array(self.position_body_m);
-        let mut effectors = Vec::with_capacity(2);
-        for gimbal_axis in [gimbal_a, gimbal_b] {
-            // dF/ddelta = gimbal_axis x F; moment = r x dF/ddelta.
-            let force_per_rad = gimbal_axis.cross(thrust_n);
-            let moment_per_rad = position.cross(force_per_rad);
-            effectors.push(GimbalEffector {
-                gimbal_axis: gimbal_axis.to_array(),
-                force_per_command_n: (force_per_rad * self.gimbal_range_rad()).to_array(),
-                moment_per_command_nm: (moment_per_rad * self.gimbal_range_rad()).to_array(),
-            });
-        }
-        Ok([effectors[0], effectors[1]])
+        Ok(gimbal_pair(
+            self.position_body_m,
+            self.thrust_axis_body,
+            thrust_n.to_array(),
+            self.gimbal_range_rad(),
+        ))
     }
+}
+
+/// Shared gimbal-pair math: two effectors about the body axes perpendicular
+/// to the thrust axis. A normalized command spans `range_rad` about each
+/// gimbal axis; moments are about the body origin.
+pub(crate) fn gimbal_pair(
+    position_body_m: [f64; 3],
+    thrust_axis_body: [f64; 3],
+    thrust_vector_body_n: [f64; 3],
+    range_rad: f64,
+) -> [GimbalEffector; 2] {
+    use glam::DVec3;
+    let thrust_n = DVec3::from_array(thrust_vector_body_n);
+    let axis = DVec3::from_array(thrust_axis_body);
+    let reference = if axis.x.abs() < 0.9 {
+        DVec3::X
+    } else {
+        DVec3::Y
+    };
+    let gimbal_a = axis.cross(reference).normalize();
+    let gimbal_b = axis.cross(gimbal_a).normalize();
+    let position = DVec3::from_array(position_body_m);
+    let mut effectors = Vec::with_capacity(2);
+    for gimbal_axis in [gimbal_a, gimbal_b] {
+        // dF/ddelta = gimbal_axis x F; moment = r x dF/ddelta.
+        let force_per_rad = gimbal_axis.cross(thrust_n);
+        let moment_per_rad = position.cross(force_per_rad);
+        effectors.push(GimbalEffector {
+            gimbal_axis: gimbal_axis.to_array(),
+            force_per_command_n: (force_per_rad * range_rad).to_array(),
+            moment_per_command_nm: (moment_per_rad * range_rad).to_array(),
+        });
+    }
+    [effectors[0], effectors[1]]
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::liquid::merlin_like;
     use super::*;
-
     #[test]
     fn gimbal_authority_matches_lever_arm() {
         // +X thrust at x = -3 m with 1 MN: gimbaling must produce ~3 MN·m
@@ -164,5 +182,45 @@ mod tests {
                 "moment must equal thrust times lever arm"
             );
         }
+    }
+
+    #[test]
+    fn vehicle_wrench_sums_mount_moments() {
+        // Offset engine firing alone: force along +X, moment r x F about
+        // the origin; arity mismatch refuses.
+        use crate::{AeroGeometry, AeroPanel, RigidBodyProperties, VehicleDefinition};
+        use glam::{DMat3, DVec3};
+        let panel = AeroPanel::new(DVec3::new(0.2, -1.4, 0.0), DVec3::X, DVec3::Z, 9.29, 3.10)
+            .expect("panel");
+        let geometry = AeroGeometry::new(vec![panel]).expect("geometry");
+        let properties = RigidBodyProperties::new(1000.0, DMat3::IDENTITY * 5000.0).expect("mass");
+        let vehicle = VehicleDefinition::new("wrench probe", geometry, properties, vec![])
+            .expect("vehicle")
+            .with_engines(vec![
+                EngineMount {
+                    name: "main".into(),
+                    engine: super::super::CompiledEngine::Liquid(
+                        merlin_like().compile().expect("compile"),
+                    ),
+                    position_body_m: [-3.0, 0.0, 0.0],
+                    thrust_axis_body: [1.0, 0.0, 0.0],
+                },
+                EngineMount {
+                    name: "offset".into(),
+                    engine: super::super::CompiledEngine::Liquid(
+                        merlin_like().compile().expect("compile"),
+                    ),
+                    position_body_m: [-3.0, 0.0, 1.0],
+                    thrust_axis_body: [1.0, 0.0, 0.0],
+                },
+            ])
+            .expect("mounts");
+        let full = merlin_like().compile().expect("compile").thrust_vac_n;
+        let (force, moment) = vehicle
+            .wrench_body_n(&[(0.0, 0.0), (1.0, 0.0)], 0.0)
+            .expect("wrench");
+        assert!((force - DVec3::new(full, 0.0, 0.0)).length() / full < 1e-12);
+        assert!((moment - DVec3::new(0.0, full, 0.0)).length() / full < 1e-12);
+        assert!(vehicle.wrench_body_n(&[(1.0, 0.0)], 0.0).is_err());
     }
 }

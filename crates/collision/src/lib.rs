@@ -24,9 +24,9 @@ use rapier3d_f64::dynamics::MassProperties;
 use rapier3d_f64::math::{Matrix, Pose, Rotation, Vector};
 use rapier3d_f64::prelude::{
     BroadPhaseBvh, CCDSolver, ColliderBuilder, ColliderHandle, ColliderSet, FixedJointBuilder,
-    ImpulseJointHandle, ImpulseJointSet, IntegrationParameters, IslandManager, MultibodyJointSet,
-    NarrowPhase, PhysicsPipeline, RevoluteJointBuilder, RigidBodyBuilder, RigidBodyHandle,
-    RigidBodySet,
+    GenericJointBuilder, ImpulseJointHandle, ImpulseJointSet, IntegrationParameters, IslandManager,
+    JointAxesMask, MultibodyJointSet, NarrowPhase, PhysicsPipeline, RigidBodyBuilder,
+    RigidBodyHandle, RigidBodySet,
 };
 use thessa_sim_core::{
     CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionShape, FlightForces,
@@ -984,18 +984,19 @@ impl CollisionWorld {
 
     /// Attach a hinge for a moving mechanism such as a D1 soft-capture petal.
     ///
-    /// The axis is expressed in both body-local frames and must therefore be
-    /// aligned in the asset's rest pose. The joint locks the two local anchor
-    /// points together while leaving rotation about that axis free. Contacts
-    /// between the mechanism bodies are disabled so explicit hinge kinematics
-    /// remain the sole owner of the mechanism constraint.
+    /// The two axes are expressed in their respective body-local frames. The
+    /// joint locks the two local anchor points together while leaving rotation
+    /// about the mapped hinge axis free. Contacts between the mechanism bodies
+    /// are disabled so explicit hinge kinematics remain the sole owner of the
+    /// mechanism constraint.
     pub fn attach_revolute_joint(
         &mut self,
         a: CollisionBodyId,
         b: CollisionBodyId,
         anchor_a_local_m: DVec3,
         anchor_b_local_m: DVec3,
-        axis_local_m: DVec3,
+        axis_a_local_m: DVec3,
+        axis_b_local_m: DVec3,
     ) -> Result<JointId, CollisionBackendError> {
         if a == b {
             return Err(CollisionBackendError::InvalidGeometry(
@@ -1004,9 +1005,13 @@ impl CollisionWorld {
         }
         validate_local_vector(anchor_a_local_m, "revolute anchor on body A")?;
         validate_local_vector(anchor_b_local_m, "revolute anchor on body B")?;
-        if !axis_local_m.is_finite() || axis_local_m.length_squared() <= QUATERNION_TOLERANCE {
+        if !axis_a_local_m.is_finite()
+            || axis_a_local_m.length_squared() <= QUATERNION_TOLERANCE
+            || !axis_b_local_m.is_finite()
+            || axis_b_local_m.length_squared() <= QUATERNION_TOLERANCE
+        {
             return Err(CollisionBackendError::InvalidGeometry(
-                "revolute axis must be finite and non-zero".into(),
+                "revolute axes must be finite and non-zero".into(),
             ));
         }
         let handle_a = self
@@ -1019,7 +1024,9 @@ impl CollisionWorld {
             .get(&b)
             .ok_or(CollisionBackendError::UnknownBody(b))?
             .rapier;
-        let joint = RevoluteJointBuilder::new(to_rapier_vector(axis_local_m.normalize()))
+        let joint = GenericJointBuilder::new(JointAxesMask::LOCKED_REVOLUTE_AXES)
+            .local_axis1(to_rapier_vector(axis_a_local_m.normalize()))
+            .local_axis2(to_rapier_vector(axis_b_local_m.normalize()))
             .local_anchor1(to_rapier_vector(anchor_a_local_m))
             .local_anchor2(to_rapier_vector(anchor_b_local_m))
             .contacts_enabled(false)
@@ -2028,7 +2035,7 @@ mod joint_and_replay_tests {
         (world, a, b)
     }
 
-    fn d1_craft_geometry() -> CollisionGeometry {
+    fn d1_craft_geometry(port_x_m: f64) -> CollisionGeometry {
         let material = CollisionMaterial {
             friction: 0.45,
             restitution: 0.0,
@@ -2048,10 +2055,14 @@ mod joint_and_replay_tests {
             let angle = f64::from(index) * std::f64::consts::TAU / 8.0;
             parts.push(
                 CollisionPart::new(
-                    DVec3::new(0.45, 0.55 * angle.cos(), 0.55 * angle.sin()),
+                    DVec3::new(
+                        port_x_m - port_x_m.signum() * 0.01,
+                        0.55 * angle.cos(),
+                        0.55 * angle.sin(),
+                    ),
                     DQuat::from_rotation_x(angle),
                     CollisionShape::Cuboid {
-                        half_extents_m: DVec3::new(0.08, 0.12, 0.12),
+                        half_extents_m: DVec3::new(0.01, 0.12, 0.12),
                     },
                     material,
                 )
@@ -2138,7 +2149,8 @@ mod joint_and_replay_tests {
         let mut world = CollisionWorld::new(frame).unwrap();
         let properties =
             RigidBodyProperties::new(1_200.0, DMat3::from_diagonal(DVec3::splat(900.0))).unwrap();
-        let geometry = d1_craft_geometry();
+        let geometry_a = d1_craft_geometry(0.8);
+        let geometry_b = d1_craft_geometry(-0.8);
         let state_a = RigidBodyState::new(
             DVec3::new(-0.805, 0.0, 0.0),
             DVec3::new(0.01, 0.0, 0.0),
@@ -2154,10 +2166,20 @@ mod joint_and_replay_tests {
         )
         .unwrap();
         let a = world
-            .insert_dynamic_body(state_a, properties, &geometry, DynamicBodyConfig::default())
+            .insert_dynamic_body(
+                state_a,
+                properties,
+                &geometry_a,
+                DynamicBodyConfig::default(),
+            )
             .unwrap();
         let b = world
-            .insert_dynamic_body(state_b, properties, &geometry, DynamicBodyConfig::default())
+            .insert_dynamic_body(
+                state_b,
+                properties,
+                &geometry_b,
+                DynamicBodyConfig::default(),
+            )
             .unwrap();
 
         let port_a =
@@ -2176,18 +2198,8 @@ mod joint_and_replay_tests {
             .unwrap();
         let solved_a = world.body_state(a).unwrap();
         let solved_b = world.body_state(b).unwrap();
-        let relative_position = port_frame_world(solved_b, port_b.local_position_m)
-            - port_frame_world(solved_a, port_a.local_position_m);
         docking
-            .align(
-                DockingKinematics::new(
-                    relative_position,
-                    solved_a.orientation_body_to_inertial.inverse()
-                        * solved_b.orientation_body_to_inertial,
-                    solved_b.velocity_inertial_mps - solved_a.velocity_inertial_mps,
-                )
-                .unwrap(),
-            )
+            .align(DockingKinematics::between(solved_a, &port_a, solved_b, &port_b).unwrap())
             .unwrap();
         assert_eq!(docking.state, DockingPortState::Aligned);
 
@@ -2237,7 +2249,7 @@ mod joint_and_replay_tests {
     fn revolute_joint_keeps_d1_mechanism_anchor_and_allows_hinge_rotation() {
         let (mut world, a, b) = two_spheres();
         let joint = world
-            .attach_revolute_joint(a, b, DVec3::X, DVec3::NEG_X, DVec3::Z)
+            .attach_revolute_joint(a, b, DVec3::X, DVec3::NEG_X, DVec3::Z, DVec3::Z)
             .unwrap();
         let torque = ExternalWrench {
             force_inertial_n: DVec3::ZERO,

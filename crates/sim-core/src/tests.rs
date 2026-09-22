@@ -2206,6 +2206,32 @@ fn vehicle_definition_supports_arbitrary_surfaces_and_control_channels() {
 }
 
 #[test]
+fn one_sided_spoiler_parks_negative_commands_at_zero() {
+    let panel = AeroPanel::flat_plate(DVec3::ZERO, 5.0, 2.0).expect("valid panel");
+    let geometry = AeroGeometry::new(vec![panel]).expect("valid geometry");
+    let properties =
+        RigidBodyProperties::new(1_000.0, glam::DMat3::from_diagonal(DVec3::splat(100.0)))
+            .expect("valid properties");
+    let spoiler = ControlSurfaceDefinition::new("spoiler", vec![0], 0.0, 60.0_f64.to_radians())
+        .expect("one-sided spoiler validates");
+    let mut vehicle = VehicleDefinition::new("spoiler-test", geometry, properties, vec![spoiler])
+        .expect("valid vehicle definition");
+    vehicle.apply_control_inputs(&[1.0]).expect("full deploy");
+    assert!(
+        (vehicle.aero_geometry.panels[0].control_deflection_rad - 60.0_f64.to_radians()).abs()
+            < 1.0e-12
+    );
+    vehicle
+        .apply_control_inputs(&[-1.0])
+        .expect("retract command");
+    assert!(vehicle.aero_geometry.panels[0].control_deflection_rad.abs() < 1.0e-12);
+    assert!(
+        ControlSurfaceDefinition::new("bad", vec![0], 0.1, 0.5).is_err(),
+        "strictly positive minima stay rejected"
+    );
+}
+
+#[test]
 fn aero_zero_flow_has_no_force_or_moment() {
     let case = aero_test_case(0.0, 0.0);
     let model = PanelAeroModel::new(AeroConfig::default()).expect("valid aero model");
@@ -5925,4 +5951,107 @@ mod harmonics_effect_tests {
             "divergence stays bounded on 3 orbits, got {divergence:.1} m"
         );
     }
+}
+
+#[test]
+fn mechanism_metadata_validates_without_touching_forces() {
+    use glam::DVec3;
+
+    // All-moving marker plus nested parent ride definitions; the force
+    // path ignores them (proved by the unchanged force tests), the
+    // mixer will consume them.
+    let parent =
+        ControlSurfaceDefinition::new("elevator", vec![0], -0.4, 0.4).expect("valid parent");
+    let tab = ControlSurfaceDefinition::new("tab", vec![1], -0.2, 0.2)
+        .expect("valid tab")
+        .with_parent(0);
+    assert_eq!(tab.parent_index, Some(0));
+    let stab = ControlSurfaceDefinition::new("stab", vec![2], -0.3, 0.3)
+        .expect("valid stab")
+        .with_kind(ControlKind::AllMoving);
+    assert_eq!(stab.kind, ControlKind::AllMoving);
+    assert_eq!(
+        ControlSurfaceDefinition::new("plain", vec![0], -0.4, 0.4)
+            .expect("valid")
+            .kind,
+        ControlKind::Hinge
+    );
+    let left = AeroPanel::flat_plate(DVec3::ZERO, 2.0, 1.0).expect("panel");
+    assert_eq!(left.fold_index, None);
+    let geometry = AeroGeometry::new(vec![
+        left,
+        AeroPanel::flat_plate(DVec3::new(0.0, 1.0, 0.0), 2.0, 1.0).expect("panel"),
+        AeroPanel::flat_plate(DVec3::new(0.0, 2.0, 0.0), 2.0, 1.0).expect("panel"),
+    ])
+    .expect("geometry");
+    let properties =
+        RigidBodyProperties::new(1_000.0, glam::DMat3::from_diagonal(DVec3::splat(100.0)))
+            .expect("properties");
+    // Cyclic parents rejected.
+    let cyclic_a = ControlSurfaceDefinition::new("a", vec![0], -0.4, 0.4)
+        .expect("valid")
+        .with_parent(1);
+    let cyclic_b = ControlSurfaceDefinition::new("b", vec![1], -0.4, 0.4)
+        .expect("valid")
+        .with_parent(0);
+    assert!(
+        VehicleDefinition::new("cyclic", geometry, properties, vec![cyclic_a, cyclic_b]).is_err()
+    );
+    // Dangling fold reference rejected.
+    let mut bad_panel = left;
+    bad_panel.fold_index = Some(3);
+    let bad_geometry = AeroGeometry::new(vec![bad_panel]).expect("geometry with tagged panel");
+    assert!(
+        VehicleDefinition::new(
+            "dangling",
+            bad_geometry,
+            properties,
+            vec![parent.clone(), tab.clone(), stab.clone()],
+        )
+        .is_err()
+    );
+    // Well-formed mechanism vehicle validates, joints included: joints
+    // attach first (untagged panels), then the tag validates against them.
+    let good_geometry = AeroGeometry::new(vec![
+        AeroPanel::flat_plate(DVec3::ZERO, 2.0, 1.0).expect("panel"),
+        AeroPanel::flat_plate(DVec3::new(0.0, 1.0, 0.0), 2.0, 1.0).expect("panel"),
+        AeroPanel::flat_plate(DVec3::new(0.0, 2.0, 0.0), 2.0, 1.0).expect("panel"),
+    ])
+    .expect("geometry");
+    let mut vehicle = VehicleDefinition::new(
+        "mechanism",
+        good_geometry,
+        properties,
+        vec![parent, tab, stab],
+    )
+    .expect("mechanism vehicle validates")
+    .with_fold_joints(vec![FoldJointRecord {
+        name: "wing.tip-fold".into(),
+        hinge_body_m: DVec3::new(1.0, 2.0, 0.0),
+        axis_body: DVec3::X,
+        angle_rad: 0.5,
+        deployed_angle_rad: 0.0,
+        deployment_rate_rad_s: 0.1,
+        lock_window_rad: (-0.05, 0.05),
+        max_dynamic_pressure_pa: None,
+    }])
+    .expect("joints attach");
+    assert_eq!(vehicle.fold_joints.len(), 1);
+    vehicle.aero_geometry.panels[0].fold_index = Some(0);
+    vehicle.validate().expect("tag resolves against joints");
+    assert!(
+        FoldJointRecord {
+            name: "bad".into(),
+            hinge_body_m: DVec3::ZERO,
+            axis_body: DVec3::new(1.0, 1.0, 0.0),
+            angle_rad: 0.0,
+            deployed_angle_rad: 0.0,
+            deployment_rate_rad_s: 0.1,
+            lock_window_rad: (-0.05, 0.05),
+            max_dynamic_pressure_pa: None,
+        }
+        .validate()
+        .is_err(),
+        "non-unit axis rejected"
+    );
 }

@@ -5577,6 +5577,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "thessa-aero-surfaces"
+version = "0.0.1"
+dependencies = [
+ "glam 0.32.1",
+ "postcard",
+ "serde",
+ "thessa-sim-core",
+]
+
+[[package]]
 name = "thessa-atmosphere"
 version = "0.0.1"
 dependencies = [
@@ -5830,6 +5840,7 @@ dependencies = [
  "glam 0.32.1",
  "serde",
  "serde_json",
+ "thessa-aero-surfaces",
  "thessa-sim-core",
  "toml",
 ]

@@ -8,16 +8,10 @@ import bpy
 from mathutils import Matrix, Vector
 
 
-ROOT = Path('/home/chechulin/Projects/project-thessa')
+ROOT = Path(__file__).resolve().parents[2]
 ASSET = ROOT / 'assets/models/thessa-d1-docking-port'
 OUT = ASSET / 'thessa_d1_docking_port.glb'
 PREVIEW = ASSET / 'thessa_d1_docking_port_preview.png'
-
-PETAL_ANGLES_DEG = (24.0, 36.0, 144.0, 156.0, -96.0, -84.0)
-PETAL_PIVOTS = [
-    (550.0 * math.cos(math.radians(angle)), 550.0 * math.sin(math.radians(angle)), -68.0)
-    for angle in PETAL_ANGLES_DEG
-]
 
 
 def clear_scene():
@@ -86,6 +80,17 @@ def look_at(obj, target):
 
 def main():
     clear_scene()
+    manifest = json.loads((ASSET / 'manifest.json').read_text(encoding='utf-8'))
+    mechanism = manifest['mechanics']['provisional_moving_parts'][0]
+    petal_angles_deg = mechanism['hinge_angles_deg']
+    petal_pivots = [
+        (
+            mechanism['hinge_radius_mm'] * math.cos(math.radians(angle)),
+            mechanism['hinge_radius_mm'] * math.sin(math.radians(angle)),
+            mechanism['hinge_z_mm'],
+        )
+        for angle in petal_angles_deg
+    ]
     material_contract = json.loads((ASSET / 'materials.json').read_text(encoding='utf-8'))['materials']
     structural = material_contract['structural_metal']
     capture = material_contract['capture_hardware']
@@ -110,7 +115,7 @@ def main():
     fixed.parent = root
     fixed.matrix_parent_inverse = Matrix.Identity(4)
 
-    for number, pivot_mm in enumerate(PETAL_PIVOTS, 1):
+    for number, pivot_mm in enumerate(petal_pivots, 1):
         petal = import_mesh(ASSET / f'petal_{number:02d}.obj', f'SoftCapturePetal_{number:02d}', petal_mat)
         pivot = bpy.data.objects.new(f'SoftCapturePetal_{number:02d}_Hinge', None)
         bpy.context.collection.objects.link(pivot)
@@ -118,7 +123,7 @@ def main():
         pivot.parent = root
         pivot.matrix_parent_inverse = Matrix.Identity(4)
         set_origin_parent(petal, pivot, pivot_mm)
-        theta = math.radians(PETAL_ANGLES_DEG[number - 1])
+        theta = math.radians(petal_angles_deg[number - 1])
         animate_petal(pivot, theta)
 
     scene = bpy.context.scene

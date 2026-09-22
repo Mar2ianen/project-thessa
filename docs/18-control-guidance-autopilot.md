@@ -308,6 +308,28 @@ Examples:
 
 The allocator outputs actuator targets. The actuator layer advances the physical actuator state at the world tick.
 
+### 8.1 Jet and ESTOC runtime contract
+
+Jet spool and combined-cycle mode changes are actuator state, not guidance
+policy. The flight loop owns the state and passes it through pure simulation
+calls:
+
+- air-breather throttle follows a first-order spool law with the compiled
+  `spool_tau_s`; ESTOC exposes this air-path lag separately from its mode
+  transition lag;
+- an ESTOC call carries `EstocCommand` (`manual`, `last_mode`, the previous
+  `EstocTransient`, and `dt_s`), and returns both the operating point and the
+  updated transient snapshot;
+- manual ESTOC mode selection has priority over automatic hysteresis,
+  including a manually selected air mode in vacuum, which flames out instead
+  of silently switching modes;
+- transition smoothing covers the full flow/thermodynamic snapshot, with Isp
+  recomputed from the smoothed onboard propellant flow.
+
+The propulsion geometry, mass fits, oxygen accounting, analyzer flags, and
+the `vehicle-baker --oxygen` adapter are specified in
+[`docs/details/04_PROCEDURAL_PROPULSION.md`](details/04_PROCEDURAL_PROPULSION.md).
+
 ## 9. High-level autopilot graph
 
 High-level automation is a typed directed graph inspired by MechJeb/Scratch visually and Unix pipelines semantically.

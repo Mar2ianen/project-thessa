@@ -38,6 +38,7 @@ pub struct DockingDemoState {
 pub(super) struct DockingDemoVisual {
     body: u8,
     local_position_m: Vec3,
+    local_rotation: Quat,
 }
 
 #[derive(Component)]
@@ -71,9 +72,10 @@ pub(super) fn setup(
         DockingSession::new(port_a.clone(), port_b.clone(), 0.5).expect("compatible demo ports");
     session
         .begin_soft_capture(0.04)
-        .expect("demo approach is inside capture speed limit");
+        .expect("demo logical soft-capture gate is inside speed limit");
 
-    let geometry = demo_geometry();
+    let geometry_a = demo_geometry(PORT_A_X_M);
+    let geometry_b = demo_geometry(PORT_B_X_M);
     let properties =
         RigidBodyProperties::new(300.0, glam::DMat3::from_diagonal(glam::DVec3::splat(400.0)))
             .expect("valid demo mass properties");
@@ -96,7 +98,7 @@ pub(super) fn setup(
             )
             .expect("valid demo craft A state"),
             properties,
-            &geometry,
+            &geometry_a,
             demo_config,
         )
         .expect("insert demo craft A");
@@ -110,7 +112,7 @@ pub(super) fn setup(
             )
             .expect("valid demo craft B state"),
             properties,
-            &geometry,
+            &geometry_b,
             demo_config,
         )
         .expect("insert demo craft B");
@@ -143,6 +145,7 @@ pub(super) fn setup(
         body_a_material,
         0,
         Vec3::ZERO,
+        Quat::IDENTITY,
         "Docking demo craft A",
     );
     spawn_visual(
@@ -151,6 +154,7 @@ pub(super) fn setup(
         body_b_material,
         1,
         Vec3::ZERO,
+        Quat::IDENTITY,
         "Docking demo craft B",
     );
     spawn_visual(
@@ -159,6 +163,7 @@ pub(super) fn setup(
         port_material.clone(),
         0,
         Vec3::new(PORT_A_X_M as f32, 0.0, 0.0),
+        Quat::IDENTITY,
         "D1 port A",
     );
     spawn_visual(
@@ -167,12 +172,13 @@ pub(super) fn setup(
         port_material,
         1,
         Vec3::new(PORT_B_X_M as f32, 0.0, 0.0),
+        Quat::IDENTITY,
         "D1 port B",
     );
 
-    // Also load the generated CAD-derived D1 assembly into the real client.
-    // The simple proxy bodies remain visible as the two craft, while these
-    // scenes show the authored docking hardware at each interface.
+    // The source STEP/glTF port normal is +Z. Rotate A's authored port normal
+    // to +X and B's to -X so the two CAD-derived assemblies face each other;
+    // the physics proxy uses the shared mating frame in the craft coordinates.
     let d1_scene =
         asset_server.load("models/thessa-d1-docking-port/thessa_d1_docking_port.glb#Scene0");
     commands.spawn((
@@ -180,6 +186,7 @@ pub(super) fn setup(
         DockingDemoVisual {
             body: 0,
             local_position_m: Vec3::new(PORT_A_X_M as f32, 0.0, 0.0),
+            local_rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
         },
         Name::new("CAD D1 port A"),
         Transform::default(),
@@ -189,6 +196,7 @@ pub(super) fn setup(
         DockingDemoVisual {
             body: 1,
             local_position_m: Vec3::new(PORT_B_X_M as f32, 0.0, 0.0),
+            local_rotation: Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2),
         },
         Name::new("CAD D1 port B"),
         Transform::default(),
@@ -270,37 +278,31 @@ pub(super) fn step(
 
         let state_a = demo.world.body_state(body_a).expect("craft A readback");
         let state_b = demo.world.body_state(body_b).expect("craft B readback");
-        let relative_position = port_world_position(state_b, port_b_position)
-            - port_world_position(state_a, port_a_position);
-        let relative_orientation =
-            state_a.orientation_body_to_inertial.inverse() * state_b.orientation_body_to_inertial;
-        let relative_velocity = state_b.velocity_inertial_mps - state_a.velocity_inertial_mps;
+        let kinematics = DockingKinematics::between(state_a, &demo.port_a, state_b, &demo.port_b)
+            .expect("finite docking demo port-frame kinematics");
+        let relative_position = kinematics.relative_position_m();
 
         if demo.session.state == DockingPortState::SoftCapture
             && relative_position.length() <= 0.025
+            && demo.session.align(kinematics).is_ok()
         {
-            let kinematics =
-                DockingKinematics::new(relative_position, relative_orientation, relative_velocity)
-                    .expect("finite docking demo kinematics");
-            if demo.session.align(kinematics).is_ok() {
-                demo.session.hard_dock().expect("demo hard dock transition");
-                demo.joint = Some(
-                    demo.world
-                        .attach_fixed_joint(
-                            body_a,
-                            body_b,
-                            port_a_position,
-                            port_a_orientation,
-                            port_b_position,
-                            port_b_orientation,
-                        )
-                        .expect("demo Rapier hard dock"),
-                );
-                demo.session
-                    .engage_outer_structure()
-                    .expect("demo outer structure");
-                eprintln!("[docking-demo] aligned -> hard_dock -> outer_structure_engaged");
-            }
+            demo.session.hard_dock().expect("demo hard dock transition");
+            demo.joint = Some(
+                demo.world
+                    .attach_fixed_joint(
+                        body_a,
+                        body_b,
+                        port_a_position,
+                        port_a_orientation,
+                        port_b_position,
+                        port_b_orientation,
+                    )
+                    .expect("demo Rapier hard dock"),
+            );
+            demo.session
+                .engage_outer_structure()
+                .expect("demo outer structure");
+            eprintln!("[docking-demo] aligned -> hard_dock -> outer_structure_engaged");
         }
         if demo.session.state == DockingPortState::OuterStructureEngaged {
             demo.session
@@ -335,12 +337,13 @@ pub(super) fn step(
             world_position.y as f32,
             world_position.z as f32,
         );
-        transform.rotation = Quat::from_xyzw(
+        let body_rotation = Quat::from_xyzw(
             state.orientation_body_to_inertial.x as f32,
             state.orientation_body_to_inertial.y as f32,
             state.orientation_body_to_inertial.z as f32,
             state.orientation_body_to_inertial.w as f32,
         );
+        transform.rotation = body_rotation * visual.local_rotation;
     }
     let port_gap = (port_world_position(state_b, port_b_position)
         - port_world_position(state_a, port_a_position))
@@ -378,6 +381,7 @@ fn spawn_visual(
     material: Handle<StandardMaterial>,
     body: u8,
     local_position_m: Vec3,
+    local_rotation: Quat,
     name: &str,
 ) {
     commands.spawn((
@@ -386,25 +390,45 @@ fn spawn_visual(
         DockingDemoVisual {
             body,
             local_position_m,
+            local_rotation,
         },
         Name::new(name.to_string()),
         Transform::default(),
     ));
 }
 
-fn demo_geometry() -> CollisionGeometry {
-    CollisionGeometry::new(vec![
+fn demo_geometry(port_x_m: f64) -> CollisionGeometry {
+    let material = CollisionMaterial::default();
+    let mut parts = vec![
         CollisionPart::new(
             glam::DVec3::ZERO,
             glam::DQuat::IDENTITY,
             CollisionShape::Cuboid {
                 half_extents_m: glam::DVec3::new(0.55, 0.45, 0.45),
             },
-            CollisionMaterial::default(),
+            material,
         )
         .expect("valid demo collision part"),
-    ])
-    .expect("valid demo geometry")
+    ];
+    for index in 0..8 {
+        let angle = f64::from(index) * std::f64::consts::TAU / 8.0;
+        parts.push(
+            CollisionPart::new(
+                glam::DVec3::new(
+                    port_x_m - port_x_m.signum() * 0.01,
+                    0.55 * angle.cos(),
+                    0.55 * angle.sin(),
+                ),
+                glam::DQuat::from_rotation_x(angle),
+                CollisionShape::Cuboid {
+                    half_extents_m: glam::DVec3::new(0.01, 0.12, 0.12),
+                },
+                material,
+            )
+            .expect("valid demo port proxy"),
+        );
+    }
+    CollisionGeometry::new(parts).expect("valid demo geometry")
 }
 
 fn port_world_position(state: RigidBodyState, local_position_m: glam::DVec3) -> glam::DVec3 {

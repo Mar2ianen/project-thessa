@@ -23,22 +23,39 @@
 //! gimbal authority). Every public name from the former single-file module
 //! re-exports here unchanged.
 
+mod air;
 mod analyze;
 mod cycle;
 mod engine;
 mod error;
+mod estoc;
+mod jet;
 mod liquid;
 mod material;
 mod mount;
 mod nozzle;
+mod nuclear;
 mod propellant;
+mod rcs;
 mod solid;
 mod spool;
+mod system;
 
+pub use air::{
+    AIR_CP_J_KG_K, AIR_GAMMA, AirAltitudePoint, AirCycle, AirOperatingPoint, AirbreathingSpec,
+    CompiledAirbreather, EARTH_OXYGEN_FRACTION, FlightCondition, IntakeKind, JetFuel,
+    THESSA_OXYGEN_MASS_FRACTION, advance_jet_spool, analyze_airbreathing, flight_condition,
+};
 pub use analyze::{AltitudePoint, analyze_altitude};
 pub use cycle::{CycleLimits, EngineCycle};
 pub use engine::{CompiledEngine, EngineOperatingPoint, EnginePlumeState};
 pub use error::PropulsionError;
+pub use estoc::{
+    CompiledEstoc, ESTOC_DEFAULT_SWITCH_MACH_HI, ESTOC_DEFAULT_SWITCH_MACH_LO,
+    ESTOC_DEFAULT_TRANSITION_TAU_S, ESTOC_MAX_ROCKET_PC_PA, ESTOC_REINFORCEMENT_FRACTION,
+    EstocMode, EstocPoint, EstocSpec, EstocTransient,
+};
+pub use jet::{CompiledJet, EstocCommand, JetMount};
 pub use liquid::{CompiledLiquid, LiquidEngineSpec};
 pub use material::{ChamberMaterial, CoolingMode};
 pub use mount::{EngineMount, GimbalEffector};
@@ -46,9 +63,23 @@ pub use nozzle::{
     NozzleContour, NozzleExitState, characteristic_velocity, mach_from_area_ratio,
     thrust_coefficient,
 };
+pub use nuclear::{
+    NTR_COOLDOWN_FRACTION, NTR_DEFAULT_RATED_BURN_S, NTR_DEFAULT_SPECIFIC_MASS_KG_PER_MW,
+    NTR_DEFAULT_STARTUP_TAU_S, NTR_INLET_TEMP_K, NTR_KINETIC_EFFICIENCY,
+    NTR_MAX_CHAMBER_PRESSURE_PA, NtrFluid, NtrSupplement, NuclearThermalSpec,
+};
 pub use propellant::{Propellant, PropellantThermo};
+pub use rcs::{
+    ColdGasThrusterSpec, CompiledColdGas, CompiledMonoprop, MonopropThrusterSpec,
+    RCS_DEFAULT_MIN_ON_TIME_S, RCS_DEFAULT_RISE_TIME_S, RcsCluster, RcsMount, RcsPulse,
+    RcsThruster,
+};
 pub use solid::{BurnPoint, CompiledSolid, SolidMotorSpec};
 pub use spool::{EngineSpool, advance_spool};
+pub use system::{
+    ChamberSpec, CompiledChamber, CompiledPropulsionSystem, MAX_SYSTEM_CHAMBERS,
+    PropulsionSystemSpec, SystemAltitudePoint, SystemMount, SystemOperatingPoint,
+};
 
 pub(crate) use error::{require_non_negative, require_positive, require_unit_interval};
 pub(crate) use nozzle::{AEROSPIKE_BASE_FRACTION, nozzle_exit};

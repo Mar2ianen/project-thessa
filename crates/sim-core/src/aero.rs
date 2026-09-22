@@ -134,6 +134,11 @@ pub struct AeroPanel {
     /// Fraction of the panel exposed to the incoming flow after an optional
     /// occlusion/wake query. `1` is fully exposed and `0` contributes nothing.
     pub exposure: f64,
+    /// Fold-joint ownership for mechanism-aware runtime: index into the
+    /// vehicle-level fold-joint list, `None` for rigid structure. The
+    /// force solver ignores it; the future mechanism mixer consumes it.
+    #[serde(default)]
+    pub fold_index: Option<usize>,
 }
 
 impl AeroPanel {
@@ -176,6 +181,7 @@ impl AeroPanel {
             thickness_to_chord_ratio: 0.0,
             control_deflection_rad: 0.0,
             exposure: 1.0,
+            fold_index: None,
         })
     }
 
@@ -1980,6 +1986,10 @@ impl PanelSoA {
             thickness_to_chord_ratio: self.thickness_ratio[index],
             control_deflection_rad: self.deflection[index],
             exposure: self.exposure[index],
+            // Mechanism ownership lives outside the SoA force path by
+            // design: the kernels evaluate forces, the mixer (future)
+            // addresses panels by index.
+            fold_index: None,
         }
     }
 }

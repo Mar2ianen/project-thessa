@@ -146,7 +146,8 @@ impl CompiledEngine {
                     ambient_pa,
                     engine.divergence_factor,
                 );
-                let mut thrust_n = main_cf * chamber_pa * engine.throat_area_m2;
+                let mut thrust_n =
+                    main_cf * chamber_pa * engine.throat_area_m2 * engine.kinetic_efficiency;
                 thrust_n += engine.gg_thrust_at(throttle, ambient_pa);
                 let isp_s = thrust_n / (flow_kg_s * STANDARD_GRAVITY_MPS2);
                 Ok(EngineOperatingPoint {

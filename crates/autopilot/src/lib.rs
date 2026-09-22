@@ -369,9 +369,10 @@ impl GraphNodeConfig {
                     if !net_braking_decel_mps2.is_finite() || *net_braking_decel_mps2 <= 0.0 {
                         return Err("landing braking decel must be finite and positive".into());
                     }
-                    if !touchdown_speed_limit_mps.is_finite() || *touchdown_speed_limit_mps <= 0.0
-                    {
-                        return Err("landing braking speed limit must be finite and positive".into());
+                    if !touchdown_speed_limit_mps.is_finite() || *touchdown_speed_limit_mps <= 0.0 {
+                        return Err(
+                            "landing braking speed limit must be finite and positive".into()
+                        );
                     }
                     check_throttle("landing braking", *burn_throttle)?;
                     check_watchdog("landing braking", *max_phase_time_s)

@@ -178,7 +178,9 @@ pub fn approach_gate_ok_params(
     if !range_m.is_finite() || !range_rate_mps.is_finite() {
         return false;
     }
-    range_m <= hold_distance_m && range_rate_mps <= 0.0 && (-range_rate_mps) <= closing_rate_limit_mps
+    range_m <= hold_distance_m
+        && range_rate_mps <= 0.0
+        && (-range_rate_mps) <= closing_rate_limit_mps
 }
 
 #[derive(Debug, Clone, PartialEq)]

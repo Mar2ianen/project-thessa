@@ -26,6 +26,45 @@ Each atmosphere should eventually define:
 - aerosol/haze model;
 - biome/local overrides where required.
 
+### 1.1 Runtime atmosphere API contract
+
+The runtime atmosphere interface must expose chemistry and thermodynamics as a
+single authoritative sample, not make each consumer reconstruct "air" from
+pressure plus Earth constants.
+
+At minimum an atmosphere sample must be able to provide:
+
+```text
+pressure
+temperature
+density
+mean molar mass
+specific gas constant
+gamma / heat-capacity data
+speed of sound
+molar fractions by species
+mass fractions by species
+partial pressures by species
+```
+
+Composition has one canonical basis in stored data (prefer molar fraction for
+authoring); all alternative views are derived. Fraction basis must be explicit
+in types/APIs so that, for example, Thessa's 25% O2 by mole cannot silently be
+passed to an interface expecting oxygen mass fraction.
+
+Consumers such as propulsion should query useful reactants from the sampled
+composition, e.g. "available O2 mass fraction here", rather than accept a
+free-standing scalar `oxygen_fraction`. The current propulsion scalar and
+vehicle-baker Earth value are temporary adapters and must be removed once the
+richer API lands.
+
+The same API must work for non-Earth atmospheres and local overrides: a sample
+may contain atmospheric oxidizer, atmospheric fuel, chemically inert working
+mass, or mixtures of all three. Pressure/temperature/composition must come from
+the same position/altitude query so Khepri gas-sea cells, condensable layers,
+and future weather/biome chemistry cannot disagree between aero, propulsion,
+audio, rendering, and climate consumers.
+
 ## 2. Current atmosphere table
 
 `rho_ref` values are **illustrative design estimates**, not locked canon, until temperature/composition are fixed.
@@ -36,7 +75,7 @@ Each atmosphere should eventually define:
 | **Khepri — cold basin floor** | up to ~0.8 bar | CO₂-rich, enhanced condensable/volcanic species | ~190–220 K target | ~1.9–2.2 kg/m³ for CO₂-rich gas | local gas sea, not a separate sealed atmosphere |
 | **Nereid** | profile, no surface datum | H₂/He; CH₄/NH₃/H₂O traces | altitude-dependent | profile only | use pressure-level reference radii instead of surface density |
 | **Pyra** | near vacuum | local SO₂ exosphere | strongly regional | negligible | transient volcanic exospheres |
-| **Thessa** | ~1.20 bar | ~76% N₂, ~21% O₂, ~3% Ar/CO₂/H₂O/trace | ~280–292 K | ~1.4–1.5 kg/m³ | composition provisional until biosphere canon lock |
+| **Thessa** | ~1.20 bar | ~73.5–73.7% N₂, 25.0% O₂, ~1.0–1.2% Ar, ~0.3% CO₂, H₂O variable | ~278 K reference; climate variable | ~1.5 kg/m³ | composition provisional until biosphere canon lock; fractions are molar/volume unless stated otherwise |
 | **Pelagos** | ~1.7 bar | N₂-rich; CO₂/H₂O/Ar | warm/humid | ~1.8–2.2 kg/m³ | strong humidity and weather variation |
 | **Auron** | ~0.006 bar | CO₂/Ar | cold, strongly diurnal | ~0.01–0.02 kg/m³ | near-exosphere / thin-atmosphere regime |
 | **Borea** | ~0.55 bar | N₂/CH₄/Ar; minor NH₃/hydrocarbons | cryogenic | ~1.5–2.2 kg/m³ | condensation/seasonality important |

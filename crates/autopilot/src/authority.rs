@@ -19,11 +19,11 @@ use thessa_flight_control::{
 };
 
 use crate::{
+    GraphNodeConfig,
     ascent::{self, AscentPhase},
     execute::ExecutePhase,
     landing::{self, LandingPhase},
     rendezvous::{self, RendezvousPhase},
-    GraphNodeConfig,
 };
 
 /// Tower-clearance altitude (m): vertical rise ends here. A launch mount
@@ -90,9 +90,7 @@ pub struct PhaseTick {
 
 /// Zero-throttle propulsion, infallible by construction.
 fn propulsion_zero() -> PropulsionDemand {
-    PropulsionDemand {
-        normalized: 0.0,
-    }
+    PropulsionDemand { normalized: 0.0 }
 }
 
 /// Attitude hold on the current orientation with zero propulsion: the
@@ -228,29 +226,59 @@ pub fn completion_event(config: &GraphNodeConfig) -> Option<&'static str> {
 pub fn phase_watchdog_s(config: &GraphNodeConfig) -> Option<f64> {
     let seconds = match config {
         GraphNodeConfig::AscentPhase { phase } => match phase {
-            AscentPhase::VerticalRise { max_phase_time_s, .. }
-            | AscentPhase::GravityTurn { max_phase_time_s, .. }
-            | AscentPhase::Coast { max_phase_time_s, .. }
-            | AscentPhase::Circularize { max_phase_time_s, .. }
+            AscentPhase::VerticalRise {
+                max_phase_time_s, ..
+            }
+            | AscentPhase::GravityTurn {
+                max_phase_time_s, ..
+            }
+            | AscentPhase::Coast {
+                max_phase_time_s, ..
+            }
+            | AscentPhase::Circularize {
+                max_phase_time_s, ..
+            }
             | AscentPhase::Abort { max_phase_time_s } => *max_phase_time_s,
         },
         GraphNodeConfig::LandingPhase { phase } => match phase {
-            LandingPhase::DeorbitBurn { max_phase_time_s, .. }
-            | LandingPhase::CoastToEntry { max_phase_time_s, .. }
-            | LandingPhase::BrakingBurn { max_phase_time_s, .. }
-            | LandingPhase::TerminalDescent { max_phase_time_s, .. }
+            LandingPhase::DeorbitBurn {
+                max_phase_time_s, ..
+            }
+            | LandingPhase::CoastToEntry {
+                max_phase_time_s, ..
+            }
+            | LandingPhase::BrakingBurn {
+                max_phase_time_s, ..
+            }
+            | LandingPhase::TerminalDescent {
+                max_phase_time_s, ..
+            }
             | LandingPhase::AbortToOrbit { max_phase_time_s } => *max_phase_time_s,
         },
         GraphNodeConfig::RendezvousPhase { phase } => match phase {
-            RendezvousPhase::Approach { max_phase_time_s, .. }
-            | RendezvousPhase::MatchVelocity { max_phase_time_s, .. }
-            | RendezvousPhase::StationKeep { max_phase_time_s, .. }
-            | RendezvousPhase::BackAway { max_phase_time_s, .. } => *max_phase_time_s,
+            RendezvousPhase::Approach {
+                max_phase_time_s, ..
+            }
+            | RendezvousPhase::MatchVelocity {
+                max_phase_time_s, ..
+            }
+            | RendezvousPhase::StationKeep {
+                max_phase_time_s, ..
+            }
+            | RendezvousPhase::BackAway {
+                max_phase_time_s, ..
+            } => *max_phase_time_s,
         },
         GraphNodeConfig::ExecutePhase { phase } => match phase {
-            ExecutePhase::Arm { max_phase_time_s, .. }
-            | ExecutePhase::Burn { max_phase_time_s, .. }
-            | ExecutePhase::Verify { max_phase_time_s, .. }
+            ExecutePhase::Arm {
+                max_phase_time_s, ..
+            }
+            | ExecutePhase::Burn {
+                max_phase_time_s, ..
+            }
+            | ExecutePhase::Verify {
+                max_phase_time_s, ..
+            }
             | ExecutePhase::Abort { max_phase_time_s } => *max_phase_time_s,
         },
         _ => return None,
@@ -282,7 +310,8 @@ pub fn ascent_tick(phase: &AscentPhase, state: &LiveState) -> PhaseTick {
             let altitude = altitude_m(state).unwrap_or(0.0);
             let span = (*turn_end_altitude_m - *turn_start_altitude_m).max(1.0);
             let t = ((altitude - *turn_start_altitude_m) / span).clamp(0.0, 1.0);
-            let pitch = std::f64::consts::FRAC_PI_2 * 0.5 * (1.0 + (std::f64::consts::PI * t).cos());
+            let pitch =
+                std::f64::consts::FRAC_PI_2 * 0.5 * (1.0 + (std::f64::consts::PI * t).cos());
             let direction = match (radial(state), prograde_horizontal(state)) {
                 (Some(up), Some(prograde)) => {
                     (up * pitch.sin() + prograde * pitch.cos()).normalize()
@@ -380,8 +409,7 @@ pub fn landing_tick(phase: &LandingPhase, state: &LiveState) -> PhaseTick {
             )
             .is_some_and(|periapsis| periapsis <= state.body_radius_m + *entry_altitude_m);
             if state.velocity_mps.length_squared() > 1.0 {
-                let mut tick =
-                    steer_toward(-state.velocity_mps.normalize(), *throttle, state);
+                let mut tick = steer_toward(-state.velocity_mps.normalize(), *throttle, state);
                 tick.done = done;
                 tick
             } else {
@@ -416,8 +444,7 @@ pub fn landing_tick(phase: &LandingPhase, state: &LiveState) -> PhaseTick {
                 *net_braking_decel_mps2,
             )
             .is_some_and(|distance| {
-                altitude_m(state)
-                    .is_some_and(|alt| alt <= distance + BRAKING_GATE_MARGIN_M)
+                altitude_m(state).is_some_and(|alt| alt <= distance + BRAKING_GATE_MARGIN_M)
             });
             let mut tick = if gate_open && state.velocity_mps.length_squared() > 1.0 {
                 steer_toward(-state.velocity_mps.normalize(), *burn_throttle, state)
@@ -493,13 +520,18 @@ pub fn rendezvous_tick(phase: &RendezvousPhase, state: &LiveState) -> PhaseTick 
             tick
         }
         RendezvousPhase::MatchVelocity {
-            match_tolerance_mps, ..
+            match_tolerance_mps,
+            ..
         } => {
             let speed = relative_velocity.length();
             let mut tick = if speed > 1.0e-6 {
                 steer_toward(
                     -relative_velocity.normalize(),
-                    if speed > *match_tolerance_mps { 1.0 } else { 0.0 },
+                    if speed > *match_tolerance_mps {
+                        1.0
+                    } else {
+                        0.0
+                    },
                     state,
                 )
             } else {
@@ -580,10 +612,7 @@ pub fn phase_tick(config: &GraphNodeConfig, state: &LiveState) -> Option<PhaseTi
 mod tests {
     use super::*;
     use crate::{
-        ascent::AscentProfile,
-        landing::LandingProfile,
-        rendezvous::RendezvousProfile,
-        LandingSite,
+        LandingSite, ascent::AscentProfile, landing::LandingProfile, rendezvous::RendezvousProfile,
     };
 
     fn earth_state(position_m: DVec3, velocity_mps: DVec3) -> LiveState {
@@ -941,9 +970,7 @@ mod flight_tests {
                 };
                 let tick = ascent_tick(phase, &state);
                 let thrust_dir = match tick.intent {
-                    GuidanceIntent::VelocityDirection { direction, .. } => {
-                        direction.direction
-                    }
+                    GuidanceIntent::VelocityDirection { direction, .. } => direction.direction,
                     _ => DVec3::ZERO,
                 };
                 let gravity = -position.normalize() * (mu / position.length_squared());

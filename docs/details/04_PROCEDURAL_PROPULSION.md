@@ -3,9 +3,11 @@
 Status: design baseline with a shipped backend (`thessa-sim-core::propulsion`
 + `feed`): liquid chemical rockets + solid motors, isentropic nozzle core
 with mixture sensitivity, cycle/feed bounds, geometry-derived mass, spool
-runtime, altitude analyzer, vehicle mounts, tanks and feed lines, and the
-plume handoff. Star/finocyl grain burnback, tank depletion wiring, the
-flight-loop allocator, and the editor UI are still TBD (see section 18).
+runtime, altitude analyzer, vehicle mounts, tanks and feed lines, RCS and
+nuclear thermal models, multi-chamber systems, air-breathing jets
+(turbojet/turbofan/ramjet), and the ESTOC combined-cycle engine. Star/finocyl
+grain burnback, tank depletion wiring, the flight-loop allocator, shaft-power
+propulsion, scramjets, and the editor UI are still TBD (see section 18).
 
 ## 1. Design goal
 
@@ -315,6 +317,104 @@ Potential procedural parameters include:
 
 Named engine families are presets over this common representation.
 
+### 8.1 Spools, gearboxes, starters, and relight
+
+Gas-turbine startup is part of the authored shaft topology, not a free state
+change. Multi-spool engines may have independent LP/IP/HP shafts, optional
+gearboxes, clutches, and motor-generators. Starter torque acts on a selected
+shaft (normally a core/HP spool); a geared fan or LP spool does not imply that
+the core is mechanically locked to it.
+
+The runtime state must therefore track enough shaft state to answer:
+
+```text
+shaft angular speed / normalized spool speed
+compressor/fan aerodynamic torque
+turbine torque
+starter torque and power
+gear/clutch coupling
+bearing/accessory losses
+minimum light-off speed
+minimum self-sustaining speed
+ignition state
+```
+
+Starter hardware is an authoring choice with real mass/resource consequences.
+It is not synonymous with an electrical generator: start torque and generated
+electrical power are separate optional shaft accessories, though one reversible
+machine may implement both. At minimum support these starter topologies:
+
+```text
+none / windmill-only
+    no onboard starter hardware;
+    saves starter/generator mass and startup power infrastructure;
+    cannot self-start at rest;
+    airborne relight succeeds only when inlet-driven shaft torque reaches
+    light-off speed and combustion can accelerate the core to self-sustain
+
+electric starter-generator
+    electrical bus -> motor/generator -> selected spool;
+    supports zero-airspeed start;
+    after light-off the same machine may generate power
+
+pneumatic / air-turbine starter
+    APU, ground cart, or cross-bleed air -> starter turbine -> selected spool;
+    trades electrical demand for ducting/valves and an external or onboard
+    compressed-air source
+
+rocket / gas-generator bootstrap
+    onboard propellant drives a starter turbine or shared rocket machinery;
+    especially natural for combined-cycle engines;
+    consumes propellant but can start independently of ambient airspeed
+```
+
+A starterless aircraft is therefore a valid deliberate design. Wheel motors may
+accelerate the vehicle until ram/windmill torque can relight the core; the
+required speed is not a constant vehicle stat. It emerges from intake state,
+air density, shaft inertia, compressor map/drag, gearbox topology, and the
+chosen light-off/self-sustain thresholds.
+
+If wheel propulsion and the engine share an electrical bus, wheel-motor energy
+can start an engine at zero airspeed only when a starter-generator/cross-drive
+path actually connects that bus to the required core spool. Merely moving the
+aircraft on powered wheels does not mechanically spin an uncoupled compressor.
+
+Electrical generation is independently optional. A shafted turbine engine may
+carry no generator, a dedicated generator, or a reversible starter-generator.
+Authoring/runtime must expose at least:
+
+```text
+generator fitted / absent
+attached spool
+maximum electrical power
+maximum shaft torque draw
+efficiency map or bounded efficiency
+cut-in spool speed
+thermal limit
+bus connection
+motor capability (if reversible)
+generator mass
+```
+
+Generator load must appear in the shaft work balance. Drawing electrical power
+reduces available turbine margin; at low spool speed the generator may be
+offline, power-limited, or able to motor the shaft only if it is explicitly a
+starter-generator. Conversely, an engine with no generator must not create
+electrical bus power just because it is running.
+
+A ramjet has no compressor/turbine shaft, so `starter = none` is its normal
+topology and its static thrust remains zero. If a ramjet installation needs
+electrical power, it must obtain it from the vehicle bus or from a separately
+modelled source (battery, fuel cell, RAT/air-turbine generator, auxiliary
+turbogenerator, etc.). A rocket-ejector bootstrap is a separate combined-cycle
+path, not a hidden ramjet starter.
+
+The steady-state engine solver must not manufacture starter power. At zero
+shaft speed, compressor suction is zero unless an explicit starter, cross-drive,
+rocket ejector, or other modeled source creates flow/torque. A separate
+steady-state performance analyzer may continue to evaluate already-running
+static thrust, but it must label that assumption explicitly.
+
 ## 9. Piston, electric, and generic shaft-power propulsion
 
 Propellers/fans should be reusable thrust-producing components driven by different sources of shaft power.
@@ -361,6 +461,32 @@ Hydrogen-rich atmosphere:
 
 A combustor therefore consumes reactants according to chemistry/composition rather than according to a hard-coded `intake air = oxidizer` rule.
 
+The atmosphere may also be useful when it supplies no chemical reactant at all.
+A rocket/ejector or air-augmented-rocket topology may inject onboard fuel and
+onboard oxidizer, then entrain atmospheric gas as additional working mass. The
+ambient gas is heated/mixed by the primary rocket flow and can improve
+propulsive efficiency or thrust in the regime where ingesting it is worth the
+intake/duct drag. This is a distinct RBCC/ejector topology, not permission for a
+normal turbojet combustor to run in an anoxic atmosphere for free.
+
+Therefore a vehicle on an anoxic world has three different cases:
+
+```text
+ordinary turbojet/ramjet:
+    no usable atmospheric oxidizer -> flameout
+
+air-augmented rocket / ejector mode:
+    onboard fuel + onboard oxidizer + ingested atmospheric working mass
+
+pure rocket:
+    onboard fuel + onboard oxidizer, intake closed/irrelevant
+```
+
+Propulsion must obtain species availability from the authoritative atmosphere
+sample. The current scalar `oxygen_fraction` interface is transitional; it
+must be replaced by composition-aware queries with explicit molar-vs-mass
+fraction semantics.
+
 This is important for Thessa's non-Earth environments and should apply consistently to turbojets, turbofans, ramjets, combined-cycle engines, and other atmospheric propulsion.
 
 ## 11. Ramjets and high-speed air-breathing engines
@@ -385,19 +511,49 @@ Performance should depend on inlet conditions, flight Mach number, geometry/mode
 
 ## 12. Combined-cycle engines
 
-RAPIER/SABRE-class or other combined-cycle propulsion should be represented as multi-mode graphs with shared hardware and alternate flow paths, not as a hard-coded `air mode / rocket mode` engine primitive.
+ESTOC-class combined-cycle propulsion (our implementation of the
+switchable air/rocket niche) is represented as multi-mode graphs with
+shared hardware and alternate flow paths, not as a hard-coded `air mode
+/ rocket mode` engine primitive.
 
 Conceptually:
 
 ```text
-                  +-- intake -> precooler/compressor --+
-fuel -------------+                                    +-> chamber -> nozzle
-onboard oxidizer --+----------- rocket path ------------+
+                                +-- compressor ----------+
+atmosphere -> intake -> precooler                         |
+                                +-- bypass / ejector -----+-> chamber/mixer -> nozzle
+                                      ^                   ^
+                                      |                   |
+bulk fuel ----------------------------+-------------------+
+boost/coolant fuel (optional) --------+
+onboard oxidizer ----------------------------------------+
 ```
 
-Valves/mode logic select which path is active. Components such as chamber, nozzle, pumps, heat exchangers, shafts, or compressors may be shared between modes.
+Valves/mode logic select which paths are active. Components such as chamber,
+nozzle, pumps, heat exchangers, shafts, or compressors may be shared between
+modes.
 
-This architecture should also permit turbo-rocket, ejector-rocket, and other hybrid cycles where future gameplay/physics justifies them.
+The Thessa reference ESTOC direction is a dense bulk fuel (especially methane)
+plus optional hydrogen used where its cryogenic heat sink is valuable. Hydrogen
+is not required to be the entire fuel load: a precooler may consume H2 only at
+high inlet heat load, then send the warmed H2 to the combustor instead of
+discarding it. Closed cycle uses onboard LOX. This keeps the physical reason for
+hydrogen without forcing the vehicle to devote SABRE-like tank volume to pure
+LH2.
+
+Automatic mode choice should ultimately be driven by the solved operating
+envelope (intake recovery, compressor-inlet temperature, precooler heat flux,
+shaft/work balance, useful atmospheric reactants, and net thrust), not by Mach
+number alone. A Mach hysteresis band remains a useful controller policy/fallback,
+not the primary law of nature.
+
+On worlds whose atmosphere does not contain usable oxidizer, the normal
+air-combustion ESTOC path must not work. A separately modelled air-augmented
+rocket/ejector path may still ingest the atmosphere as working mass while
+burning onboard fuel + onboard oxidizer.
+
+This architecture should also permit turbo-rocket, ejector-rocket, RBCC, and
+other hybrid cycles where future gameplay/physics justifies them.
 
 ## 13. Electric/plasma space propulsion
 
@@ -496,7 +652,7 @@ Examples may include:
 - piston propeller engine;
 - electric propeller drive;
 - ramjet;
-- combined-cycle RAPIER/SABRE-like engine;
+- ESTOC combined-cycle engine;
 - Hall thruster;
 - ion thruster;
 - MPD/plasma thruster;
@@ -608,6 +764,28 @@ Shipped in `crates/sim-core/src/propulsion.rs` (MIT engine crate, no Bevy/Tokio/
 - Editor-facing analyzer CLI: `vehicle-baker --analyze` prints the
   Performance Analyzer table (JSON under `--analyze-json`).
 
+### 18.3 Reaction control and nuclear thermal (v3)
+
+- RCS propellants: monopropellant hydrazine (catalytic chamber through
+  the shared pressure-fed liquid path, fixed full thrust) and cold-gas
+  nitrogen/helium (chamberless compile; runtime thrust tracks inlet
+  pressure exactly through choked flow).
+- Pulse physics: triangular valve rise with propellant booked over the
+  full open time, so short pulses lose effective Isp causally; minimum
+  impulse bit, hydrazine Isp band (210-235 s), and N2 Isp band (65-85 s)
+  pinned by test. Mounted `RcsCluster` delivers force/moment impulses
+  and PWM-average wrenches (opposed-pair pure couple pinned).
+- NTR: power-limited compile (mdot from reactor power balance, chamber
+  pressure from choked flow, expander cap refusal), hot-fluid properties
+  for H2/CH4/NH3/H2O, frozen-flow dissociation efficiency on
+  `kinetic_efficiency` (NERVA-pinned), reactor mass from specific power,
+  NERVA-class golden test (750-950 s, 150-350 kN, 8-20 t), startup tau
+  wired into spool, decay-heat cooldown tail. Compiled output reuses
+  `CompiledLiquid`, so spool/throttle/plume/analyzer paths just work.
+- Baker `kind = "nuclear"` plus monopropellant RCS assets; the
+  pressure-fed feed cross-check covers RCS tanks. `VehicleDefinition`
+  gains a per-mount force/moment `wrench_body_n` for clusters.
+
 ### 18.2 Validation
 
 - Merlin-1D-class golden test: 845 kN / 914 kN and 282 s / 311 s within
@@ -618,11 +796,179 @@ Shipped in `crates/sim-core/src/propulsion.rs` (MIT engine crate, no Bevy/Tokio/
 - Bench `crates/sim-core/benches/propulsion.rs`: hangar compile
   ~20 us (liquid) / ~12 us (solid), analyzer and solid-replay sweeps.
 
-### 18.3 Still deferred
+### 18.4 Multi-chamber systems (v4)
+
+- `propulsion::system`: one shared feed (single turbopump set, single
+  GG duct on total bypass flow, common tanks) driving 1-16 chamber/nozzle
+  assemblies at their own stations — RD-170-style clustering.
+- Native compile (not N single compiles): shared hardware books once
+  from total flow; chambers carry walls, nozzles, injectors, heads, and
+  gimbals. A single-chamber system reproduces the standalone liquid
+  compile bit-for-bit (pinned); totals scale linearly, so clustering buys
+  runtime authority (differential throttle, per-chamber gimbals, one
+  plume source per nozzle), not mass magic.
+- Runtime: per-chamber throttles with the shared duct following total
+  flow, per-nozzle plume states, force/moment wrench with the GG duct
+  distributed proportionally (documented rule, shared with the vehicle
+  total), per-chamber gimbal authority, independent spool states under
+  the same first-order law, and a system altitude analyzer for the
+  editor. Gimbal actuators size by chamber thrust (the standalone liquid
+  path was corrected to match; Merlin band unaffected).
+- Vehicle integration: `systems` mounts with per-chamber bake mass
+  (shared hardware at the chamber-mass centroid), uniform-throttle total
+  thrust, per-system differential wrench; baker `[[systems]]` with
+  nested `[[systems.chambers]]` plus the pressure-fed feed check.
+
+### 18.5 Air-breathing jets (v5)
+
+- `propulsion::air`: turbojet, turbofan, and ramjet from one Brayton
+  core. Juno-style sliders (intake area/recovery, compression and bypass
+  ratios, turbine temperature, fuel, afterburner, nozzle) plus the cycle
+  internals Juno hides: polytropic efficiencies, turbine cooling bleed
+  with rotor-bypass work split and mixing loss, customer bleed,
+  part-power TIT/pressure/flow schedules, and oxygen gating for
+  non-Earth atmospheres (Juno 1.4 scales jets with O2 the same way).
+- Turbine cycles run convergent nozzles; ramjets run fixed
+  convergent-divergent geometry adapted at the design point (Mach 2 sea
+  level) with a Summerfield separation check and a separated fallback to
+  convergent-at-throat behavior (documented).
+- Fixed-geometry matching: the nozzle sets swallowed flow — demand
+  beyond choked capacity rescales the whole engine consistently instead
+  of booking fuel for unswallowed air (this exact inconsistency was
+  caught by the energy pin during development).
+- Validation: Olympus-593-class anchor bands (thrust, Isp, mass order,
+  design flow) with documented input uncertainty and no fitted
+  multipliers; ramjet static-zero and Mach-rise pins; vacuum/anoxic
+  flameout; fan-vs-jet efficiency ordering; reheat tradeoff; full first-
+  law energy pins (useful + exhaust KE vs fuel + inlet KE); hypersonic
+  drive-limit flameout; size-scaling and refusal tests; Mach × altitude
+  analyzer grid (the Juno Mach-table contract, computed from the cycle).
+
+Closed v5 debt (audited 2026-09-21):
+
+- Reheat gating compares against the solved design turbine-exit state,
+  not TIT; `reheat_active` reads the nozzle-scaled AB flow.
+- Afterburner oxygen is an explicit species budget (combustor inflow
+  minus core burn plus rejoining cooling-bleed O2; customer bleed
+  excluded on one basis throughout).
+- Drive/work failure and intake starvation are distinct flags (vacuum
+  starves with a healthy drive).
+- `CompiledJet::spool_tau_s()` returns the air-path spool in both
+  variants; ESTOC transition lag lives behind `transition_tau_s()`.
+- Analyzer rows label the steady-running suction assumption
+  (`suction_assisted`); a first-order jet spool helper bridges to the
+  future shaft-state machine.
+- Baker `--oxygen` overrides the analyzer O2 mass fraction (Earth 0.232
+  default; Thessa ~0.274); the scalar stays an explicit adapter until
+  the composition-aware atmosphere API lands.
+
+Known v5 airbreather correctness debt:
+
+- `spool_tau_s` is compiled and exposed but the jet runtime has no spool
+  state: `JetMount` feeds commanded throttle straight into the steady
+  `operating_point`. Startup, shutdown, relight, and transient compressor
+  work are therefore not actually modeled yet.
+- The static `INTAKE_DESIGN_CAPTURE_MACH` suction floor is a steady-running
+  calibration, but today it also creates airflow at zero vehicle speed with no
+  shaft-power source. Once shaft state lands, suction must scale from actual
+  compressor speed/torque; a stopped starterless engine at V=0 gets no free
+  intake flow.
+- `CompiledJet::spool_tau_s()` returns ESTOC mode-transition tau for an ESTOC
+  rather than the air-path spool tau. These are independent dynamics and need
+  separate fields/accessors.
+- The `drive_limited` early-return path currently forces
+  `air_limited = true` even when the intake supplied the requested flow.
+  Drive/work failure and intake starvation must remain distinct flags.
+- Afterburner validation says reheat must exceed turbine-exit temperature but
+  compares `reheat_temp_k` against turbine *inlet* temperature. This rejects
+  physically valid reheat targets between turbine exit and TIT; the constraint
+  must be evaluated against the solved turbine-exit state.
+- `reheat_active` compares nozzle-scaled total fuel against the unscaled core
+  fuel flow. Under nozzle limiting it can report the afterburner off despite
+  positive afterburner fuel flow; use the scaled AB flow directly.
+- Afterburner oxygen bookkeeping mixes bases: remaining O2 is computed per unit
+  initial core air, then applied as though it were a mass fraction of the
+  post-turbine mixed stream, and customer-bleed oxygen is not removed
+  consistently. Recompute available O2 as an explicit species mass flow through
+  the combustor/cooling-bleed merge before deriving the AB fuel cap.
+
+### 18.6 ESTOC combined-cycle engine (v5 shipped; v6 obligations)
+
+Shipped v5:
+
+- `propulsion::estoc`: air-breathing turbojet path plus closed-cycle
+  rocket path sharing intake ducting, chamber, and nozzle hardware under
+  our own name. Shared convergent nozzle caps rocket expansion; rocket
+  chamber reuses LOX-pair thermo, OF bookkeeping, pump-feed cap,
+  throat-clearance validation, and books shared hardware once.
+- Automatic selection currently uses a Mach hysteresis band plus dead-air
+  fallback; manual mode can override it. Per-nozzle plume states reuse the
+  jet handoff; baker `[[jets]]` kinds `jet`/`estoc` expose analyzer
+  Mach grids and JSON rows.
+
+Required v6 physical model:
+
+- Add an explicit precooler/heat-exchanger component with heat-flow,
+  effectiveness, wall-temperature, coolant state, and compressor-inlet
+  temperature limits. High-Mach airbreathing capability must emerge from
+  this thermal budget rather than a renamed ordinary turbojet.
+- Split fuel roles: dense `bulk_fuel` (CH4 is the Thessa reference) and
+  optional `boost/coolant_fuel` (H2 reference). The H2 stream may be
+  scheduled from required heat sink, warmed in the precooler, and then
+  burned; it must have independent tank/flow bookkeeping. A pure-H2 ESTOC
+  remains expressible, but is not the only topology.
+- Select automatic air/rocket transition from solved envelope limits
+  (precooler saturation, compressor inlet temperature/work, intake
+  recovery, atmospheric reactant availability, and useful net thrust).
+  Mach thresholds remain controller hysteresis/policy only.
+- Add an optional air-augmented-rocket/ejector path. On an atmosphere with
+  no usable oxidizer, the ordinary air-combustion path flames out; an
+  ejector path may deliberately spend onboard fuel + oxidizer while using
+  ingested gas as extra reaction mass.
+- Replace the free-standing oxygen scalar with the richer atmosphere API.
+  Species basis must be explicit: Thessa's design O2 is 25% molar/volume,
+  about 27.4% by mass for the current bulk mixture. The vehicle-baker
+  analyzer must stop hard-coding Earth's 0.232 oxygen mass fraction.
+- Adopt the starter/spool contract from section 8.1. ESTOC must be authorable
+  with an electric starter-generator, pneumatic start, rocket/gas-generator
+  bootstrap, or deliberately no starter at all. A starterless ESTOC may relight
+  in flight from windmilling once the solved core spool reaches light-off
+  speed; it must not start at rest merely because the steady-state intake model
+  has a suction floor.
+- Electrical generation is independently optional: no generator, a dedicated
+  generator, or a reversible starter-generator attached to a chosen spool.
+  Generator shaft load, cut-in speed, efficiency, thermal limit, mass, and bus
+  connection must participate in the runtime power/shaft balance.
+- Multi-spool/gearbox authoring must keep mode-transition dynamics separate
+  from shaft dynamics. LP/IP/HP spool inertia and coupling, starter attachment,
+  and optional geared fan reduction are independent of the ESTOC
+  air/rocket-valve transition.
+
+Known v5 correctness debt:
+
+- Transition smoothing currently applies only on the first tick for which
+  `mode != last_mode`; once the caller feeds back the new mode, thrust
+  snaps to steady target on the next tick instead of following the stated
+  first-order time constant. Transition state must live independently of
+  the selected mode or the low-pass must run until converged.
+- Only thrust is smoothed. Fuel, oxidizer, air flow, exhaust state, and
+  reported Isp jump immediately to the target mode, so a transition point
+  can violate its own `Isp = F / (mdot * g0)` bookkeeping. Transition
+  must evolve a self-consistent flow/thermodynamic state, not one scalar.
+- The current docs/comment say "vacuum always rockets", while manual
+  `Air` wins before the vacuum check. Choose and document one contract.
+  Allowing a manual impossible command and returning a clean flameout is
+  acceptable; silently contradicting the API contract is not.
+- v5 uses one `JetFuel` for both air and rocket paths and has no
+  precooler state, so it cannot yet represent the intended CH4 + H2
+  tripropellant/thermal architecture.
+
+### 18.7 Still deferred
 
 Star/finocyl grain geometry (needs numerical perimeter burnback, not a
 tweak of the port solver), tank depletion wiring into the flight loop
 (the queries exist; the loop still flies baked mass), per-engine
 allocation in the flight loop (authority pairs exist; the allocator
-still sees one lever), and the editor UI itself (the CLI/JSON analyzer
+still sees one lever), shaft-power propulsion (turboprop/piston/electric
+fans), scramjets, and the editor UI itself (the CLI/JSON analyzer
 is its backend contract).

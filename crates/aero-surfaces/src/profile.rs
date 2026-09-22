@@ -7,14 +7,15 @@
 //! thickness, ready for the baker and the future solver. Nothing here
 //! feeds back into compiled panel forces today.
 //!
-//! Method, no magic coefficients: NACA 4-digit geometry is the public
-//! Abbott/Von Doenhoff analytic definition (thickness polynomial, parabolic
-//! camber arcs); the zero-lift angle is the thin-airfoil integral evaluated
-//! numerically; the Cl-max band is an empirical bracket around published 2D
-//! wind-tunnel values at Re 3-10M, returned as a band precisely because a
-//! single number would pretend CFD accuracy. The cruise selector inverts
-//! the thin-airfoil lift line for the camber that delivers a required
-//! section Cl at a deck attitude, on the standard 4-digit grid.
+//! Method, first principles only: NACA 4-digit geometry is the public
+//! Abbott/Von Doenhoff analytic definition; the zero-lift angle and the
+//! lift-line prediction are thin-airfoil theory evaluated numerically.
+//! Deliberately absent: any stall/Cl-max prediction. Stall is a viscous
+//! phenomenon no inviscid formula earns; the empirical brackets that
+//! used to live here were cut as observation-fitted physics. The
+//! selector sizes camber and reports the lift-line prediction with its
+//! grid-quantization error; stall margin waits for a boundary-layer
+//! slice (Stratford criterion over these pressure distributions).
 
 use serde::{Deserialize, Serialize};
 
@@ -117,13 +118,22 @@ impl Naca4 {
         -sum / STEPS as f64
     }
 
-    /// Empirical Cl-max bracket `(low, high)` around 2D wind-tunnel values
-    /// at Re 3-10M: `1.52 + 6m + 0.8(t − 0.12) ± 0.12`. Anchors: NACA 0012
-    /// stalls near 1.5-1.6, 2412 near 1.6-1.7, 4412 near 1.7-1.8. A band,
-    /// not a number: stall is the first thing CFD would correct.
-    pub fn cl_max_band(&self) -> (f64, f64) {
-        let mid = 1.52 + 6.0 * self.m + 0.8 * (self.t - 0.12);
-        (mid - 0.12, mid + 0.12)
+    /// Section area coefficient: `∫₀¹ 2·yt(x; t=1) dx` by 1024-point
+    /// midpoint rule. Thickness scales linearly, so one constant serves
+    /// the whole 4-digit family (rib plates, computed, never assumed).
+    pub(crate) fn area_coefficient() -> f64 {
+        let unit = Naca4 {
+            m: 0.0,
+            p: 0.4,
+            t: 1.0,
+        };
+        const STEPS: usize = 1024;
+        let mut sum = 0.0;
+        for index in 0..STEPS {
+            let x = (index as f64 + 0.5) / STEPS as f64;
+            sum += 2.0 * unit.thickness_at(x);
+        }
+        sum / STEPS as f64
     }
 }
 
@@ -136,28 +146,24 @@ pub struct CruiseRequirement {
     pub deck_angle_deg: f64,
     /// Structural thickness ceiling as a chord fraction.
     pub max_thickness_ratio: f64,
-    /// Reynolds number, informational: the Cl-max band is calibrated for
-    /// Re 3M-10M; outside, treat the band as wider than stated.
+    /// Reynolds number, informational only (no model depends on it yet;
+    /// recorded so a future boundary-layer slice can consume it).
     pub reynolds_number: f64,
 }
 
 /// The selector's answer: best standard-grid 4-digit profile for the
 /// requirement, i.e. the least camber that still delivers the target Cl
-/// at the deck attitude with predicted stall margin.
+/// at the deck attitude, with the lift-line prediction of the rounded
+/// family (grid quantization is the only error source, and it is
+/// reported, not hidden).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProfilePick {
     /// Rounded family parameters on the standard 4-digit grid.
     pub family: Naca4,
     /// Thin-airfoil zero-lift angle of the rounded family (radians).
     pub zero_lift_angle_rad: f64,
-    /// Empirical Cl-max bracket of the rounded family.
-    pub cl_max_low: f64,
-    /// Empirical Cl-max bracket of the rounded family.
-    pub cl_max_high: f64,
-    /// Predicted margin: bracket midpoint minus required Cl. Negative
-    /// means the requirement exceeds the bracket: returned honestly, not
-    /// hidden, so the caller can relax the requirement or the thickness.
-    pub stall_margin: f64,
+    /// Lift-line prediction `2π(α_deck − α0)` of the rounded family.
+    pub predicted_cl_at_deck: f64,
 }
 
 impl ProfilePick {
@@ -222,13 +228,10 @@ pub fn recommend_cruise_profile(
     let t = (requirement.max_thickness_ratio * 100.0).floor() / 100.0;
     let family = Naca4::new(m, 0.4, t)?;
     let zero_lift_angle_rad = family.zero_lift_angle_rad();
-    let (cl_max_low, cl_max_high) = family.cl_max_band();
-    let stall_margin = 0.5 * (cl_max_low + cl_max_high) - requirement.target_section_cl;
+    let predicted_cl_at_deck = 2.0 * std::f64::consts::PI * (deck_rad - zero_lift_angle_rad);
     Ok(ProfilePick {
         family,
         zero_lift_angle_rad,
-        cl_max_low,
-        cl_max_high,
-        stall_margin,
+        predicted_cl_at_deck,
     })
 }

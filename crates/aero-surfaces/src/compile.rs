@@ -392,45 +392,61 @@ struct ZoneQuantities {
     centroid: DVec3,
     normal: DVec3,
 }
-
 /// Local-frame structural accumulator over emitted zones: mass-weighted
 /// centers plus a point-mass inertia about the surface-local origin.
 /// The mount step carries the aggregates into the body frame afterwards.
+///
+/// Two passes: `add_zone` records skin/web/rib/box per zone; `finish`
+/// sizes spar caps from the Schrenk-distributed limit bending moment and
+/// folds every zone mass into the centers and inertia.
 #[derive(Debug, Clone)]
 struct StructAcc {
-    mass_kg: f64,
+    layout_rib_area_coefficient: f64,
     skin_kg: f64,
-    spar_kg: f64,
+    web_kg: f64,
+    rib_kg: f64,
+    box_m3: f64,
+    box_numerator: DVec3,
+    rib_m3: f64,
+    zones: Vec<LoadZone>,
+    cap_kg: f64,
+    mass_kg: f64,
     com_numerator: DVec3,
     inertia_local: glam::DMat3,
-    fuel_m3: f64,
-    fuel_numerator: DVec3,
-}
-
-impl Default for StructAcc {
-    fn default() -> Self {
-        // Explicit: glam matrix Default is identity, but an accumulator
-        // must start at zero (the +1.0 diagonal ghost bit us once).
-        Self {
-            mass_kg: 0.0,
-            skin_kg: 0.0,
-            spar_kg: 0.0,
-            com_numerator: DVec3::ZERO,
-            inertia_local: glam::DMat3::ZERO,
-            fuel_m3: 0.0,
-            fuel_numerator: DVec3::ZERO,
-        }
-    }
 }
 
 impl StructAcc {
+    fn new(rib_area_coefficient: f64) -> Self {
+        Self {
+            layout_rib_area_coefficient: rib_area_coefficient,
+            skin_kg: 0.0,
+            web_kg: 0.0,
+            rib_kg: 0.0,
+            box_m3: 0.0,
+            box_numerator: DVec3::ZERO,
+            rib_m3: 0.0,
+            zones: Vec::new(),
+            cap_kg: 0.0,
+            mass_kg: 0.0,
+            com_numerator: DVec3::ZERO,
+            // Explicit zero: glam matrix Default is identity, and an
+            // accumulator starting at identity ghosts +1.0 diagonals.
+            inertia_local: glam::DMat3::ZERO,
+        }
+    }
+
+    /// Zone record for the cap-sizing pass plus skin/web/rib/box sums.
+    /// Fuel uses the chordwise overlap with the authored spar box.
     fn add_zone(
         &mut self,
         layout: &StructuralLayout,
         panel: &thessa_sim_core::AeroPanel,
-        u0: f64,
-        u1: f64,
+        span: (f64, f64),
+        chord: (f64, f64),
+        span_y: (f64, f64),
     ) {
+        let (a, b, u0, u1) = (span.0, span.1, chord.0, chord.1);
+        let s_mid = 0.5 * (a + b);
         let skin_kg = 2.0
             * panel.area_m2
             * (layout.skin_gauge_mm / 1000.0)
@@ -442,28 +458,108 @@ impl StructAcc {
             * web_height_m
             * (layout.spar_web_gauge_mm / 1000.0)
             * layout.spar_material.density_kg_m3;
-        let spar_kg = web_kg * (1.0 + layout.spar_cap_fraction);
-        let primary_kg = skin_kg + spar_kg;
-        let mass_kg = primary_kg * (1.0 + layout.secondary_fraction);
-        let center = panel.center_of_pressure_body_m;
-        self.mass_kg += mass_kg;
+        let rib_plate_m2 = panel.chord_m.powi(2)
+            * panel.thickness_to_chord_ratio
+            * self.layout_rib_area_coefficient;
+        let rib_kg = (panel.span_m / layout.rib_spacing_m)
+            * rib_plate_m2
+            * (layout.rib_gauge_mm / 1000.0)
+            * layout.skin_material.density_kg_m3;
         self.skin_kg += skin_kg;
-        self.spar_kg += spar_kg;
-        self.com_numerator += center * mass_kg;
-        self.inertia_local += point_inertia(mass_kg, center);
+        self.web_kg += web_kg;
+        self.rib_kg += rib_kg;
+        self.rib_m3 += rib_kg / layout.skin_material.density_kg_m3;
         let fuel_u0 = u0.max(layout.fuel_box_chord.0);
         let fuel_u1 = u1.min(layout.fuel_box_chord.1);
         if fuel_u1 > fuel_u0 {
             let thickness_m = panel.thickness_to_chord_ratio * panel.chord_m;
-            let volume = panel.span_m
-                * (fuel_u1 - fuel_u0)
-                * panel.chord_m
-                * thickness_m
-                * layout.fuel_fill_efficiency;
-            self.fuel_m3 += volume;
-            self.fuel_numerator += center * volume;
+            let box_m3 = panel.span_m * (fuel_u1 - fuel_u0) * panel.chord_m * thickness_m;
+            self.box_m3 += box_m3;
+            self.box_numerator += panel.center_of_pressure_body_m * box_m3;
+        }
+        self.zones.push(LoadZone {
+            s_mid,
+            span_m: panel.span_m,
+            chord_m: panel.chord_m,
+            web_height_m,
+            area_m2: panel.area_m2,
+            centroid: panel.center_of_pressure_body_m,
+            y_a: span_y.0,
+            y_b: span_y.1,
+            skin_kg,
+            web_kg,
+            rib_kg,
+        });
+    }
+
+    /// Cap-sizing pass: Schrenk-distribute the limit lift, integrate
+    /// shear and moment tip-to-root, size caps from allowable stress,
+    /// then fold all zone masses into centers and inertia.
+    fn finish(&mut self, layout: &StructuralLayout) {
+        let total_area: f64 = self.zones.iter().map(|zone| zone.area_m2).sum();
+        let total_span: f64 = self.zones.iter().map(|zone| zone.span_m).sum();
+        let mean_chord = if total_span > 0.0 {
+            total_area / total_span
+        } else {
+            0.0
+        };
+        let allowable_pa = layout.spar_material.allowable_stress_mpa * 1.0e6;
+        // Outboard-first order for the shear/moment integration.
+        let mut order: Vec<usize> = (0..self.zones.len()).collect();
+        order.sort_by(|&a, &b| {
+            self.zones[b]
+                .s_mid
+                .partial_cmp(&self.zones[a].s_mid)
+                .expect("validated finite")
+        });
+        let mut weights = vec![0.0; self.zones.len()];
+        let mut weight_sum = 0.0;
+        for (index, zone) in self.zones.iter().enumerate() {
+            let share = crate::structure::schrenk_share(zone.chord_m, mean_chord, zone.s_mid);
+            weights[index] = share * zone.span_m;
+            weight_sum += weights[index];
+        }
+        let mut shear_n = 0.0;
+        let mut moment_nm = 0.0;
+        for &index in &order {
+            let zone = &self.zones[index];
+            let lift_n = if weight_sum > 0.0 {
+                layout.design_limit_lift_n * weights[index] / weight_sum
+            } else {
+                0.0
+            };
+            let y_centroid = 0.5 * (zone.y_a + zone.y_b);
+            // Moment at the inboard edge: outboard shear over the outer
+            // segment plus grown shear over the inner segment.
+            moment_nm +=
+                shear_n * (zone.y_b - y_centroid) + (shear_n + lift_n) * (y_centroid - zone.y_a);
+            shear_n += lift_n;
+            let cap_area =
+                crate::structure::cap_area_m2(moment_nm, allowable_pa, zone.web_height_m);
+            let cap_kg = layout.spar_material.density_kg_m3 * 2.0 * cap_area * zone.span_m;
+            let zone_mass = zone.skin_kg + zone.web_kg + zone.rib_kg + cap_kg;
+            self.cap_kg += cap_kg;
+            self.mass_kg += zone_mass;
+            self.com_numerator += zone.centroid * zone_mass;
+            self.inertia_local += point_inertia(zone_mass, zone.centroid);
         }
     }
+}
+
+/// One zone's load-relevant data for the cap-sizing pass.
+#[derive(Debug, Clone, Copy)]
+struct LoadZone {
+    s_mid: f64,
+    span_m: f64,
+    chord_m: f64,
+    web_height_m: f64,
+    area_m2: f64,
+    centroid: DVec3,
+    y_a: f64,
+    y_b: f64,
+    skin_kg: f64,
+    web_kg: f64,
+    rib_kg: f64,
 }
 
 /// Point-mass inertia about the origin: `m(|r|^2 I - r r^T)`.
@@ -543,7 +639,7 @@ impl<'a> Compiler<'a> {
         };
         let mut bbox_min = DVec3::splat(f64::INFINITY);
         let mut bbox_max = DVec3::splat(f64::NEG_INFINITY);
-        let mut struct_acc = StructAcc::default();
+        let mut struct_acc = StructAcc::new(crate::structure::rib_area_coefficient());
         let layout = self.surface.structure.clone();
         for leaf in &leaves {
             for zone in self.chord_zones(leaf.a, leaf.b) {
@@ -553,7 +649,13 @@ impl<'a> Compiler<'a> {
                     bbox_max = bbox_max.max(*corner);
                 }
                 if let Some(layout) = &layout {
-                    struct_acc.add_zone(layout, &panel, zone.0, zone.1);
+                    struct_acc.add_zone(
+                        layout,
+                        &panel,
+                        (leaf.a, leaf.b),
+                        (zone.0, zone.1),
+                        (self.span_y(leaf.a), self.span_y(leaf.b)),
+                    );
                 }
                 compiled.tags.push(zone.2);
                 compiled.panels.push(panel);
@@ -573,8 +675,9 @@ impl<'a> Compiler<'a> {
             estimated_error_m2,
         );
         let mut compiled = self.mount(compiled);
-        if layout.is_some() {
-            compiled.structure = Some(self.mount_structure(struct_acc));
+        if let Some(layout) = layout {
+            struct_acc.finish(&layout);
+            compiled.structure = Some(self.mount_structure(struct_acc, &layout));
         }
         Ok(compiled)
     }
@@ -1089,8 +1192,9 @@ impl<'a> Compiler<'a> {
     /// Carry the local structural aggregates into the body frame: mass
     /// and volumes are invariant, centers map as points, the inertia
     /// tensor rotates (plus mirror conjugation) and shifts to the body
-    /// origin by the parallel-axis term.
-    fn mount_structure(&self, acc: StructAcc) -> CompiledStructure {
+    /// origin by the parallel-axis term. Fuel fill derives here: one
+    /// minus sump minus rib displacement, floored at zero.
+    fn mount_structure(&self, acc: StructAcc, layout: &StructuralLayout) -> CompiledStructure {
         let rotation = self.mount_matrix();
         let mut inertia = rotation * acc.inertia_local * rotation.transpose();
         if self.surface.mirror_y {
@@ -1107,18 +1211,28 @@ impl<'a> Compiler<'a> {
         } else {
             DVec3::ZERO
         };
-        let fuel_centroid_body_m = if acc.fuel_m3 > 0.0 {
-            self.mount_point(acc.fuel_numerator / acc.fuel_m3)
+        // Derived fill: box minus rib displacement minus sump, floored.
+        let displacement = if acc.box_m3 > 0.0 {
+            acc.rib_m3 / acc.box_m3
+        } else {
+            0.0
+        };
+        let fill = (1.0 - layout.fuel_sump_fraction - displacement).max(0.0);
+        let fuel_volume_m3 = acc.box_m3 * fill;
+        let fuel_centroid_body_m = if acc.box_m3 > 0.0 {
+            self.mount_point(acc.box_numerator / acc.box_m3)
         } else {
             DVec3::ZERO
         };
         CompiledStructure {
             mass_kg: acc.mass_kg,
             skin_mass_kg: acc.skin_kg,
-            spar_mass_kg: acc.spar_kg,
+            spar_web_mass_kg: acc.web_kg,
+            spar_cap_mass_kg: acc.cap_kg,
+            rib_mass_kg: acc.rib_kg,
             center_of_mass_body_m,
             inertia_body_kg_m2: inertia,
-            fuel_volume_m3: acc.fuel_m3,
+            fuel_volume_m3,
             fuel_centroid_body_m,
         }
     }

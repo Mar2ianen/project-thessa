@@ -1112,9 +1112,8 @@ fn naca_thickness_matches_textbook_shape() {
 #[test]
 fn naca_2412_zero_lift_matches_published_value() {
     use crate::Naca4;
-    // Abbott/Von Doenhoff: NACA 2412 stalls with α0 ≈ -2.1 deg, Cl(α=0)
-    // ≈ 0.25. The integral below is thin-airfoil theory, the band is the
-    // published measurement.
+    // Abbott/Von Doenhoff: NACA 2412 has α0 ≈ -2.1 deg, Cl(α=0)
+    // ≈ 0.25. Theory below, published measurement as the band.
     let wing = Naca4::new(0.02, 0.4, 0.12).unwrap();
     let alpha0_deg = wing.zero_lift_angle_rad().to_degrees();
     assert!((alpha0_deg + 2.1).abs() < 0.3, "α0 = {alpha0_deg}");
@@ -1124,13 +1123,10 @@ fn naca_2412_zero_lift_matches_published_value() {
     let more = Naca4::new(0.04, 0.4, 0.12).unwrap();
     let ratio = more.zero_lift_angle_rad() / wing.zero_lift_angle_rad();
     assert!((ratio - 2.0).abs() < 0.02, "ratio = {ratio}");
-    // Cl-max bracket covers the published 1.6-1.7 stall.
-    let (low, high) = wing.cl_max_band();
-    assert!(low <= 1.55 && high >= 1.70, "band = {low}..{high}");
 }
 
 #[test]
-fn cruise_selector_picks_least_camber_with_margin() {
+fn cruise_selector_picks_least_camber_with_prediction() {
     use crate::{CruiseRequirement, recommend_cruise_profile};
     // Moderate cruise ask: 2-percent camber suffices, thickness rides
     // the structural ceiling.
@@ -1143,7 +1139,9 @@ fn cruise_selector_picks_least_camber_with_margin() {
     .unwrap();
     assert_eq!(pick.profile_id().0, "NACA2415");
     assert!((pick.family.t - 0.15).abs() < 1e-12);
-    assert!(pick.stall_margin > 0.3);
+    // Grid quantization is the only prediction error: the rounded
+    // family lands near the target on its own lift line.
+    assert!((pick.predicted_cl_at_deck - 0.5).abs() < 0.08);
     // Harder ask: camber grows, never exceeds the grid.
     let hard = recommend_cruise_profile(&CruiseRequirement {
         target_section_cl: 0.8,
@@ -1154,7 +1152,7 @@ fn cruise_selector_picks_least_camber_with_margin() {
     .unwrap();
     assert!(hard.family.m >= 0.04);
     assert!(hard.family.m <= 0.06);
-    assert!(hard.stall_margin > 0.0);
+    assert!((hard.predicted_cl_at_deck - 0.8).abs() < 0.1);
     // The pick stamps sections consistently.
     let mut sections = SectionData::uniform(0.0, 0.0).unwrap();
     pick.apply_to_sections(&mut sections);
@@ -1630,7 +1628,7 @@ fn structured_rect(thickness: f64, material: crate::SolidMaterial) -> Procedural
     use crate::StructuralLayout;
     let mut surface = rectangular(8.0, 2.0);
     surface.sections = SectionData::uniform(0.0, thickness).unwrap();
-    let mut layout = StructuralLayout::metal_baseline();
+    let mut layout = StructuralLayout::metal_baseline(12_000.0);
     layout.skin_material = material.clone();
     layout.spar_material = material;
     surface.structure = Some(layout);
@@ -1639,9 +1637,8 @@ fn structured_rect(thickness: f64, material: crate::SolidMaterial) -> Procedural
 
 #[test]
 fn structural_mass_matches_hand_buildup() {
-    use crate::{SolidMaterial, StructuralLayout};
+    use crate::SolidMaterial;
 
-    let _ = StructuralLayout::metal_baseline();
     let surface = structured_rect(0.10, SolidMaterial::aluminum_7075());
     let compiled = compile_surface(
         &surface,
@@ -1650,62 +1647,77 @@ fn structural_mass_matches_hand_buildup() {
     )
     .unwrap();
     let structure = compiled.structure.as_ref().expect("structured");
-    // Skin 2*16*0.002*2810 = 179.84; webs 2*8*0.12*0.003*2810 = 16.1856
-    // plus 1.5x caps = 40.464 spar; primary 220.304 plus 20 percent.
+    // Skin 2*16*0.002*2810 = 179.84; webs 2*8*0.12*0.003*2810 = 16.1856.
     assert!((structure.skin_mass_kg - 179.84).abs() < 0.05);
-    assert!((structure.spar_mass_kg - 40.464).abs() < 0.05);
-    assert!((structure.mass_kg - 264.3648).abs() < 0.1);
+    assert!((structure.spar_web_mass_kg - 16.1856).abs() < 0.01);
+    // Caps: single-zone root moment 12000*4 = 48000 Nm over the 0.12 m
+    // spar arm at 503 MPa: 2810*2*(48000/(503e6*0.12))*8 = 35.757.
+    assert!((structure.spar_cap_mass_kg - 35.757).abs() < 0.1);
+    // Ribs: 16 solid plates at 0.5 m pitch; absolute value pinned as a
+    // regression, physics carried by the ratio tests below.
+    assert!((structure.rib_mass_kg - 18.433).abs() < 0.2);
+    // Bookkeeping identity: total is exactly the parts sum.
+    assert!(
+        (structure.mass_kg
+            - (structure.skin_mass_kg
+                + structure.spar_web_mass_kg
+                + structure.spar_cap_mass_kg
+                + structure.rib_mass_kg))
+            .abs()
+            < 1e-9
+    );
     // Symmetric flat wing: center of mass at mid-chord, mid-span.
     assert!((structure.center_of_mass_body_m - DVec3::new(1.0, 4.0, 0.0)).length() < 1e-9);
-    // Flat point-mass assembly: perpendicular-axis identity holds.
+    // Flat point-mass assembly: perpendicular-axis identity holds, and
+    // the radial direction is the exact null vector (rank 2, not a bug).
     let inertia = structure.inertia_body_kg_m2;
-    let trace_gap = (inertia.z_axis.z - (inertia.x_axis.x + inertia.y_axis.y)).abs();
-    assert!(trace_gap < 1e-9 * inertia.z_axis.z);
-    // Single point mass: the radial direction is the exact null vector
-    // of the inertia tensor (rank 2 by construction, not a bug).
+    assert!(
+        (inertia.z_axis.z - (inertia.x_axis.x + inertia.y_axis.y)).abs() < 1e-9 * inertia.z_axis.z
+    );
     let radial = DVec3::new(1.0, 4.0, 0.0).normalize();
     assert!((inertia * radial).length() < 1e-9 * structure.mass_kg);
-    // Fuel box 0.5 x chord 2 x span 8 x thickness 0.2 x fill 0.85.
-    assert!((structure.fuel_volume_m3 - 1.36).abs() < 1e-9);
-    assert!((structure.fuel_centroid_body_m - DVec3::new(1.0, 4.0, 0.0)).length() < 1e-6);
+    // Fuel algebra: box minus sump minus rib displacement, exactly.
+    let rib_displacement = structure.rib_mass_kg / 2810.0;
+    assert!((structure.fuel_volume_m3 - (1.6 * 0.97 - rib_displacement)).abs() < 1e-9);
+    assert!((structure.fuel_volume_m3 - 1.545).abs() < 0.01);
+    assert!((structure.fuel_centroid_body_m - DVec3::new(1.0, 4.0, 0.0)).length() < 1e-9);
 }
 
 #[test]
-fn structural_mass_scales_with_material_density() {
+fn structural_mass_scales_with_material_data() {
     use crate::SolidMaterial;
 
-    // Same gauges, different density: total mass ratio is exactly the
-    // density ratio. This is the material-variation proof.
+    // Density-driven parts scale exactly with the density ratio; caps
+    // additionally feel the allowable: (rho/sigma) ratio, exactly.
     let aluminum = structured_rect(0.10, SolidMaterial::aluminum_7075());
     let carbon = structured_rect(0.10, SolidMaterial::carbon_fiber());
-    let mass_al = compile_surface(
-        &aluminum,
-        &CompileOptions::default(),
-        &MechanismState::deployed(),
-    )
-    .unwrap()
-    .structure
-    .unwrap()
-    .mass_kg;
-    let mass_cf = compile_surface(
-        &carbon,
-        &CompileOptions::default(),
-        &MechanismState::deployed(),
-    )
-    .unwrap()
-    .structure
-    .unwrap()
-    .mass_kg;
-    assert!((mass_cf / mass_al - 1600.0 / 2810.0).abs() < 1e-12);
+    let compile = |surface: &ProceduralSurface| {
+        compile_surface(
+            surface,
+            &CompileOptions::default(),
+            &MechanismState::deployed(),
+        )
+        .unwrap()
+        .structure
+        .unwrap()
+    };
+    let al = compile(&aluminum);
+    let cf = compile(&carbon);
+    let density_ratio = 1600.0 / 2810.0;
+    assert!((cf.skin_mass_kg / al.skin_mass_kg - density_ratio).abs() < 1e-12);
+    assert!((cf.spar_web_mass_kg / al.spar_web_mass_kg - density_ratio).abs() < 1e-12);
+    assert!((cf.rib_mass_kg / al.rib_mass_kg - density_ratio).abs() < 1e-12);
+    let cap_ratio = (1600.0 / 400.0) / (2810.0 / 503.0);
+    assert!((cf.spar_cap_mass_kg / al.spar_cap_mass_kg - cap_ratio).abs() < 1e-9);
 }
 
 #[test]
-fn fuel_volume_scales_with_thickness_while_skin_does_not() {
+fn thickness_trades_volume_against_cap_mass() {
     use crate::SolidMaterial;
 
-    // Thickness variation: box volume is linear in thickness (ratio 3
-    // for 0.05 -> 0.15); skin mass is gauge-driven and must not move;
-    // spar webs ride the section depth linearly.
+    // The classic thickness trade, exact: box volume, webs, and ribs go
+    // linear with thickness (x3 for 0.05 -> 0.15), gauge-driven skin does
+    // not move, and caps go inverse (deeper spar, lighter caps).
     let thin = structured_rect(0.05, SolidMaterial::aluminum_7075());
     let thick = structured_rect(0.15, SolidMaterial::aluminum_7075());
     let compile = |surface: &ProceduralSurface| {
@@ -1720,19 +1732,53 @@ fn fuel_volume_scales_with_thickness_while_skin_does_not() {
     };
     let thin_structure = compile(&thin);
     let thick_structure = compile(&thick);
-    assert!((thick_structure.fuel_volume_m3 / thin_structure.fuel_volume_m3 - 3.0).abs() < 1e-9);
+    let rel = |a: f64, b: f64| (a / b - 3.0).abs();
+    assert!(
+        rel(
+            thick_structure.fuel_volume_m3,
+            thin_structure.fuel_volume_m3
+        ) < 1e-9
+    );
     assert!(
         (thick_structure.skin_mass_kg - thin_structure.skin_mass_kg).abs()
-            < 1e-9 * thin_structure.skin_mass_kg
+            < 1e-12 * thin_structure.skin_mass_kg
     );
-    assert!((thick_structure.spar_mass_kg / thin_structure.spar_mass_kg - 3.0).abs() < 1e-9);
+    assert!(
+        rel(
+            thick_structure.spar_web_mass_kg,
+            thin_structure.spar_web_mass_kg
+        ) < 1e-9
+    );
+    assert!(rel(thick_structure.rib_mass_kg, thin_structure.rib_mass_kg) < 1e-9);
+    assert!(
+        (thick_structure.spar_cap_mass_kg / thin_structure.spar_cap_mass_kg - 1.0 / 3.0).abs()
+            < 1e-9
+    );
+}
+
+#[test]
+fn schrenk_and_helpers_match_closed_forms() {
+    use crate::Naca4;
+    use crate::structure::{cap_area_m2, schrenk_share};
+
+    // Rectangular wing: trapezoid share 1, elliptic (4/pi)sqrt(1-eta^2).
+    assert!(
+        (schrenk_share(2.0, 2.0, 0.0) - 0.5 * (1.0 + 4.0 / std::f64::consts::PI)).abs() < 1e-12
+    );
+    assert!((schrenk_share(2.0, 2.0, 1.0) - 0.5).abs() < 1e-12);
+    // Cap area: moment over allowable times arm.
+    assert!((cap_area_m2(1.0e5, 500.0e6, 0.5) - 4.0e-4).abs() < 1e-12);
+    assert_eq!(cap_area_m2(1.0e5, 0.0, 0.5), 0.0);
+    // Section area coefficient: computed, deterministic, sane.
+    let a = Naca4::area_coefficient();
+    assert!((0.6..0.75).contains(&a));
+    assert_eq!(a, Naca4::area_coefficient());
 }
 
 #[test]
 fn structural_output_mirrors_and_absents_cleanly() {
     use crate::SolidMaterial;
 
-    // Mirrored surfaces carry identical mass with mirrored centers.
     let mut surface = structured_rect(0.10, SolidMaterial::aluminum_7075());
     surface.mirror_y = true;
     let plain = structured_rect(0.10, SolidMaterial::aluminum_7075());
@@ -1773,6 +1819,16 @@ fn structural_output_mirrors_and_absents_cleanly() {
     assert!(
         compile_surface(
             &bad,
+            &CompileOptions::default(),
+            &MechanismState::deployed()
+        )
+        .is_err()
+    );
+    let mut bad_load = structured_rect(0.10, SolidMaterial::aluminum_7075());
+    bad_load.structure.as_mut().unwrap().design_limit_lift_n = 0.0;
+    assert!(
+        compile_surface(
+            &bad_load,
             &CompileOptions::default(),
             &MechanismState::deployed()
         )

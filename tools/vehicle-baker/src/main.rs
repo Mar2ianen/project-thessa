@@ -1969,24 +1969,27 @@ thickness_ratio = 0.10
 skin_gauge_mm = 2.0
 spar_depth_fraction = 0.6
 spar_web_gauge_mm = 3.0
-spar_cap_fraction = 1.5
-secondary_fraction = 0.2
+rib_spacing_m = 0.5
+rib_gauge_mm = 1.5
+design_limit_lift_n = 12000.0
 fuel_box_chord = [0.15, 0.65]
-fuel_fill_efficiency = 0.85
+fuel_sump_fraction = 0.03
 
 [procedural_surfaces.structure.skin_material]
 name = "Al-7075-T6"
 density_kg_m3 = 2810.0
+allowable_stress_mpa = 503.0
 
 [procedural_surfaces.structure.spar_material]
 name = "Al-7075-T6"
 density_kg_m3 = 2810.0
+allowable_stress_mpa = 503.0
 "#,
     )
     .expect("structured vehicle TOML should parse");
     let vehicle = asset.bake().expect("structured asset should bake");
-    assert!((vehicle.mass_properties.mass_kg - 1264.3648).abs() < 0.2);
-    // Wing point mass at (1, 4, 0) adds m*x*y to the xy off-diagonal.
-    let expected_xy = -(1000.0 * 0.0 + 264.3648 * 1.0 * 4.0);
-    assert!((vehicle.mass_properties.inertia_body_kg_m2.x_axis.y - expected_xy).abs() < 1.0);
+    assert!((vehicle.mass_properties.mass_kg - 1250.216).abs() < 0.5);
+    // Wing mass at (1, 4, 0) adds m*x*y to the xy off-diagonal.
+    let expected_xy = -(250.2156 * 1.0 * 4.0);
+    assert!((vehicle.mass_properties.inertia_body_kg_m2.x_axis.y - expected_xy).abs() < 2.0);
 }

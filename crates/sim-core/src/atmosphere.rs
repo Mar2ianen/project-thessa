@@ -136,6 +136,23 @@ impl GasKind {
         }
     }
 
+    /// Ratio of specific heats (γ) of the gas (single source with the
+    /// transport catalog below).
+    pub const fn heat_capacity_ratio(self) -> f64 {
+        match self {
+            Self::Nitrogen => 1.400,
+            Self::Oxygen => 1.395,
+            Self::Argon => 1.667,
+            Self::CarbonDioxide => 1.294,
+            Self::SulfurDioxide => 1.290,
+            Self::Hydrogen => 1.405,
+            Self::Helium => 1.667,
+            Self::Methane => 1.300,
+            Self::Ammonia => 1.310,
+            Self::WaterVapor => 1.330,
+        }
+    }
+
     /// Array slot of this gas (declaration order).
     fn slot(self) -> usize {
         self as usize
@@ -155,22 +172,22 @@ struct GasSpecies {
 /// Full transport/thermodynamic record for one catalog gas (zero mole
 /// fraction until the composition assigns it).
 fn catalog_gas(kind: GasKind) -> GasSpecies {
-    let (gamma, reference_viscosity_pa_s, sutherland_constant_k) = match kind {
-        GasKind::Nitrogen => (1.400, 1.663e-5, 111.0),
-        GasKind::Oxygen => (1.395, 1.919e-5, 127.0),
-        GasKind::Argon => (1.667, 2.117e-5, 144.0),
-        GasKind::CarbonDioxide => (1.294, 1.370e-5, 222.0),
-        GasKind::SulfurDioxide => (1.290, 1.250e-5, 416.0),
-        GasKind::Hydrogen => (1.405, 8.76e-6, 72.0),
-        GasKind::Helium => (1.667, 1.96e-5, 79.4),
-        GasKind::Methane => (1.300, 1.10e-5, 170.0),
-        GasKind::Ammonia => (1.310, 9.82e-6, 370.0),
-        GasKind::WaterVapor => (1.330, 1.00e-5, 1_064.0),
+    let (reference_viscosity_pa_s, sutherland_constant_k) = match kind {
+        GasKind::Nitrogen => (1.663e-5, 111.0),
+        GasKind::Oxygen => (1.919e-5, 127.0),
+        GasKind::Argon => (2.117e-5, 144.0),
+        GasKind::CarbonDioxide => (1.370e-5, 222.0),
+        GasKind::SulfurDioxide => (1.250e-5, 416.0),
+        GasKind::Hydrogen => (8.76e-6, 72.0),
+        GasKind::Helium => (1.96e-5, 79.4),
+        GasKind::Methane => (1.10e-5, 170.0),
+        GasKind::Ammonia => (9.82e-6, 370.0),
+        GasKind::WaterVapor => (1.00e-5, 1_064.0),
     };
     GasSpecies {
         kind,
         molar_mass_kg_mol: kind.molar_mass_kg_mol(),
-        gamma,
+        gamma: kind.heat_capacity_ratio(),
         reference_viscosity_pa_s,
         sutherland_constant_k,
         mole_fraction: 0.0,
@@ -418,6 +435,32 @@ impl AtmosphereComposition {
             .iter()
             .map(|kind| self.mole_fraction(*kind) * kind.molar_mass_kg_mol())
             .sum()
+    }
+
+    /// Mixture gas constant in J/(kg·K): R_u / mean molar mass.
+    pub fn gas_constant_j_kg_k(self) -> f64 {
+        let mean_molar_mass = self.mean_molar_mass_kg_mol();
+        if !mean_molar_mass.is_finite() || mean_molar_mass <= 0.0 {
+            return 0.0;
+        }
+        UNIVERSAL_GAS_CONSTANT_J_MOL_K / mean_molar_mass
+    }
+
+    /// Mixture ratio of specific heats: mole-basis mixing of the catalog
+    /// γ values (γ_mix = Σ x_i γ_i/(γ_i − 1) / Σ x_i/(γ_i − 1)).
+    pub fn mean_heat_capacity_ratio(self) -> f64 {
+        let mut cp_term = 0.0;
+        let mut cv_term = 0.0;
+        for kind in GasKind::ALL {
+            let gamma = kind.heat_capacity_ratio();
+            let x = self.mole_fraction(kind);
+            cp_term += x * gamma / (gamma - 1.0);
+            cv_term += x / (gamma - 1.0);
+        }
+        if !cv_term.is_finite() || cv_term <= 0.0 || !cp_term.is_finite() {
+            return 0.0;
+        }
+        cp_term / cv_term
     }
 
     /// Sanity for deserialized/edited input: all slots finite and
@@ -1042,6 +1085,21 @@ mod tests {
         let config = AtmosphereConfig::from_baked(&thessa, 288.15, 4.9).expect("runtime config");
         assert_eq!(config.sea_level_pressure_pa, 120_000.0);
         assert_eq!(config.gravity_mps2, 4.9);
+    }
+
+    #[test]
+    fn mixture_gamma_and_specific_gas_constant_match_baked_properties() {
+        for design in ["N2/O2/Ar/CO2", "CO2", "H2/He"] {
+            let baked = BakedAtmosphere::from_design(design, Some(1.0)).expect("baked mix");
+            let composition = AtmosphereComposition::parse(design).expect("composition");
+            assert!(
+                (composition.gas_constant_j_kg_k() - baked.gas_constant_j_kg_k).abs() < 1.0e-10
+            );
+            assert!(
+                (composition.mean_heat_capacity_ratio() - baked.heat_capacity_ratio).abs()
+                    < 1.0e-12
+            );
+        }
     }
 
     #[test]

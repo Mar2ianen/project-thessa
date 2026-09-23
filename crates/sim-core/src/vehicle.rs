@@ -6,9 +6,15 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AeroConfig, AeroError, AeroGeometry, AeroPanel, CollisionAxis, CollisionError,
     CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine,
-    EngineMount, EstocPoint, FlightCondition, FlightError, JetCommand, JetMount, PropulsionError,
-    RigidBodyProperties, SystemMount, TankMount,
+    EngineMount, EstocPoint, FlightCondition, FlightError, JetCommand, JetMount, PropDrivePoint,
+    PropellerDriveCommand, PropellerDriveMount, PropulsionError, RigidBodyProperties, SystemMount,
+    TankMount, TurbopropCommand, TurbopropMount, TurbopropOperatingPoint,
 };
+
+pub type StatefulTurbopropWrench = (
+    (DVec3, DVec3),
+    Vec<(TurbopropOperatingPoint, TurbopropCommand)>,
+);
 
 /// One user-configurable aerodynamic control channel.
 ///
@@ -159,6 +165,13 @@ pub struct VehicleDefinition {
     /// needs a flight condition at query time).
     #[serde(default)]
     pub jets: Vec<JetMount>,
+    /// Installed piston/electric propeller drives (steady source commands;
+    /// dry mass aggregates at bake and thrust requires ambient conditions).
+    #[serde(default)]
+    pub propeller_drives: Vec<PropellerDriveMount>,
+    /// Installed turbine-propeller drives with stateful core-shaft loading.
+    #[serde(default)]
+    pub turboprops: Vec<TurbopropMount>,
     /// Fold joints compiled from procedural surfaces (hinge placement in
     /// the compiled mechanism state). The force solver ignores them; the
     /// mechanism mixer transforms `fold_index`-tagged panels about these
@@ -457,6 +470,8 @@ impl VehicleDefinition {
             tanks: Vec::new(),
             systems: Vec::new(),
             jets: Vec::new(),
+            propeller_drives: Vec::new(),
+            turboprops: Vec::new(),
             fold_joints: Vec::new(),
         };
         definition.validate()?;
@@ -503,6 +518,12 @@ impl VehicleDefinition {
             mount.validate().map_err(VehicleError::Propulsion)?;
         }
         for mount in &self.jets {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        for mount in &self.propeller_drives {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        for mount in &self.turboprops {
             mount.validate().map_err(VehicleError::Propulsion)?;
         }
 
@@ -699,6 +720,66 @@ impl VehicleDefinition {
         Ok(())
     }
 
+    /// Attach compiled shaft-power propeller drives (baker path).
+    pub fn with_propeller_drives(
+        mut self,
+        drives: Vec<PropellerDriveMount>,
+    ) -> Result<Self, VehicleError> {
+        for mount in &drives {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        self.propeller_drives = drives;
+        Ok(self)
+    }
+
+    /// Aggregate source, rotor, and gearbox dry masses at their mount
+    /// stations. Call after the other propulsion-family mass aggregators.
+    pub fn bake_propeller_drive_masses(&mut self) -> Result<(), VehicleError> {
+        let mut mass_kg = self.mass_properties.mass_kg;
+        let mut inertia = self.mass_properties.inertia_body_kg_m2;
+        for mount in &self.propeller_drives {
+            let drive_mass_kg = mount.drive.dry_mass_kg;
+            let position = DVec3::from_array(mount.position_body_m);
+            mass_kg += drive_mass_kg;
+            inertia += drive_mass_kg
+                * (glam::DMat3::IDENTITY * position.length_squared()
+                    - outer_product(position, position));
+        }
+        self.mass_properties =
+            RigidBodyProperties::new(mass_kg, inertia).map_err(VehicleError::MassProperties)?;
+        Ok(())
+    }
+
+    /// Attach compiled turboprop mounts (baker path).
+    pub fn with_turboprops(
+        mut self,
+        turboprops: Vec<TurbopropMount>,
+    ) -> Result<Self, VehicleError> {
+        for mount in &turboprops {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        self.turboprops = turboprops;
+        Ok(self)
+    }
+
+    /// Aggregate gas-path, power-turbine, propeller, and reduction-gear dry
+    /// mass at each mount station.
+    pub fn bake_turboprop_masses(&mut self) -> Result<(), VehicleError> {
+        let mut mass_kg = self.mass_properties.mass_kg;
+        let mut inertia = self.mass_properties.inertia_body_kg_m2;
+        for mount in &self.turboprops {
+            let drive_mass_kg = mount.drive.dry_mass_kg;
+            let position = DVec3::from_array(mount.position_body_m);
+            mass_kg += drive_mass_kg;
+            inertia += drive_mass_kg
+                * (glam::DMat3::IDENTITY * position.length_squared()
+                    - outer_product(position, position));
+        }
+        self.mass_properties =
+            RigidBodyProperties::new(mass_kg, inertia).map_err(VehicleError::MassProperties)?;
+        Ok(())
+    }
+
     /// Thrust vector of one mount in body axes (N).
     pub fn engine_thrust_body_n(
         &self,
@@ -853,6 +934,66 @@ impl VehicleDefinition {
             next_commands.push(jet.with_state(&point, transient, shaft));
         }
         Ok(((force, moment), next_commands))
+    }
+
+    /// Evaluate every installed shaft-power drive and return the combined
+    /// body-frame force/moment plus per-drive telemetry. Commands carry each
+    /// source's requested shaft RPM and throttle.
+    pub fn propeller_drives_wrench_body_n(
+        &self,
+        commands: &[PropellerDriveCommand],
+        condition: &FlightCondition,
+    ) -> Result<((DVec3, DVec3), Vec<PropDrivePoint>), VehicleError> {
+        if commands.len() != self.propeller_drives.len() {
+            return Err(VehicleError::InvalidVehicle(format!(
+                "expected {} propeller-drive commands, got {}",
+                self.propeller_drives.len(),
+                commands.len()
+            )));
+        }
+        let mut force = DVec3::ZERO;
+        let mut moment = DVec3::ZERO;
+        let mut points = Vec::with_capacity(commands.len());
+        for (mount, command) in self.propeller_drives.iter().zip(commands) {
+            let point = mount
+                .operating_point(condition, *command)
+                .map_err(VehicleError::Propulsion)?;
+            let thrust = DVec3::from_array(mount.thrust_axis_body) * point.propeller.thrust_n;
+            force += thrust;
+            moment += DVec3::from_array(mount.position_body_m).cross(thrust);
+            points.push(point);
+        }
+        Ok(((force, moment), points))
+    }
+
+    /// Advance all installed turboprops, summing combined core-nozzle and
+    /// propeller force/moment. Each returned command carries the next shaft
+    /// state and should be stored for the following physics step.
+    pub fn turboprops_wrench_body_n_stateful(
+        &self,
+        commands: &[TurbopropCommand],
+        condition: &FlightCondition,
+    ) -> Result<StatefulTurbopropWrench, VehicleError> {
+        if commands.len() != self.turboprops.len() {
+            return Err(VehicleError::InvalidVehicle(format!(
+                "expected {} turboprop commands, got {}",
+                self.turboprops.len(),
+                commands.len()
+            )));
+        }
+        let mut force = DVec3::ZERO;
+        let mut moment = DVec3::ZERO;
+        let mut next = Vec::with_capacity(commands.len());
+        for (mount, command) in self.turboprops.iter().zip(commands) {
+            let (shaft_state, point) = mount
+                .advance(condition, command)
+                .map_err(VehicleError::Propulsion)?;
+            let thrust = DVec3::from_array(mount.thrust_axis_body) * point.total_thrust_n;
+            force += thrust;
+            moment += DVec3::from_array(mount.position_body_m).cross(thrust);
+            next.push((point, command.with_state(shaft_state)));
+        }
+        Ok(((force, moment), next))
     }
 
     /// Force/moment wrench in body axes at per-mount commands: force is the
@@ -1022,7 +1163,10 @@ fn outer_product(a: DVec3, b: DVec3) -> glam::DMat3 {
 mod tests {
     use super::*;
     use crate::{
-        AirCycle, AirbreathingSpec, ChamberMaterial, EstocMode, EstocSpec, IntakeKind, JetFuel,
+        AirCycle, AirbreathingSpec, ChamberMaterial, ElectricMotorSpec, EstocMode, EstocSpec,
+        IntakeKind, JetFuel, PropellerDriveCommand, PropellerDriveMount, PropellerDriveSpec,
+        PropellerSpec, ShaftPowerSourceSpec, ShaftSpec, TurbopropCommand, TurbopropDriveSpec,
+        TurbopropMount,
     };
 
     fn test_vehicle() -> VehicleDefinition {
@@ -1110,5 +1254,143 @@ mod tests {
         assert!(continued_force.x > 0.0);
         assert_eq!(continued[0].last_mode, EstocMode::Rocket);
         assert!(continued[0].prev.is_some());
+    }
+
+    #[test]
+    fn propeller_drive_wrench_uses_mount_station_and_bakes_dry_mass() {
+        let base = VehicleDefinition::new(
+            "propeller-drive-test",
+            AeroGeometry::new(vec![
+                AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+            ])
+            .expect("geometry"),
+            RigidBodyProperties::new(1_000.0, glam::DMat3::from_diagonal(DVec3::splat(500.0)))
+                .expect("mass"),
+            vec![],
+        )
+        .expect("vehicle");
+        let drive = PropellerDriveSpec {
+            propeller: PropellerSpec::default(),
+            source: ShaftPowerSourceSpec::Electric(ElectricMotorSpec::default()),
+            reduction_ratio: 2.0,
+        }
+        .compile()
+        .expect("drive");
+        let expected_drive_mass = drive.dry_mass_kg;
+        let mut vehicle = base
+            .with_propeller_drives(vec![PropellerDriveMount {
+                name: "nose-prop".into(),
+                drive,
+                position_body_m: [0.0, 1.0, 0.0],
+                thrust_axis_body: [1.0, 0.0, 0.0],
+            }])
+            .expect("mount");
+        vehicle
+            .bake_propeller_drive_masses()
+            .expect("mass aggregate");
+        assert!((vehicle.mass_properties.mass_kg - (1_000.0 + expected_drive_mass)).abs() < 1e-10);
+
+        let sample = crate::AtmosphereConfig::default()
+            .sample(0.0)
+            .expect("atmosphere");
+        let condition = crate::flight_condition(&sample, 60.0).expect("flight condition");
+        let command = PropellerDriveCommand {
+            throttle: 1.0,
+            source_rpm: 6_000.0,
+        };
+        let ((force, moment), points) = vehicle
+            .propeller_drives_wrench_body_n(&[command], &condition)
+            .expect("propeller wrench");
+        assert_eq!(points.len(), 1);
+        assert!(force.x > 0.0);
+        assert!(moment.z.abs() > 0.0);
+        assert_eq!(moment.x, 0.0);
+        assert_eq!(moment.y, 0.0);
+        assert!(
+            vehicle
+                .propeller_drives_wrench_body_n(&[], &condition)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn turboprop_wrench_advances_shaft_state_and_bakes_the_drive_mass() {
+        let base = VehicleDefinition::new(
+            "turboprop-test",
+            AeroGeometry::new(vec![
+                AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+            ])
+            .expect("geometry"),
+            RigidBodyProperties::new(1_000.0, glam::DMat3::from_diagonal(DVec3::splat(500.0)))
+                .expect("mass"),
+            vec![],
+        )
+        .expect("vehicle");
+        let drive = TurbopropDriveSpec {
+            air: AirbreathingSpec {
+                name: "mounted-turboprop-core".into(),
+                cycle: AirCycle::Turbojet,
+                fuel: JetFuel::Kerosene,
+                intake_area_m2: 0.8,
+                intake: IntakeKind::Pitot,
+                compressor_ratio: 8.0,
+                bypass_ratio: 0.0,
+                fan_pressure_ratio: 1.0,
+                turbine_inlet_temp_k: 1_400.0,
+                afterburner: false,
+                reheat_temp_k: 0.0,
+                turbine_material: ChamberMaterial::nickel_superalloy(),
+                spool_tau_s: 4.0,
+                shaft: ShaftSpec {
+                    power_turbine_heat_fraction: 0.15,
+                    ..ShaftSpec::default()
+                },
+            },
+            propeller: PropellerSpec {
+                diameter_m: 2.4,
+                ..PropellerSpec::default()
+            },
+            shaft_rpm_at_full_spool: 12_000.0,
+            reduction_ratio: 6.0,
+            power_turbine_mass_kg: 40.0,
+        }
+        .compile()
+        .expect("drive");
+        let drive_mass = drive.dry_mass_kg;
+        let mut vehicle = base
+            .with_turboprops(vec![TurbopropMount {
+                name: "left-prop".into(),
+                drive: drive.clone(),
+                position_body_m: [0.0, 1.0, 0.0],
+                thrust_axis_body: [1.0, 0.0, 0.0],
+            }])
+            .expect("mount");
+        vehicle.bake_turboprop_masses().expect("mass aggregation");
+        assert!((vehicle.mass_properties.mass_kg - (1_000.0 + drive_mass)).abs() < 1e-10);
+
+        let sample = crate::AtmosphereConfig::default()
+            .sample(0.0)
+            .expect("sea-level atmosphere");
+        let condition = crate::flight_condition(&sample, 0.0).expect("static condition");
+        let (_, balance) = drive
+            .air
+            .operating_point_at_spool_loaded(&condition, 1.0, 1.0, true, 0.0)
+            .expect("takeoff capacity");
+        let mut command = TurbopropCommand::running(&drive);
+        command.dt_s = 0.01;
+        command.propeller_power_w = balance.power_takeoff_capacity_w * 0.1;
+        let ((force, moment), next) = vehicle
+            .turboprops_wrench_body_n_stateful(&[command], &condition)
+            .expect("turboprop wrench");
+        assert_eq!(next.len(), 1);
+        assert!(force.x > 0.0);
+        assert!(moment.z.abs() > 0.0);
+        assert!(next[0].0.propeller.thrust_n > 0.0);
+        assert!(next[0].1.shaft_state.spool_n >= command.shaft_state.spool_n);
+        assert!(
+            vehicle
+                .turboprops_wrench_body_n_stateful(&[], &condition)
+                .is_err()
+        );
     }
 }

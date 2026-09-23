@@ -10,9 +10,11 @@ use thessa_sim_core::{
     ChamberSpec, CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionPart,
     CollisionShape, CompiledEngine, CompiledJet, ControlSurfaceDefinition, CoolingMode,
     EngineCycle, EngineMount, EstocSpec, FoldJointRecord, IntakeKind, JetFuel, JetMount,
-    LiquidEngineSpec, NozzleContour, NtrFluid, NuclearThermalSpec, Propellant,
-    PropulsionSystemSpec, RigidBodyProperties, ShaftSpec, SolidMotorSpec, SystemMount, TankMount,
-    TankShape, TankSpec, VehicleDefinition, analyze_airbreathing, analyze_altitude,
+    LiquidEngineSpec, NozzleContour, NtrFluid, NuclearThermalSpec, Propellant, PropellerDriveMount,
+    PropellerDriveSpec, PropellerSpec, PropulsionSystemSpec, RigidBodyProperties,
+    ShaftPowerSourceSpec, ShaftSpec, SolidMotorSpec, SystemMount, TankMount, TankShape, TankSpec,
+    TurbopropDriveSpec, TurbopropMount, VehicleDefinition, analyze_airbreathing, analyze_altitude,
+    analyze_propeller_drive, analyze_turboprop_drive,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -81,6 +83,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             mount.engine.dry_mass_kg(),
         );
     }
+    for mount in &vehicle.propeller_drives {
+        println!(
+            "propeller drive {}: ideal disk {:.2} m, dry {:.1} kg",
+            mount.name, mount.drive.propeller.diameter_m, mount.drive.dry_mass_kg,
+        );
+    }
     if let Some(output) = options.output {
         let json = serde_json::to_string_pretty(&vehicle)?;
         fs::write(&output, format!("{json}\n"))?;
@@ -93,6 +101,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             options.burn_time_s,
             options.analyze_json,
             &options.composition,
+            options.source_rpm,
+            options.power_takeoff_fraction,
         )?;
     }
     Ok(())
@@ -108,6 +118,8 @@ fn run_analyzer(
     burn_time_s: f64,
     as_json: bool,
     composition: &str,
+    source_rpm: f64,
+    power_takeoff_fraction: f64,
 ) -> Result<(), Box<dyn Error>> {
     // Species basis is explicit: the atmosphere derives both its gas
     // properties and its species from the design composition string
@@ -115,6 +127,7 @@ fn run_analyzer(
     // (doc 04 section 10 / 18.6).
     let atmosphere = AtmosphereConfig::from_composition(composition, 288.15, 101_325.0, 9.80665)?;
     let altitudes: Vec<f64> = (0..=10).map(|k| k as f64 * 8000.0).collect();
+    let airspeeds_mps = [0.0, 50.0, 100.0, 150.0];
     if as_json {
         let mut rows = Vec::new();
         for mount in &vehicle.engines {
@@ -153,6 +166,32 @@ fn run_analyzer(
                     &altitudes,
                     &[0.0, 1.0, 2.0, 3.0],
                     throttle,
+                )?,
+            }));
+        }
+        for mount in &vehicle.propeller_drives {
+            rows.push(serde_json::json!({
+                "propeller_drive": mount.name,
+                "points": analyze_propeller_drive(
+                    &mount.drive,
+                    &atmosphere,
+                    &altitudes,
+                    &airspeeds_mps,
+                    throttle,
+                    source_rpm,
+                )?,
+            }));
+        }
+        for mount in &vehicle.turboprops {
+            rows.push(serde_json::json!({
+                "turboprop": mount.name,
+                "points": analyze_turboprop_drive(
+                    &mount.drive,
+                    &atmosphere,
+                    &altitudes,
+                    &airspeeds_mps,
+                    throttle,
+                    power_takeoff_fraction,
                 )?,
             }));
         }
@@ -250,6 +289,80 @@ fn run_analyzer(
             );
         }
     }
+    for mount in &vehicle.propeller_drives {
+        println!(
+            "--- analyzer: {} (throttle {throttle}, source {source_rpm:.0} RPM)",
+            mount.name
+        );
+        println!(
+            "{:>10} {:>8} {:>10} {:>12} {:>10} {:>10} {:>5}",
+            "alt_m", "speed", "p_amb", "thrust_kN", "fuel_g/s", "bus_kW", "flags"
+        );
+        let rows = analyze_propeller_drive(
+            &mount.drive,
+            &atmosphere,
+            &altitudes,
+            &airspeeds_mps,
+            throttle,
+            source_rpm,
+        )?;
+        for point in &rows {
+            let mut flags = String::new();
+            if point.oxygen_limited {
+                flags.push('O');
+            }
+            if point.thermal_limited {
+                flags.push('T');
+            }
+            if point.density_limited {
+                flags.push('V');
+            }
+            if point.source_speed_limited {
+                flags.push('R');
+            }
+            println!(
+                "{:>10.0} {:>8.0} {:>10.0} {:>12.2} {:>10.2} {:>10.2} {:>5}",
+                point.altitude_m,
+                point.airspeed_mps,
+                point.ambient_pa,
+                point.thrust_n / 1000.0,
+                point.fuel_flow_kg_s * 1000.0,
+                point.electrical_power_w / 1000.0,
+                flags,
+            );
+        }
+    }
+    for mount in &vehicle.turboprops {
+        println!(
+            "--- analyzer: {} (throttle {throttle}, PTO {:.0}% of available)",
+            mount.name,
+            power_takeoff_fraction * 100.0,
+        );
+        println!(
+            "{:>10} {:>8} {:>10} {:>12} {:>12} {:>10} {:>5}",
+            "alt_m", "speed", "p_amb", "total_kN", "prop_kN", "PTO_kW", "spool"
+        );
+        let rows = analyze_turboprop_drive(
+            &mount.drive,
+            &atmosphere,
+            &altitudes,
+            &airspeeds_mps,
+            throttle,
+            power_takeoff_fraction,
+        )?;
+        for point in &rows {
+            println!(
+                "{:>10.0} {:>8.0} {:>10.0} {:>12.2} {:>12.2} {:>10.1} {:>5.2}",
+                point.altitude_m,
+                point.airspeed_mps,
+                point.ambient_pa,
+                point.total_thrust_n / 1000.0,
+                point.propeller_thrust_n / 1000.0,
+                point.power_takeoff_w / 1000.0,
+                point.spool_n,
+            );
+        }
+    }
     Ok(())
 }
 
@@ -296,6 +409,12 @@ struct VehicleAsset {
     /// needs a flight condition at query time).
     #[serde(default)]
     jets: Vec<JetAsset>,
+    /// Piston/electric shaft sources driving reusable ideal propeller disks.
+    #[serde(default)]
+    propeller_drives: Vec<PropellerDriveAsset>,
+    /// Gas turbines coupled to propellers through an explicit power turbine.
+    #[serde(default)]
+    turboprops: Vec<TurbopropAsset>,
 }
 
 impl VehicleAsset {
@@ -429,6 +548,16 @@ impl VehicleAsset {
             .into_iter()
             .map(JetAsset::bake)
             .collect::<Result<Vec<_>, _>>()?;
+        let propeller_drive_mounts = self
+            .propeller_drives
+            .into_iter()
+            .map(PropellerDriveAsset::bake)
+            .collect::<Result<Vec<_>, _>>()?;
+        let turboprop_mounts = self
+            .turboprops
+            .into_iter()
+            .map(TurbopropAsset::bake)
+            .collect::<Result<Vec<_>, _>>()?;
         // Assembly center of mass over EVERYTHING: hand mass rides the
         // authoring origin, surfaces/engine/tank/system/jet masses ride
         // their stations. Flight integrates moments about the body
@@ -467,6 +596,16 @@ impl VehicleAsset {
         }
         for mount in &jet_mounts {
             let mass = mount.engine.dry_mass_kg();
+            total_mass_kg += mass;
+            total_moment += DVec3::from_array(mount.position_body_m) * mass;
+        }
+        for mount in &propeller_drive_mounts {
+            let mass = mount.drive.dry_mass_kg;
+            total_mass_kg += mass;
+            total_moment += DVec3::from_array(mount.position_body_m) * mass;
+        }
+        for mount in &turboprop_mounts {
+            let mass = mount.drive.dry_mass_kg;
             total_mass_kg += mass;
             total_moment += DVec3::from_array(mount.position_body_m) * mass;
         }
@@ -537,11 +676,15 @@ impl VehicleAsset {
             .with_tanks(tank_mounts)?
             .with_systems(system_mounts)?
             .with_fold_joints(fold_joints)?
-            .with_jets(jet_mounts)?;
+            .with_jets(jet_mounts)?
+            .with_propeller_drives(propeller_drive_mounts)?
+            .with_turboprops(turboprop_mounts)?;
         vehicle.bake_engine_masses()?;
         vehicle.bake_tank_masses()?;
         vehicle.bake_system_masses()?;
         vehicle.bake_jet_masses()?;
+        vehicle.bake_propeller_drive_masses()?;
+        vehicle.bake_turboprop_masses()?;
         for (panel_index, joint) in parked_tags {
             vehicle.aero_geometry.panels[panel_index].fold_index = Some(joint);
         }
@@ -572,6 +715,12 @@ impl VehicleAsset {
             }
         }
         for mount in &mut vehicle.jets {
+            shift_array(&mut mount.position_body_m, shift);
+        }
+        for mount in &mut vehicle.propeller_drives {
+            shift_array(&mut mount.position_body_m, shift);
+        }
+        for mount in &mut vehicle.turboprops {
             shift_array(&mut mount.position_body_m, shift);
         }
         let total = vehicle.mass_properties.mass_kg;
@@ -1337,6 +1486,105 @@ impl JetAsset {
     }
 }
 
+/// One piston/electric source and ideal actuator-disk propulsor.
+///
+/// Example TOML:
+///
+/// ```text
+/// [[propeller_drives]]
+/// name = "electric-cruise"
+/// mount_position_body_m = [-1.2, 0.0, 0.0]
+/// thrust_axis_body = [1.0, 0.0, 0.0]
+/// reduction_ratio = 2.0
+///
+/// [propeller_drives.propeller]
+/// blade_count = 4
+/// diameter_m = 2.0
+/// hub_diameter_m = 0.25
+/// blade_chord_m = 0.12
+/// blade_thickness_m = 0.018
+/// blade_material_density_kg_m3 = 1600.0
+/// gearbox_efficiency = 0.97
+/// gearbox_mass_kg = 12.0
+///
+/// [propeller_drives.source]
+/// kind = "electric"
+///
+/// [propeller_drives.source.spec]
+/// rated_power_w = 100000.0
+/// peak_torque_nm = 400.0
+/// maximum_rpm = 12000.0
+/// efficiency = 0.94
+/// cooling_capacity_w = 6400.0
+/// dry_mass_kg = 35.0
+/// ```
+#[derive(Debug, Deserialize)]
+struct PropellerDriveAsset {
+    name: String,
+    #[serde(default = "mount_position_default")]
+    mount_position_body_m: [f64; 3],
+    #[serde(default = "thrust_axis_default")]
+    thrust_axis_body: [f64; 3],
+    #[serde(default)]
+    propeller: PropellerSpec,
+    source: ShaftPowerSourceSpec,
+    #[serde(default = "one")]
+    reduction_ratio: f64,
+}
+
+impl PropellerDriveAsset {
+    fn bake(self) -> Result<PropellerDriveMount, Box<dyn Error>> {
+        let drive = PropellerDriveSpec {
+            propeller: self.propeller,
+            source: self.source,
+            reduction_ratio: self.reduction_ratio,
+        }
+        .compile()?;
+        println!(
+            "propeller drive {}: {:.2} m ideal disk, {:.1} kg installed",
+            self.name, drive.propeller.diameter_m, drive.dry_mass_kg,
+        );
+        Ok(PropellerDriveMount {
+            name: self.name,
+            drive,
+            position_body_m: self.mount_position_body_m,
+            thrust_axis_body: self.thrust_axis_body,
+        })
+    }
+}
+
+/// Gas-turbine propeller mount with an energy-accounted power turbine.
+/// The nested `drive.air.shaft.power_turbine_heat_fraction` reserves the
+/// mechanical takeoff share from combustor heat.
+#[derive(Debug, Deserialize)]
+struct TurbopropAsset {
+    name: String,
+    #[serde(default = "mount_position_default")]
+    mount_position_body_m: [f64; 3],
+    #[serde(default = "thrust_axis_default")]
+    thrust_axis_body: [f64; 3],
+    drive: TurbopropDriveSpec,
+}
+
+impl TurbopropAsset {
+    fn bake(self) -> Result<TurbopropMount, Box<dyn Error>> {
+        let drive = self.drive.compile()?;
+        println!(
+            "turboprop {}: {:.2} m ideal disk, {:.1}% PTO heat, {:.1} kg installed",
+            self.name,
+            drive.propeller.diameter_m,
+            drive.air.shaft.power_turbine_heat_fraction * 100.0,
+            drive.dry_mass_kg,
+        );
+        Ok(TurbopropMount {
+            name: self.name,
+            drive,
+            position_body_m: self.mount_position_body_m,
+            thrust_axis_body: self.thrust_axis_body,
+        })
+    }
+}
+
 /// One body-local collision primitive from the source vehicle asset.
 ///
 /// Example TOML:
@@ -1481,6 +1729,10 @@ struct Options {
     /// species basis is explicit; default is Thessa air `N2/O2/AR/CO2` —
     /// never a hard-coded oxygen scalar).
     composition: String,
+    /// Commanded source-shaft speed for propeller-drive analyzer rows.
+    source_rpm: f64,
+    /// Requested fraction of available power-turbine output in the analyzer.
+    power_takeoff_fraction: f64,
 }
 
 impl Options {
@@ -1493,6 +1745,8 @@ impl Options {
         let mut burn_time_s = 0.0;
         let mut analyze_json = false;
         let mut composition = "N2/O2/AR/CO2".to_string();
+        let mut source_rpm: f64 = 2_400.0;
+        let mut power_takeoff_fraction: f64 = 0.25;
         let mut arguments = arguments.peekable();
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
@@ -1518,9 +1772,26 @@ impl Options {
                 "--composition" => {
                     composition = required_value(&mut arguments, "--composition")?;
                 }
+                "--source-rpm" => {
+                    source_rpm = required_value(&mut arguments, "--source-rpm")?
+                        .parse()
+                        .map_err(|_| "--source-rpm needs a finite RPM >= 0")?;
+                }
+                "--power-takeoff-fraction" => {
+                    power_takeoff_fraction =
+                        required_value(&mut arguments, "--power-takeoff-fraction")?
+                            .parse()
+                            .map_err(|_| "--power-takeoff-fraction needs a number in [0, 1]")?;
+                }
                 "--help" | "-h" => help = true,
                 unknown => return Err(format!("unknown argument {unknown}; use --help").into()),
             }
+        }
+        if !source_rpm.is_finite() || source_rpm < 0.0 {
+            return Err("--source-rpm must be finite and >= 0".into());
+        }
+        if !power_takeoff_fraction.is_finite() || !(0.0..=1.0).contains(&power_takeoff_fraction) {
+            return Err("--power-takeoff-fraction must be finite in [0, 1]".into());
         }
         Ok(Self {
             input,
@@ -1531,6 +1802,8 @@ impl Options {
             burn_time_s,
             analyze_json,
             composition,
+            source_rpm,
+            power_takeoff_fraction,
         })
     }
 }
@@ -1546,17 +1819,23 @@ fn required_value(
 
 fn print_help() {
     println!(
-        "Usage: thessa-vehicle-baker [--input data/vehicles/example_aircraft.toml] [--output data/vehicles/example_aircraft.baked.json] [--analyze [--throttle 1.0] [--burn-time 0.0] [--analyze-json] [--composition N2/O2/AR/CO2]]"
+        "Usage: thessa-vehicle-baker [--input data/vehicles/example_aircraft.toml] [--output data/vehicles/example_aircraft.baked.json] [--analyze [--throttle 1.0] [--burn-time 0.0] [--analyze-json] [--composition N2/O2/AR/CO2] [--source-rpm 2400] [--power-takeoff-fraction 0.25]]"
     );
     println!(
         "--composition sets the analyzer atmosphere species (design string, default Thessa air N2/O2/AR/CO2; unknown gases are refused)."
+    );
+    println!("--source-rpm sets the steady shaft speed used by propeller-drive analyzer rows.");
+    println!(
+        "--power-takeoff-fraction requests this share of available turboprop shaft output [0, 1]."
     );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use thessa_sim_core::AtmosphereComposition;
+    use thessa_sim_core::{
+        AtmosphereComposition, CompiledShaftPowerSource, PropellerDriveCommand, TurbopropCommand,
+    };
 
     #[test]
     fn example_vehicle_asset_bakes_to_valid_generic_definition() {
@@ -1573,6 +1852,146 @@ mod tests {
         let round_trip: VehicleDefinition =
             serde_json::from_str(&json).expect("vehicle JSON should deserialize");
         assert_eq!(round_trip, vehicle);
+    }
+
+    #[test]
+    fn electric_propeller_drive_bakes_mass_wrench_and_json() {
+        let doc = r#"
+name = "electric-prop-test"
+mass_kg = 1000.0
+inertia_body_kg_m2 = [[500.0, 0.0, 0.0], [0.0, 500.0, 0.0], [0.0, 0.0, 500.0]]
+
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 1.0
+chord_m = 1.0
+
+[[propeller_drives]]
+name = "electric-cruise"
+mount_position_body_m = [0.0, 1.0, 0.0]
+thrust_axis_body = [1.0, 0.0, 0.0]
+reduction_ratio = 2.0
+
+[propeller_drives.propeller]
+diameter_m = 2.2
+gearbox_efficiency = 0.96
+
+[propeller_drives.source]
+kind = "electric"
+
+[propeller_drives.source.spec]
+rated_power_w = 90000.0
+peak_torque_nm = 420.0
+maximum_rpm = 10000.0
+efficiency = 0.92
+cooling_capacity_w = 10000.0
+dry_mass_kg = 32.0
+"#;
+        let asset: VehicleAsset = toml::from_str(doc).expect("drive TOML parses");
+        let vehicle = asset.bake().expect("drive asset bakes");
+        assert_eq!(vehicle.propeller_drives.len(), 1);
+        assert!(matches!(
+            vehicle.propeller_drives[0].drive.source,
+            CompiledShaftPowerSource::Electric(_)
+        ));
+        assert!(vehicle.mass_properties.mass_kg > 1_032.0);
+
+        let sample = AtmosphereConfig::default().sample(0.0).expect("atmosphere");
+        let condition = thessa_sim_core::flight_condition(&sample, 60.0).expect("condition");
+        let ((force, moment), points) = vehicle
+            .propeller_drives_wrench_body_n(
+                &[PropellerDriveCommand {
+                    throttle: 1.0,
+                    source_rpm: 6_000.0,
+                }],
+                &condition,
+            )
+            .expect("wrench");
+        assert!(force.x > 0.0);
+        assert!(moment.z.abs() > 0.0);
+        assert_eq!(points.len(), 1);
+
+        let json = serde_json::to_string(&vehicle).expect("vehicle JSON");
+        let round_trip: VehicleDefinition = serde_json::from_str(&json).expect("JSON round-trip");
+        assert_eq!(round_trip.propeller_drives.len(), 1);
+        assert!(
+            (round_trip.mass_properties.mass_kg - vehicle.mass_properties.mass_kg).abs() < 1e-9
+        );
+    }
+    #[test]
+    fn turboprop_asset_bakes_mass_wrench_and_serialized_state() {
+        let doc = r#"
+name = "turboprop-test"
+mass_kg = 1000.0
+inertia_body_kg_m2 = [[500.0, 0.0, 0.0], [0.0, 500.0, 0.0], [0.0, 0.0, 500.0]]
+
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 1.0
+chord_m = 1.0
+
+[[turboprops]]
+name = "left-turboprop"
+mount_position_body_m = [0.0, 1.0, 0.0]
+thrust_axis_body = [1.0, 0.0, 0.0]
+
+[turboprops.drive]
+shaft_rpm_at_full_spool = 12000.0
+reduction_ratio = 6.0
+power_turbine_mass_kg = 40.0
+
+[turboprops.drive.air]
+name = "left-core"
+cycle = "turbojet"
+fuel = "kerosene"
+intake_area_m2 = 0.8
+intake = "pitot"
+compressor_ratio = 8.0
+bypass_ratio = 0.0
+fan_pressure_ratio = 1.0
+turbine_inlet_temp_k = 1400.0
+afterburner = false
+reheat_temp_k = 0.0
+turbine_material = { density_kg_m3 = 8190.0, yield_strength_pa = 1000000000.0, max_wall_temp_k = 1350.0 }
+spool_tau_s = 4.0
+
+[turboprops.drive.air.shaft]
+power_turbine_heat_fraction = 0.15
+
+[turboprops.drive.propeller]
+diameter_m = 2.4
+"#;
+        let asset: VehicleAsset = toml::from_str(doc).expect("turboprop TOML parses");
+        let vehicle = asset.bake().expect("turboprop bakes");
+        assert_eq!(vehicle.turboprops.len(), 1);
+        assert!(vehicle.mass_properties.mass_kg > 1_040.0);
+
+        let sample = AtmosphereConfig::default().sample(0.0).expect("atmosphere");
+        let condition = thessa_sim_core::flight_condition(&sample, 0.0).expect("condition");
+        let drive = &vehicle.turboprops[0].drive;
+        let (_, balance) = drive
+            .air
+            .operating_point_at_spool_loaded(&condition, 1.0, 1.0, true, 0.0)
+            .expect("takeoff capacity");
+        let mut command = TurbopropCommand::running(drive);
+        command.propeller_power_w = balance.power_takeoff_capacity_w * 0.1;
+        let ((force, moment), next) = vehicle
+            .turboprops_wrench_body_n_stateful(&[command], &condition)
+            .expect("wrench");
+        assert!(force.x > 0.0);
+        assert!(moment.z.abs() > 0.0);
+        assert_eq!(next.len(), 1);
+
+        let json = serde_json::to_string(&vehicle).expect("serialize");
+        let round_trip: VehicleDefinition = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(round_trip.turboprops.len(), 1);
+        assert!(
+            (round_trip.mass_properties.mass_kg - vehicle.mass_properties.mass_kg).abs() < 1e-9
+        );
     }
 
     #[test]
@@ -1913,16 +2332,36 @@ rocket_throat_radius_m = 0.09
     #[test]
     fn analyzer_options_preserve_explicit_composition() {
         let options = Options::parse(
-            ["--analyze", "--composition", "N2/O2/AR/CO2"]
-                .into_iter()
-                .map(String::from),
+            [
+                "--analyze",
+                "--composition",
+                "N2/O2/AR/CO2",
+                "--source-rpm",
+                "2700",
+                "--power-takeoff-fraction",
+                "0.4",
+            ]
+            .into_iter()
+            .map(String::from),
         )
         .expect("options parse");
         assert!(options.analyze);
         assert_eq!(options.composition, "N2/O2/AR/CO2");
+        assert_eq!(options.source_rpm, 2700.0);
+        assert_eq!(options.power_takeoff_fraction, 0.4);
         // Default is Thessa air, not a hard-coded Earth scalar.
         let default = Options::parse(std::iter::empty()).expect("defaults parse");
         assert_eq!(default.composition, "N2/O2/AR/CO2");
+        assert_eq!(default.source_rpm, 2_400.0);
+        assert_eq!(default.power_takeoff_fraction, 0.25);
+        assert!(
+            Options::parse(
+                ["--power-takeoff-fraction", "1.1"]
+                    .into_iter()
+                    .map(String::from)
+            )
+            .is_err()
+        );
         // Unknown species are refused instead of becoming Earth air.
         assert!(AtmosphereComposition::parse(&default.composition).is_ok());
         assert!(AtmosphereComposition::parse("XYZ").is_err());

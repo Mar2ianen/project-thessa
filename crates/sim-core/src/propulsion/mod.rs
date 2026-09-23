@@ -39,6 +39,7 @@ mod nuclear;
 mod propellant;
 mod rcs;
 mod shaft;
+mod shaft_power;
 mod solid;
 mod spool;
 mod system;
@@ -78,7 +79,16 @@ pub use rcs::{
 };
 pub use shaft::{
     GeneratorSpec, JetShaftState, ShaftBalance, ShaftCommand, ShaftSpec, ShaftTelemetry,
-    StarterKind, StarterSpec, advance_jet_shaft,
+    StarterKind, StarterSpec, advance_jet_shaft, advance_jet_shaft_loaded,
+};
+pub use shaft_power::{
+    CompiledElectricMotor, CompiledPistonEngine, CompiledPropeller, CompiledPropellerDrive,
+    CompiledShaftPowerSource, CompiledTurbopropDrive, ElectricMotorPoint, ElectricMotorSpec,
+    PistonEngineSpec, PistonOperatingPoint, PropDriveAltitudePoint, PropDrivePoint,
+    PropellerDriveCommand, PropellerDriveMount, PropellerDriveSpec, PropellerPoint, PropellerSpec,
+    ShaftPowerSourceSpec, TurbopropAltitudePoint, TurbopropCommand, TurbopropDriveSpec,
+    TurbopropMount, TurbopropOperatingPoint, analyze_propeller_drive, analyze_turboprop_drive,
+    effective_propulsive_isp_s,
 };
 pub use solid::{BurnPoint, CompiledSolid, SolidMotorSpec};
 pub use spool::{EngineSpool, advance_spool};

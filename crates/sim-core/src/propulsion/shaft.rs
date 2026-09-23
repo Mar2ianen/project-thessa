@@ -208,9 +208,9 @@ impl GeneratorSpec {
     }
 }
 
-/// Authored shaft topology of one jet: starter, generator, and the
-/// light-off/self-sustain thresholds that decide when combustion can
-/// start and when it dies (section 8.1).
+/// Authored shaft topology of one gas turbine: starter, generator,
+/// power-turbine takeoff, and the light-off/self-sustain thresholds
+/// that decide when combustion can start and when it dies (sections 8.1/9).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ShaftSpec {
@@ -221,6 +221,12 @@ pub struct ShaftSpec {
     /// Normalized spool speed below which a lit core flames out
     /// (`<= light_off_n`: the gap is the relight hysteresis band).
     pub self_sustain_n: f64,
+    /// Maximum share of combustor heat released as mechanical output by a
+    /// downstream power turbine. Zero preserves a pure jet shaft. This is
+    /// an energy budget, not a thrust multiplier; loaded cycle evaluation
+    /// subtracts the corresponding gas enthalpy and pressure before the core
+    /// nozzle.
+    pub power_turbine_heat_fraction: f64,
 }
 
 impl Default for ShaftSpec {
@@ -230,6 +236,7 @@ impl Default for ShaftSpec {
             generator: GeneratorSpec::default(),
             light_off_n: 0.15,
             self_sustain_n: 0.10,
+            power_turbine_heat_fraction: 0.0,
         }
     }
 }
@@ -258,6 +265,18 @@ impl ShaftSpec {
                 "self-sustain spool must not exceed light-off spool".into(),
             ));
         }
+        if !self.power_turbine_heat_fraction.is_finite()
+            || !(0.0..=1.0).contains(&self.power_turbine_heat_fraction)
+        {
+            return Err(PropulsionError::InvalidSpec(
+                "power-turbine heat fraction must be finite in [0, 1]".into(),
+            ));
+        }
+        if cycle == AirCycle::Ramjet && self.power_turbine_heat_fraction != 0.0 {
+            return Err(PropulsionError::UnsupportedCombination(
+                "ramjets have no turbine shaft or power takeoff".into(),
+            ));
+        }
         self.starter.validate(cycle)?;
         self.generator.validate(cycle)?;
         Ok(())
@@ -275,6 +294,9 @@ pub struct ShaftBalance {
     /// Turbine shaft power available at this fuel flow (0 when the core
     /// is not burning).
     pub capacity_w: f64,
+    /// Gas enthalpy-limited output reserved for a downstream power turbine.
+    #[serde(default)]
+    pub power_takeoff_capacity_w: f64,
     /// Bearing/accessory friction loss at the evaluated spool speed.
     pub friction_w: f64,
 }
@@ -385,6 +407,20 @@ pub fn advance_jet_shaft(
     condition: &FlightCondition,
     dt_s: f64,
 ) -> Result<(JetShaftState, ShaftTelemetry), PropulsionError> {
+    advance_jet_shaft_loaded(engine, state, command, condition, dt_s, 0.0)
+}
+
+/// [`advance_jet_shaft`] with an extra power take-off on the same shaft
+/// (`extra_load_w`, watts): a geared propeller load for turboprops
+/// (section 9). Zero reproduces the plain jet path exactly.
+pub fn advance_jet_shaft_loaded(
+    engine: &CompiledAirbreather,
+    state: JetShaftState,
+    command: &ShaftCommand,
+    condition: &FlightCondition,
+    dt_s: f64,
+    extra_load_w: f64,
+) -> Result<(JetShaftState, ShaftTelemetry), PropulsionError> {
     if engine.cycle == AirCycle::Ramjet {
         return Err(PropulsionError::InvalidCommand(
             "ramjets have no shaft to advance".into(),
@@ -404,6 +440,16 @@ pub fn advance_jet_shaft(
     if !command.generator_load_w.is_finite() || command.generator_load_w < 0.0 {
         return Err(PropulsionError::InvalidCommand(
             "generator load must be finite and >= 0".into(),
+        ));
+    }
+    if !extra_load_w.is_finite() || extra_load_w < 0.0 {
+        return Err(PropulsionError::InvalidCommand(
+            "extra shaft load must be finite and >= 0".into(),
+        ));
+    }
+    if extra_load_w > 0.0 && !state.lit {
+        return Err(PropulsionError::InvalidCommand(
+            "extra shaft load requires an already-lit engine".into(),
         ));
     }
     if !dt_s.is_finite() || dt_s < 0.0 {
@@ -432,8 +478,13 @@ pub fn advance_jet_shaft(
     // Air path at the current spool speed. Fuel is scheduled whenever
     // throttle commands it (a start attempt below light-off still asks
     // "could this light?"); capacity is gated on the decided state.
-    let (point, balance) =
-        engine.operating_point_at_spool(condition, command.throttle, spool_n, commanded)?;
+    let (point, balance) = engine.operating_point_at_spool_loaded(
+        condition,
+        command.throttle,
+        spool_n,
+        commanded,
+        extra_load_w,
+    )?;
 
     // Light-off / self-sustain hysteresis.
     let mut lit = state.lit;
@@ -446,7 +497,15 @@ pub fn advance_jet_shaft(
     } else if spool_n >= engine.shaft.light_off_n {
         lit = true;
     }
-    let capacity_w = if lit { balance.capacity_w } else { 0.0 };
+    // A commanded power-turbine output is credited only when the core is
+    // burning. The same output is booked as the external propeller load
+    // below, so the two cancel while the extracted gas work is reflected in
+    // the nozzle state and available-power limit.
+    let capacity_w = if lit {
+        balance.capacity_w + extra_load_w
+    } else {
+        0.0
+    };
 
     // Starter: shaft power limited by rated power and remaining stored
     // energy scaled through its drivetrain efficiency.
@@ -479,8 +538,9 @@ pub fn advance_jet_shaft(
         generator_shaft_w = generator_electrical_w / generator.efficiency;
     }
 
+    let total_demand_w = balance.demand_w + extra_load_w;
     let net_w =
-        capacity_w + starter_shaft_w - balance.demand_w - balance.friction_w - generator_shaft_w;
+        capacity_w + starter_shaft_w - total_demand_w - balance.friction_w - generator_shaft_w;
     let mut spool_next =
         spool_n + dt_s * net_w / (engine.shaft_reference_power_w * engine.spool_tau_s);
     if !spool_next.is_finite() {
@@ -511,7 +571,7 @@ pub fn advance_jet_shaft(
             starter_charge_j,
             generator_electrical_w,
             generator_shaft_draw_w: generator_shaft_w,
-            demand_w: balance.demand_w,
+            demand_w: total_demand_w,
             capacity_w,
             friction_w: balance.friction_w,
             net_w,
@@ -1141,6 +1201,7 @@ mod tests {
         let balance = ShaftBalance {
             demand_w: 60.0,
             capacity_w: 100.0,
+            power_takeoff_capacity_w: 0.0,
             friction_w: 10.0,
         };
         assert_eq!(balance.net_w(), 30.0);
@@ -1156,5 +1217,31 @@ mod tests {
             .operating_point_at_spool(&condition, 1.0, 0.5, true)
             .expect("full evaluation");
         assert!((lean.net_w() - full.net_w()).abs() < 1e-6);
+    }
+
+    #[test]
+    fn loaded_shaft_zero_load_is_identical_and_bad_loads_are_refused() {
+        let engine = jet_spec(electric_starter(), GeneratorSpec::default())
+            .compile()
+            .expect("compiles");
+        let condition = sl_static();
+        let state = JetShaftState::running(&engine);
+        let command = ShaftCommand {
+            throttle: 1.0,
+            starter_engaged: false,
+            generator_load_w: 0.0,
+        };
+        let plain = advance_jet_shaft(&engine, state, &command, &condition, 0.02)
+            .expect("plain shaft step");
+        let explicit_zero =
+            advance_jet_shaft_loaded(&engine, state, &command, &condition, 0.02, 0.0)
+                .expect("loaded shaft with zero takeoff");
+        assert_eq!(plain, explicit_zero);
+        assert!(
+            advance_jet_shaft_loaded(&engine, state, &command, &condition, 0.02, -1.0).is_err()
+        );
+        assert!(
+            advance_jet_shaft_loaded(&engine, state, &command, &condition, 0.02, f64::NAN).is_err()
+        );
     }
 }

@@ -173,6 +173,39 @@ pub struct FlightCondition {
 }
 
 impl FlightCondition {
+    /// Ambient mass density from the sampled species basis:
+    /// ρ = p M̄ / (R_u T) (composition-aware, section 10).
+    pub fn density_kg_m3(&self) -> f64 {
+        let gas_constant = self.composition.gas_constant_j_kg_k();
+        if !gas_constant.is_finite()
+            || gas_constant <= 0.0
+            || !self.ambient_temp_k.is_finite()
+            || self.ambient_temp_k <= 0.0
+            || !self.ambient_pa.is_finite()
+            || self.ambient_pa < 0.0
+        {
+            return 0.0;
+        }
+        self.ambient_pa / (gas_constant * self.ambient_temp_k)
+    }
+
+    /// Ambient speed of sound from the sampled species basis:
+    /// a = sqrt(γ_mix R_mix T) (composition-aware, section 10).
+    pub fn speed_of_sound_mps(&self) -> f64 {
+        let gas_constant = self.composition.gas_constant_j_kg_k();
+        let gamma = self.composition.mean_heat_capacity_ratio();
+        if !gas_constant.is_finite()
+            || gas_constant <= 0.0
+            || !gamma.is_finite()
+            || gamma <= 1.0
+            || !self.ambient_temp_k.is_finite()
+            || self.ambient_temp_k <= 0.0
+        {
+            return 0.0;
+        }
+        (gamma * gas_constant * self.ambient_temp_k).sqrt()
+    }
+
     /// Validate the condition (NaN fails closed).
     pub fn validate(&self) -> Result<(), PropulsionError> {
         if !self.mach.is_finite() || self.mach < 0.0 {
@@ -425,11 +458,23 @@ struct CycleState {
     /// Compressor + fan power the shaft must supply at this spool speed
     /// (W): the shaft-side demand of the evaluated state.
     shaft_demand_w: f64,
+    /// Maximum downstream power-turbine output at this gas state (W), after
+    /// the authored fuel-heat budget and the positive exhaust-enthalpy bound.
+    power_takeoff_capacity_w: f64,
     oxygen_limited: bool,
     reheat_limited: bool,
     drive_limited: bool,
     /// True when the intake cannot supply demanded flow.
     air_starved: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CycleDriveInput {
+    spool_n: f64,
+    ignition: bool,
+    corrected_flow_kg_s: Option<f64>,
+    power_takeoff_w: f64,
+    power_takeoff_heat_fraction: f64,
 }
 
 /// Run the Brayton core at a condition, TIT, spool speed, and ignition
@@ -442,16 +487,40 @@ struct CycleState {
 /// schedule (false = windmilling/shutdown: airflow only).
 /// `corrected_flow_kg_s` is the design corrected flow (mass at standard
 /// face conditions); demand follows δ/√θ off-design, capped by intake
-/// capture.
+/// capture. `power_takeoff_w` is work extracted by the downstream power
+/// turbine; its heat budget is `power_takeoff_heat_fraction` of combustor
+/// heat, and the same work reduces core-nozzle total temperature/pressure.
 fn run_cycle(
     spec: &AirbreathingSpec,
     fuel: (f64, f64, f64, f64, f64, f64),
     condition: &FlightCondition,
     turbine_temp_k: f64,
-    spool_n: f64,
-    ignition: bool,
-    corrected_flow_kg_s: Option<f64>,
+    drive: CycleDriveInput,
 ) -> Result<CycleState, PropulsionError> {
+    let CycleDriveInput {
+        spool_n,
+        ignition,
+        corrected_flow_kg_s,
+        power_takeoff_w,
+        power_takeoff_heat_fraction,
+    } = drive;
+    if !power_takeoff_w.is_finite() || power_takeoff_w < 0.0 {
+        return Err(PropulsionError::InvalidCommand(
+            "power-turbine load must be finite and >= 0".into(),
+        ));
+    }
+    if !power_takeoff_heat_fraction.is_finite()
+        || !(0.0..=1.0).contains(&power_takeoff_heat_fraction)
+    {
+        return Err(PropulsionError::InvalidSpec(
+            "power-turbine heat fraction must be finite in [0, 1]".into(),
+        ));
+    }
+    if power_takeoff_w > 0.0 && (!ignition || power_takeoff_heat_fraction == 0.0) {
+        return Err(PropulsionError::InvalidCommand(
+            "power-turbine load requires a lit core and nonzero authored takeoff capacity".into(),
+        ));
+    }
     let (lhv, _f_stoich, o2_per_fuel, gamma_b, r_b, _density) = fuel;
     let gamma_a = AIR_GAMMA;
     let cp_b = gamma_b * r_b / (gamma_b - 1.0);
@@ -551,6 +620,11 @@ fn run_cycle(
     // infeasibility — compressor delivery hotter than the TIT schedule
     // allows).
     if fuel_air <= 0.0 && mdot_core_kg_s > 0.0 {
+        if power_takeoff_w > 0.0 {
+            return Err(PropulsionError::InvalidCommand(
+                "power-turbine load requires positive combustor fuel flow".into(),
+            ));
+        }
         return Ok(CycleState {
             mdot_air_kg_s,
             mdot_core_kg_s,
@@ -562,6 +636,7 @@ fn run_cycle(
             fan_total_temp_k: t_fan_exit,
             fan_total_pressure_pa: p_fan_exit,
             shaft_demand_w,
+            power_takeoff_capacity_w: 0.0,
             oxygen_limited: oxygen_limited || oxygen_limited_starved,
             reheat_limited: false,
             drive_limited: f_for_tit <= 0.0,
@@ -578,6 +653,11 @@ fn run_cycle(
     let delta_t_rotor = (work_comp + work_fan) / (cp_b * rotor_flow_ratio);
     // Feasibility: the turbine must supply compression work with margin.
     if delta_t_rotor >= turbine_temp_eff * 0.95 && mdot_core_kg_s > 0.0 {
+        if power_takeoff_w > 0.0 {
+            return Err(PropulsionError::InvalidCommand(
+                "power-turbine load unavailable while the core turbine is drive-limited".into(),
+            ));
+        }
         return Ok(CycleState {
             mdot_air_kg_s,
             mdot_core_kg_s,
@@ -589,6 +669,7 @@ fn run_cycle(
             fan_total_temp_k: t_fan_exit,
             fan_total_pressure_pa: p_fan_exit,
             shaft_demand_w,
+            power_takeoff_capacity_w: 0.0,
             oxygen_limited: oxygen_limited || oxygen_limited_starved,
             reheat_limited: false,
             drive_limited: true,
@@ -606,6 +687,37 @@ fn run_cycle(
     let bleed_flow_ratio = bleed / rotor_flow_ratio.max(1e-12);
     let t_turb_exit = t_rotor_exit * (1.0 - bleed_flow_ratio) + t_comp_exit * bleed_flow_ratio;
     let p_turb_exit = p_rotor_exit * (1.0 - TURBINE_MIXING_DP_FRACTION);
+    let hot_nozzle_flow_kg_s = mdot_core_kg_s * (rotor_flow_ratio + bleed) + fuel_flow_kg_s;
+    let configured_takeoff_w =
+        power_takeoff_heat_fraction * fuel_flow_kg_s * COMBUSTOR_EFFICIENCY * lhv;
+    let max_power_turbine_delta_t = (t_turb_exit - condition.ambient_temp_k)
+        .max(0.0)
+        .min(t_turb_exit * TURBINE_POLY_EFFICIENCY * (1.0 - 1.0e-12));
+    let thermal_takeoff_w =
+        (hot_nozzle_flow_kg_s * cp_b * TURBINE_POLY_EFFICIENCY * max_power_turbine_delta_t)
+            .max(0.0);
+    let power_takeoff_capacity_w = configured_takeoff_w.min(thermal_takeoff_w);
+    if power_takeoff_w > power_takeoff_capacity_w + 1.0e-9 * power_takeoff_capacity_w.max(1.0) {
+        return Err(PropulsionError::InvalidCommand(format!(
+            "power-turbine load {:.3} MW exceeds available {:.3} MW",
+            power_takeoff_w / 1.0e6,
+            power_takeoff_capacity_w / 1.0e6,
+        )));
+    }
+    let mut t_turb_exit = t_turb_exit;
+    let mut p_turb_exit = p_turb_exit;
+    if power_takeoff_w > 0.0 {
+        let delta_t_power_turbine =
+            power_takeoff_w / (hot_nozzle_flow_kg_s * cp_b * TURBINE_POLY_EFFICIENCY);
+        let pressure_factor = 1.0 - delta_t_power_turbine / (t_turb_exit * TURBINE_POLY_EFFICIENCY);
+        if !(pressure_factor > 0.0) || !pressure_factor.is_finite() {
+            return Err(PropulsionError::InvalidCommand(
+                "power-turbine extraction leaves no physical core-nozzle state".into(),
+            ));
+        }
+        p_turb_exit *= pressure_factor.powf(gamma_b / (gamma_b - 1.0));
+        t_turb_exit -= delta_t_power_turbine;
+    }
     // Afterburner with an explicit species O2 budget: combustor air
     // arrives with its oxygen minus what the core burned; cooling bleed
     // rejoins carrying its oxygen with it (burnable here); customer bleed
@@ -644,6 +756,7 @@ fn run_cycle(
         fan_total_temp_k: t_fan_exit,
         fan_total_pressure_pa: p_fan_exit,
         shaft_demand_w,
+        power_takeoff_capacity_w,
         oxygen_limited: oxygen_limited || oxygen_limited_starved,
         reheat_limited,
         drive_limited: false,
@@ -930,16 +1043,20 @@ impl AirbreathingSpec {
             fuel,
             &design_condition,
             self.turbine_inlet_temp_k,
-            1.0,
-            true,
-            Some(design_corrected_flow_kg_s),
+            CycleDriveInput {
+                spool_n: 1.0,
+                ignition: true,
+                corrected_flow_kg_s: Some(design_corrected_flow_kg_s),
+                power_takeoff_w: 0.0,
+                power_takeoff_heat_fraction: self.shaft.power_turbine_heat_fraction,
+            },
         )?;
         if state.drive_limited {
             return Err(PropulsionError::UnsupportedCombination(
                 "turbine cannot drive the compressor at the design point".into(),
             ));
         }
-        // Shaft calibration at the design point (documented): reference
+        // Core-shaft calibration at the design point (documented): reference
         // power is the design turbine shaft capacity, and `FRAC`
         // normalizes it so demand + bearing friction exactly balance
         // capacity at spool 1.0 — the full-throttle sea-level design
@@ -948,9 +1065,11 @@ impl AirbreathingSpec {
         // shaft work the design actually needs to the nominal 50%-of-
         // heat split, so well-calibrated engines land near 1.0 (a
         // fraction slightly above 1.0 just means the compressor needs a
-        // hair more than the nominal split). The refusal enforces energy
-        // conservation on the booking: `FRAC > 2` would give the shaft
-        // more than 100% of the combustor heat release. Gas-side
+        // hair more than the nominal split). A configured downstream
+        // power-turbine share uses the remaining combustor-heat budget. The
+        // refusal enforces energy conservation: core-shaft fraction times
+        // the nominal split plus the power-turbine fraction may not exceed
+        // all combustor heat release. Gas-side
         // feasibility (turbine temperature margin at the design point)
         // is refused separately above — that check, not this one, is
         // what rejects an engine that cannot drive its compressor.
@@ -967,10 +1086,11 @@ impl AirbreathingSpec {
             }
             let frac =
                 (state.shaft_demand_w + SHAFT_FRICTION_FRACTION * capacity_raw_w) / capacity_raw_w;
-            if !(frac <= 1.0 / TURBINE_SHAFT_HEAT_FRACTION) {
+            let maximum_core_fraction =
+                (1.0 - self.shaft.power_turbine_heat_fraction) / TURBINE_SHAFT_HEAT_FRACTION;
+            if !(frac <= maximum_core_fraction) {
                 return Err(PropulsionError::UnsupportedCombination(
-                    "shaft work demand exceeds the combustor heat release at the design point"
-                        .into(),
+                    "core shaft and power-turbine demand exceed combustor heat release at the design point".into(),
                 ));
             }
             (frac, capacity_raw_w)
@@ -1174,9 +1294,13 @@ impl CompiledAirbreather {
             fuel,
             condition,
             tit,
-            spool_n,
-            ignition,
-            Some(self.design_corrected_flow_kg_s),
+            CycleDriveInput {
+                spool_n,
+                ignition,
+                corrected_flow_kg_s: Some(self.design_corrected_flow_kg_s),
+                power_takeoff_w: 0.0,
+                power_takeoff_heat_fraction: self.shaft.power_turbine_heat_fraction,
+            },
         )?;
         Ok(self.balance_from_state(&state, spool_n, ignition))
     }
@@ -1193,6 +1317,11 @@ impl CompiledAirbreather {
                     * state.fuel_flow_kg_s
                     * COMBUSTOR_EFFICIENCY
                     * fuel.0
+            } else {
+                0.0
+            },
+            power_takeoff_capacity_w: if ignition {
+                state.power_takeoff_capacity_w
             } else {
                 0.0
             },
@@ -1215,6 +1344,22 @@ impl CompiledAirbreather {
         throttle: f64,
         spool_n: f64,
         ignition: bool,
+    ) -> Result<(AirOperatingPoint, ShaftBalance), PropulsionError> {
+        self.operating_point_at_spool_loaded(condition, throttle, spool_n, ignition, 0.0)
+    }
+
+    /// [`Self::operating_point_at_spool`] with mechanical power extracted by
+    /// an authored downstream power turbine. The requested load is checked
+    /// against both the configured combustor-heat budget and the available
+    /// gas enthalpy; extracted work lowers core-nozzle total temperature and
+    /// pressure.
+    pub fn operating_point_at_spool_loaded(
+        &self,
+        condition: &FlightCondition,
+        throttle: f64,
+        spool_n: f64,
+        ignition: bool,
+        power_takeoff_w: f64,
     ) -> Result<(AirOperatingPoint, ShaftBalance), PropulsionError> {
         condition.validate()?;
         if !throttle.is_finite() || !(0.0..=1.0).contains(&throttle) {
@@ -1255,9 +1400,13 @@ impl CompiledAirbreather {
             fuel,
             condition,
             tit,
-            spool_n,
-            ignition,
-            Some(self.design_corrected_flow_kg_s),
+            CycleDriveInput {
+                spool_n,
+                ignition,
+                corrected_flow_kg_s: Some(self.design_corrected_flow_kg_s),
+                power_takeoff_w,
+                power_takeoff_heat_fraction: self.shaft.power_turbine_heat_fraction,
+            },
         )?;
         let balance = self.balance_from_state(&state, spool_n, ignition);
         // Static-suction label: air above ram-only capture at low speed

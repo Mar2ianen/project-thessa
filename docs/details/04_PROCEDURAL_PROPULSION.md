@@ -8,9 +8,12 @@ nuclear thermal models, multi-chamber systems, air-breathing jets
 (turbojet/turbofan/ramjet) with the single-spool shaft/starter runtime
 (starter topologies, light-off/self-sustain, relight, generator load),
 composition-aware atmosphere queries (section 10), and
-the ESTOC combined-cycle engine. Star/finocyl
-grain burnback, tank depletion wiring, the flight-loop allocator, shaft-power
-propulsion, scramjets, and the editor UI are still TBD (see section 18).
+the ESTOC combined-cycle engine, plus piston/electric propeller drives and a
+stateful, heat-budgeted turboprop takeoff path on a reusable ideal actuator
+disk (section 9). Star/finocyl grain burnback, tank depletion wiring, the
+flight-loop allocator, transient piston/electric source and prop-shaft
+state, finite-blade propeller maps, an independent free-power-turbine spool,
+scramjets, and the editor UI are still TBD (see section 18).
 
 ## 1. Design goal
 
@@ -418,15 +421,16 @@ rocket ejector, or other modeled source creates flow/torque. A separate
 steady-state performance analyzer may continue to evaluate already-running
 static thrust, but it must label that assumption explicitly.
 
-Status note (2026-09-23): the single-spool runtime described above has landed
+Status note (2026-09-24): the single-spool runtime described above has landed
 in `propulsion::shaft` (section 18.8) — starter topologies with real
 stored-energy draw, light-off/self-sustain hysteresis, windmill relight,
 spool-scaled compressor suction, and generator load in the shaft work
-balance. Still deferred from this section: multi-spal/gearbox coupling,
-torque-level (instead of power-level) starter/generator authoring, the
-pneumatic and rocket-bootstrap resource pipelines (all stored-energy
-topologies currently book one energy reservoir), and generator thermal
-limits/bus connection.
+balance. A power-level downstream power-turbine load now shares this balance,
+and its enthalpy extraction is documented in section 18.10. Still deferred
+from this section: independent multi-spool/gearbox coupling, torque-level
+starter/generator authoring, pneumatic and rocket-bootstrap resource
+pipelines (stored-energy topologies currently book one energy reservoir),
+and generator thermal limits/bus connection.
 
 ## 9. Piston, electric, and generic shaft-power propulsion
 
@@ -449,6 +453,16 @@ electrical source -> motor/controller -> shaft -> propeller/fan
 The motor should expose physical power, torque/RPM, efficiency, thermal limits, and mass rather than exist as a special `electric propeller` force primitive.
 
 This allows batteries, fuel cells, fission reactors, fusion reactors, generators, or other electrical sources to drive the same propeller/fan component.
+
+Status note (2026-09-24): the backend now has a reusable annular ideal
+actuator disk with piston-Otto, electric-motor, and gas-turbine power-takeoff
+sources, including vehicle mounts, mass aggregation, analyzer rows, and
+electrical/fuel/thermal/shaft telemetry (section 18.10). The disk is explicitly
+an incompressible momentum-theory bound: blade-element pitch/stall/profile
+maps are not implied. Piston/electric sources are steady operating points;
+the turboprop shares the existing normalized gas-generator shaft state and
+uses a power-level takeoff command. Transient piston/electric startup,
+propeller-shaft/free-turbine inertia, and finite-blade maps remain open.
 
 ## 10. Atmospheric reactants are not assumed to be oxygen
 
@@ -986,9 +1000,12 @@ Star/finocyl grain geometry (needs numerical perimeter burnback, not a
 tweak of the port solver), tank depletion wiring into the flight loop
 (the queries exist; the loop still flies baked mass), per-engine
 allocation in the flight loop (authority pairs exist; the allocator
-still sees one lever), shaft-power propulsion (turboprop/piston/electric
-fans), scramjets, and the editor UI itself (the CLI/JSON analyzer
-is its backend contract).
+still sees one lever), transient piston/electric source startup and
+propeller-shaft inertia, finite-blade propeller pitch/stall/profile maps, and
+an independent free-power-turbine/prop-rotor inertia model (the current
+turboprop extracts power through the shared normalized gas-generator shaft),
+scramjets, and the editor UI itself (the CLI/JSON analyzer is its backend
+contract).
 
 ### 18.8 Jet shaft/starter runtime (section 8.1, single spool)
 
@@ -1009,8 +1026,12 @@ Formal description:
   draw, demand, capacity, friction, and net shaft power — the debug
   channel for the effect.
 - Balance per step: capacity exists only while `lit` (reheat fuel is
-  downstream of the turbine and never drives the shaft) and is booked
-  as `FRAC × TURBINE_SHAFT_HEAT_FRACTION × fuel × η_comb × LHV`;
+  downstream of the turbine and never drives the shaft). Core-turbine
+  capacity is booked as
+  `FRAC × TURBINE_SHAFT_HEAT_FRACTION × fuel × η_comb × LHV`. A loaded
+  downstream power turbine credits only its commanded extracted power to
+  shaft capacity, then the matching propeller load is booked on demand
+  (section 18.10).
   compressor/fan demand and bearing friction
   (`SHAFT_FRICTION_FRACTION × P_ref × n³`) always cost rotation. The
   starter adds shaft power at its topology efficiency (electric 0.85,
@@ -1026,13 +1047,14 @@ Formal description:
   Engaging a starter with `StarterKind::None`, ramjet shaft commands,
   and non-finite/out-of-range inputs are explicit refusals (NaN fails
   closed).
-- Calibration: `P_ref` (design turbine shaft capacity) and `FRAC`
+- Calibration: `P_ref` (design turbine shaft reference power) and `FRAC`
   come from the compile-time design run so full-throttle sea-level
   static is an exact steady equilibrium — the anchor that keeps every
-  runtime number comparable with v5. Compile refuses `FRAC > 2` (the
-  shaft booking would exceed 100% of the combustor heat release) or a
-  design point with no shaft-usable heat; gas-side drive feasibility
-  is a separate, pre-existing refusal.
+  runtime number comparable with v5. Compile refuses when
+  `FRAC × TURBINE_SHAFT_HEAT_FRACTION + power_turbine_heat_fraction > 1`
+  (the combined shaft booking would exceed combustor heat release) or a
+  design point with no shaft-usable heat; gas-side drive feasibility is a
+  separate refusal.
 - Suction and schedules ride the actual spool: the
   `INTAKE_DESIGN_CAPTURE_MACH` floor scales with `spool_n` (zero at
   rest — no free intake flow without a shaft source), head with
@@ -1108,3 +1130,93 @@ property instead of a transitional caller scalar.
   the air analyzer sweep (55 rows of altitude × Mach) runs at ~4.5 µs
   per row including the steady spool solve, with the per-row species
   stamp inside that cost.
+
+### 18.10 Steady shaft-power propeller drives (section 9)
+
+Shipped 2026-09-24: a reusable ideal actuator disk can be driven by a
+four-stroke piston engine, a continuous-duty electric motor, or a gas-turbine
+power takeoff, and mounted on a vehicle with force/moment, dry-mass, baker,
+and analyzer paths.
+
+- State and inputs: these are steady operating-point components, not a
+  transient rotor state machine. `PropellerDriveCommand` supplies normalized
+  throttle and source RPM. `PropellerDriveSpec` combines a geometric annular
+  disk, gearbox efficiency, a source (`PistonEngineSpec` or
+  `ElectricMotorSpec`), and source-to-propeller reduction ratio.
+- Propulsor law: the incompressible ideal actuator disk solves
+  `P = 2 ρ A v_i (V + v_i)^2` and reports
+  `T = 2 ρ A v_i (V + v_i)`. The solution is bracketed by 0 and
+  `cbrt(P/(2ρA))`, then bisected 80 times. Propulsive efficiency is
+  `T V / P`; it is exactly zero at static conditions. At zero density,
+  thrust and absorbed power are zero with `density_limited` telemetry.
+  Blade pitch/stall, profile drag, swirl, and compressibility are outside
+  this ideal bound and are not hidden in fitted thrust multipliers.
+- Piston source: bore, stroke, and cylinder count determine swept volume.
+  The air-standard four-stroke Otto cycle uses mixture `R` and `γ`, authored
+  compression/boost/volumetric/combustion efficiencies, and fuel LHV plus
+  stoichiometry. Fuel is capped by sampled oxygen mass fraction. Friction
+  MEP and isentropic supercharger work are deducted before brake power;
+  wall-heat fraction plus friction are checked against cooling capacity,
+  with a bisection throttle cap and `cooling_limited` evidence. Installed
+  engine dry mass is an explicit hardware property.
+- Electric source: the motor has a constant-torque region up to base speed
+  (`P_rated/τ_peak`) and a constant-power region to maximum RPM. Electrical
+  draw is `P_mech/η`; waste heat is `P_mech(1/η − 1)`. Cooling caps
+  mechanical output and reports `thermal_limited`; installed mass and bus
+  draw are explicit outputs. Standstill winding losses and battery state of
+  charge are not represented by this steady component.
+- Turboprop source: `TurbopropDriveSpec` compiles an airbreather with a
+  positive `ShaftSpec::power_turbine_heat_fraction`, power turbine mass,
+  rated full-spool RPM, reduction ratio, and the same propeller component.
+  The compile-time energy check requires
+  `core_FRAC × 0.5 + power_turbine_heat_fraction ≤ 1`. At runtime available
+  PTO is the lesser of the authored fuel-heat budget and the downstream gas
+  enthalpy/pressure bound. For hot-stream flow `ṁ`, burned-gas `cp`, turbine
+  inlet-to-power-stage temperature `T₃`, and turbine efficiency `ηₜ`,
+  `P_PTO,max = ṁ cp ηₜ min(max(T₃ − T_ambient, 0), T₃ ηₜ(1−ε))`, where
+  `ε=10⁻¹²` keeps the pressure ratio positive. A requested load `P_PTO`
+  removes `ΔT=P_PTO/(ṁ cp ηₜ)` and updates total pressure by
+  `p_out/p_in=[1−ΔT/(T₃ηₜ)]^(γ/(γ−1))` before core-nozzle matching.
+  `advance_jet_shaft_loaded` books that same extracted power as output and
+  propeller draw in the common-shaft balance, so unused maximum capacity is
+  not silently credited and requested load above either limit is refused.
+  Propeller RPM follows normalized shaft speed times rated RPM divided by
+  reduction ratio. This is a power-level,
+  single-spool turboprop approximation, not a distinct free-power-turbine
+  spool or torque/inertia model.
+- Vehicle integration: `PropellerDriveMount` validates the unit thrust axis;
+  `VehicleDefinition::propeller_drives_wrench_body_n` sums thrust and
+  mount-station cross products and returns per-drive telemetry. The baker
+  accepts `[[propeller_drives]]`, aggregates source/rotor/gearbox dry mass at
+  the mount, recenters with the other vehicle masses, and exposes altitude ×
+  true-airspeed analyzer rows (`--source-rpm`).
+- Turboprop vehicle integration: `TurbopropMount` advances the shaft state,
+  sums the loaded core-nozzle and propeller thrust at one mount station, and
+  returns the next command state. The baker accepts `[[turboprops]]`, includes
+  gas path, power turbine, propeller, and reduction gear mass in COM/inertia,
+  and the analyzer reports combined thrust over altitude × true-airspeed;
+  `--power-takeoff-fraction` requests that share of each row's available PTO.
+- Known-case/regression tests: static ideal-disk thrust matches
+  `(2ρAP²)^(1/3)` within `2e-14` relative; forward-flight efficiency matches
+  `V/(V+v_i)`; Otto efficiency matches `1 − r^(1−γ)`; anoxic air gives zero
+  piston fuel/shaft power; low cooling capacity and motor losses report
+  their thermal caps; the electric gear path pins power conservation and
+  vehicle force/moment/mass aggregation. Turboprop regressions pin PTO heat
+  and enthalpy refusals, core exhaust-temperature/thrust reduction, shaft-load
+  telemetry, mount wrench/mass, and vacuum analyzer output.
+- Numerical error: 80 root halvings bound the induced-velocity interval by
+  `cbrt(P/(2ρA))/2^80`; the static closed-form regression is within
+  `2e-14` relative in f64. The cooling cap uses 56 throttle halvings; its
+  regression leaves heat rejection no more than `1e-7 W` above capacity.
+  Turbine takeoff uses closed-form temperature/pressure relations; the
+  enthalpy limiter prevents `T_out < T_ambient`, and `ε` bounds pressure-ratio
+  evaluation away from zero.
+- Benchmark (`benches/propulsion.rs`, 11 altitudes × 4 airspeeds, 44 rows):
+  electric drive analyzer 486 ns/row, piston drive analyzer 286 ns/row, and
+  turboprop analyzer 1,031 ns/row in the recorded release run. These include
+  atmosphere sampling, source evaluation, power-turbine extraction where
+  applicable, and the actuator-disk solve.
+- Remaining section 9 work: transient piston/electric source startup and
+  propeller-shaft state, finite-blade pitch/stall/profile maps, and an
+  independent free-power-turbine/propeller inertia model. These remain
+  explicit section 18.7 debts rather than being inferred from the ideal disk.

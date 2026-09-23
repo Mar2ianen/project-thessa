@@ -7,9 +7,11 @@ use std::{hint::black_box, time::Instant};
 
 use thessa_sim_core::{
     AirCycle, AirbreathingSpec, AtmosphereConfig, ChamberMaterial, CompiledEngine, CoolingMode,
-    EngineCycle, GasKind, IntakeKind, JetFuel, JetShaftState, LiquidEngineSpec, NozzleContour,
-    Propellant, ShaftCommand, ShaftSpec, SolidMotorSpec, StarterKind, StarterSpec,
-    advance_jet_shaft, analyze_airbreathing, analyze_altitude, flight_condition,
+    ElectricMotorSpec, EngineCycle, GasKind, IntakeKind, JetFuel, JetShaftState, LiquidEngineSpec,
+    NozzleContour, PistonEngineSpec, Propellant, PropellerDriveSpec, PropellerSpec, ShaftCommand,
+    ShaftPowerSourceSpec, ShaftSpec, SolidMotorSpec, StarterKind, StarterSpec, TurbopropDriveSpec,
+    advance_jet_shaft, analyze_airbreathing, analyze_altitude, analyze_propeller_drive,
+    analyze_turboprop_drive, flight_condition,
 };
 
 fn methalox_spec() -> LiquidEngineSpec {
@@ -190,6 +192,115 @@ fn main() {
     let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * warm_rows.len()) as f64;
     println!(
         "air analyzer row: {per_row_ns:.1} ns/row ({} rows/iter, species stamped per row)",
+        warm_rows.len()
+    );
+
+    // Shaft-power aircraft analyzer (section 9): electric and piston sources
+    // driving the same ideal actuator-disk component over an 11-altitude ×
+    // 4-airspeed target grid.
+    let electric_drive = PropellerDriveSpec {
+        propeller: PropellerSpec::default(),
+        source: ShaftPowerSourceSpec::Electric(ElectricMotorSpec::default()),
+        reduction_ratio: 2.0,
+    }
+    .compile()
+    .expect("electric propeller drive");
+    let piston_drive = PropellerDriveSpec {
+        propeller: PropellerSpec::default(),
+        source: ShaftPowerSourceSpec::Piston(PistonEngineSpec {
+            cooling_capacity_w: 100_000.0,
+            ..PistonEngineSpec::default()
+        }),
+        reduction_ratio: 1.0,
+    }
+    .compile()
+    .expect("piston propeller drive");
+    let source_rpm = 2_400.0;
+    let airspeeds_mps = [0.0, 50.0, 100.0, 150.0];
+    for (label, drive) in [("electric", &electric_drive), ("piston", &piston_drive)] {
+        let warm_rows = analyze_propeller_drive(
+            drive,
+            &atmosphere,
+            &altitudes,
+            &airspeeds_mps,
+            1.0,
+            source_rpm,
+        )
+        .expect("shaft-power analyzer");
+        let start = Instant::now();
+        for _ in 0..iters {
+            black_box(
+                analyze_propeller_drive(
+                    drive,
+                    &atmosphere,
+                    &altitudes,
+                    &airspeeds_mps,
+                    1.0,
+                    source_rpm,
+                )
+                .expect("shaft-power analyzer"),
+            );
+        }
+        let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * warm_rows.len()) as f64;
+        println!(
+            "{label} propeller analyzer row: {per_row_ns:.1} ns/row ({} rows/iter)",
+            warm_rows.len()
+        );
+    }
+
+    let turboprop = TurbopropDriveSpec {
+        air: AirbreathingSpec {
+            name: "bench-turboprop-core".into(),
+            cycle: AirCycle::Turbojet,
+            fuel: JetFuel::Kerosene,
+            intake_area_m2: 0.9,
+            intake: IntakeKind::Pitot,
+            compressor_ratio: 12.0,
+            bypass_ratio: 0.0,
+            fan_pressure_ratio: 1.0,
+            turbine_inlet_temp_k: 1_500.0,
+            afterburner: false,
+            reheat_temp_k: 0.0,
+            turbine_material: ChamberMaterial::nickel_superalloy(),
+            spool_tau_s: 5.0,
+            shaft: ShaftSpec {
+                power_turbine_heat_fraction: 0.15,
+                ..ShaftSpec::default()
+            },
+        },
+        propeller: PropellerSpec::default(),
+        shaft_rpm_at_full_spool: 12_000.0,
+        reduction_ratio: 6.0,
+        power_turbine_mass_kg: 45.0,
+    }
+    .compile()
+    .expect("turboprop drive");
+    let warm_rows = analyze_turboprop_drive(
+        &turboprop,
+        &atmosphere,
+        &altitudes,
+        &airspeeds_mps,
+        1.0,
+        0.25,
+    )
+    .expect("turboprop analyzer");
+    let start = Instant::now();
+    for _ in 0..iters {
+        black_box(
+            analyze_turboprop_drive(
+                &turboprop,
+                &atmosphere,
+                &altitudes,
+                &airspeeds_mps,
+                1.0,
+                0.25,
+            )
+            .expect("turboprop analyzer"),
+        );
+    }
+    let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * warm_rows.len()) as f64;
+    println!(
+        "turboprop analyzer row: {per_row_ns:.1} ns/row ({} rows/iter)",
         warm_rows.len()
     );
 }

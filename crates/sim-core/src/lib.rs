@@ -94,23 +94,30 @@ pub use onrails::{
 pub use propulsion::{
     AIR_CP_J_KG_K, AIR_GAMMA, AirAltitudePoint, AirCycle, AirOperatingPoint, AirbreathingSpec,
     AltitudePoint, BurnPoint, ChamberMaterial, ChamberSpec, ColdGasThrusterSpec,
-    CompiledAirbreather, CompiledChamber, CompiledColdGas, CompiledEngine, CompiledEstoc,
-    CompiledJet, CompiledLiquid, CompiledMonoprop, CompiledPropulsionSystem, CompiledSolid,
-    CoolingMode, CycleLimits, ESTOC_DEFAULT_SWITCH_MACH_HI, ESTOC_DEFAULT_SWITCH_MACH_LO,
-    ESTOC_DEFAULT_TRANSITION_TAU_S, ESTOC_MAX_ROCKET_PC_PA, ESTOC_REINFORCEMENT_FRACTION,
-    EngineCycle, EngineMount, EngineOperatingPoint, EnginePlumeState, EngineSpool, EstocMode,
-    EstocPoint, EstocSpec, FlightCondition, GeneratorSpec, GimbalEffector, IntakeKind, JetCommand,
-    JetFuel, JetMount, JetShaftState, LiquidEngineSpec, MAX_SYSTEM_CHAMBERS, MonopropThrusterSpec,
+    CompiledAirbreather, CompiledChamber, CompiledColdGas, CompiledElectricMotor, CompiledEngine,
+    CompiledEstoc, CompiledJet, CompiledLiquid, CompiledMonoprop, CompiledPistonEngine,
+    CompiledPropeller, CompiledPropellerDrive, CompiledPropulsionSystem, CompiledShaftPowerSource,
+    CompiledSolid, CompiledTurbopropDrive, CoolingMode, CycleLimits, ESTOC_DEFAULT_SWITCH_MACH_HI,
+    ESTOC_DEFAULT_SWITCH_MACH_LO, ESTOC_DEFAULT_TRANSITION_TAU_S, ESTOC_MAX_ROCKET_PC_PA,
+    ESTOC_REINFORCEMENT_FRACTION, ElectricMotorPoint, ElectricMotorSpec, EngineCycle, EngineMount,
+    EngineOperatingPoint, EnginePlumeState, EngineSpool, EstocMode, EstocPoint, EstocSpec,
+    FlightCondition, GeneratorSpec, GimbalEffector, IntakeKind, JetCommand, JetFuel, JetMount,
+    JetShaftState, LiquidEngineSpec, MAX_SYSTEM_CHAMBERS, MonopropThrusterSpec,
     NTR_COOLDOWN_FRACTION, NTR_DEFAULT_RATED_BURN_S, NTR_DEFAULT_SPECIFIC_MASS_KG_PER_MW,
     NTR_DEFAULT_STARTUP_TAU_S, NTR_INLET_TEMP_K, NTR_KINETIC_EFFICIENCY,
     NTR_MAX_CHAMBER_PRESSURE_PA, NozzleContour, NozzleExitState, NtrFluid, NtrSupplement,
-    NuclearThermalSpec, Propellant, PropellantThermo, PropulsionError, PropulsionSystemSpec,
+    NuclearThermalSpec, PistonEngineSpec, PistonOperatingPoint, PropDriveAltitudePoint,
+    PropDrivePoint, Propellant, PropellantThermo, PropellerDriveCommand, PropellerDriveMount,
+    PropellerDriveSpec, PropellerPoint, PropellerSpec, PropulsionError, PropulsionSystemSpec,
     RCS_DEFAULT_MIN_ON_TIME_S, RCS_DEFAULT_RISE_TIME_S, RcsCluster, RcsMount, RcsPulse,
     RcsThruster, SEPARATION_PRESSURE_RATIO, STANDARD_GRAVITY_MPS2, ShaftBalance, ShaftCommand,
-    ShaftSpec, ShaftTelemetry, SolidMotorSpec, StarterKind, StarterSpec, SystemAltitudePoint,
-    SystemMount, SystemOperatingPoint, advance_jet_shaft, advance_jet_spool, advance_spool,
-    analyze_airbreathing, analyze_altitude, characteristic_velocity, flight_condition,
-    mach_from_area_ratio, thrust_coefficient,
+    ShaftPowerSourceSpec, ShaftSpec, ShaftTelemetry, SolidMotorSpec, StarterKind, StarterSpec,
+    SystemAltitudePoint, SystemMount, SystemOperatingPoint, TurbopropAltitudePoint,
+    TurbopropCommand, TurbopropDriveSpec, TurbopropMount, TurbopropOperatingPoint,
+    advance_jet_shaft, advance_jet_shaft_loaded, advance_jet_spool, advance_spool,
+    analyze_airbreathing, analyze_altitude, analyze_propeller_drive, analyze_turboprop_drive,
+    characteristic_velocity, effective_propulsive_isp_s, flight_condition, mach_from_area_ratio,
+    thrust_coefficient,
 };
 pub use scheduler::{EventScheduler, ScheduledEvent, ScheduledKind};
 pub use system::{
@@ -122,8 +129,8 @@ pub use tick_integrator::{TickIntegratorConfig, propagate_tick_adaptive};
 pub use time::{SimTime, WORLD_TICK_HZ, WORLD_TICK_S, WorldTick};
 pub use units::{AU_M, DAY_S, EARTH_MASS_KG, G, JUPITER_MASS_KG, SOLAR_MASS_KG, TAU};
 pub use vehicle::{
-    ControlKind, ControlSurfaceDefinition, FoldJointRecord, VehicleDefinition, VehicleError,
-    X15StarterProfile, x15_contact_geometry,
+    ControlKind, ControlSurfaceDefinition, FoldJointRecord, StatefulTurbopropWrench,
+    VehicleDefinition, VehicleError, X15StarterProfile, x15_contact_geometry,
 };
 
 #[cfg(test)]

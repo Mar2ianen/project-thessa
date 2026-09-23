@@ -19,7 +19,8 @@
 //! `nozzle` (isentropic kernel + contours), `cycle` (feed topologies),
 //! `material` (walls + cooling), `liquid` / `solid` (authoring + compile),
 //! `engine` (runtime dispatch + thermal/depletion), `spool` (ignition
-//! dynamics), `analyze` (editor altitude curves), `mount` (vehicle mounts +
+//! dynamics), `shaft` (jet shaft state: starter topologies, light-off and
+//! self-sustain, generator load), `analyze` (editor altitude curves), `mount` (vehicle mounts +
 //! gimbal authority). Every public name from the former single-file module
 //! re-exports here unchanged.
 
@@ -37,6 +38,7 @@ mod nozzle;
 mod nuclear;
 mod propellant;
 mod rcs;
+mod shaft;
 mod solid;
 mod spool;
 mod system;
@@ -55,7 +57,7 @@ pub use estoc::{
     ESTOC_DEFAULT_TRANSITION_TAU_S, ESTOC_MAX_ROCKET_PC_PA, ESTOC_REINFORCEMENT_FRACTION,
     EstocMode, EstocPoint, EstocSpec, EstocTransient,
 };
-pub use jet::{CompiledJet, EstocCommand, JetMount};
+pub use jet::{CompiledJet, JetCommand, JetMount};
 pub use liquid::{CompiledLiquid, LiquidEngineSpec};
 pub use material::{ChamberMaterial, CoolingMode};
 pub use mount::{EngineMount, GimbalEffector};
@@ -73,6 +75,10 @@ pub use rcs::{
     ColdGasThrusterSpec, CompiledColdGas, CompiledMonoprop, MonopropThrusterSpec,
     RCS_DEFAULT_MIN_ON_TIME_S, RCS_DEFAULT_RISE_TIME_S, RcsCluster, RcsMount, RcsPulse,
     RcsThruster,
+};
+pub use shaft::{
+    GeneratorSpec, JetShaftState, ShaftBalance, ShaftCommand, ShaftSpec, ShaftTelemetry,
+    StarterKind, StarterSpec, advance_jet_shaft,
 };
 pub use solid::{BurnPoint, CompiledSolid, SolidMotorSpec};
 pub use spool::{EngineSpool, advance_spool};

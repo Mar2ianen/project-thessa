@@ -11,8 +11,8 @@ use thessa_sim_core::{
     CollisionShape, CompiledEngine, CompiledJet, ControlSurfaceDefinition, CoolingMode,
     EngineCycle, EngineMount, EstocSpec, FoldJointRecord, IntakeKind, JetFuel, JetMount,
     LiquidEngineSpec, NozzleContour, NtrFluid, NuclearThermalSpec, Propellant,
-    PropulsionSystemSpec, RigidBodyProperties, SolidMotorSpec, SystemMount, TankMount, TankShape,
-    TankSpec, VehicleDefinition, analyze_airbreathing, analyze_altitude,
+    PropulsionSystemSpec, RigidBodyProperties, ShaftSpec, SolidMotorSpec, SystemMount, TankMount,
+    TankShape, TankSpec, VehicleDefinition, analyze_airbreathing, analyze_altitude,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -141,7 +141,7 @@ fn run_analyzer(
         }
         for mount in &vehicle.jets {
             let air = match &mount.engine {
-                CompiledJet::Air(engine) => engine,
+                CompiledJet::Air(engine) => engine.as_ref(),
                 CompiledJet::Estoc(engine) => &engine.air,
             };
             rows.push(serde_json::json!({
@@ -210,7 +210,7 @@ fn run_analyzer(
     }
     for mount in &vehicle.jets {
         let air = match &mount.engine {
-            CompiledJet::Air(engine) => engine,
+            CompiledJet::Air(engine) => engine.as_ref(),
             CompiledJet::Estoc(engine) => &engine.air,
         };
         println!(
@@ -1169,6 +1169,29 @@ impl SystemAsset {
 /// rocket_chamber_pressure_mpa = 7.0
 /// rocket_throat_radius_m = 0.09
 /// ```
+///
+/// Optional shaft topology block (section 8.1): starter, generator, and
+/// light-off/self-sustain thresholds. Omitted = inert default
+/// (starterless, windmill/relight only):
+///
+/// ```text
+/// [jets.shaft]
+/// light_off_n = 0.15
+/// self_sustain_n = 0.10
+///
+/// [jets.shaft.starter]
+/// kind = "electric"       # "none" | "electric" | "pneumatic" | "rocket-bootstrap"
+/// power_w = 200000.0
+/// charge_j = 20000000.0
+/// mass_kg = 12.0
+///
+/// [jets.shaft.generator]
+/// fitted = true
+/// power_w = 50000.0
+/// efficiency = 0.92
+/// cut_in_spool_n = 0.5
+/// mass_kg = 25.0
+/// ```
 #[derive(Debug, Deserialize)]
 struct JetAsset {
     name: String,
@@ -1197,6 +1220,10 @@ struct JetAsset {
     material: MaterialAsset,
     #[serde(default = "default_spool_tau")]
     spool_tau_s: f64,
+    /// Shaft topology block (`[jets.shaft]`): starter, generator,
+    /// light-off/self-sustain. Inert default when omitted.
+    #[serde(default)]
+    shaft: ShaftSpec,
     // ESTOC-only rocket block.
     #[serde(default)]
     rocket_chamber_pressure_mpa: Option<f64>,
@@ -1255,6 +1282,7 @@ impl JetAsset {
             reheat_temp_k: self.reheat_temp_k,
             turbine_material: self.material()?,
             spool_tau_s: self.spool_tau_s,
+            shaft: self.shaft.clone(),
         })
     }
 
@@ -1273,7 +1301,7 @@ impl JetAsset {
 
     fn bake(self) -> Result<JetMount, Box<dyn Error>> {
         let engine = match self.kind {
-            JetKind::Jet => CompiledJet::Air(self.air_spec()?.compile()?),
+            JetKind::Jet => CompiledJet::Air(Box::new(self.air_spec()?.compile()?)),
             JetKind::Estoc => {
                 let spec = EstocSpec {
                     name: self.name.clone(),

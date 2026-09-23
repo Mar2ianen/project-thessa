@@ -215,6 +215,46 @@ impl JetMount {
         jet: &JetCommand,
     ) -> Result<(EstocPoint, EstocTransient, JetShaftState), PropulsionError> {
         self.validate()?;
+        let air_engine = self.air_engine();
+        if !air_engine.cycle.has_shaft() {
+            if jet.starter_engaged
+                || !jet.generator_load_w.is_finite()
+                || jet.generator_load_w != 0.0
+            {
+                return Err(PropulsionError::InvalidCommand(
+                    "ramjet/scramjet mounts do not accept starter or generator commands".into(),
+                ));
+            }
+            let point = air_engine.operating_point(condition, throttle)?;
+            let snapshot = EstocTransient {
+                thrust_n: point.thrust_n.max(0.0),
+                fuel_flow_kg_s: point.fuel_flow_kg_s,
+                oxidizer_flow_kg_s: 0.0,
+                air_flow_kg_s: point.air_flow_kg_s,
+                exhaust_temp_k: point.exhaust_temp_k,
+                exhaust_velocity_mps: point.exhaust_velocity_mps,
+                exit_pressure_pa: point.exit_pressure_pa,
+                exit_mach: point.exit_mach,
+            };
+            let mut shaft = JetShaftState::running(air_engine);
+            shaft.lit = point.lit;
+            return Ok((
+                EstocPoint {
+                    mode: EstocMode::Air,
+                    thrust_n: snapshot.thrust_n,
+                    fuel_flow_kg_s: snapshot.fuel_flow_kg_s,
+                    oxidizer_flow_kg_s: 0.0,
+                    air_flow_kg_s: snapshot.air_flow_kg_s,
+                    isp_total_s: point.isp_s,
+                    exhaust_temp_k: snapshot.exhaust_temp_k,
+                    exhaust_velocity_mps: snapshot.exhaust_velocity_mps,
+                    exit_pressure_pa: snapshot.exit_pressure_pa,
+                    exit_mach: snapshot.exit_mach,
+                },
+                snapshot,
+                shaft,
+            ));
+        }
         let shaft_cmd = ShaftCommand {
             throttle,
             starter_engaged: jet.starter_engaged,
@@ -409,6 +449,53 @@ mod tests {
         let mut bad = mount;
         bad.thrust_axis_body = [2.0, 0.0, 0.0];
         assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn scramjet_mount_uses_passive_cycle_and_refuses_shaft_accessories() {
+        let engine = AirbreathingSpec {
+            name: "mounted-scramjet".into(),
+            cycle: AirCycle::Scramjet,
+            fuel: JetFuel::Hydrogen,
+            intake_area_m2: 0.5,
+            intake: IntakeKind::Ramp,
+            compressor_ratio: 1.0,
+            bypass_ratio: 0.0,
+            fan_pressure_ratio: 1.0,
+            turbine_inlet_temp_k: 2_300.0,
+            afterburner: false,
+            reheat_temp_k: 0.0,
+            turbine_material: ChamberMaterial::nickel_superalloy(),
+            spool_tau_s: 5.0,
+            shaft: ShaftSpec::default(),
+        }
+        .compile()
+        .expect("scramjet");
+        let mount = JetMount {
+            name: "scramjet-mount".into(),
+            engine: CompiledJet::Air(Box::new(engine)),
+            position_body_m: [0.0; 3],
+            thrust_axis_body: [1.0, 0.0, 0.0],
+            gimbal_range_rad: 0.0,
+        };
+        let sample = crate::AtmosphereConfig::default()
+            .sample(20_000.0)
+            .expect("20 km atmosphere");
+        let condition =
+            crate::flight_condition(&sample, 6.0 * sample.speed_of_sound_mps).expect("Mach 6");
+        let command = JetCommand::fresh();
+        let (point, _, shaft) = mount
+            .estoc_point(1.0, &condition, &command)
+            .expect("passive air path");
+        assert!(point.thrust_n > 0.0);
+        assert_eq!(shaft.spool_n, 1.0);
+
+        let mut invalid = command;
+        invalid.starter_engaged = true;
+        assert!(mount.estoc_point(1.0, &condition, &invalid).is_err());
+        invalid.starter_engaged = false;
+        invalid.generator_load_w = 10.0;
+        assert!(mount.estoc_point(1.0, &condition, &invalid).is_err());
     }
 
     #[test]

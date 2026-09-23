@@ -118,12 +118,12 @@ impl Default for StarterSpec {
 }
 
 impl StarterSpec {
-    /// Validate against the engine cycle (NaN fails closed; ramjets
-    /// refuse shaft hardware because they have no shaft).
+    /// Validate against the engine cycle (NaN fails closed; ramjets and
+    /// scramjets refuse shaft hardware because they have no shaft).
     pub fn validate(&self, cycle: AirCycle) -> Result<(), PropulsionError> {
-        if cycle == AirCycle::Ramjet && self.kind != StarterKind::None {
+        if !cycle.has_shaft() && self.kind != StarterKind::None {
             return Err(PropulsionError::UnsupportedCombination(
-                "ramjets have no compressor/turbine shaft to start".into(),
+                "ramjets and scramjets have no compressor/turbine shaft to start".into(),
             ));
         }
         match self.kind {
@@ -176,12 +176,13 @@ impl Default for GeneratorSpec {
 }
 
 impl GeneratorSpec {
-    /// Validate against the engine cycle (NaN fails closed; ramjets
-    /// refuse shaft hardware because they have no shaft).
+    /// Validate against the engine cycle (NaN fails closed; ramjets and
+    /// scramjets refuse shaft hardware because they have no shaft).
     pub fn validate(&self, cycle: AirCycle) -> Result<(), PropulsionError> {
-        if cycle == AirCycle::Ramjet && self.fitted {
+        if !cycle.has_shaft() && self.fitted {
             return Err(PropulsionError::UnsupportedCombination(
-                "ramjets have no shaft to drive a generator; use the vehicle bus".into(),
+                "ramjets and scramjets have no shaft to drive a generator; use the vehicle bus"
+                    .into(),
             ));
         }
         if !self.fitted {
@@ -243,7 +244,7 @@ impl Default for ShaftSpec {
 
 impl ShaftSpec {
     /// Validate authoring values against the engine cycle (NaN fails
-    /// closed; a ramjet may only carry the inert default shaft).
+    /// closed; passive ramjets/scramjets may only carry the inert default shaft).
     pub fn validate(&self, cycle: AirCycle) -> Result<(), PropulsionError> {
         if !self.light_off_n.is_finite() || !(0.0..=1.0).contains(&self.light_off_n) {
             return Err(PropulsionError::InvalidSpec(
@@ -272,9 +273,9 @@ impl ShaftSpec {
                 "power-turbine heat fraction must be finite in [0, 1]".into(),
             ));
         }
-        if cycle == AirCycle::Ramjet && self.power_turbine_heat_fraction != 0.0 {
+        if !cycle.has_shaft() && self.power_turbine_heat_fraction != 0.0 {
             return Err(PropulsionError::UnsupportedCombination(
-                "ramjets have no turbine shaft or power takeoff".into(),
+                "ramjets and scramjets have no turbine shaft or power takeoff".into(),
             ));
         }
         self.starter.validate(cycle)?;
@@ -328,7 +329,7 @@ pub struct JetShaftState {
 
 impl JetShaftState {
     /// Stopped engine: no rotation, unlit, starter at full charge.
-    /// Shafted engines only (a ramjet has no shaft state).
+    /// Shafted engines only (ramjet/scramjet have no shaft state).
     pub fn cold(engine: &CompiledAirbreather) -> Self {
         Self {
             spool_n: 0.0,
@@ -398,7 +399,7 @@ pub struct ShaftTelemetry {
 /// subtract generator load, then integrate the normalized spool
 /// dynamics. Returns the next state plus the full power telemetry.
 ///
-/// Refuses: ramjets (no shaft), a starter engagement with no starter
+/// Refuses: passive ramjet/scramjet cycles (no shaft), a starter engagement with no starter
 /// fitted, and non-finite/out-of-range commands (NaN fails closed).
 pub fn advance_jet_shaft(
     engine: &CompiledAirbreather,
@@ -421,9 +422,9 @@ pub fn advance_jet_shaft_loaded(
     dt_s: f64,
     extra_load_w: f64,
 ) -> Result<(JetShaftState, ShaftTelemetry), PropulsionError> {
-    if engine.cycle == AirCycle::Ramjet {
+    if !engine.cycle.has_shaft() {
         return Err(PropulsionError::InvalidCommand(
-            "ramjets have no shaft to advance".into(),
+            "ramjets and scramjets have no shaft to advance".into(),
         ));
     }
     if !(engine.shaft_reference_power_w > 0.0) {

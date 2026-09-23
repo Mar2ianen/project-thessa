@@ -13,7 +13,8 @@ stateful, heat-budgeted turboprop takeoff path on a reusable ideal actuator
 disk (section 9). Star/finocyl grain burnback, tank depletion wiring, the
 flight-loop allocator, transient piston/electric source and prop-shaft
 state, finite-blade propeller maps, an independent free-power-turbine spool,
-scramjets, and the editor UI are still TBD (see section 18).
+high-fidelity scramjet shock-train/finite-rate chemistry, and the editor UI
+are still TBD (see section 18).
 
 ## 1. Design goal
 
@@ -523,7 +524,7 @@ explicit molar-vs-mass basis), and `flight_condition` /
 `analyze_airbreathing` read species from the sample instead of a
 caller-supplied scalar — the transitional `oxygen_fraction` interface
 and the `0.232`/`0.274` constants are gone. Turbojets, turbofans,
-ramjets, and ESTOC all gate through the same query, so anoxic air
+ramjets, scramjets, and ESTOC all gate through the same query, so anoxic air
 flameouts and scarce oxidizer derates through the explicit species
 budget. Still future from this section: the air-augmented
 rocket/ejector path that spends onboard reactants while entraining
@@ -547,9 +548,20 @@ intake / inlet compression
         nozzle
 ```
 
-Ram compression replaces compressor work. Future supersonic-combustion support can extend the same family toward scramjet-like operation.
+Ram compression replaces compressor work. The passive scramjet branch adds
+supersonic combustor scheduling to the same intake/nozzle family; its current
+shock-train and chemistry limits are recorded in section 18.11.
 
 Performance should depend on inlet conditions, flight Mach number, geometry/model assumptions, reactant chemistry, thermal limits, and nozzle state.
+
+Status note (2026-09-24): the airbreathing cycle family now includes a
+scramjet operating branch. It shares the ram-compression, oxygen/thermal
+combustion, fixed-geometry C-D nozzle, vehicle-mount, and analyzer paths, but
+has no compressor/turbine shaft. Combustion is gated strictly above Mach 1;
+the baker analyzer sweeps through Mach 8 and marks sonic/subsonic rows. The
+current design point is Mach 6 at 20 km in the default atmosphere. Shock-train
+geometry, finite-rate chemistry, and high-enthalpy dissociation remain outside
+this engineering model.
 
 ## 12. Combined-cycle engines
 
@@ -863,17 +875,20 @@ Shipped in `crates/sim-core/src/propulsion.rs` (MIT engine crate, no Bevy/Tokio/
 
 ### 18.5 Air-breathing jets (v5)
 
-- `propulsion::air`: turbojet, turbofan, and ramjet from one Brayton
-  core. Juno-style sliders (intake area/recovery, compression and bypass
-  ratios, turbine temperature, fuel, afterburner, nozzle) plus the cycle
+- `propulsion::air`: turbojet, turbofan, ramjet, and scramjet share one
+  airbreathing authoring/runtime boundary. Turbine cycles use Juno-style
+  sliders (intake area/recovery, compression and bypass ratios, turbine
+  temperature, fuel, afterburner, nozzle) plus the cycle
   internals Juno hides: polytropic efficiencies, turbine cooling bleed
   with rotor-bypass work split and mixing loss, customer bleed,
   part-power TIT/pressure/flow schedules, and oxygen gating for
-  non-Earth atmospheres (Juno 1.4 scales jets with O2 the same way).
-- Turbine cycles run convergent nozzles; ramjets run fixed
-  convergent-divergent geometry adapted at the design point (Mach 2 sea
-  level) with a Summerfield separation check and a separated fallback to
-  convergent-at-throat behavior (documented).
+  non-Earth atmospheres (Juno 1.4 scales jets with O2 the same way). Passive
+  ramjet/scramjet cycles have no turbomachinery shaft; the scramjet additionally
+  gates combustion on a supersonic combustor inlet.
+- Turbine cycles run convergent nozzles; ramjets and scramjets use fixed
+  convergent-divergent geometry adapted at Mach 2 / sea level and Mach 6 /
+  20 km respectively, with a Summerfield separation check and a separated
+  fallback to convergent-at-throat behavior (documented).
 - Fixed-geometry matching: the nozzle sets swallowed flow — demand
   beyond choked capacity rescales the whole engine consistently instead
   of booking fuel for unswallowed air (this exact inconsistency was
@@ -1004,8 +1019,8 @@ still sees one lever), transient piston/electric source startup and
 propeller-shaft inertia, finite-blade propeller pitch/stall/profile maps, and
 an independent free-power-turbine/prop-rotor inertia model (the current
 turboprop extracts power through the shared normalized gas-generator shaft),
-scramjets, and the editor UI itself (the CLI/JSON analyzer is its backend
-contract).
+high-fidelity scramjet inlet/shock-train geometry and finite-rate chemistry,
+and the editor UI itself (the CLI/JSON analyzer is its backend contract).
 
 ### 18.8 Jet shaft/starter runtime (section 8.1, single spool)
 
@@ -1220,3 +1235,55 @@ and analyzer paths.
   propeller-shaft state, finite-blade pitch/stall/profile maps, and an
   independent free-power-turbine/propeller inertia model. These remain
   explicit section 18.7 debts rather than being inferred from the ideal disk.
+
+### 18.11 Scramjet branch (section 11)
+
+Shipped 2026-09-24: `AirCycle::Scramjet` reuses the passive airbreather cycle,
+species accounting, fixed C-D nozzle, vehicle mount, and altitude/Mach analyzer.
+
+- Formal boundary: `AirbreathingSpec` with cycle `scramjet`, compressor ratio
+  exactly 1, zero bypass, no afterburner, and an inert `ShaftSpec`. There is no
+  compressor, turbine, starter, generator, or power takeoff. Attempting to add
+  shaft hardware or drive the shaft is refused. The legacy input field
+  `turbine_inlet_temp_k` is the scheduled combustor-exit total temperature for
+  ramjet and scramjet passive cycles.
+- Inputs and outputs: atmosphere sample/composition, Mach/true airspeed,
+  intake area/recovery class, fuel/combustor temperature, thrust/flows,
+  fixed-nozzle exit state, and explicit `scramjet_limited` and
+  `combustion_thermal_limited` telemetry. Ram total conditions use
+  `Tt = Tamb(1+0.2M²)` and the authored intake pressure
+  recovery; capture demand is anchored at the compile point. Fuel is zero at
+  `M ≤ 1` and above the sonic boundary is capped by available atmospheric O₂
+  and the combustor temperature target. No static suction flow is created.
+  Above the authored combustor total-temperature target the fuel schedule
+  closes and reports `combustion_thermal_limited`, not turbine-drive failure.
+- Design/nozzle: design sizing is fixed at Mach 6 / 20 km in the default
+  atmosphere. The shared fixed-geometry C-D nozzle is adapted there and uses
+  the existing area/Mach inversion and separation telemetry. No compressor or
+  turbine mass is booked; intake, combustor, nozzle, and common hardware mass
+  still follow the airbreather geometry/flow fits.
+- Vehicle/analyzer: `JetMount` takes the passive path without advancing a
+  nonexistent shaft and rejects starter/generator commands. Analyzer rows
+  propagate both limit flags; vehicle-baker uses Mach 0/1/2/4/6/8 for
+  scramjets (`M` flags the sonic boundary and `T` flags over-temperature
+  inlet rows) and its JSON output carries the same telemetry.
+- Known special cases/regressions: at Mach 1 the engine reports limited,
+  unlit, zero fuel and zero thrust; at Mach 6 / 20 km hydrogen combusts, the
+  fixed nozzle exits supersonically, and thrust is positive. First-law
+  telemetry check bounds useful power plus exhaust kinetic power by chemical
+  fuel power plus inlet kinetic power. Anoxic Mach 6 air is oxygen-limited;
+  at Mach 8 / 20 km the total-temperature schedule is closed and the
+  thermal-limit flag is set without setting `drive_limited`. Starter/
+  afterburner combinations are refused; a mounted scramjet produces thrust
+  and refuses shaft accessory commands.
+- Numerical error: total inlet conditions and the sonic gate are closed-form;
+  nozzle area/Mach inversion uses the already-tested bisection-backed solver
+  (see section 18.5). The Mach boundary is exact at `M=1`; this branch adds no
+  new iterative solver.
+- Benchmark (`benches/propulsion.rs`, 11 altitudes × 6 Mach values): the
+  release analyzer measured 520.9 ns/row on this machine, including
+  low-speed boundary rows, the active supersonic range, and declared-vacuum
+  samples.
+- Remaining scramjet fidelity belongs to the explicit section 18.7 debt:
+  inlet/shock-train geometry and finite-rate chemistry/dissociation, not an
+  untracked extension of the current ram-compression bound.

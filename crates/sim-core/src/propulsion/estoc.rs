@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use super::shaft::JetShaftState;
 use super::{
-    AirCycle, AirOperatingPoint, AirbreathingSpec, CompiledAirbreather, FlightCondition, JetFuel,
+    AirOperatingPoint, AirbreathingSpec, CompiledAirbreather, FlightCondition, JetFuel,
     MASS_FIT_FEED_KG_PER_N, NozzleExitState, Propellant, PropellantThermo, PropulsionError,
     STANDARD_GRAVITY_MPS2, characteristic_velocity, mach_from_area_ratio, require_positive,
     thrust_coefficient,
@@ -145,9 +145,9 @@ impl EstocSpec {
                 "engine name must not be empty".into(),
             ));
         }
-        if self.air.cycle == AirCycle::Ramjet {
+        if !self.air.cycle.has_shaft() {
             return Err(PropulsionError::InvalidSpec(
-                "combined cycle builds on a turbomachinery air path, not a ramjet".into(),
+                "combined cycle builds on a turbomachinery air path, not a ramjet/scramjet".into(),
             ));
         }
         require_positive(self.rocket_chamber_pressure_pa, "rocket chamber pressure")?;

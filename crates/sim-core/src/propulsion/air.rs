@@ -1,4 +1,4 @@
-//! Air-breathing jet engines: turbojet, turbofan, and ramjet from one
+//! Air-breathing jet engines: turbojet, turbofan, ramjet, and scramjet from one
 //! Brayton-cycle core (`docs/details/04` sections 8 and 11).
 //!
 //! Authoring is Juno-style sliders (intake area/recovery, compression and
@@ -67,7 +67,8 @@ pub const NOZZLE_GROSS_EFFICIENCY: f64 = 0.95;
 /// (documented calibration: turbine engines inhale their corrected
 /// demand). The floor scales with actual spool speed — a stopped
 /// compressor draws nothing (section 8.1: no free intake flow without
-/// a shaft source) — and ramjets are passive, so they get no floor.
+/// a shaft source) — and ramjet/scramjet cycles are passive, so they get no
+/// floor.
 pub const INTAKE_DESIGN_CAPTURE_MACH: f64 = 0.5;
 /// Afterburner duct temperature cap (K, liner limit, documented).
 pub const REHEAT_TEMP_CAP_K: f64 = 2200.0;
@@ -157,6 +158,19 @@ pub enum AirCycle {
     Turbojet,
     Turbofan,
     Ramjet,
+    Scramjet,
+}
+
+impl AirCycle {
+    /// Passive inlet/combustor/nozzle cycles with no compressor or turbine
+    /// shaft state.
+    pub const fn has_shaft(self) -> bool {
+        !matches!(self, Self::Ramjet | Self::Scramjet)
+    }
+
+    const fn is_passive(self) -> bool {
+        !self.has_shaft()
+    }
 }
 
 /// Flight condition for air-breathing evaluation (all SI; Mach ≥ 0).
@@ -268,13 +282,14 @@ pub struct AirbreathingSpec {
     /// Intake capture area (m^2).
     pub intake_area_m2: f64,
     pub intake: IntakeKind,
-    /// Compressor pressure ratio (1.0 exactly for ramjets).
+    /// Compressor pressure ratio (1.0 exactly for ramjets/scramjets).
     pub compressor_ratio: f64,
     /// Bypass ratio (0 = turbojet).
     pub bypass_ratio: f64,
     /// Fan pressure ratio (turbofans).
     pub fan_pressure_ratio: f64,
-    /// Turbine inlet temperature at full throttle (K).
+    /// Turbine-inlet target or passive combustor-exit total-temperature
+    /// target at full throttle (K), depending on `cycle`.
     pub turbine_inlet_temp_k: f64,
     /// Afterburner/reheat fitted.
     pub afterburner: bool,
@@ -328,15 +343,15 @@ impl AirbreathingSpec {
         self.turbine_material.validate()?;
         self.shaft.validate(self.cycle)?;
         match self.cycle {
-            AirCycle::Ramjet => {
+            AirCycle::Ramjet | AirCycle::Scramjet => {
                 if self.compressor_ratio != 1.0 {
                     return Err(PropulsionError::InvalidSpec(
-                        "ramjets carry no compressor (ratio must be 1)".into(),
+                        "ramjets and scramjets carry no compressor (ratio must be 1)".into(),
                     ));
                 }
                 if self.bypass_ratio != 0.0 {
                     return Err(PropulsionError::InvalidSpec(
-                        "ramjets carry no bypass".into(),
+                        "ramjets and scramjets carry no bypass".into(),
                     ));
                 }
             }
@@ -356,10 +371,10 @@ impl AirbreathingSpec {
             }
         }
         // Cooled blades allow TIT above wall temperature (documented).
-        // Ramjets carry no turbine: the dump combustor answers to the
-        // liner cap instead (actively cooled, documented).
+        // Passive ramjet/scramjet combustors carry no turbine and use the
+        // documented dump-combustor liner cap.
         let tit_cap = match self.cycle {
-            AirCycle::Ramjet => 2400.0,
+            AirCycle::Ramjet | AirCycle::Scramjet => 2400.0,
             _ => self.turbine_material.max_wall_temp_k * TURBINE_COOLING_ALLOWANCE,
         };
         if self.turbine_inlet_temp_k > tit_cap {
@@ -369,6 +384,11 @@ impl AirbreathingSpec {
             )));
         }
         if self.afterburner {
+            if self.cycle == AirCycle::Scramjet {
+                return Err(PropulsionError::UnsupportedCombination(
+                    "scramjet combustor does not use a separate afterburner duct".into(),
+                ));
+            }
             require_positive(self.reheat_temp_k, "reheat temperature")?;
             if self.reheat_temp_k > REHEAT_TEMP_CAP_K {
                 return Err(PropulsionError::UnsupportedCombination(format!(
@@ -386,7 +406,7 @@ impl AirbreathingSpec {
 /// Convergent-nozzle exit state for total conditions and a fixed exit
 /// (= throat) area: choked with a pressure term, or fully expanded
 /// subsonic. Ambient above total pressure yields zero (no backflow).
-/// Supersonic cruise nozzles (ramjets) use [`cd_nozzle`] instead: fixed
+/// Passive supersonic nozzles (ramjets/scramjets) use [`cd_nozzle`] instead: fixed
 /// convergent-divergent geometry adapted at the design point.
 struct NozzleFlow {
     thrust_gross_n: f64,
@@ -464,8 +484,11 @@ struct CycleState {
     oxygen_limited: bool,
     reheat_limited: bool,
     drive_limited: bool,
+    combustion_thermal_limited: bool,
     /// True when the intake cannot supply demanded flow.
     air_starved: bool,
+    /// Scramjet fuel is inhibited at/below the sonic combustor boundary.
+    scramjet_limited: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -524,7 +547,8 @@ fn run_cycle(
     let (lhv, _f_stoich, o2_per_fuel, gamma_b, r_b, _density) = fuel;
     let gamma_a = AIR_GAMMA;
     let cp_b = gamma_b * r_b / (gamma_b - 1.0);
-    let is_ramjet = spec.cycle == AirCycle::Ramjet;
+    let is_passive = spec.cycle.is_passive();
+    let scramjet_limited = spec.cycle == AirCycle::Scramjet && condition.mach <= 1.0;
     let spool_n = spool_n.clamp(0.0, 1.0);
     // Ram conditions with recovery.
     let t_ram =
@@ -534,18 +558,19 @@ fn run_cycle(
         * spec.intake.recovery(condition.mach);
     // Air available: ram capture, plus the suction floor for active
     // (turbomachinery) cycles scaled by actual spool speed — a stopped
-    // compressor inhales nothing. Ramjets are passive: capture only.
+    // compressor inhales nothing. Ramjet/scramjet cycles are passive:
+    // capture only.
     let sound = (gamma_a * 287.0 * condition.ambient_temp_k).sqrt();
     let rho_0 = condition.ambient_pa / (287.0 * condition.ambient_temp_k);
-    let suction = if is_ramjet {
+    let suction = if is_passive {
         0.0
     } else {
         INTAKE_DESIGN_CAPTURE_MACH * sound * spool_n
     };
     let available_kg_s = rho_0 * spec.intake_area_m2 * condition.airspeed_mps.max(suction);
-    // Corrected-flow part-power schedule follows spool speed (ramjet
+    // Corrected-flow part-power schedule follows spool speed (passive-cycle
     // capture is spool-independent: no machinery to schedule).
-    let flow_factor = if is_ramjet {
+    let flow_factor = if is_passive {
         1.0
     } else {
         0.35 + 0.65 * spool_n
@@ -557,16 +582,16 @@ fn run_cycle(
     let mdot_air_kg_s = demanded_kg_s.min(available_kg_s);
     let oxygen_limited_starved = demanded_kg_s > available_kg_s && available_kg_s <= 0.0;
     let air_starved = demanded_kg_s > available_kg_s + 1e-9;
-    // Core/bypass split (ramjet: all core, no machinery).
+    // Core/bypass split (passive cycles: all core, no machinery).
     let bypass = match spec.cycle {
         AirCycle::Turbofan => spec.bypass_ratio,
         _ => 0.0,
     };
     let mdot_core_kg_s = mdot_air_kg_s / (1.0 + bypass);
-    // Compression (ramjets: ram only). Turbomachinery pressure ratio
+    // Compression (passive cycles: ram only). Turbomachinery pressure ratio
     // follows spool^2: no rotation, no pressure rise.
     let pi_c = match spec.cycle {
-        AirCycle::Ramjet => 1.0,
+        AirCycle::Ramjet | AirCycle::Scramjet => 1.0,
         _ => 1.0 + (spec.compressor_ratio - 1.0) * spool_n * spool_n,
     };
     let tau_c = pi_c.powf((gamma_a - 1.0) / (gamma_a * COMPRESSOR_POLY_EFFICIENCY));
@@ -593,9 +618,9 @@ fn run_cycle(
     let shaft_demand_w = mdot_core_kg_s * (work_comp + work_fan);
     // Combustion with O2 gating: fuel capped by available oxygen, TIT
     // follows energy (oxygen-limited operation derates TIT, documented).
-    // Ramjets carry no turbine cooling bleed (dump combustor).
+    // Passive cycles carry no turbine cooling bleed (dump combustor).
     let bleed = match spec.cycle {
-        AirCycle::Ramjet => 0.0,
+        AirCycle::Ramjet | AirCycle::Scramjet => 0.0,
         _ => TURBINE_COOLING_BLEED,
     };
     let o2_mass_fraction = condition.composition.mass_fraction(GasKind::Oxygen);
@@ -610,7 +635,7 @@ fn run_cycle(
     // Ignition gates the fuel schedule only: oxygen and thermal
     // feasibility stay reported whether or not ignition is commanded,
     // so the cause flags survive a windmilling evaluation.
-    let fuel_air = if ignition {
+    let fuel_air = if ignition && !scramjet_limited {
         f_for_tit.max(0.0).min(f_o2_cap)
     } else {
         0.0
@@ -639,8 +664,10 @@ fn run_cycle(
             power_takeoff_capacity_w: 0.0,
             oxygen_limited: oxygen_limited || oxygen_limited_starved,
             reheat_limited: false,
-            drive_limited: f_for_tit <= 0.0,
+            drive_limited: spec.cycle.has_shaft() && f_for_tit <= 0.0,
+            combustion_thermal_limited: f_for_tit <= 0.0,
             air_starved,
+            scramjet_limited,
         });
     }
     let turbine_temp_eff = t_comp_exit + fuel_air * COMBUSTOR_EFFICIENCY * lhv / AIR_CP_J_KG_K;
@@ -673,7 +700,9 @@ fn run_cycle(
             oxygen_limited: oxygen_limited || oxygen_limited_starved,
             reheat_limited: false,
             drive_limited: true,
+            combustion_thermal_limited: false,
             air_starved,
+            scramjet_limited,
         });
     }
     // Rotor exit, then cold-bleed mixing at rotor pressure with a
@@ -686,7 +715,12 @@ fn run_cycle(
             .powf(gamma_b / (gamma_b - 1.0));
     let bleed_flow_ratio = bleed / rotor_flow_ratio.max(1e-12);
     let t_turb_exit = t_rotor_exit * (1.0 - bleed_flow_ratio) + t_comp_exit * bleed_flow_ratio;
-    let p_turb_exit = p_rotor_exit * (1.0 - TURBINE_MIXING_DP_FRACTION);
+    let mixing_loss = if bleed > 0.0 {
+        TURBINE_MIXING_DP_FRACTION
+    } else {
+        0.0
+    };
+    let p_turb_exit = p_rotor_exit * (1.0 - mixing_loss);
     let hot_nozzle_flow_kg_s = mdot_core_kg_s * (rotor_flow_ratio + bleed) + fuel_flow_kg_s;
     let configured_takeoff_w =
         power_takeoff_heat_fraction * fuel_flow_kg_s * COMBUSTOR_EFFICIENCY * lhv;
@@ -760,11 +794,13 @@ fn run_cycle(
         oxygen_limited: oxygen_limited || oxygen_limited_starved,
         reheat_limited,
         drive_limited: false,
+        combustion_thermal_limited: false,
         air_starved,
+        scramjet_limited,
     })
 }
 
-/// Fixed-geometry convergent-divergent nozzle (ramjet cruise): exit Mach
+/// Fixed-geometry convergent-divergent nozzle (ramjet/scramjet cruise): exit Mach
 /// from the area ratio, Summerfield separation check, separated fallback
 /// to convergent-at-throat behavior (documented).
 #[allow(clippy::too_many_arguments)]
@@ -917,8 +953,8 @@ pub struct CompiledAirbreather {
     pub design_corrected_flow_kg_s: f64,
     pub exit_area_core_m2: f64,
     pub exit_area_fan_m2: f64,
-    /// Core throat area (ramjet C-D; turbojets/fans run convergent, so the
-    /// throat equals the exit area).
+    /// Core throat area (ramjet/scramjet C-D; turbojets/fans run convergent,
+    /// so the throat equals the exit area).
     pub throat_area_core_m2: f64,
     pub design_static_thrust_n: f64,
     pub design_fuel_flow_kg_s: f64,
@@ -932,13 +968,13 @@ pub struct CompiledAirbreather {
     /// Design-point shaft normalization `FRAC`: turbine heat fraction
     /// scaled so the full-throttle sea-level design point is an exact
     /// shaft equilibrium (demand + friction = capacity at spool 1.0).
-    /// Ramjets carry 0.0 (no shaft).
+    /// Ramjets/scramjets carry 0.0 (no shaft).
     #[serde(default)]
     pub shaft_turbine_frac: f64,
     /// Reference shaft power `P_ref` (W): design turbine shaft capacity
     /// before normalization. Sizes bearing friction and the normalized
     /// spool dynamics (`dn/dt = net / (P_ref * spool_tau_s)`). Ramjets
-    /// carry 0.0 (no shaft).
+    /// carry 0.0 for ramjets/scramjets (no shaft).
     #[serde(default)]
     pub shaft_reference_power_w: f64,
 }
@@ -976,6 +1012,12 @@ pub struct AirOperatingPoint {
     pub oxygen_limited: bool,
     /// True when the turbine cannot drive compression (flameout region).
     pub drive_limited: bool,
+    /// True when inlet total temperature already exceeds the combustor target.
+    #[serde(default)]
+    pub combustion_thermal_limited: bool,
+    /// True when a scramjet is below the supersonic-combustor boundary.
+    #[serde(default)]
+    pub scramjet_limited: bool,
     /// True when the fixed nozzle, not the intake, caps flow.
     pub nozzle_limited: bool,
     /// True when a ramjet C-D nozzle separates (overexpanded).
@@ -994,7 +1036,8 @@ pub struct AirOperatingPoint {
 impl AirbreathingSpec {
     /// Hangar compile: solve the design point, size the convergent nozzles,
     /// derive mass. Turbojets/fans design at sea-level static; ramjets at
-    /// Mach 2 sea level (no static flow exists to design on).
+    /// Mach 2 sea level; scramjets at Mach 6 / 20 km. Passive cycles have no
+    /// static flow point to design on.
     pub fn compile(&self) -> Result<CompiledAirbreather, PropulsionError> {
         self.validate()?;
         let fuel = self.fuel.properties();
@@ -1006,6 +1049,14 @@ impl AirbreathingSpec {
                 airspeed_mps: 2.0 * (AIR_GAMMA * 287.0 * 288.15).sqrt(),
                 composition: AtmosphereComposition::earth_air(),
             },
+            AirCycle::Scramjet => {
+                let atmosphere = crate::atmosphere::AtmosphereConfig::default()
+                    .with_composition(AtmosphereComposition::earth_air());
+                let sample = atmosphere.sample(20_000.0).map_err(|error| {
+                    PropulsionError::InvalidSpec(format!("scramjet design atmosphere: {error}"))
+                })?;
+                flight_condition(&sample, 6.0 * sample.speed_of_sound_mps)?
+            }
             _ => FlightCondition {
                 mach: 0.0,
                 ambient_pa: 101_325.0,
@@ -1018,6 +1069,11 @@ impl AirbreathingSpec {
         let a_sl = (AIR_GAMMA * 287.0 * 288.15).sqrt();
         let design_flow_kg_s = match self.cycle {
             AirCycle::Ramjet => rho_sl * self.intake_area_m2 * design_condition.airspeed_mps,
+            AirCycle::Scramjet => {
+                design_condition.ambient_pa / (287.0 * design_condition.ambient_temp_k)
+                    * self.intake_area_m2
+                    * design_condition.airspeed_mps
+            }
             _ => rho_sl * self.intake_area_m2 * INTAKE_DESIGN_CAPTURE_MACH * a_sl,
         };
         // Corrected-flow anchor at standard face conditions.
@@ -1074,7 +1130,7 @@ impl AirbreathingSpec {
         // is refused separately above — that check, not this one, is
         // what rejects an engine that cannot drive its compressor.
         let lhv = fuel.0;
-        let (shaft_turbine_frac, shaft_reference_power_w) = if self.cycle == AirCycle::Ramjet {
+        let (shaft_turbine_frac, shaft_reference_power_w) = if !self.cycle.has_shaft() {
             (0.0, 0.0)
         } else {
             let capacity_raw_w =
@@ -1106,8 +1162,8 @@ impl AirbreathingSpec {
         }
         let (_, _, _, gamma_b, r_b, _) = fuel;
         let mdot_core_hot = state.nozzle_flow_kg_s;
-        // Ramjets size a fixed convergent-divergent nozzle adapted at the
-        // design point; turbine cycles run convergent (throat = exit).
+        // Ramjets/scramjets size a fixed convergent-divergent nozzle adapted
+        // at the design point; turbine cycles run convergent (throat = exit).
         let throat_area_core_m2 = size_nozzle_area(
             mdot_core_hot,
             state.core_total_temp_k,
@@ -1116,7 +1172,7 @@ impl AirbreathingSpec {
             r_b,
         );
         let exit_area_core_m2 = match self.cycle {
-            AirCycle::Ramjet => {
+            AirCycle::Ramjet | AirCycle::Scramjet => {
                 let cp_b = gamma_b * r_b / (gamma_b - 1.0);
                 adapted_exit_area(
                     mdot_core_hot,
@@ -1132,7 +1188,8 @@ impl AirbreathingSpec {
         };
         if exit_area_core_m2 < throat_area_core_m2 {
             return Err(PropulsionError::UnsupportedCombination(
-                "design point overexpands the ramjet nozzle; pick a faster design Mach".into(),
+                "design point overexpands the passive-cycle nozzle; pick a faster design Mach"
+                    .into(),
             ));
         }
         let mdot_fan = state.mdot_air_kg_s - state.mdot_core_kg_s;
@@ -1176,11 +1233,11 @@ impl AirbreathingSpec {
             _ => 0.0,
         };
         let compressor_kg = match self.cycle {
-            AirCycle::Ramjet => 0.0,
+            AirCycle::Ramjet | AirCycle::Scramjet => 0.0,
             _ => MASS_FIT_COMPRESSOR * design_flow_kg_s * self.compressor_ratio,
         };
         let turbine_kg = match self.cycle {
-            AirCycle::Ramjet => 0.0,
+            AirCycle::Ramjet | AirCycle::Scramjet => 0.0,
             _ => MASS_FIT_TURBINE * design_flow_kg_s * self.compressor_ratio,
         };
         let combustor_kg = MASS_FIT_COMBUSTOR * design_flow_kg_s.powf(0.7);
@@ -1386,6 +1443,8 @@ impl CompiledAirbreather {
             air_limited: false,
             oxygen_limited: false,
             drive_limited: false,
+            combustion_thermal_limited: false,
+            scramjet_limited: false,
             nozzle_limited: false,
             separation_risk: false,
             suction_assisted: false,
@@ -1413,9 +1472,10 @@ impl CompiledAirbreather {
         // runs on the steady-running assumption, scaled by the actual
         // spool speed this point was evaluated at.
         let sound_speed_mps = (AIR_GAMMA * 287.0 * condition.ambient_temp_k).sqrt();
-        let suction_floor_mps = match self.cycle {
-            AirCycle::Ramjet => 0.0,
-            _ => INTAKE_DESIGN_CAPTURE_MACH * sound_speed_mps * spool_n,
+        let suction_floor_mps = if self.cycle.is_passive() {
+            0.0
+        } else {
+            INTAKE_DESIGN_CAPTURE_MACH * sound_speed_mps * spool_n
         };
         let ram_only_kg_s = condition.ambient_pa / (287.0 * condition.ambient_temp_k)
             * self.intake_area_m2
@@ -1433,6 +1493,8 @@ impl CompiledAirbreather {
                     air_limited: state.mdot_air_kg_s <= 0.0 || state.air_starved,
                     oxygen_limited: state.oxygen_limited,
                     drive_limited: state.drive_limited,
+                    combustion_thermal_limited: state.combustion_thermal_limited,
+                    scramjet_limited: state.scramjet_limited,
                     suction_assisted: suction_assisted(state.mdot_air_kg_s),
                     ..off
                 },
@@ -1451,6 +1513,8 @@ impl CompiledAirbreather {
                     air_limited: state.air_starved,
                     oxygen_limited: state.oxygen_limited,
                     drive_limited: state.drive_limited,
+                    combustion_thermal_limited: state.combustion_thermal_limited,
+                    scramjet_limited: state.scramjet_limited,
                     suction_assisted: suction_assisted(state.mdot_air_kg_s),
                     ..off
                 },
@@ -1490,9 +1554,9 @@ impl CompiledAirbreather {
         let fuel_flow = state.fuel_flow_kg_s * scale;
         let fuel_ab_flow = state.fuel_ab_flow_kg_s * scale;
         let core_flow = mdot_core_hot * scale;
-        // Turbine cycles run convergent; ramjets run fixed C-D.
+        // Turbine cycles run convergent; ramjets/scramjets run fixed C-D.
         let (core, separation_risk) = match self.cycle {
-            AirCycle::Ramjet => cd_nozzle(
+            AirCycle::Ramjet | AirCycle::Scramjet => cd_nozzle(
                 core_flow,
                 state.core_total_temp_k,
                 state.core_total_pressure_pa,
@@ -1546,6 +1610,8 @@ impl CompiledAirbreather {
                 air_limited: state.air_starved,
                 oxygen_limited: state.oxygen_limited,
                 drive_limited: false,
+                combustion_thermal_limited: state.combustion_thermal_limited,
+                scramjet_limited: state.scramjet_limited,
                 nozzle_limited,
                 separation_risk,
                 suction_assisted: suction_assisted(mdot_air),
@@ -1603,8 +1669,8 @@ impl CompiledAirbreather {
     /// first, then evaluate the cycle there (part-power TIT and reheat
     /// follow the throttle; pressure/flow follow the solved spool).
     ///
-    /// Ramjets have no shaft: they evaluate directly at the full-flow
-    /// schedule and report `spool_n = 1.0` as the no-derating
+    /// Ramjets and scramjets have no shaft: they evaluate directly at the
+    /// full-flow schedule and report `spool_n = 1.0` as the no-derating
     /// placeholder. When no sustainable equilibrium exists but throttle
     /// commands run, the point is evaluated at full spool as an
     /// already-running attempt so failure flags stay reportable while
@@ -1637,6 +1703,8 @@ impl CompiledAirbreather {
                 air_limited: false,
                 oxygen_limited: false,
                 drive_limited: false,
+                combustion_thermal_limited: false,
+                scramjet_limited: self.cycle == AirCycle::Scramjet && condition.mach <= 1.0,
                 nozzle_limited: false,
                 separation_risk: false,
                 suction_assisted: false,
@@ -1644,7 +1712,7 @@ impl CompiledAirbreather {
                 reheat_limited: false,
             });
         }
-        let solved = if self.cycle == AirCycle::Ramjet {
+        let solved = if !self.cycle.has_shaft() {
             1.0
         } else {
             self.solve_steady_spool(condition, throttle)?
@@ -1669,6 +1737,10 @@ pub struct AirAltitudePoint {
     pub fuel_flow_kg_s: f64,
     pub air_limited: bool,
     pub oxygen_limited: bool,
+    #[serde(default)]
+    pub drive_limited: bool,
+    pub combustion_thermal_limited: bool,
+    pub scramjet_limited: bool,
     pub nozzle_limited: bool,
     pub separation_risk: bool,
     /// True wherever the steady-running suction assumption is active
@@ -1721,6 +1793,9 @@ pub fn analyze_airbreathing(
                 fuel_flow_kg_s: point.fuel_flow_kg_s,
                 air_limited: point.air_limited,
                 oxygen_limited: point.oxygen_limited,
+                drive_limited: point.drive_limited,
+                combustion_thermal_limited: point.combustion_thermal_limited,
+                scramjet_limited: point.scramjet_limited,
                 nozzle_limited: point.nozzle_limited,
                 separation_risk: point.separation_risk,
                 suction_assisted: point.suction_assisted,
@@ -1892,6 +1967,116 @@ mod tests {
         assert!(
             useful_power < input_power,
             "ramjet cruise must respect energy conservation"
+        );
+    }
+
+    #[test]
+    fn scramjet_requires_supersonic_combustion_and_reuses_the_passive_nozzle_path() {
+        let spec = AirbreathingSpec {
+            name: "scramjet-test".into(),
+            cycle: AirCycle::Scramjet,
+            fuel: JetFuel::Hydrogen,
+            intake_area_m2: 0.5,
+            intake: IntakeKind::Ramp,
+            compressor_ratio: 1.0,
+            bypass_ratio: 0.0,
+            fan_pressure_ratio: 1.0,
+            turbine_inlet_temp_k: 2_300.0,
+            afterburner: false,
+            reheat_temp_k: 0.0,
+            turbine_material: ChamberMaterial::nickel_superalloy(),
+            spool_tau_s: 5.0,
+            shaft: ShaftSpec::default(),
+        };
+        let engine = spec.compile().expect("scramjet compiles");
+        assert_eq!(engine.shaft_reference_power_w, 0.0);
+        assert_eq!(engine.shaft_turbine_frac, 0.0);
+        assert!(engine.design_flow_kg_s > 0.0);
+        assert!(engine.dry_mass_kg > 0.0);
+
+        let sample = AtmosphereConfig::default()
+            .sample(20_000.0)
+            .expect("20 km sample");
+        let sonic = flight_condition(&sample, sample.speed_of_sound_mps).expect("sonic condition");
+        let limited = engine.operating_point(&sonic, 1.0).expect("sonic boundary");
+        assert!(limited.scramjet_limited);
+        assert!(!limited.lit);
+        assert_eq!(limited.fuel_flow_kg_s, 0.0);
+        assert_eq!(limited.thrust_n, 0.0);
+        assert!(
+            engine
+                .operating_point(&sonic, 0.0)
+                .expect("off sonic point")
+                .scramjet_limited
+        );
+
+        let supersonic =
+            flight_condition(&sample, 6.0 * sample.speed_of_sound_mps).expect("Mach 6");
+        let point = engine
+            .operating_point(&supersonic, 1.0)
+            .expect("supersonic operating point");
+        assert!(!point.scramjet_limited);
+        assert!(point.lit);
+        assert!(point.fuel_flow_kg_s > 0.0);
+        assert!(point.thrust_n > 0.0);
+        assert!(point.exit_mach > 1.0);
+
+        let anoxic = FlightCondition {
+            composition: AtmosphereComposition::anoxic(),
+            ..supersonic
+        };
+        let oxygen_starved = engine
+            .operating_point(&anoxic, 1.0)
+            .expect("anoxic scramjet point");
+        assert!(oxygen_starved.oxygen_limited);
+        assert!(!oxygen_starved.scramjet_limited);
+        assert!(!oxygen_starved.lit);
+        assert_eq!(oxygen_starved.fuel_flow_kg_s, 0.0);
+        assert_eq!(oxygen_starved.thrust_n, 0.0);
+
+        let hypersonic =
+            flight_condition(&sample, 8.0 * sample.speed_of_sound_mps).expect("Mach 8");
+        let too_hot = engine
+            .operating_point(&hypersonic, 1.0)
+            .expect("high-enthalpy inlet");
+        assert!(!too_hot.scramjet_limited);
+        assert!(!too_hot.drive_limited, "passive scramjets have no shaft");
+        assert!(too_hot.combustion_thermal_limited);
+        assert!(!too_hot.lit);
+        assert_eq!(too_hot.fuel_flow_kg_s, 0.0);
+
+        let exhaust_ground_speed = (point.exhaust_velocity_mps - supersonic.airspeed_mps).max(0.0);
+        let useful_power = point.thrust_n * supersonic.airspeed_mps
+            + 0.5 * point.air_flow_kg_s * exhaust_ground_speed * exhaust_ground_speed;
+        let fuel_lhv = JetFuel::Hydrogen.properties().0;
+        let input_power = point.fuel_flow_kg_s * fuel_lhv
+            + 0.5 * point.air_flow_kg_s * supersonic.airspeed_mps.powi(2);
+        assert!(useful_power < input_power, "scramjet first-law bound");
+
+        assert!(
+            AirbreathingSpec {
+                afterburner: true,
+                reheat_temp_k: 2_300.0,
+                ..spec.clone()
+            }
+            .compile()
+            .is_err()
+        );
+        assert!(
+            AirbreathingSpec {
+                shaft: ShaftSpec {
+                    starter: super::super::StarterSpec {
+                        kind: super::super::StarterKind::Electric,
+                        power_w: 1_000.0,
+                        charge_j: 10_000.0,
+                        mass_kg: 1.0,
+                    },
+                    ..ShaftSpec::default()
+                },
+                ..spec
+            }
+            .compile()
+            .is_err()
         );
     }
 

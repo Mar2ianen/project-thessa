@@ -158,13 +158,18 @@ fn run_analyzer(
                 CompiledJet::Air(engine) => engine.as_ref(),
                 CompiledJet::Estoc(engine) => &engine.air,
             };
+            let mach_grid: &[f64] = match air.cycle {
+                thessa_sim_core::AirCycle::Scramjet => &[0.0, 1.0, 2.0, 4.0, 6.0, 8.0],
+                thessa_sim_core::AirCycle::Ramjet => &[0.0, 1.0, 2.0, 3.0, 4.0],
+                _ => &[0.0, 1.0, 2.0, 3.0],
+            };
             rows.push(serde_json::json!({
                 "jet": mount.name,
                 "points": analyze_airbreathing(
                     air,
                     &atmosphere,
                     &altitudes,
-                    &[0.0, 1.0, 2.0, 3.0],
+                    mach_grid,
                     throttle,
                 )?,
             }));
@@ -252,6 +257,11 @@ fn run_analyzer(
             CompiledJet::Air(engine) => engine.as_ref(),
             CompiledJet::Estoc(engine) => &engine.air,
         };
+        let mach_grid: &[f64] = match air.cycle {
+            thessa_sim_core::AirCycle::Scramjet => &[0.0, 1.0, 2.0, 4.0, 6.0, 8.0],
+            thessa_sim_core::AirCycle::Ramjet => &[0.0, 1.0, 2.0, 3.0, 4.0],
+            _ => &[0.0, 1.0, 2.0, 3.0],
+        };
         println!(
             "--- analyzer: {} (throttle {throttle}, air path)",
             mount.name
@@ -260,13 +270,7 @@ fn run_analyzer(
             "{:>10} {:>6} {:>10} {:>12} {:>10} {:>5}",
             "alt_m", "mach", "p_amb", "thrust_kN", "isp_s", "flags"
         );
-        let grid = analyze_airbreathing(
-            air,
-            &atmosphere,
-            &altitudes,
-            &[0.0, 1.0, 2.0, 3.0],
-            throttle,
-        )?;
+        let grid = analyze_airbreathing(air, &atmosphere, &altitudes, mach_grid, throttle)?;
         for point in &grid {
             let mut flags = String::new();
             if point.air_limited {
@@ -274,6 +278,15 @@ fn run_analyzer(
             }
             if point.oxygen_limited {
                 flags.push('O');
+            }
+            if point.drive_limited {
+                flags.push('D');
+            }
+            if point.combustion_thermal_limited {
+                flags.push('T');
+            }
+            if point.scramjet_limited {
+                flags.push('M');
             }
             if point.separation_risk {
                 flags.push('S');
@@ -1344,6 +1357,10 @@ impl SystemAsset {
 struct JetAsset {
     name: String,
     kind: JetKind,
+    /// Airbreathing cycle topology; omitted assets keep the legacy inference
+    /// from bypass ratio (turbofan if positive, turbojet otherwise).
+    #[serde(default)]
+    cycle: Option<AirCycle>,
     #[serde(default = "mount_position_default")]
     mount_position_body_m: [f64; 3],
     #[serde(default = "thrust_axis_default")]
@@ -1414,11 +1431,13 @@ impl JetAsset {
     fn air_spec(&self) -> Result<AirbreathingSpec, Box<dyn Error>> {
         Ok(AirbreathingSpec {
             name: self.name.clone(),
-            cycle: if self.bypass_ratio > 0.0 {
-                AirCycle::Turbofan
-            } else {
-                AirCycle::Turbojet
-            },
+            cycle: self.cycle.unwrap_or({
+                if self.bypass_ratio > 0.0 {
+                    AirCycle::Turbofan
+                } else {
+                    AirCycle::Turbojet
+                }
+            }),
             fuel: self.fuel,
             intake_area_m2: self.intake_area_m2,
             intake: self.intake,
@@ -2327,6 +2346,53 @@ rocket_throat_radius_m = 0.09
             "baked mass must equal structure plus jets"
         );
         assert!(vehicle.jets[1].engine.dry_mass_kg() > vehicle.jets[0].engine.dry_mass_kg());
+    }
+
+    #[test]
+    fn scramjet_cycle_is_authorable_and_analyzer_reaches_hypersonic_rows() {
+        let doc = r#"
+name = "scramjet-test"
+mass_kg = 3000.0
+inertia_body_kg_m2 = [[8000.0, 0.0, 0.0], [0.0, 8000.0, 0.0], [0.0, 0.0, 4000.0]]
+
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 4.0
+chord_m = 1.0
+
+[[jets]]
+name = "scramjet"
+kind = "jet"
+cycle = "scramjet"
+fuel = "hydrogen"
+intake_area_m2 = 0.5
+intake = "ramp"
+compressor_ratio = 1.0
+turbine_inlet_temp_k = 2300.0
+material = "nickel-superalloy"
+"#;
+        let asset: VehicleAsset = toml::from_str(doc).expect("scramjet TOML parses");
+        let vehicle = asset.bake().expect("scramjet asset bakes");
+        let engine = match &vehicle.jets[0].engine {
+            CompiledJet::Air(engine) => engine.as_ref(),
+            CompiledJet::Estoc(_) => panic!("scramjet is not ESTOC"),
+        };
+        assert_eq!(engine.cycle, AirCycle::Scramjet);
+        assert_eq!(engine.shaft_reference_power_w, 0.0);
+
+        let atmosphere = AtmosphereConfig::default();
+        let rows =
+            analyze_airbreathing(engine, &atmosphere, &[20_000.0], &[0.0, 1.0, 6.0, 8.0], 1.0)
+                .expect("scramjet analyzer");
+        assert_eq!(rows.len(), 4);
+        assert!(rows[0].scramjet_limited);
+        assert!(rows[1].scramjet_limited);
+        assert!(!rows[2].scramjet_limited);
+        assert!(rows[2].thrust_n > 0.0);
+        assert!(rows[3].combustion_thermal_limited);
+        assert!(!rows[3].drive_limited);
     }
 
     #[test]

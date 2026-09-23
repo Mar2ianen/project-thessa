@@ -195,6 +195,40 @@ fn main() {
         warm_rows.len()
     );
 
+    let scramjet = AirbreathingSpec {
+        name: "bench-scramjet".into(),
+        cycle: AirCycle::Scramjet,
+        fuel: JetFuel::Hydrogen,
+        intake_area_m2: 0.5,
+        intake: IntakeKind::Ramp,
+        compressor_ratio: 1.0,
+        bypass_ratio: 0.0,
+        fan_pressure_ratio: 1.0,
+        turbine_inlet_temp_k: 2_300.0,
+        afterburner: false,
+        reheat_temp_k: 0.0,
+        turbine_material: ChamberMaterial::nickel_superalloy(),
+        spool_tau_s: 5.0,
+        shaft: ShaftSpec::default(),
+    }
+    .compile()
+    .expect("scramjet");
+    let scramjet_machs = [0.0, 1.0, 2.0, 4.0, 6.0, 8.0];
+    let warm_rows = analyze_airbreathing(&scramjet, &atmosphere, &altitudes, &scramjet_machs, 1.0)
+        .expect("scramjet analyzer");
+    let start = Instant::now();
+    for _ in 0..iters {
+        black_box(
+            analyze_airbreathing(&scramjet, &atmosphere, &altitudes, &scramjet_machs, 1.0)
+                .expect("scramjet analyzer"),
+        );
+    }
+    let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * warm_rows.len()) as f64;
+    println!(
+        "scramjet analyzer row: {per_row_ns:.1} ns/row ({} rows/iter)",
+        warm_rows.len()
+    );
+
     // Shaft-power aircraft analyzer (section 9): electric and piston sources
     // driving the same ideal actuator-disk component over an 11-altitude ×
     // 4-airspeed target grid.

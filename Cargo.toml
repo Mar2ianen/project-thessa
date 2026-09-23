@@ -11,6 +11,7 @@ members = [
     "crates/flight-net",
     "crates/flight-control",
     "crates/aero-surfaces",
+    "crates/fuselage",
     "crates/autopilot",
     "crates/autopilot-js",
     "crates/flight-authority",

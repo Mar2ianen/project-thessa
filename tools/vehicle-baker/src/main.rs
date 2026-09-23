@@ -5,6 +5,9 @@ use serde::Deserialize;
 use thessa_aero_surfaces::{
     CollisionOptions, CompileOptions, MechanismState, ProceduralSurface, compile_surface,
 };
+use thessa_fuselage::{
+    BodyCollisionOptions, BodyCompileOptions, ProceduralBody, body_collision_parts, compile_body,
+};
 use thessa_sim_core::{
     AeroGeometry, AeroPanel, AirCycle, AirbreathingSpec, AtmosphereConfig, ChamberMaterial,
     ChamberSpec, CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionPart,
@@ -15,6 +18,11 @@ use thessa_sim_core::{
     TankSpec, VehicleDefinition, analyze_airbreathing, analyze_altitude,
 };
 
+mod debug_mesh;
+
+#[cfg(test)]
+mod integration;
+
 fn main() -> Result<(), Box<dyn Error>> {
     let options = Options::parse(env::args().skip(1))?;
     if options.help {
@@ -23,6 +31,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let source = fs::read_to_string(&options.input)?;
     let asset: VehicleAsset = toml::from_str(&source)?;
+    if let Some(output_dir) = options.debug_body_mesh_dir.as_deref() {
+        debug_mesh::export_body_meshes(&asset.procedural_bodies, output_dir)?;
+    }
     let vehicle = asset.bake()?;
     println!("vehicle: {}", vehicle.name);
     println!("panels: {}", vehicle.aero_geometry.panels.len());
@@ -34,8 +45,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("mass: {:.3} kg", vehicle.mass_properties.mass_kg);
     for mount in &vehicle.tanks {
         println!(
-            "tank: {:.3} m^3, dry {:.1} kg, full fill {:.0} kg",
-            mount.tank.volume_m3, mount.tank.dry_mass_kg, mount.tank.full_propellant_kg,
+            "tank: {:.3} m^3 capacity, dry {:.1} kg, loaded {:.0}/{:.0} kg",
+            mount.tank.volume_m3,
+            mount.tank.dry_mass_kg,
+            mount.loaded_propellant_kg(),
+            mount.tank.full_propellant_kg,
         );
     }
     for mount in &vehicle.engines {
@@ -272,12 +286,23 @@ struct VehicleAsset {
     /// compiled output. Empty keeps legacy hand-panel assets valid.
     #[serde(default)]
     procedural_surfaces: Vec<ProceduralSurface>,
+    /// Procedural fuselage bodies compiled hangar-side into strip panels,
+    /// hull mass, feed-pipeline tanks, and contact parts. Same boundary
+    /// as surfaces: the compiler never runs in flight. Empty keeps
+    /// legacy assets valid.
+    #[serde(default)]
+    procedural_bodies: Vec<ProceduralBody>,
     /// Compile contact boxes from procedural surfaces into the collision
     /// geometry (one body-axis box per mechanism region). Default true:
     /// the documented hangar pipeline; set false to keep hand-authored
     /// contact geometry only.
     #[serde(default = "default_true")]
     surface_collision: bool,
+    /// Compile per-segment contact parts from procedural bodies into the
+    /// collision geometry. Default true; set false to keep hand-authored
+    /// contact geometry only.
+    #[serde(default = "default_true")]
+    body_collision: bool,
     /// Solver-neutral contact primitives. Legacy assets may omit this while
     /// collision geometry is migrated; contact-active runtime code must not.
     #[serde(default)]
@@ -287,7 +312,7 @@ struct VehicleAsset {
     /// without engines" once mounts are present.
     #[serde(default)]
     engines: Vec<EngineAsset>,
-    /// Propellant tanks (dry + full-fill mass aggregates at bake).
+    /// Propellant tanks (dry + initial-load mass aggregates at bake).
     #[serde(default)]
     tanks: Vec<TankAsset>,
     /// Multi-chamber propulsion systems (shared feed, per-chamber nozzles).
@@ -403,6 +428,92 @@ impl VehicleAsset {
                 surface_collision_parts.extend(parts);
             }
         }
+        // Hangar-side body compilation: each body contributes strip
+        // panels (appended after hand and surface panels), control channels
+        // rebased onto those panels, hull mass and inertia about the
+        // authoring origin, feed-pipeline tank mounts from tank regions,
+        // and per-segment contact parts. Ports print as anchor data; engine
+        // auto-mounting from ports is future work.
+        let mut body_tank_mounts = Vec::new();
+        let mut body_contact_parts = Vec::new();
+        for body in &self.procedural_bodies {
+            let compiled = compile_body(body, &BodyCompileOptions::default())
+                .map_err(|error| format!("body '{}': {error}", body.name))?;
+            println!(
+                "body '{}': {} panels in {} zones, volume {:.3} m^3, wet {:.2} m^2",
+                body.name,
+                compiled.panels.len(),
+                compiled.summary.zone_count,
+                compiled.summary.enclosed_volume_m3,
+                compiled.summary.wetted_area_m2
+            );
+            if let Some(structure) = &compiled.structure {
+                println!(
+                    "body '{}': hull {:.1} kg at {:?}, fuel {:.3} m^3",
+                    body.name,
+                    structure.mass_kg,
+                    structure.center_of_mass_body_m,
+                    compiled.summary.tank_capacity_m3
+                );
+                surface_mass_kg += structure.mass_kg;
+                surface_moment += structure.center_of_mass_body_m * structure.mass_kg;
+                surface_inertia += structure.inertia_body_kg_m2;
+            }
+            for tank in &compiled.tanks {
+                println!(
+                    "body '{}': tank '{}' {:.3} m^3, fill {:.0} kg at {:?}",
+                    body.name,
+                    tank.region_name,
+                    tank.inner_volume_m3,
+                    tank.propellant_kg,
+                    tank.mount.position_body_m
+                );
+                body_tank_mounts.push(tank.mount);
+            }
+            for region in &compiled.interior {
+                // Manifest mass already rides the hull accumulators above
+                // (single ownership: the compiler aggregates, the baker
+                // only prints here).
+                if region.payload_mass_kg > 0.0 {
+                    println!(
+                        "body '{}': region '{}' manifest {:.1} kg",
+                        body.name, region.name, region.payload_mass_kg
+                    );
+                }
+            }
+            for port in &compiled.ports {
+                println!(
+                    "body '{}': port '{}' ({:?}) at {:?} along {:?}",
+                    body.name, port.name, port.kind, port.position_body_m, port.axis_body_m
+                );
+            }
+            let panel_base = panels.len();
+            let control_base = controls.len();
+            for definition in &compiled.controls {
+                let mut rebased = ControlSurfaceDefinition::new(
+                    definition.name.clone(),
+                    definition
+                        .panel_indices
+                        .iter()
+                        .map(|index| panel_base + index)
+                        .collect(),
+                    definition.minimum_deflection_rad,
+                    definition.maximum_deflection_rad,
+                )?;
+                rebased = rebased.with_kind(definition.kind);
+                if let Some(parent) = definition.parent_index {
+                    rebased = rebased.with_parent(control_base + parent);
+                }
+                controls.push(rebased);
+            }
+            panels.extend(compiled.panels.iter().cloned());
+            if self.body_collision {
+                let parts = body_collision_parts(body, &BodyCollisionOptions::default())
+                    .map_err(|error| format!("body '{}': {error}", body.name))?;
+                println!("body '{}': {} contact parts", body.name, parts.len());
+                body_contact_parts.extend(parts);
+            }
+        }
         // Bake mounts first (authoring stations): the single final COM
         // below needs every mass contributor before anything shifts.
         let mut collision_parts = self
@@ -415,11 +526,14 @@ impl VehicleAsset {
             .into_iter()
             .map(EngineAsset::bake)
             .collect::<Result<Vec<_>, _>>()?;
-        let tank_mounts = self
+        let mut tank_mounts = self
             .tanks
             .into_iter()
             .map(TankAsset::bake)
             .collect::<Result<Vec<TankMount>, _>>()?;
+        // Body tank regions join the hand tanks before the COM pass so
+        // they ride the same feed-pressure cross-check and recenter.
+        tank_mounts.extend(body_tank_mounts);
         let system_mounts = self
             .systems
             .into_iter()
@@ -446,7 +560,7 @@ impl VehicleAsset {
             total_moment += DVec3::from_array(mount.position_body_m) * mass;
         }
         for mount in &tank_mounts {
-            let mass = mount.tank.dry_mass_kg + mount.tank.full_propellant_kg;
+            let mass = mount.tank.dry_mass_kg + mount.loaded_propellant_kg();
             total_mass_kg += mass;
             total_moment += DVec3::from_array(mount.position_body_m) * mass;
         }
@@ -496,6 +610,7 @@ impl VehicleAsset {
             println!("wing fuel volume: {surface_fuel_m3:.3} m^3");
         }
         collision_parts.extend(surface_collision_parts);
+        collision_parts.extend(body_contact_parts);
         let collision_geometry = CollisionGeometry::new(collision_parts)?;
         // Feed cross-check: pressure-fed engines have no pump to hide
         // behind, so a tank must hold their full feed pressure. Pump-fed
@@ -602,6 +717,8 @@ struct PanelAsset {
     lift_interference_factor: Option<f64>,
     #[serde(default = "one")]
     lift_coefficient_sign: f64,
+    #[serde(default = "one")]
+    side_force_scale: f64,
     #[serde(default)]
     thickness_to_chord_ratio: f64,
     #[serde(default)]
@@ -637,6 +754,7 @@ impl PanelAsset {
             panel = panel.with_center_of_pressure(vector(center_of_pressure))?;
         }
         panel = panel.with_lift_sign(self.lift_coefficient_sign)?;
+        panel = panel.with_side_force_scale(self.side_force_scale)?;
         panel = panel.with_thickness_ratio(self.thickness_to_chord_ratio)?;
         panel.control_deflection_rad = self.control_deflection_rad;
         panel.exposure = self.exposure;
@@ -1004,9 +1122,15 @@ impl TankAsset {
                 },
             },
         };
+        let tank = spec.compile(density)?;
+        let intrinsic_inertia_body_kg_m2 =
+            shape.intrinsic_inertia_body_kg_m2(tank.dry_mass_kg, tank.full_propellant_kg)?;
+        let initial_propellant_kg = tank.full_propellant_kg;
         Ok(TankMount {
-            tank: spec.compile(density)?,
+            tank,
             position_body_m: self.position_body_m,
+            intrinsic_inertia_body_kg_m2,
+            initial_propellant_kg: Some(initial_propellant_kg),
         })
     }
 }
@@ -1445,6 +1569,7 @@ fn default_friction() -> f64 {
 struct Options {
     input: PathBuf,
     output: Option<PathBuf>,
+    debug_body_mesh_dir: Option<PathBuf>,
     help: bool,
     analyze: bool,
     throttle: f64,
@@ -1459,6 +1584,7 @@ impl Options {
     fn parse(arguments: impl Iterator<Item = String>) -> Result<Self, Box<dyn Error>> {
         let mut input = PathBuf::from("data/vehicles/example_aircraft.toml");
         let mut output = None;
+        let mut debug_body_mesh_dir = None;
         let mut help = false;
         let mut analyze = false;
         let mut throttle = 1.0;
@@ -1471,6 +1597,12 @@ impl Options {
                 "--input" => input = PathBuf::from(required_value(&mut arguments, "--input")?),
                 "--output" => {
                     output = Some(PathBuf::from(required_value(&mut arguments, "--output")?))
+                }
+                "--debug-body-mesh-dir" => {
+                    debug_body_mesh_dir = Some(PathBuf::from(required_value(
+                        &mut arguments,
+                        "--debug-body-mesh-dir",
+                    )?));
                 }
                 "--analyze" => analyze = true,
                 "--analyze-json" => {
@@ -1499,6 +1631,7 @@ impl Options {
         Ok(Self {
             input,
             output,
+            debug_body_mesh_dir,
             help,
             analyze,
             throttle,
@@ -1520,8 +1653,9 @@ fn required_value(
 
 fn print_help() {
     println!(
-        "Usage: thessa-vehicle-baker [--input data/vehicles/example_aircraft.toml] [--output data/vehicles/example_aircraft.baked.json] [--analyze [--throttle 1.0] [--burn-time 0.0] [--analyze-json] [--oxygen 0.232]]"
+        "Usage: thessa-vehicle-baker [--input data/vehicles/example_aircraft.toml] [--output data/vehicles/example_aircraft.baked.json] [--debug-body-mesh-dir DIR] [--analyze [--throttle 1.0] [--burn-time 0.0] [--analyze-json] [--oxygen 0.232]]"
     );
+    println!("--debug-body-mesh-dir exports procedural fuselage meshes as OBJ before baking.");
     println!("--oxygen sets the jet analyzer O2 mass fraction (Earth 0.232, Thessa ~0.274).");
 }
 
@@ -1590,7 +1724,7 @@ friction = 0.8
         let tanks_mass: f64 = vehicle
             .tanks
             .iter()
-            .map(|mount| mount.tank.dry_mass_kg + mount.tank.full_propellant_kg)
+            .map(|mount| mount.tank.dry_mass_kg + mount.loaded_propellant_kg())
             .sum();
         assert!(
             (vehicle.mass_properties.mass_kg - 2000.0 - engines_mass - tanks_mass).abs() < 1e-6,
@@ -1805,7 +1939,7 @@ gimbal_range_rad = 0.09
         let tanks_mass: f64 = vehicle
             .tanks
             .iter()
-            .map(|mount| mount.tank.dry_mass_kg + mount.tank.full_propellant_kg)
+            .map(|mount| mount.tank.dry_mass_kg + mount.loaded_propellant_kg())
             .sum();
         assert!(
             (vehicle.mass_properties.mass_kg - 2000.0 - tanks_mass - system.dry_mass_kg).abs()
@@ -2299,4 +2433,40 @@ material = "nickel-superalloy"
     )
     .expect("parse");
     eprintln!("engines={}", asset.engines.len());
+}
+
+#[cfg(test)]
+mod body_tests {
+    use super::*;
+
+    #[test]
+    fn example_body_asset_bakes_panels_tanks_and_contact() {
+        let asset: VehicleAsset =
+            toml::from_str(include_str!("../../../data/vehicles/example_body.toml"))
+                .expect("body TOML should parse");
+        assert_eq!(asset.procedural_bodies.len(), 1);
+        let vehicle = asset.bake().expect("body asset should bake");
+        // Strip panels (two per axial zone), one feed-pipeline tank from
+        // the tank region, per-segment contact parts, and mass above the
+        // 500 kg hand structure (hull plus tank dry plus propellant).
+        assert!(!vehicle.aero_geometry.panels.is_empty());
+        assert_eq!(vehicle.aero_geometry.panels.len() % 2, 0);
+        assert_eq!(vehicle.tanks.len(), 1);
+        assert_eq!(vehicle.tanks[0].tank.full_propellant_kg > 0.0, true);
+        assert_eq!(vehicle.collision_geometry.parts.len(), 4);
+        assert!(vehicle.collision_geometry.validate().is_ok());
+        assert!(vehicle.mass_properties.mass_kg > 500.0);
+        // Body strips mute the shared side-force path (their lateral
+        // answer arrives through the orthogonal strips' lift path).
+        for panel in &vehicle.aero_geometry.panels {
+            assert_eq!(panel.side_force_scale, 0.0);
+        }
+        let json = serde_json::to_string(&vehicle).expect("vehicle JSON should serialize");
+        let round_trip: VehicleDefinition =
+            serde_json::from_str(&json).expect("vehicle JSON should deserialize");
+        assert_eq!(
+            round_trip.aero_geometry.panels.len(),
+            vehicle.aero_geometry.panels.len()
+        );
+    }
 }

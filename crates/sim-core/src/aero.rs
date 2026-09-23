@@ -134,6 +134,15 @@ pub struct AeroPanel {
     /// Fraction of the panel exposed to the incoming flow after an optional
     /// occlusion/wake query. `1` is fully exposed and `0` contributes nothing.
     pub exposure: f64,
+    /// Authority scale for the side-force path (`side_force_slope` times
+    /// sideslip). `1` is conventional; `0` mutes the config side-force
+    /// slope while keeping the lift path intact. Body-of-revolution
+    /// strips use `0`: their lateral response already arrives through the
+    /// lift path of the orthogonal strips, and the shared sideslip
+    /// convention would otherwise double-count pitch-plane crossflow as
+    /// sideslip on yaw-normal panels.
+    #[serde(default = "default_side_force_scale")]
+    pub side_force_scale: f64,
     /// Fold-joint ownership for mechanism-aware runtime: index into the
     /// vehicle-level fold-joint list, `None` for rigid structure. The
     /// force solver ignores it; the future mechanism mixer consumes it.
@@ -181,6 +190,7 @@ impl AeroPanel {
             thickness_to_chord_ratio: 0.0,
             control_deflection_rad: 0.0,
             exposure: 1.0,
+            side_force_scale: 1.0,
             fold_index: None,
         })
     }
@@ -248,6 +258,14 @@ impl AeroPanel {
         Ok(self)
     }
 
+    /// Set side-force authority while keeping the lift path intact.
+    /// Body strips commonly use `0.0` here (see the field docs).
+    pub fn with_side_force_scale(mut self, side_force_scale: f64) -> Result<Self, AeroError> {
+        self.side_force_scale = side_force_scale;
+        self.validate()?;
+        Ok(self)
+    }
+
     /// A convenient symmetric flat-plate zone for tests and early vehicle
     /// prototypes. Its normal/lift axis is `+Z`.
     pub fn flat_plate(
@@ -299,6 +317,11 @@ impl AeroPanel {
         if !self.exposure.is_finite() || !(0.0..=1.0).contains(&self.exposure) {
             return Err(AeroError::InvalidGeometry(
                 "panel exposure must be in [0, 1]".into(),
+            ));
+        }
+        if !self.side_force_scale.is_finite() || !(0.0..=1.0).contains(&self.side_force_scale) {
+            return Err(AeroError::InvalidGeometry(
+                "panel side-force scale must be in [0, 1]".into(),
             ));
         }
         let chord = normalize_axis(self.chord_axis_body, "chord axis")?;
@@ -1659,11 +1682,12 @@ impl PanelAeroModel {
                     "aero coefficients must be finite with non-negative drag".into(),
                 ));
             }
-            // Lift sign lives in force assembly, outside the kernels.
+            // Lift sign and side-force scale live in force assembly,
+            // outside the kernels.
             let coefficients = AeroCoefficients {
                 lift: s.cl[index] * panels.lift_sign[index],
                 drag: s.cd[index],
-                side_force: s.cy[index],
+                side_force: s.cy[index] * panels.side_scale[index],
                 pitching_moment: s.cm[index],
             };
             let (force, moment) =
@@ -1702,8 +1726,8 @@ impl PanelAeroModel {
     }
 
     /// Shared scalar coefficient lane for SIMD tails and fallback machines:
-    /// the analytic model without lift sign (kernels never see the sign;
-    /// assembly applies it uniformly).
+    /// the analytic model without lift sign or side-force scale (kernels
+    /// never see either; assembly applies them uniformly).
     fn analytic_lane(&self, panels: &PanelSoA, lane: &LaneFlow, index: usize) -> AeroCoefficients {
         if !lane.active {
             return AeroCoefficients {
@@ -1790,6 +1814,7 @@ impl PanelAeroModel {
             let mut coefficients = table.sample(mach, alpha_eff);
             coefficients.lift *= panel.lift_coefficient_sign;
             coefficients.side_force += self.config.side_force_slope_per_rad * beta;
+            coefficients.side_force *= panel.side_force_scale;
             // Buffet applies to table models too (same bounded loss, keyed
             // to the sampled point with the sweep-corrected normal Mach);
             // the branch keeps legacy output bitwise identical when the
@@ -1808,6 +1833,7 @@ impl PanelAeroModel {
                 self.config
                     .analytic_coefficients(mach, alpha, beta, control_deflection, panel);
             coefficients.lift *= panel.lift_coefficient_sign;
+            coefficients.side_force *= panel.side_force_scale;
             coefficients
         }
     }
@@ -1869,6 +1895,7 @@ pub struct PanelSoA {
     pub sweep_rad: Vec<f64>,
     pub interference: Vec<f64>,
     pub lift_sign: Vec<f64>,
+    pub side_scale: Vec<f64>,
     pub thickness_ratio: Vec<f64>,
     pub deflection: Vec<f64>,
     pub exposure: Vec<f64>,
@@ -1897,6 +1924,7 @@ macro_rules! push_panel_lane {
         $soa.sweep_rad.push($panel.planform_sweep_rad);
         $soa.interference.push($panel.lift_interference_factor);
         $soa.lift_sign.push($panel.lift_coefficient_sign);
+        $soa.side_scale.push($panel.side_force_scale);
         $soa.thickness_ratio.push($panel.thickness_to_chord_ratio);
         $soa.deflection.push($panel.control_deflection_rad);
         $soa.exposure.push($panel.exposure);
@@ -1930,6 +1958,7 @@ impl PanelSoA {
             sweep_rad: Vec::with_capacity(geometry.panels.len()),
             interference: Vec::with_capacity(geometry.panels.len()),
             lift_sign: Vec::with_capacity(geometry.panels.len()),
+            side_scale: Vec::with_capacity(geometry.panels.len()),
             thickness_ratio: Vec::with_capacity(geometry.panels.len()),
             deflection: Vec::with_capacity(geometry.panels.len()),
             exposure: Vec::with_capacity(geometry.panels.len()),
@@ -1983,6 +2012,7 @@ impl PanelSoA {
             planform_sweep_rad: self.sweep_rad[index],
             lift_interference_factor: self.interference[index],
             lift_coefficient_sign: self.lift_sign[index],
+            side_force_scale: self.side_scale[index],
             thickness_to_chord_ratio: self.thickness_ratio[index],
             control_deflection_rad: self.deflection[index],
             exposure: self.exposure[index],
@@ -2017,6 +2047,11 @@ impl fmt::Display for AeroError {
 
 impl Error for AeroError {}
 
+/// Default side-force authority for legacy panel definitions.
+fn default_side_force_scale() -> f64 {
+    1.0
+}
+
 fn normalize_axis(axis: DVec3, name: &str) -> Result<DVec3, AeroError> {
     if !axis.is_finite() || axis.length_squared() <= EPS_SPEED_MPS {
         return Err(AeroError::InvalidGeometry(format!(
@@ -2048,12 +2083,26 @@ fn project_perpendicular(axis: DVec3, direction: DVec3) -> DVec3 {
 /// geometry, not a global vehicle tuning constant.
 fn finite_planform_lift_slope(compressible_2d_slope: f64, panel: &AeroPanel) -> f64 {
     let sweep_cos = panel.planform_sweep_rad.cos();
-    let correlation_parameter = 2.0 * std::f64::consts::PI * panel.planform_aspect_ratio
-        / (compressible_2d_slope * sweep_cos);
+    panel.lift_interference_factor
+        * diederich_lift_slope(
+            compressible_2d_slope,
+            panel.planform_aspect_ratio,
+            sweep_cos,
+        )
+}
+
+/// Diederich finite-planform correlation for an explicit aspect ratio and
+/// leading-edge sweep cosine, without the panel interference multiplier.
+///
+/// Hangar-side compilers (fuselage body strips) use this to size a
+/// geometry-derived interference value from a closed-form target slope;
+/// the runtime path above stays the single force implementation.
+pub fn diederich_lift_slope(two_d_slope_per_rad: f64, aspect_ratio: f64, sweep_cos: f64) -> f64 {
+    let correlation_parameter =
+        2.0 * std::f64::consts::PI * aspect_ratio / (two_d_slope_per_rad * sweep_cos);
     let denominator =
         2.0 + correlation_parameter * (1.0 + (2.0 / correlation_parameter).powi(2)).sqrt();
-    panel.lift_interference_factor
-        * (compressible_2d_slope * correlation_parameter * sweep_cos / denominator)
+    two_d_slope_per_rad * correlation_parameter * sweep_cos / denominator
 }
 
 fn average_chord(geometry: &AeroGeometry) -> f64 {

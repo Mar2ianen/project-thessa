@@ -1020,7 +1020,7 @@ fn concorde_delta_vortex_lift_matches_polhamus_band() {
     // wider: they pin the calibration without overfitting the analogy.
     // Vortex-induced drag is not modeled yet (induced drag follows the
     // attached branch only), so no L/D assertion is attempted here.
-    use crate::{CompileOptions, MechanismState, concorde, concorde_wing, compile_surface};
+    use crate::{CompileOptions, MechanismState, compile_surface, concorde, concorde_wing};
     use thessa_sim_core::{
         AeroConfig, AeroEnvironment, AeroGeometry, AeroModel, AeroState, PanelAeroModel,
     };

@@ -1,0 +1,158 @@
+# Procedural lifting-body aircraft: one lofted, tank-bearing hull and a
+# structured procedural wing with an outboard trailing-edge control region.
+name = "example-lifting-body-aircraft"
+mass_kg = 1200.0
+inertia_body_kg_m2 = [
+  [16000.0, 0.0, 0.0],
+  [0.0, 42000.0, 0.0],
+  [0.0, 0.0, 46000.0],
+]
+
+[[procedural_surfaces]]
+name = "main-wing"
+span_m = 7.0
+origin_body_m = [0.0, 0.0, -0.15]
+
+[procedural_surfaces.planform]
+[[procedural_surfaces.planform.stations]]
+s = 0.0
+x_le = -1.0
+x_te = 3.0
+[[procedural_surfaces.planform.stations]]
+s = 1.0
+x_le = 0.0
+x_te = 2.0
+
+[procedural_surfaces.bend]
+[[procedural_surfaces.bend.stations]]
+s = 0.0
+z_m = 0.0
+[[procedural_surfaces.bend.stations]]
+s = 1.0
+z_m = 0.2
+
+[procedural_surfaces.sections]
+[[procedural_surfaces.sections.stations]]
+s = 0.0
+incidence_rad = 0.0
+thickness_ratio = 0.12
+[[procedural_surfaces.sections.stations]]
+s = 1.0
+incidence_rad = 0.0
+thickness_ratio = 0.12
+
+[[procedural_surfaces.controls]]
+name = "aileron"
+span = [0.65, 0.92]
+chord = [0.72, 1.0]
+hinge_u = 0.72
+min_deflection_rad = -0.4
+max_deflection_rad = 0.4
+
+[procedural_surfaces.structure]
+skin_gauge_mm = 2.0
+spar_depth_fraction = 0.6
+spar_web_gauge_mm = 3.0
+rib_spacing_m = 0.5
+rib_gauge_mm = 1.0
+design_limit_lift_n = 30000.0
+fuel_box_chord = [0.15, 0.65]
+fuel_sump_fraction = 0.03
+
+[procedural_surfaces.structure.skin_material]
+name = "Al-7075-T6"
+density_kg_m3 = 2810.0
+allowable_stress_mpa = 503.0
+
+[procedural_surfaces.structure.spar_material]
+name = "Al-7075-T6"
+density_kg_m3 = 2810.0
+allowable_stress_mpa = 503.0
+
+[[procedural_bodies]]
+name = "lifting-body-hull"
+origin_body_m = [0.0, 0.0, 0.0]
+
+[[procedural_bodies.stations]]
+x_m = -4.0
+half_width_m = 0.32
+top_height_m = 0.28
+bottom_height_m = 0.30
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.stations]]
+x_m = -2.0
+half_width_m = 0.82
+top_height_m = 0.62
+bottom_height_m = 0.56
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.stations]]
+x_m = 0.0
+half_width_m = 1.0
+top_height_m = 0.72
+bottom_height_m = 0.58
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.stations]]
+x_m = 2.0
+half_width_m = 0.82
+top_height_m = 0.62
+bottom_height_m = 0.56
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.stations]]
+x_m = 4.0
+half_width_m = 0.001
+top_height_m = 0.001
+bottom_height_m = 0.001
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.controls]]
+name = "body-rudder"
+x0_m = -2.0
+x1_m = 0.0
+plane = "yaw"
+minimum_deflection_rad = -0.35
+maximum_deflection_rad = 0.35
+
+[[procedural_bodies.regions]]
+name = "center-fuel-tank"
+x0_m = -2.0
+x1_m = 2.0
+
+[procedural_bodies.regions.kind.tank]
+propellant = "lox-methane"
+fill_fraction = 0.85
+
+[procedural_bodies.structure]
+skin_gauge_mm = 2.0
+frame_spacing_m = 1.0
+frame_gauge_mm = 2.0
+frame_width_mm = 40.0
+tank_pressure_pa = 500000.0
+wall_inset_mm = 10.0
+
+[procedural_bodies.structure.skin_material]
+name = "Al-7075-T6"
+density_kg_m3 = 2810.0
+
+[procedural_bodies.structure.tank_material]
+density_kg_m3 = 8190.0
+yield_strength_pa = 1000000000.0
+max_wall_temp_k = 1350.0

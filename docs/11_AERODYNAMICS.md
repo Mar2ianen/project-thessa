@@ -144,13 +144,16 @@ cruise L/D claim is made for deltas.
 
 Fuselage bodies compile to two strip panels per axial zone (pitch plus
 yaw plane) with Munk/slender-body interference: each zone carries the
-potential-flow normal force of its own section-area shrinkage toward
-the nose (`2 * dA` through a geometry-derived interference value), so
-a pointed forebody recovers the `2 * S_base / S_ref` slope with zero
-per-vehicle tuning while a constant barrel correctly carries almost
-none. Centers of pressure sit at zone centroids, giving real CP travel
-(and the genuine nose-forward destabilization that makes rocket fins
-necessary). Axial blunt/base/wave drag is reported as bookkeeping
+potential-flow normal force of its signed section-area gradient
+(`2 * |dA|`, with lift direction following the gradient sign) through a
+geometry-derived interference value. A pointed forebody recovers the
+`2 * S_base / S_ref` slope with zero per-vehicle tuning, a constant
+barrel correctly carries almost none, and a boat-tail retains its
+opposite-sign contribution. Centers of pressure follow the first moment
+of area change, giving real CP travel (and the genuine nose-forward
+destabilization that makes rocket fins necessary). Cross-sections and
+volume centroids are integrated along the actual interpolated loft.
+Axial blunt/base/wave drag is reported as bookkeeping
 (wetted area, base area, fineness) for Tier B table calibration, not
 wired to runtime `Cd0`.
 
@@ -159,6 +162,14 @@ arrives through the lift path of the orthogonal strips, and the shared
 sideslip convention would otherwise double-count pitch-plane crossflow
 as sideslip on yaw-normal panels. The scale defaults to `1.0`, so every
 legacy panel is bitwise identical.
+
+Procedural bodies may assign normalized control channels to axial ranges
+of their pitch or yaw strip panels. Range edges split the body zone schedule,
+so a command changes only the selected generated panels; the vehicle baker
+rebases those indices into the same runtime control list used by wings.
+This reuses the current panel-deflection response and does not inject a
+direct vehicle moment. Rate limits, hinge torque and detailed appendage
+geometry remain actuator/mechanism model work.
 
 ## 11.8.3. Lifting bodies
 
@@ -172,7 +183,8 @@ physics (negative lift at zero alpha, pinned by regression) with no new
 coefficient. Chine vortex lift itself stays a per-vehicle config factor
 calibrated the Concorde way (imported polars or tunnel/CFD), never an
 invented constant: the Dream Chaser fixture pins the Munk-class slope
-(1.8–2.5/base area) and the camber shift, not a vortex number.
+(within 0.3 of `2 * S_base / S_ref`, about 1.7 per maximum frontal area
+for this notional geometry) and the camber shift, not a vortex number.
 
 The repository also contains a bundled X-15-like proxy comparison. Its Mach
 and altitude errors are useful regression measurements, not a statement that

@@ -1,6 +1,15 @@
 # Procedural fuselages and body modules
 
-Status: design baseline. Exact editor UX, structural shell model, internal packing rules, cutout implementation, and balancing values are TBD.
+Status: hangar compiler implemented in `crates/fuselage`
+(asymmetric station loft, adaptive volume/centroid integration, signed
+Munk strips, triangulated skin/cap area and mass moments, frames,
+feed-pipeline tanks, body-strip control regions, conservative contacts,
+interior volumes, ports, and renderer-neutral loft mesh). A combined
+lifting-body-plus-wing baker fixture exercises the runtime boundary.
+Tank shells and authored initial-fill contents contribute an
+equivalent-cylinder intrinsic inertia; fluid redistribution is still TBD as
+below.
+Exact editor UX, section roll, and cutouts remain TBD.
 
 ## 1. Design goal
 
@@ -51,15 +60,59 @@ This is intentionally more capable than a constant-section linear extrusion whil
 
 Per-station data may include:
 
-- section spline shape;
+- section spline shape (independent top/bottom heights and exponents:
+  round tops over flat chined bottoms are first-class);
 - scale;
-- lateral/vertical offset;
-- rotation about the longitudinal axis;
+- lateral/vertical offset (centerline camber and nose droop);
+- rotation about the longitudinal axis (reserved, rejected in this
+  slice);
 - optional local wall/structural parameters.
 
 This lets the same primitive produce cylinders, tapers, circular-to-oval transitions, rounded rectangular sections, asymmetrical bodies, mild curvature, twist, lifting-body-like forms, and other useful spacecraft or aircraft fuselages.
 
-The exact mathematical interpolation between stations is TBD, but it must remain deterministic and reject self-intersecting/invalid solids cleanly.
+The mathematical interpolation between stations is linear in each section
+parameter. The compiler integrates the resulting section area and first
+moments adaptively, including cases where changing width and height make
+area nonlinear between endpoints. Aerodynamic zones subdivide at area
+reversals and curvature while preserving the authored loft. Self-intersecting
+lofts are rejected by the strictly increasing station rule plus
+per-station positivity; section roll about the longitudinal axis is not
+in this slice.
+
+Ring frames use `frame_spacing_m` as a maximum pitch and are distributed
+uniformly along the body, independently of the number of authoring knots.
+The lateral skin and end caps are triangulated from the same loft; their
+surface area, centroid and inertia are accumulated from facet moments.
+Ring-frame mass moments integrate the polygonal section perimeter and
+include the finite axial frame width. The compiler reports the estimated
+area refinement error alongside volume integration error.
+Each authored interval currently uses an axis-aligned bounding cuboid for
+contact. This keeps the axial extent exact and conservatively encloses the
+loft, including offset and cambered sections; a tighter convex decomposition
+can replace it once it can preserve the same coverage guarantee.
+
+Body controls are authored as axial ranges plus a `pitch` or `yaw` strip
+plane and deflection limits. The compiler inserts range edges into the zone
+schedule and resolves each channel to only the corresponding generated
+panels. `vehicle-baker` rebases those local indices into the merged vehicle
+geometry, after wing controls; runtime control commands then use the shared
+`ControlSurfaceDefinition` path. The present control model applies the
+existing per-panel deflection response. Hinge torque, rate-limited actuator
+state, and a moving surface mesh are separate mechanism/actuator work.
+
+Tank pressure shells are currently sized by the shared cylinder/sphere
+pressure-vessel model: cylindrical hoop stress uses `pD/(2σ)`, spherical
+membrane stress uses `pD/(4σ)`, both with the stated 1.5 factor of safety.
+Cylinder end-cap bending is not separately sized yet; caps currently use
+the cylindrical wall gauge and remain a documented limitation. Dry-shell
+inertia follows the cylindrical wall/end-cap area split (or thin spherical
+shell). Tank capacity (`full_propellant_kg`) remains distinct from the
+authored initial load (`TankMount::initial_propellant_kg`); older baked
+mounts without this field deserialize as full. Fuselage tank regions map
+their loft volume to an equivalent cylinder for the feed model. Initial
+partial-fill mass currently uses the equivalent full-volume tensor scaled
+to that mass; orientation-dependent fluid levels, sloshing and changing
+liquid centroid/inertia are not yet modeled.
 
 ## 3. Editor modes
 

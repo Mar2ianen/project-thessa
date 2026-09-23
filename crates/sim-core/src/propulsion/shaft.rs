@@ -572,7 +572,6 @@ mod tests {
         flight_condition(
             &AtmosphereConfig::default().sample(0.0).expect("SL sample"),
             0.0,
-            super::super::EARTH_OXYGEN_FRACTION,
         )
         .expect("static condition")
     }
@@ -713,12 +712,8 @@ mod tests {
             .compile()
             .expect("compiles");
         let sample = AtmosphereConfig::default().sample(0.0).expect("SL");
-        let condition = flight_condition(
-            &sample,
-            0.8 * sample.speed_of_sound_mps,
-            super::super::EARTH_OXYGEN_FRACTION,
-        )
-        .expect("cruise condition");
+        let condition =
+            flight_condition(&sample, 0.8 * sample.speed_of_sound_mps).expect("cruise condition");
         let state = JetShaftState {
             spool_n: 0.6,
             lit: false,
@@ -1125,7 +1120,7 @@ mod tests {
             ..sl_static()
         };
         let anoxic = FlightCondition {
-            oxygen_fraction: 0.0,
+            composition: crate::atmosphere::AtmosphereComposition::anoxic(),
             ..sl_static()
         };
         let command = ShaftCommand {

@@ -7,9 +7,9 @@ use std::{hint::black_box, time::Instant};
 
 use thessa_sim_core::{
     AirCycle, AirbreathingSpec, AtmosphereConfig, ChamberMaterial, CompiledEngine, CoolingMode,
-    EARTH_OXYGEN_FRACTION, EngineCycle, IntakeKind, JetFuel, JetShaftState, LiquidEngineSpec,
-    NozzleContour, Propellant, ShaftCommand, ShaftSpec, SolidMotorSpec, StarterKind, StarterSpec,
-    advance_jet_shaft, analyze_altitude, flight_condition,
+    EngineCycle, GasKind, IntakeKind, JetFuel, JetShaftState, LiquidEngineSpec, NozzleContour,
+    Propellant, ShaftCommand, ShaftSpec, SolidMotorSpec, StarterKind, StarterSpec,
+    advance_jet_shaft, analyze_airbreathing, analyze_altitude, flight_condition,
 };
 
 fn methalox_spec() -> LiquidEngineSpec {
@@ -130,7 +130,7 @@ fn main() {
     .compile()
     .expect("bench jet");
     let sample = atmosphere.sample(0.0).expect("SL sample");
-    let condition = flight_condition(&sample, 0.0, EARTH_OXYGEN_FRACTION).expect("condition");
+    let condition = flight_condition(&sample, 0.0).expect("condition");
 
     let start = Instant::now();
     for _ in 0..iters {
@@ -162,6 +162,35 @@ fn main() {
     println!(
         "jet cold crank to light-off: {crank_steps} steps ({:.1} sim s) at {crank_ns:.0} ns/step",
         crank_steps as f64 * 0.1
+    );
+
+    // Composition-aware atmosphere (section 10 / 18.9): oxidizer query
+    // cost plus the analyzer sweep that stamps species into every sample.
+    let composition = atmosphere.sample(0.0).expect("SL sample").composition;
+    let queries = iters * 10_000;
+    let start = Instant::now();
+    let mut acc = 0.0;
+    for _ in 0..queries {
+        acc += composition.mass_fraction(GasKind::Oxygen);
+    }
+    black_box(acc);
+    let per_query_ns = start.elapsed().as_secs_f64() * 1.0e9 / queries as f64;
+    println!("composition mass-fraction query: {per_query_ns:.2} ns/query");
+
+    let altitudes: Vec<f64> = (0..=10).map(|k| k as f64 * 8000.0).collect();
+    let machs = [0.0, 0.5, 1.0, 2.0, 3.0];
+    let warm_rows =
+        analyze_airbreathing(&jet, &atmosphere, &altitudes, &machs, 1.0).expect("air grid");
+    let start = Instant::now();
+    for _ in 0..iters {
+        black_box(
+            analyze_airbreathing(&jet, &atmosphere, &altitudes, &machs, 1.0).expect("air grid"),
+        );
+    }
+    let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * warm_rows.len()) as f64;
+    println!(
+        "air analyzer row: {per_row_ns:.1} ns/row ({} rows/iter, species stamped per row)",
+        warm_rows.len()
     );
 }
 

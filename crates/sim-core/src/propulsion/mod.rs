@@ -45,8 +45,8 @@ mod system;
 
 pub use air::{
     AIR_CP_J_KG_K, AIR_GAMMA, AirAltitudePoint, AirCycle, AirOperatingPoint, AirbreathingSpec,
-    CompiledAirbreather, EARTH_OXYGEN_FRACTION, FlightCondition, IntakeKind, JetFuel,
-    THESSA_OXYGEN_MASS_FRACTION, advance_jet_spool, analyze_airbreathing, flight_condition,
+    CompiledAirbreather, FlightCondition, IntakeKind, JetFuel, advance_jet_spool,
+    analyze_airbreathing, flight_condition,
 };
 pub use analyze::{AltitudePoint, analyze_altitude};
 pub use cycle::{CycleLimits, EngineCycle};

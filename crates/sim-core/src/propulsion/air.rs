@@ -25,7 +25,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::atmosphere::AtmosphereSample;
+use crate::atmosphere::{AtmosphereComposition, AtmosphereSample, GasKind};
 
 use super::SEPARATION_PRESSURE_RATIO;
 use super::shaft::{SHAFT_FRICTION_FRACTION, ShaftBalance, ShaftSpec, TURBINE_SHAFT_HEAT_FRACTION};
@@ -71,12 +71,6 @@ pub const NOZZLE_GROSS_EFFICIENCY: f64 = 0.95;
 pub const INTAKE_DESIGN_CAPTURE_MACH: f64 = 0.5;
 /// Afterburner duct temperature cap (K, liner limit, documented).
 pub const REHEAT_TEMP_CAP_K: f64 = 2200.0;
-/// Oxygen mass fraction of Earth air (reference point for O2 gating).
-pub const EARTH_OXYGEN_FRACTION: f64 = 0.232;
-/// Oxygen mass fraction of Thessa air: 25.0% molar converts to ~27.4% by
-/// mass for the current bulk mixture (world atlas, provisional until the
-/// biosphere canon locks; recompute if the mixture changes).
-pub const THESSA_OXYGEN_MASS_FRACTION: f64 = 0.274;
 
 /// Compressor mass fit (kg per (kg/s · ratio), Olympus-anchored order fit).
 pub const MASS_FIT_COMPRESSOR: f64 = 0.42;
@@ -172,9 +166,10 @@ pub struct FlightCondition {
     pub ambient_pa: f64,
     pub ambient_temp_k: f64,
     pub airspeed_mps: f64,
-    /// Oxidizer mass fraction of the atmosphere (Earth 0.232; alien air
-    /// may offer nothing — the combustor checks, never assumes).
-    pub oxygen_fraction: f64,
+    /// Well-mixed species basis sampled from the atmosphere (section 10):
+    /// the combustor queries oxidizer availability from it and checks,
+    /// never assumes — alien air may offer nothing.
+    pub composition: AtmosphereComposition,
 }
 
 impl FlightCondition {
@@ -200,21 +195,22 @@ impl FlightCondition {
                 "airspeed must be finite and >= 0".into(),
             ));
         }
-        if !self.oxygen_fraction.is_finite() || !(0.0..=1.0).contains(&self.oxygen_fraction) {
+        if !self.composition.is_sane() {
             return Err(PropulsionError::InvalidSpec(
-                "oxygen fraction must be finite in [0, 1]".into(),
+                "flight-condition composition must be sane (finite, non-negative, positive total)"
+                    .into(),
             ));
         }
         Ok(())
     }
 }
 
-/// Build a flight condition from an atmosphere sample, true airspeed, and
-/// the local oxygen fraction (explicit: no silent Earth assumption).
+/// Build a flight condition from an atmosphere sample and true airspeed.
+/// Species availability comes from the sample itself (section 10): the
+/// authoritative atmosphere decides, never a caller-supplied scalar.
 pub fn flight_condition(
     sample: &AtmosphereSample,
     airspeed_mps: f64,
-    oxygen_fraction: f64,
 ) -> Result<FlightCondition, PropulsionError> {
     let mach = sample
         .mach(airspeed_mps)
@@ -224,7 +220,7 @@ pub fn flight_condition(
         ambient_pa: sample.pressure_pa,
         ambient_temp_k: sample.temperature_k,
         airspeed_mps,
-        oxygen_fraction,
+        composition: sample.composition,
     };
     condition.validate()?;
     Ok(condition)
@@ -533,8 +529,8 @@ fn run_cycle(
         AirCycle::Ramjet => 0.0,
         _ => TURBINE_COOLING_BLEED,
     };
-    let o2_avail_kg_s =
-        mdot_core_kg_s * (1.0 - bleed - CUSTOMER_BLEED_FRACTION) * condition.oxygen_fraction;
+    let o2_mass_fraction = condition.composition.mass_fraction(GasKind::Oxygen);
+    let o2_avail_kg_s = mdot_core_kg_s * (1.0 - bleed - CUSTOMER_BLEED_FRACTION) * o2_mass_fraction;
     let combustor_air_kg_s = mdot_core_kg_s * (1.0 - bleed - CUSTOMER_BLEED_FRACTION);
     let f_for_tit = AIR_CP_J_KG_K * (turbine_temp_k - t_comp_exit) / (COMBUSTOR_EFFICIENCY * lhv);
     let f_o2_cap = if combustor_air_kg_s > 0.0 {
@@ -621,7 +617,7 @@ fn run_cycle(
     let mut reheat_limited = false;
     if spec.afterburner && mdot_core_kg_s > 0.0 {
         let o2_used_core_kg_s = fuel_flow_kg_s * o2_per_fuel;
-        let o2_cooling_kg_s = mdot_core_kg_s * bleed * condition.oxygen_fraction;
+        let o2_cooling_kg_s = mdot_core_kg_s * bleed * o2_mass_fraction;
         let o2_for_ab_kg_s = (o2_avail_kg_s - o2_used_core_kg_s + o2_cooling_kg_s).max(0.0);
         let ab_stream_kg_s = mdot_core_kg_s * (rotor_flow_ratio + bleed) + fuel_flow_kg_s;
         let f_ab_want =
@@ -895,14 +891,14 @@ impl AirbreathingSpec {
                 ambient_pa: 101_325.0,
                 ambient_temp_k: 288.15,
                 airspeed_mps: 2.0 * (AIR_GAMMA * 287.0 * 288.15).sqrt(),
-                oxygen_fraction: EARTH_OXYGEN_FRACTION,
+                composition: AtmosphereComposition::earth_air(),
             },
             _ => FlightCondition {
                 mach: 0.0,
                 ambient_pa: 101_325.0,
                 ambient_temp_k: 288.15,
                 airspeed_mps: 0.0,
-                oxygen_fraction: EARTH_OXYGEN_FRACTION,
+                composition: AtmosphereComposition::earth_air(),
             },
         };
         let rho_sl = 101_325.0 / (287.0 * 288.15);
@@ -1534,15 +1530,15 @@ pub struct AirAltitudePoint {
     pub spool_n: f64,
 }
 
-/// Thrust/Isp grid over altitudes × Mach numbers at fixed throttle and
-/// oxygen fraction (well-mixed atmosphere assumption, documented).
+/// Thrust/Isp grid over altitudes × Mach numbers at fixed throttle;
+/// species ride the atmosphere config's well-mixed composition (the
+/// authoritative basis, section 10 — no caller scalar).
 pub fn analyze_airbreathing(
     engine: &CompiledAirbreather,
     atmosphere: &crate::atmosphere::AtmosphereConfig,
     altitudes_m: &[f64],
     machs: &[f64],
     throttle: f64,
-    oxygen_fraction: f64,
 ) -> Result<Vec<AirAltitudePoint>, PropulsionError> {
     if altitudes_m.is_empty() || machs.is_empty() {
         return Err(PropulsionError::InvalidSpec(
@@ -1565,8 +1561,7 @@ pub fn analyze_airbreathing(
                     "Mach numbers must be finite and >= 0".into(),
                 ));
             }
-            let condition =
-                flight_condition(&sample, mach * sample.speed_of_sound_mps, oxygen_fraction)?;
+            let condition = flight_condition(&sample, mach * sample.speed_of_sound_mps)?;
             let point = engine.operating_point(&condition, throttle)?;
             rows.push(AirAltitudePoint {
                 altitude_m: *altitude_m,
@@ -1646,7 +1641,7 @@ mod tests {
             ambient_pa: 101_325.0,
             ambient_temp_k: 288.15,
             airspeed_mps: 0.0,
-            oxygen_fraction: EARTH_OXYGEN_FRACTION,
+            composition: AtmosphereComposition::earth_air(),
         }
     }
 
@@ -1720,12 +1715,8 @@ mod tests {
         let sample = AtmosphereConfig::default().sample(0.0).expect("SL sample");
         let mut last = 0.0;
         for mach in [1.5, 2.0, 2.5, 3.0] {
-            let condition = flight_condition(
-                &sample,
-                mach * sample.speed_of_sound_mps,
-                EARTH_OXYGEN_FRACTION,
-            )
-            .expect("condition");
+            let condition =
+                flight_condition(&sample, mach * sample.speed_of_sound_mps).expect("condition");
             let point = engine.operating_point(&condition, 1.0).expect("point");
             assert!(point.thrust_n > last, "ramjet thrust must rise with Mach");
             last = point.thrust_n;
@@ -1735,24 +1726,14 @@ mod tests {
         // Off-design absolute Isp is geometry-dependent (underexpansion
         // pressure thrust is real thrust on a fixed nozzle); energy
         // conservation at Mach 3 is the rigorous check instead.
-        let design = flight_condition(
-            &sample,
-            2.0 * sample.speed_of_sound_mps,
-            EARTH_OXYGEN_FRACTION,
-        )
-        .expect("condition");
+        let design = flight_condition(&sample, 2.0 * sample.speed_of_sound_mps).expect("condition");
         let design_point = engine.operating_point(&design, 1.0).expect("design");
         assert!(
             (1500.0..=2200.0).contains(&design_point.isp_s),
             "ramjet design Isp {:.0} s outside the band",
             design_point.isp_s
         );
-        let cruise = flight_condition(
-            &sample,
-            3.0 * sample.speed_of_sound_mps,
-            EARTH_OXYGEN_FRACTION,
-        )
-        .expect("condition");
+        let cruise = flight_condition(&sample, 3.0 * sample.speed_of_sound_mps).expect("condition");
         let point = engine.operating_point(&cruise, 1.0).expect("cruise");
         let exhaust_ground_speed = (point.exhaust_velocity_mps - cruise.airspeed_mps).max(0.0);
         let useful_power = point.thrust_n * cruise.airspeed_mps
@@ -1777,7 +1758,7 @@ mod tests {
         let dead = engine.operating_point(&vacuum, 1.0).expect("vacuum");
         assert_eq!(dead.thrust_n, 0.0);
         let anoxic = FlightCondition {
-            oxygen_fraction: 0.0,
+            composition: AtmosphereComposition::anoxic(),
             ..sl_static()
         };
         let choked = engine.operating_point(&anoxic, 1.0).expect("anoxic");
@@ -1823,12 +1804,7 @@ mod tests {
         let sample = AtmosphereConfig::default()
             .sample(11_000.0)
             .expect("11 km sample");
-        let cruise = flight_condition(
-            &sample,
-            0.9 * sample.speed_of_sound_mps,
-            EARTH_OXYGEN_FRACTION,
-        )
-        .expect("cruise");
+        let cruise = flight_condition(&sample, 0.9 * sample.speed_of_sound_mps).expect("cruise");
         let point = engine.operating_point(&cruise, 1.0).expect("cruise");
         let exhaust_ground_speed = (point.exhaust_velocity_mps - cruise.airspeed_mps).max(0.0);
         let useful_power = point.thrust_n * cruise.airspeed_mps
@@ -1846,12 +1822,7 @@ mod tests {
         // the model must report drive-limited zero, not garbage.
         let engine = olympus_like().compile().expect("olympus compiles");
         let sample = AtmosphereConfig::default().sample(0.0).expect("SL sample");
-        let fast = flight_condition(
-            &sample,
-            5.0 * sample.speed_of_sound_mps,
-            EARTH_OXYGEN_FRACTION,
-        )
-        .expect("fast");
+        let fast = flight_condition(&sample, 5.0 * sample.speed_of_sound_mps).expect("fast");
         let point = engine.operating_point(&fast, 1.0).expect("fast");
         assert!(point.drive_limited);
         assert_eq!(point.thrust_n, 0.0);
@@ -1914,19 +1885,28 @@ mod tests {
             &[0.0],
             &[0.0, 2.0],
             1.0,
-            EARTH_OXYGEN_FRACTION,
         )
         .expect("analyze");
         assert!(rows[0].suction_assisted);
         assert!(!rows[1].suction_assisted);
-        let rich =
-            flight_condition(&sample, 0.0, super::THESSA_OXYGEN_MASS_FRACTION).expect("thessa air");
-        let earth = flight_condition(&sample, 0.0, EARTH_OXYGEN_FRACTION).expect("earth air");
+        let thessa_config =
+            AtmosphereConfig::default().with_composition(AtmosphereComposition::thessa_air());
+        let rich = flight_condition(&thessa_config.sample(0.0).expect("thessa sample"), 0.0)
+            .expect("thessa air");
+        let earth = flight_condition(&sample, 0.0).expect("earth air");
         let p_rich = engine.operating_point(&rich, 0.8).expect("rich");
         let p_earth = engine.operating_point(&earth, 0.8).expect("earth");
         assert!(!p_rich.oxygen_limited);
         assert!((p_rich.thrust_n - p_earth.thrust_n).abs() / p_earth.thrust_n < 1e-12);
-        let scarce = flight_condition(&sample, 0.0, 0.05).expect("scarce");
+        let scarce_config = AtmosphereConfig::default().with_composition(
+            AtmosphereComposition::from_mass_fractions(&[
+                (GasKind::Nitrogen, 0.95),
+                (GasKind::Oxygen, 0.05),
+            ])
+            .expect("scarce mix"),
+        );
+        let scarce = flight_condition(&scarce_config.sample(0.0).expect("scarce sample"), 0.0)
+            .expect("scarce");
         let p_scarce = engine.operating_point(&scarce, 0.8).expect("scarce");
         assert!(p_scarce.oxygen_limited);
         assert!(p_scarce.thrust_n < p_earth.thrust_n);

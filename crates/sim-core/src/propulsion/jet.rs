@@ -377,7 +377,7 @@ mod tests {
             ambient_pa: 101_325.0,
             ambient_temp_k: 288.15,
             airspeed_mps: 0.0,
-            oxygen_fraction: 0.232,
+            composition: crate::atmosphere::AtmosphereComposition::earth_air(),
         }
     }
 

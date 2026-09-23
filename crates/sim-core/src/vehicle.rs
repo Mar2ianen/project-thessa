@@ -1081,7 +1081,7 @@ mod tests {
             ambient_pa: 2_000.0,
             ambient_temp_k: temperature_k,
             airspeed_mps: 4.0 * speed_of_sound,
-            oxygen_fraction: crate::EARTH_OXYGEN_FRACTION,
+            composition: crate::atmosphere::AtmosphereComposition::earth_air(),
         }
     }
 

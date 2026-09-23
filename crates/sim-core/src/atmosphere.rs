@@ -82,13 +82,99 @@ impl BakedAtmosphere {
     }
 }
 
+/// Catalog gases an atmosphere design and the propulsion queries may
+/// recognize. This is the explicit species vocabulary of section 10:
+/// unknown design tokens fail at parse time instead of silently becoming
+/// Earth air, and every molar/mass conversion goes through
+/// [`GasKind::molar_mass_kg_mol`] (the single source of truth).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GasKind {
+    Nitrogen,
+    Oxygen,
+    Argon,
+    CarbonDioxide,
+    SulfurDioxide,
+    Hydrogen,
+    Helium,
+    Methane,
+    Ammonia,
+    WaterVapor,
+}
+
+impl GasKind {
+    /// Number of catalog gases (array slots in [`AtmosphereComposition`]).
+    pub const COUNT: usize = 10;
+
+    /// All catalog gases in slot order.
+    pub const ALL: [GasKind; Self::COUNT] = [
+        Self::Nitrogen,
+        Self::Oxygen,
+        Self::Argon,
+        Self::CarbonDioxide,
+        Self::SulfurDioxide,
+        Self::Hydrogen,
+        Self::Helium,
+        Self::Methane,
+        Self::Ammonia,
+        Self::WaterVapor,
+    ];
+
+    /// Molar mass in kg/mol (basis conversion source of truth).
+    pub const fn molar_mass_kg_mol(self) -> f64 {
+        match self {
+            Self::Nitrogen => 0.028_013_4,
+            Self::Oxygen => 0.031_998_8,
+            Self::Argon => 0.039_948,
+            Self::CarbonDioxide => 0.044_009_5,
+            Self::SulfurDioxide => 0.064_066,
+            Self::Hydrogen => 0.002_015_88,
+            Self::Helium => 0.004_002_6,
+            Self::Methane => 0.016_042_5,
+            Self::Ammonia => 0.017_030_5,
+            Self::WaterVapor => 0.018_015_3,
+        }
+    }
+
+    /// Array slot of this gas (declaration order).
+    fn slot(self) -> usize {
+        self as usize
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct GasSpecies {
+    kind: GasKind,
     molar_mass_kg_mol: f64,
     gamma: f64,
     reference_viscosity_pa_s: f64,
     sutherland_constant_k: f64,
     mole_fraction: f64,
+}
+
+/// Full transport/thermodynamic record for one catalog gas (zero mole
+/// fraction until the composition assigns it).
+fn catalog_gas(kind: GasKind) -> GasSpecies {
+    let (gamma, reference_viscosity_pa_s, sutherland_constant_k) = match kind {
+        GasKind::Nitrogen => (1.400, 1.663e-5, 111.0),
+        GasKind::Oxygen => (1.395, 1.919e-5, 127.0),
+        GasKind::Argon => (1.667, 2.117e-5, 144.0),
+        GasKind::CarbonDioxide => (1.294, 1.370e-5, 222.0),
+        GasKind::SulfurDioxide => (1.290, 1.250e-5, 416.0),
+        GasKind::Hydrogen => (1.405, 8.76e-6, 72.0),
+        GasKind::Helium => (1.667, 1.96e-5, 79.4),
+        GasKind::Methane => (1.300, 1.10e-5, 170.0),
+        GasKind::Ammonia => (1.310, 9.82e-6, 370.0),
+        GasKind::WaterVapor => (1.330, 1.00e-5, 1_064.0),
+    };
+    GasSpecies {
+        kind,
+        molar_mass_kg_mol: kind.molar_mass_kg_mol(),
+        gamma,
+        reference_viscosity_pa_s,
+        sutherland_constant_k,
+        mole_fraction: 0.0,
+    }
 }
 
 fn parse_composition(composition: &str) -> Result<Vec<GasSpecies>, AtmosphereError> {
@@ -107,84 +193,24 @@ fn parse_composition(composition: &str) -> Result<Vec<GasSpecies>, AtmosphereErr
         ) {
             continue;
         }
-        let gas = match normalized.as_str() {
-            "N2" => GasSpecies {
-                molar_mass_kg_mol: 0.028_013_4,
-                gamma: 1.400,
-                reference_viscosity_pa_s: 1.663e-5,
-                sutherland_constant_k: 111.0,
-                mole_fraction: 0.0,
-            },
-            "O2" => GasSpecies {
-                molar_mass_kg_mol: 0.031_998_8,
-                gamma: 1.395,
-                reference_viscosity_pa_s: 1.919e-5,
-                sutherland_constant_k: 127.0,
-                mole_fraction: 0.0,
-            },
-            "AR" => GasSpecies {
-                molar_mass_kg_mol: 0.039_948,
-                gamma: 1.667,
-                reference_viscosity_pa_s: 2.117e-5,
-                sutherland_constant_k: 144.0,
-                mole_fraction: 0.0,
-            },
-            "CO2" => GasSpecies {
-                molar_mass_kg_mol: 0.044_009_5,
-                gamma: 1.294,
-                reference_viscosity_pa_s: 1.370e-5,
-                sutherland_constant_k: 222.0,
-                mole_fraction: 0.0,
-            },
-            "SO2" => GasSpecies {
-                molar_mass_kg_mol: 0.064_066,
-                gamma: 1.290,
-                reference_viscosity_pa_s: 1.250e-5,
-                sutherland_constant_k: 416.0,
-                mole_fraction: 0.0,
-            },
-            "H2" => GasSpecies {
-                molar_mass_kg_mol: 0.002_015_88,
-                gamma: 1.405,
-                reference_viscosity_pa_s: 8.76e-6,
-                sutherland_constant_k: 72.0,
-                mole_fraction: 0.0,
-            },
-            "HE" => GasSpecies {
-                molar_mass_kg_mol: 0.004_002_6,
-                gamma: 1.667,
-                reference_viscosity_pa_s: 1.96e-5,
-                sutherland_constant_k: 79.4,
-                mole_fraction: 0.0,
-            },
-            "CH4" => GasSpecies {
-                molar_mass_kg_mol: 0.016_042_5,
-                gamma: 1.300,
-                reference_viscosity_pa_s: 1.10e-5,
-                sutherland_constant_k: 170.0,
-                mole_fraction: 0.0,
-            },
-            "NH3" => GasSpecies {
-                molar_mass_kg_mol: 0.017_030_5,
-                gamma: 1.310,
-                reference_viscosity_pa_s: 9.82e-6,
-                sutherland_constant_k: 370.0,
-                mole_fraction: 0.0,
-            },
-            "H2O" => GasSpecies {
-                molar_mass_kg_mol: 0.018_015_3,
-                gamma: 1.330,
-                reference_viscosity_pa_s: 1.00e-5,
-                sutherland_constant_k: 1_064.0,
-                mole_fraction: 0.0,
-            },
+        let kind = match normalized.as_str() {
+            "N2" => GasKind::Nitrogen,
+            "O2" => GasKind::Oxygen,
+            "AR" => GasKind::Argon,
+            "CO2" => GasKind::CarbonDioxide,
+            "SO2" => GasKind::SulfurDioxide,
+            "H2" => GasKind::Hydrogen,
+            "HE" => GasKind::Helium,
+            "CH4" => GasKind::Methane,
+            "NH3" => GasKind::Ammonia,
+            "H2O" => GasKind::WaterVapor,
             _ => {
                 return Err(AtmosphereError::InvalidConfig(format!(
                     "unsupported atmosphere gas {token} in composition {composition:?}"
                 )));
             }
         };
-        components.push((normalized, gas));
+        components.push((normalized, kind));
     }
     if components.is_empty() {
         return Err(AtmosphereError::InvalidConfig(
@@ -198,8 +224,9 @@ fn parse_composition(composition: &str) -> Result<Vec<GasSpecies>, AtmosphereErr
             .all(|name| components.iter().any(|(candidate, _)| candidate == name));
     let species = components
         .into_iter()
-        .map(|(name, gas)| {
-            let mole_fraction = if thessa_profile {
+        .map(|(name, kind)| {
+            let mut gas = catalog_gas(kind);
+            gas.mole_fraction = if thessa_profile {
                 // Design values from data/worldgen/thessa_v02.toml.
                 match name.as_str() {
                     "N2" => 0.735,
@@ -211,13 +238,197 @@ fn parse_composition(composition: &str) -> Result<Vec<GasSpecies>, AtmosphereErr
             } else {
                 1.0 / component_count as f64
             };
-            GasSpecies {
-                mole_fraction,
-                ..gas
-            }
+            gas
         })
         .collect();
     Ok(species)
+}
+
+/// Well-mixed atmospheric composition with an explicit species basis.
+///
+/// Entries are **mole fractions** (dimensionless, one slot per catalog
+/// gas, summing to 1); mass fractions are derived on query through the
+/// catalog molar masses, so the molar-vs-mass basis is never ambiguous.
+/// Every constructor validates and normalizes: empty, non-finite,
+/// negative, or duplicate input is rejected instead of guessed.
+///
+/// Propulsion obtains this from the sampled atmosphere
+/// ([`AtmosphereSample::composition`]) instead of a free-standing oxygen
+/// scalar (`docs/details/04_PROCEDURAL_PROPULSION.md` section 10), so an
+/// anoxic world flameouts and a methane/hydrogen-rich atmosphere exposes
+/// its usable fuel species to the same queries.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AtmosphereComposition {
+    /// Mole fraction per catalog gas, indexed by [`GasKind`] slot.
+    mole_fractions: [f64; GasKind::COUNT],
+}
+
+impl Default for AtmosphereComposition {
+    /// Earth-like standard dry air, matching [`AtmosphereConfig`]'s
+    /// Earth-default scalar profile.
+    fn default() -> Self {
+        Self::earth_air()
+    }
+}
+
+impl AtmosphereComposition {
+    /// Parse a design composition string (same catalog and Thessa-profile
+    /// rules as [`BakedAtmosphere::from_design`]); output is normalized.
+    pub fn parse(composition: &str) -> Result<Self, AtmosphereError> {
+        let species = parse_composition(composition)?;
+        let mut mole_fractions = [0.0; GasKind::COUNT];
+        let mut total = 0.0;
+        for gas in species {
+            mole_fractions[gas.kind.slot()] += gas.mole_fraction;
+            total += gas.mole_fraction;
+        }
+        if !total.is_finite() || total <= 0.0 {
+            return Err(AtmosphereError::InvalidConfig(
+                "composition needs a positive finite total".into(),
+            ));
+        }
+        for value in &mut mole_fractions {
+            *value /= total;
+        }
+        Ok(Self { mole_fractions })
+    }
+
+    /// Build from explicit **mole** fractions; values are normalized to
+    /// sum 1. Rejects empty/NaN/negative/duplicate input.
+    pub fn from_mole_fractions(entries: &[(GasKind, f64)]) -> Result<Self, AtmosphereError> {
+        let mut mole_fractions = [0.0; GasKind::COUNT];
+        let mut seen = [false; GasKind::COUNT];
+        let mut total = 0.0;
+        for &(kind, value) in entries {
+            if !value.is_finite() || value < 0.0 {
+                return Err(AtmosphereError::InvalidConfig(
+                    "mole fractions must be finite and >= 0".into(),
+                ));
+            }
+            let slot = kind.slot();
+            if seen[slot] {
+                return Err(AtmosphereError::InvalidConfig(
+                    "duplicate species in composition".into(),
+                ));
+            }
+            seen[slot] = true;
+            mole_fractions[slot] = value;
+            total += value;
+        }
+        if !total.is_finite() || total <= 0.0 {
+            return Err(AtmosphereError::InvalidConfig(
+                "composition needs a positive finite total".into(),
+            ));
+        }
+        for value in &mut mole_fractions {
+            *value /= total;
+        }
+        Ok(Self { mole_fractions })
+    }
+
+    /// Build from explicit **mass** fractions (the legacy scalar basis):
+    /// converts through the catalog molar masses and normalizes.
+    /// Rejects empty/NaN/negative/duplicate input.
+    pub fn from_mass_fractions(entries: &[(GasKind, f64)]) -> Result<Self, AtmosphereError> {
+        let mut mass_fractions = [0.0; GasKind::COUNT];
+        let mut seen = [false; GasKind::COUNT];
+        let mut total = 0.0;
+        for &(kind, value) in entries {
+            if !value.is_finite() || value < 0.0 {
+                return Err(AtmosphereError::InvalidConfig(
+                    "mass fractions must be finite and >= 0".into(),
+                ));
+            }
+            let slot = kind.slot();
+            if seen[slot] {
+                return Err(AtmosphereError::InvalidConfig(
+                    "duplicate species in composition".into(),
+                ));
+            }
+            seen[slot] = true;
+            mass_fractions[slot] = value;
+            total += value;
+        }
+        if !total.is_finite() || total <= 0.0 {
+            return Err(AtmosphereError::InvalidConfig(
+                "composition needs a positive finite total".into(),
+            ));
+        }
+        let mut mole_fractions = [0.0; GasKind::COUNT];
+        let mut mole_total = 0.0;
+        for kind in GasKind::ALL {
+            let mass = mass_fractions[kind.slot()];
+            if mass > 0.0 {
+                let moles = mass / kind.molar_mass_kg_mol();
+                mole_fractions[kind.slot()] = moles;
+                mole_total += moles;
+            }
+        }
+        for value in &mut mole_fractions {
+            *value /= mole_total;
+        }
+        Ok(Self { mole_fractions })
+    }
+
+    /// Thessa design air (N2 73.5 / O2 25.0 / Ar 1.2 / CO2 0.3 % molar,
+    /// data/worldgen/thessa_v02.toml through the design parser).
+    pub fn thessa_air() -> Self {
+        Self::parse("N2/O2/AR/CO2").expect("Thessa composition is in the catalog")
+    }
+
+    /// Earth standard dry air (N2 78.08 / O2 20.95 / Ar 0.93 / CO2 0.04
+    /// % molar): O2 mass fraction ≈ 0.231, the reference the retired
+    /// `0.232` scalar approximated.
+    pub fn earth_air() -> Self {
+        Self::from_mole_fractions(&[
+            (GasKind::Nitrogen, 0.7808),
+            (GasKind::Oxygen, 0.2095),
+            (GasKind::Argon, 0.0093),
+            (GasKind::CarbonDioxide, 0.0004),
+        ])
+        .expect("Earth air is in the catalog")
+    }
+
+    /// Anoxic blanket (pure CO2, Mars-class): zero oxidizer for any
+    /// atmospheric combustor, real pressure/density for the inlet.
+    pub fn anoxic() -> Self {
+        Self::from_mole_fractions(&[(GasKind::CarbonDioxide, 1.0)])
+            .expect("pure gas is in the catalog")
+    }
+
+    /// Mole fraction of one species (0 when absent).
+    pub fn mole_fraction(self, kind: GasKind) -> f64 {
+        self.mole_fractions[kind.slot()]
+    }
+
+    /// Mass fraction of one species (0 when absent or for a degenerate
+    /// mixture — consumers reject insane compositions via [`Self::is_sane`]
+    /// before querying).
+    pub fn mass_fraction(self, kind: GasKind) -> f64 {
+        let mean_molar_mass = self.mean_molar_mass_kg_mol();
+        if !mean_molar_mass.is_finite() || mean_molar_mass <= 0.0 {
+            return 0.0;
+        }
+        self.mole_fraction(kind) * kind.molar_mass_kg_mol() / mean_molar_mass
+    }
+
+    /// Mean molar mass in kg/mol (Σ x_i M_i).
+    pub fn mean_molar_mass_kg_mol(self) -> f64 {
+        GasKind::ALL
+            .iter()
+            .map(|kind| self.mole_fraction(*kind) * kind.molar_mass_kg_mol())
+            .sum()
+    }
+
+    /// Sanity for deserialized/edited input: all slots finite and
+    /// non-negative with a positive mixture molar mass.
+    pub fn is_sane(self) -> bool {
+        self.mole_fractions
+            .iter()
+            .all(|value| value.is_finite() && *value >= 0.0)
+            && self.mean_molar_mass_kg_mol().is_finite()
+            && self.mean_molar_mass_kg_mol() > 0.0
+    }
 }
 
 fn mixture_properties(species: &[GasSpecies]) -> (f64, f64, f64, f64) {
@@ -300,6 +511,16 @@ pub struct AtmosphereConfig {
     /// the 5 m batch position tolerance with margin. See the cutoff
     /// regression test pinning this envelope.
     pub vacuum_cutoff_density_kg_m3: f64,
+    /// Well-mixed species basis carried into every sample. The scalar gas
+    /// constant/heat capacity ratio above stay the barometric profile;
+    /// propulsion queries species (oxidizer/fuel/inert) from this with
+    /// explicit molar/mass semantics, never from a free-standing scalar.
+    /// [`AtmosphereConfig::from_baked`] and
+    /// [`AtmosphereConfig::from_composition`] fill it from the design
+    /// string; the scalar constructors keep the documented Earth-like
+    /// default, matching this config's Earth-default scalars.
+    #[serde(default)]
+    pub composition: AtmosphereComposition,
 }
 
 impl Default for AtmosphereConfig {
@@ -315,6 +536,7 @@ impl Default for AtmosphereConfig {
             sutherland_reference_viscosity_pa_s: SUTHERLAND_REFERENCE_VISCOSITY_PA_S,
             body_rotation_rad_s: glam::DVec3::ZERO,
             vacuum_cutoff_density_kg_m3: 1.0e-10,
+            composition: AtmosphereComposition::earth_air(),
         }
     }
 }
@@ -360,10 +582,23 @@ impl AtmosphereConfig {
             sutherland_reference_temperature_k: baked.sutherland_reference_temperature_k,
             sutherland_constant_k: baked.sutherland_constant_k,
             sutherland_reference_viscosity_pa_s: baked.sutherland_reference_viscosity_pa_s,
+            composition: AtmosphereComposition::parse(&baked.composition).map_err(|error| {
+                AtmosphereError::InvalidConfig(format!(
+                    "baked atmosphere composition {}: {error}",
+                    baked.composition
+                ))
+            })?,
             ..Self::default()
         };
         config.validate()?;
         Ok(config)
+    }
+
+    /// Replace the species basis while keeping this profile's barometric
+    /// scalars (validated by construction upstream).
+    pub fn with_composition(mut self, composition: AtmosphereComposition) -> Self {
+        self.composition = composition;
+        self
     }
 
     /// Convenience entry point for callers that have not gone through the
@@ -410,6 +645,7 @@ impl AtmosphereConfig {
             || self.sutherland_constant_k < 0.0
             || self.sutherland_reference_viscosity_pa_s <= 0.0
             || self.vacuum_cutoff_density_kg_m3 <= 0.0
+            || !self.composition.is_sane()
         {
             return Err(AtmosphereError::InvalidConfig(
                 "atmosphere configuration has an invalid range".into(),
@@ -517,6 +753,7 @@ impl AtmosphereConfig {
             density_kg_m3,
             speed_of_sound_mps,
             dynamic_viscosity_pa_s,
+            composition: self.composition,
         })
     }
 
@@ -600,6 +837,10 @@ pub struct AtmosphereSample {
     pub density_kg_m3: f64,
     pub speed_of_sound_mps: f64,
     pub dynamic_viscosity_pa_s: f64,
+    /// Well-mixed species at this sample point (constant with altitude in
+    /// this profile): the authoritative source propulsion reads oxidizer/
+    /// fuel/inert availability from (section 10 — no caller scalar).
+    pub composition: AtmosphereComposition,
 }
 
 impl AtmosphereSample {
@@ -837,6 +1078,122 @@ mod tests {
         assert!(atmosphere.validate().is_err());
         atmosphere.vacuum_cutoff_density_kg_m3 = f64::NAN;
         assert!(atmosphere.validate().is_err());
+    }
+
+    #[test]
+    fn mole_and_mass_bases_convert_exactly() {
+        // Earth dry air: the legacy scalar 0.232 approximated this mass
+        // fraction (0.2095 molar O2) to within a fifth of a percent.
+        let earth = AtmosphereComposition::earth_air();
+        let earth_o2_mass = earth.mass_fraction(GasKind::Oxygen);
+        assert!((earth_o2_mass - 0.232).abs() < 0.001, "{earth_o2_mass}");
+        assert!((earth.mass_fraction(GasKind::Nitrogen) - 0.755).abs() < 0.003);
+
+        // Thessa design air: 25% molar O2 -> ~27.4% by mass (the doc anchor).
+        let thessa = AtmosphereComposition::thessa_air();
+        assert!((thessa.mole_fraction(GasKind::Oxygen) - 0.25).abs() < 1e-12);
+        let thessa_o2_mass = thessa.mass_fraction(GasKind::Oxygen);
+        assert!((thessa_o2_mass - 0.274).abs() < 0.001, "{thessa_o2_mass}");
+
+        // Mass basis round-trips through the catalog molar masses.
+        let scarce = AtmosphereComposition::from_mass_fractions(&[
+            (GasKind::Nitrogen, 0.95),
+            (GasKind::Oxygen, 0.05),
+        ])
+        .expect("scarce mix");
+        assert!((scarce.mass_fraction(GasKind::Oxygen) - 0.05).abs() < 1e-12);
+        assert!((scarce.mole_fraction(GasKind::Oxygen) - 0.044_05).abs() < 1e-4);
+
+        // Both bases normalize to a total of 1 (f64 rounding only).
+        for composition in [earth, thessa, scarce] {
+            let mole_sum: f64 = GasKind::ALL
+                .iter()
+                .map(|kind| composition.mole_fraction(*kind))
+                .sum();
+            let mass_sum: f64 = GasKind::ALL
+                .iter()
+                .map(|kind| composition.mass_fraction(*kind))
+                .sum();
+            assert!((mole_sum - 1.0).abs() < 1e-12, "mole sum {mole_sum}");
+            assert!((mass_sum - 1.0).abs() < 1e-12, "mass sum {mass_sum}");
+        }
+    }
+
+    #[test]
+    fn composition_validates_and_rejects_bad_input() {
+        assert!(AtmosphereComposition::from_mole_fractions(&[]).is_err());
+        assert!(
+            AtmosphereComposition::from_mole_fractions(&[(GasKind::Oxygen, f64::NAN)]).is_err()
+        );
+        assert!(AtmosphereComposition::from_mole_fractions(&[(GasKind::Oxygen, -0.1)]).is_err());
+        assert!(
+            AtmosphereComposition::from_mole_fractions(&[
+                (GasKind::Oxygen, 0.0),
+                (GasKind::Oxygen, 1.0)
+            ])
+            .is_err()
+        );
+        assert!(AtmosphereComposition::from_mass_fractions(&[]).is_err());
+        assert!(AtmosphereComposition::parse("XYZ").is_err());
+        assert!(AtmosphereComposition::parse("").is_err());
+
+        // Normalization: unnormalized input still yields sane unit sums.
+        let thick = AtmosphereComposition::from_mole_fractions(&[(GasKind::Methane, 3.0)])
+            .expect("pure methane");
+        assert!((thick.mole_fraction(GasKind::Methane) - 1.0).abs() < 1e-12);
+        assert!(thick.is_sane());
+        assert!(
+            !AtmosphereComposition::default()
+                .mole_fraction(GasKind::Helium)
+                .is_nan()
+        );
+    }
+
+    #[test]
+    fn anoxic_composition_has_no_oxidizer_but_real_air_properties() {
+        let anoxic = AtmosphereComposition::anoxic();
+        assert_eq!(anoxic.mole_fraction(GasKind::Oxygen), 0.0);
+        assert_eq!(anoxic.mass_fraction(GasKind::Oxygen), 0.0);
+        assert_eq!(anoxic.mole_fraction(GasKind::CarbonDioxide), 1.0);
+        assert!(anoxic.is_sane());
+    }
+
+    #[test]
+    fn composition_rides_config_into_every_sample() {
+        // Scalar constructors keep the documented Earth-like default.
+        let default_config = AtmosphereConfig::default();
+        let sample = default_config.sample(1_000.0).expect("sample");
+        assert_eq!(sample.composition, AtmosphereComposition::earth_air());
+
+        // An explicit species basis replaces it without touching the
+        // barometric profile (same pressure/density, different species).
+        let thessa_config = default_config.with_composition(AtmosphereComposition::thessa_air());
+        assert_eq!(
+            thessa_config.sample(1_000.0).expect("sample").composition,
+            AtmosphereComposition::thessa_air()
+        );
+        let default_sample = default_config.sample(1_000.0).expect("sample");
+        let thessa_sample = thessa_config.sample(1_000.0).expect("sample");
+        assert_eq!(default_sample.pressure_pa, thessa_sample.pressure_pa);
+        assert_eq!(default_sample.density_kg_m3, thessa_sample.density_kg_m3);
+
+        // Design-string construction fills both the profile AND the species.
+        let baked = BakedAtmosphere::from_design("N2/O2/Ar/CO2", Some(1.0)).expect("design");
+        let from_baked = AtmosphereConfig::from_baked(&baked, 288.15, 9.8).expect("baked");
+        assert_eq!(from_baked.composition, AtmosphereComposition::thessa_air());
+        assert_eq!(
+            from_baked.sample(0.0).expect("sample").composition,
+            AtmosphereComposition::thessa_air()
+        );
+
+        // from_composition funnels through the same path.
+        let direct =
+            AtmosphereConfig::from_composition("CO2", 288.15, 600.0, 3.7).expect("mars-like");
+        assert_eq!(
+            direct.composition.mole_fraction(GasKind::CarbonDioxide),
+            1.0
+        );
+        assert_eq!(direct.composition.mole_fraction(GasKind::Oxygen), 0.0);
     }
 
     #[test]

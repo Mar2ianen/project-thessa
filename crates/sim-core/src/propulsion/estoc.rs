@@ -524,9 +524,10 @@ impl CompiledEstoc {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{AIR_GAMMA, EARTH_OXYGEN_FRACTION};
+    use super::super::AIR_GAMMA;
     use super::super::{AirCycle, AirbreathingSpec, ChamberMaterial, JetFuel, ShaftSpec};
     use super::*;
+    use crate::atmosphere::AtmosphereComposition;
 
     fn estoc_like() -> EstocSpec {
         EstocSpec {
@@ -564,7 +565,7 @@ mod tests {
             ambient_pa,
             ambient_temp_k: temp,
             airspeed_mps: mach * a,
-            oxygen_fraction: EARTH_OXYGEN_FRACTION,
+            composition: AtmosphereComposition::earth_air(),
         }
     }
 

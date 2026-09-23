@@ -6,7 +6,8 @@ with mixture sensitivity, cycle/feed bounds, geometry-derived mass, spool
 runtime, altitude analyzer, vehicle mounts, tanks and feed lines, RCS and
 nuclear thermal models, multi-chamber systems, air-breathing jets
 (turbojet/turbofan/ramjet) with the single-spool shaft/starter runtime
-(starter topologies, light-off/self-sustain, relight, generator load), and
+(starter topologies, light-off/self-sustain, relight, generator load),
+composition-aware atmosphere queries (section 10), and
 the ESTOC combined-cycle engine. Star/finocyl
 grain burnback, tank depletion wiring, the flight-loop allocator, shaft-power
 propulsion, scramjets, and the editor UI are still TBD (see section 18).
@@ -501,6 +502,21 @@ fraction semantics.
 
 This is important for Thessa's non-Earth environments and should apply consistently to turbojets, turbofans, ramjets, combined-cycle engines, and other atmospheric propulsion.
 
+Status note (2026-09-23): shipped — see section 18.9.
+`AtmosphereSample` now carries an `AtmosphereComposition` (normalized
+mole fractions per catalog gas with derived mass-fraction queries, an
+explicit molar-vs-mass basis), and `flight_condition` /
+`analyze_airbreathing` read species from the sample instead of a
+caller-supplied scalar — the transitional `oxygen_fraction` interface
+and the `0.232`/`0.274` constants are gone. Turbojets, turbofans,
+ramjets, and ESTOC all gate through the same query, so anoxic air
+flameouts and scarce oxidizer derates through the explicit species
+budget. Still future from this section: the air-augmented
+rocket/ejector path that spends onboard reactants while entraining
+inert atmosphere as working mass (section 12), and propulsion burning
+atmospheric CH4/H2 as fuel — the species queries exist; no such cycle
+ships yet.
+
 ## 11. Ramjets and high-speed air-breathing engines
 
 Ramjets/scramjets should reuse intake, combustor, and nozzle concepts without requiring compressor/turbine machinery.
@@ -925,10 +941,12 @@ Required v6 physical model:
   no usable oxidizer, the ordinary air-combustion path flames out; an
   ejector path may deliberately spend onboard fuel + oxidizer while using
   ingested gas as extra reaction mass.
-- Replace the free-standing oxygen scalar with the richer atmosphere API.
-  Species basis must be explicit: Thessa's design O2 is 25% molar/volume,
-  about 27.4% by mass for the current bulk mixture. The vehicle-baker
-  analyzer must stop hard-coding Earth's 0.232 oxygen mass fraction.
+- CLOSED 2026-09-23 (section 18.9): the free-standing oxygen scalar is
+  gone — `AtmosphereSample` carries `AtmosphereComposition` with an
+  explicit molar basis and derived mass fractions (Thessa 25% molar O2
+  = ~27.4% by mass, Earth ~23.1%), `flight_condition` and the analyzer
+  read the sample, and vehicle-baker takes `--composition` (default
+  Thessa air `N2/O2/AR/CO2`) instead of a hard-coded `0.232`.
 - ADOPTED 2026-09-23 for the single-spool runtime (section 18.8): ESTOC is
   authorable with an electric starter-generator, pneumatic start,
   rocket/gas-generator bootstrap, or deliberately no starter at all. A
@@ -1051,3 +1069,42 @@ law).
 
 Benchmark: `benches/propulsion.rs` reports steady-solve cost
 (µs/solve) and cold-crank cost (ns/step to light-off).
+
+### 18.9 Composition-aware atmosphere (section 10)
+
+Shipped 2026-09-23: species availability is an authoritative atmosphere
+property instead of a transitional caller scalar.
+
+- Formal description: `GasKind` is the explicit catalog (N2, O2, Ar,
+  CO2, SO2, H2, He, CH4, NH3, H2O — unknown design gases still fail at
+  parse instead of silently becoming Earth air).
+  `AtmosphereComposition` stores normalized **mole** fractions per
+  catalog gas and derives mass fractions on query through
+  `GasKind::molar_mass_kg_mol` (the single conversion source);
+  constructors (`parse`, `from_mole_fractions`, `from_mass_fractions`,
+  presets `thessa_air`/`earth_air`/`anoxic`) validate and normalize
+  empty/NaN/negative/duplicate input. `AtmosphereConfig` owns the
+  composition (design-string constructors fill it; scalar constructors
+  keep the documented Earth-like default) and stamps it into every
+  `AtmosphereSample`; `flight_condition` and `analyze_airbreathing` take
+  no species argument at all.
+- Inputs/outputs: config + altitude → sample carrying species; the core
+  and afterburner query `mass_fraction(Oxygen)` for their explicit
+  species budgets; `oxygen_limited` telemetry reports gating.
+- Known special cases: anoxic composition (pure CO2) gives zero
+  oxidizer with real inlet properties → clean flameout; scarce
+  mixtures derate TIT through the species budget; Thessa (~0.274 by
+  mass) and Earth (~0.231 by mass) both clear the combustor's ~7%
+  requirement, so no design anchor moved.
+- Regression: 4 new atmosphere tests (basis conversion + unit sums,
+  validation refusals, anoxic-no-oxidizer, config→sample stamping)
+  plus the re-run vacuum/anoxic flameout, scarce-O2 gating,
+  drive-limit, and ESTOC mode anchors.
+- Numerical error: basis conversion is direct f64 arithmetic (~1e-16
+  relative); Earth's mass fraction lands at 0.2314 versus the retired
+  0.232 scalar (0.3% relative), felt only under oxygen gating — which
+  no sea-level anchor enters.
+- Benchmark (`benches/propulsion.rs`): ~1.2 ns per mass-fraction query;
+  the air analyzer sweep (55 rows of altitude × Mach) runs at ~4.5 µs
+  per row including the steady spool solve, with the per-row species
+  stamp inside that cost.

@@ -39,7 +39,10 @@ pub use affine_propagator::{
     AffinePropagator, AnalyticError, AnalyticFallback, AnalyticStep, ModeCoefficients,
     PiecewiseReport, PropagatorError, StepCoefficients, propagate_piecewise,
 };
-pub use atmosphere::{AtmosphereConfig, AtmosphereError, AtmosphereSample, BakedAtmosphere};
+pub use atmosphere::{
+    AtmosphereComposition, AtmosphereConfig, AtmosphereError, AtmosphereSample, BakedAtmosphere,
+    GasKind,
+};
 pub use collision::{
     CollisionAxis, CollisionError, CollisionGeometry, CollisionMaterial, CollisionPart,
     CollisionShape,
@@ -93,21 +96,21 @@ pub use propulsion::{
     AltitudePoint, BurnPoint, ChamberMaterial, ChamberSpec, ColdGasThrusterSpec,
     CompiledAirbreather, CompiledChamber, CompiledColdGas, CompiledEngine, CompiledEstoc,
     CompiledJet, CompiledLiquid, CompiledMonoprop, CompiledPropulsionSystem, CompiledSolid,
-    CoolingMode, CycleLimits, EARTH_OXYGEN_FRACTION, ESTOC_DEFAULT_SWITCH_MACH_HI,
-    ESTOC_DEFAULT_SWITCH_MACH_LO, ESTOC_DEFAULT_TRANSITION_TAU_S, ESTOC_MAX_ROCKET_PC_PA,
-    ESTOC_REINFORCEMENT_FRACTION, EngineCycle, EngineMount, EngineOperatingPoint, EnginePlumeState,
-    EngineSpool, EstocMode, EstocPoint, EstocSpec, FlightCondition, GeneratorSpec, GimbalEffector,
-    IntakeKind, JetCommand, JetFuel, JetMount, JetShaftState, LiquidEngineSpec,
-    MAX_SYSTEM_CHAMBERS, MonopropThrusterSpec, NTR_COOLDOWN_FRACTION, NTR_DEFAULT_RATED_BURN_S,
-    NTR_DEFAULT_SPECIFIC_MASS_KG_PER_MW, NTR_DEFAULT_STARTUP_TAU_S, NTR_INLET_TEMP_K,
-    NTR_KINETIC_EFFICIENCY, NTR_MAX_CHAMBER_PRESSURE_PA, NozzleContour, NozzleExitState, NtrFluid,
-    NtrSupplement, NuclearThermalSpec, Propellant, PropellantThermo, PropulsionError,
-    PropulsionSystemSpec, RCS_DEFAULT_MIN_ON_TIME_S, RCS_DEFAULT_RISE_TIME_S, RcsCluster, RcsMount,
-    RcsPulse, RcsThruster, SEPARATION_PRESSURE_RATIO, STANDARD_GRAVITY_MPS2, ShaftBalance,
-    ShaftCommand, ShaftSpec, ShaftTelemetry, SolidMotorSpec, StarterKind, StarterSpec,
-    SystemAltitudePoint, SystemMount, SystemOperatingPoint, THESSA_OXYGEN_MASS_FRACTION,
-    advance_jet_shaft, advance_jet_spool, advance_spool, analyze_airbreathing, analyze_altitude,
-    characteristic_velocity, flight_condition, mach_from_area_ratio, thrust_coefficient,
+    CoolingMode, CycleLimits, ESTOC_DEFAULT_SWITCH_MACH_HI, ESTOC_DEFAULT_SWITCH_MACH_LO,
+    ESTOC_DEFAULT_TRANSITION_TAU_S, ESTOC_MAX_ROCKET_PC_PA, ESTOC_REINFORCEMENT_FRACTION,
+    EngineCycle, EngineMount, EngineOperatingPoint, EnginePlumeState, EngineSpool, EstocMode,
+    EstocPoint, EstocSpec, FlightCondition, GeneratorSpec, GimbalEffector, IntakeKind, JetCommand,
+    JetFuel, JetMount, JetShaftState, LiquidEngineSpec, MAX_SYSTEM_CHAMBERS, MonopropThrusterSpec,
+    NTR_COOLDOWN_FRACTION, NTR_DEFAULT_RATED_BURN_S, NTR_DEFAULT_SPECIFIC_MASS_KG_PER_MW,
+    NTR_DEFAULT_STARTUP_TAU_S, NTR_INLET_TEMP_K, NTR_KINETIC_EFFICIENCY,
+    NTR_MAX_CHAMBER_PRESSURE_PA, NozzleContour, NozzleExitState, NtrFluid, NtrSupplement,
+    NuclearThermalSpec, Propellant, PropellantThermo, PropulsionError, PropulsionSystemSpec,
+    RCS_DEFAULT_MIN_ON_TIME_S, RCS_DEFAULT_RISE_TIME_S, RcsCluster, RcsMount, RcsPulse,
+    RcsThruster, SEPARATION_PRESSURE_RATIO, STANDARD_GRAVITY_MPS2, ShaftBalance, ShaftCommand,
+    ShaftSpec, ShaftTelemetry, SolidMotorSpec, StarterKind, StarterSpec, SystemAltitudePoint,
+    SystemMount, SystemOperatingPoint, advance_jet_shaft, advance_jet_spool, advance_spool,
+    analyze_airbreathing, analyze_altitude, characteristic_velocity, flight_condition,
+    mach_from_area_ratio, thrust_coefficient,
 };
 pub use scheduler::{EventScheduler, ScheduledEvent, ScheduledKind};
 pub use system::{

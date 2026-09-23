@@ -12,9 +12,9 @@ use thessa_sim_core::{
     EngineCycle, EngineMount, EstocSpec, FoldJointRecord, IntakeKind, JetFuel, JetMount,
     LiquidEngineSpec, NozzleContour, NtrFluid, NuclearThermalSpec, Propellant, PropellerDriveMount,
     PropellerDriveSpec, PropellerSpec, PropulsionSystemSpec, RigidBodyProperties,
-    ShaftPowerSourceSpec, ShaftSpec, SolidMotorSpec, SystemMount, TankMount, TankShape, TankSpec,
-    TurbopropDriveSpec, TurbopropMount, VehicleDefinition, analyze_airbreathing, analyze_altitude,
-    analyze_propeller_drive, analyze_turboprop_drive,
+    ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec, SystemMount, TankMount,
+    TankShape, TankSpec, TurbopropDriveSpec, TurbopropMount, VehicleDefinition,
+    analyze_airbreathing, analyze_altitude, analyze_propeller_drive, analyze_turboprop_drive,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -850,7 +850,13 @@ impl ControlSurfaceAsset {
 /// Solid motors use `kind = "solid"` with grain fields
 /// (`outer_radius_m`, `core_radius_m`, `segment_length_m`, `segments`,
 /// optional APCP ballistics overrides, `ignition_shots`) instead of the
-/// chamber/cycle fields.
+/// chamber/cycle fields. Optional `grain_geometry` selects star or finocyl
+/// port burnback; omitted geometry is circular BATES:
+///
+/// ```text
+/// grain_geometry = { kind = "star", tip_count = 6, tip_radius_m = 0.30 }
+/// grain_geometry = { kind = "finocyl", fin_count = 8, fin_tip_radius_m = 0.32, fin_width_rad = 0.24 }
+/// ```
 #[derive(Debug, Deserialize)]
 struct EngineAsset {
     name: String,
@@ -897,6 +903,8 @@ struct EngineAsset {
     segments: Option<u32>,
     #[serde(default)]
     segment_core_radii_m: Option<Vec<f64>>,
+    #[serde(default)]
+    grain_geometry: SolidGrainGeometry,
     #[serde(default)]
     burn_rate_coeff: Option<f64>,
     #[serde(default)]
@@ -1007,6 +1015,7 @@ impl EngineAsset {
             core_radius_m: self
                 .core_radius_m
                 .ok_or("solid motor needs core_radius_m")?,
+            grain_geometry: self.grain_geometry,
             segment_length_m: self
                 .segment_length_m
                 .ok_or("solid motor needs segment_length_m")?,
@@ -2346,6 +2355,74 @@ rocket_throat_radius_m = 0.09
             "baked mass must equal structure plus jets"
         );
         assert!(vehicle.jets[1].engine.dry_mass_kg() > vehicle.jets[0].engine.dry_mass_kg());
+    }
+
+    #[test]
+    fn shaped_solid_grain_profiles_are_authorable_in_toml() {
+        let doc = r#"
+name = "shaped-solid-test"
+mass_kg = 3000.0
+inertia_body_kg_m2 = [[8000.0, 0.0, 0.0], [0.0, 8000.0, 0.0], [0.0, 0.0, 4000.0]]
+
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 4.0
+chord_m = 1.0
+
+[[engines]]
+name = "star-booster"
+kind = "solid"
+outer_radius_m = 0.5
+core_radius_m = 0.16
+segment_length_m = 1.0
+segments = 2
+throat_radius_m = 0.12
+expansion_ratio = 10.0
+nozzle_length_m = 0.9
+material = "nickel-superalloy"
+grain_geometry = { kind = "star", tip_count = 6, tip_radius_m = 0.30 }
+
+[[engines]]
+name = "finocyl-sustainer"
+kind = "solid"
+outer_radius_m = 0.5
+core_radius_m = 0.16
+segment_length_m = 1.0
+segments = 2
+throat_radius_m = 0.12
+expansion_ratio = 10.0
+nozzle_length_m = 0.9
+material = "nickel-superalloy"
+grain_geometry = { kind = "finocyl", fin_count = 8, fin_tip_radius_m = 0.32, fin_width_rad = 0.24 }
+"#;
+        let asset: VehicleAsset = toml::from_str(doc).expect("shaped grain TOML parses");
+        let vehicle = asset.bake().expect("shaped solid assets bake");
+        assert_eq!(vehicle.engines.len(), 2);
+        for (engine, expected_geometry) in [
+            (
+                &vehicle.engines[0].engine,
+                SolidGrainGeometry::Star {
+                    tip_count: 6,
+                    tip_radius_m: 0.30,
+                },
+            ),
+            (
+                &vehicle.engines[1].engine,
+                SolidGrainGeometry::Finocyl {
+                    fin_count: 8,
+                    fin_tip_radius_m: 0.32,
+                    fin_width_rad: 0.24,
+                },
+            ),
+        ] {
+            let CompiledEngine::Solid(motor) = engine else {
+                panic!("expected solid motor");
+            };
+            assert_eq!(motor.grain_geometry, expected_geometry);
+            assert!(motor.burn_curve[0].burn_surface_area_m2 > 0.0);
+        }
     }
 
     #[test]

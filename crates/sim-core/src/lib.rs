@@ -111,13 +111,13 @@ pub use propulsion::{
     PropellerDriveSpec, PropellerPoint, PropellerSpec, PropulsionError, PropulsionSystemSpec,
     RCS_DEFAULT_MIN_ON_TIME_S, RCS_DEFAULT_RISE_TIME_S, RcsCluster, RcsMount, RcsPulse,
     RcsThruster, SEPARATION_PRESSURE_RATIO, STANDARD_GRAVITY_MPS2, ShaftBalance, ShaftCommand,
-    ShaftPowerSourceSpec, ShaftSpec, ShaftTelemetry, SolidMotorSpec, StarterKind, StarterSpec,
-    SystemAltitudePoint, SystemMount, SystemOperatingPoint, TurbopropAltitudePoint,
-    TurbopropCommand, TurbopropDriveSpec, TurbopropMount, TurbopropOperatingPoint,
-    advance_jet_shaft, advance_jet_shaft_loaded, advance_jet_spool, advance_spool,
-    analyze_airbreathing, analyze_altitude, analyze_propeller_drive, analyze_turboprop_drive,
-    characteristic_velocity, effective_propulsive_isp_s, flight_condition, mach_from_area_ratio,
-    thrust_coefficient,
+    ShaftPowerSourceSpec, ShaftSpec, ShaftTelemetry, SolidGrainGeometry, SolidMotorSpec,
+    StarterKind, StarterSpec, SystemAltitudePoint, SystemMount, SystemOperatingPoint,
+    TurbopropAltitudePoint, TurbopropCommand, TurbopropDriveSpec, TurbopropMount,
+    TurbopropOperatingPoint, advance_jet_shaft, advance_jet_shaft_loaded, advance_jet_spool,
+    advance_spool, analyze_airbreathing, analyze_altitude, analyze_propeller_drive,
+    analyze_turboprop_drive, characteristic_velocity, effective_propulsive_isp_s, flight_condition,
+    mach_from_area_ratio, thrust_coefficient,
 };
 pub use scheduler::{EventScheduler, ScheduledEvent, ScheduledKind};
 pub use system::{

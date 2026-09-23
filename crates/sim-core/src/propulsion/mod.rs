@@ -90,7 +90,7 @@ pub use shaft_power::{
     TurbopropMount, TurbopropOperatingPoint, analyze_propeller_drive, analyze_turboprop_drive,
     effective_propulsive_isp_s,
 };
-pub use solid::{BurnPoint, CompiledSolid, SolidMotorSpec};
+pub use solid::{BurnPoint, CompiledSolid, SolidGrainGeometry, SolidMotorSpec};
 pub use spool::{EngineSpool, advance_spool};
 pub use system::{
     ChamberSpec, CompiledChamber, CompiledPropulsionSystem, MAX_SYSTEM_CHAMBERS,

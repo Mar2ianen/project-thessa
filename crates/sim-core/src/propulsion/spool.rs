@@ -126,7 +126,9 @@ pub fn advance_spool(
 #[cfg(test)]
 mod tests {
     use super::super::liquid::merlin_like;
-    use super::super::{ChamberMaterial, NozzleContour, Propellant, SolidMotorSpec};
+    use super::super::{
+        ChamberMaterial, NozzleContour, Propellant, SolidGrainGeometry, SolidMotorSpec,
+    };
     use super::*;
 
     #[test]
@@ -150,6 +152,7 @@ mod tests {
             propellant: Propellant::SolidApcp,
             outer_radius_m: 0.3,
             core_radius_m: 0.1,
+            grain_geometry: SolidGrainGeometry::Circular,
             segment_length_m: 1.0,
             segments: 2,
             burn_rate_coeff: a,

@@ -5,13 +5,13 @@ Status: design baseline with a shipped backend (`thessa-sim-core::propulsion`
 with mixture sensitivity, cycle/feed bounds, geometry-derived mass, spool
 runtime, altitude analyzer, vehicle mounts, tanks and feed lines, RCS and
 nuclear thermal models, multi-chamber systems, air-breathing jets
-(turbojet/turbofan/ramjet) with the single-spool shaft/starter runtime
+(turbojet/turbofan/ramjet/scramjet) with the single-spool shaft/starter runtime
 (starter topologies, light-off/self-sustain, relight, generator load),
-composition-aware atmosphere queries (section 10), and
-the ESTOC combined-cycle engine, plus piston/electric propeller drives and a
+composition-aware atmosphere queries (section 10), and the ESTOC combined-cycle
+engine, plus piston/electric propeller drives and a
 stateful, heat-budgeted turboprop takeoff path on a reusable ideal actuator
-disk (section 9). Star/finocyl grain burnback, tank depletion wiring, the
-flight-loop allocator, transient piston/electric source and prop-shaft
+disk (section 9). Tank depletion wiring, the flight-loop allocator,
+transient piston/electric source and prop-shaft
 state, finite-blade propeller maps, an independent free-power-turbine spool,
 high-fidelity scramjet shock-train/finite-rate chemistry, and the editor UI
 are still TBD (see section 18).
@@ -801,9 +801,9 @@ Shipped in `crates/sim-core/src/propulsion.rs` (MIT engine crate, no Bevy/Tokio/
 - Aerospike contour (linear): near-axial divergence, altitude
   compensation down to base drag on the plug base, separation flag
   never trips by design. Sea-level thrust holds within 3% of vacuum.
-- Shaped solid thrust: per-segment port radii (stepped channel) solved
-  on a coupled time-stepped trace; boost-sustain signature and
-  integrated-vs-geometric propellant agreement pinned by test.
+- Shaped solid thrust: per-segment stepped circular ports plus star and
+  finocyl profiles solve port burnback on a coupled time-stepped trace;
+  boost/sustain and geometry-error envelopes are pinned by tests.
 - Thermal interface data: chamber stagnation power, exhaust kinetic
   power (ordering pinned), nozzle wall area; the graph hookup waits for
   a runtime thermal graph to exist.
@@ -1011,16 +1011,16 @@ Known v5 correctness debt:
 
 ### 18.7 Still deferred
 
-Star/finocyl grain geometry (needs numerical perimeter burnback, not a
-tweak of the port solver), tank depletion wiring into the flight loop
-(the queries exist; the loop still flies baked mass), per-engine
+Tank depletion wiring into the flight loop (the queries exist; the loop
+still flies baked mass), per-engine
 allocation in the flight loop (authority pairs exist; the allocator
 still sees one lever), transient piston/electric source startup and
 propeller-shaft inertia, finite-blade propeller pitch/stall/profile maps, and
 an independent free-power-turbine/prop-rotor inertia model (the current
 turboprop extracts power through the shared normalized gas-generator shaft),
 high-fidelity scramjet inlet/shock-train geometry and finite-rate chemistry,
-and the editor UI itself (the CLI/JSON analyzer is its backend contract).
+local casing failure after shaped-grain web breakthrough, and the editor UI
+itself (the CLI/JSON analyzer is its backend contract).
 
 ### 18.8 Jet shaft/starter runtime (section 8.1, single spool)
 
@@ -1287,3 +1287,51 @@ species accounting, fixed C-D nozzle, vehicle mount, and altitude/Mach analyzer.
 - Remaining scramjet fidelity belongs to the explicit section 18.7 debt:
   inlet/shock-train geometry and finite-rate chemistry/dissociation, not an
   untracked extension of the current ram-compression bound.
+
+### 18.12 Star and finocyl solid-grain burnback
+
+Shipped 2026-09-24: `SolidGrainGeometry::{Star, Finocyl}` compile noncircular
+grain ports into the existing pressure-coupled APCP burn trace. Circular BATES
+and stepped-channel ports retain their analytic-radius path.
+
+- Formal geometry: star ports are alternating root/tip regular polygons;
+  finocyl ports are a central core joined to evenly spaced radial fin slots
+  with a short polygonal tip arc. Existing `core_radius_m` is the star root or
+  finocyl center radius; stepped `segment_core_radii_m` overrides it per
+  segment. Lobe/fin tips must lie inside the cylindrical grain and outside
+  every configured root.
+- Burnback: a 128×128 cell-center signed-distance field is built inside the
+  cylindrical grain section. Port area is the count of cells with distance
+  `≤ web`; the perimeter is a four-direction Crofton crossing estimate.
+  These are reduced to 400 linearly interpolated web stations per segment.
+  Authoring refuses lobe depth, fin width, or outer web thinner than two
+  grid cells at the selected grain radius, keeping profiles inside the
+  validated resolution envelope.
+  Each trace step evaluates per-segment perimeter × segment length plus the
+  existing optional burning end faces, then solves the shared Saint-Robert
+  equilibrium `Pc=[Ab·a·ρ·c*/At]^(1/(1−n))` and regresses each segment by
+  `a·Pcⁿ·dt`. This is a sampled geometric burn-front model, not a pressure or
+  thrust curve fit.
+- Telemetry: every `BurnPoint` records total burning surface area, total open
+  port area and perimeter, web, chamber pressure, mass flow and thrust.
+  Compiled-solid state carries the selected grain profile. Baker TOML accepts
+  `grain_geometry = { kind = "star", tip_count = 6, tip_radius_m = 0.30 }`
+  or `grain_geometry = { kind = "finocyl", fin_count = 8,
+  fin_tip_radius_m = 0.32, fin_width_rad = 0.24 }`; omission remains the
+  legacy circular profile.
+- Regressions: initial raster port area is within 2.5% and Crofton perimeter
+  within 8% of exact polygon area/perimeter; trace-integrated propellant mass
+  is within 7% of the exact cross-section volume. Tests also pin monotonic
+  open area, zero terminal burn surface, impulse/Isp consistency, geometry
+  validation, and TOML baking for both families.
+- Numerical error: geometry tolerances above are envelope checks against
+  closed-form polygon geometry at the production grid. Time integration
+  continues to use the existing burn-trace step rule; pressure is recomputed
+  from the sampled perimeter rather than interpolating thrust directly.
+- Benchmark (`benches/propulsion.rs`): release compile measured 6.32 ms for
+  a four-segment star and 8.38 ms for a four-segment finocyl, versus 138 µs
+  for analytic four-segment BATES. The distance-field path is hangar compile
+  work; runtime replays the precompiled burn curve.
+- Limitation: the current grain model completes the sampled burn front at
+  full cross-section depletion; local case exposure/rupture before then is
+  not yet represented as a structural failure event (section 18.7 debt).

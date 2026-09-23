@@ -9,9 +9,9 @@ use thessa_sim_core::{
     AirCycle, AirbreathingSpec, AtmosphereConfig, ChamberMaterial, CompiledEngine, CoolingMode,
     ElectricMotorSpec, EngineCycle, GasKind, IntakeKind, JetFuel, JetShaftState, LiquidEngineSpec,
     NozzleContour, PistonEngineSpec, Propellant, PropellerDriveSpec, PropellerSpec, ShaftCommand,
-    ShaftPowerSourceSpec, ShaftSpec, SolidMotorSpec, StarterKind, StarterSpec, TurbopropDriveSpec,
-    advance_jet_shaft, analyze_airbreathing, analyze_altitude, analyze_propeller_drive,
-    analyze_turboprop_drive, flight_condition,
+    ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec, StarterKind, StarterSpec,
+    TurbopropDriveSpec, advance_jet_shaft, analyze_airbreathing, analyze_altitude,
+    analyze_propeller_drive, analyze_turboprop_drive, flight_condition,
 };
 
 fn methalox_spec() -> LiquidEngineSpec {
@@ -41,6 +41,7 @@ fn apcp_spec() -> SolidMotorSpec {
         propellant: Propellant::SolidApcp,
         outer_radius_m: 0.5,
         core_radius_m: 0.32,
+        grain_geometry: SolidGrainGeometry::Circular,
         segment_length_m: 1.5,
         segments: 4,
         burn_rate_coeff: a,
@@ -66,6 +67,41 @@ fn main() {
     let solid = CompiledEngine::Solid(apcp_spec().compile().expect("solid"));
     let solid_compile_us = start.elapsed().as_secs_f64() * 1.0e6;
     println!("liquid compile: {liquid_compile_us:.1} us, solid compile: {solid_compile_us:.1} us");
+
+    for (label, geometry) in [
+        (
+            "star",
+            SolidGrainGeometry::Star {
+                tip_count: 6,
+                tip_radius_m: 0.30,
+            },
+        ),
+        (
+            "finocyl",
+            SolidGrainGeometry::Finocyl {
+                fin_count: 8,
+                fin_tip_radius_m: 0.32,
+                fin_width_rad: 0.24,
+            },
+        ),
+    ] {
+        let spec = SolidMotorSpec {
+            name: format!("bench-{label}"),
+            core_radius_m: 0.16,
+            grain_geometry: geometry,
+            ..apcp_spec()
+        };
+        let compile_iters = 10;
+        let start = Instant::now();
+        for _ in 0..compile_iters {
+            black_box(spec.compile().expect("shaped solid compile"));
+        }
+        let compile_us = start.elapsed().as_secs_f64() * 1.0e6 / compile_iters as f64;
+        println!(
+            "{label} grain compile: {compile_us:.1} us ({} segments)",
+            spec.segments
+        );
+    }
 
     // Analyzer sweep: 21 altitudes x 5 throttles (editor slider path).
     let atmosphere = AtmosphereConfig::default();

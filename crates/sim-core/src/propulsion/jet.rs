@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::GimbalEffector;
 use super::mount::gimbal_pair;
+use super::shaft::{JetShaftState, ShaftCommand, advance_jet_shaft};
 use super::{
     CompiledAirbreather, CompiledEstoc, EnginePlumeState, EstocMode, EstocPoint, EstocTransient,
     FlightCondition, PropulsionError,
@@ -16,7 +17,7 @@ use super::{
 /// One installed jet of either family.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum CompiledJet {
-    Air(CompiledAirbreather),
+    Air(Box<CompiledAirbreather>),
     Estoc(Box<CompiledEstoc>),
 }
 
@@ -56,36 +57,78 @@ impl CompiledJet {
     }
 }
 
-/// ESTOC command threading for stateless vehicle calls: manual override,
-/// last mode, previous transient, and timestep. A fresh command has no
-/// previous transient, so it evaluates the target directly.
+/// Jet command threading for stateless vehicle calls: manual override,
+/// last mode, previous transient, timestep, and the live shaft state.
+/// A fresh command has no previous transient, so it evaluates the
+/// target directly, and carries an already-running shaft (analyzer
+/// convention: the engine starts warm; `starter_charge_j` is a
+/// `f64::MAX` sentinel meaning "starter untouched", since a running
+/// engine never spends starter energy).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct EstocCommand {
+pub struct JetCommand {
     pub manual: Option<EstocMode>,
     pub last_mode: EstocMode,
     /// Previous transition snapshot; `None` evaluates the fresh target.
     pub prev: Option<EstocTransient>,
     pub dt_s: f64,
+    /// Live shaft state feeding the air path (spool speed, lit flag,
+    /// starter charge). Plain air-breathers and the ESTOC air leg both
+    /// schedule on it.
+    pub shaft: JetShaftState,
+    /// Starter engagement request for this step (advance with
+    /// [`JetCommand::advance_shaft`]).
+    pub starter_engaged: bool,
+    /// Requested electrical generator load (W) for this step.
+    pub generator_load_w: f64,
 }
 
-impl EstocCommand {
-    /// Fresh-start evaluation (direct target, no smoothing).
+impl JetCommand {
+    /// Fresh-start evaluation (direct target, no smoothing) with an
+    /// already-running shaft.
     pub fn fresh() -> Self {
         Self {
             manual: None,
             last_mode: EstocMode::Air,
             prev: None,
             dt_s: 0.0,
+            shaft: JetShaftState {
+                spool_n: 1.0,
+                lit: true,
+                starter_charge_j: f64::MAX,
+            },
+            starter_engaged: false,
+            generator_load_w: 0.0,
         }
     }
 
-    /// Return the command to use on the next world tick after an ESTOC
-    /// operating-point evaluation. Manual selection and timestep are caller
-    /// inputs; mode and the full transient snapshot are runtime state.
-    pub fn with_state(&self, point: &EstocPoint, transient: EstocTransient) -> Self {
+    /// Cold-start command: stopped, unlit shaft at full starter charge
+    /// (per the engine's fitted starter topology).
+    pub fn cold(engine: &CompiledJet) -> Self {
+        let air = match engine {
+            CompiledJet::Air(inner) => inner.as_ref(),
+            CompiledJet::Estoc(inner) => &inner.air,
+        };
+        Self {
+            shaft: JetShaftState::cold(air),
+            starter_engaged: false,
+            ..Self::fresh()
+        }
+    }
+
+    /// Return the command to use on the next world tick after an
+    /// operating-point evaluation. Manual selection and timestep are
+    /// caller inputs; mode, the full transient snapshot, and the shaft
+    /// state returned by [`JetMount::estoc_point`] are runtime state.
+    pub fn with_state(
+        &self,
+        point: &EstocPoint,
+        transient: EstocTransient,
+        shaft: JetShaftState,
+    ) -> Self {
         Self {
             last_mode: point.mode,
             prev: Some(transient),
+            shaft,
             ..*self
         }
     }
@@ -105,6 +148,14 @@ pub struct JetMount {
 }
 
 impl JetMount {
+    /// The air-breather core of this mount (shared shaft plumbing).
+    fn air_engine(&self) -> &CompiledAirbreather {
+        match &self.engine {
+            CompiledJet::Air(engine) => engine.as_ref(),
+            CompiledJet::Estoc(engine) => &engine.air,
+        }
+    }
+
     /// Validate mount data (NaN fails closed; axis must be unit).
     pub fn validate(&self) -> Result<(), PropulsionError> {
         if self.name.trim().is_empty() {
@@ -140,29 +191,50 @@ impl JetMount {
         Ok(())
     }
 
-    /// Thrust magnitude (N) at throttle, condition, and ESTOC command.
+    /// Thrust magnitude (N) at throttle, condition, and jet command.
     pub fn thrust_n(
         &self,
         throttle: f64,
         condition: &FlightCondition,
-        estoc: &EstocCommand,
+        jet: &JetCommand,
     ) -> Result<f64, PropulsionError> {
-        Ok(self.estoc_point(throttle, condition, estoc)?.0.thrust_n)
+        Ok(self.estoc_point(throttle, condition, jet)?.0.thrust_n)
     }
 
-    /// Full ESTOC point plus the updated transition snapshot (stateful
-    /// callers thread both forward; `thrust_n`/`plume_state` discard the
-    /// snapshot for one-shot calls).
+    /// Full point, updated transition snapshot, and next shaft state.
+    /// The shaft is advanced one command step first (`command.dt_s`
+    /// physics seconds, starter/generator honored), then the air path
+    /// is evaluated at the resulting spool speed with `lit` as the
+    /// ignition gate — so the returned state, point, and mode always
+    /// agree. Thread all three forward via [`JetCommand::with_state`];
+    /// `thrust_n`/`plume_state` discard the extras for one-shot calls.
     pub fn estoc_point(
         &self,
         throttle: f64,
         condition: &FlightCondition,
-        estoc: &EstocCommand,
-    ) -> Result<(EstocPoint, EstocTransient), PropulsionError> {
+        jet: &JetCommand,
+    ) -> Result<(EstocPoint, EstocTransient, JetShaftState), PropulsionError> {
         self.validate()?;
+        let shaft_cmd = ShaftCommand {
+            throttle,
+            starter_engaged: jet.starter_engaged,
+            generator_load_w: jet.generator_load_w,
+        };
+        let (shaft, _telemetry) = advance_jet_shaft(
+            self.air_engine(),
+            jet.shaft,
+            &shaft_cmd,
+            condition,
+            jet.dt_s,
+        )?;
         match &self.engine {
             CompiledJet::Air(engine) => {
-                let point = engine.operating_point(condition, throttle)?;
+                let (point, _) = engine.operating_point_at_spool(
+                    condition,
+                    throttle,
+                    shaft.spool_n,
+                    shaft.lit,
+                )?;
                 let snapshot = EstocTransient {
                     thrust_n: point.thrust_n.max(0.0),
                     fuel_flow_kg_s: point.fuel_flow_kg_s,
@@ -187,16 +259,21 @@ impl JetMount {
                         exit_mach: snapshot.exit_mach,
                     },
                     snapshot,
+                    shaft,
                 ))
             }
-            CompiledJet::Estoc(engine) => engine.operating_point(
-                condition,
-                throttle,
-                estoc.manual,
-                estoc.last_mode,
-                estoc.prev.as_ref(),
-                estoc.dt_s,
-            ),
+            CompiledJet::Estoc(engine) => {
+                let (point, transient) = engine.operating_point(
+                    condition,
+                    throttle,
+                    jet.manual,
+                    jet.last_mode,
+                    jet.prev.as_ref(),
+                    jet.dt_s,
+                    shaft,
+                )?;
+                Ok((point, transient, shaft))
+            }
         }
     }
 
@@ -205,9 +282,9 @@ impl JetMount {
         &self,
         throttle: f64,
         condition: &FlightCondition,
-        estoc: &EstocCommand,
+        jet: &JetCommand,
     ) -> Result<[f64; 3], PropulsionError> {
-        let thrust_n = self.thrust_n(throttle, condition, estoc)?;
+        let thrust_n = self.thrust_n(throttle, condition, jet)?;
         Ok([
             self.thrust_axis_body[0] * thrust_n,
             self.thrust_axis_body[1] * thrust_n,
@@ -217,48 +294,26 @@ impl JetMount {
 
     /// Plume-renderer input for the jet at throttle and condition (exit
     /// radius from the core nozzle area; ESTOC reports the active mode).
+    /// Derived from [`JetMount::estoc_point`], so the plume always shows
+    /// the same flow/state the thrust came from.
     pub fn plume_state(
         &self,
         throttle: f64,
         condition: &FlightCondition,
-        estoc: &EstocCommand,
+        jet: &JetCommand,
     ) -> Result<EnginePlumeState, PropulsionError> {
         self.validate()?;
-        match &self.engine {
-            CompiledJet::Air(engine) => {
-                let point = engine.operating_point(condition, throttle)?;
-                Ok(EnginePlumeState {
-                    exit_radius_m: (engine.exit_area_core_m2 / std::f64::consts::PI).sqrt(),
-                    mass_flow_kg_s: point.air_flow_kg_s + point.fuel_flow_kg_s,
-                    exhaust_velocity_mps: point.exhaust_velocity_mps,
-                    exit_pressure_pa: point.exit_pressure_pa,
-                    exit_temp_k: point.exhaust_temp_k,
-                    exit_mach: point.exit_mach,
-                    propellant: engine.fuel.exhaust_propellant(),
-                })
-            }
-            CompiledJet::Estoc(engine) => {
-                let (point, _) = engine.operating_point(
-                    condition,
-                    throttle,
-                    estoc.manual,
-                    estoc.last_mode,
-                    estoc.prev.as_ref(),
-                    estoc.dt_s,
-                )?;
-                Ok(EnginePlumeState {
-                    exit_radius_m: (engine.air.exit_area_core_m2 / std::f64::consts::PI).sqrt(),
-                    mass_flow_kg_s: point.fuel_flow_kg_s
-                        + point.oxidizer_flow_kg_s
-                        + point.air_flow_kg_s,
-                    exhaust_velocity_mps: point.exhaust_velocity_mps,
-                    exit_pressure_pa: point.exit_pressure_pa,
-                    exit_temp_k: point.exhaust_temp_k,
-                    exit_mach: point.exit_mach,
-                    propellant: engine.air.fuel.exhaust_propellant(),
-                })
-            }
-        }
+        let (point, _, _) = self.estoc_point(throttle, condition, jet)?;
+        let radius_source: &CompiledAirbreather = self.air_engine();
+        Ok(EnginePlumeState {
+            exit_radius_m: (radius_source.exit_area_core_m2 / std::f64::consts::PI).sqrt(),
+            mass_flow_kg_s: point.fuel_flow_kg_s + point.oxidizer_flow_kg_s + point.air_flow_kg_s,
+            exhaust_velocity_mps: point.exhaust_velocity_mps,
+            exit_pressure_pa: point.exit_pressure_pa,
+            exit_temp_k: point.exhaust_temp_k,
+            exit_mach: point.exit_mach,
+            propellant: radius_source.fuel.exhaust_propellant(),
+        })
     }
 
     /// Gimbal authority pair for the flight allocator (shared math with
@@ -267,10 +322,10 @@ impl JetMount {
         &self,
         throttle: f64,
         condition: &FlightCondition,
-        estoc: &EstocCommand,
+        jet: &JetCommand,
     ) -> Result<[GimbalEffector; 2], PropulsionError> {
         self.validate()?;
-        let thrust_n = DVec3::from_array(self.thrust_vector_body_n(throttle, condition, estoc)?);
+        let thrust_n = DVec3::from_array(self.thrust_vector_body_n(throttle, condition, jet)?);
         Ok(gimbal_pair(
             self.position_body_m,
             self.thrust_axis_body,
@@ -282,7 +337,10 @@ impl JetMount {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{AirCycle, AirbreathingSpec, ChamberMaterial, IntakeKind, JetFuel};
+    use super::super::{
+        AirCycle, AirbreathingSpec, ChamberMaterial, IntakeKind, JetFuel, ShaftSpec, StarterKind,
+        StarterSpec,
+    };
     use super::*;
 
     fn test_jet() -> JetMount {
@@ -300,12 +358,13 @@ mod tests {
             reheat_temp_k: 0.0,
             turbine_material: ChamberMaterial::nickel_superalloy(),
             spool_tau_s: 5.0,
+            shaft: ShaftSpec::default(),
         }
         .compile()
         .expect("jet compiles");
         JetMount {
             name: "jet-a".into(),
-            engine: CompiledJet::Air(engine),
+            engine: CompiledJet::Air(Box::new(engine)),
             position_body_m: [-2.0, 0.0, 0.5],
             thrust_axis_body: [1.0, 0.0, 0.0],
             gimbal_range_rad: 0.0,
@@ -318,7 +377,7 @@ mod tests {
             ambient_pa: 101_325.0,
             ambient_temp_k: 288.15,
             airspeed_mps: 0.0,
-            oxygen_fraction: 0.232,
+            composition: crate::atmosphere::AtmosphereComposition::earth_air(),
         }
     }
 
@@ -328,13 +387,13 @@ mod tests {
         // mount returns zero gimbal authority with well-defined axes.
         let mount = test_jet();
         let thrust = mount
-            .thrust_vector_body_n(1.0, &sl_static(), &EstocCommand::fresh())
+            .thrust_vector_body_n(1.0, &sl_static(), &JetCommand::fresh())
             .expect("thrust");
         assert!(thrust[0] > 10_000.0);
         assert_eq!(thrust[1], 0.0);
         assert_eq!(thrust[2], 0.0);
         let authority = mount
-            .gimbal_authority(1.0, &sl_static(), &EstocCommand::fresh())
+            .gimbal_authority(1.0, &sl_static(), &JetCommand::fresh())
             .expect("authority");
         for effector in authority {
             assert_eq!(
@@ -344,11 +403,93 @@ mod tests {
         }
         // Off throttle is off; bad axis is refused.
         let off = mount
-            .thrust_n(0.0, &sl_static(), &EstocCommand::fresh())
+            .thrust_n(0.0, &sl_static(), &JetCommand::fresh())
             .expect("off");
         assert_eq!(off, 0.0);
         let mut bad = mount;
         bad.thrust_axis_body = [2.0, 0.0, 0.0];
         assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn cold_start_needs_a_starter_and_crank() {
+        // A cold shaft refuses engagement when no starter is fitted;
+        // with an electric starter the crank raises spool through
+        // light-off, and the engine then self-sustains with the starter
+        // released.
+        let sl = sl_static();
+        let mut cold = JetCommand::cold(&test_jet().engine);
+        assert_eq!(cold.shaft.spool_n, 0.0);
+        assert!(!cold.shaft.lit);
+        cold.starter_engaged = true;
+        assert!(
+            test_jet().estoc_point(1.0, &sl, &cold).is_err(),
+            "starterless engine must refuse engagement"
+        );
+
+        let engine = AirbreathingSpec {
+            name: "starter jet".into(),
+            cycle: AirCycle::Turbojet,
+            fuel: JetFuel::Kerosene,
+            intake_area_m2: 0.5,
+            intake: IntakeKind::Pitot,
+            compressor_ratio: 8.0,
+            bypass_ratio: 0.0,
+            fan_pressure_ratio: 1.0,
+            turbine_inlet_temp_k: 1400.0,
+            afterburner: false,
+            reheat_temp_k: 0.0,
+            turbine_material: ChamberMaterial::nickel_superalloy(),
+            spool_tau_s: 5.0,
+            shaft: ShaftSpec {
+                starter: StarterSpec {
+                    kind: StarterKind::Electric,
+                    power_w: 4.0e6,
+                    charge_j: 1.0e9,
+                    mass_kg: 30.0,
+                },
+                ..ShaftSpec::default()
+            },
+        }
+        .compile()
+        .expect("starter jet compiles");
+        let mount = JetMount {
+            name: "starter-jet".into(),
+            engine: CompiledJet::Air(Box::new(engine)),
+            position_body_m: [-2.0, 0.0, 0.5],
+            thrust_axis_body: [1.0, 0.0, 0.0],
+            gimbal_range_rad: 0.0,
+        };
+        let mut command = JetCommand::cold(&mount.engine);
+        command.starter_engaged = true;
+        command.dt_s = 0.1;
+        let mut lit = false;
+        let mut spool = 0.0;
+        for _ in 0..400 {
+            let (_, _, shaft) = mount.estoc_point(1.0, &sl, &command).expect("crank");
+            spool = shaft.spool_n;
+            lit = shaft.lit;
+            command.shaft = shaft;
+            if lit {
+                break;
+            }
+        }
+        assert!(
+            lit,
+            "electric starter must light the core (spool {spool:.3})"
+        );
+        assert!(
+            spool >= 0.15,
+            "lit engine above light-off, spool {spool:.3}"
+        );
+        // Self-sustain: release the starter, keep throttle — stays lit
+        // and keeps spooling up.
+        command.starter_engaged = false;
+        for _ in 0..200 {
+            let (_, _, shaft) = mount.estoc_point(1.0, &sl, &command).expect("sustain");
+            command.shaft = shaft;
+        }
+        assert!(command.shaft.lit, "self-sustaining after starter release");
+        assert!(command.shaft.spool_n >= 0.15);
     }
 }

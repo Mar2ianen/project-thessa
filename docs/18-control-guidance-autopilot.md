@@ -314,12 +314,17 @@ Jet spool and combined-cycle mode changes are actuator state, not guidance
 policy. The flight loop owns the state and passes it through pure simulation
 calls:
 
-- air-breather throttle follows a first-order spool law with the compiled
-  `spool_tau_s`; ESTOC exposes this air-path lag separately from its mode
-  transition lag;
-- an ESTOC call carries `EstocCommand` (`manual`, `last_mode`, the previous
-  `EstocTransient`, and `dt_s`), and returns both the operating point and the
-  updated transient snapshot;
+- air-breather spool advances through the shaft balance
+  (`advance_jet_shaft`) with the compiled `spool_tau_s` as its time
+  constant: starter input, light-off/self-sustain hysteresis, and
+  generator load decide acceleration; ESTOC exposes this air-path lag
+  separately from its mode transition lag;
+- a jet call carries `JetCommand` (`manual`, `last_mode`, the previous
+  `EstocTransient`, `dt_s`, plus the `shaft` state,
+  `starter_engaged`, and `generator_load_w`), and returns the
+  operating point plus the updated transient and shaft state —
+  `estoc_point` advances the shaft first, then evaluates the air path
+  at the resulting spool with `lit` gating ignition;
 - manual ESTOC mode selection has priority over automatic hysteresis,
   including a manually selected air mode in vacuum, which flames out instead
   of silently switching modes;

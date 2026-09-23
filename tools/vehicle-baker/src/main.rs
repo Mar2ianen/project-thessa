@@ -14,8 +14,8 @@ use thessa_sim_core::{
     CollisionShape, CompiledEngine, CompiledJet, ControlSurfaceDefinition, CoolingMode,
     EngineCycle, EngineMount, EstocSpec, FoldJointRecord, IntakeKind, JetFuel, JetMount,
     LiquidEngineSpec, NozzleContour, NtrFluid, NuclearThermalSpec, Propellant,
-    PropulsionSystemSpec, RigidBodyProperties, SolidMotorSpec, SystemMount, TankMount, TankShape,
-    TankSpec, VehicleDefinition, analyze_airbreathing, analyze_altitude,
+    PropulsionSystemSpec, RigidBodyProperties, ShaftSpec, SolidMotorSpec, SystemMount, TankMount,
+    TankShape, TankSpec, VehicleDefinition, analyze_airbreathing, analyze_altitude,
 };
 
 mod debug_mesh;
@@ -101,15 +101,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("wrote: {}", output.display());
     }
     if options.analyze {
-        if !(0.0..=1.0).contains(&options.oxygen_fraction) || !options.oxygen_fraction.is_finite() {
-            return Err("--oxygen needs a mass fraction in [0, 1]".into());
-        }
         run_analyzer(
             &vehicle,
             options.throttle,
             options.burn_time_s,
             options.analyze_json,
-            options.oxygen_fraction,
+            &options.composition,
         )?;
     }
     Ok(())
@@ -124,9 +121,13 @@ fn run_analyzer(
     throttle: f64,
     burn_time_s: f64,
     as_json: bool,
-    oxygen_fraction: f64,
+    composition: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let atmosphere = AtmosphereConfig::default();
+    // Species basis is explicit: the atmosphere derives both its gas
+    // properties and its species from the design composition string
+    // (default Thessa air), never from a hard-coded oxygen scalar
+    // (doc 04 section 10 / 18.6).
+    let atmosphere = AtmosphereConfig::from_composition(composition, 288.15, 101_325.0, 9.80665)?;
     let altitudes: Vec<f64> = (0..=10).map(|k| k as f64 * 8000.0).collect();
     if as_json {
         let mut rows = Vec::new();
@@ -155,7 +156,7 @@ fn run_analyzer(
         }
         for mount in &vehicle.jets {
             let air = match &mount.engine {
-                CompiledJet::Air(engine) => engine,
+                CompiledJet::Air(engine) => engine.as_ref(),
                 CompiledJet::Estoc(engine) => &engine.air,
             };
             rows.push(serde_json::json!({
@@ -166,7 +167,6 @@ fn run_analyzer(
                     &altitudes,
                     &[0.0, 1.0, 2.0, 3.0],
                     throttle,
-                    oxygen_fraction,
                 )?,
             }));
         }
@@ -224,7 +224,7 @@ fn run_analyzer(
     }
     for mount in &vehicle.jets {
         let air = match &mount.engine {
-            CompiledJet::Air(engine) => engine,
+            CompiledJet::Air(engine) => engine.as_ref(),
             CompiledJet::Estoc(engine) => &engine.air,
         };
         println!(
@@ -241,7 +241,6 @@ fn run_analyzer(
             &altitudes,
             &[0.0, 1.0, 2.0, 3.0],
             throttle,
-            oxygen_fraction,
         )?;
         for point in &grid {
             let mut flags = String::new();
@@ -1293,6 +1292,29 @@ impl SystemAsset {
 /// rocket_chamber_pressure_mpa = 7.0
 /// rocket_throat_radius_m = 0.09
 /// ```
+///
+/// Optional shaft topology block (section 8.1): starter, generator, and
+/// light-off/self-sustain thresholds. Omitted = inert default
+/// (starterless, windmill/relight only):
+///
+/// ```text
+/// [jets.shaft]
+/// light_off_n = 0.15
+/// self_sustain_n = 0.10
+///
+/// [jets.shaft.starter]
+/// kind = "electric"       # "none" | "electric" | "pneumatic" | "rocket-bootstrap"
+/// power_w = 200000.0
+/// charge_j = 20000000.0
+/// mass_kg = 12.0
+///
+/// [jets.shaft.generator]
+/// fitted = true
+/// power_w = 50000.0
+/// efficiency = 0.92
+/// cut_in_spool_n = 0.5
+/// mass_kg = 25.0
+/// ```
 #[derive(Debug, Deserialize)]
 struct JetAsset {
     name: String,
@@ -1321,6 +1343,10 @@ struct JetAsset {
     material: MaterialAsset,
     #[serde(default = "default_spool_tau")]
     spool_tau_s: f64,
+    /// Shaft topology block (`[jets.shaft]`): starter, generator,
+    /// light-off/self-sustain. Inert default when omitted.
+    #[serde(default)]
+    shaft: ShaftSpec,
     // ESTOC-only rocket block.
     #[serde(default)]
     rocket_chamber_pressure_mpa: Option<f64>,
@@ -1379,6 +1405,7 @@ impl JetAsset {
             reheat_temp_k: self.reheat_temp_k,
             turbine_material: self.material()?,
             spool_tau_s: self.spool_tau_s,
+            shaft: self.shaft.clone(),
         })
     }
 
@@ -1397,7 +1424,7 @@ impl JetAsset {
 
     fn bake(self) -> Result<JetMount, Box<dyn Error>> {
         let engine = match self.kind {
-            JetKind::Jet => CompiledJet::Air(self.air_spec()?.compile()?),
+            JetKind::Jet => CompiledJet::Air(Box::new(self.air_spec()?.compile()?)),
             JetKind::Estoc => {
                 let spec = EstocSpec {
                     name: self.name.clone(),
@@ -1575,9 +1602,10 @@ struct Options {
     throttle: f64,
     burn_time_s: f64,
     analyze_json: bool,
-    /// Oxygen mass fraction for the jet analyzer (Earth 0.232 default;
-    /// Thessa runs ~0.274 — pass it explicitly, never assume).
-    oxygen_fraction: f64,
+    /// Atmosphere composition design string for the jet analyzer (the
+    /// species basis is explicit; default is Thessa air `N2/O2/AR/CO2` —
+    /// never a hard-coded oxygen scalar).
+    composition: String,
 }
 
 impl Options {
@@ -1590,7 +1618,7 @@ impl Options {
         let mut throttle = 1.0;
         let mut burn_time_s = 0.0;
         let mut analyze_json = false;
-        let mut oxygen_fraction = 0.232;
+        let mut composition = "N2/O2/AR/CO2".to_string();
         let mut arguments = arguments.peekable();
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
@@ -1619,10 +1647,8 @@ impl Options {
                         .parse()
                         .map_err(|_| "--burn-time needs seconds >= 0")?;
                 }
-                "--oxygen" => {
-                    oxygen_fraction = required_value(&mut arguments, "--oxygen")?
-                        .parse()
-                        .map_err(|_| "--oxygen needs a mass fraction in [0, 1]")?;
+                "--composition" => {
+                    composition = required_value(&mut arguments, "--composition")?;
                 }
                 "--help" | "-h" => help = true,
                 unknown => return Err(format!("unknown argument {unknown}; use --help").into()),
@@ -1637,7 +1663,7 @@ impl Options {
             throttle,
             burn_time_s,
             analyze_json,
-            oxygen_fraction,
+            composition,
         })
     }
 }
@@ -1653,15 +1679,18 @@ fn required_value(
 
 fn print_help() {
     println!(
-        "Usage: thessa-vehicle-baker [--input data/vehicles/example_aircraft.toml] [--output data/vehicles/example_aircraft.baked.json] [--debug-body-mesh-dir DIR] [--analyze [--throttle 1.0] [--burn-time 0.0] [--analyze-json] [--oxygen 0.232]]"
+        "Usage: thessa-vehicle-baker [--input data/vehicles/example_aircraft.toml] [--output data/vehicles/example_aircraft.baked.json] [--debug-body-mesh-dir DIR] [--analyze [--throttle 1.0] [--burn-time 0.0] [--analyze-json] [--composition N2/O2/AR/CO2]]"
     );
     println!("--debug-body-mesh-dir exports procedural fuselage meshes as OBJ before baking.");
-    println!("--oxygen sets the jet analyzer O2 mass fraction (Earth 0.232, Thessa ~0.274).");
+    println!(
+        "--composition sets the analyzer atmosphere species (design string, default Thessa air N2/O2/AR/CO2; unknown gases are refused)."
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use thessa_sim_core::AtmosphereComposition;
 
     #[test]
     fn example_vehicle_asset_bakes_to_valid_generic_definition() {
@@ -2016,15 +2045,21 @@ rocket_throat_radius_m = 0.09
     }
 
     #[test]
-    fn analyzer_options_preserve_explicit_oxygen_fraction() {
+    fn analyzer_options_preserve_explicit_composition() {
         let options = Options::parse(
-            ["--analyze", "--oxygen", "0.274"]
+            ["--analyze", "--composition", "N2/O2/AR/CO2"]
                 .into_iter()
                 .map(String::from),
         )
         .expect("options parse");
         assert!(options.analyze);
-        assert!((options.oxygen_fraction - 0.274).abs() < f64::EPSILON);
+        assert_eq!(options.composition, "N2/O2/AR/CO2");
+        // Default is Thessa air, not a hard-coded Earth scalar.
+        let default = Options::parse(std::iter::empty()).expect("defaults parse");
+        assert_eq!(default.composition, "N2/O2/AR/CO2");
+        // Unknown species are refused instead of becoming Earth air.
+        assert!(AtmosphereComposition::parse(&default.composition).is_ok());
+        assert!(AtmosphereComposition::parse("XYZ").is_err());
     }
 }
 

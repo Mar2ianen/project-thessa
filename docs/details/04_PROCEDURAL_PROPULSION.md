@@ -5,7 +5,10 @@ Status: design baseline with a shipped backend (`thessa-sim-core::propulsion`
 with mixture sensitivity, cycle/feed bounds, geometry-derived mass, spool
 runtime, altitude analyzer, vehicle mounts, tanks and feed lines, RCS and
 nuclear thermal models, multi-chamber systems, air-breathing jets
-(turbojet/turbofan/ramjet), and the ESTOC combined-cycle engine. Star/finocyl
+(turbojet/turbofan/ramjet) with the single-spool shaft/starter runtime
+(starter topologies, light-off/self-sustain, relight, generator load),
+composition-aware atmosphere queries (section 10), and
+the ESTOC combined-cycle engine. Star/finocyl
 grain burnback, tank depletion wiring, the flight-loop allocator, shaft-power
 propulsion, scramjets, and the editor UI are still TBD (see section 18).
 
@@ -415,6 +418,16 @@ rocket ejector, or other modeled source creates flow/torque. A separate
 steady-state performance analyzer may continue to evaluate already-running
 static thrust, but it must label that assumption explicitly.
 
+Status note (2026-09-23): the single-spool runtime described above has landed
+in `propulsion::shaft` (section 18.8) — starter topologies with real
+stored-energy draw, light-off/self-sustain hysteresis, windmill relight,
+spool-scaled compressor suction, and generator load in the shaft work
+balance. Still deferred from this section: multi-spal/gearbox coupling,
+torque-level (instead of power-level) starter/generator authoring, the
+pneumatic and rocket-bootstrap resource pipelines (all stored-energy
+topologies currently book one energy reservoir), and generator thermal
+limits/bus connection.
+
 ## 9. Piston, electric, and generic shaft-power propulsion
 
 Propellers/fans should be reusable thrust-producing components driven by different sources of shaft power.
@@ -488,6 +501,21 @@ must be replaced by composition-aware queries with explicit molar-vs-mass
 fraction semantics.
 
 This is important for Thessa's non-Earth environments and should apply consistently to turbojets, turbofans, ramjets, combined-cycle engines, and other atmospheric propulsion.
+
+Status note (2026-09-23): shipped — see section 18.9.
+`AtmosphereSample` now carries an `AtmosphereComposition` (normalized
+mole fractions per catalog gas with derived mass-fraction queries, an
+explicit molar-vs-mass basis), and `flight_condition` /
+`analyze_airbreathing` read species from the sample instead of a
+caller-supplied scalar — the transitional `oxygen_fraction` interface
+and the `0.232`/`0.274` constants are gone. Turbojets, turbofans,
+ramjets, and ESTOC all gate through the same query, so anoxic air
+flameouts and scarce oxidizer derates through the explicit species
+budget. Still future from this section: the air-augmented
+rocket/ejector path that spends onboard reactants while entraining
+inert atmosphere as working mass (section 12), and propulsion burning
+atmospheric CH4/H2 as fuel — the species queries exist; no such cycle
+ships yet.
 
 ## 11. Ramjets and high-speed air-breathing engines
 
@@ -862,35 +890,23 @@ Closed v5 debt (audited 2026-09-21):
   default; Thessa ~0.274); the scalar stays an explicit adapter until
   the composition-aware atmosphere API lands.
 
-Known v5 airbreather correctness debt:
+Closed 2026-09-23 (jet shaft/starter runtime, section 18.8):
 
-- `spool_tau_s` is compiled and exposed but the jet runtime has no spool
-  state: `JetMount` feeds commanded throttle straight into the steady
-  `operating_point`. Startup, shutdown, relight, and transient compressor
-  work are therefore not actually modeled yet.
-- The static `INTAKE_DESIGN_CAPTURE_MACH` suction floor is a steady-running
-  calibration, but today it also creates airflow at zero vehicle speed with no
-  shaft-power source. Once shaft state lands, suction must scale from actual
-  compressor speed/torque; a stopped starterless engine at V=0 gets no free
-  intake flow.
-- `CompiledJet::spool_tau_s()` returns ESTOC mode-transition tau for an ESTOC
-  rather than the air-path spool tau. These are independent dynamics and need
-  separate fields/accessors.
-- The `drive_limited` early-return path currently forces
-  `air_limited = true` even when the intake supplied the requested flow.
-  Drive/work failure and intake starvation must remain distinct flags.
-- Afterburner validation says reheat must exceed turbine-exit temperature but
-  compares `reheat_temp_k` against turbine *inlet* temperature. This rejects
-  physically valid reheat targets between turbine exit and TIT; the constraint
-  must be evaluated against the solved turbine-exit state.
-- `reheat_active` compares nozzle-scaled total fuel against the unscaled core
-  fuel flow. Under nozzle limiting it can report the afterburner off despite
-  positive afterburner fuel flow; use the scaled AB flow directly.
-- Afterburner oxygen bookkeeping mixes bases: remaining O2 is computed per unit
-  initial core air, then applied as though it were a mass fraction of the
-  post-turbine mixed stream, and customer-bleed oxygen is not removed
-  consistently. Recompute available O2 as an explicit species mass flow through
-  the combustor/cooling-bleed merge before deriving the AB fuel cap.
+- The jet runtime now carries real shaft state: `JetMount` advances
+  `JetShaftState` through `advance_jet_shaft` (starter topologies,
+  light-off/self-sustain hysteresis, generator load) and evaluates the
+  air path at the resulting spool speed with `lit` as the ignition
+  gate, so startup, shutdown, windmill relight, and part-spool
+  compressor work are actually modeled.
+- The `INTAKE_DESIGN_CAPTURE_MACH` suction floor scales with actual
+  spool speed: a stopped starterless engine at V=0 draws no free
+  intake flow, while the steady analyzer keeps labeling its
+  already-running assumption (`suction_assisted`).
+- Entries 3-7 of the former debt list (spool/transition accessor
+  split, drive-vs-starvation flags, reheat gating basis,
+  `reheat_active` scaling, and oxygen species basis) were already
+  closed by the 2026-09-21 audit above; the stale duplicates are
+  removed here.
 
 ### 18.6 ESTOC combined-cycle engine (v5 shipped; v6 obligations)
 
@@ -925,20 +941,28 @@ Required v6 physical model:
   no usable oxidizer, the ordinary air-combustion path flames out; an
   ejector path may deliberately spend onboard fuel + oxidizer while using
   ingested gas as extra reaction mass.
-- Replace the free-standing oxygen scalar with the richer atmosphere API.
-  Species basis must be explicit: Thessa's design O2 is 25% molar/volume,
-  about 27.4% by mass for the current bulk mixture. The vehicle-baker
-  analyzer must stop hard-coding Earth's 0.232 oxygen mass fraction.
-- Adopt the starter/spool contract from section 8.1. ESTOC must be authorable
-  with an electric starter-generator, pneumatic start, rocket/gas-generator
-  bootstrap, or deliberately no starter at all. A starterless ESTOC may relight
-  in flight from windmilling once the solved core spool reaches light-off
-  speed; it must not start at rest merely because the steady-state intake model
-  has a suction floor.
-- Electrical generation is independently optional: no generator, a dedicated
-  generator, or a reversible starter-generator attached to a chosen spool.
-  Generator shaft load, cut-in speed, efficiency, thermal limit, mass, and bus
-  connection must participate in the runtime power/shaft balance.
+- CLOSED 2026-09-23 (section 18.9): the free-standing oxygen scalar is
+  gone — `AtmosphereSample` carries `AtmosphereComposition` with an
+  explicit molar basis and derived mass fractions (Thessa 25% molar O2
+  = ~27.4% by mass, Earth ~23.1%), `flight_condition` and the analyzer
+  read the sample, and vehicle-baker takes `--composition` (default
+  Thessa air `N2/O2/AR/CO2`) instead of a hard-coded `0.232`.
+- ADOPTED 2026-09-23 for the single-spool runtime (section 18.8): ESTOC is
+  authorable with an electric starter-generator, pneumatic start,
+  rocket/gas-generator bootstrap, or deliberately no starter at all. A
+  starterless ESTOC relights in flight once inlet-driven windmilling
+  reaches light-off speed and cannot start at rest — spool-scaled
+  suction means a stopped compressor draws nothing. Still deferred from
+  this item: torque-level (instead of power-level) starter authoring,
+  the pneumatic/rocket stored-energy pipelines (all topologies
+  currently book one energy reservoir), and multi-spool attachment.
+- PARTIAL 2026-09-23 (section 18.8): generator fit, rated power, cut-in
+  spool speed, bounded efficiency, mass, and the electrical load now
+  participate in the runtime shaft work balance — the request is capped
+  at rated power, scaled by efficiency onto the shaft, below cut-in the
+  generator is offline, and an overdraw bogs the spool down instead of
+  being padded. Still missing: thermal limit, bus connection, and an
+  efficiency map instead of the bounded scalar.
 - Multi-spool/gearbox authoring must keep mode-transition dynamics separate
   from shaft dynamics. LP/IP/HP spool inertia and coupling, starter attachment,
   and optional geared fan reduction are independent of the ESTOC
@@ -946,19 +970,12 @@ Required v6 physical model:
 
 Known v5 correctness debt:
 
-- Transition smoothing currently applies only on the first tick for which
-  `mode != last_mode`; once the caller feeds back the new mode, thrust
-  snaps to steady target on the next tick instead of following the stated
-  first-order time constant. Transition state must live independently of
-  the selected mode or the low-pass must run until converged.
-- Only thrust is smoothed. Fuel, oxidizer, air flow, exhaust state, and
-  reported Isp jump immediately to the target mode, so a transition point
-  can violate its own `Isp = F / (mdot * g0)` bookkeeping. Transition
-  must evolve a self-consistent flow/thermodynamic state, not one scalar.
-- The current docs/comment say "vacuum always rockets", while manual
-  `Air` wins before the vacuum check. Choose and document one contract.
-  Allowing a manual impossible command and returning a clean flameout is
-  acceptable; silently contradicting the API contract is not.
+- Transition smoothing (first-tick-only application, thrust-only smoothing
+  with flow/Isp jumping) and the "vacuum always rockets" contract
+  contradiction were closed before 2026-09-23: smoothing now evolves the
+  full flow/thermodynamic snapshot with Isp recomputed from smoothed
+  flows, and manual `Air` in vacuum is the documented contract (honored,
+  clean flameout).
 - v5 uses one `JetFuel` for both air and rocket paths and has no
   precooler state, so it cannot yet represent the intended CH4 + H2
   tripropellant/thermal architecture.
@@ -972,3 +989,122 @@ allocation in the flight loop (authority pairs exist; the allocator
 still sees one lever), shaft-power propulsion (turboprop/piston/electric
 fans), scramjets, and the editor UI itself (the CLI/JSON analyzer
 is its backend contract).
+
+### 18.8 Jet shaft/starter runtime (section 8.1, single spool)
+
+Shipped 2026-09-23: `propulsion::shaft` turns the section 8.1 contract
+into the runtime for one normalized compressor spool, closing the v5
+"no spool state" and suction-floor debt above.
+
+Formal description:
+
+- State (`JetShaftState`): `spool_n ∈ [0, 1]` (normalized compressor
+  speed), `lit` (self-sustaining combustion), and `starter_charge_j`
+  (remaining stored starter energy; constant for `StarterKind::None`).
+- Inputs (`ShaftCommand` + flight condition + physics `dt_s`):
+  throttle demand, starter engagement, and requested electrical
+  generator load. `dt_s` is always physics seconds.
+- Outputs (`ShaftTelemetry`): the next state plus starter
+  active/shaft power/draw/charge, generator electrical and shaft-side
+  draw, demand, capacity, friction, and net shaft power — the debug
+  channel for the effect.
+- Balance per step: capacity exists only while `lit` (reheat fuel is
+  downstream of the turbine and never drives the shaft) and is booked
+  as `FRAC × TURBINE_SHAFT_HEAT_FRACTION × fuel × η_comb × LHV`;
+  compressor/fan demand and bearing friction
+  (`SHAFT_FRICTION_FRACTION × P_ref × n³`) always cost rotation. The
+  starter adds shaft power at its topology efficiency (electric 0.85,
+  pneumatic 0.70, rocket bootstrap 0.40), capped by
+  `charge × η / dt` so a spent battery/air bottle really dies. The
+  generator comes online above its cut-in spool, caps at rated power,
+  and draws `load / efficiency` from the shaft — never padded, so an
+  overdraw bogs the spool down. Integration:
+  `Δn = net × dt / (P_ref × spool_tau_s)`, clamped to `[0, 1]`.
+- Light-off hysteresis: throttle > 0 commands ignition, ≤ 0 commands
+  shutdown; the core lights at `n ≥ light_off_n` and flames out below
+  `self_sustain_n` (or on zero fuel, zero air, vacuum, or anoxic air).
+  Engaging a starter with `StarterKind::None`, ramjet shaft commands,
+  and non-finite/out-of-range inputs are explicit refusals (NaN fails
+  closed).
+- Calibration: `P_ref` (design turbine shaft capacity) and `FRAC`
+  come from the compile-time design run so full-throttle sea-level
+  static is an exact steady equilibrium — the anchor that keeps every
+  runtime number comparable with v5. Compile refuses `FRAC > 2` (the
+  shaft booking would exceed 100% of the combustor heat release) or a
+  design point with no shaft-usable heat; gas-side drive feasibility
+  is a separate, pre-existing refusal.
+- Suction and schedules ride the actual spool: the
+  `INTAKE_DESIGN_CAPTURE_MACH` floor scales with `spool_n` (zero at
+  rest — no free intake flow without a shaft source), head with
+  `1 + (ratio − 1) × n²`, and corrected-flow demand with
+  `0.35 + 0.65 × n`. The steady analyzer
+  (`CompiledAirbreather::operating_point`) bisects net shaft power
+  over `[light_off_n, 1]` and reports the solved equilibrium; where
+  nothing sustains (vacuum, anoxia, hypersonic drive limit) it reports
+  `spool_n = 0.0` while evaluating the failure flags at full spool as
+  a labeled already-running attempt. Ramjets skip the solve and
+  report the `1.0` placeholder.
+- Threading: `EstocCommand` became `JetCommand` and now also carries
+  `shaft`, `starter_engaged`, and `generator_load_w`.
+  `JetMount::estoc_point` advances the shaft first, then evaluates the
+  air path at the resulting spool with `lit` gating ignition;
+  `JetCommand::with_state` threads mode, transition snapshot, and
+  shaft state into the next tick.
+
+Known special cases and regression coverage (13 tests in
+`propulsion::shaft` plus the mount-level crank test): cold start with
+a fitted starter, starterless no-start at rest and refused engagement,
+windmill relight at speed, light-off/self-sustain hysteresis, starter
+charge depleting to a dead crank, generator load/cut-in/rating,
+suction scaling with spool, steady-solve vs transient equilibrium
+agreement, exact design-point equilibrium at full spool, ramjet and
+authoring refusals, vacuum/anoxic never lighting, and the net-power
+balance helper.
+
+Numerical error: the steady solve performs 40 halvings, placing the
+equilibrium within `(1 − light_off_n) / 2^40 ≈ 1e-12` spool — orders
+below thrust-band resolution. The runtime step is first-order Euler in
+`dt_s` (same scheme and caller-owned cadence as the existing spool
+law).
+
+Benchmark: `benches/propulsion.rs` reports steady-solve cost
+(µs/solve) and cold-crank cost (ns/step to light-off).
+
+### 18.9 Composition-aware atmosphere (section 10)
+
+Shipped 2026-09-23: species availability is an authoritative atmosphere
+property instead of a transitional caller scalar.
+
+- Formal description: `GasKind` is the explicit catalog (N2, O2, Ar,
+  CO2, SO2, H2, He, CH4, NH3, H2O — unknown design gases still fail at
+  parse instead of silently becoming Earth air).
+  `AtmosphereComposition` stores normalized **mole** fractions per
+  catalog gas and derives mass fractions on query through
+  `GasKind::molar_mass_kg_mol` (the single conversion source);
+  constructors (`parse`, `from_mole_fractions`, `from_mass_fractions`,
+  presets `thessa_air`/`earth_air`/`anoxic`) validate and normalize
+  empty/NaN/negative/duplicate input. `AtmosphereConfig` owns the
+  composition (design-string constructors fill it; scalar constructors
+  keep the documented Earth-like default) and stamps it into every
+  `AtmosphereSample`; `flight_condition` and `analyze_airbreathing` take
+  no species argument at all.
+- Inputs/outputs: config + altitude → sample carrying species; the core
+  and afterburner query `mass_fraction(Oxygen)` for their explicit
+  species budgets; `oxygen_limited` telemetry reports gating.
+- Known special cases: anoxic composition (pure CO2) gives zero
+  oxidizer with real inlet properties → clean flameout; scarce
+  mixtures derate TIT through the species budget; Thessa (~0.274 by
+  mass) and Earth (~0.231 by mass) both clear the combustor's ~7%
+  requirement, so no design anchor moved.
+- Regression: 4 new atmosphere tests (basis conversion + unit sums,
+  validation refusals, anoxic-no-oxidizer, config→sample stamping)
+  plus the re-run vacuum/anoxic flameout, scarce-O2 gating,
+  drive-limit, and ESTOC mode anchors.
+- Numerical error: basis conversion is direct f64 arithmetic (~1e-16
+  relative); Earth's mass fraction lands at 0.2314 versus the retired
+  0.232 scalar (0.3% relative), felt only under oxygen gating — which
+  no sea-level anchor enters.
+- Benchmark (`benches/propulsion.rs`): ~1.2 ns per mass-fraction query;
+  the air analyzer sweep (55 rows of altitude × Mach) runs at ~4.5 µs
+  per row including the steady spool solve, with the per-row species
+  stamp inside that cost.

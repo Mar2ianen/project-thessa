@@ -17,6 +17,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::shaft::JetShaftState;
 use super::{
     AirCycle, AirOperatingPoint, AirbreathingSpec, CompiledAirbreather, FlightCondition, JetFuel,
     MASS_FIT_FEED_KG_PER_N, NozzleExitState, Propellant, PropellantThermo, PropulsionError,
@@ -269,17 +270,37 @@ impl EstocSpec {
 }
 
 impl CompiledEstoc {
-    /// Mode selector: manual wins; vacuum always rockets; above the high
-    /// edge rockets; hysteresis holds rocket inside the band; a dead air
-    /// path (stalled drive, anoxic air) falls back to rocket. Sustained
-    /// intake starvation only limits (flagged) — switching on weakness is
-    /// the pilot/FCU call, not the valve logic.
+    /// Mode selector (steady-analyzer convention: the air path is
+    /// considered commanded — see [`Self::select_mode_inner`] for the
+    /// runtime form).
     pub fn select_mode(
         &self,
         condition: &FlightCondition,
         air_point: &AirOperatingPoint,
         last_mode: EstocMode,
         manual: Option<EstocMode>,
+    ) -> EstocMode {
+        self.select_mode_inner(condition, air_point, last_mode, manual, true)
+    }
+
+    /// Mode selector: manual wins; vacuum always rockets; above the high
+    /// edge rockets; hysteresis holds rocket inside the band; a dead air
+    /// path (stalled drive, anoxic air) falls back to rocket. When the
+    /// air path is actually commanded (throttle > 0), an unlit core or
+    /// zero intake flow is dead air too — the shaft has failed to light
+    /// or the intake delivered nothing, so the valve falls back to
+    /// rocket. Idle (`air_commanded = false`) skips that rule: a
+    /// deliberately stopped core at zero throttle is not a failure and
+    /// the reported mode stays Air (documented section 8.1 rule).
+    /// Sustained intake starvation only limits (flagged) — switching on
+    /// weakness is the pilot/FCU call, not the valve logic.
+    fn select_mode_inner(
+        &self,
+        condition: &FlightCondition,
+        air_point: &AirOperatingPoint,
+        last_mode: EstocMode,
+        manual: Option<EstocMode>,
+        air_commanded: bool,
     ) -> EstocMode {
         if let Some(mode) = manual {
             return mode;
@@ -294,6 +315,9 @@ impl CompiledEstoc {
             return EstocMode::Rocket;
         }
         if air_point.drive_limited || air_point.oxygen_limited {
+            return EstocMode::Rocket;
+        }
+        if air_commanded && (!air_point.lit || air_point.air_flow_kg_s <= 0.0) {
             return EstocMode::Rocket;
         }
         EstocMode::Air
@@ -364,6 +388,14 @@ impl CompiledEstoc {
     /// Mode contract: manual selection always wins — including a manual
     /// `Air` in vacuum, which is honored and flames out cleanly (zero
     /// thrust, cause flags) rather than silently switching.
+    ///
+    /// The air path is evaluated at the runtime shaft state (`shaft`):
+    /// spool speed schedules the cycle and `lit` gates ignition, so a
+    /// windmilling or stopped core reports its real (unlit) state and
+    /// mode selection falls back to rocket when air is commanded but
+    /// dead. Analyzer callers pass a steady state
+    /// ([`JetShaftState::running`] or the solved equilibrium).
+    #[allow(clippy::too_many_arguments)]
     pub fn operating_point(
         &self,
         condition: &FlightCondition,
@@ -372,6 +404,7 @@ impl CompiledEstoc {
         last_mode: EstocMode,
         prev: Option<&EstocTransient>,
         dt_s: f64,
+        shaft: JetShaftState,
     ) -> Result<(EstocPoint, EstocTransient), PropulsionError> {
         condition.validate()?;
         if !throttle.is_finite() || !(0.0..=1.0).contains(&throttle) {
@@ -386,7 +419,7 @@ impl CompiledEstoc {
         }
         if throttle == 0.0 {
             let air_point = self.air.operating_point(condition, 0.0)?;
-            let mode = self.select_mode(condition, &air_point, last_mode, manual);
+            let mode = self.select_mode_inner(condition, &air_point, last_mode, manual, false);
             let transient = EstocTransient {
                 thrust_n: 0.0,
                 fuel_flow_kg_s: 0.0,
@@ -413,7 +446,10 @@ impl CompiledEstoc {
                 transient,
             ));
         }
-        let air_point = self.air.operating_point(condition, throttle)?;
+        let air_point = self
+            .air
+            .operating_point_at_spool(condition, throttle, shaft.spool_n, shaft.lit)?
+            .0;
         let mode = self.select_mode(condition, &air_point, last_mode, manual);
         let target = match mode {
             EstocMode::Air => EstocTransient {
@@ -488,9 +524,10 @@ impl CompiledEstoc {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{AIR_GAMMA, EARTH_OXYGEN_FRACTION};
-    use super::super::{AirCycle, AirbreathingSpec, ChamberMaterial, JetFuel};
+    use super::super::AIR_GAMMA;
+    use super::super::{AirCycle, AirbreathingSpec, ChamberMaterial, JetFuel, ShaftSpec};
     use super::*;
+    use crate::atmosphere::AtmosphereComposition;
 
     fn estoc_like() -> EstocSpec {
         EstocSpec {
@@ -509,6 +546,7 @@ mod tests {
                 reheat_temp_k: 0.0,
                 turbine_material: ChamberMaterial::nickel_superalloy(),
                 spool_tau_s: 5.0,
+                shaft: ShaftSpec::default(),
             },
             rocket_chamber_pressure_pa: 7.0e6,
             rocket_throat_radius_m: 0.09,
@@ -527,7 +565,7 @@ mod tests {
             ambient_pa,
             ambient_temp_k: temp,
             airspeed_mps: mach * a,
-            oxygen_fraction: EARTH_OXYGEN_FRACTION,
+            composition: AtmosphereComposition::earth_air(),
         }
     }
 
@@ -621,6 +659,7 @@ mod tests {
                 EstocMode::Air,
                 None,
                 1.0,
+                JetShaftState::running(&engine.air),
             )
             .expect("air");
         assert_eq!(air_m2.0.mode, EstocMode::Air);
@@ -644,7 +683,15 @@ mod tests {
         let engine = estoc_like().compile().expect("estoc compiles");
         let condition = condition_at(4.0, 2000.0);
         let (fresh, fresh_state) = engine
-            .operating_point(&condition, 1.0, None, EstocMode::Rocket, None, 0.0)
+            .operating_point(
+                &condition,
+                1.0,
+                None,
+                EstocMode::Rocket,
+                None,
+                0.0,
+                JetShaftState::running(&engine.air),
+            )
             .expect("fresh");
         assert_eq!(fresh.mode, EstocMode::Rocket);
         let (direct, _) = engine
@@ -655,6 +702,7 @@ mod tests {
                 EstocMode::Rocket,
                 None,
                 0.0,
+                JetShaftState::running(&engine.air),
             )
             .expect("direct");
         assert!((fresh.thrust_n - direct.thrust_n).abs() / direct.thrust_n < 1e-12);
@@ -677,6 +725,7 @@ mod tests {
                 EstocMode::Air,
                 Some(&cold),
                 engine.transition_tau_s,
+                JetShaftState::running(&engine.air),
             )
             .expect("mid");
         assert_eq!(mid.mode, EstocMode::Rocket);
@@ -708,6 +757,7 @@ mod tests {
                     mode,
                     Some(&state),
                     engine.transition_tau_s,
+                    JetShaftState::running(&engine.air),
                 )
                 .expect("converge");
             mode = point.mode;
@@ -723,7 +773,7 @@ mod tests {
         // A fresh command has no previous snapshot, so the target is
         // returned directly. It remains JSON-safe for editor/network use.
         let engine = estoc_like().compile().expect("estoc compiles");
-        let command = super::super::jet::EstocCommand::fresh();
+        let command = super::super::jet::JetCommand::fresh();
         assert!(command.dt_s.is_finite());
         let (point, _) = engine
             .operating_point(
@@ -733,6 +783,7 @@ mod tests {
                 command.last_mode,
                 command.prev.as_ref(),
                 command.dt_s,
+                command.shaft,
             )
             .expect("fresh command evaluates");
         assert_eq!(point.mode, EstocMode::Rocket);
@@ -754,6 +805,7 @@ mod tests {
                 EstocMode::Air,
                 None,
                 0.0,
+                JetShaftState::running(&engine.air),
             )
             .expect("manual air");
         assert_eq!(point.mode, EstocMode::Air);

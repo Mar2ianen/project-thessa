@@ -25,9 +25,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::atmosphere::AtmosphereSample;
+use crate::atmosphere::{AtmosphereComposition, AtmosphereSample, GasKind};
 
 use super::SEPARATION_PRESSURE_RATIO;
+use super::shaft::{SHAFT_FRICTION_FRACTION, ShaftBalance, ShaftSpec, TURBINE_SHAFT_HEAT_FRACTION};
 use super::{
     ChamberMaterial, PropulsionError, STANDARD_GRAVITY_MPS2, mach_from_area_ratio,
     require_non_negative, require_positive,
@@ -62,18 +63,14 @@ pub const TURBINE_COOLING_ALLOWANCE: f64 = 1.25;
 /// Gross-thrust nozzle/installation efficiency (documented: discharge,
 /// velocity coefficient, and first-order installation effects).
 pub const NOZZLE_GROSS_EFFICIENCY: f64 = 0.95;
-/// Design capture Mach for intake suction at zero airspeed (documented
-/// calibration: turbine engines inhale their corrected demand; ramjets
-/// are passive and get no suction floor).
+/// Design capture Mach for intake suction at zero vehicle speed
+/// (documented calibration: turbine engines inhale their corrected
+/// demand). The floor scales with actual spool speed — a stopped
+/// compressor draws nothing (section 8.1: no free intake flow without
+/// a shaft source) — and ramjets are passive, so they get no floor.
 pub const INTAKE_DESIGN_CAPTURE_MACH: f64 = 0.5;
 /// Afterburner duct temperature cap (K, liner limit, documented).
 pub const REHEAT_TEMP_CAP_K: f64 = 2200.0;
-/// Oxygen mass fraction of Earth air (reference point for O2 gating).
-pub const EARTH_OXYGEN_FRACTION: f64 = 0.232;
-/// Oxygen mass fraction of Thessa air: 25.0% molar converts to ~27.4% by
-/// mass for the current bulk mixture (world atlas, provisional until the
-/// biosphere canon locks; recompute if the mixture changes).
-pub const THESSA_OXYGEN_MASS_FRACTION: f64 = 0.274;
 
 /// Compressor mass fit (kg per (kg/s · ratio), Olympus-anchored order fit).
 pub const MASS_FIT_COMPRESSOR: f64 = 0.42;
@@ -169,9 +166,10 @@ pub struct FlightCondition {
     pub ambient_pa: f64,
     pub ambient_temp_k: f64,
     pub airspeed_mps: f64,
-    /// Oxidizer mass fraction of the atmosphere (Earth 0.232; alien air
-    /// may offer nothing — the combustor checks, never assumes).
-    pub oxygen_fraction: f64,
+    /// Well-mixed species basis sampled from the atmosphere (section 10):
+    /// the combustor queries oxidizer availability from it and checks,
+    /// never assumes — alien air may offer nothing.
+    pub composition: AtmosphereComposition,
 }
 
 impl FlightCondition {
@@ -197,21 +195,22 @@ impl FlightCondition {
                 "airspeed must be finite and >= 0".into(),
             ));
         }
-        if !self.oxygen_fraction.is_finite() || !(0.0..=1.0).contains(&self.oxygen_fraction) {
+        if !self.composition.is_sane() {
             return Err(PropulsionError::InvalidSpec(
-                "oxygen fraction must be finite in [0, 1]".into(),
+                "flight-condition composition must be sane (finite, non-negative, positive total)"
+                    .into(),
             ));
         }
         Ok(())
     }
 }
 
-/// Build a flight condition from an atmosphere sample, true airspeed, and
-/// the local oxygen fraction (explicit: no silent Earth assumption).
+/// Build a flight condition from an atmosphere sample and true airspeed.
+/// Species availability comes from the sample itself (section 10): the
+/// authoritative atmosphere decides, never a caller-supplied scalar.
 pub fn flight_condition(
     sample: &AtmosphereSample,
     airspeed_mps: f64,
-    oxygen_fraction: f64,
 ) -> Result<FlightCondition, PropulsionError> {
     let mach = sample
         .mach(airspeed_mps)
@@ -221,7 +220,7 @@ pub fn flight_condition(
         ambient_pa: sample.pressure_pa,
         ambient_temp_k: sample.temperature_k,
         airspeed_mps,
-        oxygen_fraction,
+        composition: sample.composition,
     };
     condition.validate()?;
     Ok(condition)
@@ -251,6 +250,11 @@ pub struct AirbreathingSpec {
     pub turbine_material: ChamberMaterial,
     /// Spool time constant (s).
     pub spool_tau_s: f64,
+    /// Shaft topology: starter, generator, light-off/self-sustain
+    /// thresholds (section 8.1). Inert default = deliberate starterless
+    /// windmill-only design.
+    #[serde(default)]
+    pub shaft: ShaftSpec,
 }
 
 impl Default for AirbreathingSpec {
@@ -269,6 +273,7 @@ impl Default for AirbreathingSpec {
             reheat_temp_k: 0.0,
             turbine_material: ChamberMaterial::nickel_superalloy(),
             spool_tau_s: 5.0,
+            shaft: ShaftSpec::default(),
         }
     }
 }
@@ -288,6 +293,7 @@ impl AirbreathingSpec {
         require_positive(self.turbine_inlet_temp_k, "turbine inlet temperature")?;
         require_positive(self.spool_tau_s, "spool tau")?;
         self.turbine_material.validate()?;
+        self.shaft.validate(self.cycle)?;
         match self.cycle {
             AirCycle::Ramjet => {
                 if self.compressor_ratio != 1.0 {
@@ -416,6 +422,9 @@ struct CycleState {
     core_total_pressure_pa: f64,
     fan_total_temp_k: f64,
     fan_total_pressure_pa: f64,
+    /// Compressor + fan power the shaft must supply at this spool speed
+    /// (W): the shaft-side demand of the evaluated state.
+    shaft_demand_w: f64,
     oxygen_limited: bool,
     reheat_limited: bool,
     drive_limited: bool,
@@ -423,22 +432,31 @@ struct CycleState {
     air_starved: bool,
 }
 
-/// Run the Brayton core at a condition, TIT, and flow factor. Pure
-/// thermodynamics: ram recovery, compression, O2-gated combustion, turbine
-/// work balance, reheat with O2 cap. `corrected_flow_kg_s` is the design
-/// corrected flow (mass at standard face conditions); demand follows
-/// δ/√θ off-design, capped by intake capture.
+/// Run the Brayton core at a condition, TIT, spool speed, and ignition
+/// command. Pure thermodynamics: ram recovery, spool-scheduled
+/// compression (head ~ spool^2, corrected-flow schedule and suction
+/// floor follow the actual compressor speed), O2-gated combustion,
+/// turbine work balance, reheat with O2 cap. `spool_n` is the
+/// normalized compressor speed in [0, 1] — the part-power schedules
+/// ride it, never the throttle command; `ignition` gates the fuel
+/// schedule (false = windmilling/shutdown: airflow only).
+/// `corrected_flow_kg_s` is the design corrected flow (mass at standard
+/// face conditions); demand follows δ/√θ off-design, capped by intake
+/// capture.
 fn run_cycle(
     spec: &AirbreathingSpec,
     fuel: (f64, f64, f64, f64, f64, f64),
     condition: &FlightCondition,
     turbine_temp_k: f64,
-    flow_factor: f64,
+    spool_n: f64,
+    ignition: bool,
     corrected_flow_kg_s: Option<f64>,
 ) -> Result<CycleState, PropulsionError> {
     let (lhv, _f_stoich, o2_per_fuel, gamma_b, r_b, _density) = fuel;
     let gamma_a = AIR_GAMMA;
     let cp_b = gamma_b * r_b / (gamma_b - 1.0);
+    let is_ramjet = spec.cycle == AirCycle::Ramjet;
+    let spool_n = spool_n.clamp(0.0, 1.0);
     // Ram conditions with recovery.
     let t_ram =
         condition.ambient_temp_k * (1.0 + (gamma_a - 1.0) / 2.0 * condition.mach * condition.mach);
@@ -446,15 +464,23 @@ fn run_cycle(
         * (t_ram / condition.ambient_temp_k).powf(gamma_a / (gamma_a - 1.0))
         * spec.intake.recovery(condition.mach);
     // Air available: ram capture, plus the suction floor for active
-    // (turbomachinery) cycles. Ramjets are passive: capture only.
+    // (turbomachinery) cycles scaled by actual spool speed — a stopped
+    // compressor inhales nothing. Ramjets are passive: capture only.
     let sound = (gamma_a * 287.0 * condition.ambient_temp_k).sqrt();
     let rho_0 = condition.ambient_pa / (287.0 * condition.ambient_temp_k);
-    let suction = if spec.cycle == AirCycle::Ramjet {
+    let suction = if is_ramjet {
         0.0
     } else {
-        INTAKE_DESIGN_CAPTURE_MACH * sound
+        INTAKE_DESIGN_CAPTURE_MACH * sound * spool_n
     };
     let available_kg_s = rho_0 * spec.intake_area_m2 * condition.airspeed_mps.max(suction);
+    // Corrected-flow part-power schedule follows spool speed (ramjet
+    // capture is spool-independent: no machinery to schedule).
+    let flow_factor = if is_ramjet {
+        1.0
+    } else {
+        0.35 + 0.65 * spool_n
+    };
     let demanded_kg_s = match corrected_flow_kg_s {
         Some(wc) => wc * (p_ram / 101_325.0) / (t_ram / 288.15).sqrt() * flow_factor,
         None => available_kg_s * flow_factor,
@@ -468,22 +494,34 @@ fn run_cycle(
         _ => 0.0,
     };
     let mdot_core_kg_s = mdot_air_kg_s / (1.0 + bypass);
-    // Compression (ramjets: ram only).
+    // Compression (ramjets: ram only). Turbomachinery pressure ratio
+    // follows spool^2: no rotation, no pressure rise.
     let pi_c = match spec.cycle {
         AirCycle::Ramjet => 1.0,
-        _ => spec.compressor_ratio,
+        _ => 1.0 + (spec.compressor_ratio - 1.0) * spool_n * spool_n,
     };
     let tau_c = pi_c.powf((gamma_a - 1.0) / (gamma_a * COMPRESSOR_POLY_EFFICIENCY));
     let t_comp_exit = t_ram * tau_c;
     let p_comp_exit = p_ram * pi_c;
     let pi_f = if bypass > 0.0 {
-        spec.fan_pressure_ratio
+        1.0 + (spec.fan_pressure_ratio - 1.0) * spool_n * spool_n
     } else {
         1.0
     };
     let tau_f = pi_f.powf((gamma_a - 1.0) / (gamma_a * COMPRESSOR_POLY_EFFICIENCY));
     let t_fan_exit = t_ram * tau_f;
     let p_fan_exit = p_ram * pi_f * 0.98;
+    // Shaft demand: what the compressor and fan take from the shaft at
+    // this spool speed (specific works per kg of core flow; the fan
+    // term carries the bypass weighting). Zero at zero spool (no head),
+    // so a stopped starterless engine books no demand and no suction.
+    let work_comp = AIR_CP_J_KG_K * (t_comp_exit - t_ram);
+    let work_fan = if bypass > 0.0 {
+        bypass * AIR_CP_J_KG_K * (t_fan_exit - t_ram)
+    } else {
+        0.0
+    };
+    let shaft_demand_w = mdot_core_kg_s * (work_comp + work_fan);
     // Combustion with O2 gating: fuel capped by available oxygen, TIT
     // follows energy (oxygen-limited operation derates TIT, documented).
     // Ramjets carry no turbine cooling bleed (dump combustor).
@@ -491,8 +529,8 @@ fn run_cycle(
         AirCycle::Ramjet => 0.0,
         _ => TURBINE_COOLING_BLEED,
     };
-    let o2_avail_kg_s =
-        mdot_core_kg_s * (1.0 - bleed - CUSTOMER_BLEED_FRACTION) * condition.oxygen_fraction;
+    let o2_mass_fraction = condition.composition.mass_fraction(GasKind::Oxygen);
+    let o2_avail_kg_s = mdot_core_kg_s * (1.0 - bleed - CUSTOMER_BLEED_FRACTION) * o2_mass_fraction;
     let combustor_air_kg_s = mdot_core_kg_s * (1.0 - bleed - CUSTOMER_BLEED_FRACTION);
     let f_for_tit = AIR_CP_J_KG_K * (turbine_temp_k - t_comp_exit) / (COMBUSTOR_EFFICIENCY * lhv);
     let f_o2_cap = if combustor_air_kg_s > 0.0 {
@@ -500,10 +538,18 @@ fn run_cycle(
     } else {
         0.0
     };
-    let fuel_air = f_for_tit.max(0.0).min(f_o2_cap);
+    // Ignition gates the fuel schedule only: oxygen and thermal
+    // feasibility stay reported whether or not ignition is commanded,
+    // so the cause flags survive a windmilling evaluation.
+    let fuel_air = if ignition {
+        f_for_tit.max(0.0).min(f_o2_cap)
+    } else {
+        0.0
+    };
     let oxygen_limited = f_for_tit > f_o2_cap && f_for_tit > 0.0;
-    // No fuel, no cycle: flameout (anoxic air) or thermal infeasibility
-    // (compressor delivery hotter than the TIT schedule allows).
+    // No fuel, no cycle: flameout (anoxic air, ignition off, or thermal
+    // infeasibility — compressor delivery hotter than the TIT schedule
+    // allows).
     if fuel_air <= 0.0 && mdot_core_kg_s > 0.0 {
         return Ok(CycleState {
             mdot_air_kg_s,
@@ -515,6 +561,7 @@ fn run_cycle(
             core_total_pressure_pa: p_ram,
             fan_total_temp_k: t_fan_exit,
             fan_total_pressure_pa: p_fan_exit,
+            shaft_demand_w,
             oxygen_limited: oxygen_limited || oxygen_limited_starved,
             reheat_limited: false,
             drive_limited: f_for_tit <= 0.0,
@@ -527,12 +574,6 @@ fn run_cycle(
     // Turbine work balance: the rotor sees combustor flow only; cooling
     // bleed bypasses the rotor and mixes downstream at rotor-exit
     // pressure (documented mixing loss: the bleed carries no work).
-    let work_comp = AIR_CP_J_KG_K * (t_comp_exit - t_ram);
-    let work_fan = if mdot_core_kg_s > 0.0 {
-        bypass * AIR_CP_J_KG_K * (t_fan_exit - t_ram)
-    } else {
-        0.0
-    };
     let rotor_flow_ratio = (1.0 - bleed - CUSTOMER_BLEED_FRACTION) * (1.0 + fuel_air);
     let delta_t_rotor = (work_comp + work_fan) / (cp_b * rotor_flow_ratio);
     // Feasibility: the turbine must supply compression work with margin.
@@ -547,6 +588,7 @@ fn run_cycle(
             core_total_pressure_pa: p_ram,
             fan_total_temp_k: t_fan_exit,
             fan_total_pressure_pa: p_fan_exit,
+            shaft_demand_w,
             oxygen_limited: oxygen_limited || oxygen_limited_starved,
             reheat_limited: false,
             drive_limited: true,
@@ -575,7 +617,7 @@ fn run_cycle(
     let mut reheat_limited = false;
     if spec.afterburner && mdot_core_kg_s > 0.0 {
         let o2_used_core_kg_s = fuel_flow_kg_s * o2_per_fuel;
-        let o2_cooling_kg_s = mdot_core_kg_s * bleed * condition.oxygen_fraction;
+        let o2_cooling_kg_s = mdot_core_kg_s * bleed * o2_mass_fraction;
         let o2_for_ab_kg_s = (o2_avail_kg_s - o2_used_core_kg_s + o2_cooling_kg_s).max(0.0);
         let ab_stream_kg_s = mdot_core_kg_s * (rotor_flow_ratio + bleed) + fuel_flow_kg_s;
         let f_ab_want =
@@ -601,6 +643,7 @@ fn run_cycle(
         core_total_pressure_pa: p_nozzle,
         fan_total_temp_k: t_fan_exit,
         fan_total_pressure_pa: p_fan_exit,
+        shaft_demand_w,
         oxygen_limited: oxygen_limited || oxygen_limited_starved,
         reheat_limited,
         drive_limited: false,
@@ -769,6 +812,22 @@ pub struct CompiledAirbreather {
     pub design_isp_s: f64,
     pub dry_mass_kg: f64,
     pub spool_tau_s: f64,
+    /// Shaft topology carried through compile (starter/generator mass is
+    /// already booked into `dry_mass_kg`).
+    #[serde(default)]
+    pub shaft: ShaftSpec,
+    /// Design-point shaft normalization `FRAC`: turbine heat fraction
+    /// scaled so the full-throttle sea-level design point is an exact
+    /// shaft equilibrium (demand + friction = capacity at spool 1.0).
+    /// Ramjets carry 0.0 (no shaft).
+    #[serde(default)]
+    pub shaft_turbine_frac: f64,
+    /// Reference shaft power `P_ref` (W): design turbine shaft capacity
+    /// before normalization. Sizes bearing friction and the normalized
+    /// spool dynamics (`dn/dt = net / (P_ref * spool_tau_s)`). Ramjets
+    /// carry 0.0 (no shaft).
+    #[serde(default)]
+    pub shaft_reference_power_w: f64,
 }
 
 /// Instantaneous air-breathing operating point.
@@ -782,6 +841,22 @@ pub struct AirOperatingPoint {
     pub exit_pressure_pa: f64,
     pub exit_mach: f64,
     pub isp_s: f64,
+    /// Solved steady spool speed (normalized) this point was evaluated
+    /// at — or the sustainable equilibrium the steady solver found.
+    /// `0.0` means no sustainable shaft equilibrium exists (the engine
+    /// cannot hold its own compressor there); in that case the
+    /// thermodynamic channels are evaluated at full spool as an
+    /// already-running attempt so failure flags stay reportable
+    /// (documented analyzer fallback — runtime shaft truth lives in
+    /// `propulsion::shaft::advance_jet_shaft`).
+    #[serde(default)]
+    pub spool_n: f64,
+    /// True when the core is actually burning in this point (fuel flow
+    /// positive with air present). A commanded-but-unlit engine — failed
+    /// light-off, anoxic air, or an unsustained shaft — reports false
+    /// with cause flags instead of pretending to run.
+    #[serde(default)]
+    pub lit: bool,
     /// True when the intake cannot supply demanded flow.
     pub air_limited: bool,
     /// True when oxygen (not fuel schedule) caps combustion.
@@ -792,10 +867,10 @@ pub struct AirOperatingPoint {
     pub nozzle_limited: bool,
     /// True when a ramjet C-D nozzle separates (overexpanded).
     pub separation_risk: bool,
-    /// True when part of the airflow came from the static suction floor:
-    /// the steady-running assumption is active (an already-spinning
-    /// compressor; starter/shaft state is deferred to the shaft machine,
-    /// and the analyzer labels this per row).
+    /// True when part of the airflow came from the static suction floor
+    /// scaled by actual spool speed: the steady-running assumption is
+    /// active (an already-spinning compressor), and the analyzer labels
+    /// it per row.
     pub suction_assisted: bool,
     /// True when the afterburner is lit.
     pub reheat_active: bool,
@@ -816,14 +891,14 @@ impl AirbreathingSpec {
                 ambient_pa: 101_325.0,
                 ambient_temp_k: 288.15,
                 airspeed_mps: 2.0 * (AIR_GAMMA * 287.0 * 288.15).sqrt(),
-                oxygen_fraction: EARTH_OXYGEN_FRACTION,
+                composition: AtmosphereComposition::earth_air(),
             },
             _ => FlightCondition {
                 mach: 0.0,
                 ambient_pa: 101_325.0,
                 ambient_temp_k: 288.15,
                 airspeed_mps: 0.0,
-                oxygen_fraction: EARTH_OXYGEN_FRACTION,
+                composition: AtmosphereComposition::earth_air(),
             },
         };
         let rho_sl = 101_325.0 / (287.0 * 288.15);
@@ -856,6 +931,7 @@ impl AirbreathingSpec {
             &design_condition,
             self.turbine_inlet_temp_k,
             1.0,
+            true,
             Some(design_corrected_flow_kg_s),
         )?;
         if state.drive_limited {
@@ -863,6 +939,42 @@ impl AirbreathingSpec {
                 "turbine cannot drive the compressor at the design point".into(),
             ));
         }
+        // Shaft calibration at the design point (documented): reference
+        // power is the design turbine shaft capacity, and `FRAC`
+        // normalizes it so demand + bearing friction exactly balance
+        // capacity at spool 1.0 — the full-throttle sea-level design
+        // point is an exact steady equilibrium, which anchors every
+        // runtime comparison against v5 numbers. `FRAC` is the ratio of
+        // shaft work the design actually needs to the nominal 50%-of-
+        // heat split, so well-calibrated engines land near 1.0 (a
+        // fraction slightly above 1.0 just means the compressor needs a
+        // hair more than the nominal split). The refusal enforces energy
+        // conservation on the booking: `FRAC > 2` would give the shaft
+        // more than 100% of the combustor heat release. Gas-side
+        // feasibility (turbine temperature margin at the design point)
+        // is refused separately above — that check, not this one, is
+        // what rejects an engine that cannot drive its compressor.
+        let lhv = fuel.0;
+        let (shaft_turbine_frac, shaft_reference_power_w) = if self.cycle == AirCycle::Ramjet {
+            (0.0, 0.0)
+        } else {
+            let capacity_raw_w =
+                TURBINE_SHAFT_HEAT_FRACTION * state.fuel_flow_kg_s * COMBUSTOR_EFFICIENCY * lhv;
+            if !(capacity_raw_w > 0.0) {
+                return Err(PropulsionError::UnsupportedCombination(
+                    "design point releases no shaft-usable heat".into(),
+                ));
+            }
+            let frac =
+                (state.shaft_demand_w + SHAFT_FRICTION_FRACTION * capacity_raw_w) / capacity_raw_w;
+            if !(frac <= 1.0 / TURBINE_SHAFT_HEAT_FRACTION) {
+                return Err(PropulsionError::UnsupportedCombination(
+                    "shaft work demand exceeds the combustor heat release at the design point"
+                        .into(),
+                ));
+            }
+            (frac, capacity_raw_w)
+        };
         // Reheat must clear the solved design turbine-exit temperature
         // (spec-level TIT comparison would reject valid targets between
         // turbine exit and TIT).
@@ -966,6 +1078,9 @@ impl AirbreathingSpec {
         };
         let fan_kg = MASS_FIT_FAN * fan_area_m2;
         let misc_kg = 150.0 + 50.0 * (1.0 + bypass);
+        // Starter and generator are authored shaft hardware with real
+        // mass (0 for a deliberate starterless/generator-less design).
+        let shaft_kg = self.shaft.starter.mass_kg + self.shaft.generator.mass_kg;
         let dry_mass_kg = compressor_kg
             + turbine_kg
             + combustor_kg
@@ -973,6 +1088,7 @@ impl AirbreathingSpec {
             + nozzle_kg
             + ab_kg
             + fan_kg
+            + shaft_kg
             + misc_kg;
 
         Ok(CompiledAirbreather {
@@ -1001,24 +1117,114 @@ impl AirbreathingSpec {
             },
             dry_mass_kg,
             spool_tau_s: self.spool_tau_s,
+            shaft: self.shaft.clone(),
+            shaft_turbine_frac,
+            shaft_reference_power_w,
         })
     }
 }
 
 impl CompiledAirbreather {
-    /// Steady operating point at a flight condition and effective
-    /// (post-spool) throttle. Part-power idealizations (TIT, pressure
-    /// ratio, and flow schedules) are documented linear schedules, not
-    /// component maps.
-    pub fn operating_point(
+    /// Part-power effective spec at a commanded throttle: the TIT
+    /// schedule and reheat gate follow the throttle command
+    /// (documented); pressure and flow schedules ride spool speed
+    /// inside [`run_cycle`], never the throttle, so an unspooled
+    /// engine never gets full-pressure air for free.
+    fn effective_spec(&self, throttle: f64) -> (AirbreathingSpec, f64, bool) {
+        let tit = self.turbine_inlet_temp_k * (0.55 + 0.45 * throttle);
+        let eff_reheat = self.afterburner && throttle >= 0.9;
+        let spec_eff = AirbreathingSpec {
+            afterburner: eff_reheat,
+            turbine_inlet_temp_k: tit,
+            name: self.name.clone(),
+            cycle: self.cycle,
+            fuel: self.fuel,
+            intake_area_m2: self.intake_area_m2,
+            intake: self.intake,
+            compressor_ratio: self.compressor_ratio,
+            bypass_ratio: self.bypass_ratio,
+            fan_pressure_ratio: self.fan_pressure_ratio,
+            reheat_temp_k: self.reheat_temp_k,
+            turbine_material: ChamberMaterial::nickel_superalloy(),
+            spool_tau_s: self.spool_tau_s,
+            shaft: self.shaft.clone(),
+        };
+        (spec_eff, tit, eff_reheat)
+    }
+
+    /// Lean shaft power balance at an explicit spool speed: one cycle
+    /// evaluation, no nozzle matching — the form the steady spool solver
+    /// bisects (identical numbers to the balance returned by
+    /// [`Self::operating_point_at_spool`], just cheaper per call).
+    ///
+    /// Demand and friction cost rotation whether or not the core burns;
+    /// capacity exists only when ignition actually runs (reheat fuel is
+    /// downstream of the turbine and never drives the shaft).
+    fn lean_shaft_balance(
         &self,
         condition: &FlightCondition,
         throttle: f64,
-    ) -> Result<AirOperatingPoint, PropulsionError> {
+        spool_n: f64,
+        ignition: bool,
+    ) -> Result<ShaftBalance, PropulsionError> {
+        let fuel = self.fuel.properties();
+        let (spec_eff, tit, _) = self.effective_spec(throttle);
+        let state = run_cycle(
+            &spec_eff,
+            fuel,
+            condition,
+            tit,
+            spool_n,
+            ignition,
+            Some(self.design_corrected_flow_kg_s),
+        )?;
+        Ok(self.balance_from_state(&state, spool_n, ignition))
+    }
+
+    /// Balance view of an already-evaluated cycle state (shared by the
+    /// operating-point path and [`Self::shaft_balance`]).
+    fn balance_from_state(&self, state: &CycleState, spool_n: f64, ignition: bool) -> ShaftBalance {
+        let fuel = self.fuel.properties();
+        ShaftBalance {
+            demand_w: state.shaft_demand_w,
+            capacity_w: if ignition {
+                self.shaft_turbine_frac
+                    * TURBINE_SHAFT_HEAT_FRACTION
+                    * state.fuel_flow_kg_s
+                    * COMBUSTOR_EFFICIENCY
+                    * fuel.0
+            } else {
+                0.0
+            },
+            friction_w: SHAFT_FRICTION_FRACTION * self.shaft_reference_power_w * spool_n.powi(3),
+        }
+    }
+
+    /// Evaluate the air path at an EXPLICIT spool speed (transient
+    /// state from the shaft machine, or a steady-solved value) instead
+    /// of solving for equilibrium. `ignition` gates the fuel schedule:
+    /// false = windmilling/shutdown (airflow only, zero fuel), true =
+    /// the fuel schedule runs — light-off viability is still judged by
+    /// the caller (`propulsion::shaft` owns the hysteresis), while O2
+    /// and thermal feasibility stay gated inside the cycle. Returns the
+    /// operating point plus the shaft power balance at this spool
+    /// speed.
+    pub fn operating_point_at_spool(
+        &self,
+        condition: &FlightCondition,
+        throttle: f64,
+        spool_n: f64,
+        ignition: bool,
+    ) -> Result<(AirOperatingPoint, ShaftBalance), PropulsionError> {
         condition.validate()?;
         if !throttle.is_finite() || !(0.0..=1.0).contains(&throttle) {
             return Err(PropulsionError::InvalidCommand(
                 "throttle must be finite in [0, 1]".into(),
+            ));
+        }
+        if !spool_n.is_finite() || !(0.0..=1.0).contains(&spool_n) {
+            return Err(PropulsionError::InvalidCommand(
+                "spool must be finite in [0, 1]".into(),
             ));
         }
         let off = AirOperatingPoint {
@@ -1030,6 +1236,8 @@ impl CompiledAirbreather {
             exit_pressure_pa: condition.ambient_pa,
             exit_mach: 0.0,
             isp_s: 0.0,
+            spool_n,
+            lit: false,
             air_limited: false,
             oxygen_limited: false,
             drive_limited: false,
@@ -1039,63 +1247,66 @@ impl CompiledAirbreather {
             reheat_active: false,
             reheat_limited: false,
         };
-        if throttle == 0.0 {
-            return Ok(off);
-        }
         let fuel = self.fuel.properties();
         let (_, _, _, gamma_b, r_b, _) = fuel;
-        // Part-power schedules (documented idealizations).
-        let tit = self.turbine_inlet_temp_k * (0.55 + 0.45 * throttle);
-        let flow_factor = 0.35 + 0.65 * throttle;
-        let eff_pi_c = match self.cycle {
-            AirCycle::Ramjet => 1.0,
-            _ => 1.0 + (self.compressor_ratio - 1.0) * (0.35 + 0.65 * throttle),
-        };
-        let eff_reheat = self.afterburner && throttle >= 0.9;
-        let spec_eff = AirbreathingSpec {
-            compressor_ratio: eff_pi_c,
-            afterburner: eff_reheat,
-            turbine_inlet_temp_k: tit,
-            name: self.name.clone(),
-            cycle: self.cycle,
-            fuel: self.fuel,
-            intake_area_m2: self.intake_area_m2,
-            intake: self.intake,
-            bypass_ratio: self.bypass_ratio,
-            fan_pressure_ratio: self.fan_pressure_ratio,
-            reheat_temp_k: self.reheat_temp_k,
-            turbine_material: ChamberMaterial::nickel_superalloy(),
-            spool_tau_s: self.spool_tau_s,
-        };
+        let (spec_eff, tit, eff_reheat) = self.effective_spec(throttle);
         let state = run_cycle(
             &spec_eff,
             fuel,
             condition,
             tit,
-            flow_factor,
+            spool_n,
+            ignition,
             Some(self.design_corrected_flow_kg_s),
         )?;
+        let balance = self.balance_from_state(&state, spool_n, ignition);
+        // Static-suction label: air above ram-only capture at low speed
+        // runs on the steady-running assumption, scaled by the actual
+        // spool speed this point was evaluated at.
+        let sound_speed_mps = (AIR_GAMMA * 287.0 * condition.ambient_temp_k).sqrt();
+        let suction_floor_mps = match self.cycle {
+            AirCycle::Ramjet => 0.0,
+            _ => INTAKE_DESIGN_CAPTURE_MACH * sound_speed_mps * spool_n,
+        };
+        let ram_only_kg_s = condition.ambient_pa / (287.0 * condition.ambient_temp_k)
+            * self.intake_area_m2
+            * condition.airspeed_mps;
+        let suction_assisted = |mdot_air: f64| {
+            suction_floor_mps > 0.0
+                && condition.airspeed_mps < suction_floor_mps
+                && mdot_air > ram_only_kg_s + 1e-9
+        };
         if state.drive_limited || state.mdot_air_kg_s <= 0.0 {
             // Drive/work failure and intake starvation stay distinct
             // flags: vacuum starves with a healthy drive.
-            return Ok(AirOperatingPoint {
-                air_limited: state.mdot_air_kg_s <= 0.0 || state.air_starved,
-                oxygen_limited: state.oxygen_limited,
-                drive_limited: state.drive_limited,
-                ..off
-            });
+            return Ok((
+                AirOperatingPoint {
+                    air_limited: state.mdot_air_kg_s <= 0.0 || state.air_starved,
+                    oxygen_limited: state.oxygen_limited,
+                    drive_limited: state.drive_limited,
+                    suction_assisted: suction_assisted(state.mdot_air_kg_s),
+                    ..off
+                },
+                balance,
+            ));
         }
         let fuel_total = state.fuel_flow_kg_s + state.fuel_ab_flow_kg_s;
         if fuel_total <= 0.0 {
-            // Flameout with airflow (anoxic air or thermally infeasible
-            // TIT): windmilling drag books airframe-side; the backend
-            // reports zero thrust with the cause flags, never NaN.
-            return Ok(AirOperatingPoint {
-                air_limited: state.air_starved,
-                oxygen_limited: state.oxygen_limited,
-                drive_limited: state.drive_limited,
-                ..off
-            });
+            // Flameout with airflow (anoxic air, ignition off, or a
+            // thermally infeasible TIT): the airflow is real and stays
+            // reported (windmilling drags on it), zero thrust with the
+            // cause flags, never NaN.
+            return Ok((
+                AirOperatingPoint {
+                    air_flow_kg_s: state.mdot_air_kg_s,
+                    air_limited: state.air_starved,
+                    oxygen_limited: state.oxygen_limited,
+                    drive_limited: state.drive_limited,
+                    suction_assisted: suction_assisted(state.mdot_air_kg_s),
+                    ..off
+                },
+                balance,
+            ));
         }
         let mdot_core_hot = state.nozzle_flow_kg_s;
         let mdot_fan = state.mdot_air_kg_s - state.mdot_core_kg_s;
@@ -1167,43 +1378,133 @@ impl CompiledAirbreather {
         );
         let thrust_n = core.thrust_gross_n + fan.thrust_gross_n - mdot_air * condition.airspeed_mps;
         let fuel_total = fuel_flow + fuel_ab_flow;
-        // Suction-floor label: airflow above ram-only capture at low speed
-        // runs on the steady-running assumption (deferred shaft state).
-        let sound_speed_mps = (AIR_GAMMA * 287.0 * condition.ambient_temp_k).sqrt();
-        let suction_floor_mps = match self.cycle {
-            AirCycle::Ramjet => 0.0,
-            _ => INTAKE_DESIGN_CAPTURE_MACH * sound_speed_mps,
-        };
-        let ram_only_kg_s = condition.ambient_pa / (287.0 * condition.ambient_temp_k)
-            * self.intake_area_m2
-            * condition.airspeed_mps;
-        let suction_assisted = suction_floor_mps > 0.0
-            && condition.airspeed_mps < suction_floor_mps
-            && mdot_air > ram_only_kg_s + 1e-9;
-        Ok(AirOperatingPoint {
-            thrust_n,
-            fuel_flow_kg_s: fuel_total,
-            air_flow_kg_s: mdot_air,
-            exhaust_temp_k: core.exit_temp_k,
-            exhaust_velocity_mps: if core_flow > 0.0 {
-                core.thrust_gross_n / core_flow
-            } else {
-                0.0
+        Ok((
+            AirOperatingPoint {
+                thrust_n,
+                fuel_flow_kg_s: fuel_total,
+                air_flow_kg_s: mdot_air,
+                exhaust_temp_k: core.exit_temp_k,
+                exhaust_velocity_mps: if core_flow > 0.0 {
+                    core.thrust_gross_n / core_flow
+                } else {
+                    0.0
+                },
+                exit_pressure_pa: core.exit_pressure_pa,
+                exit_mach: core.exit_mach,
+                isp_s: thrust_n / (fuel_total * STANDARD_GRAVITY_MPS2),
+                spool_n,
+                lit: fuel_total > 0.0,
+                air_limited: state.air_starved,
+                oxygen_limited: state.oxygen_limited,
+                drive_limited: false,
+                nozzle_limited,
+                separation_risk,
+                suction_assisted: suction_assisted(mdot_air),
+                // Scaled AB flow directly: under nozzle limiting the unscaled
+                // core comparison would misreport a lit afterburner as off.
+                reheat_active: eff_reheat && fuel_ab_flow > 0.0,
+                reheat_limited: state.reheat_limited,
             },
-            exit_pressure_pa: core.exit_pressure_pa,
-            exit_mach: core.exit_mach,
-            isp_s: thrust_n / (fuel_total * STANDARD_GRAVITY_MPS2),
-            air_limited: state.air_starved,
-            oxygen_limited: state.oxygen_limited,
-            drive_limited: false,
-            nozzle_limited,
-            separation_risk,
-            suction_assisted,
-            // Scaled AB flow directly: under nozzle limiting the unscaled
-            // core comparison would misreport a lit afterburner as off.
-            reheat_active: eff_reheat && fuel_ab_flow > 0.0,
-            reheat_limited: state.reheat_limited,
-        })
+            balance,
+        ))
+    }
+
+    /// Steady spool equilibrium at a commanded throttle: bisect net
+    /// shaft power (capacity − demand − friction with ignition
+    /// commanded and the generator unloaded — the editor/analyzer
+    /// convention) over `[light_off_n, 1]`. Returns `0.0` when the core
+    /// cannot sustain itself even at light-off speed (vacuum, anoxic
+    /// air, too-thin air, drive-limited heat: no sustained rotation
+    /// exists) and `1.0` when net power is still positive at redline
+    /// (the spool is governed there). Numerical error: 40 halvings put
+    /// `n*` within `(1 − light_off_n)/2^40 ≈ 1e-12` spool — orders
+    /// below thrust-band resolution (documented).
+    fn solve_steady_spool(
+        &self,
+        condition: &FlightCondition,
+        throttle: f64,
+    ) -> Result<f64, PropulsionError> {
+        let net = |spool_n: f64| -> Result<f64, PropulsionError> {
+            Ok(self
+                .lean_shaft_balance(condition, throttle, spool_n, true)?
+                .net_w())
+        };
+        let mut lo = self.shaft.light_off_n;
+        if !(net(lo)? > 0.0) {
+            return Ok(0.0);
+        }
+        let hi_net = net(1.0)?;
+        if !(hi_net < 0.0) {
+            return Ok(1.0);
+        }
+        let mut hi = 1.0;
+        for _ in 0..40 {
+            let mid = 0.5 * (lo + hi);
+            if net(mid)? > 0.0 {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(0.5 * (lo + hi))
+    }
+
+    /// Steady operating point at a flight condition and effective
+    /// (post-spool) throttle: solve the sustainable shaft equilibrium
+    /// first, then evaluate the cycle there (part-power TIT and reheat
+    /// follow the throttle; pressure/flow follow the solved spool).
+    ///
+    /// Ramjets have no shaft: they evaluate directly at the full-flow
+    /// schedule and report `spool_n = 1.0` as the no-derating
+    /// placeholder. When no sustainable equilibrium exists but throttle
+    /// commands run, the point is evaluated at full spool as an
+    /// already-running attempt so failure flags stay reportable while
+    /// `spool_n` reports the solved (stopped) shaft — the documented
+    /// section 8.1 analyzer fallback; runtime shaft truth lives in
+    /// `propulsion::shaft::advance_jet_shaft`.
+    pub fn operating_point(
+        &self,
+        condition: &FlightCondition,
+        throttle: f64,
+    ) -> Result<AirOperatingPoint, PropulsionError> {
+        condition.validate()?;
+        if !throttle.is_finite() || !(0.0..=1.0).contains(&throttle) {
+            return Err(PropulsionError::InvalidCommand(
+                "throttle must be finite in [0, 1]".into(),
+            ));
+        }
+        if throttle == 0.0 {
+            return Ok(AirOperatingPoint {
+                thrust_n: 0.0,
+                fuel_flow_kg_s: 0.0,
+                air_flow_kg_s: 0.0,
+                exhaust_temp_k: condition.ambient_temp_k,
+                exhaust_velocity_mps: 0.0,
+                exit_pressure_pa: condition.ambient_pa,
+                exit_mach: 0.0,
+                isp_s: 0.0,
+                spool_n: 0.0,
+                lit: false,
+                air_limited: false,
+                oxygen_limited: false,
+                drive_limited: false,
+                nozzle_limited: false,
+                separation_risk: false,
+                suction_assisted: false,
+                reheat_active: false,
+                reheat_limited: false,
+            });
+        }
+        let solved = if self.cycle == AirCycle::Ramjet {
+            1.0
+        } else {
+            self.solve_steady_spool(condition, throttle)?
+        };
+        let eval_spool = if solved > 0.0 { solved } else { 1.0 };
+        let (mut point, _) =
+            self.operating_point_at_spool(condition, throttle, eval_spool, true)?;
+        point.spool_n = solved;
+        Ok(point)
     }
 }
 
@@ -1222,19 +1523,22 @@ pub struct AirAltitudePoint {
     pub nozzle_limited: bool,
     pub separation_risk: bool,
     /// True wherever the steady-running suction assumption is active
-    /// (explicit label per the shaft-state deferral).
+    /// (explicit label; spool-scaled at the row's steady spool speed).
     pub suction_assisted: bool,
+    /// Steady spool speed solved for this row (0.0 where the row is not
+    /// self-sustaining: vacuum, anoxia, or hypersonic drive limit).
+    pub spool_n: f64,
 }
 
-/// Thrust/Isp grid over altitudes × Mach numbers at fixed throttle and
-/// oxygen fraction (well-mixed atmosphere assumption, documented).
+/// Thrust/Isp grid over altitudes × Mach numbers at fixed throttle;
+/// species ride the atmosphere config's well-mixed composition (the
+/// authoritative basis, section 10 — no caller scalar).
 pub fn analyze_airbreathing(
     engine: &CompiledAirbreather,
     atmosphere: &crate::atmosphere::AtmosphereConfig,
     altitudes_m: &[f64],
     machs: &[f64],
     throttle: f64,
-    oxygen_fraction: f64,
 ) -> Result<Vec<AirAltitudePoint>, PropulsionError> {
     if altitudes_m.is_empty() || machs.is_empty() {
         return Err(PropulsionError::InvalidSpec(
@@ -1257,8 +1561,7 @@ pub fn analyze_airbreathing(
                     "Mach numbers must be finite and >= 0".into(),
                 ));
             }
-            let condition =
-                flight_condition(&sample, mach * sample.speed_of_sound_mps, oxygen_fraction)?;
+            let condition = flight_condition(&sample, mach * sample.speed_of_sound_mps)?;
             let point = engine.operating_point(&condition, throttle)?;
             rows.push(AirAltitudePoint {
                 altitude_m: *altitude_m,
@@ -1272,6 +1575,7 @@ pub fn analyze_airbreathing(
                 nozzle_limited: point.nozzle_limited,
                 separation_risk: point.separation_risk,
                 suction_assisted: point.suction_assisted,
+                spool_n: point.spool_n,
             });
         }
     }
@@ -1279,9 +1583,11 @@ pub fn analyze_airbreathing(
 }
 
 /// First-order throttle lag for jet spools: effective throttle approaches
-/// the target with time constant `tau_s`. v5 bridge until the shaft-state
-/// machine (§8.1/generator dynamics) lands — the flight loop owns the
-/// state, this owns the law. Pure function, physics seconds.
+/// the target with time constant `tau_s`. Command-side scheduling only —
+/// the physical spool balance (starter torque, light-off/self-sustain
+/// hysteresis, generator load) lives in `propulsion::shaft`; this helper
+/// remains for callers that want a plain lag filter on the throttle
+/// command itself. Pure function, physics seconds.
 pub fn advance_jet_spool(
     current_effective: f64,
     target: f64,
@@ -1325,6 +1631,7 @@ mod tests {
             reheat_temp_k: 1900.0,
             turbine_material: ChamberMaterial::nickel_superalloy(),
             spool_tau_s: 5.0,
+            shaft: ShaftSpec::default(),
         }
     }
 
@@ -1334,7 +1641,7 @@ mod tests {
             ambient_pa: 101_325.0,
             ambient_temp_k: 288.15,
             airspeed_mps: 0.0,
-            oxygen_fraction: EARTH_OXYGEN_FRACTION,
+            composition: AtmosphereComposition::earth_air(),
         }
     }
 
@@ -1399,6 +1706,7 @@ mod tests {
             reheat_temp_k: 0.0,
             turbine_material: ChamberMaterial::nickel_superalloy(),
             spool_tau_s: 0.5,
+            shaft: ShaftSpec::default(),
         };
         let engine = spec.compile().expect("ramjet compiles");
         let statik = engine.operating_point(&sl_static(), 1.0).expect("static");
@@ -1407,12 +1715,8 @@ mod tests {
         let sample = AtmosphereConfig::default().sample(0.0).expect("SL sample");
         let mut last = 0.0;
         for mach in [1.5, 2.0, 2.5, 3.0] {
-            let condition = flight_condition(
-                &sample,
-                mach * sample.speed_of_sound_mps,
-                EARTH_OXYGEN_FRACTION,
-            )
-            .expect("condition");
+            let condition =
+                flight_condition(&sample, mach * sample.speed_of_sound_mps).expect("condition");
             let point = engine.operating_point(&condition, 1.0).expect("point");
             assert!(point.thrust_n > last, "ramjet thrust must rise with Mach");
             last = point.thrust_n;
@@ -1422,24 +1726,14 @@ mod tests {
         // Off-design absolute Isp is geometry-dependent (underexpansion
         // pressure thrust is real thrust on a fixed nozzle); energy
         // conservation at Mach 3 is the rigorous check instead.
-        let design = flight_condition(
-            &sample,
-            2.0 * sample.speed_of_sound_mps,
-            EARTH_OXYGEN_FRACTION,
-        )
-        .expect("condition");
+        let design = flight_condition(&sample, 2.0 * sample.speed_of_sound_mps).expect("condition");
         let design_point = engine.operating_point(&design, 1.0).expect("design");
         assert!(
             (1500.0..=2200.0).contains(&design_point.isp_s),
             "ramjet design Isp {:.0} s outside the band",
             design_point.isp_s
         );
-        let cruise = flight_condition(
-            &sample,
-            3.0 * sample.speed_of_sound_mps,
-            EARTH_OXYGEN_FRACTION,
-        )
-        .expect("condition");
+        let cruise = flight_condition(&sample, 3.0 * sample.speed_of_sound_mps).expect("condition");
         let point = engine.operating_point(&cruise, 1.0).expect("cruise");
         let exhaust_ground_speed = (point.exhaust_velocity_mps - cruise.airspeed_mps).max(0.0);
         let useful_power = point.thrust_n * cruise.airspeed_mps
@@ -1464,7 +1758,7 @@ mod tests {
         let dead = engine.operating_point(&vacuum, 1.0).expect("vacuum");
         assert_eq!(dead.thrust_n, 0.0);
         let anoxic = FlightCondition {
-            oxygen_fraction: 0.0,
+            composition: AtmosphereComposition::anoxic(),
             ..sl_static()
         };
         let choked = engine.operating_point(&anoxic, 1.0).expect("anoxic");
@@ -1510,12 +1804,7 @@ mod tests {
         let sample = AtmosphereConfig::default()
             .sample(11_000.0)
             .expect("11 km sample");
-        let cruise = flight_condition(
-            &sample,
-            0.9 * sample.speed_of_sound_mps,
-            EARTH_OXYGEN_FRACTION,
-        )
-        .expect("cruise");
+        let cruise = flight_condition(&sample, 0.9 * sample.speed_of_sound_mps).expect("cruise");
         let point = engine.operating_point(&cruise, 1.0).expect("cruise");
         let exhaust_ground_speed = (point.exhaust_velocity_mps - cruise.airspeed_mps).max(0.0);
         let useful_power = point.thrust_n * cruise.airspeed_mps
@@ -1533,12 +1822,7 @@ mod tests {
         // the model must report drive-limited zero, not garbage.
         let engine = olympus_like().compile().expect("olympus compiles");
         let sample = AtmosphereConfig::default().sample(0.0).expect("SL sample");
-        let fast = flight_condition(
-            &sample,
-            5.0 * sample.speed_of_sound_mps,
-            EARTH_OXYGEN_FRACTION,
-        )
-        .expect("fast");
+        let fast = flight_condition(&sample, 5.0 * sample.speed_of_sound_mps).expect("fast");
         let point = engine.operating_point(&fast, 1.0).expect("fast");
         assert!(point.drive_limited);
         assert_eq!(point.thrust_n, 0.0);
@@ -1601,19 +1885,28 @@ mod tests {
             &[0.0],
             &[0.0, 2.0],
             1.0,
-            EARTH_OXYGEN_FRACTION,
         )
         .expect("analyze");
         assert!(rows[0].suction_assisted);
         assert!(!rows[1].suction_assisted);
-        let rich =
-            flight_condition(&sample, 0.0, super::THESSA_OXYGEN_MASS_FRACTION).expect("thessa air");
-        let earth = flight_condition(&sample, 0.0, EARTH_OXYGEN_FRACTION).expect("earth air");
+        let thessa_config =
+            AtmosphereConfig::default().with_composition(AtmosphereComposition::thessa_air());
+        let rich = flight_condition(&thessa_config.sample(0.0).expect("thessa sample"), 0.0)
+            .expect("thessa air");
+        let earth = flight_condition(&sample, 0.0).expect("earth air");
         let p_rich = engine.operating_point(&rich, 0.8).expect("rich");
         let p_earth = engine.operating_point(&earth, 0.8).expect("earth");
         assert!(!p_rich.oxygen_limited);
         assert!((p_rich.thrust_n - p_earth.thrust_n).abs() / p_earth.thrust_n < 1e-12);
-        let scarce = flight_condition(&sample, 0.0, 0.05).expect("scarce");
+        let scarce_config = AtmosphereConfig::default().with_composition(
+            AtmosphereComposition::from_mass_fractions(&[
+                (GasKind::Nitrogen, 0.95),
+                (GasKind::Oxygen, 0.05),
+            ])
+            .expect("scarce mix"),
+        );
+        let scarce = flight_condition(&scarce_config.sample(0.0).expect("scarce sample"), 0.0)
+            .expect("scarce");
         let p_scarce = engine.operating_point(&scarce, 0.8).expect("scarce");
         assert!(p_scarce.oxygen_limited);
         assert!(p_scarce.thrust_n < p_earth.thrust_n);

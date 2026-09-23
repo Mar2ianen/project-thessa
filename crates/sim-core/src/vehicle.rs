@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AeroConfig, AeroError, AeroGeometry, AeroPanel, CollisionAxis, CollisionError,
     CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine,
-    EngineMount, EstocCommand, EstocPoint, FlightCondition, FlightError, JetMount, PropulsionError,
+    EngineMount, EstocPoint, FlightCondition, FlightError, JetCommand, JetMount, PropulsionError,
     RigidBodyProperties, SystemMount, TankMount,
 };
 
@@ -772,20 +772,20 @@ impl VehicleDefinition {
     }
 
     /// Thrust vector of one jet in body axes (N) at throttle, condition,
-    /// and ESTOC command.
+    /// and jet command.
     pub fn jet_thrust_body_n(
         &self,
         index: usize,
         throttle: f64,
         condition: &FlightCondition,
-        estoc: &EstocCommand,
+        jet: &JetCommand,
     ) -> Result<DVec3, VehicleError> {
         let mount = self
             .jets
             .get(index)
             .ok_or_else(|| VehicleError::InvalidVehicle(format!("no jet at index {index}")))?;
         mount
-            .thrust_vector_body_n(throttle, condition, estoc)
+            .thrust_vector_body_n(throttle, condition, jet)
             .map(DVec3::from_array)
             .map_err(VehicleError::Propulsion)
     }
@@ -793,30 +793,32 @@ impl VehicleDefinition {
     /// Evaluate one jet and return the command state for the next world tick.
     /// Plain air-breathers still return an `EstocPoint`-shaped snapshot so a
     /// vehicle caller can use one state-threading path for mixed jet mounts.
+    /// The returned command carries the advanced shaft state (spool, lit,
+    /// starter charge) alongside mode and transition snapshot.
     pub fn jet_estoc_point(
         &self,
         index: usize,
         throttle: f64,
         condition: &FlightCondition,
-        estoc: &EstocCommand,
-    ) -> Result<(EstocPoint, EstocCommand), VehicleError> {
+        jet: &JetCommand,
+    ) -> Result<(EstocPoint, JetCommand), VehicleError> {
         let mount = self
             .jets
             .get(index)
             .ok_or_else(|| VehicleError::InvalidVehicle(format!("no jet at index {index}")))?;
-        let (point, transient) = mount
-            .estoc_point(throttle, condition, estoc)
+        let (point, transient, shaft) = mount
+            .estoc_point(throttle, condition, jet)
             .map_err(VehicleError::Propulsion)?;
-        let next = estoc.with_state(&point, transient);
+        let next = jet.with_state(&point, transient, shaft);
         Ok((point, next))
     }
 
-    /// Force/moment wrench of all jets at per-mount (throttle, ESTOC
+    /// Force/moment wrench of all jets at per-mount (throttle, jet
     /// command) pairs: engine-out and asymmetric-reheat steering fall out
     /// of the stations for free.
     pub fn jets_wrench_body_n(
         &self,
-        commands: &[(f64, EstocCommand)],
+        commands: &[(f64, JetCommand)],
         condition: &FlightCondition,
     ) -> Result<(DVec3, DVec3), VehicleError> {
         self.jets_wrench_body_n_stateful(commands, condition)
@@ -824,13 +826,14 @@ impl VehicleDefinition {
     }
 
     /// Stateful variant of [`VehicleDefinition::jets_wrench_body_n`]. The
-    /// returned commands contain each mount's updated ESTOC mode and full
-    /// transition snapshot and must be fed into the next world tick.
+    /// returned commands contain each mount's updated ESTOC mode, full
+    /// transition snapshot, and advanced shaft state, and must be fed
+    /// into the next world tick.
     pub fn jets_wrench_body_n_stateful(
         &self,
-        commands: &[(f64, EstocCommand)],
+        commands: &[(f64, JetCommand)],
         condition: &FlightCondition,
-    ) -> Result<((DVec3, DVec3), Vec<EstocCommand>), VehicleError> {
+    ) -> Result<((DVec3, DVec3), Vec<JetCommand>), VehicleError> {
         if commands.len() != self.jets.len() {
             return Err(VehicleError::InvalidVehicle(format!(
                 "expected {} jet commands, got {}",
@@ -841,14 +844,14 @@ impl VehicleDefinition {
         let mut force = DVec3::ZERO;
         let mut moment = DVec3::ZERO;
         let mut next_commands = Vec::with_capacity(commands.len());
-        for (mount, (throttle, estoc)) in self.jets.iter().zip(commands) {
-            let (point, transient) = mount
-                .estoc_point(*throttle, condition, estoc)
+        for (mount, (throttle, jet)) in self.jets.iter().zip(commands) {
+            let (point, transient, shaft) = mount
+                .estoc_point(*throttle, condition, jet)
                 .map_err(VehicleError::Propulsion)?;
             let thrust = DVec3::from_array(mount.thrust_axis_body) * point.thrust_n;
             force += thrust;
             moment += DVec3::from_array(mount.position_body_m).cross(thrust);
-            next_commands.push(estoc.with_state(&point, transient));
+            next_commands.push(jet.with_state(&point, transient, shaft));
         }
         Ok(((force, moment), next_commands))
     }
@@ -1049,6 +1052,7 @@ mod tests {
                 reheat_temp_k: 0.0,
                 turbine_material: ChamberMaterial::nickel_superalloy(),
                 spool_tau_s: 5.0,
+                shaft: crate::ShaftSpec::default(),
             },
             rocket_chamber_pressure_pa: 7.0e6,
             rocket_throat_radius_m: 0.09,
@@ -1128,18 +1132,19 @@ mod tests {
             ambient_pa: 2_000.0,
             ambient_temp_k: temperature_k,
             airspeed_mps: 4.0 * speed_of_sound,
-            oxygen_fraction: crate::EARTH_OXYGEN_FRACTION,
+            composition: crate::atmosphere::AtmosphereComposition::earth_air(),
         }
     }
 
     #[test]
     fn stateful_jet_wrench_returns_next_estoc_commands() {
         let vehicle = test_vehicle();
-        let command = EstocCommand {
+        let command = JetCommand {
             manual: None,
             last_mode: EstocMode::Air,
             prev: None,
             dt_s: 1.0,
+            ..JetCommand::fresh()
         };
         let ((force, moment), next) = vehicle
             .jets_wrench_body_n_stateful(&[(1.0, command)], &high_mach_condition())

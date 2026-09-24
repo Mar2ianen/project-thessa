@@ -23,13 +23,13 @@ use thessa_flight_control::{
     PropulsionDemand, RollPolicy, SpacecraftControlLaw,
 };
 use thessa_sim_core::{
-    AeroConfig, AeroModel, AeroSimdScratch, AeroState, AtmosphereConfig, AtmosphereError,
-    BakedEphemeris, BodyId, BodyState, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_VELOCITY_TOL_MPS,
-    CollisionMaterial, EphemerisFrame, EventScheduler, FlightError, FlightForces, FlightStepInput,
-    GravityField, OnRailsCache, PanelAeroModel, PanelSoA, RigidBodyState, ScheduledEvent,
-    ScheduledKind, SimTime, TestParticleState, TickIntegratorConfig, VehicleDefinition,
-    WORLD_TICK_S, X15StarterProfile, evaluate_flight_forces_soa, integrate_attitude_step,
-    integrate_rigid_body_step_soa,
+    AeroConfig, AeroGeometry, AeroModel, AeroSimdScratch, AeroState, AtmosphereConfig,
+    AtmosphereError, BakedEphemeris, BodyId, BodyState, COAST_RAILS_POSITION_TOL_M,
+    COAST_RAILS_VELOCITY_TOL_MPS, CollisionMaterial, EphemerisFrame, EventScheduler, FlightError,
+    FlightForces, FlightStepInput, GravityField, OnRailsCache, PanelAeroModel, PanelSoA,
+    RigidBodyState, ScheduledEvent, ScheduledKind, SimTime, TestParticleState,
+    TickIntegratorConfig, VehicleDefinition, WORLD_TICK_S, X15StarterProfile,
+    evaluate_flight_forces_soa, integrate_attitude_step, integrate_rigid_body_step_soa,
 };
 use thessa_worldgen_rocky::field::{ObstacleReport, ObstacleTrackCertificate, PlanetField};
 
@@ -355,9 +355,12 @@ pub struct FlightAuthority {
     pub vehicle: VehicleDefinition,
     pub aero_model: PanelAeroModel,
     /// Compiled SoA geometry and reusable SIMD scratch for the authoritative
-    /// per-step aero evaluation. Control inputs only refresh deflections.
+    /// per-step aero evaluation. The reference geometry is retained so hinge
+    /// motion is applied absolutely rather than accumulated numerically.
     aero_panels: PanelSoA,
     aero_scratch: AeroSimdScratch,
+    control_reference_geometry: AeroGeometry,
+    control_deflections_rad: Vec<f64>,
     pub atmosphere: AtmosphereConfig,
     pub state: RigidBodyState,
     pub sas_target_orientation: DQuat,
@@ -505,8 +508,7 @@ impl FlightAuthority {
         self.launch_site_dir = None;
         self.throttle = 0.0;
         self.engine_active = false;
-        self.control_input = DVec3::ZERO;
-        self.surface_input = DVec3::ZERO;
+        self.reset_control_surfaces()?;
         self.accumulator_s = 0.0;
         self.flight_error = None;
         self.regime = FlightRegime::Aero;
@@ -557,8 +559,8 @@ impl FlightAuthority {
         let dir = self.launch_site_dir.ok_or("no launch site for reset")?;
         self.flight_error = None;
         self.set_legacy_propulsion(0.0, true);
-        self.control_input = DVec3::ZERO;
-        self.surface_input = DVec3::ZERO;
+        self.reset_control_surfaces()
+            .map_err(|error| error.to_string())?;
         self.explicit_force_demand_body_n = None;
         self.explicit_moment_demand_nm = None;
         self.regime = FlightRegime::Aero;
@@ -728,6 +730,8 @@ impl FlightAuthority {
         )
         .map_err(|error| format!("X-15 initial state is invalid: {error}"))?;
         let vehicle = x15_vehicle()?;
+        let control_reference_geometry = vehicle.aero_geometry.clone();
+        let control_deflections_rad = vec![0.0; vehicle.control_surfaces.len()];
         let recipe_max_elevation_m: f64 = {
             let recipe: thessa_worldgen_rocky::spec_recipe::SpecRecipe =
                 toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml"))
@@ -775,6 +779,8 @@ impl FlightAuthority {
             aero_model,
             aero_panels,
             aero_scratch: AeroSimdScratch::default(),
+            control_reference_geometry,
+            control_deflections_rad,
             atmosphere,
             state,
             sas_target_orientation: orientation_body_to_inertial,
@@ -839,13 +845,43 @@ impl FlightAuthority {
         self
     }
 
-    pub fn command_controls(&mut self, pitch: f64, yaw: f64, roll: f64) {
-        // Body +X forward, +Z up implies physical right = -Y.
-        // r x F: aft-tail downforce raises the nose (-Y); downforce at -Y
-        // rolls right (+X); aft-tail +Y force yaws right (-Z).
-        let _ = self
+    /// Actual post-actuator control-surface angles in vehicle definition
+    /// order. `surface_input` remains the normalized requested command.
+    pub fn control_deflections_rad(&self) -> &[f64] {
+        &self.control_deflections_rad
+    }
+
+    fn reset_control_surfaces(&mut self) -> Result<(), FlightError> {
+        self.control_input = DVec3::ZERO;
+        self.surface_input = DVec3::ZERO;
+        self.control_deflections_rad.fill(0.0);
+        self.actuator_saturated = false;
+        self.vehicle
+            .apply_control_deflections(
+                &self.control_reference_geometry,
+                &self.control_deflections_rad,
+            )
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+        if self
             .vehicle
-            .apply_control_inputs(&surface_commands(pitch, yaw, roll));
+            .control_surfaces
+            .iter()
+            .any(|surface| surface.hinge.is_some())
+        {
+            self.aero_panels
+                .sync_geometry(&self.vehicle.aero_geometry)
+                .map_err(FlightError::Aero)?;
+        }
+        Ok(())
+    }
+
+    /// Submit normalized pilot-axis input. Physical surface angles change on
+    /// the fixed-step path after allocation and actuator rate/load limits.
+    pub fn command_controls(&mut self, pitch: f64, yaw: f64, roll: f64) {
+        let input = DVec3::new(pitch, yaw, roll);
+        if input.is_finite() && input.abs().max_element() <= 1.0 {
+            self.control_input = input;
+        }
     }
 
     /// Apply a legacy pilot/compatibility command with immediate actuator
@@ -2053,10 +2089,17 @@ impl FlightAuthority {
         let requested = explicit_moment.unwrap_or(attitude.requested_moment_nm);
         // Vacuum fast path: no air load exists, so the trim solve and the
         // response evaluation are skipped outright (exactly zero aero
-        // moment); attitude flies on RCS alone.
+        // moment); attitude flies on RCS alone. Physical actuators still
+        // advance in vacuum, where aerodynamic hinge load is exactly zero.
         if self.regime == FlightRegime::Coast {
+            let surface_command = if assisted {
+                self.surface_input
+            } else {
+                self.control_input
+            };
+            let actuator_saturated = self.advance_coast_control_actuators(surface_command)?;
             let allocation = allocate_rcs(requested, DVec3::ZERO, axes, assisted, self.rcs_enabled);
-            self.actuator_saturated = allocation.saturated;
+            self.actuator_saturated = allocation.saturated || actuator_saturated;
             return Ok(allocation.moment_body_nm);
         }
         let environment = self
@@ -2078,6 +2121,7 @@ impl FlightAuthority {
             self.trim_solves += 1;
             let result = solve_aero_trim(
                 &mut self.vehicle,
+                &self.control_reference_geometry,
                 &self.aero_model,
                 aero_state,
                 environment,
@@ -2090,18 +2134,137 @@ impl FlightAuthority {
         }
         let max_change = SURFACE_COMMAND_RATE_S * FLIGHT_STEP_S;
         self.surface_input = slew_surface_command(self.surface_input, command, max_change);
-        self.command_controls(
+        // A trim probe temporarily mutates panel geometry while estimating
+        // commanded effectiveness. Direct allocation leaves the last actual
+        // geometry intact, so only the trim path needs this restore.
+        if solve_trim {
+            self.vehicle
+                .apply_control_deflections(
+                    &self.control_reference_geometry,
+                    &self.control_deflections_rad,
+                )
+                .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+        }
+        let legacy_commands = surface_commands(
             self.surface_input.x,
             self.surface_input.y,
             self.surface_input.z,
         );
+        let actuator_commands = surface_commands(command.x, command.y, command.z);
+        let commands: Vec<_> = self
+            .vehicle
+            .control_surfaces
+            .iter()
+            .enumerate()
+            .map(|(index, surface)| {
+                if surface.actuator.is_some() {
+                    actuator_commands[index]
+                } else {
+                    legacy_commands[index]
+                }
+            })
+            .collect();
+        let actuator_loads_nm = if self
+            .vehicle
+            .control_surfaces
+            .iter()
+            .any(|surface| surface.actuator.is_some())
+        {
+            let detailed = self.aero_model.evaluate_state_detailed(
+                aero_state,
+                environment,
+                &self.vehicle.aero_geometry,
+            )?;
+            self.vehicle
+                .control_hinge_moments(&detailed)
+                .map_err(|error| FlightError::InvalidInput(error.to_string()))?
+        } else {
+            vec![0.0; self.vehicle.control_surfaces.len()]
+        };
+        let (next_deflections, actuator_saturated) = self
+            .vehicle
+            .advance_control_actuators(
+                &self.control_deflections_rad,
+                &commands,
+                &actuator_loads_nm,
+                FLIGHT_STEP_S,
+            )
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+        self.control_deflections_rad = next_deflections;
+        self.vehicle
+            .apply_control_deflections(
+                &self.control_reference_geometry,
+                &self.control_deflections_rad,
+            )
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+        if self
+            .vehicle
+            .control_surfaces
+            .iter()
+            .any(|surface| surface.hinge.is_some())
+        {
+            self.aero_panels
+                .sync_geometry(&self.vehicle.aero_geometry)
+                .map_err(FlightError::Aero)?;
+        }
         let actual_aero = self
             .aero_model
             .evaluate_state(aero_state, environment, &self.vehicle.aero_geometry)?
             .moment_body_nm;
         let allocation = allocate_rcs(requested, actual_aero, axes, assisted, self.rcs_enabled);
-        self.actuator_saturated = allocation.saturated;
+        self.actuator_saturated = allocation.saturated || actuator_saturated;
         Ok(allocation.moment_body_nm)
+    }
+
+    fn advance_coast_control_actuators(
+        &mut self,
+        normalized_command: DVec3,
+    ) -> Result<bool, FlightError> {
+        let commands = surface_commands(
+            normalized_command.x,
+            normalized_command.y,
+            normalized_command.z,
+        );
+        let mut next = self.control_deflections_rad.clone();
+        let mut saturated = false;
+        for (index, surface) in self.vehicle.control_surfaces.iter().enumerate() {
+            let Some(actuator) = surface.actuator else {
+                continue;
+            };
+            let target = surface
+                .deflection_for_command(commands[index])
+                .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+            let actual = actuator
+                .advance(
+                    self.control_deflections_rad[index],
+                    target,
+                    0.0,
+                    FLIGHT_STEP_S,
+                    surface.minimum_deflection_rad,
+                    surface.maximum_deflection_rad,
+                )
+                .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+            saturated |= (target - actual).abs() > 1.0e-12;
+            next[index] = actual;
+        }
+        self.control_deflections_rad = next;
+        self.vehicle
+            .apply_control_deflections(
+                &self.control_reference_geometry,
+                &self.control_deflections_rad,
+            )
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+        if self
+            .vehicle
+            .control_surfaces
+            .iter()
+            .any(|surface| surface.hinge.is_some())
+        {
+            self.aero_panels
+                .sync_geometry(&self.vehicle.aero_geometry)
+                .map_err(FlightError::Aero)?;
+        }
+        Ok(saturated)
     }
 
     fn allocate_explicit_force(&mut self) -> DVec3 {
@@ -2565,8 +2728,7 @@ impl FlightAuthority {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use thessa_sim_core::AeroModel;
-    use thessa_sim_core::SystemConfig;
+    use thessa_sim_core::{AeroModel, ControlHinge, ControlSurfaceActuator, SystemConfig};
 
     struct NeverReadyBakeQueue {
         pending: bool,
@@ -3160,8 +3322,70 @@ mod tests {
     }
 
     #[test]
+    fn physical_control_actuator_advances_in_vacuum_without_aero_load() {
+        let (_, mut flight) = fixture();
+        let actuator = ControlSurfaceActuator {
+            max_rate_rad_s: 0.6,
+            max_torque_nm: 1_000.0,
+        };
+        flight.vehicle.control_surfaces[0].hinge =
+            Some(ControlHinge::new(DVec3::ZERO, DVec3::Y).expect("valid test hinge"));
+        flight.vehicle.control_surfaces[0].actuator = Some(actuator);
+        flight.control_reference_geometry = flight.vehicle.aero_geometry.clone();
+        flight.regime = FlightRegime::Coast;
+        flight.rcs_enabled = false;
+        flight.command_controls(1.0, 0.0, 0.0);
+
+        let kinematics = LocalAirKinematics {
+            relative_position_inertial_m: DVec3::ZERO,
+            relative_position_body_m: DVec3::ZERO,
+            relative_velocity_inertial_mps: DVec3::ZERO,
+            air_velocity_body_mps: DVec3::ZERO,
+            surface_velocity_inertial_mps: DVec3::ZERO,
+            radial_up: DVec3::Z,
+            altitude_m: 100_000.0,
+        };
+        let moment = flight
+            .allocate_controls(kinematics, ControlMode::Direct)
+            .expect("coast control allocation");
+
+        assert_eq!(moment, DVec3::ZERO);
+        let expected_angle = -actuator.max_rate_rad_s * FLIGHT_STEP_S;
+        assert!((flight.control_deflections_rad[0] - expected_angle).abs() < 1.0e-12);
+        assert!(flight.actuator_saturated);
+        let controlled_panel = flight.vehicle.control_surfaces[0].panel_indices[0];
+        assert_ne!(
+            flight.vehicle.aero_geometry.panels[controlled_panel].position_body_m,
+            flight.control_reference_geometry.panels[controlled_panel].position_body_m
+        );
+
+        flight
+            .reset_control_surfaces()
+            .expect("reset actual actuator state to neutral");
+        assert!(
+            flight
+                .control_deflections_rad
+                .iter()
+                .all(|angle| angle.abs() < 1.0e-12)
+        );
+        assert_eq!(
+            flight.vehicle.aero_geometry,
+            flight.control_reference_geometry
+        );
+    }
+
+    #[test]
     fn surface_moments_follow_pilot_axes_without_rcs() {
         let (_, mut flight) = fixture();
+        let kinematics = LocalAirKinematics {
+            relative_position_inertial_m: DVec3::ZERO,
+            relative_position_body_m: DVec3::ZERO,
+            relative_velocity_inertial_mps: DVec3::X * 180.0,
+            air_velocity_body_mps: DVec3::X * 180.0,
+            surface_velocity_inertial_mps: DVec3::ZERO,
+            radial_up: DVec3::Z,
+            altitude_m: 500.0,
+        };
         let env = flight
             .atmosphere
             .aero_environment(500.0, DVec3::ZERO)
@@ -3181,6 +3405,20 @@ mod tests {
             -DVec3::Z,
         ] {
             flight.command_controls(command.x, command.y, command.z);
+            flight.surface_input = DVec3::ZERO;
+            flight.control_deflections_rad.fill(0.0);
+            flight
+                .vehicle
+                .apply_control_deflections(
+                    &flight.control_reference_geometry,
+                    &flight.control_deflections_rad,
+                )
+                .unwrap();
+            for _ in 0..60 {
+                flight
+                    .allocate_controls(kinematics, ControlMode::Direct)
+                    .unwrap();
+            }
             let moment = flight
                 .aero_model
                 .evaluate_state(flow, env, &flight.vehicle.aero_geometry)

@@ -4,7 +4,7 @@ use glam::{DQuat, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AeroConfig, AeroError, AeroGeometry, AeroPanel, CollisionAxis, CollisionError,
+    AeroConfig, AeroError, AeroGeometry, AeroPanel, AeroResult, CollisionAxis, CollisionError,
     CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine,
     ElectricThrusterCommand, ElectricThrusterMount, ElectricThrusterPoint, EngineMount, EstocPoint,
     FlightCondition, FlightError, FusionTorchCommand, FusionTorchMount, FusionTorchOperatingPoint,
@@ -35,15 +35,114 @@ pub struct ControlSurfaceDefinition {
     pub panel_indices: Vec<usize>,
     pub minimum_deflection_rad: f64,
     pub maximum_deflection_rad: f64,
-    /// Hinge motion vs whole-surface rotation. The force solver treats
-    /// both identically today (per-panel deflections); the mechanism
-    /// mixer consumes the marker to rotate all-moving surfaces rigidly.
+    /// Hinge device vs all-moving surface classification. Geometric motion
+    /// is enabled by `hinge`; controls without hinge data retain the legacy
+    /// incidence-style response.
     #[serde(default)]
     pub kind: ControlKind,
     /// Nested-tab parent: index into the vehicle's control-surface list
     /// whose deflection this region rides. `None` for top-level regions.
     #[serde(default)]
     pub parent_index: Option<usize>,
+    /// Body-frame hinge line for a geometrically moving control. `None`
+    /// retains the incidence-style panel response.
+    #[serde(default)]
+    pub hinge: Option<ControlHinge>,
+    /// Rated no-load angular rate and stall torque. When present, actuator
+    /// rate falls linearly to zero as opposing aerodynamic hinge torque
+    /// reaches the stall rating.
+    #[serde(default)]
+    pub actuator: Option<ControlSurfaceActuator>,
+}
+
+/// A straight hinge line in vehicle body coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ControlHinge {
+    pub point_body_m: DVec3,
+    pub axis_body: DVec3,
+}
+
+impl ControlHinge {
+    pub fn new(point_body_m: DVec3, axis_body: DVec3) -> Result<Self, VehicleError> {
+        let axis_length = axis_body.length();
+        if !point_body_m.is_finite()
+            || !axis_body.is_finite()
+            || !axis_length.is_finite()
+            || axis_length <= 1.0e-12
+        {
+            return Err(VehicleError::InvalidControlSurface(
+                "hinge needs a finite point and non-zero finite axis".into(),
+            ));
+        }
+        Ok(Self {
+            point_body_m,
+            axis_body: axis_body / axis_length,
+        })
+    }
+}
+
+/// Physical actuator ratings used by the control-surface mechanism model.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ControlSurfaceActuator {
+    /// Maximum angular rate at zero aerodynamic load (rad/s).
+    pub max_rate_rad_s: f64,
+    /// Stall torque about the hinge (N·m).
+    pub max_torque_nm: f64,
+}
+
+impl ControlSurfaceActuator {
+    pub fn validate(self) -> Result<(), VehicleError> {
+        if !self.max_rate_rad_s.is_finite()
+            || self.max_rate_rad_s <= 0.0
+            || !self.max_torque_nm.is_finite()
+            || self.max_torque_nm <= 0.0
+        {
+            return Err(VehicleError::InvalidControlSurface(
+                "actuator rate and stall torque must be positive and finite".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Advance toward a commanded position using a linear torque-speed
+    /// envelope: max rate at zero opposing load, zero rate at stall torque.
+    /// Loads that assist motion do not raise speed above the no-load rating.
+    pub fn advance(
+        self,
+        current_rad: f64,
+        target_rad: f64,
+        aerodynamic_hinge_torque_nm: f64,
+        dt_s: f64,
+        minimum_rad: f64,
+        maximum_rad: f64,
+    ) -> Result<f64, VehicleError> {
+        self.validate()?;
+        if !current_rad.is_finite()
+            || !target_rad.is_finite()
+            || !aerodynamic_hinge_torque_nm.is_finite()
+            || !dt_s.is_finite()
+            || dt_s < 0.0
+            || !minimum_rad.is_finite()
+            || !maximum_rad.is_finite()
+            || minimum_rad > maximum_rad
+        {
+            return Err(VehicleError::InvalidControlSurface(
+                "actuator state, load, timestep, or limits are invalid".into(),
+            ));
+        }
+        let current = current_rad.clamp(minimum_rad, maximum_rad);
+        let target = target_rad.clamp(minimum_rad, maximum_rad);
+        let remaining = target - current;
+        if remaining == 0.0 || dt_s == 0.0 {
+            return Ok(current);
+        }
+        let direction = remaining.signum();
+        let opposing_torque = (-direction * aerodynamic_hinge_torque_nm).max(0.0);
+        let available_rate =
+            self.max_rate_rad_s * (1.0 - opposing_torque / self.max_torque_nm).clamp(0.0, 1.0);
+        let step = remaining.abs().min(available_rate * dt_s) * direction;
+        Ok((current + step).clamp(minimum_rad, maximum_rad))
+    }
 }
 
 /// Hinge motion (panels deflect about the hinge line) vs whole-surface
@@ -72,6 +171,8 @@ impl ControlSurfaceDefinition {
             maximum_deflection_rad,
             kind: ControlKind::Hinge,
             parent_index: None,
+            hinge: None,
+            actuator: None,
         };
         definition.validate(usize::MAX)?;
         Ok(definition)
@@ -87,6 +188,18 @@ impl ControlSurfaceDefinition {
     /// Attach a nested-tab parent (index into the vehicle control list).
     pub fn with_parent(mut self, parent_index: usize) -> Self {
         self.parent_index = Some(parent_index);
+        self
+    }
+
+    /// Attach body-frame hinge geometry for rigid panel motion.
+    pub fn with_hinge(mut self, hinge: ControlHinge) -> Self {
+        self.hinge = Some(hinge);
+        self
+    }
+
+    /// Attach physical no-load rate and stall-torque ratings.
+    pub fn with_actuator(mut self, actuator: ControlSurfaceActuator) -> Self {
+        self.actuator = Some(actuator);
         self
     }
 
@@ -122,10 +235,26 @@ impl ControlSurfaceDefinition {
                 self.name
             )));
         }
+        if let Some(hinge) = self.hinge {
+            let axis_length = hinge.axis_body.length();
+            if !hinge.point_body_m.is_finite()
+                || !hinge.axis_body.is_finite()
+                || !axis_length.is_finite()
+                || (axis_length - 1.0).abs() > 1.0e-6
+            {
+                return Err(VehicleError::InvalidControlSurface(format!(
+                    "{} has invalid hinge geometry",
+                    self.name
+                )));
+            }
+        }
+        if let Some(actuator) = self.actuator {
+            actuator.validate()?;
+        }
         Ok(())
     }
 
-    fn deflection_for_command(&self, command: f64) -> Result<f64, VehicleError> {
+    pub fn deflection_for_command(&self, command: f64) -> Result<f64, VehicleError> {
         if !command.is_finite() || !(-1.0..=1.0).contains(&command) {
             return Err(VehicleError::InvalidControlCommand {
                 surface: self.name.clone(),
@@ -1277,6 +1406,162 @@ impl VehicleDefinition {
         self.aero_geometry
             .validate()
             .map_err(VehicleError::Geometry)
+    }
+
+    /// Set absolute control deflections from a stable reference geometry.
+    /// Geometric hinges rotate panel sample points, force centers, and axes;
+    /// legacy controls without hinge data retain the incidence response.
+    pub fn apply_control_deflections(
+        &mut self,
+        reference_geometry: &AeroGeometry,
+        deflections_rad: &[f64],
+    ) -> Result<(), VehicleError> {
+        if deflections_rad.len() != self.control_surfaces.len() {
+            return Err(VehicleError::ControlCount {
+                expected: self.control_surfaces.len(),
+                actual: deflections_rad.len(),
+            });
+        }
+        if reference_geometry.panels.len() != self.aero_geometry.panels.len() {
+            return Err(VehicleError::InvalidVehicle(
+                "reference geometry panel count changed".into(),
+            ));
+        }
+        for (surface, deflection) in self.control_surfaces.iter().zip(deflections_rad) {
+            if !deflection.is_finite()
+                || *deflection < surface.minimum_deflection_rad - 1.0e-12
+                || *deflection > surface.maximum_deflection_rad + 1.0e-12
+            {
+                return Err(VehicleError::InvalidControlCommand {
+                    surface: surface.name.clone(),
+                    command: *deflection,
+                });
+            }
+        }
+
+        self.aero_geometry
+            .panels
+            .copy_from_slice(&reference_geometry.panels);
+        for (surface, deflection) in self.control_surfaces.iter().zip(deflections_rad) {
+            if let Some(hinge) = surface.hinge {
+                let rotation = DQuat::from_axis_angle(hinge.axis_body, *deflection);
+                for panel_index in &surface.panel_indices {
+                    let panel = &mut self.aero_geometry.panels[*panel_index];
+                    panel.position_body_m = hinge.point_body_m
+                        + rotation * (panel.position_body_m - hinge.point_body_m);
+                    panel.center_of_pressure_body_m = hinge.point_body_m
+                        + rotation * (panel.center_of_pressure_body_m - hinge.point_body_m);
+                    panel.chord_axis_body = (rotation * panel.chord_axis_body).normalize();
+                    panel.lift_axis_body = (rotation * panel.lift_axis_body).normalize();
+                    // The angle is represented by moved geometry; applying
+                    // coefficient deflection as well would count it twice.
+                    panel.control_deflection_rad = 0.0;
+                }
+            } else {
+                for panel_index in &surface.panel_indices {
+                    self.aero_geometry.panels[*panel_index].control_deflection_rad = *deflection;
+                }
+            }
+        }
+        self.aero_geometry
+            .validate()
+            .map_err(VehicleError::Geometry)
+    }
+
+    /// Calculate aerodynamic torque about each compiled hinge from detailed
+    /// panel loads. Panel moment is translated from the body origin to the
+    /// hinge line before projection onto its unit axis.
+    pub fn control_hinge_moments(
+        &self,
+        aero_result: &AeroResult,
+    ) -> Result<Vec<f64>, VehicleError> {
+        let loads = aero_result.panel_loads.as_ref().ok_or_else(|| {
+            VehicleError::InvalidVehicle(
+                "detailed panel loads are required for hinge-moment evaluation".into(),
+            )
+        })?;
+        if loads.len() != self.aero_geometry.panels.len() {
+            return Err(VehicleError::InvalidVehicle(
+                "aerodynamic panel-load count differs from vehicle geometry".into(),
+            ));
+        }
+        Ok(self
+            .control_surfaces
+            .iter()
+            .map(|surface| {
+                let Some(hinge) = surface.hinge else {
+                    return 0.0;
+                };
+                surface
+                    .panel_indices
+                    .iter()
+                    .map(|index| {
+                        let load = loads[*index];
+                        hinge
+                            .axis_body
+                            .dot(load.moment_body_nm - hinge.point_body_m.cross(load.force_body_n))
+                    })
+                    .sum()
+            })
+            .collect())
+    }
+
+    /// Advance actuator states from normalized commands and current detailed
+    /// aerodynamic hinge loads. Unconfigured actuators preserve instantaneous
+    /// legacy response; configured actuators are rate/load limited.
+    pub fn advance_control_actuators(
+        &self,
+        current_deflections_rad: &[f64],
+        commands: &[f64],
+        hinge_moments_nm: &[f64],
+        dt_s: f64,
+    ) -> Result<(Vec<f64>, bool), VehicleError> {
+        let expected = self.control_surfaces.len();
+        for actual in [
+            current_deflections_rad.len(),
+            commands.len(),
+            hinge_moments_nm.len(),
+        ] {
+            if actual != expected {
+                return Err(VehicleError::ControlCount { expected, actual });
+            }
+        }
+        if !dt_s.is_finite()
+            || dt_s < 0.0
+            || current_deflections_rad
+                .iter()
+                .any(|value| !value.is_finite())
+            || hinge_moments_nm.iter().any(|value| !value.is_finite())
+        {
+            return Err(VehicleError::InvalidControlSurface(
+                "actuator state, timestep, and hinge loads must be finite".into(),
+            ));
+        }
+        let mut saturated = false;
+        let mut next = Vec::with_capacity(expected);
+        for (((surface, current), command), hinge_moment) in self
+            .control_surfaces
+            .iter()
+            .zip(current_deflections_rad)
+            .zip(commands)
+            .zip(hinge_moments_nm)
+        {
+            let target = surface.deflection_for_command(*command)?;
+            let actual = match surface.actuator {
+                Some(actuator) => actuator.advance(
+                    *current,
+                    target,
+                    *hinge_moment,
+                    dt_s,
+                    surface.minimum_deflection_rad,
+                    surface.maximum_deflection_rad,
+                )?,
+                None => target,
+            };
+            saturated |= (target - actual).abs() > 1.0e-12;
+            next.push(actual);
+        }
+        Ok((next, saturated))
     }
 }
 

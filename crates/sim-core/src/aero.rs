@@ -1148,6 +1148,18 @@ impl PanelAeroModel {
         })
     }
 
+    /// Evaluate panel forces and retain each panel load for mechanism and
+    /// structural queries such as aerodynamic hinge torque. The ordinary
+    /// flight path remains allocation-free through [`Self::evaluate_state`].
+    pub fn evaluate_state_detailed(
+        &self,
+        state: AeroState,
+        environment: AeroEnvironment,
+        geometry: &AeroGeometry,
+    ) -> Result<AeroResult, AeroError> {
+        self.evaluate_parts(state, environment, geometry, true)
+    }
+
     fn evaluate_internal(
         &self,
         case: &AeroCase,
@@ -1971,12 +1983,12 @@ impl PanelSoA {
         Ok(soa)
     }
 
-    /// Refresh the deflection column after control commands mutate the
-    /// geometry. Shape columns are compile-once (control surfaces rotate
-    /// panels in place without changing area/chord/span); only the
-    /// deflection column varies per evaluation. Caller must invoke this
-    /// after every [`VehicleDefinition::apply_control_inputs`] before reading
-    /// the SoA path, otherwise the kernels fly the previous deflection.
+    /// Refresh the coefficient-response deflection column after control
+    /// commands mutate the geometry. Geometric hinges use
+    /// [`Self::sync_geometry`] to refresh positions and axes as well. Caller
+    /// must invoke this after [`VehicleDefinition::apply_control_inputs`]
+    /// before reading the SoA path, otherwise kernels retain the previous
+    /// coefficient deflection.
     pub fn sync_deflections(&mut self, geometry: &AeroGeometry) -> Result<(), AeroError> {
         if self.count != geometry.panels.len() {
             return Err(AeroError::InvalidGeometry(
@@ -1984,6 +1996,36 @@ impl PanelSoA {
             ));
         }
         for (index, panel) in geometry.panels.iter().enumerate() {
+            self.deflection[index] = panel.control_deflection_rad;
+        }
+        Ok(())
+    }
+
+    /// Refresh moving panel positions and axes after a mechanism transform.
+    /// Compile-once dimensions and material coefficients remain unchanged;
+    /// the caller invokes this only when a geometric control has moved.
+    pub fn sync_geometry(&mut self, geometry: &AeroGeometry) -> Result<(), AeroError> {
+        if self.count != geometry.panels.len() {
+            return Err(AeroError::InvalidGeometry(
+                "panel count changed after SoA compile; rebuild the layout".into(),
+            ));
+        }
+        geometry.validate()?;
+        for (index, panel) in geometry.panels.iter().enumerate() {
+            let chord = normalize_axis(panel.chord_axis_body, "chord axis")?;
+            let lift = orthogonal_axis(panel.lift_axis_body, chord, "lift axis")?;
+            self.pos_x[index] = panel.position_body_m.x;
+            self.pos_y[index] = panel.position_body_m.y;
+            self.pos_z[index] = panel.position_body_m.z;
+            self.cop_x[index] = panel.center_of_pressure_body_m.x;
+            self.cop_y[index] = panel.center_of_pressure_body_m.y;
+            self.cop_z[index] = panel.center_of_pressure_body_m.z;
+            self.chord_x[index] = chord.x;
+            self.chord_y[index] = chord.y;
+            self.chord_z[index] = chord.z;
+            self.lift_x[index] = lift.x;
+            self.lift_y[index] = lift.y;
+            self.lift_z[index] = lift.z;
             self.deflection[index] = panel.control_deflection_rad;
         }
         Ok(())

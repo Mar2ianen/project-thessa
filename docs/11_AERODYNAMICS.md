@@ -167,9 +167,23 @@ Procedural bodies may assign normalized control channels to axial ranges
 of their pitch or yaw strip panels. Range edges split the body zone schedule,
 so a command changes only the selected generated panels; the vehicle baker
 rebases those indices into the same runtime control list used by wings.
-This reuses the current panel-deflection response and does not inject a
-direct vehicle moment. Rate limits, hinge torque and detailed appendage
-geometry remain actuator/mechanism model work.
+Each compiled region has a geometry-derived hinge at its leading axial edge
+and section centroid. The runtime applies the deflection as a rigid rotation
+of selected panel positions, centers of pressure, and axes; it does not add a
+direct vehicle moment or also apply the legacy coefficient deflection.
+
+An authored body-control actuator may specify its no-load angular rate and
+stall torque. Detailed panel forces and moments determine the signed
+aerodynamic hinge torque, and a linear torque-speed envelope reduces actuator
+rate against opposing load. At rated stall torque the commanded actuator
+stalls; aerodynamic control effectiveness itself remains untouched. Missing
+actuator data preserves the shared command-response path (including the
+flight-authority normalized command slew) for older assets. In vacuum the
+actuator advances at its rated no-load rate without an aerodynamic solve.
+Hinge motion currently affects aero-panel geometry only; moved-surface
+mass/inertia and contact geometry, actuator mass, moving render meshes,
+electrical/hydraulic power, thermal inhibition, and structural hinge failure
+remain outside this slice.
 
 ## 11.8.3. Lifting bodies
 

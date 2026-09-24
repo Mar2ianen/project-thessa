@@ -13,9 +13,24 @@ const FIXTURE: &str = include_str!("../../../data/vehicles/example_lifting_body_
 
 #[test]
 fn procedural_lifting_body_and_wing_bake_and_roundtrip_as_one_vehicle() {
-    let asset: VehicleAsset = toml::from_str(FIXTURE).expect("aircraft fixture should parse");
+    // Explicit ratings are test design inputs, not defaults baked into the
+    // runtime: existing body controls without actuator data remain migratable.
+    let body_actuator = thessa_sim_core::ControlSurfaceActuator {
+        max_rate_rad_s: 0.4,
+        max_torque_nm: 1.0e12,
+    };
+    let actuator_fixture = FIXTURE.replace(
+        "maximum_deflection_rad = 0.35",
+        "maximum_deflection_rad = 0.35\n\n[procedural_bodies.controls.actuator]\nmax_rate_rad_s = 0.4\nmax_torque_nm = 1000000000000.0",
+    );
+    let asset: VehicleAsset =
+        toml::from_str(&actuator_fixture).expect("actuated aircraft fixture should parse");
     assert_eq!(asset.procedural_surfaces.len(), 1);
     assert_eq!(asset.procedural_bodies.len(), 1);
+    assert_eq!(
+        asset.procedural_bodies[0].controls[0].actuator,
+        Some(body_actuator)
+    );
 
     // Compile source-side expectations with the same defaults as VehicleAsset::bake.
     let wing = compile_surface(
@@ -56,9 +71,24 @@ fn procedural_lifting_body_and_wing_bake_and_roundtrip_as_one_vehicle() {
     assert!(!vehicle.control_surfaces[0].panel_indices.is_empty());
     assert_eq!(vehicle.control_surfaces[1].name, "body-rudder");
     assert!(!vehicle.control_surfaces[1].panel_indices.is_empty());
+    assert_eq!(
+        vehicle.control_surfaces[1].hinge.unwrap().axis_body,
+        DVec3::Z
+    );
+    assert_eq!(vehicle.control_surfaces[1].actuator, Some(body_actuator));
 
     // VehicleAsset::bake appends hull strips after procedural surface panels.
     let body_panel_start = vehicle.aero_geometry.panels.len() - body.panels.len();
+    let body_hinge_shift = vehicle.aero_geometry.panels
+        [body_panel_start + body.controls[0].panel_indices[0]]
+        .position_body_m
+        - body.panels[body.controls[0].panel_indices[0]].position_body_m;
+    assert!(
+        (vehicle.control_surfaces[1].hinge.unwrap().point_body_m
+            - (body.controls[0].hinge.unwrap().point_body_m + body_hinge_shift))
+            .length()
+            < 1.0e-12
+    );
     let wing_controlled_panels: HashSet<usize> = vehicle.control_surfaces[0]
         .panel_indices
         .iter()
@@ -121,6 +151,63 @@ fn procedural_lifting_body_and_wing_bake_and_roundtrip_as_one_vehicle() {
         .expect("initial panel loads should evaluate")
         .panel_loads
         .expect("detailed evaluation should return local panel loads");
+
+    let mut moving_vehicle = vehicle.clone();
+    moving_vehicle
+        .apply_control_deflections(&vehicle.aero_geometry, &[0.0, 0.2])
+        .expect("hinged body region should rotate from reference geometry");
+    for (index, (moved, original)) in moving_vehicle
+        .aero_geometry
+        .panels
+        .iter()
+        .zip(&initial_panels)
+        .enumerate()
+    {
+        if body_controlled_panels.contains(&index) {
+            assert_ne!(
+                moved.center_of_pressure_body_m,
+                original.center_of_pressure_body_m
+            );
+            assert_eq!(moved.control_deflection_rad, 0.0);
+        } else {
+            assert_eq!(moved, original, "hinge motion leaked to panel {index}");
+        }
+    }
+    let moving_loads = model
+        .evaluate_detailed(
+            &AeroCase::new(state, environment, moving_vehicle.aero_geometry.clone())
+                .expect("moving geometry aero case should be valid"),
+        )
+        .expect("moving body geometry loads should evaluate");
+    let moving_panel_loads = moving_loads
+        .panel_loads
+        .as_ref()
+        .expect("moving detailed result should expose panel loads");
+    for index in 0..baseline.len() {
+        let force_delta =
+            (moving_panel_loads[index].force_body_n - baseline[index].force_body_n).length();
+        if body_controlled_panels.contains(&index) {
+            assert!(
+                force_delta > 1.0e-6,
+                "hinge angle did not alter panel {index}"
+            );
+        } else {
+            assert!(force_delta < 1.0e-10, "hinge motion altered panel {index}");
+        }
+    }
+    let hinge_moments = moving_vehicle
+        .control_hinge_moments(&moving_loads)
+        .expect("body hinge should receive panel aerodynamic loads");
+    assert!(hinge_moments[1].is_finite());
+    let (next_angles, saturated) = moving_vehicle
+        .advance_control_actuators(&[0.0, 0.0], &[0.0, 1.0], &hinge_moments, 0.5)
+        .expect("rated body actuator should advance");
+    assert!(
+        saturated,
+        "the rate limit should leave the target unreached"
+    );
+    let expected_angle = 0.4 * (1.0 - hinge_moments[1].abs() / body_actuator.max_torque_nm) * 0.5;
+    assert!((next_angles[1] - expected_angle).abs() < 1.0e-12);
 
     vehicle
         .apply_control_inputs(&[1.0, 1.0])

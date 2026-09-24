@@ -10,11 +10,12 @@ nuclear thermal models, multi-chamber systems, air-breathing jets
 composition-aware atmosphere queries (section 10), and the ESTOC combined-cycle
 engine, plus piston/electric propeller drives and a
 stateful, heat-budgeted turboprop takeoff path on a reusable ideal actuator
-disk (section 9). Tank depletion wiring, the flight-loop allocator,
+disk (section 9), and steady electric spacecraft thrusters (section 13).
+Tank depletion wiring, the flight-loop allocator,
 transient piston/electric source and prop-shaft
 state, finite-blade propeller maps, an independent free-power-turbine spool,
-high-fidelity scramjet shock-train/finite-rate chemistry, and the editor UI
-are still TBD (see section 18).
+high-fidelity scramjet shock-train/finite-rate chemistry, continuous/pulsed
+fusion propulsion, and the editor UI are still TBD (see section 18).
 
 ## 1. Design goal
 
@@ -636,6 +637,35 @@ exhaust + thrust + waste heat
 Procedural inputs may include accelerator/grid dimensions, voltage/current, magnetic field, chamber dimensions, propellant, power electronics, cooling, and materials.
 
 Runtime characteristics should emerge from supplied electrical power, mass flow, accelerator state, efficiency, and thermal limits rather than from a fixed thrust value.
+
+Status note (2026-09-24): the sim-core now compiles gridded-ion, Hall,
+magnetoplasmadynamic (MPD), resistojet, and arcjet designs, mounts them on a
+vehicle, and books power-processor, active hardware, and radiator mass. Each
+steady operating point is bounded by its electrical-power, feed-flow, current,
+and radiative heat-rejection limits.
+
+- Gridded-ion/Hall exhaust velocity follows singly charged particle energy,
+  `ve = sqrt(2 e V / mi)`. Ion current follows particle throughput, and feed
+  flow is capped by rated power, accelerator current, propellant utilization,
+  and radiator duty. The Hall annular channel's field coil is included in the
+  structure mass estimate.
+- MPD thrust uses the reduced self-field Maecker relation,
+  `T = μ0 I² ln(ra/rc)/(4π)`, bounded by arc voltage/current, bus power, feed
+  flow, and jet kinetic energy. This is an engineering relation, not an
+  electrode/plasma simulation.
+- Resistojet/arcjet designs use constant-γ gas heat capacity, heater efficiency,
+  maximum exhaust temperature, and nozzle efficiency:
+  `ve = sqrt(2 ηn cp (Texhaust - Tinlet))`. Electrical input covers gas
+  enthalpy; the nozzle's residual exhaust enthalpy leaves with the propellant.
+- All families report thrust, effective Isp, consumed flow, electrical draw,
+  jet kinetic power, residual exhaust-internal power, waste heat, radiator
+  capacity, current, and active limiting flags. The energy telemetry closes
+  `Pelec = Pjet + Pexhaust-internal + Qwaste`; radiator heat is only local
+  conversion loss, not residual exhaust enthalpy. Radiator capacity is
+  `εσA(Trad⁴ - Tbackground⁴)`.
+- This is a steady operating-point model: no plasma kinetics, multi-charge
+  states, electrode erosion, propellant tank depletion, plume interaction,
+  Hall field topology, or transient power-bus/storage state is claimed.
 
 ## 14. Fusion propulsion
 
@@ -1335,3 +1365,68 @@ and stepped-channel ports retain their analytic-radius path.
 - Limitation: the current grain model completes the sampled burn front at
   full cross-section depletion; local case exposure/rupture before then is
   not yet represented as a structural failure event (section 18.7 debt).
+
+### 18.13 Electric spacecraft thrusters (section 13)
+
+Shipped 2026-09-24: `propulsion::electric` compiles five steady electric
+thruster designs and installs them through `ElectricThrusterMount`.
+
+- Formal boundary: `ElectricThrusterSpec` carries species, hardware topology,
+  rated bus power/feed flow, power-processor specific power, active structure
+  material/thickness, radiator area/emissivity/temperature/areal mass, plasma
+  ionization efficiency, and propellant inlet temperature. The baker accepts
+  `[[electric_thrusters]]` with a tagged `design` table (`gridded-ion`,
+  `hall-effect`, `magnetoplasmadynamic`, `resistojet`, or `arcjet`). The
+  installed dry mass is PPU rating / PPU specific power + geometry-derived
+  active hardware + radiator mass; vehicle mass, inertia, final COM, and
+  station wrench all include the mount.
+- Species: xenon, krypton, argon, iodine, nitrogen, hydrogen, ammonia, and
+  water carry molar mass, constant-γ gas heat capacity, and first-ionization
+  reference energy. Ion accelerators assume singly charged species and a
+  constant propellant-utilization fraction. Their particle speed is
+  `sqrt(2 e V / mi)`; beam current is particle throughput × elementary charge.
+  Electrical ionization/acceleration efficiencies divide the respective
+  energy requirements, and the feed is capped by bus power, current, rated
+  flow, and radiator rejection.
+- Hall hardware is an annular channel. The reduced performance law is the
+  same electrostatic particle-energy relation as the gridded accelerator;
+  channel geometry and magnetic field size the channel plus copper field-coil
+  mass (`N·I = BL/μ0`, conductor section from authored current density), while
+  the authored discharge-current rating bounds the beam. Coil excitation
+  power, electron transport, and field topology are expressly outside this
+  version.
+- MPD performance uses the self-field Maecker relation
+  `T = μ0 I² ln(ra/rc)/(4π)`. Arc-voltage, current rating, bus power,
+  ionization energy, flow, and the jet-power efficiency jointly bound the
+  selected discharge current. Geometry-based electrode volume contributes
+  device mass.
+- Resistojet/arcjet use `cp = γR/(γ−1)` and gas enthalpy rise
+  `Δh = cp(Tmax−Tinlet)`: `ve = sqrt(2 ηnozzle Δh)` and required input per
+  mass is `Δh/ηheater`. Arcjet current/voltage add an electrical cap. The
+  residual enthalpy is exhaust-internal power, not radiator heat.
+- Thermal and energy accounting: radiator capacity is
+  `εσA(Trad⁴−Tbackground⁴)`. Every returned point carries thrust, effective
+  Isp, feed flow, input power, jet kinetic power, exhaust-internal power,
+  waste heat, radiator capacity, discharge current, and power/flow/current/
+  thermal flags. Regression pins the first-law closure
+  `Pelec = Pjet + Pexhaust-internal + Qwaste` and the command/rating guards.
+- Known-case anchors: a 1 kV xenon ion beam has the closed-form particle exit
+  speed from singly charged xenon mass; its effective vehicle Isp includes
+  neutral propellant left by the authored utilization. MPD force equals the
+  Maecker current-squared relation; electrothermal speed matches the
+  constant-γ enthalpy/nozzle expression. A deliberately undersized Hall
+  radiator caps mass flow exactly at its radiative heat envelope. TOML
+  regression bakes an ion thruster, aggregates dry mass, recenters its mount,
+  and verifies its off-origin force/moment.
+- Numerical error: accelerator speed, MPD force law, gas enthalpy, and
+  black-body radiator capacity are closed-form in this reduced model; runtime
+  adds no numerical iteration except a bounded 56-step bisection for MPD
+  radiator clipping. Species property, utilization, efficiency, and constant-γ
+  errors are engineering-model inputs/limits, not hidden thrust calibration.
+- Benchmark (`benches/propulsion.rs`): an 11-power × 4-flow sweep measured
+  21.0 ns/row gridded-ion, 20.7 ns/row Hall, 30.7 ns/row MPD, 40.0 ns/row
+  resistojet, and 20.8 ns/row arcjet on this machine.
+- Fidelity debt: pulsed-power supplies, charge-state distributions, plume
+  divergence, electrode/grid erosion, transient bus storage, feed-tank
+  depletion, Hall electron transport, and VASIMR-class RF/helicon coupling
+  remain outside this steady backend.

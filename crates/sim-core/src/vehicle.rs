@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AeroConfig, AeroError, AeroGeometry, AeroPanel, CollisionAxis, CollisionError,
     CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine,
-    EngineMount, EstocPoint, FlightCondition, FlightError, JetCommand, JetMount, PropDrivePoint,
-    PropellerDriveCommand, PropellerDriveMount, PropulsionError, RigidBodyProperties, SystemMount,
-    TankMount, TurbopropCommand, TurbopropMount, TurbopropOperatingPoint,
+    ElectricThrusterCommand, ElectricThrusterMount, ElectricThrusterPoint, EngineMount, EstocPoint,
+    FlightCondition, FlightError, JetCommand, JetMount, PropDrivePoint, PropellerDriveCommand,
+    PropellerDriveMount, PropulsionError, RigidBodyProperties, SystemMount, TankMount,
+    TurbopropCommand, TurbopropMount, TurbopropOperatingPoint,
 };
 
 pub type StatefulTurbopropWrench = (
@@ -165,6 +166,9 @@ pub struct VehicleDefinition {
     /// needs a flight condition at query time).
     #[serde(default)]
     pub jets: Vec<JetMount>,
+    /// Installed electric space thrusters (steady power/flow commands).
+    #[serde(default)]
+    pub electric_thrusters: Vec<ElectricThrusterMount>,
     /// Installed piston/electric propeller drives (steady source commands;
     /// dry mass aggregates at bake and thrust requires ambient conditions).
     #[serde(default)]
@@ -470,6 +474,7 @@ impl VehicleDefinition {
             tanks: Vec::new(),
             systems: Vec::new(),
             jets: Vec::new(),
+            electric_thrusters: Vec::new(),
             propeller_drives: Vec::new(),
             turboprops: Vec::new(),
             fold_joints: Vec::new(),
@@ -518,6 +523,9 @@ impl VehicleDefinition {
             mount.validate().map_err(VehicleError::Propulsion)?;
         }
         for mount in &self.jets {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        for mount in &self.electric_thrusters {
             mount.validate().map_err(VehicleError::Propulsion)?;
         }
         for mount in &self.propeller_drives {
@@ -691,6 +699,18 @@ impl VehicleDefinition {
         Ok(self)
     }
 
+    /// Attach compiled electric spacecraft thrusters (baker path).
+    pub fn with_electric_thrusters(
+        mut self,
+        electric_thrusters: Vec<ElectricThrusterMount>,
+    ) -> Result<Self, VehicleError> {
+        for mount in &electric_thrusters {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        self.electric_thrusters = electric_thrusters;
+        Ok(self)
+    }
+
     /// Attach compiled fold joints (baker path; validates records and
     /// panel/joint references through full validation).
     pub fn with_fold_joints(
@@ -712,6 +732,24 @@ impl VehicleDefinition {
             let position = DVec3::from_array(mount.position_body_m);
             mass_kg += jet_mass_kg;
             inertia += jet_mass_kg
+                * (glam::DMat3::IDENTITY * position.length_squared()
+                    - outer_product(position, position));
+        }
+        self.mass_properties =
+            RigidBodyProperties::new(mass_kg, inertia).map_err(VehicleError::MassProperties)?;
+        Ok(())
+    }
+
+    /// Aggregate electric-thruster, power-processing, and radiator mass at
+    /// the installed mount stations.
+    pub fn bake_electric_thruster_masses(&mut self) -> Result<(), VehicleError> {
+        let mut mass_kg = self.mass_properties.mass_kg;
+        let mut inertia = self.mass_properties.inertia_body_kg_m2;
+        for mount in &self.electric_thrusters {
+            let device_mass_kg = mount.engine.dry_mass_kg;
+            let position = DVec3::from_array(mount.position_body_m);
+            mass_kg += device_mass_kg;
+            inertia += device_mass_kg
                 * (glam::DMat3::IDENTITY * position.length_squared()
                     - outer_product(position, position));
         }
@@ -934,6 +972,34 @@ impl VehicleDefinition {
             next_commands.push(jet.with_state(&point, transient, shaft));
         }
         Ok(((force, moment), next_commands))
+    }
+
+    /// Evaluate all installed electric thrusters and return their combined
+    /// body-frame wrench plus per-mount power, flow, heat, and thrust telemetry.
+    pub fn electric_thrusters_wrench_body_n(
+        &self,
+        commands: &[ElectricThrusterCommand],
+    ) -> Result<((DVec3, DVec3), Vec<ElectricThrusterPoint>), VehicleError> {
+        if commands.len() != self.electric_thrusters.len() {
+            return Err(VehicleError::InvalidVehicle(format!(
+                "expected {} electric-thruster commands, got {}",
+                self.electric_thrusters.len(),
+                commands.len()
+            )));
+        }
+        let mut force = DVec3::ZERO;
+        let mut moment = DVec3::ZERO;
+        let mut points = Vec::with_capacity(commands.len());
+        for (mount, command) in self.electric_thrusters.iter().zip(commands) {
+            let point = mount
+                .operating_point(*command)
+                .map_err(VehicleError::Propulsion)?;
+            let thrust = DVec3::from_array(mount.thrust_axis_body) * point.thrust_n;
+            force += thrust;
+            moment += DVec3::from_array(mount.position_body_m).cross(thrust);
+            points.push(point);
+        }
+        Ok(((force, moment), points))
     }
 
     /// Evaluate every installed shaft-power drive and return the combined
@@ -1163,10 +1229,11 @@ fn outer_product(a: DVec3, b: DVec3) -> glam::DMat3 {
 mod tests {
     use super::*;
     use crate::{
-        AirCycle, AirbreathingSpec, ChamberMaterial, ElectricMotorSpec, EstocMode, EstocSpec,
-        IntakeKind, JetFuel, PropellerDriveCommand, PropellerDriveMount, PropellerDriveSpec,
-        PropellerSpec, ShaftPowerSourceSpec, ShaftSpec, TurbopropCommand, TurbopropDriveSpec,
-        TurbopropMount,
+        AirCycle, AirbreathingSpec, ChamberMaterial, ElectricMotorSpec, ElectricPropellant,
+        ElectricThrusterCommand, ElectricThrusterDesign, ElectricThrusterMount,
+        ElectricThrusterSpec, EstocMode, EstocSpec, IntakeKind, JetFuel, PropellerDriveCommand,
+        PropellerDriveMount, PropellerDriveSpec, PropellerSpec, ShaftPowerSourceSpec, ShaftSpec,
+        TurbopropCommand, TurbopropDriveSpec, TurbopropMount,
     };
 
     fn test_vehicle() -> VehicleDefinition {
@@ -1254,6 +1321,73 @@ mod tests {
         assert!(continued_force.x > 0.0);
         assert_eq!(continued[0].last_mode, EstocMode::Rocket);
         assert!(continued[0].prev.is_some());
+    }
+
+    #[test]
+    fn electric_thruster_mount_bakes_mass_and_applies_force_at_station() {
+        let base = VehicleDefinition::new(
+            "electric-thruster-test",
+            AeroGeometry::new(vec![
+                AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+            ])
+            .expect("geometry"),
+            RigidBodyProperties::new(1_000.0, glam::DMat3::from_diagonal(DVec3::splat(500.0)))
+                .expect("mass"),
+            vec![],
+        )
+        .expect("vehicle");
+        let engine = ElectricThrusterSpec {
+            name: "xenon-ion".into(),
+            propellant: ElectricPropellant::Xenon,
+            design: ElectricThrusterDesign::GriddedIon {
+                accelerator_voltage_v: 1_000.0,
+                grid_diameter_m: 0.4,
+                grid_gap_m: 0.002,
+                max_beam_current_density_a_m2: 100.0,
+                propellant_utilization: 0.95,
+                accelerator_efficiency: 0.9,
+            },
+            maximum_power_w: 5_000.0,
+            maximum_mass_flow_kg_s: 1.0e-5,
+            power_processor_specific_power_w_kg: 2_000.0,
+            structure_density_kg_m3: 2_700.0,
+            structure_thickness_m: 0.003,
+            radiator_area_m2: 10.0,
+            radiator_temperature_k: 700.0,
+            radiator_emissivity: 0.9,
+            radiator_areal_density_kg_m2: 8.0,
+            ionization_efficiency: 0.75,
+            inlet_temperature_k: 300.0,
+        }
+        .compile()
+        .expect("ion drive");
+        let expected_mass = engine.dry_mass_kg;
+        let mut vehicle = base
+            .with_electric_thrusters(vec![ElectricThrusterMount {
+                name: "aft-ion".into(),
+                engine,
+                position_body_m: [0.0, 1.0, 0.0],
+                thrust_axis_body: [1.0, 0.0, 0.0],
+            }])
+            .expect("mount");
+        vehicle
+            .bake_electric_thruster_masses()
+            .expect("mass aggregate");
+        assert!((vehicle.mass_properties.mass_kg - (1_000.0 + expected_mass)).abs() < 1e-10);
+
+        let command = ElectricThrusterCommand {
+            available_power_w: 5_000.0,
+            requested_mass_flow_kg_s: 1.0e-6,
+        };
+        let ((force, moment), points) = vehicle
+            .electric_thrusters_wrench_body_n(&[command])
+            .expect("electric-thruster wrench");
+        assert_eq!(points.len(), 1);
+        assert!(force.x > 0.0);
+        assert!(moment.z < 0.0);
+        assert_eq!(moment.x, 0.0);
+        assert_eq!(moment.y, 0.0);
+        assert!(vehicle.electric_thrusters_wrench_body_n(&[]).is_err());
     }
 
     #[test]

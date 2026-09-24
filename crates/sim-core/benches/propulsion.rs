@@ -7,8 +7,9 @@ use std::{hint::black_box, time::Instant};
 
 use thessa_sim_core::{
     AirCycle, AirbreathingSpec, AtmosphereConfig, ChamberMaterial, CompiledEngine, CoolingMode,
-    ElectricMotorSpec, EngineCycle, GasKind, IntakeKind, JetFuel, JetShaftState, LiquidEngineSpec,
-    NozzleContour, PistonEngineSpec, Propellant, PropellerDriveSpec, PropellerSpec, ShaftCommand,
+    ElectricMotorSpec, ElectricPropellant, ElectricThrusterDesign, ElectricThrusterSpec,
+    EngineCycle, GasKind, IntakeKind, JetFuel, JetShaftState, LiquidEngineSpec, NozzleContour,
+    PistonEngineSpec, Propellant, PropellerDriveSpec, PropellerSpec, ShaftCommand,
     ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec, StarterKind, StarterSpec,
     TurbopropDriveSpec, advance_jet_shaft, analyze_airbreathing, analyze_altitude,
     analyze_propeller_drive, analyze_turboprop_drive, flight_condition,
@@ -55,6 +56,29 @@ fn apcp_spec() -> SolidMotorSpec {
         segment_core_radii_m: None,
         gimbal_range_rad: 0.0,
         ignition_shots: 1,
+    }
+}
+
+fn electric_thruster_spec(
+    name: &str,
+    propellant: ElectricPropellant,
+    design: ElectricThrusterDesign,
+) -> ElectricThrusterSpec {
+    ElectricThrusterSpec {
+        name: name.into(),
+        propellant,
+        design,
+        maximum_power_w: 20_000.0,
+        maximum_mass_flow_kg_s: 1.0e-3,
+        power_processor_specific_power_w_kg: 2_000.0,
+        structure_density_kg_m3: 2_700.0,
+        structure_thickness_m: 0.003,
+        radiator_area_m2: 20.0,
+        radiator_temperature_k: 700.0,
+        radiator_emissivity: 0.9,
+        radiator_areal_density_kg_m2: 8.0,
+        ionization_efficiency: 0.75,
+        inlet_temperature_k: 300.0,
     }
 }
 
@@ -316,6 +340,116 @@ fn main() {
             "{label} propeller analyzer row: {per_row_ns:.1} ns/row ({} rows/iter)",
             warm_rows.len()
         );
+    }
+
+    // Space propulsion operating-point sweep: eleven bus-power levels by four
+    // propellant-flow requests per physical accelerator/nozzle family.
+    let electric_thrusters = [
+        (
+            "gridded-ion",
+            electric_thruster_spec(
+                "bench-ion",
+                ElectricPropellant::Xenon,
+                ElectricThrusterDesign::GriddedIon {
+                    accelerator_voltage_v: 1_000.0,
+                    grid_diameter_m: 0.4,
+                    grid_gap_m: 0.002,
+                    max_beam_current_density_a_m2: 100.0,
+                    propellant_utilization: 0.95,
+                    accelerator_efficiency: 0.9,
+                },
+            ),
+        ),
+        (
+            "hall",
+            electric_thruster_spec(
+                "bench-hall",
+                ElectricPropellant::Xenon,
+                ElectricThrusterDesign::HallEffect {
+                    accelerator_voltage_v: 300.0,
+                    channel_inner_radius_m: 0.025,
+                    channel_outer_radius_m: 0.05,
+                    channel_length_m: 0.04,
+                    magnetic_field_t: 0.02,
+                    coil_current_density_a_m2: 4.0e7,
+                    max_discharge_current_a: 5.0,
+                    propellant_utilization: 0.9,
+                    accelerator_efficiency: 0.8,
+                },
+            ),
+        ),
+        (
+            "mpd",
+            electric_thruster_spec(
+                "bench-mpd",
+                ElectricPropellant::Argon,
+                ElectricThrusterDesign::Magnetoplasmadynamic {
+                    arc_voltage_v: 100.0,
+                    cathode_radius_m: 0.01,
+                    anode_radius_m: 0.05,
+                    electrode_length_m: 0.1,
+                    max_current_a: 200.0,
+                    jet_power_efficiency: 0.55,
+                },
+            ),
+        ),
+        (
+            "resistojet",
+            electric_thruster_spec(
+                "bench-resistojet",
+                ElectricPropellant::Ammonia,
+                ElectricThrusterDesign::Resistojet {
+                    chamber_radius_m: 0.02,
+                    chamber_length_m: 0.1,
+                    max_exhaust_temp_k: 1_400.0,
+                    heater_efficiency: 0.9,
+                    nozzle_efficiency: 0.8,
+                },
+            ),
+        ),
+        (
+            "arcjet",
+            electric_thruster_spec(
+                "bench-arcjet",
+                ElectricPropellant::Ammonia,
+                ElectricThrusterDesign::Arcjet {
+                    chamber_radius_m: 0.02,
+                    chamber_length_m: 0.1,
+                    max_exhaust_temp_k: 2_500.0,
+                    arc_voltage_v: 80.0,
+                    max_arc_current_a: 100.0,
+                    heater_efficiency: 0.8,
+                    nozzle_efficiency: 0.75,
+                },
+            ),
+        ),
+    ]
+    .map(|(label, spec)| (label, spec.compile().expect("electric thruster")));
+    let power_grid: Vec<f64> = (1..=11).map(|level| f64::from(level) * 2_000.0).collect();
+    let flow_grid = [1.0e-7, 1.0e-6, 1.0e-5, 1.0e-4];
+    for (label, engine) in &electric_thrusters {
+        let evaluate_grid = || {
+            for power_w in &power_grid {
+                for mass_flow_kg_s in flow_grid {
+                    black_box(
+                        engine
+                            .operating_point(thessa_sim_core::ElectricThrusterCommand {
+                                available_power_w: *power_w,
+                                requested_mass_flow_kg_s: mass_flow_kg_s,
+                            })
+                            .expect("electric thruster point"),
+                    );
+                }
+            }
+        };
+        evaluate_grid();
+        let start = Instant::now();
+        for _ in 0..iters {
+            evaluate_grid();
+        }
+        let row_count = power_grid.len() * flow_grid.len();
+        let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * row_count) as f64;
+        println!("{label} propulsion row: {per_row_ns:.1} ns/row ({row_count} rows/iter)");
     }
 
     let turboprop = TurbopropDriveSpec {

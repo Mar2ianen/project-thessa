@@ -27,6 +27,7 @@
 mod air;
 mod analyze;
 mod cycle;
+mod electric;
 mod engine;
 mod error;
 mod estoc;
@@ -51,6 +52,10 @@ pub use air::{
 };
 pub use analyze::{AltitudePoint, analyze_altitude};
 pub use cycle::{CycleLimits, EngineCycle};
+pub use electric::{
+    CompiledElectricThruster, ElectricPropellant, ElectricThrusterCommand, ElectricThrusterDesign,
+    ElectricThrusterMount, ElectricThrusterPoint, ElectricThrusterSpec,
+};
 pub use engine::{CompiledEngine, EngineOperatingPoint, EnginePlumeState};
 pub use error::PropulsionError;
 pub use estoc::{

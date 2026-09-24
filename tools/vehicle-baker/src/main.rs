@@ -9,6 +9,7 @@ use thessa_sim_core::{
     AeroGeometry, AeroPanel, AirCycle, AirbreathingSpec, AtmosphereConfig, ChamberMaterial,
     ChamberSpec, CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionPart,
     CollisionShape, CompiledEngine, CompiledJet, ControlSurfaceDefinition, CoolingMode,
+    ElectricPropellant, ElectricThrusterDesign, ElectricThrusterMount, ElectricThrusterSpec,
     EngineCycle, EngineMount, EstocSpec, FoldJointRecord, IntakeKind, JetFuel, JetMount,
     LiquidEngineSpec, NozzleContour, NtrFluid, NuclearThermalSpec, Propellant, PropellerDriveMount,
     PropellerDriveSpec, PropellerSpec, PropulsionSystemSpec, RigidBodyProperties,
@@ -422,6 +423,9 @@ struct VehicleAsset {
     /// needs a flight condition at query time).
     #[serde(default)]
     jets: Vec<JetAsset>,
+    /// Electric spacecraft thrusters, with power processor and radiator mass.
+    #[serde(default)]
+    electric_thrusters: Vec<ElectricThrusterAsset>,
     /// Piston/electric shaft sources driving reusable ideal propeller disks.
     #[serde(default)]
     propeller_drives: Vec<PropellerDriveAsset>,
@@ -561,6 +565,11 @@ impl VehicleAsset {
             .into_iter()
             .map(JetAsset::bake)
             .collect::<Result<Vec<_>, _>>()?;
+        let electric_thruster_mounts = self
+            .electric_thrusters
+            .into_iter()
+            .map(ElectricThrusterAsset::bake)
+            .collect::<Result<Vec<_>, _>>()?;
         let propeller_drive_mounts = self
             .propeller_drives
             .into_iter()
@@ -609,6 +618,11 @@ impl VehicleAsset {
         }
         for mount in &jet_mounts {
             let mass = mount.engine.dry_mass_kg();
+            total_mass_kg += mass;
+            total_moment += DVec3::from_array(mount.position_body_m) * mass;
+        }
+        for mount in &electric_thruster_mounts {
+            let mass = mount.engine.dry_mass_kg;
             total_mass_kg += mass;
             total_moment += DVec3::from_array(mount.position_body_m) * mass;
         }
@@ -690,12 +704,14 @@ impl VehicleAsset {
             .with_systems(system_mounts)?
             .with_fold_joints(fold_joints)?
             .with_jets(jet_mounts)?
+            .with_electric_thrusters(electric_thruster_mounts)?
             .with_propeller_drives(propeller_drive_mounts)?
             .with_turboprops(turboprop_mounts)?;
         vehicle.bake_engine_masses()?;
         vehicle.bake_tank_masses()?;
         vehicle.bake_system_masses()?;
         vehicle.bake_jet_masses()?;
+        vehicle.bake_electric_thruster_masses()?;
         vehicle.bake_propeller_drive_masses()?;
         vehicle.bake_turboprop_masses()?;
         for (panel_index, joint) in parked_tags {
@@ -728,6 +744,9 @@ impl VehicleAsset {
             }
         }
         for mount in &mut vehicle.jets {
+            shift_array(&mut mount.position_body_m, shift);
+        }
+        for mount in &mut vehicle.electric_thrusters {
             shift_array(&mut mount.position_body_m, shift);
         }
         for mount in &mut vehicle.propeller_drives {
@@ -1510,6 +1529,65 @@ impl JetAsset {
             position_body_m: self.mount_position_body_m,
             thrust_axis_body: self.thrust_axis_body,
             gimbal_range_rad: self.gimbal_range_rad,
+        })
+    }
+}
+
+/// Installed electric spacecraft thruster (`[[electric_thrusters]]`).
+/// `design` is a tagged table selecting gridded-ion, Hall, MPD, resistojet,
+/// or arcjet hardware; each compiled mount includes its power processor and
+/// radiator mass.
+#[derive(Debug, Deserialize)]
+struct ElectricThrusterAsset {
+    name: String,
+    #[serde(default = "mount_position_default")]
+    mount_position_body_m: [f64; 3],
+    #[serde(default = "thrust_axis_default")]
+    thrust_axis_body: [f64; 3],
+    propellant: ElectricPropellant,
+    design: ElectricThrusterDesign,
+    maximum_power_w: f64,
+    maximum_mass_flow_kg_s: f64,
+    power_processor_specific_power_w_kg: f64,
+    structure_density_kg_m3: f64,
+    structure_thickness_m: f64,
+    radiator_area_m2: f64,
+    radiator_temperature_k: f64,
+    radiator_emissivity: f64,
+    radiator_areal_density_kg_m2: f64,
+    ionization_efficiency: f64,
+    #[serde(default = "standard_propellant_inlet_temp")]
+    inlet_temperature_k: f64,
+}
+
+fn standard_propellant_inlet_temp() -> f64 {
+    300.0
+}
+
+impl ElectricThrusterAsset {
+    fn bake(self) -> Result<ElectricThrusterMount, Box<dyn Error>> {
+        let engine = ElectricThrusterSpec {
+            name: self.name.clone(),
+            propellant: self.propellant,
+            design: self.design,
+            maximum_power_w: self.maximum_power_w,
+            maximum_mass_flow_kg_s: self.maximum_mass_flow_kg_s,
+            power_processor_specific_power_w_kg: self.power_processor_specific_power_w_kg,
+            structure_density_kg_m3: self.structure_density_kg_m3,
+            structure_thickness_m: self.structure_thickness_m,
+            radiator_area_m2: self.radiator_area_m2,
+            radiator_temperature_k: self.radiator_temperature_k,
+            radiator_emissivity: self.radiator_emissivity,
+            radiator_areal_density_kg_m2: self.radiator_areal_density_kg_m2,
+            ionization_efficiency: self.ionization_efficiency,
+            inlet_temperature_k: self.inlet_temperature_k,
+        }
+        .compile()?;
+        Ok(ElectricThrusterMount {
+            name: self.name,
+            engine,
+            position_body_m: self.mount_position_body_m,
+            thrust_axis_body: self.thrust_axis_body,
         })
     }
 }
@@ -2423,6 +2501,54 @@ grain_geometry = { kind = "finocyl", fin_count = 8, fin_tip_radius_m = 0.32, fin
             assert_eq!(motor.grain_geometry, expected_geometry);
             assert!(motor.burn_curve[0].burn_surface_area_m2 > 0.0);
         }
+    }
+
+    #[test]
+    fn electric_space_thruster_is_authorable_and_bakes_wrench_mass_and_state() {
+        let doc = r#"
+name = "electric-spacecraft-test"
+mass_kg = 3000.0
+inertia_body_kg_m2 = [[8000.0, 0.0, 0.0], [0.0, 8000.0, 0.0], [0.0, 0.0, 4000.0]]
+
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 4.0
+chord_m = 1.0
+
+[[electric_thrusters]]
+name = "aft-ion"
+mount_position_body_m = [-1.0, 0.8, 0.0]
+thrust_axis_body = [1.0, 0.0, 0.0]
+propellant = "xenon"
+design = { kind = "gridded-ion", accelerator_voltage_v = 1000.0, grid_diameter_m = 0.4, grid_gap_m = 0.002, max_beam_current_density_a_m2 = 100.0, propellant_utilization = 0.95, accelerator_efficiency = 0.9 }
+maximum_power_w = 5000.0
+maximum_mass_flow_kg_s = 0.00001
+power_processor_specific_power_w_kg = 2000.0
+structure_density_kg_m3 = 2700.0
+structure_thickness_m = 0.003
+radiator_area_m2 = 10.0
+radiator_temperature_k = 700.0
+radiator_emissivity = 0.9
+radiator_areal_density_kg_m2 = 8.0
+ionization_efficiency = 0.75
+"#;
+        let asset: VehicleAsset = toml::from_str(doc).expect("electric-thruster TOML parses");
+        let vehicle = asset.bake().expect("electric-thruster asset bakes");
+        assert_eq!(vehicle.electric_thrusters.len(), 1);
+        assert!(vehicle.mass_properties.mass_kg > 3_000.0);
+        assert!(vehicle.electric_thrusters[0].engine.dry_mass_kg > 0.0);
+        let ((force, moment), points) = vehicle
+            .electric_thrusters_wrench_body_n(&[thessa_sim_core::ElectricThrusterCommand {
+                available_power_w: 5_000.0,
+                requested_mass_flow_kg_s: 1.0e-6,
+            }])
+            .expect("mounted electric drive wrench");
+        assert!(force.x > 0.0);
+        assert!(moment.z < 0.0);
+        assert_eq!(points.len(), 1);
+        assert!(points[0].waste_heat_w <= points[0].radiator_capacity_w);
     }
 
     #[test]

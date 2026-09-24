@@ -10,9 +10,10 @@ use thessa_sim_core::{
     ChamberSpec, CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionPart,
     CollisionShape, CompiledEngine, CompiledJet, ControlSurfaceDefinition, CoolingMode,
     ElectricPropellant, ElectricThrusterDesign, ElectricThrusterMount, ElectricThrusterSpec,
-    EngineCycle, EngineMount, EstocSpec, FoldJointRecord, IntakeKind, JetFuel, JetMount,
-    LiquidEngineSpec, NozzleContour, NtrFluid, NuclearThermalSpec, Propellant, PropellerDriveMount,
-    PropellerDriveSpec, PropellerSpec, PropulsionSystemSpec, RigidBodyProperties,
+    EngineCycle, EngineMount, EstocSpec, FoldJointRecord, FusionReaction, FusionTorchMount,
+    FusionTorchSpec, IntakeKind, JetFuel, JetMount, LiquidEngineSpec, NozzleContour, NtrFluid,
+    NuclearThermalSpec, Propellant, PropellerDriveMount, PropellerDriveSpec, PropellerSpec,
+    PropulsionSystemSpec, PulsedFusionMount, PulsedFusionSpec, RigidBodyProperties,
     ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec, SystemMount, TankMount,
     TankShape, TankSpec, TurbopropDriveSpec, TurbopropMount, VehicleDefinition,
     analyze_airbreathing, analyze_altitude, analyze_propeller_drive, analyze_turboprop_drive,
@@ -426,6 +427,12 @@ struct VehicleAsset {
     /// Electric spacecraft thrusters, with power processor and radiator mass.
     #[serde(default)]
     electric_thrusters: Vec<ElectricThrusterAsset>,
+    /// Continuous magnetic-nozzle fusion torches.
+    #[serde(default)]
+    fusion_torches: Vec<FusionTorchAsset>,
+    /// Discrete pellet/impulse fusion systems with finite energy buffers.
+    #[serde(default)]
+    pulsed_fusion_systems: Vec<PulsedFusionAsset>,
     /// Piston/electric shaft sources driving reusable ideal propeller disks.
     #[serde(default)]
     propeller_drives: Vec<PropellerDriveAsset>,
@@ -570,6 +577,16 @@ impl VehicleAsset {
             .into_iter()
             .map(ElectricThrusterAsset::bake)
             .collect::<Result<Vec<_>, _>>()?;
+        let fusion_torch_mounts = self
+            .fusion_torches
+            .into_iter()
+            .map(FusionTorchAsset::bake)
+            .collect::<Result<Vec<_>, _>>()?;
+        let pulsed_fusion_mounts = self
+            .pulsed_fusion_systems
+            .into_iter()
+            .map(PulsedFusionAsset::bake)
+            .collect::<Result<Vec<_>, _>>()?;
         let propeller_drive_mounts = self
             .propeller_drives
             .into_iter()
@@ -622,6 +639,16 @@ impl VehicleAsset {
             total_moment += DVec3::from_array(mount.position_body_m) * mass;
         }
         for mount in &electric_thruster_mounts {
+            let mass = mount.engine.dry_mass_kg;
+            total_mass_kg += mass;
+            total_moment += DVec3::from_array(mount.position_body_m) * mass;
+        }
+        for mount in &fusion_torch_mounts {
+            let mass = mount.engine.dry_mass_kg;
+            total_mass_kg += mass;
+            total_moment += DVec3::from_array(mount.position_body_m) * mass;
+        }
+        for mount in &pulsed_fusion_mounts {
             let mass = mount.engine.dry_mass_kg;
             total_mass_kg += mass;
             total_moment += DVec3::from_array(mount.position_body_m) * mass;
@@ -705,6 +732,8 @@ impl VehicleAsset {
             .with_fold_joints(fold_joints)?
             .with_jets(jet_mounts)?
             .with_electric_thrusters(electric_thruster_mounts)?
+            .with_fusion_torches(fusion_torch_mounts)?
+            .with_pulsed_fusion_systems(pulsed_fusion_mounts)?
             .with_propeller_drives(propeller_drive_mounts)?
             .with_turboprops(turboprop_mounts)?;
         vehicle.bake_engine_masses()?;
@@ -712,6 +741,7 @@ impl VehicleAsset {
         vehicle.bake_system_masses()?;
         vehicle.bake_jet_masses()?;
         vehicle.bake_electric_thruster_masses()?;
+        vehicle.bake_fusion_masses()?;
         vehicle.bake_propeller_drive_masses()?;
         vehicle.bake_turboprop_masses()?;
         for (panel_index, joint) in parked_tags {
@@ -747,6 +777,12 @@ impl VehicleAsset {
             shift_array(&mut mount.position_body_m, shift);
         }
         for mount in &mut vehicle.electric_thrusters {
+            shift_array(&mut mount.position_body_m, shift);
+        }
+        for mount in &mut vehicle.fusion_torches {
+            shift_array(&mut mount.position_body_m, shift);
+        }
+        for mount in &mut vehicle.pulsed_fusion_systems {
             shift_array(&mut mount.position_body_m, shift);
         }
         for mount in &mut vehicle.propeller_drives {
@@ -1584,6 +1620,139 @@ impl ElectricThrusterAsset {
         }
         .compile()?;
         Ok(ElectricThrusterMount {
+            name: self.name,
+            engine,
+            position_body_m: self.mount_position_body_m,
+            thrust_axis_body: self.thrust_axis_body,
+        })
+    }
+}
+
+/// Continuous magnetic-nozzle fusion torch (`[[fusion_torches]]`).
+#[derive(Debug, Deserialize)]
+struct FusionTorchAsset {
+    name: String,
+    #[serde(default = "mount_position_default")]
+    mount_position_body_m: [f64; 3],
+    #[serde(default = "thrust_axis_default")]
+    thrust_axis_body: [f64; 3],
+    reaction: FusionReaction,
+    working_fluid: ElectricPropellant,
+    maximum_fusion_power_w: f64,
+    fusion_gain: f64,
+    maximum_working_flow_kg_s: f64,
+    reactor_specific_power_w_kg: f64,
+    plasma_coupling_efficiency: f64,
+    magnetic_nozzle_efficiency: f64,
+    nozzle_radius_m: f64,
+    nozzle_length_m: f64,
+    magnetic_field_t: f64,
+    coil_current_density_a_m2: f64,
+    structure_density_kg_m3: f64,
+    structure_thickness_m: f64,
+    radiator_area_m2: f64,
+    radiator_temperature_k: f64,
+    radiator_emissivity: f64,
+    radiator_areal_density_kg_m2: f64,
+}
+
+impl FusionTorchAsset {
+    fn bake(self) -> Result<FusionTorchMount, Box<dyn Error>> {
+        let engine = FusionTorchSpec {
+            name: self.name.clone(),
+            reaction: self.reaction,
+            working_fluid: self.working_fluid,
+            maximum_fusion_power_w: self.maximum_fusion_power_w,
+            fusion_gain: self.fusion_gain,
+            maximum_working_flow_kg_s: self.maximum_working_flow_kg_s,
+            reactor_specific_power_w_kg: self.reactor_specific_power_w_kg,
+            plasma_coupling_efficiency: self.plasma_coupling_efficiency,
+            magnetic_nozzle_efficiency: self.magnetic_nozzle_efficiency,
+            nozzle_radius_m: self.nozzle_radius_m,
+            nozzle_length_m: self.nozzle_length_m,
+            magnetic_field_t: self.magnetic_field_t,
+            coil_current_density_a_m2: self.coil_current_density_a_m2,
+            structure_density_kg_m3: self.structure_density_kg_m3,
+            structure_thickness_m: self.structure_thickness_m,
+            radiator_area_m2: self.radiator_area_m2,
+            radiator_temperature_k: self.radiator_temperature_k,
+            radiator_emissivity: self.radiator_emissivity,
+            radiator_areal_density_kg_m2: self.radiator_areal_density_kg_m2,
+        }
+        .compile()?;
+        Ok(FusionTorchMount {
+            name: self.name,
+            engine,
+            position_body_m: self.mount_position_body_m,
+            thrust_axis_body: self.thrust_axis_body,
+        })
+    }
+}
+
+/// Discrete fusion pellet drive with pulse-energy storage
+/// (`[[pulsed_fusion_systems]]`).
+#[derive(Debug, Deserialize)]
+struct PulsedFusionAsset {
+    name: String,
+    #[serde(default = "mount_position_default")]
+    mount_position_body_m: [f64; 3],
+    #[serde(default = "thrust_axis_default")]
+    thrust_axis_body: [f64; 3],
+    reaction: FusionReaction,
+    working_fluid: ElectricPropellant,
+    fuel_mass_per_pulse_kg: f64,
+    working_fluid_mass_per_pulse_kg: f64,
+    fusion_gain: f64,
+    plasma_coupling_efficiency: f64,
+    magnetic_nozzle_efficiency: f64,
+    maximum_pulse_frequency_hz: f64,
+    pulse_duration_s: f64,
+    maximum_charge_power_w: f64,
+    energy_buffer_capacity_pulses: u8,
+    energy_buffer_specific_energy_j_kg: f64,
+    pulse_system_specific_power_w_kg: f64,
+    chamber_radius_m: f64,
+    chamber_length_m: f64,
+    magnetic_field_t: f64,
+    coil_current_density_a_m2: f64,
+    structure_density_kg_m3: f64,
+    structure_thickness_m: f64,
+    radiator_area_m2: f64,
+    radiator_temperature_k: f64,
+    radiator_emissivity: f64,
+    radiator_areal_density_kg_m2: f64,
+}
+
+impl PulsedFusionAsset {
+    fn bake(self) -> Result<PulsedFusionMount, Box<dyn Error>> {
+        let engine = PulsedFusionSpec {
+            name: self.name.clone(),
+            reaction: self.reaction,
+            working_fluid: self.working_fluid,
+            fuel_mass_per_pulse_kg: self.fuel_mass_per_pulse_kg,
+            working_fluid_mass_per_pulse_kg: self.working_fluid_mass_per_pulse_kg,
+            fusion_gain: self.fusion_gain,
+            plasma_coupling_efficiency: self.plasma_coupling_efficiency,
+            magnetic_nozzle_efficiency: self.magnetic_nozzle_efficiency,
+            maximum_pulse_frequency_hz: self.maximum_pulse_frequency_hz,
+            pulse_duration_s: self.pulse_duration_s,
+            maximum_charge_power_w: self.maximum_charge_power_w,
+            energy_buffer_capacity_pulses: self.energy_buffer_capacity_pulses,
+            energy_buffer_specific_energy_j_kg: self.energy_buffer_specific_energy_j_kg,
+            pulse_system_specific_power_w_kg: self.pulse_system_specific_power_w_kg,
+            chamber_radius_m: self.chamber_radius_m,
+            chamber_length_m: self.chamber_length_m,
+            magnetic_field_t: self.magnetic_field_t,
+            coil_current_density_a_m2: self.coil_current_density_a_m2,
+            structure_density_kg_m3: self.structure_density_kg_m3,
+            structure_thickness_m: self.structure_thickness_m,
+            radiator_area_m2: self.radiator_area_m2,
+            radiator_temperature_k: self.radiator_temperature_k,
+            radiator_emissivity: self.radiator_emissivity,
+            radiator_areal_density_kg_m2: self.radiator_areal_density_kg_m2,
+        }
+        .compile()?;
+        Ok(PulsedFusionMount {
             name: self.name,
             engine,
             position_body_m: self.mount_position_body_m,
@@ -2549,6 +2718,130 @@ ionization_efficiency = 0.75
         assert!(moment.z < 0.0);
         assert_eq!(points.len(), 1);
         assert!(points[0].waste_heat_w <= points[0].radiator_capacity_w);
+    }
+
+    #[test]
+    fn continuous_and_pulsed_fusion_mounts_are_authorable_and_recentered() {
+        let doc = r#"
+name = "fusion-spacecraft-test"
+mass_kg = 3000.0
+inertia_body_kg_m2 = [[8000.0, 0.0, 0.0], [0.0, 8000.0, 0.0], [0.0, 0.0, 4000.0]]
+
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 4.0
+chord_m = 1.0
+
+[[fusion_torches]]
+name = "dt-torch"
+mount_position_body_m = [-2.0, 0.5, 0.0]
+thrust_axis_body = [1.0, 0.0, 0.0]
+reaction = "deuterium-tritium"
+working_fluid = "hydrogen"
+maximum_fusion_power_w = 100000000.0
+fusion_gain = 10.0
+maximum_working_flow_kg_s = 0.001
+reactor_specific_power_w_kg = 10000.0
+plasma_coupling_efficiency = 0.9
+magnetic_nozzle_efficiency = 0.8
+nozzle_radius_m = 0.5
+nozzle_length_m = 2.0
+magnetic_field_t = 1.0
+coil_current_density_a_m2 = 40000000.0
+structure_density_kg_m3 = 2700.0
+structure_thickness_m = 0.01
+radiator_area_m2 = 3000.0
+radiator_temperature_k = 1000.0
+radiator_emissivity = 0.9
+radiator_areal_density_kg_m2 = 8.0
+
+[[pulsed_fusion_systems]]
+name = "pellet-drive"
+mount_position_body_m = [2.0, -0.5, 0.0]
+thrust_axis_body = [1.0, 0.0, 0.0]
+reaction = "deuterium-tritium"
+working_fluid = "hydrogen"
+fuel_mass_per_pulse_kg = 0.000000001
+working_fluid_mass_per_pulse_kg = 0.0000001
+fusion_gain = 10.0
+plasma_coupling_efficiency = 0.9
+magnetic_nozzle_efficiency = 0.8
+maximum_pulse_frequency_hz = 0.1
+pulse_duration_s = 0.01
+maximum_charge_power_w = 100000.0
+energy_buffer_capacity_pulses = 2
+energy_buffer_specific_energy_j_kg = 1000000.0
+pulse_system_specific_power_w_kg = 1000000.0
+chamber_radius_m = 0.1
+chamber_length_m = 0.5
+magnetic_field_t = 1.0
+coil_current_density_a_m2 = 40000000.0
+structure_density_kg_m3 = 2700.0
+structure_thickness_m = 0.01
+radiator_area_m2 = 10.0
+radiator_temperature_k = 1000.0
+radiator_emissivity = 0.9
+radiator_areal_density_kg_m2 = 8.0
+"#;
+        let asset: VehicleAsset = toml::from_str(doc).expect("fusion TOML parses");
+        let vehicle = asset.bake().expect("fusion vehicle bakes");
+        assert_eq!(vehicle.fusion_torches.len(), 1);
+        assert_eq!(vehicle.pulsed_fusion_systems.len(), 1);
+        assert!(vehicle.mass_properties.mass_kg > 3_000.0);
+        let torch_mass = vehicle.fusion_torches[0].engine.dry_mass_kg;
+        let pulse_mass = vehicle.pulsed_fusion_systems[0].engine.dry_mass_kg;
+        let expected_shift = -(DVec3::new(-2.0, 0.5, 0.0) * torch_mass
+            + DVec3::new(2.0, -0.5, 0.0) * pulse_mass)
+            / (3_000.0 + torch_mass + pulse_mass);
+        assert!(
+            (DVec3::from_array(vehicle.fusion_torches[0].position_body_m)
+                - (DVec3::new(-2.0, 0.5, 0.0) + expected_shift))
+                .length()
+                < 1e-10
+        );
+        assert!(
+            (DVec3::from_array(vehicle.pulsed_fusion_systems[0].position_body_m)
+                - (DVec3::new(2.0, -0.5, 0.0) + expected_shift))
+                .length()
+                < 1e-10
+        );
+        let total_first_moment = DVec3::from_array(vehicle.fusion_torches[0].position_body_m)
+            * torch_mass
+            + DVec3::from_array(vehicle.pulsed_fusion_systems[0].position_body_m) * pulse_mass
+            + expected_shift * 3_000.0;
+        assert!(total_first_moment.length() < 1e-7);
+
+        let ((force, moment), points) = vehicle
+            .fusion_torches_wrench_body_n(&[thessa_sim_core::FusionTorchCommand {
+                available_driver_power_w: 20.0e6,
+                requested_working_flow_kg_s: 1.0e-4,
+            }])
+            .expect("torch wrench");
+        assert!(force.x > 0.0);
+        assert!(moment.is_finite());
+        assert_eq!(points.len(), 1);
+        let pulse_mount = &vehicle.pulsed_fusion_systems[0];
+        let ((pulse_force, pulse_moment), next) = vehicle
+            .pulsed_fusion_wrench_body_n_stateful(
+                &[(
+                    thessa_sim_core::PulsedFusionState {
+                        pulse_phase_s: pulse_mount.engine.pulse_interval_s - 1.0,
+                        stored_driver_energy_j: pulse_mount.engine.driver_energy_per_pulse_j,
+                        cumulative_shots: 0,
+                    },
+                    thessa_sim_core::PulsedFusionCommand {
+                        available_charge_power_w: 100_000.0,
+                        armed: true,
+                    },
+                )],
+                1.0,
+            )
+            .expect("pulse wrench");
+        assert!(pulse_force.x > 0.0);
+        assert!(pulse_moment.is_finite());
+        assert_eq!(next[0].1.pulses_fired, 1);
     }
 
     #[test]

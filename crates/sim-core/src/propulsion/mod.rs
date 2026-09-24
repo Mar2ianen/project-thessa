@@ -31,6 +31,7 @@ mod electric;
 mod engine;
 mod error;
 mod estoc;
+mod fusion;
 mod jet;
 mod liquid;
 mod material;
@@ -62,6 +63,11 @@ pub use estoc::{
     CompiledEstoc, ESTOC_DEFAULT_SWITCH_MACH_HI, ESTOC_DEFAULT_SWITCH_MACH_LO,
     ESTOC_DEFAULT_TRANSITION_TAU_S, ESTOC_MAX_ROCKET_PC_PA, ESTOC_REINFORCEMENT_FRACTION,
     EstocMode, EstocPoint, EstocSpec, EstocTransient,
+};
+pub use fusion::{
+    CompiledFusionTorch, CompiledPulsedFusion, FusionReaction, FusionTorchCommand,
+    FusionTorchMount, FusionTorchOperatingPoint, FusionTorchSpec, PulsedFusionCommand,
+    PulsedFusionMount, PulsedFusionOperatingPoint, PulsedFusionSpec, PulsedFusionState,
 };
 pub use jet::{CompiledJet, JetCommand, JetMount};
 pub use liquid::{CompiledLiquid, LiquidEngineSpec};

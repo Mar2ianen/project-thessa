@@ -7,14 +7,21 @@ use crate::{
     AeroConfig, AeroError, AeroGeometry, AeroPanel, CollisionAxis, CollisionError,
     CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine,
     ElectricThrusterCommand, ElectricThrusterMount, ElectricThrusterPoint, EngineMount, EstocPoint,
-    FlightCondition, FlightError, JetCommand, JetMount, PropDrivePoint, PropellerDriveCommand,
-    PropellerDriveMount, PropulsionError, RigidBodyProperties, SystemMount, TankMount,
-    TurbopropCommand, TurbopropMount, TurbopropOperatingPoint,
+    FlightCondition, FlightError, FusionTorchCommand, FusionTorchMount, FusionTorchOperatingPoint,
+    JetCommand, JetMount, PropDrivePoint, PropellerDriveCommand, PropellerDriveMount,
+    PropulsionError, PulsedFusionCommand, PulsedFusionMount, PulsedFusionOperatingPoint,
+    PulsedFusionState, RigidBodyProperties, SystemMount, TankMount, TurbopropCommand,
+    TurbopropMount, TurbopropOperatingPoint,
 };
 
 pub type StatefulTurbopropWrench = (
     (DVec3, DVec3),
     Vec<(TurbopropOperatingPoint, TurbopropCommand)>,
+);
+
+pub type StatefulPulsedFusionWrench = (
+    (DVec3, DVec3),
+    Vec<(PulsedFusionState, PulsedFusionOperatingPoint)>,
 );
 
 /// One user-configurable aerodynamic control channel.
@@ -169,6 +176,12 @@ pub struct VehicleDefinition {
     /// Installed electric space thrusters (steady power/flow commands).
     #[serde(default)]
     pub electric_thrusters: Vec<ElectricThrusterMount>,
+    /// Installed continuous fusion torches.
+    #[serde(default)]
+    pub fusion_torches: Vec<FusionTorchMount>,
+    /// Installed pulsed fusion systems with event-driven runtime state.
+    #[serde(default)]
+    pub pulsed_fusion_systems: Vec<PulsedFusionMount>,
     /// Installed piston/electric propeller drives (steady source commands;
     /// dry mass aggregates at bake and thrust requires ambient conditions).
     #[serde(default)]
@@ -475,6 +488,8 @@ impl VehicleDefinition {
             systems: Vec::new(),
             jets: Vec::new(),
             electric_thrusters: Vec::new(),
+            fusion_torches: Vec::new(),
+            pulsed_fusion_systems: Vec::new(),
             propeller_drives: Vec::new(),
             turboprops: Vec::new(),
             fold_joints: Vec::new(),
@@ -526,6 +541,12 @@ impl VehicleDefinition {
             mount.validate().map_err(VehicleError::Propulsion)?;
         }
         for mount in &self.electric_thrusters {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        for mount in &self.fusion_torches {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        for mount in &self.pulsed_fusion_systems {
             mount.validate().map_err(VehicleError::Propulsion)?;
         }
         for mount in &self.propeller_drives {
@@ -711,6 +732,30 @@ impl VehicleDefinition {
         Ok(self)
     }
 
+    /// Attach compiled continuous fusion torches.
+    pub fn with_fusion_torches(
+        mut self,
+        fusion_torches: Vec<FusionTorchMount>,
+    ) -> Result<Self, VehicleError> {
+        for mount in &fusion_torches {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        self.fusion_torches = fusion_torches;
+        Ok(self)
+    }
+
+    /// Attach compiled pulsed fusion systems.
+    pub fn with_pulsed_fusion_systems(
+        mut self,
+        pulsed_fusion_systems: Vec<PulsedFusionMount>,
+    ) -> Result<Self, VehicleError> {
+        for mount in &pulsed_fusion_systems {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        self.pulsed_fusion_systems = pulsed_fusion_systems;
+        Ok(self)
+    }
+
     /// Attach compiled fold joints (baker path; validates records and
     /// panel/joint references through full validation).
     pub fn with_fold_joints(
@@ -748,6 +793,32 @@ impl VehicleDefinition {
         for mount in &self.electric_thrusters {
             let device_mass_kg = mount.engine.dry_mass_kg;
             let position = DVec3::from_array(mount.position_body_m);
+            mass_kg += device_mass_kg;
+            inertia += device_mass_kg
+                * (glam::DMat3::IDENTITY * position.length_squared()
+                    - outer_product(position, position));
+        }
+        self.mass_properties =
+            RigidBodyProperties::new(mass_kg, inertia).map_err(VehicleError::MassProperties)?;
+        Ok(())
+    }
+
+    /// Aggregate continuous and pulsed fusion hardware, driver, coil, and
+    /// radiator dry mass at their mount stations.
+    pub fn bake_fusion_masses(&mut self) -> Result<(), VehicleError> {
+        let mut mass_kg = self.mass_properties.mass_kg;
+        let mut inertia = self.mass_properties.inertia_body_kg_m2;
+        for (position_body_m, device_mass_kg) in self
+            .fusion_torches
+            .iter()
+            .map(|mount| (mount.position_body_m, mount.engine.dry_mass_kg))
+            .chain(
+                self.pulsed_fusion_systems
+                    .iter()
+                    .map(|mount| (mount.position_body_m, mount.engine.dry_mass_kg)),
+            )
+        {
+            let position = DVec3::from_array(position_body_m);
             mass_kg += device_mass_kg;
             inertia += device_mass_kg
                 * (glam::DMat3::IDENTITY * position.length_squared()
@@ -1002,6 +1073,64 @@ impl VehicleDefinition {
         Ok(((force, moment), points))
     }
 
+    /// Evaluate installed continuous fusion torches and return their body
+    /// wrench plus per-mount reactor, flow, and energy telemetry.
+    pub fn fusion_torches_wrench_body_n(
+        &self,
+        commands: &[FusionTorchCommand],
+    ) -> Result<((DVec3, DVec3), Vec<FusionTorchOperatingPoint>), VehicleError> {
+        if commands.len() != self.fusion_torches.len() {
+            return Err(VehicleError::InvalidVehicle(format!(
+                "expected {} fusion-torch commands, got {}",
+                self.fusion_torches.len(),
+                commands.len()
+            )));
+        }
+        let mut force = DVec3::ZERO;
+        let mut moment = DVec3::ZERO;
+        let mut points = Vec::with_capacity(commands.len());
+        for (mount, command) in self.fusion_torches.iter().zip(commands) {
+            let point = mount
+                .operating_point(*command)
+                .map_err(VehicleError::Propulsion)?;
+            let thrust = DVec3::from_array(mount.thrust_axis_body) * point.thrust_n;
+            force += thrust;
+            moment += DVec3::from_array(mount.position_body_m).cross(thrust);
+            points.push(point);
+        }
+        Ok(((force, moment), points))
+    }
+
+    /// Advance installed pulsed-fusion systems for one physics step, summing
+    /// average force/moment over the step and returning each next state.
+    pub fn pulsed_fusion_wrench_body_n_stateful(
+        &self,
+        commands: &[(PulsedFusionState, PulsedFusionCommand)],
+        dt_s: f64,
+    ) -> Result<StatefulPulsedFusionWrench, VehicleError> {
+        if commands.len() != self.pulsed_fusion_systems.len() {
+            return Err(VehicleError::InvalidVehicle(format!(
+                "expected {} pulsed-fusion commands, got {}",
+                self.pulsed_fusion_systems.len(),
+                commands.len()
+            )));
+        }
+        let mut force = DVec3::ZERO;
+        let mut moment = DVec3::ZERO;
+        let mut next = Vec::with_capacity(commands.len());
+        for (mount, (state, command)) in self.pulsed_fusion_systems.iter().zip(commands) {
+            let (next_state, point) = mount
+                .engine
+                .advance(*state, *command, dt_s)
+                .map_err(VehicleError::Propulsion)?;
+            let thrust = DVec3::from_array(mount.thrust_axis_body) * point.average_thrust_n;
+            force += thrust;
+            moment += DVec3::from_array(mount.position_body_m).cross(thrust);
+            next.push((next_state, point));
+        }
+        Ok(((force, moment), next))
+    }
+
     /// Evaluate every installed shaft-power drive and return the combined
     /// body-frame force/moment plus per-drive telemetry. Commands carry each
     /// source's requested shaft RPM and throttle.
@@ -1231,8 +1360,10 @@ mod tests {
     use crate::{
         AirCycle, AirbreathingSpec, ChamberMaterial, ElectricMotorSpec, ElectricPropellant,
         ElectricThrusterCommand, ElectricThrusterDesign, ElectricThrusterMount,
-        ElectricThrusterSpec, EstocMode, EstocSpec, IntakeKind, JetFuel, PropellerDriveCommand,
-        PropellerDriveMount, PropellerDriveSpec, PropellerSpec, ShaftPowerSourceSpec, ShaftSpec,
+        ElectricThrusterSpec, EstocMode, EstocSpec, FusionReaction, FusionTorchCommand,
+        FusionTorchMount, FusionTorchSpec, IntakeKind, JetFuel, PropellerDriveCommand,
+        PropellerDriveMount, PropellerDriveSpec, PropellerSpec, PulsedFusionCommand,
+        PulsedFusionMount, PulsedFusionSpec, PulsedFusionState, ShaftPowerSourceSpec, ShaftSpec,
         TurbopropCommand, TurbopropDriveSpec, TurbopropMount,
     };
 
@@ -1388,6 +1519,116 @@ mod tests {
         assert_eq!(moment.x, 0.0);
         assert_eq!(moment.y, 0.0);
         assert!(vehicle.electric_thrusters_wrench_body_n(&[]).is_err());
+    }
+
+    #[test]
+    fn fusion_mounts_bake_mass_and_stateful_pulses_apply_body_wrench() {
+        let base = test_vehicle();
+        let torch = FusionTorchSpec {
+            name: "mounted-dt-torch".into(),
+            reaction: FusionReaction::DeuteriumTritium,
+            working_fluid: ElectricPropellant::Hydrogen,
+            maximum_fusion_power_w: 100.0e6,
+            fusion_gain: 10.0,
+            maximum_working_flow_kg_s: 1.0e-3,
+            reactor_specific_power_w_kg: 10_000.0,
+            plasma_coupling_efficiency: 0.9,
+            magnetic_nozzle_efficiency: 0.8,
+            nozzle_radius_m: 0.5,
+            nozzle_length_m: 2.0,
+            magnetic_field_t: 1.0,
+            coil_current_density_a_m2: 4.0e7,
+            structure_density_kg_m3: 2_700.0,
+            structure_thickness_m: 0.01,
+            radiator_area_m2: 3_000.0,
+            radiator_temperature_k: 1_000.0,
+            radiator_emissivity: 0.9,
+            radiator_areal_density_kg_m2: 8.0,
+        }
+        .compile()
+        .expect("continuous torch");
+        let pulse = PulsedFusionSpec {
+            name: "mounted-pellet-drive".into(),
+            reaction: FusionReaction::DeuteriumTritium,
+            working_fluid: ElectricPropellant::Hydrogen,
+            fuel_mass_per_pulse_kg: 1.0e-9,
+            working_fluid_mass_per_pulse_kg: 1.0e-7,
+            fusion_gain: 10.0,
+            plasma_coupling_efficiency: 0.9,
+            magnetic_nozzle_efficiency: 0.8,
+            maximum_pulse_frequency_hz: 0.1,
+            pulse_duration_s: 0.01,
+            maximum_charge_power_w: 100_000.0,
+            energy_buffer_capacity_pulses: 2,
+            energy_buffer_specific_energy_j_kg: 1.0e6,
+            pulse_system_specific_power_w_kg: 1.0e6,
+            chamber_radius_m: 0.1,
+            chamber_length_m: 0.5,
+            magnetic_field_t: 1.0,
+            coil_current_density_a_m2: 4.0e7,
+            structure_density_kg_m3: 2_700.0,
+            structure_thickness_m: 0.01,
+            radiator_area_m2: 10.0,
+            radiator_temperature_k: 1_000.0,
+            radiator_emissivity: 0.9,
+            radiator_areal_density_kg_m2: 8.0,
+        }
+        .compile()
+        .expect("pulsed fusion system");
+        let expected_extra_mass = torch.dry_mass_kg + pulse.dry_mass_kg;
+        let mut vehicle = base
+            .with_fusion_torches(vec![FusionTorchMount {
+                name: "torch-aft".into(),
+                engine: torch,
+                position_body_m: [0.0, 1.0, 0.0],
+                thrust_axis_body: [1.0, 0.0, 0.0],
+            }])
+            .expect("torch mount")
+            .with_pulsed_fusion_systems(vec![PulsedFusionMount {
+                name: "pulse-aft".into(),
+                engine: pulse,
+                position_body_m: [0.0, 1.0, 0.0],
+                thrust_axis_body: [1.0, 0.0, 0.0],
+            }])
+            .expect("pulse mount");
+        vehicle.bake_fusion_masses().expect("fusion mass");
+        assert!((vehicle.mass_properties.mass_kg - 1_000.0 - expected_extra_mass).abs() < 1e-8);
+
+        let ((torch_force, torch_moment), torch_points) = vehicle
+            .fusion_torches_wrench_body_n(&[FusionTorchCommand {
+                available_driver_power_w: 20.0e6,
+                requested_working_flow_kg_s: 1.0e-4,
+            }])
+            .expect("torch wrench");
+        assert_eq!(torch_points.len(), 1);
+        assert!(torch_force.x > 0.0);
+        assert!(torch_moment.z < 0.0);
+
+        let ((pulse_force, pulse_moment), next) = vehicle
+            .pulsed_fusion_wrench_body_n_stateful(
+                &[(
+                    PulsedFusionState {
+                        pulse_phase_s: pulse.pulse_interval_s - 1.0,
+                        stored_driver_energy_j: pulse.driver_energy_per_pulse_j,
+                        cumulative_shots: 0,
+                    },
+                    PulsedFusionCommand {
+                        available_charge_power_w: 100_000.0,
+                        armed: true,
+                    },
+                )],
+                1.0,
+            )
+            .expect("pulsed fusion wrench");
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].1.pulses_fired, 1);
+        assert!(pulse_force.x > 0.0);
+        assert!(pulse_moment.z < 0.0);
+        assert!(
+            vehicle
+                .pulsed_fusion_wrench_body_n_stateful(&[], 1.0)
+                .is_err()
+        );
     }
 
     #[test]

@@ -10,12 +10,13 @@ nuclear thermal models, multi-chamber systems, air-breathing jets
 composition-aware atmosphere queries (section 10), and the ESTOC combined-cycle
 engine, plus piston/electric propeller drives and a
 stateful, heat-budgeted turboprop takeoff path on a reusable ideal actuator
-disk (section 9), and steady electric spacecraft thrusters (section 13).
+disk (section 9), steady electric spacecraft thrusters (section 13), and
+continuous/pulsed fusion propulsion (section 14).
 Tank depletion wiring, the flight-loop allocator,
 transient piston/electric source and prop-shaft
 state, finite-blade propeller maps, an independent free-power-turbine spool,
-high-fidelity scramjet shock-train/finite-rate chemistry, continuous/pulsed
-fusion propulsion, and the editor UI are still TBD (see section 18).
+high-fidelity scramjet shock-train/finite-rate chemistry, fusion confinement
+and transient thermal fidelity, and the editor UI are still TBD (see section 18).
 
 ## 1. Design goal
 
@@ -690,6 +691,41 @@ high-velocity exhaust
 
 Relevant parameters may include reactor specific power, fusion gain, plasma temperature, exhaust fraction, magnetic-nozzle efficiency, working fluid/reaction products, field strength, and cooling/radiator capacity.
 
+Status note (2026-09-24): sim-core now compiles a reduced continuous torch
+and a distinct event-driven pulsed engine, each with vehicle mounts, mass
+aggregation, baker authoring, heat/power telemetry, and thrust/moment
+integration. These models establish the component/resource boundary; they do
+not claim a fusion-plasma or confinement simulation.
+
+`FusionReaction` carries reaction energy and charged-product energy share for
+D-T (17.6 MeV, 3.5 MeV charged), equal-branch D-D (3.65 MeV average, 2.425 MeV
+average charged), D-He3 (18.3 MeV charged), and p-B11 (8.68 MeV charged).
+Specific energy is `Q × N_A / molar_mass_of_reactants`; the compiled design
+uses that value to derive fusion fuel consumption, not a reaction-name thrust
+lookup.
+
+For a continuous torch, `fusion_gain = fusion_power / driver_power`. The
+reaction power is limited by driver availability, rated fusion power, and the
+radiator heat budget. With charged fraction `fc`, plasma coupling `ηc`, and
+magnetic-nozzle efficiency `ηn`,
+
+```text
+Pjet       = Pfusion × fc × ηc × ηn
+Pexhaust   = Pfusion × fc × ηc × (1 − ηn)
+Qlocal     = Pdriver + Pfusion × (1 − fc) + Pfusion × fc × (1 − ηc)
+Pfusion    = fuel_flow × reaction_specific_energy
+thrust     = sqrt(2 × Pjet × (fuel_flow + working_flow))
+```
+
+The ideal mixed exhaust carries reaction products plus commanded working
+fluid. Radiator capacity is `εσA(Trad⁴ − Tbackground⁴)`, and runtime clips
+fusion power when `Qlocal` would exceed it. Reactor dry mass follows rated
+fusion power / reactor specific power; nozzle walls, a field coil sized from
+`B = μ0 n I` and conductor current density, and radiators add geometry/material
+mass at the mount. The model does not solve confinement, plasma temperature,
+reaction-rate kinetics, ash separation, neutron shielding, or a magnetic-field
+map.
+
 ### 14.2 Pulsed fusion
 
 Conceptually:
@@ -708,6 +744,30 @@ thrust pulses
 ```
 
 This supports pulsed-fusion concepts without pretending they behave like steady-flow chemical engines.
+
+`PulsedFusionSpec` instead authors fuel and working-fluid mass per shot,
+fusion gain, driver charge power, finite buffer capacity/specific energy,
+pulse duration/frequency, coupling/nozzle efficiency, and pulse-chamber/coil/
+radiator geometry. State is `(pulse_phase, stored_driver_energy, cumulative
+shots)`. Each physics-step advance charges the finite buffer, fires only when
+both cadence and driver-energy conditions are met, and returns an impulse
+total for the step. The cadence lower bound is the maximum of authored period,
+pulse duration, and `waste_heat_per_pulse / radiator_capacity`; the disarmed
+state may recharge without firing or advancing the firing phase.
+
+```text
+Ishot = sqrt(2 × Ejet_per_shot × (fuel_mass + working_mass))
+Tstep = sum(Ishot) / dt
+Ebus + Efusion = ΔEbuffer + Ejet + Eexhaust-internal + Qwaste
+```
+
+The radiator cadence is an average-duty limit: each shot reports its heat
+energy and step-average heat rate, while this reduced model has no transient
+thermal-mass node or shot-temperature solver. The thermal graph must consume
+the event heat energy when that integration is added. Driver storage is
+lossless here; charging efficiency, pulse-unit depletion, shock coupling,
+mechanical pusher plates, radiation damage, and fragmentation are fidelity
+debts rather than hidden multipliers.
 
 ### 14.3 Epstein-class / advanced torch engines
 
@@ -1358,8 +1418,8 @@ and stepped-channel ports retain their analytic-radius path.
   closed-form polygon geometry at the production grid. Time integration
   continues to use the existing burn-trace step rule; pressure is recomputed
   from the sampled perimeter rather than interpolating thrust directly.
-- Benchmark (`benches/propulsion.rs`): release compile measured 6.32 ms for
-  a four-segment star and 8.38 ms for a four-segment finocyl, versus 138 µs
+- Benchmark (`benches/propulsion.rs`): release compile measured 4.35 ms for
+  a four-segment star and 4.73 ms for a four-segment finocyl, versus 126 µs
   for analytic four-segment BATES. The distance-field path is hangar compile
   work; runtime replays the precompiled burn curve.
 - Limitation: the current grain model completes the sampled burn front at
@@ -1424,9 +1484,69 @@ thruster designs and installs them through `ElectricThrusterMount`.
   radiator clipping. Species property, utilization, efficiency, and constant-γ
   errors are engineering-model inputs/limits, not hidden thrust calibration.
 - Benchmark (`benches/propulsion.rs`): an 11-power × 4-flow sweep measured
-  21.0 ns/row gridded-ion, 20.7 ns/row Hall, 30.7 ns/row MPD, 40.0 ns/row
-  resistojet, and 20.8 ns/row arcjet on this machine.
+  21.0 ns/row gridded-ion, 20.7 ns/row Hall, 30.3 ns/row MPD, 38.1 ns/row
+  resistojet, and 22.2 ns/row arcjet on this machine.
 - Fidelity debt: pulsed-power supplies, charge-state distributions, plume
   divergence, electrode/grid erosion, transient bus storage, feed-tank
   depletion, Hall electron transport, and VASIMR-class RF/helicon coupling
   remain outside this steady backend.
+
+### 18.14 Continuous and pulsed fusion propulsion (section 14)
+
+Shipped 2026-09-24: `propulsion::fusion` provides separate continuous-torch
+and event-driven pulsed-fusion contracts; both are installable in a vehicle
+and authorable through `vehicle-baker`.
+
+- Continuous state is a steady design (`FusionTorchSpec` / compiled torch),
+  with command `(available driver power, requested working-fluid flow)` and
+  point telemetry for fusion/driver power, reaction-fuel and working-fluid
+  flow, total exhaust flow, thrust/Isp, jet kinetic power, exhaust-internal
+  power, radiator waste heat, radiator capacity, and active limits. Reaction
+  energy, charged-product share, plasma coupling, nozzle conversion, fusion
+  gain, and the radiator determine the outputs. D-T, D-D, D-He3, and p-B11
+  carry documented Q-values and reactant molar masses.
+- Torch energy closure is
+  `Pfusion + Pdriver = Pjet + Pexhaust-internal + Qlocal`. Neutron-carried
+  energy, driver input, and uncoupled charged energy load local heat; magnetic
+  nozzle conversion losses remain as exhaust internal energy. Thrust is the
+  ideal momentum relation over the sum of reacting fuel products and supplied
+  working fluid. The radiator clips fusion power against local heat, and
+  geometry/specific-power inputs size reactor, walls, field coil, and radiator.
+- Pulsed state is `(pulse_phase_s, stored_driver_energy_j, cumulative_shots)`;
+  command carries charge-bus power and arm state. `advance(state, command,
+  dt)` returns the next state plus pulse count, step impulse/average thrust,
+  fuel and working-fluid flow, fusion/driver energy, buffer delta, jet and
+  exhaust energy, waste heat, and power/thermal-limit flags. The buffer has
+  finite energy and charge power; an unarmed drive can recharge without
+  firing. Cadence is bounded by the authored maximum rate, pulse duration,
+  available driver energy, and average radiative heat duty.
+- Pulsed energy closes stepwise:
+  `Ebus + Efusion = ΔEbuffer + Ejet + Eexhaust-internal + Qwaste`. Per-shot
+  impulse is `sqrt(2 Ejet mexhaust)` and vehicle force uses the impulse divided
+  by physics `dt`; mounted moments use the mount lever arm. Heat is reported
+  as event energy and step-average watts. The cadence guarantees average
+  `Qpulse / pulse_interval <= radiator_capacity`; no pulse thermal-mass state
+  or shot-temperature transient is claimed.
+- Baker tables are `[[fusion_torches]]` and
+  `[[pulsed_fusion_systems]]`. Their compiled dry mass includes reactor/pulse
+  hardware, driver or buffer, geometry-derived chamber/nozzle and copper
+  field coils, and radiator. Final assembly COM and inertia include both
+  mount families. Regressions pin D-T Q/mass energy, charged share, torch and
+  pulse first-law closure, radiator clipping, pulse cadence/charge boundaries,
+  step-partition invariance, invalid-state refusal, mounted wrenches, TOML
+  bake, and final recentering.
+- Numerical error: reaction energy and continuous thrust are closed-form;
+  pulse events are advanced to exact cadence/charge event boundaries in f64
+  and energy bookkeeping closes to floating-point tolerance. No fusion-rate,
+  confinement, charged-particle transport, or thermal transient solver is
+  approximated by a fitted thrust coefficient.
+- Benchmark (`benches/propulsion.rs`): release 11-power × 4-flow steady-torch
+  grid measured 23.1 ns/row; the 11-charge-power × 4-step-size pulse advance
+  grid measured 34.4 ns/row. Each row advances compiled runtime state/physics,
+  not TOML parsing or design compilation.
+- Fidelity debt: fusion reaction-rate/confinement and burn dynamics, ash
+  management, neutron shielding, pulse-buffer losses, transient thermal
+  storage and thermal-graph coupling, pulse-unit depletion, shock/mechanical
+  coupling, magnetic-field topology, and technology/material unlock policy
+  remain future work. These limits are distinct from the shipped steady and
+  event-driven engine interfaces.

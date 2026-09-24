@@ -8,10 +8,11 @@ use std::{hint::black_box, time::Instant};
 use thessa_sim_core::{
     AirCycle, AirbreathingSpec, AtmosphereConfig, ChamberMaterial, CompiledEngine, CoolingMode,
     ElectricMotorSpec, ElectricPropellant, ElectricThrusterDesign, ElectricThrusterSpec,
-    EngineCycle, GasKind, IntakeKind, JetFuel, JetShaftState, LiquidEngineSpec, NozzleContour,
-    PistonEngineSpec, Propellant, PropellerDriveSpec, PropellerSpec, ShaftCommand,
-    ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec, StarterKind, StarterSpec,
-    TurbopropDriveSpec, advance_jet_shaft, analyze_airbreathing, analyze_altitude,
+    EngineCycle, FusionReaction, FusionTorchCommand, FusionTorchSpec, GasKind, IntakeKind, JetFuel,
+    JetShaftState, LiquidEngineSpec, NozzleContour, PistonEngineSpec, Propellant,
+    PropellerDriveSpec, PropellerSpec, PulsedFusionCommand, PulsedFusionSpec, PulsedFusionState,
+    ShaftCommand, ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec, StarterKind,
+    StarterSpec, TurbopropDriveSpec, advance_jet_shaft, analyze_airbreathing, analyze_altitude,
     analyze_propeller_drive, analyze_turboprop_drive, flight_condition,
 };
 
@@ -451,6 +452,117 @@ fn main() {
         let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * row_count) as f64;
         println!("{label} propulsion row: {per_row_ns:.1} ns/row ({row_count} rows/iter)");
     }
+
+    // Continuous and event-driven fusion have separate runtime contracts:
+    // the former evaluates a steady power/flow point; the latter advances
+    // stored pulse energy across cadence boundaries.
+    let torch = FusionTorchSpec {
+        name: "bench-dt-torch".into(),
+        reaction: FusionReaction::DeuteriumTritium,
+        working_fluid: ElectricPropellant::Hydrogen,
+        maximum_fusion_power_w: 100.0e6,
+        fusion_gain: 10.0,
+        maximum_working_flow_kg_s: 1.0e-3,
+        reactor_specific_power_w_kg: 10_000.0,
+        plasma_coupling_efficiency: 0.9,
+        magnetic_nozzle_efficiency: 0.8,
+        nozzle_radius_m: 0.5,
+        nozzle_length_m: 2.0,
+        magnetic_field_t: 1.0,
+        coil_current_density_a_m2: 4.0e7,
+        structure_density_kg_m3: 2_700.0,
+        structure_thickness_m: 0.01,
+        radiator_area_m2: 3_000.0,
+        radiator_temperature_k: 1_000.0,
+        radiator_emissivity: 0.9,
+        radiator_areal_density_kg_m2: 8.0,
+    }
+    .compile()
+    .expect("fusion torch");
+    let torch_flows = [1.0e-5, 1.0e-4, 5.0e-4, 1.0e-3];
+    let evaluate_torch_grid = || {
+        for power_w in &power_grid {
+            for working_flow_kg_s in torch_flows {
+                black_box(
+                    torch
+                        .operating_point(FusionTorchCommand {
+                            available_driver_power_w: *power_w,
+                            requested_working_flow_kg_s: working_flow_kg_s,
+                        })
+                        .expect("fusion torch point"),
+                );
+            }
+        }
+    };
+    evaluate_torch_grid();
+    let start = Instant::now();
+    for _ in 0..iters {
+        evaluate_torch_grid();
+    }
+    let fusion_rows = power_grid.len() * torch_flows.len();
+    let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * fusion_rows) as f64;
+    println!("continuous fusion row: {per_row_ns:.1} ns/row ({fusion_rows} rows/iter)");
+
+    let pulsed_fusion = PulsedFusionSpec {
+        name: "bench-pellet-drive".into(),
+        reaction: FusionReaction::DeuteriumTritium,
+        working_fluid: ElectricPropellant::Hydrogen,
+        fuel_mass_per_pulse_kg: 1.0e-9,
+        working_fluid_mass_per_pulse_kg: 1.0e-7,
+        fusion_gain: 10.0,
+        plasma_coupling_efficiency: 0.9,
+        magnetic_nozzle_efficiency: 0.8,
+        maximum_pulse_frequency_hz: 0.1,
+        pulse_duration_s: 0.01,
+        maximum_charge_power_w: 100_000.0,
+        energy_buffer_capacity_pulses: 2,
+        energy_buffer_specific_energy_j_kg: 1.0e6,
+        pulse_system_specific_power_w_kg: 1.0e6,
+        chamber_radius_m: 0.1,
+        chamber_length_m: 0.5,
+        magnetic_field_t: 1.0,
+        coil_current_density_a_m2: 4.0e7,
+        structure_density_kg_m3: 2_700.0,
+        structure_thickness_m: 0.01,
+        radiator_area_m2: 10.0,
+        radiator_temperature_k: 1_000.0,
+        radiator_emissivity: 0.9,
+        radiator_areal_density_kg_m2: 8.0,
+    }
+    .compile()
+    .expect("pulsed fusion drive");
+    let step_sizes_s = [0.1, 1.0, 10.0, 25.0];
+    let pulse_ready_state = PulsedFusionState {
+        pulse_phase_s: 0.0,
+        stored_driver_energy_j: pulsed_fusion.buffer_capacity_j,
+        cumulative_shots: 0,
+    };
+    let evaluate_pulse_grid = || {
+        for power_w in &power_grid {
+            for dt_s in step_sizes_s {
+                black_box(
+                    pulsed_fusion
+                        .advance(
+                            pulse_ready_state,
+                            PulsedFusionCommand {
+                                available_charge_power_w: *power_w,
+                                armed: true,
+                            },
+                            dt_s,
+                        )
+                        .expect("pulsed fusion point"),
+                );
+            }
+        }
+    };
+    evaluate_pulse_grid();
+    let start = Instant::now();
+    for _ in 0..iters {
+        evaluate_pulse_grid();
+    }
+    let fusion_rows = power_grid.len() * step_sizes_s.len();
+    let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * fusion_rows) as f64;
+    println!("pulsed fusion row: {per_row_ns:.1} ns/row ({fusion_rows} rows/iter)");
 
     let turboprop = TurbopropDriveSpec {
         air: AirbreathingSpec {

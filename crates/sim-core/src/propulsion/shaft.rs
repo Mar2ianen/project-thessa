@@ -33,7 +33,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{AirCycle, CompiledAirbreather, FlightCondition, PropulsionError, require_positive};
+use super::{
+    AirCycle, AirOperatingPoint, CompiledAirbreather, FlightCondition, PropulsionError,
+    require_positive,
+};
 
 /// Bearing/accessory friction as a fraction of the reference shaft power
 /// at `spool_n` cubed (documented loss channel; the cubic speed
@@ -422,6 +425,40 @@ pub fn advance_jet_shaft_loaded(
     dt_s: f64,
     extra_load_w: f64,
 ) -> Result<(JetShaftState, ShaftTelemetry), PropulsionError> {
+    advance_jet_shaft_loaded_with(
+        engine,
+        state,
+        command,
+        condition,
+        dt_s,
+        extra_load_w,
+        |spool_n, ignition| {
+            engine.operating_point_at_spool_loaded(
+                condition,
+                command.throttle,
+                spool_n,
+                ignition,
+                extra_load_w,
+            )
+        },
+    )
+}
+
+/// Shaft integrator variant whose cycle balance is supplied by the caller.
+/// ESTOC uses this to include its precooler-adjusted compressor work in the
+/// same shaft balance that advances the spool.
+pub(super) fn advance_jet_shaft_loaded_with<F>(
+    engine: &CompiledAirbreather,
+    state: JetShaftState,
+    command: &ShaftCommand,
+    condition: &FlightCondition,
+    dt_s: f64,
+    extra_load_w: f64,
+    evaluate: F,
+) -> Result<(JetShaftState, ShaftTelemetry), PropulsionError>
+where
+    F: FnOnce(f64, bool) -> Result<(AirOperatingPoint, ShaftBalance), PropulsionError>,
+{
     if !engine.cycle.has_shaft() {
         return Err(PropulsionError::InvalidCommand(
             "ramjets and scramjets have no shaft to advance".into(),
@@ -479,13 +516,7 @@ pub fn advance_jet_shaft_loaded(
     // Air path at the current spool speed. Fuel is scheduled whenever
     // throttle commands it (a start attempt below light-off still asks
     // "could this light?"); capacity is gated on the decided state.
-    let (point, balance) = engine.operating_point_at_spool_loaded(
-        condition,
-        command.throttle,
-        spool_n,
-        commanded,
-        extra_load_w,
-    )?;
+    let (point, balance) = evaluate(spool_n, commanded)?;
 
     // Light-off / self-sustain hysteresis.
     let mut lit = state.lit;

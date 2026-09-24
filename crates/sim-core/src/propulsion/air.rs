@@ -41,7 +41,7 @@ pub const AIR_GAMMA: f64 = 1.4;
 /// Subsonic intake recovery (documented).
 pub const INTAKE_RECOVERY_SUBSONIC: f64 = 0.97;
 /// Compressor polytropic efficiency (documented).
-pub const COMPRESSOR_POLY_EFFICIENCY: f64 = 0.88;
+pub(super) const COMPRESSOR_POLY_EFFICIENCY: f64 = 0.88;
 /// Turbine polytropic efficiency (documented).
 pub const TURBINE_POLY_EFFICIENCY: f64 = 0.90;
 /// Combustor efficiency (documented: pattern factor + wall quenching).
@@ -468,6 +468,7 @@ struct CycleState {
     mdot_air_kg_s: f64,
     mdot_core_kg_s: f64,
     fuel_flow_kg_s: f64,
+    boost_fuel_flow_kg_s: f64,
     fuel_ab_flow_kg_s: f64,
     /// Hot flow reaching the core nozzle (customer bleed excluded).
     nozzle_flow_kg_s: f64,
@@ -478,6 +479,12 @@ struct CycleState {
     /// Compressor + fan power the shaft must supply at this spool speed
     /// (W): the shaft-side demand of the evaluated state.
     shaft_demand_w: f64,
+    combustor_heat_release_w: f64,
+    core_gamma: f64,
+    core_gas_constant_j_kg_k: f64,
+    compressor_inlet_total_temp_k: f64,
+    precooler_heat_flow_w: f64,
+    precooler_wall_heat_flow_w: f64,
     /// Maximum downstream power-turbine output at this gas state (W), after
     /// the authored fuel-heat budget and the positive exhaust-enthalpy bound.
     power_takeoff_capacity_w: f64,
@@ -492,12 +499,24 @@ struct CycleState {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub(super) struct AirCycleConditioning {
+    pub compressor_inlet_total_temp_k: f64,
+    pub compressor_pressure_recovery: f64,
+    pub boost_fuel: JetFuel,
+    pub boost_fuel_flow_kg_s: f64,
+    /// Sensible heat picked up by boost fuel and returned to the combustor.
+    pub coolant_heat_flow_w: f64,
+    pub wall_heat_flow_w: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
 struct CycleDriveInput {
     spool_n: f64,
     ignition: bool,
     corrected_flow_kg_s: Option<f64>,
     power_takeoff_w: f64,
     power_takeoff_heat_fraction: f64,
+    conditioning: Option<AirCycleConditioning>,
 }
 
 /// Run the Brayton core at a condition, TIT, spool speed, and ignition
@@ -526,6 +545,7 @@ fn run_cycle(
         corrected_flow_kg_s,
         power_takeoff_w,
         power_takeoff_heat_fraction,
+        conditioning,
     } = drive;
     if !power_takeoff_w.is_finite() || power_takeoff_w < 0.0 {
         return Err(PropulsionError::InvalidCommand(
@@ -556,6 +576,22 @@ fn run_cycle(
     let p_ram = condition.ambient_pa
         * (t_ram / condition.ambient_temp_k).powf(gamma_a / (gamma_a - 1.0))
         * spec.intake.recovery(condition.mach);
+    let compressor_inlet_total_temp_k = conditioning
+        .map(|input| input.compressor_inlet_total_temp_k)
+        .unwrap_or(t_ram);
+    let compressor_pressure_recovery = conditioning
+        .map(|input| input.compressor_pressure_recovery)
+        .unwrap_or(1.0);
+    if !compressor_inlet_total_temp_k.is_finite()
+        || compressor_inlet_total_temp_k <= 0.0
+        || compressor_inlet_total_temp_k > t_ram + 1e-9
+        || !compressor_pressure_recovery.is_finite()
+        || !(0.0..=1.0).contains(&compressor_pressure_recovery)
+    {
+        return Err(PropulsionError::InvalidCommand(
+            "pre-cooler outlet temperature and pressure recovery are invalid".into(),
+        ));
+    }
     // Air available: ram capture, plus the suction floor for active
     // (turbomachinery) cycles scaled by actual spool speed — a stopped
     // compressor inhales nothing. Ramjet/scramjet cycles are passive:
@@ -595,8 +631,8 @@ fn run_cycle(
         _ => 1.0 + (spec.compressor_ratio - 1.0) * spool_n * spool_n,
     };
     let tau_c = pi_c.powf((gamma_a - 1.0) / (gamma_a * COMPRESSOR_POLY_EFFICIENCY));
-    let t_comp_exit = t_ram * tau_c;
-    let p_comp_exit = p_ram * pi_c;
+    let t_comp_exit = compressor_inlet_total_temp_k * tau_c;
+    let p_comp_exit = p_ram * compressor_pressure_recovery * pi_c;
     let pi_f = if bypass > 0.0 {
         1.0 + (spec.fan_pressure_ratio - 1.0) * spool_n * spool_n
     } else {
@@ -609,7 +645,7 @@ fn run_cycle(
     // this spool speed (specific works per kg of core flow; the fan
     // term carries the bypass weighting). Zero at zero spool (no head),
     // so a stopped starterless engine books no demand and no suction.
-    let work_comp = AIR_CP_J_KG_K * (t_comp_exit - t_ram);
+    let work_comp = AIR_CP_J_KG_K * (t_comp_exit - compressor_inlet_total_temp_k);
     let work_fan = if bypass > 0.0 {
         bypass * AIR_CP_J_KG_K * (t_fan_exit - t_ram)
     } else {
@@ -627,20 +663,109 @@ fn run_cycle(
     let o2_avail_kg_s = mdot_core_kg_s * (1.0 - bleed - CUSTOMER_BLEED_FRACTION) * o2_mass_fraction;
     let combustor_air_kg_s = mdot_core_kg_s * (1.0 - bleed - CUSTOMER_BLEED_FRACTION);
     let f_for_tit = AIR_CP_J_KG_K * (turbine_temp_k - t_comp_exit) / (COMBUSTOR_EFFICIENCY * lhv);
-    let f_o2_cap = if combustor_air_kg_s > 0.0 {
-        o2_avail_kg_s / (combustor_air_kg_s * o2_per_fuel)
+    let conditioning_fuel = conditioning.map(|input| input.boost_fuel.properties());
+    let boost_flow_requested_kg_s = if ignition && !scramjet_limited {
+        conditioning.map_or(0.0, |input| input.boost_fuel_flow_kg_s)
     } else {
         0.0
     };
-    // Ignition gates the fuel schedule only: oxygen and thermal
-    // feasibility stay reported whether or not ignition is commanded,
-    // so the cause flags survive a windmilling evaluation.
-    let fuel_air = if ignition && !scramjet_limited {
-        f_for_tit.max(0.0).min(f_o2_cap)
+    let coolant_heat_flow_w = if ignition && !scramjet_limited {
+        conditioning.map_or(0.0, |input| input.coolant_heat_flow_w)
     } else {
         0.0
     };
-    let oxygen_limited = f_for_tit > f_o2_cap && f_for_tit > 0.0;
+    let wall_heat_flow_w = if ignition && !scramjet_limited {
+        conditioning.map_or(0.0, |input| input.wall_heat_flow_w)
+    } else {
+        0.0
+    };
+    let (
+        fuel_air,
+        fuel_flow_kg_s,
+        boost_fuel_flow_kg_s,
+        oxygen_limited,
+        turbine_temp_eff,
+        combustor_heat_release_w,
+        core_gamma,
+        core_gas_constant_j_kg_k,
+        core_cp,
+    ) = if let Some(boost_properties) =
+        conditioning_fuel.filter(|_| boost_flow_requested_kg_s > 0.0)
+    {
+        let boost_lhv = boost_properties.0;
+        let boost_o2_per_fuel = boost_properties.2;
+        let requested_heat_w = (AIR_CP_J_KG_K * (turbine_temp_k - t_comp_exit) * mdot_core_kg_s
+            - coolant_heat_flow_w)
+            .max(0.0)
+            / COMBUSTOR_EFFICIENCY;
+        let bulk_wanted_kg_s =
+            (requested_heat_w - boost_flow_requested_kg_s * boost_lhv).max(0.0) / lhv;
+        let requested_oxygen_kg_s =
+            bulk_wanted_kg_s * o2_per_fuel + boost_flow_requested_kg_s * boost_o2_per_fuel;
+        let oxygen_scale = if requested_oxygen_kg_s > 0.0 {
+            (o2_avail_kg_s / requested_oxygen_kg_s).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let bulk_flow = bulk_wanted_kg_s * oxygen_scale;
+        let boost_flow = boost_flow_requested_kg_s * oxygen_scale;
+        let total_fuel_flow = bulk_flow + boost_flow;
+        let fuel_air = if combustor_air_kg_s > 0.0 {
+            total_fuel_flow / combustor_air_kg_s
+        } else {
+            0.0
+        };
+        let heat_release =
+            COMBUSTOR_EFFICIENCY * (bulk_flow * lhv + boost_flow * boost_lhv) + coolant_heat_flow_w;
+        let turbine_temp = t_comp_exit + heat_release / (AIR_CP_J_KG_K * mdot_core_kg_s.max(1e-12));
+        let boost_cp = boost_properties.3 * boost_properties.4 / (boost_properties.3 - 1.0);
+        let main_cp = cp_b;
+        let mixed_cp = if total_fuel_flow > 0.0 {
+            (bulk_flow * main_cp + boost_flow * boost_cp) / total_fuel_flow
+        } else {
+            main_cp
+        };
+        let mixed_r = if total_fuel_flow > 0.0 {
+            (bulk_flow * r_b + boost_flow * boost_properties.4) / total_fuel_flow
+        } else {
+            r_b
+        };
+        (
+            fuel_air,
+            bulk_flow,
+            boost_flow,
+            requested_oxygen_kg_s > o2_avail_kg_s,
+            turbine_temp,
+            heat_release,
+            mixed_cp / (mixed_cp - mixed_r),
+            mixed_r,
+            mixed_cp,
+        )
+    } else {
+        let f_o2_cap = if combustor_air_kg_s > 0.0 {
+            o2_avail_kg_s / (combustor_air_kg_s * o2_per_fuel)
+        } else {
+            0.0
+        };
+        let fuel_air = if ignition && !scramjet_limited {
+            f_for_tit.max(0.0).min(f_o2_cap)
+        } else {
+            0.0
+        };
+        let fuel_flow = fuel_air * mdot_core_kg_s * (1.0 - bleed - CUSTOMER_BLEED_FRACTION);
+        let heat_release = fuel_flow * COMBUSTOR_EFFICIENCY * lhv;
+        (
+            fuel_air,
+            fuel_flow,
+            0.0,
+            f_for_tit > f_o2_cap && f_for_tit > 0.0,
+            t_comp_exit + fuel_air * COMBUSTOR_EFFICIENCY * lhv / AIR_CP_J_KG_K,
+            heat_release,
+            gamma_b,
+            r_b,
+            cp_b,
+        )
+    };
     // No fuel, no cycle: flameout (anoxic air, ignition off, or thermal
     // infeasibility — compressor delivery hotter than the TIT schedule
     // allows).
@@ -654,6 +779,7 @@ fn run_cycle(
             mdot_air_kg_s,
             mdot_core_kg_s,
             fuel_flow_kg_s: 0.0,
+            boost_fuel_flow_kg_s: 0.0,
             fuel_ab_flow_kg_s: 0.0,
             nozzle_flow_kg_s: mdot_core_kg_s,
             core_total_temp_k: t_ram,
@@ -661,6 +787,12 @@ fn run_cycle(
             fan_total_temp_k: t_fan_exit,
             fan_total_pressure_pa: p_fan_exit,
             shaft_demand_w,
+            combustor_heat_release_w: 0.0,
+            core_gamma,
+            core_gas_constant_j_kg_k,
+            compressor_inlet_total_temp_k,
+            precooler_heat_flow_w: coolant_heat_flow_w + wall_heat_flow_w,
+            precooler_wall_heat_flow_w: wall_heat_flow_w,
             power_takeoff_capacity_w: 0.0,
             oxygen_limited: oxygen_limited || oxygen_limited_starved,
             reheat_limited: false,
@@ -670,14 +802,12 @@ fn run_cycle(
             scramjet_limited,
         });
     }
-    let turbine_temp_eff = t_comp_exit + fuel_air * COMBUSTOR_EFFICIENCY * lhv / AIR_CP_J_KG_K;
-    let fuel_flow_kg_s = fuel_air * mdot_core_kg_s * (1.0 - bleed - CUSTOMER_BLEED_FRACTION);
     let p_comb = p_comp_exit * (1.0 - COMBUSTOR_DP_FRACTION);
     // Turbine work balance: the rotor sees combustor flow only; cooling
     // bleed bypasses the rotor and mixes downstream at rotor-exit
     // pressure (documented mixing loss: the bleed carries no work).
     let rotor_flow_ratio = (1.0 - bleed - CUSTOMER_BLEED_FRACTION) * (1.0 + fuel_air);
-    let delta_t_rotor = (work_comp + work_fan) / (cp_b * rotor_flow_ratio);
+    let delta_t_rotor = (work_comp + work_fan) / (core_cp * rotor_flow_ratio);
     // Feasibility: the turbine must supply compression work with margin.
     if delta_t_rotor >= turbine_temp_eff * 0.95 && mdot_core_kg_s > 0.0 {
         if power_takeoff_w > 0.0 {
@@ -689,6 +819,7 @@ fn run_cycle(
             mdot_air_kg_s,
             mdot_core_kg_s,
             fuel_flow_kg_s: 0.0,
+            boost_fuel_flow_kg_s: 0.0,
             fuel_ab_flow_kg_s: 0.0,
             nozzle_flow_kg_s: mdot_core_kg_s,
             core_total_temp_k: t_ram,
@@ -696,6 +827,12 @@ fn run_cycle(
             fan_total_temp_k: t_fan_exit,
             fan_total_pressure_pa: p_fan_exit,
             shaft_demand_w,
+            combustor_heat_release_w: 0.0,
+            core_gamma,
+            core_gas_constant_j_kg_k,
+            compressor_inlet_total_temp_k,
+            precooler_heat_flow_w: coolant_heat_flow_w + wall_heat_flow_w,
+            precooler_wall_heat_flow_w: wall_heat_flow_w,
             power_takeoff_capacity_w: 0.0,
             oxygen_limited: oxygen_limited || oxygen_limited_starved,
             reheat_limited: false,
@@ -712,7 +849,7 @@ fn run_cycle(
     let p_rotor_exit = p_comb
         * (1.0 - delta_t_rotor / (turbine_temp_eff * TURBINE_POLY_EFFICIENCY))
             .max(0.01)
-            .powf(gamma_b / (gamma_b - 1.0));
+            .powf(core_gamma / (core_gamma - 1.0));
     let bleed_flow_ratio = bleed / rotor_flow_ratio.max(1e-12);
     let t_turb_exit = t_rotor_exit * (1.0 - bleed_flow_ratio) + t_comp_exit * bleed_flow_ratio;
     let mixing_loss = if bleed > 0.0 {
@@ -721,14 +858,14 @@ fn run_cycle(
         0.0
     };
     let p_turb_exit = p_rotor_exit * (1.0 - mixing_loss);
-    let hot_nozzle_flow_kg_s = mdot_core_kg_s * (rotor_flow_ratio + bleed) + fuel_flow_kg_s;
-    let configured_takeoff_w =
-        power_takeoff_heat_fraction * fuel_flow_kg_s * COMBUSTOR_EFFICIENCY * lhv;
+    let hot_nozzle_flow_kg_s =
+        mdot_core_kg_s * (rotor_flow_ratio + bleed) + fuel_flow_kg_s + boost_fuel_flow_kg_s;
+    let configured_takeoff_w = power_takeoff_heat_fraction * combustor_heat_release_w;
     let max_power_turbine_delta_t = (t_turb_exit - condition.ambient_temp_k)
         .max(0.0)
         .min(t_turb_exit * TURBINE_POLY_EFFICIENCY * (1.0 - 1.0e-12));
     let thermal_takeoff_w =
-        (hot_nozzle_flow_kg_s * cp_b * TURBINE_POLY_EFFICIENCY * max_power_turbine_delta_t)
+        (hot_nozzle_flow_kg_s * core_cp * TURBINE_POLY_EFFICIENCY * max_power_turbine_delta_t)
             .max(0.0);
     let power_takeoff_capacity_w = configured_takeoff_w.min(thermal_takeoff_w);
     if power_takeoff_w > power_takeoff_capacity_w + 1.0e-9 * power_takeoff_capacity_w.max(1.0) {
@@ -742,14 +879,14 @@ fn run_cycle(
     let mut p_turb_exit = p_turb_exit;
     if power_takeoff_w > 0.0 {
         let delta_t_power_turbine =
-            power_takeoff_w / (hot_nozzle_flow_kg_s * cp_b * TURBINE_POLY_EFFICIENCY);
+            power_takeoff_w / (hot_nozzle_flow_kg_s * core_cp * TURBINE_POLY_EFFICIENCY);
         let pressure_factor = 1.0 - delta_t_power_turbine / (t_turb_exit * TURBINE_POLY_EFFICIENCY);
         if !(pressure_factor > 0.0) || !pressure_factor.is_finite() {
             return Err(PropulsionError::InvalidCommand(
                 "power-turbine extraction leaves no physical core-nozzle state".into(),
             ));
         }
-        p_turb_exit *= pressure_factor.powf(gamma_b / (gamma_b - 1.0));
+        p_turb_exit *= pressure_factor.powf(core_gamma / (core_gamma - 1.0));
         t_turb_exit -= delta_t_power_turbine;
     }
     // Afterburner with an explicit species O2 budget: combustor air
@@ -762,10 +899,13 @@ fn run_cycle(
     let mut p_nozzle = p_turb_exit;
     let mut reheat_limited = false;
     if spec.afterburner && mdot_core_kg_s > 0.0 {
-        let o2_used_core_kg_s = fuel_flow_kg_s * o2_per_fuel;
+        let boost_o2_per_fuel = conditioning_fuel.map_or(0.0, |properties| properties.2);
+        let o2_used_core_kg_s =
+            fuel_flow_kg_s * o2_per_fuel + boost_fuel_flow_kg_s * boost_o2_per_fuel;
         let o2_cooling_kg_s = mdot_core_kg_s * bleed * o2_mass_fraction;
         let o2_for_ab_kg_s = (o2_avail_kg_s - o2_used_core_kg_s + o2_cooling_kg_s).max(0.0);
-        let ab_stream_kg_s = mdot_core_kg_s * (rotor_flow_ratio + bleed) + fuel_flow_kg_s;
+        let ab_stream_kg_s =
+            mdot_core_kg_s * (rotor_flow_ratio + bleed) + fuel_flow_kg_s + boost_fuel_flow_kg_s;
         let f_ab_want =
             cp_b * (spec.reheat_temp_k - t_turb_exit).max(0.0) / (COMBUSTOR_EFFICIENCY * lhv);
         let f_ab_cap = if ab_stream_kg_s > 0.0 {
@@ -783,13 +923,23 @@ fn run_cycle(
         mdot_air_kg_s,
         mdot_core_kg_s,
         fuel_flow_kg_s,
+        boost_fuel_flow_kg_s,
         fuel_ab_flow_kg_s,
-        nozzle_flow_kg_s: mdot_core_kg_s * (rotor_flow_ratio + bleed) + fuel_ab_flow_kg_s,
+        nozzle_flow_kg_s: mdot_core_kg_s * (rotor_flow_ratio + bleed)
+            + fuel_flow_kg_s
+            + boost_fuel_flow_kg_s
+            + fuel_ab_flow_kg_s,
         core_total_temp_k: t_nozzle,
         core_total_pressure_pa: p_nozzle,
         fan_total_temp_k: t_fan_exit,
         fan_total_pressure_pa: p_fan_exit,
         shaft_demand_w,
+        combustor_heat_release_w,
+        core_gamma,
+        core_gas_constant_j_kg_k,
+        compressor_inlet_total_temp_k,
+        precooler_heat_flow_w: coolant_heat_flow_w + wall_heat_flow_w,
+        precooler_wall_heat_flow_w: wall_heat_flow_w,
         power_takeoff_capacity_w,
         oxygen_limited: oxygen_limited || oxygen_limited_starved,
         reheat_limited,
@@ -984,12 +1134,24 @@ pub struct CompiledAirbreather {
 pub struct AirOperatingPoint {
     pub thrust_n: f64,
     pub fuel_flow_kg_s: f64,
+    /// Bulk-fuel portion of `fuel_flow_kg_s` (including reheat fuel).
+    #[serde(default)]
+    pub bulk_fuel_flow_kg_s: f64,
+    /// Independently metered coolant/boost-fuel portion of total fuel.
+    #[serde(default)]
+    pub boost_fuel_flow_kg_s: f64,
     pub air_flow_kg_s: f64,
     pub exhaust_temp_k: f64,
     pub exhaust_velocity_mps: f64,
     pub exit_pressure_pa: f64,
     pub exit_mach: f64,
     pub isp_s: f64,
+    #[serde(default)]
+    pub compressor_inlet_total_temp_k: f64,
+    #[serde(default)]
+    pub precooler_heat_flow_w: f64,
+    #[serde(default)]
+    pub precooler_wall_heat_flow_w: f64,
     /// Solved steady spool speed (normalized) this point was evaluated
     /// at — or the sustainable equilibrium the steady solver found.
     /// `0.0` means no sustainable shaft equilibrium exists (the engine
@@ -1105,6 +1267,7 @@ impl AirbreathingSpec {
                 corrected_flow_kg_s: Some(design_corrected_flow_kg_s),
                 power_takeoff_w: 0.0,
                 power_takeoff_heat_fraction: self.shaft.power_turbine_heat_fraction,
+                conditioning: None,
             },
         )?;
         if state.drive_limited {
@@ -1357,6 +1520,7 @@ impl CompiledAirbreather {
                 corrected_flow_kg_s: Some(self.design_corrected_flow_kg_s),
                 power_takeoff_w: 0.0,
                 power_takeoff_heat_fraction: self.shaft.power_turbine_heat_fraction,
+                conditioning: None,
             },
         )?;
         Ok(self.balance_from_state(&state, spool_n, ignition))
@@ -1365,15 +1529,12 @@ impl CompiledAirbreather {
     /// Balance view of an already-evaluated cycle state (shared by the
     /// operating-point path and [`Self::shaft_balance`]).
     fn balance_from_state(&self, state: &CycleState, spool_n: f64, ignition: bool) -> ShaftBalance {
-        let fuel = self.fuel.properties();
         ShaftBalance {
             demand_w: state.shaft_demand_w,
             capacity_w: if ignition {
                 self.shaft_turbine_frac
                     * TURBINE_SHAFT_HEAT_FRACTION
-                    * state.fuel_flow_kg_s
-                    * COMBUSTOR_EFFICIENCY
-                    * fuel.0
+                    * state.combustor_heat_release_w
             } else {
                 0.0
             },
@@ -1418,6 +1579,43 @@ impl CompiledAirbreather {
         ignition: bool,
         power_takeoff_w: f64,
     ) -> Result<(AirOperatingPoint, ShaftBalance), PropulsionError> {
+        self.operating_point_at_spool_internal(
+            condition,
+            throttle,
+            spool_n,
+            ignition,
+            power_takeoff_w,
+            None,
+        )
+    }
+
+    pub(super) fn operating_point_at_spool_conditioned(
+        &self,
+        condition: &FlightCondition,
+        throttle: f64,
+        spool_n: f64,
+        ignition: bool,
+        conditioning: AirCycleConditioning,
+    ) -> Result<(AirOperatingPoint, ShaftBalance), PropulsionError> {
+        self.operating_point_at_spool_internal(
+            condition,
+            throttle,
+            spool_n,
+            ignition,
+            0.0,
+            Some(conditioning),
+        )
+    }
+
+    fn operating_point_at_spool_internal(
+        &self,
+        condition: &FlightCondition,
+        throttle: f64,
+        spool_n: f64,
+        ignition: bool,
+        power_takeoff_w: f64,
+        conditioning: Option<AirCycleConditioning>,
+    ) -> Result<(AirOperatingPoint, ShaftBalance), PropulsionError> {
         condition.validate()?;
         if !throttle.is_finite() || !(0.0..=1.0).contains(&throttle) {
             return Err(PropulsionError::InvalidCommand(
@@ -1432,12 +1630,17 @@ impl CompiledAirbreather {
         let off = AirOperatingPoint {
             thrust_n: 0.0,
             fuel_flow_kg_s: 0.0,
+            bulk_fuel_flow_kg_s: 0.0,
+            boost_fuel_flow_kg_s: 0.0,
             air_flow_kg_s: 0.0,
             exhaust_temp_k: condition.ambient_temp_k,
             exhaust_velocity_mps: 0.0,
             exit_pressure_pa: condition.ambient_pa,
             exit_mach: 0.0,
             isp_s: 0.0,
+            compressor_inlet_total_temp_k: condition.ambient_temp_k,
+            precooler_heat_flow_w: 0.0,
+            precooler_wall_heat_flow_w: 0.0,
             spool_n,
             lit: false,
             air_limited: false,
@@ -1452,7 +1655,6 @@ impl CompiledAirbreather {
             reheat_limited: false,
         };
         let fuel = self.fuel.properties();
-        let (_, _, _, gamma_b, r_b, _) = fuel;
         let (spec_eff, tit, eff_reheat) = self.effective_spec(throttle);
         let state = run_cycle(
             &spec_eff,
@@ -1465,6 +1667,7 @@ impl CompiledAirbreather {
                 corrected_flow_kg_s: Some(self.design_corrected_flow_kg_s),
                 power_takeoff_w,
                 power_takeoff_heat_fraction: self.shaft.power_turbine_heat_fraction,
+                conditioning,
             },
         )?;
         let balance = self.balance_from_state(&state, spool_n, ignition);
@@ -1496,12 +1699,16 @@ impl CompiledAirbreather {
                     combustion_thermal_limited: state.combustion_thermal_limited,
                     scramjet_limited: state.scramjet_limited,
                     suction_assisted: suction_assisted(state.mdot_air_kg_s),
+                    compressor_inlet_total_temp_k: state.compressor_inlet_total_temp_k,
+                    precooler_heat_flow_w: state.precooler_heat_flow_w,
+                    precooler_wall_heat_flow_w: state.precooler_wall_heat_flow_w,
                     ..off
                 },
                 balance,
             ));
         }
-        let fuel_total = state.fuel_flow_kg_s + state.fuel_ab_flow_kg_s;
+        let fuel_bulk = state.fuel_flow_kg_s + state.fuel_ab_flow_kg_s;
+        let fuel_total = fuel_bulk + state.boost_fuel_flow_kg_s;
         if fuel_total <= 0.0 {
             // Flameout with airflow (anoxic air, ignition off, or a
             // thermally infeasible TIT): the airflow is real and stays
@@ -1516,6 +1723,9 @@ impl CompiledAirbreather {
                     combustion_thermal_limited: state.combustion_thermal_limited,
                     scramjet_limited: state.scramjet_limited,
                     suction_assisted: suction_assisted(state.mdot_air_kg_s),
+                    compressor_inlet_total_temp_k: state.compressor_inlet_total_temp_k,
+                    precooler_heat_flow_w: state.precooler_heat_flow_w,
+                    precooler_wall_heat_flow_w: state.precooler_wall_heat_flow_w,
                     ..off
                 },
                 balance,
@@ -1532,8 +1742,8 @@ impl CompiledAirbreather {
             state.core_total_temp_k,
             state.core_total_pressure_pa,
             self.throat_area_core_m2,
-            gamma_b,
-            r_b,
+            state.core_gamma,
+            state.core_gas_constant_j_kg_k,
         );
         let cap_fan = if self.exit_area_fan_m2 > 0.0 && mdot_fan > 0.0 {
             nozzle_capacity_kg_s(
@@ -1552,6 +1762,7 @@ impl CompiledAirbreather {
         let nozzle_limited = scale < 1.0;
         let mdot_air = state.mdot_air_kg_s * scale;
         let fuel_flow = state.fuel_flow_kg_s * scale;
+        let boost_fuel_flow = state.boost_fuel_flow_kg_s * scale;
         let fuel_ab_flow = state.fuel_ab_flow_kg_s * scale;
         let core_flow = mdot_core_hot * scale;
         // Turbine cycles run convergent; ramjets/scramjets run fixed C-D.
@@ -1562,8 +1773,8 @@ impl CompiledAirbreather {
                 state.core_total_pressure_pa,
                 self.throat_area_core_m2,
                 self.exit_area_core_m2,
-                gamma_b,
-                r_b,
+                state.core_gamma,
+                state.core_gas_constant_j_kg_k,
                 condition.ambient_pa,
             )?,
             _ => (
@@ -1572,8 +1783,8 @@ impl CompiledAirbreather {
                     state.core_total_temp_k,
                     state.core_total_pressure_pa,
                     self.exit_area_core_m2,
-                    gamma_b,
-                    r_b,
+                    state.core_gamma,
+                    state.core_gas_constant_j_kg_k,
                     condition.ambient_pa,
                 ),
                 false,
@@ -1590,11 +1801,14 @@ impl CompiledAirbreather {
             condition.ambient_pa,
         );
         let thrust_n = core.thrust_gross_n + fan.thrust_gross_n - mdot_air * condition.airspeed_mps;
-        let fuel_total = fuel_flow + fuel_ab_flow;
+        let fuel_bulk = fuel_flow + fuel_ab_flow;
+        let fuel_total = fuel_bulk + boost_fuel_flow;
         Ok((
             AirOperatingPoint {
                 thrust_n,
                 fuel_flow_kg_s: fuel_total,
+                bulk_fuel_flow_kg_s: fuel_bulk,
+                boost_fuel_flow_kg_s: boost_fuel_flow,
                 air_flow_kg_s: mdot_air,
                 exhaust_temp_k: core.exit_temp_k,
                 exhaust_velocity_mps: if core_flow > 0.0 {
@@ -1605,6 +1819,9 @@ impl CompiledAirbreather {
                 exit_pressure_pa: core.exit_pressure_pa,
                 exit_mach: core.exit_mach,
                 isp_s: thrust_n / (fuel_total * STANDARD_GRAVITY_MPS2),
+                compressor_inlet_total_temp_k: state.compressor_inlet_total_temp_k,
+                precooler_heat_flow_w: state.precooler_heat_flow_w * scale,
+                precooler_wall_heat_flow_w: state.precooler_wall_heat_flow_w * scale,
                 spool_n,
                 lit: fuel_total > 0.0,
                 air_limited: state.air_starved,
@@ -1692,12 +1909,17 @@ impl CompiledAirbreather {
             return Ok(AirOperatingPoint {
                 thrust_n: 0.0,
                 fuel_flow_kg_s: 0.0,
+                bulk_fuel_flow_kg_s: 0.0,
+                boost_fuel_flow_kg_s: 0.0,
                 air_flow_kg_s: 0.0,
                 exhaust_temp_k: condition.ambient_temp_k,
                 exhaust_velocity_mps: 0.0,
                 exit_pressure_pa: condition.ambient_pa,
                 exit_mach: 0.0,
                 isp_s: 0.0,
+                compressor_inlet_total_temp_k: condition.ambient_temp_k,
+                precooler_heat_flow_w: 0.0,
+                precooler_wall_heat_flow_w: 0.0,
                 spool_n: 0.0,
                 lit: false,
                 air_limited: false,

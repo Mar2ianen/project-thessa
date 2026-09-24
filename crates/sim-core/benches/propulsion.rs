@@ -8,7 +8,8 @@ use std::{hint::black_box, time::Instant};
 use thessa_sim_core::{
     AirCycle, AirbreathingSpec, AtmosphereConfig, ChamberMaterial, CompiledEngine, CoolingMode,
     ElectricMotorSpec, ElectricPropellant, ElectricThrusterDesign, ElectricThrusterSpec,
-    EngineCycle, FusionReaction, FusionTorchCommand, FusionTorchSpec, GasKind, IntakeKind, JetFuel,
+    EngineCycle, EstocEjectorSpec, EstocMode, EstocPrecoolerSpec, EstocSpec, FlightCondition,
+    FusionReaction, FusionTorchCommand, FusionTorchSpec, GasKind, IntakeKind, JetFuel,
     JetShaftState, LiquidEngineSpec, NozzleContour, PistonEngineSpec, Propellant,
     PropellerDriveSpec, PropellerSpec, PulsedFusionCommand, PulsedFusionSpec, PulsedFusionState,
     ShaftCommand, ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec, StarterKind,
@@ -563,6 +564,101 @@ fn main() {
     let fusion_rows = power_grid.len() * step_sizes_s.len();
     let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * fusion_rows) as f64;
     println!("pulsed fusion row: {per_row_ns:.1} ns/row ({fusion_rows} rows/iter)");
+
+    let estoc = EstocSpec {
+        name: "bench-v6-estoc".into(),
+        air: AirbreathingSpec {
+            name: "bench-v6-air".into(),
+            cycle: AirCycle::Turbojet,
+            fuel: JetFuel::Kerosene,
+            intake_area_m2: 0.05,
+            intake: IntakeKind::Pitot,
+            compressor_ratio: 1.5,
+            bypass_ratio: 0.0,
+            fan_pressure_ratio: 1.0,
+            turbine_inlet_temp_k: 1_500.0,
+            afterburner: false,
+            reheat_temp_k: 0.0,
+            turbine_material: ChamberMaterial::nickel_superalloy(),
+            spool_tau_s: 5.0,
+            shaft: ShaftSpec::default(),
+        },
+        bulk_fuel: Some(JetFuel::Methane),
+        boost_coolant_fuel: Some(JetFuel::Hydrogen),
+        precooler: Some(EstocPrecoolerSpec {
+            maximum_heat_flow_w: 20.0e6,
+            effectiveness: 0.85,
+            maximum_compressor_inlet_temp_k: 500.0,
+            pressure_recovery: 0.98,
+            wall_mass_kg: 500.0,
+            wall_specific_heat_j_kg_k: 1_000.0,
+            wall_initial_temp_k: 300.0,
+            wall_max_temp_k: 800.0,
+            coolant_inlet_temp_k: 20.0,
+            coolant_max_outlet_temp_k: 400.0,
+            coolant_specific_heat_j_kg_k: 14_000.0,
+            maximum_coolant_flow_kg_s: 0.1,
+        }),
+        ejector: Some(EstocEjectorSpec {
+            capture_area_m2: 0.06,
+            mixing_length_m: 2.0,
+            mixing_efficiency: 0.95,
+            structure_density_kg_m3: 2_700.0,
+            wall_thickness_m: 0.005,
+        }),
+        rocket_chamber_pressure_pa: 7.0e6,
+        rocket_throat_radius_m: 0.09,
+        oxidizer_fuel_ratio: None,
+        switch_mach_hi: None,
+        switch_mach_lo: None,
+        transition_tau_s: None,
+    }
+    .compile()
+    .expect("v6 ESTOC");
+    let sea_level = atmosphere.sample(0.0).expect("ESTOC benchmark atmosphere");
+    let mach_rows = [0.5, 1.0, 2.0, 3.0, 4.0, 5.0]
+        .into_iter()
+        .map(|mach| {
+            flight_condition(&sea_level, mach * sea_level.speed_of_sound_mps)
+                .expect("ESTOC Mach condition")
+        })
+        .collect::<Vec<FlightCondition>>();
+    let anoxic =
+        thessa_sim_core::AtmosphereComposition::from_mole_fractions(&[(GasKind::Nitrogen, 1.0)])
+            .expect("nitrogen composition");
+    let anoxic_rows = mach_rows
+        .iter()
+        .copied()
+        .map(|mut condition| {
+            condition.composition = anoxic;
+            condition
+        })
+        .collect::<Vec<_>>();
+    let estoc_state = JetShaftState::running(&estoc.air);
+    let evaluate_estoc_grid = || {
+        for condition in &mach_rows {
+            black_box(
+                estoc
+                    .operating_point(condition, 1.0, None, EstocMode::Air, None, 1.0, estoc_state)
+                    .expect("precooled ESTOC point"),
+            );
+        }
+        for condition in &anoxic_rows {
+            black_box(
+                estoc
+                    .operating_point(condition, 1.0, None, EstocMode::Air, None, 1.0, estoc_state)
+                    .expect("anoxic ejector ESTOC point"),
+            );
+        }
+    };
+    evaluate_estoc_grid();
+    let start = Instant::now();
+    for _ in 0..iters {
+        evaluate_estoc_grid();
+    }
+    let estoc_rows = mach_rows.len() + anoxic_rows.len();
+    let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * estoc_rows) as f64;
+    println!("ESTOC precooler/ejector row: {per_row_ns:.1} ns/row ({estoc_rows} rows/iter)");
 
     let turboprop = TurbopropDriveSpec {
         air: AirbreathingSpec {

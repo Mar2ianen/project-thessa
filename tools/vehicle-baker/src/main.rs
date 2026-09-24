@@ -10,13 +10,14 @@ use thessa_sim_core::{
     ChamberSpec, CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionPart,
     CollisionShape, CompiledEngine, CompiledJet, ControlSurfaceDefinition, CoolingMode,
     ElectricPropellant, ElectricThrusterDesign, ElectricThrusterMount, ElectricThrusterSpec,
-    EngineCycle, EngineMount, EstocSpec, FoldJointRecord, FusionReaction, FusionTorchMount,
-    FusionTorchSpec, IntakeKind, JetFuel, JetMount, LiquidEngineSpec, NozzleContour, NtrFluid,
-    NuclearThermalSpec, Propellant, PropellerDriveMount, PropellerDriveSpec, PropellerSpec,
-    PropulsionSystemSpec, PulsedFusionMount, PulsedFusionSpec, RigidBodyProperties,
-    ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec, SystemMount, TankMount,
-    TankShape, TankSpec, TurbopropDriveSpec, TurbopropMount, VehicleDefinition,
-    analyze_airbreathing, analyze_altitude, analyze_propeller_drive, analyze_turboprop_drive,
+    EngineCycle, EngineMount, EstocEjectorSpec, EstocPrecoolerSpec, EstocSpec, FoldJointRecord,
+    FusionReaction, FusionTorchMount, FusionTorchSpec, IntakeKind, JetFuel, JetMount,
+    LiquidEngineSpec, NozzleContour, NtrFluid, NuclearThermalSpec, Propellant, PropellerDriveMount,
+    PropellerDriveSpec, PropellerSpec, PropulsionSystemSpec, PulsedFusionMount, PulsedFusionSpec,
+    RigidBodyProperties, ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec,
+    SystemMount, TankMount, TankShape, TankSpec, TurbopropDriveSpec, TurbopropMount,
+    VehicleDefinition, analyze_airbreathing, analyze_altitude, analyze_estoc,
+    analyze_propeller_drive, analyze_turboprop_drive,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -110,6 +111,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn jet_analyzer_mach_grid(engine: &CompiledJet) -> &'static [f64] {
+    match engine {
+        CompiledJet::Estoc(_) => &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+        CompiledJet::Air(engine) => match engine.cycle {
+            thessa_sim_core::AirCycle::Scramjet => &[0.0, 1.0, 2.0, 4.0, 6.0, 8.0],
+            thessa_sim_core::AirCycle::Ramjet => &[0.0, 1.0, 2.0, 3.0, 4.0],
+            _ => &[0.0, 1.0, 2.0, 3.0],
+        },
+    }
+}
+
 /// Juno Performance Analyzer equivalent for the terminal: thrust/Isp over
 /// altitude per engine (plus the uniform-command vehicle total) at fixed
 /// throttle. `--analyze-json` emits the same rows as JSON for the future
@@ -160,20 +172,23 @@ fn run_analyzer(
                 CompiledJet::Air(engine) => engine.as_ref(),
                 CompiledJet::Estoc(engine) => &engine.air,
             };
-            let mach_grid: &[f64] = match air.cycle {
-                thessa_sim_core::AirCycle::Scramjet => &[0.0, 1.0, 2.0, 4.0, 6.0, 8.0],
-                thessa_sim_core::AirCycle::Ramjet => &[0.0, 1.0, 2.0, 3.0, 4.0],
-                _ => &[0.0, 1.0, 2.0, 3.0],
-            };
-            rows.push(serde_json::json!({
-                "jet": mount.name,
-                "points": analyze_airbreathing(
-                    air,
+            let mach_grid = jet_analyzer_mach_grid(&mount.engine);
+            let air_points =
+                analyze_airbreathing(air, &atmosphere, &altitudes, mach_grid, throttle)?;
+            let estoc_points = match &mount.engine {
+                CompiledJet::Air(_) => None,
+                CompiledJet::Estoc(engine) => Some(analyze_estoc(
+                    engine,
                     &atmosphere,
                     &altitudes,
                     mach_grid,
                     throttle,
-                )?,
+                )?),
+            };
+            rows.push(serde_json::json!({
+                "jet": mount.name,
+                "points": air_points,
+                "estoc_points": estoc_points,
             }));
         }
         for mount in &vehicle.propeller_drives {
@@ -259,11 +274,7 @@ fn run_analyzer(
             CompiledJet::Air(engine) => engine.as_ref(),
             CompiledJet::Estoc(engine) => &engine.air,
         };
-        let mach_grid: &[f64] = match air.cycle {
-            thessa_sim_core::AirCycle::Scramjet => &[0.0, 1.0, 2.0, 4.0, 6.0, 8.0],
-            thessa_sim_core::AirCycle::Ramjet => &[0.0, 1.0, 2.0, 3.0, 4.0],
-            _ => &[0.0, 1.0, 2.0, 3.0],
-        };
+        let mach_grid = jet_analyzer_mach_grid(&mount.engine);
         println!(
             "--- analyzer: {} (throttle {throttle}, air path)",
             mount.name
@@ -302,6 +313,34 @@ fn run_analyzer(
                 point.isp_s,
                 flags,
             );
+        }
+        if let CompiledJet::Estoc(engine) = &mount.engine {
+            println!(
+                "--- ESTOC envelope: {} (steady precooler, throttle {throttle})",
+                mount.name
+            );
+            println!(
+                "{:>10} {:>6} {:>9} {:>12} {:>10} {:>10} {:>7}",
+                "alt_m", "mach", "mode", "thrust_kN", "isp_s", "fuel_g/s", "cool"
+            );
+            let rows = analyze_estoc(engine, &atmosphere, &altitudes, mach_grid, throttle)?;
+            for point in &rows {
+                let mode = match point.mode {
+                    thessa_sim_core::EstocMode::Air => "air",
+                    thessa_sim_core::EstocMode::Rocket => "rocket",
+                    thessa_sim_core::EstocMode::Ejector => "ejector",
+                };
+                println!(
+                    "{:>10.0} {:>6.1} {:>9} {:>12.1} {:>10.0} {:>10.2} {:>7}",
+                    point.altitude_m,
+                    point.mach,
+                    mode,
+                    point.thrust_n / 1000.0,
+                    point.isp_total_s,
+                    point.fuel_flow_kg_s * 1000.0,
+                    if point.precooler_saturated { "SAT" } else { "" },
+                );
+            }
         }
     }
     for mount in &vehicle.propeller_drives {
@@ -1455,6 +1494,14 @@ struct JetAsset {
     shaft: ShaftSpec,
     // ESTOC-only rocket block.
     #[serde(default)]
+    bulk_fuel: Option<JetFuel>,
+    #[serde(default)]
+    boost_coolant_fuel: Option<JetFuel>,
+    #[serde(default)]
+    precooler: Option<EstocPrecoolerSpec>,
+    #[serde(default)]
+    ejector: Option<EstocEjectorSpec>,
+    #[serde(default)]
     rocket_chamber_pressure_mpa: Option<f64>,
     #[serde(default)]
     rocket_throat_radius_m: Option<f64>,
@@ -1537,6 +1584,10 @@ impl JetAsset {
                 let spec = EstocSpec {
                     name: self.name.clone(),
                     air: self.air_spec()?,
+                    bulk_fuel: self.bulk_fuel,
+                    boost_coolant_fuel: self.boost_coolant_fuel,
+                    precooler: self.precooler,
+                    ejector: self.ejector,
                     rocket_chamber_pressure_pa: required_mpa(
                         self.rocket_chamber_pressure_mpa,
                         "rocket_chamber_pressure_mpa",
@@ -2581,6 +2632,8 @@ kind = "estoc"
 mount_position_body_m = [0.0, 0.0, 0.0]
 thrust_axis_body = [1.0, 0.0, 0.0]
 fuel = "kerosene"
+bulk_fuel = "methane"
+boost_coolant_fuel = "hydrogen"
 intake_area_m2 = 0.9
 intake = "pitot"
 compressor_ratio = 12.0
@@ -2588,6 +2641,27 @@ turbine_inlet_temp_k = 1500.0
 material = "nickel-superalloy"
 rocket_chamber_pressure_mpa = 7.0
 rocket_throat_radius_m = 0.09
+
+[jets.precooler]
+maximum_heat_flow_w = 20000000.0
+effectiveness = 0.85
+maximum_compressor_inlet_temp_k = 500.0
+pressure_recovery = 0.98
+wall_mass_kg = 500.0
+wall_specific_heat_j_kg_k = 1000.0
+wall_initial_temp_k = 300.0
+wall_max_temp_k = 800.0
+coolant_inlet_temp_k = 20.0
+coolant_max_outlet_temp_k = 400.0
+coolant_specific_heat_j_kg_k = 14000.0
+maximum_coolant_flow_kg_s = 0.1
+
+[jets.ejector]
+capture_area_m2 = 0.06
+mixing_length_m = 2.0
+mixing_efficiency = 0.95
+structure_density_kg_m3 = 2700.0
+wall_thickness_m = 0.005
 "#;
         let asset: VehicleAsset = toml::from_str(doc).expect("TOML parses");
         let vehicle = asset.bake().expect("jets bake");
@@ -2602,6 +2676,12 @@ rocket_throat_radius_m = 0.09
             "baked mass must equal structure plus jets"
         );
         assert!(vehicle.jets[1].engine.dry_mass_kg() > vehicle.jets[0].engine.dry_mass_kg());
+        let CompiledJet::Estoc(engine) = &vehicle.jets[1].engine else {
+            panic!("second mount is the ESTOC");
+        };
+        assert_eq!(engine.bulk_fuel, JetFuel::Methane);
+        assert_eq!(engine.boost_coolant_fuel, Some(JetFuel::Hydrogen));
+        assert!(engine.precooler.is_some());
     }
 
     #[test]

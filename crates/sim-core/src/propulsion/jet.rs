@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::GimbalEffector;
 use super::mount::gimbal_pair;
-use super::shaft::{JetShaftState, ShaftCommand, advance_jet_shaft};
+use super::shaft::{JetShaftState, ShaftCommand, advance_jet_shaft, advance_jet_shaft_loaded_with};
 use super::{
     CompiledAirbreather, CompiledEstoc, EnginePlumeState, EstocMode, EstocPoint, EstocTransient,
     FlightCondition, PropulsionError,
@@ -229,12 +229,19 @@ impl JetMount {
             let snapshot = EstocTransient {
                 thrust_n: point.thrust_n.max(0.0),
                 fuel_flow_kg_s: point.fuel_flow_kg_s,
+                bulk_fuel_flow_kg_s: point.bulk_fuel_flow_kg_s,
+                boost_fuel_flow_kg_s: point.boost_fuel_flow_kg_s,
                 oxidizer_flow_kg_s: 0.0,
                 air_flow_kg_s: point.air_flow_kg_s,
                 exhaust_temp_k: point.exhaust_temp_k,
                 exhaust_velocity_mps: point.exhaust_velocity_mps,
                 exit_pressure_pa: point.exit_pressure_pa,
                 exit_mach: point.exit_mach,
+                compressor_inlet_total_temp_k: point.compressor_inlet_total_temp_k,
+                precooler_heat_flow_w: point.precooler_heat_flow_w,
+                precooler_wall_heat_flow_w: point.precooler_wall_heat_flow_w,
+                precooler_wall_temp_k: 0.0,
+                coolant_outlet_temp_k: 0.0,
             };
             let mut shaft = JetShaftState::running(air_engine);
             shaft.lit = point.lit;
@@ -243,6 +250,8 @@ impl JetMount {
                     mode: EstocMode::Air,
                     thrust_n: snapshot.thrust_n,
                     fuel_flow_kg_s: snapshot.fuel_flow_kg_s,
+                    bulk_fuel_flow_kg_s: snapshot.bulk_fuel_flow_kg_s,
+                    boost_fuel_flow_kg_s: snapshot.boost_fuel_flow_kg_s,
                     oxidizer_flow_kg_s: 0.0,
                     air_flow_kg_s: snapshot.air_flow_kg_s,
                     isp_total_s: point.isp_s,
@@ -250,6 +259,12 @@ impl JetMount {
                     exhaust_velocity_mps: snapshot.exhaust_velocity_mps,
                     exit_pressure_pa: snapshot.exit_pressure_pa,
                     exit_mach: snapshot.exit_mach,
+                    compressor_inlet_total_temp_k: snapshot.compressor_inlet_total_temp_k,
+                    precooler_heat_flow_w: snapshot.precooler_heat_flow_w,
+                    precooler_wall_heat_flow_w: snapshot.precooler_wall_heat_flow_w,
+                    precooler_wall_temp_k: snapshot.precooler_wall_temp_k,
+                    coolant_outlet_temp_k: snapshot.coolant_outlet_temp_k,
+                    precooler_saturated: false,
                 },
                 snapshot,
                 shaft,
@@ -260,13 +275,38 @@ impl JetMount {
             starter_engaged: jet.starter_engaged,
             generator_load_w: jet.generator_load_w,
         };
-        let (shaft, _telemetry) = advance_jet_shaft(
-            self.air_engine(),
-            jet.shaft,
-            &shaft_cmd,
-            condition,
-            jet.dt_s,
-        )?;
+        let (shaft, _telemetry) = match &self.engine {
+            CompiledJet::Estoc(estoc) => advance_jet_shaft_loaded_with(
+                &estoc.air,
+                jet.shaft,
+                &shaft_cmd,
+                condition,
+                jet.dt_s,
+                0.0,
+                |spool_n, ignition| {
+                    estoc
+                        .conditioned_air_point(
+                            condition,
+                            throttle,
+                            JetShaftState {
+                                spool_n,
+                                lit: ignition,
+                                starter_charge_j: jet.shaft.starter_charge_j,
+                            },
+                            jet.prev.as_ref(),
+                            jet.dt_s,
+                        )
+                        .map(|(point, _, _, balance)| (point, balance))
+                },
+            )?,
+            CompiledJet::Air(_) => advance_jet_shaft(
+                self.air_engine(),
+                jet.shaft,
+                &shaft_cmd,
+                condition,
+                jet.dt_s,
+            )?,
+        };
         match &self.engine {
             CompiledJet::Air(engine) => {
                 let (point, _) = engine.operating_point_at_spool(
@@ -278,18 +318,27 @@ impl JetMount {
                 let snapshot = EstocTransient {
                     thrust_n: point.thrust_n.max(0.0),
                     fuel_flow_kg_s: point.fuel_flow_kg_s,
+                    bulk_fuel_flow_kg_s: point.bulk_fuel_flow_kg_s,
+                    boost_fuel_flow_kg_s: point.boost_fuel_flow_kg_s,
                     oxidizer_flow_kg_s: 0.0,
                     air_flow_kg_s: point.air_flow_kg_s,
                     exhaust_temp_k: point.exhaust_temp_k,
                     exhaust_velocity_mps: point.exhaust_velocity_mps,
                     exit_pressure_pa: point.exit_pressure_pa,
                     exit_mach: point.exit_mach,
+                    compressor_inlet_total_temp_k: point.compressor_inlet_total_temp_k,
+                    precooler_heat_flow_w: point.precooler_heat_flow_w,
+                    precooler_wall_heat_flow_w: point.precooler_wall_heat_flow_w,
+                    precooler_wall_temp_k: 0.0,
+                    coolant_outlet_temp_k: 0.0,
                 };
                 Ok((
                     EstocPoint {
                         mode: EstocMode::Air,
                         thrust_n: snapshot.thrust_n,
                         fuel_flow_kg_s: snapshot.fuel_flow_kg_s,
+                        bulk_fuel_flow_kg_s: snapshot.bulk_fuel_flow_kg_s,
+                        boost_fuel_flow_kg_s: snapshot.boost_fuel_flow_kg_s,
                         oxidizer_flow_kg_s: 0.0,
                         air_flow_kg_s: snapshot.air_flow_kg_s,
                         isp_total_s: point.isp_s,
@@ -297,6 +346,12 @@ impl JetMount {
                         exhaust_velocity_mps: snapshot.exhaust_velocity_mps,
                         exit_pressure_pa: snapshot.exit_pressure_pa,
                         exit_mach: snapshot.exit_mach,
+                        compressor_inlet_total_temp_k: snapshot.compressor_inlet_total_temp_k,
+                        precooler_heat_flow_w: snapshot.precooler_heat_flow_w,
+                        precooler_wall_heat_flow_w: snapshot.precooler_wall_heat_flow_w,
+                        precooler_wall_temp_k: snapshot.precooler_wall_temp_k,
+                        coolant_outlet_temp_k: snapshot.coolant_outlet_temp_k,
+                        precooler_saturated: false,
                     },
                     snapshot,
                     shaft,

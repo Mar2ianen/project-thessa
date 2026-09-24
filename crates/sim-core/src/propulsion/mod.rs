@@ -62,7 +62,8 @@ pub use error::PropulsionError;
 pub use estoc::{
     CompiledEstoc, ESTOC_DEFAULT_SWITCH_MACH_HI, ESTOC_DEFAULT_SWITCH_MACH_LO,
     ESTOC_DEFAULT_TRANSITION_TAU_S, ESTOC_MAX_ROCKET_PC_PA, ESTOC_REINFORCEMENT_FRACTION,
-    EstocMode, EstocPoint, EstocSpec, EstocTransient,
+    EstocAltitudePoint, EstocEjectorSpec, EstocMode, EstocPoint, EstocPrecoolerSpec, EstocSpec,
+    EstocTransient, analyze_estoc,
 };
 pub use fusion::{
     CompiledFusionTorch, CompiledPulsedFusion, FusionReaction, FusionTorchCommand,

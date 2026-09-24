@@ -597,16 +597,18 @@ discarding it. Closed cycle uses onboard LOX. This keeps the physical reason for
 hydrogen without forcing the vehicle to devote SABRE-like tank volume to pure
 LH2.
 
-Automatic mode choice should ultimately be driven by the solved operating
-envelope (intake recovery, compressor-inlet temperature, precooler heat flux,
-shaft/work balance, useful atmospheric reactants, and net thrust), not by Mach
-number alone. A Mach hysteresis band remains a useful controller policy/fallback,
-not the primary law of nature.
+Automatic mode choice uses the solved operating envelope (intake recovery,
+compressor-inlet temperature, precooler heat flux, shaft/work balance,
+atmospheric reactants, and net thrust). A Mach hysteresis band only delays a
+return from rocket mode while the air path remains viable; it is not the
+primary transition law.
 
 On worlds whose atmosphere does not contain usable oxidizer, the normal
 air-combustion ESTOC path must not work. A separately modelled air-augmented
 rocket/ejector path may still ingest the atmosphere as working mass while
-burning onboard fuel + onboard oxidizer.
+burning onboard fuel + onboard oxidizer. The ESTOC v6 ejector uses free-stream
+capture area and motive-jet kinetic energy; zero-speed aspiration remains a
+higher-fidelity geometry debt.
 
 This architecture should also permit turbo-rocket, ejector-rocket, RBCC, and
 other hybrid cycles where future gameplay/physics justifies them.
@@ -1027,39 +1029,69 @@ Closed 2026-09-23 (jet shaft/starter runtime, section 18.8):
   closed by the 2026-09-21 audit above; the stale duplicates are
   removed here.
 
-### 18.6 ESTOC combined-cycle engine (v5 shipped; v6 obligations)
+### 18.6 ESTOC combined-cycle engine (v6 shipped, reduced model)
 
-Shipped v5:
+Shipped v5 foundation:
 
 - `propulsion::estoc`: air-breathing turbojet path plus closed-cycle
   rocket path sharing intake ducting, chamber, and nozzle hardware under
   our own name. Shared convergent nozzle caps rocket expansion; rocket
   chamber reuses LOX-pair thermo, OF bookkeeping, pump-feed cap,
   throat-clearance validation, and books shared hardware once.
-- Automatic selection currently uses a Mach hysteresis band plus dead-air
-  fallback; manual mode can override it. Per-nozzle plume states reuse the
-  jet handoff; baker `[[jets]]` kinds `jet`/`estoc` expose analyzer
-  Mach grids and JSON rows.
+- Per-nozzle plume states reuse the jet handoff; baker `[[jets]]` kinds
+  `jet`/`estoc` expose air-path Mach grids, and ESTOCs additionally emit
+  steady `EstocAltitudePoint` rows with selected mode, fuel split, oxidizer/
+  air flow, precooler duty, and saturation to text/JSON analyzers.
 
-Required v6 physical model:
+- `EstocPrecoolerSpec` authors rated heat flow, effectiveness, pressure
+  recovery, compressor-inlet temperature limit, finite wall mass/heat
+  capacity and temperature bounds, coolant inlet/outlet temperatures,
+  coolant specific heat, and maximum coolant flow. Runtime threads wall
+  temperature and coolant outlet temperature through `EstocTransient`.
+- Exchanger heat rate is bounded by effectiveness and the minimum hot/cold
+  capacity rate, rated duty, the compressor-inlet temperature limit, coolant
+  flow/enthalpy, and remaining wall thermal capacity. Wall energy advances as
+  `ΔTwall = Qwall × dt / (mwall cpwall)`. Compressor work uses the cooled
+  total temperature and exchanger pressure recovery, and that same conditioned
+  shaft balance drives spool integration. Unmet cooling leaves
+  `precooler_saturated` visible in the operating point. The steady analyzer
+  does not credit finite wall storage; only continuous coolant/boost-fuel
+  capacity is available at equilibrium.
+- Fuel roles are independent: `bulk_fuel` supplies the conventional air and
+  rocket paths (defaulting to legacy `air.fuel`), and optional
+  `boost_coolant_fuel` passes through the precooler and is burned. Hydrogen is
+  the reference coolant/boost fuel; methane remains a dense bulk-fuel option.
+  `AirOperatingPoint` and `EstocPoint` report total, bulk, and boost flows
+  separately. Warmed coolant sensible heat returns to the combustor energy
+  balance; boost chemical energy displaces bulk-fuel energy at the scheduled
+  turbine-inlet target, with combined oxygen demand applied to both streams.
+  The compile-time rocket path uses the bulk fuel's LOX pair.
+- Automatic mode evaluates the actual cooled cycle: it requires usable
+  oxygen, delivered air, a lit/non-drive-limited core, compressor temperature
+  within its authored limit, and positive net thrust. It otherwise selects
+  rocket, or selects the ejector when oxygen is absent and captured flow is
+  nonzero. `switch_mach_hi` is an upper policy bound while the air path is
+  viable; `switch_mach_lo` supplies rocket-to-air return hysteresis.
+- Optional `EstocEjectorSpec` sizes inlet area, mixing length, shroud density
+  and thickness, and mixing efficiency. Capture is `mdot_air = rho A V∞`; motive
+  kinetic power is mixed over rocket exhaust plus captured air, and thrust
+  closes mixed-stream momentum against inlet momentum while retaining the
+  rocket nozzle pressure term. Ejector dry mass follows shroud geometry. A
+  stopped craft with no captured flow falls back to the closed-cycle rocket.
+- Baker `[jets.precooler]`, `[jets.ejector]`, `bulk_fuel`, and
+  `boost_coolant_fuel` fields compile through normal mass/COM baking.
+  Regressions pin heat/flow limits, wall-state advancement, separate CH4/H2
+  bookkeeping, O2-gated ejector selection, ejector thrust against rocket-only
+  operation, zero-capture fallback, invalid authoring, and TOML mass baking.
+- Numerical closure: the heat-partition solve bisects its feasible heat-flow
+  bracket 48 times (at the 20 MW reference duty, the final bracket is below
+  `7.2e-8 W`); the regression energy balance closes within `1e-8` relative.
+  Ejector momentum uses the captured-flow and motive-jet kinetic-energy
+  equations directly; its explicit `mixing_efficiency` bounds the unresolved
+  mixing loss rather than fitting thrust. The release benchmark measured
+  `237.0 ns/row` over six Mach points in Earth air and six in nitrogen-only
+  atmosphere on this machine.
 
-- Add an explicit precooler/heat-exchanger component with heat-flow,
-  effectiveness, wall-temperature, coolant state, and compressor-inlet
-  temperature limits. High-Mach airbreathing capability must emerge from
-  this thermal budget rather than a renamed ordinary turbojet.
-- Split fuel roles: dense `bulk_fuel` (CH4 is the Thessa reference) and
-  optional `boost/coolant_fuel` (H2 reference). The H2 stream may be
-  scheduled from required heat sink, warmed in the precooler, and then
-  burned; it must have independent tank/flow bookkeeping. A pure-H2 ESTOC
-  remains expressible, but is not the only topology.
-- Select automatic air/rocket transition from solved envelope limits
-  (precooler saturation, compressor inlet temperature/work, intake
-  recovery, atmospheric reactant availability, and useful net thrust).
-  Mach thresholds remain controller hysteresis/policy only.
-- Add an optional air-augmented-rocket/ejector path. On an atmosphere with
-  no usable oxidizer, the ordinary air-combustion path flames out; an
-  ejector path may deliberately spend onboard fuel + oxidizer while using
-  ingested gas as extra reaction mass.
 - CLOSED 2026-09-23 (section 18.9): the free-standing oxygen scalar is
   gone — `AtmosphereSample` carries `AtmosphereComposition` with an
   explicit molar basis and derived mass fractions (Thessa 25% molar O2
@@ -1095,9 +1127,12 @@ Known v5 correctness debt:
   full flow/thermodynamic snapshot with Isp recomputed from smoothed
   flows, and manual `Air` in vacuum is the documented contract (honored,
   clean flameout).
-- v5 uses one `JetFuel` for both air and rocket paths and has no
-  precooler state, so it cannot yet represent the intended CH4 + H2
-  tripropellant/thermal architecture.
+- CLOSED 2026-09-24: separate bulk and boost/coolant fuels, finite precooler
+  state, envelope-driven transitions, and an anoxic ejector are implemented.
+  The model has no local heat-rejection edge from the precooler wall, no
+  two-phase H2 property table, and no steady coolant recirculation (the
+  streamed coolant is the boost fuel). These thermal/material refinements
+  are explicit fidelity debts, not hidden mode coefficients.
 
 ### 18.7 Still deferred
 

@@ -6087,3 +6087,75 @@ fn fold_parent_cycles_rejected() {
         .with_fold_joints(vec![joint("a", Some(1)), joint("b", Some(0))]);
     assert!(cyclic.is_err());
 }
+
+#[test]
+fn diederich_helper_matches_known_slopes() {
+    // AR = 2 at 2-D slope 2π: p = 2, slope = 2π*2/(2+2√2) ≈ 2.6026.
+    let slope = diederich_lift_slope(2.0 * std::f64::consts::PI, 2.0, 1.0);
+    assert!((slope - 2.6026).abs() < 1e-3, "slope = {slope}");
+    // High aspect ratio recovers the 2-D slope; the curve is monotone.
+    let high = diederich_lift_slope(2.0 * std::f64::consts::PI, 1.0e4, 1.0);
+    assert!((high - 2.0 * std::f64::consts::PI).abs() < 0.01);
+    let mid = diederich_lift_slope(2.0 * std::f64::consts::PI, 5.0, 1.0);
+    assert!(slope < mid && mid < high);
+}
+
+#[test]
+fn side_force_scale_mutes_side_path_on_all_paths() {
+    // Yaw-normal strip at sideslip: the shared beta convention reads
+    // pitch-plane-orthogonal flow as sideslip, so body strips mute the
+    // side-force path (scale 0) and answer through the lift path only.
+    let mut full = AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Y, 4.0, 2.0)
+        .expect("valid fin")
+        .with_planform(2.0, 1.0, 0.0, 1.0)
+        .expect("planform");
+    full.side_force_scale = 1.0;
+    let mut muted = full;
+    muted.side_force_scale = 0.0;
+    // Geometry validation covers the scale range through construction.
+    for panel in [full, muted] {
+        AeroGeometry::new(vec![panel]).expect("valid scale");
+    }
+    assert!(
+        AeroPanel::flat_plate(DVec3::ZERO, 1.0, 1.0)
+            .expect("panel")
+            .with_side_force_scale(1.5)
+            .is_err()
+    );
+    // Yaw-normal strip under pitch-plane crossflow: the shared beta
+    // convention reads it as sideslip (the body-strip double-count),
+    // so scale 0 must mute exactly that while lift stays identical.
+    let alpha = 5.0_f64.to_radians();
+    let speed = 100.0;
+    let environment = AeroEnvironment::standard_sea_level();
+    let state = AeroState::new(
+        DVec3::new(speed * alpha.cos(), 0.0, -speed * alpha.sin()),
+        DVec3::ZERO,
+    );
+    let model = PanelAeroModel::new(AeroConfig::default()).expect("model");
+    let case_full =
+        AeroCase::new(state, environment, AeroGeometry::new(vec![full]).unwrap()).expect("case");
+    let case_muted =
+        AeroCase::new(state, environment, AeroGeometry::new(vec![muted]).unwrap()).expect("case");
+    let full_result = model.evaluate_detailed(&case_full).expect("result");
+    let muted_result = model.evaluate_detailed(&case_muted).expect("result");
+    let full_load = &full_result.panel_loads.as_ref().expect("loads")[0];
+    let muted_load = &muted_result.panel_loads.as_ref().expect("loads")[0];
+    // Muted side force is exactly zero; lift is untouched.
+    assert_eq!(muted_load.coefficients.side_force, 0.0);
+    assert_eq!(muted_load.coefficients.lift, full_load.coefficients.lift);
+    assert!(full_load.coefficients.side_force.abs() > 0.0);
+    // Oracle and SIMD paths agree with the AoS path on both scales.
+    for (case, expected) in [(&case_full, &full_result), (&case_muted, &muted_result)] {
+        let soa = PanelSoA::from_geometry(&case.geometry).expect("soa");
+        let oracle = model
+            .evaluate_soa_parts(state, environment, &soa, false)
+            .expect("oracle");
+        assert_eq!(oracle.force_body_n, expected.force_body_n);
+        let simd = model
+            .evaluate_soa_simd(state, environment, &soa, false)
+            .expect("simd");
+        let scale = expected.force_body_n.length().max(1.0);
+        assert!((simd.force_body_n - expected.force_body_n).length() / scale < 1e-9);
+    }
+}

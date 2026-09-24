@@ -263,14 +263,11 @@ impl<'a> GravityField<'a> {
                 time.0,
                 None,
             )?;
+            if !total.is_finite() {
+                return Err(GravityError::NonFinite { body_id: *body_id });
+            }
         }
-        if total.is_finite() {
-            Ok(total)
-        } else {
-            Err(GravityError::NonFinite {
-                body_id: self.source_ids[0],
-            })
-        }
+        Ok(total)
     }
 
     /// Shared harmonic lane for both accumulation paths. Identical inputs
@@ -404,14 +401,11 @@ impl<'a> GravityField<'a> {
                 time.0,
                 host_pos,
             )?;
+            if !total.is_finite() {
+                return Err(GravityError::NonFinite { body_id: *body_id });
+            }
         }
-        if total.is_finite() {
-            Ok(total)
-        } else {
-            Err(GravityError::NonFinite {
-                body_id: self.source_ids[0],
-            })
-        }
+        Ok(total)
     }
 
     pub fn potential(&self, position: DVec3, time: SimTime) -> Result<f64, GravityError> {
@@ -567,14 +561,11 @@ impl<'a> GravityField<'a> {
                 offset * (outer_scale * offset.y),
                 offset * (outer_scale * offset.z),
             ) - glam::DMat3::IDENTITY * trace_scale;
+            if !total.is_finite() {
+                return Err(GravityError::NonFinite { body_id: *body_id });
+            }
         }
-        if total.is_finite() {
-            Ok(total)
-        } else {
-            Err(GravityError::NonFinite {
-                body_id: self.source_ids[0],
-            })
-        }
+        Ok(total)
     }
 
     /// Resolve `(mu, state index)` for every source in accumulation order.
@@ -617,14 +608,11 @@ fn accumulate_frame(
         }
         let inverse_distance = distance_squared.sqrt().recip();
         total += offset * (*mu * inverse_distance.powi(3));
+        if !total.is_finite() {
+            return Err(GravityError::NonFinite { body_id: *body_id });
+        }
     }
-    if total.is_finite() {
-        Ok(total)
-    } else {
-        Err(GravityError::NonFinite {
-            body_id: sources[0].1,
-        })
-    }
+    Ok(total)
 }
 
 #[derive(Debug, Clone, PartialEq)]

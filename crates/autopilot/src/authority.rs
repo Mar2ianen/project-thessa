@@ -339,15 +339,17 @@ pub fn ascent_tick(phase: &AscentPhase, state: &LiveState) -> PhaseTick {
             tick
         }
         AscentPhase::Coast { .. } => {
-            // Unpowered drift to just before apoapsis, already slewed onto
-            // the circularization direction: a hot engine with a slewing
-            // nose wastes the burn arc cosine losses. Retire while still
-            // ascending slowly so the arc centers on apo instead of
-            // pumping it one-sidedly from the descending leg. A shattered
-            // ascent that never arrives hangs here for the watchdog —
-            // that is the honest signal, not a coasted crash.
-            let done = state.position_m.dot(state.velocity_mps)
-                <= COAST_HANDOFF_CLIMB_MPS * state.position_m.length();
+            // Unpowered drift onto the circularization direction: a hot
+            // engine with a slewing nose wastes the burn in cosine
+            // losses. Retire inside a narrow band around apoapsis —
+            // climbing no faster than the handoff limit and not yet
+            // descending past it either: a one-sided `climb <= L` also
+            // fires during a near-vertical fall, handing circularize
+            // below apoapsis. A shattered ascent that misses the band
+            // hangs here for the watchdog — that is the honest signal,
+            // not a coasted crash.
+            let radial_momentum = state.position_m.dot(state.velocity_mps);
+            let done = radial_momentum.abs() <= COAST_HANDOFF_CLIMB_MPS * state.position_m.length();
             let mut tick = match orbital_horizontal(state) {
                 Some(direction) => steer_toward(direction, 0.0, state),
                 None => hold_tick(state),
@@ -459,8 +461,13 @@ pub fn landing_tick(phase: &LandingPhase, state: &LiveState) -> PhaseTick {
             burn_throttle,
             ..
         } => {
-            // Bang-bang around the touchdown speed on the down vector;
-            // touchdown declares on the spherical approximation.
+            // Bang-bang around the touchdown speed: thrust must oppose
+            // the fall, so the nose points along `-down` (up) — body +X
+            // carries the thrust, and steering along `down` would fire
+            // the engine straight into the ground and accelerate the
+            // descent. Touchdown declares only inside the altitude gate
+            // *and* with the descent rate inside the limit, so a hot
+            // impact keeps braking instead of reporting a success.
             let down = radial(state).map(|up| -up).unwrap_or(DVec3::NEG_Y);
             let descent_rate = -state.velocity_mps.dot(-down);
             let throttle = if descent_rate > *touchdown_speed_limit_mps {
@@ -468,8 +475,9 @@ pub fn landing_tick(phase: &LandingPhase, state: &LiveState) -> PhaseTick {
             } else {
                 0.0
             };
-            let mut tick = steer_toward(down, throttle, state);
-            tick.done = altitude <= TOUCHDOWN_ALTITUDE_M;
+            let mut tick = steer_toward(-down, throttle, state);
+            tick.done =
+                altitude <= TOUCHDOWN_ALTITUDE_M && descent_rate <= *touchdown_speed_limit_mps;
             tick
         }
         LandingPhase::AbortToOrbit { .. } => {
@@ -501,13 +509,24 @@ pub fn rendezvous_tick(phase: &RendezvousPhase, state: &LiveState) -> PhaseTick 
             ..
         } => {
             let closing = (-range_rate).max(0.0);
-            let throttle = if closing < 0.5 * *closing_rate_limit_mps {
-                1.0
-            } else {
-                0.0
-            };
+            let hot =
+                closing > *closing_rate_limit_mps && relative_velocity.length_squared() > 1.0e-12;
             let mut tick = if range > 1.0e-6 {
-                steer_toward(relative.normalize(), throttle, state)
+                if hot {
+                    // Arriving hot: the gate can never open while the
+                    // closing rate is over the limit (space has no drag
+                    // to bleed it), so brake along the target-minus-us
+                    // velocity — retrograde relative — until the
+                    // approach slows back into the envelope.
+                    steer_toward(relative_velocity.normalize(), 1.0, state)
+                } else {
+                    let throttle = if closing < 0.5 * *closing_rate_limit_mps {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    steer_toward(relative.normalize(), throttle, state)
+                }
             } else {
                 hold_tick(state)
             };
@@ -525,8 +544,12 @@ pub fn rendezvous_tick(phase: &RendezvousPhase, state: &LiveState) -> PhaseTick 
         } => {
             let speed = relative_velocity.length();
             let mut tick = if speed > 1.0e-6 {
+                // Matching means burning along the delta-v that closes the
+                // gap: v_target - v_us = +relative_velocity. The negated
+                // form thrusts along our own motion relative to the target
+                // and accelerates the divergence instead.
                 steer_toward(
-                    -relative_velocity.normalize(),
+                    relative_velocity.normalize(),
                     if speed > *match_tolerance_mps {
                         1.0
                     } else {
@@ -551,7 +574,10 @@ pub fn rendezvous_tick(phase: &RendezvousPhase, state: &LiveState) -> PhaseTick 
         } => {
             let drift = relative_velocity.length();
             let mut tick = if drift > *match_tolerance_mps && drift > 1.0e-6 {
-                steer_toward(-relative_velocity.normalize(), 1.0, state)
+                // Nulling the drift burns along +relative_velocity (the
+                // delta-v closing v_us to v_target); the negated form
+                // pushes the drift apart, so the keep never settles.
+                steer_toward(relative_velocity.normalize(), 1.0, state)
             } else {
                 hold_tick(state)
             };

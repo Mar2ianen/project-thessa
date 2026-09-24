@@ -451,16 +451,20 @@ fn drive_plume_consumers(
     let in_pilot = pilot
         .as_deref()
         .is_some_and(|s| s.view_mode == ClientViewMode::Pilot);
+    // Disabled plumes must not pay for the name scan below.
+    let enabled = r.plume_enabled && in_pilot;
     // Pilot (metre) space only: map-view transforms are compressed-AU and
     // meaningless for metre-scale plume consumers.
     let mut craft_frame: Option<GlobalTransform> = None;
-    for (name, g, v) in &craft {
-        if name.as_str() == "PFD North American X-15" && *v != Visibility::Hidden {
-            craft_frame = Some(*g);
-            break;
+    if enabled {
+        for (name, g, v) in &craft {
+            if name.as_str() == "PFD North American X-15" && *v != Visibility::Hidden {
+                craft_frame = Some(*g);
+                break;
+            }
         }
     }
-    let show = r.plume_enabled && in_pilot && craft_frame.is_some() && !cache.profile.is_empty();
+    let show = enabled && craft_frame.is_some() && !cache.profile.is_empty();
     let Ok((mut cone_t, mut cone_v)) = cone.single_mut() else {
         return;
     };

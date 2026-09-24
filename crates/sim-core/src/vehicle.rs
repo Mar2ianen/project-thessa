@@ -1269,8 +1269,16 @@ impl VehicleDefinition {
         for ((surface, _), deflection) in
             self.control_surfaces.iter().zip(commands).zip(deflections)
         {
+            let panel_count = self.aero_geometry.panels.len();
             for panel_index in &surface.panel_indices {
-                self.aero_geometry.panels[*panel_index].control_deflection_rad = deflection;
+                let Some(panel) = self.aero_geometry.panels.get_mut(*panel_index) else {
+                    return Err(VehicleError::InvalidVehicle(format!(
+                        "control surface '{}' references aero panel {panel_index}, \
+                         but the vehicle has {panel_count} aero panels",
+                        surface.name
+                    )));
+                };
+                panel.control_deflection_rad = deflection;
             }
         }
         self.aero_geometry

@@ -224,6 +224,13 @@ pub fn validate_spec(recipe: &SpecRecipe, body: &BodyFile) -> Result<(), String>
     if recipe.readability.preview_width != 480 || recipe.readability.preview_height != 270 {
         return Err("readability preview must be 480x270 per spec".into());
     }
+    let geothermal = &recipe.geothermal;
+    if geothermal.major_provinces_min > geothermal.major_provinces_max {
+        return Err("geothermal major_provinces range is inverted".into());
+    }
+    if geothermal.secondary_fields_min > geothermal.secondary_fields_max {
+        return Err("geothermal secondary_fields range is inverted".into());
+    }
     for f in &recipe.feature {
         let (lo, hi) = count_range(f);
         if lo > hi {

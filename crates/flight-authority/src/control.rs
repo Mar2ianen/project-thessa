@@ -244,7 +244,9 @@ pub(crate) fn solve_aero_trim(
     let mut second_passes = 0;
     for pass in 0..2 {
         let before = command;
-        let _ = vehicle.apply_control_inputs(&surface_commands(command.x, command.y, command.z));
+        vehicle
+            .apply_control_inputs(&surface_commands(command.x, command.y, command.z))
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
         let baseline = aero_model
             .evaluate_state(aero_state, environment, &vehicle.aero_geometry)
             .map_err(FlightError::Aero)?
@@ -260,7 +262,9 @@ pub(crate) fn solve_aero_trim(
             let mut probe = command;
             let delta = if command[axis] > 0.9 { -0.02 } else { 0.02 };
             probe[axis] += delta;
-            let _ = vehicle.apply_control_inputs(&surface_commands(probe.x, probe.y, probe.z));
+            vehicle
+                .apply_control_inputs(&surface_commands(probe.x, probe.y, probe.z))
+                .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
             columns[axis] = (aero_model
                 .evaluate_state(aero_state, environment, &vehicle.aero_geometry)
                 .map_err(FlightError::Aero)?

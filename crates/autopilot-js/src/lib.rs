@@ -6,7 +6,7 @@
 //! rejects ambient capabilities before evaluating user code.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::BTreeMap,
     error::Error,
     fmt,
@@ -136,6 +136,9 @@ pub struct ScriptEngine {
     limits: ScriptLimits,
     interrupt_requested: Arc<AtomicBool>,
     wait_request: Rc<RefCell<Option<PendingWait>>>,
+    /// Authoritative simulation clock exposed to scripts as `sim.time()`.
+    /// The sandbox denies `Date`, so this is the only deterministic time source.
+    now: Rc<Cell<f64>>,
 }
 
 #[derive(Debug)]
@@ -160,8 +163,12 @@ impl ScriptEngine {
         let context =
             Context::full(&runtime).map_err(|error| ScriptError::Runtime(error.to_string()))?;
         let wait_request = Rc::new(RefCell::new(None));
+        let now = Rc::new(Cell::new(0.0));
         context
-            .with(|ctx| install_wait_api(ctx, Rc::clone(&wait_request)))
+            .with(|ctx| {
+                install_wait_api(ctx.clone(), Rc::clone(&wait_request))?;
+                install_time_api(ctx, Rc::clone(&now))
+            })
             .map_err(|error| ScriptError::Runtime(error.to_string()))?;
         Ok(Self {
             runtime,
@@ -169,7 +176,15 @@ impl ScriptEngine {
             limits,
             interrupt_requested,
             wait_request,
+            now,
         })
+    }
+
+    /// Publish the current simulation time before starting or resuming a
+    /// script so `sim.time()` reads the authoritative clock instead of an
+    /// ambient one (which the sandbox denies alongside `Date`).
+    pub fn set_now(&self, now: SimTime) {
+        self.now.set(now.0);
     }
 
     /// Evaluate one graph block. The wrapper intentionally exposes no host
@@ -383,6 +398,7 @@ impl ScriptScheduler {
                 .ok_or(ScriptError::TaskIdExhausted)?,
         );
         self.next_task_id = task.0;
+        engine.set_now(now);
         self.attach(task, now, engine.run_async(source)?)
     }
 
@@ -392,15 +408,34 @@ impl ScriptScheduler {
         now: SimTime,
         event: Option<&str>,
     ) -> Result<Vec<ScriptSchedulerStep>, ScriptError> {
+        engine.set_now(now);
         let ready = self.waits.wake(now, event);
         let mut steps = Vec::with_capacity(ready.len());
+        // Every ready wait was already popped from the wait set, so a
+        // bail-out mid-batch would strand its continuation: the task
+        // would never resume and never be reported. Drain the whole
+        // batch, then surface the first error so siblings survive.
+        let mut first_error = None;
         for wait in ready {
             let Some((task, continuation)) = self.continuations.remove(&wait) else {
                 continue;
             };
-            steps.push(self.attach(task, now, continuation.resume(engine)?)?);
+            let resumed = continuation
+                .resume(engine)
+                .and_then(|step| self.attach(task, now, step));
+            match resumed {
+                Ok(step) => steps.push(step),
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+            }
         }
-        Ok(steps)
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(steps),
+        }
     }
 
     pub fn cancel(&mut self, wait: WaitId) -> bool {
@@ -521,6 +556,15 @@ fn install_wait_api(
     Ok(())
 }
 
+/// Installs the deterministic simulation clock. The host calls `set_now`
+/// before every start/wake so scripts observe the same time the scheduler
+/// resolves `Wait.at` and `sim.sleep` against.
+fn install_time_api(ctx: Ctx<'_>, now: Rc<Cell<f64>>) -> rquickjs::Result<()> {
+    let time = Func::from(move || now.get());
+    ctx.globals().set("__thessa_now", time)?;
+    Ok(())
+}
+
 const SANDBOX_PRELUDE: &str = r#"
 (() => {
   const denied = () => { throw new Error('ambient capability is unavailable'); };
@@ -552,6 +596,7 @@ const SANDBOX_PRELUDE: &str = r#"
     warning: (code, message) => JSON.stringify({kind:'warning', code, message}),
   });
   globalThis.sim = Object.freeze({
+    time: () => __thessa_now(),
     sleep: (seconds) => new Promise(resolve => __thessa_register_sleep(seconds, resolve)),
     timeout: (seconds) => new Promise(resolve => __thessa_register_sleep(seconds, resolve)),
     event: (name) => new Promise(resolve => __thessa_register_event(name, resolve)),
@@ -1316,5 +1361,25 @@ mod tests {
         ));
 
         assert!(!scheduler.cancel(task.1));
+    }
+
+    #[test]
+    fn sim_time_reflects_the_scheduler_clock() {
+        let engine = ScriptEngine::new(ScriptLimits::default()).unwrap();
+        let mut scheduler = ScriptScheduler::default();
+        let started = scheduler
+            .start(
+                &engine,
+                SimTime(100.0),
+                "return Guidance.angularRate(sim.time(), 0, 0);",
+            )
+            .unwrap();
+        assert!(matches!(
+            started,
+            ScriptSchedulerStep::Completed {
+                result: ScriptResult::Guidance(GuidanceIntent::AngularRate { rate_body_rps }),
+                ..
+            } if rate_body_rps == glam::DVec3::new(100.0, 0.0, 0.0)
+        ));
     }
 }

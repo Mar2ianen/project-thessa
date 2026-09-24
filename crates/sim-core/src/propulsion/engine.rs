@@ -263,8 +263,13 @@ impl CompiledEngine {
                 if burn_time_s >= engine.burn_time_s {
                     return Some(0.0);
                 }
+                let Some(first_point) = engine.burn_curve.first() else {
+                    // An empty curve integrates to zero flow (same fallback
+                    // as `interpolate`): nothing is consumed yet.
+                    return Some(engine.propellant_mass_kg);
+                };
                 let mut consumed_kg = 0.0;
-                let mut prev = &engine.burn_curve[0];
+                let mut prev = first_point;
                 for point in engine.burn_curve.iter().skip(1) {
                     if point.time_s >= burn_time_s {
                         // Partial interval with linear flow: exact integral.

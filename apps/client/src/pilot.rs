@@ -1701,7 +1701,9 @@ mod tests {
         // vehicle asset exposes one elevator, one rudder and split ailerons;
         // assert the actual actuator deflections so an axis/mesh conversion
         // regression cannot silently turn pitch into roll again.
-        flight.command_controls(0.5, -0.25, -0.75);
+        flight
+            .command_controls(0.5, -0.25, -0.75)
+            .expect("pilot axes are finite and in range");
         let panels = &flight.vehicle.aero_geometry.panels;
         let degrees = |radians: f64| radians.to_degrees();
         assert!((degrees(panels[2].control_deflection_rad) + 12.5).abs() < 1.0e-10);

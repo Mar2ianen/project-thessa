@@ -795,11 +795,14 @@ pub fn aero_coefficients_chunk(
         let ins: [&[f64]; 10] = [
             alpha_eff, beta, sin_e, cos_e, sep, mach, sweep_cos, aspect, interf, thick,
         ];
-        if ins.iter().any(|v| v.len() < base + 8) {
+        let Some(end) = base.checked_add(8) else {
+            return false;
+        };
+        if ins.iter().any(|v| v.len() < end) {
             return false;
         }
         let outs: [&mut [f64]; 4] = [cl, cd, cy, cm];
-        if outs.iter().any(|v| v.len() < base + 8) {
+        if outs.iter().any(|v| v.len() < end) {
             return false;
         }
         unsafe {
@@ -861,11 +864,14 @@ pub fn aero_coefficients_quad(
         let ins: [&[f64]; 10] = [
             alpha_eff, beta, sin_e, cos_e, sep, mach, sweep_cos, aspect, interf, thick,
         ];
-        if ins.iter().any(|v| v.len() < base + 4) {
+        let Some(end) = base.checked_add(4) else {
+            return false;
+        };
+        if ins.iter().any(|v| v.len() < end) {
             return false;
         }
         let outs: [&mut [f64]; 4] = [cl, cd, cy, cm];
-        if outs.iter().any(|v| v.len() < base + 4) {
+        if outs.iter().any(|v| v.len() < end) {
             return false;
         }
         unsafe {

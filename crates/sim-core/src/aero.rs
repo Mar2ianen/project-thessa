@@ -2122,7 +2122,9 @@ fn validate_grid(grid: &[f64], name: &str) -> Result<(), AeroError> {
 }
 
 fn bracket(grid: &[f64], value: f64) -> (usize, usize, f64) {
-    if grid.len() == 1 || value <= grid[0] {
+    // NaN would slip past both clamps below and underflow `upper - 1`;
+    // an empty grid cannot be clamped at all. Treat both as "clamp low".
+    if grid.len() <= 1 || !value.is_finite() || value <= grid[0] {
         return (0, 0, 0.0);
     }
     if value >= grid[grid.len() - 1] {

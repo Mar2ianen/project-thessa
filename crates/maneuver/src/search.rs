@@ -1481,9 +1481,16 @@ impl EncounterTemplate {
 /// Midcourse epoch: past depot-escape, with margin on both sides. Shared
 /// by direct and flyby legs (same correction architecture).
 pub(crate) fn midcourse_time_s(time_of_flight_s: f64) -> f64 {
-    (time_of_flight_s / 4.0)
+    let scheduled = (time_of_flight_s / 4.0)
         .max(3_600.0)
-        .min((time_of_flight_s - 3_600.0).max(3_600.0))
+        .min((time_of_flight_s - 3_600.0).max(3_600.0));
+    // Short legs clamp to the 3600 s floor and can schedule the correction
+    // at or past arrival; fall back to the plain quarter-TOF epoch there.
+    if scheduled.is_finite() && scheduled < time_of_flight_s {
+        scheduled
+    } else {
+        time_of_flight_s / 4.0
+    }
 }
 /// Midcourse differential correction on the full N-body dynamics.
 ///

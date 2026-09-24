@@ -949,9 +949,17 @@ fn revalidate_chain_from_start(
     let mid_candidates: Vec<f64> = if legs > 1 {
         let mut mids = vec![midcourse_time_s(tof1_s)];
         for fraction in [1.0 / 8.0, 1.0 / 2.0] {
-            let candidate = (tof1_s * fraction)
+            let clamped = (tof1_s * fraction)
                 .max(3_600.0)
                 .min((tof1_s - 3_600.0).max(3_600.0));
+            // Same 3600 s floor trap as `midcourse_time_s`: on short legs
+            // the clamp can land at/past arrival, so drop to the plain
+            // fraction of the leg in that case.
+            let candidate = if clamped.is_finite() && clamped < tof1_s {
+                clamped
+            } else {
+                tof1_s * fraction
+            };
             if (candidate - mids[0]).abs() > 1.0
                 && mids.iter().all(|prior| (candidate - prior).abs() > 1.0)
             {

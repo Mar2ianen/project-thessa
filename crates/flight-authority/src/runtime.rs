@@ -839,13 +839,13 @@ impl FlightAuthority {
         self
     }
 
-    pub fn command_controls(&mut self, pitch: f64, yaw: f64, roll: f64) {
+    pub fn command_controls(&mut self, pitch: f64, yaw: f64, roll: f64) -> Result<(), FlightError> {
         // Body +X forward, +Z up implies physical right = -Y.
         // r x F: aft-tail downforce raises the nose (-Y); downforce at -Y
         // rolls right (+X); aft-tail +Y force yaws right (-Z).
-        let _ = self
-            .vehicle
-            .apply_control_inputs(&surface_commands(pitch, yaw, roll));
+        self.vehicle
+            .apply_control_inputs(&surface_commands(pitch, yaw, roll))
+            .map_err(|error| FlightError::InvalidInput(format!("control command: {error}")))
     }
 
     /// Apply a legacy pilot/compatibility command with immediate actuator
@@ -2094,7 +2094,7 @@ impl FlightAuthority {
             self.surface_input.x,
             self.surface_input.y,
             self.surface_input.z,
-        );
+        )?;
         let actual_aero = self
             .aero_model
             .evaluate_state(aero_state, environment, &self.vehicle.aero_geometry)?
@@ -3180,7 +3180,9 @@ mod tests {
             -DVec3::Y,
             -DVec3::Z,
         ] {
-            flight.command_controls(command.x, command.y, command.z);
+            flight
+                .command_controls(command.x, command.y, command.z)
+                .expect("pilot axes are finite and in range");
             let moment = flight
                 .aero_model
                 .evaluate_state(flow, env, &flight.vehicle.aero_geometry)

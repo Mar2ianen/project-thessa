@@ -243,13 +243,24 @@ fn parse_pgm8(data: &[u8]) -> Result<(usize, usize, Vec<u8>), String> {
         .map_err(|e| e.to_string())?
         .parse::<usize>()
         .map_err(|e| e.to_string())?;
-    if maxval != 255 || w == 0 || h == 0 || w * h > 64 * 1024 * 1024 {
+    if maxval != 255 {
         return Err("unsupported pgm geometry".into());
     }
-    if data.len() < pos + w * h {
+    // `w * h` and `pos + w * h` can overflow on hostile geometry; checked
+    // math keeps a crafted header from wrapping into an in-bounds slice.
+    let pixels = w
+        .checked_mul(h)
+        .ok_or_else(|| "unsupported pgm geometry".to_string())?;
+    if w == 0 || h == 0 || pixels > 64 * 1024 * 1024 {
+        return Err("unsupported pgm geometry".into());
+    }
+    let end = pos
+        .checked_add(pixels)
+        .ok_or_else(|| "truncated pgm raster".to_string())?;
+    if data.len() < end {
         return Err("truncated pgm raster".into());
     }
-    Ok((w, h, data[pos..pos + w * h].to_vec()))
+    Ok((w, h, data[pos..end].to_vec()))
 }
 
 #[cfg(test)]

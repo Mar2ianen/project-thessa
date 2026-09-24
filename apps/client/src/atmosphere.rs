@@ -276,9 +276,11 @@ fn toggle_ray_tracing(
 /// RT applies only to metre-scale scenes (pilot/survey). The map uses
 /// compressed astronomical units and never feeds Solari (see
 /// `configure_solari_precision`); `Full` included. Domain physics untouched.
+#[allow(clippy::too_many_arguments)]
 fn sync_rt_view(
     mut commands: Commands,
     active: Res<RayTracingActive>,
+    graphics: Res<GraphicsResolved>,
     pilot: Res<PilotHudState>,
     survey: Res<terrain::SurfaceSurvey>,
     cameras: Query<(Entity, Option<&SolariLighting>), With<Camera3d>>,
@@ -287,7 +289,10 @@ fn sync_rt_view(
 ) {
     let wanted = active.0 && (survey.active || pilot.view_mode == ClientViewMode::Pilot);
     for mut light in &mut lights {
-        light.shadow_maps_enabled = !wanted;
+        // RT provides its own shadows, so raster shadow maps must switch off
+        // while RT renders; otherwise they follow the user's `shadow_enabled`
+        // setting instead of being force-enabled here.
+        light.shadow_maps_enabled = !wanted && graphics.0.shadow_enabled;
     }
     if wanted {
         // BLAS builds lag the toggle by a frame or two; enabling the RT

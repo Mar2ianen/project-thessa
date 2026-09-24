@@ -128,24 +128,28 @@ impl FrameDecoder {
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<Vec<u8>>, CodecError> {
         self.buffer.extend_from_slice(bytes);
         let mut frames = Vec::new();
-        loop {
-            if self.buffer.len() < 4 {
-                break;
-            }
+        // Walk with a cursor and drain once: draining per frame inside the
+        // loop shifted the whole remainder for every envelope in the batch
+        // (quadratic in buffered bytes under message bursts).
+        let mut cursor = 0usize;
+        while self.buffer.len() - cursor >= 4 {
             let declared = u32::from_le_bytes([
-                self.buffer[0],
-                self.buffer[1],
-                self.buffer[2],
-                self.buffer[3],
+                self.buffer[cursor],
+                self.buffer[cursor + 1],
+                self.buffer[cursor + 2],
+                self.buffer[cursor + 3],
             ]) as usize;
             if declared > MAX_FRAME_BYTES {
                 return Err(CodecError::FrameTooLarge { declared });
             }
-            if self.buffer.len() < 4 + declared {
+            if self.buffer.len() - cursor < 4 + declared {
                 break;
             }
-            frames.push(self.buffer[4..4 + declared].to_vec());
-            self.buffer.drain(..4 + declared);
+            frames.push(self.buffer[cursor + 4..cursor + 4 + declared].to_vec());
+            cursor += 4 + declared;
+        }
+        if cursor > 0 {
+            self.buffer.drain(..cursor);
         }
         Ok(frames)
     }

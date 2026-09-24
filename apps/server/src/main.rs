@@ -2471,7 +2471,11 @@ impl IngressReceiver {
 fn is_edge_command(command: &Command) -> bool {
     matches!(
         command,
-        Command::Stage | Command::Engine { .. } | Command::Reset | Command::ExecuteManeuver { .. }
+        Command::Stage
+            | Command::Engine { .. }
+            | Command::Reset
+            | Command::ExecuteManeuver { .. }
+            | Command::ExecuteBurnPlan { .. }
     )
 }
 
@@ -4660,9 +4664,10 @@ mod tests {
             assert!(ingress.send_input("pilot", input(vec![Command::Stage])));
         }
         // Reliability: a full shared queue must NOT report success for a
-        // dropped edge (Stage/Engine/Reset/ExecuteManeuver). Backpressure
-        // (`false`) forces the caller to fail loudly (disconnect/retry)
-        // instead of desyncing client intent from authoritative state.
+        // dropped edge (Stage/Engine/Reset/ExecuteManeuver/ExecuteBurnPlan).
+        // Backpressure (`false`) forces the caller to fail loudly
+        // (disconnect/retry) instead of desyncing client intent from
+        // authoritative state.
         assert!(!ingress.send_input("pilot", input(vec![Command::Stage])));
         assert!(ingress.send_leave("pilot"));
         assert!(receiver.take_leaves().contains("pilot"));

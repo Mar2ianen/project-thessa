@@ -708,11 +708,15 @@ pub(crate) fn impact_at(
     time: SimTime,
 ) -> Option<BodyId> {
     for body_id in impact_bodies {
-        let body = ephemeris.body(*body_id).ok()?;
+        let Ok(body) = ephemeris.body(*body_id) else {
+            continue;
+        };
         if body.radius_m <= 0.0 {
             continue;
         }
-        let state = ephemeris.body_state(*body_id, time).ok()?;
+        let Ok(state) = ephemeris.body_state(*body_id, time) else {
+            continue;
+        };
         if (position - state.position_inertial).length() < body.radius_m {
             return Some(*body_id);
         }
@@ -733,12 +737,18 @@ pub(crate) fn impact_segment(
 ) -> Option<(BodyId, f64)> {
     let mut first: Option<(BodyId, f64)> = None;
     for body_id in impact_bodies {
-        let body = ephemeris.body(*body_id).ok()?;
+        let Ok(body) = ephemeris.body(*body_id) else {
+            continue;
+        };
         if body.radius_m <= 0.0 {
             continue;
         }
-        let start = ephemeris.body_state(*body_id, start_time).ok()?;
-        let end = ephemeris.body_state(*body_id, end_time).ok()?;
+        let Ok(start) = ephemeris.body_state(*body_id, start_time) else {
+            continue;
+        };
+        let Ok(end) = ephemeris.body_state(*body_id, end_time) else {
+            continue;
+        };
         let relative = from - start.position_inertial;
         let delta = (to - end.position_inertial) - relative;
         let a = delta.length_squared();

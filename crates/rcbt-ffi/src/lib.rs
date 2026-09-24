@@ -132,14 +132,29 @@ macro_rules! impl_tree {
 
             pub fn reset_to_depth(&mut self, depth: u8) {
                 debug_assert!(depth <= self.max_depth());
-                // SAFETY: `raw` is a live tree; depth is range-checked in debug.
+                // `cbt_ResetToDepth` walks heap rows up to `depth`; a larger
+                // value writes past the allocation, so clamp in release.
+                let depth = depth.min(self.max_depth());
+                // SAFETY: `raw` is a live tree; depth <= max_depth <= 24.
                 unsafe {
                     $reset(self.raw, depth as i64);
                 }
             }
 
+            /// True when `id` addresses a node of `depth` inside this tree:
+            /// `depth <= max_depth` and `2^depth <= id < 2^(depth + 1)`.
+            fn node_in_range(id: u64, depth: u8, max_depth: u8) -> bool {
+                depth <= max_depth && (id >> depth) == 1
+            }
+
             pub fn split(&mut self, id: u64, depth: u8) {
-                // SAFETY: `raw` is a live tree; the caller replays valid leaf splits.
+                // `cbt_SplitNode` only rejects ceil nodes: an out-of-range
+                // depth or an id outside `[2^depth, 2^(depth + 1))` indexes
+                // the heap out of bounds, so such ops are ignored here.
+                if !Self::node_in_range(id, depth, self.max_depth()) {
+                    return;
+                }
+                // SAFETY: id/depth address a node that fits this tree.
                 unsafe {
                     $split(self.raw, id, depth as i64);
                 }
@@ -147,7 +162,17 @@ macro_rules! impl_tree {
 
             /// Merge the two leaf children of `parent`, mirroring `Tree::merge`.
             pub fn merge_children(&mut self, parent_id: u64, parent_depth: u8) {
-                // SAFETY: `raw` is a live tree; the caller replays valid merges.
+                // The merge writes the parent's children at `parent_depth +
+                // 1`: they only exist strictly below max depth, and the
+                // parent id must fit its own row. Out-of-range ops are
+                // ignored instead of reaching C.
+                if parent_depth >= self.max_depth()
+                    || !Self::node_in_range(parent_id, parent_depth, self.max_depth())
+                {
+                    return;
+                }
+                // SAFETY: parent id/depth address a node whose children fit
+                // this tree.
                 unsafe {
                     $merge(self.raw, parent_id, parent_depth as i64);
                 }
@@ -183,20 +208,40 @@ macro_rules! impl_tree {
                 let mut ids = Vec::with_capacity(ops.len());
                 let mut depths = Vec::with_capacity(ops.len());
                 let mut kinds = Vec::with_capacity(ops.len());
+                let max_depth = self.max_depth();
                 for (id, depth, kind) in ops {
+                    // `depth` is i64 off the wire: guard the sign, the row
+                    // range (kind 0 splits a node, kind 1 merges its parent —
+                    // both need `depth < max_depth` so children fit) and the
+                    // node id before anything reaches C. Unknown kinds are
+                    // dropped too.
+                    let depth = *depth;
+                    if !(0..i64::from(max_depth)).contains(&depth) {
+                        continue;
+                    }
+                    if (id >> depth as u32) != 1 {
+                        continue;
+                    }
+                    if *kind > 1 {
+                        continue;
+                    }
                     ids.push(*id);
-                    depths.push(*depth);
+                    depths.push(depth);
                     kinds.push(*kind);
                 }
+                if ids.is_empty() {
+                    return 0;
+                }
                 // SAFETY: `raw` is live; the three slices are valid, equally
-                // long, and borrowed for the duration of the call.
+                // long, and borrowed for the duration of the call. Every
+                // entry is range-checked against this tree above.
                 unsafe {
                     $batch(
                         self.raw,
                         ids.as_ptr(),
                         depths.as_ptr(),
                         kinds.as_ptr(),
-                        ops.len() as i64,
+                        ids.len() as i64,
                     ) as usize
                 }
             }
@@ -207,10 +252,21 @@ macro_rules! impl_tree {
             }
 
             pub fn decode(&self, index: usize) -> (u64, u8) {
+                // `cbt_DecodeNode` only asserts on the C side: an
+                // out-of-range handle walks heap rows the tree does not
+                // have, so the safe wrapper reports the null node instead.
+                if index >= self.node_count() {
+                    return (0, 0);
+                }
+                self.decode_unchecked(index)
+            }
+
+            fn decode_unchecked(&self, index: usize) -> (u64, u8) {
                 let mut id = 0_u64;
                 let mut depth = 0_i64;
-                // SAFETY: `raw` is live, index is in range by contract,
-                // out-pointers are valid stack slots for the duration.
+                // SAFETY: `raw` is live, index < node_count (checked by
+                // `decode`/`leaves`), out-pointers are valid stack slots
+                // for the duration.
                 unsafe {
                     $decode(self.raw, index as i64, &mut id, &mut depth);
                 }
@@ -218,7 +274,12 @@ macro_rules! impl_tree {
             }
 
             pub fn is_leaf(&self, id: u64, depth: u8) -> bool {
-                // SAFETY: `raw` is a live tree.
+                // Out-of-range nodes are not leaves of this tree; passing
+                // them to C would read heap rows that do not exist.
+                if !Self::node_in_range(id, depth, self.max_depth()) {
+                    return false;
+                }
+                // SAFETY: id/depth address a node that fits this tree.
                 unsafe { $is_leaf(self.raw, id, depth as i64) != 0 }
             }
 
@@ -229,7 +290,10 @@ macro_rules! impl_tree {
 
             /// All leaves in left-to-right decode order.
             pub fn leaves(&self) -> Vec<(u64, u8)> {
-                (0..self.node_count()).map(|i| self.decode(i)).collect()
+                let count = self.node_count();
+                (0..count)
+                    .map(|index| self.decode_unchecked(index))
+                    .collect()
             }
         }
     };

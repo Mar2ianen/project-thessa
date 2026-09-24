@@ -495,12 +495,20 @@ fn cmd_bake_spec(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn E
     let (hlats, hlons): (Vec<f64>, Vec<f64>) = hot_spots.iter().cloned().unzip();
     let major = recipe.geothermal.major_provinces_min
         + (thessa_worldgen_rocky::rng::hash01(manifest.planet.seed, 600, 0, 0)
-            * (recipe.geothermal.major_provinces_max - recipe.geothermal.major_provinces_min + 1)
-                as f64) as u32;
+            // `validate_spec` rejects inverted ranges; saturating arithmetic
+            // keeps a bypassed call from underflowing the u32 span.
+            * (recipe
+                .geothermal
+                .major_provinces_max
+                .saturating_sub(recipe.geothermal.major_provinces_min)
+                .saturating_add(1)) as f64) as u32;
     let secondary = recipe.geothermal.secondary_fields_min
         + (thessa_worldgen_rocky::rng::hash01(manifest.planet.seed, 601, 0, 0)
-            * (recipe.geothermal.secondary_fields_max - recipe.geothermal.secondary_fields_min + 1)
-                as f64) as u32;
+            * (recipe
+                .geothermal
+                .secondary_fields_max
+                .saturating_sub(recipe.geothermal.secondary_fields_min)
+                .saturating_add(1)) as f64) as u32;
     let provinces =
         geothermal::place_provinces(manifest.planet.seed, major, secondary, &hlats, &hlons);
     println!("geothermal: {major} major + {secondary} secondary provinces");

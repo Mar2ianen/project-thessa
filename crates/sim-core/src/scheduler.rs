@@ -70,6 +70,10 @@ impl EventScheduler {
 
     /// Arm an event, keeping time order. Returns its id for `cancel`.
     pub fn arm(&mut self, kind: ScheduledKind, time: SimTime) -> u64 {
+        debug_assert!(
+            time.seconds().is_finite(),
+            "scheduler events must arm at a finite time"
+        );
         let id = self.next_id;
         self.next_id += 1;
         let event = ScheduledEvent { id, time, kind };

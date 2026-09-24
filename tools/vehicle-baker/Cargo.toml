@@ -11,5 +11,6 @@ glam.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thessa-aero-surfaces = { path = "../../crates/aero-surfaces" }
+thessa-fuselage = { path = "../../crates/fuselage" }
 thessa-sim-core = { path = "../../crates/sim-core" }
 toml.workspace = true

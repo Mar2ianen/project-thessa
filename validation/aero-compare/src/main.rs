@@ -317,7 +317,7 @@ fn cases() -> Result<Vec<Case>, Box<dyn Error>> {
             name: "naca_like_subsonic_wing",
             case: AeroCase::new(
                 AeroState::new(
-                    DVec3::new(102.0, 0.0, 102.0 * 5.0_f64.to_radians().tan()),
+                    DVec3::new(102.0, 0.0, -102.0 * 5.0_f64.to_radians().tan()),
                     DVec3::ZERO,
                 ),
                 environment,
@@ -346,7 +346,7 @@ fn cases() -> Result<Vec<Case>, Box<dyn Error>> {
                     DVec3::new(
                         5.0 * environment.speed_of_sound_mps,
                         0.0,
-                        5.0 * environment.speed_of_sound_mps * 20.0_f64.to_radians().tan(),
+                        -5.0 * environment.speed_of_sound_mps * 20.0_f64.to_radians().tan(),
                     ),
                     DVec3::ZERO,
                 ),
@@ -423,7 +423,7 @@ fn x15_wing_only_case(mach: f64, alpha_deg: f64) -> Result<AeroCase, Box<dyn Err
             DVec3::new(
                 mach * environment.speed_of_sound_mps * alpha_rad.cos(),
                 0.0,
-                mach * environment.speed_of_sound_mps * alpha_rad.sin(),
+                -mach * environment.speed_of_sound_mps * alpha_rad.sin(),
             ),
             DVec3::ZERO,
         ),
@@ -469,7 +469,7 @@ fn x15_trajectory() -> Result<TrajectoryResult, Box<dyn Error>> {
         DVec3::new(
             speed_mps * alpha_rad.cos(),
             0.0,
-            speed_mps * alpha_rad.sin(),
+            -speed_mps * alpha_rad.sin(),
         ),
         DQuat::IDENTITY,
         DVec3::ZERO,
@@ -486,8 +486,7 @@ fn x15_trajectory() -> Result<TrajectoryResult, Box<dyn Error>> {
     let final_velocity_body =
         final_state.orientation_body_to_inertial.inverse() * final_state.velocity_inertial_mps;
     let final_speed_mps = final_state.velocity_inertial_mps.length();
-    let final_alpha_deg = final_velocity_body
-        .z
+    let final_alpha_deg = (-final_velocity_body.z)
         .atan2(final_velocity_body.x)
         .to_degrees();
     Ok(TrajectoryResult {
@@ -512,7 +511,7 @@ fn print_x15_trajectory(result: &TrajectoryResult) {
 
 fn angle_of_attack_deg(case: &AeroCase) -> f64 {
     let relative_velocity = case.state.velocity_body_mps - case.environment.wind_velocity_body_mps;
-    relative_velocity.z.atan2(relative_velocity.x).to_degrees()
+    (-relative_velocity.z).atan2(relative_velocity.x).to_degrees()
 }
 
 fn normalized_coefficients(
@@ -600,7 +599,7 @@ fn rocket_fin_case(mach: f64, alpha_rad: f64) -> Result<AeroCase, Box<dyn Error>
     .collect::<Result<Vec<_>, _>>()?;
     Ok(AeroCase::new(
         AeroState::new(
-            DVec3::new(speed * alpha_rad.cos(), 0.0, speed * alpha_rad.sin()),
+            DVec3::new(speed * alpha_rad.cos(), 0.0, -speed * alpha_rad.sin()),
             DVec3::ZERO,
         ),
         environment,

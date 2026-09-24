@@ -54,6 +54,18 @@ pub mod concorde {
     pub const SPAN_M: f64 = 25.5;
     /// Reference wing area, 3,856 sq ft (same specs).
     pub const WING_AREA_M2: f64 = 358.2;
+    /// Calibrated Polhamus vortex-lift factor for the ogival delta.
+    ///
+    /// The compiled Concorde wing holds aspect ratio 1.813 with effective
+    /// leading-edge sweep near 60 deg. AVL (VLM, attached flow) gives a
+    /// lift slope of 1.98/rad against the solver's 2.04/rad (+3.0%); the
+    /// vortex term `V * |sin a| * sin a * cos a` is second-order at small
+    /// angles, so it leaves that slope untouched. `V = 3.0` follows the
+    /// Polhamus suction analogy (NASA TN D-3767) vortex constant `Kv` for
+    /// ~60 deg sharp-edge sweep and reproduces the `Kp = 1.98` polar
+    /// within ~2.5% at 5–15 deg AoA. Pinned by
+    /// `concorde_delta_vortex_lift_matches_polhamus_band`.
+    pub const VORTEX_LIFT_FACTOR: f64 = 3.0;
 }
 
 /// Boeing 777X right half-wing reconstruction.

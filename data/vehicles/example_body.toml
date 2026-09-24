@@ -1,0 +1,106 @@
+# Example procedural-body vehicle: Juno-style round stack (boat-tail,
+# barrel tank with real propellant, ogive nose) plus hand mass/inertia.
+# The baker compiles bodies hangar-side into strip panels, hull mass,
+# feed-pipeline tanks, and contact parts; flight sees only the baked
+# vehicle definition.
+name = "example-body-rocket"
+mass_kg = 500.0
+# Symmetric positive-definite inertia tensor, written as rows.
+inertia_body_kg_m2 = [
+  [800.0, 0.0, 0.0],
+  [0.0, 1500.0, 0.0],
+  [0.0, 0.0, 1500.0],
+]
+
+[[procedural_bodies]]
+name = "core"
+origin_body_m = [0.0, 0.0, 0.0]
+
+[[procedural_bodies.stations]]
+x_m = 0.0
+half_width_m = 0.55
+top_height_m = 0.55
+bottom_height_m = 0.55
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.stations]]
+x_m = 0.9
+half_width_m = 1.0
+top_height_m = 1.0
+bottom_height_m = 1.0
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.stations]]
+x_m = 4.9
+half_width_m = 1.0
+top_height_m = 1.0
+bottom_height_m = 1.0
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.stations]]
+x_m = 5.85
+half_width_m = 0.75
+top_height_m = 0.75
+bottom_height_m = 0.75
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.stations]]
+x_m = 6.8
+half_width_m = 0.001
+top_height_m = 0.001
+bottom_height_m = 0.001
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.regions]]
+name = "main-tank"
+x0_m = 0.9
+x1_m = 4.9
+
+[procedural_bodies.regions.kind.tank]
+propellant = "lox-methane"
+fill_fraction = 0.95
+
+[[procedural_bodies.regions]]
+name = "avionics"
+x0_m = 4.9
+x1_m = 5.85
+kind = "avionics"
+
+[[procedural_bodies.ports]]
+name = "engine-aft"
+x_m = 0.0
+clock_rad = 0.0
+kind = "engine-mount"
+diameter_m = 0.5
+
+[procedural_bodies.structure]
+skin_gauge_mm = 2.0
+frame_spacing_m = 1.0
+frame_gauge_mm = 2.0
+frame_width_mm = 40.0
+tank_pressure_pa = 500000.0
+wall_inset_mm = 10.0
+
+[procedural_bodies.structure.skin_material]
+name = "Al-7075-T6"
+density_kg_m3 = 2810.0
+
+[procedural_bodies.structure.tank_material]
+density_kg_m3 = 8190.0
+yield_strength_pa = 1000000000.0
+max_wall_temp_k = 1350.0

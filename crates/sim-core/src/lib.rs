@@ -33,7 +33,7 @@ mod vehicle;
 pub use aero::{
     AeroCase, AeroCoefficientTable, AeroCoefficients, AeroConfig, AeroEnvironment, AeroError,
     AeroGeometry, AeroModel, AeroPanel, AeroPanelLoad, AeroResult, AeroSimdScratch, AeroState,
-    PanelAeroModel, PanelSoA, evaluate_batch,
+    PanelAeroModel, PanelSoA, diederich_lift_slope, evaluate_batch,
 };
 pub use affine_propagator::{
     AffinePropagator, AnalyticError, AnalyticFallback, AnalyticStep, ModeCoefficients,

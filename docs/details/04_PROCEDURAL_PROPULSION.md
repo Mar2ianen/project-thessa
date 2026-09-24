@@ -1089,7 +1089,7 @@ Shipped v5 foundation:
   Ejector momentum uses the captured-flow and motive-jet kinetic-energy
   equations directly; its explicit `mixing_efficiency` bounds the unresolved
   mixing loss rather than fitting thrust. The release benchmark measured
-  `237.0 ns/row` over six Mach points in Earth air and six in nitrogen-only
+  `241.5 ns/row` over six Mach points in Earth air and six in nitrogen-only
   atmosphere on this machine.
 
 - CLOSED 2026-09-23 (section 18.9): the free-standing oxygen scalar is

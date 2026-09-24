@@ -1004,6 +1004,89 @@ fn concorde_golden_ogival_subdivision() {
     );
 }
 
+#[test]
+fn concorde_delta_vortex_lift_matches_polhamus_band() {
+    // End-to-end delta-wing quality guard: the compiled Concorde ogive
+    // (mirrored pair, full-aircraft aspect ratio 1.813) through the stock
+    // panel solver must reproduce the AVL attached-flow slope at small
+    // angles and the Polhamus suction-analogy polar once the calibrated
+    // vortex factor (`concorde::VORTEX_LIFT_FACTOR`) is applied.
+    //
+    // Reference anchors, all documented: AVL 3.36 VLM on the same
+    // 7-station ogive gives a lift slope of 1.98/rad with CL(2/5/10/15)
+    // at 0.069/0.172/0.341/0.501; the Polhamus polar with Kp = 1.98
+    // (that AVL slope) and Kv = 3.0 predicts CL(5/10/12/15) at
+    // 0.194/0.423/0.521/0.672 (NASA TN D-3767). Bands below are ±5% or
+    // wider: they pin the calibration without overfitting the analogy.
+    // Vortex-induced drag is not modeled yet (induced drag follows the
+    // attached branch only), so no L/D assertion is attempted here.
+    use crate::{CompileOptions, MechanismState, compile_surface, concorde, concorde_wing};
+    use thessa_sim_core::{
+        AeroConfig, AeroEnvironment, AeroGeometry, AeroModel, AeroState, PanelAeroModel,
+    };
+
+    let surface = concorde_wing().unwrap();
+    let right = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    let mirrored = right.mirrored();
+    let mut panels = right.panels.clone();
+    panels.extend(mirrored.panels.iter().cloned());
+    let geometry = AeroGeometry::new(panels).unwrap();
+    let area: f64 = geometry.panels.iter().map(|panel| panel.area_m2).sum();
+    assert!((2.0 * right.summary.material_area_m2 - concorde::WING_AREA_M2).abs() < 8.0);
+
+    let env = AeroEnvironment::standard_sea_level();
+    let speed = 68.0;
+    let dynamic_pressure = 0.5 * env.density_kg_m3 * speed * speed;
+    let lift_with = |model: &PanelAeroModel, deg: f64| {
+        let alpha = deg.to_radians();
+        let state = AeroState::new(
+            DVec3::new(speed * alpha.cos(), 0.0, -speed * alpha.sin()),
+            DVec3::ZERO,
+        );
+        model
+            .evaluate_state(state, env, &geometry)
+            .unwrap()
+            .force_body_n
+            .z
+            / (dynamic_pressure * area)
+    };
+
+    // Attached branch: symmetric at zero, linear clear of stall, slope in
+    // the AVL band (1.98/rad measured, solver reads 2.04).
+    let base = PanelAeroModel::new(AeroConfig::default()).unwrap();
+    assert!(lift_with(&base, 0.0).abs() < 1e-9);
+    let ratio = lift_with(&base, 4.0) / lift_with(&base, 2.0);
+    assert!((ratio - 2.0).abs() < 0.1);
+    let slope = (lift_with(&base, 2.0) - lift_with(&base, 0.0)) / 2.0_f64.to_radians();
+    assert!((1.8..2.2).contains(&slope), "slope = {slope}");
+
+    // Vortex branch: dedicated delta term, second-order at small angles
+    // (leaves the linear slope alone), Polhamus band at 5–15 deg.
+    let vortex = PanelAeroModel::new(AeroConfig {
+        vortex_lift_factor: concorde::VORTEX_LIFT_FACTOR,
+        ..AeroConfig::default()
+    })
+    .unwrap();
+    assert!((lift_with(&vortex, 2.0) - lift_with(&base, 2.0)).abs() < 0.01);
+    for (deg, low, high) in [
+        (5.0, 0.18, 0.21),
+        (10.0, 0.40, 0.45),
+        (12.0, 0.49, 0.55),
+        (15.0, 0.63, 0.71),
+    ] {
+        let cl = lift_with(&vortex, deg);
+        assert!((low..high).contains(&cl), "CL({deg}) = {cl}");
+    }
+    // Bounded far past stall: the vortex term never explodes the curve.
+    let deep = lift_with(&vortex, 25.0);
+    assert!(deep.is_finite() && deep > 0.0 && deep < 1.5);
+}
+
 fn budget_options(budget_m2: f64, max_panels: usize) -> CompileOptions {
     CompileOptions {
         mode: RefinementMode::ErrorBudget {

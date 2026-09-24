@@ -161,8 +161,8 @@ pub struct VehicleDefinition {
     /// masses into `mass_properties` when mounts are present.
     #[serde(default)]
     pub engines: Vec<EngineMount>,
-    /// Installed propellant tanks (dry + full-fill mass aggregate at bake;
-    /// depletion wiring is future work).
+    /// Installed propellant tanks (dry + initial-load mass aggregate at
+    /// bake; runtime depletion wiring is future work).
     #[serde(default)]
     pub tanks: Vec<TankMount>,
     /// Installed multi-chamber propulsion systems (chambers carry their
@@ -626,19 +626,20 @@ impl VehicleDefinition {
         Ok(self)
     }
 
-    /// Aggregate installed tank masses (dry + full propellant fill) as
-    /// point masses at their stations. Called after
+    /// Aggregate installed tank masses (dry + initial propellant load), adding
+    /// each mount's intrinsic tensor and its parallel-axis term. Called after
     /// [`VehicleDefinition::bake_engine_masses`].
     pub fn bake_tank_masses(&mut self) -> Result<(), VehicleError> {
         let mut mass_kg = self.mass_properties.mass_kg;
         let mut inertia = self.mass_properties.inertia_body_kg_m2;
         for mount in &self.tanks {
-            let tank_mass_kg = mount.tank.dry_mass_kg + mount.tank.full_propellant_kg;
+            let tank_mass_kg = mount.tank.dry_mass_kg + mount.loaded_propellant_kg();
             let position = DVec3::from_array(mount.position_body_m);
             mass_kg += tank_mass_kg;
-            inertia += tank_mass_kg
-                * (glam::DMat3::IDENTITY * position.length_squared()
-                    - outer_product(position, position));
+            inertia += mount.intrinsic_inertia_body_kg_m2
+                + tank_mass_kg
+                    * (glam::DMat3::IDENTITY * position.length_squared()
+                        - outer_product(position, position));
         }
         self.mass_properties =
             RigidBodyProperties::new(mass_kg, inertia).map_err(VehicleError::MassProperties)?;
@@ -1425,6 +1426,56 @@ mod tests {
                 gimbal_range_rad: 0.0,
             }])
             .expect("jet mount")
+    }
+
+    #[test]
+    fn tank_bake_adds_intrinsic_and_parallel_axis_inertia() {
+        let geometry = AeroGeometry::new(vec![
+            AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+        ])
+        .expect("geometry");
+        let initial =
+            RigidBodyProperties::new(1000.0, glam::DMat3::from_diagonal(DVec3::splat(1000.0)))
+                .expect("mass properties");
+        let initial_mass = initial.mass_kg;
+        let initial_inertia = initial.inertia_body_kg_m2;
+        let mut vehicle =
+            VehicleDefinition::new("tank-inertia", geometry, initial, vec![]).expect("vehicle");
+        let shape = crate::TankShape::Cylinder {
+            diameter_m: 1.0,
+            length_m: 2.0,
+        };
+        let tank = crate::TankSpec {
+            shape,
+            pressure_pa: 500_000.0,
+            material: crate::ChamberMaterial::nickel_superalloy(),
+        }
+        .compile(800.0)
+        .expect("tank");
+        let intrinsic = shape
+            .intrinsic_inertia_body_kg_m2(tank.dry_mass_kg, tank.full_propellant_kg)
+            .expect("tank inertia");
+        let position = DVec3::new(1.0, -2.0, 0.5);
+        vehicle = vehicle
+            .with_tanks(vec![TankMount {
+                tank,
+                position_body_m: position.to_array(),
+                intrinsic_inertia_body_kg_m2: intrinsic,
+                initial_propellant_kg: Some(tank.full_propellant_kg),
+            }])
+            .expect("mount");
+        vehicle.bake_tank_masses().expect("mass bake");
+
+        let tank_mass = tank.dry_mass_kg + tank.full_propellant_kg;
+        let point = (glam::DMat3::IDENTITY * position.length_squared()
+            - outer_product(position, position))
+            * tank_mass;
+        let expected = initial_inertia + intrinsic + point;
+        let diff = vehicle.mass_properties.inertia_body_kg_m2 - expected;
+        assert!(diff.x_axis.length() < 1e-9);
+        assert!(diff.y_axis.length() < 1e-9);
+        assert!(diff.z_axis.length() < 1e-9);
+        assert!((vehicle.mass_properties.mass_kg - initial_mass - tank_mass).abs() < 1e-9);
     }
 
     fn high_mach_condition() -> FlightCondition {

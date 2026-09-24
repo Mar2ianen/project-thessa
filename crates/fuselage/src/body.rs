@@ -148,6 +148,10 @@ pub struct BodyControlRegion {
     pub plane: BodyControlPlane,
     pub minimum_deflection_rad: f64,
     pub maximum_deflection_rad: f64,
+    /// Optional physical drive rating. Omission preserves legacy immediate
+    /// command response for migration of existing body-control assets.
+    #[serde(default)]
+    pub actuator: Option<thessa_sim_core::ControlSurfaceActuator>,
 }
 
 impl BodyControlRegion {
@@ -166,6 +170,7 @@ impl BodyControlRegion {
             plane,
             minimum_deflection_rad,
             maximum_deflection_rad,
+            actuator: None,
         };
         if region.name.trim().is_empty() {
             return Err(FuselageError::InvalidBody(
@@ -191,6 +196,19 @@ impl BodyControlRegion {
             )));
         }
         Ok(region)
+    }
+
+    /// Set the physical no-load slew rate and stall torque for this body
+    /// control. Values are design inputs in rad/s and N·m.
+    pub fn with_actuator(
+        mut self,
+        actuator: thessa_sim_core::ControlSurfaceActuator,
+    ) -> Result<Self, FuselageError> {
+        actuator
+            .validate()
+            .map_err(|error| FuselageError::InvalidBody(error.to_string()))?;
+        self.actuator = Some(actuator);
+        Ok(self)
     }
 
     fn validate(&self, x_first: f64, x_last: f64) -> Result<(), FuselageError> {
@@ -221,6 +239,11 @@ impl BodyControlRegion {
                 "body control '{}' has invalid deflection limits",
                 self.name
             )));
+        }
+        if let Some(actuator) = self.actuator {
+            actuator
+                .validate()
+                .map_err(|error| FuselageError::InvalidBody(error.to_string()))?;
         }
         Ok(())
     }

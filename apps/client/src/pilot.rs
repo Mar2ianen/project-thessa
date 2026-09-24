@@ -1689,7 +1689,7 @@ mod tests {
     }
 
     #[test]
-    fn x15_manual_commands_map_to_ksp_control_surfaces() {
+    fn x15_manual_commands_are_queued_as_normalized_pilot_axes() {
         let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml"))
             .expect("checked-in system config parses");
         let ephemeris = config.bake().expect("checked-in system bakes");
@@ -1697,20 +1697,17 @@ mod tests {
         let mut flight =
             PilotFlightRuntime::new(&ephemeris, reference_body).expect("X-15 runtime initializes");
 
-        // KSP's W/S, A/D and Q/E channels are pitch, yaw and roll.  The
-        // vehicle asset exposes one elevator, one rudder and split ailerons;
-        // assert the actual actuator deflections so an axis/mesh conversion
-        // regression cannot silently turn pitch into roll again.
-        flight
-            .command_controls(0.5, -0.25, -0.75)
-            .expect("pilot axes are finite and in range");
-        let panels = &flight.vehicle.aero_geometry.panels;
-        let degrees = |radians: f64| radians.to_degrees();
-        assert!((degrees(panels[2].control_deflection_rad) + 12.5).abs() < 1.0e-10);
-        assert!((degrees(panels[3].control_deflection_rad) + 12.5).abs() < 1.0e-10);
-        assert!((degrees(panels[4].control_deflection_rad) + 5.5).abs() < 1.0e-10);
-        assert!((degrees(panels[0].control_deflection_rad) - 13.5).abs() < 1.0e-10);
-        assert!((degrees(panels[1].control_deflection_rad) + 13.5).abs() < 1.0e-10);
+        // KSP's W/S, A/D and Q/E channels are pitch, yaw and roll. Commands
+        // enter the fixed-step actuator pipeline; setting pilot input must
+        // not teleport the surfaces between physics ticks.
+        flight.command_controls(0.5, -0.25, -0.75);
+        assert_eq!(flight.control_input, DVec3::new(0.5, -0.25, -0.75));
+        assert!(
+            flight
+                .control_deflections_rad()
+                .iter()
+                .all(|angle| angle.abs() < 1.0e-12)
+        );
     }
 
     #[test]

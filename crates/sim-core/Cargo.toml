@@ -78,3 +78,7 @@ harness = false
 [[bench]]
 name = "propulsion"
 harness = false
+
+[[bench]]
+name = "controls"
+harness = false

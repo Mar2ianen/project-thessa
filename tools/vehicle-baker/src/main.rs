@@ -583,6 +583,12 @@ impl VehicleAsset {
                     definition.maximum_deflection_rad,
                 )?;
                 rebased = rebased.with_kind(definition.kind);
+                if let Some(hinge) = definition.hinge {
+                    rebased = rebased.with_hinge(hinge);
+                }
+                if let Some(actuator) = definition.actuator {
+                    rebased = rebased.with_actuator(actuator);
+                }
                 if let Some(parent) = definition.parent_index {
                     rebased = rebased.with_parent(def_base + parent);
                 }
@@ -682,6 +688,12 @@ impl VehicleAsset {
                     definition.maximum_deflection_rad,
                 )?;
                 rebased = rebased.with_kind(definition.kind);
+                if let Some(hinge) = definition.hinge {
+                    rebased = rebased.with_hinge(hinge);
+                }
+                if let Some(actuator) = definition.actuator {
+                    rebased = rebased.with_actuator(actuator);
+                }
                 if let Some(parent) = definition.parent_index {
                     rebased = rebased.with_parent(control_base + parent);
                 }
@@ -912,6 +924,11 @@ impl VehicleAsset {
         }
         for joint in &mut vehicle.fold_joints {
             joint.hinge_body_m = shift_point(joint.hinge_body_m);
+        }
+        for control in &mut vehicle.control_surfaces {
+            if let Some(hinge) = &mut control.hinge {
+                hinge.point_body_m = shift_point(hinge.point_body_m);
+            }
         }
         for part in &mut vehicle.collision_geometry.parts {
             part.local_position_m = shift_point(part.local_position_m);

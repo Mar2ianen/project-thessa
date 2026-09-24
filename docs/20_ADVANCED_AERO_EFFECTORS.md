@@ -125,6 +125,14 @@ Not all fields must exist literally in this form. The principle matters: asset g
 
 The SoA path should receive compact arrays of already prepared control state, so that new effectors do not destroy the SIMD layout.
 
+The fuselage-control slice now has an explicit mechanism path alongside this
+legacy response: the baker emits a body-frame `ControlHinge`, and the flight
+runtime applies absolute rigid transforms from reference geometry. Optional
+`ControlSurfaceActuator` data advances actual deflection against detailed
+panel hinge loads. This path is currently for procedural body strips; a
+separate immutable panel-definition / control-state representation remains
+the broader architecture target for all effectors.
+
 ## 5. Flaps / high-lift devices
 
 A conventional trailing-edge flap changes more than just the effective AoA. It changes:
@@ -346,7 +354,13 @@ The next useful realism layer after the geometric effect:
 
 At high dynamic pressure a surface may have sufficient aerodynamic authority, but the actuator may be unable to reach the requested angle quickly or at all. This should appear as actuator saturation/residual wrench, not as an artificial reduction of `CL`.
 
-The first slice may keep a constant slew rate; the load-dependent limit can be added later.
+Procedural body strips now support the first load-dependent slice. The author
+provides no-load angular rate and stall torque; rate scales linearly from the
+no-load rating to zero at opposing stall torque. This model intentionally
+does not yet represent actuator mass, motor current, back-drive, actuator
+inertia, power, thermal limits, or failure modes. Other surface effectors
+still use the existing shared normalized-command slew until their mechanism
+data is wired.
 
 ## 11. Interaction with stall/separation model
 

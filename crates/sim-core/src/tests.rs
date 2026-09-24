@@ -2206,6 +2206,133 @@ fn vehicle_definition_supports_arbitrary_surfaces_and_control_channels() {
 }
 
 #[test]
+fn geometric_control_hinge_rotates_panel_from_reference_geometry() {
+    let mut panel =
+        AeroPanel::flat_plate(DVec3::new(2.0, 0.0, 0.0), 1.0, 1.0).expect("valid panel");
+    panel.center_of_pressure_body_m = DVec3::new(2.0, 0.0, 0.0);
+    let geometry = AeroGeometry::new(vec![panel]).expect("valid geometry");
+    let properties = RigidBodyProperties::new(100.0, DMat3::from_diagonal(DVec3::splat(10.0)))
+        .expect("valid properties");
+    let control = ControlSurfaceDefinition::new("body-flap", vec![0], -0.4, 0.4)
+        .expect("valid control")
+        .with_hinge(ControlHinge::new(DVec3::X, -DVec3::Y).expect("valid hinge"));
+    let mut vehicle =
+        VehicleDefinition::new("hinged-body", geometry.clone(), properties, vec![control])
+            .expect("valid vehicle");
+
+    vehicle
+        .apply_control_deflections(&geometry, &[0.2])
+        .expect("apply positive hinge angle");
+    let moved = vehicle.aero_geometry.panels[0];
+    assert!((moved.center_of_pressure_body_m.x - (1.0 + 0.2_f64.cos())).abs() < 1.0e-12);
+    assert!((moved.center_of_pressure_body_m.z - 0.2_f64.sin()).abs() < 1.0e-12);
+    assert!(moved.control_deflection_rad.abs() < 1.0e-12);
+
+    let mut soa = PanelSoA::from_geometry(&geometry).expect("compile neutral SoA geometry");
+    soa.sync_geometry(&vehicle.aero_geometry)
+        .expect("sync moved hinge geometry");
+    let model = PanelAeroModel::new(AeroConfig::default()).expect("valid aero model");
+    let state = AeroState::new(DVec3::new(30.0, 0.0, -4.0), DVec3::ZERO);
+    let environment = AeroEnvironment::standard_sea_level();
+    let aos = model
+        .evaluate_state(state, environment, &vehicle.aero_geometry)
+        .expect("evaluate moved AoS panel");
+    let soa_result = model
+        .evaluate_soa_parts(state, environment, &soa, false)
+        .expect("evaluate moved SoA panel");
+    assert!((aos.force_body_n - soa_result.force_body_n).length() < 1.0e-10);
+    assert!((aos.moment_body_nm - soa_result.moment_body_nm).length() < 1.0e-10);
+
+    vehicle
+        .apply_control_deflections(&geometry, &[0.0])
+        .expect("restore neutral from reference");
+    assert_eq!(vehicle.aero_geometry, geometry);
+}
+
+#[test]
+fn body_control_actuator_rate_falls_with_opposing_hinge_load() {
+    let panel = AeroPanel::flat_plate(DVec3::new(2.0, 0.0, 0.0), 1.0, 1.0).expect("valid panel");
+    let geometry = AeroGeometry::new(vec![panel]).expect("valid geometry");
+    let properties = RigidBodyProperties::new(100.0, DMat3::from_diagonal(DVec3::splat(10.0)))
+        .expect("valid properties");
+    let actuator = ControlSurfaceActuator {
+        max_rate_rad_s: 1.0,
+        max_torque_nm: 100.0,
+    };
+    let control = ControlSurfaceDefinition::new("body-flap", vec![0], -0.5, 0.5)
+        .expect("valid control")
+        .with_hinge(ControlHinge::new(DVec3::ZERO, DVec3::Y).expect("valid hinge"))
+        .with_actuator(actuator);
+    let vehicle = VehicleDefinition::new("actuated-body", geometry, properties, vec![control])
+        .expect("valid vehicle");
+
+    let (half_rate, saturated) = vehicle
+        .advance_control_actuators(&[0.0], &[1.0], &[-50.0], 0.5)
+        .expect("advance under half-rated opposing torque");
+    assert!((half_rate[0] - 0.25).abs() < 1.0e-12);
+    assert!(saturated);
+
+    let (stalled, _) = vehicle
+        .advance_control_actuators(&[0.0], &[1.0], &[-100.0], 0.5)
+        .expect("stall at rated torque");
+    assert_eq!(stalled, vec![0.0]);
+
+    let (no_load, saturated) = vehicle
+        .advance_control_actuators(&[0.0], &[1.0], &[0.0], 1.0)
+        .expect("advance at no-load rate");
+    assert_eq!(no_load, vec![0.5]);
+    assert!(!saturated);
+
+    let (assisted, _) = vehicle
+        .advance_control_actuators(&[0.0], &[1.0], &[500.0], 1.0)
+        .expect("assisting aero load must not exceed no-load rate");
+    assert_eq!(assisted, no_load);
+}
+
+#[test]
+fn hinge_torque_is_panel_moment_translated_to_the_hinge_line() {
+    let panel = AeroPanel::flat_plate(DVec3::new(2.0, 0.0, 0.0), 1.0, 1.0).expect("valid panel");
+    let geometry = AeroGeometry::new(vec![panel]).expect("valid geometry");
+    let properties = RigidBodyProperties::new(100.0, DMat3::from_diagonal(DVec3::splat(10.0)))
+        .expect("valid properties");
+    let control = ControlSurfaceDefinition::new("body-flap", vec![0], -0.5, 0.5)
+        .expect("valid control")
+        .with_hinge(ControlHinge::new(DVec3::X, DVec3::Y).expect("valid hinge"));
+    let vehicle = VehicleDefinition::new("hinge-load", geometry, properties, vec![control])
+        .expect("valid vehicle");
+    let result = AeroResult {
+        force_body_n: DVec3::Z * 10.0,
+        moment_body_nm: -DVec3::Y * 20.0,
+        dynamic_pressure_pa: 1.0,
+        mach: 0.1,
+        reynolds_number: 1.0,
+        panel_count: 1,
+        panel_loads: Some(vec![AeroPanelLoad {
+            force_body_n: DVec3::Z * 10.0,
+            moment_body_nm: -DVec3::Y * 20.0,
+            local_velocity_body_mps: DVec3::X,
+            dynamic_pressure_pa: 1.0,
+            mach: 0.1,
+            reynolds_number: 1.0,
+            angle_of_attack_rad: 0.0,
+            sideslip_rad: 0.0,
+            coefficients: AeroCoefficients {
+                lift: 0.0,
+                drag: 0.0,
+                side_force: 0.0,
+                pitching_moment: 0.0,
+            },
+        }]),
+    };
+
+    let hinge_moments = vehicle
+        .control_hinge_moments(&result)
+        .expect("panel loads produce hinge torque");
+    // About x=1 the force arm is 1 m, so the remaining torque is -10 N·m.
+    assert!((hinge_moments[0] + 10.0).abs() < 1.0e-12);
+}
+
+#[test]
 fn one_sided_spoiler_parks_negative_commands_at_zero() {
     let panel = AeroPanel::flat_plate(DVec3::ZERO, 5.0, 2.0).expect("valid panel");
     let geometry = AeroGeometry::new(vec![panel]).expect("valid geometry");

@@ -21,7 +21,7 @@
 use glam::{DMat3, DVec3, DVec4};
 use serde::{Deserialize, Serialize};
 use thessa_sim_core::{
-    AeroPanel, ControlSurfaceDefinition, Propellant, TankMount, TankShape, TankSpec,
+    AeroPanel, ControlHinge, ControlSurfaceDefinition, Propellant, TankMount, TankShape, TankSpec,
     diederich_lift_slope,
 };
 
@@ -804,15 +804,28 @@ impl<'a> Compiler<'a> {
                     control.name
                 )));
             }
-            compiled.controls.push(
-                ControlSurfaceDefinition::new(
-                    control.name.clone(),
-                    panel_indices,
-                    control.minimum_deflection_rad,
-                    control.maximum_deflection_rad,
-                )
-                .map_err(|error| FuselageError::PanelRejected(error.to_string()))?,
-            );
+            let section = self.body.section_at(control.x0_m);
+            let hinge_point = self.section_center(section)? + self.body.origin_body_m;
+            // Positive pitch/yaw commands preserve the existing body-control
+            // sign convention while now rotating the strip geometry itself.
+            let hinge_axis = match control.plane {
+                BodyControlPlane::Pitch => -DVec3::Y,
+                BodyControlPlane::Yaw => DVec3::Z,
+            };
+            let hinge = ControlHinge::new(hinge_point, hinge_axis)
+                .map_err(|error| FuselageError::PanelRejected(error.to_string()))?;
+            let mut definition = ControlSurfaceDefinition::new(
+                control.name.clone(),
+                panel_indices,
+                control.minimum_deflection_rad,
+                control.maximum_deflection_rad,
+            )
+            .map_err(|error| FuselageError::PanelRejected(error.to_string()))?
+            .with_hinge(hinge);
+            if let Some(actuator) = control.actuator {
+                definition = definition.with_actuator(actuator);
+            }
+            compiled.controls.push(definition);
         }
 
         // Flat-disc end caps for open ends (documented closure rule).

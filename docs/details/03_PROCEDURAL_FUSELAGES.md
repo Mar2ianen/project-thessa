@@ -96,9 +96,36 @@ plane and deflection limits. The compiler inserts range edges into the zone
 schedule and resolves each channel to only the corresponding generated
 panels. `vehicle-baker` rebases those local indices into the merged vehicle
 geometry, after wing controls; runtime control commands then use the shared
-`ControlSurfaceDefinition` path. The present control model applies the
-existing per-panel deflection response. Hinge torque, rate-limited actuator
-state, and a moving surface mesh are separate mechanism/actuator work.
+`ControlSurfaceDefinition` path. Each body control now compiles a hinge at
+its leading axial boundary and the local section centroid: pitch strips rotate
+about body `-Y`, yaw strips about `+Z`, preserving the existing positive
+command/lift convention. Runtime motion rotates panel sample points, force
+centers, and aerodynamic axes from a stable reference geometry, so a change
+in command does not accumulate transform error.
+
+Body controls may carry an optional actuator table with `max_rate_rad_s` and
+`max_torque_nm`. The detailed panel solution supplies the aerodynamic hinge
+load from the actual panel force and moment; the actuator rate follows a
+linear torque-speed envelope from the rated no-load rate to zero at stall
+torque. This is a bounded actuator model, not an artificial reduction of
+aerodynamic effectiveness. Controls without actuator ratings retain the
+legacy shared command response (including flight-authority's normalized
+command slew), and older assets deserialize without changes.
+Actuator and moving-surface mass/inertia, contact geometry, electrical/hydraulic
+power and thermal limits, structural hinge failure, nested moving hinges, and a
+deforming render mesh remain separate work; current hinge motion changes the
+aerodynamic panel geometry only.
+
+The actuator step is `Δθ = sign(error) * min(|error|, ω₀ Δt *
+clamp(1 - τ_opposing / τ_stall, 0, 1))`: a known special case is half the
+no-load rate at half stall torque, with no motion at stall. The transform is
+applied from the reference panel geometry each time, avoiding accumulated
+rotation error (the geometric regression is below `1e-12 m` in `f64`). The
+release benchmark (`cargo bench -p thessa-sim-core --bench controls`) evaluates
+16 panels and four actuators for 256 vehicles, including detailed load
+evaluation and SoA geometry refresh; on the development host it measured
+`5.54 µs/vehicle-step` (`2.9 million panel-steps/s`). This is a throughput
+reference, not a cross-machine target.
 
 Tank pressure shells are currently sized by the shared cylinder/sphere
 pressure-vessel model: cylindrical hoop stress uses `pD/(2σ)`, spherical

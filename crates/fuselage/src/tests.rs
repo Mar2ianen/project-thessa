@@ -6,6 +6,7 @@
 //! anchors where noted. The compiler is never compared against itself.
 
 use glam::DVec3;
+use thessa_sim_core::ControlSurfaceActuator;
 
 use crate::{
     BodyCompileOptions, BodyControlPlane, BodyControlRegion, BodyPort, BodyStation,
@@ -93,8 +94,15 @@ fn body_control_regions_split_axial_zones_and_bind_one_strip_plane() {
         DVec3::ZERO,
     )
     .unwrap();
+    let actuator = ControlSurfaceActuator {
+        max_rate_rad_s: 0.4,
+        max_torque_nm: 500.0,
+    };
     body.controls.push(
-        BodyControlRegion::new("body-rudder", 1.0, 3.0, BodyControlPlane::Yaw, -0.3, 0.3).unwrap(),
+        BodyControlRegion::new("body-rudder", 1.0, 3.0, BodyControlPlane::Yaw, -0.3, 0.3)
+            .unwrap()
+            .with_actuator(actuator)
+            .unwrap(),
     );
     let compiled = compile_body(
         &body,
@@ -112,6 +120,9 @@ fn body_control_regions_split_axial_zones_and_bind_one_strip_plane() {
     assert_eq!(control.minimum_deflection_rad, -0.3);
     assert_eq!(control.maximum_deflection_rad, 0.3);
     assert_eq!(control.panel_indices, vec![3]);
+    assert_eq!(control.hinge.unwrap().point_body_m, DVec3::X);
+    assert_eq!(control.hinge.unwrap().axis_body, DVec3::Z);
+    assert_eq!(control.actuator, Some(actuator));
     let controlled_panel = compiled.panels[control.panel_indices[0]];
     assert!(controlled_panel.lift_axis_body.y > 0.99);
     assert!((1.0..=3.0).contains(&controlled_panel.center_of_pressure_body_m.x));

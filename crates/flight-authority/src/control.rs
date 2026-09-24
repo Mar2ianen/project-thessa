@@ -10,13 +10,15 @@ use thessa_flight_control::{
     ActuatorGroup, ControlDemand, EffectorContribution, PropulsionDemand, allocate_wrench,
 };
 use thessa_sim_core::{
-    AeroEnvironment, AeroModel, AeroState, FlightError, PanelAeroModel, RigidBodyState,
-    VehicleDefinition,
+    AeroEnvironment, AeroGeometry, AeroModel, AeroState, FlightError, PanelAeroModel,
+    RigidBodyState, VehicleDefinition,
 };
 
 use crate::ControlMode;
 
-pub(crate) const SURFACE_COMMAND_RATE_S: f64 = 2.4; // 60 deg/s for the 25-degree elevator
+/// Legacy normalized-command slew for controls without authored physical
+/// actuator data. Mechanized surfaces use their own rad/s and torque ratings.
+pub(crate) const SURFACE_COMMAND_RATE_S: f64 = 2.4;
 // Residual moment below which the trim Newton skips its second pass.  The
 // tolerance is intentionally part of the control primitive so its bounded
 // approximation remains pinned by the same regression tests as the full solve.
@@ -232,8 +234,10 @@ pub(crate) struct TrimSolveResult {
 /// This is the existing Newton trim algorithm extracted verbatim in behavior:
 /// one baseline/effectiveness pass, with an adaptive second pass near stall or
 /// whenever the first pass materially changes the command.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn solve_aero_trim(
     vehicle: &mut VehicleDefinition,
+    reference_geometry: &AeroGeometry,
     aero_model: &PanelAeroModel,
     aero_state: AeroState,
     environment: AeroEnvironment,
@@ -244,9 +248,7 @@ pub(crate) fn solve_aero_trim(
     let mut second_passes = 0;
     for pass in 0..2 {
         let before = command;
-        vehicle
-            .apply_control_inputs(&surface_commands(command.x, command.y, command.z))
-            .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+        apply_trim_command(vehicle, reference_geometry, command)?;
         let baseline = aero_model
             .evaluate_state(aero_state, environment, &vehicle.aero_geometry)
             .map_err(FlightError::Aero)?
@@ -262,9 +264,7 @@ pub(crate) fn solve_aero_trim(
             let mut probe = command;
             let delta = if command[axis] > 0.9 { -0.02 } else { 0.02 };
             probe[axis] += delta;
-            vehicle
-                .apply_control_inputs(&surface_commands(probe.x, probe.y, probe.z))
-                .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+            apply_trim_command(vehicle, reference_geometry, probe)?;
             columns[axis] = (aero_model
                 .evaluate_state(aero_state, environment, &vehicle.aero_geometry)
                 .map_err(FlightError::Aero)?
@@ -288,6 +288,24 @@ pub(crate) fn solve_aero_trim(
         command,
         second_passes,
     })
+}
+
+fn apply_trim_command(
+    vehicle: &mut VehicleDefinition,
+    reference_geometry: &AeroGeometry,
+    command: DVec3,
+) -> Result<(), FlightError> {
+    let commands = surface_commands(command.x, command.y, command.z);
+    let deflections = vehicle
+        .control_surfaces
+        .iter()
+        .zip(commands)
+        .map(|(surface, command)| surface.deflection_for_command(command))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+    vehicle
+        .apply_control_deflections(reference_geometry, &deflections)
+        .map_err(|error| FlightError::InvalidInput(error.to_string()))
 }
 
 pub(crate) fn body_axes(command: DVec3) -> DVec3 {

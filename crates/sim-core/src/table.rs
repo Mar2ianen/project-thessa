@@ -338,9 +338,9 @@ impl EphemerisTable {
         };
         let a = &self.arrays;
         let (lx, hx) = (low * n, high * n);
-        // Width cascade: 8-wide AVX-512, then 4-wide AVX2, then scalar.
-        // Each tier degrades per chunk, so a missing tier falls through
-        // without disturbing the rest.
+        // Width cascade: 8/4-wide AVX-512/AVX2 on x86 or paired NEON vectors
+        // on AArch64, then scalar. Each tier degrades per chunk, so a missing
+        // tier falls through without disturbing the rest.
         let mut body = 0;
         while body + 8 <= n {
             let done8 = use_simd
@@ -480,8 +480,8 @@ impl EphemerisTable {
                     &mut total,
                 );
             if !done {
-                // Singular 8-lane (or no AVX-512): two 4-wide attempts, then
-                // scalar, same `None` semantics as the pre-SIMD loop.
+                // Singular 8-lane (or no 8-wide kernel): two 4-wide attempts,
+                // then scalar, same `None` semantics as the pre-SIMD loop.
                 for half in [body, body + 4] {
                     let done4 = use_simd
                         && thessa_simd::gravity_quad(

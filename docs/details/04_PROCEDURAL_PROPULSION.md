@@ -1040,8 +1040,9 @@ Shipped v5 foundation:
   throat-clearance validation, and books shared hardware once.
 - Per-nozzle plume states reuse the jet handoff; baker `[[jets]]` kinds
   `jet`/`estoc` expose air-path Mach grids, and ESTOCs additionally emit
-  steady `EstocAltitudePoint` rows with selected mode, fuel split, oxidizer/
-  air flow, precooler duty, and saturation to text/JSON analyzers.
+  steady `EstocAltitudePoint` rows with selected mode, solved spool fraction,
+  fuel split, oxidizer/air flow, precooler duty, and saturation to text/JSON
+  analyzers.
 
 - `EstocPrecoolerSpec` authors rated heat flow, effectiveness, pressure
   recovery, compressor-inlet temperature limit, finite wall mass/heat
@@ -1065,6 +1066,8 @@ Shipped v5 foundation:
   separately. Warmed coolant sensible heat returns to the combustor energy
   balance; boost chemical energy displaces bulk-fuel energy at the scheduled
   turbine-inlet target, with combined oxygen demand applied to both streams.
+  Oxygen-limited operation scales boost-coolant flow and its returned heat
+  together, preserving the coolant outlet-temperature limit.
   The compile-time rocket path uses the bulk fuel's LOX pair.
 - Automatic mode evaluates the actual cooled cycle: it requires usable
   oxygen, delivered air, a lit/non-drive-limited core, compressor temperature
@@ -1072,11 +1075,16 @@ Shipped v5 foundation:
   rocket, or selects the ejector when oxygen is absent and captured flow is
   nonzero. `switch_mach_hi` is an upper policy bound while the air path is
   viable; `switch_mach_lo` supplies rocket-to-air return hysteresis.
+  The steady analyzer solves the shaft equilibrium with the conditioned cycle
+  and exchanger pressure recovery; if the shaft cannot sustain itself, it
+  reports the selected fallback mode and a zero spool fraction. Finite wall
+  storage is not credited in that equilibrium.
 - Optional `EstocEjectorSpec` sizes inlet area, mixing length, shroud density
   and thickness, and mixing efficiency. Capture is `mdot_air = rho A V∞`; motive
   kinetic power is mixed over rocket exhaust plus captured air, and thrust
   closes mixed-stream momentum against inlet momentum while retaining the
-  rocket nozzle pressure term. Ejector dry mass follows shroud geometry. A
+  rocket nozzle pressure term. Capture uses composition-aware ambient density.
+  Ejector dry mass follows shroud geometry. A
   stopped craft with no captured flow falls back to the closed-cycle rocket.
 - Baker `[jets.precooler]`, `[jets.ejector]`, `bulk_fuel`, and
   `boost_coolant_fuel` fields compile through normal mass/COM baking.

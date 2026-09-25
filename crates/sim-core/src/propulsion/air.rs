@@ -669,7 +669,7 @@ fn run_cycle(
     } else {
         0.0
     };
-    let coolant_heat_flow_w = if ignition && !scramjet_limited {
+    let mut coolant_heat_flow_w = if ignition && !scramjet_limited {
         conditioning.map_or(0.0, |input| input.coolant_heat_flow_w)
     } else {
         0.0
@@ -707,6 +707,10 @@ fn run_cycle(
         } else {
             1.0
         };
+        // Boost fuel is both the precooler coolant and combustor fuel. When
+        // oxygen availability scales its actual flow, the heat it can carry
+        // back to the combustor must scale with that same flow.
+        coolant_heat_flow_w *= oxygen_scale;
         let bulk_flow = bulk_wanted_kg_s * oxygen_scale;
         let boost_flow = boost_flow_requested_kg_s * oxygen_scale;
         let total_fuel_flow = bulk_flow + boost_flow;
@@ -1656,7 +1660,7 @@ impl CompiledAirbreather {
         };
         let fuel = self.fuel.properties();
         let (spec_eff, tit, eff_reheat) = self.effective_spec(throttle);
-        let state = run_cycle(
+        let mut state = run_cycle(
             &spec_eff,
             fuel,
             condition,
@@ -1670,6 +1674,49 @@ impl CompiledAirbreather {
                 conditioning,
             },
         )?;
+        // Oxygen gating can reduce the boost-fuel flow after the ESTOC
+        // exchanger has scheduled its cooling. Re-evaluate the cycle with
+        // only the coolant heat and mass flow that the combustor actually
+        // accepts, so the compressor does not retain unpowered precooling.
+        if let Some(mut current) = conditioning
+            .filter(|input| input.coolant_heat_flow_w > 0.0 && input.boost_fuel_flow_kg_s > 0.0)
+        {
+            let ram_temp_k = condition.ambient_temp_k
+                * (1.0 + (AIR_GAMMA - 1.0) * 0.5 * condition.mach * condition.mach);
+            for _ in 0..16 {
+                let actual_coolant_heat_w =
+                    (state.precooler_heat_flow_w - state.precooler_wall_heat_flow_w).max(0.0);
+                let air_capacity_w_k = state.mdot_air_kg_s * AIR_CP_J_KG_K;
+                if air_capacity_w_k <= 0.0 {
+                    break;
+                }
+                let actual_inlet_temp_k = (ram_temp_k
+                    - (actual_coolant_heat_w + state.precooler_wall_heat_flow_w)
+                        / air_capacity_w_k)
+                    .max(1.0);
+                if (current.compressor_inlet_total_temp_k - actual_inlet_temp_k).abs()
+                    <= 1e-6 * actual_inlet_temp_k.max(1.0)
+                {
+                    break;
+                }
+                current.compressor_inlet_total_temp_k =
+                    0.5 * (current.compressor_inlet_total_temp_k + actual_inlet_temp_k);
+                state = run_cycle(
+                    &spec_eff,
+                    fuel,
+                    condition,
+                    tit,
+                    CycleDriveInput {
+                        spool_n,
+                        ignition,
+                        corrected_flow_kg_s: Some(self.design_corrected_flow_kg_s),
+                        power_takeoff_w,
+                        power_takeoff_heat_fraction: self.shaft.power_turbine_heat_fraction,
+                        conditioning: Some(current),
+                    },
+                )?;
+            }
+        }
         let balance = self.balance_from_state(&state, spool_n, ignition);
         // Static-suction label: air above ram-only capture at low speed
         // runs on the steady-running assumption, scaled by the actual

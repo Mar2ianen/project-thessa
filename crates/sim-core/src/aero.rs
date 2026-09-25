@@ -1460,7 +1460,7 @@ impl PanelAeroModel {
     /// SIMD fast path over [`PanelSoA`] lanes: scalar prologue (flow angles,
     /// separation, control folding, sin/cos) then the 8/4-wide coefficient
     /// kernels from `thessa-simd`, then the shared assembly below. Short
-    /// tails and machines without AVX-512 evaluate the same shared scalar
+    /// tails and machines without an 8-wide kernel evaluate the shared scalar
     /// coefficient path per lane, so the result is deterministic for a fixed
     /// lane count and feature set (cross-machine bits may differ). A
     /// coefficient table forces delegation to [`evaluate_soa_parts`](Self::evaluate_soa_parts):

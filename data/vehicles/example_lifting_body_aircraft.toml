@@ -1,5 +1,6 @@
-# Procedural lifting-body aircraft: one lofted, tank-bearing hull and a
-# structured procedural wing with an outboard trailing-edge control region.
+# Procedural lifting-body aircraft: one lofted, tank-bearing hull with a
+# flattened chined belly and a drooped forward centerline, plus a structured
+# wing with an outboard trailing-edge control region. Body +X is forward.
 name = "example-lifting-body-aircraft"
 mass_kg = 1200.0
 inertia_body_kg_m2 = [
@@ -79,7 +80,7 @@ half_width_m = 0.32
 top_height_m = 0.28
 bottom_height_m = 0.30
 top_exponent = 2.0
-bottom_exponent = 2.0
+bottom_exponent = 4.0
 offset_y_m = 0.0
 offset_z_m = 0.0
 
@@ -89,7 +90,7 @@ half_width_m = 0.82
 top_height_m = 0.62
 bottom_height_m = 0.56
 top_exponent = 2.0
-bottom_exponent = 2.0
+bottom_exponent = 6.0
 offset_y_m = 0.0
 offset_z_m = 0.0
 
@@ -99,7 +100,7 @@ half_width_m = 1.0
 top_height_m = 0.72
 bottom_height_m = 0.58
 top_exponent = 2.0
-bottom_exponent = 2.0
+bottom_exponent = 7.0
 offset_y_m = 0.0
 offset_z_m = 0.0
 
@@ -109,9 +110,9 @@ half_width_m = 0.82
 top_height_m = 0.62
 bottom_height_m = 0.56
 top_exponent = 2.0
-bottom_exponent = 2.0
+bottom_exponent = 6.0
 offset_y_m = 0.0
-offset_z_m = 0.0
+offset_z_m = -0.12
 
 [[procedural_bodies.stations]]
 x_m = 4.0
@@ -119,9 +120,9 @@ half_width_m = 0.001
 top_height_m = 0.001
 bottom_height_m = 0.001
 top_exponent = 2.0
-bottom_exponent = 2.0
+bottom_exponent = 4.0
 offset_y_m = 0.0
-offset_z_m = 0.0
+offset_z_m = -0.30
 
 [[procedural_bodies.controls]]
 name = "body-rudder"
@@ -130,6 +131,14 @@ x1_m = 0.0
 plane = "yaw"
 minimum_deflection_rad = -0.35
 maximum_deflection_rad = 0.35
+
+[[procedural_bodies.controls]]
+name = "body-elevator"
+x0_m = -4.0
+x1_m = -2.0
+plane = "pitch"
+minimum_deflection_rad = -0.3
+maximum_deflection_rad = 0.3
 
 [[procedural_bodies.regions]]
 name = "center-fuel-tank"

@@ -651,14 +651,17 @@ impl Sim {
                 }
                 Command::ExecuteManeuver { nodes } => {
                     // Wire cap: node vectors are unbounded on the transport.
-                    const MAX_MANEUVER_NODES: usize = 16;
                     let rejected = |sim: &mut Self, reason: String| {
                         sim.authority.wake_notice = Some(format!("maneuver rejected: {reason}"));
                     };
-                    if nodes.len() > MAX_MANEUVER_NODES {
+                    if nodes.len() > thessa_flight_net::MAX_MANEUVER_NODES {
                         rejected(
                             self,
-                            format!("{} nodes over cap {MAX_MANEUVER_NODES}", nodes.len()),
+                            format!(
+                                "{} nodes over cap {}",
+                                nodes.len(),
+                                thessa_flight_net::MAX_MANEUVER_NODES
+                            ),
                         );
                         continue;
                     }
@@ -707,14 +710,17 @@ impl Sim {
                 } => {
                     // Wire cap: segments are unbounded on the transport;
                     // scaled up from the node cap for split burns.
-                    const MAX_BURN_SEGMENTS: usize = 64;
                     let rejected = |sim: &mut Self, reason: String| {
                         sim.authority.wake_notice = Some(format!("burn plan rejected: {reason}"));
                     };
-                    if segments.len() > MAX_BURN_SEGMENTS {
+                    if segments.len() > thessa_flight_net::MAX_BURN_SEGMENTS {
                         rejected(
                             self,
-                            format!("{} segments over cap {MAX_BURN_SEGMENTS}", segments.len()),
+                            format!(
+                                "{} segments over cap {}",
+                                segments.len(),
+                                thessa_flight_net::MAX_BURN_SEGMENTS
+                            ),
                         );
                         continue;
                     }
@@ -3518,14 +3524,17 @@ mod tests {
                 17
             ],
         };
-        let _ = sim.apply_input("pilot", &input(vec![big]));
+        let mut malformed = input(vec![big]);
+        malformed.control_input = [0.5, 0.0, 0.0];
+        malformed.throttle = 0.75;
+        let controls_before = (sim.authority.control_input, sim.authority.throttle);
+        assert!(!sim.apply_input("pilot", &malformed));
         assert!(sim.maneuver_execution.is_none());
-        assert!(
-            sim.authority
-                .wake_notice
-                .as_ref()
-                .is_some_and(|notice| notice.contains("cap"))
+        assert_eq!(
+            (sim.authority.control_input, sim.authority.throttle),
+            controls_before
         );
+        assert!(sim.last_client_inputs.is_empty());
         // Non-finite node is refused the same way.
         let mut sim = fresh_sim();
         let bad = Command::ExecuteManeuver {
@@ -3534,9 +3543,17 @@ mod tests {
                 delta_v_mps: [1.0, 0.0, 0.0],
             }],
         };
-        let _ = sim.apply_input("pilot", &input(vec![bad]));
+        let mut malformed = input(vec![bad]);
+        malformed.control_input = [0.5, 0.0, 0.0];
+        malformed.throttle = 0.75;
+        let controls_before = (sim.authority.control_input, sim.authority.throttle);
+        assert!(!sim.apply_input("pilot", &malformed));
         assert!(sim.maneuver_execution.is_none());
-        assert!(sim.authority.wake_notice.is_some());
+        assert_eq!(
+            (sim.authority.control_input, sim.authority.throttle),
+            controls_before
+        );
+        assert!(sim.last_client_inputs.is_empty());
     }
 
     #[test]
@@ -3755,14 +3772,9 @@ mod tests {
             initial_mass_kg: 20_000.0,
             segments: vec![segment(30.0); 65],
         };
-        let _ = sim.apply_input("pilot", &input(vec![big]));
+        assert!(!sim.apply_input("pilot", &input(vec![big])));
         assert!(sim.burn_execution.is_none());
-        assert!(
-            sim.authority
-                .wake_notice
-                .as_ref()
-                .is_some_and(|notice| notice.contains("cap"))
-        );
+        assert!(sim.last_client_inputs.is_empty());
         // Unknown RTN central and dead engine are refused the same way.
         let mut sim = fresh_sim();
         let lost = Command::ExecuteBurnPlan {
@@ -3789,9 +3801,9 @@ mod tests {
             initial_mass_kg: 20_000.0,
             segments: vec![segment(30.0)],
         };
-        let _ = sim.apply_input("pilot", &input(vec![dead]));
+        assert!(!sim.apply_input("pilot", &input(vec![dead])));
         assert!(sim.burn_execution.is_none());
-        assert!(sim.authority.wake_notice.is_some());
+        assert!(sim.last_client_inputs.is_empty());
     }
 
     #[test]

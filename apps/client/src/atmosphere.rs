@@ -906,19 +906,15 @@ fn update_atmosphere_visuals(
 ) {
     let (terrain, flight_runtime) = terrain_data;
     let frame_start = Instant::now();
-    let (Some(runtime), Some(bodies), Some(catalog), Some(tuning), Some(graphics)) = (
+    let (Some(runtime), Some(bodies), Some(catalog), Some(graphics)) = (
         runtime.as_deref(),
         bodies.as_deref(),
         catalog.as_deref(),
-        tuning.as_deref(),
         resolved.as_deref(),
     ) else {
         return;
     };
     let resolved = &graphics.0;
-    if !resolved.atmosphere_enabled {
-        return;
-    }
     let sim_time = clock.as_deref().map(|c| c.sim_seconds).unwrap_or(0.0);
     let in_pilot = pilot
         .as_deref()
@@ -1024,6 +1020,17 @@ fn update_atmosphere_visuals(
             disk.intensity *= (physical / disk.angular_size).powi(2);
         }
     }
+
+    // Celestial lights are independent of the atmosphere renderer. Continue
+    // updating their ephemeris directions, irradiance, and eclipse factors
+    // even when the user disables scattering; only the shell/LUT work below
+    // belongs to the atmosphere master switch.
+    if !resolved.atmosphere_enabled {
+        return;
+    }
+    let Some(tuning) = tuning.as_deref() else {
+        return;
+    };
 
     // Aerial perspective must cover the visible horizon: the default 32 km
     // ends mid-frame in the metre-scale pilot scene (~80+ km to the horizon

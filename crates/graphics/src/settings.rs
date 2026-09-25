@@ -617,6 +617,12 @@ impl RequestedGraphics {
                 detail: format!("expected 4..=128, got {}", self.atmosphere.ray_steps),
             });
         }
+        if !(0.0..=2.0).contains(&self.atmosphere.density_scale) {
+            return Err(ConfigError::InvalidValue {
+                path: "atmosphere.density_scale",
+                detail: format!("expected 0..=2, got {}", self.atmosphere.density_scale),
+            });
+        }
         if !(4..=128).contains(&self.clouds.ray_steps) {
             return Err(ConfigError::InvalidValue {
                 path: "clouds.ray_steps",
@@ -650,10 +656,13 @@ impl RequestedGraphics {
                 ),
             });
         }
-        if !self.raytracing.max_distance_m.is_finite() || self.raytracing.max_distance_m < 0.0 {
+        if !(0.0..=1_000_000_000.0).contains(&self.raytracing.max_distance_m) {
             return Err(ConfigError::InvalidValue {
                 path: "raytracing.max_distance_m",
-                detail: "expected a finite value >= 0".to_string(),
+                detail: format!(
+                    "expected a finite value in 0..=1000000000, got {}",
+                    self.raytracing.max_distance_m
+                ),
             });
         }
         if !(1..=4).contains(&self.shadows.cascades) {
@@ -860,10 +869,16 @@ mod tests {
         assert!(RequestedGraphics::from_toml(bad_cloud_steps).is_err());
         let bad_terrain_cells = "preset = \"high\"\n[renderer]\nterrain_mesh_cells = 4\n";
         assert!(RequestedGraphics::from_toml(bad_terrain_cells).is_err());
+        for value in ["-0.1", "2.1", "nan", "inf"] {
+            let bad_density_scale = format!("[atmosphere]\ndensity_scale = {value}\n");
+            assert!(RequestedGraphics::from_toml(&bad_density_scale).is_err());
+        }
         for value in ["nan", "inf", "-inf"] {
             let bad_rt_distance = format!("[raytracing]\nmax_distance_m = {value}\n");
             assert!(RequestedGraphics::from_toml(&bad_rt_distance).is_err());
         }
+        let bad_rt_distance = "[raytracing]\nmax_distance_m = 1000000001.0\n";
+        assert!(RequestedGraphics::from_toml(bad_rt_distance).is_err());
     }
 
     #[test]

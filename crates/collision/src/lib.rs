@@ -34,6 +34,8 @@ use thessa_sim_core::{
 };
 
 const QUATERNION_TOLERANCE: f64 = 1.0e-6;
+const MIN_MASS_KG: f64 = 1.0e-9;
+const MIN_INERTIA: f64 = 1.0e-12;
 const MIN_STEP_S: f64 = 1.0e-9;
 const WRENCH_CHANGE_ABS: f64 = 1.0e-9;
 const WRENCH_CHANGE_REL: f64 = 1.0e-10;
@@ -490,6 +492,30 @@ impl CollisionWorld {
         self.joints.len()
     }
 
+    /// Validate a prospective dynamic body without mutating the contact
+    /// scene. State and mass properties are public wire/domain structs, so
+    /// callers that must perform cleanup before insertion can preflight the
+    /// same checks used by the insertion path.
+    pub fn validate_dynamic_body_inputs(
+        &self,
+        state: RigidBodyState,
+        properties: RigidBodyProperties,
+        geometry: &CollisionGeometry,
+    ) -> Result<(), CollisionBackendError> {
+        validate_body_state(state)?;
+        if geometry.is_empty() {
+            return Err(CollisionBackendError::InvalidGeometry(
+                "dynamic contact body needs at least one collision part".into(),
+            ));
+        }
+        geometry
+            .validate()
+            .map_err(|error| CollisionBackendError::InvalidGeometry(error.to_string()))?;
+        validate_properties(properties)?;
+        body_state_in_frame(self.frame, state)?;
+        Ok(())
+    }
+
     /// Insert one authoritative rigid body and attach its backend-neutral
     /// collision primitives. Collider density is zero because sim-core's mass
     /// and inertia are authoritative and are installed explicitly on the body.
@@ -525,29 +551,15 @@ impl CollisionWorld {
         config: DynamicBodyConfig,
         sensor: bool,
     ) -> Result<CollisionBodyId, CollisionBackendError> {
-        if geometry.is_empty() {
-            return Err(CollisionBackendError::InvalidGeometry(
-                "dynamic contact body needs at least one collision part".into(),
-            ));
-        }
-        geometry
-            .validate()
-            .map_err(|error| CollisionBackendError::InvalidGeometry(error.to_string()))?;
-        validate_properties(properties)?;
+        self.validate_dynamic_body_inputs(state, properties, geometry)?;
+        let (local_position, local_orientation, local_linear_velocity, local_angular_velocity) =
+            body_state_in_frame(self.frame, state)?;
 
         let id = CollisionBodyId(self.next_body_id);
         self.next_body_id = self
             .next_body_id
             .checked_add(1)
             .ok_or(CollisionBackendError::IdentifierExhausted)?;
-
-        let local_position = self.frame.position_to_local(state.position_inertial_m);
-        let local_orientation =
-            (self.frame.local_from_inertial() * state.orientation_body_to_inertial).normalize();
-        let local_linear_velocity = self.frame.velocity_to_local(state.velocity_inertial_mps);
-        let angular_velocity_inertial =
-            state.orientation_body_to_inertial * state.angular_velocity_body_rps;
-        let local_angular_velocity = self.frame.vector_to_local(angular_velocity_inertial);
 
         let mass_properties = MassProperties::with_inertia_matrix(
             Vector::ZERO,
@@ -611,7 +623,10 @@ impl CollisionWorld {
         properties: RigidBodyProperties,
         config: DynamicBodyConfig,
     ) -> Result<(), CollisionBackendError> {
+        validate_body_state(state)?;
         validate_properties(properties)?;
+        let (local_position, local_orientation, local_linear_velocity, local_angular_velocity) =
+            body_state_in_frame(self.frame, state)?;
         let entry = self
             .dynamic
             .get(&id)
@@ -621,13 +636,6 @@ impl CollisionWorld {
             .bodies
             .get_mut(handle)
             .ok_or(CollisionBackendError::BackendStateLost(id))?;
-        let local_position = self.frame.position_to_local(state.position_inertial_m);
-        let local_orientation =
-            (self.frame.local_from_inertial() * state.orientation_body_to_inertial).normalize();
-        let local_linear_velocity = self.frame.velocity_to_local(state.velocity_inertial_mps);
-        let angular_velocity_inertial =
-            state.orientation_body_to_inertial * state.angular_velocity_body_rps;
-        let local_angular_velocity = self.frame.vector_to_local(angular_velocity_inertial);
         body.set_position(
             Pose::from_parts(
                 to_rapier_vector(local_position),
@@ -2082,13 +2090,87 @@ fn collider_builder(shape: CollisionShape) -> ColliderBuilder {
 
 fn validate_properties(properties: RigidBodyProperties) -> Result<(), CollisionBackendError> {
     if !properties.mass_kg.is_finite()
-        || properties.mass_kg <= 0.0
+        || properties.mass_kg <= MIN_MASS_KG
         || !properties.inertia_body_kg_m2.is_finite()
-        || properties.inertia_body_kg_m2.determinant() <= 0.0
+    {
+        return Err(CollisionBackendError::InvalidMassProperties);
+    }
+    let matrix = properties.inertia_body_kg_m2;
+    let entries = [
+        matrix.x_axis.x,
+        matrix.x_axis.y,
+        matrix.x_axis.z,
+        matrix.y_axis.x,
+        matrix.y_axis.y,
+        matrix.y_axis.z,
+        matrix.z_axis.x,
+        matrix.z_axis.y,
+        matrix.z_axis.z,
+    ];
+    let scale = entries
+        .iter()
+        .map(|entry| entry.abs())
+        .fold(1.0_f64, f64::max);
+    let symmetric_tolerance = 1.0e-10 * scale;
+    let symmetric = (matrix.x_axis.y - matrix.y_axis.x).abs() <= symmetric_tolerance
+        && (matrix.x_axis.z - matrix.z_axis.x).abs() <= symmetric_tolerance
+        && (matrix.y_axis.z - matrix.z_axis.y).abs() <= symmetric_tolerance;
+    let leading_minor_2 = matrix.x_axis.x * matrix.y_axis.y - matrix.y_axis.x.powi(2);
+    let determinant = matrix.determinant();
+    if !symmetric
+        || !leading_minor_2.is_finite()
+        || leading_minor_2 <= MIN_INERTIA
+        || matrix.x_axis.x <= MIN_INERTIA
+        || !determinant.is_finite()
+        || determinant <= MIN_INERTIA
     {
         return Err(CollisionBackendError::InvalidMassProperties);
     }
     Ok(())
+}
+
+fn validate_body_state(state: RigidBodyState) -> Result<(), CollisionBackendError> {
+    if !state.position_inertial_m.is_finite()
+        || !state.velocity_inertial_mps.is_finite()
+        || !state.orientation_body_to_inertial.is_finite()
+        || !state.angular_velocity_body_rps.is_finite()
+    {
+        return Err(CollisionBackendError::InvalidBodyState(
+            "rigid-body state contains a non-finite value".into(),
+        ));
+    }
+    if (state.orientation_body_to_inertial.length_squared() - 1.0).abs() > QUATERNION_TOLERANCE {
+        return Err(CollisionBackendError::InvalidBodyState(
+            "body orientation must be a unit quaternion".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn body_state_in_frame(
+    frame: CollisionFrame,
+    state: RigidBodyState,
+) -> Result<(DVec3, DQuat, DVec3, DVec3), CollisionBackendError> {
+    let local_position = frame.position_to_local(state.position_inertial_m);
+    let local_orientation = frame.orientation_to_local(state.orientation_body_to_inertial);
+    let local_linear_velocity = frame.velocity_to_local(state.velocity_inertial_mps);
+    let local_angular_velocity =
+        frame.vector_to_local(state.orientation_body_to_inertial * state.angular_velocity_body_rps);
+    if !local_position.is_finite()
+        || !local_orientation.is_finite()
+        || !local_linear_velocity.is_finite()
+        || !local_angular_velocity.is_finite()
+    {
+        return Err(CollisionBackendError::InvalidBodyState(
+            "rigid-body state is not representable in the collision frame".into(),
+        ));
+    }
+    Ok((
+        local_position,
+        local_orientation,
+        local_linear_velocity,
+        local_angular_velocity,
+    ))
 }
 
 fn validate_local_pose(position: DVec3, orientation: DQuat) -> Result<(), CollisionBackendError> {
@@ -2211,6 +2293,7 @@ pub enum CollisionBackendError {
     InvalidFrame(String),
     InvalidGeometry(String),
     InvalidWrench(String),
+    InvalidBodyState(String),
     InvalidMassProperties,
     InvalidWheelContact(String),
     InvalidStep(f64),
@@ -2234,6 +2317,9 @@ impl fmt::Display for CollisionBackendError {
             }
             Self::InvalidWrench(message) => {
                 write!(formatter, "invalid collision wrench: {message}")
+            }
+            Self::InvalidBodyState(message) => {
+                write!(formatter, "invalid collision body state: {message}")
             }
             Self::InvalidMassProperties => write!(formatter, "invalid rigid-body mass properties"),
             Self::InvalidWheelContact(message) => {
@@ -2390,6 +2476,86 @@ mod tests {
             (round_trip.angular_velocity_body_rps - state.angular_velocity_body_rps).length()
                 < 1.0e-9
         );
+    }
+
+    #[test]
+    fn dynamic_body_inputs_reject_invalid_public_state_and_inertia() {
+        let mut world =
+            CollisionWorld::new(CollisionFrame::inertial_at(DVec3::ZERO, DVec3::ZERO)).unwrap();
+        let properties =
+            RigidBodyProperties::new(5.0, DMat3::from_diagonal(DVec3::splat(2.0))).unwrap();
+        let geometry = sphere_geometry(0.5);
+        let state = RigidBodyState::stationary(DVec3::ZERO);
+
+        let invalid_orientation = RigidBodyState {
+            orientation_body_to_inertial: DQuat::from_xyzw(0.0, 0.0, 0.0, 0.0),
+            ..state
+        };
+        assert!(matches!(
+            world.insert_dynamic_body(
+                invalid_orientation,
+                properties,
+                &geometry,
+                DynamicBodyConfig::default()
+            ),
+            Err(CollisionBackendError::InvalidBodyState(_))
+        ));
+
+        let indefinite_inertia = RigidBodyProperties {
+            mass_kg: 5.0,
+            inertia_body_kg_m2: DMat3::from_diagonal(DVec3::new(1.0, -1.0, -1.0)),
+        };
+        assert!(matches!(
+            world.insert_dynamic_body(
+                state,
+                indefinite_inertia,
+                &geometry,
+                DynamicBodyConfig::default()
+            ),
+            Err(CollisionBackendError::InvalidMassProperties)
+        ));
+        assert_eq!(world.dynamic_body_count(), 0);
+
+        let id = world
+            .insert_dynamic_body(state, properties, &geometry, DynamicBodyConfig::default())
+            .unwrap();
+        assert!(matches!(
+            world.resync_dynamic_body(
+                id,
+                invalid_orientation,
+                properties,
+                DynamicBodyConfig::default()
+            ),
+            Err(CollisionBackendError::InvalidBodyState(_))
+        ));
+        assert_eq!(world.body_state(id).unwrap(), state);
+    }
+
+    #[test]
+    fn body_states_unrepresentable_in_the_collision_frame_are_rejected() {
+        let origin = DVec3::splat(-f64::MAX);
+        let mut world =
+            CollisionWorld::new(CollisionFrame::inertial_at(origin, DVec3::ZERO)).unwrap();
+        let properties =
+            RigidBodyProperties::new(5.0, DMat3::from_diagonal(DVec3::splat(2.0))).unwrap();
+        let geometry = sphere_geometry(0.5);
+        let initial = RigidBodyState::stationary(origin);
+        let id = world
+            .insert_dynamic_body(initial, properties, &geometry, DynamicBodyConfig::default())
+            .unwrap();
+        let unrepresentable = RigidBodyState::stationary(DVec3::splat(f64::MAX));
+
+        assert!(matches!(
+            world.resync_dynamic_body(
+                id,
+                unrepresentable,
+                properties,
+                DynamicBodyConfig::default()
+            ),
+            Err(CollisionBackendError::InvalidBodyState(_))
+        ));
+        assert_eq!(world.dynamic_body_count(), 1);
+        assert_eq!(world.body_state(id).unwrap(), initial);
     }
 
     #[test]

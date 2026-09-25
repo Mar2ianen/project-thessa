@@ -259,6 +259,9 @@ fn setup_plume(
     mut volume_materials: ResMut<Assets<PlumeVolumeMaterial>>,
 ) {
     let r = graphics.as_deref().map(|g| g.0.clone()).unwrap_or_default();
+    if !r.plume_enabled {
+        return;
+    }
 
     // Low-path impostor texture (fixed bands = documented fallback artifact).
     let plume_tex = images.add(rgba_image(32, 256, bake_plume(32, 256, r.plume_diamonds)));
@@ -357,10 +360,18 @@ fn update_plume_field(
     graphics: Option<Res<GraphicsResolved>>,
     mut cache: ResMut<PlumeFieldCache>,
 ) {
+    if graphics
+        .as_deref()
+        .is_some_and(|settings| !settings.0.plume_enabled)
+    {
+        cache.key = (i64::MIN, i64::MIN);
+        cache.profile = AxialProfile::empty(cache.profile.regime);
+        cache.radiant = [0.0; 3];
+        return;
+    }
     let (Some(clock), Some(runtime)) = (clock.as_deref(), runtime.as_deref()) else {
         return;
     };
-    let _ = graphics;
     let input = read_plume_input(runtime, clock);
     let amount = input.active_amount();
 
@@ -702,6 +713,57 @@ mod tests {
         };
         assert!((on.active_amount() - 0.8).abs() < 1e-12);
         assert!((plume_flicker(10.0, 0.8) - 1.0).abs() < 0.25);
+    }
+
+    #[test]
+    fn disabled_plume_clears_field_without_flight_resources() {
+        let settings = ResolvedGraphicsSettings {
+            plume_enabled: false,
+            ..Default::default()
+        };
+        let mut cache = PlumeFieldCache::empty();
+        cache.key = (10, 20);
+        cache.radiant = [1.0, 2.0, 3.0];
+
+        let mut world = World::new();
+        world.insert_resource(GraphicsResolved(settings));
+        world.insert_resource(cache);
+        let mut schedule = Schedule::default();
+        schedule.add_systems(update_plume_field);
+        schedule.run(&mut world);
+
+        let cache = world.resource::<PlumeFieldCache>();
+        assert_eq!(cache.key, (i64::MIN, i64::MIN));
+        assert_eq!(cache.radiant, [0.0; 3]);
+        assert!(cache.profile.is_empty());
+    }
+
+    #[test]
+    fn disabled_plume_skips_startup_assets_and_entities() {
+        let settings = ResolvedGraphicsSettings {
+            plume_enabled: false,
+            ..Default::default()
+        };
+        let mut world = World::new();
+        world.insert_resource(GraphicsResolved(settings));
+        world.insert_resource(Assets::<Image>::default());
+        world.insert_resource(Assets::<Mesh>::default());
+        world.insert_resource(Assets::<StandardMaterial>::default());
+        world.insert_resource(Assets::<PlumeVolumeMaterial>::default());
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(setup_plume);
+        schedule.run(&mut world);
+
+        assert!(world.iter_entities().all(|entity| {
+            entity.get::<PlumeCone>().is_none()
+                && entity.get::<PlumeVolume>().is_none()
+                && entity.get::<PlumeLight>().is_none()
+        }));
+        assert_eq!(world.resource::<Assets<Image>>().len(), 0);
+        assert_eq!(world.resource::<Assets<Mesh>>().len(), 0);
+        assert_eq!(world.resource::<Assets<StandardMaterial>>().len(), 0);
+        assert_eq!(world.resource::<Assets<PlumeVolumeMaterial>>().len(), 0);
     }
 
     #[test]

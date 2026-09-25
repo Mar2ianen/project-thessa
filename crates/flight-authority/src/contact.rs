@@ -263,6 +263,7 @@ pub struct ContactRuntime {
     kinematic_terrain: Vec<KinematicBodyId>,
 }
 
+#[derive(Clone)]
 struct ContactBody {
     id: CollisionBodyId,
     geometry: CollisionGeometry,
@@ -336,18 +337,18 @@ impl ContactRuntime {
         geometry: &CollisionGeometry,
         config: DynamicBodyConfig,
     ) -> Result<CollisionBodyId, FlightError> {
+        self.world
+            .validate_dynamic_body_inputs(state, properties, geometry)
+            .map_err(|error| invalid(format!("contact body: {error}")))?;
         self.clear_wheel_assembly()?;
-        let mut slot = self.body.take();
-        let id = Self::sync_slot(
+        Self::sync_slot(
             &mut self.world,
-            &mut slot,
+            &mut self.body,
             state,
             properties,
             geometry,
             config,
-        )?;
-        self.body = slot;
-        Ok(id)
+        )
     }
 
     pub fn body_id(&self) -> Option<CollisionBodyId> {
@@ -595,7 +596,7 @@ impl ContactRuntime {
         geometry: &CollisionGeometry,
         config: DynamicBodyConfig,
     ) -> Result<CollisionBodyId, FlightError> {
-        let mut slot = self.partners.remove(&tag);
+        let mut slot = self.partners.get(&tag).cloned();
         let id = Self::sync_slot(
             &mut self.world,
             &mut slot,
@@ -653,14 +654,15 @@ impl ContactRuntime {
                 .map_err(|error| invalid(format!("contact resync: {error}")))?;
             return Ok(id);
         }
-        if let Some(previous) = slot.take() {
-            world
-                .remove_dynamic_body(previous.id)
-                .map_err(|error| invalid(format!("contact rebuild: {error}")))?;
-        }
         let id = world
             .insert_dynamic_body(state, properties, geometry, config)
             .map_err(|error| invalid(format!("contact body: {error}")))?;
+        if let Some(previous) = slot.as_ref()
+            && let Err(error) = world.remove_dynamic_body(previous.id)
+        {
+            let _ = world.remove_dynamic_body(id);
+            return Err(invalid(format!("contact rebuild: {error}")));
+        }
         *slot = Some(ContactBody {
             id,
             geometry: geometry.clone(),
@@ -1507,6 +1509,61 @@ mod tests {
         );
         runtime.remove_body().unwrap();
         assert_eq!(runtime.body_id(), None);
+    }
+
+    #[test]
+    fn rejected_sync_keeps_existing_body_and_partner_registered() {
+        let mut contact_runtime = runtime();
+        let geometry = x15_contact_geometry().unwrap();
+        let properties = test_properties();
+        let config = DynamicBodyConfig::default();
+        let state = RigidBodyState::stationary(DVec3::new(0.0, 5.0, 0.0));
+        let body = contact_runtime
+            .sync_body(state, properties, &geometry, config)
+            .unwrap();
+        let empty_geometry = CollisionGeometry::default();
+
+        assert!(
+            contact_runtime
+                .sync_body(state, properties, &empty_geometry, config)
+                .is_err()
+        );
+        assert_eq!(contact_runtime.body_id(), Some(body));
+        assert_eq!(contact_runtime.world.dynamic_body_count(), 1);
+        assert!(contact_runtime.world.body_state(body).is_ok());
+
+        let partner = contact_runtime
+            .sync_partner(9, state, properties, &geometry, config)
+            .unwrap();
+        assert!(
+            contact_runtime
+                .sync_partner(9, state, properties, &empty_geometry, config)
+                .is_err()
+        );
+        assert_eq!(contact_runtime.partner_id(9), Some(partner));
+        assert_eq!(contact_runtime.world.dynamic_body_count(), 2);
+        assert!(contact_runtime.world.body_state(partner).is_ok());
+
+        let mut articulated = runtime();
+        let vehicle = one_wheel_vehicle(false);
+        let articulated_state = RigidBodyState::stationary(DVec3::new(0.0, 0.0, 10.0));
+        let sprung = articulated
+            .sync_articulated_vehicle(articulated_state, &vehicle, &[vec![0.0]], config)
+            .unwrap();
+        assert_eq!(articulated.world.dynamic_body_count(), 2);
+        assert!(
+            articulated
+                .sync_body(
+                    articulated_state,
+                    vehicle.mass_properties,
+                    &empty_geometry,
+                    config,
+                )
+                .is_err()
+        );
+        assert_eq!(articulated.body_id(), Some(sprung));
+        assert!(articulated.wheel_assembly.is_some());
+        assert_eq!(articulated.world.dynamic_body_count(), 2);
     }
 
     #[test]

@@ -69,6 +69,25 @@ fn intersect_outer(optics: &AtmosphereOptics, origin_m: DVec3, dir: DVec3) -> Op
     Some((t0.max(0.0), t1))
 }
 
+/// Whether a forward ray enters the opaque body. A tangent has no interior
+/// interval and therefore remains a grazing, unoccluded ray.
+fn intersects_body(optics: &AtmosphereOptics, origin_m: DVec3, dir: DVec3) -> bool {
+    let radius = optics.inner_radius_m;
+    let b = origin_m.dot(dir);
+    let c = origin_m.length_squared() - radius * radius;
+    if c < 0.0 {
+        return true;
+    }
+    let discriminant = b * b - c;
+    if discriminant <= 0.0 {
+        return false;
+    }
+    let root = discriminant.sqrt();
+    let entry = -b - root;
+    let exit = -b + root;
+    exit > 0.0 && entry.max(0.0) < exit
+}
+
 /// Atmosphere segment clipped at the opaque body's surface. Optical density
 /// is clamped to its sea-level value below the datum, so marching to the outer
 /// sphere alone incorrectly treats the solid body's full chord as atmosphere.
@@ -113,6 +132,9 @@ pub fn transmittance(
     let dir = view_dir.normalize_or_zero();
     if dir == DVec3::ZERO {
         return [1.0; 3];
+    }
+    if intersects_body(optics, camera_m, dir) {
+        return [0.0; 3];
     }
     let Some((t0, t1)) = intersect_atmosphere(optics, camera_m, dir) else {
         return [1.0; 3];
@@ -434,7 +456,18 @@ mod tests {
         assert!((segment.1 - 500.0).abs() < 1e-6);
 
         let t = transmittance(&optics, camera, -DVec3::Y, 64);
-        assert!(t.iter().all(|channel| *channel > 0.9), "{t:?}");
+        assert_eq!(t, [0.0; 3], "the opaque body blocks the downward ray");
+        let upward = transmittance(&optics, camera, DVec3::Y, 64);
+        assert!(
+            upward.iter().all(|channel| (0.0..1.0).contains(channel)),
+            "{upward:?}"
+        );
+
+        let mut below_horizon = noon_light();
+        below_horizon.direction_to_star = -DVec3::Y;
+        let blocked_sky = sky_radiance(&optics, camera, DVec3::Y, &[below_horizon], 32, 16);
+        let unlit_sky = sky_radiance(&optics, camera, DVec3::Y, &[], 32, 16);
+        assert_eq!(blocked_sky.radiance_rgb, unlit_sky.radiance_rgb);
     }
 
     #[test]

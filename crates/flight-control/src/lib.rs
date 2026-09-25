@@ -105,7 +105,8 @@ pub struct DirectionTarget {
 
 impl DirectionTarget {
     pub fn new(direction: DVec3, frame: DirectionFrame) -> Result<Self, ControlError> {
-        if !direction.is_finite() || direction.length_squared() <= 1.0e-12 {
+        let length_squared = direction.length_squared();
+        if !direction.is_finite() || !length_squared.is_finite() || length_squared <= 1.0e-12 {
             return Err(ControlError::InvalidDirection);
         }
         Ok(Self {
@@ -127,7 +128,8 @@ impl DirectionTarget {
     /// so even `Target` built through `new` fails here until resolved
     /// through `for_target` or deserialized with the body attached.
     pub fn validate(&self) -> Result<(), ControlError> {
-        if !self.direction.is_finite() || self.direction.length_squared() <= 1.0e-12 {
+        let length_squared = self.direction.length_squared();
+        if !self.direction.is_finite() || !length_squared.is_finite() || length_squared <= 1.0e-12 {
             return Err(ControlError::InvalidDirection);
         }
         match self.frame {
@@ -1226,6 +1228,21 @@ mod tests {
         let json = serde_json::to_string(&resolved).expect("serializes");
         let back: DirectionTarget = serde_json::from_str(&json).expect("deserializes");
         assert!(back.validate().is_ok());
+    }
+
+    #[test]
+    fn direction_targets_reject_finite_vectors_that_overflow_norm() {
+        let huge = DVec3::splat(f64::MAX);
+        assert_eq!(
+            DirectionTarget::new(huge, DirectionFrame::Inertial),
+            Err(ControlError::InvalidDirection)
+        );
+        let decoded = DirectionTarget {
+            direction: huge,
+            frame: DirectionFrame::Inertial,
+            target_body: None,
+        };
+        assert_eq!(decoded.validate(), Err(ControlError::InvalidDirection));
     }
 
     #[test]

@@ -50,7 +50,13 @@ impl ScalarField {
         if width == 0 || height == 0 {
             return Err(CodecError::EmptyField);
         }
-        let expect = width as usize * height as usize;
+        let Some(expect) = (width as usize).checked_mul(height as usize) else {
+            return Err(CodecError::BadExtent {
+                width,
+                height,
+                samples: data.len(),
+            });
+        };
         if data.len() != expect {
             return Err(CodecError::BadExtent {
                 width,
@@ -257,11 +263,7 @@ impl fmt::Display for CodecError {
                 width,
                 height,
                 samples,
-            } => write!(
-                f,
-                "field {width}x{height} needs {} samples, got {samples}",
-                *width as usize * *height as usize
-            ),
+            } => write!(f, "field {width}x{height} does not match {samples} samples"),
             CodecError::BadMagic => write!(f, "bad microscale magic, want MICR"),
             CodecError::UnsupportedVersion(v) => {
                 write!(f, "unsupported microscale version {v}")
@@ -788,6 +790,13 @@ mod tests {
             })
         );
         assert!(ScalarField::new(4, 4, vec![7; 16]).is_ok());
+    }
+
+    #[test]
+    fn scalar_field_reports_extent_overflow_without_panicking() {
+        let error = ScalarField::new(u32::MAX, u32::MAX, Vec::new()).unwrap_err();
+        assert!(matches!(error, CodecError::BadExtent { .. }));
+        assert!(error.to_string().contains("4294967295x4294967295"));
     }
 
     #[test]

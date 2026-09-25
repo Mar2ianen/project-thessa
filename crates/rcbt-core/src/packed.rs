@@ -96,6 +96,9 @@ impl PackedTree {
 
     #[inline]
     pub fn is_active(&self, id: u64) -> bool {
+        if id == 0 || id >= (1_u64 << (self.max_depth + 1)) {
+            return false;
+        }
         let bit = (id - 1) as usize;
         (self.active[bit / 64] >> (bit % 64)) & 1 == 1
     }
@@ -138,6 +141,9 @@ impl PackedTree {
     pub fn merge(&mut self, parent: Node) -> Result<(), TreeError> {
         if parent.is_root() {
             return Err(TreeError::CannotMergeRoot);
+        }
+        if parent.depth() >= self.max_depth {
+            return Err(TreeError::ChildrenNotLeaves(parent));
         }
         let Some([left, right]) = parent.children() else {
             return Err(TreeError::ChildrenNotLeaves(parent));
@@ -364,6 +370,19 @@ mod tests {
         assert_eq!(
             t.footprint_bytes(),
             (1_usize << 9) * 4 + (1_usize << 9).div_ceil(64) * 8
+        );
+    }
+
+    #[test]
+    fn packed_out_of_range_queries_and_merges_are_safe() {
+        let mut tree = PackedTree::new(4).unwrap();
+        let outside = Node::new(32, 5).unwrap();
+        assert!(!tree.is_active(0));
+        assert!(!tree.is_active(65));
+        assert!(!tree.contains(outside));
+        assert_eq!(
+            tree.merge(outside),
+            Err(TreeError::ChildrenNotLeaves(outside))
         );
     }
 

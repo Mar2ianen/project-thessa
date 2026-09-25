@@ -34,7 +34,13 @@ pub fn encode_material_level(
     height: u32,
     max_abs_error: f64,
 ) -> Option<EncodedMaterialLevel> {
-    if rgba.len() != width as usize * height as usize * 4 {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let expected_bytes = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
+    if rgba.len() != expected_bytes {
         return None;
     }
     let mut planes = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
@@ -147,6 +153,8 @@ mod tests {
     #[test]
     fn encode_level_rejects_extent_mismatch() {
         assert!(encode_material_level(&[0u8; 10], 4, 4, 2.0).is_none());
+        assert!(encode_material_level(&[], 0, 0, 2.0).is_none());
+        assert!(encode_material_level(&[], u32::MAX, u32::MAX, 2.0).is_none());
         assert!(encode_material_level(&[0u8; 4 * 4 * 4], 4, 4, 2.0).is_some());
     }
 

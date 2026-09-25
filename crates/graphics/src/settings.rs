@@ -650,10 +650,10 @@ impl RequestedGraphics {
                 ),
             });
         }
-        if self.raytracing.max_distance_m < 0.0 {
+        if !self.raytracing.max_distance_m.is_finite() || self.raytracing.max_distance_m < 0.0 {
             return Err(ConfigError::InvalidValue {
                 path: "raytracing.max_distance_m",
-                detail: "expected >= 0".to_string(),
+                detail: "expected a finite value >= 0".to_string(),
             });
         }
         if !(1..=4).contains(&self.shadows.cascades) {
@@ -860,6 +860,10 @@ mod tests {
         assert!(RequestedGraphics::from_toml(bad_cloud_steps).is_err());
         let bad_terrain_cells = "preset = \"high\"\n[renderer]\nterrain_mesh_cells = 4\n";
         assert!(RequestedGraphics::from_toml(bad_terrain_cells).is_err());
+        for value in ["nan", "inf", "-inf"] {
+            let bad_rt_distance = format!("[raytracing]\nmax_distance_m = {value}\n");
+            assert!(RequestedGraphics::from_toml(&bad_rt_distance).is_err());
+        }
     }
 
     #[test]

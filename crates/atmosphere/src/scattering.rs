@@ -69,6 +69,34 @@ fn intersect_outer(optics: &AtmosphereOptics, origin_m: DVec3, dir: DVec3) -> Op
     Some((t0.max(0.0), t1))
 }
 
+/// Atmosphere segment clipped at the opaque body's surface. Optical density
+/// is clamped to its sea-level value below the datum, so marching to the outer
+/// sphere alone incorrectly treats the solid body's full chord as atmosphere.
+fn intersect_atmosphere(
+    optics: &AtmosphereOptics,
+    origin_m: DVec3,
+    dir: DVec3,
+) -> Option<(f64, f64)> {
+    let (t0, mut t1) = intersect_outer(optics, origin_m, dir)?;
+    let inner_radius = optics.inner_radius_m;
+    let b = origin_m.dot(dir);
+    let c = origin_m.length_squared() - inner_radius * inner_radius;
+
+    // Queries originating inside the body are not atmospheric sight lines.
+    if c < 0.0 {
+        return None;
+    }
+
+    let disc = b * b - c;
+    if disc >= 0.0 {
+        let surface_entry = -b - disc.sqrt();
+        if surface_entry >= t0 && surface_entry < t1 {
+            t1 = surface_entry;
+        }
+    }
+    (t1 > t0).then_some((t0, t1))
+}
+
 /// Spectral transmittance along a view segment (fraction surviving per channel).
 ///
 /// Stable for cameras below, inside, near, and far outside the shell: rays
@@ -79,11 +107,14 @@ pub fn transmittance(
     view_dir: DVec3,
     steps: u32,
 ) -> [f64; 3] {
+    if camera_m.length_squared() < optics.inner_radius_m * optics.inner_radius_m {
+        return [0.0; 3];
+    }
     let dir = view_dir.normalize_or_zero();
     if dir == DVec3::ZERO {
         return [1.0; 3];
     }
-    let Some((t0, t1)) = intersect_outer(optics, camera_m, dir) else {
+    let Some((t0, t1)) = intersect_atmosphere(optics, camera_m, dir) else {
         return [1.0; 3];
     };
     let n = steps.clamp(1, 512) as usize;
@@ -123,10 +154,14 @@ pub fn sky_radiance(
         radiance_rgb: [0.0; 3],
         transmittance_rgb: [1.0; 3],
     };
+    if camera_m.length_squared() < optics.inner_radius_m * optics.inner_radius_m {
+        result.transmittance_rgb = [0.0; 3];
+        return result;
+    }
     if dir == DVec3::ZERO {
         return result;
     }
-    let Some((t0, t1)) = intersect_outer(optics, camera_m, dir) else {
+    let Some((t0, t1)) = intersect_atmosphere(optics, camera_m, dir) else {
         return result;
     };
     let nv = view_steps.clamp(1, 256) as usize;
@@ -210,7 +245,10 @@ pub fn aerial_perspective(
 /// shell on the night side. Deterministic in geometry; no time dependence.
 pub fn airglow_radiance(optics: &AtmosphereOptics, camera_m: DVec3, view_dir: DVec3) -> [f64; 3] {
     let dir = view_dir.normalize_or_zero();
-    let Some((_, t1)) = intersect_outer(optics, camera_m, dir) else {
+    if dir == DVec3::ZERO {
+        return [0.0; 3];
+    }
+    let Some((_, t1)) = intersect_atmosphere(optics, camera_m, dir) else {
         return [0.0; 3];
     };
     // Grazing rays traverse more emissive shell: approximate with the
@@ -384,6 +422,37 @@ mod tests {
         let t = transmittance(&thessa_optics(), surface_camera(), DVec3::Y, 16);
         assert!(t[0] > t[1] && t[1] > t[2], "red survives best: {t:?}");
         assert!(t.iter().all(|c| (0.0..=1.0).contains(c)));
+    }
+
+    #[test]
+    fn downward_atmosphere_ray_stops_at_the_surface() {
+        let optics = thessa_optics();
+        let camera = surface_camera();
+        let segment = intersect_atmosphere(&optics, camera, -DVec3::Y)
+            .expect("the ray crosses the atmosphere before ground");
+        assert_eq!(segment.0, 0.0);
+        assert!((segment.1 - 500.0).abs() < 1e-6);
+
+        let t = transmittance(&optics, camera, -DVec3::Y, 64);
+        assert!(t.iter().all(|channel| *channel > 0.9), "{t:?}");
+    }
+
+    #[test]
+    fn zero_airglow_view_direction_has_no_radiance() {
+        assert_eq!(
+            airglow_radiance(&thessa_optics(), surface_camera(), DVec3::ZERO),
+            [0.0; 3]
+        );
+    }
+
+    #[test]
+    fn camera_inside_the_body_is_occluded() {
+        let optics = thessa_optics();
+        let camera = DVec3::Y * (optics.inner_radius_m - 1.0);
+        assert_eq!(transmittance(&optics, camera, DVec3::Y, 16), [0.0; 3]);
+        let sky = sky_radiance(&optics, camera, DVec3::Y, &[noon_light()], 16, 8);
+        assert_eq!(sky.radiance_rgb, [0.0; 3]);
+        assert_eq!(sky.transmittance_rgb, [0.0; 3]);
     }
 }
 

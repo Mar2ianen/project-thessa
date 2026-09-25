@@ -2131,7 +2131,11 @@ fn propagate_thrust_arc(
             arc_start_elapsed_s,
             step_start_elapsed_s: elapsed_s,
         };
-        let time = start_time.offset(elapsed_s - arc_start_elapsed_s);
+        // Absolute epoch of this step: `start_time` is the propagation
+        // origin and `elapsed_s` is propagation-relative (the caller passes
+        // both). Subtracting the arc start here would shift the whole arc
+        // back by `arc.start_s` and sample gravity/RTN at the wrong epoch.
+        let time = start_time.offset(elapsed_s);
         let (candidate, error_state) = dormand_prince_thrust_step(field, state, time, h, &ctx)?;
         let error = normalized_error(error_state, candidate, config);
         if error <= 1.0 || h <= config.min_step_s {

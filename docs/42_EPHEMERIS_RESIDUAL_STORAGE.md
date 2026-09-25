@@ -34,13 +34,18 @@ vel_x / vel_y / vel_z
 
 Runtime source state is reconstructed with cubic Hermite interpolation.
 
-The layout is SIMD-friendly. Current x86 execution uses:
+The layout is SIMD-friendly. Native kernels use these f64 lane widths:
 
 ~~~text
-AVX-512: 8 f64 lanes
-AVX2:    4 f64 lanes
-scalar:  tail / fallback
+x86 AVX-512: 8 f64 lanes
+x86 AVX2:    4 f64 lanes
+ARM NEON:   2 f64 lanes per vector, grouped by 8-/4-wide batch wrappers
+scalar:     tail / fallback
 ~~~
+
+The AArch64 NEON implementation is exercised against the scalar oracle on
+Apple Silicon and other ARM64 targets. Other architectures retain the scalar
+fallback.
 
 Every stored sample still pays six full f64 values per source.
 

@@ -1,6 +1,6 @@
 //! Optional SIMD math kernels for Project Thessa numerical loops (AVX-512
-//! 8-wide with an AVX2 4-wide fallback — AVX2 ships in nearly every x86-64
-//! CPU built in the last decade).
+//! 8-wide and AVX2 4-wide on x86-64; AArch64 NEON uses two f64 lanes per
+//! vector grouped by the same 8-/4-wide batch wrappers).
 //!
 //! Two per-step costs dominate a long ephemeris bake: Hermite interpolation
 //! of body centers and the gravity accumulation (one sqrt+recip per body).
@@ -8,14 +8,15 @@
 //! dispatch buy a real multiple while the scalar path stays the portable
 //! baseline and cross-check oracle.
 //!
-//! `unsafe` is isolated in this MIT math crate (raw SIMD loads/stores with
-//! bounds checked once at each safe boundary); `thessa-sim-core` keeps its
-//! `#![forbid(unsafe_code)]`.
+//! `unsafe` x86 intrinsics are isolated in this MIT math crate (raw SIMD
+//! loads/stores with bounds checked at each safe boundary); the AArch64 path
+//! uses `wide`'s safe f64x2 facade, which lowers to NEON. `thessa-sim-core`
+//! keeps its `#![forbid(unsafe_code)]`.
 //!
 //! Precision: Hermite matches the scalar op order structurally (tolerance
-//! ~1e-15 relative); the 512-bit gravity kernel refines `rsqrt14` twice
-//! with Newton iterations, the 256-bit one uses full-precision sqrt+div.
-//! Dispatch is deterministic per machine; cross-machine bits may differ.
+//! ~1e-15 relative); AVX-512 gravity refines `rsqrt14` twice with Newton
+//! iterations, while AVX2 and NEON use full-precision sqrt+div. Dispatch is
+//! deterministic per machine; cross-machine bits may differ.
 
 /// Independent tier flags, resolved once per process: `is_x86_feature_detected`
 /// executes cpuid, so never probe per chunk. An AVX-512 machine also reports
@@ -51,13 +52,25 @@ pub fn avx2_available() -> bool {
     has_avx2()
 }
 
-/// Non-x86 builds compile to the scalar path only.
+/// AArch64 Advanced SIMD is part of the target baseline when enabled.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+pub fn neon_available() -> bool {
+    true
+}
+
+/// NEON is unavailable outside AArch64 targets compiled with that feature.
+#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
+pub fn neon_available() -> bool {
+    false
+}
+
+/// Targets without x86-64 compile this tier to the scalar fallback.
 #[cfg(not(target_arch = "x86_64"))]
 pub fn avx512_available() -> bool {
     false
 }
 
-/// Non-x86 builds compile to the scalar path only.
+/// Targets without x86-64 compile this tier to the scalar fallback.
 #[cfg(not(target_arch = "x86_64"))]
 pub fn avx2_available() -> bool {
     false
@@ -245,7 +258,34 @@ pub fn hermite_snapshot_chunk(
         }
         true
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    {
+        let Some(end) = base.checked_add(8) else {
+            return false;
+        };
+        let slices: [&[f64]; 12] = [x0, x1, vx0, vx1, y0, y1, vy0, vy1, z0, z1, vz0, vz1];
+        if slices.iter().any(|v| v.len() < end)
+            || ox.len() < end
+            || oy.len() < end
+            || oz.len() < end
+            || !(h.is_finite() && s.is_finite())
+        {
+            return false;
+        }
+        hermite_neon(
+            [x0, x1, vx0, vx1, y0, y1, vy0, vy1, z0, z1, vz0, vz1],
+            base,
+            8,
+            h,
+            s,
+            [ox, oy, oz],
+        );
+        true
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", target_feature = "neon")
+    )))]
     {
         let _ = (
             x0, x1, vx0, vx1, y0, y1, vy0, vy1, z0, z1, vz0, vz1, base, h, s, ox, oy, oz,
@@ -303,7 +343,33 @@ pub fn gravity_chunk(
             None => false,
         }
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    {
+        let Some(end) = base.checked_add(8) else {
+            return false;
+        };
+        if cx.len() < end
+            || cy.len() < end
+            || cz.len() < end
+            || mu.len() < end
+            || !(px.is_finite() && py.is_finite() && pz.is_finite())
+        {
+            return false;
+        }
+        match gravity_neon(cx, cy, cz, mu, base, 8, px, py, pz) {
+            Some((sx, sy, sz)) => {
+                out.0 += sx;
+                out.1 += sy;
+                out.2 += sz;
+                true
+            }
+            None => false,
+        }
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", target_feature = "neon")
+    )))]
     {
         let _ = (cx, cy, cz, mu, base, px, py, pz, out);
         false
@@ -411,6 +477,111 @@ unsafe fn gravity4_avx2(
     }
 }
 
+/// AArch64 f64 vectors lower to NEON through `wide::f64x2`. The public 8-/
+/// 4-wide entries group four/two vector operations respectively.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+#[inline]
+fn neon_pair(values: &[f64], base: usize) -> wide::f64x2 {
+    wide::f64x2::new([values[base], values[base + 1]])
+}
+
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+#[inline]
+fn neon_store(values: wide::f64x2, output: &mut [f64], base: usize) {
+    let [first, second] = values.to_array();
+    output[base] = first;
+    output[base + 1] = second;
+}
+
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+#[allow(clippy::too_many_arguments)]
+fn hermite_neon(
+    inputs: [&[f64]; 12],
+    base: usize,
+    width: usize,
+    h: f64,
+    s: f64,
+    outputs: [&mut [f64]; 3],
+) {
+    use wide::f64x2;
+
+    let two = f64x2::splat(2.0);
+    let three = f64x2::splat(3.0);
+    let hn = f64x2::splat(h);
+    let sn = f64x2::splat(s);
+    macro_rules! component {
+        ($c0:expr, $c1:expr, $v0:expr, $v1:expr, $output:expr) => {{
+            for offset in (0..width).step_by(2) {
+                let i = base + offset;
+                let c0 = neon_pair($c0, i);
+                let c1 = neon_pair($c1, i);
+                let v0 = neon_pair($v0, i);
+                let v1 = neon_pair($v1, i);
+                let dx = c1 - c0;
+                let t = two * v0 + v1;
+                let a = three * dx - hn * t;
+                let u = v0 + v1;
+                let b = hn * u - two * dx;
+                let inner = a + sn * b;
+                let mid = hn * v0 + sn * inner;
+                neon_store(c0 + sn * mid, $output, i);
+            }
+        }};
+    }
+    let [x0, x1, vx0, vx1, y0, y1, vy0, vy1, z0, z1, vz0, vz1] = inputs;
+    let [ox, oy, oz] = outputs;
+    component!(x0, x1, vx0, vx1, ox);
+    component!(y0, y1, vy0, vy1, oy);
+    component!(z0, z1, vz0, vz1, oz);
+}
+
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+#[allow(clippy::too_many_arguments)]
+fn gravity_neon(
+    cx: &[f64],
+    cy: &[f64],
+    cz: &[f64],
+    mu: &[f64],
+    base: usize,
+    width: usize,
+    px: f64,
+    py: f64,
+    pz: f64,
+) -> Option<(f64, f64, f64)> {
+    use wide::f64x2;
+
+    let position = [px, py, pz].map(f64x2::splat);
+    let mut total = [0.0; 3];
+    for offset in (0..width).step_by(2) {
+        let i = base + offset;
+        let delta = [cx, cy, cz].map(|axis| neon_pair(axis, i));
+        let dx = delta[0] - position[0];
+        let dy = delta[1] - position[1];
+        let dz = delta[2] - position[2];
+        let d2 = dx * dx + dy * dy + dz * dz;
+        let d2_lanes = d2.to_array();
+        if d2_lanes
+            .iter()
+            .any(|distance_squared| !distance_squared.is_finite() || *distance_squared == 0.0)
+        {
+            return None;
+        }
+        let inverse_distance = f64x2::splat(1.0) / d2.sqrt();
+        let mu = neon_pair(mu, i);
+        let scale = mu * inverse_distance * inverse_distance * inverse_distance;
+        for (axis, displacement) in [dx, dy, dz].into_iter().enumerate() {
+            let lanes = (displacement * scale).to_array();
+            total[axis] += lanes[0];
+            total[axis] += lanes[1];
+        }
+    }
+    if total.iter().all(|component| component.is_finite()) {
+        Some((total[0], total[1], total[2]))
+    } else {
+        None
+    }
+}
+
 /// 4-wide Hermite batch entry: same contract as the 8-wide one, `base + 4`
 /// in bounds. Returns `false` when the caller must take the scalar path.
 #[allow(clippy::too_many_arguments)]
@@ -475,7 +646,34 @@ pub fn hermite_snapshot_quad(
         }
         true
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    {
+        let Some(end) = base.checked_add(4) else {
+            return false;
+        };
+        let slices: [&[f64]; 12] = [x0, x1, vx0, vx1, y0, y1, vy0, vy1, z0, z1, vz0, vz1];
+        if slices.iter().any(|v| v.len() < end)
+            || ox.len() < end
+            || oy.len() < end
+            || oz.len() < end
+            || !(h.is_finite() && s.is_finite())
+        {
+            return false;
+        }
+        hermite_neon(
+            [x0, x1, vx0, vx1, y0, y1, vy0, vy1, z0, z1, vz0, vz1],
+            base,
+            4,
+            h,
+            s,
+            [ox, oy, oz],
+        );
+        true
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", target_feature = "neon")
+    )))]
     {
         let _ = (
             x0, x1, vx0, vx1, y0, y1, vy0, vy1, z0, z1, vz0, vz1, base, h, s, ox, oy, oz,
@@ -534,7 +732,33 @@ pub fn gravity_quad(
             None => false,
         }
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    {
+        let Some(end) = base.checked_add(4) else {
+            return false;
+        };
+        if cx.len() < end
+            || cy.len() < end
+            || cz.len() < end
+            || mu.len() < end
+            || !(px.is_finite() && py.is_finite() && pz.is_finite())
+        {
+            return false;
+        }
+        match gravity_neon(cx, cy, cz, mu, base, 4, px, py, pz) {
+            Some((sx, sy, sz)) => {
+                out.0 += sx;
+                out.1 += sy;
+                out.2 += sz;
+                true
+            }
+            None => false,
+        }
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", target_feature = "neon")
+    )))]
     {
         let _ = (cx, cy, cz, mu, base, px, py, pz, out);
         false
@@ -593,8 +817,8 @@ mod tests {
     #[test]
     fn kernels_match_scalar_reference() {
         // Every available tier (8-wide, 4-wide) against the scalar oracle.
-        // On machines without AVX the wrappers return false and the asserts
-        // below are skipped; `ran_any` records what actually executed.
+        // On scalar-only machines wrappers return false; `ran_any` records
+        // what actually executed.
         let mut rng = 0x12345678u64;
         const N: usize = 16;
         let x0 = mkvec(&mut rng, 1.0e9, N);
@@ -698,6 +922,8 @@ mod tests {
         } else {
             eprintln!("simd kernel self-test skipped: no supported SIMD tier");
         }
+        #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+        assert!(ran_any, "AArch64 NEON kernels must execute on this target");
     }
 }
 
@@ -768,8 +994,8 @@ pub struct AeroKernelParams {
 /// stays outside: the kernel consumes alpha, beta, sin/cos and Mach plus
 /// per-lane panel scalars, and returns cl/cd/cy/cm. Everything inside is
 /// mul/add/min/max/sqrt/div plus Mach-regime masks — no atan2, powf or tanh.
-/// Returns `false` when AVX-512 is unavailable (caller falls through to the
-/// 4-wide tier, then scalar); per-lane validity is the caller's contract
+/// Returns `false` when AVX-512/NEON is unavailable (caller falls through to
+/// the 4-wide tier, then scalar); per-lane validity is the caller's contract
 /// (same checks as the scalar path, run before dispatch).
 #[allow(clippy::too_many_arguments)]
 pub fn aero_coefficients_chunk(
@@ -829,7 +1055,28 @@ pub fn aero_coefficients_chunk(
         }
         true
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    {
+        let Some(end) = base.checked_add(8) else {
+            return false;
+        };
+        let inputs: [&[f64]; 10] = [
+            alpha_eff, beta, sin_e, cos_e, sep, mach, sweep_cos, aspect, interf, thick,
+        ];
+        if inputs.iter().any(|values| values.len() < end) {
+            return false;
+        }
+        let outputs: [&mut [f64]; 4] = [cl, cd, cy, cm];
+        if outputs.iter().any(|values| values.len() < end) {
+            return false;
+        }
+        aero_neon(inputs, base, 8, params, outputs);
+        true
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", target_feature = "neon")
+    )))]
     {
         let _ = (
             alpha_eff, beta, sin_e, cos_e, sep, mach, sweep_cos, aspect, interf, thick, base,
@@ -839,7 +1086,7 @@ pub fn aero_coefficients_chunk(
     }
 }
 
-/// 4-wide variant of [`aero_coefficients_chunk`] for the AVX2 tier.
+/// 4-wide variant of [`aero_coefficients_chunk`] for AVX2 or AArch64 NEON.
 #[allow(clippy::too_many_arguments)]
 pub fn aero_coefficients_quad(
     alpha_eff: &[f64],
@@ -898,7 +1145,28 @@ pub fn aero_coefficients_quad(
         }
         true
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    {
+        let Some(end) = base.checked_add(4) else {
+            return false;
+        };
+        let inputs: [&[f64]; 10] = [
+            alpha_eff, beta, sin_e, cos_e, sep, mach, sweep_cos, aspect, interf, thick,
+        ];
+        if inputs.iter().any(|values| values.len() < end) {
+            return false;
+        }
+        let outputs: [&mut [f64]; 4] = [cl, cd, cy, cm];
+        if outputs.iter().any(|values| values.len() < end) {
+            return false;
+        }
+        aero_neon(inputs, base, 4, params, outputs);
+        true
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", target_feature = "neon")
+    )))]
     {
         let _ = (
             alpha_eff, beta, sin_e, cos_e, sep, mach, sweep_cos, aspect, interf, thick, base,
@@ -1278,6 +1546,111 @@ unsafe fn aero4_avx2(
     }
 }
 
+/// Two-lane analytic coefficient kernel. `wide::f64x2` maps these operations
+/// to AArch64 NEON on Apple Silicon while keeping this backend memory-safe.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+fn aero_neon(
+    inputs: [&[f64]; 10],
+    base: usize,
+    width: usize,
+    p: &AeroKernelParams,
+    outputs: [&mut [f64]; 4],
+) {
+    use wide::f64x2;
+
+    macro_rules! sstep {
+        ($e0:expr, $e1:expr, $x:expr, $one:expr, $two:expr, $three:expr, $zero:expr) => {{
+            let t = ($x - $e0) / ($e1 - $e0);
+            let tc = t.max($zero).min($one);
+            let tc2 = tc * tc;
+            tc2 * ($three - $two * tc)
+        }};
+    }
+
+    let one = f64x2::splat(1.0);
+    let two = f64x2::splat(2.0);
+    let three = f64x2::splat(3.0);
+    let zero = f64x2::splat(0.0);
+    let [cl_out, cd_out, cy_out, cm_out] = outputs;
+
+    for offset in (0..width).step_by(2) {
+        let i = base + offset;
+        let [ae, be, sn, cs, sp, ma, sc, ar, it, th] = inputs.map(|values| neon_pair(values, i));
+        let gt1 = ma.simd_gt(one);
+        let nm = gt1.bitselect(ma * sc, ma);
+        let nm_gt1 = nm.simd_gt(one);
+        let sub = f64x2::splat(p.lift_slope)
+            / (one - ma * ma)
+                .max(f64x2::splat(p.beta_floor * p.beta_floor))
+                .sqrt();
+        let tra = f64x2::splat(p.lift_slope / p.beta_floor);
+        let nm2m1 = (nm * nm - one).max(f64x2::splat(0.05));
+        let sup = nm_gt1.bitselect(
+            (f64x2::splat(p.ss_factor) / nm2m1.sqrt()).min(f64x2::splat(p.lift_slope * 2.5)),
+            tra,
+        );
+        let m08 = f64x2::splat(0.80);
+        let m10 = f64x2::splat(1.00);
+        let m12 = f64x2::splat(1.20);
+        let le08 = nm.simd_le(m08);
+        let le10 = nm.simd_le(m10);
+        let ge12 = nm.simd_ge(m12);
+        let band_plateau = le10 & !le08;
+        let band_trans = !le10 & !ge12;
+        let mid_t = sstep!(m10, m12, nm, one, two, three, zero);
+        let mid_slope = tra + (sup - tra) * mid_t;
+        let mut slope2d = sub;
+        slope2d = band_plateau.bitselect(tra, slope2d);
+        slope2d = band_trans.bitselect(mid_slope, slope2d);
+        slope2d = ge12.bitselect(sup, slope2d);
+        let corr = f64x2::splat(std::f64::consts::TAU) * ar / (slope2d * sc);
+        let two_over = two / corr;
+        let denom = two + corr * (one + two_over * two_over).sqrt();
+        let slope = it * (slope2d * corr * sc) / denom;
+        let linear = slope * ae;
+        let maxl = f64x2::splat(p.max_lift);
+        let x = linear / maxl;
+        let capped = maxl * x / (one + x * x).sqrt();
+        let cl_sep = f64x2::splat(p.sep_lift) * (two * sn * cs);
+        let cl = capped + (cl_sep - capped) * sp;
+        let clv = f64x2::splat(p.vortex) * (sn.abs() * sn * cs);
+        let cl_tot = cl + clv;
+        let cd = f64x2::splat(p.base_drag)
+            + f64x2::splat(p.induced) * capped * capped * (one - sp)
+            + f64x2::splat(p.sep_drag) * sp * sn * sn;
+        let rise = sstep!(
+            f64x2::splat(0.78),
+            f64x2::splat(1.18),
+            ma,
+            one,
+            two,
+            three,
+            zero
+        );
+        let nalpha = ae * sc;
+        let supw = nm_gt1.bitselect(
+            f64x2::splat(p.wave_factor * 4.0) * (nalpha * nalpha + th * th) / nm2m1.sqrt(),
+            zero,
+        );
+        let wave = f64x2::splat(p.wave_coeff)
+            * (rise * (f64x2::splat(0.12) + f64x2::splat(1.5) * ae * ae))
+            + sstep!(m10, m12, nm, one, two, three, zero) * supw;
+        let cd = cd + wave;
+        let cut = f64x2::splat(p.drag_cut);
+        let cut_inf = cut.simd_eq(f64x2::splat(f64::INFINITY));
+        let fade_s = sstep!(cut, cut + one, ma, one, two, three, zero);
+        let fade = cut_inf.bitselect(one, one - fade_s);
+        let cl_total = cl_tot * fade;
+        let cy = f64x2::splat(p.side_slope) * be;
+        let cm = f64x2::splat(p.cm_att) + f64x2::splat(p.cm_sep - p.cm_att) * sp;
+
+        neon_store(cl_total, cl_out, i);
+        neon_store(cd, cd_out, i);
+        neon_store(cy, cy_out, i);
+        neon_store(cm, cm_out, i);
+    }
+}
+
 #[cfg(test)]
 mod aero_kernel_tests {
     use super::{AeroKernelParams, aero_coefficients_chunk, aero_coefficients_quad};
@@ -1468,8 +1841,8 @@ mod aero_kernel_tests {
                 thick[i],
             );
             for (tag, ran, g_cl, g_cd, g_cy, g_cm) in [
-                ("avx512", ran8, cl8[i], cd8[i], cy8[i], cm8[i]),
-                ("avx2", ran4, cl4[i], cd4[i], cy4[i], cm4[i]),
+                ("chunk-8", ran8, cl8[i], cd8[i], cy8[i], cm8[i]),
+                ("quad-4", ran4, cl4[i], cd4[i], cy4[i], cm4[i]),
             ] {
                 if !ran {
                     continue;
@@ -1490,5 +1863,10 @@ mod aero_kernel_tests {
         } else {
             eprintln!("aero kernel self-test skipped: no supported SIMD tier");
         }
+        #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+        assert!(
+            ran8 && ran4,
+            "AArch64 NEON must exercise both coefficient batch widths"
+        );
     }
 }

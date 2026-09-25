@@ -464,7 +464,7 @@ Grid fins and body flaps are not a reason to move the whole craft to an expensiv
 
 For each new effector, the following are mandatory:
 
-- scalar vs AVX2/AVX-512 coefficient parity;
+- scalar vs AVX2/AVX-512/NEON coefficient parity;
 - deterministic reduction order;
 - serialize/deserialize roundtrip vehicle assets;
 - no effect on unrelated panels at neutral;

@@ -4064,13 +4064,15 @@ fn year_long_scaled_escape_stays_display_grade() {
 
 #[test]
 fn simd_snapshot_and_accel_match_scalar_within_tolerance() {
-    // Cross-path agreement for the AVX-512 kernels on the real 22-source
-    // system: Hermite FMA contraction and rsqrt-Newton refinement must stay
-    // within ~1e-12 relative of the scalar loop. Skipped (vacuous pass)
-    // where AVX-512 is unavailable — then both sides run the same code.
+    // Cross-path agreement for native SIMD kernels on the real 30-source
+    // system: Hermite FMA contraction and gravity refinement must stay within
+    // ~1e-12 relative of the scalar loop. Skip only on scalar-only targets.
     use crate::{EphemerisTable, TableSnapshot};
-    if !thessa_simd::avx512_available() {
-        eprintln!("no AVX-512: SIMD agreement vacuous");
+    if !(thessa_simd::avx512_available()
+        || thessa_simd::avx2_available()
+        || thessa_simd::neon_available())
+    {
+        eprintln!("no native SIMD tier: SIMD agreement skipped");
         return;
     }
     let config: SystemConfig =

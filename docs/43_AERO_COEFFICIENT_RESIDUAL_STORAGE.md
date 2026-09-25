@@ -386,8 +386,9 @@ must preserve it within the declared error envelope.
 
 ## 9. Do not compress the current analytic SIMD path for its own sake
 
-The existing analytic coefficient path already has dedicated AVX2/AVX-512
-kernels and avoids table traffic.
+The existing analytic coefficient path has AVX2/AVX-512 kernels on x86-64
+and an AArch64 NEON backend, with native paths checked against the scalar
+coefficient oracle. It also avoids table traffic.
 
 That path should remain untouched unless profiling finds an actual bottleneck.
 

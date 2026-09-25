@@ -5833,6 +5833,9 @@ dependencies = [
 [[package]]
 name = "thessa-simd"
 version = "0.0.1"
+dependencies = [
+ "wide",
+]
 
 [[package]]
 name = "thessa-system-baker"

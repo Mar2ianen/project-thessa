@@ -330,8 +330,8 @@ impl<'a> GravityField<'a> {
     /// [`GravityField::acceleration`] for the same timestamp; the win is
     /// that a Dormand–Prince step needs seven RHS evaluations at seven
     /// nearby timestamps, and without the frame each one re-walks every
-    /// shared parent chain (58 Kepler solves per call vs 23 per frame on
-    /// the 24-body design system). Keep one frame per stepping context.
+    /// shared parent chain (81 Kepler solves per call vs 31 per frame on
+    /// the 32-body design system). Keep one frame per stepping context.
     pub fn acceleration_with_frame(
         &self,
         position: DVec3,

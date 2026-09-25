@@ -25,12 +25,12 @@ use rapier3d_f64::math::{Matrix, Pose, Rotation, Vector};
 use rapier3d_f64::prelude::{
     BroadPhaseBvh, CCDSolver, ColliderBuilder, ColliderHandle, ColliderSet, FixedJointBuilder,
     GenericJointBuilder, ImpulseJointHandle, ImpulseJointSet, IntegrationParameters, IslandManager,
-    JointAxesMask, MultibodyJointSet, NarrowPhase, PhysicsPipeline, RigidBodyBuilder,
-    RigidBodyHandle, RigidBodySet,
+    JointAxesMask, JointAxis, MultibodyJointSet, NarrowPhase, PhysicsPipeline,
+    PrismaticJointBuilder, QueryFilter, Ray, RigidBodyBuilder, RigidBodyHandle, RigidBodySet,
 };
 use thessa_sim_core::{
-    CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionShape, FlightForces,
-    RigidBodyProperties, RigidBodyState,
+    CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionShape, CompiledWheelChassis,
+    FlightForces, RigidBodyProperties, RigidBodyState,
 };
 
 const QUATERNION_TOLERANCE: f64 = 1.0e-6;
@@ -303,6 +303,66 @@ pub struct ContactSummary {
     pub approach_speed_mps: f64,
 }
 
+/// One reduced-order tire/terrain contact evaluated from Rapier ray geometry.
+/// Wheel colliders are deliberately absent from the solid solver path, so this
+/// force is the sole tire reaction for the reported wheel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WheelContactSample {
+    pub wheel_index: u16,
+    pub contact_point_inertial_m: DVec3,
+    pub terrain_normal_inertial: DVec3,
+    pub forward_axis_inertial: DVec3,
+    pub lateral_axis_inertial: DVec3,
+    /// Vehicle/wheel contact-patch velocity relative to terrain, including the
+    /// supplied wheel spin rate.
+    pub relative_contact_velocity_inertial_mps: DVec3,
+    pub radial_penetration_m: f64,
+    pub strut_compression_m: f64,
+    pub tire_compression_m: f64,
+    /// Positive while the terrain and wheel are closing along the surface
+    /// normal.
+    pub compression_rate_mps: f64,
+    pub normal_load_n: f64,
+    pub longitudinal_force_n: f64,
+    pub lateral_force_n: f64,
+    pub contact_friction: f64,
+    pub saturated: bool,
+}
+
+/// Tire contacts and their summed external wrench about the vehicle center of
+/// mass. The caller adds this wrench to gravity/aero/propulsion before the same
+/// Rapier step; the query itself never advances or mutates world state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WheelContactResult {
+    pub contacts: Vec<WheelContactSample>,
+    pub wrench: ExternalWrench,
+}
+
+/// Backend binding for a wheel rigid body attached to the sprung vehicle by a
+/// slider/spin joint. The nominal center is expressed from the sprung body's
+/// center at full strut extension.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArticulatedWheelBinding {
+    pub wheel_body: CollisionBodyId,
+    pub wheel_index: u16,
+    pub nominal_center_sprung_local_m: DVec3,
+    pub slide_axis_sprung_local: DVec3,
+    pub axle_axis_sprung_local: DVec3,
+}
+
+/// Tire and strut reactions for one articulated wheel. The tire wrench acts on
+/// the unsprung body; `sprung_wrench` is the equal-and-opposite strut reaction
+/// on the chassis. Dynamic terrain remains excluded from this reduced model.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArticulatedWheelForce {
+    pub wheel_body: CollisionBodyId,
+    pub wheel_index: u16,
+    pub spin_rate_rad_s: f64,
+    pub contact: Option<WheelContactSample>,
+    pub wheel_wrench: ExternalWrench,
+    pub sprung_wrench: ExternalWrench,
+}
+
 /// One terrain patch reduced to a debug box: live inertial center,
 /// orientation, and half extents. Trimesh patches report their AABB.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
@@ -440,6 +500,31 @@ impl CollisionWorld {
         geometry: &CollisionGeometry,
         config: DynamicBodyConfig,
     ) -> Result<CollisionBodyId, CollisionBackendError> {
+        self.insert_dynamic_body_with_sensor(state, properties, geometry, config, false)
+    }
+
+    /// Insert a dynamic body whose colliders participate in geometric queries
+    /// but produce no solid solver impulses. Used for articulated wheel tires:
+    /// the tire law owns the terrain reaction, while Rapier integrates the
+    /// wheel body's mass and suspension constraints.
+    pub fn insert_dynamic_sensor_body(
+        &mut self,
+        state: RigidBodyState,
+        properties: RigidBodyProperties,
+        geometry: &CollisionGeometry,
+        config: DynamicBodyConfig,
+    ) -> Result<CollisionBodyId, CollisionBackendError> {
+        self.insert_dynamic_body_with_sensor(state, properties, geometry, config, true)
+    }
+
+    fn insert_dynamic_body_with_sensor(
+        &mut self,
+        state: RigidBodyState,
+        properties: RigidBodyProperties,
+        geometry: &CollisionGeometry,
+        config: DynamicBodyConfig,
+        sensor: bool,
+    ) -> Result<CollisionBodyId, CollisionBackendError> {
         if geometry.is_empty() {
             return Err(CollisionBackendError::InvalidGeometry(
                 "dynamic contact body needs at least one collision part".into(),
@@ -491,6 +576,7 @@ impl CollisionWorld {
                 .density(0.0)
                 .friction(part.material.friction)
                 .restitution(part.material.restitution)
+                .sensor(sensor)
                 .position(Pose::from_parts(
                     to_rapier_vector(part.local_position_m),
                     to_rapier_rotation(part.local_orientation),
@@ -1041,6 +1127,157 @@ impl CollisionWorld {
         Ok(id)
     }
 
+    /// Attach a bounded slider, suitable for a landing-gear strut or another
+    /// telescoping mechanism. Anchors and axes are body-local; limits are
+    /// signed translations along the common slider axis in metres. The caller
+    /// remains responsible for applying the authored spring/damper wrench.
+    #[allow(clippy::too_many_arguments)]
+    pub fn attach_prismatic_joint(
+        &mut self,
+        a: CollisionBodyId,
+        b: CollisionBodyId,
+        anchor_a_local_m: DVec3,
+        anchor_b_local_m: DVec3,
+        axis_a_local: DVec3,
+        axis_b_local: DVec3,
+        limits_m: [f64; 2],
+    ) -> Result<JointId, CollisionBackendError> {
+        if a == b {
+            return Err(CollisionBackendError::InvalidGeometry(
+                "prismatic joint needs two distinct bodies".into(),
+            ));
+        }
+        validate_local_vector(anchor_a_local_m, "prismatic anchor on body A")?;
+        validate_local_vector(anchor_b_local_m, "prismatic anchor on body B")?;
+        if !axis_a_local.is_finite()
+            || axis_a_local.length_squared() <= QUATERNION_TOLERANCE
+            || !axis_b_local.is_finite()
+            || axis_b_local.length_squared() <= QUATERNION_TOLERANCE
+        {
+            return Err(CollisionBackendError::InvalidGeometry(
+                "prismatic axes must be finite and non-zero".into(),
+            ));
+        }
+        if limits_m.iter().any(|limit| !limit.is_finite()) || limits_m[0] > limits_m[1] {
+            return Err(CollisionBackendError::InvalidGeometry(
+                "prismatic limits must be finite and ordered".into(),
+            ));
+        }
+        let handle_a = self
+            .dynamic
+            .get(&a)
+            .ok_or(CollisionBackendError::UnknownBody(a))?
+            .rapier;
+        let handle_b = self
+            .dynamic
+            .get(&b)
+            .ok_or(CollisionBackendError::UnknownBody(b))?
+            .rapier;
+        let joint = PrismaticJointBuilder::new(to_rapier_vector(axis_a_local.normalize()))
+            .local_anchor1(to_rapier_vector(anchor_a_local_m))
+            .local_anchor2(to_rapier_vector(anchor_b_local_m))
+            .local_axis1(to_rapier_vector(axis_a_local.normalize()))
+            .local_axis2(to_rapier_vector(axis_b_local.normalize()))
+            .limits(limits_m)
+            .contacts_enabled(false)
+            .build();
+        let rapier = self.impulse_joints.insert(handle_a, handle_b, joint, true);
+        let id = JointId(self.next_joint_id);
+        self.next_joint_id = self
+            .next_joint_id
+            .checked_add(1)
+            .ok_or(CollisionBackendError::IdentifierExhausted)?;
+        self.joints.insert(id, JointEntry { rapier, a, b });
+        Ok(id)
+    }
+
+    /// Attach a wheel body with two deliberately free degrees of freedom:
+    /// slider translation along the strut and wheel rotation about its axle.
+    /// The caller supplies local axis pairs that are orthogonal within each
+    /// body. Joint coordinates are `LIN_X` for suspension travel and `ANG_Y`
+    /// for wheel spin; stroke limits are signed translations in metres.
+    #[allow(clippy::too_many_arguments)]
+    pub fn attach_suspension_wheel_joint(
+        &mut self,
+        sprung_body: CollisionBodyId,
+        wheel_body: CollisionBodyId,
+        anchor_sprung_local_m: DVec3,
+        anchor_wheel_local_m: DVec3,
+        slide_axis_sprung_local: DVec3,
+        axle_axis_sprung_local: DVec3,
+        slide_axis_wheel_local: DVec3,
+        axle_axis_wheel_local: DVec3,
+        stroke_limits_m: [f64; 2],
+    ) -> Result<JointId, CollisionBackendError> {
+        if sprung_body == wheel_body {
+            return Err(CollisionBackendError::InvalidGeometry(
+                "suspension wheel joint needs two distinct bodies".into(),
+            ));
+        }
+        validate_local_vector(anchor_sprung_local_m, "suspension anchor on sprung body")?;
+        validate_local_vector(anchor_wheel_local_m, "suspension anchor on wheel body")?;
+        if stroke_limits_m.iter().any(|limit| !limit.is_finite())
+            || stroke_limits_m[0] > stroke_limits_m[1]
+        {
+            return Err(CollisionBackendError::InvalidGeometry(
+                "suspension stroke limits must be finite and ordered".into(),
+            ));
+        }
+        let frame_sprung = wheel_joint_frame(
+            slide_axis_sprung_local,
+            axle_axis_sprung_local,
+            "sprung wheel-joint axes",
+        )?;
+        let frame_wheel = wheel_joint_frame(
+            slide_axis_wheel_local,
+            axle_axis_wheel_local,
+            "wheel wheel-joint axes",
+        )?;
+        let sprung_handle = self
+            .dynamic
+            .get(&sprung_body)
+            .ok_or(CollisionBackendError::UnknownBody(sprung_body))?
+            .rapier;
+        let wheel_handle = self
+            .dynamic
+            .get(&wheel_body)
+            .ok_or(CollisionBackendError::UnknownBody(wheel_body))?
+            .rapier;
+        let locked = JointAxesMask::LIN_Y
+            | JointAxesMask::LIN_Z
+            | JointAxesMask::ANG_X
+            | JointAxesMask::ANG_Z;
+        let joint = GenericJointBuilder::new(locked)
+            .local_frame1(Pose::from_parts(
+                to_rapier_vector(anchor_sprung_local_m),
+                to_rapier_rotation(frame_sprung),
+            ))
+            .local_frame2(Pose::from_parts(
+                to_rapier_vector(anchor_wheel_local_m),
+                to_rapier_rotation(frame_wheel),
+            ))
+            .limits(JointAxis::LinX, stroke_limits_m)
+            .contacts_enabled(false)
+            .build();
+        let rapier = self
+            .impulse_joints
+            .insert(sprung_handle, wheel_handle, joint, true);
+        let id = JointId(self.next_joint_id);
+        self.next_joint_id = self
+            .next_joint_id
+            .checked_add(1)
+            .ok_or(CollisionBackendError::IdentifierExhausted)?;
+        self.joints.insert(
+            id,
+            JointEntry {
+                rapier,
+                a: sprung_body,
+                b: wheel_body,
+            },
+        );
+        Ok(id)
+    }
+
     /// Undock a fixed joint. Both bodies keep their solved pose/velocity;
     /// the flight layer re-owns them as independent clusters from here.
     pub fn remove_joint(&mut self, id: JointId) -> Result<(), CollisionBackendError> {
@@ -1254,6 +1491,480 @@ impl CollisionWorld {
         Ok(patches)
     }
 
+    /// Query every wheel station against fixed or kinematic terrain and
+    /// evaluate its tire/strut load and tangent-plane force. `wheel_spin_rad_s`
+    /// carries the caller-owned scalar spin state in each station's authored
+    /// axle direction. The returned wrench can be added to the ordinary
+    /// external loads before [`Self::step`].
+    ///
+    /// The broad phase is the one produced by the preceding Rapier step. This
+    /// is intentional: contact-active callers sync terrain and the vehicle,
+    /// evaluate forces from that same scene, then advance exactly once.
+    pub fn evaluate_articulated_wheel_contacts(
+        &self,
+        sprung_body_id: CollisionBodyId,
+        chassis: &CompiledWheelChassis,
+        bindings: &[ArticulatedWheelBinding],
+    ) -> Result<Vec<ArticulatedWheelForce>, CollisionBackendError> {
+        let sprung_entry = self
+            .dynamic
+            .get(&sprung_body_id)
+            .ok_or(CollisionBackendError::UnknownBody(sprung_body_id))?;
+        let sprung_body = self
+            .bodies
+            .get(sprung_entry.rapier)
+            .ok_or(CollisionBackendError::BackendStateLost(sprung_body_id))?;
+        if bindings.len() != chassis.wheel_stations.len()
+            || bindings
+                .iter()
+                .enumerate()
+                .any(|(index, binding)| usize::from(binding.wheel_index) != index)
+        {
+            return Err(CollisionBackendError::InvalidWheelContact(
+                "articulated wheel bindings must match compiled station order".into(),
+            ));
+        }
+
+        let sprung_position_local = from_rapier_vector(sprung_body.position().translation);
+        let sprung_orientation_local = from_rapier_rotation(sprung_body.position().rotation);
+        let forward_body = chassis.spec.mount_orientation_body * DVec3::X;
+        let query = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.bodies,
+            &self.colliders,
+            QueryFilter::default()
+                .exclude_rigid_body(sprung_entry.rapier)
+                .exclude_sensors(),
+        );
+
+        let max_toi = chassis.spec.strut.extended_length_m
+            + chassis.spec.strut.stroke_m
+            + chassis.spec.tire.radius_m;
+        let mut forces = Vec::with_capacity(bindings.len());
+        for (station, binding) in chassis.wheel_stations.iter().zip(bindings) {
+            let wheel_entry = self
+                .dynamic
+                .get(&binding.wheel_body)
+                .ok_or(CollisionBackendError::UnknownBody(binding.wheel_body))?;
+            let wheel_body = self
+                .bodies
+                .get(wheel_entry.rapier)
+                .ok_or(CollisionBackendError::BackendStateLost(binding.wheel_body))?;
+            let wheel_position_local = from_rapier_vector(wheel_body.position().translation);
+            let wheel_orientation_local = from_rapier_rotation(wheel_body.position().rotation);
+            let down = (sprung_orientation_local * binding.slide_axis_sprung_local).normalize();
+            let axle_axis_local =
+                (wheel_orientation_local * binding.axle_axis_sprung_local).normalize();
+            let nominal_center_local = sprung_position_local
+                + sprung_orientation_local * binding.nominal_center_sprung_local_m;
+            let relative_center_local = wheel_position_local - nominal_center_local;
+            let strut_compression_m =
+                (-relative_center_local.dot(down)).clamp(0.0, chassis.spec.strut.stroke_m);
+            let nominal_center_rapier = to_rapier_vector(nominal_center_local);
+            let wheel_center_rapier = to_rapier_vector(wheel_position_local);
+            let sprung_velocity_at_hub = sprung_body.velocity_at_point(nominal_center_rapier);
+            let wheel_velocity_at_hub = wheel_body.velocity_at_point(wheel_center_rapier);
+            let relative_hub_velocity_local =
+                from_rapier_vector(wheel_velocity_at_hub - sprung_velocity_at_hub);
+            let strut_compression_rate_mps = -relative_hub_velocity_local.dot(down);
+            let strut_load = chassis
+                .spec
+                .strut
+                .axial_force(strut_compression_m, strut_compression_rate_mps)
+                .map_err(|error| CollisionBackendError::InvalidWheelContact(error.to_string()))?;
+
+            // The slider axis points from the chassis mount toward the wheel;
+            // a compressed strut pushes the wheel down and the chassis up.
+            let strut_force_local = down * strut_load.axial_force_n;
+            let mount_local = nominal_center_local - down * chassis.spec.strut.extended_length_m;
+            let wheel_strut_force_inertial = self.frame.vector_to_inertial(strut_force_local);
+            let sprung_strut_force_inertial = -wheel_strut_force_inertial;
+            let sprung_torque_local =
+                (mount_local - sprung_position_local).cross(-strut_force_local);
+            let mut wheel_wrench = ExternalWrench {
+                force_inertial_n: wheel_strut_force_inertial,
+                torque_inertial_nm: DVec3::ZERO,
+            };
+            let sprung_wrench = ExternalWrench {
+                force_inertial_n: sprung_strut_force_inertial,
+                torque_inertial_nm: self.frame.vector_to_inertial(sprung_torque_local),
+            };
+
+            let wheel_center_ray = Ray::new(
+                to_rapier_vector(wheel_position_local),
+                to_rapier_vector(down),
+            );
+            let nearest = query
+                .intersect_ray(wheel_center_ray, max_toi, true)
+                .filter_map(|(handle, collider, hit)| {
+                    let normal = from_rapier_vector(hit.normal);
+                    let alignment = -normal.dot(down);
+                    if alignment <= 1.0e-6 {
+                        return None;
+                    }
+                    if let Some(parent) = collider.parent()
+                        && self
+                            .bodies
+                            .get(parent)
+                            .is_some_and(|body| body.is_dynamic())
+                    {
+                        return None;
+                    }
+                    Some((handle, collider, hit, alignment.min(1.0)))
+                })
+                .min_by(|left, right| left.2.time_of_impact.total_cmp(&right.2.time_of_impact));
+
+            let mut contact = None;
+            if let Some((_, terrain_collider, hit, alignment)) = nearest {
+                let terrain_normal_local = from_rapier_vector(hit.normal).normalize();
+                let contact_point_local = wheel_position_local + down * hit.time_of_impact;
+                let radial_penetration_m =
+                    chassis.spec.tire.radius_m - hit.time_of_impact * alignment;
+                if radial_penetration_m > 0.0 {
+                    let point_rapier = to_rapier_vector(contact_point_local);
+                    let wheel_velocity_local = wheel_body.velocity_at_point(point_rapier);
+                    let terrain_velocity_local = terrain_collider
+                        .parent()
+                        .and_then(|parent| self.bodies.get(parent))
+                        .map(|terrain_body| terrain_body.velocity_at_point(point_rapier))
+                        .unwrap_or_else(|| Vector::new(0.0, 0.0, 0.0));
+                    let relative_velocity_local =
+                        from_rapier_vector(wheel_velocity_local - terrain_velocity_local);
+                    let radial_compression_rate_mps =
+                        -relative_velocity_local.dot(terrain_normal_local);
+                    // The wheel body's pose already includes live strut travel;
+                    // radial overlap is therefore tire deflection directly.
+                    let tire_compression_m = radial_penetration_m;
+                    let tire_compression_rate_mps = radial_compression_rate_mps;
+                    let tire_load = chassis
+                        .spec
+                        .tire
+                        .normal_load(tire_compression_m, tire_compression_rate_mps)
+                        .map_err(|error| {
+                            CollisionBackendError::InvalidWheelContact(error.to_string())
+                        })?;
+
+                    let axle_tangent = axle_axis_local
+                        - terrain_normal_local * axle_axis_local.dot(terrain_normal_local);
+                    let forward_hint_local = sprung_orientation_local * forward_body;
+                    let (mut forward_local, mut lateral_local) = if axle_tangent.length_squared()
+                        > 1.0e-12
+                    {
+                        let lateral = axle_tangent.normalize();
+                        (lateral.cross(terrain_normal_local).normalize(), lateral)
+                    } else {
+                        let projected_forward = forward_hint_local
+                            - terrain_normal_local * forward_hint_local.dot(terrain_normal_local);
+                        let forward = if projected_forward.length_squared() > 1.0e-12 {
+                            projected_forward.normalize()
+                        } else {
+                            let seed = if terrain_normal_local.x.abs() < 0.9 {
+                                DVec3::X
+                            } else {
+                                DVec3::Y
+                            };
+                            (seed - terrain_normal_local * seed.dot(terrain_normal_local))
+                                .normalize()
+                        };
+                        (forward, terrain_normal_local.cross(forward).normalize())
+                    };
+                    if forward_local.dot(forward_hint_local) < 0.0 {
+                        forward_local = -forward_local;
+                        lateral_local = -lateral_local;
+                    }
+                    let contact_friction = chassis
+                        .spec
+                        .tire
+                        .contact_friction(terrain_collider.friction())
+                        .map_err(|error| {
+                            CollisionBackendError::InvalidWheelContact(error.to_string())
+                        })?;
+                    let tangent_force = chassis
+                        .spec
+                        .tire
+                        .tangential_force(
+                            relative_velocity_local.dot(forward_local),
+                            relative_velocity_local.dot(lateral_local),
+                            tire_load.normal_load_n,
+                            contact_friction,
+                        )
+                        .map_err(|error| {
+                            CollisionBackendError::InvalidWheelContact(error.to_string())
+                        })?;
+                    let contact_force_local = terrain_normal_local * tire_load.normal_load_n
+                        + forward_local * tangent_force.longitudinal_force_n
+                        + lateral_local * tangent_force.lateral_force_n;
+                    wheel_wrench.force_inertial_n +=
+                        self.frame.vector_to_inertial(contact_force_local);
+                    wheel_wrench.torque_inertial_nm += self.frame.vector_to_inertial(
+                        (contact_point_local - wheel_position_local).cross(contact_force_local),
+                    );
+                    sprung_wrench.validate()?;
+                    wheel_wrench.validate()?;
+                    let angular_velocity_sprung_local = from_rapier_vector(sprung_body.angvel());
+                    let angular_velocity_wheel_local = from_rapier_vector(wheel_body.angvel());
+                    let spin_rate_rad_s = (angular_velocity_wheel_local
+                        - angular_velocity_sprung_local)
+                        .dot(axle_axis_local);
+                    contact = Some(WheelContactSample {
+                        wheel_index: station.index,
+                        contact_point_inertial_m: self
+                            .frame
+                            .position_to_inertial(contact_point_local),
+                        terrain_normal_inertial: self
+                            .frame
+                            .vector_to_inertial(terrain_normal_local),
+                        forward_axis_inertial: self.frame.vector_to_inertial(forward_local),
+                        lateral_axis_inertial: self.frame.vector_to_inertial(lateral_local),
+                        relative_contact_velocity_inertial_mps: self
+                            .frame
+                            .vector_to_inertial(relative_velocity_local),
+                        radial_penetration_m,
+                        strut_compression_m,
+                        tire_compression_m: tire_load.compression_m,
+                        compression_rate_mps: radial_compression_rate_mps,
+                        normal_load_n: tire_load.normal_load_n,
+                        longitudinal_force_n: tangent_force.longitudinal_force_n,
+                        lateral_force_n: tangent_force.lateral_force_n,
+                        contact_friction,
+                        saturated: strut_load.saturated
+                            || tire_load.saturated
+                            || tangent_force.saturated,
+                    });
+                    forces.push(ArticulatedWheelForce {
+                        wheel_body: binding.wheel_body,
+                        wheel_index: station.index,
+                        spin_rate_rad_s,
+                        contact,
+                        wheel_wrench,
+                        sprung_wrench,
+                    });
+                    continue;
+                }
+            }
+
+            let angular_velocity_sprung_local = from_rapier_vector(sprung_body.angvel());
+            let angular_velocity_wheel_local = from_rapier_vector(wheel_body.angvel());
+            let spin_rate_rad_s =
+                (angular_velocity_wheel_local - angular_velocity_sprung_local).dot(axle_axis_local);
+            wheel_wrench.validate()?;
+            sprung_wrench.validate()?;
+            forces.push(ArticulatedWheelForce {
+                wheel_body: binding.wheel_body,
+                wheel_index: station.index,
+                spin_rate_rad_s,
+                contact,
+                wheel_wrench,
+                sprung_wrench,
+            });
+        }
+        Ok(forces)
+    }
+
+    /// Query every wheel station against fixed or kinematic terrain and
+    /// evaluate its tire/strut load and tangent-plane force. `wheel_spin_rad_s`
+    pub fn evaluate_wheel_contacts(
+        &self,
+        body_id: CollisionBodyId,
+        chassis: &CompiledWheelChassis,
+        wheel_spin_rad_s: &[f64],
+    ) -> Result<WheelContactResult, CollisionBackendError> {
+        let entry = self
+            .dynamic
+            .get(&body_id)
+            .ok_or(CollisionBackendError::UnknownBody(body_id))?;
+        let body = self
+            .bodies
+            .get(entry.rapier)
+            .ok_or(CollisionBackendError::BackendStateLost(body_id))?;
+        if chassis.wheel_stations.len() != usize::from(chassis.spec.wheel_count)
+            || wheel_spin_rad_s.len() != chassis.wheel_stations.len()
+            || wheel_spin_rad_s.iter().any(|speed| !speed.is_finite())
+        {
+            return Err(CollisionBackendError::InvalidWheelContact(
+                "compiled wheel stations and finite spin rates must match wheel_count".into(),
+            ));
+        }
+
+        let root_pose = body.position();
+        let root_position_local = from_rapier_vector(root_pose.translation);
+        let root_orientation_local = from_rapier_rotation(root_pose.rotation);
+        let down_body = chassis.spec.mount_orientation_body * DVec3::NEG_Z;
+        let down_local = (root_orientation_local * down_body).normalize();
+        let forward_body = chassis.spec.mount_orientation_body * DVec3::X;
+        let query = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.bodies,
+            &self.colliders,
+            QueryFilter::default().exclude_rigid_body(entry.rapier),
+        );
+
+        let mut contacts = Vec::with_capacity(chassis.wheel_stations.len());
+        let mut wrench = ExternalWrench::ZERO;
+        let max_toi = chassis.spec.strut.extended_length_m
+            + chassis.spec.strut.stroke_m
+            + chassis.spec.tire.radius_m;
+        for (station, spin_rate_rad_s) in chassis
+            .wheel_stations
+            .iter()
+            .zip(wheel_spin_rad_s.iter().copied())
+        {
+            let wheel_center_local =
+                root_position_local + root_orientation_local * station.position_body_m;
+            let ray = Ray::new(
+                to_rapier_vector(wheel_center_local),
+                to_rapier_vector(down_local),
+            );
+            let nearest = query
+                .intersect_ray(ray, max_toi, true)
+                .filter_map(|(handle, collider, hit)| {
+                    let normal = from_rapier_vector(hit.normal);
+                    let alignment = -normal.dot(down_local);
+                    if alignment <= 1.0e-6 {
+                        return None;
+                    }
+                    if let Some(parent) = collider.parent() {
+                        let terrain_body = self.bodies.get(parent)?;
+                        // Tire forces are one-sided against terrain in this
+                        // slice. Dynamic-body interaction remains Rapier's
+                        // solid-contact responsibility.
+                        if terrain_body.is_dynamic() {
+                            return None;
+                        }
+                    }
+                    Some((handle, collider, hit, alignment.min(1.0)))
+                })
+                .min_by(|left, right| left.2.time_of_impact.total_cmp(&right.2.time_of_impact));
+            let Some((_, terrain_collider, hit, alignment)) = nearest else {
+                continue;
+            };
+
+            let terrain_normal_local = from_rapier_vector(hit.normal).normalize();
+            let contact_point_local = wheel_center_local + down_local * hit.time_of_impact;
+            let radial_penetration_m = chassis.spec.tire.radius_m - hit.time_of_impact * alignment;
+            if radial_penetration_m <= 0.0 {
+                continue;
+            }
+
+            let wheel_velocity_local =
+                body.velocity_at_point(to_rapier_vector(contact_point_local));
+            let terrain_velocity_local = terrain_collider
+                .parent()
+                .and_then(|parent| self.bodies.get(parent))
+                .map(|terrain_body| {
+                    terrain_body.velocity_at_point(to_rapier_vector(contact_point_local))
+                })
+                .unwrap_or_else(|| Vector::new(0.0, 0.0, 0.0));
+            let axle_axis_local = (root_orientation_local * station.axle_axis_body).normalize();
+            let wheel_spin_velocity_local = axle_axis_local
+                .cross(-terrain_normal_local * chassis.spec.tire.radius_m)
+                * spin_rate_rad_s;
+            let relative_velocity_local = from_rapier_vector(wheel_velocity_local)
+                - from_rapier_vector(terrain_velocity_local)
+                + wheel_spin_velocity_local;
+            let compression_rate_mps = -relative_velocity_local.dot(terrain_normal_local);
+            let load = chassis
+                .spec
+                .contact_load(radial_penetration_m, compression_rate_mps, alignment)
+                .map_err(|error| CollisionBackendError::InvalidWheelContact(error.to_string()))?;
+
+            let axle_tangent =
+                axle_axis_local - terrain_normal_local * axle_axis_local.dot(terrain_normal_local);
+            if axle_tangent.length_squared() <= 1.0e-12 {
+                continue;
+            }
+            let mut lateral_local = axle_tangent.normalize();
+            let mut forward_local = lateral_local.cross(terrain_normal_local).normalize();
+            let forward_hint_local = root_orientation_local * forward_body;
+            if forward_local.dot(forward_hint_local) < 0.0 {
+                forward_local = -forward_local;
+                lateral_local = -lateral_local;
+            }
+            let contact_friction = chassis
+                .spec
+                .tire
+                .contact_friction(terrain_collider.friction())
+                .map_err(|error| CollisionBackendError::InvalidWheelContact(error.to_string()))?;
+            let tangent_force = chassis
+                .spec
+                .tire
+                .tangential_force(
+                    relative_velocity_local.dot(forward_local),
+                    relative_velocity_local.dot(lateral_local),
+                    load.normal_load_n,
+                    contact_friction,
+                )
+                .map_err(|error| CollisionBackendError::InvalidWheelContact(error.to_string()))?;
+            let force_local = terrain_normal_local * load.normal_load_n
+                + forward_local * tangent_force.longitudinal_force_n
+                + lateral_local * tangent_force.lateral_force_n;
+            let torque_local = (contact_point_local - root_position_local).cross(force_local);
+            let contact = WheelContactSample {
+                wheel_index: station.index,
+                contact_point_inertial_m: self.frame.position_to_inertial(contact_point_local),
+                terrain_normal_inertial: self.frame.vector_to_inertial(terrain_normal_local),
+                forward_axis_inertial: self.frame.vector_to_inertial(forward_local),
+                lateral_axis_inertial: self.frame.vector_to_inertial(lateral_local),
+                relative_contact_velocity_inertial_mps: self
+                    .frame
+                    .vector_to_inertial(relative_velocity_local),
+                radial_penetration_m,
+                strut_compression_m: load.strut_compression_m,
+                tire_compression_m: load.tire_compression_m,
+                compression_rate_mps,
+                normal_load_n: load.normal_load_n,
+                longitudinal_force_n: tangent_force.longitudinal_force_n,
+                lateral_force_n: tangent_force.lateral_force_n,
+                contact_friction,
+                saturated: load.saturated || tangent_force.saturated,
+            };
+            wrench.force_inertial_n += self.frame.vector_to_inertial(force_local);
+            wrench.torque_inertial_nm += self.frame.vector_to_inertial(torque_local);
+            contacts.push(contact);
+        }
+
+        wrench.validate()?;
+        Ok(WheelContactResult { contacts, wrench })
+    }
+
+    /// Evaluate wheel contacts, add their wrenches to caller-supplied external
+    /// loads, and advance the scene exactly once. Multiple wheel chassis may
+    /// attach to one vehicle body. Each input carries one scalar spin rate per
+    /// wheel station, owned by the caller's authoritative vehicle state.
+    pub fn step_with_wheel_contacts<'a, I, W>(
+        &mut self,
+        step_s: f64,
+        wrenches: I,
+        wheel_chassis: W,
+    ) -> Result<Vec<WheelContactResult>, CollisionBackendError>
+    where
+        I: IntoIterator<Item = (CollisionBodyId, ExternalWrench)>,
+        W: IntoIterator<Item = (CollisionBodyId, &'a CompiledWheelChassis, &'a [f64])>,
+    {
+        let mut accumulated = BTreeMap::new();
+        for (body_id, wrench) in wrenches {
+            wrench.validate()?;
+            if !self.dynamic.contains_key(&body_id) {
+                return Err(CollisionBackendError::UnknownBody(body_id));
+            }
+            if accumulated.insert(body_id, wrench).is_some() {
+                return Err(CollisionBackendError::DuplicateWrench(body_id));
+            }
+        }
+
+        let mut results = Vec::new();
+        for (body_id, chassis, wheel_spin_rad_s) in wheel_chassis {
+            let result = self.evaluate_wheel_contacts(body_id, chassis, wheel_spin_rad_s)?;
+            let accumulated_wrench = accumulated.entry(body_id).or_insert(ExternalWrench::ZERO);
+            accumulated_wrench.force_inertial_n += result.wrench.force_inertial_n;
+            accumulated_wrench.torque_inertial_nm += result.wrench.torque_inertial_nm;
+            accumulated_wrench.validate()?;
+            results.push(result);
+        }
+        self.step(step_s, accumulated)?;
+        Ok(results)
+    }
+
     /// Advance one contact step with an explicit per-body external wrench.
     ///
     /// Every body's previous user force/torque is cleared first, so omitting an
@@ -1403,6 +2114,33 @@ fn validate_local_vector(value: DVec3, label: &str) -> Result<(), CollisionBacke
     Ok(())
 }
 
+fn wheel_joint_frame(
+    slide_axis: DVec3,
+    axle_axis: DVec3,
+    label: &str,
+) -> Result<DQuat, CollisionBackendError> {
+    if !slide_axis.is_finite()
+        || !axle_axis.is_finite()
+        || slide_axis.length_squared() <= QUATERNION_TOLERANCE
+        || axle_axis.length_squared() <= QUATERNION_TOLERANCE
+    {
+        return Err(CollisionBackendError::InvalidGeometry(format!(
+            "{label} must be finite and non-zero"
+        )));
+    }
+    let x = slide_axis.normalize();
+    let axle = axle_axis.normalize();
+    let projected_axle = axle - x * axle.dot(x);
+    if projected_axle.length_squared() <= QUATERNION_TOLERANCE {
+        return Err(CollisionBackendError::InvalidGeometry(format!(
+            "{label} must be orthogonal"
+        )));
+    }
+    let y = projected_axle.normalize();
+    let z = x.cross(y).normalize();
+    Ok(DQuat::from_mat3(&DMat3::from_cols(x, y, z)).normalize())
+}
+
 /// Reject out-of-range triangle indices before touching the mesh builder:
 /// the underlying geometry crate indexes vertices directly and panics on a
 /// bad index instead of returning an error.
@@ -1474,6 +2212,7 @@ pub enum CollisionBackendError {
     InvalidGeometry(String),
     InvalidWrench(String),
     InvalidMassProperties,
+    InvalidWheelContact(String),
     InvalidStep(f64),
     UnknownBody(CollisionBodyId),
     UnknownKinematicBody(KinematicBodyId),
@@ -1497,6 +2236,9 @@ impl fmt::Display for CollisionBackendError {
                 write!(formatter, "invalid collision wrench: {message}")
             }
             Self::InvalidMassProperties => write!(formatter, "invalid rigid-body mass properties"),
+            Self::InvalidWheelContact(message) => {
+                write!(formatter, "invalid wheel contact: {message}")
+            }
             Self::InvalidStep(step) => write!(formatter, "invalid collision step duration: {step}"),
             Self::UnknownBody(id) => write!(formatter, "unknown collision body {}", id.raw()),
             Self::UnknownKinematicBody(id) => {
@@ -1542,7 +2284,10 @@ impl Error for CollisionBackendError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use thessa_sim_core::{CollisionPart, CollisionShape};
+    use thessa_sim_core::{
+        CollisionPart, CollisionShape, TireConstruction, WheelBrakeSpec, WheelChassisSpec,
+        WheelLayout, WheelStrutSpec, WheelTireSpec,
+    };
 
     fn sphere_geometry(radius_m: f64) -> CollisionGeometry {
         CollisionGeometry::new(vec![
@@ -1554,6 +2299,54 @@ mod tests {
             )
             .unwrap(),
         ])
+        .unwrap()
+    }
+
+    fn wheel_chassis() -> CompiledWheelChassis {
+        WheelChassisSpec {
+            name: "query-test-wheel".into(),
+            mount_position_body_m: DVec3::new(0.0, 0.0, 0.7),
+            mount_orientation_body: DQuat::IDENTITY,
+            length_m: 1.0,
+            layout: WheelLayout::Inline,
+            wheel_count: 1,
+            structural_mass_kg: 10.0,
+            structural_inertia_local_kg_m2: DMat3::from_diagonal(DVec3::splat(0.2)),
+            tire: WheelTireSpec {
+                construction: TireConstruction::Pneumatic {
+                    inflation_pressure_pa: 220_000.0,
+                    reference_temperature_k: 293.15,
+                },
+                radius_m: 0.32,
+                width_m: 0.2,
+                mass_kg: 2.0,
+                spin_inertia_kg_m2: 0.08,
+                radial_stiffness_n_m: 200_000.0,
+                radial_damping_n_s_m: 5_000.0,
+                longitudinal_slip_stiffness_n_per_mps: 12_000.0,
+                lateral_slip_stiffness_n_per_mps: 9_000.0,
+                maximum_deflection_m: 0.08,
+                maximum_load_n: 8_000.0,
+                surface_friction: 0.9,
+            },
+            strut: WheelStrutSpec {
+                extended_length_m: 0.4,
+                stroke_m: 0.15,
+                spring_rate_n_m: 30_000.0,
+                damping_n_s_m: 2_000.0,
+                preload_n: 0.0,
+                minimum_force_n: 0.0,
+                maximum_force_n: 10_000.0,
+                mass_per_wheel_kg: 0.5,
+            },
+            brake: WheelBrakeSpec {
+                maximum_torque_nm: 200.0,
+                response_time_s: 0.1,
+                mass_per_wheel_kg: 0.3,
+            },
+            drive: None,
+        }
+        .compile()
         .unwrap()
     }
 
@@ -1632,6 +2425,284 @@ mod tests {
         let solved = world.body_state(id).unwrap();
         assert!((solved.position_inertial_m.y - 0.5).abs() < 0.05);
         assert!(solved.velocity_inertial_mps.length() < 0.2);
+    }
+
+    #[test]
+    fn wheel_query_resolves_tire_strut_load_and_returns_single_contact_wrench() {
+        let mut world =
+            CollisionWorld::new(CollisionFrame::inertial_at(DVec3::ZERO, DVec3::ZERO)).unwrap();
+        world
+            .insert_static_cuboid(
+                DVec3::new(0.0, 0.0, -0.5),
+                DQuat::IDENTITY,
+                DVec3::new(10.0, 10.0, 0.5),
+                CollisionMaterial::new(0.5, 0.0).unwrap(),
+            )
+            .unwrap();
+        let properties =
+            RigidBodyProperties::new(100.0, DMat3::from_diagonal(DVec3::splat(50.0))).unwrap();
+        let state = RigidBodyState::new(
+            DVec3::ZERO,
+            DVec3::new(0.1, 0.0, 0.0),
+            DQuat::IDENTITY,
+            DVec3::ZERO,
+        )
+        .unwrap();
+        let id = world
+            .insert_dynamic_body(
+                state,
+                properties,
+                &CollisionGeometry::new(vec![
+                    CollisionPart::new(
+                        DVec3::Z,
+                        DQuat::IDENTITY,
+                        CollisionShape::Sphere { radius_m: 0.1 },
+                        CollisionMaterial::default(),
+                    )
+                    .unwrap(),
+                ])
+                .unwrap(),
+                DynamicBodyConfig::default(),
+            )
+            .unwrap();
+        world
+            .step(1.0 / 120.0, [(id, ExternalWrench::ZERO)])
+            .unwrap();
+
+        let chassis = wheel_chassis();
+        let result = world.evaluate_wheel_contacts(id, &chassis, &[0.0]).unwrap();
+        assert_eq!(result.contacts.len(), 1);
+        let contact = result.contacts[0];
+        assert!((contact.radial_penetration_m - 0.02).abs() < 1.0e-8);
+        assert!(contact.normal_load_n > 0.0);
+        assert!((contact.contact_friction - 0.7).abs() < 1.0e-12);
+        assert!(contact.longitudinal_force_n < 0.0);
+        assert!(
+            contact.longitudinal_force_n.hypot(contact.lateral_force_n)
+                <= contact.contact_friction * contact.normal_load_n + 1.0e-9
+        );
+        assert!(result.wrench.force_inertial_n.z > 0.0);
+        assert!(result.wrench.force_inertial_n.x < 0.0);
+        assert!(result.wrench.torque_inertial_nm.is_finite());
+
+        let rolling = world
+            .evaluate_wheel_contacts(id, &chassis, &[0.1 / chassis.spec.tire.radius_m])
+            .unwrap();
+        assert!(
+            rolling.contacts[0]
+                .relative_contact_velocity_inertial_mps
+                .x
+                .abs()
+                < 1.0e-10
+        );
+        assert!(rolling.contacts[0].longitudinal_force_n.abs() < 1.0e-8);
+
+        assert!(world.evaluate_wheel_contacts(id, &chassis, &[]).is_err());
+    }
+
+    #[test]
+    fn wheel_query_uses_kinematic_terrain_velocity_for_tire_slip() {
+        let mut world =
+            CollisionWorld::new(CollisionFrame::inertial_at(DVec3::ZERO, DVec3::ZERO)).unwrap();
+        let terrain = world
+            .insert_kinematic_cuboid(
+                DVec3::new(0.0, 0.0, -0.5),
+                DQuat::IDENTITY,
+                DVec3::new(10.0, 10.0, 0.5),
+                CollisionMaterial::default(),
+            )
+            .unwrap();
+        let properties =
+            RigidBodyProperties::new(100.0, DMat3::from_diagonal(DVec3::splat(50.0))).unwrap();
+        let geometry = CollisionGeometry::new(vec![
+            CollisionPart::new(
+                DVec3::Z,
+                DQuat::IDENTITY,
+                CollisionShape::Sphere { radius_m: 0.1 },
+                CollisionMaterial::default(),
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        let body = world
+            .insert_dynamic_body(
+                RigidBodyState::stationary(DVec3::ZERO),
+                properties,
+                &geometry,
+                DynamicBodyConfig::default(),
+            )
+            .unwrap();
+        world
+            .set_next_kinematic_pose(terrain, DVec3::new(0.1, 0.0, -0.5), DQuat::IDENTITY)
+            .unwrap();
+        world.step(0.1, [(body, ExternalWrench::ZERO)]).unwrap();
+
+        let chassis = wheel_chassis();
+        let contact = world
+            .evaluate_wheel_contacts(body, &chassis, &[0.0])
+            .unwrap()
+            .contacts[0];
+        assert!((contact.relative_contact_velocity_inertial_mps.x + 1.0).abs() < 1.0e-10);
+        assert!(contact.longitudinal_force_n > 0.0);
+    }
+
+    #[test]
+    fn articulated_wheel_keeps_tire_deflection_separate_from_strut_travel() {
+        let mut world =
+            CollisionWorld::new(CollisionFrame::inertial_at(DVec3::ZERO, DVec3::ZERO)).unwrap();
+        world
+            .insert_static_cuboid(
+                DVec3::new(0.0, 0.0, -0.5),
+                DQuat::IDENTITY,
+                DVec3::new(10.0, 10.0, 0.5),
+                CollisionMaterial::default(),
+            )
+            .unwrap();
+
+        let mut chassis = wheel_chassis();
+        chassis.spec.mount_position_body_m = DVec3::ZERO;
+        chassis = chassis.spec.clone().compile().unwrap();
+        let station = chassis.wheel_stations[0];
+        let sprung_state = RigidBodyState::stationary(DVec3::new(0.0, 0.0, 0.65));
+        let sprung_geometry = CollisionGeometry::new(vec![
+            CollisionPart::new(
+                DVec3::new(0.0, 0.0, 5.0),
+                DQuat::IDENTITY,
+                CollisionShape::Sphere { radius_m: 0.1 },
+                CollisionMaterial::default(),
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        let sprung = world
+            .insert_dynamic_body(
+                sprung_state,
+                RigidBodyProperties::new(100.0, DMat3::from_diagonal(DVec3::splat(50.0))).unwrap(),
+                &sprung_geometry,
+                DynamicBodyConfig::default(),
+            )
+            .unwrap();
+        let wheel_mass = chassis.wheel_body_mass_properties(0)[0];
+        let wheel_geometry = CollisionGeometry::new(vec![
+            CollisionPart::new(
+                DVec3::ZERO,
+                DQuat::IDENTITY,
+                CollisionShape::Sphere {
+                    radius_m: chassis.spec.tire.radius_m,
+                },
+                CollisionMaterial::default(),
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        let wheel = world
+            .insert_dynamic_sensor_body(
+                RigidBodyState::stationary(
+                    sprung_state.position_inertial_m + station.position_body_m + DVec3::Z * 0.05,
+                ),
+                RigidBodyProperties::new(wheel_mass.mass_kg, wheel_mass.inertia_body_kg_m2)
+                    .unwrap(),
+                &wheel_geometry,
+                DynamicBodyConfig::default(),
+            )
+            .unwrap();
+        world
+            .attach_suspension_wheel_joint(
+                sprung,
+                wheel,
+                station.position_body_m,
+                DVec3::ZERO,
+                DVec3::NEG_Z,
+                station.axle_axis_body,
+                DVec3::NEG_Z,
+                station.axle_axis_body,
+                [-chassis.spec.strut.stroke_m, 0.0],
+            )
+            .unwrap();
+        world.step(1.0 / 120.0, []).unwrap();
+
+        let binding = ArticulatedWheelBinding {
+            wheel_body: wheel,
+            wheel_index: station.index,
+            nominal_center_sprung_local_m: station.position_body_m,
+            slide_axis_sprung_local: DVec3::NEG_Z,
+            axle_axis_sprung_local: station.axle_axis_body,
+        };
+        let result = world
+            .evaluate_articulated_wheel_contacts(sprung, &chassis, &[binding])
+            .unwrap();
+        let contact = result[0].contact.expect("wheel/terrain contact");
+        assert!((contact.strut_compression_m - 0.05).abs() < 1.0e-9);
+        assert!((contact.radial_penetration_m - 0.02).abs() < 1.0e-9);
+        assert!((contact.tire_compression_m - 0.02).abs() < 1.0e-9);
+        assert!(result[0].wheel_wrench.force_inertial_n.z > 0.0);
+        assert!(result[0].sprung_wrench.force_inertial_n.z > 0.0);
+        assert!(
+            (result[0].wheel_wrench.force_inertial_n.z
+                + result[0].sprung_wrench.force_inertial_n.z
+                - contact.normal_load_n)
+                .abs()
+                < 1.0e-9,
+            "strut reaction must cancel internally, leaving only tire contact load"
+        );
+    }
+
+    #[test]
+    fn one_wheel_contact_settles_under_gravity_without_solid_wheel_impulses() {
+        let mut world =
+            CollisionWorld::new(CollisionFrame::inertial_at(DVec3::ZERO, DVec3::ZERO)).unwrap();
+        world
+            .insert_static_cuboid(
+                DVec3::new(0.0, 0.0, -0.5),
+                DQuat::IDENTITY,
+                DVec3::new(10.0, 10.0, 0.5),
+                CollisionMaterial::default(),
+            )
+            .unwrap();
+        let mass_kg = 100.0;
+        let properties =
+            RigidBodyProperties::new(mass_kg, DMat3::from_diagonal(DVec3::splat(50.0))).unwrap();
+        let geometry = CollisionGeometry::new(vec![
+            CollisionPart::new(
+                DVec3::Z,
+                DQuat::IDENTITY,
+                CollisionShape::Sphere { radius_m: 0.1 },
+                CollisionMaterial::default(),
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        let id = world
+            .insert_dynamic_body(
+                RigidBodyState::stationary(DVec3::ZERO),
+                properties,
+                &geometry,
+                DynamicBodyConfig::default(),
+            )
+            .unwrap();
+        let chassis = wheel_chassis();
+        let gravity = ExternalWrench {
+            force_inertial_n: DVec3::new(0.0, 0.0, -9.81 * mass_kg),
+            torque_inertial_nm: DVec3::ZERO,
+        };
+        for _ in 0..1_200 {
+            world
+                .step_with_wheel_contacts(
+                    1.0 / 240.0,
+                    [(id, gravity)],
+                    [(id, &chassis, &[0.0][..])],
+                )
+                .unwrap();
+        }
+        let solved = world.body_state(id).unwrap();
+        let contact = world
+            .evaluate_wheel_contacts(id, &chassis, &[0.0])
+            .unwrap()
+            .contacts[0];
+        assert!((contact.normal_load_n - mass_kg * 9.81).abs() < 0.005 * mass_kg * 9.81);
+        assert!(solved.velocity_inertial_mps.length() < 0.1);
+        assert!(solved.position_inertial_m.z < 0.0);
+        assert!(!contact.saturated);
     }
 
     #[test]
@@ -2033,6 +3104,64 @@ mod joint_and_replay_tests {
             )
             .unwrap();
         (world, a, b)
+    }
+
+    #[test]
+    fn prismatic_joint_keeps_its_anchor_and_enforces_strut_stroke_limits() {
+        let frame = CollisionFrame::inertial_at(DVec3::ZERO, DVec3::ZERO);
+        let mut world = CollisionWorld::new(frame).unwrap();
+        let root_properties =
+            RigidBodyProperties::new(100.0, DMat3::from_diagonal(DVec3::splat(20.0))).unwrap();
+        let wheel_properties =
+            RigidBodyProperties::new(2.0, DMat3::from_diagonal(DVec3::splat(0.2))).unwrap();
+        let geometry = sphere_geometry(0.1);
+        let root = world
+            .insert_dynamic_body(
+                RigidBodyState::stationary(DVec3::ZERO),
+                root_properties,
+                &geometry,
+                DynamicBodyConfig::default(),
+            )
+            .unwrap();
+        let wheel = world
+            .insert_dynamic_body(
+                RigidBodyState::stationary(DVec3::new(0.0, 0.0, -0.5)),
+                wheel_properties,
+                &geometry,
+                DynamicBodyConfig::default(),
+            )
+            .unwrap();
+        let joint = world
+            .attach_prismatic_joint(
+                root,
+                wheel,
+                DVec3::new(0.0, 0.0, -0.5),
+                DVec3::ZERO,
+                DVec3::NEG_Z,
+                DVec3::NEG_Z,
+                [0.0, 0.2],
+            )
+            .unwrap();
+        let push_down = ExternalWrench {
+            force_inertial_n: DVec3::new(0.0, 0.0, -100.0),
+            torque_inertial_nm: DVec3::ZERO,
+        };
+        for _ in 0..600 {
+            world
+                .step(
+                    1.0 / 240.0,
+                    [(root, ExternalWrench::ZERO), (wheel, push_down)],
+                )
+                .unwrap();
+        }
+        let root_state = world.body_state(root).unwrap();
+        let wheel_state = world.body_state(wheel).unwrap();
+        let relative = wheel_state.position_inertial_m - root_state.position_inertial_m;
+        let extension_m = (relative - DVec3::new(0.0, 0.0, -0.5)).dot(DVec3::NEG_Z);
+        assert!((extension_m - 0.2).abs() < 0.02);
+        assert!(world.joint_count() == 1);
+        world.remove_joint(joint).unwrap();
+        assert_eq!(world.joint_count(), 0);
     }
 
     fn d1_craft_geometry(port_x_m: f64) -> CollisionGeometry {

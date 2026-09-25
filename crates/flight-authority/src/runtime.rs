@@ -17,6 +17,7 @@ use std::{
 use glam::{DMat3, DQuat, DVec3};
 use thessa_collision::{
     CollisionDebugSnapshot, CollisionFrame, ContactSummary, DynamicBodyConfig, KinematicBodyId,
+    WheelContactSample,
 };
 use thessa_flight_control::{
     ActuatorDynamics, ControlDemand, DirectionFrame, DirectionTarget, GuidanceIntent,
@@ -28,8 +29,9 @@ use thessa_sim_core::{
     COAST_RAILS_VELOCITY_TOL_MPS, CollisionMaterial, EphemerisFrame, EventScheduler, FlightError,
     FlightForces, FlightStepInput, GravityField, OnRailsCache, PanelAeroModel, PanelSoA,
     RigidBodyState, ScheduledEvent, ScheduledKind, SimTime, TestParticleState,
-    TickIntegratorConfig, VehicleDefinition, WORLD_TICK_S, X15StarterProfile,
-    evaluate_flight_forces_soa, integrate_attitude_step, integrate_rigid_body_step_soa,
+    TickIntegratorConfig, VehicleDefinition, WORLD_TICK_S, WheelBrakeState, WheelDrivePoint,
+    X15StarterProfile, evaluate_flight_forces_soa, integrate_attitude_step,
+    integrate_rigid_body_step_soa,
 };
 use thessa_worldgen_rocky::field::{ObstacleReport, ObstacleTrackCertificate, PlanetField};
 
@@ -375,6 +377,15 @@ pub struct FlightAuthority {
     pub sas_enabled: bool,
     pub rcs_enabled: bool,
     pub gear_down: bool,
+    /// Normalized service-brake command applied to every installed wheel
+    /// brake actuator during contact-active ticks.
+    pub wheel_brake_command: f64,
+    /// Signed traction-motor command; wheel chassis without a drive ignore it.
+    pub wheel_drive_command: f64,
+    wheel_spin_rad_s: Vec<Vec<f64>>,
+    wheel_brake_states: Vec<Vec<WheelBrakeState>>,
+    last_wheel_contacts: Vec<WheelContactSample>,
+    last_wheel_drive_points: Vec<(usize, u16, WheelDrivePoint)>,
     /// Manual body-axis command: pitch, yaw, roll in normalized units.
     pub control_input: DVec3,
     pub surface_input: DVec3,
@@ -732,6 +743,16 @@ impl FlightAuthority {
         let vehicle = x15_vehicle()?;
         let control_reference_geometry = vehicle.aero_geometry.clone();
         let control_deflections_rad = vec![0.0; vehicle.control_surfaces.len()];
+        let wheel_spin_rad_s: Vec<Vec<f64>> = vehicle
+            .wheel_chassis
+            .iter()
+            .map(|chassis| vec![0.0; chassis.wheel_stations.len()])
+            .collect();
+        let wheel_brake_states: Vec<Vec<WheelBrakeState>> = vehicle
+            .wheel_chassis
+            .iter()
+            .map(|chassis| vec![WheelBrakeState::default(); chassis.wheel_stations.len()])
+            .collect();
         let recipe_max_elevation_m: f64 = {
             let recipe: thessa_worldgen_rocky::spec_recipe::SpecRecipe =
                 toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml"))
@@ -792,6 +813,12 @@ impl FlightAuthority {
             sas_enabled: true,
             rcs_enabled: true,
             gear_down: true,
+            wheel_brake_command: 0.0,
+            wheel_drive_command: 0.0,
+            wheel_spin_rad_s,
+            wheel_brake_states,
+            last_wheel_contacts: Vec::new(),
+            last_wheel_drive_points: Vec::new(),
             control_input: DVec3::ZERO,
             surface_input: DVec3::ZERO,
             actuator_saturated: false,
@@ -849,6 +876,54 @@ impl FlightAuthority {
     /// order. `surface_input` remains the normalized requested command.
     pub fn control_deflections_rad(&self) -> &[f64] {
         &self.control_deflections_rad
+    }
+
+    pub fn set_wheel_brake_command(&mut self, command: f64) -> Result<(), FlightError> {
+        if !command.is_finite() || !(0.0..=1.0).contains(&command) {
+            return Err(FlightError::InvalidInput(
+                "wheel brake command must be finite and in [0, 1]".into(),
+            ));
+        }
+        self.wheel_brake_command = command;
+        Ok(())
+    }
+
+    pub fn set_wheel_drive_command(&mut self, command: f64) -> Result<(), FlightError> {
+        if !command.is_finite() || !(-1.0..=1.0).contains(&command) {
+            return Err(FlightError::InvalidInput(
+                "wheel drive command must be finite and in [-1, 1]".into(),
+            ));
+        }
+        self.wheel_drive_command = command;
+        Ok(())
+    }
+
+    pub fn wheel_spin_rates_rad_s(&self) -> &[Vec<f64>] {
+        &self.wheel_spin_rad_s
+    }
+
+    pub fn wheel_brake_states(&self) -> &[Vec<WheelBrakeState>] {
+        &self.wheel_brake_states
+    }
+
+    pub fn wheel_contact_telemetry(&self) -> &[WheelContactSample] {
+        &self.last_wheel_contacts
+    }
+
+    pub fn wheel_drive_telemetry(&self) -> &[(usize, u16, WheelDrivePoint)] {
+        &self.last_wheel_drive_points
+    }
+
+    fn sync_wheel_runtime_state(&mut self) {
+        self.wheel_spin_rad_s
+            .resize_with(self.vehicle.wheel_chassis.len(), Vec::new);
+        self.wheel_brake_states
+            .resize_with(self.vehicle.wheel_chassis.len(), Vec::new);
+        for (index, chassis) in self.vehicle.wheel_chassis.iter().enumerate() {
+            let station_count = chassis.wheel_stations.len();
+            self.wheel_spin_rad_s[index].resize(station_count, 0.0);
+            self.wheel_brake_states[index].resize(station_count, WheelBrakeState::default());
+        }
     }
 
     fn reset_control_surfaces(&mut self) -> Result<(), FlightError> {
@@ -1245,6 +1320,8 @@ impl FlightAuthority {
                 .map_err(|error| FlightError::InvalidInput(format!("contact frame: {error}")))?;
         self.contact = Some(ContactRuntime::new(frame, activation)?);
         self.contact_patch = None;
+        self.last_wheel_contacts.clear();
+        self.last_wheel_drive_points.clear();
         self.rails.invalidate();
         self.scheduler.clear_rails_wakes();
         Ok(())
@@ -1256,6 +1333,8 @@ impl FlightAuthority {
     pub fn disable_contact_mode(&mut self) {
         self.contact = None;
         self.contact_patch = None;
+        self.last_wheel_contacts.clear();
+        self.last_wheel_drive_points.clear();
         self.rails.invalidate();
         self.scheduler.clear_rails_wakes();
     }
@@ -1318,6 +1397,8 @@ impl FlightAuthority {
         }
         if was_active && !active {
             runtime.remove_body()?;
+            self.last_wheel_contacts.clear();
+            self.last_wheel_drive_points.clear();
             if let Some(patch) = self.contact_patch.take() {
                 runtime.evict_kinematic_terrain(patch)?;
             }
@@ -1342,6 +1423,9 @@ impl FlightAuthority {
         band_drag_body_n: DVec3,
         skip_aero: bool,
     ) -> Result<(RigidBodyState, FlightForces), FlightError> {
+        if !self.vehicle.wheel_chassis.is_empty() {
+            self.sync_wheel_runtime_state();
+        }
         let state = self.state;
         let properties = self.vehicle.mass_properties;
         let geometry = self.vehicle.collision_geometry.clone();
@@ -1388,7 +1472,8 @@ impl FlightAuthority {
             CONTACT_PATCH_HALF_M,
         );
         let existing_patch = self.contact_patch;
-        let (next, patch) = {
+        let articulated_wheels = !self.vehicle.wheel_chassis.is_empty();
+        let (next, patch, wheel_contacts, wheel_drive_points) = {
             let runtime = self
                 .contact
                 .as_mut()
@@ -1406,12 +1491,29 @@ impl FlightAuthority {
                 )?,
             };
             runtime.move_kinematic_terrain(patch, center_local, orientation_local)?;
-            runtime.sync_body(state, properties, &geometry, DynamicBodyConfig::default())?;
-            (runtime.step(FLIGHT_STEP_S, wrench)?, patch)
+            let (next, wheel_contacts, wheel_drive_points) = if articulated_wheels {
+                runtime.step_articulated_vehicle(
+                    FLIGHT_STEP_S,
+                    state,
+                    gravity,
+                    &forces,
+                    &self.vehicle,
+                    self.wheel_brake_command,
+                    self.wheel_drive_command,
+                    &mut self.wheel_spin_rad_s,
+                    &mut self.wheel_brake_states,
+                )?
+            } else {
+                runtime.sync_body(state, properties, &geometry, DynamicBodyConfig::default())?;
+                (runtime.step(FLIGHT_STEP_S, wrench)?, Vec::new(), Vec::new())
+            };
+            (next, patch, wheel_contacts, wheel_drive_points)
         };
         if existing_patch.is_none() {
             self.contact_patch = Some(patch);
         }
+        self.last_wheel_contacts = wheel_contacts;
+        self.last_wheel_drive_points = wheel_drive_points;
         Ok((next, forces))
     }
 
@@ -2728,7 +2830,11 @@ impl FlightAuthority {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use thessa_sim_core::{AeroModel, ControlHinge, ControlSurfaceActuator, SystemConfig};
+    use thessa_sim_core::{
+        AeroModel, AirlessWheelStructure, ControlHinge, ControlSurfaceActuator, ElectricMotorSpec,
+        RigidBodyProperties, SystemConfig, TireConstruction, WheelBrakeSpec, WheelChassisSpec,
+        WheelDriveSpec, WheelLayout, WheelStrutSpec, WheelTireSpec,
+    };
 
     struct NeverReadyBakeQueue {
         pending: bool,
@@ -2759,6 +2865,104 @@ mod tests {
         let runtime =
             FlightAuthority::new(&ephemeris, ephemeris.body_id("thessa").unwrap()).unwrap();
         (ephemeris, runtime)
+    }
+
+    fn install_airless_drive(flight: &mut FlightAuthority) {
+        let spec = WheelChassisSpec {
+            name: "authority-regolith-wheel".into(),
+            mount_position_body_m: DVec3::new(0.0, 0.0, -1.05),
+            mount_orientation_body: DQuat::IDENTITY,
+            length_m: 1.0,
+            layout: WheelLayout::Inline,
+            wheel_count: 1,
+            structural_mass_kg: 12.0,
+            structural_inertia_local_kg_m2: DMat3::from_diagonal(DVec3::splat(0.5)),
+            tire: WheelTireSpec {
+                construction: TireConstruction::Airless {
+                    structure: AirlessWheelStructure::Spoked { spoke_count: 24 },
+                    structure_density_kg_m3: 4_400.0,
+                    minimum_temperature_k: 80.0,
+                    maximum_temperature_k: 500.0,
+                },
+                radius_m: 0.32,
+                width_m: 0.18,
+                mass_kg: 3.4,
+                spin_inertia_kg_m2: 0.11,
+                radial_stiffness_n_m: 42_000.0,
+                radial_damping_n_s_m: 1_100.0,
+                longitudinal_slip_stiffness_n_per_mps: 3_000.0,
+                lateral_slip_stiffness_n_per_mps: 2_400.0,
+                maximum_deflection_m: 0.075,
+                maximum_load_n: 2_400.0,
+                surface_friction: 0.85,
+            },
+            strut: WheelStrutSpec {
+                extended_length_m: 0.42,
+                stroke_m: 0.16,
+                spring_rate_n_m: 31_000.0,
+                damping_n_s_m: 2_800.0,
+                preload_n: 80.0,
+                minimum_force_n: 0.0,
+                maximum_force_n: 9_000.0,
+                mass_per_wheel_kg: 0.8,
+            },
+            brake: WheelBrakeSpec {
+                maximum_torque_nm: 95.0,
+                response_time_s: 0.12,
+                mass_per_wheel_kg: 0.4,
+            },
+            drive: Some(WheelDriveSpec {
+                motor: ElectricMotorSpec {
+                    rated_power_w: 20_000.0,
+                    peak_torque_nm: 250.0,
+                    maximum_rpm: 5_000.0,
+                    efficiency: 0.92,
+                    cooling_capacity_w: 4_000.0,
+                    dry_mass_kg: 25.0,
+                },
+                stall_copper_loss_w: 350.0,
+                rotor_inertia_kg_m2: 0.04,
+                final_drive_ratio: 5.0,
+                drivetrain_efficiency: 0.9,
+                driven_wheel_count: 1,
+            }),
+        };
+        let base_mass_kg = flight.vehicle.mass_properties.mass_kg;
+        let uncentered = spec.clone().compile().unwrap();
+        let total_mass_kg = base_mass_kg + uncentered.mass_properties.mass_kg;
+        let assembly_com = uncentered.mass_properties.center_of_mass_body_m
+            * (uncentered.mass_properties.mass_kg / total_mass_kg);
+        flight.vehicle.wheel_chassis = vec![uncentered];
+        flight.vehicle.bake_wheel_chassis_masses().unwrap();
+
+        let shift = -assembly_com;
+        for panel in &mut flight.vehicle.aero_geometry.panels {
+            panel.position_body_m += shift;
+            panel.center_of_pressure_body_m += shift;
+        }
+        for part in &mut flight.vehicle.collision_geometry.parts {
+            part.local_position_m += shift;
+        }
+        for chassis in &mut flight.vehicle.wheel_chassis {
+            chassis.spec.mount_position_body_m += shift;
+            *chassis = chassis.spec.clone().compile().unwrap();
+        }
+        let parallel_axis = total_mass_kg
+            * (DMat3::IDENTITY * assembly_com.length_squared()
+                - DMat3::from_cols(
+                    assembly_com * assembly_com.x,
+                    assembly_com * assembly_com.y,
+                    assembly_com * assembly_com.z,
+                ));
+        flight.vehicle.mass_properties.inertia_body_kg_m2 -= parallel_axis;
+        flight.vehicle.mass_properties = RigidBodyProperties::new(
+            total_mass_kg,
+            flight.vehicle.mass_properties.inertia_body_kg_m2,
+        )
+        .unwrap();
+        flight.aero_panels = PanelSoA::from_geometry(&flight.vehicle.aero_geometry).unwrap();
+        flight.control_reference_geometry = flight.vehicle.aero_geometry.clone();
+        flight.vehicle.validate().unwrap();
     }
 
     #[test]
@@ -3221,6 +3425,60 @@ mod tests {
         );
         let snapshot = flight.contact_snapshot().expect("contact telemetry");
         assert_eq!(snapshot.dynamic_bodies.len(), 1);
+    }
+
+    #[test]
+    fn powered_authority_tick_wires_airless_wheel_state_and_drive() {
+        let (ephemeris, mut flight) = fixture();
+        install_airless_drive(&mut flight);
+        flight.atmosphere.sea_level_pressure_pa = 1.0e-12;
+        assert_eq!(
+            flight.atmosphere.sample(0.0).unwrap().density_kg_m3,
+            0.0,
+            "the wheel-drive regression runs in the declared vacuum path"
+        );
+        let home = ephemeris
+            .body_state(flight.reference_body, SimTime::EPOCH)
+            .unwrap();
+        let up = DVec3::X;
+        let (east, north) = surface_tangent_basis(up).unwrap();
+        let relative = up * (flight.planet_radius_m + 1.85);
+        flight.state = RigidBodyState::new(
+            home.position_inertial + relative,
+            home.velocity_inertial - up * 0.4,
+            DQuat::from_mat3(&DMat3::from_cols(east, north, up)),
+            DVec3::ZERO,
+        )
+        .unwrap();
+        flight.relative_position_m = relative;
+        flight.set_legacy_propulsion(0.0, false);
+        flight.set_wheel_drive_command(1.0).unwrap();
+        flight
+            .enable_contact_mode(20.0, 40.0)
+            .expect("contact mode arms");
+
+        let mut observed_wheel_contact = false;
+        for _ in 0..240 {
+            flight
+                .advance(&ephemeris, ControlMode::Direct, FLIGHT_STEP_S)
+                .expect("powered contact tick");
+            assert!(flight.flight_error.is_none(), "{:?}", flight.flight_error);
+            observed_wheel_contact |= !flight.wheel_contact_telemetry().is_empty();
+            if observed_wheel_contact && flight.wheel_drive_telemetry().len() == 1 {
+                break;
+            }
+        }
+        assert!(flight.contact_active());
+        assert!(observed_wheel_contact, "airless wheel must query terrain");
+        assert_eq!(flight.wheel_spin_rates_rad_s().len(), 1);
+        assert_eq!(flight.wheel_spin_rates_rad_s()[0].len(), 1);
+        assert_eq!(flight.wheel_drive_telemetry().len(), 1);
+        assert!(
+            flight.wheel_drive_telemetry()[0]
+                .2
+                .requested_wheel_torque_per_driven_wheel_nm
+                > 0.0
+        );
     }
 
     #[test]

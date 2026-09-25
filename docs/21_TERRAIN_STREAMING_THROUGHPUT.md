@@ -180,7 +180,11 @@ For landing, a single `height_m(point)` is not enough. When a vehicle actually i
 - uneven terrain;
 - penetration resolution;
 - braking/friction;
-- later suspension and rolling contacts.
+- suspension and rolling contacts, with sprung/unsprung bodies in the local
+  contact-active vehicle model.
+
+The wheel/strut data and tire-contact acceptance contract is documented in
+[`details/05_PROCEDURAL_LANDING_GEAR.md`](details/05_PROCEDURAL_LANDING_GEAR.md).
 
 Target lifecycle:
 

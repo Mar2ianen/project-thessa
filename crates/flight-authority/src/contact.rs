@@ -16,16 +16,42 @@
 
 use glam::{DQuat, DVec3};
 use thessa_collision::{
-    CollisionBodyId, CollisionDebugSnapshot, CollisionFrame, CollisionWorld, ContactSummary,
-    DynamicBodyConfig, ExternalWrench, JointId, KinematicBodyId, StaticColliderId,
+    ArticulatedWheelBinding, CollisionBodyId, CollisionDebugSnapshot, CollisionFrame,
+    CollisionWorld, ContactSummary, DynamicBodyConfig, ExternalWrench, JointId, KinematicBodyId,
+    StaticColliderId, WheelContactResult, WheelContactSample,
 };
 use thessa_sim_core::{
-    CollisionGeometry, CollisionMaterial, FlightError, FlightForces, RigidBodyProperties,
-    RigidBodyState,
+    CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledWheelChassis,
+    FlightError, FlightForces, RigidBodyProperties, RigidBodyState, VehicleDefinition,
+    VehicleWheelMassSplit, WheelBodyMassProperties, WheelBrakeState, WheelDrivePoint,
 };
 
 fn invalid(message: impl Into<String>) -> FlightError {
     FlightError::InvalidInput(message.into())
+}
+
+fn shift_collision_geometry(
+    geometry: &CollisionGeometry,
+    origin_shift_body_m: DVec3,
+) -> Result<CollisionGeometry, FlightError> {
+    let mut shifted = geometry.clone();
+    for part in &mut shifted.parts {
+        part.local_position_m -= origin_shift_body_m;
+    }
+    shifted
+        .validate()
+        .map_err(|error| invalid(format!("sprung collision geometry: {error}")))?;
+    Ok(shifted)
+}
+
+fn add_wrench(
+    wrenches: &mut std::collections::BTreeMap<CollisionBodyId, ExternalWrench>,
+    body: CollisionBodyId,
+    wrench: ExternalWrench,
+) {
+    let accumulated = wrenches.entry(body).or_insert(ExternalWrench::ZERO);
+    accumulated.force_inertial_n += wrench.force_inertial_n;
+    accumulated.torque_inertial_nm += wrench.torque_inertial_nm;
 }
 
 /// Hysteresis policy for the contact-active regime switch.
@@ -227,6 +253,7 @@ fn pair_distance_m(a: &ContactCandidate, b: &ContactCandidate, horizon_s: f64) -
 pub struct ContactRuntime {
     world: CollisionWorld,
     body: Option<ContactBody>,
+    wheel_assembly: Option<ContactWheelAssembly>,
     /// Docking partners (upper stage, visiting vehicle) sharing this scene.
     /// The primary `body` keeps the single-vehicle fast path; partners join
     /// for joint/docking ticks and multi-body contact.
@@ -243,6 +270,22 @@ struct ContactBody {
     config: DynamicBodyConfig,
 }
 
+struct ContactWheelBody {
+    id: CollisionBodyId,
+    chassis_index: usize,
+    wheel_mass: WheelBodyMassProperties,
+}
+
+struct ContactWheelAssembly {
+    total_properties: RigidBodyProperties,
+    mass_split: VehicleWheelMassSplit,
+    chassis: Vec<CompiledWheelChassis>,
+    source_geometry: CollisionGeometry,
+    config: DynamicBodyConfig,
+    wheels: Vec<ContactWheelBody>,
+    bindings_by_chassis: Vec<Vec<ArticulatedWheelBinding>>,
+}
+
 impl ContactRuntime {
     pub fn new(frame: CollisionFrame, activation: ContactActivation) -> Result<Self, FlightError> {
         let world = CollisionWorld::new(frame)
@@ -250,6 +293,7 @@ impl ContactRuntime {
         Ok(Self {
             world,
             body: None,
+            wheel_assembly: None,
             partners: std::collections::BTreeMap::new(),
             activation,
             static_patches: Vec::new(),
@@ -292,6 +336,7 @@ impl ContactRuntime {
         geometry: &CollisionGeometry,
         config: DynamicBodyConfig,
     ) -> Result<CollisionBodyId, FlightError> {
+        self.clear_wheel_assembly()?;
         let mut slot = self.body.take();
         let id = Self::sync_slot(
             &mut self.world,
@@ -310,10 +355,231 @@ impl ContactRuntime {
     }
 
     pub fn remove_body(&mut self) -> Result<(), FlightError> {
+        self.clear_wheel_assembly()?;
         if let Some(previous) = self.body.take() {
             self.world
                 .remove_dynamic_body(previous.id)
                 .map_err(|error| invalid(format!("contact removal: {error}")))?;
+        }
+        Ok(())
+    }
+
+    /// Synchronize a vehicle as one sprung body plus one sensor-only dynamic
+    /// wheel body per station. The total vehicle state remains COM-based;
+    /// unsprung wheel poses are retained between ticks and the sprung pose is
+    /// reconciled from total COM and the live wheel states.
+    fn sync_articulated_vehicle(
+        &mut self,
+        state: RigidBodyState,
+        vehicle: &VehicleDefinition,
+        wheel_spin_rad_s: &[Vec<f64>],
+        config: DynamicBodyConfig,
+    ) -> Result<CollisionBodyId, FlightError> {
+        if vehicle.wheel_chassis.is_empty() {
+            return Err(invalid("articulated sync needs at least one wheel chassis"));
+        }
+        if vehicle.collision_geometry.is_empty() {
+            return Err(invalid(
+                "articulated contact needs compiled sprung-body collision geometry",
+            ));
+        }
+        if wheel_spin_rad_s.len() != vehicle.wheel_chassis.len()
+            || wheel_spin_rad_s
+                .iter()
+                .zip(&vehicle.wheel_chassis)
+                .any(|(rates, chassis)| {
+                    rates.len() != chassis.wheel_stations.len()
+                        || rates.iter().any(|rate| !rate.is_finite())
+                })
+        {
+            return Err(invalid(
+                "wheel spin state must match every compiled wheel station",
+            ));
+        }
+        let needs_rebuild = self.body.is_none()
+            || self.wheel_assembly.as_ref().is_none_or(|assembly| {
+                assembly.total_properties != vehicle.mass_properties
+                    || assembly.chassis != vehicle.wheel_chassis
+                    || assembly.source_geometry != vehicle.collision_geometry
+                    || assembly.config != config
+            });
+        if needs_rebuild {
+            self.clear_wheel_assembly()?;
+            let mass_split = vehicle
+                .wheel_mass_split()
+                .map_err(|error| invalid(format!("wheel mass split: {error}")))?;
+            let sprung_geometry = shift_collision_geometry(
+                &vehicle.collision_geometry,
+                mass_split.sprung_center_of_mass_body_m,
+            )?;
+            let orientation = state.orientation_body_to_inertial;
+            let angular_inertial = orientation * state.angular_velocity_body_rps;
+            let sprung_offset = orientation * mass_split.sprung_center_of_mass_body_m;
+            let sprung_state = RigidBodyState::new(
+                state.position_inertial_m + sprung_offset,
+                state.velocity_inertial_mps + angular_inertial.cross(sprung_offset),
+                orientation,
+                state.angular_velocity_body_rps,
+            )
+            .map_err(|error| invalid(format!("sprung body initialization: {error}")))?;
+            let root_id = Self::sync_slot(
+                &mut self.world,
+                &mut self.body,
+                sprung_state,
+                mass_split.sprung_properties,
+                &sprung_geometry,
+                config,
+            )?;
+
+            let mut wheel_bodies: Vec<ContactWheelBody> =
+                Vec::with_capacity(mass_split.wheels.len());
+            let mut bindings_by_chassis: Vec<Vec<ArticulatedWheelBinding>> = vehicle
+                .wheel_chassis
+                .iter()
+                .map(|chassis| Vec::with_capacity(chassis.wheel_stations.len()))
+                .collect();
+            for (chassis_index, chassis) in vehicle.wheel_chassis.iter().enumerate() {
+                let slide_axis_body = chassis.spec.mount_orientation_body * DVec3::NEG_Z;
+                for station in &chassis.wheel_stations {
+                    let wheel_mass = mass_split
+                        .wheels
+                        .iter()
+                        .find(|wheel| {
+                            wheel.chassis_index == chassis_index
+                                && wheel.wheel_index == station.index
+                        })
+                        .copied()
+                        .ok_or_else(|| invalid("wheel mass split lost a compiled station"))?;
+                    let wheel_properties =
+                        RigidBodyProperties::new(wheel_mass.mass_kg, wheel_mass.inertia_body_kg_m2)
+                            .map_err(|error| invalid(format!("wheel mass properties: {error}")))?;
+                    let wheel_offset = orientation * wheel_mass.center_of_mass_body_m;
+                    let axle_spin = station.axle_axis_body
+                        * wheel_spin_rad_s[chassis_index][usize::from(station.index)];
+                    let wheel_state = RigidBodyState::new(
+                        state.position_inertial_m + wheel_offset,
+                        state.velocity_inertial_mps + angular_inertial.cross(wheel_offset),
+                        orientation,
+                        state.angular_velocity_body_rps + axle_spin,
+                    )
+                    .map_err(|error| invalid(format!("wheel body initialization: {error}")))?;
+                    let wheel_geometry = CollisionGeometry::new(vec![
+                        CollisionPart::new(
+                            DVec3::ZERO,
+                            DQuat::IDENTITY,
+                            CollisionShape::Sphere {
+                                radius_m: chassis.spec.tire.radius_m,
+                            },
+                            CollisionMaterial::new(chassis.spec.tire.surface_friction, 0.0)
+                                .map_err(|error| invalid(format!("wheel material: {error}")))?,
+                        )
+                        .map_err(|error| invalid(format!("wheel sensor geometry: {error}")))?,
+                    ])
+                    .map_err(|error| invalid(format!("wheel sensor geometry: {error}")))?;
+                    let wheel_id = self
+                        .world
+                        .insert_dynamic_sensor_body(
+                            wheel_state,
+                            wheel_properties,
+                            &wheel_geometry,
+                            config,
+                        )
+                        .map_err(|error| invalid(format!("wheel body: {error}")))?;
+                    let nominal_center_sprung_local_m =
+                        station.position_body_m - mass_split.sprung_center_of_mass_body_m;
+                    let anchor_sprung_local_m = nominal_center_sprung_local_m;
+                    let binding = ArticulatedWheelBinding {
+                        wheel_body: wheel_id,
+                        wheel_index: station.index,
+                        nominal_center_sprung_local_m,
+                        slide_axis_sprung_local: slide_axis_body,
+                        axle_axis_sprung_local: station.axle_axis_body,
+                    };
+                    if let Err(error) = self.world.attach_suspension_wheel_joint(
+                        root_id,
+                        wheel_id,
+                        anchor_sprung_local_m,
+                        DVec3::ZERO,
+                        slide_axis_body,
+                        station.axle_axis_body,
+                        slide_axis_body,
+                        station.axle_axis_body,
+                        [-chassis.spec.strut.stroke_m, 0.0],
+                    ) {
+                        self.world.remove_dynamic_body(wheel_id).ok();
+                        for previous in &wheel_bodies {
+                            self.world.remove_dynamic_body(previous.id).ok();
+                        }
+                        self.body = None;
+                        self.world.remove_dynamic_body(root_id).ok();
+                        return Err(invalid(format!("wheel suspension joint: {error}")));
+                    }
+                    wheel_bodies.push(ContactWheelBody {
+                        id: wheel_id,
+                        chassis_index,
+                        wheel_mass,
+                    });
+                    bindings_by_chassis[chassis_index].push(binding);
+                }
+            }
+            self.wheel_assembly = Some(ContactWheelAssembly {
+                total_properties: vehicle.mass_properties,
+                mass_split,
+                chassis: vehicle.wheel_chassis.clone(),
+                source_geometry: vehicle.collision_geometry.clone(),
+                config,
+                wheels: wheel_bodies,
+                bindings_by_chassis,
+            });
+            return Ok(root_id);
+        }
+
+        let assembly = self
+            .wheel_assembly
+            .as_ref()
+            .ok_or_else(|| invalid("wheel assembly disappeared during sync"))?;
+        let total_mass = vehicle.mass_properties.mass_kg;
+        let sprung_mass = assembly.mass_split.sprung_properties.mass_kg;
+        let mut wheel_position_moment = DVec3::ZERO;
+        let mut wheel_velocity_moment = DVec3::ZERO;
+        for wheel in &assembly.wheels {
+            let wheel_state = self
+                .world
+                .body_state(wheel.id)
+                .map_err(|error| invalid(format!("wheel state sync: {error}")))?;
+            wheel_position_moment += wheel_state.position_inertial_m * wheel.wheel_mass.mass_kg;
+            wheel_velocity_moment += wheel_state.velocity_inertial_mps * wheel.wheel_mass.mass_kg;
+        }
+        let sprung_state = RigidBodyState::new(
+            (state.position_inertial_m * total_mass - wheel_position_moment) / sprung_mass,
+            (state.velocity_inertial_mps * total_mass - wheel_velocity_moment) / sprung_mass,
+            state.orientation_body_to_inertial,
+            state.angular_velocity_body_rps,
+        )
+        .map_err(|error| invalid(format!("sprung body reconciliation: {error}")))?;
+        let root_id = self
+            .body
+            .as_ref()
+            .map(|body| body.id)
+            .ok_or_else(|| invalid("articulated sync lost its sprung body"))?;
+        self.world
+            .resync_dynamic_body(
+                root_id,
+                sprung_state,
+                assembly.mass_split.sprung_properties,
+                config,
+            )
+            .map_err(|error| invalid(format!("sprung body resync: {error}")))?;
+        Ok(root_id)
+    }
+
+    fn clear_wheel_assembly(&mut self) -> Result<(), FlightError> {
+        if let Some(assembly) = self.wheel_assembly.take() {
+            for wheel in assembly.wheels {
+                self.world
+                    .remove_dynamic_body(wheel.id)
+                    .map_err(|error| invalid(format!("wheel removal: {error}")))?;
+            }
         }
         Ok(())
     }
@@ -445,6 +711,267 @@ impl ContactRuntime {
         self.world
             .body_state(id)
             .map_err(|error| invalid(format!("contact readback: {error}")))
+    }
+
+    /// Advance one contact-active tick with compiled wheel chassis. Tire and
+    /// strut contact wrenches are evaluated from Rapier terrain queries and
+    /// combined with the caller's external wrench before the sole integration
+    /// step. Wheel-spin rates remain caller-owned state.
+    pub fn step_with_wheel_contacts(
+        &mut self,
+        step_s: f64,
+        wrench: ExternalWrench,
+        wheel_chassis: &[(&CompiledWheelChassis, &[f64])],
+    ) -> Result<(RigidBodyState, Vec<WheelContactResult>), FlightError> {
+        let id = self
+            .body
+            .as_ref()
+            .map(|body| body.id)
+            .ok_or_else(|| invalid("contact step needs a synced body"))?;
+        let contacts = self
+            .world
+            .step_with_wheel_contacts(
+                step_s,
+                [(id, wrench)],
+                wheel_chassis
+                    .iter()
+                    .map(|(chassis, spin_rates)| (id, *chassis, *spin_rates)),
+            )
+            .map_err(|error| invalid(format!("wheel contact step: {error}")))?;
+        let state = self
+            .world
+            .body_state(id)
+            .map_err(|error| invalid(format!("contact readback: {error}")))?;
+        Ok((state, contacts))
+    }
+
+    /// Integrate a vehicle whose wheel chassis have been assembled as
+    /// sprung/unsprung Rapier bodies. External flight loads are applied at the
+    /// total vehicle COM, gravity is distributed by mass, suspension/tire
+    /// forces are applied at their respective bodies, and actuator torques are
+    /// paired so they cannot create net angular momentum.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    pub fn step_articulated_vehicle(
+        &mut self,
+        step_s: f64,
+        state: RigidBodyState,
+        gravity_acceleration_inertial_mps2: DVec3,
+        forces: &FlightForces,
+        vehicle: &VehicleDefinition,
+        brake_command: f64,
+        drive_command: f64,
+        wheel_spin_rad_s: &mut [Vec<f64>],
+        wheel_brake_states: &mut [Vec<WheelBrakeState>],
+    ) -> Result<
+        (
+            RigidBodyState,
+            Vec<WheelContactSample>,
+            Vec<(usize, u16, WheelDrivePoint)>,
+        ),
+        FlightError,
+    > {
+        if !step_s.is_finite()
+            || step_s <= 0.0
+            || !gravity_acceleration_inertial_mps2.is_finite()
+            || !brake_command.is_finite()
+            || !(0.0..=1.0).contains(&brake_command)
+            || !drive_command.is_finite()
+            || !(-1.0..=1.0).contains(&drive_command)
+            || !forces.total_force_inertial_n.is_finite()
+            || !forces.total_moment_body_nm.is_finite()
+            || !(state.orientation_body_to_inertial * forces.total_moment_body_nm).is_finite()
+        {
+            return Err(invalid(
+                "articulated step, wrench, commands and gravity must be finite and in range",
+            ));
+        }
+        if wheel_brake_states.len() != vehicle.wheel_chassis.len()
+            || wheel_brake_states
+                .iter()
+                .zip(&vehicle.wheel_chassis)
+                .any(|(states, chassis)| states.len() != chassis.wheel_stations.len())
+        {
+            return Err(invalid(
+                "wheel brake state must match every compiled wheel station",
+            ));
+        }
+        let root_id = self.sync_articulated_vehicle(
+            state,
+            vehicle,
+            wheel_spin_rad_s,
+            DynamicBodyConfig::default(),
+        )?;
+        let assembly = self
+            .wheel_assembly
+            .as_ref()
+            .ok_or_else(|| invalid("articulated contact lost its wheel assembly"))?;
+        let sprung_state = self
+            .world
+            .body_state(root_id)
+            .map_err(|error| invalid(format!("sprung state readback: {error}")))?;
+
+        let external_force = forces.total_force_inertial_n;
+        let external_torque = state.orientation_body_to_inertial * forces.total_moment_body_nm;
+        let sprung_offset_from_total = state.position_inertial_m - sprung_state.position_inertial_m;
+        let mut wrenches = std::collections::BTreeMap::new();
+        wrenches.insert(
+            root_id,
+            ExternalWrench {
+                force_inertial_n: external_force
+                    + gravity_acceleration_inertial_mps2
+                        * assembly.mass_split.sprung_properties.mass_kg,
+                torque_inertial_nm: external_torque
+                    + sprung_offset_from_total.cross(external_force),
+            },
+        );
+        for wheel in &assembly.wheels {
+            add_wrench(
+                &mut wrenches,
+                wheel.id,
+                ExternalWrench {
+                    force_inertial_n: gravity_acceleration_inertial_mps2 * wheel.wheel_mass.mass_kg,
+                    torque_inertial_nm: DVec3::ZERO,
+                },
+            );
+        }
+
+        let mut contacts = Vec::new();
+        let mut drive_points = Vec::new();
+        for (chassis_index, chassis) in assembly.chassis.iter().enumerate() {
+            let bindings = &assembly.bindings_by_chassis[chassis_index];
+            let wheel_forces = self
+                .world
+                .evaluate_articulated_wheel_contacts(root_id, chassis, bindings)
+                .map_err(|error| invalid(format!("articulated wheel contact: {error}")))?;
+            for wheel_force in wheel_forces {
+                let wheel = assembly
+                    .wheels
+                    .iter()
+                    .find(|wheel| wheel.id == wheel_force.wheel_body)
+                    .ok_or_else(|| invalid("wheel contact returned an unknown body"))?;
+                let wheel_index = usize::from(wheel_force.wheel_index);
+                wheel_spin_rad_s[chassis_index][wheel_index] = wheel_force.spin_rate_rad_s;
+                if let Some(contact) = wheel_force.contact {
+                    contacts.push(contact);
+                }
+                add_wrench(&mut wrenches, root_id, wheel_force.sprung_wrench);
+
+                let wheel_state = self
+                    .world
+                    .body_state(wheel.id)
+                    .map_err(|error| invalid(format!("wheel actuator state: {error}")))?;
+                let axle_axis_inertial =
+                    wheel_state.orientation_body_to_inertial * wheel.wheel_mass.axle_axis_body;
+                let mut drive_torque_nm = 0.0;
+                if let Some(drive) = chassis.drive
+                    && wheel_index < usize::from(drive.driven_wheel_count)
+                {
+                    let point = drive
+                        .operating_point(
+                            wheel_force.spin_rate_rad_s * 60.0 / std::f64::consts::TAU,
+                            drive_command,
+                        )
+                        .map_err(|error| invalid(format!("wheel drive: {error}")))?;
+                    drive_torque_nm = point.requested_wheel_torque_per_driven_wheel_nm;
+                    drive_points.push((chassis_index, wheel_force.wheel_index, point));
+                }
+
+                let brake_state = chassis
+                    .spec
+                    .brake
+                    .advance(
+                        wheel_brake_states[chassis_index][wheel_index],
+                        brake_command,
+                        step_s,
+                    )
+                    .map_err(|error| invalid(format!("wheel brake actuator: {error}")))?;
+                wheel_brake_states[chassis_index][wheel_index] = brake_state;
+                let contact_friction = wheel_force
+                    .contact
+                    .map(|contact| contact.contact_friction)
+                    .unwrap_or(chassis.spec.tire.surface_friction);
+                let normal_load_n = wheel_force
+                    .contact
+                    .map(|contact| contact.normal_load_n)
+                    .unwrap_or(0.0);
+                let brake = chassis
+                    .spec
+                    .brake
+                    .braking_force(
+                        brake_state.applied_fraction,
+                        chassis.spec.tire.radius_m,
+                        normal_load_n,
+                        contact_friction,
+                    )
+                    .map_err(|error| invalid(format!("wheel brake load: {error}")))?;
+                let axle_inertia = wheel
+                    .wheel_mass
+                    .axle_axis_body
+                    .dot(wheel.wheel_mass.inertia_body_kg_m2 * wheel.wheel_mass.axle_axis_body);
+                let tire_torque_nm = wheel_force
+                    .wheel_wrench
+                    .torque_inertial_nm
+                    .dot(axle_axis_inertial);
+                let requested_brake_torque_nm = -axle_inertia * wheel_force.spin_rate_rad_s
+                    / step_s
+                    - tire_torque_nm
+                    - drive_torque_nm;
+                let brake_torque_nm =
+                    requested_brake_torque_nm.clamp(-brake.brake_torque_nm, brake.brake_torque_nm);
+                let actuator_torque = axle_axis_inertial * (drive_torque_nm + brake_torque_nm);
+                let mut wheel_wrench = wheel_force.wheel_wrench;
+                wheel_wrench.torque_inertial_nm += actuator_torque;
+                add_wrench(&mut wrenches, wheel.id, wheel_wrench);
+                add_wrench(
+                    &mut wrenches,
+                    root_id,
+                    ExternalWrench {
+                        force_inertial_n: DVec3::ZERO,
+                        torque_inertial_nm: -actuator_torque,
+                    },
+                );
+            }
+        }
+
+        self.world
+            .step(step_s, wrenches)
+            .map_err(|error| invalid(format!("articulated contact step: {error}")))?;
+        let sprung_next = self
+            .world
+            .body_state(root_id)
+            .map_err(|error| invalid(format!("sprung contact readback: {error}")))?;
+        let assembly = self
+            .wheel_assembly
+            .as_ref()
+            .ok_or_else(|| invalid("articulated contact lost its wheel assembly after step"))?;
+        let total_mass = vehicle.mass_properties.mass_kg;
+        let mut center_position_m =
+            sprung_next.position_inertial_m * assembly.mass_split.sprung_properties.mass_kg;
+        let mut center_velocity_mps =
+            sprung_next.velocity_inertial_mps * assembly.mass_split.sprung_properties.mass_kg;
+        for wheel in &assembly.wheels {
+            let wheel_state = self
+                .world
+                .body_state(wheel.id)
+                .map_err(|error| invalid(format!("wheel contact readback: {error}")))?;
+            center_position_m += wheel_state.position_inertial_m * wheel.wheel_mass.mass_kg;
+            center_velocity_mps += wheel_state.velocity_inertial_mps * wheel.wheel_mass.mass_kg;
+            let wheel_orientation = wheel_state.orientation_body_to_inertial;
+            let sprung_angular_inertial =
+                sprung_next.orientation_body_to_inertial * sprung_next.angular_velocity_body_rps;
+            let wheel_angular_inertial = wheel_orientation * wheel_state.angular_velocity_body_rps;
+            let axle_axis_inertial = wheel_orientation * wheel.wheel_mass.axle_axis_body;
+            wheel_spin_rad_s[wheel.chassis_index][usize::from(wheel.wheel_mass.wheel_index)] =
+                (wheel_angular_inertial - sprung_angular_inertial).dot(axle_axis_inertial);
+        }
+        let next_state = RigidBodyState::new(
+            center_position_m / total_mass,
+            center_velocity_mps / total_mass,
+            sprung_next.orientation_body_to_inertial,
+            sprung_next.angular_velocity_body_rps,
+        )
+        .map_err(|error| invalid(format!("vehicle contact readback: {error}")))?;
+        Ok((next_state, contacts, drive_points))
     }
 
     /// Advance one tick for the primary body plus any synced partners,
@@ -609,7 +1136,11 @@ impl ContactRuntime {
 mod tests {
     use super::*;
     use glam::{DMat3, DQuat, DVec3};
-    use thessa_sim_core::{CollisionMaterial, CollisionPart, CollisionShape, x15_contact_geometry};
+    use thessa_sim_core::{
+        AeroGeometry, AeroResult, AirlessWheelStructure, CollisionMaterial, CollisionPart,
+        CollisionShape, ElectricMotorSpec, TireConstruction, WheelBrakeSpec, WheelChassisSpec,
+        WheelDriveSpec, WheelLayout, WheelStrutSpec, WheelTireSpec, x15_contact_geometry,
+    };
 
     fn test_properties() -> RigidBodyProperties {
         RigidBodyProperties::new(100.0, DMat3::from_diagonal(DVec3::splat(500.0))).unwrap()
@@ -625,6 +1156,113 @@ mod tests {
             activation(),
         )
         .unwrap()
+    }
+
+    fn zero_forces() -> FlightForces {
+        FlightForces {
+            environment: thessa_sim_core::AeroEnvironment::standard_sea_level(),
+            aero: AeroResult {
+                force_body_n: DVec3::ZERO,
+                moment_body_nm: DVec3::ZERO,
+                dynamic_pressure_pa: 0.0,
+                mach: 0.0,
+                reynolds_number: 0.0,
+                panel_count: 0,
+                panel_loads: None,
+            },
+            total_force_body_n: DVec3::ZERO,
+            total_moment_body_nm: DVec3::ZERO,
+            total_force_inertial_n: DVec3::ZERO,
+            acceleration_inertial_mps2: DVec3::ZERO,
+            angular_acceleration_body_rps2: DVec3::ZERO,
+        }
+    }
+
+    fn one_wheel_vehicle(with_drive: bool) -> VehicleDefinition {
+        let body_geometry = CollisionGeometry::new(vec![
+            CollisionPart::new(
+                DVec3::new(0.0, 0.0, 20.0),
+                DQuat::IDENTITY,
+                CollisionShape::Sphere { radius_m: 0.1 },
+                CollisionMaterial::default(),
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        let mut chassis_spec = WheelChassisSpec {
+            name: "test-wheel".into(),
+            mount_position_body_m: DVec3::ZERO,
+            mount_orientation_body: DQuat::IDENTITY,
+            length_m: 1.0,
+            layout: WheelLayout::Inline,
+            wheel_count: 1,
+            structural_mass_kg: 10.0,
+            structural_inertia_local_kg_m2: DMat3::from_diagonal(DVec3::splat(0.2)),
+            tire: WheelTireSpec {
+                construction: TireConstruction::Airless {
+                    structure: AirlessWheelStructure::Spoked { spoke_count: 24 },
+                    structure_density_kg_m3: 4_400.0,
+                    minimum_temperature_k: 80.0,
+                    maximum_temperature_k: 500.0,
+                },
+                radius_m: 0.32,
+                width_m: 0.2,
+                mass_kg: 2.0,
+                spin_inertia_kg_m2: 0.08,
+                radial_stiffness_n_m: 200_000.0,
+                radial_damping_n_s_m: 5_000.0,
+                longitudinal_slip_stiffness_n_per_mps: 12_000.0,
+                lateral_slip_stiffness_n_per_mps: 9_000.0,
+                maximum_deflection_m: 0.08,
+                maximum_load_n: 8_000.0,
+                surface_friction: 0.9,
+            },
+            strut: WheelStrutSpec {
+                extended_length_m: 0.4,
+                stroke_m: 0.15,
+                spring_rate_n_m: 30_000.0,
+                damping_n_s_m: 2_000.0,
+                preload_n: 0.0,
+                minimum_force_n: 0.0,
+                maximum_force_n: 10_000.0,
+                mass_per_wheel_kg: 0.5,
+            },
+            brake: WheelBrakeSpec {
+                maximum_torque_nm: 200.0,
+                response_time_s: 0.0,
+                mass_per_wheel_kg: 0.3,
+            },
+            drive: with_drive.then_some(WheelDriveSpec {
+                motor: ElectricMotorSpec {
+                    rated_power_w: 100_000.0,
+                    peak_torque_nm: 1_000.0,
+                    maximum_rpm: 5_000.0,
+                    efficiency: 0.9,
+                    cooling_capacity_w: 10_000.0,
+                    dry_mass_kg: 10.0,
+                },
+                stall_copper_loss_w: 100.0,
+                rotor_inertia_kg_m2: 0.02,
+                final_drive_ratio: 4.0,
+                drivetrain_efficiency: 0.9,
+                driven_wheel_count: 1,
+            }),
+        };
+        let uncentered = chassis_spec.clone().compile().unwrap();
+        chassis_spec.mount_position_body_m = -uncentered.mass_properties.center_of_mass_body_m;
+        let mut vehicle = VehicleDefinition::new(
+            "articulated-contact-test",
+            AeroGeometry::default(),
+            RigidBodyProperties::new(100.0, DMat3::from_diagonal(DVec3::splat(100.0))).unwrap(),
+            Vec::new(),
+        )
+        .unwrap()
+        .with_collision_geometry(body_geometry)
+        .unwrap()
+        .with_wheel_chassis(vec![chassis_spec])
+        .unwrap();
+        vehicle.bake_wheel_chassis_masses().unwrap();
+        vehicle
     }
 
     #[test]
@@ -696,6 +1334,149 @@ mod tests {
         assert!(next.position_inertial_m.is_finite());
         let snapshot = runtime.debug_snapshot().unwrap();
         assert_eq!(snapshot.dynamic_bodies.len(), 1);
+    }
+
+    #[test]
+    fn articulated_wheel_contacts_ground_and_brake_actuator_stops_spin() {
+        let mut runtime = runtime();
+        runtime
+            .attach_static_patch(
+                DVec3::new(0.0, 0.0, -0.5),
+                DQuat::IDENTITY,
+                DVec3::new(20.0, 20.0, 0.5),
+                CollisionMaterial::new(0.25, 0.0).unwrap(),
+            )
+            .unwrap();
+        let vehicle = one_wheel_vehicle(false);
+        let station = vehicle.wheel_chassis[0].wheel_stations[0];
+        let state = RigidBodyState::new(
+            DVec3::new(
+                0.0,
+                0.0,
+                vehicle.wheel_chassis[0].spec.tire.radius_m + 0.03 - station.position_body_m.z,
+            ),
+            DVec3::new(vehicle.wheel_chassis[0].spec.tire.radius_m * 5.0, 0.0, 0.0),
+            DQuat::IDENTITY,
+            DVec3::ZERO,
+        )
+        .unwrap();
+        let mut wheel_spin = vec![vec![5.0]];
+        let mut brake_states = vec![vec![WheelBrakeState::default()]];
+        let forces = zero_forces();
+        let gravity = DVec3::new(0.0, 0.0, -9.81);
+        let mut next = state;
+        for _ in 0..120 {
+            (next, _, _) = runtime
+                .step_articulated_vehicle(
+                    1.0 / 120.0,
+                    next,
+                    gravity,
+                    &forces,
+                    &vehicle,
+                    0.0,
+                    0.0,
+                    &mut wheel_spin,
+                    &mut brake_states,
+                )
+                .unwrap();
+        }
+        let spin_before_braking = wheel_spin[0][0].abs();
+        assert!(spin_before_braking > 1.0, "wheel should still be rolling");
+        let mut saw_ground_contact = false;
+        for _ in 0..60 {
+            let (solved, contacts, _) = runtime
+                .step_articulated_vehicle(
+                    1.0 / 120.0,
+                    next,
+                    gravity,
+                    &forces,
+                    &vehicle,
+                    1.0,
+                    0.0,
+                    &mut wheel_spin,
+                    &mut brake_states,
+                )
+                .unwrap();
+            next = solved;
+            saw_ground_contact |= contacts.iter().any(|contact| contact.normal_load_n > 0.0);
+        }
+        assert!(saw_ground_contact, "tire law should report terrain load");
+        assert!(
+            wheel_spin[0][0].abs() < spin_before_braking,
+            "service brake should reduce wheel spin"
+        );
+        assert!(next.position_inertial_m.is_finite());
+        assert_eq!(runtime.world.dynamic_body_count(), 2);
+        assert_eq!(runtime.world.joint_count(), 1);
+    }
+
+    #[test]
+    fn articulated_electric_drive_produces_lunar_regolith_traction() {
+        let mut runtime = runtime();
+        runtime
+            .attach_static_patch(
+                DVec3::new(0.0, 0.0, -0.5),
+                DQuat::IDENTITY,
+                DVec3::new(20.0, 20.0, 0.5),
+                CollisionMaterial::new(0.25, 0.0).unwrap(),
+            )
+            .unwrap();
+        let vehicle = one_wheel_vehicle(true);
+        let station = vehicle.wheel_chassis[0].wheel_stations[0];
+        let state = RigidBodyState::new(
+            DVec3::new(
+                0.0,
+                0.0,
+                vehicle.wheel_chassis[0].spec.tire.radius_m - 0.005 - station.position_body_m.z,
+            ),
+            DVec3::ZERO,
+            DQuat::IDENTITY,
+            DVec3::ZERO,
+        )
+        .unwrap();
+        let mut wheel_spin = vec![vec![0.0]];
+        let mut brake_states = vec![vec![WheelBrakeState::default()]];
+        let forces = zero_forces();
+        let gravity = DVec3::new(0.0, 0.0, -1.62);
+        let mut next = state;
+        let mut last_drive_points = Vec::new();
+        let mut regolith_contact = None;
+        for _ in 0..24 {
+            let (solved, contacts, drive_points) = runtime
+                .step_articulated_vehicle(
+                    1.0 / 120.0,
+                    next,
+                    gravity,
+                    &forces,
+                    &vehicle,
+                    0.0,
+                    1.0,
+                    &mut wheel_spin,
+                    &mut brake_states,
+                )
+                .unwrap();
+            next = solved;
+            last_drive_points = drive_points;
+            if let Some(contact) = contacts.iter().find(|contact| contact.normal_load_n > 0.0) {
+                regolith_contact = Some(*contact);
+            }
+        }
+        assert!(next.velocity_inertial_mps.x > 0.05, "state={next:?}");
+        assert!(wheel_spin[0][0] > 0.1, "spin={wheel_spin:?}");
+        assert_eq!(last_drive_points.len(), 1);
+        assert!(
+            last_drive_points[0]
+                .2
+                .requested_wheel_torque_per_driven_wheel_nm
+                > 0.0
+        );
+        let contact = regolith_contact.expect("airless wheel should contact regolith");
+        assert!(contact.longitudinal_force_n > 0.0);
+        assert!((contact.contact_friction - 0.575).abs() < 1.0e-12);
+        assert!(
+            contact.longitudinal_force_n.hypot(contact.lateral_force_n)
+                <= contact.contact_friction * contact.normal_load_n + 1.0e-9
+        );
     }
 
     #[test]

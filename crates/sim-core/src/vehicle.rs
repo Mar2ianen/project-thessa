@@ -6,12 +6,13 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AeroConfig, AeroError, AeroGeometry, AeroPanel, AeroResult, CollisionAxis, CollisionError,
     CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine,
-    ElectricThrusterCommand, ElectricThrusterMount, ElectricThrusterPoint, EngineMount, EstocPoint,
-    FlightCondition, FlightError, FusionTorchCommand, FusionTorchMount, FusionTorchOperatingPoint,
-    JetCommand, JetMount, PropDrivePoint, PropellerDriveCommand, PropellerDriveMount,
-    PropulsionError, PulsedFusionCommand, PulsedFusionMount, PulsedFusionOperatingPoint,
-    PulsedFusionState, RigidBodyProperties, SystemMount, TankMount, TurbopropCommand,
-    TurbopropMount, TurbopropOperatingPoint,
+    CompiledWheelChassis, ElectricThrusterCommand, ElectricThrusterMount, ElectricThrusterPoint,
+    EngineMount, EstocPoint, FlightCondition, FlightError, FusionTorchCommand, FusionTorchMount,
+    FusionTorchOperatingPoint, JetCommand, JetMount, LandingGearError, PropDrivePoint,
+    PropellerDriveCommand, PropellerDriveMount, PropulsionError, PulsedFusionCommand,
+    PulsedFusionMount, PulsedFusionOperatingPoint, PulsedFusionState, RigidBodyProperties,
+    SystemMount, TankMount, TurbopropCommand, TurbopropMount, TurbopropOperatingPoint,
+    WheelBodyMassProperties, WheelChassisMassProperties, WheelChassisSpec,
 };
 
 pub type StatefulTurbopropWrench = (
@@ -318,12 +319,26 @@ pub struct VehicleDefinition {
     /// Installed turbine-propeller drives with stateful core-shaft loading.
     #[serde(default)]
     pub turboprops: Vec<TurbopropMount>,
+    /// Compiled parametric landing-gear and rover-wheel assemblies.
+    /// Empty retains compatibility with older vehicle assets.
+    #[serde(default)]
+    pub wheel_chassis: Vec<CompiledWheelChassis>,
     /// Fold joints compiled from procedural surfaces (hinge placement in
     /// the compiled mechanism state). The force solver ignores them; the
     /// mechanism mixer transforms `fold_index`-tagged panels about these
     /// hinges. Empty keeps every legacy asset valid.
     #[serde(default)]
     pub fold_joints: Vec<FoldJointRecord>,
+}
+
+/// Mass partition for a contact-active sprung chassis and its unsprung wheel
+/// bodies. The baked vehicle frame is the total center of mass;
+/// `sprung_center_of_mass_body_m` gives the sprung-body COM in that frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VehicleWheelMassSplit {
+    pub sprung_properties: RigidBodyProperties,
+    pub sprung_center_of_mass_body_m: DVec3,
+    pub wheels: Vec<WheelBodyMassProperties>,
 }
 
 /// One compiled fold joint: hinge placement plus compiled angle, in
@@ -621,6 +636,7 @@ impl VehicleDefinition {
             pulsed_fusion_systems: Vec::new(),
             propeller_drives: Vec::new(),
             turboprops: Vec::new(),
+            wheel_chassis: Vec::new(),
             fold_joints: Vec::new(),
         };
         definition.validate()?;
@@ -684,6 +700,26 @@ impl VehicleDefinition {
         for mount in &self.turboprops {
             mount.validate().map_err(VehicleError::Propulsion)?;
         }
+        let mut chassis_names = std::collections::HashSet::new();
+        for chassis in &self.wheel_chassis {
+            if !chassis_names.insert(chassis.spec.name.as_str()) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "duplicate wheel chassis name '{}'",
+                    chassis.spec.name
+                )));
+            }
+            let compiled = chassis
+                .spec
+                .clone()
+                .compile()
+                .map_err(VehicleError::LandingGear)?;
+            if !chassis.matches_recompiled(&compiled) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "wheel chassis '{}' has stale compiled data",
+                    chassis.spec.name
+                )));
+            }
+        }
 
         let mut claimed_panels = std::collections::HashSet::new();
         for (surface_index, surface) in self.control_surfaces.iter().enumerate() {
@@ -735,6 +771,106 @@ impl VehicleDefinition {
             }
         }
         Ok(())
+    }
+
+    /// Attach authored wheel-chassis specifications after compiling and
+    /// validating their wheel stations, component laws, and mass properties.
+    pub fn with_wheel_chassis(
+        mut self,
+        wheel_chassis: Vec<WheelChassisSpec>,
+    ) -> Result<Self, VehicleError> {
+        let mut compiled = Vec::with_capacity(wheel_chassis.len());
+        let mut names = std::collections::HashSet::new();
+        for spec in wheel_chassis {
+            if !names.insert(spec.name.clone()) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "duplicate wheel chassis name '{}'",
+                    spec.name
+                )));
+            }
+            compiled.push(spec.compile().map_err(VehicleError::LandingGear)?);
+        }
+        self.wheel_chassis = compiled;
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Add the compiled wheel-chassis dry masses and full inertia tensors to
+    /// the vehicle's base structure properties. Component inertias are
+    /// translated from each chassis center of mass with the parallel-axis
+    /// theorem; wheel spin inertia remains about each wheel axle.
+    pub fn bake_wheel_chassis_masses(&mut self) -> Result<(), VehicleError> {
+        let mut mass_kg = self.mass_properties.mass_kg;
+        let mut inertia_body_kg_m2 = self.mass_properties.inertia_body_kg_m2;
+        for chassis in &self.wheel_chassis {
+            let WheelChassisMassProperties {
+                mass_kg: chassis_mass_kg,
+                center_of_mass_body_m,
+                inertia_body_kg_m2: chassis_inertia_body_kg_m2,
+            } = chassis.mass_properties;
+            mass_kg += chassis_mass_kg;
+            inertia_body_kg_m2 += chassis_inertia_body_kg_m2
+                + chassis_mass_kg
+                    * (glam::DMat3::IDENTITY * center_of_mass_body_m.length_squared()
+                        - outer_product(center_of_mass_body_m, center_of_mass_body_m));
+        }
+        self.mass_properties = RigidBodyProperties::new(mass_kg, inertia_body_kg_m2)
+            .map_err(VehicleError::MassProperties)?;
+        Ok(())
+    }
+
+    /// Split a center-of-mass-baked vehicle into the sprung chassis and
+    /// per-station unsprung wheel bodies. This must be called on the final
+    /// baked vehicle definition, after all component masses and the common
+    /// COM shift have been applied.
+    pub fn wheel_mass_split(&self) -> Result<VehicleWheelMassSplit, VehicleError> {
+        let wheels: Vec<_> = self
+            .wheel_chassis
+            .iter()
+            .enumerate()
+            .flat_map(|(chassis_index, chassis)| chassis.wheel_body_mass_properties(chassis_index))
+            .collect();
+        let unsprung_mass_kg: f64 = wheels.iter().map(|wheel| wheel.mass_kg).sum();
+        let sprung_mass_kg = self.mass_properties.mass_kg - unsprung_mass_kg;
+        if !unsprung_mass_kg.is_finite() || !sprung_mass_kg.is_finite() || sprung_mass_kg <= 1.0e-9
+        {
+            return Err(VehicleError::InvalidVehicle(
+                "wheel mass split leaves no positive sprung chassis mass".into(),
+            ));
+        }
+
+        // The authored vehicle frame is at total COM. Solve the sprung COM
+        // offset from the zero first moment of the complete assembly.
+        let wheel_first_moment: DVec3 = wheels
+            .iter()
+            .map(|wheel| wheel.center_of_mass_body_m * wheel.mass_kg)
+            .sum();
+        let sprung_center_of_mass_body_m = -wheel_first_moment / sprung_mass_kg;
+        let parallel_axis = |mass_kg: f64, position_m: DVec3| {
+            mass_kg
+                * (glam::DMat3::IDENTITY * position_m.length_squared()
+                    - outer_product(position_m, position_m))
+        };
+        let wheel_inertia_about_total_com = wheels.iter().fold(glam::DMat3::ZERO, |sum, wheel| {
+            sum + wheel.inertia_body_kg_m2
+                + parallel_axis(wheel.mass_kg, wheel.center_of_mass_body_m)
+        });
+        let sprung_inertia_about_total_com =
+            self.mass_properties.inertia_body_kg_m2 - wheel_inertia_about_total_com;
+        let sprung_inertia_at_com = sprung_inertia_about_total_com
+            - parallel_axis(sprung_mass_kg, sprung_center_of_mass_body_m);
+        let sprung_properties = RigidBodyProperties::new(sprung_mass_kg, sprung_inertia_at_com)
+            .map_err(VehicleError::MassProperties)?;
+        if !sprung_center_of_mass_body_m.is_finite() {
+            return Err(VehicleError::InvalidVehicle(
+                "wheel mass split produced a non-finite sprung COM".into(),
+            ));
+        }
+        Ok(VehicleWheelMassSplit {
+            sprung_properties,
+            sprung_center_of_mass_body_m,
+            wheels,
+        })
     }
 
     /// Attach compiled engine mounts (baker path; validates the mounts).
@@ -1580,6 +1716,7 @@ pub enum VehicleError {
     Collision(CollisionError),
     MassProperties(FlightError),
     Propulsion(PropulsionError),
+    LandingGear(LandingGearError),
     InvalidControlSurface(String),
     InvalidControlCommand { surface: String, command: f64 },
     ControlCount { expected: usize, actual: usize },
@@ -1600,6 +1737,7 @@ impl fmt::Display for VehicleError {
             Self::Propulsion(error) => {
                 write!(formatter, "vehicle engine error: {error}")
             }
+            Self::LandingGear(error) => write!(formatter, "vehicle landing-gear error: {error}"),
             Self::InvalidControlSurface(message) => {
                 write!(formatter, "invalid control surface: {message}")
             }
@@ -1658,7 +1796,8 @@ mod tests {
         FusionTorchMount, FusionTorchSpec, IntakeKind, JetFuel, PropellerDriveCommand,
         PropellerDriveMount, PropellerDriveSpec, PropellerSpec, PulsedFusionCommand,
         PulsedFusionMount, PulsedFusionSpec, PulsedFusionState, ShaftPowerSourceSpec, ShaftSpec,
-        TurbopropCommand, TurbopropDriveSpec, TurbopropMount,
+        TireConstruction, TurbopropCommand, TurbopropDriveSpec, TurbopropMount, WheelBrakeSpec,
+        WheelChassisSpec, WheelLayout, WheelStrutSpec, WheelTireSpec,
     };
 
     fn test_vehicle() -> VehicleDefinition {
@@ -2115,5 +2254,146 @@ mod tests {
                 .turboprops_wrench_body_n_stateful(&[], &condition)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn wheel_chassis_compiles_into_vehicle_and_bakes_full_mass_inertia() {
+        let base_inertia = glam::DMat3::from_diagonal(DVec3::splat(500.0));
+        let mut vehicle = VehicleDefinition::new(
+            "rover-wheel-mass",
+            AeroGeometry::new(vec![
+                AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+            ])
+            .expect("geometry"),
+            RigidBodyProperties::new(1_000.0, base_inertia).expect("mass"),
+            vec![],
+        )
+        .expect("vehicle");
+        let spec = WheelChassisSpec {
+            name: "front-rover-bogie".into(),
+            mount_position_body_m: DVec3::new(0.2, 0.0, -1.0),
+            mount_orientation_body: DQuat::IDENTITY,
+            length_m: 1.2,
+            layout: WheelLayout::AxlePairs { track_width_m: 0.6 },
+            wheel_count: 2,
+            structural_mass_kg: 8.0,
+            structural_inertia_local_kg_m2: glam::DMat3::from_diagonal(DVec3::splat(0.1)),
+            tire: WheelTireSpec {
+                construction: TireConstruction::Airless {
+                    structure: crate::AirlessWheelStructure::Spoked { spoke_count: 24 },
+                    structure_density_kg_m3: 4_400.0,
+                    minimum_temperature_k: 80.0,
+                    maximum_temperature_k: 500.0,
+                },
+                radius_m: 0.3,
+                width_m: 0.2,
+                mass_kg: 1.0,
+                spin_inertia_kg_m2: 0.05,
+                radial_stiffness_n_m: 20_000.0,
+                radial_damping_n_s_m: 500.0,
+                longitudinal_slip_stiffness_n_per_mps: 2_000.0,
+                lateral_slip_stiffness_n_per_mps: 1_500.0,
+                maximum_deflection_m: 0.06,
+                maximum_load_n: 1_500.0,
+                surface_friction: 0.8,
+            },
+            strut: WheelStrutSpec {
+                extended_length_m: 0.4,
+                stroke_m: 0.12,
+                spring_rate_n_m: 5_000.0,
+                damping_n_s_m: 600.0,
+                preload_n: 30.0,
+                minimum_force_n: 0.0,
+                maximum_force_n: 2_000.0,
+                mass_per_wheel_kg: 0.5,
+            },
+            brake: WheelBrakeSpec {
+                maximum_torque_nm: 100.0,
+                response_time_s: 0.1,
+                mass_per_wheel_kg: 0.2,
+            },
+            drive: Some(crate::WheelDriveSpec {
+                motor: crate::ElectricMotorSpec {
+                    rated_power_w: 8_000.0,
+                    peak_torque_nm: 80.0,
+                    maximum_rpm: 6_000.0,
+                    efficiency: 0.93,
+                    cooling_capacity_w: 1_000.0,
+                    dry_mass_kg: 6.0,
+                },
+                stall_copper_loss_w: 120.0,
+                rotor_inertia_kg_m2: 0.004,
+                final_drive_ratio: 18.0,
+                drivetrain_efficiency: 0.91,
+                driven_wheel_count: 2,
+            }),
+        };
+        vehicle = vehicle
+            .with_wheel_chassis(vec![spec])
+            .expect("wheel chassis compiles");
+        let component = &vehicle.wheel_chassis[0].mass_properties;
+        let expected_mass = 1_000.0 + component.mass_kg;
+        let expected_inertia = base_inertia
+            + component.inertia_body_kg_m2
+            + component.mass_kg
+                * (glam::DMat3::IDENTITY * component.center_of_mass_body_m.length_squared()
+                    - outer_product(
+                        component.center_of_mass_body_m,
+                        component.center_of_mass_body_m,
+                    ));
+        vehicle
+            .bake_wheel_chassis_masses()
+            .expect("wheel mass and inertia bake");
+        assert!((vehicle.mass_properties.mass_kg - expected_mass).abs() < 1.0e-10);
+        for (actual, expected) in vehicle
+            .mass_properties
+            .inertia_body_kg_m2
+            .to_cols_array()
+            .into_iter()
+            .zip(expected_inertia.to_cols_array())
+        {
+            assert!((actual - expected).abs() < 1.0e-9);
+        }
+        vehicle
+            .validate()
+            .expect("compiled wheel chassis validates");
+
+        let split = vehicle.wheel_mass_split().expect("sprung/unsprung split");
+        let parallel_axis = |mass_kg: f64, position_m: DVec3| {
+            mass_kg
+                * (glam::DMat3::IDENTITY * position_m.length_squared()
+                    - outer_product(position_m, position_m))
+        };
+        let split_mass = split.sprung_properties.mass_kg
+            + split.wheels.iter().map(|wheel| wheel.mass_kg).sum::<f64>();
+        assert!((split_mass - vehicle.mass_properties.mass_kg).abs() < 1.0e-10);
+        let split_inertia = split.wheels.iter().fold(
+            split.sprung_properties.inertia_body_kg_m2
+                + parallel_axis(
+                    split.sprung_properties.mass_kg,
+                    split.sprung_center_of_mass_body_m,
+                ),
+            |sum, wheel| {
+                sum + wheel.inertia_body_kg_m2
+                    + parallel_axis(wheel.mass_kg, wheel.center_of_mass_body_m)
+            },
+        );
+        for (actual, expected) in split_inertia
+            .to_cols_array()
+            .into_iter()
+            .zip(vehicle.mass_properties.inertia_body_kg_m2.to_cols_array())
+        {
+            assert!((actual - expected).abs() < 1.0e-9);
+        }
+
+        let mut stale_wheel_station = vehicle.clone();
+        stale_wheel_station.wheel_chassis[0].wheel_stations[0]
+            .position_body_m
+            .x += 1.0e-6;
+        assert!(matches!(
+            stale_wheel_station.validate(),
+            Err(VehicleError::InvalidVehicle(message))
+                if message.contains("stale compiled data")
+        ));
     }
 }

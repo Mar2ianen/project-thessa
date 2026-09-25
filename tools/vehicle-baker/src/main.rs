@@ -19,7 +19,8 @@ use thessa_sim_core::{
     PropellerDriveSpec, PropellerSpec, PropulsionSystemSpec, PulsedFusionMount, PulsedFusionSpec,
     RigidBodyProperties, ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec,
     SystemMount, TankMount, TankShape, TankSpec, TurbopropDriveSpec, TurbopropMount,
-    VehicleDefinition, analyze_airbreathing, analyze_altitude, analyze_estoc,
+    VehicleDefinition, WheelBrakeSpec, WheelChassisSpec, WheelDriveSpec, WheelLayout,
+    WheelStrutSpec, WheelTireSpec, analyze_airbreathing, analyze_altitude, analyze_estoc,
     analyze_propeller_drive, analyze_turboprop_drive,
 };
 
@@ -48,6 +49,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         vehicle.collision_geometry.parts.len()
     );
     println!("mass: {:.3} kg", vehicle.mass_properties.mass_kg);
+    for chassis in &vehicle.wheel_chassis {
+        println!(
+            "wheel chassis {}: {} stations, {:.3} kg",
+            chassis.spec.name,
+            chassis.wheel_stations.len(),
+            chassis.dry_mass_kg(),
+        );
+    }
     for mount in &vehicle.tanks {
         println!(
             "tank: {:.3} m^3 capacity, dry {:.1} kg, loaded {:.0}/{:.0} kg",
@@ -503,6 +512,53 @@ struct VehicleAsset {
     /// Gas turbines coupled to propellers through an explicit power turbine.
     #[serde(default)]
     turboprops: Vec<TurbopropAsset>,
+    /// Parametric aircraft landing gear or rover wheel chassis. Component
+    /// masses participate in the same final center-of-mass bake as mounts.
+    #[serde(default)]
+    wheel_chassis: Vec<WheelChassisAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WheelChassisAsset {
+    name: String,
+    mount_position_body_m: [f64; 3],
+    mount_orientation_body_xyzw: [f64; 4],
+    length_m: f64,
+    layout: WheelLayout,
+    wheel_count: u16,
+    structural_mass_kg: f64,
+    /// Matrix is authored as rows for readability.
+    structural_inertia_local_kg_m2: [[f64; 3]; 3],
+    tire: WheelTireSpec,
+    strut: WheelStrutSpec,
+    brake: WheelBrakeSpec,
+    #[serde(default)]
+    drive: Option<WheelDriveSpec>,
+}
+
+impl WheelChassisAsset {
+    fn bake(self) -> Result<WheelChassisSpec, Box<dyn Error>> {
+        let orientation = DQuat::from_xyzw(
+            self.mount_orientation_body_xyzw[0],
+            self.mount_orientation_body_xyzw[1],
+            self.mount_orientation_body_xyzw[2],
+            self.mount_orientation_body_xyzw[3],
+        );
+        Ok(WheelChassisSpec {
+            name: self.name,
+            mount_position_body_m: vector(self.mount_position_body_m),
+            mount_orientation_body: orientation,
+            length_m: self.length_m,
+            layout: self.layout,
+            wheel_count: self.wheel_count,
+            structural_mass_kg: self.structural_mass_kg,
+            structural_inertia_local_kg_m2: rows_to_matrix(self.structural_inertia_local_kg_m2),
+            tire: self.tire,
+            strut: self.strut,
+            brake: self.brake,
+            drive: self.drive,
+        })
+    }
 }
 
 impl VehicleAsset {
@@ -762,6 +818,16 @@ impl VehicleAsset {
             .into_iter()
             .map(TurbopropAsset::bake)
             .collect::<Result<Vec<_>, _>>()?;
+        let wheel_chassis_specs = self
+            .wheel_chassis
+            .into_iter()
+            .map(WheelChassisAsset::bake)
+            .collect::<Result<Vec<_>, _>>()?;
+        let wheel_chassis_components = wheel_chassis_specs
+            .iter()
+            .cloned()
+            .map(|spec| spec.compile())
+            .collect::<Result<Vec<_>, _>>()?;
         // Assembly center of mass over EVERYTHING: hand mass rides the
         // authoring origin, surfaces/engine/tank/system/jet masses ride
         // their stations. Flight integrates moments about the body
@@ -827,6 +893,11 @@ impl VehicleAsset {
             let mass = mount.drive.dry_mass_kg;
             total_mass_kg += mass;
             total_moment += DVec3::from_array(mount.position_body_m) * mass;
+        }
+        for chassis in &wheel_chassis_components {
+            total_mass_kg += chassis.mass_properties.mass_kg;
+            total_moment +=
+                chassis.mass_properties.center_of_mass_body_m * chassis.mass_properties.mass_kg;
         }
         let assembly_com = if total_mass_kg > 0.0 {
             total_moment / total_mass_kg
@@ -901,7 +972,8 @@ impl VehicleAsset {
             .with_fusion_torches(fusion_torch_mounts)?
             .with_pulsed_fusion_systems(pulsed_fusion_mounts)?
             .with_propeller_drives(propeller_drive_mounts)?
-            .with_turboprops(turboprop_mounts)?;
+            .with_turboprops(turboprop_mounts)?
+            .with_wheel_chassis(wheel_chassis_specs)?;
         vehicle.bake_engine_masses()?;
         vehicle.bake_tank_masses()?;
         vehicle.bake_system_masses()?;
@@ -910,6 +982,7 @@ impl VehicleAsset {
         vehicle.bake_fusion_masses()?;
         vehicle.bake_propeller_drive_masses()?;
         vehicle.bake_turboprop_masses()?;
+        vehicle.bake_wheel_chassis_masses()?;
         for (panel_index, joint) in parked_tags {
             vehicle.aero_geometry.panels[panel_index].fold_index = Some(joint);
         }
@@ -961,6 +1034,14 @@ impl VehicleAsset {
         }
         for mount in &mut vehicle.turboprops {
             shift_array(&mut mount.position_body_m, shift);
+        }
+        for chassis in &mut vehicle.wheel_chassis {
+            chassis.spec.mount_position_body_m += shift;
+            *chassis = chassis
+                .spec
+                .clone()
+                .compile()
+                .map_err(|error| format!("wheel chassis '{}': {error}", chassis.spec.name))?;
         }
         let total = vehicle.mass_properties.mass_kg;
         let recentered =
@@ -2329,6 +2410,149 @@ mod tests {
         let round_trip: VehicleDefinition =
             serde_json::from_str(&json).expect("vehicle JSON should deserialize");
         assert_eq!(round_trip, vehicle);
+    }
+
+    #[test]
+    fn wheel_chassis_asset_bakes_mass_and_recenters_its_mount() {
+        let doc = r#"
+name = "rover-wheel-bake"
+mass_kg = 1000.0
+inertia_body_kg_m2 = [[500.0, 0.0, 0.0], [0.0, 500.0, 0.0], [0.0, 0.0, 500.0]]
+
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 1.0
+chord_m = 1.0
+
+[[wheel_chassis]]
+name = "front-bogie"
+mount_position_body_m = [1.0, 0.0, -0.5]
+mount_orientation_body_xyzw = [0.0, 0.0, 0.0, 1.0]
+length_m = 0.8
+layout = "inline"
+wheel_count = 1
+structural_mass_kg = 8.0
+structural_inertia_local_kg_m2 = [[0.2, 0.0, 0.0], [0.0, 0.2, 0.0], [0.0, 0.0, 0.2]]
+
+[wheel_chassis.tire]
+construction = { kind = "pneumatic", inflation_pressure_pa = 220000.0, reference_temperature_k = 293.15 }
+radius_m = 0.32
+width_m = 0.18
+mass_kg = 3.4
+spin_inertia_kg_m2 = 0.11
+radial_stiffness_n_m = 200000.0
+radial_damping_n_s_m = 10000.0
+longitudinal_slip_stiffness_n_per_mps = 12000.0
+lateral_slip_stiffness_n_per_mps = 9000.0
+maximum_deflection_m = 0.08
+maximum_load_n = 8000.0
+surface_friction = 0.9
+
+[wheel_chassis.strut]
+extended_length_m = 0.4
+stroke_m = 0.15
+spring_rate_n_m = 30000.0
+damping_n_s_m = 2000.0
+preload_n = 0.0
+minimum_force_n = 0.0
+maximum_force_n = 10000.0
+mass_per_wheel_kg = 0.5
+
+[wheel_chassis.brake]
+maximum_torque_nm = 200.0
+response_time_s = 0.1
+mass_per_wheel_kg = 0.3
+
+[wheel_chassis.drive]
+stall_copper_loss_w = 120.0
+rotor_inertia_kg_m2 = 0.004
+final_drive_ratio = 18.0
+drivetrain_efficiency = 0.91
+driven_wheel_count = 1
+
+[wheel_chassis.drive.motor]
+rated_power_w = 1600.0
+peak_torque_nm = 5.0
+maximum_rpm = 12000.0
+efficiency = 0.94
+cooling_capacity_w = 640.0
+dry_mass_kg = 5.0
+"#;
+        let asset: VehicleAsset = toml::from_str(doc).expect("wheel chassis TOML parses");
+        let vehicle = asset.bake().expect("wheel chassis asset bakes");
+        assert_eq!(vehicle.wheel_chassis.len(), 1);
+        assert_eq!(vehicle.wheel_chassis[0].wheel_stations.len(), 1);
+        assert!((vehicle.mass_properties.mass_kg - 1_017.2).abs() < 1.0e-10);
+        assert!(vehicle.wheel_chassis[0].drive.is_some());
+        assert!(vehicle.wheel_chassis[0].spec.mount_position_body_m.x < 1.0);
+        vehicle
+            .validate()
+            .expect("recentered wheel asset validates");
+        let split = vehicle
+            .wheel_mass_split()
+            .expect("recentered vehicle splits into sprung and unsprung masses");
+        assert_eq!(split.wheels.len(), 1);
+        let recovered_mass = split.sprung_properties.mass_kg + split.wheels[0].mass_kg;
+        assert!((recovered_mass - vehicle.mass_properties.mass_kg).abs() < 1.0e-10);
+        let split_com = split.sprung_center_of_mass_body_m * split.sprung_properties.mass_kg
+            + split.wheels[0].center_of_mass_body_m * split.wheels[0].mass_kg;
+        assert!(split_com.length() < 1.0e-10);
+        let recovered_inertia = split.sprung_properties.inertia_body_kg_m2
+            + parallel_axis(
+                split.sprung_properties.mass_kg,
+                split.sprung_center_of_mass_body_m,
+            )
+            + split.wheels[0].inertia_body_kg_m2
+            + parallel_axis(
+                split.wheels[0].mass_kg,
+                split.wheels[0].center_of_mass_body_m,
+            );
+        for (actual, expected) in recovered_inertia
+            .to_cols_array()
+            .into_iter()
+            .zip(vehicle.mass_properties.inertia_body_kg_m2.to_cols_array())
+        {
+            assert!((actual - expected).abs() < 1.0e-8);
+        }
+
+        let json = serde_json::to_string(&vehicle).expect("vehicle JSON serializes");
+        let round_trip: VehicleDefinition =
+            serde_json::from_str(&json).expect("vehicle JSON deserializes");
+        round_trip
+            .validate()
+            .expect("serialized wheel vehicle remains internally consistent");
+        assert_eq!(round_trip.wheel_chassis[0].spec.name, "front-bogie");
+        assert_eq!(
+            round_trip.wheel_chassis[0].wheel_stations.len(),
+            vehicle.wheel_chassis[0].wheel_stations.len()
+        );
+        assert!(
+            (round_trip.mass_properties.mass_kg - vehicle.mass_properties.mass_kg).abs() < 1.0e-12
+        );
+
+        let axle_pair_asset = doc
+            .replace(
+                "layout = \"inline\"",
+                "layout = { axle_pairs = { track_width_m = 0.6 } }",
+            )
+            .replace("wheel_count = 1", "wheel_count = 2");
+        let axle_pair_vehicle: VehicleDefinition = toml::from_str::<VehicleAsset>(&axle_pair_asset)
+            .expect("axle-pair wheel TOML parses")
+            .bake()
+            .expect("axle-pair wheel chassis bakes");
+        assert_eq!(axle_pair_vehicle.wheel_chassis[0].wheel_stations.len(), 2);
+
+        let airless_asset = doc.replace(
+            "construction = { kind = \"pneumatic\", inflation_pressure_pa = 220000.0, reference_temperature_k = 293.15 }",
+            "construction = { kind = \"airless\", structure = { spoked = { spoke_count = 24 } }, structure_density_kg_m3 = 4400.0, minimum_temperature_k = 80.0, maximum_temperature_k = 500.0 }",
+        );
+        let airless_vehicle: VehicleDefinition = toml::from_str::<VehicleAsset>(&airless_asset)
+            .expect("airless wheel TOML parses")
+            .bake()
+            .expect("airless wheel chassis bakes");
+        assert_eq!(airless_vehicle.wheel_chassis.len(), 1);
     }
 
     #[test]

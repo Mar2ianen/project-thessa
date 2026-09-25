@@ -20,6 +20,7 @@ mod gravity_patch;
 mod gravity_tree;
 mod high_speed;
 mod integrator;
+mod landing_gear;
 mod onrails;
 mod propulsion;
 mod scheduler;
@@ -85,6 +86,13 @@ pub use integrator::{
     propagate_sampled_verlet, propagate_sampled_verlet_fast, propagate_sampled_verlet_scaled,
     propagate_velocity_verlet, rtn_basis,
 };
+pub use landing_gear::{
+    AirlessWheelStructure, BrakePoint, CompiledWheelChassis, CompiledWheelDrive, LandingGearError,
+    MAX_WHEELS_PER_CHASSIS, StrutLoadPoint, TireConstruction, TireLoadPoint, TireTangentForcePoint,
+    WheelBodyMassProperties, WheelBrakeSpec, WheelBrakeState, WheelChassisMassProperties,
+    WheelChassisSpec, WheelContactLoadPoint, WheelDrivePoint, WheelDriveSpec,
+    WheelDriveTractionPoint, WheelLayout, WheelStation, WheelStrutSpec, WheelTireSpec,
+};
 pub use onrails::{
     COAST_RAILS_EXTEND_CHUNK, COAST_RAILS_HEAD_STEPS, COAST_RAILS_MAX_STEPS,
     COAST_RAILS_MIN_AHEAD_S, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_STEP_S,
@@ -136,7 +144,7 @@ pub use units::{AU_M, DAY_S, EARTH_MASS_KG, G, JUPITER_MASS_KG, SOLAR_MASS_KG, T
 pub use vehicle::{
     ControlHinge, ControlKind, ControlSurfaceActuator, ControlSurfaceDefinition, FoldJointRecord,
     StatefulPulsedFusionWrench, StatefulTurbopropWrench, VehicleDefinition, VehicleError,
-    X15StarterProfile, x15_contact_geometry,
+    VehicleWheelMassSplit, X15StarterProfile, x15_contact_geometry,
 };
 
 #[cfg(test)]

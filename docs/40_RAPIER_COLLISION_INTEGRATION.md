@@ -1,6 +1,6 @@
 # Rapier collision integration
 
-Status: implementation baseline, 2026-09-17.
+Status: implementation baseline, 2026-09-25.
 
 This document fixes the ownership and frame rules for adding Rapier to the
 Project Thessa authoritative simulation. It is intentionally stricter than a
@@ -257,7 +257,7 @@ state divergence envelope.
 
 ## 11. Current MVP in this branch
 
-Implemented (update 2026-09-17, second slice):
+Implemented (update 2026-09-25):
 
 - workspace `thessa-collision` crate using `rapier3d-f64` 0.35.3;
 - backend-neutral f64/SI collision primitives in `thessa-sim-core`;
@@ -317,7 +317,7 @@ Serial wins on settled scenes: Rayon overhead exceeds the gain once bodies
 sleep, exactly the §8 caveat. Keep `parallel` switchable and re-measure on
 awake/constraint-heavy scenes before choosing scheduler granularity.
 
-Not implemented yet (update 2026-09-17):
+Not implemented yet (update 2026-09-25):
 
 - terrain streaming beyond the single-vehicle producer: the 120 Hz loop
   re-poses one kinematic patch from worldgen every tick and evicts on
@@ -328,6 +328,9 @@ Not implemented yet (update 2026-09-17):
 - per-part wireframe gizmos (craft-anchored patch boxes + body markers +
   normal arrows are in §13 fourth-slice items below and are implemented
   in `apps/client/src/contact_gizmos.rs`).
+- wheel reactions against dynamic bodies and the corresponding equal-and-
+  opposite impulses (current tire queries intentionally accept fixed and
+  kinematic terrain only).
 
 #### Fourth slice — completed in this branch
 
@@ -428,5 +431,25 @@ All items from the §11 MVP and §13 fourth slice are now implemented in this br
 6. ✅ floor/landing and fast-impact regression fixtures — `rapier_resolves_gravity_driven_ground_contact`, `fast_body_does_not_tunnel_through_floor`, `kinematic_terrain_carries_a_landed_body`;
 7. ✅ benchmark — `contacts` bench sweeps 1/8/64/256/1024 active bodies with both `parallel` settings.
 
-The production-shaped continuation is now:
+The articulated wheel-running-gear slice is tracked in
+[`details/05_PROCEDURAL_LANDING_GEAR.md`](details/05_PROCEDURAL_LANDING_GEAR.md):
 
+- ✅ `thessa-sim-core` compiles parametric wheel stations and bakes their mass
+  and inertia into `VehicleDefinition`, then partitions total mass/inertia
+  into a sprung body and per-wheel unsprung bodies;
+- ✅ `thessa-collision` queries fixed/kinematic terrain per wheel, evaluates
+  tire/strut and friction-circle forces, integrates sensor-only wheel bodies
+  through a bounded slider/spin joint, and applies tire and strut loads to the
+  correct unsprung/sprung bodies;
+- ✅ a one-wheel gravity-settling regression checks normal-load balance within
+  0.5% of vehicle weight without a second solid wheel impulse;
+- ✅ kinematic terrain velocity and the positive rolling-spin sign are pinned
+  by known-case tire-slip tests;
+- ✅ `FlightAuthority` steps persistent wheel spin, brake actuator state,
+  optional electric-drive torque and per-wheel contact/drive telemetry;
+- ✅ articulated rolling/braking and airless low-friction terrain regressions
+  exercise the tire friction-circle limit;
+- ✅ release benchmarks sweep 1/4/16/64 wheels for query-only and articulated
+  contact stepping in serial and parallel Rapier modes;
+- 🔵 remaining: dynamic-body wheel/terrain reactions, granular soil sinkage and
+  shear, and representative articulated-fleet benchmarks.

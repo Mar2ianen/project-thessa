@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     CompiledLiquid, CompiledSolid, NozzleContour, Propellant, PropulsionError,
-    SEPARATION_PRESSURE_RATIO, STANDARD_GRAVITY_MPS2, thrust_coefficient,
+    SEPARATION_PRESSURE_RATIO, STANDARD_GRAVITY_MPS2, require_non_negative, require_positive,
+    require_unit_interval, thrust_coefficient,
 };
 
 /// Compiled engine, either family. One representation for simple-mode
@@ -84,6 +85,215 @@ impl CompiledEngine {
         match self {
             Self::Liquid(engine) => engine.spool_tau_s,
             Self::Solid(_) => 0.0,
+        }
+    }
+
+    /// Fail-closed validation of a compiled engine: tampered or
+    /// hand-edited baked data (zero divisors, out-of-range nozzle ratios,
+    /// an empty or truncated burn trace) must be rejected before the
+    /// operating-point formulas can turn it into NaN thrust. Mirrors the
+    /// guarantees `compile()` establishes on the spec path; `EngineMount`
+    /// runs this before every dispatch.
+    pub fn validate(&self) -> Result<(), PropulsionError> {
+        match self {
+            Self::Liquid(engine) => {
+                // Divisors: chamber pressure in the exit-pressure ratio
+                // and thrust coefficient, full flow in Isp, gas constant
+                // and (gamma - 1) in the thermal power, spool tau in the
+                // valve advance.
+                require_positive(engine.chamber_pressure_pa, "engine chamber pressure")?;
+                require_positive(engine.throat_area_m2, "engine throat area")?;
+                require_positive(engine.full_flow_kg_s, "engine full-throttle flow")?;
+                require_positive(engine.gas_constant_j_kg_k, "engine gas constant")?;
+                require_positive(engine.chamber_temp_k, "engine chamber temperature")?;
+                require_positive(engine.spool_tau_s, "engine spool time constant")?;
+                if !engine.gamma.is_finite() || engine.gamma <= 1.0 {
+                    return Err(PropulsionError::InvalidSpec(
+                        "engine gamma must be finite and > 1".into(),
+                    ));
+                }
+                if !engine.expansion_ratio.is_finite() || engine.expansion_ratio < 1.0 {
+                    return Err(PropulsionError::InvalidSpec(
+                        "engine expansion ratio must be finite and >= 1".into(),
+                    ));
+                }
+                // The frozen exit-pressure ratio is the powf base inside
+                // the thrust coefficient's momentum sqrt: a non-positive
+                // base goes NaN, a ratio above 1 takes sqrt of a negative.
+                if !engine.exit_pressure_pa.is_finite()
+                    || engine.exit_pressure_pa <= 0.0
+                    || engine.exit_pressure_pa > engine.chamber_pressure_pa
+                {
+                    return Err(PropulsionError::InvalidSpec(
+                        "engine exit pressure must be finite in (0, chamber pressure]".into(),
+                    ));
+                }
+                if !engine.divergence_factor.is_finite()
+                    || engine.divergence_factor <= 0.0
+                    || engine.divergence_factor > 1.0
+                {
+                    return Err(PropulsionError::InvalidSpec(
+                        "engine divergence factor must be finite in (0, 1]".into(),
+                    ));
+                }
+                if !engine.kinetic_efficiency.is_finite()
+                    || engine.kinetic_efficiency <= 0.0
+                    || engine.kinetic_efficiency > 1.0
+                {
+                    return Err(PropulsionError::InvalidSpec(
+                        "engine kinetic efficiency must be finite in (0, 1]".into(),
+                    ));
+                }
+                require_unit_interval(engine.min_throttle, "engine minimum throttle")?;
+                require_unit_interval(engine.gg_bypass_fraction, "engine gg bypass fraction")?;
+                require_non_negative(engine.exhaust_velocity_mps, "engine exhaust velocity")?;
+                require_non_negative(engine.exit_mach, "engine exit mach")?;
+                require_non_negative(engine.dry_mass_kg, "engine dry mass")?;
+                require_non_negative(engine.gimbal_range_rad, "engine gimbal range")?;
+                // Remaining scalars that reach an operating point, the
+                // plume handoff, or the vehicle mass budget.
+                if [
+                    engine.exit_temp_k,
+                    engine.c_star_mps,
+                    engine.thrust_sl_n,
+                    engine.thrust_vac_n,
+                    engine.isp_sl_s,
+                    engine.isp_vac_s,
+                    engine.gg_thrust_sl_n,
+                    engine.gg_thrust_vac_n,
+                    engine.gg_exit_area_m2,
+                    engine.gg_isp_s,
+                    engine.aerospike_base_area_m2,
+                    engine.nozzle_wall_area_m2,
+                    engine.pump_power_w,
+                    engine.feed_pressure_required_pa,
+                    engine.exit_radius_m,
+                    engine.nozzle_length_m,
+                ]
+                .iter()
+                .any(|value| !value.is_finite())
+                {
+                    return Err(PropulsionError::InvalidSpec(
+                        "compiled liquid engine values must be finite".into(),
+                    ));
+                }
+                Ok(())
+            }
+            Self::Solid(engine) => {
+                require_positive(engine.throat_area_m2, "engine throat area")?;
+                require_positive(engine.gas_constant_j_kg_k, "engine gas constant")?;
+                require_positive(engine.chamber_temp_k, "engine chamber temperature")?;
+                // The burn clock divides propellant into average flow in
+                // the thermal power and gates the burned-out branch.
+                require_positive(engine.burn_time_s, "engine burn time")?;
+                require_non_negative(engine.propellant_mass_kg, "engine propellant mass")?;
+                require_non_negative(engine.exhaust_velocity_mps, "engine exhaust velocity")?;
+                require_non_negative(engine.exit_mach, "engine exit mach")?;
+                require_non_negative(engine.dry_mass_kg, "engine dry mass")?;
+                require_non_negative(engine.gimbal_range_rad, "engine gimbal range")?;
+                if !engine.gamma.is_finite() || engine.gamma <= 1.0 {
+                    return Err(PropulsionError::InvalidSpec(
+                        "engine gamma must be finite and > 1".into(),
+                    ));
+                }
+                if !engine.expansion_ratio.is_finite() || engine.expansion_ratio < 1.0 {
+                    return Err(PropulsionError::InvalidSpec(
+                        "engine expansion ratio must be finite and >= 1".into(),
+                    ));
+                }
+                if !engine.divergence_factor.is_finite()
+                    || engine.divergence_factor <= 0.0
+                    || engine.divergence_factor > 1.0
+                {
+                    return Err(PropulsionError::InvalidSpec(
+                        "engine divergence factor must be finite in (0, 1]".into(),
+                    ));
+                }
+                if [
+                    engine.total_impulse_ns,
+                    engine.avg_isp_s,
+                    engine.peak_pressure_pa,
+                    engine.peak_thrust_sl_n,
+                    engine.c_star_mps,
+                    engine.exit_temp_k,
+                    engine.aerospike_base_area_m2,
+                    engine.throat_radius_m,
+                    engine.exit_radius_m,
+                    engine.grain_outer_radius_m,
+                    engine.grain_length_m,
+                ]
+                .iter()
+                .any(|value| !value.is_finite())
+                {
+                    return Err(PropulsionError::InvalidSpec(
+                        "compiled solid engine values must be finite".into(),
+                    ));
+                }
+                // Burn trace: `interpolate` output divides by chamber
+                // pressure (thrust coefficient) and mass flow (Isp), so
+                // every sample a query can land on must be burning. Only
+                // the terminal burn-through sample may read zero, and it
+                // must sit at or past the burn clock where the
+                // burned-out branch takes over instead.
+                let curve = &engine.burn_curve;
+                let Some(first) = curve.first() else {
+                    return Err(PropulsionError::InvalidSpec(
+                        "solid engine burn curve must not be empty".into(),
+                    ));
+                };
+                if first.chamber_pa <= 0.0 || first.mass_flow_kg_s <= 0.0 {
+                    return Err(PropulsionError::InvalidSpec(
+                        "solid engine must be burning at ignition".into(),
+                    ));
+                }
+                for (index, point) in curve.iter().enumerate() {
+                    if [
+                        point.time_s,
+                        point.web_burned_m,
+                        point.burn_surface_area_m2,
+                        point.port_area_m2,
+                        point.port_perimeter_m,
+                        point.chamber_pa,
+                        point.mass_flow_kg_s,
+                        point.thrust_sl_n,
+                        point.thrust_vac_n,
+                    ]
+                    .iter()
+                    .any(|value| !value.is_finite())
+                    {
+                        return Err(PropulsionError::InvalidSpec(
+                            "solid burn curve points must be finite".into(),
+                        ));
+                    }
+                    if point.time_s < 0.0 || point.chamber_pa < 0.0 || point.mass_flow_kg_s < 0.0 {
+                        return Err(PropulsionError::InvalidSpec(
+                            "solid burn curve points must be non-negative".into(),
+                        ));
+                    }
+                    if index > 0 && point.time_s < curve[index - 1].time_s {
+                        return Err(PropulsionError::InvalidSpec(
+                            "solid burn curve time must be non-decreasing".into(),
+                        ));
+                    }
+                    if index + 1 < curve.len()
+                        && (point.chamber_pa <= 0.0 || point.mass_flow_kg_s <= 0.0)
+                    {
+                        return Err(PropulsionError::InvalidSpec(
+                            "solid burn curve must stay lit between ignition and burn-through"
+                                .into(),
+                        ));
+                    }
+                }
+                let last = curve.last().expect("non-empty burn curve");
+                if (last.chamber_pa <= 0.0 || last.mass_flow_kg_s <= 0.0)
+                    && last.time_s < engine.burn_time_s
+                {
+                    return Err(PropulsionError::InvalidSpec(
+                        "solid burn-through sample must reach the burn clock".into(),
+                    ));
+                }
+                Ok(())
+            }
         }
     }
 
@@ -228,7 +438,13 @@ impl CompiledEngine {
             }
             Self::Solid(engine) => {
                 let cp = engine.gamma * engine.gas_constant_j_kg_k / (engine.gamma - 1.0);
-                let avg_flow_kg_s = engine.propellant_mass_kg / engine.burn_time_s;
+                // A motor with no burn duration releases no time-averaged
+                // power; never divide by zero (NaN fails closed to 0 too).
+                let avg_flow_kg_s = if engine.burn_time_s > 0.0 {
+                    engine.propellant_mass_kg / engine.burn_time_s
+                } else {
+                    0.0
+                };
                 avg_flow_kg_s * cp * engine.chamber_temp_k
             }
         }
@@ -245,7 +461,13 @@ impl CompiledEngine {
                     * engine.exhaust_velocity_mps
             }
             Self::Solid(engine) => {
-                let avg_flow_kg_s = engine.propellant_mass_kg / engine.burn_time_s;
+                // Same guard as `chamber_power_w`: zero-duration motors
+                // give zero average flow, never an infinite power.
+                let avg_flow_kg_s = if engine.burn_time_s > 0.0 {
+                    engine.propellant_mass_kg / engine.burn_time_s
+                } else {
+                    0.0
+                };
                 0.5 * avg_flow_kg_s * engine.exhaust_velocity_mps * engine.exhaust_velocity_mps
             }
         }
@@ -420,5 +642,138 @@ mod tests {
         }
         assert_eq!(solid.propellant_remaining_kg(burn_time), Some(0.0));
         assert_eq!(solid.propellant_remaining_kg(burn_time + 100.0), Some(0.0));
+    }
+
+    /// A clean bake must validate; each tampered divisor/range that the
+    /// operating-point formulas would turn into NaN thrust must not.
+    #[test]
+    fn compiled_liquid_validate_rejects_tampered_fields() {
+        let clean = CompiledEngine::Liquid(merlin_like().compile().expect("compile"));
+        clean.validate().expect("clean bake validates");
+
+        let CompiledEngine::Liquid(mut tampered) = clean.clone() else {
+            panic!("liquid variant");
+        };
+        let original_chamber_pa = tampered.chamber_pressure_pa;
+        // Zero chamber pressure feeds the exit-pressure ratio (division)
+        // and the thrust coefficient.
+        tampered.chamber_pressure_pa = 0.0;
+        assert!(matches!(
+            CompiledEngine::Liquid(tampered.clone()).validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+        // NaN instead of a zero: `require_*` helpers reject both.
+        tampered.chamber_pressure_pa = f64::NAN;
+        assert!(matches!(
+            CompiledEngine::Liquid(tampered.clone()).validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+        tampered.chamber_pressure_pa = original_chamber_pa;
+        // Full flow divides thrust into Isp.
+        tampered.full_flow_kg_s = 0.0;
+        assert!(matches!(
+            CompiledEngine::Liquid(tampered.clone()).validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+        tampered.full_flow_kg_s = 100.0;
+        // gamma - 1 divides in the thrust coefficient and thermal power.
+        tampered.gamma = 1.0;
+        assert!(matches!(
+            CompiledEngine::Liquid(tampered.clone()).validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+        tampered.gamma = 1.4;
+        // Exit above chamber inverts the momentum sqrt term.
+        tampered.exit_pressure_pa = tampered.chamber_pressure_pa * 1.5;
+        assert!(matches!(
+            CompiledEngine::Liquid(tampered.clone()).validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+        tampered.exit_pressure_pa = tampered.chamber_pressure_pa * 0.1;
+        // Unit-interval fields gate throttling and GG thrust.
+        tampered.min_throttle = 1.5;
+        assert!(matches!(
+            CompiledEngine::Liquid(tampered.clone()).validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+        tampered.min_throttle = 0.5;
+        tampered.gg_bypass_fraction = f64::NAN;
+        assert!(matches!(
+            CompiledEngine::Liquid(tampered).validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+    }
+
+    #[test]
+    fn compiled_solid_validate_rejects_tampered_trace() {
+        let clean = CompiledEngine::Solid(probe_solid());
+        clean.validate().expect("clean bake validates");
+
+        let CompiledEngine::Solid(mut tampered) = clean.clone() else {
+            panic!("solid variant");
+        };
+        let original_burn_time_s = tampered.burn_time_s;
+        let original_curve = tampered.burn_curve.clone();
+        // The burn clock divides propellant into average flow.
+        tampered.burn_time_s = 0.0;
+        assert!(matches!(
+            CompiledEngine::Solid(tampered.clone()).validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+        tampered.burn_time_s = original_burn_time_s;
+        // An empty trace makes `interpolate` return zeros: chamber
+        // pressure zero divides in the thrust coefficient.
+        tampered.burn_curve.clear();
+        assert!(matches!(
+            CompiledEngine::Solid(tampered.clone()).validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+        tampered.burn_curve = original_curve.clone();
+        // A dark sample in the middle of the trace is reachable by an
+        // exact-time query and would divide by zero.
+        tampered.burn_curve[1].chamber_pa = 0.0;
+        assert!(matches!(
+            CompiledEngine::Solid(tampered.clone()).validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+        tampered.burn_curve[1].chamber_pa = original_curve[1].chamber_pa;
+        // NaN anywhere in the trace is not a physical burn state.
+        tampered.burn_curve[0].mass_flow_kg_s = f64::NAN;
+        assert!(matches!(
+            CompiledEngine::Solid(tampered.clone()).validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+        tampered.burn_curve = original_curve;
+        CompiledEngine::Solid(tampered)
+            .validate()
+            .expect("untampered bake still validates");
+    }
+
+    /// Grain probe for the validation tests: a plain two-segment APCP
+    /// motor that compiles to a lit trace with a burn-through tail.
+    fn probe_solid() -> CompiledSolid {
+        let (a, n) = SolidMotorSpec::apcp_ballistics();
+        SolidMotorSpec {
+            name: "validate probe".into(),
+            propellant: Propellant::SolidApcp,
+            outer_radius_m: 0.5,
+            core_radius_m: 0.32,
+            grain_geometry: SolidGrainGeometry::Circular,
+            segment_length_m: 1.5,
+            segments: 2,
+            burn_rate_coeff: a,
+            burn_rate_exponent: n,
+            throat_radius_m: 0.12,
+            expansion_ratio: 8.0,
+            nozzle_length_m: 0.8,
+            contour: NozzleContour::Conical,
+            casing_material: ChamberMaterial::nickel_superalloy(),
+            inhibited_ends: true,
+            segment_core_radii_m: None,
+            gimbal_range_rad: 0.0,
+            ignition_shots: 1,
+        }
+        .compile()
+        .expect("solid")
     }
 }

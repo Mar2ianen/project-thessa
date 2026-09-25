@@ -131,15 +131,24 @@ pub enum IntakeKind {
 
 impl IntakeKind {
     /// Total-pressure recovery at flight Mach.
+    ///
+    /// The MIL-E-5008 supersonic schedule starts at 1.0 exactly at
+    /// Mach 1, so applying it straight would jump recovery *up* across
+    /// the sonic point (0.97 -> ~1.0) and `p_ram` — and with it thrust
+    /// and flow — would step by a few percent right at Mach 1. Taking
+    /// the lower of the subsonic constant and the MIL value keeps the
+    /// schedule continuous and non-increasing: flat at 0.97 up to where
+    /// the MIL law drops below it (~M1.5), MIL beyond.
     pub fn recovery(self, mach: f64) -> f64 {
         if mach <= 1.0 {
             return INTAKE_RECOVERY_SUBSONIC;
         }
         let over = mach - 1.0;
-        match self {
-            Self::Pitot => (1.0 - 0.075 * over.powf(1.35)).max(0.3),
-            Self::Ramp => (1.0 - 0.05 * over.powf(1.35)).max(0.3),
-        }
+        let mil = match self {
+            Self::Pitot => 1.0 - 0.075 * over.powf(1.35),
+            Self::Ramp => 1.0 - 0.05 * over.powf(1.35),
+        };
+        mil.clamp(0.3, INTAKE_RECOVERY_SUBSONIC)
     }
 
     /// Intake mass factor over the pitot baseline.
@@ -437,7 +446,17 @@ fn convergent_nozzle(
         return dead;
     }
     let crit = ((gamma + 1.0) / 2.0).powf(gamma / (gamma - 1.0));
-    if total_pressure_pa / ambient_pa.max(1.0) > crit {
+    // Choke on the honest pressure ratio p_t/p_a. Ambient at or below
+    // 0 Pa cannot hold subsonic back pressure, so a positive total
+    // pressure is choked there — the ratio is never divided by a
+    // clamped denominator (which would silently re-decide choking for
+    // p_a < 1 Pa).
+    let choked = if ambient_pa > 0.0 {
+        total_pressure_pa / ambient_pa > crit
+    } else {
+        true
+    };
+    if choked {
         // Choked: sonic exit, underexpanded pressure term.
         let exit_temp_k = total_temp_k * 2.0 / (gamma + 1.0);
         let exit_pressure_pa = total_pressure_pa / crit;
@@ -455,11 +474,20 @@ fn convergent_nozzle(
         * total_temp_k
         * (1.0 - (ambient_pa / total_pressure_pa).powf((gamma - 1.0) / gamma)))
     .sqrt();
+    // Exit Mach from the STATIC exit temperature (already solved above),
+    // not the total inlet temperature: the flow accelerates as it cools,
+    // so using T0 here would under-report the exit Mach.
+    let exit_temp_k = total_temp_k * (ambient_pa / total_pressure_pa).powf((gamma - 1.0) / gamma);
+    let exit_mach = if exit_temp_k > 0.0 {
+        (exit_velocity_mps / (gamma * gas_r * exit_temp_k).sqrt()).min(1.0)
+    } else {
+        0.0
+    };
     NozzleFlow {
         thrust_gross_n: NOZZLE_GROSS_EFFICIENCY * mdot_kg_s * exit_velocity_mps,
-        exit_temp_k: total_temp_k * (ambient_pa / total_pressure_pa).powf((gamma - 1.0) / gamma),
+        exit_temp_k,
         exit_pressure_pa: ambient_pa,
-        exit_mach: (exit_velocity_mps / (gamma * gas_r * total_temp_k).sqrt()).min(1.0),
+        exit_mach,
     }
 }
 
@@ -595,9 +623,13 @@ fn run_cycle(
     // Air available: ram capture, plus the suction floor for active
     // (turbomachinery) cycles scaled by actual spool speed — a stopped
     // compressor inhales nothing. Ramjet/scramjet cycles are passive:
-    // capture only.
-    let sound = (gamma_a * 287.0 * condition.ambient_temp_k).sqrt();
-    let rho_0 = condition.ambient_pa / (287.0 * condition.ambient_temp_k);
+    // capture only. Density and speed of sound come from the sampled
+    // species basis (composition-aware, section 10): on a CO2-heavy
+    // atmosphere R differs from the 287 J/(kg·K) dry-air constant by
+    // hundreds of percent, so a hardcoded constant would desynchronize
+    // the inlet from the O2 budget, which already reads composition.
+    let sound = condition.speed_of_sound_mps();
+    let rho_0 = condition.density_kg_m3();
     let suction = if is_passive {
         0.0
     } else {
@@ -616,7 +648,11 @@ fn run_cycle(
         None => available_kg_s * flow_factor,
     };
     let mdot_air_kg_s = demanded_kg_s.min(available_kg_s);
-    let oxygen_limited_starved = demanded_kg_s > available_kg_s && available_kg_s <= 0.0;
+    // Zero capture is an intake/air problem, not an oxygen problem: it
+    // is reported through `air_starved` (and `mdot_air_kg_s <= 0`
+    // downstream), never through `oxygen_limited` — a stopped engine on
+    // the bench or a static grid row captures no air while the
+    // atmosphere may be perfectly oxygenated.
     let air_starved = demanded_kg_s > available_kg_s + 1e-9;
     // Core/bypass split (passive cycles: all core, no machinery).
     let bypass = match spec.cycle {
@@ -734,7 +770,11 @@ fn run_cycle(
             fuel_air,
             bulk_flow,
             boost_flow,
-            requested_oxygen_kg_s > o2_avail_kg_s,
+            // Oxygen caps combustion only while there IS combustion air:
+            // with zero combustor flow the oxygen budget is zero by
+            // construction and the shortfall is an intake problem
+            // (`air_limited`), not an oxygen one (section 10 contract).
+            combustor_air_kg_s > 0.0 && requested_oxygen_kg_s > o2_avail_kg_s,
             turbine_temp,
             heat_release,
             mixed_cp / (mixed_cp - mixed_r),
@@ -758,7 +798,12 @@ fn run_cycle(
             fuel_air,
             fuel_flow,
             0.0,
-            f_for_tit > f_o2_cap && f_for_tit > 0.0,
+            // Oxygen may cap the fuel schedule only when combustor air
+            // actually arrives: with zero air the oxygen budget is zero
+            // by construction and the zero-capture shortfall is reported
+            // by `air_limited` instead (section 10 contract: the flag
+            // means oxygen, not airflow, limits combustion).
+            combustor_air_kg_s > 0.0 && f_for_tit > f_o2_cap && f_for_tit > 0.0,
             t_comp_exit + fuel_air * COMBUSTOR_EFFICIENCY * lhv / AIR_CP_J_KG_K,
             heat_release,
             gamma_b,
@@ -794,7 +839,7 @@ fn run_cycle(
             precooler_heat_flow_w: coolant_heat_flow_w + wall_heat_flow_w,
             precooler_wall_heat_flow_w: wall_heat_flow_w,
             power_takeoff_capacity_w: 0.0,
-            oxygen_limited: oxygen_limited || oxygen_limited_starved,
+            oxygen_limited,
             reheat_limited: false,
             drive_limited: spec.cycle.has_shaft() && f_for_tit <= 0.0,
             combustion_thermal_limited: f_for_tit <= 0.0,
@@ -834,7 +879,7 @@ fn run_cycle(
             precooler_heat_flow_w: coolant_heat_flow_w + wall_heat_flow_w,
             precooler_wall_heat_flow_w: wall_heat_flow_w,
             power_takeoff_capacity_w: 0.0,
-            oxygen_limited: oxygen_limited || oxygen_limited_starved,
+            oxygen_limited,
             reheat_limited: false,
             drive_limited: true,
             combustion_thermal_limited: false,
@@ -941,7 +986,7 @@ fn run_cycle(
         precooler_heat_flow_w: coolant_heat_flow_w + wall_heat_flow_w,
         precooler_wall_heat_flow_w: wall_heat_flow_w,
         power_takeoff_capacity_w,
-        oxygen_limited: oxygen_limited || oxygen_limited_starved,
+        oxygen_limited,
         reheat_limited,
         drive_limited: false,
         combustion_thermal_limited: false,
@@ -979,7 +1024,14 @@ fn cd_nozzle(
         return Ok((dead, false));
     }
     let crit = ((gamma + 1.0) / 2.0).powf(gamma / (gamma - 1.0));
-    if total_pressure_pa / ambient_pa.max(1.0) <= crit {
+    // Same honest choke decision as `convergent_nozzle` (see there);
+    // the unchoked branch inherits it through the convergent fallback.
+    let choked = if ambient_pa > 0.0 {
+        total_pressure_pa / ambient_pa > crit
+    } else {
+        true
+    };
+    if !choked {
         // Unchoked: subsonic throughout, adapted exit.
         return Ok((
             convergent_nozzle(
@@ -1034,7 +1086,13 @@ fn cd_nozzle(
 }
 
 /// Adapted exit area for a design mass flow expanded to ambient
-/// (convergent-divergent design point).
+/// (convergent-divergent design point). A physical adaptation needs
+/// `0 < p_a < p_t`: at `p_a >= p_t` the isentropic exit velocity is not
+/// positive, the square root would go negative, and the resulting NaN
+/// would sail through every downstream area comparison (NaN comparisons
+/// are false) into `CompiledAirbreather`. Refused as a spec error
+/// instead — the design points are authored, so this is compile-time
+/// validation, never runtime.
 fn adapted_exit_area(
     mdot_kg_s: f64,
     total_temp_k: f64,
@@ -1043,15 +1101,47 @@ fn adapted_exit_area(
     gamma: f64,
     gas_r: f64,
     cp: f64,
-) -> f64 {
-    let exit_velocity_mps = (2.0
-        * cp
-        * total_temp_k
-        * (1.0 - (ambient_pa / total_pressure_pa).powf((gamma - 1.0) / gamma)))
-    .sqrt();
-    let exit_temp_k = total_temp_k * (ambient_pa / total_pressure_pa).powf((gamma - 1.0) / gamma);
+) -> Result<f64, PropulsionError> {
+    if !(total_pressure_pa > 0.0) || !(ambient_pa > 0.0) || ambient_pa >= total_pressure_pa {
+        return Err(PropulsionError::InvalidSpec(
+            "adapted CD exit needs ambient pressure finite, > 0 and below total pressure".into(),
+        ));
+    }
+    let pressure_ratio = ambient_pa / total_pressure_pa;
+    let exit_velocity_mps =
+        (2.0 * cp * total_temp_k * (1.0 - pressure_ratio.powf((gamma - 1.0) / gamma))).sqrt();
+    let exit_temp_k = total_temp_k * pressure_ratio.powf((gamma - 1.0) / gamma);
     let density = ambient_pa / (gas_r * exit_temp_k);
-    mdot_kg_s / (density * exit_velocity_mps)
+    let area = mdot_kg_s / (density * exit_velocity_mps);
+    if !area.is_finite() || !(area > 0.0) {
+        return Err(PropulsionError::InvalidSpec(
+            "adapted CD exit area is not a finite positive area at the design point".into(),
+        ));
+    }
+    Ok(area)
+}
+
+/// Design-point Isp metadata (the `design_isp_s` field of
+/// [`CompiledAirbreather`]). Net thrust at the design point must be
+/// positive: a passive cycle (ramjet/scramjet) expanded below its own
+/// flight speed, or a non-finite nozzle solve, would book a negative or
+/// meaningless Isp and poison every sign-dependent comparison
+/// downstream. Fuel flow may still be zero (a dry design point simply
+/// reports 0 s of Isp).
+fn design_point_isp_s(
+    design_static_thrust_n: f64,
+    design_fuel_flow_kg_s: f64,
+) -> Result<f64, PropulsionError> {
+    if !(design_static_thrust_n > 0.0) {
+        return Err(PropulsionError::InvalidSpec(format!(
+            "design-point net thrust must be finite and > 0 (got {design_static_thrust_n} N); Isp metadata would be invalid"
+        )));
+    }
+    if design_fuel_flow_kg_s > 0.0 {
+        Ok(design_static_thrust_n / (design_fuel_flow_kg_s * STANDARD_GRAVITY_MPS2))
+    } else {
+        Ok(0.0)
+    }
 }
 
 /// Choked throat area for a design mass flow at total conditions
@@ -1345,10 +1435,15 @@ impl AirbreathingSpec {
                     gamma_b,
                     r_b,
                     cp_b,
-                )
+                )?
             }
             _ => throat_area_core_m2,
         };
+        if !exit_area_core_m2.is_finite() {
+            return Err(PropulsionError::InvalidSpec(
+                "design-point nozzle exit area must be finite".into(),
+            ));
+        }
         if exit_area_core_m2 < throat_area_core_m2 {
             return Err(PropulsionError::UnsupportedCombination(
                 "design point overexpands the passive-cycle nozzle; pick a faster design Mach"
@@ -1450,11 +1545,7 @@ impl AirbreathingSpec {
             throat_area_core_m2,
             design_static_thrust_n,
             design_fuel_flow_kg_s: design_fuel,
-            design_isp_s: if design_fuel > 0.0 {
-                design_static_thrust_n / (design_fuel * STANDARD_GRAVITY_MPS2)
-            } else {
-                0.0
-            },
+            design_isp_s: design_point_isp_s(design_static_thrust_n, design_fuel)?,
             dry_mass_kg,
             spool_tau_s: self.spool_tau_s,
             shaft: self.shaft.clone(),
@@ -1673,16 +1764,18 @@ impl CompiledAirbreather {
         let balance = self.balance_from_state(&state, spool_n, ignition);
         // Static-suction label: air above ram-only capture at low speed
         // runs on the steady-running assumption, scaled by the actual
-        // spool speed this point was evaluated at.
-        let sound_speed_mps = (AIR_GAMMA * 287.0 * condition.ambient_temp_k).sqrt();
+        // spool speed this point was evaluated at. Both the suction
+        // floor (speed of sound) and the ram-only capture (density)
+        // are composition-aware, matching the capture terms inside
+        // `run_cycle` so the label and the cycle agree on alien air.
+        let sound_speed_mps = condition.speed_of_sound_mps();
         let suction_floor_mps = if self.cycle.is_passive() {
             0.0
         } else {
             INTAKE_DESIGN_CAPTURE_MACH * sound_speed_mps * spool_n
         };
-        let ram_only_kg_s = condition.ambient_pa / (287.0 * condition.ambient_temp_k)
-            * self.intake_area_m2
-            * condition.airspeed_mps;
+        let ram_only_kg_s =
+            condition.density_kg_m3() * self.intake_area_m2 * condition.airspeed_mps;
         let suction_assisted = |mdot_air: f64| {
             suction_floor_mps > 0.0
                 && condition.airspeed_mps < suction_floor_mps
@@ -2430,9 +2523,11 @@ mod tests {
     #[test]
     fn suction_label_and_oxygen_composition() {
         // Static sea-level rows run on the suction floor (labeled); fast
-        // rows do not. Thessa's 25%-molar (~27.4%-mass) O2 behaves exactly
-        // like Earth air here (no false gating: both clear the ~7% the
-        // combustor actually needs), while 5% O2 derates with the flag.
+        // rows do not. Thessa's 25%-molar (~27.4%-mass) O2 clears the ~7%
+        // the combustor actually needs, so it is never gated like the 5%
+        // mix — but intake air is composition-aware, so its slightly
+        // denser mix (R 284.7 vs 287.0) must show a fraction of a percent
+        // more flow and thrust than Earth air, not bitwise equality.
         let engine = olympus_like().compile().expect("olympus compiles");
         let sample = AtmosphereConfig::default().sample(0.0).expect("SL sample");
         let rows = analyze_airbreathing(
@@ -2453,7 +2548,16 @@ mod tests {
         let p_rich = engine.operating_point(&rich, 0.8).expect("rich");
         let p_earth = engine.operating_point(&earth, 0.8).expect("earth");
         assert!(!p_rich.oxygen_limited);
-        assert!((p_rich.thrust_n - p_earth.thrust_n).abs() / p_earth.thrust_n < 1e-12);
+        // Composition-aware: Thessa's mix is a touch denser at the same
+        // static state, so flow and thrust edge above Earth air by well
+        // under 2% — old code pinned bitwise equality, hiding that the
+        // composition never reached the intake model.
+        assert!(p_rich.thrust_n > p_earth.thrust_n);
+        assert!(p_rich.air_flow_kg_s > p_earth.air_flow_kg_s);
+        let thrust_delta = (p_rich.thrust_n - p_earth.thrust_n) / p_earth.thrust_n;
+        assert!(thrust_delta < 0.02, "thrust delta {thrust_delta}");
+        let flow_delta = (p_rich.air_flow_kg_s - p_earth.air_flow_kg_s) / p_earth.air_flow_kg_s;
+        assert!(flow_delta < 0.02, "flow delta {flow_delta}");
         let scarce_config = AtmosphereConfig::default().with_composition(
             AtmosphereComposition::from_mass_fractions(&[
                 (GasKind::Nitrogen, 0.95),

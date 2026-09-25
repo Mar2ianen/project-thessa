@@ -227,7 +227,10 @@ impl JetMount {
             }
             let point = air_engine.operating_point(condition, throttle)?;
             let snapshot = EstocTransient {
-                thrust_n: point.thrust_n.max(0.0),
+                // Net thrust, unclamped: ram drag above gross thrust
+                // (weak combustion, partial throttle) is real physics
+                // and must match `analyze_airbreathing` exactly.
+                thrust_n: point.thrust_n,
                 fuel_flow_kg_s: point.fuel_flow_kg_s,
                 bulk_fuel_flow_kg_s: point.bulk_fuel_flow_kg_s,
                 boost_fuel_flow_kg_s: point.boost_fuel_flow_kg_s,
@@ -316,7 +319,9 @@ impl JetMount {
                     shaft.lit,
                 )?;
                 let snapshot = EstocTransient {
-                    thrust_n: point.thrust_n.max(0.0),
+                    // Net thrust, unclamped (same contract as the
+                    // passive branch above and the analyzer).
+                    thrust_n: point.thrust_n,
                     fuel_flow_kg_s: point.fuel_flow_kg_s,
                     bulk_fuel_flow_kg_s: point.bulk_fuel_flow_kg_s,
                     boost_fuel_flow_kg_s: point.boost_fuel_flow_kg_s,

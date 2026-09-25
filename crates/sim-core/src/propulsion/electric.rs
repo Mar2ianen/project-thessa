@@ -349,8 +349,8 @@ impl ElectricThrusterSpec {
                 require_positive(grid_diameter_m, "ion grid diameter")?;
                 require_positive(grid_gap_m, "ion grid gap")?;
                 require_positive(max_beam_current_density_a_m2, "ion beam current density")?;
-                require_unit_interval(propellant_utilization, "ion propellant utilization")?;
-                require_unit_interval(accelerator_efficiency, "ion accelerator efficiency")?;
+                require_active_efficiency(propellant_utilization, "ion propellant utilization")?;
+                require_active_efficiency(accelerator_efficiency, "ion accelerator efficiency")?;
                 let area = std::f64::consts::PI * grid_diameter_m.powi(2) / 4.0;
                 let rim_area = std::f64::consts::PI * grid_diameter_m * grid_gap_m;
                 2.0 * area * self.structure_thickness_m + rim_area * self.structure_thickness_m
@@ -378,8 +378,8 @@ impl ElectricThrusterSpec {
                 require_positive(magnetic_field_t, "Hall magnetic field")?;
                 require_positive(coil_current_density_a_m2, "Hall coil current density")?;
                 require_positive(max_discharge_current_a, "Hall discharge current")?;
-                require_unit_interval(propellant_utilization, "Hall propellant utilization")?;
-                require_unit_interval(accelerator_efficiency, "Hall accelerator efficiency")?;
+                require_active_efficiency(propellant_utilization, "Hall propellant utilization")?;
+                require_active_efficiency(accelerator_efficiency, "Hall accelerator efficiency")?;
                 let annular_area = std::f64::consts::PI
                     * (channel_outer_radius_m.powi(2) - channel_inner_radius_m.powi(2));
                 let mean_radius_m = 0.5 * (channel_inner_radius_m + channel_outer_radius_m);
@@ -411,7 +411,7 @@ impl ElectricThrusterSpec {
                 }
                 require_positive(electrode_length_m, "MPD electrode length")?;
                 require_positive(max_current_a, "MPD current rating")?;
-                require_unit_interval(jet_power_efficiency, "MPD jet-power efficiency")?;
+                require_active_efficiency(jet_power_efficiency, "MPD jet-power efficiency")?;
                 std::f64::consts::PI
                     * (cathode_radius_m.powi(2) + anode_radius_m.powi(2))
                     * electrode_length_m
@@ -493,6 +493,19 @@ impl ElectricThrusterSpec {
     }
 }
 
+/// Unit-interval efficiency that must also be strictly positive. A zero
+/// efficiency divides by zero in the operating-point energy balance and would
+/// produce NaN telemetry instead of an `InvalidSpec` error.
+fn require_active_efficiency(value: f64, name: &str) -> Result<f64, PropulsionError> {
+    require_unit_interval(value, name)?;
+    if value == 0.0 {
+        return Err(PropulsionError::InvalidSpec(format!(
+            "{name} must be in (0, 1]"
+        )));
+    }
+    Ok(value)
+}
+
 fn validate_thermal_design(
     radius_m: f64,
     length_m: f64,
@@ -555,11 +568,145 @@ pub struct ElectricThrusterPoint {
 }
 
 impl CompiledElectricThruster {
+    /// Validate compiled engine data (finite, positive ratings, active
+    /// efficiencies, coherent design geometry). This is the same domain check
+    /// `ElectricThrusterSpec::compile` applies, re-run at use time so a
+    /// deserialized/edited engine fails closed instead of reaching the
+    /// operating-point formulas with zero efficiencies or non-finite ratings.
+    pub fn validate(&self) -> Result<(), PropulsionError> {
+        if [
+            self.maximum_power_w,
+            self.maximum_mass_flow_kg_s,
+            self.ionization_efficiency,
+            self.inlet_temperature_k,
+            self.radiator_heat_rejection_w,
+            self.dry_mass_kg,
+        ]
+        .iter()
+        .any(|value| !value.is_finite())
+        {
+            return Err(PropulsionError::InvalidSpec(
+                "compiled electric thruster values must be finite".into(),
+            ));
+        }
+        require_positive(self.maximum_power_w, "electric thruster rated power")?;
+        require_positive(
+            self.maximum_mass_flow_kg_s,
+            "electric thruster rated mass flow",
+        )?;
+        require_positive(self.inlet_temperature_k, "propellant inlet temperature")?;
+        require_positive(
+            self.radiator_heat_rejection_w,
+            "electric thruster heat rejection",
+        )?;
+        require_positive(self.dry_mass_kg, "electric thruster dry mass")?;
+        require_active_efficiency(self.ionization_efficiency, "ionization efficiency")?;
+        match self.design {
+            ElectricThrusterDesign::GriddedIon {
+                accelerator_voltage_v,
+                grid_diameter_m,
+                grid_gap_m,
+                max_beam_current_density_a_m2,
+                propellant_utilization,
+                accelerator_efficiency,
+            } => {
+                require_positive(accelerator_voltage_v, "ion accelerator voltage")?;
+                require_positive(grid_diameter_m, "ion grid diameter")?;
+                require_positive(grid_gap_m, "ion grid gap")?;
+                require_positive(max_beam_current_density_a_m2, "ion beam current density")?;
+                require_active_efficiency(propellant_utilization, "ion propellant utilization")?;
+                require_active_efficiency(accelerator_efficiency, "ion accelerator efficiency")?;
+            }
+            ElectricThrusterDesign::HallEffect {
+                accelerator_voltage_v,
+                channel_inner_radius_m,
+                channel_outer_radius_m,
+                channel_length_m,
+                magnetic_field_t,
+                coil_current_density_a_m2,
+                max_discharge_current_a,
+                propellant_utilization,
+                accelerator_efficiency,
+            } => {
+                require_positive(accelerator_voltage_v, "Hall accelerator voltage")?;
+                require_positive(channel_inner_radius_m, "Hall channel inner radius")?;
+                require_positive(channel_outer_radius_m, "Hall channel outer radius")?;
+                if channel_inner_radius_m >= channel_outer_radius_m {
+                    return Err(PropulsionError::InvalidSpec(
+                        "Hall channel outer radius must exceed inner radius".into(),
+                    ));
+                }
+                require_positive(channel_length_m, "Hall channel length")?;
+                require_positive(magnetic_field_t, "Hall magnetic field")?;
+                require_positive(coil_current_density_a_m2, "Hall coil current density")?;
+                require_positive(max_discharge_current_a, "Hall discharge current")?;
+                require_active_efficiency(propellant_utilization, "Hall propellant utilization")?;
+                require_active_efficiency(accelerator_efficiency, "Hall accelerator efficiency")?;
+            }
+            ElectricThrusterDesign::Magnetoplasmadynamic {
+                arc_voltage_v,
+                cathode_radius_m,
+                anode_radius_m,
+                electrode_length_m,
+                max_current_a,
+                jet_power_efficiency,
+            } => {
+                require_positive(arc_voltage_v, "MPD arc voltage")?;
+                require_positive(cathode_radius_m, "MPD cathode radius")?;
+                require_positive(anode_radius_m, "MPD anode radius")?;
+                if cathode_radius_m >= anode_radius_m {
+                    return Err(PropulsionError::InvalidSpec(
+                        "MPD anode radius must exceed cathode radius".into(),
+                    ));
+                }
+                require_positive(electrode_length_m, "MPD electrode length")?;
+                require_positive(max_current_a, "MPD current rating")?;
+                require_active_efficiency(jet_power_efficiency, "MPD jet-power efficiency")?;
+            }
+            ElectricThrusterDesign::Resistojet {
+                chamber_radius_m,
+                chamber_length_m,
+                max_exhaust_temp_k,
+                heater_efficiency,
+                nozzle_efficiency,
+            } => validate_thermal_design(
+                chamber_radius_m,
+                chamber_length_m,
+                max_exhaust_temp_k,
+                self.inlet_temperature_k,
+                heater_efficiency,
+                nozzle_efficiency,
+            )?,
+            ElectricThrusterDesign::Arcjet {
+                chamber_radius_m,
+                chamber_length_m,
+                max_exhaust_temp_k,
+                arc_voltage_v,
+                max_arc_current_a,
+                heater_efficiency,
+                nozzle_efficiency,
+            } => {
+                validate_thermal_design(
+                    chamber_radius_m,
+                    chamber_length_m,
+                    max_exhaust_temp_k,
+                    self.inlet_temperature_k,
+                    heater_efficiency,
+                    nozzle_efficiency,
+                )?;
+                require_positive(arc_voltage_v, "arcjet voltage")?;
+                require_positive(max_arc_current_a, "arcjet current rating")?;
+            }
+        }
+        Ok(())
+    }
+
     /// Evaluate a steady operating point from bus power and feed command.
     pub fn operating_point(
         &self,
         command: ElectricThrusterCommand,
     ) -> Result<ElectricThrusterPoint, PropulsionError> {
+        self.validate()?;
         if !command.available_power_w.is_finite() || command.available_power_w < 0.0 {
             return Err(PropulsionError::InvalidCommand(
                 "available electric power must be finite and >= 0".into(),
@@ -825,13 +972,23 @@ impl CompiledElectricThruster {
             * (anode_radius_m / cathode_radius_m).ln();
         let ionization_specific_j_kg =
             self.propellant.ionization_energy_j_kg() / self.ionization_efficiency;
+        // Charge carried per unit of ionized feed mass (A per kg/s). Mirrors
+        // the ion-path term with full propellant utilization, which the MPD
+        // model assumes (all feed mass enters the discharge).
+        let ion_current_per_feed_kg_s_a =
+            ELEMENTARY_CHARGE_C * AVOGADRO_PER_MOL / self.propellant.properties().molar_mass_kg_mol;
         let evaluate = |power_w: f64| {
             let flow_by_ionization = if ionization_specific_j_kg > 0.0 {
                 power_w / ionization_specific_j_kg
             } else {
                 0.0
             };
-            let mass_flow_kg_s = requested_flow.min(flow_by_ionization);
+            let flow_by_current = if ion_current_per_feed_kg_s_a > 0.0 {
+                max_current_a / ion_current_per_feed_kg_s_a
+            } else {
+                0.0
+            };
+            let mass_flow_kg_s = requested_flow.min(flow_by_ionization).min(flow_by_current);
             if mass_flow_kg_s <= 0.0 || power_w <= 0.0 {
                 return make_electric_point(
                     0.0,
@@ -849,24 +1006,54 @@ impl CompiledElectricThruster {
                 );
             }
             let ionization_power_w = mass_flow_kg_s * ionization_specific_j_kg;
-            let available_jet_power_w =
-                ((power_w - ionization_power_w) * jet_power_efficiency).max(0.0);
-            let energy_limited_thrust_n = (2.0 * mass_flow_kg_s * available_jet_power_w).sqrt();
-            let energy_limited_current_a =
-                (energy_limited_thrust_n / maecker_coefficient_n_a2).sqrt();
-            let current_from_bus_a = power_w / arc_voltage_v;
-            let current_a = current_from_bus_a
-                .min(max_current_a)
-                .min(energy_limited_current_a);
+            // Fixed point on the discharge current: the jet budget is funded
+            // from the actual arc draw V*I, never from the full bus, so
+            // jet_kinetic_power <= jet_power_efficiency * (V*I - ionization)
+            // holds by construction and no over-unity point can appear.
+            let current_cap_a = (power_w / arc_voltage_v).min(max_current_a);
+            let mut current_a = current_cap_a;
+            for _ in 0..24 {
+                let available_jet_power_w = (arc_voltage_v * current_a - ionization_power_w)
+                    .max(0.0)
+                    * jet_power_efficiency;
+                let energy_limited_thrust_n = (2.0 * mass_flow_kg_s * available_jet_power_w).sqrt();
+                let energy_limited_current_a =
+                    (energy_limited_thrust_n / maecker_coefficient_n_a2).sqrt();
+                current_a = current_cap_a.min(energy_limited_current_a);
+            }
+            if !current_a.is_finite() || current_a <= 0.0 {
+                // Ionizing this feed would consume at least the whole budget
+                // (V*I <= power_w <= ionization power): no self-consistent
+                // drawing point exists, so report a finite idle instead of
+                // consuming power for zero thrust.
+                return make_electric_point(
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    self.radiator_heat_rejection_w,
+                    0.0,
+                    true,
+                    flow_limited,
+                    false,
+                    false,
+                    0.0,
+                );
+            }
+            let electrical_power_w = (arc_voltage_v * current_a).min(power_w);
             let thrust_n = maecker_coefficient_n_a2 * current_a.powi(2);
             let jet_kinetic_power_w = thrust_n.powi(2) / (2.0 * mass_flow_kg_s);
-            let electrical_power_w = (arc_voltage_v * current_a)
-                .max(ionization_power_w + jet_kinetic_power_w / jet_power_efficiency)
-                .min(power_w);
             let exhaust_internal_power_w =
                 mass_flow_kg_s * self.propellant.ionization_energy_j_kg();
             let waste_heat_w =
                 (electrical_power_w - jet_kinetic_power_w - exhaust_internal_power_w).max(0.0);
+            let current_from_bus_a = power_w / arc_voltage_v;
+            let available_jet_power_w =
+                (arc_voltage_v * current_a - ionization_power_w).max(0.0) * jet_power_efficiency;
+            let energy_limited_current_a = ((2.0 * mass_flow_kg_s * available_jet_power_w).sqrt()
+                / maecker_coefficient_n_a2)
+                .sqrt();
             make_electric_point(
                 thrust_n,
                 mass_flow_kg_s,
@@ -875,7 +1062,7 @@ impl CompiledElectricThruster {
                 waste_heat_w,
                 self.radiator_heat_rejection_w,
                 current_a,
-                flow_by_ionization < requested_flow
+                (flow_by_ionization < requested_flow && flow_by_ionization <= flow_by_current)
                     || (current_from_bus_a <= max_current_a
                         && current_from_bus_a <= energy_limited_current_a),
                 flow_limited,
@@ -980,6 +1167,7 @@ impl ElectricThrusterMount {
                 "electric-thruster axis must be unit length".into(),
             ));
         }
+        self.engine.validate()?;
         Ok(())
     }
 
@@ -987,6 +1175,7 @@ impl ElectricThrusterMount {
         &self,
         command: ElectricThrusterCommand,
     ) -> Result<ElectricThrusterPoint, PropulsionError> {
+        self.validate()?;
         self.engine.operating_point(command)
     }
 }
@@ -1203,5 +1392,223 @@ mod tests {
         assert!(invalid.clone().compile().is_err());
         invalid.radiator_temperature_k = 2.0;
         assert!(invalid.compile().is_err());
+    }
+
+    fn assert_all_finite(point: ElectricThrusterPoint) {
+        assert!(point.thrust_n.is_finite());
+        assert!(point.exhaust_velocity_mps.is_finite());
+        assert!(point.isp_s.is_finite());
+        assert!(point.mass_flow_kg_s.is_finite());
+        assert!(point.electrical_power_w.is_finite());
+        assert!(point.jet_kinetic_power_w.is_finite());
+        assert!(point.exhaust_internal_power_w.is_finite());
+        assert!(point.waste_heat_w.is_finite());
+        assert!(point.radiator_capacity_w.is_finite());
+        assert!(point.discharge_current_a.is_finite());
+    }
+
+    fn mpd_spec(jet_power_efficiency: f64) -> ElectricThrusterSpec {
+        base_spec(ElectricThrusterDesign::Magnetoplasmadynamic {
+            arc_voltage_v: 100.0,
+            cathode_radius_m: 0.01,
+            anode_radius_m: 0.05,
+            electrode_length_m: 0.1,
+            max_current_a: 20.0,
+            jet_power_efficiency,
+        })
+    }
+
+    #[test]
+    fn zero_efficiencies_fail_closed_at_compile_and_validation() {
+        let gridded = |propellant_utilization: f64, accelerator_efficiency: f64| {
+            base_spec(ElectricThrusterDesign::GriddedIon {
+                accelerator_voltage_v: 1_000.0,
+                grid_diameter_m: 0.4,
+                grid_gap_m: 0.002,
+                max_beam_current_density_a_m2: 100.0,
+                propellant_utilization,
+                accelerator_efficiency,
+            })
+        };
+        assert!(gridded(0.0, 0.9).compile().is_err());
+        assert!(gridded(0.95, 0.0).compile().is_err());
+
+        let hall = |propellant_utilization: f64, accelerator_efficiency: f64| {
+            base_spec(ElectricThrusterDesign::HallEffect {
+                accelerator_voltage_v: 300.0,
+                channel_inner_radius_m: 0.025,
+                channel_outer_radius_m: 0.05,
+                channel_length_m: 0.04,
+                magnetic_field_t: 0.02,
+                coil_current_density_a_m2: 4.0e7,
+                max_discharge_current_a: 0.2,
+                propellant_utilization,
+                accelerator_efficiency,
+            })
+        };
+        assert!(hall(0.0, 0.8).compile().is_err());
+        assert!(hall(0.9, 0.0).compile().is_err());
+
+        assert!(mpd_spec(0.0).compile().is_err());
+        assert!(mpd_spec(1.0).compile().is_ok());
+    }
+
+    #[test]
+    fn forged_engine_data_is_rejected_before_the_formulas() {
+        let engine = mpd_spec(0.55).compile().expect("MPD compiles");
+        // Simulate hand-edited JSON: zero jet-power efficiency and a
+        // non-finite rating must not reach the operating-point formulas.
+        let ElectricThrusterDesign::Magnetoplasmadynamic {
+            arc_voltage_v,
+            cathode_radius_m,
+            anode_radius_m,
+            electrode_length_m,
+            max_current_a,
+            ..
+        } = engine.design
+        else {
+            panic!("expected an MPD design");
+        };
+        let zero_efficiency = CompiledElectricThruster {
+            design: ElectricThrusterDesign::Magnetoplasmadynamic {
+                arc_voltage_v,
+                cathode_radius_m,
+                anode_radius_m,
+                electrode_length_m,
+                max_current_a,
+                jet_power_efficiency: 0.0,
+            },
+            ..engine
+        };
+        assert!(zero_efficiency.validate().is_err());
+        assert!(
+            zero_efficiency
+                .operating_point(command(1_000.0, 1.0e-4))
+                .is_err()
+        );
+        let non_finite = CompiledElectricThruster {
+            maximum_power_w: f64::NAN,
+            ..engine
+        };
+        assert!(non_finite.validate().is_err());
+        assert!(
+            non_finite
+                .operating_point(command(1_000.0, 1.0e-4))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn mount_operating_point_validates_engine_and_mount_first() {
+        let engine = base_spec(ElectricThrusterDesign::GriddedIon {
+            accelerator_voltage_v: 1_000.0,
+            grid_diameter_m: 0.4,
+            grid_gap_m: 0.002,
+            max_beam_current_density_a_m2: 100.0,
+            propellant_utilization: 0.95,
+            accelerator_efficiency: 0.9,
+        })
+        .compile()
+        .expect("ion thruster compiles");
+        let valid = ElectricThrusterMount {
+            name: "aft-ion".into(),
+            engine,
+            position_body_m: [0.0, 1.0, 0.0],
+            thrust_axis_body: [1.0, 0.0, 0.0],
+        };
+        assert!(valid.operating_point(command(5_000.0, 1.0e-5)).is_ok());
+        // A forged non-unit axis previously reached the formulas unchecked.
+        let bad_axis = ElectricThrusterMount {
+            thrust_axis_body: [1.0, 1.0, 0.0],
+            ..valid.clone()
+        };
+        assert!(bad_axis.operating_point(command(5_000.0, 1.0e-5)).is_err());
+        // A forged engine (zero ionization efficiency) fails closed too.
+        let bad_engine = ElectricThrusterMount {
+            engine: CompiledElectricThruster {
+                ionization_efficiency: 0.0,
+                ..engine
+            },
+            ..valid
+        };
+        assert!(bad_engine.validate().is_err());
+        let bad_point = bad_engine.operating_point(command(5_000.0, 1.0e-5));
+        assert!(bad_point.is_err());
+    }
+
+    #[test]
+    fn mpd_typical_point_draws_exactly_voltage_times_current() {
+        let engine = mpd_spec(0.55).compile().expect("MPD compiles");
+        // Requested flow exceeds both the rated flow and the ionization
+        // budget P / E_ion; the point must stay self-consistent anyway.
+        let point = engine
+            .operating_point(command(10_000.0, 1.0e-3))
+            .expect("MPD typical point");
+        assert_all_finite(point);
+        assert!(point.thrust_n > 0.0);
+        assert!(point.discharge_current_a > 0.0);
+        assert!(point.discharge_current_a <= 20.0 + 1e-9);
+        let draw_w = 100.0 * point.discharge_current_a;
+        assert!((point.electrical_power_w - draw_w).abs() <= 1e-9 * draw_w);
+        assert!(point.electrical_power_w <= 10_000.0 + 1e-9);
+        assert!(point.waste_heat_w >= 0.0);
+        assert!(point.waste_heat_w <= point.radiator_capacity_w + 1e-8);
+        assert!(point.flow_limited);
+        assert!(point.current_limited);
+        assert_energy_balance(point);
+
+        // Energy-limited inequality: kinetic power never exceeds the jet
+        // efficiency of the power left after ionization.
+        let ionization_power_w = point.mass_flow_kg_s * engine.propellant.ionization_energy_j_kg()
+            / engine.ionization_efficiency;
+        assert!(
+            point.jet_kinetic_power_w
+                <= 0.55 * (point.electrical_power_w - ionization_power_w) + 1e-9,
+            "jet power {} W exceeds the {} W jet budget",
+            point.jet_kinetic_power_w,
+            0.55 * (point.electrical_power_w - ionization_power_w)
+        );
+
+        // Bus-power-limited branch: current below the current rating.
+        let low_power = engine
+            .operating_point(command(1_000.0, 1.0e-4))
+            .expect("MPD low-power point");
+        assert_all_finite(low_power);
+        assert!(low_power.thrust_n > 0.0);
+        assert!(
+            (low_power.electrical_power_w - 100.0 * low_power.discharge_current_a).abs() <= 1e-9
+        );
+        assert!(low_power.power_limited);
+        assert!(!low_power.current_limited);
+        assert!(low_power.waste_heat_w >= 0.0);
+        assert_energy_balance(low_power);
+    }
+
+    #[test]
+    fn mpd_starved_feed_reports_finite_idle_instead_of_nan() {
+        let engine = mpd_spec(0.55).compile().expect("MPD compiles");
+        // P / E_ion = 8.4e-6 kg/s < requested: ionization alone would eat
+        // the whole budget, so there is no self-consistent drawing point.
+        // The engine must report a finite idle, not a power-burning zero
+        // thrust or NaN telemetry.
+        let point = engine
+            .operating_point(command(100.0, 1.0e-3))
+            .expect("starved MPD point");
+        assert_all_finite(point);
+        assert_eq!(point.thrust_n, 0.0);
+        assert_eq!(point.electrical_power_w, 0.0);
+        assert_eq!(point.discharge_current_a, 0.0);
+        assert!(point.power_limited);
+        assert_energy_balance(point);
+
+        // The same bus power with a moderate feed request still works.
+        let fed = engine
+            .operating_point(command(100.0, 1.0e-6))
+            .expect("low-power MPD point");
+        assert_all_finite(fed);
+        assert!(fed.thrust_n > 0.0);
+        assert!((fed.electrical_power_w - 100.0 * fed.discharge_current_a).abs() <= 1e-9);
+        assert!(fed.waste_heat_w >= 0.0);
+        assert_energy_balance(fed);
     }
 }

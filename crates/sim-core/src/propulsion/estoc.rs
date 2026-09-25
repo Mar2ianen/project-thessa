@@ -243,6 +243,13 @@ pub struct CompiledEstoc {
     pub switch_mach_hi: f64,
     pub switch_mach_lo: f64,
     pub transition_tau_s: f64,
+    /// Cutoff throttle (combined-cycle-wide): a command in
+    /// `[0, min_throttle)` shuts the engine down (zero thrust, zero
+    /// propellant flow), a command `>= min_throttle` runs clamped into
+    /// `[min_throttle, 1]`. The chamber cannot hold a stable choked flame
+    /// below the floor, and a nearly closed chamber would report the
+    /// ambient back-pressure term (`-pa * Ae`, hundreds of kN of braking)
+    /// as "thrust" with negative Isp.
     pub min_throttle: f64,
 }
 
@@ -274,6 +281,32 @@ pub struct EstocTransient {
     pub precooler_wall_temp_k: f64,
     #[serde(default)]
     pub coolant_outlet_temp_k: f64,
+}
+
+impl EstocTransient {
+    /// Self-heal for a threaded snapshot: any non-finite channel resets to
+    /// `0.0` before it is blended, so a corrupted or hand-deserialized
+    /// `prev` cannot reproduce NaN through the transition lerp forever.
+    fn healed(self) -> Self {
+        let finite = |value: f64| if value.is_finite() { value } else { 0.0 };
+        Self {
+            thrust_n: finite(self.thrust_n),
+            fuel_flow_kg_s: finite(self.fuel_flow_kg_s),
+            bulk_fuel_flow_kg_s: finite(self.bulk_fuel_flow_kg_s),
+            boost_fuel_flow_kg_s: finite(self.boost_fuel_flow_kg_s),
+            oxidizer_flow_kg_s: finite(self.oxidizer_flow_kg_s),
+            air_flow_kg_s: finite(self.air_flow_kg_s),
+            exhaust_temp_k: finite(self.exhaust_temp_k),
+            exhaust_velocity_mps: finite(self.exhaust_velocity_mps),
+            exit_pressure_pa: finite(self.exit_pressure_pa),
+            exit_mach: finite(self.exit_mach),
+            compressor_inlet_total_temp_k: finite(self.compressor_inlet_total_temp_k),
+            precooler_heat_flow_w: finite(self.precooler_heat_flow_w),
+            precooler_wall_heat_flow_w: finite(self.precooler_wall_heat_flow_w),
+            precooler_wall_temp_k: finite(self.precooler_wall_temp_k),
+            coolant_outlet_temp_k: finite(self.coolant_outlet_temp_k),
+        }
+    }
 }
 
 /// One ESTOC operating point (single active mode).
@@ -353,6 +386,13 @@ impl EstocSpec {
                 "oxidizer/fuel ratio must be finite and > 0".into(),
             ));
         }
+        if let Some(ratio) = self.oxidizer_fuel_ratio {
+            // Same table-range refusal as liquids: the authored ratio has
+            // to land inside the LOX-pair mixture table that drives the
+            // chamber thermo — no extrapolation outside it.
+            let bulk_fuel = self.bulk_fuel.unwrap_or(self.air.fuel);
+            bulk_fuel.lox_pair().thermo_at_mixture(Some(ratio))?;
+        }
         let switch_mach_hi = self.switch_mach_hi.unwrap_or(ESTOC_DEFAULT_SWITCH_MACH_HI);
         let switch_mach_lo = self.switch_mach_lo.unwrap_or(ESTOC_DEFAULT_SWITCH_MACH_LO);
         if !switch_mach_hi.is_finite()
@@ -383,7 +423,11 @@ impl EstocSpec {
             .oxidizer_fuel_ratio
             .or(pair.reference_mixture_ratio())
             .expect("LOX pairs carry a reference ratio");
-        let thermo = pair.thermo();
+        // Chamber thermo follows the authored oxidizer/fuel ratio through
+        // the same mixture-table interpolation liquids use (`None` keeps
+        // the reference ratio; validation already refused out-of-table
+        // ratios).
+        let thermo = pair.thermo_at_mixture(self.oxidizer_fuel_ratio)?;
         let c_star = characteristic_velocity(&thermo);
         let throat_area_m2 =
             std::f64::consts::PI * self.rocket_throat_radius_m * self.rocket_throat_radius_m;
@@ -478,15 +522,18 @@ impl EstocSpec {
 impl CompiledEstoc {
     /// Mode selector (steady-analyzer convention: the air path is
     /// considered commanded — see [`Self::select_mode_inner`] for the
-    /// runtime form).
+    /// runtime form). `throttle` is the commanded throttle: the ejector
+    /// branch is only eligible where its net thrust is positive at that
+    /// throttle, mirroring the air branch's `thrust_n > 0` requirement.
     pub fn select_mode(
         &self,
         condition: &FlightCondition,
         air_point: &AirOperatingPoint,
+        throttle: f64,
         last_mode: EstocMode,
         manual: Option<EstocMode>,
     ) -> EstocMode {
-        self.select_mode_inner(condition, air_point, last_mode, manual, true)
+        self.select_mode_inner(condition, air_point, throttle, last_mode, manual, true)
     }
 
     /// Manual selection wins. Automatic selection uses the solved thermal,
@@ -496,6 +543,7 @@ impl CompiledEstoc {
         &self,
         condition: &FlightCondition,
         air_point: &AirOperatingPoint,
+        throttle: f64,
         last_mode: EstocMode,
         manual: Option<EstocMode>,
         air_commanded: bool,
@@ -530,10 +578,12 @@ impl CompiledEstoc {
             }
             return EstocMode::Air;
         }
-        if !oxygen_available
-            && self.ejector.is_some()
-            && self.ejector_capture_flow_kg_s(condition) > 0.0
-        {
+        // Ejector eligibility carries the same positive-net-thrust
+        // requirement as the air branch: captured flow alone is not
+        // enough, because on a dense anoxic atmosphere the inlet momentum
+        // can outweigh the mixed stream (net braking, negative Isp).
+        // Recomputed every tick, so a non-producing ejector can never stick.
+        if !oxygen_available && self.ejector_augmented_point(throttle, condition).is_some() {
             return EstocMode::Ejector;
         }
         EstocMode::Rocket
@@ -686,7 +736,7 @@ impl CompiledEstoc {
             coolant_heat_flow_w: coolant_heat_w,
             wall_heat_flow_w: wall_heat_w,
         };
-        let (point, balance) = if boost_flow_kg_s > 0.0 || wall_heat_w > 0.0 {
+        let (mut point, balance) = if boost_flow_kg_s > 0.0 || wall_heat_w > 0.0 {
             self.air.operating_point_at_spool_conditioned(
                 condition,
                 throttle,
@@ -701,8 +751,21 @@ impl CompiledEstoc {
         // report coolant outlet from the heat actually used by that matched
         // operating point, not the pre-match exchanger request.
         let matched_wall_heat_w = point.precooler_wall_heat_flow_w;
-        let matched_coolant_heat_w = (point.precooler_heat_flow_w - matched_wall_heat_w).max(0.0);
         let matched_coolant_flow_kg_s = point.boost_fuel_flow_kg_s;
+        // No coolant mass through the exchanger (flameout/ignition-off:
+        // `precooler_heat_flow_w > 0` with `boost_fuel_flow_kg_s == 0`)
+        // means the coolant side removes no heat — there is no medium to
+        // carry it. Book only the wall store's share so reported duty and
+        // stored wall energy agree, and the coolant outlet stays at its
+        // inlet temperature (no flow, no temperature rise).
+        let matched_coolant_heat_w = if matched_coolant_flow_kg_s > 0.0 {
+            (point.precooler_heat_flow_w - matched_wall_heat_w).max(0.0)
+        } else {
+            0.0
+        };
+        if matched_coolant_flow_kg_s <= 0.0 {
+            point.precooler_heat_flow_w = matched_wall_heat_w;
+        }
         let coolant_outlet_temp_k = if matched_coolant_flow_kg_s > 0.0 {
             precooler.coolant_inlet_temp_k
                 + matched_coolant_heat_w
@@ -722,7 +785,48 @@ impl CompiledEstoc {
     /// Steady rocket-mode point at throttle and ambient (chamber pressure
     /// scales linearly, same documented deep-throttle assumption as
     /// liquids; oxidizer/fuel split by the OF ratio).
+    ///
+    /// Throttle/regime discipline: a command below
+    /// [`CompiledEstoc::min_throttle`] shuts the chamber down (zero
+    /// thrust, zero flow), and the nozzle never reports a negative net —
+    /// the frozen exit ratio presumes choked exit flow, so when the
+    /// chamber cannot outrun the ambient (`pa >= pc`) or the standard
+    /// balance `F = mdot*ve + (pe - pa)*Ae` comes out non-positive the
+    /// engine is simply not producing thrust (0, never `-pa*Ae` braking
+    /// with negative Isp).
     fn rocket_point(&self, throttle: f64, ambient_pa: f64) -> Result<EstocPoint, PropulsionError> {
+        if !throttle.is_finite() || !(0.0..=1.0).contains(&throttle) {
+            return Err(PropulsionError::InvalidCommand(
+                "throttle must be finite in [0, 1]".into(),
+            ));
+        }
+        let throttle = if throttle < self.min_throttle {
+            0.0
+        } else {
+            throttle
+        };
+        if throttle == 0.0 {
+            return Ok(EstocPoint {
+                mode: EstocMode::Rocket,
+                thrust_n: 0.0,
+                fuel_flow_kg_s: 0.0,
+                bulk_fuel_flow_kg_s: 0.0,
+                boost_fuel_flow_kg_s: 0.0,
+                oxidizer_flow_kg_s: 0.0,
+                air_flow_kg_s: 0.0,
+                isp_total_s: 0.0,
+                exhaust_temp_k: self.rocket_exit_temp_k,
+                exhaust_velocity_mps: 0.0,
+                exit_pressure_pa: ambient_pa,
+                exit_mach: 0.0,
+                compressor_inlet_total_temp_k: 0.0,
+                precooler_heat_flow_w: 0.0,
+                precooler_wall_heat_flow_w: 0.0,
+                precooler_wall_temp_k: 0.0,
+                coolant_outlet_temp_k: 0.0,
+                precooler_saturated: false,
+            });
+        }
         let thermo = PropellantThermo {
             gamma: self.rocket_gamma,
             chamber_temp_k: self.rocket_chamber_temp_k,
@@ -750,7 +854,17 @@ impl CompiledEstoc {
             ambient_pa,
             0.99,
         );
-        let thrust_n = cf * chamber_pa * self.rocket_throat_area_m2;
+        // `cf * pc * At` expands to the standard
+        // `mdot*ve + (pe - pa)*Ae` with the frozen exit ratio, which only
+        // describes choked exit flow. Outside that regime (a chamber that
+        // cannot push against the ambient, or a balance that nets below
+        // zero) the honest answer is "no thrust", not `-pa*Ae`.
+        let ideal_thrust_n = cf * chamber_pa * self.rocket_throat_area_m2;
+        let thrust_n = if chamber_pa > ambient_pa && ideal_thrust_n > 0.0 {
+            ideal_thrust_n
+        } else {
+            0.0
+        };
         let flow_kg_s = self.rocket_flow_kg_s * throttle;
         let fuel_flow_kg_s = flow_kg_s / (1.0 + self.oxidizer_fuel_ratio);
         let oxidizer_flow_kg_s = flow_kg_s - fuel_flow_kg_s;
@@ -781,22 +895,43 @@ impl CompiledEstoc {
         })
     }
 
+    /// Ejector-mode point with the documented fallback: no installed
+    /// ejector, no captured flow, or a mixed stream whose net thrust does
+    /// not come out positive falls back to the steady rocket point — never
+    /// an `Err`, so a mode fallback cannot tear the wrench of every jet out
+    /// of the vehicle step.
     fn ejector_point(
         &self,
         throttle: f64,
         condition: &FlightCondition,
     ) -> Result<EstocPoint, PropulsionError> {
-        let ejector = self.ejector.ok_or_else(|| {
-            PropulsionError::InvalidCommand("ESTOC ejector mode is not installed".into())
-        })?;
-        let entrained_air_kg_s = self.ejector_capture_flow_kg_s(condition);
-        if entrained_air_kg_s <= 0.0 {
-            return Err(PropulsionError::InvalidCommand(
-                "ESTOC ejector needs nonzero captured atmospheric flow".into(),
-            ));
+        if let Some(point) = self.ejector_augmented_point(throttle, condition) {
+            return Ok(point);
         }
-        let mut point = self.rocket_point(throttle, condition.ambient_pa)?;
+        self.rocket_point(throttle, condition.ambient_pa)
+    }
+
+    /// The augmented ejector point itself: `None` whenever the ejector
+    /// cannot produce positive net thrust here — hardware missing, no
+    /// captured flow (stopped craft), chamber below its throttle cutoff,
+    /// or inlet momentum outrunning the mixed jet (dense anoxic
+    /// atmosphere, where the "ejector" would brake the ship instead of
+    /// pushing it).
+    fn ejector_augmented_point(
+        &self,
+        throttle: f64,
+        condition: &FlightCondition,
+    ) -> Option<EstocPoint> {
+        let ejector = self.ejector?;
+        let entrained_air_kg_s = self.ejector_capture_flow_kg_s(condition);
+        if !(entrained_air_kg_s > 0.0) {
+            return None;
+        }
+        let mut point = self.rocket_point(throttle, condition.ambient_pa).ok()?;
         let motive_flow_kg_s = point.fuel_flow_kg_s + point.oxidizer_flow_kg_s;
+        if !(motive_flow_kg_s > 0.0) {
+            return None;
+        }
         let mixed_flow_kg_s = motive_flow_kg_s + entrained_air_kg_s;
         let motive_kinetic_power_w = 0.5 * motive_flow_kg_s * point.exhaust_velocity_mps.powi(2);
         let mixed_exhaust_velocity_mps =
@@ -805,21 +940,21 @@ impl CompiledEstoc {
         // Preserve the rocket nozzle's pressure term, then close the mixed
         // stream momentum against captured air's incoming momentum.
         let pressure_thrust_n = point.thrust_n - motive_flow_kg_s * point.exhaust_velocity_mps;
-        point.mode = EstocMode::Ejector;
-        point.thrust_n = mixed_flow_kg_s * mixed_exhaust_velocity_mps
+        let thrust_n = mixed_flow_kg_s * mixed_exhaust_velocity_mps
             - entrained_air_kg_s * condition.airspeed_mps
             + pressure_thrust_n;
+        if !(thrust_n > 0.0) {
+            return None;
+        }
+        point.mode = EstocMode::Ejector;
+        point.thrust_n = thrust_n;
         point.air_flow_kg_s = entrained_air_kg_s;
-        point.isp_total_s = if motive_flow_kg_s > 0.0 {
-            point.thrust_n / (motive_flow_kg_s * STANDARD_GRAVITY_MPS2)
-        } else {
-            0.0
-        };
+        point.isp_total_s = thrust_n / (motive_flow_kg_s * STANDARD_GRAVITY_MPS2);
         point.exhaust_velocity_mps = mixed_exhaust_velocity_mps;
         point.exit_pressure_pa = condition.ambient_pa;
         point.exit_mach = mixed_exhaust_velocity_mps
             / (super::AIR_GAMMA * 287.0 * point.exhaust_temp_k.max(1.0)).sqrt();
-        Ok(point)
+        Some(point)
     }
 
     /// Operating point with mode discipline and a self-consistent
@@ -863,9 +998,12 @@ impl CompiledEstoc {
                 "transition dt must be >= 0 or +infinity".into(),
             ));
         }
-        if throttle == 0.0 {
+        // Cutoff throttle: any command below `min_throttle` is a shutdown
+        // (zero thrust and flow across every channel).
+        if throttle < self.min_throttle {
             let air_point = self.air.operating_point(condition, 0.0)?;
-            let mode = self.select_mode_inner(condition, &air_point, last_mode, manual, false);
+            let mode =
+                self.select_mode_inner(condition, &air_point, throttle, last_mode, manual, false);
             let wall_temp = self.precooler.map_or(0.0, |precooler| {
                 prev.map_or(precooler.wall_initial_temp_k, |state| {
                     if state.precooler_wall_temp_k > 0.0 {
@@ -931,7 +1069,14 @@ impl CompiledEstoc {
             air_point.compressor_inlet_total_temp_k
                 > precooler.maximum_compressor_inlet_temp_k * (1.0 + 1e-9)
         });
-        let mode = self.select_mode(condition, &air_point, last_mode, manual);
+        let mut mode = self.select_mode(condition, &air_point, throttle, last_mode, manual);
+        if mode == EstocMode::Ejector && self.ejector_augmented_point(throttle, condition).is_none()
+        {
+            // Documented fallback (re-checked every tick): a manual ejector
+            // without hardware, captured flow, or positive net thrust runs
+            // the closed cycle instead of failing the step.
+            mode = EstocMode::Rocket;
+        }
         let idle_wall_temp_k = prev.map_or_else(
             || {
                 self.precooler
@@ -947,8 +1092,12 @@ impl CompiledEstoc {
             |state| state.coolant_outlet_temp_k,
         );
         let target = match mode {
+            // Negative air-path net thrust is real ram drag that panel aero
+            // does not model — reported as computed (parity with the
+            // steady analyzer); mode selection already refuses to *enter*
+            // Air on non-positive net thrust.
             EstocMode::Air => EstocTransient {
-                thrust_n: air_point.thrust_n.max(0.0),
+                thrust_n: air_point.thrust_n,
                 fuel_flow_kg_s: air_point.fuel_flow_kg_s,
                 bulk_fuel_flow_kg_s: air_point.bulk_fuel_flow_kg_s,
                 boost_fuel_flow_kg_s: air_point.boost_fuel_flow_kg_s,
@@ -992,7 +1141,27 @@ impl CompiledEstoc {
         let smoothed = match prev {
             None => target,
             Some(previous) => {
-                let alpha = 1.0 - (-dt_s / self.transition_tau_s).exp();
+                // Alpha is guarded end-to-end: `dt == 0` holds the
+                // snapshot, a NaN transition tau snaps to the target, and
+                // the result is clamped into `[0, 1]` — a deserialized
+                // `CompiledEstoc` carrying `tau == 0` must not turn
+                // `dt == 0` into a NaN that the lerp reproduces forever.
+                let alpha = if !(dt_s > 0.0) {
+                    0.0
+                } else if self.transition_tau_s.is_nan() {
+                    1.0
+                } else {
+                    1.0 - (-dt_s / self.transition_tau_s).exp()
+                };
+                let alpha = if alpha.is_finite() {
+                    alpha.clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+                // Self-heal a corrupted/deserialized snapshot before it is
+                // blended: a non-finite channel resets to 0.0 instead of
+                // poisoning every subsequent tick.
+                let previous = previous.healed();
                 let lerp = |old: f64, new: f64| old + (new - old) * alpha;
                 EstocTransient {
                     thrust_n: lerp(previous.thrust_n, target.thrust_n),
@@ -1099,7 +1268,10 @@ pub fn analyze_estoc(
             "ESTOC analyzer needs altitudes and Mach numbers".into(),
         ));
     }
-    let mut rows = Vec::with_capacity(altitudes_m.len() * machs.len());
+    // Checked product: absurdly large slices must grow the buffer
+    // dynamically instead of panicking inside `with_capacity`.
+    let row_capacity = altitudes_m.len().checked_mul(machs.len()).unwrap_or(0);
+    let mut rows = Vec::with_capacity(row_capacity);
     for altitude_m in altitudes_m {
         if !altitude_m.is_finite() {
             return Err(PropulsionError::InvalidSpec(
@@ -1266,7 +1438,7 @@ mod tests {
             .operating_point(&low_condition, 1.0)
             .expect("air point");
         assert_eq!(
-            engine.select_mode(&low_condition, &air_low, EstocMode::Air, None),
+            engine.select_mode(&low_condition, &air_low, 1.0, EstocMode::Air, None),
             EstocMode::Air
         );
         let high_condition = condition_at(4.5, 1000.0);
@@ -1275,11 +1447,11 @@ mod tests {
             .operating_point(&high_condition, 1.0)
             .expect("high-Mach air point");
         assert_eq!(
-            engine.select_mode(&high_condition, &air_high, EstocMode::Air, None),
+            engine.select_mode(&high_condition, &air_high, 1.0, EstocMode::Air, None),
             EstocMode::Rocket
         );
         assert_eq!(
-            engine.select_mode(&condition_at(0.0, 0.0), &air_low, EstocMode::Air, None),
+            engine.select_mode(&condition_at(0.0, 0.0), &air_low, 1.0, EstocMode::Air, None),
             EstocMode::Rocket
         );
         // Inside the band the last mode holds.
@@ -1290,17 +1462,18 @@ mod tests {
             .expect("band air point");
         assert!(air_band.lit && !air_band.drive_limited && air_band.thrust_n > 0.0);
         assert_eq!(
-            engine.select_mode(&band_condition, &air_band, EstocMode::Rocket, None),
+            engine.select_mode(&band_condition, &air_band, 1.0, EstocMode::Rocket, None),
             EstocMode::Rocket
         );
         assert_eq!(
-            engine.select_mode(&band_condition, &air_band, EstocMode::Air, None),
+            engine.select_mode(&band_condition, &air_band, 1.0, EstocMode::Air, None),
             EstocMode::Air
         );
         assert_eq!(
             engine.select_mode(
                 &high_condition,
                 &air_high,
+                1.0,
                 EstocMode::Rocket,
                 Some(EstocMode::Air)
             ),
@@ -1325,7 +1498,13 @@ mod tests {
             .expect("viable point above policy threshold");
         assert!(policy_air_point.lit && !policy_air_point.drive_limited);
         assert_eq!(
-            policy_engine.select_mode(&policy_condition, &policy_air_point, EstocMode::Air, None,),
+            policy_engine.select_mode(
+                &policy_condition,
+                &policy_air_point,
+                1.0,
+                EstocMode::Air,
+                None,
+            ),
             EstocMode::Rocket
         );
     }
@@ -1777,5 +1956,315 @@ mod tests {
             ..estoc_like()
         };
         assert!(ram_air.compile().is_err());
+    }
+
+    fn nitrogen_flight(mach: f64, ambient_pa: f64, ambient_temp_k: f64) -> FlightCondition {
+        let sound_speed_mps = (AIR_GAMMA * 287.0 * ambient_temp_k).sqrt();
+        FlightCondition {
+            mach,
+            ambient_pa,
+            ambient_temp_k,
+            airspeed_mps: mach * sound_speed_mps,
+            composition: AtmosphereComposition::from_mole_fractions(&[(
+                crate::atmosphere::GasKind::Nitrogen,
+                1.0,
+            )])
+            .expect("nitrogen atmosphere"),
+        }
+    }
+
+    #[test]
+    fn ejector_is_never_selected_on_negative_net_thrust() {
+        // Dense anoxic atmosphere (Titan class: rho ~5 kg/m^3 at Mach 8):
+        // inlet momentum outruns the mixed stream by an order of magnitude,
+        // so the ejector would brake the ship and drive Isp negative.
+        let engine = v6_estoc().compile().expect("v6 ESTOC compiles");
+        let titan = nitrogen_flight(8.0, 146_700.0, 94.0);
+        assert!(
+            engine.ejector_augmented_point(1.0, &titan).is_none(),
+            "ejector net thrust must not come out positive here"
+        );
+        let air_point = engine
+            .air
+            .operating_point(&titan, 1.0)
+            .expect("anoxic air point");
+        assert_eq!(
+            engine.select_mode(&titan, &air_point, 1.0, EstocMode::Air, None),
+            EstocMode::Rocket
+        );
+        // Recomputed every tick: even with the ejector as the previous
+        // mode, a non-producing ejector cannot stick.
+        for last_mode in [EstocMode::Air, EstocMode::Ejector] {
+            let (point, _) = engine
+                .operating_point(
+                    &titan,
+                    1.0,
+                    None,
+                    last_mode,
+                    None,
+                    1.0,
+                    JetShaftState::running(&engine.air),
+                )
+                .expect("anoxic step");
+            assert_eq!(point.mode, EstocMode::Rocket);
+            assert!(point.thrust_n > 0.0);
+            assert!(point.isp_total_s >= 0.0);
+        }
+    }
+
+    #[test]
+    fn rocket_deep_throttle_is_cut_off_and_never_negative() {
+        let engine = estoc_like().compile().expect("estoc compiles");
+        let sea_level = condition_at(1.0, 101_325.0);
+        let shaft = JetShaftState::running(&engine.air);
+        // Below the cutoff the whole engine is off: zero thrust, zero flow,
+        // zero Isp — never the `-pa*Ae` braking (hundreds of kN at sea
+        // level) with Isp -> -infinity the raw chamber scaling produced.
+        for throttle in [0.0, 0.1, 0.25, engine.min_throttle - 1e-9] {
+            let (point, _) = engine
+                .operating_point(
+                    &sea_level,
+                    throttle,
+                    Some(EstocMode::Rocket),
+                    EstocMode::Rocket,
+                    None,
+                    1.0,
+                    shaft,
+                )
+                .expect("cutoff point");
+            assert_eq!(point.thrust_n, 0.0, "throttle {throttle}");
+            assert_eq!(point.fuel_flow_kg_s, 0.0);
+            assert_eq!(point.oxidizer_flow_kg_s, 0.0);
+            assert_eq!(point.isp_total_s, 0.0);
+        }
+        // Direct evaluation (bypassing the runtime gate) is non-negative
+        // at any finite throttle as well.
+        let trickle = engine
+            .rocket_point(1.0e-6, 101_325.0)
+            .expect("deep-throttle rocket");
+        assert_eq!(throttle_zero(trickle.thrust_n), 0.0);
+        assert_eq!(trickle.thrust_n, 0.0);
+        assert_eq!(trickle.fuel_flow_kg_s, 0.0);
+        // Lower edge of the running band: finite, positive thrust at the
+        // commanded cutoff, and no negative net anywhere above it.
+        let edge = engine
+            .rocket_point(engine.min_throttle, 101_325.0)
+            .expect("cutoff-edge rocket");
+        assert!(edge.thrust_n.is_finite() && edge.thrust_n > 0.0);
+        assert!(edge.isp_total_s.is_finite() && edge.isp_total_s >= 0.0);
+        for step in 0..=20 {
+            let throttle = step as f64 / 20.0;
+            if throttle < engine.min_throttle {
+                continue;
+            }
+            let (point, _) = engine
+                .operating_point(
+                    &sea_level,
+                    throttle,
+                    Some(EstocMode::Rocket),
+                    EstocMode::Rocket,
+                    None,
+                    1.0,
+                    shaft,
+                )
+                .expect("running-band point");
+            assert!(
+                point.thrust_n.is_finite() && point.thrust_n > 0.0,
+                "throttle {throttle}: net thrust {}",
+                point.thrust_n
+            );
+            assert!(point.isp_total_s.is_finite() && point.isp_total_s >= 0.0);
+        }
+    }
+
+    fn throttle_zero(value: f64) -> f64 {
+        assert!(value.is_finite());
+        value
+    }
+
+    #[test]
+    fn manual_ejector_falls_back_to_rocket_instead_of_erroring() {
+        // No ejector hardware: a manual ejector command must not fail the
+        // step (an Err there tears the wrench of every jet off the vehicle).
+        let engine = estoc_like().compile().expect("estoc compiles");
+        let condition = condition_at(2.0, 101_325.0);
+        let (point, _) = engine
+            .operating_point(
+                &condition,
+                1.0,
+                Some(EstocMode::Ejector),
+                EstocMode::Air,
+                None,
+                1.0,
+                JetShaftState::running(&engine.air),
+            )
+            .expect("manual ejector without hardware");
+        assert_eq!(point.mode, EstocMode::Rocket);
+        assert!(point.thrust_n > 0.0);
+
+        // Hardware installed but the craft is stopped: zero captured flow
+        // falls back to the documented closed cycle, again without Err.
+        let engine = v6_estoc().compile().expect("v6 ESTOC compiles");
+        let mut stopped = condition_at(2.0, 101_325.0);
+        stopped.airspeed_mps = 0.0;
+        stopped.mach = 0.0;
+        let (point, _) = engine
+            .operating_point(
+                &stopped,
+                1.0,
+                Some(EstocMode::Ejector),
+                EstocMode::Air,
+                None,
+                1.0,
+                JetShaftState::running(&engine.air),
+            )
+            .expect("manual ejector without captured flow");
+        assert_eq!(point.mode, EstocMode::Rocket);
+        assert!(point.thrust_n > 0.0);
+        assert_eq!(point.air_flow_kg_s, 0.0);
+    }
+
+    #[test]
+    fn authored_oxidizer_fuel_ratio_is_validated_and_drives_thermo() {
+        // Out-of-table ratios are refused at validation, like liquids.
+        let mut too_rich = estoc_like(); // Lox/RP-1 table spans [2.0, 3.4]
+        too_rich.oxidizer_fuel_ratio = Some(9.9);
+        assert!(matches!(
+            too_rich.compile().err(),
+            Some(PropulsionError::InvalidSpec(_))
+        ));
+        let mut too_lean = estoc_like();
+        too_lean.oxidizer_fuel_ratio = Some(0.5); // > 0 but outside the table
+        assert!(matches!(
+            too_lean.compile().err(),
+            Some(PropulsionError::InvalidSpec(_))
+        ));
+
+        // The authored ratio reaches chamber thermo (fuel-rich mixture:
+        // lower Tc -> lower c* -> lower Isp), not just the propellant split.
+        let reference = estoc_like().compile().expect("reference ratio");
+        let mut rich_spec = estoc_like();
+        rich_spec.oxidizer_fuel_ratio = Some(2.0);
+        let rich = rich_spec.compile().expect("in-table ratio");
+        assert!(rich.rocket_chamber_temp_k < reference.rocket_chamber_temp_k);
+        assert!(rich.rocket_c_star_mps < reference.rocket_c_star_mps);
+        assert!(rich.rocket_isp_vac_s < reference.rocket_isp_vac_s);
+        assert!(rich.rocket_isp_sl_s < reference.rocket_isp_sl_s);
+        // The flow split still books the authored ratio, and the point
+        // stays physical.
+        let rich_point = rich.rocket_point(1.0, 0.0).expect("rich rocket at vacuum");
+        assert!((rich_point.oxidizer_flow_kg_s / rich_point.fuel_flow_kg_s - 2.0).abs() < 1e-9);
+        assert!(rich_point.thrust_n > 0.0);
+        assert!(rich_point.isp_total_s > 0.0);
+    }
+
+    #[test]
+    fn degenerate_transition_and_corrupted_snapshot_never_reproduce_nan() {
+        // A `CompiledEstoc` deserialized without going through `compile()`
+        // may carry a zero transition tau; with `dt == 0` the old alpha was
+        // NaN and the lerp poisoned `prev` forever.
+        let mut engine = estoc_like().compile().expect("estoc compiles");
+        engine.transition_tau_s = 0.0;
+        let condition = condition_at(4.0, 2000.0);
+        let shaft = JetShaftState::running(&engine.air);
+        let poisoned = EstocTransient {
+            thrust_n: f64::NAN,
+            fuel_flow_kg_s: f64::NAN,
+            bulk_fuel_flow_kg_s: f64::NAN,
+            boost_fuel_flow_kg_s: f64::NAN,
+            oxidizer_flow_kg_s: f64::NAN,
+            air_flow_kg_s: f64::NAN,
+            exhaust_temp_k: f64::NAN,
+            exhaust_velocity_mps: f64::NAN,
+            exit_pressure_pa: f64::NAN,
+            exit_mach: f64::NAN,
+            compressor_inlet_total_temp_k: f64::NAN,
+            precooler_heat_flow_w: f64::NAN,
+            precooler_wall_heat_flow_w: f64::NAN,
+            precooler_wall_temp_k: f64::NAN,
+            coolant_outlet_temp_k: f64::NAN,
+        };
+        let (point, state) = engine
+            .operating_point(
+                &condition,
+                1.0,
+                Some(EstocMode::Rocket),
+                EstocMode::Rocket,
+                Some(&poisoned),
+                0.0,
+                shaft,
+            )
+            .expect("zero-dt step");
+        assert!(point.thrust_n.is_finite());
+        assert!(point.isp_total_s.is_finite());
+        assert!(state.thrust_n.is_finite());
+        // The healed snapshot keeps producing finite, positive thrust on
+        // the following ticks.
+        let (next, next_state) = engine
+            .operating_point(
+                &condition,
+                1.0,
+                Some(EstocMode::Rocket),
+                EstocMode::Rocket,
+                Some(&state),
+                1.0,
+                shaft,
+            )
+            .expect("follow-up step");
+        assert!(next.thrust_n.is_finite() && next.thrust_n > 0.0);
+        assert!(next_state.thrust_n.is_finite());
+
+        // Same guards with the authored (finite, positive) tau.
+        let engine = estoc_like().compile().expect("estoc compiles");
+        let (point, state) = engine
+            .operating_point(
+                &condition,
+                1.0,
+                Some(EstocMode::Rocket),
+                EstocMode::Rocket,
+                Some(&poisoned),
+                engine.transition_tau_s,
+                shaft,
+            )
+            .expect("normal-tau step");
+        assert!(point.thrust_n.is_finite());
+        assert!(state.thrust_n.is_finite() && state.thrust_n >= 0.0);
+    }
+
+    #[test]
+    fn flameout_precooler_books_zero_coolant_heat_without_coolant_flow() {
+        let engine = v6_estoc().compile().expect("v6 ESTOC compiles");
+        let anoxic = nitrogen_flight(2.0, 101_325.0, 288.15);
+        let (point, _) = engine
+            .operating_point(
+                &anoxic,
+                1.0,
+                Some(EstocMode::Air),
+                EstocMode::Air,
+                None,
+                1.0,
+                JetShaftState::running(&engine.air),
+            )
+            .expect("anoxic manual-air point");
+        // Manual Air is honored and flames out: real airflow, no fuel.
+        assert_eq!(point.mode, EstocMode::Air);
+        assert_eq!(point.thrust_n, 0.0);
+        assert!(point.air_flow_kg_s > 0.0);
+        assert_eq!(point.boost_fuel_flow_kg_s, 0.0);
+        // No coolant mass through the exchanger means the coolant side
+        // removes no heat: reported duty collapses to the wall store's
+        // share (previously the coolant share was booked with zero flow,
+        // so the outlet sat at its inlet temperature while claiming
+        // extraction that no medium carried away).
+        assert!(
+            point.precooler_heat_flow_w > 0.0,
+            "regression case must extract some heat somewhere"
+        );
+        assert!(
+            (point.precooler_heat_flow_w - point.precooler_wall_heat_flow_w).abs() < 1e-9,
+            "coolant-side heat must be zero without coolant flow"
+        );
+        let inlet_k = engine.precooler.expect("precooler").coolant_inlet_temp_k;
+        assert!(point.coolant_outlet_temp_k >= inlet_k - 1e-9);
     }
 }

@@ -639,8 +639,8 @@ impl BakedEphemeris {
     ///
     /// Representation optimization, not a model change: each body's Kepler
     /// solve runs exactly once per timestamp instead of once per dependent
-    /// (`body_state` re-walks shared parents — 58 solves per gravity call on
-    /// the 24-body design system vs 23 here). Values are bitwise identical to
+    /// (`body_state` re-walks shared parents — 81 solves per gravity call on
+    /// the 32-body design system vs 31 here). Values are bitwise identical to
     /// individual [`BakedEphemeris::body_state`] calls: same solve, same basis,
     /// same summation order per body.
     ///

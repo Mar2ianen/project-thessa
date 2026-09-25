@@ -543,8 +543,7 @@ impl CompiledEstoc {
         let Some(ejector) = self.ejector else {
             return 0.0;
         };
-        let density = condition.ambient_pa / (287.0 * condition.ambient_temp_k);
-        density * ejector.spec.capture_area_m2 * condition.airspeed_mps
+        condition.density_kg_m3() * ejector.spec.capture_area_m2 * condition.airspeed_mps
     }
 
     pub(super) fn conditioned_air_point(
@@ -686,17 +685,15 @@ impl CompiledEstoc {
             coolant_heat_flow_w: coolant_heat_w,
             wall_heat_flow_w: wall_heat_w,
         };
-        let (point, balance) = if boost_flow_kg_s > 0.0 || wall_heat_w > 0.0 {
-            self.air.operating_point_at_spool_conditioned(
-                condition,
-                throttle,
-                shaft.spool_n,
-                shaft.lit,
-                conditioning,
-            )?
-        } else {
-            (baseline, baseline_balance)
-        };
+        // The exchanger's pressure recovery is a hardware loss even when
+        // neither coolant nor the finite wall store transfers heat.
+        let (point, balance) = self.air.operating_point_at_spool_conditioned(
+            condition,
+            throttle,
+            shaft.spool_n,
+            shaft.lit,
+            conditioning,
+        )?;
         // The nozzle may rescale all matched flows. Advance the wall and
         // report coolant outlet from the heat actually used by that matched
         // operating point, not the pre-match exchanger request.
@@ -717,6 +714,47 @@ impl CompiledEstoc {
             prior_wall_temp_k
         };
         Ok((point, next_wall_temp_k, coolant_outlet_temp_k, balance))
+    }
+
+    /// Solve the sustainable steady shaft speed with the ESTOC precooler
+    /// included in the cycle and shaft balance. The finite wall store is not
+    /// credited at steady state; flowing coolant remains available.
+    fn solve_steady_spool_n(
+        &self,
+        condition: &FlightCondition,
+        throttle: f64,
+    ) -> Result<f64, PropulsionError> {
+        if !self.air.cycle.has_shaft() {
+            return Ok(1.0);
+        }
+        if throttle == 0.0 {
+            return Ok(0.0);
+        }
+        let net_power_w = |spool_n: f64| -> Result<f64, PropulsionError> {
+            let mut shaft = JetShaftState::running(&self.air);
+            shaft.spool_n = spool_n;
+            let (_, _, _, balance) =
+                self.conditioned_air_point(condition, throttle, shaft, None, f64::INFINITY)?;
+            Ok(balance.net_w())
+        };
+
+        let mut low = self.air.shaft.light_off_n;
+        if !(net_power_w(low)? > 0.0) {
+            return Ok(0.0);
+        }
+        if !(net_power_w(1.0)? < 0.0) {
+            return Ok(1.0);
+        }
+        let mut high = 1.0;
+        for _ in 0..40 {
+            let middle = 0.5 * (low + high);
+            if net_power_w(middle)? > 0.0 {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        Ok(0.5 * (low + high))
     }
 
     /// Steady rocket-mode point at throttle and ambient (chamber pressure
@@ -1079,6 +1117,10 @@ pub struct EstocAltitudePoint {
     pub boost_fuel_flow_kg_s: f64,
     pub oxidizer_flow_kg_s: f64,
     pub air_flow_kg_s: f64,
+    /// Sustainable steady spool speed; 0.0 means the air core cannot sustain
+    /// its shaft at this condition. Shaftless ramjet/scramjet cycles report 1.
+    #[serde(default)]
+    pub spool_n: f64,
     pub compressor_inlet_total_temp_k: f64,
     pub precooler_heat_flow_w: f64,
     pub precooler_saturated: bool,
@@ -1117,6 +1159,12 @@ pub fn analyze_estoc(
             }
             let condition =
                 super::air::flight_condition(&sample, mach * sample.speed_of_sound_mps)?;
+            let spool_n = engine.solve_steady_spool_n(&condition, throttle)?;
+            let mut shaft = JetShaftState::running(&engine.air);
+            if engine.air.cycle.has_shaft() {
+                shaft.spool_n = spool_n;
+                shaft.lit = spool_n > 0.0;
+            }
             let (point, _) = engine.operating_point(
                 &condition,
                 throttle,
@@ -1124,7 +1172,7 @@ pub fn analyze_estoc(
                 EstocMode::Air,
                 None,
                 f64::INFINITY,
-                JetShaftState::running(&engine.air),
+                shaft,
             )?;
             rows.push(EstocAltitudePoint {
                 altitude_m: *altitude_m,
@@ -1138,6 +1186,7 @@ pub fn analyze_estoc(
                 boost_fuel_flow_kg_s: point.boost_fuel_flow_kg_s,
                 oxidizer_flow_kg_s: point.oxidizer_flow_kg_s,
                 air_flow_kg_s: point.air_flow_kg_s,
+                spool_n,
                 compressor_inlet_total_temp_k: point.compressor_inlet_total_temp_k,
                 precooler_heat_flow_w: point.precooler_heat_flow_w,
                 precooler_saturated: point.precooler_saturated,
@@ -1461,11 +1510,120 @@ mod tests {
     }
 
     #[test]
+    fn oxygen_limited_boost_fuel_respects_coolant_outlet_limit() {
+        let engine = v6_estoc().compile().expect("v6 ESTOC");
+        let mut condition = condition_at(2.0, 101_325.0);
+        condition.composition = AtmosphereComposition::from_mole_fractions(&[
+            (crate::atmosphere::GasKind::Oxygen, 0.01),
+            (crate::atmosphere::GasKind::Nitrogen, 0.99),
+        ])
+        .expect("oxygen-poor atmosphere");
+        let (point, _, coolant_outlet_k, _) = engine
+            .conditioned_air_point(
+                &condition,
+                1.0,
+                JetShaftState::running(&engine.air),
+                None,
+                0.1,
+            )
+            .expect("conditioned air point");
+        assert!(point.oxygen_limited, "test condition must limit combustion");
+        assert!(point.boost_fuel_flow_kg_s > 0.0);
+        let precooler = engine.precooler.expect("pre-cooler");
+        let coolant_heat_w = point.precooler_heat_flow_w - point.precooler_wall_heat_flow_w;
+        assert!(
+            coolant_heat_w > 0.0,
+            "coolant must absorb heat in this case"
+        );
+        assert!(
+            coolant_outlet_k <= precooler.coolant_max_outlet_temp_k + 1e-8,
+            "coolant outlet {coolant_outlet_k} K exceeds configured limit"
+        );
+        let coolant_capacity_w = point.boost_fuel_flow_kg_s
+            * precooler.coolant_specific_heat_j_kg_k
+            * (precooler.coolant_max_outlet_temp_k - precooler.coolant_inlet_temp_k);
+        assert!(coolant_heat_w <= coolant_capacity_w + 1e-8 * coolant_capacity_w.max(1.0));
+        let ram_temp_k = condition.ambient_temp_k
+            * (1.0 + (AIR_GAMMA - 1.0) * 0.5 * condition.mach * condition.mach);
+        let expected_inlet_temp_k =
+            ram_temp_k - point.precooler_heat_flow_w / (point.air_flow_kg_s * AIR_CP_J_KG_K);
+        assert!(
+            (point.compressor_inlet_total_temp_k - expected_inlet_temp_k).abs()
+                <= 1e-6 * expected_inlet_temp_k.max(1.0),
+            "compressor inlet {} K does not match heat-transfer temperature {expected_inlet_temp_k} K; heat={} W, air={} kg/s",
+            point.compressor_inlet_total_temp_k,
+            point.precooler_heat_flow_w,
+            point.air_flow_kg_s
+        );
+
+        condition.composition = AtmosphereComposition::anoxic();
+        let (anoxic_point, _, anoxic_outlet_k, _) = engine
+            .conditioned_air_point(
+                &condition,
+                1.0,
+                JetShaftState::running(&engine.air),
+                None,
+                0.1,
+            )
+            .expect("anoxic conditioned point");
+        let anoxic_coolant_heat_w =
+            anoxic_point.precooler_heat_flow_w - anoxic_point.precooler_wall_heat_flow_w;
+        assert_eq!(anoxic_point.boost_fuel_flow_kg_s, 0.0);
+        assert_eq!(anoxic_coolant_heat_w, 0.0);
+        assert_eq!(anoxic_outlet_k, precooler.coolant_inlet_temp_k);
+    }
+
+    #[test]
+    fn pre_cooler_pressure_recovery_applies_without_heat_transfer() {
+        let mut cooled_spec = v6_estoc();
+        cooled_spec.boost_coolant_fuel = None;
+        let cooled = cooled_spec.compile().expect("cooled ESTOC");
+        let mut uncooled_spec = cooled_spec;
+        uncooled_spec.precooler = None;
+        let uncooled = uncooled_spec.compile().expect("uncooled ESTOC");
+        let condition = condition_at(2.0, 101_325.0);
+        let shaft = JetShaftState::running(&cooled.air);
+        let (cooled_point, _, _, _) = cooled
+            .conditioned_air_point(&condition, 1.0, shaft, None, f64::INFINITY)
+            .expect("cooled point");
+        let (uncooled_point, _) = uncooled
+            .air
+            .operating_point_at_spool(&condition, 1.0, shaft.spool_n, shaft.lit)
+            .expect("uncooled point");
+        assert_eq!(cooled_point.precooler_heat_flow_w, 0.0);
+        assert!(
+            cooled_point.thrust_n < uncooled_point.thrust_n,
+            "the installed pre-cooler pressure loss must apply with zero heat transfer"
+        );
+    }
+
+    #[test]
+    fn ejector_capture_uses_atmosphere_composition_density() {
+        let engine = v6_estoc().compile().expect("v6 ESTOC");
+        let mut condition = condition_at(2.0, 101_325.0);
+        condition.composition = AtmosphereComposition::from_mole_fractions(&[(
+            crate::atmosphere::GasKind::CarbonDioxide,
+            1.0,
+        )])
+        .expect("carbon-dioxide atmosphere");
+        let ejector = engine.ejector.expect("ejector");
+        let expected =
+            condition.density_kg_m3() * ejector.spec.capture_area_m2 * condition.airspeed_mps;
+        assert_eq!(engine.ejector_capture_flow_kg_s(&condition), expected);
+    }
+
+    #[test]
     fn estoc_analyzer_reports_the_selected_steady_mode_and_thermal_point() {
         let engine = v6_estoc().compile().expect("v6 ESTOC");
         let atmosphere = crate::atmosphere::AtmosphereConfig::default();
         let sample = atmosphere.sample(0.0).expect("sea-level atmosphere");
         let condition = super::super::air::flight_condition(&sample, 0.0).expect("condition");
+        let rows =
+            analyze_estoc(&engine, &atmosphere, &[0.0], &[0.0], 1.0).expect("ESTOC analyzer");
+        assert_eq!(rows.len(), 1);
+        let mut shaft = JetShaftState::running(&engine.air);
+        shaft.spool_n = rows[0].spool_n;
+        shaft.lit = rows[0].spool_n > 0.0;
         let (expected, _) = engine
             .operating_point(
                 &condition,
@@ -1474,12 +1632,9 @@ mod tests {
                 EstocMode::Air,
                 None,
                 f64::INFINITY,
-                JetShaftState::running(&engine.air),
+                shaft,
             )
             .expect("steady ESTOC point");
-        let rows =
-            analyze_estoc(&engine, &atmosphere, &[0.0], &[0.0], 1.0).expect("ESTOC analyzer");
-        assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].mode, expected.mode);
         assert_eq!(rows[0].thrust_n, expected.thrust_n);
         assert_eq!(
@@ -1487,6 +1642,19 @@ mod tests {
             expected.precooler_heat_flow_w
         );
         assert!(analyze_estoc(&engine, &atmosphere, &[], &[0.0], 1.0).is_err());
+    }
+
+    #[test]
+    fn estoc_analyzer_does_not_report_an_unsustainable_full_spool_air_point() {
+        let engine = v6_estoc().compile().expect("v6 ESTOC");
+        let atmosphere = crate::atmosphere::AtmosphereConfig::default();
+        let rows = analyze_estoc(&engine, &atmosphere, &[56_000.0], &[0.0], 0.5)
+            .expect("high-altitude ESTOC analyzer");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].spool_n, 0.0);
+        assert_eq!(rows[0].mode, EstocMode::Rocket);
+        assert_eq!(rows[0].air_flow_kg_s, 0.0);
+        assert!(rows[0].thrust_n > 0.0);
     }
 
     #[test]

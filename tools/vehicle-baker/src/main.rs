@@ -334,8 +334,8 @@ fn run_analyzer(
                 mount.name
             );
             println!(
-                "{:>10} {:>6} {:>9} {:>12} {:>10} {:>10} {:>7}",
-                "alt_m", "mach", "mode", "thrust_kN", "isp_s", "fuel_g/s", "cool"
+                "{:>10} {:>6} {:>9} {:>12} {:>10} {:>10} {:>8} {:>7}",
+                "alt_m", "mach", "mode", "thrust_kN", "isp_s", "fuel_g/s", "spool_n", "cool"
             );
             let rows = analyze_estoc(engine, &atmosphere, &altitudes, mach_grid, throttle)?;
             for point in &rows {
@@ -345,13 +345,14 @@ fn run_analyzer(
                     thessa_sim_core::EstocMode::Ejector => "ejector",
                 };
                 println!(
-                    "{:>10.0} {:>6.1} {:>9} {:>12.1} {:>10.0} {:>10.2} {:>7}",
+                    "{:>10.0} {:>6.1} {:>9} {:>12.1} {:>10.0} {:>10.2} {:>8.3} {:>7}",
                     point.altitude_m,
                     point.mach,
                     mode,
                     point.thrust_n / 1000.0,
                     point.isp_total_s,
                     point.fuel_flow_kg_s * 1000.0,
+                    point.spool_n,
                     if point.precooler_saturated { "SAT" } else { "" },
                 );
             }

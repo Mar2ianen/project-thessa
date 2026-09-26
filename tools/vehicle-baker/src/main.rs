@@ -15,13 +15,14 @@ use thessa_sim_core::{
     ElectricPropellant, ElectricThrusterDesign, ElectricThrusterMount, ElectricThrusterSpec,
     EngineCycle, EngineMount, EstocEjectorSpec, EstocPrecoolerSpec, EstocSpec, FoldJointRecord,
     FusionReaction, FusionTorchMount, FusionTorchSpec, IntakeKind, JetFuel, JetMount,
-    LiquidEngineSpec, NozzleContour, NtrFluid, NuclearThermalSpec, Propellant, PropellerDriveMount,
-    PropellerDriveSpec, PropellerSpec, PropulsionSystemSpec, PulsedFusionMount, PulsedFusionSpec,
-    RigidBodyProperties, ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec,
-    SystemMount, TankMount, TankShape, TankSpec, TurbopropDriveSpec, TurbopropMount,
-    VehicleDefinition, WheelBrakeSpec, WheelChassisSpec, WheelDriveSpec, WheelLayout,
-    WheelStrutSpec, WheelTireSpec, analyze_airbreathing, analyze_altitude, analyze_estoc,
-    analyze_propeller_drive, analyze_turboprop_drive,
+    LandingLegSpec, LandingShockAbsorberSpec, LiquidEngineSpec, NozzleContour, NtrFluid,
+    NuclearThermalSpec, Propellant, PropellerDriveMount, PropellerDriveSpec, PropellerSpec,
+    PropulsionSystemSpec, PulsedFusionMount, PulsedFusionSpec, RigidBodyProperties,
+    ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec, SystemMount, TankMount,
+    TankShape, TankSpec, TurbopropDriveSpec, TurbopropMount, VehicleDefinition, WheelBrakeSpec,
+    WheelChassisRetractionSpec, WheelChassisSpec, WheelDriveSpec, WheelLayout, WheelStrutSpec,
+    WheelTireSpec, analyze_airbreathing, analyze_altitude, analyze_estoc, analyze_propeller_drive,
+    analyze_turboprop_drive,
 };
 
 mod debug_mesh;
@@ -516,6 +517,9 @@ struct VehicleAsset {
     /// masses participate in the same final center-of-mass bake as mounts.
     #[serde(default)]
     wheel_chassis: Vec<WheelChassisAsset>,
+    /// Fold-out rocket/lander support legs with reusable or crushable shocks.
+    #[serde(default)]
+    landing_legs: Vec<LandingLegAsset>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -534,6 +538,37 @@ struct WheelChassisAsset {
     brake: WheelBrakeSpec,
     #[serde(default)]
     drive: Option<WheelDriveSpec>,
+    /// Optional aircraft-style fold hinge. The authored chassis pose is fully
+    /// deployed; this record defines its stowed angle relative to that pose.
+    #[serde(default)]
+    retraction: Option<WheelChassisRetractionAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WheelChassisRetractionAsset {
+    pivot_position_body_m: [f64; 3],
+    hinge_axis_body: [f64; 3],
+    stowed_angle_rad: f64,
+    #[serde(default)]
+    deployed_angle_rad: f64,
+    #[serde(default = "default_true")]
+    initially_deployed: bool,
+    deployment_rate_rad_s: f64,
+    actuator_max_torque_nm: f64,
+}
+
+impl From<WheelChassisRetractionAsset> for WheelChassisRetractionSpec {
+    fn from(asset: WheelChassisRetractionAsset) -> Self {
+        Self {
+            pivot_position_body_m: vector(asset.pivot_position_body_m),
+            hinge_axis_body: vector(asset.hinge_axis_body),
+            stowed_angle_rad: asset.stowed_angle_rad,
+            deployed_angle_rad: asset.deployed_angle_rad,
+            initially_deployed: asset.initially_deployed,
+            deployment_rate_rad_s: asset.deployment_rate_rad_s,
+            actuator_max_torque_nm: asset.actuator_max_torque_nm,
+        }
+    }
 }
 
 impl WheelChassisAsset {
@@ -557,7 +592,52 @@ impl WheelChassisAsset {
             strut: self.strut,
             brake: self.brake,
             drive: self.drive,
+            retraction: self.retraction.map(Into::into),
         })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct LandingLegAsset {
+    name: String,
+    mount_position_body_m: [f64; 3],
+    hinge_axis_body: [f64; 3],
+    stowed_leg_axis_body: [f64; 3],
+    stowed_angle_rad: f64,
+    deployed_angle_rad: f64,
+    #[serde(default = "default_true")]
+    initially_deployed: bool,
+    deployment_rate_rad_s: f64,
+    actuator_max_torque_nm: f64,
+    leg_length_m: f64,
+    leg_mass_kg: f64,
+    footpad_radius_m: f64,
+    footpad_mass_kg: f64,
+    footpad_friction: f64,
+    footpad_slip_stiffness_n_per_mps: f64,
+    shock_absorber: LandingShockAbsorberSpec,
+}
+
+impl LandingLegAsset {
+    fn bake(self) -> LandingLegSpec {
+        LandingLegSpec {
+            name: self.name,
+            mount_position_body_m: vector(self.mount_position_body_m),
+            hinge_axis_body: vector(self.hinge_axis_body),
+            stowed_leg_axis_body: vector(self.stowed_leg_axis_body),
+            stowed_angle_rad: self.stowed_angle_rad,
+            deployed_angle_rad: self.deployed_angle_rad,
+            initially_deployed: self.initially_deployed,
+            deployment_rate_rad_s: self.deployment_rate_rad_s,
+            actuator_max_torque_nm: self.actuator_max_torque_nm,
+            leg_length_m: self.leg_length_m,
+            leg_mass_kg: self.leg_mass_kg,
+            footpad_radius_m: self.footpad_radius_m,
+            footpad_mass_kg: self.footpad_mass_kg,
+            footpad_friction: self.footpad_friction,
+            footpad_slip_stiffness_n_per_mps: self.footpad_slip_stiffness_n_per_mps,
+            shock_absorber: self.shock_absorber,
+        }
     }
 }
 
@@ -828,6 +908,16 @@ impl VehicleAsset {
             .cloned()
             .map(|spec| spec.compile())
             .collect::<Result<Vec<_>, _>>()?;
+        let landing_leg_specs: Vec<_> = self
+            .landing_legs
+            .into_iter()
+            .map(LandingLegAsset::bake)
+            .collect();
+        let landing_leg_components = landing_leg_specs
+            .iter()
+            .cloned()
+            .map(LandingLegSpec::compile)
+            .collect::<Result<Vec<_>, _>>()?;
         // Assembly center of mass over EVERYTHING: hand mass rides the
         // authoring origin, surfaces/engine/tank/system/jet masses ride
         // their stations. Flight integrates moments about the body
@@ -898,6 +988,10 @@ impl VehicleAsset {
             total_mass_kg += chassis.mass_properties.mass_kg;
             total_moment +=
                 chassis.mass_properties.center_of_mass_body_m * chassis.mass_properties.mass_kg;
+        }
+        for leg in &landing_leg_components {
+            total_mass_kg += leg.mass_properties.mass_kg;
+            total_moment += leg.mass_properties.center_of_mass_body_m * leg.mass_properties.mass_kg;
         }
         let assembly_com = if total_mass_kg > 0.0 {
             total_moment / total_mass_kg
@@ -973,7 +1067,8 @@ impl VehicleAsset {
             .with_pulsed_fusion_systems(pulsed_fusion_mounts)?
             .with_propeller_drives(propeller_drive_mounts)?
             .with_turboprops(turboprop_mounts)?
-            .with_wheel_chassis(wheel_chassis_specs)?;
+            .with_wheel_chassis(wheel_chassis_specs)?
+            .with_landing_legs(landing_leg_specs)?;
         vehicle.bake_engine_masses()?;
         vehicle.bake_tank_masses()?;
         vehicle.bake_system_masses()?;
@@ -983,6 +1078,7 @@ impl VehicleAsset {
         vehicle.bake_propeller_drive_masses()?;
         vehicle.bake_turboprop_masses()?;
         vehicle.bake_wheel_chassis_masses()?;
+        vehicle.bake_landing_leg_masses()?;
         for (panel_index, joint) in parked_tags {
             vehicle.aero_geometry.panels[panel_index].fold_index = Some(joint);
         }
@@ -1037,11 +1133,22 @@ impl VehicleAsset {
         }
         for chassis in &mut vehicle.wheel_chassis {
             chassis.spec.mount_position_body_m += shift;
+            if let Some(retraction) = &mut chassis.spec.retraction {
+                retraction.pivot_position_body_m += shift;
+            }
             *chassis = chassis
                 .spec
                 .clone()
                 .compile()
                 .map_err(|error| format!("wheel chassis '{}': {error}", chassis.spec.name))?;
+        }
+        for leg in &mut vehicle.landing_legs {
+            leg.spec.mount_position_body_m = shift_point(leg.spec.mount_position_body_m);
+            *leg = leg
+                .spec
+                .clone()
+                .compile()
+                .map_err(|error| format!("landing leg '{}': {error}", leg.spec.name))?;
         }
         let total = vehicle.mass_properties.mass_kg;
         let recentered =
@@ -2479,14 +2586,49 @@ maximum_rpm = 12000.0
 efficiency = 0.94
 cooling_capacity_w = 640.0
 dry_mass_kg = 5.0
+
+[wheel_chassis.retraction]
+pivot_position_body_m = [0.5, 0.0, 0.0]
+hinge_axis_body = [0.0, 1.0, 0.0]
+stowed_angle_rad = -1.25
+deployed_angle_rad = 0.0
+initially_deployed = true
+deployment_rate_rad_s = 0.7
+actuator_max_torque_nm = 500.0
+
+[[landing_legs]]
+name = "apollo-foldout"
+mount_position_body_m = [-1.0, 0.0, -0.2]
+hinge_axis_body = [0.0, 1.0, 0.0]
+stowed_leg_axis_body = [0.0, 0.0, 1.0]
+stowed_angle_rad = 0.0
+deployed_angle_rad = 3.141592653589793
+initially_deployed = false
+deployment_rate_rad_s = 0.6
+actuator_max_torque_nm = 20000.0
+leg_length_m = 2.0
+leg_mass_kg = 18.0
+footpad_radius_m = 0.2
+footpad_mass_kg = 3.0
+footpad_friction = 0.8
+footpad_slip_stiffness_n_per_mps = 5000.0
+shock_absorber = { kind = "reusable", stroke_m = 0.2, spring_rate_n_m = 40000.0, damping_n_s_m = 1000.0, preload_n = 0.0, bottom_out_stiffness_n_m = 250000.0, maximum_force_n = 80000.0 }
 "#;
         let asset: VehicleAsset = toml::from_str(doc).expect("wheel chassis TOML parses");
         let vehicle = asset.bake().expect("wheel chassis asset bakes");
         assert_eq!(vehicle.wheel_chassis.len(), 1);
         assert_eq!(vehicle.wheel_chassis[0].wheel_stations.len(), 1);
-        assert!((vehicle.mass_properties.mass_kg - 1_017.2).abs() < 1.0e-10);
+        assert_eq!(vehicle.landing_legs.len(), 1);
+        assert!((vehicle.mass_properties.mass_kg - 1_038.2).abs() < 1.0e-10);
         assert!(vehicle.wheel_chassis[0].drive.is_some());
-        assert!(vehicle.wheel_chassis[0].spec.mount_position_body_m.x < 1.0);
+        let retraction = vehicle.wheel_chassis[0]
+            .spec
+            .retraction
+            .expect("wheel retraction config bakes");
+        assert!(retraction.pivot_position_body_m.is_finite());
+        assert!(retraction.initially_deployed);
+        assert!(vehicle.wheel_chassis[0].spec.mount_position_body_m.x < 1.01);
+        assert!(vehicle.landing_legs[0].spec.mount_position_body_m.x > -1.0);
         vehicle
             .validate()
             .expect("recentered wheel asset validates");
@@ -2524,6 +2666,7 @@ dry_mass_kg = 5.0
             .validate()
             .expect("serialized wheel vehicle remains internally consistent");
         assert_eq!(round_trip.wheel_chassis[0].spec.name, "front-bogie");
+        assert_eq!(round_trip.landing_legs[0].spec.name, "apollo-foldout");
         assert_eq!(
             round_trip.wheel_chassis[0].wheel_stations.len(),
             vehicle.wheel_chassis[0].wheel_stations.len()
@@ -2553,6 +2696,49 @@ dry_mass_kg = 5.0
             .bake()
             .expect("airless wheel chassis bakes");
         assert_eq!(airless_vehicle.wheel_chassis.len(), 1);
+    }
+
+    #[test]
+    fn vehicle_asset_parses_crushable_landing_cartridge() {
+        let doc = r#"
+name = "one-shot-lander"
+mass_kg = 1000.0
+inertia_body_kg_m2 = [[1000.0, 0.0, 0.0], [0.0, 1000.0, 0.0], [0.0, 0.0, 1000.0]]
+
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 1.0
+chord_m = 1.0
+
+[[landing_legs]]
+name = "impact-leg"
+mount_position_body_m = [0.0, 0.0, 0.0]
+hinge_axis_body = [0.0, 1.0, 0.0]
+stowed_leg_axis_body = [0.0, 0.0, 1.0]
+stowed_angle_rad = 0.0
+deployed_angle_rad = 3.141592653589793
+initially_deployed = true
+deployment_rate_rad_s = 0.5
+actuator_max_torque_nm = 12000.0
+leg_length_m = 2.0
+leg_mass_kg = 18.0
+footpad_radius_m = 0.2
+footpad_mass_kg = 3.0
+footpad_friction = 0.8
+footpad_slip_stiffness_n_per_mps = 5000.0
+shock_absorber = { kind = "crushable", elastic_stiffness_n_m = 120000.0, damping_n_s_m = 7000.0, plateau_force_n = 30000.0, maximum_crush_m = 0.35, bottom_out_stiffness_n_m = 500000.0, maximum_force_n = 220000.0 }
+"#;
+        let asset: VehicleAsset = toml::from_str(doc).expect("crushable shock TOML parses");
+        let vehicle = asset.bake().expect("crushable shock vehicle bakes");
+        assert_eq!(vehicle.mass_properties.mass_kg, 1_021.0);
+        assert_eq!(vehicle.landing_legs.len(), 1);
+        assert!(matches!(
+            vehicle.landing_legs[0].spec.shock_absorber,
+            LandingShockAbsorberSpec::Crushable { .. }
+        ));
+        vehicle.validate().expect("one-shot cartridge validates");
     }
 
     #[test]

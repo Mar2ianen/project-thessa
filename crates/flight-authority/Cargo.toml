@@ -17,3 +17,7 @@ toml.workspace = true
 
 [dev-dependencies]
 toml.workspace = true
+
+[[bench]]
+name = "retractable_wheels"
+harness = false

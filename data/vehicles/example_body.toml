@@ -104,3 +104,78 @@ density_kg_m3 = 2810.0
 density_kg_m3 = 8190.0
 yield_strength_pa = 1000000000.0
 max_wall_temp_k = 1350.0
+
+# Four splayed, powered fold-out supports with reusable spring/damper shocks.
+# Replace `kind = "reusable"` with the crushable cartridge shown in the
+# landing-gear specification when designing a one-shot lunar impact stage.
+[[landing_legs]]
+name = "lander-forward-port"
+mount_position_body_m = [0.35, -0.75, -0.45]
+hinge_axis_body = [0.7071067811865475, 0.7071067811865475, 0.0]
+stowed_leg_axis_body = [0.0, 0.0, 1.0]
+stowed_angle_rad = 0.0
+deployed_angle_rad = 2.541
+initially_deployed = false
+deployment_rate_rad_s = 0.6
+actuator_max_torque_nm = 18000.0
+leg_length_m = 2.5
+leg_mass_kg = 24.0
+footpad_radius_m = 0.25
+footpad_mass_kg = 4.0
+footpad_friction = 0.75
+footpad_slip_stiffness_n_per_mps = 6000.0
+shock_absorber = { kind = "reusable", stroke_m = 0.28, spring_rate_n_m = 65000.0, damping_n_s_m = 8500.0, preload_n = 0.0, bottom_out_stiffness_n_m = 350000.0, maximum_force_n = 180000.0 }
+
+[[landing_legs]]
+name = "lander-forward-starboard"
+mount_position_body_m = [0.35, 0.75, -0.45]
+hinge_axis_body = [-0.7071067811865475, 0.7071067811865475, 0.0]
+stowed_leg_axis_body = [0.0, 0.0, 1.0]
+stowed_angle_rad = 0.0
+deployed_angle_rad = 2.541
+initially_deployed = false
+deployment_rate_rad_s = 0.6
+actuator_max_torque_nm = 18000.0
+leg_length_m = 2.5
+leg_mass_kg = 24.0
+footpad_radius_m = 0.25
+footpad_mass_kg = 4.0
+footpad_friction = 0.75
+footpad_slip_stiffness_n_per_mps = 6000.0
+shock_absorber = { kind = "reusable", stroke_m = 0.28, spring_rate_n_m = 65000.0, damping_n_s_m = 8500.0, preload_n = 0.0, bottom_out_stiffness_n_m = 350000.0, maximum_force_n = 180000.0 }
+
+[[landing_legs]]
+name = "lander-aft-port"
+mount_position_body_m = [-0.65, -0.75, -0.45]
+hinge_axis_body = [0.7071067811865475, -0.7071067811865475, 0.0]
+stowed_leg_axis_body = [0.0, 0.0, 1.0]
+stowed_angle_rad = 0.0
+deployed_angle_rad = 2.541
+initially_deployed = false
+deployment_rate_rad_s = 0.6
+actuator_max_torque_nm = 18000.0
+leg_length_m = 2.5
+leg_mass_kg = 24.0
+footpad_radius_m = 0.25
+footpad_mass_kg = 4.0
+footpad_friction = 0.75
+footpad_slip_stiffness_n_per_mps = 6000.0
+shock_absorber = { kind = "reusable", stroke_m = 0.28, spring_rate_n_m = 65000.0, damping_n_s_m = 8500.0, preload_n = 0.0, bottom_out_stiffness_n_m = 350000.0, maximum_force_n = 180000.0 }
+
+[[landing_legs]]
+name = "lander-aft-starboard"
+mount_position_body_m = [-0.65, 0.75, -0.45]
+hinge_axis_body = [-0.7071067811865475, -0.7071067811865475, 0.0]
+stowed_leg_axis_body = [0.0, 0.0, 1.0]
+stowed_angle_rad = 0.0
+deployed_angle_rad = 2.541
+initially_deployed = false
+deployment_rate_rad_s = 0.6
+actuator_max_torque_nm = 18000.0
+leg_length_m = 2.5
+leg_mass_kg = 24.0
+footpad_radius_m = 0.25
+footpad_mass_kg = 4.0
+footpad_friction = 0.75
+footpad_slip_stiffness_n_per_mps = 6000.0
+shock_absorber = { kind = "reusable", stroke_m = 0.28, spring_rate_n_m = 65000.0, damping_n_s_m = 8500.0, preload_n = 0.0, bottom_out_stiffness_n_m = 350000.0, maximum_force_n = 180000.0 }

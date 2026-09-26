@@ -1,18 +1,19 @@
 use std::{error::Error, fmt};
 
-use glam::{DQuat, DVec3};
+use glam::{DMat3, DQuat, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     AeroConfig, AeroError, AeroGeometry, AeroPanel, AeroResult, CollisionAxis, CollisionError,
     CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine,
-    CompiledWheelChassis, ElectricThrusterCommand, ElectricThrusterMount, ElectricThrusterPoint,
-    EngineMount, EstocPoint, FlightCondition, FlightError, FusionTorchCommand, FusionTorchMount,
-    FusionTorchOperatingPoint, JetCommand, JetMount, LandingGearError, PropDrivePoint,
+    CompiledLandingLeg, CompiledWheelChassis, ElectricThrusterCommand, ElectricThrusterMount,
+    ElectricThrusterPoint, EngineMount, EstocPoint, FlightCondition, FlightError,
+    FusionTorchCommand, FusionTorchMount, FusionTorchOperatingPoint, JetCommand, JetMount,
+    LandingGearError, LandingLegMassProperties, LandingLegSpec, PropDrivePoint,
     PropellerDriveCommand, PropellerDriveMount, PropulsionError, PulsedFusionCommand,
     PulsedFusionMount, PulsedFusionOperatingPoint, PulsedFusionState, RigidBodyProperties,
     SystemMount, TankMount, TurbopropCommand, TurbopropMount, TurbopropOperatingPoint,
-    WheelBodyMassProperties, WheelChassisMassProperties, WheelChassisSpec,
+    WheelBodyMassProperties, WheelChassisMassProperties, WheelChassisSpec, WheelChassisState,
 };
 
 pub type StatefulTurbopropWrench = (
@@ -323,6 +324,10 @@ pub struct VehicleDefinition {
     /// Empty retains compatibility with older vehicle assets.
     #[serde(default)]
     pub wheel_chassis: Vec<CompiledWheelChassis>,
+    /// Fold-out landing supports with reusable or sacrificial shock absorbers.
+    /// Their structural mass is included in the sprung vehicle properties.
+    #[serde(default)]
+    pub landing_legs: Vec<CompiledLandingLeg>,
     /// Fold joints compiled from procedural surfaces (hinge placement in
     /// the compiled mechanism state). The force solver ignores them; the
     /// mechanism mixer transforms `fold_index`-tagged panels about these
@@ -637,6 +642,7 @@ impl VehicleDefinition {
             propeller_drives: Vec::new(),
             turboprops: Vec::new(),
             wheel_chassis: Vec::new(),
+            landing_legs: Vec::new(),
             fold_joints: Vec::new(),
         };
         definition.validate()?;
@@ -717,6 +723,32 @@ impl VehicleDefinition {
                 return Err(VehicleError::InvalidVehicle(format!(
                     "wheel chassis '{}' has stale compiled data",
                     chassis.spec.name
+                )));
+            }
+        }
+        let mut landing_leg_names = std::collections::HashSet::new();
+        if self.landing_legs.len() > crate::MAX_LANDING_LEGS {
+            return Err(VehicleError::InvalidVehicle(format!(
+                "landing-leg count must not exceed {}",
+                crate::MAX_LANDING_LEGS
+            )));
+        }
+        for leg in &self.landing_legs {
+            if !landing_leg_names.insert(leg.spec.name.as_str()) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "duplicate landing-leg name '{}'",
+                    leg.spec.name
+                )));
+            }
+            let compiled = leg
+                .spec
+                .clone()
+                .compile()
+                .map_err(VehicleError::LandingGear)?;
+            if !leg.matches_recompiled(&compiled) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "landing leg '{}' has stale compiled data",
+                    leg.spec.name
                 )));
             }
         }
@@ -819,6 +851,56 @@ impl VehicleDefinition {
         Ok(())
     }
 
+    /// Attach authored fold-out landing legs after compiling their axes,
+    /// deployment motion, shock absorber, and mass properties.
+    pub fn with_landing_legs(
+        mut self,
+        landing_legs: Vec<LandingLegSpec>,
+    ) -> Result<Self, VehicleError> {
+        if landing_legs.len() > crate::MAX_LANDING_LEGS {
+            return Err(VehicleError::InvalidVehicle(format!(
+                "landing-leg count must not exceed {}",
+                crate::MAX_LANDING_LEGS
+            )));
+        }
+        let mut compiled = Vec::with_capacity(landing_legs.len());
+        let mut names = std::collections::HashSet::new();
+        for spec in landing_legs {
+            if !names.insert(spec.name.clone()) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "duplicate landing-leg name '{}'",
+                    spec.name
+                )));
+            }
+            compiled.push(spec.compile().map_err(VehicleError::LandingGear)?);
+        }
+        self.landing_legs = compiled;
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Add installed landing-leg masses and inertia about the authored vehicle
+    /// origin. The vehicle baker performs the final common COM shift later.
+    pub fn bake_landing_leg_masses(&mut self) -> Result<(), VehicleError> {
+        let mut mass_kg = self.mass_properties.mass_kg;
+        let mut inertia_body_kg_m2 = self.mass_properties.inertia_body_kg_m2;
+        for leg in &self.landing_legs {
+            let LandingLegMassProperties {
+                mass_kg: leg_mass_kg,
+                center_of_mass_body_m,
+                inertia_body_kg_m2: leg_inertia_body_kg_m2,
+            } = leg.mass_properties;
+            mass_kg += leg_mass_kg;
+            inertia_body_kg_m2 += leg_inertia_body_kg_m2
+                + leg_mass_kg
+                    * (glam::DMat3::IDENTITY * center_of_mass_body_m.length_squared()
+                        - outer_product(center_of_mass_body_m, center_of_mass_body_m));
+        }
+        self.mass_properties = RigidBodyProperties::new(mass_kg, inertia_body_kg_m2)
+            .map_err(VehicleError::MassProperties)?;
+        Ok(())
+    }
+
     /// Split a center-of-mass-baked vehicle into the sprung chassis and
     /// per-station unsprung wheel bodies. This must be called on the final
     /// baked vehicle definition, after all component masses and the common
@@ -871,6 +953,66 @@ impl VehicleDefinition {
             sprung_center_of_mass_body_m,
             wheels,
         })
+    }
+
+    /// Resolve unsprung wheel positions and the current total-COM offset for
+    /// folded gear. The sprung body's intrinsic mass and inertia stay at the
+    /// authored structural frame; wheel body positions/inertias follow each
+    /// chassis hinge.
+    pub fn wheel_mass_split_at_deployment(
+        &self,
+        chassis_states: &[WheelChassisState],
+    ) -> Result<VehicleWheelMassSplit, VehicleError> {
+        if chassis_states.len() != self.wheel_chassis.len() {
+            return Err(VehicleError::InvalidVehicle(
+                "wheel chassis state must match every compiled chassis".into(),
+            ));
+        }
+        let mut split = self.wheel_mass_split()?;
+        for (chassis_index, (chassis, state)) in
+            self.wheel_chassis.iter().zip(chassis_states).enumerate()
+        {
+            if !state.deployment_fraction.is_finite()
+                || !(0.0..=1.0).contains(&state.deployment_fraction)
+            {
+                return Err(VehicleError::InvalidVehicle(
+                    "wheel chassis deployment fraction must be finite and in [0, 1]".into(),
+                ));
+            }
+            let Some(retraction) = chassis.spec.retraction else {
+                continue;
+            };
+            let rotation = retraction.rotation_at(state.deployment_fraction);
+            for wheel in split
+                .wheels
+                .iter_mut()
+                .filter(|wheel| wheel.chassis_index == chassis_index)
+            {
+                let old_center = wheel.center_of_mass_body_m;
+                wheel.center_of_mass_body_m = retraction.pivot_position_body_m
+                    + rotation * (old_center - retraction.pivot_position_body_m);
+                wheel.inertia_body_kg_m2 = DMat3::from_quat(rotation)
+                    * wheel.inertia_body_kg_m2
+                    * DMat3::from_quat(rotation).transpose();
+                wheel.axle_axis_body = (rotation * wheel.axle_axis_body).normalize();
+            }
+        }
+        let total_mass = self.mass_properties.mass_kg;
+        let center_shift_body_m = split
+            .wheels
+            .iter()
+            .map(|wheel| {
+                let authored_center = self.wheel_chassis[wheel.chassis_index].wheel_stations
+                    [usize::from(wheel.wheel_index)]
+                .position_body_m;
+                (wheel.center_of_mass_body_m - authored_center) * (wheel.mass_kg / total_mass)
+            })
+            .sum::<DVec3>();
+        split.sprung_center_of_mass_body_m -= center_shift_body_m;
+        for wheel in &mut split.wheels {
+            wheel.center_of_mass_body_m -= center_shift_body_m;
+        }
+        Ok(split)
     }
 
     /// Attach compiled engine mounts (baker path; validates the mounts).
@@ -1793,11 +1935,12 @@ mod tests {
         AirCycle, AirbreathingSpec, ChamberMaterial, ElectricMotorSpec, ElectricPropellant,
         ElectricThrusterCommand, ElectricThrusterDesign, ElectricThrusterMount,
         ElectricThrusterSpec, EstocMode, EstocSpec, FusionReaction, FusionTorchCommand,
-        FusionTorchMount, FusionTorchSpec, IntakeKind, JetFuel, PropellerDriveCommand,
-        PropellerDriveMount, PropellerDriveSpec, PropellerSpec, PulsedFusionCommand,
-        PulsedFusionMount, PulsedFusionSpec, PulsedFusionState, ShaftPowerSourceSpec, ShaftSpec,
-        TireConstruction, TurbopropCommand, TurbopropDriveSpec, TurbopropMount, WheelBrakeSpec,
-        WheelChassisSpec, WheelLayout, WheelStrutSpec, WheelTireSpec,
+        FusionTorchMount, FusionTorchSpec, IntakeKind, JetFuel, LandingLegSpec,
+        LandingShockAbsorberSpec, PropellerDriveCommand, PropellerDriveMount, PropellerDriveSpec,
+        PropellerSpec, PulsedFusionCommand, PulsedFusionMount, PulsedFusionSpec, PulsedFusionState,
+        ShaftPowerSourceSpec, ShaftSpec, TireConstruction, TurbopropCommand, TurbopropDriveSpec,
+        TurbopropMount, WheelBrakeSpec, WheelChassisSpec, WheelLayout, WheelStrutSpec,
+        WheelTireSpec,
     };
 
     fn test_vehicle() -> VehicleDefinition {
@@ -2327,6 +2470,7 @@ mod tests {
                 drivetrain_efficiency: 0.91,
                 driven_wheel_count: 2,
             }),
+            retraction: None,
         };
         vehicle = vehicle
             .with_wheel_chassis(vec![spec])
@@ -2395,5 +2539,101 @@ mod tests {
             Err(VehicleError::InvalidVehicle(message))
                 if message.contains("stale compiled data")
         ));
+
+        let mut retractable = vehicle.clone();
+        let mut retractable_spec = retractable.wheel_chassis[0].spec.clone();
+        retractable_spec.retraction = Some(crate::WheelChassisRetractionSpec {
+            pivot_position_body_m: DVec3::ZERO,
+            hinge_axis_body: DVec3::Y,
+            stowed_angle_rad: -std::f64::consts::FRAC_PI_2,
+            deployed_angle_rad: 0.0,
+            initially_deployed: false,
+            deployment_rate_rad_s: 0.8,
+            actuator_max_torque_nm: 1_000.0,
+        });
+        retractable.wheel_chassis[0] = retractable_spec
+            .compile()
+            .expect("retractable wheel chassis compiles");
+        let stowed_split = retractable
+            .wheel_mass_split_at_deployment(&[crate::WheelChassisState {
+                deployment_fraction: 0.0,
+                actuator_stalled: false,
+            }])
+            .expect("stowed gear mass split");
+        let stowed_first_moment = stowed_split
+            .wheels
+            .iter()
+            .map(|wheel| wheel.center_of_mass_body_m * wheel.mass_kg)
+            .sum::<DVec3>()
+            + stowed_split.sprung_center_of_mass_body_m * stowed_split.sprung_properties.mass_kg;
+        assert!(stowed_first_moment.length() < 1.0e-10);
+        assert!(
+            (stowed_split.wheels[0].center_of_mass_body_m - split.wheels[0].center_of_mass_body_m)
+                .length()
+                > 1.0e-4
+        );
+    }
+
+    #[test]
+    fn landing_legs_are_baked_into_sprung_mass_and_survive_asset_roundtrip() {
+        let geometry = AeroGeometry::new(vec![
+            AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+        ])
+        .expect("geometry");
+        let initial_mass =
+            RigidBodyProperties::new(1_000.0, glam::DMat3::from_diagonal(DVec3::splat(1_000.0)))
+                .expect("mass properties");
+        let spec = LandingLegSpec {
+            name: "apollo-style-leg".into(),
+            mount_position_body_m: DVec3::new(1.0, 0.0, 0.0),
+            hinge_axis_body: DVec3::Y,
+            stowed_leg_axis_body: DVec3::Z,
+            stowed_angle_rad: 0.0,
+            deployed_angle_rad: std::f64::consts::PI,
+            initially_deployed: false,
+            deployment_rate_rad_s: 0.5,
+            actuator_max_torque_nm: 20_000.0,
+            leg_length_m: 2.0,
+            leg_mass_kg: 18.0,
+            footpad_radius_m: 0.2,
+            footpad_mass_kg: 3.0,
+            footpad_friction: 0.8,
+            footpad_slip_stiffness_n_per_mps: 5_000.0,
+            shock_absorber: LandingShockAbsorberSpec::Reusable {
+                stroke_m: 0.2,
+                spring_rate_n_m: 40_000.0,
+                damping_n_s_m: 1_000.0,
+                preload_n: 0.0,
+                bottom_out_stiffness_n_m: 250_000.0,
+                maximum_force_n: 80_000.0,
+            },
+        };
+        let mut vehicle =
+            VehicleDefinition::new("landing-leg-mass", geometry, initial_mass, vec![])
+                .expect("vehicle")
+                .with_landing_legs(vec![spec])
+                .expect("compiled landing leg");
+        vehicle.bake_landing_leg_masses().expect("leg mass bake");
+        assert_eq!(vehicle.mass_properties.mass_kg, 1_021.0);
+        assert!(vehicle.mass_properties.inertia_body_kg_m2.is_finite());
+        let split = vehicle.wheel_mass_split().expect("sprung mass split");
+        assert_eq!(
+            split.sprung_properties.mass_kg,
+            vehicle.mass_properties.mass_kg
+        );
+        assert!(split.wheels.is_empty());
+
+        let json = serde_json::to_string(&vehicle).expect("vehicle serializes");
+        let round_trip: VehicleDefinition = serde_json::from_str(&json).expect("vehicle parses");
+        round_trip.validate().expect("round-tripped leg recompiles");
+        assert_eq!(round_trip.landing_legs.len(), 1);
+        assert_eq!(round_trip.landing_legs[0].spec.name, "apollo-style-leg");
+        assert_eq!(
+            round_trip.landing_legs[0]
+                .spec
+                .initial_state()
+                .deployment_fraction,
+            0.0
+        );
     }
 }

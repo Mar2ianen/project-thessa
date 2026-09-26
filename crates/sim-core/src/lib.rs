@@ -87,11 +87,14 @@ pub use integrator::{
     propagate_velocity_verlet, rtn_basis,
 };
 pub use landing_gear::{
-    AirlessWheelStructure, BrakePoint, CompiledWheelChassis, CompiledWheelDrive, LandingGearError,
+    AirlessWheelStructure, BrakePoint, CompiledLandingLeg, CompiledWheelChassis,
+    CompiledWheelDrive, LandingGearActuatorPoint, LandingGearError, LandingLegMassProperties,
+    LandingLegSpec, LandingLegState, LandingShockAbsorberSpec, LandingShockPoint, MAX_LANDING_LEGS,
     MAX_WHEELS_PER_CHASSIS, StrutLoadPoint, TireConstruction, TireLoadPoint, TireTangentForcePoint,
-    WheelBodyMassProperties, WheelBrakeSpec, WheelBrakeState, WheelChassisMassProperties,
-    WheelChassisSpec, WheelContactLoadPoint, WheelDrivePoint, WheelDriveSpec,
-    WheelDriveTractionPoint, WheelLayout, WheelStation, WheelStrutSpec, WheelTireSpec,
+    WheelBodyMassProperties, WheelBrakeSpec, WheelBrakeState, WheelChassisActuatorPoint,
+    WheelChassisMassProperties, WheelChassisRetractionSpec, WheelChassisSpec, WheelChassisState,
+    WheelContactLoadPoint, WheelDrivePoint, WheelDriveSpec, WheelDriveTractionPoint, WheelLayout,
+    WheelStation, WheelStrutSpec, WheelTireSpec,
 };
 pub use onrails::{
     COAST_RAILS_EXTEND_CHUNK, COAST_RAILS_HEAD_STEPS, COAST_RAILS_MAX_STEPS,

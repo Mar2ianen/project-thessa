@@ -5826,6 +5826,7 @@ dependencies = [
  "glam 0.32.1",
  "rayon",
  "serde",
+ "serde_json",
  "thessa-simd",
  "toml",
 ]

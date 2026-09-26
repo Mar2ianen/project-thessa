@@ -821,6 +821,145 @@ pub struct WheelChassisSpec {
     pub brake: WheelBrakeSpec,
     /// No drive is a valid configuration for free-rolling or aircraft gear.
     pub drive: Option<WheelDriveSpec>,
+    /// Optional fold actuator for aircraft-style retractable wheel gear.
+    /// When absent, the chassis stays at its authored mount pose.
+    #[serde(default)]
+    pub retraction: Option<WheelChassisRetractionSpec>,
+}
+
+/// Hinge geometry and actuator limits for a retractable wheel chassis.
+/// The chassis mount pose in [`WheelChassisSpec`] is its fully deployed pose.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WheelChassisRetractionSpec {
+    pub pivot_position_body_m: DVec3,
+    pub hinge_axis_body: DVec3,
+    pub stowed_angle_rad: f64,
+    pub deployed_angle_rad: f64,
+    pub initially_deployed: bool,
+    pub deployment_rate_rad_s: f64,
+    pub actuator_max_torque_nm: f64,
+}
+
+impl WheelChassisRetractionSpec {
+    pub fn validate(self) -> Result<(), LandingGearError> {
+        if !self.pivot_position_body_m.is_finite()
+            || !self.hinge_axis_body.is_finite()
+            || (self.hinge_axis_body.length_squared() - 1.0).abs() > UNIT_QUATERNION_TOLERANCE
+        {
+            return Err(LandingGearError::InvalidSpec(
+                "wheel retraction pivot and unit hinge axis must be finite".into(),
+            ));
+        }
+        if !self.stowed_angle_rad.is_finite()
+            || !self.deployed_angle_rad.is_finite()
+            || (self.deployed_angle_rad - self.stowed_angle_rad).abs() <= 1.0e-6
+            || (self.deployed_angle_rad - self.stowed_angle_rad).abs() > std::f64::consts::TAU
+        {
+            return Err(LandingGearError::InvalidSpec(
+                "wheel retraction angles must be finite and distinct within one turn".into(),
+            ));
+        }
+        require_positive(self.deployment_rate_rad_s, "wheel gear deployment rate")?;
+        require_positive(self.actuator_max_torque_nm, "wheel gear actuator torque")
+    }
+
+    pub fn initial_state(self) -> WheelChassisState {
+        WheelChassisState {
+            deployment_fraction: if self.initially_deployed { 1.0 } else { 0.0 },
+            actuator_stalled: false,
+        }
+    }
+
+    /// Rotation that carries the authored deployed chassis pose to the
+    /// requested point between stowed (0) and deployed (1).
+    pub fn rotation_at(self, deployment_fraction: f64) -> DQuat {
+        let fraction = deployment_fraction.clamp(0.0, 1.0);
+        let angle =
+            self.stowed_angle_rad + (self.deployed_angle_rad - self.stowed_angle_rad) * fraction;
+        DQuat::from_axis_angle(self.hinge_axis_body, angle - self.deployed_angle_rad)
+    }
+
+    pub fn advance_deployment(
+        self,
+        state: WheelChassisState,
+        deployed: bool,
+        dt_s: f64,
+        resisting_torque_nm: f64,
+    ) -> Result<(WheelChassisState, WheelChassisActuatorPoint), LandingGearError> {
+        self.validate()?;
+        if !state.deployment_fraction.is_finite()
+            || !(0.0..=1.0).contains(&state.deployment_fraction)
+            || !dt_s.is_finite()
+            || dt_s < 0.0
+            || !resisting_torque_nm.is_finite()
+            || resisting_torque_nm < 0.0
+        {
+            return Err(LandingGearError::InvalidCommand(
+                "wheel gear state, interval and resisting torque must be finite and in range"
+                    .into(),
+            ));
+        }
+        let target_fraction = if deployed { 1.0 } else { 0.0 };
+        let remaining_fraction = target_fraction - state.deployment_fraction;
+        let moving_to_target = remaining_fraction.abs() > 1.0e-12;
+        let stalled = moving_to_target && resisting_torque_nm >= self.actuator_max_torque_nm;
+        let mut next = state;
+        if !stalled {
+            let travel_rad = (self.deployed_angle_rad - self.stowed_angle_rad).abs();
+            let load_factor =
+                (1.0 - resisting_torque_nm / self.actuator_max_torque_nm).clamp(0.0, 1.0);
+            let fraction_step = self.deployment_rate_rad_s * load_factor * dt_s / travel_rad;
+            next.deployment_fraction = if remaining_fraction >= 0.0 {
+                (state.deployment_fraction + fraction_step).min(target_fraction)
+            } else {
+                (state.deployment_fraction - fraction_step).max(target_fraction)
+            };
+        }
+        next.actuator_stalled = stalled;
+        Ok((
+            next,
+            WheelChassisActuatorPoint {
+                target_fraction,
+                deployment_fraction: next.deployment_fraction,
+                resisting_torque_nm,
+                actuator_torque_nm: if moving_to_target {
+                    resisting_torque_nm.min(self.actuator_max_torque_nm)
+                } else {
+                    0.0
+                },
+                stalled,
+                moving: (target_fraction - next.deployment_fraction).abs() > 1.0e-12,
+            },
+        ))
+    }
+}
+
+/// Persistent position and stall state for one retractable wheel chassis.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WheelChassisState {
+    /// 0 = stowed, 1 = fully deployed.
+    pub deployment_fraction: f64,
+    pub actuator_stalled: bool,
+}
+
+impl WheelChassisState {
+    pub const fn deployed() -> Self {
+        Self {
+            deployment_fraction: 1.0,
+            actuator_stalled: false,
+        }
+    }
+}
+
+/// Measured gear load and achieved state of one fold actuator.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WheelChassisActuatorPoint {
+    pub target_fraction: f64,
+    pub deployment_fraction: f64,
+    pub resisting_torque_nm: f64,
+    pub actuator_torque_nm: f64,
+    pub stalled: bool,
+    pub moving: bool,
 }
 
 impl WheelChassisSpec {
@@ -882,6 +1021,9 @@ impl WheelChassisSpec {
         validate_inertia_matrix(self.structural_inertia_local_kg_m2)?;
         self.strut.validate()?;
         self.brake.validate()?;
+        if let Some(retraction) = self.retraction {
+            retraction.validate()?;
+        }
         let drive = self
             .drive
             .map(|drive| drive.compile(self.wheel_count))
@@ -901,6 +1043,19 @@ impl WheelChassisSpec {
             drive,
             mass_properties,
         })
+    }
+
+    /// Body-frame mount pose at the requested gear position.
+    pub fn mount_pose_at_fraction(&self, deployment_fraction: f64) -> (DVec3, DQuat) {
+        let Some(retraction) = self.retraction else {
+            return (self.mount_position_body_m, self.mount_orientation_body);
+        };
+        let rotation = retraction.rotation_at(deployment_fraction);
+        (
+            retraction.pivot_position_body_m
+                + rotation * (self.mount_position_body_m - retraction.pivot_position_body_m),
+            (rotation * self.mount_orientation_body).normalize(),
+        )
     }
 }
 
@@ -925,6 +1080,28 @@ pub struct CompiledWheelChassis {
 }
 
 impl CompiledWheelChassis {
+    /// Resolve a runtime chassis pose without changing its authored deployed
+    /// mass bake. Unsprung wheel positions and axes follow the fold hinge.
+    pub fn at_deployment_fraction(&self, deployment_fraction: f64) -> Self {
+        let mut resolved = self.clone();
+        let Some(retraction) = self.spec.retraction else {
+            return resolved;
+        };
+        let rotation = retraction.rotation_at(deployment_fraction);
+        let (mount_position_body_m, mount_orientation_body) =
+            self.spec.mount_pose_at_fraction(deployment_fraction);
+        resolved.spec.mount_position_body_m = mount_position_body_m;
+        resolved.spec.mount_orientation_body = mount_orientation_body;
+        for station in &mut resolved.wheel_stations {
+            station.position_body_m = retraction.pivot_position_body_m
+                + rotation * (station.position_body_m - retraction.pivot_position_body_m);
+            station.mount_relative_position_body_m =
+                rotation * station.mount_relative_position_body_m;
+            station.axle_axis_body = (rotation * station.axle_axis_body).normalize();
+        }
+        resolved
+    }
+
     pub fn dry_mass_kg(&self) -> f64 {
         self.mass_properties.mass_kg
     }
@@ -1198,6 +1375,554 @@ fn validate_inertia_matrix(inertia: DMat3) -> Result<(), LandingGearError> {
     Ok(())
 }
 
+/// Maximum independent fold-out supports compiled for one vehicle.
+pub const MAX_LANDING_LEGS: usize = 16;
+
+/// Shock-absorber architecture for a fold-out landing leg.
+///
+/// `Reusable` represents a spring/hydraulic-damper unit that returns its
+/// stroke after unloading. `Crushable` represents a one-shot cellular or
+/// honeycomb cartridge: plastic crush is retained in [`LandingLegState`] and
+/// its spent length is removed from the leg on subsequent ticks.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum LandingShockAbsorberSpec {
+    Reusable {
+        stroke_m: f64,
+        spring_rate_n_m: f64,
+        damping_n_s_m: f64,
+        preload_n: f64,
+        bottom_out_stiffness_n_m: f64,
+        maximum_force_n: f64,
+    },
+    Crushable {
+        elastic_stiffness_n_m: f64,
+        damping_n_s_m: f64,
+        plateau_force_n: f64,
+        maximum_crush_m: f64,
+        bottom_out_stiffness_n_m: f64,
+        maximum_force_n: f64,
+    },
+}
+
+impl LandingShockAbsorberSpec {
+    pub fn validate(self) -> Result<(), LandingGearError> {
+        match self {
+            Self::Reusable {
+                stroke_m,
+                spring_rate_n_m,
+                damping_n_s_m,
+                preload_n,
+                bottom_out_stiffness_n_m,
+                maximum_force_n,
+            } => {
+                require_positive(stroke_m, "reusable shock stroke")?;
+                require_positive(spring_rate_n_m, "reusable shock spring rate")?;
+                require_non_negative(damping_n_s_m, "reusable shock damping")?;
+                require_non_negative(preload_n, "reusable shock preload")?;
+                require_positive(bottom_out_stiffness_n_m, "reusable bottom-out stiffness")?;
+                require_positive(maximum_force_n, "reusable shock maximum force")?;
+                if preload_n > maximum_force_n {
+                    return Err(LandingGearError::InvalidSpec(
+                        "reusable shock preload exceeds its maximum force".into(),
+                    ));
+                }
+            }
+            Self::Crushable {
+                elastic_stiffness_n_m,
+                damping_n_s_m,
+                plateau_force_n,
+                maximum_crush_m,
+                bottom_out_stiffness_n_m,
+                maximum_force_n,
+            } => {
+                require_positive(elastic_stiffness_n_m, "crushable elastic stiffness")?;
+                require_non_negative(damping_n_s_m, "crushable shock damping")?;
+                require_positive(plateau_force_n, "crush plateau force")?;
+                require_positive(maximum_crush_m, "maximum permanent crush")?;
+                require_positive(bottom_out_stiffness_n_m, "crushable bottom-out stiffness")?;
+                require_positive(maximum_force_n, "crushable maximum force")?;
+                if plateau_force_n > maximum_force_n {
+                    return Err(LandingGearError::InvalidSpec(
+                        "crush plateau exceeds the shock maximum force".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Maximum recoverable or crush travel in the axial load path.
+    pub fn usable_stroke_m(self) -> f64 {
+        match self {
+            Self::Reusable { stroke_m, .. } => stroke_m,
+            Self::Crushable {
+                elastic_stiffness_n_m,
+                plateau_force_n,
+                maximum_crush_m,
+                ..
+            } => plateau_force_n / elastic_stiffness_n_m + maximum_crush_m,
+        }
+    }
+
+    pub fn maximum_permanent_crush_m(self) -> f64 {
+        match self {
+            Self::Reusable { .. } => 0.0,
+            Self::Crushable {
+                maximum_crush_m, ..
+            } => maximum_crush_m,
+        }
+    }
+
+    fn force_limit_n(self) -> f64 {
+        match self {
+            Self::Reusable {
+                maximum_force_n, ..
+            }
+            | Self::Crushable {
+                maximum_force_n, ..
+            } => maximum_force_n,
+        }
+    }
+
+    fn bottom_out_stiffness_n_m(self) -> f64 {
+        match self {
+            Self::Reusable {
+                bottom_out_stiffness_n_m,
+                ..
+            }
+            | Self::Crushable {
+                bottom_out_stiffness_n_m,
+                ..
+            } => bottom_out_stiffness_n_m,
+        }
+    }
+
+    /// Evaluate a shock's axial force and advance its irreversible energy
+    /// state. Positive compression rate is an impact/compression event.
+    pub fn evaluate(
+        self,
+        state: LandingLegState,
+        compression_m: f64,
+        compression_rate_mps: f64,
+        dt_s: f64,
+    ) -> Result<(LandingShockPoint, LandingLegState), LandingGearError> {
+        self.validate()?;
+        if !compression_m.is_finite()
+            || compression_m < 0.0
+            || !compression_rate_mps.is_finite()
+            || !dt_s.is_finite()
+            || dt_s < 0.0
+            || !state.deployment_fraction.is_finite()
+            || !(0.0..=1.0).contains(&state.deployment_fraction)
+            || !state.permanent_crush_m.is_finite()
+            || state.permanent_crush_m < 0.0
+            || !state.absorbed_energy_j.is_finite()
+            || state.absorbed_energy_j < 0.0
+        {
+            return Err(LandingGearError::InvalidCommand(
+                "shock state and compression inputs must be finite and non-negative".into(),
+            ));
+        }
+        match self {
+            Self::Reusable { .. } if state.permanent_crush_m != 0.0 => {
+                return Err(LandingGearError::InvalidCommand(
+                    "reusable shock state cannot contain permanent crush".into(),
+                ));
+            }
+            Self::Crushable {
+                maximum_crush_m, ..
+            } if state.permanent_crush_m > maximum_crush_m => {
+                return Err(LandingGearError::InvalidCommand(
+                    "permanent crush exceeds the shock cartridge capacity".into(),
+                ));
+            }
+            _ => {}
+        }
+
+        let mut next = state;
+        let (
+            elastic_compression_m,
+            overtravel_m,
+            plastic_delta_m,
+            spring_rate_n_m,
+            viscous_damping_n_s_m,
+            preload_n,
+        ) = match self {
+            Self::Reusable {
+                stroke_m,
+                spring_rate_n_m,
+                damping_n_s_m,
+                preload_n,
+                ..
+            } => {
+                let elastic = compression_m.min(stroke_m);
+                (
+                    elastic,
+                    (compression_m - stroke_m).max(0.0),
+                    0.0,
+                    spring_rate_n_m,
+                    damping_n_s_m,
+                    preload_n,
+                )
+            }
+            Self::Crushable {
+                elastic_stiffness_n_m,
+                damping_n_s_m,
+                plateau_force_n,
+                maximum_crush_m,
+                ..
+            } => {
+                let yield_compression_m = plateau_force_n / elastic_stiffness_n_m;
+                let requested_crush_m = (compression_m - yield_compression_m)
+                    .max(0.0)
+                    .min(maximum_crush_m);
+                let permanent_crush_m = state.permanent_crush_m.max(requested_crush_m);
+                let plastic_delta_m = permanent_crush_m - state.permanent_crush_m;
+                next.permanent_crush_m = permanent_crush_m;
+                let recoverable_compression_m = (compression_m - permanent_crush_m).max(0.0);
+                (
+                    recoverable_compression_m.min(yield_compression_m),
+                    (recoverable_compression_m - yield_compression_m).max(0.0),
+                    plastic_delta_m,
+                    elastic_stiffness_n_m,
+                    damping_n_s_m,
+                    0.0,
+                )
+            }
+        };
+
+        let spring_force_n = spring_rate_n_m * elastic_compression_m;
+        let bottom_out_force_n = self.bottom_out_stiffness_n_m() * overtravel_m;
+        let damping_force_n = viscous_damping_n_s_m * compression_rate_mps;
+        let force_axial_n = (preload_n + spring_force_n + bottom_out_force_n + damping_force_n)
+            .clamp(0.0, self.force_limit_n());
+        if !force_axial_n.is_finite() {
+            return Err(LandingGearError::InvalidCommand(
+                "landing shock force overflowed".into(),
+            ));
+        }
+
+        let plateau_force_n = match self {
+            Self::Reusable { .. } => 0.0,
+            Self::Crushable {
+                plateau_force_n, ..
+            } => plateau_force_n,
+        };
+        let plastic_energy_j = plateau_force_n * plastic_delta_m;
+        let damping_energy_j =
+            viscous_damping_n_s_m * compression_rate_mps * compression_rate_mps * dt_s;
+        let absorbed_energy_delta_j = plastic_energy_j + damping_energy_j;
+        next.absorbed_energy_j += absorbed_energy_delta_j;
+        if !next.absorbed_energy_j.is_finite() {
+            return Err(LandingGearError::InvalidCommand(
+                "landing shock energy overflowed".into(),
+            ));
+        }
+        let stored_energy_j = match self {
+            Self::Reusable {
+                spring_rate_n_m, ..
+            } => {
+                0.5 * spring_rate_n_m * elastic_compression_m.powi(2)
+                    + 0.5 * self.bottom_out_stiffness_n_m() * overtravel_m.powi(2)
+            }
+            Self::Crushable {
+                elastic_stiffness_n_m,
+                ..
+            } => {
+                0.5 * elastic_stiffness_n_m * elastic_compression_m.powi(2)
+                    + 0.5 * self.bottom_out_stiffness_n_m() * overtravel_m.powi(2)
+            }
+        };
+        if !stored_energy_j.is_finite() || !absorbed_energy_delta_j.is_finite() {
+            return Err(LandingGearError::InvalidCommand(
+                "landing shock energy calculation overflowed".into(),
+            ));
+        }
+        let exhausted = match self {
+            Self::Reusable { stroke_m, .. } => compression_m >= stroke_m,
+            Self::Crushable {
+                maximum_crush_m, ..
+            } => next.permanent_crush_m >= maximum_crush_m,
+        };
+        let point = LandingShockPoint {
+            compression_m,
+            compression_rate_mps,
+            force_axial_n,
+            permanent_crush_m: next.permanent_crush_m,
+            plastic_crush_delta_m: plastic_delta_m,
+            absorbed_energy_delta_j,
+            stored_energy_j,
+            exhausted,
+            bottomed_out: overtravel_m > 0.0,
+        };
+        Ok((point, next))
+    }
+}
+
+/// One authored fold-out support. Geometry and all axes are in vehicle body
+/// coordinates; the mass model treats the leg as sprung mass at its deployed
+/// pose while the fold actuator drives its explicit angular degree of freedom.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LandingLegSpec {
+    pub name: String,
+    pub mount_position_body_m: DVec3,
+    /// Unit body-frame hinge axis.
+    pub hinge_axis_body: DVec3,
+    /// Unit leg direction at `stowed_angle_rad`.
+    pub stowed_leg_axis_body: DVec3,
+    pub stowed_angle_rad: f64,
+    pub deployed_angle_rad: f64,
+    pub initially_deployed: bool,
+    pub deployment_rate_rad_s: f64,
+    pub actuator_max_torque_nm: f64,
+    /// Length of the structural leg at full extension (m).
+    pub leg_length_m: f64,
+    pub leg_mass_kg: f64,
+    pub footpad_radius_m: f64,
+    pub footpad_mass_kg: f64,
+    pub footpad_friction: f64,
+    pub footpad_slip_stiffness_n_per_mps: f64,
+    pub shock_absorber: LandingShockAbsorberSpec,
+}
+
+impl LandingLegSpec {
+    pub fn validate(&self) -> Result<(), LandingGearError> {
+        if self.name.trim().is_empty() {
+            return Err(LandingGearError::InvalidSpec(
+                "landing leg needs a non-empty name".into(),
+            ));
+        }
+        if !self.mount_position_body_m.is_finite()
+            || !self.hinge_axis_body.is_finite()
+            || !self.stowed_leg_axis_body.is_finite()
+            || (self.hinge_axis_body.length_squared() - 1.0).abs() > UNIT_QUATERNION_TOLERANCE
+            || (self.stowed_leg_axis_body.length_squared() - 1.0).abs() > UNIT_QUATERNION_TOLERANCE
+            || self.hinge_axis_body.dot(self.stowed_leg_axis_body).abs() > UNIT_QUATERNION_TOLERANCE
+        {
+            return Err(LandingGearError::InvalidSpec(
+                "landing leg mount and orthogonal hinge/leg axes must be finite and unit length"
+                    .into(),
+            ));
+        }
+        if !self.stowed_angle_rad.is_finite()
+            || !self.deployed_angle_rad.is_finite()
+            || (self.deployed_angle_rad - self.stowed_angle_rad).abs() <= 1.0e-6
+            || (self.deployed_angle_rad - self.stowed_angle_rad).abs() > std::f64::consts::TAU
+        {
+            return Err(LandingGearError::InvalidSpec(
+                "landing leg stowed/deployed angles must be finite and distinct within one turn"
+                    .into(),
+            ));
+        }
+        require_positive(self.deployment_rate_rad_s, "landing leg deployment rate")?;
+        require_positive(self.actuator_max_torque_nm, "landing leg actuator torque")?;
+        require_positive(self.leg_length_m, "landing leg length")?;
+        require_positive(self.leg_mass_kg, "landing leg structural mass")?;
+        require_positive(self.footpad_radius_m, "landing footpad radius")?;
+        require_positive(self.footpad_mass_kg, "landing footpad mass")?;
+        require_non_negative(self.footpad_friction, "landing footpad friction")?;
+        require_positive(
+            self.footpad_slip_stiffness_n_per_mps,
+            "landing footpad slip stiffness",
+        )?;
+        self.shock_absorber.validate()?;
+        if self.shock_absorber.usable_stroke_m() >= self.leg_length_m {
+            return Err(LandingGearError::InvalidSpec(
+                "landing shock stroke must be shorter than the structural leg".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn compile(self) -> Result<CompiledLandingLeg, LandingGearError> {
+        self.validate()?;
+        let deployed_axis_body = self.leg_axis_body_at_fraction(1.0);
+        let leg_center =
+            self.mount_position_body_m + deployed_axis_body * (0.5 * self.leg_length_m);
+        let footpad_center = self.mount_position_body_m + deployed_axis_body * self.leg_length_m;
+        let mass_kg = self.leg_mass_kg + self.footpad_mass_kg;
+        let center_of_mass_body_m =
+            (leg_center * self.leg_mass_kg + footpad_center * self.footpad_mass_kg) / mass_kg;
+        let rod_inertia_at_center = (DMat3::IDENTITY - outer_product(deployed_axis_body))
+            * (self.leg_mass_kg * self.leg_length_m.powi(2) / 12.0);
+        let pad_inertia_at_center =
+            DMat3::IDENTITY * (0.4 * self.footpad_mass_kg * self.footpad_radius_m.powi(2));
+        let inertia_about_mount = rod_inertia_at_center
+            + point_mass_inertia(self.leg_mass_kg, leg_center)
+            + pad_inertia_at_center
+            + point_mass_inertia(self.footpad_mass_kg, footpad_center);
+        let inertia_body_kg_m2 =
+            inertia_about_mount - point_mass_inertia(mass_kg, center_of_mass_body_m);
+        validate_inertia_matrix(inertia_body_kg_m2)?;
+        Ok(CompiledLandingLeg {
+            mass_properties: LandingLegMassProperties {
+                mass_kg,
+                center_of_mass_body_m,
+                inertia_body_kg_m2,
+            },
+            spec: self,
+        })
+    }
+
+    /// Resolve the deployed or partially-folded body-frame leg direction.
+    pub fn leg_axis_body_at_fraction(&self, deployment_fraction: f64) -> DVec3 {
+        let fraction = deployment_fraction.clamp(0.0, 1.0);
+        let angle =
+            self.stowed_angle_rad + (self.deployed_angle_rad - self.stowed_angle_rad) * fraction;
+        DQuat::from_axis_angle(self.hinge_axis_body, angle - self.stowed_angle_rad)
+            * self.stowed_leg_axis_body
+    }
+
+    pub fn initial_state(&self) -> LandingLegState {
+        LandingLegState {
+            deployment_fraction: if self.initially_deployed { 1.0 } else { 0.0 },
+            ..LandingLegState::default()
+        }
+    }
+
+    /// Advance the fold actuator. `resisting_torque_nm` is the non-negative
+    /// contact-load moment opposing the commanded angular direction.
+    pub fn advance_deployment(
+        &self,
+        state: LandingLegState,
+        deployed: bool,
+        dt_s: f64,
+        resisting_torque_nm: f64,
+    ) -> Result<(LandingLegState, LandingGearActuatorPoint), LandingGearError> {
+        self.validate()?;
+        if !state.deployment_fraction.is_finite()
+            || !(0.0..=1.0).contains(&state.deployment_fraction)
+            || !state.permanent_crush_m.is_finite()
+            || state.permanent_crush_m < 0.0
+            || state.permanent_crush_m > self.shock_absorber.maximum_permanent_crush_m()
+            || !state.absorbed_energy_j.is_finite()
+            || state.absorbed_energy_j < 0.0
+            || !dt_s.is_finite()
+            || dt_s < 0.0
+            || !resisting_torque_nm.is_finite()
+            || resisting_torque_nm < 0.0
+        {
+            return Err(LandingGearError::InvalidCommand(
+                "landing actuator state, interval and load torque must be finite and in range"
+                    .into(),
+            ));
+        }
+        let target_fraction = if deployed { 1.0 } else { 0.0 };
+        let remaining_fraction = target_fraction - state.deployment_fraction;
+        let moving_to_target = remaining_fraction.abs() > 1.0e-12;
+        let stalled = moving_to_target && resisting_torque_nm >= self.actuator_max_torque_nm;
+        let mut next = state;
+        if !stalled {
+            let full_travel_rad = (self.deployed_angle_rad - self.stowed_angle_rad).abs();
+            let load_factor =
+                (1.0 - resisting_torque_nm / self.actuator_max_torque_nm).clamp(0.0, 1.0);
+            let fraction_step = self.deployment_rate_rad_s * load_factor * dt_s / full_travel_rad;
+            next.deployment_fraction = if remaining_fraction >= 0.0 {
+                (state.deployment_fraction + fraction_step).min(target_fraction)
+            } else {
+                (state.deployment_fraction - fraction_step).max(target_fraction)
+            };
+        }
+        next.actuator_stalled = stalled;
+        let actuator_torque_nm = if moving_to_target {
+            resisting_torque_nm.min(self.actuator_max_torque_nm)
+        } else {
+            0.0
+        };
+        Ok((
+            next,
+            LandingGearActuatorPoint {
+                target_fraction,
+                deployment_fraction: next.deployment_fraction,
+                resisting_torque_nm,
+                actuator_torque_nm,
+                stalled,
+                moving: (target_fraction - next.deployment_fraction).abs() > 1.0e-12,
+            },
+        ))
+    }
+}
+
+impl CompiledLandingLeg {
+    pub fn matches_recompiled(&self, expected: &Self) -> bool {
+        self.spec == expected.spec
+            && close_scalar(
+                self.mass_properties.mass_kg,
+                expected.mass_properties.mass_kg,
+            )
+            && close_vec3(
+                self.mass_properties.center_of_mass_body_m,
+                expected.mass_properties.center_of_mass_body_m,
+            )
+            && close_mat3(
+                self.mass_properties.inertia_body_kg_m2,
+                expected.mass_properties.inertia_body_kg_m2,
+            )
+    }
+}
+
+/// Compiled one-leg geometry and its contribution to vehicle mass properties.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompiledLandingLeg {
+    pub spec: LandingLegSpec,
+    pub mass_properties: LandingLegMassProperties,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LandingLegMassProperties {
+    pub mass_kg: f64,
+    pub center_of_mass_body_m: DVec3,
+    pub inertia_body_kg_m2: DMat3,
+}
+
+/// Persistent flight-authority state for one landing leg and its absorber.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LandingLegState {
+    /// 0 = stowed, 1 = fully deployed.
+    pub deployment_fraction: f64,
+    /// Irreversible shortening for a crushable absorber (m).
+    pub permanent_crush_m: f64,
+    /// Cumulative plastic and damper energy absorbed (J).
+    pub absorbed_energy_j: f64,
+    pub actuator_stalled: bool,
+}
+
+impl Default for LandingLegState {
+    fn default() -> Self {
+        Self {
+            deployment_fraction: 1.0,
+            permanent_crush_m: 0.0,
+            absorbed_energy_j: 0.0,
+            actuator_stalled: false,
+        }
+    }
+}
+
+/// One shock response evaluated for a geometric landing-leg compression.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LandingShockPoint {
+    pub compression_m: f64,
+    pub compression_rate_mps: f64,
+    pub force_axial_n: f64,
+    pub permanent_crush_m: f64,
+    pub plastic_crush_delta_m: f64,
+    pub absorbed_energy_delta_j: f64,
+    pub stored_energy_j: f64,
+    pub exhausted: bool,
+    pub bottomed_out: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LandingGearActuatorPoint {
+    pub target_fraction: f64,
+    pub deployment_fraction: f64,
+    pub resisting_torque_nm: f64,
+    pub actuator_torque_nm: f64,
+    pub stalled: bool,
+    pub moving: bool,
+}
+
 /// Validation/evaluation error for backend-neutral landing-gear data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LandingGearError {
@@ -1208,8 +1933,10 @@ pub enum LandingGearError {
 impl fmt::Display for LandingGearError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidSpec(message) => write!(formatter, "invalid wheel chassis: {message}"),
-            Self::InvalidCommand(message) => write!(formatter, "invalid wheel command: {message}"),
+            Self::InvalidSpec(message) => write!(formatter, "invalid landing-gear spec: {message}"),
+            Self::InvalidCommand(message) => {
+                write!(formatter, "invalid landing-gear command: {message}")
+            }
         }
     }
 }
@@ -1301,6 +2028,27 @@ mod tests {
         }
     }
 
+    fn landing_leg(shock_absorber: LandingShockAbsorberSpec) -> LandingLegSpec {
+        LandingLegSpec {
+            name: "lander-leg".into(),
+            mount_position_body_m: DVec3::new(0.5, 0.0, 0.0),
+            hinge_axis_body: DVec3::Y,
+            stowed_leg_axis_body: DVec3::Z,
+            stowed_angle_rad: 0.0,
+            deployed_angle_rad: std::f64::consts::PI,
+            initially_deployed: false,
+            deployment_rate_rad_s: 1.0,
+            actuator_max_torque_nm: 12_000.0,
+            leg_length_m: 2.0,
+            leg_mass_kg: 18.0,
+            footpad_radius_m: 0.2,
+            footpad_mass_kg: 3.0,
+            footpad_friction: 0.8,
+            footpad_slip_stiffness_n_per_mps: 5_000.0,
+            shock_absorber,
+        }
+    }
+
     fn chassis(layout: WheelLayout, wheel_count: u16) -> WheelChassisSpec {
         WheelChassisSpec {
             name: "test-bogie".into(),
@@ -1319,6 +2067,7 @@ mod tests {
                 mass_per_wheel_kg: 0.5,
             },
             drive: None,
+            retraction: None,
         }
     }
 
@@ -1373,6 +2122,56 @@ mod tests {
                 .abs()
                 < 1.0e-12
         );
+    }
+
+    #[test]
+    fn retractable_wheel_chassis_uses_authored_hinge_and_torque_limit() {
+        let mut spec = chassis(WheelLayout::Inline, 1);
+        spec.retraction = Some(WheelChassisRetractionSpec {
+            pivot_position_body_m: DVec3::ZERO,
+            hinge_axis_body: DVec3::Y,
+            stowed_angle_rad: -std::f64::consts::FRAC_PI_2,
+            deployed_angle_rad: 0.0,
+            initially_deployed: true,
+            deployment_rate_rad_s: 1.0,
+            actuator_max_torque_nm: 1_000.0,
+        });
+        let compiled = spec.clone().compile().expect("retractable chassis");
+        let deployed = compiled.at_deployment_fraction(1.0);
+        assert_eq!(
+            deployed.wheel_stations[0].position_body_m,
+            compiled.wheel_stations[0].position_body_m
+        );
+        let stowed = compiled.at_deployment_fraction(0.0);
+        let expected_stowed =
+            spec.retraction.unwrap().rotation_at(0.0) * compiled.wheel_stations[0].position_body_m;
+        assert!(close_vec3(
+            stowed.wheel_stations[0].position_body_m,
+            expected_stowed
+        ));
+        assert!(
+            (stowed.wheel_stations[0].position_body_m - compiled.wheel_stations[0].position_body_m)
+                .length()
+                > 1.0
+        );
+
+        let retraction = spec.retraction.unwrap();
+        let initial = WheelChassisState {
+            deployment_fraction: 0.0,
+            actuator_stalled: false,
+        };
+        let (moving, point) = retraction
+            .advance_deployment(initial, true, 0.5, 500.0)
+            .expect("loaded actuator moves toward deployment target");
+        let expected_fraction = 0.5 * 0.5 / std::f64::consts::FRAC_PI_2;
+        assert!((moving.deployment_fraction - expected_fraction).abs() < 1.0e-12);
+        assert!(point.moving);
+        let (stalled, point) = retraction
+            .advance_deployment(moving, true, 0.5, 1_000.0)
+            .expect("actuator stalls at its torque limit");
+        assert_eq!(stalled.deployment_fraction, moving.deployment_fraction);
+        assert!(stalled.actuator_stalled);
+        assert!(point.stalled);
     }
 
     #[test]
@@ -1607,5 +2406,113 @@ mod tests {
         negative_inertia.structural_inertia_local_kg_m2 =
             DMat3::from_diagonal(DVec3::new(-1.0, 1.0, 1.0));
         assert!(negative_inertia.compile().is_err());
+    }
+
+    #[test]
+    fn reusable_and_crushable_landing_shocks_have_distinct_state_laws() {
+        let reusable = LandingShockAbsorberSpec::Reusable {
+            stroke_m: 0.25,
+            spring_rate_n_m: 20_000.0,
+            damping_n_s_m: 500.0,
+            preload_n: 100.0,
+            bottom_out_stiffness_n_m: 200_000.0,
+            maximum_force_n: 40_000.0,
+        };
+        let (rebound, rebound_state) = reusable
+            .evaluate(LandingLegState::default(), 0.05, -2.0, 0.1)
+            .unwrap();
+        assert_eq!(rebound.force_axial_n, 100.0);
+        assert_eq!(rebound_state.permanent_crush_m, 0.0);
+        assert_eq!(rebound.absorbed_energy_delta_j, 200.0);
+        let (compression, _) = reusable
+            .evaluate(LandingLegState::default(), 0.05, 2.0, 0.1)
+            .unwrap();
+        assert_eq!(compression.force_axial_n, 2_100.0);
+        assert!(
+            reusable
+                .evaluate(
+                    LandingLegState {
+                        permanent_crush_m: 0.01,
+                        ..LandingLegState::default()
+                    },
+                    0.05,
+                    0.0,
+                    0.1,
+                )
+                .is_err()
+        );
+
+        let crushable = LandingShockAbsorberSpec::Crushable {
+            elastic_stiffness_n_m: 100_000.0,
+            damping_n_s_m: 200.0,
+            plateau_force_n: 10_000.0,
+            maximum_crush_m: 0.25,
+            bottom_out_stiffness_n_m: 300_000.0,
+            maximum_force_n: 100_000.0,
+        };
+        let (first_impact, crushed_state) = crushable
+            .evaluate(LandingLegState::default(), 0.25, 0.0, 0.1)
+            .unwrap();
+        assert_eq!(first_impact.force_axial_n, 10_000.0);
+        assert!((first_impact.permanent_crush_m - 0.15).abs() < 1.0e-12);
+        assert!((first_impact.absorbed_energy_delta_j - 1_500.0).abs() < 1.0e-12);
+        assert_eq!(crushed_state.permanent_crush_m, 0.15);
+        let (second_impact, further_crushed) =
+            crushable.evaluate(crushed_state, 0.30, 0.0, 0.1).unwrap();
+        assert_eq!(second_impact.force_axial_n, 10_000.0);
+        assert!((further_crushed.permanent_crush_m - 0.20).abs() < 1.0e-12);
+        assert!((further_crushed.absorbed_energy_j - 2_000.0).abs() < 1.0e-12);
+        let (bottomed, _) = crushable.evaluate(further_crushed, 0.70, 0.0, 0.1).unwrap();
+        assert!(bottomed.bottomed_out);
+        assert!(bottomed.exhausted);
+        assert!(bottomed.force_axial_n > second_impact.force_axial_n);
+    }
+
+    #[test]
+    fn landing_leg_geometry_mass_and_fold_actuator_are_bounded() {
+        let reusable = LandingShockAbsorberSpec::Reusable {
+            stroke_m: 0.2,
+            spring_rate_n_m: 40_000.0,
+            damping_n_s_m: 1_000.0,
+            preload_n: 0.0,
+            bottom_out_stiffness_n_m: 250_000.0,
+            maximum_force_n: 80_000.0,
+        };
+        let spec = landing_leg(reusable);
+        let compiled = spec.clone().compile().unwrap();
+        assert_eq!(compiled.mass_properties.mass_kg, 21.0);
+        assert!(compiled.mass_properties.center_of_mass_body_m.z < 0.0);
+        assert!(compiled.mass_properties.inertia_body_kg_m2.is_finite());
+        assert!((spec.leg_axis_body_at_fraction(1.0) - DVec3::NEG_Z).length() < 1.0e-12);
+        assert_eq!(spec.initial_state().deployment_fraction, 0.0);
+
+        let initial = spec.initial_state();
+        let (moving, point) = spec.advance_deployment(initial, true, 0.5, 0.0).unwrap();
+        assert!((moving.deployment_fraction - 0.5 / std::f64::consts::PI).abs() < 1.0e-12);
+        assert!(point.moving);
+        let (loaded_moving, _) = spec
+            .advance_deployment(initial, true, 0.5, 6_000.0)
+            .unwrap();
+        assert!((loaded_moving.deployment_fraction - 0.25 / std::f64::consts::PI).abs() < 1.0e-12);
+        let (stalled, point) = spec
+            .advance_deployment(initial, true, 1.0, 12_001.0)
+            .unwrap();
+        assert!(stalled.actuator_stalled);
+        assert_eq!(stalled.deployment_fraction, initial.deployment_fraction);
+        assert!(point.stalled);
+        assert_eq!(point.actuator_torque_nm, 12_000.0);
+        let (retracting, point) = spec
+            .advance_deployment(
+                LandingLegState {
+                    deployment_fraction: 1.0,
+                    ..LandingLegState::default()
+                },
+                false,
+                0.5,
+                0.0,
+            )
+            .unwrap();
+        assert!(retracting.deployment_fraction < 1.0);
+        assert_eq!(point.target_fraction, 0.0);
     }
 }

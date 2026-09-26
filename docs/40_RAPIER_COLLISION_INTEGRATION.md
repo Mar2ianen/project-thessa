@@ -328,8 +328,8 @@ Not implemented yet (update 2026-09-25):
 - per-part wireframe gizmos (craft-anchored patch boxes + body markers +
   normal arrows are in §13 fourth-slice items below and are implemented
   in `apps/client/src/contact_gizmos.rs`).
-- wheel reactions against dynamic bodies and the corresponding equal-and-
-  opposite impulses (current tire queries intentionally accept fixed and
+- wheel/foot reactions against dynamic bodies and the corresponding equal-and-
+  opposite impulses (current tire/foot queries intentionally accept fixed and
   kinematic terrain only).
 
 #### Fourth slice — completed in this branch
@@ -451,5 +451,23 @@ The articulated wheel-running-gear slice is tracked in
   exercise the tire friction-circle limit;
 - ✅ release benchmarks sweep 1/4/16/64 wheels for query-only and articulated
   contact stepping in serial and parallel Rapier modes;
-- 🔵 remaining: dynamic-body wheel/terrain reactions, granular soil sinkage and
-  shear, and representative articulated-fleet benchmarks.
+- ✅ `LandingLegSpec` compiles Falcon-style splayed fold-out supports, bakes leg
+  and footpad mass/inertia into the sprung vehicle, and accepts reusable
+  spring/damper or one-shot crushable shock cartridges;
+- ✅ terrain ray queries evaluate footpad radius/normal alignment, persistent
+  absorber crush/energy and Coulomb-limited foot friction, then apply one
+  contact-point wrench without adding a duplicate solid foot impulse;
+- ✅ `FlightAuthority` advances the `gear_down` target during physical ticks,
+  slows/stalls the fold actuator under measured support torque, retains crush
+  state and exposes contact/actuator telemetry;
+- ✅ optional aircraft-style wheel-chassis hinges share `gear_down`, persist
+  deployment state, update station/joint geometry and re-split unsprung wheel
+  mass in contact mode;
+- ✅ three-leg contact regression covers crush state and commanded retraction;
+  reusable/crushable force laws and free-flight deploy/retract paths have
+  known-case tests;
+- ✅ release benchmarks measure 3/4/8/16 support contacts in serial and
+  parallel modes in addition to wheel sweeps;
+- 🔵 remaining: dynamic-body wheel/foot reactions, moving-hinge inertia and
+  reaction torque, granular soil sinkage/shear,
+  and representative articulated-fleet benchmarks.

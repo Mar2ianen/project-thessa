@@ -5,9 +5,9 @@ use thessa_collision::{
     ArticulatedWheelBinding, CollisionFrame, CollisionWorld, DynamicBodyConfig, ExternalWrench,
 };
 use thessa_sim_core::{
-    CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, RigidBodyProperties,
-    RigidBodyState, TireConstruction, WheelBrakeSpec, WheelChassisSpec, WheelLayout,
-    WheelStrutSpec, WheelTireSpec,
+    CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, LandingLegSpec,
+    LandingLegState, LandingShockAbsorberSpec, RigidBodyProperties, RigidBodyState,
+    TireConstruction, WheelBrakeSpec, WheelChassisSpec, WheelLayout, WheelStrutSpec, WheelTireSpec,
 };
 
 const DT: f64 = 1.0 / 120.0;
@@ -16,6 +16,7 @@ const DT: f64 = 1.0 / 120.0;
 /// choice has numbers for both `parallel` settings.
 const BODY_COUNTS: [usize; 5] = [1, 8, 64, 256, 1024];
 const WHEEL_COUNTS: [u16; 4] = [1, 4, 16, 64];
+const LANDING_LEG_COUNTS: [usize; 4] = [3, 4, 8, 16];
 
 fn body_count_steps(body_count: usize) -> usize {
     // Keep wall time bounded: large scenes run fewer timed steps while still
@@ -84,12 +85,49 @@ fn wheel_chassis(
             mass_per_wheel_kg: 0.3,
         },
         drive: None,
+        retraction: None,
     }
     .compile()?)
 }
 
 fn wheel_query_steps(wheel_count: u16) -> usize {
     (32_000 / usize::from(wheel_count)).clamp(200, 10_000)
+}
+
+fn landing_leg_specs(
+    leg_count: usize,
+) -> Result<Vec<thessa_sim_core::CompiledLandingLeg>, Box<dyn std::error::Error>> {
+    let mut legs = Vec::with_capacity(leg_count);
+    for index in 0..leg_count {
+        let angle = std::f64::consts::TAU * index as f64 / leg_count as f64;
+        let spec = LandingLegSpec {
+            name: format!("landing-bench-{index}"),
+            mount_position_body_m: DVec3::new(angle.cos(), angle.sin(), 0.0),
+            hinge_axis_body: DVec3::Y,
+            stowed_leg_axis_body: DVec3::Z,
+            stowed_angle_rad: 0.0,
+            deployed_angle_rad: std::f64::consts::PI,
+            initially_deployed: true,
+            deployment_rate_rad_s: 0.8,
+            actuator_max_torque_nm: 20_000.0,
+            leg_length_m: 2.0,
+            leg_mass_kg: 18.0,
+            footpad_radius_m: 0.2,
+            footpad_mass_kg: 3.0,
+            footpad_friction: 0.8,
+            footpad_slip_stiffness_n_per_mps: 5_000.0,
+            shock_absorber: LandingShockAbsorberSpec::Reusable {
+                stroke_m: 0.2,
+                spring_rate_n_m: 100_000.0,
+                damping_n_s_m: 4_000.0,
+                preload_n: 0.0,
+                bottom_out_stiffness_n_m: 300_000.0,
+                maximum_force_n: 100_000.0,
+            },
+        };
+        legs.push(spec.compile()?);
+    }
+    Ok(legs)
 }
 
 fn articulated_wheel_step(
@@ -405,6 +443,75 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
              steps={steps} elapsed={elapsed:?} \
              wheel-steps/s={:.0}",
             wheel_steps as f64 / elapsed.as_secs_f64(),
+        );
+    }
+
+    println!("landing-leg benchmark (terrain queries, shock state, foot friction, applied loads)");
+    for leg_count in LANDING_LEG_COUNTS {
+        let mut world = CollisionWorld::new(CollisionFrame::inertial_at(DVec3::ZERO, DVec3::ZERO))?;
+        world.insert_static_cuboid(
+            DVec3::new(0.0, 0.0, -0.5),
+            DQuat::IDENTITY,
+            DVec3::new(100.0, 100.0, 0.5),
+            CollisionMaterial::new(0.6, 0.0)?,
+        )?;
+        let legs = landing_leg_specs(leg_count)?;
+        let mass_kg = 1_000.0 + 21.0 * leg_count as f64;
+        let properties =
+            RigidBodyProperties::new(mass_kg, DMat3::from_diagonal(DVec3::splat(mass_kg * 2.0)))?;
+        let geometry = CollisionGeometry::new(vec![CollisionPart::new(
+            DVec3::new(0.0, 0.0, 3.0),
+            DQuat::IDENTITY,
+            CollisionShape::Sphere { radius_m: 0.1 },
+            CollisionMaterial::default(),
+        )?])?;
+        let compression_m = mass_kg * 9.81 / (leg_count as f64 * 100_000.0);
+        let root = world.insert_dynamic_body(
+            RigidBodyState::stationary(DVec3::new(0.0, 0.0, 2.0 + 0.2 - compression_m)),
+            properties,
+            &geometry,
+            DynamicBodyConfig {
+                full_ccd: false,
+                can_sleep: false,
+            },
+        )?;
+        world.step(DT, [])?;
+        let mut states: Vec<LandingLegState> =
+            legs.iter().map(|leg| leg.spec.initial_state()).collect();
+        let gravity = ExternalWrench {
+            force_inertial_n: DVec3::new(0.0, 0.0, -9.81 * mass_kg),
+            torque_inertial_nm: DVec3::ZERO,
+        };
+        let steps = 5_000 / leg_count;
+        let mut loaded_leg_steps = 0usize;
+        let mut minimum_loaded_legs = usize::MAX;
+        let started = Instant::now();
+        for _ in 0..steps {
+            let result =
+                world.evaluate_landing_leg_contacts(root, &legs, &states, DVec3::ZERO, true, DT)?;
+            let loaded = result
+                .contacts
+                .iter()
+                .filter(|contact| contact.normal_load_n > 0.0)
+                .count();
+            loaded_leg_steps += loaded;
+            minimum_loaded_legs = minimum_loaded_legs.min(loaded);
+            states = result.states;
+            let mut wrench = gravity;
+            wrench.force_inertial_n += result.wrench.force_inertial_n;
+            wrench.torque_inertial_nm += result.wrench.torque_inertial_nm;
+            world.step(DT, [(root, wrench)])?;
+        }
+        let elapsed = started.elapsed();
+        assert!(
+            minimum_loaded_legs > 0,
+            "landing-leg bench lost all loaded footpads for count={leg_count}"
+        );
+        let leg_steps = leg_count * steps;
+        println!(
+            "landing legs: legs={leg_count} loaded_min={minimum_loaded_legs} \
+             steps={steps} elapsed={elapsed:?} leg-steps/s={:.0} loaded={loaded_leg_steps}",
+            leg_steps as f64 / elapsed.as_secs_f64(),
         );
     }
     Ok(())

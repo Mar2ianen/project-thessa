@@ -29,8 +29,8 @@ use rapier3d_f64::prelude::{
     PrismaticJointBuilder, QueryFilter, Ray, RigidBodyBuilder, RigidBodyHandle, RigidBodySet,
 };
 use thessa_sim_core::{
-    CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionShape, CompiledWheelChassis,
-    FlightForces, RigidBodyProperties, RigidBodyState,
+    CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionShape, CompiledLandingLeg,
+    CompiledWheelChassis, FlightForces, LandingLegState, RigidBodyProperties, RigidBodyState,
 };
 
 const QUATERNION_TOLERANCE: f64 = 1.0e-6;
@@ -337,6 +337,37 @@ pub struct WheelContactSample {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WheelContactResult {
     pub contacts: Vec<WheelContactSample>,
+    pub wrench: ExternalWrench,
+}
+
+/// Reduced footpad/terrain contact from a ray aligned with a deployed support.
+/// The absorber is evaluated once per contact; terrain supplies the normal
+/// direction while the strut law supplies the axial load.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LandingLegContactSample {
+    pub leg_index: u16,
+    pub contact_point_inertial_m: DVec3,
+    pub terrain_normal_inertial: DVec3,
+    pub relative_contact_velocity_inertial_mps: DVec3,
+    pub compression_m: f64,
+    pub compression_rate_mps: f64,
+    pub axial_force_n: f64,
+    pub normal_load_n: f64,
+    pub tangential_force_inertial_n: DVec3,
+    pub contact_friction: f64,
+    pub permanent_crush_m: f64,
+    pub absorbed_energy_delta_j: f64,
+    pub actuator_resisting_torque_nm: f64,
+    pub bottomed_out: bool,
+    pub exhausted: bool,
+    pub saturated: bool,
+}
+
+/// Landing-leg load evidence, updated absorber states, and vehicle wrench.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LandingLegContactResult {
+    pub contacts: Vec<LandingLegContactSample>,
+    pub states: Vec<LandingLegState>,
     pub wrench: ExternalWrench,
 }
 
@@ -1286,6 +1317,52 @@ impl CollisionWorld {
         Ok(id)
     }
 
+    /// Update a suspension joint's frames as a wheel chassis folds about its
+    /// vehicle hinge. Both bodies use vehicle-aligned local axes in this
+    /// reduced wheel model, so callers provide the current slide/axle pair for
+    /// each frame. The solver is woken before the next contact step.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_suspension_wheel_joint_frames(
+        &mut self,
+        id: JointId,
+        anchor_sprung_local_m: DVec3,
+        anchor_wheel_local_m: DVec3,
+        slide_axis_sprung_local: DVec3,
+        axle_axis_sprung_local: DVec3,
+        slide_axis_wheel_local: DVec3,
+        axle_axis_wheel_local: DVec3,
+    ) -> Result<(), CollisionBackendError> {
+        validate_local_vector(anchor_sprung_local_m, "sprung wheel-joint anchor")?;
+        validate_local_vector(anchor_wheel_local_m, "wheel wheel-joint anchor")?;
+        let frame_sprung = wheel_joint_frame(
+            slide_axis_sprung_local,
+            axle_axis_sprung_local,
+            "sprung wheel-joint axes",
+        )?;
+        let frame_wheel = wheel_joint_frame(
+            slide_axis_wheel_local,
+            axle_axis_wheel_local,
+            "wheel wheel-joint axes",
+        )?;
+        let entry = self
+            .joints
+            .get(&id)
+            .ok_or(CollisionBackendError::UnknownJoint(id))?;
+        let joint = self
+            .impulse_joints
+            .get_mut(entry.rapier, true)
+            .ok_or(CollisionBackendError::BackendStateLost(entry.a))?;
+        joint.data.set_local_frame1(Pose::from_parts(
+            to_rapier_vector(anchor_sprung_local_m),
+            to_rapier_rotation(frame_sprung),
+        ));
+        joint.data.set_local_frame2(Pose::from_parts(
+            to_rapier_vector(anchor_wheel_local_m),
+            to_rapier_rotation(frame_wheel),
+        ));
+        Ok(())
+    }
+
     /// Undock a fixed joint. Both bodies keep their solved pose/velocity;
     /// the flight layer re-owns them as independent clusters from here.
     pub fn remove_joint(&mut self, id: JointId) -> Result<(), CollisionBackendError> {
@@ -1767,6 +1844,207 @@ impl CollisionWorld {
             });
         }
         Ok(forces)
+    }
+
+    /// Query fold-out footpads against fixed or kinematic terrain and evaluate
+    /// their reusable or crushable absorber laws. `body_origin_offset_body_m`
+    /// maps the authored total-COM frame into the synced sprung-body frame.
+    pub fn evaluate_landing_leg_contacts(
+        &self,
+        body_id: CollisionBodyId,
+        legs: &[CompiledLandingLeg],
+        states: &[LandingLegState],
+        body_origin_offset_body_m: DVec3,
+        command_deployed: bool,
+        step_s: f64,
+    ) -> Result<LandingLegContactResult, CollisionBackendError> {
+        let entry = self
+            .dynamic
+            .get(&body_id)
+            .ok_or(CollisionBackendError::UnknownBody(body_id))?;
+        let body = self
+            .bodies
+            .get(entry.rapier)
+            .ok_or(CollisionBackendError::BackendStateLost(body_id))?;
+        if legs.len() != states.len()
+            || !body_origin_offset_body_m.is_finite()
+            || !step_s.is_finite()
+            || step_s <= 0.0
+        {
+            return Err(CollisionBackendError::InvalidLandingLegContact(
+                "compiled legs, persistent states, body offset and step must be valid".into(),
+            ));
+        }
+
+        let root_pose = body.position();
+        let root_position_local = from_rapier_vector(root_pose.translation);
+        let root_orientation_local = from_rapier_rotation(root_pose.rotation);
+        let query = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.bodies,
+            &self.colliders,
+            QueryFilter::default().exclude_rigid_body(entry.rapier),
+        );
+        let mut contacts = Vec::with_capacity(legs.len());
+        let mut next_states = states.to_vec();
+        let mut wrench = ExternalWrench::ZERO;
+
+        for (index, (leg, state)) in legs.iter().zip(states.iter().copied()).enumerate() {
+            leg.spec.validate().map_err(|error| {
+                CollisionBackendError::InvalidLandingLegContact(error.to_string())
+            })?;
+            let fraction = state.deployment_fraction;
+            if !fraction.is_finite()
+                || !(0.0..=1.0).contains(&fraction)
+                || !state.permanent_crush_m.is_finite()
+                || state.permanent_crush_m < 0.0
+                || !state.absorbed_energy_j.is_finite()
+                || state.absorbed_energy_j < 0.0
+                || state.permanent_crush_m > leg.spec.shock_absorber.maximum_permanent_crush_m()
+            {
+                return Err(CollisionBackendError::InvalidLandingLegContact(
+                    "deployment, crush and absorbed-energy state must be finite and in range"
+                        .into(),
+                ));
+            }
+            if fraction <= 1.0e-9 {
+                continue;
+            }
+
+            let spec = &leg.spec;
+            let axis_body = spec.leg_axis_body_at_fraction(fraction).normalize();
+            let axis_local = (root_orientation_local * axis_body).normalize();
+            let mount_local = root_position_local
+                + root_orientation_local * (spec.mount_position_body_m - body_origin_offset_body_m);
+            // At shallow angles the sphere-foot contact becomes ill-conditioned
+            // as an axial support. Excluding alignments below 0.1 bounds the
+            // terrain-normal-to-strut load amplification to 10.
+            const MIN_SUPPORT_ALIGNMENT: f64 = 0.1;
+            let effective_leg_length_m = spec.leg_length_m - state.permanent_crush_m;
+            let max_toi = effective_leg_length_m + spec.footpad_radius_m / MIN_SUPPORT_ALIGNMENT;
+            let ray = Ray::new(to_rapier_vector(mount_local), to_rapier_vector(axis_local));
+            let nearest = query
+                .intersect_ray(ray, max_toi, true)
+                .filter_map(|(handle, collider, hit)| {
+                    let normal = from_rapier_vector(hit.normal).normalize();
+                    let alignment = -normal.dot(axis_local);
+                    if alignment < MIN_SUPPORT_ALIGNMENT {
+                        return None;
+                    }
+                    if let Some(parent) = collider.parent() {
+                        let terrain_body = self.bodies.get(parent)?;
+                        if terrain_body.is_dynamic() {
+                            return None;
+                        }
+                    }
+                    Some((handle, collider, hit, alignment))
+                })
+                .min_by(|left, right| left.2.time_of_impact.total_cmp(&right.2.time_of_impact));
+            let Some((_, terrain_collider, hit, alignment)) = nearest else {
+                continue;
+            };
+
+            let normal_local = from_rapier_vector(hit.normal).normalize();
+            let ray_surface_point_local = mount_local + axis_local * hit.time_of_impact;
+            // Shock compression is referenced to the pristine leg length.
+            // The ray reach uses the shortened installed length above, while
+            // adding permanent crush back here prevents consuming that crush
+            // twice in the absorber law.
+            let compression_m = (spec.leg_length_m - hit.time_of_impact
+                + spec.footpad_radius_m / alignment)
+                .max(0.0);
+            if compression_m <= 0.0 {
+                continue;
+            }
+            let foot_center_local = mount_local + axis_local * (spec.leg_length_m - compression_m);
+            let signed_center_distance_m =
+                (foot_center_local - ray_surface_point_local).dot(normal_local);
+            let contact_point_local = foot_center_local - normal_local * signed_center_distance_m;
+
+            let body_velocity_local =
+                from_rapier_vector(body.velocity_at_point(to_rapier_vector(contact_point_local)));
+            let terrain_velocity_local = terrain_collider
+                .parent()
+                .and_then(|parent| self.bodies.get(parent))
+                .map(|terrain_body| {
+                    from_rapier_vector(
+                        terrain_body.velocity_at_point(to_rapier_vector(contact_point_local)),
+                    )
+                })
+                .unwrap_or(DVec3::ZERO);
+            let relative_velocity_local = body_velocity_local - terrain_velocity_local;
+            let compression_rate_mps = -relative_velocity_local.dot(normal_local) / alignment;
+            let (shock, next_state) = spec
+                .shock_absorber
+                .evaluate(state, compression_m, compression_rate_mps, step_s)
+                .map_err(|error| {
+                    CollisionBackendError::InvalidLandingLegContact(error.to_string())
+                })?;
+            next_states[index] = next_state;
+
+            let friction = 0.5 * (spec.footpad_friction + terrain_collider.friction());
+            let normal_load_n = shock.force_axial_n / alignment;
+            let tangential_velocity_local =
+                relative_velocity_local - normal_local * relative_velocity_local.dot(normal_local);
+            let requested_tangent_local =
+                -tangential_velocity_local * spec.footpad_slip_stiffness_n_per_mps;
+            let requested_tangent_n = requested_tangent_local.length();
+            let friction_limit_n = friction * normal_load_n;
+            let saturated = requested_tangent_n > friction_limit_n;
+            let tangent_force_local = if saturated && requested_tangent_n > 1.0e-12 {
+                requested_tangent_local * (friction_limit_n / requested_tangent_n)
+            } else {
+                requested_tangent_local
+            };
+            let contact_force_local = normal_local * normal_load_n + tangent_force_local;
+            let contact_force_inertial = self.frame.vector_to_inertial(contact_force_local);
+            let contact_point_inertial = self.frame.position_to_inertial(contact_point_local);
+            wrench.force_inertial_n += contact_force_inertial;
+            wrench.torque_inertial_nm += self.frame.vector_to_inertial(
+                (contact_point_local - root_position_local).cross(contact_force_local),
+            );
+
+            let hinge_axis_local = (root_orientation_local * spec.hinge_axis_body).normalize();
+            let moment_about_hinge_nm = (contact_point_local - mount_local)
+                .cross(contact_force_local)
+                .dot(hinge_axis_local);
+            let mut commanded_rotation_sign =
+                (spec.deployed_angle_rad - spec.stowed_angle_rad).signum();
+            if !command_deployed {
+                commanded_rotation_sign = -commanded_rotation_sign;
+            }
+            let resisting_torque_nm = (-moment_about_hinge_nm * commanded_rotation_sign).max(0.0);
+            contacts.push(LandingLegContactSample {
+                leg_index: u16::try_from(index).map_err(|_| {
+                    CollisionBackendError::InvalidLandingLegContact(
+                        "landing-leg index exceeds the telemetry format".into(),
+                    )
+                })?,
+                contact_point_inertial_m: contact_point_inertial,
+                terrain_normal_inertial: self.frame.vector_to_inertial(normal_local),
+                relative_contact_velocity_inertial_mps: self
+                    .frame
+                    .vector_to_inertial(relative_velocity_local),
+                compression_m,
+                compression_rate_mps,
+                axial_force_n: shock.force_axial_n,
+                normal_load_n,
+                tangential_force_inertial_n: self.frame.vector_to_inertial(tangent_force_local),
+                contact_friction: friction,
+                permanent_crush_m: shock.permanent_crush_m,
+                absorbed_energy_delta_j: shock.absorbed_energy_delta_j,
+                actuator_resisting_torque_nm: resisting_torque_nm,
+                bottomed_out: shock.bottomed_out,
+                exhausted: shock.exhausted,
+                saturated: saturated || shock.exhausted,
+            });
+        }
+        wrench.validate()?;
+        Ok(LandingLegContactResult {
+            contacts,
+            states: next_states,
+            wrench,
+        })
     }
 
     /// Query every wheel station against fixed or kinematic terrain and
@@ -2296,6 +2574,7 @@ pub enum CollisionBackendError {
     InvalidBodyState(String),
     InvalidMassProperties,
     InvalidWheelContact(String),
+    InvalidLandingLegContact(String),
     InvalidStep(f64),
     UnknownBody(CollisionBodyId),
     UnknownKinematicBody(KinematicBodyId),
@@ -2324,6 +2603,9 @@ impl fmt::Display for CollisionBackendError {
             Self::InvalidMassProperties => write!(formatter, "invalid rigid-body mass properties"),
             Self::InvalidWheelContact(message) => {
                 write!(formatter, "invalid wheel contact: {message}")
+            }
+            Self::InvalidLandingLegContact(message) => {
+                write!(formatter, "invalid landing-leg contact: {message}")
             }
             Self::InvalidStep(step) => write!(formatter, "invalid collision step duration: {step}"),
             Self::UnknownBody(id) => write!(formatter, "unknown collision body {}", id.raw()),
@@ -2371,8 +2653,8 @@ impl Error for CollisionBackendError {}
 mod tests {
     use super::*;
     use thessa_sim_core::{
-        CollisionPart, CollisionShape, TireConstruction, WheelBrakeSpec, WheelChassisSpec,
-        WheelLayout, WheelStrutSpec, WheelTireSpec,
+        CollisionPart, CollisionShape, LandingLegSpec, LandingShockAbsorberSpec, TireConstruction,
+        WheelBrakeSpec, WheelChassisSpec, WheelLayout, WheelStrutSpec, WheelTireSpec,
     };
 
     fn sphere_geometry(radius_m: f64) -> CollisionGeometry {
@@ -2431,9 +2713,201 @@ mod tests {
                 mass_per_wheel_kg: 0.3,
             },
             drive: None,
+            retraction: None,
         }
         .compile()
         .unwrap()
+    }
+
+    fn landing_leg() -> CompiledLandingLeg {
+        LandingLegSpec {
+            name: "query-test-leg".into(),
+            mount_position_body_m: DVec3::ZERO,
+            hinge_axis_body: DVec3::Y,
+            stowed_leg_axis_body: DVec3::Z,
+            stowed_angle_rad: 0.0,
+            deployed_angle_rad: std::f64::consts::PI,
+            initially_deployed: true,
+            deployment_rate_rad_s: 1.0,
+            actuator_max_torque_nm: 10_000.0,
+            leg_length_m: 2.0,
+            leg_mass_kg: 10.0,
+            footpad_radius_m: 0.2,
+            footpad_mass_kg: 1.0,
+            footpad_friction: 0.8,
+            footpad_slip_stiffness_n_per_mps: 5_000.0,
+            shock_absorber: LandingShockAbsorberSpec::Reusable {
+                stroke_m: 0.2,
+                spring_rate_n_m: 20_000.0,
+                damping_n_s_m: 1_000.0,
+                preload_n: 0.0,
+                bottom_out_stiffness_n_m: 200_000.0,
+                maximum_force_n: 50_000.0,
+            },
+        }
+        .compile()
+        .unwrap()
+    }
+
+    #[test]
+    fn landing_footpad_query_reports_reaction_friction_and_absorbed_energy() {
+        let frame = CollisionFrame::inertial_at(DVec3::ZERO, DVec3::ZERO);
+        let mut world = CollisionWorld::new(frame).unwrap();
+        world
+            .insert_static_cuboid(
+                DVec3::new(0.0, 0.0, -0.25),
+                DQuat::IDENTITY,
+                DVec3::new(5.0, 5.0, 0.25),
+                CollisionMaterial::new(0.4, 0.0).unwrap(),
+            )
+            .unwrap();
+        let properties =
+            RigidBodyProperties::new(100.0, DMat3::from_diagonal(DVec3::splat(10.0))).unwrap();
+        let body = world
+            .insert_dynamic_body(
+                RigidBodyState::stationary(DVec3::new(0.0, 0.0, 2.15)),
+                properties,
+                &sphere_geometry(0.5),
+                DynamicBodyConfig::default(),
+            )
+            .unwrap();
+        world.step(1.0 / 120.0, []).unwrap();
+        world
+            .resync_dynamic_body(
+                body,
+                RigidBodyState::new(
+                    DVec3::new(0.0, 0.0, 2.15),
+                    DVec3::new(1.0, 0.0, -0.2),
+                    DQuat::IDENTITY,
+                    DVec3::ZERO,
+                )
+                .unwrap(),
+                properties,
+                DynamicBodyConfig::default(),
+            )
+            .unwrap();
+        let compiled = landing_leg();
+        let state = compiled.spec.initial_state();
+        let result = world
+            .evaluate_landing_leg_contacts(
+                body,
+                std::slice::from_ref(&compiled),
+                std::slice::from_ref(&state),
+                DVec3::ZERO,
+                true,
+                0.1,
+            )
+            .unwrap();
+        assert_eq!(result.contacts.len(), 1);
+        let contact = result.contacts[0];
+        assert!((contact.compression_m - 0.05).abs() < 1.0e-12);
+        assert!((contact.compression_rate_mps - 0.2).abs() < 1.0e-12);
+        assert!((contact.axial_force_n - 1_200.0).abs() < 1.0e-9);
+        assert!((contact.normal_load_n - 1_200.0).abs() < 1.0e-9);
+        assert!((contact.contact_friction - 0.6).abs() < 1.0e-12);
+        assert!((contact.tangential_force_inertial_n.length() - 720.0).abs() < 1.0e-9);
+        assert!(contact.saturated);
+        assert!((contact.absorbed_energy_delta_j - 4.0).abs() < 1.0e-12);
+        assert!((result.wrench.force_inertial_n.z - 1_200.0).abs() < 1.0e-9);
+        assert!(result.wrench.force_inertial_n.x < 0.0);
+        assert!((result.contacts[0].contact_point_inertial_m.z).abs() < 1.0e-12);
+        let state = result.states[0];
+        assert_eq!(state.permanent_crush_m, 0.0);
+
+        let folded = LandingLegState {
+            deployment_fraction: 0.0,
+            ..state
+        };
+        let no_contact = world
+            .evaluate_landing_leg_contacts(
+                body,
+                std::slice::from_ref(&compiled),
+                std::slice::from_ref(&folded),
+                DVec3::ZERO,
+                false,
+                0.1,
+            )
+            .unwrap();
+        assert!(no_contact.contacts.is_empty());
+        assert_eq!(no_contact.wrench, ExternalWrench::ZERO);
+        assert_eq!(no_contact.states, vec![folded]);
+    }
+
+    #[test]
+    fn landing_footpad_query_applies_persistent_crush_once_to_leg_geometry() {
+        let mut world =
+            CollisionWorld::new(CollisionFrame::inertial_at(DVec3::ZERO, DVec3::ZERO)).unwrap();
+        world
+            .insert_static_cuboid(
+                DVec3::new(0.0, 0.0, -0.25),
+                DQuat::IDENTITY,
+                DVec3::new(5.0, 5.0, 0.25),
+                CollisionMaterial::default(),
+            )
+            .unwrap();
+        let properties =
+            RigidBodyProperties::new(100.0, DMat3::from_diagonal(DVec3::splat(10.0))).unwrap();
+        // L + pad radius - ground distance = 0.25 m compression.
+        let body = world
+            .insert_dynamic_body(
+                RigidBodyState::stationary(DVec3::new(0.0, 0.0, 1.95)),
+                properties,
+                &sphere_geometry(0.1),
+                DynamicBodyConfig::default(),
+            )
+            .unwrap();
+        world.step(1.0 / 120.0, []).unwrap();
+        world
+            .resync_dynamic_body(
+                body,
+                RigidBodyState::stationary(DVec3::new(0.0, 0.0, 1.95)),
+                properties,
+                DynamicBodyConfig::default(),
+            )
+            .unwrap();
+
+        let mut spec = landing_leg().spec;
+        spec.shock_absorber = LandingShockAbsorberSpec::Crushable {
+            elastic_stiffness_n_m: 100_000.0,
+            damping_n_s_m: 0.0,
+            plateau_force_n: 10_000.0,
+            maximum_crush_m: 0.25,
+            bottom_out_stiffness_n_m: 300_000.0,
+            maximum_force_n: 100_000.0,
+        };
+        let leg = spec.compile().unwrap();
+        let first = world
+            .evaluate_landing_leg_contacts(
+                body,
+                std::slice::from_ref(&leg),
+                &[leg.spec.initial_state()],
+                DVec3::ZERO,
+                true,
+                1.0 / 120.0,
+            )
+            .unwrap();
+        assert_eq!(first.contacts.len(), 1);
+        assert!((first.contacts[0].compression_m - 0.25).abs() < 1.0e-12);
+        assert!((first.contacts[0].axial_force_n - 10_000.0).abs() < 1.0e-9);
+        assert!((first.states[0].permanent_crush_m - 0.15).abs() < 1.0e-12);
+
+        // Keep the body at the same pose: reduced leg length changes the
+        // query reach, but the shock sees the original total compression and
+        // neither loses support nor consumes the same crush a second time.
+        let second = world
+            .evaluate_landing_leg_contacts(
+                body,
+                std::slice::from_ref(&leg),
+                &first.states,
+                DVec3::ZERO,
+                true,
+                1.0 / 120.0,
+            )
+            .unwrap();
+        assert_eq!(second.contacts.len(), 1);
+        assert!((second.contacts[0].compression_m - 0.25).abs() < 1.0e-12);
+        assert!((second.contacts[0].axial_force_n - 10_000.0).abs() < 1.0e-9);
+        assert!((second.states[0].permanent_crush_m - 0.15).abs() < 1.0e-12);
     }
 
     #[test]

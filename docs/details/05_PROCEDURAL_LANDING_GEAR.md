@@ -1,18 +1,21 @@
 # Procedural landing gear, rover wheels, and tires
 
-Status: partial model/runtime slice. sim-core component laws, wheel-station
-compilation, vehicle-baker TOML input and mass/COM baking, sprung/unsprung mass
-partitioning, articulated Rapier wheel bodies/joints, tire/strut contact loads,
-and powered `FlightAuthority` integration are implemented. Fixed/kinematic
-terrain rolling, braking, airless-wheel traction, and mass-recovery regressions
-pass. Dynamic-body wheel contacts, granular soil response, and broader fleet
+Status: partial model/runtime slice. sim-core component laws, vehicle-baker
+TOML input and mass/COM baking, sprung/unsprung wheel partitioning, articulated
+Rapier wheel bodies/joints, fold-out landing supports, reusable and crushable
+shock laws, terrain footpad loads, and powered `FlightAuthority` integration
+are implemented. Wheel rolling/braking, airless traction, absorber energy and
+permanent-crush regressions pass. Dynamic-body gear contacts, granular soil
+response, full hinged-leg inertia/reaction coupling, and broader fleet
 validation remain future work.
 
 This specification covers aircraft landing gear and surface-rover running gear
 with one reusable parametric model. Aircraft gear may retract and brake for
 landing; rover gear may use multiple driven wheel stations and compliant tires
-for low-speed traversal. A lunar rover may use an airless wheel without
-pretending that the vacuum is an atmosphere.
+for low-speed traversal. Rocket/lander assets may use splayed fold-out supports
+inspired by Falcon-style reusable hardware or Apollo-style impact attenuation.
+A lunar rover may use an airless wheel without pretending that the vacuum is
+an atmosphere.
 
 ## 1. Ownership and scope
 
@@ -20,17 +23,17 @@ The intended boundary is:
 
 ```text
 vehicle-baker / design asset
-    procedural wheel-chassis and component parameters
+    wheel chassis, fold-out supports and component parameters
         ↓ compile
 thessa-sim-core
-    SI-valued chassis, tire, strut, brake and drive data
-    mass/inertia contributions and deterministic actuator/tire laws
+    SI-valued chassis, tire, strut, brake, drive and landing-leg data
+    mass/inertia contributions and deterministic shock/actuator/tire laws
         ↓ force, state and constraint commands
 thessa-collision / Rapier
-    terrain queries, reduced wheel/terrain loads and contact wrenches
+    terrain queries, reduced wheel/footpad loads and contact wrenches
         ↓ authoritative state and contact/load telemetry
     flight-authority
-     wheel-spin state, braking/motor commands and per-wheel telemetry
+     wheel/absorber state, gear command, braking/motor commands and load telemetry
 ```
 
 `sim-core` must not depend on Rapier. `thessa-collision` remains the only layer
@@ -65,7 +68,8 @@ Each chassis has:
 - a selected brake-actuator rating, replicated per braked wheel;
 - an optional electric drive motor, reduction and driven-wheel count;
 - steering and retraction are separate mechanisms and are outside this first
-  parameter type.
+  wheel-chassis parameter type. Fold-out legs are authored independently as
+  `LandingLegSpec` entries, up to 16 per vehicle.
 
 `length_m` and strut length are distinct quantities. Chassis `length_m` controls
 wheel placement; `strut.extended_length_m` is the distance from the vehicle
@@ -218,16 +222,90 @@ torque exceeds its contact grip. Electrical bus/battery resource accounting is
 a separate vehicle system and must eventually constrain motor electrical
 power.
 
+### 4.4 Retractable aircraft wheel chassis
+
+`WheelChassisSpec.retraction` is optional. When present, the authored chassis
+mount pose and wheel stations are the fully deployed configuration. The
+retraction record supplies a body-frame hinge pivot and unit axis, stowed and
+deployed angles, initial position, deployment rate, and maximum actuator
+torque. When omitted, the wheels remain fixed at their authored mount pose.
+`gear_down` commands both retractable wheel chassis and fold-out legs.
+
+The persistent deployment fraction drives the station and axle geometry. In
+contact mode, wheel masses and axle inertias follow the hinge, the assembly COM
+is recomputed, and the wheel suspension joint frames track the current strut
+and axle axes. Terrain, suspension, and wheel-weight moments about the hinge
+load the same torque-limited actuator law used by the support legs. Wheel brake
+and drive states remain attached to their station indices throughout the fold.
+Free-flight actuator motion advances the same state; free-flight inertia and
+hinge angular-momentum reaction remain reduced-model approximations.
+
+### 4.5 Fold-out lander supports and shock absorbers
+
+Each `LandingLegSpec` describes a body-frame hinge, stowed/deployed angles, leg
+axis and length, installed leg/footpad mass, pad radius/material, and a powered
+fold actuator. `gear_down` is the deployment target: `0` is stowed and `1` is
+deployed. The no-load angular rate falls linearly with opposing hinge load,
+`rate = rated_rate * (1 - resisting_torque / stall_torque)`; a load at the
+stall-torque rating holds the current fraction. Loads come from the queried
+foot/terrain force moment arm, so the deployment limit is a torque and geometry
+interaction rather than a free animation.
+
+Two absorbers use one contact interface:
+
+- `reusable` is a spring/hydraulic-damper unit with recoverable stroke,
+  preload, bottom-out stiffness and a maximum axial load. It returns to zero
+  compression after contact unloads;
+- `crushable` is a one-shot cellular/honeycomb cartridge. Its elastic portion
+  rises to a force plateau, then permanent crush advances monotonically and
+  remains in `LandingLegState`. After the cartridge reaches its crush capacity,
+  remaining travel engages the bottom-out stiffness. Cumulative plastic and
+  damping energy are exposed as telemetry; there is no automatic reset.
+
+For compression `δ`, compression rate `δ_dot`, yield displacement
+`δ_y = F_plateau/k`, and permanent crush `δ_p`, the crushable cartridge updates
+`δ_p_next = max(δ_p, min(δ - δ_y, δ_p_max))` when compressed beyond yield. Its
+recoverable spring load is `k * min(max(δ - δ_p_next, 0), δ_y)`; bottom-out and
+damper loads are then added and clamped to the authored force rating. Plastic
+energy is `F_plateau * (δ_p_next - δ_p)` and damper energy is
+`c * δ_dot² * dt`, both non-negative.
+
+The contact query casts along the deployed leg axis, uses the footpad radius to
+resolve sphere/terrain overlap, and requires axis/normal alignment of at least
+0.1. That conditioning boundary bounds terrain-normal load amplification to
+10 times the absorber's axial load. The terrain normal reaction is
+`N = F_axial / alignment`; tangential slip response is capped by the arithmetic
+mean of pad and terrain friction times `N`. The resulting single wrench is
+applied to the vehicle body at the geometric foot contact point. Feet are not
+solid Rapier colliders, so the support load is not duplicated by a second
+impulse. Fixed and kinematic terrain are supported; dynamic-body foot reactions
+and granular sinkage/shear are not.
+
+Leg and footpad masses/inertia enter the sprung vehicle mass bake and common
+COM recenter. In this slice their inertia is baked at the fully deployed pose;
+fold motion is a torque-limited persistent kinematic coordinate, not a separate
+Rapier rigid body. Mass redistribution and the equal/opposite hinge reaction
+during fold motion are explicit fidelity work still to do. The footpad force
+and absorber energy laws are exact for their stated reduced model; for planar
+terrain the ray/sphere overlap is analytic, while the 0.1 alignment gate bounds
+load amplification. The collision regression pins compression and normal-load
+values against this closed form to floating-point tolerance. Curved-ground
+error is controlled by the terrain query's local tangent approximation and has
+no global envelope for arbitrary unbounded curvature.
+
 ## 5. Rapier wheel queries and fixed-step order
 
 The articulated Rapier runtime creates one sensor-only dynamic wheel body per
 station and attaches it to the sprung body with a joint that permits strut
-translation and wheel spin. FlightAuthority retains wheel-spin values for
-assembly rebuilds, advances brake actuators, applies optional motor/brake
-torques as equal-and-opposite couples, and publishes per-wheel contact/drive
-telemetry. Thessa gravity is distributed by body mass; external vehicle loads
-are shifted from total COM to the sprung-body COM before the one Rapier step.
-Dynamic-body wheel contact is not yet included.
+translation and wheel spin. Fold-out supports remain sprung in this reduced
+slice and contribute terrain-query contact wrenches at their feet.
+FlightAuthority retains wheel-spin/brake, wheel-chassis deployment, and
+per-leg deployment/crush state, advances their actuators, applies optional
+motor/brake torques as equal-and-opposite couples, and publishes
+contact/drive/gear/shock telemetry.
+Thessa gravity is distributed by body mass; external vehicle loads are shifted
+from total COM to the sprung-body COM before the one Rapier step. Dynamic-body
+wheel/foot contacts are not yet included.
 
 The per-tick order is:
 
@@ -235,11 +313,12 @@ The per-tick order is:
 2. query each wheel against the preceding Rapier broad phase and evaluate
    measured strut/tire loads plus longitudinal/lateral slip forces;
 3. advance brake state, evaluate motor torque, and distribute gravity and
-   equal-and-opposite actuator/suspension loads;
+   equal-and-opposite wheel actuator/suspension loads plus landing-foot
+   absorber/friction loads;
 4. step the contact-active Rapier scene once and reconstruct the total vehicle
    COM state;
-5. retain wheel spin/brake state and publish per-wheel load, slip, saturation
-   and drive telemetry.
+5. retain wheel spin/brake and leg deployment/crush state and publish wheel
+   load/slip/drive and landing shock/actuator telemetry.
 
 Rapier global gravity remains zero. Thessa supplies gravity and other external
 loads. No body or wheel is advanced once by a custom rigid-body integrator and
@@ -295,6 +374,15 @@ mass_per_wheel_kg = 0.8
 maximum_torque_nm = 95.0
 response_time_s = 0.12
 mass_per_wheel_kg = 0.4
+
+[wheel_chassis.retraction]
+pivot_position_body_m = [-0.2, -0.9, 0.1]
+hinge_axis_body = [0.0, 1.0, 0.0]
+stowed_angle_rad = -1.5707963267948966
+deployed_angle_rad = 0.0
+initially_deployed = true
+deployment_rate_rad_s = 0.8
+actuator_max_torque_nm = 12_000.0
 ```
 
 An `axle_pairs` layout uses the externally tagged TOML value
@@ -303,13 +391,47 @@ table accepts the motor envelope, stall copper loss, rotor inertia, final-drive
 ratio, drivetrain efficiency and driven-wheel count. Omitted `wheel_chassis`
 tables keep existing vehicle files valid. The baker includes wheel-chassis
 mass and inertia before its one assembly COM shift, then shifts/recompiles the
-mount frames with the rest of the vehicle.
+mount frames and optional retraction pivots with the rest of the vehicle.
 
 The model compiler rejects invalid dimensions, wheel counts/layouts,
 pressure/construction mismatches, impossible actuator ratings, bad drive
 ratios, non-finite values, and a drive count exceeding the wheel count.
 
-## 7. Acceptance tests before broad integration
+Fold-out supports are authored in the same file. Axes and mount points are
+body-frame vectors; `gear_down` moves each leg between its stowed and deployed
+angles. Reusable hardware:
+
+```toml
+[[landing_legs]]
+name = "forward-leg"
+mount_position_body_m = [1.2, -0.8, -0.5]
+hinge_axis_body = [0.0, 1.0, 0.0]
+stowed_leg_axis_body = [0.0, 0.0, 1.0]
+stowed_angle_rad = 0.0
+deployed_angle_rad = 2.5
+initially_deployed = false
+deployment_rate_rad_s = 0.6
+actuator_max_torque_nm = 18000.0
+leg_length_m = 2.5
+leg_mass_kg = 24.0
+footpad_radius_m = 0.25
+footpad_mass_kg = 4.0
+footpad_friction = 0.75
+footpad_slip_stiffness_n_per_mps = 6000.0
+shock_absorber = { kind = "reusable", stroke_m = 0.28, spring_rate_n_m = 65000.0, damping_n_s_m = 8500.0, preload_n = 0.0, bottom_out_stiffness_n_m = 350000.0, maximum_force_n = 180000.0 }
+```
+
+For a one-shot Apollo-style crush cartridge, replace the shock value with:
+
+```toml
+shock_absorber = { kind = "crushable", elastic_stiffness_n_m = 120000.0, damping_n_s_m = 7000.0, plateau_force_n = 30000.0, maximum_crush_m = 0.35, bottom_out_stiffness_n_m = 500000.0, maximum_force_n = 220000.0 }
+```
+
+`data/vehicles/example_body.toml` contains a four-leg splayed reusable lander
+configuration. The baker adds its leg masses before the common COM shift, then
+shifts and recompiles each hinge frame with the rest of the vehicle.
+
+## 7. Acceptance tests
 
 `thessa-sim-core` known-case and regression tests:
 
@@ -358,22 +480,57 @@ ratios, non-finite values, and a drive count exceeding the wheel count.
      spring stored-energy change and dissipates non-negative damper energy; hard
      stroke stops do not inject energy.
 13. **Determinism and ownership:** repeated fixed-step command/contact tapes
-     yield bounded replay error; there is one Rapier integration per contact
-     tick, no duplicate Thessa rigid-body integration, and no hidden gravity.
+      yield bounded replay error; there is one Rapier integration per contact
+      tick, no duplicate Thessa rigid-body integration, and no hidden gravity.
+14. **Reusable vs one-shot absorber:** reusable travel returns after rebound;
+       crushable travel and absorbed energy persist monotonically, reach the
+       bottom-out law at capacity, and never generate a tensile load.
+15. **Fold actuator:** deployment/retraction moves at rated no-load speed,
+      slows with resisting hinge torque, and stalls at rated torque. Gear
+      transitions prevent rails batching until the requested configuration is
+      reached.
+16. **Footpad load:** a flat-plane three-leg lander reports analytic
+      sphere-pad compression, friction-limited tangent force, permanent crush
+      and finite vehicle wrench through contact-active authority ticks.
 
 The `thessa-collision` release benchmark measures warm-broad-phase wheel
-queries alone and a contact-active articulated assembly (sensor wheel bodies,
-slider/spin joints, gravity, tire/strut wrench evaluation and one Rapier step)
-at 1, 4, 16, and 64 wheels. On the current development host, query-only
-throughput ranged from 4.12 to 4.71 million wheel-steps/s across the serial
-and parallel runs. The latest articulated release runs measured:
+queries alone, articulated wheel assemblies (sensor wheel bodies, slider/spin
+joints, gravity, tire/strut wrench evaluation and one Rapier step), and landing
+support queries with shock/friction state and applied loads. Wheel query-only
+throughput was 3.67–4.50 million wheel-steps/s across serial/parallel runs.
+The latest articulated-wheel results measured:
 
 | wheels | serial wheel-steps/s | parallel wheel-steps/s |
 | -----: | -------------------: | ---------------------: |
-|      1 |              326,009 |                301,908 |
-|      4 |              501,217 |                 84,483 |
-|     16 |              589,004 |                134,740 |
-|     64 |              613,934 |                243,844 |
+|      1 |              311,532 |                280,688 |
+|      4 |              483,563 |                 68,488 |
+|     16 |              552,992 |               106,021 |
+|     64 |              580,811 |               275,509 |
+
+Landing-leg throughput includes the queried contact, absorber state update,
+footpad friction, wrench application, and one Rapier body step. Every support
+remained loaded through the timed run:
+
+| legs | serial leg-steps/s | parallel leg-steps/s | minimum loaded legs |
+| ---: | -----------------: | -------------------: | ------------------: |
+|    3 |          1,362,770 |            1,194,404 |                   3 |
+|    4 |          1,715,194 |            1,324,728 |                   4 |
+|    8 |          2,383,322 |            2,217,326 |                   8 |
+|   16 |          3,200,146 |            2,997,158 |                  16 |
+
+The `thessa-flight-authority` retractable-wheel benchmark exercises the full
+contact-runtime path: current COM split, wheel-body resync, suspension-joint
+frame updates, contact queries, gear actuation and one Rapier step. It switches
+the gear target halfway through each timed run; the wheels begin clear of
+terrain so these numbers isolate retraction overhead rather than loaded tire
+forces. One host-local release run measured:
+
+| wheels | timed steps | wheel-steps/s |
+| -----: | ----------: | ------------: |
+|      1 |       8,000 |        39,420 |
+|      4 |       8,000 |        55,846 |
+|     16 |       2,000 |        68,753 |
+|     64 |         500 |       105,348 |
 
 These are host-local throughput samples, not portable targets; the contact
 benchmark also sweeps 1/8/64/256/1024 rigid bodies. Follow-up measurements must
@@ -391,7 +548,10 @@ fraction of vehicle weight and wheel load, never as a relative error near zero.
 - tire structural fatigue and full electrical bus/battery integration;
 - wheel contact with dynamic bodies and the corresponding equal-and-opposite
   terrain/body impulses;
-- retractable gear, steering, anti-skid and active suspension;
+- free-flight rotational inertia changes during wheel retraction, steering,
+  anti-skid and active suspension;
+- explicit fold-hinge rigid bodies, structural hinge loads and the
+  equal-and-opposite angular-momentum reaction of moving gear;
 - full visual wheel/tread/spoke CAD and deforming contact patches.
 
 These limits are explicit model boundaries. Lower-detail tiers may simplify

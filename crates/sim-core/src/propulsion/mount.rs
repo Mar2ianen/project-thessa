@@ -55,6 +55,10 @@ impl EngineMount {
                 "thrust axis must be unit length".into(),
             ));
         }
+        // The nested engine is baked data too: a tampered field (zero
+        // chamber pressure, an empty burn curve) must fail here instead
+        // of reaching the operating-point formulas as NaN thrust.
+        self.engine.validate()?;
         Ok(())
     }
 
@@ -222,5 +226,35 @@ mod tests {
         assert!((force - DVec3::new(full, 0.0, 0.0)).length() / full < 1e-12);
         assert!((moment - DVec3::new(0.0, full, 0.0)).length() / full < 1e-12);
         assert!(vehicle.wrench_body_n(&[(1.0, 0.0)], 0.0).is_err());
+    }
+
+    /// A tampered nested engine must fail mount validation (and every
+    /// dispatch through it) instead of reaching the formulas as NaN.
+    #[test]
+    fn engine_mount_validate_rejects_tampered_baked_engine() {
+        let mount = EngineMount {
+            name: "tamper probe".into(),
+            engine: CompiledEngine::Liquid(merlin_like().compile().expect("compile")),
+            position_body_m: [0.0, 1.0, 0.0],
+            thrust_axis_body: [1.0, 0.0, 0.0],
+        };
+        mount.validate().expect("clean bake validates");
+
+        let mut tampered = mount.clone();
+        let CompiledEngine::Liquid(engine) = &mut tampered.engine else {
+            panic!("liquid variant");
+        };
+        // Zero chamber pressure divides in the thrust coefficient.
+        engine.chamber_pressure_pa = 0.0;
+        assert!(matches!(
+            tampered.validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+        let error = tampered
+            .thrust_vector_body_n(1.0, 0.0, 0.0)
+            .expect_err("tampered mount must fail closed, not return NaN thrust");
+        assert!(matches!(error, PropulsionError::InvalidSpec(_)));
+
+        mount.validate().expect("untampered bake still validates");
     }
 }

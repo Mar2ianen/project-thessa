@@ -26,8 +26,11 @@ Implemented: serializable vehicle definitions, 6-DoF starter vehicle, control
 surfaces, actuator dynamics, RCS/propulsion demand, authority runtime, Bevy
 pilot HUD, server snapshots, reset path, and flight traces.
 
-Remaining: complete staging, richer propulsion catalogs, full contact/wheels,
-vehicle editor, and production asset workflow.
+Remaining: complete staging, richer propulsion catalogs, wheel interactions
+with dynamic bodies, retractable/steering mechanisms, vehicle editor, and
+production asset workflow. The current articulated wheel runtime, its boundaries
+and acceptance tests are documented in
+[`details/05_PROCEDURAL_LANDING_GEAR.md`](details/05_PROCEDURAL_LANDING_GEAR.md).
 
 ## M2 — Aero, spaceplane, thermal, and structure — partial
 

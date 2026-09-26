@@ -1717,6 +1717,39 @@ fn analytic_bound_expires_and_refuses_honestly() {
     );
 }
 
+/// Excursion and source drift must be charged jointly. A target at the
+/// excursion edge and a source drifting past it can meet inside the
+/// interval — that IS the rebuild signal (INFINITY), not a finite bound.
+/// The temporal clearance used to subtract only the drift, so an excursion
+/// plus drift summing to more than the anchor distance still posted a
+/// finite (and understated) bound.
+#[test]
+fn analytic_bound_expires_when_excursion_and_drift_close_the_gap() {
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 1.0e8);
+    let mut frame = EphemerisFrame::new();
+    let states = frame
+        .evaluate(&ephemeris, SimTime::EPOCH)
+        .expect("frame states")
+        .to_vec();
+    let center = DVec3::new(3.0e9, 1.0e9, 0.0);
+    let positions = vec![center, center + DVec3::new(10_000.0, 0.0, 0.0)];
+    let patch = compile_patch(&ephemeris, &states, &positions, CohortConfig::default())
+        .expect("patch compiles");
+    // Sources sit within 1e8 m of the origin, so every anchor distance is
+    // ~3.16e9 m: the 2.5e9 m excursion alone leaves ~6.6e8 m of clearance.
+    // Orbit speeds are 500..1500 m/s, so over 2e6 s the sources displace
+    // 1e9..3e9 m — drift alone closes the remaining gap.
+    let excursion = 2.5e9;
+    let interval_s = 2.0e6;
+    let bound = affine_segment_bound(&ephemeris, &states, &patch, excursion, interval_s)
+        .expect("bound evaluates");
+    assert!(
+        bound.is_infinite(),
+        "excursion {excursion:e} m + drift over {interval_s}s must reach the anchor, \
+         but the bound stayed finite at {bound:e}"
+    );
+}
+
 #[test]
 fn piecewise_converges_with_budget_and_stays_deterministic() {
     // Budget-driven convergence: a tighter budget takes shorter segments
@@ -4891,6 +4924,32 @@ fn soa_scratch_matches_scalar_panel_loop_within_envelope() {
     }
 }
 
+/// `drag_only_above_mach = -inf` must be rejected. Validation used to accept
+/// any infinity as the "disabled" sentinel, but the SIMD coefficient kernels
+/// mask only +inf: on the aarch64 NEON tier -inf would produce a NaN lift
+/// fade while scalar treats it as no fade at all. +inf stays valid.
+#[test]
+fn aero_rejects_negative_infinite_drag_cutoff() {
+    use crate::{AeroConfig, PanelAeroModel};
+    let negative_disabled = AeroConfig {
+        drag_only_above_mach: f64::NEG_INFINITY,
+        ..AeroConfig::default()
+    };
+    assert!(
+        PanelAeroModel::new(negative_disabled).is_err(),
+        "-inf is not the disabled sentinel"
+    );
+    assert!(
+        PanelAeroModel::new(AeroConfig::default()).is_ok(),
+        "+inf must remain the disabled sentinel"
+    );
+    let finite_cutoff = AeroConfig {
+        drag_only_above_mach: 2.5,
+        ..AeroConfig::default()
+    };
+    assert!(PanelAeroModel::new(finite_cutoff).is_ok());
+}
+
 /// Transonic buffet (Slice F): opt-in lift loss through the panel solver.
 mod buffet_tests {
     use super::*;
@@ -5054,6 +5113,70 @@ fn circular_state(mu: f64, radius: f64) -> TestParticleState {
 
 fn orbital_energy(mu: f64, state: TestParticleState) -> f64 {
     state.velocity.length_squared() / 2.0 - mu / state.position.length()
+}
+
+/// The epoch sampled inside a finite burn must follow the schedule: a burn
+/// that starts `start_s` after departure runs against the field at its true
+/// absolute time, not shifted back to the departure epoch. Fixed central
+/// fields cannot see the shift (that is how this once regressed); the
+/// moving binary here rotates enough between the two epochs to separate
+/// correct from shifted by metres. Same physical burn encoded twice —
+/// scheduled later from `EPOCH`, or started fresh at `EPOCH + offset` —
+/// must land on the same state.
+#[test]
+fn thrust_arc_gravity_epoch_follows_schedule_offset() {
+    let ephemeris = two_body_binary(3.0e14, 1.0e14, 5.0e7);
+    let field = GravityField::from_ephemeris(&ephemeris);
+    let mu = 4.0e14;
+    let initial = circular_state(mu, 1.1e9);
+    let mass = 20_000.0;
+    let config = AdaptiveIntegratorConfig::default();
+    let offset = 600.0;
+    let burn_s = 120.0;
+    let arc = ThrustArc {
+        start_s: offset,
+        duration_s: burn_s,
+        direction: ThrustDirection::Inertial(DVec3::Y),
+        throttle_01: 1.0,
+        thrust_n: 5_000.0,
+        mass_flow_kgs: 0.1,
+    };
+    let scheduled = propagate_adaptive_with_thrust(
+        &field,
+        initial,
+        mass,
+        SimTime::EPOCH,
+        offset + burn_s,
+        &[arc],
+        config,
+    )
+    .expect("scheduled arc propagates");
+    // Identical burn, same absolute window, encoded with start_s = 0 from
+    // the arc-start epoch. Coast to the arc start with the same ballistic
+    // stepper the scheduled run uses internally.
+    let coast = propagate_adaptive(&field, initial, SimTime::EPOCH, offset, config)
+        .expect("coast to arc start");
+    let arc_at_origin = ThrustArc {
+        start_s: 0.0,
+        ..arc
+    };
+    let shifted = propagate_adaptive_with_thrust(
+        &field,
+        coast.state,
+        mass,
+        SimTime::EPOCH.offset(offset),
+        burn_s,
+        &[arc_at_origin],
+        config,
+    )
+    .expect("offset arc propagates");
+    let position_gap = (scheduled.state.position - shifted.state.position).length();
+    let velocity_gap = (scheduled.state.velocity - shifted.state.velocity).length();
+    assert!(
+        position_gap < 1.0e-6,
+        "burn scheduled at +{offset}s drifted {position_gap:e} m from the same burn encoded at its own epoch"
+    );
+    assert!(velocity_gap < 1.0e-9, "velocity gap {velocity_gap:e} m/s");
 }
 
 #[test]

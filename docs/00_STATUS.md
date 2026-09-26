@@ -20,7 +20,8 @@ do not update in place).
 | `20_ADVANCED_AERO_EFFECTORS.md` | 🔵 design target | background only (incidence-only control) | flaps/spoilers/hinged-panels/grid-fins, neutral bounds, `AeroEffectorModel`, high-speed plan (§§17–20: boom/buffet/plasma/vortex/ground-effect) |
 | `23_GRAVITY_FIELD_COHORTS.md` | 🟡 partial | monopole tree, quadrupole rung, single-tick patches, Hessian spatial bound | time-span patches, cohort keys, planner-patch reuse, GPU |
 | `24_ANALYTIC_AFFINE_PROPAGATION.md` | ✅ prototype | far-only analytic STM on single-tick cohorts | atmosphere/thrust/contact integration, global proof |
-| `40_RAPIER_COLLISION_INTEGRATION.md` | ✅ baseline | local contact solver, zero-gravity Rapier, readback, regime switch | wheels, rich-terrain contact boundary, full PBR parity |
+| `40_RAPIER_COLLISION_INTEGRATION.md` | ✅ baseline | local contact solver, zero-gravity Rapier, readback, regime switch, articulated wheel bodies/joints, sensor-only tire queries, split mass properties, powered wheel/strut/brake/drive stepping | dynamic-body wheel contacts, richer terrain contact boundary, full PBR parity |
+| `details/05_PROCEDURAL_LANDING_GEAR.md` | 🟡 partial | sim-core wheel/tire/strut/brake/drive laws, vehicle-baker TOML grammar, deterministic station compilation, wheel mass/COM bake and sprung/unsprung split, articulated Rapier wheel bodies/joints, powered FlightAuthority spin/brake/drive state and telemetry, static-load/rolling/braking/lunar low-friction regressions, 1–64 wheel-query and articulated serial/parallel benchmarks | dynamic-body wheel contacts, granular soil response, steering/retraction/anti-skid, electrical bus limits, representative fleet benchmarks |
 
 ## World and lore
 

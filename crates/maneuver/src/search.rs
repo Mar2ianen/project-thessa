@@ -1746,6 +1746,27 @@ pub(crate) fn correct_shooting(
     best.map(|(burn1, end, miss)| (departure_burn, burn1, end, miss))
 }
 
+/// Encounter-plane basis for the B-plane solve: T ⊥ S, R = S × T.
+/// The reference axis is picked away from `s` — Z only when `s` carries a
+/// strong X or Y component, X otherwise — so the cross product can never
+/// degenerate: |s × ref| ≥ sqrt(1 − 0.9²) for every unit `s`. Choosing
+/// the reference by the opposite condition degenerated exactly at ±X and
+/// ±Z (zero cross product → NaN basis → the solve silently dropped the
+/// legacy B-plane path).
+fn encounter_basis(s: DVec3) -> Option<(DVec3, DVec3)> {
+    let reference = if s.x.abs() >= 0.9 || s.y.abs() >= 0.9 {
+        DVec3::Z
+    } else {
+        DVec3::X
+    };
+    let t_axis = s.cross(reference).normalize();
+    let r_axis = s.cross(t_axis).normalize();
+    if !t_axis.is_finite() || !r_axis.is_finite() {
+        return None;
+    }
+    Some((t_axis, r_axis))
+}
+
 /// B-plane differential correction for flyby encounters: vary one burn
 /// (3 DOF) against the 2D encounter-plane miss, minimum-norm.
 ///
@@ -1784,16 +1805,7 @@ pub(crate) fn correct_bplane_shooting(
     if !s.is_finite() {
         return None;
     }
-    let reference = if s.x.abs() < 0.9 && s.y.abs() < 0.9 {
-        DVec3::Z
-    } else {
-        DVec3::X
-    };
-    let t_axis = s.cross(reference).normalize();
-    let r_axis = s.cross(t_axis).normalize();
-    if !t_axis.is_finite() || !r_axis.is_finite() {
-        return None;
-    }
+    let (t_axis, r_axis) = encounter_basis(s)?;
     let project = |point: DVec3| -> (f64, f64) {
         let relative = aim_point_m - point;
         (relative.dot(t_axis), relative.dot(r_axis))
@@ -2162,5 +2174,34 @@ mod tests {
             porkchop_search(&ephemeris, &field, bad),
             Err(SearchError::InvalidConfig)
         );
+    }
+
+    /// Every unit direction must yield a finite orthonormal basis. The
+    /// reference-axis choice once degenerated exactly at ±X and ±Z: the
+    /// cross product went to zero, the basis went NaN, and the solver
+    /// silently dropped the legacy B-plane path for that leg.
+    #[test]
+    fn encounter_basis_survives_every_axis() {
+        let axes = [
+            DVec3::X,
+            -DVec3::X,
+            DVec3::Y,
+            -DVec3::Y,
+            DVec3::Z,
+            -DVec3::Z,
+            DVec3::new(1.0, 1.0, 0.0).normalize(),
+            DVec3::new(0.9, 0.1, 0.4).normalize(),
+            DVec3::new(0.1, 0.1, 1.0).normalize(),
+            DVec3::new(0.7, 0.7, 0.1).normalize(),
+        ];
+        for s in axes {
+            let (t, r) =
+                encounter_basis(s).unwrap_or_else(|| panic!("basis degenerate for s = {s}"));
+            assert!(t.is_finite() && r.is_finite(), "NaN basis for s = {s}");
+            assert!((t.length() - 1.0).abs() < 1.0e-12, "T not unit for s = {s}");
+            assert!((r.length() - 1.0).abs() < 1.0e-12, "R not unit for s = {s}");
+            assert!(t.dot(s).abs() < 1.0e-12, "T not perpendicular to s = {s}");
+            assert!(r.dot(s).abs() < 1.0e-12, "R not perpendicular to s = {s}");
+        }
     }
 }

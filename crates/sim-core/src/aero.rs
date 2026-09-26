@@ -504,9 +504,14 @@ impl AeroConfig {
                 "aero configuration contains a non-finite value".into(),
             ));
         }
-        // drag_only_above_mach may be INFINITY (disabled); anything else
-        // must be a positive finite cutoff.
-        if !(self.drag_only_above_mach.is_infinite() || self.drag_only_above_mach > 0.0) {
+        // drag_only_above_mach may be +INFINITY (disabled); anything else
+        // must be a positive finite cutoff. Negative infinity is not a
+        // "disabled" sentinel: the scalar fade checks `is_infinite()`, but
+        // the SIMD coefficient kernels mask only +inf, so -inf would split
+        // scalar/SIMD parity (NaN lift fade on the aarch64 NEON tier).
+        let cutoff_disabled =
+            self.drag_only_above_mach.is_infinite() && self.drag_only_above_mach.is_sign_positive();
+        if !(cutoff_disabled || self.drag_only_above_mach > 0.0) {
             return Err(AeroError::InvalidModel(
                 "aero configuration has an invalid range".into(),
             ));

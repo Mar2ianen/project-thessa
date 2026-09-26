@@ -216,6 +216,12 @@ The runtime supports:
 - dynamic bodies: rigid-body contact objects with full CCD,
   sleep, and zero-density colliders (mass/inertia come from
   sim-core authority);
+- parametric wheel assemblies, component laws and vehicle mass/inertia baking
+  are implemented in sim-core and specified in
+  [`details/05_PROCEDURAL_LANDING_GEAR.md`](details/05_PROCEDURAL_LANDING_GEAR.md);
+  the Rapier backend splits sprung/unsprung mass, assembles sensor-only wheel
+  bodies with suspension/spin joints, evaluates tire/strut forces, and steps
+  persistent wheel spin plus brake/motor commands through FlightAuthority;
 - fixed joints: docking/seamless staging connections with
   contacts between joined bodies disabled;
 - contact activation hysteresis: a body enters contact-active
@@ -238,7 +244,8 @@ Still future work:
   (fleet layer with multiple resident patches);
 - structural failure mapping onto collision body rebuild
   (requires a structural graph in sim-core);
-- wheels, debris bodies, and fluid-surface interactions.
+- dynamic-body tire contacts with equal-and-opposite reactions, debris bodies,
+  and fluid-surface interactions.
 
 ## 3.11. Thermal, structural, and fluid systems
 

@@ -17,6 +17,7 @@ use std::{
 use glam::{DMat3, DQuat, DVec3};
 use thessa_collision::{
     CollisionDebugSnapshot, CollisionFrame, ContactSummary, DynamicBodyConfig, KinematicBodyId,
+    LandingLegContactSample, WheelContactSample,
 };
 use thessa_flight_control::{
     ActuatorDynamics, ControlDemand, DirectionFrame, DirectionTarget, GuidanceIntent,
@@ -26,9 +27,10 @@ use thessa_sim_core::{
     AeroConfig, AeroGeometry, AeroModel, AeroSimdScratch, AeroState, AtmosphereConfig,
     AtmosphereError, BakedEphemeris, BodyId, BodyState, COAST_RAILS_POSITION_TOL_M,
     COAST_RAILS_VELOCITY_TOL_MPS, CollisionMaterial, EphemerisFrame, EventScheduler, FlightError,
-    FlightForces, FlightStepInput, GravityField, OnRailsCache, PanelAeroModel, PanelSoA,
-    RigidBodyState, ScheduledEvent, ScheduledKind, SimTime, TestParticleState,
-    TickIntegratorConfig, VehicleDefinition, WORLD_TICK_S, X15StarterProfile,
+    FlightForces, FlightStepInput, GravityField, LandingGearActuatorPoint, LandingLegState,
+    OnRailsCache, PanelAeroModel, PanelSoA, RigidBodyState, ScheduledEvent, ScheduledKind, SimTime,
+    TestParticleState, TickIntegratorConfig, VehicleDefinition, WORLD_TICK_S, WheelBrakeState,
+    WheelChassisActuatorPoint, WheelChassisState, WheelDrivePoint, X15StarterProfile,
     evaluate_flight_forces_soa, integrate_attitude_step, integrate_rigid_body_step_soa,
 };
 use thessa_worldgen_rocky::field::{ObstacleReport, ObstacleTrackCertificate, PlanetField};
@@ -375,6 +377,20 @@ pub struct FlightAuthority {
     pub sas_enabled: bool,
     pub rcs_enabled: bool,
     pub gear_down: bool,
+    /// Normalized service-brake command applied to every installed wheel
+    /// brake actuator during contact-active ticks.
+    pub wheel_brake_command: f64,
+    /// Signed traction-motor command; wheel chassis without a drive ignore it.
+    pub wheel_drive_command: f64,
+    wheel_spin_rad_s: Vec<Vec<f64>>,
+    wheel_brake_states: Vec<Vec<WheelBrakeState>>,
+    wheel_chassis_states: Vec<WheelChassisState>,
+    landing_leg_states: Vec<LandingLegState>,
+    last_wheel_contacts: Vec<WheelContactSample>,
+    last_wheel_drive_points: Vec<(usize, u16, WheelDrivePoint)>,
+    last_wheel_gear_actuators: Vec<(usize, WheelChassisActuatorPoint)>,
+    last_landing_leg_contacts: Vec<LandingLegContactSample>,
+    last_landing_leg_actuators: Vec<(usize, LandingGearActuatorPoint)>,
     /// Manual body-axis command: pitch, yaw, roll in normalized units.
     pub control_input: DVec3,
     pub surface_input: DVec3,
@@ -732,6 +748,32 @@ impl FlightAuthority {
         let vehicle = x15_vehicle()?;
         let control_reference_geometry = vehicle.aero_geometry.clone();
         let control_deflections_rad = vec![0.0; vehicle.control_surfaces.len()];
+        let wheel_spin_rad_s: Vec<Vec<f64>> = vehicle
+            .wheel_chassis
+            .iter()
+            .map(|chassis| vec![0.0; chassis.wheel_stations.len()])
+            .collect();
+        let wheel_brake_states: Vec<Vec<WheelBrakeState>> = vehicle
+            .wheel_chassis
+            .iter()
+            .map(|chassis| vec![WheelBrakeState::default(); chassis.wheel_stations.len()])
+            .collect();
+        let wheel_chassis_states: Vec<WheelChassisState> = vehicle
+            .wheel_chassis
+            .iter()
+            .map(|chassis| {
+                chassis
+                    .spec
+                    .retraction
+                    .map(|retraction| retraction.initial_state())
+                    .unwrap_or_else(WheelChassisState::deployed)
+            })
+            .collect();
+        let landing_leg_states: Vec<LandingLegState> = vehicle
+            .landing_legs
+            .iter()
+            .map(|leg| leg.spec.initial_state())
+            .collect();
         let recipe_max_elevation_m: f64 = {
             let recipe: thessa_worldgen_rocky::spec_recipe::SpecRecipe =
                 toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml"))
@@ -792,6 +834,17 @@ impl FlightAuthority {
             sas_enabled: true,
             rcs_enabled: true,
             gear_down: true,
+            wheel_brake_command: 0.0,
+            wheel_drive_command: 0.0,
+            wheel_spin_rad_s,
+            wheel_brake_states,
+            wheel_chassis_states,
+            landing_leg_states,
+            last_wheel_contacts: Vec::new(),
+            last_wheel_drive_points: Vec::new(),
+            last_wheel_gear_actuators: Vec::new(),
+            last_landing_leg_contacts: Vec::new(),
+            last_landing_leg_actuators: Vec::new(),
             control_input: DVec3::ZERO,
             surface_input: DVec3::ZERO,
             actuator_saturated: false,
@@ -849,6 +902,168 @@ impl FlightAuthority {
     /// order. `surface_input` remains the normalized requested command.
     pub fn control_deflections_rad(&self) -> &[f64] {
         &self.control_deflections_rad
+    }
+
+    pub fn set_wheel_brake_command(&mut self, command: f64) -> Result<(), FlightError> {
+        if !command.is_finite() || !(0.0..=1.0).contains(&command) {
+            return Err(FlightError::InvalidInput(
+                "wheel brake command must be finite and in [0, 1]".into(),
+            ));
+        }
+        self.wheel_brake_command = command;
+        Ok(())
+    }
+
+    pub fn set_wheel_drive_command(&mut self, command: f64) -> Result<(), FlightError> {
+        if !command.is_finite() || !(-1.0..=1.0).contains(&command) {
+            return Err(FlightError::InvalidInput(
+                "wheel drive command must be finite and in [-1, 1]".into(),
+            ));
+        }
+        self.wheel_drive_command = command;
+        Ok(())
+    }
+
+    /// Set the requested landing-gear configuration. Fold-out legs and
+    /// retractable wheel chassis advance toward this command on physics ticks.
+    pub fn set_gear_down(&mut self, deployed: bool) {
+        self.gear_down = deployed;
+    }
+
+    pub fn wheel_spin_rates_rad_s(&self) -> &[Vec<f64>] {
+        &self.wheel_spin_rad_s
+    }
+
+    pub fn wheel_brake_states(&self) -> &[Vec<WheelBrakeState>] {
+        &self.wheel_brake_states
+    }
+
+    pub fn wheel_chassis_states(&self) -> &[WheelChassisState] {
+        &self.wheel_chassis_states
+    }
+
+    pub fn wheel_contact_telemetry(&self) -> &[WheelContactSample] {
+        &self.last_wheel_contacts
+    }
+
+    pub fn wheel_drive_telemetry(&self) -> &[(usize, u16, WheelDrivePoint)] {
+        &self.last_wheel_drive_points
+    }
+
+    pub fn wheel_gear_actuator_telemetry(&self) -> &[(usize, WheelChassisActuatorPoint)] {
+        &self.last_wheel_gear_actuators
+    }
+
+    pub fn landing_leg_states(&self) -> &[LandingLegState] {
+        &self.landing_leg_states
+    }
+
+    pub fn landing_leg_contact_telemetry(&self) -> &[LandingLegContactSample] {
+        &self.last_landing_leg_contacts
+    }
+
+    pub fn landing_leg_actuator_telemetry(&self) -> &[(usize, LandingGearActuatorPoint)] {
+        &self.last_landing_leg_actuators
+    }
+
+    fn sync_wheel_runtime_state(&mut self) {
+        self.wheel_spin_rad_s
+            .resize_with(self.vehicle.wheel_chassis.len(), Vec::new);
+        self.wheel_brake_states
+            .resize_with(self.vehicle.wheel_chassis.len(), Vec::new);
+        for (index, chassis) in self.vehicle.wheel_chassis.iter().enumerate() {
+            let station_count = chassis.wheel_stations.len();
+            self.wheel_spin_rad_s[index].resize(station_count, 0.0);
+            self.wheel_brake_states[index].resize(station_count, WheelBrakeState::default());
+        }
+    }
+
+    fn sync_landing_leg_runtime_state(&mut self) {
+        self.landing_leg_states
+            .truncate(self.vehicle.landing_legs.len());
+        while self.landing_leg_states.len() < self.vehicle.landing_legs.len() {
+            let index = self.landing_leg_states.len();
+            self.landing_leg_states
+                .push(self.vehicle.landing_legs[index].spec.initial_state());
+        }
+    }
+
+    fn sync_wheel_gear_runtime_state(&mut self) {
+        self.wheel_chassis_states
+            .truncate(self.vehicle.wheel_chassis.len());
+        while self.wheel_chassis_states.len() < self.vehicle.wheel_chassis.len() {
+            let index = self.wheel_chassis_states.len();
+            let chassis = &self.vehicle.wheel_chassis[index];
+            self.wheel_chassis_states.push(
+                chassis
+                    .spec
+                    .retraction
+                    .map(|retraction| retraction.initial_state())
+                    .unwrap_or_else(WheelChassisState::deployed),
+            );
+        }
+    }
+
+    fn landing_gear_transitioning(&self) -> bool {
+        let target = if self.gear_down { 1.0 } else { 0.0 };
+        self.landing_leg_states
+            .iter()
+            .any(|state| (state.deployment_fraction - target).abs() > 1.0e-12)
+            || self
+                .vehicle
+                .wheel_chassis
+                .iter()
+                .zip(&self.wheel_chassis_states)
+                .any(|(chassis, state)| {
+                    chassis.spec.retraction.is_some()
+                        && (state.deployment_fraction - target).abs() > 1.0e-12
+                })
+    }
+
+    fn advance_freeflight_landing_gear(&mut self) -> Result<(), FlightError> {
+        if self.vehicle.landing_legs.is_empty()
+            && self
+                .vehicle
+                .wheel_chassis
+                .iter()
+                .all(|chassis| chassis.spec.retraction.is_none())
+        {
+            return Ok(());
+        }
+        self.sync_landing_leg_runtime_state();
+        self.sync_wheel_gear_runtime_state();
+        self.last_landing_leg_actuators.clear();
+        self.last_wheel_gear_actuators.clear();
+        for (index, leg) in self.vehicle.landing_legs.iter().enumerate() {
+            let (state, point) = leg
+                .spec
+                .advance_deployment(
+                    self.landing_leg_states[index],
+                    self.gear_down,
+                    FLIGHT_STEP_S,
+                    0.0,
+                )
+                .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+            self.landing_leg_states[index] = state;
+            self.last_landing_leg_actuators.push((index, point));
+        }
+        for (index, chassis) in self.vehicle.wheel_chassis.iter().enumerate() {
+            let Some(retraction) = chassis.spec.retraction else {
+                self.wheel_chassis_states[index] = WheelChassisState::deployed();
+                continue;
+            };
+            let (state, point) = retraction
+                .advance_deployment(
+                    self.wheel_chassis_states[index],
+                    self.gear_down,
+                    FLIGHT_STEP_S,
+                    0.0,
+                )
+                .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+            self.wheel_chassis_states[index] = state;
+            self.last_wheel_gear_actuators.push((index, point));
+        }
+        Ok(())
     }
 
     fn reset_control_surfaces(&mut self) -> Result<(), FlightError> {
@@ -1245,6 +1460,10 @@ impl FlightAuthority {
                 .map_err(|error| FlightError::InvalidInput(format!("contact frame: {error}")))?;
         self.contact = Some(ContactRuntime::new(frame, activation)?);
         self.contact_patch = None;
+        self.last_wheel_contacts.clear();
+        self.last_wheel_drive_points.clear();
+        self.last_landing_leg_contacts.clear();
+        self.last_landing_leg_actuators.clear();
         self.rails.invalidate();
         self.scheduler.clear_rails_wakes();
         Ok(())
@@ -1256,6 +1475,8 @@ impl FlightAuthority {
     pub fn disable_contact_mode(&mut self) {
         self.contact = None;
         self.contact_patch = None;
+        self.last_wheel_contacts.clear();
+        self.last_wheel_drive_points.clear();
         self.rails.invalidate();
         self.scheduler.clear_rails_wakes();
     }
@@ -1318,6 +1539,10 @@ impl FlightAuthority {
         }
         if was_active && !active {
             runtime.remove_body()?;
+            self.last_wheel_contacts.clear();
+            self.last_wheel_drive_points.clear();
+            self.last_landing_leg_contacts.clear();
+            self.last_landing_leg_actuators.clear();
             if let Some(patch) = self.contact_patch.take() {
                 runtime.evict_kinematic_terrain(patch)?;
             }
@@ -1342,6 +1567,11 @@ impl FlightAuthority {
         band_drag_body_n: DVec3,
         skip_aero: bool,
     ) -> Result<(RigidBodyState, FlightForces), FlightError> {
+        if !self.vehicle.wheel_chassis.is_empty() || !self.vehicle.landing_legs.is_empty() {
+            self.sync_wheel_runtime_state();
+            self.sync_wheel_gear_runtime_state();
+            self.sync_landing_leg_runtime_state();
+        }
         let state = self.state;
         let properties = self.vehicle.mass_properties;
         let geometry = self.vehicle.collision_geometry.clone();
@@ -1388,7 +1618,17 @@ impl FlightAuthority {
             CONTACT_PATCH_HALF_M,
         );
         let existing_patch = self.contact_patch;
-        let (next, patch) = {
+        let articulated_gear =
+            !self.vehicle.wheel_chassis.is_empty() || !self.vehicle.landing_legs.is_empty();
+        let (
+            next,
+            patch,
+            wheel_contacts,
+            wheel_drive_points,
+            landing_leg_contacts,
+            landing_leg_actuators,
+            wheel_gear_actuators,
+        ) = {
             let runtime = self
                 .contact
                 .as_mut()
@@ -1406,12 +1646,57 @@ impl FlightAuthority {
                 )?,
             };
             runtime.move_kinematic_terrain(patch, center_local, orientation_local)?;
-            runtime.sync_body(state, properties, &geometry, DynamicBodyConfig::default())?;
-            (runtime.step(FLIGHT_STEP_S, wrench)?, patch)
+            let (
+                next,
+                wheel_contacts,
+                wheel_drive_points,
+                landing_leg_contacts,
+                landing_leg_actuators,
+                wheel_gear_actuators,
+            ) = if articulated_gear {
+                runtime.step_articulated_vehicle_with_gear(
+                    FLIGHT_STEP_S,
+                    state,
+                    gravity,
+                    &forces,
+                    &self.vehicle,
+                    self.wheel_brake_command,
+                    self.wheel_drive_command,
+                    &mut self.wheel_spin_rad_s,
+                    &mut self.wheel_brake_states,
+                    &mut self.wheel_chassis_states,
+                    &mut self.landing_leg_states,
+                    self.gear_down,
+                )?
+            } else {
+                runtime.sync_body(state, properties, &geometry, DynamicBodyConfig::default())?;
+                (
+                    runtime.step(FLIGHT_STEP_S, wrench)?,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                )
+            };
+            (
+                next,
+                patch,
+                wheel_contacts,
+                wheel_drive_points,
+                landing_leg_contacts,
+                landing_leg_actuators,
+                wheel_gear_actuators,
+            )
         };
         if existing_patch.is_none() {
             self.contact_patch = Some(patch);
         }
+        self.last_wheel_contacts = wheel_contacts;
+        self.last_wheel_drive_points = wheel_drive_points;
+        self.last_wheel_gear_actuators = wheel_gear_actuators;
+        self.last_landing_leg_contacts = landing_leg_contacts;
+        self.last_landing_leg_actuators = landing_leg_actuators;
         Ok((next, forces))
     }
 
@@ -1821,6 +2106,9 @@ impl FlightAuthority {
         // its pose every tick, so a rails batch would integrate a second,
         // divergent trajectory through the same interval.
         if self.contact_active() {
+            return Ok(CoastAdvance::NotEligible);
+        }
+        if self.landing_gear_transitioning() {
             return Ok(CoastAdvance::NotEligible);
         }
         if self.guidance_state_dependent {
@@ -2629,7 +2917,11 @@ impl FlightAuthority {
                 band_drag_body_n,
                 skip_aero,
             )?
-        } else if self.regime == FlightRegime::Coast && thrust_n == 0.0 && skip_aero {
+        } else if self.regime == FlightRegime::Coast
+            && thrust_n == 0.0
+            && skip_aero
+            && !self.landing_gear_transitioning()
+        {
             match self.try_coast_step_on_rails(ephemeris, time, jet_moment, body_state, gravity)? {
                 Some(coasted) => coasted,
                 None => self.integrate_powered_step(
@@ -2656,6 +2948,9 @@ impl FlightAuthority {
                 skip_aero,
             )?
         };
+        if !contact_active {
+            self.advance_freeflight_landing_gear()?;
+        }
         // skip_aero zeroes the aero summary; restore the measured dynamic
         // pressure so HUD readouts stay on-model through the band.
         if band_q_pa > 0.0 {
@@ -2728,7 +3023,12 @@ impl FlightAuthority {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use thessa_sim_core::{AeroModel, ControlHinge, ControlSurfaceActuator, SystemConfig};
+    use thessa_sim_core::{
+        AeroModel, AirlessWheelStructure, ControlHinge, ControlSurfaceActuator, ElectricMotorSpec,
+        LandingLegSpec, LandingShockAbsorberSpec, RigidBodyProperties, SystemConfig,
+        TireConstruction, WheelBrakeSpec, WheelChassisRetractionSpec, WheelChassisSpec,
+        WheelDriveSpec, WheelLayout, WheelStrutSpec, WheelTireSpec,
+    };
 
     struct NeverReadyBakeQueue {
         pending: bool,
@@ -2759,6 +3059,190 @@ mod tests {
         let runtime =
             FlightAuthority::new(&ephemeris, ephemeris.body_id("thessa").unwrap()).unwrap();
         (ephemeris, runtime)
+    }
+
+    #[test]
+    fn flight_authority_advances_and_retracts_foldout_legs_across_ticks() {
+        let (_, mut flight) = fixture();
+        let leg = LandingLegSpec {
+            name: "runtime-foldout-leg".into(),
+            mount_position_body_m: DVec3::ZERO,
+            hinge_axis_body: DVec3::Y,
+            stowed_leg_axis_body: DVec3::Z,
+            stowed_angle_rad: 0.0,
+            deployed_angle_rad: std::f64::consts::PI,
+            initially_deployed: false,
+            deployment_rate_rad_s: 1.0,
+            actuator_max_torque_nm: 10_000.0,
+            leg_length_m: 2.0,
+            leg_mass_kg: 10.0,
+            footpad_radius_m: 0.2,
+            footpad_mass_kg: 1.0,
+            footpad_friction: 0.7,
+            footpad_slip_stiffness_n_per_mps: 1_000.0,
+            shock_absorber: LandingShockAbsorberSpec::Reusable {
+                stroke_m: 0.2,
+                spring_rate_n_m: 30_000.0,
+                damping_n_s_m: 1_000.0,
+                preload_n: 0.0,
+                bottom_out_stiffness_n_m: 200_000.0,
+                maximum_force_n: 60_000.0,
+            },
+        };
+        flight.vehicle = flight
+            .vehicle
+            .clone()
+            .with_landing_legs(vec![leg])
+            .expect("foldout leg compiles");
+        flight.vehicle.bake_landing_leg_masses().unwrap();
+        flight.set_gear_down(true);
+        flight.advance_freeflight_landing_gear().unwrap();
+        let deployed_fraction = flight.landing_leg_states()[0].deployment_fraction;
+        assert!(deployed_fraction > 0.0 && deployed_fraction < 1.0);
+        assert!(flight.landing_gear_transitioning());
+        assert_eq!(flight.landing_leg_actuator_telemetry().len(), 1);
+
+        flight.set_gear_down(false);
+        flight.advance_freeflight_landing_gear().unwrap();
+        assert!(flight.landing_leg_states()[0].deployment_fraction < deployed_fraction);
+        assert!(!flight.landing_gear_transitioning());
+        assert_eq!(
+            flight.landing_leg_actuator_telemetry()[0].1.target_fraction,
+            0.0
+        );
+    }
+
+    fn install_airless_drive(flight: &mut FlightAuthority) {
+        let spec = WheelChassisSpec {
+            name: "authority-regolith-wheel".into(),
+            mount_position_body_m: DVec3::new(0.0, 0.0, -1.05),
+            mount_orientation_body: DQuat::IDENTITY,
+            length_m: 1.0,
+            layout: WheelLayout::Inline,
+            wheel_count: 1,
+            structural_mass_kg: 12.0,
+            structural_inertia_local_kg_m2: DMat3::from_diagonal(DVec3::splat(0.5)),
+            tire: WheelTireSpec {
+                construction: TireConstruction::Airless {
+                    structure: AirlessWheelStructure::Spoked { spoke_count: 24 },
+                    structure_density_kg_m3: 4_400.0,
+                    minimum_temperature_k: 80.0,
+                    maximum_temperature_k: 500.0,
+                },
+                radius_m: 0.32,
+                width_m: 0.18,
+                mass_kg: 3.4,
+                spin_inertia_kg_m2: 0.11,
+                radial_stiffness_n_m: 42_000.0,
+                radial_damping_n_s_m: 1_100.0,
+                longitudinal_slip_stiffness_n_per_mps: 3_000.0,
+                lateral_slip_stiffness_n_per_mps: 2_400.0,
+                maximum_deflection_m: 0.075,
+                maximum_load_n: 2_400.0,
+                surface_friction: 0.85,
+            },
+            strut: WheelStrutSpec {
+                extended_length_m: 0.42,
+                stroke_m: 0.16,
+                spring_rate_n_m: 31_000.0,
+                damping_n_s_m: 2_800.0,
+                preload_n: 80.0,
+                minimum_force_n: 0.0,
+                maximum_force_n: 9_000.0,
+                mass_per_wheel_kg: 0.8,
+            },
+            brake: WheelBrakeSpec {
+                maximum_torque_nm: 95.0,
+                response_time_s: 0.12,
+                mass_per_wheel_kg: 0.4,
+            },
+            drive: Some(WheelDriveSpec {
+                motor: ElectricMotorSpec {
+                    rated_power_w: 20_000.0,
+                    peak_torque_nm: 250.0,
+                    maximum_rpm: 5_000.0,
+                    efficiency: 0.92,
+                    cooling_capacity_w: 4_000.0,
+                    dry_mass_kg: 25.0,
+                },
+                stall_copper_loss_w: 350.0,
+                rotor_inertia_kg_m2: 0.04,
+                final_drive_ratio: 5.0,
+                drivetrain_efficiency: 0.9,
+                driven_wheel_count: 1,
+            }),
+            retraction: None,
+        };
+        let base_mass_kg = flight.vehicle.mass_properties.mass_kg;
+        let uncentered = spec.clone().compile().unwrap();
+        let total_mass_kg = base_mass_kg + uncentered.mass_properties.mass_kg;
+        let assembly_com = uncentered.mass_properties.center_of_mass_body_m
+            * (uncentered.mass_properties.mass_kg / total_mass_kg);
+        flight.vehicle.wheel_chassis = vec![uncentered];
+        flight.vehicle.bake_wheel_chassis_masses().unwrap();
+
+        let shift = -assembly_com;
+        for panel in &mut flight.vehicle.aero_geometry.panels {
+            panel.position_body_m += shift;
+            panel.center_of_pressure_body_m += shift;
+        }
+        for part in &mut flight.vehicle.collision_geometry.parts {
+            part.local_position_m += shift;
+        }
+        for chassis in &mut flight.vehicle.wheel_chassis {
+            chassis.spec.mount_position_body_m += shift;
+            *chassis = chassis.spec.clone().compile().unwrap();
+        }
+        let parallel_axis = total_mass_kg
+            * (DMat3::IDENTITY * assembly_com.length_squared()
+                - DMat3::from_cols(
+                    assembly_com * assembly_com.x,
+                    assembly_com * assembly_com.y,
+                    assembly_com * assembly_com.z,
+                ));
+        flight.vehicle.mass_properties.inertia_body_kg_m2 -= parallel_axis;
+        flight.vehicle.mass_properties = RigidBodyProperties::new(
+            total_mass_kg,
+            flight.vehicle.mass_properties.inertia_body_kg_m2,
+        )
+        .unwrap();
+        flight.aero_panels = PanelSoA::from_geometry(&flight.vehicle.aero_geometry).unwrap();
+        flight.control_reference_geometry = flight.vehicle.aero_geometry.clone();
+        flight.vehicle.validate().unwrap();
+    }
+
+    #[test]
+    fn flight_authority_advances_and_retracts_aircraft_wheel_chassis() {
+        let (_, mut flight) = fixture();
+        install_airless_drive(&mut flight);
+        let mut spec = flight.vehicle.wheel_chassis[0].spec.clone();
+        spec.retraction = Some(WheelChassisRetractionSpec {
+            pivot_position_body_m: spec.mount_position_body_m,
+            hinge_axis_body: DVec3::Y,
+            stowed_angle_rad: -std::f64::consts::FRAC_PI_2,
+            deployed_angle_rad: 0.0,
+            initially_deployed: false,
+            deployment_rate_rad_s: 1.0,
+            actuator_max_torque_nm: 10_000.0,
+        });
+        flight.vehicle.wheel_chassis[0] = spec.compile().expect("aircraft gear compiles");
+        flight.sync_wheel_gear_runtime_state();
+
+        flight.set_gear_down(true);
+        flight.advance_freeflight_landing_gear().unwrap();
+        let deployed_fraction = flight.wheel_chassis_states()[0].deployment_fraction;
+        assert!(deployed_fraction > 0.0 && deployed_fraction < 1.0);
+        assert!(flight.landing_gear_transitioning());
+        assert_eq!(flight.wheel_gear_actuator_telemetry().len(), 1);
+
+        flight.set_gear_down(false);
+        flight.advance_freeflight_landing_gear().unwrap();
+        assert!(flight.wheel_chassis_states()[0].deployment_fraction < deployed_fraction);
+        assert!(!flight.landing_gear_transitioning());
+        assert_eq!(
+            flight.wheel_gear_actuator_telemetry()[0].1.target_fraction,
+            0.0
+        );
     }
 
     #[test]
@@ -3221,6 +3705,60 @@ mod tests {
         );
         let snapshot = flight.contact_snapshot().expect("contact telemetry");
         assert_eq!(snapshot.dynamic_bodies.len(), 1);
+    }
+
+    #[test]
+    fn powered_authority_tick_wires_airless_wheel_state_and_drive() {
+        let (ephemeris, mut flight) = fixture();
+        install_airless_drive(&mut flight);
+        flight.atmosphere.sea_level_pressure_pa = 1.0e-12;
+        assert_eq!(
+            flight.atmosphere.sample(0.0).unwrap().density_kg_m3,
+            0.0,
+            "the wheel-drive regression runs in the declared vacuum path"
+        );
+        let home = ephemeris
+            .body_state(flight.reference_body, SimTime::EPOCH)
+            .unwrap();
+        let up = DVec3::X;
+        let (east, north) = surface_tangent_basis(up).unwrap();
+        let relative = up * (flight.planet_radius_m + 1.85);
+        flight.state = RigidBodyState::new(
+            home.position_inertial + relative,
+            home.velocity_inertial - up * 0.4,
+            DQuat::from_mat3(&DMat3::from_cols(east, north, up)),
+            DVec3::ZERO,
+        )
+        .unwrap();
+        flight.relative_position_m = relative;
+        flight.set_legacy_propulsion(0.0, false);
+        flight.set_wheel_drive_command(1.0).unwrap();
+        flight
+            .enable_contact_mode(20.0, 40.0)
+            .expect("contact mode arms");
+
+        let mut observed_wheel_contact = false;
+        for _ in 0..240 {
+            flight
+                .advance(&ephemeris, ControlMode::Direct, FLIGHT_STEP_S)
+                .expect("powered contact tick");
+            assert!(flight.flight_error.is_none(), "{:?}", flight.flight_error);
+            observed_wheel_contact |= !flight.wheel_contact_telemetry().is_empty();
+            if observed_wheel_contact && flight.wheel_drive_telemetry().len() == 1 {
+                break;
+            }
+        }
+        assert!(flight.contact_active());
+        assert!(observed_wheel_contact, "airless wheel must query terrain");
+        assert_eq!(flight.wheel_spin_rates_rad_s().len(), 1);
+        assert_eq!(flight.wheel_spin_rates_rad_s()[0].len(), 1);
+        assert_eq!(flight.wheel_drive_telemetry().len(), 1);
+        assert!(
+            flight.wheel_drive_telemetry()[0]
+                .2
+                .requested_wheel_torque_per_driven_wheel_nm
+                > 0.0
+        );
     }
 
     #[test]

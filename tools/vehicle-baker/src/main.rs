@@ -667,6 +667,12 @@ impl VehicleAsset {
                         body.name, region.name, region.payload_mass_kg
                     );
                 }
+                if region.air_mass_kg > 0.0 {
+                    println!(
+                        "body '{}': region '{}' air {:.2} kg (O2 {:.2} kg)",
+                        body.name, region.name, region.air_mass_kg, region.o2_mass_kg
+                    );
+                }
             }
             for port in &compiled.ports {
                 println!(

@@ -59,8 +59,8 @@ mod structure;
 mod summary;
 
 pub use body::{
-    BodyControlPlane, BodyControlRegion, BodyPort, BodyStructuralLayout, HullMaterial,
-    InteriorRegion, PortKind, ProceduralBody, RegionKind, StoredFluid, TankShell,
+    BodyControlPlane, BodyControlRegion, BodyPort, BodyStructuralLayout, CabinAtmosphere,
+    HullMaterial, InteriorRegion, PortKind, ProceduralBody, RegionKind, StoredFluid, TankShell,
 };
 pub use collision::{BodyCollisionOptions, body_collision_parts};
 pub use compile::{

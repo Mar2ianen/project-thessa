@@ -100,6 +100,9 @@ seat_mass_kg_each = 12.0
 occupant_mass_kg_each = 90.0
 seat_pitch_m = 0.3
 
+[procedural_bodies.regions.atmosphere]
+pressure_kpa = 101.325
+
 [[procedural_bodies.ports]]
 name = "engine-aft"
 x_m = 0.0
@@ -118,6 +121,7 @@ wall_inset_mm = 10.0
 [procedural_bodies.structure.skin_material]
 name = "Al-Li-2195"
 density_kg_m3 = 2710.0
+yield_strength_mpa = 590.0
 
 [procedural_bodies.structure.tank_material]
 density_kg_m3 = 2840.0

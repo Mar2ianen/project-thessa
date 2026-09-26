@@ -169,6 +169,34 @@ by default; `shell = "sphere"` sizes a volume-equivalent sphere instead,
 which carries half the membrane stress at the same pressure. Mixed shapes
 in one auto-split are not offered: combine two `FluidTank` regions.
 
+## Pressurization (first ECLSS brick)
+
+Any non-tank region (`cabin`, `crew`, `cargo`, `avionics`, `empty`) may
+hold a `CabinAtmosphere`: absolute pressure in kPa, temperature in K
+(default 293.15), and oxygen volume fraction (default 0.21). Tank regions
+refuse it — they size their own shells from `tank_pressure_pa`. Ranges
+are screened at authoring time (`pressure_kpa` in (0, 500], `temp_k` in
+[180, 350], `o2_fraction` in (0, 1]).
+
+The compiler derives the cabin air inventory from the ideal gas law over
+the usable inner-mold volume (`pV/RT`, dry-air `R = 287.05 J/kg/K`) and
+the oxygen mass from the molar split (32.0/28.97). Air mass rides the
+hull at the region centroid like manifest; oxygen is reported inside it
+for future metabolic-consumption bookkeeping, not double-counted. Ports
+inside pressurized zones are future leak paths, not yet modeled — like
+slosh, seepage, and active ECLSS loops.
+
+Holding pressure needs a verified shell: the skin over the region must
+pass a thin-hoop screening (`p*r/t` at the largest loft radius, vacuum
+outside, frames ignored, 1.5 safety factor shared with tanks) against
+the skin alloy's yield strength. Hull presets carry typical yields
+(7075: 503, 2219: 395, Ti-6Al-4V: 880, 304L: 205, Al-Li-2195: 590 MPa);
+carbon layup allowables stay unset on purpose and must be supplied
+explicitly, and an unknown custom strength refuses pressurization rather
+than guessing. A pressurized region with no structural layout refuses
+for the same reason. Failures name the required gauge so the author
+thickens the skin, derates pressure, or picks a stronger alloy.
+
 A `Crew` region places seats: `seats` distributes along the region while
 seat plus occupant mass aggregates at the region centroid like cargo
 manifest (seat default 12 kg each, occupants default 0 for unoccupied

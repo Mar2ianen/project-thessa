@@ -156,6 +156,61 @@ pub enum RegionKind {
     Empty,
 }
 
+/// Default cabin temperature in K (20 C) when a pressurized region omits it.
+fn default_cabin_temp_k() -> f64 {
+    293.15
+}
+
+/// Default oxygen volume fraction (sea-level air) for a pressurized region.
+fn default_o2_fraction() -> f64 {
+    0.21
+}
+
+/// Breathing atmosphere held by a pressurized region (first ECLSS brick:
+/// pressure inventory plus oxygen mass for future metabolic bookkeeping).
+/// Tanks carry their own `tank_pressure_pa` and refuse this field.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CabinAtmosphere {
+    /// Absolute pressure in kPa (sea-level cabin ~101.3).
+    pub pressure_kpa: f64,
+    /// Temperature in K.
+    #[serde(default = "default_cabin_temp_k")]
+    pub temp_k: f64,
+    /// Oxygen volume fraction.
+    #[serde(default = "default_o2_fraction")]
+    pub o2_fraction: f64,
+}
+
+impl CabinAtmosphere {
+    /// Sea-level cabin: 101.325 kPa, 20 C, 21% O2.
+    pub fn sea_level() -> Self {
+        Self {
+            pressure_kpa: 101.325,
+            temp_k: default_cabin_temp_k(),
+            o2_fraction: default_o2_fraction(),
+        }
+    }
+
+    pub fn validate(&self, region: &str) -> Result<(), FuselageError> {
+        if !self.pressure_kpa.is_finite() || self.pressure_kpa <= 0.0 || self.pressure_kpa > 500.0 {
+            return Err(FuselageError::InvalidInterior(format!(
+                "region '{region}' needs pressure_kpa in (0, 500]"
+            )));
+        }
+        if !self.temp_k.is_finite() || self.temp_k < 180.0 || self.temp_k > 350.0 {
+            return Err(FuselageError::InvalidInterior(format!(
+                "region '{region}' needs temp_k in [180, 350]"
+            )));
+        }
+        if !self.o2_fraction.is_finite() || self.o2_fraction <= 0.0 || self.o2_fraction > 1.0 {
+            return Err(FuselageError::InvalidInterior(format!(
+                "region '{region}' needs o2_fraction in (0, 1]"
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// One longitudinal interior allocation over `[x0_m, x1_m]` in body metres.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InteriorRegion {
@@ -163,6 +218,11 @@ pub struct InteriorRegion {
     pub x0_m: f64,
     pub x1_m: f64,
     pub kind: RegionKind,
+    /// Pressurized atmosphere held by this region (habitats, cabins, crew;
+    /// never tank regions, which size their own shells). `None` vents to
+    /// ambient.
+    #[serde(default)]
+    pub atmosphere: Option<CabinAtmosphere>,
 }
 
 impl InteriorRegion {
@@ -177,6 +237,26 @@ impl InteriorRegion {
             x0_m,
             x1_m,
             kind,
+            atmosphere: None,
+        };
+        region.validate()?;
+        Ok(region)
+    }
+
+    /// Pressurized variant: the same allocation holding an atmosphere.
+    pub fn pressurized(
+        name: impl Into<String>,
+        x0_m: f64,
+        x1_m: f64,
+        kind: RegionKind,
+        atmosphere: CabinAtmosphere,
+    ) -> Result<Self, FuselageError> {
+        let region = Self {
+            name: name.into(),
+            x0_m,
+            x1_m,
+            kind,
+            atmosphere: Some(atmosphere),
         };
         region.validate()?;
         Ok(region)
@@ -371,6 +451,20 @@ impl InteriorRegion {
             }
             RegionKind::Cargo { .. } => {}
             _ => {}
+        }
+        if let Some(atmosphere) = self.atmosphere {
+            atmosphere.validate(&self.name)?;
+            match self.kind {
+                RegionKind::Tank { .. }
+                | RegionKind::FluidTank { .. }
+                | RegionKind::Bipropellant { .. } => {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "region '{}' is a tank and sizes its own shell; atmosphere belongs on habitats",
+                        self.name
+                    )));
+                }
+                _ => {}
+            }
         }
         Ok(())
     }
@@ -569,50 +663,61 @@ impl BodyPort {
 /// Hull shell material (structural skin and frames, not tank pressure
 /// shells: those size through [`thessa_sim_core::ChamberMaterial`] in the
 /// tank pipeline, the same wall math as every other pressure vessel).
+/// The optional yield strength gates pressurized habitats: holding cabin
+/// pressure needs a known shell allowable, otherwise the compiler refuses
+/// instead of guessing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HullMaterial {
     /// Material name for hangar display and golden records.
     pub name: String,
     /// Mass density in kg/m^3.
     pub density_kg_m3: f64,
+    /// Yield strength in MPa for pressure-membrane screening (`None` =
+    /// unknown: unpressurized shells only). Composite allowables are
+    /// layup-specific and intentionally left unset on the preset.
+    #[serde(default)]
+    pub yield_strength_mpa: Option<f64>,
 }
 
 impl HullMaterial {
-    fn checked(name: &str, density_kg_m3: f64) -> Self {
+    fn checked(name: &str, density_kg_m3: f64, yield_strength_mpa: Option<f64>) -> Self {
         Self {
             name: name.into(),
             density_kg_m3,
+            yield_strength_mpa,
         }
     }
 
-    /// Aluminum 7075-T6: 2810 kg/m^3 (same source as wing skins).
+    /// Aluminum 7075-T6: 2810 kg/m^3, 503 MPa yield (same source as wing skins).
     pub fn aluminum_7075() -> Self {
-        Self::checked("Al-7075-T6", 2810.0)
+        Self::checked("Al-7075-T6", 2810.0, Some(503.0))
     }
 
-    /// Aluminum 2219-T87 tankage-grade: 2840 kg/m^3.
+    /// Aluminum 2219-T87 tankage-grade: 2840 kg/m^3, 395 MPa yield.
     pub fn aluminum_2219() -> Self {
-        Self::checked("Al-2219-T87", 2840.0)
+        Self::checked("Al-2219-T87", 2840.0, Some(395.0))
     }
 
-    /// Quasi-isotropic carbon laminate: 1600 kg/m^3.
+    /// Quasi-isotropic carbon laminate: 1600 kg/m^3. Pressure allowable
+    /// is layup-specific, so it stays unset: pressurized carbon shells
+    /// need an explicit layup allowable.
     pub fn carbon_fiber() -> Self {
-        Self::checked("CFRP-quasi-iso", 1600.0)
+        Self::checked("CFRP-quasi-iso", 1600.0, None)
     }
 
-    /// Titanium Ti-6Al-4V: 4430 kg/m^3.
+    /// Titanium Ti-6Al-4V: 4430 kg/m^3, 880 MPa yield.
     pub fn titanium() -> Self {
-        Self::checked("Ti-6Al-4V", 4430.0)
+        Self::checked("Ti-6Al-4V", 4430.0, Some(880.0))
     }
 
-    /// Stainless 304L: 7900 kg/m^3 (weldable storable/cryo shells).
+    /// Stainless 304L: 7900 kg/m^3, 205 MPa yield (annealed).
     pub fn stainless_304() -> Self {
-        Self::checked("SS-304L", 7900.0)
+        Self::checked("SS-304L", 7900.0, Some(205.0))
     }
 
-    /// Aluminum-lithium 2195: 2710 kg/m^3 (cryo tankage-grade).
+    /// Aluminum-lithium 2195: 2710 kg/m^3, 590 MPa yield (T8).
     pub fn aluminum_lithium_2195() -> Self {
-        Self::checked("Al-Li-2195", 2710.0)
+        Self::checked("Al-Li-2195", 2710.0, Some(590.0))
     }
 
     pub fn validate(&self) -> Result<(), FuselageError> {
@@ -624,6 +729,13 @@ impl HullMaterial {
         if !self.density_kg_m3.is_finite() || self.density_kg_m3 <= 0.0 {
             return Err(FuselageError::InvalidBody(
                 "hull material density must be finite and > 0".into(),
+            ));
+        }
+        if let Some(yield_mpa) = self.yield_strength_mpa
+            && (!yield_mpa.is_finite() || yield_mpa <= 0.0)
+        {
+            return Err(FuselageError::InvalidBody(
+                "hull material yield strength must be finite and > 0".into(),
             ));
         }
         Ok(())

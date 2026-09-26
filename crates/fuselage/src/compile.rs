@@ -27,8 +27,8 @@ use thessa_sim_core::{
 
 use crate::summary::CompiledBodySummary;
 use crate::{
-    BodyControlPlane, BodyStation, CompiledHull, FuselageError, InteriorRegion, ProceduralBody,
-    RegionKind, TankShell, outline_point, point_inertia,
+    BodyControlPlane, BodyStation, CabinAtmosphere, CompiledHull, FuselageError, InteriorRegion,
+    ProceduralBody, RegionKind, TankShell, outline_point, point_inertia,
 };
 
 /// Subdivision tolerances for one compilation.
@@ -125,6 +125,16 @@ pub enum TankContents {
     Fluid(crate::StoredFluid),
 }
 
+/// Dry-air gas constant in J/kg/K for cabin air inventory.
+const R_DRY_AIR_J_KG_K: f64 = 287.05;
+/// Molar masses in g/mol for the oxygen mass split.
+const MOLAR_MASS_AIR_G_MOL: f64 = 28.97;
+const MOLAR_MASS_O2_G_MOL: f64 = 32.0;
+/// Shared safety factor for tank and cabin pressure shells.
+const PRESSURE_SAFETY_FACTOR: f64 = 1.5;
+/// Loft samples for the pressurized-region radius screening.
+const PRESSURE_SHELL_SAMPLES: usize = 16;
+
 /// One tank region compiled into the feed pipeline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompiledBodyTank {
@@ -172,6 +182,12 @@ pub struct CompiledRegion {
     /// centerline (crew regions only; empty otherwise).
     #[serde(default)]
     pub seat_positions_body_m: Vec<DVec3>,
+    /// Cabin air mass in kg at the authored atmosphere (0 unpressurized).
+    #[serde(default)]
+    pub air_mass_kg: f64,
+    /// Oxygen mass within the cabin air in kg (0 unpressurized).
+    #[serde(default)]
+    pub o2_mass_kg: f64,
 }
 
 /// One interface anchor in body-local metres.
@@ -1112,6 +1128,36 @@ impl<'a> Compiler<'a> {
                 compiled.tanks.push(ox_tank);
                 compiled.tanks.push(fuel_tank);
             }
+            // Pressurized atmosphere (first ECLSS brick): ideal-gas air
+            // inventory rides the hull at the region centroid, and the
+            // skin must hold the full differential against vacuum.
+            let (air_mass_kg, o2_mass_kg) = match region.atmosphere {
+                Some(atmosphere) => {
+                    let considering = layout.as_ref().ok_or_else(|| {
+                        FuselageError::InvalidBody(format!(
+                            "pressurized region '{}' needs a structural layout",
+                            region.name
+                        ))
+                    })?;
+                    self.check_pressure_shell(
+                        &region.name,
+                        region.x0_m,
+                        region.x1_m,
+                        atmosphere,
+                        considering,
+                    )?;
+                    let density_kg_m3 =
+                        atmosphere.pressure_kpa * 1000.0 / (R_DRY_AIR_J_KG_K * atmosphere.temp_k);
+                    let air = density_kg_m3 * volume;
+                    let o2 =
+                        air * atmosphere.o2_fraction * MOLAR_MASS_O2_G_MOL / MOLAR_MASS_AIR_G_MOL;
+                    hull_mass_kg += air;
+                    hull_moment += centroid * air;
+                    hull_inertia += point_inertia(air, centroid);
+                    (air, o2)
+                }
+                None => (0.0, 0.0),
+            };
             compiled.interior.push(CompiledRegion {
                 name: region.name.clone(),
                 kind: region.kind,
@@ -1121,6 +1167,8 @@ impl<'a> Compiler<'a> {
                 payload_mass_kg: payload,
                 seats,
                 seat_positions_body_m: seat_anchors,
+                air_mass_kg,
+                o2_mass_kg,
             });
         }
 
@@ -1388,6 +1436,50 @@ impl<'a> Compiler<'a> {
             anchors.push(center);
         }
         Ok(anchors)
+    }
+
+    /// Pressure-membrane screening for one pressurized region: thin-hoop
+    /// stress `p*r/t` at the largest loft radius in the region must stay
+    /// under yield with the shared safety factor. Conservative on purpose
+    /// (vacuum outside, frames ignored); a failure names the numbers so
+    /// the author thickens the skin, derates pressure, or picks a
+    /// stronger alloy instead of flying an unverified shell.
+    fn check_pressure_shell(
+        &self,
+        region_name: &str,
+        x0_m: f64,
+        x1_m: f64,
+        atmosphere: CabinAtmosphere,
+        layout: &crate::BodyStructuralLayout,
+    ) -> Result<(), FuselageError> {
+        let yield_mpa = layout.skin_material.yield_strength_mpa.ok_or_else(|| {
+            FuselageError::InvalidBody(format!(
+                "pressurized region '{region_name}' needs a skin yield strength for '{}'",
+                layout.skin_material.name
+            ))
+        })?;
+        let mut radius_m = 0.0_f64;
+        for sample in 0..=PRESSURE_SHELL_SAMPLES {
+            let x = x0_m + (x1_m - x0_m) * sample as f64 / PRESSURE_SHELL_SAMPLES as f64;
+            let section = self.body.section_at(x);
+            radius_m = radius_m
+                .max(section.half_width_m)
+                .max(section.top_height_m)
+                .max(section.bottom_height_m);
+        }
+        let pressure_pa = atmosphere.pressure_kpa * 1000.0;
+        let skin_m = layout.skin_gauge_mm / 1000.0;
+        let required_m = pressure_pa * radius_m / (yield_mpa * 1.0e6 / PRESSURE_SAFETY_FACTOR);
+        if skin_m < required_m {
+            return Err(FuselageError::InvalidBody(format!(
+                "pressurized region '{region_name}' needs {:.2} mm skin for {:.1} kPa at {:.2} m radius (has {:.2} mm)",
+                required_m * 1000.0,
+                atmosphere.pressure_kpa,
+                radius_m,
+                skin_m * 1000.0,
+            )));
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]

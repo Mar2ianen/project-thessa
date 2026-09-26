@@ -1430,3 +1430,248 @@ fn crew_seat_anchors_line_up_on_the_centerline() {
         .is_err()
     );
 }
+
+#[test]
+fn pressurized_cabin_air_matches_ideal_gas() {
+    use crate::CabinAtmosphere;
+
+    // 2 m of 1 m-radius barrel at sea-level cabin air: hand ideal-gas
+    // mass over the 10 mm-inset inner volume, plus the O2 split.
+    let mut body = ProceduralBody::new(
+        "pressure-cabin",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(4.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::pressurized(
+            "cabin",
+            1.0,
+            3.0,
+            RegionKind::Cabin,
+            CabinAtmosphere::sea_level(),
+        )
+        .unwrap(),
+    ];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let cabin = &compiled.interior[0];
+    let expected_volume = std::f64::consts::PI * 0.99_f64.powi(2) * 2.0;
+    assert!((cabin.volume_m3 - expected_volume).abs() / expected_volume < 1e-9);
+    let expected_air = 101325.0 / (287.05 * 293.15) * expected_volume;
+    assert!((cabin.air_mass_kg - expected_air).abs() / expected_air < 1e-9);
+    let expected_o2 = expected_air * 0.21 * 32.0 / 28.97;
+    assert!((cabin.o2_mass_kg - expected_o2).abs() / expected_o2 < 1e-9);
+    // Air rides the hull like manifest mass.
+    let hull = compiled.structure.as_ref().expect("hull mass");
+    assert!(hull.mass_kg >= expected_air);
+}
+
+#[test]
+fn thin_or_unknown_skin_refuses_pressurization() {
+    use crate::{CabinAtmosphere, HullMaterial};
+
+    let cabin = |layout: BodyStructuralLayout| {
+        let mut body = ProceduralBody::new(
+            "thin-pressure",
+            vec![
+                BodyStation::round(0.0, 1.0).unwrap(),
+                BodyStation::round(4.0, 1.0).unwrap(),
+            ],
+            DVec3::ZERO,
+        )
+        .unwrap();
+        body.structure = Some(layout);
+        body.regions = vec![
+            InteriorRegion::pressurized(
+                "cabin",
+                1.0,
+                3.0,
+                RegionKind::Cabin,
+                CabinAtmosphere::sea_level(),
+            )
+            .unwrap(),
+        ];
+        compile_body(&body, &BodyCompileOptions::default())
+    };
+    // 0.2 mm 7075 skin cannot hold 101 kPa over a 1 m radius (needs
+    // ~0.30 mm at the 1.5 safety factor).
+    let mut thin = BodyStructuralLayout::metal_baseline();
+    thin.skin_gauge_mm = 0.2;
+    assert!(cabin(thin).is_err());
+    // Unknown shell allowable refuses instead of guessing.
+    let mut unknown = BodyStructuralLayout::metal_baseline();
+    unknown.skin_material = HullMaterial {
+        name: "mystery".into(),
+        density_kg_m3: 2700.0,
+        yield_strength_mpa: None,
+    };
+    assert!(cabin(unknown).is_err());
+    // Pressurized volume with no structure at all refuses as well.
+    let mut bare = ProceduralBody::new(
+        "bare-pressure",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(4.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    bare.regions = vec![
+        InteriorRegion::pressurized(
+            "cabin",
+            1.0,
+            3.0,
+            RegionKind::Cabin,
+            CabinAtmosphere::sea_level(),
+        )
+        .unwrap(),
+    ];
+    assert!(compile_body(&bare, &BodyCompileOptions::default()).is_err());
+}
+
+#[test]
+fn tanks_and_bad_air_reject_atmosphere() {
+    use crate::CabinAtmosphere;
+
+    // Tanks size their own shells: cabin air does not belong on them.
+    assert!(
+        InteriorRegion::pressurized(
+            "tank",
+            0.5,
+            3.5,
+            RegionKind::Tank {
+                propellant: thessa_sim_core::Propellant::LoxMethane,
+                fill_fraction: 1.0,
+                pressure_pa: None,
+                material: None,
+                shell: None,
+            },
+            CabinAtmosphere::sea_level(),
+        )
+        .is_err()
+    );
+    // Out-of-range air refuses at authoring time.
+    for bad in [
+        CabinAtmosphere {
+            pressure_kpa: 0.0,
+            ..CabinAtmosphere::sea_level()
+        },
+        CabinAtmosphere {
+            pressure_kpa: 101325.0,
+            ..CabinAtmosphere::sea_level()
+        },
+        CabinAtmosphere {
+            o2_fraction: 0.0,
+            ..CabinAtmosphere::sea_level()
+        },
+        CabinAtmosphere {
+            temp_k: 500.0,
+            ..CabinAtmosphere::sea_level()
+        },
+    ] {
+        assert!(InteriorRegion::pressurized("cabin", 0.5, 3.5, RegionKind::Cabin, bad,).is_err());
+    }
+}
+
+#[test]
+fn crew_with_atmosphere_aggregates_air_and_seats() {
+    use crate::CabinAtmosphere;
+
+    let mut body = ProceduralBody::new(
+        "crewed-pressure",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(4.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::pressurized(
+            "cabin",
+            1.0,
+            3.0,
+            RegionKind::Crew {
+                seats: 2,
+                seat_mass_kg_each: 12.0,
+                occupant_mass_kg_each: 90.0,
+                seat_pitch_m: None,
+            },
+            CabinAtmosphere::sea_level(),
+        )
+        .unwrap(),
+    ];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let cabin = &compiled.interior[0];
+    assert_eq!(cabin.seats, 2);
+    assert_eq!(cabin.seat_positions_body_m.len(), 2);
+    // Seats (204 kg) plus ~7.4 kg of air both ride the hull.
+    assert!((cabin.payload_mass_kg - 204.0).abs() < 1e-9);
+    assert!(cabin.air_mass_kg > 7.0 && cabin.air_mass_kg < 8.0);
+    assert!(cabin.o2_mass_kg > 1.6 && cabin.o2_mass_kg < 1.8);
+}
+
+#[test]
+fn atmosphere_parses_from_toml() {
+    let toml = r#"
+name = "pressure-demo"
+origin_body_m = [0.0, 0.0, 0.0]
+
+[[stations]]
+x_m = 0.0
+half_width_m = 1.0
+top_height_m = 1.0
+bottom_height_m = 1.0
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[stations]]
+x_m = 4.0
+half_width_m = 1.0
+top_height_m = 1.0
+bottom_height_m = 1.0
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[regions]]
+name = "cabin"
+x0_m = 1.0
+x1_m = 3.0
+kind = "cabin"
+
+[regions.atmosphere]
+pressure_kpa = 101.325
+
+[structure]
+skin_gauge_mm = 2.0
+frame_spacing_m = 1.0
+frame_gauge_mm = 2.0
+frame_width_mm = 40.0
+tank_pressure_pa = 500000.0
+wall_inset_mm = 10.0
+
+[structure.skin_material]
+name = "Al-7075-T6"
+density_kg_m3 = 2810.0
+yield_strength_mpa = 503.0
+
+[structure.tank_material]
+density_kg_m3 = 2840.0
+yield_strength_pa = 395000000.0
+max_wall_temp_k = 400.0
+"#;
+    let body: ProceduralBody = toml::from_str(toml).expect("atmosphere TOML should parse");
+    body.validate().expect("TOML body should validate");
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    assert!(compiled.interior[0].air_mass_kg > 0.0);
+    assert!(compiled.interior[0].o2_mass_kg > 0.0);
+}

@@ -139,6 +139,25 @@ impl Propellant {
         }
     }
 
+    /// Component storable densities `(oxidizer, fuel)` in kg/m^3 for
+    /// split bipropellant tank sizing. Standard cryo/storable values
+    /// (LOX 1141, RP-1 810, LCH4 422, LH2 71, NTO 1440, MMH 878);
+    /// single-tank bulk densities above remain the capacity source
+    /// for the legacy mixed-tank path. Returns `None` for
+    /// monopropellants, cold gas, and solids.
+    pub fn split_densities(self) -> Option<(f64, f64)> {
+        match self {
+            Self::LoxRp1 => Some((1141.0, 810.0)),
+            Self::LoxMethane => Some((1141.0, 422.0)),
+            Self::LoxHydrogen => Some((1141.0, 71.0)),
+            Self::NtoMmh => Some((1440.0, 878.0)),
+            Self::MonopropHydrazine
+            | Self::ColdGasNitrogen
+            | Self::ColdGasHelium
+            | Self::SolidApcp => None,
+        }
+    }
+
     /// Mixture table: (oxidizer-to-fuel ratio, chamber temp K, gamma, gas
     /// constant J/kg/K). Representative CEA-trend values bracketing the
     /// reference point; refine with project CEA runs. The middle row always

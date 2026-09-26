@@ -13,19 +13,67 @@ use serde::{Deserialize, Serialize};
 use crate::FuselageError;
 use crate::section::BodyStation;
 
+/// Default light-aircraft seat mass (kg each) when a crew cabin omits it.
+fn default_seat_mass_kg_each() -> f64 {
+    12.0
+}
+
 /// What a slice of the usable interior does. Geometry and structure are
 /// shared; purpose is assigned per longitudinal region.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RegionKind {
     /// Propellant volume: feeds the tank pipeline with a real propellant.
+    /// Optional per-tank pressure/material override the body layout so
+    /// one hull can carry dissimilar tanks (cryo + storable, different
+    /// pressures or shell alloys). `None` keeps the layout default.
     Tank {
         propellant: thessa_sim_core::Propellant,
         /// Usable fill fraction in `[0, 1]` (ullage and traps excluded).
         fill_fraction: f64,
+        #[serde(default)]
+        pressure_pa: Option<f64>,
+        #[serde(default)]
+        material: Option<thessa_sim_core::ChamberMaterial>,
     },
-    /// Crew or passenger volume (outfitting mass is future module work).
+    /// Bipropellant volume split into two tanks at compile time:
+    /// oxidizer aft, fuel forward, divided axially so sub-volumes match
+    /// the mixture ratio and component densities. One region authors
+    /// both tanks; the compiler emits `{name}-ox` and `{name}-fuel`.
+    Bipropellant {
+        propellant: thessa_sim_core::Propellant,
+        /// Usable fill fraction in `[0, 1]`, applied to both tanks.
+        fill_fraction: f64,
+        /// Oxidizer-to-fuel mass ratio; `None` uses the reference ratio.
+        #[serde(default)]
+        mixture_ratio: Option<f64>,
+        /// Shared pressure fallback when per-component values are absent.
+        #[serde(default)]
+        pressure_pa: Option<f64>,
+        #[serde(default)]
+        oxidizer_pressure_pa: Option<f64>,
+        #[serde(default)]
+        fuel_pressure_pa: Option<f64>,
+        #[serde(default)]
+        material: Option<thessa_sim_core::ChamberMaterial>,
+        #[serde(default)]
+        oxidizer_material: Option<thessa_sim_core::ChamberMaterial>,
+        #[serde(default)]
+        fuel_material: Option<thessa_sim_core::ChamberMaterial>,
+    },
+    /// Crew or passenger volume (unfitted shell; mass is future module work).
     Cabin,
+    /// Crewed cabin with seats: `seats` places are distributed along the
+    /// region; seat plus occupant mass rides the hull at the region
+    /// centroid like cargo manifest. Occupant mass defaults to 0
+    /// (unoccupied ferry) so crew loading stays explicit.
+    Crew {
+        seats: u32,
+        #[serde(default = "default_seat_mass_kg_each")]
+        seat_mass_kg_each: f64,
+        #[serde(default)]
+        occupant_mass_kg_each: f64,
+    },
     /// Pressurized cargo volume plus explicit manifest mass.
     Cargo {
         /// Declared cargo/manifest mass carried in this region (kg).
@@ -76,10 +124,123 @@ impl InteriorRegion {
             )));
         }
         match self.kind {
-            RegionKind::Tank { fill_fraction, .. } => {
+            RegionKind::Tank {
+                fill_fraction,
+                pressure_pa,
+                material,
+                ..
+            } => {
                 if !fill_fraction.is_finite() || !(0.0..=1.0).contains(&fill_fraction) {
                     return Err(FuselageError::InvalidInterior(format!(
                         "region '{}' needs fill_fraction in [0, 1]",
+                        self.name
+                    )));
+                }
+                if let Some(pressure) = pressure_pa
+                    && (!pressure.is_finite() || pressure <= 0.0)
+                {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "region '{}' needs pressure_pa > 0",
+                        self.name
+                    )));
+                }
+                if let Some(material) = material
+                    && material.validate().is_err()
+                {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "region '{}' has an invalid tank material",
+                        self.name
+                    )));
+                }
+            }
+            RegionKind::Bipropellant {
+                fill_fraction,
+                mixture_ratio,
+                pressure_pa,
+                oxidizer_pressure_pa,
+                fuel_pressure_pa,
+                material,
+                oxidizer_material,
+                fuel_material,
+                ..
+            } => {
+                if !fill_fraction.is_finite() || !(0.0..=1.0).contains(&fill_fraction) {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "region '{}' needs fill_fraction in [0, 1]",
+                        self.name
+                    )));
+                }
+                // Only true bipropellant pairs can split into two tanks.
+                let propellant = match self.kind {
+                    RegionKind::Bipropellant { propellant, .. } => propellant,
+                    _ => unreachable!("matched bipropellant"),
+                };
+                if propellant.split_densities().is_none() {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "region '{}' needs a bipropellant pair for a split tank",
+                        self.name
+                    )));
+                }
+                if let Some(ratio) = mixture_ratio {
+                    if !ratio.is_finite() || ratio <= 0.0 {
+                        return Err(FuselageError::InvalidInterior(format!(
+                            "region '{}' needs mixture_ratio > 0",
+                            self.name
+                        )));
+                    }
+                    if propellant.thermo_at_mixture(Some(ratio)).is_err() {
+                        return Err(FuselageError::InvalidInterior(format!(
+                            "region '{}' mixture_ratio is outside the modeled table",
+                            self.name
+                        )));
+                    }
+                }
+                for (label, pressure) in [
+                    ("pressure_pa", pressure_pa),
+                    ("oxidizer_pressure_pa", oxidizer_pressure_pa),
+                    ("fuel_pressure_pa", fuel_pressure_pa),
+                ] {
+                    if let Some(pressure) = pressure
+                        && (!pressure.is_finite() || pressure <= 0.0)
+                    {
+                        return Err(FuselageError::InvalidInterior(format!(
+                            "region '{}' needs {label} > 0",
+                            self.name
+                        )));
+                    }
+                }
+                for material in [material, oxidizer_material, fuel_material]
+                    .into_iter()
+                    .flatten()
+                {
+                    if material.validate().is_err() {
+                        return Err(FuselageError::InvalidInterior(format!(
+                            "region '{}' has an invalid tank material",
+                            self.name
+                        )));
+                    }
+                }
+            }
+            RegionKind::Crew {
+                seats,
+                seat_mass_kg_each,
+                occupant_mass_kg_each,
+            } => {
+                if seats == 0 || seats > 1000 {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "region '{}' needs seats in [1, 1000]",
+                        self.name
+                    )));
+                }
+                if !seat_mass_kg_each.is_finite() || seat_mass_kg_each < 0.0 {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "region '{}' needs seat_mass_kg_each >= 0",
+                        self.name
+                    )));
+                }
+                if !occupant_mass_kg_each.is_finite() || occupant_mass_kg_each < 0.0 {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "region '{}' needs occupant_mass_kg_each >= 0",
                         self.name
                     )));
                 }
@@ -326,6 +487,16 @@ impl HullMaterial {
     /// Titanium Ti-6Al-4V: 4430 kg/m^3.
     pub fn titanium() -> Self {
         Self::checked("Ti-6Al-4V", 4430.0)
+    }
+
+    /// Stainless 304L: 7900 kg/m^3 (weldable storable/cryo shells).
+    pub fn stainless_304() -> Self {
+        Self::checked("SS-304L", 7900.0)
+    }
+
+    /// Aluminum-lithium 2195: 2710 kg/m^3 (cryo tankage-grade).
+    pub fn aluminum_lithium_2195() -> Self {
+        Self::checked("Al-Li-2195", 2710.0)
     }
 
     pub fn validate(&self) -> Result<(), FuselageError> {

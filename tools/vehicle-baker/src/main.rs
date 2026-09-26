@@ -1397,6 +1397,9 @@ impl TankAsset {
                     "nickel-superalloy" => ChamberMaterial::nickel_superalloy(),
                     "radiative-niobium" => ChamberMaterial::radiative_niobium(),
                     "ablative" => ChamberMaterial::ablative(),
+                    "aluminum-2219" => ChamberMaterial::aluminum_2219(),
+                    "stainless-304" => ChamberMaterial::stainless_304(),
+                    "composite-copv" => ChamberMaterial::composite_copv(),
                     unknown => {
                         return Err(format!("unknown material preset {unknown}").into());
                     }

@@ -5713,6 +5713,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thessa-sim-core",
+ "toml",
 ]
 
 [[package]]

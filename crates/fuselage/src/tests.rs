@@ -797,6 +797,8 @@ fn degenerate_authoring_fails_closed() {
             RegionKind::Tank {
                 propellant: thessa_sim_core::Propellant::LoxMethane,
                 fill_fraction: 1.0,
+                pressure_pa: None,
+                material: None,
             },
         )
         .unwrap(),
@@ -952,4 +954,312 @@ fn dream_chaser_body_golden_volume_and_lifting_slope() {
     assert!((0.04..0.10).contains(&cl_10));
     assert!((0.18..0.25).contains(&cl_15));
     assert!(cl_15 > cl_10);
+}
+
+#[test]
+fn per_tank_pressure_and_material_override_shell_mass() {
+    use thessa_sim_core::ChamberMaterial;
+
+    // Same loft, same propellant: higher pressure or denser/weaker alloy
+    // must size a heavier shell. Geometry-derived, no tuning.
+    let stations = || {
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(4.0, 1.0).unwrap(),
+        ]
+    };
+    let compile_with = |pressure_pa: Option<f64>, material: Option<ChamberMaterial>| {
+        let mut body = ProceduralBody::new("tank-variant", stations(), DVec3::ZERO).unwrap();
+        body.structure = Some(BodyStructuralLayout::metal_baseline());
+        body.regions = vec![
+            InteriorRegion::new(
+                "tank",
+                0.5,
+                3.5,
+                RegionKind::Tank {
+                    propellant: thessa_sim_core::Propellant::LoxMethane,
+                    fill_fraction: 1.0,
+                    pressure_pa,
+                    material,
+                },
+            )
+            .unwrap(),
+        ];
+        compile_body(&body, &BodyCompileOptions::default()).unwrap()
+    };
+    let baseline = compile_with(None, None);
+    let high_pressure = compile_with(Some(1.0e6), None);
+    let steel = compile_with(None, Some(ChamberMaterial::stainless_304()));
+    let base_dry = baseline.tanks[0].mount.tank.dry_mass_kg;
+    let high_dry = high_pressure.tanks[0].mount.tank.dry_mass_kg;
+    let steel_dry = steel.tanks[0].mount.tank.dry_mass_kg;
+    // Baseline 0.5 MPa vs 1.0 MPa: wall (hence dry mass) doubles.
+    assert!((high_dry / base_dry - 2.0).abs() < 0.05);
+    // Stainless shell differs from the nickel-superalloy baseline.
+    assert!((steel_dry - base_dry).abs() / base_dry > 0.05);
+    assert_eq!(baseline.tanks[0].component, crate::TankComponent::Bulk);
+}
+
+#[test]
+fn bipropellant_region_splits_into_ox_and_fuel_tanks() {
+    // One LoxMethane region -> two tanks whose volumes sum to the region
+    // and whose masses respect the mixture ratio (3.5) and component
+    // densities (LOX 1141, LCH4 422).
+    let mut body = ProceduralBody::new(
+        "biprop-stage",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(6.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::new(
+            "main",
+            1.0,
+            5.0,
+            RegionKind::Bipropellant {
+                propellant: thessa_sim_core::Propellant::LoxMethane,
+                fill_fraction: 0.9,
+                mixture_ratio: None,
+                pressure_pa: None,
+                oxidizer_pressure_pa: None,
+                fuel_pressure_pa: None,
+                material: None,
+                oxidizer_material: None,
+                fuel_material: None,
+            },
+        )
+        .unwrap(),
+    ];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    assert_eq!(compiled.tanks.len(), 2);
+    let ox = compiled
+        .tanks
+        .iter()
+        .find(|tank| tank.region_name == "main-ox")
+        .unwrap();
+    let fuel = compiled
+        .tanks
+        .iter()
+        .find(|tank| tank.region_name == "main-fuel")
+        .unwrap();
+    assert_eq!(ox.component, crate::TankComponent::Oxidizer);
+    assert_eq!(fuel.component, crate::TankComponent::Fuel);
+    let region_volume = compiled.interior[0].volume_m3;
+    assert!((ox.inner_volume_m3 + fuel.inner_volume_m3 - region_volume).abs() < 1e-9);
+    // Oxidizer aft of fuel along +X-forward stations.
+    assert!(ox.mount.position_body_m[0] < fuel.mount.position_body_m[0]);
+    // Mass ratio follows MR=3.5 with LOX 1141 / LCH4 422.
+    let mr = ox.propellant_kg / fuel.propellant_kg;
+    assert!((mr - 3.5).abs() < 0.05, "mixture ratio = {mr}");
+    // Fill fraction applies to both tanks.
+    assert!((ox.propellant_kg - ox.mount.tank.full_propellant_kg * 0.9).abs() < 1e-9);
+    assert!((fuel.propellant_kg - fuel.mount.tank.full_propellant_kg * 0.9).abs() < 1e-9);
+}
+
+#[test]
+fn bipropellant_rejects_monoprop_and_bad_mixture() {
+    // Monopropellant cannot split into two tanks.
+    assert!(
+        InteriorRegion::new(
+            "mono",
+            0.5,
+            3.5,
+            RegionKind::Bipropellant {
+                propellant: thessa_sim_core::Propellant::MonopropHydrazine,
+                fill_fraction: 1.0,
+                mixture_ratio: None,
+                pressure_pa: None,
+                oxidizer_pressure_pa: None,
+                fuel_pressure_pa: None,
+                material: None,
+                oxidizer_material: None,
+                fuel_material: None,
+            },
+        )
+        .is_err()
+    );
+    // Mixture ratio outside the modeled table refuses instead of
+    // extrapolating.
+    assert!(
+        InteriorRegion::new(
+            "bad-mr",
+            0.5,
+            3.5,
+            RegionKind::Bipropellant {
+                propellant: thessa_sim_core::Propellant::LoxMethane,
+                fill_fraction: 1.0,
+                mixture_ratio: Some(9.0),
+                pressure_pa: None,
+                oxidizer_pressure_pa: None,
+                fuel_pressure_pa: None,
+                material: None,
+                oxidizer_material: None,
+                fuel_material: None,
+            },
+        )
+        .is_err()
+    );
+    // Zero seats refuse.
+    assert!(
+        InteriorRegion::new(
+            "empty-crew",
+            0.5,
+            3.5,
+            RegionKind::Crew {
+                seats: 0,
+                seat_mass_kg_each: 12.0,
+                occupant_mass_kg_each: 0.0,
+            },
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn crew_cabin_seats_ride_hull_mass_at_centroid() {
+    let mut body = ProceduralBody::new(
+        "crewed-block",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(4.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::new(
+            "cabin",
+            1.0,
+            3.0,
+            RegionKind::Crew {
+                seats: 4,
+                seat_mass_kg_each: 12.0,
+                occupant_mass_kg_each: 90.0,
+            },
+        )
+        .unwrap(),
+    ];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let cabin = &compiled.interior[0];
+    assert_eq!(cabin.seats, 4);
+    // 4 x (12 + 90) = 408 kg manifest.
+    assert!((cabin.payload_mass_kg - 408.0).abs() < 1e-9);
+    let hull = compiled.structure.as_ref().expect("hull mass");
+    assert!(hull.mass_kg >= 408.0);
+}
+
+#[test]
+fn hull_and_tank_material_presets_validate() {
+    assert!(crate::HullMaterial::stainless_304().validate().is_ok());
+    assert!(
+        crate::HullMaterial::aluminum_lithium_2195()
+            .validate()
+            .is_ok()
+    );
+    assert!(
+        thessa_sim_core::ChamberMaterial::aluminum_2219()
+            .validate()
+            .is_ok()
+    );
+    assert!(
+        thessa_sim_core::ChamberMaterial::stainless_304()
+            .validate()
+            .is_ok()
+    );
+    assert!(
+        thessa_sim_core::ChamberMaterial::composite_copv()
+            .validate()
+            .is_ok()
+    );
+    // Component densities exist for biprop pairs, none for monoprop.
+    assert!(
+        thessa_sim_core::Propellant::LoxMethane
+            .split_densities()
+            .is_some()
+    );
+    assert!(
+        thessa_sim_core::Propellant::MonopropHydrazine
+            .split_densities()
+            .is_none()
+    );
+}
+
+#[test]
+fn new_region_kinds_parse_from_toml() {
+    // Bipropellant + crew + per-tank overrides must survive the TOML
+    // authoring path, not just programmatic construction.
+    let toml = r#"
+name = "toml-demo"
+origin_body_m = [0.0, 0.0, 0.0]
+
+[[stations]]
+x_m = 0.0
+half_width_m = 1.0
+top_height_m = 1.0
+bottom_height_m = 1.0
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[stations]]
+x_m = 6.0
+half_width_m = 1.0
+top_height_m = 1.0
+bottom_height_m = 1.0
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[regions]]
+name = "split"
+x0_m = 0.5
+x1_m = 3.5
+
+[regions.kind.bipropellant]
+propellant = "lox-methane"
+fill_fraction = 0.9
+oxidizer_pressure_pa = 600000.0
+
+[[regions]]
+name = "cabin"
+x0_m = 3.5
+x1_m = 5.5
+
+[regions.kind.crew]
+seats = 2
+occupant_mass_kg_each = 90.0
+
+[structure]
+skin_gauge_mm = 2.0
+frame_spacing_m = 1.0
+frame_gauge_mm = 2.0
+frame_width_mm = 40.0
+tank_pressure_pa = 500000.0
+wall_inset_mm = 10.0
+
+[structure.skin_material]
+name = "Al-7075-T6"
+density_kg_m3 = 2810.0
+
+[structure.tank_material]
+density_kg_m3 = 2840.0
+yield_strength_pa = 395000000.0
+max_wall_temp_k = 400.0
+"#;
+    let body: ProceduralBody = toml::from_str(toml).expect("new region TOML should parse");
+    assert_eq!(body.regions.len(), 2);
+    body.validate().expect("TOML body should validate");
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    // Split region -> 2 tanks; crew region -> 2 seats.
+    assert_eq!(compiled.tanks.len(), 2);
+    assert_eq!(compiled.interior[1].seats, 2);
+    // Seat-mass default (12 kg) + 2x90 kg occupants = 204 kg.
+    assert!((compiled.interior[1].payload_mass_kg - 204.0).abs() < 1e-9);
 }

@@ -141,6 +141,34 @@ partial-fill mass currently uses the equivalent full-volume tensor scaled
 to that mass; orientation-dependent fluid levels, sloshing and changing
 liquid centroid/inertia are not yet modeled.
 
+Each `Tank` region may override the body-level `tank_pressure_pa` and
+`tank_material`, so one hull can carry dissimilar tanks (for example a
+high-pressure cryo methane tank forward and a low-pressure storable tank
+aft, or aluminum vs stainless vs composite shells). Omitted overrides keep
+the layout defaults, so older assets compile unchanged.
+
+A `Bipropellant` region authors a two-component pair once and compiles to
+two tanks: oxidizer aft (`{name}-ox`) and fuel forward (`{name}-fuel`),
+split axially so sub-volumes match the mixture ratio and the component
+densities (LOX 1141, RP-1 810, LCH4 422, LH2 71, NTO 1440, MMH 878 kg/m³).
+The mixture ratio defaults to the pair reference (2.7 / 3.5 / 6.0 / 1.65)
+and may be set inside the modeled thermo table; outside values refuse.
+Per-component pressures and materials override the same way as single
+tanks. The compiled tanks carry their pair plus an oxidizer/fuel tag for
+the feed pipeline.
+
+A `Crew` region places seats: `seats` distributes along the region while
+seat plus occupant mass aggregates at the region centroid like cargo
+manifest (seat default 12 kg each, occupants default 0 for unoccupied
+ferry). The compiled interior reports the seat count and total payload
+mass. The legacy unit `Cabin` remains as unfitted volume with no mass.
+
+Tank shell alloys available to both fuselage regions and hand tanks are
+`nickel-superalloy`, `aluminum-2219`, `stainless-304`, and
+`composite-copv` alongside the chamber presets; hull skins add `SS-304L`
+and `Al-Li-2195` to the existing aluminum/carbon/titanium set. All are
+physical density/strength/temperature triples, never tier labels.
+
 ## 3. Editor modes
 
 Simple users should not need to manipulate every spline point.

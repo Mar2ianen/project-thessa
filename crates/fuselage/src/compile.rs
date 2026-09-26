@@ -103,10 +103,22 @@ impl BodyCompileOptions {
     }
 }
 
+/// Which propellant load a compiled tank carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TankComponent {
+    /// Single mixed/bulk tank (legacy path).
+    Bulk,
+    /// Oxidizer side of a split bipropellant region.
+    Oxidizer,
+    /// Fuel side of a split bipropellant region.
+    Fuel,
+}
+
 /// One tank region compiled into the feed pipeline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompiledBodyTank {
-    /// Region name from authoring.
+    /// Region name from authoring (`{name}-ox` / `{name}-fuel` for splits).
     pub region_name: String,
     /// Feed-pipeline mount (equivalent-cylinder shell, real inner volume
     /// capacity, authored initial fill kept separate from capacity).
@@ -118,6 +130,20 @@ pub struct CompiledBodyTank {
     pub inner_volume_error_m3: f64,
     /// Propellant mass at the authored fill (kg).
     pub propellant_kg: f64,
+    /// Propellant pair this tank belongs to.
+    #[serde(default = "default_compiled_propellant")]
+    pub propellant: Propellant,
+    /// Bulk vs split-tank side.
+    #[serde(default = "default_tank_component")]
+    pub component: TankComponent,
+}
+
+fn default_compiled_propellant() -> Propellant {
+    Propellant::LoxMethane
+}
+
+fn default_tank_component() -> TankComponent {
+    TankComponent::Bulk
 }
 
 /// One interior region with compiled volume data.
@@ -132,8 +158,11 @@ pub struct CompiledRegion {
     pub volume_error_m3: f64,
     /// Volume centroid in body-local metres.
     pub centroid_body_m: DVec3,
-    /// Declared cargo mass (kg, cargo regions only).
+    /// Declared cargo/crew mass (kg; cargo manifest, seats + occupants).
     pub payload_mass_kg: f64,
+    /// Installed seat places (crew regions only).
+    #[serde(default)]
+    pub seats: u32,
 }
 
 /// One interface anchor in body-local metres.
@@ -906,9 +935,17 @@ impl<'a> Compiler<'a> {
             .unwrap_or(0.0);
         for region in &self.body.regions {
             let (volume, volume_error, centroid) = self.region_volume(region, &leaves, wall_m)?;
-            let payload = match region.kind {
-                RegionKind::Cargo { payload_mass_kg } => payload_mass_kg,
-                _ => 0.0,
+            let (payload, seats) = match region.kind {
+                RegionKind::Cargo { payload_mass_kg } => (payload_mass_kg, 0),
+                RegionKind::Crew {
+                    seats,
+                    seat_mass_kg_each,
+                    occupant_mass_kg_each,
+                } => (
+                    seats as f64 * (seat_mass_kg_each + occupant_mass_kg_each),
+                    seats,
+                ),
+                _ => (0.0, 0),
             };
             if payload > 0.0 {
                 hull_mass_kg += payload;
@@ -918,6 +955,8 @@ impl<'a> Compiler<'a> {
             if let RegionKind::Tank {
                 propellant,
                 fill_fraction,
+                pressure_pa,
+                material,
             } = region.kind
             {
                 let layout = layout.as_ref().ok_or_else(|| {
@@ -926,52 +965,114 @@ impl<'a> Compiler<'a> {
                         region.name
                     ))
                 })?;
-                let mean_area = volume / (region.x1_m - region.x0_m).max(1e-12);
-                let equiv_d = 2.0 * (mean_area / std::f64::consts::PI).sqrt();
                 let spec = TankSpec {
                     shape: TankShape::Cylinder {
-                        diameter_m: equiv_d,
+                        diameter_m: Self::equiv_diameter(volume, region.x1_m - region.x0_m),
                         length_m: region.x1_m - region.x0_m,
                     },
-                    pressure_pa: layout.tank_pressure_pa,
-                    material: layout.tank_material,
+                    pressure_pa: pressure_pa.unwrap_or(layout.tank_pressure_pa),
+                    material: material.unwrap_or(layout.tank_material),
                 };
-                let density = propellant_density(propellant)?;
-                let mut tank = spec.compile(density).map_err(|error| {
-                    FuselageError::InvalidBody(format!("tank region '{}': {error}", region.name))
+                let compiled_tank = self.compile_single_tank(
+                    &region.name,
+                    propellant,
+                    TankComponent::Bulk,
+                    volume,
+                    volume_error,
+                    centroid,
+                    fill_fraction,
+                    &spec,
+                )?;
+                compiled.tanks.push(compiled_tank);
+            }
+            if let RegionKind::Bipropellant {
+                propellant,
+                fill_fraction,
+                mixture_ratio,
+                pressure_pa,
+                oxidizer_pressure_pa,
+                fuel_pressure_pa,
+                material,
+                oxidizer_material,
+                fuel_material,
+            } = region.kind
+            {
+                let layout = layout.as_ref().ok_or_else(|| {
+                    FuselageError::InvalidBody(format!(
+                        "tank region '{}' needs a structural layout",
+                        region.name
+                    ))
                 })?;
-                // Real inner volume is the capacity (equivalent cylinder
-                // sizes the shell); preserve capacity separately from the
-                // authored initial fill in the installed mount.
-                tank.volume_m3 = volume;
-                tank.full_propellant_kg = volume * density;
-                let initial_propellant_kg = tank.full_propellant_kg * fill_fraction;
-                let intrinsic_inertia_body_kg_m2 = spec
-                    .shape
-                    .intrinsic_inertia_body_kg_m2(tank.dry_mass_kg, initial_propellant_kg)
-                    .map_err(|error| {
-                        FuselageError::InvalidBody(format!(
-                            "tank region '{}': {error}",
-                            region.name
-                        ))
-                    })?;
-                let position = centroid + self.body.origin_body_m;
-                let mount = TankMount {
-                    tank,
-                    position_body_m: position.to_array(),
-                    intrinsic_inertia_body_kg_m2,
-                    initial_propellant_kg: Some(initial_propellant_kg),
-                };
-                mount
-                    .validate()
-                    .map_err(|error| FuselageError::InvalidBody(error.to_string()))?;
-                compiled.tanks.push(CompiledBodyTank {
-                    region_name: region.name.clone(),
-                    mount,
-                    inner_volume_m3: volume,
-                    inner_volume_error_m3: volume_error,
-                    propellant_kg: initial_propellant_kg,
+                let ratio = mixture_ratio.unwrap_or_else(|| {
+                    propellant
+                        .reference_mixture_ratio()
+                        .expect("validated bipropellant pair")
                 });
+                let (rho_ox, rho_fuel) = propellant.split_densities().ok_or_else(|| {
+                    FuselageError::InvalidInterior(format!(
+                        "region '{}' needs a bipropellant pair for a split tank",
+                        region.name
+                    ))
+                })?;
+                // Mass ratio MR = m_ox / m_f; volume ratio follows densities.
+                let volume_ratio = ratio * rho_fuel / rho_ox;
+                let ox_volume = volume * volume_ratio / (1.0 + volume_ratio);
+                let split_x = self.find_split_x(region.x0_m, region.x1_m, ox_volume, wall_m)?;
+                let (ox_vol, ox_err, ox_centroid) =
+                    self.range_volume(region.x0_m, split_x, wall_m)?;
+                let (fuel_vol, fuel_err, fuel_centroid) =
+                    self.range_volume(split_x, region.x1_m, wall_m)?;
+                let base_pressure = pressure_pa.unwrap_or(layout.tank_pressure_pa);
+                let base_material = material.unwrap_or(layout.tank_material);
+                let ox_spec = TankSpec {
+                    shape: TankShape::Cylinder {
+                        diameter_m: Self::equiv_diameter(
+                            ox_vol,
+                            (split_x - region.x0_m).max(1e-12),
+                        ),
+                        length_m: (split_x - region.x0_m).max(1e-12),
+                    },
+                    pressure_pa: oxidizer_pressure_pa
+                        .or(pressure_pa)
+                        .unwrap_or(base_pressure),
+                    material: oxidizer_material.or(material).unwrap_or(base_material),
+                };
+                let fuel_spec = TankSpec {
+                    shape: TankShape::Cylinder {
+                        diameter_m: Self::equiv_diameter(
+                            fuel_vol,
+                            (region.x1_m - split_x).max(1e-12),
+                        ),
+                        length_m: (region.x1_m - split_x).max(1e-12),
+                    },
+                    pressure_pa: fuel_pressure_pa.or(pressure_pa).unwrap_or(base_pressure),
+                    material: fuel_material.or(material).unwrap_or(base_material),
+                };
+                // Oxidizer aft, fuel forward: denser load near the tail.
+                let ox_tank = self.compile_split_tank(
+                    &format!("{}-ox", region.name),
+                    propellant,
+                    TankComponent::Oxidizer,
+                    ox_vol,
+                    ox_err,
+                    ox_centroid,
+                    rho_ox,
+                    fill_fraction,
+                    &ox_spec,
+                )?;
+                let fuel_tank = self.compile_split_tank(
+                    &format!("{}-fuel", region.name),
+                    propellant,
+                    TankComponent::Fuel,
+                    fuel_vol,
+                    fuel_err,
+                    fuel_centroid,
+                    rho_fuel,
+                    fill_fraction,
+                    &fuel_spec,
+                )?;
+                compiled.tanks.push(ox_tank);
+                compiled.tanks.push(fuel_tank);
             }
             compiled.interior.push(CompiledRegion {
                 name: region.name.clone(),
@@ -980,6 +1081,7 @@ impl<'a> Compiler<'a> {
                 volume_error_m3: volume_error,
                 centroid_body_m: centroid,
                 payload_mass_kg: payload,
+                seats,
             });
         }
 
@@ -1132,6 +1234,172 @@ impl<'a> Compiler<'a> {
             )));
         }
         Ok((volume, volume_error, moment / volume))
+    }
+
+    /// Usable inner-mold volume over an explicit axial range (split tanks).
+    fn range_volume(
+        &self,
+        x0_m: f64,
+        x1_m: f64,
+        wall_m: f64,
+    ) -> Result<(f64, f64, DVec3), FuselageError> {
+        if x1_m - x0_m <= 1e-12 {
+            return Err(FuselageError::InvalidInterior(
+                "split tank needs a non-empty axial sub-range".into(),
+            ));
+        }
+        let integrated = self.integrate_section(x0_m, x1_m, wall_m)?;
+        let volume = integrated.moments.x;
+        if volume <= 0.0 {
+            return Err(FuselageError::InvalidInterior(
+                "split tank sub-range has no usable volume".into(),
+            ));
+        }
+        let centroid = DVec3::new(
+            integrated.moments.y / volume,
+            integrated.moments.z / volume,
+            integrated.moments.w / volume,
+        );
+        Ok((volume, integrated.estimated_error.x, centroid))
+    }
+
+    /// Axial station where `[x0, split]` holds `target_volume_m3`.
+    fn find_split_x(
+        &self,
+        x0_m: f64,
+        x1_m: f64,
+        target_volume_m3: f64,
+        wall_m: f64,
+    ) -> Result<f64, FuselageError> {
+        let (total, _, _) = self.range_volume(x0_m, x1_m, wall_m)?;
+        if target_volume_m3 <= 0.0 || target_volume_m3 >= total {
+            return Err(FuselageError::InvalidInterior(
+                "split tank target volume lies outside the region".into(),
+            ));
+        }
+        let mut low = x0_m;
+        let mut high = x1_m;
+        for _ in 0..80 {
+            let mid = 0.5 * (low + high);
+            let integrated = self.integrate_section(x0_m, mid, wall_m)?;
+            if integrated.moments.x < target_volume_m3 {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        Ok(0.5 * (low + high))
+    }
+
+    fn equiv_diameter(volume_m3: f64, length_m: f64) -> f64 {
+        let mean_area = volume_m3 / length_m.max(1e-12);
+        2.0 * (mean_area / std::f64::consts::PI).sqrt()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_single_tank(
+        &self,
+        name: &str,
+        propellant: Propellant,
+        component: TankComponent,
+        volume_m3: f64,
+        volume_error_m3: f64,
+        centroid: DVec3,
+        fill_fraction: f64,
+        spec: &TankSpec,
+    ) -> Result<CompiledBodyTank, FuselageError> {
+        let density = propellant_density(propellant)?;
+        self.compile_tank_with_density(
+            name,
+            propellant,
+            component,
+            volume_m3,
+            volume_error_m3,
+            centroid,
+            density,
+            fill_fraction,
+            spec,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_split_tank(
+        &self,
+        name: &str,
+        propellant: Propellant,
+        component: TankComponent,
+        volume_m3: f64,
+        volume_error_m3: f64,
+        centroid: DVec3,
+        component_density: f64,
+        fill_fraction: f64,
+        spec: &TankSpec,
+    ) -> Result<CompiledBodyTank, FuselageError> {
+        if !component_density.is_finite() || component_density <= 0.0 {
+            return Err(FuselageError::InvalidInterior(
+                "split tank component needs a positive density".into(),
+            ));
+        }
+        self.compile_tank_with_density(
+            name,
+            propellant,
+            component,
+            volume_m3,
+            volume_error_m3,
+            centroid,
+            component_density,
+            fill_fraction,
+            spec,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_tank_with_density(
+        &self,
+        name: &str,
+        propellant: Propellant,
+        component: TankComponent,
+        volume_m3: f64,
+        volume_error_m3: f64,
+        centroid: DVec3,
+        density_kg_m3: f64,
+        fill_fraction: f64,
+        spec: &TankSpec,
+    ) -> Result<CompiledBodyTank, FuselageError> {
+        let mut tank = spec.compile(density_kg_m3).map_err(|error| {
+            FuselageError::InvalidBody(format!("tank region '{name}': {error}"))
+        })?;
+        // Real inner volume is the capacity (equivalent cylinder sizes
+        // the shell); preserve capacity separately from the authored
+        // initial fill in the installed mount.
+        tank.volume_m3 = volume_m3;
+        tank.full_propellant_kg = volume_m3 * density_kg_m3;
+        let initial_propellant_kg = tank.full_propellant_kg * fill_fraction;
+        let intrinsic_inertia_body_kg_m2 = spec
+            .shape
+            .intrinsic_inertia_body_kg_m2(tank.dry_mass_kg, initial_propellant_kg)
+            .map_err(|error| {
+                FuselageError::InvalidBody(format!("tank region '{name}': {error}"))
+            })?;
+        let position = centroid + self.body.origin_body_m;
+        let mount = TankMount {
+            tank,
+            position_body_m: position.to_array(),
+            intrinsic_inertia_body_kg_m2,
+            initial_propellant_kg: Some(initial_propellant_kg),
+        };
+        mount
+            .validate()
+            .map_err(|error| FuselageError::InvalidBody(error.to_string()))?;
+        Ok(CompiledBodyTank {
+            region_name: name.into(),
+            mount,
+            inner_volume_m3: volume_m3,
+            inner_volume_error_m3: volume_error_m3,
+            propellant_kg: initial_propellant_kg,
+            propellant,
+            component,
+        })
     }
 
     fn compile_port(&self, port: &crate::BodyPort) -> Result<BodyPortCompiled, FuselageError> {

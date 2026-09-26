@@ -60,15 +60,16 @@ mod structure;
 mod summary;
 
 pub use body::{
-    BodyControlPlane, BodyControlRegion, BodyEnd, BodyHeatShield, BodyPort, BodyStructuralLayout,
-    CabinAtmosphere, HullMaterial, InteriorRegion, PortKind, ProceduralBody, RegionKind, SeatStyle,
-    StoredFluid, SuitType, TankShell,
+    AttachKind, AttachNode, AttachSite, BodyControlPlane, BodyControlRegion, BodyEnd,
+    BodyHeatShield, BodyPort, BodyStructuralLayout, CabinAtmosphere, HullMaterial, InteriorRegion,
+    PortKind, ProceduralBody, RegionKind, SeatStyle, StoredFluid, SuitType, TankShell,
 };
 pub use capsule::{CapsuleParams, CapsuleShape, capsule_body};
 pub use collision::{BodyCollisionOptions, body_collision_parts};
 pub use compile::{
-    BodyCompileOptions, BodyPortCompiled, CompiledBody, CompiledBodyTank, CompiledHeatShield,
-    CompiledRegion, TankComponent, TankContents, compile_body,
+    AssemblyLink, BodyCompileOptions, BodyPortCompiled, CompiledAssembly, CompiledBody,
+    CompiledBodyTank, CompiledHeatShield, CompiledRegion, FeedPath, TankComponent, TankContents,
+    VolumeId, compile_assembly, compile_body,
 };
 pub use error::FuselageError;
 pub use golden::{

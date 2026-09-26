@@ -27,8 +27,9 @@ use thessa_sim_core::{
 
 use crate::summary::CompiledBodySummary;
 use crate::{
-    BodyControlPlane, BodyStation, CabinAtmosphere, CompiledHull, FuselageError, InteriorRegion,
-    ProceduralBody, RegionKind, TankShell, outline_point, point_inertia,
+    AttachKind, AttachSite, BodyControlPlane, BodyStation, CabinAtmosphere, CompiledHull,
+    FuselageError, InteriorRegion, ProceduralBody, RegionKind, TankShell, outline_point,
+    point_inertia,
 };
 
 /// Subdivision tolerances for one compilation.
@@ -1900,4 +1901,383 @@ fn propellant_density(propellant: Propellant) -> Result<f64, FuselageError> {
         ));
     }
     Ok(density)
+}
+
+/// Stack interface diameters must agree this closely (relative) or the
+/// author fits an adapter part (future) instead of forcing the joint.
+const STACK_DIAMETER_TOLERANCE: f64 = 0.05;
+/// A hatch below this diameter cannot pass crew (documented minimum).
+const HATCH_MIN_DIAMETER_M: f64 = 0.5;
+
+/// One assembly link between two attach nodes on different bodies.
+/// Stack links are permanently open for resources; hatch links carry an
+/// initial open state (crew/air/fuel cross only when open).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssemblyLink {
+    pub name: String,
+    pub parent_body: String,
+    pub parent_node: String,
+    pub child_body: String,
+    pub child_node: String,
+    /// Initial hatch state; forced open on stack links.
+    #[serde(default = "default_hatch_open")]
+    pub hatch_open: bool,
+}
+
+fn default_hatch_open() -> bool {
+    true
+}
+
+/// One habitable volume: a non-tank interior region on one body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct VolumeId {
+    pub body: usize,
+    pub region: usize,
+}
+
+/// One fuel path: a tank region that can reach an engine-mount port
+/// through open resource links.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeedPath {
+    /// `body.region` qualified tank name.
+    pub tank: String,
+    /// `body.port` qualified engine-mount port name.
+    pub engine_port: String,
+}
+
+/// Compiled part assembly: validated topology plus crew/air sharing
+/// domains and fuel reachability. Merged physics (transforms, joints)
+/// arrives in a later slice; this record owns topology truth.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompiledAssembly {
+    /// Root body name (the one never used as a child).
+    pub root: String,
+    /// Crew-passable volume groups (open hatch links; suits and air
+    /// checked at runtime, not here).
+    pub crew_groups: Vec<Vec<VolumeId>>,
+    /// Shared-air domains (open hatch links between pressurized volumes).
+    pub air_groups: Vec<Vec<VolumeId>>,
+    /// Tank-to-engine-port fuel reachability through open links.
+    pub feed_paths: Vec<FeedPath>,
+}
+
+/// Compile a part assembly from bodies plus links (KSP-style tree).
+///
+/// Fails closed on: unknown bodies/nodes, a node used twice, diameter
+/// mismatch beyond tolerance, hatch links below crew-passage diameter,
+/// cycles, and forests (more than one root). A single body with no
+/// links compiles to one root with isolated volumes.
+pub fn compile_assembly(
+    bodies: &[ProceduralBody],
+    links: &[AssemblyLink],
+) -> Result<CompiledAssembly, FuselageError> {
+    for body in bodies {
+        body.validate()?;
+    }
+    if bodies.is_empty() {
+        return Err(FuselageError::InvalidBody(
+            "assembly needs at least one body".into(),
+        ));
+    }
+    let body_index = |name: &str| {
+        bodies
+            .iter()
+            .position(|body| body.name == name)
+            .ok_or_else(|| {
+                FuselageError::InvalidBody(format!("assembly references unknown body '{name}'"))
+            })
+    };
+    let node_diameter = |body: &ProceduralBody, node: &crate::AttachNode| -> f64 {
+        if let Some(diameter) = node.diameter_m {
+            return diameter;
+        }
+        let station = match node.site {
+            AttachSite::AftEnd => body.stations[0],
+            AttachSite::ForwardEnd => *body.stations.last().unwrap(),
+            AttachSite::Station { x_m } => body.section_at(x_m),
+        };
+        2.0 * station
+            .half_width_m
+            .max(station.top_height_m)
+            .max(station.bottom_height_m)
+    };
+    // Resolve endpoints, check single use and diameter match.
+    struct Resolved {
+        parent: usize,
+        child: usize,
+        open: bool,
+    }
+    let mut resolved = Vec::with_capacity(links.len());
+    let mut used: std::collections::HashSet<(usize, &str)> = std::collections::HashSet::new();
+    for link in links {
+        if link.name.trim().is_empty() {
+            return Err(FuselageError::InvalidBody(
+                "assembly link needs a name".into(),
+            ));
+        }
+        let parent = body_index(&link.parent_body)?;
+        let child = body_index(&link.child_body)?;
+        if parent == child {
+            return Err(FuselageError::InvalidBody(format!(
+                "assembly link '{}' connects a body to itself",
+                link.name
+            )));
+        }
+        let parent_node = bodies[parent]
+            .attach_nodes
+            .iter()
+            .find(|node| node.name == link.parent_node)
+            .ok_or_else(|| {
+                FuselageError::InvalidBody(format!(
+                    "assembly link '{}' references unknown node '{}.{}'",
+                    link.name, link.parent_body, link.parent_node
+                ))
+            })?;
+        let child_node = bodies[child]
+            .attach_nodes
+            .iter()
+            .find(|node| node.name == link.child_node)
+            .ok_or_else(|| {
+                FuselageError::InvalidBody(format!(
+                    "assembly link '{}' references unknown node '{}.{}'",
+                    link.name, link.child_body, link.child_node
+                ))
+            })?;
+        for (index, node) in [
+            (parent, parent_node.name.as_str()),
+            (child, child_node.name.as_str()),
+        ] {
+            if !used.insert((index, node)) {
+                return Err(FuselageError::InvalidBody(format!(
+                    "attach node '{node}' is used by more than one link"
+                )));
+            }
+        }
+        let parent_d = node_diameter(&bodies[parent], parent_node);
+        let child_d = node_diameter(&bodies[child], child_node);
+        let mismatch = (parent_d - child_d).abs() / parent_d.max(child_d).max(f64::MIN_POSITIVE);
+        if mismatch > STACK_DIAMETER_TOLERANCE {
+            return Err(FuselageError::InvalidBody(format!(
+                "assembly link '{}' joins {:.2} m to {:.2} m (beyond {:.0}% tolerance)",
+                link.name,
+                parent_d,
+                child_d,
+                STACK_DIAMETER_TOLERANCE * 100.0,
+            )));
+        }
+        let hatch = parent_node.kind == AttachKind::Hatch || child_node.kind == AttachKind::Hatch;
+        if hatch && parent_d.min(child_d) < HATCH_MIN_DIAMETER_M {
+            return Err(FuselageError::InvalidBody(format!(
+                "assembly link '{}' hatch is {:.2} m (crew passage needs {:.1} m)",
+                link.name,
+                parent_d.min(child_d),
+                HATCH_MIN_DIAMETER_M,
+            )));
+        }
+        resolved.push(Resolved {
+            parent,
+            child,
+            open: if hatch { link.hatch_open } else { true },
+        });
+    }
+    // Tree check: acyclic (union-find rejects the closing edge) with
+    // exactly one root and one connected set (no forests).
+    let mut union = UnionFind::new(bodies.len());
+    for link in &resolved {
+        if !union.union(link.parent, link.child) {
+            return Err(FuselageError::InvalidBody(format!(
+                "assembly link between '{}' and '{}' closes a cycle (trees only)",
+                bodies[link.parent].name, bodies[link.child].name
+            )));
+        }
+    }
+    // The root is the one body never used as a child; every body must
+    // share its connected set (single tree, no forests).
+    let is_child = |index: usize| resolved.iter().any(|link| link.child == index);
+    let roots: Vec<usize> = (0..bodies.len())
+        .filter(|index| !is_child(*index))
+        .collect();
+    if roots.len() != 1 {
+        return Err(FuselageError::InvalidBody(format!(
+            "assembly needs exactly one root body (found {})",
+            roots.len()
+        )));
+    }
+    let main = union.find(roots[0]);
+    if !(0..bodies.len()).all(|index| union.find(index) == main) {
+        return Err(FuselageError::InvalidBody(
+            "assembly is a forest, not one connected tree".into(),
+        ));
+    }
+    // Habitable volumes per body (non-tank regions).
+    let is_volume = |kind: &RegionKind| {
+        !matches!(
+            kind,
+            RegionKind::Tank { .. }
+                | RegionKind::FluidTank { .. }
+                | RegionKind::Bipropellant { .. }
+        )
+    };
+    let mut volumes: Vec<VolumeId> = Vec::new();
+    for (body_index, body) in bodies.iter().enumerate() {
+        for (region_index, region) in body.regions.iter().enumerate() {
+            if is_volume(&region.kind) {
+                volumes.push(VolumeId {
+                    body: body_index,
+                    region: region_index,
+                });
+            }
+        }
+    }
+    let volume_index = |id: VolumeId| {
+        volumes
+            .iter()
+            .position(|volume| *volume == id)
+            .expect("volume inventoried above")
+    };
+    // Crew groups: open links of any kind (stack sides have no doors).
+    let mut crew_union = UnionFind::new(volumes.len());
+    // Air groups: open links between pressurized volumes only.
+    let mut air_union = UnionFind::new(volumes.len());
+    let pressurized = |id: VolumeId| bodies[id.body].regions[id.region].atmosphere.is_some();
+    // Body adjacency through open links.
+    let mut open_adj: Vec<Vec<usize>> = vec![Vec::new(); bodies.len()];
+    for link in &resolved {
+        if link.open {
+            open_adj[link.parent].push(link.child);
+            open_adj[link.child].push(link.parent);
+        }
+    }
+    // Volumes in one body share the open interior (documented rule).
+    for body_volumes in volumes.chunk_by(|a, b| a.body == b.body) {
+        for pair in body_volumes.windows(2) {
+            crew_union.union(volume_index(pair[0]), volume_index(pair[1]));
+            if pressurized(pair[0]) && pressurized(pair[1]) {
+                air_union.union(volume_index(pair[0]), volume_index(pair[1]));
+            }
+        }
+    }
+    for (body_index, neighbors) in open_adj.iter().enumerate() {
+        for neighbor in neighbors {
+            let a: Vec<VolumeId> = volumes
+                .iter()
+                .copied()
+                .filter(|volume| volume.body == body_index)
+                .collect();
+            let b: Vec<VolumeId> = volumes
+                .iter()
+                .copied()
+                .filter(|volume| volume.body == *neighbor)
+                .collect();
+            for x in &a {
+                for y in &b {
+                    crew_union.union(volume_index(*x), volume_index(*y));
+                    if pressurized(*x) && pressurized(*y) {
+                        air_union.union(volume_index(*x), volume_index(*y));
+                    }
+                }
+            }
+        }
+    }
+    let groups = |union: &mut UnionFind| {
+        let mut groups: std::collections::HashMap<usize, Vec<VolumeId>> =
+            std::collections::HashMap::new();
+        for (index, volume) in volumes.iter().enumerate() {
+            groups.entry(union.find(index)).or_default().push(*volume);
+        }
+        let mut groups: Vec<Vec<VolumeId>> = groups.into_values().collect();
+        for group in &mut groups {
+            group.sort_by_key(|volume| (volume.body, volume.region));
+        }
+        groups.sort_by_key(|group| (group[0].body, group[0].region));
+        groups
+    };
+    // Fuel reachability: tanks to engine-mount ports through open links
+    // (hatch links carry fuel only when open; structure never blocks).
+    let mut tanks: Vec<(usize, String)> = Vec::new();
+    for (body_index, body) in bodies.iter().enumerate() {
+        for region in &body.regions {
+            let tank_kind = matches!(
+                region.kind,
+                RegionKind::Tank { .. }
+                    | RegionKind::FluidTank { .. }
+                    | RegionKind::Bipropellant { .. }
+            );
+            if tank_kind {
+                tanks.push((body_index, format!("{}.{}", body.name, region.name)));
+            }
+        }
+    }
+    let mut engine_ports: Vec<(usize, String)> = Vec::new();
+    for (body_index, body) in bodies.iter().enumerate() {
+        for port in &body.ports {
+            if port.kind == crate::PortKind::EngineMount {
+                engine_ports.push((body_index, format!("{}.{}", body.name, port.name)));
+            }
+        }
+    }
+    let reachable = |from: usize| {
+        let mut seen = vec![false; bodies.len()];
+        let mut stack = vec![from];
+        seen[from] = true;
+        while let Some(next) = stack.pop() {
+            for neighbor in &open_adj[next] {
+                if !seen[*neighbor] {
+                    seen[*neighbor] = true;
+                    stack.push(*neighbor);
+                }
+            }
+        }
+        seen
+    };
+    let mut feed_paths = Vec::new();
+    for (tank_body, tank) in &tanks {
+        let seen = reachable(*tank_body);
+        for (port_body, engine_port) in &engine_ports {
+            if seen[*port_body] {
+                feed_paths.push(FeedPath {
+                    tank: tank.clone(),
+                    engine_port: engine_port.clone(),
+                });
+            }
+        }
+    }
+    feed_paths.sort_by(|a, b| (&a.tank, &a.engine_port).cmp(&(&b.tank, &b.engine_port)));
+    Ok(CompiledAssembly {
+        root: bodies[roots[0]].name.clone(),
+        crew_groups: groups(&mut crew_union),
+        air_groups: groups(&mut air_union),
+        feed_paths,
+    })
+}
+
+/// Disjoint-set union for tree and group computation.
+struct UnionFind {
+    parent: Vec<usize>,
+}
+
+impl UnionFind {
+    fn new(count: usize) -> Self {
+        Self {
+            parent: (0..count).collect(),
+        }
+    }
+
+    fn find(&mut self, mut index: usize) -> usize {
+        while self.parent[index] != index {
+            self.parent[index] = self.parent[self.parent[index]];
+            index = self.parent[index];
+        }
+        index
+    }
+
+    /// Returns false when already united (cycle edge).
+    fn union(&mut self, a: usize, b: usize) -> bool {
+        let (root_a, root_b) = (self.find(a), self.find(b));
+        if root_a == root_b {
+            return false;
+        }
+        self.parent[root_a] = root_b;
+        true
+    }
 }

@@ -8,6 +8,7 @@
 
 mod aero;
 mod affine_propagator;
+mod assembly;
 mod atmosphere;
 mod cabin;
 mod collision;
@@ -40,6 +41,7 @@ pub use affine_propagator::{
     AffinePropagator, AnalyticError, AnalyticFallback, AnalyticStep, ModeCoefficients,
     PiecewiseReport, PropagatorError, StepCoefficients, propagate_piecewise,
 };
+pub use assembly::{AssemblyError, AssemblyLinkState, air_groups, crew_groups, feed_reachable};
 pub use atmosphere::{
     AtmosphereComposition, AtmosphereConfig, AtmosphereError, AtmosphereSample, BakedAtmosphere,
     GasKind,

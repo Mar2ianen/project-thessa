@@ -2220,3 +2220,195 @@ fn control_core_rides_avionics_not_tanks() {
     tank.control_core = Some(AutopilotTier::Hold);
     assert!(tank.validate().is_err());
 }
+
+fn assembly_stage() -> ProceduralBody {
+    use crate::{AttachKind, AttachNode, AttachSite};
+    let mut body = ProceduralBody::new(
+        "stage",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(4.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::new(
+            "tank",
+            0.5,
+            3.5,
+            RegionKind::Tank {
+                propellant: thessa_sim_core::Propellant::LoxMethane,
+                fill_fraction: 1.0,
+                pressure_pa: None,
+                material: None,
+                shell: None,
+            },
+        )
+        .unwrap(),
+    ];
+    body.ports = vec![BodyPort::new("engine", 0.0, 0.0, PortKind::EngineMount, 0.5).unwrap()];
+    body.attach_nodes =
+        vec![AttachNode::new("top", AttachSite::ForwardEnd, AttachKind::Hatch, None).unwrap()];
+    body.validate().unwrap();
+    body
+}
+
+fn assembly_capsule() -> ProceduralBody {
+    use crate::{AttachKind, AttachNode, AttachSite, CabinAtmosphere};
+    let mut body = ProceduralBody::new(
+        "capsule",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(2.0, 1.0).unwrap(),
+        ],
+        DVec3::new(0.0, 0.0, 4.0),
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::pressurized(
+            "cabin",
+            0.2,
+            1.8,
+            RegionKind::Cabin,
+            CabinAtmosphere::sea_level(),
+        )
+        .unwrap(),
+    ];
+    body.attach_nodes =
+        vec![AttachNode::new("base", AttachSite::AftEnd, AttachKind::Hatch, None).unwrap()];
+    body.validate().unwrap();
+    body
+}
+
+fn assembly_link(open: bool) -> crate::AssemblyLink {
+    crate::AssemblyLink {
+        name: "stack".into(),
+        parent_body: "stage".into(),
+        parent_node: "top".into(),
+        child_body: "capsule".into(),
+        child_node: "base".into(),
+        hatch_open: open,
+    }
+}
+
+#[test]
+fn open_hatch_shares_crew_air_and_fuel() {
+    let bodies = vec![assembly_stage(), assembly_capsule()];
+    let compiled = crate::compile_assembly(&bodies, &[assembly_link(true)]).unwrap();
+    assert_eq!(compiled.root, "stage");
+    // One crew group spanning both cabins (tank is not a volume).
+    assert_eq!(compiled.crew_groups.len(), 1);
+    assert_eq!(compiled.crew_groups[0].len(), 1);
+    // Only the capsule cabin holds air: its own domain.
+    assert_eq!(compiled.air_groups.len(), 1);
+    // The stage tank feeds the stage engine through the open link.
+    assert!(
+        compiled
+            .feed_paths
+            .iter()
+            .any(|path| path.tank == "stage.tank" && path.engine_port == "stage.engine")
+    );
+}
+
+#[test]
+fn closed_hatch_isolates_but_holds_structure() {
+    use crate::{AttachKind, AttachNode, AttachSite};
+    // Same stack, hatch sealed: volumes split, fuel stops at the hatch.
+    let bodies = vec![assembly_stage(), assembly_capsule()];
+    let compiled = crate::compile_assembly(&bodies, &[assembly_link(false)]).unwrap();
+    assert_eq!(compiled.crew_groups.len(), 1);
+    assert_eq!(compiled.crew_groups[0].len(), 1);
+    // The tree still validates: structure never depends on hatch state.
+    assert_eq!(compiled.root, "stage");
+    assert!(
+        compiled
+            .feed_paths
+            .iter()
+            .any(|path| path.tank == "stage.tank" && path.engine_port == "stage.engine")
+    );
+    // A sealed all-hatch pair of cabins splits crew domains.
+    let mut second = assembly_capsule();
+    second.name = "capsule-2".into();
+    second.attach_nodes =
+        vec![AttachNode::new("base", AttachSite::AftEnd, AttachKind::Stack, None).unwrap()];
+    let bodies = vec![assembly_capsule(), second];
+    let link = crate::AssemblyLink {
+        name: "sealed".into(),
+        parent_body: "capsule".into(),
+        parent_node: "base".into(),
+        child_body: "capsule-2".into(),
+        child_node: "base".into(),
+        hatch_open: false,
+    };
+    let compiled = crate::compile_assembly(&bodies, &[link]).unwrap();
+    assert_eq!(compiled.crew_groups.len(), 2);
+    assert_eq!(compiled.air_groups.len(), 2);
+}
+
+#[test]
+fn assembly_topology_fails_closed() {
+    // Unknown body and unknown node.
+    assert!(
+        crate::compile_assembly(
+            &[assembly_stage()],
+            &[crate::AssemblyLink {
+                name: "bad".into(),
+                parent_body: "ghost".into(),
+                parent_node: "top".into(),
+                child_body: "stage".into(),
+                child_node: "top".into(),
+                hatch_open: true,
+            }]
+        )
+        .is_err()
+    );
+    // Diameter mismatch beyond tolerance.
+    let mut wide = assembly_capsule();
+    wide.attach_nodes[0].diameter_m = Some(3.0);
+    assert!(crate::compile_assembly(&[assembly_stage(), wide], &[assembly_link(true)]).is_err());
+    // Hatch below crew-passage diameter.
+    let mut narrow = assembly_capsule();
+    narrow.attach_nodes[0].diameter_m = Some(0.3);
+    assert!(crate::compile_assembly(&[assembly_stage(), narrow], &[assembly_link(true)]).is_err());
+    // Forest of two unlinked bodies refuses (single bodies fly alone).
+    assert!(crate::compile_assembly(&[assembly_stage(), assembly_capsule()], &[]).is_err());
+    assert!(
+        crate::compile_assembly(&[assembly_stage()], &[])
+            .unwrap()
+            .root
+            == "stage"
+    );
+    // Cycle of three refuses.
+    let (mut a, mut b, mut c) = (assembly_stage(), assembly_capsule(), assembly_capsule());
+    use crate::{AttachKind, AttachNode, AttachSite};
+    a.name = "a".into();
+    b.name = "b".into();
+    c.name = "c".into();
+    for (body, extra) in [(&mut a, "a2"), (&mut b, "b2"), (&mut c, "c2")] {
+        body.attach_nodes
+            .push(AttachNode::new(extra, AttachSite::AftEnd, AttachKind::Stack, None).unwrap());
+    }
+    // Note: a/b/c reuse node name "top"/"base" per body; links below form a loop.
+    let mk = |p: &str, pn: &str, c: &str, cn: &str| crate::AssemblyLink {
+        name: format!("{p}-{c}"),
+        parent_body: p.into(),
+        parent_node: pn.into(),
+        child_body: c.into(),
+        child_node: cn.into(),
+        hatch_open: true,
+    };
+    assert!(
+        crate::compile_assembly(
+            &[a, b, c],
+            &[
+                mk("a", "top", "b", "base"),
+                mk("b", "b2", "c", "base"),
+                mk("c", "c2", "a", "a2"),
+            ]
+        )
+        .is_err()
+    );
+}

@@ -6,8 +6,8 @@ use thessa_aero_surfaces::{
     CollisionOptions, CompileOptions, MechanismState, ProceduralSurface, compile_surface,
 };
 use thessa_fuselage::{
-    BodyCollisionOptions, BodyCompileOptions, ProceduralBody, RegionKind, body_collision_parts,
-    compile_body,
+    AssemblyLink, BodyCollisionOptions, BodyCompileOptions, ProceduralBody, RegionKind,
+    body_collision_parts, compile_assembly, compile_body,
 };
 use thessa_sim_core::{
     AeroGeometry, AeroPanel, AirCycle, AirbreathingSpec, AtmosphereConfig, ChamberMaterial,
@@ -515,6 +515,70 @@ struct VehicleAsset {
     /// Gas turbines coupled to propellers through an explicit power turbine.
     #[serde(default)]
     turboprops: Vec<TurbopropAsset>,
+    /// Part-assembly links between procedural bodies (`body.node`
+    /// endpoints). Validated topology plus a connectivity report; merged
+    /// assembly physics arrives in a later slice. Empty skips validation.
+    #[serde(default)]
+    assembly: AssemblyAsset,
+}
+
+/// Optional assembly section of the vehicle asset.
+///
+/// ```text
+/// [[assembly.links]]
+/// name = "stack"
+/// parent = "stage.top"
+/// child = "capsule.base"
+/// hatch_open = true
+/// ```
+#[derive(Debug, Default, Deserialize)]
+struct AssemblyAsset {
+    #[serde(default)]
+    links: Vec<AssemblyLinkAsset>,
+}
+
+/// One assembly link asset: `body.node` endpoints plus initial hatch state.
+#[derive(Debug, Deserialize)]
+struct AssemblyLinkAsset {
+    name: String,
+    parent: String,
+    child: String,
+    /// Initial hatch state (stack links are always open). Defaults open.
+    #[serde(default = "hatch_open_default")]
+    hatch_open: bool,
+}
+
+fn hatch_open_default() -> bool {
+    true
+}
+
+/// Resolve `body.node` link endpoints into compiler links.
+fn resolve_assembly_links(links: &[AssemblyLinkAsset]) -> Result<Vec<AssemblyLink>, String> {
+    fn endpoint(value: &str, link: &str) -> Result<(String, String), String> {
+        value.split_once('.').map_or_else(
+            || {
+                Err(format!(
+                    "assembly link '{link}' endpoint '{value}' must be 'body.node'"
+                ))
+            },
+            |(body, node)| Ok((body.into(), node.into())),
+        )
+    }
+    links
+        .iter()
+        .map(|link| {
+            let (parent_body, parent_node) = endpoint(&link.parent, &link.name)?;
+            let (child_body, child_node) = endpoint(&link.child, &link.name)?;
+            Ok(AssemblyLink {
+                name: link.name.clone(),
+                parent_body,
+                parent_node,
+                child_body,
+                child_node,
+                hatch_open: link.hatch_open,
+            })
+        })
+        .collect()
 }
 
 impl VehicleAsset {
@@ -781,6 +845,24 @@ impl VehicleAsset {
                     .map_err(|error| format!("body '{}': {error}", body.name))?;
                 println!("body '{}': {} contact parts", body.name, parts.len());
                 body_contact_parts.extend(parts);
+            }
+        }
+        // Part assembly: validated topology plus crew/air sharing domains
+        // and fuel reachability. Merged assembly physics (transforms,
+        // joints) arrives in a later slice; this step owns topology truth.
+        if !self.assembly.links.is_empty() {
+            let links = resolve_assembly_links(&self.assembly.links)?;
+            let assembly = compile_assembly(&self.procedural_bodies, &links)
+                .map_err(|error| format!("assembly: {error}"))?;
+            println!("assembly root: {}", assembly.root);
+            for (index, group) in assembly.crew_groups.iter().enumerate() {
+                println!("assembly crew domain {index}: {} volumes", group.len());
+            }
+            for (index, group) in assembly.air_groups.iter().enumerate() {
+                println!("assembly air domain {index}: {} volumes", group.len());
+            }
+            for path in &assembly.feed_paths {
+                println!("assembly feed: {} -> {}", path.tank, path.engine_port);
             }
         }
         // Bake mounts first (authoring stations): the single final COM
@@ -3712,5 +3794,45 @@ mod cabin_wiring_tests {
             .expect("debark");
         assert!(!eva.control_authority().controllable);
         assert!(eva.apply_control_inputs(&[]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod assembly_wiring_tests {
+    use super::*;
+
+    #[test]
+    fn example_assembly_validates_links_and_reports_domains() {
+        let asset: VehicleAsset =
+            toml::from_str(include_str!("../../../data/vehicles/example_assembly.toml"))
+                .expect("assembly TOML should parse");
+        assert_eq!(asset.procedural_bodies.len(), 2);
+        assert_eq!(asset.assembly.links.len(), 1);
+        let links = resolve_assembly_links(&asset.assembly.links).expect("links resolve");
+        let assembly = thessa_fuselage::compile_assembly(&asset.procedural_bodies, &links)
+            .expect("assembly compiles");
+        let vehicle = asset.bake().expect("assembly asset should bake");
+        assert_eq!(assembly.root, "stage");
+        // Open hatch: one crew domain holding the capsule cabin.
+        assert_eq!(assembly.crew_groups.len(), 1);
+        assert_eq!(assembly.crew_groups[0].len(), 1);
+        // Stage tank feeds the stage engine through the open link.
+        assert!(
+            assembly
+                .feed_paths
+                .iter()
+                .any(|path| path.tank == "stage.tank" && path.engine_port == "stage.engine")
+        );
+        assert!(vehicle.mass_properties.mass_kg > 1500.0);
+        // Malformed endpoints refuse with a named error.
+        assert!(
+            resolve_assembly_links(&[AssemblyLinkAsset {
+                name: "bad".into(),
+                parent: "stage".into(),
+                child: "capsule.base".into(),
+                hatch_open: true,
+            }])
+            .is_err()
+        );
     }
 }

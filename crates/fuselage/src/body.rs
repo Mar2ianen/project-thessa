@@ -671,6 +671,82 @@ impl BodyHeatShield {
     }
 }
 
+/// Attachment node kind: plain structural stack (resources flow, crew
+/// never passes) vs hatch (structural + resources + crew/air when open).
+/// A hatch node mates any node kind; a stack node has no door and is
+/// always open on its side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AttachKind {
+    Stack,
+    Hatch,
+}
+
+/// Where on the loft a node sits: blunt ends or an explicit station.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AttachSite {
+    AftEnd,
+    ForwardEnd,
+    Station { x_m: f64 },
+}
+
+/// One KSP-style attach node authored separately from the loft
+/// primitive, like ports and heat shields. Diameter derives from the
+/// local section unless authored explicitly (docking standards).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AttachNode {
+    pub name: String,
+    pub site: AttachSite,
+    pub kind: AttachKind,
+    /// Interface diameter in metres (`None` = local section diameter).
+    #[serde(default)]
+    pub diameter_m: Option<f64>,
+}
+
+impl AttachNode {
+    pub fn new(
+        name: impl Into<String>,
+        site: AttachSite,
+        kind: AttachKind,
+        diameter_m: Option<f64>,
+    ) -> Result<Self, FuselageError> {
+        let node = Self {
+            name: name.into(),
+            site,
+            kind,
+            diameter_m,
+        };
+        node.validate()?;
+        Ok(node)
+    }
+
+    pub fn validate(&self) -> Result<(), FuselageError> {
+        if self.name.trim().is_empty() {
+            return Err(FuselageError::InvalidBody(
+                "attach node needs a name".into(),
+            ));
+        }
+        if let AttachSite::Station { x_m } = self.site
+            && (!x_m.is_finite())
+        {
+            return Err(FuselageError::InvalidBody(format!(
+                "attach node '{}' station must be finite",
+                self.name
+            )));
+        }
+        if let Some(diameter) = self.diameter_m
+            && (!diameter.is_finite() || diameter <= 0.0)
+        {
+            return Err(FuselageError::InvalidBody(format!(
+                "attach node '{}' needs diameter_m > 0",
+                self.name
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Which pair of the fuselage compiler's orthogonal normal-force strips is
 /// driven by a body-mounted aerodynamic control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -999,6 +1075,9 @@ pub struct ProceduralBody {
     /// Detachable heat shields on the blunt ends (separate parts).
     #[serde(default)]
     pub heat_shields: Vec<BodyHeatShield>,
+    /// KSP-style attach nodes for assembly links (separate details).
+    #[serde(default)]
+    pub attach_nodes: Vec<AttachNode>,
     /// Axial regions assigned to control inputs over generated body strips.
     #[serde(default)]
     pub controls: Vec<BodyControlRegion>,
@@ -1020,6 +1099,7 @@ impl ProceduralBody {
             regions: Vec::new(),
             ports: Vec::new(),
             heat_shields: Vec::new(),
+            attach_nodes: Vec::new(),
             controls: Vec::new(),
             structure: None,
         };
@@ -1105,6 +1185,24 @@ impl ProceduralBody {
                 return Err(FuselageError::InvalidBody(format!(
                     "heat shield '{}' needs a blunt end (got {:.3} m diameter)",
                     shield.name, end_diameter
+                )));
+            }
+        }
+        let mut node_names = std::collections::HashSet::new();
+        for node in &self.attach_nodes {
+            node.validate()?;
+            if !node_names.insert(node.name.as_str()) {
+                return Err(FuselageError::InvalidBody(format!(
+                    "attach node '{}' is defined twice on '{}'",
+                    node.name, self.name
+                )));
+            }
+            if let AttachSite::Station { x_m } = node.site
+                && (x_m < x_first - 1e-9 || x_m > x_last + 1e-9)
+            {
+                return Err(FuselageError::InvalidBody(format!(
+                    "attach node '{}' lies outside the station range",
+                    node.name
                 )));
             }
         }

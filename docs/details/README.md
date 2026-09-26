@@ -12,4 +12,5 @@ These notes define stable design intent and cross-system invariants. Exact balan
 - [Procedural aerodynamic surfaces](02_PROCEDURAL_AERO_SURFACES.md) — spline-authored wings/fins, mechanization, nested control surfaces, and hangar compilation into solver-ready aerodynamic panels.
 - [Procedural fuselages and body modules](03_PROCEDURAL_FUSELAGES.md) — revolve/loft body authoring, derived structure/interior volume, semantic modules and presets, with a constrained path toward future cutouts.
 - [Procedural propulsion systems](04_PROCEDURAL_PROPULSION.md) — component/flow-graph propulsion covering chemical rockets, nuclear thermal, gas turbines, atmospheric-reactant engines, electric/plasma propulsion, combined cycles, and fusion systems.
-- [Cabin editor](05_CABIN_EDITOR.md) — design before implementation: one parametric cabin model for airliners (747, Concorde) and fighter cockpits over the existing interior/crew/pressure primitives.
+- [Cabin editor](05_CABIN_EDITOR.md) — one parametric cabin model for airliners (747, Concorde) and fighter cockpits; suits, venting/EVA rules, and control authority implemented, seat blocks/decks pending.
+- [Part attachment and assembly](06_ATTACHMENT_MODEL.md) — KSP-style attach nodes, validated assembly trees, passable crew/air domains, and fuel reachability; merged assembly physics later.

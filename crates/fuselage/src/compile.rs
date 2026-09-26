@@ -804,7 +804,9 @@ impl<'a> Compiler<'a> {
                     control.name
                 )));
             }
-            let section = self.body.section_at(control.x0_m);
+            // Body stations run tail-to-nose with +X forward, so the
+            // control's forward/leading axial boundary is its larger x.
+            let section = self.body.section_at(control.x1_m);
             let hinge_point = self.section_center(section)? + self.body.origin_body_m;
             // Positive pitch/yaw commands preserve the existing body-control
             // sign convention while now rotating the strip geometry itself.

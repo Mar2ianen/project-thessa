@@ -178,6 +178,9 @@ pub struct CompiledRegion {
     /// Installed seat places (crew regions only).
     #[serde(default)]
     pub seats: u32,
+    /// Upright seats vs reclined couches.
+    #[serde(default)]
+    pub seat_style: crate::SeatStyle,
     /// Seat anchors in body-local metres, forward-facing on the section
     /// centerline (crew regions only; empty otherwise).
     #[serde(default)]
@@ -960,19 +963,30 @@ impl<'a> Compiler<'a> {
             .unwrap_or(0.0);
         for region in &self.body.regions {
             let (volume, volume_error, centroid) = self.region_volume(region, &leaves, wall_m)?;
-            let (payload, seats, seat_anchors) = match region.kind {
-                RegionKind::Cargo { payload_mass_kg } => (payload_mass_kg, 0, Vec::new()),
+            let (payload, seats, seat_style, seat_anchors) = match region.kind {
+                RegionKind::Cargo { payload_mass_kg } => {
+                    (payload_mass_kg, 0, crate::SeatStyle::Upright, Vec::new())
+                }
                 RegionKind::Crew {
                     seats,
                     seat_mass_kg_each,
                     occupant_mass_kg_each,
                     seat_pitch_m,
+                    abreast,
+                    seat_style,
                 } => (
                     seats as f64 * (seat_mass_kg_each + occupant_mass_kg_each),
                     seats,
-                    self.seat_anchors(region.x0_m, region.x1_m, seats, seat_pitch_m)?,
+                    seat_style,
+                    self.seat_anchors(
+                        region.x0_m,
+                        region.x1_m,
+                        seats,
+                        seat_pitch_m,
+                        abreast.unwrap_or(1),
+                    )?,
                 ),
-                _ => (0.0, 0, Vec::new()),
+                _ => (0.0, 0, crate::SeatStyle::Upright, Vec::new()),
             };
             if payload > 0.0 {
                 hull_mass_kg += payload;
@@ -1166,6 +1180,7 @@ impl<'a> Compiler<'a> {
                 centroid_body_m: centroid,
                 payload_mass_kg: payload,
                 seats,
+                seat_style,
                 seat_positions_body_m: seat_anchors,
                 air_mass_kg,
                 o2_mass_kg,
@@ -1412,28 +1427,52 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    /// Seat anchors for a crew region: one forward-facing place per seat
-    /// on the loft centerline. Even spread by default; explicit pitch
-    /// centers the row (validated to fit at authoring time).
+    /// Seat anchors for a crew region: transverse rows of forward-facing
+    /// places on the loft centerline. Rows spread evenly along the axis
+    /// by default; explicit pitch centers them (validated to fit at
+    /// authoring time). Within a row, places spread across the local
+    /// section width and refuse if the row overflows the loft — the same
+    /// row rule will serve multi-aisle airplane cabins later.
     fn seat_anchors(
         &self,
         x0_m: f64,
         x1_m: f64,
         seats: u32,
         seat_pitch_m: Option<f64>,
+        abreast: u32,
     ) -> Result<Vec<DVec3>, FuselageError> {
-        let mut anchors = Vec::with_capacity(seats as usize);
+        let abreast = abreast.max(1);
+        let rows = seats.div_ceil(abreast);
         let length = x1_m - x0_m;
-        for index in 0..seats {
+        let mut anchors = Vec::with_capacity(seats as usize);
+        for row in 0..rows {
             let x = match seat_pitch_m {
                 Some(pitch) => {
-                    let row = (seats as f64 - 1.0) * pitch;
-                    0.5 * (x0_m + x1_m) - 0.5 * row + index as f64 * pitch
+                    let block = (rows as f64 - 1.0) * pitch;
+                    0.5 * (x0_m + x1_m) - 0.5 * block + row as f64 * pitch
                 }
-                None => x0_m + (index as f64 + 0.5) * length / seats as f64,
+                None => x0_m + (row as f64 + 0.5) * length / rows as f64,
             };
-            let center = self.section_center(self.body.section_at(x))?;
-            anchors.push(center);
+            let section = self.body.section_at(x);
+            let center = self.section_center(section)?;
+            let in_row = (seats - row * abreast).min(abreast);
+            // Shoulder room per place, capped so the outer place stays
+            // inside the local section.
+            let spacing = if in_row > 1 {
+                (0.55_f64).min(1.6 * section.half_width_m / (in_row as f64 - 1.0))
+            } else {
+                0.0
+            };
+            for place in 0..in_row {
+                let y = (place as f64 - (in_row as f64 - 1.0) / 2.0) * spacing;
+                if y.abs() > section.half_width_m * 0.95 + 1e-9 {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "seat row at x={x:.2} m overflows the {:.2} m half-width",
+                        section.half_width_m,
+                    )));
+                }
+                anchors.push(DVec3::new(x, center.y + y, center.z));
+            }
         }
         Ok(anchors)
     }

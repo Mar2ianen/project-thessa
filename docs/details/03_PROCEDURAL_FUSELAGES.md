@@ -197,6 +197,37 @@ than guessing. A pressurized region with no structural layout refuses
 for the same reason. Failures name the required gauge so the author
 thickens the skin, derates pressure, or picks a stronger alloy.
 
+## Capsule cabins
+
+`crates/fuselage/src/capsule.rs` builds blunt capsule pressure vessels
+parametrically: a conical frustum (base/top diameter, height) or a full
+sphere, lofted tail-to-nose with the blunt base closing on the
+heat-shield plane at compile time. The crew rides low near the shield
+(`5-65%` of frustum height, `20-80%` of a sphere) with couches
+side-by-side, sea-level air by default, and a nose docking hatch where
+the frustum top fits one (spheres keep their side hatch).
+
+Representative presets (public dimensions, regression-grade):
+
+| preset | shape | crew | layout |
+|---|---|---|---|
+| Mercury | 1.89 m bell | 1 couch | single |
+| Gemini | 3.05 m frustum | 2 upright seats | 2 abreast |
+| Apollo CM | 3.91 m cone | 3 couches | 3 abreast |
+| Orion (Artemis) | 5.0 m cone | 4 couches | 2 x 2 |
+| Crew Dragon | 4.0 m cone | 4 upright seats | 2 x 2 |
+| Vostok | 2.3 m sphere | 1 couch | single, no dock |
+
+Couches are `Crew` places with `seat_style = "couch"` and an `abreast`
+row width; anchors spread across the local section and refuse if a row
+overflows the loft. Couch mass defaults to 30 kg each in the presets
+(typical strap couch, not a 12 kg aircraft seat).
+
+Airplane-like cabins are not started, but the design already anticipates
+them: `abreast` rows, pitch validation, and the upright/couch tag are
+the same primitives a multi-aisle layout needs. Galleys, lavatories,
+doors/overwing exits, and evacuation rules remain future module work.
+
 A `Crew` region places seats: `seats` distributes along the region while
 seat plus occupant mass aggregates at the region centroid like cargo
 manifest (seat default 12 kg each, occupants default 0 for unoccupied

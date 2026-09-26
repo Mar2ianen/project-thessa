@@ -1119,6 +1119,8 @@ fn bipropellant_rejects_monoprop_and_bad_mixture() {
                 seat_mass_kg_each: 12.0,
                 occupant_mass_kg_each: 0.0,
                 seat_pitch_m: None,
+                abreast: None,
+                seat_style: crate::SeatStyle::Upright,
             },
         )
         .is_err()
@@ -1147,6 +1149,8 @@ fn crew_cabin_seats_ride_hull_mass_at_centroid() {
                 seat_mass_kg_each: 12.0,
                 occupant_mass_kg_each: 90.0,
                 seat_pitch_m: None,
+                abreast: None,
+                seat_style: crate::SeatStyle::Upright,
             },
         )
         .unwrap(),
@@ -1392,6 +1396,8 @@ fn crew_seat_anchors_line_up_on_the_centerline() {
                 seat_mass_kg_each: 12.0,
                 occupant_mass_kg_each: 0.0,
                 seat_pitch_m: Some(0.8),
+                abreast: None,
+                seat_style: crate::SeatStyle::Upright,
             },
         )
         .unwrap(),
@@ -1425,6 +1431,8 @@ fn crew_seat_anchors_line_up_on_the_centerline() {
                 seat_mass_kg_each: 12.0,
                 occupant_mass_kg_each: 0.0,
                 seat_pitch_m: Some(0.8),
+                abreast: None,
+                seat_style: crate::SeatStyle::Upright,
             },
         )
         .is_err()
@@ -1601,6 +1609,8 @@ fn crew_with_atmosphere_aggregates_air_and_seats() {
                 seat_mass_kg_each: 12.0,
                 occupant_mass_kg_each: 90.0,
                 seat_pitch_m: None,
+                abreast: None,
+                seat_style: crate::SeatStyle::Upright,
             },
             CabinAtmosphere::sea_level(),
         )
@@ -1674,4 +1684,178 @@ max_wall_temp_k = 400.0
     let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
     assert!(compiled.interior[0].air_mass_kg > 0.0);
     assert!(compiled.interior[0].o2_mass_kg > 0.0);
+}
+
+#[test]
+fn capsule_frustum_matches_closed_form_volume() {
+    use crate::{CapsuleParams, CapsuleShape, capsule_body};
+    use glam::DVec3;
+
+    // V = pi*h/3 * (R^2 + R*r + r^2) for R=2, r=1, h=3.
+    let params = CapsuleParams {
+        name: "frustum-check".into(),
+        shape: CapsuleShape::Frustum {
+            base_diameter_m: 4.0,
+            top_diameter_m: 2.0,
+            height_m: 3.0,
+        },
+        crew: 1,
+        seat_style: crate::SeatStyle::Couch,
+        abreast: 1,
+        couch_mass_kg_each: 30.0,
+        occupant_mass_kg_each: 0.0,
+        atmosphere: None,
+        structure: None,
+        origin_body_m: DVec3::ZERO,
+        divisions: 4,
+    };
+    let body = capsule_body(&params).unwrap();
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let expected = std::f64::consts::PI * 3.0 / 3.0 * (4.0 + 2.0 + 1.0);
+    assert!(
+        (compiled.summary.enclosed_volume_m3 - expected).abs() / expected < 1e-9,
+        "volume = {}",
+        compiled.summary.enclosed_volume_m3
+    );
+}
+
+#[test]
+fn capsule_sphere_matches_closed_form_volume() {
+    use crate::{CapsuleParams, CapsuleShape, capsule_body};
+    use glam::DVec3;
+
+    let params = CapsuleParams {
+        name: "sphere-check".into(),
+        shape: CapsuleShape::Sphere { diameter_m: 2.0 },
+        crew: 1,
+        seat_style: crate::SeatStyle::Couch,
+        abreast: 1,
+        couch_mass_kg_each: 30.0,
+        occupant_mass_kg_each: 0.0,
+        atmosphere: None,
+        structure: None,
+        origin_body_m: DVec3::ZERO,
+        divisions: 24,
+    };
+    let body = capsule_body(&params).unwrap();
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    // Latitude loft cuts chords between stations, so the volume converges
+    // from below quadratically; 24 rings land within 1%.
+    let expected = 4.0 / 3.0 * std::f64::consts::PI;
+    assert!(
+        (compiled.summary.enclosed_volume_m3 - expected).abs() / expected < 0.01,
+        "volume = {}",
+        compiled.summary.enclosed_volume_m3
+    );
+}
+
+#[test]
+fn capsule_presets_carry_crew_air_and_docks() {
+    use crate::{apollo_cm, crew_dragon, gemini, mercury, orion, vostok};
+
+    // Apollo: three couches abreast in a single row, sea-level air,
+    // nose docking hatch.
+    let apollo = apollo_cm().unwrap();
+    let compiled = compile_body(&apollo, &BodyCompileOptions::default()).unwrap();
+    let cabin = &compiled.interior[0];
+    assert_eq!(cabin.seats, 3);
+    assert_eq!(cabin.seat_style, crate::SeatStyle::Couch);
+    assert_eq!(cabin.seat_positions_body_m.len(), 3);
+    let xs: Vec<f64> = cabin
+        .seat_positions_body_m
+        .iter()
+        .map(|seat| seat.x)
+        .collect();
+    assert!((xs[0] - xs[1]).abs() < 1e-9 && (xs[1] - xs[2]).abs() < 1e-9);
+    let mut ys: Vec<f64> = cabin
+        .seat_positions_body_m
+        .iter()
+        .map(|seat| seat.y)
+        .collect();
+    ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert!((ys[0] + 0.55).abs() < 1e-9 && ys[1].abs() < 1e-9 && (ys[2] - 0.55).abs() < 1e-9);
+    assert!(cabin.air_mass_kg > 0.0 && cabin.o2_mass_kg > 0.0);
+    assert!(
+        compiled
+            .ports
+            .iter()
+            .any(|port| port.name == "docking-nose")
+    );
+
+    // Gemini: two upright seats side-by-side; Dragon/Orion: four places
+    // in two rows of two.
+    for (body, seats, rows) in [
+        (gemini().unwrap(), 2, 1),
+        (crew_dragon().unwrap(), 4, 2),
+        (orion().unwrap(), 4, 2),
+        (mercury().unwrap(), 1, 1),
+        (vostok().unwrap(), 1, 1),
+    ] {
+        let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+        let cabin = &compiled.interior[0];
+        assert_eq!(cabin.seats, seats, "{}", body.name);
+        assert_eq!(cabin.seat_positions_body_m.len() as u32, seats);
+        let mut row_xs: Vec<i64> = cabin
+            .seat_positions_body_m
+            .iter()
+            .map(|seat| (seat.x * 1.0e9) as i64)
+            .collect();
+        row_xs.sort();
+        row_xs.dedup();
+        assert_eq!(row_xs.len() as u32, rows, "{}", body.name);
+        assert!(cabin.air_mass_kg > 0.0, "{}", body.name);
+    }
+    // Vostok sphere keeps its side hatch: no nose dock.
+    let vostok_compiled = compile_body(&vostok().unwrap(), &BodyCompileOptions::default()).unwrap();
+    assert!(vostok_compiled.ports.is_empty());
+}
+
+#[test]
+fn capsule_authoring_fails_closed() {
+    use crate::{CapsuleParams, CapsuleShape, capsule_body};
+    use glam::DVec3;
+
+    let base = CapsuleParams {
+        name: "capsule".into(),
+        shape: CapsuleShape::Frustum {
+            base_diameter_m: 3.0,
+            top_diameter_m: 1.0,
+            height_m: 3.0,
+        },
+        crew: 2,
+        seat_style: crate::SeatStyle::Couch,
+        abreast: 2,
+        couch_mass_kg_each: 30.0,
+        occupant_mass_kg_each: 0.0,
+        atmosphere: None,
+        structure: None,
+        origin_body_m: DVec3::ZERO,
+        divisions: 4,
+    };
+    // Nose wider than the base is not a capsule.
+    assert!(
+        capsule_body(&CapsuleParams {
+            shape: CapsuleShape::Frustum {
+                base_diameter_m: 1.0,
+                top_diameter_m: 3.0,
+                height_m: 3.0,
+            },
+            ..base.clone()
+        })
+        .is_err()
+    );
+    assert!(
+        capsule_body(&CapsuleParams {
+            crew: 0,
+            ..base.clone()
+        })
+        .is_err()
+    );
+    assert!(
+        capsule_body(&CapsuleParams {
+            abreast: 3,
+            ..base.clone()
+        })
+        .is_err()
+    );
 }

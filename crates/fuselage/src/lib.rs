@@ -49,6 +49,7 @@
 //! baker test next door proves the hangar-side wiring instead.
 
 mod body;
+mod capsule;
 mod collision;
 mod compile;
 mod error;
@@ -60,7 +61,12 @@ mod summary;
 
 pub use body::{
     BodyControlPlane, BodyControlRegion, BodyPort, BodyStructuralLayout, CabinAtmosphere,
-    HullMaterial, InteriorRegion, PortKind, ProceduralBody, RegionKind, StoredFluid, TankShell,
+    HullMaterial, InteriorRegion, PortKind, ProceduralBody, RegionKind, SeatStyle, StoredFluid,
+    TankShell,
+};
+pub use capsule::{
+    CapsuleParams, CapsuleShape, apollo_cm, capsule_body, crew_dragon, gemini, mercury, orion,
+    vostok,
 };
 pub use collision::{BodyCollisionOptions, body_collision_parts};
 pub use compile::{

@@ -61,6 +61,19 @@ pub enum TankShell {
     Sphere,
 }
 
+/// How crew places are oriented: upright aircraft-style seats or
+/// reclined capsule couches. The tag travels to the compiled interior so
+/// renderer and crew systems orient bodies later; anchors already encode
+/// the transverse couch rows. Airplane cabins (future) reuse `Upright`
+/// with multi-abreast rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SeatStyle {
+    #[default]
+    Upright,
+    Couch,
+}
+
 /// What a slice of the usable interior does. Geometry and structure are
 /// shared; purpose is assigned per longitudinal region.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -144,6 +157,14 @@ pub enum RegionKind {
         /// Longitudinal pitch between places; `None` spreads evenly.
         #[serde(default)]
         seat_pitch_m: Option<f64>,
+        /// Places per transverse row (`None` = single column). Couches
+        /// ride side-by-side like Apollo; airplane cabins will use wider
+        /// upright rows.
+        #[serde(default)]
+        abreast: Option<u32>,
+        /// Upright seats vs reclined couches.
+        #[serde(default)]
+        seat_style: SeatStyle,
     },
     /// Pressurized cargo volume plus explicit manifest mass.
     Cargo {
@@ -406,7 +427,23 @@ impl InteriorRegion {
                 seat_mass_kg_each,
                 occupant_mass_kg_each,
                 seat_pitch_m,
+                abreast,
+                ..
             } => {
+                if seats == 0 || seats > 1000 {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "region '{}' needs seats in [1, 1000]",
+                        self.name
+                    )));
+                }
+                if let Some(abreast) = abreast
+                    && (abreast == 0 || abreast > seats)
+                {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "region '{}' needs abreast in [1, seats]",
+                        self.name
+                    )));
+                }
                 if seats == 0 || seats > 1000 {
                     return Err(FuselageError::InvalidInterior(format!(
                         "region '{}' needs seats in [1, 1000]",
@@ -432,8 +469,9 @@ impl InteriorRegion {
                             self.name
                         )));
                     }
+                    let rows = seats.div_ceil(abreast.unwrap_or(1).max(1));
                     let length = self.x1_m - self.x0_m;
-                    if (seats as f64 - 1.0) * pitch > length + 1e-9 {
+                    if (rows as f64 - 1.0) * pitch > length + 1e-9 {
                         return Err(FuselageError::InvalidInterior(format!(
                             "region '{}' seats at {pitch} m pitch do not fit in {length:.2} m",
                             self.name

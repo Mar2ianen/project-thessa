@@ -1,11 +1,13 @@
 # 20 — Advanced aerodynamic effectors: flaps, spoilers, grid fins, body flaps
 
-Status: design target — flaps/spoilers/hinged-panels/grid-fins, neutral bounds,
-`AeroEffectorModel`, and the high-speed effects plan (§§17–20: sonic boom,
-buffet, vapor/cone/contrail visuals, plasma blackout, vortex lift, ground
-effect, icing hooks) not implemented; incidence-only control is the runtime.
+Status: partial foundation — conventional panel controls use the incidence
+effector, and procedural fuselage pitch/yaw strips support hinged geometry with
+load-limited actuators. Dedicated flap/spoiler/grid-fin models, general neutral
+bounds, `AeroEffectorModel`, and the high-speed effects plan (§§17–20: sonic
+boom, buffet, vapor/cone/contrail visuals, plasma blackout, vortex lift, ground
+effect, icing hooks) remain future work.
 
-Status: **design target**.
+Status: **design target with implemented control foundations**.
 
 This doc describes the next realtime-aero layer on top of the existing `PanelAeroModel`: high-lift devices, spoilers/speedbrakes, grid fins, and large Starship-class hinged body flaps. The goal is to extend the already working O(panels) solver without turning the runtime into CFD and without introducing separate `Aircraft`, `Rocket`, or `Starship` classes.
 
@@ -23,7 +25,12 @@ The current `thessa-sim-core` already has the right foundation:
 - optional Tier B coefficient tables;
 - `ControlSurfaceDefinition`, which links one physical control channel to one or more panels.
 
-`ControlSurfaceDefinition` already admits elevator, split elevons, rudder, flaps, and procedural surfaces in comments. But the current physical control-surface model is effectively just one:
+The general `ControlSurfaceDefinition` panel path still represents conventional
+surfaces through control-dependent incidence. Procedural fuselage body strips
+also have a separate implemented hinge path that rotates generated panel
+geometry and applies actuator rate/torque limits. Neither path currently models
+the additional local-flow changes and separation behavior needed by general
+spoilers or grid fins. The incidence path is:
 
 ```text
 alpha_eff = alpha_aero + effectiveness * control_gain * deflection

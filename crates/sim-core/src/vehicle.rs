@@ -339,8 +339,9 @@ pub struct VehicleDefinition {
     pub parachutes: Vec<ParachuteSpec>,
     /// Fold joints compiled from procedural surfaces (hinge placement in
     /// the compiled mechanism state). The force solver ignores them; the
-    /// mechanism mixer transforms `fold_index`-tagged panels about these
-    /// hinges. Empty keeps every legacy asset valid.
+    /// records and panel ownership are retained for mechanism integration,
+    /// but flight stepping does not currently animate aerodynamic folds.
+    /// Empty keeps every legacy asset valid.
     #[serde(default)]
     pub fold_joints: Vec<FoldJointRecord>,
 }
@@ -356,8 +357,9 @@ pub struct VehicleWheelMassSplit {
 }
 
 /// One compiled fold joint: hinge placement plus compiled angle, in
-/// vehicle body metres. Panels tagged with this joint's index rotate
-/// rigidly about the hinge axis; untagged panels stay put.
+/// vehicle body metres. Panels tagged with this joint's index identify the
+/// region that a future runtime fold transform will rotate about the hinge;
+/// this record alone does not animate them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FoldJointRecord {
     /// Joint name (`surface.joint` qualified by the baker across surfaces).
@@ -368,18 +370,16 @@ pub struct FoldJointRecord {
     pub axis_body: DVec3,
     /// Compiled angle in radians.
     pub angle_rad: f64,
-    /// As-drawn flight (deployed) angle in radians: the runtime rotates
-    /// tagged panels by `angle_rad - deployed_angle_rad`, so a vehicle
-    /// baked deployed starts at the identity transform.
+    /// As-drawn flight (deployed) angle in radians. A deployed bake has
+    /// `angle_rad == deployed_angle_rad`; a future runtime mechanism can use
+    /// their difference as the transform from the baked panel geometry.
     pub deployed_angle_rad: f64,
     /// Parent joint in the fold hierarchy (index into the same vehicle
-    /// joint list): panels tagged with this joint also ride every
-    /// ancestor up to the root. `None` for root joints. The runtime
-    /// builds the transform chain bone-style instead of storing chains
-    /// on panels.
+    /// joint list), retained for a future mechanism evaluator. `None` for
+    /// root joints.
     #[serde(default)]
     pub parent_joint: Option<usize>,
-    /// Deployment rate limit in rad/s (actuator data for the runtime).
+    /// Deployment rate limit in rad/s (actuator data for future runtime use).
     pub deployment_rate_rad_s: f64,
     /// Lock engagement window in radians (the lock may only engage
     /// inside it).

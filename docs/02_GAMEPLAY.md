@@ -59,10 +59,12 @@ parts. A design can include:
   throttle/restart range, gimbal, cooling, and efficiency;
 - actuator, fluid, electrical, structural, and thermal connectivity.
 
-The implemented `VehicleDefinition` and `vehicle-baker` cover the early shared
-asset boundary: geometry, mass/inertia, aero panels, control surfaces, and
-starter propulsion/control data. The editor, full compilation pipeline,
-damage topology, and reusable design database are future work.
+The implemented `VehicleDefinition` and `vehicle-baker` compile procedural
+fuselages and wings, aero panels/body strips and controls, propulsion mounts,
+wheel chassis and fold-out legs, reaction-wheel banks, parachute packs, and
+their mass/inertia contributions. An in-game parametric editor and design
+library, integration of future fluid/electrical/thermal/structural graphs, and
+damage topology are future work.
 
 ## 2.5. Flight and fly-by-wire
 
@@ -72,9 +74,11 @@ policy, allocation, and actuator dynamics. Aerodynamic surfaces, RCS,
 propulsion, and future effectors must produce the result physically.
 
 Available current control concepts include manual axes, attitude/rate
-guidance, aircraft/spacecraft laws, envelope limits, RCS, control surfaces,
-and typed trajectory-plan guidance. High-level guidance does not directly add
-force or moment to the craft.
+guidance, aircraft/spacecraft laws, envelope limits, RCS, reaction wheels,
+control surfaces, landing-gear actuators, parachute deployment, and typed
+trajectory-plan guidance. Pilot part controls use ordered typed commands on the
+authoritative input path. High-level guidance does not directly add force or
+moment to the craft.
 
 ## 2.6. Surface transport
 
@@ -131,9 +135,14 @@ The design direction is:
 3. nuclear electric/ion propulsion;
 4. advanced fusion and torch-class late game.
 
-These are gameplay progression goals, not implemented engine catalogs. Any
-future propulsion feature must feed mass, thrust, propellant, heat, power, and
-actuator contracts rather than grant class-based performance multipliers.
+These remain gameplay progression goals, not a shipped unlock/catalog system.
+The engineering backend already contains authorable chemical, solid, nuclear
+thermal, electric, airbreathing/combined-cycle, and continuous/pulsed fusion
+prototypes; their models and current fidelity boundaries are documented in
+[`details/04_PROCEDURAL_PROPULSION.md`](details/04_PROCEDURAL_PROPULSION.md).
+Future progression must connect those models to mass, thrust, propellant, heat,
+power, and actuator contracts rather than grant class-based performance
+multipliers.
 
 ## 2.10. Failure and maintenance
 

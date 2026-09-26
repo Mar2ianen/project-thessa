@@ -378,18 +378,18 @@ impl Default for GasGiantSettings {
     }
 }
 
-/// Cheap realistic plume: cone mesh + baked gradient/Mach-diamond texture +
-/// flicker + one optional point light. No particles, no volumetrics.
+/// Engine plume quality and optional effects. Low uses the impostor cone;
+/// Medium/High integrate the analytic field through a volume ribbon.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnginePlumeSettings {
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
     pub quality: Quality,
-    /// Mach-diamond bands baked into the emissive texture.
+    /// Enable field-derived shock diamonds (and bands on the Low impostor).
     #[serde(default = "default_true")]
     pub mach_diamonds: bool,
-    /// Throttle-driven flicker; off = steady plume (cheapest).
+    /// Enable plume animation; off freezes the field-time input.
     #[serde(default = "default_true")]
     pub flicker: bool,
     /// One point light at the nozzle; off saves a forward light.

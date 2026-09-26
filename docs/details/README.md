@@ -1,10 +1,14 @@
 # Detail design notes
 
-Status: design baselines (families defined; balance values TBD).
+Status: mixed: design baselines and implemented vehicle-system models. Each
+document marks its own implementation boundary; see [`docs/00_STATUS.md`](../00_STATUS.md)
+for the current project-wide implementation index.
 
 This directory contains focused engineering/gameplay specifications for concrete vehicle, station, infrastructure, and interaction details that are too narrow for the top-level architecture documents.
 
-These notes define stable design intent and cross-system invariants. Exact balance values and implementation details may remain TBD until the relevant simulation subsystem is implemented.
+These notes define design intent, implementation contracts, and cross-system
+invariants. Exact balance values and unimplemented behavior remain marked TBD
+in the relevant document.
 
 ## Index
 

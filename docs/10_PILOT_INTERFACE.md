@@ -22,7 +22,8 @@ simulation state. Contact debug visualization lives in
 | `Space` | engine toggle |
 | `T` | SAS toggle |
 | hold `F` | temporary SAS inversion |
-| `R` / `G` | RCS / gear toggle |
+| `R` / `Y` | RCS / reaction-wheel toggle |
+| `G` / `P` | landing-gear deploy/retract / parachute arm/disarm |
 | `V` | free/follow camera |
 | backquote | reset camera |
 | `Escape` / `F8` / `Pause` | pause |
@@ -31,8 +32,9 @@ simulation state. Contact debug visualization lives in
 | `F3` | extra telemetry |
 | RMB / MMB / wheel | orbit/pan/zoom |
 
-The UI also exposes buttons for SAS, RCS, gear, engine, camera, map, and pause.
-Green indicates an enabled state. Extra data is hidden by default.
+The UI also exposes buttons for SAS, RCS, reaction wheels, gear, parachutes,
+engine, camera, map, and pause. Green indicates an enabled state. Extra data is
+hidden by default.
 
 ## 10.2. Control path
 
@@ -53,8 +55,11 @@ authoritative vehicle state
 ```
 
 The client never writes an authoritative transform. Manual axes, SAS/attitude
-hold, rate guidance, direct mode, RCS, throttle, gear, and reset are commands
-or typed intents. The authority returns snapshots and telemetry.
+hold, rate guidance, direct mode, RCS, reaction wheels, gear, parachutes,
+throttle, and reset are commands or typed intents. Discrete installed-part
+commands are applied to local prediction and sent in order to the embedded
+server; the server remains authoritative. The authority returns snapshots and
+telemetry.
 
 ## 10.3. Speed frames
 

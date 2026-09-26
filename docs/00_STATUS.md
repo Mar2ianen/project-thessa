@@ -1,9 +1,10 @@
 # 00 — Documentation status: implemented vs future
 
-Status: living index. Each row states what is merged reality and what is still
-design. Per-file `Status:` headers agree with this table; open decisions live
-in `docs/06_OPEN_QUESTIONS.md`. Regenerate `data/system.baked.json` via
-`thessa-system-baker` after any `data/system.toml` edit.
+Status: living index, reviewed 2026-09-27. Each row states what is merged
+reality and what is still design. Per-file `Status:` headers agree with this
+table; open decisions live in `docs/06_OPEN_QUESTIONS.md`. Regenerate
+`data/system.baked.json` via `thessa-system-baker` after any `data/system.toml`
+edit.
 
 Legend: ✅ implemented · 🟡 partial (shipped slice + open remainder) ·
 🔵 design baseline/target (no code yet) · 🕰️ historical record (dated audit,
@@ -14,27 +15,33 @@ do not update in place).
 | Doc | Status | Implemented | Future |
 | --- | --- | --- | --- |
 | `01_CELESTIAL_SYSTEM.md` | ✅ reference | baked ephemerides, summed gravity, 32-body working set | stability/Halo/co-orbital validation checklist |
-| `03_PHYSICS_ENGINE.md` | 🟡 prototype | DP5-FSAL + DP8-DOP853, variational STM, EphemerisFrame, monopole tree + single-tick cohorts, thrust/RTN arcs, envelope-barrier + active-set allocator, Rapier contact backend, gated J2/C22 harmonics, tree quadrupole rung | time-span patches, thermal/structural/fluid graphs, CFD, fracture |
+| `03_PHYSICS_ENGINE.md` | 🟡 prototype | DP5-FSAL + DP8-DOP853, variational STM, EphemerisFrame, monopole/quadrupole gravity tree, single-tick cohort patches with Hessian bounds, thrust/RTN arcs, envelope-barrier + active-set allocator, Rapier contact backend, gated J2/C22 harmonics | time-span patches, thermal/structural/fluid graphs, CFD, fracture |
 | `08_NUMERICAL_VERTICAL_SLICE.md` | 🟡 prototype | test-particle contract, baked hierarchy, on-rails/Verlet, harnesses, gated J2/C22 | fitted segments, higher-degree harmonics, joint multi-leg shooting, structural/thermal |
-| `11_AERODYNAMICS.md` | ✅ runtime model | panel SoA/SIMD + tables + upper-band/vacuum reductions | body gas/weather/winds, full wake, hypersonics, arbitrary axes |
-| `20_ADVANCED_AERO_EFFECTORS.md` | 🔵 design target | background only (incidence-only control) | flaps/spoilers/hinged-panels/grid-fins, neutral bounds, `AeroEffectorModel`, high-speed plan (§§17–20: boom/buffet/plasma/vortex/ground-effect) |
+| `11_AERODYNAMICS.md` | ✅ runtime model | panel SoA/SIMD + tables + fuselage Munk strips/body controls + composition-aware atmosphere samples + upper-band/vacuum reductions | per-body vertical atmosphere profiles, weather/winds, full wake/occlusion, high-enthalpy chemistry and viscous hypersonics, arbitrary table axes |
+| `details/02_PROCEDURAL_AERO_SURFACES.md` | 🟡 compiler slice | procedural planform/bend/section compiler, tolerance/error-budget panelization, control ownership, compiled fold-state records, structural sizing, contact parts, vehicle-baker integration | render mesh/editor UX, runtime wing-fold actuation, broader structure/failure coupling, solver-integrated airfoil polars, authored catalogs and balance |
+| `details/03_PROCEDURAL_FUSELAGES.md` | 🟡 implementation slice | loft compiler, interior volumes, pressure-shell/tank regions, aero body strips and controls, mass/inertia, conservative contacts, renderer-neutral mesh | editor UX, cutouts, section roll, fluid redistribution and structural failure |
+| `details/04_PROCEDURAL_PROPULSION.md` | 🟡 broad backend | compiled chemical/solid/nuclear-thermal, airbreathing/ESTOC, electric, shaft-power and continuous/pulsed fusion models with baker/analyzer paths | tank depletion in flight, complete per-engine allocator, transient source fidelity and editor UI |
+| `20_ADVANCED_AERO_EFFECTORS.md` | 🟡 partial foundation | incidence controls and hinged fuselage body strips with load-limited actuators | general flap/spoiler/hinged-panel/grid-fin models, neutral bounds, `AeroEffectorModel`, high-speed plan (§§17–20: boom/buffet/plasma/vortex/ground-effect) |
 | `23_GRAVITY_FIELD_COHORTS.md` | 🟡 partial | monopole tree, quadrupole rung, single-tick patches, Hessian spatial bound | time-span patches, cohort keys, planner-patch reuse, GPU |
 | `24_ANALYTIC_AFFINE_PROPAGATION.md` | ✅ prototype | far-only analytic STM on single-tick cohorts | atmosphere/thrust/contact integration, global proof |
 | `40_RAPIER_COLLISION_INTEGRATION.md` | ✅ baseline | local contact solver, zero-gravity Rapier, readback, regime switch, articulated wheel bodies/joints, sensor-only tire queries, split mass properties, powered wheel/strut/brake/drive stepping | dynamic-body wheel contacts, richer terrain contact boundary, full PBR parity |
-| `details/05_PROCEDURAL_LANDING_GEAR.md` | 🟡 partial | sim-core wheel/tire/strut/brake/drive laws, vehicle-baker TOML grammar, deterministic station compilation, wheel mass/COM bake and sprung/unsprung split, articulated Rapier wheel bodies/joints, powered FlightAuthority spin/brake/drive state and telemetry, static-load/rolling/braking/lunar low-friction regressions, 1–64 wheel-query and articulated serial/parallel benchmarks | dynamic-body wheel contacts, granular soil response, steering/retraction/anti-skid, electrical bus limits, representative fleet benchmarks |
+| `details/05_PROCEDURAL_LANDING_GEAR.md` | 🟡 partial | wheel/tire/strut/brake/drive laws, mass/COM bake, sprung/unsprung split, articulated Rapier wheel bodies/joints, retractable chassis, fold-out legs, powered authority state/telemetry | dynamic-body wheel contacts, granular soil response, steering/anti-skid, electrical bus limits, representative fleet benchmarks |
+| `details/06_REACTION_WHEELS.md` | ✅ implemented model | named banks, per-axis torque allocation, mass/inertia bake, RCS residual routing, telemetry and pilot controls | electrical draw, rotor momentum, thermal state and desaturation |
+| `details/07_PARACHUTES.md` | ✅ implemented model | named packs, pressure/q deployment gates, reefing, aerodynamic loads/failure, mass/inertia bake and telemetry | line elasticity, canopy deformation, inflation shock and packing/reuse |
+| `details/08_VEHICLE_PART_COMMANDS.md` | ✅ implemented API | ordered group/named commands on wire v5, pilot local prediction and server application | stage-definition resolution and action-group routing |
 
 ## World and lore
 
 | Doc | Status | Implemented | Future |
 | --- | --- | --- | --- |
 | `02_WORLD_ATLAS.md` | 🟡 partial | §§1–4, Mora midpoints | §5.1/§7 point at 02B; §8 rules ongoing |
-| `02A_ATMOSPHERE_MODEL.md` | 🟡 partial | data rule + A-system/Janus/Mora rows | TBD cells, Khepri local field, biome coupling |
+| `02A_ATMOSPHERE_MODEL.md` | 🟡 partial | baked mixtures, runtime composition/species queries, A-system/Janus/Mora rows | per-altitude composition/temperature profiles, TBD cells, Khepri local field, biome coupling |
 | `02B_BC_SUBSYSTEM.md` | ✅ reference | working ranges = baked midpoints | formation narrative, canon lock, stability proof |
 | `02C_FAR_COMPANION.md` | 🔵 design target | — (deliberately unbaked) | encounter geometry, cloud phase-space, travel benchmarks |
 | `02D_BIOSPHERE_CHIRALITY.md` | 🔵 future work | — | food-refinery progression, biosafety, narrative |
 | `03_INTERSTELLAR_SCOPE.md` | 🔵 design baseline | — | cloud model, phase-space, travel benchmarks, RSS egg |
 | `13_THESSA_V02_DESIGN.md` | 🟡 partial | bulk values, landmark/biome recipes | §2 stellar proposal, climate/clouds/tidal targets |
-| `02_GAMEPLAY.md` | 🔵 baseline | §2.5 chain; §2.7–2.8 shipped subsets noted | editor, economy, contracts, logistics blocks, certification |
+| `02_GAMEPLAY.md` | 🔵 baseline | §2.5 and §2.7–2.8 describe current flight/automation slices, including vehicle part controls | surface transport, editor, economy, contracts, logistics blocks, certification |
 
 ## Client, render, terrain
 
@@ -42,16 +49,16 @@ do not update in place).
 | --- | --- | --- | --- |
 | `04_RUNTIME_ARCHITECTURE.md` | 🟡 prototype | process split, 120 Hz authority, warp/rails, snapshots, f64→render-local | editor/graphs, persistence, WASM, non-promises |
 | `09_BEVY_VISUAL_SLICE.md` | 🟡 prototype | map/pilot/terrain-CPU/water-cubemap/atmosphere + opt-in GPU CBT + beauty/plume | multiplayer/auth/persistence, WASM |
-| `10_PILOT_INTERFACE.md` | ✅ prototype | HUD/navball/camera/commands/telemetry/snapshot boundary | — |
-| `14_VISUAL_ATMOSPHERE.md` | 🟡 partial | raster/LUT + shell clouds + gas-giant bands + aurora + field-first plume | volumetrics, weather coupling, full Solari |
+| `10_PILOT_INTERFACE.md` | ✅ prototype | HUD/navball/camera, RCS/reaction-wheel/gear/parachute controls, typed part commands, telemetry/snapshot boundary | — |
+| `14_VISUAL_ATMOSPHERE.md` | 🟡 partial | raster/LUT + shell clouds + gas-giant bands + aurora + field-first plume volume | volumetric clouds, weather coupling, full Solari |
 | `19_ALERTING_AND_FLIGHT_PHASES.md` | 🔵 design target | background only (regime/mode inputs) | `FlightPhase`, alerts, arbitration, Slices A–D |
 | `21_TERRAIN_STREAMING_THROUGHPUT.md` | 🔵 baseline | invariants normative | scheduler, geomorph, UMA fast path |
 | `22_RCBT_GPU_TERRAIN.md` | 🟡 baseline | §§1–18 normative, stable height slots, dirty-ordinal geometry dispatch | GPU bisector pool, native Vulkan, compressed pages |
 | `37_CBT_INTEGRATION_STATUS_2026_09_14.md` | ✅ opt-in | fallback + indexed raster + material pages | visual acceptance, numeric comparison, persistent topology |
 | `38_CBT_RENDER_AUDIT_2026_09_15.md` | ✅ audit | defects fixed + follow-ups | bisector pool, shadow parity, FFT ocean, virtual texture |
-| `38_ENGINE_PLUME_RENDERING.md` | 🔵 design target | — (replaces `beauty.rs` smoke test) | residual bricks, RT lighting, Ultra |
+| `38_ENGINE_PLUME_RENDERING.md` | 🟡 implemented renderer slice | backend-neutral plume core, Low impostor, Medium/High field-integrated volume ribbon and field-derived light | live compiled engine/nozzle state in client, adaptive residual integration, ray-traced lighting and higher-quality tiers |
 | `39_BEVY_EXIT_AND_ENGINE_MIGRATION.md` | 🔵 migration plan | policy/freeze rules | §§4–20 migration phases |
-| `41_MICROSCALED_SURFACE_STORAGE.md` | 🟡 partial | codec A–E, allocator, residency, GPU LOD/mip path, game + render-world A/B, measured | crack-free geometry, baked-format adoption, height pages |
+| `41_MICROSCALED_SURFACE_STORAGE.md` | 🟡 experimental | codec A–E, allocator/residency, GPU LOD/mip/aniso path, game + render-world A/B measured; compact path pre-decodes to RGBA and raw remains default | packed material-shader sampling, crack-free geometry, baked-format adoption, production height pages |
 | `45_CAD_RCBT_GEOMETRY.md` | 🔵 design baseline | D1 STEP/BRep fixture audited; existing RCBT + mesh-shader terrain path reused architecturally | CAD importer, normalized BRep runtime, crack-free adaptive face meshing, editor integration |
 | `46_AUDIO_AND_ACOUSTIC_PROPAGATION.md` | 🔵 design baseline | current Bevy host only; no dedicated semantic audio layer yet | backend-neutral events/sources, atmosphere/cabin/structure/suit/radio paths, delayed sonic boom, backend migration |
 
@@ -73,6 +80,6 @@ do not update in place).
 | `35_BLAZE_AUDIT_2026_09_12.md` | 🕰️ record | scoped to base `45e0b79`; see 36 for current status |
 | `36_DOCUMENTATION_AUDIT_2026_09_14.md` | 🕰️ record | snapshot `e1454ac`; superseded by this file for post-merge state |
 | `44_KSA_TECHNICAL_COMPARISON_2026_09_20.md` | 🕰️ external audit | KSA comparison: warp, rings, glints, plume, instruments, body orientation |
-| `details/01–04_*.md` | 🔵 design baselines | docking/aero/fuselage/propulsion families; values TBD |
+| `details/01_DOCKING_PORTS.md` | 🔵 design baseline | interface and gameplay contract | runtime implementation |
 | `REFERENCES.md` | 📚 reference | UX-only refs; Nyx/ANISE isolation; no copied code |
 | `adr/0007–0011` | ✅ accepted | licensing, render boundary, autopilot graphs, aero boundary, RCBT boundary |

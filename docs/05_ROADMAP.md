@@ -22,24 +22,29 @@ segments, and broader reference-vector coverage.
 
 ## M1 — Controllable vehicle and flight lab — partial/implemented prototype
 
-Implemented: serializable vehicle definitions, 6-DoF starter vehicle, control
-surfaces, actuator dynamics, RCS/propulsion demand, authority runtime, Bevy
-pilot HUD, server snapshots, reset path, and flight traces.
+Implemented: serializable vehicle definitions and procedural body baking, 6-DoF
+starter vehicle, control surfaces and body strips, actuator dynamics,
+RCS/reaction-wheel/propulsion demand, retractable wheel chassis and fold-out
+legs, deployable parachutes, ordered vehicle-part commands, authority runtime,
+Bevy pilot HUD, server snapshots, reset path, and flight traces.
 
-Remaining: complete staging, richer propulsion catalogs, wheel interactions
-with dynamic bodies, retractable/steering mechanisms, vehicle editor, and
-production asset workflow. The current articulated wheel runtime, its boundaries
-and acceptance tests are documented in
+Remaining: stage-definition resolution and action-group routing, per-engine
+control allocation, wheel interactions with dynamic bodies, steering/anti-skid,
+vehicle editor, and production asset workflow. The current articulated wheel
+runtime, its boundaries and acceptance tests are documented in
 [`details/05_PROCEDURAL_LANDING_GEAR.md`](details/05_PROCEDURAL_LANDING_GEAR.md).
 
 ## M2 — Aero, spaceplane, thermal, and structure — partial
 
-Implemented: local panel aero, atmosphere rotation, stall/transonic/supersonic
-reduced-order branches, coefficient tables, control laws, and actuator limits.
+Implemented: procedural wing/body compilation, local panel and fuselage-strip
+aero, composition-aware bulk atmosphere properties, atmosphere rotation,
+stall/transonic/supersonic reduced-order branches, coefficient tables, control
+laws, and actuator limits.
 
 Remaining:
 
-- expanded wing/flap/spoiler/grid-fin geometry;
+- general flap/spoiler/grid-fin aerodynamic models beyond the current incidence
+  controls and hinged fuselage-strip actuators;
 - wake/occlusion compiler;
 - structural graph and fracture into multiple bodies;
 - thermal graph, entry heating, and material strength coupling;
@@ -92,15 +97,17 @@ and shared warp vote policy exist as a prototype. Future work includes:
 - transport/replication decision and packaging;
 - native cross-platform and WASM/WebGPU smoke coverage.
 
-## M7 — Nuclear age — future
+## M7 — Nuclear age — future gameplay/content
 
-Fission power, nuclear thermal and electric propulsion, radiators, cryogenics,
-maintenance, and the Orthea/Vesper content layer.
+Nuclear-thermal and electric propulsion models exist in the engineering
+backend. Fission power, radiators, cryogenics, resource/thermal integration,
+maintenance gameplay, and the Orthea/Vesper content layer remain future work.
 
-## M8 — Fusion industrialization — future
+## M8 — Fusion industrialization — future gameplay/content
 
-Isotope separation, breeding chains, pulsed fusion, D–He3, high-power thermal
-systems, and late-game torch-class propulsion.
+Continuous and pulsed fusion propulsion models exist in the engineering
+backend. Isotope separation, breeding chains, D–He3 resource chains, high-power
+thermal systems, and late-game torch gameplay remain future work.
 
 ## M9 — BC endgame — future
 

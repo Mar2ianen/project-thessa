@@ -8,6 +8,25 @@ All project documentation is written in English.
 
 This includes `docs/`, ADRs, architecture/design notes, agent instructions, README-style design prose, and new documentation embedded in configuration examples. Existing non-English documentation should be translated when it is materially edited; do not introduce new non-English documentation.
 
+## 0.1. Documentation/code synchronization
+
+**Do not leave documentation out of sync with the code.** Documentation updates
+are part of the implementation, not optional follow-up work.
+Do not commit or push a change when a known code/documentation mismatch remains.
+
+- When a change affects behavior, public APIs, configuration/assets, wire
+  formats, controls, or implementation status, update the relevant canonical
+  docs and living indexes in the same change.
+- Keep implemented, partial, design, and future-work claims aligned with the
+  current source and tests. Do not preserve stale claims as if they described
+  current behavior.
+- If a document is intentionally a dated audit or historical record, leave its
+  snapshot intact and update the current status/index documents to point to the
+  newer reality.
+- Before finishing, check that the README, relevant feature docs, and
+  `docs/00_STATUS.md` agree with the changed code. If no documentation edit is
+  needed, verify that the existing text remains accurate.
+
 ## 1. Main invariant
 
 **Do not replace physical causality with game coefficients when the effect can be obtained from geometry, material, a field, or an actuator.**

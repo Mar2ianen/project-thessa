@@ -67,9 +67,9 @@ Each chassis has:
 - strut length, usable stroke, spring rate, damping, preload and load limit;
 - a selected brake-actuator rating, replicated per braked wheel;
 - an optional electric drive motor, reduction and driven-wheel count;
-- steering and retraction are separate mechanisms and are outside this first
-  wheel-chassis parameter type. Fold-out legs are authored independently as
-  `LandingLegSpec` entries, up to 16 per vehicle.
+- steering is not implemented in this slice. Retraction is an optional
+  `WheelChassisSpec.retraction` mechanism described in §4.4. Fold-out legs are
+  authored independently as `LandingLegSpec` entries, up to 16 per vehicle.
 
 `length_m` and strut length are distinct quantities. Chassis `length_m` controls
 wheel placement; `strut.extended_length_m` is the distance from the vehicle

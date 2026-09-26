@@ -1,7 +1,9 @@
 # Project Thessa — Atmosphere Model & Tracking Table
 
-Status: partial implementation. A-system/Janus/Mora rows match `data/system.toml`
-pressures; BC-subsystem rows added from the 02B bake; TBD cells stay future.
+Status: partial implementation. Baked compositions and bulk mixture properties
+flow into runtime atmosphere samples and propulsion species queries. A-system/
+Janus/Mora rows match `data/system.toml` pressures; BC-subsystem rows come from
+the 02B bake; unbaked profiles, local fields, and TBD cells stay future.
 
 > Companion to `02_WORLD_ATLAS.md`.
 >
@@ -26,44 +28,43 @@ Each atmosphere should eventually define:
 - aerosol/haze model;
 - biome/local overrides where required.
 
-### 1.1 Runtime atmosphere API contract
+### 1.1 Runtime atmosphere API: shipped boundary and remaining work
 
-The runtime atmosphere interface must expose chemistry and thermodynamics as a
-single authoritative sample, not make each consumer reconstruct "air" from
-pressure plus Earth constants.
+`AtmosphereSample` carries thermodynamic/transport values and a single
+`AtmosphereComposition`; propulsion reads species from that sample instead of
+reconstructing "air" from pressure plus Earth constants.
 
-At minimum an atmosphere sample must be able to provide:
+The current sample provides:
 
 ```text
 pressure
 temperature
 density
-mean molar mass
-specific gas constant
-gamma / heat-capacity data
 speed of sound
+dynamic viscosity
 molar fractions by species
-mass fractions by species
-partial pressures by species
+derived mass fractions by species
 ```
 
-Composition has one canonical basis in stored data (prefer molar fraction for
-authoring); all alternative views are derived. Fraction basis must be explicit
-in types/APIs so that, for example, Thessa's 25% O2 by mole cannot silently be
-passed to an interface expecting oxygen mass fraction.
+`AtmosphereComposition` derives mean molar mass and specific gas constant; the
+baked design record supplies mixture heat-capacity properties used to resolve
+the runtime profile and speed of sound. The profile currently uses one
+well-mixed composition across altitude. Partial pressure is derived as total
+pressure times mole fraction rather than stored as a separate sample field.
+Composition has one canonical molar basis in authored data and derives mass
+fractions, so Thessa's 25% O2 by mole cannot silently be passed as an oxygen
+mass fraction.
 
 Consumers such as propulsion should query useful reactants from the sampled
 composition, e.g. "available O2 mass fraction here", rather than accept a
-free-standing scalar `oxygen_fraction`. The current propulsion scalar and
-vehicle-baker Earth value are temporary adapters and must be removed once the
-richer API lands.
+free-standing scalar `oxygen_fraction`. This query path is implemented for
+airbreathing engines. The old scalar oxygen-fraction interface and fixed Earth
+fraction have been removed.
 
-The same API must work for non-Earth atmospheres and local overrides: a sample
-may contain atmospheric oxidizer, atmospheric fuel, chemically inert working
-mass, or mixtures of all three. Pressure/temperature/composition must come from
-the same position/altitude query so Khepri gas-sea cells, condensable layers,
-and future weather/biome chemistry cannot disagree between aero, propulsion,
-audio, rendering, and climate consumers.
+The current composition is well mixed and constant with altitude in a profile.
+Per-position species changes, local overrides, Khepri gas-sea cells, weather,
+and biome chemistry remain future work; those values must eventually come from
+the same position/altitude query for all consumers.
 
 ## 2. Current atmosphere table
 

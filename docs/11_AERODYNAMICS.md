@@ -77,8 +77,11 @@ temperature, pressure, density, viscosity, and speed of sound. The configured
 body atmosphere feeds both dynamic pressure and Mach/Reynolds values. It also
 supports atmospheric rotation and a declared vacuum cutoff.
 
-This is not a final planetary composition or weather model. Body-specific gas
-constants, winds, weather, and heating correlations remain future inputs.
+`AtmosphereSample` carries baked species composition, mixture-derived gas
+properties, and transport state; propulsion shares that composition query.
+Profiles are still well-mixed and use the current layered temperature model.
+Per-body vertical composition/temperature structure, winds, weather, and
+heating correlations remain future inputs.
 
 ## 11.5. Reduction and upper atmosphere
 

@@ -40,6 +40,18 @@ APIs, data formats, and save files are not stable before `0.1.0`.
 - Deployable parachutes, reaction-wheel banks, and typed installed-part
   commands over flight wire protocol v5, including named gear and canopy
   controls for future stage/action-group dispatch.
+- Procedural lofted fuselages with derived interior volume, tank/body-strip
+  compilation, aero controls, conservative contact geometry, and a combined
+  lifting-body/wing fixture.
+- Procedural lifting-surface compilation for authored planforms, bend, sections,
+  controls, fold-state geometry, structural sizing, and contact parts; the
+  vehicle baker merges `[[procedural_surfaces]]` into vehicle assets with
+  rebased panel/control/fold references. Runtime wing-fold actuation and render
+  mesh generation remain future work.
+- Experimental microscaled material-page storage: adaptive codec and residency
+  phases A–E, GPU LOD/mip/aniso sampling, and a render-world storage A/B. The
+  compact path currently pre-decodes to RGBA; raw storage remains the default,
+  and crack-free height geometry/canonical baked-format adoption remain open.
 - Declared terrain obstacle heights and geometric track certification for
   unattended craft, future landing guidance, and impact prediction.
 - Shared `canonical_launch_setup` helper so server and client surveys derive
@@ -60,14 +72,13 @@ APIs, data formats, and save files are not stable before `0.1.0`.
   implementations, a universal Bevy frame plugin, cube-sphere Morton mapping,
   and an optional portable wgpu adapter. The client runs CBT scheduling beside
   the existing CPU terrain renderer while GPU geometry parity is validated.
-- Cheap atmospheric beauties (`apps/client/src/beauty.rs`, all behind graphics
-  settings): procedural gas-giant bands (CPU-baked), 1-2 cloud shell decks for
-  ocean worlds, engine-plume cone with Mach diamonds/flicker/point light,
-  aurora shell over the analytic oval. New `graphics.toml` sections
+- Atmospheric beauty effects (all behind graphics settings): procedural
+  gas-giant bands (CPU-baked), 1–2 cloud shell decks for ocean worlds,
+  Low-quality engine-plume cone fallback, and aurora shell over the analytic
+  oval. New `graphics.toml` sections
   `[gas_giant]`, `[engine_plume]`, extended `[clouds]` and `[upper_atmosphere]`
-  (aurora intensity/animation). The plume reads data via `EnginePlumeInput`:
-  no engine-sim exists yet, engine-sim will become the provider without
-  renderer changes.
+  (aurora intensity/animation). The plume reads `EnginePlumeInput`; live
+  compiled engine/nozzle state is not yet wired into the client renderer.
 - New `plume-core` crate: backend-neutral `PlumeSource`/`PlumeEnvironment`
   contract, analytic axial mean profile (pressure-ratio regime, shock-cell
   spacing), participating-medium CPU oracle (`sample_medium`, `integrate_ray`,
@@ -77,7 +88,8 @@ APIs, data formats, and save files are not stable before `0.1.0`.
 - Field-first plume renderer (Medium/High): a camera-facing ribbon carries
   coverage while `assets/shaders/plume_volume.wgsl` marches view rays through
   the round cross-section and Beer-Lambert-integrates the `plume-core` mean
-  field. Cone impostor kept for Low; pilot-view gating kept.
+  field. Cone impostor kept for Low; pilot-view gating kept. The point-light
+  proxy intensity is derived from the field's integrated radiant power.
 
 ### Changed
 

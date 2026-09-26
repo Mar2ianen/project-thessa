@@ -1,24 +1,40 @@
 # Engine Plume Rendering Architecture
 
-Status: design target for replacing the current `beauty.rs` plume smoke test.
+Status: partially implemented. `thessa-plume-core` provides the backend-neutral
+analytic profile/optics/medium model; the client uses a Low-quality impostor
+and a Medium/High field-integrated volume ribbon with field-derived lighting.
+Wiring live compiled engine/nozzle state into the client, adaptive residual
+rendering, and ray-traced lighting remain future work. The rest of this document
+records the architecture and acceptance targets for those follow-ups.
 
-Reference implementation being replaced: commit `33e58cd25abf82c17ffc2467edc0ebed23274dd2` (`feat/atmospheric-beauty`).
+The original CPU-baked cone from commit `33e58cd25abf82c17ffc2467edc0ebed23274dd2`
+(`feat/atmospheric-beauty`) remains as the Low-quality fallback, not the default
+representation for every quality level.
 
 ## 1. Problem statement
 
-The current engine plume is intentionally cheap and useful as a bring-up path, but it must not become the long-term representation. It is a CPU-baked `32x256` RGBA texture mapped onto one Bevy cone, with fixed sinusoidal Mach-diamond bands, throttle-driven cone scale, two-sine flicker, a hand-tuned emissive color, and one point light. The active craft is located by a concrete entity name and the nozzle offset is hard-coded for the X-15 preview.
+The original engine-plume implementation was a CPU-baked `32x256` RGBA texture
+mapped onto a Bevy cone, with fixed Mach-diamond bands, throttle-driven cone
+scale, flicker, emissive color, and a point light. That path remains as the
+Low-quality fallback. Medium/High now use the analytic plume profile and a
+camera-facing volume ribbon whose shader marches view rays through the plume
+cross-section.
 
-That implementation is a valid `Low`/fallback effect. It is not a suitable semantic model for multiple engine types, altitude-dependent expansion, crosswind, condensation, secondary combustion, ground impingement, volumetric lighting, or future ray-traced lighting.
+The shipped volume path still reads provisional rocket/nozzle values and an
+X-15 nozzle offset from the client adapter; it is not yet driven by compiled
+vehicle engine data. Crosswind, condensation, secondary combustion, ground
+impingement, and ray-traced lighting remain future work.
 
-The replacement must be cheap in raster mode today and remain useful when Thessa gains its own ray-query / ray-tracing lighting path later.
+The long-term architecture must stay cheap in raster mode and remain useful if
+Thessa gains its own ray-query/ray-tracing lighting path.
 
 The core rule is:
 
 > Rocket exhaust is a compact world-space participating-medium field. Raster meshes, particles, lights, and future ray tracing are consumers of that field, never the source of its shape.
 
-## 2. Goals
+## 2. Remaining design goals
 
-The plume system must:
+The fuller plume system should:
 
 - derive shape and optical behavior from engine/nozzle state and the local environment rather than fixed visual dimensions;
 - keep the mean supersonic plume analytically cheap;
@@ -41,7 +57,13 @@ The plume renderer is not authoritative propulsion physics. Thrust, mass flow, t
 
 ## 4. Semantic boundary
 
-Introduce a backend-neutral plume core. Suggested layering:
+The backend-neutral plume core is implemented in `crates/plume-core`. It
+provides `PlumeSource`, `PlumeEnvironment`, analytic axial profiles, optical
+materials, and CPU medium/ray integration. The current client integration is
+in `apps/client/src/plume.rs`, with the volume shader in
+`assets/shaders/plume_volume.wgsl` and the Low-quality fallback in the same
+client module. This remains a thinner arrangement than the fuller optional
+backend split proposed below:
 
 ```text
 crates/
@@ -68,38 +90,44 @@ crates/
       plugin.rs
 ```
 
-`plume-core` must not expose Bevy, wgpu, or Vulkan types. `bevy-plume` is an integration adapter, not the semantic API.
+`thessa-plume-core` exposes no Bevy, wgpu, or Vulkan types. The proposed
+separate `plume-wgpu` / `bevy-plume` crates and optional Vulkan backend have
+not been split out; the client currently owns those rendering adapters.
 
-The existing `apps/client/src/beauty.rs` should eventually contain only plugin composition for gas giants, clouds, aurora, and plume. The four effects should not remain one monolithic renderer module.
+`apps/client/src/beauty.rs` currently owns gas-giant bands, cloud decks, and
+aurora; the plume renderer is already split into `apps/client/src/plume.rs`.
+Further effect-local extraction can happen as those renderers grow.
 
 ## 5. Source data
 
-The current `EnginePlumeInput { throttle, engine_active, sim_time_s }` is too small for the long-term renderer. Replace it with a compiled nozzle/engine description plus dynamic state and a local environment sample.
+The client currently supplies `EnginePlumeInput { throttle, engine_active,
+sim_time_s }` and constructs provisional nozzle/environment data in the
+renderer adapter. This is sufficient for the shipped visualization, but is too
+small to connect actual propulsion hardware. Replace that adapter input with a
+compiled nozzle/engine description plus dynamic state and a local environment
+sample once client extraction from compiled vehicle/engine state is implemented.
 
 A representative semantic input is:
 
 ```rust
 pub struct PlumeSource {
     pub nozzle_to_vehicle: RigidTransform,
-
-    pub exit_radius_m: f32,
-    pub mass_flow_kg_s: f32,
-    pub exhaust_velocity_mps: f32,
-
-    pub exit_pressure_pa: f32,
-    pub exit_temperature_k: f32,
-    pub exit_mach: f32,
-
-    pub throttle: f32,
-    pub exhaust: ExhaustMaterialId,
+    pub exit_radius_m: f64,
+    pub mass_flow_kg_s: f64,
+    pub exhaust_velocity_mps: f64,
+    pub exit_pressure_pa: f64,
+    pub exit_temperature_k: f64,
+    pub exit_mach: f64,
+    pub throttle: f64,
+    pub exhaust: ExhaustFamily,
 }
 
 pub struct PlumeEnvironment {
-    pub pressure_pa: f32,
-    pub density_kg_m3: f32,
-    pub temperature_k: f32,
-    pub oxygen_fraction: f32,
-    pub flow_velocity_local_mps: [f32; 3],
+    pub pressure_pa: f64,
+    pub density_kg_m3: f64,
+    pub temperature_k: f64,
+    pub oxygen_fraction: f64,
+    pub flow_velocity_local_mps: [f64; 3],
 }
 ```
 
@@ -240,12 +268,15 @@ camera ray
 
 A short Beer-Lambert integration is sufficient for the first implementation. The pass runs only on pixels covered by the plume bound; it is not a fullscreen raymarch.
 
-Suggested quality budgets are representation budgets, not different physical models:
+The shipped tiers use representation budgets, not different physical models:
 
-- Low: current cone/impostor or analytic 1-2 evaluation approximation;
-- Medium: analytic volume, roughly 4-8 medium evaluations per covered pixel;
-- High: analytic volume + RCBT residual, roughly 8-12 evaluations with temporal reuse/jitter where useful;
-- future Ultra/RT: larger residual budget and ray-traced lighting/transmittance.
+- Low: baked cone impostor;
+- Medium: analytic field volume ribbon, 8 view-ray samples per covered pixel;
+- High: the same analytic field volume ribbon, 14 samples per covered pixel;
+- future tiers: adaptive residual budget and ray-traced lighting/transmittance.
+
+The current Medium/High path does not yet traverse RCBT residuals or use
+temporal reuse/jitter. Those remain architecture targets.
 
 Projected size should additionally select cheaper LODs. A sub-pixel plume should collapse to an emissive sprite rather than running a volume pass.
 
@@ -257,11 +288,16 @@ The production path should derive shock-cell modulation from exit diameter, exit
 
 The shock model should modulate radius, density, temperature, and emission together so that diamonds emerge from the volume rather than from a 2D decal.
 
-The user-facing `mach_diamonds` toggle should not define whether the physics produces shock cells. If kept at all, it is a debug/diagnostic override. Normal quality settings change the fidelity of their representation, not their existence.
+The graphics `mach_diamonds` toggle controls only visible shock-cell
+modulation; it never changes simulated engine or plume physics. Normal quality
+settings change representation cost/fidelity, not physical source state.
 
 ## 10. Turbulence and advection
 
-Do not model plume instability as whole-plume brightness flicker. The current two-sine flicker is acceptable for the fallback path only.
+Do not model plume instability as whole-plume brightness flicker. The current
+two-sine animation is confined to the Low impostor; Medium/High use advected
+noise to deform the visible mixing-layer boundary, but do not yet have an
+adaptive residual field.
 
 The analytic supersonic core should be comparatively stable. Higher-frequency motion belongs primarily to the mixing layer and residual field. A small deterministic 3D noise field may be advected approximately with exhaust/mixing flow:
 
@@ -313,15 +349,17 @@ This keeps the bright supersonic jet, atmospheric cloud, and lifted ground mater
 
 ## 13. Lighting before full ray tracing
 
-The existing single nozzle point light is a valid fallback, but lighting proxies should be derived from the plume field rather than from `1800 * throttle`.
+The current renderer has one point light at the nozzle for all quality tiers;
+its intensity is scaled from the plume profile's integrated radiant power. The
+photometric mapping remains provisional. Additional downstream proxies and
+ray-traced volume lighting are future work.
 
-Integrate or approximate radiative power along the plume and emit a tiny set of `RadianceProxy` records:
+The long-term lighting architecture may integrate or approximate radiative
+power along the plume and emit a small set of `RadianceProxy` records:
 
 ```text
-Low:      one nozzle light
-Medium:   nozzle + one downstream proxy
-High:     a few importance-weighted proxies
-RT:       actual volumetric emission/transmittance, proxies optional
+Current:  one nozzle point light driven by the field radiant integral
+Future:   downstream proxies and/or RT volume lighting
 ```
 
 This gives a continuous migration path without making a point light part of the semantic representation.
@@ -366,39 +404,48 @@ Physical state such as pressure ratio, shock formation, nozzle expansion, conden
 
 `enabled = false` must remove plume rendering work and side effects. Merely registering the plugin must not switch the global renderer, allocate large persistent resources, add hidden prepasses, or otherwise impose a meaningful frame cost.
 
-## 16. Migration plan from `beauty.rs`
+## 16. Migration and integration status
 
-Implement in vertical slices so every stage remains usable:
+Original staged plan (completed items and remaining work):
 
-1. Keep the existing cone effect as `PlumeBackend::Impostor` / Low fallback.
-2. Move engine/nozzle/render inputs out of `beauty.rs` into `plume-core` semantic types.
-3. Remove hard-coded X-15 entity lookup and nozzle position; extract real plume sources from vehicle data.
-4. Implement an analytic pressure-aware mean plume and axial profile.
-5. Add a custom wgpu volume pass over a coarse plume bound; keep the cone for fallback/parity.
-6. Replace fixed Mach-diamond texture bands with the reduced pressure/Mach shock model.
+1. **Done:** retain the cone impostor as the Low fallback.
+2. **Partial:** `thessa-plume-core` owns semantic nozzle/environment/profile
+   types, while the client adapter still constructs provisional source data.
+3. **Remaining:** remove the X-15 entity lookup and provisional nozzle offset;
+   extract live plume sources from compiled vehicle/engine state.
+4. **Done:** implement the analytic pressure-aware mean plume and axial profile.
+5. **Done:** add the Medium/High view-ray volume pass and keep the cone fallback.
+6. **Partial:** Medium/High shock modulation uses pressure/Mach-derived
+   spacing and amplitude; the Low impostor retains fixed texture bands.
 7. Add RCBT binary 3D topology with analytic-only leaves first.
 8. Add sparse `4x4x4` residual bricks and conservative node aggregates.
 9. Move turbulence/mixing-layer detail into advected residuals; remove whole-plume sine flicker from normal/high paths.
-10. Add field-derived lighting proxies.
+10. **Partial:** derive the existing nozzle point-light intensity from the field
+    radiant integral; downstream lighting proxies remain future work.
 11. Add condensation/aerosol wake and surface impingement as separate downstream systems.
 12. When ray lighting exists, add wgpu ray-query and/or native Vulkan consumers of the same `PlumeField`; do not fork plume semantics.
-13. Delete the normal/high `StandardMaterial` cone path after visual/performance parity is demonstrated. Keep the impostor only as the lowest fallback if it remains useful.
+13. **Done:** Medium/High select the field-volume path; the cone impostor is
+    retained only for Low.
 
 ## 17. Tests and benchmarks
 
-The new system needs tests that pin semantics rather than screenshots alone:
+Current `thessa-plume-core` tests pin deterministic bounded profiles, pressure-
+ratio regime changes, shock-spacing response, family-specific optics, invalid
+source rejection, zero-throttle behavior, ray integration/transmittance, and
+field-derived radiant power. The profile benchmark is run with
+`cargo bench -p thessa-plume-core --bench profile`.
 
-- deterministic source/profile generation for fixed engine/environment input;
-- increasing ambient pressure changes the expansion regime in the expected direction;
-- changing exit Mach/diameter changes shock-cell spacing in the expected direction;
-- disabled engine/throttle produces zero visible/lighting contribution;
-- RCBT residual reconstruction stays within an explicit error bound against a dense/reference sample set;
-- node aggregate bounds are conservative;
-- topology hysteresis prevents frame-to-frame split/merge thrash;
-- portable raster and future RT backend agree on transmittance/emission within a declared tolerance;
+Residual/rendering work still needs tests that pin semantics rather than
+screenshots alone:
+
+- client shader/CPU-oracle parity for the same field input;
+- RCBT residual reconstruction within an explicit error bound against a dense/reference sample set;
+- conservative residual-node aggregate bounds and topology hysteresis;
+- portable raster and future RT backend agreement on transmittance/emission;
 - quality tiers preserve the same physical input and differ only in representation error/cost;
 - disabled plugin path has no meaningful per-frame GPU work;
-- benchmark cost versus projected plume size, active engine count, residual brick count, and wake count.
+- performance by projected plume size, active engine count, sample budget,
+  residual brick count, and wake count.
 
 Visual captures remain useful for regression, but numeric field/transmittance comparisons should be the primary correctness oracle.
 

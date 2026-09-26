@@ -1,6 +1,14 @@
 # Procedural aerodynamic surfaces
 
-Status: design baseline. Exact editor UX, panelization thresholds, structural limits, airfoil data, and balancing values are TBD.
+Status: procedural compiler implemented in `crates/aero-surfaces` and used by
+`vehicle-baker`. It compiles authored planform, bend, section, control, and fold
+state into solver panels, ownership/mechanism records, contact parts, and
+structural sizing summaries. The baker accepts `[[procedural_surfaces]]`, merges
+compiled panels into the vehicle, and rebases control/fold references. The
+compiled data crosses the hangar/flight boundary without authoring geometry.
+Render-mesh generation, in-game editor UX, runtime wing-fold actuation, broader
+structural/failure coupling, solver-integrated airfoil polars, and balancing
+remain future work.
 
 ## 1. Design goal
 
@@ -8,7 +16,7 @@ Project Thessa uses procedural aerodynamic surfaces rather than a catalogue of f
 
 The central rule is:
 
-> The editor stores an aerodynamic surface as authoring geometry; leaving the hangar compiles that geometry into solver-ready aerodynamic panels, render geometry, collision geometry, mechanism data, and structural data.
+> The hangar stores an aerodynamic surface as authoring geometry; `vehicle-baker` compiles it into solver-ready panels, mechanism records, collision parts, and structural estimates before the vehicle crosses into flight data. The current surface compiler does not emit a render mesh.
 
 Runtime flight code must not depend on editor splines or render meshes. The existing `AeroPanel` representation remains the solver-facing force primitive.
 
@@ -60,7 +68,7 @@ The editor may expose convenience controls such as span, root chord, tip chord, 
 
 After the flat planform is authored, the surface may be bent out of its original plane by a third spanwise curve.
 
-The first implementation should expose this as a simple bend/elevation function such as:
+The current authoring model exposes this as a spanwise bend/elevation function:
 
 ```text
 z_bend(s)
@@ -184,7 +192,8 @@ Slats and other devices whose motion is not a pure hinge rotation may use a diff
 
 ### 7.2 Nested surfaces and trim tabs
 
-The representation should permit a hinged region to contain a smaller hinged region.
+The current compiler permits one nested control level, which covers a parent
+control and a trim/servo tab. Deeper nesting is not supported in this slice.
 
 This naturally supports:
 
@@ -244,15 +253,22 @@ ProceduralSurface
     |
     v
 Compiled surface data
-    +-- render mesh
-    +-- collision geometry
-    +-- structural representation
     +-- AeroPanel[]
-    +-- ControlSurfaceDefinition[] / equivalent control mapping
-    +-- FoldJointDefinition[] / equivalent mechanism data
+    +-- per-panel control/fold ownership tags
+    +-- ControlSurfaceDefinition[]
+    +-- CompiledFold[] for the selected fold state
+    +-- geometry summary and optional structural sizing
+    +-- separate collision_parts() contact geometry
 ```
 
 The authoring representation is not evaluated in the flight hot path.
+
+`vehicle-baker` currently reads `[[procedural_surfaces]]` from vehicle TOML,
+compiles each surface in its deployed state, merges its panels and controls with
+hand-authored vehicle data, rebases panel/control/fold indices, and optionally
+adds contact parts. `CompiledSurface` is serializable data; a postcard
+round-trip test pins the hangar/flight boundary. Render-mesh generation is not
+part of this compiler output yet.
 
 A single editor surface may therefore compile into multiple connected numerical/structural regions while still remaining one object from the user's perspective.
 
@@ -296,7 +312,11 @@ A new panel boundary should be introduced when needed because of a meaningful ch
 
 Simple rectangular or trapezoidal surfaces may compile to very few aerodynamic zones. Complex curved/bent planforms may require many more without affecting render-mesh density.
 
-Exact subdivision/error thresholds are TBD and should be chosen from accuracy/performance measurements rather than a fixed design-time panel count.
+The compiler implements tolerance-based subdivision and a greedy error-budget
+mode. Default tolerances are in `CompileOptions`; they bound zone granularity,
+while the error-budget mode reports its achieved estimate under a panel cap.
+Further presets should be chosen from accuracy/performance measurements rather
+than a fixed design-time panel count.
 
 ### 10.2 Mechanization boundaries are hard splits
 
@@ -306,12 +326,21 @@ No compiled panel should straddle two regions that can receive different deflect
 
 ## 11. Runtime representation
 
-The current solver-neutral runtime model is the intended target of compilation:
+The compiled vehicle data currently contains:
 
 - `AeroPanel` remains the local aerodynamic force primitive;
-- control channels address one or more compiled panels;
-- fold joints transform precompiled panel groups;
-- the runtime evaluates compiled panels and mechanism state, not editor splines and not mesh triangles.
+- control definitions address compiled panels, with ownership indices rebased
+  when the baker merges the surface into the vehicle;
+- fold-state geometry is compiled into panels and `FoldJointRecord` metadata;
+- `CompiledSurface::collision_parts` derives contact primitives from compiled
+  panels, separately from the force-solver representation;
+- the serialized vehicle contains compiled numerical data, not authoring splines
+  or render meshes.
+
+The fold records and tagged panels are validated and carried in the vehicle
+asset, but a runtime mechanism mixer that deploys/folds aerodynamic surfaces is
+not yet wired into flight stepping. Each baked surface currently compiles in its
+deployed configuration through `vehicle-baker`.
 
 This preserves an important architectural boundary:
 
@@ -357,14 +386,17 @@ Panelized approximations should converge toward the analytic reference as compil
 
 Maintain small authoring fixtures reconstructed from public manufacturer/NASA geometry or sufficiently good public drawings.
 
-Initial reference set:
+The current compiler ships these authoring/golden fixtures:
 
-- **Boeing 777X** — validates a conventional swept wing plus folding wingtip. Public Boeing data gives a 71.8 m extended wingspan and 64.8 m ground/folded wingspan. The test should compile both mechanism states and compare the resulting external envelope.
-- **Dream Chaser / Tenacity** — validates a compact lifting-body spaceplane whose wings fold into the launch configuration. NASA/Sierra Space publicly describe the wings as folding for launch inside a 5 m payload fairing; public NASA material also provides a roughly 7 m deployed wingspan for Dream Chaser reference geometry. The fixture should verify deployed geometry, folded transform topology, and launch-envelope fit for the selected documented configuration.
-- **Space Shuttle Orbiter** — validates a large highly swept delta-like wing, elevon regions, and compilation of a shuttle-class planform. NASA publishes an Orbiter wingspan of 78 ft / about 23.8 m; additional fixture dimensions should be tied to the exact public drawing/source used.
-- **Concorde** — validates a strongly curved/ogival delta planform that requires more than a simple trapezoid and exercises adaptive subdivision of curved leading/trailing edges.
+- **Boeing 777X** — a public-geometry swept-wing and folding-tip fixture, including deployed/stowed compilation. Public Boeing data gives a 71.8 m extended wingspan and 64.8 m ground/folded wingspan.
+- **Dream Chaser / Tenacity** — a public-reference lifting-body spaceplane fixture with wings folded into a launch configuration. NASA/Sierra Space describe the wings folding for launch inside a 5 m payload fairing; public NASA material gives a roughly 7 m deployed wingspan.
+- **Space Shuttle Orbiter** — a public-reference highly swept delta-like wing with elevon regions. NASA publishes an Orbiter wingspan of 78 ft / about 23.8 m; other fixture dimensions follow the recorded reference drawing.
+- **Concorde** — a public-reference curved/ogival delta planform that exercises more than a simple trapezoid.
 
-A Pathfinder-like fixture may additionally be kept as a **fictional visual regression** for a single surface with smoothly rising/canted tips and embedded controls. It is useful for feature coverage but must not be treated as real-world validation ground truth.
+The **Pathfinder** fixture is implemented as a fictional regression surface with
+smoothly rising/canted tips and embedded aileron/flap controls. It covers the
+bend-plus-controls interaction and must not be treated as real-world validation
+ground truth.
 
 Reference sources should be recorded alongside each fixture so that a test failure can be distinguished from a changed reconstruction or source assumption.
 
@@ -423,9 +455,9 @@ Procedural-surface authoring should therefore avoid baking in the assumption tha
 
 A future extension may attach an `AeroProfileId`, polar reference, or equivalent per-panel/per-section aerodynamic description. This is an extension point, not a requirement for the first procedural-wing implementation.
 
-## 14. Non-goals for the first implementation
+## 14. Remaining scope
 
-The initial system does not need to solve:
+The implemented compiler slice does not yet solve:
 
 - arbitrary CFD from render geometry;
 - unrestricted free-form 3D surface sculpture;

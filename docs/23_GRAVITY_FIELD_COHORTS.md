@@ -1,12 +1,10 @@
 # 23 — Baked gravity hierarchy and target-cohort field cache
 
-Status: partially implemented — monopole `GravitySourceTree`, single-tick
-affine `GravityPatch` / `CohortEvaluator` with Hessian spatial bound landed;
-time-span patches, quadrupole, cohort keys, planner-patch reuse, and GPU
-backends remain design targets. Struct sketches below are the target API and
-do not all compile against the current single-tick types.
-
-Status: **architecture / performance design target**.
+Status: partial implementation — `GravitySourceTree` uses bounded monopole and
+quadrupole aggregation; single-tick affine `GravityPatch` / `CohortEvaluator`
+uses exact-near terms and a Hessian spatial bound. Time-span patches, reusable
+cohort keys, planner-patch sharing, and GPU backends remain design targets.
+The sections below distinguish current behavior from the future architecture.
 
 This doc defines the next major gravity optimization layer on top of the already existing baked ephemerides, adaptive integration and SIMD-oriented ephemeris tables.
 
@@ -36,7 +34,11 @@ This is **not SOI**, not patched conics, and not "cargo ships get cheap physics"
 
 ## 1. Current baseline and missing sharing
 
-The current `GravityField::acceleration(position, time)` walks over all gravity sources, obtains `body_state`, then for each source computes distance, reciprocal distance cubed and sums the point-mass acceleration.
+The direct `GravityField::acceleration(position, time)` path remains the exact
+point-source reference and current default. The public `GravitySourceTree` API
+can aggregate distant sources; `CohortEvaluator` can evaluate multiple targets
+inside a bounded affine spatial patch for one epoch. These remain explicit
+caller-selected paths rather than a persistent fleet cache.
 
 `EphemerisTable` already solves an important part of the cost:
 
@@ -46,9 +48,12 @@ The current `GravityField::acceleration(position, time)` walks over all gravity 
 - has a SIMD-friendly layout;
 - snapshots all body centers at the chosen epoch.
 
-But even after that, each target separately repeats source accumulation.
+When used, the source tree reduces distant-source work and a cohort patch
+shares local field evaluation across nearby targets for a single tick. The
+current implementation does not keep a persistent spatial/temporal cohort
+cache and does not reuse a patch over an integration interval.
 
-That is, the current conceptual hot path remains close to:
+The direct exact reference path remains close to:
 
 ```text
 for target in targets:

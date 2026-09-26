@@ -24,9 +24,9 @@
 //! axis); cohorts of two or fewer targets evaluate exactly.
 //!
 //! v1 compiles `g0`/`J` exactly once per tick (single-tick validity).
-//! Multi-tick reuse with a motion bound, tree-opened compilation, and the
-//! quadrupole ladder are documented in the architecture doc as follow-ups,
-//! not part of this layer.
+//! Multi-tick reuse with a motion bound remains a follow-up. Source-side
+//! aggregation is implemented separately by `GravitySourceTree`, including
+//! its bounded monopole/quadrupole/open-node ladder.
 
 use glam::{DMat3, DVec3};
 

@@ -7,6 +7,7 @@
 //! means no control). Power/comm dependencies of cores are recorded as
 //! future wiring, not implemented gates.
 
+use glam::DVec3;
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt};
 
@@ -40,8 +41,9 @@ impl fmt::Display for CabinError {
 
 impl Error for CabinError {}
 
-/// Runtime pressure state of one cabin volume. Vent/repress rates are
-/// future physics; transitions are discrete and mass-conserving.
+/// Runtime pressure state of one cabin volume. Opening a connected hatch
+/// currently resolves the ideal-gas equalization as one discrete transition;
+/// finite-rate flow is a later dynamics slice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CabinPressureState {
@@ -49,11 +51,18 @@ pub enum CabinPressureState {
     Vacuum,
 }
 
-/// One cabin pressure volume with tracked air inventory.
+/// One cabin pressure volume with tracked air inventory. `pressure_kpa` is
+/// the authored repressurization target; instantaneous pressure follows from
+/// the current air mass, temperature, and volume.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PressurizedCabin {
     pub name: String,
     pub volume_m3: f64,
+    /// Cabin air-inventory centroid in the vehicle body frame. The baker
+    /// uses the compiled interior centroid; legacy serialized cabins default
+    /// to the vehicle origin.
+    #[serde(default)]
+    pub centroid_body_m: DVec3,
     pub pressure_kpa: f64,
     pub temp_k: f64,
     pub o2_fraction: f64,
@@ -75,6 +84,7 @@ impl PressurizedCabin {
         let cabin = Self {
             name: name.into(),
             volume_m3,
+            centroid_body_m: DVec3::ZERO,
             pressure_kpa,
             temp_k,
             o2_fraction,
@@ -82,12 +92,30 @@ impl PressurizedCabin {
             state: CabinPressureState::Pressurized,
         };
         cabin.validate()?;
+        if initial_air_kg > cabin.full_charge_kg() {
+            return Err(CabinError::InvalidCabin(format!(
+                "cabin '{}' initial air exceeds its design charge",
+                cabin.name
+            )));
+        }
         let state = if initial_air_kg > 0.0 {
             CabinPressureState::Pressurized
         } else {
             CabinPressureState::Vacuum
         };
         Ok(Self { state, ..cabin })
+    }
+
+    /// Place this cabin's gas inventory at its compiled interior centroid.
+    pub fn with_centroid_body_m(mut self, centroid_body_m: DVec3) -> Result<Self, CabinError> {
+        if !centroid_body_m.is_finite() {
+            return Err(CabinError::InvalidCabin(format!(
+                "cabin '{}' centroid must be finite",
+                self.name
+            )));
+        }
+        self.centroid_body_m = centroid_body_m;
+        Ok(self)
     }
 
     pub fn validate(&self) -> Result<(), CabinError> {
@@ -107,9 +135,21 @@ impl PressurizedCabin {
                 )));
             }
         }
-        if !self.air_kg.is_finite() || self.air_kg < 0.0 || self.air_kg > self.full_charge_kg() {
+        if !self.centroid_body_m.is_finite() {
             return Err(CabinError::InvalidCabin(format!(
-                "cabin '{}' air inventory exceeds its full charge",
+                "cabin '{}' centroid must be finite",
+                self.name
+            )));
+        }
+        if !self.air_kg.is_finite() || self.air_kg < 0.0 {
+            return Err(CabinError::InvalidCabin(format!(
+                "cabin '{}' air inventory must be finite and non-negative",
+                self.name
+            )));
+        }
+        if !self.current_pressure_kpa().is_finite() {
+            return Err(CabinError::InvalidCabin(format!(
+                "cabin '{}' current pressure is not finite",
                 self.name
             )));
         }
@@ -119,6 +159,11 @@ impl PressurizedCabin {
     /// Air mass at full charge from the ideal gas law over the volume.
     pub fn full_charge_kg(&self) -> f64 {
         self.pressure_kpa * 1000.0 / (R_DRY_AIR_J_KG_K * self.temp_k) * self.volume_m3
+    }
+
+    /// Current ideal-gas pressure in kPa from the tracked air inventory.
+    pub fn current_pressure_kpa(&self) -> f64 {
+        self.air_kg * R_DRY_AIR_J_KG_K * self.temp_k / self.volume_m3 / 1000.0
     }
 
     /// Oxygen mass within the current air inventory.
@@ -135,23 +180,30 @@ impl PressurizedCabin {
         dumped
     }
 
-    /// Repressurize from reserve: full charge or refusal (partial fills
-    /// are future work). Returns the consumed reserve mass.
+    /// Repressurize toward the authored target from reserve: full charge or
+    /// refusal (partial fills are future work). Already-over-target gas is
+    /// retained and consumes no reserve. Returns consumed reserve mass.
     pub fn repress(&mut self, available_kg: f64) -> Result<f64, CabinError> {
         if !available_kg.is_finite() || available_kg < 0.0 {
             return Err(CabinError::InvalidCabin(
                 "air reserve must be finite and non-negative".into(),
             ));
         }
-        let needed = self.full_charge_kg() - self.air_kg;
+        let needed = (self.full_charge_kg() - self.air_kg).max(0.0);
         if available_kg < needed {
             return Err(CabinError::InsufficientAir {
                 needed_kg: needed,
                 available_kg,
             });
         }
-        self.air_kg = self.full_charge_kg();
-        self.state = CabinPressureState::Pressurized;
+        if needed > 0.0 {
+            self.air_kg += needed;
+        }
+        self.state = if self.air_kg > 0.0 {
+            CabinPressureState::Pressurized
+        } else {
+            CabinPressureState::Vacuum
+        };
         Ok(needed)
     }
 
@@ -341,9 +393,7 @@ mod tests {
             control_authority(std::slice::from_ref(&empty_station), &[], true).reason,
             AuthorityReason::NoPilotNoCore
         );
-        assert!(
-            !control_authority(std::slice::from_ref(&empty_station), &[], true).controllable
-        );
+        assert!(!control_authority(std::slice::from_ref(&empty_station), &[], true).controllable);
         assert_eq!(
             control_authority(
                 std::slice::from_ref(&empty_station),

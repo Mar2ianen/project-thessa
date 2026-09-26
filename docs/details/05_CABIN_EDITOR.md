@@ -197,6 +197,18 @@ open, lose the air, repress from reserve on return. An airlock part
 and arrives as its own part slice. Vent/repress rates and the
 air-reserve tank part stay future slices.
 
+Connected pressure volumes in an assembled vehicle share gas through open
+assembly hatches. The current topology transition solves the ideal-gas
+equilibrium immediately, conserving air, oxygen, and sensible thermal
+energy under a constant dry-air heat-capacity model. Each cabin reports its
+current pressure from its inventory; `pressure_kpa` remains its authored
+repressurization target. Finite-rate flow through the hatch opening remains
+future work. Vehicle-level `vent_cabin` and `repress_cabin` operations,
+along with hatch equalization, update vehicle mass and inertia from each
+cabin's air-mass change and recenter all body-frame geometry on the new COM.
+Callers should use these vehicle-level operations rather than mutating a
+cabin's air inventory directly when the cabin is part of a flown vehicle.
+
 ## 9. Control authority (KSP-like, presence-based)
 
 Whether the craft answers the controls is a discrete capability flag,

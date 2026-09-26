@@ -688,7 +688,13 @@ pub enum AttachKind {
 pub enum AttachSite {
     AftEnd,
     ForwardEnd,
-    Station { x_m: f64 },
+    /// Clock angle follows fuselage convention: 0 is +Y, positive angles
+    /// turn toward +Z. The node sits on the loft outline at this station.
+    Station {
+        x_m: f64,
+        #[serde(default)]
+        clock_rad: f64,
+    },
 }
 
 /// One KSP-style attach node authored separately from the loft
@@ -727,11 +733,11 @@ impl AttachNode {
                 "attach node needs a name".into(),
             ));
         }
-        if let AttachSite::Station { x_m } = self.site
-            && (!x_m.is_finite())
+        if let AttachSite::Station { x_m, clock_rad } = self.site
+            && (!x_m.is_finite() || !clock_rad.is_finite())
         {
             return Err(FuselageError::InvalidBody(format!(
-                "attach node '{}' station must be finite",
+                "attach node '{}' station and clock angle must be finite",
                 self.name
             )));
         }
@@ -1197,7 +1203,7 @@ impl ProceduralBody {
                     node.name, self.name
                 )));
             }
-            if let AttachSite::Station { x_m } = node.site
+            if let AttachSite::Station { x_m, .. } = node.site
                 && (x_m < x_first - 1e-9 || x_m > x_last + 1e-9)
             {
                 return Err(FuselageError::InvalidBody(format!(

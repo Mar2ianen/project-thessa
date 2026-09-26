@@ -67,9 +67,9 @@ pub use body::{
 pub use capsule::{CapsuleParams, CapsuleShape, capsule_body};
 pub use collision::{BodyCollisionOptions, body_collision_parts};
 pub use compile::{
-    AssemblyLink, BodyCompileOptions, BodyPortCompiled, CompiledAssembly, CompiledBody,
-    CompiledBodyTank, CompiledHeatShield, CompiledRegion, FeedPath, TankComponent, TankContents,
-    VolumeId, compile_assembly, compile_body,
+    AssemblyLink, BodyCompileOptions, BodyPortCompiled, BodyTransform, CompiledAssembly,
+    CompiledBody, CompiledBodyTank, CompiledHeatShield, CompiledRegion, FeedPath, TankComponent,
+    TankContents, VolumeId, compile_assembly, compile_body,
 };
 pub use error::FuselageError;
 pub use golden::{

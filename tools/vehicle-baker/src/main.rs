@@ -6,21 +6,23 @@ use thessa_aero_surfaces::{
     CollisionOptions, CompileOptions, MechanismState, ProceduralSurface, compile_surface,
 };
 use thessa_fuselage::{
-    AssemblyLink, BodyCollisionOptions, BodyCompileOptions, ProceduralBody, RegionKind,
-    body_collision_parts, compile_assembly, compile_body,
+    AssemblyLink, AttachKind, BodyCollisionOptions, BodyCompileOptions, BodyTransform,
+    CompiledBody, PortKind, ProceduralBody, RegionKind, body_collision_parts, compile_assembly,
+    compile_body,
 };
 use thessa_sim_core::{
-    AeroGeometry, AeroPanel, AirCycle, AirbreathingSpec, AtmosphereConfig, ChamberMaterial,
-    ChamberSpec, CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionPart,
-    CollisionShape, CompiledEngine, CompiledJet, ControlCore, ControlStation,
-    ControlSurfaceDefinition, CoolingMode, ElectricPropellant, ElectricThrusterDesign,
-    ElectricThrusterMount, ElectricThrusterSpec, EngineCycle, EngineMount, EstocEjectorSpec,
-    EstocPrecoolerSpec, EstocSpec, FoldJointRecord, FusionReaction, FusionTorchMount,
-    FusionTorchSpec, IntakeKind, JetFuel, JetMount, LiquidEngineSpec, NozzleContour, NtrFluid,
-    NuclearThermalSpec, PressurizedCabin, Propellant, PropellerDriveMount, PropellerDriveSpec,
-    PropellerSpec, PropulsionSystemSpec, PulsedFusionMount, PulsedFusionSpec, RigidBodyProperties,
+    AeroGeometry, AeroPanel, AirCycle, AirbreathingSpec, AssemblyEndpoint, AssemblyLinkState,
+    AssemblyVolume, AtmosphereConfig, ChamberMaterial, ChamberSpec, CollisionAxis,
+    CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine,
+    CompiledJet, ControlCore, ControlStation, ControlSurfaceDefinition, CoolingMode,
+    ElectricPropellant, ElectricThrusterDesign, ElectricThrusterMount, ElectricThrusterSpec,
+    EngineCycle, EngineMount, EstocEjectorSpec, EstocPrecoolerSpec, EstocSpec, FoldJointRecord,
+    FusionReaction, FusionTorchMount, FusionTorchSpec, IntakeKind, JetFuel, JetMount,
+    LiquidEngineSpec, NamedAssemblyLink, NozzleContour, NtrFluid, NuclearThermalSpec,
+    PressurizedCabin, Propellant, PropellerDriveMount, PropellerDriveSpec, PropellerSpec,
+    PropulsionSystemSpec, PulsedFusionMount, PulsedFusionSpec, RigidBodyProperties,
     ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec, SystemMount, TankMount,
-    TankShape, TankSpec, TurbopropDriveSpec, TurbopropMount, VehicleDefinition,
+    TankShape, TankSpec, TurbopropDriveSpec, TurbopropMount, VehicleAssembly, VehicleDefinition,
     analyze_airbreathing, analyze_altitude, analyze_estoc, analyze_propeller_drive,
     analyze_turboprop_drive,
 };
@@ -581,6 +583,95 @@ fn resolve_assembly_links(links: &[AssemblyLinkAsset]) -> Result<Vec<AssemblyLin
         .collect()
 }
 
+fn runtime_assembly(
+    bodies: &[ProceduralBody],
+    links: &[AssemblyLinkAsset],
+    root_name: &str,
+    volumes: Vec<AssemblyVolume>,
+) -> Result<VehicleAssembly, String> {
+    let body_indices: std::collections::HashMap<&str, usize> = bodies
+        .iter()
+        .enumerate()
+        .map(|(index, body)| (body.name.as_str(), index))
+        .collect();
+    let root_body = *body_indices
+        .get(root_name)
+        .ok_or_else(|| format!("assembly root '{root_name}' is missing"))?;
+    let mut runtime_links = Vec::with_capacity(links.len());
+    for link in links {
+        let (parent_name, parent_node_name) = link
+            .parent
+            .split_once('.')
+            .ok_or_else(|| format!("assembly link '{}' has malformed parent", link.name))?;
+        let (child_name, child_node_name) = link
+            .child
+            .split_once('.')
+            .ok_or_else(|| format!("assembly link '{}' has malformed child", link.name))?;
+        let parent = *body_indices
+            .get(parent_name)
+            .ok_or_else(|| format!("assembly link '{}' has unknown parent body", link.name))?;
+        let child = *body_indices
+            .get(child_name)
+            .ok_or_else(|| format!("assembly link '{}' has unknown child body", link.name))?;
+        let parent_node = bodies[parent]
+            .attach_nodes
+            .iter()
+            .find(|node| node.name == parent_node_name)
+            .ok_or_else(|| format!("assembly link '{}' has unknown parent node", link.name))?;
+        let child_node = bodies[child]
+            .attach_nodes
+            .iter()
+            .find(|node| node.name == child_node_name)
+            .ok_or_else(|| format!("assembly link '{}' has unknown child node", link.name))?;
+        let hatch = parent_node.kind == AttachKind::Hatch || child_node.kind == AttachKind::Hatch;
+        runtime_links.push(NamedAssemblyLink {
+            name: link.name.clone(),
+            state: AssemblyLinkState {
+                a: parent,
+                b: child,
+                hatch,
+                open: !hatch || link.hatch_open,
+            },
+        });
+    }
+    let mut tanks = Vec::new();
+    let mut engine_ports = Vec::new();
+    for (body_index, body) in bodies.iter().enumerate() {
+        for region in &body.regions {
+            let is_tank = matches!(
+                region.kind,
+                RegionKind::Tank { .. }
+                    | RegionKind::FluidTank { .. }
+                    | RegionKind::Bipropellant { .. }
+            );
+            if is_tank {
+                tanks.push(AssemblyEndpoint {
+                    name: format!("{}.{}", body.name, region.name),
+                    body: body_index,
+                });
+            }
+        }
+        for port in &body.ports {
+            if port.kind == PortKind::EngineMount {
+                engine_ports.push(AssemblyEndpoint {
+                    name: format!("{}.{}", body.name, port.name),
+                    body: body_index,
+                });
+            }
+        }
+    }
+    let assembly = VehicleAssembly {
+        root_body,
+        body_names: bodies.iter().map(|body| body.name.clone()).collect(),
+        links: runtime_links,
+        volumes,
+        tanks,
+        engine_ports,
+    };
+    assembly.validate().map_err(|error| error.to_string())?;
+    Ok(assembly)
+}
+
 impl VehicleAsset {
     fn bake(self) -> Result<VehicleDefinition, Box<dyn Error>> {
         let mut panels = self
@@ -702,9 +793,44 @@ impl VehicleAsset {
         let mut body_cabins = Vec::new();
         let mut body_cores = Vec::new();
         let mut body_stations = Vec::new();
-        for body in &self.procedural_bodies {
-            let compiled = compile_body(body, &BodyCompileOptions::default())
+        let mut assembly_volumes = Vec::new();
+        let compiled_assembly = if self.assembly.links.is_empty() {
+            None
+        } else {
+            let links = resolve_assembly_links(&self.assembly.links)?;
+            let assembly = compile_assembly(&self.procedural_bodies, &links)
+                .map_err(|error| format!("assembly: {error}"))?;
+            println!("assembly root: {}", assembly.root);
+            for (index, group) in assembly.crew_groups.iter().enumerate() {
+                println!("assembly crew domain {index}: {} volumes", group.len());
+            }
+            for (index, group) in assembly.air_groups.iter().enumerate() {
+                println!("assembly air domain {index}: {} volumes", group.len());
+            }
+            for path in &assembly.feed_paths {
+                println!("assembly feed: {} -> {}", path.tank, path.engine_port);
+            }
+            Some(assembly)
+        };
+        for (body_index, body) in self.procedural_bodies.iter().enumerate() {
+            let transform = compiled_assembly
+                .as_ref()
+                .map(|assembly| assembly.body_transforms[body_index])
+                .unwrap_or(BodyTransform {
+                    rotation_body: DQuat::IDENTITY,
+                    translation_body_m: body.origin_body_m,
+                });
+            let mut part_frame_body = body.clone();
+            // Assembly transforms own the placement; compiling at the part
+            // origin avoids applying authored translation a second time.
+            part_frame_body.origin_body_m = DVec3::ZERO;
+            let mut compiled = compile_body(&part_frame_body, &BodyCompileOptions::default())
                 .map_err(|error| format!("body '{}': {error}", body.name))?;
+            transform_compiled_body(&mut compiled, transform);
+            println!(
+                "body '{}': assembled at {:?} (rotation {:?})",
+                body.name, transform.translation_body_m, transform.rotation_body
+            );
             println!(
                 "body '{}': {} panels in {} zones, volume {:.3} m^3, wet {:.2} m^2",
                 body.name,
@@ -737,6 +863,24 @@ impl VehicleAsset {
                 body_tank_mounts.push(tank.mount);
             }
             for region in &compiled.interior {
+                if compiled_assembly.is_some()
+                    && !matches!(
+                        region.kind,
+                        RegionKind::Tank { .. }
+                            | RegionKind::FluidTank { .. }
+                            | RegionKind::Bipropellant { .. }
+                    )
+                {
+                    assembly_volumes.push(AssemblyVolume {
+                        name: format!("{}.{}", body.name, region.name),
+                        body: body_index,
+                        pressurized: region.atmosphere.is_some(),
+                        volume_m3: region.volume_m3,
+                        centroid_body_m: region.centroid_body_m,
+                        seats: region.seats,
+                        seat_positions_body_m: region.seat_positions_body_m.clone(),
+                    });
+                }
                 // Manifest mass already rides the hull accumulators above
                 // (single ownership: the compiler aggregates, the baker
                 // only prints here).
@@ -768,6 +912,7 @@ impl VehicleAsset {
                             atmosphere.o2_fraction,
                             region.air_mass_kg,
                         )
+                        .and_then(|cabin| cabin.with_centroid_body_m(region.centroid_body_m))
                         .map_err(|error| format!("body '{}': {error}", body.name))?,
                     );
                 }
@@ -841,28 +986,58 @@ impl VehicleAsset {
             }
             panels.extend(compiled.panels.iter().cloned());
             if self.body_collision {
-                let parts = body_collision_parts(body, &BodyCollisionOptions::default())
-                    .map_err(|error| format!("body '{}': {error}", body.name))?;
+                let mut parts =
+                    body_collision_parts(&part_frame_body, &BodyCollisionOptions::default())
+                        .map_err(|error| format!("body '{}': {error}", body.name))?;
+                for part in &mut parts {
+                    part.local_position_m = transform.transform_point(part.local_position_m);
+                    part.local_orientation =
+                        (transform.rotation_body * part.local_orientation).normalize();
+                }
                 println!("body '{}': {} contact parts", body.name, parts.len());
                 body_contact_parts.extend(parts);
             }
         }
-        // Part assembly: validated topology plus crew/air sharing domains
-        // and fuel reachability. Merged assembly physics (transforms,
-        // joints) arrives in a later slice; this step owns topology truth.
-        if !self.assembly.links.is_empty() {
-            let links = resolve_assembly_links(&self.assembly.links)?;
-            let assembly = compile_assembly(&self.procedural_bodies, &links)
-                .map_err(|error| format!("assembly: {error}"))?;
-            println!("assembly root: {}", assembly.root);
-            for (index, group) in assembly.crew_groups.iter().enumerate() {
-                println!("assembly crew domain {index}: {} volumes", group.len());
-            }
-            for (index, group) in assembly.air_groups.iter().enumerate() {
-                println!("assembly air domain {index}: {} volumes", group.len());
-            }
-            for path in &assembly.feed_paths {
-                println!("assembly feed: {} -> {}", path.tank, path.engine_port);
+        let runtime_assembly = compiled_assembly
+            .as_ref()
+            .map(|assembly| {
+                runtime_assembly(
+                    &self.procedural_bodies,
+                    &self.assembly.links,
+                    &assembly.root,
+                    assembly_volumes,
+                )
+            })
+            .transpose()?;
+        if let Some(assembly) = &runtime_assembly {
+            let initial_cabins = body_cabins.clone();
+            assembly
+                .equalize_cabin_states(&mut body_cabins)
+                .map_err(|error| format!("assembly cabin equilibrium: {error}"))?;
+            for cabin in &body_cabins {
+                let Some(initial) = initial_cabins
+                    .iter()
+                    .find(|initial| initial.name == cabin.name)
+                else {
+                    return Err(format!(
+                        "assembly equilibrium introduced unknown cabin '{}'",
+                        cabin.name
+                    )
+                    .into());
+                };
+                let delta_mass_kg = cabin.air_kg - initial.air_kg;
+                if delta_mass_kg != 0.0 {
+                    let volume = assembly
+                        .volumes
+                        .iter()
+                        .find(|volume| volume.name == cabin.name)
+                        .ok_or_else(|| {
+                            format!("assembly has no volume for cabin '{}'", cabin.name)
+                        })?;
+                    surface_mass_kg += delta_mass_kg;
+                    surface_moment += volume.centroid_body_m * delta_mass_kg;
+                    surface_inertia += parallel_axis(delta_mass_kg, volume.centroid_body_m);
+                }
             }
         }
         // Bake mounts first (authoring stations): the single final COM
@@ -1063,6 +1238,18 @@ impl VehicleAsset {
             .with_cabins(body_cabins)?
             .with_control_cores(body_cores)?
             .with_control_stations(body_stations)?;
+        if let Some(assembly) = runtime_assembly {
+            vehicle = vehicle.with_assembly(assembly)?;
+            for cabin in &vehicle.cabins {
+                println!(
+                    "assembly cabin '{}': equilibrium {:.2} kPa, {:.3} kg air at {:.1} K",
+                    cabin.name,
+                    cabin.current_pressure_kpa(),
+                    cabin.air_kg,
+                    cabin.temp_k
+                );
+            }
+        }
         vehicle.bake_engine_masses()?;
         vehicle.bake_tank_masses()?;
         vehicle.bake_system_masses()?;
@@ -1122,6 +1309,17 @@ impl VehicleAsset {
         }
         for mount in &mut vehicle.turboprops {
             shift_array(&mut mount.position_body_m, shift);
+        }
+        for cabin in &mut vehicle.cabins {
+            cabin.centroid_body_m = shift_point(cabin.centroid_body_m);
+        }
+        if let Some(assembly) = &mut vehicle.assembly {
+            for volume in &mut assembly.volumes {
+                volume.centroid_body_m = shift_point(volume.centroid_body_m);
+                for seat in &mut volume.seat_positions_body_m {
+                    *seat = shift_point(*seat);
+                }
+            }
         }
         let total = vehicle.mass_properties.mass_kg;
         let recentered =
@@ -2327,6 +2525,55 @@ fn rows_to_matrix(rows: [[f64; 3]; 3]) -> DMat3 {
 fn parallel_axis(mass_kg: f64, center: DVec3) -> DMat3 {
     let outer = DMat3::from_cols(center * center.x, center * center.y, center * center.z);
     (DMat3::from_diagonal(DVec3::splat(center.length_squared())) - outer) * mass_kg
+}
+
+/// Move all physical compiler outputs from one part frame into the
+/// assembled vehicle frame before aggregating mass, aero and runtime data.
+fn transform_compiled_body(compiled: &mut CompiledBody, transform: BodyTransform) {
+    for panel in &mut compiled.panels {
+        panel.position_body_m = transform.transform_point(panel.position_body_m);
+        panel.center_of_pressure_body_m =
+            transform.transform_point(panel.center_of_pressure_body_m);
+        panel.chord_axis_body = transform.transform_direction(panel.chord_axis_body);
+        panel.lift_axis_body = transform.transform_direction(panel.lift_axis_body);
+    }
+    for control in &mut compiled.controls {
+        if let Some(hinge) = &mut control.hinge {
+            hinge.point_body_m = transform.transform_point(hinge.point_body_m);
+            hinge.axis_body = transform.transform_direction(hinge.axis_body).normalize();
+        }
+    }
+    if let Some(structure) = &mut compiled.structure {
+        let local_center = structure.center_of_mass_body_m;
+        let centroidal_inertia =
+            structure.inertia_body_kg_m2 - parallel_axis(structure.mass_kg, local_center);
+        structure.center_of_mass_body_m = transform.transform_point(local_center);
+        structure.inertia_body_kg_m2 = transform.rotate_inertia(centroidal_inertia)
+            + parallel_axis(structure.mass_kg, structure.center_of_mass_body_m);
+    }
+    for tank in &mut compiled.tanks {
+        let mount = &mut tank.mount;
+        mount.position_body_m = transform
+            .transform_point(DVec3::from_array(mount.position_body_m))
+            .to_array();
+        mount.intrinsic_inertia_body_kg_m2 =
+            transform.rotate_inertia(mount.intrinsic_inertia_body_kg_m2);
+    }
+    for shield in &mut compiled.heat_shields {
+        shield.position_body_m = transform.transform_point(shield.position_body_m);
+    }
+    for region in &mut compiled.interior {
+        region.centroid_body_m = transform.transform_point(region.centroid_body_m);
+        for seat in &mut region.seat_positions_body_m {
+            *seat = transform.transform_point(*seat);
+        }
+    }
+    for port in &mut compiled.ports {
+        port.position_body_m = transform.transform_point(port.position_body_m);
+        port.axis_body_m = transform.transform_direction(port.axis_body_m).normalize();
+    }
+    compiled.summary.center_of_volume_m =
+        transform.transform_point(compiled.summary.center_of_volume_m);
 }
 
 /// Shift an array station by the recenter offset.
@@ -3813,17 +4060,111 @@ mod assembly_wiring_tests {
             .expect("assembly compiles");
         let vehicle = asset.bake().expect("assembly asset should bake");
         assert_eq!(assembly.root, "stage");
-        // Open hatch: one crew domain holding the capsule cabin.
+        let stage_mate = assembly.body_transforms[0].transform_point(DVec3::new(4.0, 0.0, 0.0));
+        let capsule_mate = assembly.body_transforms[1].transform_point(DVec3::ZERO);
+        assert!((stage_mate - capsule_mate).length() < 1.0e-12);
+        // Open hatch: one crew domain spanning both attached compartments.
         assert_eq!(assembly.crew_groups.len(), 1);
-        assert_eq!(assembly.crew_groups[0].len(), 1);
-        // Stage tank feeds the stage engine through the open link.
+        assert_eq!(assembly.crew_groups[0].len(), 2);
+        // Stage tank reaches a port on the attached capsule.
         assert!(
             assembly
                 .feed_paths
                 .iter()
-                .any(|path| path.tank == "stage.tank" && path.engine_port == "stage.engine")
+                .any(|path| path.tank == "stage.tank" && path.engine_port == "capsule.engine")
+        );
+        let cabin_volume = vehicle
+            .assembly
+            .as_ref()
+            .expect("baked assembly retained")
+            .volumes
+            .iter()
+            .find(|volume| volume.name == "capsule.cabin")
+            .expect("cabin region retained in assembly frame");
+        assert!(cabin_volume.volume_m3 > 0.0);
+        assert!(cabin_volume.centroid_body_m.is_finite());
+        let cabin = vehicle
+            .cabins
+            .iter()
+            .find(|cabin| cabin.name == cabin_volume.name)
+            .expect("runtime cabin aligns with its retained interior volume");
+        assert!((cabin.volume_m3 - cabin_volume.volume_m3).abs() < 1.0e-12);
+        let service_cabin = vehicle
+            .cabins
+            .iter()
+            .find(|cabin| cabin.name == "stage.service-bay")
+            .expect("stage service compartment retained");
+        assert!(
+            (cabin.current_pressure_kpa() - service_cabin.current_pressure_kpa()).abs() < 1.0e-10
+        );
+        assert_eq!(
+            vehicle.assembly.as_ref().unwrap().crew_domains().unwrap(),
+            vec![vec![
+                "stage.service-bay".to_string(),
+                "capsule.cabin".to_string()
+            ]]
+        );
+        assert!(
+            vehicle
+                .assembly_crew_can_pass("stage.service-bay", "capsule.cabin")
+                .unwrap()
+        );
+        assert!(
+            vehicle
+                .assembly_cabins_share_air("stage.service-bay", "capsule.cabin")
+                .unwrap()
+        );
+        assert!(
+            vehicle
+                .assembly_feed_paths()
+                .unwrap()
+                .contains(&("stage.tank".into(), "capsule.engine".into()))
+        );
+        let mut live_vehicle = vehicle.clone();
+        live_vehicle
+            .set_assembly_hatch_open("stack", false)
+            .unwrap();
+        assert!(
+            !live_vehicle
+                .assembly_crew_can_pass("stage.service-bay", "capsule.cabin")
+                .unwrap()
+        );
+        assert!(
+            !live_vehicle
+                .assembly_cabins_share_air("stage.service-bay", "capsule.cabin")
+                .unwrap()
+        );
+        assert!(
+            !live_vehicle
+                .assembly_feed_paths()
+                .unwrap()
+                .contains(&("stage.tank".into(), "capsule.engine".into()))
         );
         assert!(vehicle.mass_properties.mass_kg > 1500.0);
+        let serialized = serde_json::to_string(&vehicle).expect("vehicle assembly serializes");
+        let restored: VehicleDefinition =
+            serde_json::from_str(&serialized).expect("vehicle assembly deserializes");
+        let restored_assembly = restored.assembly.as_ref().expect("assembly round trips");
+        let original_assembly = vehicle.assembly.as_ref().unwrap();
+        assert_eq!(restored_assembly.root_body, original_assembly.root_body);
+        assert_eq!(restored_assembly.links, original_assembly.links);
+        assert_eq!(
+            restored_assembly.volumes.len(),
+            original_assembly.volumes.len()
+        );
+        for (restored, original) in restored_assembly
+            .volumes
+            .iter()
+            .zip(&original_assembly.volumes)
+        {
+            assert_eq!(restored.name, original.name);
+            assert!((restored.centroid_body_m - original.centroid_body_m).length() < 1.0e-12);
+            assert!((restored.volume_m3 - original.volume_m3).abs() < 1.0e-12);
+            assert_eq!(
+                restored.seat_positions_body_m,
+                original.seat_positions_body_m
+            );
+        }
         // Malformed endpoints refuse with a named error.
         assert!(
             resolve_assembly_links(&[AssemblyLinkAsset {

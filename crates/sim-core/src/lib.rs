@@ -41,14 +41,18 @@ pub use affine_propagator::{
     AffinePropagator, AnalyticError, AnalyticFallback, AnalyticStep, ModeCoefficients,
     PiecewiseReport, PropagatorError, StepCoefficients, propagate_piecewise,
 };
-pub use assembly::{AssemblyError, AssemblyLinkState, air_groups, crew_groups, feed_reachable};
+pub use assembly::{
+    AssemblyEndpoint, AssemblyError, AssemblyLinkState, AssemblyVolume, NamedAssemblyLink,
+    VehicleAssembly, air_groups, crew_groups, feed_reachable,
+};
 pub use atmosphere::{
     AtmosphereComposition, AtmosphereConfig, AtmosphereError, AtmosphereSample, BakedAtmosphere,
     GasKind,
 };
 pub use cabin::{
     AuthorityReason, AutopilotTier, CabinError, CabinPressureState, ControlAuthority, ControlCore,
-    ControlStation, PressurizedCabin, control_authority,
+    ControlStation, MOLAR_MASS_AIR_G_MOL, MOLAR_MASS_O2_G_MOL, PressurizedCabin, R_DRY_AIR_J_KG_K,
+    control_authority,
 };
 pub use collision::{
     CollisionAxis, CollisionError, CollisionGeometry, CollisionMaterial, CollisionPart,

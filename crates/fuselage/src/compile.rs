@@ -18,7 +18,7 @@
 //! follow the first moment of area change. Viscous crossflow at high alpha
 //! arrives through the solver's separated `sin^2` branch, not a body knob.
 
-use glam::{DMat3, DVec3, DVec4};
+use glam::{DMat3, DQuat, DVec3, DVec4};
 use serde::{Deserialize, Serialize};
 use thessa_sim_core::{
     AeroPanel, ControlHinge, ControlSurfaceDefinition, Propellant, TankMount, TankShape, TankSpec,
@@ -1945,6 +1945,31 @@ pub struct FeedPath {
     pub engine_port: String,
 }
 
+/// Rigid transform from one part's authored body frame into the assembled
+/// vehicle frame. Points include the translation; directions do not.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct BodyTransform {
+    pub rotation_body: DQuat,
+    pub translation_body_m: DVec3,
+}
+
+impl BodyTransform {
+    pub fn transform_point(self, point_body_m: DVec3) -> DVec3 {
+        self.rotation_body * point_body_m + self.translation_body_m
+    }
+
+    pub fn transform_direction(self, direction_body: DVec3) -> DVec3 {
+        self.rotation_body * direction_body
+    }
+
+    /// Rotate a centroidal tensor into the vehicle axes. Translation of
+    /// the tensor reference point uses a separate parallel-axis term.
+    pub fn rotate_inertia(self, inertia_body_kg_m2: DMat3) -> DMat3 {
+        let rotation = DMat3::from_quat(self.rotation_body);
+        rotation * inertia_body_kg_m2 * rotation.transpose()
+    }
+}
+
 /// Compiled part assembly: validated topology plus crew/air sharing
 /// domains and fuel reachability. Merged physics (transforms, joints)
 /// arrives in a later slice; this record owns topology truth.
@@ -1952,6 +1977,10 @@ pub struct FeedPath {
 pub struct CompiledAssembly {
     /// Root body name (the one never used as a child).
     pub root: String,
+    /// Part-to-vehicle transforms indexed exactly like the `bodies`
+    /// argument to [`compile_assembly`]. The root keeps its authored
+    /// translation; linked children are placed by mating attach frames.
+    pub body_transforms: Vec<BodyTransform>,
     /// Crew-passable volume groups (open hatch links; suits and air
     /// checked at runtime, not here).
     pub crew_groups: Vec<Vec<VolumeId>>,
@@ -1979,6 +2008,15 @@ pub fn compile_assembly(
             "assembly needs at least one body".into(),
         ));
     }
+    let mut body_names = std::collections::HashSet::new();
+    if bodies
+        .iter()
+        .any(|body| !body_names.insert(body.name.as_str()))
+    {
+        return Err(FuselageError::InvalidBody(
+            "assembly body names must be unique".into(),
+        ));
+    }
     let body_index = |name: &str| {
         bodies
             .iter()
@@ -1994,7 +2032,7 @@ pub fn compile_assembly(
         let station = match node.site {
             AttachSite::AftEnd => body.stations[0],
             AttachSite::ForwardEnd => *body.stations.last().unwrap(),
-            AttachSite::Station { x_m } => body.section_at(x_m),
+            AttachSite::Station { x_m, .. } => body.section_at(x_m),
         };
         2.0 * station
             .half_width_m
@@ -2005,14 +2043,18 @@ pub fn compile_assembly(
     struct Resolved {
         parent: usize,
         child: usize,
+        parent_node: usize,
+        child_node: usize,
+        hatch: bool,
         open: bool,
     }
     let mut resolved = Vec::with_capacity(links.len());
+    let mut link_names = std::collections::HashSet::new();
     let mut used: std::collections::HashSet<(usize, &str)> = std::collections::HashSet::new();
     for link in links {
-        if link.name.trim().is_empty() {
+        if link.name.trim().is_empty() || !link_names.insert(link.name.as_str()) {
             return Err(FuselageError::InvalidBody(
-                "assembly link needs a name".into(),
+                "assembly link names must be non-empty and unique".into(),
             ));
         }
         let parent = body_index(&link.parent_body)?;
@@ -2033,6 +2075,11 @@ pub fn compile_assembly(
                     link.name, link.parent_body, link.parent_node
                 ))
             })?;
+        let parent_node_index = bodies[parent]
+            .attach_nodes
+            .iter()
+            .position(|node| node.name == link.parent_node)
+            .expect("resolved parent node exists");
         let child_node = bodies[child]
             .attach_nodes
             .iter()
@@ -2043,6 +2090,11 @@ pub fn compile_assembly(
                     link.name, link.child_body, link.child_node
                 ))
             })?;
+        let child_node_index = bodies[child]
+            .attach_nodes
+            .iter()
+            .position(|node| node.name == link.child_node)
+            .expect("resolved child node exists");
         for (index, node) in [
             (parent, parent_node.name.as_str()),
             (child, child_node.name.as_str()),
@@ -2055,6 +2107,12 @@ pub fn compile_assembly(
         }
         let parent_d = node_diameter(&bodies[parent], parent_node);
         let child_d = node_diameter(&bodies[child], child_node);
+        if !parent_d.is_finite() || !child_d.is_finite() || parent_d <= 0.0 || child_d <= 0.0 {
+            return Err(FuselageError::InvalidBody(format!(
+                "assembly link '{}' requires positive finite interface diameters",
+                link.name
+            )));
+        }
         let mismatch = (parent_d - child_d).abs() / parent_d.max(child_d).max(f64::MIN_POSITIVE);
         if mismatch > STACK_DIAMETER_TOLERANCE {
             return Err(FuselageError::InvalidBody(format!(
@@ -2077,6 +2135,9 @@ pub fn compile_assembly(
         resolved.push(Resolved {
             parent,
             child,
+            parent_node: parent_node_index,
+            child_node: child_node_index,
+            hatch,
             open: if hatch { link.hatch_open } else { true },
         });
     }
@@ -2109,6 +2170,45 @@ pub fn compile_assembly(
             "assembly is a forest, not one connected tree".into(),
         ));
     }
+    // Resolve each part pose from attach-frame coincidence. The mating
+    // half-turn makes node outward axes oppose while preserving an
+    // authored stack's axial roll convention.
+    let mut body_transforms = vec![None; bodies.len()];
+    body_transforms[roots[0]] = Some(BodyTransform {
+        rotation_body: DQuat::IDENTITY,
+        translation_body_m: bodies[roots[0]].origin_body_m,
+    });
+    let mut pose_stack = vec![roots[0]];
+    while let Some(parent_index) = pose_stack.pop() {
+        let parent_transform = body_transforms[parent_index].expect("rooted traversal");
+        for link in resolved.iter().filter(|link| link.parent == parent_index) {
+            let parent_body = &bodies[link.parent];
+            let child_body = &bodies[link.child];
+            let parent_node = &parent_body.attach_nodes[link.parent_node];
+            let child_node = &child_body.attach_nodes[link.child_node];
+            let (parent_local_position, parent_local_rotation) =
+                attach_node_pose(parent_body, parent_node);
+            let (child_local_position, child_local_rotation) =
+                attach_node_pose(child_body, child_node);
+            let mating_rotation = DQuat::from_rotation_y(std::f64::consts::PI);
+            let child_rotation = (parent_transform.rotation_body
+                * parent_local_rotation
+                * mating_rotation
+                * child_local_rotation.inverse())
+            .normalize();
+            let parent_node_world = parent_transform.transform_point(parent_local_position);
+            let child_translation = parent_node_world - child_rotation * child_local_position;
+            body_transforms[link.child] = Some(BodyTransform {
+                rotation_body: child_rotation,
+                translation_body_m: child_translation,
+            });
+            pose_stack.push(link.child);
+        }
+    }
+    let body_transforms = body_transforms
+        .into_iter()
+        .map(|transform| transform.expect("connected tree assigns every part pose"))
+        .collect::<Vec<_>>();
     // Habitable volumes per body (non-tank regions).
     let is_volume = |kind: &RegionKind| {
         !matches!(
@@ -2135,17 +2235,24 @@ pub fn compile_assembly(
             .position(|volume| *volume == id)
             .expect("volume inventoried above")
     };
-    // Crew groups: open links of any kind (stack sides have no doors).
+    // Crew groups: open hatch links only; a structural stack joint is not
+    // an interior passage.
     let mut crew_union = UnionFind::new(volumes.len());
     // Air groups: open links between pressurized volumes only.
     let mut air_union = UnionFind::new(volumes.len());
     let pressurized = |id: VolumeId| bodies[id.body].regions[id.region].atmosphere.is_some();
-    // Body adjacency through open links.
-    let mut open_adj: Vec<Vec<usize>> = vec![Vec::new(); bodies.len()];
+    // Crew passes only through open hatches. Resource paths cross stack
+    // joints unconditionally and hatches only while open.
+    let mut crew_adj: Vec<Vec<usize>> = vec![Vec::new(); bodies.len()];
+    let mut resource_adj: Vec<Vec<usize>> = vec![Vec::new(); bodies.len()];
     for link in &resolved {
-        if link.open {
-            open_adj[link.parent].push(link.child);
-            open_adj[link.child].push(link.parent);
+        if link.hatch && link.open {
+            crew_adj[link.parent].push(link.child);
+            crew_adj[link.child].push(link.parent);
+        }
+        if !link.hatch || link.open {
+            resource_adj[link.parent].push(link.child);
+            resource_adj[link.child].push(link.parent);
         }
     }
     // Volumes in one body share the open interior (documented rule).
@@ -2157,7 +2264,7 @@ pub fn compile_assembly(
             }
         }
     }
-    for (body_index, neighbors) in open_adj.iter().enumerate() {
+    for (body_index, neighbors) in crew_adj.iter().enumerate() {
         for neighbor in neighbors {
             let a: Vec<VolumeId> = volumes
                 .iter()
@@ -2192,8 +2299,8 @@ pub fn compile_assembly(
         groups.sort_by_key(|group| (group[0].body, group[0].region));
         groups
     };
-    // Fuel reachability: tanks to engine-mount ports through open links
-    // (hatch links carry fuel only when open; structure never blocks).
+    // Fuel reachability: tanks to engine-mount ports through resource-open
+    // links (stack joints always flow; sealed hatches block crossfeed).
     let mut tanks: Vec<(usize, String)> = Vec::new();
     for (body_index, body) in bodies.iter().enumerate() {
         for region in &body.regions {
@@ -2221,7 +2328,7 @@ pub fn compile_assembly(
         let mut stack = vec![from];
         seen[from] = true;
         while let Some(next) = stack.pop() {
-            for neighbor in &open_adj[next] {
+            for neighbor in &resource_adj[next] {
                 if !seen[*neighbor] {
                     seen[*neighbor] = true;
                     stack.push(*neighbor);
@@ -2245,10 +2352,56 @@ pub fn compile_assembly(
     feed_paths.sort_by(|a, b| (&a.tank, &a.engine_port).cmp(&(&b.tank, &b.engine_port)));
     Ok(CompiledAssembly {
         root: bodies[roots[0]].name.clone(),
+        body_transforms,
         crew_groups: groups(&mut crew_union),
         air_groups: groups(&mut air_union),
         feed_paths,
     })
+}
+
+fn attach_node_pose(body: &ProceduralBody, node: &crate::AttachNode) -> (DVec3, DQuat) {
+    match node.site {
+        AttachSite::AftEnd => (
+            DVec3::new(
+                body.stations[0].x_m,
+                body.stations[0].offset_y_m,
+                body.stations[0].offset_z_m,
+            ),
+            DQuat::from_rotation_y(std::f64::consts::PI),
+        ),
+        AttachSite::ForwardEnd => {
+            let station = *body.stations.last().expect("validated stations");
+            (
+                DVec3::new(station.x_m, station.offset_y_m, station.offset_z_m),
+                DQuat::IDENTITY,
+            )
+        }
+        AttachSite::Station { x_m, clock_rad } => {
+            let station = body.section_at(x_m);
+            let (y, z) = outline_point(
+                station.half_width_m,
+                station.top_height_m,
+                station.bottom_height_m,
+                station.top_exponent,
+                station.bottom_exponent,
+                clock_rad,
+            );
+            let sin = clock_rad.sin();
+            let (height, exponent) = if sin >= 0.0 {
+                (station.top_height_m, station.top_exponent)
+            } else {
+                (station.bottom_height_m, station.bottom_exponent)
+            };
+            let normal_y = y.signum() * (y.abs() / station.half_width_m).powf(exponent - 1.0)
+                / station.half_width_m;
+            let normal_z = z.signum() * (z.abs() / height).powf(exponent - 1.0) / height;
+            let outward = DVec3::new(0.0, normal_y, normal_z).normalize();
+            (
+                DVec3::new(station.x_m, station.offset_y_m + y, station.offset_z_m + z),
+                DQuat::from_rotation_arc(DVec3::X, outward),
+            )
+        }
+    }
 }
 
 /// Disjoint-set union for tree and group computation.

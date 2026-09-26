@@ -2277,6 +2277,7 @@ fn assembly_capsule() -> ProceduralBody {
         )
         .unwrap(),
     ];
+    body.ports = vec![BodyPort::new("engine", 2.0, 0.0, PortKind::EngineMount, 0.5).unwrap()];
     body.attach_nodes =
         vec![AttachNode::new("base", AttachSite::AftEnd, AttachKind::Hatch, None).unwrap()];
     body.validate().unwrap();
@@ -2299,17 +2300,90 @@ fn open_hatch_shares_crew_air_and_fuel() {
     let bodies = vec![assembly_stage(), assembly_capsule()];
     let compiled = crate::compile_assembly(&bodies, &[assembly_link(true)]).unwrap();
     assert_eq!(compiled.root, "stage");
+    let stage_transform = compiled.body_transforms[0];
+    let capsule_transform = compiled.body_transforms[1];
+    let stage_attach = stage_transform.transform_point(DVec3::new(4.0, 0.0, 0.0));
+    let capsule_attach = capsule_transform.transform_point(DVec3::ZERO);
+    assert!((stage_attach - capsule_attach).length() < 1.0e-12);
+    let opposed_normals = stage_transform.transform_direction(DVec3::X)
+        + capsule_transform.transform_direction(DVec3::NEG_X);
+    assert!(opposed_normals.length() < 1.0e-12);
     // One crew group spanning both cabins (tank is not a volume).
     assert_eq!(compiled.crew_groups.len(), 1);
     assert_eq!(compiled.crew_groups[0].len(), 1);
     // Only the capsule cabin holds air: its own domain.
     assert_eq!(compiled.air_groups.len(), 1);
-    // The stage tank feeds the stage engine through the open link.
+    // The stage tank reaches an engine port on the attached capsule.
     assert!(
         compiled
             .feed_paths
             .iter()
-            .any(|path| path.tank == "stage.tank" && path.engine_port == "stage.engine")
+            .any(|path| path.tank == "stage.tank" && path.engine_port == "capsule.engine")
+    );
+}
+
+#[test]
+fn radial_attach_nodes_mate_at_the_loft_surface() {
+    use crate::{AttachKind, AttachNode, AttachSite};
+    let mut stage = assembly_stage();
+    let mut capsule = assembly_capsule();
+    stage.attach_nodes.push(
+        AttachNode::new(
+            "side",
+            AttachSite::Station {
+                x_m: 2.0,
+                clock_rad: 0.0,
+            },
+            AttachKind::Stack,
+            None,
+        )
+        .unwrap(),
+    );
+    capsule.attach_nodes.push(
+        AttachNode::new(
+            "side",
+            AttachSite::Station {
+                x_m: 1.0,
+                clock_rad: 0.0,
+            },
+            AttachKind::Stack,
+            None,
+        )
+        .unwrap(),
+    );
+    let link = crate::AssemblyLink {
+        name: "radial-joint".into(),
+        parent_body: "stage".into(),
+        parent_node: "side".into(),
+        child_body: "capsule".into(),
+        child_node: "side".into(),
+        hatch_open: true,
+    };
+    let assembly = crate::compile_assembly(&[stage, capsule], &[link]).unwrap();
+    let stage_transform = assembly.body_transforms[0];
+    let capsule_transform = assembly.body_transforms[1];
+    let stage_point = stage_transform.transform_point(DVec3::new(2.0, 1.0, 0.0));
+    let capsule_point = capsule_transform.transform_point(DVec3::new(1.0, 1.0, 0.0));
+    assert!((stage_point - capsule_point).length() < 1.0e-12);
+    let stage_normal = stage_transform.transform_direction(DVec3::Y);
+    let capsule_normal = capsule_transform.transform_direction(DVec3::Y);
+    assert!((stage_normal + capsule_normal).length() < 1.0e-12);
+}
+
+#[test]
+fn assembly_pose_rotates_inertia_without_changing_principal_values() {
+    let transform = crate::BodyTransform {
+        rotation_body: glam::DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2),
+        translation_body_m: DVec3::new(5.0, -2.0, 1.0),
+    };
+    let local = glam::DMat3::from_diagonal(DVec3::new(1.0, 2.0, 3.0));
+    let rotated = transform.rotate_inertia(local);
+    let expected = glam::DMat3::from_diagonal(DVec3::new(2.0, 1.0, 3.0));
+    assert!(
+        (rotated - expected)
+            .to_cols_array()
+            .iter()
+            .all(|entry| entry.abs() < 1.0e-12)
     );
 }
 
@@ -2329,6 +2403,12 @@ fn closed_hatch_isolates_but_holds_structure() {
             .iter()
             .any(|path| path.tank == "stage.tank" && path.engine_port == "stage.engine")
     );
+    assert!(
+        !compiled
+            .feed_paths
+            .iter()
+            .any(|path| path.tank == "stage.tank" && path.engine_port == "capsule.engine")
+    );
     // A sealed all-hatch pair of cabins splits crew domains.
     let mut second = assembly_capsule();
     second.name = "capsule-2".into();
@@ -2346,6 +2426,25 @@ fn closed_hatch_isolates_but_holds_structure() {
     let compiled = crate::compile_assembly(&bodies, &[link]).unwrap();
     assert_eq!(compiled.crew_groups.len(), 2);
     assert_eq!(compiled.air_groups.len(), 2);
+    // Structural stack interfaces carry loads/resources but never turn
+    // into walk-through doors, even when authored hatch_open is true.
+    let mut stack_a = assembly_capsule();
+    stack_a.name = "stack-a".into();
+    stack_a.attach_nodes[0].kind = AttachKind::Stack;
+    let mut stack_b = assembly_capsule();
+    stack_b.name = "stack-b".into();
+    stack_b.attach_nodes[0].kind = AttachKind::Stack;
+    let stack_link = crate::AssemblyLink {
+        name: "rigid-stack".into(),
+        parent_body: "stack-a".into(),
+        parent_node: "base".into(),
+        child_body: "stack-b".into(),
+        child_node: "base".into(),
+        hatch_open: true,
+    };
+    let stacked = crate::compile_assembly(&[stack_a, stack_b], &[stack_link]).unwrap();
+    assert_eq!(stacked.crew_groups.len(), 2);
+    assert_eq!(stacked.air_groups.len(), 2);
 }
 
 #[test]

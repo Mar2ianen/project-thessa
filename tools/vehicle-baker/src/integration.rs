@@ -23,7 +23,9 @@ fn procedural_lifting_body_and_wing_bake_and_roundtrip_as_one_vehicle() {
         max_rate_rad_s: 0.3,
         max_torque_nm: 7_500.0,
     };
-    let actuator_fixture = FIXTURE
+    // Normalize checkout line endings before injecting test-only TOML tables.
+    let normalized_fixture = FIXTURE.replace("\r\n", "\n");
+    let actuator_fixture = normalized_fixture
         .replace(
             "maximum_deflection_rad = 0.35\n",
             "maximum_deflection_rad = 0.35\n\n[procedural_bodies.controls.actuator]\nmax_rate_rad_s = 0.4\nmax_torque_nm = 1000000000000.0",

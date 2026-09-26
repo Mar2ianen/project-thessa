@@ -487,8 +487,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut minimum_loaded_legs = usize::MAX;
         let started = Instant::now();
         for _ in 0..steps {
-            let result =
-                world.evaluate_landing_leg_contacts(root, &legs, &states, DVec3::ZERO, true, DT)?;
+            let result = world.evaluate_landing_leg_contacts(
+                root,
+                &legs,
+                &states,
+                DVec3::ZERO,
+                thessa_collision::LandingLegDeploymentCommand::All(true),
+                DT,
+            )?;
             let loaded = result
                 .contacts
                 .iter()

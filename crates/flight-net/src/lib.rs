@@ -11,7 +11,7 @@ use thessa_autopilot::{AutopilotGraph, PlanDeoptimizationReason, TrajectoryPlan}
 use thessa_flight_authority::ControlMode;
 use thessa_flight_control::{GuidanceIntent, PropulsionDemand};
 use thessa_protocol::{CodecError, Envelope, kind};
-use thessa_sim_core::RigidBodyState;
+use thessa_sim_core::{ParachuteLoad, RigidBodyState, VehiclePartCommand};
 
 /// Client handshake: version check happens on [`Envelope`], this carries
 /// the human-readable identity for logs and the admin surface.
@@ -81,6 +81,13 @@ pub enum Command {
         initial_mass_kg: f64,
         segments: Vec<BurnSegmentCommand>,
     },
+    /// Apply a typed command to an installed vehicle subsystem. Event-like
+    /// commands are preserved in order by the server input mailbox, ready for
+    /// later staging and action-group dispatch. Kept last to preserve the
+    /// postcard discriminants of existing command variants.
+    Part {
+        command: VehiclePartCommand,
+    },
 }
 
 /// Steering direction of one burn segment on the wire: extensible enum so
@@ -136,7 +143,11 @@ pub struct ClientInput {
     pub engine_active: bool,
     pub sas_enabled: bool,
     pub rcs_enabled: bool,
+    pub reaction_wheels_enabled: bool,
     pub gear_down: bool,
+    /// Automatic parachute packs armed for their authored pressure triggers.
+    #[serde(default)]
+    pub parachutes_armed: bool,
     pub commands: Vec<Command>,
 }
 
@@ -277,6 +288,15 @@ impl ClientInput {
                         previous_end_s = end_s;
                     }
                 }
+                Command::Part {
+                    command:
+                        VehiclePartCommand::Parachute { name, .. }
+                        | VehiclePartCommand::SetReactionWheelBankEnabled { name, .. }
+                        | VehiclePartCommand::SetWheelChassisDeployed { name, .. }
+                        | VehiclePartCommand::SetLandingLegDeployed { name, .. },
+                } if name.trim().is_empty() => {
+                    return Err("named part command needs a non-empty component name".into());
+                }
                 _ => {}
             }
         }
@@ -319,6 +339,11 @@ pub struct Snapshot {
     pub server_wall_s: f64,
     pub steps_this_frame: u32,
     pub rails_advanced_s: f64,
+    /// Actual body-axis reaction-wheel moment from the latest authority step.
+    pub reaction_wheel_torque_body_nm: [f64; 3],
+    /// Per-canopy phase and physical load from the latest authority step.
+    #[serde(default)]
+    pub parachutes: Vec<ParachuteLoad>,
     pub wake_notice: Option<String>,
     pub flight_error: Option<String>,
 }
@@ -452,6 +477,7 @@ mod tests {
     use super::*;
     use glam::{DQuat, DVec3};
     use thessa_protocol::FrameDecoder;
+    use thessa_sim_core::{ParachutePhase, ParachuteState, VehiclePartCommand};
 
     fn sample_input() -> ClientInput {
         ClientInput {
@@ -463,7 +489,9 @@ mod tests {
             engine_active: true,
             sas_enabled: true,
             rcs_enabled: false,
+            reaction_wheels_enabled: true,
             gear_down: false,
+            parachutes_armed: true,
             commands: vec![Command::SetWarp { factor: 128.0 }, Command::Stage],
         }
     }
@@ -492,6 +520,46 @@ mod tests {
         let mut input = sample_input();
         input.commands = vec![Command::Stage; MAX_COMMANDS_PER_INPUT + 1];
         assert!(input.validate().is_err());
+    }
+
+    #[test]
+    fn part_commands_are_typed_and_reject_empty_named_targets() {
+        let mut input = sample_input();
+        input.commands = vec![Command::Part {
+            command: VehiclePartCommand::SetReactionWheelsEnabled { enabled: false },
+        }];
+        assert!(input.validate().is_ok());
+
+        input.commands = vec![Command::Part {
+            command: VehiclePartCommand::Parachute {
+                name: "  ".into(),
+                command: thessa_sim_core::ParachuteCommand::Arm,
+            },
+        }];
+        assert!(input.validate().is_err());
+    }
+
+    #[test]
+    fn part_commands_round_trip_in_order_on_the_flight_input_wire() {
+        let mut input = sample_input();
+        input.commands = vec![
+            Command::Part {
+                command: VehiclePartCommand::SetLandingGearDeployed { deployed: true },
+            },
+            Command::Part {
+                command: VehiclePartCommand::Parachute {
+                    name: "main".into(),
+                    command: thessa_sim_core::ParachuteCommand::Arm,
+                },
+            },
+        ];
+
+        let frame = encode_input(&input).expect("encode part commands");
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.push(&frame).expect("decode framed input");
+        let envelope = decode_frame(&frames[0]).expect("decode input envelope");
+        let decoded: ClientInput = decode_payload(&envelope).expect("decode part commands");
+        assert_eq!(decoded.commands, input.commands);
     }
 
     #[test]
@@ -579,6 +647,17 @@ mod tests {
             server_wall_s: 1.705,
             steps_this_frame: 181,
             rails_advanced_s: 0.0,
+            reaction_wheel_torque_body_nm: [250.0, -50.0, 10.0],
+            parachutes: vec![ParachuteLoad {
+                state: ParachuteState {
+                    phase: ParachutePhase::Reefed,
+                    inflation_elapsed_s: 0.8,
+                },
+                deployment_fraction: 0.42,
+                dynamic_pressure_pa: 820.0,
+                force_body_n: [-4_200.0, 0.0, 0.0].into(),
+                moment_body_nm: [0.0, 8_400.0, 0.0].into(),
+            }],
             wake_notice: None,
             flight_error: None,
         }
@@ -769,7 +848,9 @@ mod reset_command_tests {
             engine_active: false,
             sas_enabled: false,
             rcs_enabled: false,
+            reaction_wheels_enabled: true,
             gear_down: false,
+            parachutes_armed: false,
             commands: vec![
                 Command::Stage,
                 Command::Reset,

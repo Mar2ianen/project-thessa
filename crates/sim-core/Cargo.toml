@@ -83,3 +83,11 @@ harness = false
 [[bench]]
 name = "controls"
 harness = false
+
+[[bench]]
+name = "reaction_wheels"
+harness = false
+
+[[bench]]
+name = "parachutes"
+harness = false

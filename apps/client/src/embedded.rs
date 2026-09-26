@@ -231,6 +231,7 @@ fn is_edge_command(command: &thessa_flight_net::Command) -> bool {
         command,
         thessa_flight_net::Command::Stage
             | thessa_flight_net::Command::Engine { .. }
+            | thessa_flight_net::Command::Part { .. }
             | thessa_flight_net::Command::Reset
     )
 }
@@ -249,8 +250,8 @@ fn merge_commands(
                 queued.retain(|old| !matches!(old, thessa_flight_net::Command::Pause { .. }));
                 queued.push(command);
             }
-            // Stage and explicit engine commands are events; dropping one can
-            // change the authoritative state, so retain their full order.
+            // Stage, part, and explicit engine commands are events; dropping
+            // one can change authoritative state, so retain their full order.
             event => queued.push(event),
         }
     }
@@ -484,6 +485,8 @@ mod tests {
             server_wall_s: 0.1,
             steps_this_frame: 1,
             rails_advanced_s: 0.0,
+            reaction_wheel_torque_body_nm: [0.0; 3],
+            parachutes: Vec::new(),
             wake_notice: None,
             flight_error: None,
         }
@@ -624,11 +627,15 @@ mod tests {
             engine_active: false,
             sas_enabled: false,
             rcs_enabled: false,
+            reaction_wheels_enabled: true,
             gear_down: false,
+            parachutes_armed: false,
             commands: vec![Command::Stage; MAX_PENDING_EDGE_COMMANDS],
         };
         assert!(mailbox.push(input.clone()).is_ok());
-        input.commands.push(Command::Stage);
+        input.commands.push(Command::Part {
+            command: thessa_sim_core::VehiclePartCommand::SetRcsEnabled { enabled: true },
+        });
         assert_eq!(
             mailbox.push(input),
             Err(InputPushError::TooManyEdgeCommands)

@@ -16,10 +16,11 @@ use thessa_sim_core::{
     EngineCycle, EngineMount, EstocEjectorSpec, EstocPrecoolerSpec, EstocSpec, FoldJointRecord,
     FusionReaction, FusionTorchMount, FusionTorchSpec, IntakeKind, JetFuel, JetMount,
     LandingLegSpec, LandingShockAbsorberSpec, LiquidEngineSpec, NozzleContour, NtrFluid,
-    NuclearThermalSpec, Propellant, PropellerDriveMount, PropellerDriveSpec, PropellerSpec,
-    PropulsionSystemSpec, PulsedFusionMount, PulsedFusionSpec, RigidBodyProperties,
-    ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec, SystemMount, TankMount,
-    TankShape, TankSpec, TurbopropDriveSpec, TurbopropMount, VehicleDefinition, WheelBrakeSpec,
+    NuclearThermalSpec, ParachuteSpec, Propellant, PropellerDriveMount, PropellerDriveSpec,
+    PropellerSpec, PropulsionSystemSpec, PulsedFusionMount, PulsedFusionSpec,
+    ReactionWheelBankSpec, RigidBodyProperties, ShaftPowerSourceSpec, ShaftSpec,
+    SolidGrainGeometry, SolidMotorSpec, SystemMount, TankMount, TankShape, TankSpec,
+    TurbopropDriveSpec, TurbopropMount, VehicleDefinition, WheelBrakeSpec,
     WheelChassisRetractionSpec, WheelChassisSpec, WheelDriveSpec, WheelLayout, WheelStrutSpec,
     WheelTireSpec, analyze_airbreathing, analyze_altitude, analyze_estoc, analyze_propeller_drive,
     analyze_turboprop_drive,
@@ -520,6 +521,71 @@ struct VehicleAsset {
     /// Fold-out rocket/lander support legs with reusable or crushable shocks.
     #[serde(default)]
     landing_legs: Vec<LandingLegAsset>,
+    /// Optional body-axis reaction-wheel banks. Their rated torque is the
+    /// only attitude-authority limit; no rotor speed/momentum saturation is
+    /// modeled, matching the intended KSP-like gameplay behavior.
+    #[serde(default)]
+    reaction_wheels: Vec<ReactionWheelAsset>,
+    /// Optional atmospheric drag devices. Their pack mass is included in the
+    /// final center-of-mass and inertia bake.
+    #[serde(default)]
+    parachutes: Vec<ParachuteAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReactionWheelAsset {
+    name: String,
+    max_torque_body_nm: [f64; 3],
+    mass_kg: f64,
+    position_body_m: [f64; 3],
+    /// Matrix is authored as rows for readability.
+    inertia_body_kg_m2: [[f64; 3]; 3],
+}
+
+impl ReactionWheelAsset {
+    fn bake(self) -> ReactionWheelBankSpec {
+        ReactionWheelBankSpec {
+            name: self.name,
+            max_torque_body_nm: vector(self.max_torque_body_nm),
+            mass_kg: self.mass_kg,
+            position_body_m: vector(self.position_body_m),
+            inertia_body_kg_m2: rows_to_matrix(self.inertia_body_kg_m2),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ParachuteAsset {
+    name: String,
+    reference_area_m2: f64,
+    drag_coefficient: f64,
+    reefed_area_fraction: f64,
+    inflation_time_s: f64,
+    deploy_pressure_pa: f64,
+    max_deploy_dynamic_pressure_pa: f64,
+    max_canopy_load_n: f64,
+    pack_mass_kg: f64,
+    position_body_m: [f64; 3],
+    /// Matrix is authored as rows for readability.
+    inertia_body_kg_m2: [[f64; 3]; 3],
+}
+
+impl ParachuteAsset {
+    fn bake(self) -> ParachuteSpec {
+        ParachuteSpec {
+            name: self.name,
+            reference_area_m2: self.reference_area_m2,
+            drag_coefficient: self.drag_coefficient,
+            reefed_area_fraction: self.reefed_area_fraction,
+            inflation_time_s: self.inflation_time_s,
+            deploy_pressure_pa: self.deploy_pressure_pa,
+            max_deploy_dynamic_pressure_pa: self.max_deploy_dynamic_pressure_pa,
+            max_canopy_load_n: self.max_canopy_load_n,
+            pack_mass_kg: self.pack_mass_kg,
+            position_body_m: vector(self.position_body_m),
+            inertia_body_kg_m2: rows_to_matrix(self.inertia_body_kg_m2),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -918,6 +984,16 @@ impl VehicleAsset {
             .cloned()
             .map(LandingLegSpec::compile)
             .collect::<Result<Vec<_>, _>>()?;
+        let reaction_wheel_banks: Vec<_> = self
+            .reaction_wheels
+            .into_iter()
+            .map(ReactionWheelAsset::bake)
+            .collect();
+        let parachutes: Vec<_> = self
+            .parachutes
+            .into_iter()
+            .map(ParachuteAsset::bake)
+            .collect();
         // Assembly center of mass over EVERYTHING: hand mass rides the
         // authoring origin, surfaces/engine/tank/system/jet masses ride
         // their stations. Flight integrates moments about the body
@@ -992,6 +1068,14 @@ impl VehicleAsset {
         for leg in &landing_leg_components {
             total_mass_kg += leg.mass_properties.mass_kg;
             total_moment += leg.mass_properties.center_of_mass_body_m * leg.mass_properties.mass_kg;
+        }
+        for bank in &reaction_wheel_banks {
+            total_mass_kg += bank.mass_kg;
+            total_moment += bank.position_body_m * bank.mass_kg;
+        }
+        for parachute in &parachutes {
+            total_mass_kg += parachute.pack_mass_kg;
+            total_moment += parachute.position_body_m * parachute.pack_mass_kg;
         }
         let assembly_com = if total_mass_kg > 0.0 {
             total_moment / total_mass_kg
@@ -1068,7 +1152,9 @@ impl VehicleAsset {
             .with_propeller_drives(propeller_drive_mounts)?
             .with_turboprops(turboprop_mounts)?
             .with_wheel_chassis(wheel_chassis_specs)?
-            .with_landing_legs(landing_leg_specs)?;
+            .with_landing_legs(landing_leg_specs)?
+            .with_reaction_wheels(reaction_wheel_banks)?
+            .with_parachutes(parachutes)?;
         vehicle.bake_engine_masses()?;
         vehicle.bake_tank_masses()?;
         vehicle.bake_system_masses()?;
@@ -1079,6 +1165,8 @@ impl VehicleAsset {
         vehicle.bake_turboprop_masses()?;
         vehicle.bake_wheel_chassis_masses()?;
         vehicle.bake_landing_leg_masses()?;
+        vehicle.bake_reaction_wheel_masses()?;
+        vehicle.bake_parachute_masses()?;
         for (panel_index, joint) in parked_tags {
             vehicle.aero_geometry.panels[panel_index].fold_index = Some(joint);
         }
@@ -1149,6 +1237,12 @@ impl VehicleAsset {
                 .clone()
                 .compile()
                 .map_err(|error| format!("landing leg '{}': {error}", leg.spec.name))?;
+        }
+        for bank in &mut vehicle.reaction_wheels {
+            bank.position_body_m = shift_point(bank.position_body_m);
+        }
+        for parachute in &mut vehicle.parachutes {
+            parachute.position_body_m = shift_point(parachute.position_body_m);
         }
         let total = vehicle.mass_properties.mass_kg;
         let recentered =
@@ -2517,6 +2611,67 @@ mod tests {
         let round_trip: VehicleDefinition =
             serde_json::from_str(&json).expect("vehicle JSON should deserialize");
         assert_eq!(round_trip, vehicle);
+    }
+
+    #[test]
+    fn reaction_wheel_asset_bakes_its_torque_ratings_mass_and_mount() {
+        let asset: VehicleAsset = toml::from_str(include_str!(
+            "../../../data/vehicles/example_spacecraft.toml"
+        ))
+        .expect("spacecraft TOML should parse");
+        let vehicle = asset.bake().expect("spacecraft should bake");
+        assert_eq!(vehicle.reaction_wheels.len(), 1);
+        assert_eq!(
+            vehicle.reaction_wheels[0].max_torque_body_nm,
+            DVec3::new(250.0, 250.0, 180.0)
+        );
+        assert_eq!(vehicle.mass_properties.mass_kg, 1_228.0);
+        assert!(vehicle.reaction_wheels[0].position_body_m.x > -0.4);
+        let json = serde_json::to_string(&vehicle).expect("baked vehicle JSON");
+        let decoded: VehicleDefinition = serde_json::from_str(&json).expect("vehicle round trip");
+        assert_eq!(decoded.reaction_wheels[0].name, "service-module-wheel-box");
+        assert_eq!(
+            decoded.reaction_wheels[0].max_torque_body_nm,
+            vehicle.reaction_wheels[0].max_torque_body_nm
+        );
+        assert!(
+            (decoded.reaction_wheels[0].position_body_m
+                - vehicle.reaction_wheels[0].position_body_m)
+                .length()
+                < 1.0e-12
+        );
+        assert_eq!(
+            decoded.mass_properties.mass_kg,
+            vehicle.mass_properties.mass_kg
+        );
+    }
+
+    #[test]
+    fn parachute_asset_bakes_pressure_envelopes_mounts_and_pack_mass() {
+        let asset: VehicleAsset = toml::from_str(include_str!(
+            "../../../data/vehicles/example_parachute_vehicle.toml"
+        ))
+        .expect("parachute vehicle TOML should parse");
+        let vehicle = asset.bake().expect("parachute vehicle should bake");
+        assert_eq!(vehicle.parachutes.len(), 2);
+        assert_eq!(vehicle.parachutes[0].name, "drogue");
+        assert_eq!(vehicle.parachutes[0].deploy_pressure_pa, 22_000.0);
+        assert_eq!(vehicle.parachutes[1].reference_area_m2, 32.0);
+        assert_eq!(vehicle.mass_properties.mass_kg, 1_232.0);
+        assert!(vehicle.parachutes[0].position_body_m.x > -2.2);
+        let encoded = serde_json::to_string(&vehicle).expect("baked vehicle JSON");
+        let decoded: VehicleDefinition =
+            serde_json::from_str(&encoded).expect("vehicle round trip");
+        for (decoded, baked) in decoded.parachutes.iter().zip(&vehicle.parachutes) {
+            assert_eq!(decoded.name, baked.name);
+            assert_eq!(decoded.reference_area_m2, baked.reference_area_m2);
+            assert_eq!(decoded.deploy_pressure_pa, baked.deploy_pressure_pa);
+            assert!((decoded.position_body_m - baked.position_body_m).length() < 1.0e-12);
+        }
+        assert_eq!(
+            decoded.mass_properties.mass_kg,
+            vehicle.mass_properties.mass_kg
+        );
     }
 
     #[test]

@@ -194,6 +194,7 @@ fn client_input_takes_over(previous: Option<&ClientInput>, input: &ClientInput) 
             command,
             Command::Stage
                 | Command::Engine { .. }
+                | Command::Part { .. }
                 | Command::Reset
                 | Command::ExecuteManeuver { .. }
                 | Command::ExecuteBurnPlan { .. }
@@ -211,7 +212,9 @@ fn client_input_takes_over(previous: Option<&ClientInput>, input: &ClientInput) 
         || input.engine_active != previous.engine_active
         || input.sas_enabled != previous.sas_enabled
         || input.rcs_enabled != previous.rcs_enabled
+        || input.reaction_wheels_enabled != previous.reaction_wheels_enabled
         || input.gear_down != previous.gear_down
+        || input.parachutes_armed != previous.parachutes_armed
 }
 
 /// Driver around the authority: inputs in, snapshots out, warp accounting.
@@ -597,9 +600,44 @@ impl Sim {
             input.engine_active
         };
         self.authority.set_legacy_propulsion(input.throttle, active);
-        self.authority.sas_enabled = input.sas_enabled;
-        self.authority.rcs_enabled = input.rcs_enabled;
-        self.authority.gear_down = input.gear_down;
+        // These legacy state echoes are applied only when the client changes
+        // them. Otherwise a stale last-value packet could undo an intervening
+        // authoritative Part command (for example, one emitted by staging).
+        let changed = |current: bool, previous: Option<bool>| {
+            previous.is_none_or(|previous| current != previous)
+        };
+        if changed(
+            input.sas_enabled,
+            previous.as_ref().map(|previous| previous.sas_enabled),
+        ) {
+            self.authority.sas_enabled = input.sas_enabled;
+        }
+        if changed(
+            input.rcs_enabled,
+            previous.as_ref().map(|previous| previous.rcs_enabled),
+        ) {
+            self.authority.rcs_enabled = input.rcs_enabled;
+        }
+        if changed(
+            input.reaction_wheels_enabled,
+            previous
+                .as_ref()
+                .map(|previous| previous.reaction_wheels_enabled),
+        ) {
+            self.authority.reaction_wheels_enabled = input.reaction_wheels_enabled;
+        }
+        if changed(
+            input.gear_down,
+            previous.as_ref().map(|previous| previous.gear_down),
+        ) {
+            self.authority.set_gear_down(input.gear_down);
+        }
+        if changed(
+            input.parachutes_armed,
+            previous.as_ref().map(|previous| previous.parachutes_armed),
+        ) {
+            self.authority.set_parachutes_armed(input.parachutes_armed);
+        }
         let mut engine_command_seen = false;
         for command in &input.commands {
             match command {
@@ -647,6 +685,13 @@ impl Sim {
                     self.authority.engine_active = *active;
                     if became_ready {
                         self.autopilot_events.push_back(AutopilotEvent::EngineReady);
+                    }
+                }
+                Command::Part { command } => {
+                    force_snapshot = true;
+                    if let Err(error) = self.authority.apply_part_command(command) {
+                        self.authority.wake_notice =
+                            Some(format!("part command rejected: {error}"));
                     }
                 }
                 Command::ExecuteManeuver { nodes } => {
@@ -1777,6 +1822,8 @@ impl Sim {
             server_wall_s: self.wall_s(),
             steps_this_frame: authority.steps_this_frame,
             rails_advanced_s: authority.rails_advanced_this_frame,
+            reaction_wheel_torque_body_nm: authority.reaction_wheel_telemetry().to_array(),
+            parachutes: authority.parachute_telemetry().to_vec(),
             wake_notice: authority.wake_notice.clone(),
             flight_error: authority.flight_error.clone(),
         }
@@ -2479,6 +2526,7 @@ fn is_edge_command(command: &Command) -> bool {
         command,
         Command::Stage
             | Command::Engine { .. }
+            | Command::Part { .. }
             | Command::Reset
             | Command::ExecuteManeuver { .. }
             | Command::ExecuteBurnPlan { .. }
@@ -2517,7 +2565,7 @@ impl PendingInput {
                     merged.retain(|queued| !matches!(queued, Command::Pause { .. }));
                     merged.push(command);
                 }
-                // Stage and explicit engine commands are edge/event-like:
+                // Stage, part and explicit engine commands are edge/event-like:
                 // every one must reach the authoritative state in order.
                 event => {
                     edge_seen |= is_edge_command(&event);
@@ -3301,7 +3349,9 @@ mod tests {
             engine_active: false,
             sas_enabled: false,
             rcs_enabled: false,
+            reaction_wheels_enabled: true,
             gear_down: false,
+            parachutes_armed: false,
             commands,
         }
     }
@@ -3486,6 +3536,49 @@ mod tests {
         }
         assert!(sim.start_maneuver_execution(stale).is_err());
         assert!(sim.maneuver_execution.is_none());
+    }
+
+    #[test]
+    fn part_command_reaches_authoritative_runtime() {
+        let (mut driver, _) = test_driver();
+        driver.sim.register("pilot");
+        driver.sim.authority.rcs_enabled = false;
+        let command = Command::Part {
+            command: thessa_sim_core::VehiclePartCommand::SetRcsEnabled { enabled: true },
+        };
+
+        assert!(driver.sim.apply_input("pilot", &input(vec![command])));
+        assert!(driver.sim.authority.rcs_enabled);
+        // The next full-state packet still echoes the old legacy field. It
+        // must not undo the discrete command unless the client changed it.
+        driver.sim.apply_input("pilot", &input(Vec::new()));
+        assert!(driver.sim.authority.rcs_enabled);
+    }
+
+    #[test]
+    fn part_command_cancels_a_waiting_autopilot_script() {
+        let (mut driver, _) = test_driver();
+        driver.sim.register("pilot");
+        let neutral = input(Vec::new());
+        driver.apply_client_input("pilot", &neutral);
+        assert!(driver.sim.apply_autopilot(
+            "pilot",
+            &AutopilotInput {
+                tick: 0,
+                command: AutopilotCommand::StartScript {
+                    source: "await sim.sleep(1); return Guidance.angularRate(0.1, 0, 0);".into(),
+                },
+            },
+            &mut driver.autopilot,
+        ));
+        assert_eq!(driver.autopilot.scheduler.pending(), 1);
+
+        let part_input = input(vec![Command::Part {
+            command: thessa_sim_core::VehiclePartCommand::SetRcsEnabled { enabled: true },
+        }]);
+        assert!(driver.apply_client_input("pilot", &part_input));
+        assert_eq!(driver.autopilot.scheduler.pending(), 0);
+        assert!(driver.sim.authority.rcs_enabled);
     }
 
     #[test]
@@ -4412,6 +4505,23 @@ mod tests {
     }
 
     #[test]
+    fn coalescing_preserves_ordered_part_commands() {
+        let commands = vec![
+            Command::Part {
+                command: thessa_sim_core::VehiclePartCommand::SetRcsEnabled { enabled: false },
+            },
+            Command::Part {
+                command: thessa_sim_core::VehiclePartCommand::SetLandingGearDeployed {
+                    deployed: true,
+                },
+            },
+        ];
+        let mut pending = PendingInput::default();
+        pending.push(input(commands.clone()), 1);
+        assert_eq!(pending.take().expect("part input").commands, commands);
+    }
+
+    #[test]
     fn coalesced_trailing_toggle_after_an_edge_is_preserved() {
         // [Stage(seq1, echo=false), continuous(seq2, echo=true)]: the user
         // toggled after the edge. The merged batch must carry the newer
@@ -4949,7 +5059,9 @@ mod reset_tests {
             engine_active: false,
             sas_enabled: false,
             rcs_enabled: false,
+            reaction_wheels_enabled: true,
             gear_down: false,
+            parachutes_armed: false,
             commands,
         }
     }

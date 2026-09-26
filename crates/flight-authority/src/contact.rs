@@ -18,7 +18,8 @@ use glam::{DQuat, DVec3};
 use thessa_collision::{
     ArticulatedWheelBinding, CollisionBodyId, CollisionDebugSnapshot, CollisionFrame,
     CollisionWorld, ContactSummary, DynamicBodyConfig, ExternalWrench, JointId, KinematicBodyId,
-    LandingLegContactSample, StaticColliderId, WheelContactResult, WheelContactSample,
+    LandingLegContactSample, LandingLegDeploymentCommand, StaticColliderId, WheelContactResult,
+    WheelContactSample,
 };
 use thessa_sim_core::{
     CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledWheelChassis,
@@ -1119,6 +1120,54 @@ impl ContactRuntime {
         ),
         FlightError,
     > {
+        let landing_leg_commands = vec![gear_down; vehicle.landing_legs.len()];
+        let wheel_chassis_commands = vec![gear_down; vehicle.wheel_chassis.len()];
+        self.step_articulated_vehicle_with_gear_targets(
+            step_s,
+            state,
+            gravity_acceleration_inertial_mps2,
+            forces,
+            vehicle,
+            brake_command,
+            drive_command,
+            wheel_spin_rad_s,
+            wheel_brake_states,
+            wheel_chassis_states,
+            landing_leg_states,
+            &landing_leg_commands,
+            &wheel_chassis_commands,
+        )
+    }
+
+    /// Integrate articulated gear using independent deployment commands for
+    /// each authored landing leg and wheel chassis.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    pub fn step_articulated_vehicle_with_gear_targets(
+        &mut self,
+        step_s: f64,
+        state: RigidBodyState,
+        gravity_acceleration_inertial_mps2: DVec3,
+        forces: &FlightForces,
+        vehicle: &VehicleDefinition,
+        brake_command: f64,
+        drive_command: f64,
+        wheel_spin_rad_s: &mut [Vec<f64>],
+        wheel_brake_states: &mut [Vec<WheelBrakeState>],
+        wheel_chassis_states: &mut [WheelChassisState],
+        landing_leg_states: &mut [LandingLegState],
+        landing_leg_deployment_commands: &[bool],
+        wheel_chassis_deployment_commands: &[bool],
+    ) -> Result<
+        (
+            RigidBodyState,
+            Vec<WheelContactSample>,
+            Vec<(usize, u16, WheelDrivePoint)>,
+            Vec<LandingLegContactSample>,
+            Vec<(usize, LandingGearActuatorPoint)>,
+            Vec<(usize, WheelChassisActuatorPoint)>,
+        ),
+        FlightError,
+    > {
         if !step_s.is_finite()
             || step_s <= 0.0
             || !gravity_acceleration_inertial_mps2.is_finite()
@@ -1126,6 +1175,8 @@ impl ContactRuntime {
             || !(0.0..=1.0).contains(&brake_command)
             || !drive_command.is_finite()
             || !(-1.0..=1.0).contains(&drive_command)
+            || landing_leg_deployment_commands.len() != vehicle.landing_legs.len()
+            || wheel_chassis_deployment_commands.len() != vehicle.wheel_chassis.len()
             || !forces.total_force_inertial_n.is_finite()
             || !forces.total_moment_body_nm.is_finite()
             || !(state.orientation_body_to_inertial * forces.total_moment_body_nm).is_finite()
@@ -1323,7 +1374,7 @@ impl ContactRuntime {
                     &vehicle.landing_legs,
                     landing_leg_states,
                     assembly.mass_split.sprung_center_of_mass_body_m,
-                    gear_down,
+                    LandingLegDeploymentCommand::PerLeg(landing_leg_deployment_commands),
                     step_s,
                 )
                 .map_err(|error| invalid(format!("landing-leg contact: {error}")))?;
@@ -1341,7 +1392,7 @@ impl ContactRuntime {
                     .spec
                     .advance_deployment(
                         landing_leg_states[index],
-                        gear_down,
+                        landing_leg_deployment_commands[index],
                         step_s,
                         resisting_torque_nm,
                     )
@@ -1360,7 +1411,7 @@ impl ContactRuntime {
             let (next_state, actuator) = retraction
                 .advance_deployment(
                     wheel_chassis_states[index],
-                    gear_down,
+                    wheel_chassis_deployment_commands[index],
                     step_s,
                     wheel_hinge_moments_nm[index].abs(),
                 )
@@ -1906,9 +1957,11 @@ mod tests {
             .expect("retraction config")
             .initial_state()];
         let mut landing_leg_states = [];
+        let landing_leg_deployment_commands = [];
+        let wheel_chassis_deployment_commands = [true];
         let forces = zero_forces();
         let (next, _, _, _, _, telemetry) = runtime
-            .step_articulated_vehicle_with_gear(
+            .step_articulated_vehicle_with_gear_targets(
                 1.0 / 120.0,
                 state,
                 DVec3::ZERO,
@@ -1920,7 +1973,8 @@ mod tests {
                 &mut brake_states,
                 &mut gear_states,
                 &mut landing_leg_states,
-                true,
+                &landing_leg_deployment_commands,
+                &wheel_chassis_deployment_commands,
             )
             .expect("contact step deploys the aircraft wheel");
         state = next;
@@ -1930,7 +1984,7 @@ mod tests {
 
         let stowed_position = vehicle.wheel_chassis[0].wheel_stations[0].position_body_m;
         runtime
-            .step_articulated_vehicle_with_gear(
+            .step_articulated_vehicle_with_gear_targets(
                 1.0 / 120.0,
                 state,
                 DVec3::ZERO,
@@ -1942,7 +1996,8 @@ mod tests {
                 &mut brake_states,
                 &mut gear_states,
                 &mut landing_leg_states,
-                true,
+                &landing_leg_deployment_commands,
+                &wheel_chassis_deployment_commands,
             )
             .expect("contact runtime follows the moving gear hinge");
         let deployed_position = runtime

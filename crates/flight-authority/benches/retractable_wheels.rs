@@ -130,10 +130,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut brake_states = vec![vec![Default::default(); usize::from(wheel_count)]];
         let mut gear_states = vec![retraction.initial_state()];
         let mut leg_states = Vec::new();
+        let leg_deployment_commands = Vec::new();
+        let mut wheel_deployment_commands = vec![true; vehicle.wheel_chassis.len()];
         let forces = zero_forces();
         let steps = (32_000 / usize::from(wheel_count)).clamp(500, 8_000);
         for index in 0..120 {
-            (state, _, _, _, _, _) = runtime.step_articulated_vehicle_with_gear(
+            wheel_deployment_commands[0] = index < 60;
+            (state, _, _, _, _, _) = runtime.step_articulated_vehicle_with_gear_targets(
                 STEP_S,
                 state,
                 DVec3::ZERO,
@@ -145,13 +148,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &mut brake_states,
                 &mut gear_states,
                 &mut leg_states,
-                index < 60,
+                &leg_deployment_commands,
+                &wheel_deployment_commands,
             )?;
         }
 
         let started = Instant::now();
         for index in 0..steps {
-            (state, _, _, _, _, _) = runtime.step_articulated_vehicle_with_gear(
+            wheel_deployment_commands[0] = index < steps / 2;
+            (state, _, _, _, _, _) = runtime.step_articulated_vehicle_with_gear_targets(
                 STEP_S,
                 state,
                 DVec3::ZERO,
@@ -163,7 +168,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &mut brake_states,
                 &mut gear_states,
                 &mut leg_states,
-                index < steps / 2,
+                &leg_deployment_commands,
+                &wheel_deployment_commands,
             )?;
         }
         let elapsed = started.elapsed();

@@ -1,0 +1,26 @@
+name = "example-reaction-wheel-spacecraft"
+mass_kg = 1200.0
+# Base structure properties; the wheel bank is added by the vehicle baker.
+inertia_body_kg_m2 = [
+  [1800.0, 0.0, 0.0],
+  [0.0, 2200.0, 0.0],
+  [0.0, 0.0, 2400.0],
+]
+
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 1.0
+chord_m = 1.0
+
+[[reaction_wheels]]
+name = "service-module-wheel-box"
+max_torque_body_nm = [250.0, 250.0, 180.0]
+mass_kg = 28.0
+position_body_m = [-0.4, 0.0, 0.0]
+inertia_body_kg_m2 = [
+  [8.0, 0.0, 0.0],
+  [0.0, 8.0, 0.0],
+  [0.0, 0.0, 8.0],
+]

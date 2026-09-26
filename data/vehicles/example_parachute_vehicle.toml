@@ -1,0 +1,49 @@
+name = "example-two-stage-recovery-vehicle"
+mass_kg = 1200.0
+# Base structure properties; both packed parachute assemblies are added by the baker.
+inertia_body_kg_m2 = [
+  [1800.0, 0.0, 0.0],
+  [0.0, 2200.0, 0.0],
+  [0.0, 0.0, 2400.0],
+]
+
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 1.0
+chord_m = 1.0
+
+[[parachutes]]
+name = "drogue"
+reference_area_m2 = 5.0
+drag_coefficient = 1.5
+reefed_area_fraction = 0.2
+inflation_time_s = 1.5
+deploy_pressure_pa = 22000.0
+max_deploy_dynamic_pressure_pa = 18000.0
+max_canopy_load_n = 95000.0
+pack_mass_kg = 8.0
+position_body_m = [-2.2, 0.0, 0.0]
+inertia_body_kg_m2 = [
+  [1.5, 0.0, 0.0],
+  [0.0, 1.5, 0.0],
+  [0.0, 0.0, 1.5],
+]
+
+[[parachutes]]
+name = "main"
+reference_area_m2 = 32.0
+drag_coefficient = 1.5
+reefed_area_fraction = 0.12
+inflation_time_s = 3.0
+deploy_pressure_pa = 9000.0
+max_deploy_dynamic_pressure_pa = 1800.0
+max_canopy_load_n = 180000.0
+pack_mass_kg = 24.0
+position_body_m = [-2.0, 0.0, 0.0]
+inertia_body_kg_m2 = [
+  [4.0, 0.0, 0.0],
+  [0.0, 4.0, 0.0],
+  [0.0, 0.0, 4.0],
+]

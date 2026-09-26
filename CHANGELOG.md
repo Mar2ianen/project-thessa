@@ -37,6 +37,9 @@ APIs, data formats, and save files are not stable before `0.1.0`.
   and control inputs at deterministic substeps.
 - `Reset` in flight wire protocol v4, restarting at the canonical site while
   preserving simulation time.
+- Deployable parachutes, reaction-wheel banks, and typed installed-part
+  commands over flight wire protocol v5, including named gear and canopy
+  controls for future stage/action-group dispatch.
 - Declared terrain obstacle heights and geometric track certification for
   unattended craft, future landing guidance, and impact prediction.
 - Shared `canonical_launch_setup` helper so server and client surveys derive

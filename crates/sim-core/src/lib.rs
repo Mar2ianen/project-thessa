@@ -22,7 +22,10 @@ mod high_speed;
 mod integrator;
 mod landing_gear;
 mod onrails;
+mod parachute;
+mod part_command;
 mod propulsion;
+mod reaction_wheel;
 mod scheduler;
 mod system;
 mod table;
@@ -102,6 +105,11 @@ pub use onrails::{
     COAST_RAILS_VELOCITY_TOL_MPS, DISPLAY_SCALED_ETA, DISPLAY_SCALED_H_MAX_S,
     DISPLAY_SCALED_H_MIN_S, DISPLAY_SCALED_MAX_SAMPLES, OnRailsCache, OnRailsWake,
 };
+pub use parachute::{
+    MAX_PARACHUTES, ParachuteCommand, ParachuteEnvironment, ParachuteError, ParachuteLoad,
+    ParachutePhase, ParachuteSpec, ParachuteState,
+};
+pub use part_command::VehiclePartCommand;
 pub use propulsion::{
     AIR_CP_J_KG_K, AIR_GAMMA, AirAltitudePoint, AirCycle, AirOperatingPoint, AirbreathingSpec,
     AltitudePoint, BurnPoint, ChamberMaterial, ChamberSpec, ColdGasThrusterSpec,
@@ -134,6 +142,10 @@ pub use propulsion::{
     advance_jet_spool, advance_spool, analyze_airbreathing, analyze_altitude, analyze_estoc,
     analyze_propeller_drive, analyze_turboprop_drive, characteristic_velocity,
     effective_propulsive_isp_s, flight_condition, mach_from_area_ratio, thrust_coefficient,
+};
+pub use reaction_wheel::{
+    ReactionWheelAllocation, ReactionWheelBankSpec, ReactionWheelError, allocate_reaction_wheels,
+    allocate_reaction_wheels_with_enabled_banks,
 };
 pub use scheduler::{EventScheduler, ScheduledEvent, ScheduledKind};
 pub use system::{

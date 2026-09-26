@@ -371,6 +371,15 @@ pub struct LandingLegContactResult {
     pub wrench: ExternalWrench,
 }
 
+/// Deployment target applied while evaluating fold-out landing-leg contacts.
+/// `All` is allocation-free for legacy/group controls; `PerLeg` lets part
+/// commands independently control each authored support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LandingLegDeploymentCommand<'a> {
+    All(bool),
+    PerLeg(&'a [bool]),
+}
+
 /// Backend binding for a wheel rigid body attached to the sprung vehicle by a
 /// slider/spin joint. The nominal center is expressed from the sprung body's
 /// center at full strut extension.
@@ -1855,7 +1864,7 @@ impl CollisionWorld {
         legs: &[CompiledLandingLeg],
         states: &[LandingLegState],
         body_origin_offset_body_m: DVec3,
-        command_deployed: bool,
+        deployment_command: LandingLegDeploymentCommand<'_>,
         step_s: f64,
     ) -> Result<LandingLegContactResult, CollisionBackendError> {
         let entry = self
@@ -1867,6 +1876,7 @@ impl CollisionWorld {
             .get(entry.rapier)
             .ok_or(CollisionBackendError::BackendStateLost(body_id))?;
         if legs.len() != states.len()
+            || matches!(deployment_command, LandingLegDeploymentCommand::PerLeg(commands) if commands.len() != legs.len())
             || !body_origin_offset_body_m.is_finite()
             || !step_s.is_finite()
             || step_s <= 0.0
@@ -2010,6 +2020,10 @@ impl CollisionWorld {
                 .dot(hinge_axis_local);
             let mut commanded_rotation_sign =
                 (spec.deployed_angle_rad - spec.stowed_angle_rad).signum();
+            let command_deployed = match deployment_command {
+                LandingLegDeploymentCommand::All(deployed) => deployed,
+                LandingLegDeploymentCommand::PerLeg(commands) => commands[index],
+            };
             if !command_deployed {
                 commanded_rotation_sign = -commanded_rotation_sign;
             }
@@ -2794,7 +2808,7 @@ mod tests {
                 std::slice::from_ref(&compiled),
                 std::slice::from_ref(&state),
                 DVec3::ZERO,
-                true,
+                LandingLegDeploymentCommand::All(true),
                 0.1,
             )
             .unwrap();
@@ -2824,7 +2838,7 @@ mod tests {
                 std::slice::from_ref(&compiled),
                 std::slice::from_ref(&folded),
                 DVec3::ZERO,
-                false,
+                LandingLegDeploymentCommand::PerLeg(&[false]),
                 0.1,
             )
             .unwrap();
@@ -2882,7 +2896,7 @@ mod tests {
                 std::slice::from_ref(&leg),
                 &[leg.spec.initial_state()],
                 DVec3::ZERO,
-                true,
+                LandingLegDeploymentCommand::All(true),
                 1.0 / 120.0,
             )
             .unwrap();
@@ -2900,7 +2914,7 @@ mod tests {
                 std::slice::from_ref(&leg),
                 &first.states,
                 DVec3::ZERO,
-                true,
+                LandingLegDeploymentCommand::All(true),
                 1.0 / 120.0,
             )
             .unwrap();

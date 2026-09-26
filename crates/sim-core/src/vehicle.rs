@@ -9,11 +9,12 @@ use crate::{
     CompiledLandingLeg, CompiledWheelChassis, ElectricThrusterCommand, ElectricThrusterMount,
     ElectricThrusterPoint, EngineMount, EstocPoint, FlightCondition, FlightError,
     FusionTorchCommand, FusionTorchMount, FusionTorchOperatingPoint, JetCommand, JetMount,
-    LandingGearError, LandingLegMassProperties, LandingLegSpec, PropDrivePoint,
-    PropellerDriveCommand, PropellerDriveMount, PropulsionError, PulsedFusionCommand,
-    PulsedFusionMount, PulsedFusionOperatingPoint, PulsedFusionState, RigidBodyProperties,
-    SystemMount, TankMount, TurbopropCommand, TurbopropMount, TurbopropOperatingPoint,
-    WheelBodyMassProperties, WheelChassisMassProperties, WheelChassisSpec, WheelChassisState,
+    LandingGearError, LandingLegMassProperties, LandingLegSpec, ParachuteError, ParachuteSpec,
+    PropDrivePoint, PropellerDriveCommand, PropellerDriveMount, PropulsionError,
+    PulsedFusionCommand, PulsedFusionMount, PulsedFusionOperatingPoint, PulsedFusionState,
+    ReactionWheelBankSpec, ReactionWheelError, RigidBodyProperties, SystemMount, TankMount,
+    TurbopropCommand, TurbopropMount, TurbopropOperatingPoint, WheelBodyMassProperties,
+    WheelChassisMassProperties, WheelChassisSpec, WheelChassisState,
 };
 
 pub type StatefulTurbopropWrench = (
@@ -328,6 +329,14 @@ pub struct VehicleDefinition {
     /// Their structural mass is included in the sprung vehicle properties.
     #[serde(default)]
     pub landing_legs: Vec<CompiledLandingLeg>,
+    /// Installed internal attitude-control assemblies. Their per-axis torque
+    /// ratings are actuator data; assembly mass is included in mass baking.
+    #[serde(default)]
+    pub reaction_wheels: Vec<ReactionWheelBankSpec>,
+    /// Installed atmospheric drag devices. Their packed mass is included in
+    /// the vehicle COM and inertia; canopy forces are evaluated at each mount.
+    #[serde(default)]
+    pub parachutes: Vec<ParachuteSpec>,
     /// Fold joints compiled from procedural surfaces (hinge placement in
     /// the compiled mechanism state). The force solver ignores them; the
     /// mechanism mixer transforms `fold_index`-tagged panels about these
@@ -643,6 +652,8 @@ impl VehicleDefinition {
             turboprops: Vec::new(),
             wheel_chassis: Vec::new(),
             landing_legs: Vec::new(),
+            reaction_wheels: Vec::new(),
+            parachutes: Vec::new(),
             fold_joints: Vec::new(),
         };
         definition.validate()?;
@@ -705,6 +716,32 @@ impl VehicleDefinition {
         }
         for mount in &self.turboprops {
             mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        let mut reaction_wheel_names = std::collections::HashSet::new();
+        for bank in &self.reaction_wheels {
+            bank.validate().map_err(VehicleError::ReactionWheel)?;
+            if !reaction_wheel_names.insert(bank.name.as_str()) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "duplicate reaction-wheel bank name '{}'",
+                    bank.name
+                )));
+            }
+        }
+        if self.parachutes.len() > crate::MAX_PARACHUTES {
+            return Err(VehicleError::InvalidVehicle(format!(
+                "parachute count must not exceed {}",
+                crate::MAX_PARACHUTES
+            )));
+        }
+        let mut parachute_names = std::collections::HashSet::new();
+        for parachute in &self.parachutes {
+            parachute.validate().map_err(VehicleError::Parachute)?;
+            if !parachute_names.insert(parachute.name.as_str()) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "duplicate parachute name '{}'",
+                    parachute.name
+                )));
+            }
         }
         let mut chassis_names = std::collections::HashSet::new();
         for chassis in &self.wheel_chassis {
@@ -895,6 +932,88 @@ impl VehicleDefinition {
                 + leg_mass_kg
                     * (glam::DMat3::IDENTITY * center_of_mass_body_m.length_squared()
                         - outer_product(center_of_mass_body_m, center_of_mass_body_m));
+        }
+        self.mass_properties = RigidBodyProperties::new(mass_kg, inertia_body_kg_m2)
+            .map_err(VehicleError::MassProperties)?;
+        Ok(())
+    }
+
+    /// Attach authored body-axis reaction-wheel banks. Their torque ratings
+    /// are actuator data; their dry mass and local
+    /// inertia are added separately by [`Self::bake_reaction_wheel_masses`].
+    pub fn with_reaction_wheels(
+        mut self,
+        reaction_wheels: Vec<ReactionWheelBankSpec>,
+    ) -> Result<Self, VehicleError> {
+        let mut names = std::collections::HashSet::new();
+        for bank in &reaction_wheels {
+            bank.validate().map_err(VehicleError::ReactionWheel)?;
+            if !names.insert(bank.name.as_str()) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "duplicate reaction-wheel bank name '{}'",
+                    bank.name
+                )));
+            }
+        }
+        self.reaction_wheels = reaction_wheels;
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Add installed reaction-wheel dry masses and inertia tensors about the
+    /// authored vehicle origin. The vehicle baker applies the final common COM
+    /// shift after every mounted component has been attached.
+    pub fn bake_reaction_wheel_masses(&mut self) -> Result<(), VehicleError> {
+        let mut mass_kg = self.mass_properties.mass_kg;
+        let mut inertia_body_kg_m2 = self.mass_properties.inertia_body_kg_m2;
+        for bank in &self.reaction_wheels {
+            bank.validate().map_err(VehicleError::ReactionWheel)?;
+            mass_kg += bank.mass_kg;
+            inertia_body_kg_m2 += bank.inertia_body_kg_m2
+                + bank.mass_kg
+                    * (glam::DMat3::IDENTITY * bank.position_body_m.length_squared()
+                        - outer_product(bank.position_body_m, bank.position_body_m));
+        }
+        self.mass_properties = RigidBodyProperties::new(mass_kg, inertia_body_kg_m2)
+            .map_err(VehicleError::MassProperties)?;
+        Ok(())
+    }
+
+    /// Attach validated, named parachute assemblies.
+    pub fn with_parachutes(mut self, parachutes: Vec<ParachuteSpec>) -> Result<Self, VehicleError> {
+        if parachutes.len() > crate::MAX_PARACHUTES {
+            return Err(VehicleError::InvalidVehicle(format!(
+                "parachute count must not exceed {}",
+                crate::MAX_PARACHUTES
+            )));
+        }
+        let mut names = std::collections::HashSet::new();
+        for parachute in &parachutes {
+            parachute.validate().map_err(VehicleError::Parachute)?;
+            if !names.insert(parachute.name.as_str()) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "duplicate parachute name '{}'",
+                    parachute.name
+                )));
+            }
+        }
+        self.parachutes = parachutes;
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Add packed parachute mass and local inertia about the authored vehicle
+    /// origin. The asset baker applies the final common COM shift afterward.
+    pub fn bake_parachute_masses(&mut self) -> Result<(), VehicleError> {
+        let mut mass_kg = self.mass_properties.mass_kg;
+        let mut inertia_body_kg_m2 = self.mass_properties.inertia_body_kg_m2;
+        for parachute in &self.parachutes {
+            parachute.validate().map_err(VehicleError::Parachute)?;
+            mass_kg += parachute.pack_mass_kg;
+            inertia_body_kg_m2 += parachute.inertia_body_kg_m2
+                + parachute.pack_mass_kg
+                    * (DMat3::IDENTITY * parachute.position_body_m.length_squared()
+                        - outer_product(parachute.position_body_m, parachute.position_body_m));
         }
         self.mass_properties = RigidBodyProperties::new(mass_kg, inertia_body_kg_m2)
             .map_err(VehicleError::MassProperties)?;
@@ -1859,6 +1978,8 @@ pub enum VehicleError {
     MassProperties(FlightError),
     Propulsion(PropulsionError),
     LandingGear(LandingGearError),
+    ReactionWheel(ReactionWheelError),
+    Parachute(ParachuteError),
     InvalidControlSurface(String),
     InvalidControlCommand { surface: String, command: f64 },
     ControlCount { expected: usize, actual: usize },
@@ -1880,6 +2001,10 @@ impl fmt::Display for VehicleError {
                 write!(formatter, "vehicle engine error: {error}")
             }
             Self::LandingGear(error) => write!(formatter, "vehicle landing-gear error: {error}"),
+            Self::ReactionWheel(error) => {
+                write!(formatter, "vehicle reaction-wheel error: {error}")
+            }
+            Self::Parachute(error) => write!(formatter, "vehicle parachute error: {error}"),
             Self::InvalidControlSurface(message) => {
                 write!(formatter, "invalid control surface: {message}")
             }
@@ -1936,11 +2061,11 @@ mod tests {
         ElectricThrusterCommand, ElectricThrusterDesign, ElectricThrusterMount,
         ElectricThrusterSpec, EstocMode, EstocSpec, FusionReaction, FusionTorchCommand,
         FusionTorchMount, FusionTorchSpec, IntakeKind, JetFuel, LandingLegSpec,
-        LandingShockAbsorberSpec, PropellerDriveCommand, PropellerDriveMount, PropellerDriveSpec,
-        PropellerSpec, PulsedFusionCommand, PulsedFusionMount, PulsedFusionSpec, PulsedFusionState,
-        ShaftPowerSourceSpec, ShaftSpec, TireConstruction, TurbopropCommand, TurbopropDriveSpec,
-        TurbopropMount, WheelBrakeSpec, WheelChassisSpec, WheelLayout, WheelStrutSpec,
-        WheelTireSpec,
+        LandingShockAbsorberSpec, ParachuteSpec, PropellerDriveCommand, PropellerDriveMount,
+        PropellerDriveSpec, PropellerSpec, PulsedFusionCommand, PulsedFusionMount,
+        PulsedFusionSpec, PulsedFusionState, ReactionWheelBankSpec, ShaftPowerSourceSpec,
+        ShaftSpec, TireConstruction, TurbopropCommand, TurbopropDriveSpec, TurbopropMount,
+        WheelBrakeSpec, WheelChassisSpec, WheelLayout, WheelStrutSpec, WheelTireSpec,
     };
 
     fn test_vehicle() -> VehicleDefinition {
@@ -1993,6 +2118,66 @@ mod tests {
                 gimbal_range_rad: 0.0,
             }])
             .expect("jet mount")
+    }
+
+    #[test]
+    fn reaction_wheel_bake_adds_mount_mass_and_parallel_axis_inertia() {
+        let geometry = AeroGeometry::new(vec![
+            AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+        ])
+        .expect("geometry");
+        let initial = RigidBodyProperties::new(1_000.0, DMat3::from_diagonal(DVec3::splat(100.0)))
+            .expect("base mass");
+        let bank = ReactionWheelBankSpec {
+            name: "axis-box".into(),
+            max_torque_body_nm: DVec3::splat(100.0),
+            mass_kg: 20.0,
+            position_body_m: DVec3::X,
+            inertia_body_kg_m2: DMat3::from_diagonal(DVec3::splat(2.0)),
+        };
+        let mut vehicle = VehicleDefinition::new("reaction-wheel-bake", geometry, initial, vec![])
+            .unwrap()
+            .with_reaction_wheels(vec![bank])
+            .unwrap();
+        vehicle.bake_reaction_wheel_masses().unwrap();
+        assert_eq!(vehicle.mass_properties.mass_kg, 1_020.0);
+        assert_eq!(
+            vehicle.mass_properties.inertia_body_kg_m2,
+            DMat3::from_diagonal(DVec3::new(102.0, 122.0, 122.0))
+        );
+    }
+
+    #[test]
+    fn parachute_pack_bake_adds_mount_mass_and_parallel_axis_inertia() {
+        let geometry = AeroGeometry::new(vec![
+            AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+        ])
+        .expect("geometry");
+        let initial = RigidBodyProperties::new(1_000.0, DMat3::from_diagonal(DVec3::splat(100.0)))
+            .expect("base mass");
+        let parachute = ParachuteSpec {
+            name: "main".into(),
+            reference_area_m2: 25.0,
+            drag_coefficient: 1.5,
+            reefed_area_fraction: 0.12,
+            inflation_time_s: 2.0,
+            deploy_pressure_pa: 8_000.0,
+            max_deploy_dynamic_pressure_pa: 1_500.0,
+            max_canopy_load_n: 80_000.0,
+            pack_mass_kg: 20.0,
+            position_body_m: DVec3::X,
+            inertia_body_kg_m2: DMat3::from_diagonal(DVec3::splat(2.0)),
+        };
+        let mut vehicle = VehicleDefinition::new("parachute-bake", geometry, initial, vec![])
+            .unwrap()
+            .with_parachutes(vec![parachute])
+            .unwrap();
+        vehicle.bake_parachute_masses().unwrap();
+        assert_eq!(vehicle.mass_properties.mass_kg, 1_020.0);
+        assert_eq!(
+            vehicle.mass_properties.inertia_body_kg_m2,
+            DMat3::from_diagonal(DVec3::new(102.0, 122.0, 122.0))
+        );
     }
 
     #[test]

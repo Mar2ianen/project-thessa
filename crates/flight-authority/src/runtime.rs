@@ -28,10 +28,13 @@ use thessa_sim_core::{
     AtmosphereError, BakedEphemeris, BodyId, BodyState, COAST_RAILS_POSITION_TOL_M,
     COAST_RAILS_VELOCITY_TOL_MPS, CollisionMaterial, EphemerisFrame, EventScheduler, FlightError,
     FlightForces, FlightStepInput, GravityField, LandingGearActuatorPoint, LandingLegState,
-    OnRailsCache, PanelAeroModel, PanelSoA, RigidBodyState, ScheduledEvent, ScheduledKind, SimTime,
-    TestParticleState, TickIntegratorConfig, VehicleDefinition, WORLD_TICK_S, WheelBrakeState,
-    WheelChassisActuatorPoint, WheelChassisState, WheelDrivePoint, X15StarterProfile,
-    evaluate_flight_forces_soa, integrate_attitude_step, integrate_rigid_body_step_soa,
+    OnRailsCache, PanelAeroModel, PanelSoA, ParachuteCommand, ParachuteEnvironment, ParachuteLoad,
+    ParachutePhase, ParachuteState, ReactionWheelAllocation, RigidBodyState, ScheduledEvent,
+    ScheduledKind, SimTime, TestParticleState, TickIntegratorConfig, VehicleDefinition,
+    VehiclePartCommand, WORLD_TICK_S, WheelBrakeState, WheelChassisActuatorPoint,
+    WheelChassisState, WheelDrivePoint, X15StarterProfile,
+    allocate_reaction_wheels_with_enabled_banks, evaluate_flight_forces_soa,
+    integrate_attitude_step, integrate_rigid_body_step_soa,
 };
 use thessa_worldgen_rocky::field::{ObstacleReport, ObstacleTrackCertificate, PlanetField};
 
@@ -40,7 +43,7 @@ use crate::{
     contact::{ContactActivation, ContactRuntime},
     control::{
         PILOT_ATTITUDE_COMMAND_RATE_RAD_S, SURFACE_COMMAND_RATE_S, allocate_rcs,
-        allocate_rcs_force, attitude_demand, slew_surface_command, solve_aero_trim,
+        allocate_rcs_force, attitude_demand, rcs_moment, slew_surface_command, solve_aero_trim,
         surface_commands,
     },
 };
@@ -129,6 +132,8 @@ fn powered_step_input(
     rcs_force_body_n: DVec3,
     thrust_n: f64,
     band_drag_body_n: DVec3,
+    parachute_force_body_n: DVec3,
+    parachute_moment_body_nm: DVec3,
     skip_aero: bool,
 ) -> FlightStepInput {
     FlightStepInput {
@@ -137,8 +142,11 @@ fn powered_step_input(
         position_body_m: kinematics.relative_position_body_m,
         wind_velocity_body_mps: state.orientation_body_to_inertial.inverse()
             * body_velocity_inertial_mps,
-        extra_force_body_n: DVec3::X * thrust_n + rcs_force_body_n + band_drag_body_n,
-        extra_moment_body_nm: jet_moment,
+        extra_force_body_n: DVec3::X * thrust_n
+            + rcs_force_body_n
+            + band_drag_body_n
+            + parachute_force_body_n,
+        extra_moment_body_nm: jet_moment + parachute_moment_body_nm,
         skip_aero,
     }
 }
@@ -376,7 +384,12 @@ pub struct FlightAuthority {
     pub engine_active: bool,
     pub sas_enabled: bool,
     pub rcs_enabled: bool,
+    pub reaction_wheels_enabled: bool,
+    /// Body-frame moment currently supplied by installed reaction-wheel banks.
+    pub reaction_wheel_torque_body_nm: DVec3,
     pub gear_down: bool,
+    /// Installed parachutes' automatic pressure-trigger command.
+    pub parachutes_armed: bool,
     /// Normalized service-brake command applied to every installed wheel
     /// brake actuator during contact-active ticks.
     pub wheel_brake_command: f64,
@@ -386,6 +399,11 @@ pub struct FlightAuthority {
     wheel_brake_states: Vec<Vec<WheelBrakeState>>,
     wheel_chassis_states: Vec<WheelChassisState>,
     landing_leg_states: Vec<LandingLegState>,
+    reaction_wheel_bank_enabled: Vec<bool>,
+    wheel_chassis_deployment_commands: Vec<bool>,
+    landing_leg_deployment_commands: Vec<bool>,
+    parachute_states: Vec<ParachuteState>,
+    last_parachute_loads: Vec<ParachuteLoad>,
     last_wheel_contacts: Vec<WheelContactSample>,
     last_wheel_drive_points: Vec<(usize, u16, WheelDrivePoint)>,
     last_wheel_gear_actuators: Vec<(usize, WheelChassisActuatorPoint)>,
@@ -579,6 +597,10 @@ impl FlightAuthority {
             .map_err(|error| error.to_string())?;
         self.explicit_force_demand_body_n = None;
         self.explicit_moment_demand_nm = None;
+        self.reaction_wheel_torque_body_nm = DVec3::ZERO;
+        self.set_parachutes_armed(false);
+        self.parachute_states.fill(ParachuteState::default());
+        self.last_parachute_loads.fill(ParachuteLoad::default());
         self.regime = FlightRegime::Aero;
         self.accumulator_s = 0.0;
         self.rails.invalidate();
@@ -774,6 +796,11 @@ impl FlightAuthority {
             .iter()
             .map(|leg| leg.spec.initial_state())
             .collect();
+        let reaction_wheel_bank_enabled = vec![true; vehicle.reaction_wheels.len()];
+        let wheel_chassis_deployment_commands = vec![true; vehicle.wheel_chassis.len()];
+        let landing_leg_deployment_commands = vec![true; vehicle.landing_legs.len()];
+        let parachute_states = vec![ParachuteState::default(); vehicle.parachutes.len()];
+        let last_parachute_loads = vec![ParachuteLoad::default(); vehicle.parachutes.len()];
         let recipe_max_elevation_m: f64 = {
             let recipe: thessa_worldgen_rocky::spec_recipe::SpecRecipe =
                 toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml"))
@@ -833,13 +860,21 @@ impl FlightAuthority {
             engine_active: true,
             sas_enabled: true,
             rcs_enabled: true,
+            reaction_wheels_enabled: true,
+            reaction_wheel_torque_body_nm: DVec3::ZERO,
             gear_down: true,
+            parachutes_armed: false,
             wheel_brake_command: 0.0,
             wheel_drive_command: 0.0,
             wheel_spin_rad_s,
             wheel_brake_states,
             wheel_chassis_states,
             landing_leg_states,
+            reaction_wheel_bank_enabled,
+            wheel_chassis_deployment_commands,
+            landing_leg_deployment_commands,
+            parachute_states,
+            last_parachute_loads,
             last_wheel_contacts: Vec::new(),
             last_wheel_drive_points: Vec::new(),
             last_wheel_gear_actuators: Vec::new(),
@@ -928,6 +963,195 @@ impl FlightAuthority {
     /// retractable wheel chassis advance toward this command on physics ticks.
     pub fn set_gear_down(&mut self, deployed: bool) {
         self.gear_down = deployed;
+        self.sync_gear_deployment_commands();
+        self.wheel_chassis_deployment_commands.fill(deployed);
+        self.landing_leg_deployment_commands.fill(deployed);
+    }
+
+    /// Enable or disable one authored reaction-wheel bank without changing
+    /// the state of other installed banks.
+    pub fn set_reaction_wheel_bank_enabled(
+        &mut self,
+        name: &str,
+        enabled: bool,
+    ) -> Result<(), FlightError> {
+        self.sync_reaction_wheel_runtime_state();
+        let Some(index) = self
+            .vehicle
+            .reaction_wheels
+            .iter()
+            .position(|bank| bank.name == name)
+        else {
+            return Err(FlightError::InvalidInput(format!(
+                "vehicle has no reaction-wheel bank named '{name}'"
+            )));
+        };
+        self.reaction_wheel_bank_enabled[index] = enabled;
+        Ok(())
+    }
+
+    /// Set one authored fold-out landing leg's deployment target.
+    pub fn set_landing_leg_deployed(
+        &mut self,
+        name: &str,
+        deployed: bool,
+    ) -> Result<(), FlightError> {
+        self.sync_gear_deployment_commands();
+        let Some(index) = self
+            .vehicle
+            .landing_legs
+            .iter()
+            .position(|leg| leg.spec.name == name)
+        else {
+            return Err(FlightError::InvalidInput(format!(
+                "vehicle has no landing leg named '{name}'"
+            )));
+        };
+        self.landing_leg_deployment_commands[index] = deployed;
+        Ok(())
+    }
+
+    /// Set one authored retractable wheel chassis' deployment target.
+    pub fn set_wheel_chassis_deployed(
+        &mut self,
+        name: &str,
+        deployed: bool,
+    ) -> Result<(), FlightError> {
+        self.sync_gear_deployment_commands();
+        let Some(index) = self
+            .vehicle
+            .wheel_chassis
+            .iter()
+            .position(|chassis| chassis.spec.name == name)
+        else {
+            return Err(FlightError::InvalidInput(format!(
+                "vehicle has no wheel chassis named '{name}'"
+            )));
+        };
+        if self.vehicle.wheel_chassis[index].spec.retraction.is_none() {
+            return Err(FlightError::InvalidInput(format!(
+                "wheel chassis '{name}' has no deployment actuator"
+            )));
+        }
+        self.wheel_chassis_deployment_commands[index] = deployed;
+        Ok(())
+    }
+
+    pub fn reaction_wheel_telemetry(&self) -> DVec3 {
+        self.reaction_wheel_torque_body_nm
+    }
+
+    pub fn parachute_telemetry(&self) -> &[ParachuteLoad] {
+        &self.last_parachute_loads
+    }
+
+    /// Arm or disarm every installed pack. This convenience API backs the
+    /// current pilot toggle; future staging/action-group dispatch can target
+    /// individual packs with [`Self::command_parachute`].
+    pub fn set_parachutes_armed(&mut self, armed: bool) {
+        self.sync_parachute_runtime_state();
+        self.parachutes_armed = armed;
+        let command = if armed {
+            ParachuteCommand::Arm
+        } else {
+            ParachuteCommand::Disarm
+        };
+        for (spec, state) in self
+            .vehicle
+            .parachutes
+            .iter()
+            .zip(&mut self.parachute_states)
+        {
+            spec.apply_command(state, command);
+        }
+    }
+
+    /// Apply a part-level parachute command by the stable authored component
+    /// name. Stage or action-group systems can route their future bindings
+    /// through this API without duplicating canopy state transitions.
+    pub fn command_parachute(
+        &mut self,
+        name: &str,
+        command: ParachuteCommand,
+    ) -> Result<(), FlightError> {
+        self.sync_parachute_runtime_state();
+        let Some(index) = self
+            .vehicle
+            .parachutes
+            .iter()
+            .position(|parachute| parachute.name == name)
+        else {
+            return Err(FlightError::InvalidInput(format!(
+                "vehicle has no parachute named '{name}'"
+            )));
+        };
+        self.vehicle.parachutes[index].apply_command(&mut self.parachute_states[index], command);
+        Ok(())
+    }
+
+    /// Apply one serialized installed-subsystem command. The same method is
+    /// the server endpoint for pilot commands and the future stage/action-group
+    /// dispatcher, keeping those producers out of the physical state machines.
+    pub fn apply_part_command(&mut self, command: &VehiclePartCommand) -> Result<(), FlightError> {
+        match command {
+            VehiclePartCommand::SetRcsEnabled { enabled } => {
+                self.rcs_enabled = *enabled;
+            }
+            VehiclePartCommand::SetReactionWheelsEnabled { enabled } => {
+                self.reaction_wheels_enabled = *enabled;
+            }
+            VehiclePartCommand::SetReactionWheelBankEnabled { name, enabled } => {
+                self.set_reaction_wheel_bank_enabled(name, *enabled)?;
+            }
+            VehiclePartCommand::SetLandingGearDeployed { deployed } => {
+                self.set_gear_down(*deployed);
+            }
+            VehiclePartCommand::SetWheelChassisDeployed { name, deployed } => {
+                self.set_wheel_chassis_deployed(name, *deployed)?;
+            }
+            VehiclePartCommand::SetLandingLegDeployed { name, deployed } => {
+                self.set_landing_leg_deployed(name, *deployed)?;
+            }
+            VehiclePartCommand::SetParachutesArmed { armed } => {
+                self.set_parachutes_armed(*armed);
+            }
+            VehiclePartCommand::Parachute { name, command } => {
+                self.command_parachute(name, *command)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn parachute_wrench(&self) -> (DVec3, DVec3) {
+        self.last_parachute_loads
+            .iter()
+            .fold((DVec3::ZERO, DVec3::ZERO), |(force, moment), load| {
+                (force + load.force_body_n, moment + load.moment_body_nm)
+            })
+    }
+
+    /// Adopt the server's latest per-canopy state into an embedded client.
+    /// A mismatched or malformed vector is ignored rather than resizing a
+    /// vehicle from untrusted snapshot data.
+    pub fn adopt_parachute_telemetry(&mut self, loads: &[ParachuteLoad]) {
+        if loads.len() != self.vehicle.parachutes.len()
+            || loads.iter().any(|load| {
+                !load.deployment_fraction.is_finite()
+                    || !(0.0..=1.0).contains(&load.deployment_fraction)
+                    || !load.dynamic_pressure_pa.is_finite()
+                    || load.dynamic_pressure_pa < 0.0
+                    || !load.force_body_n.is_finite()
+                    || !load.moment_body_nm.is_finite()
+                    || !load.state.inflation_elapsed_s.is_finite()
+                    || load.state.inflation_elapsed_s < 0.0
+            })
+        {
+            return;
+        }
+        self.last_parachute_loads.copy_from_slice(loads);
+        for (state, load) in self.parachute_states.iter_mut().zip(loads) {
+            *state = load.state;
+        }
     }
 
     pub fn wheel_spin_rates_rad_s(&self) -> &[Vec<f64>] {
@@ -978,6 +1202,26 @@ impl FlightAuthority {
         }
     }
 
+    fn sync_reaction_wheel_runtime_state(&mut self) {
+        self.reaction_wheel_bank_enabled.resize(
+            self.vehicle.reaction_wheels.len(),
+            self.reaction_wheels_enabled,
+        );
+        self.reaction_wheel_bank_enabled
+            .truncate(self.vehicle.reaction_wheels.len());
+    }
+
+    fn sync_gear_deployment_commands(&mut self) {
+        self.wheel_chassis_deployment_commands
+            .resize(self.vehicle.wheel_chassis.len(), self.gear_down);
+        self.wheel_chassis_deployment_commands
+            .truncate(self.vehicle.wheel_chassis.len());
+        self.landing_leg_deployment_commands
+            .resize(self.vehicle.landing_legs.len(), self.gear_down);
+        self.landing_leg_deployment_commands
+            .truncate(self.vehicle.landing_legs.len());
+    }
+
     fn sync_landing_leg_runtime_state(&mut self) {
         self.landing_leg_states
             .truncate(self.vehicle.landing_legs.len());
@@ -986,6 +1230,64 @@ impl FlightAuthority {
             self.landing_leg_states
                 .push(self.vehicle.landing_legs[index].spec.initial_state());
         }
+    }
+
+    fn sync_parachute_runtime_state(&mut self) {
+        self.parachute_states
+            .resize(self.vehicle.parachutes.len(), ParachuteState::default());
+        self.last_parachute_loads
+            .resize(self.vehicle.parachutes.len(), ParachuteLoad::default());
+    }
+
+    fn parachute_rails_ineligible(&self) -> bool {
+        self.parachute_states.iter().any(|state| {
+            matches!(
+                state.phase,
+                ParachutePhase::Armed | ParachutePhase::Reefed | ParachutePhase::Deployed
+            )
+        })
+    }
+
+    fn advance_parachutes(
+        &mut self,
+        kinematics: LocalAirKinematics,
+        atmosphere: thessa_sim_core::AtmosphereSample,
+    ) -> Result<(DVec3, DVec3), FlightError> {
+        if self.vehicle.parachutes.is_empty() {
+            self.last_parachute_loads.clear();
+            self.parachute_states.clear();
+            return Ok((DVec3::ZERO, DVec3::ZERO));
+        }
+        self.sync_parachute_runtime_state();
+        let mut total_force_body_n = DVec3::ZERO;
+        let mut total_moment_body_nm = DVec3::ZERO;
+        for index in 0..self.vehicle.parachutes.len() {
+            let spec = &self.vehicle.parachutes[index];
+            let load = spec
+                .advance(
+                    self.parachute_states[index],
+                    ParachuteEnvironment {
+                        atmosphere,
+                        radial_velocity_mps: kinematics
+                            .relative_velocity_inertial_mps
+                            .dot(kinematics.radial_up),
+                        center_of_mass_air_velocity_body_mps: kinematics.air_velocity_body_mps,
+                        angular_velocity_body_rps: self.state.angular_velocity_body_rps,
+                        dt_s: FLIGHT_STEP_S,
+                    },
+                )
+                .map_err(|error| {
+                    FlightError::InvalidInput(format!(
+                        "parachute '{}' could not advance: {error}",
+                        spec.name
+                    ))
+                })?;
+            self.parachute_states[index] = load.state;
+            self.last_parachute_loads[index] = load;
+            total_force_body_n += load.force_body_n;
+            total_moment_body_nm += load.moment_body_nm;
+        }
+        Ok((total_force_body_n, total_moment_body_nm))
     }
 
     fn sync_wheel_gear_runtime_state(&mut self) {
@@ -1005,16 +1307,31 @@ impl FlightAuthority {
     }
 
     fn landing_gear_transitioning(&self) -> bool {
-        let target = if self.gear_down { 1.0 } else { 0.0 };
         self.landing_leg_states
             .iter()
-            .any(|state| (state.deployment_fraction - target).abs() > 1.0e-12)
+            .enumerate()
+            .any(|(index, state)| {
+                let deployed = self
+                    .landing_leg_deployment_commands
+                    .get(index)
+                    .copied()
+                    .unwrap_or(self.gear_down);
+                let target = if deployed { 1.0 } else { 0.0 };
+                (state.deployment_fraction - target).abs() > 1.0e-12
+            })
             || self
                 .vehicle
                 .wheel_chassis
                 .iter()
                 .zip(&self.wheel_chassis_states)
-                .any(|(chassis, state)| {
+                .enumerate()
+                .any(|(index, (chassis, state))| {
+                    let deployed = self
+                        .wheel_chassis_deployment_commands
+                        .get(index)
+                        .copied()
+                        .unwrap_or(self.gear_down);
+                    let target = if deployed { 1.0 } else { 0.0 };
                     chassis.spec.retraction.is_some()
                         && (state.deployment_fraction - target).abs() > 1.0e-12
                 })
@@ -1030,6 +1347,7 @@ impl FlightAuthority {
         {
             return Ok(());
         }
+        self.sync_gear_deployment_commands();
         self.sync_landing_leg_runtime_state();
         self.sync_wheel_gear_runtime_state();
         self.last_landing_leg_actuators.clear();
@@ -1039,7 +1357,7 @@ impl FlightAuthority {
                 .spec
                 .advance_deployment(
                     self.landing_leg_states[index],
-                    self.gear_down,
+                    self.landing_leg_deployment_commands[index],
                     FLIGHT_STEP_S,
                     0.0,
                 )
@@ -1055,7 +1373,7 @@ impl FlightAuthority {
             let (state, point) = retraction
                 .advance_deployment(
                     self.wheel_chassis_states[index],
-                    self.gear_down,
+                    self.wheel_chassis_deployment_commands[index],
                     FLIGHT_STEP_S,
                     0.0,
                 )
@@ -1565,9 +1883,12 @@ impl FlightAuthority {
         rcs_force_body_n: DVec3,
         thrust_n: f64,
         band_drag_body_n: DVec3,
+        parachute_force_body_n: DVec3,
+        parachute_moment_body_nm: DVec3,
         skip_aero: bool,
     ) -> Result<(RigidBodyState, FlightForces), FlightError> {
         if !self.vehicle.wheel_chassis.is_empty() || !self.vehicle.landing_legs.is_empty() {
+            self.sync_gear_deployment_commands();
             self.sync_wheel_runtime_state();
             self.sync_wheel_gear_runtime_state();
             self.sync_landing_leg_runtime_state();
@@ -1584,6 +1905,8 @@ impl FlightAuthority {
             rcs_force_body_n,
             thrust_n,
             band_drag_body_n,
+            parachute_force_body_n,
+            parachute_moment_body_nm,
             skip_aero,
         );
         let forces = self.evaluate_forces(state, input)?;
@@ -1654,7 +1977,7 @@ impl FlightAuthority {
                 landing_leg_actuators,
                 wheel_gear_actuators,
             ) = if articulated_gear {
-                runtime.step_articulated_vehicle_with_gear(
+                runtime.step_articulated_vehicle_with_gear_targets(
                     FLIGHT_STEP_S,
                     state,
                     gravity,
@@ -1666,7 +1989,8 @@ impl FlightAuthority {
                     &mut self.wheel_brake_states,
                     &mut self.wheel_chassis_states,
                     &mut self.landing_leg_states,
-                    self.gear_down,
+                    &self.landing_leg_deployment_commands,
+                    &self.wheel_chassis_deployment_commands,
                 )?
             } else {
                 runtime.sync_body(state, properties, &geometry, DynamicBodyConfig::default())?;
@@ -1755,6 +2079,7 @@ impl FlightAuthority {
         let band = self.upper_band_drag(kinematics, density_kg_m3);
         let skip_aero = vacuum || band.is_some();
         let (band_drag_body_n, band_q_pa) = band.unwrap_or((DVec3::ZERO, 0.0));
+        let (parachute_force_body_n, parachute_moment_body_nm) = self.parachute_wrench();
         let mut forces = self.evaluate_forces(
             self.state,
             FlightStepInput {
@@ -1763,8 +2088,10 @@ impl FlightAuthority {
                 position_body_m: kinematics.relative_position_body_m,
                 wind_velocity_body_mps: self.state.orientation_body_to_inertial.inverse()
                     * body_state.velocity_inertial,
-                extra_force_body_n: DVec3::X * self.thrust_n() + band_drag_body_n,
-                extra_moment_body_nm: jet_moment,
+                extra_force_body_n: DVec3::X * self.thrust_n()
+                    + band_drag_body_n
+                    + parachute_force_body_n,
+                extra_moment_body_nm: jet_moment + parachute_moment_body_nm,
                 skip_aero,
             },
         )?;
@@ -2141,7 +2468,7 @@ impl FlightAuthority {
         // forecast must never delay responsive maneuver input.
         let attitude_hold =
             self.sas_enabled && matches!(mode, ControlMode::Navball | ControlMode::MouseAim);
-        if self.rcs_enabled
+        if (self.rcs_enabled || self.reaction_wheels_enabled)
             && (self.control_input != DVec3::ZERO
                 || (mode != ControlMode::Direct
                     && self.state.angular_velocity_body_rps != DVec3::ZERO)
@@ -2386,7 +2713,18 @@ impl FlightAuthority {
                 self.control_input
             };
             let actuator_saturated = self.advance_coast_control_actuators(surface_command)?;
+            if !self.vehicle.reaction_wheels.is_empty() {
+                let wheel_request = if !assisted && axes == DVec3::ZERO {
+                    DVec3::ZERO
+                } else {
+                    requested
+                };
+                let moment = self.allocate_reaction_wheel_residual(wheel_request, DVec3::ZERO)?;
+                self.actuator_saturated |= actuator_saturated;
+                return Ok(moment);
+            }
             let allocation = allocate_rcs(requested, DVec3::ZERO, axes, assisted, self.rcs_enabled);
+            self.reaction_wheel_torque_body_nm = DVec3::ZERO;
             self.actuator_saturated = allocation.saturated || actuator_saturated;
             return Ok(allocation.moment_body_nm);
         }
@@ -2499,9 +2837,54 @@ impl FlightAuthority {
             .aero_model
             .evaluate_state(aero_state, environment, &self.vehicle.aero_geometry)?
             .moment_body_nm;
+        if !self.vehicle.reaction_wheels.is_empty() {
+            let (wheel_request, wheel_aero_moment) = if !assisted && axes == DVec3::ZERO {
+                (DVec3::ZERO, DVec3::ZERO)
+            } else {
+                (requested, actual_aero)
+            };
+            let moment = self.allocate_reaction_wheel_residual(wheel_request, wheel_aero_moment)?;
+            self.actuator_saturated |= actuator_saturated;
+            return Ok(moment);
+        }
         let allocation = allocate_rcs(requested, actual_aero, axes, assisted, self.rcs_enabled);
+        self.reaction_wheel_torque_body_nm = DVec3::ZERO;
         self.actuator_saturated = allocation.saturated || actuator_saturated;
         Ok(allocation.moment_body_nm)
+    }
+
+    /// Allocate the post-aerodynamic attitude demand to internal wheels first,
+    /// then use RCS for any remaining moment. This preserves the physical
+    /// moment interface while giving KSP-style wheels continuous authority at
+    /// their configured motor torque, with no rotor-speed saturation.
+    fn allocate_reaction_wheel_residual(
+        &mut self,
+        requested_moment_nm: DVec3,
+        actual_aero_moment_nm: DVec3,
+    ) -> Result<DVec3, FlightError> {
+        let residual = requested_moment_nm - actual_aero_moment_nm;
+        self.sync_reaction_wheel_runtime_state();
+        let wheel = if self.reaction_wheels_enabled {
+            allocate_reaction_wheels_with_enabled_banks(
+                &self.vehicle.reaction_wheels,
+                &self.reaction_wheel_bank_enabled,
+                residual,
+            )
+            .map_err(|error| {
+                FlightError::InvalidInput(format!("reaction-wheel allocation failed: {error}"))
+            })?
+        } else {
+            ReactionWheelAllocation {
+                delivered_torque_body_nm: DVec3::ZERO,
+                saturated: false,
+            }
+        };
+        self.reaction_wheel_torque_body_nm = wheel.delivered_torque_body_nm;
+        let rcs_request = residual - wheel.delivered_torque_body_nm;
+        let rcs_torque = rcs_moment(rcs_request, self.rcs_enabled);
+        let unserved = rcs_request - rcs_torque;
+        self.actuator_saturated = unserved.length_squared() > 1.0e-12;
+        Ok(wheel.delivered_torque_body_nm + rcs_torque)
     }
 
     fn advance_coast_control_actuators(
@@ -2604,6 +2987,8 @@ impl FlightAuthority {
         rcs_force_body_n: DVec3,
         thrust_n: f64,
         band_drag_body_n: DVec3,
+        parachute_force_body_n: DVec3,
+        parachute_moment_body_nm: DVec3,
         skip_aero: bool,
     ) -> Result<(RigidBodyState, FlightForces), FlightError> {
         self.aero_panels
@@ -2618,6 +3003,8 @@ impl FlightAuthority {
             rcs_force_body_n,
             thrust_n,
             band_drag_body_n,
+            parachute_force_body_n,
+            parachute_moment_body_nm,
             skip_aero,
         );
         integrate_rigid_body_step_soa(
@@ -2877,16 +3264,15 @@ impl FlightAuthority {
         )?;
         // Regime follows sampled density, never altitude: an invalid sample
         // keeps Aero so the existing atmosphere error paths still fire.
-        let density_kg_m3 = self
-            .atmosphere
-            .sample(kinematics.altitude_m.max(0.0))
-            .map(|sample| sample.density_kg_m3)
-            .unwrap_or(f64::INFINITY);
+        let atmosphere_sample = self.atmosphere.sample(kinematics.altitude_m.max(0.0))?;
+        let density_kg_m3 = atmosphere_sample.density_kg_m3;
         self.regime = if density_kg_m3 < COAST_DENSITY_KG_M3 {
             FlightRegime::Coast
         } else {
             FlightRegime::Aero
         };
+        let (parachute_force_body_n, parachute_moment_body_nm) =
+            self.advance_parachutes(kinematics, atmosphere_sample)?;
         let jet_moment = self.allocate_controls(kinematics, mode)?;
         let rcs_force_body_n = self.allocate_explicit_force();
         // Only an exactly empty sampled medium permits zero force; the
@@ -2915,12 +3301,15 @@ impl FlightAuthority {
                 rcs_force_body_n,
                 thrust_n,
                 band_drag_body_n,
+                parachute_force_body_n,
+                parachute_moment_body_nm,
                 skip_aero,
             )?
         } else if self.regime == FlightRegime::Coast
             && thrust_n == 0.0
             && skip_aero
             && !self.landing_gear_transitioning()
+            && !self.parachute_rails_ineligible()
         {
             match self.try_coast_step_on_rails(ephemeris, time, jet_moment, body_state, gravity)? {
                 Some(coasted) => coasted,
@@ -2932,6 +3321,8 @@ impl FlightAuthority {
                     rcs_force_body_n,
                     thrust_n,
                     band_drag_body_n,
+                    parachute_force_body_n,
+                    parachute_moment_body_nm,
                     skip_aero,
                 )?,
             }
@@ -2945,6 +3336,8 @@ impl FlightAuthority {
                 rcs_force_body_n,
                 thrust_n,
                 band_drag_body_n,
+                parachute_force_body_n,
+                parachute_moment_body_nm,
                 skip_aero,
             )?
         };
@@ -3025,8 +3418,9 @@ mod tests {
     use super::*;
     use thessa_sim_core::{
         AeroModel, AirlessWheelStructure, ControlHinge, ControlSurfaceActuator, ElectricMotorSpec,
-        LandingLegSpec, LandingShockAbsorberSpec, RigidBodyProperties, SystemConfig,
-        TireConstruction, WheelBrakeSpec, WheelChassisRetractionSpec, WheelChassisSpec,
+        LandingLegSpec, LandingShockAbsorberSpec, ParachuteCommand, ParachutePhase, ParachuteSpec,
+        ReactionWheelBankSpec, RigidBodyProperties, SystemConfig, TireConstruction,
+        VehiclePartCommand, WheelBrakeSpec, WheelChassisRetractionSpec, WheelChassisSpec,
         WheelDriveSpec, WheelLayout, WheelStrutSpec, WheelTireSpec,
     };
 
@@ -3102,7 +3496,13 @@ mod tests {
         assert!(flight.landing_gear_transitioning());
         assert_eq!(flight.landing_leg_actuator_telemetry().len(), 1);
 
-        flight.set_gear_down(false);
+        flight
+            .set_landing_leg_deployed("runtime-foldout-leg", false)
+            .expect("named leg retract command");
+        assert!(
+            flight.gear_down,
+            "part command leaves the group target intact"
+        );
         flight.advance_freeflight_landing_gear().unwrap();
         assert!(flight.landing_leg_states()[0].deployment_fraction < deployed_fraction);
         assert!(!flight.landing_gear_transitioning());
@@ -3235,7 +3635,13 @@ mod tests {
         assert!(flight.landing_gear_transitioning());
         assert_eq!(flight.wheel_gear_actuator_telemetry().len(), 1);
 
-        flight.set_gear_down(false);
+        flight
+            .set_wheel_chassis_deployed("authority-regolith-wheel", false)
+            .expect("named wheel-gear retract command");
+        assert!(
+            flight.gear_down,
+            "part command leaves the group target intact"
+        );
         flight.advance_freeflight_landing_gear().unwrap();
         assert!(flight.wheel_chassis_states()[0].deployment_fraction < deployed_fraction);
         assert!(!flight.landing_gear_transitioning());
@@ -3909,6 +4315,193 @@ mod tests {
         assert_eq!(
             flight.vehicle.aero_geometry,
             flight.control_reference_geometry
+        );
+    }
+
+    #[test]
+    fn reaction_wheels_keep_torque_authority_and_rcs_covers_excess_demand() {
+        let (_, mut flight) = fixture();
+        flight.vehicle.reaction_wheels = vec![ReactionWheelBankSpec {
+            name: "test-wheel-box".into(),
+            max_torque_body_nm: DVec3::splat(100.0),
+            mass_kg: 10.0,
+            position_body_m: DVec3::ZERO,
+            inertia_body_kg_m2: DMat3::IDENTITY,
+        }];
+        flight.reaction_wheels_enabled = true;
+        flight.rcs_enabled = false;
+
+        let below_rating = flight
+            .allocate_reaction_wheel_residual(DVec3::X * 60.0, DVec3::ZERO)
+            .expect("wheel allocation");
+        assert_eq!(below_rating, DVec3::X * 60.0);
+        assert_eq!(flight.reaction_wheel_telemetry(), DVec3::X * 60.0);
+        assert!(!flight.actuator_saturated);
+        let (_, wheel_started_rotation) = integrate_attitude_step(
+            DQuat::IDENTITY,
+            DVec3::ZERO,
+            flight.vehicle.mass_properties.inertia_body_kg_m2,
+            below_rating,
+            FLIGHT_STEP_S,
+        )
+        .expect("wheel moment integrates through the rigid-body attitude solver");
+        assert!(wheel_started_rotation.x > 0.0);
+
+        let above_rating = flight
+            .allocate_reaction_wheel_residual(DVec3::X * 150.0, DVec3::ZERO)
+            .expect("rated wheel allocation");
+        assert_eq!(above_rating, DVec3::X * 100.0);
+        assert!(flight.actuator_saturated);
+
+        flight
+            .set_reaction_wheel_bank_enabled("test-wheel-box", false)
+            .expect("named bank disable");
+        let disabled = flight
+            .allocate_reaction_wheel_residual(DVec3::X * 60.0, DVec3::ZERO)
+            .expect("disabled bank allocation");
+        assert_eq!(disabled, DVec3::ZERO);
+        assert!(flight.actuator_saturated);
+
+        flight.rcs_enabled = true;
+        let combined = flight
+            .allocate_reaction_wheel_residual(DVec3::X * 500.0, DVec3::ZERO)
+            .expect("wheel plus RCS allocation");
+        assert!(
+            (combined.x - 500.0).abs() < 1.0e-7,
+            "combined torque: {combined:?}"
+        );
+        assert!(!flight.actuator_saturated);
+    }
+
+    #[test]
+    fn parachute_commands_target_one_named_vehicle_part() {
+        let (_, mut flight) = fixture();
+        let parachute = |name: &str| ParachuteSpec {
+            name: name.into(),
+            reference_area_m2: 20.0,
+            drag_coefficient: 1.5,
+            reefed_area_fraction: 0.1,
+            inflation_time_s: 2.0,
+            deploy_pressure_pa: 10_000.0,
+            max_deploy_dynamic_pressure_pa: 2_000.0,
+            max_canopy_load_n: 100_000.0,
+            pack_mass_kg: 12.0,
+            position_body_m: DVec3::ZERO,
+            inertia_body_kg_m2: DMat3::IDENTITY,
+        };
+        flight.vehicle.parachutes = vec![parachute("drogue"), parachute("main")];
+
+        flight
+            .command_parachute("main", ParachuteCommand::Arm)
+            .expect("named chute command");
+        assert_eq!(flight.parachute_states[0].phase, ParachutePhase::Stowed);
+        assert_eq!(flight.parachute_states[1].phase, ParachutePhase::Armed);
+        assert!(
+            flight
+                .command_parachute("unknown", ParachuteCommand::Arm)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn shared_part_command_api_routes_installed_subsystem_controls() {
+        let (_, mut flight) = fixture();
+        flight.vehicle.reaction_wheels = vec![ReactionWheelBankSpec {
+            name: "trim-bank".into(),
+            max_torque_body_nm: DVec3::splat(20.0),
+            mass_kg: 5.0,
+            position_body_m: DVec3::ZERO,
+            inertia_body_kg_m2: DMat3::IDENTITY,
+        }];
+        flight.vehicle.parachutes = vec![ParachuteSpec {
+            name: "main".into(),
+            reference_area_m2: 20.0,
+            drag_coefficient: 1.5,
+            reefed_area_fraction: 0.1,
+            inflation_time_s: 2.0,
+            deploy_pressure_pa: 10_000.0,
+            max_deploy_dynamic_pressure_pa: 2_000.0,
+            max_canopy_load_n: 100_000.0,
+            pack_mass_kg: 12.0,
+            position_body_m: DVec3::ZERO,
+            inertia_body_kg_m2: DMat3::IDENTITY,
+        }];
+
+        for command in [
+            VehiclePartCommand::SetRcsEnabled { enabled: false },
+            VehiclePartCommand::SetReactionWheelsEnabled { enabled: true },
+            VehiclePartCommand::SetReactionWheelBankEnabled {
+                name: "trim-bank".into(),
+                enabled: false,
+            },
+            VehiclePartCommand::SetLandingGearDeployed { deployed: false },
+            VehiclePartCommand::Parachute {
+                name: "main".into(),
+                command: ParachuteCommand::Arm,
+            },
+        ] {
+            flight
+                .apply_part_command(&command)
+                .expect("valid installed-part command");
+        }
+
+        assert!(!flight.rcs_enabled);
+        assert!(flight.reaction_wheels_enabled);
+        assert_eq!(flight.reaction_wheel_bank_enabled, vec![false]);
+        assert!(!flight.gear_down);
+        assert_eq!(flight.parachute_states[0].phase, ParachutePhase::Armed);
+        assert!(
+            flight
+                .apply_part_command(&VehiclePartCommand::Parachute {
+                    name: "missing".into(),
+                    command: ParachuteCommand::Arm,
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn parachute_drag_enters_the_authoritative_rigid_body_force_step() {
+        let (ephemeris, mut flight) = fixture();
+        flight.vehicle.parachutes = vec![ParachuteSpec {
+            name: "authority-main".into(),
+            reference_area_m2: 24.0,
+            drag_coefficient: 1.5,
+            reefed_area_fraction: 0.1,
+            inflation_time_s: 2.0,
+            deploy_pressure_pa: 5_000.0,
+            max_deploy_dynamic_pressure_pa: 2_000.0,
+            max_canopy_load_n: 100_000.0,
+            pack_mass_kg: 12.0,
+            position_body_m: DVec3::new(-2.0, 0.0, 0.0),
+            inertia_body_kg_m2: DMat3::IDENTITY,
+        }];
+        flight.set_parachutes_armed(true);
+        flight.sas_enabled = false;
+        flight.rcs_enabled = false;
+        flight.reaction_wheels_enabled = false;
+        flight.set_legacy_propulsion(0.0, false);
+        let home = ephemeris
+            .body_state(flight.reference_body, SimTime::EPOCH)
+            .unwrap();
+        flight.relative_position_m = DVec3::Z * (flight.planet_radius_m + 1_000.0);
+        flight.state.position_inertial_m = home.position_inertial + flight.relative_position_m;
+        flight.state.velocity_inertial_mps = home.velocity_inertial - DVec3::Z * 40.0;
+
+        let gravity = GravityField::from_ephemeris(&ephemeris);
+        flight
+            .step(&ephemeris, &gravity, ControlMode::Direct)
+            .expect("atmospheric step with an armed parachute");
+
+        let load = flight.parachute_telemetry()[0];
+        assert_eq!(load.state.phase, ParachutePhase::Reefed);
+        assert!(load.force_body_n.z > 0.0);
+        let forces = flight.last_forces.as_ref().expect("step force sample");
+        assert!(
+            (forces.total_force_body_n - forces.aero.force_body_n - load.force_body_n).length()
+                < 1.0e-8,
+            "parachute load was not composed into the body force: {:?}",
+            forces.total_force_body_n
         );
     }
 

@@ -204,32 +204,68 @@ The repository also contains a bundled X-15-like proxy comparison. Its Mach
 and altitude errors are useful regression measurements, not a statement that
 the compact proxy reproduces the full X-15 model.
 
-## 11.8.4. HL-20 published aerodynamic anchors
+## 11.8.4. HL-20 / PLS references and matching frame
 
-NASA-TM-107580 (1992), Appendix E, publishes the HL-20 simulator's
-Mach/AoA coefficient polynomials and control increments. At Mach 0.30, its
-basic table gives `CL(0 deg) = -0.053627` and a local lift slope of
-`0.036236 per degree` (`2.076 per radian`). The basic pitching-moment row gives
-`Cm(0 deg) = 0.013877` and `dCm/dalpha = -0.001669 per degree`
-(`-0.0956 per radian`). These are reference-database anchors, not coefficients
-transferred to the notional 7 m Dream Chaser-style fixture: the HL-20 table
-uses a 286.45 ft² reference area and a moment reference at 54% of body length,
-so geometry, reference quantities, CG and axis conventions must match before
-an absolute model comparison is meaningful.
+Keep the experimental PLS geometry and the later HL-20 simulator database as
+distinct reference sets until their published reference quantities are
+reconciled:
 
-For control authority, the upper-left body-flap table gives
+- NASA-TM-4515 (1993), Table I and Figure 2, documents the subsonic HL-20
+  wind-tunnel model. The basic body is 20.6 in long, has a 9.7 in reference
+  span, and a 152.2 in² reference planform area. With the fins installed, the
+  model span and planform area are 16.3 in and 178.6 in²; the aerodynamic
+  coefficients are still normalized by the basic body area without fins.
+- NASA-TM-101641 (1989), Table 1, gives the baseline flight-scale PLS
+  body as 24.6 ft long, 11.6 ft reference span, and 216.8 ft² reference area;
+  with fins, the span and planform area are 19.5 ft and 254.3 ft². Its report
+  identifies the 20.6 in model as the 0.07-scale geometry: scaling the model
+  by `24.6 ft / 20.6 in` gives 11.58 ft span and 217.0 ft² body area, both
+  within 0.2% of the flight-scale table values, consistent with the rounded
+  dimensions. This is the geometrically matched low-speed tunnel reference.
+  The report says the detailed 1,429-point
+  `PLS.FUS` surface grid was distributed on the companion disk; the report PDF
+  contains station sketches, not that complete coordinate file.
+- NASA-TM-107580 (1992), Appendix E, publishes the HL-20 simulator v2.0
+  coefficient tables. It gives `S = 286.45 ft²`, `c = 28.24 ft`, and
+  `b = 13.89 ft`, with the moment reference at 54% of body length. Although
+  TM-107580 describes its baseline as the configuration in TM-101641 (with a
+  smaller all-movable rudder), its area and span do not equal the PLS
+  flight-scale values above. Keep its coefficient database on its own reference
+  set rather than silently scaling it onto the tunnel model or the notional
+  7 m fixture.
+
+TM-4515 says its longitudinal coefficients use stability axes and its
+lateral-directional coefficients use body axes. Coefficients use the basic-body
+reference area, length, and span; the moment center is the estimated CG at 54%
+of body length from the nose and 0.08% above the flat lower surface. In the
+Thessa body convention `+X` points forward. For a PLS model whose longitudinal
+origin is the published 54%-length moment station, a fuselage station `FS`
+measured aft from the nose maps to `x = 0.54 L - FS`. Compare lift and drag
+after transforming runtime body-axis forces into the report's stability axes;
+compare pitching moment only after matching the moment-reference location.
+
+NASA-TM-107580 (1992), Appendix E, gives the simulator's Mach/AoA coefficient
+polynomials. At Mach 0.30 its basic table gives `CL(0 deg) = -0.053627` and a
+local lift slope of `0.036236 per degree` (`2.076 per radian`). The basic
+pitching-moment row gives `Cm(0 deg) = 0.013877` and
+`dCm/dalpha = -0.001669 per degree` (`-0.0956 per radian`). These are
+simulator-database anchors, not measurements for the 216.8 ft² PLS tunnel
+reference.
+
+For control authority, the TM-107580 upper-left body-flap table gives
 `Delta Cm = 0.011831` at Mach 0.30, zero AoA and `-15 deg` flap deflection.
 The report says the symmetric right-side longitudinal increment is identical,
-so the paired-flap secant is `Delta Cm / Delta = -0.0904 per radian` in the
-report's convention. The lower-left body-flap table is zero throughout; it
-does not provide a useful lower-flap calibration target. The report also
-states that hinge-moment limits were not modeled and actuator ratings had not
-been specified, so it cannot ground the fixture's `max_torque_nm` value.
+so the paired-flap secant is `Delta Cm / Delta = -0.0904 per radian` in its
+convention. The lower-left body-flap table is zero throughout; it does not
+provide a useful lower-flap calibration target. Hinge-moment limits were not
+modeled and actuator ratings had not been specified, so this source cannot
+ground the fixture's `max_torque_nm` value.
 
-These values are suitable for future coefficient-table validation once a
-matching HL-20 geometry/reference frame is available. They do not justify a
-free lift multiplier or an inferred actuator torque for the current generic
-fixture.
+The next apples-to-apples comparison should use the TM-4515/TM-101641
+body-alone reference area, matching `Mach`, angle of attack, Reynolds number,
+flap configuration, stability-axis force projection, and 54%-length moment
+station. The current generic fixture is not that geometry. No HL-20 lift
+multiplier or actuator torque follows from either reference set by itself.
 
 ## 11.9. Performance and limits
 

@@ -36,6 +36,9 @@ absolute error envelopes, and fallback rules.
 - OpenRocket: https://openrocket.info/
 - NASA X-15 technical reports and aerodynamic data where cited by a specific
   validation case.
+- Jackson, E. B., Cruz, C. I., and Ragsdale, W. A., *Real-Time Simulation
+  Model of the HL-20 Lifting Body*, NASA-TM-107580, 1992, NTRS 19920021916:
+  https://ntrs.nasa.gov/citations/19920021916.
 
 External solvers and data remain reference-only. Imported coefficient tables
 must preserve geometry, reference area, units, sign conventions, source, and

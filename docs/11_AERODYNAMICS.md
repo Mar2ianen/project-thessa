@@ -204,6 +204,33 @@ The repository also contains a bundled X-15-like proxy comparison. Its Mach
 and altitude errors are useful regression measurements, not a statement that
 the compact proxy reproduces the full X-15 model.
 
+## 11.8.4. HL-20 published aerodynamic anchors
+
+NASA-TM-107580 (1992), Appendix E, publishes the HL-20 simulator's
+Mach/AoA coefficient polynomials and control increments. At Mach 0.30, its
+basic table gives `CL(0 deg) = -0.053627` and a local lift slope of
+`0.036236 per degree` (`2.076 per radian`). The basic pitching-moment row gives
+`Cm(0 deg) = 0.013877` and `dCm/dalpha = -0.001669 per degree`
+(`-0.0956 per radian`). These are reference-database anchors, not coefficients
+transferred to the notional 7 m Dream Chaser-style fixture: the HL-20 table
+uses a 286.45 ft² reference area and a moment reference at 54% of body length,
+so geometry, reference quantities, CG and axis conventions must match before
+an absolute model comparison is meaningful.
+
+For control authority, the upper-left body-flap table gives
+`Delta Cm = 0.011831` at Mach 0.30, zero AoA and `-15 deg` flap deflection.
+The report says the symmetric right-side longitudinal increment is identical,
+so the paired-flap secant is `Delta Cm / Delta = -0.0904 per radian` in the
+report's convention. The lower-left body-flap table is zero throughout; it
+does not provide a useful lower-flap calibration target. The report also
+states that hinge-moment limits were not modeled and actuator ratings had not
+been specified, so it cannot ground the fixture's `max_torque_nm` value.
+
+These values are suitable for future coefficient-table validation once a
+matching HL-20 geometry/reference frame is available. They do not justify a
+free lift multiplier or an inferred actuator torque for the current generic
+fixture.
+
 ## 11.9. Performance and limits
 
 The target batch sizes are 1, 16, 256, and 1024 vehicles, with 8–64 aggregated

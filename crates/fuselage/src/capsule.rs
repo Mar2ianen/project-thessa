@@ -1,11 +1,13 @@
-//! Parametric capsule cabins (Mercury/Gemini/Apollo/Orion/Dragon class).
+//! Parametric capsule cabins: a general blunt-body primitive, not a
+//! vehicle catalogue. Dial base/top diameter, height (or sphere diameter),
+//! crew count, couch rows, and atmosphere to cover Mercury- through
+//! Dragon-class missions; those vehicles are example parameter sets,
+//! not library presets.
 //!
 //! A capsule is a blunt frustum (or sphere) pressure vessel with the crew
-//! low near the heat shield, couches side-by-side, and a sea-level cabin
-//! atmosphere. Dimensions below are representative public values,
-//! regression-grade like the other goldens — not copied proprietary lines.
-//! Airplane-like cabins are future work; the transverse `abreast` rows
-//! introduced for couches already anticipate multi-aisle layouts.
+//! low near the heat shield, couches side-by-side, and cabin air on
+//! request. Airplane-like cabins are future work; the transverse `abreast`
+//! rows introduced for couches already anticipate multi-aisle layouts.
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
@@ -14,7 +16,6 @@ use crate::{
     BodyPort, BodyStation, BodyStructuralLayout, CabinAtmosphere, FuselageError, InteriorRegion,
     PortKind, ProceduralBody, RegionKind, SeatStyle,
 };
-
 /// Capsule outer-mold shape: blunt conical frustum or full sphere.
 /// Stations run tail-to-nose (`+X` forward); the blunt base closes with a
 /// flat disc at compile time (the heat-shield plane).
@@ -196,116 +197,4 @@ fn crew_kind(params: &CapsuleParams) -> RegionKind {
         abreast: Some(params.abreast),
         seat_style: params.seat_style,
     }
-}
-
-fn base_params(
-    name: &str,
-    shape: CapsuleShape,
-    crew: u32,
-    seat_style: SeatStyle,
-    abreast: u32,
-) -> CapsuleParams {
-    CapsuleParams {
-        name: name.into(),
-        shape,
-        crew,
-        seat_style,
-        abreast,
-        couch_mass_kg_each: if seat_style == SeatStyle::Couch {
-            30.0
-        } else {
-            12.0
-        },
-        occupant_mass_kg_each: 0.0,
-        atmosphere: Some(CabinAtmosphere::sea_level()),
-        structure: Some(BodyStructuralLayout::metal_baseline()),
-        origin_body_m: DVec3::ZERO,
-        divisions: 6,
-    }
-}
-
-/// Mercury-class: 1.89 m blunt bell, single couch.
-pub fn mercury() -> Result<ProceduralBody, FuselageError> {
-    capsule_body(&base_params(
-        "mercury-capsule",
-        CapsuleShape::Frustum {
-            base_diameter_m: 1.89,
-            top_diameter_m: 0.75,
-            height_m: 2.9,
-        },
-        1,
-        SeatStyle::Couch,
-        1,
-    ))
-}
-
-/// Gemini-class: two ejection seats side-by-side under a 3.05 m frustum.
-pub fn gemini() -> Result<ProceduralBody, FuselageError> {
-    capsule_body(&base_params(
-        "gemini-capsule",
-        CapsuleShape::Frustum {
-            base_diameter_m: 3.05,
-            top_diameter_m: 1.0,
-            height_m: 3.4,
-        },
-        2,
-        SeatStyle::Upright,
-        2,
-    ))
-}
-
-/// Apollo CM-class: 3.91 m cone, three couches abreast.
-pub fn apollo_cm() -> Result<ProceduralBody, FuselageError> {
-    capsule_body(&base_params(
-        "apollo-cm",
-        CapsuleShape::Frustum {
-            base_diameter_m: 3.91,
-            top_diameter_m: 1.0,
-            height_m: 3.23,
-        },
-        3,
-        SeatStyle::Couch,
-        3,
-    ))
-}
-
-/// Orion-class (Artemis): 5.0 m cone, four couches in two rows.
-pub fn orion() -> Result<ProceduralBody, FuselageError> {
-    capsule_body(&base_params(
-        "orion-cm",
-        CapsuleShape::Frustum {
-            base_diameter_m: 5.0,
-            top_diameter_m: 1.3,
-            height_m: 3.3,
-        },
-        4,
-        SeatStyle::Couch,
-        2,
-    ))
-}
-
-/// Crew Dragon-class: 4.0 m cone, four upright seats in two rows.
-pub fn crew_dragon() -> Result<ProceduralBody, FuselageError> {
-    capsule_body(&base_params(
-        "crew-dragon",
-        CapsuleShape::Frustum {
-            base_diameter_m: 4.0,
-            top_diameter_m: 1.6,
-            height_m: 4.5,
-        },
-        4,
-        SeatStyle::Upright,
-        2,
-    ))
-}
-
-/// Vostok-class: 2.3 m sphere, single couch, no nose dock.
-pub fn vostok() -> Result<ProceduralBody, FuselageError> {
-    capsule_body(&base_params(
-        "vostok-capsule",
-        CapsuleShape::Sphere { diameter_m: 2.3 },
-        1,
-        SeatStyle::Couch,
-        1,
-    ))
 }

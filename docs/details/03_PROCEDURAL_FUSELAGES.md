@@ -199,29 +199,27 @@ thickens the skin, derates pressure, or picks a stronger alloy.
 
 ## Capsule cabins
 
-`crates/fuselage/src/capsule.rs` builds blunt capsule pressure vessels
-parametrically: a conical frustum (base/top diameter, height) or a full
-sphere, lofted tail-to-nose with the blunt base closing on the
+`crates/fuselage/src/capsule.rs` exposes one general blunt-body
+primitive, not a vehicle catalogue: `CapsuleParams` (frustum base/top
+diameter plus height, or sphere diameter; crew count; couch/row layout;
+atmosphere; structure; loft divisions) compiled by `capsule_body` into a
+pressure vessel lofted tail-to-nose. The blunt base closes on the
 heat-shield plane at compile time. The crew rides low near the shield
 (`5-65%` of frustum height, `20-80%` of a sphere) with couches
-side-by-side, sea-level air by default, and a nose docking hatch where
-the frustum top fits one (spheres keep their side hatch).
+side-by-side and cabin air on request; a nose docking hatch appears
+where the frustum top fits one (spheres keep their side hatch).
 
-Representative presets (public dimensions, regression-grade):
-
-| preset | shape | crew | layout |
-|---|---|---|---|
-| Mercury | 1.89 m bell | 1 couch | single |
-| Gemini | 3.05 m frustum | 2 upright seats | 2 abreast |
-| Apollo CM | 3.91 m cone | 3 couches | 3 abreast |
-| Orion (Artemis) | 5.0 m cone | 4 couches | 2 x 2 |
-| Crew Dragon | 4.0 m cone | 4 upright seats | 2 x 2 |
-| Vostok | 2.3 m sphere | 1 couch | single, no dock |
+Mercury through Dragon-class missions are example parameter sets dialled
+on this primitive — roughly: a 1.89 m solo bell; a 3.05 m two-abreast
+pair; a 3.91 m three-abreast cone; 5.0/4.0 m four-place 2x2 cones; a
+2.3 m solo sphere. Dimensions are representative public values,
+regression-grade like the other goldens, and live in tests and docs —
+never as hardcoded library presets.
 
 Couches are `Crew` places with `seat_style = "couch"` and an `abreast`
 row width; anchors spread across the local section and refuse if a row
-overflows the loft. Couch mass defaults to 30 kg each in the presets
-(typical strap couch, not a 12 kg aircraft seat).
+overflows the loft. Couch mass is an explicit authoring input (strap
+couches run ~25-35 kg, not 12 kg aircraft seats).
 
 Airplane-like cabins are not started, but the design already anticipates
 them: `abreast` rows, pitch validation, and the upright/couch tag are

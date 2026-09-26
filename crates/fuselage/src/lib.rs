@@ -64,10 +64,7 @@ pub use body::{
     HullMaterial, InteriorRegion, PortKind, ProceduralBody, RegionKind, SeatStyle, StoredFluid,
     TankShell,
 };
-pub use capsule::{
-    CapsuleParams, CapsuleShape, apollo_cm, capsule_body, crew_dragon, gemini, mercury, orion,
-    vostok,
-};
+pub use capsule::{CapsuleParams, CapsuleShape, capsule_body};
 pub use collision::{BodyCollisionOptions, body_collision_parts};
 pub use compile::{
     BodyCompileOptions, BodyPortCompiled, CompiledBody, CompiledBodyTank, CompiledRegion,

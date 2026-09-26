@@ -1750,13 +1750,46 @@ fn capsule_sphere_matches_closed_form_volume() {
 }
 
 #[test]
-fn capsule_presets_carry_crew_air_and_docks() {
-    use crate::{apollo_cm, crew_dragon, gemini, mercury, orion, vostok};
+fn capsule_example_crews_compile_with_air_and_docks() {
+    use crate::{BodyStructuralLayout, CabinAtmosphere, CapsuleParams, CapsuleShape, capsule_body};
+    use glam::DVec3;
 
-    // Apollo: three couches abreast in a single row, sea-level air,
-    // nose docking hatch.
-    let apollo = apollo_cm().unwrap();
-    let compiled = compile_body(&apollo, &BodyCompileOptions::default()).unwrap();
+    // Example parameter sets on the generic primitive (representative
+    // public dimensions, not library presets): Apollo-like 3-abreast
+    // couches, Gemini-like side-by-side seats, 2x2 rows, a solo bell,
+    // and a spherical cabin.
+    let example =
+        |name: &str, shape: CapsuleShape, crew: u32, seat_style: crate::SeatStyle, abreast: u32| {
+            capsule_body(&CapsuleParams {
+                name: name.into(),
+                shape,
+                crew,
+                seat_style,
+                abreast,
+                couch_mass_kg_each: 30.0,
+                occupant_mass_kg_each: 0.0,
+                atmosphere: Some(CabinAtmosphere::sea_level()),
+                structure: Some(BodyStructuralLayout::metal_baseline()),
+                origin_body_m: DVec3::ZERO,
+                divisions: 6,
+            })
+            .unwrap()
+        };
+    let frustum = |base: f64, top: f64, height: f64| CapsuleShape::Frustum {
+        base_diameter_m: base,
+        top_diameter_m: top,
+        height_m: height,
+    };
+
+    // Three couches abreast in a single row, sea-level air, nose dock.
+    let apollo_like = example(
+        "three-abreast",
+        frustum(3.91, 1.0, 3.23),
+        3,
+        crate::SeatStyle::Couch,
+        3,
+    );
+    let compiled = compile_body(&apollo_like, &BodyCompileOptions::default()).unwrap();
     let cabin = &compiled.interior[0];
     assert_eq!(cabin.seats, 3);
     assert_eq!(cabin.seat_style, crate::SeatStyle::Couch);
@@ -1782,14 +1815,61 @@ fn capsule_presets_carry_crew_air_and_docks() {
             .any(|port| port.name == "docking-nose")
     );
 
-    // Gemini: two upright seats side-by-side; Dragon/Orion: four places
-    // in two rows of two.
+    // Side-by-side pair, two rows of two (upright or couch), solo bell,
+    // and a spherical cabin with no nose dock.
+    let sphere_like = example(
+        "ball-cabin",
+        CapsuleShape::Sphere { diameter_m: 2.3 },
+        1,
+        crate::SeatStyle::Couch,
+        1,
+    );
     for (body, seats, rows) in [
-        (gemini().unwrap(), 2, 1),
-        (crew_dragon().unwrap(), 4, 2),
-        (orion().unwrap(), 4, 2),
-        (mercury().unwrap(), 1, 1),
-        (vostok().unwrap(), 1, 1),
+        (
+            example(
+                "pair-abreast",
+                frustum(3.05, 1.0, 3.4),
+                2,
+                crate::SeatStyle::Upright,
+                2,
+            ),
+            2,
+            1,
+        ),
+        (
+            example(
+                "four-upright",
+                frustum(4.0, 1.6, 4.5),
+                4,
+                crate::SeatStyle::Upright,
+                2,
+            ),
+            4,
+            2,
+        ),
+        (
+            example(
+                "four-couches",
+                frustum(5.0, 1.3, 3.3),
+                4,
+                crate::SeatStyle::Couch,
+                2,
+            ),
+            4,
+            2,
+        ),
+        (
+            example(
+                "solo-bell",
+                frustum(1.89, 0.75, 2.9),
+                1,
+                crate::SeatStyle::Couch,
+                1,
+            ),
+            1,
+            1,
+        ),
+        (sphere_like, 1, 1),
     ] {
         let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
         let cabin = &compiled.interior[0];
@@ -1805,9 +1885,16 @@ fn capsule_presets_carry_crew_air_and_docks() {
         assert_eq!(row_xs.len() as u32, rows, "{}", body.name);
         assert!(cabin.air_mass_kg > 0.0, "{}", body.name);
     }
-    // Vostok sphere keeps its side hatch: no nose dock.
-    let vostok_compiled = compile_body(&vostok().unwrap(), &BodyCompileOptions::default()).unwrap();
-    assert!(vostok_compiled.ports.is_empty());
+    // The sphere keeps its side hatch: no nose dock.
+    let ball = example(
+        "ball-cabin",
+        CapsuleShape::Sphere { diameter_m: 2.3 },
+        1,
+        crate::SeatStyle::Couch,
+        1,
+    );
+    let ball_compiled = compile_body(&ball, &BodyCompileOptions::default()).unwrap();
+    assert!(ball_compiled.ports.is_empty());
 }
 
 #[test]

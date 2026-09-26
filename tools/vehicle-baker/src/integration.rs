@@ -81,6 +81,11 @@ fn procedural_lifting_body_and_wing_bake_and_roundtrip_as_one_vehicle() {
     .expect("procedural wing should compile");
     let body = compile_body(&asset.procedural_bodies[0], &BodyCompileOptions::default())
         .expect("procedural hull should compile");
+    assert_eq!(
+        body.controls[1].hinge.unwrap().point_body_m.x,
+        -2.0,
+        "the aft pitch flap must hinge from its forward (+X) boundary"
+    );
     let wing_collision = wing
         .collision_parts(&CollisionOptions::default())
         .expect("wing contact parts should compile");
@@ -256,10 +261,10 @@ fn procedural_lifting_body_and_wing_bake_and_roundtrip_as_one_vehicle() {
                 .expect("deflected body flap aero case"),
         )
         .expect("deflected body flap loads should evaluate");
+    let flap_pitch_moment_delta = flap_result.moment_body_nm.y - baseline_pitch_moment_nm;
     assert!(
-        (flap_result.moment_body_nm.y - baseline_pitch_moment_nm).abs() > 1.0e-3,
-        "aft flap should change the aerodynamic pitch moment: baseline={baseline_pitch_moment_nm}, deflected={}",
-        flap_result.moment_body_nm.y
+        flap_pitch_moment_delta.abs() > 1.0e-3,
+        "aft flap should change aerodynamic pitch moment: delta={flap_pitch_moment_delta}"
     );
     let flap_panel_loads = flap_result
         .panel_loads
@@ -335,7 +340,8 @@ fn procedural_lifting_body_and_wing_bake_and_roundtrip_as_one_vehicle() {
         saturated,
         "the rate limit should leave the target unreached"
     );
-    let expected_angle = 0.4 * (1.0 - hinge_moments[1].abs() / body_actuator.max_torque_nm) * 0.5;
+    let opposing_load_fraction = (-hinge_moments[1] / body_actuator.max_torque_nm).clamp(0.0, 1.0);
+    let expected_angle = 0.4 * (1.0 - opposing_load_fraction) * 0.5;
     assert!((next_angles[1] - expected_angle).abs() < 1.0e-12);
 
     vehicle

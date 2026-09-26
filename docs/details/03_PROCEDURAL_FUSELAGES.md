@@ -100,9 +100,10 @@ plane and deflection limits. The compiler inserts range edges into the zone
 schedule and resolves each channel to only the corresponding generated
 panels. `vehicle-baker` rebases those local indices into the merged vehicle
 geometry, after wing controls; runtime control commands then use the shared
-`ControlSurfaceDefinition` path. Each body control now compiles a hinge at
-its leading axial boundary and the local section centroid: pitch strips rotate
-about body `-Y`, yaw strips about `+Z`, preserving the existing positive
+`ControlSurfaceDefinition` path. Each body control compiles a hinge at its
+forward (larger-`x`) axial boundary and the local section centroid because
+body stations run tail-to-nose with `+X` forward. Pitch strips rotate about
+body `-Y`, yaw strips about `+Z`, preserving the existing positive
 command/lift convention. Runtime motion rotates panel sample points, force
 centers, and aerodynamic axes from a stable reference geometry, so a change
 in command does not accumulate transform error.

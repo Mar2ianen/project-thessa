@@ -120,7 +120,7 @@ fn body_control_regions_split_axial_zones_and_bind_one_strip_plane() {
     assert_eq!(control.minimum_deflection_rad, -0.3);
     assert_eq!(control.maximum_deflection_rad, 0.3);
     assert_eq!(control.panel_indices, vec![3]);
-    assert_eq!(control.hinge.unwrap().point_body_m, DVec3::X);
+    assert_eq!(control.hinge.unwrap().point_body_m, 3.0 * DVec3::X);
     assert_eq!(control.hinge.unwrap().axis_body, DVec3::Z);
     assert_eq!(control.actuator, Some(actuator));
     let controlled_panel = compiled.panels[control.panel_indices[0]];

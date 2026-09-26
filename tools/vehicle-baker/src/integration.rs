@@ -23,8 +23,10 @@ fn procedural_lifting_body_and_wing_bake_and_roundtrip_as_one_vehicle() {
         max_rate_rad_s: 0.3,
         max_torque_nm: 7_500.0,
     };
-    // Normalize checkout line endings before injecting test-only TOML tables.
-    let normalized_fixture = FIXTURE.replace("\r\n", "\n");
+    // Exercise Windows checkout line endings on every host before injecting
+    // test-only TOML tables, then normalize them for platform-independent edits.
+    let crlf_fixture = FIXTURE.replace("\r\n", "\n").replace('\n', "\r\n");
+    let normalized_fixture = crlf_fixture.replace("\r\n", "\n");
     let actuator_fixture = normalized_fixture
         .replace(
             "maximum_deflection_rad = 0.35\n",

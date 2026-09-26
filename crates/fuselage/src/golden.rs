@@ -68,6 +68,7 @@ pub fn juno_style_stack() -> Result<ProceduralBody, FuselageError> {
                 fill_fraction: 0.95,
                 pressure_pa: None,
                 material: None,
+                shell: None,
             },
         )?,
         InteriorRegion::new("avionics", 4.9, 5.9, RegionKind::Avionics)?,

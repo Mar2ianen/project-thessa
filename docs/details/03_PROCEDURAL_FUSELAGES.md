@@ -157,11 +157,26 @@ Per-component pressures and materials override the same way as single
 tanks. The compiled tanks carry their pair plus an oxidizer/fuel tag for
 the feed pipeline.
 
+A `FluidTank` region stores one pure component (`lox`, `liquid-methane`,
+`liquid-hydrogen`, `rp1`, `nto`, `mmh`, `hydrazine`, `water`) with the
+same per-tank pressure/material/shell overrides. Use two `FluidTank`
+regions for a hand-placed oxidizer + fuel pair (for example a spherical
+LOX tank aft and a cylindrical methane tank forward); use `Bipropellant`
+for the automatic mixture-ratio split.
+
+Tank shells are cylindrical (equivalent diameter over the region length)
+by default; `shell = "sphere"` sizes a volume-equivalent sphere instead,
+which carries half the membrane stress at the same pressure. Mixed shapes
+in one auto-split are not offered: combine two `FluidTank` regions.
+
 A `Crew` region places seats: `seats` distributes along the region while
 seat plus occupant mass aggregates at the region centroid like cargo
 manifest (seat default 12 kg each, occupants default 0 for unoccupied
-ferry). The compiled interior reports the seat count and total payload
-mass. The legacy unit `Cabin` remains as unfitted volume with no mass.
+ferry). The compiled interior reports the seat count, the total payload
+mass, and one forward-facing seat anchor per place on the loft
+centerline (even spread by default, centered row at an explicit
+`seat_pitch_m` that must fit the region). The legacy unit `Cabin`
+remains as unfitted volume with no mass.
 
 Tank shell alloys available to both fuselage regions and hand tanks are
 `nickel-superalloy`, `aluminum-2219`, `stainless-304`, and

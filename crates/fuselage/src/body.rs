@@ -18,6 +18,49 @@ fn default_seat_mass_kg_each() -> f64 {
     12.0
 }
 
+/// Pure stored fluid for standalone component tanks (no chamber thermo:
+/// just storage density for mass/volume bookkeeping). Component densities
+/// match the split-tank table so a manual LOX + methane pair agrees with
+/// the auto-split `Bipropellant` region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StoredFluid {
+    Lox,
+    LiquidMethane,
+    LiquidHydrogen,
+    Rp1,
+    Nto,
+    Mmh,
+    Hydrazine,
+    Water,
+}
+
+impl StoredFluid {
+    /// Storable density in kg/m^3.
+    pub fn density_kg_m3(self) -> f64 {
+        match self {
+            Self::Lox => 1141.0,
+            Self::LiquidMethane => 422.0,
+            Self::LiquidHydrogen => 71.0,
+            Self::Rp1 => 810.0,
+            Self::Nto => 1440.0,
+            Self::Mmh => 878.0,
+            Self::Hydrazine => 1008.0,
+            Self::Water => 1000.0,
+        }
+    }
+}
+
+/// Pressure-shell shape for one tank region. The cylinder maps the loft
+/// volume to an equivalent diameter over the region length; the sphere
+/// sizes from the volume alone and suits compact storable tanks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TankShell {
+    Cylinder,
+    Sphere,
+}
+
 /// What a slice of the usable interior does. Geometry and structure are
 /// shared; purpose is assigned per longitudinal region.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -35,6 +78,25 @@ pub enum RegionKind {
         pressure_pa: Option<f64>,
         #[serde(default)]
         material: Option<thessa_sim_core::ChamberMaterial>,
+        /// Shell shape; `None` keeps the equivalent cylinder.
+        #[serde(default)]
+        shell: Option<TankShell>,
+    },
+    /// Standalone pure-fluid tank (manual oxidizer/fuel placement, water,
+    /// RCS monoprop): one region is one tank with the stored density.
+    /// Use this for hand-split pairs; use `Bipropellant` for the automatic
+    /// mixture-ratio split.
+    FluidTank {
+        fluid: StoredFluid,
+        /// Usable fill fraction in `[0, 1]`.
+        fill_fraction: f64,
+        #[serde(default)]
+        pressure_pa: Option<f64>,
+        #[serde(default)]
+        material: Option<thessa_sim_core::ChamberMaterial>,
+        /// Shell shape; `None` keeps the equivalent cylinder.
+        #[serde(default)]
+        shell: Option<TankShell>,
     },
     /// Bipropellant volume split into two tanks at compile time:
     /// oxidizer aft, fuel forward, divided axially so sub-volumes match
@@ -60,19 +122,28 @@ pub enum RegionKind {
         oxidizer_material: Option<thessa_sim_core::ChamberMaterial>,
         #[serde(default)]
         fuel_material: Option<thessa_sim_core::ChamberMaterial>,
+        /// Shell shape for both sub-tanks; mix shapes via two `FluidTank`
+        /// regions instead.
+        #[serde(default)]
+        shell: Option<TankShell>,
     },
     /// Crew or passenger volume (unfitted shell; mass is future module work).
     Cabin,
     /// Crewed cabin with seats: `seats` places are distributed along the
     /// region; seat plus occupant mass rides the hull at the region
     /// centroid like cargo manifest. Occupant mass defaults to 0
-    /// (unoccupied ferry) so crew loading stays explicit.
+    /// (unoccupied ferry) so crew loading stays explicit. Seat anchors
+    /// (one position per place, forward-facing, on the section centerline)
+    /// are exposed in the compiled interior for renderer/crew systems.
     Crew {
         seats: u32,
         #[serde(default = "default_seat_mass_kg_each")]
         seat_mass_kg_each: f64,
         #[serde(default)]
         occupant_mass_kg_each: f64,
+        /// Longitudinal pitch between places; `None` spreads evenly.
+        #[serde(default)]
+        seat_pitch_m: Option<f64>,
     },
     /// Pressurized cargo volume plus explicit manifest mass.
     Cargo {
@@ -125,6 +196,35 @@ impl InteriorRegion {
         }
         match self.kind {
             RegionKind::Tank {
+                fill_fraction,
+                pressure_pa,
+                material,
+                ..
+            } => {
+                if !fill_fraction.is_finite() || !(0.0..=1.0).contains(&fill_fraction) {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "region '{}' needs fill_fraction in [0, 1]",
+                        self.name
+                    )));
+                }
+                if let Some(pressure) = pressure_pa
+                    && (!pressure.is_finite() || pressure <= 0.0)
+                {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "region '{}' needs pressure_pa > 0",
+                        self.name
+                    )));
+                }
+                if let Some(material) = material
+                    && material.validate().is_err()
+                {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "region '{}' has an invalid tank material",
+                        self.name
+                    )));
+                }
+            }
+            RegionKind::FluidTank {
                 fill_fraction,
                 pressure_pa,
                 material,
@@ -225,6 +325,7 @@ impl InteriorRegion {
                 seats,
                 seat_mass_kg_each,
                 occupant_mass_kg_each,
+                seat_pitch_m,
             } => {
                 if seats == 0 || seats > 1000 {
                     return Err(FuselageError::InvalidInterior(format!(
@@ -243,6 +344,21 @@ impl InteriorRegion {
                         "region '{}' needs occupant_mass_kg_each >= 0",
                         self.name
                     )));
+                }
+                if let Some(pitch) = seat_pitch_m {
+                    if !pitch.is_finite() || pitch <= 0.0 {
+                        return Err(FuselageError::InvalidInterior(format!(
+                            "region '{}' needs seat_pitch_m > 0",
+                            self.name
+                        )));
+                    }
+                    let length = self.x1_m - self.x0_m;
+                    if (seats as f64 - 1.0) * pitch > length + 1e-9 {
+                        return Err(FuselageError::InvalidInterior(format!(
+                            "region '{}' seats at {pitch} m pitch do not fit in {length:.2} m",
+                            self.name
+                        )));
+                    }
                 }
             }
             RegionKind::Cargo { payload_mass_kg }

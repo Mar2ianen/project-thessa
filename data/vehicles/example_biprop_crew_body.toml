@@ -81,6 +81,7 @@ x1_m = 4.9
 propellant = "nto-mmh"
 fill_fraction = 0.85
 pressure_pa = 2000000.0
+shell = "sphere"
 
 [procedural_bodies.regions.kind.tank.material]
 density_kg_m3 = 7900.0
@@ -97,6 +98,7 @@ x1_m = 6.0
 seats = 4
 seat_mass_kg_each = 12.0
 occupant_mass_kg_each = 90.0
+seat_pitch_m = 0.3
 
 [[procedural_bodies.ports]]
 name = "engine-aft"

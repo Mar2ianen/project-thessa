@@ -799,6 +799,7 @@ fn degenerate_authoring_fails_closed() {
                 fill_fraction: 1.0,
                 pressure_pa: None,
                 material: None,
+                shell: None,
             },
         )
         .unwrap(),
@@ -981,6 +982,7 @@ fn per_tank_pressure_and_material_override_shell_mass() {
                     fill_fraction: 1.0,
                     pressure_pa,
                     material,
+                    shell: None,
                 },
             )
             .unwrap(),
@@ -1030,6 +1032,7 @@ fn bipropellant_region_splits_into_ox_and_fuel_tanks() {
                 material: None,
                 oxidizer_material: None,
                 fuel_material: None,
+                shell: None,
             },
         )
         .unwrap(),
@@ -1078,6 +1081,7 @@ fn bipropellant_rejects_monoprop_and_bad_mixture() {
                 material: None,
                 oxidizer_material: None,
                 fuel_material: None,
+                shell: None,
             },
         )
         .is_err()
@@ -1099,6 +1103,7 @@ fn bipropellant_rejects_monoprop_and_bad_mixture() {
                 material: None,
                 oxidizer_material: None,
                 fuel_material: None,
+                shell: None,
             },
         )
         .is_err()
@@ -1113,6 +1118,7 @@ fn bipropellant_rejects_monoprop_and_bad_mixture() {
                 seats: 0,
                 seat_mass_kg_each: 12.0,
                 occupant_mass_kg_each: 0.0,
+                seat_pitch_m: None,
             },
         )
         .is_err()
@@ -1140,6 +1146,7 @@ fn crew_cabin_seats_ride_hull_mass_at_centroid() {
                 seats: 4,
                 seat_mass_kg_each: 12.0,
                 occupant_mass_kg_each: 90.0,
+                seat_pitch_m: None,
             },
         )
         .unwrap(),
@@ -1262,4 +1269,164 @@ max_wall_temp_k = 400.0
     assert_eq!(compiled.interior[1].seats, 2);
     // Seat-mass default (12 kg) + 2x90 kg occupants = 204 kg.
     assert!((compiled.interior[1].payload_mass_kg - 204.0).abs() < 1e-9);
+}
+
+#[test]
+fn fluid_tanks_carry_pure_components_with_own_shells() {
+    use crate::{StoredFluid, TankShell};
+
+    // Manual LOX + methane pair as two independent regions: masses follow
+    // stored densities, shells size from their own pressure/material.
+    let mut body = ProceduralBody::new(
+        "manual-pair",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(6.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::new(
+            "lox",
+            0.5,
+            2.5,
+            RegionKind::FluidTank {
+                fluid: StoredFluid::Lox,
+                fill_fraction: 1.0,
+                pressure_pa: None,
+                material: None,
+                shell: None,
+            },
+        )
+        .unwrap(),
+        InteriorRegion::new(
+            "methane",
+            2.5,
+            4.5,
+            RegionKind::FluidTank {
+                fluid: StoredFluid::LiquidMethane,
+                fill_fraction: 0.5,
+                pressure_pa: None,
+                material: None,
+                shell: None,
+            },
+        )
+        .unwrap(),
+    ];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    assert_eq!(compiled.tanks.len(), 2);
+    let lox = &compiled.tanks[0];
+    let ch4 = &compiled.tanks[1];
+    assert_eq!(lox.component, crate::TankComponent::Stored);
+    assert_eq!(lox.contents, crate::TankContents::Fluid(StoredFluid::Lox));
+    // Same geometric volume (2 m of 1 m-radius barrel minus 10 mm wall),
+    // so the mass ratio is the density ratio at the authored fills.
+    let expected = 1141.0 / (422.0 * 0.5);
+    let actual = lox.propellant_kg / ch4.propellant_kg;
+    assert!((actual - expected).abs() / expected < 0.01);
+    assert!((lox.mount.tank.full_propellant_kg - lox.inner_volume_m3 * 1141.0).abs() < 1e-9);
+    let _ = TankShell::Sphere;
+}
+
+#[test]
+fn sphere_shell_is_lighter_than_cylinder_for_same_volume() {
+    use crate::TankShell;
+
+    let stations = || {
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(4.0, 1.0).unwrap(),
+        ]
+    };
+    let compile_with = |shell: Option<TankShell>| {
+        let mut body = ProceduralBody::new("shell-variant", stations(), DVec3::ZERO).unwrap();
+        body.structure = Some(BodyStructuralLayout::metal_baseline());
+        body.regions = vec![
+            InteriorRegion::new(
+                "tank",
+                0.5,
+                3.5,
+                RegionKind::Tank {
+                    propellant: thessa_sim_core::Propellant::LoxMethane,
+                    fill_fraction: 1.0,
+                    pressure_pa: None,
+                    material: None,
+                    shell,
+                },
+            )
+            .unwrap(),
+        ];
+        compile_body(&body, &BodyCompileOptions::default()).unwrap()
+    };
+    let cylinder = compile_with(None);
+    let sphere = compile_with(Some(TankShell::Sphere));
+    // Same capacity, same pressure/material: the sphere carries half the
+    // membrane stress, so its shell is lighter.
+    assert!((cylinder.tanks[0].inner_volume_m3 - sphere.tanks[0].inner_volume_m3).abs() < 1e-9);
+    assert!(sphere.tanks[0].mount.tank.dry_mass_kg < cylinder.tanks[0].mount.tank.dry_mass_kg);
+}
+
+#[test]
+fn crew_seat_anchors_line_up_on_the_centerline() {
+    // Four seats with explicit 0.8 m pitch center on the region; anchors
+    // ride the loft centerline in x order.
+    let mut body = ProceduralBody::new(
+        "seated-block",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(6.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::new(
+            "cabin",
+            1.0,
+            5.0,
+            RegionKind::Crew {
+                seats: 4,
+                seat_mass_kg_each: 12.0,
+                occupant_mass_kg_each: 0.0,
+                seat_pitch_m: Some(0.8),
+            },
+        )
+        .unwrap(),
+    ];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let cabin = &compiled.interior[0];
+    assert_eq!(cabin.seat_positions_body_m.len(), 4);
+    let xs: Vec<f64> = cabin
+        .seat_positions_body_m
+        .iter()
+        .map(|seat| seat.x)
+        .collect();
+    for pair in xs.windows(2) {
+        assert!((pair[1] - pair[0] - 0.8).abs() < 1e-9);
+        assert!(pair[0] >= 1.0 && pair[1] <= 5.0);
+    }
+    // Centered row: midpoint of the outer seats is the region midpoint.
+    assert!(((xs[0] + xs[3]) / 2.0 - 3.0).abs() < 1e-9);
+    // Anchors sit on the barrel centerline (y/z ~ 0).
+    for seat in &cabin.seat_positions_body_m {
+        assert!(seat.y.abs() < 1e-9 && seat.z.abs() < 1e-9);
+    }
+    // Oversize pitch refuses at authoring time.
+    assert!(
+        InteriorRegion::new(
+            "tight",
+            1.0,
+            2.0,
+            RegionKind::Crew {
+                seats: 4,
+                seat_mass_kg_each: 12.0,
+                occupant_mass_kg_each: 0.0,
+                seat_pitch_m: Some(0.8),
+            },
+        )
+        .is_err()
+    );
 }

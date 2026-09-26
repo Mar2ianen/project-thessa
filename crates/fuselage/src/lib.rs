@@ -60,12 +60,12 @@ mod summary;
 
 pub use body::{
     BodyControlPlane, BodyControlRegion, BodyPort, BodyStructuralLayout, HullMaterial,
-    InteriorRegion, PortKind, ProceduralBody, RegionKind,
+    InteriorRegion, PortKind, ProceduralBody, RegionKind, StoredFluid, TankShell,
 };
 pub use collision::{BodyCollisionOptions, body_collision_parts};
 pub use compile::{
     BodyCompileOptions, BodyPortCompiled, CompiledBody, CompiledBodyTank, CompiledRegion,
-    TankComponent, compile_body,
+    TankComponent, TankContents, compile_body,
 };
 pub use error::FuselageError;
 pub use golden::{

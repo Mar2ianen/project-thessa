@@ -680,6 +680,12 @@ impl VehicleAsset {
                     body.name, port.name, port.kind, port.position_body_m, port.axis_body_m
                 );
             }
+            for shield in &compiled.heat_shields {
+                println!(
+                    "body '{}': heat shield '{}' {:.2} m, {:.1} kg",
+                    body.name, shield.name, shield.diameter_m, shield.mass_kg
+                );
+            }
             let panel_base = panels.len();
             let control_base = controls.len();
             for definition in &compiled.controls {

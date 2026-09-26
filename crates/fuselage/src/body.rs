@@ -533,6 +533,69 @@ pub struct BodyPort {
     pub diameter_m: f64,
 }
 
+/// Which loft end a detachable part mounts on: tail (`x_first`) or nose
+/// (`x_last`). Stations run tail-to-nose with `+X` forward.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BodyEnd {
+    Aft,
+    Forward,
+}
+
+/// A detachable heat shield on one blunt end (KSP-style separate part:
+/// authored and tracked independently of the loft primitive, docking
+/// ports, and tank shells). Diameter derives from the end section;
+/// thickness and ablative mass are authoring inputs. Entry aeroheating
+/// itself is future work — this record owns geometry and mass.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BodyHeatShield {
+    pub name: String,
+    pub end: BodyEnd,
+    /// Shield thickness in mm.
+    pub thickness_mm: f64,
+    /// Ablative shell material (density sizes the mass).
+    pub material: thessa_sim_core::ChamberMaterial,
+}
+
+impl BodyHeatShield {
+    pub fn new(
+        name: impl Into<String>,
+        end: BodyEnd,
+        thickness_mm: f64,
+        material: thessa_sim_core::ChamberMaterial,
+    ) -> Result<Self, FuselageError> {
+        let shield = Self {
+            name: name.into(),
+            end,
+            thickness_mm,
+            material,
+        };
+        shield.validate()?;
+        Ok(shield)
+    }
+
+    pub fn validate(&self) -> Result<(), FuselageError> {
+        if self.name.trim().is_empty() {
+            return Err(FuselageError::InvalidBody(
+                "heat shield needs a name".into(),
+            ));
+        }
+        if !self.thickness_mm.is_finite() || self.thickness_mm <= 0.0 {
+            return Err(FuselageError::InvalidBody(format!(
+                "heat shield '{}' needs thickness_mm > 0",
+                self.name
+            )));
+        }
+        if self.material.validate().is_err() {
+            return Err(FuselageError::InvalidBody(format!(
+                "heat shield '{}' has an invalid material",
+                self.name
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Which pair of the fuselage compiler's orthogonal normal-force strips is
 /// driven by a body-mounted aerodynamic control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -858,6 +921,9 @@ pub struct ProceduralBody {
     /// Interface anchors on the outer mold.
     #[serde(default)]
     pub ports: Vec<BodyPort>,
+    /// Detachable heat shields on the blunt ends (separate parts).
+    #[serde(default)]
+    pub heat_shields: Vec<BodyHeatShield>,
     /// Axial regions assigned to control inputs over generated body strips.
     #[serde(default)]
     pub controls: Vec<BodyControlRegion>,
@@ -878,6 +944,7 @@ impl ProceduralBody {
             origin_body_m,
             regions: Vec::new(),
             ports: Vec::new(),
+            heat_shields: Vec::new(),
             controls: Vec::new(),
             structure: None,
         };
@@ -944,6 +1011,25 @@ impl ProceduralBody {
                 return Err(FuselageError::InvalidInterior(format!(
                     "port '{}' lies outside the station range",
                     port.name
+                )));
+            }
+        }
+        for shield in &self.heat_shields {
+            shield.validate()?;
+            // A shield needs a blunt end to cover: pointed tips refuse.
+            let end_station = match shield.end {
+                BodyEnd::Aft => self.stations[0],
+                BodyEnd::Forward => *self.stations.last().unwrap(),
+            };
+            let end_diameter = 2.0
+                * end_station
+                    .half_width_m
+                    .max(end_station.top_height_m)
+                    .max(end_station.bottom_height_m);
+            if end_diameter < 0.1 {
+                return Err(FuselageError::InvalidBody(format!(
+                    "heat shield '{}' needs a blunt end (got {:.3} m diameter)",
+                    shield.name, end_diameter
                 )));
             }
         }

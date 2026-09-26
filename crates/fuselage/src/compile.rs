@@ -193,6 +193,20 @@ pub struct CompiledRegion {
     pub o2_mass_kg: f64,
 }
 
+/// One detachable heat shield with compiled mass data.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompiledHeatShield {
+    pub name: String,
+    /// Mount position in body-local metres (end-section center).
+    pub position_body_m: DVec3,
+    /// Shield diameter in metres (from the end section).
+    pub diameter_m: f64,
+    /// Shield mass in kg.
+    pub mass_kg: f64,
+    /// Ablative shell material.
+    pub material: thessa_sim_core::ChamberMaterial,
+}
+
 /// One interface anchor in body-local metres.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BodyPortCompiled {
@@ -222,6 +236,9 @@ pub struct CompiledBody {
     pub structure: Option<CompiledHull>,
     /// Tank regions compiled into feed-pipeline mounts.
     pub tanks: Vec<CompiledBodyTank>,
+    /// Detachable heat shields with mass data.
+    #[serde(default)]
+    pub heat_shields: Vec<CompiledHeatShield>,
     /// All interior regions with usable volumes.
     pub interior: Vec<CompiledRegion>,
     /// Interface anchors in body-local metres.
@@ -817,6 +834,7 @@ impl<'a> Compiler<'a> {
             controls: Vec::new(),
             structure: None,
             tanks: Vec::new(),
+            heat_shields: Vec::new(),
             interior: Vec::new(),
             ports: Vec::new(),
             summary: CompiledBodySummary::default(),
@@ -1184,6 +1202,34 @@ impl<'a> Compiler<'a> {
                 seat_positions_body_m: seat_anchors,
                 air_mass_kg,
                 o2_mass_kg,
+            });
+        }
+
+        // Detachable heat shields: disc mass from the end-section area,
+        // thin-disc intrinsic inertia plus the mount offset term.
+        for shield in &self.body.heat_shields {
+            let end_station = match shield.end {
+                crate::BodyEnd::Aft => self.body.stations[0],
+                crate::BodyEnd::Forward => *self.body.stations.last().unwrap(),
+            };
+            let area = end_station.area_m2();
+            let radius = (area / std::f64::consts::PI).sqrt();
+            let mass = area * (shield.thickness_mm / 1000.0) * shield.material.density_kg_m3;
+            let center = self.section_center(end_station)?;
+            let intrinsic = DMat3::from_diagonal(DVec3::new(
+                0.5 * mass * radius.powi(2),
+                0.25 * mass * radius.powi(2),
+                0.25 * mass * radius.powi(2),
+            ));
+            hull_mass_kg += mass;
+            hull_moment += center * mass;
+            hull_inertia += intrinsic + point_inertia(mass, center);
+            compiled.heat_shields.push(CompiledHeatShield {
+                name: shield.name.clone(),
+                position_body_m: center,
+                diameter_m: 2.0 * radius,
+                mass_kg: mass,
+                material: shield.material,
             });
         }
 
@@ -1717,6 +1763,9 @@ impl<'a> Compiler<'a> {
             for seat in &mut region.seat_positions_body_m {
                 *seat += origin;
             }
+        }
+        for shield in &mut compiled.heat_shields {
+            shield.position_body_m += origin;
         }
         compiled.summary.center_of_volume_m += origin;
         compiled

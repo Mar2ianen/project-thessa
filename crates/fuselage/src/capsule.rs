@@ -13,8 +13,8 @@ use glam::DVec3;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BodyPort, BodyStation, BodyStructuralLayout, CabinAtmosphere, FuselageError, InteriorRegion,
-    PortKind, ProceduralBody, RegionKind, SeatStyle,
+    BodyStation, BodyStructuralLayout, CabinAtmosphere, FuselageError, InteriorRegion,
+    ProceduralBody, RegionKind, SeatStyle,
 };
 /// Capsule outer-mold shape: blunt conical frustum or full sphere.
 /// Stations run tail-to-nose (`+X` forward); the blunt base closes with a
@@ -156,33 +156,17 @@ pub fn capsule_body(params: &CapsuleParams) -> Result<ProceduralBody, FuselageEr
         }
     };
     let mut body = ProceduralBody::new(params.name.clone(), stations, params.origin_body_m)?;
-    let (crew_x0, crew_x1, top_diameter) = match params.shape {
-        CapsuleShape::Frustum {
-            top_diameter_m,
-            height_m,
-            ..
-        } => (0.05 * height_m, 0.65 * height_m, top_diameter_m),
-        CapsuleShape::Sphere { diameter_m } => (0.20 * diameter_m, 0.80 * diameter_m, 0.0),
+    let (crew_x0, crew_x1) = match params.shape {
+        CapsuleShape::Frustum { height_m, .. } => (0.05 * height_m, 0.65 * height_m),
+        CapsuleShape::Sphere { diameter_m } => (0.20 * diameter_m, 0.80 * diameter_m),
     };
     let mut crew = InteriorRegion::new(params.name.clone(), crew_x0, crew_x1, crew_kind(params))?;
     crew.atmosphere = params.atmosphere;
     crew.validate()?;
     body.regions = vec![crew];
-    // Nose docking hatch where the frustum top fits one (spheres keep
-    // their side hatch, outside this slice).
-    if top_diameter >= 0.5 {
-        let diameter = (0.8 * top_diameter).min(0.8);
-        body.ports = vec![BodyPort::new(
-            "docking-nose",
-            match params.shape {
-                CapsuleShape::Frustum { height_m, .. } => height_m,
-                CapsuleShape::Sphere { diameter_m } => diameter_m,
-            },
-            std::f64::consts::FRAC_PI_2,
-            PortKind::Docking,
-            diameter,
-        )?];
-    }
+    // No auto-fitted details: heat shields and docking ports are separate
+    // parts the author attaches (KSP-style), never baked into the
+    // primitive. See `BodyHeatShield` and `BodyPort`.
     body.structure = params.structure.clone();
     body.validate()?;
     Ok(body)

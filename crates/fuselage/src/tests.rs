@@ -1781,7 +1781,8 @@ fn capsule_example_crews_compile_with_air_and_docks() {
         height_m: height,
     };
 
-    // Three couches abreast in a single row, sea-level air, nose dock.
+    // Three couches abreast in a single row, sea-level air. Details
+    // (dock, shield) are separate parts now: the primitive ships none.
     let apollo_like = example(
         "three-abreast",
         frustum(3.91, 1.0, 3.23),
@@ -1789,6 +1790,8 @@ fn capsule_example_crews_compile_with_air_and_docks() {
         crate::SeatStyle::Couch,
         3,
     );
+    assert!(apollo_like.ports.is_empty());
+    assert!(apollo_like.heat_shields.is_empty());
     let compiled = compile_body(&apollo_like, &BodyCompileOptions::default()).unwrap();
     let cabin = &compiled.interior[0];
     assert_eq!(cabin.seats, 3);
@@ -1808,12 +1811,6 @@ fn capsule_example_crews_compile_with_air_and_docks() {
     ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
     assert!((ys[0] + 0.55).abs() < 1e-9 && ys[1].abs() < 1e-9 && (ys[2] - 0.55).abs() < 1e-9);
     assert!(cabin.air_mass_kg > 0.0 && cabin.o2_mass_kg > 0.0);
-    assert!(
-        compiled
-            .ports
-            .iter()
-            .any(|port| port.name == "docking-nose")
-    );
 
     // Side-by-side pair, two rows of two (upright or couch), solo bell,
     // and a spherical cabin with no nose dock.
@@ -1885,7 +1882,7 @@ fn capsule_example_crews_compile_with_air_and_docks() {
         assert_eq!(row_xs.len() as u32, rows, "{}", body.name);
         assert!(cabin.air_mass_kg > 0.0, "{}", body.name);
     }
-    // The sphere keeps its side hatch: no nose dock.
+    // The sphere ships bare too: side hatches stay user-authored.
     let ball = example(
         "ball-cabin",
         CapsuleShape::Sphere { diameter_m: 2.3 },
@@ -1895,6 +1892,137 @@ fn capsule_example_crews_compile_with_air_and_docks() {
     );
     let ball_compiled = compile_body(&ball, &BodyCompileOptions::default()).unwrap();
     assert!(ball_compiled.ports.is_empty());
+    assert!(ball_compiled.heat_shields.is_empty());
+}
+
+#[test]
+fn capsule_assembles_with_separate_shield_and_dock() {
+    use crate::{
+        BodyEnd, BodyHeatShield, BodyPort, BodyStructuralLayout, CabinAtmosphere, CapsuleParams,
+        CapsuleShape, PortKind, capsule_body,
+    };
+    use glam::DVec3;
+
+    // KSP-style assembly: bare frustum primitive plus an explicitly
+    // authored ablative shield on the blunt base and a nose dock.
+    let mut body = capsule_body(&CapsuleParams {
+        name: "crewed-frustom".into(),
+        shape: CapsuleShape::Frustum {
+            base_diameter_m: 3.91,
+            top_diameter_m: 1.0,
+            height_m: 3.23,
+        },
+        crew: 3,
+        seat_style: crate::SeatStyle::Couch,
+        abreast: 3,
+        couch_mass_kg_each: 30.0,
+        occupant_mass_kg_each: 0.0,
+        atmosphere: Some(CabinAtmosphere::sea_level()),
+        structure: Some(BodyStructuralLayout::metal_baseline()),
+        origin_body_m: DVec3::ZERO,
+        divisions: 6,
+    })
+    .unwrap();
+    body.heat_shields = vec![
+        BodyHeatShield::new(
+            "base-shield",
+            BodyEnd::Aft,
+            50.0,
+            thessa_sim_core::ChamberMaterial::ablative(),
+        )
+        .unwrap(),
+    ];
+    body.ports = vec![
+        BodyPort::new(
+            "docking-nose",
+            3.23,
+            std::f64::consts::FRAC_PI_2,
+            PortKind::Docking,
+            0.8,
+        )
+        .unwrap(),
+    ];
+    body.validate().unwrap();
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    // Shield disc mass: pi * 1.955^2 * 0.05 * 1800.
+    let shield = &compiled.heat_shields[0];
+    let expected_mass = std::f64::consts::PI * 1.955_f64.powi(2) * 0.05 * 1800.0;
+    assert!((shield.mass_kg - expected_mass).abs() / expected_mass < 1e-9);
+    assert!((shield.diameter_m - 3.91).abs() < 1e-9);
+    assert_eq!(shield.position_body_m.x, 0.0);
+    assert!(
+        compiled
+            .ports
+            .iter()
+            .any(|port| port.name == "docking-nose")
+    );
+    let hull = compiled.structure.as_ref().expect("hull mass");
+    assert!(hull.mass_kg >= shield.mass_kg);
+}
+
+#[test]
+fn heat_shield_math_and_blunt_end_rule() {
+    use crate::{BodyEnd, BodyHeatShield};
+
+    // Flat disc on a 1 m-radius barrel: hand mass and disc inertia.
+    let mut body = ProceduralBody::new(
+        "shielded-barrel",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(4.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.heat_shields = vec![
+        BodyHeatShield::new(
+            "aft-shield",
+            BodyEnd::Aft,
+            50.0,
+            thessa_sim_core::ChamberMaterial::ablative(),
+        )
+        .unwrap(),
+    ];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let shield = &compiled.heat_shields[0];
+    let expected_mass = std::f64::consts::PI * 0.05 * 1800.0;
+    assert!((shield.mass_kg - expected_mass).abs() / expected_mass < 1e-12);
+    assert!((shield.diameter_m - 2.0).abs() < 1e-12);
+    // Thin-disc inertia about its centroid: Ix = m r^2 / 2.
+    let hull = compiled.structure.as_ref().expect("hull mass");
+    assert!(hull.mass_kg >= expected_mass);
+    // A pointed tip cannot take a shield.
+    let mut pointy = ProceduralBody::cone("dart", 3.0, 1.0, DVec3::ZERO).unwrap();
+    pointy.heat_shields = vec![
+        BodyHeatShield::new(
+            "nose-shield",
+            BodyEnd::Forward,
+            50.0,
+            thessa_sim_core::ChamberMaterial::ablative(),
+        )
+        .unwrap(),
+    ];
+    assert!(pointy.validate().is_err());
+    // Empty name and zero thickness refuse.
+    assert!(
+        BodyHeatShield::new(
+            "",
+            BodyEnd::Aft,
+            50.0,
+            thessa_sim_core::ChamberMaterial::ablative(),
+        )
+        .is_err()
+    );
+    assert!(
+        BodyHeatShield::new(
+            "flat",
+            BodyEnd::Aft,
+            0.0,
+            thessa_sim_core::ChamberMaterial::ablative(),
+        )
+        .is_err()
+    );
 }
 
 #[test]

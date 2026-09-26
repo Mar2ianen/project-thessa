@@ -221,6 +221,22 @@ row width; anchors spread across the local section and refuse if a row
 overflows the loft. Couch mass is an explicit authoring input (strap
 couches run ~25-35 kg, not 12 kg aircraft seats).
 
+## Separate details (KSP-style parts)
+
+Heat shields and docking ports are independent details attached to a
+body, never baked into a geometry primitive — not even the capsule:
+
+- `BodyHeatShield { name, end: aft/forward, thickness_mm, material }`
+  mounts a detachable ablative disc on one blunt end. Diameter derives
+  from the end section; mass is disc area times thickness times density
+  with thin-disc inertia, aggregated into the hull. Pointed tips refuse
+  (a shield needs at least a 0.1 m blunt end); entry heating itself is
+  future work, this record owns geometry and mass.
+- `BodyPort` anchors stay the docking/hatch/engine interface: author a
+  `docking-nose` port where the frustum top fits one, a side hatch on a
+  sphere, an engine mount aft. The capsule ships bare; the assembly
+  above is what flies.
+
 Airplane-like cabins are not started, but the design already anticipates
 them: `abreast` rows, pitch validation, and the upright/couch tag are
 the same primitives a multi-aisle layout needs. Galleys, lavatories,

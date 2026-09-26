@@ -39,6 +39,8 @@ later slice).
 | Doors | many Type-A pairs | few small doors | canopy (cutout) | hatch + dock |
 | Crew beyond pilots | dozens of attendants | handful | none / WSO | none |
 | Pressure setpoint | ~75 kPa cabin alt | higher Δp setpoint | low-pressure + mask | sea-level |
+| Suits | rarely (ferry) | rarely | pressure suit, always | worn launch/entry |
+| Control source | pilots + autopilot | pilots + autopilot | pilot (or core) | pilot / core / none |
 
 Everything in the table is a parameter of one model, not a separate
 physics class — the same invariant as fuselages (`03`, §1).
@@ -69,6 +71,9 @@ SeatBlock {
     seat_mass_kg_each: f64,    // authored; class presets only suggest
     occupant_mass_kg_each: f64,
     carry_on_kg_each: f64,
+    suited: bool,              // pressure suit: cabin air optional (§7)
+    suit_mass_kg_each: f64,    // authored; suit presets only suggest
+    suit_type: SuitType,       // hose-fed vs self-contained (§7–8)
 }
 
 Monument {
@@ -95,6 +100,14 @@ business lie-flat ≈ 0.55 m / ~60 kg, first suite ≈ 0.65 m / ~100 kg,
 ejection ≈ 0.55 m / ~110 kg with rails and kit. All illustrative
 typical values; every number stays overridable per block, and the
 compiler uses only the authored values.
+
+`SuitType` is `HoseFed` (fighter pressure suit, capsule launch/entry
+suit: ~15–25 kg, vehicle-fed air) vs `SelfContained` (EVA suit:
+~100–130 kg with PLSS backpack, duration-limited consumables later).
+Illustrative masses again; authored values rule. A suited block does
+not require cabin pressure (§7); an unsuited block without atmosphere
+fails closed at compile time (ground-ambient ferry ops stay a future
+scenario flag, not a silent exception).
 
 ## 4. Geometry-derived validation (fails closed)
 
@@ -148,9 +161,69 @@ the skin pressure screening unchanged. Only the setpoints differ:
 airliner ~75 kPa equivalent, Concorde higher-Δp schedule, fighter
 low-pressure plus mask (mask/O2-system detail is future ECLSS), capsule
 sea-level. The existing `CABIN_ALTITUDE` alert contract already keys
-off pressurized occupied volumes.
+off pressurized occupied volumes. Venting a cabin to vacuum (§8) is a
+runtime state change of the same atmosphere record, not a rebuild.
 
-## 7. Worked examples (illustrative arithmetic)
+## 7. Suits and unpressurized operations
+
+A suited occupant brings their own pressure, so the cabin does not have
+to. Compile rule: a block with `suited = false` and no atmosphere
+refuses (add air or suits); a suited block compiles pressurized or dry
+— fighters fly low-pressure or dry cockpits with the pilot on suit
+pressure, capsules wear suits for launch/entry as backup to sea-level
+air. Suit mass rides the anchors like seat mass. `HoseFed` suits depend
+on vehicle air (lose the cabin and they lose the loop — future failure
+model, not today); `SelfContained` suits are EVA-capable. Injury,
+consciousness, and thermal modeling of the human are out of scope: the
+cabin layer tracks presence, fit, mass, and air — never biology.
+
+## 8. Venting and EVA without an airlock
+
+Cabin pressure is runtime state per pressure volume —
+`Pressurized | Venting | Vacuum` — owned by the same region that
+authors the atmosphere. Venting dumps the tracked air inventory
+overboard (mass goes to zero on the gauges); repressurizing consumes
+stored air, which makes air a consumable and reserves a future air-tank
+part plus vent/repress rate physics (orifice flow, later slice).
+
+Hatch rule (concept, enforced at implementation): an exterior hatch
+opens only into a `Vacuum` region, or into a region whose occupants are
+all suited. EVA without an airlock is exactly Gemini-style whole-cabin
+venting: suits on, vent, open, lose the air, repress from reserve on
+return. An airlock part (small cycled volume, KSP-style part) avoids
+dumping the whole cabin and arrives as its own part slice.
+
+## 9. Control authority (KSP-like concept)
+
+Whether the craft answers the controls is a discrete capability flag,
+computed from the vehicle definition plus manifest — a separate graph
+from aero, propulsion, pressure, and resources (same separation as the
+docking graphs in `01`). Close to KSP: no pilot at a station and no
+autopilot core aboard means nobody flies the craft.
+
+- **Sources.** (a) A pilot at a control station: a flight-deck seat or
+  a designated pilot couch/cockpit seat, occupied. Presence only for
+  now — skill, fatigue, and injury stay future. A crew member on EVA
+  does not count (not at a station). (b) An autopilot block: an
+  avionics monument with a capability tier — `Hold` (stability
+  augmentation only), `Fly` (executes maneuvers), `Full` (runs
+  programs, §10/§13). Pilots map to full manual plus augmentation;
+  cores map to tiered automation.
+- **Dependencies (noted, not implemented).** A core needs electrical
+  power (future electrical graph); remotely commanded operation needs a
+  comm link (future comm graph). Recorded here so the flag has places
+  to plug them in later instead of growing booleans.
+- **No source, no control.** FBW emits nothing, manual axes are
+  rejected, autopilot graphs cannot arm; the craft continues on last
+  trim/ballistic. UI reports the reason (no pilot / no core / no
+  power / no comm). Scripts (`docs/18`, §9 there) require authority to
+  arm; their schedulers check the flag first.
+
+This section is concept-only in this slice: it fixes the vocabulary
+(station, core, tier, flag, reason) so the first executable slice can
+be presence-based without renaming everything later.
+
+## 10. Worked examples (illustrative arithmetic)
 
 All numbers below are hand-checkable illustrations, not certification.
 
@@ -171,12 +244,19 @@ rows = 96 seats. Headroom is what binds the hump ends, not width.
 25 rows at 0.86 m = 21.5 m for 100 places.
 
 **Fighter tandem.** Two ejection-seat blocks, 1-abreast, ~1.4 m
-spacing, seat+rails 110 kg authored each, canopy as a future cutout
-(`03`, §9), instruments as avionics manifest. Width fit is trivially
+spacing, seat+rails 110 kg authored each, pilot suited (`HoseFed`,
+~20 kg) so the cockpit compiles at low pressure; canopy as a future
+cutout (`03`, §9), instruments as avionics manifest. A single-seat
+variant with an autopilot core instead of a pilot is controllable
+exactly when the core is aboard (§9). Width fit is trivially
 satisfied; the binding checks are headroom under the canopy line and
 the pressure schedule.
 
-## 8. Editor UX (two depths, like fuselages)
+**EVA without airlock (capsule).** Two suited `SelfContained` couches,
+cabin vented to `Vacuum`, hatch opens under the §8 rule; the ~2 kg of
+cabin air is lost and repress needs reserve. Same parts, no airlock.
+
+## 11. Editor UX (two depths, like fuselages)
 
 - **Simple mode:** passenger count + class mix (+ decks for 747-likes)
   auto-fill the straight section of the loft; fails closed with the
@@ -187,16 +267,18 @@ the pressure schedule.
   cockpit. Capsule presets stay where they are (test/doc parameter
   sets, never library hardcodes).
 
-## 9. Compile targets (decided at implementation)
+## 12. Compile targets (decided at implementation)
 
 Direction, not final schema: seat blocks lower into the existing
 `Crew` anchor/mass path (one logical row set per block, class tags
 added to anchors); monuments lower into manifest mass; doors lower
-into door records for exit accounting and future evacuation hooks.
-No forked pipeline: the capsule path must keep compiling unchanged
-through every slice (regression-pinned).
+into door records for exit accounting and future evacuation hooks;
+suit flags ride the anchors; the authority flag (§9) lowers into a
+`controllable` capability with a reason code. No forked pipeline: the
+capsule path must keep compiling unchanged through every slice
+(regression-pinned).
 
-## 10. Implementation slices (in order, each with tests)
+## 13. Implementation slices (in order, each with tests)
 
 1. `SeatBlock` with column groups + per-row width fit against the
    loft (hand-width unit tests; `[3,4,3]` passes wide, fails narrow).
@@ -205,17 +287,28 @@ through every slice (regression-pinned).
 3. `Door` fit + project-owned exit table + exit-limited occupancy +
    pilot/attendant rules (refusal tests).
 4. Deck height/headroom + 747-like double-deck golden (main + upper).
-5. Presets (747/Concorde/fighter) + TOML roundtrip + baker wiring.
-6. Later, out of scope here: evacuation hooks, consumables/carts,
-   metabolic O2 loop, canopy/window cutouts.
+5. Suits: per-block flag/mass/type, pressure exemption, unsuited-dry
+   refusal; suited EVA-eligibility tag (no sim yet).
+6. Venting state + hatch rule + air-consumable accounting; airlock part
+   reserved as its own slice after this.
+7. Presence-based `controllable` flag with reason codes (pilot station
+   / core tier); scripts check it before arming.
+8. Presets (747/Concorde/fighter) + TOML roundtrip + baker wiring.
+9. Later, out of scope here: evacuation hooks, consumables/carts,
+   metabolic O2 loop, canopy/window cutouts, vent rates, power/comm
+   dependencies of cores.
 
-## 11. Open questions
+## 14. Open questions
 
 - Exact exit-type ratings and their regulatory source (locks in
-  slice 3).
+  the doors slice).
 - Side-pairing rule for exit capacity (total vs per-side).
 - Whether attendant places need jump-seat geometry distinct from
   upright anchors.
 - Door cutout interaction with the future subtractive layer.
 - Business/first monuments (bars, showers) as mass-only or modelled
   volumes.
+- Per-place suit overrides vs per-block uniform suits.
+- Vent/repress rate physics and air-reserve tank sizing.
+- Core power/comm dependency thresholds and the uncontrollable-UI
+  vocabulary.

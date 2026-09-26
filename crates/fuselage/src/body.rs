@@ -74,6 +74,16 @@ pub enum SeatStyle {
     Couch,
 }
 
+/// Pressure-suit feed: hose-fed suits borrow vehicle air, self-contained
+/// suits (EVA) carry their own loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SuitType {
+    #[default]
+    HoseFed,
+    SelfContained,
+}
+
 /// What a slice of the usable interior does. Geometry and structure are
 /// shared; purpose is assigned per longitudinal region.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -148,6 +158,8 @@ pub enum RegionKind {
     /// (unoccupied ferry) so crew loading stays explicit. Seat anchors
     /// (one position per place, forward-facing, on the section centerline)
     /// are exposed in the compiled interior for renderer/crew systems.
+    /// Suited crews may fly dry cabins; `control_station` marks pilot
+    /// posts for control authority.
     Crew {
         seats: u32,
         #[serde(default = "default_seat_mass_kg_each")]
@@ -165,6 +177,18 @@ pub enum RegionKind {
         /// Upright seats vs reclined couches.
         #[serde(default)]
         seat_style: SeatStyle,
+        /// Crew wear pressure suits (cabin air optional, §7 of the cabin doc).
+        #[serde(default)]
+        suited: bool,
+        /// Suit mass each in kg (counts only when suited).
+        #[serde(default)]
+        suit_mass_kg_each: f64,
+        /// Hose-fed (vehicle air) vs self-contained (EVA-capable).
+        #[serde(default)]
+        suit_type: SuitType,
+        /// Pilot post: occupancy here grants control authority.
+        #[serde(default)]
+        control_station: bool,
     },
     /// Pressurized cargo volume plus explicit manifest mass.
     Cargo {
@@ -244,6 +268,10 @@ pub struct InteriorRegion {
     /// ambient.
     #[serde(default)]
     pub atmosphere: Option<CabinAtmosphere>,
+    /// Autopilot core hosted by this region (usually avionics): presence
+    /// grants control authority at its tier. Tanks refuse cores.
+    #[serde(default)]
+    pub control_core: Option<thessa_sim_core::AutopilotTier>,
 }
 
 impl InteriorRegion {
@@ -259,6 +287,7 @@ impl InteriorRegion {
             x1_m,
             kind,
             atmosphere: None,
+            control_core: None,
         };
         region.validate()?;
         Ok(region)
@@ -278,6 +307,7 @@ impl InteriorRegion {
             x1_m,
             kind,
             atmosphere: Some(atmosphere),
+            control_core: None,
         };
         region.validate()?;
         Ok(region)
@@ -428,6 +458,8 @@ impl InteriorRegion {
                 occupant_mass_kg_each,
                 seat_pitch_m,
                 abreast,
+                suited,
+                suit_mass_kg_each,
                 ..
             } => {
                 if seats == 0 || seats > 1000 {
@@ -459,6 +491,25 @@ impl InteriorRegion {
                 if !occupant_mass_kg_each.is_finite() || occupant_mass_kg_each < 0.0 {
                     return Err(FuselageError::InvalidInterior(format!(
                         "region '{}' needs occupant_mass_kg_each >= 0",
+                        self.name
+                    )));
+                }
+                let suit_mass = suit_mass_kg_each;
+                if !suit_mass.is_finite() || suit_mass < 0.0 {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "region '{}' needs suit_mass_kg_each >= 0",
+                        self.name
+                    )));
+                }
+                if suited && suit_mass <= 0.0 {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "region '{}' suits need suit_mass_kg_each > 0",
+                        self.name
+                    )));
+                }
+                if !suited && suit_mass > 0.0 {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "region '{}' carries suit mass without suited crew",
                         self.name
                     )));
                 }
@@ -498,6 +549,30 @@ impl InteriorRegion {
                 | RegionKind::Bipropellant { .. } => {
                     return Err(FuselageError::InvalidInterior(format!(
                         "region '{}' is a tank and sizes its own shell; atmosphere belongs on habitats",
+                        self.name
+                    )));
+                }
+                _ => {}
+            }
+        }
+        // Unsuited crew need cabin air; suited crews may fly dry.
+        if let RegionKind::Crew { suited, .. } = self.kind
+            && !suited
+            && self.atmosphere.is_none()
+        {
+            return Err(FuselageError::InvalidInterior(format!(
+                "region '{}' has unsuited crew without atmosphere (add air or suits)",
+                self.name
+            )));
+        }
+        // Tanks size their own shells; they host neither air nor cores.
+        if self.control_core.is_some() {
+            match self.kind {
+                RegionKind::Tank { .. }
+                | RegionKind::FluidTank { .. }
+                | RegionKind::Bipropellant { .. } => {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "region '{}' is a tank and cannot host a control core",
                         self.name
                     )));
                 }

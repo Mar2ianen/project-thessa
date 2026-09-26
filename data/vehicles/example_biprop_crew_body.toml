@@ -99,6 +99,7 @@ seats = 4
 seat_mass_kg_each = 12.0
 occupant_mass_kg_each = 90.0
 seat_pitch_m = 0.3
+control_station = true
 
 [procedural_bodies.regions.atmosphere]
 pressure_kpa = 101.325

@@ -6,21 +6,23 @@ use thessa_aero_surfaces::{
     CollisionOptions, CompileOptions, MechanismState, ProceduralSurface, compile_surface,
 };
 use thessa_fuselage::{
-    BodyCollisionOptions, BodyCompileOptions, ProceduralBody, body_collision_parts, compile_body,
+    BodyCollisionOptions, BodyCompileOptions, ProceduralBody, RegionKind, body_collision_parts,
+    compile_body,
 };
 use thessa_sim_core::{
     AeroGeometry, AeroPanel, AirCycle, AirbreathingSpec, AtmosphereConfig, ChamberMaterial,
     ChamberSpec, CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionPart,
-    CollisionShape, CompiledEngine, CompiledJet, ControlSurfaceDefinition, CoolingMode,
-    ElectricPropellant, ElectricThrusterDesign, ElectricThrusterMount, ElectricThrusterSpec,
-    EngineCycle, EngineMount, EstocEjectorSpec, EstocPrecoolerSpec, EstocSpec, FoldJointRecord,
-    FusionReaction, FusionTorchMount, FusionTorchSpec, IntakeKind, JetFuel, JetMount,
-    LiquidEngineSpec, NozzleContour, NtrFluid, NuclearThermalSpec, Propellant, PropellerDriveMount,
-    PropellerDriveSpec, PropellerSpec, PropulsionSystemSpec, PulsedFusionMount, PulsedFusionSpec,
-    RigidBodyProperties, ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec,
-    SystemMount, TankMount, TankShape, TankSpec, TurbopropDriveSpec, TurbopropMount,
-    VehicleDefinition, analyze_airbreathing, analyze_altitude, analyze_estoc,
-    analyze_propeller_drive, analyze_turboprop_drive,
+    CollisionShape, CompiledEngine, CompiledJet, ControlCore, ControlStation,
+    ControlSurfaceDefinition, CoolingMode, ElectricPropellant, ElectricThrusterDesign,
+    ElectricThrusterMount, ElectricThrusterSpec, EngineCycle, EngineMount, EstocEjectorSpec,
+    EstocPrecoolerSpec, EstocSpec, FoldJointRecord, FusionReaction, FusionTorchMount,
+    FusionTorchSpec, IntakeKind, JetFuel, JetMount, LiquidEngineSpec, NozzleContour, NtrFluid,
+    NuclearThermalSpec, PressurizedCabin, Propellant, PropellerDriveMount, PropellerDriveSpec,
+    PropellerSpec, PropulsionSystemSpec, PulsedFusionMount, PulsedFusionSpec, RigidBodyProperties,
+    ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec, SystemMount, TankMount,
+    TankShape, TankSpec, TurbopropDriveSpec, TurbopropMount, VehicleDefinition,
+    analyze_airbreathing, analyze_altitude, analyze_estoc, analyze_propeller_drive,
+    analyze_turboprop_drive,
 };
 
 mod debug_mesh;
@@ -48,6 +50,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         vehicle.collision_geometry.parts.len()
     );
     println!("mass: {:.3} kg", vehicle.mass_properties.mass_kg);
+    let authority = vehicle.control_authority();
+    println!(
+        "control authority: {} ({:?})",
+        if authority.controllable {
+            "controllable"
+        } else {
+            "uncontrollable"
+        },
+        authority.reason
+    );
     for mount in &vehicle.tanks {
         println!(
             "tank: {:.3} m^3 capacity, dry {:.1} kg, loaded {:.0}/{:.0} kg",
@@ -623,6 +635,9 @@ impl VehicleAsset {
         // auto-mounting from ports is future work.
         let mut body_tank_mounts = Vec::new();
         let mut body_contact_parts = Vec::new();
+        let mut body_cabins = Vec::new();
+        let mut body_cores = Vec::new();
+        let mut body_stations = Vec::new();
         for body in &self.procedural_bodies {
             let compiled = compile_body(body, &BodyCompileOptions::default())
                 .map_err(|error| format!("body '{}': {error}", body.name))?;
@@ -672,6 +687,55 @@ impl VehicleAsset {
                         "body '{}': region '{}' air {:.2} kg (O2 {:.2} kg)",
                         body.name, region.name, region.air_mass_kg, region.o2_mass_kg
                     );
+                }
+                // Cabins, cores, and pilot stations ride to the vehicle
+                // definition for pressure and control-authority runtime.
+                if let Some(atmosphere) = region.atmosphere {
+                    println!(
+                        "body '{}': region '{}' cabin {:.1} kPa, {:.2} kg air",
+                        body.name, region.name, atmosphere.pressure_kpa, region.air_mass_kg
+                    );
+                    body_cabins.push(
+                        PressurizedCabin::new(
+                            format!("{}.{}", body.name, region.name),
+                            region.volume_m3,
+                            atmosphere.pressure_kpa,
+                            atmosphere.temp_k,
+                            atmosphere.o2_fraction,
+                            region.air_mass_kg,
+                        )
+                        .map_err(|error| format!("body '{}': {error}", body.name))?,
+                    );
+                }
+                if let Some(tier) = region.control_core {
+                    println!(
+                        "body '{}': region '{}' autopilot core ({:?})",
+                        body.name, region.name, tier
+                    );
+                    body_cores.push(ControlCore {
+                        name: format!("{}.{}", body.name, region.name),
+                        tier,
+                    });
+                }
+                if let RegionKind::Crew {
+                    control_station,
+                    seats,
+                    occupant_mass_kg_each,
+                    ..
+                } = region.kind
+                    && control_station
+                {
+                    let occupied = seats > 0 && occupant_mass_kg_each > 0.0;
+                    println!(
+                        "body '{}': region '{}' pilot station ({})",
+                        body.name,
+                        region.name,
+                        if occupied { "occupied" } else { "empty" }
+                    );
+                    body_stations.push(ControlStation {
+                        name: format!("{}.{}", body.name, region.name),
+                        occupied,
+                    });
                 }
             }
             for port in &compiled.ports {
@@ -913,7 +977,10 @@ impl VehicleAsset {
             .with_fusion_torches(fusion_torch_mounts)?
             .with_pulsed_fusion_systems(pulsed_fusion_mounts)?
             .with_propeller_drives(propeller_drive_mounts)?
-            .with_turboprops(turboprop_mounts)?;
+            .with_turboprops(turboprop_mounts)?
+            .with_cabins(body_cabins)?
+            .with_control_cores(body_cores)?
+            .with_control_stations(body_stations)?;
         vehicle.bake_engine_masses()?;
         vehicle.bake_tank_masses()?;
         vehicle.bake_system_masses()?;
@@ -3616,5 +3683,34 @@ mod body_tests {
             round_trip.aero_geometry.panels.len(),
             vehicle.aero_geometry.panels.len()
         );
+    }
+}
+
+#[cfg(test)]
+mod cabin_wiring_tests {
+    use super::*;
+
+    #[test]
+    fn example_biprop_crew_body_bakes_cabins_stations_and_authority() {
+        let asset: VehicleAsset = toml::from_str(include_str!(
+            "../../../data/vehicles/example_biprop_crew_body.toml"
+        ))
+        .expect("crew TOML should parse");
+        let vehicle = asset.bake().expect("crew asset should bake");
+        // Split biprop pair (ox + fuel) plus the storable tank.
+        assert_eq!(vehicle.tanks.len(), 3);
+        // One pressurized cabin carrying air.
+        assert_eq!(vehicle.cabins.len(), 1);
+        assert!(vehicle.cabins[0].air_kg > 0.0);
+        // One occupied pilot station: the craft answers the controls.
+        assert_eq!(vehicle.control_stations.len(), 1);
+        assert!(vehicle.control_stations[0].occupied);
+        assert!(vehicle.control_authority().controllable);
+        // ...until the pilot leaves for EVA.
+        let mut eva = vehicle.clone();
+        eva.set_station_occupied(&vehicle.control_stations[0].name.clone(), false)
+            .expect("debark");
+        assert!(!eva.control_authority().controllable);
+        assert!(eva.apply_control_inputs(&[]).is_err());
     }
 }

@@ -1,11 +1,11 @@
 # Cabin editor
 
-Status: design before implementation. No code in this slice on purpose:
-the model below must be reviewed first, then implemented slice by slice
-(§10). Capsule cabins already exist as a compiled primitive
-(`crates/fuselage/src/capsule.rs`); this note designs the common cabin
-layer that will also serve airliners, supersonic transports, and
-fighter cockpits.
+Status: slices 5–7 implemented (suits, venting/EVA rules, control
+authority); slices 1–4 (seat blocks, classes/monuments, doors, decks)
+remain design before implementation. Capsule cabins already exist as a
+compiled primitive (`crates/fuselage/src/capsule.rs`); this note designs
+the common cabin layer that will also serve airliners, supersonic
+transports, and fighter cockpits.
 
 ## 1. Goal
 
@@ -173,27 +173,31 @@ refuses (add air or suits); a suited block compiles pressurized or dry
 pressure, capsules wear suits for launch/entry as backup to sea-level
 air. Suit mass rides the anchors like seat mass. `HoseFed` suits depend
 on vehicle air (lose the cabin and they lose the loop — future failure
-model, not today); `SelfContained` suits are EVA-capable. Injury,
-consciousness, and thermal modeling of the human are out of scope: the
+model, not today); `SelfContained` suits are EVA-capable. Implemented as
+`Crew.suited/suit_mass_kg_each/suit_type`: suits without mass, and mass
+without suits, both refuse. Injury, consciousness, and thermal modeling
+of the human are out of scope: the
 cabin layer tracks presence, fit, mass, and air — never biology.
 
 ## 8. Venting and EVA without an airlock
 
 Cabin pressure is runtime state per pressure volume —
-`Pressurized | Venting | Vacuum` — owned by the same region that
+`Pressurized | Vacuum` — owned by the same region that
 authors the atmosphere. Venting dumps the tracked air inventory
 overboard (mass goes to zero on the gauges); repressurizing consumes
 stored air, which makes air a consumable and reserves a future air-tank
 part plus vent/repress rate physics (orifice flow, later slice).
 
-Hatch rule (concept, enforced at implementation): an exterior hatch
+Hatch rule (implemented in `sim-core::cabin`): an exterior hatch
 opens only into a `Vacuum` region, or into a region whose occupants are
-all suited. EVA without an airlock is exactly Gemini-style whole-cabin
-venting: suits on, vent, open, lose the air, repress from reserve on
-return. An airlock part (small cycled volume, KSP-style part) avoids
-dumping the whole cabin and arrives as its own part slice.
+all suited; EVA additionally needs self-contained suits. EVA without an
+airlock is exactly Gemini-style whole-cabin venting: suits on, vent,
+open, lose the air, repress from reserve on return. An airlock part
+(small cycled volume, KSP-style part) avoids dumping the whole cabin
+and arrives as its own part slice. Vent/repress rates and the
+air-reserve tank part stay future slices.
 
-## 9. Control authority (KSP-like concept)
+## 9. Control authority (KSP-like, presence-based)
 
 Whether the craft answers the controls is a discrete capability flag,
 computed from the vehicle definition plus manifest — a separate graph
@@ -207,7 +211,7 @@ autopilot core aboard means nobody flies the craft.
   does not count (not at a station). (b) An autopilot block: an
   avionics monument with a capability tier — `Hold` (stability
   augmentation only), `Fly` (executes maneuvers), `Full` (runs
-  programs, §10/§13). Pilots map to full manual plus augmentation;
+  programs). Pilots map to full manual plus augmentation;
   cores map to tiered automation.
 - **Dependencies (noted, not implemented).** A core needs electrical
   power (future electrical graph); remotely commanded operation needs a
@@ -219,9 +223,12 @@ autopilot core aboard means nobody flies the craft.
   power / no comm). Scripts (`docs/18`, §9 there) require authority to
   arm; their schedulers check the flag first.
 
-This section is concept-only in this slice: it fixes the vocabulary
-(station, core, tier, flag, reason) so the first executable slice can
-be presence-based without renaming everything later.
+Implemented presence-based in `sim-core::cabin`/`vehicle`: pilot
+stations and core tiers bake from crew regions and avionics cores,
+`control_authority()` returns the flag with a reason, and both control
+intakes refuse with `NoControlAuthority` unless the asset predates crew
+modeling entirely (legacy migration). Power/comm gates arrive with
+their graphs.
 
 ## 10. Worked examples (illustrative arithmetic)
 
@@ -287,12 +294,13 @@ capsule path must keep compiling unchanged through every slice
 3. `Door` fit + project-owned exit table + exit-limited occupancy +
    pilot/attendant rules (refusal tests).
 4. Deck height/headroom + 747-like double-deck golden (main + upper).
-5. Suits: per-block flag/mass/type, pressure exemption, unsuited-dry
-   refusal; suited EVA-eligibility tag (no sim yet).
-6. Venting state + hatch rule + air-consumable accounting; airlock part
-   reserved as its own slice after this.
-7. Presence-based `controllable` flag with reason codes (pilot station
-   / core tier); scripts check it before arming.
+5. Suits (implemented): per-block flag/mass/type, pressure exemption,
+   unsuited-dry refusal; suited EVA-eligibility tag.
+6. Venting state + hatch rule + air-consumable accounting (implemented
+   in `sim-core::cabin`); airlock part reserved as its own slice after this.
+7. Presence-based `controllable` flag with reason codes (implemented:
+   pilot stations, core tiers, intake gate, legacy migration); scripts
+   check it before arming.
 8. Presets (747/Concorde/fighter) + TOML roundtrip + baker wiring.
 9. Later, out of scope here: evacuation hooks, consumables/carts,
    metabolic O2 loop, canopy/window cutouts, vent rates, power/comm

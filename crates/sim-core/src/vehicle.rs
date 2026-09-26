@@ -4,14 +4,15 @@ use glam::{DQuat, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AeroConfig, AeroError, AeroGeometry, AeroPanel, AeroResult, CollisionAxis, CollisionError,
-    CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine,
+    AeroConfig, AeroError, AeroGeometry, AeroPanel, AeroResult, AuthorityReason, CabinError,
+    CollisionAxis, CollisionError, CollisionGeometry, CollisionMaterial, CollisionPart,
+    CollisionShape, CompiledEngine, ControlAuthority, ControlCore, ControlStation,
     ElectricThrusterCommand, ElectricThrusterMount, ElectricThrusterPoint, EngineMount, EstocPoint,
     FlightCondition, FlightError, FusionTorchCommand, FusionTorchMount, FusionTorchOperatingPoint,
-    JetCommand, JetMount, PropDrivePoint, PropellerDriveCommand, PropellerDriveMount,
-    PropulsionError, PulsedFusionCommand, PulsedFusionMount, PulsedFusionOperatingPoint,
-    PulsedFusionState, RigidBodyProperties, SystemMount, TankMount, TurbopropCommand,
-    TurbopropMount, TurbopropOperatingPoint,
+    JetCommand, JetMount, PressurizedCabin, PropDrivePoint, PropellerDriveCommand,
+    PropellerDriveMount, PropulsionError, PulsedFusionCommand, PulsedFusionMount,
+    PulsedFusionOperatingPoint, PulsedFusionState, RigidBodyProperties, SystemMount, TankMount,
+    TurbopropCommand, TurbopropMount, TurbopropOperatingPoint, control_authority,
 };
 
 pub type StatefulTurbopropWrench = (
@@ -324,6 +325,16 @@ pub struct VehicleDefinition {
     /// hinges. Empty keeps every legacy asset valid.
     #[serde(default)]
     pub fold_joints: Vec<FoldJointRecord>,
+    /// Pressurized cabin volumes with tracked air inventory (vent/repress
+    /// runtime state; empty keeps every legacy asset valid).
+    #[serde(default)]
+    pub cabins: Vec<PressurizedCabin>,
+    /// Autopilot cores aboard (capability tiers; empty keeps legacy valid).
+    #[serde(default)]
+    pub control_cores: Vec<ControlCore>,
+    /// Pilot control stations with boarding state (empty keeps legacy valid).
+    #[serde(default)]
+    pub control_stations: Vec<ControlStation>,
 }
 
 /// One compiled fold joint: hinge placement plus compiled angle, in
@@ -622,6 +633,9 @@ impl VehicleDefinition {
             propeller_drives: Vec::new(),
             turboprops: Vec::new(),
             fold_joints: Vec::new(),
+            cabins: Vec::new(),
+            control_cores: Vec::new(),
+            control_stations: Vec::new(),
         };
         definition.validate()?;
         Ok(definition)
@@ -683,6 +697,15 @@ impl VehicleDefinition {
         }
         for mount in &self.turboprops {
             mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        for cabin in &self.cabins {
+            cabin.validate().map_err(VehicleError::Cabin)?;
+        }
+        for core in &self.control_cores {
+            core.validate().map_err(VehicleError::Cabin)?;
+        }
+        for station in &self.control_stations {
+            station.validate().map_err(VehicleError::Cabin)?;
         }
 
         let mut claimed_panels = std::collections::HashSet::new();
@@ -999,6 +1022,78 @@ impl VehicleDefinition {
         }
         self.turboprops = turboprops;
         Ok(self)
+    }
+
+    /// Attach pressurized cabin volumes (baker path; validates inventory).
+    pub fn with_cabins(mut self, cabins: Vec<PressurizedCabin>) -> Result<Self, VehicleError> {
+        for cabin in &cabins {
+            cabin.validate().map_err(VehicleError::Cabin)?;
+        }
+        self.cabins = cabins;
+        Ok(self)
+    }
+
+    /// Attach autopilot cores (baker path).
+    pub fn with_control_cores(mut self, cores: Vec<ControlCore>) -> Result<Self, VehicleError> {
+        for core in &cores {
+            core.validate().map_err(VehicleError::Cabin)?;
+        }
+        self.control_cores = cores;
+        Ok(self)
+    }
+
+    /// Attach pilot control stations with boarding state (baker path).
+    pub fn with_control_stations(
+        mut self,
+        stations: Vec<ControlStation>,
+    ) -> Result<Self, VehicleError> {
+        for station in &stations {
+            station.validate().map_err(VehicleError::Cabin)?;
+        }
+        self.control_stations = stations;
+        Ok(self)
+    }
+
+    /// Presence-based control authority: pilot at a station wins, else any
+    /// core flies, else nobody does. Vehicles that declare no crew systems
+    /// at all stay unrestricted (legacy migration, like empty collision
+    /// geometry).
+    pub fn control_authority(&self) -> ControlAuthority {
+        control_authority(
+            &self.control_stations,
+            &self.control_cores,
+            !self.control_stations.is_empty()
+                || !self.control_cores.is_empty()
+                || !self.cabins.is_empty(),
+        )
+    }
+
+    /// Board or debark a pilot station by name (EVA clears it, boarding sets it).
+    pub fn set_station_occupied(&mut self, name: &str, occupied: bool) -> Result<(), VehicleError> {
+        let Some(station) = self
+            .control_stations
+            .iter_mut()
+            .find(|station| station.name == name)
+        else {
+            return Err(VehicleError::InvalidVehicle(format!(
+                "no control station named '{name}'"
+            )));
+        };
+        station.occupied = occupied;
+        Ok(())
+    }
+
+    /// Refuse control intake when nobody aboard can fly the craft.
+    /// Legacy assets without crew declarations stay unrestricted, so the
+    /// gate is a single authority query with no special cases.
+    fn check_control_authority(&self) -> Result<(), VehicleError> {
+        let authority = self.control_authority();
+        if authority.controllable {
+            return Ok(());
+        }
+        Err(VehicleError::NoControlAuthority {
+            reason: authority.reason,
+        })
     }
 
     /// Aggregate gas-path, power-turbine, propeller, and reduction-gear dry
@@ -1382,8 +1477,10 @@ impl VehicleDefinition {
 
     /// Apply normalized control commands in `[-1, 1]` to this vehicle's
     /// panels. It mutates only the asset's control deflections; geometry,
-    /// mass and solver configuration remain unchanged.
+    /// mass and solver configuration remain unchanged. Refuses when the
+    /// vehicle declares crew systems but has no control authority.
     pub fn apply_control_inputs(&mut self, commands: &[f64]) -> Result<(), VehicleError> {
+        self.check_control_authority()?;
         if commands.len() != self.control_surfaces.len() {
             return Err(VehicleError::ControlCount {
                 expected: self.control_surfaces.len(),
@@ -1419,11 +1516,14 @@ impl VehicleDefinition {
     /// Set absolute control deflections from a stable reference geometry.
     /// Geometric hinges rotate panel sample points, force centers, and axes;
     /// legacy controls without hinge data retain the incidence response.
+    /// Like [`VehicleDefinition::apply_control_inputs`], refuses without
+    /// control authority on crew-declaring vehicles.
     pub fn apply_control_deflections(
         &mut self,
         reference_geometry: &AeroGeometry,
         deflections_rad: &[f64],
     ) -> Result<(), VehicleError> {
+        self.check_control_authority()?;
         if deflections_rad.len() != self.control_surfaces.len() {
             return Err(VehicleError::ControlCount {
                 expected: self.control_surfaces.len(),
@@ -1580,10 +1680,12 @@ pub enum VehicleError {
     Collision(CollisionError),
     MassProperties(FlightError),
     Propulsion(PropulsionError),
+    Cabin(CabinError),
     InvalidControlSurface(String),
     InvalidControlCommand { surface: String, command: f64 },
     ControlCount { expected: usize, actual: usize },
     InvalidThrottle { throttle: f64 },
+    NoControlAuthority { reason: AuthorityReason },
 }
 
 impl fmt::Display for VehicleError {
@@ -1599,6 +1701,9 @@ impl fmt::Display for VehicleError {
             }
             Self::Propulsion(error) => {
                 write!(formatter, "vehicle engine error: {error}")
+            }
+            Self::Cabin(error) => {
+                write!(formatter, "vehicle cabin error: {error}")
             }
             Self::InvalidControlSurface(message) => {
                 write!(formatter, "invalid control surface: {message}")
@@ -1617,6 +1722,12 @@ impl fmt::Display for VehicleError {
                 write!(
                     formatter,
                     "vehicle throttle must be finite and in [0, 1], got {throttle}"
+                )
+            }
+            Self::NoControlAuthority { reason } => {
+                write!(
+                    formatter,
+                    "no control authority ({reason:?}): no pilot at a station and no autopilot core"
                 )
             }
         }
@@ -2115,5 +2226,79 @@ mod tests {
                 .turboprops_wrench_body_n_stateful(&[], &condition)
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod cabin_authority_tests {
+    use super::*;
+    use crate::{AutopilotTier, ControlCore, ControlStation, PressurizedCabin};
+
+    fn bare_vehicle() -> VehicleDefinition {
+        VehicleDefinition::new(
+            "authority-test",
+            AeroGeometry::new(vec![
+                AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+            ])
+            .expect("geometry"),
+            RigidBodyProperties::new(1_000.0, glam::DMat3::from_diagonal(DVec3::splat(500.0)))
+                .expect("mass"),
+            vec![],
+        )
+        .expect("vehicle")
+    }
+
+    fn station(name: &str, occupied: bool) -> ControlStation {
+        ControlStation {
+            name: name.into(),
+            occupied,
+        }
+    }
+
+    #[test]
+    fn legacy_vehicle_without_crew_systems_stays_unrestricted() {
+        let mut vehicle = bare_vehicle();
+        assert!(vehicle.control_authority().controllable);
+        // No stations/cores/cabins: the gate skips entirely.
+        vehicle.apply_control_inputs(&[]).expect("legacy intake");
+    }
+
+    #[test]
+    fn empty_station_locks_control_intake_until_boarding() {
+        let mut vehicle = bare_vehicle()
+            .with_control_stations(vec![station("left-seat", false)])
+            .expect("stations");
+        assert!(!vehicle.control_authority().controllable);
+        assert!(matches!(
+            vehicle.apply_control_inputs(&[]),
+            Err(VehicleError::NoControlAuthority { .. })
+        ));
+        vehicle
+            .set_station_occupied("left-seat", true)
+            .expect("boarding");
+        assert!(vehicle.control_authority().controllable);
+        vehicle.apply_control_inputs(&[]).expect("piloted intake");
+        // EVA clears the station: lock returns.
+        vehicle
+            .set_station_occupied("left-seat", false)
+            .expect("debark");
+        assert!(vehicle.apply_control_inputs(&[]).is_err());
+        assert!(vehicle.set_station_occupied("right-seat", true).is_err());
+    }
+
+    #[test]
+    fn core_flies_uncrewed_craft() {
+        let vehicle = bare_vehicle()
+            .with_control_cores(vec![ControlCore {
+                name: "core".into(),
+                tier: AutopilotTier::Fly,
+            }])
+            .expect("cores");
+        assert!(vehicle.control_authority().controllable);
+        // Cabins alone (passengers, no pilot, no core) still lock.
+        let mut cabin = PressurizedCabin::new("cabin", 2.5, 101.0, 293.0, 0.21, 3.0).unwrap();
+        cabin.vent();
+        let locked = bare_vehicle().with_cabins(vec![cabin]).expect("cabins");
+        assert!(!locked.control_authority().controllable);
     }
 }

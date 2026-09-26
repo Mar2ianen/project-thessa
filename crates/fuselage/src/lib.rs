@@ -62,7 +62,7 @@ mod summary;
 pub use body::{
     BodyControlPlane, BodyControlRegion, BodyEnd, BodyHeatShield, BodyPort, BodyStructuralLayout,
     CabinAtmosphere, HullMaterial, InteriorRegion, PortKind, ProceduralBody, RegionKind, SeatStyle,
-    StoredFluid, TankShell,
+    StoredFluid, SuitType, TankShell,
 };
 pub use capsule::{CapsuleParams, CapsuleShape, capsule_body};
 pub use collision::{BodyCollisionOptions, body_collision_parts};

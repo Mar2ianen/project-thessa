@@ -44,6 +44,9 @@ pub struct CapsuleParams {
     /// Couch/seat mass each in kg (couches run ~25-35).
     pub couch_mass_kg_each: f64,
     pub occupant_mass_kg_each: f64,
+    /// Crew fly suited (dry cabins allowed) with this suit mass each.
+    pub suited: bool,
+    pub suit_mass_kg_each: f64,
     pub atmosphere: Option<CabinAtmosphere>,
     pub structure: Option<BodyStructuralLayout>,
     pub origin_body_m: DVec3,
@@ -160,8 +163,14 @@ pub fn capsule_body(params: &CapsuleParams) -> Result<ProceduralBody, FuselageEr
         CapsuleShape::Frustum { height_m, .. } => (0.05 * height_m, 0.65 * height_m),
         CapsuleShape::Sphere { diameter_m } => (0.20 * diameter_m, 0.80 * diameter_m),
     };
-    let mut crew = InteriorRegion::new(params.name.clone(), crew_x0, crew_x1, crew_kind(params))?;
-    crew.atmosphere = params.atmosphere;
+    let crew = InteriorRegion {
+        name: params.name.clone(),
+        x0_m: crew_x0,
+        x1_m: crew_x1,
+        kind: crew_kind(params),
+        atmosphere: params.atmosphere,
+        control_core: None,
+    };
     crew.validate()?;
     body.regions = vec![crew];
     // No auto-fitted details: heat shields and docking ports are separate
@@ -180,5 +189,9 @@ fn crew_kind(params: &CapsuleParams) -> RegionKind {
         seat_pitch_m: None,
         abreast: Some(params.abreast),
         seat_style: params.seat_style,
+        suited: params.suited,
+        suit_mass_kg_each: params.suit_mass_kg_each,
+        suit_type: crate::SuitType::HoseFed,
+        control_station: false,
     }
 }

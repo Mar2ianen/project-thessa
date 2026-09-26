@@ -1121,6 +1121,10 @@ fn bipropellant_rejects_monoprop_and_bad_mixture() {
                 seat_pitch_m: None,
                 abreast: None,
                 seat_style: crate::SeatStyle::Upright,
+                suited: false,
+                suit_mass_kg_each: 0.0,
+                suit_type: crate::SuitType::HoseFed,
+                control_station: false,
             },
         )
         .is_err()
@@ -1140,7 +1144,7 @@ fn crew_cabin_seats_ride_hull_mass_at_centroid() {
     .unwrap();
     body.structure = Some(BodyStructuralLayout::metal_baseline());
     body.regions = vec![
-        InteriorRegion::new(
+        InteriorRegion::pressurized(
             "cabin",
             1.0,
             3.0,
@@ -1151,7 +1155,12 @@ fn crew_cabin_seats_ride_hull_mass_at_centroid() {
                 seat_pitch_m: None,
                 abreast: None,
                 seat_style: crate::SeatStyle::Upright,
+                suited: false,
+                suit_mass_kg_each: 0.0,
+                suit_type: crate::SuitType::HoseFed,
+                control_station: false,
             },
+            crate::CabinAtmosphere::sea_level(),
         )
         .unwrap(),
     ];
@@ -1247,6 +1256,9 @@ x1_m = 5.5
 seats = 2
 occupant_mass_kg_each = 90.0
 
+[regions.atmosphere]
+pressure_kpa = 101.325
+
 [structure]
 skin_gauge_mm = 2.0
 frame_spacing_m = 1.0
@@ -1258,6 +1270,7 @@ wall_inset_mm = 10.0
 [structure.skin_material]
 name = "Al-7075-T6"
 density_kg_m3 = 2810.0
+yield_strength_mpa = 503.0
 
 [structure.tank_material]
 density_kg_m3 = 2840.0
@@ -1387,7 +1400,7 @@ fn crew_seat_anchors_line_up_on_the_centerline() {
     .unwrap();
     body.structure = Some(BodyStructuralLayout::metal_baseline());
     body.regions = vec![
-        InteriorRegion::new(
+        InteriorRegion::pressurized(
             "cabin",
             1.0,
             5.0,
@@ -1398,7 +1411,12 @@ fn crew_seat_anchors_line_up_on_the_centerline() {
                 seat_pitch_m: Some(0.8),
                 abreast: None,
                 seat_style: crate::SeatStyle::Upright,
+                suited: false,
+                suit_mass_kg_each: 0.0,
+                suit_type: crate::SuitType::HoseFed,
+                control_station: false,
             },
+            crate::CabinAtmosphere::sea_level(),
         )
         .unwrap(),
     ];
@@ -1433,6 +1451,10 @@ fn crew_seat_anchors_line_up_on_the_centerline() {
                 seat_pitch_m: Some(0.8),
                 abreast: None,
                 seat_style: crate::SeatStyle::Upright,
+                suited: false,
+                suit_mass_kg_each: 0.0,
+                suit_type: crate::SuitType::HoseFed,
+                control_station: false,
             },
         )
         .is_err()
@@ -1611,6 +1633,10 @@ fn crew_with_atmosphere_aggregates_air_and_seats() {
                 seat_pitch_m: None,
                 abreast: None,
                 seat_style: crate::SeatStyle::Upright,
+                suited: false,
+                suit_mass_kg_each: 0.0,
+                suit_type: crate::SuitType::HoseFed,
+                control_station: false,
             },
             CabinAtmosphere::sea_level(),
         )
@@ -1704,6 +1730,8 @@ fn capsule_frustum_matches_closed_form_volume() {
         abreast: 1,
         couch_mass_kg_each: 30.0,
         occupant_mass_kg_each: 0.0,
+        suited: true,
+        suit_mass_kg_each: 20.0,
         atmosphere: None,
         structure: None,
         origin_body_m: DVec3::ZERO,
@@ -1732,6 +1760,8 @@ fn capsule_sphere_matches_closed_form_volume() {
         abreast: 1,
         couch_mass_kg_each: 30.0,
         occupant_mass_kg_each: 0.0,
+        suited: true,
+        suit_mass_kg_each: 20.0,
         atmosphere: None,
         structure: None,
         origin_body_m: DVec3::ZERO,
@@ -1768,6 +1798,8 @@ fn capsule_example_crews_compile_with_air_and_docks() {
                 abreast,
                 couch_mass_kg_each: 30.0,
                 occupant_mass_kg_each: 0.0,
+                suited: false,
+                suit_mass_kg_each: 0.0,
                 atmosphere: Some(CabinAtmosphere::sea_level()),
                 structure: Some(BodyStructuralLayout::metal_baseline()),
                 origin_body_m: DVec3::ZERO,
@@ -1917,6 +1949,8 @@ fn capsule_assembles_with_separate_shield_and_dock() {
         abreast: 3,
         couch_mass_kg_each: 30.0,
         occupant_mass_kg_each: 0.0,
+        suited: false,
+        suit_mass_kg_each: 0.0,
         atmosphere: Some(CabinAtmosphere::sea_level()),
         structure: Some(BodyStructuralLayout::metal_baseline()),
         origin_body_m: DVec3::ZERO,
@@ -2042,6 +2076,8 @@ fn capsule_authoring_fails_closed() {
         abreast: 2,
         couch_mass_kg_each: 30.0,
         occupant_mass_kg_each: 0.0,
+        suited: false,
+        suit_mass_kg_each: 0.0,
         atmosphere: None,
         structure: None,
         origin_body_m: DVec3::ZERO,
@@ -2073,4 +2109,114 @@ fn capsule_authoring_fails_closed() {
         })
         .is_err()
     );
+}
+
+#[test]
+fn suited_crew_aggregates_suit_mass_and_flies_dry() {
+    use crate::SuitType;
+
+    // Fighter cockpit: suited pilot, dry cabin, no pressure schedule.
+    let mut body = ProceduralBody::new(
+        "fighter-nose",
+        vec![
+            BodyStation::round(0.0, 0.6).unwrap(),
+            BodyStation::round(3.0, 0.6).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::new(
+            "cockpit",
+            1.0,
+            2.5,
+            RegionKind::Crew {
+                seats: 1,
+                seat_mass_kg_each: 12.0,
+                occupant_mass_kg_each: 90.0,
+                seat_pitch_m: None,
+                abreast: None,
+                seat_style: crate::SeatStyle::Upright,
+                suited: true,
+                suit_mass_kg_each: 20.0,
+                suit_type: SuitType::HoseFed,
+                control_station: true,
+            },
+        )
+        .unwrap(),
+    ];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let cockpit = &compiled.interior[0];
+    // Seat + occupant + suit ride the hull; no air aboard.
+    assert!((cockpit.payload_mass_kg - 122.0).abs() < 1e-9);
+    assert_eq!(cockpit.air_mass_kg, 0.0);
+    assert_eq!(cockpit.seat_positions_body_m.len(), 1);
+}
+
+#[test]
+fn suit_rules_fail_closed() {
+    use crate::SuitType;
+
+    // Suits without mass, and mass without suits, both refuse.
+    for (suited, mass) in [(true, 0.0), (false, 5.0)] {
+        assert!(
+            InteriorRegion::new(
+                "cockpit",
+                1.0,
+                2.5,
+                RegionKind::Crew {
+                    seats: 1,
+                    seat_mass_kg_each: 12.0,
+                    occupant_mass_kg_each: 90.0,
+                    seat_pitch_m: None,
+                    abreast: None,
+                    seat_style: crate::SeatStyle::Upright,
+                    suited,
+                    suit_mass_kg_each: mass,
+                    suit_type: SuitType::HoseFed,
+                    control_station: false,
+                },
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn control_core_rides_avionics_not_tanks() {
+    use thessa_sim_core::AutopilotTier;
+
+    let mut body = ProceduralBody::new(
+        "cored-bus",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(6.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    let mut avionics = InteriorRegion::new("avionics", 4.0, 5.0, RegionKind::Avionics).unwrap();
+    avionics.control_core = Some(AutopilotTier::Full);
+    avionics.validate().unwrap();
+    body.regions = vec![avionics];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    assert_eq!(compiled.interior[0].control_core, Some(AutopilotTier::Full));
+    // Tanks size their own shells and host no cores.
+    let mut tank = InteriorRegion::new(
+        "tank",
+        0.5,
+        3.5,
+        RegionKind::Tank {
+            propellant: thessa_sim_core::Propellant::LoxMethane,
+            fill_fraction: 1.0,
+            pressure_pa: None,
+            material: None,
+            shell: None,
+        },
+    )
+    .unwrap();
+    tank.control_core = Some(AutopilotTier::Hold);
+    assert!(tank.validate().is_err());
 }

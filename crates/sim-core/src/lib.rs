@@ -9,6 +9,7 @@
 mod aero;
 mod affine_propagator;
 mod atmosphere;
+mod cabin;
 mod collision;
 mod docking;
 mod ephemeris;
@@ -42,6 +43,10 @@ pub use affine_propagator::{
 pub use atmosphere::{
     AtmosphereComposition, AtmosphereConfig, AtmosphereError, AtmosphereSample, BakedAtmosphere,
     GasKind,
+};
+pub use cabin::{
+    AuthorityReason, AutopilotTier, CabinError, CabinPressureState, ControlAuthority, ControlCore,
+    ControlStation, PressurizedCabin, control_authority,
 };
 pub use collision::{
     CollisionAxis, CollisionError, CollisionGeometry, CollisionMaterial, CollisionPart,

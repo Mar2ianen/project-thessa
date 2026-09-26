@@ -191,6 +191,12 @@ pub struct CompiledRegion {
     /// Oxygen mass within the cabin air in kg (0 unpressurized).
     #[serde(default)]
     pub o2_mass_kg: f64,
+    /// Authored atmosphere (pressure/temp/O2 setpoints for runtime cabins).
+    #[serde(default)]
+    pub atmosphere: Option<crate::CabinAtmosphere>,
+    /// Autopilot core hosted here, if any (runtime control authority).
+    #[serde(default)]
+    pub control_core: Option<thessa_sim_core::AutopilotTier>,
 }
 
 /// One detachable heat shield with compiled mass data.
@@ -992,8 +998,14 @@ impl<'a> Compiler<'a> {
                     seat_pitch_m,
                     abreast,
                     seat_style,
+                    suited,
+                    suit_mass_kg_each,
+                    ..
                 } => (
-                    seats as f64 * (seat_mass_kg_each + occupant_mass_kg_each),
+                    seats as f64
+                        * (seat_mass_kg_each
+                            + occupant_mass_kg_each
+                            + if suited { suit_mass_kg_each } else { 0.0 }),
                     seats,
                     seat_style,
                     self.seat_anchors(
@@ -1202,6 +1214,8 @@ impl<'a> Compiler<'a> {
                 seat_positions_body_m: seat_anchors,
                 air_mass_kg,
                 o2_mass_kg,
+                atmosphere: region.atmosphere,
+                control_core: region.control_core,
             });
         }
 

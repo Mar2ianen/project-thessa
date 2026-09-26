@@ -1849,6 +1849,15 @@ impl VehicleDefinition {
             .copy_from_slice(&reference_geometry.panels);
         for (surface, deflection) in self.control_surfaces.iter().zip(deflections_rad) {
             if let Some(hinge) = surface.hinge {
+                if *deflection == 0.0 {
+                    // Avoid running neutral panels through an identity
+                    // quaternion, which can renormalize axes and introduce
+                    // drift while another control surface moves.
+                    for panel_index in &surface.panel_indices {
+                        self.aero_geometry.panels[*panel_index].control_deflection_rad = 0.0;
+                    }
+                    continue;
+                }
                 let rotation = DQuat::from_axis_angle(hinge.axis_body, *deflection);
                 for panel_index in &surface.panel_indices {
                     let panel = &mut self.aero_geometry.panels[*panel_index];

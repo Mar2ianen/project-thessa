@@ -2280,6 +2280,16 @@ fn geometric_control_hinge_rotates_panel_from_reference_geometry() {
         .apply_control_deflections(&geometry, &[0.0])
         .expect("restore neutral from reference");
     assert_eq!(vehicle.aero_geometry, geometry);
+
+    // A caller may supply a reference geometry carrying stale coefficient
+    // deflection. A geometric hinge must clear it or the panel rotates once
+    // geometrically and again through the coefficient path.
+    let mut stale_reference = geometry.clone();
+    stale_reference.panels[0].control_deflection_rad = 0.1;
+    vehicle
+        .apply_control_deflections(&stale_reference, &[0.2])
+        .expect("geometric hinge replaces stale coefficient deflection");
+    assert_eq!(vehicle.aero_geometry.panels[0].control_deflection_rad, 0.0);
 }
 
 #[test]

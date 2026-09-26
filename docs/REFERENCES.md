@@ -36,6 +36,23 @@ absolute error envelopes, and fallback rules.
 - OpenRocket: https://openrocket.info/
 - NASA X-15 technical reports and aerodynamic data where cited by a specific
   validation case.
+- Jackson, E. B., Cruz, C. I., and Ragsdale, W. A., *Real-Time Simulation
+  Model of the HL-20 Lifting Body*, NASA-TM-107580, 1992, NTRS 19920021916:
+  https://ntrs.nasa.gov/citations/19920021916.
+- Ware, G. M., and Cruz, C. I., *Subsonic Aerodynamic Characteristics of the
+  HL-20 Lifting-Body Configuration*, NASA-TM-4515, 1993, NTRS 19940012811:
+  https://ntrs.nasa.gov/citations/19940012811. Its Table I and Figure 2
+  document the subsonic wind-tunnel model geometry and its longitudinal
+  stability-axis convention.
+- Cruz, C. I., Ware, G. M., Grafton, S. B., Woods, W. C., and Young, J. C.,
+  *Aerodynamic Characteristics of a Proposed Personnel Launch System (PLS)
+  Lifting-Body Configuration at Mach Numbers From 0.05 to 20.3*, NASA-TM-101641,
+  November 1989, NTRS 19930015333:
+  https://ntrs.nasa.gov/citations/19930015333. Table 1 supplies the matching
+  flight-scale PLS reference geometry. The report describes a 1,429-point
+  `PLS.FUS` coordinate grid distributed on its companion disk; the report PDF
+  itself does not contain that grid. The companion-disk record is NTRS 20090005242:
+  https://ntrs.nasa.gov/citations/20090005242.
 
 External solvers and data remain reference-only. Imported coefficient tables
 must preserve geometry, reference area, units, sign conventions, source, and

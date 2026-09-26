@@ -504,9 +504,14 @@ impl AeroConfig {
                 "aero configuration contains a non-finite value".into(),
             ));
         }
-        // drag_only_above_mach may be INFINITY (disabled); anything else
-        // must be a positive finite cutoff.
-        if !(self.drag_only_above_mach.is_infinite() || self.drag_only_above_mach > 0.0) {
+        // drag_only_above_mach may be +INFINITY (disabled); anything else
+        // must be a positive finite cutoff. Negative infinity is not a
+        // "disabled" sentinel: the scalar fade checks `is_infinite()`, but
+        // the SIMD coefficient kernels mask only +inf, so -inf would split
+        // scalar/SIMD parity (NaN lift fade on the aarch64 NEON tier).
+        let cutoff_disabled =
+            self.drag_only_above_mach.is_infinite() && self.drag_only_above_mach.is_sign_positive();
+        if !(cutoff_disabled || self.drag_only_above_mach > 0.0) {
             return Err(AeroError::InvalidModel(
                 "aero configuration has an invalid range".into(),
             ));
@@ -1460,7 +1465,7 @@ impl PanelAeroModel {
     /// SIMD fast path over [`PanelSoA`] lanes: scalar prologue (flow angles,
     /// separation, control folding, sin/cos) then the 8/4-wide coefficient
     /// kernels from `thessa-simd`, then the shared assembly below. Short
-    /// tails and machines without AVX-512 evaluate the same shared scalar
+    /// tails and machines without an 8-wide kernel evaluate the shared scalar
     /// coefficient path per lane, so the result is deterministic for a fixed
     /// lane count and feature set (cross-machine bits may differ). A
     /// coefficient table forces delegation to [`evaluate_soa_parts`](Self::evaluate_soa_parts):

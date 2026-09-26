@@ -733,41 +733,67 @@ impl CompiledPulsedFusion {
             charge(remaining_s, &mut stored_j, &mut bus_energy_input_j);
             remaining_s = 0.0;
         }
-        let mut iterations = 0_u32;
-        while remaining_s > epsilon_s {
-            iterations += 1;
-            if iterations > 1_000_000 {
+        // A step may legitimately carry a huge cadence event count (fast
+        // pulse train × long warp step), so the bounded event budget is
+        // spent per pass and the accumulated state — buffer charge, phase,
+        // fired pulses — carries across passes instead of rejecting the
+        // step. A pass that burns its whole budget without consuming any
+        // simulated time is a cadence the step cannot resolve (interval
+        // at or below the step epsilon) and still fails closed, as does a
+        // run that exhausts every pass.
+        const EVENTS_PER_PASS: u32 = 1_000_000;
+        const MAX_EVENT_PASSES: u32 = 8;
+        let mut passes_spent = 0_u32;
+        loop {
+            let mut pass_events = 0_u32;
+            let remaining_before_s = remaining_s;
+            let mut stalled = false;
+            while remaining_s > epsilon_s && pass_events < EVENTS_PER_PASS {
+                pass_events += 1;
+                let time_to_pulse_s = (self.pulse_interval_s - phase_s).max(0.0);
+                let time_to_charge_s =
+                    if stored_j + energy_epsilon_j >= self.driver_energy_per_pulse_j {
+                        0.0
+                    } else if rated_charge_power_w > 0.0 {
+                        (self.driver_energy_per_pulse_j - stored_j) / rated_charge_power_w
+                    } else {
+                        f64::INFINITY
+                    };
+                let event_wait_s = time_to_pulse_s.max(time_to_charge_s);
+                if !event_wait_s.is_finite() || event_wait_s > remaining_s {
+                    // The next event lies past the step: charge and coast
+                    // through the whole remainder, then finish the step.
+                    charge(remaining_s, &mut stored_j, &mut bus_energy_input_j);
+                    phase_s = (phase_s + remaining_s).min(self.pulse_interval_s);
+                    remaining_s = 0.0;
+                    break;
+                }
+                charge(event_wait_s, &mut stored_j, &mut bus_energy_input_j);
+                phase_s = (phase_s + event_wait_s).min(self.pulse_interval_s);
+                remaining_s -= event_wait_s;
+                if phase_s + epsilon_s >= self.pulse_interval_s
+                    && stored_j + energy_epsilon_j >= self.driver_energy_per_pulse_j
+                {
+                    stored_j = (stored_j - self.driver_energy_per_pulse_j).max(0.0);
+                    phase_s = 0.0;
+                    pulses_fired += 1;
+                } else if event_wait_s <= epsilon_s {
+                    // Float edge: no event can advance time further — accept
+                    // the partial step (pre-existing safety valve).
+                    stalled = true;
+                    break;
+                }
+            }
+            if remaining_s <= epsilon_s || stalled {
+                break;
+            }
+            if passes_spent + 1 >= MAX_EVENT_PASSES || remaining_s >= remaining_before_s - epsilon_s
+            {
                 return Err(PropulsionError::InvalidCommand(
                     "pulsed fusion cadence exceeded the bounded step event count".into(),
                 ));
             }
-            let time_to_pulse_s = (self.pulse_interval_s - phase_s).max(0.0);
-            let time_to_charge_s = if stored_j + energy_epsilon_j >= self.driver_energy_per_pulse_j
-            {
-                0.0
-            } else if rated_charge_power_w > 0.0 {
-                (self.driver_energy_per_pulse_j - stored_j) / rated_charge_power_w
-            } else {
-                f64::INFINITY
-            };
-            let event_wait_s = time_to_pulse_s.max(time_to_charge_s);
-            if !event_wait_s.is_finite() || event_wait_s > remaining_s {
-                charge(remaining_s, &mut stored_j, &mut bus_energy_input_j);
-                phase_s = (phase_s + remaining_s).min(self.pulse_interval_s);
-                break;
-            }
-            charge(event_wait_s, &mut stored_j, &mut bus_energy_input_j);
-            phase_s = (phase_s + event_wait_s).min(self.pulse_interval_s);
-            remaining_s -= event_wait_s;
-            if phase_s + epsilon_s >= self.pulse_interval_s
-                && stored_j + energy_epsilon_j >= self.driver_energy_per_pulse_j
-            {
-                stored_j = (stored_j - self.driver_energy_per_pulse_j).max(0.0);
-                phase_s = 0.0;
-                pulses_fired += 1;
-            } else if event_wait_s <= epsilon_s {
-                break;
-            }
+            passes_spent += 1;
         }
 
         let fusion_energy_j = f64::from(pulses_fired) * self.fusion_energy_per_pulse_j;

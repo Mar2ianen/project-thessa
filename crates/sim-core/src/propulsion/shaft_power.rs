@@ -338,6 +338,9 @@ pub struct PistonOperatingPoint {
     pub thermal_efficiency: f64,
     pub oxygen_limited: bool,
     pub cooling_limited: bool,
+    /// True when the engine turns without delivering shaft power, or when
+    /// the cooling installation cannot carry even the friction heat of the
+    /// minimum running point (overheat stall).
     pub stalled: bool,
 }
 
@@ -425,7 +428,10 @@ impl CompiledPistonEngine {
     /// the authored compressor efficiency; fuel flow is stoichiometric but
     /// is capped by the sampled oxygen mass fraction. Friction MEP and the
     /// supercharger work are subtracted from brake power. Cooling overload
-    /// reduces throttle by bisection and is explicitly reported.
+    /// reduces throttle by bisection and is explicitly reported; when the
+    /// cooling installation cannot carry even the friction heat of the
+    /// minimum running point, no throttle keeps the engine cool and the
+    /// point comes back `stalled`.
     pub fn operating_point(
         &self,
         condition: &FlightCondition,
@@ -467,12 +473,30 @@ impl CompiledPistonEngine {
         if requested.cooling_load_w <= self.cooling_capacity_w {
             return Ok(requested);
         }
-        let zero = self.at_throttle(condition, rpm, 0.0)?;
-        if self.cooling_capacity_w <= zero.cooling_load_w {
-            let mut point = zero;
-            point.cooling_limited = true;
-            point.stalled = true;
-            return Ok(point);
+        // Heat balance at the least-hungry running point: fuel heat scales
+        // with throttle, so as the throttle falls away the only heat left
+        // to reject is cycle friction at this RPM. When the cooling
+        // installation cannot carry even that, every running point
+        // generates more heat than it can shed — temperature runs away and
+        // the engine is reported stalled, not limping along. The returned
+        // point is that minimum running state: no fuel, no shaft power,
+        // and the friction heat load that already exceeds the capacity.
+        let minimum_cooling_load_w =
+            self.friction_mep_pa * self.displacement_m3 * rpm / 60.0 * FOUR_STROKE_CYCLES_PER_REV;
+        if self.cooling_capacity_w <= minimum_cooling_load_w {
+            return Ok(PistonOperatingPoint {
+                rpm,
+                displacement_m3: self.displacement_m3,
+                shaft_power_w: 0.0,
+                torque_nm: 0.0,
+                fuel_flow_kg_s: 0.0,
+                fuel_power_w: 0.0,
+                cooling_load_w: minimum_cooling_load_w,
+                thermal_efficiency: 0.0,
+                oxygen_limited: false,
+                cooling_limited: true,
+                stalled: true,
+            });
         }
         let mut low = 0.0;
         let mut high = throttle;
@@ -514,14 +538,21 @@ impl CompiledPistonEngine {
 
         let gas_constant = condition.composition.gas_constant_j_kg_k();
         let gamma = condition.composition.mean_heat_capacity_ratio();
-        let density = condition.density_kg_m3();
-        if !gas_constant.is_finite()
-            || gas_constant <= 0.0
-            || !gamma.is_finite()
-            || gamma <= 1.0
-            || !density.is_finite()
-            || density <= 0.0
-        {
+        if !gas_constant.is_finite() || gas_constant <= 0.0 || !gamma.is_finite() || gamma <= 1.0 {
+            return Err(PropulsionError::InvalidCommand(
+                "piston engine requires a finite, positive-density atmosphere".into(),
+            ));
+        }
+        // Ram (stagnation) intake state: isentropic total temperature and
+        // pressure at the flight Mach number — the same ram model the
+        // airbreathing cycle uses (air.rs), with unity recovery because no
+        // intake duct is authored here. The trapped charge then follows
+        // ram density instead of the static atmosphere.
+        let ram_temp_ratio = 1.0 + (gamma - 1.0) / 2.0 * condition.mach * condition.mach;
+        let ram_temp_k = condition.ambient_temp_k * ram_temp_ratio;
+        let ram_pressure_pa = condition.ambient_pa * ram_temp_ratio.powf(gamma / (gamma - 1.0));
+        let density = ram_pressure_pa / (gas_constant * ram_temp_k);
+        if !density.is_finite() || density <= 0.0 {
             return Err(PropulsionError::InvalidCommand(
                 "piston engine requires a finite, positive-density atmosphere".into(),
             ));
@@ -530,9 +561,9 @@ impl CompiledPistonEngine {
         let pressure_ratio = self.boost_pressure_ratio;
         let compressor_exponent = (gamma - 1.0) / gamma;
         let ideal_temp_ratio = pressure_ratio.powf(compressor_exponent);
-        let charge_temp_k = condition.ambient_temp_k
-            * (1.0 + (ideal_temp_ratio - 1.0) / self.supercharger_efficiency);
-        let charge_pressure_pa = condition.ambient_pa * pressure_ratio;
+        let charge_temp_k =
+            ram_temp_k * (1.0 + (ideal_temp_ratio - 1.0) / self.supercharger_efficiency);
+        let charge_pressure_pa = ram_pressure_pa * pressure_ratio;
         let charge_density = charge_pressure_pa / (gas_constant * charge_temp_k);
         let air_mass_per_cycle_kg =
             charge_density * self.displacement_m3 * self.volumetric_efficiency * throttle;
@@ -563,7 +594,7 @@ impl CompiledPistonEngine {
         let friction_power_w = self.friction_mep_pa * self.displacement_m3 * cycle_rate_hz;
         let mass_flow_kg_s = air_mass_per_cycle_kg * cycle_rate_hz;
         let compressor_specific_work_j_kg =
-            gas_constant / (gamma - 1.0) * condition.ambient_temp_k * (ideal_temp_ratio - 1.0)
+            gas_constant / (gamma - 1.0) * ram_temp_k * (ideal_temp_ratio - 1.0)
                 / self.supercharger_efficiency;
         let supercharger_power_w = mass_flow_kg_s * compressor_specific_work_j_kg;
         let raw_shaft_power_w = indicated_power_w - friction_power_w - supercharger_power_w;
@@ -1180,7 +1211,150 @@ pub fn analyze_turboprop_drive(
     Ok(rows)
 }
 
+// Baked-JSON guards for the compiled shaft-power hardware. `compile`
+// enforces these once at authoring time; a tampered or hand-edited baked
+// definition reaches the formulas directly, so the mounts re-check the
+// divisors, powf bases, and finiteness-critical values before any
+// evaluation turns them into NaN instead of `InvalidSpec`.
+impl CompiledPropeller {
+    fn validate(&self) -> Result<(), PropulsionError> {
+        require_positive(self.disk_area_m2, "propeller disk area")?;
+        if !self.gearbox_efficiency.is_finite()
+            || !(0.0..=1.0).contains(&self.gearbox_efficiency)
+            || self.gearbox_efficiency == 0.0
+        {
+            return Err(PropulsionError::InvalidSpec(
+                "propeller gearbox efficiency must be finite in (0, 1]".into(),
+            ));
+        }
+        require_non_negative(self.dry_mass_kg, "propeller dry mass")?;
+        Ok(())
+    }
+}
+
+impl CompiledPistonEngine {
+    /// Validate baked values the cycle divides by, powf's with, or
+    /// compares against (mirrors [`PistonEngineSpec::compile`]).
+    fn validate(&self) -> Result<(), PropulsionError> {
+        require_positive(self.displacement_m3, "piston displacement")?;
+        if !self.compression_ratio.is_finite() || self.compression_ratio <= 1.0 {
+            return Err(PropulsionError::InvalidSpec(
+                "piston compression ratio must be finite and > 1".into(),
+            ));
+        }
+        if !self.boost_pressure_ratio.is_finite() || self.boost_pressure_ratio < 1.0 {
+            return Err(PropulsionError::InvalidSpec(
+                "piston boost pressure ratio must be finite and >= 1".into(),
+            ));
+        }
+        require_unit_interval(
+            self.supercharger_efficiency,
+            "piston supercharger efficiency",
+        )?;
+        if self.supercharger_efficiency == 0.0 {
+            return Err(PropulsionError::InvalidSpec(
+                "piston supercharger efficiency must be finite in (0, 1]".into(),
+            ));
+        }
+        if !self.volumetric_efficiency.is_finite()
+            || !(0.0..=1.5).contains(&self.volumetric_efficiency)
+            || self.volumetric_efficiency == 0.0
+        {
+            return Err(PropulsionError::InvalidSpec(
+                "piston volumetric efficiency must be finite in (0, 1.5]".into(),
+            ));
+        }
+        require_unit_interval(self.combustion_efficiency, "piston combustion efficiency")?;
+        require_positive(self.idle_rpm, "piston idle RPM")?;
+        require_positive(self.redline_rpm, "piston redline RPM")?;
+        if self.redline_rpm <= self.idle_rpm {
+            return Err(PropulsionError::InvalidSpec(
+                "piston redline RPM must exceed idle RPM".into(),
+            ));
+        }
+        require_non_negative(self.friction_mep_pa, "piston friction MEP")?;
+        require_unit_interval(self.wall_heat_fraction, "piston wall heat fraction")?;
+        require_non_negative(self.cooling_capacity_w, "piston cooling capacity")?;
+        require_positive(self.dry_mass_kg, "piston engine dry mass")?;
+        Ok(())
+    }
+}
+
+impl CompiledElectricMotor {
+    /// Validate baked values the torque/power envelope divides by
+    /// (mirrors [`ElectricMotorSpec::compile`]).
+    fn validate(&self) -> Result<(), PropulsionError> {
+        require_positive(self.rated_power_w, "motor rated power")?;
+        require_positive(self.peak_torque_nm, "motor peak torque")?;
+        require_positive(self.maximum_rpm, "motor maximum RPM")?;
+        if !self.efficiency.is_finite()
+            || !(0.0..=1.0).contains(&self.efficiency)
+            || self.efficiency == 0.0
+        {
+            return Err(PropulsionError::InvalidSpec(
+                "motor efficiency must be finite in (0, 1]".into(),
+            ));
+        }
+        require_non_negative(self.cooling_capacity_w, "motor cooling capacity")?;
+        require_positive(self.dry_mass_kg, "motor dry mass")?;
+        Ok(())
+    }
+}
+
+impl CompiledShaftPowerSource {
+    fn validate(&self) -> Result<(), PropulsionError> {
+        match self {
+            Self::Piston(engine) => engine.validate(),
+            Self::Electric(motor) => motor.validate(),
+        }
+    }
+}
+
+impl CompiledPropellerDrive {
+    /// Validate baked drive data (`reduction_ratio` is a divisor in every
+    /// operating point).
+    fn validate(&self) -> Result<(), PropulsionError> {
+        require_positive(self.reduction_ratio, "shaft-power reduction ratio")?;
+        self.propeller.validate()?;
+        self.source.validate()?;
+        require_non_negative(self.dry_mass_kg, "propeller-drive dry mass")?;
+        Ok(())
+    }
+}
+
+impl CompiledTurbopropDrive {
+    /// Validate baked drive data (`reduction_ratio` and the air-core
+    /// `spool_tau_s`/`shaft_reference_power_w` are divisors on the
+    /// advance path).
+    fn validate(&self) -> Result<(), PropulsionError> {
+        require_positive(self.shaft_rpm_at_full_spool, "turboprop shaft RPM")?;
+        require_positive(self.reduction_ratio, "turboprop reduction ratio")?;
+        require_non_negative(self.power_turbine_mass_kg, "turboprop power-turbine mass")?;
+        require_non_negative(self.dry_mass_kg, "turboprop dry mass")?;
+        self.propeller.validate()?;
+        require_positive(self.air.intake_area_m2, "turboprop intake area")?;
+        require_positive(self.air.spool_tau_s, "turboprop spool tau")?;
+        require_non_negative(self.air.dry_mass_kg, "turboprop core dry mass")?;
+        if self.air.cycle.has_shaft() {
+            require_positive(
+                self.air.shaft_reference_power_w,
+                "turboprop shaft reference power",
+            )?;
+        }
+        let heat_fraction = self.air.shaft.power_turbine_heat_fraction;
+        if heat_fraction <= 0.0 || !heat_fraction.is_finite() {
+            return Err(PropulsionError::InvalidSpec(
+                "turboprop requires a positive power-turbine heat fraction".into(),
+            ));
+        }
+        self.air.shaft.validate(self.air.cycle)?;
+        Ok(())
+    }
+}
+
 impl PropellerDriveMount {
+    /// Validate the mount station plus the nested compiled drive (tampered
+    /// baked JSON fails closed here, before formulas see it).
     pub fn validate(&self) -> Result<(), PropulsionError> {
         if self.name.trim().is_empty() {
             return Err(PropulsionError::InvalidSpec(
@@ -1204,6 +1378,7 @@ impl PropellerDriveMount {
                 "propeller-drive thrust axis must be unit length".into(),
             ));
         }
+        self.drive.validate()?;
         Ok(())
     }
 
@@ -1338,6 +1513,8 @@ impl CompiledTurbopropDrive {
 }
 
 impl TurbopropMount {
+    /// Validate the mount station plus the nested compiled drive (tampered
+    /// baked JSON fails closed here, before formulas see it).
     pub fn validate(&self) -> Result<(), PropulsionError> {
         if self.name.trim().is_empty() {
             return Err(PropulsionError::InvalidSpec(
@@ -1361,6 +1538,7 @@ impl TurbopropMount {
                 "turboprop thrust axis must be unit length".into(),
             ));
         }
+        self.drive.validate()?;
         Ok(())
     }
 
@@ -1540,8 +1718,78 @@ mod tests {
             .operating_point(&earth_condition(0.0), 2_400.0, 1.0)
             .expect("cooled piston");
         assert!(point.cooling_limited);
+        assert!(!point.stalled);
         assert!(point.cooling_load_w <= engine.cooling_capacity_w + 1.0e-7);
         assert!(point.shaft_power_w > 0.0);
+    }
+
+    #[test]
+    fn piston_overheats_and_stalls_when_cooling_cannot_carry_friction_heat() {
+        let engine = PistonEngineSpec {
+            cooling_capacity_w: 1_000.0,
+            ..PistonEngineSpec::default()
+        }
+        .compile()
+        .expect("valid piston");
+        // Friction heat alone at this RPM already exceeds the installation,
+        // so no throttle keeps the engine below its cooling capacity.
+        let friction_w = engine.friction_mep_pa * engine.displacement_m3 * 2_400.0 / 60.0
+            * FOUR_STROKE_CYCLES_PER_REV;
+        assert!(friction_w > engine.cooling_capacity_w);
+
+        let point = engine
+            .operating_point(&earth_condition(0.0), 2_400.0, 1.0)
+            .expect("overheated piston");
+        assert!(point.stalled);
+        assert!(point.cooling_limited);
+        assert!(point.cooling_load_w > engine.cooling_capacity_w);
+        assert_eq!(point.shaft_power_w, 0.0);
+        assert_eq!(point.fuel_flow_kg_s, 0.0);
+    }
+
+    #[test]
+    fn piston_cycle_traps_ram_charge_and_senses_flight_speed() {
+        let engine = PistonEngineSpec {
+            cooling_capacity_w: 1.0e9,
+            ..PistonEngineSpec::default()
+        }
+        .compile()
+        .expect("valid piston");
+        let still = earth_condition(0.0);
+        let mach = 0.44;
+        // Sample-based Mach so the condition carries exactly this Mach.
+        let sample = AtmosphereConfig::default()
+            .sample(0.0)
+            .expect("sea-level atmosphere");
+        let fast = super::super::flight_condition(&sample, mach * sample.speed_of_sound_mps)
+            .expect("ram condition");
+        assert!((fast.mach - mach).abs() < 1.0e-12);
+
+        // Independent ram-density reference: isentropic stagnation at
+        // Mach 0.44 packs the intake charge ~10% above the static column.
+        let gamma = still.composition.mean_heat_capacity_ratio();
+        let gas_constant = still.composition.gas_constant_j_kg_k();
+        let ram_temp_ratio = 1.0 + (gamma - 1.0) / 2.0 * mach * mach;
+        let ram_temp_k = still.ambient_temp_k * ram_temp_ratio;
+        let ram_pressure_pa = still.ambient_pa * ram_temp_ratio.powf(gamma / (gamma - 1.0));
+        let ram_density = ram_pressure_pa / (gas_constant * ram_temp_k);
+        let static_density = still.density_kg_m3();
+        assert!(ram_density > static_density);
+        assert!(ram_density / static_density > 1.09);
+
+        let still_point = engine
+            .operating_point(&still, 2_400.0, 1.0)
+            .expect("static piston point");
+        let fast_point = engine
+            .operating_point(&fast, 2_400.0, 1.0)
+            .expect("ram piston point");
+        assert!(fast_point.fuel_flow_kg_s > still_point.fuel_flow_kg_s);
+        assert!(fast_point.shaft_power_w > still_point.shaft_power_w);
+        // Boost pressure ratio is 1, so trapped charge density is exactly
+        // ram density and fuel flow (proportional to trapped air) scales
+        // with the same ratio.
+        let fuel_ratio = fast_point.fuel_flow_kg_s / still_point.fuel_flow_kg_s;
+        assert!((fuel_ratio - ram_density / static_density).abs() < 1.0e-9);
     }
 
     #[test]
@@ -1720,5 +1968,116 @@ mod tests {
         assert!(rows[0].propeller_thrust_n > 0.0);
         assert_eq!(rows[2].power_takeoff_w, 0.0);
         assert_eq!(rows[2].total_thrust_n, 0.0);
+    }
+
+    #[test]
+    fn propeller_drive_mount_validate_rejects_tampered_baked_drive() {
+        let drive = PropellerDriveSpec {
+            propeller: PropellerSpec::default(),
+            source: ShaftPowerSourceSpec::Piston(PistonEngineSpec::default()),
+            reduction_ratio: 2.0,
+        }
+        .compile()
+        .expect("drive");
+        let mount = PropellerDriveMount {
+            name: "baked-prop".into(),
+            drive,
+            position_body_m: [0.0, 1.0, 0.0],
+            thrust_axis_body: [1.0, 0.0, 0.0],
+        };
+        mount.validate().expect("clean bake validates");
+
+        // Zero reduction ratio is a divisor in every drive point.
+        let mut no_ratio = mount.clone();
+        no_ratio.drive.reduction_ratio = 0.0;
+        assert!(matches!(
+            no_ratio.validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+
+        // Zero supercharger efficiency is a divisor in the piston cycle.
+        let mut no_boost = mount.clone();
+        match &mut no_boost.drive.source {
+            CompiledShaftPowerSource::Piston(engine) => {
+                engine.supercharger_efficiency = 0.0;
+            }
+            CompiledShaftPowerSource::Electric(_) => panic!("piston source expected"),
+        }
+        assert!(matches!(
+            no_boost.validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+
+        // A NaN motor efficiency used to sail through to the formulas and
+        // come back as an `Ok` point carrying NaN electrical power.
+        let mut motor = ElectricMotorSpec::default().compile().expect("motor");
+        motor.efficiency = f64::NAN;
+        let mut nan_motor = mount.clone();
+        nan_motor.drive.source = CompiledShaftPowerSource::Electric(motor);
+        assert!(matches!(
+            nan_motor.validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+        let error = nan_motor
+            .operating_point(
+                &earth_condition(0.0),
+                PropellerDriveCommand {
+                    throttle: 1.0,
+                    source_rpm: 6_000.0,
+                },
+            )
+            .expect_err("tampered mount must fail closed, not return NaN");
+        assert!(matches!(error, PropulsionError::InvalidSpec(_)));
+
+        mount.validate().expect("untampered bake still validates");
+    }
+
+    #[test]
+    fn turboprop_mount_validate_rejects_tampered_baked_drive() {
+        let mount = TurbopropMount {
+            name: "baked-turboprop".into(),
+            drive: turboprop_drive(),
+            position_body_m: [0.0, 1.0, 0.0],
+            thrust_axis_body: [1.0, 0.0, 0.0],
+        };
+        mount.validate().expect("clean bake validates");
+
+        let mut no_ratio = mount.clone();
+        no_ratio.drive.reduction_ratio = f64::NAN;
+        assert!(matches!(
+            no_ratio.validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+        // The evaluation path routes through the same validation.
+        let error = no_ratio
+            .advance(
+                &earth_condition(0.0),
+                &TurbopropCommand::running(&no_ratio.drive),
+            )
+            .expect_err("tampered turboprop must fail closed");
+        assert!(matches!(error, PropulsionError::InvalidSpec(_)));
+
+        let mut no_area = mount.clone();
+        no_area.drive.propeller.disk_area_m2 = 0.0;
+        assert!(matches!(
+            no_area.validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+
+        let mut no_spool = mount.clone();
+        no_spool.drive.air.spool_tau_s = 0.0;
+        assert!(matches!(
+            no_spool.validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+
+        let mut no_takeoff = mount.clone();
+        no_takeoff.drive.air.shaft.power_turbine_heat_fraction = 0.0;
+        assert!(matches!(
+            no_takeoff.validate(),
+            Err(PropulsionError::InvalidSpec(_))
+        ));
+
+        mount.validate().expect("untampered bake still validates");
     }
 }

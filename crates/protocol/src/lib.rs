@@ -88,6 +88,11 @@ pub fn encode_envelope<T: Serialize>(kind: u32, message: &T) -> Result<Vec<u8>, 
 /// Decode and version-check an envelope; payload stays opaque bytes for the
 /// game layer to deserialize by `kind`.
 pub fn decode_envelope(bytes: &[u8]) -> Result<Envelope, CodecError> {
+    if bytes.len() > MAX_FRAME_BYTES {
+        return Err(CodecError::FrameTooLarge {
+            declared: bytes.len(),
+        });
+    }
     let envelope: Envelope =
         postcard::from_bytes(bytes).map_err(|e| CodecError::Codec(e.to_string()))?;
     if envelope.version != ProtocolVersion::CURRENT {
@@ -225,6 +230,17 @@ mod tests {
             CodecError::FrameTooLarge {
                 declared: MAX_FRAME_BYTES + 1
             }
+        );
+    }
+
+    #[test]
+    fn direct_envelope_decode_enforces_the_frame_size_cap() {
+        let bytes = vec![0; MAX_FRAME_BYTES + 1];
+        assert_eq!(
+            decode_envelope(&bytes),
+            Err(CodecError::FrameTooLarge {
+                declared: MAX_FRAME_BYTES + 1,
+            })
         );
     }
 

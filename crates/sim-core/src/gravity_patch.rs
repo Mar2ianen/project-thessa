@@ -347,7 +347,13 @@ pub fn affine_segment_bound(
             return Err(PatchError::NonFiniteInput);
         }
         let spatial_clearance = distance - excursion_m;
-        let temporal_clearance = distance - displacement;
+        // The Lipschitz temporal term is the worst case over BOTH moving
+        // ends: the target anywhere in its excursion ball and the source
+        // anywhere on its drift path, so the clearances subtract together.
+        // Omitting the excursion here understated the term by
+        // ((D - d) / (D - r - d))^3 and could post a finite bound for a
+        // target and a drifting source that can actually meet.
+        let temporal_clearance = distance - excursion_m - displacement;
         if spatial_clearance <= 0.0 || temporal_clearance <= 0.0 {
             return Ok(f64::INFINITY);
         }

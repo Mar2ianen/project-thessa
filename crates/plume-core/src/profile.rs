@@ -24,6 +24,8 @@
 use crate::optics::optical_material;
 use crate::source::{PlumeEnvironment, PlumeSource, pressure_ratio, validation_error};
 
+const MAX_PROFILE_LENGTH_M: f64 = 4000.0;
+
 /// Expansion regime from the pressure ratio (5% deadband).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExpansionRegime {
@@ -204,6 +206,12 @@ pub fn build_axial_profile(
     if let Some(reason) = validation_error(source, env) {
         return Err(reason);
     }
+    // The model keeps a minimum visible length of two nozzle diameters. Reject
+    // sources for which that lower bound would exceed the profile's hard cap;
+    // f64::clamp panics when its bounds are inverted.
+    if source.exit_radius_m > MAX_PROFILE_LENGTH_M / 4.0 {
+        return Err("exit_radius_m is too large for the maximum profile length");
+    }
     let regime = expansion_regime(source, env);
     if source.throttle <= 0.0 {
         return Ok(AxialProfile::empty(regime));
@@ -219,7 +227,7 @@ pub fn build_axial_profile(
     // provisional (reference-like flames run ~10-15 nozzle diameters);
     // tests pin direction (longer with Pi, M, D), never metres.
     let length = diameter * source.exit_mach * pi.max(0.05).sqrt() * 3.0;
-    let length = length.clamp(diameter * 2.0, 4000.0);
+    let length = length.clamp(diameter * 2.0, MAX_PROFILE_LENGTH_M);
 
     let spread = spread_rate(pi);
     let fan = expansion_fan(pi);
@@ -411,5 +419,26 @@ mod tests {
         let mut source = sample_source();
         source.exit_radius_m = 0.0;
         assert!(build_axial_profile(&source, &sample_env_sea_level(), 32).is_err());
+    }
+
+    #[test]
+    fn non_finite_and_unrepresentable_sources_are_rejected() {
+        let env = sample_env_sea_level();
+
+        let mut source = sample_source();
+        source.exit_radius_m = f64::INFINITY;
+        assert!(build_axial_profile(&source, &env, 32).is_err());
+
+        let mut source = sample_source();
+        source.exit_mach = f64::INFINITY;
+        assert!(build_axial_profile(&source, &env, 32).is_err());
+
+        let mut source = sample_source();
+        source.exit_radius_m = 1001.0;
+        assert!(build_axial_profile(&source, &env, 32).is_err());
+
+        let mut env = sample_env_sea_level();
+        env.pressure_pa = f64::INFINITY;
+        assert!(build_axial_profile(&sample_source(), &env, 32).is_err());
     }
 }

@@ -495,7 +495,7 @@ impl FlightAuthority {
         body_state: BodyState,
         jet_moment: DVec3,
         rcs_force_body_n: DVec3,
-        thrust_n: f64,
+        propulsion_force_body_n: DVec3,
         band_drag_body_n: DVec3,
         parachute_force_body_n: DVec3,
         parachute_moment_body_nm: DVec3,
@@ -509,7 +509,7 @@ impl FlightAuthority {
             gravity,
             jet_moment,
             rcs_force_body_n,
-            thrust_n,
+            propulsion_force_body_n,
             band_drag_body_n,
             parachute_force_body_n,
             parachute_moment_body_nm,
@@ -539,6 +539,45 @@ impl FlightAuthority {
                 FLIGHT_STEP_S,
             )
         }
+    }
+
+    fn plan_installed_propulsion(
+        &self,
+        ambient_pa: f64,
+    ) -> Result<Option<VehiclePropulsionAllocation>, FlightError> {
+        if self.vehicle.engines.is_empty() && self.vehicle.systems.is_empty() {
+            return Ok(None);
+        }
+        let vessel_throttle = if self.engine_active {
+            self.propulsion_actual
+        } else {
+            0.0
+        };
+        let engine_throttles: Vec<_> = self
+            .engine_throttle_overrides
+            .iter()
+            .map(|override_throttle| override_throttle.unwrap_or(vessel_throttle))
+            .collect();
+        let system_throttles: Vec<Vec<_>> = self
+            .system_throttle_overrides
+            .iter()
+            .map(|chambers| {
+                chambers
+                    .iter()
+                    .map(|override_throttle| override_throttle.unwrap_or(vessel_throttle))
+                    .collect()
+            })
+            .collect();
+        self.vehicle
+            .plan_propulsion_step(
+                &self.resource_state,
+                &engine_throttles,
+                &system_throttles,
+                ambient_pa,
+                FLIGHT_STEP_S,
+            )
+            .map(Some)
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))
     }
 
     /// Arm the baked path's wake condition in the simulation-time scheduler:
@@ -589,7 +628,7 @@ impl FlightAuthority {
         let (parachute_force_body_n, parachute_moment_body_nm) =
             self.advance_parachutes(kinematics, atmosphere_sample)?;
         let control_allocation = self.allocate_controls(kinematics, mode)?;
-        let jet_moment = control_allocation.moment_body_nm;
+        let mut jet_moment = control_allocation.moment_body_nm;
         let precomputed_aero = control_allocation.aero_result;
         let rcs_force_body_n = self.allocate_explicit_force();
         // Only an exactly empty sampled medium permits zero force; the
@@ -601,7 +640,14 @@ impl FlightAuthority {
         let band = self.upper_band_drag(kinematics, density_kg_m3);
         let skip_aero = vacuum || band.is_some();
         let (band_drag_body_n, band_q_pa) = band.unwrap_or((DVec3::ZERO, 0.0));
-        let thrust_n = self.thrust_n();
+        let propulsion_allocation =
+            self.plan_installed_propulsion(atmosphere_sample.pressure_pa)?;
+        let propulsion_force_body_n = if let Some(allocation) = &propulsion_allocation {
+            jet_moment += allocation.moment_body_nm;
+            allocation.force_body_n
+        } else {
+            DVec3::X * self.thrust_n()
+        };
         // Contact-active ticks integrate through Rapier with the same
         // sampled loads; the free-flight integrator never runs for them.
         // The rails coast below is additionally guarded, so no baked batch
@@ -616,7 +662,7 @@ impl FlightAuthority {
                 kinematics,
                 jet_moment,
                 rcs_force_body_n,
-                thrust_n,
+                propulsion_force_body_n,
                 band_drag_body_n,
                 parachute_force_body_n,
                 parachute_moment_body_nm,
@@ -624,7 +670,7 @@ impl FlightAuthority {
                 precomputed_aero,
             )?
         } else if self.regime == FlightRegime::Coast
-            && thrust_n == 0.0
+            && propulsion_force_body_n == DVec3::ZERO
             && skip_aero
             && !self.landing_gear_transitioning()
             && !self.parachute_rails_ineligible()
@@ -637,7 +683,7 @@ impl FlightAuthority {
                     body_state,
                     jet_moment,
                     rcs_force_body_n,
-                    thrust_n,
+                    propulsion_force_body_n,
                     band_drag_body_n,
                     parachute_force_body_n,
                     parachute_moment_body_nm,
@@ -653,7 +699,7 @@ impl FlightAuthority {
                 body_state,
                 jet_moment,
                 rcs_force_body_n,
-                thrust_n,
+                propulsion_force_body_n,
                 band_drag_body_n,
                 parachute_force_body_n,
                 parachute_moment_body_nm,
@@ -661,6 +707,20 @@ impl FlightAuthority {
                 precomputed_aero,
             )?
         };
+        if let Some(allocation) = &propulsion_allocation {
+            let frame_shift = self
+                .vehicle
+                .commit_propulsion_step(&mut self.resource_state, allocation)
+                .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+            self.apply_resource_frame_shift(frame_shift, &mut next)?;
+            self.last_propulsion_force_body_n = allocation.force_body_n;
+            self.last_propellant_flow_kg_s = allocation.total_propellant_flow_kg_s;
+            self.fuel_limited = allocation.fuel_limited;
+        } else {
+            self.last_propulsion_force_body_n = propulsion_force_body_n;
+            self.last_propellant_flow_kg_s = 0.0;
+            self.fuel_limited = false;
+        }
         if !contact_active {
             self.advance_freeflight_landing_gear()?;
         }

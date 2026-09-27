@@ -12,11 +12,14 @@ engine, plus piston/electric propeller drives and a
 stateful, heat-budgeted turboprop takeoff path on a reusable ideal actuator
 disk (section 9), steady electric spacecraft thrusters (section 13), and
 continuous/pulsed fusion propulsion (section 14).
-Tank depletion wiring, the flight-loop allocator,
-transient piston/electric source and prop-shaft
-state, finite-blade propeller maps, an independent free-power-turbine spool,
-high-fidelity scramjet shock-train/finite-rate chemistry, fusion confinement
-and transient thermal fidelity, and the editor UI are still TBD (see section 18).
+Runtime propellant draw for installed liquid/solid rocket engines and
+multi-chamber systems, per-engine throttle allocation, explicit tank transfer,
+and moving-mass/inertia updates are implemented. Resource coupling for the
+air-breathing, electric, shaft-power, and fusion families, transient
+piston/electric source and prop-shaft state, finite-blade propeller maps, an
+independent free-power-turbine spool, high-fidelity scramjet shock-train and
+finite-rate chemistry, fusion confinement and transient thermal fidelity, and
+the editor UI are still TBD (see section 18).
 
 ## 1. Design goal
 
@@ -887,10 +890,48 @@ Bevy/Tokio/wgpu).
   clock), altitude analyzer over any `AtmosphereConfig` (the Juno
   Performance Analyzer backend: ~180 ns/point, a 21-row curve in under
   4 us), and engine mounts in `VehicleDefinition` with point-mass bake
-  aggregation plus uniform-command thrust queries.
+  aggregation, per-mount operating-point allocation, and mass-flow queries.
+- Flight-authority liquid-engine and multi-chamber-system draws use each
+  operating point's kg/s and mixture ratio, reserve compatible reachable
+  mixed/component tanks through assembly resource connectivity, and update
+  tank inventory, vehicle mass, inertia, and body-frame COM each fixed tick.
+  Solid motors use their compiled burn curve and remaining-grain query. Named
+  tanks support explicit, mass-conserving transfers over an open resource path;
+  no authored pipe geometry or detailed pipeline solver is required.
+  `flight-authority/benches/resource_allocation.rs` measures the allocator on a
+  32-engine/64-tank 120-Hz vehicle workload; the current optimized local run
+  measured 4.35–4.56 us per allocation.
 - Plume handoff: `EnginePlumeState` maps field-for-field into
   `plume-core` `PlumeSource` through the single `engine_plume_source`
   choke point, with no new cross-crate dependency.
+
+#### Runtime resource contract
+
+- State is `VehicleResourceState`: one remaining-mass value per installed tank,
+  plus one burn clock and ignition bit per solid motor.
+- Inputs are installed-engine and chamber throttle commands, ambient pressure,
+  fixed-step duration, and tank-to-engine-port reachability from the assembly
+  graph. Output is the allocated body wrench, actual throttles, per-tank draw,
+  propellant mass flow, fuel-limited status, and next solid-motor burn state.
+- A liquid/system operating point supplies each requested kg/s. For a resource
+  group, requested mass is `sum(mass_flow_i * dt)`. Compatible mixed inventory
+  is drawn first; split bipropellant inventory is constrained by the smaller
+  available oxidizer/fuel amount at each engine's mixture ratio. A shared
+  availability scale reduces each engine's requested throttle proportionally;
+  engines that would fall below their minimum stable throttle are shut off and
+  the remaining demand is reallocated. Pure working-fluid engines match the
+  compiled fluid identity rather than the plume-label propellant pair.
+- Commit conserves total mass: tank and grain mass changes update vehicle mass,
+  first moment, and inertia about the new center of mass, then shift all baked
+  body-frame geometry and the inertial state to that frame. The commit returns
+  the frame shift; tank transfers conserve mass and enforce source inventory,
+  destination capacity, resource identity, and open assembly connectivity.
+- Regression cases pin liquid demand/tank-draw closure within `1e-10 kg` for
+  0.1-second steps, summed thrust within `1e-8 N`, vehicle mass change within
+  `1e-9 kg` (solid grain: `1e-8 kg`), and transfer conservation within
+  `1e-12 kg`. These are floating-point regression tolerances, not uncertainty
+  estimates for the underlying engine constitutive models. The assembly test
+  verifies that a closed hatch blocks feed.
 
 ### 18.2 Tails closed after v1
 
@@ -907,8 +948,8 @@ Bevy/Tokio/wgpu).
 - Thermal interface data: chamber stagnation power, exhaust kinetic
   power (ordering pinned), nozzle wall area; the graph hookup waits for
   a runtime thermal graph to exist.
-- Solid depletion queries: remaining grain vs burn clock, vehicle mass
-  with grain burned off (inertia held, documented).
+- Solid depletion queries: remaining grain vs burn clock; the flight loop
+  now applies grain mass and point-mass inertia changes along that clock.
 - Tanks and feed lines: thin-wall vessels with weld/fixture allowance,
   Darcy-Weisbach + minor-loss drops with a velocity gate (refusal, not
   derating), baker `[[tanks]]` with mass aggregation and a
@@ -1152,10 +1193,8 @@ Known v5 correctness debt:
 
 ### 18.7 Still deferred
 
-Tank depletion wiring into the flight loop (the queries exist; the loop
-still flies baked mass), per-engine
-allocation in the flight loop (authority pairs exist; the allocator
-still sees one lever), transient piston/electric source startup and
+Resource coupling for air-breathing/ESTOC, electric, shaft-power, and fusion
+propulsion remains future work, as do transient piston/electric source startup and
 propeller-shaft inertia, finite-blade propeller pitch/stall/profile maps, and
 an independent free-power-turbine/prop-rotor inertia model (the current
 turboprop extracts power through the shared normalized gas-generator shaft),

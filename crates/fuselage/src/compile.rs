@@ -21,8 +21,8 @@
 use glam::{DMat3, DQuat, DVec3, DVec4};
 use serde::{Deserialize, Serialize};
 use thessa_sim_core::{
-    AeroPanel, ControlHinge, ControlSurfaceDefinition, Propellant, TankMount, TankShape, TankSpec,
-    diederich_lift_slope,
+    AeroPanel, ControlHinge, ControlSurfaceDefinition, Propellant, StoredPropellant, TankMount,
+    TankResource, TankShape, TankSpec, diederich_lift_slope,
 };
 
 use crate::summary::CompiledBodySummary;
@@ -124,6 +124,28 @@ pub enum TankComponent {
 pub enum TankContents {
     Pair(Propellant),
     Fluid(crate::StoredFluid),
+}
+
+fn tank_resource(contents: TankContents, component: TankComponent) -> TankResource {
+    match contents {
+        TankContents::Pair(propellant) => match component {
+            TankComponent::Bulk => TankResource::Pair(propellant),
+            TankComponent::Oxidizer => TankResource::Oxidizer(propellant),
+            TankComponent::Fuel => TankResource::Fuel(propellant),
+            TankComponent::Stored => TankResource::Pair(propellant),
+        },
+        TankContents::Fluid(fluid) => TankResource::Stored(match fluid {
+            crate::StoredFluid::Lox => StoredPropellant::Lox,
+            crate::StoredFluid::LiquidMethane => StoredPropellant::LiquidMethane,
+            crate::StoredFluid::LiquidHydrogen => StoredPropellant::LiquidHydrogen,
+            crate::StoredFluid::Rp1 => StoredPropellant::Rp1,
+            crate::StoredFluid::Nto => StoredPropellant::Nto,
+            crate::StoredFluid::Mmh => StoredPropellant::Mmh,
+            crate::StoredFluid::Hydrazine => StoredPropellant::Hydrazine,
+            crate::StoredFluid::Ammonia => StoredPropellant::Ammonia,
+            crate::StoredFluid::Water => StoredPropellant::Water,
+        }),
+    }
 }
 
 /// Dry-air gas constant in J/kg/K for cabin air inventory.
@@ -1993,10 +2015,12 @@ impl<'a> Compiler<'a> {
             })?;
         let position = centroid + self.body.origin_body_m;
         let mount = TankMount {
+            name: name.into(),
             tank,
             position_body_m: position.to_array(),
             intrinsic_inertia_body_kg_m2,
             initial_propellant_kg: Some(initial_propellant_kg),
+            resource: tank_resource(contents, component),
         };
         mount
             .validate()

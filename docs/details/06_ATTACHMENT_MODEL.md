@@ -21,9 +21,10 @@ Separate parts assemble into one craft through authored interfaces:
 - fuel reachability: which tanks can feed which engine ports.
 
 Non-goals in this slice: per-joint loads, structural failure and cluster
-splitting, runtime docking/undocking, finite-rate cabin flow, fuel *flow*
-simulation (reachability only), airlock parts, struts and fuel lines
-(they require explicit non-tree graph edges).
+splitting, runtime docking/undocking, finite-rate cabin flow, airlock parts,
+struts and fuel lines (they require explicit non-tree graph edges). Fuel draw
+uses reachable tank inventory and engine mass flow without solving pressure or
+flow through authored pipe geometry.
 
 ## 2. Nodes (hangar authoring)
 
@@ -75,7 +76,11 @@ Volumes are non-tank regions; tanks are never crew volumes:
   domain.
 - **Fuel reachability** (`feed_paths`): tank regions to `engine-mount`
   ports through resource-open links, as qualified `body.region` →
-  `body.port` pairs. Closed hatches block fuel like sealed KSP docks.
+  `body.port` pairs (`Bipropellant` regions expose `body.region-ox` and
+  `body.region-fuel`). Closed hatches block fuel like sealed KSP docks. The
+  flight allocator draws from the reachable inventory according to installed
+  rocket operating-point flow and mixture ratio; named compatible tanks may
+  also be manually transferred across an open resource path.
 
 ## 5. Runtime connectivity (`thessa-vehicle-core::assembly`)
 

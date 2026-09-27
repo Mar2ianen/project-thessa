@@ -16,6 +16,7 @@
 // Validity guards use `!(x > 0.0)` so NaN fails closed (repo convention).
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
 
+use crate::feed::StoredPropellant;
 use serde::{Deserialize, Serialize};
 
 use super::AEROSPIKE_BASE_FRACTION;
@@ -266,6 +267,13 @@ impl NuclearThermalSpec {
             // Plume-label approximation for the working fluid (the thermo
             // above is authoritative; this selects render hues downstream).
             propellant: self.fluid.tank_propellant(),
+            mixture_ratio: None,
+            working_fluid: Some(match self.fluid {
+                NtrFluid::Hydrogen => StoredPropellant::LiquidHydrogen,
+                NtrFluid::Methane => StoredPropellant::LiquidMethane,
+                NtrFluid::Ammonia => StoredPropellant::Ammonia,
+                NtrFluid::Water => StoredPropellant::Water,
+            }),
             cycle: EngineCycle::StagedCombustion,
             chamber_pressure_pa: chamber_pa,
             throat_area_m2,

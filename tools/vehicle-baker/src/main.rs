@@ -31,11 +31,12 @@ use thessa_sim_core::{
     PropulsionSystemSpec, PulsedFusionMount, PulsedFusionSpec, RadiatorDeployment, RadiatorSpec,
     ReactionWheelBankSpec, ReactorSpec, RigidBodyProperties, ShaftPowerSourceSpec, ShaftSpec,
     SolarArrayDeployment, SolarArraySpec, SolarArrayTracking, SolidGrainGeometry, SolidMotorSpec,
-    SystemMount, TankMount, TankShape, TankSpec, ThermalLinkSpec, ThermalNodeSpec, ThermalSystem,
-    TurbopropDriveSpec, TurbopropMount, UltracapacitorSpec, VehicleAssembly, VehicleDefinition,
-    WheelBrakeSpec, WheelChassisRetractionSpec, WheelChassisSpec, WheelDriveSpec, WheelLayout,
-    WheelStrutSpec, WheelTireSpec, analyze_airbreathing, analyze_altitude, analyze_estoc,
-    analyze_propeller_drive, analyze_turboprop_drive, default_convective_k,
+    SystemMount, TankMount, TankResource, TankShape, TankSpec, ThermalLinkSpec, ThermalNodeSpec,
+    ThermalSystem, TurbopropDriveSpec, TurbopropMount, UltracapacitorSpec, VehicleAssembly,
+    VehicleDefinition, WheelBrakeSpec, WheelChassisRetractionSpec, WheelChassisSpec,
+    WheelDriveSpec, WheelLayout, WheelStrutSpec, WheelTireSpec, analyze_airbreathing,
+    analyze_altitude, analyze_estoc, analyze_propeller_drive, analyze_turboprop_drive,
+    default_convective_k,
 };
 
 mod analyzer;

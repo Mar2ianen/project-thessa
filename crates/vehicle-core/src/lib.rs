@@ -20,6 +20,7 @@ mod parachute;
 mod part_command;
 mod power;
 mod reaction_wheel;
+mod resources;
 mod shield;
 mod thermal;
 mod vehicle;
@@ -78,6 +79,7 @@ pub use reaction_wheel::{
     ReactionWheelAllocation, ReactionWheelBankSpec, ReactionWheelError, allocate_reaction_wheels,
     allocate_reaction_wheels_with_enabled_banks,
 };
+pub use resources::{VehiclePropulsionAllocation, VehicleResourceState};
 pub use shield::{HeatShieldMount, ShieldError};
 pub use thermal::{
     RadiatorDeployment, RadiatorSpec, RadiatorTelemetry, ThermalCommand, ThermalError,

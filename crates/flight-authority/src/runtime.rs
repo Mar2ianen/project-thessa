@@ -37,12 +37,12 @@ use thessa_sim_core::{
     LandingGearActuatorPoint, LandingLegState, OnRailsCache, PanelAeroModel, PanelSoA,
     ParachuteCommand, ParachuteEnvironment, ParachuteLoad, ParachutePhase, ParachuteState,
     ReactionWheelAllocation, RigidBodyState, ScheduledEvent, ScheduledKind, SimTime,
-    TestParticleState, TickIntegratorConfig, VehicleDefinition, VehiclePartCommand, WORLD_TICK_S,
-    WheelBrakeState, WheelChassisActuatorPoint, WheelChassisState, WheelDrivePoint,
-    X15StarterProfile, allocate_reaction_wheels_with_enabled_banks, control_surface_commands,
-    evaluate_flight_forces, evaluate_flight_forces_soa, evaluate_flight_forces_with_aero_result,
-    integrate_attitude_step, integrate_rigid_body_step_soa,
-    integrate_rigid_body_step_with_aero_result,
+    TestParticleState, TickIntegratorConfig, VehicleDefinition, VehiclePartCommand,
+    VehiclePropulsionAllocation, VehicleResourceState, WORLD_TICK_S, WheelBrakeState,
+    WheelChassisActuatorPoint, WheelChassisState, WheelDrivePoint, X15StarterProfile,
+    allocate_reaction_wheels_with_enabled_banks, control_surface_commands, evaluate_flight_forces,
+    evaluate_flight_forces_soa, evaluate_flight_forces_with_aero_result, integrate_attitude_step,
+    integrate_rigid_body_step_soa, integrate_rigid_body_step_with_aero_result,
 };
 use thessa_worldgen_rocky::field::{ObstacleReport, ObstacleTrackCertificate, PlanetField};
 
@@ -153,7 +153,7 @@ fn powered_step_input(
     gravity: DVec3,
     jet_moment: DVec3,
     rcs_force_body_n: DVec3,
-    thrust_n: f64,
+    propulsion_force_body_n: DVec3,
     band_drag_body_n: DVec3,
     parachute_force_body_n: DVec3,
     parachute_moment_body_nm: DVec3,
@@ -165,7 +165,7 @@ fn powered_step_input(
         position_body_m: kinematics.relative_position_body_m,
         wind_velocity_body_mps: state.orientation_body_to_inertial.inverse()
             * body_velocity_inertial_mps,
-        extra_force_body_n: DVec3::X * thrust_n
+        extra_force_body_n: propulsion_force_body_n
             + rcs_force_body_n
             + band_drag_body_n
             + parachute_force_body_n,
@@ -210,6 +210,8 @@ pub struct FlightAuthority {
     pub recipe_max_elevation_m: f64,
     pub launch_site_dir: Option<[f64; 3]>,
     pub vehicle: VehicleDefinition,
+    /// Mutable propellant inventory and solid-motor burn clocks.
+    pub resource_state: VehicleResourceState,
     pub aero_model: PanelAeroModel,
     /// Compiled SoA geometry and reusable SIMD scratch for the authoritative
     /// per-step aero evaluation. The reference geometry is retained so hinge
@@ -340,6 +342,12 @@ pub struct FlightAuthority {
     propulsion_target: f64,
     propulsion_dynamics_active: bool,
     propulsion_dynamics: ActuatorDynamics,
+    /// Optional per-mount throttle overrides; `None` follows the vessel lever.
+    engine_throttle_overrides: Vec<Option<f64>>,
+    system_throttle_overrides: Vec<Vec<Option<f64>>>,
+    pub last_propulsion_force_body_n: DVec3,
+    pub last_propellant_flow_kg_s: f64,
+    pub fuel_limited: bool,
 }
 
 impl FlightAuthority {
@@ -576,7 +584,25 @@ impl FlightAuthority {
             .map_err(|error| format!("terrain obstacle report: {error}"))
     }
 
+    /// Build the compatibility X-15 flight used by the starter scene.
     pub fn new(ephemeris: &BakedEphemeris, reference_body: BodyId) -> Result<Self, String> {
+        let mut authority = Self::new_with_vehicle(ephemeris, reference_body, x15_vehicle()?)?;
+        authority.set_legacy_propulsion(1.0, true);
+        Ok(authority)
+    }
+
+    /// Build an authoritative flight around a baked vehicle definition.
+    /// Procedural engines and tanks start inactive with their authored fill
+    /// levels; the compatibility constructor above retains the starter's
+    /// running legacy engine.
+    pub fn new_with_vehicle(
+        ephemeris: &BakedEphemeris,
+        reference_body: BodyId,
+        vehicle: VehicleDefinition,
+    ) -> Result<Self, String> {
+        vehicle
+            .validate()
+            .map_err(|error| format!("vehicle definition is invalid: {error}"))?;
         let body = ephemeris
             .body(reference_body)
             .map_err(|error| format!("reference body is unavailable: {error}"))?;
@@ -616,7 +642,13 @@ impl FlightAuthority {
             DVec3::ZERO,
         )
         .map_err(|error| format!("X-15 initial state is invalid: {error}"))?;
-        let vehicle = x15_vehicle()?;
+        let resource_state = vehicle.initial_resource_state();
+        let engine_throttle_overrides = vec![None; vehicle.engines.len()];
+        let system_throttle_overrides = vehicle
+            .systems
+            .iter()
+            .map(|mount| vec![None; mount.system.chambers.len()])
+            .collect();
         let control_reference_geometry = vehicle.aero_geometry.clone();
         let control_deflections_rad = vec![0.0; vehicle.control_surfaces.len()];
         let wheel_spin_rad_s: Vec<Vec<f64>> = vehicle
@@ -694,6 +726,7 @@ impl FlightAuthority {
             recipe_max_elevation_m,
             launch_site_dir: None,
             vehicle,
+            resource_state,
             aero_model,
             aero_panels,
             aero_scratch: AeroSimdScratch::default(),
@@ -705,8 +738,8 @@ impl FlightAuthority {
             relative_position_m: initial_relative_position,
             flight_time_s: 0.0,
             world_tick: thessa_sim_core::WorldTick::default(),
-            throttle: 1.0,
-            engine_active: true,
+            throttle: 0.0,
+            engine_active: false,
             sas_enabled: true,
             rcs_enabled: true,
             reaction_wheels_enabled: true,
@@ -759,8 +792,8 @@ impl FlightAuthority {
             explicit_force_demand_body_n: None,
             explicit_moment_demand_nm: None,
             guidance_state_dependent: false,
-            propulsion_actual: 1.0,
-            propulsion_target: 1.0,
+            propulsion_actual: 0.0,
+            propulsion_target: 0.0,
             propulsion_dynamics_active: false,
             propulsion_dynamics: ActuatorDynamics {
                 response_s: 0.12,
@@ -768,6 +801,11 @@ impl FlightAuthority {
                 min_command: 0.0,
                 max_command: 1.0,
             },
+            engine_throttle_overrides,
+            system_throttle_overrides,
+            last_propulsion_force_body_n: DVec3::ZERO,
+            last_propellant_flow_kg_s: 0.0,
+            fuel_limited: false,
         })
     }
 
@@ -968,7 +1006,49 @@ impl FlightAuthority {
             VehiclePartCommand::Parachute { name, command } => {
                 self.command_parachute(name, *command)?;
             }
+            VehiclePartCommand::SetEngineThrottle { name, throttle } => {
+                self.set_engine_throttle(name, *throttle)?;
+            }
+            VehiclePartCommand::TransferPropellant {
+                source_tank,
+                destination_tank,
+                mass_kg,
+            } => {
+                self.transfer_propellant(source_tank, destination_tank, *mass_kg)?;
+            }
         }
+        Ok(())
+    }
+
+    /// Live propellant mass for a named tank.
+    pub fn tank_propellant_kg(&self, tank_name: &str) -> Result<f64, FlightError> {
+        self.vehicle
+            .tank_propellant_kg(&self.resource_state, tank_name)
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))
+    }
+
+    /// Manually transfer propellant and immediately update vehicle mass,
+    /// inertia, body-frame geometry, and the center-of-mass state.
+    pub fn transfer_propellant(
+        &mut self,
+        source_name: &str,
+        destination_name: &str,
+        mass_kg: f64,
+    ) -> Result<(), FlightError> {
+        let frame_shift = self
+            .vehicle
+            .transfer_propellant(
+                &mut self.resource_state,
+                source_name,
+                destination_name,
+                mass_kg,
+            )
+            .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+        let mut state = self.state;
+        self.apply_resource_frame_shift(frame_shift, &mut state)?;
+        self.state = state;
+        self.rails.invalidate();
+        self.scheduler.clear_rails_wakes();
         Ok(())
     }
 

@@ -322,7 +322,9 @@ impl VehicleAsset {
                     tank.propellant_kg,
                     tank.mount.position_body_m
                 );
-                body_tank_mounts.push(tank.mount);
+                let mut mount = tank.mount.clone();
+                mount.name = format!("{}.{}", body.name, tank.region_name);
+                body_tank_mounts.push(mount);
             }
             for shield in &compiled.heat_shields {
                 println!(

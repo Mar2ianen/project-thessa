@@ -14,5 +14,8 @@ pub(crate) mod atmosphere {
     };
 }
 
-pub use feed::{CompiledTank, FEED_MAX_VELOCITY_MPS, FeedLine, TankMount, TankShape, TankSpec};
+pub use feed::{
+    CompiledTank, FEED_MAX_VELOCITY_MPS, FeedLine, StoredPropellant, TankMount, TankResource,
+    TankShape, TankSpec,
+};
 pub use propulsion::*;

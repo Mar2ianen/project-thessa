@@ -1155,7 +1155,7 @@ impl VehicleDefinition {
     }
 
     /// Translate every stored point from the old COM frame into a new one.
-    fn shift_body_frame_origin(&mut self, shift: DVec3) {
+    pub(crate) fn shift_body_frame_origin(&mut self, shift: DVec3) {
         for panel in &mut self.aero_geometry.panels {
             panel.position_body_m += shift;
             panel.center_of_pressure_body_m += shift;
@@ -1246,7 +1246,7 @@ impl VehicleDefinition {
         }
     }
 
-    fn body_frame_shift_is_finite(&self, shift: DVec3) -> bool {
+    pub(crate) fn body_frame_shift_is_finite(&self, shift: DVec3) -> bool {
         let shifted_point_is_finite = |point: DVec3| (point + shift).is_finite();
         let shifted_station_is_finite =
             |station: &[f64; 3]| shifted_point_is_finite(DVec3::from_array(*station));
@@ -3469,10 +3469,12 @@ mod tests {
         let position = DVec3::new(1.0, -2.0, 0.5);
         vehicle = vehicle
             .with_tanks(vec![TankMount {
+                name: "test-tank".into(),
                 tank,
                 position_body_m: position.to_array(),
                 intrinsic_inertia_body_kg_m2: intrinsic,
                 initial_propellant_kg: Some(tank.full_propellant_kg),
+                resource: crate::TankResource::Unspecified,
             }])
             .expect("mount");
         vehicle.bake_tank_masses().expect("mass bake");

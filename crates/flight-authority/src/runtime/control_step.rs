@@ -40,6 +40,10 @@ impl FlightAuthority {
     /// semantics. This is used by the old wire representation and by tests
     /// that directly exercise the original X-15 path.
     pub fn set_legacy_propulsion(&mut self, throttle: f64, active: bool) {
+        self.engine_throttle_overrides.fill(None);
+        for chamber_overrides in &mut self.system_throttle_overrides {
+            chamber_overrides.fill(None);
+        }
         self.throttle = if throttle.is_finite() {
             throttle.clamp(0.0, 1.0)
         } else {
@@ -65,6 +69,10 @@ impl FlightAuthority {
         self.throttle = propulsion.normalized;
         self.propulsion_target = propulsion.normalized;
         self.propulsion_dynamics_active = true;
+        self.engine_throttle_overrides.fill(None);
+        for chamber_overrides in &mut self.system_throttle_overrides {
+            chamber_overrides.fill(None);
+        }
         if propulsion.normalized > 0.0 {
             self.engine_active = true;
         }
@@ -80,6 +88,73 @@ impl FlightAuthority {
         self.propulsion_actual = 0.0;
         self.propulsion_dynamics_active = false;
         self.engine_active = false;
+        self.engine_throttle_overrides.fill(None);
+        for chamber_overrides in &mut self.system_throttle_overrides {
+            chamber_overrides.fill(None);
+        }
+    }
+
+    /// Set a throttle override for one named engine, propulsion system, or
+    /// qualified chamber (`system.chamber`). Passing through `VehiclePartCommand`
+    /// gives pilot, action-group, and autopilot callers the same route.
+    pub fn set_engine_throttle(&mut self, name: &str, throttle: f64) -> Result<(), FlightError> {
+        if name.trim().is_empty() || !throttle.is_finite() || !(0.0..=1.0).contains(&throttle) {
+            return Err(FlightError::InvalidInput(
+                "engine throttle needs a component name and a finite value in [0, 1]".into(),
+            ));
+        }
+        let engine_matches: Vec<_> = self
+            .vehicle
+            .engines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, mount)| (mount.name == name).then_some(index))
+            .collect();
+        let system_matches: Vec<_> = self
+            .vehicle
+            .systems
+            .iter()
+            .enumerate()
+            .filter_map(|(system_index, mount)| (mount.name == name).then_some(system_index))
+            .collect();
+        let chamber_matches: Vec<_> = self
+            .vehicle
+            .systems
+            .iter()
+            .enumerate()
+            .flat_map(|(system_index, mount)| {
+                mount.system.chambers.iter().enumerate().filter_map(
+                    move |(chamber_index, chamber)| {
+                        (format!("{}.{}", mount.name, chamber.name) == name)
+                            .then_some((system_index, chamber_index))
+                    },
+                )
+            })
+            .collect();
+        let match_count = engine_matches.len() + system_matches.len() + chamber_matches.len();
+        if match_count == 0 {
+            return Err(FlightError::InvalidInput(format!(
+                "vehicle has no rocket engine or chamber named '{name}'"
+            )));
+        }
+        if match_count != 1 {
+            return Err(FlightError::InvalidInput(format!(
+                "engine throttle name '{name}' is ambiguous"
+            )));
+        }
+        if let Some(index) = engine_matches.first() {
+            self.engine_throttle_overrides[*index] = Some(throttle);
+        } else if let Some(index) = system_matches.first() {
+            self.system_throttle_overrides[*index].fill(Some(throttle));
+        } else if let Some((system_index, chamber_index)) = chamber_matches.first() {
+            self.system_throttle_overrides[*system_index][*chamber_index] = Some(throttle);
+        }
+        if throttle > 0.0 {
+            self.engine_active = true;
+        }
+        self.rails.invalidate();
+        self.scheduler.clear_rails_wakes();
+        Ok(())
     }
 
     pub(super) fn advance_propulsion_actuator(&mut self) -> Result<(), FlightError> {
@@ -366,6 +441,9 @@ impl FlightAuthority {
     }
 
     pub fn thrust_n(&self) -> f64 {
+        if !self.vehicle.engines.is_empty() || !self.vehicle.systems.is_empty() {
+            return self.last_propulsion_force_body_n.length();
+        }
         if self.propulsion_dynamics_active {
             self.propulsion_actual * 254_000.0
         } else if self.engine_active {

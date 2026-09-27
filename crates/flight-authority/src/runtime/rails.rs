@@ -205,8 +205,22 @@ impl FlightAuthority {
             return Ok(CoastAdvance::NotEligible);
         }
         if self.thrust_n() != 0.0
+            || (self.engine_active
+                && self.throttle > 1.0e-8
+                && (!self.vehicle.engines.is_empty() || !self.vehicle.systems.is_empty()))
             || (self.propulsion_dynamics_active
                 && (self.propulsion_target > 1.0e-8 || self.propulsion_actual > 1.0e-8))
+            || self
+                .engine_throttle_overrides
+                .iter()
+                .flatten()
+                .any(|throttle| *throttle > 1.0e-8)
+            || self
+                .system_throttle_overrides
+                .iter()
+                .flatten()
+                .flatten()
+                .any(|throttle| *throttle > 1.0e-8)
             || self.trace.is_some()
         {
             return Ok(CoastAdvance::NotEligible);

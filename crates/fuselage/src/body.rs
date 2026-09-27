@@ -32,6 +32,7 @@ pub enum StoredFluid {
     Nto,
     Mmh,
     Hydrazine,
+    Ammonia,
     Water,
 }
 
@@ -46,6 +47,7 @@ impl StoredFluid {
             Self::Nto => 1440.0,
             Self::Mmh => 878.0,
             Self::Hydrazine => 1008.0,
+            Self::Ammonia => 682.0,
             Self::Water => 1000.0,
         }
     }

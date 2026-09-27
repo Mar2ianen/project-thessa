@@ -103,6 +103,9 @@ pub struct CompiledChamber {
 pub struct CompiledPropulsionSystem {
     pub name: String,
     pub propellant: Propellant,
+    /// Oxidizer-to-fuel mass ratio override; `None` uses the pair reference.
+    #[serde(default)]
+    pub mixture_ratio: Option<f64>,
     pub cycle: EngineCycle,
     pub chamber_pressure_pa: f64,
     pub gamma: f64,
@@ -448,6 +451,7 @@ impl PropulsionSystemSpec {
         Ok(CompiledPropulsionSystem {
             name: self.name.clone(),
             propellant: self.propellant,
+            mixture_ratio: self.mixture_ratio,
             cycle: self.cycle,
             chamber_pressure_pa: self.chamber_pressure_pa,
             gamma: thermo.gamma,

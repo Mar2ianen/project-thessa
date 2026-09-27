@@ -1,6 +1,7 @@
 //! Liquid chemical rocket engines: Juno-simple-mode authoring compiled into
 //! a solved design point with derived mass/power/thermal interfaces.
 
+use crate::feed::StoredPropellant;
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -300,6 +301,8 @@ impl LiquidEngineSpec {
         Ok(CompiledLiquid {
             name: self.name.clone(),
             propellant: self.propellant,
+            mixture_ratio: self.mixture_ratio,
+            working_fluid: None,
             cycle: self.cycle,
             chamber_pressure_pa: self.chamber_pressure_pa,
             throat_area_m2,
@@ -368,6 +371,13 @@ fn full_kinetic_efficiency() -> f64 {
 pub struct CompiledLiquid {
     pub name: String,
     pub propellant: Propellant,
+    /// Oxidizer-to-fuel mass ratio override; `None` uses the pair reference.
+    #[serde(default)]
+    pub mixture_ratio: Option<f64>,
+    /// Pure working fluid used by engines such as nuclear-thermal rockets.
+    /// When present, tank matching uses this species instead of a chemical pair.
+    #[serde(default)]
+    pub working_fluid: Option<StoredPropellant>,
     pub cycle: EngineCycle,
     pub chamber_pressure_pa: f64,
     pub throat_area_m2: f64,

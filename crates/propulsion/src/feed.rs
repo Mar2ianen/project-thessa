@@ -12,7 +12,43 @@
 use glam::{DMat3, DVec3};
 use serde::{Deserialize, Serialize};
 
-use crate::propulsion::{ChamberMaterial, PropulsionError};
+use crate::propulsion::{ChamberMaterial, Propellant, PropulsionError};
+
+/// A pure stored substance used by a tank without chamber-pair metadata.
+///
+/// Kept in the propulsion crate so the vehicle runtime can match manually
+/// authored component tanks to an engine without depending on the fuselage
+/// compiler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StoredPropellant {
+    Lox,
+    LiquidMethane,
+    LiquidHydrogen,
+    Rp1,
+    Nto,
+    Mmh,
+    Hydrazine,
+    Ammonia,
+    Water,
+}
+
+/// Resource identity and mixture semantics for an installed tank.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TankResource {
+    /// Compatibility for old or density-only assets with no chemical label.
+    #[default]
+    Unspecified,
+    /// Premixed pair, modeled as one conserved resource mass.
+    Pair(Propellant),
+    /// Pure oxidizer component for a named propellant family.
+    Oxidizer(Propellant),
+    /// Pure fuel component for a named propellant family.
+    Fuel(Propellant),
+    /// Explicitly stored pure fluid (for example a hand-split LOX/RP-1 set).
+    Stored(StoredPropellant),
+}
 
 /// Tank shell shape.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -161,6 +197,10 @@ pub struct CompiledTank {
     pub max_pressure_pa: f64,
     /// Propellant mass at full fill for a bulk density (kg).
     pub full_propellant_kg: f64,
+    /// Authored shell geometry, used to update the fluid's intrinsic inertia
+    /// as the tank drains. Missing on legacy baked assets.
+    #[serde(default)]
+    pub shape: Option<TankShape>,
 }
 
 impl TankSpec {
@@ -213,6 +253,7 @@ impl TankSpec {
             dry_mass_kg,
             max_pressure_pa: self.pressure_pa,
             full_propellant_kg,
+            shape: Some(self.shape),
         })
     }
 }
@@ -221,8 +262,12 @@ impl TankSpec {
 /// Tank mass contributes its intrinsic initial-fill inertia plus the parallel
 /// axis term at bake time. `initial_propellant_kg` is optional for backward
 /// compatibility; older baked mounts are interpreted as full.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TankMount {
+    /// Stable installed-part name used by transfer commands. Empty on legacy
+    /// baked mounts; such tanks can still feed engines but are not addressable.
+    #[serde(default)]
+    pub name: String,
     pub tank: CompiledTank,
     /// Mount station in vehicle body metres.
     pub position_body_m: [f64; 3],
@@ -234,6 +279,10 @@ pub struct TankMount {
     /// pre-field serialized mounts.
     #[serde(default)]
     pub initial_propellant_kg: Option<f64>,
+    /// Conserved resource in this tank. Unspecified legacy tanks act as a
+    /// generic premixed resource for compatibility.
+    #[serde(default)]
+    pub resource: TankResource,
 }
 
 fn zero_tank_inertia() -> DMat3 {
@@ -534,10 +583,12 @@ mod tests {
         .compile(800.0)
         .unwrap();
         let legacy_full = TankMount {
+            name: String::new(),
             tank,
             position_body_m: [0.0; 3],
             intrinsic_inertia_body_kg_m2: DMat3::ZERO,
             initial_propellant_kg: None,
+            resource: TankResource::Unspecified,
         };
         assert_eq!(legacy_full.loaded_propellant_kg(), tank.full_propellant_kg);
 

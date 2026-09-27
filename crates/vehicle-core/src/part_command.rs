@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ParachuteCommand;
 
-/// Idempotent control commands for currently modeled installed actuators.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Commands for currently modeled installed vehicle parts and resources.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VehiclePartCommand {
     SetRcsEnabled {
@@ -41,5 +41,16 @@ pub enum VehiclePartCommand {
     Parachute {
         name: String,
         command: ParachuteCommand,
+    },
+    /// Set one installed rocket engine or chamber's normalized throttle.
+    SetEngineThrottle {
+        name: String,
+        throttle: f64,
+    },
+    /// Manually transfer an exact propellant mass between compatible tanks.
+    TransferPropellant {
+        source_tank: String,
+        destination_tank: String,
+        mass_kg: f64,
     },
 }

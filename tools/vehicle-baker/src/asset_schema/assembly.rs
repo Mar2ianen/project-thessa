@@ -110,16 +110,22 @@ pub(crate) fn runtime_assembly(
     let mut engine_ports = Vec::new();
     for (body_index, body) in bodies.iter().enumerate() {
         for region in &body.regions {
-            if matches!(
-                region.kind,
-                RegionKind::Tank { .. }
-                    | RegionKind::FluidTank { .. }
-                    | RegionKind::Bipropellant { .. }
-            ) {
-                tanks.push(AssemblyEndpoint {
-                    name: format!("{}.{}", body.name, region.name),
-                    body: body_index,
-                });
+            match region.kind {
+                RegionKind::Tank { .. } | RegionKind::FluidTank { .. } => {
+                    tanks.push(AssemblyEndpoint {
+                        name: format!("{}.{}", body.name, region.name),
+                        body: body_index,
+                    });
+                }
+                RegionKind::Bipropellant { .. } => {
+                    for component in ["ox", "fuel"] {
+                        tanks.push(AssemblyEndpoint {
+                            name: format!("{}.{}-{component}", body.name, region.name),
+                            body: body_index,
+                        });
+                    }
+                }
+                _ => {}
             }
         }
         for port in &body.ports {

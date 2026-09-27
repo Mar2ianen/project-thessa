@@ -73,9 +73,9 @@ impl RigidBodyState {
 
 /// Constant mass properties for the first rigid-body slice.
 ///
-/// Fuel burn and moving-mass updates will replace this value between steps;
-/// the integrator does not cache mass or inertia, so those updates remain
-/// deterministic and do not require a new vehicle type.
+/// Resource-consuming engines update this value between fixed steps; the
+/// integrator does not cache mass or inertia, so fuel burn and transfer remain
+/// deterministic without a separate rigid-body representation.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct RigidBodyProperties {
     pub mass_kg: f64,

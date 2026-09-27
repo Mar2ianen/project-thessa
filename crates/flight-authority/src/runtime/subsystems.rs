@@ -3,6 +3,37 @@
 use super::*;
 
 impl FlightAuthority {
+    pub(super) fn apply_resource_frame_shift(
+        &mut self,
+        frame_shift_body_m: DVec3,
+        state: &mut RigidBodyState,
+    ) -> Result<(), FlightError> {
+        if frame_shift_body_m == DVec3::ZERO {
+            return Ok(());
+        }
+        for panel in &mut self.control_reference_geometry.panels {
+            panel.position_body_m += frame_shift_body_m;
+            panel.center_of_pressure_body_m += frame_shift_body_m;
+        }
+        for disc in &mut self.control_reference_geometry.blunt_discs {
+            disc.position_body_m += frame_shift_body_m;
+        }
+        self.aero_panels
+            .sync_geometry(&self.vehicle.aero_geometry)
+            .map_err(FlightError::Aero)?;
+
+        // The integrator tracks the current COM. Re-basing the compiled body
+        // frame therefore moves the state point by the opposite local shift.
+        let center_shift_body_m = -frame_shift_body_m;
+        let orientation = state.orientation_body_to_inertial;
+        let offset_inertial_m = orientation * center_shift_body_m;
+        let angular_velocity_inertial_rps = orientation * state.angular_velocity_body_rps;
+        state.position_inertial_m += offset_inertial_m;
+        state.velocity_inertial_mps += angular_velocity_inertial_rps.cross(offset_inertial_m);
+        self.relative_position_m += offset_inertial_m;
+        Ok(())
+    }
+
     pub(super) fn sync_wheel_runtime_state(&mut self) {
         self.wheel_spin_rad_s
             .resize_with(self.vehicle.wheel_chassis.len(), Vec::new);

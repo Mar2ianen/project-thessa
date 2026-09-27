@@ -344,10 +344,12 @@ impl TankAsset {
             shape.intrinsic_inertia_body_kg_m2(tank.dry_mass_kg, tank.full_propellant_kg)?;
         let initial_propellant_kg = tank.full_propellant_kg;
         Ok(TankMount {
+            name: self.name,
             tank,
             position_body_m: self.position_body_m,
             intrinsic_inertia_body_kg_m2,
             initial_propellant_kg: Some(initial_propellant_kg),
+            resource: self.propellant.map(TankResource::Pair).unwrap_or_default(),
         })
     }
 }

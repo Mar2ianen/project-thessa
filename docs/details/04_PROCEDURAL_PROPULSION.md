@@ -850,7 +850,8 @@ The target is an engineering game model: component topology and geometry should 
 
 ## 18. Backend implementation (v1)
 
-Shipped in `crates/sim-core/src/propulsion.rs` (MIT engine crate, no Bevy/Tokio/wgpu).
+Shipped in `crates/propulsion/src/propulsion/` (MIT engine crate, no
+Bevy/Tokio/wgpu).
 
 ### 18.1 What is modeled
 

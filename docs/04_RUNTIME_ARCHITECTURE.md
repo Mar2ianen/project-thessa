@@ -52,7 +52,12 @@ authority model.
 ## 4.2. Current workspace boundary
 
 ```text
-crates/sim-core/          MIT numerical state, time, gravity, aero, flight
+crates/sim-core/          MIT aggregate compatibility facade
+crates/aero-core/         MIT atmosphere and aerodynamic models
+crates/celestial/         MIT ephemerides, gravity fields, and simulation time
+crates/trajectory/       MIT propagation, gravity patches, and coast caches
+crates/propulsion/       MIT propulsion models and feed systems
+crates/vehicle-core/     MIT rigid-body, vehicle, and mechanism models
 crates/simd/              MIT optional numeric kernels
 crates/aero-surfaces/     MIT procedural lifting-surface authoring/compiler
 crates/fuselage/          MIT procedural body compiler
@@ -175,11 +180,17 @@ script continuations, plan cursors, and event order.
 Snapshots use a versioned envelope and bounded framed transport. Continuous
 pilot input is latest-value-wins per client; edge commands, including the
 version-5 `Command::Part` group and named subsystem commands, remain ordered.
+The server decodes each input envelope once and dispatches payload
+deserialization by its message kind. Client-observed tick fields are advisory;
+state is applied on the next available authority step without rewind or
+tick-based rejection. Valid non-unit SAS quaternions are normalized before use.
 Keyboard/HUD part commands apply immediately to local prediction and are sent
 to the authoritative server; legacy boolean state echoes cannot overwrite a
 part command unless the echoed value actually changes. Leave cleanup is
 retained even when an input queue is saturated. Outbound snapshots use a
-latest-wins slot while reliable welcome/control frames stay ordered.
+latest-wins slot while reliable welcome/control frames stay ordered. One
+encoded snapshot frame is Arc-shared across subscriber mailboxes; socket
+writers consume the shared bytes without a per-client payload copy.
 
 The current protocol is designed for a local/server prototype. Production
 prediction, interpolation policy for remote craft, authentication, persistence,

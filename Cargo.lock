@@ -5577,6 +5577,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "thessa-aero-core"
+version = "0.0.1"
+dependencies = [
+ "glam 0.32.1",
+ "rayon",
+ "serde",
+ "thessa-simd",
+]
+
+[[package]]
 name = "thessa-aero-surfaces"
 version = "0.0.1"
 dependencies = [
@@ -5631,6 +5641,17 @@ dependencies = [
  "thessa-rcbt-core",
  "thessa-rcbt-wgpu",
  "wgpu",
+]
+
+[[package]]
+name = "thessa-celestial"
+version = "0.0.1"
+dependencies = [
+ "glam 0.32.1",
+ "rayon",
+ "serde",
+ "thessa-aero-core",
+ "toml",
 ]
 
 [[package]]
@@ -5754,6 +5775,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "thessa-propulsion"
+version = "0.0.1"
+dependencies = [
+ "glam 0.32.1",
+ "serde",
+ "thessa-aero-core",
+]
+
+[[package]]
 name = "thessa-protocol"
 version = "0.0.1"
 dependencies = [
@@ -5825,9 +5855,13 @@ version = "0.0.1"
 dependencies = [
  "glam 0.32.1",
  "rayon",
- "serde",
  "serde_json",
+ "thessa-aero-core",
+ "thessa-celestial",
+ "thessa-propulsion",
  "thessa-simd",
+ "thessa-trajectory",
+ "thessa-vehicle-core",
  "toml",
 ]
 
@@ -5849,6 +5883,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "thessa-trajectory"
+version = "0.0.1"
+dependencies = [
+ "glam 0.32.1",
+ "rayon",
+ "thessa-celestial",
+ "thessa-simd",
+ "toml",
+]
+
+[[package]]
 name = "thessa-vehicle-baker"
 version = "0.0.1"
 dependencies = [
@@ -5859,6 +5904,17 @@ dependencies = [
  "thessa-fuselage",
  "thessa-sim-core",
  "toml",
+]
+
+[[package]]
+name = "thessa-vehicle-core"
+version = "0.0.1"
+dependencies = [
+ "glam 0.32.1",
+ "serde",
+ "serde_json",
+ "thessa-aero-core",
+ "thessa-propulsion",
 ]
 
 [[package]]

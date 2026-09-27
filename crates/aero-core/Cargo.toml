@@ -1,0 +1,13 @@
+[package]
+name = "thessa-aero-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+
+[dependencies]
+glam.workspace = true
+rayon.workspace = true
+serde.workspace = true
+thessa-simd = { path = "../simd" }

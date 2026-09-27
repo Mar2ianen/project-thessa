@@ -9,6 +9,7 @@
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
+use thessa_sim_core::ControlMixing;
 
 use crate::SurfaceError;
 
@@ -63,6 +64,9 @@ pub struct ControlRegion {
     /// Trailing-edge device or whole-surface rotation marker.
     #[serde(default)]
     pub kind: ControlRegionKind,
+    /// Optional channel gains baked into the runtime control definition.
+    #[serde(default)]
+    pub mixing: Option<ControlMixing>,
 }
 
 /// A fold joint at one span station.
@@ -132,6 +136,22 @@ impl ControlRegion {
                     "control region", self.name
                 )));
             }
+        }
+        if self.mixing.is_some_and(|mixing| {
+            ![
+                mixing.pitch,
+                mixing.roll,
+                mixing.yaw,
+                mixing.flap,
+                mixing.airbrake,
+            ]
+            .into_iter()
+            .all(f64::is_finite)
+        }) {
+            return Err(SurfaceError::InvalidControlRegion(format!(
+                "control region '{}' has non-finite mixing gains",
+                self.name
+            )));
         }
         if !(0.0..=1.0).contains(&s0) || !(0.0..=1.0).contains(&s1) || s0 >= s1 {
             return Err(SurfaceError::InvalidControlRegion(format!(

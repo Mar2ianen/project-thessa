@@ -19,11 +19,13 @@ promise is made for them.
 
 The checked-in vertical slice currently contains:
 
-- `thessa-sim-core`: deterministic baked ephemerides, full multi-body
-  test-particle gravity, composition-aware atmosphere samples, panel
-  aerodynamics, rigid-body flight,
-  on-rails coast caches, cohort gravity patches, piecewise analytic affine
-  propagation, installed reaction-wheel banks, and deployable parachutes;
+- `thessa-sim-core`: compatibility facade for deterministic baked ephemerides,
+  full multi-body test-particle gravity, atmosphere and panel aerodynamics,
+  rigid-body flight, on-rails coast caches, cohort gravity patches, piecewise
+  analytic affine propagation, installed reaction-wheel banks, and deployable
+  parachutes. The implementation is separated into `thessa-aero-core`,
+  `thessa-celestial`, `thessa-trajectory`, `thessa-propulsion`, and
+  `thessa-vehicle-core`;
 - `thessa-aero-surfaces`, `thessa-fuselage`, and `thessa-vehicle-baker`:
   procedural lifting-surface/body compilers, interior-volume and mass
   properties, controls, and vehicle asset compilation;
@@ -82,7 +84,12 @@ these areas explicitly marked as planned rather than presenting them as shipped.
 ```text
 apps/client/             GPL Bevy client
 apps/server/             GPL authoritative server shell
-crates/sim-core/         MIT numerical and physics kernel
+crates/sim-core/         MIT compatibility facade for simulation-domain crates
+crates/aero-core/        MIT atmosphere and aerodynamic models
+crates/celestial/        MIT ephemerides, gravity fields, and simulation time
+crates/trajectory/       MIT propagation and coast-cache algorithms
+crates/propulsion/       MIT propulsion models and feed systems
+crates/vehicle-core/     MIT rigid-body, vehicle, and mechanism models
 crates/simd/             MIT optional numeric kernels
 crates/fuselage/         MIT procedural body compiler
 crates/plume-core/       MIT backend-neutral plume field

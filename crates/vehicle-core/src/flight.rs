@@ -226,6 +226,25 @@ pub fn evaluate_flight_forces<M: AeroModel>(
     )
 }
 
+/// Assemble flight forces from an aero result already evaluated for the same
+/// state, geometry, atmosphere, and input. This lets a controller reuse its
+/// post-actuator aero sample for the rigid-body step instead of evaluating the
+/// panels twice.
+pub fn evaluate_flight_forces_with_aero_result(
+    atmosphere: AtmosphereConfig,
+    state: RigidBodyState,
+    properties: RigidBodyProperties,
+    input: FlightStepInput,
+    aero_result: AeroResult,
+) -> Result<FlightForces, FlightError> {
+    if input.skip_aero {
+        return Err(FlightError::InvalidInput(
+            "a precomputed aero result cannot be used with skip_aero".into(),
+        ));
+    }
+    evaluate_flight_forces_with_aero(atmosphere, state, properties, input, |_, _| Ok(aero_result))
+}
+
 /// Evaluate flight forces through the built-in structure-of-arrays aero path.
 /// The flight equations remain identical to [`evaluate_flight_forces`]; only
 /// the panel coefficient/assembly stage uses the reusable SIMD scratch.
@@ -403,6 +422,25 @@ pub fn integrate_rigid_body_step_soa(
     }
     let forces =
         evaluate_flight_forces_soa(model, panels, scratch, atmosphere, state, properties, input)?;
+    integrate_rigid_body_step_from_forces(state, properties, forces, step_s)
+}
+
+/// Integrate one step using an aero result sampled earlier for this exact
+/// control-updated geometry and state.
+#[allow(clippy::too_many_arguments)]
+pub fn integrate_rigid_body_step_with_aero_result(
+    atmosphere: AtmosphereConfig,
+    state: RigidBodyState,
+    properties: RigidBodyProperties,
+    input: FlightStepInput,
+    step_s: f64,
+    aero_result: AeroResult,
+) -> Result<(RigidBodyState, FlightForces), FlightError> {
+    if !step_s.is_finite() || step_s < MIN_STEP_S {
+        return Err(FlightError::InvalidStep);
+    }
+    let forces =
+        evaluate_flight_forces_with_aero_result(atmosphere, state, properties, input, aero_result)?;
     integrate_rigid_body_step_from_forces(state, properties, forces, step_s)
 }
 

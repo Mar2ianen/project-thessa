@@ -3,7 +3,7 @@
 ## Status
 
 **Implemented reduced-order runtime model.** The model is in
-`crates/sim-core/src/aero.rs`, with atmosphere coupling, vehicle baking,
+`crates/aero-core/src/aero.rs`, with atmosphere coupling, vehicle baking,
 control surfaces, and validation harnesses. It is not CFD and does not claim
 exact shock/separation/aeroelastic behavior.
 
@@ -65,6 +65,19 @@ The analytic panel model includes:
 - static `Cm` and dynamic roll/pitch/yaw damping;
 - optional panel exposure input and imported coefficient tables.
 
+After control actuation, the authority samples panel SoA once and reuses that
+`AeroResult` for both residual-moment allocation and the rigid-body/contact
+force assembly. This removes the former second full panel pass and lets the
+force path consume the already-synchronized panel layout without another sync.
+The cached result carries the same sampled state and load. The
+comparison bench `cargo bench -p thessa-flight-authority --bench aero_pass`
+uses 64 panels and measured 14.97 µs/step for the previous scalar-plus-SoA
+duplicate path versus 5.76 µs/step for the cached single-pass path (2.60× in
+this microbenchmark; not a whole-runtime speedup claim). A pre-actuation
+detailed sample for aerodynamic hinge torque remains necessary when physical
+actuators are installed; Newton trim also evaluates candidate geometries
+separately because those samples represent different commands.
+
 The coefficient-table path uses monotonic Mach/AoA grids and bilinear
 interpolation, clamping outside the exported domain. The table’s reference
 area, length, Reynolds/atmosphere range, body axes, and control deflection
@@ -97,6 +110,14 @@ Control surfaces have geometry, hinge axis/limits, response rate, and actuator
 torque/authority. A command is not an instantaneous deflection: aerodynamic
 load may leave the surface short of its requested position. The flight-control
 allocator receives a desired force/moment and reports saturation/residuals.
+
+Each baked surface may also carry pitch, roll, yaw, flap, and airbrake gains.
+The vehicle baker preserves those gains from procedural presets or hand-authored
+vehicle data, and the authority computes one independently mixed command per
+surface, so surface count and ordering do not encode the mixer. Current pilot
+input supplies pitch/roll/yaw; flap and airbrake inputs remain neutral until
+their command path is wired. Older unmixed assets retain the original four
+X-15 mappings, with any additional unmixed surfaces neutral.
 
 This boundary keeps direct/manual control possible and prevents FBW from
 injecting an artificial craft moment.

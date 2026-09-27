@@ -4,10 +4,10 @@
 //! region with conventional hinge placement, limits, and a roll mixing.
 //! An elevon is the same region shape with a pitch-plus-roll mix; a
 //! flaperon mixes flap deployment with roll. This module builds those
-//! presets as [`ControlRegion`] plus [`ControlMixing`] data. Geometry and
-//! limits compile today; mixing gains are data for the future FBW mixer
-//! (evaluated here only by the pure [`mix_command`] helper, which pins
-//! the documented formulas).
+//! presets as [`ControlRegion`] plus [`ControlMixing`] data. The compiler
+//! carries each region's gains into its baked runtime control definition;
+//! flight authority evaluates the same formula against normalized channels.
+//! [`mix_command`] pins the documented formulas independently.
 //!
 //! Sign conventions (right-hand surface, documented, not enforced):
 //! positive pitch/roll/yaw/flap channel values drive trailing-edge-down
@@ -22,60 +22,13 @@
 //! are presets since the sim-core limit model parks negative commands at
 //! zero; the flap preset keeps a documented −1 deg reflex shim.
 
-use serde::{Deserialize, Serialize};
-
 use crate::{ControlRegion, ControlRegionKind, SurfaceError};
-
-/// Channel mixing gains for one control region. The runtime command is
-/// `pitch*k_pitch + roll*k_roll + yaw*k_yaw + flap*k_flap +
-/// airbrake*k_airbrake`, saturated to `[-1, 1]` by [`mix_command`].
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct ControlMixing {
-    /// Pitch channel gain (elevator, elevon).
-    pub pitch: f64,
-    /// Roll channel gain (aileron, elevon, flaperon; negated on mirrors).
-    pub roll: f64,
-    /// Yaw channel gain (rudder).
-    pub yaw: f64,
-    /// Flap deployment channel gain (flap, flaperon, slat).
-    pub flap: f64,
-    /// Airbrake channel gain (spoiler panels, airbrake).
-    pub airbrake: f64,
-}
-
-/// Pilot/trim channel inputs, each in `[-1, 1]` (flap/airbrake `0..=1`
-/// typical).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct ControlChannels {
-    /// Pitch input, +1 trailing-edge-down on a right wing.
-    pub pitch: f64,
-    /// Roll input, +1 right-wing-up.
-    pub roll: f64,
-    /// Yaw input, +1 trailing-edge-right on a vertical tail.
-    pub yaw: f64,
-    /// Flap deployment input, 1 fully deployed.
-    pub flap: f64,
-    /// Airbrake input, 1 fully deployed.
-    pub airbrake: f64,
-}
-
-impl ControlChannels {
-    /// Neutral sticks, clean wing.
-    pub fn neutral() -> Self {
-        Self {
-            pitch: 0.0,
-            roll: 0.0,
-            yaw: 0.0,
-            flap: 0.0,
-            airbrake: 0.0,
-        }
-    }
-}
+pub use thessa_sim_core::{ControlChannels, ControlMixing};
 
 /// Evaluate the documented mixing formulas with `[-1, 1]` saturation:
 /// `elevon = pitch + roll`, `flaperon = flap + roll`, plain surfaces take
-/// their single channel. Pure function: pins preset semantics without a
-/// runtime mixer.
+/// their single channel. The same gains are baked into each runtime control
+/// definition so the flight authority uses this formula directly.
 pub fn mix_command(mixing: ControlMixing, channels: ControlChannels) -> f64 {
     for (label, value) in [
         ("pitch", channels.pitch),
@@ -89,12 +42,7 @@ pub fn mix_command(mixing: ControlMixing, channels: ControlChannels) -> f64 {
             "channel {label} must be in [-1, 1]"
         );
     }
-    (mixing.pitch * channels.pitch
-        + mixing.roll * channels.roll
-        + mixing.yaw * channels.yaw
-        + mixing.flap * channels.flap
-        + mixing.airbrake * channels.airbrake)
-        .clamp(-1.0, 1.0)
+    mixing.command(channels)
 }
 
 /// Aileron: trailing-edge region with roll mixing.
@@ -456,6 +404,7 @@ fn region_with_mix(
         max_deflection_rad,
         parent: None,
         kind,
+        mixing: Some(mixing),
     };
     // Standalone check covers bounds, hinge placement, and limits.
     // Nesting containment against the real parent is a surface-level

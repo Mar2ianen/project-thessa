@@ -506,7 +506,7 @@ impl<'a> GravityField<'a> {
     /// `(mu, id)` pairs in accumulation order for the integrator's
     /// dynamical step cap. A body that fails lookup reports `mu = 0` and
     /// is skipped by the cap (same effect as a non-contributing source).
-    pub(crate) fn cap_sources(&self) -> Vec<(f64, BodyId)> {
+    pub fn cap_sources(&self) -> Vec<(f64, BodyId)> {
         self.source_ids
             .iter()
             .map(|id| {

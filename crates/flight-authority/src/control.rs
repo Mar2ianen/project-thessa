@@ -10,8 +10,8 @@ use thessa_flight_control::{
     ActuatorGroup, ControlDemand, EffectorContribution, PropulsionDemand, allocate_wrench,
 };
 use thessa_sim_core::{
-    AeroEnvironment, AeroGeometry, AeroModel, AeroState, FlightError, PanelAeroModel,
-    RigidBodyState, VehicleDefinition,
+    AeroEnvironment, AeroGeometry, AeroModel, AeroState, ControlChannels, FlightError,
+    PanelAeroModel, RigidBodyState, VehicleDefinition, control_surface_commands,
 };
 
 use crate::ControlMode;
@@ -295,7 +295,15 @@ fn apply_trim_command(
     reference_geometry: &AeroGeometry,
     command: DVec3,
 ) -> Result<(), FlightError> {
-    let commands = surface_commands(command.x, command.y, command.z);
+    let commands = control_surface_commands(
+        &vehicle.control_surfaces,
+        ControlChannels {
+            pitch: command.x,
+            roll: command.z,
+            yaw: command.y,
+            ..ControlChannels::default()
+        },
+    );
     let deflections = vehicle
         .control_surfaces
         .iter()
@@ -310,12 +318,6 @@ fn apply_trim_command(
 
 pub(crate) fn body_axes(command: DVec3) -> DVec3 {
     DVec3::new(command.z, -command.x, -command.y)
-}
-
-/// Map the three normalized pilot surface axes to the starter vehicle's four
-/// physical channels: elevator, rudder, left aileron and right aileron.
-pub(crate) fn surface_commands(pitch: f64, yaw: f64, roll: f64) -> [f64; 4] {
-    [-pitch, yaw, -roll, roll]
 }
 
 #[cfg(test)]

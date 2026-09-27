@@ -703,6 +703,7 @@ impl EphemerisTable {
 mod hermite_velocity_tests {
     use super::*;
     use glam::DVec3;
+    use thessa_celestial::{BakedBody, SystemConfig};
 
     /// Quadratic motion is reproduced exactly, including at barycentric
     /// ~1e12 m coordinates where differentiating the position Hermite
@@ -744,5 +745,110 @@ mod hermite_velocity_tests {
         let h = 5.0;
         assert_eq!(hermite_velocity(v0, a0, v1, a1, h, 0.0), v0);
         assert_eq!(hermite_velocity(v0, a0, v1, a1, h, 1.0), v1);
+    }
+
+    #[test]
+    fn hermite_velocity_matches_position_derivative() {
+        let p0 = DVec3::new(1e7, 2e7, 3e7);
+        let p1 = p0 + DVec3::new(100.0, 40.0, -3.0);
+        let v0 = DVec3::new(20.0, 4.0, 0.0);
+        let v1 = DVec3::new(18.0, 10.0, -2.0);
+        let h = 5.0;
+        for s in [0.2, 0.5, 0.8] {
+            let (_, velocity) = hermite_state(p0, v0, p1, v1, h, s);
+            let epsilon = 1e-3;
+            let before = hermite_state(p0, v0, p1, v1, h, s - epsilon / h).0;
+            let after = hermite_state(p0, v0, p1, v1, h, s + epsilon / h).0;
+            assert!(velocity.distance((after - before) / (2.0 * epsilon)) < 1e-5);
+        }
+    }
+
+    #[test]
+    fn simd_snapshot_and_accel_match_scalar_within_tolerance() {
+        // Cross-path agreement for native SIMD kernels on the real 30-source
+        // system: Hermite FMA contraction and gravity refinement must stay within
+        // ~1e-12 relative of the scalar loop. Skip only on scalar-only targets.
+        if !(thessa_simd::avx512_available()
+            || thessa_simd::avx2_available()
+            || thessa_simd::neon_available())
+        {
+            eprintln!("no native SIMD tier: SIMD agreement skipped");
+            return;
+        }
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).expect("system parses");
+        let ephemeris = config.bake().expect("system bakes");
+        let bodies: Vec<_> = ephemeris.gravity_sources().map(|body| body.id).collect();
+        let table = EphemerisTable::build(
+            &ephemeris,
+            &bodies,
+            SimTime::EPOCH,
+            SimTime::EPOCH.offset(86_400.0),
+            40.0,
+        )
+        .expect("table builds");
+        let mut simd_snap = TableSnapshot::default();
+        let mut scalar_snap = TableSnapshot::default();
+        let mut worst_snapshot: f64 = 0.0;
+        let mut worst_accel: f64 = 0.0;
+        for minutes in [0, 7, 63, 721, 1439] {
+            let time = SimTime::EPOCH.offset(minutes as f64 * 60.0);
+            table.snapshot_with(time, &mut simd_snap, true);
+            table.snapshot_with(time, &mut scalar_snap, false);
+            assert_eq!(simd_snap.cx.len(), scalar_snap.cx.len());
+            for i in 0..simd_snap.cx.len() {
+                for (a, b) in [
+                    (simd_snap.cx[i], scalar_snap.cx[i]),
+                    (simd_snap.cy[i], scalar_snap.cy[i]),
+                    (simd_snap.cz[i], scalar_snap.cz[i]),
+                ] {
+                    let scale = b.abs().max(1.0);
+                    worst_snapshot = worst_snapshot.max((a - b).abs() / scale);
+                }
+            }
+            let probe = DVec3::new(1.0e8, -2.0e8, 3.0e8);
+            let simd_a = table
+                .accel_with(&simd_snap, probe, true)
+                .expect("simd accel");
+            let scalar_a = table
+                .accel_with(&scalar_snap, probe, false)
+                .expect("scalar accel");
+            let scale = scalar_a.length().max(1e-12);
+            worst_accel = worst_accel.max((simd_a - scalar_a).length() / scale);
+        }
+        eprintln!(
+            "simd-vs-scalar max relative: snapshot {worst_snapshot:e}, accel {worst_accel:e}"
+        );
+        assert!(
+            worst_snapshot < 1e-12,
+            "snapshot diverged {worst_snapshot:e}"
+        );
+        assert!(worst_accel < 1e-9, "accel diverged {worst_accel:e}");
+    }
+
+    #[test]
+    fn table_fallback_ignores_non_gravitating_center() {
+        // A singular zero-mu lane makes the SIMD kernel fall back to scalar.
+        for count in [1, 4, 8, 9] {
+            let bodies: Vec<_> = (0..count)
+                .map(|i| {
+                    let mut body = BakedBody::fixed(BodyId(i), "surface-only", 1.0, 1.0);
+                    body.gravity_source = false;
+                    body
+                })
+                .collect();
+            let ephemeris = BakedEphemeris::new("CONTACT", bodies).unwrap();
+            let ids: Vec<_> = ephemeris.bodies.iter().map(|body| body.id).collect();
+            let table =
+                EphemerisTable::build(&ephemeris, &ids, SimTime::EPOCH, SimTime(1.0), 1.0).unwrap();
+            let mut snapshot = TableSnapshot::default();
+            table.snapshot(SimTime::EPOCH, &mut snapshot);
+            for simd in [false, true] {
+                assert_eq!(
+                    table.accel_with(&snapshot, DVec3::ZERO, simd),
+                    Some(DVec3::ZERO)
+                );
+            }
+        }
     }
 }

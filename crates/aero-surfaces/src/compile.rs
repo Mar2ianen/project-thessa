@@ -394,10 +394,23 @@ impl CompiledSurface {
                 parent_joint: fold.parent_joint,
             })
             .collect();
+        let controls = self
+            .controls
+            .iter()
+            .cloned()
+            .map(|mut control| {
+                if let Some(mut mixing) = control.mixing {
+                    mixing.roll = -mixing.roll;
+                    mixing.yaw = -mixing.yaw;
+                    control.mixing = Some(mixing);
+                }
+                control
+            })
+            .collect();
         let mirrored = Self {
             panels,
             tags: self.tags.clone(),
-            controls: self.controls.clone(),
+            controls,
             folds,
             summary: self.summary.mirrored(),
             structure: self.structure.as_ref().map(CompiledStructure::mirrored),
@@ -1344,6 +1357,9 @@ impl<'a> Compiler<'a> {
                 )
                 .map_err(|error| SurfaceError::PanelRejected(error.to_string()))?;
                 definition = definition.with_kind(kind);
+                if let Some(mixing) = region.mixing {
+                    definition = definition.with_mixing(mixing);
+                }
                 if let Some(parent) = region.parent {
                     definition = definition.with_parent(parent);
                 }

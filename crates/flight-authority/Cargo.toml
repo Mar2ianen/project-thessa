@@ -21,3 +21,7 @@ toml.workspace = true
 [[bench]]
 name = "retractable_wheels"
 harness = false
+
+[[bench]]
+name = "aero_pass"
+harness = false

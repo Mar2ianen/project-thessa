@@ -726,8 +726,8 @@ Effector references (existing):
 
 - Existing aero design: `docs/11_AERODYNAMICS.md`
 - Unified control/allocator design: `docs/18-control-guidance-autopilot.md`
-- Current panel solver: `crates/sim-core/src/aero.rs`
-- Current vehicle/control-surface model: `crates/sim-core/src/vehicle.rs`
+- Current panel solver: `crates/aero-core/src/aero.rs`
+- Current vehicle/control-surface model: `crates/vehicle-core/src/vehicle.rs`
 - NASA Glenn, spoilers: https://www.grc.nasa.gov/WWW/k-12/VirtualAero/BottleRocket/airplane/spoil.html
 - NASA Glenn, flaps/slats: https://www.grc.nasa.gov/www/k-12/airplane/aflap.html
 - FAA Airplane Flying Handbook, flap pitching behavior: https://www.faa.gov/sites/faa.gov/files/regulations_policies/handbooks_manuals/aviation/airplane_handbook/10_afh_ch9.pdf

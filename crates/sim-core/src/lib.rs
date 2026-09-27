@@ -1,129 +1,43 @@
-//! Project Thessa reusable authoritative simulation core.
+//! Project Thessa reusable authoritative simulation API.
 //!
-//! The first vertical slice deliberately contains only deterministic celestial
-//! ephemerides, point-mass gravity, reference-frame-labelled state vectors, and
-//! orbital propagators. It has no renderer, async runtime, or game-specific API.
+//! The domain crates own deterministic atmosphere/aerodynamics, celestial,
+//! trajectory, propulsion, and vehicle models. This facade preserves the
+//! original `thessa-sim-core` import surface for downstream crates.
 
 #![forbid(unsafe_code)]
 
-mod aero;
-mod affine_propagator;
-mod atmosphere;
-mod collision;
-mod docking;
-mod ephemeris;
-mod feed;
-mod flight;
-mod frames;
-mod gravity;
-mod gravity_patch;
-mod gravity_tree;
-mod high_speed;
-mod integrator;
-mod landing_gear;
-mod onrails;
-mod parachute;
-mod part_command;
-mod propulsion;
-mod reaction_wheel;
-mod scheduler;
-mod system;
-mod table;
-mod tick_integrator;
-mod time;
-mod units;
-mod vehicle;
-
-pub use aero::{
+pub use thessa_aero_core::{
     AeroCase, AeroCoefficientTable, AeroCoefficients, AeroConfig, AeroEnvironment, AeroError,
     AeroGeometry, AeroModel, AeroPanel, AeroPanelLoad, AeroResult, AeroSimdScratch, AeroState,
-    PanelAeroModel, PanelSoA, diederich_lift_slope, evaluate_batch,
+    AtmosphereComposition, AtmosphereConfig, AtmosphereError, AtmosphereSample, BOOM_ANCHOR_PSF,
+    BOOM_OVERPRESSURE_GAIN, BakedAtmosphere, BoomCarpet, GasKind, HighSpeedError, PanelAeroModel,
+    PanelSoA, boom_carpet, buffet_fluctuation, buffet_gain, diederich_lift_slope, evaluate_batch,
+    vapor_cone_active,
 };
-pub use affine_propagator::{
-    AffinePropagator, AnalyticError, AnalyticFallback, AnalyticStep, ModeCoefficients,
-    PiecewiseReport, PropagatorError, StepCoefficients, propagate_piecewise,
-};
-pub use atmosphere::{
-    AtmosphereComposition, AtmosphereConfig, AtmosphereError, AtmosphereSample, BakedAtmosphere,
-    GasKind,
-};
-pub use collision::{
-    CollisionAxis, CollisionError, CollisionGeometry, CollisionMaterial, CollisionPart,
-    CollisionShape,
-};
-pub use docking::{
-    DockingError, DockingKinematics, DockingPortClass, DockingPortSpec, DockingPortState,
-    DockingSession,
-};
-pub use ephemeris::{
-    BakedBody, BakedEphemeris, BodyId, BodyState, EphemerisError, EphemerisFrame, EphemerisScratch,
-    KeplerOrbit, OsculatingElements,
-};
-pub use feed::{CompiledTank, FEED_MAX_VELOCITY_MPS, FeedLine, TankMount, TankShape, TankSpec};
-pub use flight::{
-    FlightError, FlightForces, FlightStepInput, RigidBodyProperties, RigidBodyState,
-    constant_spin_orientation, evaluate_flight_forces, evaluate_flight_forces_soa,
-    integrate_attitude_step, integrate_rigid_body_duration, integrate_rigid_body_duration_sampled,
-    integrate_rigid_body_step, integrate_rigid_body_step_soa,
-};
-pub use frames::{ReferenceFrame, StateVector};
-pub use gravity::{GravityError, GravityField};
-pub use gravity_patch::{
-    CohortConfig, CohortEval, CohortEvaluator, CohortReport, GravityPatch, HESSIAN_FROBENIUS_NORM,
-    HESSIAN_REMAINDER, PatchError, affine_segment_bound, compile_patch, evaluate_cohorts,
-};
-pub use gravity_tree::{
-    GravityNode, GravityNodeFrame, GravitySourceTree, TreeEval, monopole_error_estimate,
+pub use thessa_celestial::{
+    AU_M, BakedBody, BakedEphemeris, BinaryOrbitConfig, BodyId, BodyState, CelestialConfig, DAY_S,
+    EARTH_MASS_KG, EphemerisError, EphemerisFrame, EphemerisScratch, EventScheduler, G,
+    GravityError, GravityField, GravityNode, GravityNodeFrame, GravitySourceTree, JUPITER_MASS_KG,
+    KeplerOrbit, OrbitConfig, OsculatingElements, ReferenceFrame, SOLAR_MASS_KG, ScheduledEvent,
+    ScheduledKind, SimTime, StarConfig, StateVector, SystemConfig, SystemMeta, SystemSpecError,
+    TAU, TreeEval, WORLD_TICK_HZ, WORLD_TICK_S, WorldTick, monopole_error_estimate,
     quadrupole_correction, quadrupole_error_estimate,
 };
-pub use high_speed::{
-    BOOM_ANCHOR_PSF, BOOM_OVERPRESSURE_GAIN, BoomCarpet, HighSpeedError, boom_carpet,
-    buffet_fluctuation, buffet_gain, vapor_cone_active,
-};
-pub use integrator::{
-    AdaptiveIntegratorConfig, ImpulsiveBurn, IntegratorError, IntegratorStats, PropagationResult,
-    SampledPath, SampledPathEnd, SensitivityPropagation, TestParticleState, ThrustArc,
-    ThrustDirection, ThrustPropagationResult, VelocitySensitivity, VerletConfig,
-    propagate_adaptive, propagate_adaptive_dop853, propagate_adaptive_sensitivity,
-    propagate_adaptive_with_burns, propagate_adaptive_with_thrust, propagate_sampled_extend,
-    propagate_sampled_verlet, propagate_sampled_verlet_fast, propagate_sampled_verlet_scaled,
-    propagate_velocity_verlet, rtn_basis,
-};
-pub use landing_gear::{
-    AirlessWheelStructure, BrakePoint, CompiledLandingLeg, CompiledWheelChassis,
-    CompiledWheelDrive, LandingGearActuatorPoint, LandingGearError, LandingLegMassProperties,
-    LandingLegSpec, LandingLegState, LandingShockAbsorberSpec, LandingShockPoint, MAX_LANDING_LEGS,
-    MAX_WHEELS_PER_CHASSIS, StrutLoadPoint, TireConstruction, TireLoadPoint, TireTangentForcePoint,
-    WheelBodyMassProperties, WheelBrakeSpec, WheelBrakeState, WheelChassisActuatorPoint,
-    WheelChassisMassProperties, WheelChassisRetractionSpec, WheelChassisSpec, WheelChassisState,
-    WheelContactLoadPoint, WheelDrivePoint, WheelDriveSpec, WheelDriveTractionPoint, WheelLayout,
-    WheelStation, WheelStrutSpec, WheelTireSpec,
-};
-pub use onrails::{
-    COAST_RAILS_EXTEND_CHUNK, COAST_RAILS_HEAD_STEPS, COAST_RAILS_MAX_STEPS,
-    COAST_RAILS_MIN_AHEAD_S, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_STEP_S,
-    COAST_RAILS_VELOCITY_TOL_MPS, DISPLAY_SCALED_ETA, DISPLAY_SCALED_H_MAX_S,
-    DISPLAY_SCALED_H_MIN_S, DISPLAY_SCALED_MAX_SAMPLES, OnRailsCache, OnRailsWake,
-};
-pub use parachute::{
-    MAX_PARACHUTES, ParachuteCommand, ParachuteEnvironment, ParachuteError, ParachuteLoad,
-    ParachutePhase, ParachuteSpec, ParachuteState,
-};
-pub use part_command::VehiclePartCommand;
-pub use propulsion::{
+pub use thessa_propulsion::{
     AIR_CP_J_KG_K, AIR_GAMMA, AirAltitudePoint, AirCycle, AirOperatingPoint, AirbreathingSpec,
     AltitudePoint, BurnPoint, ChamberMaterial, ChamberSpec, ColdGasThrusterSpec,
     CompiledAirbreather, CompiledChamber, CompiledColdGas, CompiledElectricMotor,
     CompiledElectricThruster, CompiledEngine, CompiledEstoc, CompiledFusionTorch, CompiledJet,
     CompiledLiquid, CompiledMonoprop, CompiledPistonEngine, CompiledPropeller,
     CompiledPropellerDrive, CompiledPropulsionSystem, CompiledPulsedFusion,
-    CompiledShaftPowerSource, CompiledSolid, CompiledTurbopropDrive, CoolingMode, CycleLimits,
-    ESTOC_DEFAULT_SWITCH_MACH_HI, ESTOC_DEFAULT_SWITCH_MACH_LO, ESTOC_DEFAULT_TRANSITION_TAU_S,
-    ESTOC_MAX_ROCKET_PC_PA, ESTOC_REINFORCEMENT_FRACTION, ElectricMotorPoint, ElectricMotorSpec,
-    ElectricPropellant, ElectricThrusterCommand, ElectricThrusterDesign, ElectricThrusterMount,
-    ElectricThrusterPoint, ElectricThrusterSpec, EngineCycle, EngineMount, EngineOperatingPoint,
-    EnginePlumeState, EngineSpool, EstocAltitudePoint, EstocEjectorSpec, EstocMode, EstocPoint,
-    EstocPrecoolerSpec, EstocSpec, FlightCondition, FusionReaction, FusionTorchCommand,
+    CompiledShaftPowerSource, CompiledSolid, CompiledTank, CompiledTurbopropDrive, CoolingMode,
+    CycleLimits, ESTOC_DEFAULT_SWITCH_MACH_HI, ESTOC_DEFAULT_SWITCH_MACH_LO,
+    ESTOC_DEFAULT_TRANSITION_TAU_S, ESTOC_MAX_ROCKET_PC_PA, ESTOC_REINFORCEMENT_FRACTION,
+    ElectricMotorPoint, ElectricMotorSpec, ElectricPropellant, ElectricThrusterCommand,
+    ElectricThrusterDesign, ElectricThrusterMount, ElectricThrusterPoint, ElectricThrusterSpec,
+    EngineCycle, EngineMount, EngineOperatingPoint, EnginePlumeState, EngineSpool,
+    EstocAltitudePoint, EstocEjectorSpec, EstocMode, EstocPoint, EstocPrecoolerSpec, EstocSpec,
+    FEED_MAX_VELOCITY_MPS, FeedLine, FlightCondition, FusionReaction, FusionTorchCommand,
     FusionTorchMount, FusionTorchOperatingPoint, FusionTorchSpec, GeneratorSpec, GimbalEffector,
     IntakeKind, JetCommand, JetFuel, JetMount, JetShaftState, LiquidEngineSpec,
     MAX_SYSTEM_CHAMBERS, MonopropThrusterSpec, NTR_COOLDOWN_FRACTION, NTR_DEFAULT_RATED_BURN_S,
@@ -137,29 +51,54 @@ pub use propulsion::{
     RcsCluster, RcsMount, RcsPulse, RcsThruster, SEPARATION_PRESSURE_RATIO, STANDARD_GRAVITY_MPS2,
     ShaftBalance, ShaftCommand, ShaftPowerSourceSpec, ShaftSpec, ShaftTelemetry,
     SolidGrainGeometry, SolidMotorSpec, StarterKind, StarterSpec, SystemAltitudePoint, SystemMount,
-    SystemOperatingPoint, TurbopropAltitudePoint, TurbopropCommand, TurbopropDriveSpec,
-    TurbopropMount, TurbopropOperatingPoint, advance_jet_shaft, advance_jet_shaft_loaded,
-    advance_jet_spool, advance_spool, analyze_airbreathing, analyze_altitude, analyze_estoc,
-    analyze_propeller_drive, analyze_turboprop_drive, characteristic_velocity,
-    effective_propulsive_isp_s, flight_condition, mach_from_area_ratio, thrust_coefficient,
+    SystemOperatingPoint, TankMount, TankShape, TankSpec, TurbopropAltitudePoint, TurbopropCommand,
+    TurbopropDriveSpec, TurbopropMount, TurbopropOperatingPoint, advance_jet_shaft,
+    advance_jet_shaft_loaded, advance_jet_spool, advance_spool, analyze_airbreathing,
+    analyze_altitude, analyze_estoc, analyze_propeller_drive, analyze_turboprop_drive,
+    characteristic_velocity, effective_propulsive_isp_s, flight_condition, mach_from_area_ratio,
+    thrust_coefficient,
 };
-pub use reaction_wheel::{
-    ReactionWheelAllocation, ReactionWheelBankSpec, ReactionWheelError, allocate_reaction_wheels,
-    allocate_reaction_wheels_with_enabled_banks,
+pub use thessa_trajectory::{
+    AdaptiveIntegratorConfig, AffinePropagator, AnalyticError, AnalyticFallback, AnalyticStep,
+    COAST_RAILS_EXTEND_CHUNK, COAST_RAILS_HEAD_STEPS, COAST_RAILS_MAX_STEPS,
+    COAST_RAILS_MIN_AHEAD_S, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_STEP_S,
+    COAST_RAILS_VELOCITY_TOL_MPS, CohortConfig, CohortEval, CohortEvaluator, CohortReport,
+    DISPLAY_SCALED_ETA, DISPLAY_SCALED_H_MAX_S, DISPLAY_SCALED_H_MIN_S, DISPLAY_SCALED_MAX_SAMPLES,
+    EphemerisTable, GravityPatch, HESSIAN_FROBENIUS_NORM, HESSIAN_REMAINDER, ImpulsiveBurn,
+    IntegratorError, IntegratorStats, ModeCoefficients, OnRailsCache, OnRailsWake, PatchError,
+    PiecewiseReport, PropagationResult, PropagatorError, SampledPath, SampledPathEnd,
+    SensitivityPropagation, StepCoefficients, TABLE_NODE_EVERY_STEPS, TableSnapshot,
+    TestParticleState, ThrustArc, ThrustDirection, ThrustPropagationResult, TickIntegratorConfig,
+    VelocitySensitivity, VerletConfig, affine_segment_bound, compile_patch, evaluate_cohorts,
+    propagate_adaptive, propagate_adaptive_dop853, propagate_adaptive_sensitivity,
+    propagate_adaptive_with_burns, propagate_adaptive_with_thrust, propagate_piecewise,
+    propagate_sampled_extend, propagate_sampled_verlet, propagate_sampled_verlet_fast,
+    propagate_sampled_verlet_scaled, propagate_tick_adaptive, propagate_velocity_verlet, rtn_basis,
 };
-pub use scheduler::{EventScheduler, ScheduledEvent, ScheduledKind};
-pub use system::{
-    BinaryOrbitConfig, CelestialConfig, OrbitConfig, StarConfig, SystemConfig, SystemMeta,
-    SystemSpecError,
-};
-pub use table::{EphemerisTable, TABLE_NODE_EVERY_STEPS, TableSnapshot};
-pub use tick_integrator::{TickIntegratorConfig, propagate_tick_adaptive};
-pub use time::{SimTime, WORLD_TICK_HZ, WORLD_TICK_S, WorldTick};
-pub use units::{AU_M, DAY_S, EARTH_MASS_KG, G, JUPITER_MASS_KG, SOLAR_MASS_KG, TAU};
-pub use vehicle::{
-    ControlHinge, ControlKind, ControlSurfaceActuator, ControlSurfaceDefinition, FoldJointRecord,
-    StatefulPulsedFusionWrench, StatefulTurbopropWrench, VehicleDefinition, VehicleError,
-    VehicleWheelMassSplit, X15StarterProfile, x15_contact_geometry,
+pub use thessa_vehicle_core::{
+    AirlessWheelStructure, BrakePoint, CollisionAxis, CollisionError, CollisionGeometry,
+    CollisionMaterial, CollisionPart, CollisionShape, CompiledLandingLeg, CompiledWheelChassis,
+    CompiledWheelDrive, ControlChannels, ControlHinge, ControlKind, ControlMixing,
+    ControlSurfaceActuator, ControlSurfaceDefinition, DockingError, DockingKinematics,
+    DockingPortClass, DockingPortSpec, DockingPortState, DockingSession, FlightError, FlightForces,
+    FlightStepInput, FoldJointRecord, LandingGearActuatorPoint, LandingGearError,
+    LandingLegMassProperties, LandingLegSpec, LandingLegState, LandingShockAbsorberSpec,
+    LandingShockPoint, MAX_LANDING_LEGS, MAX_PARACHUTES, MAX_WHEELS_PER_CHASSIS, ParachuteCommand,
+    ParachuteEnvironment, ParachuteError, ParachuteLoad, ParachutePhase, ParachuteSpec,
+    ParachuteState, ReactionWheelAllocation, ReactionWheelBankSpec, ReactionWheelError,
+    RigidBodyProperties, RigidBodyState, StatefulPulsedFusionWrench, StatefulTurbopropWrench,
+    StrutLoadPoint, TireConstruction, TireLoadPoint, TireTangentForcePoint, VehicleDefinition,
+    VehicleError, VehiclePartCommand, VehicleWheelMassSplit, WheelBodyMassProperties,
+    WheelBrakeSpec, WheelBrakeState, WheelChassisActuatorPoint, WheelChassisMassProperties,
+    WheelChassisRetractionSpec, WheelChassisSpec, WheelChassisState, WheelContactLoadPoint,
+    WheelDrivePoint, WheelDriveSpec, WheelDriveTractionPoint, WheelLayout, WheelStation,
+    WheelStrutSpec, WheelTireSpec, X15StarterProfile, allocate_reaction_wheels,
+    allocate_reaction_wheels_with_enabled_banks, constant_spin_orientation,
+    control_surface_commands, evaluate_flight_forces, evaluate_flight_forces_soa,
+    evaluate_flight_forces_with_aero_result, integrate_attitude_step,
+    integrate_rigid_body_duration, integrate_rigid_body_duration_sampled,
+    integrate_rigid_body_step, integrate_rigid_body_step_soa,
+    integrate_rigid_body_step_with_aero_result, x15_contact_geometry,
 };
 
 #[cfg(test)]

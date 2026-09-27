@@ -1,14 +1,16 @@
 # Procedural aerodynamic surfaces
 
-Status: procedural compiler implemented in `crates/aero-surfaces` and used by
+Status: the procedural compiler in `crates/aero-surfaces` is used by
 `vehicle-baker`. It compiles authored planform, bend, section, control, and fold
-state into solver panels, ownership/mechanism records, contact parts, and
-structural sizing summaries. The baker accepts `[[procedural_surfaces]]`, merges
-compiled panels into the vehicle, and rebases control/fold references. The
-compiled data crosses the hangar/flight boundary without authoring geometry.
-Render-mesh generation, in-game editor UX, runtime wing-fold actuation, broader
-structural/failure coupling, solver-integrated airfoil polars, and balancing
-remain future work.
+state into solver panels, ownership/mechanism records, baked pitch/roll/yaw/flap/
+airbrake gains, contact parts, and structural sizing summaries. The baker
+accepts `[[procedural_surfaces]]`, merges compiled panels into the vehicle, and
+rebases control/fold references. The flight authority applies the baked mixers
+for its current pitch/roll/yaw pilot channels; flap/airbrake input wiring is
+still future work. The compiled data crosses the hangar/flight boundary without
+authoring geometry. Render-mesh generation, in-game editor UX, runtime wing-fold
+actuation, broader structural/failure coupling, solver-integrated airfoil
+polars, and balancing remain future work.
 
 ## 1. Design goal
 
@@ -267,8 +269,12 @@ The authoring representation is not evaluated in the flight hot path.
 compiles each surface in its deployed state, merges its panels and controls with
 hand-authored vehicle data, rebases panel/control/fold indices, and optionally
 adds contact parts. `CompiledSurface` is serializable data; a postcard
-round-trip test pins the hangar/flight boundary. Render-mesh generation is not
-part of this compiler output yet.
+round-trip test pins the hangar/flight boundary. Preset channel gains are stored
+on the compiled control definitions and survive baking; the runtime evaluates
+one command per surface independent of the control list length/order. The
+authority currently supplies pitch/roll/yaw pilot channels; flap and airbrake
+input wiring remains future work. Render-mesh generation is not part of this
+compiler output yet.
 
 A single editor surface may therefore compile into multiple connected numerical/structural regions while still remaining one object from the user's perspective.
 
@@ -338,9 +344,10 @@ The compiled vehicle data currently contains:
   or render meshes.
 
 The fold records and tagged panels are validated and carried in the vehicle
-asset, but a runtime mechanism mixer that deploys/folds aerodynamic surfaces is
-not yet wired into flight stepping. Each baked surface currently compiles in its
-deployed configuration through `vehicle-baker`.
+asset, but runtime wing-fold actuation is not yet wired into flight stepping.
+Each baked surface currently compiles in its deployed configuration through
+`vehicle-baker`; control-channel mixing is runtime data and is active for the
+currently wired pilot channels.
 
 This preserves an important architectural boundary:
 

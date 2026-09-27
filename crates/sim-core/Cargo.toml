@@ -7,13 +7,17 @@ license = "MIT"
 publish = false
 
 [dependencies]
-glam.workspace = true
-serde.workspace = true
-rayon.workspace = true
-thessa-simd = { path = "../simd" }
+thessa-aero-core = { path = "../aero-core" }
+thessa-celestial = { path = "../celestial" }
+thessa-trajectory = { path = "../trajectory" }
+thessa-propulsion = { path = "../propulsion" }
+thessa-vehicle-core = { path = "../vehicle-core" }
 
 [dev-dependencies]
+glam.workspace = true
+rayon.workspace = true
 serde_json.workspace = true
+thessa-simd = { path = "../simd" }
 toml.workspace = true
 
 [[bench]]

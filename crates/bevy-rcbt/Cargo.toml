@@ -33,3 +33,7 @@ thessa-rcbt-wgpu = { path = "../rcbt-wgpu" }
 name = "material_storage"
 harness = false
 required-features = ["render"]
+
+[[bench]]
+name = "extraction_snapshots"
+harness = false

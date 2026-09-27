@@ -3,11 +3,13 @@
 ## Status
 
 **Implemented numerical prototype.** This document is the current contract for
-the paths in `crates/sim-core`, `crates/flight-control`, and
-`crates/flight-authority`. Vehicle assets already compile procedural bodies and
-surfaces plus the installed propulsion, gear, reaction-wheel, and parachute
-subsystems described below. Structural fracture, thermal networks, and full
-fluid/electrical system-graph compilation remain future work.
+the paths in `crates/aero-core`, `crates/celestial`, `crates/trajectory`,
+`crates/propulsion`, `crates/vehicle-core`, `crates/flight-control`, and
+`crates/flight-authority`. `crates/sim-core` retains the established aggregate
+API. Vehicle assets already compile procedural bodies and surfaces plus the
+installed propulsion, gear, reaction-wheel, and parachute subsystems described
+below. Structural fracture, thermal networks, and full fluid/electrical
+system-graph compilation remain future work.
 
 ## 3.1. Ownership and units
 
@@ -227,7 +229,8 @@ The runtime supports:
 - kinematic bodies: position-based terrain patches whose pose at
   tick `n+1` is prescribed from the canonical ephemeris and
   body-rotation model — Rapier derives the surface velocity that
-  enters contacts, so a landed body rides a moving/rotating body;
+  enters contacts, so a landed body rides a moving/rotating body. The active
+  terrain patch retains a body-fixed anchor and recenters only near its edge;
 - dynamic bodies: rigid-body contact objects with full CCD,
   sleep, and zero-density colliders (mass/inertia come from
   sim-core authority);

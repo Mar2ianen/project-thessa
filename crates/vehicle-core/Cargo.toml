@@ -1,0 +1,16 @@
+[package]
+name = "thessa-vehicle-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+
+[dependencies]
+glam.workspace = true
+serde.workspace = true
+thessa-aero-core = { path = "../aero-core" }
+thessa-propulsion = { path = "../propulsion" }
+
+[dev-dependencies]
+serde_json.workspace = true

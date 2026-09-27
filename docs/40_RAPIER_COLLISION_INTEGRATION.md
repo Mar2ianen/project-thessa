@@ -169,6 +169,10 @@ Any structural topology change, staging event, docking/undocking event, or
 collision-geometry rebuild also invalidates/rebuilds the corresponding backend
 body.
 
+Disabling contact mode or leaving its active regime clears per-tick wheel,
+landing-leg, and gear-actuator telemetry. Snapshot/UI readers therefore see no
+stale contact evidence after the solver stops producing it.
+
 ## 7. Fixed-tick phase order
 
 For the current single-authority runtime the intended 120 Hz order is:
@@ -276,7 +280,9 @@ Implemented (update 2026-09-25):
   `insert_kinematic_trimesh`, `set_next_kinematic_pose`): the caller
   prescribes the ephemeris/body-rotation-derived pose at tick `n+1` and
   Rapier derives the surface velocity that enters contacts — a landed body
-  rides a rising platform in the regression test;
+  rides a rising platform in the regression test. Flight terrain patches keep
+  a body-fixed sample/frame anchor, follow body translation and rotation, and
+  recenter only as the craft nears the patch edge;
 - body/patch **removal** (`remove_dynamic_body`, `remove_static_collider`,
   `remove_kinematic_body`) so topology changes and terrain streaming evict
   stale backend state instead of leaking it;
@@ -320,7 +326,7 @@ awake/constraint-heavy scenes before choosing scheduler granularity.
 Not implemented yet (update 2026-09-25):
 
 - terrain streaming beyond the single-vehicle producer: the 120 Hz loop
-  re-poses one kinematic patch from worldgen every tick and evicts on
+  follows one anchored kinematic patch from worldgen and evicts it on
   regime exit; a fleet layer with multiple resident patches is future
   work (`attach/evict` carry it);
 - structural failure mapping: no structural graph exists in sim-core yet,

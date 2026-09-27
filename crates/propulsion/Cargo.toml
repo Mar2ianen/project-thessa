@@ -1,0 +1,12 @@
+[package]
+name = "thessa-propulsion"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+
+[dependencies]
+glam.workspace = true
+serde.workspace = true
+thessa-aero-core = { path = "../aero-core" }

@@ -27,11 +27,63 @@ pub type StatefulPulsedFusionWrench = (
     Vec<(PulsedFusionState, PulsedFusionOperatingPoint)>,
 );
 
-/// One user-configurable aerodynamic control channel.
-///
-/// A channel can drive one or more panels, which lets a vehicle compiler
-/// represent a conventional elevator, split elevons, rudder, flaps or a
-/// procedural control surface without changing the aero solver.
+/// Normalized pilot/control channels consumed by baked surface mixers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct ControlChannels {
+    /// Pitch command (`[-1, 1]`).
+    pub pitch: f64,
+    /// Roll command (`[-1, 1]`).
+    pub roll: f64,
+    /// Yaw command (`[-1, 1]`).
+    pub yaw: f64,
+    /// Flap deployment (`0..=1` typical).
+    pub flap: f64,
+    /// Airbrake deployment (`0..=1` typical).
+    pub airbrake: f64,
+}
+
+impl ControlChannels {
+    /// Neutral sticks and retracted auxiliary controls.
+    pub fn neutral() -> Self {
+        Self::default()
+    }
+}
+
+/// Per-surface gains mapping normalized channels to a normalized actuator
+/// command. The result saturates to `[-1, 1]` before surface limits apply.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct ControlMixing {
+    /// Pitch channel gain.
+    pub pitch: f64,
+    /// Roll channel gain.
+    pub roll: f64,
+    /// Yaw channel gain.
+    pub yaw: f64,
+    /// Flap channel gain.
+    pub flap: f64,
+    /// Airbrake channel gain.
+    pub airbrake: f64,
+}
+
+impl ControlMixing {
+    pub fn command(self, channels: ControlChannels) -> f64 {
+        (self.pitch * channels.pitch
+            + self.roll * channels.roll
+            + self.yaw * channels.yaw
+            + self.flap * channels.flap
+            + self.airbrake * channels.airbrake)
+            .clamp(-1.0, 1.0)
+    }
+
+    fn validate(self) -> bool {
+        [self.pitch, self.roll, self.yaw, self.flap, self.airbrake]
+            .into_iter()
+            .all(f64::is_finite)
+    }
+}
+
+/// One user-configurable aerodynamic control surface. A surface can own one
+/// or more panels and carries its optional baked channel mixer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ControlSurfaceDefinition {
     pub name: String,
@@ -56,6 +108,11 @@ pub struct ControlSurfaceDefinition {
     /// reaches the stall rating.
     #[serde(default)]
     pub actuator: Option<ControlSurfaceActuator>,
+    /// Explicit pitch/roll/yaw/flap/airbrake gains. Missing mixers preserve
+    /// the four-channel legacy X-15 mapping for old baked assets; later
+    /// unconfigured surfaces remain neutral rather than indexing past it.
+    #[serde(default)]
+    pub mixing: Option<ControlMixing>,
 }
 
 /// A straight hinge line in vehicle body coordinates.
@@ -176,6 +233,7 @@ impl ControlSurfaceDefinition {
             parent_index: None,
             hinge: None,
             actuator: None,
+            mixing: None,
         };
         definition.validate(usize::MAX)?;
         Ok(definition)
@@ -203,6 +261,12 @@ impl ControlSurfaceDefinition {
     /// Attach physical no-load rate and stall-torque ratings.
     pub fn with_actuator(mut self, actuator: ControlSurfaceActuator) -> Self {
         self.actuator = Some(actuator);
+        self
+    }
+
+    /// Attach baked channel gains for this surface.
+    pub fn with_mixing(mut self, mixing: ControlMixing) -> Self {
+        self.mixing = Some(mixing);
         self
     }
 
@@ -254,6 +318,12 @@ impl ControlSurfaceDefinition {
         if let Some(actuator) = self.actuator {
             actuator.validate()?;
         }
+        if self.mixing.is_some_and(|mixing| !mixing.validate()) {
+            return Err(VehicleError::InvalidControlSurface(format!(
+                "{} has non-finite control mixing gains",
+                self.name
+            )));
+        }
         Ok(())
     }
 
@@ -270,6 +340,31 @@ impl ControlSurfaceDefinition {
             -command * self.minimum_deflection_rad
         })
     }
+}
+
+/// Build a command for every compiled surface in its current definition
+/// order. Explicit baked mixers are order-independent; unmixed legacy assets
+/// retain the original X-15 elevator/rudder/left-aileron/right-aileron map.
+pub fn control_surface_commands(
+    surfaces: &[ControlSurfaceDefinition],
+    channels: ControlChannels,
+) -> Vec<f64> {
+    surfaces
+        .iter()
+        .enumerate()
+        .map(|(index, surface)| {
+            surface.mixing.map_or_else(
+                || match index {
+                    0 => -channels.pitch,
+                    1 => channels.yaw,
+                    2 => -channels.roll,
+                    3 => channels.roll,
+                    _ => 0.0,
+                },
+                |mixing| mixing.command(channels),
+            )
+        })
+        .collect()
 }
 
 /// Generic runtime vehicle asset. It is deliberately agnostic to aircraft,
@@ -2076,6 +2171,67 @@ mod tests {
         ShaftSpec, TireConstruction, TurbopropCommand, TurbopropDriveSpec, TurbopropMount,
         WheelBrakeSpec, WheelChassisSpec, WheelLayout, WheelStrutSpec, WheelTireSpec,
     };
+    use thessa_propulsion::{
+        CoolingMode, EngineCycle, LiquidEngineSpec, NozzleContour, Propellant,
+    };
+
+    #[test]
+    fn vehicle_wrench_sums_mount_moments() {
+        // Offset engine firing alone: force along +X, moment r x F about
+        // the origin; arity mismatch refuses.
+        let panel = AeroPanel::new(DVec3::new(0.2, -1.4, 0.0), DVec3::X, DVec3::Z, 9.29, 3.10)
+            .expect("panel");
+        let geometry = AeroGeometry::new(vec![panel]).expect("geometry");
+        let properties = RigidBodyProperties::new(1000.0, DMat3::IDENTITY * 5000.0).expect("mass");
+        let engine = CompiledEngine::Liquid(
+            LiquidEngineSpec {
+                name: "Merlin-1D class".into(),
+                propellant: Propellant::LoxRp1,
+                cycle: EngineCycle::GasGenerator,
+                chamber_pressure_pa: 9.7e6,
+                throat_radius_m: 0.134,
+                expansion_ratio: 16.0,
+                nozzle_length_m: 1.5,
+                contour: NozzleContour::Bell,
+                chamber_material: ChamberMaterial::nickel_superalloy(),
+                cooling: CoolingMode::Regenerative,
+                mixture_ratio: None,
+                characteristic_length_m: None,
+                gimbal_range_rad: 0.09,
+                min_throttle: None,
+                restartable: true,
+            }
+            .compile()
+            .expect("compile"),
+        );
+        let full = engine
+            .operating_point(1.0, 0.0, 0.0)
+            .expect("vacuum point")
+            .thrust_n;
+        let vehicle = VehicleDefinition::new("wrench probe", geometry, properties, vec![])
+            .expect("vehicle")
+            .with_engines(vec![
+                EngineMount {
+                    name: "main".into(),
+                    engine: engine.clone(),
+                    position_body_m: [-3.0, 0.0, 0.0],
+                    thrust_axis_body: [1.0, 0.0, 0.0],
+                },
+                EngineMount {
+                    name: "offset".into(),
+                    engine,
+                    position_body_m: [-3.0, 0.0, 1.0],
+                    thrust_axis_body: [1.0, 0.0, 0.0],
+                },
+            ])
+            .expect("mounts");
+        let (force, moment) = vehicle
+            .wrench_body_n(&[(0.0, 0.0), (1.0, 0.0)], 0.0)
+            .expect("wrench");
+        assert!((force - DVec3::new(full, 0.0, 0.0)).length() / full < 1e-12);
+        assert!((moment - DVec3::new(0.0, full, 0.0)).length() / full < 1e-12);
+        assert!(vehicle.wrench_body_n(&[(1.0, 0.0)], 0.0).is_err());
+    }
 
     fn test_vehicle() -> VehicleDefinition {
         let geometry = AeroGeometry::new(vec![

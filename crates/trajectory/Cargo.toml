@@ -1,0 +1,16 @@
+[package]
+name = "thessa-trajectory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+
+[dependencies]
+glam.workspace = true
+rayon.workspace = true
+thessa-celestial = { path = "../celestial" }
+thessa-simd = { path = "../simd" }
+
+[dev-dependencies]
+toml.workspace = true

@@ -1,0 +1,65 @@
+//! Backend-neutral vehicle state, rigid-body dynamics, mechanisms and mounts.
+
+#![forbid(unsafe_code)]
+
+use thessa_aero_core::*;
+use thessa_propulsion::*;
+
+#[cfg(test)]
+pub(crate) mod atmosphere {
+    pub use thessa_aero_core::AtmosphereComposition;
+}
+
+mod collision;
+mod docking;
+mod flight;
+mod landing_gear;
+mod parachute;
+mod part_command;
+mod reaction_wheel;
+mod vehicle;
+
+pub use collision::{
+    CollisionAxis, CollisionError, CollisionGeometry, CollisionMaterial, CollisionPart,
+    CollisionShape,
+};
+pub use docking::{
+    DockingError, DockingKinematics, DockingPortClass, DockingPortSpec, DockingPortState,
+    DockingSession,
+};
+pub use flight::{
+    FlightError, FlightForces, FlightStepInput, RigidBodyProperties, RigidBodyState,
+    constant_spin_orientation, evaluate_flight_forces, evaluate_flight_forces_soa,
+    evaluate_flight_forces_with_aero_result, integrate_attitude_step,
+    integrate_rigid_body_duration, integrate_rigid_body_duration_sampled,
+    integrate_rigid_body_step, integrate_rigid_body_step_soa,
+    integrate_rigid_body_step_with_aero_result,
+};
+pub use landing_gear::{
+    AirlessWheelStructure, BrakePoint, CompiledLandingLeg, CompiledWheelChassis,
+    CompiledWheelDrive, LandingGearActuatorPoint, LandingGearError, LandingLegMassProperties,
+    LandingLegSpec, LandingLegState, LandingShockAbsorberSpec, LandingShockPoint, MAX_LANDING_LEGS,
+    MAX_WHEELS_PER_CHASSIS, StrutLoadPoint, TireConstruction, TireLoadPoint, TireTangentForcePoint,
+    WheelBodyMassProperties, WheelBrakeSpec, WheelBrakeState, WheelChassisActuatorPoint,
+    WheelChassisMassProperties, WheelChassisRetractionSpec, WheelChassisSpec, WheelChassisState,
+    WheelContactLoadPoint, WheelDrivePoint, WheelDriveSpec, WheelDriveTractionPoint, WheelLayout,
+    WheelStation, WheelStrutSpec, WheelTireSpec,
+};
+pub use parachute::{
+    MAX_PARACHUTES, ParachuteCommand, ParachuteEnvironment, ParachuteError, ParachuteLoad,
+    ParachutePhase, ParachuteSpec, ParachuteState,
+};
+pub use part_command::VehiclePartCommand;
+pub use reaction_wheel::{
+    ReactionWheelAllocation, ReactionWheelBankSpec, ReactionWheelError, allocate_reaction_wheels,
+    allocate_reaction_wheels_with_enabled_banks,
+};
+pub use vehicle::{
+    ControlChannels, ControlHinge, ControlKind, ControlMixing, ControlSurfaceActuator,
+    ControlSurfaceDefinition, FoldJointRecord, StatefulPulsedFusionWrench, StatefulTurbopropWrench,
+    VehicleDefinition, VehicleError, VehicleWheelMassSplit, X15StarterProfile,
+    control_surface_commands, x15_contact_geometry,
+};
+
+#[cfg(test)]
+mod tests;

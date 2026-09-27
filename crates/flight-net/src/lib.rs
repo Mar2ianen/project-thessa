@@ -131,13 +131,16 @@ pub struct ManeuverNodeCommand {
 /// input/commands, never world state).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientInput {
-    /// Client's view of the tick this input targets; the server clamps.
+    /// Client-observed authority tick when this state was sampled. Advisory
+    /// only: the server applies the latest received state on its next
+    /// available simulation step and does not schedule or replay by this tick.
     pub tick: u64,
     /// Manual body-axis command: pitch, yaw, roll in normalized units.
     pub control_input: [f64; 3],
     /// Assist mode selecting the server-side control law.
     pub control_mode: ControlMode,
-    /// SAS attitude target as (x, y, z, w); ignored unless finite nonzero.
+    /// SAS attitude target as (x, y, z, w); the server normalizes accepted
+    /// finite nonzero values before applying them.
     pub sas_target_xyzw: [f64; 4],
     pub throttle: f64,
     pub engine_active: bool,
@@ -309,6 +312,7 @@ impl ClientInput {
 /// server still validates and realizes it through native control laws.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GuidanceInput {
+    /// Client-observed authority tick; advisory, not a scheduling request.
     pub tick: u64,
     pub intent: GuidanceIntent,
     pub propulsion: PropulsionDemand,
@@ -386,6 +390,7 @@ pub enum AutopilotCommand {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutopilotInput {
+    /// Client-observed authority tick; advisory, not a scheduling request.
     pub tick: u64,
     pub command: AutopilotCommand,
 }

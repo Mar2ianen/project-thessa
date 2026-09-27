@@ -38,6 +38,7 @@ fn aileron(name: &str) -> ControlRegion {
         max_deflection_rad: 20.0_f64.to_radians(),
         parent: None,
         kind: ControlRegionKind::TrailingEdgeDevice,
+        mixing: None,
     }
 }
 
@@ -300,6 +301,7 @@ fn nested_tab_keeps_parent_chain() {
         max_deflection_rad: 25.0_f64.to_radians(),
         parent: None,
         kind: ControlRegionKind::TrailingEdgeDevice,
+        mixing: None,
     });
     surface.controls.push(ControlRegion {
         name: "trim-tab".into(),
@@ -310,6 +312,7 @@ fn nested_tab_keeps_parent_chain() {
         max_deflection_rad: 15.0_f64.to_radians(),
         parent: Some(0),
         kind: ControlRegionKind::TrailingEdgeDevice,
+        mixing: None,
     });
     let compiled = compile_surface(
         &surface,
@@ -565,6 +568,7 @@ fn degenerate_authoring_fails_closed() {
         max_deflection_rad: 0.4,
         parent: None,
         kind: ControlRegionKind::TrailingEdgeDevice,
+        mixing: None,
     });
     surface.controls.push(ControlRegion {
         name: "tab".into(),
@@ -575,6 +579,7 @@ fn degenerate_authoring_fails_closed() {
         max_deflection_rad: 0.2,
         parent: Some(0),
         kind: ControlRegionKind::TrailingEdgeDevice,
+        mixing: None,
     });
     assert!(matches!(
         compile_surface(
@@ -1303,6 +1308,8 @@ fn control_presets_build_validated_regions_with_mixing() {
     )
     .unwrap();
     assert_eq!(compiled.controls.len(), 3);
+    assert_eq!(compiled.controls[0].mixing, Some(ail_mix));
+    assert_eq!(compiled.controls[1].mixing, Some(elev_mix));
     assert_eq!(
         compiled
             .tags
@@ -1358,6 +1365,22 @@ fn control_presets_build_validated_regions_with_mixing() {
     assert!((mix_command(ail_mix, pitch_only)).abs() < 1e-12);
     assert!((mix_command(elev_mix, pitch_only) - 0.5).abs() < 1e-12);
 
+    let (mut invalid_mixer, _) = aileron("invalid-mixer", (0.6, 0.95)).unwrap();
+    invalid_mixer.mixing = Some(thessa_sim_core::ControlMixing {
+        pitch: f64::NAN,
+        ..thessa_sim_core::ControlMixing::default()
+    });
+    let mut invalid_surface = rectangular(8.0, 1.5);
+    invalid_surface.controls.push(invalid_mixer);
+    assert!(matches!(
+        compile_surface(
+            &invalid_surface,
+            &CompileOptions::default(),
+            &MechanismState::deployed()
+        ),
+        Err(SurfaceError::InvalidControlRegion(_))
+    ));
+
     // Flap preset documents its one-sided-limit shim openly.
     let (flap_region, flap_mix) = flap("flap", (0.2, 0.8)).unwrap();
     assert!((flap_region.min_deflection_rad + 1.0_f64.to_radians()).abs() < 1e-12);
@@ -1367,6 +1390,22 @@ fn control_presets_build_validated_regions_with_mixing() {
         ..ControlChannels::neutral()
     };
     assert!((mix_command(flap_mix, full) - 1.0).abs() < 1e-12);
+
+    let mut mirrored_surface = rectangular(8.0, 1.5);
+    mirrored_surface.mirror_y = true;
+    let (right_aileron, right_mixing) = aileron("mirrored-aileron", (0.6, 0.95)).unwrap();
+    mirrored_surface.controls.push(right_aileron);
+    let mirrored = compile_surface(
+        &mirrored_surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    assert_eq!(
+        mirrored.controls[0].mixing.unwrap().roll,
+        -right_mixing.roll,
+        "mirroring must reverse the roll gain with the surface hand"
+    );
 }
 
 #[test]
@@ -2326,6 +2365,7 @@ fn compiled_panels_carry_mechanism_metadata() {
         max_deflection_rad: 0.4,
         parent: None,
         kind: ControlRegionKind::TrailingEdgeDevice,
+        mixing: None,
     });
     tab_surface.controls.push(ControlRegion {
         name: "tab".into(),
@@ -2336,6 +2376,7 @@ fn compiled_panels_carry_mechanism_metadata() {
         max_deflection_rad: 0.2,
         parent: Some(0),
         kind: ControlRegionKind::TrailingEdgeDevice,
+        mixing: None,
     });
     let compiled_tab = compile_surface(
         &tab_surface,

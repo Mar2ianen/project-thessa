@@ -695,6 +695,15 @@ The current code slice provides:
   already a plain memcpy with nothing left to take;
 - a terrain-level `legacy-cpu vs rcbt-pages` comparison on shared selections
   (`cargo bench -p thessa-worldgen-rocky --bench compare`);
+- Bevy extraction snapshots for topology and height pages share immutable
+  `Arc` payloads; completed height/material pages and cache evictions update
+  copy-on-write page directories in batches. The clone-cost bench
+  (`cargo bench -p thessa-bevy-rcbt --bench extraction_snapshots`) uses 8,192
+  leaves and 2,048 33×33 height pages (~4.46 MB residual payload): 0.0165 µs
+  per shared snapshot clone versus 565.50 µs for the prior owned `Vec`/`BTreeMap`
+  deep-copy shape (~34,200× lower clone cost in this microbenchmark, not a
+  whole-frame speedup claim). It measures snapshot cloning, not page encoding,
+  GPU upload, or render preparation;
 - a shipped-asset anchor (`cargo bench -p thessa-worldgen-rocky --bench
   assets`): the live recipe field reproduces `assets/worlds/thessa-v3`
   albedo at RMSE 0.0013 (linear, stride 16), legacy tiles match shipped
@@ -749,11 +758,9 @@ The current code slice provides:
   pays when ancestors are actually shared. Cutoff stays a measured knob,
   not a constant.
 
-This baseline intentionally does not claim the M2.5 exit criteria. Baked page
-provider, LEB/cube-sphere neighbor balancing, indirect terrain draws, Bevy
-extraction, and visual error captures remain the
-next integration layers. No server or authoritative `PlanetField` code may
-depend on them.
+This baseline intentionally does not claim the M2.5 exit criteria. End-to-end
+visual and numeric acceptance remains outstanding. No server or authoritative
+`PlanetField` code may depend on the client extraction and rendering layers.
 
 ---
 

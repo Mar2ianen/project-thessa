@@ -6,6 +6,11 @@ table; open decisions live in `docs/06_OPEN_QUESTIONS.md`. Regenerate
 `data/system.baked.json` via `thessa-system-baker` after any `data/system.toml`
 edit.
 
+The numerical implementation is split across `thessa-aero-core`,
+`thessa-celestial`, `thessa-trajectory`, `thessa-propulsion`, and
+`thessa-vehicle-core`; `thessa-sim-core` preserves the established aggregate
+API for existing consumers.
+
 Legend: ✅ implemented · 🟡 partial (shipped slice + open remainder) ·
 🔵 design baseline/target (no code yet) · 🕰️ historical record (dated audit,
 do not update in place).
@@ -17,14 +22,14 @@ do not update in place).
 | `01_CELESTIAL_SYSTEM.md` | ✅ reference | baked ephemerides, summed gravity, 32-body working set | stability/Halo/co-orbital validation checklist |
 | `03_PHYSICS_ENGINE.md` | 🟡 prototype | DP5-FSAL + DP8-DOP853, variational STM, EphemerisFrame, monopole/quadrupole gravity tree, single-tick cohort patches with Hessian bounds, thrust/RTN arcs, envelope-barrier + active-set allocator, Rapier contact backend, gated J2/C22 harmonics | time-span patches, thermal/structural/fluid graphs, CFD, fracture |
 | `08_NUMERICAL_VERTICAL_SLICE.md` | 🟡 prototype | test-particle contract, baked hierarchy, on-rails/Verlet, harnesses, gated J2/C22 | fitted segments, higher-degree harmonics, joint multi-leg shooting, structural/thermal |
-| `11_AERODYNAMICS.md` | ✅ runtime model | panel SoA/SIMD + tables + fuselage Munk strips/body controls + composition-aware atmosphere samples + upper-band/vacuum reductions | per-body vertical atmosphere profiles, weather/winds, full wake/occlusion, high-enthalpy chemistry and viscous hypersonics, arbitrary table axes |
-| `details/02_PROCEDURAL_AERO_SURFACES.md` | 🟡 compiler slice | procedural planform/bend/section compiler, tolerance/error-budget panelization, control ownership, compiled fold-state records, structural sizing, contact parts, vehicle-baker integration | render mesh/editor UX, runtime wing-fold actuation, broader structure/failure coupling, solver-integrated airfoil polars, authored catalogs and balance |
+| `11_AERODYNAMICS.md` | ✅ runtime model | panel SoA/SIMD + tables + post-actuator aero-result reuse (2.60× in 64-panel microbenchmark) + fuselage Munk strips/body controls + composition-aware atmosphere samples + upper-band/vacuum reductions | per-body vertical atmosphere profiles, weather/winds, full wake/occlusion, high-enthalpy chemistry and viscous hypersonics, arbitrary table axes |
+| `details/02_PROCEDURAL_AERO_SURFACES.md` | 🟡 compiler/runtime slice | procedural planform/bend/section compiler, tolerance/error-budget panelization, baked five-channel control mixing with arbitrary surface counts, control ownership, compiled fold-state records, structural sizing, contact parts, vehicle-baker integration | render mesh/editor UX, runtime wing-fold actuation, flap/airbrake input wiring, broader structure/failure coupling, solver-integrated airfoil polars, authored catalogs and balance |
 | `details/03_PROCEDURAL_FUSELAGES.md` | 🟡 implementation slice | loft compiler, interior volumes, pressure-shell/tank regions, aero body strips and controls, mass/inertia, conservative contacts, renderer-neutral mesh | editor UX, cutouts, section roll, fluid redistribution and structural failure |
 | `details/04_PROCEDURAL_PROPULSION.md` | 🟡 broad backend | compiled chemical/solid/nuclear-thermal, airbreathing/ESTOC, electric, shaft-power and continuous/pulsed fusion models with baker/analyzer paths | tank depletion in flight, complete per-engine allocator, transient source fidelity and editor UI |
 | `20_ADVANCED_AERO_EFFECTORS.md` | 🟡 partial foundation | incidence controls and hinged fuselage body strips with load-limited actuators | general flap/spoiler/hinged-panel/grid-fin models, neutral bounds, `AeroEffectorModel`, high-speed plan (§§17–20: boom/buffet/plasma/vortex/ground-effect) |
 | `23_GRAVITY_FIELD_COHORTS.md` | 🟡 partial | monopole tree, quadrupole rung, single-tick patches, Hessian spatial bound | time-span patches, cohort keys, planner-patch reuse, GPU |
 | `24_ANALYTIC_AFFINE_PROPAGATION.md` | ✅ prototype | far-only analytic STM on single-tick cohorts | atmosphere/thrust/contact integration, global proof |
-| `40_RAPIER_COLLISION_INTEGRATION.md` | ✅ baseline | local contact solver, zero-gravity Rapier, readback, regime switch, articulated wheel bodies/joints, sensor-only tire queries, split mass properties, powered wheel/strut/brake/drive stepping | dynamic-body wheel contacts, richer terrain contact boundary, full PBR parity |
+| `40_RAPIER_COLLISION_INTEGRATION.md` | ✅ baseline | local contact solver, zero-gravity Rapier, readback, regime switch, stale contact telemetry clearing, articulated wheel bodies/joints, sensor-only tire queries, split mass properties, powered wheel/strut/brake/drive stepping | dynamic-body wheel contacts, richer terrain contact boundary, full PBR parity |
 | `details/05_PROCEDURAL_LANDING_GEAR.md` | 🟡 partial | wheel/tire/strut/brake/drive laws, mass/COM bake, sprung/unsprung split, articulated Rapier wheel bodies/joints, retractable chassis, fold-out legs, powered authority state/telemetry | dynamic-body wheel contacts, granular soil response, steering/anti-skid, electrical bus limits, representative fleet benchmarks |
 | `details/06_REACTION_WHEELS.md` | ✅ implemented model | named banks, per-axis torque allocation, mass/inertia bake, RCS residual routing, telemetry and pilot controls | electrical draw, rotor momentum, thermal state and desaturation |
 | `details/07_PARACHUTES.md` | ✅ implemented model | named packs, pressure/q deployment gates, reefing, aerodynamic loads/failure, mass/inertia bake and telemetry | line elasticity, canopy deformation, inflation shock and packing/reuse |
@@ -47,13 +52,13 @@ do not update in place).
 
 | Doc | Status | Implemented | Future |
 | --- | --- | --- | --- |
-| `04_RUNTIME_ARCHITECTURE.md` | 🟡 prototype | process split, 120 Hz authority, warp/rails, snapshots, f64→render-local | editor/graphs, persistence, WASM, non-promises |
+| `04_RUNTIME_ARCHITECTURE.md` | 🟡 prototype | process split, 120 Hz authority, warp/rails, single-pass ingress dispatch, Arc-shared outbound snapshots, f64→render-local | editor/graphs, persistence, WASM, non-promises |
 | `09_BEVY_VISUAL_SLICE.md` | 🟡 prototype | map/pilot/terrain-CPU/water-cubemap/atmosphere + opt-in GPU CBT + beauty/plume | multiplayer/auth/persistence, WASM |
 | `10_PILOT_INTERFACE.md` | ✅ prototype | HUD/navball/camera, RCS/reaction-wheel/gear/parachute controls, typed part commands, telemetry/snapshot boundary | — |
 | `14_VISUAL_ATMOSPHERE.md` | 🟡 partial | raster/LUT + shell clouds + gas-giant bands + aurora + field-first plume volume | volumetric clouds, weather coupling, full Solari |
 | `19_ALERTING_AND_FLIGHT_PHASES.md` | 🔵 design target | background only (regime/mode inputs) | `FlightPhase`, alerts, arbitration, Slices A–D |
 | `21_TERRAIN_STREAMING_THROUGHPUT.md` | 🔵 baseline | invariants normative | scheduler, geomorph, UMA fast path |
-| `22_RCBT_GPU_TERRAIN.md` | 🟡 baseline | §§1–18 normative, stable height slots, dirty-ordinal geometry dispatch | GPU bisector pool, native Vulkan, compressed pages |
+| `22_RCBT_GPU_TERRAIN.md` | 🟡 baseline | §§1–18 normative, Arc-shared extraction snapshots, batched COW page streaming, stable height slots, dirty-ordinal geometry dispatch | GPU bisector pool, native Vulkan, compressed pages |
 | `37_CBT_INTEGRATION_STATUS_2026_09_14.md` | ✅ opt-in | fallback + indexed raster + material pages | visual acceptance, numeric comparison, persistent topology |
 | `38_CBT_RENDER_AUDIT_2026_09_15.md` | ✅ audit | defects fixed + follow-ups | bisector pool, shadow parity, FFT ocean, virtual texture |
 | `38_ENGINE_PLUME_RENDERING.md` | 🟡 implemented renderer slice | backend-neutral plume core, Low impostor, Medium/High field-integrated volume ribbon and field-derived light | live compiled engine/nozzle state in client, adaptive residual integration, ray-traced lighting and higher-quality tiers |

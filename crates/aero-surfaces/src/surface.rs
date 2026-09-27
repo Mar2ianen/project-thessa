@@ -72,9 +72,9 @@ impl SurfaceTileLayer {
         0.5 * 3.0_f64.sqrt() * (self.tile_size_m + self.gap_m).powi(2)
     }
 
-    /// Solid fraction of a cell: tile hex area over cell area.
-    pub(crate) fn fill_fraction(self) -> f64 {
-        (self.tile_size_m / (self.tile_size_m + self.gap_m)).powi(2)
+    /// Face area of one regular hexagonal tile (flat-to-flat width).
+    pub(crate) fn tile_area_m2(self) -> f64 {
+        0.5 * 3.0_f64.sqrt() * self.tile_size_m.powi(2)
     }
 }
 

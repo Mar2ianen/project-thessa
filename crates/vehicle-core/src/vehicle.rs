@@ -4,22 +4,22 @@ use glam::{DMat3, DQuat, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AeroConfig, AeroError, AeroGeometry, AeroPanel, AeroResult, AuthorityReason, CabinError,
-    CabinExit, CabinMonument, CabinSeat, CollisionAxis, CollisionError, CollisionGeometry,
-    CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine, CompiledLandingLeg,
-    CompiledWheelChassis, ControlAuthority, ControlCore, ControlStation, CrewSuitMode,
-    ElectricThrusterCommand, ElectricThrusterMount, ElectricThrusterPoint, ElectricalPowerCommand,
-    ElectricalPowerError, ElectricalPowerState, ElectricalPowerSystem, ElectricalPowerTelemetry,
-    EngineMount, EstocPoint, FlightCondition, FlightError, FusionTorchCommand, FusionTorchMount,
-    FusionTorchOperatingPoint, HeatShieldMount, JetCommand, JetMount, LandingGearError,
-    LandingLegMassProperties, LandingLegSpec, ParachuteError, ParachuteSpec, PressurizedCabin,
-    PropDrivePoint, PropellerDriveCommand, PropellerDriveMount, PropulsionError,
-    PulsedFusionCommand, PulsedFusionMount, PulsedFusionOperatingPoint, PulsedFusionState,
-    ReactionWheelBankSpec, ReactionWheelError, RigidBodyProperties, ShieldError, SolarOccluder,
-    SystemMount, TankMount, ThermalCommand, ThermalError, ThermalState, ThermalSystem,
-    ThermalTelemetry, TurbopropCommand, TurbopropMount, TurbopropOperatingPoint, VehicleAssembly,
-    WheelBodyMassProperties, WheelChassisMassProperties, WheelChassisSpec, WheelChassisState,
-    control_authority,
+    AeroBluntDisc, AeroConfig, AeroError, AeroGeometry, AeroPanel, AeroResult, AuthorityReason,
+    CabinError, CabinExit, CabinMonument, CabinSeat, CollisionAxis, CollisionError,
+    CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine,
+    CompiledLandingLeg, CompiledWheelChassis, ControlAuthority, ControlCore, ControlStation,
+    CrewSuitMode, ElectricThrusterCommand, ElectricThrusterMount, ElectricThrusterPoint,
+    ElectricalPowerCommand, ElectricalPowerError, ElectricalPowerState, ElectricalPowerSystem,
+    ElectricalPowerTelemetry, EngineMount, EstocPoint, FlightCondition, FlightError,
+    FusionTorchCommand, FusionTorchMount, FusionTorchOperatingPoint, HeatShieldMount, JetCommand,
+    JetMount, LandingGearError, LandingLegMassProperties, LandingLegSpec, ParachuteError,
+    ParachuteSpec, PressurizedCabin, PropDrivePoint, PropellerDriveCommand, PropellerDriveMount,
+    PropulsionError, PulsedFusionCommand, PulsedFusionMount, PulsedFusionOperatingPoint,
+    PulsedFusionState, ReactionWheelBankSpec, ReactionWheelError, RigidBodyProperties, ShieldError,
+    SolarOccluder, SystemMount, TankMount, ThermalCommand, ThermalError, ThermalState,
+    ThermalSystem, ThermalTelemetry, TurbopropCommand, TurbopropMount, TurbopropOperatingPoint,
+    VehicleAssembly, WheelBodyMassProperties, WheelChassisMassProperties, WheelChassisSpec,
+    WheelChassisState, control_authority,
 };
 
 pub type StatefulTurbopropWrench = (
@@ -982,38 +982,120 @@ impl VehicleDefinition {
         self.replace_cabin_states(updated_cabins)
     }
 
-    /// Dump one cabin's air inventory overboard while keeping vehicle mass
-    /// properties and all body-frame geometry centered on the updated COM.
-    /// Existing mass properties must include the cabin's current air mass.
+    /// Dump a cabin's connected air domain overboard while keeping vehicle
+    /// mass properties and all body-frame geometry centered on the updated
+    /// COM. Existing mass properties must include current cabin air.
     pub fn vent_cabin(&mut self, name: &str) -> Result<f64, VehicleError> {
+        self.validate()?;
+        let domain_names = self.cabin_air_domain_names(name)?;
         let mut updated_cabins = self.cabins.clone();
-        let cabin = updated_cabins
-            .iter_mut()
-            .find(|cabin| cabin.name == name)
-            .ok_or_else(|| VehicleError::InvalidVehicle(format!("no cabin named '{name}'")))?;
-        let dumped_kg = cabin.vent();
+        let mut dumped_kg = 0.0;
+        for cabin_name in domain_names {
+            let cabin = updated_cabins
+                .iter_mut()
+                .find(|cabin| cabin.name == cabin_name)
+                .ok_or_else(|| {
+                    VehicleError::InvalidVehicle(format!(
+                        "pressure domain references missing cabin '{cabin_name}'"
+                    ))
+                })?;
+            dumped_kg += cabin.vent();
+        }
         self.replace_cabin_states(updated_cabins)?;
         Ok(dumped_kg)
     }
 
-    /// Repressurize one cabin from a finite air reserve, updating the vehicle
-    /// COM and inertia for the added gas. Existing mass properties must
-    /// include the cabin's current air mass; insufficient reserve is atomic.
+    /// Repressurize the selected cabin's connected pressure domain from a
+    /// finite air reserve, updating vehicle COM and inertia for the added gas.
+    /// Each chamber is filled to its authored target before open domains are
+    /// equalized. Existing mass properties must include current cabin air;
+    /// insufficient reserve is atomic.
     pub fn repress_cabin(
         &mut self,
         name: &str,
         available_air_kg: f64,
     ) -> Result<f64, VehicleError> {
+        self.validate()?;
+        if !available_air_kg.is_finite() || available_air_kg < 0.0 {
+            return Err(VehicleError::Cabin(CabinError::InvalidCabin(
+                "air reserve must be finite and non-negative".into(),
+            )));
+        }
+        let domain_names = self.cabin_air_domain_names(name)?;
+        if let Some(assembly) = &self.assembly {
+            let exposed = assembly
+                .cabins_exposed_to_unpressurized_regions()
+                .map_err(|error| VehicleError::InvalidVehicle(error.to_string()))?;
+            if exposed.iter().any(|cabin_name| cabin_name == name) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "cannot repressurize cabin '{name}' while its open hatch domain is exposed to an unpressurized region"
+                )));
+            }
+        }
+
         let mut updated_cabins = self.cabins.clone();
-        let cabin = updated_cabins
-            .iter_mut()
-            .find(|cabin| cabin.name == name)
-            .ok_or_else(|| VehicleError::InvalidVehicle(format!("no cabin named '{name}'")))?;
-        let consumed_kg = cabin
-            .repress(available_air_kg)
-            .map_err(VehicleError::Cabin)?;
+        let mut needed_air_kg = 0.0;
+        for cabin_name in &domain_names {
+            let cabin = updated_cabins
+                .iter()
+                .find(|cabin| cabin.name == *cabin_name)
+                .ok_or_else(|| {
+                    VehicleError::InvalidVehicle(format!(
+                        "pressure domain references missing cabin '{cabin_name}'"
+                    ))
+                })?;
+            needed_air_kg += (cabin.full_charge_kg() - cabin.air_kg).max(0.0);
+        }
+        if !needed_air_kg.is_finite() {
+            return Err(VehicleError::Cabin(CabinError::InvalidCabin(
+                "pressure-domain air requirement overflowed".into(),
+            )));
+        }
+        if available_air_kg < needed_air_kg {
+            return Err(VehicleError::Cabin(CabinError::InsufficientAir {
+                needed_kg: needed_air_kg,
+                available_kg: available_air_kg,
+            }));
+        }
+
+        let mut consumed_kg = 0.0;
+        for cabin_name in domain_names {
+            let cabin = updated_cabins
+                .iter_mut()
+                .find(|cabin| cabin.name == cabin_name)
+                .expect("validated pressure-domain cabin exists");
+            consumed_kg += cabin
+                .repress(available_air_kg)
+                .map_err(VehicleError::Cabin)?;
+        }
+        if let Some(assembly) = &self.assembly {
+            assembly
+                .equalize_cabin_states(&mut updated_cabins)
+                .map_err(|error| VehicleError::InvalidVehicle(error.to_string()))?;
+        }
         self.replace_cabin_states(updated_cabins)?;
         Ok(consumed_kg)
+    }
+
+    fn cabin_air_domain_names(&self, name: &str) -> Result<Vec<String>, VehicleError> {
+        if !self.cabins.iter().any(|cabin| cabin.name == name) {
+            return Err(VehicleError::InvalidVehicle(format!(
+                "no cabin named '{name}'"
+            )));
+        }
+        let Some(assembly) = &self.assembly else {
+            return Ok(vec![name.to_owned()]);
+        };
+        assembly
+            .air_domains()
+            .map_err(|error| VehicleError::InvalidVehicle(error.to_string()))?
+            .into_iter()
+            .find(|domain| domain.iter().any(|cabin_name| cabin_name == name))
+            .ok_or_else(|| {
+                VehicleError::InvalidVehicle(format!(
+                    "assembly has no pressure domain for cabin '{name}'"
+                ))
+            })
     }
 
     fn equalized_assembly_cabins(&self) -> Result<Vec<PressurizedCabin>, VehicleError> {
@@ -1037,7 +1119,6 @@ impl VehicleDefinition {
         // Validate and compute every fallible result before mutating the
         // vehicle. This keeps the transition atomic without cloning its
         // potentially large aero/collision geometry.
-        self.validate()?;
         if let Some(assembly) = &self.assembly {
             for cabin in &mut updated_cabins {
                 if let Some(volume) = assembly
@@ -1052,6 +1133,7 @@ impl VehicleDefinition {
         for cabin in &updated_cabins {
             cabin.validate().map_err(VehicleError::Cabin)?;
         }
+        self.validate_with_cabins(&updated_cabins)?;
         let (mass_properties, frame_shift) =
             self.mass_properties_after_cabin_change(&self.cabins, &updated_cabins)?;
         if !self.body_frame_shift_is_finite(frame_shift)
@@ -1224,6 +1306,26 @@ impl VehicleDefinition {
         for shield in &mut self.heat_shields {
             shield.position_body_m += shift;
         }
+        for chassis in &mut self.wheel_chassis {
+            chassis.spec.mount_position_body_m += shift;
+            if let Some(retraction) = &mut chassis.spec.retraction {
+                retraction.pivot_position_body_m += shift;
+            }
+            for station in &mut chassis.wheel_stations {
+                station.position_body_m += shift;
+            }
+            chassis.mass_properties.center_of_mass_body_m += shift;
+        }
+        for leg in &mut self.landing_legs {
+            leg.spec.mount_position_body_m += shift;
+            leg.mass_properties.center_of_mass_body_m += shift;
+        }
+        for bank in &mut self.reaction_wheels {
+            bank.position_body_m += shift;
+        }
+        for parachute in &mut self.parachutes {
+            parachute.position_body_m += shift;
+        }
         for cabin in &mut self.cabins {
             cabin.centroid_body_m += shift;
         }
@@ -1311,6 +1413,29 @@ impl VehicleDefinition {
                 .turboprops
                 .iter()
                 .all(|mount| shifted_station_is_finite(&mount.position_body_m))
+            && self.wheel_chassis.iter().all(|chassis| {
+                shifted_point_is_finite(chassis.spec.mount_position_body_m)
+                    && chassis.spec.retraction.is_none_or(|retraction| {
+                        shifted_point_is_finite(retraction.pivot_position_body_m)
+                    })
+                    && chassis
+                        .wheel_stations
+                        .iter()
+                        .all(|station| shifted_point_is_finite(station.position_body_m))
+                    && shifted_point_is_finite(chassis.mass_properties.center_of_mass_body_m)
+            })
+            && self.landing_legs.iter().all(|leg| {
+                shifted_point_is_finite(leg.spec.mount_position_body_m)
+                    && shifted_point_is_finite(leg.mass_properties.center_of_mass_body_m)
+            })
+            && self
+                .reaction_wheels
+                .iter()
+                .all(|bank| shifted_point_is_finite(bank.position_body_m))
+            && self
+                .parachutes
+                .iter()
+                .all(|parachute| shifted_point_is_finite(parachute.position_body_m))
             && self
                 .electrical_power
                 .batteries
@@ -1373,6 +1498,10 @@ impl VehicleDefinition {
     }
 
     pub fn validate(&self) -> Result<(), VehicleError> {
+        self.validate_with_cabins(&self.cabins)
+    }
+
+    fn validate_with_cabins(&self, cabins: &[PressurizedCabin]) -> Result<(), VehicleError> {
         if self.name.trim().is_empty() {
             return Err(VehicleError::InvalidVehicle(
                 "vehicle name must not be empty".into(),
@@ -1516,7 +1645,7 @@ impl VehicleDefinition {
                 )));
             }
         }
-        for cabin in &self.cabins {
+        for cabin in cabins {
             cabin.validate().map_err(VehicleError::Cabin)?;
         }
         let mut cabin_exit_names = std::collections::HashSet::new();
@@ -1560,7 +1689,7 @@ impl VehicleDefinition {
                 VehicleError::InvalidVehicle(format!("invalid part assembly: {error}"))
             })?;
             let mut cabin_names = std::collections::HashSet::new();
-            for cabin in &self.cabins {
+            for cabin in cabins {
                 if !cabin_names.insert(cabin.name.as_str()) {
                     return Err(VehicleError::InvalidVehicle(format!(
                         "duplicate runtime cabin '{}'",
@@ -1579,7 +1708,7 @@ impl VehicleDefinition {
                 }
             }
             for volume in assembly.volumes.iter().filter(|volume| volume.pressurized) {
-                let Some(cabin) = self.cabins.iter().find(|cabin| cabin.name == volume.name) else {
+                let Some(cabin) = cabins.iter().find(|cabin| cabin.name == volume.name) else {
                     return Err(VehicleError::InvalidVehicle(format!(
                         "pressurized assembly volume '{}' has no runtime cabin",
                         volume.name
@@ -1591,6 +1720,23 @@ impl VehicleDefinition {
                     return Err(VehicleError::InvalidVehicle(format!(
                         "assembly volume '{}' does not match its runtime cabin volume",
                         volume.name
+                    )));
+                }
+            }
+            for cabin_name in
+                assembly
+                    .cabins_exposed_to_unpressurized_regions()
+                    .map_err(|error| {
+                        VehicleError::InvalidVehicle(format!("invalid part assembly: {error}"))
+                    })?
+            {
+                if cabins
+                    .iter()
+                    .find(|cabin| cabin.name == cabin_name)
+                    .is_some_and(|cabin| cabin.air_kg > 0.0)
+                {
+                    return Err(VehicleError::InvalidVehicle(format!(
+                        "open assembly hatch exposes pressurized cabin '{cabin_name}' to an unpressurized region"
                     )));
                 }
             }
@@ -1808,9 +1954,10 @@ impl VehicleDefinition {
         Ok(self)
     }
 
-    /// Attach blunt heat-shield discs for Newtonian aerodynamics.
-    /// Shield mass already bakes through the fuselage hull aggregate;
-    /// mounts carry force-application geometry only.
+    /// Attach blunt heat-shield mounts and compile their Newtonian aero discs.
+    /// The supplied shields replace the vehicle's blunt-disc list, keeping
+    /// mount and force geometry in sync. Shield mass already bakes through the
+    /// fuselage hull aggregate; mounts carry force-application geometry only.
     pub fn with_heat_shields(
         mut self,
         heat_shields: Vec<HeatShieldMount>,
@@ -1825,6 +1972,14 @@ impl VehicleDefinition {
                 )));
             }
         }
+        self.aero_geometry.blunt_discs = heat_shields
+            .iter()
+            .map(|shield| AeroBluntDisc {
+                position_body_m: shield.position_body_m,
+                normal_body_m: shield.normal_body_m,
+                area_m2: shield.area_m2(),
+            })
+            .collect();
         self.heat_shields = heat_shields;
         self.validate()?;
         Ok(self)
@@ -3636,6 +3791,26 @@ mod tests {
     }
 
     #[test]
+    fn heat_shield_mounts_compile_into_shared_aero_geometry() {
+        let shield = HeatShieldMount::new("fore-shield", DVec3::new(2.0, 0.0, 0.0), DVec3::X, 2.0)
+            .expect("valid shield");
+        let vehicle = test_vehicle()
+            .with_heat_shields(vec![shield.clone()])
+            .expect("attach shield");
+
+        assert_eq!(vehicle.aero_geometry.blunt_discs.len(), 1);
+        let disc = &vehicle.aero_geometry.blunt_discs[0];
+        assert_eq!(disc.position_body_m, shield.position_body_m);
+        assert_eq!(disc.normal_body_m, shield.normal_body_m);
+        assert!((disc.area_m2 - shield.area_m2()).abs() < 1.0e-12);
+
+        let cleared = vehicle
+            .with_heat_shields(Vec::new())
+            .expect("replace shields");
+        assert!(cleared.aero_geometry.blunt_discs.is_empty());
+    }
+
+    #[test]
     fn own_hull_shadow_kills_array_output_through_shared_occluders() {
         // Tall hull box at the origin, array panel 5 m to its side facing
         // up: a high sun past the hull face is blocked although incidence
@@ -4223,7 +4398,8 @@ mod cabin_authority_tests {
     use super::*;
     use crate::{
         AssemblyVolume, AutopilotTier, CabinExit, CabinExitSide, CabinExitType, ControlCore,
-        ControlStation, CrewSuitMode, NamedAssemblyLink, PressurizedCabin, R_DRY_AIR_J_KG_K,
+        ControlStation, CrewSuitMode, LandingShockAbsorberSpec, NamedAssemblyLink,
+        PressurizedCabin, R_DRY_AIR_J_KG_K, WheelLayout,
     };
 
     fn bare_vehicle() -> VehicleDefinition {
@@ -4320,6 +4496,107 @@ mod cabin_authority_tests {
             )
             .expect("capsule cabin"),
         ]
+    }
+
+    fn test_wheel_chassis() -> WheelChassisSpec {
+        WheelChassisSpec {
+            name: "recenter-test-wheel".into(),
+            mount_position_body_m: DVec3::new(1.5, -0.5, -1.0),
+            mount_orientation_body: DQuat::IDENTITY,
+            length_m: 0.5,
+            layout: WheelLayout::Inline,
+            wheel_count: 1,
+            structural_mass_kg: 4.0,
+            structural_inertia_local_kg_m2: DMat3::IDENTITY,
+            tire: crate::WheelTireSpec {
+                construction: crate::TireConstruction::Airless {
+                    structure: crate::AirlessWheelStructure::Spoked { spoke_count: 8 },
+                    structure_density_kg_m3: 1_000.0,
+                    minimum_temperature_k: 100.0,
+                    maximum_temperature_k: 500.0,
+                },
+                radius_m: 0.25,
+                width_m: 0.1,
+                mass_kg: 1.0,
+                spin_inertia_kg_m2: 0.1,
+                radial_stiffness_n_m: 1_000.0,
+                radial_damping_n_s_m: 100.0,
+                longitudinal_slip_stiffness_n_per_mps: 1_000.0,
+                lateral_slip_stiffness_n_per_mps: 1_000.0,
+                maximum_deflection_m: 0.05,
+                maximum_load_n: 10_000.0,
+                surface_friction: 0.8,
+            },
+            strut: crate::WheelStrutSpec {
+                extended_length_m: 0.5,
+                stroke_m: 0.1,
+                spring_rate_n_m: 5_000.0,
+                damping_n_s_m: 100.0,
+                preload_n: 0.0,
+                minimum_force_n: 0.0,
+                maximum_force_n: 10_000.0,
+                mass_per_wheel_kg: 0.5,
+            },
+            brake: crate::WheelBrakeSpec {
+                maximum_torque_nm: 10.0,
+                response_time_s: 0.1,
+                mass_per_wheel_kg: 0.1,
+            },
+            drive: None,
+            retraction: Some(crate::WheelChassisRetractionSpec {
+                pivot_position_body_m: DVec3::new(1.0, 0.0, -0.2),
+                hinge_axis_body: DVec3::Y,
+                stowed_angle_rad: -std::f64::consts::FRAC_PI_2,
+                deployed_angle_rad: 0.0,
+                initially_deployed: true,
+                deployment_rate_rad_s: 0.5,
+                actuator_max_torque_nm: 100.0,
+            }),
+        }
+    }
+
+    fn test_landing_leg() -> LandingLegSpec {
+        LandingLegSpec {
+            name: "recenter-test-leg".into(),
+            mount_position_body_m: DVec3::new(-1.0, 0.5, -0.2),
+            hinge_axis_body: DVec3::Y,
+            stowed_leg_axis_body: DVec3::Z,
+            stowed_angle_rad: 0.0,
+            deployed_angle_rad: std::f64::consts::PI,
+            initially_deployed: true,
+            deployment_rate_rad_s: 0.5,
+            actuator_max_torque_nm: 100.0,
+            leg_length_m: 2.0,
+            leg_mass_kg: 5.0,
+            footpad_radius_m: 0.2,
+            footpad_mass_kg: 1.0,
+            footpad_friction: 0.8,
+            footpad_slip_stiffness_n_per_mps: 1_000.0,
+            shock_absorber: LandingShockAbsorberSpec::Reusable {
+                stroke_m: 0.2,
+                spring_rate_n_m: 5_000.0,
+                damping_n_s_m: 100.0,
+                preload_n: 0.0,
+                bottom_out_stiffness_n_m: 10_000.0,
+                maximum_force_n: 20_000.0,
+            },
+        }
+    }
+
+    fn test_parachute() -> ParachuteSpec {
+        ParachuteSpec {
+            name: "recenter-test-chute".into(),
+            reference_area_m2: 10.0,
+            drag_coefficient: 1.2,
+            reefed_area_fraction: 0.2,
+            inflation_time_s: 1.0,
+            deploy_pressure_pa: 5_000.0,
+            max_deploy_dynamic_pressure_pa: 1_000.0,
+            max_canopy_load_n: 10_000.0,
+            pack_mass_kg: 2.0,
+            position_body_m: DVec3::new(2.0, 1.0, -0.5),
+            inertia_body_kg_m2: DMat3::IDENTITY,
+        }
     }
 
     #[test]
@@ -4529,6 +4806,74 @@ mod cabin_authority_tests {
     }
 
     #[test]
+    fn vent_and_repress_operate_on_the_whole_open_air_domain() {
+        let cabins = unequal_cabins();
+        let initial_air_kg = cabins.iter().map(|cabin| cabin.air_kg).sum::<f64>();
+        let mut vehicle = bare_vehicle();
+        vehicle.mass_properties = RigidBodyProperties::new(
+            1_000.0 + initial_air_kg,
+            DMat3::from_diagonal(DVec3::splat(500.0)),
+        )
+        .expect("mass properties include cabin air");
+        vehicle = vehicle
+            .with_cabins(cabins)
+            .expect("cabins")
+            .with_assembly(air_assembly(true))
+            .expect("open connected cabins");
+
+        let dumped_kg = vehicle.vent_cabin("service.cabin").expect("vent domain");
+        assert!((dumped_kg - initial_air_kg).abs() < 1e-12);
+        assert!(vehicle.cabins.iter().all(|cabin| cabin.air_kg == 0.0));
+        assert!(
+            vehicle
+                .cabins
+                .iter()
+                .all(|cabin| cabin.state == crate::CabinPressureState::Vacuum)
+        );
+        assert!((vehicle.mass_properties.mass_kg - 1_000.0).abs() < 1e-12);
+
+        let vented = vehicle.clone();
+        let needed_air_kg: f64 = vehicle
+            .cabins
+            .iter()
+            .map(PressurizedCabin::full_charge_kg)
+            .sum();
+        assert!(
+            vehicle
+                .repress_cabin("capsule.cabin", needed_air_kg - 1e-6)
+                .is_err()
+        );
+        assert_eq!(vehicle, vented, "insufficient domain reserve is atomic");
+
+        let consumed_kg = vehicle
+            .repress_cabin("capsule.cabin", needed_air_kg)
+            .expect("repress shared domain");
+        assert!((consumed_kg - needed_air_kg).abs() < 1e-12);
+        assert!(vehicle.cabins.iter().all(|cabin| cabin.air_kg > 0.0));
+        assert!(
+            (vehicle.cabins[0].current_pressure_kpa() - vehicle.cabins[1].current_pressure_kpa())
+                .abs()
+                < 1e-10
+        );
+    }
+
+    #[test]
+    fn open_hatch_to_dry_region_cannot_be_repressurized() {
+        let mut cabin = PressurizedCabin::new("service.cabin", 2.0, 101.325, 293.15, 0.21, 0.0)
+            .expect("vacuum cabin");
+        cabin.vent();
+        let vehicle = bare_vehicle()
+            .with_cabins(vec![cabin])
+            .expect("cabin")
+            .with_assembly(dry_hatch_assembly(true))
+            .expect("open dry hatch");
+        let mut vehicle = vehicle;
+        let before = vehicle.clone();
+        assert!(vehicle.repress_cabin("service.cabin", 10.0).is_err());
+        assert_eq!(vehicle, before);
+    }
+
+    #[test]
     fn pressurized_route_allows_unsuited_and_hose_fed_crew() {
         let vehicle = bare_vehicle()
             .with_cabins(unequal_cabins())
@@ -4582,6 +4927,20 @@ mod cabin_authority_tests {
         let initial_center_of_pressure = vehicle.aero_geometry.panels[0].center_of_pressure_body_m;
         let initial_exit_position = DVec3::new(8.0, 2.0, -1.0);
         vehicle = vehicle
+            .with_wheel_chassis(vec![test_wheel_chassis()])
+            .expect("wheel chassis")
+            .with_landing_legs(vec![test_landing_leg()])
+            .expect("landing leg")
+            .with_reaction_wheels(vec![ReactionWheelBankSpec {
+                name: "recenter-test-wheel-bank".into(),
+                max_torque_body_nm: DVec3::splat(10.0),
+                mass_kg: 2.0,
+                position_body_m: DVec3::new(0.5, -1.0, 0.5),
+                inertia_body_kg_m2: DMat3::IDENTITY,
+            }])
+            .expect("reaction wheel")
+            .with_parachutes(vec![test_parachute()])
+            .expect("parachute")
             .with_cabins(cabins.clone())
             .expect("cabins")
             .with_cabin_exits(vec![CabinExit {
@@ -4622,6 +4981,10 @@ mod cabin_authority_tests {
         let expected_inertia =
             initial_inertia + inertia_delta - parallel_axis(initial_mass_kg, expected_center_shift);
         assert!(expected_center_shift.length() > 1.0e-6);
+        let initial_wheel_chassis = vehicle.wheel_chassis[0].clone();
+        let initial_landing_leg = vehicle.landing_legs[0].clone();
+        let initial_reaction_wheel = vehicle.reaction_wheels[0].position_body_m;
+        let initial_parachute = vehicle.parachutes[0].position_body_m;
 
         vehicle
             .set_assembly_hatch_open("hatch", true)
@@ -4646,6 +5009,67 @@ mod cabin_authority_tests {
         assert!(
             (vehicle.cabin_exits[0].position_body_m
                 - (initial_exit_position + expected_frame_shift))
+                .length()
+                < 1e-12
+        );
+        let shifted_chassis = &vehicle.wheel_chassis[0];
+        assert!(
+            (shifted_chassis.spec.mount_position_body_m
+                - (initial_wheel_chassis.spec.mount_position_body_m + expected_frame_shift))
+                .length()
+                < 1e-12
+        );
+        assert!(
+            (shifted_chassis
+                .spec
+                .retraction
+                .unwrap()
+                .pivot_position_body_m
+                - (initial_wheel_chassis
+                    .spec
+                    .retraction
+                    .unwrap()
+                    .pivot_position_body_m
+                    + expected_frame_shift))
+                .length()
+                < 1e-12
+        );
+        assert!(
+            (shifted_chassis.wheel_stations[0].position_body_m
+                - (initial_wheel_chassis.wheel_stations[0].position_body_m + expected_frame_shift))
+                .length()
+                < 1e-12
+        );
+        assert!(
+            (shifted_chassis.mass_properties.center_of_mass_body_m
+                - (initial_wheel_chassis.mass_properties.center_of_mass_body_m
+                    + expected_frame_shift))
+                .length()
+                < 1e-12
+        );
+        assert!(
+            (vehicle.landing_legs[0].spec.mount_position_body_m
+                - (initial_landing_leg.spec.mount_position_body_m + expected_frame_shift))
+                .length()
+                < 1e-12
+        );
+        assert!(
+            (vehicle.landing_legs[0]
+                .mass_properties
+                .center_of_mass_body_m
+                - (initial_landing_leg.mass_properties.center_of_mass_body_m
+                    + expected_frame_shift))
+                .length()
+                < 1e-12
+        );
+        assert!(
+            (vehicle.reaction_wheels[0].position_body_m
+                - (initial_reaction_wheel + expected_frame_shift))
+                .length()
+                < 1e-12
+        );
+        assert!(
+            (vehicle.parachutes[0].position_body_m - (initial_parachute + expected_frame_shift))
                 .length()
                 < 1e-12
         );

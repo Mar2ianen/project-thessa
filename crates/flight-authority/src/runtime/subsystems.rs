@@ -11,6 +11,18 @@ impl FlightAuthority {
         if frame_shift_body_m == DVec3::ZERO {
             return Ok(());
         }
+        self.apply_resource_geometry_shift(frame_shift_body_m)?;
+        self.relative_position_m += rebase_resource_frame_state(frame_shift_body_m, state);
+        Ok(())
+    }
+
+    pub(super) fn apply_resource_geometry_shift(
+        &mut self,
+        frame_shift_body_m: DVec3,
+    ) -> Result<(), FlightError> {
+        if frame_shift_body_m == DVec3::ZERO {
+            return Ok(());
+        }
         for panel in &mut self.control_reference_geometry.panels {
             panel.position_body_m += frame_shift_body_m;
             panel.center_of_pressure_body_m += frame_shift_body_m;
@@ -21,16 +33,6 @@ impl FlightAuthority {
         self.aero_panels
             .sync_geometry(&self.vehicle.aero_geometry)
             .map_err(FlightError::Aero)?;
-
-        // The integrator tracks the current COM. Re-basing the compiled body
-        // frame therefore moves the state point by the opposite local shift.
-        let center_shift_body_m = -frame_shift_body_m;
-        let orientation = state.orientation_body_to_inertial;
-        let offset_inertial_m = orientation * center_shift_body_m;
-        let angular_velocity_inertial_rps = orientation * state.angular_velocity_body_rps;
-        state.position_inertial_m += offset_inertial_m;
-        state.velocity_inertial_mps += angular_velocity_inertial_rps.cross(offset_inertial_m);
-        self.relative_position_m += offset_inertial_m;
         Ok(())
     }
 
@@ -227,4 +229,19 @@ impl FlightAuthority {
         }
         Ok(())
     }
+}
+
+/// The integrator tracks the current COM. Re-basing the compiled body frame
+/// therefore moves the state point by the opposite local shift.
+pub(super) fn rebase_resource_frame_state(
+    frame_shift_body_m: DVec3,
+    state: &mut RigidBodyState,
+) -> DVec3 {
+    let center_shift_body_m = -frame_shift_body_m;
+    let orientation = state.orientation_body_to_inertial;
+    let offset_inertial_m = orientation * center_shift_body_m;
+    let angular_velocity_inertial_rps = orientation * state.angular_velocity_body_rps;
+    state.position_inertial_m += offset_inertial_m;
+    state.velocity_inertial_mps += angular_velocity_inertial_rps.cross(offset_inertial_m);
+    offset_inertial_m
 }

@@ -250,8 +250,8 @@ pub struct CompiledSurface {
 }
 
 /// Hexagonal tile layer compiled from the panel zones: both wetted sides
-/// paved on a flat-to-flat pitch lattice (count floored per side), solid
-/// fraction `(size/(size+gap))²` applied to the mass.
+/// paved on a flat-to-flat pitch lattice (count floored per side); face area
+/// and mass are sums over that estimated tile count.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompiledTileLayer {
     /// Tile count over both wetted sides.
@@ -504,14 +504,30 @@ fn compile_tile_layer(
     }
     let cell = layer.cell_area_m2();
     let per_side = (area_one_side / cell).floor() as u64;
+    if per_side == 0 {
+        return Err(SurfaceError::PanelRejected(format!(
+            "surface '{}' tile layer cannot fit one tile per side",
+            surface.name
+        )));
+    }
+    let Some(tile_count) = per_side.checked_mul(2) else {
+        return Err(SurfaceError::PanelRejected(format!(
+            "surface '{}' tile count exceeds the supported range",
+            surface.name
+        )));
+    };
+    let area_m2 = tile_count as f64 * layer.tile_area_m2();
+    let mass_kg = area_m2 * layer.thickness_m * layer.density_kg_m3;
+    if !area_m2.is_finite() || area_m2 <= 0.0 || !mass_kg.is_finite() || mass_kg <= 0.0 {
+        return Err(SurfaceError::PanelRejected(format!(
+            "surface '{}' tile area or mass overflowed",
+            surface.name
+        )));
+    }
     Ok(Some(CompiledTileLayer {
-        tile_count: 2 * per_side,
-        area_m2: 2.0 * area_one_side,
-        mass_kg: 2.0
-            * area_one_side
-            * layer.thickness_m
-            * layer.density_kg_m3
-            * layer.fill_fraction(),
+        tile_count,
+        area_m2,
+        mass_kg,
         centroid_body_m: centroid_numerator / area_one_side,
         normal_body_m: normal_numerator.normalize(),
         thickness_m: layer.thickness_m,

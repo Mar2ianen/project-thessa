@@ -38,9 +38,10 @@ fn fixture() -> (BakedEphemeris, FlightAuthority) {
     (ephemeris, runtime)
 }
 
-#[test]
-fn authoritative_fixed_tick_burns_reachable_tank_and_updates_vehicle_mass() {
-    let (ephemeris, starter) = fixture();
+fn vehicle_with_resource_test_rocket(
+    base: &VehicleDefinition,
+    thrust_axis_body: [f64; 3],
+) -> VehicleDefinition {
     let engine = LiquidEngineSpec {
         name: "runtime-main".into(),
         propellant: Propellant::LoxRp1,
@@ -64,7 +65,7 @@ fn authoritative_fixed_tick_burns_reachable_tank_and_updates_vehicle_mass() {
         name: "main".into(),
         engine: thessa_sim_core::CompiledEngine::Liquid(engine),
         position_body_m: [0.0; 3],
-        thrust_axis_body: [1.0, 0.0, 0.0],
+        thrust_axis_body,
     };
     let shape = TankShape::Sphere { diameter_m: 1.0 };
     let compiled_tank = TankSpec {
@@ -87,15 +88,21 @@ fn authoritative_fixed_tick_burns_reachable_tank_and_updates_vehicle_mass() {
         initial_propellant_kg: Some(compiled_tank.full_propellant_kg),
         resource: TankResource::Pair(Propellant::LoxRp1),
     };
-    let mut vehicle = starter
-        .vehicle
+    let mut vehicle = base
         .clone()
         .with_engines(vec![engine])
         .expect("install engine")
         .with_tanks(vec![tank])
         .expect("install tank");
-    vehicle.bake_engine_masses().expect("engine mass");
-    vehicle.bake_tank_masses().expect("tank mass");
+    vehicle.bake_engine_masses().expect("bake engine mass");
+    vehicle.bake_tank_masses().expect("bake tank mass");
+    vehicle
+}
+
+#[test]
+fn authoritative_fixed_tick_burns_reachable_tank_and_updates_vehicle_mass() {
+    let (ephemeris, starter) = fixture();
+    let vehicle = vehicle_with_resource_test_rocket(&starter.vehicle, [1.0, 0.0, 0.0]);
     let mut flight = FlightAuthority::new_with_vehicle(
         &ephemeris,
         ephemeris.body_id("thessa").unwrap(),
@@ -116,6 +123,45 @@ fn authoritative_fixed_tick_burns_reachable_tank_and_updates_vehicle_mass() {
     assert!(flight.vehicle.mass_properties.mass_kg < initial_mass);
     assert!(flight.last_propellant_flow_kg_s > 0.0);
     assert!(flight.last_propulsion_force_body_n.length() > 0.0);
+}
+
+#[test]
+fn rejected_endpoint_does_not_commit_propellant_or_mass_change() {
+    let (ephemeris, starter) = fixture();
+    let reference_body = ephemeris.body_id("thessa").unwrap();
+    let body = ephemeris.body(reference_body).unwrap();
+    let body_state = ephemeris
+        .body_state(reference_body, SimTime::EPOCH)
+        .unwrap();
+    let vehicle = vehicle_with_resource_test_rocket(&starter.vehicle, [1.0, 0.0, 0.0]);
+    let mut flight = FlightAuthority::new_with_vehicle(&ephemeris, reference_body, vehicle)
+        .expect("custom flight authority");
+
+    let relative_position = DVec3::Z * (body.radius_m - 10.0);
+    flight.state.position_inertial_m = body_state.position_inertial + relative_position;
+    flight.state.velocity_inertial_mps = body_state.velocity_inertial;
+    flight.state.orientation_body_to_inertial = DQuat::IDENTITY;
+    flight.state.angular_velocity_body_rps = DVec3::ZERO;
+    flight.relative_position_m = relative_position;
+    flight
+        .set_engine_throttle("main", 1.0)
+        .expect("ignite installed engine");
+    let initial_state = flight.state;
+    let initial_resources = flight.resource_state.clone();
+    let initial_mass_properties = flight.vehicle.mass_properties;
+    let initial_geometry = flight.vehicle.aero_geometry.clone();
+
+    let error = flight
+        .advance(&ephemeris, ControlMode::Direct, FLIGHT_STEP_S)
+        .expect_err("endpoint guard rejects a state inside the body");
+
+    assert!(error.to_string().contains("surface contact"));
+    assert_eq!(flight.state, initial_state);
+    assert_eq!(flight.resource_state, initial_resources);
+    assert_eq!(flight.vehicle.mass_properties, initial_mass_properties);
+    assert_eq!(flight.vehicle.aero_geometry, initial_geometry);
+    assert_eq!(flight.world_tick, thessa_sim_core::WorldTick::default());
+    assert_eq!(flight.last_propellant_flow_kg_s, 0.0);
 }
 
 #[test]

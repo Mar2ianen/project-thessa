@@ -4,7 +4,7 @@
 //! Parts declare a load and priority; a single vehicle-wide bus allocates
 //! available power. There are no authored wire graphs or per-part connections.
 
-use glam::{DMat3, DQuat, DVec3};
+use glam::{DMat3, DQuat, DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt};
 
@@ -635,18 +635,16 @@ impl SolarFluxSource {
         Ok(source)
     }
 
-    /// Combined dimming: caller visibility times every geometric overlap.
+    /// Combined dimming: caller visibility times the visible fraction left
+    /// after taking the union of all geometric occluder discs.
     pub fn effective_visibility(&self) -> f64 {
-        let mut factor = self.visibility.clamp(0.0, 1.0);
-        for occluder in &self.occluders {
-            factor *= eclipse_visibility(
+        (self.visibility.clamp(0.0, 1.0)
+            * eclipse_visibility(
                 self.direction_body,
                 self.light_angular_radius_rad,
-                occluder.direction_body,
-                occluder.angular_radius_rad,
-            );
-        }
-        factor.clamp(0.0, 1.0)
+                &self.occluders,
+            ))
+        .clamp(0.0, 1.0)
     }
 
     /// Broadband irradiance actually reaching the receiver (W/m^2).
@@ -705,44 +703,217 @@ fn apparent_angular_radius(body_radius_m: f64, distance_m: f64) -> f64 {
     (body_radius_m / distance_m).asin().max(0.0)
 }
 
-/// Fraction of a stellar disc remaining visible behind one circular
-/// occluder: 1.0 clear, 0.0 fully eclipsed, smooth penumbra between.
-/// Independent implementation of the standard circle-circle overlap used by
-/// the lighting pipeline (kept in vehicle-core so power stays free of
-/// visual-crate dependencies).
+/// Fraction of a stellar disc remaining visible after the union of circular
+/// occluders is removed: 1.0 clear, 0.0 fully eclipsed, smooth penumbra
+/// between. Apparent discs use a common tangent-plane angular model; the
+/// exposed boundary arcs give the union area without counting shared shadow
+/// regions more than once. This remains independent of visual-crate code.
 fn eclipse_visibility(
     light_dir: DVec3,
     light_angular_radius_rad: f64,
-    occluder_dir: DVec3,
-    occluder_angular_radius_rad: f64,
+    occluders: &[SolarOccluder],
 ) -> f64 {
     let rl = light_angular_radius_rad.max(0.0);
-    let ro = occluder_angular_radius_rad.max(0.0);
-    if rl <= 0.0 || ro <= 0.0 {
+    if rl <= 0.0 || occluders.is_empty() {
         return 1.0;
     }
-    let cos_sep = light_dir
-        .normalize_or_zero()
-        .dot(occluder_dir.normalize_or_zero())
-        .clamp(-1.0, 1.0);
-    let separation = cos_sep.acos();
-    if separation >= rl + ro {
+
+    let light_dir = light_dir.normalize_or_zero();
+    if light_dir == DVec3::ZERO {
         return 1.0;
     }
-    if separation <= (ro - rl).abs() {
-        return if ro >= rl {
-            0.0
+    let helper_axis =
+        if light_dir.x.abs() <= light_dir.y.abs() && light_dir.x.abs() <= light_dir.z.abs() {
+            DVec3::X
+        } else if light_dir.y.abs() <= light_dir.z.abs() {
+            DVec3::Y
         } else {
-            1.0 - (ro * ro) / (rl * rl)
+            DVec3::Z
         };
+    let tangent_u = light_dir.cross(helper_axis).normalize();
+    let tangent_v = light_dir.cross(tangent_u);
+
+    let mut discs = Vec::with_capacity(occluders.len());
+    for occluder in occluders {
+        let radius = occluder.angular_radius_rad.max(0.0);
+        if radius <= 0.0 {
+            continue;
+        }
+        let cosine = light_dir
+            .dot(occluder.direction_body.normalize_or_zero())
+            .clamp(-1.0, 1.0);
+        let separation = cosine.acos();
+        if separation > rl + radius {
+            continue;
+        }
+        if radius >= separation + rl {
+            return 0.0;
+        }
+
+        let tangent = occluder.direction_body.normalize_or_zero() - light_dir * cosine;
+        let tangent_length = tangent.length();
+        let offset_direction = if tangent_length > 1.0e-15 {
+            tangent / tangent_length
+        } else {
+            // At the antipode the tangent direction is undefined. Any radial
+            // orientation is equivalent in the circular angular-disc model.
+            tangent_u
+        };
+        let center = DVec2::new(
+            separation * offset_direction.dot(tangent_u),
+            separation * offset_direction.dot(tangent_v),
+        );
+        let disc = AngularDisc { center, radius };
+        if !discs.iter().any(|existing: &AngularDisc| {
+            existing.center == disc.center && existing.radius == disc.radius
+        }) {
+            discs.push(disc);
+        }
     }
-    let overlap = circle_overlap_area(rl, ro, separation);
-    (1.0 - overlap / (std::f64::consts::PI * rl * rl)).clamp(0.0, 1.0)
+
+    match discs.as_slice() {
+        [] => 1.0,
+        [disc] => {
+            let overlap = circle_overlap_area(rl, disc.radius, disc.center.length());
+            (1.0 - overlap / (std::f64::consts::PI * rl * rl)).clamp(0.0, 1.0)
+        }
+        _ => {
+            let occulted_area = clipped_circle_union_area(rl, &discs);
+            (1.0 - occulted_area / (std::f64::consts::PI * rl * rl)).clamp(0.0, 1.0)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AngularDisc {
+    center: DVec2,
+    radius: f64,
+}
+
+/// Area covered by the union of `occluders` inside the centered stellar disc.
+/// The boundary of the clipped union consists of source-circle arcs covered
+/// by at least one occluder and occluder-circle arcs inside the source and
+/// outside every other occluder. Green's theorem integrates those arcs exactly
+/// in the angular-disc model.
+fn clipped_circle_union_area(light_radius: f64, occluders: &[AngularDisc]) -> f64 {
+    let source = AngularDisc {
+        center: DVec2::ZERO,
+        radius: light_radius,
+    };
+    let mut circles = Vec::with_capacity(occluders.len() + 1);
+    circles.push(source);
+    circles.extend_from_slice(occluders);
+
+    let mut intersection_angles = vec![Vec::new(); circles.len()];
+    for first in 0..circles.len() {
+        for second in (first + 1)..circles.len() {
+            if let Some(intersections) = circle_intersection_angles(circles[first], circles[second])
+            {
+                for (first_angle, second_angle) in intersections {
+                    intersection_angles[first].push(first_angle);
+                    intersection_angles[second].push(second_angle);
+                }
+            }
+        }
+    }
+
+    let mut covered_area = 0.0;
+    for (circle_index, circle) in circles.iter().copied().enumerate() {
+        let mut boundaries = vec![0.0];
+        boundaries.extend(
+            intersection_angles[circle_index]
+                .iter()
+                .copied()
+                .filter(|angle| {
+                    *angle > 16.0 * f64::EPSILON
+                        && *angle < std::f64::consts::TAU - 16.0 * f64::EPSILON
+                }),
+        );
+        boundaries.sort_by(f64::total_cmp);
+        boundaries.dedup_by(|left, right| (*left - *right).abs() <= 16.0 * f64::EPSILON);
+        boundaries.push(std::f64::consts::TAU);
+
+        for interval in boundaries.windows(2) {
+            let (start, end) = (interval[0], interval[1]);
+            if end <= start {
+                continue;
+            }
+            let angle = (start + end) * 0.5;
+            let point = circle.center + DVec2::new(angle.cos(), angle.sin()) * circle.radius;
+            let exposed = if circle_index == 0 {
+                occluders
+                    .iter()
+                    .any(|occluder| disc_contains(*occluder, point))
+            } else {
+                disc_contains(source, point)
+                    && occluders.iter().enumerate().all(|(other_index, other)| {
+                        other_index == circle_index - 1 || !disc_contains(*other, point)
+                    })
+            };
+            if exposed {
+                covered_area += circle_arc_signed_area(circle, start, end);
+            }
+        }
+    }
+
+    covered_area.clamp(0.0, std::f64::consts::PI * light_radius * light_radius)
+}
+
+fn circle_intersection_angles(first: AngularDisc, second: AngularDisc) -> Option<[(f64, f64); 2]> {
+    let delta = second.center - first.center;
+    let distance = delta.length();
+    if distance <= 0.0
+        || distance > first.radius + second.radius
+        || distance < (first.radius - second.radius).abs()
+    {
+        return None;
+    }
+
+    let along = ((first.radius * first.radius - second.radius * second.radius
+        + distance * distance)
+        / (2.0 * distance))
+        .clamp(-first.radius, first.radius);
+    let height = (first.radius * first.radius - along * along)
+        .max(0.0)
+        .sqrt();
+    let axis = delta / distance;
+    let perpendicular = DVec2::new(-axis.y, axis.x);
+    let mut angles = [(0.0, 0.0); 2];
+    for (index, sign) in [-1.0, 1.0].into_iter().enumerate() {
+        let point = first.center + axis * along + perpendicular * (sign * height);
+        angles[index] = (
+            (point.y - first.center.y)
+                .atan2(point.x - first.center.x)
+                .rem_euclid(std::f64::consts::TAU),
+            (point.y - second.center.y)
+                .atan2(point.x - second.center.x)
+                .rem_euclid(std::f64::consts::TAU),
+        );
+    }
+    Some(angles)
+}
+
+fn disc_contains(disc: AngularDisc, point: DVec2) -> bool {
+    point.distance_squared(disc.center) <= disc.radius * disc.radius
+}
+
+fn circle_arc_signed_area(circle: AngularDisc, start: f64, end: f64) -> f64 {
+    let (start_sin, start_cos) = start.sin_cos();
+    let (end_sin, end_cos) = end.sin_cos();
+    0.5 * (circle.radius * circle.center.x * (end_sin - start_sin)
+        + circle.radius * circle.center.y * (start_cos - end_cos)
+        + circle.radius * circle.radius * (end - start))
 }
 
 /// Intersection area of two circles (standard lens formula).
 fn circle_overlap_area(r0: f64, r1: f64, separation: f64) -> f64 {
-    let d = separation.max(1e-12);
+    let d = separation.max(0.0);
+    if d >= r0 + r1 {
+        return 0.0;
+    }
+    if d <= (r0 - r1).abs() {
+        return std::f64::consts::PI * r0.min(r1).powi(2);
+    }
     let arg0 = ((d * d + r0 * r0 - r1 * r1) / (2.0 * d * r0)).clamp(-1.0, 1.0);
     let arg1 = ((d * d + r1 * r1 - r0 * r0) / (2.0 * d * r1)).clamp(-1.0, 1.0);
     let term = ((-d + r0 + r1).max(0.0)
@@ -1681,7 +1852,7 @@ fn best_tracking_angle(
         return 0.0;
     };
     let total_weight: f64 = weights_w_m2.iter().sum();
-    if total_weight <= 0.0 {
+    if !total_weight.is_finite() || total_weight <= 0.0 {
         return current_angle_rad;
     }
     let current_value = tracking_objective(array, current_angle_rad, sources, weights_w_m2);
@@ -2231,13 +2402,65 @@ mod tests {
         annular.occluders = vec![SolarOccluder::new(DVec3::Z, 0.01).unwrap()];
         assert!((annular.effective_visibility() - 0.75).abs() < 1.0e-9);
 
-        // Two independent occluders multiply; occluders without a stellar
-        // disc fail closed instead of silently passing full sun.
-        let mut double = annular.clone();
-        double
+        // Coincident shadows cover the same area only once.
+        let mut duplicate = annular.clone();
+        duplicate
             .occluders
             .push(SolarOccluder::new(DVec3::Z, 0.01).unwrap());
-        assert!((double.effective_visibility() - 0.75 * 0.75).abs() < 1.0e-9);
+        assert!((duplicate.effective_visibility() - 0.75).abs() < 1.0e-9);
+
+        // Partially overlapping discs subtract their shared lens only once.
+        let offset_rad: f64 = 0.005;
+        let offset_direction = DVec3::new(offset_rad.sin(), 0.0, offset_rad.cos());
+        let mut partial_overlap = annular.clone();
+        partial_overlap.occluders = vec![
+            SolarOccluder::new(DVec3::Z, 0.01).unwrap(),
+            SolarOccluder::new(offset_direction, 0.01).unwrap(),
+        ];
+        let shared_area = circle_overlap_area(0.01, 0.01, offset_rad);
+        let expected_visibility = 1.0
+            - (2.0 * std::f64::consts::PI * 0.01_f64.powi(2) - shared_area)
+                / (std::f64::consts::PI * light_radius.powi(2));
+        assert!((partial_overlap.effective_visibility() - expected_visibility).abs() < 1.0e-9);
+
+        // Separated discs inside the stellar limb contribute disjoint areas.
+        let disjoint_radius = 0.005;
+        let disjoint_offset: f64 = 0.01;
+        let mut disjoint = annular.clone();
+        disjoint.occluders = vec![
+            SolarOccluder::new(
+                DVec3::new(disjoint_offset.sin(), 0.0, disjoint_offset.cos()),
+                disjoint_radius,
+            )
+            .unwrap(),
+            SolarOccluder::new(
+                DVec3::new(-disjoint_offset.sin(), 0.0, disjoint_offset.cos()),
+                disjoint_radius,
+            )
+            .unwrap(),
+        ];
+        let expected_disjoint_visibility =
+            1.0 - 2.0 * disjoint_radius.powi(2) / light_radius.powi(2);
+        assert!((disjoint.effective_visibility() - expected_disjoint_visibility).abs() < 1.0e-9);
+
+        // A near-tangent contact must not classify a whole boundary arc as
+        // eclipsed when another disc sends the calculation through the
+        // multi-occluder union path.
+        let tangent_separation = light_radius + 0.01 - 1.0e-12;
+        let mut tangent = annular.clone();
+        tangent.occluders = vec![
+            SolarOccluder::new(
+                DVec3::new(0.0, -tangent_separation.sin(), tangent_separation.cos()),
+                0.01,
+            )
+            .unwrap(),
+            SolarOccluder::new(DVec3::Z, 0.002).unwrap(),
+        ];
+        let expected_tangent_visibility = 1.0 - 0.002_f64.powi(2) / light_radius.powi(2);
+        assert!((tangent.effective_visibility() - expected_tangent_visibility).abs() < 1.0e-9);
+
+        // Occluders without a stellar disc fail closed instead of silently
+        // passing full sun.
         let mut no_disc = SolarFluxSource::new(1_000.0, DVec3::Z, 1.0).unwrap();
         no_disc.occluders = vec![SolarOccluder::new(DVec3::Z, 0.01).unwrap()];
         let system = ElectricalPowerSystem {

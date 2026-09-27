@@ -279,3 +279,41 @@ fn assembled_vehicle_bakes_transforms_and_runtime_connectivity() {
         .is_err()
     );
 }
+
+#[test]
+fn initially_open_hatch_to_dry_volume_vents_cabin_before_mass_bake() {
+    fn bake_with_hatch_open(open: bool) -> VehicleDefinition {
+        let mut asset: VehicleAsset =
+            toml::from_str(include_str!("../../../data/vehicles/example_assembly.toml"))
+                .expect("assembly TOML should parse");
+        asset.procedural_bodies[1].regions[0].kind = RegionKind::Empty;
+        asset.procedural_bodies[1].regions[0].atmosphere = None;
+        asset.assembly.links[0].hatch_open = open;
+        asset.bake().expect("dry-hatch assembly should bake")
+    }
+
+    let sealed = bake_with_hatch_open(false);
+    let open = bake_with_hatch_open(true);
+    let sealed_cabin = sealed
+        .cabins
+        .iter()
+        .find(|cabin| cabin.name == "stage.service-bay")
+        .expect("pressurized stage cabin");
+    let open_cabin = open
+        .cabins
+        .iter()
+        .find(|cabin| cabin.name == "stage.service-bay")
+        .expect("runtime stage cabin");
+
+    assert!(sealed_cabin.air_kg > 0.0);
+    assert_eq!(open_cabin.air_kg, 0.0);
+    assert_eq!(
+        open_cabin.state,
+        thessa_sim_core::CabinPressureState::Vacuum
+    );
+    assert!(
+        (sealed.mass_properties.mass_kg - open.mass_properties.mass_kg - sealed_cabin.air_kg).abs()
+            < 1e-9
+    );
+    open.validate().expect("vented initial assembly is valid");
+}

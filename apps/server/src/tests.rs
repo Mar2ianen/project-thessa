@@ -1,6 +1,10 @@
 use super::*;
-use glam::DQuat;
+use glam::{DQuat, DVec3};
 use thessa_autopilot::PlanExecutionMode;
+use thessa_sim_core::{
+    ChamberMaterial, CoolingMode, EngineCycle, EngineMount, LiquidEngineSpec, NozzleContour,
+    Propellant, TankMount, TankResource, TankShape, TankSpec, VehiclePartCommand,
+};
 
 fn input(commands: Vec<Command>) -> ClientInput {
     ClientInput {
@@ -91,6 +95,68 @@ fn test_driver() -> (Driver, IngressSender) {
         },
         upstream,
     )
+}
+
+fn install_resource_test_vehicle(sim: &mut Sim) {
+    let engine = LiquidEngineSpec {
+        name: "server-resource-engine".into(),
+        propellant: Propellant::LoxRp1,
+        cycle: EngineCycle::GasGenerator,
+        chamber_pressure_pa: 9.7e6,
+        throat_radius_m: 0.08,
+        expansion_ratio: 18.0,
+        nozzle_length_m: 0.9,
+        contour: NozzleContour::Bell,
+        chamber_material: ChamberMaterial::nickel_superalloy(),
+        cooling: CoolingMode::Regenerative,
+        mixture_ratio: None,
+        characteristic_length_m: None,
+        gimbal_range_rad: 0.0,
+        min_throttle: None,
+        restartable: true,
+    }
+    .compile()
+    .expect("compile server test engine");
+    let mount = EngineMount {
+        name: "main-engine".into(),
+        engine: thessa_sim_core::CompiledEngine::Liquid(engine),
+        position_body_m: [0.0; 3],
+        thrust_axis_body: [1.0, 0.0, 0.0],
+    };
+    let shape = TankShape::Sphere { diameter_m: 1.0 };
+    let compiled_tank = TankSpec {
+        shape,
+        pressure_pa: 500_000.0,
+        material: ChamberMaterial::nickel_superalloy(),
+    }
+    .compile(800.0)
+    .expect("compile server test tank");
+    let tank = TankMount {
+        name: "main-tank".into(),
+        tank: compiled_tank,
+        position_body_m: DVec3::X.to_array(),
+        intrinsic_inertia_body_kg_m2: shape
+            .intrinsic_inertia_body_kg_m2(
+                compiled_tank.dry_mass_kg,
+                compiled_tank.full_propellant_kg,
+            )
+            .expect("test tank inertia"),
+        initial_propellant_kg: Some(compiled_tank.full_propellant_kg),
+        resource: TankResource::Pair(Propellant::LoxRp1),
+    };
+    let mut vehicle = sim
+        .authority
+        .vehicle
+        .clone()
+        .with_engines(vec![mount])
+        .expect("install test engine")
+        .with_tanks(vec![tank])
+        .expect("install test tank");
+    vehicle.bake_engine_masses().expect("bake test engine");
+    vehicle.bake_tank_masses().expect("bake test tank");
+    let reference_body = sim.authority.reference_body;
+    sim.authority = FlightAuthority::new_with_vehicle(&sim.ephemeris, reference_body, vehicle)
+        .expect("create resource test authority");
 }
 
 fn timed_wait_graph(seconds: f64) -> AutopilotGraph {
@@ -264,6 +330,31 @@ fn part_command_reaches_authoritative_runtime() {
     // must not undo the discrete command unless the client changed it.
     driver.sim.apply_input("pilot", &input(Vec::new()));
     assert!(driver.sim.authority.rcs_enabled);
+}
+
+#[test]
+fn engine_throttle_part_command_survives_unchanged_legacy_input() {
+    let (mut driver, _) = test_driver();
+    driver.sim.register("pilot");
+    install_resource_test_vehicle(&mut driver.sim);
+
+    let command = Command::Part {
+        command: VehiclePartCommand::SetEngineThrottle {
+            name: "main-engine".into(),
+            throttle: 0.5,
+        },
+    };
+    assert!(driver.sim.apply_input("pilot", &input(vec![command])));
+    // A normal full-state packet repeats the same legacy throttle fields but
+    // carries no engine command. It must not erase the named throttle.
+    driver.sim.apply_input("pilot", &input(Vec::new()));
+    driver
+        .sim
+        .advance_chunk(1.0 / 120.0)
+        .expect("advance commanded engine");
+
+    assert!(driver.sim.authority.last_propulsion_force_body_n.x > 0.0);
+    assert!(driver.sim.authority.last_propellant_flow_kg_s > 0.0);
 }
 
 #[test]

@@ -1341,10 +1341,13 @@ nose_radius_m = 0.05
     )
     .expect("tiled wing TOML should parse");
     let vehicle = asset.bake().expect("tiled wing should bake");
-    // Rectangular 8x2 wing: one panel, 16 m^2 per side paved both sides.
+    // Rectangular 8x2 wing: one panel, 16 m^2 of candidate area per side.
     assert_eq!(vehicle.aero_geometry.panels.len(), 1);
-    let fill = (0.2_f64 / 0.22).powi(2);
-    let expected_tiles_kg = 32.0 * 0.01 * 2000.0 * fill;
+    let pitch_cell_area = 0.5 * 3.0_f64.sqrt() * 0.22_f64.powi(2);
+    let tile_face_area = 0.5 * 3.0_f64.sqrt() * 0.2_f64.powi(2);
+    let tile_count = 2 * (16.0 / pitch_cell_area).floor() as u64;
+    let expected_tile_area = tile_count as f64 * tile_face_area;
+    let expected_tiles_kg = expected_tile_area * 0.01 * 2000.0;
     assert!((vehicle.mass_properties.mass_kg - (1000.0 + expected_tiles_kg)).abs() < 1.0e-9);
     // One lumped tile node rides the thermal system with tile material.
     assert_eq!(vehicle.thermal.nodes.len(), 1);
@@ -1352,8 +1355,9 @@ nose_radius_m = 0.05
     assert_eq!(tiles.name, "wing-right.tiles");
     assert!((tiles.mass_kg - expected_tiles_kg).abs() < 1.0e-9);
     assert_eq!(tiles.max_temp_k, 1500.0);
-    assert!((tiles.radiating_area_m2 - 32.0).abs() < 1.0e-9);
-    assert!((tiles.solar_exposed_area_m2 - 16.0).abs() < 1.0e-9);
+    assert!((tiles.radiating_area_m2 - expected_tile_area).abs() < 1.0e-9);
+    assert!((tiles.solar_exposed_area_m2 - 0.5 * expected_tile_area).abs() < 1.0e-9);
+    assert!((tiles.aero_area_m2 - 0.5 * expected_tile_area).abs() < 1.0e-9);
     let state = vehicle.initial_thermal_state().expect("tile state");
     assert_eq!(state.node_temp_k, vec![280.0]);
 }

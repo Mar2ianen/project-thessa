@@ -32,7 +32,9 @@ post-occlusion irradiance and projected incidence:
 
 ```text
 A = count_x × count_y × cell_size_x × cell_size_y
-w_i = irradiance_i × visibility_i × Π eclipse(light_i, occluder_j)
+w_i = irradiance_i × visibility_i
+     × (1 - area(light_disc_i ∩ union(occluder_discs_ij))
+            / area(light_disc_i))
 Psolar = deployment_fraction × A × cell_efficiency
          × Σ w_i × max(0, normal(θ) · direction_to_star_i)
 ```
@@ -43,13 +45,18 @@ angular radius from star radius and range. Each `SolarOccluder` carries a
 body-frame direction (from an authoritative ephemeris/attitude transform) and
 an angular radius (from body size and range, e.g. a planet, another vehicle,
 or the vessel's own hull via `VehicleDefinition::own_body_occluder`, which
-ray-casts the baked collision geometry on the CPU). The combined dimming multiplies the caller's `visibility` by every
-geometric disc-overlap factor, using the same circle-circle lens formula as
-the lighting pipeline (independently implemented in vehicle-core so power
-stays free of visual-crate dependencies). Total eclipse yields exactly 0.0;
-a small craft transiting the disc blocks `(ro/rl)^2`; clear geometry yields
-1.0. Supplying occluders without a stellar angular radius fails the step
-closed instead of silently passing full sun: a point source cannot produce a
+ray-casts the baked collision geometry on the CPU). The combined dimming
+multiplies the caller's `visibility` by the fraction of the stellar disc not
+covered by the **union** of the occluder discs. Circle intersections partition
+the exposed boundary arcs, whose area is integrated once; coincident and
+partial shadows therefore are not counted multiple times. A single-disc case
+reduces to the standard circle-circle lens area. This computation uses the
+same planar apparent-disc model as the lighting pipeline, independently
+implemented in vehicle-core so power stays free of visual-crate dependencies.
+Total eclipse yields exactly 0.0; a small craft centered on the disc blocks
+`(ro/rl)^2`; clear geometry yields 1.0. Supplying occluders without a stellar
+angular radius fails the step closed instead of silently passing full sun: a
+point source cannot produce a
 penumbra.
 
 Fixed arrays keep their reference orientation. Single-axis arrays rotate the
@@ -152,15 +159,16 @@ the table remain valid with an empty power system.
 ## 5. Verification and boundary
 
 Regression tests cover inverse-square flux, incidence and eclipse visibility,
-geometric occluders (total/annular/stacked, fail-closed without a stellar
-disc), cell-area scaling, mass/inertia derivation, priority shedding, battery
+geometric occluders (total/annular plus coincident, partial, disjoint, and
+near-tangent unions; fail-closed without a stellar disc), cell-area scaling,
+mass/inertia derivation, priority shedding, battery
 and ultracapacitor energy/efficiency bounds, reactor heat/fuel balance,
 fold-actuator power limits, single-axis tracking toward the strongest of three
 suns, eclipse hold, and powered-thruster bus allocation. The tracking search
 (72-sample scan plus local refinement) recovers >= 99.5% of a 3600-step
 brute-force optimum on a three-sun fixture. The 64-vessel runtime benchmark is
-`cargo bench -p thessa-sim-core --bench electrical_power` (~240k vessel steps/s
-with tracking, occlusion, and storage pooling).
+`cargo bench -p thessa-sim-core --bench electrical_power` (~187k vessel steps/s
+on this run, with tracking, two overlapping occluders, and storage pooling).
 
 The bus is a powered-load allocation model, not a complete electrical network.
 Voltage/current dynamics, ultracapacitor leakage, converters, short circuits,

@@ -575,8 +575,8 @@ impl VehicleAsset {
         if let Some(assembly) = &runtime_assembly {
             let initial_cabins = body_cabins.clone();
             assembly
-                .equalize_cabin_states(&mut body_cabins)
-                .map_err(|error| format!("assembly cabin equilibrium: {error}"))?;
+                .resolve_initial_cabin_states(&mut body_cabins)
+                .map_err(|error| format!("assembly initial cabin state: {error}"))?;
             for cabin in &body_cabins {
                 let initial = initial_cabins
                     .iter()
@@ -796,18 +796,7 @@ impl VehicleAsset {
             );
         }
         let shift = -assembly_com;
-        let mut geometry = AeroGeometry::new(panels)?;
-        // Shield discs join the shared aero summation exactly like panels:
-        // same geometry object, same flow solution, same result. Mounts
-        // stay on the vehicle for identity and validation.
-        for mount in &body_heat_shield_mounts {
-            geometry.blunt_discs.push(AeroBluntDisc {
-                position_body_m: mount.position_body_m,
-                normal_body_m: mount.normal_body_m,
-                area_m2: mount.area_m2(),
-            });
-        }
-        geometry.validate()?;
+        let geometry = AeroGeometry::new(panels)?;
         // Properties stay in the authoring frame here (hand plus
         // surfaces, always positive-definite); the single recenter to
         // the final COM happens on the built vehicle below, after every

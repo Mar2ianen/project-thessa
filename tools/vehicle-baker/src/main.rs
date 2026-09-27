@@ -15,9 +15,9 @@ use thessa_fuselage::{
     body_collision_parts, compile_assembly, compile_body,
 };
 use thessa_sim_core::{
-    AeroBluntDisc, AeroGeometry, AeroPanel, AirCycle, AirbreathingSpec, AssemblyEndpoint,
-    AssemblyLinkState, AssemblyVolume, AtmosphereConfig, BatterySpec, CabinExit, CabinExitSide,
-    CabinExitType, CabinMonument, CabinMonumentKind, CabinSeat, CabinSeatClass,
+    AeroGeometry, AeroPanel, AirCycle, AirbreathingSpec, AssemblyEndpoint, AssemblyLinkState,
+    AssemblyVolume, AtmosphereConfig, BatterySpec, CabinExit, CabinExitSide, CabinExitType,
+    CabinMonument, CabinMonumentKind, CabinSeat, CabinSeatClass,
     CabinSeatRole as RuntimeCabinSeatRole, CabinSeatStyle, CabinSuitType, ChamberMaterial,
     ChamberSpec, CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionPart,
     CollisionShape, CompiledEngine, CompiledJet, ControlCore, ControlMixing, ControlStation,

@@ -707,19 +707,15 @@ impl FlightAuthority {
                 precomputed_aero,
             )?
         };
-        if let Some(allocation) = &propulsion_allocation {
-            let frame_shift = self
-                .vehicle
-                .commit_propulsion_step(&mut self.resource_state, allocation)
-                .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
-            self.apply_resource_frame_shift(frame_shift, &mut next)?;
-            self.last_propulsion_force_body_n = allocation.force_body_n;
-            self.last_propellant_flow_kg_s = allocation.total_propellant_flow_kg_s;
-            self.fuel_limited = allocation.fuel_limited;
+        let propulsion_frame_shift = if let Some(allocation) = &propulsion_allocation {
+            self.vehicle
+                .preview_propulsion_commit_frame_shift(&self.resource_state, allocation)
+                .map_err(|error| FlightError::InvalidInput(error.to_string()))?
         } else {
-            self.last_propulsion_force_body_n = propulsion_force_body_n;
-            self.last_propellant_flow_kg_s = 0.0;
-            self.fuel_limited = false;
+            DVec3::ZERO
+        };
+        if propulsion_frame_shift != DVec3::ZERO {
+            super::subsystems::rebase_resource_frame_state(propulsion_frame_shift, &mut next);
         }
         if !contact_active {
             self.advance_freeflight_landing_gear()?;
@@ -765,6 +761,25 @@ impl FlightAuthority {
             guard_state,
             guard_radius,
         )?;
+        // Resource inventory and vehicle mass properties commit only after
+        // the rebased endpoint passes every flight-state guard. A rejected
+        // physical step therefore cannot consume propellant or alter the
+        // vehicle's body frame.
+        if let Some(allocation) = &propulsion_allocation {
+            let frame_shift = self
+                .vehicle
+                .commit_propulsion_step(&mut self.resource_state, allocation)
+                .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+            debug_assert_eq!(frame_shift, propulsion_frame_shift);
+            self.apply_resource_geometry_shift(frame_shift)?;
+            self.last_propulsion_force_body_n = allocation.force_body_n;
+            self.last_propellant_flow_kg_s = allocation.total_propellant_flow_kg_s;
+            self.fuel_limited = allocation.fuel_limited;
+        } else {
+            self.last_propulsion_force_body_n = propulsion_force_body_n;
+            self.last_propellant_flow_kg_s = 0.0;
+            self.fuel_limited = false;
+        }
         if let Some(trace) = self.trace.as_mut() {
             trace.record(
                 self.flight_time_s,

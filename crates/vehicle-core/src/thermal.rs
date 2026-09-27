@@ -481,7 +481,7 @@ impl ThermalSystem {
         let h = command.dt_s / substeps as f64;
 
         let mut temps = state.node_temp_k.clone();
-        let mut acc = Accumulator::new(self.nodes.len());
+        let mut acc = Accumulator::new(self.nodes.len(), self.radiators.len());
         for _ in 0..substeps {
             let rates = self.step_rates(&temps, &link_edges, &radiator_edges, command);
             for (index, node) in self.nodes.iter().enumerate() {
@@ -494,6 +494,7 @@ impl ThermalSystem {
                     node.heat_capacity_j_k(),
                 );
             }
+            acc.add_radiators(&rates, h);
         }
         if temps.iter().any(|temp| !temp.is_finite()) {
             return Err(ThermalError::InvalidState(
@@ -557,7 +558,7 @@ impl ThermalSystem {
                 aero_heat_w: acc.aero_w[index] / command.dt_s,
                 internal_heat_w: acc.internal_w[index] / command.dt_s,
                 radiated_heat_w: acc.radiated_w[index] / command.dt_s,
-                radiator_rejected_heat_w: acc.radiator_w[index] / command.dt_s,
+                radiator_rejected_heat_w: acc.radiator_node_w[index] / command.dt_s,
                 conducted_net_heat_w: acc.conducted_w[index] / command.dt_s,
                 margin_to_max_k: node.max_temp_k - temp_k,
                 overheated: temp_k > node.max_temp_k,
@@ -634,6 +635,7 @@ impl ThermalSystem {
         let mut conducted = vec![0.0; self.nodes.len()];
         let mut radiated = vec![0.0; self.nodes.len()];
         let mut radiator_out = vec![0.0; self.nodes.len()];
+        let mut radiator_by_device = vec![0.0; radiators.len()];
 
         for (index, node) in self.nodes.iter().enumerate() {
             if node.solar_exposed_area_m2 > 0.0 {
@@ -664,13 +666,15 @@ impl ThermalSystem {
                 * node.radiating_area_m2
                 * (temp4 - SPACE_BACKGROUND_TEMP_K.powi(4));
         }
-        for (node_index, radiator, deployed) in radiators {
+        for (radiator_index, (node_index, radiator, deployed)) in radiators.iter().enumerate() {
             let effective_area = radiator.area_m2 * deployed;
             let temp4 = temps[*node_index].max(0.0).powi(4);
-            radiator_out[*node_index] += radiator.emissivity
+            let rejected_heat_w = radiator.emissivity
                 * STEFAN_BOLTZMANN_W_M2_K4
                 * effective_area
                 * (temp4 - SPACE_BACKGROUND_TEMP_K.powi(4));
+            radiator_out[*node_index] += rejected_heat_w;
+            radiator_by_device[radiator_index] = rejected_heat_w;
             if radiator.solar_absorptivity > 0.0 {
                 let projected: f64 = command
                     .solar_flux
@@ -703,6 +707,7 @@ impl ThermalSystem {
             conducted,
             radiated,
             radiator_out,
+            radiator_by_device,
         }
     }
 }
@@ -917,6 +922,7 @@ struct StepRates {
     conducted: Vec<f64>,
     radiated: Vec<f64>,
     radiator_out: Vec<f64>,
+    radiator_by_device: Vec<f64>,
 }
 
 struct Accumulator {
@@ -925,6 +931,7 @@ struct Accumulator {
     internal_w: Vec<f64>,
     conducted_w: Vec<f64>,
     radiated_w: Vec<f64>,
+    radiator_node_w: Vec<f64>,
     radiator_w: Vec<f64>,
     total_solar: f64,
     total_aero: f64,
@@ -935,14 +942,15 @@ struct Accumulator {
 }
 
 impl Accumulator {
-    fn new(nodes: usize) -> Self {
+    fn new(nodes: usize, radiators: usize) -> Self {
         Self {
             solar_w: vec![0.0; nodes],
             aero_w: vec![0.0; nodes],
             internal_w: vec![0.0; nodes],
             conducted_w: vec![0.0; nodes],
             radiated_w: vec![0.0; nodes],
-            radiator_w: vec![0.0; nodes],
+            radiator_node_w: vec![0.0; nodes],
+            radiator_w: vec![0.0; radiators],
             total_solar: 0.0,
             total_aero: 0.0,
             total_internal: 0.0,
@@ -958,13 +966,21 @@ impl Accumulator {
         self.internal_w[index] += internal_w * h;
         self.conducted_w[index] += rates.conducted[index] * h;
         self.radiated_w[index] += rates.radiated[index] * h;
-        self.radiator_w[index] += rates.radiator_out[index] * h;
+        self.radiator_node_w[index] += rates.radiator_out[index] * h;
         self.total_solar += rates.solar[index] * h;
         self.total_aero += rates.aero[index] * h;
         self.total_internal += internal_w * h;
         self.total_radiated += rates.radiated[index] * h;
         self.total_radiator += rates.radiator_out[index] * h;
         self.total_stored += rates.dtemp_dt[index] * h * capacity_j_k;
+    }
+
+    fn add_radiators(&mut self, rates: &StepRates, h: f64) {
+        for (accumulated, rejected_heat_w) in
+            self.radiator_w.iter_mut().zip(&rates.radiator_by_device)
+        {
+            *accumulated += rejected_heat_w * h;
+        }
     }
 }
 
@@ -1153,6 +1169,62 @@ mod tests {
             .expect("settle step");
         assert!((report.total_rejected_heat_w - 2_000.0).abs() < 5.0);
         assert!(!report.nodes[0].overheated);
+    }
+
+    #[test]
+    fn multiple_radiators_report_per_device_heat_on_their_attached_node() {
+        let mut first = node("first");
+        first.radiating_area_m2 = 0.0;
+        first.solar_exposed_area_m2 = 0.0;
+        let mut second = node("second");
+        second.radiating_area_m2 = 0.0;
+        second.solar_exposed_area_m2 = 0.0;
+        let radiators = [
+            ("small", 1.0, 0.4),
+            ("medium", 2.0, 0.7),
+            ("large", 3.0, 0.9),
+        ]
+        .into_iter()
+        .map(|(name, area_m2, emissivity)| RadiatorSpec {
+            name: name.into(),
+            attached_node: "second".into(),
+            area_m2,
+            emissivity,
+            solar_absorptivity: 0.0,
+            normal_body: DVec3::X,
+            areal_density_kg_m2: 1.0,
+            position_body_m: DVec3::ZERO,
+            deployment: RadiatorDeployment::Fixed,
+        })
+        .collect();
+        let system = ThermalSystem {
+            nodes: vec![first, second],
+            links: vec![],
+            radiators,
+            convective_k: default_convective_k(),
+        };
+        let state = system.initial_state().expect("initial state");
+        let command = ThermalCommand::idle_for(&system, 1.0);
+        let (_, report) = system.advance(&state, &command).expect("radiator step");
+
+        let base_flux =
+            STEFAN_BOLTZMANN_W_M2_K4 * (280.0_f64.powi(4) - SPACE_BACKGROUND_TEMP_K.powi(4));
+        for (telemetry, (name, area_m2, emissivity)) in report.radiators.iter().zip([
+            ("small", 1.0, 0.4),
+            ("medium", 2.0, 0.7),
+            ("large", 3.0, 0.9),
+        ]) {
+            assert_eq!(telemetry.name, name);
+            let expected = base_flux * area_m2 * emissivity;
+            assert!((telemetry.rejected_heat_w - expected).abs() < 1.0e-9 * expected);
+        }
+        let radiator_total: f64 = report
+            .radiators
+            .iter()
+            .map(|radiator| radiator.rejected_heat_w)
+            .sum();
+        assert!((report.nodes[1].radiator_rejected_heat_w - radiator_total).abs() < 1.0e-9);
+        assert_eq!(report.nodes[0].radiator_rejected_heat_w, 0.0);
     }
 
     #[test]

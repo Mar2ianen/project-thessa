@@ -313,7 +313,15 @@ impl Sim {
         } else {
             input.engine_active
         };
-        self.authority.set_legacy_propulsion(input.throttle, active);
+        let propulsion_echo_changed = previous.as_ref().is_none_or(|previous| {
+            input.throttle != previous.throttle
+                || (!has_engine_command && input.engine_active != previous.engine_active)
+        });
+        // Engine/stage edges first clear current propulsion on manual takeover;
+        // restore the coalesced legacy throttle for their resulting active state.
+        if propulsion_echo_changed || has_engine_command {
+            self.authority.set_legacy_propulsion(input.throttle, active);
+        }
         // These legacy state echoes are applied only when the client changes
         // them. Otherwise a stale last-value packet could undo an intervening
         // authoritative Part command (for example, one emitted by staging).

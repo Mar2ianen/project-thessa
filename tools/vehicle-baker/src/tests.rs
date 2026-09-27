@@ -1,6 +1,7 @@
 use super::*;
 use thessa_sim_core::{
-    AtmosphereComposition, CompiledShaftPowerSource, PropellerDriveCommand, TurbopropCommand,
+    AtmosphereComposition, CompiledShaftPowerSource, ElectricalPowerCommand, PropellerDriveCommand,
+    SolarArrayTracking, TurbopropCommand,
 };
 
 #[test]
@@ -49,6 +50,142 @@ fn reaction_wheel_asset_bakes_its_torque_ratings_mass_and_mount() {
     assert_eq!(
         decoded.mass_properties.mass_kg,
         vehicle.mass_properties.mass_kg
+    );
+}
+
+#[test]
+fn electrical_power_asset_bakes_cell_arrays_sources_loads_and_center_of_mass() {
+    let asset: VehicleAsset = toml::from_str(include_str!(
+        "../../../data/vehicles/example_powered_spacecraft.toml"
+    ))
+    .expect("powered spacecraft TOML should parse");
+    let vehicle = asset.bake().expect("powered spacecraft should bake");
+
+    assert_eq!(vehicle.electrical_power.batteries.len(), 1);
+    assert_eq!(vehicle.electrical_power.ultracapacitors.len(), 1);
+    assert_eq!(vehicle.electrical_power.solar_arrays.len(), 2);
+    assert_eq!(vehicle.electrical_power.reactors.len(), 1);
+    assert_eq!(vehicle.electrical_power.consumers.len(), 3);
+    assert!((vehicle.electrical_power.solar_arrays[0].area_m2() - 6.0).abs() < 1.0e-12);
+    assert!((vehicle.electrical_power.solar_arrays[1].area_m2() - 9.6).abs() < 1.0e-12);
+    assert!(vehicle.mass_properties.mass_kg > 2_200.0);
+    assert!(vehicle.electrical_power.batteries[0].position_body_m.x < -0.8);
+    assert_eq!(
+        vehicle.electrical_power.ultracapacitors[0].name,
+        "pulse-ionistor-bank"
+    );
+    assert!(
+        (vehicle.electrical_power.ultracapacitors[0].mass_kg() - 4.0e6 / 36_000.0).abs() < 1.0e-9
+    );
+    assert_eq!(
+        vehicle.electrical_power.solar_arrays[1].deployment,
+        SolarArrayDeployment::Foldable {
+            deployment_rate_per_s: 0.12,
+            actuator_power_w: 350.0,
+            initial_fraction: 0.0,
+        }
+    );
+    assert_eq!(
+        vehicle.electrical_power.solar_arrays[1].tracking,
+        SolarArrayTracking::SingleAxis {
+            rotation_axis_body: DVec3::X,
+            minimum_angle_rad: -std::f64::consts::FRAC_PI_2,
+            maximum_angle_rad: std::f64::consts::FRAC_PI_2,
+            slew_rate_rad_s: 0.05,
+            actuator_power_w: 120.0,
+            initial_angle_rad: 0.0,
+        }
+    );
+
+    let initial_state = vehicle
+        .initial_electrical_power_state()
+        .expect("power initial state");
+    assert_eq!(initial_state.capacitor_energy_j.len(), 1);
+    assert_eq!(initial_state.solar_array_tracking_angle_rad.len(), 2);
+    let command = ElectricalPowerCommand::idle_for(&vehicle.electrical_power, 1.0);
+    let (_, telemetry) = vehicle
+        .advance_electrical_power(&initial_state, &command)
+        .expect("vehicle power step");
+    assert!(telemetry.reactor_available_power_w > 0.0);
+
+    let encoded = serde_json::to_string(&vehicle).expect("baked vehicle JSON");
+    let decoded: VehicleDefinition = serde_json::from_str(&encoded).expect("vehicle round trip");
+    // COM-shift arithmetic plus JSON text round-trip can move the last float
+    // bit; compare discrete authoring exactly and geometry within 1e-9 m.
+    assert_eq!(
+        decoded.electrical_power.batteries.len(),
+        vehicle.electrical_power.batteries.len()
+    );
+    for (actual, expected) in decoded
+        .electrical_power
+        .batteries
+        .iter()
+        .zip(&vehicle.electrical_power.batteries)
+    {
+        assert_eq!(actual.name, expected.name);
+        assert!((actual.capacity_j - expected.capacity_j).abs() < 1.0e-9);
+        assert!((actual.position_body_m - expected.position_body_m).length() < 1.0e-9);
+    }
+    assert_eq!(
+        decoded.electrical_power.ultracapacitors.len(),
+        vehicle.electrical_power.ultracapacitors.len()
+    );
+    for (actual, expected) in decoded
+        .electrical_power
+        .ultracapacitors
+        .iter()
+        .zip(&vehicle.electrical_power.ultracapacitors)
+    {
+        assert_eq!(actual.name, expected.name);
+        assert!((actual.capacity_j - expected.capacity_j).abs() < 1.0e-9);
+        assert!((actual.position_body_m - expected.position_body_m).length() < 1.0e-9);
+    }
+    assert_eq!(
+        decoded.electrical_power.solar_arrays.len(),
+        vehicle.electrical_power.solar_arrays.len()
+    );
+    for (actual, expected) in decoded
+        .electrical_power
+        .solar_arrays
+        .iter()
+        .zip(&vehicle.electrical_power.solar_arrays)
+    {
+        assert_eq!(actual.name, expected.name);
+        assert_eq!(actual.cell_count_x, expected.cell_count_x);
+        assert_eq!(actual.cell_count_y, expected.cell_count_y);
+        assert_eq!(actual.deployment, expected.deployment);
+        assert_eq!(actual.tracking, expected.tracking);
+        assert!((actual.position_body_m - expected.position_body_m).length() < 1.0e-9);
+    }
+    assert_eq!(
+        decoded.electrical_power.reactors.len(),
+        vehicle.electrical_power.reactors.len()
+    );
+    for (actual, expected) in decoded
+        .electrical_power
+        .reactors
+        .iter()
+        .zip(&vehicle.electrical_power.reactors)
+    {
+        assert_eq!(actual.name, expected.name);
+        assert!((actual.position_body_m - expected.position_body_m).length() < 1.0e-9);
+    }
+    assert_eq!(
+        decoded.electrical_power.consumers,
+        vehicle.electrical_power.consumers
+    );
+    assert_eq!(
+        decoded.mass_properties.mass_kg,
+        vehicle.mass_properties.mass_kg
+    );
+    assert!(
+        decoded
+            .mass_properties
+            .inertia_body_kg_m2
+            .to_cols_array()
+            .iter()
+            .zip(vehicle.mass_properties.inertia_body_kg_m2.to_cols_array())
+            .all(|(decoded, baked)| (decoded - baked).abs() < 1.0e-9)
     );
 }
 

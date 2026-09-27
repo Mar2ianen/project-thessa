@@ -218,9 +218,9 @@ independent hub motors are later options, not invisible behavior.
 The motor output obeys `P = τ ω`, the rated-power and peak-torque limits. The
 wheel-ground force follows contact-patch slip and is friction-circle limited;
 motor torque itself is not silently clipped, so a wheel can spin when drive
-torque exceeds its contact grip. Electrical bus/battery resource accounting is
-a separate vehicle system and must eventually constrain motor electrical
-power.
+torque exceeds its contact grip. The shared vehicle bus is specified in
+[`09_ELECTRICAL_POWER.md`](09_ELECTRICAL_POWER.md), but this motor does not yet
+automatically submit its electrical demand to that bus.
 
 ### 4.4 Retractable aircraft wheel chassis
 

@@ -22,3 +22,4 @@ in the relevant document.
 - [Reaction-wheel attitude control](06_REACTION_WHEELS.md) — KSP-style body-moment authority with authored per-axis torque ratings, vehicle mass baking, RCS residual allocation, and pilot controls.
 - [KSP-style deployable parachutes](07_PARACHUTES.md) — automatic pressure-triggered extraction, dynamic-pressure opening limits, reefed inflation, canopy overload failure, and physically applied drag at vehicle mounts.
 - [Vehicle part commands](08_VEHICLE_PART_COMMANDS.md) — shared typed subsystem commands for pilot inputs and future stage/action-group dispatch.
+- [Vehicle electrical power](09_ELECTRICAL_POWER.md) — parameterized batteries, fission reactors, static/foldable cell arrays, and prioritized loads on one wire-free vessel bus.

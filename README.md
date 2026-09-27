@@ -23,14 +23,17 @@ The checked-in vertical slice currently contains:
   full multi-body test-particle gravity, atmosphere and panel aerodynamics,
   rigid-body flight, on-rails coast caches, cohort gravity patches, piecewise
   analytic affine propagation, cabin pressure and crew authority, part
-  assembly connectivity, installed reaction-wheel banks, and deployable
-  parachutes. The implementation is separated into `thessa-aero-core`,
+  assembly connectivity, installed reaction-wheel banks, deployable
+  parachutes, and a parameterized wire-free vehicle power bus with batteries,
+  ultracapacitors, fission reactors, sun-tracking cell-grid solar arrays with
+  geometric occlusion, and prioritized consumers. The
+  implementation is separated into `thessa-aero-core`,
   `thessa-celestial`, `thessa-trajectory`, `thessa-propulsion`, and
   `thessa-vehicle-core`;
 - `thessa-aero-surfaces`, `thessa-fuselage`, and `thessa-vehicle-baker`:
   procedural lifting-surface/body compilers, interior-volume and mass
   properties, cabin layouts and presets, static exits, controls, and assembled
-  vehicle asset compilation;
+  vehicle asset compilation including electrical power hardware;
 - `thessa-plume-core`: backend-neutral engine-exhaust profiles, optics, and
   participating-medium evaluation, consumed by the client plume renderer;
 - `thessa-flight-control` and `thessa-flight-authority`: typed guidance,

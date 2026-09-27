@@ -18,10 +18,13 @@ emits a body moment, and the rigid-body integrator turns that moment into the
 vehicle's angular response using the baked inertia tensor. There is no
 wheel-generated torque when the requested moment is zero.
 
-The current slice does not model electrical draw, rotor-speed telemetry,
-thermal load, or momentum dumping. Reaction wheels and RCS have independent
-enable switches; RCS may supply the part of the requested moment that exceeds
-the installed wheel ratings.
+The current slice does not model automatic electrical draw, rotor-speed
+telemetry, thermal load, or momentum dumping. A vehicle may declare a generic
+prioritized consumer on the shared bus (see
+[`09_ELECTRICAL_POWER.md`](09_ELECTRICAL_POWER.md)), but the wheel allocator
+does not yet generate that demand automatically. Reaction wheels and RCS have
+independent enable switches; RCS may supply the part of the requested moment
+that exceeds the installed wheel ratings.
 
 ## 2. State, inputs, and output
 

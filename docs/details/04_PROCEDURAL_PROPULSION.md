@@ -647,6 +647,13 @@ vehicle, and books power-processor, active hardware, and radiator mass. Each
 steady operating point is bounded by its electrical-power, feed-flow, current,
 and radiative heat-rejection limits.
 
+The vehicle-wide shared electrical bus is now documented in
+[`09_ELECTRICAL_POWER.md`](09_ELECTRICAL_POWER.md). An electric-thruster bus
+consumer uses the same mount name; its allocated bus power becomes the
+thruster's available-power limit. Standalone explicit power commands remain
+available, and the bus does not automatically create demands for other
+propulsion or actuator components.
+
 - Gridded-ion/Hall exhaust velocity follows singly charged particle energy,
   `ve = sqrt(2 e V / mi)`. Ion current follows particle throughput, and feed
   flow is capped by rated power, accelerator current, propellant utilization,

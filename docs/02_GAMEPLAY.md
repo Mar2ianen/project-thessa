@@ -57,14 +57,19 @@ parts. A design can include:
   hinges, radiators, intakes, and engine mounts;
 - propulsion parameters such as propellant pair, chamber/expansion class,
   throttle/restart range, gimbal, cooling, and efficiency;
-- actuator, fluid, electrical, structural, and thermal connectivity.
+- parameterized batteries, reactors, solar-cell arrays, and powered-part loads;
+- structural and fluid connectivity, with mechanisms compiled from component
+  geometry and authored attachment relationships.
 
 The implemented `VehicleDefinition` and `vehicle-baker` compile procedural
 fuselages and wings, aero panels/body strips and controls, propulsion mounts,
 wheel chassis and fold-out legs, reaction-wheel banks, parachute packs, and
-their mass/inertia contributions. An in-game parametric editor and design
-library, integration of future fluid/electrical/thermal/structural graphs, and
-damage topology are future work.
+their mass/inertia contributions. The vehicle baker also compiles a shared
+electrical bus with battery storage, fission generation, fixed/foldable
+cell-grid arrays, rated consumers, power priorities, and mass/inertia. Parts
+join the bus implicitly; wire routing is not authored. An in-game parametric
+editor and design library, automatic power-demand coupling for every actuator,
+full fluid/thermal/structural graphs, and damage topology are future work.
 
 ## 2.5. Flight and fly-by-wire
 

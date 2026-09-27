@@ -1,0 +1,106 @@
+name = "example-powered-spacecraft"
+mass_kg = 1800.0
+# Dry bus-free vehicle structure; installed power hardware is added by the baker.
+inertia_body_kg_m2 = [
+  [2400.0, 0.0, 0.0],
+  [0.0, 3100.0, 0.0],
+  [0.0, 0.0, 2800.0],
+]
+
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 1.0
+chord_m = 1.0
+
+[electrical_power]
+
+[[electrical_power.batteries]]
+name = "service-battery"
+capacity_j = 180000000.0
+initial_charge_fraction = 0.85
+maximum_charge_power_w = 8000.0
+maximum_discharge_power_w = 16000.0
+charge_efficiency = 0.94
+discharge_efficiency = 0.95
+specific_energy_j_kg = 720000.0
+dimensions_body_m = [0.8, 0.6, 0.5]
+position_body_m = [-0.8, 0.0, 0.0]
+
+[[electrical_power.ultracapacitors]]
+name = "pulse-ionistor-bank"
+capacity_j = 4000000.0
+initial_charge_fraction = 0.6
+maximum_charge_power_w = 120000.0
+maximum_discharge_power_w = 200000.0
+charge_efficiency = 0.97
+discharge_efficiency = 0.97
+specific_energy_j_kg = 36000.0
+dimensions_body_m = [0.5, 0.5, 0.4]
+position_body_m = [-0.8, 0.5, 0.0]
+
+[[electrical_power.solar_arrays]]
+name = "fixed-service-cells"
+cell_count_x = 30
+cell_count_y = 20
+cell_size_x_m = 0.1
+cell_size_y_m = 0.1
+cell_efficiency = 0.31
+cell_areal_density_kg_m2 = 2.4
+support_areal_density_kg_m2 = 1.1
+panel_u_axis_body = [1.0, 0.0, 0.0]
+panel_v_axis_body = [0.0, 1.0, 0.0]
+position_body_m = [0.0, 0.0, 0.6]
+deployment = "fixed"
+
+[[electrical_power.solar_arrays]]
+name = "fold-out-power-wing"
+cell_count_x = 80
+cell_count_y = 12
+cell_size_x_m = 0.1
+cell_size_y_m = 0.1
+cell_efficiency = 0.32
+cell_areal_density_kg_m2 = 2.1
+support_areal_density_kg_m2 = 0.9
+panel_u_axis_body = [1.0, 0.0, 0.0]
+panel_v_axis_body = [0.0, 1.0, 0.0]
+position_body_m = [0.0, 0.0, 0.0]
+deployment = "foldable"
+deployment_rate_per_s = 0.12
+actuator_power_w = 350.0
+initial_deployment_fraction = 0.0
+
+[electrical_power.solar_arrays.tracking]
+rotation_axis_body = [1.0, 0.0, 0.0]
+minimum_angle_rad = -1.5707963267948966
+maximum_angle_rad = 1.5707963267948966
+slew_rate_rad_s = 0.05
+actuator_power_w = 120.0
+initial_angle_rad = 0.0
+
+[[electrical_power.reactors]]
+name = "compact-fission-reactor"
+rated_thermal_power_w = 120000.0
+electric_efficiency = 0.28
+radiator_capacity_w = 320000.0
+initial_fuel_mass_kg = 0.015
+fuel_specific_energy_j_kg = 8.0e13
+dry_mass_kg = 420.0
+dimensions_body_m = [1.4, 1.2, 2.0]
+position_body_m = [0.8, 0.0, -0.4]
+
+[[electrical_power.consumers]]
+name = "life-support"
+rated_power_w = 2400.0
+priority = "life-support"
+
+[[electrical_power.consumers]]
+name = "avionics"
+rated_power_w = 900.0
+priority = "flight-control"
+
+[[electrical_power.consumers]]
+name = "utility-heater"
+rated_power_w = 1800.0
+priority = "utility"

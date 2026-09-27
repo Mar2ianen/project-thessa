@@ -8,15 +8,16 @@ use crate::{
     CabinExit, CabinMonument, CabinSeat, CollisionAxis, CollisionError, CollisionGeometry,
     CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine, CompiledLandingLeg,
     CompiledWheelChassis, ControlAuthority, ControlCore, ControlStation, CrewSuitMode,
-    ElectricThrusterCommand, ElectricThrusterMount, ElectricThrusterPoint, EngineMount, EstocPoint,
-    FlightCondition, FlightError, FusionTorchCommand, FusionTorchMount, FusionTorchOperatingPoint,
-    JetCommand, JetMount, LandingGearError, LandingLegMassProperties, LandingLegSpec,
-    ParachuteError, ParachuteSpec, PressurizedCabin, PropDrivePoint, PropellerDriveCommand,
-    PropellerDriveMount, PropulsionError, PulsedFusionCommand, PulsedFusionMount,
-    PulsedFusionOperatingPoint, PulsedFusionState, ReactionWheelBankSpec, ReactionWheelError,
-    RigidBodyProperties, SystemMount, TankMount, TurbopropCommand, TurbopropMount,
-    TurbopropOperatingPoint, VehicleAssembly, WheelBodyMassProperties, WheelChassisMassProperties,
-    WheelChassisSpec, WheelChassisState, control_authority,
+    ElectricThrusterCommand, ElectricThrusterMount, ElectricThrusterPoint, ElectricalPowerCommand,
+    ElectricalPowerError, ElectricalPowerState, ElectricalPowerSystem, ElectricalPowerTelemetry,
+    EngineMount, EstocPoint, FlightCondition, FlightError, FusionTorchCommand, FusionTorchMount,
+    FusionTorchOperatingPoint, JetCommand, JetMount, LandingGearError, LandingLegMassProperties,
+    LandingLegSpec, ParachuteError, ParachuteSpec, PressurizedCabin, PropDrivePoint,
+    PropellerDriveCommand, PropellerDriveMount, PropulsionError, PulsedFusionCommand,
+    PulsedFusionMount, PulsedFusionOperatingPoint, PulsedFusionState, ReactionWheelBankSpec,
+    ReactionWheelError, RigidBodyProperties, SystemMount, TankMount, TurbopropCommand,
+    TurbopropMount, TurbopropOperatingPoint, VehicleAssembly, WheelBodyMassProperties,
+    WheelChassisMassProperties, WheelChassisSpec, WheelChassisState, control_authority,
 };
 
 pub type StatefulTurbopropWrench = (
@@ -466,6 +467,10 @@ pub struct VehicleDefinition {
     /// cross-part resource reachability. None is the legacy single-body path.
     #[serde(default)]
     pub assembly: Option<VehicleAssembly>,
+    /// One ideal shared electrical bus with parameterized sources, storage,
+    /// and prioritized part loads. Empty keeps legacy vehicles unpowered.
+    #[serde(default)]
+    pub electrical_power: ElectricalPowerSystem,
 }
 
 /// Mass partition for a contact-active sprung chassis and its unsprung wheel
@@ -784,6 +789,7 @@ impl VehicleDefinition {
             control_cores: Vec::new(),
             control_stations: Vec::new(),
             assembly: None,
+            electrical_power: ElectricalPowerSystem::default(),
         };
         definition.validate()?;
         Ok(definition)
@@ -821,6 +827,90 @@ impl VehicleDefinition {
         self.assembly = Some(assembly);
         self.validate()?;
         Ok(self)
+    }
+
+    /// Attach batteries, solar arrays, fission sources, and bus consumers.
+    /// Power consumers join the vessel-wide bus implicitly; no wire graph is
+    /// authored or required.
+    pub fn with_electrical_power(
+        mut self,
+        electrical_power: ElectricalPowerSystem,
+    ) -> Result<Self, VehicleError> {
+        electrical_power
+            .validate()
+            .map_err(VehicleError::ElectricalPower)?;
+        self.electrical_power = electrical_power;
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Create saved runtime energy state from the vehicle's authored initial
+    /// battery charges, reactor inventories, and solar-array positions.
+    pub fn initial_electrical_power_state(&self) -> Result<ElectricalPowerState, VehicleError> {
+        self.electrical_power
+            .initial_state()
+            .map_err(VehicleError::ElectricalPower)
+    }
+
+    /// Advance the vessel-wide electrical network for one simulation step.
+    pub fn advance_electrical_power(
+        &self,
+        state: &ElectricalPowerState,
+        command: &ElectricalPowerCommand,
+    ) -> Result<(ElectricalPowerState, ElectricalPowerTelemetry), VehicleError> {
+        self.electrical_power
+            .advance(state, command)
+            .map_err(VehicleError::ElectricalPower)
+    }
+
+    /// Turn bus allocations into commands for installed electric thrusters.
+    /// A consumer with the same part name as a thruster is its implicit load;
+    /// callers do not connect either part with wires.
+    pub fn electric_thruster_commands_from_bus(
+        &self,
+        telemetry: &ElectricalPowerTelemetry,
+        requested_mass_flow_kg_s: &[f64],
+    ) -> Result<Vec<ElectricThrusterCommand>, VehicleError> {
+        if requested_mass_flow_kg_s.len() != self.electric_thrusters.len() {
+            return Err(VehicleError::ControlCount {
+                expected: self.electric_thrusters.len(),
+                actual: requested_mass_flow_kg_s.len(),
+            });
+        }
+        self.electric_thrusters
+            .iter()
+            .zip(requested_mass_flow_kg_s)
+            .map(|(thruster, mass_flow)| {
+                if !mass_flow.is_finite() || *mass_flow < 0.0 {
+                    return Err(VehicleError::InvalidVehicle(format!(
+                        "electric thruster '{}' mass-flow request must be finite and non-negative",
+                        thruster.name
+                    )));
+                }
+                let consumer = self
+                    .electrical_power
+                    .consumers
+                    .iter()
+                    .find(|consumer| consumer.name == thruster.name)
+                    .ok_or_else(|| {
+                        VehicleError::InvalidVehicle(format!(
+                            "electric thruster '{}' has no same-named electrical bus consumer",
+                            thruster.name
+                        ))
+                    })?;
+                let available_power_w =
+                    telemetry.supplied_power_w(&consumer.name).ok_or_else(|| {
+                        VehicleError::InvalidVehicle(format!(
+                            "power telemetry has no allocation for electric thruster '{}'",
+                            thruster.name
+                        ))
+                    })?;
+                Ok(ElectricThrusterCommand {
+                    available_power_w,
+                    requested_mass_flow_kg_s: *mass_flow,
+                })
+            })
+            .collect()
     }
 
     /// Resolve each currently connected ideal-gas domain to a common
@@ -1053,6 +1143,18 @@ impl VehicleDefinition {
         for mount in &mut self.turboprops {
             shift_array(&mut mount.position_body_m, shift);
         }
+        for battery in &mut self.electrical_power.batteries {
+            battery.position_body_m += shift;
+        }
+        for capacitor in &mut self.electrical_power.ultracapacitors {
+            capacitor.position_body_m += shift;
+        }
+        for array in &mut self.electrical_power.solar_arrays {
+            array.position_body_m += shift;
+        }
+        for reactor in &mut self.electrical_power.reactors {
+            reactor.position_body_m += shift;
+        }
         for cabin in &mut self.cabins {
             cabin.centroid_body_m += shift;
         }
@@ -1135,6 +1237,26 @@ impl VehicleDefinition {
                 .iter()
                 .all(|mount| shifted_station_is_finite(&mount.position_body_m))
             && self
+                .electrical_power
+                .batteries
+                .iter()
+                .all(|part| shifted_point_is_finite(part.position_body_m))
+            && self
+                .electrical_power
+                .ultracapacitors
+                .iter()
+                .all(|part| shifted_point_is_finite(part.position_body_m))
+            && self
+                .electrical_power
+                .solar_arrays
+                .iter()
+                .all(|part| shifted_point_is_finite(part.position_body_m))
+            && self
+                .electrical_power
+                .reactors
+                .iter()
+                .all(|part| shifted_point_is_finite(part.position_body_m))
+            && self
                 .cabins
                 .iter()
                 .all(|cabin| shifted_point_is_finite(cabin.centroid_body_m))
@@ -1204,6 +1326,23 @@ impl VehicleDefinition {
         }
         for mount in &self.turboprops {
             mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        self.electrical_power
+            .validate()
+            .map_err(VehicleError::ElectricalPower)?;
+        for thruster in &self.electric_thrusters {
+            if let Some(consumer) = self
+                .electrical_power
+                .consumers
+                .iter()
+                .find(|consumer| consumer.name == thruster.name)
+                && consumer.rated_power_w < thruster.engine.maximum_power_w
+            {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "electrical bus consumer '{}' is rated below its electric thruster",
+                    thruster.name
+                )));
+            }
         }
         let mut reaction_wheel_names = std::collections::HashSet::new();
         for bank in &self.reaction_wheels {
@@ -1582,6 +1721,22 @@ impl VehicleDefinition {
                     * (DMat3::IDENTITY * parachute.position_body_m.length_squared()
                         - outer_product(parachute.position_body_m, parachute.position_body_m));
         }
+        self.mass_properties = RigidBodyProperties::new(mass_kg, inertia_body_kg_m2)
+            .map_err(VehicleError::MassProperties)?;
+        Ok(())
+    }
+
+    /// Add battery, solar-array, and reactor mass and inertia about the
+    /// authored vehicle origin. The baker applies the common COM shift later.
+    pub fn bake_electrical_power_masses(&mut self) -> Result<(), VehicleError> {
+        let contribution = self
+            .electrical_power
+            .mass_properties()
+            .map_err(VehicleError::ElectricalPower)?;
+        let mass_kg = self.mass_properties.mass_kg + contribution.mass_kg;
+        let inertia_body_kg_m2 = self.mass_properties.inertia_body_kg_m2
+            + contribution.inertia_body_kg_m2
+            + parallel_axis(contribution.mass_kg, contribution.center_of_mass_body_m);
         self.mass_properties = RigidBodyProperties::new(mass_kg, inertia_body_kg_m2)
             .map_err(VehicleError::MassProperties)?;
         Ok(())
@@ -2852,6 +3007,7 @@ pub enum VehicleError {
     ReactionWheel(ReactionWheelError),
     Parachute(ParachuteError),
     Cabin(CabinError),
+    ElectricalPower(ElectricalPowerError),
     InvalidControlSurface(String),
     InvalidControlCommand { surface: String, command: f64 },
     ControlCount { expected: usize, actual: usize },
@@ -2880,6 +3036,9 @@ impl fmt::Display for VehicleError {
             Self::Parachute(error) => write!(formatter, "vehicle parachute error: {error}"),
             Self::Cabin(error) => {
                 write!(formatter, "vehicle cabin error: {error}")
+            }
+            Self::ElectricalPower(error) => {
+                write!(formatter, "vehicle electrical-power error: {error}")
             }
             Self::InvalidControlSurface(message) => {
                 write!(formatter, "invalid control surface: {message}")
@@ -2951,14 +3110,14 @@ mod tests {
     use super::*;
     use crate::{
         AirCycle, AirbreathingSpec, ChamberMaterial, ElectricMotorSpec, ElectricPropellant,
-        ElectricThrusterCommand, ElectricThrusterDesign, ElectricThrusterMount,
-        ElectricThrusterSpec, EstocMode, EstocSpec, FusionReaction, FusionTorchCommand,
-        FusionTorchMount, FusionTorchSpec, IntakeKind, JetFuel, LandingLegSpec,
-        LandingShockAbsorberSpec, ParachuteSpec, PropellerDriveCommand, PropellerDriveMount,
-        PropellerDriveSpec, PropellerSpec, PulsedFusionCommand, PulsedFusionMount,
-        PulsedFusionSpec, PulsedFusionState, ReactionWheelBankSpec, ShaftPowerSourceSpec,
-        ShaftSpec, TireConstruction, TurbopropCommand, TurbopropDriveSpec, TurbopropMount,
-        WheelBrakeSpec, WheelChassisSpec, WheelLayout, WheelStrutSpec, WheelTireSpec,
+        ElectricThrusterDesign, ElectricThrusterMount, ElectricThrusterSpec, EstocMode, EstocSpec,
+        FusionReaction, FusionTorchCommand, FusionTorchMount, FusionTorchSpec, IntakeKind, JetFuel,
+        LandingLegSpec, LandingShockAbsorberSpec, ParachuteSpec, PropellerDriveCommand,
+        PropellerDriveMount, PropellerDriveSpec, PropellerSpec, PulsedFusionCommand,
+        PulsedFusionMount, PulsedFusionSpec, PulsedFusionState, ReactionWheelBankSpec,
+        ShaftPowerSourceSpec, ShaftSpec, TireConstruction, TurbopropCommand, TurbopropDriveSpec,
+        TurbopropMount, WheelBrakeSpec, WheelChassisSpec, WheelLayout, WheelStrutSpec,
+        WheelTireSpec,
     };
     use thessa_propulsion::{
         CoolingMode, EngineCycle, LiquidEngineSpec, NozzleContour, Propellant,
@@ -3275,12 +3434,50 @@ mod tests {
             .expect("mass aggregate");
         assert!((vehicle.mass_properties.mass_kg - (1_000.0 + expected_mass)).abs() < 1e-10);
 
-        let command = ElectricThrusterCommand {
-            available_power_w: 5_000.0,
-            requested_mass_flow_kg_s: 1.0e-6,
-        };
+        vehicle = vehicle
+            .with_electrical_power(ElectricalPowerSystem {
+                batteries: vec![],
+                ultracapacitors: vec![],
+                solar_arrays: vec![crate::SolarArraySpec {
+                    name: "bus-test-array".into(),
+                    cell_count_x: 10,
+                    cell_count_y: 10,
+                    cell_size_x_m: 0.1,
+                    cell_size_y_m: 0.1,
+                    cell_efficiency: 0.25,
+                    cell_areal_density_kg_m2: 2.0,
+                    support_areal_density_kg_m2: 1.0,
+                    panel_u_axis_body: DVec3::X,
+                    panel_v_axis_body: DVec3::Y,
+                    position_body_m: DVec3::ZERO,
+                    deployment: crate::SolarArrayDeployment::Fixed,
+                    tracking: crate::SolarArrayTracking::Fixed,
+                }],
+                reactors: vec![],
+                consumers: vec![crate::PowerConsumerSpec {
+                    name: "aft-ion".into(),
+                    rated_power_w: 5_000.0,
+                    priority: crate::PowerPriority::Propulsion,
+                }],
+            })
+            .expect("attach shared bus");
+        let state = vehicle
+            .initial_electrical_power_state()
+            .expect("initial electrical state");
+        let mut power_step = ElectricalPowerCommand::idle_for(&vehicle.electrical_power, 1.0);
+        power_step.solar_flux = vec![
+            crate::SolarFluxSource::new(20_000.0, DVec3::Z, 1.0).expect("incident solar flux"),
+        ];
+        power_step.consumer_power_w = vec![5_000.0];
+        let (_, power_telemetry) = vehicle
+            .advance_electrical_power(&state, &power_step)
+            .expect("allocate solar power");
+        let commands = vehicle
+            .electric_thruster_commands_from_bus(&power_telemetry, &[1.0e-6])
+            .expect("map implicit bus allocation to thruster");
+        assert_eq!(commands[0].available_power_w, 5_000.0);
         let ((force, moment), points) = vehicle
-            .electric_thrusters_wrench_body_n(&[command])
+            .electric_thrusters_wrench_body_n(&commands)
             .expect("electric-thruster wrench");
         assert_eq!(points.len(), 1);
         assert!(force.x > 0.0);

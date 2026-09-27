@@ -18,6 +18,7 @@ mod flight;
 mod landing_gear;
 mod parachute;
 mod part_command;
+mod power;
 mod reaction_wheel;
 mod vehicle;
 
@@ -63,6 +64,14 @@ pub use parachute::{
     ParachutePhase, ParachuteSpec, ParachuteState,
 };
 pub use part_command::VehiclePartCommand;
+pub use power::{
+    BatteryPowerTelemetry, BatterySpec, ElectricalPowerCommand, ElectricalPowerError,
+    ElectricalPowerState, ElectricalPowerSystem, ElectricalPowerTelemetry, PowerAllocation,
+    PowerConsumerSpec, PowerPriority, PowerSystemMassProperties, ReactorPowerTelemetry,
+    ReactorSpec, SolarArrayDeployment, SolarArrayPowerTelemetry, SolarArraySpec,
+    SolarArrayTracking, SolarFluxSource, SolarOccluder, UltracapacitorPowerTelemetry,
+    UltracapacitorSpec,
+};
 pub use reaction_wheel::{
     ReactionWheelAllocation, ReactionWheelBankSpec, ReactionWheelError, allocate_reaction_wheels,
     allocate_reaction_wheels_with_enabled_banks,

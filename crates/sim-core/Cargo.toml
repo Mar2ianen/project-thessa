@@ -99,3 +99,7 @@ harness = false
 [[bench]]
 name = "assembly_air"
 harness = false
+
+[[bench]]
+name = "electrical_power"
+harness = false

@@ -7,9 +7,10 @@ the paths in `crates/aero-core`, `crates/celestial`, `crates/trajectory`,
 `crates/propulsion`, `crates/vehicle-core`, `crates/flight-control`, and
 `crates/flight-authority`. `crates/sim-core` retains the established aggregate
 API. Vehicle assets already compile procedural bodies and surfaces plus the
-installed propulsion, gear, reaction-wheel, and parachute subsystems described
-below. Structural fracture, thermal networks, and full fluid/electrical
-system-graph compilation remain future work.
+installed propulsion, gear, reaction-wheel, parachute, and shared electrical
+power-bus subsystems described below. Structural fracture, thermal networks,
+full fluid system graphs, and detailed electrical-network compilation beyond
+the ideal shared bus remain future work.
 
 ## 3.1. Ownership and units
 

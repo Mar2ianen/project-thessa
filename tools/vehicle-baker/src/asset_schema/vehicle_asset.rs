@@ -30,6 +30,9 @@ pub(crate) struct VehicleAsset {
     /// and resource connectivity.
     #[serde(default)]
     pub(crate) assembly: AssemblyAsset,
+    /// Optional shared bus with rated loads, storage, solar cells, and reactors.
+    #[serde(default)]
+    pub(crate) electrical_power: ElectricalPowerAsset,
     /// Compile contact boxes from procedural surfaces into the collision
     /// geometry (one body-axis box per mechanism region). Default true:
     /// the documented hangar pipeline; set false to keep hand-authored
@@ -631,16 +634,20 @@ impl VehicleAsset {
             .into_iter()
             .map(ParachuteAsset::bake)
             .collect();
+        let electrical_power = self.electrical_power.bake();
+        let power_mass_properties = electrical_power.mass_properties()?;
         // Assembly center of mass over EVERYTHING: hand mass rides the
-        // authoring origin, surfaces/engine/tank/system/jet masses ride
-        // their stations. Flight integrates moments about the body
-        // origin, so the baker recenters the whole asset onto the final
+        // authoring origin; surfaces, propulsion, electrical power hardware,
+        // and other installed masses ride their authored stations. Flight
+        // integrates moments about the body origin, so the baker recenters
+        // the whole asset onto the final
         // COM in one shift (legacy hand-only assets sit at zero and
         // shift by nothing). Engine/tank/system/jet mass calls below
         // then add point terms about already-centered stations, and the
         // same accumulator shape serves future fuel-driven COM motion.
-        let mut total_mass_kg = self.mass_kg + surface_mass_kg;
-        let mut total_moment = surface_moment;
+        let mut total_mass_kg = self.mass_kg + surface_mass_kg + power_mass_properties.mass_kg;
+        let mut total_moment = surface_moment
+            + power_mass_properties.center_of_mass_body_m * power_mass_properties.mass_kg;
         for mount in &mounts {
             let mass = mount.engine.bake_mass_kg();
             total_mass_kg += mass;
@@ -797,7 +804,8 @@ impl VehicleAsset {
             .with_wheel_chassis(wheel_chassis_specs)?
             .with_landing_legs(landing_leg_specs)?
             .with_reaction_wheels(reaction_wheel_banks)?
-            .with_parachutes(parachutes)?;
+            .with_parachutes(parachutes)?
+            .with_electrical_power(electrical_power)?;
         if let Some(assembly) = runtime_assembly {
             vehicle = vehicle.with_assembly(assembly)?;
             for cabin in &vehicle.cabins {
@@ -822,6 +830,7 @@ impl VehicleAsset {
         vehicle.bake_landing_leg_masses()?;
         vehicle.bake_reaction_wheel_masses()?;
         vehicle.bake_parachute_masses()?;
+        vehicle.bake_electrical_power_masses()?;
         for (panel_index, joint) in parked_tags {
             vehicle.aero_geometry.panels[panel_index].fold_index = Some(joint);
         }
@@ -898,6 +907,18 @@ impl VehicleAsset {
         }
         for parachute in &mut vehicle.parachutes {
             parachute.position_body_m = shift_point(parachute.position_body_m);
+        }
+        for battery in &mut vehicle.electrical_power.batteries {
+            battery.position_body_m = shift_point(battery.position_body_m);
+        }
+        for capacitor in &mut vehicle.electrical_power.ultracapacitors {
+            capacitor.position_body_m = shift_point(capacitor.position_body_m);
+        }
+        for array in &mut vehicle.electrical_power.solar_arrays {
+            array.position_body_m = shift_point(array.position_body_m);
+        }
+        for reactor in &mut vehicle.electrical_power.reactors {
+            reactor.position_body_m = shift_point(reactor.position_body_m);
         }
         for cabin in &mut vehicle.cabins {
             cabin.centroid_body_m = shift_point(cabin.centroid_body_m);

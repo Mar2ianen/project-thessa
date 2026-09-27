@@ -5,7 +5,7 @@ use super::*;
 #[derive(Debug, Deserialize)]
 pub(crate) struct VehicleAsset {
     pub(super) name: String,
-    pub(super) mass_kg: f64,
+    pub(crate) mass_kg: f64,
     /// Matrix is written as rows in the TOML file for readability.
     pub(super) inertia_body_kg_m2: [[f64; 3]; 3],
     /// Hand-authored solver panels. Empty for all-procedural assets;
@@ -26,6 +26,10 @@ pub(crate) struct VehicleAsset {
     /// legacy assets valid.
     #[serde(default)]
     pub(crate) procedural_bodies: Vec<ProceduralBody>,
+    /// Optional rigid assembly of authored body parts with live crew, air,
+    /// and resource connectivity.
+    #[serde(default)]
+    pub(crate) assembly: AssemblyAsset,
     /// Compile contact boxes from procedural surfaces into the collision
     /// geometry (one body-axis box per mechanism region). Default true:
     /// the documented hangar pipeline; set false to keep hand-authored
@@ -210,9 +214,50 @@ impl VehicleAsset {
         // auto-mounting from ports is future work.
         let mut body_tank_mounts = Vec::new();
         let mut body_contact_parts = Vec::new();
-        for body in &self.procedural_bodies {
-            let compiled = compile_body(body, &BodyCompileOptions::default())
+        let mut body_cabins = Vec::new();
+        let mut body_cabin_exits = Vec::new();
+        let mut body_cabin_seats = Vec::new();
+        let mut body_cabin_monuments = Vec::new();
+        let mut body_cores = Vec::new();
+        let mut body_stations = Vec::new();
+        let mut assembly_volumes = Vec::new();
+        let compiled_assembly = if self.assembly.links.is_empty() {
+            None
+        } else {
+            let links = resolve_assembly_links(&self.assembly.links)?;
+            let assembly = compile_assembly(&self.procedural_bodies, &links)
+                .map_err(|error| format!("assembly: {error}"))?;
+            println!("assembly root: {}", assembly.root);
+            for (index, group) in assembly.crew_groups.iter().enumerate() {
+                println!("assembly crew domain {index}: {} volumes", group.len());
+            }
+            for (index, group) in assembly.air_groups.iter().enumerate() {
+                println!("assembly air domain {index}: {} volumes", group.len());
+            }
+            for path in &assembly.feed_paths {
+                println!("assembly feed: {} -> {}", path.tank, path.engine_port);
+            }
+            Some(assembly)
+        };
+        for (body_index, body) in self.procedural_bodies.iter().enumerate() {
+            let transform = compiled_assembly
+                .as_ref()
+                .map(|assembly| assembly.body_transforms[body_index])
+                .unwrap_or(BodyTransform {
+                    rotation_body: DQuat::IDENTITY,
+                    translation_body_m: body.origin_body_m,
+                });
+            let mut part_frame_body = body.clone();
+            // Assembly transforms own part placement; compile in the part's
+            // local frame to avoid applying the authored origin twice.
+            part_frame_body.origin_body_m = DVec3::ZERO;
+            let mut compiled = compile_body(&part_frame_body, &BodyCompileOptions::default())
                 .map_err(|error| format!("body '{}': {error}", body.name))?;
+            transform_compiled_body(&mut compiled, transform);
+            println!(
+                "body '{}': assembled at {:?} (rotation {:?})",
+                body.name, transform.translation_body_m, transform.rotation_body
+            );
             println!(
                 "body '{}': {} panels in {} zones, volume {:.3} m^3, wet {:.2} m^2",
                 body.name,
@@ -245,6 +290,24 @@ impl VehicleAsset {
                 body_tank_mounts.push(tank.mount);
             }
             for region in &compiled.interior {
+                if compiled_assembly.is_some()
+                    && !matches!(
+                        region.kind,
+                        RegionKind::Tank { .. }
+                            | RegionKind::FluidTank { .. }
+                            | RegionKind::Bipropellant { .. }
+                    )
+                {
+                    assembly_volumes.push(AssemblyVolume {
+                        name: format!("{}.{}", body.name, region.name),
+                        body: body_index,
+                        pressurized: region.atmosphere.is_some(),
+                        volume_m3: region.volume_m3,
+                        centroid_body_m: region.centroid_body_m,
+                        seats: region.seats,
+                        seat_positions_body_m: region.seat_positions_body_m.clone(),
+                    });
+                }
                 // Manifest mass already rides the hull accumulators above
                 // (single ownership: the compiler aggregates, the baker
                 // only prints here).
@@ -253,6 +316,145 @@ impl VehicleAsset {
                         "body '{}': region '{}' manifest {:.1} kg",
                         body.name, region.name, region.payload_mass_kg
                     );
+                }
+                if region.air_mass_kg > 0.0 {
+                    println!(
+                        "body '{}': region '{}' air {:.2} kg (O2 {:.2} kg)",
+                        body.name, region.name, region.air_mass_kg, region.o2_mass_kg
+                    );
+                }
+                if let Some(atmosphere) = region.atmosphere {
+                    println!(
+                        "body '{}': region '{}' cabin {:.1} kPa, {:.2} kg air",
+                        body.name, region.name, atmosphere.pressure_kpa, region.air_mass_kg
+                    );
+                    body_cabins.push(
+                        PressurizedCabin::new(
+                            format!("{}.{}", body.name, region.name),
+                            region.volume_m3,
+                            atmosphere.pressure_kpa,
+                            atmosphere.temp_k,
+                            atmosphere.o2_fraction,
+                            region.air_mass_kg,
+                        )
+                        .and_then(|cabin| cabin.with_centroid_body_m(region.centroid_body_m))
+                        .map_err(|error| format!("body '{}': {error}", body.name))?,
+                    );
+                }
+                if let Some(tier) = region.control_core {
+                    println!(
+                        "body '{}': region '{}' autopilot core ({tier:?})",
+                        body.name, region.name
+                    );
+                    body_cores.push(ControlCore {
+                        name: format!("{}.{}", body.name, region.name),
+                        tier,
+                    });
+                }
+                if let RegionKind::Crew {
+                    control_station,
+                    seats,
+                    occupant_mass_kg_each,
+                    ..
+                } = region.kind
+                    && control_station
+                {
+                    let occupied = seats > 0 && occupant_mass_kg_each > 0.0;
+                    println!(
+                        "body '{}': region '{}' pilot station ({})",
+                        body.name,
+                        region.name,
+                        if occupied { "occupied" } else { "empty" }
+                    );
+                    body_stations.push(ControlStation {
+                        name: format!("{}.{}", body.name, region.name),
+                        occupied,
+                    });
+                }
+                for seat in region
+                    .cabin_seats
+                    .iter()
+                    .filter(|seat| seat.role == CabinSeatRole::FlightCrew)
+                {
+                    body_stations.push(ControlStation {
+                        name: seat.name.clone(),
+                        occupied: seat.occupied,
+                    });
+                }
+                for seat in &region.cabin_seats {
+                    body_cabin_seats.push(CabinSeat {
+                        name: seat.name.clone(),
+                        position_body_m: seat.position_body_m,
+                        class: match seat.class {
+                            thessa_fuselage::SeatClass::Economy => CabinSeatClass::Economy,
+                            thessa_fuselage::SeatClass::Premium => CabinSeatClass::Premium,
+                            thessa_fuselage::SeatClass::Business => CabinSeatClass::Business,
+                            thessa_fuselage::SeatClass::First => CabinSeatClass::First,
+                            thessa_fuselage::SeatClass::Ejection => CabinSeatClass::Ejection,
+                        },
+                        role: match seat.role {
+                            CabinSeatRole::Passenger => RuntimeCabinSeatRole::Passenger,
+                            CabinSeatRole::FlightCrew => RuntimeCabinSeatRole::FlightCrew,
+                            CabinSeatRole::CabinAttendant => RuntimeCabinSeatRole::CabinAttendant,
+                        },
+                        seat_style: match seat.seat_style {
+                            thessa_fuselage::SeatStyle::Upright => CabinSeatStyle::Upright,
+                            thessa_fuselage::SeatStyle::Couch => CabinSeatStyle::Couch,
+                            thessa_fuselage::SeatStyle::Ejection => CabinSeatStyle::Ejection,
+                        },
+                        occupied: seat.occupied,
+                        suited: seat.suited,
+                        suit_type: match seat.suit_type {
+                            thessa_fuselage::SuitType::HoseFed => CabinSuitType::HoseFed,
+                            thessa_fuselage::SuitType::SelfContained => {
+                                CabinSuitType::SelfContained
+                            }
+                        },
+                        seat_mass_kg: seat.seat_mass_kg,
+                        occupant_mass_kg: seat.occupant_mass_kg,
+                        carry_on_mass_kg: seat.carry_on_mass_kg,
+                        suit_mass_kg: seat.suit_mass_kg,
+                    });
+                }
+                for monument in &region.cabin_monuments {
+                    body_cabin_monuments.push(CabinMonument {
+                        name: monument.name.clone(),
+                        kind: match monument.kind {
+                            thessa_fuselage::MonumentKind::Galley => CabinMonumentKind::Galley,
+                            thessa_fuselage::MonumentKind::Lavatory => CabinMonumentKind::Lavatory,
+                            thessa_fuselage::MonumentKind::Closet => CabinMonumentKind::Closet,
+                            thessa_fuselage::MonumentKind::FlightDeck => {
+                                CabinMonumentKind::FlightDeck
+                            }
+                            thessa_fuselage::MonumentKind::AvionicsRack => {
+                                CabinMonumentKind::AvionicsRack
+                            }
+                        },
+                        position_body_m: monument.position_body_m,
+                        mass_kg: monument.mass_kg,
+                    });
+                }
+                for exit in &region.cabin_doors {
+                    body_cabin_exits.push(CabinExit {
+                        name: exit.name.clone(),
+                        pair_id: exit.pair_id.clone(),
+                        position_body_m: exit.position_body_m,
+                        side: match exit.side {
+                            DoorSide::Left => CabinExitSide::Left,
+                            DoorSide::Right => CabinExitSide::Right,
+                        },
+                        exit_type: match exit.rating {
+                            ExitType::TypeA => CabinExitType::TypeA,
+                            ExitType::TypeB => CabinExitType::TypeB,
+                            ExitType::TypeC => CabinExitType::TypeC,
+                            ExitType::TypeI => CabinExitType::TypeI,
+                            ExitType::TypeII => CabinExitType::TypeII,
+                            ExitType::TypeIII => CabinExitType::TypeIII,
+                            ExitType::TypeIV => CabinExitType::TypeIV,
+                        },
+                        opening_width_m: exit.opening_width_m,
+                        opening_height_m: exit.opening_height_m,
+                    });
                 }
             }
             for port in &compiled.ports {
@@ -291,10 +493,57 @@ impl VehicleAsset {
             }
             panels.extend(compiled.panels.iter().cloned());
             if self.body_collision {
-                let parts = body_collision_parts(body, &BodyCollisionOptions::default())
-                    .map_err(|error| format!("body '{}': {error}", body.name))?;
+                let mut parts =
+                    body_collision_parts(&part_frame_body, &BodyCollisionOptions::default())
+                        .map_err(|error| format!("body '{}': {error}", body.name))?;
+                for part in &mut parts {
+                    part.local_position_m = transform.transform_point(part.local_position_m);
+                    part.local_orientation =
+                        (transform.rotation_body * part.local_orientation).normalize();
+                }
                 println!("body '{}': {} contact parts", body.name, parts.len());
                 body_contact_parts.extend(parts);
+            }
+        }
+        let runtime_assembly = compiled_assembly
+            .as_ref()
+            .map(|assembly| {
+                runtime_assembly(
+                    &self.procedural_bodies,
+                    &self.assembly.links,
+                    &assembly.root,
+                    assembly_volumes,
+                )
+            })
+            .transpose()?;
+        if let Some(assembly) = &runtime_assembly {
+            let initial_cabins = body_cabins.clone();
+            assembly
+                .equalize_cabin_states(&mut body_cabins)
+                .map_err(|error| format!("assembly cabin equilibrium: {error}"))?;
+            for cabin in &body_cabins {
+                let initial = initial_cabins
+                    .iter()
+                    .find(|initial| initial.name == cabin.name)
+                    .ok_or_else(|| {
+                        format!(
+                            "assembly equilibrium introduced unknown cabin '{}'",
+                            cabin.name
+                        )
+                    })?;
+                let delta_mass_kg = cabin.air_kg - initial.air_kg;
+                if delta_mass_kg != 0.0 {
+                    let volume = assembly
+                        .volumes
+                        .iter()
+                        .find(|volume| volume.name == cabin.name)
+                        .ok_or_else(|| {
+                            format!("assembly has no volume for cabin '{}'", cabin.name)
+                        })?;
+                    surface_mass_kg += delta_mass_kg;
+                    surface_moment += volume.centroid_body_m * delta_mass_kg;
+                    surface_inertia += parallel_axis(delta_mass_kg, volume.centroid_body_m);
+                }
             }
         }
         // Bake mounts first (authoring stations): the single final COM
@@ -539,10 +788,28 @@ impl VehicleAsset {
             .with_pulsed_fusion_systems(pulsed_fusion_mounts)?
             .with_propeller_drives(propeller_drive_mounts)?
             .with_turboprops(turboprop_mounts)?
+            .with_cabins(body_cabins)?
+            .with_cabin_exits(body_cabin_exits)?
+            .with_cabin_seats(body_cabin_seats)?
+            .with_cabin_monuments(body_cabin_monuments)?
+            .with_control_cores(body_cores)?
+            .with_control_stations(body_stations)?
             .with_wheel_chassis(wheel_chassis_specs)?
             .with_landing_legs(landing_leg_specs)?
             .with_reaction_wheels(reaction_wheel_banks)?
             .with_parachutes(parachutes)?;
+        if let Some(assembly) = runtime_assembly {
+            vehicle = vehicle.with_assembly(assembly)?;
+            for cabin in &vehicle.cabins {
+                println!(
+                    "assembly cabin '{}': equilibrium {:.2} kPa, {:.3} kg air at {:.1} K",
+                    cabin.name,
+                    cabin.current_pressure_kpa(),
+                    cabin.air_kg,
+                    cabin.temp_k
+                );
+            }
+        }
         vehicle.bake_engine_masses()?;
         vehicle.bake_tank_masses()?;
         vehicle.bake_system_masses()?;
@@ -632,6 +899,26 @@ impl VehicleAsset {
         for parachute in &mut vehicle.parachutes {
             parachute.position_body_m = shift_point(parachute.position_body_m);
         }
+        for cabin in &mut vehicle.cabins {
+            cabin.centroid_body_m = shift_point(cabin.centroid_body_m);
+        }
+        for exit in &mut vehicle.cabin_exits {
+            exit.position_body_m = shift_point(exit.position_body_m);
+        }
+        for seat in &mut vehicle.cabin_seats {
+            seat.position_body_m = shift_point(seat.position_body_m);
+        }
+        for monument in &mut vehicle.cabin_monuments {
+            monument.position_body_m = shift_point(monument.position_body_m);
+        }
+        if let Some(assembly) = &mut vehicle.assembly {
+            for volume in &mut assembly.volumes {
+                volume.centroid_body_m = shift_point(volume.centroid_body_m);
+                for seat in &mut volume.seat_positions_body_m {
+                    *seat = shift_point(*seat);
+                }
+            }
+        }
         let total = vehicle.mass_properties.mass_kg;
         let recentered =
             vehicle.mass_properties.inertia_body_kg_m2 - parallel_axis(total, assembly_com);
@@ -639,4 +926,60 @@ impl VehicleAsset {
         vehicle.validate()?;
         Ok(vehicle)
     }
+}
+
+fn transform_compiled_body(compiled: &mut CompiledBody, transform: BodyTransform) {
+    for panel in &mut compiled.panels {
+        panel.position_body_m = transform.transform_point(panel.position_body_m);
+        panel.center_of_pressure_body_m =
+            transform.transform_point(panel.center_of_pressure_body_m);
+        panel.chord_axis_body = transform.transform_direction(panel.chord_axis_body);
+        panel.lift_axis_body = transform.transform_direction(panel.lift_axis_body);
+    }
+    for control in &mut compiled.controls {
+        if let Some(hinge) = &mut control.hinge {
+            hinge.point_body_m = transform.transform_point(hinge.point_body_m);
+            hinge.axis_body = transform.transform_direction(hinge.axis_body).normalize();
+        }
+    }
+    if let Some(structure) = &mut compiled.structure {
+        let local_center = structure.center_of_mass_body_m;
+        let centroidal_inertia =
+            structure.inertia_body_kg_m2 - parallel_axis(structure.mass_kg, local_center);
+        structure.center_of_mass_body_m = transform.transform_point(local_center);
+        structure.inertia_body_kg_m2 = transform.rotate_inertia(centroidal_inertia)
+            + parallel_axis(structure.mass_kg, structure.center_of_mass_body_m);
+    }
+    for tank in &mut compiled.tanks {
+        let mount = &mut tank.mount;
+        mount.position_body_m = transform
+            .transform_point(DVec3::from_array(mount.position_body_m))
+            .to_array();
+        mount.intrinsic_inertia_body_kg_m2 =
+            transform.rotate_inertia(mount.intrinsic_inertia_body_kg_m2);
+    }
+    for shield in &mut compiled.heat_shields {
+        shield.position_body_m = transform.transform_point(shield.position_body_m);
+    }
+    for region in &mut compiled.interior {
+        region.centroid_body_m = transform.transform_point(region.centroid_body_m);
+        for seat in &mut region.seat_positions_body_m {
+            *seat = transform.transform_point(*seat);
+        }
+        for seat in &mut region.cabin_seats {
+            seat.position_body_m = transform.transform_point(seat.position_body_m);
+        }
+        for monument in &mut region.cabin_monuments {
+            monument.position_body_m = transform.transform_point(monument.position_body_m);
+        }
+        for door in &mut region.cabin_doors {
+            door.position_body_m = transform.transform_point(door.position_body_m);
+        }
+    }
+    for port in &mut compiled.ports {
+        port.position_body_m = transform.transform_point(port.position_body_m);
+        port.axis_body_m = transform.transform_direction(port.axis_body_m).normalize();
+    }
+    compiled.summary.center_of_volume_m =
+        transform.transform_point(compiled.summary.center_of_volume_m);
 }

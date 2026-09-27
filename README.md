@@ -22,13 +22,15 @@ The checked-in vertical slice currently contains:
 - `thessa-sim-core`: compatibility facade for deterministic baked ephemerides,
   full multi-body test-particle gravity, atmosphere and panel aerodynamics,
   rigid-body flight, on-rails coast caches, cohort gravity patches, piecewise
-  analytic affine propagation, installed reaction-wheel banks, and deployable
+  analytic affine propagation, cabin pressure and crew authority, part
+  assembly connectivity, installed reaction-wheel banks, and deployable
   parachutes. The implementation is separated into `thessa-aero-core`,
   `thessa-celestial`, `thessa-trajectory`, `thessa-propulsion`, and
   `thessa-vehicle-core`;
 - `thessa-aero-surfaces`, `thessa-fuselage`, and `thessa-vehicle-baker`:
   procedural lifting-surface/body compilers, interior-volume and mass
-  properties, controls, and vehicle asset compilation;
+  properties, cabin layouts and presets, static exits, controls, and assembled
+  vehicle asset compilation;
 - `thessa-plume-core`: backend-neutral engine-exhaust profiles, optics, and
   participating-medium evaluation, consumed by the client plume renderer;
 - `thessa-flight-control` and `thessa-flight-authority`: typed guidance,

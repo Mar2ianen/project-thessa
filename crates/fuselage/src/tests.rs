@@ -797,6 +797,9 @@ fn degenerate_authoring_fails_closed() {
             RegionKind::Tank {
                 propellant: thessa_sim_core::Propellant::LoxMethane,
                 fill_fraction: 1.0,
+                pressure_pa: None,
+                material: None,
+                shell: None,
             },
         )
         .unwrap(),
@@ -952,4 +955,1917 @@ fn dream_chaser_body_golden_volume_and_lifting_slope() {
     assert!((0.04..0.10).contains(&cl_10));
     assert!((0.18..0.25).contains(&cl_15));
     assert!(cl_15 > cl_10);
+}
+
+#[test]
+fn per_tank_pressure_and_material_override_shell_mass() {
+    use thessa_sim_core::ChamberMaterial;
+
+    // Same loft, same propellant: higher pressure or denser/weaker alloy
+    // must size a heavier shell. Geometry-derived, no tuning.
+    let stations = || {
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(4.0, 1.0).unwrap(),
+        ]
+    };
+    let compile_with = |pressure_pa: Option<f64>, material: Option<ChamberMaterial>| {
+        let mut body = ProceduralBody::new("tank-variant", stations(), DVec3::ZERO).unwrap();
+        body.structure = Some(BodyStructuralLayout::metal_baseline());
+        body.regions = vec![
+            InteriorRegion::new(
+                "tank",
+                0.5,
+                3.5,
+                RegionKind::Tank {
+                    propellant: thessa_sim_core::Propellant::LoxMethane,
+                    fill_fraction: 1.0,
+                    pressure_pa,
+                    material,
+                    shell: None,
+                },
+            )
+            .unwrap(),
+        ];
+        compile_body(&body, &BodyCompileOptions::default()).unwrap()
+    };
+    let baseline = compile_with(None, None);
+    let high_pressure = compile_with(Some(1.0e6), None);
+    let steel = compile_with(None, Some(ChamberMaterial::stainless_304()));
+    let base_dry = baseline.tanks[0].mount.tank.dry_mass_kg;
+    let high_dry = high_pressure.tanks[0].mount.tank.dry_mass_kg;
+    let steel_dry = steel.tanks[0].mount.tank.dry_mass_kg;
+    // Baseline 0.5 MPa vs 1.0 MPa: wall (hence dry mass) doubles.
+    assert!((high_dry / base_dry - 2.0).abs() < 0.05);
+    // Stainless shell differs from the nickel-superalloy baseline.
+    assert!((steel_dry - base_dry).abs() / base_dry > 0.05);
+    assert_eq!(baseline.tanks[0].component, crate::TankComponent::Bulk);
+}
+
+#[test]
+fn bipropellant_region_splits_into_ox_and_fuel_tanks() {
+    // One LoxMethane region -> two tanks whose volumes sum to the region
+    // and whose masses respect the mixture ratio (3.5) and component
+    // densities (LOX 1141, LCH4 422).
+    let mut body = ProceduralBody::new(
+        "biprop-stage",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(6.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::new(
+            "main",
+            1.0,
+            5.0,
+            RegionKind::Bipropellant {
+                propellant: thessa_sim_core::Propellant::LoxMethane,
+                fill_fraction: 0.9,
+                mixture_ratio: None,
+                pressure_pa: None,
+                oxidizer_pressure_pa: None,
+                fuel_pressure_pa: None,
+                material: None,
+                oxidizer_material: None,
+                fuel_material: None,
+                shell: None,
+            },
+        )
+        .unwrap(),
+    ];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    assert_eq!(compiled.tanks.len(), 2);
+    let ox = compiled
+        .tanks
+        .iter()
+        .find(|tank| tank.region_name == "main-ox")
+        .unwrap();
+    let fuel = compiled
+        .tanks
+        .iter()
+        .find(|tank| tank.region_name == "main-fuel")
+        .unwrap();
+    assert_eq!(ox.component, crate::TankComponent::Oxidizer);
+    assert_eq!(fuel.component, crate::TankComponent::Fuel);
+    let region_volume = compiled.interior[0].volume_m3;
+    assert!((ox.inner_volume_m3 + fuel.inner_volume_m3 - region_volume).abs() < 1e-9);
+    // Oxidizer aft of fuel along +X-forward stations.
+    assert!(ox.mount.position_body_m[0] < fuel.mount.position_body_m[0]);
+    // Mass ratio follows MR=3.5 with LOX 1141 / LCH4 422.
+    let mr = ox.propellant_kg / fuel.propellant_kg;
+    assert!((mr - 3.5).abs() < 0.05, "mixture ratio = {mr}");
+    // Fill fraction applies to both tanks.
+    assert!((ox.propellant_kg - ox.mount.tank.full_propellant_kg * 0.9).abs() < 1e-9);
+    assert!((fuel.propellant_kg - fuel.mount.tank.full_propellant_kg * 0.9).abs() < 1e-9);
+}
+
+#[test]
+fn bipropellant_rejects_monoprop_and_bad_mixture() {
+    // Monopropellant cannot split into two tanks.
+    assert!(
+        InteriorRegion::new(
+            "mono",
+            0.5,
+            3.5,
+            RegionKind::Bipropellant {
+                propellant: thessa_sim_core::Propellant::MonopropHydrazine,
+                fill_fraction: 1.0,
+                mixture_ratio: None,
+                pressure_pa: None,
+                oxidizer_pressure_pa: None,
+                fuel_pressure_pa: None,
+                material: None,
+                oxidizer_material: None,
+                fuel_material: None,
+                shell: None,
+            },
+        )
+        .is_err()
+    );
+    // Mixture ratio outside the modeled table refuses instead of
+    // extrapolating.
+    assert!(
+        InteriorRegion::new(
+            "bad-mr",
+            0.5,
+            3.5,
+            RegionKind::Bipropellant {
+                propellant: thessa_sim_core::Propellant::LoxMethane,
+                fill_fraction: 1.0,
+                mixture_ratio: Some(9.0),
+                pressure_pa: None,
+                oxidizer_pressure_pa: None,
+                fuel_pressure_pa: None,
+                material: None,
+                oxidizer_material: None,
+                fuel_material: None,
+                shell: None,
+            },
+        )
+        .is_err()
+    );
+    // Zero seats refuse.
+    assert!(
+        InteriorRegion::new(
+            "empty-crew",
+            0.5,
+            3.5,
+            RegionKind::Crew {
+                seats: 0,
+                seat_mass_kg_each: 12.0,
+                occupant_mass_kg_each: 0.0,
+                seat_pitch_m: None,
+                abreast: None,
+                seat_style: crate::SeatStyle::Upright,
+                suited: false,
+                suit_mass_kg_each: 0.0,
+                suit_type: crate::SuitType::HoseFed,
+                control_station: false,
+            },
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn crew_cabin_seats_ride_hull_mass_at_centroid() {
+    let mut body = ProceduralBody::new(
+        "crewed-block",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(4.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::pressurized(
+            "cabin",
+            1.0,
+            3.0,
+            RegionKind::Crew {
+                seats: 4,
+                seat_mass_kg_each: 12.0,
+                occupant_mass_kg_each: 90.0,
+                seat_pitch_m: None,
+                abreast: None,
+                seat_style: crate::SeatStyle::Upright,
+                suited: false,
+                suit_mass_kg_each: 0.0,
+                suit_type: crate::SuitType::HoseFed,
+                control_station: false,
+            },
+            crate::CabinAtmosphere::sea_level(),
+        )
+        .unwrap(),
+    ];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let cabin = &compiled.interior[0];
+    assert_eq!(cabin.seats, 4);
+    // 4 x (12 + 90) = 408 kg manifest.
+    assert!((cabin.payload_mass_kg - 408.0).abs() < 1e-9);
+    let hull = compiled.structure.as_ref().expect("hull mass");
+    assert!(hull.mass_kg >= 408.0);
+}
+
+#[test]
+fn hull_and_tank_material_presets_validate() {
+    assert!(crate::HullMaterial::stainless_304().validate().is_ok());
+    assert!(
+        crate::HullMaterial::aluminum_lithium_2195()
+            .validate()
+            .is_ok()
+    );
+    assert!(
+        thessa_sim_core::ChamberMaterial::aluminum_2219()
+            .validate()
+            .is_ok()
+    );
+    assert!(
+        thessa_sim_core::ChamberMaterial::stainless_304()
+            .validate()
+            .is_ok()
+    );
+    assert!(
+        thessa_sim_core::ChamberMaterial::composite_copv()
+            .validate()
+            .is_ok()
+    );
+    // Component densities exist for biprop pairs, none for monoprop.
+    assert!(
+        thessa_sim_core::Propellant::LoxMethane
+            .split_densities()
+            .is_some()
+    );
+    assert!(
+        thessa_sim_core::Propellant::MonopropHydrazine
+            .split_densities()
+            .is_none()
+    );
+}
+
+#[test]
+fn new_region_kinds_parse_from_toml() {
+    // Bipropellant + crew + per-tank overrides must survive the TOML
+    // authoring path, not just programmatic construction.
+    let toml = r#"
+name = "toml-demo"
+origin_body_m = [0.0, 0.0, 0.0]
+
+[[stations]]
+x_m = 0.0
+half_width_m = 1.0
+top_height_m = 1.0
+bottom_height_m = 1.0
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[stations]]
+x_m = 6.0
+half_width_m = 1.0
+top_height_m = 1.0
+bottom_height_m = 1.0
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[regions]]
+name = "split"
+x0_m = 0.5
+x1_m = 3.5
+
+[regions.kind.bipropellant]
+propellant = "lox-methane"
+fill_fraction = 0.9
+oxidizer_pressure_pa = 600000.0
+
+[[regions]]
+name = "cabin"
+x0_m = 3.5
+x1_m = 5.5
+
+[regions.kind.crew]
+seats = 2
+occupant_mass_kg_each = 90.0
+
+[regions.atmosphere]
+pressure_kpa = 101.325
+
+[structure]
+skin_gauge_mm = 2.0
+frame_spacing_m = 1.0
+frame_gauge_mm = 2.0
+frame_width_mm = 40.0
+tank_pressure_pa = 500000.0
+wall_inset_mm = 10.0
+
+[structure.skin_material]
+name = "Al-7075-T6"
+density_kg_m3 = 2810.0
+yield_strength_mpa = 503.0
+
+[structure.tank_material]
+density_kg_m3 = 2840.0
+yield_strength_pa = 395000000.0
+max_wall_temp_k = 400.0
+"#;
+    let body: ProceduralBody = toml::from_str(toml).expect("new region TOML should parse");
+    assert_eq!(body.regions.len(), 2);
+    body.validate().expect("TOML body should validate");
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    // Split region -> 2 tanks; crew region -> 2 seats.
+    assert_eq!(compiled.tanks.len(), 2);
+    assert_eq!(compiled.interior[1].seats, 2);
+    // Seat-mass default (12 kg) + 2x90 kg occupants = 204 kg.
+    assert!((compiled.interior[1].payload_mass_kg - 204.0).abs() < 1e-9);
+}
+
+#[test]
+fn fluid_tanks_carry_pure_components_with_own_shells() {
+    use crate::{StoredFluid, TankShell};
+
+    // Manual LOX + methane pair as two independent regions: masses follow
+    // stored densities, shells size from their own pressure/material.
+    let mut body = ProceduralBody::new(
+        "manual-pair",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(6.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::new(
+            "lox",
+            0.5,
+            2.5,
+            RegionKind::FluidTank {
+                fluid: StoredFluid::Lox,
+                fill_fraction: 1.0,
+                pressure_pa: None,
+                material: None,
+                shell: None,
+            },
+        )
+        .unwrap(),
+        InteriorRegion::new(
+            "methane",
+            2.5,
+            4.5,
+            RegionKind::FluidTank {
+                fluid: StoredFluid::LiquidMethane,
+                fill_fraction: 0.5,
+                pressure_pa: None,
+                material: None,
+                shell: None,
+            },
+        )
+        .unwrap(),
+    ];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    assert_eq!(compiled.tanks.len(), 2);
+    let lox = &compiled.tanks[0];
+    let ch4 = &compiled.tanks[1];
+    assert_eq!(lox.component, crate::TankComponent::Stored);
+    assert_eq!(lox.contents, crate::TankContents::Fluid(StoredFluid::Lox));
+    // Same geometric volume (2 m of 1 m-radius barrel minus 10 mm wall),
+    // so the mass ratio is the density ratio at the authored fills.
+    let expected = 1141.0 / (422.0 * 0.5);
+    let actual = lox.propellant_kg / ch4.propellant_kg;
+    assert!((actual - expected).abs() / expected < 0.01);
+    assert!((lox.mount.tank.full_propellant_kg - lox.inner_volume_m3 * 1141.0).abs() < 1e-9);
+    let _ = TankShell::Sphere;
+}
+
+#[test]
+fn sphere_shell_is_lighter_than_cylinder_for_same_volume() {
+    use crate::TankShell;
+
+    let stations = || {
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(4.0, 1.0).unwrap(),
+        ]
+    };
+    let compile_with = |shell: Option<TankShell>| {
+        let mut body = ProceduralBody::new("shell-variant", stations(), DVec3::ZERO).unwrap();
+        body.structure = Some(BodyStructuralLayout::metal_baseline());
+        body.regions = vec![
+            InteriorRegion::new(
+                "tank",
+                0.5,
+                3.5,
+                RegionKind::Tank {
+                    propellant: thessa_sim_core::Propellant::LoxMethane,
+                    fill_fraction: 1.0,
+                    pressure_pa: None,
+                    material: None,
+                    shell,
+                },
+            )
+            .unwrap(),
+        ];
+        compile_body(&body, &BodyCompileOptions::default()).unwrap()
+    };
+    let cylinder = compile_with(None);
+    let sphere = compile_with(Some(TankShell::Sphere));
+    // Same capacity, same pressure/material: the sphere carries half the
+    // membrane stress, so its shell is lighter.
+    assert!((cylinder.tanks[0].inner_volume_m3 - sphere.tanks[0].inner_volume_m3).abs() < 1e-9);
+    assert!(sphere.tanks[0].mount.tank.dry_mass_kg < cylinder.tanks[0].mount.tank.dry_mass_kg);
+}
+
+#[test]
+fn crew_seat_anchors_line_up_on_the_centerline() {
+    // Four seats with explicit 0.8 m pitch center on the region; anchors
+    // ride the loft centerline in x order.
+    let mut body = ProceduralBody::new(
+        "seated-block",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(6.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::pressurized(
+            "cabin",
+            1.0,
+            5.0,
+            RegionKind::Crew {
+                seats: 4,
+                seat_mass_kg_each: 12.0,
+                occupant_mass_kg_each: 0.0,
+                seat_pitch_m: Some(0.8),
+                abreast: None,
+                seat_style: crate::SeatStyle::Upright,
+                suited: false,
+                suit_mass_kg_each: 0.0,
+                suit_type: crate::SuitType::HoseFed,
+                control_station: false,
+            },
+            crate::CabinAtmosphere::sea_level(),
+        )
+        .unwrap(),
+    ];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let cabin = &compiled.interior[0];
+    assert_eq!(cabin.seat_positions_body_m.len(), 4);
+    let xs: Vec<f64> = cabin
+        .seat_positions_body_m
+        .iter()
+        .map(|seat| seat.x)
+        .collect();
+    for pair in xs.windows(2) {
+        assert!((pair[1] - pair[0] - 0.8).abs() < 1e-9);
+        assert!(pair[0] >= 1.0 && pair[1] <= 5.0);
+    }
+    // Centered row: midpoint of the outer seats is the region midpoint.
+    assert!(((xs[0] + xs[3]) / 2.0 - 3.0).abs() < 1e-9);
+    // Anchors sit on the barrel centerline (y/z ~ 0).
+    for seat in &cabin.seat_positions_body_m {
+        assert!(seat.y.abs() < 1e-9 && seat.z.abs() < 1e-9);
+    }
+    // Oversize pitch refuses at authoring time.
+    assert!(
+        InteriorRegion::new(
+            "tight",
+            1.0,
+            2.0,
+            RegionKind::Crew {
+                seats: 4,
+                seat_mass_kg_each: 12.0,
+                occupant_mass_kg_each: 0.0,
+                seat_pitch_m: Some(0.8),
+                abreast: None,
+                seat_style: crate::SeatStyle::Upright,
+                suited: false,
+                suit_mass_kg_each: 0.0,
+                suit_type: crate::SuitType::HoseFed,
+                control_station: false,
+            },
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn pressurized_cabin_air_matches_ideal_gas() {
+    use crate::CabinAtmosphere;
+
+    // 2 m of 1 m-radius barrel at sea-level cabin air: hand ideal-gas
+    // mass over the 10 mm-inset inner volume, plus the O2 split.
+    let mut body = ProceduralBody::new(
+        "pressure-cabin",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(4.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::pressurized(
+            "cabin",
+            1.0,
+            3.0,
+            RegionKind::Cabin,
+            CabinAtmosphere::sea_level(),
+        )
+        .unwrap(),
+    ];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let cabin = &compiled.interior[0];
+    let expected_volume = std::f64::consts::PI * 0.99_f64.powi(2) * 2.0;
+    assert!((cabin.volume_m3 - expected_volume).abs() / expected_volume < 1e-9);
+    let expected_air = 101325.0 / (287.05 * 293.15) * expected_volume;
+    assert!((cabin.air_mass_kg - expected_air).abs() / expected_air < 1e-9);
+    let expected_o2 = expected_air * 0.21 * 32.0 / 28.97;
+    assert!((cabin.o2_mass_kg - expected_o2).abs() / expected_o2 < 1e-9);
+    // Air rides the hull like manifest mass.
+    let hull = compiled.structure.as_ref().expect("hull mass");
+    assert!(hull.mass_kg >= expected_air);
+}
+
+#[test]
+fn thin_or_unknown_skin_refuses_pressurization() {
+    use crate::{CabinAtmosphere, HullMaterial};
+
+    let cabin = |layout: BodyStructuralLayout| {
+        let mut body = ProceduralBody::new(
+            "thin-pressure",
+            vec![
+                BodyStation::round(0.0, 1.0).unwrap(),
+                BodyStation::round(4.0, 1.0).unwrap(),
+            ],
+            DVec3::ZERO,
+        )
+        .unwrap();
+        body.structure = Some(layout);
+        body.regions = vec![
+            InteriorRegion::pressurized(
+                "cabin",
+                1.0,
+                3.0,
+                RegionKind::Cabin,
+                CabinAtmosphere::sea_level(),
+            )
+            .unwrap(),
+        ];
+        compile_body(&body, &BodyCompileOptions::default())
+    };
+    // 0.2 mm 7075 skin cannot hold 101 kPa over a 1 m radius (needs
+    // ~0.30 mm at the 1.5 safety factor).
+    let mut thin = BodyStructuralLayout::metal_baseline();
+    thin.skin_gauge_mm = 0.2;
+    assert!(cabin(thin).is_err());
+    // Unknown shell allowable refuses instead of guessing.
+    let mut unknown = BodyStructuralLayout::metal_baseline();
+    unknown.skin_material = HullMaterial {
+        name: "mystery".into(),
+        density_kg_m3: 2700.0,
+        yield_strength_mpa: None,
+    };
+    assert!(cabin(unknown).is_err());
+    // Pressurized volume with no structure at all refuses as well.
+    let mut bare = ProceduralBody::new(
+        "bare-pressure",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(4.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    bare.regions = vec![
+        InteriorRegion::pressurized(
+            "cabin",
+            1.0,
+            3.0,
+            RegionKind::Cabin,
+            CabinAtmosphere::sea_level(),
+        )
+        .unwrap(),
+    ];
+    assert!(compile_body(&bare, &BodyCompileOptions::default()).is_err());
+}
+
+#[test]
+fn tanks_and_bad_air_reject_atmosphere() {
+    use crate::CabinAtmosphere;
+
+    // Tanks size their own shells: cabin air does not belong on them.
+    assert!(
+        InteriorRegion::pressurized(
+            "tank",
+            0.5,
+            3.5,
+            RegionKind::Tank {
+                propellant: thessa_sim_core::Propellant::LoxMethane,
+                fill_fraction: 1.0,
+                pressure_pa: None,
+                material: None,
+                shell: None,
+            },
+            CabinAtmosphere::sea_level(),
+        )
+        .is_err()
+    );
+    // Out-of-range air refuses at authoring time.
+    for bad in [
+        CabinAtmosphere {
+            pressure_kpa: 0.0,
+            ..CabinAtmosphere::sea_level()
+        },
+        CabinAtmosphere {
+            pressure_kpa: 101325.0,
+            ..CabinAtmosphere::sea_level()
+        },
+        CabinAtmosphere {
+            o2_fraction: 0.0,
+            ..CabinAtmosphere::sea_level()
+        },
+        CabinAtmosphere {
+            temp_k: 500.0,
+            ..CabinAtmosphere::sea_level()
+        },
+    ] {
+        assert!(InteriorRegion::pressurized("cabin", 0.5, 3.5, RegionKind::Cabin, bad,).is_err());
+    }
+}
+
+#[test]
+fn crew_with_atmosphere_aggregates_air_and_seats() {
+    use crate::CabinAtmosphere;
+
+    let mut body = ProceduralBody::new(
+        "crewed-pressure",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(4.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::pressurized(
+            "cabin",
+            1.0,
+            3.0,
+            RegionKind::Crew {
+                seats: 2,
+                seat_mass_kg_each: 12.0,
+                occupant_mass_kg_each: 90.0,
+                seat_pitch_m: None,
+                abreast: None,
+                seat_style: crate::SeatStyle::Upright,
+                suited: false,
+                suit_mass_kg_each: 0.0,
+                suit_type: crate::SuitType::HoseFed,
+                control_station: false,
+            },
+            CabinAtmosphere::sea_level(),
+        )
+        .unwrap(),
+    ];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let cabin = &compiled.interior[0];
+    assert_eq!(cabin.seats, 2);
+    assert_eq!(cabin.seat_positions_body_m.len(), 2);
+    // Seats (204 kg) plus ~7.4 kg of air both ride the hull.
+    assert!((cabin.payload_mass_kg - 204.0).abs() < 1e-9);
+    assert!(cabin.air_mass_kg > 7.0 && cabin.air_mass_kg < 8.0);
+    assert!(cabin.o2_mass_kg > 1.6 && cabin.o2_mass_kg < 1.8);
+}
+
+#[test]
+fn atmosphere_parses_from_toml() {
+    let toml = r#"
+name = "pressure-demo"
+origin_body_m = [0.0, 0.0, 0.0]
+
+[[stations]]
+x_m = 0.0
+half_width_m = 1.0
+top_height_m = 1.0
+bottom_height_m = 1.0
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[stations]]
+x_m = 4.0
+half_width_m = 1.0
+top_height_m = 1.0
+bottom_height_m = 1.0
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[regions]]
+name = "cabin"
+x0_m = 1.0
+x1_m = 3.0
+kind = "cabin"
+
+[regions.atmosphere]
+pressure_kpa = 101.325
+
+[structure]
+skin_gauge_mm = 2.0
+frame_spacing_m = 1.0
+frame_gauge_mm = 2.0
+frame_width_mm = 40.0
+tank_pressure_pa = 500000.0
+wall_inset_mm = 10.0
+
+[structure.skin_material]
+name = "Al-7075-T6"
+density_kg_m3 = 2810.0
+yield_strength_mpa = 503.0
+
+[structure.tank_material]
+density_kg_m3 = 2840.0
+yield_strength_pa = 395000000.0
+max_wall_temp_k = 400.0
+"#;
+    let body: ProceduralBody = toml::from_str(toml).expect("atmosphere TOML should parse");
+    body.validate().expect("TOML body should validate");
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    assert!(compiled.interior[0].air_mass_kg > 0.0);
+    assert!(compiled.interior[0].o2_mass_kg > 0.0);
+}
+
+#[test]
+fn capsule_frustum_matches_closed_form_volume() {
+    use crate::{CapsuleParams, CapsuleShape, capsule_body};
+    use glam::DVec3;
+
+    // V = pi*h/3 * (R^2 + R*r + r^2) for R=2, r=1, h=3.
+    let params = CapsuleParams {
+        name: "frustum-check".into(),
+        shape: CapsuleShape::Frustum {
+            base_diameter_m: 4.0,
+            top_diameter_m: 2.0,
+            height_m: 3.0,
+        },
+        crew: 1,
+        seat_style: crate::SeatStyle::Couch,
+        abreast: 1,
+        couch_mass_kg_each: 30.0,
+        occupant_mass_kg_each: 0.0,
+        suited: true,
+        suit_mass_kg_each: 20.0,
+        atmosphere: None,
+        structure: None,
+        origin_body_m: DVec3::ZERO,
+        divisions: 4,
+    };
+    let body = capsule_body(&params).unwrap();
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let expected = std::f64::consts::PI * 3.0 / 3.0 * (4.0 + 2.0 + 1.0);
+    assert!(
+        (compiled.summary.enclosed_volume_m3 - expected).abs() / expected < 1e-9,
+        "volume = {}",
+        compiled.summary.enclosed_volume_m3
+    );
+}
+
+#[test]
+fn capsule_sphere_matches_closed_form_volume() {
+    use crate::{CapsuleParams, CapsuleShape, capsule_body};
+    use glam::DVec3;
+
+    let params = CapsuleParams {
+        name: "sphere-check".into(),
+        shape: CapsuleShape::Sphere { diameter_m: 2.0 },
+        crew: 1,
+        seat_style: crate::SeatStyle::Couch,
+        abreast: 1,
+        couch_mass_kg_each: 30.0,
+        occupant_mass_kg_each: 0.0,
+        suited: true,
+        suit_mass_kg_each: 20.0,
+        atmosphere: None,
+        structure: None,
+        origin_body_m: DVec3::ZERO,
+        divisions: 24,
+    };
+    let body = capsule_body(&params).unwrap();
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    // Latitude loft cuts chords between stations, so the volume converges
+    // from below quadratically; 24 rings land within 1%.
+    let expected = 4.0 / 3.0 * std::f64::consts::PI;
+    assert!(
+        (compiled.summary.enclosed_volume_m3 - expected).abs() / expected < 0.01,
+        "volume = {}",
+        compiled.summary.enclosed_volume_m3
+    );
+}
+
+#[test]
+fn capsule_example_crews_compile_with_air_and_docks() {
+    use crate::{BodyStructuralLayout, CabinAtmosphere, CapsuleParams, CapsuleShape, capsule_body};
+    use glam::DVec3;
+
+    // Example parameter sets on the generic primitive (representative
+    // public dimensions, not library presets): Apollo-like 3-abreast
+    // couches, Gemini-like side-by-side seats, 2x2 rows, a solo bell,
+    // and a spherical cabin.
+    let example =
+        |name: &str, shape: CapsuleShape, crew: u32, seat_style: crate::SeatStyle, abreast: u32| {
+            capsule_body(&CapsuleParams {
+                name: name.into(),
+                shape,
+                crew,
+                seat_style,
+                abreast,
+                couch_mass_kg_each: 30.0,
+                occupant_mass_kg_each: 0.0,
+                suited: false,
+                suit_mass_kg_each: 0.0,
+                atmosphere: Some(CabinAtmosphere::sea_level()),
+                structure: Some(BodyStructuralLayout::metal_baseline()),
+                origin_body_m: DVec3::ZERO,
+                divisions: 6,
+            })
+            .unwrap()
+        };
+    let frustum = |base: f64, top: f64, height: f64| CapsuleShape::Frustum {
+        base_diameter_m: base,
+        top_diameter_m: top,
+        height_m: height,
+    };
+
+    // Three couches abreast in a single row, sea-level air. Details
+    // (dock, shield) are separate parts now: the primitive ships none.
+    let apollo_like = example(
+        "three-abreast",
+        frustum(3.91, 1.0, 3.23),
+        3,
+        crate::SeatStyle::Couch,
+        3,
+    );
+    assert!(apollo_like.ports.is_empty());
+    assert!(apollo_like.heat_shields.is_empty());
+    let compiled = compile_body(&apollo_like, &BodyCompileOptions::default()).unwrap();
+    let cabin = &compiled.interior[0];
+    assert_eq!(cabin.seats, 3);
+    assert_eq!(cabin.seat_style, crate::SeatStyle::Couch);
+    assert_eq!(cabin.seat_positions_body_m.len(), 3);
+    let xs: Vec<f64> = cabin
+        .seat_positions_body_m
+        .iter()
+        .map(|seat| seat.x)
+        .collect();
+    assert!((xs[0] - xs[1]).abs() < 1e-9 && (xs[1] - xs[2]).abs() < 1e-9);
+    let mut ys: Vec<f64> = cabin
+        .seat_positions_body_m
+        .iter()
+        .map(|seat| seat.y)
+        .collect();
+    ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert!((ys[0] + 0.55).abs() < 1e-9 && ys[1].abs() < 1e-9 && (ys[2] - 0.55).abs() < 1e-9);
+    assert!(cabin.air_mass_kg > 0.0 && cabin.o2_mass_kg > 0.0);
+
+    // Side-by-side pair, two rows of two (upright or couch), solo bell,
+    // and a spherical cabin with no nose dock.
+    let sphere_like = example(
+        "ball-cabin",
+        CapsuleShape::Sphere { diameter_m: 2.3 },
+        1,
+        crate::SeatStyle::Couch,
+        1,
+    );
+    for (body, seats, rows) in [
+        (
+            example(
+                "pair-abreast",
+                frustum(3.05, 1.0, 3.4),
+                2,
+                crate::SeatStyle::Upright,
+                2,
+            ),
+            2,
+            1,
+        ),
+        (
+            example(
+                "four-upright",
+                frustum(4.0, 1.6, 4.5),
+                4,
+                crate::SeatStyle::Upright,
+                2,
+            ),
+            4,
+            2,
+        ),
+        (
+            example(
+                "four-couches",
+                frustum(5.0, 1.3, 3.3),
+                4,
+                crate::SeatStyle::Couch,
+                2,
+            ),
+            4,
+            2,
+        ),
+        (
+            example(
+                "solo-bell",
+                frustum(1.89, 0.75, 2.9),
+                1,
+                crate::SeatStyle::Couch,
+                1,
+            ),
+            1,
+            1,
+        ),
+        (sphere_like, 1, 1),
+    ] {
+        let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+        let cabin = &compiled.interior[0];
+        assert_eq!(cabin.seats, seats, "{}", body.name);
+        assert_eq!(cabin.seat_positions_body_m.len() as u32, seats);
+        let mut row_xs: Vec<i64> = cabin
+            .seat_positions_body_m
+            .iter()
+            .map(|seat| (seat.x * 1.0e9) as i64)
+            .collect();
+        row_xs.sort();
+        row_xs.dedup();
+        assert_eq!(row_xs.len() as u32, rows, "{}", body.name);
+        assert!(cabin.air_mass_kg > 0.0, "{}", body.name);
+    }
+    // The sphere ships bare too: side hatches stay user-authored.
+    let ball = example(
+        "ball-cabin",
+        CapsuleShape::Sphere { diameter_m: 2.3 },
+        1,
+        crate::SeatStyle::Couch,
+        1,
+    );
+    let ball_compiled = compile_body(&ball, &BodyCompileOptions::default()).unwrap();
+    assert!(ball_compiled.ports.is_empty());
+    assert!(ball_compiled.heat_shields.is_empty());
+}
+
+#[test]
+fn capsule_assembles_with_separate_shield_and_dock() {
+    use crate::{
+        BodyEnd, BodyHeatShield, BodyPort, BodyStructuralLayout, CabinAtmosphere, CapsuleParams,
+        CapsuleShape, PortKind, capsule_body,
+    };
+    use glam::DVec3;
+
+    // KSP-style assembly: bare frustum primitive plus an explicitly
+    // authored ablative shield on the blunt base and a nose dock.
+    let mut body = capsule_body(&CapsuleParams {
+        name: "crewed-frustom".into(),
+        shape: CapsuleShape::Frustum {
+            base_diameter_m: 3.91,
+            top_diameter_m: 1.0,
+            height_m: 3.23,
+        },
+        crew: 3,
+        seat_style: crate::SeatStyle::Couch,
+        abreast: 3,
+        couch_mass_kg_each: 30.0,
+        occupant_mass_kg_each: 0.0,
+        suited: false,
+        suit_mass_kg_each: 0.0,
+        atmosphere: Some(CabinAtmosphere::sea_level()),
+        structure: Some(BodyStructuralLayout::metal_baseline()),
+        origin_body_m: DVec3::ZERO,
+        divisions: 6,
+    })
+    .unwrap();
+    body.heat_shields = vec![
+        BodyHeatShield::new(
+            "base-shield",
+            BodyEnd::Aft,
+            50.0,
+            thessa_sim_core::ChamberMaterial::ablative(),
+        )
+        .unwrap(),
+    ];
+    body.ports = vec![
+        BodyPort::new(
+            "docking-nose",
+            3.23,
+            std::f64::consts::FRAC_PI_2,
+            PortKind::Docking,
+            0.8,
+        )
+        .unwrap(),
+    ];
+    body.validate().unwrap();
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    // Shield disc mass: pi * 1.955^2 * 0.05 * 1800.
+    let shield = &compiled.heat_shields[0];
+    let expected_mass = std::f64::consts::PI * 1.955_f64.powi(2) * 0.05 * 1800.0;
+    assert!((shield.mass_kg - expected_mass).abs() / expected_mass < 1e-9);
+    assert!((shield.diameter_m - 3.91).abs() < 1e-9);
+    assert_eq!(shield.position_body_m.x, 0.0);
+    assert!(
+        compiled
+            .ports
+            .iter()
+            .any(|port| port.name == "docking-nose")
+    );
+    let hull = compiled.structure.as_ref().expect("hull mass");
+    assert!(hull.mass_kg >= shield.mass_kg);
+}
+
+#[test]
+fn heat_shield_math_and_blunt_end_rule() {
+    use crate::{BodyEnd, BodyHeatShield};
+
+    // Flat disc on a 1 m-radius barrel: hand mass and disc inertia.
+    let mut body = ProceduralBody::new(
+        "shielded-barrel",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(4.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.heat_shields = vec![
+        BodyHeatShield::new(
+            "aft-shield",
+            BodyEnd::Aft,
+            50.0,
+            thessa_sim_core::ChamberMaterial::ablative(),
+        )
+        .unwrap(),
+    ];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let shield = &compiled.heat_shields[0];
+    let expected_mass = std::f64::consts::PI * 0.05 * 1800.0;
+    assert!((shield.mass_kg - expected_mass).abs() / expected_mass < 1e-12);
+    assert!((shield.diameter_m - 2.0).abs() < 1e-12);
+    // Thin-disc inertia about its centroid: Ix = m r^2 / 2.
+    let hull = compiled.structure.as_ref().expect("hull mass");
+    assert!(hull.mass_kg >= expected_mass);
+    // A pointed tip cannot take a shield.
+    let mut pointy = ProceduralBody::cone("dart", 3.0, 1.0, DVec3::ZERO).unwrap();
+    pointy.heat_shields = vec![
+        BodyHeatShield::new(
+            "nose-shield",
+            BodyEnd::Forward,
+            50.0,
+            thessa_sim_core::ChamberMaterial::ablative(),
+        )
+        .unwrap(),
+    ];
+    assert!(pointy.validate().is_err());
+    // Empty name and zero thickness refuse.
+    assert!(
+        BodyHeatShield::new(
+            "",
+            BodyEnd::Aft,
+            50.0,
+            thessa_sim_core::ChamberMaterial::ablative(),
+        )
+        .is_err()
+    );
+    assert!(
+        BodyHeatShield::new(
+            "flat",
+            BodyEnd::Aft,
+            0.0,
+            thessa_sim_core::ChamberMaterial::ablative(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn capsule_authoring_fails_closed() {
+    use crate::{CapsuleParams, CapsuleShape, capsule_body};
+    use glam::DVec3;
+
+    let base = CapsuleParams {
+        name: "capsule".into(),
+        shape: CapsuleShape::Frustum {
+            base_diameter_m: 3.0,
+            top_diameter_m: 1.0,
+            height_m: 3.0,
+        },
+        crew: 2,
+        seat_style: crate::SeatStyle::Couch,
+        abreast: 2,
+        couch_mass_kg_each: 30.0,
+        occupant_mass_kg_each: 0.0,
+        suited: false,
+        suit_mass_kg_each: 0.0,
+        atmosphere: None,
+        structure: None,
+        origin_body_m: DVec3::ZERO,
+        divisions: 4,
+    };
+    // Nose wider than the base is not a capsule.
+    assert!(
+        capsule_body(&CapsuleParams {
+            shape: CapsuleShape::Frustum {
+                base_diameter_m: 1.0,
+                top_diameter_m: 3.0,
+                height_m: 3.0,
+            },
+            ..base.clone()
+        })
+        .is_err()
+    );
+    assert!(
+        capsule_body(&CapsuleParams {
+            crew: 0,
+            ..base.clone()
+        })
+        .is_err()
+    );
+    assert!(
+        capsule_body(&CapsuleParams {
+            abreast: 3,
+            ..base.clone()
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn suited_crew_aggregates_suit_mass_and_flies_dry() {
+    use crate::SuitType;
+
+    // Fighter cockpit: suited pilot, dry cabin, no pressure schedule.
+    let mut body = ProceduralBody::new(
+        "fighter-nose",
+        vec![
+            BodyStation::round(0.0, 0.6).unwrap(),
+            BodyStation::round(3.0, 0.6).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::new(
+            "cockpit",
+            1.0,
+            2.5,
+            RegionKind::Crew {
+                seats: 1,
+                seat_mass_kg_each: 12.0,
+                occupant_mass_kg_each: 90.0,
+                seat_pitch_m: None,
+                abreast: None,
+                seat_style: crate::SeatStyle::Upright,
+                suited: true,
+                suit_mass_kg_each: 20.0,
+                suit_type: SuitType::HoseFed,
+                control_station: true,
+            },
+        )
+        .unwrap(),
+    ];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let cockpit = &compiled.interior[0];
+    // Seat + occupant + suit ride the hull; no air aboard.
+    assert!((cockpit.payload_mass_kg - 122.0).abs() < 1e-9);
+    assert_eq!(cockpit.air_mass_kg, 0.0);
+    assert_eq!(cockpit.seat_positions_body_m.len(), 1);
+}
+
+#[test]
+fn suit_rules_fail_closed() {
+    use crate::SuitType;
+
+    // Suits without mass, and mass without suits, both refuse.
+    for (suited, mass) in [(true, 0.0), (false, 5.0)] {
+        assert!(
+            InteriorRegion::new(
+                "cockpit",
+                1.0,
+                2.5,
+                RegionKind::Crew {
+                    seats: 1,
+                    seat_mass_kg_each: 12.0,
+                    occupant_mass_kg_each: 90.0,
+                    seat_pitch_m: None,
+                    abreast: None,
+                    seat_style: crate::SeatStyle::Upright,
+                    suited,
+                    suit_mass_kg_each: mass,
+                    suit_type: SuitType::HoseFed,
+                    control_station: false,
+                },
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn cabin_seat_suit_overrides_compile_per_place_and_round_trip() {
+    use crate::{
+        CabinDeck, CabinLayout, CabinSeatRole, SeatBlock, SeatClass, SeatStyle, SeatSuitOverride,
+        SuitType,
+    };
+
+    let layout_with = |suit_overrides| CabinLayout {
+        decks: vec![CabinDeck {
+            name: "cockpit".into(),
+            floor_z_m: 0.0,
+            min_headroom_m: 1.0,
+            blocks: vec![SeatBlock {
+                name: "pilots".into(),
+                class: SeatClass::Business,
+                role: CabinSeatRole::FlightCrew,
+                x0_m: 1.0,
+                rows: 1,
+                columns: vec![2],
+                pitch_m: 0.8,
+                aisle_widths_m: vec![],
+                wall_clearance_m: 0.2,
+                seat_width_m: None,
+                seat_mass_kg_each: None,
+                occupants: 1,
+                occupant_mass_kg_each: 90.0,
+                carry_on_kg_each: 0.0,
+                suited: false,
+                suit_mass_kg_each: 0.0,
+                suit_type: SuitType::HoseFed,
+                suit_overrides,
+                seat_style: SeatStyle::Upright,
+            }],
+            monuments: vec![],
+            doors: vec![],
+        }],
+    };
+    let overrides = vec![
+        SeatSuitOverride {
+            seat_index: 0,
+            suited: true,
+            suit_mass_kg_each: 100.0,
+            suit_type: SuitType::SelfContained,
+        },
+        SeatSuitOverride {
+            seat_index: 1,
+            suited: true,
+            suit_mass_kg_each: 25.0,
+            suit_type: SuitType::HoseFed,
+        },
+    ];
+
+    let mut body = ProceduralBody::new(
+        "mixed-suit-cockpit",
+        vec![
+            BodyStation::round(0.0, 1.5).unwrap(),
+            BodyStation::round(4.0, 1.5).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.regions = vec![
+        InteriorRegion::new("cockpit", 0.2, 3.8, RegionKind::Cabin)
+            .unwrap()
+            .with_cabin_layout(layout_with(overrides.clone()))
+            .unwrap(),
+    ];
+
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let cabin = &compiled.interior[0];
+    assert_eq!(cabin.cabin_seats.len(), 2);
+    assert!(cabin.cabin_seats[0].occupied);
+    assert_eq!(cabin.cabin_seats[0].suit_type, SuitType::SelfContained);
+    assert_eq!(cabin.cabin_seats[0].suit_mass_kg, 100.0);
+    assert!(!cabin.cabin_seats[1].occupied);
+    assert_eq!(cabin.cabin_seats[1].suit_type, SuitType::HoseFed);
+    assert_eq!(cabin.cabin_seats[1].suit_mass_kg, 25.0);
+    // Both fitted seats count; occupant and suit mass count only at place 0.
+    assert!((cabin.payload_mass_kg - 310.0).abs() < 1e-12);
+
+    let source = toml::to_string(&body).unwrap();
+    let restored: ProceduralBody = toml::from_str(&source).unwrap();
+    assert_eq!(restored, body);
+    restored.validate().unwrap();
+
+    assert!(
+        InteriorRegion::new("dry", 0.2, 3.8, RegionKind::Cabin)
+            .unwrap()
+            .with_cabin_layout(layout_with(Vec::new()))
+            .is_err(),
+        "unoverridden unsuited places cannot enter a dry cabin"
+    );
+    for bad_overrides in [
+        vec![overrides[0], overrides[0]],
+        vec![SeatSuitOverride {
+            seat_index: 2,
+            ..overrides[0]
+        }],
+        vec![SeatSuitOverride {
+            suited: false,
+            suit_mass_kg_each: 5.0,
+            ..overrides[0]
+        }],
+    ] {
+        assert!(
+            InteriorRegion::new("dry", 0.2, 3.8, RegionKind::Cabin)
+                .unwrap()
+                .with_cabin_layout(layout_with(bad_overrides))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn control_core_rides_avionics_not_tanks() {
+    use thessa_sim_core::AutopilotTier;
+
+    let mut body = ProceduralBody::new(
+        "cored-bus",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(6.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    let mut avionics = InteriorRegion::new("avionics", 4.0, 5.0, RegionKind::Avionics).unwrap();
+    avionics.control_core = Some(AutopilotTier::Full);
+    avionics.validate().unwrap();
+    body.regions = vec![avionics];
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    assert_eq!(compiled.interior[0].control_core, Some(AutopilotTier::Full));
+    // Tanks size their own shells and host no cores.
+    let mut tank = InteriorRegion::new(
+        "tank",
+        0.5,
+        3.5,
+        RegionKind::Tank {
+            propellant: thessa_sim_core::Propellant::LoxMethane,
+            fill_fraction: 1.0,
+            pressure_pa: None,
+            material: None,
+            shell: None,
+        },
+    )
+    .unwrap();
+    tank.control_core = Some(AutopilotTier::Hold);
+    assert!(tank.validate().is_err());
+}
+
+fn assembly_stage() -> ProceduralBody {
+    use crate::{AttachKind, AttachNode, AttachSite};
+    let mut body = ProceduralBody::new(
+        "stage",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(4.0, 1.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::new(
+            "tank",
+            0.5,
+            3.5,
+            RegionKind::Tank {
+                propellant: thessa_sim_core::Propellant::LoxMethane,
+                fill_fraction: 1.0,
+                pressure_pa: None,
+                material: None,
+                shell: None,
+            },
+        )
+        .unwrap(),
+    ];
+    body.ports = vec![BodyPort::new("engine", 0.0, 0.0, PortKind::EngineMount, 0.5).unwrap()];
+    body.attach_nodes =
+        vec![AttachNode::new("top", AttachSite::ForwardEnd, AttachKind::Hatch, None).unwrap()];
+    body.validate().unwrap();
+    body
+}
+
+fn assembly_capsule() -> ProceduralBody {
+    use crate::{AttachKind, AttachNode, AttachSite, CabinAtmosphere};
+    let mut body = ProceduralBody::new(
+        "capsule",
+        vec![
+            BodyStation::round(0.0, 1.0).unwrap(),
+            BodyStation::round(2.0, 1.0).unwrap(),
+        ],
+        DVec3::new(0.0, 0.0, 4.0),
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    body.regions = vec![
+        InteriorRegion::pressurized(
+            "cabin",
+            0.2,
+            1.8,
+            RegionKind::Cabin,
+            CabinAtmosphere::sea_level(),
+        )
+        .unwrap(),
+    ];
+    body.ports = vec![BodyPort::new("engine", 2.0, 0.0, PortKind::EngineMount, 0.5).unwrap()];
+    body.attach_nodes =
+        vec![AttachNode::new("base", AttachSite::AftEnd, AttachKind::Hatch, None).unwrap()];
+    body.validate().unwrap();
+    body
+}
+
+#[test]
+fn double_deck_cabin_preset_fits_and_compiles_seats_mass_and_exits() {
+    use crate::{CabinLayout, CabinSeatRole, CompiledCabinDoor, SeatClass};
+
+    let mut body = ProceduralBody::new(
+        "wide-airliner",
+        vec![
+            BodyStation::round(0.0, 3.4).unwrap(),
+            BodyStation::round(52.0, 3.4).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    let layout = CabinLayout::preset_747_like(1.0, 51.0, -1.0, 0.8).unwrap();
+    body.regions = vec![
+        InteriorRegion::pressurized(
+            "passenger-cabin",
+            1.0,
+            51.0,
+            RegionKind::Cabin,
+            crate::CabinAtmosphere {
+                pressure_kpa: 75.0,
+                ..crate::CabinAtmosphere::sea_level()
+            },
+        )
+        .unwrap()
+        .with_cabin_layout(layout)
+        .unwrap(),
+    ];
+
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let cabin = &compiled.interior[0];
+    assert_eq!(cabin.seats, 468);
+    assert_eq!(cabin.cabin_seats.len(), 468);
+    assert_eq!(cabin.cabin_doors.len(), 14);
+    assert!(cabin.cabin_doors.iter().all(|door| {
+        matches!(
+            door,
+            CompiledCabinDoor {
+                rating: crate::ExitType::TypeA,
+                ..
+            }
+        )
+    }));
+    assert_eq!(
+        cabin.cabin_seats
+            .iter()
+            .filter(|seat| seat.role == CabinSeatRole::Passenger && seat.class == SeatClass::Economy)
+            .count(),
+        376
+    );
+    assert_eq!(
+        cabin
+            .cabin_seats
+            .iter()
+            .filter(|seat| seat.role == CabinSeatRole::FlightCrew)
+            .count(),
+        2
+    );
+    assert_eq!(
+        cabin
+            .cabin_seats
+            .iter()
+            .filter(|seat| seat.role == CabinSeatRole::CabinAttendant)
+            .count(),
+        10
+    );
+    assert!(cabin.payload_mass_kg > 7_000.0);
+    assert!(compiled.structure.unwrap().mass_kg > cabin.payload_mass_kg);
+
+    let source = toml::to_string(&body).unwrap();
+    let restored: ProceduralBody = toml::from_str(&source).unwrap();
+    assert_eq!(restored, body);
+    restored.validate().unwrap();
+}
+
+#[test]
+fn cabin_layout_presets_deserialize_and_expand_from_region_bounds() {
+    use crate::CabinLayoutPreset;
+
+    let cases = [
+        (
+            "kind = '747-like'\nmain_floor_z_m = -1.0\nupper_floor_z_m = 0.8",
+            50.0,
+            2,
+            468,
+        ),
+        ("kind = 'concorde-like'\nfloor_z_m = 0.0", 32.0, 1, 104),
+        ("kind = 'fighter'\nfloor_z_m = 0.0", 4.0, 1, 1),
+        ("kind = 'fighter'\nfloor_z_m = 0.0\npilots = 2", 4.0, 1, 2),
+    ];
+
+    for (source, length_m, expected_decks, expected_seats) in cases {
+        let preset: CabinLayoutPreset = toml::from_str(source).unwrap();
+        let layout = preset.build_for_region(0.0, length_m).unwrap();
+        assert_eq!(layout.decks.len(), expected_decks);
+        let seat_count: u32 = layout
+            .decks
+            .iter()
+            .flat_map(|deck| &deck.blocks)
+            .map(|block| block.rows * block.columns.iter().sum::<u32>())
+            .sum();
+        assert_eq!(seat_count, expected_seats);
+    }
+}
+
+#[test]
+fn cabin_presets_enforce_exit_capacity_and_slender_width() {
+    use crate::{CabinLayout, CabinSeatRole, SeatBlock, SeatClass};
+
+    let mut layout = CabinLayout::preset_747_like(1.0, 51.0, -1.0, 0.8).unwrap();
+    layout.decks[0].doors.truncate(2);
+    let region = InteriorRegion::pressurized(
+        "cabin",
+        1.0,
+        51.0,
+        RegionKind::Cabin,
+        crate::CabinAtmosphere::sea_level(),
+    )
+    .unwrap();
+    assert!(region.with_cabin_layout(layout).is_err());
+
+    let mut concorde_body = ProceduralBody::new(
+        "slender-airliner",
+        vec![
+            BodyStation::new(0.0, 1.3, 2.2, 2.2, 2.0, 2.0, 0.0, 0.0).unwrap(),
+            BodyStation::new(32.0, 1.3, 2.2, 2.2, 2.0, 2.0, 0.0, 0.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    concorde_body.structure = Some(BodyStructuralLayout::metal_baseline());
+    concorde_body.regions = vec![
+        InteriorRegion::pressurized(
+            "passenger-cabin",
+            1.0,
+            31.0,
+            RegionKind::Cabin,
+            crate::CabinAtmosphere {
+                pressure_kpa: 75.0,
+                ..crate::CabinAtmosphere::sea_level()
+            },
+        )
+        .unwrap()
+        .with_cabin_layout(CabinLayout::preset_concorde_like(1.0, 31.0, 0.0).unwrap())
+        .unwrap(),
+    ];
+    let concorde = compile_body(&concorde_body, &BodyCompileOptions::default()).unwrap();
+    assert_eq!(concorde.interior[0].seats, 104);
+    assert_eq!(concorde.interior[0].cabin_doors.len(), 6);
+
+    let mut narrow = ProceduralBody::new(
+        "slender",
+        vec![
+            BodyStation::new(0.0, 1.15, 2.2, 2.2, 2.0, 2.0, 0.0, 0.0).unwrap(),
+            BodyStation::new(32.0, 1.15, 2.2, 2.2, 2.0, 2.0, 0.0, 0.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    let mut concorde = CabinLayout::preset_concorde_like(1.0, 31.0, 0.0).unwrap();
+    concorde.decks[0]
+        .blocks
+        .retain(|block| block.role == CabinSeatRole::Passenger);
+    concorde.decks[0].blocks.push(SeatBlock {
+        name: "flight-crew".into(),
+        class: SeatClass::Business,
+        role: CabinSeatRole::FlightCrew,
+        x0_m: 29.0,
+        rows: 1,
+        columns: vec![2],
+        pitch_m: 0.86,
+        aisle_widths_m: vec![],
+        wall_clearance_m: 0.2,
+        seat_width_m: None,
+        seat_mass_kg_each: None,
+        occupants: 0,
+        occupant_mass_kg_each: 90.0,
+        carry_on_kg_each: 0.0,
+        suited: false,
+        suit_mass_kg_each: 0.0,
+        suit_type: crate::SuitType::HoseFed,
+        suit_overrides: Vec::new(),
+        seat_style: crate::SeatStyle::Upright,
+    });
+    concorde.decks[0].blocks.push(SeatBlock {
+        name: "cabin-attendants".into(),
+        class: SeatClass::Economy,
+        role: CabinSeatRole::CabinAttendant,
+        x0_m: 27.0,
+        rows: 2,
+        columns: vec![1],
+        pitch_m: 0.86,
+        aisle_widths_m: vec![],
+        wall_clearance_m: 0.2,
+        seat_width_m: None,
+        seat_mass_kg_each: None,
+        occupants: 0,
+        occupant_mass_kg_each: 90.0,
+        carry_on_kg_each: 0.0,
+        suited: false,
+        suit_mass_kg_each: 0.0,
+        suit_type: crate::SuitType::HoseFed,
+        suit_overrides: Vec::new(),
+        seat_style: crate::SeatStyle::Upright,
+    });
+    narrow.structure = Some(BodyStructuralLayout::metal_baseline());
+    narrow.regions = vec![
+        InteriorRegion::pressurized(
+            "cabin",
+            1.0,
+            31.0,
+            RegionKind::Cabin,
+            crate::CabinAtmosphere::sea_level(),
+        )
+        .unwrap()
+        .with_cabin_layout(concorde)
+        .unwrap(),
+    ];
+    let err = compile_body(&narrow, &BodyCompileOptions::default()).unwrap_err();
+    assert!(err.to_string().contains("seat block"), "{err}");
+}
+
+#[test]
+fn cabin_exit_specs_match_14_cfr_25_807_minimums_and_seat_credits() {
+    use crate::ExitType;
+
+    let specs = [
+        (ExitType::TypeA, 42.0, 72.0, 110),
+        (ExitType::TypeB, 32.0, 72.0, 75),
+        (ExitType::TypeC, 30.0, 48.0, 55),
+        (ExitType::TypeI, 24.0, 48.0, 45),
+        (ExitType::TypeII, 20.0, 44.0, 40),
+        (ExitType::TypeIII, 20.0, 36.0, 35),
+        (ExitType::TypeIV, 19.0, 26.0, 9),
+    ];
+    for (rating, width_in, height_in, passenger_seats) in specs {
+        let spec = rating.spec();
+        assert!((spec.opening_width_m - width_in * 0.0254).abs() < 1e-12);
+        assert!((spec.opening_height_m - height_in * 0.0254).abs() < 1e-12);
+        assert_eq!(spec.passenger_seats, passenger_seats);
+    }
+}
+
+fn assembly_link(open: bool) -> crate::AssemblyLink {
+    crate::AssemblyLink {
+        name: "stack".into(),
+        parent_body: "stage".into(),
+        parent_node: "top".into(),
+        child_body: "capsule".into(),
+        child_node: "base".into(),
+        hatch_open: open,
+    }
+}
+
+#[test]
+fn open_hatch_shares_crew_air_and_fuel() {
+    let bodies = vec![assembly_stage(), assembly_capsule()];
+    let compiled = crate::compile_assembly(&bodies, &[assembly_link(true)]).unwrap();
+    assert_eq!(compiled.root, "stage");
+    let stage_transform = compiled.body_transforms[0];
+    let capsule_transform = compiled.body_transforms[1];
+    let stage_attach = stage_transform.transform_point(DVec3::new(4.0, 0.0, 0.0));
+    let capsule_attach = capsule_transform.transform_point(DVec3::ZERO);
+    assert!((stage_attach - capsule_attach).length() < 1.0e-12);
+    let opposed_normals = stage_transform.transform_direction(DVec3::X)
+        + capsule_transform.transform_direction(DVec3::NEG_X);
+    assert!(opposed_normals.length() < 1.0e-12);
+    // One crew group spanning both cabins (tank is not a volume).
+    assert_eq!(compiled.crew_groups.len(), 1);
+    assert_eq!(compiled.crew_groups[0].len(), 1);
+    // Only the capsule cabin holds air: its own domain.
+    assert_eq!(compiled.air_groups.len(), 1);
+    // The stage tank reaches an engine port on the attached capsule.
+    assert!(
+        compiled
+            .feed_paths
+            .iter()
+            .any(|path| path.tank == "stage.tank" && path.engine_port == "capsule.engine")
+    );
+}
+
+#[test]
+fn radial_attach_nodes_mate_at_the_loft_surface() {
+    use crate::{AttachKind, AttachNode, AttachSite};
+    let mut stage = assembly_stage();
+    let mut capsule = assembly_capsule();
+    stage.attach_nodes.push(
+        AttachNode::new(
+            "side",
+            AttachSite::Station {
+                x_m: 2.0,
+                clock_rad: 0.0,
+            },
+            AttachKind::Stack,
+            None,
+        )
+        .unwrap(),
+    );
+    capsule.attach_nodes.push(
+        AttachNode::new(
+            "side",
+            AttachSite::Station {
+                x_m: 1.0,
+                clock_rad: 0.0,
+            },
+            AttachKind::Stack,
+            None,
+        )
+        .unwrap(),
+    );
+    let link = crate::AssemblyLink {
+        name: "radial-joint".into(),
+        parent_body: "stage".into(),
+        parent_node: "side".into(),
+        child_body: "capsule".into(),
+        child_node: "side".into(),
+        hatch_open: true,
+    };
+    let assembly = crate::compile_assembly(&[stage, capsule], &[link]).unwrap();
+    let stage_transform = assembly.body_transforms[0];
+    let capsule_transform = assembly.body_transforms[1];
+    let stage_point = stage_transform.transform_point(DVec3::new(2.0, 1.0, 0.0));
+    let capsule_point = capsule_transform.transform_point(DVec3::new(1.0, 1.0, 0.0));
+    assert!((stage_point - capsule_point).length() < 1.0e-12);
+    let stage_normal = stage_transform.transform_direction(DVec3::Y);
+    let capsule_normal = capsule_transform.transform_direction(DVec3::Y);
+    assert!((stage_normal + capsule_normal).length() < 1.0e-12);
+}
+
+#[test]
+fn assembly_pose_rotates_inertia_without_changing_principal_values() {
+    let transform = crate::BodyTransform {
+        rotation_body: glam::DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2),
+        translation_body_m: DVec3::new(5.0, -2.0, 1.0),
+    };
+    let local = glam::DMat3::from_diagonal(DVec3::new(1.0, 2.0, 3.0));
+    let rotated = transform.rotate_inertia(local);
+    let expected = glam::DMat3::from_diagonal(DVec3::new(2.0, 1.0, 3.0));
+    assert!(
+        (rotated - expected)
+            .to_cols_array()
+            .iter()
+            .all(|entry| entry.abs() < 1.0e-12)
+    );
+}
+
+#[test]
+fn closed_hatch_isolates_but_holds_structure() {
+    use crate::{AttachKind, AttachNode, AttachSite};
+    // Same stack, hatch sealed: volumes split, fuel stops at the hatch.
+    let bodies = vec![assembly_stage(), assembly_capsule()];
+    let compiled = crate::compile_assembly(&bodies, &[assembly_link(false)]).unwrap();
+    assert_eq!(compiled.crew_groups.len(), 1);
+    assert_eq!(compiled.crew_groups[0].len(), 1);
+    // The tree still validates: structure never depends on hatch state.
+    assert_eq!(compiled.root, "stage");
+    assert!(
+        compiled
+            .feed_paths
+            .iter()
+            .any(|path| path.tank == "stage.tank" && path.engine_port == "stage.engine")
+    );
+    assert!(
+        !compiled
+            .feed_paths
+            .iter()
+            .any(|path| path.tank == "stage.tank" && path.engine_port == "capsule.engine")
+    );
+    // A sealed all-hatch pair of cabins splits crew domains.
+    let mut second = assembly_capsule();
+    second.name = "capsule-2".into();
+    second.attach_nodes =
+        vec![AttachNode::new("base", AttachSite::AftEnd, AttachKind::Stack, None).unwrap()];
+    let bodies = vec![assembly_capsule(), second];
+    let link = crate::AssemblyLink {
+        name: "sealed".into(),
+        parent_body: "capsule".into(),
+        parent_node: "base".into(),
+        child_body: "capsule-2".into(),
+        child_node: "base".into(),
+        hatch_open: false,
+    };
+    let compiled = crate::compile_assembly(&bodies, &[link]).unwrap();
+    assert_eq!(compiled.crew_groups.len(), 2);
+    assert_eq!(compiled.air_groups.len(), 2);
+    // Structural stack interfaces carry loads/resources but never turn
+    // into walk-through doors, even when authored hatch_open is true.
+    let mut stack_a = assembly_capsule();
+    stack_a.name = "stack-a".into();
+    stack_a.attach_nodes[0].kind = AttachKind::Stack;
+    let mut stack_b = assembly_capsule();
+    stack_b.name = "stack-b".into();
+    stack_b.attach_nodes[0].kind = AttachKind::Stack;
+    let stack_link = crate::AssemblyLink {
+        name: "rigid-stack".into(),
+        parent_body: "stack-a".into(),
+        parent_node: "base".into(),
+        child_body: "stack-b".into(),
+        child_node: "base".into(),
+        hatch_open: true,
+    };
+    let stacked = crate::compile_assembly(&[stack_a, stack_b], &[stack_link]).unwrap();
+    assert_eq!(stacked.crew_groups.len(), 2);
+    assert_eq!(stacked.air_groups.len(), 2);
+}
+
+#[test]
+fn assembly_topology_fails_closed() {
+    // Unknown body and unknown node.
+    assert!(
+        crate::compile_assembly(
+            &[assembly_stage()],
+            &[crate::AssemblyLink {
+                name: "bad".into(),
+                parent_body: "ghost".into(),
+                parent_node: "top".into(),
+                child_body: "stage".into(),
+                child_node: "top".into(),
+                hatch_open: true,
+            }]
+        )
+        .is_err()
+    );
+    // Diameter mismatch beyond tolerance.
+    let mut wide = assembly_capsule();
+    wide.attach_nodes[0].diameter_m = Some(3.0);
+    assert!(crate::compile_assembly(&[assembly_stage(), wide], &[assembly_link(true)]).is_err());
+    // Hatch below crew-passage diameter.
+    let mut narrow = assembly_capsule();
+    narrow.attach_nodes[0].diameter_m = Some(0.3);
+    assert!(crate::compile_assembly(&[assembly_stage(), narrow], &[assembly_link(true)]).is_err());
+    // Forest of two unlinked bodies refuses (single bodies fly alone).
+    assert!(crate::compile_assembly(&[assembly_stage(), assembly_capsule()], &[]).is_err());
+    assert!(
+        crate::compile_assembly(&[assembly_stage()], &[])
+            .unwrap()
+            .root
+            == "stage"
+    );
+    // Cycle of three refuses.
+    let (mut a, mut b, mut c) = (assembly_stage(), assembly_capsule(), assembly_capsule());
+    use crate::{AttachKind, AttachNode, AttachSite};
+    a.name = "a".into();
+    b.name = "b".into();
+    c.name = "c".into();
+    for (body, extra) in [(&mut a, "a2"), (&mut b, "b2"), (&mut c, "c2")] {
+        body.attach_nodes
+            .push(AttachNode::new(extra, AttachSite::AftEnd, AttachKind::Stack, None).unwrap());
+    }
+    // Note: a/b/c reuse node name "top"/"base" per body; links below form a loop.
+    let mk = |p: &str, pn: &str, c: &str, cn: &str| crate::AssemblyLink {
+        name: format!("{p}-{c}"),
+        parent_body: p.into(),
+        parent_node: pn.into(),
+        child_body: c.into(),
+        child_node: cn.into(),
+        hatch_open: true,
+    };
+    assert!(
+        crate::compile_assembly(
+            &[a, b, c],
+            &[
+                mk("a", "top", "b", "base"),
+                mk("b", "b2", "c", "base"),
+                mk("c", "c2", "a", "a2"),
+            ]
+        )
+        .is_err()
+    );
 }

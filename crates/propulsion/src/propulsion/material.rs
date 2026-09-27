@@ -55,7 +55,35 @@ impl ChamberMaterial {
         }
     }
 
-    pub(crate) fn validate(self) -> Result<(), PropulsionError> {
+    /// Tank-grade aluminum 2219-T87 (cryo/storable tank shells).
+    pub fn aluminum_2219() -> Self {
+        Self {
+            density_kg_m3: 2840.0,
+            yield_strength_pa: 395.0e6,
+            max_wall_temp_k: 400.0,
+        }
+    }
+
+    /// Tank-grade stainless 304L (storable/cryo shells, weldable).
+    pub fn stainless_304() -> Self {
+        Self {
+            density_kg_m3: 7900.0,
+            yield_strength_pa: 515.0e6,
+            max_wall_temp_k: 800.0,
+        }
+    }
+
+    /// Composite-overwrapped pressure vessel class (carbon overwrap
+    /// with thin liner; low density, liner-limited temperature).
+    pub fn composite_copv() -> Self {
+        Self {
+            density_kg_m3: 1600.0,
+            yield_strength_pa: 800.0e6,
+            max_wall_temp_k: 350.0,
+        }
+    }
+
+    pub fn validate(self) -> Result<(), PropulsionError> {
         require_positive(self.density_kg_m3, "material density")?;
         require_positive(self.yield_strength_pa, "material yield strength")?;
         require_positive(self.max_wall_temp_k, "material max wall temperature")?;

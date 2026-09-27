@@ -66,6 +66,9 @@ pub fn juno_style_stack() -> Result<ProceduralBody, FuselageError> {
             RegionKind::Tank {
                 propellant: thessa_sim_core::Propellant::LoxMethane,
                 fill_fraction: 0.95,
+                pressure_pa: None,
+                material: None,
+                shell: None,
             },
         )?,
         InteriorRegion::new("avionics", 4.9, 5.9, RegionKind::Avionics)?,

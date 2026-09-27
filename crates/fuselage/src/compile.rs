@@ -18,7 +18,7 @@
 //! follow the first moment of area change. Viscous crossflow at high alpha
 //! arrives through the solver's separated `sin^2` branch, not a body knob.
 
-use glam::{DMat3, DVec3, DVec4};
+use glam::{DMat3, DQuat, DVec3, DVec4};
 use serde::{Deserialize, Serialize};
 use thessa_sim_core::{
     AeroPanel, ControlHinge, ControlSurfaceDefinition, Propellant, TankMount, TankShape, TankSpec,
@@ -27,8 +27,9 @@ use thessa_sim_core::{
 
 use crate::summary::CompiledBodySummary;
 use crate::{
-    BodyControlPlane, BodyStation, CompiledHull, FuselageError, InteriorRegion, ProceduralBody,
-    RegionKind, outline_point, point_inertia,
+    AttachKind, AttachSite, BodyControlPlane, BodyStation, CabinAtmosphere, CabinSeatRole,
+    CompiledHull, DoorSide, ExitType, FuselageError, InteriorRegion, MonumentKind, ProceduralBody,
+    RegionKind, SeatClass, SeatStyle, SuitType, TankShell, outline_point, point_inertia,
 };
 
 /// Subdivision tolerances for one compilation.
@@ -103,10 +104,42 @@ impl BodyCompileOptions {
     }
 }
 
+/// Which propellant load a compiled tank carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TankComponent {
+    /// Single mixed/bulk tank (legacy path).
+    Bulk,
+    /// Oxidizer side of a split bipropellant region.
+    Oxidizer,
+    /// Fuel side of a split bipropellant region.
+    Fuel,
+    /// Standalone pure-fluid tank.
+    Stored,
+}
+
+/// Tank contents: a chamber pair (bulk mixed load) or a pure stored fluid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TankContents {
+    Pair(Propellant),
+    Fluid(crate::StoredFluid),
+}
+
+/// Dry-air gas constant in J/kg/K for cabin air inventory.
+const R_DRY_AIR_J_KG_K: f64 = 287.05;
+/// Molar masses in g/mol for the oxygen mass split.
+const MOLAR_MASS_AIR_G_MOL: f64 = 28.97;
+const MOLAR_MASS_O2_G_MOL: f64 = 32.0;
+/// Shared safety factor for tank and cabin pressure shells.
+const PRESSURE_SAFETY_FACTOR: f64 = 1.5;
+/// Loft samples for the pressurized-region radius screening.
+const PRESSURE_SHELL_SAMPLES: usize = 16;
+
 /// One tank region compiled into the feed pipeline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompiledBodyTank {
-    /// Region name from authoring.
+    /// Region name from authoring (`{name}-ox` / `{name}-fuel` for splits).
     pub region_name: String,
     /// Feed-pipeline mount (equivalent-cylinder shell, real inner volume
     /// capacity, authored initial fill kept separate from capacity).
@@ -118,6 +151,15 @@ pub struct CompiledBodyTank {
     pub inner_volume_error_m3: f64,
     /// Propellant mass at the authored fill (kg).
     pub propellant_kg: f64,
+    /// What the tank stores (pair or pure fluid).
+    pub contents: TankContents,
+    /// Bulk vs split-tank side vs standalone stored fluid.
+    #[serde(default = "default_tank_component")]
+    pub component: TankComponent,
+}
+
+fn default_tank_component() -> TankComponent {
+    TankComponent::Bulk
 }
 
 /// One interior region with compiled volume data.
@@ -132,8 +174,110 @@ pub struct CompiledRegion {
     pub volume_error_m3: f64,
     /// Volume centroid in body-local metres.
     pub centroid_body_m: DVec3,
-    /// Declared cargo mass (kg, cargo regions only).
+    /// Declared cargo/crew mass (kg; cargo manifest, seats + occupants).
     pub payload_mass_kg: f64,
+    /// Installed seat places (crew regions only).
+    #[serde(default)]
+    pub seats: u32,
+    /// Upright seats vs reclined couches.
+    #[serde(default)]
+    pub seat_style: crate::SeatStyle,
+    /// Seat anchors in body-local metres, forward-facing on the section
+    /// centerline (crew regions only; empty otherwise).
+    #[serde(default)]
+    pub seat_positions_body_m: Vec<DVec3>,
+    /// Cabin air mass in kg at the authored atmosphere (0 unpressurized).
+    #[serde(default)]
+    pub air_mass_kg: f64,
+    /// Oxygen mass within the cabin air in kg (0 unpressurized).
+    #[serde(default)]
+    pub o2_mass_kg: f64,
+    /// Authored atmosphere (pressure/temp/O2 setpoints for runtime cabins).
+    #[serde(default)]
+    pub atmosphere: Option<crate::CabinAtmosphere>,
+    /// Autopilot core hosted here, if any (runtime control authority).
+    #[serde(default)]
+    pub control_core: Option<thessa_sim_core::AutopilotTier>,
+    /// Advanced cabin seats with per-place class, role, suit and mass data.
+    #[serde(default)]
+    pub cabin_seats: Vec<CompiledCabinSeat>,
+    /// Fitted mass-only volumes compiled from deck monuments.
+    #[serde(default)]
+    pub cabin_monuments: Vec<CompiledCabinMonument>,
+    /// Exit records retained for hangar diagnostics and future evacuation.
+    #[serde(default)]
+    pub cabin_doors: Vec<CompiledCabinDoor>,
+}
+
+/// One compiled place after loft fitting, including its baked mass manifest.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompiledCabinSeat {
+    pub name: String,
+    pub position_body_m: DVec3,
+    pub class: SeatClass,
+    pub role: CabinSeatRole,
+    pub seat_style: SeatStyle,
+    pub occupied: bool,
+    pub suited: bool,
+    pub suit_type: SuitType,
+    pub seat_mass_kg: f64,
+    pub occupant_mass_kg: f64,
+    pub carry_on_mass_kg: f64,
+    pub suit_mass_kg: f64,
+}
+
+impl CompiledCabinSeat {
+    pub fn mass_kg(&self) -> f64 {
+        self.seat_mass_kg
+            + if self.occupied {
+                self.occupant_mass_kg + self.carry_on_mass_kg + self.suit_mass_kg
+            } else {
+                0.0
+            }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompiledCabinMonument {
+    pub name: String,
+    pub kind: MonumentKind,
+    pub position_body_m: DVec3,
+    pub mass_kg: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompiledCabinDoor {
+    pub name: String,
+    pub pair_id: String,
+    pub position_body_m: DVec3,
+    pub side: DoorSide,
+    pub rating: ExitType,
+    pub opening_width_m: f64,
+    pub opening_height_m: f64,
+}
+
+struct CompiledCabinLayout {
+    seats: Vec<CompiledCabinSeat>,
+    monuments: Vec<CompiledCabinMonument>,
+    doors: Vec<CompiledCabinDoor>,
+    seat_positions_body_m: Vec<DVec3>,
+    seat_count: u32,
+    payload_mass_kg: f64,
+    seat_style: SeatStyle,
+}
+
+/// One detachable heat shield with compiled mass data.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompiledHeatShield {
+    pub name: String,
+    /// Mount position in body-local metres (end-section center).
+    pub position_body_m: DVec3,
+    /// Shield diameter in metres (from the end section).
+    pub diameter_m: f64,
+    /// Shield mass in kg.
+    pub mass_kg: f64,
+    /// Ablative shell material.
+    pub material: thessa_sim_core::ChamberMaterial,
 }
 
 /// One interface anchor in body-local metres.
@@ -165,6 +309,9 @@ pub struct CompiledBody {
     pub structure: Option<CompiledHull>,
     /// Tank regions compiled into feed-pipeline mounts.
     pub tanks: Vec<CompiledBodyTank>,
+    /// Detachable heat shields with mass data.
+    #[serde(default)]
+    pub heat_shields: Vec<CompiledHeatShield>,
     /// All interior regions with usable volumes.
     pub interior: Vec<CompiledRegion>,
     /// Interface anchors in body-local metres.
@@ -760,6 +907,7 @@ impl<'a> Compiler<'a> {
             controls: Vec::new(),
             structure: None,
             tanks: Vec::new(),
+            heat_shields: Vec::new(),
             interior: Vec::new(),
             ports: Vec::new(),
             summary: CompiledBodySummary::default(),
@@ -908,11 +1056,62 @@ impl<'a> Compiler<'a> {
             .unwrap_or(0.0);
         for region in &self.body.regions {
             let (volume, volume_error, centroid) = self.region_volume(region, &leaves, wall_m)?;
-            let payload = match region.kind {
-                RegionKind::Cargo { payload_mass_kg } => payload_mass_kg,
-                _ => 0.0,
+            let cabin_layout = if let Some(layout) = &region.cabin_layout {
+                Some(self.compile_cabin_layout(region, layout, wall_m)?)
+            } else if let Some(preset) = region.cabin_layout_preset {
+                let layout = preset.build_for_region(region.x0_m, region.x1_m)?;
+                Some(self.compile_cabin_layout(region, &layout, wall_m)?)
+            } else {
+                None
             };
-            if payload > 0.0 {
+            let (mut payload, mut seats, mut seat_style, mut seat_anchors) = match region.kind {
+                RegionKind::Cargo { payload_mass_kg } => {
+                    (payload_mass_kg, 0, crate::SeatStyle::Upright, Vec::new())
+                }
+                RegionKind::Crew {
+                    seats,
+                    seat_mass_kg_each,
+                    occupant_mass_kg_each,
+                    seat_pitch_m,
+                    abreast,
+                    seat_style,
+                    suited,
+                    suit_mass_kg_each,
+                    ..
+                } => (
+                    seats as f64
+                        * (seat_mass_kg_each
+                            + occupant_mass_kg_each
+                            + if suited { suit_mass_kg_each } else { 0.0 }),
+                    seats,
+                    seat_style,
+                    self.seat_anchors(
+                        region.x0_m,
+                        region.x1_m,
+                        seats,
+                        seat_pitch_m,
+                        abreast.unwrap_or(1),
+                    )?,
+                ),
+                _ => (0.0, 0, crate::SeatStyle::Upright, Vec::new()),
+            };
+            if let Some(cabin) = &cabin_layout {
+                payload = cabin.payload_mass_kg;
+                seats = cabin.seat_count;
+                seat_style = cabin.seat_style;
+                seat_anchors = cabin.seat_positions_body_m.clone();
+                for seat in &cabin.seats {
+                    let mass = seat.mass_kg();
+                    hull_mass_kg += mass;
+                    hull_moment += seat.position_body_m * mass;
+                    hull_inertia += point_inertia(mass, seat.position_body_m);
+                }
+                for monument in &cabin.monuments {
+                    hull_mass_kg += monument.mass_kg;
+                    hull_moment += monument.position_body_m * monument.mass_kg;
+                    hull_inertia += point_inertia(monument.mass_kg, monument.position_body_m);
+                }
+            } else if payload > 0.0 {
                 hull_mass_kg += payload;
                 hull_moment += centroid * payload;
                 hull_inertia += point_inertia(payload, centroid);
@@ -920,6 +1119,9 @@ impl<'a> Compiler<'a> {
             if let RegionKind::Tank {
                 propellant,
                 fill_fraction,
+                pressure_pa,
+                material,
+                shell,
             } = region.kind
             {
                 let layout = layout.as_ref().ok_or_else(|| {
@@ -928,53 +1130,171 @@ impl<'a> Compiler<'a> {
                         region.name
                     ))
                 })?;
-                let mean_area = volume / (region.x1_m - region.x0_m).max(1e-12);
-                let equiv_d = 2.0 * (mean_area / std::f64::consts::PI).sqrt();
-                let spec = TankSpec {
-                    shape: TankShape::Cylinder {
-                        diameter_m: equiv_d,
-                        length_m: region.x1_m - region.x0_m,
-                    },
-                    pressure_pa: layout.tank_pressure_pa,
-                    material: layout.tank_material,
-                };
-                let density = propellant_density(propellant)?;
-                let mut tank = spec.compile(density).map_err(|error| {
-                    FuselageError::InvalidBody(format!("tank region '{}': {error}", region.name))
+                let spec = Self::tank_spec(
+                    shell,
+                    volume,
+                    region.x1_m - region.x0_m,
+                    pressure_pa.unwrap_or(layout.tank_pressure_pa),
+                    material.unwrap_or(layout.tank_material),
+                );
+                let compiled_tank = self.compile_single_tank(
+                    &region.name,
+                    TankContents::Pair(propellant),
+                    TankComponent::Bulk,
+                    volume,
+                    volume_error,
+                    centroid,
+                    fill_fraction,
+                    &spec,
+                )?;
+                compiled.tanks.push(compiled_tank);
+            }
+            if let RegionKind::FluidTank {
+                fluid,
+                fill_fraction,
+                pressure_pa,
+                material,
+                shell,
+            } = region.kind
+            {
+                let layout = layout.as_ref().ok_or_else(|| {
+                    FuselageError::InvalidBody(format!(
+                        "tank region '{}' needs a structural layout",
+                        region.name
+                    ))
                 })?;
-                // Real inner volume is the capacity (equivalent cylinder
-                // sizes the shell); preserve capacity separately from the
-                // authored initial fill in the installed mount.
-                tank.volume_m3 = volume;
-                tank.full_propellant_kg = volume * density;
-                let initial_propellant_kg = tank.full_propellant_kg * fill_fraction;
-                let intrinsic_inertia_body_kg_m2 = spec
-                    .shape
-                    .intrinsic_inertia_body_kg_m2(tank.dry_mass_kg, initial_propellant_kg)
-                    .map_err(|error| {
+                let spec = Self::tank_spec(
+                    shell,
+                    volume,
+                    region.x1_m - region.x0_m,
+                    pressure_pa.unwrap_or(layout.tank_pressure_pa),
+                    material.unwrap_or(layout.tank_material),
+                );
+                let compiled_tank = self.compile_split_tank(
+                    &region.name,
+                    TankContents::Fluid(fluid),
+                    TankComponent::Stored,
+                    volume,
+                    volume_error,
+                    centroid,
+                    fluid.density_kg_m3(),
+                    fill_fraction,
+                    &spec,
+                )?;
+                compiled.tanks.push(compiled_tank);
+            }
+            if let RegionKind::Bipropellant {
+                propellant,
+                fill_fraction,
+                mixture_ratio,
+                pressure_pa,
+                oxidizer_pressure_pa,
+                fuel_pressure_pa,
+                material,
+                oxidizer_material,
+                fuel_material,
+                shell,
+            } = region.kind
+            {
+                let layout = layout.as_ref().ok_or_else(|| {
+                    FuselageError::InvalidBody(format!(
+                        "tank region '{}' needs a structural layout",
+                        region.name
+                    ))
+                })?;
+                let ratio = mixture_ratio.unwrap_or_else(|| {
+                    propellant
+                        .reference_mixture_ratio()
+                        .expect("validated bipropellant pair")
+                });
+                let (rho_ox, rho_fuel) = propellant.split_densities().ok_or_else(|| {
+                    FuselageError::InvalidInterior(format!(
+                        "region '{}' needs a bipropellant pair for a split tank",
+                        region.name
+                    ))
+                })?;
+                // Mass ratio MR = m_ox / m_f; volume ratio follows densities.
+                let volume_ratio = ratio * rho_fuel / rho_ox;
+                let ox_volume = volume * volume_ratio / (1.0 + volume_ratio);
+                let split_x = self.find_split_x(region.x0_m, region.x1_m, ox_volume, wall_m)?;
+                let (ox_vol, ox_err, ox_centroid) =
+                    self.range_volume(region.x0_m, split_x, wall_m)?;
+                let (fuel_vol, fuel_err, fuel_centroid) =
+                    self.range_volume(split_x, region.x1_m, wall_m)?;
+                let base_pressure = pressure_pa.unwrap_or(layout.tank_pressure_pa);
+                let base_material = material.unwrap_or(layout.tank_material);
+                let ox_spec = Self::tank_spec(
+                    shell,
+                    ox_vol,
+                    (split_x - region.x0_m).max(1e-12),
+                    oxidizer_pressure_pa
+                        .or(pressure_pa)
+                        .unwrap_or(base_pressure),
+                    oxidizer_material.or(material).unwrap_or(base_material),
+                );
+                let fuel_spec = Self::tank_spec(
+                    shell,
+                    fuel_vol,
+                    (region.x1_m - split_x).max(1e-12),
+                    fuel_pressure_pa.or(pressure_pa).unwrap_or(base_pressure),
+                    fuel_material.or(material).unwrap_or(base_material),
+                );
+                // Oxidizer aft, fuel forward: denser load near the tail.
+                let ox_tank = self.compile_split_tank(
+                    &format!("{}-ox", region.name),
+                    TankContents::Pair(propellant),
+                    TankComponent::Oxidizer,
+                    ox_vol,
+                    ox_err,
+                    ox_centroid,
+                    rho_ox,
+                    fill_fraction,
+                    &ox_spec,
+                )?;
+                let fuel_tank = self.compile_split_tank(
+                    &format!("{}-fuel", region.name),
+                    TankContents::Pair(propellant),
+                    TankComponent::Fuel,
+                    fuel_vol,
+                    fuel_err,
+                    fuel_centroid,
+                    rho_fuel,
+                    fill_fraction,
+                    &fuel_spec,
+                )?;
+                compiled.tanks.push(ox_tank);
+                compiled.tanks.push(fuel_tank);
+            }
+            // Pressurized atmosphere (first ECLSS brick): ideal-gas air
+            // inventory rides the hull at the region centroid, and the
+            // skin must hold the full differential against vacuum.
+            let (air_mass_kg, o2_mass_kg) = match region.atmosphere {
+                Some(atmosphere) => {
+                    let considering = layout.as_ref().ok_or_else(|| {
                         FuselageError::InvalidBody(format!(
-                            "tank region '{}': {error}",
+                            "pressurized region '{}' needs a structural layout",
                             region.name
                         ))
                     })?;
-                let position = centroid + self.body.origin_body_m;
-                let mount = TankMount {
-                    tank,
-                    position_body_m: position.to_array(),
-                    intrinsic_inertia_body_kg_m2,
-                    initial_propellant_kg: Some(initial_propellant_kg),
-                };
-                mount
-                    .validate()
-                    .map_err(|error| FuselageError::InvalidBody(error.to_string()))?;
-                compiled.tanks.push(CompiledBodyTank {
-                    region_name: region.name.clone(),
-                    mount,
-                    inner_volume_m3: volume,
-                    inner_volume_error_m3: volume_error,
-                    propellant_kg: initial_propellant_kg,
-                });
-            }
+                    self.check_pressure_shell(
+                        &region.name,
+                        region.x0_m,
+                        region.x1_m,
+                        atmosphere,
+                        considering,
+                    )?;
+                    let density_kg_m3 =
+                        atmosphere.pressure_kpa * 1000.0 / (R_DRY_AIR_J_KG_K * atmosphere.temp_k);
+                    let air = density_kg_m3 * volume;
+                    let o2 =
+                        air * atmosphere.o2_fraction * MOLAR_MASS_O2_G_MOL / MOLAR_MASS_AIR_G_MOL;
+                    hull_mass_kg += air;
+                    hull_moment += centroid * air;
+                    hull_inertia += point_inertia(air, centroid);
+                    (air, o2)
+                }
+                None => (0.0, 0.0),
+            };
             compiled.interior.push(CompiledRegion {
                 name: region.name.clone(),
                 kind: region.kind,
@@ -982,6 +1302,50 @@ impl<'a> Compiler<'a> {
                 volume_error_m3: volume_error,
                 centroid_body_m: centroid,
                 payload_mass_kg: payload,
+                seats,
+                seat_style,
+                seat_positions_body_m: seat_anchors,
+                air_mass_kg,
+                o2_mass_kg,
+                atmosphere: region.atmosphere,
+                control_core: region.control_core,
+                cabin_seats: cabin_layout
+                    .as_ref()
+                    .map(|layout| layout.seats.clone())
+                    .unwrap_or_default(),
+                cabin_monuments: cabin_layout
+                    .as_ref()
+                    .map(|layout| layout.monuments.clone())
+                    .unwrap_or_default(),
+                cabin_doors: cabin_layout.map(|layout| layout.doors).unwrap_or_default(),
+            });
+        }
+
+        // Detachable heat shields: disc mass from the end-section area,
+        // thin-disc intrinsic inertia plus the mount offset term.
+        for shield in &self.body.heat_shields {
+            let end_station = match shield.end {
+                crate::BodyEnd::Aft => self.body.stations[0],
+                crate::BodyEnd::Forward => *self.body.stations.last().unwrap(),
+            };
+            let area = end_station.area_m2();
+            let radius = (area / std::f64::consts::PI).sqrt();
+            let mass = area * (shield.thickness_mm / 1000.0) * shield.material.density_kg_m3;
+            let center = self.section_center(end_station)?;
+            let intrinsic = DMat3::from_diagonal(DVec3::new(
+                0.5 * mass * radius.powi(2),
+                0.25 * mass * radius.powi(2),
+                0.25 * mass * radius.powi(2),
+            ));
+            hull_mass_kg += mass;
+            hull_moment += center * mass;
+            hull_inertia += intrinsic + point_inertia(mass, center);
+            compiled.heat_shields.push(CompiledHeatShield {
+                name: shield.name.clone(),
+                position_body_m: center,
+                diameter_m: 2.0 * radius,
+                mass_kg: mass,
+                material: shield.material,
             });
         }
 
@@ -1136,6 +1500,511 @@ impl<'a> Compiler<'a> {
         Ok((volume, volume_error, moment / volume))
     }
 
+    fn compile_cabin_layout(
+        &self,
+        region: &InteriorRegion,
+        layout: &crate::CabinLayout,
+        wall_m: f64,
+    ) -> Result<CompiledCabinLayout, FuselageError> {
+        let mut seats = Vec::new();
+        let mut monuments = Vec::new();
+        let mut doors = Vec::new();
+        let mut seat_positions_body_m = Vec::new();
+        let mut payload_mass_kg = 0.0;
+        let mut first_style = None;
+
+        for deck in &layout.decks {
+            for block in &deck.blocks {
+                first_style.get_or_insert(block.seat_style);
+                let suit_overrides: std::collections::HashMap<_, _> = block
+                    .suit_overrides
+                    .iter()
+                    .map(|suit_override| (suit_override.seat_index, suit_override))
+                    .collect();
+                let seat_width_m = block.seat_width_m();
+                let seat_count_per_row: u32 = block.columns.iter().sum();
+                let seat_width_total_m = seat_count_per_row as f64 * seat_width_m;
+                let aisle_width_total_m: f64 = block.aisle_widths_m.iter().sum();
+                let required_width_m =
+                    seat_width_total_m + aisle_width_total_m + block.wall_clearance_m;
+
+                for row in 0..block.rows {
+                    let x_m = block.x0_m + (row as f64 + 0.5) * block.pitch_m;
+                    let section = self.body.section_at(x_m);
+                    let top_inner_z_m = section.offset_z_m + section.top_height_m - wall_m;
+                    let bottom_inner_z_m = section.offset_z_m - section.bottom_height_m + wall_m;
+                    if deck.floor_z_m < bottom_inner_z_m - 1e-9
+                        || deck.floor_z_m + deck.min_headroom_m > top_inner_z_m + 1e-9
+                    {
+                        return Err(FuselageError::InvalidInterior(format!(
+                            "deck '{}' at row x={x_m:.2} m has insufficient headroom or its floor lies outside the loft",
+                            deck.name
+                        )));
+                    }
+                    let relative_z_m = deck.floor_z_m - section.offset_z_m;
+                    let (height_m, exponent) = if relative_z_m >= 0.0 {
+                        (section.top_height_m, section.top_exponent)
+                    } else {
+                        (section.bottom_height_m, section.bottom_exponent)
+                    };
+                    let z_fraction: f64 = (relative_z_m.abs() / height_m).clamp(0.0, 1.0);
+                    let outer_half_width_m: f64 = section.half_width_m
+                        * (1.0 - z_fraction.powf(exponent))
+                            .max(0.0)
+                            .powf(1.0 / exponent);
+                    let inner_half_width_m = outer_half_width_m - wall_m;
+                    let usable_width_m = 2.0 * inner_half_width_m;
+                    if !usable_width_m.is_finite() || required_width_m > usable_width_m + 1e-9 {
+                        return Err(FuselageError::InvalidInterior(format!(
+                            "seat block '{}' row at x={x_m:.2} m needs {:.2} m width, loft provides {:.2} m",
+                            block.name,
+                            required_width_m,
+                            usable_width_m.max(0.0)
+                        )));
+                    }
+
+                    let lateral_span_m = seat_width_total_m + aisle_width_total_m;
+                    let mut lateral_cursor_m = section.offset_y_m - 0.5 * lateral_span_m;
+                    let mut column_index = 0_u32;
+                    for (group_index, &group_places) in block.columns.iter().enumerate() {
+                        for place_in_group in 0..group_places {
+                            let position = DVec3::new(
+                                x_m,
+                                lateral_cursor_m + (place_in_group as f64 + 0.5) * seat_width_m,
+                                deck.floor_z_m,
+                            );
+                            let occupied =
+                                row * seat_count_per_row + column_index < block.occupants;
+                            let seat_index = row * seat_count_per_row + column_index;
+                            let (suited, suit_mass_kg, suit_type) = suit_overrides
+                                .get(&seat_index)
+                                .map(|suit_override| {
+                                    (
+                                        suit_override.suited,
+                                        suit_override.suit_mass_kg_each,
+                                        suit_override.suit_type,
+                                    )
+                                })
+                                .unwrap_or((
+                                    block.suited,
+                                    block.suit_mass_kg_each,
+                                    block.suit_type,
+                                ));
+                            let seat = CompiledCabinSeat {
+                                name: format!(
+                                    "{}.{}.{}.r{}.c{}",
+                                    region.name,
+                                    deck.name,
+                                    block.name,
+                                    row + 1,
+                                    column_index + 1
+                                ),
+                                position_body_m: position,
+                                class: block.class,
+                                role: block.role,
+                                seat_style: block.seat_style,
+                                occupied,
+                                suited,
+                                suit_type,
+                                seat_mass_kg: block.seat_mass_kg_each(),
+                                occupant_mass_kg: block.occupant_mass_kg_each,
+                                carry_on_mass_kg: block.carry_on_kg_each,
+                                suit_mass_kg,
+                            };
+                            payload_mass_kg += seat.mass_kg();
+                            seat_positions_body_m.push(position);
+                            seats.push(seat);
+                            column_index += 1;
+                        }
+                        lateral_cursor_m += group_places as f64 * seat_width_m;
+                        if let Some(&aisle_width_m) = block.aisle_widths_m.get(group_index) {
+                            lateral_cursor_m += aisle_width_m;
+                        }
+                    }
+                }
+            }
+
+            for monument in &deck.monuments {
+                let x_m = 0.5 * (monument.x0_m + monument.x1_m);
+                let section = self.body.section_at(x_m);
+                let position = DVec3::new(x_m, section.offset_y_m, deck.floor_z_m);
+                monuments.push(CompiledCabinMonument {
+                    name: format!("{}.{}.{}", region.name, deck.name, monument.name),
+                    kind: monument.kind,
+                    position_body_m: position,
+                    mass_kg: monument.mass_kg,
+                });
+                payload_mass_kg += monument.mass_kg;
+            }
+
+            for door in &deck.doors {
+                let section = self.body.section_at(door.x_m);
+                let spec = door.rating.spec();
+                let top_inner_z_m = section.offset_z_m + section.top_height_m - wall_m;
+                let bottom_inner_z_m = section.offset_z_m - section.bottom_height_m + wall_m;
+                let (door_height, door_exponent) = if deck.floor_z_m >= section.offset_z_m {
+                    (section.top_height_m, section.top_exponent)
+                } else {
+                    (section.bottom_height_m, section.bottom_exponent)
+                };
+                let door_z_fraction: f64 =
+                    ((deck.floor_z_m - section.offset_z_m).abs() / door_height).clamp(0.0, 1.0);
+                let floor_half_width_m: f64 = section.half_width_m
+                    * (1.0 - door_z_fraction.powf(door_exponent))
+                        .max(0.0)
+                        .powf(1.0 / door_exponent);
+                if deck.floor_z_m < bottom_inner_z_m - 1e-9
+                    || deck.floor_z_m + spec.opening_height_m > top_inner_z_m + 1e-9
+                    || floor_half_width_m <= wall_m
+                {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "door '{}' ({:?}) does not fit the loft at x={:.2} m on deck '{}'",
+                        door.name, door.rating, door.x_m, deck.name
+                    )));
+                }
+                let side_sign = match door.side {
+                    DoorSide::Left => -1.0,
+                    DoorSide::Right => 1.0,
+                };
+                doors.push(CompiledCabinDoor {
+                    name: format!("{}.{}.{}", region.name, deck.name, door.name),
+                    pair_id: format!("{}.{}.{}", region.name, deck.name, door.pair_id),
+                    position_body_m: DVec3::new(
+                        door.x_m,
+                        section.offset_y_m + side_sign * floor_half_width_m,
+                        deck.floor_z_m,
+                    ),
+                    side: door.side,
+                    rating: door.rating,
+                    opening_width_m: spec.opening_width_m,
+                    opening_height_m: spec.opening_height_m,
+                });
+            }
+        }
+
+        let seat_count = u32::try_from(seats.len()).map_err(|_| {
+            FuselageError::InvalidInterior(format!(
+                "cabin '{}' has too many compiled seat places",
+                region.name
+            ))
+        })?;
+        if !payload_mass_kg.is_finite()
+            || seats.iter().any(|seat| !seat.position_body_m.is_finite())
+            || monuments
+                .iter()
+                .any(|monument| !monument.position_body_m.is_finite())
+            || doors.iter().any(|door| !door.position_body_m.is_finite())
+        {
+            return Err(FuselageError::InvalidInterior(format!(
+                "cabin '{}' compiled non-finite layout data",
+                region.name
+            )));
+        }
+        Ok(CompiledCabinLayout {
+            seats,
+            monuments,
+            doors,
+            seat_positions_body_m,
+            seat_count,
+            payload_mass_kg,
+            seat_style: first_style.unwrap_or(SeatStyle::Upright),
+        })
+    }
+
+    /// Usable inner-mold volume over an explicit axial range (split tanks).
+    fn range_volume(
+        &self,
+        x0_m: f64,
+        x1_m: f64,
+        wall_m: f64,
+    ) -> Result<(f64, f64, DVec3), FuselageError> {
+        if x1_m - x0_m <= 1e-12 {
+            return Err(FuselageError::InvalidInterior(
+                "split tank needs a non-empty axial sub-range".into(),
+            ));
+        }
+        let integrated = self.integrate_section(x0_m, x1_m, wall_m)?;
+        let volume = integrated.moments.x;
+        if volume <= 0.0 {
+            return Err(FuselageError::InvalidInterior(
+                "split tank sub-range has no usable volume".into(),
+            ));
+        }
+        let centroid = DVec3::new(
+            integrated.moments.y / volume,
+            integrated.moments.z / volume,
+            integrated.moments.w / volume,
+        );
+        Ok((volume, integrated.estimated_error.x, centroid))
+    }
+
+    /// Axial station where `[x0, split]` holds `target_volume_m3`.
+    fn find_split_x(
+        &self,
+        x0_m: f64,
+        x1_m: f64,
+        target_volume_m3: f64,
+        wall_m: f64,
+    ) -> Result<f64, FuselageError> {
+        let (total, _, _) = self.range_volume(x0_m, x1_m, wall_m)?;
+        if target_volume_m3 <= 0.0 || target_volume_m3 >= total {
+            return Err(FuselageError::InvalidInterior(
+                "split tank target volume lies outside the region".into(),
+            ));
+        }
+        let mut low = x0_m;
+        let mut high = x1_m;
+        for _ in 0..80 {
+            let mid = 0.5 * (low + high);
+            let integrated = self.integrate_section(x0_m, mid, wall_m)?;
+            if integrated.moments.x < target_volume_m3 {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        Ok(0.5 * (low + high))
+    }
+
+    fn equiv_diameter(volume_m3: f64, length_m: f64) -> f64 {
+        let mean_area = volume_m3 / length_m.max(1e-12);
+        2.0 * (mean_area / std::f64::consts::PI).sqrt()
+    }
+
+    fn sphere_diameter(volume_m3: f64) -> f64 {
+        (6.0 * volume_m3 / std::f64::consts::PI).cbrt()
+    }
+
+    /// Pressure-shell spec for one tank: equivalent cylinder over the
+    /// axial length, or a volume-sized sphere.
+    fn tank_spec(
+        shell: Option<TankShell>,
+        volume_m3: f64,
+        length_m: f64,
+        pressure_pa: f64,
+        material: thessa_sim_core::ChamberMaterial,
+    ) -> TankSpec {
+        let shape = match shell.unwrap_or(TankShell::Cylinder) {
+            TankShell::Cylinder => TankShape::Cylinder {
+                diameter_m: Self::equiv_diameter(volume_m3, length_m),
+                length_m: length_m.max(1e-12),
+            },
+            TankShell::Sphere => TankShape::Sphere {
+                diameter_m: Self::sphere_diameter(volume_m3),
+            },
+        };
+        TankSpec {
+            shape,
+            pressure_pa,
+            material,
+        }
+    }
+
+    /// Seat anchors for a crew region: transverse rows of forward-facing
+    /// places on the loft centerline. Rows spread evenly along the axis
+    /// by default; explicit pitch centers them (validated to fit at
+    /// authoring time). Within a row, places spread across the local
+    /// section width and refuse if the row overflows the loft — the same
+    /// row rule will serve multi-aisle airplane cabins later.
+    fn seat_anchors(
+        &self,
+        x0_m: f64,
+        x1_m: f64,
+        seats: u32,
+        seat_pitch_m: Option<f64>,
+        abreast: u32,
+    ) -> Result<Vec<DVec3>, FuselageError> {
+        let abreast = abreast.max(1);
+        let rows = seats.div_ceil(abreast);
+        let length = x1_m - x0_m;
+        let mut anchors = Vec::with_capacity(seats as usize);
+        for row in 0..rows {
+            let x = match seat_pitch_m {
+                Some(pitch) => {
+                    let block = (rows as f64 - 1.0) * pitch;
+                    0.5 * (x0_m + x1_m) - 0.5 * block + row as f64 * pitch
+                }
+                None => x0_m + (row as f64 + 0.5) * length / rows as f64,
+            };
+            let section = self.body.section_at(x);
+            let center = self.section_center(section)?;
+            let in_row = (seats - row * abreast).min(abreast);
+            // Shoulder room per place, capped so the outer place stays
+            // inside the local section.
+            let spacing = if in_row > 1 {
+                (0.55_f64).min(1.6 * section.half_width_m / (in_row as f64 - 1.0))
+            } else {
+                0.0
+            };
+            for place in 0..in_row {
+                let y = (place as f64 - (in_row as f64 - 1.0) / 2.0) * spacing;
+                if y.abs() > section.half_width_m * 0.95 + 1e-9 {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "seat row at x={x:.2} m overflows the {:.2} m half-width",
+                        section.half_width_m,
+                    )));
+                }
+                anchors.push(DVec3::new(x, center.y + y, center.z));
+            }
+        }
+        Ok(anchors)
+    }
+
+    /// Pressure-membrane screening for one pressurized region: thin-hoop
+    /// stress `p*r/t` at the largest loft radius in the region must stay
+    /// under yield with the shared safety factor. Conservative on purpose
+    /// (vacuum outside, frames ignored); a failure names the numbers so
+    /// the author thickens the skin, derates pressure, or picks a
+    /// stronger alloy instead of flying an unverified shell.
+    fn check_pressure_shell(
+        &self,
+        region_name: &str,
+        x0_m: f64,
+        x1_m: f64,
+        atmosphere: CabinAtmosphere,
+        layout: &crate::BodyStructuralLayout,
+    ) -> Result<(), FuselageError> {
+        let yield_mpa = layout.skin_material.yield_strength_mpa.ok_or_else(|| {
+            FuselageError::InvalidBody(format!(
+                "pressurized region '{region_name}' needs a skin yield strength for '{}'",
+                layout.skin_material.name
+            ))
+        })?;
+        let mut radius_m = 0.0_f64;
+        for sample in 0..=PRESSURE_SHELL_SAMPLES {
+            let x = x0_m + (x1_m - x0_m) * sample as f64 / PRESSURE_SHELL_SAMPLES as f64;
+            let section = self.body.section_at(x);
+            radius_m = radius_m
+                .max(section.half_width_m)
+                .max(section.top_height_m)
+                .max(section.bottom_height_m);
+        }
+        let pressure_pa = atmosphere.pressure_kpa * 1000.0;
+        let skin_m = layout.skin_gauge_mm / 1000.0;
+        let required_m = pressure_pa * radius_m / (yield_mpa * 1.0e6 / PRESSURE_SAFETY_FACTOR);
+        if skin_m < required_m {
+            return Err(FuselageError::InvalidBody(format!(
+                "pressurized region '{region_name}' needs {:.2} mm skin for {:.1} kPa at {:.2} m radius (has {:.2} mm)",
+                required_m * 1000.0,
+                atmosphere.pressure_kpa,
+                radius_m,
+                skin_m * 1000.0,
+            )));
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_single_tank(
+        &self,
+        name: &str,
+        contents: TankContents,
+        component: TankComponent,
+        volume_m3: f64,
+        volume_error_m3: f64,
+        centroid: DVec3,
+        fill_fraction: f64,
+        spec: &TankSpec,
+    ) -> Result<CompiledBodyTank, FuselageError> {
+        let TankContents::Pair(propellant) = contents else {
+            return Err(FuselageError::InvalidInterior(
+                "single tank needs a propellant pair".into(),
+            ));
+        };
+        let density = propellant_density(propellant)?;
+        self.compile_tank_with_density(
+            name,
+            contents,
+            component,
+            volume_m3,
+            volume_error_m3,
+            centroid,
+            density,
+            fill_fraction,
+            spec,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_split_tank(
+        &self,
+        name: &str,
+        contents: TankContents,
+        component: TankComponent,
+        volume_m3: f64,
+        volume_error_m3: f64,
+        centroid: DVec3,
+        component_density: f64,
+        fill_fraction: f64,
+        spec: &TankSpec,
+    ) -> Result<CompiledBodyTank, FuselageError> {
+        if !component_density.is_finite() || component_density <= 0.0 {
+            return Err(FuselageError::InvalidInterior(
+                "split tank component needs a positive density".into(),
+            ));
+        }
+        self.compile_tank_with_density(
+            name,
+            contents,
+            component,
+            volume_m3,
+            volume_error_m3,
+            centroid,
+            component_density,
+            fill_fraction,
+            spec,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_tank_with_density(
+        &self,
+        name: &str,
+        contents: TankContents,
+        component: TankComponent,
+        volume_m3: f64,
+        volume_error_m3: f64,
+        centroid: DVec3,
+        density_kg_m3: f64,
+        fill_fraction: f64,
+        spec: &TankSpec,
+    ) -> Result<CompiledBodyTank, FuselageError> {
+        let mut tank = spec.compile(density_kg_m3).map_err(|error| {
+            FuselageError::InvalidBody(format!("tank region '{name}': {error}"))
+        })?;
+        // Real inner volume is the capacity (equivalent cylinder sizes
+        // the shell); preserve capacity separately from the authored
+        // initial fill in the installed mount.
+        tank.volume_m3 = volume_m3;
+        tank.full_propellant_kg = volume_m3 * density_kg_m3;
+        let initial_propellant_kg = tank.full_propellant_kg * fill_fraction;
+        let intrinsic_inertia_body_kg_m2 = spec
+            .shape
+            .intrinsic_inertia_body_kg_m2(tank.dry_mass_kg, initial_propellant_kg)
+            .map_err(|error| {
+                FuselageError::InvalidBody(format!("tank region '{name}': {error}"))
+            })?;
+        let position = centroid + self.body.origin_body_m;
+        let mount = TankMount {
+            tank,
+            position_body_m: position.to_array(),
+            intrinsic_inertia_body_kg_m2,
+            initial_propellant_kg: Some(initial_propellant_kg),
+        };
+        mount
+            .validate()
+            .map_err(|error| FuselageError::InvalidBody(error.to_string()))?;
+        Ok(CompiledBodyTank {
+            region_name: name.into(),
+            mount,
+            inner_volume_m3: volume_m3,
+            inner_volume_error_m3: volume_error_m3,
+            propellant_kg: initial_propellant_kg,
+            contents,
+            component,
+        })
+    }
+
     fn compile_port(&self, port: &crate::BodyPort) -> Result<BodyPortCompiled, FuselageError> {
         let section = self.body.section_at(port.x_m);
         let (dy, dz) = crate::outline_point(
@@ -1209,8 +2078,8 @@ impl<'a> Compiler<'a> {
     /// Shift a compiled body into the mounted vehicle frame.
     ///
     /// Panels and tank mounts already carry the origin from emission;
-    /// ports, interior centroids, and the summary volume center shift
-    /// here exactly once.
+    /// ports, interior centroids, seat anchors, and the summary volume
+    /// center shift here exactly once.
     fn mount(&self, mut compiled: CompiledBody) -> CompiledBody {
         let origin = self.body.origin_body_m;
         for port in &mut compiled.ports {
@@ -1218,6 +2087,21 @@ impl<'a> Compiler<'a> {
         }
         for region in &mut compiled.interior {
             region.centroid_body_m += origin;
+            for seat in &mut region.seat_positions_body_m {
+                *seat += origin;
+            }
+            for seat in &mut region.cabin_seats {
+                seat.position_body_m += origin;
+            }
+            for monument in &mut region.cabin_monuments {
+                monument.position_body_m += origin;
+            }
+            for door in &mut region.cabin_doors {
+                door.position_body_m += origin;
+            }
+        }
+        for shield in &mut compiled.heat_shields {
+            shield.position_body_m += origin;
         }
         compiled.summary.center_of_volume_m += origin;
         compiled
@@ -1338,4 +2222,536 @@ fn propellant_density(propellant: Propellant) -> Result<f64, FuselageError> {
         ));
     }
     Ok(density)
+}
+
+/// Stack interface diameters must agree this closely (relative) or the
+/// author fits an adapter part (future) instead of forcing the joint.
+const STACK_DIAMETER_TOLERANCE: f64 = 0.05;
+/// A hatch below this diameter cannot pass crew (documented minimum).
+const HATCH_MIN_DIAMETER_M: f64 = 0.5;
+
+/// One assembly link between two attach nodes on different bodies.
+/// Stack links are permanently open for resources; hatch links carry an
+/// initial open state (crew/air/fuel cross only when open).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssemblyLink {
+    pub name: String,
+    pub parent_body: String,
+    pub parent_node: String,
+    pub child_body: String,
+    pub child_node: String,
+    /// Initial hatch state; forced open on stack links.
+    #[serde(default = "default_hatch_open")]
+    pub hatch_open: bool,
+}
+
+fn default_hatch_open() -> bool {
+    true
+}
+
+/// One habitable volume: a non-tank interior region on one body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct VolumeId {
+    pub body: usize,
+    pub region: usize,
+}
+
+/// One fuel path: a tank region that can reach an engine-mount port
+/// through open resource links.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeedPath {
+    /// `body.region` qualified tank name.
+    pub tank: String,
+    /// `body.port` qualified engine-mount port name.
+    pub engine_port: String,
+}
+
+/// Rigid transform from one part's authored body frame into the assembled
+/// vehicle frame. Points include the translation; directions do not.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct BodyTransform {
+    pub rotation_body: DQuat,
+    pub translation_body_m: DVec3,
+}
+
+impl BodyTransform {
+    pub fn transform_point(self, point_body_m: DVec3) -> DVec3 {
+        self.rotation_body * point_body_m + self.translation_body_m
+    }
+
+    pub fn transform_direction(self, direction_body: DVec3) -> DVec3 {
+        self.rotation_body * direction_body
+    }
+
+    /// Rotate a centroidal tensor into the vehicle axes. Translation of
+    /// the tensor reference point uses a separate parallel-axis term.
+    pub fn rotate_inertia(self, inertia_body_kg_m2: DMat3) -> DMat3 {
+        let rotation = DMat3::from_quat(self.rotation_body);
+        rotation * inertia_body_kg_m2 * rotation.transpose()
+    }
+}
+
+/// Compiled part assembly: validated topology plus crew/air sharing
+/// domains and fuel reachability. Merged physics (transforms, joints)
+/// arrives in a later slice; this record owns topology truth.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompiledAssembly {
+    /// Root body name (the one never used as a child).
+    pub root: String,
+    /// Part-to-vehicle transforms indexed exactly like the `bodies`
+    /// argument to [`compile_assembly`]. The root keeps its authored
+    /// translation; linked children are placed by mating attach frames.
+    pub body_transforms: Vec<BodyTransform>,
+    /// Crew-passable volume groups (open hatch links; suits and air
+    /// checked at runtime, not here).
+    pub crew_groups: Vec<Vec<VolumeId>>,
+    /// Shared-air domains (open hatch links between pressurized volumes).
+    pub air_groups: Vec<Vec<VolumeId>>,
+    /// Tank-to-engine-port fuel reachability through open links.
+    pub feed_paths: Vec<FeedPath>,
+}
+
+/// Compile a part assembly from bodies plus links (KSP-style tree).
+///
+/// Fails closed on: unknown bodies/nodes, a node used twice, diameter
+/// mismatch beyond tolerance, hatch links below crew-passage diameter,
+/// cycles, and forests (more than one root). A single body with no
+/// links compiles to one root with isolated volumes.
+pub fn compile_assembly(
+    bodies: &[ProceduralBody],
+    links: &[AssemblyLink],
+) -> Result<CompiledAssembly, FuselageError> {
+    for body in bodies {
+        body.validate()?;
+    }
+    if bodies.is_empty() {
+        return Err(FuselageError::InvalidBody(
+            "assembly needs at least one body".into(),
+        ));
+    }
+    let mut body_names = std::collections::HashSet::new();
+    if bodies
+        .iter()
+        .any(|body| !body_names.insert(body.name.as_str()))
+    {
+        return Err(FuselageError::InvalidBody(
+            "assembly body names must be unique".into(),
+        ));
+    }
+    let body_index = |name: &str| {
+        bodies
+            .iter()
+            .position(|body| body.name == name)
+            .ok_or_else(|| {
+                FuselageError::InvalidBody(format!("assembly references unknown body '{name}'"))
+            })
+    };
+    let node_diameter = |body: &ProceduralBody, node: &crate::AttachNode| -> f64 {
+        if let Some(diameter) = node.diameter_m {
+            return diameter;
+        }
+        let station = match node.site {
+            AttachSite::AftEnd => body.stations[0],
+            AttachSite::ForwardEnd => *body.stations.last().unwrap(),
+            AttachSite::Station { x_m, .. } => body.section_at(x_m),
+        };
+        2.0 * station
+            .half_width_m
+            .max(station.top_height_m)
+            .max(station.bottom_height_m)
+    };
+    // Resolve endpoints, check single use and diameter match.
+    struct Resolved {
+        parent: usize,
+        child: usize,
+        parent_node: usize,
+        child_node: usize,
+        hatch: bool,
+        open: bool,
+    }
+    let mut resolved = Vec::with_capacity(links.len());
+    let mut link_names = std::collections::HashSet::new();
+    let mut used: std::collections::HashSet<(usize, &str)> = std::collections::HashSet::new();
+    for link in links {
+        if link.name.trim().is_empty() || !link_names.insert(link.name.as_str()) {
+            return Err(FuselageError::InvalidBody(
+                "assembly link names must be non-empty and unique".into(),
+            ));
+        }
+        let parent = body_index(&link.parent_body)?;
+        let child = body_index(&link.child_body)?;
+        if parent == child {
+            return Err(FuselageError::InvalidBody(format!(
+                "assembly link '{}' connects a body to itself",
+                link.name
+            )));
+        }
+        let parent_node = bodies[parent]
+            .attach_nodes
+            .iter()
+            .find(|node| node.name == link.parent_node)
+            .ok_or_else(|| {
+                FuselageError::InvalidBody(format!(
+                    "assembly link '{}' references unknown node '{}.{}'",
+                    link.name, link.parent_body, link.parent_node
+                ))
+            })?;
+        let parent_node_index = bodies[parent]
+            .attach_nodes
+            .iter()
+            .position(|node| node.name == link.parent_node)
+            .expect("resolved parent node exists");
+        let child_node = bodies[child]
+            .attach_nodes
+            .iter()
+            .find(|node| node.name == link.child_node)
+            .ok_or_else(|| {
+                FuselageError::InvalidBody(format!(
+                    "assembly link '{}' references unknown node '{}.{}'",
+                    link.name, link.child_body, link.child_node
+                ))
+            })?;
+        let child_node_index = bodies[child]
+            .attach_nodes
+            .iter()
+            .position(|node| node.name == link.child_node)
+            .expect("resolved child node exists");
+        for (index, node) in [
+            (parent, parent_node.name.as_str()),
+            (child, child_node.name.as_str()),
+        ] {
+            if !used.insert((index, node)) {
+                return Err(FuselageError::InvalidBody(format!(
+                    "attach node '{node}' is used by more than one link"
+                )));
+            }
+        }
+        let parent_d = node_diameter(&bodies[parent], parent_node);
+        let child_d = node_diameter(&bodies[child], child_node);
+        if !parent_d.is_finite() || !child_d.is_finite() || parent_d <= 0.0 || child_d <= 0.0 {
+            return Err(FuselageError::InvalidBody(format!(
+                "assembly link '{}' requires positive finite interface diameters",
+                link.name
+            )));
+        }
+        let mismatch = (parent_d - child_d).abs() / parent_d.max(child_d).max(f64::MIN_POSITIVE);
+        if mismatch > STACK_DIAMETER_TOLERANCE {
+            return Err(FuselageError::InvalidBody(format!(
+                "assembly link '{}' joins {:.2} m to {:.2} m (beyond {:.0}% tolerance)",
+                link.name,
+                parent_d,
+                child_d,
+                STACK_DIAMETER_TOLERANCE * 100.0,
+            )));
+        }
+        let hatch = parent_node.kind == AttachKind::Hatch || child_node.kind == AttachKind::Hatch;
+        if hatch && parent_d.min(child_d) < HATCH_MIN_DIAMETER_M {
+            return Err(FuselageError::InvalidBody(format!(
+                "assembly link '{}' hatch is {:.2} m (crew passage needs {:.1} m)",
+                link.name,
+                parent_d.min(child_d),
+                HATCH_MIN_DIAMETER_M,
+            )));
+        }
+        resolved.push(Resolved {
+            parent,
+            child,
+            parent_node: parent_node_index,
+            child_node: child_node_index,
+            hatch,
+            open: if hatch { link.hatch_open } else { true },
+        });
+    }
+    // Tree check: acyclic (union-find rejects the closing edge) with
+    // exactly one root and one connected set (no forests).
+    let mut union = UnionFind::new(bodies.len());
+    for link in &resolved {
+        if !union.union(link.parent, link.child) {
+            return Err(FuselageError::InvalidBody(format!(
+                "assembly link between '{}' and '{}' closes a cycle (trees only)",
+                bodies[link.parent].name, bodies[link.child].name
+            )));
+        }
+    }
+    // The root is the one body never used as a child; every body must
+    // share its connected set (single tree, no forests).
+    let is_child = |index: usize| resolved.iter().any(|link| link.child == index);
+    let roots: Vec<usize> = (0..bodies.len())
+        .filter(|index| !is_child(*index))
+        .collect();
+    if roots.len() != 1 {
+        return Err(FuselageError::InvalidBody(format!(
+            "assembly needs exactly one root body (found {})",
+            roots.len()
+        )));
+    }
+    let main = union.find(roots[0]);
+    if !(0..bodies.len()).all(|index| union.find(index) == main) {
+        return Err(FuselageError::InvalidBody(
+            "assembly is a forest, not one connected tree".into(),
+        ));
+    }
+    // Resolve each part pose from attach-frame coincidence. The mating
+    // half-turn makes node outward axes oppose while preserving an
+    // authored stack's axial roll convention.
+    let mut body_transforms = vec![None; bodies.len()];
+    body_transforms[roots[0]] = Some(BodyTransform {
+        rotation_body: DQuat::IDENTITY,
+        translation_body_m: bodies[roots[0]].origin_body_m,
+    });
+    let mut pose_stack = vec![roots[0]];
+    while let Some(parent_index) = pose_stack.pop() {
+        let parent_transform = body_transforms[parent_index].expect("rooted traversal");
+        for link in resolved.iter().filter(|link| link.parent == parent_index) {
+            let parent_body = &bodies[link.parent];
+            let child_body = &bodies[link.child];
+            let parent_node = &parent_body.attach_nodes[link.parent_node];
+            let child_node = &child_body.attach_nodes[link.child_node];
+            let (parent_local_position, parent_local_rotation) =
+                attach_node_pose(parent_body, parent_node);
+            let (child_local_position, child_local_rotation) =
+                attach_node_pose(child_body, child_node);
+            let mating_rotation = DQuat::from_rotation_y(std::f64::consts::PI);
+            let child_rotation = (parent_transform.rotation_body
+                * parent_local_rotation
+                * mating_rotation
+                * child_local_rotation.inverse())
+            .normalize();
+            let parent_node_world = parent_transform.transform_point(parent_local_position);
+            let child_translation = parent_node_world - child_rotation * child_local_position;
+            body_transforms[link.child] = Some(BodyTransform {
+                rotation_body: child_rotation,
+                translation_body_m: child_translation,
+            });
+            pose_stack.push(link.child);
+        }
+    }
+    let body_transforms = body_transforms
+        .into_iter()
+        .map(|transform| transform.expect("connected tree assigns every part pose"))
+        .collect::<Vec<_>>();
+    // Habitable volumes per body (non-tank regions).
+    let is_volume = |kind: &RegionKind| {
+        !matches!(
+            kind,
+            RegionKind::Tank { .. }
+                | RegionKind::FluidTank { .. }
+                | RegionKind::Bipropellant { .. }
+        )
+    };
+    let mut volumes: Vec<VolumeId> = Vec::new();
+    for (body_index, body) in bodies.iter().enumerate() {
+        for (region_index, region) in body.regions.iter().enumerate() {
+            if is_volume(&region.kind) {
+                volumes.push(VolumeId {
+                    body: body_index,
+                    region: region_index,
+                });
+            }
+        }
+    }
+    let volume_index = |id: VolumeId| {
+        volumes
+            .iter()
+            .position(|volume| *volume == id)
+            .expect("volume inventoried above")
+    };
+    // Crew groups: open hatch links only; a structural stack joint is not
+    // an interior passage.
+    let mut crew_union = UnionFind::new(volumes.len());
+    // Air groups: open links between pressurized volumes only.
+    let mut air_union = UnionFind::new(volumes.len());
+    let pressurized = |id: VolumeId| bodies[id.body].regions[id.region].atmosphere.is_some();
+    // Crew passes only through open hatches. Resource paths cross stack
+    // joints unconditionally and hatches only while open.
+    let mut crew_adj: Vec<Vec<usize>> = vec![Vec::new(); bodies.len()];
+    let mut resource_adj: Vec<Vec<usize>> = vec![Vec::new(); bodies.len()];
+    for link in &resolved {
+        if link.hatch && link.open {
+            crew_adj[link.parent].push(link.child);
+            crew_adj[link.child].push(link.parent);
+        }
+        if !link.hatch || link.open {
+            resource_adj[link.parent].push(link.child);
+            resource_adj[link.child].push(link.parent);
+        }
+    }
+    // Volumes in one body share the open interior (documented rule).
+    for body_volumes in volumes.chunk_by(|a, b| a.body == b.body) {
+        for pair in body_volumes.windows(2) {
+            crew_union.union(volume_index(pair[0]), volume_index(pair[1]));
+            if pressurized(pair[0]) && pressurized(pair[1]) {
+                air_union.union(volume_index(pair[0]), volume_index(pair[1]));
+            }
+        }
+    }
+    for (body_index, neighbors) in crew_adj.iter().enumerate() {
+        for neighbor in neighbors {
+            let a: Vec<VolumeId> = volumes
+                .iter()
+                .copied()
+                .filter(|volume| volume.body == body_index)
+                .collect();
+            let b: Vec<VolumeId> = volumes
+                .iter()
+                .copied()
+                .filter(|volume| volume.body == *neighbor)
+                .collect();
+            for x in &a {
+                for y in &b {
+                    crew_union.union(volume_index(*x), volume_index(*y));
+                    if pressurized(*x) && pressurized(*y) {
+                        air_union.union(volume_index(*x), volume_index(*y));
+                    }
+                }
+            }
+        }
+    }
+    let groups = |union: &mut UnionFind| {
+        let mut groups: std::collections::HashMap<usize, Vec<VolumeId>> =
+            std::collections::HashMap::new();
+        for (index, volume) in volumes.iter().enumerate() {
+            groups.entry(union.find(index)).or_default().push(*volume);
+        }
+        let mut groups: Vec<Vec<VolumeId>> = groups.into_values().collect();
+        for group in &mut groups {
+            group.sort_by_key(|volume| (volume.body, volume.region));
+        }
+        groups.sort_by_key(|group| (group[0].body, group[0].region));
+        groups
+    };
+    // Fuel reachability: tanks to engine-mount ports through resource-open
+    // links (stack joints always flow; sealed hatches block crossfeed).
+    let mut tanks: Vec<(usize, String)> = Vec::new();
+    for (body_index, body) in bodies.iter().enumerate() {
+        for region in &body.regions {
+            let tank_kind = matches!(
+                region.kind,
+                RegionKind::Tank { .. }
+                    | RegionKind::FluidTank { .. }
+                    | RegionKind::Bipropellant { .. }
+            );
+            if tank_kind {
+                tanks.push((body_index, format!("{}.{}", body.name, region.name)));
+            }
+        }
+    }
+    let mut engine_ports: Vec<(usize, String)> = Vec::new();
+    for (body_index, body) in bodies.iter().enumerate() {
+        for port in &body.ports {
+            if port.kind == crate::PortKind::EngineMount {
+                engine_ports.push((body_index, format!("{}.{}", body.name, port.name)));
+            }
+        }
+    }
+    let reachable = |from: usize| {
+        let mut seen = vec![false; bodies.len()];
+        let mut stack = vec![from];
+        seen[from] = true;
+        while let Some(next) = stack.pop() {
+            for neighbor in &resource_adj[next] {
+                if !seen[*neighbor] {
+                    seen[*neighbor] = true;
+                    stack.push(*neighbor);
+                }
+            }
+        }
+        seen
+    };
+    let mut feed_paths = Vec::new();
+    for (tank_body, tank) in &tanks {
+        let seen = reachable(*tank_body);
+        for (port_body, engine_port) in &engine_ports {
+            if seen[*port_body] {
+                feed_paths.push(FeedPath {
+                    tank: tank.clone(),
+                    engine_port: engine_port.clone(),
+                });
+            }
+        }
+    }
+    feed_paths.sort_by(|a, b| (&a.tank, &a.engine_port).cmp(&(&b.tank, &b.engine_port)));
+    Ok(CompiledAssembly {
+        root: bodies[roots[0]].name.clone(),
+        body_transforms,
+        crew_groups: groups(&mut crew_union),
+        air_groups: groups(&mut air_union),
+        feed_paths,
+    })
+}
+
+fn attach_node_pose(body: &ProceduralBody, node: &crate::AttachNode) -> (DVec3, DQuat) {
+    match node.site {
+        AttachSite::AftEnd => (
+            DVec3::new(
+                body.stations[0].x_m,
+                body.stations[0].offset_y_m,
+                body.stations[0].offset_z_m,
+            ),
+            DQuat::from_rotation_y(std::f64::consts::PI),
+        ),
+        AttachSite::ForwardEnd => {
+            let station = *body.stations.last().expect("validated stations");
+            (
+                DVec3::new(station.x_m, station.offset_y_m, station.offset_z_m),
+                DQuat::IDENTITY,
+            )
+        }
+        AttachSite::Station { x_m, clock_rad } => {
+            let station = body.section_at(x_m);
+            let (y, z) = outline_point(
+                station.half_width_m,
+                station.top_height_m,
+                station.bottom_height_m,
+                station.top_exponent,
+                station.bottom_exponent,
+                clock_rad,
+            );
+            let sin = clock_rad.sin();
+            let (height, exponent) = if sin >= 0.0 {
+                (station.top_height_m, station.top_exponent)
+            } else {
+                (station.bottom_height_m, station.bottom_exponent)
+            };
+            let normal_y = y.signum() * (y.abs() / station.half_width_m).powf(exponent - 1.0)
+                / station.half_width_m;
+            let normal_z = z.signum() * (z.abs() / height).powf(exponent - 1.0) / height;
+            let outward = DVec3::new(0.0, normal_y, normal_z).normalize();
+            (
+                DVec3::new(station.x_m, station.offset_y_m + y, station.offset_z_m + z),
+                DQuat::from_rotation_arc(DVec3::X, outward),
+            )
+        }
+    }
+}
+
+/// Disjoint-set union for tree and group computation.
+struct UnionFind {
+    parent: Vec<usize>,
+}
+
+impl UnionFind {
+    fn new(count: usize) -> Self {
+        Self {
+            parent: (0..count).collect(),
+        }
+    }
+
+    fn find(&mut self, mut index: usize) -> usize {
+        while self.parent[index] != index {
+            self.parent[index] = self.parent[self.parent[index]];
+            index = self.parent[index];
+        }
+        index
+    }
+
+    /// Returns false when already united (cycle edge).
+    fn union(&mut self, a: usize, b: usize) -> bool {
+        let (root_a, root_b) = (self.find(a), self.find(b));
+        if root_a == root_b {
+            return false;
+        }
+        self.parent[root_a] = root_b;
+        true
+    }
 }

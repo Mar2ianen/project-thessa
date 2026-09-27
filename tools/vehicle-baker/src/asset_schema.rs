@@ -2,8 +2,12 @@
 
 use super::*;
 
+mod assembly;
 mod propulsion_assets;
 mod vehicle_asset;
+pub(super) use assembly::{
+    AssemblyAsset, AssemblyLinkAsset, resolve_assembly_links, runtime_assembly,
+};
 pub(super) use propulsion_assets::*;
 pub(super) use vehicle_asset::VehicleAsset;
 

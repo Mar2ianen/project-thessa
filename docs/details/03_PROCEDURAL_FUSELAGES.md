@@ -146,6 +146,123 @@ partial-fill mass currently uses the equivalent full-volume tensor scaled
 to that mass; orientation-dependent fluid levels, sloshing and changing
 liquid centroid/inertia are not yet modeled.
 
+Each `Tank` region may override the body-level `tank_pressure_pa` and
+`tank_material`, so one hull can carry dissimilar tanks (for example a
+high-pressure cryo methane tank forward and a low-pressure storable tank
+aft, or aluminum vs stainless vs composite shells). Omitted overrides keep
+the layout defaults, so older assets compile unchanged.
+
+A `Bipropellant` region authors a two-component pair once and compiles to
+two tanks: oxidizer aft (`{name}-ox`) and fuel forward (`{name}-fuel`),
+split axially so sub-volumes match the mixture ratio and the component
+densities (LOX 1141, RP-1 810, LCH4 422, LH2 71, NTO 1440, MMH 878 kg/m³).
+The mixture ratio defaults to the pair reference (2.7 / 3.5 / 6.0 / 1.65)
+and may be set inside the modeled thermo table; outside values refuse.
+Per-component pressures and materials override the same way as single
+tanks. The compiled tanks carry their pair plus an oxidizer/fuel tag for
+the feed pipeline.
+
+A `FluidTank` region stores one pure component (`lox`, `liquid-methane`,
+`liquid-hydrogen`, `rp1`, `nto`, `mmh`, `hydrazine`, `water`) with the
+same per-tank pressure/material/shell overrides. Use two `FluidTank`
+regions for a hand-placed oxidizer + fuel pair (for example a spherical
+LOX tank aft and a cylindrical methane tank forward); use `Bipropellant`
+for the automatic mixture-ratio split.
+
+Tank shells are cylindrical (equivalent diameter over the region length)
+by default; `shell = "sphere"` sizes a volume-equivalent sphere instead,
+which carries half the membrane stress at the same pressure. Mixed shapes
+in one auto-split are not offered: combine two `FluidTank` regions.
+
+## Pressurization (first ECLSS brick)
+
+Any non-tank region (`cabin`, `crew`, `cargo`, `avionics`, `empty`) may
+hold a `CabinAtmosphere`: absolute pressure in kPa, temperature in K
+(default 293.15), and oxygen volume fraction (default 0.21). Tank regions
+refuse it — they size their own shells from `tank_pressure_pa`. Ranges
+are screened at authoring time (`pressure_kpa` in (0, 500], `temp_k` in
+[180, 350], `o2_fraction` in (0, 1]).
+
+The compiler derives the cabin air inventory from the ideal gas law over
+the usable inner-mold volume (`pV/RT`, dry-air `R = 287.05 J/kg/K`) and
+the oxygen mass from the molar split (32.0/28.97). Air mass rides the
+hull at the region centroid like manifest; oxygen is reported inside it
+for future metabolic-consumption bookkeeping, not double-counted. Ports
+inside pressurized zones are future leak paths, not yet modeled — like
+slosh, seepage, and active ECLSS loops.
+
+Holding pressure needs a verified shell: the skin over the region must
+pass a thin-hoop screening (`p*r/t` at the largest loft radius, vacuum
+outside, frames ignored, 1.5 safety factor shared with tanks) against
+the skin alloy's yield strength. Hull presets carry typical yields
+(7075: 503, 2219: 395, Ti-6Al-4V: 880, 304L: 205, Al-Li-2195: 590 MPa);
+carbon layup allowables stay unset on purpose and must be supplied
+explicitly, and an unknown custom strength refuses pressurization rather
+than guessing. A pressurized region with no structural layout refuses
+for the same reason. Failures name the required gauge so the author
+thickens the skin, derates pressure, or picks a stronger alloy.
+
+## Capsule cabins
+
+`crates/fuselage/src/capsule.rs` exposes one general blunt-body
+primitive, not a vehicle catalogue: `CapsuleParams` (frustum base/top
+diameter plus height, or sphere diameter; crew count; couch/row layout;
+atmosphere; structure; loft divisions) compiled by `capsule_body` into a
+pressure vessel lofted tail-to-nose. The blunt base closes on the
+heat-shield plane at compile time. The crew rides low near the shield
+(`5-65%` of frustum height, `20-80%` of a sphere) with couches
+side-by-side and cabin air on request; a nose docking hatch appears
+where the frustum top fits one (spheres keep their side hatch).
+
+Mercury through Dragon-class missions are example parameter sets dialled
+on this primitive — roughly: a 1.89 m solo bell; a 3.05 m two-abreast
+pair; a 3.91 m three-abreast cone; 5.0/4.0 m four-place 2x2 cones; a
+2.3 m solo sphere. Dimensions are representative public values,
+regression-grade like the other goldens, and live in tests and docs —
+never as hardcoded library presets.
+
+Couches are `Crew` places with `seat_style = "couch"` and an `abreast`
+row width; anchors spread across the local section and refuse if a row
+overflows the loft. Couch mass is an explicit authoring input (strap
+couches run ~25-35 kg, not 12 kg aircraft seats).
+
+## Separate details (KSP-style parts)
+
+Heat shields and docking ports are independent details attached to a
+body, never baked into a geometry primitive — not even the capsule:
+
+- `BodyHeatShield { name, end: aft/forward, thickness_mm, material }`
+  mounts a detachable ablative disc on one blunt end. Diameter derives
+  from the end section; mass is disc area times thickness times density
+  with thin-disc inertia, aggregated into the hull. Pointed tips refuse
+  (a shield needs at least a 0.1 m blunt end); entry heating itself is
+  future work, this record owns geometry and mass.
+- `BodyPort` anchors stay the docking/hatch/engine interface: author a
+  `docking-nose` port where the frustum top fits one, a side hatch on a
+  sphere, an engine mount aft. The capsule ships bare; the assembly
+  above is what flies.
+
+The advanced cabin editor builds on these primitives with multi-aisle seat
+blocks, per-place suit overrides, monuments, static paired exits, deck
+headroom, and aircraft/fighter presets. The feature boundary and remaining
+work are documented in [`05_CABIN_EDITOR.md`](05_CABIN_EDITOR.md); exits
+remain static records, while cutouts and evacuation are future work.
+
+A `Crew` region places seats: `seats` distributes along the region while
+seat plus occupant mass aggregates at the region centroid like cargo
+manifest (seat default 12 kg each, occupants default 0 for unoccupied
+ferry). The compiled interior reports the seat count, the total payload
+mass, and one forward-facing seat anchor per place on the loft
+centerline (even spread by default, centered row at an explicit
+`seat_pitch_m` that must fit the region). The legacy unit `Cabin`
+remains as unfitted volume with no mass.
+
+Tank shell alloys available to both fuselage regions and hand tanks are
+`nickel-superalloy`, `aluminum-2219`, `stainless-304`, and
+`composite-copv` alongside the chamber presets; hull skins add `SS-304L`
+and `Al-Li-2195` to the existing aluminum/carbon/titanium set. All are
+physical density/strength/temperature triples, never tier labels.
+
 ## 3. Editor modes
 
 Simple users should not need to manipulate every spline point.

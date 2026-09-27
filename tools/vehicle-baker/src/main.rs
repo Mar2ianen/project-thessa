@@ -10,21 +10,26 @@ use thessa_aero_surfaces::{
     CollisionOptions, CompileOptions, MechanismState, ProceduralSurface, compile_surface,
 };
 use thessa_fuselage::{
-    BodyCollisionOptions, BodyCompileOptions, ProceduralBody, body_collision_parts, compile_body,
+    AssemblyLink, AttachKind, BodyCollisionOptions, BodyCompileOptions, BodyTransform,
+    CabinSeatRole, CompiledBody, DoorSide, ExitType, PortKind, ProceduralBody, RegionKind,
+    body_collision_parts, compile_assembly, compile_body,
 };
 use thessa_sim_core::{
-    AeroGeometry, AeroPanel, AirCycle, AirbreathingSpec, AtmosphereConfig, ChamberMaterial,
-    ChamberSpec, CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionPart,
-    CollisionShape, CompiledEngine, CompiledJet, ControlMixing, ControlSurfaceDefinition,
-    CoolingMode, ElectricPropellant, ElectricThrusterDesign, ElectricThrusterMount,
-    ElectricThrusterSpec, EngineCycle, EngineMount, EstocEjectorSpec, EstocPrecoolerSpec,
-    EstocSpec, FoldJointRecord, FusionReaction, FusionTorchMount, FusionTorchSpec, IntakeKind,
-    JetFuel, JetMount, LandingLegSpec, LandingShockAbsorberSpec, LiquidEngineSpec, NozzleContour,
-    NtrFluid, NuclearThermalSpec, ParachuteSpec, Propellant, PropellerDriveMount,
+    AeroGeometry, AeroPanel, AirCycle, AirbreathingSpec, AssemblyEndpoint, AssemblyLinkState,
+    AssemblyVolume, AtmosphereConfig, CabinExit, CabinExitSide, CabinExitType, CabinMonument,
+    CabinMonumentKind, CabinSeat, CabinSeatClass, CabinSeatRole as RuntimeCabinSeatRole,
+    CabinSeatStyle, CabinSuitType, ChamberMaterial, ChamberSpec, CollisionAxis, CollisionGeometry,
+    CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine, CompiledJet, ControlCore,
+    ControlMixing, ControlStation, ControlSurfaceDefinition, CoolingMode, ElectricPropellant,
+    ElectricThrusterDesign, ElectricThrusterMount, ElectricThrusterSpec, EngineCycle, EngineMount,
+    EstocEjectorSpec, EstocPrecoolerSpec, EstocSpec, FoldJointRecord, FusionReaction,
+    FusionTorchMount, FusionTorchSpec, IntakeKind, JetFuel, JetMount, LandingLegSpec,
+    LandingShockAbsorberSpec, LiquidEngineSpec, NamedAssemblyLink, NozzleContour, NtrFluid,
+    NuclearThermalSpec, ParachuteSpec, PressurizedCabin, Propellant, PropellerDriveMount,
     PropellerDriveSpec, PropellerSpec, PropulsionSystemSpec, PulsedFusionMount, PulsedFusionSpec,
     ReactionWheelBankSpec, RigidBodyProperties, ShaftPowerSourceSpec, ShaftSpec,
     SolidGrainGeometry, SolidMotorSpec, SystemMount, TankMount, TankShape, TankSpec,
-    TurbopropDriveSpec, TurbopropMount, VehicleDefinition, WheelBrakeSpec,
+    TurbopropDriveSpec, TurbopropMount, VehicleAssembly, VehicleDefinition, WheelBrakeSpec,
     WheelChassisRetractionSpec, WheelChassisSpec, WheelDriveSpec, WheelLayout, WheelStrutSpec,
     WheelTireSpec, analyze_airbreathing, analyze_altitude, analyze_estoc, analyze_propeller_drive,
     analyze_turboprop_drive,
@@ -65,6 +70,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             chassis.dry_mass_kg(),
         );
     }
+    let authority = vehicle.control_authority();
+    println!(
+        "control authority: {} ({:?})",
+        if authority.controllable {
+            "controllable"
+        } else {
+            "uncontrollable"
+        },
+        authority.reason
+    );
     for mount in &vehicle.tanks {
         println!(
             "tank: {:.3} m^3 capacity, dry {:.1} kg, loaded {:.0}/{:.0} kg",
@@ -267,5 +282,7 @@ fn print_help() {
 
 #[cfg(test)]
 mod body_tests;
+#[cfg(test)]
+mod cabin_tests;
 #[cfg(test)]
 mod tests;

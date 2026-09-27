@@ -10,6 +10,8 @@ pub(crate) mod atmosphere {
     pub use thessa_aero_core::AtmosphereComposition;
 }
 
+mod assembly;
+mod cabin;
 mod collision;
 mod docking;
 mod flight;
@@ -19,6 +21,17 @@ mod part_command;
 mod reaction_wheel;
 mod vehicle;
 
+pub use assembly::{
+    AssemblyEndpoint, AssemblyError, AssemblyLinkState, AssemblyVolume, NamedAssemblyLink,
+    VehicleAssembly, air_groups, crew_groups, feed_reachable,
+};
+pub use cabin::{
+    AuthorityReason, AutopilotTier, CabinError, CabinExit, CabinExitSide, CabinExitType,
+    CabinMonument, CabinMonumentKind, CabinPressureState, CabinSeat, CabinSeatClass, CabinSeatRole,
+    CabinSeatStyle, CabinSuitType, ControlAuthority, ControlCore, ControlStation, CrewSuitMode,
+    MOLAR_MASS_AIR_G_MOL, MOLAR_MASS_O2_G_MOL, PressurizedCabin, R_DRY_AIR_J_KG_K,
+    control_authority,
+};
 pub use collision::{
     CollisionAxis, CollisionError, CollisionGeometry, CollisionMaterial, CollisionPart,
     CollisionShape,

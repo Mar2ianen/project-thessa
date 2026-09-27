@@ -49,6 +49,7 @@
 //! baker test next door proves the hangar-side wiring instead.
 
 mod body;
+mod capsule;
 mod collision;
 mod compile;
 mod error;
@@ -59,13 +60,19 @@ mod structure;
 mod summary;
 
 pub use body::{
-    BodyControlPlane, BodyControlRegion, BodyPort, BodyStructuralLayout, HullMaterial,
-    InteriorRegion, PortKind, ProceduralBody, RegionKind,
+    AttachKind, AttachNode, AttachSite, BodyControlPlane, BodyControlRegion, BodyEnd,
+    BodyHeatShield, BodyPort, BodyStructuralLayout, CabinAtmosphere, CabinDeck, CabinDoor,
+    CabinLayout, CabinLayoutPreset, CabinSeatRole, DoorSide, ExitSpec, ExitType, HullMaterial,
+    InteriorRegion, Monument, MonumentKind, PortKind, ProceduralBody, RegionKind, SeatBlock,
+    SeatClass, SeatStyle, SeatSuitOverride, StoredFluid, SuitType, TankShell,
 };
+pub use capsule::{CapsuleParams, CapsuleShape, capsule_body};
 pub use collision::{BodyCollisionOptions, body_collision_parts};
 pub use compile::{
-    BodyCompileOptions, BodyPortCompiled, CompiledBody, CompiledBodyTank, CompiledRegion,
-    compile_body,
+    AssemblyLink, BodyCompileOptions, BodyPortCompiled, BodyTransform, CompiledAssembly,
+    CompiledBody, CompiledBodyTank, CompiledCabinDoor, CompiledCabinMonument, CompiledCabinSeat,
+    CompiledHeatShield, CompiledRegion, FeedPath, TankComponent, TankContents, VolumeId,
+    compile_assembly, compile_body,
 };
 pub use error::FuselageError;
 pub use golden::{

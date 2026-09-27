@@ -34,7 +34,8 @@ The checked-in vertical slice currently contains:
 - `thessa-aero-surfaces`, `thessa-fuselage`, and `thessa-vehicle-baker`:
   procedural lifting-surface/body compilers, interior-volume and mass
   properties, cabin layouts and presets, static exits, controls, and assembled
-  vehicle asset compilation including electrical power hardware;
+  vehicle asset compilation including electrical power, thermal, shield-aero,
+  and wing tile-layer hardware;
 - `thessa-plume-core`: backend-neutral engine-exhaust profiles, optics, and
   participating-medium evaluation, consumed by the client plume renderer;
 - `thessa-flight-control` and `thessa-flight-authority`: typed guidance,
@@ -64,9 +65,11 @@ The checked-in vertical slice currently contains:
   visual fallback while CBT topology is exercised against live terrain selection;
 - isolated validation harnesses for orbital and aerodynamic reference checks.
 
-Factory gameplay, structural fracture, thermal networks, save persistence, and
-production multiplayer are still design/future work. The design documents keep
-these areas explicitly marked as planned rather than presenting them as shipped.
+Factory gameplay, structural fracture and vehicle-topology changes, full fluid
+and electrical networks, shield thermal protection/ablation, save persistence,
+and production multiplayer remain future work. Vehicle thermal nodes and the
+ideal shared power bus are implemented slices; they are not full thermal,
+structural, or electrical-network coupling.
 
 ## Physical and architectural invariants
 

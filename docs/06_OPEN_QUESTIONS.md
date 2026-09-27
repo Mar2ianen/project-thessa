@@ -67,7 +67,8 @@ prototypes rather than open architecture choices. Remaining physics questions:
 - structural solver and fracture order;
 - reduced-order aeroelasticity;
 - slosh fidelity;
-- atmospheric heating and ablative heat shield model;
+- shield-specific thermal protection, ablation/recession, and burn-through
+  coupling (general Sutton-Graves heating and shield aerodynamics are shipped);
 - CPU ray-sampling budget;
 - deterministic tolerance policy across AVX builds;
 - spin periods and prime meridians for triaxial bodies (hyperbolic/parabolic osculating

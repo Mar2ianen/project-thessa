@@ -39,7 +39,9 @@ runtime, its boundaries and acceptance tests are documented in
 Implemented: procedural wing/body compilation, local panel and fuselage-strip
 aero, composition-aware bulk atmosphere properties, atmosphere rotation,
 stall/transonic/supersonic reduced-order branches, coefficient tables, control
-laws, and actuator limits.
+laws, and actuator limits; a lumped thermal-node network with Sutton-Graves
+heating and radiators; an ideal vehicle power bus; Newtonian shield-disc aero;
+and wing tile-layer mass/thermal nodes.
 
 Remaining:
 
@@ -47,7 +49,10 @@ Remaining:
   controls and hinged fuselage-strip actuators;
 - wake/occlusion compiler;
 - structural graph and fracture into multiple bodies;
-- thermal graph, entry heating, and material strength coupling;
+- shield thermal protection/ablation and temperature-dependent material
+  strength;
+- structural/thermal coupling, full fluid/resource flow, and detailed
+  electrical-network coupling;
 - water contact and buoyancy;
 - high-fidelity offline reference tables.
 
@@ -60,8 +65,8 @@ authoritative streamed terrain contact via `thessa-collision`
 (Rapier: static trimesh, kinematic terrain, fixed joints, contact
 activation hysteresis, load evidence).
 
-Remaining: player movement, resource nodes, construction, power,
-storage, save/load, and a first factory loop.
+Remaining: player movement, resource nodes, construction, settlement-scale
+power/storage networks, save/load, and a first factory loop.
 
 ## M4 — Surface logistics and automation — partial
 
@@ -100,8 +105,10 @@ and shared warp vote policy exist as a prototype. Future work includes:
 ## M7 — Nuclear age — future gameplay/content
 
 Nuclear-thermal and electric propulsion models exist in the engineering
-backend. Fission power, radiators, cryogenics, resource/thermal integration,
-maintenance gameplay, and the Orthea/Vesper content layer remain future work.
+backend; the vehicle slice now also includes fission electrical generation and
+area radiators. Cryogenics, resource/thermal integration, automatic heat-load
+coupling, maintenance gameplay, and the Orthea/Vesper content layer remain
+future work.
 
 ## M8 — Fusion industrialization — future gameplay/content
 

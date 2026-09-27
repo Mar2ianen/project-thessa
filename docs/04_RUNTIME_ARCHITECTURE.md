@@ -99,8 +99,11 @@ that accepts its single-threaded handle and depth limit. Neither backend is
 required by the authoritative server simulation.
 
 The following boundaries are future work rather than missing hidden crates:
-factory/logistics state, persistence/migrations, structural fracture, thermal
-networks, fluid/electrical networks, and an optional web client.
+factory/logistics state, persistence/migrations, structural fracture and
+vehicle-topology changes, fluid/resource networks, full electrical circuits
+and docked-bus exchange, thermal/structural failure coupling, and an optional
+web client. A lumped vehicle thermal network and an ideal shared electrical bus
+already exist as bounded vehicle-system slices.
 
 ## 4.3. Threading
 

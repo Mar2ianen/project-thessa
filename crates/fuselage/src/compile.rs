@@ -27,9 +27,9 @@ use thessa_sim_core::{
 
 use crate::summary::CompiledBodySummary;
 use crate::{
-    AttachKind, AttachSite, BodyControlPlane, BodyStation, CabinAtmosphere, CompiledHull,
-    FuselageError, InteriorRegion, ProceduralBody, RegionKind, TankShell, outline_point,
-    point_inertia,
+    AttachKind, AttachSite, BodyControlPlane, BodyStation, CabinAtmosphere, CabinSeatRole,
+    CompiledHull, DoorSide, ExitType, FuselageError, InteriorRegion, MonumentKind, ProceduralBody,
+    RegionKind, SeatClass, SeatStyle, SuitType, TankShell, outline_point, point_inertia,
 };
 
 /// Subdivision tolerances for one compilation.
@@ -198,6 +198,72 @@ pub struct CompiledRegion {
     /// Autopilot core hosted here, if any (runtime control authority).
     #[serde(default)]
     pub control_core: Option<thessa_sim_core::AutopilotTier>,
+    /// Advanced cabin seats with per-place class, role, suit and mass data.
+    #[serde(default)]
+    pub cabin_seats: Vec<CompiledCabinSeat>,
+    /// Fitted mass-only volumes compiled from deck monuments.
+    #[serde(default)]
+    pub cabin_monuments: Vec<CompiledCabinMonument>,
+    /// Exit records retained for hangar diagnostics and future evacuation.
+    #[serde(default)]
+    pub cabin_doors: Vec<CompiledCabinDoor>,
+}
+
+/// One compiled place after loft fitting, including its baked mass manifest.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompiledCabinSeat {
+    pub name: String,
+    pub position_body_m: DVec3,
+    pub class: SeatClass,
+    pub role: CabinSeatRole,
+    pub seat_style: SeatStyle,
+    pub occupied: bool,
+    pub suited: bool,
+    pub suit_type: SuitType,
+    pub seat_mass_kg: f64,
+    pub occupant_mass_kg: f64,
+    pub carry_on_mass_kg: f64,
+    pub suit_mass_kg: f64,
+}
+
+impl CompiledCabinSeat {
+    pub fn mass_kg(&self) -> f64 {
+        self.seat_mass_kg
+            + if self.occupied {
+                self.occupant_mass_kg + self.carry_on_mass_kg + self.suit_mass_kg
+            } else {
+                0.0
+            }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompiledCabinMonument {
+    pub name: String,
+    pub kind: MonumentKind,
+    pub position_body_m: DVec3,
+    pub mass_kg: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompiledCabinDoor {
+    pub name: String,
+    pub pair_id: String,
+    pub position_body_m: DVec3,
+    pub side: DoorSide,
+    pub rating: ExitType,
+    pub opening_width_m: f64,
+    pub opening_height_m: f64,
+}
+
+struct CompiledCabinLayout {
+    seats: Vec<CompiledCabinSeat>,
+    monuments: Vec<CompiledCabinMonument>,
+    doors: Vec<CompiledCabinDoor>,
+    seat_positions_body_m: Vec<DVec3>,
+    seat_count: u32,
+    payload_mass_kg: f64,
+    seat_style: SeatStyle,
 }
 
 /// One detachable heat shield with compiled mass data.
@@ -988,7 +1054,15 @@ impl<'a> Compiler<'a> {
             .unwrap_or(0.0);
         for region in &self.body.regions {
             let (volume, volume_error, centroid) = self.region_volume(region, &leaves, wall_m)?;
-            let (payload, seats, seat_style, seat_anchors) = match region.kind {
+            let cabin_layout = if let Some(layout) = &region.cabin_layout {
+                Some(self.compile_cabin_layout(region, layout, wall_m)?)
+            } else if let Some(preset) = region.cabin_layout_preset {
+                let layout = preset.build_for_region(region.x0_m, region.x1_m)?;
+                Some(self.compile_cabin_layout(region, &layout, wall_m)?)
+            } else {
+                None
+            };
+            let (mut payload, mut seats, mut seat_style, mut seat_anchors) = match region.kind {
                 RegionKind::Cargo { payload_mass_kg } => {
                     (payload_mass_kg, 0, crate::SeatStyle::Upright, Vec::new())
                 }
@@ -1019,7 +1093,23 @@ impl<'a> Compiler<'a> {
                 ),
                 _ => (0.0, 0, crate::SeatStyle::Upright, Vec::new()),
             };
-            if payload > 0.0 {
+            if let Some(cabin) = &cabin_layout {
+                payload = cabin.payload_mass_kg;
+                seats = cabin.seat_count;
+                seat_style = cabin.seat_style;
+                seat_anchors = cabin.seat_positions_body_m.clone();
+                for seat in &cabin.seats {
+                    let mass = seat.mass_kg();
+                    hull_mass_kg += mass;
+                    hull_moment += seat.position_body_m * mass;
+                    hull_inertia += point_inertia(mass, seat.position_body_m);
+                }
+                for monument in &cabin.monuments {
+                    hull_mass_kg += monument.mass_kg;
+                    hull_moment += monument.position_body_m * monument.mass_kg;
+                    hull_inertia += point_inertia(monument.mass_kg, monument.position_body_m);
+                }
+            } else if payload > 0.0 {
                 hull_mass_kg += payload;
                 hull_moment += centroid * payload;
                 hull_inertia += point_inertia(payload, centroid);
@@ -1217,6 +1307,15 @@ impl<'a> Compiler<'a> {
                 o2_mass_kg,
                 atmosphere: region.atmosphere,
                 control_core: region.control_core,
+                cabin_seats: cabin_layout
+                    .as_ref()
+                    .map(|layout| layout.seats.clone())
+                    .unwrap_or_default(),
+                cabin_monuments: cabin_layout
+                    .as_ref()
+                    .map(|layout| layout.monuments.clone())
+                    .unwrap_or_default(),
+                cabin_doors: cabin_layout.map(|layout| layout.doors).unwrap_or_default(),
             });
         }
 
@@ -1397,6 +1496,217 @@ impl<'a> Compiler<'a> {
             )));
         }
         Ok((volume, volume_error, moment / volume))
+    }
+
+    fn compile_cabin_layout(
+        &self,
+        region: &InteriorRegion,
+        layout: &crate::CabinLayout,
+        wall_m: f64,
+    ) -> Result<CompiledCabinLayout, FuselageError> {
+        let mut seats = Vec::new();
+        let mut monuments = Vec::new();
+        let mut doors = Vec::new();
+        let mut seat_positions_body_m = Vec::new();
+        let mut payload_mass_kg = 0.0;
+        let mut first_style = None;
+
+        for deck in &layout.decks {
+            for block in &deck.blocks {
+                first_style.get_or_insert(block.seat_style);
+                let suit_overrides: std::collections::HashMap<_, _> = block
+                    .suit_overrides
+                    .iter()
+                    .map(|suit_override| (suit_override.seat_index, suit_override))
+                    .collect();
+                let seat_width_m = block.seat_width_m();
+                let seat_count_per_row: u32 = block.columns.iter().sum();
+                let seat_width_total_m = seat_count_per_row as f64 * seat_width_m;
+                let aisle_width_total_m: f64 = block.aisle_widths_m.iter().sum();
+                let required_width_m =
+                    seat_width_total_m + aisle_width_total_m + block.wall_clearance_m;
+
+                for row in 0..block.rows {
+                    let x_m = block.x0_m + (row as f64 + 0.5) * block.pitch_m;
+                    let section = self.body.section_at(x_m);
+                    let top_inner_z_m = section.offset_z_m + section.top_height_m - wall_m;
+                    let bottom_inner_z_m = section.offset_z_m - section.bottom_height_m + wall_m;
+                    if deck.floor_z_m < bottom_inner_z_m - 1e-9
+                        || deck.floor_z_m + deck.min_headroom_m > top_inner_z_m + 1e-9
+                    {
+                        return Err(FuselageError::InvalidInterior(format!(
+                            "deck '{}' at row x={x_m:.2} m has insufficient headroom or its floor lies outside the loft",
+                            deck.name
+                        )));
+                    }
+                    let relative_z_m = deck.floor_z_m - section.offset_z_m;
+                    let (height_m, exponent) = if relative_z_m >= 0.0 {
+                        (section.top_height_m, section.top_exponent)
+                    } else {
+                        (section.bottom_height_m, section.bottom_exponent)
+                    };
+                    let z_fraction: f64 = (relative_z_m.abs() / height_m).clamp(0.0, 1.0);
+                    let outer_half_width_m: f64 = section.half_width_m
+                        * (1.0 - z_fraction.powf(exponent))
+                            .max(0.0)
+                            .powf(1.0 / exponent);
+                    let inner_half_width_m = outer_half_width_m - wall_m;
+                    let usable_width_m = 2.0 * inner_half_width_m;
+                    if !usable_width_m.is_finite() || required_width_m > usable_width_m + 1e-9 {
+                        return Err(FuselageError::InvalidInterior(format!(
+                            "seat block '{}' row at x={x_m:.2} m needs {:.2} m width, loft provides {:.2} m",
+                            block.name,
+                            required_width_m,
+                            usable_width_m.max(0.0)
+                        )));
+                    }
+
+                    let lateral_span_m = seat_width_total_m + aisle_width_total_m;
+                    let mut lateral_cursor_m = section.offset_y_m - 0.5 * lateral_span_m;
+                    let mut column_index = 0_u32;
+                    for (group_index, &group_places) in block.columns.iter().enumerate() {
+                        for place_in_group in 0..group_places {
+                            let position = DVec3::new(
+                                x_m,
+                                lateral_cursor_m + (place_in_group as f64 + 0.5) * seat_width_m,
+                                deck.floor_z_m,
+                            );
+                            let occupied =
+                                row * seat_count_per_row + column_index < block.occupants;
+                            let seat_index = row * seat_count_per_row + column_index;
+                            let (suited, suit_mass_kg, suit_type) = suit_overrides
+                                .get(&seat_index)
+                                .map(|suit_override| {
+                                    (
+                                        suit_override.suited,
+                                        suit_override.suit_mass_kg_each,
+                                        suit_override.suit_type,
+                                    )
+                                })
+                                .unwrap_or((
+                                    block.suited,
+                                    block.suit_mass_kg_each,
+                                    block.suit_type,
+                                ));
+                            let seat = CompiledCabinSeat {
+                                name: format!(
+                                    "{}.{}.{}.r{}.c{}",
+                                    region.name,
+                                    deck.name,
+                                    block.name,
+                                    row + 1,
+                                    column_index + 1
+                                ),
+                                position_body_m: position,
+                                class: block.class,
+                                role: block.role,
+                                seat_style: block.seat_style,
+                                occupied,
+                                suited,
+                                suit_type,
+                                seat_mass_kg: block.seat_mass_kg_each(),
+                                occupant_mass_kg: block.occupant_mass_kg_each,
+                                carry_on_mass_kg: block.carry_on_kg_each,
+                                suit_mass_kg,
+                            };
+                            payload_mass_kg += seat.mass_kg();
+                            seat_positions_body_m.push(position);
+                            seats.push(seat);
+                            column_index += 1;
+                        }
+                        lateral_cursor_m += group_places as f64 * seat_width_m;
+                        if let Some(&aisle_width_m) = block.aisle_widths_m.get(group_index) {
+                            lateral_cursor_m += aisle_width_m;
+                        }
+                    }
+                }
+            }
+
+            for monument in &deck.monuments {
+                let x_m = 0.5 * (monument.x0_m + monument.x1_m);
+                let section = self.body.section_at(x_m);
+                let position = DVec3::new(x_m, section.offset_y_m, deck.floor_z_m);
+                monuments.push(CompiledCabinMonument {
+                    name: format!("{}.{}.{}", region.name, deck.name, monument.name),
+                    kind: monument.kind,
+                    position_body_m: position,
+                    mass_kg: monument.mass_kg,
+                });
+                payload_mass_kg += monument.mass_kg;
+            }
+
+            for door in &deck.doors {
+                let section = self.body.section_at(door.x_m);
+                let spec = door.rating.spec();
+                let top_inner_z_m = section.offset_z_m + section.top_height_m - wall_m;
+                let bottom_inner_z_m = section.offset_z_m - section.bottom_height_m + wall_m;
+                let (door_height, door_exponent) = if deck.floor_z_m >= section.offset_z_m {
+                    (section.top_height_m, section.top_exponent)
+                } else {
+                    (section.bottom_height_m, section.bottom_exponent)
+                };
+                let door_z_fraction: f64 =
+                    ((deck.floor_z_m - section.offset_z_m).abs() / door_height).clamp(0.0, 1.0);
+                let floor_half_width_m: f64 = section.half_width_m
+                    * (1.0 - door_z_fraction.powf(door_exponent))
+                        .max(0.0)
+                        .powf(1.0 / door_exponent);
+                if deck.floor_z_m < bottom_inner_z_m - 1e-9
+                    || deck.floor_z_m + spec.opening_height_m > top_inner_z_m + 1e-9
+                    || floor_half_width_m <= wall_m
+                {
+                    return Err(FuselageError::InvalidInterior(format!(
+                        "door '{}' ({:?}) does not fit the loft at x={:.2} m on deck '{}'",
+                        door.name, door.rating, door.x_m, deck.name
+                    )));
+                }
+                let side_sign = match door.side {
+                    DoorSide::Left => -1.0,
+                    DoorSide::Right => 1.0,
+                };
+                doors.push(CompiledCabinDoor {
+                    name: format!("{}.{}.{}", region.name, deck.name, door.name),
+                    pair_id: format!("{}.{}.{}", region.name, deck.name, door.pair_id),
+                    position_body_m: DVec3::new(
+                        door.x_m,
+                        section.offset_y_m + side_sign * floor_half_width_m,
+                        deck.floor_z_m,
+                    ),
+                    side: door.side,
+                    rating: door.rating,
+                    opening_width_m: spec.opening_width_m,
+                    opening_height_m: spec.opening_height_m,
+                });
+            }
+        }
+
+        let seat_count = u32::try_from(seats.len()).map_err(|_| {
+            FuselageError::InvalidInterior(format!(
+                "cabin '{}' has too many compiled seat places",
+                region.name
+            ))
+        })?;
+        if !payload_mass_kg.is_finite()
+            || seats.iter().any(|seat| !seat.position_body_m.is_finite())
+            || monuments
+                .iter()
+                .any(|monument| !monument.position_body_m.is_finite())
+            || doors.iter().any(|door| !door.position_body_m.is_finite())
+        {
+            return Err(FuselageError::InvalidInterior(format!(
+                "cabin '{}' compiled non-finite layout data",
+                region.name
+            )));
+        }
+        Ok(CompiledCabinLayout {
+            seats,
+            monuments,
+            doors,
+            seat_positions_body_m,
+            seat_count,
+            payload_mass_kg,
+            seat_style: first_style.unwrap_or(SeatStyle::Upright),
+        })
     }
 
     /// Usable inner-mold volume over an explicit axial range (split tanks).
@@ -1777,6 +2087,15 @@ impl<'a> Compiler<'a> {
             region.centroid_body_m += origin;
             for seat in &mut region.seat_positions_body_m {
                 *seat += origin;
+            }
+            for seat in &mut region.cabin_seats {
+                seat.position_body_m += origin;
+            }
+            for monument in &mut region.cabin_monuments {
+                monument.position_body_m += origin;
+            }
+            for door in &mut region.cabin_doors {
+                door.position_body_m += origin;
             }
         }
         for shield in &mut compiled.heat_shields {

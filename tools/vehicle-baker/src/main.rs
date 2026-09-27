@@ -7,24 +7,25 @@ use thessa_aero_surfaces::{
 };
 use thessa_fuselage::{
     AssemblyLink, AttachKind, BodyCollisionOptions, BodyCompileOptions, BodyTransform,
-    CompiledBody, PortKind, ProceduralBody, RegionKind, body_collision_parts, compile_assembly,
-    compile_body,
+    CabinSeatRole, CompiledBody, DoorSide, ExitType, PortKind, ProceduralBody, RegionKind,
+    body_collision_parts, compile_assembly, compile_body,
 };
 use thessa_sim_core::{
     AeroGeometry, AeroPanel, AirCycle, AirbreathingSpec, AssemblyEndpoint, AssemblyLinkState,
-    AssemblyVolume, AtmosphereConfig, ChamberMaterial, ChamberSpec, CollisionAxis,
-    CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine,
-    CompiledJet, ControlCore, ControlStation, ControlSurfaceDefinition, CoolingMode,
-    ElectricPropellant, ElectricThrusterDesign, ElectricThrusterMount, ElectricThrusterSpec,
-    EngineCycle, EngineMount, EstocEjectorSpec, EstocPrecoolerSpec, EstocSpec, FoldJointRecord,
-    FusionReaction, FusionTorchMount, FusionTorchSpec, IntakeKind, JetFuel, JetMount,
-    LiquidEngineSpec, NamedAssemblyLink, NozzleContour, NtrFluid, NuclearThermalSpec,
-    PressurizedCabin, Propellant, PropellerDriveMount, PropellerDriveSpec, PropellerSpec,
-    PropulsionSystemSpec, PulsedFusionMount, PulsedFusionSpec, RigidBodyProperties,
-    ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec, SystemMount, TankMount,
-    TankShape, TankSpec, TurbopropDriveSpec, TurbopropMount, VehicleAssembly, VehicleDefinition,
-    analyze_airbreathing, analyze_altitude, analyze_estoc, analyze_propeller_drive,
-    analyze_turboprop_drive,
+    AssemblyVolume, AtmosphereConfig, CabinExit, CabinExitSide, CabinExitType, CabinMonument,
+    CabinMonumentKind, CabinSeat, CabinSeatClass, CabinSeatRole as RuntimeCabinSeatRole,
+    CabinSeatStyle, CabinSuitType, ChamberMaterial, ChamberSpec, CollisionAxis, CollisionGeometry,
+    CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine, CompiledJet, ControlCore,
+    ControlStation, ControlSurfaceDefinition, CoolingMode, ElectricPropellant,
+    ElectricThrusterDesign, ElectricThrusterMount, ElectricThrusterSpec, EngineCycle, EngineMount,
+    EstocEjectorSpec, EstocPrecoolerSpec, EstocSpec, FoldJointRecord, FusionReaction,
+    FusionTorchMount, FusionTorchSpec, IntakeKind, JetFuel, JetMount, LiquidEngineSpec,
+    NamedAssemblyLink, NozzleContour, NtrFluid, NuclearThermalSpec, PressurizedCabin, Propellant,
+    PropellerDriveMount, PropellerDriveSpec, PropellerSpec, PropulsionSystemSpec,
+    PulsedFusionMount, PulsedFusionSpec, RigidBodyProperties, ShaftPowerSourceSpec, ShaftSpec,
+    SolidGrainGeometry, SolidMotorSpec, SystemMount, TankMount, TankShape, TankSpec,
+    TurbopropDriveSpec, TurbopropMount, VehicleAssembly, VehicleDefinition, analyze_airbreathing,
+    analyze_altitude, analyze_estoc, analyze_propeller_drive, analyze_turboprop_drive,
 };
 
 mod debug_mesh;
@@ -791,6 +792,9 @@ impl VehicleAsset {
         let mut body_tank_mounts = Vec::new();
         let mut body_contact_parts = Vec::new();
         let mut body_cabins = Vec::new();
+        let mut body_cabin_exits = Vec::new();
+        let mut body_cabin_seats = Vec::new();
+        let mut body_cabin_monuments = Vec::new();
         let mut body_cores = Vec::new();
         let mut body_stations = Vec::new();
         let mut assembly_volumes = Vec::new();
@@ -944,6 +948,91 @@ impl VehicleAsset {
                     body_stations.push(ControlStation {
                         name: format!("{}.{}", body.name, region.name),
                         occupied,
+                    });
+                }
+                for seat in region
+                    .cabin_seats
+                    .iter()
+                    .filter(|seat| seat.role == CabinSeatRole::FlightCrew)
+                {
+                    body_stations.push(ControlStation {
+                        name: seat.name.clone(),
+                        occupied: seat.occupied,
+                    });
+                }
+                for seat in &region.cabin_seats {
+                    body_cabin_seats.push(CabinSeat {
+                        name: seat.name.clone(),
+                        position_body_m: seat.position_body_m,
+                        class: match seat.class {
+                            thessa_fuselage::SeatClass::Economy => CabinSeatClass::Economy,
+                            thessa_fuselage::SeatClass::Premium => CabinSeatClass::Premium,
+                            thessa_fuselage::SeatClass::Business => CabinSeatClass::Business,
+                            thessa_fuselage::SeatClass::First => CabinSeatClass::First,
+                            thessa_fuselage::SeatClass::Ejection => CabinSeatClass::Ejection,
+                        },
+                        role: match seat.role {
+                            CabinSeatRole::Passenger => RuntimeCabinSeatRole::Passenger,
+                            CabinSeatRole::FlightCrew => RuntimeCabinSeatRole::FlightCrew,
+                            CabinSeatRole::CabinAttendant => RuntimeCabinSeatRole::CabinAttendant,
+                        },
+                        seat_style: match seat.seat_style {
+                            thessa_fuselage::SeatStyle::Upright => CabinSeatStyle::Upright,
+                            thessa_fuselage::SeatStyle::Couch => CabinSeatStyle::Couch,
+                            thessa_fuselage::SeatStyle::Ejection => CabinSeatStyle::Ejection,
+                        },
+                        occupied: seat.occupied,
+                        suited: seat.suited,
+                        suit_type: match seat.suit_type {
+                            thessa_fuselage::SuitType::HoseFed => CabinSuitType::HoseFed,
+                            thessa_fuselage::SuitType::SelfContained => {
+                                CabinSuitType::SelfContained
+                            }
+                        },
+                        seat_mass_kg: seat.seat_mass_kg,
+                        occupant_mass_kg: seat.occupant_mass_kg,
+                        carry_on_mass_kg: seat.carry_on_mass_kg,
+                        suit_mass_kg: seat.suit_mass_kg,
+                    });
+                }
+                for monument in &region.cabin_monuments {
+                    body_cabin_monuments.push(CabinMonument {
+                        name: monument.name.clone(),
+                        kind: match monument.kind {
+                            thessa_fuselage::MonumentKind::Galley => CabinMonumentKind::Galley,
+                            thessa_fuselage::MonumentKind::Lavatory => CabinMonumentKind::Lavatory,
+                            thessa_fuselage::MonumentKind::Closet => CabinMonumentKind::Closet,
+                            thessa_fuselage::MonumentKind::FlightDeck => {
+                                CabinMonumentKind::FlightDeck
+                            }
+                            thessa_fuselage::MonumentKind::AvionicsRack => {
+                                CabinMonumentKind::AvionicsRack
+                            }
+                        },
+                        position_body_m: monument.position_body_m,
+                        mass_kg: monument.mass_kg,
+                    });
+                }
+                for exit in &region.cabin_doors {
+                    body_cabin_exits.push(CabinExit {
+                        name: exit.name.clone(),
+                        pair_id: exit.pair_id.clone(),
+                        position_body_m: exit.position_body_m,
+                        side: match exit.side {
+                            DoorSide::Left => CabinExitSide::Left,
+                            DoorSide::Right => CabinExitSide::Right,
+                        },
+                        exit_type: match exit.rating {
+                            ExitType::TypeA => CabinExitType::TypeA,
+                            ExitType::TypeB => CabinExitType::TypeB,
+                            ExitType::TypeC => CabinExitType::TypeC,
+                            ExitType::TypeI => CabinExitType::TypeI,
+                            ExitType::TypeII => CabinExitType::TypeII,
+                            ExitType::TypeIII => CabinExitType::TypeIII,
+                            ExitType::TypeIV => CabinExitType::TypeIV,
+                        },
+                        opening_width_m: exit.opening_width_m,
+                        opening_height_m: exit.opening_height_m,
                     });
                 }
             }
@@ -1236,6 +1325,9 @@ impl VehicleAsset {
             .with_propeller_drives(propeller_drive_mounts)?
             .with_turboprops(turboprop_mounts)?
             .with_cabins(body_cabins)?
+            .with_cabin_exits(body_cabin_exits)?
+            .with_cabin_seats(body_cabin_seats)?
+            .with_cabin_monuments(body_cabin_monuments)?
             .with_control_cores(body_cores)?
             .with_control_stations(body_stations)?;
         if let Some(assembly) = runtime_assembly {
@@ -1312,6 +1404,15 @@ impl VehicleAsset {
         }
         for cabin in &mut vehicle.cabins {
             cabin.centroid_body_m = shift_point(cabin.centroid_body_m);
+        }
+        for exit in &mut vehicle.cabin_exits {
+            exit.position_body_m = shift_point(exit.position_body_m);
+        }
+        for seat in &mut vehicle.cabin_seats {
+            seat.position_body_m = shift_point(seat.position_body_m);
+        }
+        for monument in &mut vehicle.cabin_monuments {
+            monument.position_body_m = shift_point(monument.position_body_m);
         }
         if let Some(assembly) = &mut vehicle.assembly {
             for volume in &mut assembly.volumes {
@@ -2567,6 +2668,15 @@ fn transform_compiled_body(compiled: &mut CompiledBody, transform: BodyTransform
         for seat in &mut region.seat_positions_body_m {
             *seat = transform.transform_point(*seat);
         }
+        for seat in &mut region.cabin_seats {
+            seat.position_body_m = transform.transform_point(seat.position_body_m);
+        }
+        for monument in &mut region.cabin_monuments {
+            monument.position_body_m = transform.transform_point(monument.position_body_m);
+        }
+        for door in &mut region.cabin_doors {
+            door.position_body_m = transform.transform_point(door.position_body_m);
+        }
     }
     for port in &mut compiled.ports {
         port.position_body_m = transform.transform_point(port.position_body_m);
@@ -2740,6 +2850,160 @@ mod tests {
         let round_trip: VehicleDefinition =
             serde_json::from_str(&json).expect("vehicle JSON should deserialize");
         assert_eq!(round_trip, vehicle);
+    }
+
+    #[test]
+    fn fighter_cabin_toml_bakes_seat_mass_and_pilot_authority() {
+        let asset: VehicleAsset = toml::from_str(include_str!(
+            "../../../data/vehicles/example_fighter_cabin.toml"
+        ))
+        .expect("fighter cabin TOML should parse");
+        let vehicle = asset.bake().expect("fighter cabin should bake");
+
+        assert_eq!(vehicle.control_stations.len(), 1);
+        assert!(vehicle.control_stations[0].occupied);
+        assert_eq!(vehicle.cabin_seats.len(), 1);
+        assert_eq!(
+            vehicle.cabin_seats[0].class,
+            thessa_sim_core::CabinSeatClass::Ejection
+        );
+        assert_eq!(
+            vehicle.cabin_seats[0].role,
+            thessa_sim_core::CabinSeatRole::FlightCrew
+        );
+        assert!(vehicle.cabin_seats[0].suited);
+        assert_eq!(
+            vehicle.cabin_seats[0].suit_type,
+            thessa_sim_core::CabinSuitType::HoseFed
+        );
+        assert_eq!(vehicle.cabin_seats[0].seat_mass_kg, 110.0);
+        assert!(vehicle.cabin_seats[0].position_body_m.is_finite());
+        let authority = vehicle.control_authority();
+        assert!(authority.controllable);
+        assert_eq!(
+            authority.reason,
+            thessa_sim_core::AuthorityReason::PilotAboard
+        );
+        assert!(vehicle.mass_properties.mass_kg >= 1_220.0);
+    }
+
+    #[test]
+    fn regional_cabin_toml_bakes_paired_exits_and_empty_crew_stations() {
+        let asset: VehicleAsset = toml::from_str(include_str!(
+            "../../../data/vehicles/example_regional_cabin.toml"
+        ))
+        .expect("regional cabin TOML should parse");
+        let compiled_structure_mass = thessa_fuselage::compile_body(
+            &asset.procedural_bodies[0],
+            &BodyCompileOptions::default(),
+        )
+        .expect("regional cabin body should compile")
+        .structure
+        .expect("regional cabin should have structure")
+        .mass_kg;
+        let expected_baked_mass = asset.mass_kg + compiled_structure_mass;
+        let vehicle = asset.bake().expect("regional cabin should bake");
+
+        assert!((vehicle.mass_properties.mass_kg - expected_baked_mass).abs() < 1e-9);
+        assert_eq!(vehicle.cabin_exits.len(), 2);
+        assert_eq!(
+            vehicle.cabin_exits[0].pair_id,
+            vehicle.cabin_exits[1].pair_id
+        );
+        assert!(vehicle.cabin_exits[0].position_body_m.is_finite());
+        assert!(vehicle.cabin_exits[1].position_body_m.is_finite());
+        assert_eq!(vehicle.cabin_exits[0].exit_type, CabinExitType::TypeIII);
+        assert!(
+            (vehicle.cabin_exits[0].position_body_m.y + vehicle.cabin_exits[1].position_body_m.y)
+                .abs()
+                < 1e-12
+        );
+        assert_eq!(vehicle.cabin_seats.len(), 13);
+        assert!(vehicle.cabin_seats[0].suited);
+        assert_eq!(vehicle.cabin_seats[0].suit_mass_kg, 24.0);
+        assert_eq!(
+            vehicle.cabin_seats[0].suit_type,
+            thessa_sim_core::CabinSuitType::SelfContained
+        );
+        assert_eq!(
+            vehicle
+                .cabin_seats
+                .iter()
+                .filter(|seat| seat.role == RuntimeCabinSeatRole::Passenger)
+                .count(),
+            10
+        );
+        assert_eq!(
+            vehicle
+                .cabin_seats
+                .iter()
+                .filter(|seat| seat.role == RuntimeCabinSeatRole::FlightCrew)
+                .count(),
+            2
+        );
+        let recenter_shift_x_m = vehicle.cabins[0].centroid_body_m.x - 5.0;
+        assert!(
+            (vehicle.cabin_seats[0].position_body_m.x - (1.175 + recenter_shift_x_m)).abs() < 1e-12
+        );
+        assert!(
+            vehicle
+                .cabin_seats
+                .iter()
+                .all(|seat| seat.position_body_m.is_finite())
+        );
+        assert_eq!(vehicle.cabin_monuments.len(), 1);
+        assert!(
+            (vehicle.cabin_monuments[0].position_body_m.x - (0.675 + recenter_shift_x_m)).abs()
+                < 1e-12
+        );
+        assert_eq!(
+            vehicle.cabin_monuments[0].kind,
+            thessa_sim_core::CabinMonumentKind::Galley
+        );
+        assert_eq!(vehicle.cabin_monuments[0].mass_kg, 45.0);
+        assert!(vehicle.cabin_monuments[0].position_body_m.is_finite());
+        assert_eq!(vehicle.control_stations.len(), 2);
+        assert!(
+            vehicle
+                .control_stations
+                .iter()
+                .all(|station| !station.occupied)
+        );
+        assert_eq!(
+            vehicle.control_authority().reason,
+            thessa_sim_core::AuthorityReason::NoPilotNoCore
+        );
+        let json = serde_json::to_string(&vehicle).expect("baked cabin should serialize");
+        let round_trip: VehicleDefinition =
+            serde_json::from_str(&json).expect("baked cabin should deserialize");
+        assert_eq!(round_trip.cabin_seats.len(), vehicle.cabin_seats.len());
+        assert_eq!(
+            round_trip.cabin_monuments.len(),
+            vehicle.cabin_monuments.len()
+        );
+        assert_eq!(
+            round_trip.cabin_seats[0].class,
+            vehicle.cabin_seats[0].class
+        );
+        assert_eq!(
+            round_trip.cabin_seats[0].suit_type,
+            vehicle.cabin_seats[0].suit_type
+        );
+        assert!(
+            (round_trip.cabin_seats[0].position_body_m - vehicle.cabin_seats[0].position_body_m)
+                .length()
+                < 1e-12
+        );
+        assert_eq!(
+            round_trip.cabin_monuments[0].kind,
+            vehicle.cabin_monuments[0].kind
+        );
+        assert!(
+            (round_trip.cabin_monuments[0].position_body_m
+                - vehicle.cabin_monuments[0].position_body_m)
+                .length()
+                < 1e-12
+        );
     }
 
     #[test]

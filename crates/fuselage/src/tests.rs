@@ -2184,6 +2184,119 @@ fn suit_rules_fail_closed() {
 }
 
 #[test]
+fn cabin_seat_suit_overrides_compile_per_place_and_round_trip() {
+    use crate::{
+        CabinDeck, CabinLayout, CabinSeatRole, SeatBlock, SeatClass, SeatStyle, SeatSuitOverride,
+        SuitType,
+    };
+
+    let layout_with = |suit_overrides| CabinLayout {
+        decks: vec![CabinDeck {
+            name: "cockpit".into(),
+            floor_z_m: 0.0,
+            min_headroom_m: 1.0,
+            blocks: vec![SeatBlock {
+                name: "pilots".into(),
+                class: SeatClass::Business,
+                role: CabinSeatRole::FlightCrew,
+                x0_m: 1.0,
+                rows: 1,
+                columns: vec![2],
+                pitch_m: 0.8,
+                aisle_widths_m: vec![],
+                wall_clearance_m: 0.2,
+                seat_width_m: None,
+                seat_mass_kg_each: None,
+                occupants: 1,
+                occupant_mass_kg_each: 90.0,
+                carry_on_kg_each: 0.0,
+                suited: false,
+                suit_mass_kg_each: 0.0,
+                suit_type: SuitType::HoseFed,
+                suit_overrides,
+                seat_style: SeatStyle::Upright,
+            }],
+            monuments: vec![],
+            doors: vec![],
+        }],
+    };
+    let overrides = vec![
+        SeatSuitOverride {
+            seat_index: 0,
+            suited: true,
+            suit_mass_kg_each: 100.0,
+            suit_type: SuitType::SelfContained,
+        },
+        SeatSuitOverride {
+            seat_index: 1,
+            suited: true,
+            suit_mass_kg_each: 25.0,
+            suit_type: SuitType::HoseFed,
+        },
+    ];
+
+    let mut body = ProceduralBody::new(
+        "mixed-suit-cockpit",
+        vec![
+            BodyStation::round(0.0, 1.5).unwrap(),
+            BodyStation::round(4.0, 1.5).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.regions = vec![
+        InteriorRegion::new("cockpit", 0.2, 3.8, RegionKind::Cabin)
+            .unwrap()
+            .with_cabin_layout(layout_with(overrides.clone()))
+            .unwrap(),
+    ];
+
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let cabin = &compiled.interior[0];
+    assert_eq!(cabin.cabin_seats.len(), 2);
+    assert!(cabin.cabin_seats[0].occupied);
+    assert_eq!(cabin.cabin_seats[0].suit_type, SuitType::SelfContained);
+    assert_eq!(cabin.cabin_seats[0].suit_mass_kg, 100.0);
+    assert!(!cabin.cabin_seats[1].occupied);
+    assert_eq!(cabin.cabin_seats[1].suit_type, SuitType::HoseFed);
+    assert_eq!(cabin.cabin_seats[1].suit_mass_kg, 25.0);
+    // Both fitted seats count; occupant and suit mass count only at place 0.
+    assert!((cabin.payload_mass_kg - 310.0).abs() < 1e-12);
+
+    let source = toml::to_string(&body).unwrap();
+    let restored: ProceduralBody = toml::from_str(&source).unwrap();
+    assert_eq!(restored, body);
+    restored.validate().unwrap();
+
+    assert!(
+        InteriorRegion::new("dry", 0.2, 3.8, RegionKind::Cabin)
+            .unwrap()
+            .with_cabin_layout(layout_with(Vec::new()))
+            .is_err(),
+        "unoverridden unsuited places cannot enter a dry cabin"
+    );
+    for bad_overrides in [
+        vec![overrides[0], overrides[0]],
+        vec![SeatSuitOverride {
+            seat_index: 2,
+            ..overrides[0]
+        }],
+        vec![SeatSuitOverride {
+            suited: false,
+            suit_mass_kg_each: 5.0,
+            ..overrides[0]
+        }],
+    ] {
+        assert!(
+            InteriorRegion::new("dry", 0.2, 3.8, RegionKind::Cabin)
+                .unwrap()
+                .with_cabin_layout(layout_with(bad_overrides))
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn control_core_rides_avionics_not_tanks() {
     use thessa_sim_core::AutopilotTier;
 
@@ -2282,6 +2395,251 @@ fn assembly_capsule() -> ProceduralBody {
         vec![AttachNode::new("base", AttachSite::AftEnd, AttachKind::Hatch, None).unwrap()];
     body.validate().unwrap();
     body
+}
+
+#[test]
+fn double_deck_cabin_preset_fits_and_compiles_seats_mass_and_exits() {
+    use crate::{CabinLayout, CabinSeatRole, CompiledCabinDoor, SeatClass};
+
+    let mut body = ProceduralBody::new(
+        "wide-airliner",
+        vec![
+            BodyStation::round(0.0, 3.4).unwrap(),
+            BodyStation::round(52.0, 3.4).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    body.structure = Some(BodyStructuralLayout::metal_baseline());
+    let layout = CabinLayout::preset_747_like(1.0, 51.0, -1.0, 0.8).unwrap();
+    body.regions = vec![
+        InteriorRegion::pressurized(
+            "passenger-cabin",
+            1.0,
+            51.0,
+            RegionKind::Cabin,
+            crate::CabinAtmosphere {
+                pressure_kpa: 75.0,
+                ..crate::CabinAtmosphere::sea_level()
+            },
+        )
+        .unwrap()
+        .with_cabin_layout(layout)
+        .unwrap(),
+    ];
+
+    let compiled = compile_body(&body, &BodyCompileOptions::default()).unwrap();
+    let cabin = &compiled.interior[0];
+    assert_eq!(cabin.seats, 468);
+    assert_eq!(cabin.cabin_seats.len(), 468);
+    assert_eq!(cabin.cabin_doors.len(), 14);
+    assert!(cabin.cabin_doors.iter().all(|door| {
+        matches!(
+            door,
+            CompiledCabinDoor {
+                rating: crate::ExitType::TypeA,
+                ..
+            }
+        )
+    }));
+    assert_eq!(
+        cabin.cabin_seats
+            .iter()
+            .filter(|seat| seat.role == CabinSeatRole::Passenger && seat.class == SeatClass::Economy)
+            .count(),
+        376
+    );
+    assert_eq!(
+        cabin
+            .cabin_seats
+            .iter()
+            .filter(|seat| seat.role == CabinSeatRole::FlightCrew)
+            .count(),
+        2
+    );
+    assert_eq!(
+        cabin
+            .cabin_seats
+            .iter()
+            .filter(|seat| seat.role == CabinSeatRole::CabinAttendant)
+            .count(),
+        10
+    );
+    assert!(cabin.payload_mass_kg > 7_000.0);
+    assert!(compiled.structure.unwrap().mass_kg > cabin.payload_mass_kg);
+
+    let source = toml::to_string(&body).unwrap();
+    let restored: ProceduralBody = toml::from_str(&source).unwrap();
+    assert_eq!(restored, body);
+    restored.validate().unwrap();
+}
+
+#[test]
+fn cabin_layout_presets_deserialize_and_expand_from_region_bounds() {
+    use crate::CabinLayoutPreset;
+
+    let cases = [
+        (
+            "kind = '747-like'\nmain_floor_z_m = -1.0\nupper_floor_z_m = 0.8",
+            50.0,
+            2,
+            468,
+        ),
+        ("kind = 'concorde-like'\nfloor_z_m = 0.0", 32.0, 1, 104),
+        ("kind = 'fighter'\nfloor_z_m = 0.0", 4.0, 1, 1),
+        ("kind = 'fighter'\nfloor_z_m = 0.0\npilots = 2", 4.0, 1, 2),
+    ];
+
+    for (source, length_m, expected_decks, expected_seats) in cases {
+        let preset: CabinLayoutPreset = toml::from_str(source).unwrap();
+        let layout = preset.build_for_region(0.0, length_m).unwrap();
+        assert_eq!(layout.decks.len(), expected_decks);
+        let seat_count: u32 = layout
+            .decks
+            .iter()
+            .flat_map(|deck| &deck.blocks)
+            .map(|block| block.rows * block.columns.iter().sum::<u32>())
+            .sum();
+        assert_eq!(seat_count, expected_seats);
+    }
+}
+
+#[test]
+fn cabin_presets_enforce_exit_capacity_and_slender_width() {
+    use crate::{CabinLayout, CabinSeatRole, SeatBlock, SeatClass};
+
+    let mut layout = CabinLayout::preset_747_like(1.0, 51.0, -1.0, 0.8).unwrap();
+    layout.decks[0].doors.truncate(2);
+    let region = InteriorRegion::pressurized(
+        "cabin",
+        1.0,
+        51.0,
+        RegionKind::Cabin,
+        crate::CabinAtmosphere::sea_level(),
+    )
+    .unwrap();
+    assert!(region.with_cabin_layout(layout).is_err());
+
+    let mut concorde_body = ProceduralBody::new(
+        "slender-airliner",
+        vec![
+            BodyStation::new(0.0, 1.3, 2.2, 2.2, 2.0, 2.0, 0.0, 0.0).unwrap(),
+            BodyStation::new(32.0, 1.3, 2.2, 2.2, 2.0, 2.0, 0.0, 0.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    concorde_body.structure = Some(BodyStructuralLayout::metal_baseline());
+    concorde_body.regions = vec![
+        InteriorRegion::pressurized(
+            "passenger-cabin",
+            1.0,
+            31.0,
+            RegionKind::Cabin,
+            crate::CabinAtmosphere {
+                pressure_kpa: 75.0,
+                ..crate::CabinAtmosphere::sea_level()
+            },
+        )
+        .unwrap()
+        .with_cabin_layout(CabinLayout::preset_concorde_like(1.0, 31.0, 0.0).unwrap())
+        .unwrap(),
+    ];
+    let concorde = compile_body(&concorde_body, &BodyCompileOptions::default()).unwrap();
+    assert_eq!(concorde.interior[0].seats, 104);
+    assert_eq!(concorde.interior[0].cabin_doors.len(), 6);
+
+    let mut narrow = ProceduralBody::new(
+        "slender",
+        vec![
+            BodyStation::new(0.0, 1.15, 2.2, 2.2, 2.0, 2.0, 0.0, 0.0).unwrap(),
+            BodyStation::new(32.0, 1.15, 2.2, 2.2, 2.0, 2.0, 0.0, 0.0).unwrap(),
+        ],
+        DVec3::ZERO,
+    )
+    .unwrap();
+    let mut concorde = CabinLayout::preset_concorde_like(1.0, 31.0, 0.0).unwrap();
+    concorde.decks[0]
+        .blocks
+        .retain(|block| block.role == CabinSeatRole::Passenger);
+    concorde.decks[0].blocks.push(SeatBlock {
+        name: "flight-crew".into(),
+        class: SeatClass::Business,
+        role: CabinSeatRole::FlightCrew,
+        x0_m: 29.0,
+        rows: 1,
+        columns: vec![2],
+        pitch_m: 0.86,
+        aisle_widths_m: vec![],
+        wall_clearance_m: 0.2,
+        seat_width_m: None,
+        seat_mass_kg_each: None,
+        occupants: 0,
+        occupant_mass_kg_each: 90.0,
+        carry_on_kg_each: 0.0,
+        suited: false,
+        suit_mass_kg_each: 0.0,
+        suit_type: crate::SuitType::HoseFed,
+        suit_overrides: Vec::new(),
+        seat_style: crate::SeatStyle::Upright,
+    });
+    concorde.decks[0].blocks.push(SeatBlock {
+        name: "cabin-attendants".into(),
+        class: SeatClass::Economy,
+        role: CabinSeatRole::CabinAttendant,
+        x0_m: 27.0,
+        rows: 2,
+        columns: vec![1],
+        pitch_m: 0.86,
+        aisle_widths_m: vec![],
+        wall_clearance_m: 0.2,
+        seat_width_m: None,
+        seat_mass_kg_each: None,
+        occupants: 0,
+        occupant_mass_kg_each: 90.0,
+        carry_on_kg_each: 0.0,
+        suited: false,
+        suit_mass_kg_each: 0.0,
+        suit_type: crate::SuitType::HoseFed,
+        suit_overrides: Vec::new(),
+        seat_style: crate::SeatStyle::Upright,
+    });
+    narrow.structure = Some(BodyStructuralLayout::metal_baseline());
+    narrow.regions = vec![
+        InteriorRegion::pressurized(
+            "cabin",
+            1.0,
+            31.0,
+            RegionKind::Cabin,
+            crate::CabinAtmosphere::sea_level(),
+        )
+        .unwrap()
+        .with_cabin_layout(concorde)
+        .unwrap(),
+    ];
+    let err = compile_body(&narrow, &BodyCompileOptions::default()).unwrap_err();
+    assert!(err.to_string().contains("seat block"), "{err}");
+}
+
+#[test]
+fn cabin_exit_specs_match_14_cfr_25_807_minimums_and_seat_credits() {
+    use crate::ExitType;
+
+    let specs = [
+        (ExitType::TypeA, 42.0, 72.0, 110),
+        (ExitType::TypeB, 32.0, 72.0, 75),
+        (ExitType::TypeC, 30.0, 48.0, 55),
+        (ExitType::TypeI, 24.0, 48.0, 45),
+        (ExitType::TypeII, 20.0, 44.0, 40),
+        (ExitType::TypeIII, 20.0, 36.0, 35),
+        (ExitType::TypeIV, 19.0, 26.0, 9),
+    ];
+    for (rating, width_in, height_in, passenger_seats) in specs {
+        let spec = rating.spec();
+        assert!((spec.opening_width_m - width_in * 0.0254).abs() < 1e-12);
+        assert!((spec.opening_height_m - height_in * 0.0254).abs() < 1e-12);
+        assert_eq!(spec.passenger_seats, passenger_seats);
+    }
 }
 
 fn assembly_link(open: bool) -> crate::AssemblyLink {

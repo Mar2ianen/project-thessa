@@ -5,14 +5,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AeroConfig, AeroError, AeroGeometry, AeroPanel, AeroResult, AuthorityReason, CabinError,
-    CollisionAxis, CollisionError, CollisionGeometry, CollisionMaterial, CollisionPart,
-    CollisionShape, CompiledEngine, ControlAuthority, ControlCore, ControlStation,
-    ElectricThrusterCommand, ElectricThrusterMount, ElectricThrusterPoint, EngineMount, EstocPoint,
-    FlightCondition, FlightError, FusionTorchCommand, FusionTorchMount, FusionTorchOperatingPoint,
-    JetCommand, JetMount, PressurizedCabin, PropDrivePoint, PropellerDriveCommand,
-    PropellerDriveMount, PropulsionError, PulsedFusionCommand, PulsedFusionMount,
-    PulsedFusionOperatingPoint, PulsedFusionState, RigidBodyProperties, SystemMount, TankMount,
-    TurbopropCommand, TurbopropMount, TurbopropOperatingPoint, VehicleAssembly, control_authority,
+    CabinExit, CabinMonument, CabinSeat, CollisionAxis, CollisionError, CollisionGeometry,
+    CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine, ControlAuthority,
+    ControlCore, ControlStation, CrewSuitMode, ElectricThrusterCommand, ElectricThrusterMount,
+    ElectricThrusterPoint, EngineMount, EstocPoint, FlightCondition, FlightError,
+    FusionTorchCommand, FusionTorchMount, FusionTorchOperatingPoint, JetCommand, JetMount,
+    PressurizedCabin, PropDrivePoint, PropellerDriveCommand, PropellerDriveMount, PropulsionError,
+    PulsedFusionCommand, PulsedFusionMount, PulsedFusionOperatingPoint, PulsedFusionState,
+    RigidBodyProperties, SystemMount, TankMount, TurbopropCommand, TurbopropMount,
+    TurbopropOperatingPoint, VehicleAssembly, control_authority,
 };
 
 pub type StatefulTurbopropWrench = (
@@ -329,6 +330,17 @@ pub struct VehicleDefinition {
     /// runtime state; empty keeps every legacy asset valid).
     #[serde(default)]
     pub cabins: Vec<PressurizedCabin>,
+    /// Validated static exit records compiled from authored cabin layouts.
+    #[serde(default)]
+    pub cabin_exits: Vec<CabinExit>,
+    /// Per-place seat, role, suit, and fitted-mass metadata from cabin layouts.
+    /// Mass is already included in `mass_properties`.
+    #[serde(default)]
+    pub cabin_seats: Vec<CabinSeat>,
+    /// Fitted equipment metadata from cabin layouts. Its mass is already
+    /// included in `mass_properties`.
+    #[serde(default)]
+    pub cabin_monuments: Vec<CabinMonument>,
     /// Autopilot cores aboard (capability tiers; empty keeps legacy valid).
     #[serde(default)]
     pub control_cores: Vec<ControlCore>,
@@ -638,6 +650,9 @@ impl VehicleDefinition {
             turboprops: Vec::new(),
             fold_joints: Vec::new(),
             cabins: Vec::new(),
+            cabin_exits: Vec::new(),
+            cabin_seats: Vec::new(),
+            cabin_monuments: Vec::new(),
             control_cores: Vec::new(),
             control_stations: Vec::new(),
             assembly: None,
@@ -913,6 +928,15 @@ impl VehicleDefinition {
         for cabin in &mut self.cabins {
             cabin.centroid_body_m += shift;
         }
+        for exit in &mut self.cabin_exits {
+            exit.position_body_m += shift;
+        }
+        for seat in &mut self.cabin_seats {
+            seat.position_body_m += shift;
+        }
+        for monument in &mut self.cabin_monuments {
+            monument.position_body_m += shift;
+        }
         if let Some(assembly) = &mut self.assembly {
             for volume in &mut assembly.volumes {
                 volume.centroid_body_m += shift;
@@ -986,6 +1010,18 @@ impl VehicleDefinition {
                 .cabins
                 .iter()
                 .all(|cabin| shifted_point_is_finite(cabin.centroid_body_m))
+            && self
+                .cabin_exits
+                .iter()
+                .all(|exit| shifted_point_is_finite(exit.position_body_m))
+            && self
+                .cabin_seats
+                .iter()
+                .all(|seat| shifted_point_is_finite(seat.position_body_m))
+            && self
+                .cabin_monuments
+                .iter()
+                .all(|monument| shifted_point_is_finite(monument.position_body_m))
             && self.assembly.as_ref().is_none_or(|assembly| {
                 assembly.volumes.iter().all(|volume| {
                     shifted_point_is_finite(volume.centroid_body_m)
@@ -1043,6 +1079,36 @@ impl VehicleDefinition {
         }
         for cabin in &self.cabins {
             cabin.validate().map_err(VehicleError::Cabin)?;
+        }
+        let mut cabin_exit_names = std::collections::HashSet::new();
+        for exit in &self.cabin_exits {
+            exit.validate().map_err(VehicleError::Cabin)?;
+            if !cabin_exit_names.insert(exit.name.as_str()) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "duplicate cabin exit '{}'",
+                    exit.name
+                )));
+            }
+        }
+        let mut cabin_seat_names = std::collections::HashSet::new();
+        for seat in &self.cabin_seats {
+            seat.validate().map_err(VehicleError::Cabin)?;
+            if !cabin_seat_names.insert(seat.name.as_str()) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "duplicate cabin seat '{}'",
+                    seat.name
+                )));
+            }
+        }
+        let mut cabin_monument_names = std::collections::HashSet::new();
+        for monument in &self.cabin_monuments {
+            monument.validate().map_err(VehicleError::Cabin)?;
+            if !cabin_monument_names.insert(monument.name.as_str()) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "duplicate cabin monument '{}'",
+                    monument.name
+                )));
+            }
         }
         for core in &self.control_cores {
             core.validate().map_err(VehicleError::Cabin)?;
@@ -1416,6 +1482,36 @@ impl VehicleDefinition {
         Ok(self)
     }
 
+    /// Attach statically authored emergency-exit records from cabin layouts.
+    pub fn with_cabin_exits(mut self, exits: Vec<CabinExit>) -> Result<Self, VehicleError> {
+        for exit in &exits {
+            exit.validate().map_err(VehicleError::Cabin)?;
+        }
+        self.cabin_exits = exits;
+        Ok(self)
+    }
+
+    /// Attach compiled per-place cabin metadata (baker path).
+    pub fn with_cabin_seats(mut self, seats: Vec<CabinSeat>) -> Result<Self, VehicleError> {
+        for seat in &seats {
+            seat.validate().map_err(VehicleError::Cabin)?;
+        }
+        self.cabin_seats = seats;
+        Ok(self)
+    }
+
+    /// Attach compiled fitted-equipment metadata (baker path).
+    pub fn with_cabin_monuments(
+        mut self,
+        monuments: Vec<CabinMonument>,
+    ) -> Result<Self, VehicleError> {
+        for monument in &monuments {
+            monument.validate().map_err(VehicleError::Cabin)?;
+        }
+        self.cabin_monuments = monuments;
+        Ok(self)
+    }
+
     /// Attach autopilot cores (baker path).
     pub fn with_control_cores(mut self, cores: Vec<ControlCore>) -> Result<Self, VehicleError> {
         for core in &cores {
@@ -1466,12 +1562,30 @@ impl VehicleDefinition {
         Ok(())
     }
 
-    /// Change the live state of a named assembly hatch.
+    /// Change a named assembly hatch without asserting that its occupants are
+    /// suited. Opening into an unpressurized region is permitted only after
+    /// the connected cabins have been vented.
     pub fn set_assembly_hatch_open(&mut self, name: &str, open: bool) -> Result<(), VehicleError> {
-        let mut assembly = self.assembly.clone().ok_or_else(|| {
+        self.set_assembly_hatch_open_with_safety(name, open, false)
+    }
+
+    /// Change a named assembly hatch while declaring that all crew exposed by
+    /// opening it are suited. If a pressurized domain opens into an
+    /// unpressurized region, its air is dumped and vehicle mass properties
+    /// are updated as part of the same transition.
+    ///
+    /// This is a manifest assertion: callers must only pass `true` after
+    /// checking every occupant in the exposed pressure domain.
+    pub fn set_assembly_hatch_open_with_safety(
+        &mut self,
+        name: &str,
+        open: bool,
+        all_occupants_suited: bool,
+    ) -> Result<(), VehicleError> {
+        let current_assembly = self.assembly.as_ref().ok_or_else(|| {
             VehicleError::InvalidVehicle("vehicle has no part assembly graph".into())
         })?;
-        let was_open = assembly
+        let was_open = current_assembly
             .links
             .iter()
             .find(|link| link.name == name)
@@ -1479,6 +1593,38 @@ impl VehicleDefinition {
             .ok_or_else(|| {
                 VehicleError::InvalidVehicle(format!("unknown assembly link '{name}'"))
             })?;
+        let exposed_cabins = if open && !was_open {
+            Self::hatch_exposed_cabin_names(current_assembly, name)?
+        } else {
+            None
+        };
+
+        let updated_cabins = if let Some(cabin_names) = &exposed_cabins {
+            let mut updated = self.cabins.clone();
+            for cabin_name in cabin_names {
+                let cabin = updated
+                    .iter_mut()
+                    .find(|cabin| cabin.name == *cabin_name)
+                    .ok_or_else(|| {
+                        VehicleError::InvalidVehicle(format!(
+                            "assembly hatch '{name}' exposes missing runtime cabin '{cabin_name}'"
+                        ))
+                    })?;
+                if !cabin.hatch_may_open(all_occupants_suited) {
+                    return Err(VehicleError::InvalidVehicle(format!(
+                        "hatch '{name}' cannot expose cabin air to an unpressurized region without suited-occupant confirmation; vent the cabin first or assert suited occupants"
+                    )));
+                }
+                if all_occupants_suited {
+                    cabin.vent();
+                }
+            }
+            all_occupants_suited.then_some(updated)
+        } else {
+            None
+        };
+
+        let mut assembly = current_assembly.clone();
         assembly
             .set_hatch_open(name, open)
             .map_err(|error| VehicleError::InvalidVehicle(error.to_string()))?;
@@ -1487,19 +1633,73 @@ impl VehicleDefinition {
             .map_err(|error| VehicleError::InvalidVehicle(error.to_string()))?;
         let previous_assembly = self.assembly.replace(assembly);
         if open && !was_open {
-            let updated_cabins = match self.equalized_assembly_cabins() {
-                Ok(cabins) => cabins,
-                Err(error) => {
-                    self.assembly = previous_assembly;
-                    return Err(error);
-                }
+            let transition = if let Some(updated_cabins) = updated_cabins {
+                self.replace_cabin_states(updated_cabins)
+            } else if exposed_cabins.is_none() {
+                self.equalize_assembly_air_domains()
+            } else {
+                Ok(())
             };
-            if let Err(error) = self.replace_cabin_states(updated_cabins) {
+            if let Err(error) = transition {
                 self.assembly = previous_assembly;
                 return Err(error);
             }
         }
         Ok(())
+    }
+
+    fn hatch_exposed_cabin_names(
+        assembly: &VehicleAssembly,
+        name: &str,
+    ) -> Result<Option<Vec<String>>, VehicleError> {
+        let link = assembly
+            .links
+            .iter()
+            .find(|link| link.name == name)
+            .ok_or_else(|| {
+                VehicleError::InvalidVehicle(format!("unknown assembly link '{name}'"))
+            })?;
+        if !link.state.hatch {
+            return Ok(None);
+        }
+
+        let has_pressure_volume = |body| {
+            assembly
+                .volumes
+                .iter()
+                .any(|volume| volume.body == body && volume.pressurized)
+        };
+        let pressure_a = has_pressure_volume(link.state.a);
+        let pressure_b = has_pressure_volume(link.state.b);
+        if pressure_a == pressure_b {
+            return Ok(None);
+        }
+
+        let pressure_body = if pressure_a {
+            link.state.a
+        } else {
+            link.state.b
+        };
+        let pressure_groups = assembly
+            .air_groups()
+            .map_err(|error| VehicleError::InvalidVehicle(error.to_string()))?;
+        let mut exposed = Vec::new();
+        for group in pressure_groups {
+            if group.iter().any(|index| {
+                let volume = &assembly.volumes[*index];
+                volume.body == pressure_body && volume.pressurized
+            }) {
+                exposed.extend(
+                    group
+                        .into_iter()
+                        .filter(|index| assembly.volumes[*index].pressurized)
+                        .map(|index| assembly.volumes[index].name.clone()),
+                );
+            }
+        }
+        exposed.sort();
+        exposed.dedup();
+        Ok(Some(exposed))
     }
 
     /// Query whether the current attachment graph permits crew passage
@@ -1510,6 +1710,23 @@ impl VehicleDefinition {
         })?;
         assembly
             .crew_can_pass(from, to)
+            .map_err(|error| VehicleError::InvalidVehicle(error.to_string()))
+    }
+
+    /// Pressure- and suit-aware crew access query for one crew member.
+    /// Unsuited and hose-fed crew cannot traverse a dry or vacuum region;
+    /// self-contained suits can traverse any currently connected interior.
+    pub fn assembly_crew_can_pass_safely(
+        &self,
+        from: &str,
+        to: &str,
+        suit: CrewSuitMode,
+    ) -> Result<bool, VehicleError> {
+        let assembly = self.assembly.as_ref().ok_or_else(|| {
+            VehicleError::InvalidVehicle("vehicle has no part assembly graph".into())
+        })?;
+        assembly
+            .crew_can_pass_safely(from, to, &self.cabins, suit)
             .map_err(|error| VehicleError::InvalidVehicle(error.to_string()))
     }
 
@@ -2694,8 +2911,8 @@ mod tests {
 mod cabin_authority_tests {
     use super::*;
     use crate::{
-        AssemblyVolume, AutopilotTier, ControlCore, ControlStation, NamedAssemblyLink,
-        PressurizedCabin, R_DRY_AIR_J_KG_K,
+        AssemblyVolume, AutopilotTier, CabinExit, CabinExitSide, CabinExitType, ControlCore,
+        ControlStation, CrewSuitMode, NamedAssemblyLink, PressurizedCabin, R_DRY_AIR_J_KG_K,
     };
 
     fn bare_vehicle() -> VehicleDefinition {
@@ -2761,6 +2978,13 @@ mod cabin_authority_tests {
         let mut assembly = air_assembly(false);
         assembly.volumes[0].centroid_body_m = DVec3::new(-2.0, 0.0, 0.0);
         assembly.volumes[1].centroid_body_m = DVec3::new(4.0, 0.0, 0.0);
+        assembly
+    }
+
+    fn dry_hatch_assembly(open: bool) -> VehicleAssembly {
+        let mut assembly = air_assembly(open);
+        assembly.volumes[1].name = "capsule.bay".into();
+        assembly.volumes[1].pressurized = false;
         assembly
     }
 
@@ -2890,6 +3114,137 @@ mod cabin_authority_tests {
     }
 
     #[test]
+    fn pressure_hatch_into_dry_space_requires_suited_crew_or_prior_venting() {
+        let cabin = PressurizedCabin::new("service.cabin", 2.0, 101.325, 293.15, 0.21, 2.0)
+            .expect("pressurized cabin");
+        let air_kg = cabin.air_kg;
+        let mut vehicle = bare_vehicle();
+        vehicle.mass_properties = RigidBodyProperties::new(
+            1_000.0 + air_kg,
+            glam::DMat3::from_diagonal(DVec3::splat(500.0)),
+        )
+        .expect("mass properties including cabin air");
+        vehicle = vehicle
+            .with_cabins(vec![cabin])
+            .expect("cabin")
+            .with_assembly(dry_hatch_assembly(false))
+            .expect("dry-hatch assembly");
+
+        assert!(vehicle.set_assembly_hatch_open("hatch", true).is_err());
+        assert!(!vehicle.assembly.as_ref().unwrap().links[0].state.open);
+        assert_eq!(vehicle.cabins[0].air_kg, air_kg);
+        assert!((vehicle.mass_properties.mass_kg - (1_000.0 + air_kg)).abs() < 1e-12);
+
+        vehicle
+            .set_assembly_hatch_open_with_safety("hatch", true, true)
+            .expect("suited crew may open and vent the hatch");
+        assert!(vehicle.assembly.as_ref().unwrap().links[0].state.open);
+        assert_eq!(vehicle.cabins[0].state, crate::CabinPressureState::Vacuum);
+        assert_eq!(vehicle.cabins[0].air_kg, 0.0);
+        assert!((vehicle.mass_properties.mass_kg - 1_000.0).abs() < 1e-12);
+        assert!(
+            vehicle
+                .assembly_crew_can_pass("service.cabin", "capsule.bay")
+                .expect("open hatch connectivity")
+        );
+        assert!(
+            !vehicle
+                .assembly_crew_can_pass_safely(
+                    "service.cabin",
+                    "capsule.bay",
+                    CrewSuitMode::Unsuited,
+                )
+                .expect("unsuited access query")
+        );
+        assert!(
+            !vehicle
+                .assembly_crew_can_pass_safely(
+                    "service.cabin",
+                    "capsule.bay",
+                    CrewSuitMode::HoseFed,
+                )
+                .expect("hose-fed access query")
+        );
+        assert!(
+            vehicle
+                .assembly_crew_can_pass_safely(
+                    "service.cabin",
+                    "capsule.bay",
+                    CrewSuitMode::SelfContained,
+                )
+                .expect("self-contained access query")
+        );
+    }
+
+    #[test]
+    fn vented_hatch_opens_without_suit_assertion_but_access_still_requires_protection() {
+        let cabin = PressurizedCabin::new("service.cabin", 2.0, 101.325, 293.15, 0.21, 2.0)
+            .expect("pressurized cabin");
+        let air_kg = cabin.air_kg;
+        let mut vehicle = bare_vehicle();
+        vehicle.mass_properties = RigidBodyProperties::new(
+            1_000.0 + air_kg,
+            glam::DMat3::from_diagonal(DVec3::splat(500.0)),
+        )
+        .expect("mass properties including cabin air");
+        vehicle = vehicle
+            .with_cabins(vec![cabin])
+            .expect("cabin")
+            .with_assembly(dry_hatch_assembly(false))
+            .expect("dry-hatch assembly");
+
+        vehicle.vent_cabin("service.cabin").expect("vent cabin");
+        vehicle
+            .set_assembly_hatch_open("hatch", true)
+            .expect("a vented cabin may open into dry space");
+        assert!(
+            !vehicle
+                .assembly_crew_can_pass_safely(
+                    "service.cabin",
+                    "capsule.bay",
+                    CrewSuitMode::Unsuited,
+                )
+                .expect("unsuited access query")
+        );
+        assert!(
+            vehicle
+                .assembly_crew_can_pass_safely(
+                    "service.cabin",
+                    "capsule.bay",
+                    CrewSuitMode::SelfContained,
+                )
+                .expect("self-contained access query")
+        );
+    }
+
+    #[test]
+    fn pressurized_route_allows_unsuited_and_hose_fed_crew() {
+        let vehicle = bare_vehicle()
+            .with_cabins(unequal_cabins())
+            .expect("cabins")
+            .with_assembly(air_assembly(true))
+            .expect("open pressurized assembly");
+        assert!(
+            vehicle
+                .assembly_crew_can_pass_safely(
+                    "service.cabin",
+                    "capsule.cabin",
+                    CrewSuitMode::Unsuited,
+                )
+                .expect("unsuited access query")
+        );
+        assert!(
+            vehicle
+                .assembly_crew_can_pass_safely(
+                    "service.cabin",
+                    "capsule.cabin",
+                    CrewSuitMode::HoseFed,
+                )
+                .expect("hose-fed access query")
+        );
+    }
+
+    #[test]
     fn cabin_redistribution_updates_com_inertia_and_body_frame_geometry() {
         let cabins = unequal_cabins();
         let assembly = positioned_air_assembly();
@@ -2914,9 +3269,20 @@ mod cabin_authority_tests {
         vehicle.aero_geometry.panels[0].center_of_pressure_body_m = DVec3::new(3.5, 1.0, -2.0);
         let initial_panel_position = vehicle.aero_geometry.panels[0].position_body_m;
         let initial_center_of_pressure = vehicle.aero_geometry.panels[0].center_of_pressure_body_m;
+        let initial_exit_position = DVec3::new(8.0, 2.0, -1.0);
         vehicle = vehicle
             .with_cabins(cabins.clone())
             .expect("cabins")
+            .with_cabin_exits(vec![CabinExit {
+                name: "cabin.main.exit-left".into(),
+                pair_id: "cabin.main.exit-1".into(),
+                position_body_m: initial_exit_position,
+                side: CabinExitSide::Left,
+                exit_type: CabinExitType::TypeIII,
+                opening_width_m: 0.508,
+                opening_height_m: 0.9144,
+            }])
+            .expect("cabin exits")
             .with_assembly(assembly.clone())
             .expect("assembly");
 
@@ -2963,6 +3329,12 @@ mod cabin_authority_tests {
         assert!(
             (vehicle.aero_geometry.panels[0].center_of_pressure_body_m
                 - (initial_center_of_pressure + expected_frame_shift))
+                .length()
+                < 1e-12
+        );
+        assert!(
+            (vehicle.cabin_exits[0].position_body_m
+                - (initial_exit_position + expected_frame_shift))
                 .length()
                 < 1e-12
         );

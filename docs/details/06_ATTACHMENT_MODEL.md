@@ -15,8 +15,8 @@ Separate parts assemble into one craft through authored interfaces:
   inferred from proximity);
 - one validated assembly tree (no cycles, no forests, diameter match);
 - geometric mating transforms that carry aero panels, collision parts,
-  tank mounts, cabins/seats, ports, controls, and hull mass/inertia into
-  the craft frame;
+  tank mounts, cabin seats/exits, ports, controls, and hull mass/inertia
+  into the craft frame;
 - passable cabins: crew and air domains shared through open hatches;
 - fuel reachability: which tanks can feed which engine ports.
 
@@ -81,20 +81,28 @@ Volumes are non-tank regions; tanks are never crew volumes:
 
 `VehicleDefinition.assembly` retains named bodies, volume addresses,
 resource endpoints, and named mutable `AssemblyLinkState`s. Runtime
-queries expose `crew_can_pass`, `cabins_share_air`, named crew/air
-domains, and qualified feed paths. Sealing or opening a hatch recomputes
-connectivity. Structural stack joints never pass crew but always pass
-resources. Index-based helpers are geometry-free and validate endpoint
-ranges. When an open hatch joins pressure volumes, `VehicleDefinition`
+queries expose topological `crew_can_pass`, pressure-aware
+`crew_can_pass_safely`, `cabins_share_air`, named crew/air domains, and
+qualified feed paths. Pressure-aware passage requires non-vacuum air in all
+regions along an unsuited or hose-fed crew member's route; self-contained
+suits also permit dry/vacuum passage. This is a compartment access query,
+not character movement. Structural stack joints never pass crew but always
+pass resources. Index-based helpers are geometry-free and validate endpoint
+ranges. Opening an exterior assembly hatch into a dry region refuses while
+its connected pressure domain contains air unless the caller explicitly
+asserts that all exposed occupants are suited. That operation vents the
+affected domain and updates vehicle mass properties and the body-frame COM
+atomically. Opening after a separate `vent_cabin` operation is also allowed.
+When an open hatch joins pressure volumes, `VehicleDefinition`
 resolves the ideal-gas equilibrium as an instantaneous state transition:
 total air, oxygen, and sensible thermal energy are conserved, and the
 resulting inventory is distributed by chamber volume at common pressure,
 temperature, and composition (constant dry-air heat capacity and gas
 constant). Closing the hatch preserves each chamber's current state.
 The baker resolves initially open domains before final COM/inertia
-aggregation. Later runtime hatch changes update cabin inventories, but
-runtime mass/inertia updates for gas redistribution and venting remain
-future work. Finite-rate orifice flow also remains future work.
+aggregation. Later runtime hatch changes update cabin inventories and vehicle
+mass/inertia plus the body-frame COM for gas redistribution and venting.
+Finite-rate orifice flow remains future work.
 
 ## 6. Baker wiring
 

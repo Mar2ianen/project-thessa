@@ -1,11 +1,11 @@
 //! Crewed cabin pressure state and control authority (`docs/details/05`).
 //!
-//! Hangar-side authoring (fuselage regions, atmospheres, suits) compiles
-//! down to two runtime concerns owned here: how much air a cabin holds
-//! and whether its hatches may open, and whether anybody aboard can fly
-//! the craft (KSP-like: no pilot at a station and no autopilot core
-//! means no control). Power/comm dependencies of cores are recorded as
-//! future wiring, not implemented gates.
+//! Hangar-side authoring (fuselage regions, atmospheres, suits, and exits)
+//! compiles down to runtime cabin inventories/access rules, static exit
+//! records, and whether anybody aboard can fly the craft (KSP-like: no
+//! pilot at a station and no autopilot core means no control). Power/comm
+//! dependencies of cores are recorded as future wiring, not implemented
+//! gates.
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
@@ -49,6 +49,19 @@ impl Error for CabinError {}
 pub enum CabinPressureState {
     Pressurized,
     Vacuum,
+}
+
+/// Pressure protection available to one crew member while traversing a
+/// connected set of interior volumes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CrewSuitMode {
+    /// No pressure protection.
+    Unsuited,
+    /// Pressure suit supplied from vehicle air; it cannot support vacuum.
+    HoseFed,
+    /// Suit with an independent pressure and breathing supply.
+    SelfContained,
 }
 
 /// One cabin pressure volume with tracked air inventory. `pressure_kpa` is
@@ -207,10 +220,10 @@ impl PressurizedCabin {
         Ok(needed)
     }
 
-    /// Hatch rule: opens into vacuum, or into air when every occupant
-    /// in the volume is suited.
+    /// Hatch rule: opens with an empty air inventory, or with air aboard when
+    /// every occupant in the volume is suited.
     pub fn hatch_may_open(&self, all_occupants_suited: bool) -> bool {
-        self.state == CabinPressureState::Vacuum || all_occupants_suited
+        self.air_kg == 0.0 || all_occupants_suited
     }
 
     /// EVA needs the hatch rule plus self-contained suits.
@@ -261,6 +274,188 @@ impl ControlStation {
             return Err(CabinError::InvalidCabin(
                 "control station needs a name".into(),
             ));
+        }
+        Ok(())
+    }
+}
+
+/// Seat bundle class retained from the hangar cabin layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CabinSeatClass {
+    Economy,
+    Premium,
+    Business,
+    First,
+    Ejection,
+}
+
+/// Operational role of a retained cabin seat record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CabinSeatRole {
+    Passenger,
+    FlightCrew,
+    CabinAttendant,
+}
+
+/// Seat orientation retained for later crew presentation systems.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CabinSeatStyle {
+    Upright,
+    Couch,
+    Ejection,
+}
+
+/// Pressure-suit feed type authored for one seat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CabinSuitType {
+    HoseFed,
+    SelfContained,
+}
+
+/// Fitted cabin-equipment category.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CabinMonumentKind {
+    Galley,
+    Lavatory,
+    Closet,
+    FlightDeck,
+    AvionicsRack,
+}
+
+/// Compiled seat and manifest metadata retained in the baked vehicle.
+/// Mass values describe the already-baked manifest and are not independently
+/// added to vehicle mass by `sim-core`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CabinSeat {
+    pub name: String,
+    pub position_body_m: DVec3,
+    pub class: CabinSeatClass,
+    pub role: CabinSeatRole,
+    pub seat_style: CabinSeatStyle,
+    pub occupied: bool,
+    pub suited: bool,
+    pub suit_type: CabinSuitType,
+    pub seat_mass_kg: f64,
+    pub occupant_mass_kg: f64,
+    pub carry_on_mass_kg: f64,
+    pub suit_mass_kg: f64,
+}
+
+impl CabinSeat {
+    pub fn validate(&self) -> Result<(), CabinError> {
+        let masses = [
+            self.seat_mass_kg,
+            self.occupant_mass_kg,
+            self.carry_on_mass_kg,
+            self.suit_mass_kg,
+        ];
+        if self.name.trim().is_empty()
+            || !self.position_body_m.is_finite()
+            || masses.iter().any(|mass| !mass.is_finite() || *mass < 0.0)
+            || (self.occupied && self.occupant_mass_kg <= 0.0)
+            || (self.suited && self.suit_mass_kg <= 0.0)
+            || (!self.suited && self.suit_mass_kg > 0.0)
+            || ((self.class == CabinSeatClass::Ejection)
+                != (self.seat_style == CabinSeatStyle::Ejection))
+            || (self.class == CabinSeatClass::Ejection && self.role != CabinSeatRole::FlightCrew)
+        {
+            return Err(CabinError::InvalidCabin(format!(
+                "seat '{}' has invalid identity, position, role, or mass data",
+                self.name
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Compiled fitted-equipment metadata retained in the baked vehicle.
+/// Its mass is already included in baked vehicle mass properties.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CabinMonument {
+    pub name: String,
+    pub kind: CabinMonumentKind,
+    pub position_body_m: DVec3,
+    pub mass_kg: f64,
+}
+
+impl CabinMonument {
+    pub fn validate(&self) -> Result<(), CabinError> {
+        if self.name.trim().is_empty()
+            || !self.position_body_m.is_finite()
+            || !self.mass_kg.is_finite()
+            || self.mass_kg < 0.0
+        {
+            return Err(CabinError::InvalidCabin(format!(
+                "monument '{}' has invalid identity, position, or mass data",
+                self.name
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Exit classification retained in the baked vehicle for cabin layout and
+/// later evacuation systems. Exit dimensions and capacity are screened by
+/// the hangar compiler against the applicable aircraft-design rule set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CabinExitType {
+    #[serde(rename = "type-a")]
+    TypeA,
+    #[serde(rename = "type-b")]
+    TypeB,
+    #[serde(rename = "type-c")]
+    TypeC,
+    #[serde(rename = "type-i")]
+    TypeI,
+    #[serde(rename = "type-ii")]
+    TypeII,
+    #[serde(rename = "type-iii")]
+    TypeIII,
+    #[serde(rename = "type-iv")]
+    TypeIV,
+}
+
+/// Fuselage side of a cabin exit in the vehicle body frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CabinExitSide {
+    Left,
+    Right,
+}
+
+/// Static cabin exit metadata. This does not model a moving door or shell
+/// cutout; it preserves the validated authored exit in the baked vehicle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CabinExit {
+    pub name: String,
+    pub pair_id: String,
+    pub position_body_m: DVec3,
+    pub side: CabinExitSide,
+    pub exit_type: CabinExitType,
+    pub opening_width_m: f64,
+    pub opening_height_m: f64,
+}
+
+impl CabinExit {
+    pub fn validate(&self) -> Result<(), CabinError> {
+        if self.name.trim().is_empty()
+            || self.pair_id.trim().is_empty()
+            || !self.position_body_m.is_finite()
+            || !self.opening_width_m.is_finite()
+            || self.opening_width_m <= 0.0
+            || !self.opening_height_m.is_finite()
+            || self.opening_height_m <= 0.0
+        {
+            return Err(CabinError::InvalidCabin(format!(
+                "exit '{}' needs a pair ID, finite position, and positive opening dimensions",
+                self.name
+            )));
         }
         Ok(())
     }
@@ -364,6 +559,13 @@ mod tests {
         // Vacuum hatch is open; suited self-contained crew may still exit.
         assert!(cabin.eva_may_exit(false, true));
         assert!(!cabin.eva_may_exit(false, false));
+
+        // Inventory, rather than a stale serialized label, determines
+        // whether opening would expose pressurized gas to vacuum.
+        cabin.air_kg = 1.0;
+        cabin.state = CabinPressureState::Vacuum;
+        assert!(!cabin.hatch_may_open(false));
+        assert!(cabin.hatch_may_open(true));
     }
 
     #[test]

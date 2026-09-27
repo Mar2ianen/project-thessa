@@ -10,7 +10,9 @@ use glam::DVec3;
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt};
 
-use crate::{CabinPressureState, MOLAR_MASS_AIR_G_MOL, MOLAR_MASS_O2_G_MOL, PressurizedCabin};
+use crate::{
+    CabinPressureState, CrewSuitMode, MOLAR_MASS_AIR_G_MOL, MOLAR_MASS_O2_G_MOL, PressurizedCabin,
+};
 
 /// Assembly connectivity failure modes.
 #[derive(Debug, Clone, PartialEq)]
@@ -389,6 +391,58 @@ impl VehicleAssembly {
             .any(|group| group.contains(&from) && group.contains(&to)))
     }
 
+    /// Whether one crew member can safely traverse the current open-hatch
+    /// route. Unsuited and hose-fed crew need a pressurized atmosphere in
+    /// every region on the route; self-contained suits also cover dry and
+    /// vacuum regions.
+    pub fn crew_can_pass_safely(
+        &self,
+        from: &str,
+        to: &str,
+        cabins: &[PressurizedCabin],
+        suit: CrewSuitMode,
+    ) -> Result<bool, AssemblyError> {
+        let (from_index, to_index) = self.volume_pair(from, to)?;
+        if !self.crew_can_pass(from, to)? {
+            return Ok(false);
+        }
+
+        let from_body = self.volumes[from_index].body;
+        let to_body = self.volumes[to_index].body;
+        let Some(route_bodies) = self.crew_body_route(from_body, to_body)? else {
+            return Ok(false);
+        };
+        if suit == CrewSuitMode::SelfContained {
+            return Ok(true);
+        }
+
+        for volume in self
+            .volumes
+            .iter()
+            .filter(|volume| route_bodies.contains(&volume.body))
+        {
+            if !volume.pressurized {
+                return Ok(false);
+            }
+            let cabin = cabins
+                .iter()
+                .find(|cabin| cabin.name == volume.name)
+                .ok_or_else(|| {
+                    AssemblyError::InvalidCabinState(format!(
+                        "pressurized assembly volume '{}' has no runtime cabin",
+                        volume.name
+                    ))
+                })?;
+            cabin.validate().map_err(|error| {
+                AssemblyError::InvalidCabinState(format!("{}: {error}", cabin.name))
+            })?;
+            if cabin.air_kg <= 0.0 {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// Named pressure-sharing groups for cabin equalization systems.
     pub fn air_domains(&self) -> Result<Vec<Vec<String>>, AssemblyError> {
         let groups = self.air_groups()?;
@@ -472,6 +526,47 @@ impl VehicleAssembly {
                 .ok_or_else(|| AssemblyError::InvalidLink(format!("unknown volume '{name}'")))
         };
         Ok((find(a)?, find(b)?))
+    }
+
+    fn crew_body_route(&self, from: usize, to: usize) -> Result<Option<Vec<usize>>, AssemblyError> {
+        self.validate()?;
+        let mut adjacency = vec![Vec::new(); self.body_names.len()];
+        for link in &self.links {
+            if link.state.crew_open() {
+                adjacency[link.state.a].push(link.state.b);
+                adjacency[link.state.b].push(link.state.a);
+            }
+        }
+
+        let mut parent = vec![None; self.body_names.len()];
+        let mut seen = vec![false; self.body_names.len()];
+        let mut queue = std::collections::VecDeque::from([from]);
+        seen[from] = true;
+        while let Some(body) = queue.pop_front() {
+            if body == to {
+                break;
+            }
+            for &neighbor in &adjacency[body] {
+                if !seen[neighbor] {
+                    seen[neighbor] = true;
+                    parent[neighbor] = Some(body);
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+        if !seen[to] {
+            return Ok(None);
+        }
+
+        let mut route = vec![to];
+        let mut body = to;
+        while body != from {
+            body = parent[body].ok_or_else(|| {
+                AssemblyError::InvalidLink("crew route has no parent body".into())
+            })?;
+            route.push(body);
+        }
+        Ok(Some(route))
     }
 }
 

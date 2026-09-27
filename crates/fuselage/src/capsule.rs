@@ -170,6 +170,8 @@ pub fn capsule_body(params: &CapsuleParams) -> Result<ProceduralBody, FuselageEr
         kind: crew_kind(params),
         atmosphere: params.atmosphere,
         control_core: None,
+        cabin_layout: None,
+        cabin_layout_preset: None,
     };
     crew.validate()?;
     body.regions = vec![crew];

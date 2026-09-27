@@ -50,8 +50,10 @@ pub use atmosphere::{
     GasKind,
 };
 pub use cabin::{
-    AuthorityReason, AutopilotTier, CabinError, CabinPressureState, ControlAuthority, ControlCore,
-    ControlStation, MOLAR_MASS_AIR_G_MOL, MOLAR_MASS_O2_G_MOL, PressurizedCabin, R_DRY_AIR_J_KG_K,
+    AuthorityReason, AutopilotTier, CabinError, CabinExit, CabinExitSide, CabinExitType,
+    CabinMonument, CabinMonumentKind, CabinPressureState, CabinSeat, CabinSeatClass, CabinSeatRole,
+    CabinSeatStyle, CabinSuitType, ControlAuthority, ControlCore, ControlStation, CrewSuitMode,
+    MOLAR_MASS_AIR_G_MOL, MOLAR_MASS_O2_G_MOL, PressurizedCabin, R_DRY_AIR_J_KG_K,
     control_authority,
 };
 pub use collision::{

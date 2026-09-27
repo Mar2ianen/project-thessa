@@ -1,11 +1,11 @@
 # Cabin editor
 
-Status: slices 5–7 implemented (suits, venting/EVA rules, control
-authority); slices 1–4 (seat blocks, classes/monuments, doors, decks)
-remain design before implementation. Capsule cabins already exist as a
-compiled primitive (`crates/fuselage/src/capsule.rs`); this note designs
-the common cabin layer that will also serve airliners, supersonic
-transports, and fighter cockpits.
+Status: slices 1–8 are implemented in the fuselage compiler and vehicle
+baker: seat blocks, class presets, monuments, paired exits, decks,
+geometry-derived fit checks, cabin presets, TOML loading, mass aggregation,
+and pilot-station wiring. The existing capsule `Crew` path remains
+backward-compatible. Runtime evacuation, moving/cutout doors, and the
+remaining items in §13 are future work.
 
 ## 1. Goal
 
@@ -64,16 +64,29 @@ Deck {
 }
 
 SeatBlock {
+    name: String,
+    role: Passenger | FlightCrew | CabinAttendant,
+    x0_m: f64,                  // first row's leading edge
     class: SeatClass,          // economy / premium / business / first / ejection
     columns: Vec<u32>,         // seat groups split by aisles, e.g. [3, 4, 3]
     rows: u32,
     pitch_m: f64,
+    wall_clearance_m: f64,     // combined outer-wall/armrest allowance
+    seat_width_m: Option<f64>, // overrides class suggestion
     seat_mass_kg_each: f64,    // authored; class presets only suggest
     occupant_mass_kg_each: f64,
     carry_on_kg_each: f64,
     suited: bool,              // pressure suit: cabin air optional (§7)
     suit_mass_kg_each: f64,    // authored; suit presets only suggest
     suit_type: SuitType,       // hose-fed vs self-contained (§7–8)
+    suit_overrides: Vec<SeatSuitOverride>, // sparse per-place exceptions
+}
+
+SeatSuitOverride {
+    seat_index: u32,           // zero-based row-major place index
+    suited: bool,
+    suit_mass_kg_each: f64,
+    suit_type: SuitType,
 }
 
 Monument {
@@ -83,9 +96,12 @@ Monument {
 }
 
 Door {
+    name: String,
+    pair_id: String,           // exactly one left + one right exit
     x_m: f64,
     side: Left | Right,
-    rating: ExitType,          // A / B / C / I / II / III
+    rating: ExitType,          // A / B / C / I / II / III / IV
+    clear_zone_length_m: f64,
 }
 ```
 
@@ -97,17 +113,29 @@ column groups get an authored width each (typical 0.51 m twin-aisle,
 `SeatClass` is a preset bundle (width, suggested mass), never a hidden
 multiplier: economy ≈ 0.44 m / ~11 kg, premium ≈ 0.47 m / ~18 kg,
 business lie-flat ≈ 0.55 m / ~60 kg, first suite ≈ 0.65 m / ~100 kg,
-ejection ≈ 0.55 m / ~110 kg with rails and kit. All illustrative
-typical values; every number stays overridable per block, and the
-compiler uses only the authored values.
+ejection ≈ 0.55 m / ~110 kg with rails and kit. These are deterministic
+class suggestions that each block may override; the compiler uses the
+resolved width and mass directly, with no class multiplier.
 
 `SuitType` is `HoseFed` (fighter pressure suit, capsule launch/entry
 suit: ~15–25 kg, vehicle-fed air) vs `SelfContained` (EVA suit:
 ~100–130 kg with PLSS backpack, duration-limited consumables later).
-Illustrative masses again; authored values rule. A suited block does
-not require cabin pressure (§7); an unsuited block without atmosphere
-fails closed at compile time (ground-ambient ferry ops stay a future
-scenario flag, not a silent exception).
+Illustrative masses again; authored values rule. A block's suit fields are
+the default for every place; sparse `suit_overrides` replace the full suit
+configuration for selected places. Indices count rows first, then each row's
+column groups and seats from left to right. Suited places do not require cabin
+pressure (§7); every unsuited place needs cabin atmosphere (ground-ambient
+ferry ops stay a future scenario flag, not a silent exception).
+
+For example, override the second place in a block with a self-contained suit:
+
+```toml
+[[procedural_bodies.regions.cabin_layout.decks.blocks.suit_overrides]]
+seat_index = 1
+suited = true
+suit_mass_kg_each = 115.0
+suit_type = "self-contained"
+```
 
 ## 4. Geometry-derived validation (fails closed)
 
@@ -126,16 +154,25 @@ All checks derive from the loft at the actual row/door x-stations:
 4. **Door fit.** Door height for its `ExitType` ≤ local section height
    at `x_m`; doors need shell on their side (always true on a loft,
    recorded for future cutouts).
-5. **Exit-limited occupancy.** Sum of door ratings on board ≥ total
-   occupants. Ratings come from a project-owned exit table keyed by
-   `ExitType` (indicative magnitudes only at design time — Type A
-   of order 100, overwing of order dozens; exact values lock against
-   14 CFR / CS 25.807 with source cited at implementation).
-6. **Crew complement.** 2 pilots minimum when the layout carries
-   passengers (flight-deck monument or explicit crew), plus one cabin
-   attendant place per 50 passenger seats or part thereof (FAR 121.391
-   family; exact regulatory citation locks at implementation).
-   Attendant seats are ordinary upright places in a crew block.
+5. **Exit-limited seating.** Every pair has one left and one right exit;
+   its credit uses the smaller exit. The compiler applies the 14 CFR
+   25.807(g) per-side exit-count rules and seat credits (A 110, B 75,
+   C 55, I 45, II 40, III 35, IV 9), the 70/65-seat Type-III limits, the
+   two-Type-C-or-larger rule when A/B/C exits are used, and the 60 ft
+   maximum adjacent-exit distance. The pair-credit sum must cover the
+   passenger seating configuration. Type-IV exits are treated as
+   overwing exits; the authoring model does not yet describe their exact
+   wing intersection.
+6. **Crew complement.** 2 flight-crew places minimum when the layout carries
+   passengers, plus one cabin
+   attendant place per 50 passenger seats or part thereof. Flight-crew
+   and attendant places are explicit roles on ordinary seat blocks.
+
+These are fail-closed hangar checks, not an FAA/EASA conformity finding.
+The pinned reference is [14 CFR 25.807](https://www.ecfr.gov/current/title-14/chapter-I/subchapter-C/part-25/subpart-D/subject-group-ECFR88992669bab3b52/section-25.807),
+especially paragraphs (a), (d), (f), and (g). The separate 90-second
+evacuation demonstration remains an operational check and is not inferred
+from seat credits.
 
 The 90-second evacuation demonstration stays out of the compiler: it
 is an operational validation fed by door/aisle geometry, not a
@@ -143,10 +180,11 @@ hangar-time pass/fail.
 
 ## 5. Mass model
 
-- Seats: `rows × places × seat_mass_kg_each` at anchor positions
-  (existing anchor pipeline, extended with class tags later).
-- Occupants + carry-on: same anchors, like today's seat/occupant mass.
-- Monuments: fitted mass at footprint centroid.
+- Seats: each row/column place compiles to a class- and role-tagged anchor;
+  seat mass is charged at every anchor.
+- Occupants, carry-on, and suits: charged at the same anchor only for
+  occupied places.
+- Monuments: fitted mass at the footprint centroid.
 - Checked baggage: not cabin mass — it goes to `Cargo` manifest in the
   hold, which already exists.
 - Flight deck: pilots as occupants of a 2-place block; instrument mass
@@ -167,15 +205,15 @@ runtime state change of the same atmosphere record, not a rebuild.
 ## 7. Suits and unpressurized operations
 
 A suited occupant brings their own pressure, so the cabin does not have
-to. Compile rule: a block with `suited = false` and no atmosphere
-refuses (add air or suits); a suited block compiles pressurized or dry
+to. Compile rule: an unsuited place with no atmosphere refuses (add air or
+author a suit override); suited places compile pressurized or dry
 — fighters fly low-pressure or dry cockpits with the pilot on suit
 pressure, capsules wear suits for launch/entry as backup to sea-level
 air. Suit mass rides the anchors like seat mass. `HoseFed` suits depend
 on vehicle air (lose the cabin and they lose the loop — future failure
-model, not today); `SelfContained` suits are EVA-capable. Implemented as
-`Crew.suited/suit_mass_kg_each/suit_type`: suits without mass, and mass
-without suits, both refuse. Injury, consciousness, and thermal modeling
+model, not today); `SelfContained` suits are EVA-capable. Each effective
+per-place suit record rejects a suit without positive mass or suit mass
+without a suit. Injury, consciousness, and thermal modeling
 of the human are out of scope: the
 cabin layer tracks presence, fit, mass, and air — never biology.
 
@@ -209,6 +247,23 @@ cabin's air-mass change and recenter all body-frame geometry on the new COM.
 Callers should use these vehicle-level operations rather than mutating a
 cabin's air inventory directly when the cabin is part of a flown vehicle.
 
+An assembly hatch that connects a pressurized cabin domain to a dry region
+does not silently discard air. `set_assembly_hatch_open` refuses while that
+domain contains air, requiring callers to vent first. The access query still
+blocks unsuited crew from traversing the resulting dry/vacuum route. The
+`set_assembly_hatch_open_with_safety` operation accepts a caller-supplied
+manifest assertion that all exposed occupants are suited; on success it
+vents the affected pressure domain and updates mass, inertia, and COM in the
+same transition. Runtime does not yet own a named crew roster, so callers
+must derive this assertion from their manifest.
+
+`assembly_crew_can_pass` reports open-hatch topology only.
+`assembly_crew_can_pass_safely` additionally checks the requested crew
+member's protection along the route: unsuited and hose-fed crew require
+non-vacuum air inventory in every region, while self-contained suits also
+permit passage through dry or vacuum regions. This is an access query, not
+character movement or pathfinding within a compartment.
+
 ## 9. Control authority (KSP-like, presence-based)
 
 Whether the craft answers the controls is a discrete capability flag,
@@ -236,7 +291,8 @@ autopilot core aboard means nobody flies the craft.
   arm; their schedulers check the flag first.
 
 Implemented presence-based in `sim-core::cabin`/`vehicle`: pilot
-stations and core tiers bake from crew regions and avionics cores,
+stations and core tiers bake from legacy crew regions, advanced
+flight-crew seat blocks, and avionics cores,
 `control_authority()` returns the flag with a reason, and both control
 intakes refuse with `NoControlAuthority` unless the asset predates crew
 modeling entirely (legacy migration). Power/comm gates arrive with
@@ -282,53 +338,71 @@ cabin air is lost and repress needs reserve. Same parts, no airlock.
   first violated rule named (width at row x, length, exits, crew).
 - **Advanced mode:** decks/blocks/monuments/doors edited directly.
 - **Presets** (convenience, same physics): 747-like 3-class double
-  deck, Concorde-like 100-seat single class, single/tandem fighter
+  deck, Concorde-like 100-place single deck, single/tandem fighter
   cockpit. Capsule presets stay where they are (test/doc parameter
   sets, never library hardcodes).
 
-## 12. Compile targets (decided at implementation)
+Vehicle TOML may select a preset on a `Cabin` interior region instead of
+authoring its decks manually:
 
-Direction, not final schema: seat blocks lower into the existing
-`Crew` anchor/mass path (one logical row set per block, class tags
-added to anchors); monuments lower into manifest mass; doors lower
-into door records for exit accounting and future evacuation hooks;
-suit flags ride the anchors; the authority flag (§9) lowers into a
-`controllable` capability with a reason code. No forked pipeline: the
-capsule path must keep compiling unchanged through every slice
-(regression-pinned).
+```toml
+[procedural_bodies.regions.cabin_layout_preset]
+kind = "fighter" # also "747-like" or "concorde-like"
+floor_z_m = 0.0
+pilots = 1 # fighter only; defaults to one
+```
+
+The baker expands the preset across the region's `x0_m..x1_m` range and
+applies the same fit, capacity, crew, and exit validation used for manual
+layouts. A region may specify either `cabin_layout` or
+`cabin_layout_preset`, not both.
+
+## 12. Compiled outputs
+
+Seat blocks compile into individual runtime records carrying position, class,
+role, occupancy, suit, and mass data; their seat anchors also feed the
+existing assembly volume/capacity path. Monuments compile into runtime
+point-mass metadata. Both are retained in the baked `VehicleDefinition`;
+their masses have already been included in the compiled structure and are
+not counted a second time by the baker.
+Door records retain fitted positions, pair IDs, ratings, and dimensions in
+the baked `VehicleDefinition` as static exit metadata for diagnostics and
+later evacuation/cutout work; this does not create moving doors or shell
+cutouts. Flight-crew places lower into runtime control stations. No
+parallel capsule pipeline is introduced: legacy capsule `Crew` regions
+continue through their existing mass and anchor compiler path.
 
 ## 13. Implementation slices (in order, each with tests)
 
-1. `SeatBlock` with column groups + per-row width fit against the
-   loft (hand-width unit tests; `[3,4,3]` passes wide, fails narrow).
-2. Classes (preset bundles, authored overrides) + `Monument` mass and
-   length packing (overlap/packing refusal tests).
-3. `Door` fit + project-owned exit table + exit-limited occupancy +
-   pilot/attendant rules (refusal tests).
-4. Deck height/headroom + 747-like double-deck golden (main + upper).
-5. Suits (implemented): per-block flag/mass/type, pressure exemption,
-   unsuited-dry refusal; suited EVA-eligibility tag.
+1. Implemented: `SeatBlock` with column groups + per-row width fit against the
+    loft (hand-width unit tests; `[3,4,3]` passes wide, fails narrow).
+2. Implemented: classes (preset bundles, authored overrides) + `Monument` mass and
+    length packing (overlap/packing refusal tests).
+3. Implemented: `Door` fit + project-owned exit table + exit-limited seating +
+    pilot/attendant rules (refusal tests).
+4. Implemented: deck height/headroom + 747-like double-deck layout
+   (main + upper).
+5. Suits (implemented): per-block defaults with per-place overrides,
+    pressure exemption, unsuited-dry refusal, and suited EVA-eligibility tag.
 6. Venting state + hatch rule + air-consumable accounting (implemented
    in `sim-core::cabin`); airlock part reserved as its own slice after this.
 7. Presence-based `controllable` flag with reason codes (implemented:
    pilot stations, core tiers, intake gate, legacy migration); scripts
    check it before arming.
-8. Presets (747/Concorde/fighter) + TOML roundtrip + baker wiring.
+8. Implemented: presets (747/Concorde/fighter) + TOML roundtrip + baker
+   wiring. `data/vehicles/example_fighter_cabin.toml` is the end-to-end
+   authoring example.
 9. Later, out of scope here: evacuation hooks, consumables/carts,
    metabolic O2 loop, canopy/window cutouts, vent rates, power/comm
    dependencies of cores.
 
-## 14. Open questions
+## 14. Remaining questions and follow-up work
 
-- Exact exit-type ratings and their regulatory source (locks in
-  the doors slice).
-- Side-pairing rule for exit capacity (total vs per-side).
-- Whether attendant places need jump-seat geometry distinct from
-  upright anchors.
 - Door cutout interaction with the future subtractive layer.
 - Business/first monuments (bars, showers) as mass-only or modelled
   volumes.
-- Per-place suit overrides vs per-block uniform suits.
 - Vent/repress rate physics and air-reserve tank sizing.
 - Core power/comm dependency thresholds and the uncontrollable-UI
   vocabulary.
+- Exact wing intersection for Type-IV overwing exits and the aircraft
+  conformity cases outside the implemented 14 CFR 25.807(g) checks.

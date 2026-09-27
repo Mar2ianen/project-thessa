@@ -1,0 +1,145 @@
+# Ten-place regional cabin demonstrating paired Type-III exits and crew roles.
+name = "example-regional-cabin"
+mass_kg = 2400.0
+inertia_body_kg_m2 = [
+  [2500.0, 0.0, 0.0],
+  [0.0, 6000.0, 0.0],
+  [0.0, 0.0, 6000.0],
+]
+body_collision = false
+
+[[procedural_bodies]]
+name = "fuselage"
+origin_body_m = [0.0, 0.0, 0.0]
+
+[[procedural_bodies.stations]]
+x_m = 0.0
+half_width_m = 1.5
+top_height_m = 1.5
+bottom_height_m = 1.5
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.stations]]
+x_m = 10.0
+half_width_m = 1.5
+top_height_m = 1.5
+bottom_height_m = 1.5
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.regions]]
+name = "cabin"
+x0_m = 0.5
+x1_m = 9.5
+kind = "cabin"
+
+[procedural_bodies.regions.atmosphere]
+pressure_kpa = 75.0
+
+[[procedural_bodies.regions.cabin_layout.decks]]
+name = "main"
+floor_z_m = 0.0
+min_headroom_m = 1.2
+
+[[procedural_bodies.regions.cabin_layout.decks.monuments]]
+name = "forward-galley"
+kind = "galley"
+x0_m = 0.6
+x1_m = 0.75
+mass_kg = 45.0
+
+[[procedural_bodies.regions.cabin_layout.decks.blocks]]
+name = "passengers"
+class = "economy"
+role = "passenger"
+x0_m = 0.8
+rows = 5
+columns = [2]
+pitch_m = 0.75
+aisle_widths_m = []
+wall_clearance_m = 0.2
+occupants = 0
+occupant_mass_kg_each = 90.0
+carry_on_kg_each = 8.0
+suited = false
+suit_mass_kg_each = 0.0
+seat_style = "upright"
+
+[[procedural_bodies.regions.cabin_layout.decks.blocks.suit_overrides]]
+seat_index = 0
+suited = true
+suit_mass_kg_each = 24.0
+suit_type = "self-contained"
+
+[[procedural_bodies.regions.cabin_layout.decks.doors]]
+name = "exit-left"
+pair_id = "exit-1"
+x_m = 5.0
+side = "left"
+rating = "type-iii"
+clear_zone_length_m = 0.6
+
+[[procedural_bodies.regions.cabin_layout.decks.doors]]
+name = "exit-right"
+pair_id = "exit-1"
+x_m = 5.0
+side = "right"
+rating = "type-iii"
+clear_zone_length_m = 0.6
+
+[[procedural_bodies.regions.cabin_layout.decks.blocks]]
+name = "flight-crew"
+class = "business"
+role = "flight-crew"
+x0_m = 5.5
+rows = 1
+columns = [2]
+pitch_m = 0.8
+aisle_widths_m = []
+wall_clearance_m = 0.2
+occupants = 0
+occupant_mass_kg_each = 90.0
+carry_on_kg_each = 0.0
+suited = false
+suit_mass_kg_each = 0.0
+seat_style = "upright"
+
+[[procedural_bodies.regions.cabin_layout.decks.blocks]]
+name = "cabin-attendant"
+class = "economy"
+role = "cabin-attendant"
+x0_m = 6.5
+rows = 1
+columns = [1]
+pitch_m = 0.8
+aisle_widths_m = []
+wall_clearance_m = 0.2
+occupants = 0
+occupant_mass_kg_each = 90.0
+carry_on_kg_each = 0.0
+suited = false
+suit_mass_kg_each = 0.0
+seat_style = "upright"
+
+[procedural_bodies.structure]
+skin_gauge_mm = 2.0
+frame_spacing_m = 1.0
+frame_gauge_mm = 2.0
+frame_width_mm = 40.0
+tank_pressure_pa = 500000.0
+wall_inset_mm = 10.0
+
+[procedural_bodies.structure.skin_material]
+name = "Al-7075-T6"
+density_kg_m3 = 2810.0
+yield_strength_mpa = 503.0
+
+[procedural_bodies.structure.tank_material]
+density_kg_m3 = 2840.0
+yield_strength_pa = 395000000.0
+max_wall_temp_k = 400.0

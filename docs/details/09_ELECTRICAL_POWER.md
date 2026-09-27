@@ -41,8 +41,9 @@ Psolar = deployment_fraction × A × cell_efficiency
 law; `from_luminosity_with_occluders` additionally derives the stellar
 angular radius from star radius and range. Each `SolarOccluder` carries a
 body-frame direction (from an authoritative ephemeris/attitude transform) and
-an angular radius (from body size and range, e.g. a planet or another
-vehicle). The combined dimming multiplies the caller's `visibility` by every
+an angular radius (from body size and range, e.g. a planet, another vehicle,
+or the vessel's own hull via `VehicleDefinition::own_body_occluder`, which
+ray-casts the baked collision geometry on the CPU). The combined dimming multiplies the caller's `visibility` by every
 geometric disc-overlap factor, using the same circle-circle lens formula as
 the lighting pipeline (independently implemented in vehicle-core so power
 stays free of visual-crate dependencies). Total eclipse yields exactly 0.0;

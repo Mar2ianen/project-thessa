@@ -33,6 +33,9 @@ pub(crate) struct VehicleAsset {
     /// Optional shared bus with rated loads, storage, solar cells, and reactors.
     #[serde(default)]
     pub(crate) electrical_power: ElectricalPowerAsset,
+    /// Optional lumped thermal-node network (nodes, links, radiators).
+    #[serde(default)]
+    pub(crate) thermal: ThermalAsset,
     /// Compile contact boxes from procedural surfaces into the collision
     /// geometry (one body-axis box per mechanism region). Default true:
     /// the documented hangar pipeline; set false to keep hand-authored
@@ -121,6 +124,7 @@ impl VehicleAsset {
         let mut fold_joints = Vec::new();
         let mut parked_tags: Vec<(usize, usize)> = Vec::new();
         let mut surface_collision_parts = Vec::new();
+        let mut surface_tile_nodes = Vec::new();
         for surface in &self.procedural_surfaces {
             let compiled = compile_surface(
                 surface,
@@ -146,6 +150,33 @@ impl VehicleAsset {
                 surface_moment += structure.center_of_mass_body_m * structure.mass_kg;
                 surface_inertia += structure.inertia_body_kg_m2;
                 surface_fuel_m3 += structure.fuel_volume_m3;
+            }
+            if let (Some(layer), Some(tiles)) = (&surface.tile_layer, &compiled.tile_layer) {
+                println!(
+                    "surface '{}': {} hex tiles, {:.1} kg at {:?}",
+                    surface.name, tiles.tile_count, tiles.mass_kg, tiles.centroid_body_m
+                );
+                // Tile mass rides the thermal bake below (one lumped node
+                // per surface), never the surface accumulators: adding it
+                // here would double-count.
+                // One lumped tile node per surface (both sides paved, so the
+                // node radiates both faces but takes sun/aero on one face
+                // through the mean normal; backside solar is future work).
+                surface_tile_nodes.push(ThermalNodeSpec {
+                    name: format!("{}.tiles", surface.name),
+                    mass_kg: tiles.mass_kg,
+                    specific_heat_j_kg_k: layer.specific_heat_j_kg_k,
+                    initial_temp_k: 280.0,
+                    max_temp_k: layer.max_temp_k,
+                    emissivity: layer.emissivity,
+                    solar_absorptivity: layer.solar_absorptivity,
+                    radiating_area_m2: tiles.area_m2,
+                    solar_exposed_area_m2: 0.5 * tiles.area_m2,
+                    solar_normal_body: tiles.normal_body_m,
+                    aero_area_m2: 0.5 * tiles.area_m2,
+                    nose_radius_m: layer.nose_radius_m,
+                    position_body_m: tiles.centroid_body_m,
+                });
             }
             let base = panels.len();
             let joint_base = fold_joints.len();
@@ -216,6 +247,7 @@ impl VehicleAsset {
         // and per-segment contact parts. Ports print as anchor data; engine
         // auto-mounting from ports is future work.
         let mut body_tank_mounts = Vec::new();
+        let mut body_heat_shield_mounts = Vec::new();
         let mut body_contact_parts = Vec::new();
         let mut body_cabins = Vec::new();
         let mut body_cabin_exits = Vec::new();
@@ -291,6 +323,25 @@ impl VehicleAsset {
                     tank.mount.position_body_m
                 );
                 body_tank_mounts.push(tank.mount);
+            }
+            for shield in &compiled.heat_shields {
+                println!(
+                    "body '{}': heat shield '{}' {:.2} m at {:?} along {:?}",
+                    body.name,
+                    shield.name,
+                    shield.diameter_m,
+                    shield.position_body_m,
+                    shield.normal_body_m
+                );
+                body_heat_shield_mounts.push(
+                    HeatShieldMount::new(
+                        shield.name.clone(),
+                        shield.position_body_m,
+                        shield.normal_body_m,
+                        shield.diameter_m,
+                    )
+                    .map_err(|error| format!("body '{}': {error}", body.name))?,
+                );
             }
             for region in &compiled.interior {
                 if compiled_assembly.is_some()
@@ -636,18 +687,28 @@ impl VehicleAsset {
             .collect();
         let electrical_power = self.electrical_power.bake();
         let power_mass_properties = electrical_power.mass_properties()?;
+        let mut thermal = self.thermal.bake();
+        // Wing/tail tile layers arrive as lumped nodes (one per surface);
+        // duplicate names with authored [thermal] nodes fail closed below.
+        thermal.nodes.extend(surface_tile_nodes);
+        let thermal_mass_properties = thermal.mass_properties()?;
         // Assembly center of mass over EVERYTHING: hand mass rides the
         // authoring origin; surfaces, propulsion, electrical power hardware,
-        // and other installed masses ride their authored stations. Flight
+        // thermal hardware, and other installed masses ride their authored
+        // stations. Flight
         // integrates moments about the body origin, so the baker recenters
         // the whole asset onto the final
         // COM in one shift (legacy hand-only assets sit at zero and
         // shift by nothing). Engine/tank/system/jet mass calls below
         // then add point terms about already-centered stations, and the
         // same accumulator shape serves future fuel-driven COM motion.
-        let mut total_mass_kg = self.mass_kg + surface_mass_kg + power_mass_properties.mass_kg;
+        let mut total_mass_kg = self.mass_kg
+            + surface_mass_kg
+            + power_mass_properties.mass_kg
+            + thermal_mass_properties.mass_kg;
         let mut total_moment = surface_moment
-            + power_mass_properties.center_of_mass_body_m * power_mass_properties.mass_kg;
+            + power_mass_properties.center_of_mass_body_m * power_mass_properties.mass_kg
+            + thermal_mass_properties.center_of_mass_body_m * thermal_mass_properties.mass_kg;
         for mount in &mounts {
             let mass = mount.engine.bake_mass_kg();
             total_mass_kg += mass;
@@ -733,7 +794,18 @@ impl VehicleAsset {
             );
         }
         let shift = -assembly_com;
-        let geometry = AeroGeometry::new(panels)?;
+        let mut geometry = AeroGeometry::new(panels)?;
+        // Shield discs join the shared aero summation exactly like panels:
+        // same geometry object, same flow solution, same result. Mounts
+        // stay on the vehicle for identity and validation.
+        for mount in &body_heat_shield_mounts {
+            geometry.blunt_discs.push(AeroBluntDisc {
+                position_body_m: mount.position_body_m,
+                normal_body_m: mount.normal_body_m,
+                area_m2: mount.area_m2(),
+            });
+        }
+        geometry.validate()?;
         // Properties stay in the authoring frame here (hand plus
         // surfaces, always positive-definite); the single recenter to
         // the final COM happens on the built vehicle below, after every
@@ -805,7 +877,9 @@ impl VehicleAsset {
             .with_landing_legs(landing_leg_specs)?
             .with_reaction_wheels(reaction_wheel_banks)?
             .with_parachutes(parachutes)?
-            .with_electrical_power(electrical_power)?;
+            .with_heat_shields(body_heat_shield_mounts)?
+            .with_electrical_power(electrical_power)?
+            .with_thermal(thermal)?;
         if let Some(assembly) = runtime_assembly {
             vehicle = vehicle.with_assembly(assembly)?;
             for cabin in &vehicle.cabins {
@@ -831,6 +905,7 @@ impl VehicleAsset {
         vehicle.bake_reaction_wheel_masses()?;
         vehicle.bake_parachute_masses()?;
         vehicle.bake_electrical_power_masses()?;
+        vehicle.bake_thermal_masses()?;
         for (panel_index, joint) in parked_tags {
             vehicle.aero_geometry.panels[panel_index].fold_index = Some(joint);
         }
@@ -842,6 +917,9 @@ impl VehicleAsset {
         for panel in &mut vehicle.aero_geometry.panels {
             panel.position_body_m = shift_point(panel.position_body_m);
             panel.center_of_pressure_body_m = shift_point(panel.center_of_pressure_body_m);
+        }
+        for disc in &mut vehicle.aero_geometry.blunt_discs {
+            disc.position_body_m = shift_point(disc.position_body_m);
         }
         for joint in &mut vehicle.fold_joints {
             joint.hinge_body_m = shift_point(joint.hinge_body_m);
@@ -908,6 +986,9 @@ impl VehicleAsset {
         for parachute in &mut vehicle.parachutes {
             parachute.position_body_m = shift_point(parachute.position_body_m);
         }
+        for shield in &mut vehicle.heat_shields {
+            shield.position_body_m = shift_point(shield.position_body_m);
+        }
         for battery in &mut vehicle.electrical_power.batteries {
             battery.position_body_m = shift_point(battery.position_body_m);
         }
@@ -919,6 +1000,12 @@ impl VehicleAsset {
         }
         for reactor in &mut vehicle.electrical_power.reactors {
             reactor.position_body_m = shift_point(reactor.position_body_m);
+        }
+        for node in &mut vehicle.thermal.nodes {
+            node.position_body_m = shift_point(node.position_body_m);
+        }
+        for radiator in &mut vehicle.thermal.radiators {
+            radiator.position_body_m = shift_point(radiator.position_body_m);
         }
         for cabin in &mut vehicle.cabins {
             cabin.centroid_body_m = shift_point(cabin.centroid_body_m);
@@ -981,6 +1068,7 @@ fn transform_compiled_body(compiled: &mut CompiledBody, transform: BodyTransform
     }
     for shield in &mut compiled.heat_shields {
         shield.position_body_m = transform.transform_point(shield.position_body_m);
+        shield.normal_body_m = transform.transform_direction(shield.normal_body_m);
     }
     for region in &mut compiled.interior {
         region.centroid_body_m = transform.transform_point(region.centroid_body_m);

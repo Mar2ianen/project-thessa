@@ -8,9 +8,10 @@ mod atmosphere;
 mod high_speed;
 
 pub use aero::{
-    AeroCase, AeroCoefficientTable, AeroCoefficients, AeroConfig, AeroEnvironment, AeroError,
-    AeroGeometry, AeroModel, AeroPanel, AeroPanelLoad, AeroResult, AeroSimdScratch, AeroState,
-    PanelAeroModel, PanelSoA, diederich_lift_slope, evaluate_batch,
+    AeroBluntDisc, AeroCase, AeroCoefficientTable, AeroCoefficients, AeroConfig, AeroDiscLoad,
+    AeroEnvironment, AeroError, AeroForceBreakdown, AeroGeometry, AeroModel, AeroPanel,
+    AeroPanelLoad, AeroResult, AeroSimdScratch, AeroState, PanelAeroModel, PanelSoA,
+    diederich_lift_slope, evaluate_batch,
 };
 pub use atmosphere::{
     AtmosphereComposition, AtmosphereConfig, AtmosphereError, AtmosphereSample, BakedAtmosphere,

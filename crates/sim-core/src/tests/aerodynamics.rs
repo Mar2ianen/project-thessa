@@ -444,6 +444,10 @@ fn hinge_torque_is_panel_moment_translated_to_the_hinge_line() {
         .expect("valid vehicle");
     let result = AeroResult {
         force_body_n: DVec3::Z * 10.0,
+        force_components: AeroForceBreakdown {
+            drag_body_n: DVec3::ZERO,
+            lift_body_n: DVec3::Z * 10.0,
+        },
         moment_body_nm: -DVec3::Y * 20.0,
         dynamic_pressure_pa: 1.0,
         mach: 0.1,
@@ -451,6 +455,10 @@ fn hinge_torque_is_panel_moment_translated_to_the_hinge_line() {
         panel_count: 1,
         panel_loads: Some(vec![AeroPanelLoad {
             force_body_n: DVec3::Z * 10.0,
+            force_components: AeroForceBreakdown {
+                drag_body_n: DVec3::ZERO,
+                lift_body_n: DVec3::Z * 10.0,
+            },
             moment_body_nm: -DVec3::Y * 20.0,
             local_velocity_body_mps: DVec3::X,
             dynamic_pressure_pa: 1.0,
@@ -465,6 +473,7 @@ fn hinge_torque_is_panel_moment_translated_to_the_hinge_line() {
                 pitching_moment: 0.0,
             },
         }]),
+        disc_loads: None,
     };
 
     let hinge_moments = vehicle

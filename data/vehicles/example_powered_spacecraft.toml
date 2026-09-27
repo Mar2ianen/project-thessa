@@ -104,3 +104,54 @@ priority = "flight-control"
 name = "utility-heater"
 rated_power_w = 1800.0
 priority = "utility"
+
+[thermal]
+
+[[thermal.nodes]]
+name = "service-module"
+mass_kg = 400.0
+specific_heat_j_kg_k = 900.0
+initial_temp_k = 280.0
+max_temp_k = 450.0
+emissivity = 0.8
+solar_absorptivity = 0.5
+radiating_area_m2 = 6.0
+solar_exposed_area_m2 = 2.0
+solar_normal_body = [0.0, 0.0, 1.0]
+aero_area_m2 = 1.5
+nose_radius_m = 1.2
+position_body_m = [-0.5, 0.0, 0.0]
+
+[[thermal.nodes]]
+name = "reactor-block"
+mass_kg = 420.0
+specific_heat_j_kg_k = 600.0
+initial_temp_k = 300.0
+max_temp_k = 900.0
+emissivity = 0.7
+solar_absorptivity = 0.4
+radiating_area_m2 = 3.0
+solar_exposed_area_m2 = 0.0
+solar_normal_body = [0.0, 0.0, 1.0]
+aero_area_m2 = 0.0
+nose_radius_m = 1.0
+position_body_m = [0.8, 0.0, -0.4]
+
+[[thermal.links]]
+node_a = "service-module"
+node_b = "reactor-block"
+conductance_w_k = 25.0
+
+[[thermal.radiators]]
+name = "main-radiator-wing"
+attached_node = "reactor-block"
+area_m2 = 8.0
+emissivity = 0.9
+solar_absorptivity = 0.2
+normal_body = [0.0, 0.0, 1.0]
+areal_density_kg_m2 = 5.0
+position_body_m = [0.8, 0.0, 0.8]
+deployment = "foldable"
+deployment_rate_per_s = 0.05
+actuator_power_w = 120.0
+initial_deployment_fraction = 1.0

@@ -1,7 +1,7 @@
 use super::*;
 use thessa_sim_core::{
     AtmosphereComposition, CompiledShaftPowerSource, ElectricalPowerCommand, PropellerDriveCommand,
-    SolarArrayTracking, TurbopropCommand,
+    SolarArrayTracking, SolarFluxSource, ThermalCommand, TurbopropCommand,
 };
 
 #[test]
@@ -174,6 +174,34 @@ fn electrical_power_asset_bakes_cell_arrays_sources_loads_and_center_of_mass() {
         decoded.electrical_power.consumers,
         vehicle.electrical_power.consumers
     );
+
+    // Thermal section: two nodes, one link, one radiator; mass joins COM.
+    assert_eq!(vehicle.thermal.nodes.len(), 2);
+    assert_eq!(vehicle.thermal.links.len(), 1);
+    assert_eq!(vehicle.thermal.radiators.len(), 1);
+    assert!(vehicle.mass_properties.mass_kg > 2_200.0);
+    let thermal_state = vehicle.initial_thermal_state().expect("thermal state");
+    assert_eq!(thermal_state.node_temp_k, vec![280.0, 300.0]);
+    // Wire the reactor's waste heat into its block node and step under sun.
+    let mut heat_command = ThermalCommand::idle_for(&vehicle.thermal, 60.0);
+    heat_command.solar_flux = vec![SolarFluxSource::new(1_360.0, DVec3::Z, 1.0).unwrap()];
+    heat_command.internal_heat_w = vec![0.0, 5_000.0];
+    let (hot_state, heat_report) = vehicle
+        .advance_thermal(&thermal_state, &heat_command)
+        .expect("thermal step");
+    assert!(hot_state.node_temp_k[1] > 300.0);
+    assert!(heat_report.total_internal_heat_w > 0.0);
+    assert!(heat_report.total_rejected_heat_w > 0.0);
+    assert_eq!(heat_report.nodes.len(), 2);
+    assert_eq!(decoded.thermal.nodes.len(), vehicle.thermal.nodes.len());
+    assert_eq!(
+        decoded.thermal.radiators.len(),
+        vehicle.thermal.radiators.len()
+    );
+    assert!(matches!(
+        vehicle.thermal.radiators[0].deployment,
+        thessa_sim_core::RadiatorDeployment::Foldable { .. }
+    ));
     assert_eq!(
         decoded.mass_properties.mass_kg,
         vehicle.mass_properties.mass_kg
@@ -1256,6 +1284,78 @@ fn analyzer_options_preserve_explicit_composition() {
     // Unknown species are refused instead of becoming Earth air.
     assert!(AtmosphereComposition::parse(&default.composition).is_ok());
     assert!(AtmosphereComposition::parse("XYZ").is_err());
+}
+
+#[test]
+fn wing_tile_layer_toggle_bakes_mass_and_lumped_thermal_node() {
+    let asset: VehicleAsset = toml::from_str(
+        r#"
+name = "tiled-wing-test"
+mass_kg = 1000.0
+inertia_body_kg_m2 = [[1000.0, 0.0, 0.0], [0.0, 1000.0, 0.0], [0.0, 0.0, 1000.0]]
+
+[[procedural_surfaces]]
+name = "wing-right"
+span_m = 8.0
+origin_body_m = [0.0, 0.0, 0.0]
+
+[procedural_surfaces.planform]
+[[procedural_surfaces.planform.stations]]
+s = 0.0
+x_le = 0.0
+x_te = 2.0
+[[procedural_surfaces.planform.stations]]
+s = 1.0
+x_le = 0.0
+x_te = 2.0
+
+[procedural_surfaces.bend]
+[[procedural_surfaces.bend.stations]]
+s = 0.0
+z_m = 0.0
+[[procedural_surfaces.bend.stations]]
+s = 1.0
+z_m = 0.0
+
+[procedural_surfaces.sections]
+[[procedural_surfaces.sections.stations]]
+s = 0.0
+incidence_rad = 0.0
+thickness_ratio = 0.0
+[[procedural_surfaces.sections.stations]]
+s = 1.0
+incidence_rad = 0.0
+thickness_ratio = 0.0
+
+[procedural_surfaces.tile_layer]
+tile_size_m = 0.2
+thickness_m = 0.01
+gap_m = 0.02
+density_kg_m3 = 2000.0
+specific_heat_j_kg_k = 800.0
+emissivity = 0.85
+solar_absorptivity = 0.4
+max_temp_k = 1500.0
+nose_radius_m = 0.05
+"#,
+    )
+    .expect("tiled wing TOML should parse");
+    let vehicle = asset.bake().expect("tiled wing should bake");
+    // Rectangular 8x2 wing: one panel, 16 m^2 per side paved both sides.
+    assert_eq!(vehicle.aero_geometry.panels.len(), 1);
+    let fill = (0.2_f64 / 0.22).powi(2);
+    let expected_tiles_kg = 32.0 * 0.01 * 2000.0 * fill;
+    assert!((vehicle.mass_properties.mass_kg - (1000.0 + expected_tiles_kg)).abs() < 1.0e-9);
+    // One lumped tile node rides the thermal system with tile material.
+    assert_eq!(vehicle.thermal.nodes.len(), 1);
+    let tiles = &vehicle.thermal.nodes[0];
+    assert_eq!(tiles.name, "wing-right.tiles");
+    assert!((tiles.mass_kg - expected_tiles_kg).abs() < 1.0e-9);
+    assert_eq!(tiles.max_temp_k, 1500.0);
+    assert!((tiles.radiating_area_m2 - 32.0).abs() < 1.0e-9);
+    assert!((tiles.solar_exposed_area_m2 - 16.0).abs() < 1.0e-9);
+    let state = vehicle.initial_thermal_state().expect("tile state");
+    assert_eq!(state.node_temp_k, vec![280.0]);
 }
 
 #[test]

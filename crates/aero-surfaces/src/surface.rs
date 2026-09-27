@@ -10,6 +10,74 @@ use crate::{
     BendCurve, ControlRegion, FoldJoint, Planform, SectionData, StructuralLayout, SurfaceError,
 };
 
+/// Optional hexagonal thermal-tile layer on a surface: one toggle, not
+/// tile objects. Both sides of the wetted surface are paved with flat
+/// hexagons (flat-to-flat `tile_size_m` on a `tile_size_m + gap_m` pitch);
+/// the compiler derives count, area, mass, centroid, and mean normal from
+/// the compiled panels, and the vehicle baker turns the layer into tile
+/// mass plus one lumped thermal node per surface.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SurfaceTileLayer {
+    /// Hexagon flat-to-flat width in metres.
+    pub tile_size_m: f64,
+    pub thickness_m: f64,
+    /// Expansion gap between neighbors in metres (0 = seamless).
+    pub gap_m: f64,
+    pub density_kg_m3: f64,
+    pub specific_heat_j_kg_k: f64,
+    pub emissivity: f64,
+    pub solar_absorptivity: f64,
+    pub max_temp_k: f64,
+    /// Effective nose radius for Sutton-Graves aero heating on the tile
+    /// node (m): leading-edge radius class of the covered surface.
+    pub nose_radius_m: f64,
+}
+
+impl SurfaceTileLayer {
+    pub fn validate(&self, surface_name: &str) -> Result<(), SurfaceError> {
+        for (value, label) in [
+            (self.tile_size_m, "tile size"),
+            (self.thickness_m, "tile thickness"),
+            (self.density_kg_m3, "tile density"),
+            (self.specific_heat_j_kg_k, "tile specific heat"),
+            (self.max_temp_k, "tile maximum temperature"),
+            (self.nose_radius_m, "tile nose radius"),
+        ] {
+            if !value.is_finite() || value <= 0.0 {
+                return Err(SurfaceError::InvalidSurface(format!(
+                    "surface '{surface_name}' tile layer needs positive finite {label}"
+                )));
+            }
+        }
+        if !self.gap_m.is_finite() || self.gap_m < 0.0 {
+            return Err(SurfaceError::InvalidSurface(format!(
+                "surface '{surface_name}' tile layer needs a finite non-negative gap"
+            )));
+        }
+        if !(0.0..=1.0).contains(&self.solar_absorptivity) || !self.solar_absorptivity.is_finite() {
+            return Err(SurfaceError::InvalidSurface(format!(
+                "surface '{surface_name}' tile absorptivity must be in [0, 1]"
+            )));
+        }
+        if self.emissivity <= 0.0 || self.emissivity > 1.0 || !self.emissivity.is_finite() {
+            return Err(SurfaceError::InvalidSurface(format!(
+                "surface '{surface_name}' tile emissivity must be in (0, 1]"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Hex cell area per tile site (flat-to-flat pitch over √3/2).
+    pub(crate) fn cell_area_m2(self) -> f64 {
+        0.5 * 3.0_f64.sqrt() * (self.tile_size_m + self.gap_m).powi(2)
+    }
+
+    /// Solid fraction of a cell: tile hex area over cell area.
+    pub(crate) fn fill_fraction(self) -> f64 {
+        (self.tile_size_m / (self.tile_size_m + self.gap_m)).powi(2)
+    }
+}
+
 /// How the surface flies: alone or as half of a mirrored pair.
 ///
 /// The finite-surface lift correlation needs the full-aircraft aspect
@@ -77,6 +145,11 @@ pub struct ProceduralSurface {
     /// valid); `Some` is the operator's material and gauge choice.
     #[serde(default)]
     pub structure: Option<StructuralLayout>,
+    /// Hexagonal thermal-tile layer toggle. `None` leaves the surface
+    /// bare; `Some` paves both wetted sides with hex tiles (count, area,
+    /// and mass derived by the compiler, never authored per tile).
+    #[serde(default)]
+    pub tile_layer: Option<SurfaceTileLayer>,
 }
 
 impl ProceduralSurface {
@@ -100,6 +173,7 @@ impl ProceduralSurface {
             controls: Vec::new(),
             folds: Vec::new(),
             structure: None,
+            tile_layer: None,
         }
         .validated()
     }
@@ -135,6 +209,9 @@ impl ProceduralSurface {
         self.sections.validate()?;
         if let Some(layout) = &self.structure {
             layout.validate()?;
+        }
+        if let Some(layer) = &self.tile_layer {
+            layer.validate(&self.name)?;
         }
         for (index, region) in self.controls.iter().enumerate() {
             region.validate(&self.controls[..index])?;

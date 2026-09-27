@@ -1766,6 +1766,7 @@ fn upper_band_drag_matches_full_panels_within_newtons() {
         .unwrap();
     let mut worst_force = 0.0f64;
     let mut worst_moment = 0.0f64;
+    let mut shield_band_probe = None;
     for altitude_m in [280_000.0f64, 300_000.0] {
         let radius = body.radius_m + altitude_m;
         for pitch_deg in [0.0f64, 10.0, 30.0, 90.0] {
@@ -1810,6 +1811,7 @@ fn upper_band_drag_matches_full_panels_within_newtons() {
                 .unwrap();
             worst_force = worst_force.max((band_drag - full.force_body_n).length());
             worst_moment = worst_moment.max(full.moment_body_nm.length());
+            shield_band_probe = Some((kinematics, density));
         }
     }
     assert!(
@@ -1819,6 +1821,18 @@ fn upper_band_drag_matches_full_panels_within_newtons() {
     assert!(
         worst_moment < 25.0,
         "band drops {worst_moment:.1} N·m of panel moment"
+    );
+
+    // The reference-area reduction is calibrated for panel-only geometry.
+    // Shielded craft retain the full shared drag/lift evaluation until their
+    // own upper-band error envelope is pinned.
+    flight.vehicle.aero_geometry.blunt_discs.push(
+        thessa_sim_core::AeroBluntDisc::new(DVec3::ZERO, DVec3::X, 1.0).expect("valid test shield"),
+    );
+    let (kinematics, density) = shield_band_probe.expect("band calibration sample");
+    assert!(
+        flight.upper_band_drag(kinematics, density).is_none(),
+        "shielded geometry must stay in the shared aero solver"
     );
 }
 

@@ -48,6 +48,7 @@ fn representative_surface() -> ProceduralSurface {
             max_dynamic_pressure_pa: None,
         }],
         structure: None,
+        tile_layer: None,
     }
 }
 

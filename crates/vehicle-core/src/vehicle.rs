@@ -11,13 +11,15 @@ use crate::{
     ElectricThrusterCommand, ElectricThrusterMount, ElectricThrusterPoint, ElectricalPowerCommand,
     ElectricalPowerError, ElectricalPowerState, ElectricalPowerSystem, ElectricalPowerTelemetry,
     EngineMount, EstocPoint, FlightCondition, FlightError, FusionTorchCommand, FusionTorchMount,
-    FusionTorchOperatingPoint, JetCommand, JetMount, LandingGearError, LandingLegMassProperties,
-    LandingLegSpec, ParachuteError, ParachuteSpec, PressurizedCabin, PropDrivePoint,
-    PropellerDriveCommand, PropellerDriveMount, PropulsionError, PulsedFusionCommand,
-    PulsedFusionMount, PulsedFusionOperatingPoint, PulsedFusionState, ReactionWheelBankSpec,
-    ReactionWheelError, RigidBodyProperties, SystemMount, TankMount, TurbopropCommand,
-    TurbopropMount, TurbopropOperatingPoint, VehicleAssembly, WheelBodyMassProperties,
-    WheelChassisMassProperties, WheelChassisSpec, WheelChassisState, control_authority,
+    FusionTorchOperatingPoint, HeatShieldMount, JetCommand, JetMount, LandingGearError,
+    LandingLegMassProperties, LandingLegSpec, ParachuteError, ParachuteSpec, PressurizedCabin,
+    PropDrivePoint, PropellerDriveCommand, PropellerDriveMount, PropulsionError,
+    PulsedFusionCommand, PulsedFusionMount, PulsedFusionOperatingPoint, PulsedFusionState,
+    ReactionWheelBankSpec, ReactionWheelError, RigidBodyProperties, ShieldError, SolarOccluder,
+    SystemMount, TankMount, ThermalCommand, ThermalError, ThermalState, ThermalSystem,
+    ThermalTelemetry, TurbopropCommand, TurbopropMount, TurbopropOperatingPoint, VehicleAssembly,
+    WheelBodyMassProperties, WheelChassisMassProperties, WheelChassisSpec, WheelChassisState,
+    control_authority,
 };
 
 pub type StatefulTurbopropWrench = (
@@ -435,6 +437,12 @@ pub struct VehicleDefinition {
     /// the vehicle COM and inertia; canopy forces are evaluated at each mount.
     #[serde(default)]
     pub parachutes: Vec<ParachuteSpec>,
+    /// Blunt heat-shield discs retained for Newtonian aerodynamics (drag
+    /// plus incidence lift). Shield mass already bakes through the fuselage
+    /// hull aggregate; mounts carry force-application geometry only and
+    /// never re-add mass. Empty keeps legacy assets valid.
+    #[serde(default)]
+    pub heat_shields: Vec<HeatShieldMount>,
     /// Fold joints compiled from procedural surfaces (hinge placement in
     /// the compiled mechanism state). The force solver ignores them; the
     /// records and panel ownership are retained for mechanism integration,
@@ -471,6 +479,10 @@ pub struct VehicleDefinition {
     /// and prioritized part loads. Empty keeps legacy vehicles unpowered.
     #[serde(default)]
     pub electrical_power: ElectricalPowerSystem,
+    /// Lumped thermal-node network (conduction, radiation, radiators).
+    /// Empty keeps legacy vehicles without a thermal model.
+    #[serde(default)]
+    pub thermal: ThermalSystem,
 }
 
 /// Mass partition for a contact-active sprung chassis and its unsprung wheel
@@ -781,6 +793,7 @@ impl VehicleDefinition {
             landing_legs: Vec::new(),
             reaction_wheels: Vec::new(),
             parachutes: Vec::new(),
+            heat_shields: Vec::new(),
             fold_joints: Vec::new(),
             cabins: Vec::new(),
             cabin_exits: Vec::new(),
@@ -790,6 +803,7 @@ impl VehicleDefinition {
             control_stations: Vec::new(),
             assembly: None,
             electrical_power: ElectricalPowerSystem::default(),
+            thermal: ThermalSystem::default(),
         };
         definition.validate()?;
         Ok(definition)
@@ -861,6 +875,49 @@ impl VehicleDefinition {
         self.electrical_power
             .advance(state, command)
             .map_err(VehicleError::ElectricalPower)
+    }
+
+    /// Attach a lumped thermal-node network (nodes, links, radiators).
+    pub fn with_thermal(mut self, thermal: ThermalSystem) -> Result<Self, VehicleError> {
+        thermal.validate().map_err(VehicleError::Thermal)?;
+        self.thermal = thermal;
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Create saved runtime node temperatures from authored initial values.
+    pub fn initial_thermal_state(&self) -> Result<ThermalState, VehicleError> {
+        self.thermal.initial_state().map_err(VehicleError::Thermal)
+    }
+
+    /// Advance the vessel-wide thermal network for one simulation step.
+    pub fn advance_thermal(
+        &self,
+        state: &ThermalState,
+        command: &ThermalCommand,
+    ) -> Result<(ThermalState, ThermalTelemetry), VehicleError> {
+        self.thermal
+            .advance(state, command)
+            .map_err(VehicleError::Thermal)
+    }
+
+    /// Own-body solar occluder for one receiver point, derived from the
+    /// baked collision geometry by a CPU ray query (no GPU needed).
+    /// Feed the result into solar-flux occluders alongside planet and
+    /// other-vehicle discs so arrays and thermal nodes share one shadow.
+    /// Empty when nothing blocks the sun, or when the inputs are degenerate
+    /// (a bad direction claims no shadow rather than a wrong one).
+    pub fn own_body_occluder(
+        &self,
+        receiver_body_m: DVec3,
+        sun_direction_body: DVec3,
+    ) -> Option<SolarOccluder> {
+        self.collision_geometry
+            .own_body_occluder(receiver_body_m, sun_direction_body)
+            .map(|(direction_body, angular_radius_rad)| SolarOccluder {
+                direction_body,
+                angular_radius_rad,
+            })
     }
 
     /// Turn bus allocations into commands for installed electric thrusters.
@@ -1103,6 +1160,9 @@ impl VehicleDefinition {
             panel.position_body_m += shift;
             panel.center_of_pressure_body_m += shift;
         }
+        for disc in &mut self.aero_geometry.blunt_discs {
+            disc.position_body_m += shift;
+        }
         for control in &mut self.control_surfaces {
             if let Some(hinge) = &mut control.hinge {
                 hinge.point_body_m += shift;
@@ -1155,6 +1215,15 @@ impl VehicleDefinition {
         for reactor in &mut self.electrical_power.reactors {
             reactor.position_body_m += shift;
         }
+        for node in &mut self.thermal.nodes {
+            node.position_body_m += shift;
+        }
+        for radiator in &mut self.thermal.radiators {
+            radiator.position_body_m += shift;
+        }
+        for shield in &mut self.heat_shields {
+            shield.position_body_m += shift;
+        }
         for cabin in &mut self.cabins {
             cabin.centroid_body_m += shift;
         }
@@ -1184,14 +1253,20 @@ impl VehicleDefinition {
         self.aero_geometry.panels.iter().all(|panel| {
             shifted_point_is_finite(panel.position_body_m)
                 && shifted_point_is_finite(panel.center_of_pressure_body_m)
-        }) && self.control_surfaces.iter().all(|control| {
-            control
-                .hinge
-                .is_none_or(|hinge| shifted_point_is_finite(hinge.point_body_m))
         }) && self
-            .fold_joints
+            .aero_geometry
+            .blunt_discs
             .iter()
-            .all(|joint| shifted_point_is_finite(joint.hinge_body_m))
+            .all(|disc| shifted_point_is_finite(disc.position_body_m))
+            && self.control_surfaces.iter().all(|control| {
+                control
+                    .hinge
+                    .is_none_or(|hinge| shifted_point_is_finite(hinge.point_body_m))
+            })
+            && self
+                .fold_joints
+                .iter()
+                .all(|joint| shifted_point_is_finite(joint.hinge_body_m))
             && self
                 .collision_geometry
                 .parts
@@ -1256,6 +1331,20 @@ impl VehicleDefinition {
                 .reactors
                 .iter()
                 .all(|part| shifted_point_is_finite(part.position_body_m))
+            && self
+                .thermal
+                .nodes
+                .iter()
+                .all(|node| shifted_point_is_finite(node.position_body_m))
+            && self
+                .thermal
+                .radiators
+                .iter()
+                .all(|radiator| shifted_point_is_finite(radiator.position_body_m))
+            && self
+                .heat_shields
+                .iter()
+                .all(|shield| shifted_point_is_finite(shield.position_body_m))
             && self
                 .cabins
                 .iter()
@@ -1330,6 +1419,7 @@ impl VehicleDefinition {
         self.electrical_power
             .validate()
             .map_err(VehicleError::ElectricalPower)?;
+        self.thermal.validate().map_err(VehicleError::Thermal)?;
         for thruster in &self.electric_thrusters {
             if let Some(consumer) = self
                 .electrical_power
@@ -1367,6 +1457,16 @@ impl VehicleDefinition {
                 return Err(VehicleError::InvalidVehicle(format!(
                     "duplicate parachute name '{}'",
                     parachute.name
+                )));
+            }
+        }
+        let mut heat_shield_names = std::collections::HashSet::new();
+        for shield in &self.heat_shields {
+            shield.validate().map_err(VehicleError::HeatShield)?;
+            if !heat_shield_names.insert(shield.name.as_str()) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "duplicate heat-shield mount name '{}'",
+                    shield.name
                 )));
             }
         }
@@ -1708,6 +1808,28 @@ impl VehicleDefinition {
         Ok(self)
     }
 
+    /// Attach blunt heat-shield discs for Newtonian aerodynamics.
+    /// Shield mass already bakes through the fuselage hull aggregate;
+    /// mounts carry force-application geometry only.
+    pub fn with_heat_shields(
+        mut self,
+        heat_shields: Vec<HeatShieldMount>,
+    ) -> Result<Self, VehicleError> {
+        let mut names = std::collections::HashSet::new();
+        for shield in &heat_shields {
+            shield.validate().map_err(VehicleError::HeatShield)?;
+            if !names.insert(shield.name.as_str()) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "duplicate heat-shield mount name '{}'",
+                    shield.name
+                )));
+            }
+        }
+        self.heat_shields = heat_shields;
+        self.validate()?;
+        Ok(self)
+    }
+
     /// Add packed parachute mass and local inertia about the authored vehicle
     /// origin. The asset baker applies the final common COM shift afterward.
     pub fn bake_parachute_masses(&mut self) -> Result<(), VehicleError> {
@@ -1733,6 +1855,22 @@ impl VehicleDefinition {
             .electrical_power
             .mass_properties()
             .map_err(VehicleError::ElectricalPower)?;
+        let mass_kg = self.mass_properties.mass_kg + contribution.mass_kg;
+        let inertia_body_kg_m2 = self.mass_properties.inertia_body_kg_m2
+            + contribution.inertia_body_kg_m2
+            + parallel_axis(contribution.mass_kg, contribution.center_of_mass_body_m);
+        self.mass_properties = RigidBodyProperties::new(mass_kg, inertia_body_kg_m2)
+            .map_err(VehicleError::MassProperties)?;
+        Ok(())
+    }
+
+    /// Add thermal-node and radiator point masses about the authored vehicle
+    /// origin. The baker applies the common COM shift later.
+    pub fn bake_thermal_masses(&mut self) -> Result<(), VehicleError> {
+        let contribution = self
+            .thermal
+            .mass_properties()
+            .map_err(VehicleError::Thermal)?;
         let mass_kg = self.mass_properties.mass_kg + contribution.mass_kg;
         let inertia_body_kg_m2 = self.mass_properties.inertia_body_kg_m2
             + contribution.inertia_body_kg_m2
@@ -3008,6 +3146,8 @@ pub enum VehicleError {
     Parachute(ParachuteError),
     Cabin(CabinError),
     ElectricalPower(ElectricalPowerError),
+    Thermal(ThermalError),
+    HeatShield(ShieldError),
     InvalidControlSurface(String),
     InvalidControlCommand { surface: String, command: f64 },
     ControlCount { expected: usize, actual: usize },
@@ -3039,6 +3179,12 @@ impl fmt::Display for VehicleError {
             }
             Self::ElectricalPower(error) => {
                 write!(formatter, "vehicle electrical-power error: {error}")
+            }
+            Self::Thermal(error) => {
+                write!(formatter, "vehicle thermal error: {error}")
+            }
+            Self::HeatShield(error) => {
+                write!(formatter, "vehicle heat-shield error: {error}")
             }
             Self::InvalidControlSurface(message) => {
                 write!(formatter, "invalid control surface: {message}")
@@ -3485,6 +3631,102 @@ mod tests {
         assert_eq!(moment.x, 0.0);
         assert_eq!(moment.y, 0.0);
         assert!(vehicle.electric_thrusters_wrench_body_n(&[]).is_err());
+    }
+
+    #[test]
+    fn own_hull_shadow_kills_array_output_through_shared_occluders() {
+        // Tall hull box at the origin, array panel 5 m to its side facing
+        // up: a high sun past the hull face is blocked although incidence
+        // alone would generate power.
+        let base = VehicleDefinition::new(
+            "shadow-test",
+            AeroGeometry::new(vec![
+                AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+            ])
+            .expect("geometry"),
+            RigidBodyProperties::new(1_000.0, glam::DMat3::from_diagonal(DVec3::splat(500.0)))
+                .expect("mass"),
+            vec![],
+        )
+        .expect("vehicle");
+        let material = crate::CollisionMaterial::default();
+        let hull = crate::CollisionPart::new(
+            DVec3::ZERO,
+            glam::DQuat::IDENTITY,
+            crate::CollisionShape::Cuboid {
+                half_extents_m: DVec3::new(1.0, 1.0, 10.0),
+            },
+            material,
+        )
+        .expect("hull part");
+        let panel_position = DVec3::new(5.0, 0.0, 0.0);
+        let vehicle = base
+            .with_collision_geometry(
+                crate::CollisionGeometry::new(vec![hull]).expect("hull geometry"),
+            )
+            .expect("attach hull")
+            .with_electrical_power(ElectricalPowerSystem {
+                batteries: vec![],
+                ultracapacitors: vec![],
+                solar_arrays: vec![crate::SolarArraySpec {
+                    name: "deck-array".into(),
+                    cell_count_x: 10,
+                    cell_count_y: 10,
+                    cell_size_x_m: 0.1,
+                    cell_size_y_m: 0.1,
+                    cell_efficiency: 0.25,
+                    cell_areal_density_kg_m2: 2.0,
+                    support_areal_density_kg_m2: 1.0,
+                    panel_u_axis_body: DVec3::X,
+                    panel_v_axis_body: DVec3::Y,
+                    position_body_m: panel_position,
+                    deployment: crate::SolarArrayDeployment::Fixed,
+                    tracking: crate::SolarArrayTracking::Fixed,
+                }],
+                reactors: vec![],
+                consumers: vec![crate::PowerConsumerSpec {
+                    name: "avionics".into(),
+                    rated_power_w: 1_000.0,
+                    priority: crate::PowerPriority::FlightControl,
+                }],
+            })
+            .expect("attach bus");
+        let state = vehicle
+            .initial_electrical_power_state()
+            .expect("power state");
+        // Sun straight up: no own shadow, full 250 W (1 m^2 * 0.25 * 1000).
+        let mut step = ElectricalPowerCommand::idle_for(&vehicle.electrical_power, 1.0);
+        step.solar_flux = vec![crate::SolarFluxSource::new(1_000.0, DVec3::Z, 1.0).expect("flux")];
+        step.consumer_power_w = vec![1_000.0];
+        let (_, report) = vehicle
+            .advance_electrical_power(&state, &step)
+            .expect("lit step");
+        assert!((report.solar_available_power_w - 250.0).abs() < 1.0e-9);
+
+        // Tilted high sun past the hull: incidence alone gives 216.5 W.
+        let tilted = DVec3::new(-0.5, 0.0, 0.866_025_403_784_438_6);
+        let mut bare = crate::SolarFluxSource::new(1_000.0, tilted, 1.0).expect("flux");
+        bare.light_angular_radius_rad = 0.005;
+        step.solar_flux = vec![bare];
+        let (_, unshadowed) = vehicle
+            .advance_electrical_power(&state, &step)
+            .expect("bare step");
+        assert!((unshadowed.solar_available_power_w - 216.506_350_946_109_65).abs() < 1.0e-9);
+
+        // Same sun with the own-body occluder: fully eclipsed.
+        let mut dark = crate::SolarFluxSource::new(1_000.0, tilted, 1.0).expect("flux");
+        dark.light_angular_radius_rad = 0.005;
+        dark.occluders = vec![
+            vehicle
+                .own_body_occluder(panel_position, tilted)
+                .expect("hull must block"),
+        ];
+        step.solar_flux = vec![dark];
+        let (_, shadowed) = vehicle
+            .advance_electrical_power(&state, &step)
+            .expect("shadow step");
+        assert_eq!(shadowed.solar_available_power_w, 0.0);
+        assert_eq!(shadowed.unserved_power_w, 1_000.0);
     }
 
     #[test]

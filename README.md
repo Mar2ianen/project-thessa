@@ -26,7 +26,8 @@ The checked-in vertical slice currently contains:
   assembly connectivity, installed reaction-wheel banks, deployable
   parachutes, and a parameterized wire-free vehicle power bus with batteries,
   ultracapacitors, fission reactors, sun-tracking cell-grid solar arrays with
-  geometric occlusion, and prioritized consumers. The
+  geometric occlusion, prioritized consumers, and a lumped thermal-node
+  network with conduction links and area radiators. The
   implementation is separated into `thessa-aero-core`,
   `thessa-celestial`, `thessa-trajectory`, `thessa-propulsion`, and
   `thessa-vehicle-core`;

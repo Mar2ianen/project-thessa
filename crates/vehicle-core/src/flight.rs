@@ -301,12 +301,14 @@ where
         let mach = airspeed_mps / environment.speed_of_sound_mps;
         AeroResult {
             force_body_n: DVec3::ZERO,
+            force_components: crate::AeroForceBreakdown::ZERO,
             moment_body_nm: DVec3::ZERO,
             dynamic_pressure_pa: 0.0,
             mach: if mach.is_finite() { mach } else { 0.0 },
             reynolds_number: 0.0,
             panel_count: 0,
             panel_loads: None,
+            disc_loads: None,
         }
     } else {
         evaluate_aero(aero_state, environment)?

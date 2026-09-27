@@ -5,12 +5,14 @@ use super::*;
 mod assembly;
 mod power_assets;
 mod propulsion_assets;
+mod thermal_assets;
 mod vehicle_asset;
 #[cfg(test)]
 pub(super) use assembly::AssemblyLinkAsset;
 pub(super) use assembly::{AssemblyAsset, resolve_assembly_links, runtime_assembly};
 pub(super) use power_assets::ElectricalPowerAsset;
 pub(super) use propulsion_assets::*;
+pub(super) use thermal_assets::ThermalAsset;
 pub(super) use vehicle_asset::VehicleAsset;
 
 #[derive(Debug, Deserialize)]

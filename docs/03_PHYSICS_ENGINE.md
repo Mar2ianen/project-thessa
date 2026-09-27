@@ -7,10 +7,11 @@ the paths in `crates/aero-core`, `crates/celestial`, `crates/trajectory`,
 `crates/propulsion`, `crates/vehicle-core`, `crates/flight-control`, and
 `crates/flight-authority`. `crates/sim-core` retains the established aggregate
 API. Vehicle assets already compile procedural bodies and surfaces plus the
-installed propulsion, gear, reaction-wheel, parachute, and shared electrical
-power-bus subsystems described below. Structural fracture, thermal networks,
-full fluid system graphs, and detailed electrical-network compilation beyond
-the ideal shared bus remain future work.
+installed propulsion, gear, reaction-wheel, parachute, shared electrical
+power-bus, and lumped thermal-node subsystems described below. Structural
+fracture, full fluid system graphs, detailed electrical-network compilation
+beyond the ideal shared bus, and structural/thermal graph coupling remain
+future work.
 
 ## 3.1. Ownership and units
 
@@ -268,10 +269,12 @@ Still future work:
 
 ## 3.11. Thermal, structural, and fluid systems
 
-These are architectural requirements, not shipped simulation features yet:
+The lumped vehicle thermal network is shipped (see
+`details/10_THERMAL_SYSTEM.md`): thermal nodes joined by conductance links,
+combined aerodynamic/engine/solar heating in one graph, background/radiator
+rejection, overheat telemetry, baker integration, and regression coverage.
+Still architectural requirements, not shipped features:
 
-- thermal nodes connected by conductance/radiation edges;
-- aerodynamic, engine, and solar heating in the same thermal graph;
 - temperature-dependent material strength;
 - structural topology changes that update mass, inertia, aero, and thermal
   connectivity;
@@ -314,7 +317,7 @@ cargo bench -p thessa-sim-core --bench affine_prop
 ## 3.13. Non-goals of the current slice
 
 The current physics slice does not provide final planetary ephemerides,
-CFD, full aeroelasticity, structural fracture, thermal propagation,
-factory/logistics simulation, or production networking. Each of those needs an
-explicit state contract, error/validation plan, and benchmark before it should
-be called implemented.
+CFD, full aeroelasticity, structural fracture, grid-resolved thermal
+propagation, factory/logistics simulation, or production networking. Each of
+those needs an explicit state contract, error/validation plan, and benchmark
+before it should be called implemented.

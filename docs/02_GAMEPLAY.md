@@ -69,7 +69,12 @@ electrical bus with battery storage, fission generation, fixed/foldable
 cell-grid arrays, rated consumers, power priorities, and mass/inertia. Parts
 join the bus implicitly; wire routing is not authored. An in-game parametric
 editor and design library, automatic power-demand coupling for every actuator,
-full fluid/thermal/structural graphs, and damage topology are future work.
+automatic engine-to-node heat wiring, full fluid/structural graphs,
+temperature-dependent strength, shield thermal protection/ablation, and damage
+topology are future work. Heat-shield discs already enter the shared aero
+drag/lift force result; wing tile layers already bake their mass and lumped
+thermal nodes. The baker also compiles a lumped thermal-node network (nodes,
+links, radiators) with solar/aero/internal heating and mass/inertia.
 
 ## 2.5. Flight and fly-by-wire
 
@@ -156,8 +161,9 @@ shortage, actuator saturation, structural damage, and service/maintenance.
 Damage should alter physical capability and topology rather than automatically
 explode or despawn an object.
 
-Structural and thermal graphs are not in the current runtime, so this section
-remains a design constraint for future implementation.
+Structural graphs are not in the current runtime, and the lumped thermal
+network reports overheating without modeling thermal damage yet, so this
+section remains a design constraint for future implementation.
 
 ## 2.11. Multiplayer direction
 

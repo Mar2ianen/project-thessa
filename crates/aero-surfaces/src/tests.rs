@@ -79,6 +79,55 @@ fn rectangular_wing_matches_closed_form() {
 }
 
 #[test]
+fn tile_layer_toggle_derives_count_area_mass_centroid_and_normal() {
+    let mut surface = rectangular(8.0, 2.0);
+    let bare = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    assert!(bare.tile_layer.is_none());
+    surface.tile_layer = Some(crate::SurfaceTileLayer {
+        tile_size_m: 0.2,
+        thickness_m: 0.01,
+        gap_m: 0.02,
+        density_kg_m3: 2000.0,
+        specific_heat_j_kg_k: 800.0,
+        emissivity: 0.85,
+        solar_absorptivity: 0.4,
+        max_temp_k: 1500.0,
+        nose_radius_m: 0.05,
+    });
+    let compiled = compile_surface(
+        &surface,
+        &CompileOptions::default(),
+        &MechanismState::deployed(),
+    )
+    .unwrap();
+    let tiles = compiled.tile_layer.as_ref().expect("tiles");
+    // One side is 16 m^2; hex cell (√3/2)·0.22²; counts floor per side.
+    let cell = 0.5 * 3.0_f64.sqrt() * 0.22_f64.powi(2);
+    assert_eq!(tiles.tile_count, 2 * (16.0 / cell).floor() as u64);
+    assert!((tiles.area_m2 - 32.0).abs() < 1.0e-9);
+    let fill = (0.2_f64 / 0.22).powi(2);
+    assert!((tiles.mass_kg - 32.0 * 0.01 * 2000.0 * fill).abs() < 1.0e-9);
+    assert!((tiles.centroid_body_m - compiled.panels[0].position_body_m).length() < 1.0e-12);
+    assert!((tiles.normal_body_m - DVec3::Z).length() < 1.0e-12);
+    assert!((tiles.thickness_m - 0.01).abs() < 1.0e-12);
+    // A degenerate layer fails closed instead of paving NaNs.
+    surface.tile_layer.as_mut().expect("layer").tile_size_m = 0.0;
+    assert!(
+        compile_surface(
+            &surface,
+            &CompileOptions::default(),
+            &MechanismState::deployed()
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn tapered_swept_wing_matches_closed_form() {
     // Span 10, root 3, tip 1, tip leading edge 2 m aft.
     let taper: f64 = 1.0 / 3.0;
@@ -95,6 +144,7 @@ fn tapered_swept_wing_matches_closed_form() {
         controls: Vec::new(),
         folds: Vec::new(),
         structure: None,
+        tile_layer: None,
     };
     let compiled =
         compile_surface(&surface, &tight_options(), &MechanismState::deployed()).unwrap();
@@ -224,6 +274,7 @@ fn tolerance_tightening_refines_zones_without_moving_geometry() {
         controls: Vec::new(),
         folds: Vec::new(),
         structure: None,
+        tile_layer: None,
     };
     let coarse = compile_surface(
         &tapered,
@@ -1121,6 +1172,7 @@ fn error_budget_yields_minimal_panels_at_certified_error() {
         controls: Vec::new(),
         folds: Vec::new(),
         structure: None,
+        tile_layer: None,
     };
     let optimized = compile_surface(
         &tapered,
@@ -1500,6 +1552,7 @@ fn vertical_fin(roll_deg: f64) -> ProceduralSurface {
         controls: vec![rudder],
         folds: Vec::new(),
         structure: None,
+        tile_layer: None,
     }
 }
 
@@ -1661,6 +1714,7 @@ fn v_tail_half(mirror: bool) -> ProceduralSurface {
         controls: vec![rv],
         folds: Vec::new(),
         structure: None,
+        tile_layer: None,
     }
 }
 
@@ -2234,6 +2288,7 @@ fn fuel_volume_ignores_panelization() {
         controls: Vec::new(),
         folds: Vec::new(),
         structure: None,
+        tile_layer: None,
     };
     let mut layout = crate::StructuralLayout::metal_baseline(200_000.0);
     layout.skin_material = SolidMaterial::aluminum_7075();
@@ -2621,6 +2676,7 @@ fn control_regions_do_not_move_structural_mass() {
             controls: Vec::new(),
             folds: Vec::new(),
             structure: None,
+            tile_layer: None,
         };
         if with_aileron {
             let (aileron, _) = crate::preset::aileron("aileron", (0.0, 1.0)).unwrap();

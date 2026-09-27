@@ -333,6 +333,11 @@ impl AeroPanel {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AeroGeometry {
     pub panels: Vec<AeroPanel>,
+    /// Blunt heat-shield discs: Newtonian impact zones evaluated by the
+    /// shared model in the same summation as the panels (one flow solution,
+    /// one result). Empty for vehicles without shields.
+    #[serde(default)]
+    pub blunt_discs: Vec<AeroBluntDisc>,
 }
 
 impl AeroGeometry {
@@ -342,17 +347,192 @@ impl AeroGeometry {
                 "aero geometry needs at least one panel".into(),
             ));
         }
-        let geometry = Self { panels };
+        let geometry = Self {
+            panels,
+            blunt_discs: Vec::new(),
+        };
         geometry.validate()?;
         Ok(geometry)
+    }
+
+    /// Attach blunt-disc zones (heat shields) to a panel geometry.
+    pub fn with_blunt_discs(mut self, blunt_discs: Vec<AeroBluntDisc>) -> Result<Self, AeroError> {
+        self.blunt_discs = blunt_discs;
+        self.validate()?;
+        Ok(self)
     }
 
     pub fn validate(&self) -> Result<(), AeroError> {
         for panel in &self.panels {
             panel.validate()?;
         }
+        for disc in &self.blunt_discs {
+            disc.validate()?;
+        }
         Ok(())
     }
+}
+
+/// One blunt heat-shield disc: flat circular face with an outward normal.
+/// Force follows Newtonian impact theory (`F = −2·q·A·c²·n` on the windward
+/// side, zero in the Newtonian shadow), so incidence lift and drag emerge
+/// from geometry with no authored coefficients. Hypersonic-oriented;
+/// subsonic disc accuracy is future work.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AeroBluntDisc {
+    /// Disc center in body metres (moment arm origin).
+    pub position_body_m: DVec3,
+    /// Outward unit normal in body coordinates.
+    pub normal_body_m: DVec3,
+    pub area_m2: f64,
+}
+
+/// Shared aerodynamic force contract for every local aero zone.
+///
+/// Drag is the force component parallel to the local flow (opposite the
+/// airstream); lift is the complete component perpendicular to that flow.
+/// For lifting panels, `lift` includes side-force as well as the panel's
+/// designated lift-axis force. Domain-specific models such as Newtonian
+/// shield impact produce the same pair without adding a second force path.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct AeroForceBreakdown {
+    pub drag_body_n: DVec3,
+    pub lift_body_n: DVec3,
+}
+
+impl AeroForceBreakdown {
+    pub const ZERO: Self = Self {
+        drag_body_n: DVec3::ZERO,
+        lift_body_n: DVec3::ZERO,
+    };
+
+    pub fn total_force_body_n(self) -> DVec3 {
+        self.drag_body_n + self.lift_body_n
+    }
+
+    fn add_assign(&mut self, other: Self) {
+        self.drag_body_n += other.drag_body_n;
+        self.lift_body_n += other.lift_body_n;
+    }
+}
+
+fn panel_force_breakdown(
+    velocity_direction: DVec3,
+    lift_axis: DVec3,
+    side_axis: DVec3,
+    dynamic_pressure_pa: f64,
+    area_m2: f64,
+    exposure: f64,
+    coefficients: &AeroCoefficients,
+) -> AeroForceBreakdown {
+    let scale = exposure * dynamic_pressure_pa * area_m2;
+    AeroForceBreakdown {
+        drag_body_n: -velocity_direction * (scale * coefficients.drag),
+        lift_body_n: scale
+            * (project_perpendicular(lift_axis, velocity_direction) * coefficients.lift
+                - project_perpendicular(side_axis, velocity_direction) * coefficients.side_force),
+    }
+}
+
+impl AeroBluntDisc {
+    pub fn new(
+        position_body_m: DVec3,
+        normal_body_m: DVec3,
+        area_m2: f64,
+    ) -> Result<Self, AeroError> {
+        let disc = Self {
+            position_body_m,
+            normal_body_m,
+            area_m2,
+        };
+        disc.validate()?;
+        Ok(disc)
+    }
+
+    pub fn validate(self) -> Result<(), AeroError> {
+        if !self.position_body_m.is_finite() {
+            return Err(AeroError::InvalidGeometry(
+                "blunt-disc position must be finite".into(),
+            ));
+        }
+        if !self.normal_body_m.is_finite() || (self.normal_body_m.length() - 1.0).abs() > 1.0e-9 {
+            return Err(AeroError::InvalidGeometry(
+                "blunt-disc normal must be finite and unit length".into(),
+            ));
+        }
+        if !self.area_m2.is_finite() || self.area_m2 <= 0.0 {
+            return Err(AeroError::InvalidGeometry(
+                "blunt-disc area must be positive and finite".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Per-disc load breakdown, parallel to [`AeroPanelLoad`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AeroDiscLoad {
+    pub force_body_n: DVec3,
+    pub force_components: AeroForceBreakdown,
+    pub moment_body_nm: DVec3,
+    pub local_velocity_body_mps: DVec3,
+    pub dynamic_pressure_pa: f64,
+}
+
+/// Newtonian blunt-disc forces in body axes, sharing the caller's flow
+/// state: local velocity includes `omega × r` exactly like the panel path,
+/// and each disc uses its own local dynamic pressure. Degenerate flow
+/// contributes zero loads (never an error: vacuum must stay cheap).
+fn evaluate_disc_loads(
+    discs: &[AeroBluntDisc],
+    state: AeroState,
+    density_kg_m3: f64,
+    wind_velocity_body_mps: DVec3,
+    record_loads: bool,
+) -> Result<(AeroForceBreakdown, DVec3, Option<Vec<AeroDiscLoad>>), AeroError> {
+    let mut force_components = AeroForceBreakdown::ZERO;
+    let mut moment_body_nm = DVec3::ZERO;
+    let mut loads = record_loads.then(Vec::new);
+    for disc in discs {
+        let local_velocity = state.velocity_body_mps
+            + state.angular_velocity_body_rps.cross(disc.position_body_m)
+            - wind_velocity_body_mps;
+        let local_speed = finite_length(local_velocity, "blunt-disc local velocity")?;
+        let mut components = AeroForceBreakdown::ZERO;
+        let mut local_q = 0.0;
+        if local_speed > EPS_SPEED_MPS && density_kg_m3 > 0.0 {
+            local_q = dynamic_pressure(density_kg_m3, local_speed)?;
+            let velocity_direction = local_velocity / local_speed;
+            let incidence = disc.normal_body_m.dot(velocity_direction).max(0.0);
+            if incidence > 0.0 {
+                let normal_force =
+                    -2.0 * local_q * disc.area_m2 * incidence.powi(2) * disc.normal_body_m;
+                // A shield's impact pressure remains geometry-derived.
+                // Split its resultant into the same streamwise drag and
+                // cross-flow lift contract used by panel zones.
+                components.drag_body_n = velocity_direction * normal_force.dot(velocity_direction);
+                components.lift_body_n = normal_force - components.drag_body_n;
+            }
+        }
+        let force_body_n = components.total_force_body_n();
+        force_components.add_assign(components);
+        moment_body_nm += disc.position_body_m.cross(force_body_n);
+        if let Some(recorded) = &mut loads {
+            recorded.push(AeroDiscLoad {
+                force_body_n,
+                force_components: components,
+                moment_body_nm: disc.position_body_m.cross(force_body_n),
+                local_velocity_body_mps: local_velocity,
+                dynamic_pressure_pa: local_q,
+            });
+        }
+        if !force_body_n.is_finite() || !moment_body_nm.is_finite() {
+            return Err(AeroError::InvalidState(
+                "blunt-disc force or moment is non-finite".into(),
+            ));
+        }
+    }
+    Ok((force_components, moment_body_nm, loads))
 }
 
 /// Analytic panel-model knobs. This is a compact engineering model rather
@@ -864,23 +1044,31 @@ impl AeroCoefficientTable {
     }
 }
 
-/// One complete local aerodynamic solution. `panel_loads` is intentionally
-/// optional: the authoritative flight path can avoid per-frame allocations,
-/// while debug/telemetry can request the detailed panel breakdown.
+/// One complete local aerodynamic solution. Per-zone detail vectors are
+/// intentionally optional: the authoritative flight path can avoid
+/// per-frame allocations, while debug/telemetry can request panel and shield
+/// breakdowns.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AeroResult {
     pub force_body_n: DVec3,
+    /// Total-force decomposition under the shared drag/lift contract. Its
+    /// sum equals `force_body_n`.
+    pub force_components: AeroForceBreakdown,
     pub moment_body_nm: DVec3,
     pub dynamic_pressure_pa: f64,
     pub mach: f64,
     pub reynolds_number: f64,
     pub panel_count: usize,
     pub panel_loads: Option<Vec<AeroPanelLoad>>,
+    /// Blunt-disc loads parallel to `geometry.blunt_discs`, recorded under
+    /// the same detailed flag as `panel_loads`.
+    pub disc_loads: Option<Vec<AeroDiscLoad>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AeroPanelLoad {
     pub force_body_n: DVec3,
+    pub force_components: AeroForceBreakdown,
     pub moment_body_nm: DVec3,
     pub local_velocity_body_mps: DVec3,
     pub dynamic_pressure_pa: f64,
@@ -1109,6 +1297,7 @@ fn lane_flow(
 fn parked_load(lane: &LaneFlow) -> AeroPanelLoad {
     AeroPanelLoad {
         force_body_n: DVec3::ZERO,
+        force_components: AeroForceBreakdown::ZERO,
         moment_body_nm: DVec3::ZERO,
         local_velocity_body_mps: lane.local_velocity,
         dynamic_pressure_pa: 0.0,
@@ -1211,7 +1400,7 @@ impl PanelAeroModel {
                 "freestream Reynolds number is non-finite".into(),
             ));
         }
-        let mut force_body_n = DVec3::ZERO;
+        let mut force_components = AeroForceBreakdown::ZERO;
         let mut moment_body_nm = DVec3::ZERO;
         let mut panel_loads = record_panel_loads.then(Vec::new);
 
@@ -1224,6 +1413,7 @@ impl PanelAeroModel {
                 if let Some(loads) = &mut panel_loads {
                     loads.push(AeroPanelLoad {
                         force_body_n: DVec3::ZERO,
+                        force_components: AeroForceBreakdown::ZERO,
                         moment_body_nm: DVec3::ZERO,
                         local_velocity_body_mps: local_velocity,
                         dynamic_pressure_pa: 0.0,
@@ -1284,13 +1474,16 @@ impl PanelAeroModel {
                 ));
             }
             let local_q = dynamic_pressure(environment.density_kg_m3, local_speed)?;
-            let lift_direction = project_perpendicular(lift_axis, velocity_direction);
-            let side_direction = project_perpendicular(side_axis, velocity_direction);
-            let force = panel.exposure
-                * local_q
-                * panel.area_m2
-                * (-velocity_direction * coefficients.drag + lift_direction * coefficients.lift
-                    - side_direction * coefficients.side_force);
+            let panel_components = panel_force_breakdown(
+                velocity_direction,
+                lift_axis,
+                side_axis,
+                local_q,
+                panel.area_m2,
+                panel.exposure,
+                &coefficients,
+            );
+            let force = panel_components.total_force_body_n();
             let aerodynamic_moment = side_axis
                 * (local_q * panel.area_m2 * panel.chord_m * coefficients.pitching_moment);
             let reduced_rates = DVec3::new(
@@ -1325,11 +1518,12 @@ impl PanelAeroModel {
                     "aero force or moment is non-finite".into(),
                 ));
             }
-            force_body_n += force;
+            force_components.add_assign(panel_components);
             moment_body_nm += moment;
             if let Some(loads) = &mut panel_loads {
                 loads.push(AeroPanelLoad {
                     force_body_n: force,
+                    force_components: panel_components,
                     moment_body_nm: moment,
                     local_velocity_body_mps: local_velocity,
                     dynamic_pressure_pa: local_q,
@@ -1342,6 +1536,23 @@ impl PanelAeroModel {
             }
         }
 
+        if !force_components.total_force_body_n().is_finite() || !moment_body_nm.is_finite() {
+            return Err(AeroError::InvalidState(
+                "summed aero force or moment is non-finite".into(),
+            ));
+        }
+        // Blunt shield discs share the panel flow solution: same state,
+        // same density and wind, per-disc local velocity with spin.
+        let (disc_components, disc_moment, disc_loads) = evaluate_disc_loads(
+            &geometry.blunt_discs,
+            state,
+            environment.density_kg_m3,
+            environment.wind_velocity_body_mps,
+            record_panel_loads,
+        )?;
+        force_components.add_assign(disc_components);
+        moment_body_nm += disc_moment;
+        let force_body_n = force_components.total_force_body_n();
         if !force_body_n.is_finite() || !moment_body_nm.is_finite() {
             return Err(AeroError::InvalidState(
                 "summed aero force or moment is non-finite".into(),
@@ -1349,12 +1560,14 @@ impl PanelAeroModel {
         }
         Ok(AeroResult {
             force_body_n,
+            force_components,
             moment_body_nm,
             dynamic_pressure_pa: freestream_dynamic_pressure,
             mach,
             reynolds_number,
             panel_count: geometry.panels.len(),
             panel_loads,
+            disc_loads,
         })
     }
 
@@ -1403,7 +1616,7 @@ impl PanelAeroModel {
                 "freestream Reynolds number is non-finite".into(),
             ));
         }
-        let mut force_body_n = DVec3::ZERO;
+        let mut force_components = AeroForceBreakdown::ZERO;
         let mut moment_body_nm = DVec3::ZERO;
         let mut panel_loads = record_panel_loads.then(Vec::new);
 
@@ -1433,13 +1646,15 @@ impl PanelAeroModel {
                     "aero coefficients must be finite with non-negative drag".into(),
                 ));
             }
-            let (force, moment) =
+            let (panel_components, moment) =
                 self.assemble_lane(state.angular_velocity_body_rps, &lane, &coefficients)?;
-            force_body_n += force;
+            let force = panel_components.total_force_body_n();
+            force_components.add_assign(panel_components);
             moment_body_nm += moment;
             if let Some(loads) = &mut panel_loads {
                 loads.push(AeroPanelLoad {
                     force_body_n: force,
+                    force_components: panel_components,
                     moment_body_nm: moment,
                     local_velocity_body_mps: lane.local_velocity,
                     dynamic_pressure_pa: lane.local_q,
@@ -1451,14 +1666,33 @@ impl PanelAeroModel {
                 });
             }
         }
+        // Blunt discs share the lane flow solution (scalar tail: one or
+        // two zones never earn SIMD lanes).
+        let (disc_components, disc_moment, disc_loads) = evaluate_disc_loads(
+            &panels.discs,
+            state,
+            environment.density_kg_m3,
+            environment.wind_velocity_body_mps,
+            record_panel_loads,
+        )?;
+        force_components.add_assign(disc_components);
+        moment_body_nm += disc_moment;
+        let force_body_n = force_components.total_force_body_n();
+        if !force_body_n.is_finite() || !moment_body_nm.is_finite() {
+            return Err(AeroError::InvalidState(
+                "summed aero force or moment is non-finite".into(),
+            ));
+        }
         Ok(AeroResult {
             force_body_n,
+            force_components,
             moment_body_nm,
             dynamic_pressure_pa: freestream_dynamic_pressure,
             mach,
             reynolds_number,
             panel_count: panels.count,
             panel_loads,
+            disc_loads,
         })
     }
 
@@ -1678,7 +1912,7 @@ impl PanelAeroModel {
             s.cm[index] = coefficients.pitching_moment;
         }
 
-        let mut force_body_n = DVec3::ZERO;
+        let mut force_components = AeroForceBreakdown::ZERO;
         let mut moment_body_nm = DVec3::ZERO;
         let mut panel_loads = record_panel_loads.then(Vec::new);
         for index in 0..n {
@@ -1707,13 +1941,15 @@ impl PanelAeroModel {
                 side_force: s.cy[index] * panels.side_scale[index],
                 pitching_moment: s.cm[index],
             };
-            let (force, moment) =
+            let (panel_components, moment) =
                 self.assemble_lane(state.angular_velocity_body_rps, lane, &coefficients)?;
-            force_body_n += force;
+            let force = panel_components.total_force_body_n();
+            force_components.add_assign(panel_components);
             moment_body_nm += moment;
             if let Some(loads) = &mut panel_loads {
                 loads.push(AeroPanelLoad {
                     force_body_n: force,
+                    force_components: panel_components,
                     moment_body_nm: moment,
                     local_velocity_body_mps: lane.local_velocity,
                     dynamic_pressure_pa: lane.local_q,
@@ -1726,6 +1962,22 @@ impl PanelAeroModel {
             }
         }
 
+        if !force_components.total_force_body_n().is_finite() || !moment_body_nm.is_finite() {
+            return Err(AeroError::InvalidState(
+                "summed aero force or moment is non-finite".into(),
+            ));
+        }
+        // Blunt discs share the lane flow solution (scalar tail).
+        let (disc_components, disc_moment, disc_loads) = evaluate_disc_loads(
+            &panels.discs,
+            state,
+            environment.density_kg_m3,
+            environment.wind_velocity_body_mps,
+            record_panel_loads,
+        )?;
+        force_components.add_assign(disc_components);
+        moment_body_nm += disc_moment;
+        let force_body_n = force_components.total_force_body_n();
         if !force_body_n.is_finite() || !moment_body_nm.is_finite() {
             return Err(AeroError::InvalidState(
                 "summed aero force or moment is non-finite".into(),
@@ -1733,12 +1985,14 @@ impl PanelAeroModel {
         }
         Ok(AeroResult {
             force_body_n,
+            force_components,
             moment_body_nm,
             dynamic_pressure_pa: freestream_dynamic_pressure,
             mach,
             reynolds_number,
             panel_count: panels.count,
             panel_loads,
+            disc_loads,
         })
     }
 
@@ -1773,17 +2027,20 @@ impl PanelAeroModel {
         angular_velocity_body_rps: DVec3,
         lane: &LaneFlow,
         coefficients: &AeroCoefficients,
-    ) -> Result<(DVec3, DVec3), AeroError> {
+    ) -> Result<(AeroForceBreakdown, DVec3), AeroError> {
         if !lane.active {
-            return Ok((DVec3::ZERO, DVec3::ZERO));
+            return Ok((AeroForceBreakdown::ZERO, DVec3::ZERO));
         }
-        let lift_direction = project_perpendicular(lane.lift_axis, lane.velocity_direction);
-        let side_direction = project_perpendicular(lane.side_axis, lane.velocity_direction);
-        let force = lane.exposure
-            * lane.local_q
-            * lane.area
-            * (-lane.velocity_direction * coefficients.drag + lift_direction * coefficients.lift
-                - side_direction * coefficients.side_force);
+        let force_components = panel_force_breakdown(
+            lane.velocity_direction,
+            lane.lift_axis,
+            lane.side_axis,
+            lane.local_q,
+            lane.area,
+            lane.exposure,
+            coefficients,
+        );
+        let force = force_components.total_force_body_n();
         let aerodynamic_moment =
             lane.side_axis * (lane.local_q * lane.area * lane.chord * coefficients.pitching_moment);
         let reduced_rates = DVec3::new(
@@ -1815,7 +2072,7 @@ impl PanelAeroModel {
                 "aero force or moment is non-finite".into(),
             ));
         }
-        Ok((force, moment))
+        Ok((force_components, moment))
     }
 
     fn coefficients(
@@ -1916,6 +2173,9 @@ pub struct PanelSoA {
     pub thickness_ratio: Vec<f64>,
     pub deflection: Vec<f64>,
     pub exposure: Vec<f64>,
+    /// Blunt shield discs ride alongside the lanes (few zones: evaluated
+    /// scalarly after the panel kernels, same flow solution).
+    pub discs: Vec<AeroBluntDisc>,
 }
 
 /// Push helper keeping every lane aligned; a partial push on error would
@@ -1979,6 +2239,7 @@ impl PanelSoA {
             thickness_ratio: Vec::with_capacity(geometry.panels.len()),
             deflection: Vec::with_capacity(geometry.panels.len()),
             exposure: Vec::with_capacity(geometry.panels.len()),
+            discs: geometry.blunt_discs.clone(),
         };
         for panel in &geometry.panels {
             let chord = normalize_axis(panel.chord_axis_body, "chord axis")?;
@@ -2253,4 +2514,220 @@ fn lerp(low: f64, high: f64, t: f64) -> f64 {
 pub(crate) fn smoothstep(edge0: f64, edge1: f64, value: f64) -> f64 {
     let t = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+#[cfg(test)]
+mod blunt_disc_tests {
+    use super::*;
+    use glam::DVec3;
+
+    fn disc(normal: DVec3) -> AeroBluntDisc {
+        AeroBluntDisc::new(DVec3::new(2.0, 0.0, 0.0), normal, std::f64::consts::PI)
+            .expect("valid disc")
+    }
+
+    fn state(velocity: DVec3) -> AeroState {
+        AeroState::new(velocity, DVec3::ZERO)
+    }
+
+    #[test]
+    fn face_on_disc_matches_newtonian_drag() {
+        // q = 0.5·0.01·3000² = 45000 Pa; A = π; F = 2·q·A straight back.
+        let (force, moment, _) = evaluate_disc_loads(
+            &[disc(DVec3::X)],
+            state(DVec3::new(3_000.0, 0.0, 0.0)),
+            0.01,
+            DVec3::ZERO,
+            false,
+        )
+        .expect("valid local flow");
+        let expected = -2.0 * 45_000.0 * std::f64::consts::PI;
+        assert!((force.drag_body_n.x - expected).abs() < 1.0e-6 * expected.abs());
+        assert_eq!(force.lift_body_n, DVec3::ZERO);
+        assert_eq!(force.total_force_body_n().y, 0.0);
+        assert_eq!(force.total_force_body_n().z, 0.0);
+        // Push through the disc station on the axis: r×F = 0.
+        assert_eq!(moment, DVec3::ZERO);
+    }
+
+    #[test]
+    fn incidence_splits_drag_and_lift_with_lever_arm_moment() {
+        // 45° incidence: c² = 1/2, push along −n splits evenly.
+        let tilt = DVec3::new(1.0, 0.0, 1.0).normalize();
+        let (force, moment, _) = evaluate_disc_loads(
+            &[disc(tilt)],
+            state(DVec3::new(3_000.0, 0.0, 0.0)),
+            0.01,
+            DVec3::ZERO,
+            false,
+        )
+        .expect("valid local flow");
+        let leg = -45_000.0 * std::f64::consts::PI * std::f64::consts::FRAC_1_SQRT_2;
+        assert!((force.drag_body_n.x - leg).abs() < 1.0e-6 * leg.abs());
+        assert!((force.lift_body_n.z - leg).abs() < 1.0e-6 * leg.abs());
+        assert_eq!(force.drag_body_n.y, 0.0);
+        assert_eq!(force.lift_body_n.x, 0.0);
+        // r = (2,0,0) × F: moment about Y only.
+        assert!((moment.y + 2.0 * force.total_force_body_n().z).abs() < 1.0e-9);
+        assert_eq!(moment.x, 0.0);
+        assert_eq!(moment.z, 0.0);
+    }
+
+    #[test]
+    fn leeward_and_degenerate_flow_contribute_nothing() {
+        let discs = [disc(DVec3::X)];
+        // Flow from behind the face: Newtonian shadow, zero load.
+        let (lee, _, _) = evaluate_disc_loads(
+            &discs,
+            state(DVec3::new(-3_000.0, 0.0, 0.0)),
+            0.01,
+            DVec3::ZERO,
+            false,
+        )
+        .expect("valid local flow");
+        assert_eq!(lee, AeroForceBreakdown::ZERO);
+        // Vacuum and rest sum to zero, never an error.
+        let (vacuum, _, vacuum_loads) = evaluate_disc_loads(
+            &discs,
+            state(DVec3::new(3_000.0, 0.0, 0.0)),
+            0.0,
+            DVec3::ZERO,
+            true,
+        )
+        .expect("valid local flow");
+        assert_eq!(vacuum, AeroForceBreakdown::ZERO);
+        let vacuum_loads = vacuum_loads.expect("detailed loads");
+        assert_eq!(vacuum_loads.len(), discs.len());
+        assert_eq!(vacuum_loads[0].force_components, AeroForceBreakdown::ZERO);
+        assert_eq!(vacuum_loads[0].dynamic_pressure_pa, 0.0);
+        let (rest, _, _) =
+            evaluate_disc_loads(&discs, state(DVec3::ZERO), 0.01, DVec3::ZERO, false)
+                .expect("valid rest state");
+        assert_eq!(rest, AeroForceBreakdown::ZERO);
+    }
+
+    #[test]
+    fn spin_enters_disc_local_velocity_like_panels() {
+        // Disc 2 m up +Z, spinning about +Y at 1 rad/s:
+        // ω×r = Y×2Z = +2X, so local flow is (3002, 0, 0).
+        let spinning = AeroState::new(DVec3::new(3_000.0, 0.0, 0.0), DVec3::Y);
+        let zb = AeroBluntDisc::new(DVec3::new(0.0, 0.0, 2.0), DVec3::X, 1.0).expect("disc");
+        let (_, _, loads) = evaluate_disc_loads(&[zb], spinning, 0.01, DVec3::ZERO, true)
+            .expect("valid spinning flow");
+        let recorded = loads.expect("recorded");
+        assert!(
+            (recorded[0].local_velocity_body_mps - DVec3::new(3_002.0, 0.0, 0.0)).length() < 1.0e-9
+        );
+        // Local q uses the spun-up speed, not the freestream one.
+        let expected_q = 0.5 * 0.01 * 3_002.0_f64.powi(2);
+        assert!((recorded[0].dynamic_pressure_pa - expected_q).abs() < 1.0e-9 * expected_q);
+    }
+
+    #[test]
+    fn discs_use_the_shared_drag_lift_result_contract() {
+        let panel = AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel");
+        let bare = AeroGeometry::new(vec![panel]).expect("bare geometry");
+        let shielded = AeroGeometry::new(vec![panel])
+            .expect("geometry")
+            .with_blunt_discs(vec![disc(DVec3::X)])
+            .expect("disc geometry");
+        let model = PanelAeroModel::new(AeroConfig::default()).expect("model");
+        let environment = AeroEnvironment::new(0.01, 300.0, 1.8e-5, DVec3::ZERO);
+        let flow = state(DVec3::new(3_000.0, 0.0, 0.0));
+        let plain = model
+            .evaluate_state(flow, environment, &bare)
+            .expect("plain");
+        let armed = model
+            .evaluate_state(flow, environment, &shielded)
+            .expect("armed");
+        assert!(armed.disc_loads.is_none());
+        assert_eq!(
+            armed.force_body_n,
+            armed.force_components.total_force_body_n()
+        );
+        assert!(armed.force_components.drag_body_n.dot(DVec3::X) < 0.0);
+        assert!((armed.force_components.lift_body_n.dot(DVec3::X)).abs() < 1.0e-9);
+        let delta = armed.force_body_n - plain.force_body_n;
+        // Same flow solution: the delta is exactly the analytic disc push.
+        let expected = -2.0 * 45_000.0 * std::f64::consts::PI;
+        assert!((delta.x - expected).abs() < 1.0e-6 * expected.abs());
+        assert_eq!(delta.y, 0.0);
+        assert_eq!(delta.z, 0.0);
+        // Detailed mode records one load per disc, parallel to the discs.
+        let detailed = model
+            .evaluate_state_detailed(flow, environment, &shielded)
+            .expect("detailed");
+        let loads = detailed.disc_loads.expect("disc loads");
+        assert_eq!(loads.len(), 1);
+        assert!((loads[0].force_body_n - delta).length() < 1.0e-9);
+        assert_eq!(
+            loads[0].force_body_n,
+            loads[0].force_components.total_force_body_n()
+        );
+        assert!((loads[0].force_components.lift_body_n.dot(DVec3::X)).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn soa_path_matches_scalar_path_with_discs() {
+        let panel = AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel");
+        let geometry = AeroGeometry::new(vec![panel])
+            .expect("geometry")
+            .with_blunt_discs(vec![disc(DVec3::X)])
+            .expect("disc geometry");
+        let model = PanelAeroModel::new(AeroConfig::default()).expect("model");
+        let environment = AeroEnvironment::new(0.01, 300.0, 1.8e-5, DVec3::ZERO);
+        let flow = state(DVec3::new(3_000.0, 0.0, 0.0));
+        let scalar = model
+            .evaluate_state(flow, environment, &geometry)
+            .expect("scalar");
+        let soa = PanelSoA::from_geometry(&geometry).expect("soa layout");
+        assert_eq!(soa.discs.len(), 1);
+        let vectored = model
+            .evaluate_soa_parts(flow, environment, &soa, false)
+            .expect("soa");
+        assert!((vectored.force_body_n - scalar.force_body_n).length() < 1.0e-9);
+        assert!((vectored.moment_body_nm - scalar.moment_body_nm).length() < 1.0e-9);
+        assert_eq!(
+            vectored.force_components.total_force_body_n(),
+            vectored.force_body_n
+        );
+        assert!(
+            (vectored.force_components.drag_body_n - scalar.force_components.drag_body_n).length()
+                < 1.0e-9
+        );
+        assert!(
+            (vectored.force_components.lift_body_n - scalar.force_components.lift_body_n).length()
+                < 1.0e-9
+        );
+        let simd = model
+            .evaluate_soa_simd(flow, environment, &soa, false)
+            .expect("simd");
+        assert!((simd.force_body_n - scalar.force_body_n).length() < 1.0e-9);
+        assert!(
+            (simd.force_components.drag_body_n - scalar.force_components.drag_body_n).length()
+                < 1.0e-9
+        );
+        assert!(
+            (simd.force_components.lift_body_n - scalar.force_components.lift_body_n).length()
+                < 1.0e-9
+        );
+    }
+
+    #[test]
+    fn bad_discs_fail_closed() {
+        assert!(AeroBluntDisc::new(DVec3::new(f64::NAN, 0.0, 0.0), DVec3::X, 1.0).is_err());
+        assert!(AeroBluntDisc::new(DVec3::ZERO, DVec3::new(2.0, 0.0, 0.0), 1.0).is_err());
+        assert!(AeroBluntDisc::new(DVec3::ZERO, DVec3::X, 0.0).is_err());
+        let panel = AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel");
+        assert!(
+            AeroGeometry::new(vec![panel])
+                .expect("geometry")
+                .with_blunt_discs(vec![AeroBluntDisc {
+                    position_body_m: DVec3::ZERO,
+                    normal_body_m: DVec3::ZERO,
+                    area_m2: 1.0,
+                }])
+                .is_err()
+        );
+    }
 }

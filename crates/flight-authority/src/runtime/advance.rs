@@ -465,7 +465,11 @@ impl FlightAuthority {
         kinematics: LocalAirKinematics,
         density_kg_m3: f64,
     ) -> Option<(DVec3, f64)> {
-        if density_kg_m3 <= self.atmosphere.vacuum_cutoff_density_kg_m3
+        // This reduction is calibrated against panel-only geometry. Keep
+        // blunt shields in the shared aero solver until the reduction has a
+        // pinned drag/lift error envelope for their incidence-dependent load.
+        if !self.vehicle.aero_geometry.blunt_discs.is_empty()
+            || density_kg_m3 <= self.atmosphere.vacuum_cutoff_density_kg_m3
             || density_kg_m3 >= COAST_DENSITY_KG_M3
         {
             return None;

@@ -243,6 +243,27 @@ pub struct CompiledSurface {
     /// Structural mass and fuel volume, present when the surface authors
     /// a [`StructuralLayout`].
     pub structure: Option<CompiledStructure>,
+    /// Hexagonal tile layer, present when the surface toggles
+    /// [`SurfaceTileLayer`](crate::SurfaceTileLayer): tile count, area,
+    /// mass, centroid, and mean normal derived from the compiled panels.
+    pub tile_layer: Option<CompiledTileLayer>,
+}
+
+/// Hexagonal tile layer compiled from the panel zones: both wetted sides
+/// paved on a flat-to-flat pitch lattice (count floored per side), solid
+/// fraction `(size/(size+gap))²` applied to the mass.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompiledTileLayer {
+    /// Tile count over both wetted sides.
+    pub tile_count: u64,
+    /// Paved area over both sides (m^2).
+    pub area_m2: f64,
+    pub mass_kg: f64,
+    /// Area-weighted centroid in body metres.
+    pub centroid_body_m: DVec3,
+    /// Area-averaged lift reference in body coordinates (unit).
+    pub normal_body_m: DVec3,
+    pub thickness_m: f64,
 }
 
 /// Surface-local folded point without compiler state: planform plus
@@ -414,6 +435,17 @@ impl CompiledSurface {
             folds,
             summary: self.summary.mirrored(),
             structure: self.structure.as_ref().map(CompiledStructure::mirrored),
+            tile_layer: self.tile_layer.as_ref().map(|layer| {
+                let mut mapped = layer.clone();
+                mapped.centroid_body_m.y = -mapped.centroid_body_m.y;
+                let normal = DVec3::new(
+                    mapped.normal_body_m.x,
+                    -mapped.normal_body_m.y,
+                    mapped.normal_body_m.z,
+                );
+                mapped.normal_body_m = normal.normalize();
+                mapped
+            }),
         };
         // Mirroring preserves panel order, so control definitions keep
         // addressing the same panel indices untouched.
@@ -436,7 +468,54 @@ pub fn compile_surface(
     options.validate()?;
     let fold_angles = mechanism.resolve(surface)?;
     let compiler = Compiler::new(surface, options, fold_angles)?.with_aspect_ratio();
-    compiler.compile()
+    let mut compiled = compiler.compile()?;
+    compiled.tile_layer = compile_tile_layer(surface, &compiled.panels)?;
+    Ok(compiled)
+}
+
+/// Hexagonal tile layer from the mounted panels: one-side area, centroid,
+/// and mean lift reference derive from the zones; both sides are paved.
+fn compile_tile_layer(
+    surface: &ProceduralSurface,
+    panels: &[AeroPanel],
+) -> Result<Option<CompiledTileLayer>, SurfaceError> {
+    let Some(layer) = surface.tile_layer else {
+        return Ok(None);
+    };
+    let mut area_one_side = 0.0;
+    let mut centroid_numerator = DVec3::ZERO;
+    let mut normal_numerator = DVec3::ZERO;
+    for panel in panels {
+        area_one_side += panel.area_m2;
+        centroid_numerator += panel.position_body_m * panel.area_m2;
+        normal_numerator += panel.lift_axis_body * panel.area_m2;
+    }
+    if area_one_side <= 0.0 {
+        return Err(SurfaceError::PanelRejected(format!(
+            "surface '{}' tile layer needs positive panel area",
+            surface.name
+        )));
+    }
+    if normal_numerator.length() <= 1.0e-9 * area_one_side {
+        return Err(SurfaceError::PanelRejected(format!(
+            "surface '{}' tile layer needs a non-degenerate mean normal",
+            surface.name
+        )));
+    }
+    let cell = layer.cell_area_m2();
+    let per_side = (area_one_side / cell).floor() as u64;
+    Ok(Some(CompiledTileLayer {
+        tile_count: 2 * per_side,
+        area_m2: 2.0 * area_one_side,
+        mass_kg: 2.0
+            * area_one_side
+            * layer.thickness_m
+            * layer.density_kg_m3
+            * layer.fill_fraction(),
+        centroid_body_m: centroid_numerator / area_one_side,
+        normal_body_m: normal_numerator.normalize(),
+        thickness_m: layer.thickness_m,
+    }))
 }
 
 struct Compiler<'a> {
@@ -803,6 +882,7 @@ impl<'a> Compiler<'a> {
             folds: self.compiled_folds(),
             summary: CompiledSurfaceSummary::default(),
             structure: None,
+            tile_layer: None,
         };
         let mut bbox_min = DVec3::splat(f64::INFINITY);
         let mut bbox_max = DVec3::splat(f64::NEG_INFINITY);
@@ -865,6 +945,7 @@ impl<'a> Compiler<'a> {
             acc.finish(&layout);
             compiled.structure = Some(self.mount_structure(acc, &layout));
         }
+        compiled.tile_layer = compile_tile_layer(self.surface, &compiled.panels)?;
         Ok(compiled)
     }
 

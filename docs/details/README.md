@@ -23,3 +23,5 @@ in the relevant document.
 - [KSP-style deployable parachutes](07_PARACHUTES.md) — automatic pressure-triggered extraction, dynamic-pressure opening limits, reefed inflation, canopy overload failure, and physically applied drag at vehicle mounts.
 - [Vehicle part commands](08_VEHICLE_PART_COMMANDS.md) — shared typed subsystem commands for pilot inputs and future stage/action-group dispatch.
 - [Vehicle electrical power](09_ELECTRICAL_POWER.md) — parameterized batteries, fission reactors, static/foldable cell arrays, and prioritized loads on one wire-free vessel bus.
+- [Vehicle thermal system](10_THERMAL_SYSTEM.md) — lumped thermal nodes with conduction links and fixed/foldable area radiators; solar, Sutton-Graves aero, and wired internal heating; own-hull ray occlusion; overheat reporting without auto-damage.
+- [Heat shields and thermal protection](11_HEAT_SHIELDS.md) — Newtonian shield-disc aerodynamics through the common drag/lift contract and wing hex tile-layer toggle implemented; shield thermal protection/ablation and spline-bounded tile screens remain design.

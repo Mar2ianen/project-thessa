@@ -666,7 +666,7 @@ impl SolarFluxSource {
         Ok(())
     }
 
-    fn validate_for_command(&self) -> Result<(), ElectricalPowerError> {
+    pub(crate) fn validate_for_command(&self) -> Result<(), ElectricalPowerError> {
         require_non_negative_command(self.irradiance_w_m2, "solar irradiance")?;
         require_unit_interval_command(self.visibility, "solar visibility")?;
         validate_unit_vector_command(self.direction_body, "solar direction")?;
@@ -1681,7 +1681,7 @@ fn best_tracking_angle(
         return 0.0;
     };
     let total_weight: f64 = weights_w_m2.iter().sum();
-    if !(total_weight > 0.0) {
+    if total_weight <= 0.0 {
         return current_angle_rad;
     }
     let current_value = tracking_objective(array, current_angle_rad, sources, weights_w_m2);

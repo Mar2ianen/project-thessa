@@ -235,8 +235,10 @@ body, never baked into a geometry primitive — not even the capsule:
   mounts a detachable ablative disc on one blunt end. Diameter derives
   from the end section; mass is disc area times thickness times density
   with thin-disc inertia, aggregated into the hull. Pointed tips refuse
-  (a shield needs at least a 0.1 m blunt end); entry heating itself is
-  future work, this record owns geometry and mass.
+  (a shield needs at least a 0.1 m blunt end); its geometry also compiles
+  into the shared Newtonian shield aero zone. Shield-specific heating,
+  ablation, and burn-through remain future work; this record owns geometry
+  and mass.
 - `BodyPort` anchors stay the docking/hatch/engine interface: author a
   `docking-nose` port where the frustum top fits one, a side hatch on a
   sphere, an engine mount aft. The capsule ships bare; the assembly

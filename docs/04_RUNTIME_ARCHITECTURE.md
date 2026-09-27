@@ -218,15 +218,17 @@ explicit, and preserve the MIT/GPL boundary.
 The implemented `VehicleDefinition`/`vehicle-baker` path compiles serializable
 vehicle assets with mass/inertia, lofted bodies, aero panels/body controls,
 propulsion mounts, articulated landing gear, reaction-wheel banks, parachute
-packs, and a shared electrical bus with batteries, reactors, solar arrays, and
-prioritized loads. The active flight slice uses this compiled definition and
-the X-15 adapter. The full parametric in-game editor is still future work.
+packs, a shared electrical bus with batteries, reactors, solar arrays, and
+prioritized loads, and a lumped thermal-node network with links and radiators.
+The active flight slice uses this compiled definition and the X-15 adapter.
+The full parametric in-game editor is still future work.
 
 The full parametric editor, shared immutable design storage for large fleets,
-structural/thermal graph compilation, and fluid connectivity remain future
-work. Electrical load allocation is implemented as a wire-free shared bus;
-voltage/current dynamics and automatic demand coupling for all powered vehicle
-subsystems remain future work.
+structural graph compilation, grid-resolved thermal coupling, shield
+thermal-protection/ablation coupling, and fluid connectivity remain future
+work. Electrical load allocation is
+implemented as a wire-free shared bus; voltage/current dynamics and automatic
+demand coupling for all powered vehicle subsystems remain future work.
 
 ## 4.10. Autopilot and planning boundary
 

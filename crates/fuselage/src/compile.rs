@@ -272,6 +272,9 @@ pub struct CompiledHeatShield {
     pub name: String,
     /// Mount position in body-local metres (end-section center).
     pub position_body_m: DVec3,
+    /// Outward unit normal in body-local metres: +X for a forward shield,
+    /// −X for an aft shield (stations run tail-to-nose, +X forward).
+    pub normal_body_m: DVec3,
     /// Shield diameter in metres (from the end section).
     pub diameter_m: f64,
     /// Shield mass in kg.
@@ -1343,6 +1346,10 @@ impl<'a> Compiler<'a> {
             compiled.heat_shields.push(CompiledHeatShield {
                 name: shield.name.clone(),
                 position_body_m: center,
+                normal_body_m: match shield.end {
+                    crate::BodyEnd::Aft => -DVec3::X,
+                    crate::BodyEnd::Forward => DVec3::X,
+                },
                 diameter_m: 2.0 * radius,
                 mass_kg: mass,
                 material: shield.material,

@@ -1984,6 +1984,7 @@ fn capsule_assembles_with_separate_shield_and_dock() {
     assert!((shield.mass_kg - expected_mass).abs() / expected_mass < 1e-9);
     assert!((shield.diameter_m - 3.91).abs() < 1e-9);
     assert_eq!(shield.position_body_m.x, 0.0);
+    assert_eq!(shield.normal_body_m, -DVec3::X);
     assert!(
         compiled
             .ports

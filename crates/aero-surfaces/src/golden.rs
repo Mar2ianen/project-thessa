@@ -129,6 +129,7 @@ pub fn boeing_777x_half_wing() -> Result<ProceduralSurface, SurfaceError> {
             max_dynamic_pressure_pa: Some(2000.0),
         }],
         structure: None,
+        tile_layer: None,
     };
     surface.validate()?;
     Ok(surface)
@@ -194,6 +195,7 @@ pub fn shuttle_orbiter_wing() -> Result<ProceduralSurface, SurfaceError> {
         controls: vec![elevon_inboard, elevon_outboard],
         folds: Vec::new(),
         structure: None,
+        tile_layer: None,
     };
     surface.validate()?;
     Ok(surface)
@@ -270,6 +272,7 @@ pub fn concorde_wing() -> Result<ProceduralSurface, SurfaceError> {
         controls: Vec::new(),
         folds: Vec::new(),
         structure: None,
+        tile_layer: None,
     };
     surface.validate()?;
     Ok(surface)
@@ -320,6 +323,7 @@ pub fn dream_chaser_wing() -> Result<ProceduralSurface, SurfaceError> {
             max_dynamic_pressure_pa: None,
         }],
         structure: None,
+        tile_layer: None,
     };
     surface.validate()?;
     Ok(surface)
@@ -355,6 +359,7 @@ pub fn pathfinder_wing() -> Result<ProceduralSurface, SurfaceError> {
         controls: vec![aileron, flap],
         folds: Vec::new(),
         structure: None,
+        tile_layer: None,
     };
     surface.validate()?;
     Ok(surface)

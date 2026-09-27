@@ -38,6 +38,17 @@ Examples:
 - forbidden: teleporting cargo between spaceports;
 - allowed: physical transport plus schedules, buffers, and warp.
 
+### Reuse implemented systems; do not reinvent the wheel
+
+Before adding a subsystem, force path, scheduler, allocator, serializer, or
+other shared mechanism, inspect the existing implementation and its tests.
+If the behavior is already implemented, reuse that system or extend its
+contract; do not reinvent the wheel with a parallel implementation of the
+same job.
+Domain-specific physics may have its own constitutive law, but it must enter
+the existing shared state, force, thermal, control, or runtime pipeline rather
+than bypassing it with a second generic path.
+
 ## 2. Module boundaries
 
 ### `sim-core`

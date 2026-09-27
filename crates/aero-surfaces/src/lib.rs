@@ -71,8 +71,8 @@ mod surface;
 pub use bend::{BendCurve, BendStation};
 pub use collision::CollisionOptions;
 pub use compile::{
-    CompileOptions, CompiledFold, CompiledSurface, MechanismState, PanelTag, RefinementMode,
-    compile_surface,
+    CompileOptions, CompiledFold, CompiledSurface, CompiledTileLayer, MechanismState, PanelTag,
+    RefinementMode, compile_surface,
 };
 pub use error::SurfaceError;
 pub use golden::{
@@ -89,7 +89,7 @@ pub use profile::{CruiseRequirement, Naca4, ProfilePick, recommend_cruise_profil
 pub use section::{AeroProfileId, SectionData, SectionStation};
 pub use structure::{CompiledStructure, SolidMaterial, StructuralLayout};
 pub use summary::{CompiledSurfaceSummary, ControlSummary};
-pub use surface::{ProceduralSurface, SurfaceTopology};
+pub use surface::{ProceduralSurface, SurfaceTileLayer, SurfaceTopology};
 
 #[cfg(test)]
 mod tests;

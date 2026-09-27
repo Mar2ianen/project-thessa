@@ -45,6 +45,15 @@ means the nose is above the incoming flow in body coordinates. An inverted
 stabilizer uses an explicit lift sign rather than changing the global AoA
 convention.
 
+All aero zones expose one absolute-force contract through
+`AeroForceBreakdown`: drag is the component parallel to and opposite local
+flow; lift is the complete component perpendicular to local flow (including
+panel side-force). `AeroResult.force_body_n` is the sum of these components.
+Panel and shield detail records use the same decomposition. A shield retains
+its Newtonian impact-pressure law, then decomposes that physical resultant
+into shared drag and lift components; it does not add a second flight-force
+path or a shield-specific lift coefficient.
+
 ## 11.3. Implemented Tier A model
 
 The analytic panel model includes:
@@ -102,7 +111,9 @@ Upper-band reference-area drag and zero aero moment are allowed only under the
 explicit configured density/regime boundary where the error envelope is
 decision-irrelevant and RCS dominates. The declared vacuum path is exact zero
 air load. Each reduction requires a calibration, absolute envelope regression,
-and benchmark.
+and benchmark. The current reference-area envelope covers panel-only
+geometries; a vehicle with a blunt shield stays on the full shared aero path
+through this band until a shield-inclusive drag/lift envelope is established.
 
 ## 11.6. Control surfaces and actuators
 

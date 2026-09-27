@@ -103,3 +103,7 @@ harness = false
 [[bench]]
 name = "electrical_power"
 harness = false
+
+[[bench]]
+name = "thermal"
+harness = false

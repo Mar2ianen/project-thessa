@@ -4,22 +4,23 @@ use glam::{DMat3, DQuat, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AeroConfig, AeroError, AeroGeometry, AeroPanel, AeroResult, AuthorityReason, CabinError,
-    CabinExit, CabinMonument, CabinSeat, CollisionAxis, CollisionError, CollisionGeometry,
-    CollisionMaterial, CollisionPart, CollisionShape, CompiledEngine, CompiledLandingLeg,
-    CompiledWheelChassis, ControlAuthority, ControlCore, ControlStation, CrewSuitMode,
-    ElectricThrusterCommand, ElectricThrusterMount, ElectricThrusterPoint, ElectricalPowerCommand,
-    ElectricalPowerError, ElectricalPowerState, ElectricalPowerSystem, ElectricalPowerTelemetry,
-    EngineMount, EstocPoint, FlightCondition, FlightError, FusionTorchCommand, FusionTorchMount,
-    FusionTorchOperatingPoint, HeatShieldMount, JetCommand, JetMount, LandingGearError,
-    LandingLegMassProperties, LandingLegSpec, ParachuteError, ParachuteSpec, PressurizedCabin,
-    PropDrivePoint, PropellerDriveCommand, PropellerDriveMount, PropulsionError,
-    PulsedFusionCommand, PulsedFusionMount, PulsedFusionOperatingPoint, PulsedFusionState,
-    ReactionWheelBankSpec, ReactionWheelError, RigidBodyProperties, ShieldError, SolarOccluder,
+    AeroConfig, AeroError, AeroGeometry, AeroPanel, AeroResult, AuthorityReason,
+    AuxiliaryPowerUnitMount, CabinError, CabinExit, CabinMonument, CabinSeat, CollisionAxis,
+    CollisionError, CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape,
+    CompiledEngine, CompiledLandingLeg, CompiledWheelChassis, ControlAuthority, ControlCore,
+    ControlStation, CrewSuitMode, ElectricThrusterCommand, ElectricThrusterMount,
+    ElectricThrusterPoint, ElectricalPowerCommand, ElectricalPowerError, ElectricalPowerState,
+    ElectricalPowerSystem, ElectricalPowerTelemetry, EngineMount, EstocPoint, FlightCondition,
+    FlightError, FusionTorchCommand, FusionTorchMount, FusionTorchOperatingPoint, HeatShieldMount,
+    JetCommand, JetMount, LandingGearError, LandingLegMassProperties, LandingLegSpec,
+    ParachuteError, ParachuteSpec, PressurizedCabin, PropDrivePoint, PropellerDriveCommand,
+    PropellerDriveMount, PropulsionError, PulsedFusionCommand, PulsedFusionMount,
+    PulsedFusionOperatingPoint, PulsedFusionState, RcsMount, ReactionWheelBankSpec,
+    ReactionWheelError, RigidBodyProperties, ShieldError, SolarOccluder, StoredPropellant,
     SystemMount, TankMount, ThermalCommand, ThermalError, ThermalState, ThermalSystem,
     ThermalTelemetry, TurbopropCommand, TurbopropMount, TurbopropOperatingPoint, VehicleAssembly,
-    WheelBodyMassProperties, WheelChassisMassProperties, WheelChassisSpec, WheelChassisState,
-    control_authority,
+    VehicleResourceDemand, VehicleResourceFeedPort, VehicleResourceState, WheelBodyMassProperties,
+    WheelChassisMassProperties, WheelChassisSpec, WheelChassisState, control_authority,
 };
 
 pub type StatefulTurbopropWrench = (
@@ -393,8 +394,8 @@ pub struct VehicleDefinition {
     /// masses into `mass_properties` when mounts are present.
     #[serde(default)]
     pub engines: Vec<EngineMount>,
-    /// Installed propellant tanks (dry + initial-load mass aggregate at
-    /// bake; runtime depletion wiring is future work).
+    /// Installed propellant tanks (dry + initial-load mass aggregate at bake;
+    /// rocket and named pure-fluid runtime consumers use this live inventory).
     #[serde(default)]
     pub tanks: Vec<TankMount>,
     /// Installed multi-chamber propulsion systems (chambers carry their
@@ -405,6 +406,9 @@ pub struct VehicleDefinition {
     /// needs a flight condition at query time).
     #[serde(default)]
     pub jets: Vec<JetMount>,
+    /// Installed turbo-generator auxiliary power units.
+    #[serde(default)]
+    pub auxiliary_power_units: Vec<AuxiliaryPowerUnitMount>,
     /// Installed electric space thrusters (steady power/flow commands).
     #[serde(default)]
     pub electric_thrusters: Vec<ElectricThrusterMount>,
@@ -421,6 +425,9 @@ pub struct VehicleDefinition {
     /// Installed turbine-propeller drives with stateful core-shaft loading.
     #[serde(default)]
     pub turboprops: Vec<TurbopropMount>,
+    /// Installed monopropellant and cold-gas reaction-control thrusters.
+    #[serde(default)]
+    pub rcs_mounts: Vec<RcsMount>,
     /// Compiled parametric landing-gear and rover-wheel assemblies.
     /// Empty retains compatibility with older vehicle assets.
     #[serde(default)]
@@ -475,6 +482,10 @@ pub struct VehicleDefinition {
     /// cross-part resource reachability. None is the legacy single-body path.
     #[serde(default)]
     pub assembly: Option<VehicleAssembly>,
+    /// Optional named consumer-to-assembly feed-port routes. Consumers not
+    /// listed use the legacy vehicle-level reachable tank set.
+    #[serde(default)]
+    pub resource_feed_ports: Vec<VehicleResourceFeedPort>,
     /// One ideal shared electrical bus with parameterized sources, storage,
     /// and prioritized part loads. Empty keeps legacy vehicles unpowered.
     #[serde(default)]
@@ -784,11 +795,13 @@ impl VehicleDefinition {
             tanks: Vec::new(),
             systems: Vec::new(),
             jets: Vec::new(),
+            auxiliary_power_units: Vec::new(),
             electric_thrusters: Vec::new(),
             fusion_torches: Vec::new(),
             pulsed_fusion_systems: Vec::new(),
             propeller_drives: Vec::new(),
             turboprops: Vec::new(),
+            rcs_mounts: Vec::new(),
             wheel_chassis: Vec::new(),
             landing_legs: Vec::new(),
             reaction_wheels: Vec::new(),
@@ -802,6 +815,7 @@ impl VehicleDefinition {
             control_cores: Vec::new(),
             control_stations: Vec::new(),
             assembly: None,
+            resource_feed_ports: Vec::new(),
             electrical_power: ElectricalPowerSystem::default(),
             thermal: ThermalSystem::default(),
         };
@@ -843,6 +857,18 @@ impl VehicleDefinition {
         Ok(self)
     }
 
+    /// Attach named routes from installed resource consumers to assembly
+    /// feed ports. Topology state remains live on `assembly`; every planning
+    /// step resolves the current reachable tanks.
+    pub fn with_resource_feed_ports(
+        mut self,
+        resource_feed_ports: Vec<VehicleResourceFeedPort>,
+    ) -> Result<Self, VehicleError> {
+        self.resource_feed_ports = resource_feed_ports;
+        self.validate()?;
+        Ok(self)
+    }
+
     /// Attach batteries, solar arrays, fission sources, and bus consumers.
     /// Power consumers join the vessel-wide bus implicitly; no wire graph is
     /// authored or required.
@@ -872,9 +898,137 @@ impl VehicleDefinition {
         state: &ElectricalPowerState,
         command: &ElectricalPowerCommand,
     ) -> Result<(ElectricalPowerState, ElectricalPowerTelemetry), VehicleError> {
+        if !self.electrical_power.fuel_cells.is_empty() {
+            return Err(VehicleError::InvalidVehicle(
+                "fuel-cell power must advance with installed resource inventory".into(),
+            ));
+        }
         self.electrical_power
             .advance(state, command)
             .map_err(VehicleError::ElectricalPower)
+    }
+
+    /// Advance the shared bus with fuel-cell availability bounded by named
+    /// installed hydrogen/LOX tanks, then commit its reactant draw through the
+    /// common moving-mass resource path. Each cell honors its optional named
+    /// feed-port route, while overlapping cells share the same tank allocator.
+    pub fn advance_electrical_power_with_resources(
+        &mut self,
+        resource_state: &mut VehicleResourceState,
+        power_state: &ElectricalPowerState,
+        command: &ElectricalPowerCommand,
+    ) -> Result<(ElectricalPowerState, ElectricalPowerTelemetry, DVec3), VehicleError> {
+        self.advance_electrical_power_with_demands(resource_state, power_state, command, &[])
+    }
+
+    /// Advance the shared bus and commit all colocated physical source flows
+    /// (for example an APU operating point) through the same tank inventory.
+    /// Fuel-cell and auxiliary-generator demand therefore share one resource
+    /// plan and one center-of-mass/inertia update.
+    pub fn advance_electrical_power_with_demands(
+        &mut self,
+        resource_state: &mut VehicleResourceState,
+        power_state: &ElectricalPowerState,
+        command: &ElectricalPowerCommand,
+        additional_resource_demands: &[VehicleResourceDemand],
+    ) -> Result<(ElectricalPowerState, ElectricalPowerTelemetry, DVec3), VehicleError> {
+        let mut bus_command = command.clone();
+        for demand in additional_resource_demands {
+            if demand.consumer_name.starts_with("\u{1f}fuel-cell:") {
+                return Err(VehicleError::InvalidVehicle(
+                    "resource consumer name uses the reserved fuel-cell namespace".into(),
+                ));
+            }
+        }
+        let external_plan =
+            self.plan_resource_flows(resource_state, additional_resource_demands, command.dt_s)?;
+        if external_plan
+            .consumers
+            .iter()
+            .any(|allocation| allocation.scale < 1.0 - 1.0e-10)
+        {
+            return Err(VehicleError::InvalidVehicle(
+                "external power-source demand exceeds its reachable resource inventory".into(),
+            ));
+        }
+        let mut fuel_cell_inventory = resource_state.clone();
+        for (inventory, draw) in fuel_cell_inventory
+            .tank_propellant_kg
+            .iter_mut()
+            .zip(&external_plan.tank_consumption_kg)
+        {
+            *inventory = (*inventory - draw).max(0.0);
+        }
+
+        // Fuel cells are ordinary consumers of the same reachable inventory
+        // as jets/thrusters/APUs. Re-evaluate bus dispatch after any per-cell
+        // resource cap so the committed source telemetry never claims fuel
+        // that the tank transaction cannot draw.
+        for _ in 0..=self.electrical_power.fuel_cells.len() {
+            let (next_power_state, telemetry) = self
+                .electrical_power
+                .advance(power_state, &bus_command)
+                .map_err(VehicleError::ElectricalPower)?;
+            let mut demands = Vec::with_capacity(self.electrical_power.fuel_cells.len() * 2);
+            for (cell, output) in self
+                .electrical_power
+                .fuel_cells
+                .iter()
+                .zip(&telemetry.fuel_cells)
+            {
+                let consumer_name = format!("\u{1f}fuel-cell:{}", cell.name);
+                let mut hydrogen = VehicleResourceDemand::new(
+                    consumer_name.clone(),
+                    StoredPropellant::LiquidHydrogen,
+                    output.hydrogen_flow_kg_s,
+                );
+                let mut oxygen = VehicleResourceDemand::new(
+                    consumer_name,
+                    StoredPropellant::Lox,
+                    output.oxygen_flow_kg_s,
+                );
+                if let Some(port) = &cell.feed_port_name {
+                    hydrogen.feed_port_name = Some(port.clone());
+                    oxygen.feed_port_name = Some(port.clone());
+                }
+                demands.extend([hydrogen, oxygen]);
+            }
+            let fuel_cell_plan =
+                self.plan_resource_flows(&fuel_cell_inventory, &demands, command.dt_s)?;
+            let mut limited_cell = false;
+            for (index, cell) in self.electrical_power.fuel_cells.iter().enumerate() {
+                let consumer_name = format!("\u{1f}fuel-cell:{}", cell.name);
+                if let Some(allocation) = fuel_cell_plan
+                    .consumers
+                    .iter()
+                    .find(|allocation| allocation.consumer_name == consumer_name)
+                    && allocation.scale < 1.0 - 1.0e-10
+                {
+                    bus_command.fuel_cell_power_fraction[index] *= allocation.scale;
+                    limited_cell = true;
+                }
+            }
+            if limited_cell {
+                continue;
+            }
+            let mut combined_plan = external_plan.clone();
+            for (draw, fuel_cell_draw) in combined_plan
+                .tank_consumption_kg
+                .iter_mut()
+                .zip(&fuel_cell_plan.tank_consumption_kg)
+            {
+                *draw += fuel_cell_draw;
+            }
+            combined_plan
+                .consumers
+                .extend(fuel_cell_plan.consumers.iter().cloned());
+            combined_plan.total_consumption_kg += fuel_cell_plan.total_consumption_kg;
+            let frame_shift = self.commit_resource_flows(resource_state, &combined_plan)?;
+            return Ok((next_power_state, telemetry, frame_shift));
+        }
+        Err(VehicleError::InvalidVehicle(
+            "fuel-cell dispatch did not converge with reachable tank inventory".into(),
+        ))
     }
 
     /// Attach a lumped thermal-node network (nodes, links, radiators).
@@ -948,20 +1102,17 @@ impl VehicleDefinition {
                     .electrical_power
                     .consumers
                     .iter()
-                    .find(|consumer| consumer.name == thruster.name)
-                    .ok_or_else(|| {
-                        VehicleError::InvalidVehicle(format!(
-                            "electric thruster '{}' has no same-named electrical bus consumer",
-                            thruster.name
-                        ))
-                    })?;
-                let available_power_w =
+                    .find(|consumer| consumer.name == thruster.name);
+                let available_power_w = if let Some(consumer) = consumer {
                     telemetry.supplied_power_w(&consumer.name).ok_or_else(|| {
                         VehicleError::InvalidVehicle(format!(
                             "power telemetry has no allocation for electric thruster '{}'",
                             thruster.name
                         ))
-                    })?;
+                    })?
+                } else {
+                    0.0
+                };
                 Ok(ElectricThrusterCommand {
                     available_power_w,
                     requested_mass_flow_kg_s: *mass_flow,
@@ -1188,6 +1339,9 @@ impl VehicleDefinition {
         for mount in &mut self.jets {
             shift_array(&mut mount.position_body_m, shift);
         }
+        for mount in &mut self.auxiliary_power_units {
+            shift_array(&mut mount.position_body_m, shift);
+        }
         for mount in &mut self.electric_thrusters {
             shift_array(&mut mount.position_body_m, shift);
         }
@@ -1214,6 +1368,9 @@ impl VehicleDefinition {
         }
         for reactor in &mut self.electrical_power.reactors {
             reactor.position_body_m += shift;
+        }
+        for fuel_cell in &mut self.electrical_power.fuel_cells {
+            fuel_cell.position_body_m += shift;
         }
         for node in &mut self.thermal.nodes {
             node.position_body_m += shift;
@@ -1292,6 +1449,10 @@ impl VehicleDefinition {
                 .iter()
                 .all(|mount| shifted_station_is_finite(&mount.position_body_m))
             && self
+                .auxiliary_power_units
+                .iter()
+                .all(|mount| shifted_station_is_finite(&mount.position_body_m))
+            && self
                 .electric_thrusters
                 .iter()
                 .all(|mount| shifted_station_is_finite(&mount.position_body_m))
@@ -1329,6 +1490,11 @@ impl VehicleDefinition {
             && self
                 .electrical_power
                 .reactors
+                .iter()
+                .all(|part| shifted_point_is_finite(part.position_body_m))
+            && self
+                .electrical_power
+                .fuel_cells
                 .iter()
                 .all(|part| shifted_point_is_finite(part.position_body_m))
             && self
@@ -1401,6 +1567,16 @@ impl VehicleDefinition {
         for mount in &self.jets {
             mount.validate().map_err(VehicleError::Propulsion)?;
         }
+        let mut apu_names = std::collections::HashSet::new();
+        for mount in &self.auxiliary_power_units {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+            if !apu_names.insert(mount.name.as_str()) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "duplicate APU mount name '{}'",
+                    mount.name
+                )));
+            }
+        }
         for mount in &self.electric_thrusters {
             mount.validate().map_err(VehicleError::Propulsion)?;
         }
@@ -1416,10 +1592,77 @@ impl VehicleDefinition {
         for mount in &self.turboprops {
             mount.validate().map_err(VehicleError::Propulsion)?;
         }
+        let mut rcs_names = std::collections::HashSet::new();
+        for mount in &self.rcs_mounts {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+            if !rcs_names.insert(mount.name.as_str()) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "duplicate RCS mount name '{}'",
+                    mount.name
+                )));
+            }
+        }
         self.electrical_power
             .validate()
             .map_err(VehicleError::ElectricalPower)?;
         self.thermal.validate().map_err(VehicleError::Thermal)?;
+        let mut resource_consumer_names = std::collections::HashSet::new();
+        for name in self
+            .engines
+            .iter()
+            .map(|mount| mount.name.as_str())
+            .chain(self.systems.iter().map(|mount| mount.name.as_str()))
+            .chain(
+                self.auxiliary_power_units
+                    .iter()
+                    .map(|mount| mount.name.as_str()),
+            )
+            .chain(self.jets.iter().map(|mount| mount.name.as_str()))
+            .chain(
+                self.electric_thrusters
+                    .iter()
+                    .map(|mount| mount.name.as_str()),
+            )
+            .chain(self.fusion_torches.iter().map(|mount| mount.name.as_str()))
+            .chain(
+                self.pulsed_fusion_systems
+                    .iter()
+                    .map(|mount| mount.name.as_str()),
+            )
+            .chain(
+                self.propeller_drives
+                    .iter()
+                    .map(|mount| mount.name.as_str()),
+            )
+            .chain(self.turboprops.iter().map(|mount| mount.name.as_str()))
+            .chain(self.rcs_mounts.iter().map(|mount| mount.name.as_str()))
+            .chain(
+                self.electrical_power
+                    .fuel_cells
+                    .iter()
+                    .map(|cell| cell.name.as_str()),
+            )
+        {
+            if !resource_consumer_names.insert(name) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "resource consumer name '{name}' is used by more than one installed part"
+                )));
+            }
+        }
+        let mut routed_consumers = std::collections::HashSet::new();
+        for route in &self.resource_feed_ports {
+            if route.consumer_name.trim().is_empty() || route.feed_port_name.trim().is_empty() {
+                return Err(VehicleError::InvalidVehicle(
+                    "resource feed routes need a consumer and feed-port name".into(),
+                ));
+            }
+            if !routed_consumers.insert(route.consumer_name.as_str()) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "resource consumer '{}' has more than one feed-port route",
+                    route.consumer_name
+                )));
+            }
+        }
         for thruster in &self.electric_thrusters {
             if let Some(consumer) = self
                 .electrical_power
@@ -1559,6 +1802,18 @@ impl VehicleDefinition {
             assembly.validate().map_err(|error| {
                 VehicleError::InvalidVehicle(format!("invalid part assembly: {error}"))
             })?;
+            for route in &self.resource_feed_ports {
+                if !assembly
+                    .engine_ports
+                    .iter()
+                    .any(|port| port.name == route.feed_port_name)
+                {
+                    return Err(VehicleError::InvalidVehicle(format!(
+                        "resource consumer '{}' names missing assembly feed port '{}'",
+                        route.consumer_name, route.feed_port_name
+                    )));
+                }
+            }
             let mut cabin_names = std::collections::HashSet::new();
             for cabin in &self.cabins {
                 if !cabin_names.insert(cabin.name.as_str()) {
@@ -2107,6 +2362,35 @@ impl VehicleDefinition {
         Ok(self)
     }
 
+    /// Attach compiled auxiliary turbo-generators (baker path).
+    pub fn with_auxiliary_power_units(
+        mut self,
+        auxiliary_power_units: Vec<AuxiliaryPowerUnitMount>,
+    ) -> Result<Self, VehicleError> {
+        for mount in &auxiliary_power_units {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        self.auxiliary_power_units = auxiliary_power_units;
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Aggregate installed APU dry mass at each generator mount station.
+    pub fn bake_auxiliary_power_unit_masses(&mut self) -> Result<(), VehicleError> {
+        let mut mass_kg = self.mass_properties.mass_kg;
+        let mut inertia = self.mass_properties.inertia_body_kg_m2;
+        for mount in &self.auxiliary_power_units {
+            let position = DVec3::from_array(mount.position_body_m);
+            let apu_mass_kg = mount.unit.dry_mass_kg;
+            mass_kg += apu_mass_kg;
+            inertia += apu_mass_kg
+                * (DMat3::IDENTITY * position.length_squared() - outer_product(position, position));
+        }
+        self.mass_properties =
+            RigidBodyProperties::new(mass_kg, inertia).map_err(VehicleError::MassProperties)?;
+        Ok(())
+    }
+
     /// Attach compiled electric spacecraft thrusters (baker path).
     pub fn with_electric_thrusters(
         mut self,
@@ -2255,6 +2539,16 @@ impl VehicleDefinition {
             mount.validate().map_err(VehicleError::Propulsion)?;
         }
         self.turboprops = turboprops;
+        Ok(self)
+    }
+
+    /// Attach installed reaction-control thrusters.
+    pub fn with_rcs_mounts(mut self, rcs_mounts: Vec<RcsMount>) -> Result<Self, VehicleError> {
+        for mount in &rcs_mounts {
+            mount.validate().map_err(VehicleError::Propulsion)?;
+        }
+        self.rcs_mounts = rcs_mounts;
+        self.validate()?;
         Ok(self)
     }
 
@@ -2560,6 +2854,22 @@ impl VehicleDefinition {
             inertia += drive_mass_kg
                 * (glam::DMat3::IDENTITY * position.length_squared()
                     - outer_product(position, position));
+        }
+        self.mass_properties =
+            RigidBodyProperties::new(mass_kg, inertia).map_err(VehicleError::MassProperties)?;
+        Ok(())
+    }
+
+    /// Aggregate RCS nozzle/valve dry mass at each installed station.
+    pub fn bake_rcs_masses(&mut self) -> Result<(), VehicleError> {
+        let mut mass_kg = self.mass_properties.mass_kg;
+        let mut inertia = self.mass_properties.inertia_body_kg_m2;
+        for mount in &self.rcs_mounts {
+            let dry_mass_kg = mount.thruster.dry_mass_kg();
+            let position = DVec3::from_array(mount.position_body_m);
+            mass_kg += dry_mass_kg;
+            inertia += dry_mass_kg
+                * (DMat3::IDENTITY * position.length_squared() - outer_product(position, position));
         }
         self.mass_properties =
             RigidBodyProperties::new(mass_kg, inertia).map_err(VehicleError::MassProperties)?;
@@ -3602,6 +3912,7 @@ mod tests {
                     tracking: crate::SolarArrayTracking::Fixed,
                 }],
                 reactors: vec![],
+                fuel_cells: vec![],
                 consumers: vec![crate::PowerConsumerSpec {
                     name: "aft-ion".into(),
                     rated_power_w: 5_000.0,
@@ -3686,6 +3997,7 @@ mod tests {
                     tracking: crate::SolarArrayTracking::Fixed,
                 }],
                 reactors: vec![],
+                fuel_cells: vec![],
                 consumers: vec![crate::PowerConsumerSpec {
                     name: "avionics".into(),
                     rated_power_w: 1_000.0,

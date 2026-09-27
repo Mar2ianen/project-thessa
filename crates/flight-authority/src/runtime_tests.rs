@@ -1,10 +1,15 @@
 use super::*;
 use thessa_sim_core::{
-    AeroModel, AirlessWheelStructure, ChamberMaterial, ControlHinge, ControlSurfaceActuator,
-    CoolingMode, ElectricMotorSpec, EngineCycle, EngineMount, LandingLegSpec,
-    LandingShockAbsorberSpec, LiquidEngineSpec, NozzleContour, ParachuteCommand, ParachutePhase,
-    ParachuteSpec, Propellant, ReactionWheelBankSpec, RigidBodyProperties, SystemConfig, TankMount,
-    TankResource, TankShape, TankSpec, TireConstruction, VehiclePartCommand, WheelBrakeSpec,
+    AeroModel, AirCycle, AirbreathingSpec, AirlessWheelStructure, AuxiliaryPowerUnitCommand,
+    AuxiliaryPowerUnitMount, AuxiliaryPowerUnitSpec, ChamberMaterial, ColdGasThrusterSpec,
+    CompiledJet, ControlHinge, ControlSurfaceActuator, CoolingMode, ElectricMotorSpec,
+    ElectricPropellant, ElectricThrusterDesign, ElectricThrusterMount, ElectricThrusterSpec,
+    ElectricalPowerSystem, EngineCycle, EngineMount, FuelCellSpec, GeneratorSpec, IntakeKind,
+    JetFuel, JetMount, JetShaftState, LandingLegSpec, LandingShockAbsorberSpec, LiquidEngineSpec,
+    NozzleContour, ParachuteCommand, ParachutePhase, ParachuteSpec, PowerConsumerSpec,
+    PowerPriority, Propellant, RcsMount, RcsThruster, ReactionWheelBankSpec, RigidBodyProperties,
+    ShaftSpec, StarterKind, StarterSpec, StoredPropellant, SystemConfig, TankMount, TankResource,
+    TankShape, TankSpec, TireConstruction, VehiclePartCommand, WheelBrakeSpec,
     WheelChassisRetractionSpec, WheelChassisSpec, WheelDriveSpec, WheelLayout, WheelStrutSpec,
     WheelTireSpec,
 };
@@ -116,6 +121,374 @@ fn authoritative_fixed_tick_burns_reachable_tank_and_updates_vehicle_mass() {
     assert!(flight.vehicle.mass_properties.mass_kg < initial_mass);
     assert!(flight.last_propellant_flow_kg_s > 0.0);
     assert!(flight.last_propulsion_force_body_n.length() > 0.0);
+}
+
+#[test]
+fn fixed_tick_routes_apu_bleed_into_mounted_pneumatic_jet_starter() {
+    let (ephemeris, starter_flight) = fixture();
+    let generator = GeneratorSpec {
+        fitted: true,
+        power_w: 20_000.0,
+        efficiency: 0.9,
+        cut_in_spool_n: 0.5,
+        mass_kg: 4.0,
+    };
+    let engine_spec = AirbreathingSpec {
+        name: "runtime-apu-core".into(),
+        cycle: AirCycle::Turbojet,
+        fuel: JetFuel::Kerosene,
+        intake_area_m2: 0.25,
+        intake: IntakeKind::Pitot,
+        compressor_ratio: 8.0,
+        bypass_ratio: 0.0,
+        fan_pressure_ratio: 1.0,
+        turbine_inlet_temp_k: 1_350.0,
+        afterburner: false,
+        reheat_temp_k: 0.0,
+        turbine_material: ChamberMaterial::nickel_superalloy(),
+        spool_tau_s: 3.0,
+        shaft: ShaftSpec {
+            starter: StarterSpec {
+                kind: StarterKind::Electric,
+                power_w: 20_000.0,
+                charge_j: 1.0e6,
+                mass_kg: 3.0,
+            },
+            generator,
+            power_turbine_heat_fraction: 0.2,
+            ..ShaftSpec::default()
+        },
+    };
+    let apu_unit = AuxiliaryPowerUnitSpec {
+        name: "runtime-apu".into(),
+        engine: engine_spec.clone(),
+    }
+    .compile()
+    .expect("compile runtime APU");
+    let apu_mount = AuxiliaryPowerUnitMount {
+        name: "runtime-apu".into(),
+        unit: apu_unit,
+        position_body_m: [-1.0, 0.0, 0.0],
+        thrust_axis_body: [1.0, 0.0, 0.0],
+        feed_port_name: None,
+    };
+
+    let mut jet_spec = engine_spec;
+    jet_spec.name = "runtime-startable-jet".into();
+    jet_spec.shaft.starter = StarterSpec {
+        kind: StarterKind::Pneumatic,
+        power_w: 10_000.0,
+        charge_j: 1.0e6,
+        mass_kg: 2.0,
+    };
+    jet_spec.shaft.generator = GeneratorSpec::default();
+    let jet = CompiledJet::Air(Box::new(jet_spec.compile().expect("compile jet")));
+    let jet_mount = JetMount {
+        name: "startable-jet".into(),
+        engine: jet,
+        position_body_m: [1.0, 0.0, 0.0],
+        thrust_axis_body: [1.0, 0.0, 0.0],
+        gimbal_range_rad: 0.0,
+    };
+
+    let tank_shape = TankShape::Sphere { diameter_m: 1.0 };
+    let compiled_tank = TankSpec {
+        shape: tank_shape,
+        pressure_pa: 500_000.0,
+        material: ChamberMaterial::nickel_superalloy(),
+    }
+    .compile(810.0)
+    .expect("compile jet-fuel tank");
+    let tank = TankMount {
+        name: "jet-fuel".into(),
+        tank: compiled_tank,
+        position_body_m: [0.0; 3],
+        intrinsic_inertia_body_kg_m2: tank_shape
+            .intrinsic_inertia_body_kg_m2(
+                compiled_tank.dry_mass_kg,
+                compiled_tank.full_propellant_kg,
+            )
+            .expect("tank inertia"),
+        initial_propellant_kg: Some(compiled_tank.full_propellant_kg),
+        resource: TankResource::Fuel(Propellant::LoxRp1),
+    };
+    let mut vehicle = starter_flight
+        .vehicle
+        .clone()
+        .with_auxiliary_power_units(vec![apu_mount])
+        .expect("install APU")
+        .with_jets(vec![jet_mount])
+        .expect("install jet")
+        .with_tanks(vec![tank])
+        .expect("install shared fuel tank");
+    vehicle
+        .bake_auxiliary_power_unit_masses()
+        .expect("APU mass");
+    vehicle.bake_jet_masses().expect("jet mass");
+    vehicle.bake_tank_masses().expect("tank mass");
+    let mut flight = FlightAuthority::new_with_vehicle(
+        &ephemeris,
+        ephemeris.body_id("thessa").unwrap(),
+        vehicle,
+    )
+    .expect("custom flight authority");
+    flight.set_legacy_propulsion(1.0, true);
+    flight.auxiliary_power_unit_states[0].shaft =
+        JetShaftState::running(&flight.vehicle.auxiliary_power_units[0].unit.engine);
+    flight.auxiliary_power_unit_commands[0] = AuxiliaryPowerUnitCommand {
+        throttle: 1.0,
+        starter_engaged: false,
+        generator_load_w: 10_000.0,
+        pneumatic_bleed_power_w: 0.0,
+        dt_s: FLIGHT_STEP_S,
+    };
+    flight.jet_commands[0].starter_engaged = true;
+    flight.jet_commands[0].shaft.starter_charge_j = 0.0;
+
+    flight
+        .advance(&ephemeris, ControlMode::Direct, FLIGHT_STEP_S)
+        .expect("advance with pneumatic starter load");
+
+    assert!(flight.jet_commands[0].pneumatic_starter_power_w > 0.0);
+    assert_eq!(flight.jet_commands[0].shaft.starter_charge_j, 0.0);
+    assert!(flight.jet_commands[0].shaft.spool_n > 0.0);
+    let bus = flight
+        .electrical_power_telemetry
+        .as_ref()
+        .expect("bus advances on the fixed tick");
+    assert!(bus.auxiliary_generation_power_w > 0.0);
+}
+
+#[test]
+fn fixed_tick_dispatches_fuel_cell_and_electric_thruster_on_the_shared_bus() {
+    let (ephemeris, starter_flight) = fixture();
+    let make_tank = |name: &str,
+                     resource: StoredPropellant,
+                     density_kg_m3: f64,
+                     initial_propellant_kg: f64,
+                     position_body_m: DVec3| {
+        let shape = TankShape::Sphere { diameter_m: 0.5 };
+        let compiled = TankSpec {
+            shape,
+            pressure_pa: 500_000.0,
+            material: ChamberMaterial::nickel_superalloy(),
+        }
+        .compile(density_kg_m3)
+        .expect("compile stored-reactant tank");
+        TankMount {
+            name: name.into(),
+            tank: compiled,
+            position_body_m: position_body_m.to_array(),
+            intrinsic_inertia_body_kg_m2: shape
+                .intrinsic_inertia_body_kg_m2(compiled.dry_mass_kg, compiled.full_propellant_kg)
+                .expect("reactant tank inertia"),
+            initial_propellant_kg: Some(initial_propellant_kg),
+            resource: TankResource::Stored(resource),
+        }
+    };
+    let tanks = vec![
+        make_tank(
+            "fuel-cell-hydrogen",
+            StoredPropellant::LiquidHydrogen,
+            71.0,
+            1.0,
+            DVec3::new(-0.5, 0.0, 0.0),
+        ),
+        make_tank(
+            "fuel-cell-oxygen",
+            StoredPropellant::Lox,
+            1_141.0,
+            8.0,
+            DVec3::new(0.5, 0.0, 0.0),
+        ),
+        make_tank(
+            "electric-thruster-xenon",
+            StoredPropellant::Xenon,
+            2.0,
+            0.1,
+            DVec3::new(0.0, 0.5, 0.0),
+        ),
+    ];
+    let electric_engine = ElectricThrusterSpec {
+        name: "aft-ion-engine".into(),
+        propellant: ElectricPropellant::Xenon,
+        design: ElectricThrusterDesign::GriddedIon {
+            accelerator_voltage_v: 1_000.0,
+            grid_diameter_m: 0.4,
+            grid_gap_m: 0.002,
+            max_beam_current_density_a_m2: 100.0,
+            propellant_utilization: 0.95,
+            accelerator_efficiency: 0.9,
+        },
+        maximum_power_w: 5_000.0,
+        maximum_mass_flow_kg_s: 1.0e-5,
+        power_processor_specific_power_w_kg: 2_000.0,
+        structure_density_kg_m3: 2_700.0,
+        structure_thickness_m: 0.003,
+        radiator_area_m2: 10.0,
+        radiator_temperature_k: 700.0,
+        radiator_emissivity: 0.9,
+        radiator_areal_density_kg_m2: 8.0,
+        ionization_efficiency: 0.75,
+        inlet_temperature_k: 300.0,
+    }
+    .compile()
+    .expect("compile electric thruster");
+    let electrical_power = ElectricalPowerSystem {
+        fuel_cells: vec![FuelCellSpec {
+            name: "fuel-cell-stack".into(),
+            rated_electrical_power_w: 7_000.0,
+            electrical_efficiency: 0.6,
+            dry_mass_kg: 20.0,
+            dimensions_body_m: DVec3::splat(0.3),
+            position_body_m: DVec3::ZERO,
+            feed_port_name: None,
+        }],
+        consumers: vec![
+            PowerConsumerSpec {
+                name: "life-support".into(),
+                rated_power_w: 5_000.0,
+                priority: PowerPriority::LifeSupport,
+            },
+            PowerConsumerSpec {
+                name: "aft-ion".into(),
+                rated_power_w: electric_engine.maximum_power_w,
+                priority: PowerPriority::Propulsion,
+            },
+        ],
+        ..ElectricalPowerSystem::default()
+    };
+    let mut vehicle = starter_flight
+        .vehicle
+        .clone()
+        .with_tanks(tanks)
+        .expect("install fuel-cell tanks")
+        .with_electric_thrusters(vec![ElectricThrusterMount {
+            name: "aft-ion".into(),
+            engine: electric_engine,
+            position_body_m: [0.0, 0.5, 0.0],
+            thrust_axis_body: [1.0, 0.0, 0.0],
+        }])
+        .expect("install electric thruster")
+        .with_electrical_power(electrical_power)
+        .expect("install fuel-cell power system");
+    vehicle.bake_tank_masses().expect("reactant tank masses");
+    vehicle
+        .bake_electric_thruster_masses()
+        .expect("electric-thruster mass");
+    vehicle
+        .bake_electrical_power_masses()
+        .expect("fuel-cell mass");
+    let mut flight = FlightAuthority::new_with_vehicle(
+        &ephemeris,
+        ephemeris.body_id("thessa").unwrap(),
+        vehicle,
+    )
+    .expect("custom flight authority");
+    flight.electrical_power_command.consumer_power_w[0] = 5_000.0;
+    flight.electric_thruster_requested_flow_kg_s[0] = 1.0e-5;
+
+    flight
+        .advance(&ephemeris, ControlMode::Direct, FLIGHT_STEP_S)
+        .expect("advance fuel-cell bus and shared resource transaction");
+
+    let telemetry = flight
+        .electrical_power_telemetry
+        .as_ref()
+        .expect("fixed-step bus telemetry");
+    assert!((telemetry.fuel_cell_output_power_w - 7_000.0).abs() < 1e-8);
+    assert!((telemetry.supplied_power_w("life-support").unwrap() - 5_000.0).abs() < 1e-8);
+    let delivered_thruster_power_w = telemetry.supplied_power_w("aft-ion").unwrap();
+    assert!((delivered_thruster_power_w - 2_000.0).abs() < 1e-8);
+    assert!(flight.resource_state.tank_propellant_kg[0] < 1.0);
+    assert!(flight.resource_state.tank_propellant_kg[1] < 8.0);
+    assert!(flight.resource_state.tank_propellant_kg[2] < 0.1);
+    assert!(flight.last_propulsion_force_body_n.x > 0.0);
+    let full_power_point = flight.vehicle.electric_thrusters[0]
+        .operating_point(thessa_sim_core::ElectricThrusterCommand {
+            available_power_w: 5_000.0,
+            requested_mass_flow_kg_s: 1.0e-5,
+        })
+        .expect("full-power electric thruster point");
+    assert!(flight.last_propulsion_force_body_n.x < full_power_point.thrust_n);
+    assert!(!flight.fuel_limited);
+}
+
+#[test]
+fn fixed_tick_limits_mounted_rcs_with_reachable_gas_and_updates_vehicle_mass() {
+    let (ephemeris, starter_flight) = fixture();
+    let thruster = ColdGasThrusterSpec {
+        name: "nitrogen-rendezvous-nozzle".into(),
+        gas: Propellant::ColdGasNitrogen,
+        storage_temp_k: 300.0,
+        rated_pressure_pa: 2.0e6,
+        throat_radius_m: 0.001,
+        expansion_ratio: 10.0,
+        nozzle_length_m: 0.02,
+        contour: NozzleContour::Conical,
+        material: ChamberMaterial::nickel_superalloy(),
+        valve_rise_time_s: 0.005,
+        min_on_time_s: 0.02,
+    }
+    .compile()
+    .expect("compile cold-gas thruster");
+    let mount = RcsMount {
+        name: "translation-rcs".into(),
+        thruster: RcsThruster::ColdGas(thruster),
+        position_body_m: [0.0; 3],
+        direction_body: [1.0, 0.0, 0.0],
+    };
+    let shape = TankShape::Sphere { diameter_m: 0.5 };
+    let tank = TankSpec {
+        shape,
+        pressure_pa: 2.0e6,
+        material: ChamberMaterial::nickel_superalloy(),
+    }
+    .compile(25.0)
+    .expect("compile nitrogen tank");
+    let tank_mount = TankMount {
+        name: "rcs-nitrogen".into(),
+        tank,
+        position_body_m: [0.0, 0.5, 0.0],
+        intrinsic_inertia_body_kg_m2: shape
+            .intrinsic_inertia_body_kg_m2(tank.dry_mass_kg, tank.full_propellant_kg)
+            .expect("nitrogen tank inertia"),
+        initial_propellant_kg: Some(1.0e-6),
+        resource: TankResource::Stored(StoredPropellant::Nitrogen),
+    };
+    let mut vehicle = starter_flight
+        .vehicle
+        .clone()
+        .with_rcs_mounts(vec![mount])
+        .expect("install mounted RCS")
+        .with_tanks(vec![tank_mount])
+        .expect("install nitrogen inventory");
+    vehicle.bake_rcs_masses().expect("RCS mass");
+    vehicle.bake_tank_masses().expect("tank mass");
+    let mut flight = FlightAuthority::new_with_vehicle(
+        &ephemeris,
+        ephemeris.body_id("thessa").unwrap(),
+        vehicle,
+    )
+    .expect("custom flight authority");
+    let initial_mass_kg = flight.vehicle.mass_properties.mass_kg;
+
+    flight
+        .advance_control_demand_with_budget(
+            &ephemeris,
+            ControlDemand {
+                force_body_n: DVec3::X,
+                moment_body_nm: DVec3::ZERO,
+                propulsion: PropulsionDemand { normalized: 0.0 },
+            },
+            FLIGHT_STEP_S,
+            None,
+        )
+        .expect("advance one mounted RCS pulse");
+
+    assert!(flight.resource_state.tank_propellant_kg[0] <= 1.0e-10);
+    assert!(flight.vehicle.mass_properties.mass_kg < initial_mass_kg);
+    assert!(flight.fuel_limited);
 }
 
 #[test]

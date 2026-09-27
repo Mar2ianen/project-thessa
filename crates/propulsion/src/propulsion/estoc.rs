@@ -1672,6 +1672,7 @@ mod tests {
             dt_s: 0.1,
             shaft,
             starter_engaged: false,
+            pneumatic_starter_power_w: 0.0,
             generator_load_w: 0.0,
         };
         let condition = condition_at(2.0, 101_325.0);

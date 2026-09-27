@@ -150,3 +150,7 @@ name = "stack"
 parent = "stage.top"
 child = "capsule.base"
 hatch_open = true
+
+[[resource_feed_ports]]
+consumer_name = "capsule-engine"
+feed_port_name = "capsule.engine"

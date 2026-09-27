@@ -18,13 +18,14 @@ Separate parts assemble into one craft through authored interfaces:
   tank mounts, cabin seats/exits, ports, controls, and hull mass/inertia
   into the craft frame;
 - passable cabins: crew and air domains shared through open hatches;
-- fuel reachability: which tanks can feed which engine ports.
+- resource reachability: which tanks can feed installed consumers through
+  named engine-feed ports.
 
 Non-goals in this slice: per-joint loads, structural failure and cluster
 splitting, runtime docking/undocking, finite-rate cabin flow, airlock parts,
-struts and fuel lines (they require explicit non-tree graph edges). Fuel draw
-uses reachable tank inventory and engine mass flow without solving pressure or
-flow through authored pipe geometry.
+struts and fuel lines (they require explicit non-tree graph edges). Resource
+draw uses compatible reachable inventory and actual operating-point flows
+without solving pressure or flow through authored pipe geometry.
 
 ## 2. Nodes (hangar authoring)
 
@@ -74,13 +75,17 @@ Volumes are non-tank regions; tanks are never crew volumes:
 - **Air domains** (`air_groups`): open links between pressurized volumes
   only. A dry region can be crew-passable but does not join a pressure
   domain.
-- **Fuel reachability** (`feed_paths`): tank regions to `engine-mount`
+- **Resource reachability** (`feed_paths`): tank regions to `engine-mount`
   ports through resource-open links, as qualified `body.region` →
   `body.port` pairs (`Bipropellant` regions expose `body.region-ox` and
   `body.region-fuel`). Closed hatches block fuel like sealed KSP docks. The
-  flight allocator draws from the reachable inventory according to installed
-  rocket operating-point flow and mixture ratio; named compatible tanks may
-  also be manually transferred across an open resource path.
+  fixed-step allocator draws from the reachable inventory according to each
+  installed consumer's operating-point flow. Rocket mixture ratio, APU/jet
+  fuel, RCS propellant, electric working fluid, fusion reactants, and fuel-cell
+  hydrogen/oxygen all use compatible stored-resource identities. APUs and fuel
+  cells may author their endpoint directly; `resource_feed_ports` maps other
+  consumer names to an engine-feed endpoint. Named compatible tanks may also
+  be manually transferred across an open resource path.
 
 ## 5. Runtime connectivity (`thessa-vehicle-core::assembly`)
 
@@ -93,7 +98,10 @@ regions along an unsuited or hose-fed crew member's route; self-contained
 suits also permit dry/vacuum passage. This is a compartment access query,
 not character movement. Structural stack joints never pass crew but always
 pass resources. Index-based helpers are geometry-free and validate endpoint
-ranges. Opening an exterior assembly hatch into a dry region refuses while
+ranges. Fixed-step resource planning honors current link state and named feed
+endpoints for routed consumers; shared inventory is reserved across overlapping
+ports before one mass/inertia commit. Opening an exterior assembly hatch into a
+dry region refuses while
 its connected pressure domain contains air unless the caller explicitly
 asserts that all exposed occupants are suited. That operation vents the
 affected domain and updates vehicle mass properties and the body-frame COM

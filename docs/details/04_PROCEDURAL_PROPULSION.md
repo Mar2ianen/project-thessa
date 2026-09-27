@@ -12,14 +12,15 @@ engine, plus piston/electric propeller drives and a
 stateful, heat-budgeted turboprop takeoff path on a reusable ideal actuator
 disk (section 9), steady electric spacecraft thrusters (section 13), and
 continuous/pulsed fusion propulsion (section 14).
-Runtime propellant draw for installed liquid/solid rocket engines and
-multi-chamber systems, per-engine throttle allocation, explicit tank transfer,
-and moving-mass/inertia updates are implemented. Resource coupling for the
-air-breathing, electric, shaft-power, and fusion families, transient
+Fixed-step resource coupling now covers liquid/solid rockets, air-breathing
+jets and APUs, electric and shaft-power drives, RCS, fuel cells, and continuous
+and pulsed fusion. Compatible reachable tanks share one allocation and commit
+with moving-mass/inertia updates; APUs and fuel cells also join the vehicle
+electrical bus, and APU pneumatic bleed can crank fitted jet starters. Transient
 piston/electric source and prop-shaft state, finite-blade propeller maps, an
 independent free-power-turbine spool, high-fidelity scramjet shock-train and
 finite-rate chemistry, fusion confinement and transient thermal fidelity, and
-the editor UI are still TBD (see section 18).
+the editor UI remain future work (see section 18).
 
 ## 1. Design goal
 
@@ -434,9 +435,11 @@ spool-scaled compressor suction, and generator load in the shaft work
 balance. A power-level downstream power-turbine load now shares this balance,
 and its enthalpy extraction is documented in section 18.10. Still deferred
 from this section: independent multi-spool/gearbox coupling, torque-level
-starter/generator authoring, pneumatic and rocket-bootstrap resource
-pipelines (stored-energy topologies currently book one energy reservoir),
-and generator thermal limits/bus connection.
+starter/generator authoring, onboard pneumatic and rocket-bootstrap starter
+consumable pipelines (starter state still books a generic stored-energy
+reservoir), and generator thermal limits. APU-to-starter bleed is connected
+in the authoritative runtime; standalone jet-mount generator export to the
+bus remains future work.
 
 ## 9. Piston, electric, and generic shaft-power propulsion
 
@@ -650,12 +653,12 @@ vehicle, and books power-processor, active hardware, and radiator mass. Each
 steady operating point is bounded by its electrical-power, feed-flow, current,
 and radiative heat-rejection limits.
 
-The vehicle-wide shared electrical bus is now documented in
-[`09_ELECTRICAL_POWER.md`](09_ELECTRICAL_POWER.md). An electric-thruster bus
-consumer uses the same mount name; its allocated bus power becomes the
-thruster's available-power limit. Standalone explicit power commands remain
-available, and the bus does not automatically create demands for other
-propulsion or actuator components.
+The vehicle-wide shared electrical bus is documented in
+[`09_ELECTRICAL_POWER.md`](09_ELECTRICAL_POWER.md). In the authoritative runtime,
+electric thrusters, electric propeller drives, and fusion drivers/chargers use
+same-name bus consumers; their actual bus allocations bound their operating
+points. Direct operating-point commands remain available to standalone model
+callers.
 
 - Gridded-ion/Hall exhaust velocity follows singly charged particle energy,
   `ve = sqrt(2 e V / mi)`. Ion current follows particle throughput, and feed
@@ -676,9 +679,11 @@ propulsion or actuator components.
   `Pelec = Pjet + Pexhaust-internal + Qwaste`; radiator heat is only local
   conversion loss, not residual exhaust enthalpy. Radiator capacity is
   `εσA(Trad⁴ - Tbackground⁴)`.
-- This is a steady operating-point model: no plasma kinetics, multi-charge
-  states, electrode erosion, propellant tank depletion, plume interaction,
-  Hall field topology, or transient power-bus/storage state is claimed.
+- This is a steady propulsion operating-point model: plasma kinetics,
+  multi-charge states, electrode erosion, plume interaction, Hall field
+  topology, and engine-internal transients are not modeled. Mounted vehicle
+  runtime separately handles reachable propellant depletion and fixed-step bus
+  dispatch/storage.
 
 ## 14. Fusion propulsion
 
@@ -901,6 +906,22 @@ Bevy/Tokio/wgpu).
   `flight-authority/benches/resource_allocation.rs` measures the allocator on a
   32-engine/64-tank 120-Hz vehicle workload; the current optimized local run
   measured 4.35–4.56 us per allocation.
+- The fixed-step authority also plans mounted APU, jet/ESTOC, RCS, fuel-cell,
+  electric-thruster, fusion, piston/electric propeller-drive, and turboprop
+  demands against that allocator. Each limited command is reduced and its
+  operating point re-evaluated before forces or source output are accepted.
+  Fuel-cell hydrogen/oxygen and external propulsion demands share the tank
+  transaction; committed tank and grain draws update mass, inertia, and COM.
+  APU generation and dispatched fuel-cell output enter the same ideal bus.
+  Electric thrusters and bus-powered fusion/electric propeller loads use
+  same-name bus consumers; absent consumers supply no electrical power.
+  Named `resource_feed_ports` routes send a generic consumer to an assembly
+  engine-feed endpoint without an authored pipe network or line-flow solver.
+- A pneumatic starter request is derived from the fitted starter's rated
+  inlet power. Lit APUs share that bleed request as a physical shaft load, and
+  only their delivered bleed is passed to jet/turboprop starter operating
+  points. External bleed does not consume onboard starter reserve; any
+  remaining starter demand may use the fitted reserve.
 - Plume handoff: `EnginePlumeState` maps field-for-field into
   `plume-core` `PlumeSource` through the single `engine_plume_source`
   choke point, with no new cross-crate dependency.
@@ -908,11 +929,13 @@ Bevy/Tokio/wgpu).
 #### Runtime resource contract
 
 - State is `VehicleResourceState`: one remaining-mass value per installed tank,
-  plus one burn clock and ignition bit per solid motor.
-- Inputs are installed-engine and chamber throttle commands, ambient pressure,
-  fixed-step duration, and tank-to-engine-port reachability from the assembly
-  graph. Output is the allocated body wrench, actual throttles, per-tank draw,
-  propellant mass flow, fuel-limited status, and next solid-motor burn state.
+  plus one burn clock and ignition bit per solid motor. The fixed-step runtime
+  also carries electrical-bus, starter/shaft, and pulsed-fusion operating state.
+- Inputs include mounted rocket/chamber commands, ambient pressure, fixed-step
+  duration, installed-consumer operating-point demands, and tank-to-feed-port
+  reachability through the current assembly topology. Outputs include allocated
+  wrenches and actual commands, per-tank draw, consumer scales/flows,
+  fuel-limited status, updated subsystem state, and the moving-mass frame shift.
 - A liquid/system operating point supplies each requested kg/s. For a resource
   group, requested mass is `sum(mass_flow_i * dt)`. Compatible mixed inventory
   is drawn first; split bipropellant inventory is constrained by the smaller
@@ -920,7 +943,10 @@ Bevy/Tokio/wgpu).
   availability scale reduces each engine's requested throttle proportionally;
   engines that would fall below their minimum stable throttle are shut off and
   the remaining demand is reallocated. Pure working-fluid engines match the
-  compiled fluid identity rather than the plume-label propellant pair.
+  compiled fluid identity rather than the plume-label propellant pair. Generic
+  installed consumers receive one common availability scale across all their
+  reactants, and explicit feed ports restrict allocation to topologically
+  reachable tanks.
 - Commit conserves total mass: tank and grain mass changes update vehicle mass,
   first moment, and inertia about the new center of mass, then shift all baked
   body-frame geometry and the inertial state to that frame. The commit returns
@@ -964,12 +990,18 @@ Bevy/Tokio/wgpu).
 - RCS propellants: monopropellant hydrazine (catalytic chamber through
   the shared pressure-fed liquid path, fixed full thrust) and cold-gas
   nitrogen/helium (chamberless compile; runtime thrust tracks inlet
-  pressure exactly through choked flow).
+  pressure exactly through choked flow). The mounted fixed-step path currently
+  evaluates cold-gas mounts at their authored rated inlet pressure; tank
+  blowdown and line-pressure coupling remain future work.
 - Pulse physics: triangular valve rise with propellant booked over the
   full open time, so short pulses lose effective Isp causally; minimum
   impulse bit, hydrazine Isp band (210-235 s), and N2 Isp band (65-85 s)
   pinned by test. Mounted `RcsCluster` delivers force/moment impulses
   and PWM-average wrenches (opposed-pair pure couple pinned).
+- Mounted `RcsMount`s also join the authoritative flight allocator: control
+  requests become per-nozzle pulse duties, compatible reachable tank inventory
+  limits the delivered wrench, and pulse mass commits through the vehicle
+  moving-mass/inertia path.
 - NTR: power-limited compile (mdot from reactor power balance, chamber
   pressure from choked flow, expander cap refusal), hot-fluid properties
   for H2/CH4/NH3/H2O, frozen-flow dissociation efficiency on
@@ -1169,8 +1201,10 @@ Shipped v5 foundation:
   participate in the runtime shaft work balance — the request is capped
   at rated power, scaled by efficiency onto the shaft, below cut-in the
   generator is offline, and an overdraw bogs the spool down instead of
-  being padded. Still missing: thermal limit, bus connection, and an
-  efficiency map instead of the bounded scalar.
+  being padded. APU generator output is connected to the shared bus;
+  standalone jet-mount generator export is not yet dispatched there.
+  Generator thermal limits and an efficiency map instead of the bounded
+  scalar remain future work.
 - Multi-spool/gearbox authoring must keep mode-transition dynamics separate
   from shaft dynamics. LP/IP/HP spool inertia and coupling, starter attachment,
   and optional geared fan reduction are independent of the ESTOC
@@ -1193,14 +1227,13 @@ Known v5 correctness debt:
 
 ### 18.7 Still deferred
 
-Resource coupling for air-breathing/ESTOC, electric, shaft-power, and fusion
-propulsion remains future work, as do transient piston/electric source startup and
-propeller-shaft inertia, finite-blade propeller pitch/stall/profile maps, and
-an independent free-power-turbine/prop-rotor inertia model (the current
-turboprop extracts power through the shared normalized gas-generator shaft),
-high-fidelity scramjet inlet/shock-train geometry and finite-rate chemistry,
-local casing failure after shaped-grain web breakthrough, and the editor UI
-itself (the CLI/JSON analyzer is its backend contract).
+Transient piston/electric source startup and propeller-shaft inertia,
+finite-blade propeller pitch/stall/profile maps, and an independent
+free-power-turbine/prop-rotor inertia model (the current turboprop extracts
+power through the shared normalized gas-generator shaft), high-fidelity
+scramjet inlet/shock-train geometry and finite-rate chemistry, local casing
+failure after shaped-grain web breakthrough, and the editor UI itself (the
+CLI/JSON analyzer is its backend contract) remain future work.
 
 ### 18.8 Jet shaft/starter runtime (section 8.1, single spool)
 
@@ -1231,7 +1264,10 @@ Formal description:
   (`SHAFT_FRICTION_FRACTION × P_ref × n³`) always cost rotation. The
   starter adds shaft power at its topology efficiency (electric 0.85,
   pneumatic 0.70, rocket bootstrap 0.40), capped by
-  `charge × η / dt` so a spent battery/air bottle really dies. The
+  `charge × η / dt` so a spent battery/air bottle really dies. APU-supplied
+  pneumatic input can supplement the onboard reserve up to rated starter
+  power; the supplying APU books bleed as shaft load, and accepted external
+  power is reported separately from reserve draw. The
   generator comes online above its cut-in spool, caps at rated power,
   and draws `load / efficiency` from the shaft — never padded, so an
   overdraw bogs the spool down. Integration:
@@ -1577,9 +1613,11 @@ thruster designs and installs them through `ElectricThrusterMount`.
   21.0 ns/row gridded-ion, 20.7 ns/row Hall, 30.3 ns/row MPD, 38.1 ns/row
   resistojet, and 22.2 ns/row arcjet on this machine.
 - Fidelity debt: pulsed-power supplies, charge-state distributions, plume
-  divergence, electrode/grid erosion, transient bus storage, feed-tank
-  depletion, Hall electron transport, and VASIMR-class RF/helicon coupling
-  remain outside this steady backend.
+  divergence, electrode/grid erosion, transient bus storage, Hall electron
+  transport, and VASIMR-class RF/helicon coupling remain outside this steady
+  backend. Flight-authority resource coupling draws the compiled species from
+  reachable tanks and supplies only the same-name consumer's delivered bus
+  power to the operating point.
 
 ### 18.14 Continuous and pulsed fusion propulsion (section 14)
 
@@ -1640,3 +1678,40 @@ and authorable through `vehicle-baker`.
   coupling, magnetic-field topology, and technology/material unlock policy
   remain future work. These limits are distinct from the shipped steady and
   event-driven engine interfaces.
+
+### 18.15 Fixed-step resource and electrical integration
+
+The authoritative flight runtime evaluates installed resource consumers once
+per fixed step, iterating constrained command scales until the operating points
+and shared tank assignment agree. The returned tank plan is committed after
+the rigid-body step; consumed mass updates the vehicle frame through the
+existing mass/inertia path.
+
+- State includes `VehicleResourceState`, electrical-bus state, APU and jet
+  shaft state, turboprop shaft state, and pulsed-fusion buffer state. Commands
+  cover mounted engines, APU/jet starters, RCS duty allocation, electric
+  thruster feed, fusion working flow/charge, and shaft-drive output.
+- One tank transaction covers rocket/chamber flow, mounted jet/APU and
+  propeller/turboprop fuel, RCS pulses, electric-thruster species, fusion
+  reactants/working fluid, and fuel-cell hydrogen/oxygen. Each installed
+  consumer's named port or generic `resource_feed_ports` route limits it to
+  compatible tanks reachable through the current assembly links. Consumers
+  have unique names and share one availability scale across multiple
+  reactants; overlapping ports cannot overdraw shared tanks.
+- Resource limitation feeds back into throttle, flow, RCS duty, or pulse
+  arming, then re-evaluates the affected operating point before its wrench or
+  electrical output is accepted. Fuel cells share the transaction with other
+  consumers; constrained cell output is redispatched on the bus.
+- APU generator output is evaluated from its gas-turbine shaft and joins the
+  bus as actual auxiliary generation. Fuel-cell output is dispatched against
+  bus loads and tank inventory. Electric thrusters, fusion drivers/chargers,
+  and electric propeller drives request their operating-point load through a
+  same-name bus consumer; missing loads provide zero power. APU pneumatic
+  bleed is a shaft load and supplies compatible jet/turboprop starters from
+  lit installed APUs.
+- Baker/runtime coverage includes generic named feed routes, a combined
+  APU/fuel-cell/RCS example, shared-reactant allocation, fixed-step mounted
+  RCS gas draw and mass updates, fuel-cell dispatch alongside an installed
+  electric thruster, and an APU-to-pneumatic-jet-start regression. Detailed
+  pipeline pressure/flow, starter duct geometry, transient piston/electric
+  source startup, and a multi-spool starter network remain outside this slice.

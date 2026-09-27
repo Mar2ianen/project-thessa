@@ -502,6 +502,62 @@ impl ReactorSpec {
     }
 }
 
+/// Hydrogen/oxygen fuel cell attached to the shared vehicle bus.
+///
+/// The cell consumes liquid-hydrogen inventory and LOX at the water-forming
+/// mass ratio (8 kg O2 per kg H2); product water, electrical output, and
+/// conversion heat are reported per step. Reactants remain in the common
+/// installed-tank inventory rather than being duplicated in power state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FuelCellSpec {
+    pub name: String,
+    pub rated_electrical_power_w: f64,
+    pub electrical_efficiency: f64,
+    pub dry_mass_kg: f64,
+    pub dimensions_body_m: DVec3,
+    pub position_body_m: DVec3,
+    /// Optional assembly engine/feed-port endpoint restricting its tank path.
+    #[serde(default)]
+    pub feed_port_name: Option<String>,
+}
+
+impl FuelCellSpec {
+    pub fn validate(&self) -> Result<(), ElectricalPowerError> {
+        if self.name.trim().is_empty() {
+            return Err(ElectricalPowerError::InvalidSpec(
+                "fuel-cell name must not be empty".into(),
+            ));
+        }
+        if self
+            .feed_port_name
+            .as_ref()
+            .is_some_and(|name| name.trim().is_empty())
+        {
+            return Err(ElectricalPowerError::InvalidSpec(format!(
+                "fuel cell '{}' feed-port name must not be empty",
+                self.name
+            )));
+        }
+        require_positive(self.rated_electrical_power_w, "fuel-cell electrical rating")?;
+        require_efficiency(
+            self.electrical_efficiency,
+            "fuel-cell electrical efficiency",
+        )?;
+        require_positive(self.dry_mass_kg, "fuel-cell dry mass")?;
+        validate_positive_vector(self.dimensions_body_m, "fuel-cell dimensions")?;
+        validate_finite_vector(self.position_body_m, "fuel-cell position")
+    }
+
+    pub fn inertia_body_kg_m2(&self) -> DMat3 {
+        cuboid_inertia(self.dry_mass_kg, self.dimensions_body_m)
+    }
+}
+
+/// Hydrogen lower heating value used by the idealized fuel-cell balance (J/kg).
+pub const FUEL_CELL_HYDROGEN_LHV_J_KG: f64 = 120.0e6;
+/// Stoichiometric oxygen/hydrogen mass ratio for forming water.
+pub const FUEL_CELL_OXYGEN_HYDROGEN_RATIO: f64 = 8.0;
+
 /// A geometric occluder dimming one stellar source: a planet, moon, or
 /// another vehicle seen from the receiver.
 ///
@@ -762,6 +818,7 @@ pub struct ElectricalPowerSystem {
     pub ultracapacitors: Vec<UltracapacitorSpec>,
     pub solar_arrays: Vec<SolarArraySpec>,
     pub reactors: Vec<ReactorSpec>,
+    pub fuel_cells: Vec<FuelCellSpec>,
     pub consumers: Vec<PowerConsumerSpec>,
 }
 
@@ -791,6 +848,11 @@ impl ElectricalPowerSystem {
             )
             .chain(
                 self.reactors
+                    .iter()
+                    .map(|part| (part.name.as_str(), part.validate())),
+            )
+            .chain(
+                self.fuel_cells
                     .iter()
                     .map(|part| (part.name.as_str(), part.validate())),
             )
@@ -877,6 +939,13 @@ impl ElectricalPowerSystem {
                     part.inertia_body_kg_m2(),
                 )
             }))
+            .chain(self.fuel_cells.iter().map(|part| {
+                (
+                    part.dry_mass_kg,
+                    part.position_body_m,
+                    part.inertia_body_kg_m2(),
+                )
+            }))
         {
             mass_kg += mass;
             first_moment += position * mass;
@@ -910,9 +979,24 @@ impl ElectricalPowerSystem {
         state: &ElectricalPowerState,
         command: &ElectricalPowerCommand,
     ) -> Result<(ElectricalPowerState, ElectricalPowerTelemetry), ElectricalPowerError> {
+        self.advance_with_fuel_cell_inventory(state, command, f64::MAX, f64::MAX)
+    }
+
+    /// Advance the bus with fuel-cell reactant availability taken from the
+    /// installed vehicle resource inventory. The returned fuel-cell telemetry
+    /// is the exact reactant flow to commit through that shared inventory.
+    pub fn advance_with_fuel_cell_inventory(
+        &self,
+        state: &ElectricalPowerState,
+        command: &ElectricalPowerCommand,
+        available_hydrogen_kg: f64,
+        available_oxygen_kg: f64,
+    ) -> Result<(ElectricalPowerState, ElectricalPowerTelemetry), ElectricalPowerError> {
         self.validate()?;
         state.validate_for(self)?;
         command.validate_for(self)?;
+        require_non_negative_command(available_hydrogen_kg, "available fuel-cell hydrogen")?;
+        require_non_negative_command(available_oxygen_kg, "available fuel-cell oxygen")?;
 
         // Effective post-occlusion irradiance per stellar source. Tracking
         // targets and panel power both use these weights, so an eclipsed sun
@@ -1023,6 +1107,45 @@ impl ElectricalPowerSystem {
             .collect();
         let reactor_available_power_w = finite_sum(&reactor_available_by_source, "reactor power")?;
 
+        let fuel_cell_requested_by_source: Vec<f64> = self
+            .fuel_cells
+            .iter()
+            .zip(&command.fuel_cell_power_fraction)
+            .map(|(cell, fraction)| cell.rated_electrical_power_w * fraction)
+            .collect();
+        let hydrogen_required_at_full_kg = self
+            .fuel_cells
+            .iter()
+            .zip(&fuel_cell_requested_by_source)
+            .map(|(cell, power)| {
+                power * command.dt_s / (cell.electrical_efficiency * FUEL_CELL_HYDROGEN_LHV_J_KG)
+            })
+            .sum::<f64>();
+        let oxygen_required_at_full_kg =
+            hydrogen_required_at_full_kg * FUEL_CELL_OXYGEN_HYDROGEN_RATIO;
+        if !hydrogen_required_at_full_kg.is_finite() || !oxygen_required_at_full_kg.is_finite() {
+            return Err(ElectricalPowerError::InvalidCommand(
+                "fuel-cell reactant demand overflowed".into(),
+            ));
+        }
+        let hydrogen_scale = if hydrogen_required_at_full_kg > 0.0 {
+            (available_hydrogen_kg / hydrogen_required_at_full_kg).min(1.0)
+        } else {
+            1.0
+        };
+        let oxygen_scale = if oxygen_required_at_full_kg > 0.0 {
+            (available_oxygen_kg / oxygen_required_at_full_kg).min(1.0)
+        } else {
+            1.0
+        };
+        let fuel_cell_resource_scale = hydrogen_scale.min(oxygen_scale).clamp(0.0, 1.0);
+        let fuel_cell_available_by_source: Vec<f64> = fuel_cell_requested_by_source
+            .iter()
+            .map(|power| power * fuel_cell_resource_scale)
+            .collect();
+        let fuel_cell_available_power_w =
+            finite_sum(&fuel_cell_available_by_source, "fuel-cell power")?;
+
         let battery_discharge_limit_by_store: Vec<f64> = self
             .batteries
             .iter()
@@ -1059,8 +1182,11 @@ impl ElectricalPowerSystem {
             requested_power_w.push(*motor_request_w);
             load_priorities.push(PowerPriority::Utility);
         }
-        let available_bus_power_w =
-            solar_available_power_w + reactor_available_power_w + storage_discharge_available_w;
+        let available_bus_power_w = solar_available_power_w
+            + command.auxiliary_generation_power_w
+            + reactor_available_power_w
+            + fuel_cell_available_power_w
+            + storage_discharge_available_w;
         if !available_bus_power_w.is_finite() {
             return Err(ElectricalPowerError::InvalidCommand(
                 "available bus power overflowed".into(),
@@ -1072,11 +1198,22 @@ impl ElectricalPowerSystem {
         let total_delivered_power_w = finite_sum(&allocated_power_w, "delivered power")?;
 
         let solar_to_load_w = solar_available_power_w.min(total_delivered_power_w);
-        let reactor_to_load_w = (total_delivered_power_w - solar_to_load_w)
+        let auxiliary_to_load_w = (total_delivered_power_w - solar_to_load_w)
+            .max(0.0)
+            .min(command.auxiliary_generation_power_w);
+        let reactor_to_load_w = (total_delivered_power_w - solar_to_load_w - auxiliary_to_load_w)
             .max(0.0)
             .min(reactor_available_power_w);
-        let battery_discharge_power_w =
-            (total_delivered_power_w - solar_to_load_w - reactor_to_load_w).max(0.0);
+        let fuel_cell_to_load_w =
+            (total_delivered_power_w - solar_to_load_w - auxiliary_to_load_w - reactor_to_load_w)
+                .max(0.0)
+                .min(fuel_cell_available_power_w);
+        let battery_discharge_power_w = (total_delivered_power_w
+            - solar_to_load_w
+            - auxiliary_to_load_w
+            - reactor_to_load_w
+            - fuel_cell_to_load_w)
+            .max(0.0);
 
         let battery_charge_limits_w: Vec<f64> = self
             .batteries
@@ -1105,13 +1242,33 @@ impl ElectricalPowerSystem {
                 + finite_sum(&capacitor_charge_limits_w, "ultracapacitor charge power")?;
         let solar_surplus_w = (solar_available_power_w - solar_to_load_w).max(0.0);
         let solar_to_storage_w = solar_surplus_w.min(total_storage_charge_limit_w);
+        let auxiliary_surplus_w =
+            (command.auxiliary_generation_power_w - auxiliary_to_load_w).max(0.0);
+        let auxiliary_to_storage_w =
+            auxiliary_surplus_w.min((total_storage_charge_limit_w - solar_to_storage_w).max(0.0));
         let reactor_surplus_capacity_w = (reactor_available_power_w - reactor_to_load_w).max(0.0);
-        let reactor_to_storage_w = reactor_surplus_capacity_w
-            .min((total_storage_charge_limit_w - solar_to_storage_w).max(0.0));
-        let storage_charge_power_w = solar_to_storage_w + reactor_to_storage_w;
+        let reactor_to_storage_w = reactor_surplus_capacity_w.min(
+            (total_storage_charge_limit_w - solar_to_storage_w - auxiliary_to_storage_w).max(0.0),
+        );
+        let fuel_cell_surplus_capacity_w =
+            (fuel_cell_available_power_w - fuel_cell_to_load_w).max(0.0);
+        let fuel_cell_to_storage_w = fuel_cell_surplus_capacity_w.min(
+            (total_storage_charge_limit_w
+                - solar_to_storage_w
+                - auxiliary_to_storage_w
+                - reactor_to_storage_w)
+                .max(0.0),
+        );
+        let storage_charge_power_w = solar_to_storage_w
+            + auxiliary_to_storage_w
+            + reactor_to_storage_w
+            + fuel_cell_to_storage_w;
         let reactor_output_power_w = reactor_to_load_w + reactor_to_storage_w;
+        let fuel_cell_output_power_w = fuel_cell_to_load_w + fuel_cell_to_storage_w;
 
         let reactor_outputs = share_with_caps(reactor_output_power_w, &reactor_available_by_source);
+        let fuel_cell_outputs =
+            share_with_caps(fuel_cell_output_power_w, &fuel_cell_available_by_source);
         // Batteries and ultracapacitors share bus charge/discharge in
         // proportion to their instantaneous headroom: no chemistry priority
         // is hardcoded into the ideal bus.
@@ -1185,6 +1342,23 @@ impl ElectricalPowerSystem {
                 waste_heat_w: (thermal_power_w - electrical_power_w).max(0.0),
                 fuel_consumed_kg,
                 remaining_fuel_mass_kg: remaining_fuel,
+            });
+        }
+
+        let mut fuel_cell_telemetry = Vec::with_capacity(self.fuel_cells.len());
+        for (cell, electrical_power_w) in self.fuel_cells.iter().zip(&fuel_cell_outputs) {
+            let chemical_power_w = electrical_power_w / cell.electrical_efficiency;
+            let hydrogen_flow_kg_s = chemical_power_w / FUEL_CELL_HYDROGEN_LHV_J_KG;
+            let oxygen_flow_kg_s = hydrogen_flow_kg_s * FUEL_CELL_OXYGEN_HYDROGEN_RATIO;
+            let waste_heat_w = (chemical_power_w - electrical_power_w).max(0.0);
+            fuel_cell_telemetry.push(FuelCellPowerTelemetry {
+                name: cell.name.clone(),
+                electrical_power_w: *electrical_power_w,
+                chemical_power_w,
+                hydrogen_flow_kg_s,
+                oxygen_flow_kg_s,
+                water_production_kg_s: hydrogen_flow_kg_s + oxygen_flow_kg_s,
+                waste_heat_w,
             });
         }
 
@@ -1291,6 +1465,10 @@ impl ElectricalPowerSystem {
             .iter()
             .map(|reactor| reactor.waste_heat_w)
             .sum();
+        let total_fuel_cell_waste_heat_w = fuel_cell_telemetry
+            .iter()
+            .map(|cell| cell.waste_heat_w)
+            .sum();
         let unserved_power_w = (total_requested_power_w - total_delivered_power_w).max(0.0);
         let telemetry = ElectricalPowerTelemetry {
             total_requested_power_w,
@@ -1300,9 +1478,19 @@ impl ElectricalPowerSystem {
             solar_to_load_power_w: solar_to_load_w,
             solar_to_storage_power_w: solar_to_storage_w,
             spilled_solar_power_w: total_spilled_solar_power_w,
+            auxiliary_generation_power_w: command.auxiliary_generation_power_w,
+            auxiliary_to_load_power_w: auxiliary_to_load_w,
+            auxiliary_to_storage_power_w: auxiliary_to_storage_w,
+            spilled_auxiliary_power_w: (command.auxiliary_generation_power_w
+                - auxiliary_to_load_w
+                - auxiliary_to_storage_w)
+                .max(0.0),
             reactor_available_power_w,
             reactor_output_power_w,
             reactor_waste_heat_w: total_reactor_waste_heat_w,
+            fuel_cell_available_power_w,
+            fuel_cell_output_power_w,
+            fuel_cell_waste_heat_w: total_fuel_cell_waste_heat_w,
             battery_charge_power_w: finite_sum(&battery_charge, "battery charge telemetry")?,
             battery_discharge_power_w: finite_sum(
                 &battery_discharge,
@@ -1318,6 +1506,7 @@ impl ElectricalPowerSystem {
             consumer_allocations: consumer_telemetry,
             solar_arrays: solar_telemetry,
             reactors: reactor_telemetry,
+            fuel_cells: fuel_cell_telemetry,
             batteries: battery_telemetry,
             ultracapacitors: capacitor_telemetry,
         };
@@ -1428,8 +1617,14 @@ pub struct ElectricalPowerCommand {
     pub dt_s: f64,
     pub solar_flux: Vec<SolarFluxSource>,
     pub consumer_power_w: Vec<f64>,
+    /// Electrical output from externally advanced mounted generators (for
+    /// example an APU operating point). This is actual generated power, not
+    /// a user-authored bus coefficient.
+    pub auxiliary_generation_power_w: f64,
     /// Requested reactor output as a fraction of its physical capacity.
     pub reactor_power_fraction: Vec<f64>,
+    /// Requested fuel-cell output as a fraction of each cell's rating.
+    pub fuel_cell_power_fraction: Vec<f64>,
     /// `None` holds the current position; `Some(0..=1)` targets a foldable array.
     pub solar_deployment_targets: Vec<Option<f64>>,
     /// `true` slews a single-axis array toward its instantaneous optimum.
@@ -1446,7 +1641,9 @@ impl ElectricalPowerCommand {
             dt_s,
             solar_flux: Vec::new(),
             consumer_power_w: vec![0.0; system.consumers.len()],
+            auxiliary_generation_power_w: 0.0,
             reactor_power_fraction: vec![1.0; system.reactors.len()],
+            fuel_cell_power_fraction: vec![1.0; system.fuel_cells.len()],
             solar_deployment_targets: vec![None; system.solar_arrays.len()],
             solar_tracking_auto: vec![false; system.solar_arrays.len()],
             solar_tracking_targets: vec![None; system.solar_arrays.len()],
@@ -1455,8 +1652,13 @@ impl ElectricalPowerCommand {
 
     fn validate_for(&self, system: &ElectricalPowerSystem) -> Result<(), ElectricalPowerError> {
         require_positive_command(self.dt_s, "power step duration")?;
+        require_non_negative_command(
+            self.auxiliary_generation_power_w,
+            "auxiliary generator output",
+        )?;
         if self.consumer_power_w.len() != system.consumers.len()
             || self.reactor_power_fraction.len() != system.reactors.len()
+            || self.fuel_cell_power_fraction.len() != system.fuel_cells.len()
             || self.solar_deployment_targets.len() != system.solar_arrays.len()
             || self.solar_tracking_auto.len() != system.solar_arrays.len()
             || self.solar_tracking_targets.len() != system.solar_arrays.len()
@@ -1476,6 +1678,9 @@ impl ElectricalPowerCommand {
         }
         for fraction in &self.reactor_power_fraction {
             require_unit_interval_command(*fraction, "reactor power fraction")?;
+        }
+        for fraction in &self.fuel_cell_power_fraction {
+            require_unit_interval_command(*fraction, "fuel-cell power fraction")?;
         }
         for (array, target) in system
             .solar_arrays
@@ -1563,6 +1768,18 @@ pub struct ReactorPowerTelemetry {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FuelCellPowerTelemetry {
+    pub name: String,
+    pub electrical_power_w: f64,
+    pub chemical_power_w: f64,
+    pub hydrogen_flow_kg_s: f64,
+    pub oxygen_flow_kg_s: f64,
+    /// Product water before any external recovery/venting model (kg/s).
+    pub water_production_kg_s: f64,
+    pub waste_heat_w: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BatteryPowerTelemetry {
     pub name: String,
     pub initial_energy_j: f64,
@@ -1593,9 +1810,16 @@ pub struct ElectricalPowerTelemetry {
     pub solar_to_load_power_w: f64,
     pub solar_to_storage_power_w: f64,
     pub spilled_solar_power_w: f64,
+    pub auxiliary_generation_power_w: f64,
+    pub auxiliary_to_load_power_w: f64,
+    pub auxiliary_to_storage_power_w: f64,
+    pub spilled_auxiliary_power_w: f64,
     pub reactor_available_power_w: f64,
     pub reactor_output_power_w: f64,
     pub reactor_waste_heat_w: f64,
+    pub fuel_cell_available_power_w: f64,
+    pub fuel_cell_output_power_w: f64,
+    pub fuel_cell_waste_heat_w: f64,
     pub battery_charge_power_w: f64,
     pub battery_discharge_power_w: f64,
     pub capacitor_charge_power_w: f64,
@@ -1605,6 +1829,7 @@ pub struct ElectricalPowerTelemetry {
     pub consumer_allocations: Vec<PowerAllocation>,
     pub solar_arrays: Vec<SolarArrayPowerTelemetry>,
     pub reactors: Vec<ReactorPowerTelemetry>,
+    pub fuel_cells: Vec<FuelCellPowerTelemetry>,
     pub batteries: Vec<BatteryPowerTelemetry>,
     pub ultracapacitors: Vec<UltracapacitorPowerTelemetry>,
 }
@@ -1990,6 +2215,82 @@ mod tests {
         }
     }
 
+    fn fuel_cell() -> FuelCellSpec {
+        FuelCellSpec {
+            name: "hydrogen-cell".into(),
+            rated_electrical_power_w: 1_000.0,
+            electrical_efficiency: 0.5,
+            dry_mass_kg: 20.0,
+            dimensions_body_m: DVec3::new(0.5, 0.5, 0.8),
+            position_body_m: DVec3::ZERO,
+            feed_port_name: None,
+        }
+    }
+
+    #[test]
+    fn fuel_cell_obeys_reactant_inventory_and_closes_water_heat_balance() {
+        let system = ElectricalPowerSystem {
+            fuel_cells: vec![fuel_cell()],
+            consumers: vec![consumer(
+                "life-support",
+                1_000.0,
+                PowerPriority::LifeSupport,
+            )],
+            ..ElectricalPowerSystem::default()
+        };
+        let state = system.initial_state().expect("fuel-cell power state");
+        let mut command = ElectricalPowerCommand::idle_for(&system, 1.0);
+        command.consumer_power_w = vec![500.0];
+        let (_, report) = system
+            .advance_with_fuel_cell_inventory(&state, &command, 1.0, 8.0)
+            .expect("inventory-backed cell step");
+        let cell = &report.fuel_cells[0];
+        let expected_hydrogen_flow =
+            500.0 / (fuel_cell().electrical_efficiency * FUEL_CELL_HYDROGEN_LHV_J_KG);
+        assert_eq!(report.total_delivered_power_w, 500.0);
+        assert!((cell.hydrogen_flow_kg_s - expected_hydrogen_flow).abs() < 1.0e-18);
+        assert!((cell.oxygen_flow_kg_s / cell.hydrogen_flow_kg_s - 8.0).abs() < 1.0e-12);
+        assert!((cell.water_production_kg_s - 9.0 * cell.hydrogen_flow_kg_s).abs() < 1.0e-18);
+        assert!(
+            (cell.chemical_power_w - cell.electrical_power_w - cell.waste_heat_w).abs() < 1.0e-12
+        );
+
+        let hydrogen_limited = system
+            .advance_with_fuel_cell_inventory(&state, &command, expected_hydrogen_flow * 0.5, 8.0)
+            .expect("reactant-limited cell step");
+        assert!((hydrogen_limited.1.fuel_cells[0].electrical_power_w - 250.0).abs() < 1.0e-10);
+        assert_eq!(hydrogen_limited.1.unserved_power_w, 250.0);
+        assert!(
+            system
+                .advance_with_fuel_cell_inventory(&state, &command, -1.0, 1.0)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn physically_supplied_apu_power_enters_the_shared_bus_and_reports_spill() {
+        let system = ElectricalPowerSystem {
+            consumers: vec![consumer(
+                "essential-load",
+                1_000.0,
+                PowerPriority::LifeSupport,
+            )],
+            ..ElectricalPowerSystem::default()
+        };
+        let state = system.initial_state().expect("bus state");
+        let mut command = ElectricalPowerCommand::idle_for(&system, 0.1);
+        command.consumer_power_w = vec![300.0];
+        command.auxiliary_generation_power_w = 500.0;
+        let (_, report) = system.advance(&state, &command).expect("APU bus input");
+        assert_eq!(report.auxiliary_generation_power_w, 500.0);
+        assert_eq!(report.auxiliary_to_load_power_w, 300.0);
+        assert_eq!(report.spilled_auxiliary_power_w, 200.0);
+        assert_eq!(report.unserved_power_w, 0.0);
+
+        command.auxiliary_generation_power_w = f64::NAN;
+        assert!(system.advance(&state, &command).is_err());
+    }
+
     #[test]
     fn solar_cell_area_incidence_and_visibility_set_output() {
         let system = ElectricalPowerSystem {
@@ -1997,6 +2298,7 @@ mod tests {
             ultracapacitors: vec![],
             solar_arrays: vec![array(SolarArrayDeployment::Fixed)],
             reactors: vec![],
+            fuel_cells: vec![],
             consumers: vec![consumer("avionics", 1_000.0, PowerPriority::FlightControl)],
         };
         let state = system.initial_state().expect("initial state");
@@ -2039,6 +2341,7 @@ mod tests {
             ultracapacitors: vec![],
             solar_arrays: vec![],
             reactors: vec![source],
+            fuel_cells: vec![],
             consumers: vec![
                 consumer("life-support", 40.0, PowerPriority::LifeSupport),
                 consumer("avionics-a", 50.0, PowerPriority::FlightControl),
@@ -2067,6 +2370,7 @@ mod tests {
             ultracapacitors: vec![],
             solar_arrays: vec![array(SolarArrayDeployment::Fixed)],
             reactors: vec![],
+            fuel_cells: vec![],
             consumers: vec![consumer("load", 1_000.0, PowerPriority::Utility)],
         };
         let initial = system.initial_state().unwrap();
@@ -2098,6 +2402,7 @@ mod tests {
             ultracapacitors: vec![],
             solar_arrays: vec![],
             reactors: vec![source],
+            fuel_cells: vec![],
             consumers: vec![consumer("life-support", 250.0, PowerPriority::LifeSupport)],
         };
         let state = system.initial_state().unwrap();
@@ -2124,6 +2429,7 @@ mod tests {
                 initial_fraction: 0.0,
             })],
             reactors: vec![reactor()],
+            fuel_cells: vec![],
             consumers: vec![consumer(
                 "life-support",
                 1_000.0,
@@ -2156,6 +2462,7 @@ mod tests {
             ultracapacitors: vec![capacitor()],
             solar_arrays: vec![],
             reactors: vec![],
+            fuel_cells: vec![],
             consumers: vec![consumer("pulse-load", 9_000.0, PowerPriority::Utility)],
         };
         assert!((capacitor().mass_kg() - 0.01).abs() < 1.0e-12);
@@ -2182,6 +2489,7 @@ mod tests {
             batteries: vec![battery()],
             ultracapacitors: vec![capacitor()],
             solar_arrays: vec![],
+            fuel_cells: vec![],
         };
         let empty = ElectricalPowerState {
             battery_energy_j: vec![0.0],
@@ -2245,6 +2553,7 @@ mod tests {
             ultracapacitors: vec![],
             solar_arrays: vec![array(SolarArrayDeployment::Fixed)],
             reactors: vec![],
+            fuel_cells: vec![],
             consumers: vec![],
         };
         let state = system.initial_state().unwrap();
@@ -2265,6 +2574,7 @@ mod tests {
             ultracapacitors: vec![],
             solar_arrays: vec![tracking_array()],
             reactors: vec![reactor()],
+            fuel_cells: vec![],
             consumers: vec![consumer("avionics", 2_000.0, PowerPriority::FlightControl)],
         };
         let state = system.initial_state().unwrap();

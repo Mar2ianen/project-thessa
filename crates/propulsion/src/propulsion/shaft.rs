@@ -380,6 +380,9 @@ pub struct ShaftTelemetry {
     /// Stored energy consumed per second by the starter (W; electrical
     /// draw, pneumatic thermal power, or bootstrap chemical power).
     pub starter_draw_w: f64,
+    /// Pneumatic input actually accepted from an external source (W).
+    #[serde(default)]
+    pub external_starter_supply_w: f64,
     pub starter_charge_j: f64,
     /// Electrical power delivered to the bus this step (W).
     pub generator_electrical_w: f64,
@@ -425,13 +428,36 @@ pub fn advance_jet_shaft_loaded(
     dt_s: f64,
     extra_load_w: f64,
 ) -> Result<(JetShaftState, ShaftTelemetry), PropulsionError> {
-    advance_jet_shaft_loaded_with(
+    advance_jet_shaft_loaded_with_starter_power(
         engine,
         state,
         command,
         condition,
         dt_s,
         extra_load_w,
+        0.0,
+    )
+}
+
+/// [`advance_jet_shaft_loaded`] with externally supplied pneumatic starter
+/// power. The supplier separately pays the corresponding bleed load.
+pub fn advance_jet_shaft_loaded_with_starter_power(
+    engine: &CompiledAirbreather,
+    state: JetShaftState,
+    command: &ShaftCommand,
+    condition: &FlightCondition,
+    dt_s: f64,
+    extra_load_w: f64,
+    pneumatic_starter_power_w: f64,
+) -> Result<(JetShaftState, ShaftTelemetry), PropulsionError> {
+    advance_jet_shaft_loaded_with_starter_power_and(
+        engine,
+        state,
+        command,
+        condition,
+        dt_s,
+        extra_load_w,
+        pneumatic_starter_power_w,
         |spool_n, ignition| {
             engine.operating_point_at_spool_loaded(
                 condition,
@@ -444,16 +470,17 @@ pub fn advance_jet_shaft_loaded(
     )
 }
 
-/// Shaft integrator variant whose cycle balance is supplied by the caller.
-/// ESTOC uses this to include its precooler-adjusted compressor work in the
-/// same shaft balance that advances the spool.
-pub(super) fn advance_jet_shaft_loaded_with<F>(
+/// Shaft integrator variant whose cycle balance and pneumatic starter supply
+/// are supplied by the caller. ESTOC uses it to include its precooler-adjusted
+/// compressor work in the same shaft balance that advances the spool.
+pub(super) fn advance_jet_shaft_loaded_with_starter_power_and<F>(
     engine: &CompiledAirbreather,
     state: JetShaftState,
     command: &ShaftCommand,
     condition: &FlightCondition,
     dt_s: f64,
     extra_load_w: f64,
+    pneumatic_starter_power_w: f64,
     evaluate: F,
 ) -> Result<(JetShaftState, ShaftTelemetry), PropulsionError>
 where
@@ -478,6 +505,11 @@ where
     if !command.generator_load_w.is_finite() || command.generator_load_w < 0.0 {
         return Err(PropulsionError::InvalidCommand(
             "generator load must be finite and >= 0".into(),
+        ));
+    }
+    if !pneumatic_starter_power_w.is_finite() || pneumatic_starter_power_w < 0.0 {
+        return Err(PropulsionError::InvalidCommand(
+            "pneumatic starter supply must be finite and >= 0".into(),
         ));
     }
     if !extra_load_w.is_finite() || extra_load_w < 0.0 {
@@ -539,22 +571,36 @@ where
         0.0
     };
 
-    // Starter: shaft power limited by rated power and remaining stored
-    // energy scaled through its drivetrain efficiency.
+    // Pneumatic power from an APU supplements the starter's onboard
+    // compressed-air reserve. External bleed is already booked as a shaft
+    // load at the supplying APU, so only the reserve portion is charged here.
     let mut starter_active = false;
     let mut starter_shaft_w = 0.0;
     let mut starter_draw_w = 0.0;
+    let mut external_starter_supply_w = 0.0;
     if command.starter_engaged {
         let starter = &engine.shaft.starter;
-        if starter.power_w > 0.0 && state.starter_charge_j > 0.0 {
+        if pneumatic_starter_power_w > 0.0 && starter.kind != StarterKind::Pneumatic {
+            return Err(PropulsionError::InvalidCommand(
+                "external pneumatic supply requires a pneumatic starter".into(),
+            ));
+        }
+        if starter.power_w > 0.0 {
             let efficiency = starter.kind.efficiency();
+            if starter.kind == StarterKind::Pneumatic {
+                external_starter_supply_w =
+                    pneumatic_starter_power_w.min(starter.power_w / efficiency);
+                starter_shaft_w = external_starter_supply_w * efficiency;
+            }
+            let remaining_starter_power_w = (starter.power_w - starter_shaft_w).max(0.0);
             let from_charge = if dt_s > 0.0 {
                 state.starter_charge_j * efficiency / dt_s
             } else {
                 f64::INFINITY
             };
-            starter_shaft_w = starter.power_w.min(from_charge);
-            starter_draw_w = starter_shaft_w / efficiency;
+            let charge_shaft_w = remaining_starter_power_w.min(from_charge);
+            starter_shaft_w += charge_shaft_w;
+            starter_draw_w = charge_shaft_w / efficiency;
             starter_active = starter_shaft_w > 0.0;
         }
     }
@@ -600,6 +646,7 @@ where
             starter_active,
             starter_shaft_power_w: starter_shaft_w,
             starter_draw_w,
+            external_starter_supply_w,
             starter_charge_j,
             generator_electrical_w,
             generator_shaft_draw_w: generator_shaft_w,
@@ -675,6 +722,44 @@ mod tests {
             charge_j: 1.0e9,
             mass_kg: 30.0,
         }
+    }
+
+    #[test]
+    fn apu_pneumatic_bleed_cranks_without_spending_stored_reserve() {
+        let starter = StarterSpec {
+            kind: StarterKind::Pneumatic,
+            power_w: 4.0e6,
+            charge_j: 1.0e9,
+            mass_kg: 30.0,
+        };
+        let engine = jet_spec(starter, GeneratorSpec::default())
+            .compile()
+            .expect("pneumatic starter engine compiles");
+        let condition = sl_static();
+        let mut state = JetShaftState::cold(&engine);
+        state.starter_charge_j = 0.0;
+        let command = ShaftCommand {
+            throttle: 1.0,
+            starter_engaged: true,
+            generator_load_w: 0.0,
+        };
+        let pneumatic_input_w = engine.shaft.starter.power_w / StarterKind::Pneumatic.efficiency();
+        let (next, telemetry) = advance_jet_shaft_loaded_with_starter_power(
+            &engine,
+            state,
+            &command,
+            &condition,
+            0.1,
+            0.0,
+            pneumatic_input_w,
+        )
+        .expect("APU bleed supplies the pneumatic starter");
+        assert!(telemetry.starter_active);
+        assert!((telemetry.external_starter_supply_w - pneumatic_input_w).abs() < 1e-9);
+        assert!(telemetry.starter_shaft_power_w > 0.0);
+        assert_eq!(telemetry.starter_draw_w, 0.0);
+        assert_eq!(next.starter_charge_j, 0.0);
+        assert!(next.spool_n > state.spool_n);
     }
 
     /// Integrate a shaft from `state` at fixed command until `steps`

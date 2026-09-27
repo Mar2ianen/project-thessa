@@ -24,10 +24,11 @@ The checked-in vertical slice currently contains:
   rigid-body flight, on-rails coast caches, cohort gravity patches, piecewise
   analytic affine propagation, cabin pressure and crew authority, part
   assembly connectivity, installed reaction-wheel banks, deployable
-  parachutes, and a parameterized wire-free vehicle power bus with batteries,
-  ultracapacitors, fission reactors, sun-tracking cell-grid solar arrays with
-  geometric occlusion, prioritized consumers, and a lumped thermal-node
-  network with conduction links and area radiators. The
+  parachutes, fixed-step tank-limited propulsion and moving-mass updates,
+  mounted RCS, APUs, and LH₂/LOX fuel cells on a parameterized wire-free vehicle
+  power bus with batteries, ultracapacitors, fission reactors, sun-tracking
+  cell-grid solar arrays with geometric occlusion, prioritized consumers, and
+  a lumped thermal-node network with conduction links and area radiators. The
   implementation is separated into `thessa-aero-core`,
   `thessa-celestial`, `thessa-trajectory`, `thessa-propulsion`, and
   `thessa-vehicle-core`;

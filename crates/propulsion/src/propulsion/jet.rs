@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::GimbalEffector;
 use super::mount::gimbal_pair;
-use super::shaft::{JetShaftState, ShaftCommand, advance_jet_shaft, advance_jet_shaft_loaded_with};
+use super::shaft::{JetShaftState, ShaftCommand, advance_jet_shaft_loaded_with_starter_power_and};
 use super::{
     CompiledAirbreather, CompiledEstoc, EnginePlumeState, EstocMode, EstocPoint, EstocTransient,
     FlightCondition, PropulsionError,
@@ -78,6 +78,9 @@ pub struct JetCommand {
     /// Starter engagement request for this step (advance with
     /// [`JetCommand::advance_shaft`]).
     pub starter_engaged: bool,
+    /// Pneumatic starter power supplied by an APU this step (W).
+    #[serde(default)]
+    pub pneumatic_starter_power_w: f64,
     /// Requested electrical generator load (W) for this step.
     pub generator_load_w: f64,
 }
@@ -97,6 +100,7 @@ impl JetCommand {
                 starter_charge_j: f64::MAX,
             },
             starter_engaged: false,
+            pneumatic_starter_power_w: 0.0,
             generator_load_w: 0.0,
         }
     }
@@ -154,6 +158,22 @@ impl JetMount {
             CompiledJet::Air(engine) => engine.as_ref(),
             CompiledJet::Estoc(engine) => &engine.air,
         }
+    }
+
+    /// Pneumatic inlet power needed for a fully engaged starter, or zero for
+    /// every other starter topology.
+    pub fn pneumatic_starter_input_power_w(&self) -> f64 {
+        let starter = &self.air_engine().shaft.starter;
+        if starter.kind == super::StarterKind::Pneumatic {
+            starter.power_w / starter.kind.efficiency()
+        } else {
+            0.0
+        }
+    }
+
+    /// Fitted start topology for wiring and status displays.
+    pub fn starter_kind(&self) -> super::StarterKind {
+        self.air_engine().shaft.starter.kind
     }
 
     /// Validate mount data (NaN fails closed; axis must be unit).
@@ -279,13 +299,14 @@ impl JetMount {
             generator_load_w: jet.generator_load_w,
         };
         let (shaft, _telemetry) = match &self.engine {
-            CompiledJet::Estoc(estoc) => advance_jet_shaft_loaded_with(
+            CompiledJet::Estoc(estoc) => advance_jet_shaft_loaded_with_starter_power_and(
                 &estoc.air,
                 jet.shaft,
                 &shaft_cmd,
                 condition,
                 jet.dt_s,
                 0.0,
+                jet.pneumatic_starter_power_w,
                 |spool_n, ignition| {
                     estoc
                         .conditioned_air_point(
@@ -302,12 +323,14 @@ impl JetMount {
                         .map(|(point, _, _, balance)| (point, balance))
                 },
             )?,
-            CompiledJet::Air(_) => advance_jet_shaft(
-                self.air_engine(),
+            CompiledJet::Air(engine) => super::advance_jet_shaft_loaded_with_starter_power(
+                engine,
                 jet.shaft,
                 &shaft_cmd,
                 condition,
                 jet.dt_s,
+                0.0,
+                jet.pneumatic_starter_power_w,
             )?,
         };
         match &self.engine {

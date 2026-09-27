@@ -22,6 +22,22 @@ fn example_vehicle_asset_bakes_to_valid_generic_definition() {
 }
 
 #[test]
+fn assembly_asset_bakes_named_consumer_feed_routes() {
+    let asset: VehicleAsset =
+        toml::from_str(include_str!("../../../data/vehicles/example_assembly.toml"))
+            .expect("assembly vehicle TOML should parse");
+    let vehicle = asset.bake().expect("assembly vehicle should bake");
+    assert_eq!(vehicle.resource_feed_ports.len(), 1);
+    assert_eq!(
+        vehicle.resource_feed_ports[0],
+        VehicleResourceFeedPort {
+            consumer_name: "capsule-engine".into(),
+            feed_port_name: "capsule.engine".into(),
+        }
+    );
+}
+
+#[test]
 fn reaction_wheel_asset_bakes_its_torque_ratings_mass_and_mount() {
     let asset: VehicleAsset = toml::from_str(include_str!(
         "../../../data/vehicles/example_spacecraft.toml"
@@ -598,6 +614,60 @@ diameter_m = 2.4
     let round_trip: VehicleDefinition = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(round_trip.turboprops.len(), 1);
     assert!((round_trip.mass_properties.mass_kg - vehicle.mass_properties.mass_kg).abs() < 1e-9);
+}
+
+#[test]
+fn pure_fluid_tanks_fuel_cell_and_apu_bake_and_round_trip() {
+    let asset: VehicleAsset = toml::from_str(include_str!(
+        "../../../data/vehicles/example_apu_fuel_cell.toml"
+    ))
+    .expect("APU/fuel-cell vehicle TOML should parse");
+    let vehicle = asset.bake().expect("APU/fuel-cell vehicle should bake");
+    assert_eq!(vehicle.auxiliary_power_units.len(), 1);
+    assert_eq!(vehicle.electrical_power.fuel_cells.len(), 1);
+    assert_eq!(vehicle.rcs_mounts.len(), 1);
+    assert_eq!(vehicle.tanks.len(), 4);
+    assert_eq!(
+        vehicle.tanks[0].resource,
+        TankResource::Stored(StoredPropellant::Rp1)
+    );
+    assert_eq!(
+        vehicle.tanks[1].resource,
+        TankResource::Stored(StoredPropellant::LiquidHydrogen)
+    );
+    assert_eq!(
+        vehicle.tanks[2].resource,
+        TankResource::Stored(StoredPropellant::Lox)
+    );
+    assert_eq!(
+        vehicle.auxiliary_power_units[0]
+            .unit
+            .engine
+            .shaft
+            .generator
+            .power_w,
+        20_000.0
+    );
+    let json = serde_json::to_string(&vehicle).expect("vehicle JSON serialization");
+    let round_trip: VehicleDefinition =
+        serde_json::from_str(&json).expect("vehicle JSON deserialization");
+    assert_eq!(round_trip.auxiliary_power_units.len(), 1);
+    assert_eq!(round_trip.electrical_power.fuel_cells.len(), 1);
+    assert_eq!(round_trip.rcs_mounts.len(), 1);
+    assert_eq!(
+        round_trip.tanks[1].resource,
+        TankResource::Stored(StoredPropellant::LiquidHydrogen)
+    );
+    assert_eq!(
+        round_trip.mass_properties.mass_kg,
+        vehicle.mass_properties.mass_kg
+    );
+    assert!(
+        (round_trip.electrical_power.fuel_cells[0].position_body_m
+            - vehicle.electrical_power.fuel_cells[0].position_body_m)
+            .length()
+            < 1.0e-12
+    );
 }
 
 #[test]

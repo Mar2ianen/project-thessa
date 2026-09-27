@@ -16,6 +16,21 @@ pub(super) use thermal_assets::ThermalAsset;
 pub(super) use vehicle_asset::VehicleAsset;
 
 #[derive(Debug, Deserialize)]
+pub(super) struct ResourceFeedPortAsset {
+    consumer_name: String,
+    feed_port_name: String,
+}
+
+impl ResourceFeedPortAsset {
+    pub(super) fn bake(self) -> VehicleResourceFeedPort {
+        VehicleResourceFeedPort {
+            consumer_name: self.consumer_name,
+            feed_port_name: self.feed_port_name,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct ReactionWheelAsset {
     name: String,
     max_torque_body_nm: [f64; 3],

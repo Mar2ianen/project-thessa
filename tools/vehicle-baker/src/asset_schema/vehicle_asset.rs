@@ -30,6 +30,9 @@ pub(crate) struct VehicleAsset {
     /// and resource connectivity.
     #[serde(default)]
     pub(crate) assembly: AssemblyAsset,
+    /// Optional consumer-name to assembly feed-port routes.
+    #[serde(default)]
+    pub(crate) resource_feed_ports: Vec<ResourceFeedPortAsset>,
     /// Optional shared bus with rated loads, storage, solar cells, and reactors.
     #[serde(default)]
     pub(crate) electrical_power: ElectricalPowerAsset,
@@ -66,6 +69,9 @@ pub(crate) struct VehicleAsset {
     /// needs a flight condition at query time).
     #[serde(default)]
     pub(super) jets: Vec<JetAsset>,
+    /// Fuel-burning turbo-generator auxiliary power units.
+    #[serde(default)]
+    pub(super) auxiliary_power_units: Vec<AuxiliaryPowerUnitAsset>,
     /// Electric spacecraft thrusters, with power processor and radiator mass.
     #[serde(default)]
     pub(super) electric_thrusters: Vec<ElectricThrusterAsset>,
@@ -81,6 +87,9 @@ pub(crate) struct VehicleAsset {
     /// Gas turbines coupled to propellers through an explicit power turbine.
     #[serde(default)]
     pub(super) turboprops: Vec<TurbopropAsset>,
+    /// Mounted monopropellant or cold-gas RCS thrusters.
+    #[serde(default)]
+    pub(super) rcs_mounts: Vec<RcsMountAsset>,
     /// Parametric aircraft landing gear or rover wheel chassis. Component
     /// masses participate in the same final center-of-mass bake as mounts.
     #[serde(default)]
@@ -632,6 +641,11 @@ impl VehicleAsset {
             .into_iter()
             .map(JetAsset::bake)
             .collect::<Result<Vec<_>, _>>()?;
+        let auxiliary_power_unit_mounts = self
+            .auxiliary_power_units
+            .into_iter()
+            .map(AuxiliaryPowerUnitAsset::bake)
+            .collect::<Result<Vec<_>, _>>()?;
         let electric_thruster_mounts = self
             .electric_thrusters
             .into_iter()
@@ -656,6 +670,11 @@ impl VehicleAsset {
             .turboprops
             .into_iter()
             .map(TurbopropAsset::bake)
+            .collect::<Result<Vec<_>, _>>()?;
+        let rcs_mounts = self
+            .rcs_mounts
+            .into_iter()
+            .map(RcsMountAsset::bake)
             .collect::<Result<Vec<_>, _>>()?;
         let wheel_chassis_specs = self
             .wheel_chassis
@@ -689,6 +708,11 @@ impl VehicleAsset {
             .collect();
         let electrical_power = self.electrical_power.bake();
         let power_mass_properties = electrical_power.mass_properties()?;
+        let resource_feed_ports = self
+            .resource_feed_ports
+            .into_iter()
+            .map(ResourceFeedPortAsset::bake)
+            .collect();
         let mut thermal = self.thermal.bake();
         // Wing/tail tile layers arrive as lumped nodes (one per surface);
         // duplicate names with authored [thermal] nodes fail closed below.
@@ -864,11 +888,13 @@ impl VehicleAsset {
             .with_systems(system_mounts)?
             .with_fold_joints(fold_joints)?
             .with_jets(jet_mounts)?
+            .with_auxiliary_power_units(auxiliary_power_unit_mounts)?
             .with_electric_thrusters(electric_thruster_mounts)?
             .with_fusion_torches(fusion_torch_mounts)?
             .with_pulsed_fusion_systems(pulsed_fusion_mounts)?
             .with_propeller_drives(propeller_drive_mounts)?
             .with_turboprops(turboprop_mounts)?
+            .with_rcs_mounts(rcs_mounts)?
             .with_cabins(body_cabins)?
             .with_cabin_exits(body_cabin_exits)?
             .with_cabin_seats(body_cabin_seats)?
@@ -882,6 +908,7 @@ impl VehicleAsset {
             .with_heat_shields(body_heat_shield_mounts)?
             .with_electrical_power(electrical_power)?
             .with_thermal(thermal)?;
+        vehicle = vehicle.with_resource_feed_ports(resource_feed_ports)?;
         if let Some(assembly) = runtime_assembly {
             vehicle = vehicle.with_assembly(assembly)?;
             for cabin in &vehicle.cabins {
@@ -898,10 +925,12 @@ impl VehicleAsset {
         vehicle.bake_tank_masses()?;
         vehicle.bake_system_masses()?;
         vehicle.bake_jet_masses()?;
+        vehicle.bake_auxiliary_power_unit_masses()?;
         vehicle.bake_electric_thruster_masses()?;
         vehicle.bake_fusion_masses()?;
         vehicle.bake_propeller_drive_masses()?;
         vehicle.bake_turboprop_masses()?;
+        vehicle.bake_rcs_masses()?;
         vehicle.bake_wheel_chassis_masses()?;
         vehicle.bake_landing_leg_masses()?;
         vehicle.bake_reaction_wheel_masses()?;
@@ -948,6 +977,9 @@ impl VehicleAsset {
         for mount in &mut vehicle.jets {
             shift_array(&mut mount.position_body_m, shift);
         }
+        for mount in &mut vehicle.auxiliary_power_units {
+            shift_array(&mut mount.position_body_m, shift);
+        }
         for mount in &mut vehicle.electric_thrusters {
             shift_array(&mut mount.position_body_m, shift);
         }
@@ -961,6 +993,9 @@ impl VehicleAsset {
             shift_array(&mut mount.position_body_m, shift);
         }
         for mount in &mut vehicle.turboprops {
+            shift_array(&mut mount.position_body_m, shift);
+        }
+        for mount in &mut vehicle.rcs_mounts {
             shift_array(&mut mount.position_body_m, shift);
         }
         for chassis in &mut vehicle.wheel_chassis {
@@ -1002,6 +1037,9 @@ impl VehicleAsset {
         }
         for reactor in &mut vehicle.electrical_power.reactors {
             reactor.position_body_m = shift_point(reactor.position_body_m);
+        }
+        for fuel_cell in &mut vehicle.electrical_power.fuel_cells {
+            fuel_cell.position_body_m = shift_point(fuel_cell.position_body_m);
         }
         for node in &mut vehicle.thermal.nodes {
             node.position_body_m = shift_point(node.position_body_m);

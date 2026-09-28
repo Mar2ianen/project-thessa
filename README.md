@@ -23,7 +23,8 @@ The checked-in vertical slice currently contains:
   full multi-body test-particle gravity, atmosphere and panel aerodynamics,
   rigid-body flight, on-rails coast caches, cohort gravity patches, piecewise
   analytic affine propagation, cabin pressure and crew authority, part
-  assembly connectivity/topology split planning with non-tree crossfeed and
+  assembly connectivity/topology splitting and rigid-body cluster mass/COM
+  reconstruction from complete per-body inputs, with non-tree crossfeed and
   pressure-limited feed lines, installed reaction-wheel banks, deployable
   parachutes, fixed-step tank-limited propulsion and moving-mass updates,
   mounted RCS, tank-backed pneumatic/rocket-bootstrap starters, torque-rated
@@ -46,7 +47,7 @@ The checked-in vertical slice currently contains:
 - `thessa-flight-control` and `thessa-flight-authority`: typed guidance,
   aircraft/spacecraft/direct control laws, policy limits, physical allocation,
   actuator dynamics, the authoritative flight stepper, and contact-scene D1
-  docking/separation with solver joint-load telemetry;
+  docking/separation primitives with solver joint-load telemetry;
 - `thessa-autopilot` and `thessa-autopilot-js`: validated typed graph IR,
   sequence/parallel/wait execution, simulation-time scheduling, sandboxed
   QuickJS blocks, and typed trajectory-plan execution;

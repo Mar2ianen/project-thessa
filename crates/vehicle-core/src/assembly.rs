@@ -6,13 +6,13 @@
 //! connectivity from link states with no geometry, so opening or sealing
 //! a hatch updates crew, air, and fuel domains through one code path.
 
-use glam::DVec3;
+use glam::{DMat3, DVec3};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt};
 
 use crate::{
     CabinPressureState, CrewSuitMode, FeedLine, MOLAR_MASS_AIR_G_MOL, MOLAR_MASS_O2_G_MOL,
-    PressurizedCabin,
+    PressurizedCabin, RigidBodyProperties, RigidBodyState,
 };
 
 /// Assembly connectivity failure modes.
@@ -20,6 +20,8 @@ use crate::{
 pub enum AssemblyError {
     InvalidLink(String),
     InvalidCabinState(String),
+    InvalidBodyMass(String),
+    InvalidRigidBodyState(String),
 }
 
 impl fmt::Display for AssemblyError {
@@ -28,6 +30,12 @@ impl fmt::Display for AssemblyError {
             Self::InvalidLink(message) => write!(formatter, "invalid assembly link: {message}"),
             Self::InvalidCabinState(message) => {
                 write!(formatter, "invalid assembly cabin state: {message}")
+            }
+            Self::InvalidBodyMass(message) => {
+                write!(formatter, "invalid assembly body mass: {message}")
+            }
+            Self::InvalidRigidBodyState(message) => {
+                write!(formatter, "invalid assembly rigid-body state: {message}")
             }
         }
     }
@@ -140,6 +148,33 @@ pub struct AssemblyVolume {
 pub struct AssemblyEndpoint {
     pub name: String,
     pub body: usize,
+}
+
+/// Complete mass contribution of one authored assembly body, expressed in
+/// the source vehicle's body frame. The tensor is centroidal and uses the
+/// source vehicle's body axes. Runtime callers must include every mass item
+/// owned by the body before requesting a breakup reconstruction.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AssemblyBodyMassProperties {
+    pub mass_kg: f64,
+    pub center_of_mass_body_m: DVec3,
+    pub inertia_about_center_body_kg_m2: DMat3,
+}
+
+/// One physically reconstructed connected component after a structural link
+/// failure. `state` is recentered on this component's COM; orientation and
+/// angular velocity initially match the pre-failure rigid cluster.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReconstructedAssemblyCluster {
+    /// Indices into the original `VehicleAssembly::body_names` list.
+    pub body_indices: Vec<usize>,
+    /// Independently valid topology with local body indices.
+    pub assembly: VehicleAssembly,
+    pub mass_properties: RigidBodyProperties,
+    /// Cluster COM in the original vehicle body frame at release.
+    pub center_of_mass_body_m: DVec3,
+    /// Inertial state recentered on `center_of_mass_body_m`.
+    pub state: RigidBodyState,
 }
 
 /// Runtime assembly connectivity retained by `VehicleDefinition`.
@@ -457,6 +492,138 @@ impl VehicleAssembly {
             split.push(assembly);
         }
         Ok(split)
+    }
+
+    /// Rebuild the rigid-body mass state for every connected component after
+    /// one structural link fails. Body mass data is indexed like
+    /// `body_names`, is expressed in the source vehicle body frame, and must
+    /// account for all mass attached to each body. Unassigned vehicle-level
+    /// mass cannot be apportioned here and therefore fails closed by requiring
+    /// exactly one mass record per authored body.
+    pub fn reconstruct_clusters_after_link_failure(
+        &self,
+        failed_link_name: &str,
+        body_mass_properties: &[AssemblyBodyMassProperties],
+        source_mass_properties: RigidBodyProperties,
+        source_state: RigidBodyState,
+    ) -> Result<Vec<ReconstructedAssemblyCluster>, AssemblyError> {
+        if body_mass_properties.len() != self.body_names.len() {
+            return Err(AssemblyError::InvalidBodyMass(format!(
+                "expected {} body mass records, got {}",
+                self.body_names.len(),
+                body_mass_properties.len()
+            )));
+        }
+        RigidBodyState::new(
+            source_state.position_inertial_m,
+            source_state.velocity_inertial_mps,
+            source_state.orientation_body_to_inertial,
+            source_state.angular_velocity_body_rps,
+        )
+        .map_err(|error| AssemblyError::InvalidRigidBodyState(error.to_string()))?;
+        for (body, properties) in body_mass_properties.iter().enumerate() {
+            if !properties.center_of_mass_body_m.is_finite() {
+                return Err(AssemblyError::InvalidBodyMass(format!(
+                    "body '{}' has a non-finite center of mass",
+                    self.body_names[body]
+                )));
+            }
+            RigidBodyProperties::new(
+                properties.mass_kg,
+                properties.inertia_about_center_body_kg_m2,
+            )
+            .map_err(|error| {
+                AssemblyError::InvalidBodyMass(format!("body '{}': {error}", self.body_names[body]))
+            })?;
+        }
+
+        RigidBodyProperties::new(
+            source_mass_properties.mass_kg,
+            source_mass_properties.inertia_body_kg_m2,
+        )
+        .map_err(|error| AssemblyError::InvalidBodyMass(format!("source vehicle: {error}")))?;
+        let all_bodies = (0..body_mass_properties.len()).collect::<Vec<_>>();
+        let (source_center_of_mass, reconstructed_source_properties) =
+            aggregate_cluster_mass(&all_bodies, body_mass_properties)?;
+        let mass_tolerance_kg = source_mass_properties.mass_kg.max(1.0) * 1e-10;
+        let inertia_scale = source_mass_properties
+            .inertia_body_kg_m2
+            .x_axis
+            .abs()
+            .max_element()
+            .max(
+                source_mass_properties
+                    .inertia_body_kg_m2
+                    .y_axis
+                    .abs()
+                    .max_element(),
+            )
+            .max(
+                source_mass_properties
+                    .inertia_body_kg_m2
+                    .z_axis
+                    .abs()
+                    .max_element(),
+            )
+            .max(1.0);
+        let inertia_error = source_mass_properties.inertia_body_kg_m2
+            - reconstructed_source_properties.inertia_body_kg_m2;
+        let max_inertia_error = inertia_error
+            .x_axis
+            .abs()
+            .max_element()
+            .max(inertia_error.y_axis.abs().max_element())
+            .max(inertia_error.z_axis.abs().max_element());
+        if (reconstructed_source_properties.mass_kg - source_mass_properties.mass_kg).abs()
+            > mass_tolerance_kg
+            || source_center_of_mass.length() > 1e-9
+            || max_inertia_error > inertia_scale * 1e-9
+        {
+            return Err(AssemblyError::InvalidBodyMass(
+                "body mass records do not conserve source mass, COM, and inertia".into(),
+            ));
+        }
+
+        let topologies = self.split_after_link_failure(failed_link_name)?;
+        let mut clusters = Vec::with_capacity(topologies.len());
+        for topology in topologies {
+            let body_indices = topology
+                .body_names
+                .iter()
+                .map(|name| {
+                    self.body_names
+                        .iter()
+                        .position(|source_name| source_name == name)
+                        .ok_or_else(|| {
+                            AssemblyError::InvalidLink(format!(
+                                "split topology contains unknown body '{name}'"
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let (center_of_mass_body_m, mass_properties) =
+                aggregate_cluster_mass(&body_indices, body_mass_properties)?;
+            let offset_inertial_m =
+                source_state.orientation_body_to_inertial * center_of_mass_body_m;
+            let angular_velocity_inertial_rps =
+                source_state.orientation_body_to_inertial * source_state.angular_velocity_body_rps;
+            let state = RigidBodyState::new(
+                source_state.position_inertial_m + offset_inertial_m,
+                source_state.velocity_inertial_mps
+                    + angular_velocity_inertial_rps.cross(offset_inertial_m),
+                source_state.orientation_body_to_inertial,
+                source_state.angular_velocity_body_rps,
+            )
+            .map_err(|error| AssemblyError::InvalidRigidBodyState(error.to_string()))?;
+            clusters.push(ReconstructedAssemblyCluster {
+                body_indices,
+                assembly: topology,
+                mass_properties,
+                center_of_mass_body_m,
+                state,
+            });
+        }
+        Ok(clusters)
     }
 
     /// Equalize each connected pressure domain as a single ideal-gas state
@@ -917,6 +1084,49 @@ impl UnionFind {
     }
 }
 
+fn aggregate_cluster_mass(
+    body_indices: &[usize],
+    body_mass_properties: &[AssemblyBodyMassProperties],
+) -> Result<(DVec3, RigidBodyProperties), AssemblyError> {
+    let mass_kg = body_indices
+        .iter()
+        .map(|index| body_mass_properties[*index].mass_kg)
+        .sum::<f64>();
+    let first_moment = body_indices.iter().fold(DVec3::ZERO, |sum, index| {
+        let body = body_mass_properties[*index];
+        sum + body.center_of_mass_body_m * body.mass_kg
+    });
+    if !mass_kg.is_finite() || mass_kg <= 0.0 || !first_moment.is_finite() {
+        return Err(AssemblyError::InvalidBodyMass(
+            "cluster mass or first moment overflowed".into(),
+        ));
+    }
+    let center_of_mass_body_m = first_moment / mass_kg;
+    if !center_of_mass_body_m.is_finite() {
+        return Err(AssemblyError::InvalidBodyMass(
+            "cluster center of mass is non-finite".into(),
+        ));
+    }
+    let inertia_about_center_body_kg_m2 =
+        body_indices.iter().fold(DMat3::ZERO, |inertia, index| {
+            let body = body_mass_properties[*index];
+            let offset = body.center_of_mass_body_m - center_of_mass_body_m;
+            inertia + body.inertia_about_center_body_kg_m2 + parallel_axis(body.mass_kg, offset)
+        });
+    let mass_properties = RigidBodyProperties::new(mass_kg, inertia_about_center_body_kg_m2)
+        .map_err(|error| AssemblyError::InvalidBodyMass(error.to_string()))?;
+    Ok((center_of_mass_body_m, mass_properties))
+}
+
+fn parallel_axis(mass_kg: f64, offset_m: DVec3) -> DMat3 {
+    let outer = DMat3::from_cols(
+        offset_m * offset_m.x,
+        offset_m * offset_m.y,
+        offset_m * offset_m.z,
+    );
+    (DMat3::IDENTITY * offset_m.length_squared() - outer) * mass_kg
+}
+
 /// Crew-passable volume groups over an assembly body graph.
 /// `volume_bodies[i]` names the body containing volume `i`; link endpoints
 /// are body indices. Volumes within one body share the authored open interior.
@@ -1191,6 +1401,102 @@ mod tests {
         assert_eq!(split[1].resource_edges.len(), 1);
         assert_eq!(split[1].resource_edges[0].name, "booster-service-line");
         assert!(split.iter().all(|cluster| cluster.validate().is_ok()));
+
+        let body_mass_properties = [
+            AssemblyBodyMassProperties {
+                mass_kg: 60.0,
+                center_of_mass_body_m: DVec3::new(-2.0, 0.0, 0.0),
+                inertia_about_center_body_kg_m2: DMat3::from_diagonal(DVec3::new(2.0, 3.0, 4.0)),
+            },
+            AssemblyBodyMassProperties {
+                mass_kg: 30.0,
+                center_of_mass_body_m: DVec3::X,
+                inertia_about_center_body_kg_m2: DMat3::from_diagonal(DVec3::new(1.0, 2.0, 3.0)),
+            },
+            AssemblyBodyMassProperties {
+                mass_kg: 30.0,
+                center_of_mass_body_m: DVec3::X * 3.0,
+                inertia_about_center_body_kg_m2: DMat3::from_diagonal(DVec3::new(0.2, 0.3, 0.4)),
+            },
+        ];
+        let source_state = RigidBodyState::new(
+            DVec3::new(1_000.0, 0.0, 0.0),
+            DVec3::new(20.0, 3.0, 0.0),
+            glam::DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2),
+            DVec3::new(0.0, 0.0, 2.0),
+        )
+        .unwrap();
+        let source_mass_properties =
+            RigidBodyProperties::new(120.0, DMat3::from_diagonal(DVec3::new(3.2, 545.3, 547.4)))
+                .unwrap();
+        let reconstructed = assembly
+            .reconstruct_clusters_after_link_failure(
+                "core-booster",
+                &body_mass_properties,
+                source_mass_properties,
+                source_state,
+            )
+            .unwrap();
+        assert_eq!(reconstructed.len(), 2);
+        assert_eq!(reconstructed[0].body_indices, vec![0]);
+        assert_eq!(reconstructed[1].body_indices, vec![1, 2]);
+        assert_eq!(reconstructed[0].mass_properties.mass_kg, 60.0);
+        assert_eq!(reconstructed[1].mass_properties.mass_kg, 60.0);
+        assert_eq!(
+            reconstructed[1].center_of_mass_body_m,
+            DVec3::new(2.0, 0.0, 0.0)
+        );
+        assert!(
+            (reconstructed[1].mass_properties.inertia_body_kg_m2.y_axis.y - 62.3).abs() < 1e-12
+        );
+        assert!(
+            (reconstructed[1].mass_properties.inertia_body_kg_m2.z_axis.z - 63.4).abs() < 1e-12
+        );
+        assert!(
+            (reconstructed[0].state.position_inertial_m - DVec3::new(1_000.0, -2.0, 0.0)).length()
+                < 1e-12
+        );
+        assert!(
+            (reconstructed[0].state.velocity_inertial_mps - DVec3::new(24.0, 3.0, 0.0)).length()
+                < 1e-12
+        );
+        assert!(
+            (reconstructed[1].state.position_inertial_m - DVec3::new(1_000.0, 2.0, 0.0)).length()
+                < 1e-12
+        );
+        assert!(
+            (reconstructed[1].state.velocity_inertial_mps - DVec3::new(16.0, 3.0, 0.0)).length()
+                < 1e-12
+        );
+        assert_eq!(
+            reconstructed
+                .iter()
+                .map(|cluster| cluster.mass_properties.mass_kg)
+                .sum::<f64>(),
+            120.0
+        );
+        // Recombining the separated COM inertias about the source COM
+        // conserves the full assembly inertia at the instant of release.
+        let recombined_inertia = reconstructed.iter().fold(DMat3::ZERO, |sum, cluster| {
+            sum + cluster.mass_properties.inertia_body_kg_m2
+                + parallel_axis(
+                    cluster.mass_properties.mass_kg,
+                    cluster.center_of_mass_body_m,
+                )
+        });
+        assert!((recombined_inertia.x_axis.x - 3.2).abs() < 1e-12);
+        assert!((recombined_inertia.y_axis.y - 545.3).abs() < 1e-12);
+        assert!((recombined_inertia.z_axis.z - 547.4).abs() < 1e-12);
+        assert!(
+            assembly
+                .reconstruct_clusters_after_link_failure(
+                    "core-booster",
+                    &body_mass_properties[..2],
+                    source_mass_properties,
+                    source_state,
+                )
+                .is_err()
+        );
         assert!(
             assembly
                 .body_components_after_link_failure("missing-link")

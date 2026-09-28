@@ -5,11 +5,11 @@ geometry/mass, validated topology, and runtime crew/air/feed connectivity
 are implemented. Named non-tree resource edges and pressure-limited
 `FeedLine` routing are implemented. Contact-scene docking now advances the
 persisted D1 protocol, installs/removes a fixed joint, and reports solver
-joint force/moment. The assembled vehicle is still integrated as one rigid
-body: applying internal assembly-joint loads to authored strength limits and
-rebuilding separate vehicle clusters after structural failure remain later
-slices. Reference stays KSP: parts mate through explicit nodes into one craft
-tree.
+joint force/moment. A breakup reconstruction primitive now rebuilds component
+mass, inertia, COM position, and COM velocity from complete caller-supplied
+per-body mass records. The baker and server do not yet retain/migrate complete
+per-part subsystem ownership into separate authoritative vehicle clusters.
+Reference stays KSP: parts mate through explicit nodes into one craft tree.
 
 ## 1. Goal
 
@@ -193,15 +193,27 @@ body-index components after removing a named structural edge, and
 `split_after_link_failure` returns independently validated assembly graphs
 with local indices and no resource edge crossing the physical split. These
 operations deliberately ignore cross-cluster umbilicals when determining
-structure. They are topology breakup, not physical vehicle reconstruction:
-the baked `VehicleDefinition` does not yet retain enough per-part mass,
-inertia, aero, collision, thermal, actuator, and inventory ownership to
-instantiate the results as independent authoritative vehicles.
+structure. `reconstruct_clusters_after_link_failure` additionally takes one
+complete `AssemblyBodyMassProperties` record per authored body, aggregates
+centroidal inertia with the parallel-axis theorem, and recenters each
+`RigidBodyState`. Released clusters inherit the original orientation and
+angular velocity; their COM velocities include the physical `omega x r`
+offset. The caller supplies the source vehicle's current mass properties;
+total mass, source COM, and inertia must close against the body records before
+a split is accepted. Regression coverage checks conservation and released COM
+states for a rotating three-body stack. The mass records must include all
+body-owned hardware and payload: incomplete records fail closed.
+
+This is the physical rigid-body reconstruction contract, not yet a complete
+runtime vehicle reconstruction. The baked `VehicleDefinition` does not yet
+retain enough per-part mass, inertia, aero, collision, thermal, actuator, and
+inventory ownership to instantiate these results as independent authorities.
 
 ## 8. Next slices
 
-- Internal assembly-joint load paths, per-link strength ratings, and physical
-  reconstruction of vehicle clusters from split part ownership.
+- Internal assembly-joint load paths, per-link strength ratings, baked
+  per-part ownership, and complete aero/collision/subsystem migration when
+  constructing independent vehicle clusters.
 - Server-level docking/separation ownership and persistence across independent
   vehicle authorities.
 - Branched feed-network pressure/flow solving, rate limits, and drain-order

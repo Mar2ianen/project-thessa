@@ -332,8 +332,11 @@ fn score(candidate: LeafCandidate) -> f32 {
 
 fn conservative_min(value: f64) -> f32 {
     let result = value as f32;
+    // A plain `to_bits() ± 1` walks the wrong way for negative values and
+    // corrupts zero/inf/NaN encodings; `next_down`/`next_up` handle every
+    // sign and special case correctly.
     if (result as f64) > value {
-        f32::from_bits(result.to_bits() - 1)
+        result.next_down()
     } else {
         result
     }
@@ -342,7 +345,7 @@ fn conservative_min(value: f64) -> f32 {
 fn conservative_max(value: f64) -> f32 {
     let result = value as f32;
     if (result as f64) < value {
-        f32::from_bits(result.to_bits() + 1)
+        result.next_up()
     } else {
         result
     }

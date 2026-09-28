@@ -4,7 +4,7 @@
 //! normal, hydrology, roughness, minerals and final albedo are DERIVED.
 //! AI-provided derived layers are hints at most and never override physics.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -296,7 +296,9 @@ pub struct ConsistencyReport {
     pub ice_cells: usize,
     pub min_height_m: f64,
     pub max_height_m: f64,
-    pub biome_histogram: HashMap<String, usize>,
+    /// Deterministic ordering: `HashMap` iteration order would make the
+    /// printed histogram and serialized report vary between runs.
+    pub biome_histogram: BTreeMap<String, usize>,
     pub mineral_hotspots: usize,
     pub errors: Vec<String>,
 }
@@ -313,7 +315,7 @@ pub fn bake_report(manifest: &Manifest, step_deg: f64) -> Result<ConsistencyRepo
         ice_cells: 0,
         min_height_m: f64::INFINITY,
         max_height_m: f64::NEG_INFINITY,
-        biome_histogram: HashMap::new(),
+        biome_histogram: BTreeMap::new(),
         mineral_hotspots: 0,
         errors: Vec::new(),
     };

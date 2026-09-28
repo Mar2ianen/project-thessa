@@ -41,6 +41,10 @@ TBD in `docs/details/01_DOCKING_PORTS.md`.
   `CollisionWorld::attach_fixed_joint`, while the authoritative docking state
   and pressure progression live in `thessa-sim-core::DockingSession`.
 
+The current MVP `SoftCapture` state is a logical capture gate: it validates
+closing kinematics and waits for the alignment corridor. Petal motion and
+capture damping are not yet a calibrated physical latch model.
+
 The runtime regression fixture creates two D1 craft from the same proxy
 contract, drives them through capture/alignment/hard-dock/pressure
 equalization, applies a force to one craft, and then undocks them without an
@@ -54,9 +58,12 @@ without a structural/contact calibration pass.
 With FreeCAD 1.1.x and Blender 5.x installed:
 
 ```text
-FreeCADCmd -c "exec(open('tools/cad-import/build_d1_docking_port.py').read())"
+FreeCADCmd -c "import sys; sys.argv = ['build_d1_docking_port.py', '--source', '/home/chechulin/Downloads/thessa_d1_v2_2_free.step']; exec(open('tools/cad-import/build_d1_docking_port.py').read())"
 blender -b --python tools/cad-import/export_d1_gltf.py
 ```
 
 The source STEP is intentionally not checked into the repository yet. The
-generated `manifest.json` records its SHA-256 and provenance placeholder.
+builder resolves its repository/output paths from `__file__`; the source is an
+explicit CLI input and the Blender exporter reads hinge pivots/angles from
+`manifest.json`. The generated manifest records the source SHA-256 and
+provenance placeholder.

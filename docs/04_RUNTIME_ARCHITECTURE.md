@@ -3,7 +3,7 @@
 ## Status
 
 **Implemented prototype, with explicit future boundaries.** This document
-describes the current workspace as of 2026-09-18. Sections labelled future do
+describes the current workspace as of 2026-09-27. Sections labelled future do
 not describe a shipped subsystem.
 
 ## 4.0. Cross-platform contract
@@ -52,8 +52,15 @@ authority model.
 ## 4.2. Current workspace boundary
 
 ```text
-crates/sim-core/          MIT numerical state, time, gravity, aero, flight
+crates/sim-core/          MIT aggregate compatibility facade
+crates/aero-core/         MIT atmosphere and aerodynamic models
+crates/celestial/         MIT ephemerides, gravity fields, and simulation time
+crates/trajectory/       MIT propagation, gravity patches, and coast caches
+crates/propulsion/       MIT propulsion models and feed systems
+crates/vehicle-core/     MIT rigid-body, vehicle, and mechanism models
 crates/simd/              MIT optional numeric kernels
+crates/aero-surfaces/     MIT procedural lifting-surface authoring/compiler
+crates/fuselage/          MIT procedural body compiler
 crates/atmosphere/        MIT shared atmosphere optics
 crates/graphics/          MIT graphics settings resolution
 crates/perf/              MIT performance capture model
@@ -92,8 +99,11 @@ that accepts its single-threaded handle and depth limit. Neither backend is
 required by the authoritative server simulation.
 
 The following boundaries are future work rather than missing hidden crates:
-factory/logistics state, persistence/migrations, structural fracture, thermal
-networks, fluid/electrical networks, and an optional web client.
+factory/logistics state, persistence/migrations, structural fracture and
+vehicle-topology changes, fluid/resource networks, full electrical circuits
+and docked-bus exchange, thermal/structural failure coupling, and an optional
+web client. A lumped vehicle thermal network and an ideal shared electrical bus
+already exist as bounded vehicle-system slices.
 
 ## 4.3. Threading
 
@@ -171,10 +181,19 @@ not submit arbitrary craft transforms. The server owns craft state, time warp,
 script continuations, plan cursors, and event order.
 
 Snapshots use a versioned envelope and bounded framed transport. Continuous
-pilot input is latest-value-wins per client; edge commands remain ordered, and
-leave cleanup is retained even when an input queue is saturated. Outbound
-snapshots use a latest-wins slot while reliable welcome/control frames stay
-ordered.
+pilot input is latest-value-wins per client; edge commands, including the
+version-5 `Command::Part` group and named subsystem commands, remain ordered.
+The server decodes each input envelope once and dispatches payload
+deserialization by its message kind. Client-observed tick fields are advisory;
+state is applied on the next available authority step without rewind or
+tick-based rejection. Valid non-unit SAS quaternions are normalized before use.
+Keyboard/HUD part commands apply immediately to local prediction and are sent
+to the authoritative server; legacy boolean state echoes cannot overwrite a
+part command unless the echoed value actually changes. Leave cleanup is
+retained even when an input queue is saturated. Outbound snapshots use a
+latest-wins slot while reliable welcome/control frames stay ordered. One
+encoded snapshot frame is Arc-shared across subscriber mailboxes; socket
+writers consume the shared bytes without a per-client payload copy.
 
 The current protocol is designed for a local/server prototype. Production
 prediction, interpolation policy for remote craft, authentication, persistence,
@@ -199,14 +218,20 @@ explicit, and preserve the MIT/GPL boundary.
 
 ## 4.9. Vehicle design and duplication
 
-The implemented `VehicleDefinition`/`vehicle-baker` path compiles a serializable
-vehicle asset with mass/inertia, geometry, aero panels, control surfaces, and
-starter propulsion/control data. The active flight slice uses this compiled
-definition and the X-15 adapter.
+The implemented `VehicleDefinition`/`vehicle-baker` path compiles serializable
+vehicle assets with mass/inertia, lofted bodies, aero panels/body controls,
+propulsion mounts, articulated landing gear, reaction-wheel banks, parachute
+packs, a shared electrical bus with batteries, reactors, solar arrays, and
+prioritized loads, and a lumped thermal-node network with links and radiators.
+The active flight slice uses this compiled definition and the X-15 adapter.
+The full parametric in-game editor is still future work.
 
 The full parametric editor, shared immutable design storage for large fleets,
-structural graph compilation, thermal graph compilation, and fluid/electrical
-connectivity remain future work.
+structural graph compilation, grid-resolved thermal coupling, shield
+thermal-protection/ablation coupling, and fluid connectivity remain future
+work. Electrical load allocation is
+implemented as a wire-free shared bus; voltage/current dynamics and automatic
+demand coupling for all powered vehicle subsystems remain future work.
 
 ## 4.10. Autopilot and planning boundary
 

@@ -87,6 +87,31 @@ impl ExtractResource for CbtRenderMaterial {
 
 const GPU_GRID_SIZE: usize = 33;
 const GPU_VERTEX_COUNT_PER_PATCH: usize = GPU_GRID_SIZE * GPU_GRID_SIZE;
+
+/// wgpu caps a single dispatch dimension at 65535 workgroups
+/// (`maxComputeWorkgroupsPerDimension`). Both compute passes below
+/// linearize their invocation index with `@num_workgroups`, so a wider
+/// job fans out over the y dimension instead of being clamped by the
+/// backend.
+const MAX_DISPATCH_WORKGROUPS: u32 = 65_535;
+
+fn dispatch_extent(workgroups: u32) -> (u32, u32) {
+    debug_assert!(
+        u64::from(workgroups)
+            <= u64::from(MAX_DISPATCH_WORKGROUPS) * u64::from(MAX_DISPATCH_WORKGROUPS),
+        "dispatch needs more workgroups than the 2-D fan-out can address"
+    );
+    if workgroups <= MAX_DISPATCH_WORKGROUPS {
+        (workgroups, 1)
+    } else {
+        (
+            MAX_DISPATCH_WORKGROUPS,
+            workgroups
+                .div_ceil(MAX_DISPATCH_WORKGROUPS)
+                .min(MAX_DISPATCH_WORKGROUPS),
+        )
+    }
+}
 const GPU_SURFACE_TRIANGLE_COUNT_PER_PATCH: usize = (GPU_GRID_SIZE - 1) * (GPU_GRID_SIZE - 1) * 2;
 const GPU_SKIRT_TRIANGLE_COUNT_PER_PATCH: usize = (GPU_GRID_SIZE - 1) * 4 * 2;
 const GPU_TRIANGLE_COUNT_PER_PATCH: usize =
@@ -509,8 +534,13 @@ struct DrawCommand {
 @group(0) @binding(7) var<storage, read> dirty_ordinals: array<u32>;
 
 @compute @workgroup_size(64)
-fn build_geometry(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let index = gid.x;
+fn build_geometry(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    // Wide dispatches fan out over y (see `dispatch_extent` on the Rust
+    // side); the workgroup grid is x-major, so linearize across it.
+    let index = gid.y * (num_wg.x * 64u) + gid.x;
     let total = params.dirty_count * params.vertices_per_patch;
     if (index >= total) {
         return;
@@ -689,9 +719,12 @@ var<workgroup> selected_offset: u32;
 @compute @workgroup_size(64)
 fn classify_active(
     @builtin(workgroup_id) group: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
     @builtin(local_invocation_index) lane: u32,
 ) {
-    let ordinal = group.x;
+    // Wide dispatches fan out over y (see `dispatch_extent` on the Rust
+    // side): linearize the x-major workgroup grid back into one ordinal.
+    let ordinal = group.y * num_wg.x + group.x;
     if (lane == 0u) {
         selected_count = 0u;
         if (ordinal < params.leaf_count && page_metadata[ordinal].z != 0u) {
@@ -2112,7 +2145,8 @@ fn dispatch_cbt_geometry(
         let total = gpu
             .dirty_count
             .saturating_mul(GPU_VERTEX_COUNT_PER_PATCH as u32);
-        pass.dispatch_workgroups(total.div_ceil(64), 1, 1);
+        let (groups_x, groups_y) = dispatch_extent(total.div_ceil(64));
+        pass.dispatch_workgroups(groups_x, groups_y, 1);
         if let Some(pass_span) = pass_span {
             pass_span.end(&mut pass);
         }
@@ -2497,7 +2531,8 @@ fn draw_cbt_geometry(
                 .map(|diagnostics| diagnostics.pass_span(&mut pass, "terrain_classifier"));
             pass.set_pipeline(&classifier.classify_pipeline);
             pass.set_bind_group(0, &classifier_bind_group, &[view_uniform_offset.offset]);
-            pass.dispatch_workgroups(gpu.leaf_count(), 1, 1);
+            let (groups_x, groups_y) = dispatch_extent(gpu.leaf_count());
+            pass.dispatch_workgroups(groups_x, groups_y, 1);
             if let Some(pass_span) = pass_span {
                 pass_span.end(&mut pass);
             }

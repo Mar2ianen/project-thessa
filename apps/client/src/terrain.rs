@@ -663,11 +663,9 @@ struct TerrainPageReady {
     height_page: HeightPage,
 }
 
-/// Publish one finished height page to the render snapshot.
-fn present_height_page(pages: &mut CbtRenderPages, ready: TerrainPageReady) {
-    if let Some(node) = lod::cbt_node_for_tile(ready.key) {
-        pages.set_page(node.id(), ready.height_page);
-    }
+/// Convert one completed build into a render-snapshot update.
+fn present_height_page(ready: TerrainPageReady) -> Option<(u64, HeightPage)> {
+    lod::cbt_node_for_tile(ready.key).map(|node| (node.id(), ready.height_page))
 }
 
 /// CPU-fallback half of a finished build: turn pool-built mesh/images into
@@ -1293,6 +1291,7 @@ fn poll_finished_pages(
         poll_started.elapsed().as_secs_f64(),
     );
     let asset_upload_started = Instant::now();
+    let mut ready_height_pages = Vec::with_capacity(finished.len());
     for (key, output) in finished {
         world.jobs.remove(&key);
         let TerrainBuildOutput {
@@ -1307,7 +1306,9 @@ fn poll_finished_pages(
         } = output;
         // Render snapshot first (engine-neutral handoff); the CPU fallback
         // bridge below only runs for the mesh path.
-        present_height_page(pages, TerrainPageReady { key, height_page });
+        if let Some(page) = present_height_page(TerrainPageReady { key, height_page }) {
+            ready_height_pages.push(page);
+        }
         perf.record_scope("world.terrain_meshing", seconds[0]);
         perf.record_scope("world.terrain_materials", seconds[1]);
         present_cpu_tile(
@@ -1325,6 +1326,9 @@ fn poll_finished_pages(
         );
         world.counters.terrain_patches_generated += 1;
         world.cover_dirty = true;
+    }
+    if !ready_height_pages.is_empty() {
+        pages.set_pages(ready_height_pages);
     }
     perf.record_scope(
         "world.terrain_asset_upload",
@@ -1429,6 +1433,7 @@ fn run_material_streaming(
             }
         }
     }
+    let mut ready_material_pages = Vec::with_capacity(finished.len());
     for (key, maybe_page) in finished {
         world.material_jobs.remove(&key);
         let Some(page) = maybe_page else {
@@ -1437,8 +1442,11 @@ fn run_material_streaming(
         if world.cache.contains_key(&key)
             && let Some(node) = lod::cbt_node_for_tile(key)
         {
-            material_pages.set_page(node.id(), page);
+            ready_material_pages.push((node.id(), page));
         }
+    }
+    if !ready_material_pages.is_empty() {
+        material_pages.set_pages(ready_material_pages);
     }
     let mut material_wanted: Vec<_> = world
         .visible
@@ -1683,12 +1691,12 @@ fn evict_stale_tiles(
         .map(|(key, tile)| (*key, tile.last_used))
         .collect();
     let capacity = if gpu_raster { 1024 } else { 512 };
+    let mut evicted_node_ids = Vec::new();
     for key in thessa_worldgen_rocky::streaming::lru_evictions(&entries, &protected, capacity) {
         if let Some(tile) = world.cache.remove(&key) {
             world.counters.terrain_cache_evictions += 1;
             if let Some(node) = lod::cbt_node_for_tile(key) {
-                pages.remove_page(node.id());
-                material_pages.remove_page(node.id());
+                evicted_node_ids.push(node.id());
             }
             if let Some(mesh) = tile.mesh {
                 meshes.remove(mesh.id());
@@ -1702,6 +1710,10 @@ fn evict_stale_tiles(
                 }
             }
         }
+    }
+    if !evicted_node_ids.is_empty() {
+        pages.remove_pages(evicted_node_ids.iter().copied());
+        material_pages.remove_pages(evicted_node_ids);
     }
 }
 

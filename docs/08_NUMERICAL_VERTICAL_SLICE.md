@@ -7,7 +7,9 @@ target rather than canonical celestial data.
 
 ## 8.1. Implemented paths
 
-- `thessa-sim-core` is MIT and independent of Bevy, Tokio, and DirectX;
+- `thessa-sim-core` is the MIT aggregate API over `thessa-aero-core`,
+  `thessa-celestial`, `thessa-trajectory`, `thessa-propulsion`, and
+  `thessa-vehicle-core`; these crates are independent of Bevy, Tokio, and DirectX;
 - `SimTime`, frame-labelled `f64` vectors/quaternions, and SI units are used in
   authoritative state;
 - `KeplerOrbit` evaluates deterministic elliptic segments without wall-clock
@@ -44,7 +46,8 @@ The atmosphere/flight slice adds `PanelAeroModel`, `AtmosphereConfig`,
 
 ## 8.3. Verification coverage
 
-`sim-core` tests cover:
+The `thessa-sim-core` integration/regression suite and domain-crate unit suites
+cover:
 
 1. circular and eccentric two-body orbits;
 2. bounded energy error for velocity-Verlet;

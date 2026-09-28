@@ -182,10 +182,17 @@ This origin also permits Thessa's biosphere to be significantly older than the c
 
 Working composition:
 
-- N₂ ~76%;
-- O₂ ~21%;
-- Ar + CO₂ + H₂O + trace gases ~3%;
+- N₂ ~73.5–73.7%;
+- O₂ 25.0%;
+- Ar ~1.0–1.2%;
+- CO₂ ~0.3%;
+- H₂O variable, with O₃ and other photochemical species at trace levels;
 - total pressure ~1.20 bar.
+
+These composition percentages are molar/volume fractions. For propulsion and
+other mass-flow calculations the runtime atmosphere API must derive species
+mass fractions from the same canonical composition rather than reuse the
+numeric molar percentage directly.
 
 Composition remains provisional until biosphere canon is locked.
 

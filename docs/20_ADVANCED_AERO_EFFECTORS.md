@@ -1,11 +1,13 @@
 # 20 — Advanced aerodynamic effectors: flaps, spoilers, grid fins, body flaps
 
-Status: design target — flaps/spoilers/hinged-panels/grid-fins, neutral bounds,
-`AeroEffectorModel`, and the high-speed effects plan (§§17–20: sonic boom,
-buffet, vapor/cone/contrail visuals, plasma blackout, vortex lift, ground
-effect, icing hooks) not implemented; incidence-only control is the runtime.
+Status: partial foundation — conventional panel controls use the incidence
+effector, and procedural fuselage pitch/yaw strips support hinged geometry with
+load-limited actuators. Dedicated flap/spoiler/grid-fin models, general neutral
+bounds, `AeroEffectorModel`, and the high-speed effects plan (§§17–20: sonic
+boom, buffet, vapor/cone/contrail visuals, plasma blackout, vortex lift, ground
+effect, icing hooks) remain future work.
 
-Status: **design target**.
+Status: **design target with implemented control foundations**.
 
 This doc describes the next realtime-aero layer on top of the existing `PanelAeroModel`: high-lift devices, spoilers/speedbrakes, grid fins, and large Starship-class hinged body flaps. The goal is to extend the already working O(panels) solver without turning the runtime into CFD and without introducing separate `Aircraft`, `Rocket`, or `Starship` classes.
 
@@ -23,7 +25,12 @@ The current `thessa-sim-core` already has the right foundation:
 - optional Tier B coefficient tables;
 - `ControlSurfaceDefinition`, which links one physical control channel to one or more panels.
 
-`ControlSurfaceDefinition` already admits elevator, split elevons, rudder, flaps, and procedural surfaces in comments. But the current physical control-surface model is effectively just one:
+The general `ControlSurfaceDefinition` panel path still represents conventional
+surfaces through control-dependent incidence. Procedural fuselage body strips
+also have a separate implemented hinge path that rotates generated panel
+geometry and applies actuator rate/torque limits. Neither path currently models
+the additional local-flow changes and separation behavior needed by general
+spoilers or grid fins. The incidence path is:
 
 ```text
 alpha_eff = alpha_aero + effectiveness * control_gain * deflection
@@ -124,6 +131,14 @@ pub struct AeroPanelControlState {
 Not all fields must exist literally in this form. The principle matters: asset geometry does not become storage for transient aerodynamic effects.
 
 The SoA path should receive compact arrays of already prepared control state, so that new effectors do not destroy the SIMD layout.
+
+The fuselage-control slice now has an explicit mechanism path alongside this
+legacy response: the baker emits a body-frame `ControlHinge`, and the flight
+runtime applies absolute rigid transforms from reference geometry. Optional
+`ControlSurfaceActuator` data advances actual deflection against detailed
+panel hinge loads. This path is currently for procedural body strips; a
+separate immutable panel-definition / control-state representation remains
+the broader architecture target for all effectors.
 
 ## 5. Flaps / high-lift devices
 
@@ -346,7 +361,13 @@ The next useful realism layer after the geometric effect:
 
 At high dynamic pressure a surface may have sufficient aerodynamic authority, but the actuator may be unable to reach the requested angle quickly or at all. This should appear as actuator saturation/residual wrench, not as an artificial reduction of `CL`.
 
-The first slice may keep a constant slew rate; the load-dependent limit can be added later.
+Procedural body strips now support the first load-dependent slice. The author
+provides no-load angular rate and stall torque; rate scales linearly from the
+no-load rating to zero at opposing stall torque. This model intentionally
+does not yet represent actuator mass, motor current, back-drive, actuator
+inertia, power, thermal limits, or failure modes. Other surface effectors
+still use the existing shared normalized-command slew until their mechanism
+data is wired.
 
 ## 11. Interaction with stall/separation model
 
@@ -450,7 +471,7 @@ Grid fins and body flaps are not a reason to move the whole craft to an expensiv
 
 For each new effector, the following are mandatory:
 
-- scalar vs AVX2/AVX-512 coefficient parity;
+- scalar vs AVX2/AVX-512/NEON coefficient parity;
 - deterministic reduction order;
 - serialize/deserialize roundtrip vehicle assets;
 - no effect on unrelated panels at neutral;
@@ -705,8 +726,8 @@ Effector references (existing):
 
 - Existing aero design: `docs/11_AERODYNAMICS.md`
 - Unified control/allocator design: `docs/18-control-guidance-autopilot.md`
-- Current panel solver: `crates/sim-core/src/aero.rs`
-- Current vehicle/control-surface model: `crates/sim-core/src/vehicle.rs`
+- Current panel solver: `crates/aero-core/src/aero.rs`
+- Current vehicle/control-surface model: `crates/vehicle-core/src/vehicle.rs`
 - NASA Glenn, spoilers: https://www.grc.nasa.gov/WWW/k-12/VirtualAero/BottleRocket/airplane/spoil.html
 - NASA Glenn, flaps/slats: https://www.grc.nasa.gov/www/k-12/airplane/aflap.html
 - FAA Airplane Flying Handbook, flap pitching behavior: https://www.faa.gov/sites/faa.gov/files/regulations_policies/handbooks_manuals/aviation/airplane_handbook/10_afh_ch9.pdf

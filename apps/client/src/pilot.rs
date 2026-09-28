@@ -15,7 +15,9 @@ use bevy::{
 };
 
 use thessa_flight_net::{ClientInput, Command, Snapshot};
-use thessa_sim_core::{BakedEphemeris, BodyId, OnRailsCache, SimTime, WorldTick};
+use thessa_sim_core::{
+    BakedEphemeris, BodyId, OnRailsCache, SimTime, VehiclePartCommand, WorldTick,
+};
 
 const HUD_TEXT: Color = Color::srgb(0.91, 0.95, 0.98);
 const HUD_MUTED: Color = Color::srgb(0.60, 0.69, 0.76);
@@ -56,6 +58,9 @@ pub(super) struct PilotFlightRuntime {
     /// so an older network sample cannot undo a local throttle or engine edge.
     input_throttle: f64,
     input_engine_active: bool,
+    /// Discrete part commands are applied immediately for local prediction and
+    /// forwarded in order on the next embedded-server input.
+    pending_part_commands: Vec<VehiclePartCommand>,
     /// Cumulative server timings are telemetry only; local frame/sim timings
     /// remain owned by the client perf monitor.
     pub(super) server_compute_s: f64,
@@ -93,6 +98,7 @@ impl PilotFlightRuntime {
             render_time_s,
             input_throttle,
             input_engine_active,
+            pending_part_commands: Vec::new(),
             server_compute_s: 0.0,
             server_wall_s: 0.0,
             server_effective_warp: 0.0,
@@ -169,6 +175,22 @@ impl PilotFlightRuntime {
 
     pub(super) fn stop_reason(&self) -> Option<&str> {
         self.authority.stop_reason()
+    }
+
+    pub(super) fn issue_part_command(
+        &mut self,
+        command: VehiclePartCommand,
+    ) -> Result<(), thessa_sim_core::FlightError> {
+        self.authority.apply_part_command(&command)?;
+        self.pending_part_commands.push(command);
+        Ok(())
+    }
+
+    fn take_pending_part_commands(&mut self) -> Vec<Command> {
+        std::mem::take(&mut self.pending_part_commands)
+            .into_iter()
+            .map(|command| Command::Part { command })
+            .collect()
     }
 }
 
@@ -340,6 +362,8 @@ struct FlightUiState {
     thrust_n: Option<f64>,
     twr: Option<f64>,
     g_load: Option<f64>,
+    reaction_wheel_torque_body_nm: DVec3,
+    parachute_status: String,
     sas_enabled: bool,
     rcs_enabled: bool,
     engine_active: bool,
@@ -798,6 +822,9 @@ fn adopt_snapshot(
     runtime.server_compute_s = snapshot.server_compute_s;
     runtime.server_wall_s = snapshot.server_wall_s;
     runtime.server_effective_warp = snapshot.effective_warp;
+    runtime.reaction_wheel_torque_body_nm =
+        DVec3::from_array(snapshot.reaction_wheel_torque_body_nm);
+    runtime.adopt_parachute_telemetry(&snapshot.parachutes);
     runtime.wake_notice = snapshot.wake_notice.clone();
     runtime.flight_error = snapshot.flight_error.clone();
     let time = SimTime(snapshot.flight_time_s);
@@ -846,7 +873,9 @@ fn client_input_for_server(
         engine_active: runtime.input_engine_active,
         sas_enabled: runtime.sas_enabled,
         rcs_enabled: runtime.rcs_enabled,
+        reaction_wheels_enabled: runtime.reaction_wheels_enabled,
         gear_down: runtime.gear_down,
+        parachutes_armed: runtime.parachutes_armed,
         commands,
     }
 }
@@ -870,7 +899,8 @@ fn simulate_pilot_flight(
         // live input buffer down and adopts the newest snapshot. Pause
         // and error states live server-side, so neither early-returns
         // below may skip adoption.
-        let sent = link.send_input(&client_input_for_server(&runtime, &state, &clock, vec![]));
+        let commands = runtime.take_pending_part_commands();
+        let sent = link.send_input(&client_input_for_server(&runtime, &state, &clock, commands));
         if let Some(snapshot) = link.latest_snapshot() {
             adopt_snapshot(
                 &mut runtime,
@@ -901,6 +931,9 @@ fn simulate_pilot_flight(
         );
         return;
     }
+    // Local flight applies these commands directly to its authority, so there
+    // is no remote event queue to retain after the frame.
+    runtime.pending_part_commands.clear();
     if clock.paused {
         return;
     }
@@ -1031,6 +1064,7 @@ fn pilot_input(
     // relaunch server-side via command — a local reset would be overwritten
     // by the next snapshot and only flicker.
     if runtime.flight_error.is_some() && keys.just_pressed(KeyCode::Backspace) {
+        runtime.set_parachutes_armed(false);
         if let Some(link) = link.as_deref() {
             let sent = link.send_input(&client_input_for_server(
                 &runtime,
@@ -1173,10 +1207,28 @@ fn pilot_input(
             runtime.sas_enabled = !runtime.sas_enabled;
         }
         if keys.just_pressed(KeyCode::KeyR) {
-            runtime.rcs_enabled = !runtime.rcs_enabled;
+            let enabled = !runtime.rcs_enabled;
+            runtime
+                .issue_part_command(VehiclePartCommand::SetRcsEnabled { enabled })
+                .expect("built-in RCS command is valid");
+        }
+        if keys.just_pressed(KeyCode::KeyY) {
+            let enabled = !runtime.reaction_wheels_enabled;
+            runtime
+                .issue_part_command(VehiclePartCommand::SetReactionWheelsEnabled { enabled })
+                .expect("built-in reaction-wheel command is valid");
         }
         if keys.just_pressed(KeyCode::KeyG) {
-            runtime.gear_down = !runtime.gear_down;
+            let deployed = !runtime.gear_down;
+            runtime
+                .issue_part_command(VehiclePartCommand::SetLandingGearDeployed { deployed })
+                .expect("built-in landing-gear command is valid");
+        }
+        if keys.just_pressed(KeyCode::KeyP) {
+            let armed = !runtime.parachutes_armed;
+            runtime
+                .issue_part_command(VehiclePartCommand::SetParachutesArmed { armed })
+                .expect("built-in parachute-group command is valid");
         }
         if keys.just_pressed(KeyCode::Space) {
             runtime.input_engine_active = !runtime.input_engine_active;
@@ -1282,6 +1334,40 @@ fn live_flight_ui_state(
         .map(|forces| forces.total_force_inertial_n.length())
         .unwrap_or_else(|| flight.thrust_n());
     let g_load = (force_magnitude / flight.vehicle.mass_properties.mass_kg / 9.80665).max(0.0);
+    let parachute_loads = flight.parachute_telemetry();
+    let armed_count = parachute_loads
+        .iter()
+        .filter(|load| load.state.phase == thessa_sim_core::ParachutePhase::Armed)
+        .count();
+    let open_count = parachute_loads
+        .iter()
+        .filter(|load| {
+            matches!(
+                load.state.phase,
+                thessa_sim_core::ParachutePhase::Reefed | thessa_sim_core::ParachutePhase::Deployed
+            )
+        })
+        .count();
+    let failed_count = parachute_loads
+        .iter()
+        .filter(|load| load.state.phase == thessa_sim_core::ParachutePhase::Failed)
+        .count();
+    let parachute_drag_n = parachute_loads
+        .iter()
+        .map(|load| load.force_body_n.length())
+        .sum::<f64>();
+    let parachute_dynamic_pressure_pa = parachute_loads
+        .iter()
+        .map(|load| load.dynamic_pressure_pa)
+        .fold(0.0, f64::max);
+    let parachute_status = if parachute_loads.is_empty() {
+        "none installed".to_string()
+    } else {
+        format!(
+            "{armed_count} armed / {open_count} open / {failed_count} failed · {:.0} N · q {:.0} Pa",
+            parachute_drag_n, parachute_dynamic_pressure_pa
+        )
+    };
     let (apoapsis_altitude_m, periapsis_altitude_m) = estimate_orbit_altitudes(
         relative_position,
         velocity_relative_inertial,
@@ -1374,6 +1460,8 @@ fn live_flight_ui_state(
         thrust_n: Some(flight.thrust_n()),
         twr: Some(flight.thrust_n() / (flight.vehicle.mass_properties.mass_kg * gravity)),
         g_load: Some(g_load),
+        reaction_wheel_torque_body_nm: flight.reaction_wheel_telemetry(),
+        parachute_status,
         sas_enabled: flight.sas_enabled,
         rcs_enabled: flight.rcs_enabled,
         engine_active: flight.engine_active,
@@ -1697,7 +1785,7 @@ mod tests {
     }
 
     #[test]
-    fn x15_manual_commands_map_to_ksp_control_surfaces() {
+    fn x15_manual_commands_are_queued_as_normalized_pilot_axes() {
         let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml"))
             .expect("checked-in system config parses");
         let ephemeris = config.bake().expect("checked-in system bakes");
@@ -1705,18 +1793,47 @@ mod tests {
         let mut flight =
             PilotFlightRuntime::new(&ephemeris, reference_body).expect("X-15 runtime initializes");
 
-        // KSP's W/S, A/D and Q/E channels are pitch, yaw and roll.  The
-        // vehicle asset exposes one elevator, one rudder and split ailerons;
-        // assert the actual actuator deflections so an axis/mesh conversion
-        // regression cannot silently turn pitch into roll again.
+        // KSP's W/S, A/D and Q/E channels are pitch, yaw and roll. Commands
+        // enter the fixed-step actuator pipeline; setting pilot input must
+        // not teleport the surfaces between physics ticks.
         flight.command_controls(0.5, -0.25, -0.75);
-        let panels = &flight.vehicle.aero_geometry.panels;
-        let degrees = |radians: f64| radians.to_degrees();
-        assert!((degrees(panels[2].control_deflection_rad) + 12.5).abs() < 1.0e-10);
-        assert!((degrees(panels[3].control_deflection_rad) + 12.5).abs() < 1.0e-10);
-        assert!((degrees(panels[4].control_deflection_rad) + 5.5).abs() < 1.0e-10);
-        assert!((degrees(panels[0].control_deflection_rad) - 13.5).abs() < 1.0e-10);
-        assert!((degrees(panels[1].control_deflection_rad) + 13.5).abs() < 1.0e-10);
+        assert_eq!(flight.control_input, DVec3::new(0.5, -0.25, -0.75));
+        assert!(
+            flight
+                .control_deflections_rad()
+                .iter()
+                .all(|angle| angle.abs() < 1.0e-12)
+        );
+    }
+
+    #[test]
+    fn part_commands_apply_locally_and_queue_for_server_in_order() {
+        let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml"))
+            .expect("checked-in system config parses");
+        let ephemeris = config.bake().expect("checked-in system bakes");
+        let reference_body = ephemeris.body_id("thessa").expect("playable body exists");
+        let mut runtime =
+            PilotFlightRuntime::new(&ephemeris, reference_body).expect("X-15 runtime initializes");
+        let commands = vec![
+            VehiclePartCommand::SetRcsEnabled { enabled: false },
+            VehiclePartCommand::SetRcsEnabled { enabled: true },
+        ];
+
+        for command in &commands {
+            runtime
+                .issue_part_command(command.clone())
+                .expect("group command is valid");
+        }
+
+        assert!(runtime.rcs_enabled);
+        assert_eq!(
+            runtime.take_pending_part_commands(),
+            commands
+                .into_iter()
+                .map(|command| Command::Part { command })
+                .collect::<Vec<_>>()
+        );
+        assert!(runtime.take_pending_part_commands().is_empty());
     }
 
     #[test]

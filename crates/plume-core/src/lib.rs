@@ -17,9 +17,9 @@
 //! yields the same [`profile::AxialProfile`].
 //!
 //! Deliberately NOT modeled here: combustion chemistry, CFD turbulence,
-//! vehicle/propulsion state (owned by simulation), and any renderer (the
-//! `beauty.rs` cone stays the `Low`/fallback impostor until the volume pass
-//! lands with measured parity).
+//! vehicle/propulsion state (owned by simulation), and any renderer. The
+//! client consumes this profile in its Medium/High volume path; the older
+//! cone impostor remains the Low-quality fallback.
 
 #![forbid(unsafe_code)]
 

@@ -167,6 +167,14 @@ impl MicrostoreDecode {
         blocks_y: u32,
     ) -> Result<Vec<u8>, WgpuError> {
         let texels = width as usize * height as usize;
+        let groups_x = texels.div_ceil(WORKGROUP as usize);
+        let group_limit = self.device.limits().max_compute_workgroups_per_dimension as usize;
+        if groups_x > group_limit {
+            return Err(WgpuError::DispatchWorkgroupsTooLarge {
+                x: groups_x as u32,
+                limit: group_limit as u32,
+            });
+        }
         let table = table.to_vec();
         let table_bytes = words_to_bytes(&table);
         let params = words_to_bytes(&[width, height, blocks_x, blocks_y]);
@@ -218,7 +226,7 @@ impl MicrostoreDecode {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(texels.div_ceil(WORKGROUP as usize) as u32, 1, 1);
+            pass.dispatch_workgroups(groups_x as u32, 1, 1);
         }
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("microstore-staging"),

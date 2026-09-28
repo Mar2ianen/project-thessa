@@ -1,0 +1,16 @@
+[package]
+name = "thessa-celestial"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+
+[dependencies]
+glam.workspace = true
+rayon.workspace = true
+serde.workspace = true
+thessa-aero-core = { path = "../aero-core" }
+
+[dev-dependencies]
+toml.workspace = true

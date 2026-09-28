@@ -275,7 +275,7 @@ impl PerfCollector {
     /// pass `frame_wall_s` when no finer split is available.
     pub fn end_frame(&mut self, frame_wall_s: f64, frame_cpu_s: f64, sim_time_s: f64) {
         let frame_wall_s = frame_wall_s.max(0.0);
-        let frame_cpu_s = frame_cpu_s.max(0.0).min(frame_wall_s.max(frame_cpu_s));
+        let frame_cpu_s = frame_cpu_s.max(0.0).min(frame_wall_s);
         self.pending.sim_time_s = sim_time_s;
         // Fill memory lazily when the caller did not provide a sample.
         if self.pending.memory.rss_bytes.is_none() {

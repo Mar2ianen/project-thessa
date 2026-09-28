@@ -5,12 +5,13 @@
 //! not couple to any math crate version. Framing and versioning come from
 //! `thessa-protocol`; this crate only owns the game payload registry.
 
+use glam::DVec3;
 use serde::{Deserialize, Serialize};
 use thessa_autopilot::{AutopilotGraph, PlanDeoptimizationReason, TrajectoryPlan};
 use thessa_flight_authority::ControlMode;
 use thessa_flight_control::{GuidanceIntent, PropulsionDemand};
 use thessa_protocol::{CodecError, Envelope, kind};
-use thessa_sim_core::RigidBodyState;
+use thessa_sim_core::{ParachuteLoad, RigidBodyState, VehiclePartCommand};
 
 /// Client handshake: version check happens on [`Envelope`], this carries
 /// the human-readable identity for logs and the admin surface.
@@ -31,6 +32,8 @@ pub struct Welcome {
 /// These caps run before domain validation so a hostile peer cannot burn
 /// the driver thread with one frame.
 pub const MAX_COMMANDS_PER_INPUT: usize = 64;
+pub const MAX_MANEUVER_NODES: usize = 16;
+pub const MAX_BURN_SEGMENTS: usize = 64;
 pub const MAX_GRAPH_NODES: usize = 256;
 pub const MAX_GRAPH_EDGES: usize = 1024;
 pub const MAX_PLAN_SEGMENTS: usize = 256;
@@ -78,6 +81,13 @@ pub enum Command {
         initial_mass_kg: f64,
         segments: Vec<BurnSegmentCommand>,
     },
+    /// Apply a typed command to an installed vehicle subsystem. Event-like
+    /// commands are preserved in order by the server input mailbox, ready for
+    /// later staging and action-group dispatch. Kept last to preserve the
+    /// postcard discriminants of existing command variants.
+    Part {
+        command: VehiclePartCommand,
+    },
 }
 
 /// Steering direction of one burn segment on the wire: extensible enum so
@@ -121,19 +131,26 @@ pub struct ManeuverNodeCommand {
 /// input/commands, never world state).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientInput {
-    /// Client's view of the tick this input targets; the server clamps.
+    /// Client-observed authority tick when this state was sampled. Advisory
+    /// only: the server applies the latest received state on its next
+    /// available simulation step and does not schedule or replay by this tick.
     pub tick: u64,
     /// Manual body-axis command: pitch, yaw, roll in normalized units.
     pub control_input: [f64; 3],
     /// Assist mode selecting the server-side control law.
     pub control_mode: ControlMode,
-    /// SAS attitude target as (x, y, z, w); ignored unless finite nonzero.
+    /// SAS attitude target as (x, y, z, w); the server normalizes accepted
+    /// finite nonzero values before applying them.
     pub sas_target_xyzw: [f64; 4],
     pub throttle: f64,
     pub engine_active: bool,
     pub sas_enabled: bool,
     pub rcs_enabled: bool,
+    pub reaction_wheels_enabled: bool,
     pub gear_down: bool,
+    /// Automatic parachute packs armed for their authored pressure triggers.
+    #[serde(default)]
+    pub parachutes_armed: bool,
     pub commands: Vec<Command>,
 }
 
@@ -180,6 +197,109 @@ impl ClientInput {
                 {
                     return Err("warp vote must be finite and in [0, 131072]".into());
                 }
+                Command::ExecuteManeuver { nodes } => {
+                    if nodes.is_empty() || nodes.len() > MAX_MANEUVER_NODES {
+                        return Err(format!(
+                            "maneuver node count must be in 1..={MAX_MANEUVER_NODES}"
+                        ));
+                    }
+                    let mut previous_epoch_s = f64::NEG_INFINITY;
+                    for node in nodes {
+                        let delta_v = DVec3::from_array(node.delta_v_mps);
+                        if !node.epoch_s.is_finite()
+                            || !delta_v.is_finite()
+                            || !delta_v.length_squared().is_finite()
+                        {
+                            return Err(
+                                "maneuver nodes must contain finite, representable values".into()
+                            );
+                        }
+                        if node.epoch_s < previous_epoch_s {
+                            return Err("maneuver nodes must be time ordered".into());
+                        }
+                        previous_epoch_s = node.epoch_s;
+                    }
+                }
+                Command::ExecuteBurnPlan {
+                    engine_thrust_n,
+                    engine_exhaust_velocity_mps,
+                    initial_mass_kg,
+                    segments,
+                } => {
+                    if segments.is_empty() || segments.len() > MAX_BURN_SEGMENTS {
+                        return Err(format!(
+                            "burn segment count must be in 1..={MAX_BURN_SEGMENTS}"
+                        ));
+                    }
+                    if !engine_thrust_n.is_finite()
+                        || *engine_thrust_n <= 0.0
+                        || !engine_exhaust_velocity_mps.is_finite()
+                        || *engine_exhaust_velocity_mps <= 0.0
+                        || !initial_mass_kg.is_finite()
+                        || *initial_mass_kg <= 0.0
+                    {
+                        return Err(
+                            "burn engine ratings and mass must be finite and positive".into()
+                        );
+                    }
+                    let mut previous_end_s = f64::NEG_INFINITY;
+                    for segment in segments {
+                        if !segment.start_s.is_finite()
+                            || !segment.duration_s.is_finite()
+                            || segment.duration_s < 0.0
+                            || !segment.planned_dv_mps.is_finite()
+                            || segment.planned_dv_mps < 0.0
+                            || !segment.throttle_01.is_finite()
+                            || !(0.0..=1.0).contains(&segment.throttle_01)
+                        {
+                            return Err("burn segments contain invalid numeric values".into());
+                        }
+                        let end_s = segment.start_s + segment.duration_s;
+                        if !end_s.is_finite() || segment.start_s < previous_end_s {
+                            return Err("burn segments must be ordered and non-overlapping".into());
+                        }
+                        match &segment.direction {
+                            BurnDirectionCommand::Inertial { unit } => {
+                                let direction = DVec3::from_array(*unit);
+                                if !direction.is_finite()
+                                    || !direction.length_squared().is_finite()
+                                    || direction.length_squared() <= 0.0
+                                {
+                                    return Err(
+                                        "inertial burn direction must be finite and non-zero"
+                                            .into(),
+                                    );
+                                }
+                            }
+                            BurnDirectionCommand::Rtn {
+                                central,
+                                radial,
+                                transverse,
+                                normal,
+                            } => {
+                                let components = DVec3::new(*radial, *transverse, *normal);
+                                if central.is_empty()
+                                    || !components.is_finite()
+                                    || !components.length_squared().is_finite()
+                                    || components.length_squared() <= 0.0
+                                {
+                                    return Err("RTN burn direction must have a body and finite non-zero components".into());
+                                }
+                            }
+                            BurnDirectionCommand::Prograde | BurnDirectionCommand::Retrograde => {}
+                        }
+                        previous_end_s = end_s;
+                    }
+                }
+                Command::Part {
+                    command:
+                        VehiclePartCommand::Parachute { name, .. }
+                        | VehiclePartCommand::SetReactionWheelBankEnabled { name, .. }
+                        | VehiclePartCommand::SetWheelChassisDeployed { name, .. }
+                        | VehiclePartCommand::SetLandingLegDeployed { name, .. },
+                } if name.trim().is_empty() => {
+                    return Err("named part command needs a non-empty component name".into());
+                }
                 _ => {}
             }
         }
@@ -192,6 +312,7 @@ impl ClientInput {
 /// server still validates and realizes it through native control laws.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GuidanceInput {
+    /// Client-observed authority tick; advisory, not a scheduling request.
     pub tick: u64,
     pub intent: GuidanceIntent,
     pub propulsion: PropulsionDemand,
@@ -222,6 +343,11 @@ pub struct Snapshot {
     pub server_wall_s: f64,
     pub steps_this_frame: u32,
     pub rails_advanced_s: f64,
+    /// Actual body-axis reaction-wheel moment from the latest authority step.
+    pub reaction_wheel_torque_body_nm: [f64; 3],
+    /// Per-canopy phase and physical load from the latest authority step.
+    #[serde(default)]
+    pub parachutes: Vec<ParachuteLoad>,
     pub wake_notice: Option<String>,
     pub flight_error: Option<String>,
 }
@@ -264,6 +390,7 @@ pub enum AutopilotCommand {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutopilotInput {
+    /// Client-observed authority tick; advisory, not a scheduling request.
     pub tick: u64,
     pub command: AutopilotCommand,
 }
@@ -355,6 +482,7 @@ mod tests {
     use super::*;
     use glam::{DQuat, DVec3};
     use thessa_protocol::FrameDecoder;
+    use thessa_sim_core::{ParachutePhase, ParachuteState, VehiclePartCommand};
 
     fn sample_input() -> ClientInput {
         ClientInput {
@@ -366,7 +494,9 @@ mod tests {
             engine_active: true,
             sas_enabled: true,
             rcs_enabled: false,
+            reaction_wheels_enabled: true,
             gear_down: false,
+            parachutes_armed: true,
             commands: vec![Command::SetWarp { factor: 128.0 }, Command::Stage],
         }
     }
@@ -394,6 +524,87 @@ mod tests {
     fn client_input_rejects_command_flood() {
         let mut input = sample_input();
         input.commands = vec![Command::Stage; MAX_COMMANDS_PER_INPUT + 1];
+        assert!(input.validate().is_err());
+    }
+
+    #[test]
+    fn part_commands_are_typed_and_reject_empty_named_targets() {
+        let mut input = sample_input();
+        input.commands = vec![Command::Part {
+            command: VehiclePartCommand::SetReactionWheelsEnabled { enabled: false },
+        }];
+        assert!(input.validate().is_ok());
+
+        input.commands = vec![Command::Part {
+            command: VehiclePartCommand::Parachute {
+                name: "  ".into(),
+                command: thessa_sim_core::ParachuteCommand::Arm,
+            },
+        }];
+        assert!(input.validate().is_err());
+    }
+
+    #[test]
+    fn part_commands_round_trip_in_order_on_the_flight_input_wire() {
+        let mut input = sample_input();
+        input.commands = vec![
+            Command::Part {
+                command: VehiclePartCommand::SetLandingGearDeployed { deployed: true },
+            },
+            Command::Part {
+                command: VehiclePartCommand::Parachute {
+                    name: "main".into(),
+                    command: thessa_sim_core::ParachuteCommand::Arm,
+                },
+            },
+        ];
+
+        let frame = encode_input(&input).expect("encode part commands");
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.push(&frame).expect("decode framed input");
+        let envelope = decode_frame(&frames[0]).expect("decode input envelope");
+        let decoded: ClientInput = decode_payload(&envelope).expect("decode part commands");
+        assert_eq!(decoded.commands, input.commands);
+    }
+
+    #[test]
+    fn client_input_rejects_malformed_nested_flight_commands() {
+        let mut input = sample_input();
+        input.commands = vec![Command::ExecuteManeuver {
+            nodes: vec![ManeuverNodeCommand {
+                epoch_s: f64::NAN,
+                delta_v_mps: [1.0, 0.0, 0.0],
+            }],
+        }];
+        assert!(input.validate().is_err());
+
+        let mut input = sample_input();
+        input.commands = vec![Command::ExecuteManeuver {
+            nodes: vec![
+                ManeuverNodeCommand {
+                    epoch_s: 1.0,
+                    delta_v_mps: [1.0, 0.0, 0.0],
+                };
+                MAX_MANEUVER_NODES + 1
+            ],
+        }];
+        assert!(input.validate().is_err());
+
+        let mut input = sample_input();
+        input.commands = vec![Command::ExecuteBurnPlan {
+            engine_thrust_n: 1.0,
+            engine_exhaust_velocity_mps: 1.0,
+            initial_mass_kg: 1.0,
+            segments: vec![BurnSegmentCommand {
+                start_s: 1.0,
+                duration_s: 1.0,
+                planned_dv_mps: 1.0,
+                direction: BurnDirectionCommand::Inertial {
+                    unit: [f64::MAX, f64::MAX, f64::MAX],
+                },
+                throttle_01: 1.0,
+            }],
+        }];
         assert!(input.validate().is_err());
     }
 
@@ -441,6 +652,17 @@ mod tests {
             server_wall_s: 1.705,
             steps_this_frame: 181,
             rails_advanced_s: 0.0,
+            reaction_wheel_torque_body_nm: [250.0, -50.0, 10.0],
+            parachutes: vec![ParachuteLoad {
+                state: ParachuteState {
+                    phase: ParachutePhase::Reefed,
+                    inflation_elapsed_s: 0.8,
+                },
+                deployment_fraction: 0.42,
+                dynamic_pressure_pa: 820.0,
+                force_body_n: [-4_200.0, 0.0, 0.0].into(),
+                moment_body_nm: [0.0, 8_400.0, 0.0].into(),
+            }],
             wake_notice: None,
             flight_error: None,
         }
@@ -631,7 +853,9 @@ mod reset_command_tests {
             engine_active: false,
             sas_enabled: false,
             rcs_enabled: false,
+            reaction_wheels_enabled: true,
             gear_down: false,
+            parachutes_armed: false,
             commands: vec![
                 Command::Stage,
                 Command::Reset,

@@ -1,12 +1,20 @@
 //! Propulsion backend benchmarks (`docs/details/04` section 17):
 //! hangar compile cost plus runtime evaluation throughput for the editor
-//! analyzer path (thrust/Isp sweeps over altitude x throttle) and the
-//! solid burn-trace compile.
+//! analyzer path (thrust/Isp sweeps over altitude x throttle), the solid
+//! burn-trace compile, and the jet shaft runtime (steady spool
+//! equilibrium solve + cold crank, section 8.1 / section 18.8).
 use std::{hint::black_box, time::Instant};
 
 use thessa_sim_core::{
-    AtmosphereConfig, ChamberMaterial, CompiledEngine, CoolingMode, EngineCycle, LiquidEngineSpec,
-    NozzleContour, Propellant, SolidMotorSpec, analyze_altitude,
+    AirCycle, AirbreathingSpec, AtmosphereConfig, ChamberMaterial, CompiledEngine, CoolingMode,
+    ElectricMotorSpec, ElectricPropellant, ElectricThrusterDesign, ElectricThrusterSpec,
+    EngineCycle, EstocEjectorSpec, EstocMode, EstocPrecoolerSpec, EstocSpec, FlightCondition,
+    FusionReaction, FusionTorchCommand, FusionTorchSpec, GasKind, IntakeKind, JetFuel,
+    JetShaftState, LiquidEngineSpec, NozzleContour, PistonEngineSpec, Propellant,
+    PropellerDriveSpec, PropellerSpec, PulsedFusionCommand, PulsedFusionSpec, PulsedFusionState,
+    ShaftCommand, ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec, StarterKind,
+    StarterSpec, TurbopropDriveSpec, advance_jet_shaft, analyze_airbreathing, analyze_altitude,
+    analyze_propeller_drive, analyze_turboprop_drive, flight_condition,
 };
 
 fn methalox_spec() -> LiquidEngineSpec {
@@ -36,6 +44,7 @@ fn apcp_spec() -> SolidMotorSpec {
         propellant: Propellant::SolidApcp,
         outer_radius_m: 0.5,
         core_radius_m: 0.32,
+        grain_geometry: SolidGrainGeometry::Circular,
         segment_length_m: 1.5,
         segments: 4,
         burn_rate_coeff: a,
@@ -52,6 +61,29 @@ fn apcp_spec() -> SolidMotorSpec {
     }
 }
 
+fn electric_thruster_spec(
+    name: &str,
+    propellant: ElectricPropellant,
+    design: ElectricThrusterDesign,
+) -> ElectricThrusterSpec {
+    ElectricThrusterSpec {
+        name: name.into(),
+        propellant,
+        design,
+        maximum_power_w: 20_000.0,
+        maximum_mass_flow_kg_s: 1.0e-3,
+        power_processor_specific_power_w_kg: 2_000.0,
+        structure_density_kg_m3: 2_700.0,
+        structure_thickness_m: 0.003,
+        radiator_area_m2: 20.0,
+        radiator_temperature_k: 700.0,
+        radiator_emissivity: 0.9,
+        radiator_areal_density_kg_m2: 8.0,
+        ionization_efficiency: 0.75,
+        inlet_temperature_k: 300.0,
+    }
+}
+
 fn main() {
     // Hangar compile: one liquid + one solid.
     let start = Instant::now();
@@ -61,6 +93,41 @@ fn main() {
     let solid = CompiledEngine::Solid(apcp_spec().compile().expect("solid"));
     let solid_compile_us = start.elapsed().as_secs_f64() * 1.0e6;
     println!("liquid compile: {liquid_compile_us:.1} us, solid compile: {solid_compile_us:.1} us");
+
+    for (label, geometry) in [
+        (
+            "star",
+            SolidGrainGeometry::Star {
+                tip_count: 6,
+                tip_radius_m: 0.30,
+            },
+        ),
+        (
+            "finocyl",
+            SolidGrainGeometry::Finocyl {
+                fin_count: 8,
+                fin_tip_radius_m: 0.32,
+                fin_width_rad: 0.24,
+            },
+        ),
+    ] {
+        let spec = SolidMotorSpec {
+            name: format!("bench-{label}"),
+            core_radius_m: 0.16,
+            grain_geometry: geometry,
+            ..apcp_spec()
+        };
+        let compile_iters = 10;
+        let start = Instant::now();
+        for _ in 0..compile_iters {
+            black_box(spec.compile().expect("shaped solid compile"));
+        }
+        let compile_us = start.elapsed().as_secs_f64() * 1.0e6 / compile_iters as f64;
+        println!(
+            "{label} grain compile: {compile_us:.1} us ({} segments)",
+            spec.segments
+        );
+    }
 
     // Analyzer sweep: 21 altitudes x 5 throttles (editor slider path).
     let atmosphere = AtmosphereConfig::default();
@@ -96,6 +163,558 @@ fn main() {
     let evals = iters * (steps + 1) * 3;
     let per_eval_ns = start.elapsed().as_secs_f64() * 1.0e9 / evals as f64;
     println!("solid replay point: {per_eval_ns:.1} ns/eval ({evals} evals)");
+
+    // Jet shaft runtime (section 8.1): the steady spool equilibrium
+    // solve behind `operating_point` (40-halving bisection) and a cold
+    // crank to light-off on the runtime shaft machine.
+    let jet = AirbreathingSpec {
+        name: "bench-jet".into(),
+        cycle: AirCycle::Turbojet,
+        fuel: JetFuel::Kerosene,
+        intake_area_m2: 0.9,
+        intake: IntakeKind::Pitot,
+        compressor_ratio: 12.0,
+        bypass_ratio: 0.0,
+        fan_pressure_ratio: 1.0,
+        turbine_inlet_temp_k: 1500.0,
+        afterburner: false,
+        reheat_temp_k: 0.0,
+        turbine_material: ChamberMaterial::nickel_superalloy(),
+        spool_tau_s: 5.0,
+        shaft: ShaftSpec {
+            starter: StarterSpec {
+                kind: StarterKind::Electric,
+                power_w: 4.0e6,
+                charge_j: 1.0e9,
+                mass_kg: 30.0,
+            },
+            ..ShaftSpec::default()
+        },
+    }
+    .compile()
+    .expect("bench jet");
+    let sample = atmosphere.sample(0.0).expect("SL sample");
+    let condition = flight_condition(&sample, 0.0).expect("condition");
+
+    let start = Instant::now();
+    for _ in 0..iters {
+        black_box(jet.operating_point(&condition, 1.0).expect("steady point"));
+    }
+    let per_solve_us = start.elapsed().as_secs_f64() * 1.0e6 / iters as f64;
+    println!("jet steady spool solve: {per_solve_us:.2} us/solve ({iters} solves)");
+
+    let start = Instant::now();
+    let mut state = JetShaftState::cold(&jet);
+    let command = ShaftCommand {
+        throttle: 1.0,
+        starter_engaged: true,
+        generator_load_w: 0.0,
+    };
+    let mut crank_steps = 0usize;
+    while !state.lit && crank_steps < 4000 {
+        state = advance_jet_shaft(&jet, state, &command, &condition, 0.1)
+            .expect("shaft step")
+            .0;
+        crank_steps += 1;
+    }
+    assert!(
+        state.lit,
+        "bench starter must light the core within {} steps",
+        crank_steps
+    );
+    let crank_ns = start.elapsed().as_secs_f64() * 1.0e9 / crank_steps as f64;
+    println!(
+        "jet cold crank to light-off: {crank_steps} steps ({:.1} sim s) at {crank_ns:.0} ns/step",
+        crank_steps as f64 * 0.1
+    );
+
+    // Composition-aware atmosphere (section 10 / 18.9): oxidizer query
+    // cost plus the analyzer sweep that stamps species into every sample.
+    let composition = atmosphere.sample(0.0).expect("SL sample").composition;
+    let queries = iters * 10_000;
+    let start = Instant::now();
+    let mut acc = 0.0;
+    for _ in 0..queries {
+        acc += composition.mass_fraction(GasKind::Oxygen);
+    }
+    black_box(acc);
+    let per_query_ns = start.elapsed().as_secs_f64() * 1.0e9 / queries as f64;
+    println!("composition mass-fraction query: {per_query_ns:.2} ns/query");
+
+    let altitudes: Vec<f64> = (0..=10).map(|k| k as f64 * 8000.0).collect();
+    let machs = [0.0, 0.5, 1.0, 2.0, 3.0];
+    let warm_rows =
+        analyze_airbreathing(&jet, &atmosphere, &altitudes, &machs, 1.0).expect("air grid");
+    let start = Instant::now();
+    for _ in 0..iters {
+        black_box(
+            analyze_airbreathing(&jet, &atmosphere, &altitudes, &machs, 1.0).expect("air grid"),
+        );
+    }
+    let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * warm_rows.len()) as f64;
+    println!(
+        "air analyzer row: {per_row_ns:.1} ns/row ({} rows/iter, species stamped per row)",
+        warm_rows.len()
+    );
+
+    let scramjet = AirbreathingSpec {
+        name: "bench-scramjet".into(),
+        cycle: AirCycle::Scramjet,
+        fuel: JetFuel::Hydrogen,
+        intake_area_m2: 0.5,
+        intake: IntakeKind::Ramp,
+        compressor_ratio: 1.0,
+        bypass_ratio: 0.0,
+        fan_pressure_ratio: 1.0,
+        turbine_inlet_temp_k: 2_300.0,
+        afterburner: false,
+        reheat_temp_k: 0.0,
+        turbine_material: ChamberMaterial::nickel_superalloy(),
+        spool_tau_s: 5.0,
+        shaft: ShaftSpec::default(),
+    }
+    .compile()
+    .expect("scramjet");
+    let scramjet_machs = [0.0, 1.0, 2.0, 4.0, 6.0, 8.0];
+    let warm_rows = analyze_airbreathing(&scramjet, &atmosphere, &altitudes, &scramjet_machs, 1.0)
+        .expect("scramjet analyzer");
+    let start = Instant::now();
+    for _ in 0..iters {
+        black_box(
+            analyze_airbreathing(&scramjet, &atmosphere, &altitudes, &scramjet_machs, 1.0)
+                .expect("scramjet analyzer"),
+        );
+    }
+    let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * warm_rows.len()) as f64;
+    println!(
+        "scramjet analyzer row: {per_row_ns:.1} ns/row ({} rows/iter)",
+        warm_rows.len()
+    );
+
+    // Shaft-power aircraft analyzer (section 9): electric and piston sources
+    // driving the same ideal actuator-disk component over an 11-altitude ×
+    // 4-airspeed target grid.
+    let electric_drive = PropellerDriveSpec {
+        propeller: PropellerSpec::default(),
+        source: ShaftPowerSourceSpec::Electric(ElectricMotorSpec::default()),
+        reduction_ratio: 2.0,
+    }
+    .compile()
+    .expect("electric propeller drive");
+    let piston_drive = PropellerDriveSpec {
+        propeller: PropellerSpec::default(),
+        source: ShaftPowerSourceSpec::Piston(PistonEngineSpec {
+            cooling_capacity_w: 100_000.0,
+            ..PistonEngineSpec::default()
+        }),
+        reduction_ratio: 1.0,
+    }
+    .compile()
+    .expect("piston propeller drive");
+    let source_rpm = 2_400.0;
+    let airspeeds_mps = [0.0, 50.0, 100.0, 150.0];
+    for (label, drive) in [("electric", &electric_drive), ("piston", &piston_drive)] {
+        let warm_rows = analyze_propeller_drive(
+            drive,
+            &atmosphere,
+            &altitudes,
+            &airspeeds_mps,
+            1.0,
+            source_rpm,
+        )
+        .expect("shaft-power analyzer");
+        let start = Instant::now();
+        for _ in 0..iters {
+            black_box(
+                analyze_propeller_drive(
+                    drive,
+                    &atmosphere,
+                    &altitudes,
+                    &airspeeds_mps,
+                    1.0,
+                    source_rpm,
+                )
+                .expect("shaft-power analyzer"),
+            );
+        }
+        let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * warm_rows.len()) as f64;
+        println!(
+            "{label} propeller analyzer row: {per_row_ns:.1} ns/row ({} rows/iter)",
+            warm_rows.len()
+        );
+    }
+
+    // Space propulsion operating-point sweep: eleven bus-power levels by four
+    // propellant-flow requests per physical accelerator/nozzle family.
+    let electric_thrusters = [
+        (
+            "gridded-ion",
+            electric_thruster_spec(
+                "bench-ion",
+                ElectricPropellant::Xenon,
+                ElectricThrusterDesign::GriddedIon {
+                    accelerator_voltage_v: 1_000.0,
+                    grid_diameter_m: 0.4,
+                    grid_gap_m: 0.002,
+                    max_beam_current_density_a_m2: 100.0,
+                    propellant_utilization: 0.95,
+                    accelerator_efficiency: 0.9,
+                },
+            ),
+        ),
+        (
+            "hall",
+            electric_thruster_spec(
+                "bench-hall",
+                ElectricPropellant::Xenon,
+                ElectricThrusterDesign::HallEffect {
+                    accelerator_voltage_v: 300.0,
+                    channel_inner_radius_m: 0.025,
+                    channel_outer_radius_m: 0.05,
+                    channel_length_m: 0.04,
+                    magnetic_field_t: 0.02,
+                    coil_current_density_a_m2: 4.0e7,
+                    max_discharge_current_a: 5.0,
+                    propellant_utilization: 0.9,
+                    accelerator_efficiency: 0.8,
+                },
+            ),
+        ),
+        (
+            "mpd",
+            electric_thruster_spec(
+                "bench-mpd",
+                ElectricPropellant::Argon,
+                ElectricThrusterDesign::Magnetoplasmadynamic {
+                    arc_voltage_v: 100.0,
+                    cathode_radius_m: 0.01,
+                    anode_radius_m: 0.05,
+                    electrode_length_m: 0.1,
+                    max_current_a: 200.0,
+                    jet_power_efficiency: 0.55,
+                },
+            ),
+        ),
+        (
+            "resistojet",
+            electric_thruster_spec(
+                "bench-resistojet",
+                ElectricPropellant::Ammonia,
+                ElectricThrusterDesign::Resistojet {
+                    chamber_radius_m: 0.02,
+                    chamber_length_m: 0.1,
+                    max_exhaust_temp_k: 1_400.0,
+                    heater_efficiency: 0.9,
+                    nozzle_efficiency: 0.8,
+                },
+            ),
+        ),
+        (
+            "arcjet",
+            electric_thruster_spec(
+                "bench-arcjet",
+                ElectricPropellant::Ammonia,
+                ElectricThrusterDesign::Arcjet {
+                    chamber_radius_m: 0.02,
+                    chamber_length_m: 0.1,
+                    max_exhaust_temp_k: 2_500.0,
+                    arc_voltage_v: 80.0,
+                    max_arc_current_a: 100.0,
+                    heater_efficiency: 0.8,
+                    nozzle_efficiency: 0.75,
+                },
+            ),
+        ),
+    ]
+    .map(|(label, spec)| (label, spec.compile().expect("electric thruster")));
+    let power_grid: Vec<f64> = (1..=11).map(|level| f64::from(level) * 2_000.0).collect();
+    let flow_grid = [1.0e-7, 1.0e-6, 1.0e-5, 1.0e-4];
+    for (label, engine) in &electric_thrusters {
+        let evaluate_grid = || {
+            for power_w in &power_grid {
+                for mass_flow_kg_s in flow_grid {
+                    black_box(
+                        engine
+                            .operating_point(thessa_sim_core::ElectricThrusterCommand {
+                                available_power_w: *power_w,
+                                requested_mass_flow_kg_s: mass_flow_kg_s,
+                            })
+                            .expect("electric thruster point"),
+                    );
+                }
+            }
+        };
+        evaluate_grid();
+        let start = Instant::now();
+        for _ in 0..iters {
+            evaluate_grid();
+        }
+        let row_count = power_grid.len() * flow_grid.len();
+        let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * row_count) as f64;
+        println!("{label} propulsion row: {per_row_ns:.1} ns/row ({row_count} rows/iter)");
+    }
+
+    // Continuous and event-driven fusion have separate runtime contracts:
+    // the former evaluates a steady power/flow point; the latter advances
+    // stored pulse energy across cadence boundaries.
+    let torch = FusionTorchSpec {
+        name: "bench-dt-torch".into(),
+        reaction: FusionReaction::DeuteriumTritium,
+        working_fluid: ElectricPropellant::Hydrogen,
+        maximum_fusion_power_w: 100.0e6,
+        fusion_gain: 10.0,
+        maximum_working_flow_kg_s: 1.0e-3,
+        reactor_specific_power_w_kg: 10_000.0,
+        plasma_coupling_efficiency: 0.9,
+        magnetic_nozzle_efficiency: 0.8,
+        nozzle_radius_m: 0.5,
+        nozzle_length_m: 2.0,
+        magnetic_field_t: 1.0,
+        coil_current_density_a_m2: 4.0e7,
+        structure_density_kg_m3: 2_700.0,
+        structure_thickness_m: 0.01,
+        radiator_area_m2: 3_000.0,
+        radiator_temperature_k: 1_000.0,
+        radiator_emissivity: 0.9,
+        radiator_areal_density_kg_m2: 8.0,
+    }
+    .compile()
+    .expect("fusion torch");
+    let torch_flows = [1.0e-5, 1.0e-4, 5.0e-4, 1.0e-3];
+    let evaluate_torch_grid = || {
+        for power_w in &power_grid {
+            for working_flow_kg_s in torch_flows {
+                black_box(
+                    torch
+                        .operating_point(FusionTorchCommand {
+                            available_driver_power_w: *power_w,
+                            requested_working_flow_kg_s: working_flow_kg_s,
+                        })
+                        .expect("fusion torch point"),
+                );
+            }
+        }
+    };
+    evaluate_torch_grid();
+    let start = Instant::now();
+    for _ in 0..iters {
+        evaluate_torch_grid();
+    }
+    let fusion_rows = power_grid.len() * torch_flows.len();
+    let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * fusion_rows) as f64;
+    println!("continuous fusion row: {per_row_ns:.1} ns/row ({fusion_rows} rows/iter)");
+
+    let pulsed_fusion = PulsedFusionSpec {
+        name: "bench-pellet-drive".into(),
+        reaction: FusionReaction::DeuteriumTritium,
+        working_fluid: ElectricPropellant::Hydrogen,
+        fuel_mass_per_pulse_kg: 1.0e-9,
+        working_fluid_mass_per_pulse_kg: 1.0e-7,
+        fusion_gain: 10.0,
+        plasma_coupling_efficiency: 0.9,
+        magnetic_nozzle_efficiency: 0.8,
+        maximum_pulse_frequency_hz: 0.1,
+        pulse_duration_s: 0.01,
+        maximum_charge_power_w: 100_000.0,
+        energy_buffer_capacity_pulses: 2,
+        energy_buffer_specific_energy_j_kg: 1.0e6,
+        pulse_system_specific_power_w_kg: 1.0e6,
+        chamber_radius_m: 0.1,
+        chamber_length_m: 0.5,
+        magnetic_field_t: 1.0,
+        coil_current_density_a_m2: 4.0e7,
+        structure_density_kg_m3: 2_700.0,
+        structure_thickness_m: 0.01,
+        radiator_area_m2: 10.0,
+        radiator_temperature_k: 1_000.0,
+        radiator_emissivity: 0.9,
+        radiator_areal_density_kg_m2: 8.0,
+    }
+    .compile()
+    .expect("pulsed fusion drive");
+    let step_sizes_s = [0.1, 1.0, 10.0, 25.0];
+    let pulse_ready_state = PulsedFusionState {
+        pulse_phase_s: 0.0,
+        stored_driver_energy_j: pulsed_fusion.buffer_capacity_j,
+        cumulative_shots: 0,
+    };
+    let evaluate_pulse_grid = || {
+        for power_w in &power_grid {
+            for dt_s in step_sizes_s {
+                black_box(
+                    pulsed_fusion
+                        .advance(
+                            pulse_ready_state,
+                            PulsedFusionCommand {
+                                available_charge_power_w: *power_w,
+                                armed: true,
+                            },
+                            dt_s,
+                        )
+                        .expect("pulsed fusion point"),
+                );
+            }
+        }
+    };
+    evaluate_pulse_grid();
+    let start = Instant::now();
+    for _ in 0..iters {
+        evaluate_pulse_grid();
+    }
+    let fusion_rows = power_grid.len() * step_sizes_s.len();
+    let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * fusion_rows) as f64;
+    println!("pulsed fusion row: {per_row_ns:.1} ns/row ({fusion_rows} rows/iter)");
+
+    let estoc = EstocSpec {
+        name: "bench-v6-estoc".into(),
+        air: AirbreathingSpec {
+            name: "bench-v6-air".into(),
+            cycle: AirCycle::Turbojet,
+            fuel: JetFuel::Kerosene,
+            intake_area_m2: 0.05,
+            intake: IntakeKind::Pitot,
+            compressor_ratio: 1.5,
+            bypass_ratio: 0.0,
+            fan_pressure_ratio: 1.0,
+            turbine_inlet_temp_k: 1_500.0,
+            afterburner: false,
+            reheat_temp_k: 0.0,
+            turbine_material: ChamberMaterial::nickel_superalloy(),
+            spool_tau_s: 5.0,
+            shaft: ShaftSpec::default(),
+        },
+        bulk_fuel: Some(JetFuel::Methane),
+        boost_coolant_fuel: Some(JetFuel::Hydrogen),
+        precooler: Some(EstocPrecoolerSpec {
+            maximum_heat_flow_w: 20.0e6,
+            effectiveness: 0.85,
+            maximum_compressor_inlet_temp_k: 500.0,
+            pressure_recovery: 0.98,
+            wall_mass_kg: 500.0,
+            wall_specific_heat_j_kg_k: 1_000.0,
+            wall_initial_temp_k: 300.0,
+            wall_max_temp_k: 800.0,
+            coolant_inlet_temp_k: 20.0,
+            coolant_max_outlet_temp_k: 400.0,
+            coolant_specific_heat_j_kg_k: 14_000.0,
+            maximum_coolant_flow_kg_s: 0.1,
+        }),
+        ejector: Some(EstocEjectorSpec {
+            capture_area_m2: 0.06,
+            mixing_length_m: 2.0,
+            mixing_efficiency: 0.95,
+            structure_density_kg_m3: 2_700.0,
+            wall_thickness_m: 0.005,
+        }),
+        rocket_chamber_pressure_pa: 7.0e6,
+        rocket_throat_radius_m: 0.09,
+        oxidizer_fuel_ratio: None,
+        switch_mach_hi: None,
+        switch_mach_lo: None,
+        transition_tau_s: None,
+    }
+    .compile()
+    .expect("v6 ESTOC");
+    let sea_level = atmosphere.sample(0.0).expect("ESTOC benchmark atmosphere");
+    let mach_rows = [0.5, 1.0, 2.0, 3.0, 4.0, 5.0]
+        .into_iter()
+        .map(|mach| {
+            flight_condition(&sea_level, mach * sea_level.speed_of_sound_mps)
+                .expect("ESTOC Mach condition")
+        })
+        .collect::<Vec<FlightCondition>>();
+    let anoxic =
+        thessa_sim_core::AtmosphereComposition::from_mole_fractions(&[(GasKind::Nitrogen, 1.0)])
+            .expect("nitrogen composition");
+    let anoxic_rows = mach_rows
+        .iter()
+        .copied()
+        .map(|mut condition| {
+            condition.composition = anoxic;
+            condition
+        })
+        .collect::<Vec<_>>();
+    let estoc_state = JetShaftState::running(&estoc.air);
+    let evaluate_estoc_grid = || {
+        for condition in &mach_rows {
+            black_box(
+                estoc
+                    .operating_point(condition, 1.0, None, EstocMode::Air, None, 1.0, estoc_state)
+                    .expect("precooled ESTOC point"),
+            );
+        }
+        for condition in &anoxic_rows {
+            black_box(
+                estoc
+                    .operating_point(condition, 1.0, None, EstocMode::Air, None, 1.0, estoc_state)
+                    .expect("anoxic ejector ESTOC point"),
+            );
+        }
+    };
+    evaluate_estoc_grid();
+    let start = Instant::now();
+    for _ in 0..iters {
+        evaluate_estoc_grid();
+    }
+    let estoc_rows = mach_rows.len() + anoxic_rows.len();
+    let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * estoc_rows) as f64;
+    println!("ESTOC precooler/ejector row: {per_row_ns:.1} ns/row ({estoc_rows} rows/iter)");
+
+    let turboprop = TurbopropDriveSpec {
+        air: AirbreathingSpec {
+            name: "bench-turboprop-core".into(),
+            cycle: AirCycle::Turbojet,
+            fuel: JetFuel::Kerosene,
+            intake_area_m2: 0.9,
+            intake: IntakeKind::Pitot,
+            compressor_ratio: 12.0,
+            bypass_ratio: 0.0,
+            fan_pressure_ratio: 1.0,
+            turbine_inlet_temp_k: 1_500.0,
+            afterburner: false,
+            reheat_temp_k: 0.0,
+            turbine_material: ChamberMaterial::nickel_superalloy(),
+            spool_tau_s: 5.0,
+            shaft: ShaftSpec {
+                power_turbine_heat_fraction: 0.15,
+                ..ShaftSpec::default()
+            },
+        },
+        propeller: PropellerSpec::default(),
+        shaft_rpm_at_full_spool: 12_000.0,
+        reduction_ratio: 6.0,
+        power_turbine_mass_kg: 45.0,
+    }
+    .compile()
+    .expect("turboprop drive");
+    let warm_rows = analyze_turboprop_drive(
+        &turboprop,
+        &atmosphere,
+        &altitudes,
+        &airspeeds_mps,
+        1.0,
+        0.25,
+    )
+    .expect("turboprop analyzer");
+    let start = Instant::now();
+    for _ in 0..iters {
+        black_box(
+            analyze_turboprop_drive(
+                &turboprop,
+                &atmosphere,
+                &altitudes,
+                &airspeeds_mps,
+                1.0,
+                0.25,
+            )
+            .expect("turboprop analyzer"),
+        );
+    }
+    let per_row_ns = start.elapsed().as_secs_f64() * 1.0e9 / (iters * warm_rows.len()) as f64;
+    println!(
+        "turboprop analyzer row: {per_row_ns:.1} ns/row ({} rows/iter)",
+        warm_rows.len()
+    );
 }
 
 fn solid_burn_time(engine: &CompiledEngine) -> f64 {

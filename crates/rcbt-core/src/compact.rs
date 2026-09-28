@@ -170,6 +170,9 @@ impl CompactTree {
     }
 
     pub fn is_active(&self, id: u64) -> bool {
+        if id == 0 || id >= (1_u64 << (self.max_depth + 1)) {
+            return false;
+        }
         let bit = (id - 1) as usize;
         self.active[bit / 64] & (1_u64 << (bit % 64)) != 0
     }
@@ -181,6 +184,9 @@ impl CompactTree {
     }
 
     pub fn sum(&self, node: Node) -> u32 {
+        if node.depth() > self.max_depth {
+            return 0;
+        }
         let level = &self.sums[node.depth() as usize];
         let first = 1_u64 << node.depth();
         level.get((node.id() - first) as usize)
@@ -215,6 +221,9 @@ impl CompactTree {
     pub fn merge(&mut self, parent: Node) -> Result<(), TreeError> {
         if parent.is_root() {
             return Err(TreeError::CannotMergeRoot);
+        }
+        if parent.depth() >= self.max_depth {
+            return Err(TreeError::ChildrenNotLeaves(parent));
         }
         let Some([left, right]) = parent.children() else {
             return Err(TreeError::ChildrenNotLeaves(parent));
@@ -471,5 +480,19 @@ mod tests {
         assert_eq!(compact.sum_width_bits(20), 1);
         assert!(compact.footprint_bytes() < (1_usize << 21) * 4);
         assert_eq!(compact.leaf_count(), 1);
+    }
+
+    #[test]
+    fn compact_out_of_range_queries_and_merges_are_safe() {
+        let mut tree = CompactTree::new(4).unwrap();
+        let outside = Node::new(32, 5).unwrap();
+        assert!(!tree.is_active(0));
+        assert!(!tree.is_active(65));
+        assert!(!tree.contains(outside));
+        assert_eq!(tree.sum(outside), 0);
+        assert_eq!(
+            tree.merge(outside),
+            Err(TreeError::ChildrenNotLeaves(outside))
+        );
     }
 }

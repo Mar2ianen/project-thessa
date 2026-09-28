@@ -3,9 +3,10 @@
 ## Status
 
 **Implemented and tested prototype.** The implementation is in
-`crates/sim-core/src/affine_propagator.rs`; patch compilation and bounds are in
-`gravity_patch.rs`; tests are in `src/tests.rs`; the A/B benchmark is
-`benches/affine_prop.rs`.
+`crates/trajectory/src/affine_propagator.rs`; patch compilation and bounds are in
+`crates/trajectory/src/gravity_patch.rs`; cross-domain tests are in
+`crates/sim-core/src/tests.rs`; the A/B benchmark remains in
+`crates/sim-core/benches/affine_prop.rs`.
 
 ## 24.1. Local affine field
 

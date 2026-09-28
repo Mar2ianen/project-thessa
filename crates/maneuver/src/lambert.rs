@@ -319,7 +319,7 @@ mod tests {
         .expect("near-hohmann arc solves");
         let expected_dep = (MU * (2.0 / r1 - 1.0 / semi)).sqrt();
         assert!(
-            (arc.departure_velocity_mps.length() - expected_dep) / expected_dep <= 0.01,
+            ((arc.departure_velocity_mps.length() - expected_dep) / expected_dep).abs() <= 0.01,
             "dep speed {} vs {expected_dep}",
             arc.departure_velocity_mps.length()
         );

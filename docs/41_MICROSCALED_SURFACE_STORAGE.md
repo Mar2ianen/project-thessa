@@ -1,12 +1,14 @@
 # 41 — Microscaled surface storage
 
-Status: **partial implementation on main** (merged from
-`feat/microstorage-phase-a`): codec Phases A–E, slab allocator, residency
-cache, GPU LOD/mip/sample-time path with hardware parity, game integration
-(`material_microstore`, render-world A/B) all landed and measured — see the
-phase notes below. Open: crack-free geometry (blocked on a boundary
-strategy), canonical baked-format adoption, height pages as secondary
-target after visual-data proof.
+Status: **experimental implementation on main** (the
+`feat/microstorage-phase-a` work is already represented here): codec Phases A–E,
+slab allocator, residency cache, GPU LOD/mip/sample-time path with hardware
+parity, and game/render-world A/B integration are implemented and measured —
+see the phase notes below. The compact render-world path currently pre-decodes
+to conventional RGBA pages; it is not a packed material-shader sampling path,
+and the raw RGBA path remains the default. Open: crack-free geometry (blocked on
+a boundary strategy), canonical baked-format adoption, and height-page use in
+production terrain.
 
 Implementation status (landed on `main` from `feat/microstorage-phase-a`):
 
@@ -16,16 +18,18 @@ Implementation status (landed on `main` from `feat/microstorage-phase-a`):
 - Phase B done in `thessa-microstore-core::wgsl` (sample-time WGSL
   decoder) + `thessa-rcbt-wgpu::microstore` (upload + compute decode,
   GPU==CPU parity on all fixtures); the RGBA material path is untouched.
-  Honest scope: this is a GPU decode *parity prototype* (whole-page
-  dispatch + sync readback), not a measured material-shader sample —
-  bilinear/aniso/mips, which the RGBA path gets from hardware, are still
-  open, as is the R6 tail-byte upload slack now guaranteed by the
-  backend.
+  The original whole-page dispatch/readback remains a parity harness, not
+  the production render path. Follow-up kernels implement and hardware-test
+  packed bilinear/aniso sampling, GPU mip generation, and LOD+mip sampling
+  (see below). The render-world A/B still pre-decodes compact pages to RGBA
+  shadow pages before the normal texture upload; direct packed sampling in
+  the material shader is not integrated.
 - Phase C done in `thessa-microstore-core`: Residual6/Residual2,
   cheapest-first adaptive ladder (2/4/6-bit, Raw8 fallback), per-channel
   color pages with linear-light error, header/payload overhead
   accounting, 128/256 extents in benches.
-- Measured so far (128x128): R4 0.689 B/tex (err <= 8), R6 0.938 B/tex
+- Phase-C single-level benchmark (128x128; separate from the later
+  mip-complete game path): R4 0.689 B/tex (err <= 8), R6 0.938 B/tex
   (err <= 2.6), R2 0.438 B/tex (err <= 43, headers 43% of bytes);
   adaptive@2.0 holds the budget by construction; GPU decode ~0.1-0.3 ms
   per page on a Radeon 780M; 4 adaptive channels ~= 0.94-1.19x one RGBA
@@ -70,7 +74,9 @@ Implementation status (landed on `main` from `feat/microstorage-phase-a`):
   blocks + fresh table instead of full pages on rung changes, with the
   backend applying the table first); CPU mip chains as plain page
   vectors (8-level 128x128 chain = 1.32x the base page, geometric
-  series made explicit; GPU mip sampling stays open).
+  series made explicit). GPU mip generation and LOD+mip sampling were
+  implemented in the later `LodMipSampler` path below. Direct packed sampling
+  in the production material shader remains unintegrated.
 - Second follow-up: slab allocator (first-fit, realloc grow/move/shrink,
   coalescing, deterministic slide-down compaction, `check_invariants`)
   with a 1500-step cache+allocator integration workload asserting
@@ -530,7 +536,11 @@ Costs:
 Keep very compact scalar/semantic fields packed while expanding only channels
 that benefit strongly from filtered texture hardware.
 
-No strategy is selected yet. Benchmark actual hardware.
+The current render-world A/B selects page decode into conventional RGBA shadow
+pages, then uses the existing texture/sampler/mip upload path. This preserves
+production filtering behavior but does not reduce decoded GPU residency.
+Direct packed sampling in the material shader remains unselected; benchmark
+that path against pre-decode on target hardware before adopting it.
 
 ---
 
@@ -724,7 +734,13 @@ worse shader is not a success.
 
 ---
 
-## 18. Suggested implementation order
+## 18. Original implementation order and current status
+
+The original Phase A–E delivery sequence below has been completed as an
+experimental codec and integration path; current measurements and remaining
+production gaps are summarized at the top of this document. The phases are kept
+here as the implementation record, not as a claim that those tasks are still
+pending.
 
 ### Phase A — CPU codec experiment
 
@@ -793,9 +809,9 @@ global value
             -> small residual
 ~~~
 
-Potential future users include:
+Beyond the implemented terrain material-page prototype, potential future users
+include:
 
-- terrain material fields;
 - height residual caches;
 - volumetric/atmospheric intermediate fields;
 - particle and exhaust fields;
@@ -811,11 +827,15 @@ error/bandwidth tradeoff is measured.
 
 ## 21. Summary
 
-Microscaling is valuable to Thessa because the project already exposes locality
-at multiple architectural levels. The next step is to expose that locality in
-the numeric representation of resident surface data.
+The material-page codec, residency, and GPU sampling experiments are implemented
+and integrated behind an opt-in render-world A/B. Compact wire storage is
+measured, but the current renderer expands pages to conventional RGBA before
+sampling, so decoded GPU residency is unchanged and the raw path remains the
+default. The next steps are a production packed-sampling path, a crack-free
+boundary strategy before geometry use, and a decision on canonical baked-format
+adoption.
 
-The first practical target is:
+The implemented experimental target is:
 
 ~~~text
 higher-density terrain material pages

@@ -10,8 +10,8 @@ use bevy::render::render_resource::{
     TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect, TextureDescriptor,
     TextureDimension, TextureUsages, TextureView, TextureViewDescriptor,
 };
-use std::collections::BTreeMap;
 use std::time::Instant;
+use std::{collections::BTreeMap, sync::Arc};
 use thessa_graphics::ResolvedMaterialStorage;
 
 /// CPU-only compact residency for the microstore storage path.
@@ -74,10 +74,10 @@ impl MicrostoreResidency {
         let mut shadow = CbtRenderMaterialPages {
             generation: pages.generation,
             priority: pages.priority.clone(),
-            pages: BTreeMap::new(),
+            pages: Arc::new(BTreeMap::new()),
         };
         for (id, (generation, _, page)) in self.pages.iter() {
-            shadow.pages.insert(*id, (*generation, page.clone()));
+            Arc::make_mut(&mut shadow.pages).insert(*id, (*generation, page.clone()));
         }
         shadow
     }

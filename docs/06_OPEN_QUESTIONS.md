@@ -49,7 +49,9 @@ The current `data/system.toml` target for Thessa (`R=3200 km`, approximately
 
 - cross-section parameterization and material thickness UX;
 - depth of engine-cycle design;
-- procedural wheel/gear editor;
+- procedural wheel/gear editor UX (the physical wheel-chassis parameter and
+  Rapier boundary are specified in
+  [`details/05_PROCEDURAL_LANDING_GEAR.md`](details/05_PROCEDURAL_LANDING_GEAR.md));
 - structural/thermal graph visualization;
 - shared design asset and instance storage;
 - design validation and control-authority reports.
@@ -65,7 +67,8 @@ prototypes rather than open architecture choices. Remaining physics questions:
 - structural solver and fracture order;
 - reduced-order aeroelasticity;
 - slosh fidelity;
-- atmospheric heating and ablative heat shield model;
+- shield-specific thermal protection, ablation/recession, and burn-through
+  coupling (general Sutton-Graves heating and shield aerodynamics are shipped);
 - CPU ray-sampling budget;
 - deterministic tolerance policy across AVX builds;
 - spin periods and prime meridians for triaxial bodies (hyperbolic/parabolic osculating

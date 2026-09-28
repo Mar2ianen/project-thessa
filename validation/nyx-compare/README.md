@@ -18,7 +18,7 @@ multi-body ephemeris fit.
 
 The same executable also checks the harder current slice: all five circular
 restricted three-body Lagrange points, five-period L4/L5 co-rotation, an
-eight-burn impulsive maneuver schedule, and the actual 24-body design system
+eight-burn impulsive maneuver schedule, and the actual 32-body design system
 with an eight-burn Thessa vehicle replay. The design-system `halo` result is
 reported as a diagnostic because its current Borea orbit is eccentric and
 inclined while the halo segment is still circular and coplanar.

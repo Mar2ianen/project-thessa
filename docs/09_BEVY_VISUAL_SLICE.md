@@ -67,9 +67,10 @@ in the normal HUD.
   interest management are not implemented;
 - the authoritative terrain contact boundary is spherical/sampled even though
   the client can render richer generated terrain;
-- atmosphere, water, clouds, and RT effects are visual reduced-order systems
-  (clouds/aurora/gas-giants/plume ship as cheap CPU-baked shells plus a
-  camera-facing volume ribbon; volumetric clouds and full RT remain future);
+- atmosphere, water, clouds, and RT effects are visual reduced-order systems;
+  clouds/aurora/gas-giants use shell approximations, while the plume has a Low
+  impostor and Medium/High field-integrated volume ribbon. Volumetric clouds and
+  full RT remain future work;
 - rendering backends for the current client must continue to go through
   Bevy/wgpu abstractions (see `docs/39` for the longer-term migration plan);
 - a WASM/WebGPU client target is future work.

@@ -134,24 +134,43 @@ pub fn pressure_ratio(source: &PlumeSource, env: &PlumeEnvironment) -> f64 {
 // suggested `x <= 0.0` would accept it. The negated form is deliberate.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn validation_error(source: &PlumeSource, env: &PlumeEnvironment) -> Option<&'static str> {
-    if !(source.exit_radius_m > 0.0) {
+    if !source.exit_radius_m.is_finite() || !(source.exit_radius_m > 0.0) {
         return Some("exit_radius_m must be > 0");
     }
-    if !(source.exit_mach > 1.0) {
+    if !source.exit_mach.is_finite() || !(source.exit_mach > 1.0) {
         return Some("exit_mach must be > 1 for a supersonic nozzle");
     }
     if source.throttle < 0.0 || source.throttle > 1.0 || !source.throttle.is_finite() {
         return Some("throttle must be finite in 0..=1");
     }
-    if !(source.mass_flow_kg_s >= 0.0)
+    if !source.mass_flow_kg_s.is_finite()
+        || !(source.mass_flow_kg_s >= 0.0)
+        || !source.exhaust_velocity_mps.is_finite()
         || !(source.exhaust_velocity_mps >= 0.0)
+        || !source.exit_pressure_pa.is_finite()
         || !(source.exit_pressure_pa >= 0.0)
+        || !source.exit_temperature_k.is_finite()
         || !(source.exit_temperature_k >= 0.0)
     {
         return Some("negative engine state");
     }
-    if !(env.pressure_pa >= 0.0) || !(env.density_kg_m3 >= 0.0) || !(env.temperature_k >= 0.0) {
+    if !env.pressure_pa.is_finite()
+        || !(env.pressure_pa >= 0.0)
+        || !env.density_kg_m3.is_finite()
+        || !(env.density_kg_m3 >= 0.0)
+        || !env.temperature_k.is_finite()
+        || !(env.temperature_k >= 0.0)
+    {
         return Some("negative environment state");
+    }
+    if source
+        .nozzle_to_vehicle
+        .translation_m
+        .iter()
+        .chain(source.nozzle_to_vehicle.rotation_xyzw.iter())
+        .any(|v| !v.is_finite())
+    {
+        return Some("nozzle transform must be finite");
     }
     if env.flow_velocity_local_mps.iter().any(|v| !v.is_finite()) {
         return Some("flow velocity must be finite");

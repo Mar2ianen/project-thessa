@@ -9,7 +9,10 @@
 use bevy::prelude::{App, Plugin, PostUpdate, ResMut, Resource};
 #[cfg(feature = "render")]
 use bevy::prelude::{Handle, Image};
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 use thessa_rcbt_core::{
     CbtCapabilities, FrameBudget, HeightPage, LeafCandidate, LeafList, Tree, TreeError, Update,
     UpdatePlan, plan_frame,
@@ -99,7 +102,9 @@ impl Default for CbtOceanMaterial {
 pub struct CbtRenderTopology {
     generation: u64,
     max_depth: u8,
-    records: Vec<CbtLeafRecord>,
+    /// Shared immutable payload: extraction clones the Arc rather than
+    /// copying every leaf record into the render world each changed frame.
+    records: Arc<[CbtLeafRecord]>,
     adapter_managed: bool,
 }
 
@@ -109,7 +114,7 @@ impl CbtRenderTopology {
     }
 
     fn from_leaf_list(generation: u64, max_depth: u8, leaves: &LeafList) -> Self {
-        let records = leaves
+        let records: Arc<[CbtLeafRecord]> = leaves
             .iter()
             .enumerate()
             .map(|(ordinal, node)| {
@@ -120,7 +125,8 @@ impl CbtRenderTopology {
                     ordinal as u32,
                 ]
             })
-            .collect();
+            .collect::<Vec<_>>()
+            .into();
         Self {
             generation,
             max_depth,
@@ -167,21 +173,34 @@ impl CbtRenderTopology {
     }
 
     fn publish_leaf_records(&mut self, max_depth: u8, nodes: &[thessa_rcbt_core::Node]) -> bool {
-        let records: Vec<_> = nodes
-            .iter()
-            .enumerate()
-            .map(|(ordinal, node)| {
-                [
-                    node.id() as u32,
-                    (node.id() >> 32) as u32,
-                    u32::from(node.depth()),
-                    ordinal as u32,
-                ]
-            })
-            .collect();
         self.adapter_managed = true;
-        if self.records != records || self.max_depth != max_depth {
-            self.records = records;
+        let unchanged = self.max_depth == max_depth
+            && self.records.len() == nodes.len()
+            && self.records.iter().zip(nodes.iter().enumerate()).all(
+                |(record, (ordinal, node))| {
+                    *record
+                        == [
+                            node.id() as u32,
+                            (node.id() >> 32) as u32,
+                            u32::from(node.depth()),
+                            ordinal as u32,
+                        ]
+                },
+            );
+        if !unchanged {
+            self.records = nodes
+                .iter()
+                .enumerate()
+                .map(|(ordinal, node)| {
+                    [
+                        node.id() as u32,
+                        (node.id() >> 32) as u32,
+                        u32::from(node.depth()),
+                        ordinal as u32,
+                    ]
+                })
+                .collect::<Vec<_>>()
+                .into();
             self.max_depth = max_depth;
             self.generation = self.generation.saturating_add(1);
         }
@@ -212,7 +231,10 @@ impl CbtRenderTopology {
 #[derive(Debug, Clone, Default, Resource)]
 pub struct CbtRenderPages {
     generation: u64,
-    pages: BTreeMap<u64, (u64, HeightPage)>,
+    /// Copy-on-write map snapshot. Extraction shares the immutable map; page
+    /// content is independently shared so streamed updates copy the directory
+    /// at most once per batch, not every resident height vector per page.
+    pages: Arc<BTreeMap<u64, (u64, Arc<HeightPage>)>>,
 }
 
 impl CbtRenderPages {
@@ -223,26 +245,54 @@ impl CbtRenderPages {
     /// re-examines residency) and the page's own version advances (stable
     /// GPU slot caches re-upload only this page's range).
     pub fn set_page(&mut self, node_id: u64, page: HeightPage) {
-        match self.pages.get(&node_id) {
-            Some((_, existing)) if existing == &page => {}
-            Some((version, _)) => {
-                let version = *version;
-                self.pages
-                    .insert(node_id, (version.saturating_add(1), page));
-                self.generation = self.generation.saturating_add(1);
+        self.set_pages(std::iter::once((node_id, page)));
+    }
+
+    /// Publish a batch of streamed pages with one copy-on-write directory
+    /// update. A render-world extraction may retain the previous snapshot
+    /// while several worker results arrive during one frame.
+    pub fn set_pages(&mut self, updates: impl IntoIterator<Item = (u64, HeightPage)>) {
+        let mut changed = BTreeMap::new();
+        let mut change_count = 0_u64;
+        for (node_id, page) in updates {
+            let current = changed.get(&node_id).or_else(|| self.pages.get(&node_id));
+            if current
+                .is_some_and(|(_, existing): &(u64, Arc<HeightPage>)| existing.as_ref() == &page)
+            {
+                continue;
             }
-            None => {
-                self.pages.insert(node_id, (1, page));
-                self.generation = self.generation.saturating_add(1);
-            }
+            let version = current.map_or(1, |(version, _)| version.saturating_add(1));
+            changed.insert(node_id, (version, Arc::new(page)));
+            change_count = change_count.saturating_add(1);
         }
+        if changed.is_empty() {
+            return;
+        }
+        let pages = Arc::make_mut(&mut self.pages);
+        pages.extend(changed);
+        self.generation = self.generation.saturating_add(change_count);
     }
 
     /// Remove a page whose CPU-side tile cache was evicted.
     pub fn remove_page(&mut self, node_id: u64) {
-        if self.pages.remove(&node_id).is_some() {
-            self.generation = self.generation.saturating_add(1);
+        self.remove_pages(std::iter::once(node_id));
+    }
+
+    /// Remove multiple evicted pages with at most one directory copy.
+    pub fn remove_pages(&mut self, node_ids: impl IntoIterator<Item = u64>) {
+        let removed: BTreeSet<_> = node_ids
+            .into_iter()
+            .filter(|node_id| self.pages.contains_key(node_id))
+            .collect();
+        if removed.is_empty() {
+            return;
         }
+        let count = removed.len() as u64;
+        let pages = Arc::make_mut(&mut self.pages);
+        for node_id in removed {
+            pages.remove(&node_id);
+        }
+        self.generation = self.generation.saturating_add(count);
     }
 
     pub fn generation(&self) -> u64 {
@@ -273,7 +323,7 @@ impl CbtRenderPages {
 
     #[cfg(feature = "render")]
     pub(crate) fn get(&self, node_id: u64) -> Option<&HeightPage> {
-        self.pages.get(&node_id).map(|(_, page)| page)
+        self.pages.get(&node_id).map(|(_, page)| page.as_ref())
     }
 }
 
@@ -647,14 +697,14 @@ fn apply_cbt_frame(
         state.set_view(view);
     }
     let plan = state.plan_frame(candidates, budget.unwrap_or_else(|| state.frame_budget()));
-    let updates = plan.updates().to_vec();
+    output.updates.clear();
+    output.updates.extend_from_slice(plan.updates());
     let result = state.commit(&plan);
     output.frame_index = output.frame_index.saturating_add(1);
-    output.updates = updates;
     output.error = result.as_ref().err().map(ToString::to_string);
-    let leaf_list = state.leaf_list();
     if result.is_ok() && !plan.is_empty() {
         output.topology_generation = output.topology_generation.saturating_add(1);
+        let leaf_list = state.leaf_list();
         if !render_topology.adapter_managed {
             *render_topology = CbtRenderTopology::from_leaf_list(
                 output.topology_generation,
@@ -662,8 +712,11 @@ fn apply_cbt_frame(
                 &leaf_list,
             );
         }
+        output.leaf_list = leaf_list;
     }
-    output.leaf_list = leaf_list;
+    if output.leaf_list.is_empty() {
+        output.leaf_list = state.leaf_list();
+    }
 }
 
 #[cfg(feature = "render")]
@@ -824,6 +877,45 @@ mod tests {
         assert_eq!(pages.generation(), 2);
         pages.remove_page(17);
         assert_eq!(pages.page_version(17), None);
+    }
+
+    #[test]
+    fn extracted_snapshots_share_payload_and_page_updates_are_copy_on_write() {
+        let mut topology = CbtRenderTopology::default();
+        assert!(topology.publish_resident_leaves(&[Node::root()]));
+        let topology_snapshot = topology.clone();
+        assert!(std::sync::Arc::ptr_eq(
+            &topology.records,
+            &topology_snapshot.records
+        ));
+        let children = Node::root().children().unwrap();
+        assert!(topology.publish_resident_leaves(&children));
+        assert!(!std::sync::Arc::ptr_eq(
+            &topology.records,
+            &topology_snapshot.records
+        ));
+        assert_eq!(topology_snapshot.records(), &[[1, 0, 0, 0]]);
+
+        let page = HeightPage::bake(&[10.0, 10.0, 11.0, 11.0], 2, 0.01).unwrap();
+        let replacement = HeightPage::bake(&[10.0, 10.0, 12.0, 12.0], 2, 0.01).unwrap();
+        let mut pages = CbtRenderPages::default();
+        pages.set_page(17, page.clone());
+        pages.set_page(19, page.clone());
+        let page_snapshot = pages.clone();
+        assert!(std::sync::Arc::ptr_eq(&pages.pages, &page_snapshot.pages));
+        assert!(std::sync::Arc::ptr_eq(
+            &pages.pages[&17].1,
+            &page_snapshot.pages[&17].1
+        ));
+
+        pages.set_page(17, replacement.clone());
+        assert!(!std::sync::Arc::ptr_eq(&pages.pages, &page_snapshot.pages));
+        assert_eq!(pages.pages[&17].1.as_ref(), &replacement);
+        assert_eq!(page_snapshot.pages[&17].1.as_ref(), &page);
+        assert!(std::sync::Arc::ptr_eq(
+            &pages.pages[&19].1,
+            &page_snapshot.pages[&19].1
+        ));
     }
 
     #[test]

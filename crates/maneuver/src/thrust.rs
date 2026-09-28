@@ -355,6 +355,15 @@ pub fn realize_impulsive(
         let total_duration = engine
             .burn_duration_s(node_dv, mass_kg)
             .ok_or(ThrustPlanError::PropellantExceeded)?;
+        // One period per nonzero node in `periods_s` plan order: consume it
+        // even when this burn fits unsplit. Skipping here would desynchronise
+        // the iterator, and every later split node would phase on the wrong
+        // node's period — `PerOrbitNodes` exists precisely because burns
+        // after a raise run on changed orbits.
+        let own_period = match &mut spacing {
+            Spacing::Periods(periods) => periods.next(),
+            Spacing::Chop(_) => None,
+        };
         if total_duration <= max_segment_s {
             segments.push(centered_segment(
                 node.epoch,
@@ -388,12 +397,12 @@ pub fn realize_impulsive(
                 .ok_or(ThrustPlanError::PropellantExceeded)?;
         }
         match &mut spacing {
-            Spacing::Periods(periods) => {
+            Spacing::Periods(_) => {
                 // Symmetric phasing around the node epoch on this node's
                 // own period (departure-period for the single-period mode).
                 // Pieces longer than one orbit (or nodes closer than their
                 // spans) fail honestly at plan construction with Overlap.
-                let period = periods.next().ok_or(ThrustPlanError::InvalidSegment)?;
+                let period = own_period.ok_or(ThrustPlanError::InvalidSegment)?;
                 for (k, duration) in durations.iter().enumerate() {
                     let center = node.epoch.0 + (k as f64 - (pieces as f64 - 1.0) / 2.0) * period;
                     segments.push(BurnSegment {
@@ -1188,5 +1197,68 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// `PerOrbitNodes` gives one period per NONZERO node, so even a burn
+    /// that fits unsplit must consume its entry. Otherwise the iterator
+    /// slips and every later split node phases on the wrong node's period.
+    /// Node 1 here stays under the cap (146 s burn at a 200 s cap) but
+    /// still raises the orbit; node 2 splits and must space on
+    /// periods[1], not periods[0].
+    #[test]
+    fn per_node_split_unsplit_nodes_keep_their_periods() {
+        let engine = chem_engine();
+        let ephemeris = single_body_ephemeris();
+        let field = GravityField::from_ephemeris(&ephemeris);
+        let two = ManeuverPlan::new(
+            vec![
+                ManeuverNode::new(SimTime(2_000_000.0), DVec3::Y * 800.0).unwrap(),
+                ManeuverNode::new(SimTime(4_000_000.0), DVec3::Y * 3_000.0).unwrap(),
+            ],
+            DVec3::new(RADIUS, 0.0, 0.0),
+            circular_velocity(),
+            SimTime(0.0),
+        )
+        .unwrap();
+        let periods =
+            node_osculating_periods(&field, &ephemeris, BodyId(0), &two).expect("periods");
+        assert_eq!(periods.len(), 2);
+        // The burn at 2e6 s lands off-prograde (velocity has rotated), so
+        // the orbit changes either way — what matters is that the two
+        // periods differ by far more than the assertion tolerance.
+        assert!(
+            (periods[1] - periods[0]).abs() > 480.0,
+            "fixture needs distinguishable periods: p0={} p1={}",
+            periods[0],
+            periods[1]
+        );
+        let plan = realize_impulsive(
+            &two,
+            &engine,
+            20_000.0,
+            200.0,
+            SplitMode::PerOrbitNodes {
+                periods_s: periods.clone(),
+            },
+        )
+        .expect("plans");
+        // Segment order follows node order: node 1 unsplit, then node 2's
+        // pieces.
+        assert!(
+            plan.segments.len() >= 3,
+            "expected node 1 unsplit + node 2 split, got {} segments",
+            plan.segments.len()
+        );
+        let separation = (periods[1] - periods[0]).abs();
+        for window in plan.segments[1..].windows(2) {
+            let gap = window[1].start.0 - window[0].start.0;
+            assert!(
+                (gap - periods[1]).abs() < separation / 4.0,
+                "node-2 pieces phased {gap} s apart — expected periods[1] = {} s \
+                 (periods[0] = {} s)",
+                periods[1],
+                periods[0]
+            );
+        }
     }
 }

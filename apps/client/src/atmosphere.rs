@@ -276,9 +276,11 @@ fn toggle_ray_tracing(
 /// RT applies only to metre-scale scenes (pilot/survey). The map uses
 /// compressed astronomical units and never feeds Solari (see
 /// `configure_solari_precision`); `Full` included. Domain physics untouched.
+#[allow(clippy::too_many_arguments)]
 fn sync_rt_view(
     mut commands: Commands,
     active: Res<RayTracingActive>,
+    graphics: Res<GraphicsResolved>,
     pilot: Res<PilotHudState>,
     survey: Res<terrain::SurfaceSurvey>,
     cameras: Query<(Entity, Option<&SolariLighting>), With<Camera3d>>,
@@ -287,7 +289,10 @@ fn sync_rt_view(
 ) {
     let wanted = active.0 && (survey.active || pilot.view_mode == ClientViewMode::Pilot);
     for mut light in &mut lights {
-        light.shadow_maps_enabled = !wanted;
+        // RT provides its own shadows, so raster shadow maps must switch off
+        // while RT renders; otherwise they follow the user's `shadow_enabled`
+        // setting instead of being force-enabled here.
+        light.shadow_maps_enabled = !wanted && graphics.0.shadow_enabled;
     }
     if wanted {
         // BLAS builds lag the toggle by a frame or two; enabling the RT
@@ -901,19 +906,15 @@ fn update_atmosphere_visuals(
 ) {
     let (terrain, flight_runtime) = terrain_data;
     let frame_start = Instant::now();
-    let (Some(runtime), Some(bodies), Some(catalog), Some(tuning), Some(graphics)) = (
+    let (Some(runtime), Some(bodies), Some(catalog), Some(graphics)) = (
         runtime.as_deref(),
         bodies.as_deref(),
         catalog.as_deref(),
-        tuning.as_deref(),
         resolved.as_deref(),
     ) else {
         return;
     };
     let resolved = &graphics.0;
-    if !resolved.atmosphere_enabled {
-        return;
-    }
     let sim_time = clock.as_deref().map(|c| c.sim_seconds).unwrap_or(0.0);
     let in_pilot = pilot
         .as_deref()
@@ -1019,6 +1020,17 @@ fn update_atmosphere_visuals(
             disk.intensity *= (physical / disk.angular_size).powi(2);
         }
     }
+
+    // Celestial lights are independent of the atmosphere renderer. Continue
+    // updating their ephemeris directions, irradiance, and eclipse factors
+    // even when the user disables scattering; only the shell/LUT work below
+    // belongs to the atmosphere master switch.
+    if !resolved.atmosphere_enabled {
+        return;
+    }
+    let Some(tuning) = tuning.as_deref() else {
+        return;
+    };
 
     // Aerial perspective must cover the visible horizon: the default 32 km
     // ends mid-frame in the metre-scale pilot scene (~80+ km to the horizon

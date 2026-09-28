@@ -3,9 +3,15 @@
 ## Status
 
 **Implemented numerical prototype.** This document is the current contract for
-the paths in `crates/sim-core`, `crates/flight-control`, and
-`crates/flight-authority`. Structural fracture, thermal networks, and full
-vehicle-system compilation are explicitly future work.
+the paths in `crates/aero-core`, `crates/celestial`, `crates/trajectory`,
+`crates/propulsion`, `crates/vehicle-core`, `crates/flight-control`, and
+`crates/flight-authority`. `crates/sim-core` retains the established aggregate
+API. Vehicle assets already compile procedural bodies and surfaces plus the
+installed propulsion, gear, reaction-wheel, parachute, shared electrical
+power-bus, and lumped thermal-node subsystems described below. Structural
+fracture, full fluid system graphs, detailed electrical-network compilation
+beyond the ideal shared bus, and structural/thermal graph coupling remain
+future work.
 
 ## 3.1. Ownership and units
 
@@ -65,8 +71,10 @@ ephemeris-table Hermite/gravity path, not in gravity accumulation.
 
 ### Gravity hierarchy and cohort patches
 
-`gravity_patch.rs` provides (single-tick ball patches; no time span, no stored
-hessian, no quadrupole — those remain future):
+`gravity_patch.rs` provides a bounded, single-tick spatial patch. Each patch
+stores its local acceleration and Jacobian (the gravity-field Hessian), exact
+near-source terms, and an absolute error bound. It does not yet reuse patches
+across a time span.
 
 - `CohortConfig` with `{error_budget_mps2, near_open_factor, max_depth}`;
 - `GravityPatch` with `{center, radius_m, g0, jacobian, exact, error_bound}`;
@@ -74,9 +82,12 @@ hessian, no quadrupole — those remain future):
 - `affine_segment_bound` for a posted absolute propagation bound;
 - deterministic split/fallback behavior when a patch cannot satisfy its bound.
 
-The monopole-only `GravitySourceTree` aggregates baked parents; quadrupole is
-explicitly deferred. A shared `EphemerisFrame` compiles one Kepler solution
-per propagation for all targets.
+`GravitySourceTree` aggregates distant baked sources using a monopole or a
+bounded quadrupole correction before opening nodes as needed. A shared
+`EphemerisFrame` compiles one Kepler solution per propagation for all targets.
+The time-span/cohort-key cache and planner-patch reuse described in
+[`23_GRAVITY_FIELD_COHORTS.md`](23_GRAVITY_FIELD_COHORTS.md) remain follow-up
+work.
 
 The affine approximation is:
 
@@ -118,7 +129,9 @@ state and ephemeris identity.
 ## 3.6. Vehicle and rigid-body dynamics
 
 The current `VehicleDefinition` supports serializable geometry, mass/inertia,
-aero panels, control surfaces, and starter propulsion/control channels. The
+aero panels and body strips, control surfaces, propulsion mounts, wheel
+chassis, fold-out legs, reaction-wheel banks, and parachute packs. Bakers
+include mounted-part mass, inertia, and final center-of-mass shifts. The
 rigid-body path integrates:
 
 - position and velocity;
@@ -126,11 +139,14 @@ rigid-body path integrates:
 - gravity;
 - thrust/external force and moment;
 - atmosphere and panel aero;
-- control-surface/actuator response;
+- control-surface and reaction-wheel actuator response;
+- parachute drag and moment at each authored canopy mount;
+- wheel, strut, brake, drive, and fold-actuator loads in the contact path;
 - contact and terrain boundary checks through the authority adapter.
 
-The current runtime treats one connected vehicle as one rigid body. A complete
-structural graph that splits into multiple bodies on failure is not implemented.
+The vehicle's structural chassis is one primary rigid body; wheel/contact
+assemblies may add articulated bodies in the contact runtime. A structural graph
+that splits the craft into bodies on failure is not implemented.
 
 ## 3.7. Aerodynamics
 
@@ -160,10 +176,12 @@ are not runtime dependencies. See [`11_AERODYNAMICS.md`](11_AERODYNAMICS.md).
 viscosity, and speed of sound over its configured layers. It also provides a
 rotating-atmosphere velocity boundary and a declared vacuum top.
 
-The current default is ISA-like and is not a final planetary composition
-model. A future body-specific model can provide gas composition, `R`, `gamma`,
-sea-level state, weather, and altitude-dependent winds without changing the
-force/evaluation boundary.
+The default remains an Earth-like ISA profile. Baked atmosphere compositions
+now provide mixture thermodynamics and species queries through
+`AtmosphereConfig::from_baked` / `AtmosphereSample`; the sample carries pressure,
+temperature, density, viscosity, speed of sound, and the well-mixed species
+basis used by propulsion. Per-body vertical temperature/composition profiles,
+weather, and altitude-dependent winds remain future work.
 
 ## 3.9. Control, guidance, and actuators
 
@@ -196,8 +214,9 @@ the realized response. Concretely: `validate_envelope` wires a 50 MN / 50 MN·m
 envelope, a smooth barrier ramps demands within 10% of the boundary, and a
 deterministic bounded least-squares active set solves the wrench allocation.
 
-RCS, control surfaces, and propulsion are physical effectors. Policy may limit
-or reshape a demand, but it cannot bypass the actuator path.
+RCS, reaction wheels, control surfaces, and propulsion are physical effectors.
+Landing gear and parachutes have their own typed deployment state machines.
+Policy may limit or reshape a demand, but it cannot bypass the actuator path.
 
 ## 3.10. Contacts and terrain
 
@@ -212,10 +231,17 @@ The runtime supports:
 - kinematic bodies: position-based terrain patches whose pose at
   tick `n+1` is prescribed from the canonical ephemeris and
   body-rotation model — Rapier derives the surface velocity that
-  enters contacts, so a landed body rides a moving/rotating body;
+  enters contacts, so a landed body rides a moving/rotating body. The active
+  terrain patch retains a body-fixed anchor and recenters only near its edge;
 - dynamic bodies: rigid-body contact objects with full CCD,
   sleep, and zero-density colliders (mass/inertia come from
   sim-core authority);
+- parametric wheel assemblies, component laws and vehicle mass/inertia baking
+  are implemented in sim-core and specified in
+  [`details/05_PROCEDURAL_LANDING_GEAR.md`](details/05_PROCEDURAL_LANDING_GEAR.md);
+  the Rapier backend splits sprung/unsprung mass, assembles sensor-only wheel
+  bodies with suspension/spin joints, evaluates tire/strut forces, and steps
+  persistent wheel spin plus brake/motor commands through FlightAuthority;
 - fixed joints: docking/seamless staging connections with
   contacts between joined bodies disabled;
 - contact activation hysteresis: a body enters contact-active
@@ -238,14 +264,17 @@ Still future work:
   (fleet layer with multiple resident patches);
 - structural failure mapping onto collision body rebuild
   (requires a structural graph in sim-core);
-- wheels, debris bodies, and fluid-surface interactions.
+- dynamic-body tire contacts with equal-and-opposite reactions, debris bodies,
+  and fluid-surface interactions.
 
 ## 3.11. Thermal, structural, and fluid systems
 
-These are architectural requirements, not shipped simulation features yet:
+The lumped vehicle thermal network is shipped (see
+`details/10_THERMAL_SYSTEM.md`): thermal nodes joined by conductance links,
+combined aerodynamic/engine/solar heating in one graph, background/radiator
+rejection, overheat telemetry, baker integration, and regression coverage.
+Still architectural requirements, not shipped features:
 
-- thermal nodes connected by conductance/radiation edges;
-- aerodynamic, engine, and solar heating in the same thermal graph;
 - temperature-dependent material strength;
 - structural topology changes that update mass, inertia, aero, and thermal
   connectivity;
@@ -266,7 +295,9 @@ Current tests cover:
 - atmosphere layers, rotating flow, zero flow, and finite derived values;
 - aero signs, dynamic pressure, `omega × r`, stall, transonic/supersonic
   branches, coefficient interpolation, and batch equivalence;
-- rigid-body forces, attitude, actuator response, and contact stopping;
+- fuselage Munk strips and body-control hinge moments;
+- rigid-body forces, attitude, control/reaction-wheel response, parachute loads,
+  vehicle mass-property baking, and contact stopping;
 - on-rails cache reuse, invalidation, impact, wake, extension, and trim.
 
 Reference comparisons live in isolated workspaces:
@@ -286,7 +317,7 @@ cargo bench -p thessa-sim-core --bench affine_prop
 ## 3.13. Non-goals of the current slice
 
 The current physics slice does not provide final planetary ephemerides,
-CFD, full aeroelasticity, structural fracture, thermal propagation,
-factory/logistics simulation, or production networking. Each of those needs an
-explicit state contract, error/validation plan, and benchmark before it should
-be called implemented.
+CFD, full aeroelasticity, structural fracture, grid-resolved thermal
+propagation, factory/logistics simulation, or production networking. Each of
+those needs an explicit state contract, error/validation plan, and benchmark
+before it should be called implemented.

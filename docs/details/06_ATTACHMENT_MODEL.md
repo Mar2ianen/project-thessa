@@ -187,6 +187,10 @@ time, report the latest joint solver impulse as average force/moment, and
 remove the joint while preserving both solved body states. The D1 contact test
 exercises that sequence under an applied load. `CollisionWorld` reports
 constraint loads only; it does not assign structural damage or infer ratings.
+This partner-scene path is not yet wired into the server: `apps/server::Sim`
+still owns one `FlightAuthority`, and the current client protocol has no
+vehicle-targeted docking, undocking, or separation commands. The server therefore
+does not yet transfer vehicle ownership or persist a dock graph.
 
 `VehicleAssembly::body_components_after_link_failure` computes deterministic
 body-index components after removing a named structural edge, and

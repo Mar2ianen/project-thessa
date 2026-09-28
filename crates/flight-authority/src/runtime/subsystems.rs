@@ -122,11 +122,10 @@ impl FlightAuthority {
         let mut loads = Vec::with_capacity(self.vehicle.parachutes.len());
         let mut force_body_n = DVec3::ZERO;
         let mut moment_body_nm = DVec3::ZERO;
-        for index in 0..self.vehicle.parachutes.len() {
-            let spec = &self.vehicle.parachutes[index];
+        for (spec, state) in self.vehicle.parachutes.iter().zip(&mut states) {
             let load = spec
                 .advance(
-                    states[index],
+                    *state,
                     ParachuteEnvironment {
                         atmosphere,
                         radial_velocity_mps: kinematics
@@ -143,7 +142,7 @@ impl FlightAuthority {
                         spec.name
                     ))
                 })?;
-            states[index] = load.state;
+            *state = load.state;
             force_body_n += load.force_body_n;
             moment_body_nm += load.moment_body_nm;
             loads.push(load);

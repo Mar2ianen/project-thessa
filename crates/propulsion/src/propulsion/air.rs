@@ -1890,6 +1890,7 @@ impl CompiledAirbreather {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn operating_point_at_spool_internal(
         &self,
         condition: &FlightCondition,

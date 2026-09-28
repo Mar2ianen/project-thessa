@@ -861,6 +861,7 @@ pub fn advance_jet_shaft_loaded_with_starter_power(
 /// Shaft integrator variant whose cycle balance and pneumatic starter supply
 /// are supplied by the caller. ESTOC uses it to include its precooler-adjusted
 /// compressor work in the same shaft balance that advances the spool.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn advance_jet_shaft_loaded_with_starter_power_and<F>(
     engine: &CompiledAirbreather,
     state: JetShaftState,
@@ -888,6 +889,7 @@ where
 
 /// Multi-spool-capable shaft integrator variant. The callback evaluates the
 /// cycle with HP and LP normalized rotor speeds independently.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn advance_jet_shaft_loaded_with_starter_power_and_spools<F>(
     engine: &CompiledAirbreather,
     state: JetShaftState,

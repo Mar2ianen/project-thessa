@@ -670,15 +670,14 @@ impl VehicleDefinition {
             let plan = self.plan_resource_flows(resource_state, &demands, dt_s)?;
             let mut changed = false;
             for allocation in &plan.consumers {
-                if allocation.scale < 1.0 - 1.0e-10 {
-                    if let Some(index) = self
+                if allocation.scale < 1.0 - 1.0e-10
+                    && let Some(index) = self
                         .auxiliary_power_units
                         .iter()
                         .position(|mount| mount.name == allocation.consumer_name)
-                    {
-                        throttle_scales[index] *= allocation.scale;
-                        changed = true;
-                    }
+                {
+                    throttle_scales[index] *= allocation.scale;
+                    changed = true;
                 }
             }
             if !changed {
@@ -2456,6 +2455,9 @@ struct FeedPressureQueueEntry {
     body: usize,
 }
 
+type FeedPressureEdge = (usize, f64, f64);
+type FeedPressureAdjacency = Vec<Vec<FeedPressureEdge>>;
+
 impl PartialEq for FeedPressureQueueEntry {
     fn eq(&self, other: &Self) -> bool {
         self.drop_pa.to_bits() == other.drop_pa.to_bits() && self.body == other.body
@@ -2484,7 +2486,7 @@ fn assembly_feed_pressure_edges(
     adjacency: &[Vec<(usize, Option<FeedLine>)>],
     flow_kg_s: f64,
     properties: FeedResourceProperties,
-) -> Result<Vec<Vec<(usize, f64, f64)>>, VehicleError> {
+) -> Result<FeedPressureAdjacency, VehicleError> {
     adjacency
         .iter()
         .map(|edges| {
@@ -2519,7 +2521,7 @@ fn assembly_feed_pressure_edges(
 }
 
 fn minimum_assembly_feed_pressure_drops(
-    adjacency: &[Vec<(usize, f64, f64)>],
+    adjacency: &FeedPressureAdjacency,
     target_body: usize,
     source_pressure_pa: f64,
 ) -> Vec<f64> {

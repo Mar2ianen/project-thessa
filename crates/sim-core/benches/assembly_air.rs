@@ -8,6 +8,7 @@ use thessa_sim_core::*;
 
 const BODIES: usize = 64;
 const ITERATIONS: usize = 20_000;
+const BREAKUP_ITERATIONS: usize = 2_000;
 
 fn make_vehicle() -> VehicleDefinition {
     let mut cabins = Vec::with_capacity(BODIES);
@@ -75,6 +76,28 @@ fn make_vehicle() -> VehicleDefinition {
         .expect("assembly")
 }
 
+fn breakup_mass_fixture() -> (Vec<AssemblyBodyMassProperties>, RigidBodyProperties) {
+    let bodies = (0..BODIES)
+        .map(|index| AssemblyBodyMassProperties {
+            mass_kg: 10.0,
+            center_of_mass_body_m: DVec3::X * (index as f64 - (BODIES - 1) as f64 / 2.0),
+            inertia_about_center_body_kg_m2: DMat3::from_diagonal(DVec3::splat(10.0)),
+        })
+        .collect::<Vec<_>>();
+    let mass_kg = bodies.iter().map(|body| body.mass_kg).sum::<f64>();
+    let inertia = bodies.iter().fold(DMat3::ZERO, |inertia, body| {
+        let center = body.center_of_mass_body_m;
+        let outer = DMat3::from_cols(center * center.x, center * center.y, center * center.z);
+        inertia
+            + body.inertia_about_center_body_kg_m2
+            + (DMat3::IDENTITY * center.length_squared() - outer) * body.mass_kg
+    });
+    (
+        bodies,
+        RigidBodyProperties::new(mass_kg, inertia).expect("valid breakup mass fixture"),
+    )
+}
+
 fn main() {
     let mut vehicle = make_vehicle();
     let start = Instant::now();
@@ -97,5 +120,33 @@ fn main() {
     println!(
         "assembly cabin pressure transition: {BODIES} cabins x {ITERATIONS} transitions: {elapsed:?} total, {:.2} us/transition",
         elapsed.as_secs_f64() * 1.0e6 / ITERATIONS as f64,
+    );
+
+    let assembly = vehicle.assembly.as_ref().expect("assembly topology");
+    let (body_mass_properties, source_mass_properties) = breakup_mass_fixture();
+    let source_state = RigidBodyState::new(
+        DVec3::ZERO,
+        DVec3::ZERO,
+        glam::DQuat::IDENTITY,
+        DVec3::new(0.0, 0.0, 0.01),
+    )
+    .expect("valid source state");
+    let start = Instant::now();
+    for _ in 0..BREAKUP_ITERATIONS {
+        black_box(
+            assembly
+                .reconstruct_clusters_after_link_failure(
+                    "hatch-31",
+                    &body_mass_properties,
+                    source_mass_properties,
+                    source_state,
+                )
+                .expect("conservative cluster reconstruction"),
+        );
+    }
+    let elapsed = start.elapsed();
+    println!(
+        "assembly breakup reconstruction: {BODIES} bodies x {BREAKUP_ITERATIONS} reconstructions: {elapsed:?} total, {:.2} us/reconstruction",
+        elapsed.as_secs_f64() * 1.0e6 / BREAKUP_ITERATIONS as f64,
     );
 }

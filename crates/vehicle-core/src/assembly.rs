@@ -1499,6 +1499,17 @@ mod tests {
         );
         assert!(
             assembly
+                .reconstruct_clusters_after_link_failure(
+                    "core-booster",
+                    &body_mass_properties,
+                    RigidBodyProperties::new(121.0, source_mass_properties.inertia_body_kg_m2,)
+                        .unwrap(),
+                    source_state,
+                )
+                .is_err()
+        );
+        assert!(
+            assembly
                 .body_components_after_link_failure("missing-link")
                 .is_err()
         );

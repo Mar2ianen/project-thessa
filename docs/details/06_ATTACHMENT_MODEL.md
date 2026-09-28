@@ -204,6 +204,12 @@ a split is accepted. Regression coverage checks conservation and released COM
 states for a rotating three-body stack. The mass records must include all
 body-owned hardware and payload: incomplete records fail closed.
 
+The existing `assembly_air` benchmark now also measures a 64-body chain split
+and mass/kinematic reconstruction. A 2,000-reconstruction release run on an
+AMD Ryzen 7 8745H measured `29.78 us` per reconstruction. This measures the
+current topology and mass-state primitive only; it excludes part-definition
+migration and authoritative fleet insertion.
+
 This is the physical rigid-body reconstruction contract, not yet a complete
 runtime vehicle reconstruction. The baked `VehicleDefinition` does not yet
 retain enough per-part mass, inertia, aero, collision, thermal, actuator, and

@@ -14,6 +14,7 @@
 //! measurements back captures and could feed Tracy/RenderDoc correlation later.
 
 use super::*;
+use bevy::ecs::system::SystemParam;
 use bevy::ui::FocusPolicy;
 
 use bevy::tasks::{IoTaskPool, Task, block_on, poll_once};
@@ -290,12 +291,15 @@ fn perf_autobench(
             clock.paused = true;
         }
         if let Ok(value) = std::env::var("THESSA_AUTOBENCH_ORBIT_ALTITUDE_M") {
-            match (value.parse::<f64>(), flight.as_deref_mut(), ephemeris.as_deref()) {
+            match (
+                value.parse::<f64>(),
+                flight.as_deref_mut(),
+                ephemeris.as_deref(),
+            ) {
                 (Ok(altitude_m), Some(flight), Some(ephemeris)) if embedded.is_none() => {
-                    if let Err(error) = flight.initialize_circular_orbit_benchmark(
-                        &ephemeris.ephemeris,
-                        altitude_m,
-                    ) {
+                    if let Err(error) =
+                        flight.initialize_circular_orbit_benchmark(&ephemeris.ephemeris, altitude_m)
+                    {
                         monitor.push_event("orbit benchmark initialization failed", Some(error));
                     } else {
                         pilot.set_benchmark_chase_view();
@@ -318,7 +322,10 @@ fn perf_autobench(
                 }
                 _ => monitor.push_event(
                     "orbit benchmark initialization failed",
-                    Some("altitude must be a finite number and the client authority must be ready".into()),
+                    Some(
+                        "altitude must be a finite number and the client authority must be ready"
+                            .into(),
+                    ),
                 ),
             }
         }
@@ -466,6 +473,15 @@ fn autobench_view(survey: &terrain::SurfaceSurvey, pilot: &PilotHudState) -> &'s
     }
 }
 #[allow(clippy::too_many_arguments)]
+/// Render-mode flags for the overlay. Grouped in one [`SystemParam`] because
+/// Bevy caps the parameter count of a plain system function.
+#[derive(SystemParam)]
+struct PerfMode<'w> {
+    rt_active: Option<Res<'w, RayTracingActive>>,
+    graphics: Option<Res<'w, GraphicsResolved>>,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn perf_end_frame(
     time: Res<Time<Real>>,
     window: Single<&Window, With<PrimaryWindow>>,
@@ -479,7 +495,7 @@ fn perf_end_frame(
     meshes: Res<Assets<Mesh>>,
     cbt_surface: Option<Res<CbtRenderSurface>>,
     rt_instances: Query<(), With<bevy::solari::prelude::RaytracingMesh3d>>,
-    rt_active: Option<Res<RayTracingActive>>,
+    mode: PerfMode,
     diagnostics: Option<Res<bevy::diagnostic::DiagnosticsStore>>,
     mut monitor: ResMut<PerfMonitor>,
     mut overlay: Query<(&mut Text, &mut Visibility), With<PerfOverlayText>>,
@@ -593,15 +609,14 @@ fn perf_end_frame(
     if cbt_surface
         .as_deref()
         .is_some_and(|surface| surface.gpu_raster_enabled() && surface.gpu_surface_ready())
-    {
-        if let Some(value) = diagnostics.as_ref().and_then(|store| {
+        && let Some(value) = diagnostics.as_ref().and_then(|store| {
             store
                 .iter()
                 .find(|diagnostic| diagnostic.path().as_str() == "render/terrain_triangles")
                 .and_then(|diagnostic| diagnostic.value())
-        }) {
-            world.terrain_triangles = value as u64;
-        }
+        })
+    {
+        world.terrain_triangles = value as u64;
     }
     monitor.collector.set_world_counters(world);
 
@@ -692,7 +707,11 @@ fn perf_end_frame(
             } else {
                 "MAP"
             },
-            rt_active.as_deref().is_some_and(|flag| flag.0),
+            mode.rt_active.as_deref().is_some_and(|flag| flag.0),
+            mode.graphics
+                .as_deref()
+                .map(|g| g.0.material_storage.as_str())
+                .unwrap_or("unknown"),
             if let Some(reason) = pilot_runtime
                 .as_deref()
                 .and_then(PilotFlightRuntime::stop_reason)
@@ -725,6 +744,7 @@ fn build_overlay_text(
     window: &Window,
     view: &str,
     rt_on: bool,
+    storage: &str,
     stop_reason: Option<&str>,
 ) -> String {
     let Some(wall) = monitor.collector.frame_wall_stats() else {
@@ -849,12 +869,13 @@ fn build_overlay_text(
         .map(|reason| format!("\nSIM: {reason}"))
         .unwrap_or_default();
     format!(
-        "PERF  {}  {}x{}  [F4] overlay  [F5] profile  [{}]  [RT:{}]\nFRAME {:5.2}ms {:5.0}fps cpu {:5.2}ms {gpu_line}\n  p50 {:5.2} p95 {:5.2} p99 {:5.2} max {:5.2}ms (n={})\nSIM {}\n  sim.total {:5.2}ms\nWORLD {}\nMEM {}\n{}level {}{status}",
+        "PERF  {}  {}x{}  [F4] overlay  [F5] profile  [{}]  [RT:{}]  [MAT:{}]\nFRAME {:5.2}ms {:5.0}fps cpu {:5.2}ms {gpu_line}\n  p50 {:5.2} p95 {:5.2} p99 {:5.2} max {:5.2}ms (n={})\nSIM {}\n  sim.total {:5.2}ms\nWORLD {}\nMEM {}\n{}level {}{status}",
         view,
         window.resolution.physical_width(),
         window.resolution.physical_height(),
         capture_line,
         if rt_on { "on" } else { "off" },
+        storage,
         wall.current * 1000.0,
         fps,
         cpu.map(|s| s.current * 1000.0).unwrap_or(0.0),

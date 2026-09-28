@@ -74,6 +74,29 @@ impl ResolvedTerrainRender {
     }
 }
 
+/// Material page storage selected for this client run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolvedMaterialStorage {
+    #[default]
+    RgbaArray,
+    MicrostoreCompact,
+}
+
+impl ResolvedMaterialStorage {
+    /// Whether pages upload through the compact microstore path.
+    pub fn is_microstore(self) -> bool {
+        matches!(self, Self::MicrostoreCompact)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RgbaArray => "rgba_array",
+            Self::MicrostoreCompact => "microstore_compact",
+        }
+    }
+}
+
 /// Runtime capability input for resolution.
 ///
 /// Adapter details are only known after renderer init, which happens after
@@ -105,6 +128,7 @@ pub struct ResolvedGraphicsSettings {
     pub backend: ResolvedBackend,
     pub terrain: ResolvedTerrainRender,
     pub terrain_mesh_cells: u32,
+    pub material_storage: ResolvedMaterialStorage,
     pub ray_tracing: ResolvedRayTracing,
     pub resolution_scale: f32,
     pub vsync: bool,
@@ -229,6 +253,14 @@ impl ResolvedGraphicsSettings {
                 TerrainRenderRequest::GpuIndexed => ResolvedTerrainRender::GpuIndexed,
             },
             terrain_mesh_cells: requested.renderer.terrain_mesh_cells.clamp(8, 64),
+            material_storage: match requested.renderer.material_storage {
+                crate::settings::MaterialStorageRequest::RgbaArray => {
+                    ResolvedMaterialStorage::RgbaArray
+                }
+                crate::settings::MaterialStorageRequest::MicrostoreCompact => {
+                    ResolvedMaterialStorage::MicrostoreCompact
+                }
+            },
             ray_tracing,
             resolution_scale: requested.renderer.resolution_scale,
             vsync: requested.renderer.vsync,
@@ -304,6 +336,10 @@ impl ResolvedGraphicsSettings {
         map.insert("backend".to_string(), self.backend.name.clone());
         map.insert("terrain".to_string(), self.terrain.as_str().to_string());
         map.insert(
+            "material_storage".to_string(),
+            self.material_storage.as_str().to_string(),
+        );
+        map.insert(
             "terrain_mesh_cells".to_string(),
             self.terrain_mesh_cells.to_string(),
         );
@@ -346,10 +382,7 @@ impl ResolvedGraphicsSettings {
             self.shadow_map_size.to_string(),
         );
         map.insert("clouds".to_string(), self.clouds_enabled.to_string());
-        map.insert(
-            "cloud_layers".to_string(),
-            self.clouds_layers.to_string(),
-        );
+        map.insert("cloud_layers".to_string(), self.clouds_layers.to_string());
         map.insert("gas_giant".to_string(), self.gas_giant_enabled.to_string());
         map.insert("plume".to_string(), self.plume_enabled.to_string());
         map.insert("aurora".to_string(), self.aurora_shell.to_string());
@@ -455,5 +488,44 @@ mod tests {
         assert!(resolved.terrain.is_gpu());
         assert_eq!(resolved.as_meta_map()["terrain"], "gpu_indexed");
         assert_eq!(resolved.as_meta_map()["terrain_mesh_cells"], "24");
+    }
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+    use crate::settings::{MaterialStorageRequest, RequestedGraphics};
+
+    #[test]
+    fn storage_defaults_to_rgba_array() {
+        let resolved = ResolvedGraphicsSettings::from_requested(
+            &RequestedGraphics::default(),
+            &Capabilities::unknown(),
+        );
+        assert_eq!(
+            resolved.material_storage,
+            ResolvedMaterialStorage::RgbaArray
+        );
+        assert!(!resolved.material_storage.is_microstore());
+    }
+
+    #[test]
+    fn explicit_compact_survives_resolution_with_telemetry() {
+        let mut requested = RequestedGraphics::default();
+        requested.renderer.material_storage = MaterialStorageRequest::MicrostoreCompact;
+        let resolved =
+            ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+        assert_eq!(
+            resolved.material_storage,
+            ResolvedMaterialStorage::MicrostoreCompact
+        );
+        assert!(resolved.material_storage.is_microstore());
+        assert_eq!(
+            resolved
+                .as_meta_map()
+                .get("material_storage")
+                .map(String::as_str),
+            Some("microstore_compact")
+        );
     }
 }

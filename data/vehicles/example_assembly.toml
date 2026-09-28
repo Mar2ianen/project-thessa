@@ -1,0 +1,152 @@
+# Example part assembly: a tank stage stacked under a pressurized
+# capsule through an open hatch link. Crew and air cross the interface,
+# and the stage tank reaches the capsule engine port; sealing the hatch
+# isolates those paths.
+name = "example-assembly"
+mass_kg = 1500.0
+inertia_body_kg_m2 = [
+  [3000.0, 0.0, 0.0],
+  [0.0, 6000.0, 0.0],
+  [0.0, 0.0, 6000.0],
+]
+
+[[procedural_bodies]]
+name = "stage"
+origin_body_m = [0.0, 0.0, 0.0]
+
+[[procedural_bodies.stations]]
+x_m = 0.0
+half_width_m = 1.0
+top_height_m = 1.0
+bottom_height_m = 1.0
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.stations]]
+x_m = 4.0
+half_width_m = 1.0
+top_height_m = 1.0
+bottom_height_m = 1.0
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.regions]]
+name = "tank"
+x0_m = 0.5
+x1_m = 2.5
+
+[procedural_bodies.regions.kind.tank]
+propellant = "lox-methane"
+fill_fraction = 1.0
+
+[[procedural_bodies.regions]]
+name = "service-bay"
+x0_m = 2.6
+x1_m = 3.7
+kind = "cabin"
+
+[procedural_bodies.regions.atmosphere]
+pressure_kpa = 70.0
+
+[[procedural_bodies.ports]]
+name = "engine"
+x_m = 0.0
+clock_rad = 0.0
+kind = "engine-mount"
+diameter_m = 0.5
+
+[[procedural_bodies.attach_nodes]]
+name = "top"
+site = "forward-end"
+kind = "hatch"
+
+[procedural_bodies.structure]
+skin_gauge_mm = 2.0
+frame_spacing_m = 1.0
+frame_gauge_mm = 2.0
+frame_width_mm = 40.0
+tank_pressure_pa = 500000.0
+wall_inset_mm = 10.0
+
+[procedural_bodies.structure.skin_material]
+name = "Al-7075-T6"
+density_kg_m3 = 2810.0
+yield_strength_mpa = 503.0
+
+[procedural_bodies.structure.tank_material]
+density_kg_m3 = 8190.0
+yield_strength_pa = 1000000000.0
+max_wall_temp_k = 1350.0
+
+[[procedural_bodies]]
+name = "capsule"
+origin_body_m = [0.0, 0.0, 0.0]
+
+[[procedural_bodies.stations]]
+x_m = 0.0
+half_width_m = 1.0
+top_height_m = 1.0
+bottom_height_m = 1.0
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.stations]]
+x_m = 2.0
+half_width_m = 1.0
+top_height_m = 1.0
+bottom_height_m = 1.0
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.regions]]
+name = "cabin"
+x0_m = 0.2
+x1_m = 1.8
+kind = "cabin"
+
+[procedural_bodies.regions.atmosphere]
+pressure_kpa = 101.325
+
+[[procedural_bodies.ports]]
+name = "engine"
+x_m = 0.0
+clock_rad = 0.0
+kind = "engine-mount"
+diameter_m = 0.5
+
+[[procedural_bodies.attach_nodes]]
+name = "base"
+site = "aft-end"
+kind = "hatch"
+
+[procedural_bodies.structure]
+skin_gauge_mm = 2.0
+frame_spacing_m = 1.0
+frame_gauge_mm = 2.0
+frame_width_mm = 40.0
+tank_pressure_pa = 500000.0
+wall_inset_mm = 10.0
+
+[procedural_bodies.structure.skin_material]
+name = "Al-7075-T6"
+density_kg_m3 = 2810.0
+yield_strength_mpa = 503.0
+
+[procedural_bodies.structure.tank_material]
+density_kg_m3 = 8190.0
+yield_strength_pa = 1000000000.0
+max_wall_temp_k = 1350.0
+
+[[assembly.links]]
+name = "stack"
+parent = "stage.top"
+child = "capsule.base"
+hatch_open = true

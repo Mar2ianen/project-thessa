@@ -236,7 +236,7 @@ mod tests {
         )
         .unwrap();
         let expected = (MU / ra).sqrt() - v_apo;
-        assert!((node.magnitude_mps() - expected) / expected <= 1.0e-9);
+        assert!(((node.magnitude_mps() - expected) / expected).abs() <= 1.0e-9);
     }
 
     #[test]
@@ -257,8 +257,8 @@ mod tests {
         // Vis-viva derived in-test (no magic textbook numbers).
         let expected_dep = (MU * (2.0 / r1 - 1.0 / semi)).sqrt() - speed;
         let expected_arr = (MU / r2).sqrt() - (MU * (2.0 / r2 - 1.0 / semi)).sqrt();
-        assert!((plan.nodes[0].magnitude_mps() - expected_dep) / expected_dep <= 1.0e-9);
-        assert!((plan.nodes[1].magnitude_mps() - expected_arr) / expected_arr <= 1.0e-9);
+        assert!(((plan.nodes[0].magnitude_mps() - expected_dep) / expected_dep).abs() <= 1.0e-9);
+        assert!(((plan.nodes[1].magnitude_mps() - expected_arr) / expected_arr).abs() <= 1.0e-9);
         assert!((plan.total_dv_mps() - (expected_dep + expected_arr)).abs() <= 1.0e-9);
         assert!(plan.nodes[1].epoch.0 > plan.nodes[0].epoch.0);
         // Eccentric departure is refused, not silently mistreated.

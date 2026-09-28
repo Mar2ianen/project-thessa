@@ -167,6 +167,7 @@ fn compare_case(case: Case, duration_s: f64) -> Result<Comparison, Box<dyn Error
             absolute_velocity_tolerance_mps: 1.0e-7,
             relative_tolerance: 1.0e-12,
             max_steps: 1_000_000,
+            dynamical_eta: None,
         },
     )?;
 
@@ -308,6 +309,7 @@ fn validate_lagrange_suite() -> Result<(), Box<dyn Error>> {
                 absolute_velocity_tolerance_mps: 1.0e-7,
                 relative_tolerance: 1.0e-11,
                 max_steps: 1_000_000,
+                dynamical_eta: None,
             },
         )?;
         let expected_position = rotate_z(initial_position, geometry.angular_rate * l4_l5_duration_s);
@@ -514,6 +516,7 @@ fn validate_maneuver_sequence() -> Result<(), Box<dyn Error>> {
             absolute_velocity_tolerance_mps: 1.0e-7,
             relative_tolerance: 1.0e-12,
             max_steps: 1_000_000,
+            dynamical_eta: None,
         },
     )?;
     let reference = propagate_nyx_with_burns(initial_orbit, duration_s, &burns)?;
@@ -568,8 +571,14 @@ fn propagate_nyx_coast(orbit: Orbit, duration_s: f64) -> Result<Orbit, Box<dyn E
 fn validate_design_system() -> Result<(), Box<dyn Error>> {
     let config: SystemConfig = toml::from_str(include_str!("../../../data/system.toml"))?;
     let ephemeris = config.bake()?;
-    if ephemeris.bodies.len() != 24 || ephemeris.gravity_sources().count() != 22 {
-        return Err("design system body/source counts changed unexpectedly".into());
+    // 3 stars + 2 barycenters + 7 planets + 17 moons + 3 minor bodies.
+    let body_count = ephemeris.bodies.len();
+    let gravity_source_count = ephemeris.gravity_sources().count();
+    if body_count != 32 || gravity_source_count != 30 {
+        return Err(format!(
+            "design system body/source counts changed unexpectedly: got {body_count}/{gravity_source_count}, expected 32/30"
+        )
+        .into());
     }
     for seconds in [0.0, 86_400.0, 30.0 * 86_400.0] {
         for body in &ephemeris.bodies {
@@ -617,7 +626,7 @@ fn validate_design_system() -> Result<(), Box<dyn Error>> {
         "diagnostic-approximation"
     };
     println!(
-        "design-system,bodies=24,gravity_sources=22,halo_l4_residual={l4_residual:.6e},halo_l4_status={l4_status}"
+        "design-system,bodies={body_count},gravity_sources={gravity_source_count},halo_l4_residual={l4_residual:.6e},halo_l4_status={l4_status}"
     );
 
     let thessa_id = ephemeris.body_id("thessa").ok_or("missing thessa")?;
@@ -672,6 +681,7 @@ fn validate_design_system() -> Result<(), Box<dyn Error>> {
         absolute_velocity_tolerance_mps: 1.0e-4,
         relative_tolerance: 1.0e-10,
         max_steps: 2_000_000,
+        dynamical_eta: None,
     };
     let first = propagate_adaptive_with_burns(
         &field,

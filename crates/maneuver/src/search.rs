@@ -1055,57 +1055,56 @@ pub(crate) fn phase_departure(
         // Full-arc candidate set for the min fold: the whole grid, except
         // round 0 on long legs, where escape pruning selects the top cone
         // matches plus every non-escaped candidate.
-        let full_set: Vec<(f64, f64)> =
-            if round == 0 && time_of_flight_s > ESCAPE_MIN_TOF_S {
-                let staged: Vec<_> = grid
-                    .par_iter()
-                    .map(|&pair| {
-                        let (point, park_velocity, burn) = build(pair);
-                        let max_dur = time_of_flight_s.min(ESCAPE_MAX_DUR_S);
-                        let esc = escape_state(
-                            field,
-                            TestParticleState {
-                                position: point,
-                                velocity: park_velocity + burn,
-                            },
-                            depot_epoch,
-                            depot_body,
-                            depot_mu,
-                            max_dur,
-                        );
-                        let score = esc.as_ref().and_then(|(_, vel, at, _)| {
-                            escape_score(*vel, *at, depot_body, field, broad_outgoing, depot_epoch)
-                        });
-                        let segments = esc.as_ref().map(|s| s.3).unwrap_or(0);
-                        (pair, score, segments)
-                    })
-                    .collect();
-                stats.phase_screens += staged.iter().map(|s| s.2).sum::<usize>();
-                let mut escaped: Vec<(f64, usize)> = staged
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, s)| s.1.map(|score| (score, i)))
-                    .collect();
-                escaped.sort_by(|a, b| a.0.total_cmp(&b.0));
-                let mut selected = vec![false; staged.len()];
-                for (_, i) in escaped.into_iter().take(ESCAPE_TOP_N) {
+        let full_set: Vec<(f64, f64)> = if round == 0 && time_of_flight_s > ESCAPE_MIN_TOF_S {
+            let staged: Vec<_> = grid
+                .par_iter()
+                .map(|&pair| {
+                    let (point, park_velocity, burn) = build(pair);
+                    let max_dur = time_of_flight_s.min(ESCAPE_MAX_DUR_S);
+                    let esc = escape_state(
+                        field,
+                        TestParticleState {
+                            position: point,
+                            velocity: park_velocity + burn,
+                        },
+                        depot_epoch,
+                        depot_body,
+                        depot_mu,
+                        max_dur,
+                    );
+                    let score = esc.as_ref().and_then(|(_, vel, at, _)| {
+                        escape_score(*vel, *at, depot_body, field, broad_outgoing, depot_epoch)
+                    });
+                    let segments = esc.as_ref().map(|s| s.3).unwrap_or(0);
+                    (pair, score, segments)
+                })
+                .collect();
+            stats.phase_screens += staged.iter().map(|s| s.2).sum::<usize>();
+            let mut escaped: Vec<(f64, usize)> = staged
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| s.1.map(|score| (score, i)))
+                .collect();
+            escaped.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut selected = vec![false; staged.len()];
+            for (_, i) in escaped.into_iter().take(ESCAPE_TOP_N) {
+                selected[i] = true;
+            }
+            for (i, s) in staged.iter().enumerate() {
+                if s.1.is_none() {
                     selected[i] = true;
                 }
-                for (i, s) in staged.iter().enumerate() {
-                    if s.1.is_none() {
-                        selected[i] = true;
-                    }
-                }
-                stats.phase_screens += selected.iter().filter(|b| **b).count();
-                grid.into_iter()
-                    .enumerate()
-                    .filter(|(i, _)| selected[*i])
-                    .map(|(_, pair)| pair)
-                    .collect()
-            } else {
-                stats.phase_screens += grid.len();
-                grid
-            };
+            }
+            stats.phase_screens += selected.iter().filter(|b| **b).count();
+            grid.into_iter()
+                .enumerate()
+                .filter(|(i, _)| selected[*i])
+                .map(|(_, pair)| pair)
+                .collect()
+        } else {
+            stats.phase_screens += grid.len();
+            grid
+        };
         let mut local_best: Option<(f64, f64, f64, DVec3, DVec3, DVec3)> = None;
         for (tilt, anomaly, miss, point, park_velocity, burn) in full_set
             .par_iter()
@@ -1313,80 +1312,80 @@ pub(crate) fn phase_departure_topk(
             (0..12).map(move |i| (tilt, std::f64::consts::TAU * i as f64 / 12.0))
         })
         .collect();
-    let mut scored: Vec<(f64, f64, f64, f64, DVec3, DVec3, DVec3)> =
-        if time_of_flight_s <= ESCAPE_MIN_TOF_S {
-            let screened: Vec<_> = grid
-                .par_iter()
-                .map(|&pair| {
-                    let (point, park_velocity, burn) = build(pair);
-                    full_screen((point, park_velocity, burn)).map(|(score, e)| {
-                        (score, e, pair.0, pair.1, point, park_velocity, burn)
-                    })
-                })
-                .collect();
-            stats.phase_screens += grid.len();
-            screened.into_iter().flatten().collect()
-        } else {
-            // Stage 1: escape-only screens + departure-cone scores.
-            let staged: Vec<_> = grid
-                .par_iter()
-                .map(|&pair| {
-                    let (point, park_velocity, burn) = build(pair);
-                    let start = TestParticleState {
-                        position: point,
-                        velocity: park_velocity + burn,
-                    };
-                    let max_dur = time_of_flight_s.min(ESCAPE_MAX_DUR_S);
-                    match escape_state(field, start, depot_epoch, depot_body, depot_mu, max_dur)
-                    {
-                        Some((pos, vel, at, segments)) => {
-                            let score = escape_score(
-                                vel,
-                                at,
-                                depot_body,
-                                field,
-                                broad_outgoing,
-                                depot_epoch,
-                            );
-                            (pair, point, park_velocity, burn, Some((pos, vel)), score, segments)
-                        }
-                        None => (pair, point, park_velocity, burn, None, None, 0),
+    let mut scored: Vec<(f64, f64, f64, f64, DVec3, DVec3, DVec3)> = if time_of_flight_s
+        <= ESCAPE_MIN_TOF_S
+    {
+        let screened: Vec<_> = grid
+            .par_iter()
+            .map(|&pair| {
+                let (point, park_velocity, burn) = build(pair);
+                full_screen((point, park_velocity, burn))
+                    .map(|(score, e)| (score, e, pair.0, pair.1, point, park_velocity, burn))
+            })
+            .collect();
+        stats.phase_screens += grid.len();
+        screened.into_iter().flatten().collect()
+    } else {
+        // Stage 1: escape-only screens + departure-cone scores.
+        let staged: Vec<_> = grid
+            .par_iter()
+            .map(|&pair| {
+                let (point, park_velocity, burn) = build(pair);
+                let start = TestParticleState {
+                    position: point,
+                    velocity: park_velocity + burn,
+                };
+                let max_dur = time_of_flight_s.min(ESCAPE_MAX_DUR_S);
+                match escape_state(field, start, depot_epoch, depot_body, depot_mu, max_dur) {
+                    Some((pos, vel, at, segments)) => {
+                        let score =
+                            escape_score(vel, at, depot_body, field, broad_outgoing, depot_epoch);
+                        (
+                            pair,
+                            point,
+                            park_velocity,
+                            burn,
+                            Some((pos, vel)),
+                            score,
+                            segments,
+                        )
                     }
-                })
-                .collect();
-            stats.phase_screens += staged.iter().map(|s| s.6).sum::<usize>();
-            // Stage-2 set: top escape matches plus every non-escaped
-            // candidate, in grid order (downstream sorts by score anyway).
-            let mut escaped: Vec<(f64, usize)> = staged
-                .iter()
-                .enumerate()
-                .filter_map(|(i, s)| s.5.map(|score| (score, i)))
-                .collect();
-            escaped.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let mut stage2: Vec<bool> = vec![false; staged.len()];
-            for (_, i) in escaped.into_iter().take(ESCAPE_TOP_N) {
+                    None => (pair, point, park_velocity, burn, None, None, 0),
+                }
+            })
+            .collect();
+        stats.phase_screens += staged.iter().map(|s| s.6).sum::<usize>();
+        // Stage-2 set: top escape matches plus every non-escaped
+        // candidate, in grid order (downstream sorts by score anyway).
+        let mut escaped: Vec<(f64, usize)> = staged
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| s.5.map(|score| (score, i)))
+            .collect();
+        escaped.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut stage2: Vec<bool> = vec![false; staged.len()];
+        for (_, i) in escaped.into_iter().take(ESCAPE_TOP_N) {
+            stage2[i] = true;
+        }
+        for (i, s) in staged.iter().enumerate() {
+            if s.5.is_none() {
                 stage2[i] = true;
             }
-            for (i, s) in staged.iter().enumerate() {
-                if s.5.is_none() {
-                    stage2[i] = true;
-                }
-            }
-            // Stage 2: full arcs with the shared fingerprint score.
-            let rescored: Vec<_> = staged
-                .par_iter()
-                .enumerate()
-                .filter(|(i, _)| stage2[*i])
-                .map(|(_, s)| {
-                    let (pair, point, park_velocity, burn, _, _, _) = s;
-                    full_screen((*point, *park_velocity, *burn)).map(|(score, e)| {
-                        (score, e, pair.0, pair.1, *point, *park_velocity, *burn)
-                    })
-                })
-                .collect();
-            stats.phase_screens += stage2.iter().filter(|b| **b).count();
-            rescored.into_iter().flatten().collect()
-        };
+        }
+        // Stage 2: full arcs with the shared fingerprint score.
+        let rescored: Vec<_> = staged
+            .par_iter()
+            .enumerate()
+            .filter(|(i, _)| stage2[*i])
+            .map(|(_, s)| {
+                let (pair, point, park_velocity, burn, _, _, _) = s;
+                full_screen((*point, *park_velocity, *burn))
+                    .map(|(score, e)| (score, e, pair.0, pair.1, *point, *park_velocity, *burn))
+            })
+            .collect();
+        stats.phase_screens += stage2.iter().filter(|b| **b).count();
+        rescored.into_iter().flatten().collect()
+    };
     scored.sort_by(|a, b| a.0.total_cmp(&b.0));
     // Encounter-class filter: keep screens whose osculating eccentricity
     // is within 5x of broad's (graze vs dive is an order-of-magnitude
@@ -1394,9 +1393,7 @@ pub(crate) fn phase_departure_topk(
     // not a better seed). Falls back to the unfiltered pool when nothing
     // passes, so exotic-but-valid windows still fly.
     let pool: Vec<(f64, f64, f64, f64, DVec3, DVec3, DVec3)> = match encounter_template {
-        Some(template)
-            if template.eccentricity.is_finite() && template.eccentricity > 1.0 =>
-        {
+        Some(template) if template.eccentricity.is_finite() && template.eccentricity > 1.0 => {
             let e_broad = template.eccentricity;
             let kept: Vec<_> = scored
                 .iter()
@@ -1406,7 +1403,11 @@ pub(crate) fn phase_departure_topk(
                 .cloned()
                 .collect();
             if std::env::var("THESSA_E_DBG").is_ok() {
-                eprintln!("EFILTER e_broad={e_broad:.1} scored={} kept={}", scored.len(), kept.len());
+                eprintln!(
+                    "EFILTER e_broad={e_broad:.1} scored={} kept={}",
+                    scored.len(),
+                    kept.len()
+                );
             }
             if kept.is_empty() {
                 scored.clone()
@@ -1466,10 +1467,7 @@ impl EncounterTemplate {
         let delta = cos_turn.acos();
         let eccentricity = 1.0 / (delta / 2.0).sin();
         let periapsis_dir = (v_out.normalize() - v_in.normalize()).try_normalize()?;
-        if !eccentricity.is_finite()
-            || eccentricity <= 1.0
-            || !periapsis_dir.is_finite()
-        {
+        if !eccentricity.is_finite() || eccentricity <= 1.0 || !periapsis_dir.is_finite() {
             return None;
         }
         Some(Self {
@@ -1483,9 +1481,16 @@ impl EncounterTemplate {
 /// Midcourse epoch: past depot-escape, with margin on both sides. Shared
 /// by direct and flyby legs (same correction architecture).
 pub(crate) fn midcourse_time_s(time_of_flight_s: f64) -> f64 {
-    (time_of_flight_s / 4.0)
+    let scheduled = (time_of_flight_s / 4.0)
         .max(3_600.0)
-        .min((time_of_flight_s - 3_600.0).max(3_600.0))
+        .min((time_of_flight_s - 3_600.0).max(3_600.0));
+    // Short legs clamp to the 3600 s floor and can schedule the correction
+    // at or past arrival; fall back to the plain quarter-TOF epoch there.
+    if scheduled.is_finite() && scheduled < time_of_flight_s {
+        scheduled
+    } else {
+        time_of_flight_s / 4.0
+    }
 }
 /// Midcourse differential correction on the full N-body dynamics.
 ///
@@ -1636,14 +1641,8 @@ pub(crate) fn correct_shooting(
     // intentionally identical to plain accept-always Newton (same
     // trajectories, same count): backtracking only engages on evaluation
     // failure, which previously killed the whole run.
-    let (mut end, mut jacobian) = suffix_shoot_aug(
-        field,
-        prefix,
-        time_of_flight_s,
-        mid_time_s,
-        mid_burn,
-        stats,
-    )?;
+    let (mut end, mut jacobian) =
+        suffix_shoot_aug(field, prefix, time_of_flight_s, mid_time_s, mid_burn, stats)?;
     // Hot-stall early exit (Voyager lesson): a converged leg improves its
     // miss by orders of magnitude per iteration, so five straight
     // iterations without even a 1% gain mean Newton is wandering, not
@@ -1669,7 +1668,11 @@ pub(crate) fn correct_shooting(
                 None => true,
             };
             best = Some((mid_burn, end, miss));
-            stall_iters = if improved { 0 } else { stall_iters.saturating_add(1) };
+            stall_iters = if improved {
+                0
+            } else {
+                stall_iters.saturating_add(1)
+            };
         } else {
             stall_iters = stall_iters.saturating_add(1);
         }
@@ -1743,6 +1746,27 @@ pub(crate) fn correct_shooting(
     best.map(|(burn1, end, miss)| (departure_burn, burn1, end, miss))
 }
 
+/// Encounter-plane basis for the B-plane solve: T ⊥ S, R = S × T.
+/// The reference axis is picked away from `s` — Z only when `s` carries a
+/// strong X or Y component, X otherwise — so the cross product can never
+/// degenerate: |s × ref| ≥ sqrt(1 − 0.9²) for every unit `s`. Choosing
+/// the reference by the opposite condition degenerated exactly at ±X and
+/// ±Z (zero cross product → NaN basis → the solve silently dropped the
+/// legacy B-plane path).
+fn encounter_basis(s: DVec3) -> Option<(DVec3, DVec3)> {
+    let reference = if s.x.abs() >= 0.9 || s.y.abs() >= 0.9 {
+        DVec3::Z
+    } else {
+        DVec3::X
+    };
+    let t_axis = s.cross(reference).normalize();
+    let r_axis = s.cross(t_axis).normalize();
+    if !t_axis.is_finite() || !r_axis.is_finite() {
+        return None;
+    }
+    Some((t_axis, r_axis))
+}
+
 /// B-plane differential correction for flyby encounters: vary one burn
 /// (3 DOF) against the 2D encounter-plane miss, minimum-norm.
 ///
@@ -1781,16 +1805,7 @@ pub(crate) fn correct_bplane_shooting(
     if !s.is_finite() {
         return None;
     }
-    let reference = if s.x.abs() < 0.9 && s.y.abs() < 0.9 {
-        DVec3::Z
-    } else {
-        DVec3::X
-    };
-    let t_axis = s.cross(reference).normalize();
-    let r_axis = s.cross(t_axis).normalize();
-    if !t_axis.is_finite() || !r_axis.is_finite() {
-        return None;
-    }
+    let (t_axis, r_axis) = encounter_basis(s)?;
     let project = |point: DVec3| -> (f64, f64) {
         let relative = aim_point_m - point;
         (relative.dot(t_axis), relative.dot(r_axis))
@@ -1825,14 +1840,8 @@ pub(crate) fn correct_bplane_shooting(
     };
     // Variational first evaluation: end state plus Sr; the 2x3 encounter
     // Jacobian is Sr projected on the (T, R) basis — no perturbations.
-    let (mut end, mut sensitivity) = suffix_shoot_aug(
-        field,
-        prefix,
-        time_of_flight_s,
-        mid_time_s,
-        burn,
-        stats,
-    )?;
+    let (mut end, mut sensitivity) =
+        suffix_shoot_aug(field, prefix, time_of_flight_s, mid_time_s, burn, stats)?;
     let mut best: Option<(DVec3, TestParticleState, f64)> = None;
     for _ in 0..MAX_ITERS {
         let (miss_t, miss_r) = project(end.position);
@@ -2165,5 +2174,34 @@ mod tests {
             porkchop_search(&ephemeris, &field, bad),
             Err(SearchError::InvalidConfig)
         );
+    }
+
+    /// Every unit direction must yield a finite orthonormal basis. The
+    /// reference-axis choice once degenerated exactly at ±X and ±Z: the
+    /// cross product went to zero, the basis went NaN, and the solver
+    /// silently dropped the legacy B-plane path for that leg.
+    #[test]
+    fn encounter_basis_survives_every_axis() {
+        let axes = [
+            DVec3::X,
+            -DVec3::X,
+            DVec3::Y,
+            -DVec3::Y,
+            DVec3::Z,
+            -DVec3::Z,
+            DVec3::new(1.0, 1.0, 0.0).normalize(),
+            DVec3::new(0.9, 0.1, 0.4).normalize(),
+            DVec3::new(0.1, 0.1, 1.0).normalize(),
+            DVec3::new(0.7, 0.7, 0.1).normalize(),
+        ];
+        for s in axes {
+            let (t, r) =
+                encounter_basis(s).unwrap_or_else(|| panic!("basis degenerate for s = {s}"));
+            assert!(t.is_finite() && r.is_finite(), "NaN basis for s = {s}");
+            assert!((t.length() - 1.0).abs() < 1.0e-12, "T not unit for s = {s}");
+            assert!((r.length() - 1.0).abs() < 1.0e-12, "R not unit for s = {s}");
+            assert!(t.dot(s).abs() < 1.0e-12, "T not perpendicular to s = {s}");
+            assert!(r.dot(s).abs() < 1.0e-12, "R not perpendicular to s = {s}");
+        }
     }
 }

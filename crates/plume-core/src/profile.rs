@@ -21,8 +21,10 @@
 //!   full-throttle deck values. Real engine decks are nonlinear; engine-sim
 //!   owns the true curve when it lands.
 
-use crate::source::{PlumeEnvironment, PlumeSource, pressure_ratio, validation_error};
 use crate::optics::optical_material;
+use crate::source::{PlumeEnvironment, PlumeSource, pressure_ratio, validation_error};
+
+const MAX_PROFILE_LENGTH_M: f64 = 4000.0;
 
 /// Expansion regime from the pressure ratio (5% deadband).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,14 +52,17 @@ pub fn expansion_regime(source: &PlumeSource, env: &PlumeEnvironment) -> Expansi
 /// First shock-cell spacing (m) from exit diameter, exit Mach, and ambient
 /// mismatch direction. Spacing grows with `D` and `M` (Tam); the pressure
 /// ratio feeds amplitude separately via [`shock_amplitude`].
+// Validity guards must reject NaN: `!(x > 0.0)` catches NaN while the lint's
+// suggested `x <= 0.0` would accept it. The negated form is deliberate.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn shock_cell_spacing_m(exit_diameter_m: f64, exit_mach: f64, pi: f64) -> f64 {
     if !(exit_diameter_m > 0.0) || !(exit_mach > 1.0) || !pi.is_finite() || pi <= 0.0 {
         return 0.0;
     }
     // Tam vortex-sheet cell, weakly stretched when strongly underexpanded
     // (documented provisional 8% per doubling, capped): direction-tested.
-    let tam = std::f64::consts::PI * exit_diameter_m * (exit_mach * exit_mach - 1.0).sqrt()
-        / 2.4048;
+    let tam =
+        std::f64::consts::PI * exit_diameter_m * (exit_mach * exit_mach - 1.0).sqrt() / 2.4048;
     let stretch = (1.0 + 0.08 * (pi.max(1.0).log2())).min(1.4);
     tam * stretch
 }
@@ -158,9 +163,8 @@ impl AxialProfile {
 /// megawatts, clamped. The GPU must use this, never its own gain formula.
 pub fn emission_gain(source: &PlumeSource) -> f64 {
     let material = optical_material(source.exhaust);
-    let power = source.mass_flow_kg_s * source.throttle
-        * source.exhaust_velocity_mps
-        * source.throttle;
+    let power =
+        source.mass_flow_kg_s * source.throttle * source.exhaust_velocity_mps * source.throttle;
     material.luminosity * (power / 1.0e6).clamp(0.0, 40.0)
 }
 
@@ -202,6 +206,12 @@ pub fn build_axial_profile(
     if let Some(reason) = validation_error(source, env) {
         return Err(reason);
     }
+    // The model keeps a minimum visible length of two nozzle diameters. Reject
+    // sources for which that lower bound would exceed the profile's hard cap;
+    // f64::clamp panics when its bounds are inverted.
+    if source.exit_radius_m > MAX_PROFILE_LENGTH_M / 4.0 {
+        return Err("exit_radius_m is too large for the maximum profile length");
+    }
     let regime = expansion_regime(source, env);
     if source.throttle <= 0.0 {
         return Ok(AxialProfile::empty(regime));
@@ -217,7 +227,7 @@ pub fn build_axial_profile(
     // provisional (reference-like flames run ~10-15 nozzle diameters);
     // tests pin direction (longer with Pi, M, D), never metres.
     let length = diameter * source.exit_mach * pi.max(0.05).sqrt() * 3.0;
-    let length = length.clamp(diameter * 2.0, 4000.0);
+    let length = length.clamp(diameter * 2.0, MAX_PROFILE_LENGTH_M);
 
     let spread = spread_rate(pi);
     let fan = expansion_fan(pi);
@@ -235,10 +245,13 @@ pub fn build_axial_profile(
         let decay = 1.0 / (1.0 + 6.0 * zn * zn);
         let density = (mass_flow
             / (source.exhaust_velocity_mps * std::f64::consts::PI * radius * radius).max(1e-9))
-            .max(0.0);
+        .max(0.0);
         let temp = env.temperature_k + (exit_temp - env.temperature_k).max(0.0) * decay;
         let shock = if cell > 0.0 {
-            1.0 + amp * 0.55 * (2.0 * std::f64::consts::PI * z / cell).cos() * (-z / (3.0 * cell.max(length * 0.05))).exp()
+            1.0 + amp
+                * 0.55
+                * (2.0 * std::f64::consts::PI * z / cell).cos()
+                * (-z / (3.0 * cell.max(length * 0.05))).exp()
         } else {
             1.0
         };
@@ -287,7 +300,10 @@ mod tests {
         let source = sample_source();
         let mut env = sample_env_sea_level();
         // Exit 68 kPa: sea level (101 kPa) is overexpanded.
-        assert_eq!(expansion_regime(&source, &env), ExpansionRegime::Overexpanded);
+        assert_eq!(
+            expansion_regime(&source, &env),
+            ExpansionRegime::Overexpanded
+        );
         // Matched band around exit pressure.
         env.pressure_pa = 68_000.0;
         assert_eq!(expansion_regime(&source, &env), ExpansionRegime::Matched);
@@ -345,7 +361,12 @@ mod tests {
             assert!(station.center_density_kg_m3 >= 0.0);
             assert!(station.center_temp_k >= 0.0);
             assert!(station.extinction_per_m >= 0.0);
-            assert!(station.emission_rgb.iter().all(|c| *c >= 0.0 && c.is_finite()));
+            assert!(
+                station
+                    .emission_rgb
+                    .iter()
+                    .all(|c| *c >= 0.0 && c.is_finite())
+            );
             assert!(station.shock.is_finite());
         }
     }
@@ -394,8 +415,30 @@ mod tests {
     }
 
     #[test]
-    fn invalid_source_is_an_error_not_a_profile() {        let mut source = sample_source();
+    fn invalid_source_is_an_error_not_a_profile() {
+        let mut source = sample_source();
         source.exit_radius_m = 0.0;
         assert!(build_axial_profile(&source, &sample_env_sea_level(), 32).is_err());
+    }
+
+    #[test]
+    fn non_finite_and_unrepresentable_sources_are_rejected() {
+        let env = sample_env_sea_level();
+
+        let mut source = sample_source();
+        source.exit_radius_m = f64::INFINITY;
+        assert!(build_axial_profile(&source, &env, 32).is_err());
+
+        let mut source = sample_source();
+        source.exit_mach = f64::INFINITY;
+        assert!(build_axial_profile(&source, &env, 32).is_err());
+
+        let mut source = sample_source();
+        source.exit_radius_m = 1001.0;
+        assert!(build_axial_profile(&source, &env, 32).is_err());
+
+        let mut env = sample_env_sea_level();
+        env.pressure_pa = f64::INFINITY;
+        assert!(build_axial_profile(&sample_source(), &env, 32).is_err());
     }
 }

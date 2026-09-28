@@ -1,0 +1,44 @@
+# One-seat fighter cockpit authored through the shared cabin layout.
+name = "example-fighter-cabin"
+mass_kg = 1000.0
+inertia_body_kg_m2 = [
+  [1200.0, 0.0, 0.0],
+  [0.0, 2400.0, 0.0],
+  [0.0, 0.0, 2400.0],
+]
+body_collision = false
+
+[[procedural_bodies]]
+name = "fuselage"
+origin_body_m = [0.0, 0.0, 0.0]
+
+[[procedural_bodies.stations]]
+x_m = 0.0
+half_width_m = 1.5
+top_height_m = 1.5
+bottom_height_m = 1.5
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.stations]]
+x_m = 4.0
+half_width_m = 1.5
+top_height_m = 1.5
+bottom_height_m = 1.5
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.regions]]
+name = "cockpit"
+x0_m = 0.5
+x1_m = 3.5
+kind = "cabin"
+
+[procedural_bodies.regions.cabin_layout_preset]
+kind = "fighter"
+floor_z_m = 0.0
+pilots = 1

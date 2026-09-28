@@ -13,10 +13,11 @@ pub struct ProtocolVersion(pub u16);
 
 impl ProtocolVersion {
     // Snapshot v3 adds authoritative server timing fields. Command Reset
-    // (v4) relaunches the craft at the canonical site from the wire.
+    // (v4) relaunches at the canonical site. Typed installed-part commands
+    // (v5) extend ClientInput::Command.
     // Postcard structs are not a negotiated schema, so old peers must fail
     // the handshake instead of decoding a partially compatible payload.
-    pub const CURRENT: Self = Self(4);
+    pub const CURRENT: Self = Self(5);
 }
 
 /// Numeric message kind. Game payloads assign their own registry in the
@@ -88,6 +89,11 @@ pub fn encode_envelope<T: Serialize>(kind: u32, message: &T) -> Result<Vec<u8>, 
 /// Decode and version-check an envelope; payload stays opaque bytes for the
 /// game layer to deserialize by `kind`.
 pub fn decode_envelope(bytes: &[u8]) -> Result<Envelope, CodecError> {
+    if bytes.len() > MAX_FRAME_BYTES {
+        return Err(CodecError::FrameTooLarge {
+            declared: bytes.len(),
+        });
+    }
     let envelope: Envelope =
         postcard::from_bytes(bytes).map_err(|e| CodecError::Codec(e.to_string()))?;
     if envelope.version != ProtocolVersion::CURRENT {
@@ -128,24 +134,28 @@ impl FrameDecoder {
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<Vec<u8>>, CodecError> {
         self.buffer.extend_from_slice(bytes);
         let mut frames = Vec::new();
-        loop {
-            if self.buffer.len() < 4 {
-                break;
-            }
+        // Walk with a cursor and drain once: draining per frame inside the
+        // loop shifted the whole remainder for every envelope in the batch
+        // (quadratic in buffered bytes under message bursts).
+        let mut cursor = 0usize;
+        while self.buffer.len() - cursor >= 4 {
             let declared = u32::from_le_bytes([
-                self.buffer[0],
-                self.buffer[1],
-                self.buffer[2],
-                self.buffer[3],
+                self.buffer[cursor],
+                self.buffer[cursor + 1],
+                self.buffer[cursor + 2],
+                self.buffer[cursor + 3],
             ]) as usize;
             if declared > MAX_FRAME_BYTES {
                 return Err(CodecError::FrameTooLarge { declared });
             }
-            if self.buffer.len() < 4 + declared {
+            if self.buffer.len() - cursor < 4 + declared {
                 break;
             }
-            frames.push(self.buffer[4..4 + declared].to_vec());
-            self.buffer.drain(..4 + declared);
+            frames.push(self.buffer[cursor + 4..cursor + 4 + declared].to_vec());
+            cursor += 4 + declared;
+        }
+        if cursor > 0 {
+            self.buffer.drain(..cursor);
         }
         Ok(frames)
     }
@@ -221,6 +231,17 @@ mod tests {
             CodecError::FrameTooLarge {
                 declared: MAX_FRAME_BYTES + 1
             }
+        );
+    }
+
+    #[test]
+    fn direct_envelope_decode_enforces_the_frame_size_cap() {
+        let bytes = vec![0; MAX_FRAME_BYTES + 1];
+        assert_eq!(
+            decode_envelope(&bytes),
+            Err(CodecError::FrameTooLarge {
+                declared: MAX_FRAME_BYTES + 1,
+            })
         );
     }
 

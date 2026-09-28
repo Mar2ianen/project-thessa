@@ -1,6 +1,16 @@
 # Procedural aerodynamic surfaces
 
-Status: design baseline. Exact editor UX, panelization thresholds, structural limits, airfoil data, and balancing values are TBD.
+Status: the procedural compiler in `crates/aero-surfaces` is used by
+`vehicle-baker`. It compiles authored planform, bend, section, control, and fold
+state into solver panels, ownership/mechanism records, baked pitch/roll/yaw/flap/
+airbrake gains, contact parts, and structural sizing summaries. The baker
+accepts `[[procedural_surfaces]]`, merges compiled panels into the vehicle, and
+rebases control/fold references. The flight authority applies the baked mixers
+for its current pitch/roll/yaw pilot channels; flap/airbrake input wiring is
+still future work. The compiled data crosses the hangar/flight boundary without
+authoring geometry. Render-mesh generation, in-game editor UX, runtime wing-fold
+actuation, broader structural/failure coupling, solver-integrated airfoil
+polars, and balancing remain future work.
 
 ## 1. Design goal
 
@@ -8,7 +18,7 @@ Project Thessa uses procedural aerodynamic surfaces rather than a catalogue of f
 
 The central rule is:
 
-> The editor stores an aerodynamic surface as authoring geometry; leaving the hangar compiles that geometry into solver-ready aerodynamic panels, render geometry, collision geometry, and structural data.
+> The hangar stores an aerodynamic surface as authoring geometry; `vehicle-baker` compiles it into solver-ready panels, mechanism records, collision parts, and structural estimates before the vehicle crosses into flight data. The current surface compiler does not emit a render mesh.
 
 Runtime flight code must not depend on editor splines or render meshes. The existing `AeroPanel` representation remains the solver-facing force primitive.
 
@@ -16,11 +26,22 @@ Primary interaction references are Juno: New Origins, Kerbal Space Program 2 pro
 
 ## 2. One procedural surface model
 
-There are no separate fixed-shape parts for rectangular, swept, delta, ogival, tail, or fin surfaces. A single procedural surface model can represent all of them.
+There are no separate fixed-shape parts for rectangular, swept, delta, ogival, tail, fin, winglet, or folding-wing surfaces. A single procedural surface authoring model should be able to represent all of them.
 
-Simple users should be able to obtain conventional forms from a small parameter set. Advanced users should be able to edit the underlying planform directly.
+Simple users should be able to obtain conventional forms from a small parameter set. Advanced users should be able to edit the underlying planform and bend geometry directly.
 
-The preferred authoring representation is a flat local planform defined by two spanwise spline boundaries:
+The core representation intentionally separates:
+
+- the flat 2D planform;
+- the mapping of that planform into 3D;
+- local section/profile data;
+- mechanical regions and joints.
+
+This makes "draw the wing, then bend or mechanize it" the normal workflow rather than forcing users to assemble a curved wing from many unrelated parts.
+
+## 3. Flat planform authoring
+
+The preferred base representation is a flat local planform defined by two spanwise spline boundaries:
 
 - leading edge `x_le(s)`;
 - trailing edge `x_te(s)`;
@@ -32,26 +53,81 @@ For every valid station:
 chord(s) = x_te(s) - x_le(s)
 ```
 
+A point inside the undeformed surface may be parameterized by span coordinate `s` and normalized chord coordinate `u`:
+
+```text
+P_flat(s, u) = lerp(leading_edge(s), trailing_edge(s), u)
+u in [0, 1]
+```
+
 This keeps the object recognizably wing-like while allowing nearly arbitrary useful planforms.
 
 A simple trapezoidal wing is therefore only a low-complexity spline. More advanced users may create strongly curved leading/trailing edges, ogival or compound-delta planforms, and other smooth shapes without switching to another part type.
 
 The editor may expose convenience controls such as span, root chord, tip chord, sweep, taper, or tip offset, but these are only views over the same underlying spline representation.
 
-## 3. Spanwise section data
+## 4. Out-of-plane bend curve
 
-Planform alone does not fully define the surface. Spanwise section data may additionally describe:
+After the flat planform is authored, the surface may be bent out of its original plane by a third spanwise curve.
+
+The current authoring model exposes this as a spanwise bend/elevation function:
+
+```text
+z_bend(s)
+```
+
+or an equivalent spanwise reference path.
+
+The flat planform remains the canonical parameter domain. The bend curve maps spanwise stations into 3D and defines the local span frame used to place each section.
+
+Conceptually:
+
+```text
+flat planform
+    |
+    +-- x_le(s)
+    +-- x_te(s)
+    |
+    v
+spanwise bend / reference curve
+    |
+    +-- z_bend(s)
+    +-- local section frame
+    |
+    v
+3D aerodynamic surface
+```
+
+The local tangent of the bend/reference curve should participate in construction of the section frame. Section twist remains an independent degree of freedom rather than being implicitly baked into the bend.
+
+This should support, using one authoring surface:
+
+- ordinary dihedral and anhedral;
+- gull and inverted-gull wings;
+- smoothly canted tips;
+- blended winglets;
+- near-vertical tip surfaces;
+- Pathfinder-like wings whose outer portion rises continuously out of the main wing plane.
+
+The first implementation does not need unrestricted free-form 3D sculpture. A spanwise bend curve over the flat planform is deliberately more constrained and easier to validate, compile, and edit.
+
+The compiler must distinguish projected planform quantities from actual 3D surface quantities. Bending a surface changes projected span/area and local aerodynamic frames without changing the material surface area merely because of orientation.
+
+## 5. Spanwise section data
+
+Planform and bend geometry still do not fully define the surface. Spanwise section data may additionally describe:
 
 - local airfoil/profile;
 - thickness or thickness-to-chord ratio;
 - incidence;
 - geometric twist;
+- optional local roll/cant adjustment when not fully described by the bend frame;
 - optional camber/profile parameters;
 - structural thickness or spar envelope when structural simulation consumes it.
 
 The first implementation does not need to expose every parameter to the user. The format should nevertheless leave a clean extension point for per-section aerodynamic profiles rather than assuming one global airfoil forever.
 
-## 4. Mechanization is independent from planform
+## 6. Mechanization is independent from geometry
 
 Part variants should primarily describe mechanical behavior, not restrict available planform shapes.
 
@@ -59,29 +135,67 @@ The same procedural geometry may be used as:
 
 - a fixed aerodynamic surface;
 - a fully moving surface / all-moving tail;
-- a surface carrying one or more hinged control regions.
+- a surface carrying one or more control regions;
+- a surface containing one or more fold joints.
 
 A fully moving surface rotates the complete aerodynamic surface about its configured hinge/actuation axis. It is not a special aerodynamic primitive.
 
-## 5. Embedded control surfaces
+A fold joint rotates a child/outboard region relative to the parent surface and is not the same mechanism as a control surface.
 
-Control surfaces are regions defined on top of the parent procedural surface rather than separate fixed-shape wing parts.
+## 7. Embedded control surfaces
+
+Control surfaces are regions drawn on top of the parent procedural surface rather than separate fixed-shape wing parts.
+
+The preferred editor workflow follows the SimplePlanes-style interaction model:
+
+1. create the parent aerodynamic surface;
+2. draw/select a control region directly on that surface;
+3. choose a control/mechanism preset;
+4. optionally override the preset's kinematics, limits, actuator, and control mixing.
 
 A control region should be describable by:
 
 - a spanwise interval or spanwise boundary spline;
 - chordwise leading/trailing boundaries;
-- a hinge line;
-- deflection limits;
-- actuator/control-channel assignment.
-
-This supports conventional ailerons, elevators, rudders, elevons, flaps, spoilers, airbrakes, and unusual custom surfaces with the same representation.
+- a hinge line or other kinematic reference;
+- deflection/translation limits;
+- actuator assignment;
+- one or more control-channel inputs.
 
 Control-surface boundaries may themselves be curved and should follow the procedural parent geometry rather than assuming rectangular cuts.
 
-### 5.1 Nested surfaces and trim tabs
+### 7.1 User-facing control presets
 
-The representation should permit a hinged region to contain a smaller hinged region.
+User-facing types such as the following should primarily be presets over generic region geometry, kinematics, and control mixing:
+
+- aileron;
+- elevator;
+- rudder;
+- elevon;
+- flaperon;
+- flap;
+- slat;
+- spoiler;
+- airbrake;
+- trim/servo/anti-servo tab.
+
+For example, an elevon is not a unique aerodynamic primitive. It is a region whose command is a mix of pitch and roll inputs. A flaperon similarly mixes flap deployment with roll command.
+
+Conceptually:
+
+```text
+elevon_command   = pitch * k_pitch + roll * k_roll
+flaperon_command = flap  * k_flap  + roll * k_roll
+```
+
+Presets may choose sensible signs, gains, symmetric/asymmetric pairing, limits, and default actuator behavior, but advanced users should be able to edit those mappings.
+
+Slats and other devices whose motion is not a pure hinge rotation may use a different kinematic preset while retaining the same region-on-parent authoring model.
+
+### 7.2 Nested surfaces and trim tabs
+
+The current compiler permits one nested control level, which covers a parent
+control and a trim/servo tab. Deeper nesting is not supported in this slice.
 
 This naturally supports:
 
@@ -92,7 +206,37 @@ This naturally supports:
 
 A trim tab is therefore not a hard-coded special case in the aerodynamic solver. It is a small nested control region with its own command/trim behavior.
 
-## 6. Hangar compilation
+## 8. Folding surfaces
+
+Folding is a first-class mechanical property layered on top of the same procedural surface geometry.
+
+A fold joint divides the parent surface into an inboard/parent region and an outboard/child region. The child region receives a rigid transform around the fold hinge while retaining its authored planform, bend curve, section data, controls, and nested mechanisms.
+
+A fold-joint definition should be able to describe:
+
+- fold boundary / span station;
+- hinge line and axis;
+- deployed angle;
+- one or more stowed/folded angles;
+- deployment rate;
+- hard stops;
+- actuator;
+- lock state and lock limits;
+- allowed operating states or flight-envelope constraints;
+- optional automatic deployment/folding rules.
+
+Typical use cases include:
+
+- Boeing 777X-style folding wingtips for ground/gate compatibility;
+- Dream Chaser-style wing folding for launch inside a payload fairing;
+- carrier/storage folding;
+- variable-geometry concepts where in-flight folding is intentionally allowed.
+
+Ground/launch-only folding and in-flight variable geometry use the same basic joint representation but may have very different structural limits and control rules.
+
+Folding must not destroy the underlying aerodynamic definition. The material/3D surface area of a rigidly folded child region is unchanged by the fold transform, while projected area, projected span, collision envelope, local force directions, and aerodynamic interactions may change.
+
+## 9. Hangar compilation
 
 Leaving the hangar, loading a vehicle asset for simulation, or otherwise finalizing construction runs a deterministic vehicle compilation step.
 
@@ -101,23 +245,40 @@ Conceptually:
 ```text
 ProceduralSurface
     |
-    +-- validate spline/section geometry
-    +-- sample planform and section functions
+    +-- validate planform splines
+    +-- validate bend/reference curve
+    +-- validate section geometry
+    +-- validate control regions and fold topology
+    +-- sample planform, bend, and section functions
     +-- split at important geometric and mechanism boundaries
-    +-- derive local aerodynamic properties
+    +-- derive local aerodynamic properties and transforms
     |
     v
 Compiled surface data
-    +-- render mesh
-    +-- collision geometry
-    +-- structural representation
     +-- AeroPanel[]
-    +-- ControlSurfaceDefinition[] / equivalent control mapping
+    +-- per-panel control/fold ownership tags
+    +-- ControlSurfaceDefinition[]
+    +-- CompiledFold[] for the selected fold state
+    +-- geometry summary and optional structural sizing
+    +-- separate collision_parts() contact geometry
 ```
 
 The authoring representation is not evaluated in the flight hot path.
 
-## 7. Aerodynamic panel generation
+`vehicle-baker` currently reads `[[procedural_surfaces]]` from vehicle TOML,
+compiles each surface in its deployed state, merges its panels and controls with
+hand-authored vehicle data, rebases panel/control/fold indices, and optionally
+adds contact parts. `CompiledSurface` is serializable data; a postcard
+round-trip test pins the hangar/flight boundary. Preset channel gains are stored
+on the compiled control definitions and survive baking; the runtime evaluates
+one command per surface independent of the control list length/order. The
+authority currently supplies pitch/roll/yaw pilot channels; flap and airbrake
+input wiring remains future work. Render-mesh generation is not part of this
+compiler output yet.
+
+A single editor surface may therefore compile into multiple connected numerical/structural regions while still remaining one object from the user's perspective.
+
+## 10. Aerodynamic panel generation
 
 The compiler converts the procedural surface into a relatively small set of aerodynamic zones.
 
@@ -125,7 +286,8 @@ An aerodynamic panel is a force-integration zone, not a render triangle. Render 
 
 For each generated zone the compiler should derive the solver inputs already represented by `AeroPanel`, including where applicable:
 
-- area;
+- actual 3D area;
+- projected planform area where the model needs it;
 - representative chord;
 - representative span;
 - planform aspect ratio;
@@ -133,11 +295,12 @@ For each generated zone the compiler should derive the solver inputs already rep
 - thickness-to-chord ratio;
 - force sample position;
 - geometry-derived center of pressure;
-- local chord and lift axes;
+- local chord, span, normal, and lift axes;
 - control deflection ownership;
+- fold-joint ownership / transform chain;
 - future profile/polar reference.
 
-### 7.1 Adaptive panelization
+### 10.1 Adaptive panelization
 
 Panel density should follow aerodynamic/geometric complexity rather than a fixed grid size.
 
@@ -145,35 +308,153 @@ A new panel boundary should be introduced when needed because of a meaningful ch
 
 - local chord;
 - sweep;
+- bend/dihedral/cant;
 - twist/incidence;
 - section profile or thickness;
 - curvature of the planform;
 - control-surface ownership;
+- fold-joint ownership;
 - other compiler error estimates.
 
-Simple rectangular or trapezoidal surfaces may compile to very few aerodynamic zones. Complex curved planforms may require many more without affecting render-mesh density.
+Simple rectangular or trapezoidal surfaces may compile to very few aerodynamic zones. Complex curved/bent planforms may require many more without affecting render-mesh density.
 
-Exact subdivision/error thresholds are TBD and should be chosen from accuracy/performance measurements rather than a fixed design-time panel count.
+The compiler implements tolerance-based subdivision and a greedy error-budget
+mode. Default tolerances are in `CompileOptions`; they bound zone granularity,
+while the error-budget mode reports its achieved estimate under a panel cap.
+Further presets should be chosen from accuracy/performance measurements rather
+than a fixed design-time panel count.
 
-### 7.2 Mechanization boundaries are hard splits
+### 10.2 Mechanization boundaries are hard splits
 
-Every hinge/control-region boundary that changes aerodynamic actuation must force a panelization boundary.
+Every control-region boundary or fold boundary that changes independent motion must force a panelization boundary.
 
-No compiled panel should straddle two regions that can receive different deflections. This lets runtime control continue to operate on precompiled panel groups rather than querying procedural geometry.
+No compiled panel should straddle two regions that can receive different deflections or rigid transforms. This lets runtime control continue to operate on precompiled panel groups rather than querying procedural geometry.
 
-## 8. Runtime representation
+## 11. Runtime representation
 
-The current solver-neutral runtime model is the intended target of compilation:
+The compiled vehicle data currently contains:
 
 - `AeroPanel` remains the local aerodynamic force primitive;
-- control channels address one or more compiled panels;
-- the runtime evaluates panels, not splines and not mesh triangles.
+- control definitions address compiled panels, with ownership indices rebased
+  when the baker merges the surface into the vehicle;
+- fold-state geometry is compiled into panels and `FoldJointRecord` metadata;
+- `CompiledSurface::collision_parts` derives contact primitives from compiled
+  panels, separately from the force-solver representation;
+- the serialized vehicle contains compiled numerical data, not authoring splines
+  or render meshes.
+
+The fold records and tagged panels are validated and carried in the vehicle
+asset, but runtime wing-fold actuation is not yet wired into flight stepping.
+Each baked surface currently compiles in its deployed configuration through
+`vehicle-baker`; control-channel mixing is runtime data and is active for the
+currently wired pilot channels.
 
 This preserves an important architectural boundary:
 
 > Users edit physical geometry; the vehicle compiler derives the numerical model; the runtime consumes only compiled numerical data.
 
-## 9. Future aerodynamic profile data
+## 12. Compiler validation and reference-aircraft tests
+
+Procedural-wing compilation should have both analytic geometry tests and golden reconstructions of real vehicles.
+
+The goal of the real-vehicle suite is not to claim that the current aerodynamic solver exactly reproduces measured aircraft performance. It is to verify that the authoring model can represent real planforms/mechanisms and that compilation preserves their known geometry and kinematics.
+
+### 12.1 Analytic compiler tests
+
+Simple synthetic fixtures should cover geometry for which the expected result is known independently:
+
+- rectangular wing;
+- trapezoidal wing;
+- swept trapezoid;
+- constant-dihedral wing;
+- smoothly bent wing with an analytic bend function;
+- one hinged control region;
+- nested trim tab;
+- one fold joint at a known station.
+
+Tests should independently integrate or derive expected values rather than comparing the compiler to another call into the same implementation.
+
+At minimum they should verify:
+
+- total actual surface area;
+- projected planform area;
+- span and projected span;
+- mean/representative chord quantities;
+- panel centroid and aggregate centroid;
+- local frame orientation;
+- symmetry;
+- continuity across non-mechanical subdivision boundaries;
+- exact ownership at control/fold hard boundaries;
+- preservation of child-region material area through rigid folding.
+
+Panelized approximations should converge toward the analytic reference as compiler tolerance is tightened.
+
+### 12.2 Real-vehicle golden reconstructions
+
+Maintain small authoring fixtures reconstructed from public manufacturer/NASA geometry or sufficiently good public drawings.
+
+The current compiler ships these authoring/golden fixtures:
+
+- **Boeing 777X** — a public-geometry swept-wing and folding-tip fixture, including deployed/stowed compilation. Public Boeing data gives a 71.8 m extended wingspan and 64.8 m ground/folded wingspan.
+- **Dream Chaser / Tenacity** — a public-reference lifting-body spaceplane fixture with wings folded into a launch configuration. NASA/Sierra Space describe the wings folding for launch inside a 5 m payload fairing; public NASA material gives a roughly 7 m deployed wingspan.
+- **Space Shuttle Orbiter** — a public-reference highly swept delta-like wing with elevon regions. NASA publishes an Orbiter wingspan of 78 ft / about 23.8 m; other fixture dimensions follow the recorded reference drawing.
+- **Concorde** — a public-reference curved/ogival delta planform that exercises more than a simple trapezoid.
+
+The **Pathfinder** fixture is implemented as a fictional regression surface with
+smoothly rising/canted tips and embedded aileron/flap controls. It covers the
+bend-plus-controls interaction and must not be treated as real-world validation
+ground truth.
+
+Reference sources should be recorded alongside each fixture so that a test failure can be distinguished from a changed reconstruction or source assumption.
+
+Useful authoritative starting points include:
+
+- Boeing 777X technical specifications and folding-wingtip material;
+- NASA/Sierra Space Dream Chaser launch-configuration material;
+- NASA Space Shuttle Orbiter reference dimensions;
+- museum/manufacturer/archival drawings for Concorde geometry.
+
+### 12.3 What the real-vehicle tests compare
+
+Each fixture should emit a compact deterministic `CompiledSurfaceSummary` or equivalent golden record containing geometry-only outputs such as:
+
+- deployed and folded/stowed bounding boxes;
+- total and projected span;
+- total actual surface area;
+- projected planform area;
+- root/tip/reference chords where meaningful;
+- mean aerodynamic chord derived from geometry;
+- selected sweep angles;
+- bend/dihedral/cant at reference stations;
+- control-region area and hinge positions;
+- fold hinge positions and child transforms;
+- aerodynamic-panel count;
+- sum of panel areas;
+- panel/control/fold ownership graph.
+
+The tests should compare those outputs against both:
+
+1. an independent integration of the authored geometry;
+2. public reference values available for the real vehicle.
+
+Reference tolerances must be stored per fixture and reflect source quality. A manufacturer dimension can use a tight tolerance; a value reconstructed from a perspective-corrected drawing or photograph needs a wider declared tolerance.
+
+The suite should not silently normalize a poor reconstruction until it passes. Any deliberate discrepancy from the public reference should be documented in the fixture.
+
+### 12.4 Mechanism-state invariants
+
+Real and synthetic fold/control tests should additionally assert state invariants:
+
+- rigid folding does not change child material area;
+- folding changes the external envelope exactly through the mechanism transform;
+- no `AeroPanel` crosses an independently moving hinge/fold boundary;
+- control deflection preserves region topology and ownership;
+- deploying a fold to its authored flight angle reconstructs the same compiled flight geometry as direct compilation in that state;
+- mirrored left/right surfaces remain mirrored after equivalent mechanism commands.
+
+These tests protect the compiler architecture independently of later aerodynamic-model changes.
+
+## 13. Future aerodynamic profile data
 
 The existing aerodynamic model still contains vehicle/global coefficients that will eventually be too coarse for surfaces with different section profiles.
 
@@ -181,15 +462,16 @@ Procedural-surface authoring should therefore avoid baking in the assumption tha
 
 A future extension may attach an `AeroProfileId`, polar reference, or equivalent per-panel/per-section aerodynamic description. This is an extension point, not a requirement for the first procedural-wing implementation.
 
-## 10. Non-goals for the first implementation
+## 14. Remaining scope
 
-The initial system does not need to solve:
+The implemented compiler slice does not yet solve:
 
 - arbitrary CFD from render geometry;
 - unrestricted free-form 3D surface sculpture;
 - final aeroelastic deformation;
 - final structural failure/load limits;
-- every real-world high-lift device;
+- every real-world high-lift linkage;
+- exact flight-performance reproduction for every reference aircraft;
 - final per-airfoil polar format.
 
 It should instead establish a stable authoring-to-compiled-data pipeline that can grow into those features without replacing the vehicle representation.

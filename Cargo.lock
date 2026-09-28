@@ -5577,6 +5577,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "thessa-aero-core"
+version = "0.0.1"
+dependencies = [
+ "glam 0.32.1",
+ "rayon",
+ "serde",
+ "thessa-simd",
+]
+
+[[package]]
+name = "thessa-aero-surfaces"
+version = "0.0.1"
+dependencies = [
+ "glam 0.32.1",
+ "postcard",
+ "serde",
+ "thessa-sim-core",
+]
+
+[[package]]
 name = "thessa-atmosphere"
 version = "0.0.1"
 dependencies = [
@@ -5616,8 +5636,22 @@ dependencies = [
  "bevy_core_pipeline",
  "naga",
  "pollster",
+ "thessa-graphics",
+ "thessa-microstore-core",
  "thessa-rcbt-core",
+ "thessa-rcbt-wgpu",
  "wgpu",
+]
+
+[[package]]
+name = "thessa-celestial"
+version = "0.0.1"
+dependencies = [
+ "glam 0.32.1",
+ "rayon",
+ "serde",
+ "thessa-aero-core",
+ "toml",
 ]
 
 [[package]]
@@ -5626,9 +5660,12 @@ version = "0.0.1"
 dependencies = [
  "bevy",
  "bevy_brp_extras",
+ "glam 0.32.1",
+ "rayon",
  "serde",
  "thessa-atmosphere",
  "thessa-bevy-rcbt",
+ "thessa-collision",
  "thessa-flight-authority",
  "thessa-flight-net",
  "thessa-graphics",
@@ -5689,6 +5726,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "thessa-fuselage"
+version = "0.0.1"
+dependencies = [
+ "glam 0.32.1",
+ "postcard",
+ "serde",
+ "serde_json",
+ "thessa-sim-core",
+ "toml",
+]
+
+[[package]]
 name = "thessa-graphics"
 version = "0.0.1"
 dependencies = [
@@ -5708,6 +5757,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "thessa-microstore-core"
+version = "0.0.1"
+
+[[package]]
 name = "thessa-perf"
 version = "0.0.1"
 dependencies = [
@@ -5720,6 +5773,15 @@ name = "thessa-plume-core"
 version = "0.0.1"
 dependencies = [
  "thessa-rcbt-core",
+]
+
+[[package]]
+name = "thessa-propulsion"
+version = "0.0.1"
+dependencies = [
+ "glam 0.32.1",
+ "serde",
+ "thessa-aero-core",
 ]
 
 [[package]]
@@ -5763,6 +5825,7 @@ version = "0.0.1"
 dependencies = [
  "naga",
  "pollster",
+ "thessa-microstore-core",
  "thessa-rcbt-core",
  "thessa-rcbt-ffi",
  "thessa-rcbt-large-ffi",
@@ -5793,14 +5856,22 @@ version = "0.0.1"
 dependencies = [
  "glam 0.32.1",
  "rayon",
- "serde",
+ "serde_json",
+ "thessa-aero-core",
+ "thessa-celestial",
+ "thessa-propulsion",
  "thessa-simd",
+ "thessa-trajectory",
+ "thessa-vehicle-core",
  "toml",
 ]
 
 [[package]]
 name = "thessa-simd"
 version = "0.0.1"
+dependencies = [
+ "wide",
+]
 
 [[package]]
 name = "thessa-system-baker"
@@ -5813,14 +5884,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "thessa-trajectory"
+version = "0.0.1"
+dependencies = [
+ "glam 0.32.1",
+ "rayon",
+ "thessa-celestial",
+ "thessa-simd",
+ "toml",
+]
+
+[[package]]
 name = "thessa-vehicle-baker"
 version = "0.0.1"
 dependencies = [
  "glam 0.32.1",
  "serde",
  "serde_json",
+ "thessa-aero-surfaces",
+ "thessa-fuselage",
  "thessa-sim-core",
  "toml",
+]
+
+[[package]]
+name = "thessa-vehicle-core"
+version = "0.0.1"
+dependencies = [
+ "glam 0.32.1",
+ "serde",
+ "serde_json",
+ "thessa-aero-core",
+ "thessa-propulsion",
 ]
 
 [[package]]

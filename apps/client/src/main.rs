@@ -1,5 +1,6 @@
 mod atmosphere;
 mod contact_gizmos;
+mod docking_demo;
 mod embedded;
 mod map_ui;
 mod navigation;
@@ -9,10 +10,10 @@ mod pilot;
 use atmosphere::{
     AtmospherePlugin, GraphicsRequested, GraphicsResolved, PrimaryStarLight, RayTracingActive,
 };
-mod terrain;
-mod water;
 mod beauty;
 mod plume;
+mod terrain;
+mod water;
 use map_ui::*;
 use navigation::*;
 use orbits::*;
@@ -99,6 +100,7 @@ struct MapState {
 }
 
 fn main() {
+    let docking_demo_enabled = docking_demo::requested();
     // Requested graphics first: the RT decision below must happen before
     // plugins register, while adapter capabilities only exist post-init.
     // Unknown capability + explicit RT request = fail fast at device creation
@@ -110,6 +112,7 @@ fn main() {
         RequestedGraphics::default()
     });
     let resolved = ResolvedGraphicsSettings::from_requested(&requested, &Capabilities::unknown());
+    let resolved_material_storage = resolved.material_storage;
     let rt_active = resolved.ray_tracing.is_active();
     if rt_active {
         eprintln!("[graphics] experimental Solari RT path requested; needs RT-capable Vulkan");
@@ -189,6 +192,9 @@ fn main() {
     app.insert_resource(GraphicsRequested(requested))
         .insert_resource(GraphicsResolved(resolved))
         .insert_resource(RayTracingActive(rt_active))
+        .insert_resource(thessa_bevy_rcbt::MaterialStorageSetting(
+            resolved_material_storage,
+        ))
         .add_plugins(OrbitGizmoPlugin)
         .add_plugins(PilotHudPlugin)
         .add_plugins(contact_gizmos::ContactGizmoPlugin)
@@ -223,8 +229,12 @@ fn main() {
             )
                 .chain()
                 .after(pilot::PilotUpdate),
-        )
-        .run();
+        );
+    if docking_demo_enabled {
+        app.add_systems(Startup, docking_demo::setup.after(setup))
+            .add_systems(Update, docking_demo::step);
+    }
+    app.run();
 }
 
 /// Maximum time-warp factor (2^17). High warp only sustains on rails:
@@ -271,9 +281,9 @@ struct StarMarker {
 
 #[derive(Component)]
 struct OrbitCamera {
-    orbit: Quat,
-    distance: f32,
-    target: Vec3,
+    pub(crate) orbit: Quat,
+    pub(crate) distance: f32,
+    pub(crate) target: Vec3,
 }
 
 #[derive(Component)]
@@ -1167,13 +1177,18 @@ mod tests {
                 .filter(|body| is_visible_in_view(&ephemeris, map, body.id))
                 .count()
         };
+        // Counts follow the world-atlas sync (02B BC subsystem): Koro was
+        // fragmented into Orthea's rings (-1 under Orthea/Asterion) and the
+        // B/C subsystem added Janus+3 companions, BC-Outer+5 moons, BC-I and
+        // the B/C stars under bc_barycenter. Any world edit must update these
+        // together with docs/02_WORLD_ATLAS.md.
         for (mode, expected_count) in [
-            (MapMode::SystemOverview, 22),
-            (MapMode::Asterion, 18),
+            (MapMode::SystemOverview, 30),
+            (MapMode::Asterion, 17),
             (MapMode::Nereid, 9),
-            (MapMode::Orthea, 4),
+            (MapMode::Orthea, 3),
             (MapMode::Vesper, 3),
-            (MapMode::Binary, 4),
+            (MapMode::Binary, 13),
         ] {
             let focus = ephemeris
                 .body_id(mode.focus_name())

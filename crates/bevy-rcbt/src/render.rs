@@ -20,15 +20,15 @@ use bevy::{
         extract_resource::{ExtractResource, ExtractResourcePlugin},
         render_asset::RenderAssets,
         render_resource::{
-            BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry, BindingResource, BindingType,
-            Buffer, BufferBindingType, BufferUsages, ColorTargetState, ColorWrites,
-            CompareFunction, ComputePassDescriptor, ComputePipeline, DepthBiasState,
+            BindGroup, BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry, BindingResource,
+            BindingType, Buffer, BufferBindingType, BufferId, BufferUsages, ColorTargetState,
+            ColorWrites, CompareFunction, ComputePassDescriptor, ComputePipeline, DepthBiasState,
             DepthStencilState, DownlevelFlags, MultisampleState, PipelineLayout,
             PipelineLayoutDescriptor, PrimitiveState, PrimitiveTopology, RawBufferVec,
             RawComputePipelineDescriptor, RawFragmentState, RawRenderPipelineDescriptor,
-            RawVertexState, RenderPassDescriptor, RenderPipeline, SamplerBindingType, ShaderModule,
-            ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp, TextureFormat,
-            TextureSampleType, TextureViewDimension,
+            RawVertexState, RenderPassDescriptor, RenderPipeline, SamplerBindingType, SamplerId,
+            ShaderModule, ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp,
+            TextureFormat, TextureSampleType, TextureViewDimension, TextureViewId,
         },
         renderer::{
             RenderAdapter, RenderContext, RenderDevice, RenderGraph, RenderGraphSystems,
@@ -39,7 +39,10 @@ use bevy::{
     },
 };
 
-use crate::{CbtGpuPresentation, CbtRenderMaterialPages};
+use crate::{
+    CbtGpuPresentation, CbtRenderMaterialPages,
+    material_cache::{SlotCache, SlotChange},
+};
 
 impl ExtractResource for CbtGpuPresentation {
     type Source = Self;
@@ -63,7 +66,16 @@ use bevy::render::render_resource::WgpuFeatures;
 
 use super::{
     CbtLeafRecord, CbtRenderMaterial, CbtRenderPages, CbtRenderSurface, CbtRenderTopology,
+    MaterialStorageSetting,
 };
+
+impl ExtractResource for MaterialStorageSetting {
+    type Source = Self;
+
+    fn extract_resource(source: &Self::Source) -> Self {
+        *source
+    }
+}
 
 impl ExtractResource for CbtRenderMaterial {
     type Source = Self;
@@ -75,6 +87,31 @@ impl ExtractResource for CbtRenderMaterial {
 
 const GPU_GRID_SIZE: usize = 33;
 const GPU_VERTEX_COUNT_PER_PATCH: usize = GPU_GRID_SIZE * GPU_GRID_SIZE;
+
+/// wgpu caps a single dispatch dimension at 65535 workgroups
+/// (`maxComputeWorkgroupsPerDimension`). Both compute passes below
+/// linearize their invocation index with `@num_workgroups`, so a wider
+/// job fans out over the y dimension instead of being clamped by the
+/// backend.
+const MAX_DISPATCH_WORKGROUPS: u32 = 65_535;
+
+fn dispatch_extent(workgroups: u32) -> (u32, u32) {
+    debug_assert!(
+        u64::from(workgroups)
+            <= u64::from(MAX_DISPATCH_WORKGROUPS) * u64::from(MAX_DISPATCH_WORKGROUPS),
+        "dispatch needs more workgroups than the 2-D fan-out can address"
+    );
+    if workgroups <= MAX_DISPATCH_WORKGROUPS {
+        (workgroups, 1)
+    } else {
+        (
+            MAX_DISPATCH_WORKGROUPS,
+            workgroups
+                .div_ceil(MAX_DISPATCH_WORKGROUPS)
+                .min(MAX_DISPATCH_WORKGROUPS),
+        )
+    }
+}
 const GPU_SURFACE_TRIANGLE_COUNT_PER_PATCH: usize = (GPU_GRID_SIZE - 1) * (GPU_GRID_SIZE - 1) * 2;
 const GPU_SKIRT_TRIANGLE_COUNT_PER_PATCH: usize = (GPU_GRID_SIZE - 1) * 4 * 2;
 const GPU_TRIANGLE_COUNT_PER_PATCH: usize =
@@ -122,6 +159,105 @@ impl ExtractResource for CbtRenderSurface {
 /// `active_triangles`, then writes the vertex count of one indirect draw
 /// from the GPU triangle counter. The raster consumer reads the compact triangle
 /// records directly; no per-leaf draw/entity is submitted.
+/// Identity key for the cached geometry-compute bind group.
+///
+/// View values change via dynamic offsets / uniform contents without
+/// changing the binding itself, so the bind group is rebuilt only when a
+/// buffer object is reallocated (new [`BufferId`] after `reserve`) or the
+/// pipeline layout changes. This removes per-dispatch driver churn while
+/// staying correct across residency changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GeometryBindKey {
+    leaf: BufferId,
+    patch: BufferId,
+    metadata: BufferId,
+    residual: BufferId,
+    vertex: BufferId,
+    params: BufferId,
+    frames: BufferId,
+    dirty: BufferId,
+}
+
+/// Which leaf ordinals need (re)generation this prepare.
+///
+/// Pure function of the new metadata, the last published metadata, and the
+/// slot changes: an ordinal is dirty when its metadata word differs (covers
+/// reorder, eviction, and any residency change) or when its node just
+/// claimed/updated a slot (covers content changes whose packed header words
+/// happen to match, e.g. same base/scale/grid with different residuals).
+/// `node_to_ordinal` maps resident node ids to their current ordinals.
+fn compute_dirty_ordinals(
+    new_metadata: &[[u32; 4]],
+    prev_metadata: &[[u32; 4]],
+    slot_changes: &[SlotChange],
+    node_to_ordinal: &std::collections::BTreeMap<u64, u32>,
+    force_full: bool,
+) -> Vec<u32> {
+    if force_full || prev_metadata.len() != new_metadata.len() {
+        return (0..new_metadata.len() as u32).collect();
+    }
+    let mut dirty: Vec<u32> = new_metadata
+        .iter()
+        .enumerate()
+        .filter(|(ordinal, words)| prev_metadata.get(*ordinal) != Some(*words))
+        .map(|(ordinal, _)| ordinal as u32)
+        .collect();
+    for change in slot_changes {
+        if let Some(ordinal) = node_to_ordinal.get(&change.node_id)
+            && !dirty.contains(ordinal)
+        {
+            dirty.push(*ordinal);
+        }
+    }
+    dirty.sort_unstable();
+    dirty
+}
+
+/// Identity key for the cached classifier-compute bind group. The view
+/// matrix itself flows through the existing dynamic offset, so camera motion
+/// alone must not invalidate the group — only buffer reallocations do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ClassifierBindKey {
+    view_uniforms: BufferId,
+    metadata: BufferId,
+    vertex: BufferId,
+    active_triangles: BufferId,
+    active_count: BufferId,
+    draw: BufferId,
+    surface: BufferId,
+    params: BufferId,
+    leaf: BufferId,
+    frames: BufferId,
+    grid_history: BufferId,
+}
+
+/// Identity key for the cached raster bind group. Camera motion uses the
+/// dynamic view offset; texture/buffer residency changes (new view/sampler
+/// or reallocated storage) invalidate the group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RasterBindKey {
+    view_uniforms: BufferId,
+    surface: BufferId,
+    vertex: BufferId,
+    metadata: BufferId,
+    params: BufferId,
+    active_triangles: BufferId,
+    leaf: BufferId,
+    lighting: BufferId,
+    frames: BufferId,
+    material_slots: BufferId,
+    albedo_view: TextureViewId,
+    albedo_sampler: SamplerId,
+    roughness_view: TextureViewId,
+    roughness_sampler: SamplerId,
+    material_view: TextureViewId,
+    material_sampler: SamplerId,
+}
+
+fn view_uniform_buffer_id(view_uniforms: &ViewUniforms) -> Option<BufferId> {
+    view_uniforms.uniforms.buffer().map(|buffer| buffer.id())
+}
+
 #[derive(Resource)]
 pub struct CbtGpuBuffers {
     leaf_records: RawBufferVec<CbtLeafRecord>,
@@ -148,6 +284,24 @@ pub struct CbtGpuBuffers {
     generated_surface_generation: u64,
     leaf_count: u32,
     complete_pages: bool,
+    geometry_bind_group: Option<BindGroup>,
+    geometry_bind_key: Option<GeometryBindKey>,
+    /// Stable `node_id -> slot` assignment for height-page residuals.
+    /// Topology reorder keeps slots (only the small per-ordinal metadata is
+    /// rewritten); a page arrival re-uploads exactly one slot range.
+    height_slots: SlotCache,
+    /// Packed words reserved per height slot. `metadata.w` stays a word
+    /// offset (`slot * stride`), so the shader contract is unchanged.
+    height_stride_words: usize,
+    /// Leaf ordinals the geometry pass must (re)generate, in dispatch order.
+    /// Rebuilt every prepare: full cover after topology/surface changes,
+    /// otherwise exactly the ordinals whose metadata or slot changed.
+    dirty_ordinals: RawBufferVec<u32>,
+    /// Last published per-ordinal metadata, for dirty detection. Kept at
+    /// `records.len()`; empty until the first publish.
+    last_published_metadata: Vec<[u32; 4]>,
+    /// Cached count of pending dirty ordinals, consumed by the dispatch.
+    dirty_count: u32,
 }
 
 impl FromWorld for CbtGpuBuffers {
@@ -201,6 +355,18 @@ impl FromWorld for CbtGpuBuffers {
             generated_surface_generation: u64::MAX,
             leaf_count: 0,
             complete_pages: false,
+            geometry_bind_group: None,
+            geometry_bind_key: None,
+            height_slots: SlotCache::new(HEIGHT_SLOT_INITIAL_CAPACITY)
+                .expect("height slot capacity is non-zero"),
+            height_stride_words: HEIGHT_SLOT_MIN_STRIDE_WORDS,
+            dirty_ordinals: {
+                let mut buffer = RawBufferVec::new(BufferUsages::STORAGE);
+                buffer.set_label(Some("thessa-cbt-dirty-ordinals"));
+                buffer
+            },
+            last_published_metadata: Vec::new(),
+            dirty_count: 0,
         }
     }
 }
@@ -243,7 +409,7 @@ impl CbtGpuBuffers {
         self.active_triangles.buffer()
     }
 
-    /// Uniform-compatible `[leaf_count, vertices_per_patch, radius_bits, 0]`.
+    /// Uniform-compatible `[leaf_count, vertices_per_patch, radius_bits, dirty_count]`.
     pub fn params_buffer(&self) -> Option<&Buffer> {
         self.params.buffer()
     }
@@ -264,6 +430,20 @@ impl CbtGpuBuffers {
 
     pub fn leaf_count(&self) -> u32 {
         self.leaf_count
+    }
+
+    /// Compact material storage telemetry: `(wire_bytes, decoded_bytes,
+    /// encode_secs, pages_encoded)`. `None` before the material array is
+    /// created; wire is a residency gauge, the rest are lifetimes.
+    pub fn material_microstore_stats(&self) -> Option<(u64, u64, f64, u64)> {
+        self.material_array.as_ref().map(|array| {
+            (
+                array.microstore_wire_bytes(),
+                array.microstore_decoded_bytes(),
+                array.microstore_encode_secs(),
+                array.microstore_pages_encoded(),
+            )
+        })
     }
 
     pub fn patches_generated_for(&self) -> Option<u64> {
@@ -298,6 +478,8 @@ struct CbtGpuClassifier {
     classified_topology_generation: u64,
     classified_pages_generation: u64,
     classified_surface_generation: u64,
+    cached_bind_group: Option<BindGroup>,
+    cached_bind_key: Option<ClassifierBindKey>,
 }
 
 #[derive(Resource)]
@@ -306,6 +488,8 @@ struct CbtGpuRasterPipeline {
     pipeline_layout: PipelineLayout,
     shader: ShaderModule,
     pipelines: HashMap<TextureFormat, RenderPipeline>,
+    cached_bind_group: Option<BindGroup>,
+    cached_bind_key: Option<RasterBindKey>,
 }
 
 #[cfg(feature = "mesh-shaders")]
@@ -330,7 +514,7 @@ struct Params {
     leaf_count: u32,
     vertices_per_patch: u32,
     radius_bits: u32,
-    _padding: u32,
+    dirty_count: u32,
 };
 
 struct DrawCommand {
@@ -347,31 +531,41 @@ struct DrawCommand {
 @group(0) @binding(4) var<storage, read_write> vertices: array<vec4<f32>>;
 @group(0) @binding(5) var<uniform> params: Params;
 @group(0) @binding(6) var<storage, read> tile_frames: array<CbtTileFrame>;
+@group(0) @binding(7) var<storage, read> dirty_ordinals: array<u32>;
 
 @compute @workgroup_size(64)
-fn build_geometry(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let index = gid.x;
-    let total = params.leaf_count * params.vertices_per_patch;
+fn build_geometry(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    // Wide dispatches fan out over y (see `dispatch_extent` on the Rust
+    // side); the workgroup grid is x-major, so linearize across it.
+    let index = gid.y * (num_wg.x * 64u) + gid.x;
+    let total = params.dirty_count * params.vertices_per_patch;
     if (index >= total) {
         return;
     }
-    let ordinal = index / params.vertices_per_patch;
+    // Dirty-stream index -> leaf ordinal -> ordinal-indexed vertex slot.
+    // The vertex/patch/metadata buffers stay ordinal-indexed; only the
+    // dispatch iterates the dirty prefix.
+    let ordinal = dirty_ordinals[index / params.vertices_per_patch];
     let local = index % params.vertices_per_patch;
+    let vbase = ordinal * params.vertices_per_patch + local;
     let page = page_metadata[ordinal];
     if (local == 0u) {
         patches[ordinal] = leaves[ordinal];
     }
     if (page.z == 0u) {
-        vertices[index * 2u] = vec4(0.0);
-        vertices[index * 2u + 1u] = vec4(0.0);
+        vertices[vbase * 2u] = vec4(0.0);
+        vertices[vbase * 2u + 1u] = vec4(0.0);
         return;
     }
     let gx = local % 33u;
     let gy = local / 33u;
     let uv = vec2(f32(gx) / 32.0, f32(gy) / 32.0);
     let sample = cbt_surface_sample(tile_frames[ordinal].geometry, page, uv);
-    vertices[index * 2u] = vec4(sample.local_position, 1.0);
-    vertices[index * 2u + 1u] = vec4(sample.normal, sample.height);
+    vertices[vbase * 2u] = vec4(sample.local_position, 1.0);
+    vertices[vbase * 2u + 1u] = vec4(sample.normal, sample.height);
 }
 "#
 );
@@ -525,9 +719,12 @@ var<workgroup> selected_offset: u32;
 @compute @workgroup_size(64)
 fn classify_active(
     @builtin(workgroup_id) group: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
     @builtin(local_invocation_index) lane: u32,
 ) {
-    let ordinal = group.x;
+    // Wide dispatches fan out over y (see `dispatch_extent` on the Rust
+    // side): linearize the x-major workgroup grid back into one ordinal.
+    let ordinal = group.y * num_wg.x + group.x;
     if (lane == 0u) {
         selected_count = 0u;
         if (ordinal < params.leaf_count && page_metadata[ordinal].z != 0u) {
@@ -922,7 +1119,8 @@ impl Plugin for CbtRenderPlugin {
                 .add_plugins(ExtractResourcePlugin::<CbtRenderSurface>::default())
                 .add_plugins(ExtractResourcePlugin::<CbtRenderMaterial>::default())
                 .add_plugins(ExtractResourcePlugin::<CbtRenderMaterialPages>::default())
-                .add_plugins(ExtractResourcePlugin::<CbtGpuPresentation>::default());
+                .add_plugins(ExtractResourcePlugin::<CbtGpuPresentation>::default())
+                .add_plugins(ExtractResourcePlugin::<MaterialStorageSetting>::default());
         }
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app.init_gpu_resource::<CbtGpuBuffers>();
@@ -969,6 +1167,7 @@ fn init_cbt_gpu_pipeline(mut commands: bevy::prelude::Commands, device: Res<Rend
             storage_binding(3, true),
             storage_binding(4, false),
             storage_binding(6, true),
+            storage_binding(7, true),
             BindGroupLayoutEntry {
                 binding: 5,
                 visibility: ShaderStages::COMPUTE,
@@ -1355,12 +1554,16 @@ fn init_cbt_gpu_pipeline(mut commands: bevy::prelude::Commands, device: Res<Rend
         classified_topology_generation: u64::MAX,
         classified_pages_generation: u64::MAX,
         classified_surface_generation: u64::MAX,
+        cached_bind_group: None,
+        cached_bind_key: None,
     });
     commands.insert_resource(CbtGpuRasterPipeline {
         bind_group_layout: raster_bind_group_layout,
         pipeline_layout: raster_pipeline_layout,
         shader: raster_shader,
         pipelines: HashMap::default(),
+        cached_bind_group: None,
+        cached_bind_key: None,
     });
 }
 
@@ -1387,12 +1590,238 @@ fn pack_page_residuals(page: &HeightPage, output: &mut Vec<u32>) -> u32 {
     offset
 }
 
+/// Packed words for one GPU height page (`33 x 33` quantized residuals,
+/// two `i16` per word). The GPU path always bakes `33`-grid pages; the
+/// stride only grows if a larger page is ever published (rare full
+/// re-upload, same cost as the old rebuild-everything path).
+const HEIGHT_SLOT_MIN_STRIDE_WORDS: usize = (GPU_GRID_SIZE * GPU_GRID_SIZE).div_ceil(2);
+const HEIGHT_SLOT_INITIAL_CAPACITY: usize = 1024;
+const HEIGHT_SLOT_MAX_CAPACITY: usize = 8192;
+
+fn height_page_words(page: &HeightPage) -> usize {
+    page.residuals().len().div_ceil(2).max(1)
+}
+
+fn height_leaf_node_id(record: &CbtLeafRecord) -> u64 {
+    u64::from(record[0]) | (u64::from(record[1]) << 32)
+}
+
+fn height_leaf_renderable(depth: u32) -> bool {
+    // Same predicate the old rebuild-everything loop used (`depth < 3`
+    // short-circuits before the subtraction); missing pages stay `[0; 4]`
+    // so the shader culls those leaves exactly as before.
+    depth >= 3 && (depth - 3).is_multiple_of(2)
+}
+
+/// Upload height pages through stable GPU slots instead of rebuilding every
+/// page on each arrival.
+///
+/// `node_id -> slot` is stable across topology reorders (the small
+/// per-ordinal metadata is rewritten to reference unchanged word offsets),
+/// so a reorder uploads no height data at all. A new or changed page packs
+/// and uploads exactly one `stride` range via `write_buffer_range`. A full
+/// re-upload happens only when the slot table grows or the stride changes.
+/// `leaf_records` is rewritten only when the topology itself changed.
+///
+/// Returns the per-ordinal metadata referencing stable word offsets, plus
+/// the dirty ordinal list for the geometry dispatch.
+fn sync_height_slots(
+    gpu: &mut CbtGpuBuffers,
+    device: &RenderDevice,
+    queue: &RenderQueue,
+    records: &[CbtLeafRecord],
+    pages: &CbtRenderPages,
+    topology_changed: bool,
+    surface_changed: bool,
+) -> (Vec<[u32; 4]>, Vec<u32>) {
+    // Desired resident pages in topology order with per-page versions.
+    let mut desired: Vec<(u64, u64)> = Vec::with_capacity(records.len());
+    let mut stride = HEIGHT_SLOT_MIN_STRIDE_WORDS;
+    for record in records {
+        if !height_leaf_renderable(record[2]) {
+            continue;
+        }
+        let node_id = height_leaf_node_id(record);
+        let Some(version) = pages.page_version(node_id) else {
+            continue;
+        };
+        let Some(page) = pages.get(node_id) else {
+            continue;
+        };
+        stride = stride.max(height_page_words(page));
+        desired.push((node_id, version));
+    }
+
+    let mut full_upload = false;
+    if desired.len() > gpu.height_slots.capacity() {
+        let grown = desired
+            .len()
+            .next_power_of_two()
+            .max(gpu.height_slots.capacity() * 2)
+            .clamp(1, HEIGHT_SLOT_MAX_CAPACITY);
+        gpu.height_slots = SlotCache::new(grown).expect("height slot capacity is non-zero");
+        full_upload = true;
+    }
+    if stride != gpu.height_stride_words {
+        gpu.height_stride_words = stride;
+        full_upload = true;
+    }
+    let changes: Vec<SlotChange> = gpu.height_slots.update(&desired);
+
+    // Size the CPU mirror to the full slot table; the GPU buffer follows via
+    // `reserve` (which reallocates — and drops previous contents — only on
+    // growth, in which case a full upload is required anyway).
+    let target_len = gpu.height_slots.capacity() * gpu.height_stride_words;
+    if gpu.page_residuals.len() != target_len {
+        gpu.page_residuals.clear();
+        gpu.page_residuals.reserve_internal(target_len);
+        gpu.page_residuals
+            .extend(std::iter::repeat_n(0, target_len));
+        full_upload = true;
+    }
+    let buffer_id_before = gpu.page_residuals.buffer().map(|buffer| buffer.id());
+    gpu.page_residuals.reserve(target_len, device);
+    if gpu.page_residuals.buffer().map(|buffer| buffer.id()) != buffer_id_before {
+        full_upload = true;
+    }
+
+    if full_upload {
+        // Zero the mirror (grow/stride change may have left stale words or a
+        // fresh zeroed allocation) and pack every resident page once.
+        // Desired pages beyond a clamped capacity have no slot and stay
+        // unreferenced (their metadata is `[0; 4]`, culled by the shader).
+        for index in 0..target_len {
+            gpu.page_residuals.set(index as u32, 0);
+        }
+        for (node_id, _) in &desired {
+            if let Some(slot) = gpu.height_slots.slot(*node_id) {
+                write_height_slot(gpu, pages, *node_id, slot);
+            }
+        }
+        if target_len == 0 {
+            gpu.page_residuals.extend([0]);
+        }
+        gpu.page_residuals.write_buffer(device, queue);
+    } else {
+        // Incremental path: only changed slots touch the CPU mirror and the
+        // GPU buffer. Topology reorder with unchanged pages yields zero
+        // changes here — no height upload at all.
+        let mut fell_back_to_full = false;
+        for (index, change) in changes.iter().enumerate() {
+            write_height_slot(gpu, pages, change.node_id, change.slot);
+            if fell_back_to_full {
+                continue;
+            }
+            let start = change.slot as usize * gpu.height_stride_words;
+            let end = start + gpu.height_stride_words;
+            if gpu
+                .page_residuals
+                .write_buffer_range(queue, start..end)
+                .is_err()
+            {
+                // Range upload requires an initialized buffer covering the
+                // range; pack the remaining changes into the mirror first so
+                // the full upload below carries current data for every slot,
+                // rather than leaving later slots stale.
+                for rest in &changes[index + 1..] {
+                    write_height_slot(gpu, pages, rest.node_id, rest.slot);
+                }
+                gpu.page_residuals.write_buffer(device, queue);
+                fell_back_to_full = true;
+            }
+        }
+        if gpu.page_residuals.is_empty() {
+            // Keep the binding valid while nothing is resident yet.
+            gpu.page_residuals.extend([0]);
+            gpu.page_residuals.write_buffer(device, queue);
+        }
+    }
+
+    if topology_changed {
+        gpu.leaf_records.clear();
+        gpu.leaf_records.extend(records.iter().copied());
+        gpu.leaf_records.write_buffer(device, queue);
+    }
+
+    // Per-ordinal metadata is small (4 words per leaf); rebuild it to
+    // reference the stable slot offsets. Missing pages stay `[0; 4]` so the
+    // shader culls those leaves exactly as before.
+    let mut metadata = Vec::with_capacity(records.len());
+    let mut node_to_ordinal = std::collections::BTreeMap::new();
+    for (ordinal, record) in records.iter().enumerate() {
+        if !height_leaf_renderable(record[2]) {
+            metadata.push([0; 4]);
+            continue;
+        }
+        let node_id = height_leaf_node_id(record);
+        let (Some(page), Some(slot)) = (pages.get(node_id), gpu.height_slots.slot(node_id)) else {
+            metadata.push([0; 4]);
+            continue;
+        };
+        node_to_ordinal.insert(node_id, ordinal as u32);
+        metadata.push([
+            page.base_height_m().to_bits(),
+            page.residual_scale_m().to_bits(),
+            page.grid_size(),
+            (slot as usize * gpu.height_stride_words) as u32,
+        ]);
+    }
+
+    // Dirty ordinals drive the geometry dispatch: a topology or surface
+    // change moves every ordinal (full cover); otherwise exactly the
+    // ordinals whose metadata or slot changed. One arriving page therefore
+    // dispatches one patch, not the whole cover.
+    let force_full = topology_changed || surface_changed || full_upload;
+    let dirty = compute_dirty_ordinals(
+        &metadata,
+        &gpu.last_published_metadata,
+        &changes,
+        &node_to_ordinal,
+        force_full,
+    );
+    gpu.last_published_metadata = metadata.clone();
+    gpu.dirty_ordinals.clear();
+    if dirty.is_empty() {
+        // Keep the binding valid; the dispatch skips on `dirty_count == 0`.
+        gpu.dirty_ordinals.extend([0]);
+    } else {
+        gpu.dirty_ordinals.extend(dirty.iter().copied());
+    }
+    gpu.dirty_ordinals.write_buffer(device, queue);
+    gpu.dirty_count = dirty.len() as u32;
+    (metadata, dirty)
+}
+
+/// Pack one resident page into its slot range of the residuals mirror.
+/// Pages larger than the stride cannot occur without a stride change first
+/// (which forces a full upload); the words are still truncated defensively
+/// so a slot never overlaps its neighbour.
+fn write_height_slot(gpu: &mut CbtGpuBuffers, pages: &CbtRenderPages, node_id: u64, slot: u32) {
+    let Some(page) = pages.get(node_id) else {
+        return;
+    };
+    let mut packed = Vec::with_capacity(height_page_words(page));
+    pack_page_residuals(page, &mut packed);
+    let start = slot as usize * gpu.height_stride_words;
+    for (offset, word) in packed.iter().enumerate() {
+        if offset >= gpu.height_stride_words {
+            break;
+        }
+        gpu.page_residuals.set((start + offset) as u32, *word);
+    }
+    for offset in packed.len()..gpu.height_stride_words {
+        gpu.page_residuals.set((start + offset) as u32, 0);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn prepare_cbt_gpu_buffers(
     topology: Option<Res<CbtRenderTopology>>,
     material: Option<Res<CbtRenderMaterial>>,
     material_pages: Res<CbtRenderMaterialPages>,
     pages: Option<Res<CbtRenderPages>>,
     surface: Option<Res<CbtRenderSurface>>,
+    storage: Option<Res<MaterialStorageSetting>>,
     mut gpu: ResMut<CbtGpuBuffers>,
     device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
@@ -1406,9 +1835,10 @@ fn prepare_cbt_gpu_buffers(
             r[2] >= 3 && r[2] <= 37 && (r[2] - 3).is_multiple_of(2) && pages.contains_page(id)
         });
     if surface.gpu_raster_enabled() {
+        let policy = storage.map(|s| s.0).unwrap_or_default();
         gpu.material_array
             .get_or_insert_with(|| material_render::MaterialArray::new(&device))
-            .prepare(&topology, &material_pages, &device, &queue);
+            .prepare_storage(&topology, &material_pages, &device, &queue, policy);
     }
     if let Some(material) = material {
         let values: Vec<_> = std::iter::once(material.ambient_lux)
@@ -1497,10 +1927,14 @@ fn prepare_cbt_gpu_buffers(
                 let relative = transform
                     .transform_point3(bevy::math::DVec3::from_array(anchor.anchor_body_m))
                     .to_array();
-                for axis in 0..3 {
-                    frame.anchor_hi_m[axis] = relative[axis] as f32;
-                    frame.anchor_lo_m[axis] =
-                        (relative[axis] - f64::from(frame.anchor_hi_m[axis])) as f32;
+                for (axis, (hi, rel)) in frame
+                    .anchor_hi_m
+                    .iter_mut()
+                    .zip(relative.iter())
+                    .enumerate()
+                {
+                    *hi = *rel as f32;
+                    frame.anchor_lo_m[axis] = (*rel - f64::from(*hi)) as f32;
                 }
                 [
                     frame.anchor_hi_m,
@@ -1537,37 +1971,20 @@ fn prepare_cbt_gpu_buffers(
     }
 
     let records = topology.records();
-    let mut metadata = Vec::with_capacity(records.len());
-    let mut residuals = Vec::new();
-    for record in records {
-        let depth = record[2];
-        if depth < 3 || !(depth - 3).is_multiple_of(2) {
-            metadata.push([0; 4]);
-            continue;
-        }
-        let node_id = u64::from(record[0]) | (u64::from(record[1]) << 32);
-        let Some(page) = pages.get(node_id) else {
-            metadata.push([0; 4]);
-            continue;
-        };
-        let word_offset = pack_page_residuals(page, &mut residuals);
-        metadata.push([
-            page.base_height_m().to_bits(),
-            page.residual_scale_m().to_bits(),
-            page.grid_size(),
-            word_offset,
-        ]);
-    }
-    // Keep the binding valid even while topology exists but no tile page has
-    // finished streaming. The shader branches on `grid_size == 0` and emits
-    // zero-count draw commands for those leaves.
-    if residuals.is_empty() {
-        residuals.push(0);
-    }
-
-    gpu.leaf_records.clear();
-    gpu.leaf_records.extend(records.iter().copied());
-    gpu.leaf_records.write_buffer(&device, &queue);
+    let topology_changed = gpu.topology_generation != topology.generation();
+    let surface_changed = gpu.surface_generation != surface.generation();
+    // Stable slot upload: one arriving page rewrites a single slot range and
+    // the small metadata; a topology reorder with unchanged pages uploads no
+    // height data at all. The dirty ordinal list sizes the geometry dispatch.
+    let (metadata, _) = sync_height_slots(
+        &mut gpu,
+        &device,
+        &queue,
+        records,
+        &pages,
+        topology_changed,
+        surface_changed,
+    );
 
     // Compute owns these outputs. Reserve GPU storage without constructing
     // and uploading a CPU mirror of zeros on each streamed page batch.
@@ -1579,10 +1996,6 @@ fn prepare_cbt_gpu_buffers(
     gpu.page_metadata.clear();
     gpu.page_metadata.extend(metadata);
     gpu.page_metadata.write_buffer(&device, &queue);
-
-    gpu.page_residuals.clear();
-    gpu.page_residuals.extend(residuals);
-    gpu.page_residuals.write_buffer(&device, &queue);
 
     if !surface.gpu_mesh_enabled() {
         gpu.vertices
@@ -1596,11 +2009,12 @@ fn prepare_cbt_gpu_buffers(
     }
 
     gpu.params.clear();
+    let dirty_count = gpu.dirty_count;
     gpu.params.push([
         records.len() as u32,
         GPU_VERTEX_COUNT_PER_PATCH as u32,
         surface.radius_m().to_bits(),
-        0,
+        dirty_count,
     ]);
     gpu.params.write_buffer(&device, &queue);
 
@@ -1626,6 +2040,7 @@ fn dispatch_cbt_geometry(
         return;
     }
     if gpu.leaf_count == 0
+        || gpu.dirty_count == 0
         || (gpu.generated_topology_generation == gpu.topology_generation
             && gpu.generated_pages_generation == gpu.pages_generation
             && gpu.generated_surface_generation == gpu.surface_generation)
@@ -1640,6 +2055,7 @@ fn dispatch_cbt_geometry(
         Some(vertex_buffer),
         Some(params_buffer),
         Some(frames_buffer),
+        Some(dirty_buffer),
     ) = (
         gpu.leaf_records.buffer(),
         gpu.patch_records.buffer(),
@@ -1648,44 +2064,67 @@ fn dispatch_cbt_geometry(
         gpu.vertices.buffer(),
         gpu.params.buffer(),
         gpu.tile_frames.buffer(),
+        gpu.dirty_ordinals.buffer(),
     )
     else {
         return;
     };
-    let bind_group = context.render_device().create_bind_group(
-        "thessa-cbt-geometry-bind-group",
-        &pipeline.bind_group_layout,
-        &[
-            BindGroupEntry {
-                binding: 0,
-                resource: BindingResource::Buffer(leaf_buffer.as_entire_buffer_binding()),
-            },
-            BindGroupEntry {
-                binding: 1,
-                resource: BindingResource::Buffer(patch_buffer.as_entire_buffer_binding()),
-            },
-            BindGroupEntry {
-                binding: 2,
-                resource: BindingResource::Buffer(metadata_buffer.as_entire_buffer_binding()),
-            },
-            BindGroupEntry {
-                binding: 3,
-                resource: BindingResource::Buffer(residual_buffer.as_entire_buffer_binding()),
-            },
-            BindGroupEntry {
-                binding: 4,
-                resource: BindingResource::Buffer(vertex_buffer.as_entire_buffer_binding()),
-            },
-            BindGroupEntry {
-                binding: 5,
-                resource: BindingResource::Buffer(params_buffer.as_entire_buffer_binding()),
-            },
-            BindGroupEntry {
-                binding: 6,
-                resource: BindingResource::Buffer(frames_buffer.as_entire_buffer_binding()),
-            },
-        ],
-    );
+    let key = GeometryBindKey {
+        leaf: leaf_buffer.id(),
+        patch: patch_buffer.id(),
+        metadata: metadata_buffer.id(),
+        residual: residual_buffer.id(),
+        vertex: vertex_buffer.id(),
+        params: params_buffer.id(),
+        frames: frames_buffer.id(),
+        dirty: dirty_buffer.id(),
+    };
+    // Rebuild only when a buffer object was reallocated (new BufferId).
+    // Contents changes via queue writes keep the same binding.
+    if gpu.geometry_bind_key != Some(key) {
+        gpu.geometry_bind_group = Some(context.render_device().create_bind_group(
+            "thessa-cbt-geometry-bind-group",
+            &pipeline.bind_group_layout,
+            &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::Buffer(leaf_buffer.as_entire_buffer_binding()),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Buffer(patch_buffer.as_entire_buffer_binding()),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::Buffer(metadata_buffer.as_entire_buffer_binding()),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::Buffer(residual_buffer.as_entire_buffer_binding()),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::Buffer(vertex_buffer.as_entire_buffer_binding()),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: BindingResource::Buffer(params_buffer.as_entire_buffer_binding()),
+                },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: BindingResource::Buffer(frames_buffer.as_entire_buffer_binding()),
+                },
+                BindGroupEntry {
+                    binding: 7,
+                    resource: BindingResource::Buffer(dirty_buffer.as_entire_buffer_binding()),
+                },
+            ],
+        ));
+        gpu.geometry_bind_key = Some(key);
+    }
+    let Some(bind_group) = gpu.geometry_bind_group.clone() else {
+        return;
+    };
     let diagnostics = context.diagnostic_recorder();
     {
         let mut pass = context
@@ -1699,10 +2138,15 @@ fn dispatch_cbt_geometry(
             .map(|diagnostics| diagnostics.pass_span(&mut pass, "terrain_geometry"));
         pass.set_pipeline(&pipeline.pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
+        // Dirty-only dispatch: one arriving page regenerates one patch
+        // (1089 verts), not the whole cover. The shader guards on
+        // `dirty_count` (workgroups round up past it) and addresses the
+        // ordinal-indexed vertex buffer through the dirty list.
         let total = gpu
-            .leaf_count
+            .dirty_count
             .saturating_mul(GPU_VERTEX_COUNT_PER_PATCH as u32);
-        pass.dispatch_workgroups(total.div_ceil(64), 1, 1);
+        let (groups_x, groups_y) = dispatch_extent(total.div_ceil(64));
+        pass.dispatch_workgroups(groups_x, groups_y, 1);
         if let Some(pass_span) = pass_span {
             pass_span.end(&mut pass);
         }
@@ -1712,6 +2156,7 @@ fn dispatch_cbt_geometry(
     gpu.generated_surface_generation = gpu.surface_generation;
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_cbt_geometry(
     presentation: Res<CbtGpuPresentation>,
     surface: Option<Res<CbtRenderSurface>>,
@@ -1824,9 +2269,12 @@ fn draw_cbt_geometry(
                 });
         raster.pipelines.insert(format, pipeline);
     }
+    // Clone out of the map so the bind-group cache below can mutably
+    // borrow `raster` without holding the map borrow across it.
     let pipeline = raster
         .pipelines
         .get(&format)
+        .cloned()
         .expect("CBT raster pipeline inserted above");
     // Do not submit grey fallback-textured CBT patches while the canonical
     // albedo is still loading. Main-world visibility waits for the successful
@@ -1855,74 +2303,103 @@ fn draw_cbt_geometry(
     let Some(material_slots) = material_array.slots.buffer() else {
         return;
     };
-    let bind_group = context.render_device().create_bind_group(
-        "thessa-cbt-raster-bind-group",
-        &raster.bind_group_layout,
-        &[
-            BindGroupEntry {
-                binding: 0,
-                resource: view_binding.clone(),
-            },
-            BindGroupEntry {
-                binding: 1,
-                resource: BindingResource::Buffer(surface_buffer.as_entire_buffer_binding()),
-            },
-            BindGroupEntry {
-                binding: 2,
-                resource: BindingResource::Buffer(vertex_buffer.as_entire_buffer_binding()),
-            },
-            BindGroupEntry {
-                binding: 3,
-                resource: BindingResource::Buffer(metadata_buffer.as_entire_buffer_binding()),
-            },
-            BindGroupEntry {
-                binding: 4,
-                resource: BindingResource::Buffer(params_buffer.as_entire_buffer_binding()),
-            },
-            BindGroupEntry {
-                binding: 5,
-                resource: BindingResource::Buffer(
-                    active_triangles_buffer.as_entire_buffer_binding(),
-                ),
-            },
-            BindGroupEntry {
-                binding: 8,
-                resource: BindingResource::Buffer(leaf_buffer.as_entire_buffer_binding()),
-            },
-            BindGroupEntry {
-                binding: 6,
-                resource: BindingResource::TextureView(&albedo_image.texture_view),
-            },
-            BindGroupEntry {
-                binding: 7,
-                resource: BindingResource::Sampler(&albedo_image.sampler),
-            },
-            BindGroupEntry {
-                binding: 9,
-                resource: BindingResource::Buffer(lighting_buffer.as_entire_buffer_binding()),
-            },
-            BindGroupEntry {
-                binding: 10,
-                resource: BindingResource::TextureView(&roughness_image.texture_view),
-            },
-            BindGroupEntry {
-                binding: 11,
-                resource: BindingResource::Buffer(frames_buffer.as_entire_buffer_binding()),
-            },
-            BindGroupEntry {
-                binding: 12,
-                resource: BindingResource::TextureView(&material_array.view),
-            },
-            BindGroupEntry {
-                binding: 13,
-                resource: BindingResource::Sampler(&material_array.sampler),
-            },
-            BindGroupEntry {
-                binding: 14,
-                resource: BindingResource::Buffer(material_slots.as_entire_buffer_binding()),
-            },
-        ],
-    );
+    let Some(view_uniform_id) = view_uniform_buffer_id(&view_uniforms) else {
+        return;
+    };
+    let raster_key = RasterBindKey {
+        view_uniforms: view_uniform_id,
+        surface: surface_buffer.id(),
+        vertex: vertex_buffer.id(),
+        metadata: metadata_buffer.id(),
+        params: params_buffer.id(),
+        active_triangles: active_triangles_buffer.id(),
+        leaf: leaf_buffer.id(),
+        lighting: lighting_buffer.id(),
+        frames: frames_buffer.id(),
+        material_slots: material_slots.id(),
+        albedo_view: albedo_image.texture_view.id(),
+        albedo_sampler: albedo_image.sampler.id(),
+        roughness_view: roughness_image.texture_view.id(),
+        roughness_sampler: roughness_image.sampler.id(),
+        material_view: material_array.view.id(),
+        material_sampler: material_array.sampler.id(),
+    };
+    // Camera motion flows through the dynamic view offset; rebuild only on
+    // buffer/texture identity change (realloc or residency turnover).
+    if raster.cached_bind_key != Some(raster_key) {
+        raster.cached_bind_group = Some(context.render_device().create_bind_group(
+            "thessa-cbt-raster-bind-group",
+            &raster.bind_group_layout,
+            &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: view_binding.clone(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Buffer(surface_buffer.as_entire_buffer_binding()),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::Buffer(vertex_buffer.as_entire_buffer_binding()),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::Buffer(metadata_buffer.as_entire_buffer_binding()),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::Buffer(params_buffer.as_entire_buffer_binding()),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: BindingResource::Buffer(
+                        active_triangles_buffer.as_entire_buffer_binding(),
+                    ),
+                },
+                BindGroupEntry {
+                    binding: 8,
+                    resource: BindingResource::Buffer(leaf_buffer.as_entire_buffer_binding()),
+                },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: BindingResource::TextureView(&albedo_image.texture_view),
+                },
+                BindGroupEntry {
+                    binding: 7,
+                    resource: BindingResource::Sampler(&albedo_image.sampler),
+                },
+                BindGroupEntry {
+                    binding: 9,
+                    resource: BindingResource::Buffer(lighting_buffer.as_entire_buffer_binding()),
+                },
+                BindGroupEntry {
+                    binding: 10,
+                    resource: BindingResource::TextureView(&roughness_image.texture_view),
+                },
+                BindGroupEntry {
+                    binding: 11,
+                    resource: BindingResource::Buffer(frames_buffer.as_entire_buffer_binding()),
+                },
+                BindGroupEntry {
+                    binding: 12,
+                    resource: BindingResource::TextureView(&material_array.view),
+                },
+                BindGroupEntry {
+                    binding: 13,
+                    resource: BindingResource::Sampler(&material_array.sampler),
+                },
+                BindGroupEntry {
+                    binding: 14,
+                    resource: BindingResource::Buffer(material_slots.as_entire_buffer_binding()),
+                },
+            ],
+        ));
+        raster.cached_bind_key = Some(raster_key);
+    }
+    let Some(bind_group) = raster.cached_bind_group.clone() else {
+        return;
+    };
     let supports_indirect = render_adapter
         .get_downlevel_capabilities()
         .flags
@@ -1946,60 +2423,91 @@ fn draw_cbt_geometry(
         || classifier.classified_pages_generation != gpu.pages_generation
         || classifier.classified_surface_generation != gpu.surface_generation;
     if needs_classification {
-        let classifier_bind_group = context.render_device().create_bind_group(
-            "thessa-cbt-classifier-bind-group",
-            &classifier.bind_group_layout,
-            &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: BindingResource::Buffer(metadata_buffer.as_entire_buffer_binding()),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::Buffer(vertex_buffer.as_entire_buffer_binding()),
-                },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: BindingResource::Buffer(
-                        active_triangles_buffer.as_entire_buffer_binding(),
-                    ),
-                },
-                BindGroupEntry {
-                    binding: 3,
-                    resource: BindingResource::Buffer(
-                        active_count_buffer.as_entire_buffer_binding(),
-                    ),
-                },
-                BindGroupEntry {
-                    binding: 4,
-                    resource: BindingResource::Buffer(draw_buffer.as_entire_buffer_binding()),
-                },
-                BindGroupEntry {
-                    binding: 5,
-                    resource: view_binding,
-                },
-                BindGroupEntry {
-                    binding: 6,
-                    resource: BindingResource::Buffer(surface_buffer.as_entire_buffer_binding()),
-                },
-                BindGroupEntry {
-                    binding: 7,
-                    resource: BindingResource::Buffer(params_buffer.as_entire_buffer_binding()),
-                },
-                BindGroupEntry {
-                    binding: 8,
-                    resource: BindingResource::Buffer(leaf_buffer.as_entire_buffer_binding()),
-                },
-                BindGroupEntry {
-                    binding: 9,
-                    resource: BindingResource::Buffer(frames_buffer.as_entire_buffer_binding()),
-                },
-                BindGroupEntry {
-                    binding: 10,
-                    resource: BindingResource::Buffer(grid_history_buffer.as_entire_buffer_binding()),
-                },
-            ],
-        );
+        // The bind group itself is independent of the view matrix: view
+        // changes ride the dynamic offset below. Rebuild only when a bound
+        // buffer object is reallocated.
+        let classifier_key =
+            view_uniform_buffer_id(&view_uniforms).map(|view_uniforms| ClassifierBindKey {
+                view_uniforms,
+                metadata: metadata_buffer.id(),
+                vertex: vertex_buffer.id(),
+                active_triangles: active_triangles_buffer.id(),
+                active_count: active_count_buffer.id(),
+                draw: draw_buffer.id(),
+                surface: surface_buffer.id(),
+                params: params_buffer.id(),
+                leaf: leaf_buffer.id(),
+                frames: frames_buffer.id(),
+                grid_history: grid_history_buffer.id(),
+            });
+        if let Some(key) = classifier_key
+            && classifier.cached_bind_key != Some(key)
+        {
+            classifier.cached_bind_group = Some(context.render_device().create_bind_group(
+                "thessa-cbt-classifier-bind-group",
+                &classifier.bind_group_layout,
+                &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::Buffer(
+                            metadata_buffer.as_entire_buffer_binding(),
+                        ),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: BindingResource::Buffer(vertex_buffer.as_entire_buffer_binding()),
+                    },
+                    BindGroupEntry {
+                        binding: 2,
+                        resource: BindingResource::Buffer(
+                            active_triangles_buffer.as_entire_buffer_binding(),
+                        ),
+                    },
+                    BindGroupEntry {
+                        binding: 3,
+                        resource: BindingResource::Buffer(
+                            active_count_buffer.as_entire_buffer_binding(),
+                        ),
+                    },
+                    BindGroupEntry {
+                        binding: 4,
+                        resource: BindingResource::Buffer(draw_buffer.as_entire_buffer_binding()),
+                    },
+                    BindGroupEntry {
+                        binding: 5,
+                        resource: view_binding,
+                    },
+                    BindGroupEntry {
+                        binding: 6,
+                        resource: BindingResource::Buffer(
+                            surface_buffer.as_entire_buffer_binding(),
+                        ),
+                    },
+                    BindGroupEntry {
+                        binding: 7,
+                        resource: BindingResource::Buffer(params_buffer.as_entire_buffer_binding()),
+                    },
+                    BindGroupEntry {
+                        binding: 8,
+                        resource: BindingResource::Buffer(leaf_buffer.as_entire_buffer_binding()),
+                    },
+                    BindGroupEntry {
+                        binding: 9,
+                        resource: BindingResource::Buffer(frames_buffer.as_entire_buffer_binding()),
+                    },
+                    BindGroupEntry {
+                        binding: 10,
+                        resource: BindingResource::Buffer(
+                            grid_history_buffer.as_entire_buffer_binding(),
+                        ),
+                    },
+                ],
+            ));
+            classifier.cached_bind_key = Some(key);
+        }
+        let Some(classifier_bind_group) = classifier.cached_bind_group.clone() else {
+            return;
+        };
         {
             let mut pass = context
                 .command_encoder()
@@ -2023,7 +2531,8 @@ fn draw_cbt_geometry(
                 .map(|diagnostics| diagnostics.pass_span(&mut pass, "terrain_classifier"));
             pass.set_pipeline(&classifier.classify_pipeline);
             pass.set_bind_group(0, &classifier_bind_group, &[view_uniform_offset.offset]);
-            pass.dispatch_workgroups(gpu.leaf_count(), 1, 1);
+            let (groups_x, groups_y) = dispatch_extent(gpu.leaf_count());
+            pass.dispatch_workgroups(groups_x, groups_y, 1);
             if let Some(pass_span) = pass_span {
                 pass_span.end(&mut pass);
             }
@@ -2068,7 +2577,7 @@ fn draw_cbt_geometry(
     if let Some(viewport) = camera.viewport.as_ref() {
         pass.set_camera_viewport(viewport);
     }
-    pass.set_render_pipeline(pipeline);
+    pass.set_render_pipeline(&pipeline);
     pass.set_bind_group(0, &bind_group, &[view_uniform_offset.offset]);
     // Match the reference's linear vertex stream: one instance, three
     // vertices per active triangle, with vertex_index / 3 selecting the record.
@@ -2080,6 +2589,7 @@ fn draw_cbt_geometry(
 }
 
 #[cfg(feature = "mesh-shaders")]
+#[allow(clippy::too_many_arguments)]
 fn draw_cbt_mesh_geometry(
     presentation: Res<CbtGpuPresentation>,
     material: Option<Res<CbtRenderMaterial>>,
@@ -2324,6 +2834,45 @@ mod tests {
         assert_eq!(words.len(), 2);
         assert_eq!(words[0] as u16, page.residuals()[0] as u16);
         assert_eq!((words[1] >> 16) as u16, page.residuals()[3] as u16);
+    }
+
+    fn slot_change_for(slot: u32, node_id: u64) -> SlotChange {
+        SlotChange {
+            slot,
+            node_id,
+            generation: 1,
+        }
+    }
+
+    #[test]
+    fn dirty_ordinals_cover_reorder_eviction_and_same_header_content_change() {
+        // Reorder with identical words: nothing is dirty (slots are stable,
+        // the reorder needs no height upload and no new vertices).
+        let words = [[1, 2, 33, 0], [3, 4, 33, 545]];
+        let nodes: std::collections::BTreeMap<u64, u32> = [(11, 0), (22, 1)].into_iter().collect();
+        assert!(compute_dirty_ordinals(&words, &words, &[], &nodes, false).is_empty());
+        // Ordinal content change (eviction, new page, moved leaf).
+        let changed = [[1, 2, 33, 0], [0, 0, 0, 0]];
+        assert_eq!(
+            compute_dirty_ordinals(&changed, &words, &[], &nodes, false),
+            vec![1]
+        );
+        // Same packed header words but fresh slot content: the SlotChange
+        // side-input still marks the ordinal dirty.
+        assert_eq!(
+            compute_dirty_ordinals(&words, &words, &[slot_change_for(0, 11)], &nodes, false),
+            vec![0]
+        );
+        // Topology or surface change regenerates the full cover.
+        assert_eq!(
+            compute_dirty_ordinals(&words, &words, &[], &nodes, true),
+            vec![0, 1]
+        );
+        // First publish (no previous metadata) is a full cover.
+        assert_eq!(
+            compute_dirty_ordinals(&words, &[], &[], &nodes, false),
+            vec![0, 1]
+        );
     }
 }
 

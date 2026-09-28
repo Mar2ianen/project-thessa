@@ -1,5 +1,9 @@
 # 05 — Roadmap: from equations to game
 
+Status: dependency order, not a calendar (M0–M1/M3–M4/M6 partial prototypes;
+M4 stdlib minimum partially shipped; M5 gravity-assist exact-revalidation
+prototype exists, canonical ephemeris and UX still future).
+
 This is a dependency order, not a calendar. A milestone is not complete until
 its state contract, tests, error evidence, and benchmark exist.
 
@@ -12,29 +16,43 @@ its state contract, tests, error evidence, and benchmark exist.
 - atmosphere, panel aero, rigid-body flight, contacts, and SIMD helpers;
 - system baker, validation harnesses, and physics regression suite.
 
-Remaining M0 work includes higher-fidelity ephemeris fitting, body harmonics,
-hyperbolic/parabolic segments, and broader reference-vector coverage.
+Remaining M0 work includes higher-fidelity ephemeris fitting, harmonics
+beyond degree 2 (J2/C22 evaluation landed, gated), hyperbolic/parabolic
+segments, and broader reference-vector coverage.
 
 ## M1 — Controllable vehicle and flight lab — partial/implemented prototype
 
-Implemented: serializable vehicle definitions, 6-DoF starter vehicle, control
-surfaces, actuator dynamics, RCS/propulsion demand, authority runtime, Bevy
-pilot HUD, server snapshots, reset path, and flight traces.
+Implemented: serializable vehicle definitions and procedural body baking, 6-DoF
+starter vehicle, control surfaces and body strips, actuator dynamics,
+RCS/reaction-wheel/propulsion demand, retractable wheel chassis and fold-out
+legs, deployable parachutes, ordered vehicle-part commands, authority runtime,
+Bevy pilot HUD, server snapshots, reset path, and flight traces.
 
-Remaining: complete staging, richer propulsion catalogs, full contact/wheels,
-vehicle editor, and production asset workflow.
+Remaining: stage-definition resolution and action-group routing, per-engine
+control allocation, wheel interactions with dynamic bodies, steering/anti-skid,
+vehicle editor, and production asset workflow. The current articulated wheel
+runtime, its boundaries and acceptance tests are documented in
+[`details/05_PROCEDURAL_LANDING_GEAR.md`](details/05_PROCEDURAL_LANDING_GEAR.md).
 
 ## M2 — Aero, spaceplane, thermal, and structure — partial
 
-Implemented: local panel aero, atmosphere rotation, stall/transonic/supersonic
-reduced-order branches, coefficient tables, control laws, and actuator limits.
+Implemented: procedural wing/body compilation, local panel and fuselage-strip
+aero, composition-aware bulk atmosphere properties, atmosphere rotation,
+stall/transonic/supersonic reduced-order branches, coefficient tables, control
+laws, and actuator limits; a lumped thermal-node network with Sutton-Graves
+heating and radiators; an ideal vehicle power bus; Newtonian shield-disc aero;
+and wing tile-layer mass/thermal nodes.
 
 Remaining:
 
-- expanded wing/flap/spoiler/grid-fin geometry;
+- general flap/spoiler/grid-fin aerodynamic models beyond the current incidence
+  controls and hinged fuselage-strip actuators;
 - wake/occlusion compiler;
 - structural graph and fracture into multiple bodies;
-- thermal graph, entry heating, and material strength coupling;
+- shield thermal protection/ablation and temperature-dependent material
+  strength;
+- structural/thermal coupling, full fluid/resource flow, and detailed
+  electrical-network coupling;
 - water contact and buoyancy;
 - high-fidelity offline reference tables.
 
@@ -47,8 +65,8 @@ authoritative streamed terrain contact via `thessa-collision`
 (Rapier: static trimesh, kinematic terrain, fixed joints, contact
 activation hysteresis, load evidence).
 
-Remaining: player movement, resource nodes, construction, power,
-storage, save/load, and a first factory loop.
+Remaining: player movement, resource nodes, construction, settlement-scale
+power/storage networks, save/load, and a first factory loop.
 
 ## M4 — Surface logistics and automation — partial
 
@@ -57,15 +75,19 @@ server-owned continuations, QuickJS sandbox, typed guidance, typed maneuver
 plans, server execution, and obstacle/site declarations.
 
 Remaining: trucks/trains/aircraft logistics, physical stations and cargo,
-complete guidance standard library, reusable route certification, alarms,
-resource events, and factory integration.
+rest of the guidance standard library past the shipped `Ascent`/`LandAt`/
+`ExecuteManeuver`/`Rendezvous`-approach minimum, reusable route certification,
+alarms, resource events, and factory integration.
 
-## M5 — Nereid system gameplay — future
+## M5 — Nereid system gameplay — partial prototype
+
+Implemented: broad chain/flyby survey, B-plane targeting, variational
+midcourse correction, and L0–L2 mission-replay fixtures in CI. Remaining:
 
 - canonical ephemeris version and long-horizon system validation;
 - system map and transfer-window UX;
 - orbital depots, resource differentiation, and reusable routes;
-- gravity-assist planning using exact revalidation;
+- remaining gravity-assist UX (planner core exists; map/window/assist UX future);
 - eclipse/planetshine gameplay and additional moon content.
 
 ## M6 — Production multiplayer — partial foundation
@@ -80,15 +102,19 @@ and shared warp vote policy exist as a prototype. Future work includes:
 - transport/replication decision and packaging;
 - native cross-platform and WASM/WebGPU smoke coverage.
 
-## M7 — Nuclear age — future
+## M7 — Nuclear age — future gameplay/content
 
-Fission power, nuclear thermal and electric propulsion, radiators, cryogenics,
-maintenance, and the Orthea/Vesper content layer.
+Nuclear-thermal and electric propulsion models exist in the engineering
+backend; the vehicle slice now also includes fission electrical generation and
+area radiators. Cryogenics, resource/thermal integration, automatic heat-load
+coupling, maintenance gameplay, and the Orthea/Vesper content layer remain
+future work.
 
-## M8 — Fusion industrialization — future
+## M8 — Fusion industrialization — future gameplay/content
 
-Isotope separation, breeding chains, pulsed fusion, D–He3, high-power thermal
-systems, and late-game torch-class propulsion.
+Continuous and pulsed fusion propulsion models exist in the engineering
+backend. Isotope separation, breeding chains, D–He3 resource chains, high-power
+thermal systems, and late-game torch gameplay remain future work.
 
 ## M9 — BC endgame — future
 

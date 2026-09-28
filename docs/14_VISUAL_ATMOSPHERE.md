@@ -1,14 +1,20 @@
 # Visual Atmosphere Architecture
 
-Status: partial implementation. Shared optics and graphics-settings crates are
-implemented; the sections below describe the remaining rendering direction.
+Status: implemented raster/LUT plus baked shells (cloud decks, gas-giant bands,
+aurora oval/curtains) plus field-first engine plume; volumetric clouds,
+weather coupling, and full Solari remain future. The TOML example in §15 is
+archival — normative values live in `graphics.toml` + `crates/graphics`.
 
-Current source of truth: `crates/atmosphere`, `crates/graphics`, and
-`apps/client/src/atmosphere.rs`. The client currently uses Bevy raster/LUT
+Current source of truth: `crates/atmosphere`, `crates/graphics`,
+`apps/client/src/atmosphere.rs`, plus `apps/client/src/beauty.rs`,
+`apps/client/src/plume.rs`, `crates/plume-core`, and
+`assets/shaders/plume_volume.wgsl`. The client currently uses Bevy raster/LUT
 atmosphere paths plus shared CPU-side optical inputs. Full cloud/weather
 coupling and every ray-aware mode described below are not shipped.
 
-Scope: rocky planets and rocky moons first. Gas giants may reuse parts of the same optical model later, but are not a requirement for the first implementation.
+Scope: rocky planets and rocky moons first, with gas-giant bands already
+shipped as CPU-baked shells (`beauty.rs`). Full gas-giant volumetric
+treatment is not a requirement for the first implementation.
 
 The visual-atmosphere subsystem is deliberately separate from climate simulation, cloud weather, aerodynamics, and terrain generation. It consumes physical body/atmosphere data plus current celestial-light geometry and produces rendering inputs.
 
@@ -266,7 +272,8 @@ Do not implement an eclipse by only darkening the surface while leaving a noon-b
 
 ## 10. Clouds are a separate subsystem
 
-Clouds are not part of the first atmospheric-scattering implementation.
+Shell-deck clouds have shipped (`beauty.rs`, `[clouds] enabled=true`);
+volumetric ray-marched clouds are not part of the implementation.
 
 Future cloud rendering may use the atmosphere's lighting/transmittance queries, but cloud state should remain separate.
 
@@ -319,7 +326,9 @@ A weak emissive upper-atmosphere component, mostly important from the night side
 
 ### Aurora
 
-Rocky worlds may optionally define a magnetic field / auroral configuration.
+Shipped as an analytic-field shell (`beauty.rs`, `aurora_intensity` gain,
+animated curtains on High). Rocky worlds may optionally define a magnetic
+field / auroral configuration.
 
 Thessa is a particularly good candidate because it orbits inside the environment of a gas giant. Nereid's magnetosphere can provide a persistent charged-particle environment, while Thessa's own magnetic field can organize precipitation into auroral ovals.
 
@@ -386,7 +395,7 @@ AtmosphereOptics
       |
       +--> ray-aware backend
       |
-      +--> future Solari integration
+      +--> experimental conditional Solari companion
 ```
 
 A ray-aware path may query atmospheric transmittance along selected segments without ray tracing individual particles.
@@ -436,7 +445,11 @@ The proxy must never become the physical source of truth.
 
 Graphics settings should be represented by TOML first. The future GUI is a typed editor/view of that TOML, not a second independent settings system.
 
-The checked-in implementation currently uses this structure:
+The checked-in implementation currently uses this structure (archival snapshot —
+normative values live in `graphics.toml` + `crates/graphics`; since this was
+written, `[clouds]` shipped enabled with layers/coverage/opacity/animate,
+`[upper_atmosphere]` gained intensity/animate, and `[gas_giant]`,
+`[engine_plume]`, `[shadows]`, `bloom`, and `sky_dome` sections were added):
 
 ```toml
 version = 1
@@ -490,9 +503,11 @@ show_atmosphere_bounds = false
 show_rt_proxies = false
 ```
 
-`multiple_scattering`, upper-atmosphere emission, clouds and some debug
-switches are parsed and exposed through GUI metadata even where the current
-renderer reports them as reserved follow-up work. Unknown keys are ignored by
+`multiple_scattering`, upper-atmosphere emission, volumetric clouds and some
+debug switches are parsed and exposed through GUI metadata even where the
+current renderer reports them as reserved follow-up work. Shell-deck clouds,
+aurora shells, gas-giant bands, and the engine plume are consumed by the
+renderer (not reserved). Unknown keys are ignored by
 older builds; they are not a second hidden settings system.
 
 Presets are only bulk writes/default expansions over the same settings. They are not hidden alternative state.
@@ -675,7 +690,9 @@ The first rocky-atmosphere visual slice is complete when Thessa can show all of 
 9. visual state evaluates directly from current simulation time and geometry;
 10. graphics settings can configure the subsystem through TOML.
 
-Clouds, volumetric aurora curtains, and Solari-specific high-end integration may follow incrementally.
+Clouds (shell decks), animated aurora curtains on High, and the experimental
+conditional Solari companion have shipped; volumetric clouds, coupled
+weather, and full Solari integration may follow incrementally.
 
 ---
 

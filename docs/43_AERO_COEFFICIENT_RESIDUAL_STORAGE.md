@@ -1,8 +1,8 @@
 # 43 — Bounded residual storage for aerodynamic coefficient fields
 
-Status: **design / prototype target**.
+Status: **experimental scalar prototype; not the production default**.
 
-Implementation status (branch `feat/aero-residual-prototype`):
+Implemented behavior:
 
 - scalar CPU reference `AeroResidualTable` implemented beside the canonical
   `AeroCoefficientTable`;
@@ -28,6 +28,13 @@ Implementation status (branch `feat/aero-residual-prototype`):
   trips, and end-to-end panel force/moment bounds;
 - `aero_residual` benchmark reports storage density plus scalar
   decode/interpolation overhead on a 257x257 synthetic stall/transonic field.
+
+The release benchmark on 2026-09-28 (AMD Ryzen 7 8745H, x86_64) measured
+2,064 KiB for the canonical table and 1,167 KiB logical resident storage for
+the residual table (1.77x smaller). Scalar sampling measured 87.0 ns/sample
+versus 55.2 ns/sample for the canonical table (1.58x slower). This demonstrates
+the storage tradeoff, not a runtime speedup; the residual path remains
+experimental and is not the default.
 
 Still open: channel-specific physical budget allocation, AVX2/AVX-512 fused
 decode, real VLM/CFD fixtures, and higher-dimensional coefficient fields.
@@ -416,8 +423,9 @@ must preserve it within the declared error envelope.
 
 ## 9. Do not compress the current analytic SIMD path for its own sake
 
-The existing analytic coefficient path already has dedicated AVX2/AVX-512
-kernels and avoids table traffic.
+The existing analytic coefficient path has AVX2/AVX-512 kernels on x86-64
+and an AArch64 NEON backend, with native paths checked against the scalar
+coefficient oracle. It also avoids table traffic.
 
 That path should remain untouched unless profiling finds an actual bottleneck.
 
@@ -528,14 +536,14 @@ The physical regression is the merge gate.
 
 ---
 
-## 13. Prototype plan
+## 13. Prototype implementation and remaining plan
 
-### Phase A — scalar storage transform
+### Phase A — scalar storage transform (implemented)
 
-Implement a reference `AeroResidualTable` beside the current
-`AeroCoefficientTable`.
+The reference `AeroResidualTable` lives beside the canonical
+`AeroCoefficientTable` in `thessa-aero-core`.
 
-Start with:
+It includes:
 
 - 4x4 Mach-alpha tiles;
 - bilinear predictor;
@@ -545,26 +553,26 @@ Start with:
 - deterministic encoding;
 - exact current table as the oracle.
 
-### Phase B — adaptive codec ladder
+### Phase B — adaptive codec ladder (implemented)
 
-Add:
+The encoder provides:
 
 - lower-bit candidate(s), initially R4/R6;
 - cheapest-first selection under declared coefficient error bounds;
 - tile statistics and byte accounting;
 - special coverage for stall/transonic tiles.
 
-### Phase C — physical error budgeting
+### Phase C — physical error budgeting (implemented baseline)
 
-For each tile/codec rung:
+For each tile/codec rung, the scalar reference:
 
-- convert coefficient error to force/moment bounds;
-- reject representations that exceed the configured physical envelope;
-- prove runtime interpolation does not exceed the stored/developed bound.
+- converts coefficient error to force/moment bounds;
+- rejects representations that exceed the configured physical envelope;
+- bounds runtime interpolation using the four contributing tile bounds.
 
-### Phase D — SIMD decode
+### Phase D — SIMD decode (future work)
 
-Implement:
+The future SIMD implementation must provide:
 
 - AVX2 baseline;
 - optional AVX-512 path;

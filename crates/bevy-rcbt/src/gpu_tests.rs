@@ -136,8 +136,10 @@ impl Gpu {
         let words = staging
             .slice(..)
             .get_mapped_range()
-            .chunks_exact(4)
-            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| u32::from_le_bytes(*bytes))
             .collect();
         staging.unmap();
         words
@@ -234,10 +236,13 @@ fn check_geometry(gpu: &Gpu, radius: f32) {
             count as u32,
             GPU_VERTEX_COUNT_PER_PATCH as u32,
             radius.to_bits(),
-            0,
+            count as u32,
         ],
         true,
     );
+    // Full-cover dispatch: every ordinal is dirty.
+    let dirty: Vec<u32> = (0..count as u32).collect();
+    let dirty_ordinals = gpu.buffer(&dirty, false);
     gpu.dispatch(
         CBT_GEOMETRY_WGSL,
         &[(
@@ -245,7 +250,14 @@ fn check_geometry(gpu: &Gpu, radius: f32) {
             (count as u32 * GPU_VERTEX_COUNT_PER_PATCH as u32).div_ceil(64),
         )],
         &[
-            &leaves, &patches, &metadata, &residuals, &vertices, &params, &frames,
+            &leaves,
+            &patches,
+            &metadata,
+            &residuals,
+            &vertices,
+            &params,
+            &frames,
+            &dirty_ordinals,
         ],
         &[5],
         &[1, 4],
@@ -309,6 +321,151 @@ fn check_geometry(gpu: &Gpu, radius: f32) {
 
 #[test]
 #[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+fn gpu_geometry_dirty_dispatch_regenerates_only_dirty_leaves() {
+    // One arriving page must regenerate one patch: full-cover dispatch,
+    // then a single-ordinal dispatch over the same vertex buffer. Untouched
+    // leaves stay bit-identical; the dirty leaf moves with its new page.
+    let gpu = Gpu::new();
+    let radius = 6_371_000_f32;
+    let count = 3_usize;
+    let records: Vec<u32> = (0..count as u32)
+        .flat_map(|ordinal| [8 + ordinal, 0, 3, ordinal])
+        .collect();
+    let leaves = gpu.buffer(&records, false);
+    let patches = gpu.buffer(&vec![0; count * 4], false);
+    let anchors: Vec<_> = (0..3)
+        .map(|face| {
+            crate::precision::TileAnchor::new(
+                crate::precision::TileKey::new(face, 0, 0, 0).unwrap(),
+                f64::from(radius),
+            )
+            .unwrap()
+        })
+        .collect();
+    let frame_words: Vec<_> = anchors
+        .iter()
+        .flat_map(|anchor| {
+            let frame = anchor.to_gpu([0.0; 3]).unwrap();
+            [
+                frame.anchor_hi_m,
+                frame.anchor_lo_m,
+                frame.raw_center,
+                frame.raw_axis_u,
+                frame.raw_axis_v,
+                frame.normal,
+                frame.radius_half_extent_len,
+            ]
+            .into_iter()
+            .flatten()
+            .map(f32::to_bits)
+        })
+        .collect();
+    let frames = gpu.buffer(&frame_words, false);
+    // Leaf 1 starts flat at 100 m; the update lifts it to 110 m.
+    let flat = HeightPage::bake(&[100.0; 4], 2, 0.001).unwrap();
+    let lifted = HeightPage::bake(&[110.0; 4], 2, 0.001).unwrap();
+    let mut packed = Vec::new();
+    pack_page_residuals(&flat, &mut packed);
+    let lifted_offset = pack_page_residuals(&lifted, &mut packed);
+    let metadata_for = |lifted_active: bool| {
+        (0..count)
+            .flat_map(|ordinal| {
+                let page = if lifted_active && ordinal == 1 {
+                    &lifted
+                } else {
+                    &flat
+                };
+                let offset = if lifted_active && ordinal == 1 {
+                    lifted_offset
+                } else {
+                    0
+                };
+                [
+                    page.base_height_m().to_bits(),
+                    page.residual_scale_m().to_bits(),
+                    2,
+                    offset,
+                ]
+            })
+            .collect::<Vec<_>>()
+    };
+    let vertices = gpu.buffer(&vec![0; count * GPU_VERTEX_COUNT_PER_PATCH * 8], false);
+    let run_dispatch = |gpu: &Gpu,
+                        metadata: &wgpu::Buffer,
+                        residuals: &wgpu::Buffer,
+                        dirty: &[u32],
+                        vertices: &wgpu::Buffer| {
+        let dirty_ordinals = gpu.buffer(dirty, false);
+        // The dirty count sizes the dispatch guard; the ordinal list
+        // addresses the ordinal-indexed vertex buffer.
+        let params = gpu.buffer(
+            &[
+                count as u32,
+                GPU_VERTEX_COUNT_PER_PATCH as u32,
+                radius.to_bits(),
+                dirty.len() as u32,
+            ],
+            true,
+        );
+        gpu.dispatch(
+            CBT_GEOMETRY_WGSL,
+            &[(
+                "build_geometry",
+                (dirty.len() as u32 * GPU_VERTEX_COUNT_PER_PATCH as u32).div_ceil(64),
+            )],
+            &[
+                &leaves,
+                &patches,
+                metadata,
+                residuals,
+                vertices,
+                &params,
+                &frames,
+                &dirty_ordinals,
+            ],
+            &[5],
+            &[1, 4],
+        );
+    };
+    // Full cover first.
+    let metadata = gpu.buffer(&metadata_for(false), false);
+    let residuals = gpu.buffer(&packed, false);
+    let all: Vec<u32> = (0..count as u32).collect();
+    run_dispatch(&gpu, &metadata, &residuals, &all, &vertices);
+    let before = gpu.read(&vertices);
+    // Single-ordinal dispatch with the lifted page for leaf 1.
+    let metadata_lifted = gpu.buffer(&metadata_for(true), false);
+    run_dispatch(&gpu, &metadata_lifted, &residuals, &[1], &vertices);
+    let after = gpu.read(&vertices);
+    let span = GPU_VERTEX_COUNT_PER_PATCH * 8;
+    for ordinal in 0..count {
+        let (old, new) = (
+            &before[ordinal * span..(ordinal + 1) * span],
+            &after[ordinal * span..(ordinal + 1) * span],
+        );
+        if ordinal == 1 {
+            assert_ne!(old, new, "dirty leaf 1 must regenerate");
+            // Height channel (word 7 of each vertex) moves ~10 m.
+            let drift: f32 = old
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .zip(new.as_chunks::<8>().0.iter())
+                .map(|(a, b)| (f32::from_bits(b[7]) - f32::from_bits(a[7])).abs())
+                .sum::<f32>()
+                / GPU_VERTEX_COUNT_PER_PATCH as f32;
+            assert!(
+                (drift - 10.0).abs() < 0.5,
+                "leaf 1 height must follow its page, drift={drift}"
+            );
+        } else {
+            assert_eq!(old, new, "clean leaf {ordinal} must stay bit-identical");
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
 fn gpu_classifier_uses_position_stride_for_every_leaf() {
     let gpu = Gpu::new();
     let metadata = gpu.buffer(&[0, 0, 33, 0].repeat(3), false);
@@ -353,7 +510,7 @@ fn gpu_classifier_uses_position_stride_for_every_leaf() {
     assert_eq!(gpu.read(&draw), [192, 1, 0, 0]);
     assert_eq!(gpu.read(&count)[0], 64);
     let triangles = gpu.read(&triangles);
-    for record in triangles[..64 * 4].chunks_exact(4) {
+    for record in triangles[..64 * 4].as_chunks::<4>().0.iter() {
         assert_eq!(record[0], 1, "only the middle leaf is visible");
         assert!(
             record[1..]
@@ -374,7 +531,10 @@ fn gpu_classifier_grid_step_history_has_hysteresis_and_identity_reset() {
     .map(f32::to_bits);
     let view = gpu.buffer(&identity, true);
     let transform = gpu.buffer(&identity, true);
-    let params = gpu.buffer(&[1, GPU_VERTEX_COUNT_PER_PATCH as u32, 1_f32.to_bits(), 0], true);
+    let params = gpu.buffer(
+        &[1, GPU_VERTEX_COUNT_PER_PATCH as u32, 1_f32.to_bits(), 0],
+        true,
+    );
     let frames = gpu.buffer(&[0; 28], false);
     let history = gpu.buffer(&[0; 4], false);
 
@@ -382,16 +542,19 @@ fn gpu_classifier_grid_step_history_has_hysteresis_and_identity_reset() {
         let mut words = Vec::with_capacity(GPU_VERTEX_COUNT_PER_PATCH * 8);
         for y in 0..33 {
             for x in 0..33 {
-                words.extend([
-                    x as f32 / 32.0 * span,
-                    y as f32 / 32.0 * span,
-                    0.5,
-                    1.0,
-                    0.0,
-                    0.0,
-                    1.0,
-                    0.0,
-                ].map(f32::to_bits));
+                words.extend(
+                    [
+                        x as f32 / 32.0 * span,
+                        y as f32 / 32.0 * span,
+                        0.5,
+                        1.0,
+                        0.0,
+                        0.0,
+                        1.0,
+                        0.0,
+                    ]
+                    .map(f32::to_bits),
+                );
             }
         }
         gpu.buffer(&words, false)
@@ -403,7 +566,11 @@ fn gpu_classifier_grid_step_history_has_hysteresis_and_identity_reset() {
         let draw = gpu.buffer(&[0; 4], false);
         gpu.dispatch(
             CBT_CLASSIFY_WGSL,
-            &[("reset_active", 1), ("classify_active", 1), ("finalize_active", 1)],
+            &[
+                ("reset_active", 1),
+                ("classify_active", 1),
+                ("finalize_active", 1),
+            ],
             &[
                 &metadata, vertices, &triangles, &count, &draw, &view, &transform, &params,
                 &leaves, &frames, &history,
@@ -423,11 +590,19 @@ fn gpu_classifier_grid_step_history_has_hysteresis_and_identity_reset() {
     assert_eq!(gpu.read(&history), [8, 0, 4, 0]);
 
     let (draw, _) = dispatch(&vertices_for(0.2), 8);
-    assert_eq!(gpu.read(&draw)[0], 6912, "meaningful crossing refines to step 1");
+    assert_eq!(
+        gpu.read(&draw)[0],
+        6912,
+        "meaningful crossing refines to step 1"
+    );
     assert_eq!(gpu.read(&history), [8, 0, 1, 0]);
 
     let (draw, _) = dispatch(&vertices_for(0.039), 9);
-    assert_eq!(gpu.read(&draw)[0], 576, "new leaf identity must reset history");
+    assert_eq!(
+        gpu.read(&draw)[0],
+        576,
+        "new leaf identity must reset history"
+    );
     assert_eq!(gpu.read(&history), [9, 0, 4, 0]);
 }
 
@@ -531,9 +706,14 @@ fn gpu_tile_transform_keeps_near_camera_precision_after_body_rotation() {
     let transform = DMat4::from_rotation_translation(rotation, -origin);
     let relative = transform.transform_point3(anchor_body).to_array();
     let mut frame = anchor.to_gpu([0.0; 3]).unwrap();
-    for i in 0..3 {
-        frame.anchor_hi_m[i] = relative[i] as f32;
-        frame.anchor_lo_m[i] = (relative[i] - f64::from(frame.anchor_hi_m[i])) as f32;
+    for (i, (hi, rel)) in frame
+        .anchor_hi_m
+        .iter_mut()
+        .zip(relative.iter())
+        .enumerate()
+    {
+        *hi = *rel as f32;
+        frame.anchor_lo_m[i] = (*rel - f64::from(*hi)) as f32;
     }
     let frames = gpu.buffer(
         &frame
@@ -709,4 +889,121 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
         &[7],
     );
     assert_eq!(&gpu.read(&output)[..2], &[0, 0]);
+}
+
+/// Full game-data roundtrip on hardware: a real `CbtMaterialPage` (linear-
+/// light mip averaging included) through microstore encode plus GPU decode
+/// for every mip level and every channel. This is the integration proof
+/// the prototype was built for: game constructor bytes on a real adapter.
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+#[test]
+fn game_material_mips_decode_on_hardware() {
+    use crate::material_microstore::rock_rgba;
+    use thessa_microstore_core::{EncodeMode, EncodedPage, ScalarField};
+    use thessa_rcbt_wgpu::microstore::MicrostoreDecode;
+
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
+        .expect("material GPU test requires a wgpu adapter");
+    eprintln!("material regression adapter: {:?}", adapter.get_info());
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let decoder = MicrostoreDecode::new(std::sync::Arc::new(device), std::sync::Arc::new(queue));
+
+    let rgba = rock_rgba(crate::material_pages::MATERIAL_PAGE_SIZE, 0x9A7E);
+    let page = crate::material_pages::CbtMaterialPage::from_rgba8(rgba).expect("real page");
+    assert_eq!(page.mips.len(), 8);
+    let mut total_wire = 0usize;
+    let mut worst = 0u8;
+    for (level, mip) in page.mips.iter().enumerate() {
+        let size = crate::material_pages::MATERIAL_PAGE_SIZE >> level;
+        assert_eq!(
+            mip.len(),
+            size as usize * size as usize * 4,
+            "level {level}"
+        );
+        for channel in 0..4 {
+            let plane: Vec<u8> = mip
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|px| px[channel])
+                .collect();
+            let field = ScalarField::new(size, size, plane).expect("plane extent");
+            let encoded = EncodedPage::encode(&field, EncodeMode::Adaptive { max_abs_error: 2.0 });
+            total_wire += encoded.encoded_bytes();
+            let gpu = decoder.decode_page(&encoded).expect("gpu decode");
+            let cpu = encoded.decode();
+            assert_eq!(gpu.len(), cpu.data.len(), "level {level} ch {channel} len");
+            for (g, c) in gpu.iter().zip(cpu.data.iter()) {
+                worst = worst.max(g.abs_diff(*c));
+            }
+            assert_eq!(gpu, cpu.data, "level {level} ch {channel} bit-exact");
+        }
+    }
+    eprintln!("8 game mips x 4 channels on hardware: {total_wire} B wire, worst drift {worst}");
+}
+
+/// Compact storage path on hardware: the exact `encode_material_level`
+/// (ColorPage RGB + roughness) + `MaterialArray::decode_material_levels`
+/// pre-decode used by `material_storage = "microstore_compact"`, with every
+/// underlying `EncodedPage` verified bit-exact against the GPU decoder.
+/// Sampling stays identical because the texture upload sees only the
+/// decoded RGBA; this pins the residency bytes are GPU-decodable.
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+#[test]
+fn microstore_compact_levels_match_gpu_decode() {
+    use crate::material_microstore::{encode_material_level, rock_rgba};
+    use thessa_rcbt_wgpu::microstore::MicrostoreDecode;
+
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
+        .expect("compact storage GPU test requires a wgpu adapter");
+    eprintln!("compact storage adapter: {:?}", adapter.get_info());
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let decoder = MicrostoreDecode::new(std::sync::Arc::new(device), std::sync::Arc::new(queue));
+
+    let rgba = rock_rgba(crate::material_pages::MATERIAL_PAGE_SIZE, 0xC0FFEE);
+    let page = crate::material_pages::CbtMaterialPage::from_rgba8(rgba).expect("real page");
+    let mut wire = 0usize;
+    let mut worst_vs_orig = 0u8;
+    for (level, mip) in page.mips.iter().enumerate() {
+        let size = crate::material_pages::MATERIAL_PAGE_SIZE >> level;
+        let encoded = encode_material_level(mip, size, size, 2.0).expect("encodes");
+        wire += encoded.encoded_bytes();
+        // Every stored page must GPU-decode bit-exact vs CPU.
+        let cpu_planes = [
+            encoded.color.channels[0].decode(),
+            encoded.color.channels[1].decode(),
+            encoded.color.channels[2].decode(),
+            encoded.roughness.decode(),
+        ];
+        let gpu_planes = [
+            decoder
+                .decode_page(&encoded.color.channels[0])
+                .expect("gpu r"),
+            decoder
+                .decode_page(&encoded.color.channels[1])
+                .expect("gpu g"),
+            decoder
+                .decode_page(&encoded.color.channels[2])
+                .expect("gpu b"),
+            decoder.decode_page(&encoded.roughness).expect("gpu a"),
+        ];
+        for (ch, (gpu, cpu)) in gpu_planes.iter().zip(cpu_planes.iter()).enumerate() {
+            assert_eq!(gpu.len(), cpu.data.len(), "level {level} ch {ch} len");
+            assert_eq!(gpu, &cpu.data, "level {level} ch {ch} bit-exact");
+        }
+        // The pre-decode upload path interleaves those exact planes.
+        let decoded = material_render::MaterialArray::decode_material_levels(&[encoded]);
+        assert_eq!(decoded.len(), 1);
+        let back = &decoded[0];
+        assert_eq!(back.len(), mip.len(), "level {level} rgba len");
+        for (i, (o, d)) in mip.iter().zip(back.iter()).enumerate() {
+            worst_vs_orig = worst_vs_orig.max(o.abs_diff(*d));
+            assert!(o.abs_diff(*d) <= 2, "level {level} byte {i}: {o} vs {d}");
+        }
+    }
+    let raw: usize = page.mips.iter().map(Vec::len).sum();
+    eprintln!("compact storage on hardware: {wire} B wire vs {raw} B raw, worst {worst_vs_orig}");
+    assert!(wire < raw, "compact must beat raw RGBA");
 }

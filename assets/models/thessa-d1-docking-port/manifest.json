@@ -1,0 +1,135 @@
+{
+  "schema": "thessa.cad_asset.v0",
+  "asset_id": "thessa.docking_port.d1.v2_2",
+  "semantic_role": "docking_port",
+  "port_class": "D1",
+  "source": {
+    "file": "thessa_d1_v2_2_free.step",
+    "sha256": "f38c1c6631c9fe54c47dfcc4124aa27745aaae02e5c8e78de9604dcf36f9a56f",
+    "provenance": "user-supplied local STEP fixture; license not recorded yet",
+    "canonical_layer": "STEP reference / normalized BRep importer input"
+  },
+  "units": "millimetres in source products; metres in glTF",
+  "coordinate_system": {
+    "source": "STEP source frame",
+    "up": "+Z",
+    "forward": "+X (provisional until vehicle integration)"
+  },
+  "audit": {
+    "solids": 139,
+    "bbox_mm": [
+      1252.0,
+      1223.0,
+      332.0
+    ],
+    "bbox_min_mm": [
+      -600.0,
+      -623.0,
+      -200.0
+    ],
+    "bbox_max_mm": [
+      652.0,
+      600.0,
+      132.0
+    ]
+  },
+  "derived_products": {
+    "freecad_closed": "thessa_d1_docking_port_closed.FCStd",
+    "freecad_open": "thessa_d1_docking_port_open.FCStd",
+    "visual_gltf": "thessa_d1_docking_port.glb",
+    "fixed_obj": "fixed_structure.obj",
+    "petal_objs": [
+      "petal_01.obj",
+      "petal_02.obj",
+      "petal_03.obj",
+      "petal_04.obj",
+      "petal_05.obj",
+      "petal_06.obj"
+    ]
+  },
+  "mechanics": {
+    "state_machine": [
+      "free",
+      "soft_capture",
+      "aligned",
+      "hard_dock",
+      "outer_structure_engaged",
+      "pressure_equalized"
+    ],
+    "provisional_moving_parts": [
+      {
+        "id": "soft_capture_petals",
+        "count": 6,
+        "source_solid_indices": [
+          17,
+          20,
+          25,
+          28,
+          33,
+          36
+        ],
+        "hinge_angles_deg": [
+          24.0,
+          36.0,
+          144.0,
+          156.0,
+          -96.0,
+          -84.0
+        ],
+        "hinge_radius_mm": 550.0,
+        "hinge_z_mm": -68.0,
+        "open_angle_deg": 25.0,
+        "mapping_status": "provisional; validate against mechanical feature recognition"
+      }
+    ],
+    "tbd": [
+      "clear passage and seal diameter",
+      "capture velocity limits",
+      "stiffness, damping, and structural load limits",
+      "service/power/data/fluid pinout"
+    ]
+  },
+  "runtime_contract": {
+    "render": "derived adaptive CAD/RCBT surface cache; current MVP ships glTF preview",
+    "collision": "separate product; do not derive authoritative behavior from view tessellation",
+    "actuation": "explicit joint/actuator graph; controller metadata is not physics authority"
+  },
+  "materials": {
+    "structural_metal": {
+      "semantic_id": "d1.structural_metal",
+      "base_color_linear": [
+        0.22,
+        0.28,
+        0.34
+      ],
+      "metallic": 0.8,
+      "roughness": 0.32,
+      "contact_friction": 0.65,
+      "contact_restitution": 0.02
+    },
+    "capture_hardware": {
+      "semantic_id": "d1.capture_hardware",
+      "base_color_linear": [
+        0.82,
+        0.34,
+        0.08
+      ],
+      "metallic": 0.55,
+      "roughness": 0.38,
+      "contact_friction": 0.75,
+      "contact_restitution": 0.01
+    },
+    "seal_elastomer": {
+      "semantic_id": "d1.seal_elastomer",
+      "base_color_linear": [
+        0.04,
+        0.045,
+        0.05
+      ],
+      "metallic": 0.0,
+      "roughness": 0.72,
+      "contact_friction": 0.9,
+      "contact_restitution": 0.0
+    }
+  }
+}

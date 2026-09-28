@@ -65,13 +65,38 @@ impl CbtMaterialPage {
     pub fn byte_len(&self) -> usize {
         self.mips.iter().map(Vec::len).sum()
     }
+
+    /// Mip levels, finest first. Level 0 is the full 128x128 RGBA page;
+    /// each next level halves both extents down to 1x1.
+    pub fn mips(&self) -> &[Vec<u8>] {
+        &self.mips
+    }
+
+    /// Rebuild a page from already-sized mip levels (microstore decode
+    /// path): validates the 128-halving shape instead of averaging.
+    /// Returns `None` on shape mismatch, like [`CbtMaterialPage::from_rgba8`].
+    pub fn from_decoded_mips(mips: Vec<Vec<u8>>) -> Option<Self> {
+        if mips.is_empty() || mips.len() > 8 {
+            return None;
+        }
+        let mut size = MATERIAL_PAGE_SIZE as usize;
+        for mip in &mips {
+            if mip.len() != size * size * 4 {
+                return None;
+            }
+            size = (size / 2).max(1);
+        }
+        Some(Self { mips: mips.into() })
+    }
 }
 
 #[derive(Debug, Clone, Default, Resource)]
 pub struct CbtRenderMaterialPages {
     pub(crate) generation: u64,
     pub(crate) priority: Vec<u64>,
-    pub(crate) pages: BTreeMap<u64, (u64, CbtMaterialPage)>,
+    /// Extraction shares the immutable page directory. Stream batches use
+    /// copy-on-write, while each page's mip payload is already Arc-backed.
+    pub(crate) pages: Arc<BTreeMap<u64, (u64, CbtMaterialPage)>>,
 }
 
 impl CbtRenderMaterialPages {
@@ -83,6 +108,16 @@ impl CbtRenderMaterialPages {
         }
     }
 
+    /// Immutable view of the current priority. Check this through a shared
+    /// (`Res`/`&`) borrow *before* taking a mutable borrow: calling any
+    /// `&mut self` method via Bevy `ResMut` marks the resource as changed
+    /// (via `DerefMut`) even when the bytes end up identical, which forces
+    /// `ExtractResourcePlugin` to publish a new render-world snapshot. The
+    /// `&self` path uses `Deref` only and leaves the change flag alone.
+    pub fn priority(&self) -> &[u64] {
+        &self.priority
+    }
+
     pub fn byte_len(&self) -> usize {
         self.pages.values().map(|(_, page)| page.byte_len()).sum()
     }
@@ -90,12 +125,41 @@ impl CbtRenderMaterialPages {
         self.pages.contains_key(&node_id)
     }
     pub fn set_page(&mut self, node_id: u64, page: CbtMaterialPage) {
-        self.generation = self.generation.saturating_add(1);
-        self.pages.insert(node_id, (self.generation, page));
+        self.set_pages(std::iter::once((node_id, page)));
     }
-    pub fn remove_page(&mut self, node_id: u64) {
-        if self.pages.remove(&node_id).is_some() {
+
+    /// Publish completed material pages with one copy-on-write directory
+    /// update, rather than copying the directory once per completed worker.
+    pub fn set_pages(&mut self, updates: impl IntoIterator<Item = (u64, CbtMaterialPage)>) {
+        let updates: Vec<_> = updates.into_iter().collect();
+        if updates.is_empty() {
+            return;
+        }
+        let pages = Arc::make_mut(&mut self.pages);
+        for (node_id, page) in updates {
             self.generation = self.generation.saturating_add(1);
+            pages.insert(node_id, (self.generation, page));
+        }
+    }
+
+    pub fn remove_page(&mut self, node_id: u64) {
+        self.remove_pages(std::iter::once(node_id));
+    }
+
+    /// Remove multiple evicted material pages with one directory update.
+    pub fn remove_pages(&mut self, node_ids: impl IntoIterator<Item = u64>) {
+        let removed: Vec<_> = node_ids
+            .into_iter()
+            .filter(|node_id| self.pages.contains_key(node_id))
+            .collect();
+        if removed.is_empty() {
+            return;
+        }
+        let pages = Arc::make_mut(&mut self.pages);
+        for node_id in removed {
+            if pages.remove(&node_id).is_some() {
+                self.generation = self.generation.saturating_add(1);
+            }
         }
     }
 }
@@ -103,10 +167,11 @@ impl CbtRenderMaterialPages {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn mips_average_color_in_linear_light_and_keep_roughness_linear() {
         let mut bytes = vec![0; 128 * 128 * 4];
-        for (i, p) in bytes.chunks_exact_mut(4).enumerate() {
+        for (i, p) in bytes.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let value = if i % 2 == 0 { 0 } else { 255 };
             p.copy_from_slice(&[value; 4]);
         }
@@ -115,5 +180,31 @@ mod tests {
         assert_eq!(&page.mips[1][..4], &[188, 188, 188, 128]);
         assert_eq!(page.mips.last().unwrap().len(), 4);
         assert!(CbtMaterialPage::from_rgba8(vec![0; 4]).is_none());
+    }
+
+    #[test]
+    fn extracted_material_snapshot_shares_directory_until_batch_update() {
+        let page = CbtMaterialPage::from_rgba8(vec![32; 128 * 128 * 4]).unwrap();
+        let replacement = CbtMaterialPage::from_rgba8(vec![96; 128 * 128 * 4]).unwrap();
+        let mut pages = CbtRenderMaterialPages::default();
+        pages.set_pages([(17, page.clone()), (19, page.clone())]);
+        let snapshot = pages.clone();
+        assert!(Arc::ptr_eq(&pages.pages, &snapshot.pages));
+        assert_eq!(snapshot.generation, 2);
+
+        pages.set_pages([(17, replacement)]);
+        assert!(!Arc::ptr_eq(&pages.pages, &snapshot.pages));
+        assert_eq!(pages.generation, 3);
+        assert_eq!(pages.pages[&17].0, 3);
+        assert_eq!(snapshot.pages[&17].0, 1);
+        assert!(Arc::ptr_eq(
+            &pages.pages[&19].1.mips,
+            &snapshot.pages[&19].1.mips
+        ));
+
+        pages.remove_pages([17, 19]);
+        assert_eq!(pages.generation, 5);
+        assert!(pages.pages.is_empty());
+        assert_eq!(snapshot.pages.len(), 2);
     }
 }

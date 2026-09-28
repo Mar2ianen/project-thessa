@@ -1,6 +1,6 @@
 # Rapier collision integration
 
-Status: implementation baseline, 2026-09-17.
+Status: implementation baseline, 2026-09-25.
 
 This document fixes the ownership and frame rules for adding Rapier to the
 Project Thessa authoritative simulation. It is intentionally stricter than a
@@ -169,6 +169,10 @@ Any structural topology change, staging event, docking/undocking event, or
 collision-geometry rebuild also invalidates/rebuilds the corresponding backend
 body.
 
+Disabling contact mode or leaving its active regime clears per-tick wheel,
+landing-leg, and gear-actuator telemetry. Snapshot/UI readers therefore see no
+stale contact evidence after the solver stops producing it.
+
 ## 7. Fixed-tick phase order
 
 For the current single-authority runtime the intended 120 Hz order is:
@@ -257,7 +261,7 @@ state divergence envelope.
 
 ## 11. Current MVP in this branch
 
-Implemented (update 2026-09-17, second slice):
+Implemented (update 2026-09-25):
 
 - workspace `thessa-collision` crate using `rapier3d-f64` 0.35.3;
 - backend-neutral f64/SI collision primitives in `thessa-sim-core`;
@@ -276,7 +280,9 @@ Implemented (update 2026-09-17, second slice):
   `insert_kinematic_trimesh`, `set_next_kinematic_pose`): the caller
   prescribes the ephemeris/body-rotation-derived pose at tick `n+1` and
   Rapier derives the surface velocity that enters contacts — a landed body
-  rides a rising platform in the regression test;
+  rides a rising platform in the regression test. Flight terrain patches keep
+  a body-fixed sample/frame anchor, follow body translation and rotation, and
+  recenter only as the craft nears the patch edge;
 - body/patch **removal** (`remove_dynamic_body`, `remove_static_collider`,
   `remove_kinematic_body`) so topology changes and terrain streaming evict
   stale backend state instead of leaking it;
@@ -317,10 +323,10 @@ Serial wins on settled scenes: Rayon overhead exceeds the gain once bodies
 sleep, exactly the §8 caveat. Keep `parallel` switchable and re-measure on
 awake/constraint-heavy scenes before choosing scheduler granularity.
 
-Not implemented yet (update 2026-09-17):
+Not implemented yet (update 2026-09-25):
 
 - terrain streaming beyond the single-vehicle producer: the 120 Hz loop
-  re-poses one kinematic patch from worldgen every tick and evicts on
+  follows one anchored kinematic patch from worldgen and evicts it on
   regime exit; a fleet layer with multiple resident patches is future
   work (`attach/evict` carry it);
 - structural failure mapping: no structural graph exists in sim-core yet,
@@ -328,6 +334,9 @@ Not implemented yet (update 2026-09-17):
 - per-part wireframe gizmos (craft-anchored patch boxes + body markers +
   normal arrows are in §13 fourth-slice items below and are implemented
   in `apps/client/src/contact_gizmos.rs`).
+- wheel/foot reactions against dynamic bodies and the corresponding equal-and-
+  opposite impulses (current tire/foot queries intentionally accept fixed and
+  kinematic terrain only).
 
 #### Fourth slice — completed in this branch
 
@@ -428,5 +437,43 @@ All items from the §11 MVP and §13 fourth slice are now implemented in this br
 6. ✅ floor/landing and fast-impact regression fixtures — `rapier_resolves_gravity_driven_ground_contact`, `fast_body_does_not_tunnel_through_floor`, `kinematic_terrain_carries_a_landed_body`;
 7. ✅ benchmark — `contacts` bench sweeps 1/8/64/256/1024 active bodies with both `parallel` settings.
 
-The production-shaped continuation is now:
+The articulated wheel-running-gear slice is tracked in
+[`details/05_PROCEDURAL_LANDING_GEAR.md`](details/05_PROCEDURAL_LANDING_GEAR.md):
 
+- ✅ `thessa-sim-core` compiles parametric wheel stations and bakes their mass
+  and inertia into `VehicleDefinition`, then partitions total mass/inertia
+  into a sprung body and per-wheel unsprung bodies;
+- ✅ `thessa-collision` queries fixed/kinematic terrain per wheel, evaluates
+  tire/strut and friction-circle forces, integrates sensor-only wheel bodies
+  through a bounded slider/spin joint, and applies tire and strut loads to the
+  correct unsprung/sprung bodies;
+- ✅ a one-wheel gravity-settling regression checks normal-load balance within
+  0.5% of vehicle weight without a second solid wheel impulse;
+- ✅ kinematic terrain velocity and the positive rolling-spin sign are pinned
+  by known-case tire-slip tests;
+- ✅ `FlightAuthority` steps persistent wheel spin, brake actuator state,
+  optional electric-drive torque and per-wheel contact/drive telemetry;
+- ✅ articulated rolling/braking and airless low-friction terrain regressions
+  exercise the tire friction-circle limit;
+- ✅ release benchmarks sweep 1/4/16/64 wheels for query-only and articulated
+  contact stepping in serial and parallel Rapier modes;
+- ✅ `LandingLegSpec` compiles Falcon-style splayed fold-out supports, bakes leg
+  and footpad mass/inertia into the sprung vehicle, and accepts reusable
+  spring/damper or one-shot crushable shock cartridges;
+- ✅ terrain ray queries evaluate footpad radius/normal alignment, persistent
+  absorber crush/energy and Coulomb-limited foot friction, then apply one
+  contact-point wrench without adding a duplicate solid foot impulse;
+- ✅ `FlightAuthority` advances the `gear_down` target during physical ticks,
+  slows/stalls the fold actuator under measured support torque, retains crush
+  state and exposes contact/actuator telemetry;
+- ✅ optional aircraft-style wheel-chassis hinges share `gear_down`, persist
+  deployment state, update station/joint geometry and re-split unsprung wheel
+  mass in contact mode;
+- ✅ three-leg contact regression covers crush state and commanded retraction;
+  reusable/crushable force laws and free-flight deploy/retract paths have
+  known-case tests;
+- ✅ release benchmarks measure 3/4/8/16 support contacts in serial and
+  parallel modes in addition to wheel sweeps;
+- 🔵 remaining: dynamic-body wheel/foot reactions, moving-hinge inertia and
+  reaction torque, granular soil sinkage/shear,
+  and representative articulated-fleet benchmarks.

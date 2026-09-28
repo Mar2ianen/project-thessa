@@ -19,10 +19,27 @@ promise is made for them.
 
 The checked-in vertical slice currently contains:
 
-- `thessa-sim-core`: deterministic baked ephemerides, full multi-body
-  test-particle gravity, atmosphere, panel aerodynamics, rigid-body flight,
-  on-rails coast caches, cohort gravity patches, and piecewise analytic affine
-  propagation;
+- `thessa-sim-core`: compatibility facade for deterministic baked ephemerides,
+  full multi-body test-particle gravity, atmosphere and panel aerodynamics,
+  rigid-body flight, on-rails coast caches, cohort gravity patches, piecewise
+  analytic affine propagation, cabin pressure and crew authority, part
+  assembly connectivity, installed reaction-wheel banks, deployable
+  parachutes, and a parameterized wire-free vehicle power bus with batteries,
+  ultracapacitors, fission reactors, sun-tracking cell-grid solar arrays with
+  overlap-aware geometric occlusion, prioritized consumers, and a lumped thermal-node
+  network with conduction links and area radiators. The
+  implementation is separated into `thessa-aero-core`,
+  `thessa-celestial`, `thessa-trajectory`, `thessa-propulsion`, and
+  `thessa-vehicle-core`; `thessa-aero-core` also provides an experimental
+  packed residual table path with coefficient-to-force error bounds, while
+  canonical f64 tables and analytic aerodynamics remain available;
+- `thessa-aero-surfaces`, `thessa-fuselage`, and `thessa-vehicle-baker`:
+  procedural lifting-surface/body compilers, interior-volume and mass
+  properties, cabin layouts and presets, static exits, controls, and assembled
+  vehicle asset compilation including electrical power, thermal, shield-aero,
+  and wing tile-layer hardware;
+- `thessa-plume-core`: backend-neutral engine-exhaust profiles, optics, and
+  participating-medium evaluation, consumed by the client plume renderer;
 - `thessa-flight-control` and `thessa-flight-authority`: typed guidance,
   aircraft/spacecraft/direct control laws, policy limits, physical allocation,
   actuator dynamics, and the authoritative flight stepper;
@@ -33,24 +50,28 @@ The checked-in vertical slice currently contains:
   Lambert, plane change, velocity matching) plus candidate search. Planning
   approximations are revalidated through the exact field before execution;
 - `thessa-flight-net` and `thessa-protocol`: versioned framed input/snapshot
-  transport with strict validation;
+  transport with strict validation and ordered typed part commands;
 - `apps/server`: headless authoritative simulation over stdio or TCP;
-- `apps/client`: Bevy 0.19 map, pilot HUD, atmospheric rendering, terrain
-  streaming, and an embedded authoritative-server path;
+- `apps/client`: Bevy 0.19 map, pilot HUD, atmospheric and field-first plume
+  rendering, terrain streaming, and an embedded authoritative-server path;
 - `thessa-worldgen-rocky`: deterministic rocky-world fields, geology, climate,
   landmarks, LOD, obstacle reports, and client texture export;
-- `thessa-rcbt-core`, `thessa-rcbt-ffi`, `thessa-bevy-rcbt`, and
-  `thessa-rcbt-large-ffi`, `thessa-bevy-rcbt`, and `thessa-rcbt-wgpu`:
+- `thessa-rcbt-core`, `thessa-rcbt-ffi`, `thessa-rcbt-large-ffi`,
+  `thessa-bevy-rcbt`, and `thessa-rcbt-wgpu`:
   backend-neutral adaptive terrain topology, a fast pure Rust implementation,
   optional verified upstream `libcbt` and `large_cbt` OCBT implementations,
   universal Bevy frame scheduling, compact height pages, and a portable GPU
-  adapter. The client currently keeps the CPU terrain renderer as the visual
-  fallback while CBT topology is exercised against live terrain selection;
+  adapter. An experimental microscaled material-page codec and LOD/mip path is
+  available for render-world A/B; it currently pre-decodes to RGBA and raw
+  storage remains the default. The client keeps the CPU terrain renderer as the
+  visual fallback while CBT topology is exercised against live terrain selection;
 - isolated validation harnesses for orbital and aerodynamic reference checks.
 
-Factory gameplay, structural fracture, thermal networks, save persistence, and
-production multiplayer are still design/future work. The design documents keep
-these areas explicitly marked as planned rather than presenting them as shipped.
+Factory gameplay, structural fracture and vehicle-topology changes, full fluid
+and electrical networks, shield thermal protection/ablation, save persistence,
+and production multiplayer remain future work. Vehicle thermal nodes and the
+ideal shared power bus are implemented slices; they are not full thermal,
+structural, or electrical-network coupling.
 
 ## Physical and architectural invariants
 
@@ -74,8 +95,15 @@ these areas explicitly marked as planned rather than presenting them as shipped.
 ```text
 apps/client/             GPL Bevy client
 apps/server/             GPL authoritative server shell
-crates/sim-core/         MIT numerical and physics kernel
+crates/sim-core/         MIT compatibility facade for simulation-domain crates
+crates/aero-core/        MIT atmosphere and aerodynamic models
+crates/celestial/        MIT ephemerides, gravity fields, and simulation time
+crates/trajectory/       MIT propagation and coast-cache algorithms
+crates/propulsion/       MIT propulsion models and feed systems
+crates/vehicle-core/     MIT rigid-body, vehicle, and mechanism models
 crates/simd/             MIT optional numeric kernels
+crates/fuselage/         MIT procedural body compiler
+crates/plume-core/       MIT backend-neutral plume field
 crates/flight-*          GPL flight authority, control, and transport
 crates/autopilot*        GPL graph and JavaScript automation
 crates/maneuver/         MIT trajectory planning primitives
@@ -138,7 +166,8 @@ The headless server also supports stdio and TCP transports; run
 | `Z` / `X` | full throttle / cutoff |
 | `Space` | engine on / off |
 | `T` / hold `F` | toggle / invert SAS |
-| `R` / `G` | RCS / landing gear |
+| `R` / `Y` | RCS / reaction wheels |
+| `G` / `P` | landing gear / parachutes |
 | `V` | free / follow camera |
 | `` ` `` | reset camera |
 | `Escape` / `F8` / `Pause` | pause |
@@ -192,22 +221,23 @@ simulation checks, benchmark compilation, and isolated reference validation.
 
 Start here:
 
-1. [`docs/36_DOCUMENTATION_AUDIT_2026_09_14.md`](docs/36_DOCUMENTATION_AUDIT_2026_09_14.md)
-   — implementation status and known documentation boundaries.
-2. [`docs/37_CBT_INTEGRATION_STATUS_2026_09_14.md`](docs/37_CBT_INTEGRATION_STATUS_2026_09_14.md)
-   — current CBT workspace and client integration status.
-3. [`docs/03_PHYSICS_ENGINE.md`](docs/03_PHYSICS_ENGINE.md) — physics contracts
+1. [`docs/00_STATUS.md`](docs/00_STATUS.md) — living implementation/future-work
+   index; start here for the current status of each major document.
+2. [`docs/03_PHYSICS_ENGINE.md`](docs/03_PHYSICS_ENGINE.md) — physics contracts
    and implemented numerical paths.
-4. [`docs/04_RUNTIME_ARCHITECTURE.md`](docs/04_RUNTIME_ARCHITECTURE.md) — current
+3. [`docs/04_RUNTIME_ARCHITECTURE.md`](docs/04_RUNTIME_ARCHITECTURE.md) — current
    process, crate, threading, and transport boundaries.
-5. [`docs/07_AUTOPILOT.md`](docs/07_AUTOPILOT.md) — current graph and scripting
+4. [`docs/07_AUTOPILOT.md`](docs/07_AUTOPILOT.md) — current graph and scripting
    layer plus future standard-library work.
-6. [`docs/08_NUMERICAL_VERTICAL_SLICE.md`](docs/08_NUMERICAL_VERTICAL_SLICE.md)
+5. [`docs/08_NUMERICAL_VERTICAL_SLICE.md`](docs/08_NUMERICAL_VERTICAL_SLICE.md)
    — numerical validation and known limits.
-7. [`docs/10_PILOT_INTERFACE.md`](docs/10_PILOT_INTERFACE.md) — pilot HUD and
+6. [`docs/10_PILOT_INTERFACE.md`](docs/10_PILOT_INTERFACE.md) — pilot HUD and
    control contract.
-8. [`docs/11_AERODYNAMICS.md`](docs/11_AERODYNAMICS.md) — aero model and
+7. [`docs/11_AERODYNAMICS.md`](docs/11_AERODYNAMICS.md) — aero model and
    reference matrix.
+8. [`docs/details/README.md`](docs/details/README.md) — vehicle subsystem and
+   authoring specifications, including implemented surface/body compilers,
+   landing gear, reaction wheels, and parachutes.
 9. [`docs/21_TERRAIN_STREAMING_THROUGHPUT.md`](docs/21_TERRAIN_STREAMING_THROUGHPUT.md)
    — current terrain streaming and CBT boundary.
 10. [`docs/22_RCBT_GPU_TERRAIN.md`](docs/22_RCBT_GPU_TERRAIN.md) — CBT GPU

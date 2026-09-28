@@ -239,6 +239,7 @@ fn face_frame(face: u8, a: f64, b: f64) -> ([f64; 3], [f64; 3], [f64; 3]) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stable_offset(
     axis_u: [f64; 3],
     axis_v: [f64; 3],

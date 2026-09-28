@@ -1,5 +1,5 @@
-# Provenance-only descriptors for the first aerodynamic validation vectors.
-# These are compact owned proxies; no external model files are copied here.
+# Provenance-only descriptors for aerodynamic regressions and reference sets.
+# Owned proxies are compact; no external model files are copied here.
 
 [[case]]
 id = "naca_like_subsonic_wing"
@@ -24,6 +24,22 @@ geometry = "two-zone lifting-body proxy, S=65 m^2"
 regime = "M approximately 5.3, alpha=20 deg"
 external_references = ["SU2", "OpenVSP/VSPAERO", "NASA Space Shuttle Aerodynamic Data Book"]
 runtime_use = "regression vector only"
+
+[[case]]
+id = "hl20_pls_subsonic_wind_tunnel"
+vehicle_class = "lifting_body"
+geometry = "NASA PLS body: L=24.6 ft, b=11.6 ft, Sref=216.8 ft^2; fins excluded"
+regime = "M=0.30; longitudinal stability axes; moment station at 54% body length"
+external_references = ["NASA-TM-4515", "NASA-TM-101641"]
+runtime_use = "Frame target; coefficient curve needs digitizing; full PLS.FUS loft unavailable"
+
+[[case]]
+id = "hl20_simulator_v2_coefficients"
+vehicle_class = "lifting_body"
+geometry = "NASA HL-20 v2.0: S=286.45 ft^2, c=28.24 ft, b=13.89 ft"
+regime = "M=0.30; moment reference at 54% body length"
+external_references = ["NASA-TM-107580"]
+runtime_use = "TM-107580 coefficient anchors; retain the simulator reference set"
 
 [[case]]
 id = "x15_wing_only_proxy"

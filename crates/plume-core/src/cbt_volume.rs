@@ -38,6 +38,9 @@ impl PlumeBound {
         }
     }
 
+    // Validity guards must reject NaN: `!(x > 0.0)` catches NaN while the lint's
+    // suggested `x <= 0.0` would accept it. The negated form is deliberate.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn is_degenerate(self) -> bool {
         !(self.length_m > 0.0) || !(self.max_radius_m > 0.0)
     }
@@ -81,16 +84,10 @@ impl PlumeRegion {
     pub fn split(self) -> [Self; 2] {
         if self.split_axial() {
             let mid = 0.5 * (self.z0_m + self.z1_m);
-            [
-                Self { z1_m: mid, ..self },
-                Self { z0_m: mid, ..self },
-            ]
+            [Self { z1_m: mid, ..self }, Self { z0_m: mid, ..self }]
         } else {
             let mid = 0.5 * (self.r0_m + self.r1_m);
-            [
-                Self { r1_m: mid, ..self },
-                Self { r0_m: mid, ..self },
-            ]
+            [Self { r1_m: mid, ..self }, Self { r0_m: mid, ..self }]
         }
     }
 }
@@ -140,8 +137,7 @@ mod tests {
     use crate::source::tests::{sample_env_sea_level, sample_source};
 
     fn live_bound() -> PlumeBound {
-        let profile =
-            build_axial_profile(&sample_source(), &sample_env_sea_level(), 48).unwrap();
+        let profile = build_axial_profile(&sample_source(), &sample_env_sea_level(), 48).unwrap();
         PlumeBound::from_profile(&profile)
     }
 
@@ -191,10 +187,7 @@ mod tests {
         assert!(right_region.z0_m >= root_region.z0_m);
         assert!(right_region.z1_m <= root_region.z1_m);
         // Siblings are disjoint along the split axis.
-        assert!(
-            (left_region.z1_m <= right_region.z0_m)
-                || (left_region.r1_m <= right_region.r0_m)
-        );
+        assert!((left_region.z1_m <= right_region.z0_m) || (left_region.r1_m <= right_region.r0_m));
         assert_eq!(region_for_node(bound, left), Some(left_region));
     }
 
@@ -210,8 +203,7 @@ mod tests {
 
     #[test]
     fn error_shrinks_with_refinement() {
-        let profile =
-            build_axial_profile(&sample_source(), &sample_env_sea_level(), 48).unwrap();
+        let profile = build_axial_profile(&sample_source(), &sample_env_sea_level(), 48).unwrap();
         let bound = PlumeBound::from_profile(&profile);
         let root_error = residual_error_estimate(&profile, PlumeRegion::root(bound));
         let [left, _] = PlumeRegion::root(bound).split();

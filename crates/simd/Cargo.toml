@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license = "MIT"
 publish = false
-description = "Optional AVX-512 math kernels for Project Thessa numerical loops (spec section 10)"
+description = "Optional x86 and ARM SIMD math kernels for Project Thessa numerical loops (spec section 10)"
 
-[dependencies]
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+wide = "1.7"

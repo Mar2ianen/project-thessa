@@ -1,0 +1,130 @@
+# Example: dissimilar tanks, split bipropellant pair, and crewed cabin.
+# One lofted hull carries a split LoxMethane stage (oxidizer aft, fuel
+# forward), an aft storable tank with its own pressure/material, and a
+# four-seat crew cabin. Body +X is forward.
+name = "example-biprop-crew-body"
+mass_kg = 800.0
+inertia_body_kg_m2 = [
+  [1200.0, 0.0, 0.0],
+  [0.0, 2400.0, 0.0],
+  [0.0, 0.0, 2400.0],
+]
+
+[[procedural_bodies]]
+name = "core"
+origin_body_m = [0.0, 0.0, 0.0]
+
+[[procedural_bodies.stations]]
+x_m = 0.0
+half_width_m = 0.55
+top_height_m = 0.55
+bottom_height_m = 0.55
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.stations]]
+x_m = 0.9
+half_width_m = 1.0
+top_height_m = 1.0
+bottom_height_m = 1.0
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.stations]]
+x_m = 4.9
+half_width_m = 1.0
+top_height_m = 1.0
+bottom_height_m = 1.0
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+[[procedural_bodies.stations]]
+x_m = 6.8
+half_width_m = 0.001
+top_height_m = 0.001
+bottom_height_m = 0.001
+top_exponent = 2.0
+bottom_exponent = 2.0
+offset_y_m = 0.0
+offset_z_m = 0.0
+
+# Split bipropellant stage: one region -> main-ox + main-fuel tanks.
+[[procedural_bodies.regions]]
+name = "main"
+x0_m = 0.9
+x1_m = 3.4
+
+[procedural_bodies.regions.kind.bipropellant]
+propellant = "lox-methane"
+fill_fraction = 0.9
+oxidizer_pressure_pa = 600000.0
+fuel_pressure_pa = 400000.0
+
+[procedural_bodies.regions.kind.bipropellant.fuel_material]
+density_kg_m3 = 1600.0
+yield_strength_pa = 800000000.0
+max_wall_temp_k = 350.0
+
+# Dissimilar aft tank: storable hypergolic with its own shell.
+[[procedural_bodies.regions]]
+name = "rcs-storable"
+x0_m = 3.4
+x1_m = 4.9
+
+[procedural_bodies.regions.kind.tank]
+propellant = "nto-mmh"
+fill_fraction = 0.85
+pressure_pa = 2000000.0
+shell = "sphere"
+
+[procedural_bodies.regions.kind.tank.material]
+density_kg_m3 = 7900.0
+yield_strength_pa = 515000000.0
+max_wall_temp_k = 800.0
+
+# Crewed cabin with seats.
+[[procedural_bodies.regions]]
+name = "cabin"
+x0_m = 4.9
+x1_m = 6.0
+
+[procedural_bodies.regions.kind.crew]
+seats = 4
+seat_mass_kg_each = 12.0
+occupant_mass_kg_each = 90.0
+seat_pitch_m = 0.3
+control_station = true
+
+[procedural_bodies.regions.atmosphere]
+pressure_kpa = 101.325
+
+[[procedural_bodies.ports]]
+name = "engine-aft"
+x_m = 0.0
+clock_rad = 0.0
+kind = "engine-mount"
+diameter_m = 0.5
+
+[procedural_bodies.structure]
+skin_gauge_mm = 2.0
+frame_spacing_m = 1.0
+frame_gauge_mm = 2.0
+frame_width_mm = 40.0
+tank_pressure_pa = 500000.0
+wall_inset_mm = 10.0
+
+[procedural_bodies.structure.skin_material]
+name = "Al-Li-2195"
+density_kg_m3 = 2710.0
+yield_strength_mpa = 590.0
+
+[procedural_bodies.structure.tank_material]
+density_kg_m3 = 2840.0
+yield_strength_pa = 395000000.0
+max_wall_temp_k = 400.0

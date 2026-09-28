@@ -1,11 +1,50 @@
 use std::{env, error::Error, fs, path::PathBuf};
 
+use analyzer::run_analyzer;
+use asset_schema::VehicleAsset;
+#[cfg(test)]
+use asset_schema::{CollisionPartAsset, parallel_axis};
 use glam::{DMat3, DQuat, DVec3};
 use serde::Deserialize;
-use thessa_sim_core::{
-    AeroGeometry, AeroPanel, CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionPart,
-    CollisionShape, ControlSurfaceDefinition, RigidBodyProperties, VehicleDefinition,
+use thessa_aero_surfaces::{
+    CollisionOptions, CompileOptions, MechanismState, ProceduralSurface, compile_surface,
 };
+use thessa_fuselage::{
+    AssemblyLink, AttachKind, BodyCollisionOptions, BodyCompileOptions, BodyTransform,
+    CabinSeatRole, CompiledBody, DoorSide, ExitType, PortKind, ProceduralBody, RegionKind,
+    body_collision_parts, compile_assembly, compile_body,
+};
+use thessa_sim_core::{
+    AeroGeometry, AeroPanel, AirCycle, AirbreathingSpec, AssemblyEndpoint, AssemblyLinkState,
+    AssemblyVolume, AtmosphereConfig, BatterySpec, CabinExit, CabinExitSide, CabinExitType,
+    CabinMonument, CabinMonumentKind, CabinSeat, CabinSeatClass,
+    CabinSeatRole as RuntimeCabinSeatRole, CabinSeatStyle, CabinSuitType, ChamberMaterial,
+    ChamberSpec, CollisionAxis, CollisionGeometry, CollisionMaterial, CollisionPart,
+    CollisionShape, CompiledEngine, CompiledJet, ControlCore, ControlMixing, ControlStation,
+    ControlSurfaceDefinition, CoolingMode, ElectricPropellant, ElectricThrusterDesign,
+    ElectricThrusterMount, ElectricThrusterSpec, ElectricalPowerSystem, EngineCycle, EngineMount,
+    EstocEjectorSpec, EstocPrecoolerSpec, EstocSpec, FoldJointRecord, FusionReaction,
+    FusionTorchMount, FusionTorchSpec, HeatShieldMount, IntakeKind, JetFuel, JetMount,
+    LandingLegSpec, LandingShockAbsorberSpec, LiquidEngineSpec, NamedAssemblyLink, NozzleContour,
+    NtrFluid, NuclearThermalSpec, ParachuteSpec, PowerConsumerSpec, PowerPriority,
+    PressurizedCabin, Propellant, PropellerDriveMount, PropellerDriveSpec, PropellerSpec,
+    PropulsionSystemSpec, PulsedFusionMount, PulsedFusionSpec, RadiatorDeployment, RadiatorSpec,
+    ReactionWheelBankSpec, ReactorSpec, RigidBodyProperties, ShaftPowerSourceSpec, ShaftSpec,
+    SolarArrayDeployment, SolarArraySpec, SolarArrayTracking, SolidGrainGeometry, SolidMotorSpec,
+    SystemMount, TankMount, TankResource, TankShape, TankSpec, ThermalLinkSpec, ThermalNodeSpec,
+    ThermalSystem, TurbopropDriveSpec, TurbopropMount, UltracapacitorSpec, VehicleAssembly,
+    VehicleDefinition, WheelBrakeSpec, WheelChassisRetractionSpec, WheelChassisSpec,
+    WheelDriveSpec, WheelLayout, WheelStrutSpec, WheelTireSpec, analyze_airbreathing,
+    analyze_altitude, analyze_estoc, analyze_propeller_drive, analyze_turboprop_drive,
+    default_convective_k,
+};
+
+mod analyzer;
+mod asset_schema;
+mod debug_mesh;
+
+#[cfg(test)]
+mod integration;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let options = Options::parse(env::args().skip(1))?;
@@ -15,6 +54,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let source = fs::read_to_string(&options.input)?;
     let asset: VehicleAsset = toml::from_str(&source)?;
+    if let Some(output_dir) = options.debug_body_mesh_dir.as_deref() {
+        debug_mesh::export_body_meshes(&asset.procedural_bodies, output_dir)?;
+    }
     let vehicle = asset.bake()?;
     println!("vehicle: {}", vehicle.name);
     println!("panels: {}", vehicle.aero_geometry.panels.len());
@@ -24,267 +66,133 @@ fn main() -> Result<(), Box<dyn Error>> {
         vehicle.collision_geometry.parts.len()
     );
     println!("mass: {:.3} kg", vehicle.mass_properties.mass_kg);
+    for chassis in &vehicle.wheel_chassis {
+        println!(
+            "wheel chassis {}: {} stations, {:.3} kg",
+            chassis.spec.name,
+            chassis.wheel_stations.len(),
+            chassis.dry_mass_kg(),
+        );
+    }
+    let authority = vehicle.control_authority();
+    println!(
+        "control authority: {} ({:?})",
+        if authority.controllable {
+            "controllable"
+        } else {
+            "uncontrollable"
+        },
+        authority.reason
+    );
+    for mount in &vehicle.tanks {
+        println!(
+            "tank: {:.3} m^3 capacity, dry {:.1} kg, loaded {:.0}/{:.0} kg",
+            mount.tank.volume_m3,
+            mount.tank.dry_mass_kg,
+            mount.loaded_propellant_kg(),
+            mount.tank.full_propellant_kg,
+        );
+    }
+    for mount in &vehicle.engines {
+        let (thrust_vac_n, kind) = match &mount.engine {
+            CompiledEngine::Liquid(engine) => (engine.thrust_vac_n, "liquid"),
+            CompiledEngine::Solid(engine) => (
+                engine
+                    .burn_curve
+                    .iter()
+                    .map(|point| point.thrust_vac_n)
+                    .fold(0.0_f64, f64::max),
+                "solid",
+            ),
+        };
+        println!(
+            "engine {} ({kind}): vacuum thrust {:.1} kN, bake mass {:.1} kg",
+            mount.name,
+            thrust_vac_n / 1000.0,
+            mount.engine.bake_mass_kg(),
+        );
+    }
+    for mount in &vehicle.systems {
+        println!(
+            "system {} ({} chambers): vacuum thrust {:.1} kN, dry {:.1} kg",
+            mount.name,
+            mount.system.chambers.len(),
+            mount.system.total_thrust_vac_n / 1000.0,
+            mount.system.dry_mass_kg,
+        );
+    }
+    for mount in &vehicle.jets {
+        let (kind, static_thrust_n) = match &mount.engine {
+            CompiledJet::Air(engine) => ("jet", engine.design_static_thrust_n),
+            CompiledJet::Estoc(engine) => (
+                "estoc",
+                engine.air.design_static_thrust_n + engine.rocket_thrust_vac_n,
+            ),
+        };
+        println!(
+            "jet {} ({kind}): static thrust {:.1} kN, dry {:.1} kg",
+            mount.name,
+            static_thrust_n / 1000.0,
+            mount.engine.dry_mass_kg(),
+        );
+    }
+    for mount in &vehicle.propeller_drives {
+        println!(
+            "propeller drive {}: ideal disk {:.2} m, dry {:.1} kg",
+            mount.name, mount.drive.propeller.diameter_m, mount.drive.dry_mass_kg,
+        );
+    }
     if let Some(output) = options.output {
         let json = serde_json::to_string_pretty(&vehicle)?;
         fs::write(&output, format!("{json}\n"))?;
         println!("wrote: {}", output.display());
     }
+    if options.analyze {
+        run_analyzer(
+            &vehicle,
+            options.throttle,
+            options.burn_time_s,
+            options.analyze_json,
+            &options.composition,
+            options.source_rpm,
+            options.power_takeoff_fraction,
+        )?;
+    }
     Ok(())
-}
-
-#[derive(Debug, Deserialize)]
-struct VehicleAsset {
-    name: String,
-    mass_kg: f64,
-    /// Matrix is written as rows in the TOML file for readability.
-    inertia_body_kg_m2: [[f64; 3]; 3],
-    panels: Vec<PanelAsset>,
-    #[serde(default)]
-    control_surfaces: Vec<ControlSurfaceAsset>,
-    /// Solver-neutral contact primitives. Legacy assets may omit this while
-    /// collision geometry is migrated; contact-active runtime code must not.
-    #[serde(default)]
-    collision_parts: Vec<CollisionPartAsset>,
-}
-
-impl VehicleAsset {
-    fn bake(self) -> Result<VehicleDefinition, Box<dyn Error>> {
-        let panels = self
-            .panels
-            .into_iter()
-            .map(PanelAsset::bake)
-            .collect::<Result<Vec<_>, _>>()?;
-        let geometry = AeroGeometry::new(panels)?;
-        let inertia = rows_to_matrix(self.inertia_body_kg_m2);
-        let properties = RigidBodyProperties::new(self.mass_kg, inertia)?;
-        let controls = self
-            .control_surfaces
-            .into_iter()
-            .map(ControlSurfaceAsset::bake)
-            .collect::<Result<Vec<_>, _>>()?;
-        let collision_geometry = CollisionGeometry::new(
-            self.collision_parts
-                .into_iter()
-                .map(CollisionPartAsset::bake)
-                .collect::<Result<Vec<_>, _>>()?,
-        )?;
-        Ok(
-            VehicleDefinition::new(self.name, geometry, properties, controls)?
-                .with_collision_geometry(collision_geometry)?,
-        )
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct PanelAsset {
-    position_body_m: [f64; 3],
-    chord_axis_body: [f64; 3],
-    lift_axis_body: [f64; 3],
-    area_m2: f64,
-    chord_m: f64,
-    #[serde(default)]
-    center_of_pressure_body_m: Option<[f64; 3]>,
-    #[serde(default)]
-    span_m: Option<f64>,
-    #[serde(default)]
-    aspect_ratio: Option<f64>,
-    #[serde(default)]
-    sweep_rad: Option<f64>,
-    #[serde(default)]
-    lift_interference_factor: Option<f64>,
-    #[serde(default = "one")]
-    lift_coefficient_sign: f64,
-    #[serde(default)]
-    thickness_to_chord_ratio: f64,
-    #[serde(default)]
-    control_deflection_rad: f64,
-    #[serde(default = "one")]
-    exposure: f64,
-}
-
-impl PanelAsset {
-    fn bake(self) -> Result<AeroPanel, Box<dyn Error>> {
-        let mut panel = AeroPanel::new(
-            vector(self.position_body_m),
-            vector(self.chord_axis_body),
-            vector(self.lift_axis_body),
-            self.area_m2,
-            self.chord_m,
-        )?;
-        if self.span_m.is_some()
-            || self.aspect_ratio.is_some()
-            || self.sweep_rad.is_some()
-            || self.lift_interference_factor.is_some()
-        {
-            let span_m = self.span_m.unwrap_or(panel.span_m);
-            let aspect_ratio = self.aspect_ratio.unwrap_or(span_m.powi(2) / self.area_m2);
-            panel = panel.with_planform(
-                span_m,
-                aspect_ratio,
-                self.sweep_rad.unwrap_or(0.0),
-                self.lift_interference_factor.unwrap_or(1.0),
-            )?;
-        }
-        if let Some(center_of_pressure) = self.center_of_pressure_body_m {
-            panel = panel.with_center_of_pressure(vector(center_of_pressure))?;
-        }
-        panel = panel.with_lift_sign(self.lift_coefficient_sign)?;
-        panel = panel.with_thickness_ratio(self.thickness_to_chord_ratio)?;
-        panel.control_deflection_rad = self.control_deflection_rad;
-        panel.exposure = self.exposure;
-        Ok(panel)
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct ControlSurfaceAsset {
-    name: String,
-    panel_indices: Vec<usize>,
-    minimum_deflection_rad: f64,
-    maximum_deflection_rad: f64,
-}
-
-impl ControlSurfaceAsset {
-    fn bake(self) -> Result<ControlSurfaceDefinition, Box<dyn Error>> {
-        Ok(ControlSurfaceDefinition::new(
-            self.name,
-            self.panel_indices,
-            self.minimum_deflection_rad,
-            self.maximum_deflection_rad,
-        )?)
-    }
-}
-
-/// One body-local collision primitive from the source vehicle asset.
-///
-/// Example TOML:
-///
-/// ```text
-/// [[collision_parts]]
-/// shape = "capsule"
-/// position_body_m = [0.0, 0.0, 0.0]
-/// orientation_body_xyzw = [0.0, 0.0, 0.0, 1.0]
-/// axis = "x"
-/// half_segment_m = 2.0
-/// radius_m = 0.5
-/// friction = 0.7
-/// restitution = 0.0
-/// ```
-#[derive(Debug, Deserialize)]
-struct CollisionPartAsset {
-    #[serde(default)]
-    position_body_m: [f64; 3],
-    #[serde(default = "identity_quaternion")]
-    orientation_body_xyzw: [f64; 4],
-    #[serde(default = "default_friction")]
-    friction: f64,
-    #[serde(default)]
-    restitution: f64,
-    #[serde(flatten)]
-    shape: CollisionShapeAsset,
-}
-
-impl CollisionPartAsset {
-    fn bake(self) -> Result<CollisionPart, Box<dyn Error>> {
-        let [x, y, z, w] = self.orientation_body_xyzw;
-        Ok(CollisionPart::new(
-            vector(self.position_body_m),
-            DQuat::from_xyzw(x, y, z, w),
-            self.shape.bake(),
-            CollisionMaterial::new(self.friction, self.restitution)?,
-        )?)
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "shape", rename_all = "kebab-case")]
-enum CollisionShapeAsset {
-    Sphere {
-        radius_m: f64,
-    },
-    Cuboid {
-        half_extents_m: [f64; 3],
-    },
-    Capsule {
-        axis: CollisionAxisAsset,
-        half_segment_m: f64,
-        radius_m: f64,
-    },
-}
-
-impl CollisionShapeAsset {
-    fn bake(self) -> CollisionShape {
-        match self {
-            Self::Sphere { radius_m } => CollisionShape::Sphere { radius_m },
-            Self::Cuboid { half_extents_m } => CollisionShape::Cuboid {
-                half_extents_m: vector(half_extents_m),
-            },
-            Self::Capsule {
-                axis,
-                half_segment_m,
-                radius_m,
-            } => CollisionShape::Capsule {
-                axis: axis.into(),
-                half_segment_m,
-                radius_m,
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum CollisionAxisAsset {
-    X,
-    Y,
-    Z,
-}
-
-impl From<CollisionAxisAsset> for CollisionAxis {
-    fn from(value: CollisionAxisAsset) -> Self {
-        match value {
-            CollisionAxisAsset::X => Self::X,
-            CollisionAxisAsset::Y => Self::Y,
-            CollisionAxisAsset::Z => Self::Z,
-        }
-    }
-}
-
-fn vector(values: [f64; 3]) -> DVec3 {
-    DVec3::from_array(values)
-}
-
-fn rows_to_matrix(rows: [[f64; 3]; 3]) -> DMat3 {
-    DMat3::from_cols(
-        vector([rows[0][0], rows[1][0], rows[2][0]]),
-        vector([rows[0][1], rows[1][1], rows[2][1]]),
-        vector([rows[0][2], rows[1][2], rows[2][2]]),
-    )
-}
-
-fn one() -> f64 {
-    1.0
-}
-
-fn identity_quaternion() -> [f64; 4] {
-    [0.0, 0.0, 0.0, 1.0]
-}
-
-fn default_friction() -> f64 {
-    CollisionMaterial::default().friction
 }
 
 struct Options {
     input: PathBuf,
     output: Option<PathBuf>,
+    debug_body_mesh_dir: Option<PathBuf>,
     help: bool,
+    analyze: bool,
+    throttle: f64,
+    burn_time_s: f64,
+    analyze_json: bool,
+    /// Atmosphere composition design string for the jet analyzer (the
+    /// species basis is explicit; default is Thessa air `N2/O2/AR/CO2` —
+    /// never a hard-coded oxygen scalar).
+    composition: String,
+    /// Commanded source-shaft speed for propeller-drive analyzer rows.
+    source_rpm: f64,
+    /// Requested fraction of available power-turbine output in the analyzer.
+    power_takeoff_fraction: f64,
 }
 
 impl Options {
     fn parse(arguments: impl Iterator<Item = String>) -> Result<Self, Box<dyn Error>> {
         let mut input = PathBuf::from("data/vehicles/example_aircraft.toml");
         let mut output = None;
+        let mut debug_body_mesh_dir = None;
         let mut help = false;
+        let mut analyze = false;
+        let mut throttle = 1.0;
+        let mut burn_time_s = 0.0;
+        let mut analyze_json = false;
+        let mut composition = "N2/O2/AR/CO2".to_string();
+        let mut source_rpm: f64 = 2_400.0;
+        let mut power_takeoff_fraction: f64 = 0.25;
         let mut arguments = arguments.peekable();
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
@@ -292,14 +200,63 @@ impl Options {
                 "--output" => {
                     output = Some(PathBuf::from(required_value(&mut arguments, "--output")?))
                 }
+                "--debug-body-mesh-dir" => {
+                    debug_body_mesh_dir = Some(PathBuf::from(required_value(
+                        &mut arguments,
+                        "--debug-body-mesh-dir",
+                    )?));
+                }
+                "--analyze" => analyze = true,
+                "--analyze-json" => {
+                    analyze = true;
+                    analyze_json = true;
+                }
+                "--throttle" => {
+                    throttle = required_value(&mut arguments, "--throttle")?
+                        .parse()
+                        .map_err(|_| "--throttle needs a number in [0, 1]")?;
+                }
+                "--burn-time" => {
+                    burn_time_s = required_value(&mut arguments, "--burn-time")?
+                        .parse()
+                        .map_err(|_| "--burn-time needs seconds >= 0")?;
+                }
+                "--composition" => {
+                    composition = required_value(&mut arguments, "--composition")?;
+                }
+                "--source-rpm" => {
+                    source_rpm = required_value(&mut arguments, "--source-rpm")?
+                        .parse()
+                        .map_err(|_| "--source-rpm needs a finite RPM >= 0")?;
+                }
+                "--power-takeoff-fraction" => {
+                    power_takeoff_fraction =
+                        required_value(&mut arguments, "--power-takeoff-fraction")?
+                            .parse()
+                            .map_err(|_| "--power-takeoff-fraction needs a number in [0, 1]")?;
+                }
                 "--help" | "-h" => help = true,
                 unknown => return Err(format!("unknown argument {unknown}; use --help").into()),
             }
         }
+        if !source_rpm.is_finite() || source_rpm < 0.0 {
+            return Err("--source-rpm must be finite and >= 0".into());
+        }
+        if !power_takeoff_fraction.is_finite() || !(0.0..=1.0).contains(&power_takeoff_fraction) {
+            return Err("--power-takeoff-fraction must be finite in [0, 1]".into());
+        }
         Ok(Self {
             input,
             output,
+            debug_body_mesh_dir,
             help,
+            analyze,
+            throttle,
+            burn_time_s,
+            analyze_json,
+            composition,
+            source_rpm,
+            power_takeoff_fraction,
         })
     }
 }
@@ -315,54 +272,21 @@ fn required_value(
 
 fn print_help() {
     println!(
-        "Usage: thessa-vehicle-baker [--input data/vehicles/example_aircraft.toml] [--output data/vehicles/example_aircraft.baked.json]"
+        "Usage: thessa-vehicle-baker [--input data/vehicles/example_aircraft.toml] [--output data/vehicles/example_aircraft.baked.json] [--debug-body-mesh-dir DIR] [--analyze [--throttle 1.0] [--burn-time 0.0] [--analyze-json] [--composition N2/O2/AR/CO2] [--source-rpm 2400] [--power-takeoff-fraction 0.25]]"
+    );
+    println!("--debug-body-mesh-dir exports procedural fuselage meshes as OBJ before baking.");
+    println!(
+        "--composition sets the analyzer atmosphere species (design string, default Thessa air N2/O2/AR/CO2; unknown gases are refused)."
+    );
+    println!("--source-rpm sets the steady shaft speed used by propeller-drive analyzer rows.");
+    println!(
+        "--power-takeoff-fraction requests this share of available turboprop shaft output [0, 1]."
     );
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn example_vehicle_asset_bakes_to_valid_generic_definition() {
-        let asset: VehicleAsset =
-            toml::from_str(include_str!("../../../data/vehicles/example_aircraft.toml"))
-                .expect("vehicle TOML should parse");
-        let vehicle = asset.bake().expect("vehicle asset should bake");
-        assert_eq!(vehicle.aero_geometry.panels.len(), 4);
-        assert_eq!(vehicle.control_surfaces.len(), 2);
-        assert_eq!(vehicle.collision_geometry.parts.len(), 4);
-        assert!(vehicle.collision_geometry.validate().is_ok());
-        assert_eq!(vehicle.mass_properties.mass_kg, 1_000.0);
-        let json = serde_json::to_string(&vehicle).expect("vehicle JSON should serialize");
-        let round_trip: VehicleDefinition =
-            serde_json::from_str(&json).expect("vehicle JSON should deserialize");
-        assert_eq!(round_trip, vehicle);
-    }
-
-    #[test]
-    fn collision_part_asset_bakes_without_backend_types() {
-        let part: CollisionPartAsset = toml::from_str(
-            r#"
-shape = "capsule"
-axis = "x"
-half_segment_m = 2.0
-radius_m = 0.5
-friction = 0.8
-"#,
-        )
-        .expect("collision part TOML should parse");
-        let baked = part.bake().expect("collision part should validate");
-        assert_eq!(baked.local_position_m, DVec3::ZERO);
-        assert_eq!(baked.local_orientation, DQuat::IDENTITY);
-        assert_eq!(baked.material.friction, 0.8);
-        assert!(matches!(
-            baked.shape,
-            CollisionShape::Capsule {
-                axis: CollisionAxis::X,
-                half_segment_m: 2.0,
-                radius_m: 0.5,
-            }
-        ));
-    }
-}
+mod body_tests;
+#[cfg(test)]
+mod cabin_tests;
+#[cfg(test)]
+mod tests;

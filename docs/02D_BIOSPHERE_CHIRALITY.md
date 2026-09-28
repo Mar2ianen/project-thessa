@@ -1,5 +1,8 @@
 # Project Thessa — Biosphere Chirality
 
+Status: future work. No code or data counterpart; nothing here constrains
+the runtime yet.
+
 > Working biological-canon document. This file defines the handedness relationship between Thessa-derived life and the Solar-System easter-egg biosphere, and the resulting colonization / food-economy implications.
 
 ## 1. Canon target

@@ -158,8 +158,8 @@ fn bake_plume(w: u32, h: u32, diamonds: bool) -> Vec<u8> {
             }
             let core = (bright * 1.6).min(1.0);
             let r_c = (1.0f64).min(0.35 + core);
-            let g_c = (0.85 * core + 0.15 * body) as f64;
-            let b_c = (0.55 * core * core) as f64;
+            let g_c = 0.85 * core + 0.15 * body;
+            let b_c = 0.55 * core * core;
             let a = (bright * 1.25).clamp(0.0, 1.0);
             px.extend_from_slice(&[
                 (r_c.clamp(0.0, 1.0) * 255.0) as u8,
@@ -176,8 +176,7 @@ fn bake_plume(w: u32, h: u32, diamonds: bool) -> Vec<u8> {
 /// volume path advects turbulence instead of breathing the whole plume).
 fn plume_flicker(sim_time_s: f64, throttle: f64) -> f64 {
     let t = sim_time_s;
-    1.0 + 0.10 * (t * 37.0).sin() * throttle
-        + 0.06 * (t * 61.0 + 1.3).sin() * throttle
+    1.0 + 0.10 * (t * 37.0).sin() * throttle + 0.06 * (t * 61.0 + 1.3).sin() * throttle
         - 0.04 * throttle
 }
 
@@ -230,9 +229,9 @@ impl PlumeFieldCache {
         };
         Self {
             key: (i64::MIN, i64::MIN),
-            profile: AxialProfile::empty(
-                thessa_plume_core::profile::expansion_regime(&source, &env),
-            ),
+            profile: AxialProfile::empty(thessa_plume_core::profile::expansion_regime(
+                &source, &env,
+            )),
             source,
             env,
             radiant: [0.0; 3],
@@ -259,10 +258,10 @@ fn setup_plume(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut volume_materials: ResMut<Assets<PlumeVolumeMaterial>>,
 ) {
-    let r = graphics
-        .as_deref()
-        .map(|g| g.0.clone())
-        .unwrap_or_default();
+    let r = graphics.as_deref().map(|g| g.0.clone()).unwrap_or_default();
+    if !r.plume_enabled {
+        return;
+    }
 
     // Low-path impostor texture (fixed bands = documented fallback artifact).
     let plume_tex = images.add(rgba_image(32, 256, bake_plume(32, 256, r.plume_diamonds)));
@@ -272,7 +271,6 @@ fn setup_plume(
     let cone = meshes.add(Cone {
         radius: 1.1,
         height: cone_h,
-        ..default()
     });
     commands.spawn((
         Mesh3d(cone),
@@ -362,10 +360,18 @@ fn update_plume_field(
     graphics: Option<Res<GraphicsResolved>>,
     mut cache: ResMut<PlumeFieldCache>,
 ) {
+    if graphics
+        .as_deref()
+        .is_some_and(|settings| !settings.0.plume_enabled)
+    {
+        cache.key = (i64::MIN, i64::MIN);
+        cache.profile = AxialProfile::empty(cache.profile.regime);
+        cache.radiant = [0.0; 3];
+        return;
+    }
     let (Some(clock), Some(runtime)) = (clock.as_deref(), runtime.as_deref()) else {
         return;
     };
-    let _ = graphics;
     let input = read_plume_input(runtime, clock);
     let amount = input.active_amount();
 
@@ -405,9 +411,8 @@ fn update_plume_field(
         }
         Err(_) => {
             cache.radiant = [0.0; 3];
-            cache.profile = AxialProfile::empty(
-                thessa_plume_core::profile::expansion_regime(&source, &env),
-            );
+            cache.profile =
+                AxialProfile::empty(thessa_plume_core::profile::expansion_regime(&source, &env));
             cache.source = source;
             cache.env = env;
             cache.key = key;
@@ -415,13 +420,28 @@ fn update_plume_field(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn drive_plume_consumers(
     cache: Res<PlumeFieldCache>,
     graphics: Option<Res<GraphicsResolved>>,
     clock: Option<Res<SimulationClock>>,
-    cameras: Query<&Transform, (With<Camera3d>, Without<PlumeCone>, Without<PlumeVolume>, Without<PlumeLight>)>,
-    craft: Query<(&Name, &GlobalTransform, &Visibility), (Without<PlumeCone>, Without<PlumeVolume>, Without<PlumeLight>)>,
+    cameras: Query<
+        &Transform,
+        (
+            With<Camera3d>,
+            Without<PlumeCone>,
+            Without<PlumeVolume>,
+            Without<PlumeLight>,
+        ),
+    >,
+    craft: Query<
+        (&Name, &GlobalTransform, &Visibility),
+        (
+            Without<PlumeCone>,
+            Without<PlumeVolume>,
+            Without<PlumeLight>,
+        ),
+    >,
     pilot: Option<Res<PilotHudState>>,
     mut cone: Query<
         (&mut Transform, &mut Visibility),
@@ -438,23 +458,24 @@ fn drive_plume_consumers(
         (With<PlumeLight>, Without<PlumeCone>, Without<PlumeVolume>),
     >,
 ) {
-    let r = graphics
-        .as_deref()
-        .map(|g| g.0.clone())
-        .unwrap_or_default();
+    let r = graphics.as_deref().map(|g| g.0.clone()).unwrap_or_default();
     let in_pilot = pilot
         .as_deref()
         .is_some_and(|s| s.view_mode == ClientViewMode::Pilot);
+    // Disabled plumes must not pay for the name scan below.
+    let enabled = r.plume_enabled && in_pilot;
     // Pilot (metre) space only: map-view transforms are compressed-AU and
     // meaningless for metre-scale plume consumers.
     let mut craft_frame: Option<GlobalTransform> = None;
-    for (name, g, v) in &craft {
-        if name.as_str() == "PFD North American X-15" && *v != Visibility::Hidden {
-            craft_frame = Some(*g);
-            break;
+    if enabled {
+        for (name, g, v) in &craft {
+            if name.as_str() == "PFD North American X-15" && *v != Visibility::Hidden {
+                craft_frame = Some(*g);
+                break;
+            }
         }
     }
-    let show = r.plume_enabled && in_pilot && craft_frame.is_some() && !cache.profile.is_empty();
+    let show = enabled && craft_frame.is_some() && !cache.profile.is_empty();
     let Ok((mut cone_t, mut cone_v)) = cone.single_mut() else {
         return;
     };
@@ -479,8 +500,7 @@ fn drive_plume_consumers(
 
     // Field-derived light proxy (doc section 13): radiative integral mapped
     // to intensity by a documented photometric scale.
-    let radiant_luma =
-        (cache.radiant[0] + cache.radiant[1] + cache.radiant[2]) / 3.0;
+    let radiant_luma = (cache.radiant[0] + cache.radiant[1] + cache.radiant[2]) / 3.0;
     if r.plume_light {
         point.intensity = (PROVISIONAL_LUMEN_SCALE * radiant_luma) as f32;
         light_t.translation = nozzle;
@@ -521,11 +541,20 @@ fn drive_plume_consumers(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 fn drive_volume(
     r: &ResolvedGraphicsSettings,
     cache: &PlumeFieldCache,
     sim_time_s: f64,
-    cameras: &Query<&Transform, (With<Camera3d>, Without<PlumeCone>, Without<PlumeVolume>, Without<PlumeLight>)>,
+    cameras: &Query<
+        &Transform,
+        (
+            With<Camera3d>,
+            Without<PlumeCone>,
+            Without<PlumeVolume>,
+            Without<PlumeLight>,
+        ),
+    >,
     vol_t: &mut Transform,
     vol_v: &mut Visibility,
     volume_materials: &mut Assets<PlumeVolumeMaterial>,
@@ -568,7 +597,11 @@ fn drive_volume(
 
     // Cylindrical billboard around the exhaust axis.
     let center = nozzle + exhaust * (len / 2.0);
-    let cam_pos = cameras.iter().next().map(|t| t.translation).unwrap_or(center + Vec3::Z);
+    let cam_pos = cameras
+        .iter()
+        .next()
+        .map(|t| t.translation)
+        .unwrap_or(center + Vec3::Z);
     let mut x_axis = exhaust.cross(center - cam_pos).normalize_or_zero();
     if x_axis.length_squared() < 1e-6 {
         x_axis = craft_lateral_fallback(exhaust);
@@ -579,43 +612,49 @@ fn drive_volume(
     vol_t.scale = Vec3::new(diameter * 0.5 + r_tail * 1.6, len, 1.0);
     *vol_v = Visibility::Visible;
 
-    if let Some(handle) = volume_mat.single().ok() {
-        if let Some(mut mat) = volume_materials.get_mut(&handle.0) {
-            mat.uniforms = PlumeUniforms {
-                origin_len: Vec4::new(nozzle.x, nozzle.y, nozzle.z, len),
-                axis_r0: Vec4::new(exhaust.x, exhaust.y, exhaust.z, cache.source.exit_radius_m as f32),
-                shape_time: Vec4::new(
-                    r_tail,
-                    shock_cell_spacing_m(2.0 * cache.source.exit_radius_m, cache.source.exit_mach, pi) as f32,
-                    amp,
-                    time,
-                ),
-                march: Vec4::new(
-                    gain,
-                    ext_mean,
-                    steps,
-                    cache.source.exhaust_velocity_mps as f32 * 0.1,
-                ),
-                core_rgb: Vec4::new(
-                    material.core_rgb[0] as f32 * inv_divisor,
-                    material.core_rgb[1] as f32 * inv_divisor,
-                    material.core_rgb[2] as f32 * inv_divisor,
-                    0.40,
-                ),
-                mid_rgb: Vec4::new(
-                    material.mid_rgb[0] as f32 * inv_divisor,
-                    material.mid_rgb[1] as f32 * inv_divisor,
-                    material.mid_rgb[2] as f32 * inv_divisor,
-                    spread_rate(pi) as f32,
-                ),
-                edge_rgb: Vec4::new(
-                    material.edge_rgb[0] as f32 * inv_divisor,
-                    material.edge_rgb[1] as f32 * inv_divisor,
-                    material.edge_rgb[2] as f32 * inv_divisor,
-                    expansion_fan(pi) as f32,
-                ),
-            };
-        }
+    if let Ok(handle) = volume_mat.single()
+        && let Some(mut mat) = volume_materials.get_mut(&handle.0)
+    {
+        mat.uniforms = PlumeUniforms {
+            origin_len: Vec4::new(nozzle.x, nozzle.y, nozzle.z, len),
+            axis_r0: Vec4::new(
+                exhaust.x,
+                exhaust.y,
+                exhaust.z,
+                cache.source.exit_radius_m as f32,
+            ),
+            shape_time: Vec4::new(
+                r_tail,
+                shock_cell_spacing_m(2.0 * cache.source.exit_radius_m, cache.source.exit_mach, pi)
+                    as f32,
+                amp,
+                time,
+            ),
+            march: Vec4::new(
+                gain,
+                ext_mean,
+                steps,
+                cache.source.exhaust_velocity_mps as f32 * 0.1,
+            ),
+            core_rgb: Vec4::new(
+                material.core_rgb[0] as f32 * inv_divisor,
+                material.core_rgb[1] as f32 * inv_divisor,
+                material.core_rgb[2] as f32 * inv_divisor,
+                0.40,
+            ),
+            mid_rgb: Vec4::new(
+                material.mid_rgb[0] as f32 * inv_divisor,
+                material.mid_rgb[1] as f32 * inv_divisor,
+                material.mid_rgb[2] as f32 * inv_divisor,
+                spread_rate(pi) as f32,
+            ),
+            edge_rgb: Vec4::new(
+                material.edge_rgb[0] as f32 * inv_divisor,
+                material.edge_rgb[1] as f32 * inv_divisor,
+                material.edge_rgb[2] as f32 * inv_divisor,
+                expansion_fan(pi) as f32,
+            ),
+        };
     }
 }
 
@@ -628,6 +667,7 @@ fn craft_lateral_fallback(exhaust: Vec3) -> Vec3 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn drive_cone(
     r: &ResolvedGraphicsSettings,
     cache: &PlumeFieldCache,
@@ -673,6 +713,57 @@ mod tests {
         };
         assert!((on.active_amount() - 0.8).abs() < 1e-12);
         assert!((plume_flicker(10.0, 0.8) - 1.0).abs() < 0.25);
+    }
+
+    #[test]
+    fn disabled_plume_clears_field_without_flight_resources() {
+        let settings = ResolvedGraphicsSettings {
+            plume_enabled: false,
+            ..Default::default()
+        };
+        let mut cache = PlumeFieldCache::empty();
+        cache.key = (10, 20);
+        cache.radiant = [1.0, 2.0, 3.0];
+
+        let mut world = World::new();
+        world.insert_resource(GraphicsResolved(settings));
+        world.insert_resource(cache);
+        let mut schedule = Schedule::default();
+        schedule.add_systems(update_plume_field);
+        schedule.run(&mut world);
+
+        let cache = world.resource::<PlumeFieldCache>();
+        assert_eq!(cache.key, (i64::MIN, i64::MIN));
+        assert_eq!(cache.radiant, [0.0; 3]);
+        assert!(cache.profile.is_empty());
+    }
+
+    #[test]
+    fn disabled_plume_skips_startup_assets_and_entities() {
+        let settings = ResolvedGraphicsSettings {
+            plume_enabled: false,
+            ..Default::default()
+        };
+        let mut world = World::new();
+        world.insert_resource(GraphicsResolved(settings));
+        world.insert_resource(Assets::<Image>::default());
+        world.insert_resource(Assets::<Mesh>::default());
+        world.insert_resource(Assets::<StandardMaterial>::default());
+        world.insert_resource(Assets::<PlumeVolumeMaterial>::default());
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(setup_plume);
+        schedule.run(&mut world);
+
+        assert!(world.iter_entities().all(|entity| {
+            entity.get::<PlumeCone>().is_none()
+                && entity.get::<PlumeVolume>().is_none()
+                && entity.get::<PlumeLight>().is_none()
+        }));
+        assert_eq!(world.resource::<Assets<Image>>().len(), 0);
+        assert_eq!(world.resource::<Assets<Mesh>>().len(), 0);
+        assert_eq!(world.resource::<Assets<StandardMaterial>>().len(), 0);
+        assert_eq!(world.resource::<Assets<PlumeVolumeMaterial>>().len(), 0);
     }
 
     #[test]

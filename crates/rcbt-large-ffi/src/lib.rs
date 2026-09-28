@@ -112,18 +112,21 @@ impl LargeOcbt {
     }
 
     pub fn buffer_size(&self, index: usize) -> usize {
-        // SAFETY: index is checked by the upstream implementation; callers
-        // should use 0 or 1, the two exposed OCBT buffers.
+        // SAFETY: the index is range-checked against the two OCBT buffers
+        // before the FFI call; upstream does not bounds-check it.
+        assert!(index < 2, "large CBT exposes two packed buffers");
         unsafe { thessa_large_cbt_buffer_size(self.raw, index as u32) as usize }
     }
 
     pub fn element_size(&self, index: usize) -> usize {
         // SAFETY: see buffer_size.
+        assert!(index < 2, "large CBT exposes two packed buffers");
         unsafe { thessa_large_cbt_element_size(self.raw, index as u32) as usize }
     }
 
     /// Copy one of the two packed buffers for upload or inspection.
     pub fn buffer(&self, index: usize) -> Vec<u8> {
+        assert!(index < 2, "large CBT exposes two packed buffers");
         let len = self.buffer_size(index);
         // SAFETY: the pointer is valid for `len` bytes while self is alive.
         unsafe { std::slice::from_raw_parts(thessa_large_cbt_buffer(self.raw, index as u32), len) }
@@ -160,10 +163,16 @@ impl LargeOcbt {
     }
 
     pub fn heap_element(&self, id: usize) -> usize {
-        assert!(id > 0);
-        // SAFETY: the upstream implementation validates through its layout
-        // contract; this method is intended for diagnostics and benchmarks.
-        unsafe { thessa_large_cbt_heap_element(self.raw, id as u32) as usize }
+        // `get_heap_element` indexes per-depth offset/mask tables and the
+        // packed heap/bitfield. Checking only that the id fits in `u32` would
+        // let safe callers request depths beyond those allocated tables.
+        assert!(
+            id > 0 && id < (1usize << (self.max_depth() as usize + 1)),
+            "large CBT node id is out of range"
+        );
+        // SAFETY: id is in the allocated heap rows, and therefore in u32 range.
+        let id = u32::try_from(id).expect("large CBT node id exceeds u32 range");
+        unsafe { thessa_large_cbt_heap_element(self.raw, id) as usize }
     }
 
     /// Rebuild upstream packed sums from the dense bitfield.
@@ -218,5 +227,12 @@ mod tests {
         );
         assert!(!tree.get_bit(4));
         assert_eq!(tree.decode_bit_complement(0), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "large CBT node id is out of range")]
+    fn heap_element_rejects_nodes_beyond_allocated_depth() {
+        let tree = LargeOcbt::new(Variant::Ocbt128k).unwrap();
+        tree.heap_element(1usize << (tree.max_depth() as usize + 1));
     }
 }

@@ -17,6 +17,7 @@ use thessa_flight_control::{
 use thessa_sim_core::SimTime;
 
 pub mod ascent;
+pub mod authority;
 pub mod execute;
 pub mod landing;
 pub mod rendezvous;
@@ -269,6 +270,20 @@ pub enum GraphNodeConfig {
 
 impl GraphNodeConfig {
     fn validate(&self) -> Result<(), String> {
+        // Watchdog shared by every phase node: finite and positive, so a
+        // hung executor phase always trips instead of running forever.
+        fn check_watchdog(name: &str, max_phase_time_s: f64) -> Result<(), String> {
+            if !max_phase_time_s.is_finite() || max_phase_time_s <= 0.0 {
+                return Err(format!("{name} watchdog must be finite and positive"));
+            }
+            Ok(())
+        }
+        fn check_throttle(name: &str, value: f64) -> Result<(), String> {
+            if !value.is_finite() || !(0.0..=1.2).contains(&value) {
+                return Err(format!("{name} throttle must be in [0, 1.2]"));
+            }
+            Ok(())
+        }
         match self {
             Self::Number { value } if !value.is_finite() => {
                 Err("graph number configuration must be finite".into())
@@ -282,30 +297,176 @@ impl GraphNodeConfig {
             Self::Demand { demand } => demand.validate().map_err(|error| error.to_string()),
             Self::Wait { condition } => condition.validate().map_err(|error| error.to_string()),
             Self::AscentPhase { phase } => match phase {
-                ascent::AscentPhase::VerticalRise { throttle }
-                    if !throttle.is_finite() || !(0.0..=1.2).contains(throttle) =>
-                {
-                    Err("ascent vertical-rise throttle must be in [0, 1.2]".into())
+                ascent::AscentPhase::VerticalRise {
+                    throttle,
+                    max_phase_time_s,
+                } => {
+                    check_throttle("ascent vertical-rise", *throttle)?;
+                    check_watchdog("ascent vertical-rise", *max_phase_time_s)
                 }
-                _ => Ok(()),
+                ascent::AscentPhase::GravityTurn {
+                    turn_start_altitude_m,
+                    turn_end_altitude_m,
+                    target_apoapsis_m,
+                    max_phase_time_s,
+                } => {
+                    if !turn_start_altitude_m.is_finite() || *turn_start_altitude_m < 0.0 {
+                        return Err("ascent turn start must be finite and non-negative".into());
+                    }
+                    if !turn_end_altitude_m.is_finite()
+                        || *turn_end_altitude_m <= *turn_start_altitude_m
+                    {
+                        return Err("ascent turn end must be finite and above turn start".into());
+                    }
+                    if !target_apoapsis_m.is_finite() || *target_apoapsis_m <= 0.0 {
+                        return Err("ascent turn target must be finite and positive".into());
+                    }
+                    check_watchdog("ascent gravity-turn", *max_phase_time_s)
+                }
+                ascent::AscentPhase::Coast { max_phase_time_s } => {
+                    check_watchdog("ascent coast", *max_phase_time_s)
+                }
+                ascent::AscentPhase::Circularize {
+                    target_periapsis_m,
+                    max_phase_time_s,
+                } => {
+                    if !target_periapsis_m.is_finite() || *target_periapsis_m <= 0.0 {
+                        return Err("ascent circularize target must be finite and positive".into());
+                    }
+                    check_watchdog("ascent circularize", *max_phase_time_s)
+                }
+                ascent::AscentPhase::Abort { max_phase_time_s } => {
+                    check_watchdog("ascent abort", *max_phase_time_s)
+                }
             },
             Self::LandingPhase { phase } => match phase {
-                landing::LandingPhase::DeorbitBurn { throttle }
-                    if !throttle.is_finite() || !(0.0..=1.2).contains(throttle) =>
-                {
-                    Err("landing deorbit throttle must be in [0, 1.2]".into())
+                landing::LandingPhase::DeorbitBurn {
+                    throttle,
+                    entry_altitude_m,
+                    max_phase_time_s,
+                } => {
+                    check_throttle("landing deorbit", *throttle)?;
+                    if !entry_altitude_m.is_finite() || *entry_altitude_m <= 0.0 {
+                        return Err("landing entry altitude must be finite and positive".into());
+                    }
+                    check_watchdog("landing deorbit", *max_phase_time_s)
                 }
-                _ => Ok(()),
+                landing::LandingPhase::CoastToEntry {
+                    entry_altitude_m,
+                    max_phase_time_s,
+                } => {
+                    if !entry_altitude_m.is_finite() || *entry_altitude_m <= 0.0 {
+                        return Err("landing entry altitude must be finite and positive".into());
+                    }
+                    check_watchdog("landing coast", *max_phase_time_s)
+                }
+                landing::LandingPhase::BrakingBurn {
+                    net_braking_decel_mps2,
+                    touchdown_speed_limit_mps,
+                    burn_throttle,
+                    max_phase_time_s,
+                } => {
+                    if !net_braking_decel_mps2.is_finite() || *net_braking_decel_mps2 <= 0.0 {
+                        return Err("landing braking decel must be finite and positive".into());
+                    }
+                    if !touchdown_speed_limit_mps.is_finite() || *touchdown_speed_limit_mps <= 0.0 {
+                        return Err(
+                            "landing braking speed limit must be finite and positive".into()
+                        );
+                    }
+                    check_throttle("landing braking", *burn_throttle)?;
+                    check_watchdog("landing braking", *max_phase_time_s)
+                }
+                landing::LandingPhase::TerminalDescent {
+                    site,
+                    touchdown_speed_limit_mps,
+                    burn_throttle,
+                    max_phase_time_s,
+                } => {
+                    site.validate().map_err(|error| error.to_string())?;
+                    if !touchdown_speed_limit_mps.is_finite() || *touchdown_speed_limit_mps <= 0.0 {
+                        return Err("landing touchdown speed must be finite and positive".into());
+                    }
+                    check_throttle("landing terminal", *burn_throttle)?;
+                    check_watchdog("landing terminal", *max_phase_time_s)
+                }
+                landing::LandingPhase::AbortToOrbit { max_phase_time_s } => {
+                    check_watchdog("landing abort", *max_phase_time_s)
+                }
             },
             Self::ExecutePhase { phase } => match phase {
-                execute::ExecutePhase::Burn { delta_v_mps, .. }
-                    if delta_v_mps.iter().any(|v| !v.is_finite()) =>
-                {
-                    Err("execute burn delta-v must be finite".into())
+                execute::ExecutePhase::Arm {
+                    max_phase_time_s, ..
+                } => check_watchdog("execute arm", *max_phase_time_s),
+                execute::ExecutePhase::Burn {
+                    delta_v_mps,
+                    max_phase_time_s,
+                    ..
+                } => {
+                    if delta_v_mps.iter().any(|v| !v.is_finite()) {
+                        return Err("execute burn delta-v must be finite".into());
+                    }
+                    check_watchdog("execute burn", *max_phase_time_s)
                 }
-                _ => Ok(()),
+                execute::ExecutePhase::Verify {
+                    predicted_miss_m,
+                    max_phase_time_s,
+                } => {
+                    if !predicted_miss_m.is_finite() || *predicted_miss_m < 0.0 {
+                        return Err("execute verify miss must be finite and non-negative".into());
+                    }
+                    check_watchdog("execute verify", *max_phase_time_s)
+                }
+                execute::ExecutePhase::Abort { max_phase_time_s } => {
+                    check_watchdog("execute abort", *max_phase_time_s)
+                }
             },
-            Self::RendezvousPhase { .. } => Ok(()),
+            Self::RendezvousPhase { phase } => match phase {
+                rendezvous::RendezvousPhase::Approach {
+                    hold_distance_m,
+                    closing_rate_limit_mps,
+                    max_phase_time_s,
+                } => {
+                    if !hold_distance_m.is_finite() || *hold_distance_m <= 0.0 {
+                        return Err("rendezvous hold distance must be finite and positive".into());
+                    }
+                    if !closing_rate_limit_mps.is_finite() || *closing_rate_limit_mps <= 0.0 {
+                        return Err("rendezvous closing limit must be finite and positive".into());
+                    }
+                    check_watchdog("rendezvous approach", *max_phase_time_s)
+                }
+                rendezvous::RendezvousPhase::MatchVelocity {
+                    match_tolerance_mps,
+                    max_phase_time_s,
+                } => {
+                    if !match_tolerance_mps.is_finite() || *match_tolerance_mps <= 0.0 {
+                        return Err("rendezvous match tolerance must be finite and positive".into());
+                    }
+                    check_watchdog("rendezvous match", *max_phase_time_s)
+                }
+                rendezvous::RendezvousPhase::StationKeep {
+                    hold_distance_m,
+                    match_tolerance_mps,
+                    max_phase_time_s,
+                } => {
+                    if !hold_distance_m.is_finite() || *hold_distance_m <= 0.0 {
+                        return Err("rendezvous keep distance must be finite and positive".into());
+                    }
+                    if !match_tolerance_mps.is_finite() || *match_tolerance_mps <= 0.0 {
+                        return Err("rendezvous keep tolerance must be finite and positive".into());
+                    }
+                    check_watchdog("rendezvous keep", *max_phase_time_s)
+                }
+                rendezvous::RendezvousPhase::BackAway {
+                    hold_distance_m,
+                    max_phase_time_s,
+                } => {
+                    if !hold_distance_m.is_finite() || *hold_distance_m <= 0.0 {
+                        return Err("rendezvous back-away range must be finite and positive".into());
+                    }
+                    check_watchdog("rendezvous back-away", *max_phase_time_s)
+                }
+            },
             _ => Ok(()),
         }
     }

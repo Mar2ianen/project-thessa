@@ -61,7 +61,9 @@ pub(super) enum Action {
     Altitude,
     Sas,
     Rcs,
+    ReactionWheels,
     Gear,
+    Parachutes,
     Engine,
     Mode,
     SetMode(ControlMode),
@@ -131,7 +133,9 @@ fn action_icon(action: Action) -> &'static str {
     match action {
         Action::Sas => "sas",
         Action::Rcs => "rcs",
+        Action::ReactionWheels => "attitude",
         Action::Gear => "gear",
+        Action::Parachutes => "gear",
         Action::Engine => "engine",
         Action::Mode => "attitude",
         Action::SetMode(mode) => mode_icon(mode),
@@ -211,7 +215,9 @@ fn button(
                 action,
                 Action::Sas
                     | Action::Rcs
+                    | Action::ReactionWheels
                     | Action::Gear
+                    | Action::Parachutes
                     | Action::Engine
                     | Action::Precision
                     | Action::Camera
@@ -242,7 +248,9 @@ fn action_active(
     match action {
         Action::Sas => runtime.sas_enabled,
         Action::Rcs => runtime.rcs_enabled,
+        Action::ReactionWheels => runtime.reaction_wheels_enabled,
         Action::Gear => runtime.gear_down,
+        Action::Parachutes => runtime.parachutes_armed,
         Action::Engine => runtime.input_engine_active,
         Action::Pause => clock.paused,
         Action::Help => state.show_help,
@@ -290,8 +298,32 @@ pub(super) fn pilot_hud_buttons(
                 Action::Speed => state.speed_frame = state.speed_frame.next(),
                 Action::Altitude => state.altitude_frame = state.altitude_frame.toggle(),
                 Action::Sas => runtime.sas_enabled = !runtime.sas_enabled,
-                Action::Rcs => runtime.rcs_enabled = !runtime.rcs_enabled,
-                Action::Gear => runtime.gear_down = !runtime.gear_down,
+                Action::Rcs => {
+                    let enabled = !runtime.rcs_enabled;
+                    runtime
+                        .issue_part_command(VehiclePartCommand::SetRcsEnabled { enabled })
+                        .expect("built-in RCS command is valid");
+                }
+                Action::ReactionWheels => {
+                    let enabled = !runtime.reaction_wheels_enabled;
+                    runtime
+                        .issue_part_command(VehiclePartCommand::SetReactionWheelsEnabled {
+                            enabled,
+                        })
+                        .expect("built-in reaction-wheel command is valid");
+                }
+                Action::Gear => {
+                    let deployed = !runtime.gear_down;
+                    runtime
+                        .issue_part_command(VehiclePartCommand::SetLandingGearDeployed { deployed })
+                        .expect("built-in landing-gear command is valid");
+                }
+                Action::Parachutes => {
+                    let armed = !runtime.parachutes_armed;
+                    runtime
+                        .issue_part_command(VehiclePartCommand::SetParachutesArmed { armed })
+                        .expect("built-in parachute-group command is valid");
+                }
                 Action::Engine => {
                     runtime.input_engine_active = !runtime.input_engine_active;
                     runtime.engine_active = runtime.input_engine_active;
@@ -674,7 +706,9 @@ pub(super) fn spawn_pilot_hud(
                                             for (action, title) in [
                                                 (Action::Sas, "SAS"),
                                                 (Action::Rcs, "RCS"),
+                                                (Action::ReactionWheels, "WHEELS"),
                                                 (Action::Gear, "GEAR"),
+                                                (Action::Parachutes, "CHUTE"),
                                             ] {
                                                 row.spawn(Node {
                                                     align_items: AlignItems::Center,
@@ -777,6 +811,7 @@ pub(super) fn spawn_pilot_hud(
                         ("sas", "SAS · T"),
                         ("rcs", "RCS · R"),
                         ("gear", "Gear · G"),
+                        ("gear", "Parachutes · P"),
                         ("engine", "Engine · Space"),
                         ("camera", "Camera · V"),
                         ("data", "Data · F3"),
@@ -1218,12 +1253,16 @@ pub(super) fn update_pilot_hud(
             ),
             Readout::Propulsion => format_percent(flight.throttle),
             Readout::Orbit => format!(
-                "AP {}\nPE {}\nAGL {}\nThrust {}\nGear {}",
+                "AP {}\nPE {}\nAGL {}\nThrust {}\nGear {}\nChutes {}\nRW torque {:.0}/{:.0}/{:.0} N·m",
                 format_altitude_value(flight.apoapsis_altitude_m),
                 format_altitude_value(flight.periapsis_altitude_m),
                 format_altitude_value(flight.altitude_agl_m),
                 format_force(flight.thrust_n),
-                if flight.gear_down { "down" } else { "up" }
+                if flight.gear_down { "down" } else { "up" },
+                flight.parachute_status,
+                flight.reaction_wheel_torque_body_nm.x,
+                flight.reaction_wheel_torque_body_nm.y,
+                flight.reaction_wheel_torque_body_nm.z,
             ),
             Readout::Heading => format!(
                 "HDG {:03.0}°  {}",
@@ -1231,7 +1270,7 @@ pub(super) fn update_pilot_hud(
                 heading_cardinal(flight.heading_deg)
             ),
             Readout::Help => format!(
-                "{}\n\nW / S   Nose down / up\nA / D   Yaw left / right     Q / E   Roll\nShift / Ctrl   Throttle     Z / X   Full / zero\nSpace   Engine     G   Gear     R   RCS\nT   Toggle SAS     Hold F   Invert SAS\nCaps Lock   Precision controls\n\nRMB drag   Free orbit     MMB drag   Pan\nWheel   Zoom     `   Reset camera\nV   Free / chase camera     M   Orbital map\nEsc / F8   Pause     F2   Hide interface\nF3   Extra telemetry     F1   This layout\n\nClick speed: surface / air / orbit / target\nClick altimeter: datum / AGL\nMode button beside navball: control scheme\nSAS / RCS / GEAR: green means enabled\nIcons to the left: camera, data, precision,\npause, map, help. + / −: throttle.\n\nFuel is unlimited; contact and gear forces\nare not yet simulated. F4: performance; Shift+F4: capture.\nF6: surface survey; M: return to map.\nSurvey: Shift+RMB look around; RMB orbit.\nShift+F12: RT / raster (supported GPUs).",
+                "{}\n\nW / S   Nose down / up\nA / D   Yaw left / right     Q / E   Roll\nShift / Ctrl   Throttle     Z / X   Full / zero\nSpace   Engine     G   Gear     R   RCS\nP   Arm / cut parachutes     Y   Reaction wheels\nT   Toggle SAS     Hold F   Invert SAS\nCaps Lock   Precision controls\n\nRMB drag   Free orbit     MMB drag   Pan\nWheel   Zoom     `   Reset camera\nV   Free / chase camera     M   Orbital map\nEsc / F8   Pause     F2   Hide interface\nF3   Extra telemetry     F1   This layout\n\nClick speed: surface / air / orbit / target\nClick altimeter: datum / AGL\nMode button beside navball: control scheme\nSAS / RCS / WHEELS / GEAR / CHUTE lamps\nshow enabled controls. Icons to the left: camera,\ndata, precision, pause, map, help. + / −: throttle.\n\nFuel is unlimited; contact and gear forces\nare not yet simulated. F4: performance; Shift+F4: capture.\nF6: surface survey; M: return to map.\nSurvey: Shift+RMB look around; RMB orbit.\nShift+F12: RT / raster (supported GPUs).",
                 state.control_mode.description()
             ),
         };

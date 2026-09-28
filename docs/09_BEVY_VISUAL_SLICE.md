@@ -1,5 +1,8 @@
 # Bevy visual slice
 
+Status: implemented prototype (CPU fallback default; GPU-indexed CBT plus
+baked beauty/plume opt-in via `graphics.toml`).
+
 ## Status
 
 **Implemented prototype.** The client is a Bevy 0.19 application that reads the
@@ -20,8 +23,12 @@ path already consumes snapshots from an embedded authoritative server process.
 - atmosphere optics shared with the `thessa-atmosphere` crate;
 - pilot scene with X-15 visual asset, navball/PFD, flight HUD, terrain, water,
   performance overlay, and flight tracing;
-- streamed rocky terrain tiles with parent retention during refinement;
+- streamed rocky terrain tiles with parent retention during refinement (CPU
+  fallback path; `terrain=gpu_indexed` selects the opt-in CBT raster with
+  material pages instead);
 - raster water reflection baseline and optional graphics-setting resolution;
+- baked beauty shells (cloud decks, gas-giant bands, aurora) and field-first
+  engine plume, all gated by `graphics.toml`;
 - render-local anchoring so large barycentric coordinates do not jitter.
 
 ## Coordinate contract
@@ -40,11 +47,18 @@ from the interpolated transform.
 ```bash
 cargo run -p thessa-client
 cargo run -p thessa-client -- --local
+cargo run -p thessa-client -- --docking-demo --local
 ```
 
 The regular path starts a local server process and communicates over framed
 stdio. `--local` is a legacy diagnostic path that steps the authority in the
 client process.
+
+`--docking-demo` adds an opt-in live fixture to the real client window: two
+craft approach under Rapier, load the CAD-derived D1 port scenes, progress
+through capture/alignment/hard-dock/pressure equalization, apply a structural
+load, and undock. It is a validation fixture, not a gameplay command exposed
+in the normal HUD.
 
 ## Known limits
 
@@ -54,7 +68,11 @@ client process.
 - the authoritative terrain contact boundary is spherical/sampled even though
   the client can render richer generated terrain;
 - atmosphere, water, clouds, and RT effects are visual reduced-order systems;
-- rendering backends must continue to go through Bevy/wgpu abstractions;
+  clouds/aurora/gas-giants use shell approximations, while the plume has a Low
+  impostor and Medium/High field-integrated volume ribbon. Volumetric clouds and
+  full RT remain future work;
+- rendering backends for the current client must continue to go through
+  Bevy/wgpu abstractions (see `docs/39` for the longer-term migration plan);
 - a WASM/WebGPU client target is future work.
 
 ## Verification

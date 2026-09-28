@@ -5,7 +5,8 @@
 **Implemented client prototype.** The pilot HUD, navball, camera, command
 mapping, telemetry frames, and server snapshot path are implemented in
 `apps/client`. The visual contract is deliberately separate from authoritative
-simulation state.
+simulation state. Contact debug visualization lives in
+`apps/client/src/contact_gizmos.rs`.
 
 ## 10.1. Modes and controls
 
@@ -21,7 +22,8 @@ simulation state.
 | `Space` | engine toggle |
 | `T` | SAS toggle |
 | hold `F` | temporary SAS inversion |
-| `R` / `G` | RCS / gear toggle |
+| `R` / `Y` | RCS / reaction-wheel toggle |
+| `G` / `P` | landing-gear deploy/retract / parachute arm/disarm |
 | `V` | free/follow camera |
 | backquote | reset camera |
 | `Escape` / `F8` / `Pause` | pause |
@@ -30,8 +32,9 @@ simulation state.
 | `F3` | extra telemetry |
 | RMB / MMB / wheel | orbit/pan/zoom |
 
-The UI also exposes buttons for SAS, RCS, gear, engine, camera, map, and pause.
-Green indicates an enabled state. Extra data is hidden by default.
+The UI also exposes buttons for SAS, RCS, reaction wheels, gear, parachutes,
+engine, camera, map, and pause. Green indicates an enabled state. Extra data is
+hidden by default.
 
 ## 10.2. Control path
 
@@ -52,8 +55,11 @@ authoritative vehicle state
 ```
 
 The client never writes an authoritative transform. Manual axes, SAS/attitude
-hold, rate guidance, direct mode, RCS, throttle, gear, and reset are commands
-or typed intents. The authority returns snapshots and telemetry.
+hold, rate guidance, direct mode, RCS, reaction wheels, gear, parachutes,
+throttle, and reset are commands or typed intents. Discrete installed-part
+commands are applied to local prediction and sent in order to the embedded
+server; the server remains authoritative. The authority returns snapshots and
+telemetry.
 
 ## 10.3. Speed frames
 
@@ -127,3 +133,17 @@ cargo test -p thessa-server
 
 The tests cover control mappings, frames, navball projection, orientation,
 render anchoring, camera behavior, missing telemetry, and reset behavior.
+
+
+## 10.11. Instrument presentation variants
+
+The navball/reference-frame contract is semantic, not a mandatory visual skin.
+Future clients may expose selectable presentations (for example a compact
+spaceflight ball, Apollo/ADI-like presentation, aircraft PFD-style attitude
+display, minimal vector/tape mode, or IVA-specific instruments).
+
+Every presentation must consume the same attitude and reference-frame vectors.
+Changing the instrument style must not change speed-frame selection, guidance
+semantics, marker definitions, or authoritative physics state. See the dated KSA
+comparison in 44_KSA_TECHNICAL_COMPARISON_2026_09_20.md for the external
+reference that motivated making this distinction explicit.

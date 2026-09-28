@@ -12,6 +12,8 @@
 
 pub mod bench_support;
 pub mod heap;
+pub mod microstore;
+pub mod microstore_sample;
 pub mod ocbt;
 pub mod shaders;
 
@@ -59,6 +61,7 @@ pub enum WgpuError {
     BufferRangeOutOfBounds,
     BufferNotWritable,
     MissingBinding(u32),
+    DispatchWorkgroupsTooLarge { x: u32, limit: u32 },
     Device(String),
 }
 
@@ -69,6 +72,10 @@ impl std::fmt::Display for WgpuError {
             Self::BufferRangeOutOfBounds => f.write_str("RCBT buffer binding exceeds its resource"),
             Self::BufferNotWritable => f.write_str("RCBT buffer was not created for uploads"),
             Self::MissingBinding(slot) => write!(f, "RCBT binding slot {slot} is missing"),
+            Self::DispatchWorkgroupsTooLarge { x, limit } => write!(
+                f,
+                "RCBT dispatch needs {x} workgroups per dimension; device limit is {limit}"
+            ),
             Self::Device(message) => f.write_str(message),
         }
     }
@@ -294,6 +301,13 @@ impl CbtBackend for WgpuBackend {
             .ok_or(WgpuError::BufferRangeOutOfBounds)?;
         if end > binding.resource.size_bytes || binding.size_bytes < 4 {
             return Err(WgpuError::BufferRangeOutOfBounds);
+        }
+        let group_limit = self.device.limits().max_compute_workgroups_per_dimension;
+        if groups.x > group_limit {
+            return Err(WgpuError::DispatchWorkgroupsTooLarge {
+                x: groups.x,
+                limit: group_limit,
+            });
         }
         let invocations = (groups.x as u64)
             .checked_mul(groups.y as u64)

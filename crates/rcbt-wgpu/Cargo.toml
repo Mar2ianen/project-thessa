@@ -8,6 +8,7 @@ publish = false
 description = "Portable wgpu backend adapter for RCBT compute stages"
 
 [dependencies]
+thessa-microstore-core = { path = "../microstore-core" }
 thessa-rcbt-core = { path = "../rcbt-core" }
 wgpu.workspace = true
 
@@ -19,6 +20,10 @@ thessa-rcbt-large-ffi = { path = "../rcbt-large-ffi" }
 
 [[bench]]
 name = "gpu_cbt"
+harness = false
+
+[[bench]]
+name = "microstore"
 harness = false
 
 [[bench]]

@@ -2,6 +2,11 @@
 resolver = "3"
 members = [
     "crates/sim-core",
+    "crates/aero-core",
+    "crates/celestial",
+    "crates/trajectory",
+    "crates/propulsion",
+    "crates/vehicle-core",
     "crates/collision",
     "crates/simd",
     "crates/maneuver",
@@ -10,11 +15,14 @@ members = [
     "crates/graphics",
     "crates/flight-net",
     "crates/flight-control",
+    "crates/aero-surfaces",
+    "crates/fuselage",
     "crates/autopilot",
     "crates/autopilot-js",
     "crates/flight-authority",
     "crates/atmosphere",
     "crates/plume-core",
+    "crates/microstore-core",
     "crates/rcbt-core",
     "crates/rcbt-ref",
     "crates/rcbt-ffi",
@@ -60,4 +68,19 @@ opt-level = 2
 # The interactive client uses the development profile; keep the numerical
 # kernels optimized so warp doesn't spend its frame budget in debug arithmetic.
 [profile.dev.package.thessa-sim-core]
+opt-level = 2
+
+[profile.dev.package.thessa-aero-core]
+opt-level = 2
+
+[profile.dev.package.thessa-celestial]
+opt-level = 2
+
+[profile.dev.package.thessa-trajectory]
+opt-level = 2
+
+[profile.dev.package.thessa-propulsion]
+opt-level = 2
+
+[profile.dev.package.thessa-vehicle-core]
 opt-level = 2

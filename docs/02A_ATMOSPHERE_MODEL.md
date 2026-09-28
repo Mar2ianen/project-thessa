@@ -1,5 +1,10 @@
 # Project Thessa — Atmosphere Model & Tracking Table
 
+Status: partial implementation. Baked compositions and bulk mixture properties
+flow into runtime atmosphere samples and propulsion species queries. A-system/
+Janus/Mora rows match `data/system.toml` pressures; BC-subsystem rows come from
+the 02B bake; unbaked profiles, local fields, and TBD cells stay future.
+
 > Companion to `02_WORLD_ATLAS.md`.
 >
 > **Canonical atmospheric inputs are composition + pressure profile + temperature profile.** Density is derived from them and must not be stored as an independent simulation truth.
@@ -23,6 +28,44 @@ Each atmosphere should eventually define:
 - aerosol/haze model;
 - biome/local overrides where required.
 
+### 1.1 Runtime atmosphere API: shipped boundary and remaining work
+
+`AtmosphereSample` carries thermodynamic/transport values and a single
+`AtmosphereComposition`; propulsion reads species from that sample instead of
+reconstructing "air" from pressure plus Earth constants.
+
+The current sample provides:
+
+```text
+pressure
+temperature
+density
+speed of sound
+dynamic viscosity
+molar fractions by species
+derived mass fractions by species
+```
+
+`AtmosphereComposition` derives mean molar mass and specific gas constant; the
+baked design record supplies mixture heat-capacity properties used to resolve
+the runtime profile and speed of sound. The profile currently uses one
+well-mixed composition across altitude. Partial pressure is derived as total
+pressure times mole fraction rather than stored as a separate sample field.
+Composition has one canonical molar basis in authored data and derives mass
+fractions, so Thessa's 25% O2 by mole cannot silently be passed as an oxygen
+mass fraction.
+
+Consumers such as propulsion should query useful reactants from the sampled
+composition, e.g. "available O2 mass fraction here", rather than accept a
+free-standing scalar `oxygen_fraction`. This query path is implemented for
+airbreathing engines. The old scalar oxygen-fraction interface and fixed Earth
+fraction have been removed.
+
+The current composition is well mixed and constant with altitude in a profile.
+Per-position species changes, local overrides, Khepri gas-sea cells, weather,
+and biome chemistry remain future work; those values must eventually come from
+the same position/altitude query for all consumers.
+
 ## 2. Current atmosphere table
 
 `rho_ref` values are **illustrative design estimates**, not locked canon, until temperature/composition are fixed.
@@ -33,7 +76,7 @@ Each atmosphere should eventually define:
 | **Khepri — cold basin floor** | up to ~0.8 bar | CO₂-rich, enhanced condensable/volcanic species | ~190–220 K target | ~1.9–2.2 kg/m³ for CO₂-rich gas | local gas sea, not a separate sealed atmosphere |
 | **Nereid** | profile, no surface datum | H₂/He; CH₄/NH₃/H₂O traces | altitude-dependent | profile only | use pressure-level reference radii instead of surface density |
 | **Pyra** | near vacuum | local SO₂ exosphere | strongly regional | negligible | transient volcanic exospheres |
-| **Thessa** | ~1.20 bar | ~76% N₂, ~21% O₂, ~3% Ar/CO₂/H₂O/trace | ~280–292 K | ~1.4–1.5 kg/m³ | composition provisional until biosphere canon lock |
+| **Thessa** | ~1.20 bar | ~73.5–73.7% N₂, 25.0% O₂, ~1.0–1.2% Ar, ~0.3% CO₂, H₂O variable | ~278 K reference; climate variable | ~1.5 kg/m³ | composition provisional until biosphere canon lock; fractions are molar/volume unless stated otherwise |
 | **Pelagos** | ~1.7 bar | N₂-rich; CO₂/H₂O/Ar | warm/humid | ~1.8–2.2 kg/m³ | strong humidity and weather variation |
 | **Auron** | ~0.006 bar | CO₂/Ar | cold, strongly diurnal | ~0.01–0.02 kg/m³ | near-exosphere / thin-atmosphere regime |
 | **Borea** | ~0.55 bar | N₂/CH₄/Ar; minor NH₃/hydrocarbons | cryogenic | ~1.5–2.2 kg/m³ | condensation/seasonality important |
@@ -41,17 +84,20 @@ Each atmosphere should eventually define:
 | **Halo** | none | — | — | 0 | — |
 | **Cinder** | none | — | — | 0 | — |
 | **Orthea** | ~2–3 bar | N₂ + substantial CO₂ + Ar | ~200–230 K target | roughly ~4–6 kg/m³ | exact CO₂ partial pressure must be climate-driven |
-| **Mira** | thin, TBD | TBD | cold | TBD | reopen from previous 0.08-bar moon concept after double-planet redesign |
+| **Mira** | ~0.08 bar N₂/CO₂ provisional | N₂/CO₂ | cold | TBD | reopened from previous moon concept; exact target still TBD |
 | **Dey** | none | — | — | 0 | — |
 | **Vesper** | profile, no surface datum | H₂/He/CH₄; deeper NH₃/H₂O chemistry | altitude-dependent | profile only | pressure-level atmosphere model |
 | **Skadi** | trace | N₂/CH₄ | cryogenic | TBD | mass and atmosphere both reopened |
 | **Mote** | none | — | — | 0 | — |
 | **Janus** | ~1.4 bar | N₂/CO₂/Ar, H₂O variable | ~260–290 K | ~1.7–2.0 kg/m³ | stronger UV-driven chemistry under B |
-| **Janus inner moon** | none / trace TBD | TBD | TBD | TBD | impact-derived concept |
+| **janus_inner** | none | — | — | 0 | impact-derived concept |
 | **Mora** | ~0.15–0.35 bar | residual N₂/CO₂; localized H₂O | dry/cool, local brine microclimates | TBD | dying-ocean / evaporite moon |
-| **Janus outer Titan-like moon** | ~1.5–2.0 bar | N₂ dominant; CH₄, minor CO₂, organic haze | warm relative to Titan | TBD | Titan-like atmospheric architecture, not Titan surface thermodynamics |
-| **BC inner circumbinary world** | TBD | likely mineral-vapor / trace volatile atmosphere | extremely hot | TBD | composition should emerge from surface vapor equilibrium |
-| **BC outer planet** | TBD | TBD | cold | TBD | planet class not locked |
+| **janus_haze** | ~1.75 bar | N₂ dominant; CH₄, minor CO₂, organic haze | warm relative to Titan | TBD | Titan-like atmospheric architecture, not Titan surface thermodynamics |
+| **bc_i** | TBD | likely mineral-vapor / trace volatile atmosphere | extremely hot | TBD | composition should emerge from surface vapor equilibrium |
+| **bc_outer** | TBD (H₂/He/CH₄ provisional, no pressure) | H₂/He/CH₄ | cold | TBD | planet class working pick, pressures open |
+| **bc_outer_retro** | TBD (N₂/CH₄ provisional, no pressure) | N₂/CH₄ | cold | TBD | pressures open |
+| **bc_outer_corona / ridge / rubble** | none | — | — | 0 | airless |
+| **bc_outer_plume** | transient H₂O provisional | H₂O | cold | TBD | cryovolcanic transient |
 
 ## 3. Khepri local-atmosphere rule
 

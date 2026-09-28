@@ -1,5 +1,7 @@
 # X-15 asset provenance
 
+Status: provenance record (not a feature doc).
+
 ## `assets/models/north_american_x-15_plane.glb`
 
 - Purpose: imported visual mesh for the pilot preview instead of a procedural

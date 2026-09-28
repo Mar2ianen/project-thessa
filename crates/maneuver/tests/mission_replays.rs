@@ -176,11 +176,7 @@ fn check_tour(ephemeris: &BakedEphemeris, fixture: &TourFixture) {
             central_body: ids[&fixture.central],
             departure_body: ids[&fixture.departure],
             arrival_body: ids[&fixture.arrival],
-            flyby_bodies: fixture
-                .flyby
-                .iter()
-                .map(|name| ids[name as &str])
-                .collect(),
+            flyby_bodies: fixture.flyby.iter().map(|name| ids[name as &str]).collect(),
             window_start: SimTime::EPOCH,
             departure_span_s: fixture.departure_span_d * DAY,
             departure_steps: fixture.departure_steps,
@@ -299,7 +295,12 @@ struct ChainFixture {
 
 fn check_chain(ephemeris: &BakedEphemeris, fixture: &ChainFixture) {
     let mut names: Vec<&str> = vec![&fixture.central, &fixture.departure];
-    names.extend(fixture.encounters.iter().map(|encounter| encounter.body.as_str()));
+    names.extend(
+        fixture
+            .encounters
+            .iter()
+            .map(|encounter| encounter.body.as_str()),
+    );
     let ids = body_ids(ephemeris, &names);
     let encounters: Vec<ChainEncounter> = fixture
         .encounters
@@ -321,13 +322,19 @@ fn check_chain(ephemeris: &BakedEphemeris, fixture: &ChainFixture) {
             central_body: ids[&fixture.central],
             departure_body: ids[&fixture.departure],
             encounters,
-            window_start: SimTime(
-                SimTime::EPOCH.0 + fixture.window_start_d.unwrap_or(0.0) * DAY,
-            ),
+            window_start: SimTime(SimTime::EPOCH.0 + fixture.window_start_d.unwrap_or(0.0) * DAY),
             departure_span_s: fixture.departure_span_d * DAY,
             departure_steps: fixture.departure_steps,
-            leg_tof_min_s: fixture.leg_tof_min_d.iter().map(|days| days * DAY).collect(),
-            leg_tof_max_s: fixture.leg_tof_max_d.iter().map(|days| days * DAY).collect(),
+            leg_tof_min_s: fixture
+                .leg_tof_min_d
+                .iter()
+                .map(|days| days * DAY)
+                .collect(),
+            leg_tof_max_s: fixture
+                .leg_tof_max_d
+                .iter()
+                .map(|days| days * DAY)
+                .collect(),
             leg_tof_steps: fixture.leg_tof_steps.clone(),
             keep_routes: fixture.keep,
             standoff_m: 100_000.0,

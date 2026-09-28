@@ -1,5 +1,8 @@
 # Project Thessa — Nearby Brown-Dwarf Interloper
 
+Status: design target. Deliberately unimplemented: unbound cloud member,
+not baked (`data/system.toml` carries only a comment).
+
 > Working design document for the first true off-system expansion target. The object is **not an ultra-wide Asterion companion**. It is a separate substellar system moving through the same dense stellar cloud, currently passing of order **0.5–1.0 light-year** from Asterion.
 
 ## 1. Core concept

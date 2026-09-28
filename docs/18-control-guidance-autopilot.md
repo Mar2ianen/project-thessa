@@ -1,6 +1,10 @@
 # Unified control, guidance, and autopilot architecture
 
-Status: design target.
+Status: partial implementation baseline — §§1–11, 13 (authority, guidance,
+laws, policy, allocator, actuators, graph, QuickJS, waits, server ownership)
+shipped as a vertical slice; generalized allocator past surfaces+RCS,
+wire-protocol replacement, full stdlib, staging topology, and powered-rails
+certification (§12 warm-up, §15 Phases 4–5) remain design targets.
 
 This document defines the control refactor that collapses the current SAS/assist split into one guidance-and-control stack, separates aircraft and spacecraft control laws, and adds a MechJeb-like programmable automation layer backed by QuickJS.
 
@@ -303,6 +307,33 @@ Examples:
 - reaction-wheel torque and momentum limits.
 
 The allocator outputs actuator targets. The actuator layer advances the physical actuator state at the world tick.
+
+### 8.1 Jet and ESTOC runtime contract
+
+Jet spool and combined-cycle mode changes are actuator state, not guidance
+policy. The flight loop owns the state and passes it through pure simulation
+calls:
+
+- air-breather spool advances through the shaft balance
+  (`advance_jet_shaft`) with the compiled `spool_tau_s` as its time
+  constant: starter input, light-off/self-sustain hysteresis, and
+  generator load decide acceleration; ESTOC exposes this air-path lag
+  separately from its mode transition lag;
+- a jet call carries `JetCommand` (`manual`, `last_mode`, the previous
+  `EstocTransient`, `dt_s`, plus the `shaft` state,
+  `starter_engaged`, and `generator_load_w`), and returns the
+  operating point plus the updated transient and shaft state —
+  `estoc_point` advances the shaft first, then evaluates the air path
+  at the resulting spool with `lit` gating ignition;
+- manual ESTOC mode selection has priority over automatic hysteresis,
+  including a manually selected air mode in vacuum, which flames out instead
+  of silently switching modes;
+- transition smoothing covers the full flow/thermodynamic snapshot, with Isp
+  recomputed from the smoothed onboard propellant flow.
+
+The propulsion geometry, mass fits, oxygen accounting, analyzer flags, and
+the `vehicle-baker --oxygen` adapter are specified in
+[`docs/details/04_PROCEDURAL_PROPULSION.md`](details/04_PROCEDURAL_PROPULSION.md).
 
 ## 9. High-level autopilot graph
 
@@ -654,6 +685,8 @@ The exact crate split is not normative; the dependency direction is.
 ## 15. Refactor plan
 
 The refactor should be behavior-preserving before new features are added.
+Phases 1–3 and 6–8 are substantially implemented (behavior-preserving
+extraction done); Phases 4–5 remain future.
 
 ### Phase 1: extract existing control behavior
 

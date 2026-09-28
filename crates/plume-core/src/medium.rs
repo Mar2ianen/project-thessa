@@ -20,6 +20,9 @@ pub struct MediumSample {
 
 /// Radial weight 0..~1.2 at axial `z_m`, radial `r_m` against the local mean
 /// radius `radius_m`: Gaussian core plus a mixing-layer skirt.
+// Validity guards must reject NaN: `!(x > 0.0)` catches NaN while the lint's
+// suggested `x <= 0.0` would accept it. The negated form is deliberate.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn radial_weight(r_m: f64, radius_m: f64) -> f64 {
     if !(radius_m > 0.0) || !r_m.is_finite() {
         return 0.0;
@@ -62,12 +65,9 @@ pub fn radiant_power(profile: &AxialProfile) -> [f64; 3] {
     for window in profile.stations.windows(2) {
         let (a, b) = (window[0], window[1]);
         let dz = (b.z_m - a.z_m).max(0.0);
-        let area =
-            std::f64::consts::PI * (0.5 * (a.radius_m + b.radius_m)).powi(2);
-        for channel in 0..3 {
-            total[channel] += 0.5 * (a.emission_rgb[channel] + b.emission_rgb[channel])
-                * area
-                * dz;
+        let area = std::f64::consts::PI * (0.5 * (a.radius_m + b.radius_m)).powi(2);
+        for (channel, slot) in total.iter_mut().enumerate() {
+            *slot += 0.5 * (a.emission_rgb[channel] + b.emission_rgb[channel]) * area * dz;
         }
     }
     total
@@ -77,6 +77,9 @@ pub fn radiant_power(profile: &AxialProfile) -> [f64; 3] {
 /// emission attenuated by running transmittance. Returns
 /// `(transmittance, rgb)`. This is the oracle the GPU must match within
 /// representation error; `steps` is a budget, not physics (tested).
+// Validity guards must reject NaN: `!(x > 0.0)` catches NaN while the lint's
+// suggested `x <= 0.0` would accept it. The negated form is deliberate.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn integrate_ray(
     profile: &AxialProfile,
     z_m: f64,
@@ -117,11 +120,7 @@ mod tests {
         let profile = live_profile();
         let z = profile.length_m * 0.15;
         let core = sample_medium(&profile, z, 0.0);
-        let edge = sample_medium(
-            &profile,
-            z,
-            profile.evaluate(z).unwrap().radius_m * 1.5,
-        );
+        let edge = sample_medium(&profile, z, profile.evaluate(z).unwrap().radius_m * 1.5);
         let core_sum: f64 = core.emission_rgb.iter().sum();
         let edge_sum: f64 = edge.emission_rgb.iter().sum();
         assert!(core_sum > edge_sum * 3.0, "{core_sum} vs {edge_sum}");
@@ -141,8 +140,7 @@ mod tests {
     fn dead_engine_integrates_to_vacuum() {
         let mut source = sample_source();
         source.throttle = 0.0;
-        let profile =
-            build_axial_profile(&source, &sample_env_sea_level(), 32).unwrap();
+        let profile = build_axial_profile(&source, &sample_env_sea_level(), 32).unwrap();
         let (t, rgb) = integrate_ray(&profile, 2.0, 2.0, 16);
         assert_eq!(t, 1.0);
         assert_eq!(rgb, [0.0; 3]);
@@ -167,16 +165,14 @@ mod tests {
         assert!(full.iter().all(|c| *c > 0.0));
         let mut source = sample_source();
         source.throttle = 0.4;
-        let part = radiant_power(
-            &build_axial_profile(&source, &sample_env_sea_level(), 48).unwrap(),
-        );
+        let part =
+            radiant_power(&build_axial_profile(&source, &sample_env_sea_level(), 48).unwrap());
         for channel in 0..3 {
             assert!(part[channel] < full[channel]);
         }
         source.throttle = 0.0;
-        let off = radiant_power(
-            &build_axial_profile(&source, &sample_env_sea_level(), 48).unwrap(),
-        );
+        let off =
+            radiant_power(&build_axial_profile(&source, &sample_env_sea_level(), 48).unwrap());
         assert_eq!(off, [0.0; 3]);
     }
 

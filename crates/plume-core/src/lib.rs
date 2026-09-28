@@ -17,9 +17,9 @@
 //! yields the same [`profile::AxialProfile`].
 //!
 //! Deliberately NOT modeled here: combustion chemistry, CFD turbulence,
-//! vehicle/propulsion state (owned by simulation), and any renderer (the
-//! `beauty.rs` cone stays the `Low`/fallback impostor until the volume pass
-//! lands with measured parity).
+//! vehicle/propulsion state (owned by simulation), and any renderer. The
+//! client consumes this profile in its Medium/High volume path; the older
+//! cone impostor remains the Low-quality fallback.
 
 #![forbid(unsafe_code)]
 
@@ -30,13 +30,11 @@ pub mod profile;
 pub mod source;
 
 pub use cbt_volume::{PlumeBound, PlumeRegion, region_for_node, residual_error_estimate};
-pub use medium::{
-    MediumSample, integrate_ray, radial_weight, radiant_power, sample_medium,
-};
+pub use medium::{MediumSample, integrate_ray, radial_weight, radiant_power, sample_medium};
 pub use optics::{OpticalMaterial, hue_divisor, optical_material, ramp_rgb};
-pub use source::ExhaustFamily;
 pub use profile::{
     AxialProfile, AxialStation, ExpansionRegime, emission_gain, expansion_fan, expansion_regime,
     mean_radius, shock_cell_spacing_m, spread_rate,
 };
+pub use source::ExhaustFamily;
 pub use source::{PlumeEnvironment, PlumeSource, RigidTransform};

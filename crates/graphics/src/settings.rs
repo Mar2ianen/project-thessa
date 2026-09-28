@@ -79,6 +79,30 @@ pub enum TerrainRenderRequest {
     GpuIndexed,
 }
 
+/// Material page storage for the CBT terrain path.
+///
+/// The CPU path remains the portable default. The compact path holds
+/// microstore-encoded pages in residency and decodes them at upload time;
+/// sampling (texture format, mips, filtering) is identical either way, so
+/// this is a storage/upload tradeoff, never a visual mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MaterialStorageRequest {
+    #[default]
+    RgbaArray,
+    MicrostoreCompact,
+}
+
+impl MaterialStorageRequest {
+    /// TOML name used in graphics.toml.
+    pub fn from_str_name(name: &str) -> Option<Self> {
+        match name {
+            "rgba_array" => Some(Self::RgbaArray),
+            "microstore_compact" => Some(Self::MicrostoreCompact),
+            _ => None,
+        }
+    }
+}
 /// Requested ray-tracing mode (spec section 18). Avoid a single boolean:
 /// `local` buys RT where it has the highest local visual value, `full`
 /// enables everything within budget, `auto` resolves by capability.
@@ -116,6 +140,10 @@ pub struct RendererSettings {
     pub ray_tracing: RayTracingRequest,
     #[serde(default)]
     pub terrain: TerrainRenderRequest,
+    /// Material page storage: raw RGBA array (default) or compact
+    /// microstore residency with decode at upload time.
+    #[serde(default)]
+    pub material_storage: MaterialStorageRequest,
     /// CPU terrain vertices per tile edge. The indexed GPU path has a fixed
     /// 33x33 page contract and therefore uses 32 internally.
     #[serde(default = "default_terrain_mesh_cells")]
@@ -155,6 +183,7 @@ impl Default for RendererSettings {
             backend: BackendRequest::Auto,
             ray_tracing: RayTracingRequest::Auto,
             terrain: TerrainRenderRequest::Cpu,
+            material_storage: MaterialStorageRequest::RgbaArray,
             terrain_mesh_cells: default_terrain_mesh_cells(),
             resolution_scale: 1.0,
             vsync: true,
@@ -349,18 +378,18 @@ impl Default for GasGiantSettings {
     }
 }
 
-/// Cheap realistic plume: cone mesh + baked gradient/Mach-diamond texture +
-/// flicker + one optional point light. No particles, no volumetrics.
+/// Engine plume quality and optional effects. Low uses the impostor cone;
+/// Medium/High integrate the analytic field through a volume ribbon.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnginePlumeSettings {
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
     pub quality: Quality,
-    /// Mach-diamond bands baked into the emissive texture.
+    /// Enable field-derived shock diamonds (and bands on the Low impostor).
     #[serde(default = "default_true")]
     pub mach_diamonds: bool,
-    /// Throttle-driven flicker; off = steady plume (cheapest).
+    /// Enable plume animation; off freezes the field-time input.
     #[serde(default = "default_true")]
     pub flicker: bool,
     /// One point light at the nozzle; off saves a forward light.
@@ -588,6 +617,12 @@ impl RequestedGraphics {
                 detail: format!("expected 4..=128, got {}", self.atmosphere.ray_steps),
             });
         }
+        if !(0.0..=2.0).contains(&self.atmosphere.density_scale) {
+            return Err(ConfigError::InvalidValue {
+                path: "atmosphere.density_scale",
+                detail: format!("expected 0..=2, got {}", self.atmosphere.density_scale),
+            });
+        }
         if !(4..=128).contains(&self.clouds.ray_steps) {
             return Err(ConfigError::InvalidValue {
                 path: "clouds.ray_steps",
@@ -621,10 +656,13 @@ impl RequestedGraphics {
                 ),
             });
         }
-        if self.raytracing.max_distance_m < 0.0 {
+        if !(0.0..=1_000_000_000.0).contains(&self.raytracing.max_distance_m) {
             return Err(ConfigError::InvalidValue {
                 path: "raytracing.max_distance_m",
-                detail: "expected >= 0".to_string(),
+                detail: format!(
+                    "expected a finite value in 0..=1000000000, got {}",
+                    self.raytracing.max_distance_m
+                ),
             });
         }
         if !(1..=4).contains(&self.shadows.cascades) {
@@ -831,6 +869,16 @@ mod tests {
         assert!(RequestedGraphics::from_toml(bad_cloud_steps).is_err());
         let bad_terrain_cells = "preset = \"high\"\n[renderer]\nterrain_mesh_cells = 4\n";
         assert!(RequestedGraphics::from_toml(bad_terrain_cells).is_err());
+        for value in ["-0.1", "2.1", "nan", "inf"] {
+            let bad_density_scale = format!("[atmosphere]\ndensity_scale = {value}\n");
+            assert!(RequestedGraphics::from_toml(&bad_density_scale).is_err());
+        }
+        for value in ["nan", "inf", "-inf"] {
+            let bad_rt_distance = format!("[raytracing]\nmax_distance_m = {value}\n");
+            assert!(RequestedGraphics::from_toml(&bad_rt_distance).is_err());
+        }
+        let bad_rt_distance = "[raytracing]\nmax_distance_m = 1000000001.0\n";
+        assert!(RequestedGraphics::from_toml(bad_rt_distance).is_err());
     }
 
     #[test]
@@ -863,5 +911,38 @@ mod tests {
     fn unknown_keys_ignored_for_forward_compat() {
         let text = "preset = \"high\"\n[renderer]\nray_tracing = \"auto\"\nflux_capacitor = true\n";
         assert!(RequestedGraphics::from_toml(text).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+
+    #[test]
+    fn storage_names_round_trip() {
+        assert_eq!(
+            MaterialStorageRequest::from_str_name("rgba_array"),
+            Some(MaterialStorageRequest::RgbaArray)
+        );
+        assert_eq!(
+            MaterialStorageRequest::from_str_name("microstore_compact"),
+            Some(MaterialStorageRequest::MicrostoreCompact)
+        );
+        assert_eq!(MaterialStorageRequest::from_str_name("bogus"), None);
+        assert_eq!(
+            MaterialStorageRequest::default(),
+            MaterialStorageRequest::RgbaArray
+        );
+    }
+
+    #[test]
+    fn storage_parses_from_toml() {
+        let config: RequestedGraphics =
+            toml::from_str("version = 1\n[renderer]\nmaterial_storage = \"microstore_compact\"\n")
+                .expect("parses");
+        assert_eq!(
+            config.renderer.material_storage,
+            MaterialStorageRequest::MicrostoreCompact
+        );
     }
 }

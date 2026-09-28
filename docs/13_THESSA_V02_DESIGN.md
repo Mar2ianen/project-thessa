@@ -1,5 +1,9 @@
 # Thessa v0.2 — World Design
 
+Status: partial implementation. Bulk values and landmark/biome recipes are
+built (`data/system.toml`, `data/worldgen/`); §2 stellar proposal (0.84 M☉
+track) is NOT applied — runtime star is 0.82 M☉ / 0.42 L☉.
+
 ## 1. Identity
 
 Thessa is the habitable-ish starting moon of the gas giant Nereid. It should not look like

@@ -1,5 +1,7 @@
 # Project Thessa — Interstellar Scope
 
+Status: design baseline. Entirely future by design; no runtime counterpart.
+
 > Working design target for the scale of the playable stellar neighborhood. This is deliberately separate from per-system celestial-body data in `02_WORLD_ATLAS.md`.
 
 ## 1. Playable volume

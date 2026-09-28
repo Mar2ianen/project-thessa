@@ -24,6 +24,9 @@ backend = "auto" # auto | vulkan | metal | webgpu (dx12 deferred pending ADR)
 ray_tracing = "auto" # off | local | full | auto
 terrain = "cpu" # cpu | gpu_indexed; no mesh-shader requirement
 terrain_mesh_cells = 24 # CPU middle-field density; adaptive per tile; 8..64
+material_storage = "rgba_array" # rgba_array | microstore_compact; compact holds
+# microstore-encoded pages in residency and decodes at upload time with identical
+# sampling (texture format, mips, filtering); storage/upload tradeoff, never visual
 resolution_scale = 1.0
 vsync = false
 hdr = true
@@ -79,12 +82,12 @@ limb_darkening = true # belt/zone contrast baked into the texture
 # Field-first plume (docs/38): analytic mean field + RCBT residual (later).
 # Low = baked cone impostor (fallback artifact); Medium/High = analytic
 # volume ribbon (camera-facing bound, per-pixel Beer-Lambert march).
-# NOTE (engines): no engine-sim exists yet. The client builds a provisional
-# source from throttle + ambient pressure; engine-sim/vehicle data will
-# become the provider without renderer changes.
+# Propulsion models and vehicle assets exist, but the client renderer is not
+# wired to their live nozzle state yet; it still supplies provisional X-15
+# nozzle/source values. RCBT residual rendering is also future work.
 enabled = true
 quality = "medium" # low = cone impostor; medium = volume/8 steps; high = volume/14 steps
-mach_diamonds = true # debug override (doc section 9), not physics
+mach_diamonds = true # visual shock-cell toggle; never changes simulation physics
 flicker = true
 light = true
 

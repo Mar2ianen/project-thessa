@@ -122,16 +122,22 @@ its connected pressure domain contains air unless the caller explicitly
 asserts that all exposed occupants are suited. That operation vents the
 affected domain and updates vehicle mass properties and the body-frame COM
 atomically. Opening after a separate `vent_cabin` operation is also allowed.
+An authored hatch that starts open to a dry body vents the connected pressure
+domain during baking, before mass and inertia aggregation; a runtime assembly
+with positive cabin air still exposed to a dry body fails validation.
 When an open hatch joins pressure volumes, `VehicleDefinition`
 resolves the ideal-gas equilibrium as an instantaneous state transition:
 total air, oxygen, and sensible thermal energy are conserved, and the
 resulting inventory is distributed by chamber volume at common pressure,
 temperature, and composition (constant dry-air heat capacity and gas
 constant). Closing the hatch preserves each chamber's current state.
-The baker resolves initially open domains before final COM/inertia
-aggregation. Later runtime hatch changes update cabin inventories and vehicle
-mass/inertia plus the body-frame COM for gas redistribution and venting.
-Finite-rate orifice flow remains future work.
+The baker resolves initially open pressure domains before final COM/inertia
+aggregation, venting any domain open to a dry body and equalizing domains that
+remain pressurized. Vehicle-level vent/repress operations apply to the entire
+connected pressure domain. Later runtime hatch and cabin-pressure changes
+update cabin inventories and vehicle mass/inertia plus every stored body-frame
+point, including propulsion, landing-gear, reaction-wheel, and parachute
+mounts. Finite-rate orifice flow remains future work.
 
 The flow feasibility search uses 32 monotone bisection steps, bounding its
 final relative flow interval by `2^-32` (less than `2.4e-10` of requested

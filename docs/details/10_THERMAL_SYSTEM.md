@@ -14,7 +14,8 @@ damage: overheating is reported, never auto-exploded.
 The thermal system is deterministic vehicle state. A step receives simulation
 duration, stellar source inputs (shared with the power bus, occlusion
 included), an optional local airflow, and per-node internal loads. It returns
-updated node temperatures plus per-node and vessel-total heat-flow telemetry.
+updated node temperatures plus per-node, per-radiator, and vessel-total
+heat-flow telemetry.
 
 The model sits between KSP and a full finite-element solve: real lumped
 physics (capacity, conduction, T⁴ radiation, incidence, stagnation heating)
@@ -63,7 +64,8 @@ radiators scale effective area by their deployed fraction, slewing toward
 targets at the authored rate. The deployment motor draws bus power booked by
 the caller: each step reports the requested motor power and moves only by the
 granted share (`radiator_power_fraction`, same pattern as electric-thruster
-available power).
+available power). Rejected-heat telemetry is reported for each radiator as
+well as aggregated by its attached thermal node.
 
 ### 2.3 Integration
 
@@ -98,6 +100,7 @@ with an empty thermal system.
 Regression tests cover two-node conduction convergence to the
 capacity-weighted mean, flat-plate solar analytic energy, closed-form
 radiator equilibrium, foldable-radiator rate and bus-power limits, the
+per-radiator heat attribution with multiple devices on one node, the
 Sutton-Graves number (494.1 kW/m² at
 ρ = 0.01 kg/m³, v = 3000 m/s, Rn = 1 m), own-hull ray occlusion (box blocks,
 strut grazes past, inside means full sky) end to end through the power bus,

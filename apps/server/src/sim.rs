@@ -324,7 +324,11 @@ impl Sim {
         } else {
             input.engine_active
         };
-        if legacy_propulsion_echo_changed(previous.as_ref(), input, has_engine_command) {
+        // Engine/stage edges first clear current propulsion on manual takeover;
+        // restore the coalesced legacy throttle for their resulting active state.
+        if legacy_propulsion_echo_changed(previous.as_ref(), input, has_engine_command)
+            || has_engine_command
+        {
             self.authority.set_legacy_propulsion(input.throttle, active);
         }
         // These legacy state echoes are applied only when the client changes

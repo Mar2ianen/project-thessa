@@ -582,6 +582,75 @@ impl VehicleAssembly {
         Ok(())
     }
 
+    /// Resolve the authored initial hatch topology before mass properties are
+    /// baked. Any pressurized domain already open to an unpressurized body is
+    /// vented, then the remaining connected air domains are equalized.
+    pub fn resolve_initial_cabin_states(
+        &self,
+        cabins: &mut [PressurizedCabin],
+    ) -> Result<(), AssemblyError> {
+        let exposed_cabins = self.cabins_exposed_to_unpressurized_regions()?;
+        let mut updated_cabins = cabins.to_vec();
+        for name in exposed_cabins {
+            let cabin = updated_cabins
+                .iter_mut()
+                .find(|cabin| cabin.name == name)
+                .ok_or_else(|| {
+                    AssemblyError::InvalidCabinState(format!(
+                        "exposed assembly cabin '{name}' has no runtime cabin"
+                    ))
+                })?;
+            cabin.vent();
+        }
+        self.equalize_cabin_states(&mut updated_cabins)?;
+        cabins.clone_from_slice(&updated_cabins);
+        Ok(())
+    }
+
+    /// Names of pressure chambers in air domains currently exposed through an
+    /// open hatch to a body with no pressurized volume.
+    pub fn cabins_exposed_to_unpressurized_regions(&self) -> Result<Vec<String>, AssemblyError> {
+        self.validate()?;
+        let air_groups = self.air_groups()?;
+        let mut exposed = Vec::new();
+        for link in &self.links {
+            if !link.state.crew_open() {
+                continue;
+            }
+            let has_pressure_volume = |body| {
+                self.volumes
+                    .iter()
+                    .any(|volume| volume.body == body && volume.pressurized)
+            };
+            let pressure_a = has_pressure_volume(link.state.a);
+            let pressure_b = has_pressure_volume(link.state.b);
+            if pressure_a == pressure_b {
+                continue;
+            }
+            let pressure_body = if pressure_a {
+                link.state.a
+            } else {
+                link.state.b
+            };
+            for group in &air_groups {
+                if group.iter().any(|index| {
+                    let volume = &self.volumes[*index];
+                    volume.body == pressure_body && volume.pressurized
+                }) {
+                    exposed.extend(
+                        group
+                            .iter()
+                            .filter(|index| self.volumes[**index].pressurized)
+                            .map(|index| self.volumes[*index].name.clone()),
+                    );
+                }
+            }
+        }
+        exposed.sort();
+        exposed.dedup();
+        Ok(exposed)
+    }
+
     /// Compartment-index groups joined by crew-passable open hatches.
     pub fn crew_groups(&self) -> Result<Vec<Vec<usize>>, AssemblyError> {
         self.validate()?;
@@ -1237,6 +1306,58 @@ mod tests {
         );
         assert!(assembly.feed_paths().unwrap().is_empty());
         assert!(assembly.set_hatch_open("unknown", true).is_err());
+    }
+
+    #[test]
+    fn initial_open_hatch_to_dry_region_vents_the_connected_pressure_domain() {
+        let assembly = VehicleAssembly {
+            root_body: 0,
+            body_names: vec!["pressurized-part".into(), "dry-part".into()],
+            links: vec![NamedAssemblyLink {
+                name: "initial-hatch".into(),
+                state: link(0, 1, true, true),
+                feed_line: None,
+            }],
+            resource_edges: Vec::new(),
+            volumes: vec![
+                AssemblyVolume {
+                    name: "cabin".into(),
+                    body: 0,
+                    pressurized: true,
+                    volume_m3: 2.0,
+                    centroid_body_m: DVec3::ZERO,
+                    seats: 0,
+                    seat_positions_body_m: Vec::new(),
+                },
+                AssemblyVolume {
+                    name: "service-bay".into(),
+                    body: 1,
+                    pressurized: false,
+                    volume_m3: 1.0,
+                    centroid_body_m: DVec3::X,
+                    seats: 0,
+                    seat_positions_body_m: Vec::new(),
+                },
+            ],
+            tanks: Vec::new(),
+            engine_ports: Vec::new(),
+        };
+        let initial_air_kg = 2.0 * 101_325.0 / (crate::R_DRY_AIR_J_KG_K * 293.15);
+        let mut cabins = vec![
+            PressurizedCabin::new("cabin", 2.0, 101.325, 293.15, 0.21, initial_air_kg)
+                .expect("pressurized cabin"),
+        ];
+
+        assert_eq!(
+            assembly.cabins_exposed_to_unpressurized_regions().unwrap(),
+            vec!["cabin"]
+        );
+        assembly
+            .resolve_initial_cabin_states(&mut cabins)
+            .expect("initial open hatch vents the exposed air");
+
+        assert_eq!(cabins[0].air_kg, 0.0);
+        assert_eq!(cabins[0].state, CabinPressureState::Vacuum);
     }
 
     #[test]

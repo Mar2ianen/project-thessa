@@ -243,9 +243,14 @@ current pressure from its inventory; `pressure_kpa` remains its authored
 repressurization target. Finite-rate flow through the hatch opening remains
 future work. Vehicle-level `vent_cabin` and `repress_cabin` operations,
 along with hatch equalization, update vehicle mass and inertia from each
-cabin's air-mass change and recenter all body-frame geometry on the new COM.
-Callers should use these vehicle-level operations rather than mutating a
-cabin's air inventory directly when the cabin is part of a flown vehicle.
+cabin-domain air-mass change and recenter every stored body-frame point on
+the new COM, including landing gear, reaction-wheel, and parachute mounts.
+`vent_cabin` vents the whole connected pressure domain; `repress_cabin` fills
+each chamber in that domain to its authored target from the supplied reserve,
+then resolves the common open-domain equilibrium. Repressurization is refused
+while an open hatch exposes the domain to an unpressurized region. Callers
+should use these vehicle-level operations rather than mutating a cabin's air
+inventory directly when the cabin is part of a flown vehicle.
 
 An assembly hatch that connects a pressurized cabin domain to a dry region
 does not silently discard air. `set_assembly_hatch_open` refuses while that
@@ -256,6 +261,13 @@ manifest assertion that all exposed occupants are suited; on success it
 vents the affected pressure domain and updates mass, inertia, and COM in the
 same transition. Runtime does not yet own a named crew roster, so callers
 must derive this assertion from their manifest.
+
+An authored hatch that starts open to an unpressurized body vents its entire
+connected pressure domain during vehicle baking, before mass and inertia are
+aggregated. A runtime vehicle with positive cabin inventory exposed through
+such an open hatch is invalid; close the hatch, or start with the domain
+vented. A connected domain that remains entirely pressurized is equalized at
+bake as usual.
 
 `assembly_crew_can_pass` reports open-hatch topology only.
 `assembly_crew_can_pass_safely` additionally checks the requested crew

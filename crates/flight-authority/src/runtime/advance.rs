@@ -1698,16 +1698,16 @@ impl FlightAuthority {
                 precomputed_aero,
             )?
         };
-        let propulsion_frame_shift = if let Some(allocation) = propulsion_allocation {
-            let frame_shift = self
-                .vehicle
+        let propulsion_frame_shift = if let Some(allocation) = &propulsion_allocation {
+            self.vehicle
                 .preview_propulsion_commit_frame_shift(&self.resource_state, allocation)
-                .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
-            rebase_rigid_body_state(&mut next, frame_shift)?;
-            Some(frame_shift)
+                .map_err(|error| FlightError::InvalidInput(error.to_string()))?
         } else {
-            None
+            DVec3::ZERO
         };
+        if propulsion_frame_shift != DVec3::ZERO {
+            rebase_rigid_body_state(&mut next, propulsion_frame_shift)?;
+        }
         // skip_aero zeroes the aero summary; restore the measured dynamic
         // pressure so HUD readouts stay on-model through the band.
         if band_q_pa > 0.0 {
@@ -1751,13 +1751,13 @@ impl FlightAuthority {
         )?;
         // All state that advances the installed resource systems is tentative
         // until the endpoint guard accepts this physical tick.
-        if let Some(allocation) = propulsion_allocation {
+        if let Some(allocation) = &propulsion_allocation {
             let frame_shift = self
                 .vehicle
                 .commit_propulsion_step(&mut self.resource_state, allocation)
                 .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
-            debug_assert_eq!(Some(frame_shift), propulsion_frame_shift);
-            self.apply_resource_frame_shift(frame_shift)?;
+            debug_assert_eq!(frame_shift, propulsion_frame_shift);
+            self.apply_resource_geometry_shift(frame_shift)?;
             self.last_propulsion_force_body_n =
                 allocation.force_body_n + installed_resource_step.accessory_force_body_n;
             self.last_propellant_flow_kg_s = allocation.total_propellant_flow_kg_s;

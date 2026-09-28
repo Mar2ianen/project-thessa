@@ -29,10 +29,10 @@ The checked-in vertical slice currently contains:
   mounted RCS, tank-backed pneumatic/rocket-bootstrap starters, torque-rated
   starter/generator hardware, generator efficiency/thermal limits, and
   independent LP/HP geared-turbofan dynamics plus ordinary jet/APU generation
-  on a parameterized wire-free vehicle power bus
-  with batteries, ultracapacitors, fission reactors, sun-tracking cell-grid
-  solar arrays with geometric occlusion, prioritized consumers, and a lumped
-  thermal-node network with conduction links and area radiators. The
+  on a parameterized wire-free vehicle power bus with batteries,
+  ultracapacitors, fission reactors and fuel cells, sun-tracking cell-grid
+  solar arrays with overlap-aware geometric occlusion, prioritized consumers,
+  and a lumped thermal-node network with conduction links and area radiators. The
   implementation is separated into `thessa-aero-core`,
   `thessa-celestial`, `thessa-trajectory`, `thessa-propulsion`, and
   `thessa-vehicle-core`;

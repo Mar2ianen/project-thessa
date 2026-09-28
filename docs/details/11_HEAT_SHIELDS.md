@@ -147,9 +147,11 @@ Wings and tails do not author tile objects. `ProceduralSurface.tile_layer`
 is one toggle: tile size/thickness/gap, density, specific heat, emissivity,
 absorptivity, max temperature, and nose radius. The surface compiler paves
 both wetted sides from the mounted panels — count floored per side on a
-flat-to-flat pitch lattice, solid fraction `(size/(size+gap))²` on the mass,
-area-weighted centroid and mean lift reference for position and normal —
-and the baker adds the tile mass to the thermal bake plus one lumped tile
+flat-to-flat pitch lattice; face area and mass are summed over the estimated
+tile count, so expansion gaps contribute neither tile mass nor tile thermal
+area. A layer that cannot fit at least one tile per side fails compilation.
+Area-weighted centroid and mean lift reference supply position and normal.
+The baker adds the tile mass to the thermal bake plus one lumped tile
 node per surface (`{surface}.tiles`: both faces radiate, one face takes
 sun/aero through the mean normal; backside solar is future work). The
 covered wing keeps flying on its own panels; tiles are conformal coating

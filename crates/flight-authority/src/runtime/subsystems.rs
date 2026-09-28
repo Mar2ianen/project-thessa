@@ -6,6 +6,28 @@ impl FlightAuthority {
     pub(super) fn apply_resource_frame_shift(
         &mut self,
         frame_shift_body_m: DVec3,
+        state: &mut RigidBodyState,
+    ) -> Result<(), FlightError> {
+        if frame_shift_body_m == DVec3::ZERO {
+            return Ok(());
+        }
+        self.apply_resource_geometry_shift(frame_shift_body_m)?;
+        let mut rebased_state = *state;
+        let inertial_offset = rebase_resource_frame_state(frame_shift_body_m, &mut rebased_state);
+        RigidBodyState::new(
+            rebased_state.position_inertial_m,
+            rebased_state.velocity_inertial_mps,
+            rebased_state.orientation_body_to_inertial,
+            rebased_state.angular_velocity_body_rps,
+        )?;
+        self.relative_position_m += inertial_offset;
+        *state = rebased_state;
+        Ok(())
+    }
+
+    pub(super) fn apply_resource_geometry_shift(
+        &mut self,
+        frame_shift_body_m: DVec3,
     ) -> Result<(), FlightError> {
         if frame_shift_body_m == DVec3::ZERO {
             return Ok(());
@@ -227,4 +249,19 @@ impl FlightAuthority {
         }
         Ok(())
     }
+}
+
+/// The integrator tracks the current COM. Re-basing the compiled body frame
+/// therefore moves the state point by the opposite local shift.
+pub(super) fn rebase_resource_frame_state(
+    frame_shift_body_m: DVec3,
+    state: &mut RigidBodyState,
+) -> DVec3 {
+    let center_shift_body_m = -frame_shift_body_m;
+    let orientation = state.orientation_body_to_inertial;
+    let offset_inertial_m = orientation * center_shift_body_m;
+    let angular_velocity_inertial_rps = orientation * state.angular_velocity_body_rps;
+    state.position_inertial_m += offset_inertial_m;
+    state.velocity_inertial_mps += angular_velocity_inertial_rps.cross(offset_inertial_m);
+    offset_inertial_m
 }

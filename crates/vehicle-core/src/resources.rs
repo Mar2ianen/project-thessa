@@ -18,14 +18,6 @@ use crate::{
     VehicleDefinition, VehicleError,
 };
 
-struct ResourceStateCommit {
-    mass_properties: RigidBodyProperties,
-    frame_shift: DVec3,
-    tank_propellant_kg: Vec<f64>,
-    solid_burn_time_s: Vec<f64>,
-    solid_ignited: Vec<bool>,
-}
-
 /// Live, server-authoritative resource state for one compiled vehicle.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VehicleResourceState {
@@ -543,6 +535,31 @@ struct FlowDemand {
     propellant: Propellant,
     flow_kg_s: f64,
     mixture_ratio: Option<f64>,
+}
+
+struct ResourceTransition {
+    tank_propellant_kg: Vec<f64>,
+    solid_burn_time_s: Vec<f64>,
+    solid_ignited: Vec<bool>,
+    mass_properties: RigidBodyProperties,
+    frame_shift_body_m: DVec3,
+}
+
+struct ThrottleAllocation {
+    engine_throttles: Vec<f64>,
+    system_chamber_throttles: Vec<Vec<f64>>,
+    tank_draw_kg: Vec<f64>,
+    resource_scales: Vec<(ResourceKey, f64)>,
+}
+
+struct ResourceDrawRequest<'a> {
+    tanks: &'a [crate::TankMount],
+    available: &'a [f64],
+    accessible: &'a [bool],
+    resource: ResourceKey,
+    demanded_kg: f64,
+    oxidizer_fraction: f64,
+    fuel_fraction: f64,
 }
 
 impl VehicleDefinition {
@@ -1162,25 +1179,27 @@ impl VehicleDefinition {
             ));
         }
 
-        let (actual_engines, actual_systems, mut tank_draw, group_scales) = self
-            .allocate_throttles(
-                state,
-                engine_throttles,
-                system_chamber_throttles,
-                ambient_pa,
-                dt_s,
-            )?;
+        let allocation = self.allocate_throttles(
+            state,
+            engine_throttles,
+            system_chamber_throttles,
+            ambient_pa,
+            dt_s,
+        )?;
         let mut force = DVec3::ZERO;
         let mut moment = DVec3::ZERO;
         let mut solid_burn_time_s = state.solid_burn_time_s.clone();
         let mut solid_ignited = state.solid_ignited.clone();
         let mut solid_draw_kg = 0.0;
-        let mut fuel_limited = group_scales.iter().any(|(_, scale)| *scale < 1.0 - 1.0e-10);
+        let mut fuel_limited = allocation
+            .resource_scales
+            .iter()
+            .any(|(_, scale)| *scale < 1.0 - 1.0e-10);
 
         for (index, mount) in self.engines.iter().enumerate() {
             match &mount.engine {
                 CompiledEngine::Liquid(engine) => {
-                    let throttle = actual_engines[index];
+                    let throttle = allocation.engine_throttles[index];
                     let point = mount
                         .engine
                         .operating_point(throttle, ambient_pa, 0.0)
@@ -1229,11 +1248,14 @@ impl VehicleDefinition {
         for (system_index, mount) in self.systems.iter().enumerate() {
             let (system_force, system_moment) = mount
                 .system
-                .wrench_body_n(&actual_systems[system_index], ambient_pa)
+                .wrench_body_n(
+                    &allocation.system_chamber_throttles[system_index],
+                    ambient_pa,
+                )
                 .map_err(VehicleError::Propulsion)?;
             force += system_force;
             moment += system_moment;
-            if actual_systems[system_index]
+            if allocation.system_chamber_throttles[system_index]
                 .iter()
                 .zip(&system_chamber_throttles[system_index])
                 .any(|(actual, requested)| *actual + 1.0e-12 < *requested)
@@ -1246,6 +1268,7 @@ impl VehicleDefinition {
                 "propulsion allocation produced a non-finite wrench".into(),
             ));
         }
+        let mut tank_draw = allocation.tank_draw_kg.clone();
         let additional_resource_consumers = if additional_demands.is_empty() {
             Vec::new()
         } else {
@@ -1274,8 +1297,8 @@ impl VehicleDefinition {
             tank_consumption_kg: tank_draw,
             solid_burn_time_s,
             solid_ignited,
-            engine_throttles: actual_engines,
-            system_chamber_throttles: actual_systems,
+            engine_throttles: allocation.engine_throttles,
+            system_chamber_throttles: allocation.system_chamber_throttles,
             total_propellant_flow_kg_s: (tank_draw_kg + solid_draw_kg) / dt_s,
             fuel_limited,
             additional_resource_consumers,
@@ -1289,30 +1312,28 @@ impl VehicleDefinition {
         state: &mut VehicleResourceState,
         allocation: &VehiclePropulsionAllocation,
     ) -> Result<DVec3, VehicleError> {
-        let commit = self.plan_propulsion_state_commit(state, allocation)?;
-        let frame_shift = commit.frame_shift;
-        self.apply_resource_state_commit(state, commit);
-        Ok(frame_shift)
+        let transition = self.plan_propulsion_transition(state, allocation)?;
+        Ok(self.commit_resource_transition(state, transition))
     }
 
-    /// Preview the body-frame origin shift a propulsion allocation will
-    /// commit. Fixed-step callers use this to validate the tentative endpoint
-    /// before advancing inventory or moving geometry.
+    /// Calculate the COM-frame shift for an allocated burn without mutating
+    /// the vehicle or resource state. The flight step uses this to validate
+    /// its rebased endpoint before committing the burn.
     pub fn preview_propulsion_commit_frame_shift(
         &self,
         state: &VehicleResourceState,
         allocation: &VehiclePropulsionAllocation,
     ) -> Result<DVec3, VehicleError> {
         Ok(self
-            .plan_propulsion_state_commit(state, allocation)?
-            .frame_shift)
+            .plan_propulsion_transition(state, allocation)?
+            .frame_shift_body_m)
     }
 
-    fn plan_propulsion_state_commit(
+    fn plan_propulsion_transition(
         &self,
         state: &VehicleResourceState,
         allocation: &VehiclePropulsionAllocation,
-    ) -> Result<ResourceStateCommit, VehicleError> {
+    ) -> Result<ResourceTransition, VehicleError> {
         self.validate_resource_state(state)?;
         if allocation.tank_consumption_kg.len() != self.tanks.len()
             || allocation.solid_burn_time_s.len() != self.engines.len()
@@ -1332,7 +1353,7 @@ impl VehicleDefinition {
             }
             next_tanks[index] = (next_tanks[index] - consumed).max(0.0);
         }
-        self.plan_resource_state_commit(
+        self.plan_resource_transition(
             state,
             next_tanks,
             allocation.solid_burn_time_s.clone(),
@@ -1347,7 +1368,7 @@ impl VehicleDefinition {
         system_requests: &[Vec<f64>],
         ambient_pa: f64,
         dt_s: f64,
-    ) -> Result<(Vec<f64>, Vec<Vec<f64>>, Vec<f64>, Vec<(ResourceKey, f64)>), VehicleError> {
+    ) -> Result<ThrottleAllocation, VehicleError> {
         let mut engines = engine_requests.to_vec();
         let mut systems = system_requests.to_vec();
         let accessible = self.feedable_tanks()?;
@@ -1412,7 +1433,12 @@ impl VehicleDefinition {
                 "propellant allocation changed after stable-throttle resolution".into(),
             ));
         }
-        Ok((engines, systems, final_draw, scales))
+        Ok(ThrottleAllocation {
+            engine_throttles: engines,
+            system_chamber_throttles: systems,
+            tank_draw_kg: final_draw,
+            resource_scales: scales,
+        })
     }
 
     fn allocate_flow_demands(
@@ -1454,13 +1480,15 @@ impl VehicleDefinition {
                 fuel_fraction,
             );
             draw_resource(
-                &self.tanks,
-                &available,
-                accessible,
-                resource,
-                demanded_kg * scale,
-                oxidizer_fraction,
-                fuel_fraction,
+                ResourceDrawRequest {
+                    tanks: &self.tanks,
+                    available: &available,
+                    accessible,
+                    resource,
+                    demanded_kg: demanded_kg * scale,
+                    oxidizer_fraction,
+                    fuel_fraction,
+                },
                 &mut reserved,
             );
             scales.push((resource, scale));
@@ -1475,24 +1503,18 @@ impl VehicleDefinition {
         next_solid_times: Vec<f64>,
         next_solid_ignited: Vec<bool>,
     ) -> Result<DVec3, VehicleError> {
-        let commit = self.plan_resource_state_commit(
-            state,
-            next_tanks,
-            next_solid_times,
-            next_solid_ignited,
-        )?;
-        let frame_shift = commit.frame_shift;
-        self.apply_resource_state_commit(state, commit);
-        Ok(frame_shift)
+        let transition =
+            self.plan_resource_transition(state, next_tanks, next_solid_times, next_solid_ignited)?;
+        Ok(self.commit_resource_transition(state, transition))
     }
 
-    fn plan_resource_state_commit(
+    fn plan_resource_transition(
         &self,
         state: &VehicleResourceState,
         next_tanks: Vec<f64>,
         next_solid_times: Vec<f64>,
         next_solid_ignited: Vec<bool>,
-    ) -> Result<ResourceStateCommit, VehicleError> {
+    ) -> Result<ResourceTransition, VehicleError> {
         if next_tanks.len() != self.tanks.len()
             || next_solid_times.len() != self.engines.len()
             || next_solid_ignited.len() != self.engines.len()
@@ -1591,25 +1613,34 @@ impl VehicleDefinition {
             ));
         }
 
-        Ok(ResourceStateCommit {
-            mass_properties: properties,
-            frame_shift,
+        Ok(ResourceTransition {
             tank_propellant_kg: next_tanks,
             solid_burn_time_s: next_solid_times,
             solid_ignited: next_solid_ignited,
+            mass_properties: properties,
+            frame_shift_body_m: frame_shift,
         })
     }
 
-    fn apply_resource_state_commit(
+    fn commit_resource_transition(
         &mut self,
         state: &mut VehicleResourceState,
-        commit: ResourceStateCommit,
-    ) {
-        self.shift_body_frame_origin(commit.frame_shift);
-        self.mass_properties = commit.mass_properties;
-        state.tank_propellant_kg = commit.tank_propellant_kg;
-        state.solid_burn_time_s = commit.solid_burn_time_s;
-        state.solid_ignited = commit.solid_ignited;
+        transition: ResourceTransition,
+    ) -> DVec3 {
+        let ResourceTransition {
+            tank_propellant_kg,
+            solid_burn_time_s,
+            solid_ignited,
+            mass_properties,
+            frame_shift_body_m,
+        } = transition;
+
+        self.shift_body_frame_origin(frame_shift_body_m);
+        self.mass_properties = mass_properties;
+        state.tank_propellant_kg = tank_propellant_kg;
+        state.solid_burn_time_s = solid_burn_time_s;
+        state.solid_ignited = solid_ignited;
+        frame_shift_body_m
     }
 
     fn validate_resource_state(&self, state: &VehicleResourceState) -> Result<(), VehicleError> {
@@ -2137,16 +2168,16 @@ fn resource_scale(
     ((mixed_kg + split_capacity) / demanded_kg).clamp(0.0, 1.0)
 }
 
-fn draw_resource(
-    tanks: &[crate::TankMount],
-    available: &[f64],
-    accessible: &[bool],
-    resource: ResourceKey,
-    demanded_kg: f64,
-    oxidizer_fraction: f64,
-    fuel_fraction: f64,
-    reserved: &mut [f64],
-) {
+fn draw_resource(request: ResourceDrawRequest<'_>, reserved: &mut [f64]) {
+    let ResourceDrawRequest {
+        tanks,
+        available,
+        accessible,
+        resource,
+        demanded_kg,
+        oxidizer_fraction,
+        fuel_fraction,
+    } = request;
     let mut remaining = demanded_kg;
     for (index, mount) in tanks.iter().enumerate() {
         if !accessible[index]

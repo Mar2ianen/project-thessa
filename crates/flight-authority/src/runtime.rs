@@ -1178,9 +1178,7 @@ impl FlightAuthority {
             )
             .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
         let mut state = self.state;
-        rebase_rigid_body_state(&mut state, frame_shift)?;
-        self.apply_resource_frame_shift(frame_shift)?;
-        self.relative_position_m += state.position_inertial_m - self.state.position_inertial_m;
+        self.apply_resource_frame_shift(frame_shift, &mut state)?;
         self.state = state;
         self.rails.invalidate();
         self.scheduler.clear_rails_wakes();

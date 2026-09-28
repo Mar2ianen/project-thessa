@@ -1,6 +1,7 @@
 //! Shared-bus runtime cost for a 64-vessel fleet with batteries,
-//! ultracapacitors, a sun-tracking solar array under three stars (one partly
-//! occluded), a reactor, and eight prioritized consumers per vessel. Run with
+//! ultracapacitors, a sun-tracking solar array under three stars (one with two
+//! overlapping occluders), a reactor, and eight prioritized consumers per
+//! vessel. Run with
 //! `cargo bench -p thessa-sim-core --bench electrical_power`.
 
 use std::{hint::black_box, time::Instant};
@@ -94,15 +95,21 @@ fn make_system(index: usize) -> ElectricalPowerSystem {
 fn three_suns() -> Vec<SolarFluxSource> {
     let primary =
         SolarFluxSource::from_luminosity(3.8e26, 1.5e11, DVec3::Z, 1.0).expect("primary sun");
+    let secondary_direction = DVec3::new(0.5, 0.3, 0.8).normalize();
+    let offset_axis = DVec3::X.cross(secondary_direction).normalize();
+    let direction_at_offset =
+        |offset_rad: f64| secondary_direction * offset_rad.cos() + offset_axis * offset_rad.sin();
     let secondary = SolarFluxSource::from_luminosity_with_occluders(
         1.2e26,
         5.0e8,
         2.1e11,
-        DVec3::new(0.5, 0.3, 0.8).normalize(),
+        secondary_direction,
         1.0,
         vec![
-            SolarOccluder::from_geometry(6.4e6, 9.0e6, DVec3::new(0.5, 0.3, 0.8).normalize())
+            SolarOccluder::from_geometry(6.4e6, 4.0e9, direction_at_offset(0.0008))
                 .expect("planet occluder"),
+            SolarOccluder::from_geometry(1.7e6, 1.2e9, direction_at_offset(-0.0006))
+                .expect("moon occluder"),
         ],
     )
     .expect("secondary sun");

@@ -953,7 +953,10 @@ Bevy/Tokio/wgpu).
 - Commit conserves total mass: tank and grain mass changes update vehicle mass,
   first moment, and inertia about the new center of mass, then shift all baked
   body-frame geometry and the inertial state to that frame. The commit returns
-  the frame shift; tank transfers conserve mass and enforce source inventory,
+  the frame shift. A powered flight step previews that frame shift, validates
+  the rebased endpoint, and commits inventory and mass properties only after
+  the endpoint passes flight-state guards; a rejected step consumes no
+  propellant. Tank transfers conserve mass and enforce source inventory,
   destination capacity, resource identity, and open assembly connectivity.
   Fixed-step propellant inventory, electrical/APU/jet/fusion/turboprop state,
   parachute state, and free-flight gear actuators are committed only after the

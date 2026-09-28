@@ -108,13 +108,28 @@ fn tile_layer_toggle_derives_count_area_mass_centroid_and_normal() {
     let tiles = compiled.tile_layer.as_ref().expect("tiles");
     // One side is 16 m^2; hex cell (√3/2)·0.22²; counts floor per side.
     let cell = 0.5 * 3.0_f64.sqrt() * 0.22_f64.powi(2);
-    assert_eq!(tiles.tile_count, 2 * (16.0 / cell).floor() as u64);
-    assert!((tiles.area_m2 - 32.0).abs() < 1.0e-9);
-    let fill = (0.2_f64 / 0.22).powi(2);
-    assert!((tiles.mass_kg - 32.0 * 0.01 * 2000.0 * fill).abs() < 1.0e-9);
+    let tile_count = 2 * (16.0 / cell).floor() as u64;
+    let tile_face_area = 0.5 * 3.0_f64.sqrt() * 0.2_f64.powi(2);
+    let expected_area = tile_count as f64 * tile_face_area;
+    assert_eq!(tiles.tile_count, tile_count);
+    assert!((tiles.area_m2 - expected_area).abs() < 1.0e-9);
+    assert!((tiles.mass_kg - expected_area * 0.01 * 2000.0).abs() < 1.0e-9);
     assert!((tiles.centroid_body_m - compiled.panels[0].position_body_m).length() < 1.0e-12);
     assert!((tiles.normal_body_m - DVec3::Z).length() < 1.0e-12);
     assert!((tiles.thickness_m - 0.01).abs() < 1.0e-12);
+
+    let mut undersized = rectangular(0.1, 0.1);
+    undersized.tile_layer = surface.tile_layer;
+    assert!(
+        compile_surface(
+            &undersized,
+            &CompileOptions::default(),
+            &MechanismState::deployed()
+        )
+        .is_err(),
+        "a layer that fits no complete tile must not invent tile mass or area"
+    );
+
     // A degenerate layer fails closed instead of paving NaNs.
     surface.tile_layer.as_mut().expect("layer").tile_size_m = 0.0;
     assert!(

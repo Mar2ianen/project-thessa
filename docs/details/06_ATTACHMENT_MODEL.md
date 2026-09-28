@@ -208,6 +208,14 @@ a split is accepted. Regression coverage checks conservation and released COM
 states for a rotating three-body stack. The mass records must include all
 body-owned hardware and payload: incomplete records fail closed.
 
+For a body component with members `i`, reconstruction uses
+`m = sum(m_i)`, `c = sum(m_i c_i) / m`, and
+`I_c = sum(I_i + m_i (|d_i|^2 1 - d_i d_i^T))`, where `d_i = c_i - c`.
+It then maps the COM offset into inertial position and velocity with the source
+pose and `omega x r`. Source closure tolerances are `1e-10` relative mass,
+`1e-9 m` COM magnitude, and `1e-9` relative inertia; the known three-body
+regression pins component values to `1e-12`.
+
 The existing `assembly_air` benchmark now also measures a 64-body chain split
 and mass/kinematic reconstruction. A 2,000-reconstruction release run on an
 AMD Ryzen 7 8745H measured `29.78 us` per reconstruction. This measures the

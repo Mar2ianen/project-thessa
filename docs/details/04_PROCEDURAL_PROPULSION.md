@@ -5,8 +5,9 @@ Status: design baseline with a shipped backend (`thessa-sim-core::propulsion`
 with mixture sensitivity, cycle/feed bounds, geometry-derived mass, spool
 runtime, altitude analyzer, vehicle mounts, tanks and feed lines, RCS and
 nuclear thermal models, multi-chamber systems, air-breathing jets
-(turbojet/turbofan/ramjet/scramjet) with the single-spool shaft/starter runtime
-(starter topologies, light-off/self-sustain, relight, generator load),
+(turbojet/turbofan/ramjet/scramjet) with a single-spool default and an explicit
+two-spool LP/HP turbofan shaft train, starter topologies,
+light-off/self-sustain, relight, and generator load,
 composition-aware atmosphere queries (section 10), and the ESTOC combined-cycle
 engine, plus piston/electric propeller drives and a
 stateful, heat-budgeted turboprop takeoff path on a reusable ideal actuator
@@ -428,18 +429,20 @@ rocket ejector, or other modeled source creates flow/torque. A separate
 steady-state performance analyzer may continue to evaluate already-running
 static thrust, but it must label that assumption explicitly.
 
-Status note (2026-09-24): the single-spool runtime described above has landed
-in `propulsion::shaft` (section 18.8) — starter topologies with real
-stored-energy draw, light-off/self-sustain hysteresis, windmill relight,
-spool-scaled compressor suction, and generator load in the shaft work
-balance. A power-level downstream power-turbine load now shares this balance,
-and its enthalpy extraction is documented in section 18.10. Still deferred
-from this section: independent multi-spool/gearbox coupling, torque-level
-starter/generator authoring, onboard pneumatic and rocket-bootstrap starter
-consumable pipelines (starter state still books a generic stored-energy
-reservoir), and generator thermal limits. APU-to-starter bleed is connected
-in the authoritative runtime; standalone jet-mount generator export to the
-bus remains future work.
+Historical status snapshot (2026-09-24; superseded below): the single-spool
+runtime had landed, while multi-spool/gearbox coupling, torque-rated hardware,
+tank-backed pneumatic/rocket-bootstrap consumables, generator thermal limits,
+and ordinary jet generator bus export were still open. The implemented state
+is recorded in the 2026-09-28 update and section 18.8 below.
+
+Update (2026-09-28): tank-backed pneumatic/rocket-bootstrap draws,
+torque-rated starter/generator hardware, generator efficiency maps and local
+thermal limiting are now implemented, and jet-mounted generator output joins
+APU generation on the shared bus. A two-spool LP/HP turbofan with independently
+integrated rotors, a geared fan, torque-rated accessories on either spool, and
+a coupled steady-state solver is implemented below. Three-spool/independent
+free-power-turbine topologies, clutching, and generator thermal-node integration
+remain open.
 
 ## 9. Piston, electric, and generic shaft-power propulsion
 
@@ -952,6 +955,10 @@ Bevy/Tokio/wgpu).
   body-frame geometry and the inertial state to that frame. The commit returns
   the frame shift; tank transfers conserve mass and enforce source inventory,
   destination capacity, resource identity, and open assembly connectivity.
+  Fixed-step propellant inventory, electrical/APU/jet/fusion/turboprop state,
+  parachute state, and free-flight gear actuators are committed only after the
+  integrated endpoint passes the solver guard; rejected ticks do not consume
+  propellant or advance those states.
 - Regression cases pin liquid demand/tank-draw closure within `1e-10 kg` for
   0.1-second steps, summed thrust within `1e-8 N`, vehicle mass change within
   `1e-9 kg` (solid grain: `1e-8 kg`), and transfer conservation within
@@ -1192,23 +1199,28 @@ Shipped v5 foundation:
   rocket/gas-generator bootstrap, or deliberately no starter at all. A
   starterless ESTOC relights in flight once inlet-driven windmilling
   reaches light-off speed and cannot start at rest — spool-scaled
-  suction means a stopped compressor draws nothing. Still deferred from
-  this item: torque-level (instead of power-level) starter authoring,
-  the pneumatic/rocket stored-energy pipelines (all topologies
-  currently book one energy reservoir), and multi-spool attachment.
+  suction means a stopped compressor draws nothing. Pneumatic and
+  rocket-bootstrap starters may now draw an explicitly selected stored
+  vehicle resource using authored recoverable specific energy. Starter
+  draw participates in the same reachable-tank allocation and moving-mass
+  commit as engine flow. Optional torque-rated starters use the authored
+  rotor inertia and design speed; the existing power/normalized-spool law
+  remains the default for single-spool engines. The two-spool geared-turbofan
+  extension is implemented in section 18.8 below; multi-spool ESTOC transitions
+  remain unsupported.
 - PARTIAL 2026-09-23 (section 18.8): generator fit, rated power, cut-in
-  spool speed, bounded efficiency, mass, and the electrical load now
-  participate in the runtime shaft work balance — the request is capped
-  at rated power, scaled by efficiency onto the shaft, below cut-in the
-  generator is offline, and an overdraw bogs the spool down instead of
-  being padded. APU generator output is connected to the shared bus;
-  standalone jet-mount generator export is not yet dispatched there.
-  Generator thermal limits and an efficiency map instead of the bounded
-  scalar remain future work.
-- Multi-spool/gearbox authoring must keep mode-transition dynamics separate
-  from shaft dynamics. LP/IP/HP spool inertia and coupling, starter attachment,
-  and optional geared fan reduction are independent of the ESTOC
-  air/rocket-valve transition.
+  spool speed, mass, and requested electrical load participate in the
+  runtime shaft work balance. Efficiency may be a scalar or a piecewise
+  linear normalized-speed map. Optional winding/casing heat capacity and
+  conductance limit output against the maximum temperature; optional torque
+  ratings additionally cap output at low shaft speed. APU and ordinary
+  jet-mounted generator output are dispatched onto the shared vehicle bus.
+  The thermal state is currently local to `JetShaftState`, not part of the
+  vehicle thermal-node graph.
+- A two-spool LP/HP geared turbofan now keeps mode transitions separate from
+  shaft dynamics, with a selected-spool starter and generator. General LP/IP/HP
+  shaft networks, clutches, and multi-spool ESTOC air/rocket-valve transitions
+  remain future work.
 
 Known v5 correctness debt:
 
@@ -1235,7 +1247,7 @@ scramjet inlet/shock-train geometry and finite-rate chemistry, local casing
 failure after shaped-grain web breakthrough, and the editor UI itself (the
 CLI/JSON analyzer is its backend contract) remain future work.
 
-### 18.8 Jet shaft/starter runtime (section 8.1, single spool)
+### 18.8 Jet shaft/starter runtime (section 8.1)
 
 Shipped 2026-09-23: `propulsion::shaft` turns the section 8.1 contract
 into the runtime for one normalized compressor spool, closing the v5
@@ -1264,14 +1276,25 @@ Formal description:
   (`SHAFT_FRICTION_FRACTION × P_ref × n³`) always cost rotation. The
   starter adds shaft power at its topology efficiency (electric 0.85,
   pneumatic 0.70, rocket bootstrap 0.40), capped by
-  `charge × η / dt` so a spent battery/air bottle really dies. APU-supplied
+  `charge × η / dt` so a spent battery/air bottle really dies. Tank-backed
+  pneumatic/rocket starters derive their available reservoir from reachable
+  tank inventory and charge it in the shared fixed-step resource transaction
+  at the authored `specific_energy_j_kg`. If a starter torque rating is
+  present, the rotor integrates `I dω/dt = τ_engine + τ_starter − τ_load`,
+  with starter work bounded by the same stored-energy budget; otherwise the
+  normalized power-law integration above remains active. APU-supplied
   pneumatic input can supplement the onboard reserve up to rated starter
   power; the supplying APU books bleed as shaft load, and accepted external
   power is reported separately from reserve draw. The
   generator comes online above its cut-in spool, caps at rated power,
   and draws `load / efficiency` from the shaft — never padded, so an
-  overdraw bogs the spool down. Integration:
-  `Δn = net × dt / (P_ref × spool_tau_s)`, clamped to `[0, 1]`.
+  overdraw bogs the spool down. Efficiency may be interpolated from a
+  normalized-speed map; optional local heat capacity/conductance limits the
+  electrical request to keep its implicit temperature step under the maximum.
+  Torque-rated generator hardware additionally caps low-speed electrical
+  output by `τ_max ω η`. With power-level hardware, integration is
+  `Δn = net × dt / (P_ref × spool_tau_s)`, clamped to `[0, 1]`; explicit
+  rotor-inertia hardware integrates angular speed from net torque instead.
 - Light-off hysteresis: throttle > 0 commands ignition, ≤ 0 commands
   shutdown; the core lights at `n ≥ light_off_n` and flames out below
   `self_sustain_n` (or on zero fuel, zero air, vacuum, or anoxic air).
@@ -1304,8 +1327,60 @@ Formal description:
   `JetCommand::with_state` threads mode, transition snapshot, and
   shaft state into the next tick.
 
-Known special cases and regression coverage (13 tests in
-`propulsion::shaft` plus the mount-level crank test): cold start with
+Tank-backed starter TOML extends the existing `[jets.shaft.starter]` block:
+
+```toml
+[jets.shaft]
+design_speed_rad_s = 1200.0 # required with torque-rated starter/generator hardware
+rotor_inertia_kg_m2 = 0.8
+
+[jets.shaft.starter]
+kind = "pneumatic" # or "rocket-bootstrap"
+power_w = 200000.0
+resource = "nitrogen" # pneumatic: nitrogen/helium; bootstrap: authored stored propellant
+specific_energy_j_kg = 500000.0
+mass_kg = 12.0
+maximum_shaft_torque_nm = 800.0 # optional torque-level actuator rating
+```
+
+With `resource` present, `charge_j` must be zero. Runtime energy availability
+is derived from compatible tanks reachable through the selected feed route;
+the specific energy is an explicit hardware property, not inferred from the
+resource name. A torque-rated accessory requires both shaft design speed and
+rotor inertia. `maximum_shaft_torque_nm` remains optional on starter and
+generator independently, preserving the power-based shaft integrator where no
+torque-rated hardware is installed.
+
+Generator maps and thermal limits use the same `[jets.shaft.generator]`
+authoring block. `efficiency_map` is an ordered array of `{ spool_n,
+efficiency }` points. `thermal` contains `heat_capacity_j_k`,
+`conductance_w_k`, `initial_temperature_k`, and `maximum_temperature_k`.
+The runtime interpolates conversion efficiency, computes waste heat, and
+limits requested electrical output so the implicit local thermal step stays
+within the authored maximum temperature.
+
+```toml
+[jets.shaft.generator]
+fitted = true
+power_w = 50000.0
+efficiency = 0.85 # fallback scalar; the map overrides it when present
+efficiency_map = [
+  { spool_n = 0.4, efficiency = 0.72 },
+  { spool_n = 1.0, efficiency = 0.91 },
+]
+maximum_shaft_torque_nm = 120.0 # optional; enables torque-rated shaft behavior
+cut_in_spool_n = 0.45
+mass_kg = 25.0
+
+[jets.shaft.generator.thermal]
+heat_capacity_j_k = 80000.0
+conductance_w_k = 35.0
+initial_temperature_k = 293.15
+maximum_temperature_k = 430.0
+```
+
+Known special cases and regression coverage in `propulsion::shaft` plus the
+mount-level crank test: cold start with
 a fitted starter, starterless no-start at rest and refused engagement,
 windmill relight at speed, light-off/self-sustain hysteresis, starter
 charge depleting to a dead crank, generator load/cut-in/rating,
@@ -1321,7 +1396,72 @@ below thrust-band resolution. The runtime step is first-order Euler in
 law).
 
 Benchmark: `benches/propulsion.rs` reports steady-solve cost
-(µs/solve) and cold-crank cost (ns/step to light-off).
+(µs/solve), cold-crank cost (ns/step to light-off), and the two-spool
+transient runtime (ns/step).
+
+#### Two-spool geared turbofan extension
+
+The 2026-09-28 runtime adds one explicit two-rotor topology for turbofans:
+
+- `JetShaftState.spool_n` is normalized HP compressor speed and
+  `low_pressure_spool_n` is normalized LP/fan speed. Turbine work is split by
+  `high_pressure_turbine_power_fraction`; the HP rotor pays core-compressor
+  work and the LP rotor pays fan work plus gearbox loss.
+- The fan speed ratio is `fan angular speed / LP rotor angular speed`. The
+  fan's inertia is reflected to the LP shaft as
+  `J_LP + J_fan × ratio²`. Gear efficiency increases LP shaft demand by
+  `1 / efficiency`; fan pressure rise follows LP speed, core compression
+  follows HP speed, and intake capture uses the bypass-weighted LP/HP speed.
+- Both rotors integrate their own torque balance with their authored design
+  speed and inertia. A starter and generator require torque ratings in this
+  topology and may select `attached_spool = "low_pressure"` or
+  `"high_pressure"`; starter energy, generator efficiency, local generator
+  temperature, and torque limits are evaluated at the selected rotor speed.
+- The authored turbine split must balance the compiled sea-level static design
+  point on both rotors. For authoring, calibrate the HP share against
+  `P_HP / (P_HP + P_fan / gear_efficiency)` from the corresponding single-spool
+  design balance; compile rejects a split that does not close each rotor's
+  work budget. The steady operating-point solver alternates bounded bisections
+  for the coupled HP and LP equilibria, each with 36 halvings and a 32-sweep
+  cap; the tested off-design root closes both power balances within
+  `1e-5 × capacity`.
+- The single-spool runtime remains the default and is unchanged when
+  `multi_spool` is omitted. This topology currently supports only a geared
+  turbofan with one LP fan rotor and one HP core rotor. Three-spool engines,
+  clutches, multiple accessory machines per shaft, free-power-turbine shafts,
+  and multi-spool ESTOC mode transitions are not implemented.
+
+Example authoring (the turbine split is engine-specific and must close the
+design work balance):
+
+```toml
+[jets.shaft.multi_spool]
+low_pressure_design_speed_rad_s = 500.0
+low_pressure_rotor_inertia_kg_m2 = 4.0
+fan_rotor_inertia_kg_m2 = 2.0
+high_pressure_design_speed_rad_s = 1000.0
+high_pressure_rotor_inertia_kg_m2 = 2.0
+high_pressure_turbine_power_fraction = 0.724245263613
+fan_gear_speed_ratio = 0.5
+fan_gear_efficiency = 0.95
+
+[jets.shaft.starter]
+kind = "electric"
+power_w = 12000.0
+charge_j = 2000000.0
+maximum_shaft_torque_nm = 60.0
+attached_spool = "low_pressure"
+mass_kg = 2.0
+```
+
+Regression coverage checks independent rotor acceleration/loading, LP-mounted
+starter and generator response, gear-reflected inertia, fan-flow response,
+off-design dual-rotor equilibrium, mount state threading, and asset
+serialization round-trip. `vehicle-baker` compiles the authoring example; the
+`propulsion` bench reports the multi-spool transient step and coupled
+off-design steady-solve costs on the same workload as the single-spool shaft.
+The latest release run measured `339 ns/step` and `21.29 µs/solve` for the
+two-spool turbofan on this machine; benchmark results are hardware-dependent.
 
 ### 18.9 Composition-aware atmosphere (section 10)
 
@@ -1714,4 +1854,5 @@ existing mass/inertia path.
   RCS gas draw and mass updates, fuel-cell dispatch alongside an installed
   electric thruster, and an APU-to-pneumatic-jet-start regression. Detailed
   pipeline pressure/flow, starter duct geometry, transient piston/electric
-  source startup, and a multi-spool starter network remain outside this slice.
+  source startup, multiple accessory machines per spool, and a general
+  multi-spool starter network remain outside this slice.

@@ -52,6 +52,49 @@ fn delivered_power_fraction(
     }
 }
 
+fn starter_charge_from_tanks(
+    vehicle: &thessa_sim_core::VehicleDefinition,
+    resource_state: &thessa_sim_core::VehicleResourceState,
+    consumer_name: &str,
+    explicit_feed_port: Option<&str>,
+    starter: &thessa_sim_core::StarterSpec,
+) -> Result<Option<f64>, FlightError> {
+    let Some(resource) = starter.resource else {
+        return Ok(None);
+    };
+    let feed_port =
+        explicit_feed_port.or_else(|| vehicle.resource_feed_port_for_consumer(consumer_name));
+    let mass_kg = vehicle
+        .available_stored_resource_kg(resource_state, resource, feed_port)
+        .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+    let charge_j = mass_kg * starter.specific_energy_j_kg;
+    if !charge_j.is_finite() {
+        return Err(FlightError::InvalidInput(format!(
+            "starter resource inventory for '{consumer_name}' overflowed"
+        )));
+    }
+    Ok(Some(charge_j))
+}
+
+fn starter_demand(
+    name: &str,
+    starter: &thessa_sim_core::StarterSpec,
+    actual_input_power_w: f64,
+    feed_port_name: Option<&str>,
+) -> Result<Option<thessa_sim_core::VehicleResourceDemand>, FlightError> {
+    if starter.resource.is_none() {
+        return Ok(None);
+    }
+    thessa_sim_core::VehicleResourceDemand::from_starter(
+        thessa_sim_core::JetShaftState::starter_resource_consumer_name(name),
+        starter.resource,
+        starter.specific_energy_j_kg,
+        actual_input_power_w,
+        feed_port_name,
+    )
+    .map_err(|error| FlightError::InvalidInput(error.to_string()))
+}
+
 impl FlightAuthority {
     /// Advance the exact production flight path at a fixed physics cadence.
     /// Render frames only contribute elapsed time; they never set solver dt.
@@ -808,6 +851,52 @@ impl FlightAuthority {
             ));
         }
         let turboprop_commands = self.turboprop_commands.clone();
+        let apu_starter_charges = self
+            .vehicle
+            .auxiliary_power_units
+            .iter()
+            .map(|mount| {
+                starter_charge_from_tanks(
+                    &self.vehicle,
+                    &self.resource_state,
+                    &mount.name,
+                    mount.feed_port_name.as_deref(),
+                    &mount.unit.engine.shaft.starter,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let jet_starter_charges = self
+            .vehicle
+            .jets
+            .iter()
+            .map(|mount| {
+                let engine = match &mount.engine {
+                    thessa_sim_core::CompiledJet::Air(engine) => engine.as_ref(),
+                    thessa_sim_core::CompiledJet::Estoc(engine) => &engine.air,
+                };
+                starter_charge_from_tanks(
+                    &self.vehicle,
+                    &self.resource_state,
+                    &mount.name,
+                    None,
+                    &engine.shaft.starter,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let turboprop_starter_charges = self
+            .vehicle
+            .turboprops
+            .iter()
+            .map(|mount| {
+                starter_charge_from_tanks(
+                    &self.vehicle,
+                    &self.resource_state,
+                    &mount.name,
+                    None,
+                    &mount.drive.air.shaft.starter,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let pneumatic_starter_requests: Vec<_> = self
             .vehicle
             .jets
@@ -857,6 +946,9 @@ impl FlightAuthority {
             }
         }
         let mut jet_throttle_scales = vec![1.0; self.vehicle.jets.len()];
+        let mut apu_starter_resource_scales = vec![1.0; self.vehicle.auxiliary_power_units.len()];
+        let mut jet_starter_resource_scales = vec![1.0; self.vehicle.jets.len()];
+        let mut turboprop_starter_resource_scales = vec![1.0; self.vehicle.turboprops.len()];
         let mut fuel_cell_scales = vec![1.0; self.vehicle.electrical_power.fuel_cells.len()];
         let mut rcs_duty_scales = vec![1.0; self.vehicle.rcs_mounts.len()];
         let mut electric_thruster_flow_scales = vec![1.0; self.vehicle.electric_thrusters.len()];
@@ -866,11 +958,18 @@ impl FlightAuthority {
         let mut turboprop_scales = vec![1.0; self.vehicle.turboprops.len()];
         let mut resource_limited = false;
         for _ in 0..24 {
+            let mut apu_states = self.auxiliary_power_unit_states.clone();
+            for (index, charge) in apu_starter_charges.iter().enumerate() {
+                if let Some(charge_j) = charge {
+                    apu_states[index].shaft.starter_charge_j =
+                        charge_j * apu_starter_resource_scales[index];
+                }
+            }
             let apu_step = self
                 .vehicle
                 .plan_auxiliary_power_units(
                     &self.resource_state,
-                    &self.auxiliary_power_unit_states,
+                    &apu_states,
                     &apu_commands,
                     condition,
                 )
@@ -895,6 +994,17 @@ impl FlightAuthority {
                     point,
                     mount.feed_port_name.as_deref(),
                 ));
+                if let Some(demand) = starter_demand(
+                    &mount.name,
+                    &mount.unit.engine.shaft.starter,
+                    point.shaft.starter_draw_w,
+                    mount
+                        .feed_port_name
+                        .as_deref()
+                        .or_else(|| self.vehicle.resource_feed_port_for_consumer(&mount.name)),
+                )? {
+                    additional_demands.push(demand);
+                }
             }
 
             let vessel_throttle = if self.engine_active {
@@ -903,11 +1013,20 @@ impl FlightAuthority {
                 0.0
             };
             let mut next_jet_commands = Vec::with_capacity(self.vehicle.jets.len());
+            let mut jet_generated_power_w = 0.0;
             for (index, (mount, previous)) in
                 self.vehicle.jets.iter().zip(&jet_commands).enumerate()
             {
                 let mut command = *previous;
                 command.dt_s = FLIGHT_STEP_S;
+                let engine = match &mount.engine {
+                    thessa_sim_core::CompiledJet::Air(engine) => engine.as_ref(),
+                    thessa_sim_core::CompiledJet::Estoc(engine) => &engine.air,
+                };
+                let starter = &engine.shaft.starter;
+                if let Some(charge_j) = jet_starter_charges[index] {
+                    command.shaft.starter_charge_j = charge_j * jet_starter_resource_scales[index];
+                }
                 command.pneumatic_starter_power_w = if total_pneumatic_starter_request_w > 0.0 {
                     apu_step.pneumatic_bleed_power_w * pneumatic_starter_requests[index]
                         / total_pneumatic_starter_request_w
@@ -915,16 +1034,29 @@ impl FlightAuthority {
                     0.0
                 };
                 let throttle = vessel_throttle * jet_throttle_scales[index];
-                let (point, transient, shaft) = mount
-                    .estoc_point(throttle, condition, &command)
+                let (point, transient, shaft, shaft_telemetry) = mount
+                    .estoc_point_with_telemetry(throttle, condition, &command)
                     .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+                jet_generated_power_w += shaft_telemetry.generator_electrical_w;
                 let thrust = DVec3::from_array(mount.thrust_axis_body) * point.thrust_n;
                 accessory_force_body_n += thrust;
                 accessory_moment_body_nm += DVec3::from_array(mount.position_body_m).cross(thrust);
                 additional_demands.extend(thessa_sim_core::VehicleResourceDemand::from_jet_point(
                     mount, &point, None,
                 ));
-                next_jet_commands.push(command.with_state(&point, transient, shaft));
+                if let Some(demand) = starter_demand(
+                    &mount.name,
+                    starter,
+                    shaft_telemetry.starter_draw_w,
+                    self.vehicle.resource_feed_port_for_consumer(&mount.name),
+                )? {
+                    additional_demands.push(demand);
+                }
+                let mut next_shaft = shaft;
+                if starter.resource.is_some() {
+                    next_shaft.starter_charge_j = 0.0;
+                }
+                next_jet_commands.push(command.with_state(&point, transient, next_shaft));
             }
             for (index, mount) in self.vehicle.rcs_mounts.iter().enumerate() {
                 let duty = (requested_rcs_duties[index] * rcs_duty_scales[index]).clamp(0.0, 1.0);
@@ -953,7 +1085,8 @@ impl FlightAuthority {
 
             let mut power_command = self.electrical_power_command.clone();
             power_command.dt_s = FLIGHT_STEP_S;
-            power_command.auxiliary_generation_power_w = apu_step.generated_electrical_power_w;
+            power_command.auxiliary_generation_power_w =
+                apu_step.generated_electrical_power_w + jet_generated_power_w;
             for (fraction, scale) in power_command
                 .fuel_cell_power_fraction
                 .iter_mut()
@@ -1218,6 +1351,11 @@ impl FlightAuthority {
             {
                 let mut command = *previous;
                 command.dt_s = FLIGHT_STEP_S;
+                let starter = &mount.drive.air.shaft.starter;
+                if let Some(charge_j) = turboprop_starter_charges[index] {
+                    command.shaft_state.starter_charge_j =
+                        charge_j * turboprop_starter_resource_scales[index];
+                }
                 command.shaft.throttle *= turboprop_scales[index];
                 command.pneumatic_starter_power_w = if total_pneumatic_starter_request_w > 0.0 {
                     apu_step.pneumatic_bleed_power_w * turboprop_starter_requests[index]
@@ -1237,7 +1375,19 @@ impl FlightAuthority {
                         mount, &point, None,
                     ),
                 );
-                next_turboprop_commands.push(command.with_state(shaft_state));
+                if let Some(demand) = starter_demand(
+                    &mount.name,
+                    starter,
+                    point.shaft_telemetry.starter_draw_w,
+                    self.vehicle.resource_feed_port_for_consumer(&mount.name),
+                )? {
+                    additional_demands.push(demand);
+                }
+                let mut next_shaft_state = shaft_state;
+                if starter.resource.is_some() {
+                    next_shaft_state.starter_charge_j = 0.0;
+                }
+                next_turboprop_commands.push(command.with_state(next_shaft_state));
             }
 
             let mut propulsion = self.plan_installed_propulsion(ambient_pa, &additional_demands)?;
@@ -1245,6 +1395,38 @@ impl FlightAuthority {
             if let Some(allocation) = &mut propulsion {
                 for consumer in &allocation.additional_resource_consumers {
                     if consumer.scale >= 1.0 - 1.0e-10 {
+                        continue;
+                    }
+                    if let Some(mount_name) = consumer.consumer_name.strip_suffix("::starter") {
+                        if let Some(index) = self
+                            .vehicle
+                            .auxiliary_power_units
+                            .iter()
+                            .position(|mount| mount.name == mount_name)
+                        {
+                            apu_starter_resource_scales[index] *= consumer.scale;
+                        } else if let Some(index) = self
+                            .vehicle
+                            .jets
+                            .iter()
+                            .position(|mount| mount.name == mount_name)
+                        {
+                            jet_starter_resource_scales[index] *= consumer.scale;
+                        } else if let Some(index) = self
+                            .vehicle
+                            .turboprops
+                            .iter()
+                            .position(|mount| mount.name == mount_name)
+                        {
+                            turboprop_starter_resource_scales[index] *= consumer.scale;
+                        } else {
+                            return Err(FlightError::InvalidInput(format!(
+                                "no operating-point feedback path for starter resource consumer '{}'",
+                                consumer.consumer_name
+                            )));
+                        }
+                        resource_limited = true;
+                        changed = true;
                         continue;
                     }
                     if let Some(index) = self
@@ -1333,6 +1515,17 @@ impl FlightAuthority {
             if changed {
                 continue;
             }
+            let mut next_apu_states = apu_step.next_states.clone();
+            for (mount, state) in self
+                .vehicle
+                .auxiliary_power_units
+                .iter()
+                .zip(&mut next_apu_states)
+            {
+                if mount.unit.engine.shaft.starter.resource.is_some() {
+                    state.shaft.starter_charge_j = 0.0;
+                }
+            }
             resource_limited |= apu_step.resource_limited;
             if let Some(allocation) = &mut propulsion {
                 allocation.fuel_limited |= resource_limited;
@@ -1341,7 +1534,7 @@ impl FlightAuthority {
                 propulsion,
                 electrical_power_state,
                 electrical_power_telemetry,
-                auxiliary_power_unit_states: apu_step.next_states,
+                auxiliary_power_unit_states: next_apu_states,
                 jet_commands: next_jet_commands,
                 pulsed_fusion_states: next_pulsed_fusion_states,
                 turboprop_commands: next_turboprop_commands,
@@ -1402,8 +1595,9 @@ impl FlightAuthority {
         } else {
             FlightRegime::Aero
         };
-        let (parachute_force_body_n, parachute_moment_body_nm) =
-            self.advance_parachutes(kinematics, atmosphere_sample)?;
+        let parachute_step = self.plan_parachutes(kinematics, atmosphere_sample)?;
+        let parachute_force_body_n = parachute_step.force_body_n;
+        let parachute_moment_body_nm = parachute_step.moment_body_nm;
         let control_allocation = self.allocate_controls(kinematics, mode)?;
         let mut jet_moment = control_allocation.moment_body_nm;
         let precomputed_aero = control_allocation.aero_result;
@@ -1470,7 +1664,7 @@ impl FlightAuthority {
             && propulsion_force_body_n == DVec3::ZERO
             && skip_aero
             && !self.landing_gear_transitioning()
-            && !self.parachute_rails_ineligible()
+            && !Self::parachute_rails_ineligible(&parachute_step.states)
         {
             match self.try_coast_step_on_rails(ephemeris, time, jet_moment, body_state, gravity)? {
                 Some(coasted) => coasted,
@@ -1504,30 +1698,16 @@ impl FlightAuthority {
                 precomputed_aero,
             )?
         };
-        if let Some(allocation) = propulsion_allocation {
+        let propulsion_frame_shift = if let Some(allocation) = propulsion_allocation {
             let frame_shift = self
                 .vehicle
-                .commit_propulsion_step(&mut self.resource_state, allocation)
+                .preview_propulsion_commit_frame_shift(&self.resource_state, allocation)
                 .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
-            self.apply_resource_frame_shift(frame_shift, &mut next)?;
-            self.last_propulsion_force_body_n =
-                allocation.force_body_n + installed_resource_step.accessory_force_body_n;
-            self.last_propellant_flow_kg_s = allocation.total_propellant_flow_kg_s;
-            self.fuel_limited = allocation.fuel_limited || installed_resource_step.resource_limited;
+            rebase_rigid_body_state(&mut next, frame_shift)?;
+            Some(frame_shift)
         } else {
-            self.last_propulsion_force_body_n = propulsion_force_body_n;
-            self.last_propellant_flow_kg_s = 0.0;
-            self.fuel_limited = installed_resource_step.resource_limited;
-        }
-        self.electrical_power_state = installed_resource_step.electrical_power_state;
-        self.electrical_power_telemetry = Some(installed_resource_step.electrical_power_telemetry);
-        self.auxiliary_power_unit_states = installed_resource_step.auxiliary_power_unit_states;
-        self.jet_commands = installed_resource_step.jet_commands;
-        self.pulsed_fusion_states = installed_resource_step.pulsed_fusion_states;
-        self.turboprop_commands = installed_resource_step.turboprop_commands;
-        if !contact_active {
-            self.advance_freeflight_landing_gear()?;
-        }
+            None
+        };
         // skip_aero zeroes the aero summary; restore the measured dynamic
         // pressure so HUD readouts stay on-model through the band.
         if band_q_pa > 0.0 {
@@ -1569,6 +1749,35 @@ impl FlightAuthority {
             guard_state,
             guard_radius,
         )?;
+        // All state that advances the installed resource systems is tentative
+        // until the endpoint guard accepts this physical tick.
+        if let Some(allocation) = propulsion_allocation {
+            let frame_shift = self
+                .vehicle
+                .commit_propulsion_step(&mut self.resource_state, allocation)
+                .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+            debug_assert_eq!(Some(frame_shift), propulsion_frame_shift);
+            self.apply_resource_frame_shift(frame_shift)?;
+            self.last_propulsion_force_body_n =
+                allocation.force_body_n + installed_resource_step.accessory_force_body_n;
+            self.last_propellant_flow_kg_s = allocation.total_propellant_flow_kg_s;
+            self.fuel_limited = allocation.fuel_limited || installed_resource_step.resource_limited;
+        } else {
+            self.last_propulsion_force_body_n = propulsion_force_body_n;
+            self.last_propellant_flow_kg_s = 0.0;
+            self.fuel_limited = installed_resource_step.resource_limited;
+        }
+        self.electrical_power_state = installed_resource_step.electrical_power_state;
+        self.electrical_power_telemetry = Some(installed_resource_step.electrical_power_telemetry);
+        self.auxiliary_power_unit_states = installed_resource_step.auxiliary_power_unit_states;
+        self.jet_commands = installed_resource_step.jet_commands;
+        self.pulsed_fusion_states = installed_resource_step.pulsed_fusion_states;
+        self.turboprop_commands = installed_resource_step.turboprop_commands;
+        self.parachute_states = parachute_step.states;
+        self.last_parachute_loads = parachute_step.loads;
+        if !contact_active {
+            self.advance_freeflight_landing_gear()?;
+        }
         if let Some(trace) = self.trace.as_mut() {
             trace.record(
                 self.flight_time_s,

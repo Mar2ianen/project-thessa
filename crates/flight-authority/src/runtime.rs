@@ -194,6 +194,37 @@ struct ControlAllocation {
     aero_result: Option<AeroResult>,
 }
 
+struct ParachuteStep {
+    force_body_n: DVec3,
+    moment_body_nm: DVec3,
+    states: Vec<ParachuteState>,
+    loads: Vec<ParachuteLoad>,
+}
+
+fn rebase_rigid_body_state(
+    state: &mut RigidBodyState,
+    frame_shift_body_m: DVec3,
+) -> Result<(), FlightError> {
+    if frame_shift_body_m == DVec3::ZERO {
+        return Ok(());
+    }
+    // Re-centering geometry by `frame_shift` moves the represented COM by its
+    // opposite vector. Preserve the rigid-body velocity at that shifted point.
+    let center_shift_body_m = -frame_shift_body_m;
+    let orientation = state.orientation_body_to_inertial;
+    let offset_inertial_m = orientation * center_shift_body_m;
+    let angular_velocity_inertial_rps = orientation * state.angular_velocity_body_rps;
+    state.position_inertial_m += offset_inertial_m;
+    state.velocity_inertial_mps += angular_velocity_inertial_rps.cross(offset_inertial_m);
+    RigidBodyState::new(
+        state.position_inertial_m,
+        state.velocity_inertial_mps,
+        state.orientation_body_to_inertial,
+        state.angular_velocity_body_rps,
+    )
+    .map(|_| ())
+}
+
 /// Authoritative flight model for the first playable vehicle.
 ///
 /// The authoritative equations stay in `thessa-sim-core`; this runtime supplies
@@ -1147,7 +1178,9 @@ impl FlightAuthority {
             )
             .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
         let mut state = self.state;
-        self.apply_resource_frame_shift(frame_shift, &mut state)?;
+        rebase_rigid_body_state(&mut state, frame_shift)?;
+        self.apply_resource_frame_shift(frame_shift)?;
+        self.relative_position_m += state.position_inertial_m - self.state.position_inertial_m;
         self.state = state;
         self.rails.invalidate();
         self.scheduler.clear_rails_wakes();

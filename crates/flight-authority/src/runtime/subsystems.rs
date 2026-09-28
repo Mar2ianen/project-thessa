@@ -6,7 +6,6 @@ impl FlightAuthority {
     pub(super) fn apply_resource_frame_shift(
         &mut self,
         frame_shift_body_m: DVec3,
-        state: &mut RigidBodyState,
     ) -> Result<(), FlightError> {
         if frame_shift_body_m == DVec3::ZERO {
             return Ok(());
@@ -21,16 +20,6 @@ impl FlightAuthority {
         self.aero_panels
             .sync_geometry(&self.vehicle.aero_geometry)
             .map_err(FlightError::Aero)?;
-
-        // The integrator tracks the current COM. Re-basing the compiled body
-        // frame therefore moves the state point by the opposite local shift.
-        let center_shift_body_m = -frame_shift_body_m;
-        let orientation = state.orientation_body_to_inertial;
-        let offset_inertial_m = orientation * center_shift_body_m;
-        let angular_velocity_inertial_rps = orientation * state.angular_velocity_body_rps;
-        state.position_inertial_m += offset_inertial_m;
-        state.velocity_inertial_mps += angular_velocity_inertial_rps.cross(offset_inertial_m);
-        self.relative_position_m += offset_inertial_m;
         Ok(())
     }
 
@@ -83,8 +72,8 @@ impl FlightAuthority {
             .resize(self.vehicle.parachutes.len(), ParachuteLoad::default());
     }
 
-    pub(super) fn parachute_rails_ineligible(&self) -> bool {
-        self.parachute_states.iter().any(|state| {
+    pub(super) fn parachute_rails_ineligible(states: &[ParachuteState]) -> bool {
+        states.iter().any(|state| {
             matches!(
                 state.phase,
                 ParachutePhase::Armed | ParachutePhase::Reefed | ParachutePhase::Deployed
@@ -92,24 +81,30 @@ impl FlightAuthority {
         })
     }
 
-    pub(super) fn advance_parachutes(
-        &mut self,
+    pub(super) fn plan_parachutes(
+        &self,
         kinematics: LocalAirKinematics,
         atmosphere: thessa_sim_core::AtmosphereSample,
-    ) -> Result<(DVec3, DVec3), FlightError> {
+    ) -> Result<ParachuteStep, FlightError> {
         if self.vehicle.parachutes.is_empty() {
-            self.last_parachute_loads.clear();
-            self.parachute_states.clear();
-            return Ok((DVec3::ZERO, DVec3::ZERO));
+            return Ok(ParachuteStep {
+                force_body_n: DVec3::ZERO,
+                moment_body_nm: DVec3::ZERO,
+                states: Vec::new(),
+                loads: Vec::new(),
+            });
         }
-        self.sync_parachute_runtime_state();
-        let mut total_force_body_n = DVec3::ZERO;
-        let mut total_moment_body_nm = DVec3::ZERO;
+        let mut states = self.parachute_states.clone();
+        states.resize(self.vehicle.parachutes.len(), ParachuteState::default());
+        states.truncate(self.vehicle.parachutes.len());
+        let mut loads = Vec::with_capacity(self.vehicle.parachutes.len());
+        let mut force_body_n = DVec3::ZERO;
+        let mut moment_body_nm = DVec3::ZERO;
         for index in 0..self.vehicle.parachutes.len() {
             let spec = &self.vehicle.parachutes[index];
             let load = spec
                 .advance(
-                    self.parachute_states[index],
+                    states[index],
                     ParachuteEnvironment {
                         atmosphere,
                         radial_velocity_mps: kinematics
@@ -126,12 +121,17 @@ impl FlightAuthority {
                         spec.name
                     ))
                 })?;
-            self.parachute_states[index] = load.state;
-            self.last_parachute_loads[index] = load;
-            total_force_body_n += load.force_body_n;
-            total_moment_body_nm += load.moment_body_nm;
+            states[index] = load.state;
+            force_body_n += load.force_body_n;
+            moment_body_nm += load.moment_body_nm;
+            loads.push(load);
         }
-        Ok((total_force_body_n, total_moment_body_nm))
+        Ok(ParachuteStep {
+            force_body_n,
+            moment_body_nm,
+            states,
+            loads,
+        })
     }
 
     pub(super) fn sync_wheel_gear_runtime_state(&mut self) {

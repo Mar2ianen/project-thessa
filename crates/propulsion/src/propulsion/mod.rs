@@ -95,9 +95,9 @@ pub use rcs::{
     RcsThruster,
 };
 pub use shaft::{
-    GeneratorSpec, JetShaftState, ShaftBalance, ShaftCommand, ShaftSpec, ShaftTelemetry,
-    StarterKind, StarterSpec, advance_jet_shaft, advance_jet_shaft_loaded,
-    advance_jet_shaft_loaded_with_starter_power,
+    GeneratorEfficiencyPoint, GeneratorSpec, GeneratorThermalSpec, JetShaftState, MultiSpoolSpec,
+    ShaftBalance, ShaftCommand, ShaftSpec, ShaftSpool, ShaftTelemetry, StarterKind, StarterSpec,
+    advance_jet_shaft, advance_jet_shaft_loaded, advance_jet_shaft_loaded_with_starter_power,
 };
 pub use shaft_power::{
     CompiledElectricMotor, CompiledPistonEngine, CompiledPropeller, CompiledPropellerDrive,

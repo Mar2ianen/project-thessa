@@ -7,6 +7,8 @@ use super::*;
 pub(crate) struct AssemblyAsset {
     #[serde(default)]
     pub(crate) links: Vec<AssemblyLinkAsset>,
+    #[serde(default)]
+    pub(crate) resource_edges: Vec<AssemblyResourceEdgeAsset>,
 }
 
 /// One assembly link asset with `body.node` endpoints and its initial hatch state.
@@ -18,6 +20,23 @@ pub(crate) struct AssemblyLinkAsset {
     /// Initial hatch state (stack links are always open). Defaults open.
     #[serde(default = "hatch_open_default")]
     pub(crate) hatch_open: bool,
+    /// Optional liquid feed segment routed across this structural link.
+    #[serde(default)]
+    pub(crate) feed_line: Option<FeedLine>,
+}
+
+/// Explicit crossfeed connection outside the one-parent structural tree.
+#[derive(Debug, Deserialize)]
+pub(crate) struct AssemblyResourceEdgeAsset {
+    pub(crate) name: String,
+    pub(crate) a: String,
+    pub(crate) b: String,
+    /// Resource valve state; defaults open.
+    #[serde(default = "hatch_open_default")]
+    pub(crate) open: bool,
+    /// Optional pipe geometry; omission retains ideal legacy crossfeed.
+    #[serde(default)]
+    pub(crate) feed_line: Option<FeedLine>,
 }
 
 fn hatch_open_default() -> bool {
@@ -58,6 +77,7 @@ pub(crate) fn resolve_assembly_links(
 pub(crate) fn runtime_assembly(
     bodies: &[ProceduralBody],
     links: &[AssemblyLinkAsset],
+    resource_edges: &[AssemblyResourceEdgeAsset],
     root_name: &str,
     volumes: Vec<AssemblyVolume>,
 ) -> Result<VehicleAssembly, String> {
@@ -104,6 +124,29 @@ pub(crate) fn runtime_assembly(
                 hatch,
                 open: !hatch || link.hatch_open,
             },
+            feed_line: link.feed_line,
+        });
+    }
+    let mut runtime_resource_edges = Vec::with_capacity(resource_edges.len());
+    for edge in resource_edges {
+        let a = *body_indices.get(edge.a.as_str()).ok_or_else(|| {
+            format!(
+                "resource edge '{}' has unknown body '{}'",
+                edge.name, edge.a
+            )
+        })?;
+        let b = *body_indices.get(edge.b.as_str()).ok_or_else(|| {
+            format!(
+                "resource edge '{}' has unknown body '{}'",
+                edge.name, edge.b
+            )
+        })?;
+        runtime_resource_edges.push(NamedAssemblyResourceEdge {
+            name: edge.name.clone(),
+            a,
+            b,
+            open: edge.open,
+            feed_line: edge.feed_line,
         });
     }
     let mut tanks = Vec::new();
@@ -141,6 +184,7 @@ pub(crate) fn runtime_assembly(
         root_body,
         body_names: bodies.iter().map(|body| body.name.clone()).collect(),
         links: runtime_links,
+        resource_edges: runtime_resource_edges,
         volumes,
         tanks,
         engine_ports,

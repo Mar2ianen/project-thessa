@@ -2,10 +2,14 @@
 
 Status: authored attach nodes, pose solving, transformed rigid-body
 geometry/mass, validated topology, and runtime crew/air/feed connectivity
-are implemented. The assembled craft is currently one rigid body; joint
-loads, structural breakup, and runtime docking/separation remain later
-slices. Reference stays KSP: parts mate through explicit nodes into one
-craft tree.
+are implemented. Named non-tree resource edges and pressure-limited
+`FeedLine` routing are implemented. Contact-scene docking now advances the
+persisted D1 protocol, installs/removes a fixed joint, and reports solver
+joint force/moment. The assembled vehicle is still integrated as one rigid
+body: applying internal assembly-joint loads to authored strength limits and
+rebuilding separate vehicle clusters after structural failure remain later
+slices. Reference stays KSP: parts mate through explicit nodes into one craft
+tree.
 
 ## 1. Goal
 
@@ -21,11 +25,12 @@ Separate parts assemble into one craft through authored interfaces:
 - resource reachability: which tanks can feed installed consumers through
   named engine-feed ports.
 
-Non-goals in this slice: per-joint loads, structural failure and cluster
-splitting, runtime docking/undocking, finite-rate cabin flow, airlock parts,
-struts and fuel lines (they require explicit non-tree graph edges). Resource
-draw uses compatible reachable inventory and actual operating-point flows
-without solving pressure or flow through authored pipe geometry.
+Still outside this slice: internal assembly-joint load resolution,
+material-rated structural failure and physical cluster splitting,
+authoritative multi-vehicle ownership, finite-rate cabin flow, and airlock
+parts. Resource edges currently carry reachability plus optional feed-line
+pressure loss; they do not model distributed line pressure, line storage,
+transients, pumps, or flow sharing through a branched pipe network.
 
 ## 2. Nodes (hangar authoring)
 
@@ -76,9 +81,11 @@ Volumes are non-tank regions; tanks are never crew volumes:
   only. A dry region can be crew-passable but does not join a pressure
   domain.
 - **Resource reachability** (`feed_paths`): tank regions to `engine-mount`
-  ports through resource-open links, as qualified `body.region` →
+  ports through resource-open structural links and explicit non-structural
+  crossfeed edges, as qualified `body.region` →
   `body.port` pairs (`Bipropellant` regions expose `body.region-ox` and
-  `body.region-fuel`). Closed hatches block fuel like sealed KSP docks. The
+  `body.region-fuel`). A closed hatch blocks flow through that structural
+  link; explicitly authored crossfeed edges remain independent. The
   fixed-step allocator draws from the reachable inventory according to each
   installed consumer's operating-point flow. Rocket mixture ratio, APU/jet
   fuel, RCS propellant, electric working fluid, fusion reactants, and fuel-cell
@@ -98,9 +105,18 @@ regions along an unsuited or hose-fed crew member's route; self-contained
 suits also permit dry/vacuum passage. This is a compartment access query,
 not character movement. Structural stack joints never pass crew but always
 pass resources. Index-based helpers are geometry-free and validate endpoint
-ranges. Fixed-step resource planning honors current link state and named feed
-endpoints for routed consumers; shared inventory is reserved across overlapping
-ports before one mass/inertia commit. Opening an exterior assembly hatch into a
+ranges. Fixed-step resource planning honors current link/edge state and named
+feed endpoints for routed consumers; shared inventory is reserved across
+overlapping ports before one mass/inertia commit. An optional `FeedLine` on a
+structural link or non-tree resource edge applies the existing propulsion
+pressure-drop law. For a routed fluid, `FeedResourceProperties` supplies
+density, dynamic viscosity, regulated source pressure, and required consumer
+inlet pressure. The allocator evaluates the least-drop reachable path, enforces
+the line's pressure rating and hard velocity gate, and bisects a shared
+consumer flow to the largest pressure-feasible value before committing tank
+draw. Omitting fluid properties retains the ideal legacy route; a route through
+authored lines must provide them. This is a static path calculation, not a
+branched hydraulic network solver. Opening an exterior assembly hatch into a
 dry region refuses while
 its connected pressure domain contains air unless the caller explicitly
 asserts that all exposed occupants are suited. That operation vents the
@@ -117,17 +133,31 @@ aggregation. Later runtime hatch changes update cabin inventories and vehicle
 mass/inertia plus the body-frame COM for gas redistribution and venting.
 Finite-rate orifice flow remains future work.
 
+The flow feasibility search uses 32 monotone bisection steps, bounding its
+final relative flow interval by `2^-32` (less than `2.4e-10` of requested
+flow), before f64 rounding; the regression pins the resulting inlet-pressure
+root within `0.1 Pa` for its known line fixture. The line constitutive
+approximation remains the existing Darcy-Weisbach law: laminar `64/Re`,
+smooth-turbulent Blasius, and documented entrance/exit and bend coefficients;
+rough-pipe and two-phase uncertainty are model limits rather than solver
+error. Regression coverage checks the supported flow against the authored
+minimum inlet pressure and the velocity gate. The `resource_routing` bench
+measured `436.89 us` per plan for
+one 64-body, 32-tank, 16-consumer vehicle with 63 authored line segments on the
+current development run (`cargo bench -p thessa-sim-core --bench
+resource_routing`; local hardware dependent).
+
 ## 6. Baker wiring
 
-Optional `[[assembly.links]]` on the vehicle asset. Present links are
-resolved and validated through `compile_assembly`; transforms are applied
+Optional `[[assembly.links]]` and `[[assembly.resource_edges]]` on the vehicle
+asset. Present links are resolved and validated through `compile_assembly`; transforms are applied
 before aero, mass, and collision aggregation and the root/part poses are
 reported. Runtime connectivity is serialized onto the baked
 `VehicleDefinition`; absent links skip silently for legacy assets. Baker
-test bakes `data/vehicles/example_assembly.toml` (stage + capsule, open
-hatch), checks attach-frame position/normal residuals below `1e-12 m`,
-and toggles the hatch to verify crew passage, pressure equalization, and
-cross-part feed reachability.
+test bakes `data/vehicles/example_assembly.toml` (stage + capsule, sealed
+hatch, independent fuel umbilical), checks attach-frame position/normal
+residuals below `1e-12 m`, and verifies that the umbilical preserves feed
+reachability without opening crew or cabin-air paths.
 
 Pose solving is a tree traversal, O(parts + links); runtime connectivity
 is rebuilt from the compact volume/link graph when queried. Attach-frame
@@ -142,12 +172,33 @@ bookkeeping and coordinate-shift handling, in `56.58 us` per transition on
 the current development run (`cargo bench -p thessa-sim-core --bench
 assembly_air`; local hardware dependent).
 
-## 7. Next slices
+## 7. Docking, joint loads, and split planning
 
-- Joint load paths, structural failure/splitting, dock/undock events,
-  and per-link load limits.
-- Fuel flow simulation over `feed_paths` (rates, drain order).
+`ContactRuntime` can sync a partner into the shared Rapier scene, validate
+live local-port kinematics against `DockingSession`, begin soft capture, align
+and hard-dock with a fixed joint, advance pressure equalization in physics
+time, report the latest joint solver impulse as average force/moment, and
+remove the joint while preserving both solved body states. The D1 contact test
+exercises that sequence under an applied load. `CollisionWorld` reports
+constraint loads only; it does not assign structural damage or infer ratings.
+
+`VehicleAssembly::body_components_after_link_failure` computes deterministic
+body-index components after removing a named structural edge, and
+`split_after_link_failure` returns independently validated assembly graphs
+with local indices and no resource edge crossing the physical split. These
+operations deliberately ignore cross-cluster umbilicals when determining
+structure. They are topology breakup, not physical vehicle reconstruction:
+the baked `VehicleDefinition` does not yet retain enough per-part mass,
+inertia, aero, collision, thermal, actuator, and inventory ownership to
+instantiate the results as independent authoritative vehicles.
+
+## 8. Next slices
+
+- Internal assembly-joint load paths, per-link strength ratings, and physical
+  reconstruction of vehicle clusters from split part ownership.
+- Server-level docking/separation ownership and persistence across independent
+  vehicle authorities.
+- Branched feed-network pressure/flow solving, rate limits, and drain-order
+  policy beyond the current least-drop path calculation.
 - Finite-rate hatch/orifice flow; airlock parts (cycled volume instead of
-  whole-cabin venting).
-- Adapter parts for diameter transitions; struts/fuel lines as explicit
-  non-tree edges.
+  whole-cabin venting); adapter parts for diameter transitions.

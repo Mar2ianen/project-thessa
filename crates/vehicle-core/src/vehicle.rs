@@ -4,7 +4,7 @@ use glam::{DMat3, DQuat, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AeroConfig, AeroError, AeroGeometry, AeroPanel, AeroResult, AuthorityReason,
+    AeroBluntDisc, AeroConfig, AeroError, AeroGeometry, AeroPanel, AeroResult, AuthorityReason,
     AuxiliaryPowerUnitMount, CabinError, CabinExit, CabinMonument, CabinSeat, CollisionAxis,
     CollisionError, CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape,
     CompiledEngine, CompiledLandingLeg, CompiledWheelChassis, ControlAuthority, ControlCore,
@@ -1357,6 +1357,26 @@ impl VehicleDefinition {
         for mount in &mut self.turboprops {
             shift_array(&mut mount.position_body_m, shift);
         }
+        for chassis in &mut self.wheel_chassis {
+            chassis.spec.mount_position_body_m += shift;
+            if let Some(retraction) = &mut chassis.spec.retraction {
+                retraction.pivot_position_body_m += shift;
+            }
+            for station in &mut chassis.wheel_stations {
+                station.position_body_m += shift;
+            }
+            chassis.mass_properties.center_of_mass_body_m += shift;
+        }
+        for leg in &mut self.landing_legs {
+            leg.spec.mount_position_body_m += shift;
+            leg.mass_properties.center_of_mass_body_m += shift;
+        }
+        for wheel in &mut self.reaction_wheels {
+            wheel.position_body_m += shift;
+        }
+        for parachute in &mut self.parachutes {
+            parachute.position_body_m += shift;
+        }
         for battery in &mut self.electrical_power.batteries {
             battery.position_body_m += shift;
         }
@@ -1472,6 +1492,29 @@ impl VehicleDefinition {
                 .turboprops
                 .iter()
                 .all(|mount| shifted_station_is_finite(&mount.position_body_m))
+            && self.wheel_chassis.iter().all(|chassis| {
+                shifted_point_is_finite(chassis.spec.mount_position_body_m)
+                    && chassis.spec.retraction.is_none_or(|retraction| {
+                        shifted_point_is_finite(retraction.pivot_position_body_m)
+                    })
+                    && chassis
+                        .wheel_stations
+                        .iter()
+                        .all(|station| shifted_point_is_finite(station.position_body_m))
+                    && shifted_point_is_finite(chassis.mass_properties.center_of_mass_body_m)
+            })
+            && self.landing_legs.iter().all(|leg| {
+                shifted_point_is_finite(leg.spec.mount_position_body_m)
+                    && shifted_point_is_finite(leg.mass_properties.center_of_mass_body_m)
+            })
+            && self
+                .reaction_wheels
+                .iter()
+                .all(|wheel| shifted_point_is_finite(wheel.position_body_m))
+            && self
+                .parachutes
+                .iter()
+                .all(|parachute| shifted_point_is_finite(parachute.position_body_m))
             && self
                 .electrical_power
                 .batteries
@@ -1661,6 +1704,16 @@ impl VehicleDefinition {
                     "resource consumer '{}' has more than one feed-port route",
                     route.consumer_name
                 )));
+            }
+            let mut routed_resources = std::collections::HashSet::new();
+            for properties in &route.fluid_properties {
+                properties.validate()?;
+                if !routed_resources.insert(properties.resource) {
+                    return Err(VehicleError::InvalidVehicle(format!(
+                        "resource route '{}' has duplicate fluid properties for {:?}",
+                        route.consumer_name, properties.resource
+                    )));
+                }
             }
         }
         for thruster in &self.electric_thrusters {
@@ -2078,6 +2131,37 @@ impl VehicleDefinition {
                     "duplicate heat-shield mount name '{}'",
                     shield.name
                 )));
+            }
+        }
+        let previous_shield_discs: Vec<_> = self
+            .heat_shields
+            .iter()
+            .map(|shield| {
+                AeroBluntDisc::new(
+                    shield.position_body_m,
+                    shield.normal_body_m,
+                    shield.area_m2(),
+                )
+                .map_err(VehicleError::Geometry)
+            })
+            .collect::<Result<_, _>>()?;
+        self.aero_geometry
+            .blunt_discs
+            .retain(|disc| !previous_shield_discs.contains(disc));
+        let shield_discs = heat_shields
+            .iter()
+            .map(|shield| {
+                AeroBluntDisc::new(
+                    shield.position_body_m,
+                    shield.normal_body_m,
+                    shield.area_m2(),
+                )
+                .map_err(VehicleError::Geometry)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for disc in shield_discs {
+            if !self.aero_geometry.blunt_discs.contains(&disc) {
+                self.aero_geometry.blunt_discs.push(disc);
             }
         }
         self.heat_shields = heat_shields;
@@ -3567,13 +3651,13 @@ mod tests {
     use crate::{
         AirCycle, AirbreathingSpec, ChamberMaterial, ElectricMotorSpec, ElectricPropellant,
         ElectricThrusterDesign, ElectricThrusterMount, ElectricThrusterSpec, EstocMode, EstocSpec,
-        FusionReaction, FusionTorchCommand, FusionTorchMount, FusionTorchSpec, IntakeKind, JetFuel,
-        LandingLegSpec, LandingShockAbsorberSpec, ParachuteSpec, PropellerDriveCommand,
-        PropellerDriveMount, PropellerDriveSpec, PropellerSpec, PulsedFusionCommand,
-        PulsedFusionMount, PulsedFusionSpec, PulsedFusionState, ReactionWheelBankSpec,
-        ShaftPowerSourceSpec, ShaftSpec, TireConstruction, TurbopropCommand, TurbopropDriveSpec,
-        TurbopropMount, WheelBrakeSpec, WheelChassisSpec, WheelLayout, WheelStrutSpec,
-        WheelTireSpec,
+        FusionReaction, FusionTorchCommand, FusionTorchMount, FusionTorchSpec, HeatShieldMount,
+        IntakeKind, JetFuel, LandingLegSpec, LandingShockAbsorberSpec, ParachuteSpec,
+        PropellerDriveCommand, PropellerDriveMount, PropellerDriveSpec, PropellerSpec,
+        PulsedFusionCommand, PulsedFusionMount, PulsedFusionSpec, PulsedFusionState,
+        ReactionWheelBankSpec, ShaftPowerSourceSpec, ShaftSpec, TireConstruction, TurbopropCommand,
+        TurbopropDriveSpec, TurbopropMount, WheelBrakeSpec, WheelChassisSpec, WheelLayout,
+        WheelStrutSpec, WheelTireSpec,
     };
     use thessa_propulsion::{
         CoolingMode, EngineCycle, LiquidEngineSpec, NozzleContour, Propellant,
@@ -3714,6 +3798,9 @@ mod tests {
             vehicle.mass_properties.inertia_body_kg_m2,
             DMat3::from_diagonal(DVec3::new(102.0, 122.0, 122.0))
         );
+        let shift = DVec3::new(2.0, -3.0, 0.5);
+        vehicle.shift_body_frame_origin(shift);
+        assert_eq!(vehicle.reaction_wheels[0].position_body_m, DVec3::X + shift);
     }
 
     #[test]
@@ -3747,6 +3834,55 @@ mod tests {
             vehicle.mass_properties.inertia_body_kg_m2,
             DMat3::from_diagonal(DVec3::new(102.0, 122.0, 122.0))
         );
+        let shift = DVec3::new(-1.0, 0.5, 2.0);
+        vehicle.shift_body_frame_origin(shift);
+        assert_eq!(vehicle.parachutes[0].position_body_m, DVec3::X + shift);
+    }
+
+    #[test]
+    fn heat_shield_mounts_join_the_shared_blunt_disc_geometry() {
+        let panel = AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel");
+        let authored_disc = AeroBluntDisc::new(DVec3::Y, DVec3::Z, 2.0).expect("disc");
+        let geometry = AeroGeometry::new(vec![panel])
+            .expect("geometry")
+            .with_blunt_discs(vec![authored_disc])
+            .expect("authored disc");
+        let properties =
+            RigidBodyProperties::new(1_000.0, DMat3::from_diagonal(DVec3::splat(100.0)))
+                .expect("mass");
+        let shield = HeatShieldMount::new("forebody", DVec3::new(1.0, 0.0, 0.0), DVec3::X, 2.0)
+            .expect("shield");
+        let vehicle = VehicleDefinition::new("shield-aero", geometry, properties, vec![])
+            .expect("vehicle")
+            .with_heat_shields(vec![shield.clone()])
+            .expect("heat shield");
+        assert_eq!(vehicle.aero_geometry.blunt_discs.len(), 2);
+        let shield_disc = vehicle.aero_geometry.blunt_discs[1];
+        assert_eq!(shield_disc.position_body_m, shield.position_body_m);
+        assert_eq!(shield_disc.normal_body_m, shield.normal_body_m);
+        assert!((shield_disc.area_m2 - std::f64::consts::PI).abs() < 1.0e-12);
+
+        let replaced = vehicle
+            .with_heat_shields(vec![shield])
+            .expect("replace heat-shield mounts");
+        assert_eq!(replaced.aero_geometry.blunt_discs.len(), 2);
+
+        let baked_shield_disc = AeroBluntDisc::new(
+            replaced.heat_shields[0].position_body_m,
+            replaced.heat_shields[0].normal_body_m,
+            replaced.heat_shields[0].area_m2(),
+        )
+        .expect("baked shield disc");
+        let baked_geometry = AeroGeometry::new(vec![panel])
+            .expect("geometry")
+            .with_blunt_discs(vec![authored_disc, baked_shield_disc])
+            .expect("baker geometry");
+        let baked_vehicle =
+            VehicleDefinition::new("baked-shield-aero", baked_geometry, properties, vec![])
+                .expect("vehicle")
+                .with_heat_shields(replaced.heat_shields.clone())
+                .expect("retain baked shield disc");
+        assert_eq!(baked_vehicle.aero_geometry.blunt_discs.len(), 2);
     }
 
     #[test]
@@ -4464,6 +4600,39 @@ mod tests {
                 .length()
                 > 1.0e-4
         );
+
+        let mut rebased = retractable.clone();
+        let shift = DVec3::new(0.25, -0.5, 1.0);
+        let old_station = rebased.wheel_chassis[0].wheel_stations[0].position_body_m;
+        let old_mount = rebased.wheel_chassis[0].spec.mount_position_body_m;
+        let old_center = rebased.wheel_chassis[0]
+            .mass_properties
+            .center_of_mass_body_m;
+        let old_pivot = rebased.wheel_chassis[0]
+            .spec
+            .retraction
+            .expect("retraction")
+            .pivot_position_body_m;
+        rebased.shift_body_frame_origin(shift);
+        let chassis = &rebased.wheel_chassis[0];
+        assert_eq!(
+            chassis.wheel_stations[0].position_body_m,
+            old_station + shift
+        );
+        assert_eq!(chassis.spec.mount_position_body_m, old_mount + shift);
+        assert_eq!(
+            chassis.mass_properties.center_of_mass_body_m,
+            old_center + shift
+        );
+        assert_eq!(
+            chassis
+                .spec
+                .retraction
+                .expect("retraction")
+                .pivot_position_body_m,
+            old_pivot + shift
+        );
+        rebased.validate().expect("rebased wheel chassis validates");
     }
 
     #[test]
@@ -4527,6 +4696,24 @@ mod tests {
                 .deployment_fraction,
             0.0
         );
+        let mut rebased = vehicle;
+        let shift = DVec3::new(-0.5, 0.25, 1.5);
+        let old_mount = rebased.landing_legs[0].spec.mount_position_body_m;
+        let old_center = rebased.landing_legs[0]
+            .mass_properties
+            .center_of_mass_body_m;
+        rebased.shift_body_frame_origin(shift);
+        assert_eq!(
+            rebased.landing_legs[0].spec.mount_position_body_m,
+            old_mount + shift
+        );
+        assert_eq!(
+            rebased.landing_legs[0]
+                .mass_properties
+                .center_of_mass_body_m,
+            old_center + shift
+        );
+        rebased.validate().expect("rebased landing leg validates");
     }
 }
 
@@ -4571,7 +4758,9 @@ mod cabin_authority_tests {
                     hatch: true,
                     open,
                 },
+                feed_line: None,
             }],
+            resource_edges: Vec::new(),
             volumes: vec![
                 AssemblyVolume {
                     name: "service.cabin".into(),

@@ -169,6 +169,14 @@ The first executable D1 slice is implemented at the CAD/runtime boundary:
 - `thessa-collision::CollisionWorld::attach_fixed_joint` is the Rapier hard
   docking constraint, with contacts between the joined craft disabled so the
   explicit structural constraint owns the interface;
+- `thessa-flight-authority::ContactRuntime` syncs a partner into the same
+  contact scene, checks live port-frame kinematics for soft capture/alignment,
+  installs the fixed joint after alignment, advances pressure equalization in
+  simulation time, and removes the joint on separation while retaining both
+  solved states;
+- `CollisionWorld::joint_loads(dt_s)` exposes the latest constraint impulse as
+  average force and moment magnitudes. This is solver telemetry for a future
+  strength policy, not an automatic failure threshold;
 - `CollisionWorld::attach_revolute_joint` is the mechanism seam for the six
   provisional soft-capture petals in the D1 asset;
 - the current `SoftCapture` transition is explicitly a logical MVP gate; the
@@ -179,6 +187,10 @@ The first executable D1 slice is implemented at the CAD/runtime boundary:
 - the collision regression fixture creates two D1 craft, completes the full
   docking state sequence, transfers an applied load through the dock, and
   verifies a clean undock.
+- the flight-authority contact regression runs the persisted session through
+  capture, align, hard dock, pressure equalization, applied load readback, and
+  separation; internal joints between parts of one baked vehicle still do not
+  have separate Rapier bodies or structural ratings.
 
 The fixture is an integration proof, not a final structural calibration. Exact
 petal stiffness, seal loads, latch ratings and failure thresholds remain open

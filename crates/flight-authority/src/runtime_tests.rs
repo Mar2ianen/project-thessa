@@ -8,8 +8,8 @@ use thessa_sim_core::{
     JetFuel, JetMount, JetShaftState, LandingLegSpec, LandingShockAbsorberSpec, LiquidEngineSpec,
     NozzleContour, ParachuteCommand, ParachutePhase, ParachuteSpec, PowerConsumerSpec,
     PowerPriority, Propellant, RcsMount, RcsThruster, ReactionWheelBankSpec, RigidBodyProperties,
-    ShaftSpec, StarterKind, StarterSpec, StoredPropellant, SystemConfig, TankMount, TankResource,
-    TankShape, TankSpec, TireConstruction, VehiclePartCommand, WheelBrakeSpec,
+    ShaftSpec, ShaftSpool, StarterKind, StarterSpec, StoredPropellant, SystemConfig, TankMount,
+    TankResource, TankShape, TankSpec, TireConstruction, VehiclePartCommand, WheelBrakeSpec,
     WheelChassisRetractionSpec, WheelChassisSpec, WheelDriveSpec, WheelLayout, WheelStrutSpec,
     WheelTireSpec,
 };
@@ -43,9 +43,7 @@ fn fixture() -> (BakedEphemeris, FlightAuthority) {
     (ephemeris, runtime)
 }
 
-#[test]
-fn authoritative_fixed_tick_burns_reachable_tank_and_updates_vehicle_mass() {
-    let (ephemeris, starter) = fixture();
+fn rocket_with_filled_tank(starter: &FlightAuthority) -> thessa_sim_core::VehicleDefinition {
     let engine = LiquidEngineSpec {
         name: "runtime-main".into(),
         propellant: Propellant::LoxRp1,
@@ -101,6 +99,13 @@ fn authoritative_fixed_tick_burns_reachable_tank_and_updates_vehicle_mass() {
         .expect("install tank");
     vehicle.bake_engine_masses().expect("engine mass");
     vehicle.bake_tank_masses().expect("tank mass");
+    vehicle
+}
+
+#[test]
+fn authoritative_fixed_tick_burns_reachable_tank_and_updates_vehicle_mass() {
+    let (ephemeris, starter) = fixture();
+    let vehicle = rocket_with_filled_tank(&starter);
     let mut flight = FlightAuthority::new_with_vehicle(
         &ephemeris,
         ephemeris.body_id("thessa").unwrap(),
@@ -124,12 +129,51 @@ fn authoritative_fixed_tick_burns_reachable_tank_and_updates_vehicle_mass() {
 }
 
 #[test]
+fn rejected_endpoint_does_not_commit_propellant_or_mass_properties() {
+    let (ephemeris, starter) = fixture();
+    let vehicle = rocket_with_filled_tank(&starter);
+    let mut flight = FlightAuthority::new_with_vehicle(
+        &ephemeris,
+        ephemeris.body_id("thessa").unwrap(),
+        vehicle,
+    )
+    .expect("custom flight authority");
+    flight
+        .set_engine_throttle("main", 1.0)
+        .expect("set installed engine throttle");
+    let home = ephemeris
+        .body_state(flight.reference_body, SimTime::EPOCH)
+        .expect("home body");
+    flight.relative_position_m = DVec3::Z * (flight.planet_radius_m + 400_000.0);
+    flight.state.position_inertial_m = home.position_inertial + flight.relative_position_m;
+    flight.state.velocity_inertial_mps =
+        home.velocity_inertial + DVec3::X * (MAX_PILOT_RELATIVE_SPEED_MPS + 100.0);
+    let initial_mass = flight.vehicle.mass_properties;
+    let initial_resources = flight.resource_state.clone();
+    let error = flight
+        .step(
+            &ephemeris,
+            &GravityField::from_ephemeris(&ephemeris),
+            ControlMode::Direct,
+        )
+        .expect_err("solver guard rejects excessive relative speed");
+    assert!(error.to_string().contains("solver bounds"), "{error}");
+    assert_eq!(flight.resource_state, initial_resources);
+    assert_eq!(flight.vehicle.mass_properties, initial_mass);
+    assert_eq!(flight.flight_time_s, 0.0);
+}
+
+#[test]
 fn fixed_tick_routes_apu_bleed_into_mounted_pneumatic_jet_starter() {
     let (ephemeris, starter_flight) = fixture();
     let generator = GeneratorSpec {
         fitted: true,
         power_w: 20_000.0,
         efficiency: 0.9,
+        efficiency_map: Vec::new(),
+        thermal: None,
+        attached_spool: ShaftSpool::HighPressure,
+        maximum_shaft_torque_nm: None,
         cut_in_spool_n: 0.5,
         mass_kg: 4.0,
     };
@@ -152,6 +196,10 @@ fn fixed_tick_routes_apu_bleed_into_mounted_pneumatic_jet_starter() {
                 kind: StarterKind::Electric,
                 power_w: 20_000.0,
                 charge_j: 1.0e6,
+                resource: None,
+                attached_spool: ShaftSpool::HighPressure,
+                specific_energy_j_kg: 0.0,
+                maximum_shaft_torque_nm: None,
                 mass_kg: 3.0,
             },
             generator,
@@ -179,6 +227,10 @@ fn fixed_tick_routes_apu_bleed_into_mounted_pneumatic_jet_starter() {
         kind: StarterKind::Pneumatic,
         power_w: 10_000.0,
         charge_j: 1.0e6,
+        resource: None,
+        attached_spool: ShaftSpool::HighPressure,
+        specific_energy_j_kg: 0.0,
+        maximum_shaft_torque_nm: None,
         mass_kg: 2.0,
     };
     jet_spec.shaft.generator = GeneratorSpec::default();
@@ -257,6 +309,188 @@ fn fixed_tick_routes_apu_bleed_into_mounted_pneumatic_jet_starter() {
         .as_ref()
         .expect("bus advances on the fixed tick");
     assert!(bus.auxiliary_generation_power_w > 0.0);
+}
+
+#[test]
+fn fixed_tick_dispatches_a_jet_mounted_generator_onto_the_shared_bus() {
+    let (ephemeris, starter_flight) = fixture();
+    let generator = GeneratorSpec {
+        fitted: true,
+        power_w: 8_000.0,
+        efficiency: 0.8,
+        efficiency_map: Vec::new(),
+        thermal: None,
+        attached_spool: ShaftSpool::HighPressure,
+        maximum_shaft_torque_nm: None,
+        cut_in_spool_n: 0.5,
+        mass_kg: 4.0,
+    };
+    let engine = AirbreathingSpec {
+        name: "runtime-jet-generator".into(),
+        cycle: AirCycle::Turbojet,
+        fuel: JetFuel::Kerosene,
+        intake_area_m2: 0.25,
+        intake: IntakeKind::Pitot,
+        compressor_ratio: 8.0,
+        bypass_ratio: 0.0,
+        fan_pressure_ratio: 1.0,
+        turbine_inlet_temp_k: 1_350.0,
+        afterburner: false,
+        reheat_temp_k: 0.0,
+        turbine_material: ChamberMaterial::nickel_superalloy(),
+        spool_tau_s: 3.0,
+        shaft: ShaftSpec {
+            generator,
+            ..ShaftSpec::default()
+        },
+    }
+    .compile()
+    .expect("compile generator jet");
+    let jet = CompiledJet::Air(Box::new(engine.clone()));
+    let mount = JetMount {
+        name: "generator-jet".into(),
+        engine: jet,
+        position_body_m: [0.0, 0.0, 0.0],
+        thrust_axis_body: [1.0, 0.0, 0.0],
+        gimbal_range_rad: 0.0,
+    };
+    let power = ElectricalPowerSystem {
+        consumers: vec![PowerConsumerSpec {
+            name: "avionics".into(),
+            rated_power_w: 5_000.0,
+            priority: PowerPriority::Utility,
+        }],
+        ..ElectricalPowerSystem::default()
+    };
+    let mut vehicle = starter_flight
+        .vehicle
+        .clone()
+        .with_jets(vec![mount])
+        .expect("install jet")
+        .with_electrical_power(power)
+        .expect("install shared bus");
+    vehicle.bake_jet_masses().expect("jet mass");
+    let mut flight = FlightAuthority::new_with_vehicle(
+        &ephemeris,
+        ephemeris.body_id("thessa").unwrap(),
+        vehicle,
+    )
+    .expect("custom flight authority");
+    flight.set_legacy_propulsion(1.0, true);
+    flight.jet_commands[0].shaft = JetShaftState::running(&engine);
+    flight.electrical_power_command.consumer_power_w[0] = 5_000.0;
+
+    flight
+        .advance(&ephemeris, ControlMode::Direct, FLIGHT_STEP_S)
+        .expect("advance jet generator and shared bus");
+
+    let bus = flight
+        .electrical_power_telemetry
+        .as_ref()
+        .expect("fixed-step bus telemetry");
+    assert!((bus.auxiliary_generation_power_w - 8_000.0).abs() < 1.0e-8);
+    assert!((bus.supplied_power_w("avionics").unwrap() - 5_000.0).abs() < 1.0e-8);
+}
+
+#[test]
+fn tank_backed_rocket_bootstrap_starter_consumes_reachable_inventory() {
+    let (ephemeris, starter_flight) = fixture();
+    let engine = AirbreathingSpec {
+        name: "tank-started-jet-core".into(),
+        cycle: AirCycle::Turbojet,
+        fuel: JetFuel::Kerosene,
+        intake_area_m2: 0.25,
+        intake: IntakeKind::Pitot,
+        compressor_ratio: 8.0,
+        bypass_ratio: 0.0,
+        fan_pressure_ratio: 1.0,
+        turbine_inlet_temp_k: 1_350.0,
+        afterburner: false,
+        reheat_temp_k: 0.0,
+        turbine_material: ChamberMaterial::nickel_superalloy(),
+        spool_tau_s: 3.0,
+        shaft: ShaftSpec {
+            starter: StarterSpec {
+                kind: StarterKind::RocketBootstrap,
+                power_w: 10_000.0,
+                charge_j: 0.0,
+                resource: Some(StoredPropellant::Hydrazine),
+                attached_spool: ShaftSpool::HighPressure,
+                specific_energy_j_kg: 1.0e6,
+                maximum_shaft_torque_nm: None,
+                mass_kg: 2.0,
+            },
+            ..ShaftSpec::default()
+        },
+    }
+    .compile()
+    .expect("compile tank-backed starter");
+    let jet = JetMount {
+        name: "tank-started-jet".into(),
+        engine: CompiledJet::Air(Box::new(engine)),
+        position_body_m: [0.0, 0.0, 0.0],
+        thrust_axis_body: [1.0, 0.0, 0.0],
+        gimbal_range_rad: 0.0,
+    };
+    let make_tank = |name: &str, resource: TankResource, initial_kg: f64| {
+        let shape = TankShape::Sphere { diameter_m: 0.5 };
+        let density = match resource {
+            TankResource::Stored(StoredPropellant::Hydrazine) => 1_000.0,
+            _ => 810.0,
+        };
+        let compiled = TankSpec {
+            shape,
+            pressure_pa: 500_000.0,
+            material: ChamberMaterial::nickel_superalloy(),
+        }
+        .compile(density)
+        .expect("compile starter/jet tank");
+        TankMount {
+            name: name.into(),
+            tank: compiled,
+            position_body_m: [0.0; 3],
+            intrinsic_inertia_body_kg_m2: shape
+                .intrinsic_inertia_body_kg_m2(compiled.dry_mass_kg, initial_kg)
+                .expect("tank inertia"),
+            initial_propellant_kg: Some(initial_kg),
+            resource,
+        }
+    };
+    let mut vehicle = starter_flight
+        .vehicle
+        .clone()
+        .with_jets(vec![jet])
+        .expect("install jet")
+        .with_tanks(vec![
+            make_tank(
+                "starter-hydrazine",
+                TankResource::Stored(StoredPropellant::Hydrazine),
+                1.0,
+            ),
+            make_tank("jet-rp1", TankResource::Fuel(Propellant::LoxRp1), 1.0),
+        ])
+        .expect("install starter and jet fuel");
+    vehicle.bake_jet_masses().expect("jet mass");
+    vehicle.bake_tank_masses().expect("tank masses");
+    let mut flight = FlightAuthority::new_with_vehicle(
+        &ephemeris,
+        ephemeris.body_id("thessa").unwrap(),
+        vehicle,
+    )
+    .expect("custom flight authority");
+    flight.set_legacy_propulsion(1.0, true);
+    flight.jet_commands[0].starter_engaged = true;
+    let initial_propellant = flight.resource_state.tank_propellant_kg[0];
+    let initial_vehicle_mass = flight.vehicle.mass_properties.mass_kg;
+
+    flight
+        .advance(&ephemeris, ControlMode::Direct, FLIGHT_STEP_S)
+        .expect("advance tank-backed starter");
+
+    assert!(flight.resource_state.tank_propellant_kg[0] < initial_propellant);
+    assert!(flight.vehicle.mass_properties.mass_kg < initial_vehicle_mass);
+    assert!(flight.jet_commands[0].shaft.spool_n > 0.0);
+    assert_eq!(flight.jet_commands[0].shaft.starter_charge_j, 0.0);
 }
 
 #[test]
@@ -1543,6 +1777,59 @@ fn terrain_contact_stops_before_committing_an_underground_pose() {
     );
     let dir = [1.0, 0.0, 0.0];
     flight.initialize_world_site(field.clone(), dir, &ephemeris);
+    let leg = LandingLegSpec {
+        name: "rejected-tick-leg".into(),
+        mount_position_body_m: DVec3::ZERO,
+        hinge_axis_body: DVec3::Y,
+        stowed_leg_axis_body: DVec3::Z,
+        stowed_angle_rad: 0.0,
+        deployed_angle_rad: std::f64::consts::PI,
+        initially_deployed: false,
+        deployment_rate_rad_s: 1.0,
+        actuator_max_torque_nm: 10_000.0,
+        leg_length_m: 2.0,
+        leg_mass_kg: 10.0,
+        footpad_radius_m: 0.2,
+        footpad_mass_kg: 1.0,
+        footpad_friction: 0.7,
+        footpad_slip_stiffness_n_per_mps: 1_000.0,
+        shock_absorber: LandingShockAbsorberSpec::Reusable {
+            stroke_m: 0.2,
+            spring_rate_n_m: 30_000.0,
+            damping_n_s_m: 1_000.0,
+            preload_n: 0.0,
+            bottom_out_stiffness_n_m: 200_000.0,
+            maximum_force_n: 60_000.0,
+        },
+    };
+    flight.vehicle = flight
+        .vehicle
+        .clone()
+        .with_landing_legs(vec![leg])
+        .expect("install fold-out gear");
+    flight.vehicle.bake_landing_leg_masses().unwrap();
+    flight.sync_landing_leg_runtime_state();
+    flight.set_gear_down(true);
+    flight.vehicle = flight
+        .vehicle
+        .clone()
+        .with_parachutes(vec![ParachuteSpec {
+            name: "rejected-tick-chute".into(),
+            reference_area_m2: 24.0,
+            drag_coefficient: 1.5,
+            reefed_area_fraction: 0.1,
+            inflation_time_s: 2.0,
+            deploy_pressure_pa: 1.0,
+            max_deploy_dynamic_pressure_pa: 1.0e9,
+            max_canopy_load_n: 1.0e9,
+            pack_mass_kg: 12.0,
+            position_body_m: DVec3::ZERO,
+            inertia_body_kg_m2: DMat3::IDENTITY,
+        }])
+        .expect("install parachute");
+    flight.set_parachutes_armed(true);
+    let leg_state_before = flight.landing_leg_states.clone();
+    let parachute_state_before = flight.parachute_states.clone();
     let body = ephemeris
         .body_state(flight.reference_body, SimTime::EPOCH)
         .unwrap();
@@ -1560,6 +1847,8 @@ fn terrain_contact_stops_before_committing_an_underground_pose() {
     assert!(error.to_string().contains("terrain impact"), "{error}");
     assert_eq!(flight.state.position_inertial_m, before.position_inertial_m);
     assert_eq!(flight.flight_time_s, 0.0);
+    assert_eq!(flight.landing_leg_states, leg_state_before);
+    assert_eq!(flight.parachute_states, parachute_state_before);
 }
 
 #[test]

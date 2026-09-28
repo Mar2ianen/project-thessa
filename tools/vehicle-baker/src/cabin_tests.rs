@@ -178,10 +178,9 @@ fn assembled_vehicle_bakes_transforms_and_runtime_connectivity() {
     let stage_mate = compiled.body_transforms[0].transform_point(DVec3::new(4.0, 0.0, 0.0));
     let capsule_mate = compiled.body_transforms[1].transform_point(DVec3::ZERO);
     assert!((stage_mate - capsule_mate).length() < 1e-12);
-    assert_eq!(compiled.crew_groups.len(), 1);
-    assert_eq!(compiled.crew_groups[0].len(), 2);
+    assert_eq!(compiled.crew_groups.len(), 2);
     assert!(
-        compiled
+        !compiled
             .feed_paths
             .iter()
             .any(|path| path.tank == "stage.tank" && path.engine_port == "capsule.engine")
@@ -206,35 +205,62 @@ fn assembled_vehicle_bakes_transforms_and_runtime_connectivity() {
         .iter()
         .find(|cabin| cabin.name == "stage.service-bay")
         .expect("service cabin retained");
-    assert!((cabin.current_pressure_kpa() - service_cabin.current_pressure_kpa()).abs() < 1e-10);
+    assert!((cabin.current_pressure_kpa() - service_cabin.current_pressure_kpa()).abs() > 1.0);
     assert_eq!(
         runtime.crew_domains().expect("crew domains"),
-        vec![vec![
-            "stage.service-bay".to_string(),
-            "capsule.cabin".to_string()
-        ]]
+        vec![
+            vec!["stage.service-bay".to_string()],
+            vec!["capsule.cabin".to_string()]
+        ]
     );
     assert!(
-        vehicle
+        !vehicle
             .assembly_crew_can_pass("stage.service-bay", "capsule.cabin")
-            .expect("crew passage query")
+            .expect("closed hatch blocks crew passage")
     );
     assert!(
-        vehicle
+        !vehicle
             .assembly_cabins_share_air("stage.service-bay", "capsule.cabin")
-            .expect("air sharing query")
+            .expect("closed hatch blocks air sharing")
     );
     assert!(
         vehicle
             .assembly_feed_paths()
-            .expect("feed paths")
+            .expect("independent umbilical feed path")
             .contains(&("stage.tank".into(), "capsule.engine".into()))
     );
+    let mut opened = vehicle.clone();
+    opened
+        .set_assembly_hatch_open("stack", true)
+        .expect("open hatch");
+    assert!(
+        opened
+            .assembly_crew_can_pass("stage.service-bay", "capsule.cabin")
+            .expect("open hatch permits crew passage")
+    );
+    assert!(
+        opened
+            .assembly_cabins_share_air("stage.service-bay", "capsule.cabin")
+            .expect("open hatch connects cabin air")
+    );
+    let opened_stage = opened
+        .cabins
+        .iter()
+        .find(|cabin| cabin.name == "stage.service-bay")
+        .unwrap();
+    let opened_capsule = opened
+        .cabins
+        .iter()
+        .find(|cabin| cabin.name == "capsule.cabin")
+        .unwrap();
+    assert!(
+        (opened_stage.current_pressure_kpa() - opened_capsule.current_pressure_kpa()).abs() < 1e-10
+    );
 
-    let mut sealed = vehicle.clone();
+    let mut sealed = opened;
     sealed
         .set_assembly_hatch_open("stack", false)
-        .expect("close connection");
+        .expect("keep hatch sealed");
     assert!(
         !sealed
             .assembly_crew_can_pass("stage.service-bay", "capsule.cabin")
@@ -246,9 +272,21 @@ fn assembled_vehicle_bakes_transforms_and_runtime_connectivity() {
             .expect("air sharing query")
     );
     assert!(
+        sealed
+            .assembly_feed_paths()
+            .expect("the umbilical remains independent of the hatch")
+            .contains(&("stage.tank".into(), "capsule.engine".into()))
+    );
+    sealed
+        .assembly
+        .as_mut()
+        .expect("assembly retained")
+        .set_resource_edge_open("stage-capsule-fuel-umbilical", false)
+        .expect("close fuel umbilical");
+    assert!(
         !sealed
             .assembly_feed_paths()
-            .expect("feed paths")
+            .expect("closed umbilical feed paths")
             .contains(&("stage.tank".into(), "capsule.engine".into()))
     );
 
@@ -275,6 +313,7 @@ fn assembled_vehicle_bakes_transforms_and_runtime_connectivity() {
             parent: "stage".into(),
             child: "capsule.base".into(),
             hatch_open: true,
+            feed_line: None,
         }])
         .is_err()
     );

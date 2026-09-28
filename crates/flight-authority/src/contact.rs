@@ -1536,6 +1536,132 @@ impl ContactRuntime {
             .map_err(|error| invalid(format!("contact docking: {error}")))
     }
 
+    /// Begin soft capture after validating the live local-port kinematics.
+    /// The session remains caller-owned/persistable; this operation only
+    /// advances its protocol gate from the current contact-scene states.
+    pub fn begin_docking_capture(
+        &self,
+        tag: u64,
+        session: &mut thessa_sim_core::DockingSession,
+    ) -> Result<(), FlightError> {
+        let primary_id = self
+            .body
+            .as_ref()
+            .map(|body| body.id)
+            .ok_or_else(|| invalid("docking needs a synced primary body".to_string()))?;
+        let partner_id = self
+            .partners
+            .get(&tag)
+            .map(|partner| partner.id)
+            .ok_or_else(|| invalid("docking needs a synced partner".to_string()))?;
+        let primary_state = self
+            .world
+            .body_state(primary_id)
+            .map_err(|error| invalid(format!("docking primary state: {error}")))?;
+        let partner_state = self
+            .world
+            .body_state(partner_id)
+            .map_err(|error| invalid(format!("docking partner state: {error}")))?;
+        let kinematics = thessa_sim_core::DockingKinematics::between(
+            primary_state,
+            &session.port_a,
+            partner_state,
+            &session.port_b,
+        )
+        .map_err(|error| invalid(format!("docking kinematics: {error}")))?;
+        session
+            .begin_soft_capture(kinematics.relative_velocity_mps().length())
+            .map_err(|error| invalid(format!("soft capture: {error}")))
+    }
+
+    /// Revalidate live port alignment and install the hard Rapier joint.
+    /// Protocol advancement to `HardDock`/`OuterStructureEngaged` occurs only
+    /// after the backend accepts the fixed joint.
+    pub fn align_and_dock_partner(
+        &mut self,
+        tag: u64,
+        session: &mut thessa_sim_core::DockingSession,
+    ) -> Result<JointId, FlightError> {
+        let primary_id = self
+            .body
+            .as_ref()
+            .map(|body| body.id)
+            .ok_or_else(|| invalid("docking needs a synced primary body".to_string()))?;
+        let partner_id = self
+            .partners
+            .get(&tag)
+            .map(|partner| partner.id)
+            .ok_or_else(|| invalid("docking needs a synced partner".to_string()))?;
+        let primary_state = self
+            .world
+            .body_state(primary_id)
+            .map_err(|error| invalid(format!("docking primary state: {error}")))?;
+        let partner_state = self
+            .world
+            .body_state(partner_id)
+            .map_err(|error| invalid(format!("docking partner state: {error}")))?;
+        let kinematics = thessa_sim_core::DockingKinematics::between(
+            primary_state,
+            &session.port_a,
+            partner_state,
+            &session.port_b,
+        )
+        .map_err(|error| invalid(format!("docking kinematics: {error}")))?;
+        session
+            .align(kinematics)
+            .map_err(|error| invalid(format!("docking alignment: {error}")))?;
+        let joint = self.dock_partner(
+            tag,
+            session.port_a.local_position_m,
+            session.port_a.local_orientation,
+            session.port_b.local_position_m,
+            session.port_b.local_orientation,
+        )?;
+        session
+            .hard_dock()
+            .and_then(|()| session.engage_outer_structure())
+            .map_err(|error| invalid(format!("docking protocol: {error}")))?;
+        Ok(joint)
+    }
+
+    /// Advance the persisted pressure-equalization gate in simulation time.
+    pub fn advance_docking_equalization(
+        &self,
+        session: &mut thessa_sim_core::DockingSession,
+        step_s: f64,
+    ) -> Result<(), FlightError> {
+        session
+            .advance_pressure_equalization(step_s)
+            .map_err(|error| invalid(format!("docking pressure equalization: {error}")))
+    }
+
+    /// Remove a dock joint and reset its protocol state. Both solved rigid
+    /// states remain in the scene and continue as independent bodies.
+    pub fn separate_partner(
+        &mut self,
+        joint: JointId,
+        session: &mut thessa_sim_core::DockingSession,
+    ) -> Result<(), FlightError> {
+        if !session.state.mechanically_connected() {
+            return Err(invalid("cannot separate a session before hard docking"));
+        }
+        self.undock(joint)?;
+        session
+            .undock()
+            .map_err(|error| invalid(format!("docking protocol undock: {error}")))
+    }
+
+    /// Joint force and moment evidence from the most recent contact solver
+    /// tick, suitable for the vehicle structural rating policy.
+    pub fn joint_loads(
+        &self,
+        step_s: f64,
+    ) -> Result<Vec<thessa_collision::JointLoadSummary>, FlightError> {
+        self.world
+            .joint_loads(step_s)
+            .map_err(|error| invalid(format!("contact joint load readback: {error}")))
+    }
+
     /// Undock a fixed joint. Both clusters keep their solved state.
     pub fn undock(&mut self, id: JointId) -> Result<(), FlightError> {
         self.world
@@ -1632,10 +1758,10 @@ mod tests {
     use glam::{DMat3, DQuat, DVec3};
     use thessa_sim_core::{
         AeroGeometry, AeroPanel, AeroResult, AirlessWheelStructure, CollisionMaterial,
-        CollisionPart, CollisionShape, ElectricMotorSpec, LandingLegSpec, LandingShockAbsorberSpec,
-        TireConstruction, WheelBrakeSpec, WheelChassisRetractionSpec, WheelChassisSpec,
-        WheelChassisState, WheelDriveSpec, WheelLayout, WheelStrutSpec, WheelTireSpec,
-        x15_contact_geometry,
+        CollisionPart, CollisionShape, DockingPortSpec, DockingSession, ElectricMotorSpec,
+        LandingLegSpec, LandingShockAbsorberSpec, TireConstruction, WheelBrakeSpec,
+        WheelChassisRetractionSpec, WheelChassisSpec, WheelChassisState, WheelDriveSpec,
+        WheelLayout, WheelStrutSpec, WheelTireSpec, x15_contact_geometry,
     };
 
     fn test_properties() -> RigidBodyProperties {
@@ -1652,6 +1778,62 @@ mod tests {
             activation(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn contact_runtime_docking_protocol_installs_loadable_joint_and_separates() {
+        let mut runtime = runtime();
+        let geometry = x15_contact_geometry().unwrap();
+        let primary_state = RigidBodyState::stationary(DVec3::ZERO);
+        let partner_state = RigidBodyState::stationary(DVec3::new(4.0, 0.0, 0.0));
+        let config = DynamicBodyConfig::default();
+        let primary_id = runtime
+            .sync_body(primary_state, test_properties(), &geometry, config)
+            .unwrap();
+        runtime
+            .sync_partner(7, partner_state, test_properties(), &geometry, config)
+            .unwrap();
+        let port_a = DockingPortSpec::d1("primary-d1", DVec3::X * 2.0, DQuat::IDENTITY).unwrap();
+        let port_b =
+            DockingPortSpec::d1("partner-d1", DVec3::NEG_X * 2.0, DQuat::IDENTITY).unwrap();
+        let mut session = DockingSession::new(port_a, port_b, 0.1).unwrap();
+
+        runtime.begin_docking_capture(7, &mut session).unwrap();
+        let joint = runtime.align_and_dock_partner(7, &mut session).unwrap();
+        assert_eq!(
+            session.state,
+            thessa_sim_core::DockingPortState::OuterStructureEngaged
+        );
+        runtime
+            .advance_docking_equalization(&mut session, 0.1)
+            .unwrap();
+        assert_eq!(
+            session.state,
+            thessa_sim_core::DockingPortState::PressureEqualized
+        );
+
+        let push = ExternalWrench {
+            force_inertial_n: DVec3::new(500.0, 0.0, 0.0),
+            torque_inertial_nm: DVec3::ZERO,
+        };
+        runtime
+            .step_many(
+                1.0 / 120.0,
+                &[
+                    (primary_id, push),
+                    (runtime.partner_id(7).unwrap(), ExternalWrench::ZERO),
+                ],
+            )
+            .unwrap();
+        let loads = runtime.joint_loads(1.0 / 120.0).unwrap();
+        assert_eq!(loads.len(), 1);
+        assert_eq!(loads[0].joint_id, joint);
+        assert!(loads[0].force_n > 0.0);
+        assert!(runtime.partner_state(7).unwrap().velocity_inertial_mps.x > 0.0);
+
+        runtime.separate_partner(joint, &mut session).unwrap();
+        assert_eq!(session.state, thessa_sim_core::DockingPortState::Free);
+        assert!(runtime.joint_loads(1.0 / 120.0).unwrap().is_empty());
     }
 
     fn zero_forces() -> FlightForces {

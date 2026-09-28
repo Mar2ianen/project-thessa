@@ -211,6 +211,7 @@ impl CompiledAuxiliaryPowerUnit {
 
 #[cfg(test)]
 mod tests {
+    use super::super::ShaftSpool;
     use super::*;
     use crate::propulsion::{
         AirCycle, ChamberMaterial, GeneratorSpec, IntakeKind, ShaftSpec, StarterKind, StarterSpec,
@@ -239,6 +240,10 @@ mod tests {
                         kind: StarterKind::Electric,
                         power_w: 20_000.0,
                         charge_j: 1.0e6,
+                        resource: None,
+                        attached_spool: ShaftSpool::HighPressure,
+                        specific_energy_j_kg: 0.0,
+                        maximum_shaft_torque_nm: None,
                         mass_kg: 3.0,
                     },
                     generator,
@@ -255,6 +260,10 @@ mod tests {
             fitted: true,
             power_w: 20_000.0,
             efficiency: 0.9,
+            efficiency_map: Vec::new(),
+            thermal: None,
+            attached_spool: ShaftSpool::HighPressure,
+            maximum_shaft_torque_nm: None,
             cut_in_spool_n: 0.5,
             mass_kg: 4.0,
         })
@@ -294,6 +303,10 @@ mod tests {
             fitted: true,
             power_w: 1_000.0,
             efficiency: 0.9,
+            efficiency_map: Vec::new(),
+            thermal: None,
+            attached_spool: ShaftSpool::HighPressure,
+            maximum_shaft_torque_nm: None,
             cut_in_spool_n: 0.5,
             mass_kg: 1.0,
         });

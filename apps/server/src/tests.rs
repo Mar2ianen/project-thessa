@@ -1,4 +1,5 @@
 use super::*;
+use crate::sim::legacy_propulsion_echo_changed;
 use glam::DQuat;
 use thessa_autopilot::PlanExecutionMode;
 
@@ -1280,6 +1281,38 @@ fn coalesced_engine_events_match_sequential_application() {
     coalesced.register("pilot");
     let _ = coalesced.apply_input("pilot", &merged);
     assert_eq!(coalesced.authority.engine_active, expected);
+}
+
+#[test]
+fn unchanged_legacy_propulsion_echo_does_not_reapply_legacy_controls() {
+    let previous = input(Vec::new());
+    let unchanged = previous.clone();
+    assert!(!legacy_propulsion_echo_changed(
+        Some(&previous),
+        &unchanged,
+        false
+    ));
+
+    let mut throttle_changed = unchanged.clone();
+    throttle_changed.throttle = 0.25;
+    assert!(legacy_propulsion_echo_changed(
+        Some(&previous),
+        &throttle_changed,
+        false
+    ));
+
+    let mut active_echo_changed = unchanged.clone();
+    active_echo_changed.engine_active = true;
+    assert!(!legacy_propulsion_echo_changed(
+        Some(&previous),
+        &active_echo_changed,
+        true
+    ));
+    assert!(legacy_propulsion_echo_changed(
+        Some(&previous),
+        &active_echo_changed,
+        false
+    ));
 }
 
 #[test]

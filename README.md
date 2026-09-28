@@ -23,12 +23,16 @@ The checked-in vertical slice currently contains:
   full multi-body test-particle gravity, atmosphere and panel aerodynamics,
   rigid-body flight, on-rails coast caches, cohort gravity patches, piecewise
   analytic affine propagation, cabin pressure and crew authority, part
-  assembly connectivity, installed reaction-wheel banks, deployable
+  assembly connectivity/topology split planning with non-tree crossfeed and
+  pressure-limited feed lines, installed reaction-wheel banks, deployable
   parachutes, fixed-step tank-limited propulsion and moving-mass updates,
-  mounted RCS, APUs, and LH₂/LOX fuel cells on a parameterized wire-free vehicle
-  power bus with batteries, ultracapacitors, fission reactors, sun-tracking
-  cell-grid solar arrays with geometric occlusion, prioritized consumers, and
-  a lumped thermal-node network with conduction links and area radiators. The
+  mounted RCS, tank-backed pneumatic/rocket-bootstrap starters, torque-rated
+  starter/generator hardware, generator efficiency/thermal limits, and
+  independent LP/HP geared-turbofan dynamics plus ordinary jet/APU generation
+  on a parameterized wire-free vehicle power bus
+  with batteries, ultracapacitors, fission reactors, sun-tracking cell-grid
+  solar arrays with geometric occlusion, prioritized consumers, and a lumped
+  thermal-node network with conduction links and area radiators. The
   implementation is separated into `thessa-aero-core`,
   `thessa-celestial`, `thessa-trajectory`, `thessa-propulsion`, and
   `thessa-vehicle-core`;
@@ -41,7 +45,8 @@ The checked-in vertical slice currently contains:
   participating-medium evaluation, consumed by the client plume renderer;
 - `thessa-flight-control` and `thessa-flight-authority`: typed guidance,
   aircraft/spacecraft/direct control laws, policy limits, physical allocation,
-  actuator dynamics, and the authoritative flight stepper;
+  actuator dynamics, the authoritative flight stepper, and contact-scene D1
+  docking/separation with solver joint-load telemetry;
 - `thessa-autopilot` and `thessa-autopilot-js`: validated typed graph IR,
   sequence/parallel/wait execution, simulation-time scheduling, sandboxed
   QuickJS blocks, and typed trajectory-plan execution;
@@ -66,9 +71,11 @@ The checked-in vertical slice currently contains:
   visual fallback while CBT topology is exercised against live terrain selection;
 - isolated validation harnesses for orbital and aerodynamic reference checks.
 
-Factory gameplay, structural fracture and vehicle-topology changes, full fluid
-and electrical networks, shield thermal protection/ablation, save persistence,
-and production multiplayer remain future work. Vehicle thermal nodes and the
+Factory gameplay, general three-spool/clutched and free-power-turbine dynamics,
+physical structural fracture and vehicle-cluster rebuilding, server-level
+docking ownership, branched fluid networks, full electrical networks, shield thermal
+protection/ablation, save persistence, and production multiplayer remain future
+work. Vehicle thermal nodes and the
 ideal shared power bus are implemented slices; they are not full thermal,
 structural, or electrical-network coupling.
 

@@ -19,6 +19,8 @@ pub(super) use vehicle_asset::VehicleAsset;
 pub(super) struct ResourceFeedPortAsset {
     consumer_name: String,
     feed_port_name: String,
+    #[serde(default)]
+    fluid_properties: Vec<FeedResourceProperties>,
 }
 
 impl ResourceFeedPortAsset {
@@ -26,6 +28,7 @@ impl ResourceFeedPortAsset {
         VehicleResourceFeedPort {
             consumer_name: self.consumer_name,
             feed_port_name: self.feed_port_name,
+            fluid_properties: self.fluid_properties,
         }
     }
 }

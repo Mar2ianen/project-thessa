@@ -75,6 +75,17 @@ pub(super) fn client_input_takes_over(previous: Option<&ClientInput>, input: &Cl
         || input.parachutes_armed != previous.parachutes_armed
 }
 
+pub(super) fn legacy_propulsion_echo_changed(
+    previous: Option<&ClientInput>,
+    input: &ClientInput,
+    has_engine_command: bool,
+) -> bool {
+    previous.is_none_or(|previous| {
+        input.throttle != previous.throttle
+            || (!has_engine_command && input.engine_active != previous.engine_active)
+    })
+}
+
 /// Driver around the authority: inputs in, snapshots out, warp accounting.
 pub(super) struct Sim {
     pub(super) authority: FlightAuthority,
@@ -313,7 +324,9 @@ impl Sim {
         } else {
             input.engine_active
         };
-        self.authority.set_legacy_propulsion(input.throttle, active);
+        if legacy_propulsion_echo_changed(previous.as_ref(), input, has_engine_command) {
+            self.authority.set_legacy_propulsion(input.throttle, active);
+        }
         // These legacy state echoes are applied only when the client changes
         // them. Otherwise a stale last-value packet could undo an intervening
         // authoritative Part command (for example, one emitted by staging).

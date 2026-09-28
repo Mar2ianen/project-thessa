@@ -576,6 +576,7 @@ impl VehicleAsset {
                 runtime_assembly(
                     &self.procedural_bodies,
                     &self.assembly.links,
+                    &self.assembly.resource_edges,
                     &assembly.root,
                     assembly_volumes,
                 )

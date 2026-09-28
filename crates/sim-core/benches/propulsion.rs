@@ -10,11 +10,11 @@ use thessa_sim_core::{
     ElectricMotorSpec, ElectricPropellant, ElectricThrusterDesign, ElectricThrusterSpec,
     EngineCycle, EstocEjectorSpec, EstocMode, EstocPrecoolerSpec, EstocSpec, FlightCondition,
     FusionReaction, FusionTorchCommand, FusionTorchSpec, GasKind, IntakeKind, JetFuel,
-    JetShaftState, LiquidEngineSpec, NozzleContour, PistonEngineSpec, Propellant,
+    JetShaftState, LiquidEngineSpec, MultiSpoolSpec, NozzleContour, PistonEngineSpec, Propellant,
     PropellerDriveSpec, PropellerSpec, PulsedFusionCommand, PulsedFusionSpec, PulsedFusionState,
-    ShaftCommand, ShaftPowerSourceSpec, ShaftSpec, SolidGrainGeometry, SolidMotorSpec, StarterKind,
-    StarterSpec, TurbopropDriveSpec, advance_jet_shaft, analyze_airbreathing, analyze_altitude,
-    analyze_propeller_drive, analyze_turboprop_drive, flight_condition,
+    ShaftCommand, ShaftPowerSourceSpec, ShaftSpec, ShaftSpool, SolidGrainGeometry, SolidMotorSpec,
+    StarterKind, StarterSpec, TurbopropDriveSpec, advance_jet_shaft, analyze_airbreathing,
+    analyze_altitude, analyze_propeller_drive, analyze_turboprop_drive, flight_condition,
 };
 
 fn methalox_spec() -> LiquidEngineSpec {
@@ -186,6 +186,10 @@ fn main() {
                 kind: StarterKind::Electric,
                 power_w: 4.0e6,
                 charge_j: 1.0e9,
+                resource: None,
+                attached_spool: ShaftSpool::HighPressure,
+                specific_energy_j_kg: 0.0,
+                maximum_shaft_torque_nm: None,
                 mass_kg: 30.0,
             },
             ..ShaftSpec::default()
@@ -227,6 +231,81 @@ fn main() {
         "jet cold crank to light-off: {crank_steps} steps ({:.1} sim s) at {crank_ns:.0} ns/step",
         crank_steps as f64 * 0.1
     );
+
+    let mut multi_spool_spec = AirbreathingSpec {
+        name: "bench-two-spool-turbofan".into(),
+        cycle: AirCycle::Turbofan,
+        fuel: JetFuel::Kerosene,
+        intake_area_m2: 0.9,
+        intake: IntakeKind::Pitot,
+        compressor_ratio: 12.0,
+        bypass_ratio: 4.0,
+        fan_pressure_ratio: 1.5,
+        turbine_inlet_temp_k: 1500.0,
+        afterburner: false,
+        reheat_temp_k: 0.0,
+        turbine_material: ChamberMaterial::nickel_superalloy(),
+        spool_tau_s: 5.0,
+        shaft: ShaftSpec::default(),
+    };
+    let calibration = multi_spool_spec
+        .clone()
+        .compile()
+        .expect("single-spool turbofan calibration");
+    let (_, design_balance) = calibration
+        .operating_point_at_spool(&condition, 1.0, 1.0, true)
+        .expect("turbofan design point");
+    let fan_gear_efficiency = 0.95;
+    let high_pressure_turbine_power_fraction = design_balance.high_pressure_demand_w
+        / (design_balance.high_pressure_demand_w
+            + design_balance.low_pressure_fan_demand_w / fan_gear_efficiency);
+    multi_spool_spec.shaft.multi_spool = Some(MultiSpoolSpec {
+        low_pressure_design_speed_rad_s: 500.0,
+        low_pressure_rotor_inertia_kg_m2: 4.0,
+        fan_rotor_inertia_kg_m2: 2.0,
+        high_pressure_design_speed_rad_s: 1_000.0,
+        high_pressure_rotor_inertia_kg_m2: 2.0,
+        high_pressure_turbine_power_fraction,
+        fan_gear_speed_ratio: 0.5,
+        fan_gear_efficiency,
+    });
+    let multi_spool_jet = multi_spool_spec
+        .compile()
+        .expect("bench multi-spool turbofan");
+    let mut multi_state = JetShaftState::running(&multi_spool_jet);
+    let multi_command = ShaftCommand {
+        throttle: 1.0,
+        starter_engaged: false,
+        generator_load_w: 0.0,
+    };
+    let start = Instant::now();
+    for _ in 0..iters {
+        multi_state = advance_jet_shaft(
+            &multi_spool_jet,
+            multi_state,
+            &multi_command,
+            &condition,
+            0.1,
+        )
+        .expect("multi-spool advance")
+        .0;
+        black_box(multi_state);
+    }
+    let multi_step_ns = start.elapsed().as_secs_f64() * 1.0e9 / iters as f64;
+    println!("two-spool turbofan runtime: {multi_step_ns:.0} ns/step ({iters} steps)");
+
+    let offdesign_condition =
+        flight_condition(&sample, 0.5 * sample.speed_of_sound_mps).expect("off-design condition");
+    let start = Instant::now();
+    for _ in 0..iters {
+        black_box(
+            multi_spool_jet
+                .operating_point(&offdesign_condition, 0.85)
+                .expect("two-spool steady point"),
+        );
+    }
+    let multi_solve_us = start.elapsed().as_secs_f64() * 1.0e6 / iters as f64;
+    println!("two-spool off-design steady solve: {multi_solve_us:.2} us/solve ({iters} solves)");
 
     // Composition-aware atmosphere (section 10 / 18.9): oxidizer query
     // cost plus the analyzer sweep that stamps species into every sample.

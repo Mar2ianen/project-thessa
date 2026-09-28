@@ -36,7 +36,7 @@ post-occlusion irradiance and projected incidence:
 
 ```text
 A = count_x × count_y × cell_size_x × cell_size_y
-w_i = irradiance_i × visibility_i × Π eclipse(light_i, occluder_j)
+w_i = irradiance_i × visibility_i × (1 - union_covered_fraction_i)
 Psolar = deployment_fraction × A × cell_efficiency
          × Σ w_i × max(0, normal(θ) · direction_to_star_i)
 ```
@@ -47,10 +47,12 @@ angular radius from star radius and range. Each `SolarOccluder` carries a
 body-frame direction (from an authoritative ephemeris/attitude transform) and
 an angular radius (from body size and range, e.g. a planet, another vehicle,
 or the vessel's own hull via `VehicleDefinition::own_body_occluder`, which
-ray-casts the baked collision geometry on the CPU). The combined dimming multiplies the caller's `visibility` by every
-geometric disc-overlap factor, using the same circle-circle lens formula as
-the lighting pipeline (independently implemented in vehicle-core so power
-stays free of visual-crate dependencies). Total eclipse yields exactly 0.0;
+ray-casts the baked collision geometry on the CPU). The combined dimming
+multiplies the caller's `visibility` by the uncovered fraction of the stellar
+disc. Occluder overlap is integrated as a geometric union, so coincident or
+partially overlapping shadows cover shared area only once. The angular-disc
+boundary calculation is independently implemented in vehicle-core so power
+stays free of visual-crate dependencies. Total eclipse yields exactly 0.0;
 a small craft transiting the disc blocks `(ro/rl)^2`; clear geometry yields
 1.0. Supplying occluders without a stellar angular radius fails the step
 closed instead of silently passing full sun: a point source cannot produce a
@@ -168,7 +170,7 @@ the table remain valid with an empty power system.
 ## 5. Verification and boundary
 
 Regression tests cover inverse-square flux, incidence and eclipse visibility,
-geometric occluders (total/annular/stacked, fail-closed without a stellar
+geometric occluders (total/annular/overlapping, fail-closed without a stellar
 disc), cell-area scaling, mass/inertia derivation, priority shedding, battery
 and ultracapacitor energy/efficiency bounds, reactor heat/fuel balance,
 fold-actuator power limits, fuel-cell stoichiometry/inventory, auxiliary APU

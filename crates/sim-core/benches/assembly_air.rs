@@ -48,6 +48,7 @@ fn make_vehicle() -> VehicleDefinition {
                     hatch: true,
                     open: true,
                 },
+                feed_line: None,
             });
         }
     }
@@ -61,6 +62,7 @@ fn make_vehicle() -> VehicleDefinition {
         root_body: 0,
         body_names,
         links,
+        resource_edges: Vec::new(),
         volumes,
         tanks: Vec::new(),
         engine_ports: Vec::new(),

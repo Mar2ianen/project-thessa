@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use super::GimbalEffector;
 use super::mount::gimbal_pair;
-use super::shaft::{JetShaftState, ShaftCommand, advance_jet_shaft_loaded_with_starter_power_and};
+use super::shaft::{
+    JetShaftState, ShaftCommand, ShaftTelemetry, advance_jet_shaft_loaded_with_starter_power_and,
+    advance_jet_shaft_loaded_with_starter_power_and_spools,
+};
 use super::{
     CompiledAirbreather, CompiledEstoc, EnginePlumeState, EstocMode, EstocPoint, EstocTransient,
     FlightCondition, PropulsionError,
@@ -96,8 +99,10 @@ impl JetCommand {
             dt_s: 0.0,
             shaft: JetShaftState {
                 spool_n: 1.0,
+                low_pressure_spool_n: None,
                 lit: true,
                 starter_charge_j: f64::MAX,
+                generator_temperature_k: 293.15,
             },
             starter_engaged: false,
             pneumatic_starter_power_w: 0.0,
@@ -115,6 +120,11 @@ impl JetCommand {
         Self {
             shaft: JetShaftState::cold(air),
             starter_engaged: false,
+            generator_load_w: if air.shaft.generator.fitted {
+                air.shaft.generator.power_w
+            } else {
+                0.0
+            },
             ..Self::fresh()
         }
     }
@@ -234,6 +244,20 @@ impl JetMount {
         condition: &FlightCondition,
         jet: &JetCommand,
     ) -> Result<(EstocPoint, EstocTransient, JetShaftState), PropulsionError> {
+        let (point, transient, shaft, _) =
+            self.estoc_point_with_telemetry(throttle, condition, jet)?;
+        Ok((point, transient, shaft))
+    }
+
+    /// Full operating point, next shaft state, and accessory telemetry.
+    /// The generator's accepted electrical output is returned separately from
+    /// thrust so the vehicle runtime can dispatch it as a bus source.
+    pub fn estoc_point_with_telemetry(
+        &self,
+        throttle: f64,
+        condition: &FlightCondition,
+        jet: &JetCommand,
+    ) -> Result<(EstocPoint, EstocTransient, JetShaftState, ShaftTelemetry), PropulsionError> {
         self.validate()?;
         let air_engine = self.air_engine();
         if !air_engine.cycle.has_shaft() {
@@ -268,6 +292,13 @@ impl JetMount {
             };
             let mut shaft = JetShaftState::running(air_engine);
             shaft.lit = point.lit;
+            let telemetry = ShaftTelemetry {
+                spool_n: shaft.spool_n,
+                lit: shaft.lit,
+                starter_charge_j: shaft.starter_charge_j,
+                generator_temperature_k: shaft.generator_temperature_k,
+                ..ShaftTelemetry::default()
+            };
             return Ok((
                 EstocPoint {
                     mode: EstocMode::Air,
@@ -291,6 +322,7 @@ impl JetMount {
                 },
                 snapshot,
                 shaft,
+                telemetry,
             ));
         }
         let shaft_cmd = ShaftCommand {
@@ -298,7 +330,7 @@ impl JetMount {
             starter_engaged: jet.starter_engaged,
             generator_load_w: jet.generator_load_w,
         };
-        let (shaft, _telemetry) = match &self.engine {
+        let (shaft, shaft_telemetry) = match &self.engine {
             CompiledJet::Estoc(estoc) => advance_jet_shaft_loaded_with_starter_power_and(
                 &estoc.air,
                 jet.shaft,
@@ -314,8 +346,10 @@ impl JetMount {
                             throttle,
                             JetShaftState {
                                 spool_n,
+                                low_pressure_spool_n: None,
                                 lit: ignition,
                                 starter_charge_j: jet.shaft.starter_charge_j,
+                                generator_temperature_k: jet.shaft.generator_temperature_k,
                             },
                             jet.prev.as_ref(),
                             jet.dt_s,
@@ -323,6 +357,21 @@ impl JetMount {
                         .map(|(point, _, _, balance)| (point, balance))
                 },
             )?,
+            CompiledJet::Air(engine) if engine.shaft.multi_spool.is_some() => {
+                advance_jet_shaft_loaded_with_starter_power_and_spools(
+                    engine,
+                    jet.shaft,
+                    &shaft_cmd,
+                    condition,
+                    jet.dt_s,
+                    0.0,
+                    jet.pneumatic_starter_power_w,
+                    |high_n, low_n, ignition| {
+                        engine
+                            .operating_point_at_spools(condition, throttle, high_n, low_n, ignition)
+                    },
+                )?
+            }
             CompiledJet::Air(engine) => super::advance_jet_shaft_loaded_with_starter_power(
                 engine,
                 jet.shaft,
@@ -335,12 +384,22 @@ impl JetMount {
         };
         match &self.engine {
             CompiledJet::Air(engine) => {
-                let (point, _) = engine.operating_point_at_spool(
-                    condition,
-                    throttle,
-                    shaft.spool_n,
-                    shaft.lit,
-                )?;
+                let (point, _) = if let Some(low_spool_n) = shaft.low_pressure_spool_n {
+                    engine.operating_point_at_spools(
+                        condition,
+                        throttle,
+                        shaft.spool_n,
+                        low_spool_n,
+                        shaft.lit,
+                    )?
+                } else {
+                    engine.operating_point_at_spool(
+                        condition,
+                        throttle,
+                        shaft.spool_n,
+                        shaft.lit,
+                    )?
+                };
                 let snapshot = EstocTransient {
                     // Net thrust, unclamped (same contract as the
                     // passive branch above and the analyzer).
@@ -383,6 +442,7 @@ impl JetMount {
                     },
                     snapshot,
                     shaft,
+                    shaft_telemetry,
                 ))
             }
             CompiledJet::Estoc(engine) => {
@@ -395,7 +455,7 @@ impl JetMount {
                     jet.dt_s,
                     shaft,
                 )?;
-                Ok((point, transient, shaft))
+                Ok((point, transient, shaft, shaft_telemetry))
             }
         }
     }
@@ -461,8 +521,8 @@ impl JetMount {
 #[cfg(test)]
 mod tests {
     use super::super::{
-        AirCycle, AirbreathingSpec, ChamberMaterial, IntakeKind, JetFuel, ShaftSpec, StarterKind,
-        StarterSpec,
+        AirCycle, AirbreathingSpec, ChamberMaterial, IntakeKind, JetFuel, ShaftSpec, ShaftSpool,
+        StarterKind, StarterSpec,
     };
     use super::*;
 
@@ -616,6 +676,10 @@ mod tests {
                     kind: StarterKind::Electric,
                     power_w: 4.0e6,
                     charge_j: 1.0e9,
+                    resource: None,
+                    attached_spool: ShaftSpool::HighPressure,
+                    specific_energy_j_kg: 0.0,
+                    maximum_shaft_torque_nm: None,
                     mass_kg: 30.0,
                 },
                 ..ShaftSpec::default()

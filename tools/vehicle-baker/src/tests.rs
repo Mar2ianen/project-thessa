@@ -1,7 +1,8 @@
 use super::*;
 use thessa_sim_core::{
-    AtmosphereComposition, CompiledShaftPowerSource, ElectricalPowerCommand, PropellerDriveCommand,
-    SolarArrayTracking, SolarFluxSource, ThermalCommand, TurbopropCommand,
+    AtmosphereComposition, AtmosphereConfig, CompiledJet, CompiledShaftPowerSource,
+    ElectricalPowerCommand, FeedResourceProperties, PropellerDriveCommand, SolarArrayTracking,
+    SolarFluxSource, StoredPropellant, ThermalCommand, TurbopropCommand, flight_condition,
 };
 
 #[test]
@@ -33,7 +34,34 @@ fn assembly_asset_bakes_named_consumer_feed_routes() {
         VehicleResourceFeedPort {
             consumer_name: "capsule-engine".into(),
             feed_port_name: "capsule.engine".into(),
+            fluid_properties: vec![
+                FeedResourceProperties {
+                    resource: StoredPropellant::Lox,
+                    density_kg_m3: 1_141.0,
+                    viscosity_pa_s: 0.0002,
+                    source_pressure_pa: 500_000.0,
+                    minimum_pressure_pa: 100_000.0,
+                },
+                FeedResourceProperties {
+                    resource: StoredPropellant::LiquidMethane,
+                    density_kg_m3: 422.0,
+                    viscosity_pa_s: 0.00012,
+                    source_pressure_pa: 500_000.0,
+                    minimum_pressure_pa: 100_000.0,
+                },
+            ],
         }
+    );
+    let assembly = vehicle.assembly.as_ref().expect("baked assembly graph");
+    assert_eq!(assembly.resource_edges.len(), 1);
+    assert!(assembly.resource_edges[0].open);
+    assert!(assembly.resource_edges[0].feed_line.is_some());
+    assert!(!assembly.links[0].state.open);
+    assert!(
+        assembly
+            .feed_paths()
+            .unwrap()
+            .contains(&("stage.tank".into(), "capsule.engine".into()))
     );
 }
 
@@ -974,6 +1002,35 @@ intake = "pitot"
 compressor_ratio = 8.0
 turbine_inlet_temp_k = 1400.0
 material = "nickel-superalloy"
+
+[jets.shaft]
+design_speed_rad_s = 900.0
+rotor_inertia_kg_m2 = 3.0
+
+[jets.shaft.starter]
+kind = "rocket-bootstrap"
+power_w = 12000.0
+charge_j = 0.0
+resource = "hydrazine"
+specific_energy_j_kg = 1000000.0
+maximum_shaft_torque_nm = 40.0
+mass_kg = 2.0
+
+[jets.shaft.generator]
+fitted = true
+power_w = 18000.0
+efficiency = 0.85
+efficiency_map = [{ spool_n = 0.5, efficiency = 0.75 }, { spool_n = 1.0, efficiency = 0.9 }]
+maximum_shaft_torque_nm = 30.0
+cut_in_spool_n = 0.5
+mass_kg = 5.0
+
+[jets.shaft.generator.thermal]
+heat_capacity_j_k = 50000.0
+conductance_w_k = 20.0
+initial_temperature_k = 300.0
+maximum_temperature_k = 420.0
+
 [[jets]]
 name = "estoc-1"
 kind = "estoc"
@@ -1024,12 +1081,109 @@ wall_thickness_m = 0.005
         "baked mass must equal structure plus jets"
     );
     assert!(vehicle.jets[1].engine.dry_mass_kg() > vehicle.jets[0].engine.dry_mass_kg());
+    let CompiledJet::Air(engine) = &vehicle.jets[0].engine else {
+        panic!("first mount is the airbreather");
+    };
+    assert_eq!(
+        engine.shaft.starter.resource,
+        Some(StoredPropellant::Hydrazine)
+    );
+    assert_eq!(engine.shaft.starter.maximum_shaft_torque_nm, Some(40.0));
+    assert_eq!(engine.shaft.design_speed_rad_s, Some(900.0));
+    assert_eq!(engine.shaft.generator.efficiency_map.len(), 2);
+    assert!(engine.shaft.generator.thermal.is_some());
     let CompiledJet::Estoc(engine) = &vehicle.jets[1].engine else {
         panic!("second mount is the ESTOC");
     };
     assert_eq!(engine.bulk_fuel, JetFuel::Methane);
     assert_eq!(engine.boost_coolant_fuel, Some(JetFuel::Hydrogen));
     assert!(engine.precooler.is_some());
+}
+
+#[test]
+fn multi_spool_turbofan_asset_bakes_and_round_trips() {
+    let doc = r#"
+name = "two-spool-turbofan"
+mass_kg = 3000.0
+inertia_body_kg_m2 = [[8000.0, 0.0, 0.0], [0.0, 8000.0, 0.0], [0.0, 0.0, 4000.0]]
+
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 4.0
+chord_m = 1.0
+
+[[jets]]
+name = "lp-hp-fan"
+kind = "jet"
+cycle = "turbofan"
+mount_position_body_m = [1.0, 0.0, 0.0]
+thrust_axis_body = [1.0, 0.0, 0.0]
+fuel = "kerosene"
+intake_area_m2 = 0.8
+compressor_ratio = 18.0
+bypass_ratio = 4.0
+fan_pressure_ratio = 1.5
+turbine_inlet_temp_k = 1500.0
+material = "nickel-superalloy"
+
+[jets.shaft.multi_spool]
+low_pressure_design_speed_rad_s = 500.0
+low_pressure_rotor_inertia_kg_m2 = 4.0
+fan_rotor_inertia_kg_m2 = 2.0
+high_pressure_design_speed_rad_s = 1000.0
+high_pressure_rotor_inertia_kg_m2 = 2.0
+high_pressure_turbine_power_fraction = 0.55
+fan_gear_speed_ratio = 0.5
+fan_gear_efficiency = 0.95
+"#;
+
+    let calibration_doc = doc.replace(
+        "[jets.shaft.multi_spool]\nlow_pressure_design_speed_rad_s = 500.0\nlow_pressure_rotor_inertia_kg_m2 = 4.0\nfan_rotor_inertia_kg_m2 = 2.0\nhigh_pressure_design_speed_rad_s = 1000.0\nhigh_pressure_rotor_inertia_kg_m2 = 2.0\nhigh_pressure_turbine_power_fraction = 0.55\nfan_gear_speed_ratio = 0.5\nfan_gear_efficiency = 0.95\n",
+        "",
+    );
+    assert_ne!(
+        calibration_doc, doc,
+        "calibration fixture removes its shaft train"
+    );
+    let calibration_asset: VehicleAsset =
+        toml::from_str(&calibration_doc).expect("single-spool calibration TOML parses");
+    let calibration_vehicle = calibration_asset
+        .bake()
+        .expect("single-spool calibration asset bakes");
+    let CompiledJet::Air(calibration_engine) = &calibration_vehicle.jets[0].engine else {
+        panic!("calibration asset compiled as an airbreather");
+    };
+    let sample = AtmosphereConfig::default()
+        .sample(0.0)
+        .expect("static calibration atmosphere");
+    let condition = flight_condition(&sample, 0.0).expect("static condition");
+    let (_, design_balance) = calibration_engine
+        .operating_point_at_spool(&condition, 1.0, 1.0, true)
+        .expect("turbofan design shaft balance");
+    let hp_fraction = design_balance.high_pressure_demand_w
+        / (design_balance.high_pressure_demand_w + design_balance.low_pressure_fan_demand_w / 0.95);
+    let doc = doc.replace(
+        "high_pressure_turbine_power_fraction = 0.55",
+        &format!("high_pressure_turbine_power_fraction = {hp_fraction:.12}"),
+    );
+
+    let asset: VehicleAsset = toml::from_str(&doc).expect("multi-spool TOML parses");
+    let vehicle = asset.bake().expect("multi-spool turbofan bakes");
+    let thessa_sim_core::CompiledJet::Air(engine) = &vehicle.jets[0].engine else {
+        panic!("asset compiled as an airbreather");
+    };
+    let spools = engine.shaft.multi_spool.expect("spool train retained");
+    assert_eq!(spools.fan_gear_speed_ratio, 0.5);
+    assert!((spools.high_pressure_turbine_power_fraction - hp_fraction).abs() < 5.0e-13);
+
+    let json = serde_json::to_string(&vehicle).expect("vehicle serializes");
+    let restored: VehicleDefinition = serde_json::from_str(&json).expect("vehicle restores");
+    assert_eq!(restored, vehicle);
+    let cold = thessa_sim_core::JetCommand::cold(&restored.jets[0].engine);
+    assert_eq!(cold.shaft.spool_n, 0.0);
+    assert_eq!(cold.shaft.low_pressure_spool_n, Some(0.0));
 }
 
 #[test]

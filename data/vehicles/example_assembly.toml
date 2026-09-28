@@ -1,7 +1,6 @@
-# Example part assembly: a tank stage stacked under a pressurized
-# capsule through an open hatch link. Crew and air cross the interface,
-# and the stage tank reaches the capsule engine port; sealing the hatch
-# isolates those paths.
+# Example part assembly: a tank stage and pressurized capsule are joined by a
+# closed hatch. A separate liquid umbilical crossfeed reaches the capsule
+# engine port without opening the crew or cabin-pressure path.
 name = "example-assembly"
 mass_kg = 1500.0
 inertia_body_kg_m2 = [
@@ -149,8 +148,29 @@ max_wall_temp_k = 1350.0
 name = "stack"
 parent = "stage.top"
 child = "capsule.base"
-hatch_open = true
+hatch_open = false
+
+[[assembly.resource_edges]]
+name = "stage-capsule-fuel-umbilical"
+a = "stage"
+b = "capsule"
+open = true
+feed_line = { diameter_m = 0.025, length_m = 2.0, bends = 2, rated_pressure_pa = 1000000.0, material = { density_kg_m3 = 8190.0, yield_strength_pa = 1000000000.0, max_wall_temp_k = 1350.0 } }
 
 [[resource_feed_ports]]
 consumer_name = "capsule-engine"
 feed_port_name = "capsule.engine"
+
+[[resource_feed_ports.fluid_properties]]
+resource = "lox"
+density_kg_m3 = 1141.0
+viscosity_pa_s = 0.0002
+source_pressure_pa = 500000.0
+minimum_pressure_pa = 100000.0
+
+[[resource_feed_ports.fluid_properties]]
+resource = "liquid-methane"
+density_kg_m3 = 422.0
+viscosity_pa_s = 0.00012
+source_pressure_pa = 500000.0
+minimum_pressure_pa = 100000.0

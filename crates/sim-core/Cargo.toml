@@ -107,3 +107,7 @@ harness = false
 [[bench]]
 name = "thermal"
 harness = false
+
+[[bench]]
+name = "resource_routing"
+harness = false

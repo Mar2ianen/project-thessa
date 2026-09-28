@@ -27,7 +27,8 @@ mod vehicle;
 
 pub use assembly::{
     AssemblyEndpoint, AssemblyError, AssemblyLinkState, AssemblyVolume, NamedAssemblyLink,
-    VehicleAssembly, air_groups, crew_groups, feed_reachable,
+    NamedAssemblyResourceEdge, VehicleAssembly, air_groups, crew_groups, feed_reachable,
+    feed_reachable_with_resource_edges,
 };
 pub use cabin::{
     AuthorityReason, AutopilotTier, CabinError, CabinExit, CabinExitSide, CabinExitType,
@@ -81,8 +82,9 @@ pub use reaction_wheel::{
     allocate_reaction_wheels_with_enabled_banks,
 };
 pub use resources::{
-    ConsumerResourceAllocation, VehicleAuxiliaryPowerUnitStep, VehiclePropulsionAllocation,
-    VehicleResourceDemand, VehicleResourceFeedPort, VehicleResourcePlan, VehicleResourceState,
+    ConsumerResourceAllocation, FeedResourceProperties, VehicleAuxiliaryPowerUnitStep,
+    VehiclePropulsionAllocation, VehicleResourceDemand, VehicleResourceFeedPort,
+    VehicleResourcePlan, VehicleResourceState,
 };
 pub use shield::{HeatShieldMount, ShieldError};
 pub use thermal::{

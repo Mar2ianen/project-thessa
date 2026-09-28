@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt};
 
 use crate::{
-    CabinPressureState, CrewSuitMode, MOLAR_MASS_AIR_G_MOL, MOLAR_MASS_O2_G_MOL, PressurizedCabin,
+    CabinPressureState, CrewSuitMode, FeedLine, MOLAR_MASS_AIR_G_MOL, MOLAR_MASS_O2_G_MOL,
+    PressurizedCabin,
 };
 
 /// Assembly connectivity failure modes.
@@ -73,10 +74,51 @@ impl AssemblyLinkState {
 
 /// A named hatch/stack link in the baked vehicle. `state.a` and
 /// `state.b` index `VehicleAssembly::body_names`, not cabin volumes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NamedAssemblyLink {
     pub name: String,
     pub state: AssemblyLinkState,
+    /// Optional authored liquid-feed pipe across this joint. The structure
+    /// and cabin topology are unchanged when the line is closed/unavailable.
+    #[serde(default)]
+    pub feed_line: Option<FeedLine>,
+}
+
+/// Explicit non-structural crossfeed edge between two assembly bodies. It
+/// carries resource reachability only: it never joins structure, crew, or air.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NamedAssemblyResourceEdge {
+    pub name: String,
+    pub a: usize,
+    pub b: usize,
+    pub open: bool,
+    /// Optional pressure-loss segment on this non-structural crossfeed.
+    #[serde(default)]
+    pub feed_line: Option<FeedLine>,
+}
+
+impl NamedAssemblyResourceEdge {
+    pub fn validate(&self, node_count: usize) -> Result<(), AssemblyError> {
+        if self.name.trim().is_empty()
+            || self.a >= node_count
+            || self.b >= node_count
+            || self.a == self.b
+        {
+            return Err(AssemblyError::InvalidLink(format!(
+                "invalid non-structural resource edge '{}'",
+                self.name
+            )));
+        }
+        if let Some(line) = self.feed_line {
+            line.validate().map_err(|error| {
+                AssemblyError::InvalidLink(format!(
+                    "invalid feed line on resource edge '{}': {error}",
+                    self.name
+                ))
+            })?;
+        }
+        Ok(())
+    }
 }
 
 /// Interior region address in one assembled part.
@@ -108,6 +150,9 @@ pub struct VehicleAssembly {
     pub root_body: usize,
     pub body_names: Vec<String>,
     pub links: Vec<NamedAssemblyLink>,
+    /// Runtime crossfeed edges outside the structural part tree.
+    #[serde(default)]
+    pub resource_edges: Vec<NamedAssemblyResourceEdge>,
     pub volumes: Vec<AssemblyVolume>,
     pub tanks: Vec<AssemblyEndpoint>,
     pub engine_ports: Vec<AssemblyEndpoint>,
@@ -139,6 +184,7 @@ impl VehicleAssembly {
             )));
         }
         let mut link_names = std::collections::HashSet::new();
+        let mut resource_edge_names = std::collections::HashSet::new();
         let mut union = UnionFind::new(self.body_names.len());
         let mut indegree = vec![0_u8; self.body_names.len()];
         for link in &self.links {
@@ -148,6 +194,14 @@ impl VehicleAssembly {
                 ));
             }
             link.state.validate(self.body_names.len())?;
+            if let Some(line) = link.feed_line {
+                line.validate().map_err(|error| {
+                    AssemblyError::InvalidLink(format!(
+                        "invalid feed line on assembly link '{}': {error}",
+                        link.name
+                    ))
+                })?;
+            }
             if link.state.b >= indegree.len() || indegree[link.state.b] != 0 {
                 return Err(AssemblyError::InvalidLink(format!(
                     "body '{}' has multiple assembly parents",
@@ -165,6 +219,15 @@ impl VehicleAssembly {
                 return Err(AssemblyError::InvalidLink(format!(
                     "stack link '{}' must remain open",
                     link.name
+                )));
+            }
+        }
+        for edge in &self.resource_edges {
+            edge.validate(self.body_names.len())?;
+            if !resource_edge_names.insert(edge.name.as_str()) {
+                return Err(AssemblyError::InvalidLink(format!(
+                    "duplicate resource edge name '{}'",
+                    edge.name
                 )));
             }
         }
@@ -230,6 +293,170 @@ impl VehicleAssembly {
         }
         link.state.open = open;
         Ok(())
+    }
+
+    /// Open or close a named crossfeed edge without changing structural,
+    /// crew, or cabin topology.
+    pub fn set_resource_edge_open(&mut self, name: &str, open: bool) -> Result<(), AssemblyError> {
+        let edge = self
+            .resource_edges
+            .iter_mut()
+            .find(|edge| edge.name == name)
+            .ok_or_else(|| AssemblyError::InvalidLink(format!("unknown resource edge '{name}'")))?;
+        edge.open = open;
+        Ok(())
+    }
+
+    /// Partition structural bodies if one named assembly joint fails.
+    /// Non-structural resource edges are deliberately ignored: they may keep
+    /// fluid reachability but never keep two structural clusters together.
+    /// The result is ordered by each component's first body index and is a
+    /// topology plan for the caller that rebuilds rigid-body state.
+    pub fn body_components_after_link_failure(
+        &self,
+        failed_link_name: &str,
+    ) -> Result<Vec<Vec<usize>>, AssemblyError> {
+        self.validate()?;
+        if !self.links.iter().any(|link| link.name == failed_link_name) {
+            return Err(AssemblyError::InvalidLink(format!(
+                "unknown structural link '{failed_link_name}'"
+            )));
+        }
+        let mut adjacency = vec![Vec::new(); self.body_names.len()];
+        for link in &self.links {
+            if link.name == failed_link_name {
+                continue;
+            }
+            adjacency[link.state.a].push(link.state.b);
+            adjacency[link.state.b].push(link.state.a);
+        }
+        let mut seen = vec![false; self.body_names.len()];
+        let mut components = Vec::new();
+        for root in 0..self.body_names.len() {
+            if seen[root] {
+                continue;
+            }
+            seen[root] = true;
+            let mut stack = vec![root];
+            let mut component = Vec::new();
+            while let Some(body) = stack.pop() {
+                component.push(body);
+                for neighbor in &adjacency[body] {
+                    if !seen[*neighbor] {
+                        seen[*neighbor] = true;
+                        stack.push(*neighbor);
+                    }
+                }
+            }
+            component.sort_unstable();
+            components.push(component);
+        }
+        Ok(components)
+    }
+
+    /// Remove one structural connection and return the resulting connected
+    /// assembly topologies. A non-structural edge is retained only when both
+    /// endpoints remain in the same cluster; a resource umbilical cannot
+    /// merge separated rigid bodies. Every returned topology uses local body
+    /// indices and validates as an independent assembly.
+    pub fn split_after_link_failure(
+        &self,
+        failed_link_name: &str,
+    ) -> Result<Vec<Self>, AssemblyError> {
+        let components = self.body_components_after_link_failure(failed_link_name)?;
+        let mut split = Vec::with_capacity(components.len());
+        for component in components {
+            let mut remap = vec![None; self.body_names.len()];
+            let body_names = component
+                .iter()
+                .enumerate()
+                .map(|(local, original)| {
+                    remap[*original] = Some(local);
+                    self.body_names[*original].clone()
+                })
+                .collect::<Vec<_>>();
+            let links = self
+                .links
+                .iter()
+                .filter_map(|link| {
+                    if link.name == failed_link_name {
+                        return None;
+                    }
+                    let a = remap[link.state.a]?;
+                    let b = remap[link.state.b]?;
+                    Some(NamedAssemblyLink {
+                        name: link.name.clone(),
+                        state: AssemblyLinkState { a, b, ..link.state },
+                        feed_line: link.feed_line,
+                    })
+                })
+                .collect();
+            let resource_edges = self
+                .resource_edges
+                .iter()
+                .filter_map(|edge| {
+                    let a = remap[edge.a]?;
+                    let b = remap[edge.b]?;
+                    Some(NamedAssemblyResourceEdge {
+                        name: edge.name.clone(),
+                        a,
+                        b,
+                        open: edge.open,
+                        feed_line: edge.feed_line,
+                    })
+                })
+                .collect();
+            let mut assembly = Self {
+                root_body: remap[self.root_body].unwrap_or(0),
+                body_names,
+                links,
+                resource_edges,
+                volumes: self
+                    .volumes
+                    .iter()
+                    .filter_map(|volume| {
+                        let body = remap[volume.body]?;
+                        Some(AssemblyVolume {
+                            name: volume.name.clone(),
+                            body,
+                            pressurized: volume.pressurized,
+                            volume_m3: volume.volume_m3,
+                            centroid_body_m: volume.centroid_body_m,
+                            seats: volume.seats,
+                            seat_positions_body_m: volume.seat_positions_body_m.clone(),
+                        })
+                    })
+                    .collect(),
+                tanks: self
+                    .tanks
+                    .iter()
+                    .filter_map(|endpoint| {
+                        Some(AssemblyEndpoint {
+                            name: endpoint.name.clone(),
+                            body: remap[endpoint.body]?,
+                        })
+                    })
+                    .collect(),
+                engine_ports: self
+                    .engine_ports
+                    .iter()
+                    .filter_map(|endpoint| {
+                        Some(AssemblyEndpoint {
+                            name: endpoint.name.clone(),
+                            body: remap[endpoint.body]?,
+                        })
+                    })
+                    .collect(),
+            };
+            // The root remains the authored root when present; otherwise the
+            // first body of this independent cluster becomes its local root.
+            if !component.contains(&self.root_body) {
+                assembly.root_body = 0;
+            }
+            assembly.validate()?;
+            split.push(assembly);
+        }
+        Ok(split)
     }
 
     /// Equalize each connected pressure domain as a single ideal-gas state
@@ -482,9 +709,10 @@ impl VehicleAssembly {
             .iter()
             .map(|endpoint| endpoint.body)
             .collect();
-        let reachable = feed_reachable(
+        let reachable = feed_reachable_with_resource_edges(
             self.body_names.len(),
             &self.links.iter().map(|link| link.state).collect::<Vec<_>>(),
+            &self.resource_edges,
             &tank_bodies,
             &port_bodies,
         )?;
@@ -717,12 +945,31 @@ pub fn feed_reachable(
     tanks: &[usize],
     ports: &[usize],
 ) -> Result<Vec<(usize, usize)>, AssemblyError> {
+    feed_reachable_with_resource_edges(body_count, links, &[], tanks, ports)
+}
+
+/// Tank-to-port reachability through structural resource-open links and
+/// explicit non-structural resource edges.
+pub fn feed_reachable_with_resource_edges(
+    body_count: usize,
+    links: &[AssemblyLinkState],
+    resource_edges: &[NamedAssemblyResourceEdge],
+    tanks: &[usize],
+    ports: &[usize],
+) -> Result<Vec<(usize, usize)>, AssemblyError> {
     validate_all(body_count, links)?;
     let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); body_count];
     for link in links {
         if link.resource_open() {
             adjacency[link.a].push(link.b);
             adjacency[link.b].push(link.a);
+        }
+    }
+    for edge in resource_edges {
+        edge.validate(body_count)?;
+        if edge.open {
+            adjacency[edge.a].push(edge.b);
+            adjacency[edge.b].push(edge.a);
         }
     }
     let mut pairs = Vec::new();
@@ -823,6 +1070,66 @@ mod tests {
     }
 
     #[test]
+    fn failed_structural_link_partitions_bodies_without_using_resource_edges() {
+        let assembly = VehicleAssembly {
+            root_body: 0,
+            body_names: vec!["core".into(), "booster".into(), "fairing".into()],
+            links: vec![
+                NamedAssemblyLink {
+                    name: "core-booster".into(),
+                    state: link(0, 1, false, true),
+                    feed_line: None,
+                },
+                NamedAssemblyLink {
+                    name: "booster-fairing".into(),
+                    state: link(1, 2, false, true),
+                    feed_line: None,
+                },
+            ],
+            resource_edges: vec![
+                NamedAssemblyResourceEdge {
+                    name: "temporary-umbilical".into(),
+                    a: 0,
+                    b: 2,
+                    open: true,
+                    feed_line: None,
+                },
+                NamedAssemblyResourceEdge {
+                    name: "booster-service-line".into(),
+                    a: 1,
+                    b: 2,
+                    open: true,
+                    feed_line: None,
+                },
+            ],
+            volumes: Vec::new(),
+            tanks: Vec::new(),
+            engine_ports: Vec::new(),
+        };
+
+        assert_eq!(
+            assembly
+                .body_components_after_link_failure("core-booster")
+                .unwrap(),
+            vec![vec![0], vec![1, 2]]
+        );
+        let split = assembly.split_after_link_failure("core-booster").unwrap();
+        assert_eq!(split.len(), 2);
+        assert_eq!(split[0].body_names, vec!["core"]);
+        assert!(split[0].resource_edges.is_empty());
+        assert_eq!(split[1].body_names, vec!["booster", "fairing"]);
+        assert_eq!(split[1].links.len(), 1);
+        assert_eq!(split[1].resource_edges.len(), 1);
+        assert_eq!(split[1].resource_edges[0].name, "booster-service-line");
+        assert!(split.iter().all(|cluster| cluster.validate().is_ok()));
+        assert!(
+            assembly
+                .body_components_after_link_failure("missing-link")
+                .is_err()
+        );
+    }
+
+    #[test]
     fn bad_links_fail_closed() {
         assert!(crew_groups(&[0, 1], 2, &[link(0, 2, true, true)]).is_err());
         assert!(crew_groups(&[0, 1], 2, &[link(1, 1, true, true)]).is_err());
@@ -839,7 +1146,9 @@ mod tests {
             links: vec![NamedAssemblyLink {
                 name: "crew-hatch".into(),
                 state: link(0, 1, true, true),
+                feed_line: None,
             }],
+            resource_edges: Vec::new(),
             volumes: vec![
                 AssemblyVolume {
                     name: "stage.service-bay".into(),
@@ -938,7 +1247,9 @@ mod tests {
             links: vec![NamedAssemblyLink {
                 name: "rigid-joint".into(),
                 state: link(0, 1, false, true),
+                feed_line: None,
             }],
+            resource_edges: Vec::new(),
             volumes: Vec::new(),
             tanks: Vec::new(),
             engine_ports: Vec::new(),

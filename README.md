@@ -81,7 +81,8 @@ The checked-in vertical slice currently contains:
 Factory gameplay, general three-spool/clutched and free-power-turbine dynamics,
 combined control of jointed stacks, commanding non-primary vehicles, client
 fleet rendering, vehicle despawn policy, physical structural fracture beyond
-rated-joint assessment, branched fluid networks, full electrical networks, shield thermal
+rated-joint assessment, joint-to-link load mapping with authoritative
+failure/split commit, branched fluid networks, full electrical networks, shield thermal
 protection/ablation, save persistence, and production multiplayer remain future
 work. Vehicle thermal nodes and the
 ideal shared power bus are implemented slices; they are not full thermal,

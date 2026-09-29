@@ -216,11 +216,14 @@ structure. Strength ratings ride the same path: `joint_strengths` holds one
 authored force/moment rating per structural link (populated from optional
 `failure_force_n`/`failure_moment_nm` assembly TOML fields, which must be
 rated together or omitted together), `split_after_link_failure` retains the
-ratings whose links survive in each cluster, and `find_failed_joint`
-compares measured solver loads (`AssemblyJointLoad` magnitudes from
-`CollisionWorld::joint_loads`) against the ratings, returning the first
-failed link in authored order. Unrated links never fail by load; unknown,
-duplicate, non-finite, or negative loads fail closed. `reconstruct_clusters_after_link_failure` additionally takes one
+ratings whose links survive in each cluster, and `find_failed_joint` compares
+caller-mapped solver load magnitudes (`AssemblyJointLoad`) against the ratings,
+returning the first failed link in authored order. `CollisionWorld::joint_loads`
+supplies force/moment telemetry, but mapping its `JointId` values onto
+structural link names and committing a resulting failure/split are not
+integrated. Unrated links never fail by load; unknown, duplicate, non-finite,
+or negative loads fail closed. `reconstruct_clusters_after_link_failure`
+additionally takes one
 complete `AssemblyBodyMassProperties` record per authored body, aggregates
 centroidal inertia with the parallel-axis theorem, and recenters each
 `RigidBodyState`. Released clusters inherit the original orientation and

@@ -30,6 +30,9 @@ pub(crate) struct VehicleAsset {
     /// and resource connectivity.
     #[serde(default)]
     pub(crate) assembly: AssemblyAsset,
+    /// Optional consumer-name to assembly feed-port routes.
+    #[serde(default)]
+    pub(crate) resource_feed_ports: Vec<ResourceFeedPortAsset>,
     /// Optional shared bus with rated loads, storage, solar cells, and reactors.
     #[serde(default)]
     pub(crate) electrical_power: ElectricalPowerAsset,
@@ -66,6 +69,9 @@ pub(crate) struct VehicleAsset {
     /// needs a flight condition at query time).
     #[serde(default)]
     pub(super) jets: Vec<JetAsset>,
+    /// Fuel-burning turbo-generator auxiliary power units.
+    #[serde(default)]
+    pub(super) auxiliary_power_units: Vec<AuxiliaryPowerUnitAsset>,
     /// Electric spacecraft thrusters, with power processor and radiator mass.
     #[serde(default)]
     pub(super) electric_thrusters: Vec<ElectricThrusterAsset>,
@@ -81,6 +87,9 @@ pub(crate) struct VehicleAsset {
     /// Gas turbines coupled to propellers through an explicit power turbine.
     #[serde(default)]
     pub(super) turboprops: Vec<TurbopropAsset>,
+    /// Mounted monopropellant or cold-gas RCS thrusters.
+    #[serde(default)]
+    pub(super) rcs_mounts: Vec<RcsMountAsset>,
     /// Parametric aircraft landing gear or rover wheel chassis. Component
     /// masses participate in the same final center-of-mass bake as mounts.
     #[serde(default)]
@@ -248,6 +257,7 @@ impl VehicleAsset {
         // auto-mounting from ports is future work.
         let mut body_tank_mounts = Vec::new();
         let mut body_heat_shield_mounts = Vec::new();
+        let mut body_docking_ports = Vec::new();
         let mut body_contact_parts = Vec::new();
         let mut body_cabins = Vec::new();
         let mut body_cabin_exits = Vec::new();
@@ -256,6 +266,28 @@ impl VehicleAsset {
         let mut body_cores = Vec::new();
         let mut body_stations = Vec::new();
         let mut assembly_volumes = Vec::new();
+        // Per-body ownership tracking for split reconstruction. Only
+        // populated when an assembly tree exists; hand-authored and surface
+        // hardware needs explicit per-part bodies (later slice) and fails
+        // closed below instead of being silently misattributed.
+        let track_ownership = !self.assembly.links.is_empty();
+        let hand_panel_count = panels.len();
+        let hand_control_count = controls.len();
+        let mut ownership_panel_bodies: Vec<usize> = Vec::new();
+        let mut ownership_collision_bodies: Vec<usize> = Vec::new();
+        let mut ownership_cabin_bodies: Vec<usize> = Vec::new();
+        let mut ownership_cabin_exit_bodies: Vec<usize> = Vec::new();
+        let mut ownership_cabin_seat_bodies: Vec<usize> = Vec::new();
+        let mut ownership_cabin_monument_bodies: Vec<usize> = Vec::new();
+        let mut ownership_control_core_bodies: Vec<usize> = Vec::new();
+        let mut ownership_control_station_bodies: Vec<usize> = Vec::new();
+        let mut ownership_tank_bodies: Vec<usize> = Vec::new();
+        let mut ownership_heat_shield_bodies: Vec<usize> = Vec::new();
+        let mut ownership_docking_port_bodies: Vec<usize> = Vec::new();
+        // Per-body (mass, first moment, origin-frame inertia) in the
+        // authoring frame; finalized into centroidal records after COM.
+        let mut ownership_masses: Vec<(f64, DVec3, DMat3)> =
+            vec![(0.0, DVec3::ZERO, DMat3::ZERO); self.procedural_bodies.len()];
         let compiled_assembly = if self.assembly.links.is_empty() {
             None
         } else {
@@ -289,6 +321,19 @@ impl VehicleAsset {
             let mut compiled = compile_body(&part_frame_body, &BodyCompileOptions::default())
                 .map_err(|error| format!("body '{}': {error}", body.name))?;
             transform_compiled_body(&mut compiled, transform);
+            // Ownership bases: every per-body vector appended below is
+            // attributed by length delta at the end of this iteration.
+            let ob_panel_base = panels.len();
+            let ob_contact_base = body_contact_parts.len();
+            let ob_cabin_base = body_cabins.len();
+            let ob_exit_base = body_cabin_exits.len();
+            let ob_seat_base = body_cabin_seats.len();
+            let ob_monument_base = body_cabin_monuments.len();
+            let ob_core_base = body_cores.len();
+            let ob_station_base = body_stations.len();
+            let ob_tank_base = body_tank_mounts.len();
+            let ob_shield_base = body_heat_shield_mounts.len();
+            let ob_dock_base = body_docking_ports.len();
             println!(
                 "body '{}': assembled at {:?} (rotation {:?})",
                 body.name, transform.translation_body_m, transform.rotation_body
@@ -312,6 +357,12 @@ impl VehicleAsset {
                 surface_mass_kg += structure.mass_kg;
                 surface_moment += structure.center_of_mass_body_m * structure.mass_kg;
                 surface_inertia += structure.inertia_body_kg_m2;
+                if track_ownership {
+                    let entry = &mut ownership_masses[body_index];
+                    entry.0 += structure.mass_kg;
+                    entry.1 += structure.center_of_mass_body_m * structure.mass_kg;
+                    entry.2 += structure.inertia_body_kg_m2;
+                }
             }
             for tank in &compiled.tanks {
                 println!(
@@ -518,6 +569,19 @@ impl VehicleAsset {
                     "body '{}': port '{}' ({:?}) at {:?} along {:?}",
                     body.name, port.name, port.kind, port.position_body_m, port.axis_body_m
                 );
+                if port.kind == PortKind::Docking {
+                    // Port +X is the outward docking normal by convention.
+                    let orientation =
+                        DQuat::from_rotation_arc(DVec3::X, port.axis_body_m.normalize());
+                    body_docking_ports.push(
+                        DockingPortSpec::d1(
+                            format!("{}.{}", body.name, port.name),
+                            port.position_body_m,
+                            orientation,
+                        )
+                        .map_err(|error| format!("body '{}': {error}", body.name))?,
+                    );
+                }
             }
             let panel_base = panels.len();
             let control_base = controls.len();
@@ -560,6 +624,57 @@ impl VehicleAsset {
                 println!("body '{}': {} contact parts", body.name, parts.len());
                 body_contact_parts.extend(parts);
             }
+            if track_ownership {
+                ownership_panel_bodies.extend(std::iter::repeat_n(
+                    body_index,
+                    panels.len() - ob_panel_base,
+                ));
+                ownership_collision_bodies.extend(std::iter::repeat_n(
+                    body_index,
+                    body_contact_parts.len() - ob_contact_base,
+                ));
+                ownership_cabin_bodies.extend(std::iter::repeat_n(
+                    body_index,
+                    body_cabins.len() - ob_cabin_base,
+                ));
+                ownership_cabin_exit_bodies.extend(std::iter::repeat_n(
+                    body_index,
+                    body_cabin_exits.len() - ob_exit_base,
+                ));
+                ownership_cabin_seat_bodies.extend(std::iter::repeat_n(
+                    body_index,
+                    body_cabin_seats.len() - ob_seat_base,
+                ));
+                ownership_cabin_monument_bodies.extend(std::iter::repeat_n(
+                    body_index,
+                    body_cabin_monuments.len() - ob_monument_base,
+                ));
+                ownership_control_core_bodies.extend(std::iter::repeat_n(
+                    body_index,
+                    body_cores.len() - ob_core_base,
+                ));
+                ownership_control_station_bodies.extend(std::iter::repeat_n(
+                    body_index,
+                    body_stations.len() - ob_station_base,
+                ));
+                for mount in &body_tank_mounts[ob_tank_base..] {
+                    let mass = mount.tank.dry_mass_kg + mount.loaded_propellant_kg();
+                    let position = DVec3::from_array(mount.position_body_m);
+                    let entry = &mut ownership_masses[body_index];
+                    entry.0 += mass;
+                    entry.1 += position * mass;
+                    entry.2 += mount.intrinsic_inertia_body_kg_m2 + parallel_axis(mass, position);
+                    ownership_tank_bodies.push(body_index);
+                }
+                ownership_heat_shield_bodies.extend(std::iter::repeat_n(
+                    body_index,
+                    body_heat_shield_mounts.len() - ob_shield_base,
+                ));
+                ownership_docking_port_bodies.extend(std::iter::repeat_n(
+                    body_index,
+                    body_docking_ports.len() - ob_dock_base,
+                ));
+            }
         }
         let runtime_assembly = compiled_assembly
             .as_ref()
@@ -567,11 +682,35 @@ impl VehicleAsset {
                 runtime_assembly(
                     &self.procedural_bodies,
                     &self.assembly.links,
+                    &self.assembly.resource_edges,
                     &assembly.root,
                     assembly_volumes,
                 )
             })
             .transpose()?;
+        if track_ownership
+            && (hand_panel_count > 0
+                || hand_control_count > 0
+                || !self.procedural_surfaces.is_empty()
+                || !self.collision_parts.is_empty()
+                || !self.engines.is_empty()
+                || !self.tanks.is_empty()
+                || !self.systems.is_empty()
+                || !self.jets.is_empty()
+                || !self.auxiliary_power_units.is_empty()
+                || !self.electric_thrusters.is_empty()
+                || !self.fusion_torches.is_empty()
+                || !self.pulsed_fusion_systems.is_empty()
+                || !self.propeller_drives.is_empty()
+                || !self.turboprops.is_empty()
+                || !self.rcs_mounts.is_empty()
+                || !self.wheel_chassis.is_empty()
+                || !self.landing_legs.is_empty()
+                || !self.reaction_wheels.is_empty()
+                || !self.parachutes.is_empty())
+        {
+            return Err("multi-body assemblies need per-part body ownership for hand-authored panels, surfaces, collision, and mounts: explicit per-part bodies are a later slice".into());
+        }
         if let Some(assembly) = &runtime_assembly {
             let initial_cabins = body_cabins.clone();
             assembly
@@ -599,6 +738,12 @@ impl VehicleAsset {
                     surface_mass_kg += delta_mass_kg;
                     surface_moment += volume.centroid_body_m * delta_mass_kg;
                     surface_inertia += parallel_axis(delta_mass_kg, volume.centroid_body_m);
+                    if track_ownership {
+                        let entry = &mut ownership_masses[volume.body];
+                        entry.0 += delta_mass_kg;
+                        entry.1 += volume.centroid_body_m * delta_mass_kg;
+                        entry.2 += parallel_axis(delta_mass_kg, volume.centroid_body_m);
+                    }
                 }
             }
         }
@@ -632,6 +777,11 @@ impl VehicleAsset {
             .into_iter()
             .map(JetAsset::bake)
             .collect::<Result<Vec<_>, _>>()?;
+        let auxiliary_power_unit_mounts = self
+            .auxiliary_power_units
+            .into_iter()
+            .map(AuxiliaryPowerUnitAsset::bake)
+            .collect::<Result<Vec<_>, _>>()?;
         let electric_thruster_mounts = self
             .electric_thrusters
             .into_iter()
@@ -656,6 +806,11 @@ impl VehicleAsset {
             .turboprops
             .into_iter()
             .map(TurbopropAsset::bake)
+            .collect::<Result<Vec<_>, _>>()?;
+        let rcs_mounts = self
+            .rcs_mounts
+            .into_iter()
+            .map(RcsMountAsset::bake)
             .collect::<Result<Vec<_>, _>>()?;
         let wheel_chassis_specs = self
             .wheel_chassis
@@ -689,11 +844,41 @@ impl VehicleAsset {
             .collect();
         let electrical_power = self.electrical_power.bake();
         let power_mass_properties = electrical_power.mass_properties()?;
+        let resource_feed_ports = self
+            .resource_feed_ports
+            .into_iter()
+            .map(ResourceFeedPortAsset::bake)
+            .collect();
         let mut thermal = self.thermal.bake();
         // Wing/tail tile layers arrive as lumped nodes (one per surface);
         // duplicate names with authored [thermal] nodes fail closed below.
         thermal.nodes.extend(surface_tile_nodes);
         let thermal_mass_properties = thermal.mass_properties()?;
+        // Vehicle-level shared systems have no part body: their hardware is
+        // attributed to the root body, which retains the bus on a split.
+        // mass_properties() returns centroidal tensors, so each term is
+        // moved back to the authoring origin exactly like the bake_* mass
+        // passes do below.
+        if let Some(root) = runtime_assembly.as_ref().map(|assembly| assembly.root_body) {
+            let entry = &mut ownership_masses[root];
+            entry.0 += self.mass_kg;
+            entry.2 += rows_to_matrix(self.inertia_body_kg_m2);
+            entry.0 += power_mass_properties.mass_kg;
+            entry.1 += power_mass_properties.center_of_mass_body_m * power_mass_properties.mass_kg;
+            entry.2 += power_mass_properties.inertia_body_kg_m2
+                + parallel_axis(
+                    power_mass_properties.mass_kg,
+                    power_mass_properties.center_of_mass_body_m,
+                );
+            entry.0 += thermal_mass_properties.mass_kg;
+            entry.1 +=
+                thermal_mass_properties.center_of_mass_body_m * thermal_mass_properties.mass_kg;
+            entry.2 += thermal_mass_properties.inertia_body_kg_m2
+                + parallel_axis(
+                    thermal_mass_properties.mass_kg,
+                    thermal_mass_properties.center_of_mass_body_m,
+                );
+        }
         // Assembly center of mass over EVERYTHING: hand mass rides the
         // authoring origin; surfaces, propulsion, electrical power hardware,
         // thermal hardware, and other installed masses ride their authored
@@ -853,11 +1038,13 @@ impl VehicleAsset {
             .with_systems(system_mounts)?
             .with_fold_joints(fold_joints)?
             .with_jets(jet_mounts)?
+            .with_auxiliary_power_units(auxiliary_power_unit_mounts)?
             .with_electric_thrusters(electric_thruster_mounts)?
             .with_fusion_torches(fusion_torch_mounts)?
             .with_pulsed_fusion_systems(pulsed_fusion_mounts)?
             .with_propeller_drives(propeller_drive_mounts)?
             .with_turboprops(turboprop_mounts)?
+            .with_rcs_mounts(rcs_mounts)?
             .with_cabins(body_cabins)?
             .with_cabin_exits(body_cabin_exits)?
             .with_cabin_seats(body_cabin_seats)?
@@ -869,8 +1056,54 @@ impl VehicleAsset {
             .with_reaction_wheels(reaction_wheel_banks)?
             .with_parachutes(parachutes)?
             .with_heat_shields(body_heat_shield_mounts)?
+            .with_docking_ports(body_docking_ports)?
             .with_electrical_power(electrical_power)?
             .with_thermal(thermal)?;
+        vehicle = vehicle.with_resource_feed_ports(resource_feed_ports)?;
+        // Baked ownership for split reconstruction: per-body subsystem
+        // indices tracked through the body loop plus centroidal masses in
+        // the final COM frame (authoring sums recentered by the same shift
+        // applied to every station below).
+        let assembly_ownership = runtime_assembly.as_ref().map(|assembly| {
+            let body_masses = ownership_masses
+                .iter()
+                .enumerate()
+                .map(|(body, (mass, moment, inertia_origin))| {
+                    if !mass.is_finite() || *mass <= 0.0 || !moment.is_finite() {
+                        return Err(format!(
+                            "assembly body '{}' has no positive finite baked mass",
+                            assembly.body_names[body]
+                        ));
+                    }
+                    let center = *moment / *mass;
+                    Ok(AssemblyBodyMassProperties {
+                        mass_kg: *mass,
+                        center_of_mass_body_m: center + shift,
+                        inertia_about_center_body_kg_m2: *inertia_origin
+                            - parallel_axis(*mass, center),
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok::<_, String>(AssemblyOwnership {
+                panel_bodies: ownership_panel_bodies,
+                collision_bodies: ownership_collision_bodies,
+                cabin_bodies: ownership_cabin_bodies,
+                cabin_exit_bodies: ownership_cabin_exit_bodies,
+                cabin_seat_bodies: ownership_cabin_seat_bodies,
+                cabin_monument_bodies: ownership_cabin_monument_bodies,
+                control_core_bodies: ownership_control_core_bodies,
+                control_station_bodies: ownership_control_station_bodies,
+                engine_bodies: Vec::new(),
+                tank_bodies: ownership_tank_bodies,
+                system_bodies: Vec::new(),
+                jet_bodies: Vec::new(),
+                rcs_bodies: Vec::new(),
+                heat_shield_bodies: ownership_heat_shield_bodies,
+                docking_port_bodies: ownership_docking_port_bodies,
+                body_masses,
+            })
+        });
+        let assembly_ownership = assembly_ownership.transpose()?;
         if let Some(assembly) = runtime_assembly {
             vehicle = vehicle.with_assembly(assembly)?;
             for cabin in &vehicle.cabins {
@@ -882,15 +1115,18 @@ impl VehicleAsset {
                     cabin.temp_k
                 );
             }
+            vehicle.assembly_ownership = assembly_ownership;
         }
         vehicle.bake_engine_masses()?;
         vehicle.bake_tank_masses()?;
         vehicle.bake_system_masses()?;
         vehicle.bake_jet_masses()?;
+        vehicle.bake_auxiliary_power_unit_masses()?;
         vehicle.bake_electric_thruster_masses()?;
         vehicle.bake_fusion_masses()?;
         vehicle.bake_propeller_drive_masses()?;
         vehicle.bake_turboprop_masses()?;
+        vehicle.bake_rcs_masses()?;
         vehicle.bake_wheel_chassis_masses()?;
         vehicle.bake_landing_leg_masses()?;
         vehicle.bake_reaction_wheel_masses()?;
@@ -937,6 +1173,9 @@ impl VehicleAsset {
         for mount in &mut vehicle.jets {
             shift_array(&mut mount.position_body_m, shift);
         }
+        for mount in &mut vehicle.auxiliary_power_units {
+            shift_array(&mut mount.position_body_m, shift);
+        }
         for mount in &mut vehicle.electric_thrusters {
             shift_array(&mut mount.position_body_m, shift);
         }
@@ -950,6 +1189,9 @@ impl VehicleAsset {
             shift_array(&mut mount.position_body_m, shift);
         }
         for mount in &mut vehicle.turboprops {
+            shift_array(&mut mount.position_body_m, shift);
+        }
+        for mount in &mut vehicle.rcs_mounts {
             shift_array(&mut mount.position_body_m, shift);
         }
         for chassis in &mut vehicle.wheel_chassis {
@@ -980,6 +1222,9 @@ impl VehicleAsset {
         for shield in &mut vehicle.heat_shields {
             shield.position_body_m = shift_point(shield.position_body_m);
         }
+        for port in &mut vehicle.docking_ports {
+            port.local_position_m = shift_point(port.local_position_m);
+        }
         for battery in &mut vehicle.electrical_power.batteries {
             battery.position_body_m = shift_point(battery.position_body_m);
         }
@@ -991,6 +1236,9 @@ impl VehicleAsset {
         }
         for reactor in &mut vehicle.electrical_power.reactors {
             reactor.position_body_m = shift_point(reactor.position_body_m);
+        }
+        for fuel_cell in &mut vehicle.electrical_power.fuel_cells {
+            fuel_cell.position_body_m = shift_point(fuel_cell.position_body_m);
         }
         for node in &mut vehicle.thermal.nodes {
             node.position_body_m = shift_point(node.position_body_m);

@@ -417,6 +417,11 @@ impl EstocSpec {
         let bulk_fuel = self.bulk_fuel.unwrap_or(self.air.fuel);
         let mut air_spec = self.air.clone();
         air_spec.fuel = bulk_fuel;
+        if air_spec.shaft.multi_spool.is_some() {
+            return Err(PropulsionError::UnsupportedCombination(
+                "multi-spool ESTOC mode transitions are not implemented; use a single-spool air core".into(),
+            ));
+        }
         let air = air_spec.compile()?;
         let pair = bulk_fuel.lox_pair();
         let of_ratio = self
@@ -1672,6 +1677,7 @@ mod tests {
             dt_s: 0.1,
             shaft,
             starter_engaged: false,
+            pneumatic_starter_power_w: 0.0,
             generator_load_w: 0.0,
         };
         let condition = condition_at(2.0, 101_325.0);

@@ -14,6 +14,7 @@ mod assembly;
 mod cabin;
 mod collision;
 mod docking;
+mod fleet;
 mod flight;
 mod landing_gear;
 mod parachute;
@@ -26,8 +27,10 @@ mod thermal;
 mod vehicle;
 
 pub use assembly::{
-    AssemblyEndpoint, AssemblyError, AssemblyLinkState, AssemblyVolume, NamedAssemblyLink,
-    VehicleAssembly, air_groups, crew_groups, feed_reachable,
+    AssemblyBodyMassProperties, AssemblyEndpoint, AssemblyError, AssemblyJointLoad,
+    AssemblyLinkState, AssemblyOwnership, AssemblyVolume, NamedAssemblyJointStrength,
+    NamedAssemblyLink, NamedAssemblyResourceEdge, ReconstructedAssemblyCluster, VehicleAssembly,
+    air_groups, crew_groups, feed_reachable, feed_reachable_with_resource_edges,
 };
 pub use cabin::{
     AuthorityReason, AutopilotTier, CabinError, CabinExit, CabinExitSide, CabinExitType,
@@ -44,6 +47,7 @@ pub use docking::{
     DockingError, DockingKinematics, DockingPortClass, DockingPortSpec, DockingPortState,
     DockingSession,
 };
+pub use fleet::{DockGraph, FleetError, VehicleId};
 pub use flight::{
     FlightError, FlightForces, FlightStepInput, RigidBodyProperties, RigidBodyState,
     constant_spin_orientation, evaluate_flight_forces, evaluate_flight_forces_soa,
@@ -69,17 +73,22 @@ pub use parachute::{
 pub use part_command::VehiclePartCommand;
 pub use power::{
     BatteryPowerTelemetry, BatterySpec, ElectricalPowerCommand, ElectricalPowerError,
-    ElectricalPowerState, ElectricalPowerSystem, ElectricalPowerTelemetry, PowerAllocation,
-    PowerConsumerSpec, PowerPriority, PowerSystemMassProperties, ReactorPowerTelemetry,
-    ReactorSpec, SolarArrayDeployment, SolarArrayPowerTelemetry, SolarArraySpec,
-    SolarArrayTracking, SolarFluxSource, SolarOccluder, UltracapacitorPowerTelemetry,
-    UltracapacitorSpec,
+    ElectricalPowerState, ElectricalPowerSystem, ElectricalPowerTelemetry,
+    FUEL_CELL_HYDROGEN_LHV_J_KG, FUEL_CELL_OXYGEN_HYDROGEN_RATIO, FuelCellPowerTelemetry,
+    FuelCellSpec, PowerAllocation, PowerConsumerSpec, PowerPriority, PowerSystemMassProperties,
+    ReactorPowerTelemetry, ReactorSpec, SolarArrayDeployment, SolarArrayPowerTelemetry,
+    SolarArraySpec, SolarArrayTracking, SolarFluxSource, SolarOccluder,
+    UltracapacitorPowerTelemetry, UltracapacitorSpec,
 };
 pub use reaction_wheel::{
     ReactionWheelAllocation, ReactionWheelBankSpec, ReactionWheelError, allocate_reaction_wheels,
     allocate_reaction_wheels_with_enabled_banks,
 };
-pub use resources::{VehiclePropulsionAllocation, VehicleResourceState};
+pub use resources::{
+    ConsumerResourceAllocation, FeedResourceProperties, VehicleAuxiliaryPowerUnitStep,
+    VehiclePropulsionAllocation, VehicleResourceDemand, VehicleResourceFeedPort,
+    VehicleResourcePlan, VehicleResourceState,
+};
 pub use shield::{HeatShieldMount, ShieldError};
 pub use thermal::{
     RadiatorDeployment, RadiatorSpec, RadiatorTelemetry, ThermalCommand, ThermalError,

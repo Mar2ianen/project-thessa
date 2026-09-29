@@ -309,6 +309,20 @@ pub struct ContactSummary {
     pub approach_speed_mps: f64,
 }
 
+/// Constraint load transmitted by one impulse joint during the most recent
+/// contact step. Rapier's generalized impulse is divided by the caller's step
+/// duration; translational and rotational channels remain separate.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct JointLoadSummary {
+    pub joint_id: JointId,
+    pub body_a: CollisionBodyId,
+    pub body_b: CollisionBodyId,
+    /// Resultant constraint force magnitude (N).
+    pub force_n: f64,
+    /// Resultant constraint moment magnitude (N·m).
+    pub torque_nm: f64,
+}
+
 /// One reduced-order tire/terrain contact evaluated from Rapier ray geometry.
 /// Wheel colliders are deliberately absent from the solid solver path, so this
 /// force is the sole tire reaction for the reported wheel.

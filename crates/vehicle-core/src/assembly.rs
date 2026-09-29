@@ -6,12 +6,13 @@
 //! connectivity from link states with no geometry, so opening or sealing
 //! a hatch updates crew, air, and fuel domains through one code path.
 
-use glam::DVec3;
+use glam::{DMat3, DVec3};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt};
 
 use crate::{
-    CabinPressureState, CrewSuitMode, MOLAR_MASS_AIR_G_MOL, MOLAR_MASS_O2_G_MOL, PressurizedCabin,
+    CabinPressureState, CrewSuitMode, FeedLine, MOLAR_MASS_AIR_G_MOL, MOLAR_MASS_O2_G_MOL,
+    PressurizedCabin, RigidBodyProperties, RigidBodyState,
 };
 
 /// Assembly connectivity failure modes.
@@ -19,6 +20,8 @@ use crate::{
 pub enum AssemblyError {
     InvalidLink(String),
     InvalidCabinState(String),
+    InvalidBodyMass(String),
+    InvalidRigidBodyState(String),
 }
 
 impl fmt::Display for AssemblyError {
@@ -27,6 +30,12 @@ impl fmt::Display for AssemblyError {
             Self::InvalidLink(message) => write!(formatter, "invalid assembly link: {message}"),
             Self::InvalidCabinState(message) => {
                 write!(formatter, "invalid assembly cabin state: {message}")
+            }
+            Self::InvalidBodyMass(message) => {
+                write!(formatter, "invalid assembly body mass: {message}")
+            }
+            Self::InvalidRigidBodyState(message) => {
+                write!(formatter, "invalid assembly rigid-body state: {message}")
             }
         }
     }
@@ -73,10 +82,283 @@ impl AssemblyLinkState {
 
 /// A named hatch/stack link in the baked vehicle. `state.a` and
 /// `state.b` index `VehicleAssembly::body_names`, not cabin volumes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NamedAssemblyLink {
     pub name: String,
     pub state: AssemblyLinkState,
+    /// Optional authored liquid-feed pipe across this joint. The structure
+    /// and cabin topology are unchanged when the line is closed/unavailable.
+    #[serde(default)]
+    pub feed_line: Option<FeedLine>,
+}
+
+/// Explicit non-structural crossfeed edge between two assembly bodies. It
+/// carries resource reachability only: it never joins structure, crew, or air.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NamedAssemblyResourceEdge {
+    pub name: String,
+    pub a: usize,
+    pub b: usize,
+    pub open: bool,
+    /// Optional pressure-loss segment on this non-structural crossfeed.
+    #[serde(default)]
+    pub feed_line: Option<FeedLine>,
+}
+
+impl NamedAssemblyResourceEdge {
+    pub fn validate(&self, node_count: usize) -> Result<(), AssemblyError> {
+        if self.name.trim().is_empty()
+            || self.a >= node_count
+            || self.b >= node_count
+            || self.a == self.b
+        {
+            return Err(AssemblyError::InvalidLink(format!(
+                "invalid non-structural resource edge '{}'",
+                self.name
+            )));
+        }
+        if let Some(line) = self.feed_line {
+            line.validate().map_err(|error| {
+                AssemblyError::InvalidLink(format!(
+                    "invalid feed line on resource edge '{}': {error}",
+                    self.name
+                ))
+            })?;
+        }
+        Ok(())
+    }
+}
+
+/// Authored physical strength rating for one structural assembly link.
+///
+/// Limits are hardware ratings (force and moment magnitudes the joint
+/// tolerates), not game coefficients: the solver reports constraint loads,
+/// this record states what the hardware withstands, and
+/// [`VehicleAssembly::find_failed_joint`] compares the two. Links without a
+/// rating never fail by load and are documented as unrated.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NamedAssemblyJointStrength {
+    pub link_name: String,
+    pub failure_force_n: f64,
+    pub failure_moment_nm: f64,
+}
+
+impl NamedAssemblyJointStrength {
+    pub fn validate(&self) -> Result<(), AssemblyError> {
+        if self.link_name.trim().is_empty()
+            || !self.failure_force_n.is_finite()
+            || self.failure_force_n <= 0.0
+            || !self.failure_moment_nm.is_finite()
+            || self.failure_moment_nm <= 0.0
+        {
+            return Err(AssemblyError::InvalidLink(format!(
+                "invalid joint strength for link '{}'",
+                self.link_name
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Measured solver load on one structural link: resultant constraint force
+/// and moment magnitudes from the collision backend
+/// (`CollisionWorld::joint_loads`). Non-finite or negative magnitudes fail
+/// closed at assessment time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssemblyJointLoad {
+    pub link_name: String,
+    pub force_n: f64,
+    pub moment_nm: f64,
+}
+
+/// Baked per-body ownership of vehicle subsystems.
+///
+/// The baker records which assembly body owns each aero panel, collision
+/// part, cabin record, and propulsion mount at compile time, plus the
+/// complete per-body mass in the final vehicle COM frame. Every index vector
+/// is parallel to its subsystem vector on the owning `VehicleDefinition`;
+/// `body_masses` is indexed like `VehicleAssembly::body_names`.
+///
+/// Hand-authored items without an explicit `body` ride the root body
+/// (legacy single-part path); procedural-body items carry their compiling
+/// body. `VehicleDefinition::split_definitions_after_link_failure` consumes
+/// this record to partition independent cluster definitions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct AssemblyOwnership {
+    #[serde(default)]
+    pub panel_bodies: Vec<usize>,
+    #[serde(default)]
+    pub collision_bodies: Vec<usize>,
+    #[serde(default)]
+    pub cabin_bodies: Vec<usize>,
+    #[serde(default)]
+    pub cabin_exit_bodies: Vec<usize>,
+    #[serde(default)]
+    pub cabin_seat_bodies: Vec<usize>,
+    #[serde(default)]
+    pub cabin_monument_bodies: Vec<usize>,
+    #[serde(default)]
+    pub control_core_bodies: Vec<usize>,
+    #[serde(default)]
+    pub control_station_bodies: Vec<usize>,
+    #[serde(default)]
+    pub engine_bodies: Vec<usize>,
+    #[serde(default)]
+    pub tank_bodies: Vec<usize>,
+    #[serde(default)]
+    pub system_bodies: Vec<usize>,
+    #[serde(default)]
+    pub jet_bodies: Vec<usize>,
+    #[serde(default)]
+    pub rcs_bodies: Vec<usize>,
+    #[serde(default)]
+    pub heat_shield_bodies: Vec<usize>,
+    #[serde(default)]
+    pub docking_port_bodies: Vec<usize>,
+    /// Complete per-body mass (structure, mounts, inventories, shared-system
+    /// hardware attributed to the root body) in the source vehicle COM
+    /// frame. Splits validate these against the source mass properties
+    /// before accepting any cluster.
+    #[serde(default)]
+    pub body_masses: Vec<AssemblyBodyMassProperties>,
+}
+
+impl AssemblyOwnership {
+    /// Apply point-mass inventory changes in the current vehicle frame and
+    /// return updated centroidal records. `intrinsic_inertia_delta` carries
+    /// any inventory-dependent inertia change at the same station.
+    pub(crate) fn body_masses_after_deltas(
+        &self,
+        deltas: &[(usize, f64, DVec3, DMat3)],
+    ) -> Result<Vec<AssemblyBodyMassProperties>, AssemblyError> {
+        let mut body_masses = self.body_masses.clone();
+        for (body, delta_mass_kg, position_body_m, intrinsic_inertia_delta) in deltas {
+            if *body >= body_masses.len()
+                || !delta_mass_kg.is_finite()
+                || !position_body_m.is_finite()
+                || !intrinsic_inertia_delta.is_finite()
+            {
+                return Err(AssemblyError::InvalidBodyMass(
+                    "dynamic body-mass delta is invalid".into(),
+                ));
+            }
+            if *delta_mass_kg == 0.0 && *intrinsic_inertia_delta == DMat3::ZERO {
+                continue;
+            }
+            let mass = &mut body_masses[*body];
+            let next_mass_kg = mass.mass_kg + *delta_mass_kg;
+            if !next_mass_kg.is_finite() || next_mass_kg <= 0.0 {
+                return Err(AssemblyError::InvalidBodyMass(format!(
+                    "dynamic mass change leaves body {body} without positive mass"
+                )));
+            }
+            let old_inertia_about_origin = mass.inertia_about_center_body_kg_m2
+                + parallel_axis(mass.mass_kg, mass.center_of_mass_body_m);
+            let next_first_moment =
+                mass.center_of_mass_body_m * mass.mass_kg + *position_body_m * *delta_mass_kg;
+            let next_center = next_first_moment / next_mass_kg;
+            let next_inertia_about_origin = old_inertia_about_origin
+                + parallel_axis(*delta_mass_kg, *position_body_m)
+                + *intrinsic_inertia_delta;
+            let next_inertia_about_center =
+                next_inertia_about_origin - parallel_axis(next_mass_kg, next_center);
+            RigidBodyProperties::new(next_mass_kg, next_inertia_about_center).map_err(|error| {
+                AssemblyError::InvalidBodyMass(format!("dynamic body {body}: {error}"))
+            })?;
+            mass.mass_kg = next_mass_kg;
+            mass.center_of_mass_body_m = next_center;
+            mass.inertia_about_center_body_kg_m2 = next_inertia_about_center;
+        }
+        Ok(body_masses)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn validate(
+        &self,
+        body_count: usize,
+        panels: usize,
+        collisions: usize,
+        cabins: usize,
+        exits: usize,
+        seats: usize,
+        monuments: usize,
+        cores: usize,
+        stations: usize,
+        engines: usize,
+        tanks: usize,
+        systems: usize,
+        jets: usize,
+        rcs_mounts: usize,
+        heat_shields: usize,
+        docking_ports: usize,
+    ) -> Result<(), AssemblyError> {
+        let counts = [
+            ("panel", self.panel_bodies.len(), panels),
+            ("collision", self.collision_bodies.len(), collisions),
+            ("cabin", self.cabin_bodies.len(), cabins),
+            ("cabin-exit", self.cabin_exit_bodies.len(), exits),
+            ("cabin-seat", self.cabin_seat_bodies.len(), seats),
+            (
+                "cabin-monument",
+                self.cabin_monument_bodies.len(),
+                monuments,
+            ),
+            ("control-core", self.control_core_bodies.len(), cores),
+            (
+                "control-station",
+                self.control_station_bodies.len(),
+                stations,
+            ),
+            ("engine", self.engine_bodies.len(), engines),
+            ("tank", self.tank_bodies.len(), tanks),
+            ("system", self.system_bodies.len(), systems),
+            ("jet", self.jet_bodies.len(), jets),
+            ("rcs", self.rcs_bodies.len(), rcs_mounts),
+            ("heat-shield", self.heat_shield_bodies.len(), heat_shields),
+            (
+                "docking-port",
+                self.docking_port_bodies.len(),
+                docking_ports,
+            ),
+        ];
+        for (what, got, want) in counts {
+            if got != want {
+                return Err(AssemblyError::InvalidLink(format!(
+                    "assembly ownership tracks {got} {what} bodies for {want} {what} parts"
+                )));
+            }
+        }
+        for bodies in [
+            &self.panel_bodies,
+            &self.collision_bodies,
+            &self.cabin_bodies,
+            &self.cabin_exit_bodies,
+            &self.cabin_seat_bodies,
+            &self.cabin_monument_bodies,
+            &self.control_core_bodies,
+            &self.control_station_bodies,
+            &self.engine_bodies,
+            &self.tank_bodies,
+            &self.system_bodies,
+            &self.jet_bodies,
+            &self.rcs_bodies,
+            &self.heat_shield_bodies,
+            &self.docking_port_bodies,
+        ] {
+            if bodies.iter().any(|body| *body >= body_count) {
+                return Err(AssemblyError::InvalidLink(
+                    "assembly ownership references an unknown body".into(),
+                ));
+            }
+        }
+        if self.body_masses.len() != body_count {
+            return Err(AssemblyError::InvalidBodyMass(format!(
+                "expected {body_count} body mass records, got {}",
+                self.body_masses.len()
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Interior region address in one assembled part.
@@ -100,6 +382,33 @@ pub struct AssemblyEndpoint {
     pub body: usize,
 }
 
+/// Complete mass contribution of one authored assembly body, expressed in
+/// the source vehicle's body frame. The tensor is centroidal and uses the
+/// source vehicle's body axes. Runtime callers must include every mass item
+/// owned by the body before requesting a breakup reconstruction.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AssemblyBodyMassProperties {
+    pub mass_kg: f64,
+    pub center_of_mass_body_m: DVec3,
+    pub inertia_about_center_body_kg_m2: DMat3,
+}
+
+/// One physically reconstructed connected component after a structural link
+/// failure. `state` is recentered on this component's COM; orientation and
+/// angular velocity initially match the pre-failure rigid cluster.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReconstructedAssemblyCluster {
+    /// Indices into the original `VehicleAssembly::body_names` list.
+    pub body_indices: Vec<usize>,
+    /// Independently valid topology with local body indices.
+    pub assembly: VehicleAssembly,
+    pub mass_properties: RigidBodyProperties,
+    /// Cluster COM in the original vehicle body frame at release.
+    pub center_of_mass_body_m: DVec3,
+    /// Inertial state recentered on `center_of_mass_body_m`.
+    pub state: RigidBodyState,
+}
+
 /// Runtime assembly connectivity retained by `VehicleDefinition`.
 /// Physical geometry has already been transformed and merged by the baker;
 /// this graph keeps hatch state and compartment/resource reachability live.
@@ -108,6 +417,13 @@ pub struct VehicleAssembly {
     pub root_body: usize,
     pub body_names: Vec<String>,
     pub links: Vec<NamedAssemblyLink>,
+    /// Runtime crossfeed edges outside the structural part tree.
+    #[serde(default)]
+    pub resource_edges: Vec<NamedAssemblyResourceEdge>,
+    /// Authored physical strength ratings per structural link. Empty keeps
+    /// legacy assets valid; unrated links never fail by solver load.
+    #[serde(default)]
+    pub joint_strengths: Vec<NamedAssemblyJointStrength>,
     pub volumes: Vec<AssemblyVolume>,
     pub tanks: Vec<AssemblyEndpoint>,
     pub engine_ports: Vec<AssemblyEndpoint>,
@@ -139,6 +455,7 @@ impl VehicleAssembly {
             )));
         }
         let mut link_names = std::collections::HashSet::new();
+        let mut resource_edge_names = std::collections::HashSet::new();
         let mut union = UnionFind::new(self.body_names.len());
         let mut indegree = vec![0_u8; self.body_names.len()];
         for link in &self.links {
@@ -148,6 +465,14 @@ impl VehicleAssembly {
                 ));
             }
             link.state.validate(self.body_names.len())?;
+            if let Some(line) = link.feed_line {
+                line.validate().map_err(|error| {
+                    AssemblyError::InvalidLink(format!(
+                        "invalid feed line on assembly link '{}': {error}",
+                        link.name
+                    ))
+                })?;
+            }
             if link.state.b >= indegree.len() || indegree[link.state.b] != 0 {
                 return Err(AssemblyError::InvalidLink(format!(
                     "body '{}' has multiple assembly parents",
@@ -165,6 +490,35 @@ impl VehicleAssembly {
                 return Err(AssemblyError::InvalidLink(format!(
                     "stack link '{}' must remain open",
                     link.name
+                )));
+            }
+        }
+        for edge in &self.resource_edges {
+            edge.validate(self.body_names.len())?;
+            if !resource_edge_names.insert(edge.name.as_str()) {
+                return Err(AssemblyError::InvalidLink(format!(
+                    "duplicate resource edge name '{}'",
+                    edge.name
+                )));
+            }
+        }
+        let mut strength_names = std::collections::HashSet::new();
+        for strength in &self.joint_strengths {
+            strength.validate()?;
+            if !strength_names.insert(strength.link_name.as_str()) {
+                return Err(AssemblyError::InvalidLink(format!(
+                    "duplicate joint strength for link '{}'",
+                    strength.link_name
+                )));
+            }
+            if !self
+                .links
+                .iter()
+                .any(|link| link.name == strength.link_name)
+            {
+                return Err(AssemblyError::InvalidLink(format!(
+                    "joint strength references unknown link '{}'",
+                    strength.link_name
                 )));
             }
         }
@@ -230,6 +584,374 @@ impl VehicleAssembly {
         }
         link.state.open = open;
         Ok(())
+    }
+
+    /// Open or close a named crossfeed edge without changing structural,
+    /// crew, or cabin topology.
+    pub fn set_resource_edge_open(&mut self, name: &str, open: bool) -> Result<(), AssemblyError> {
+        let edge = self
+            .resource_edges
+            .iter_mut()
+            .find(|edge| edge.name == name)
+            .ok_or_else(|| AssemblyError::InvalidLink(format!("unknown resource edge '{name}'")))?;
+        edge.open = open;
+        Ok(())
+    }
+
+    /// Compare measured solver loads against authored joint strength
+    /// ratings and return the first failed link in authored link order.
+    ///
+    /// Loads carry resultant force/moment magnitudes from the collision
+    /// backend; ratings carry what the hardware withstands. A link fails
+    /// when either magnitude strictly exceeds its rating. Links without a
+    /// rating never fail here. Unknown or duplicate link names, and
+    /// non-finite or negative magnitudes, fail closed. Missing loads mean
+    /// no evidence and never fail.
+    pub fn find_failed_joint(
+        &self,
+        loads: &[AssemblyJointLoad],
+    ) -> Result<Option<String>, AssemblyError> {
+        self.validate()?;
+        let mut seen = std::collections::HashSet::new();
+        let mut by_link = std::collections::HashMap::new();
+        for load in loads {
+            if load.link_name.trim().is_empty()
+                || !load.force_n.is_finite()
+                || load.force_n < 0.0
+                || !load.moment_nm.is_finite()
+                || load.moment_nm < 0.0
+            {
+                return Err(AssemblyError::InvalidLink(format!(
+                    "invalid joint load for link '{}'",
+                    load.link_name
+                )));
+            }
+            if !seen.insert(load.link_name.as_str()) {
+                return Err(AssemblyError::InvalidLink(format!(
+                    "duplicate joint load for link '{}'",
+                    load.link_name
+                )));
+            }
+            if !self.links.iter().any(|link| link.name == load.link_name) {
+                return Err(AssemblyError::InvalidLink(format!(
+                    "joint load references unknown link '{}'",
+                    load.link_name
+                )));
+            }
+            by_link.insert(load.link_name.as_str(), load);
+        }
+        for link in &self.links {
+            let Some(strength) = self
+                .joint_strengths
+                .iter()
+                .find(|strength| strength.link_name == link.name)
+            else {
+                continue;
+            };
+            let Some(load) = by_link.get(link.name.as_str()) else {
+                continue;
+            };
+            if load.force_n > strength.failure_force_n
+                || load.moment_nm > strength.failure_moment_nm
+            {
+                return Ok(Some(link.name.clone()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Partition structural bodies if one named assembly joint fails.
+    /// Non-structural resource edges are deliberately ignored: they may keep
+    /// fluid reachability but never keep two structural clusters together.
+    /// The result is ordered by each component's first body index and is a
+    /// topology plan for the caller that rebuilds rigid-body state.
+    pub fn body_components_after_link_failure(
+        &self,
+        failed_link_name: &str,
+    ) -> Result<Vec<Vec<usize>>, AssemblyError> {
+        self.validate()?;
+        if !self.links.iter().any(|link| link.name == failed_link_name) {
+            return Err(AssemblyError::InvalidLink(format!(
+                "unknown structural link '{failed_link_name}'"
+            )));
+        }
+        let mut adjacency = vec![Vec::new(); self.body_names.len()];
+        for link in &self.links {
+            if link.name == failed_link_name {
+                continue;
+            }
+            adjacency[link.state.a].push(link.state.b);
+            adjacency[link.state.b].push(link.state.a);
+        }
+        let mut seen = vec![false; self.body_names.len()];
+        let mut components = Vec::new();
+        for root in 0..self.body_names.len() {
+            if seen[root] {
+                continue;
+            }
+            seen[root] = true;
+            let mut stack = vec![root];
+            let mut component = Vec::new();
+            while let Some(body) = stack.pop() {
+                component.push(body);
+                for neighbor in &adjacency[body] {
+                    if !seen[*neighbor] {
+                        seen[*neighbor] = true;
+                        stack.push(*neighbor);
+                    }
+                }
+            }
+            component.sort_unstable();
+            components.push(component);
+        }
+        Ok(components)
+    }
+
+    /// Remove one structural connection and return the resulting connected
+    /// assembly topologies. A non-structural edge is retained only when both
+    /// endpoints remain in the same cluster; a resource umbilical cannot
+    /// merge separated rigid bodies. Every returned topology uses local body
+    /// indices and validates as an independent assembly.
+    pub fn split_after_link_failure(
+        &self,
+        failed_link_name: &str,
+    ) -> Result<Vec<Self>, AssemblyError> {
+        let components = self.body_components_after_link_failure(failed_link_name)?;
+        let mut split = Vec::with_capacity(components.len());
+        for component in components {
+            let mut remap = vec![None; self.body_names.len()];
+            let body_names = component
+                .iter()
+                .enumerate()
+                .map(|(local, original)| {
+                    remap[*original] = Some(local);
+                    self.body_names[*original].clone()
+                })
+                .collect::<Vec<_>>();
+            let links: Vec<NamedAssemblyLink> = self
+                .links
+                .iter()
+                .filter_map(|link| {
+                    if link.name == failed_link_name {
+                        return None;
+                    }
+                    let a = remap[link.state.a]?;
+                    let b = remap[link.state.b]?;
+                    Some(NamedAssemblyLink {
+                        name: link.name.clone(),
+                        state: AssemblyLinkState { a, b, ..link.state },
+                        feed_line: link.feed_line,
+                    })
+                })
+                .collect();
+            let resource_edges = self
+                .resource_edges
+                .iter()
+                .filter_map(|edge| {
+                    let a = remap[edge.a]?;
+                    let b = remap[edge.b]?;
+                    Some(NamedAssemblyResourceEdge {
+                        name: edge.name.clone(),
+                        a,
+                        b,
+                        open: edge.open,
+                        feed_line: edge.feed_line,
+                    })
+                })
+                .collect();
+            let joint_strengths: Vec<NamedAssemblyJointStrength> = self
+                .joint_strengths
+                .iter()
+                .filter(|strength| {
+                    strength.link_name != failed_link_name
+                        && links.iter().any(|link| link.name == strength.link_name)
+                })
+                .cloned()
+                .collect();
+            let mut assembly = Self {
+                root_body: remap[self.root_body].unwrap_or(0),
+                body_names,
+                links,
+                resource_edges,
+                joint_strengths,
+                volumes: self
+                    .volumes
+                    .iter()
+                    .filter_map(|volume| {
+                        let body = remap[volume.body]?;
+                        Some(AssemblyVolume {
+                            name: volume.name.clone(),
+                            body,
+                            pressurized: volume.pressurized,
+                            volume_m3: volume.volume_m3,
+                            centroid_body_m: volume.centroid_body_m,
+                            seats: volume.seats,
+                            seat_positions_body_m: volume.seat_positions_body_m.clone(),
+                        })
+                    })
+                    .collect(),
+                tanks: self
+                    .tanks
+                    .iter()
+                    .filter_map(|endpoint| {
+                        Some(AssemblyEndpoint {
+                            name: endpoint.name.clone(),
+                            body: remap[endpoint.body]?,
+                        })
+                    })
+                    .collect(),
+                engine_ports: self
+                    .engine_ports
+                    .iter()
+                    .filter_map(|endpoint| {
+                        Some(AssemblyEndpoint {
+                            name: endpoint.name.clone(),
+                            body: remap[endpoint.body]?,
+                        })
+                    })
+                    .collect(),
+            };
+            // The root remains the authored root when present; otherwise the
+            // first body of this independent cluster becomes its local root.
+            if !component.contains(&self.root_body) {
+                assembly.root_body = 0;
+            }
+            assembly.validate()?;
+            split.push(assembly);
+        }
+        Ok(split)
+    }
+
+    /// Rebuild the rigid-body mass state for every connected component after
+    /// one structural link fails. Body mass data is indexed like
+    /// `body_names`, is expressed in the source vehicle body frame, and must
+    /// account for all mass attached to each body. Unassigned vehicle-level
+    /// mass cannot be apportioned here and therefore fails closed by requiring
+    /// exactly one mass record per authored body.
+    pub fn reconstruct_clusters_after_link_failure(
+        &self,
+        failed_link_name: &str,
+        body_mass_properties: &[AssemblyBodyMassProperties],
+        source_mass_properties: RigidBodyProperties,
+        source_state: RigidBodyState,
+    ) -> Result<Vec<ReconstructedAssemblyCluster>, AssemblyError> {
+        if body_mass_properties.len() != self.body_names.len() {
+            return Err(AssemblyError::InvalidBodyMass(format!(
+                "expected {} body mass records, got {}",
+                self.body_names.len(),
+                body_mass_properties.len()
+            )));
+        }
+        RigidBodyState::new(
+            source_state.position_inertial_m,
+            source_state.velocity_inertial_mps,
+            source_state.orientation_body_to_inertial,
+            source_state.angular_velocity_body_rps,
+        )
+        .map_err(|error| AssemblyError::InvalidRigidBodyState(error.to_string()))?;
+        for (body, properties) in body_mass_properties.iter().enumerate() {
+            if !properties.center_of_mass_body_m.is_finite() {
+                return Err(AssemblyError::InvalidBodyMass(format!(
+                    "body '{}' has a non-finite center of mass",
+                    self.body_names[body]
+                )));
+            }
+            RigidBodyProperties::new(
+                properties.mass_kg,
+                properties.inertia_about_center_body_kg_m2,
+            )
+            .map_err(|error| {
+                AssemblyError::InvalidBodyMass(format!("body '{}': {error}", self.body_names[body]))
+            })?;
+        }
+
+        RigidBodyProperties::new(
+            source_mass_properties.mass_kg,
+            source_mass_properties.inertia_body_kg_m2,
+        )
+        .map_err(|error| AssemblyError::InvalidBodyMass(format!("source vehicle: {error}")))?;
+        let all_bodies = (0..body_mass_properties.len()).collect::<Vec<_>>();
+        let (source_center_of_mass, reconstructed_source_properties) =
+            aggregate_cluster_mass(&all_bodies, body_mass_properties)?;
+        let mass_tolerance_kg = source_mass_properties.mass_kg.max(1.0) * 1e-10;
+        let inertia_scale = source_mass_properties
+            .inertia_body_kg_m2
+            .x_axis
+            .abs()
+            .max_element()
+            .max(
+                source_mass_properties
+                    .inertia_body_kg_m2
+                    .y_axis
+                    .abs()
+                    .max_element(),
+            )
+            .max(
+                source_mass_properties
+                    .inertia_body_kg_m2
+                    .z_axis
+                    .abs()
+                    .max_element(),
+            )
+            .max(1.0);
+        let inertia_error = source_mass_properties.inertia_body_kg_m2
+            - reconstructed_source_properties.inertia_body_kg_m2;
+        let max_inertia_error = inertia_error
+            .x_axis
+            .abs()
+            .max_element()
+            .max(inertia_error.y_axis.abs().max_element())
+            .max(inertia_error.z_axis.abs().max_element());
+        if (reconstructed_source_properties.mass_kg - source_mass_properties.mass_kg).abs()
+            > mass_tolerance_kg
+            || source_center_of_mass.length() > 1e-9
+            || max_inertia_error > inertia_scale * 1e-9
+        {
+            return Err(AssemblyError::InvalidBodyMass(
+                "body mass records do not conserve source mass, COM, and inertia".into(),
+            ));
+        }
+
+        let topologies = self.split_after_link_failure(failed_link_name)?;
+        let mut clusters = Vec::with_capacity(topologies.len());
+        for topology in topologies {
+            let body_indices = topology
+                .body_names
+                .iter()
+                .map(|name| {
+                    self.body_names
+                        .iter()
+                        .position(|source_name| source_name == name)
+                        .ok_or_else(|| {
+                            AssemblyError::InvalidLink(format!(
+                                "split topology contains unknown body '{name}'"
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let (center_of_mass_body_m, mass_properties) =
+                aggregate_cluster_mass(&body_indices, body_mass_properties)?;
+            let offset_inertial_m =
+                source_state.orientation_body_to_inertial * center_of_mass_body_m;
+            let angular_velocity_inertial_rps =
+                source_state.orientation_body_to_inertial * source_state.angular_velocity_body_rps;
+            let state = RigidBodyState::new(
+                source_state.position_inertial_m + offset_inertial_m,
+                source_state.velocity_inertial_mps
+                    + angular_velocity_inertial_rps.cross(offset_inertial_m),
+                source_state.orientation_body_to_inertial,
+                source_state.angular_velocity_body_rps,
+            )
+            .map_err(|error| AssemblyError::InvalidRigidBodyState(error.to_string()))?;
+            clusters.push(ReconstructedAssemblyCluster {
+                body_indices,
+                assembly: topology,
+                mass_properties,
+                center_of_mass_body_m,
+                state,
+            });
+        }
+        Ok(clusters)
     }
 
     /// Equalize each connected pressure domain as a single ideal-gas state
@@ -551,9 +1273,10 @@ impl VehicleAssembly {
             .iter()
             .map(|endpoint| endpoint.body)
             .collect();
-        let reachable = feed_reachable(
+        let reachable = feed_reachable_with_resource_edges(
             self.body_names.len(),
             &self.links.iter().map(|link| link.state).collect::<Vec<_>>(),
+            &self.resource_edges,
             &tank_bodies,
             &port_bodies,
         )?;
@@ -689,6 +1412,49 @@ impl UnionFind {
     }
 }
 
+fn aggregate_cluster_mass(
+    body_indices: &[usize],
+    body_mass_properties: &[AssemblyBodyMassProperties],
+) -> Result<(DVec3, RigidBodyProperties), AssemblyError> {
+    let mass_kg = body_indices
+        .iter()
+        .map(|index| body_mass_properties[*index].mass_kg)
+        .sum::<f64>();
+    let first_moment = body_indices.iter().fold(DVec3::ZERO, |sum, index| {
+        let body = body_mass_properties[*index];
+        sum + body.center_of_mass_body_m * body.mass_kg
+    });
+    if !mass_kg.is_finite() || mass_kg <= 0.0 || !first_moment.is_finite() {
+        return Err(AssemblyError::InvalidBodyMass(
+            "cluster mass or first moment overflowed".into(),
+        ));
+    }
+    let center_of_mass_body_m = first_moment / mass_kg;
+    if !center_of_mass_body_m.is_finite() {
+        return Err(AssemblyError::InvalidBodyMass(
+            "cluster center of mass is non-finite".into(),
+        ));
+    }
+    let inertia_about_center_body_kg_m2 =
+        body_indices.iter().fold(DMat3::ZERO, |inertia, index| {
+            let body = body_mass_properties[*index];
+            let offset = body.center_of_mass_body_m - center_of_mass_body_m;
+            inertia + body.inertia_about_center_body_kg_m2 + parallel_axis(body.mass_kg, offset)
+        });
+    let mass_properties = RigidBodyProperties::new(mass_kg, inertia_about_center_body_kg_m2)
+        .map_err(|error| AssemblyError::InvalidBodyMass(error.to_string()))?;
+    Ok((center_of_mass_body_m, mass_properties))
+}
+
+fn parallel_axis(mass_kg: f64, offset_m: DVec3) -> DMat3 {
+    let outer = DMat3::from_cols(
+        offset_m * offset_m.x,
+        offset_m * offset_m.y,
+        offset_m * offset_m.z,
+    );
+    (DMat3::IDENTITY * offset_m.length_squared() - outer) * mass_kg
+}
+
 /// Crew-passable volume groups over an assembly body graph.
 /// `volume_bodies[i]` names the body containing volume `i`; link endpoints
 /// are body indices. Volumes within one body share the authored open interior.
@@ -786,12 +1552,31 @@ pub fn feed_reachable(
     tanks: &[usize],
     ports: &[usize],
 ) -> Result<Vec<(usize, usize)>, AssemblyError> {
+    feed_reachable_with_resource_edges(body_count, links, &[], tanks, ports)
+}
+
+/// Tank-to-port reachability through structural resource-open links and
+/// explicit non-structural resource edges.
+pub fn feed_reachable_with_resource_edges(
+    body_count: usize,
+    links: &[AssemblyLinkState],
+    resource_edges: &[NamedAssemblyResourceEdge],
+    tanks: &[usize],
+    ports: &[usize],
+) -> Result<Vec<(usize, usize)>, AssemblyError> {
     validate_all(body_count, links)?;
     let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); body_count];
     for link in links {
         if link.resource_open() {
             adjacency[link.a].push(link.b);
             adjacency[link.b].push(link.a);
+        }
+    }
+    for edge in resource_edges {
+        edge.validate(body_count)?;
+        if edge.open {
+            adjacency[edge.a].push(edge.b);
+            adjacency[edge.b].push(edge.a);
         }
     }
     let mut pairs = Vec::new();
@@ -892,12 +1677,308 @@ mod tests {
     }
 
     #[test]
+    fn failed_structural_link_partitions_bodies_without_using_resource_edges() {
+        let assembly = VehicleAssembly {
+            root_body: 0,
+            body_names: vec!["core".into(), "booster".into(), "fairing".into()],
+            links: vec![
+                NamedAssemblyLink {
+                    name: "core-booster".into(),
+                    state: link(0, 1, false, true),
+                    feed_line: None,
+                },
+                NamedAssemblyLink {
+                    name: "booster-fairing".into(),
+                    state: link(1, 2, false, true),
+                    feed_line: None,
+                },
+            ],
+            resource_edges: vec![
+                NamedAssemblyResourceEdge {
+                    name: "temporary-umbilical".into(),
+                    a: 0,
+                    b: 2,
+                    open: true,
+                    feed_line: None,
+                },
+                NamedAssemblyResourceEdge {
+                    name: "booster-service-line".into(),
+                    a: 1,
+                    b: 2,
+                    open: true,
+                    feed_line: None,
+                },
+            ],
+            joint_strengths: Vec::new(),
+            volumes: Vec::new(),
+            tanks: Vec::new(),
+            engine_ports: Vec::new(),
+        };
+
+        assert_eq!(
+            assembly
+                .body_components_after_link_failure("core-booster")
+                .unwrap(),
+            vec![vec![0], vec![1, 2]]
+        );
+        let split = assembly.split_after_link_failure("core-booster").unwrap();
+        assert_eq!(split.len(), 2);
+        assert_eq!(split[0].body_names, vec!["core"]);
+        assert!(split[0].resource_edges.is_empty());
+        assert_eq!(split[1].body_names, vec!["booster", "fairing"]);
+        assert_eq!(split[1].links.len(), 1);
+        assert_eq!(split[1].resource_edges.len(), 1);
+        assert_eq!(split[1].resource_edges[0].name, "booster-service-line");
+        assert!(split.iter().all(|cluster| cluster.validate().is_ok()));
+
+        let body_mass_properties = [
+            AssemblyBodyMassProperties {
+                mass_kg: 60.0,
+                center_of_mass_body_m: DVec3::new(-2.0, 0.0, 0.0),
+                inertia_about_center_body_kg_m2: DMat3::from_diagonal(DVec3::new(2.0, 3.0, 4.0)),
+            },
+            AssemblyBodyMassProperties {
+                mass_kg: 30.0,
+                center_of_mass_body_m: DVec3::X,
+                inertia_about_center_body_kg_m2: DMat3::from_diagonal(DVec3::new(1.0, 2.0, 3.0)),
+            },
+            AssemblyBodyMassProperties {
+                mass_kg: 30.0,
+                center_of_mass_body_m: DVec3::X * 3.0,
+                inertia_about_center_body_kg_m2: DMat3::from_diagonal(DVec3::new(0.2, 0.3, 0.4)),
+            },
+        ];
+        let source_state = RigidBodyState::new(
+            DVec3::new(1_000.0, 0.0, 0.0),
+            DVec3::new(20.0, 3.0, 0.0),
+            glam::DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2),
+            DVec3::new(0.0, 0.0, 2.0),
+        )
+        .unwrap();
+        let source_mass_properties =
+            RigidBodyProperties::new(120.0, DMat3::from_diagonal(DVec3::new(3.2, 545.3, 547.4)))
+                .unwrap();
+        let reconstructed = assembly
+            .reconstruct_clusters_after_link_failure(
+                "core-booster",
+                &body_mass_properties,
+                source_mass_properties,
+                source_state,
+            )
+            .unwrap();
+        assert_eq!(reconstructed.len(), 2);
+        assert_eq!(reconstructed[0].body_indices, vec![0]);
+        assert_eq!(reconstructed[1].body_indices, vec![1, 2]);
+        assert_eq!(reconstructed[0].mass_properties.mass_kg, 60.0);
+        assert_eq!(reconstructed[1].mass_properties.mass_kg, 60.0);
+        assert_eq!(
+            reconstructed[1].center_of_mass_body_m,
+            DVec3::new(2.0, 0.0, 0.0)
+        );
+        assert!(
+            (reconstructed[1].mass_properties.inertia_body_kg_m2.y_axis.y - 62.3).abs() < 1e-12
+        );
+        assert!(
+            (reconstructed[1].mass_properties.inertia_body_kg_m2.z_axis.z - 63.4).abs() < 1e-12
+        );
+        assert!(
+            (reconstructed[0].state.position_inertial_m - DVec3::new(1_000.0, -2.0, 0.0)).length()
+                < 1e-12
+        );
+        assert!(
+            (reconstructed[0].state.velocity_inertial_mps - DVec3::new(24.0, 3.0, 0.0)).length()
+                < 1e-12
+        );
+        assert!(
+            (reconstructed[1].state.position_inertial_m - DVec3::new(1_000.0, 2.0, 0.0)).length()
+                < 1e-12
+        );
+        assert!(
+            (reconstructed[1].state.velocity_inertial_mps - DVec3::new(16.0, 3.0, 0.0)).length()
+                < 1e-12
+        );
+        assert_eq!(
+            reconstructed
+                .iter()
+                .map(|cluster| cluster.mass_properties.mass_kg)
+                .sum::<f64>(),
+            120.0
+        );
+        // Recombining the separated COM inertias about the source COM
+        // conserves the full assembly inertia at the instant of release.
+        let recombined_inertia = reconstructed.iter().fold(DMat3::ZERO, |sum, cluster| {
+            sum + cluster.mass_properties.inertia_body_kg_m2
+                + parallel_axis(
+                    cluster.mass_properties.mass_kg,
+                    cluster.center_of_mass_body_m,
+                )
+        });
+        assert!((recombined_inertia.x_axis.x - 3.2).abs() < 1e-12);
+        assert!((recombined_inertia.y_axis.y - 545.3).abs() < 1e-12);
+        assert!((recombined_inertia.z_axis.z - 547.4).abs() < 1e-12);
+        assert!(
+            assembly
+                .reconstruct_clusters_after_link_failure(
+                    "core-booster",
+                    &body_mass_properties[..2],
+                    source_mass_properties,
+                    source_state,
+                )
+                .is_err()
+        );
+        assert!(
+            assembly
+                .reconstruct_clusters_after_link_failure(
+                    "core-booster",
+                    &body_mass_properties,
+                    RigidBodyProperties::new(121.0, source_mass_properties.inertia_body_kg_m2,)
+                        .unwrap(),
+                    source_state,
+                )
+                .is_err()
+        );
+        assert!(
+            assembly
+                .body_components_after_link_failure("missing-link")
+                .is_err()
+        );
+    }
+
+    #[test]
     fn bad_links_fail_closed() {
         assert!(crew_groups(&[0, 1], 2, &[link(0, 2, true, true)]).is_err());
         assert!(crew_groups(&[0, 1], 2, &[link(1, 1, true, true)]).is_err());
         assert!(crew_groups(&[0, 2], 2, &[]).is_err());
         assert!(air_groups(&[0, 1], 2, &[], &[true]).is_err());
         assert!(feed_reachable(2, &[link(0, 1, false, true)], &[5], &[1]).is_err());
+    }
+
+    #[test]
+    fn joint_loads_fail_the_first_overrated_link_in_authored_order() {
+        let assembly = VehicleAssembly {
+            root_body: 0,
+            body_names: vec!["core".into(), "booster".into(), "fairing".into()],
+            links: vec![
+                NamedAssemblyLink {
+                    name: "core-booster".into(),
+                    state: link(0, 1, false, true),
+                    feed_line: None,
+                },
+                NamedAssemblyLink {
+                    name: "booster-fairing".into(),
+                    state: link(1, 2, false, true),
+                    feed_line: None,
+                },
+            ],
+            resource_edges: Vec::new(),
+            joint_strengths: vec![
+                NamedAssemblyJointStrength {
+                    link_name: "core-booster".into(),
+                    failure_force_n: 1_000.0,
+                    failure_moment_nm: 100.0,
+                },
+                NamedAssemblyJointStrength {
+                    link_name: "booster-fairing".into(),
+                    failure_force_n: 2_000.0,
+                    failure_moment_nm: 200.0,
+                },
+            ],
+            volumes: Vec::new(),
+            tanks: Vec::new(),
+            engine_ports: Vec::new(),
+        };
+        let load = |link: &str, force_n: f64, moment_nm: f64| AssemblyJointLoad {
+            link_name: link.into(),
+            force_n,
+            moment_nm,
+        };
+        // Below both ratings: no failure.
+        assert_eq!(
+            assembly
+                .find_failed_joint(&[
+                    load("core-booster", 999.0, 99.0),
+                    load("booster-fairing", 1_999.0, 199.0),
+                ])
+                .unwrap(),
+            None
+        );
+        // Exactly at the rating holds; strictly above fails.
+        assert_eq!(
+            assembly
+                .find_failed_joint(&[load("core-booster", 1_000.0, 100.0)])
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            assembly
+                .find_failed_joint(&[load("core-booster", 1_000.5, 10.0)])
+                .unwrap(),
+            Some("core-booster".to_string())
+        );
+        assert_eq!(
+            assembly
+                .find_failed_joint(&[load("booster-fairing", 10.0, 200.5)])
+                .unwrap(),
+            Some("booster-fairing".to_string())
+        );
+        // Both over rating: authored link order wins, not load order.
+        assert_eq!(
+            assembly
+                .find_failed_joint(&[
+                    load("booster-fairing", 9_999.0, 9_999.0),
+                    load("core-booster", 9_999.0, 9_999.0),
+                ])
+                .unwrap(),
+            Some("core-booster".to_string())
+        );
+        // Missing loads are no evidence; unrated links never fail.
+        let mut unrated = assembly.clone();
+        unrated.joint_strengths.clear();
+        assert_eq!(
+            unrated
+                .find_failed_joint(&[load("core-booster", 1.0e12, 1.0e12)])
+                .unwrap(),
+            None
+        );
+        // Split topologies retain the surviving ratings.
+        let split = assembly.split_after_link_failure("core-booster").unwrap();
+        assert!(split[0].joint_strengths.is_empty());
+        assert_eq!(split[1].joint_strengths.len(), 1);
+        assert_eq!(split[1].joint_strengths[0].link_name, "booster-fairing");
+        // Fail-closed inputs.
+        assert!(
+            assembly
+                .find_failed_joint(&[load("missing-link", 1.0, 1.0)])
+                .is_err()
+        );
+        assert!(
+            assembly
+                .find_failed_joint(&[
+                    load("core-booster", 1.0, 1.0),
+                    load("core-booster", 2.0, 2.0),
+                ])
+                .is_err()
+        );
+        assert!(
+            assembly
+                .find_failed_joint(&[load("core-booster", f64::NAN, 1.0)])
+                .is_err()
+        );
+        assert!(
+            assembly
+                .find_failed_joint(&[load("core-booster", 1.0, -1.0)])
+                .is_err()
+        );
+        let mut bad = assembly.clone();
+        bad.joint_strengths.push(NamedAssemblyJointStrength {
+            link_name: "core-booster".into(),
+            failure_force_n: 5.0,
+            failure_moment_nm: 5.0,
+        });
+        assert!(bad.validate().is_err());
+        bad = assembly.clone();
+        bad.joint_strengths[0].link_name = "missing-link".into();
+        assert!(bad.validate().is_err());
     }
 
     #[test]
@@ -908,7 +1989,10 @@ mod tests {
             links: vec![NamedAssemblyLink {
                 name: "crew-hatch".into(),
                 state: link(0, 1, true, true),
+                feed_line: None,
             }],
+            resource_edges: Vec::new(),
+            joint_strengths: Vec::new(),
             volumes: vec![
                 AssemblyVolume {
                     name: "stage.service-bay".into(),
@@ -1007,7 +2091,10 @@ mod tests {
             links: vec![NamedAssemblyLink {
                 name: "initial-hatch".into(),
                 state: link(0, 1, true, true),
+                feed_line: None,
             }],
+            resource_edges: Vec::new(),
+            joint_strengths: Vec::new(),
             volumes: vec![
                 AssemblyVolume {
                     name: "cabin".into(),
@@ -1057,7 +2144,10 @@ mod tests {
             links: vec![NamedAssemblyLink {
                 name: "rigid-joint".into(),
                 state: link(0, 1, false, true),
+                feed_line: None,
             }],
+            resource_edges: Vec::new(),
+            joint_strengths: Vec::new(),
             volumes: Vec::new(),
             tanks: Vec::new(),
             engine_ports: Vec::new(),

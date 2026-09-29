@@ -87,6 +87,7 @@ fn make_system(index: usize) -> ElectricalPowerSystem {
         ultracapacitors: vec![capacitor],
         solar_arrays: vec![solar],
         reactors: vec![reactor],
+        fuel_cells: vec![],
         consumers,
     }
 }

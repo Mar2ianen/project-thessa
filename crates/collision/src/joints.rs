@@ -3,6 +3,34 @@
 use super::*;
 
 impl CollisionWorld {
+    /// Read the current joint solver impulses as average force/moment loads
+    /// over `step_s`. This reports solver evidence only; structural ratings
+    /// and failure policy belong to the vehicle domain.
+    pub fn joint_loads(&self, step_s: f64) -> Result<Vec<JointLoadSummary>, CollisionBackendError> {
+        if !step_s.is_finite() || step_s < MIN_STEP_S {
+            return Err(CollisionBackendError::InvalidStep(step_s));
+        }
+        let mut loads = Vec::with_capacity(self.joints.len());
+        for (joint_id, entry) in &self.joints {
+            let Some(joint) = self.impulse_joints.get(entry.rapier) else {
+                continue;
+            };
+            // Rapier's 3D spatial joint vector stores the three translational
+            // DOFs first and the three rotational DOFs second.
+            let force_impulse = DVec3::new(joint.impulses[0], joint.impulses[1], joint.impulses[2]);
+            let torque_impulse =
+                DVec3::new(joint.impulses[3], joint.impulses[4], joint.impulses[5]);
+            loads.push(JointLoadSummary {
+                joint_id: *joint_id,
+                body_a: entry.a,
+                body_b: entry.b,
+                force_n: force_impulse.length() / step_s,
+                torque_nm: torque_impulse.length() / step_s,
+            });
+        }
+        Ok(loads)
+    }
+
     /// Rigidly dock two dynamic bodies at their local port frames: the
     /// docking/undocking primitive the flight layer drives around
     /// staging and docking events. Contacts between the joined bodies are

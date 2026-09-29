@@ -1,7 +1,9 @@
 use super::*;
 use thessa_sim_core::{
-    AtmosphereComposition, CompiledShaftPowerSource, ElectricalPowerCommand, PropellerDriveCommand,
-    SolarArrayTracking, SolarFluxSource, ThermalCommand, TurbopropCommand,
+    AtmosphereComposition, AtmosphereConfig, CompiledJet, CompiledShaftPowerSource,
+    ElectricalPowerCommand, FeedResourceProperties, PropellerDriveCommand, RigidBodyState,
+    SolarArrayTracking, SolarFluxSource, StoredPropellant, ThermalCommand, TurbopropCommand,
+    flight_condition,
 };
 
 #[test]
@@ -19,6 +21,133 @@ fn example_vehicle_asset_bakes_to_valid_generic_definition() {
     let round_trip: VehicleDefinition =
         serde_json::from_str(&json).expect("vehicle JSON should deserialize");
     assert_eq!(round_trip, vehicle);
+}
+
+#[test]
+fn assembly_asset_bakes_named_consumer_feed_routes() {
+    let asset: VehicleAsset =
+        toml::from_str(include_str!("../../../data/vehicles/example_assembly.toml"))
+            .expect("assembly vehicle TOML should parse");
+    let vehicle = asset.bake().expect("assembly vehicle should bake");
+    assert_eq!(vehicle.resource_feed_ports.len(), 1);
+    assert_eq!(
+        vehicle.resource_feed_ports[0],
+        VehicleResourceFeedPort {
+            consumer_name: "capsule-engine".into(),
+            feed_port_name: "capsule.engine".into(),
+            fluid_properties: vec![
+                FeedResourceProperties {
+                    resource: StoredPropellant::Lox,
+                    density_kg_m3: 1_141.0,
+                    viscosity_pa_s: 0.0002,
+                    source_pressure_pa: 500_000.0,
+                    minimum_pressure_pa: 100_000.0,
+                },
+                FeedResourceProperties {
+                    resource: StoredPropellant::LiquidMethane,
+                    density_kg_m3: 422.0,
+                    viscosity_pa_s: 0.00012,
+                    source_pressure_pa: 500_000.0,
+                    minimum_pressure_pa: 100_000.0,
+                },
+            ],
+        }
+    );
+    let assembly = vehicle.assembly.as_ref().expect("baked assembly graph");
+    assert_eq!(assembly.resource_edges.len(), 1);
+    assert!(assembly.resource_edges[0].open);
+    assert!(assembly.resource_edges[0].feed_line.is_some());
+    assert!(!assembly.links[0].state.open);
+    assert!(
+        assembly
+            .feed_paths()
+            .unwrap()
+            .contains(&("stage.tank".into(), "capsule.engine".into()))
+    );
+}
+
+#[test]
+fn assembly_asset_bakes_ownership_and_splits_into_valid_clusters() {
+    let asset: VehicleAsset =
+        toml::from_str(include_str!("../../../data/vehicles/example_assembly.toml"))
+            .expect("assembly vehicle TOML should parse");
+    let vehicle = asset.bake().expect("assembly vehicle should bake");
+    let ownership = vehicle
+        .assembly_ownership
+        .as_ref()
+        .expect("baked part ownership");
+    assert_eq!(
+        ownership.panel_bodies.len(),
+        vehicle.aero_geometry.panels.len()
+    );
+    assert_eq!(
+        ownership.collision_bodies.len(),
+        vehicle.collision_geometry.parts.len()
+    );
+    assert_eq!(ownership.tank_bodies.len(), vehicle.tanks.len());
+    assert_eq!(ownership.body_masses.len(), 2);
+    assert!(
+        ownership
+            .panel_bodies
+            .iter()
+            .chain(&ownership.collision_bodies)
+            .chain(&ownership.tank_bodies)
+            .all(|body| *body < 2)
+    );
+    assert!(ownership.body_masses.iter().all(|body| body.mass_kg > 0.0));
+    // JSON round-trip is structural, not bitwise: irrational-derived bake
+    // values do not survive stock float formatting exactly (the exact
+    // round-trip contract is pinned by the clean-decimal aircraft test).
+    let json = serde_json::to_string(&vehicle).expect("vehicle JSON should serialize");
+    let round_trip: VehicleDefinition =
+        serde_json::from_str(&json).expect("vehicle JSON should deserialize");
+    assert_eq!(round_trip.name, vehicle.name);
+    assert_eq!(
+        round_trip.aero_geometry.panels.len(),
+        vehicle.aero_geometry.panels.len()
+    );
+    let round_ownership = round_trip
+        .assembly_ownership
+        .as_ref()
+        .expect("ownership round-trips");
+    assert_eq!(round_ownership.panel_bodies, ownership.panel_bodies);
+    assert_eq!(round_ownership.collision_bodies, ownership.collision_bodies);
+    assert_eq!(round_ownership.tank_bodies, ownership.tank_bodies);
+    assert_eq!(round_ownership.body_masses.len(), 2);
+    for (restored, original) in round_ownership
+        .body_masses
+        .iter()
+        .zip(&ownership.body_masses)
+    {
+        let scale = original.mass_kg.max(1.0);
+        assert!((restored.mass_kg - original.mass_kg).abs() < 1e-9 * scale);
+        assert!((restored.center_of_mass_body_m - original.center_of_mass_body_m).length() < 1e-9);
+    }
+    let state = RigidBodyState::stationary(DVec3::ZERO);
+    let clusters = vehicle
+        .split_definitions_after_link_failure("stack", state, &vehicle.initial_resource_state())
+        .expect("assembly should split");
+    assert_eq!(clusters.len(), 2);
+    assert!(clusters[0].0.name.contains("stage"));
+    assert!(clusters[1].0.name.contains("capsule"));
+    let mut panels = 0;
+    let mut tanks = 0;
+    let mut mass_kg = 0.0;
+    for (definition, cluster_state, _) in &clusters {
+        definition.validate().expect("cluster validates");
+        assert!(cluster_state.position_inertial_m.is_finite());
+        assert!(cluster_state.velocity_inertial_mps.is_finite());
+        panels += definition.aero_geometry.panels.len();
+        tanks += definition.tanks.len();
+        mass_kg += definition.mass_properties.mass_kg;
+    }
+    assert_eq!(panels, vehicle.aero_geometry.panels.len());
+    assert_eq!(tanks, vehicle.tanks.len());
+    let scale = vehicle.mass_properties.mass_kg.max(1.0);
+    assert!((mass_kg - vehicle.mass_properties.mass_kg).abs() < 1e-6 * scale);
+    // The capsule feed route follows its surviving engine port.
+    assert!(clusters[0].0.resource_feed_ports.is_empty());
+    assert_eq!(clusters[1].0.resource_feed_ports.len(), 1);
 }
 
 #[test]
@@ -601,6 +730,60 @@ diameter_m = 2.4
 }
 
 #[test]
+fn pure_fluid_tanks_fuel_cell_and_apu_bake_and_round_trip() {
+    let asset: VehicleAsset = toml::from_str(include_str!(
+        "../../../data/vehicles/example_apu_fuel_cell.toml"
+    ))
+    .expect("APU/fuel-cell vehicle TOML should parse");
+    let vehicle = asset.bake().expect("APU/fuel-cell vehicle should bake");
+    assert_eq!(vehicle.auxiliary_power_units.len(), 1);
+    assert_eq!(vehicle.electrical_power.fuel_cells.len(), 1);
+    assert_eq!(vehicle.rcs_mounts.len(), 1);
+    assert_eq!(vehicle.tanks.len(), 4);
+    assert_eq!(
+        vehicle.tanks[0].resource,
+        TankResource::Stored(StoredPropellant::Rp1)
+    );
+    assert_eq!(
+        vehicle.tanks[1].resource,
+        TankResource::Stored(StoredPropellant::LiquidHydrogen)
+    );
+    assert_eq!(
+        vehicle.tanks[2].resource,
+        TankResource::Stored(StoredPropellant::Lox)
+    );
+    assert_eq!(
+        vehicle.auxiliary_power_units[0]
+            .unit
+            .engine
+            .shaft
+            .generator
+            .power_w,
+        20_000.0
+    );
+    let json = serde_json::to_string(&vehicle).expect("vehicle JSON serialization");
+    let round_trip: VehicleDefinition =
+        serde_json::from_str(&json).expect("vehicle JSON deserialization");
+    assert_eq!(round_trip.auxiliary_power_units.len(), 1);
+    assert_eq!(round_trip.electrical_power.fuel_cells.len(), 1);
+    assert_eq!(round_trip.rcs_mounts.len(), 1);
+    assert_eq!(
+        round_trip.tanks[1].resource,
+        TankResource::Stored(StoredPropellant::LiquidHydrogen)
+    );
+    assert_eq!(
+        round_trip.mass_properties.mass_kg,
+        vehicle.mass_properties.mass_kg
+    );
+    assert!(
+        (round_trip.electrical_power.fuel_cells[0].position_body_m
+            - vehicle.electrical_power.fuel_cells[0].position_body_m)
+            .length()
+            < 1.0e-12
+    );
+}
+
+#[test]
 fn collision_part_asset_bakes_without_backend_types() {
     let part: CollisionPartAsset = toml::from_str(
         r#"
@@ -904,6 +1087,35 @@ intake = "pitot"
 compressor_ratio = 8.0
 turbine_inlet_temp_k = 1400.0
 material = "nickel-superalloy"
+
+[jets.shaft]
+design_speed_rad_s = 900.0
+rotor_inertia_kg_m2 = 3.0
+
+[jets.shaft.starter]
+kind = "rocket-bootstrap"
+power_w = 12000.0
+charge_j = 0.0
+resource = "hydrazine"
+specific_energy_j_kg = 1000000.0
+maximum_shaft_torque_nm = 40.0
+mass_kg = 2.0
+
+[jets.shaft.generator]
+fitted = true
+power_w = 18000.0
+efficiency = 0.85
+efficiency_map = [{ spool_n = 0.5, efficiency = 0.75 }, { spool_n = 1.0, efficiency = 0.9 }]
+maximum_shaft_torque_nm = 30.0
+cut_in_spool_n = 0.5
+mass_kg = 5.0
+
+[jets.shaft.generator.thermal]
+heat_capacity_j_k = 50000.0
+conductance_w_k = 20.0
+initial_temperature_k = 300.0
+maximum_temperature_k = 420.0
+
 [[jets]]
 name = "estoc-1"
 kind = "estoc"
@@ -954,12 +1166,109 @@ wall_thickness_m = 0.005
         "baked mass must equal structure plus jets"
     );
     assert!(vehicle.jets[1].engine.dry_mass_kg() > vehicle.jets[0].engine.dry_mass_kg());
+    let CompiledJet::Air(engine) = &vehicle.jets[0].engine else {
+        panic!("first mount is the airbreather");
+    };
+    assert_eq!(
+        engine.shaft.starter.resource,
+        Some(StoredPropellant::Hydrazine)
+    );
+    assert_eq!(engine.shaft.starter.maximum_shaft_torque_nm, Some(40.0));
+    assert_eq!(engine.shaft.design_speed_rad_s, Some(900.0));
+    assert_eq!(engine.shaft.generator.efficiency_map.len(), 2);
+    assert!(engine.shaft.generator.thermal.is_some());
     let CompiledJet::Estoc(engine) = &vehicle.jets[1].engine else {
         panic!("second mount is the ESTOC");
     };
     assert_eq!(engine.bulk_fuel, JetFuel::Methane);
     assert_eq!(engine.boost_coolant_fuel, Some(JetFuel::Hydrogen));
     assert!(engine.precooler.is_some());
+}
+
+#[test]
+fn multi_spool_turbofan_asset_bakes_and_round_trips() {
+    let doc = r#"
+name = "two-spool-turbofan"
+mass_kg = 3000.0
+inertia_body_kg_m2 = [[8000.0, 0.0, 0.0], [0.0, 8000.0, 0.0], [0.0, 0.0, 4000.0]]
+
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 4.0
+chord_m = 1.0
+
+[[jets]]
+name = "lp-hp-fan"
+kind = "jet"
+cycle = "turbofan"
+mount_position_body_m = [1.0, 0.0, 0.0]
+thrust_axis_body = [1.0, 0.0, 0.0]
+fuel = "kerosene"
+intake_area_m2 = 0.8
+compressor_ratio = 18.0
+bypass_ratio = 4.0
+fan_pressure_ratio = 1.5
+turbine_inlet_temp_k = 1500.0
+material = "nickel-superalloy"
+
+[jets.shaft.multi_spool]
+low_pressure_design_speed_rad_s = 500.0
+low_pressure_rotor_inertia_kg_m2 = 4.0
+fan_rotor_inertia_kg_m2 = 2.0
+high_pressure_design_speed_rad_s = 1000.0
+high_pressure_rotor_inertia_kg_m2 = 2.0
+high_pressure_turbine_power_fraction = 0.55
+fan_gear_speed_ratio = 0.5
+fan_gear_efficiency = 0.95
+"#;
+
+    let calibration_doc = doc.replace(
+        "[jets.shaft.multi_spool]\nlow_pressure_design_speed_rad_s = 500.0\nlow_pressure_rotor_inertia_kg_m2 = 4.0\nfan_rotor_inertia_kg_m2 = 2.0\nhigh_pressure_design_speed_rad_s = 1000.0\nhigh_pressure_rotor_inertia_kg_m2 = 2.0\nhigh_pressure_turbine_power_fraction = 0.55\nfan_gear_speed_ratio = 0.5\nfan_gear_efficiency = 0.95\n",
+        "",
+    );
+    assert_ne!(
+        calibration_doc, doc,
+        "calibration fixture removes its shaft train"
+    );
+    let calibration_asset: VehicleAsset =
+        toml::from_str(&calibration_doc).expect("single-spool calibration TOML parses");
+    let calibration_vehicle = calibration_asset
+        .bake()
+        .expect("single-spool calibration asset bakes");
+    let CompiledJet::Air(calibration_engine) = &calibration_vehicle.jets[0].engine else {
+        panic!("calibration asset compiled as an airbreather");
+    };
+    let sample = AtmosphereConfig::default()
+        .sample(0.0)
+        .expect("static calibration atmosphere");
+    let condition = flight_condition(&sample, 0.0).expect("static condition");
+    let (_, design_balance) = calibration_engine
+        .operating_point_at_spool(&condition, 1.0, 1.0, true)
+        .expect("turbofan design shaft balance");
+    let hp_fraction = design_balance.high_pressure_demand_w
+        / (design_balance.high_pressure_demand_w + design_balance.low_pressure_fan_demand_w / 0.95);
+    let doc = doc.replace(
+        "high_pressure_turbine_power_fraction = 0.55",
+        &format!("high_pressure_turbine_power_fraction = {hp_fraction:.12}"),
+    );
+
+    let asset: VehicleAsset = toml::from_str(&doc).expect("multi-spool TOML parses");
+    let vehicle = asset.bake().expect("multi-spool turbofan bakes");
+    let thessa_sim_core::CompiledJet::Air(engine) = &vehicle.jets[0].engine else {
+        panic!("asset compiled as an airbreather");
+    };
+    let spools = engine.shaft.multi_spool.expect("spool train retained");
+    assert_eq!(spools.fan_gear_speed_ratio, 0.5);
+    assert!((spools.high_pressure_turbine_power_fraction - hp_fraction).abs() < 5.0e-13);
+
+    let json = serde_json::to_string(&vehicle).expect("vehicle serializes");
+    let restored: VehicleDefinition = serde_json::from_str(&json).expect("vehicle restores");
+    assert_eq!(restored, vehicle);
+    let cold = thessa_sim_core::JetCommand::cold(&restored.jets[0].engine);
+    assert_eq!(cold.shaft.spool_n, 0.0);
+    assert_eq!(cold.shaft.low_pressure_spool_n, Some(0.0));
 }
 
 #[test]

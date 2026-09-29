@@ -8,6 +8,7 @@ pub(super) const RELIABLE_OUTBOUND_CAPACITY: usize = 32;
 struct OutboundState {
     reliable: VecDeque<Vec<u8>>,
     latest_snapshot: Option<Arc<Vec<u8>>>,
+    latest_fleet_snapshot: Option<Arc<Vec<u8>>>,
     closed: bool,
 }
 
@@ -41,6 +42,7 @@ impl OutboundMailbox {
             state: Mutex::new(OutboundState {
                 reliable: VecDeque::with_capacity(RELIABLE_OUTBOUND_CAPACITY),
                 latest_snapshot: None,
+                latest_fleet_snapshot: None,
                 closed: false,
             }),
             blocking_wake: Condvar::new(),
@@ -76,13 +78,42 @@ impl OutboundMailbox {
         true
     }
 
+    /// Latest-wins fleet snapshot slot, drained right after the primary
+    /// snapshot. Empty for single-vehicle operation.
+    pub(super) fn replace_fleet_snapshot(&self, frame: Arc<Vec<u8>>) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state.closed {
+            return false;
+        }
+        state.latest_fleet_snapshot = Some(frame);
+        drop(state);
+        self.blocking_wake.notify_one();
+        self.async_wake.notify_one();
+        true
+    }
+
+    fn drain_snapshots(state: &mut OutboundState) -> Option<OutboundFrame> {
+        state
+            .latest_snapshot
+            .take()
+            .map(OutboundFrame::Shared)
+            .or_else(|| {
+                state
+                    .latest_fleet_snapshot
+                    .take()
+                    .map(OutboundFrame::Shared)
+            })
+    }
+
     pub(super) fn try_next(&self) -> Option<OutboundFrame> {
         let mut state = self.state.lock().ok()?;
         state
             .reliable
             .pop_front()
             .map(OutboundFrame::Owned)
-            .or_else(|| state.latest_snapshot.take().map(OutboundFrame::Shared))
+            .or_else(|| Self::drain_snapshots(&mut state))
     }
 
     pub(super) fn blocking_next(&self) -> Option<OutboundFrame> {
@@ -92,7 +123,7 @@ impl OutboundMailbox {
                 .reliable
                 .pop_front()
                 .map(OutboundFrame::Owned)
-                .or_else(|| state.latest_snapshot.take().map(OutboundFrame::Shared))
+                .or_else(|| Self::drain_snapshots(&mut state))
             {
                 return Some(frame);
             }

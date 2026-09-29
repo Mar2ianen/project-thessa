@@ -14,10 +14,11 @@ pub struct ProtocolVersion(pub u16);
 impl ProtocolVersion {
     // Snapshot v3 adds authoritative server timing fields. Command Reset
     // (v4) relaunches at the canonical site. Typed installed-part commands
-    // (v5) extend ClientInput::Command.
+    // (v5) extend ClientInput::Command. Fleet Separate/Dock/Undock commands
+    // plus fleet snapshots (v6) add server-owned multi-vehicle lifecycle.
     // Postcard structs are not a negotiated schema, so old peers must fail
     // the handshake instead of decoding a partially compatible payload.
-    pub const CURRENT: Self = Self(5);
+    pub const CURRENT: Self = Self(6);
 }
 
 /// Numeric message kind. Game payloads assign their own registry in the
@@ -35,6 +36,9 @@ pub mod kind {
     /// Server-owned graph / trajectory commands. The payload contains intent
     /// or sandboxed source, never authoritative world or actuator state.
     pub const AUTOPILOT_COMMAND: u32 = 8;
+    /// Fleet snapshots for non-primary vehicles. The primary vehicle keeps
+    /// [`SNAPSHOT`](SNAPSHOT) so legacy fast paths never change shape.
+    pub const FLEET_SNAPSHOT: u32 = 9;
 }
 
 /// Versioned envelope around one postcard-encoded game payload.

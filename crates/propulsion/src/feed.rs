@@ -31,6 +31,17 @@ pub enum StoredPropellant {
     Hydrazine,
     Ammonia,
     Water,
+    Nitrogen,
+    Helium,
+    Xenon,
+    Krypton,
+    Argon,
+    Iodine,
+    Deuterium,
+    Tritium,
+    Helium3,
+    Protium,
+    Boron11,
 }
 
 /// Resource identity and mixture semantics for an installed tank.

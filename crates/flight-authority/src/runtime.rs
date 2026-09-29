@@ -31,18 +31,21 @@ use thessa_flight_control::{
 };
 use thessa_sim_core::{
     AeroConfig, AeroGeometry, AeroResult, AeroSimdScratch, AeroState, AtmosphereConfig,
-    AtmosphereError, BakedEphemeris, BodyId, BodyState, COAST_RAILS_POSITION_TOL_M,
-    COAST_RAILS_VELOCITY_TOL_MPS, CollisionMaterial, ControlChannels, EphemerisFrame,
-    EventScheduler, FlightError, FlightForces, FlightStepInput, GravityField,
-    LandingGearActuatorPoint, LandingLegState, OnRailsCache, PanelAeroModel, PanelSoA,
-    ParachuteCommand, ParachuteEnvironment, ParachuteLoad, ParachutePhase, ParachuteState,
+    AtmosphereError, AuxiliaryPowerUnitCommand, AuxiliaryPowerUnitState, BakedEphemeris, BodyId,
+    BodyState, COAST_RAILS_POSITION_TOL_M, COAST_RAILS_VELOCITY_TOL_MPS, CollisionMaterial,
+    ControlChannels, ElectricalPowerCommand, ElectricalPowerState, ElectricalPowerTelemetry,
+    EphemerisFrame, EventScheduler, FlightError, FlightForces, FlightStepInput, FusionTorchCommand,
+    GravityField, JetCommand, LandingGearActuatorPoint, LandingLegState, OnRailsCache,
+    PanelAeroModel, PanelSoA, ParachuteCommand, ParachuteEnvironment, ParachuteLoad,
+    ParachutePhase, ParachuteState, PropellerDriveCommand, PulsedFusionCommand, PulsedFusionState,
     ReactionWheelAllocation, RigidBodyState, ScheduledEvent, ScheduledKind, SimTime,
-    TestParticleState, TickIntegratorConfig, VehicleDefinition, VehiclePartCommand,
-    VehiclePropulsionAllocation, VehicleResourceState, WORLD_TICK_S, WheelBrakeState,
-    WheelChassisActuatorPoint, WheelChassisState, WheelDrivePoint, X15StarterProfile,
-    allocate_reaction_wheels_with_enabled_banks, control_surface_commands, evaluate_flight_forces,
-    evaluate_flight_forces_soa, evaluate_flight_forces_with_aero_result, integrate_attitude_step,
-    integrate_rigid_body_step_soa, integrate_rigid_body_step_with_aero_result,
+    TestParticleState, TickIntegratorConfig, TurbopropCommand, VehicleDefinition,
+    VehiclePartCommand, VehiclePropulsionAllocation, VehicleResourceState, WORLD_TICK_S,
+    WheelBrakeState, WheelChassisActuatorPoint, WheelChassisState, WheelDrivePoint,
+    X15StarterProfile, allocate_reaction_wheels_with_enabled_banks, control_surface_commands,
+    evaluate_flight_forces, evaluate_flight_forces_soa, evaluate_flight_forces_with_aero_result,
+    integrate_attitude_step, integrate_rigid_body_step_soa,
+    integrate_rigid_body_step_with_aero_result,
 };
 use thessa_worldgen_rocky::field::{ObstacleReport, ObstacleTrackCertificate, PlanetField};
 
@@ -186,16 +189,49 @@ enum CoastAdvance {
 
 struct ControlAllocation {
     moment_body_nm: DVec3,
+    rcs_duties: Vec<f64>,
     /// Post-actuator SoA sample reused by this tick's rigid-body force path.
     aero_result: Option<AeroResult>,
 }
 
+struct ParachuteStep {
+    force_body_n: DVec3,
+    moment_body_nm: DVec3,
+    states: Vec<ParachuteState>,
+    loads: Vec<ParachuteLoad>,
+}
+
+fn rebase_rigid_body_state(
+    state: &mut RigidBodyState,
+    frame_shift_body_m: DVec3,
+) -> Result<(), FlightError> {
+    if frame_shift_body_m == DVec3::ZERO {
+        return Ok(());
+    }
+    // Re-centering geometry by `frame_shift` moves the represented COM by its
+    // opposite vector. Preserve the rigid-body velocity at that shifted point.
+    let center_shift_body_m = -frame_shift_body_m;
+    let orientation = state.orientation_body_to_inertial;
+    let offset_inertial_m = orientation * center_shift_body_m;
+    let angular_velocity_inertial_rps = orientation * state.angular_velocity_body_rps;
+    state.position_inertial_m += offset_inertial_m;
+    state.velocity_inertial_mps += angular_velocity_inertial_rps.cross(offset_inertial_m);
+    RigidBodyState::new(
+        state.position_inertial_m,
+        state.velocity_inertial_mps,
+        state.orientation_body_to_inertial,
+        state.angular_velocity_body_rps,
+    )
+    .map(|_| ())
+}
+
 /// Authoritative flight model for the first playable vehicle.
 ///
-/// The authoritative equations stay in `thessa-sim-core`; this runtime only
-/// supplies game input, the X-15 asset and a telemetry bridge. Fuel is
-/// intentionally infinite for this slice, while staging still controls the
-/// engine. Render-view state lives client-side; stepping never reads it.
+/// The authoritative equations stay in `thessa-sim-core`; this runtime supplies
+/// game input, installed-vehicle commands, and a telemetry bridge. Mounted
+/// resource consumers draw from reachable tank inventory on each fixed step;
+/// the legacy starter-profile propulsion path remains available for the X-15
+/// flight slice. Render-view state lives client-side; stepping never reads it.
 pub struct FlightAuthority {
     pub reference_body: BodyId,
     pub planet_radius_m: f64,
@@ -212,6 +248,28 @@ pub struct FlightAuthority {
     pub vehicle: VehicleDefinition,
     /// Mutable propellant inventory and solid-motor burn clocks.
     pub resource_state: VehicleResourceState,
+    /// Authoritative electrical-bus state and command. Physical mounted APU
+    /// output is injected into the command each fixed step.
+    pub electrical_power_state: ElectricalPowerState,
+    pub electrical_power_command: ElectricalPowerCommand,
+    pub electrical_power_telemetry: Option<ElectricalPowerTelemetry>,
+    /// Persistent mounted APU shaft state and caller-selected commands.
+    pub auxiliary_power_unit_states: Vec<AuxiliaryPowerUnitState>,
+    pub auxiliary_power_unit_commands: Vec<AuxiliaryPowerUnitCommand>,
+    /// Persistent shaft/ESTOC state for installed air-breathing jets.
+    pub jet_commands: Vec<JetCommand>,
+    /// Requested feed for each installed electric thruster (actual flow is
+    /// capped by shared-bus power and reachable inventory).
+    pub electric_thruster_requested_flow_kg_s: Vec<f64>,
+    /// User-selected continuous fusion working-fluid requests.
+    pub fusion_torch_commands: Vec<FusionTorchCommand>,
+    /// Persistent pulsed-fusion buffer state and arming/charge commands.
+    pub pulsed_fusion_states: Vec<PulsedFusionState>,
+    pub pulsed_fusion_commands: Vec<PulsedFusionCommand>,
+    /// Installed piston/electric propeller-drive commands.
+    pub propeller_drive_commands: Vec<PropellerDriveCommand>,
+    /// Installed turboprop shaft state and commands.
+    pub turboprop_commands: Vec<TurbopropCommand>,
     pub aero_model: PanelAeroModel,
     /// Compiled SoA geometry and reusable SIMD scratch for the authoritative
     /// per-step aero evaluation. The reference geometry is retained so hinge
@@ -643,6 +701,69 @@ impl FlightAuthority {
         )
         .map_err(|error| format!("X-15 initial state is invalid: {error}"))?;
         let resource_state = vehicle.initial_resource_state();
+        let electrical_power_state = vehicle
+            .initial_electrical_power_state()
+            .map_err(|error| format!("vehicle electrical power system is invalid: {error}"))?;
+        let electrical_power_command =
+            ElectricalPowerCommand::idle_for(&vehicle.electrical_power, FLIGHT_STEP_S);
+        let auxiliary_power_unit_states = vehicle
+            .auxiliary_power_units
+            .iter()
+            .map(|mount| mount.unit.initial_state())
+            .collect();
+        let auxiliary_power_unit_commands = vehicle
+            .auxiliary_power_units
+            .iter()
+            .map(|mount| AuxiliaryPowerUnitCommand {
+                throttle: 0.0,
+                starter_engaged: false,
+                generator_load_w: mount.unit.engine.shaft.generator.power_w,
+                pneumatic_bleed_power_w: 0.0,
+                dt_s: FLIGHT_STEP_S,
+            })
+            .collect();
+        let jet_commands = vehicle
+            .jets
+            .iter()
+            .map(|mount| JetCommand::cold(&mount.engine))
+            .collect();
+        let electric_thruster_requested_flow_kg_s = vec![0.0; vehicle.electric_thrusters.len()];
+        let fusion_torch_commands = vehicle
+            .fusion_torches
+            .iter()
+            .map(|_| FusionTorchCommand {
+                available_driver_power_w: 0.0,
+                requested_working_flow_kg_s: 0.0,
+            })
+            .collect();
+        let pulsed_fusion_states =
+            vec![PulsedFusionState::default(); vehicle.pulsed_fusion_systems.len()];
+        let pulsed_fusion_commands = vehicle
+            .pulsed_fusion_systems
+            .iter()
+            .map(|_| PulsedFusionCommand {
+                available_charge_power_w: 0.0,
+                armed: false,
+            })
+            .collect();
+        let propeller_drive_commands = vehicle
+            .propeller_drives
+            .iter()
+            .map(|_| PropellerDriveCommand {
+                throttle: 0.0,
+                source_rpm: 0.0,
+            })
+            .collect();
+        let turboprop_commands = vehicle
+            .turboprops
+            .iter()
+            .map(|mount| {
+                let mut command = TurbopropCommand::cold(&mount.drive);
+                command.shaft.throttle = 0.0;
+                command.dt_s = FLIGHT_STEP_S;
+                command
+            })
+            .collect();
         let engine_throttle_overrides = vec![None; vehicle.engines.len()];
         let system_throttle_overrides = vehicle
             .systems
@@ -727,6 +848,18 @@ impl FlightAuthority {
             launch_site_dir: None,
             vehicle,
             resource_state,
+            electrical_power_state,
+            electrical_power_command,
+            electrical_power_telemetry: None,
+            auxiliary_power_unit_states,
+            auxiliary_power_unit_commands,
+            jet_commands,
+            electric_thruster_requested_flow_kg_s,
+            fusion_torch_commands,
+            pulsed_fusion_states,
+            pulsed_fusion_commands,
+            propeller_drive_commands,
+            turboprop_commands,
             aero_model,
             aero_panels,
             aero_scratch: AeroSimdScratch::default(),
@@ -1172,6 +1305,20 @@ impl FlightAuthority {
     /// Whether the current tick must integrate through the contact solver.
     pub fn contact_active(&self) -> bool {
         self.contact.as_ref().is_some_and(ContactRuntime::is_active)
+    }
+
+    /// Shared contact scene for fleet docking ticks. The server syncs dock
+    /// partners here and installs/removes fixed joints through it; the
+    /// single-vehicle advance path is unchanged. `None` until
+    /// `enable_contact_mode` arms the scene.
+    pub fn contact_runtime(&self) -> Option<&ContactRuntime> {
+        self.contact.as_ref()
+    }
+
+    /// Mutable shared contact scene for fleet docking ticks. See
+    /// [`contact_runtime`](Self::contact_runtime).
+    pub fn contact_runtime_mut(&mut self) -> Option<&mut ContactRuntime> {
+        self.contact.as_mut()
     }
 
     /// Debug telemetry for the contact scene. Errors when contact mode is

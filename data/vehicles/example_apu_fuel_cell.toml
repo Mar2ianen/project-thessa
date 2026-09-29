@@ -1,0 +1,127 @@
+name = "example-apu-fuel-cell"
+mass_kg = 1000.0
+inertia_body_kg_m2 = [
+  [1200.0, 0.0, 0.0],
+  [0.0, 1400.0, 0.0],
+  [0.0, 0.0, 1300.0],
+]
+
+[[panels]]
+position_body_m = [0.0, 0.0, 0.0]
+chord_axis_body = [1.0, 0.0, 0.0]
+lift_axis_body = [0.0, 0.0, 1.0]
+area_m2 = 2.0
+chord_m = 1.0
+
+# Pure-fluid tank identities are explicit; stored propellants also require
+# their authored bulk density so capacity remains a geometric mass quantity.
+[[tanks]]
+name = "apu-kerosene"
+shape = "cylinder"
+diameter_m = 0.8
+length_m = 1.2
+pressure_mpa = 0.5
+material = "nickel-superalloy"
+position_body_m = [-0.5, 0.0, 0.0]
+stored_propellant = "rp1"
+bulk_density_kg_m3 = 810.0
+
+[[tanks]]
+name = "fuel-cell-hydrogen"
+shape = "cylinder"
+diameter_m = 0.8
+length_m = 1.2
+pressure_mpa = 0.5
+material = "nickel-superalloy"
+position_body_m = [0.5, 0.0, 0.0]
+stored_propellant = "liquid-hydrogen"
+bulk_density_kg_m3 = 71.0
+
+[[tanks]]
+name = "fuel-cell-oxygen"
+shape = "cylinder"
+diameter_m = 0.8
+length_m = 1.2
+pressure_mpa = 0.5
+material = "nickel-superalloy"
+position_body_m = [0.0, 0.0, 0.5]
+stored_propellant = "lox"
+bulk_density_kg_m3 = 1141.0
+
+[[tanks]]
+name = "rcs-nitrogen"
+shape = "sphere"
+diameter_m = 0.5
+pressure_mpa = 2.0
+material = "nickel-superalloy"
+position_body_m = [0.0, -0.5, 0.0]
+stored_propellant = "nitrogen"
+bulk_density_kg_m3 = 22.5
+
+[[auxiliary_power_units]]
+name = "service-apu"
+mount_position_body_m = [-1.0, 0.0, 0.0]
+
+[auxiliary_power_units.engine]
+name = "service-apu-turbine"
+cycle = "turbojet"
+fuel = "kerosene"
+intake_area_m2 = 0.2
+intake = "pitot"
+compressor_ratio = 8.0
+bypass_ratio = 0.0
+fan_pressure_ratio = 1.0
+turbine_inlet_temp_k = 1350.0
+afterburner = false
+reheat_temp_k = 0.0
+turbine_material = { density_kg_m3 = 8190.0, yield_strength_pa = 1000000000.0, max_wall_temp_k = 1350.0 }
+spool_tau_s = 3.0
+
+[auxiliary_power_units.engine.shaft]
+power_turbine_heat_fraction = 0.2
+
+[auxiliary_power_units.engine.shaft.starter]
+kind = "electric"
+power_w = 20000.0
+charge_j = 1000000.0
+mass_kg = 3.0
+
+[auxiliary_power_units.engine.shaft.generator]
+fitted = true
+power_w = 20000.0
+efficiency = 0.9
+cut_in_spool_n = 0.5
+mass_kg = 4.0
+
+[electrical_power]
+
+[[electrical_power.fuel_cells]]
+name = "service-fuel-cell"
+rated_electrical_power_w = 5000.0
+electrical_efficiency = 0.55
+dry_mass_kg = 25.0
+dimensions_body_m = [0.6, 0.5, 0.8]
+position_body_m = [0.0, 0.5, 0.0]
+
+[[electrical_power.consumers]]
+name = "life-support"
+rated_power_w = 3000.0
+priority = "life-support"
+
+[[rcs_mounts]]
+name = "service-rcs"
+mount_position_body_m = [0.0, 0.0, 0.0]
+direction_body = [0.0, 1.0, 0.0]
+
+[rcs_mounts.thruster.cold-gas]
+name = "nitrogen-rcs-nozzle"
+gas = "cold-gas-nitrogen"
+storage_temp_k = 300.0
+rated_pressure_pa = 2000000.0
+throat_radius_m = 0.001
+expansion_ratio = 10.0
+nozzle_length_m = 0.02
+contour = "conical"
+material = { density_kg_m3 = 8190.0, yield_strength_pa = 1000000000.0, max_wall_temp_k = 1350.0 }
+valve_rise_time_s = 0.005
+min_on_time_s = 0.02

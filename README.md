@@ -23,11 +23,17 @@ The checked-in vertical slice currently contains:
   full multi-body test-particle gravity, atmosphere and panel aerodynamics,
   rigid-body flight, on-rails coast caches, cohort gravity patches, piecewise
   analytic affine propagation, cabin pressure and crew authority, part
-  assembly connectivity, installed reaction-wheel banks, deployable
-  parachutes, and a parameterized wire-free vehicle power bus with batteries,
-  ultracapacitors, fission reactors, sun-tracking cell-grid solar arrays with
-  overlap-aware geometric occlusion, prioritized consumers, and a lumped thermal-node
-  network with conduction links and area radiators. The
+  assembly connectivity/topology splitting and rigid-body cluster mass/COM
+  reconstruction from complete per-body inputs, with non-tree crossfeed and
+  pressure-limited feed lines, installed reaction-wheel banks, deployable
+  parachutes, fixed-step tank-limited propulsion and moving-mass updates,
+  mounted RCS, tank-backed pneumatic/rocket-bootstrap starters, torque-rated
+  starter/generator hardware, generator efficiency/thermal limits, and
+  independent LP/HP geared-turbofan dynamics plus ordinary jet/APU generation
+  on a parameterized wire-free vehicle power bus with batteries,
+  ultracapacitors, fission reactors and fuel cells, sun-tracking cell-grid
+  solar arrays with overlap-aware geometric occlusion, prioritized consumers,
+  and a lumped thermal-node network with conduction links and area radiators. The
   implementation is separated into `thessa-aero-core`,
   `thessa-celestial`, `thessa-trajectory`, `thessa-propulsion`, and
   `thessa-vehicle-core`; `thessa-aero-core` also provides an experimental
@@ -42,7 +48,8 @@ The checked-in vertical slice currently contains:
   participating-medium evaluation, consumed by the client plume renderer;
 - `thessa-flight-control` and `thessa-flight-authority`: typed guidance,
   aircraft/spacecraft/direct control laws, policy limits, physical allocation,
-  actuator dynamics, and the authoritative flight stepper;
+  actuator dynamics, the authoritative flight stepper, and contact-scene D1
+  docking/separation primitives with solver joint-load telemetry;
 - `thessa-autopilot` and `thessa-autopilot-js`: validated typed graph IR,
   sequence/parallel/wait execution, simulation-time scheduling, sandboxed
   QuickJS blocks, and typed trajectory-plan execution;
@@ -50,8 +57,11 @@ The checked-in vertical slice currently contains:
   Lambert, plane change, velocity matching) plus candidate search. Planning
   approximations are revalidated through the exact field before execution;
 - `thessa-flight-net` and `thessa-protocol`: versioned framed input/snapshot
-  transport with strict validation and ordered typed part commands;
-- `apps/server`: headless authoritative simulation over stdio or TCP;
+  transport (wire v6) with strict validation, ordered typed part commands,
+  and fleet Separate/Dock/Undock commands plus fleet snapshots;
+- `apps/server`: headless authoritative simulation over stdio or TCP, with a
+  server-owned vehicle fleet (separation spawning, dock sessions with fixed
+  joints, live resource-state preservation across separation, fleet snapshots);
 - `apps/client`: Bevy 0.19 map, pilot HUD, atmospheric and field-first plume
   rendering, terrain streaming, a temporary audio adapter, and an embedded
   authoritative-server path;
@@ -70,9 +80,13 @@ The checked-in vertical slice currently contains:
   visual fallback while CBT topology is exercised against live terrain selection;
 - isolated validation harnesses for orbital and aerodynamic reference checks.
 
-Factory gameplay, structural fracture and vehicle-topology changes, full fluid
-and electrical networks, shield thermal protection/ablation, save persistence,
-and production multiplayer remain future work. Vehicle thermal nodes and the
+Factory gameplay, general three-spool/clutched and free-power-turbine dynamics,
+combined control of jointed stacks, commanding non-primary vehicles, client
+fleet rendering, vehicle despawn policy, physical structural fracture beyond
+rated-joint assessment, joint-to-link load mapping with authoritative
+failure/split commit, branched fluid networks, full electrical networks, shield thermal
+protection/ablation, save persistence, and production multiplayer remain future
+work. Vehicle thermal nodes and the
 ideal shared power bus are implemented slices; they are not full thermal,
 structural, or electrical-network coupling.
 

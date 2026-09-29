@@ -2,6 +2,43 @@
 
 use super::*;
 
+/// One installed reaction-control nozzle. The nested `thruster` table is
+/// externally tagged as `monoprop` or `cold-gas` and uses the corresponding
+/// validated propulsion design.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RcsMountAsset {
+    name: String,
+    #[serde(default = "mount_position_default")]
+    mount_position_body_m: [f64; 3],
+    #[serde(default = "thrust_axis_default")]
+    direction_body: [f64; 3],
+    thruster: RcsThrusterAsset,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum RcsThrusterAsset {
+    Monoprop(MonopropThrusterSpec),
+    ColdGas(ColdGasThrusterSpec),
+}
+
+impl RcsMountAsset {
+    pub(crate) fn bake(self) -> Result<RcsMount, Box<dyn Error>> {
+        let thruster = match self.thruster {
+            RcsThrusterAsset::Monoprop(spec) => RcsThruster::Monoprop(spec.compile()?),
+            RcsThrusterAsset::ColdGas(spec) => RcsThruster::ColdGas(spec.compile()?),
+        };
+        let mount = RcsMount {
+            name: self.name,
+            thruster,
+            position_body_m: self.mount_position_body_m,
+            direction_body: self.direction_body,
+        };
+        mount.validate()?;
+        Ok(mount)
+    }
+}
+
 /// Installed electric spacecraft thruster (`[[electric_thrusters]]`).
 /// `design` is a tagged table selecting gridded-ion, Hall, MPD, resistojet,
 /// or arcjet hardware; each compiled mount includes its power processor and

@@ -21,7 +21,7 @@ use crate::atmosphere::GasKind;
 use super::{
     AirOperatingPoint, AirbreathingSpec, CompiledAirbreather, FlightCondition, JetFuel,
     JetShaftState, PropulsionError, STANDARD_GRAVITY_MPS2, ShaftCommand, ShaftTelemetry,
-    advance_jet_shaft_loaded, require_non_negative, require_positive, require_unit_interval,
+    require_non_negative, require_positive, require_unit_interval,
 };
 
 const FOUR_STROKE_CYCLES_PER_REV: f64 = 0.5;
@@ -909,6 +909,9 @@ pub struct TurbopropCommand {
     pub shaft_state: JetShaftState,
     pub shaft: ShaftCommand,
     pub dt_s: f64,
+    /// Pneumatic input supplied by an APU to this drive's starter (W).
+    #[serde(default)]
+    pub pneumatic_starter_power_w: f64,
     /// Gas-generator shaft-side power drawn by the propeller reduction gear
     /// (W), before the propeller gearbox efficiency.
     pub propeller_power_w: f64,
@@ -1431,6 +1434,7 @@ impl TurbopropCommand {
                 generator_load_w: 0.0,
             },
             dt_s: 0.0,
+            pneumatic_starter_power_w: 0.0,
             propeller_power_w: 0.0,
         }
     }
@@ -1479,13 +1483,14 @@ impl CompiledTurbopropDrive {
             command.shaft.throttle > 0.0,
             command.propeller_power_w,
         )?;
-        let (shaft_state, shaft_telemetry) = advance_jet_shaft_loaded(
+        let (shaft_state, shaft_telemetry) = super::advance_jet_shaft_loaded_with_starter_power(
             &self.air,
             command.shaft_state,
             &command.shaft,
             condition,
             command.dt_s,
             command.propeller_power_w,
+            command.pneumatic_starter_power_w,
         )?;
         let propeller_rpm =
             command.shaft_state.spool_n * self.shaft_rpm_at_full_spool / self.reduction_ratio;

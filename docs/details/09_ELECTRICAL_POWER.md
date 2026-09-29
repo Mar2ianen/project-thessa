@@ -1,17 +1,21 @@
 # Vehicle electrical power system
 
-Status: implemented shared-bus model and vehicle-baker authoring slice.
+Status: implemented shared-bus model, propulsion source/load coupling, and
+vehicle-baker authoring slice.
 Vehicle assets can install batteries, ultracapacitor (ionistor) banks,
 fission reactors, fixed/foldable solar cell arrays with optional single-axis
-sun tracking, and rated power consumers. Consumers share one ideal vessel
-bus; there is no authored wire routing or per-part electrical graph.
+sun tracking, fuel cells, and rated power consumers. Mounted APU generators
+and tank-fed fuel cells supply the same ideal vessel bus; there is no authored
+wire routing or per-part electrical graph.
 
 ## 1. Contract
 
 The electrical system is deterministic vehicle state. A step receives simulation
 duration, stellar source inputs (irradiance plus occluder geometry),
 requested consumer loads, reactor operating fractions, optional solar-array
-deployment targets, and sun-tracking commands. It returns updated battery and
+deployment targets, and sun-tracking commands. The flight runtime also derives
+loads from installed electric thrusters, fusion drivers/chargers, and electric
+propeller drives by their same-name consumer. It returns updated battery and
 ultracapacitor energy, reactor fuel, deployment/tracking state, and per-part
 source/load telemetry.
 
@@ -121,7 +125,8 @@ Priorities shed in this order: life support, flight control, propulsion, and
 utility. Loads at the same priority share a shortfall in proportion to their
 requested powers.
 
-Available solar and reactor generation serve loads before storage discharges.
+Available solar, auxiliary-generator, reactor, and fuel-cell generation serve
+loads before storage discharges (in that source order).
 Unused solar generation charges storage first; unused requested reactor
 capacity can charge any remaining storage capacity. Charge and discharge are
 bounded by per-store limits, and excess generated solar power is reported as
@@ -129,10 +134,13 @@ spill. Unsupplied requested power is reported per consumer and as a total.
 Fold and sun-tracking actuators join the bus as utility loads with their
 authored power draws.
 
-An electric thruster can use a same-named consumer. After the bus step,
-`VehicleDefinition::electric_thruster_commands_from_bus` converts that
-consumer's delivered power into the thruster's available-power input; the
-thruster's existing physical power/flow/thermal limits remain authoritative.
+Electric thrusters, continuous/pulsed fusion power electronics, and electric
+propeller drives use same-named consumers. The runtime derives each request
+from the commanded operating point, takes only delivered bus power, and then
+limits thrust/output accordingly. Electric-thruster feed, fusion reactants and
+working fluids, and fuel-cell reactants are planned in the shared tank
+transaction; tank scarcity triggers a new operating-point evaluation and bus
+redispatch. An unconfigured consumer supplies no electric propulsion power.
 Other parts can use the generic consumer interface; automatic load extraction
 from landing-gear motors, reaction wheels, cabin equipment, and other actuators
 is future integration work.
@@ -141,18 +149,26 @@ is future integration work.
 
 The optional `[electrical_power]` table contains `[[electrical_power.batteries]]`,
 `[[electrical_power.ultracapacitors]]`, `[[electrical_power.solar_arrays]]`,
-`[[electrical_power.reactors]]`, and `[[electrical_power.consumers]]`. A
-single-axis tracking drive is an optional `[electrical_power.solar_arrays.tracking]`
+`[[electrical_power.reactors]]`, `[[electrical_power.fuel_cells]]`, and
+`[[electrical_power.consumers]]`. A fuel cell may specify `feed_port_name` to
+restrict hydrogen/LOX reachability; generic consumers can be routed through
+top-level `[[resource_feed_ports]]`. APUs are authored separately through
+top-level `[[auxiliary_power_units]]` and their actual generator output joins
+the same bus. A single-axis tracking drive is an optional
+`[electrical_power.solar_arrays.tracking]`
 sub-table with rotation axis, angle limits, slew rate, actuator power, and
 initial angle; omitting it means fixed. The complete parameterized example is
 [`data/vehicles/example_powered_spacecraft.toml`](../../data/vehicles/example_powered_spacecraft.toml).
 It includes both a fixed array and a foldable single-axis-tracking array with
 cell-grid sizes, an energy store, an ultracapacitor pulse buffer, a fission
 source, and prioritized loads.
+[`data/vehicles/example_apu_fuel_cell.toml`](../../data/vehicles/example_apu_fuel_cell.toml)
+shows tank-fed LH₂/LOX fuel-cell power alongside an installed APU and cold-gas
+RCS.
 
 The baker validates unique names, positive dimensions/ratings, efficiencies,
-unit panel axes, tracking-axis geometry, and load configuration. It adds power hardware mass/inertia
-before the final vehicle center-of-mass bake and shifts all installed
+unit panel axes, tracking-axis geometry, and load configuration. It adds power
+hardware mass/inertia before the final vehicle center-of-mass bake and shifts all installed
 component positions into the final body frame. Older vehicle assets without
 the table remain valid with an empty power system.
 
@@ -163,8 +179,9 @@ geometric occluders (total/annular plus coincident, partial, disjoint, and
 near-tangent unions; fail-closed without a stellar disc), cell-area scaling,
 mass/inertia derivation, priority shedding, battery
 and ultracapacitor energy/efficiency bounds, reactor heat/fuel balance,
-fold-actuator power limits, single-axis tracking toward the strongest of three
-suns, eclipse hold, and powered-thruster bus allocation. The tracking search
+fold-actuator power limits, fuel-cell stoichiometry/inventory, auxiliary APU
+generation, single-axis tracking toward the strongest of three suns, eclipse
+hold, and powered-thruster bus allocation. The tracking search
 (72-sample scan plus local refinement) recovers >= 99.5% of a 3600-step
 brute-force optimum on a three-sun fixture. The 64-vessel runtime benchmark is
 `cargo bench -p thessa-sim-core --bench electrical_power` (~187k vessel steps/s
@@ -172,6 +189,6 @@ on this run, with tracking, two overlapping occluders, and storage pooling).
 
 The bus is a powered-load allocation model, not a complete electrical network.
 Voltage/current dynamics, ultracapacitor leakage, converters, short circuits,
-solar thermal behavior, fuel-mass center-of-mass drift, own-vehicle
-self-shadowing, multi-axis gimbals, automatic subsystem demand generation, and
-power exchange across docked assemblies remain future work.
+solar thermal behavior, reactor-inventory mass/COM drift, own-vehicle
+self-shadowing, multi-axis gimbals, automatic load extraction from nonpropulsive
+actuators, and power exchange across docked assemblies remain future work.

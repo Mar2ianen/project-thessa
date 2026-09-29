@@ -1,9 +1,13 @@
 use super::*;
-use glam::{DQuat, DVec3};
+use crate::sim::{DOCK_BODY_CONFIG, JOINTED_SCENE_DT_S, legacy_propulsion_echo_changed};
+use glam::{DMat3, DQuat, DVec3};
 use thessa_autopilot::PlanExecutionMode;
 use thessa_sim_core::{
-    ChamberMaterial, CoolingMode, EngineCycle, EngineMount, LiquidEngineSpec, NozzleContour,
-    Propellant, TankMount, TankResource, TankShape, TankSpec, VehiclePartCommand,
+    AeroGeometry, AeroPanel, AssemblyBodyMassProperties, AssemblyLinkState, AssemblyOwnership,
+    ChamberMaterial, CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape,
+    CoolingMode, DockingPortSpec, EngineCycle, EngineMount, LiquidEngineSpec, NamedAssemblyLink,
+    NozzleContour, Propellant, RigidBodyProperties, RigidBodyState, TankMount, TankResource,
+    TankShape, TankSpec, VehicleAssembly, VehicleDefinition, VehicleId, VehiclePartCommand,
 };
 
 fn input(commands: Vec<Command>) -> ClientInput {
@@ -1374,6 +1378,38 @@ fn coalesced_engine_events_match_sequential_application() {
 }
 
 #[test]
+fn unchanged_legacy_propulsion_echo_does_not_reapply_legacy_controls() {
+    let previous = input(Vec::new());
+    let unchanged = previous.clone();
+    assert!(!legacy_propulsion_echo_changed(
+        Some(&previous),
+        &unchanged,
+        false
+    ));
+
+    let mut throttle_changed = unchanged.clone();
+    throttle_changed.throttle = 0.25;
+    assert!(legacy_propulsion_echo_changed(
+        Some(&previous),
+        &throttle_changed,
+        false
+    ));
+
+    let mut active_echo_changed = unchanged.clone();
+    active_echo_changed.engine_active = true;
+    assert!(!legacy_propulsion_echo_changed(
+        Some(&previous),
+        &active_echo_changed,
+        true
+    ));
+    assert!(legacy_propulsion_echo_changed(
+        Some(&previous),
+        &active_echo_changed,
+        false
+    ));
+}
+
+#[test]
 fn saturated_work_quantum_does_not_sleep_as_a_fixed_duty_cycle() {
     assert_eq!(
         driver_sleep_duration(false, true, false, 0.0, 256.0, Duration::from_millis(100),),
@@ -1852,4 +1888,355 @@ fn transport_handshake_preserves_pipelined_and_partial_frames() {
     let mut frames = frames;
     let all = frames.push(&pipelined).expect("pipelined read");
     assert_eq!(all.len(), 3, "all post-hello frames must survive");
+}
+
+fn separable_assembly_vehicle() -> VehicleDefinition {
+    let panels = vec![
+        AeroPanel::new(DVec3::new(-2.0, 0.0, 0.0), DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+        AeroPanel::new(DVec3::new(2.0, 0.0, 0.0), DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+    ];
+    let geometry = AeroGeometry::new(panels).expect("geometry");
+    let properties = RigidBodyProperties::new(
+        200.0,
+        glam::DMat3::from_diagonal(DVec3::new(20.0, 840.0, 860.0)),
+    )
+    .expect("mass");
+    let collision = CollisionGeometry::new(vec![
+        CollisionPart::new(
+            DVec3::new(-2.0, 0.0, 0.0),
+            DQuat::IDENTITY,
+            CollisionShape::Sphere { radius_m: 0.25 },
+            CollisionMaterial::default(),
+        )
+        .expect("contact"),
+        CollisionPart::new(
+            DVec3::new(2.0, 0.0, 0.0),
+            DQuat::IDENTITY,
+            CollisionShape::Sphere { radius_m: 0.25 },
+            CollisionMaterial::default(),
+        )
+        .expect("contact"),
+    ])
+    .expect("collision");
+    let assembly = VehicleAssembly {
+        root_body: 0,
+        body_names: vec!["core".into(), "booster".into()],
+        links: vec![NamedAssemblyLink {
+            name: "stack".into(),
+            state: AssemblyLinkState {
+                a: 0,
+                b: 1,
+                hatch: false,
+                open: true,
+            },
+            feed_line: None,
+        }],
+        resource_edges: Vec::new(),
+        joint_strengths: Vec::new(),
+        volumes: Vec::new(),
+        tanks: Vec::new(),
+        engine_ports: Vec::new(),
+    };
+    let ownership = AssemblyOwnership {
+        panel_bodies: vec![0, 1],
+        collision_bodies: vec![0, 1],
+        cabin_bodies: Vec::new(),
+        cabin_exit_bodies: Vec::new(),
+        cabin_seat_bodies: Vec::new(),
+        cabin_monument_bodies: Vec::new(),
+        control_core_bodies: Vec::new(),
+        control_station_bodies: Vec::new(),
+        engine_bodies: Vec::new(),
+        tank_bodies: Vec::new(),
+        system_bodies: Vec::new(),
+        jet_bodies: Vec::new(),
+        rcs_bodies: Vec::new(),
+        heat_shield_bodies: Vec::new(),
+        docking_port_bodies: Vec::new(),
+        body_masses: vec![
+            AssemblyBodyMassProperties {
+                mass_kg: 100.0,
+                center_of_mass_body_m: DVec3::new(-2.0, 0.0, 0.0),
+                inertia_about_center_body_kg_m2: glam::DMat3::from_diagonal(DVec3::new(
+                    10.0, 20.0, 30.0,
+                )),
+            },
+            AssemblyBodyMassProperties {
+                mass_kg: 100.0,
+                center_of_mass_body_m: DVec3::new(2.0, 0.0, 0.0),
+                inertia_about_center_body_kg_m2: glam::DMat3::from_diagonal(DVec3::new(
+                    10.0, 20.0, 30.0,
+                )),
+            },
+        ],
+    };
+    let mut vehicle = VehicleDefinition::new("separable", geometry, properties, Vec::new())
+        .expect("vehicle")
+        .with_collision_geometry(collision)
+        .expect("collision")
+        .with_assembly(assembly)
+        .expect("assembly");
+    vehicle.assembly_ownership = Some(ownership);
+    vehicle.validate().expect("separable vehicle");
+    vehicle
+}
+
+fn install_separable_vehicle(sim: &mut Sim) {
+    let vehicle = separable_assembly_vehicle();
+    let reference_body = sim.authority.reference_body;
+    sim.authority = FlightAuthority::new_with_vehicle(&sim.ephemeris, reference_body, vehicle)
+        .expect("separable authority");
+}
+
+#[test]
+fn separate_rejects_vehicles_without_assembly_or_links() {
+    let (mut driver, _) = test_driver();
+    driver.sim.register("pilot");
+    let _ = driver.sim.apply_input(
+        "pilot",
+        &input(vec![Command::Separate {
+            vehicle_id: VehicleId::PRIMARY,
+            link_name: "stack".into(),
+        }]),
+    );
+    assert!(
+        driver
+            .sim
+            .authority
+            .wake_notice
+            .as_deref()
+            .unwrap_or_default()
+            .contains("rejected")
+    );
+    assert!(driver.sim.fleet.is_empty());
+    // Unknown vehicles fail closed without touching the fleet.
+    let _ = driver.sim.apply_input(
+        "pilot",
+        &input(vec![Command::Separate {
+            vehicle_id: VehicleId::new(7),
+            link_name: "stack".into(),
+        }]),
+    );
+    assert!(driver.sim.fleet.is_empty());
+}
+
+#[test]
+fn separate_spawns_a_secondary_with_conserved_mass_and_fleet_snapshot() {
+    let (mut driver, _) = test_driver();
+    driver.sim.register("pilot");
+    install_separable_vehicle(&mut driver.sim);
+    let source_mass = driver.sim.authority.vehicle.mass_properties.mass_kg;
+    assert!(driver.sim.apply_input(
+        "pilot",
+        &input(vec![Command::Separate {
+            vehicle_id: VehicleId::PRIMARY,
+            link_name: "stack".into(),
+        }])
+    ));
+    assert_eq!(driver.sim.fleet.len(), 1);
+    let (&id, secondary) = driver.sim.fleet.iter().next().expect("spawned");
+    assert_eq!(id, 1);
+    assert_ne!(
+        secondary.state.position_inertial_m,
+        driver.sim.authority.state.position_inertial_m
+    );
+    let total = driver.sim.authority.vehicle.mass_properties.mass_kg
+        + secondary.vehicle.mass_properties.mass_kg;
+    assert!((total - source_mass).abs() < 1e-6 * source_mass.max(1.0));
+    for authority in [&driver.sim.authority, secondary] {
+        assert!(authority.vehicle.validate().is_ok());
+    }
+    // Fleet snapshots carry the secondary behind the primary fast path.
+    let fleet = driver.sim.fleet_snapshot();
+    assert_eq!(fleet.vehicles.len(), 1);
+    assert_eq!(fleet.vehicles[0].vehicle_id, VehicleId::new(1));
+    assert_eq!(fleet.vehicles[0].snapshot.state, secondary.state);
+    // A second separation of a single-body cluster fails closed.
+    let _ = driver.sim.apply_input(
+        "pilot",
+        &input(vec![Command::Separate {
+            vehicle_id: VehicleId::new(1),
+            link_name: "stack".into(),
+        }]),
+    );
+    assert_eq!(driver.sim.fleet.len(), 1);
+}
+
+#[test]
+fn dock_and_undock_reject_unknown_vehicles_ports_and_sessions() {
+    let (mut driver, _) = test_driver();
+    driver.sim.register("pilot");
+    install_separable_vehicle(&mut driver.sim);
+    // No docking ports on the test vehicle: resolution fails closed.
+    let _ = driver.sim.apply_input(
+        "pilot",
+        &input(vec![Command::Dock {
+            vehicle_id: VehicleId::PRIMARY,
+            port_id: "core.d1".into(),
+            target_vehicle_id: VehicleId::new(1),
+            target_port_id: "booster.d1".into(),
+        }]),
+    );
+    assert!(
+        driver
+            .sim
+            .authority
+            .wake_notice
+            .as_deref()
+            .unwrap_or_default()
+            .contains("rejected")
+    );
+    assert!(driver.sim.dock_graph.is_empty());
+    // Undock without a session fails closed.
+    let _ = driver.sim.apply_input(
+        "pilot",
+        &input(vec![Command::Undock {
+            vehicle_id: VehicleId::PRIMARY,
+            port_id: "core.d1".into(),
+        }]),
+    );
+    assert!(driver.sim.dock_graph.is_empty());
+    assert!(driver.sim.dock_joints.is_empty());
+}
+
+#[test]
+fn dock_graph_tracks_sessions_for_docking_port_vehicles() {
+    let (mut driver, _) = test_driver();
+    install_separable_vehicle(&mut driver.sim);
+    // Give the core cluster one D1 port through the definition.
+    let authority = &mut driver.sim.authority;
+    authority
+        .vehicle
+        .assembly_ownership
+        .as_mut()
+        .expect("ownership")
+        .docking_port_bodies
+        .push(0);
+    let mut ports = authority.vehicle.docking_ports.clone();
+    ports.push(
+        DockingPortSpec::d1("core.d1", DVec3::new(-2.0, 0.0, 0.0), DQuat::IDENTITY).expect("port"),
+    );
+    authority.vehicle = authority
+        .vehicle
+        .clone()
+        .with_docking_ports(ports)
+        .expect("ports");
+    driver.sim.register("pilot");
+    assert!(driver.sim.apply_input(
+        "pilot",
+        &input(vec![Command::Separate {
+            vehicle_id: VehicleId::PRIMARY,
+            link_name: "stack".into(),
+        }])
+    ));
+    assert_eq!(driver.sim.fleet.len(), 1);
+    // The core cluster keeps the port; the booster has none, so docking
+    // fails closed on port resolution rather than inventing geometry.
+    let _ = driver.sim.apply_input(
+        "pilot",
+        &input(vec![Command::Dock {
+            vehicle_id: VehicleId::PRIMARY,
+            port_id: "core.d1".into(),
+            target_vehicle_id: VehicleId::new(1),
+            target_port_id: "booster.d1".into(),
+        }]),
+    );
+    assert!(driver.sim.dock_graph.is_empty());
+}
+
+#[test]
+fn jointed_pair_persists_partner_solver_state_and_synchronized_time() {
+    let (mut driver, _) = test_driver();
+    let reference_body = driver.sim.authority.reference_body;
+    let geometry = AeroGeometry::new(vec![
+        AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+    ])
+    .expect("aero geometry");
+    let collision = CollisionGeometry::new(vec![
+        CollisionPart::new(
+            DVec3::ZERO,
+            DQuat::IDENTITY,
+            CollisionShape::Sphere { radius_m: 0.25 },
+            CollisionMaterial::default(),
+        )
+        .expect("collision part"),
+    ])
+    .expect("collision geometry");
+    let vehicle = VehicleDefinition::new(
+        "jointed-test",
+        geometry,
+        RigidBodyProperties::new(100.0, DMat3::IDENTITY * 100.0).expect("mass properties"),
+        Vec::new(),
+    )
+    .expect("vehicle")
+    .with_collision_geometry(collision)
+    .expect("collision");
+    let mut host =
+        FlightAuthority::new_with_vehicle(&driver.sim.ephemeris, reference_body, vehicle.clone())
+            .expect("host authority");
+    let mut partner =
+        FlightAuthority::new_with_vehicle(&driver.sim.ephemeris, reference_body, vehicle)
+            .expect("partner authority");
+    let body = driver
+        .sim
+        .ephemeris
+        .body(reference_body)
+        .expect("reference body");
+    let body_state = driver
+        .sim
+        .ephemeris
+        .body_state(reference_body, SimTime(0.0))
+        .expect("body state");
+    let host_position = body_state.position_inertial + DVec3::X * (body.radius_m + 10_000_000.0);
+    let partner_position = host_position + DVec3::X;
+    let velocity = DVec3::new(0.0, 10.0, 0.0);
+    host.state = RigidBodyState::new(host_position, velocity, DQuat::IDENTITY, DVec3::ZERO)
+        .expect("host state");
+    partner.state = RigidBodyState::new(partner_position, velocity, DQuat::IDENTITY, DVec3::ZERO)
+        .expect("partner state");
+    host.enable_contact_mode(10.0, 20.0).expect("contact mode");
+    let host_state = host.state;
+    let partner_state = partner.state;
+    let host_props = host.vehicle.mass_properties;
+    let host_geometry = host.vehicle.collision_geometry.clone();
+    let partner_props = partner.vehicle.mass_properties;
+    let partner_geometry = partner.vehicle.collision_geometry.clone();
+    let runtime = host.contact_runtime_mut().expect("contact runtime");
+    runtime
+        .sync_body(host_state, host_props, &host_geometry, DOCK_BODY_CONFIG)
+        .expect("sync host");
+    runtime
+        .sync_partner(
+            1,
+            partner_state,
+            partner_props,
+            &partner_geometry,
+            DOCK_BODY_CONFIG,
+        )
+        .expect("sync partner");
+    let joint = runtime
+        .dock_partner(
+            1,
+            DVec3::new(0.5, 0.0, 0.0),
+            DQuat::IDENTITY,
+            DVec3::new(-0.5, 0.0, 0.0),
+            DQuat::IDENTITY,
+        )
+        .expect("fixed joint");
+    let initial_partner_position = partner.state.position_inertial_m;
+    driver.sim.authority = host;
+    driver.sim.fleet.insert(1, partner);
+    driver.sim.dock_joints.insert((0, 1), joint);
+
+    driver
+        .sim
+        .step_jointed_pair((0, 1), JOINTED_SCENE_DT_S)
+        .expect("jointed step");
+
+    let advanced_partner = driver.sim.fleet.get(&1).expect("partner remains");
+    assert_eq!(driver.sim.authority.flight_time_s, JOINTED_SCENE_DT_S);
+    assert_eq!(advanced_partner.flight_time_s, JOINTED_SCENE_DT_S);
+    assert!(
+        (advanced_partner.state.position_inertial_m - initial_partner_position).length() > 1.0e-4
+    );
 }

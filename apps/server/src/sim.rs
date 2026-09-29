@@ -695,6 +695,12 @@ impl Sim {
                 chunk_s = chunk_s.min((until.0 - now.0).max(0.0));
             }
         }
+        // Jointed scenes have a bounded per-frame service quantum. Keep the
+        // whole fleet on one simulation clock while that scene is active by
+        // applying the same cap to the primary and passive vehicles.
+        if !self.dock_joints.is_empty() {
+            chunk_s = chunk_s.min(JOINTED_SCENE_DEBT_CAP_S);
+        }
         let before = self.authority.flight_time_s;
         let started = Instant::now();
         let plan_demand = self.plan_demand;
@@ -747,7 +753,7 @@ impl Sim {
             if pair.0 == VehicleId::PRIMARY.0 {
                 continue;
             }
-            if let Err(error) = self.step_jointed_pair(*pair, chunk_s) {
+            if let Err(error) = self.step_jointed_pair(*pair, advanced) {
                 eprintln!("[server] jointed pair {pair:?} failed: {error}");
                 self.authority.wake_notice = Some(format!("jointed pair failed: {error}"));
             }
@@ -764,7 +770,7 @@ impl Sim {
                 continue;
             }
             if let Err(error) =
-                secondary.advance_with_budget(&self.ephemeris, ControlMode::Direct, chunk_s, None)
+                secondary.advance_with_budget(&self.ephemeris, ControlMode::Direct, advanced, None)
             {
                 secondary.engine_active = false;
                 secondary.flight_error = Some(error.to_string());
@@ -896,7 +902,7 @@ pub(super) const JOINTED_SCENE_DT_S: f64 = 1.0 / 120.0;
 pub(super) const MAX_FLEET_VEHICLES: usize = 64;
 /// Solver body config for dock-partner sync: full CCD, never sleep, so a
 /// jointed pair cannot freeze mid-protocol.
-const DOCK_BODY_CONFIG: DynamicBodyConfig = DynamicBodyConfig {
+pub(super) const DOCK_BODY_CONFIG: DynamicBodyConfig = DynamicBodyConfig {
     full_ccd: true,
     can_sleep: false,
 };
@@ -959,7 +965,11 @@ impl Sim {
             let authority = self.vehicle_authority(vehicle_id)?;
             authority
                 .vehicle
-                .split_definitions_after_link_failure(link_name, authority.state)
+                .split_definitions_after_link_failure(
+                    link_name,
+                    authority.state,
+                    &authority.resource_state,
+                )
                 .map_err(|error| error.to_string())?
         };
         if self.fleet.len() + definitions.len() > MAX_FLEET_VEHICLES {
@@ -967,26 +977,31 @@ impl Sim {
         }
         let keep_index = definitions
             .iter()
-            .position(|(definition, _)| {
+            .position(|(definition, _, _)| {
                 definition
                     .assembly
                     .as_ref()
                     .is_some_and(|assembly| assembly.body_names.contains(&root_name))
             })
             .ok_or_else(|| "split lost the root body".to_string())?;
+        let mut prepared = Vec::with_capacity(definitions.len());
+        for (definition, state, resource_state) in definitions {
+            let mut authority =
+                FlightAuthority::new_with_vehicle(&self.ephemeris, reference_body, definition)
+                    .map_err(|error| format!("cluster authority: {error}"))?;
+            authority.state = state;
+            authority.resource_state = resource_state;
+            authority.flight_time_s = source_time;
+            authority.world_tick = source_tick;
+            prepared.push(authority);
+        }
         if vehicle_id == VehicleId::PRIMARY.0 {
             self.cancel_autopilot_tasks();
             self.clear_autopilot_controls();
             self.authority.flight_error = None;
         }
         let mut spawned = Vec::new();
-        for (index, (definition, state)) in definitions.into_iter().enumerate() {
-            let mut authority =
-                FlightAuthority::new_with_vehicle(&self.ephemeris, reference_body, definition)
-                    .map_err(|error| format!("cluster authority: {error}"))?;
-            authority.state = state;
-            authority.flight_time_s = source_time;
-            authority.world_tick = source_tick;
+        for (index, authority) in prepared.into_iter().enumerate() {
             if index == keep_index {
                 if vehicle_id == VehicleId::PRIMARY.0 {
                     self.authority = authority;
@@ -1161,7 +1176,7 @@ impl Sim {
             )
         };
         let cap = debt_s.min(JOINTED_SCENE_DEBT_CAP_S);
-        let served = {
+        let (served, partner_state) = {
             let host: &mut FlightAuthority = if pair.0 == VehicleId::PRIMARY.0 {
                 &mut self.authority
             } else {
@@ -1233,7 +1248,7 @@ impl Sim {
             host.state = primary_state;
             host.flight_time_s = host_time + served;
             host.rails.invalidate();
-            served
+            (served, secondary_state)
         };
         let mut partner = self
             .fleet

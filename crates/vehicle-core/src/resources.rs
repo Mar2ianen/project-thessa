@@ -543,6 +543,7 @@ struct ResourceTransition {
     solid_ignited: Vec<bool>,
     mass_properties: RigidBodyProperties,
     frame_shift_body_m: DVec3,
+    assembly_body_masses: Option<Vec<crate::AssemblyBodyMassProperties>>,
 }
 
 struct ThrottleAllocation {
@@ -1550,12 +1551,14 @@ impl VehicleDefinition {
         let mut mass_delta_kg = 0.0;
         let mut first_moment_delta = DVec3::ZERO;
         let mut inertia_delta = DMat3::ZERO;
+        let mut body_mass_deltas = Vec::new();
         for (index, mount) in self.tanks.iter().enumerate() {
             let delta = next_tanks[index] - state.tank_propellant_kg[index];
             if delta == 0.0 {
                 continue;
             }
             let position = DVec3::from_array(mount.position_body_m);
+            let mut intrinsic_delta = DMat3::ZERO;
             mass_delta_kg += delta;
             first_moment_delta += position * delta;
             inertia_delta += parallel_axis(delta, position);
@@ -1569,7 +1572,16 @@ impl VehicleDefinition {
                 let new_intrinsic = shape
                     .intrinsic_inertia_body_kg_m2(mount.tank.dry_mass_kg, next_tanks[index])
                     .map_err(VehicleError::Propulsion)?;
-                inertia_delta += new_intrinsic - old_intrinsic;
+                intrinsic_delta = new_intrinsic - old_intrinsic;
+                inertia_delta += intrinsic_delta;
+            }
+            if let Some(ownership) = &self.assembly_ownership {
+                let body = *ownership.tank_bodies.get(index).ok_or_else(|| {
+                    VehicleError::InvalidVehicle(
+                        "assembly ownership is missing a tank body during mass update".into(),
+                    )
+                })?;
+                body_mass_deltas.push((body, delta, position, intrinsic_delta));
             }
         }
         for (index, mount) in self.engines.iter().enumerate() {
@@ -1592,6 +1604,14 @@ impl VehicleDefinition {
             mass_delta_kg += delta;
             first_moment_delta += position * delta;
             inertia_delta += parallel_axis(delta, position);
+            if let Some(ownership) = &self.assembly_ownership {
+                let body = *ownership.engine_bodies.get(index).ok_or_else(|| {
+                    VehicleError::InvalidVehicle(
+                        "assembly ownership is missing an engine body during mass update".into(),
+                    )
+                })?;
+                body_mass_deltas.push((body, delta, position, DMat3::ZERO));
+            }
         }
 
         let updated_mass_kg = self.mass_properties.mass_kg + mass_delta_kg;
@@ -1611,6 +1631,12 @@ impl VehicleDefinition {
                 "resource change would move body-frame coordinates out of range".into(),
             ));
         }
+        let assembly_body_masses = self
+            .assembly_ownership
+            .as_ref()
+            .map(|ownership| ownership.body_masses_after_deltas(&body_mass_deltas))
+            .transpose()
+            .map_err(|error| VehicleError::InvalidVehicle(error.to_string()))?;
 
         Ok(ResourceTransition {
             tank_propellant_kg: next_tanks,
@@ -1618,6 +1644,7 @@ impl VehicleDefinition {
             solid_ignited: next_solid_ignited,
             mass_properties: properties,
             frame_shift_body_m: frame_shift,
+            assembly_body_masses,
         })
     }
 
@@ -1632,8 +1659,14 @@ impl VehicleDefinition {
             solid_ignited,
             mass_properties,
             frame_shift_body_m,
+            assembly_body_masses,
         } = transition;
 
+        if let (Some(ownership), Some(body_masses)) =
+            (&mut self.assembly_ownership, assembly_body_masses)
+        {
+            ownership.body_masses = body_masses;
+        }
         self.shift_body_frame_origin(frame_shift_body_m);
         self.mass_properties = mass_properties;
         state.tank_propellant_kg = tank_propellant_kg;
@@ -1642,7 +1675,10 @@ impl VehicleDefinition {
         frame_shift_body_m
     }
 
-    fn validate_resource_state(&self, state: &VehicleResourceState) -> Result<(), VehicleError> {
+    pub(crate) fn validate_resource_state(
+        &self,
+        state: &VehicleResourceState,
+    ) -> Result<(), VehicleError> {
         if state.tank_propellant_kg.len() != self.tanks.len()
             || state.solid_burn_time_s.len() != self.engines.len()
             || state.solid_ignited.len() != self.engines.len()

@@ -1300,6 +1300,39 @@ impl VehicleDefinition {
         self.validate_with_cabins(&updated_cabins)?;
         let (mass_properties, frame_shift) =
             self.mass_properties_after_cabin_change(&self.cabins, &updated_cabins)?;
+        let assembly_body_masses = if let Some(ownership) = &self.assembly_ownership {
+            let mut deltas = Vec::with_capacity(updated_cabins.len());
+            for (index, updated) in updated_cabins.iter().enumerate() {
+                let old = self
+                    .cabins
+                    .iter()
+                    .find(|cabin| cabin.name == updated.name)
+                    .ok_or_else(|| {
+                        VehicleError::InvalidVehicle(format!(
+                            "pressure transition introduced unknown cabin '{}'",
+                            updated.name
+                        ))
+                    })?;
+                let body = *ownership.cabin_bodies.get(index).ok_or_else(|| {
+                    VehicleError::InvalidVehicle(
+                        "assembly ownership is missing a cabin body during mass update".into(),
+                    )
+                })?;
+                deltas.push((
+                    body,
+                    updated.air_kg - old.air_kg,
+                    updated.centroid_body_m,
+                    DMat3::ZERO,
+                ));
+            }
+            Some(
+                ownership
+                    .body_masses_after_deltas(&deltas)
+                    .map_err(|error| VehicleError::InvalidVehicle(error.to_string()))?,
+            )
+        } else {
+            None
+        };
         if !self.body_frame_shift_is_finite(frame_shift)
             || updated_cabins
                 .iter()
@@ -1308,6 +1341,11 @@ impl VehicleDefinition {
             return Err(VehicleError::InvalidVehicle(
                 "cabin transition would move body-frame coordinates out of range".into(),
             ));
+        }
+        if let (Some(ownership), Some(body_masses)) =
+            (&mut self.assembly_ownership, assembly_body_masses)
+        {
+            ownership.body_masses = body_masses;
         }
         self.shift_body_frame_origin(frame_shift);
         self.mass_properties = mass_properties;
@@ -1403,15 +1441,16 @@ impl VehicleDefinition {
     /// Partition this vehicle into independent cluster definitions after one
     /// structural link fails, using baked per-body ownership.
     ///
-    /// Returns one `(VehicleDefinition, RigidBodyState)` per connected
-    /// component. Geometry, mounts, cabins, controls, feed routes, and the
-    /// split assembly topology migrate by owning body and recenter onto the
-    /// cluster COM; mass and inertia come from the conservation-checked
-    /// reconstruction, so unassigned mass fails closed instead of silently
-    /// vanishing. Ownership is rebuilt with local body indices, so clusters
-    /// split again. Shared vehicle-level networks (`electrical_power`,
-    /// `thermal`) stay with the root-body cluster by design: their hardware
-    /// is attributed to the root body in the baked body masses.
+    /// Returns one `(VehicleDefinition, RigidBodyState, VehicleResourceState)`
+    /// per connected component. Geometry, mounts, cabins, controls, feed
+    /// routes, live tank inventory, solid-motor burn state, and the split
+    /// assembly topology migrate by owning body and recenter onto the cluster
+    /// COM; mass and inertia come from the conservation-checked reconstruction,
+    /// so unassigned mass fails closed instead of silently vanishing.
+    /// Ownership is rebuilt with local body indices, so clusters split again.
+    /// Shared vehicle-level networks (`electrical_power`, `thermal`) stay with
+    /// the root-body cluster by design: their hardware is attributed to the
+    /// root body in the baked body masses.
     ///
     /// Fail-closed cases: missing assembly or ownership, non-empty stores
     /// whose migration is a later slice (auxiliary power, electric/fusion/
@@ -1422,7 +1461,8 @@ impl VehicleDefinition {
         &self,
         failed_link_name: &str,
         source_state: RigidBodyState,
-    ) -> Result<Vec<(VehicleDefinition, RigidBodyState)>, VehicleError> {
+        resource_state: &VehicleResourceState,
+    ) -> Result<Vec<(VehicleDefinition, RigidBodyState, VehicleResourceState)>, VehicleError> {
         let assembly = self.assembly.as_ref().ok_or_else(|| {
             VehicleError::InvalidVehicle("vehicle has no part assembly graph".into())
         })?;
@@ -1430,6 +1470,7 @@ impl VehicleDefinition {
         let ownership = self.assembly_ownership.as_ref().ok_or_else(|| {
             VehicleError::InvalidVehicle("vehicle has no baked part ownership".into())
         })?;
+        self.validate_resource_state(resource_state)?;
         if !self.auxiliary_power_units.is_empty()
             || !self.electric_thrusters.is_empty()
             || !self.fusion_torches.is_empty()
@@ -1477,7 +1518,15 @@ impl VehicleDefinition {
                     panels.push(panel);
                 }
             }
-            let geometry = AeroGeometry::new(panels).map_err(VehicleError::Geometry)?;
+            let geometry = if panels.is_empty() {
+                // Structural clusters such as payloads can legitimately have
+                // no aerodynamic surfaces after separation. The ordinary
+                // vehicle constructor requires a panel; a split cluster uses
+                // the valid empty runtime representation instead.
+                AeroGeometry::default()
+            } else {
+                AeroGeometry::new(panels).map_err(VehicleError::Geometry)?
+            };
             let mut control_remap = vec![None; self.control_surfaces.len()];
             let mut controls = Vec::new();
             for (index, control) in self.control_surfaces.iter().enumerate() {
@@ -1565,6 +1614,13 @@ impl VehicleDefinition {
                 if cluster.body_indices.contains(&ownership.tank_bodies[index]) {
                     let mut mount = mount.clone();
                     shift_station(&mut mount.position_body_m);
+                    let propellant_kg = resource_state.tank_propellant_kg[index];
+                    mount.initial_propellant_kg = Some(propellant_kg);
+                    if let Some(shape) = mount.tank.shape {
+                        mount.intrinsic_inertia_body_kg_m2 = shape
+                            .intrinsic_inertia_body_kg_m2(mount.tank.dry_mass_kg, propellant_kg)
+                            .map_err(VehicleError::Propulsion)?;
+                    }
                     tanks.push(mount);
                 }
             }
@@ -1776,6 +1832,76 @@ impl VehicleDefinition {
                     })
                     .collect(),
             };
+            let local_resource_state = VehicleResourceState {
+                tank_propellant_kg: ownership
+                    .tank_bodies
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, body)| {
+                        cluster
+                            .body_indices
+                            .contains(body)
+                            .then_some(resource_state.tank_propellant_kg[index])
+                    })
+                    .collect(),
+                solid_burn_time_s: ownership
+                    .engine_bodies
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, body)| {
+                        cluster
+                            .body_indices
+                            .contains(body)
+                            .then_some(resource_state.solid_burn_time_s[index])
+                    })
+                    .collect(),
+                solid_ignited: ownership
+                    .engine_bodies
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, body)| {
+                        cluster
+                            .body_indices
+                            .contains(body)
+                            .then_some(resource_state.solid_ignited[index])
+                    })
+                    .collect(),
+            };
+            let mut electrical_power = if cluster.body_indices.contains(&assembly.root_body) {
+                self.electrical_power.clone()
+            } else {
+                ElectricalPowerSystem::default()
+            };
+            if cluster.body_indices.contains(&assembly.root_body) {
+                for part in &mut electrical_power.batteries {
+                    part.position_body_m += shift;
+                }
+                for part in &mut electrical_power.ultracapacitors {
+                    part.position_body_m += shift;
+                }
+                for part in &mut electrical_power.solar_arrays {
+                    part.position_body_m += shift;
+                }
+                for part in &mut electrical_power.reactors {
+                    part.position_body_m += shift;
+                }
+                for part in &mut electrical_power.fuel_cells {
+                    part.position_body_m += shift;
+                }
+            }
+            let mut thermal = if keeps_root {
+                self.thermal.clone()
+            } else {
+                ThermalSystem::default()
+            };
+            if keeps_root {
+                for node in &mut thermal.nodes {
+                    node.position_body_m += shift;
+                }
+                for radiator in &mut thermal.radiators {
+                    radiator.position_body_m += shift;
+                }
+            }
             let root_name = split_assembly.body_names[split_assembly.root_body].clone();
             let definition = VehicleDefinition {
                 name: format!("{}#{root_name}", self.name),
@@ -1810,19 +1936,12 @@ impl VehicleDefinition {
                 assembly: Some(split_assembly),
                 assembly_ownership: Some(local_ownership),
                 resource_feed_ports,
-                electrical_power: if keeps_root {
-                    self.electrical_power.clone()
-                } else {
-                    ElectricalPowerSystem::default()
-                },
-                thermal: if keeps_root {
-                    self.thermal.clone()
-                } else {
-                    ThermalSystem::default()
-                },
+                electrical_power,
+                thermal,
             };
             definition.validate()?;
-            definitions.push((definition, cluster.state));
+            definition.validate_resource_state(&local_resource_state)?;
+            definitions.push((definition, cluster.state, local_resource_state));
         }
         Ok(definitions)
     }
@@ -1941,6 +2060,11 @@ impl VehicleDefinition {
                 for seat in &mut volume.seat_positions_body_m {
                     *seat += shift;
                 }
+            }
+        }
+        if let Some(ownership) = &mut self.assembly_ownership {
+            for body in &mut ownership.body_masses {
+                body.center_of_mass_body_m += shift;
             }
         }
     }
@@ -2100,6 +2224,12 @@ impl VehicleDefinition {
                             .iter()
                             .all(|seat| shifted_point_is_finite(*seat))
                 })
+            })
+            && self.assembly_ownership.as_ref().is_none_or(|ownership| {
+                ownership
+                    .body_masses
+                    .iter()
+                    .all(|body| shifted_point_is_finite(body.center_of_mass_body_m))
             })
     }
 
@@ -5406,6 +5536,43 @@ mod cabin_authority_tests {
             separable_test_tank("core.tank", DVec3::new(-1.0, 0.0, 0.0)),
             separable_test_tank("booster.tank", DVec3::new(1.0, 0.0, 0.0)),
         ];
+        let (burn_rate_coeff, burn_rate_exponent) = crate::SolidMotorSpec::apcp_ballistics();
+        let solid_motor = crate::SolidMotorSpec {
+            name: "split-solid-motor".into(),
+            propellant: crate::Propellant::SolidApcp,
+            outer_radius_m: 0.5,
+            core_radius_m: 0.32,
+            grain_geometry: crate::SolidGrainGeometry::Circular,
+            segment_length_m: 1.5,
+            segments: 4,
+            burn_rate_coeff,
+            burn_rate_exponent,
+            throat_radius_m: 0.12,
+            expansion_ratio: 10.0,
+            nozzle_length_m: 0.9,
+            contour: crate::NozzleContour::Conical,
+            casing_material: crate::ChamberMaterial::nickel_superalloy(),
+            inhibited_ends: true,
+            segment_core_radii_m: None,
+            gimbal_range_rad: 0.0,
+            ignition_shots: 1,
+        }
+        .compile()
+        .expect("compile split solid motor");
+        let solid_engines = vec![
+            EngineMount {
+                name: "core.motor".into(),
+                engine: CompiledEngine::Solid(solid_motor.clone()),
+                position_body_m: [-1.0, 0.0, 0.0],
+                thrust_axis_body: [1.0, 0.0, 0.0],
+            },
+            EngineMount {
+                name: "booster.motor".into(),
+                engine: CompiledEngine::Solid(solid_motor),
+                position_body_m: [1.0, 0.0, 0.0],
+                thrust_axis_body: [1.0, 0.0, 0.0],
+            },
+        ];
         // Each tank sits exactly on its body structure COM, so the body COM
         // stays at the structure station for any tank mass.
         let mut body_masses = Vec::new();
@@ -5417,7 +5584,8 @@ mod cabin_authority_tests {
         {
             let tank_mass =
                 tanks[body].tank.dry_mass_kg + tanks[body].initial_propellant_kg.unwrap_or(0.0);
-            let mass = 60.0 + tank_mass;
+            let engine_mass = solid_engines[body].engine.bake_mass_kg();
+            let mass = 60.0 + tank_mass + engine_mass;
             let center = *station;
             let centroidal = DMat3::from_diagonal(DVec3::new(1.0, 2.0, 3.0))
                 + tanks[body].intrinsic_inertia_body_kg_m2;
@@ -5465,7 +5633,16 @@ mod cabin_authority_tests {
             resource_edges: Vec::new(),
             joint_strengths: Vec::new(),
             volumes: Vec::new(),
-            tanks: Vec::new(),
+            tanks: vec![
+                crate::AssemblyEndpoint {
+                    name: "core.tank".into(),
+                    body: 0,
+                },
+                crate::AssemblyEndpoint {
+                    name: "booster.tank".into(),
+                    body: 1,
+                },
+            ],
             engine_ports: vec![crate::AssemblyEndpoint {
                 name: "booster.port".into(),
                 body: 1,
@@ -5480,7 +5657,7 @@ mod cabin_authority_tests {
             cabin_monument_bodies: Vec::new(),
             control_core_bodies: Vec::new(),
             control_station_bodies: Vec::new(),
-            engine_bodies: Vec::new(),
+            engine_bodies: vec![0, 1],
             tank_bodies: vec![0, 1],
             system_bodies: Vec::new(),
             jet_bodies: Vec::new(),
@@ -5493,6 +5670,8 @@ mod cabin_authority_tests {
             .expect("vehicle")
             .with_collision_geometry(collision_geometry)
             .expect("collision")
+            .with_engines(solid_engines)
+            .expect("solid engine")
             .with_tanks(tanks)
             .expect("tanks")
             .with_assembly(assembly)
@@ -5526,14 +5705,15 @@ mod cabin_authority_tests {
     #[test]
     fn split_definitions_migrate_owned_subsystems_and_recenter_states() {
         let (vehicle, state) = separable_test_vehicle(vec![separable_fin_control()]);
+        let resource_state = vehicle.initial_resource_state();
         let clusters = vehicle
-            .split_definitions_after_link_failure("stack", state)
+            .split_definitions_after_link_failure("stack", state, &resource_state)
             .expect("split");
         assert_eq!(clusters.len(), 2);
         // Component order follows first body index: core then booster.
         assert_eq!(clusters[0].0.name, "split-ship#core");
         assert_eq!(clusters[1].0.name, "split-ship#booster");
-        for (definition, _) in &clusters {
+        for (definition, _, _) in &clusters {
             definition.validate().expect("cluster validates");
             assert!(definition.assembly_ownership.is_some());
         }
@@ -5581,7 +5761,7 @@ mod cabin_authority_tests {
         // Mass is conserved across the split.
         let total: f64 = clusters
             .iter()
-            .map(|(definition, _)| definition.mass_properties.mass_kg)
+            .map(|(definition, _, _)| definition.mass_properties.mass_kg)
             .sum();
         assert!((total - vehicle.mass_properties.mass_kg).abs() < 1e-9);
         // A control spanning both bodies fails closed instead of splitting.
@@ -5590,22 +5770,94 @@ mod cabin_authority_tests {
         let (spanning_vehicle, spanning_state) = separable_test_vehicle(vec![spanning]);
         assert!(
             spanning_vehicle
-                .split_definitions_after_link_failure("stack", spanning_state)
+                .split_definitions_after_link_failure(
+                    "stack",
+                    spanning_state,
+                    &spanning_vehicle.initial_resource_state(),
+                )
                 .is_err()
         );
         // Missing ownership fails closed.
         let mut bare = vehicle.clone();
         bare.assembly_ownership = None;
         assert!(
-            bare.split_definitions_after_link_failure("stack", state)
-                .is_err()
+            bare.split_definitions_after_link_failure(
+                "stack",
+                state,
+                &bare.initial_resource_state(),
+            )
+            .is_err()
         );
+        let mut moved_inventory = vehicle.clone();
+        let mut resources = moved_inventory.initial_resource_state();
+        moved_inventory
+            .transfer_propellant(&mut resources, "core.tank", "booster.tank", 0.1)
+            .expect("transfer between assembly tanks");
+        let moved_clusters = moved_inventory
+            .split_definitions_after_link_failure("stack", state, &resources)
+            .expect("dynamic body mass records close after transfer");
+        let moved_cluster_mass: f64 = moved_clusters
+            .iter()
+            .map(|(definition, _, _)| definition.mass_properties.mass_kg)
+            .sum();
+        assert!((moved_cluster_mass - moved_inventory.mass_properties.mass_kg).abs() < 1e-9);
+        assert_eq!(
+            moved_clusters[0].0.tanks[0].loaded_propellant_kg(),
+            resources.tank_propellant_kg[0]
+        );
+        assert_eq!(
+            moved_clusters[1].0.tanks[0].loaded_propellant_kg(),
+            resources.tank_propellant_kg[1]
+        );
+        assert_eq!(
+            moved_clusters[0].2.tank_propellant_kg,
+            vec![resources.tank_propellant_kg[0]]
+        );
+        assert_eq!(
+            moved_clusters[1].2.tank_propellant_kg,
+            vec![resources.tank_propellant_kg[1]]
+        );
+        let mut burned_vehicle = vehicle.clone();
+        let mut burned_resources = burned_vehicle.initial_resource_state();
+        let burn_duration = match &burned_vehicle.engines[0].engine {
+            CompiledEngine::Solid(motor) => motor.burn_time_s / 100.0,
+            _ => unreachable!("split fixture has one solid motor"),
+        };
+        let allocation = burned_vehicle
+            .plan_propulsion_step(&burned_resources, &[1.0, 1.0], &[], 0.0, burn_duration)
+            .expect("plan split-fixture solid burn");
+        burned_vehicle
+            .commit_propulsion_step(&mut burned_resources, &allocation)
+            .expect("commit split-fixture solid burn");
+        assert!(burned_resources.solid_ignited[0] && burned_resources.solid_ignited[1]);
+        let burned_clusters = burned_vehicle
+            .split_definitions_after_link_failure("stack", state, &burned_resources)
+            .expect("live solid state and propellant mass survive split");
+        let burned_cluster_mass: f64 = burned_clusters
+            .iter()
+            .map(|(definition, _, _)| definition.mass_properties.mass_kg)
+            .sum();
+        assert!((burned_cluster_mass - burned_vehicle.mass_properties.mass_kg).abs() < 1e-9);
+        assert_eq!(
+            burned_clusters[1].2.solid_burn_time_s,
+            vec![burned_resources.solid_burn_time_s[1]]
+        );
+        assert_eq!(
+            burned_clusters[1].2.solid_ignited,
+            vec![burned_resources.solid_ignited[1]]
+        );
+        assert!(burned_clusters[1].2.solid_burn_time_s[0] > 0.0);
+        assert_eq!(burned_clusters[1].0.engines.len(), 1);
         // Stores without a migration path fail closed.
         let mut geared = vehicle.clone();
         geared.parachutes = vec![test_parachute()];
         assert!(
             geared
-                .split_definitions_after_link_failure("stack", state)
+                .split_definitions_after_link_failure(
+                    "stack",
+                    state,
+                    &geared.initial_resource_state(),
+                )
                 .is_err()
         );
     }
@@ -6006,6 +6258,7 @@ mod cabin_authority_tests {
     fn vent_and_repress_operate_on_the_whole_open_air_domain() {
         let cabins = unequal_cabins();
         let initial_air_kg = cabins.iter().map(|cabin| cabin.air_kg).sum::<f64>();
+        let cabin_air_kg: Vec<f64> = cabins.iter().map(|cabin| cabin.air_kg).collect();
         let mut vehicle = bare_vehicle();
         vehicle.mass_properties = RigidBodyProperties::new(
             1_000.0 + initial_air_kg,
@@ -6017,6 +6270,32 @@ mod cabin_authority_tests {
             .expect("cabins")
             .with_assembly(air_assembly(true))
             .expect("open connected cabins");
+        vehicle.assembly_ownership = Some(crate::AssemblyOwnership {
+            panel_bodies: vec![0],
+            collision_bodies: Vec::new(),
+            cabin_bodies: vec![0, 1],
+            cabin_exit_bodies: Vec::new(),
+            cabin_seat_bodies: Vec::new(),
+            cabin_monument_bodies: Vec::new(),
+            control_core_bodies: Vec::new(),
+            control_station_bodies: Vec::new(),
+            engine_bodies: Vec::new(),
+            tank_bodies: Vec::new(),
+            system_bodies: Vec::new(),
+            jet_bodies: Vec::new(),
+            rcs_bodies: Vec::new(),
+            heat_shield_bodies: Vec::new(),
+            docking_port_bodies: Vec::new(),
+            body_masses: cabin_air_kg
+                .iter()
+                .map(|air_kg| crate::AssemblyBodyMassProperties {
+                    mass_kg: 500.0 + *air_kg,
+                    center_of_mass_body_m: DVec3::ZERO,
+                    inertia_about_center_body_kg_m2: DMat3::IDENTITY * 250.0,
+                })
+                .collect(),
+        });
+        vehicle.validate().expect("assembly ownership validates");
 
         let dumped_kg = vehicle.vent_cabin("service.cabin").expect("vent domain");
         assert!((dumped_kg - initial_air_kg).abs() < 1e-12);
@@ -6028,6 +6307,14 @@ mod cabin_authority_tests {
                 .all(|cabin| cabin.state == crate::CabinPressureState::Vacuum)
         );
         assert!((vehicle.mass_properties.mass_kg - 1_000.0).abs() < 1e-12);
+        assert!(
+            (vehicle.assembly_ownership.as_ref().unwrap().body_masses[0].mass_kg - 500.0).abs()
+                < 1e-12
+        );
+        assert!(
+            (vehicle.assembly_ownership.as_ref().unwrap().body_masses[1].mass_kg - 500.0).abs()
+                < 1e-12
+        );
 
         let vented = vehicle.clone();
         let needed_air_kg: f64 = vehicle
@@ -6052,6 +6339,18 @@ mod cabin_authority_tests {
                 .abs()
                 < 1e-10
         );
+        let split = vehicle
+            .split_definitions_after_link_failure(
+                "hatch",
+                RigidBodyState::stationary(DVec3::ZERO),
+                &vehicle.initial_resource_state(),
+            )
+            .expect("live cabin air mass records reconstruct after a split");
+        let split_mass_kg: f64 = split
+            .iter()
+            .map(|(definition, _, _)| definition.mass_properties.mass_kg)
+            .sum();
+        assert!((split_mass_kg - vehicle.mass_properties.mass_kg).abs() < 1e-9);
     }
 
     #[test]

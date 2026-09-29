@@ -1,13 +1,13 @@
 use super::*;
-use crate::sim::legacy_propulsion_echo_changed;
-use glam::{DQuat, DVec3};
+use crate::sim::{DOCK_BODY_CONFIG, JOINTED_SCENE_DT_S, legacy_propulsion_echo_changed};
+use glam::{DMat3, DQuat, DVec3};
 use thessa_autopilot::PlanExecutionMode;
 use thessa_sim_core::{
     AeroGeometry, AeroPanel, AssemblyBodyMassProperties, AssemblyLinkState, AssemblyOwnership,
     ChamberMaterial, CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape,
     CoolingMode, DockingPortSpec, EngineCycle, EngineMount, LiquidEngineSpec, NamedAssemblyLink,
-    NozzleContour, Propellant, RigidBodyProperties, TankMount, TankResource, TankShape, TankSpec,
-    VehicleAssembly, VehicleDefinition, VehicleId, VehiclePartCommand,
+    NozzleContour, Propellant, RigidBodyProperties, RigidBodyState, TankMount, TankResource,
+    TankShape, TankSpec, VehicleAssembly, VehicleDefinition, VehicleId, VehiclePartCommand,
 };
 
 fn input(commands: Vec<Command>) -> ClientInput {
@@ -2142,4 +2142,101 @@ fn dock_graph_tracks_sessions_for_docking_port_vehicles() {
         }]),
     );
     assert!(driver.sim.dock_graph.is_empty());
+}
+
+#[test]
+fn jointed_pair_persists_partner_solver_state_and_synchronized_time() {
+    let (mut driver, _) = test_driver();
+    let reference_body = driver.sim.authority.reference_body;
+    let geometry = AeroGeometry::new(vec![
+        AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+    ])
+    .expect("aero geometry");
+    let collision = CollisionGeometry::new(vec![
+        CollisionPart::new(
+            DVec3::ZERO,
+            DQuat::IDENTITY,
+            CollisionShape::Sphere { radius_m: 0.25 },
+            CollisionMaterial::default(),
+        )
+        .expect("collision part"),
+    ])
+    .expect("collision geometry");
+    let vehicle = VehicleDefinition::new(
+        "jointed-test",
+        geometry,
+        RigidBodyProperties::new(100.0, DMat3::IDENTITY * 100.0).expect("mass properties"),
+        Vec::new(),
+    )
+    .expect("vehicle")
+    .with_collision_geometry(collision)
+    .expect("collision");
+    let mut host =
+        FlightAuthority::new_with_vehicle(&driver.sim.ephemeris, reference_body, vehicle.clone())
+            .expect("host authority");
+    let mut partner =
+        FlightAuthority::new_with_vehicle(&driver.sim.ephemeris, reference_body, vehicle)
+            .expect("partner authority");
+    let body = driver
+        .sim
+        .ephemeris
+        .body(reference_body)
+        .expect("reference body");
+    let body_state = driver
+        .sim
+        .ephemeris
+        .body_state(reference_body, SimTime(0.0))
+        .expect("body state");
+    let host_position = body_state.position_inertial + DVec3::X * (body.radius_m + 10_000_000.0);
+    let partner_position = host_position + DVec3::X;
+    let velocity = DVec3::new(0.0, 10.0, 0.0);
+    host.state = RigidBodyState::new(host_position, velocity, DQuat::IDENTITY, DVec3::ZERO)
+        .expect("host state");
+    partner.state = RigidBodyState::new(partner_position, velocity, DQuat::IDENTITY, DVec3::ZERO)
+        .expect("partner state");
+    host.enable_contact_mode(10.0, 20.0).expect("contact mode");
+    let host_state = host.state;
+    let partner_state = partner.state;
+    let host_props = host.vehicle.mass_properties;
+    let host_geometry = host.vehicle.collision_geometry.clone();
+    let partner_props = partner.vehicle.mass_properties;
+    let partner_geometry = partner.vehicle.collision_geometry.clone();
+    let runtime = host.contact_runtime_mut().expect("contact runtime");
+    runtime
+        .sync_body(host_state, host_props, &host_geometry, DOCK_BODY_CONFIG)
+        .expect("sync host");
+    runtime
+        .sync_partner(
+            1,
+            partner_state,
+            partner_props,
+            &partner_geometry,
+            DOCK_BODY_CONFIG,
+        )
+        .expect("sync partner");
+    let joint = runtime
+        .dock_partner(
+            1,
+            DVec3::new(0.5, 0.0, 0.0),
+            DQuat::IDENTITY,
+            DVec3::new(-0.5, 0.0, 0.0),
+            DQuat::IDENTITY,
+        )
+        .expect("fixed joint");
+    let initial_partner_position = partner.state.position_inertial_m;
+    driver.sim.authority = host;
+    driver.sim.fleet.insert(1, partner);
+    driver.sim.dock_joints.insert((0, 1), joint);
+
+    driver
+        .sim
+        .step_jointed_pair((0, 1), JOINTED_SCENE_DT_S)
+        .expect("jointed step");
+
+    let advanced_partner = driver.sim.fleet.get(&1).expect("partner remains");
+    assert_eq!(driver.sim.authority.flight_time_s, JOINTED_SCENE_DT_S);
+    assert_eq!(advanced_partner.flight_time_s, JOINTED_SCENE_DT_S);
+    assert!(
+        (advanced_partner.state.position_inertial_m - initial_partner_position).length() > 1.0e-4
+    );
 }

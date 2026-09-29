@@ -59,7 +59,7 @@ The checked-in vertical slice currently contains:
   and fleet Separate/Dock/Undock commands plus fleet snapshots;
 - `apps/server`: headless authoritative simulation over stdio or TCP, with a
   server-owned vehicle fleet (separation spawning, dock sessions with fixed
-  joints, fleet snapshots);
+  joints, live resource-state preservation across separation, fleet snapshots);
 - `apps/client`: Bevy 0.19 map, pilot HUD, atmospheric and field-first plume
   rendering, terrain streaming, a temporary audio adapter, and an embedded
   authoritative-server path;

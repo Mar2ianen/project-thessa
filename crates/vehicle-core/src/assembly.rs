@@ -224,6 +224,54 @@ pub struct AssemblyOwnership {
 }
 
 impl AssemblyOwnership {
+    /// Apply point-mass inventory changes in the current vehicle frame and
+    /// return updated centroidal records. `intrinsic_inertia_delta` carries
+    /// any inventory-dependent inertia change at the same station.
+    pub(crate) fn body_masses_after_deltas(
+        &self,
+        deltas: &[(usize, f64, DVec3, DMat3)],
+    ) -> Result<Vec<AssemblyBodyMassProperties>, AssemblyError> {
+        let mut body_masses = self.body_masses.clone();
+        for (body, delta_mass_kg, position_body_m, intrinsic_inertia_delta) in deltas {
+            if *body >= body_masses.len()
+                || !delta_mass_kg.is_finite()
+                || !position_body_m.is_finite()
+                || !intrinsic_inertia_delta.is_finite()
+            {
+                return Err(AssemblyError::InvalidBodyMass(
+                    "dynamic body-mass delta is invalid".into(),
+                ));
+            }
+            if *delta_mass_kg == 0.0 && *intrinsic_inertia_delta == DMat3::ZERO {
+                continue;
+            }
+            let mass = &mut body_masses[*body];
+            let next_mass_kg = mass.mass_kg + *delta_mass_kg;
+            if !next_mass_kg.is_finite() || next_mass_kg <= 0.0 {
+                return Err(AssemblyError::InvalidBodyMass(format!(
+                    "dynamic mass change leaves body {body} without positive mass"
+                )));
+            }
+            let old_inertia_about_origin = mass.inertia_about_center_body_kg_m2
+                + parallel_axis(mass.mass_kg, mass.center_of_mass_body_m);
+            let next_first_moment =
+                mass.center_of_mass_body_m * mass.mass_kg + *position_body_m * *delta_mass_kg;
+            let next_center = next_first_moment / next_mass_kg;
+            let next_inertia_about_origin = old_inertia_about_origin
+                + parallel_axis(*delta_mass_kg, *position_body_m)
+                + *intrinsic_inertia_delta;
+            let next_inertia_about_center =
+                next_inertia_about_origin - parallel_axis(next_mass_kg, next_center);
+            RigidBodyProperties::new(next_mass_kg, next_inertia_about_center).map_err(|error| {
+                AssemblyError::InvalidBodyMass(format!("dynamic body {body}: {error}"))
+            })?;
+            mass.mass_kg = next_mass_kg;
+            mass.center_of_mass_body_m = next_center;
+            mass.inertia_about_center_body_kg_m2 = next_inertia_about_center;
+        }
+        Ok(body_masses)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn validate(
         &self,

@@ -125,7 +125,7 @@ fn assembly_asset_bakes_ownership_and_splits_into_valid_clusters() {
     }
     let state = RigidBodyState::stationary(DVec3::ZERO);
     let clusters = vehicle
-        .split_definitions_after_link_failure("stack", state)
+        .split_definitions_after_link_failure("stack", state, &vehicle.initial_resource_state())
         .expect("assembly should split");
     assert_eq!(clusters.len(), 2);
     assert!(clusters[0].0.name.contains("stage"));
@@ -133,7 +133,7 @@ fn assembly_asset_bakes_ownership_and_splits_into_valid_clusters() {
     let mut panels = 0;
     let mut tanks = 0;
     let mut mass_kg = 0.0;
-    for (definition, cluster_state) in &clusters {
+    for (definition, cluster_state, _) in &clusters {
         definition.validate().expect("cluster validates");
         assert!(cluster_state.position_inertial_m.is_finite());
         assert!(cluster_state.velocity_inertial_mps.is_finite());

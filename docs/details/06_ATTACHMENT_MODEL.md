@@ -262,11 +262,20 @@ misattributed: explicit per-part bodies are a later slice.
 `VehicleDefinition::split_definitions_after_link_failure` partitions
 panels, controls (spanning controls fail closed), collision, cabins,
 mounts, feed routes, and the split topology by owning body, recenters
-each cluster onto its COM, and rebuilds local ownership so clusters split
-again. Stores without a migration path (auxiliary power, electric/fusion/
+each cluster onto its COM, rebuilds local ownership so clusters split
+again (including valid empty aero geometry for non-aerodynamic clusters),
+and carries each cluster's live tank inventory and solid-motor burn
+state into its new authority. Per-body mass records are updated when tank
+propellant, solid-motor propellant, or cabin air changes, so a later split
+closes against the current mass and inertia rather than the baked initial
+inventory. The server constructs
+and validates all resulting authorities before replacing the source vehicle.
+Stores without a migration path (auxiliary power, electric/fusion/
 pulsed/propeller/turboprop drives, wheel chassis, landing legs, reaction
-wheels, parachutes, fold joints, blunt discs) and unrated power/thermal
-network partition fail closed with a clear error. The baker regression
+wheels, parachutes, fold joints, blunt discs) fail closed with a clear error.
+The shared power and thermal networks remain attributed to the root-body
+cluster, with their stations recentered into its local frame; independent
+per-cluster network ownership is future work. The baker regression
 bakes `example_assembly.toml`, splits the stack link, and checks
 partition coverage, mass conservation, route following, and cluster
 validation; the `assembly_air` benchmark measures 12.85 us per

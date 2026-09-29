@@ -158,7 +158,11 @@ fn main() {
     // Sanity before timing: the middle link yields two validating clusters.
     assert_eq!(
         split_vehicle
-            .split_definitions_after_link_failure("link-1", split_state)
+            .split_definitions_after_link_failure(
+                "link-1",
+                split_state,
+                &split_vehicle.initial_resource_state(),
+            )
             .expect("fixture splits")
             .len(),
         2
@@ -167,7 +171,11 @@ fn main() {
     for _ in 0..DEFINITION_ITERATIONS {
         black_box(
             split_vehicle
-                .split_definitions_after_link_failure("link-1", split_state)
+                .split_definitions_after_link_failure(
+                    "link-1",
+                    split_state,
+                    &split_vehicle.initial_resource_state(),
+                )
                 .expect("cluster definition split"),
         );
     }

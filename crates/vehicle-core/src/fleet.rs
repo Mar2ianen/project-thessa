@@ -112,6 +112,12 @@ impl DockGraph {
                 pair.0, pair.1
             )));
         }
+        if self.has_vehicle(a) || self.has_vehicle(b) {
+            return Err(FleetError::DuplicateSession(format!(
+                "vehicle {} or {} is already in a docking session",
+                a.0, b.0
+            )));
+        }
         // Keep port-to-vehicle assignment stable under key ordering: the
         // lower id always owns port_a.
         let (port_first, port_second) = if a.0 < b.0 {
@@ -218,6 +224,18 @@ mod tests {
                     1.0
                 )
                 .is_err()
+        );
+        assert!(
+            graph
+                .begin_session(
+                    VehicleId::new(3),
+                    port("c"),
+                    VehicleId::new(4),
+                    port("d"),
+                    1.0
+                )
+                .is_err(),
+            "the contact-scene adapter supports one pair per vehicle"
         );
         assert!(
             graph

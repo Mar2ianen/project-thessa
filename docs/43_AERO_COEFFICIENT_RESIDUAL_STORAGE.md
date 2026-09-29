@@ -13,6 +13,9 @@ Implemented behavior:
   budgets;
 - payload is contiguous across tiles; edge-partial tiles and canonical
   clamping/bilinear sampling semantics are covered;
+- encoding revalidates canonical table grids and samples (including tables
+  mutated through their public fields or deserialized), and non-finite Mach or
+  alpha queries clamp to the same low endpoint as canonical sampling;
 - decoded drag is clamped to the canonical table's non-negative domain before
   interpolation; because source drag is non-negative, this projection cannot
   increase its absolute coefficient error;
@@ -27,8 +30,9 @@ Implemented behavior:
   table-backed SIMD fast path correctly falls back to the scalar table oracle
   instead of expanding the table;
 - unit tests cover adaptive selection, interpolation-space error, odd extents,
-  zero-budget fallback, non-negative decoded drag, physical error conversion,
-  packed signed-code round trips, and end-to-end panel force/moment bounds;
+  zero-budget fallback, malformed-table and non-finite-query guards,
+  non-negative decoded drag, physical error conversion, packed signed-code
+  round trips, and end-to-end panel force/moment bounds;
 - `aero_residual` benchmark reports storage density plus scalar
   decode/interpolation overhead on a 257x257 synthetic stall/transonic field.
 

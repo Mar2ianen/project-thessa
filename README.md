@@ -58,7 +58,10 @@ The checked-in vertical slice currently contains:
   transport with strict validation and ordered typed part commands;
 - `apps/server`: headless authoritative simulation over stdio or TCP;
 - `apps/client`: Bevy 0.19 map, pilot HUD, atmospheric and field-first plume
-  rendering, terrain streaming, and an embedded authoritative-server path;
+  rendering, terrain streaming, a temporary audio adapter, and an embedded
+  authoritative-server path;
+- `thessa-audio-core` and `thessa-audio-synth`: backend-neutral propagation
+  semantics and procedural engine DSP, consumed by the temporary Bevy adapter;
 - `thessa-worldgen-rocky`: deterministic rocky-world fields, geology, climate,
   landmarks, LOD, obstacle reports, and client texture export;
 - `thessa-rcbt-core`, `thessa-rcbt-ffi`, `thessa-rcbt-large-ffi`,
@@ -111,6 +114,8 @@ crates/vehicle-core/     MIT rigid-body, vehicle, and mechanism models
 crates/simd/             MIT optional numeric kernels
 crates/fuselage/         MIT procedural body compiler
 crates/plume-core/       MIT backend-neutral plume field
+crates/audio-core/       MIT backend-neutral acoustic semantics
+crates/audio-synth/      MIT procedural audio DSP
 crates/flight-*          GPL flight authority, control, and transport
 crates/autopilot*        GPL graph and JavaScript automation
 crates/maneuver/         MIT trajectory planning primitives

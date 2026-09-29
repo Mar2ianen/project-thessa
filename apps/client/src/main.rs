@@ -1,4 +1,5 @@
 mod atmosphere;
+mod audio;
 mod contact_gizmos;
 mod docking_demo;
 mod embedded;
@@ -197,6 +198,7 @@ fn main() {
         ))
         .add_plugins(OrbitGizmoPlugin)
         .add_plugins(PilotHudPlugin)
+        .add_plugins(audio::ThessaAudioPlugin)
         .add_plugins(contact_gizmos::ContactGizmoPlugin)
         .add_plugins(PerfMonitorPlugin)
         .add_plugins(AtmospherePlugin)

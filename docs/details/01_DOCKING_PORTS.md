@@ -1,6 +1,9 @@
 # Docking ports
 
-Status: design baseline; exact load ratings, capture geometry, and balance values are TBD.
+Status: design baseline with a D1 contact-scene integration slice. The persisted
+docking protocol, fixed-joint installation/removal, pressure-equalization gate,
+and solver joint-load readback are implemented; physical capture dynamics,
+class-dependent load ratings, and server-level ownership remain future work.
 
 ## 1. Design goals
 

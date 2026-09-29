@@ -76,10 +76,10 @@ The checked-in vertical slice currently contains:
 - isolated validation harnesses for orbital and aerodynamic reference checks.
 
 Factory gameplay, general three-spool/clutched and free-power-turbine dynamics,
-physical structural fracture and vehicle-cluster rebuilding, server-level
-docking ownership, branched fluid networks, full electrical networks, shield thermal
-protection/ablation, save persistence, and production multiplayer remain future
-work. Vehicle thermal nodes and the
+material-rated structural fracture and complete authoritative vehicle-cluster
+rebuilding, server-level docking ownership, branched fluid networks, full
+electrical networks, shield thermal protection/ablation, save persistence, and
+production multiplayer remain future work. Vehicle thermal nodes and the
 ideal shared power bus are implemented slices; they are not full thermal,
 structural, or electrical-network coupling.
 

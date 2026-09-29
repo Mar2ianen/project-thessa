@@ -171,6 +171,139 @@ pub struct AssemblyJointLoad {
     pub moment_nm: f64,
 }
 
+/// Baked per-body ownership of vehicle subsystems.
+///
+/// The baker records which assembly body owns each aero panel, collision
+/// part, cabin record, and propulsion mount at compile time, plus the
+/// complete per-body mass in the final vehicle COM frame. Every index vector
+/// is parallel to its subsystem vector on the owning `VehicleDefinition`;
+/// `body_masses` is indexed like `VehicleAssembly::body_names`.
+///
+/// Hand-authored items without an explicit `body` ride the root body
+/// (legacy single-part path); procedural-body items carry their compiling
+/// body. `VehicleDefinition::split_definitions_after_link_failure` consumes
+/// this record to partition independent cluster definitions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct AssemblyOwnership {
+    #[serde(default)]
+    pub panel_bodies: Vec<usize>,
+    #[serde(default)]
+    pub collision_bodies: Vec<usize>,
+    #[serde(default)]
+    pub cabin_bodies: Vec<usize>,
+    #[serde(default)]
+    pub cabin_exit_bodies: Vec<usize>,
+    #[serde(default)]
+    pub cabin_seat_bodies: Vec<usize>,
+    #[serde(default)]
+    pub cabin_monument_bodies: Vec<usize>,
+    #[serde(default)]
+    pub control_core_bodies: Vec<usize>,
+    #[serde(default)]
+    pub control_station_bodies: Vec<usize>,
+    #[serde(default)]
+    pub engine_bodies: Vec<usize>,
+    #[serde(default)]
+    pub tank_bodies: Vec<usize>,
+    #[serde(default)]
+    pub system_bodies: Vec<usize>,
+    #[serde(default)]
+    pub jet_bodies: Vec<usize>,
+    #[serde(default)]
+    pub rcs_bodies: Vec<usize>,
+    #[serde(default)]
+    pub heat_shield_bodies: Vec<usize>,
+    /// Complete per-body mass (structure, mounts, inventories, shared-system
+    /// hardware attributed to the root body) in the source vehicle COM
+    /// frame. Splits validate these against the source mass properties
+    /// before accepting any cluster.
+    #[serde(default)]
+    pub body_masses: Vec<AssemblyBodyMassProperties>,
+}
+
+impl AssemblyOwnership {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn validate(
+        &self,
+        body_count: usize,
+        panels: usize,
+        collisions: usize,
+        cabins: usize,
+        exits: usize,
+        seats: usize,
+        monuments: usize,
+        cores: usize,
+        stations: usize,
+        engines: usize,
+        tanks: usize,
+        systems: usize,
+        jets: usize,
+        rcs_mounts: usize,
+        heat_shields: usize,
+    ) -> Result<(), AssemblyError> {
+        let counts = [
+            ("panel", self.panel_bodies.len(), panels),
+            ("collision", self.collision_bodies.len(), collisions),
+            ("cabin", self.cabin_bodies.len(), cabins),
+            ("cabin-exit", self.cabin_exit_bodies.len(), exits),
+            ("cabin-seat", self.cabin_seat_bodies.len(), seats),
+            (
+                "cabin-monument",
+                self.cabin_monument_bodies.len(),
+                monuments,
+            ),
+            ("control-core", self.control_core_bodies.len(), cores),
+            (
+                "control-station",
+                self.control_station_bodies.len(),
+                stations,
+            ),
+            ("engine", self.engine_bodies.len(), engines),
+            ("tank", self.tank_bodies.len(), tanks),
+            ("system", self.system_bodies.len(), systems),
+            ("jet", self.jet_bodies.len(), jets),
+            ("rcs", self.rcs_bodies.len(), rcs_mounts),
+            ("heat-shield", self.heat_shield_bodies.len(), heat_shields),
+        ];
+        for (what, got, want) in counts {
+            if got != want {
+                return Err(AssemblyError::InvalidLink(format!(
+                    "assembly ownership tracks {got} {what} bodies for {want} {what} parts"
+                )));
+            }
+        }
+        for bodies in [
+            &self.panel_bodies,
+            &self.collision_bodies,
+            &self.cabin_bodies,
+            &self.cabin_exit_bodies,
+            &self.cabin_seat_bodies,
+            &self.cabin_monument_bodies,
+            &self.control_core_bodies,
+            &self.control_station_bodies,
+            &self.engine_bodies,
+            &self.tank_bodies,
+            &self.system_bodies,
+            &self.jet_bodies,
+            &self.rcs_bodies,
+            &self.heat_shield_bodies,
+        ] {
+            if bodies.iter().any(|body| *body >= body_count) {
+                return Err(AssemblyError::InvalidLink(
+                    "assembly ownership references an unknown body".into(),
+                ));
+            }
+        }
+        if self.body_masses.len() != body_count {
+            return Err(AssemblyError::InvalidBodyMass(format!(
+                "expected {body_count} body mass records, got {}",
+                self.body_masses.len()
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Interior region address in one assembled part.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssemblyVolume {

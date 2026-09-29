@@ -231,15 +231,37 @@ current topology and mass-state primitive only; it excludes part-definition
 migration and authoritative fleet insertion.
 
 This is the physical rigid-body reconstruction contract, not yet a complete
-runtime vehicle reconstruction. The baked `VehicleDefinition` does not yet
-retain enough per-part mass, inertia, aero, collision, thermal, actuator, and
-inventory ownership to instantiate these results as independent authorities.
+runtime vehicle reconstruction. The baker now retains per-body ownership
+for the subsystems it compiles per body: `AssemblyOwnership` records the
+owning body of every aero panel, collision part, cabin record, tank mount,
+and heat-shield mount, plus complete per-body masses in the final COM
+frame (structures, body tanks with loaded propellant and intrinsic
+inertia, cabin-air equilibrium deltas, and vehicle-level hand/power/
+thermal hardware attributed to the root body, which retains the shared
+bus on a split). Hand-authored panels, surfaces, collision, and mounts
+fail closed at bake for multi-body assemblies instead of being silently
+misattributed: explicit per-part bodies are a later slice.
+`VehicleDefinition::split_definitions_after_link_failure` partitions
+panels, controls (spanning controls fail closed), collision, cabins,
+mounts, feed routes, and the split topology by owning body, recenters
+each cluster onto its COM, and rebuilds local ownership so clusters split
+again. Stores without a migration path (auxiliary power, electric/fusion/
+pulsed/propeller/turboprop drives, wheel chassis, landing legs, reaction
+wheels, parachutes, fold joints, blunt discs) and unrated power/thermal
+network partition fail closed with a clear error. The baker regression
+bakes `example_assembly.toml`, splits the stack link, and checks
+partition coverage, mass conservation, route following, and cluster
+validation; the `assembly_air` benchmark measures 12.85 us per
+four-body/sixty-four-panel definition split on an AMD Ryzen 7 8745H
+(release run).
 
 ## 8. Next slices
 
-- Internal assembly-joint load paths, baked
-  per-part ownership, and complete aero/collision/subsystem migration when
-  constructing independent vehicle clusters.
+- Internal assembly-joint load-path resolution; explicit per-part bodies for
+  hand-authored mounts/surfaces; migration for auxiliary, electric, fusion,
+  pulsed, propeller, and turboprop drives, wheel/leg gear, reaction wheels,
+  parachutes, fold joints, blunt discs, and power/thermal network partition
+  across clusters.
 - Server-level docking/separation ownership and persistence across independent
   vehicle authorities.
 - Branched feed-network pressure/flow solving, rate limits, and drain-order

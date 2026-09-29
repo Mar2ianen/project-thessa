@@ -27,9 +27,9 @@ mod vehicle;
 
 pub use assembly::{
     AssemblyBodyMassProperties, AssemblyEndpoint, AssemblyError, AssemblyJointLoad,
-    AssemblyLinkState, AssemblyVolume, NamedAssemblyJointStrength, NamedAssemblyLink,
-    NamedAssemblyResourceEdge, ReconstructedAssemblyCluster, VehicleAssembly, air_groups,
-    crew_groups, feed_reachable, feed_reachable_with_resource_edges,
+    AssemblyLinkState, AssemblyOwnership, AssemblyVolume, NamedAssemblyJointStrength,
+    NamedAssemblyLink, NamedAssemblyResourceEdge, ReconstructedAssemblyCluster, VehicleAssembly,
+    air_groups, crew_groups, feed_reachable, feed_reachable_with_resource_edges,
 };
 pub use cabin::{
     AuthorityReason, AutopilotTier, CabinError, CabinExit, CabinExitSide, CabinExitType,

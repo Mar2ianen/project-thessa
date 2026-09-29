@@ -1,8 +1,9 @@
 use super::*;
 use thessa_sim_core::{
     AtmosphereComposition, AtmosphereConfig, CompiledJet, CompiledShaftPowerSource,
-    ElectricalPowerCommand, FeedResourceProperties, PropellerDriveCommand, SolarArrayTracking,
-    SolarFluxSource, StoredPropellant, ThermalCommand, TurbopropCommand, flight_condition,
+    ElectricalPowerCommand, FeedResourceProperties, PropellerDriveCommand, RigidBodyState,
+    SolarArrayTracking, SolarFluxSource, StoredPropellant, ThermalCommand, TurbopropCommand,
+    flight_condition,
 };
 
 #[test]
@@ -63,6 +64,90 @@ fn assembly_asset_bakes_named_consumer_feed_routes() {
             .unwrap()
             .contains(&("stage.tank".into(), "capsule.engine".into()))
     );
+}
+
+#[test]
+fn assembly_asset_bakes_ownership_and_splits_into_valid_clusters() {
+    let asset: VehicleAsset =
+        toml::from_str(include_str!("../../../data/vehicles/example_assembly.toml"))
+            .expect("assembly vehicle TOML should parse");
+    let vehicle = asset.bake().expect("assembly vehicle should bake");
+    let ownership = vehicle
+        .assembly_ownership
+        .as_ref()
+        .expect("baked part ownership");
+    assert_eq!(
+        ownership.panel_bodies.len(),
+        vehicle.aero_geometry.panels.len()
+    );
+    assert_eq!(
+        ownership.collision_bodies.len(),
+        vehicle.collision_geometry.parts.len()
+    );
+    assert_eq!(ownership.tank_bodies.len(), vehicle.tanks.len());
+    assert_eq!(ownership.body_masses.len(), 2);
+    assert!(
+        ownership
+            .panel_bodies
+            .iter()
+            .chain(&ownership.collision_bodies)
+            .chain(&ownership.tank_bodies)
+            .all(|body| *body < 2)
+    );
+    assert!(ownership.body_masses.iter().all(|body| body.mass_kg > 0.0));
+    // JSON round-trip is structural, not bitwise: irrational-derived bake
+    // values do not survive stock float formatting exactly (the exact
+    // round-trip contract is pinned by the clean-decimal aircraft test).
+    let json = serde_json::to_string(&vehicle).expect("vehicle JSON should serialize");
+    let round_trip: VehicleDefinition =
+        serde_json::from_str(&json).expect("vehicle JSON should deserialize");
+    assert_eq!(round_trip.name, vehicle.name);
+    assert_eq!(
+        round_trip.aero_geometry.panels.len(),
+        vehicle.aero_geometry.panels.len()
+    );
+    let round_ownership = round_trip
+        .assembly_ownership
+        .as_ref()
+        .expect("ownership round-trips");
+    assert_eq!(round_ownership.panel_bodies, ownership.panel_bodies);
+    assert_eq!(round_ownership.collision_bodies, ownership.collision_bodies);
+    assert_eq!(round_ownership.tank_bodies, ownership.tank_bodies);
+    assert_eq!(round_ownership.body_masses.len(), 2);
+    for (restored, original) in round_ownership
+        .body_masses
+        .iter()
+        .zip(&ownership.body_masses)
+    {
+        let scale = original.mass_kg.max(1.0);
+        assert!((restored.mass_kg - original.mass_kg).abs() < 1e-9 * scale);
+        assert!((restored.center_of_mass_body_m - original.center_of_mass_body_m).length() < 1e-9);
+    }
+    let state = RigidBodyState::stationary(DVec3::ZERO);
+    let clusters = vehicle
+        .split_definitions_after_link_failure("stack", state)
+        .expect("assembly should split");
+    assert_eq!(clusters.len(), 2);
+    assert!(clusters[0].0.name.contains("stage"));
+    assert!(clusters[1].0.name.contains("capsule"));
+    let mut panels = 0;
+    let mut tanks = 0;
+    let mut mass_kg = 0.0;
+    for (definition, cluster_state) in &clusters {
+        definition.validate().expect("cluster validates");
+        assert!(cluster_state.position_inertial_m.is_finite());
+        assert!(cluster_state.velocity_inertial_mps.is_finite());
+        panels += definition.aero_geometry.panels.len();
+        tanks += definition.tanks.len();
+        mass_kg += definition.mass_properties.mass_kg;
+    }
+    assert_eq!(panels, vehicle.aero_geometry.panels.len());
+    assert_eq!(tanks, vehicle.tanks.len());
+    let scale = vehicle.mass_properties.mass_kg.max(1.0);
+    assert!((mass_kg - vehicle.mass_properties.mass_kg).abs() < 1e-6 * scale);
+    // The capsule feed route follows its surviving engine port.
+    assert!(clusters[0].0.resource_feed_ports.is_empty());
+    assert_eq!(clusters[1].0.resource_feed_ports.len(), 1);
 }
 
 #[test]

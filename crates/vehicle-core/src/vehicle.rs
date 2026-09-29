@@ -4,11 +4,11 @@ use glam::{DMat3, DQuat, DVec3};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AeroBluntDisc, AeroConfig, AeroError, AeroGeometry, AeroPanel, AeroResult, AuthorityReason,
-    AuxiliaryPowerUnitMount, CabinError, CabinExit, CabinMonument, CabinSeat, CollisionAxis,
-    CollisionError, CollisionGeometry, CollisionMaterial, CollisionPart, CollisionShape,
-    CompiledEngine, CompiledLandingLeg, CompiledWheelChassis, ControlAuthority, ControlCore,
-    ControlStation, CrewSuitMode, ElectricThrusterCommand, ElectricThrusterMount,
+    AeroBluntDisc, AeroConfig, AeroError, AeroGeometry, AeroPanel, AeroResult, AssemblyOwnership,
+    AuthorityReason, AuxiliaryPowerUnitMount, CabinError, CabinExit, CabinMonument, CabinSeat,
+    CollisionAxis, CollisionError, CollisionGeometry, CollisionMaterial, CollisionPart,
+    CollisionShape, CompiledEngine, CompiledLandingLeg, CompiledWheelChassis, ControlAuthority,
+    ControlCore, ControlStation, CrewSuitMode, ElectricThrusterCommand, ElectricThrusterMount,
     ElectricThrusterPoint, ElectricalPowerCommand, ElectricalPowerError, ElectricalPowerState,
     ElectricalPowerSystem, ElectricalPowerTelemetry, EngineMount, EstocPoint, FlightCondition,
     FlightError, FusionTorchCommand, FusionTorchMount, FusionTorchOperatingPoint, HeatShieldMount,
@@ -16,11 +16,12 @@ use crate::{
     ParachuteError, ParachuteSpec, PressurizedCabin, PropDrivePoint, PropellerDriveCommand,
     PropellerDriveMount, PropulsionError, PulsedFusionCommand, PulsedFusionMount,
     PulsedFusionOperatingPoint, PulsedFusionState, RcsMount, ReactionWheelBankSpec,
-    ReactionWheelError, RigidBodyProperties, ShieldError, SolarOccluder, StoredPropellant,
-    SystemMount, TankMount, ThermalCommand, ThermalError, ThermalState, ThermalSystem,
-    ThermalTelemetry, TurbopropCommand, TurbopropMount, TurbopropOperatingPoint, VehicleAssembly,
-    VehicleResourceDemand, VehicleResourceFeedPort, VehicleResourceState, WheelBodyMassProperties,
-    WheelChassisMassProperties, WheelChassisSpec, WheelChassisState, control_authority,
+    ReactionWheelError, RigidBodyProperties, RigidBodyState, ShieldError, SolarOccluder,
+    StoredPropellant, SystemMount, TankMount, ThermalCommand, ThermalError, ThermalState,
+    ThermalSystem, ThermalTelemetry, TurbopropCommand, TurbopropMount, TurbopropOperatingPoint,
+    VehicleAssembly, VehicleResourceDemand, VehicleResourceFeedPort, VehicleResourceState,
+    WheelBodyMassProperties, WheelChassisMassProperties, WheelChassisSpec, WheelChassisState,
+    control_authority,
 };
 
 pub type StatefulTurbopropWrench = (
@@ -482,6 +483,11 @@ pub struct VehicleDefinition {
     /// cross-part resource reachability. None is the legacy single-body path.
     #[serde(default)]
     pub assembly: Option<VehicleAssembly>,
+    /// Baked per-body subsystem ownership parallel to the vectors above.
+    /// Present when an assembly was compiled from procedural bodies; the
+    /// split routine consumes it to partition independent clusters.
+    #[serde(default)]
+    pub assembly_ownership: Option<AssemblyOwnership>,
     /// Optional named consumer-to-assembly feed-port routes. Consumers not
     /// listed use the legacy vehicle-level reachable tank set.
     #[serde(default)]
@@ -815,6 +821,7 @@ impl VehicleDefinition {
             control_cores: Vec::new(),
             control_stations: Vec::new(),
             assembly: None,
+            assembly_ownership: None,
             resource_feed_ports: Vec::new(),
             electrical_power: ElectricalPowerSystem::default(),
             thermal: ThermalSystem::default(),
@@ -1385,6 +1392,420 @@ impl VehicleDefinition {
         let properties = RigidBodyProperties::new(updated_mass_kg, updated_inertia)
             .map_err(VehicleError::MassProperties)?;
         Ok((properties, -center_shift))
+    }
+
+    /// Partition this vehicle into independent cluster definitions after one
+    /// structural link fails, using baked per-body ownership.
+    ///
+    /// Returns one `(VehicleDefinition, RigidBodyState)` per connected
+    /// component. Geometry, mounts, cabins, controls, feed routes, and the
+    /// split assembly topology migrate by owning body and recenter onto the
+    /// cluster COM; mass and inertia come from the conservation-checked
+    /// reconstruction, so unassigned mass fails closed instead of silently
+    /// vanishing. Ownership is rebuilt with local body indices, so clusters
+    /// split again. Shared vehicle-level networks (`electrical_power`,
+    /// `thermal`) stay with the root-body cluster by design: their hardware
+    /// is attributed to the root body in the baked body masses.
+    ///
+    /// Fail-closed cases: missing assembly or ownership, non-empty stores
+    /// whose migration is a later slice (auxiliary power, electric/fusion/
+    /// pulsed/propeller/turboprop drives, wheel chassis, landing legs,
+    /// reaction wheels, parachutes, fold joints, blunt discs), controls or
+    /// nested-tab parents spanning clusters.
+    pub fn split_definitions_after_link_failure(
+        &self,
+        failed_link_name: &str,
+        source_state: RigidBodyState,
+    ) -> Result<Vec<(VehicleDefinition, RigidBodyState)>, VehicleError> {
+        let assembly = self.assembly.as_ref().ok_or_else(|| {
+            VehicleError::InvalidVehicle("vehicle has no part assembly graph".into())
+        })?;
+        self.validate()?;
+        let ownership = self.assembly_ownership.as_ref().ok_or_else(|| {
+            VehicleError::InvalidVehicle("vehicle has no baked part ownership".into())
+        })?;
+        if !self.auxiliary_power_units.is_empty()
+            || !self.electric_thrusters.is_empty()
+            || !self.fusion_torches.is_empty()
+            || !self.pulsed_fusion_systems.is_empty()
+            || !self.propeller_drives.is_empty()
+            || !self.turboprops.is_empty()
+            || !self.wheel_chassis.is_empty()
+            || !self.landing_legs.is_empty()
+            || !self.reaction_wheels.is_empty()
+            || !self.parachutes.is_empty()
+            || !self.fold_joints.is_empty()
+            || !self.aero_geometry.blunt_discs.is_empty()
+        {
+            return Err(VehicleError::InvalidVehicle(
+                "split needs migration for auxiliary, electric, fusion, gear, wheel, parachute, fold, or disc stores".into(),
+            ));
+        }
+        let clusters = assembly
+            .reconstruct_clusters_after_link_failure(
+                failed_link_name,
+                &ownership.body_masses,
+                self.mass_properties,
+                source_state,
+            )
+            .map_err(|error| {
+                VehicleError::InvalidVehicle(format!("cannot reconstruct split clusters: {error}"))
+            })?;
+        let in_cluster = |bodies: &[usize], cluster_bodies: &[usize]| {
+            bodies.iter().any(|body| cluster_bodies.contains(body))
+        };
+        let mut definitions = Vec::with_capacity(clusters.len());
+        for cluster in clusters {
+            let shift = -cluster.center_of_mass_body_m;
+            let mut panel_remap = vec![None; self.aero_geometry.panels.len()];
+            let mut panels = Vec::new();
+            for (index, panel) in self.aero_geometry.panels.iter().enumerate() {
+                if cluster
+                    .body_indices
+                    .contains(&ownership.panel_bodies[index])
+                {
+                    panel_remap[index] = Some(panels.len());
+                    let mut panel = *panel;
+                    panel.position_body_m += shift;
+                    panel.center_of_pressure_body_m += shift;
+                    panels.push(panel);
+                }
+            }
+            let geometry = AeroGeometry::new(panels).map_err(VehicleError::Geometry)?;
+            let mut control_remap = vec![None; self.control_surfaces.len()];
+            let mut controls = Vec::new();
+            for (index, control) in self.control_surfaces.iter().enumerate() {
+                let mut remapped = Vec::with_capacity(control.panel_indices.len());
+                let mut spans = false;
+                for panel in &control.panel_indices {
+                    match panel_remap[*panel] {
+                        Some(local) => remapped.push(local),
+                        None => {
+                            spans = true;
+                            break;
+                        }
+                    }
+                }
+                if spans {
+                    continue;
+                }
+                control_remap[index] = Some(controls.len());
+                let mut control = control.clone();
+                control.panel_indices = remapped;
+                if let Some(hinge) = &mut control.hinge {
+                    hinge.point_body_m += shift;
+                }
+                controls.push(control);
+            }
+            for (index, control) in self.control_surfaces.iter().enumerate() {
+                let Some(local) = control_remap[index] else {
+                    if in_cluster(
+                        &[ownership.panel_bodies[control.panel_indices[0]]],
+                        &cluster.body_indices,
+                    ) && control
+                        .panel_indices
+                        .iter()
+                        .any(|panel| panel_remap[*panel].is_none())
+                    {
+                        return Err(VehicleError::InvalidVehicle(format!(
+                            "control surface '{}' spans the split",
+                            control.name
+                        )));
+                    }
+                    continue;
+                };
+                if let Some(parent) = control.parent_index {
+                    match control_remap[parent] {
+                        Some(local_parent) => controls[local].parent_index = Some(local_parent),
+                        None => {
+                            return Err(VehicleError::InvalidVehicle(format!(
+                                "control surface '{}' loses its parent across the split",
+                                control.name
+                            )));
+                        }
+                    }
+                }
+            }
+            let mut parts = Vec::new();
+            for (index, part) in self.collision_geometry.parts.iter().enumerate() {
+                if cluster
+                    .body_indices
+                    .contains(&ownership.collision_bodies[index])
+                {
+                    let mut part = *part;
+                    part.local_position_m += shift;
+                    parts.push(part);
+                }
+            }
+            let collision_geometry =
+                CollisionGeometry::new(parts).map_err(VehicleError::Collision)?;
+            let shift_point = |point: DVec3| point + shift;
+            let shift_station = |station: &mut [f64; 3]| {
+                *station = (DVec3::from_array(*station) + shift).to_array();
+            };
+            let mut engines = Vec::new();
+            for (index, mount) in self.engines.iter().enumerate() {
+                if cluster
+                    .body_indices
+                    .contains(&ownership.engine_bodies[index])
+                {
+                    let mut mount = mount.clone();
+                    shift_station(&mut mount.position_body_m);
+                    engines.push(mount);
+                }
+            }
+            let mut tanks = Vec::new();
+            for (index, mount) in self.tanks.iter().enumerate() {
+                if cluster.body_indices.contains(&ownership.tank_bodies[index]) {
+                    let mut mount = mount.clone();
+                    shift_station(&mut mount.position_body_m);
+                    tanks.push(mount);
+                }
+            }
+            let mut systems = Vec::new();
+            for (index, mount) in self.systems.iter().enumerate() {
+                if cluster
+                    .body_indices
+                    .contains(&ownership.system_bodies[index])
+                {
+                    let mut mount = mount.clone();
+                    for chamber in &mut mount.system.chambers {
+                        shift_station(&mut chamber.position_body_m);
+                    }
+                    systems.push(mount);
+                }
+            }
+            let mut jets = Vec::new();
+            for (index, mount) in self.jets.iter().enumerate() {
+                if cluster.body_indices.contains(&ownership.jet_bodies[index]) {
+                    let mut mount = mount.clone();
+                    shift_station(&mut mount.position_body_m);
+                    jets.push(mount);
+                }
+            }
+            let mut rcs_mounts = Vec::new();
+            for (index, mount) in self.rcs_mounts.iter().enumerate() {
+                if cluster.body_indices.contains(&ownership.rcs_bodies[index]) {
+                    let mut mount = mount.clone();
+                    shift_station(&mut mount.position_body_m);
+                    rcs_mounts.push(mount);
+                }
+            }
+            let mut heat_shields = Vec::new();
+            for (index, shield) in self.heat_shields.iter().enumerate() {
+                if cluster
+                    .body_indices
+                    .contains(&ownership.heat_shield_bodies[index])
+                {
+                    let mut shield = shield.clone();
+                    shield.position_body_m = shift_point(shield.position_body_m);
+                    heat_shields.push(shield);
+                }
+            }
+            let mut cabins = Vec::new();
+            for (index, cabin) in self.cabins.iter().enumerate() {
+                if cluster
+                    .body_indices
+                    .contains(&ownership.cabin_bodies[index])
+                {
+                    let mut cabin = cabin.clone();
+                    cabin.centroid_body_m = shift_point(cabin.centroid_body_m);
+                    cabins.push(cabin);
+                }
+            }
+            let mut cabin_exits = Vec::new();
+            for (index, exit) in self.cabin_exits.iter().enumerate() {
+                if cluster
+                    .body_indices
+                    .contains(&ownership.cabin_exit_bodies[index])
+                {
+                    let mut exit = exit.clone();
+                    exit.position_body_m = shift_point(exit.position_body_m);
+                    cabin_exits.push(exit);
+                }
+            }
+            let mut cabin_seats = Vec::new();
+            for (index, seat) in self.cabin_seats.iter().enumerate() {
+                if cluster
+                    .body_indices
+                    .contains(&ownership.cabin_seat_bodies[index])
+                {
+                    let mut seat = seat.clone();
+                    seat.position_body_m = shift_point(seat.position_body_m);
+                    cabin_seats.push(seat);
+                }
+            }
+            let mut cabin_monuments = Vec::new();
+            for (index, monument) in self.cabin_monuments.iter().enumerate() {
+                if cluster
+                    .body_indices
+                    .contains(&ownership.cabin_monument_bodies[index])
+                {
+                    let mut monument = monument.clone();
+                    monument.position_body_m = shift_point(monument.position_body_m);
+                    cabin_monuments.push(monument);
+                }
+            }
+            let mut control_cores = Vec::new();
+            for (index, core) in self.control_cores.iter().enumerate() {
+                if cluster
+                    .body_indices
+                    .contains(&ownership.control_core_bodies[index])
+                {
+                    control_cores.push(core.clone());
+                }
+            }
+            let mut control_stations = Vec::new();
+            for (index, station) in self.control_stations.iter().enumerate() {
+                if cluster
+                    .body_indices
+                    .contains(&ownership.control_station_bodies[index])
+                {
+                    control_stations.push(station.clone());
+                }
+            }
+            let mut split_assembly = cluster.assembly.clone();
+            for volume in &mut split_assembly.volumes {
+                volume.centroid_body_m = shift_point(volume.centroid_body_m);
+                for seat in &mut volume.seat_positions_body_m {
+                    *seat = shift_point(*seat);
+                }
+            }
+            let port_names: std::collections::HashSet<&str> = split_assembly
+                .engine_ports
+                .iter()
+                .map(|port| port.name.as_str())
+                .collect();
+            let cluster_mount_names: std::collections::HashSet<&str> = engines
+                .iter()
+                .map(|mount| mount.name.as_str())
+                .chain(systems.iter().map(|mount| mount.name.as_str()))
+                .chain(jets.iter().map(|mount| mount.name.as_str()))
+                .chain(rcs_mounts.iter().map(|mount| mount.name.as_str()))
+                .collect();
+            let source_mount_names: std::collections::HashSet<&str> = self
+                .engines
+                .iter()
+                .map(|mount| mount.name.as_str())
+                .chain(self.systems.iter().map(|mount| mount.name.as_str()))
+                .chain(self.jets.iter().map(|mount| mount.name.as_str()))
+                .chain(self.rcs_mounts.iter().map(|mount| mount.name.as_str()))
+                .collect();
+            let fuel_cell_names: std::collections::HashSet<&str> = self
+                .electrical_power
+                .fuel_cells
+                .iter()
+                .map(|cell| cell.name.as_str())
+                .collect();
+            let keeps_root = cluster.body_indices.contains(&assembly.root_body);
+            let mut resource_feed_ports = Vec::new();
+            for route in &self.resource_feed_ports {
+                if !port_names.contains(route.feed_port_name.as_str()) {
+                    continue;
+                }
+                // A route survives when its consumer rides this cluster:
+                // a migrated mount present here, or an external named
+                // consumer (fuel cells only where the root bus stays).
+                let consumer_rides = cluster_mount_names.contains(route.consumer_name.as_str())
+                    || (!source_mount_names.contains(route.consumer_name.as_str())
+                        && (keeps_root || !fuel_cell_names.contains(route.consumer_name.as_str())));
+                if consumer_rides {
+                    resource_feed_ports.push(route.clone());
+                }
+            }
+            let localize = |source_bodies: &[usize]| -> Vec<usize> {
+                source_bodies
+                    .iter()
+                    .filter_map(|body| cluster.body_indices.iter().position(|kept| kept == body))
+                    .collect()
+            };
+            let localize_panels = || -> Vec<usize> {
+                ownership
+                    .panel_bodies
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, body)| {
+                        if panel_remap[index].is_some() {
+                            cluster.body_indices.iter().position(|kept| kept == body)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            };
+            let local_ownership = AssemblyOwnership {
+                panel_bodies: localize_panels(),
+                collision_bodies: localize(&ownership.collision_bodies),
+                cabin_bodies: localize(&ownership.cabin_bodies),
+                cabin_exit_bodies: localize(&ownership.cabin_exit_bodies),
+                cabin_seat_bodies: localize(&ownership.cabin_seat_bodies),
+                cabin_monument_bodies: localize(&ownership.cabin_monument_bodies),
+                control_core_bodies: localize(&ownership.control_core_bodies),
+                control_station_bodies: localize(&ownership.control_station_bodies),
+                engine_bodies: localize(&ownership.engine_bodies),
+                tank_bodies: localize(&ownership.tank_bodies),
+                system_bodies: localize(&ownership.system_bodies),
+                jet_bodies: localize(&ownership.jet_bodies),
+                rcs_bodies: localize(&ownership.rcs_bodies),
+                heat_shield_bodies: localize(&ownership.heat_shield_bodies),
+                body_masses: cluster
+                    .body_indices
+                    .iter()
+                    .map(|body| {
+                        let mut mass = ownership.body_masses[*body];
+                        mass.center_of_mass_body_m += shift;
+                        mass
+                    })
+                    .collect(),
+            };
+            let root_name = split_assembly.body_names[split_assembly.root_body].clone();
+            let definition = VehicleDefinition {
+                name: format!("{}#{root_name}", self.name),
+                aero_geometry: geometry,
+                mass_properties: cluster.mass_properties,
+                control_surfaces: controls,
+                collision_geometry,
+                engines,
+                tanks,
+                systems,
+                jets,
+                auxiliary_power_units: Vec::new(),
+                electric_thrusters: Vec::new(),
+                fusion_torches: Vec::new(),
+                pulsed_fusion_systems: Vec::new(),
+                propeller_drives: Vec::new(),
+                turboprops: Vec::new(),
+                rcs_mounts,
+                wheel_chassis: Vec::new(),
+                landing_legs: Vec::new(),
+                reaction_wheels: Vec::new(),
+                parachutes: Vec::new(),
+                heat_shields,
+                fold_joints: Vec::new(),
+                cabins,
+                cabin_exits,
+                cabin_seats,
+                cabin_monuments,
+                control_cores,
+                control_stations,
+                assembly: Some(split_assembly),
+                assembly_ownership: Some(local_ownership),
+                resource_feed_ports,
+                electrical_power: if keeps_root {
+                    self.electrical_power.clone()
+                } else {
+                    ElectricalPowerSystem::default()
+                },
+                thermal: if keeps_root {
+                    self.thermal.clone()
+                } else {
+                    ThermalSystem::default()
+                },
+            };
+            definition.validate()?;
+            definitions.push((definition, cluster.state));
+        }
+        Ok(definitions)
     }
 
     /// Translate every stored point from the old COM frame into a new one.
@@ -2005,6 +2426,34 @@ impl VehicleDefinition {
                     )));
                 }
             }
+        }
+        if let Some(ownership) = &self.assembly_ownership {
+            let Some(assembly) = &self.assembly else {
+                return Err(VehicleError::InvalidVehicle(
+                    "part ownership needs a part assembly graph".into(),
+                ));
+            };
+            ownership
+                .validate(
+                    assembly.body_names.len(),
+                    self.aero_geometry.panels.len(),
+                    self.collision_geometry.parts.len(),
+                    self.cabins.len(),
+                    self.cabin_exits.len(),
+                    self.cabin_seats.len(),
+                    self.cabin_monuments.len(),
+                    self.control_cores.len(),
+                    self.control_stations.len(),
+                    self.engines.len(),
+                    self.tanks.len(),
+                    self.systems.len(),
+                    self.jets.len(),
+                    self.rcs_mounts.len(),
+                    self.heat_shields.len(),
+                )
+                .map_err(|error| {
+                    VehicleError::InvalidVehicle(format!("invalid part ownership: {error}"))
+                })?;
         }
 
         let mut claimed_panels = std::collections::HashSet::new();
@@ -4862,6 +5311,244 @@ mod cabin_authority_tests {
             vec![],
         )
         .expect("vehicle")
+    }
+
+    fn separable_test_tank(name: &str, position: DVec3) -> TankMount {
+        let shape = crate::TankShape::Sphere { diameter_m: 0.5 };
+        let compiled = crate::TankSpec {
+            shape,
+            pressure_pa: 500_000.0,
+            material: crate::ChamberMaterial::nickel_superalloy(),
+        }
+        .compile(1_000.0)
+        .expect("compile tank");
+        let loaded = compiled.full_propellant_kg * 0.5;
+        TankMount {
+            name: name.into(),
+            tank: compiled,
+            position_body_m: position.to_array(),
+            intrinsic_inertia_body_kg_m2: shape
+                .intrinsic_inertia_body_kg_m2(compiled.dry_mass_kg, loaded)
+                .expect("tank inertia"),
+            initial_propellant_kg: Some(loaded),
+            resource: crate::TankResource::Stored(crate::StoredPropellant::Nitrogen),
+        }
+    }
+
+    fn separable_test_vehicle(
+        controls: Vec<ControlSurfaceDefinition>,
+    ) -> (VehicleDefinition, RigidBodyState) {
+        let panels = vec![
+            AeroPanel::new(DVec3::new(-1.0, 0.0, 0.0), DVec3::X, DVec3::Z, 1.0, 1.0)
+                .expect("panel"),
+            AeroPanel::new(DVec3::new(1.0, 0.0, 0.0), DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+        ];
+        let geometry = AeroGeometry::new(panels).expect("geometry");
+        let tanks = vec![
+            separable_test_tank("core.tank", DVec3::new(-1.0, 0.0, 0.0)),
+            separable_test_tank("booster.tank", DVec3::new(1.0, 0.0, 0.0)),
+        ];
+        // Each tank sits exactly on its body structure COM, so the body COM
+        // stays at the structure station for any tank mass.
+        let mut body_masses = Vec::new();
+        let mut total_mass = 0.0;
+        let mut total_inertia = DMat3::ZERO;
+        for (body, station) in [DVec3::new(-1.0, 0.0, 0.0), DVec3::new(1.0, 0.0, 0.0)]
+            .iter()
+            .enumerate()
+        {
+            let tank_mass =
+                tanks[body].tank.dry_mass_kg + tanks[body].initial_propellant_kg.unwrap_or(0.0);
+            let mass = 60.0 + tank_mass;
+            let center = *station;
+            let centroidal = DMat3::from_diagonal(DVec3::new(1.0, 2.0, 3.0))
+                + tanks[body].intrinsic_inertia_body_kg_m2;
+            body_masses.push(crate::AssemblyBodyMassProperties {
+                mass_kg: mass,
+                center_of_mass_body_m: center,
+                inertia_about_center_body_kg_m2: centroidal,
+            });
+            total_mass += mass;
+            let outer = DMat3::from_cols(center * center.x, center * center.y, center * center.z);
+            total_inertia +=
+                centroidal + (DMat3::IDENTITY * center.length_squared() - outer) * mass;
+        }
+        let properties = RigidBodyProperties::new(total_mass, total_inertia).expect("source mass");
+        let collision_geometry = CollisionGeometry::new(vec![
+            CollisionPart::new(
+                DVec3::new(-1.0, 0.0, 0.0),
+                DQuat::IDENTITY,
+                CollisionShape::Sphere { radius_m: 0.25 },
+                CollisionMaterial::default(),
+            )
+            .expect("contact"),
+            CollisionPart::new(
+                DVec3::new(1.0, 0.0, 0.0),
+                DQuat::IDENTITY,
+                CollisionShape::Sphere { radius_m: 0.25 },
+                CollisionMaterial::default(),
+            )
+            .expect("contact"),
+        ])
+        .expect("collision");
+        let assembly = VehicleAssembly {
+            root_body: 0,
+            body_names: vec!["core".into(), "booster".into()],
+            links: vec![NamedAssemblyLink {
+                name: "stack".into(),
+                state: crate::AssemblyLinkState {
+                    a: 0,
+                    b: 1,
+                    hatch: false,
+                    open: true,
+                },
+                feed_line: None,
+            }],
+            resource_edges: Vec::new(),
+            joint_strengths: Vec::new(),
+            volumes: Vec::new(),
+            tanks: Vec::new(),
+            engine_ports: vec![crate::AssemblyEndpoint {
+                name: "booster.port".into(),
+                body: 1,
+            }],
+        };
+        let ownership = crate::AssemblyOwnership {
+            panel_bodies: vec![0, 1],
+            collision_bodies: vec![0, 1],
+            cabin_bodies: Vec::new(),
+            cabin_exit_bodies: Vec::new(),
+            cabin_seat_bodies: Vec::new(),
+            cabin_monument_bodies: Vec::new(),
+            control_core_bodies: Vec::new(),
+            control_station_bodies: Vec::new(),
+            engine_bodies: Vec::new(),
+            tank_bodies: vec![0, 1],
+            system_bodies: Vec::new(),
+            jet_bodies: Vec::new(),
+            rcs_bodies: Vec::new(),
+            heat_shield_bodies: Vec::new(),
+            body_masses,
+        };
+        let mut vehicle = VehicleDefinition::new("split-ship", geometry, properties, controls)
+            .expect("vehicle")
+            .with_collision_geometry(collision_geometry)
+            .expect("collision")
+            .with_tanks(tanks)
+            .expect("tanks")
+            .with_assembly(assembly)
+            .expect("assembly");
+        vehicle.assembly_ownership = Some(ownership);
+        vehicle.resource_feed_ports = vec![crate::VehicleResourceFeedPort {
+            consumer_name: "test-consumer".into(),
+            feed_port_name: "booster.port".into(),
+            fluid_properties: Vec::new(),
+        }];
+        vehicle.validate().expect("separable vehicle");
+        let state = RigidBodyState::new(
+            DVec3::new(100.0, 0.0, 0.0),
+            DVec3::new(10.0, 0.0, 0.0),
+            DQuat::IDENTITY,
+            DVec3::new(0.0, 0.0, 1.0),
+        )
+        .expect("state");
+        (vehicle, state)
+    }
+
+    fn separable_fin_control() -> ControlSurfaceDefinition {
+        ControlSurfaceDefinition::new("core-fin".to_string(), vec![0], -0.3, 0.3)
+            .expect("control")
+            .with_hinge(crate::ControlHinge {
+                point_body_m: DVec3::new(-1.0, 0.0, 0.0),
+                axis_body: DVec3::Y,
+            })
+    }
+
+    #[test]
+    fn split_definitions_migrate_owned_subsystems_and_recenter_states() {
+        let (vehicle, state) = separable_test_vehicle(vec![separable_fin_control()]);
+        let clusters = vehicle
+            .split_definitions_after_link_failure("stack", state)
+            .expect("split");
+        assert_eq!(clusters.len(), 2);
+        // Component order follows first body index: core then booster.
+        assert_eq!(clusters[0].0.name, "split-ship#core");
+        assert_eq!(clusters[1].0.name, "split-ship#booster");
+        for (definition, _) in &clusters {
+            definition.validate().expect("cluster validates");
+            assert!(definition.assembly_ownership.is_some());
+        }
+        // Geometry and mounts partition by owning body and recenter so each
+        // cluster COM sits at its own origin.
+        assert_eq!(clusters[0].0.aero_geometry.panels.len(), 1);
+        assert_eq!(clusters[1].0.aero_geometry.panels.len(), 1);
+        assert_eq!(
+            clusters[0].0.aero_geometry.panels[0].position_body_m,
+            DVec3::ZERO
+        );
+        assert_eq!(
+            clusters[1].0.aero_geometry.panels[0].position_body_m,
+            DVec3::ZERO
+        );
+        assert_eq!(clusters[0].0.collision_geometry.parts.len(), 1);
+        assert_eq!(clusters[1].0.collision_geometry.parts.len(), 1);
+        assert_eq!(clusters[0].0.tanks.len(), 1);
+        assert_eq!(clusters[1].0.tanks.len(), 1);
+        assert_eq!(clusters[0].0.tanks[0].name, "core.tank");
+        assert_eq!(clusters[1].0.tanks[0].name, "booster.tank");
+        // The body-local control survives with remapped panels and hinge.
+        assert_eq!(clusters[0].0.control_surfaces.len(), 1);
+        assert_eq!(clusters[0].0.control_surfaces[0].panel_indices, vec![0]);
+        assert_eq!(
+            clusters[0].0.control_surfaces[0]
+                .hinge
+                .expect("hinge")
+                .point_body_m,
+            DVec3::ZERO
+        );
+        assert!(clusters[1].0.control_surfaces.is_empty());
+        // The feed route follows its surviving port; the core drops it.
+        assert!(clusters[0].0.resource_feed_ports.is_empty());
+        assert_eq!(clusters[1].0.resource_feed_ports.len(), 1);
+        // Released COM states carry the physical omega-cross-r offset.
+        assert!((clusters[0].1.position_inertial_m - DVec3::new(99.0, 0.0, 0.0)).length() < 1e-12);
+        assert!(
+            (clusters[0].1.velocity_inertial_mps - DVec3::new(10.0, -1.0, 0.0)).length() < 1e-12
+        );
+        assert!((clusters[1].1.position_inertial_m - DVec3::new(101.0, 0.0, 0.0)).length() < 1e-12);
+        assert!(
+            (clusters[1].1.velocity_inertial_mps - DVec3::new(10.0, 1.0, 0.0)).length() < 1e-12
+        );
+        // Mass is conserved across the split.
+        let total: f64 = clusters
+            .iter()
+            .map(|(definition, _)| definition.mass_properties.mass_kg)
+            .sum();
+        assert!((total - vehicle.mass_properties.mass_kg).abs() < 1e-9);
+        // A control spanning both bodies fails closed instead of splitting.
+        let spanning = ControlSurfaceDefinition::new("span".to_string(), vec![0, 1], -0.3, 0.3)
+            .expect("control");
+        let (spanning_vehicle, spanning_state) = separable_test_vehicle(vec![spanning]);
+        assert!(
+            spanning_vehicle
+                .split_definitions_after_link_failure("stack", spanning_state)
+                .is_err()
+        );
+        // Missing ownership fails closed.
+        let mut bare = vehicle.clone();
+        bare.assembly_ownership = None;
+        assert!(
+            bare.split_definitions_after_link_failure("stack", state)
+                .is_err()
+        );
+        // Stores without a migration path fail closed.
+        let mut geared = vehicle.clone();
+        geared.parachutes = vec![test_parachute()];
+        assert!(
+            geared
+                .split_definitions_after_link_failure("stack", state)
+                .is_err()
+        );
     }
 
     fn station(name: &str, occupied: bool) -> ControlStation {

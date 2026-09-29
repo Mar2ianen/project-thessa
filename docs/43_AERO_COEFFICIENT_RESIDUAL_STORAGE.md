@@ -38,10 +38,15 @@ Implemented behavior:
 
 The release benchmark on 2026-09-28 (AMD Ryzen 7 8745H, x86_64) measured
 2,064 KiB for the canonical table and 1,167 KiB logical resident storage for
-the residual table (1.77x smaller). Scalar sampling measured 87.0 ns/sample
-versus 55.2 ns/sample for the canonical table (1.58x slower). This demonstrates
-the storage tradeoff, not a runtime speedup; the residual path remains
-experimental and is not the default.
+the residual table (1.77x smaller). That dated run measured scalar sampling at
+87.0 ns/sample versus 55.2 ns/sample for the canonical table (1.58x slower).
+Three single-pass reruns on 2026-09-30 reproduced the storage ratio and measured
+69.7–80.6 ns/sample for residual sampling versus 33.2–41.9 ns/sample canonical
+(1.77–2.10x slower). These timings are descriptive, not a stable performance
+baseline: the small number of one-pass runs is sensitive to execution order
+and machine load. They consistently show that scalar residual sampling is
+slower, so this demonstrates a storage tradeoff, not a runtime speedup. The
+residual path remains experimental and is not the default.
 
 Still open: channel-specific physical budget allocation, AVX2/AVX-512 fused
 decode, real VLM/CFD fixtures, and higher-dimensional coefficient fields.

@@ -109,6 +109,15 @@ impl AeroCoefficientError {
         reference_chord_m: f64,
         moment_arm_m: f64,
     ) -> Result<AeroPhysicalErrorBound, AeroError> {
+        let coefficient_errors = [self.lift, self.drag, self.side_force, self.pitching_moment];
+        if coefficient_errors
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err(AeroError::InvalidModel(
+                "aero coefficient error bounds must be finite and non-negative".into(),
+            ));
+        }
         let inputs = [
             dynamic_pressure_pa,
             area_m2,
@@ -126,6 +135,11 @@ impl AeroCoefficientError {
         let force_n = dynamic_pressure_pa * area_m2 * (self.lift + self.drag + self.side_force);
         let moment_nm = dynamic_pressure_pa * area_m2 * reference_chord_m * self.pitching_moment
             + moment_arm_m * force_n;
+        if !force_n.is_finite() || !moment_nm.is_finite() {
+            return Err(AeroError::InvalidModel(
+                "aero residual physical error bound overflowed".into(),
+            ));
+        }
         Ok(AeroPhysicalErrorBound { force_n, moment_nm })
     }
 }
@@ -192,6 +206,11 @@ impl AeroPhysicalBudget {
 
         let force_eps = self.max_force_error_n / (3.0 * q_area);
         let moment_scale = q_area * (self.reference_chord_m + 3.0 * self.moment_arm_m);
+        if !moment_scale.is_finite() {
+            return Err(AeroError::InvalidModel(
+                "aero residual physical budget moment scale overflowed".into(),
+            ));
+        }
         let moment_eps = if moment_scale == 0.0 {
             f64::MAX
         } else {
@@ -344,16 +363,7 @@ impl AeroResidualTable {
         budget: AeroResidualBudget,
     ) -> Result<Self, AeroError> {
         budget.validate()?;
-        if table.mach_grid.is_empty() || table.alpha_grid_rad.is_empty() {
-            return Err(AeroError::InvalidModel(
-                "aero residual table needs non-empty grids".into(),
-            ));
-        }
-        if table.samples.len() != table.mach_grid.len() * table.alpha_grid_rad.len() {
-            return Err(AeroError::InvalidModel(
-                "aero residual source table has inconsistent extents".into(),
-            ));
-        }
+        table.validate()?;
 
         let tile_mach_count = table.mach_grid.len().div_ceil(AERO_RESIDUAL_TILE_EDGE);
         let tile_alpha_count = table.alpha_grid_rad.len().div_ceil(AERO_RESIDUAL_TILE_EDGE);
@@ -579,7 +589,7 @@ impl AeroResidualTable {
         let local_index = local_mach * tile.alpha_len + local_alpha;
         let bytes = &self.payload[tile.payload_offset..tile.payload_offset + tile.payload_len];
 
-        match tile.codec {
+        let mut coefficients = match tile.codec {
             AeroResidualCodec::Raw64 => {
                 let base = local_index * COEFFICIENTS * size_of::<f64>();
                 let mut values = [0.0; COEFFICIENTS];
@@ -603,7 +613,14 @@ impl AeroResidualTable {
                 }
                 coefficients_from_array(values)
             }
-        }
+        };
+        // The canonical table rejects negative drag. Independent residual
+        // quantization can otherwise undershoot zero by a fraction of a
+        // scale even when the source samples are all physical. Clamping the
+        // decoded grid value is error-reducing because source drag is
+        // non-negative, and interpolation then preserves that invariant.
+        coefficients.drag = coefficients.drag.max(0.0);
+        coefficients
     }
 }
 
@@ -867,7 +884,7 @@ fn coefficients_from_array(value: [f64; COEFFICIENTS]) -> AeroCoefficients {
 }
 
 fn bracket(grid: &[f64], value: f64) -> (usize, usize, f64) {
-    if grid.len() == 1 || value <= grid[0] {
+    if grid.len() <= 1 || !value.is_finite() || value <= grid[0] {
         return (0, 0, 0.0);
     }
     if value >= grid[grid.len() - 1] {
@@ -986,6 +1003,41 @@ mod tests {
     }
 
     #[test]
+    fn quantized_drag_does_not_cross_below_zero() {
+        let mach_grid = vec![0.0, 1.0, 2.0, 3.0];
+        let alpha_grid_rad = vec![0.0, 1.0, 2.0, 3.0];
+        let zero = AeroCoefficients {
+            lift: 0.0,
+            drag: 0.0,
+            side_force: 0.0,
+            pitching_moment: 0.0,
+        };
+        let mut samples = vec![zero; 16];
+        for mach in 0..4 {
+            for alpha in 0..4 {
+                samples[mach * 4 + alpha] = AeroCoefficients {
+                    drag: if (mach, alpha) == (1, 1) {
+                        0.0
+                    } else if (mach, alpha) == (2, 2) {
+                        3.0
+                    } else {
+                        1.0
+                    },
+                    lift: 0.0,
+                    side_force: 0.0,
+                    pitching_moment: 0.0,
+                };
+            }
+        }
+        let source = AeroCoefficientTable::new(mach_grid, alpha_grid_rad, samples).unwrap();
+        let packed = AeroResidualTable::encode(&source, AeroResidualBudget::uniform(0.15)).unwrap();
+        assert_eq!(packed.tiles()[0].codec(), AeroResidualCodec::Residual4);
+        assert!(source.sample(1.0, 1.0).drag >= 0.0);
+        assert!(packed.grid_sample(1, 1).unwrap().drag >= 0.0);
+        assert!(packed.sample(1.0, 1.0).drag >= 0.0);
+    }
+
+    #[test]
     fn smooth_bilinear_tiles_choose_r8_and_preserve_samples() {
         let source = table_from(9, 7, bilinear_coefficients);
         let packed =
@@ -1063,6 +1115,7 @@ mod tests {
         let source = table_from(5, 7, nonlinear_coefficients);
         let packed =
             AeroResidualTable::encode(&source, AeroResidualBudget::uniform(1.0e-5)).unwrap();
+        let exact = AeroResidualTable::encode(&source, AeroResidualBudget::uniform(0.0)).unwrap();
         let error = packed.max_error();
         for (mach, alpha) in [(-10.0, -10.0), (0.0, -0.45), (0.38, -0.17), (2.0, 4.0)] {
             assert_coeff_error_le(
@@ -1071,6 +1124,34 @@ mod tests {
                 error,
             );
         }
+        for (mach, alpha) in [
+            (f64::NAN, 0.0),
+            (f64::INFINITY, 0.0),
+            (f64::NEG_INFINITY, 0.0),
+            (0.0, f64::NAN),
+            (0.0, f64::INFINITY),
+            (0.0, f64::NEG_INFINITY),
+        ] {
+            assert_eq!(exact.sample(mach, alpha), source.sample(mach, alpha));
+            let (sample, error) = packed.sample_with_error(mach, alpha);
+            assert_coeff_error_le(sample, source.sample(mach, alpha), error);
+        }
+    }
+
+    #[test]
+    fn encoding_revalidates_mutated_canonical_tables() {
+        let valid = table_from(5, 5, nonlinear_coefficients);
+        let mut unsorted_grid = valid.clone();
+        unsorted_grid.mach_grid.swap(0, 1);
+        assert!(
+            AeroResidualTable::encode(&unsorted_grid, AeroResidualBudget::uniform(1.0)).is_err()
+        );
+
+        let mut negative_drag = valid;
+        negative_drag.samples[0].drag = -0.1;
+        assert!(
+            AeroResidualTable::encode(&negative_drag, AeroResidualBudget::uniform(1.0)).is_err()
+        );
     }
 
     #[test]
@@ -1190,6 +1271,38 @@ mod tests {
         let expected_moment = 20_000.0 * 2.0 * 1.5 * 4.0e-3 + 3.0 * expected_force;
         assert!((bound.force_n - expected_force).abs() < 1.0e-12);
         assert!((bound.moment_nm - expected_moment).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn physical_error_bounds_reject_invalid_or_overflowing_values() {
+        assert!(
+            AeroCoefficientError {
+                lift: -1.0,
+                ..AeroCoefficientError::default()
+            }
+            .physical_bound(1.0, 1.0, 1.0, 1.0)
+            .is_err()
+        );
+        assert!(
+            AeroCoefficientError {
+                lift: f64::MAX,
+                ..AeroCoefficientError::default()
+            }
+            .physical_bound(f64::MAX, 2.0, 1.0, 0.0)
+            .is_err()
+        );
+        assert!(
+            AeroPhysicalBudget {
+                dynamic_pressure_pa: 1.0,
+                area_m2: 1.0,
+                reference_chord_m: f64::MAX,
+                moment_arm_m: f64::MAX,
+                max_force_error_n: 1.0,
+                max_moment_error_nm: 1.0,
+            }
+            .uniform_coefficient_budget()
+            .is_err()
+        );
     }
 
     #[test]

@@ -13,6 +13,9 @@ Implemented behavior:
   budgets;
 - payload is contiguous across tiles; edge-partial tiles and canonical
   clamping/bilinear sampling semantics are covered;
+- decoded drag is clamped to the canonical table's non-negative domain before
+  interpolation; because source drag is non-negative, this projection cannot
+  increase its absolute coefficient error;
 - `sample_with_error` returns a local interpolation-safe coefficient envelope
   from the four contributing tile bounds; `AeroCoefficientError::physical_bound`
   converts it into conservative force and moment envelopes using
@@ -24,8 +27,8 @@ Implemented behavior:
   table-backed SIMD fast path correctly falls back to the scalar table oracle
   instead of expanding the table;
 - unit tests cover adaptive selection, interpolation-space error, odd extents,
-  zero-budget fallback, physical error conversion, packed signed-code round
-  trips, and end-to-end panel force/moment bounds;
+  zero-budget fallback, non-negative decoded drag, physical error conversion,
+  packed signed-code round trips, and end-to-end panel force/moment bounds;
 - `aero_residual` benchmark reports storage density plus scalar
   decode/interpolation overhead on a 257x257 synthetic stall/transonic field.
 

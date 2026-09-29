@@ -908,19 +908,36 @@ impl AeroCoefficientTable {
         alpha_grid_rad: Vec<f64>,
         samples: Vec<AeroCoefficients>,
     ) -> Result<Self, AeroError> {
-        if mach_grid.is_empty() || alpha_grid_rad.is_empty() {
+        let table = Self {
+            mach_grid,
+            alpha_grid_rad,
+            samples,
+        };
+        table.validate()?;
+        Ok(table)
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), AeroError> {
+        if self.mach_grid.is_empty() || self.alpha_grid_rad.is_empty() {
             return Err(AeroError::InvalidModel(
                 "coefficient table needs non-empty Mach and alpha grids".into(),
             ));
         }
-        if samples.len() != mach_grid.len() * alpha_grid_rad.len() {
+        let expected_samples = self
+            .mach_grid
+            .len()
+            .checked_mul(self.alpha_grid_rad.len())
+            .ok_or_else(|| {
+                AeroError::InvalidModel("coefficient table grid extents overflow".into())
+            })?;
+        if self.samples.len() != expected_samples {
             return Err(AeroError::InvalidModel(
                 "coefficient table sample count does not match its grids".into(),
             ));
         }
-        validate_grid(&mach_grid, "Mach")?;
-        validate_grid(&alpha_grid_rad, "alpha")?;
-        if samples.iter().any(|sample| {
+        validate_grid(&self.mach_grid, "Mach")?;
+        validate_grid(&self.alpha_grid_rad, "alpha")?;
+        if self.samples.iter().any(|sample| {
             !sample.lift.is_finite()
                 || !sample.drag.is_finite()
                 || !sample.side_force.is_finite()
@@ -930,16 +947,12 @@ impl AeroCoefficientTable {
                 "coefficient table contains a non-finite sample".into(),
             ));
         }
-        if samples.iter().any(|sample| sample.drag < 0.0) {
+        if self.samples.iter().any(|sample| sample.drag < 0.0) {
             return Err(AeroError::InvalidModel(
                 "coefficient table contains negative drag".into(),
             ));
         }
-        Ok(Self {
-            mach_grid,
-            alpha_grid_rad,
-            samples,
-        })
+        Ok(())
     }
 
     pub fn sample(&self, mach: f64, alpha_rad: f64) -> AeroCoefficients {

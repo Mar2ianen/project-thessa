@@ -1,14 +1,20 @@
 //! Installed propellant inventory, feed allocation, and moving-mass updates.
 //!
-//! Resource connectivity remains the assembly graph's simple crossfeed
-//! contract. This module allocates real engine mass flow over reachable tank
-//! inventory; it deliberately does not add a fluid-network solver.
+//! Resource connectivity and optional authored feed-line pressure losses are
+//! evaluated through the assembly graph. Inventory assignment remains a
+//! fixed-step transaction; pressure-limited consumers are throttled before
+//! the matching tank draw is committed.
 
 use glam::{DMat3, DVec3};
 use serde::{Deserialize, Serialize};
+use std::{cmp::Reverse, collections::BinaryHeap};
+
+/// Flow-limit bisection leaves a relative interval below 2.4e-10; this is
+/// far tighter than the pressure/velocity authoring tolerances of a feed line.
+const FEED_PRESSURE_BISECTION_STEPS: usize = 32;
 
 use crate::{
-    CompiledEngine, Propellant, RigidBodyProperties, StoredPropellant, TankResource,
+    CompiledEngine, FeedLine, Propellant, RigidBodyProperties, StoredPropellant, TankResource,
     VehicleDefinition, VehicleError,
 };
 
@@ -54,6 +60,460 @@ pub struct VehiclePropulsionAllocation {
     pub system_chamber_throttles: Vec<Vec<f64>>,
     pub total_propellant_flow_kg_s: f64,
     pub fuel_limited: bool,
+    /// Availability scales for additional operating-point consumers booked
+    /// alongside the installed liquid/solid rocket mounts.
+    pub additional_resource_consumers: Vec<ConsumerResourceAllocation>,
+}
+
+/// One operating-point mass flow into a named installed-tank resource.
+///
+/// `feed_port_name` is an assembly endpoint name such as `stage.engine-feed`.
+/// When omitted, legacy vehicle-level feed reachability is used. Multiple
+/// demands with the same consumer name share one availability scale, so a
+/// two-reactant consumer cannot consume one reactant without the other.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VehicleResourceDemand {
+    pub consumer_name: String,
+    pub feed_port_name: Option<String>,
+    pub resource: StoredPropellant,
+    pub mass_flow_kg_s: f64,
+}
+
+/// Authored route from an installed resource consumer name to one assembly
+/// engine-feed endpoint. This keeps routing independent of any one propulsion
+/// family and also covers electrical sources such as fuel cells.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FeedResourceProperties {
+    pub resource: StoredPropellant,
+    pub density_kg_m3: f64,
+    pub viscosity_pa_s: f64,
+    /// Regulated pressure at the source outlet for this resource (Pa).
+    pub source_pressure_pa: f64,
+    /// Required pressure at the consumer inlet after all authored line drops.
+    pub minimum_pressure_pa: f64,
+}
+
+impl FeedResourceProperties {
+    pub fn validate(&self) -> Result<(), VehicleError> {
+        if !self.density_kg_m3.is_finite()
+            || self.density_kg_m3 <= 0.0
+            || !self.viscosity_pa_s.is_finite()
+            || self.viscosity_pa_s <= 0.0
+            || !self.source_pressure_pa.is_finite()
+            || self.source_pressure_pa <= 0.0
+            || !self.minimum_pressure_pa.is_finite()
+            || self.minimum_pressure_pa < 0.0
+        {
+            return Err(VehicleError::InvalidVehicle(
+                "feed fluid density/viscosity and source pressure must be positive; minimum pressure must be non-negative"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VehicleResourceFeedPort {
+    pub consumer_name: String,
+    pub feed_port_name: String,
+    /// Fluid properties and required inlet pressure for resources routed
+    /// through authored assembly feed lines. Empty preserves ideal crossfeed.
+    #[serde(default)]
+    pub fluid_properties: Vec<FeedResourceProperties>,
+}
+
+impl VehicleResourceDemand {
+    pub fn new(
+        consumer_name: impl Into<String>,
+        resource: StoredPropellant,
+        mass_flow_kg_s: f64,
+    ) -> Self {
+        Self {
+            consumer_name: consumer_name.into(),
+            feed_port_name: None,
+            resource,
+            mass_flow_kg_s,
+        }
+    }
+
+    pub fn through_feed_port(mut self, feed_port_name: impl Into<String>) -> Self {
+        self.feed_port_name = Some(feed_port_name.into());
+        self
+    }
+
+    /// Resource flows reported by an installed jet/ESTOC operating point.
+    pub fn from_jet_point(
+        mount: &crate::JetMount,
+        point: &crate::EstocPoint,
+        feed_port_name: Option<&str>,
+    ) -> Vec<Self> {
+        let (bulk_fuel, boost_fuel) = match &mount.engine {
+            crate::CompiledJet::Air(engine) => (engine.fuel, None),
+            crate::CompiledJet::Estoc(engine) => (engine.bulk_fuel, engine.boost_coolant_fuel),
+        };
+        let mut demands = Vec::new();
+        push_stored_demand(
+            &mut demands,
+            &mount.name,
+            feed_port_name,
+            jet_fuel_resource(bulk_fuel),
+            point.bulk_fuel_flow_kg_s,
+        );
+        if point.boost_fuel_flow_kg_s > 0.0 {
+            // An ESTOC may use a second fuel for its boost/coolant circuit.
+            // The compiler only permits positive boost flow when that fuel is
+            // explicitly authored.
+            if let Some(boost_fuel) = boost_fuel {
+                push_stored_demand(
+                    &mut demands,
+                    &mount.name,
+                    feed_port_name,
+                    jet_fuel_resource(boost_fuel),
+                    point.boost_fuel_flow_kg_s,
+                );
+            }
+        }
+        push_stored_demand(
+            &mut demands,
+            &mount.name,
+            feed_port_name,
+            StoredPropellant::Lox,
+            point.oxidizer_flow_kg_s,
+        );
+        demands
+    }
+
+    /// Resource flow reported by an installed electric thruster.
+    pub fn from_electric_thruster_point(
+        mount: &crate::ElectricThrusterMount,
+        point: &crate::ElectricThrusterPoint,
+        feed_port_name: Option<&str>,
+    ) -> Vec<Self> {
+        let resource = electric_propellant_resource(mount.engine.propellant);
+        vec![stored_demand(
+            &mount.name,
+            feed_port_name,
+            resource,
+            point.mass_flow_kg_s,
+        )]
+    }
+
+    /// Tank fuel flow from a piston/electric propeller-drive operating point.
+    /// Electric source drives report zero fuel flow and therefore no demand.
+    pub fn from_propeller_drive_point(
+        mount: &crate::PropellerDriveMount,
+        point: &crate::PropDrivePoint,
+        feed_port_name: Option<&str>,
+    ) -> Vec<Self> {
+        let crate::CompiledShaftPowerSource::Piston(engine) = mount.drive.source else {
+            return Vec::new();
+        };
+        vec![stored_demand(
+            &mount.name,
+            feed_port_name,
+            jet_fuel_resource(engine.fuel),
+            point.fuel_flow_kg_s,
+        )]
+    }
+
+    /// Fuel flow from an installed turbine-propeller operating point.
+    pub fn from_turboprop_point(
+        mount: &crate::TurbopropMount,
+        point: &crate::TurbopropOperatingPoint,
+        feed_port_name: Option<&str>,
+    ) -> Vec<Self> {
+        vec![stored_demand(
+            &mount.name,
+            feed_port_name,
+            jet_fuel_resource(mount.drive.air.fuel),
+            point.air.fuel_flow_kg_s,
+        )]
+    }
+
+    /// Fuel flow from the shared-shaft turbogen APU model.
+    pub fn from_apu_point(
+        consumer_name: &str,
+        point: &crate::AuxiliaryPowerUnitOperatingPoint,
+        feed_port_name: Option<&str>,
+    ) -> Vec<Self> {
+        vec![stored_demand(
+            consumer_name,
+            feed_port_name,
+            jet_fuel_resource(point.fuel),
+            point.fuel_flow_kg_s,
+        )]
+    }
+
+    /// Tank-backed starter draw. `input_power_w` is the starter's actual
+    /// onboard energy draw after efficiency and any external pneumatic supply
+    /// have been accounted for by the shaft model.
+    pub fn from_starter(
+        consumer_name: impl Into<String>,
+        resource: Option<StoredPropellant>,
+        specific_energy_j_kg: f64,
+        input_power_w: f64,
+        feed_port_name: Option<&str>,
+    ) -> Result<Option<Self>, VehicleError> {
+        if !input_power_w.is_finite() || input_power_w < 0.0 {
+            return Err(VehicleError::InvalidVehicle(
+                "starter resource draw must be finite and non-negative".into(),
+            ));
+        }
+        let Some(resource) = resource else {
+            return Ok(None);
+        };
+        if !specific_energy_j_kg.is_finite() || specific_energy_j_kg <= 0.0 {
+            return Err(VehicleError::InvalidVehicle(
+                "tank-backed starter needs positive finite specific energy".into(),
+            ));
+        }
+        let mut demand = Self::new(
+            consumer_name,
+            resource,
+            input_power_w / specific_energy_j_kg,
+        );
+        if let Some(port) = feed_port_name {
+            demand.feed_port_name = Some(port.to_owned());
+        }
+        Ok(Some(demand))
+    }
+
+    /// Fuel and working-fluid flows from a continuous fusion torch.
+    pub fn from_fusion_torch_point(
+        mount: &crate::FusionTorchMount,
+        point: &crate::FusionTorchOperatingPoint,
+        feed_port_name: Option<&str>,
+    ) -> Vec<Self> {
+        let mut demands = fusion_reactant_demands(
+            &mount.name,
+            mount.engine.reaction,
+            point.fusion_fuel_flow_kg_s,
+            feed_port_name,
+        );
+        push_stored_demand(
+            &mut demands,
+            &mount.name,
+            feed_port_name,
+            electric_propellant_resource(mount.engine.working_fluid),
+            point.working_flow_kg_s,
+        );
+        demands
+    }
+
+    /// Fuel and working-fluid flows from a pulsed fusion step.
+    pub fn from_pulsed_fusion_point(
+        mount: &crate::PulsedFusionMount,
+        point: &crate::PulsedFusionOperatingPoint,
+        feed_port_name: Option<&str>,
+    ) -> Vec<Self> {
+        let mut demands = fusion_reactant_demands(
+            &mount.name,
+            mount.engine.reaction,
+            point.fuel_mass_flow_kg_s,
+            feed_port_name,
+        );
+        push_stored_demand(
+            &mut demands,
+            &mount.name,
+            feed_port_name,
+            electric_propellant_resource(mount.engine.working_fluid),
+            point.working_flow_kg_s,
+        );
+        demands
+    }
+
+    /// Propellant used by one delivered RCS pulse, expressed as a per-step
+    /// flow so it enters the same fixed-step inventory commit.
+    pub fn from_rcs_pulse(
+        mount: &crate::RcsMount,
+        pulse: crate::RcsPulse,
+        dt_s: f64,
+        feed_port_name: Option<&str>,
+    ) -> Result<Vec<Self>, VehicleError> {
+        if !dt_s.is_finite()
+            || dt_s <= 0.0
+            || !pulse.propellant_kg.is_finite()
+            || pulse.propellant_kg < 0.0
+        {
+            return Err(VehicleError::InvalidVehicle(
+                "RCS resource flow needs finite pulse mass and positive step duration".into(),
+            ));
+        }
+        let resource = match &mount.thruster {
+            crate::RcsThruster::Monoprop(_) => StoredPropellant::Hydrazine,
+            crate::RcsThruster::ColdGas(thruster) => match thruster.gas {
+                Propellant::ColdGasNitrogen => StoredPropellant::Nitrogen,
+                Propellant::ColdGasHelium => StoredPropellant::Helium,
+                _ => {
+                    return Err(VehicleError::InvalidVehicle(format!(
+                        "RCS mount '{}' has an invalid cold-gas identity",
+                        mount.name
+                    )));
+                }
+            },
+        };
+        Ok(vec![stored_demand(
+            &mount.name,
+            feed_port_name,
+            resource,
+            pulse.propellant_kg / dt_s,
+        )])
+    }
+}
+
+/// Actual draw and availability scale for one named consumer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConsumerResourceAllocation {
+    pub consumer_name: String,
+    pub requested_mass_kg: f64,
+    pub actual_mass_kg: f64,
+    /// Common scale applied to every resource flow for this consumer.
+    pub scale: f64,
+}
+
+/// Tank draw planned from operating-point flows for one fixed step.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VehicleResourcePlan {
+    pub tank_consumption_kg: Vec<f64>,
+    pub consumers: Vec<ConsumerResourceAllocation>,
+    pub total_consumption_kg: f64,
+    pub dt_s: f64,
+}
+
+/// Stateful APU outputs and matching resource transaction for one fixed step.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VehicleAuxiliaryPowerUnitStep {
+    pub next_states: Vec<crate::AuxiliaryPowerUnitState>,
+    pub operating_points: Vec<crate::AuxiliaryPowerUnitOperatingPoint>,
+    pub generated_electrical_power_w: f64,
+    pub pneumatic_bleed_power_w: f64,
+    pub resource_limited: bool,
+    pub resource_plan: VehicleResourcePlan,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ResourceFlowGroup {
+    resource: StoredPropellant,
+    feed_port_name: Option<String>,
+    demand_indices: Vec<usize>,
+    accessible_tanks: Vec<bool>,
+    fluid_properties: Option<FeedResourceProperties>,
+}
+
+fn stored_demand(
+    consumer_name: &str,
+    feed_port_name: Option<&str>,
+    resource: StoredPropellant,
+    mass_flow_kg_s: f64,
+) -> VehicleResourceDemand {
+    let mut demand = VehicleResourceDemand::new(consumer_name, resource, mass_flow_kg_s);
+    if let Some(port_name) = feed_port_name {
+        demand.feed_port_name = Some(port_name.to_owned());
+    }
+    demand
+}
+
+fn push_stored_demand(
+    demands: &mut Vec<VehicleResourceDemand>,
+    consumer_name: &str,
+    feed_port_name: Option<&str>,
+    resource: StoredPropellant,
+    mass_flow_kg_s: f64,
+) {
+    demands.push(stored_demand(
+        consumer_name,
+        feed_port_name,
+        resource,
+        mass_flow_kg_s,
+    ));
+}
+
+fn jet_fuel_resource(fuel: crate::JetFuel) -> StoredPropellant {
+    match fuel {
+        crate::JetFuel::Kerosene => StoredPropellant::Rp1,
+        crate::JetFuel::Methane => StoredPropellant::LiquidMethane,
+        crate::JetFuel::Hydrogen => StoredPropellant::LiquidHydrogen,
+    }
+}
+
+fn electric_propellant_resource(propellant: crate::ElectricPropellant) -> StoredPropellant {
+    match propellant {
+        crate::ElectricPropellant::Xenon => StoredPropellant::Xenon,
+        crate::ElectricPropellant::Krypton => StoredPropellant::Krypton,
+        crate::ElectricPropellant::Argon => StoredPropellant::Argon,
+        crate::ElectricPropellant::Iodine => StoredPropellant::Iodine,
+        crate::ElectricPropellant::Nitrogen => StoredPropellant::Nitrogen,
+        crate::ElectricPropellant::Hydrogen => StoredPropellant::LiquidHydrogen,
+        crate::ElectricPropellant::Ammonia => StoredPropellant::Ammonia,
+        crate::ElectricPropellant::Water => StoredPropellant::Water,
+    }
+}
+
+fn fusion_reactant_demands(
+    consumer_name: &str,
+    reaction: crate::FusionReaction,
+    fuel_flow_kg_s: f64,
+    feed_port_name: Option<&str>,
+) -> Vec<VehicleResourceDemand> {
+    let mut demands = Vec::with_capacity(2);
+    let (first, first_fraction, second, second_fraction) = match reaction {
+        crate::FusionReaction::DeuteriumTritium => {
+            let deuterium_kg_mol = 0.002_014_101_778;
+            let tritium_kg_mol = 0.003_016_049_278;
+            let total = deuterium_kg_mol + tritium_kg_mol;
+            (
+                Some(StoredPropellant::Deuterium),
+                deuterium_kg_mol / total,
+                Some(StoredPropellant::Tritium),
+                tritium_kg_mol / total,
+            )
+        }
+        crate::FusionReaction::DeuteriumDeuterium => {
+            (Some(StoredPropellant::Deuterium), 1.0, None, 0.0)
+        }
+        crate::FusionReaction::DeuteriumHelium3 => {
+            let deuterium_kg_mol = 0.002_014_101_778;
+            let helium3_kg_mol = 0.003_016_029_322;
+            let total = deuterium_kg_mol + helium3_kg_mol;
+            (
+                Some(StoredPropellant::Deuterium),
+                deuterium_kg_mol / total,
+                Some(StoredPropellant::Helium3),
+                helium3_kg_mol / total,
+            )
+        }
+        crate::FusionReaction::ProtonBoron11 => {
+            let protium_kg_mol = 0.001_007_825_032;
+            let boron11_kg_mol = 0.011_009_305_36;
+            let total = protium_kg_mol + boron11_kg_mol;
+            (
+                Some(StoredPropellant::Protium),
+                protium_kg_mol / total,
+                Some(StoredPropellant::Boron11),
+                boron11_kg_mol / total,
+            )
+        }
+    };
+    if let Some(resource) = first {
+        push_stored_demand(
+            &mut demands,
+            consumer_name,
+            feed_port_name,
+            resource,
+            fuel_flow_kg_s * first_fraction,
+        );
+    }
+    if let Some(resource) = second {
+        push_stored_demand(
+            &mut demands,
+            consumer_name,
+            feed_port_name,
+            resource,
+            fuel_flow_kg_s * second_fraction,
+        );
+    }
+    demands
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +543,7 @@ struct ResourceTransition {
     solid_ignited: Vec<bool>,
     mass_properties: RigidBodyProperties,
     frame_shift_body_m: DVec3,
+    assembly_body_masses: Option<Vec<crate::AssemblyBodyMassProperties>>,
 }
 
 struct ThrottleAllocation {
@@ -117,6 +578,144 @@ impl VehicleDefinition {
         self.validate_resource_state(state)?;
         let index = self.unique_tank_index(tank_name)?;
         Ok(state.tank_propellant_kg[index])
+    }
+
+    /// Total compatible inventory reachable from an optional named feed port.
+    pub fn available_stored_resource_kg(
+        &self,
+        state: &VehicleResourceState,
+        resource: StoredPropellant,
+        feed_port_name: Option<&str>,
+    ) -> Result<f64, VehicleError> {
+        self.validate_resource_state(state)?;
+        let accessible = self.feedable_tanks_for_port(feed_port_name)?;
+        Ok(self
+            .tanks
+            .iter()
+            .zip(&state.tank_propellant_kg)
+            .zip(accessible)
+            .filter(|((tank, _), reachable)| {
+                *reachable && stored_tank_resource_compatible(tank.resource, resource)
+            })
+            .map(|((_, mass), _)| *mass)
+            .sum())
+    }
+
+    /// Evaluate every installed APU from its real airbreather/shaft operating
+    /// point and throttle it against reachable tank inventory. Returned
+    /// generator output is actual electrical power for
+    /// `ElectricalPowerCommand::auxiliary_generation_power_w`; commit its
+    /// resource plan with `commit_resource_flows` after the vehicle step.
+    pub fn plan_auxiliary_power_units(
+        &self,
+        resource_state: &VehicleResourceState,
+        apu_states: &[crate::AuxiliaryPowerUnitState],
+        commands: &[crate::AuxiliaryPowerUnitCommand],
+        condition: &crate::FlightCondition,
+    ) -> Result<VehicleAuxiliaryPowerUnitStep, VehicleError> {
+        self.validate_resource_state(resource_state)?;
+        if apu_states.len() != self.auxiliary_power_units.len()
+            || commands.len() != self.auxiliary_power_units.len()
+        {
+            return Err(VehicleError::InvalidVehicle(format!(
+                "expected {} APU states and commands, got {} and {}",
+                self.auxiliary_power_units.len(),
+                apu_states.len(),
+                commands.len()
+            )));
+        }
+        let Some(first_command) = commands.first() else {
+            return Ok(VehicleAuxiliaryPowerUnitStep {
+                next_states: Vec::new(),
+                operating_points: Vec::new(),
+                generated_electrical_power_w: 0.0,
+                pneumatic_bleed_power_w: 0.0,
+                resource_limited: false,
+                resource_plan: self.plan_resource_flows(resource_state, &[], 1.0)?,
+            });
+        };
+        if commands
+            .iter()
+            .any(|command| (command.dt_s - first_command.dt_s).abs() > 1.0e-12)
+        {
+            return Err(VehicleError::InvalidVehicle(
+                "all APU commands in one vehicle step must have the same dt".into(),
+            ));
+        }
+        let dt_s = first_command.dt_s;
+        let mut throttle_scales = vec![1.0; commands.len()];
+        let mut resource_limited = false;
+        for _ in 0..16 {
+            let mut points = Vec::with_capacity(commands.len());
+            let mut demands = Vec::with_capacity(commands.len());
+            for (index, ((mount, state), command)) in self
+                .auxiliary_power_units
+                .iter()
+                .zip(apu_states)
+                .zip(commands)
+                .enumerate()
+            {
+                let mut limited_command = *command;
+                limited_command.throttle *= throttle_scales[index];
+                let (_, point) = mount
+                    .unit
+                    .advance(*state, limited_command, condition)
+                    .map_err(VehicleError::Propulsion)?;
+                demands.extend(VehicleResourceDemand::from_apu_point(
+                    &mount.name,
+                    &point,
+                    mount.feed_port_name.as_deref(),
+                ));
+                points.push(point);
+            }
+            let plan = self.plan_resource_flows(resource_state, &demands, dt_s)?;
+            let mut changed = false;
+            for allocation in &plan.consumers {
+                if allocation.scale < 1.0 - 1.0e-10
+                    && let Some(index) = self
+                        .auxiliary_power_units
+                        .iter()
+                        .position(|mount| mount.name == allocation.consumer_name)
+                {
+                    throttle_scales[index] *= allocation.scale;
+                    changed = true;
+                }
+            }
+            if !changed {
+                let next_states = points
+                    .iter()
+                    .map(|point| crate::AuxiliaryPowerUnitState {
+                        shaft: point.shaft_state,
+                    })
+                    .collect();
+                let generated_electrical_power_w = points
+                    .iter()
+                    .map(|point| point.electrical_power_w)
+                    .sum::<f64>();
+                let pneumatic_bleed_power_w = points
+                    .iter()
+                    .map(|point| point.pneumatic_bleed_power_w)
+                    .sum::<f64>();
+                if !generated_electrical_power_w.is_finite() || !pneumatic_bleed_power_w.is_finite()
+                {
+                    return Err(VehicleError::InvalidVehicle(
+                        "APU aggregate output is non-finite".into(),
+                    ));
+                }
+                return Ok(VehicleAuxiliaryPowerUnitStep {
+                    next_states,
+                    operating_points: points,
+                    generated_electrical_power_w,
+                    pneumatic_bleed_power_w,
+                    resource_limited,
+                    resource_plan: plan,
+                });
+            }
+            resource_limited = true;
+        }
+        Err(VehicleError::InvalidVehicle(
+            "APU tank-limited operating points did not converge".into(),
+        ))
     }
 
     /// Explicitly move an exact mass between compatible tanks. Transfer is
@@ -173,6 +772,347 @@ impl VehicleDefinition {
         )
     }
 
+    /// Allocate explicit pure-fluid operating-point flows against compatible,
+    /// reachable installed tanks. Consumers that need several substances
+    /// receive one common scale across all their demands.
+    pub fn plan_resource_flows(
+        &self,
+        state: &VehicleResourceState,
+        demands: &[VehicleResourceDemand],
+        dt_s: f64,
+    ) -> Result<VehicleResourcePlan, VehicleError> {
+        self.validate_resource_state(state)?;
+        if !dt_s.is_finite() || dt_s <= 0.0 {
+            return Err(VehicleError::InvalidVehicle(
+                "resource-flow step must be finite and positive".into(),
+            ));
+        }
+
+        let mut consumer_names = Vec::<String>::new();
+        let mut demand_consumers = Vec::with_capacity(demands.len());
+        let mut groups = Vec::<ResourceFlowGroup>::new();
+        for (demand_index, demand) in demands.iter().enumerate() {
+            if demand.consumer_name.trim().is_empty()
+                || !demand.mass_flow_kg_s.is_finite()
+                || demand.mass_flow_kg_s < 0.0
+                || !(demand.mass_flow_kg_s * dt_s).is_finite()
+                || demand
+                    .feed_port_name
+                    .as_ref()
+                    .is_some_and(|port| port.trim().is_empty())
+            {
+                return Err(VehicleError::InvalidVehicle(
+                    "resource demands need a named consumer, optional named feed port, and finite non-negative flow".into(),
+                ));
+            }
+            let consumer_index = consumer_names
+                .iter()
+                .position(|name| name == &demand.consumer_name)
+                .unwrap_or_else(|| {
+                    consumer_names.push(demand.consumer_name.clone());
+                    consumer_names.len() - 1
+                });
+            demand_consumers.push(consumer_index);
+
+            let resolved_port = demand
+                .feed_port_name
+                .as_deref()
+                .or_else(|| self.resource_feed_port(&demand.consumer_name));
+            let fluid_properties = self.feed_fluid_properties(resolved_port, demand.resource)?;
+
+            let group_index = groups.iter().position(|group| {
+                group.resource == demand.resource
+                    && group.feed_port_name.as_deref() == resolved_port
+            });
+            if let Some(group_index) = group_index {
+                if groups[group_index].fluid_properties != fluid_properties {
+                    return Err(VehicleError::InvalidVehicle(
+                        "one feed-port/resource group has inconsistent fluid properties".into(),
+                    ));
+                }
+                groups[group_index].demand_indices.push(demand_index);
+            } else {
+                groups.push(ResourceFlowGroup {
+                    resource: demand.resource,
+                    feed_port_name: resolved_port.map(str::to_owned),
+                    demand_indices: vec![demand_index],
+                    accessible_tanks: self.feedable_tanks_for_port(resolved_port)?,
+                    fluid_properties,
+                });
+            }
+        }
+
+        let mut resources = Vec::new();
+        for demand in demands {
+            if !resources.contains(&demand.resource) {
+                resources.push(demand.resource);
+            }
+        }
+        let mut consumer_scales = vec![1.0; consumer_names.len()];
+        let iteration_limit = (groups.len() + consumer_names.len() + 1) * 4;
+        for _ in 0..iteration_limit {
+            let mut reserved = vec![0.0; self.tanks.len()];
+            let mut next_scales = consumer_scales.clone();
+            for group in &mut groups {
+                let requested_flow_kg_s: f64 = group
+                    .demand_indices
+                    .iter()
+                    .map(|index| {
+                        demands[*index].mass_flow_kg_s * consumer_scales[demand_consumers[*index]]
+                    })
+                    .sum();
+                if !requested_flow_kg_s.is_finite() {
+                    return Err(VehicleError::InvalidVehicle(
+                        "feed-line flow aggregation overflowed".into(),
+                    ));
+                }
+                let pressure_scale = self.feed_pressure_supported_scale(
+                    group.feed_port_name.as_deref(),
+                    group.resource,
+                    requested_flow_kg_s,
+                    group.fluid_properties,
+                )?;
+                if pressure_scale < 1.0 - 1.0e-12 {
+                    for demand_index in &group.demand_indices {
+                        let consumer = demand_consumers[*demand_index];
+                        next_scales[consumer] =
+                            next_scales[consumer].min(consumer_scales[consumer] * pressure_scale);
+                    }
+                }
+                group.accessible_tanks = self.pressure_qualified_tanks(
+                    group.feed_port_name.as_deref(),
+                    group.resource,
+                    requested_flow_kg_s * pressure_scale,
+                    group.fluid_properties,
+                )?;
+            }
+            for resource in &resources {
+                let resource_groups: Vec<_> = groups
+                    .iter()
+                    .filter(|group| group.resource == *resource)
+                    .collect();
+                let group_demands: Vec<_> = resource_groups
+                    .iter()
+                    .map(|group| {
+                        group
+                            .demand_indices
+                            .iter()
+                            .map(|index| {
+                                demands[*index].mass_flow_kg_s
+                                    * dt_s
+                                    * consumer_scales[demand_consumers[*index]]
+                            })
+                            .sum::<f64>()
+                    })
+                    .collect();
+                let total_requested_kg: f64 = group_demands.iter().sum();
+                if !total_requested_kg.is_finite() {
+                    return Err(VehicleError::InvalidVehicle(
+                        "resource demand aggregation overflowed".into(),
+                    ));
+                }
+                if total_requested_kg <= 0.0 {
+                    continue;
+                }
+                let full_assignment = assign_resource_groups(
+                    &self.tanks,
+                    &state.tank_propellant_kg,
+                    &reserved,
+                    *resource,
+                    &resource_groups,
+                    &group_demands,
+                );
+                let scale = if full_assignment.0 + 1.0e-12 >= total_requested_kg {
+                    1.0
+                } else {
+                    let mut low = 0.0;
+                    let mut high = 1.0;
+                    for _ in 0..48 {
+                        let middle = 0.5 * (low + high);
+                        let scaled_demands: Vec<_> =
+                            group_demands.iter().map(|demand| demand * middle).collect();
+                        let assigned = assign_resource_groups(
+                            &self.tanks,
+                            &state.tank_propellant_kg,
+                            &reserved,
+                            *resource,
+                            &resource_groups,
+                            &scaled_demands,
+                        )
+                        .0;
+                        if assigned >= total_requested_kg * middle {
+                            low = middle;
+                        } else {
+                            high = middle;
+                        }
+                    }
+                    low
+                };
+                for group in &resource_groups {
+                    for demand_index in &group.demand_indices {
+                        let consumer = demand_consumers[*demand_index];
+                        next_scales[consumer] =
+                            next_scales[consumer].min(consumer_scales[consumer] * scale);
+                    }
+                }
+                let scaled_demands: Vec<_> =
+                    group_demands.iter().map(|demand| demand * scale).collect();
+                let (_, tank_draw) = assign_resource_groups(
+                    &self.tanks,
+                    &state.tank_propellant_kg,
+                    &reserved,
+                    *resource,
+                    &resource_groups,
+                    &scaled_demands,
+                );
+                for (reserved, draw) in reserved.iter_mut().zip(tank_draw) {
+                    *reserved += draw;
+                }
+            }
+            let converged = consumer_scales
+                .iter()
+                .zip(&next_scales)
+                .all(|(old, new)| (old - new).abs() <= 1.0e-12);
+            consumer_scales = next_scales;
+            if converged {
+                break;
+            }
+        }
+
+        // Rebuild a feasible tank-by-tank assignment after cross-resource
+        // consumer scales settle. Each demand group can draw only from tanks
+        // reachable through its named feed port.
+        let mut tank_consumption_kg = vec![0.0; self.tanks.len()];
+        for group in &mut groups {
+            let flow_kg_s: f64 = group
+                .demand_indices
+                .iter()
+                .map(|index| {
+                    demands[*index].mass_flow_kg_s * consumer_scales[demand_consumers[*index]]
+                })
+                .sum();
+            group.accessible_tanks = self.pressure_qualified_tanks(
+                group.feed_port_name.as_deref(),
+                group.resource,
+                flow_kg_s,
+                group.fluid_properties,
+            )?;
+        }
+        for resource in &resources {
+            let resource_groups: Vec<_> = groups
+                .iter()
+                .filter(|group| group.resource == *resource)
+                .collect();
+            let group_demands: Vec<_> = resource_groups
+                .iter()
+                .map(|group| {
+                    group
+                        .demand_indices
+                        .iter()
+                        .map(|index| {
+                            demands[*index].mass_flow_kg_s
+                                * dt_s
+                                * consumer_scales[demand_consumers[*index]]
+                        })
+                        .sum::<f64>()
+                })
+                .collect();
+            let requested_kg: f64 = group_demands.iter().sum();
+            if !requested_kg.is_finite() {
+                return Err(VehicleError::InvalidVehicle(
+                    "resource demand aggregation overflowed".into(),
+                ));
+            }
+            let (assigned_kg, tank_draw) = assign_resource_groups(
+                &self.tanks,
+                &state.tank_propellant_kg,
+                &tank_consumption_kg,
+                *resource,
+                &resource_groups,
+                &group_demands,
+            );
+            if requested_kg > assigned_kg + 1.0e-8 {
+                return Err(VehicleError::InvalidVehicle(
+                    "resource allocation did not converge to a feasible tank draw".into(),
+                ));
+            }
+            for (reserved, draw) in tank_consumption_kg.iter_mut().zip(tank_draw) {
+                *reserved += draw;
+            }
+        }
+
+        let consumers = consumer_names
+            .into_iter()
+            .enumerate()
+            .map(|(consumer_index, consumer_name)| {
+                let requested_mass_kg: f64 = demands
+                    .iter()
+                    .zip(&demand_consumers)
+                    .filter(|(_, index)| **index == consumer_index)
+                    .map(|(demand, _)| demand.mass_flow_kg_s * dt_s)
+                    .sum();
+                if !requested_mass_kg.is_finite() {
+                    return Err(VehicleError::InvalidVehicle(
+                        "resource consumer demand aggregation overflowed".into(),
+                    ));
+                }
+                let scale = consumer_scales[consumer_index];
+                Ok(ConsumerResourceAllocation {
+                    consumer_name,
+                    requested_mass_kg,
+                    actual_mass_kg: requested_mass_kg * scale,
+                    scale,
+                })
+            })
+            .collect::<Result<Vec<_>, VehicleError>>()?;
+        let total_consumption_kg: f64 = tank_consumption_kg.iter().sum();
+        if !total_consumption_kg.is_finite() {
+            return Err(VehicleError::InvalidVehicle(
+                "resource allocation produced a non-finite tank draw".into(),
+            ));
+        }
+        Ok(VehicleResourcePlan {
+            tank_consumption_kg,
+            consumers,
+            total_consumption_kg,
+            dt_s,
+        })
+    }
+
+    /// Commit a planned pure-fluid draw through the same moving-mass,
+    /// center-of-mass, inertia, and body-frame update as rocket consumption.
+    pub fn commit_resource_flows(
+        &mut self,
+        state: &mut VehicleResourceState,
+        plan: &VehicleResourcePlan,
+    ) -> Result<DVec3, VehicleError> {
+        self.validate_resource_state(state)?;
+        if plan.tank_consumption_kg.len() != self.tanks.len()
+            || !plan.dt_s.is_finite()
+            || plan.dt_s <= 0.0
+        {
+            return Err(VehicleError::InvalidVehicle(
+                "resource plan does not match the installed tank inventory".into(),
+            ));
+        }
+        let mut next_tanks = state.tank_propellant_kg.clone();
+        for (index, consumed) in plan.tank_consumption_kg.iter().copied().enumerate() {
+            if !consumed.is_finite() || consumed < 0.0 || consumed > next_tanks[index] + 1.0e-9 {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "resource plan overdraws tank '{}'",
+                    tank_display_name(&self.tanks[index])
+                )));
+            }
+            next_tanks[index] = (next_tanks[index] - consumed).max(0.0);
+        }
+        self.commit_resource_state(
+            state,
+            next_tanks,
+            state.solid_burn_time_s.clone(),
+            state.solid_ignited.clone(),
+        )
+    }
+
     /// Allocate per-engine throttle requests against reachable propellant,
     /// returning the physical wrench and exact resource draw for one step.
     pub fn plan_propulsion_step(
@@ -182,6 +1122,29 @@ impl VehicleDefinition {
         system_chamber_throttles: &[Vec<f64>],
         ambient_pa: f64,
         dt_s: f64,
+    ) -> Result<VehiclePropulsionAllocation, VehicleError> {
+        self.plan_propulsion_step_with_resource_demands(
+            state,
+            engine_throttles,
+            system_chamber_throttles,
+            ambient_pa,
+            dt_s,
+            &[],
+        )
+    }
+
+    /// Plan rocket mounts and other installed operating-point consumers
+    /// against one shared tank inventory. Existing rocket/chamber allocation
+    /// is reserved first; accessory draws are planned from the exact remaining
+    /// inventory and returned with per-consumer scales.
+    pub fn plan_propulsion_step_with_resource_demands(
+        &self,
+        state: &VehicleResourceState,
+        engine_throttles: &[f64],
+        system_chamber_throttles: &[Vec<f64>],
+        ambient_pa: f64,
+        dt_s: f64,
+        additional_demands: &[VehicleResourceDemand],
     ) -> Result<VehiclePropulsionAllocation, VehicleError> {
         self.validate_resource_state(state)?;
         if !ambient_pa.is_finite() || ambient_pa < 0.0 || !dt_s.is_finite() || dt_s <= 0.0 {
@@ -305,17 +1268,40 @@ impl VehicleDefinition {
                 "propulsion allocation produced a non-finite wrench".into(),
             ));
         }
-        let tank_draw_kg: f64 = allocation.tank_draw_kg.iter().sum();
+        let mut tank_draw = allocation.tank_draw_kg.clone();
+        let additional_resource_consumers = if additional_demands.is_empty() {
+            Vec::new()
+        } else {
+            let mut remaining_state = state.clone();
+            for (inventory, reserved) in remaining_state
+                .tank_propellant_kg
+                .iter_mut()
+                .zip(&tank_draw)
+            {
+                *inventory = (*inventory - reserved).max(0.0);
+            }
+            let plan = self.plan_resource_flows(&remaining_state, additional_demands, dt_s)?;
+            for (reserved, additional) in tank_draw.iter_mut().zip(&plan.tank_consumption_kg) {
+                *reserved += additional;
+            }
+            fuel_limited |= plan
+                .consumers
+                .iter()
+                .any(|consumer| consumer.scale < 1.0 - 1.0e-10);
+            plan.consumers
+        };
+        let tank_draw_kg: f64 = tank_draw.iter().sum();
         Ok(VehiclePropulsionAllocation {
             force_body_n: force,
             moment_body_nm: moment,
-            tank_consumption_kg: allocation.tank_draw_kg,
+            tank_consumption_kg: tank_draw,
             solid_burn_time_s,
             solid_ignited,
             engine_throttles: allocation.engine_throttles,
             system_chamber_throttles: allocation.system_chamber_throttles,
             total_propellant_flow_kg_s: (tank_draw_kg + solid_draw_kg) / dt_s,
             fuel_limited,
+            additional_resource_consumers,
         })
     }
 
@@ -565,12 +1551,14 @@ impl VehicleDefinition {
         let mut mass_delta_kg = 0.0;
         let mut first_moment_delta = DVec3::ZERO;
         let mut inertia_delta = DMat3::ZERO;
+        let mut body_mass_deltas = Vec::new();
         for (index, mount) in self.tanks.iter().enumerate() {
             let delta = next_tanks[index] - state.tank_propellant_kg[index];
             if delta == 0.0 {
                 continue;
             }
             let position = DVec3::from_array(mount.position_body_m);
+            let mut intrinsic_delta = DMat3::ZERO;
             mass_delta_kg += delta;
             first_moment_delta += position * delta;
             inertia_delta += parallel_axis(delta, position);
@@ -584,7 +1572,16 @@ impl VehicleDefinition {
                 let new_intrinsic = shape
                     .intrinsic_inertia_body_kg_m2(mount.tank.dry_mass_kg, next_tanks[index])
                     .map_err(VehicleError::Propulsion)?;
-                inertia_delta += new_intrinsic - old_intrinsic;
+                intrinsic_delta = new_intrinsic - old_intrinsic;
+                inertia_delta += intrinsic_delta;
+            }
+            if let Some(ownership) = &self.assembly_ownership {
+                let body = *ownership.tank_bodies.get(index).ok_or_else(|| {
+                    VehicleError::InvalidVehicle(
+                        "assembly ownership is missing a tank body during mass update".into(),
+                    )
+                })?;
+                body_mass_deltas.push((body, delta, position, intrinsic_delta));
             }
         }
         for (index, mount) in self.engines.iter().enumerate() {
@@ -607,6 +1604,14 @@ impl VehicleDefinition {
             mass_delta_kg += delta;
             first_moment_delta += position * delta;
             inertia_delta += parallel_axis(delta, position);
+            if let Some(ownership) = &self.assembly_ownership {
+                let body = *ownership.engine_bodies.get(index).ok_or_else(|| {
+                    VehicleError::InvalidVehicle(
+                        "assembly ownership is missing an engine body during mass update".into(),
+                    )
+                })?;
+                body_mass_deltas.push((body, delta, position, DMat3::ZERO));
+            }
         }
 
         let updated_mass_kg = self.mass_properties.mass_kg + mass_delta_kg;
@@ -626,6 +1631,12 @@ impl VehicleDefinition {
                 "resource change would move body-frame coordinates out of range".into(),
             ));
         }
+        let assembly_body_masses = self
+            .assembly_ownership
+            .as_ref()
+            .map(|ownership| ownership.body_masses_after_deltas(&body_mass_deltas))
+            .transpose()
+            .map_err(|error| VehicleError::InvalidVehicle(error.to_string()))?;
 
         Ok(ResourceTransition {
             tank_propellant_kg: next_tanks,
@@ -633,6 +1644,7 @@ impl VehicleDefinition {
             solid_ignited: next_solid_ignited,
             mass_properties: properties,
             frame_shift_body_m: frame_shift,
+            assembly_body_masses,
         })
     }
 
@@ -647,8 +1659,14 @@ impl VehicleDefinition {
             solid_ignited,
             mass_properties,
             frame_shift_body_m,
+            assembly_body_masses,
         } = transition;
 
+        if let (Some(ownership), Some(body_masses)) =
+            (&mut self.assembly_ownership, assembly_body_masses)
+        {
+            ownership.body_masses = body_masses;
+        }
         self.shift_body_frame_origin(frame_shift_body_m);
         self.mass_properties = mass_properties;
         state.tank_propellant_kg = tank_propellant_kg;
@@ -657,7 +1675,10 @@ impl VehicleDefinition {
         frame_shift_body_m
     }
 
-    fn validate_resource_state(&self, state: &VehicleResourceState) -> Result<(), VehicleError> {
+    pub(crate) fn validate_resource_state(
+        &self,
+        state: &VehicleResourceState,
+    ) -> Result<(), VehicleError> {
         if state.tank_propellant_kg.len() != self.tanks.len()
             || state.solid_burn_time_s.len() != self.engines.len()
             || state.solid_ignited.len() != self.engines.len()
@@ -737,6 +1758,12 @@ impl VehicleDefinition {
                 adjacency[link.state.b].push(link.state.a);
             }
         }
+        for edge in &assembly.resource_edges {
+            if edge.open {
+                adjacency[edge.a].push(edge.b);
+                adjacency[edge.b].push(edge.a);
+            }
+        }
         let mut seen = vec![false; adjacency.len()];
         let mut stack = vec![endpoint_a.body];
         seen[endpoint_a.body] = true;
@@ -769,9 +1796,10 @@ impl VehicleDefinition {
         } else {
             assembly.engine_ports.iter().map(|port| port.body).collect()
         };
-        let reachable = crate::feed_reachable(
+        let reachable = crate::feed_reachable_with_resource_edges(
             assembly.body_names.len(),
             &links,
+            &assembly.resource_edges,
             &tank_bodies,
             &port_bodies,
         )
@@ -788,6 +1816,262 @@ impl VehicleDefinition {
             }
         }
         Ok(accessible)
+    }
+
+    fn feedable_tanks_for_port(
+        &self,
+        feed_port_name: Option<&str>,
+    ) -> Result<Vec<bool>, VehicleError> {
+        let Some(port_name) = feed_port_name else {
+            return self.feedable_tanks();
+        };
+        let mut accessible = vec![false; self.tanks.len()];
+        let Some(assembly) = &self.assembly else {
+            accessible.fill(true);
+            return Ok(accessible);
+        };
+        let endpoint = assembly
+            .engine_ports
+            .iter()
+            .find(|endpoint| endpoint.name == port_name)
+            .ok_or_else(|| {
+                VehicleError::InvalidVehicle(format!(
+                    "assembly has no engine feed port named '{port_name}'"
+                ))
+            })?;
+        let mut reachable = vec![false; assembly.body_names.len()];
+        let mut stack = vec![endpoint.body];
+        reachable[endpoint.body] = true;
+        while let Some(body) = stack.pop() {
+            for link in &assembly.links {
+                if !link.state.resource_open() {
+                    continue;
+                }
+                let neighbor = if link.state.a == body {
+                    Some(link.state.b)
+                } else if link.state.b == body {
+                    Some(link.state.a)
+                } else {
+                    None
+                };
+                if let Some(neighbor) = neighbor
+                    && !reachable[neighbor]
+                {
+                    reachable[neighbor] = true;
+                    stack.push(neighbor);
+                }
+            }
+            for edge in &assembly.resource_edges {
+                if !edge.open {
+                    continue;
+                }
+                let neighbor = if edge.a == body {
+                    Some(edge.b)
+                } else if edge.b == body {
+                    Some(edge.a)
+                } else {
+                    None
+                };
+                if let Some(neighbor) = neighbor
+                    && !reachable[neighbor]
+                {
+                    reachable[neighbor] = true;
+                    stack.push(neighbor);
+                }
+            }
+        }
+        for (tank_index, tank) in self.tanks.iter().enumerate() {
+            if let Some(tank_endpoint) = assembly
+                .tanks
+                .iter()
+                .find(|endpoint| endpoint.name == tank.name)
+            {
+                accessible[tank_index] = reachable[tank_endpoint.body];
+            }
+        }
+        Ok(accessible)
+    }
+
+    fn feed_fluid_properties(
+        &self,
+        feed_port_name: Option<&str>,
+        resource: StoredPropellant,
+    ) -> Result<Option<FeedResourceProperties>, VehicleError> {
+        let Some(port_name) = feed_port_name else {
+            return Ok(None);
+        };
+        let Some(route) = self
+            .resource_feed_ports
+            .iter()
+            .find(|route| route.feed_port_name == port_name)
+        else {
+            if self.assembly.as_ref().is_some_and(|assembly| {
+                assembly.links.iter().any(|link| link.feed_line.is_some())
+                    || assembly
+                        .resource_edges
+                        .iter()
+                        .any(|edge| edge.feed_line.is_some())
+            }) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "feed port '{port_name}' needs a resource route with fluid properties because the assembly contains feed lines"
+                )));
+            }
+            return Ok(None);
+        };
+        let Some(properties) = route
+            .fluid_properties
+            .iter()
+            .find(|properties| properties.resource == resource)
+            .copied()
+        else {
+            if self.assembly.as_ref().is_some_and(|assembly| {
+                assembly.links.iter().any(|link| link.feed_line.is_some())
+                    || assembly
+                        .resource_edges
+                        .iter()
+                        .any(|edge| edge.feed_line.is_some())
+            }) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "feed port '{port_name}' needs density, viscosity, and minimum-pressure data for {resource:?} because the assembly contains feed lines"
+                )));
+            }
+            return Ok(None);
+        };
+        properties.validate()?;
+        Ok(Some(properties))
+    }
+
+    fn pressure_qualified_tanks(
+        &self,
+        feed_port_name: Option<&str>,
+        resource: StoredPropellant,
+        flow_kg_s: f64,
+        properties: Option<FeedResourceProperties>,
+    ) -> Result<Vec<bool>, VehicleError> {
+        let mut accessible = self.feedable_tanks_for_port(feed_port_name)?;
+        let Some(properties) = properties else {
+            return Ok(accessible);
+        };
+        properties.validate()?;
+        if properties.resource != resource {
+            return Err(VehicleError::InvalidVehicle(
+                "feed-fluid resource does not match the routed tank resource".into(),
+            ));
+        }
+        if !flow_kg_s.is_finite() || flow_kg_s < 0.0 {
+            return Err(VehicleError::InvalidVehicle(
+                "feed-line flow must be finite and non-negative".into(),
+            ));
+        }
+        let Some(assembly) = &self.assembly else {
+            return Ok(accessible);
+        };
+        let Some(port_name) = feed_port_name else {
+            return Ok(accessible);
+        };
+        let Some(port) = assembly
+            .engine_ports
+            .iter()
+            .find(|endpoint| endpoint.name == port_name)
+        else {
+            return Err(VehicleError::InvalidVehicle(format!(
+                "assembly has no engine feed port named '{port_name}'"
+            )));
+        };
+        let mut pressure_classes = Vec::<f64>::new();
+        let mut tank_paths = vec![None; self.tanks.len()];
+        for (tank_index, tank) in self.tanks.iter().enumerate() {
+            if !accessible[tank_index] || !stored_tank_resource_compatible(tank.resource, resource)
+            {
+                accessible[tank_index] = false;
+                continue;
+            }
+            let Some(tank_endpoint) = assembly
+                .tanks
+                .iter()
+                .find(|endpoint| endpoint.name == tank.name)
+            else {
+                accessible[tank_index] = false;
+                continue;
+            };
+            let source_pressure_pa = properties.source_pressure_pa.min(tank.tank.max_pressure_pa);
+            let pressure_class = pressure_classes
+                .iter()
+                .position(|pressure| pressure.to_bits() == source_pressure_pa.to_bits())
+                .unwrap_or_else(|| {
+                    pressure_classes.push(source_pressure_pa);
+                    pressure_classes.len() - 1
+                });
+            tank_paths[tank_index] = Some((tank_endpoint.body, pressure_class));
+        }
+        let adjacency = assembly_feed_pressure_adjacency(assembly);
+        let pressure_edges = assembly_feed_pressure_edges(&adjacency, flow_kg_s, properties)?;
+        let drops_by_pressure: Vec<Vec<f64>> = pressure_classes
+            .iter()
+            .map(|source_pressure_pa| {
+                minimum_assembly_feed_pressure_drops(
+                    &pressure_edges,
+                    port.body,
+                    *source_pressure_pa,
+                )
+            })
+            .collect();
+        for (tank_index, path) in tank_paths.into_iter().enumerate() {
+            let Some((body, pressure_class)) = path else {
+                continue;
+            };
+            let source_pressure_pa = pressure_classes[pressure_class];
+            let pressure_drop_pa = drops_by_pressure[pressure_class][body];
+            accessible[tank_index] = pressure_drop_pa.is_finite()
+                && source_pressure_pa - pressure_drop_pa + 1.0e-8 >= properties.minimum_pressure_pa;
+        }
+        Ok(accessible)
+    }
+
+    fn feed_pressure_supported_scale(
+        &self,
+        feed_port_name: Option<&str>,
+        resource: StoredPropellant,
+        requested_flow_kg_s: f64,
+        properties: Option<FeedResourceProperties>,
+    ) -> Result<f64, VehicleError> {
+        if properties.is_none() || requested_flow_kg_s <= 0.0 {
+            return Ok(1.0);
+        }
+        let has_supply = |flow_kg_s| -> Result<bool, VehicleError> {
+            Ok(self
+                .pressure_qualified_tanks(feed_port_name, resource, flow_kg_s, properties)?
+                .into_iter()
+                .any(|reachable| reachable))
+        };
+        if has_supply(requested_flow_kg_s)? {
+            return Ok(1.0);
+        }
+        if !has_supply(0.0)? {
+            return Ok(0.0);
+        }
+        let mut low = 0.0;
+        let mut high = requested_flow_kg_s;
+        for _ in 0..FEED_PRESSURE_BISECTION_STEPS {
+            let middle = 0.5 * (low + high);
+            if has_supply(middle)? {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        Ok((low / requested_flow_kg_s).clamp(0.0, 1.0))
+    }
+
+    pub fn resource_feed_port_for_consumer(&self, consumer_name: &str) -> Option<&str> {
+        self.resource_feed_ports
+            .iter()
+            .find(|route| route.consumer_name == consumer_name)
+            .map(|route| route.feed_port_name.as_str())
+    }
+
+    fn resource_feed_port(&self, consumer_name: &str) -> Option<&str> {
+        self.resource_feed_port_for_consumer(consumer_name)
     }
 
     fn flow_demands(
@@ -1026,6 +2310,297 @@ fn stored_role(stored: StoredPropellant, propellant: Propellant) -> Option<Compo
     }
 }
 
+fn stored_tank_resource_compatible(
+    tank_resource: TankResource,
+    resource: StoredPropellant,
+) -> bool {
+    match tank_resource {
+        TankResource::Unspecified => true,
+        TankResource::Stored(stored) => stored == resource,
+        TankResource::Oxidizer(propellant) => match propellant {
+            Propellant::LoxRp1 | Propellant::LoxMethane | Propellant::LoxHydrogen => {
+                resource == StoredPropellant::Lox
+            }
+            Propellant::NtoMmh => resource == StoredPropellant::Nto,
+            _ => false,
+        },
+        TankResource::Fuel(propellant) => match propellant {
+            Propellant::LoxRp1 => resource == StoredPropellant::Rp1,
+            Propellant::LoxMethane => resource == StoredPropellant::LiquidMethane,
+            Propellant::LoxHydrogen => resource == StoredPropellant::LiquidHydrogen,
+            Propellant::NtoMmh => resource == StoredPropellant::Mmh,
+            Propellant::MonopropHydrazine => resource == StoredPropellant::Hydrazine,
+            Propellant::ColdGasNitrogen => resource == StoredPropellant::Nitrogen,
+            Propellant::ColdGasHelium => resource == StoredPropellant::Helium,
+            Propellant::SolidApcp => false,
+        },
+        TankResource::Pair(_) => false,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FlowEdge {
+    to: usize,
+    reverse: usize,
+    residual_kg: f64,
+}
+
+fn add_flow_edge(graph: &mut [Vec<FlowEdge>], from: usize, to: usize, capacity_kg: f64) -> usize {
+    let forward_index = graph[from].len();
+    let reverse_index = graph[to].len();
+    graph[from].push(FlowEdge {
+        to,
+        reverse: reverse_index,
+        residual_kg: capacity_kg,
+    });
+    graph[to].push(FlowEdge {
+        to: from,
+        reverse: forward_index,
+        residual_kg: 0.0,
+    });
+    forward_index
+}
+
+/// Maximum compatible tank-to-feed-port assignment for one stored resource.
+/// The return value is the assigned mass and exact tank withdrawals. A small
+/// Edmonds-Karp network is sufficient here: it runs only at a vehicle fixed
+/// step, and node count is bounded by installed tanks/ports.
+fn assign_resource_groups(
+    tanks: &[crate::TankMount],
+    inventory_kg: &[f64],
+    reserved_kg: &[f64],
+    resource: StoredPropellant,
+    groups: &[&ResourceFlowGroup],
+    group_demands_kg: &[f64],
+) -> (f64, Vec<f64>) {
+    if groups.is_empty() || groups.len() != group_demands_kg.len() {
+        return (0.0, vec![0.0; tanks.len()]);
+    }
+    let total_demand_kg: f64 = group_demands_kg.iter().sum();
+    if !total_demand_kg.is_finite() || total_demand_kg <= 0.0 {
+        return (0.0, vec![0.0; tanks.len()]);
+    }
+    let source = 0;
+    let tank_start = 1;
+    let group_start = tank_start + tanks.len();
+    let sink = group_start + groups.len();
+    let mut graph = vec![Vec::<FlowEdge>::new(); sink + 1];
+    let mut source_edges = Vec::with_capacity(tanks.len());
+    for (tank_index, tank) in tanks.iter().enumerate() {
+        let available_kg = (inventory_kg[tank_index] - reserved_kg[tank_index])
+            .max(0.0)
+            .min(total_demand_kg);
+        source_edges.push((
+            source,
+            add_flow_edge(&mut graph, source, tank_start + tank_index, available_kg),
+        ));
+        if available_kg <= 0.0 || !stored_tank_resource_compatible(tank.resource, resource) {
+            continue;
+        }
+        for (group_index, group) in groups.iter().enumerate() {
+            if group.accessible_tanks[tank_index] && group_demands_kg[group_index] > 0.0 {
+                add_flow_edge(
+                    &mut graph,
+                    tank_start + tank_index,
+                    group_start + group_index,
+                    available_kg.min(group_demands_kg[group_index]),
+                );
+            }
+        }
+    }
+    for (group_index, demand_kg) in group_demands_kg.iter().copied().enumerate() {
+        if demand_kg > 0.0 {
+            add_flow_edge(&mut graph, group_start + group_index, sink, demand_kg);
+        }
+    }
+
+    let mut flow_kg = 0.0;
+    loop {
+        let mut parent = vec![None::<(usize, usize)>; graph.len()];
+        let mut queue = std::collections::VecDeque::new();
+        parent[source] = Some((source, usize::MAX));
+        queue.push_back(source);
+        while let Some(node) = queue.pop_front() {
+            if node == sink {
+                break;
+            }
+            for (edge_index, edge) in graph[node].iter().enumerate() {
+                if edge.residual_kg > 1.0e-12 && parent[edge.to].is_none() {
+                    parent[edge.to] = Some((node, edge_index));
+                    queue.push_back(edge.to);
+                }
+            }
+        }
+        if parent[sink].is_none() {
+            break;
+        }
+        let mut augmentation_kg = f64::INFINITY;
+        let mut node = sink;
+        while node != source {
+            let (previous, edge_index) = parent[node].expect("augmenting path parent");
+            augmentation_kg = augmentation_kg.min(graph[previous][edge_index].residual_kg);
+            node = previous;
+        }
+        if !augmentation_kg.is_finite() || augmentation_kg <= 1.0e-12 {
+            break;
+        }
+        node = sink;
+        while node != source {
+            let (previous, edge_index) = parent[node].expect("augmenting path parent");
+            let reverse = graph[previous][edge_index].reverse;
+            graph[previous][edge_index].residual_kg -= augmentation_kg;
+            graph[node][reverse].residual_kg += augmentation_kg;
+            node = previous;
+        }
+        flow_kg += augmentation_kg;
+    }
+
+    let mut tank_draw_kg = vec![0.0; tanks.len()];
+    for (tank_index, (node, edge_index)) in source_edges.into_iter().enumerate() {
+        let initial_capacity = (inventory_kg[tank_index] - reserved_kg[tank_index])
+            .max(0.0)
+            .min(total_demand_kg);
+        tank_draw_kg[tank_index] =
+            (initial_capacity - graph[node][edge_index].residual_kg).max(0.0);
+    }
+    (flow_kg, tank_draw_kg)
+}
+
+fn assembly_feed_pressure_adjacency(
+    assembly: &crate::VehicleAssembly,
+) -> Vec<Vec<(usize, Option<FeedLine>)>> {
+    let mut adjacency = vec![Vec::<(usize, Option<FeedLine>)>::new(); assembly.body_names.len()];
+    for link in &assembly.links {
+        if link.state.resource_open() {
+            adjacency[link.state.a].push((link.state.b, link.feed_line));
+            adjacency[link.state.b].push((link.state.a, link.feed_line));
+        }
+    }
+    for edge in &assembly.resource_edges {
+        if edge.open {
+            adjacency[edge.a].push((edge.b, edge.feed_line));
+            adjacency[edge.b].push((edge.a, edge.feed_line));
+        }
+    }
+    adjacency
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FeedPressureQueueEntry {
+    drop_pa: f64,
+    body: usize,
+}
+
+type FeedPressureEdge = (usize, f64, f64);
+type FeedPressureAdjacency = Vec<Vec<FeedPressureEdge>>;
+
+impl PartialEq for FeedPressureQueueEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.drop_pa.to_bits() == other.drop_pa.to_bits() && self.body == other.body
+    }
+}
+
+impl Eq for FeedPressureQueueEntry {}
+
+impl PartialOrd for FeedPressureQueueEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FeedPressureQueueEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.drop_pa
+            .total_cmp(&other.drop_pa)
+            .then_with(|| self.body.cmp(&other.body))
+    }
+}
+
+/// Evaluate each authored pipe once for this flow before one or more
+/// pressure-rating-specific shortest-path searches.
+fn assembly_feed_pressure_edges(
+    adjacency: &[Vec<(usize, Option<FeedLine>)>],
+    flow_kg_s: f64,
+    properties: FeedResourceProperties,
+) -> Result<FeedPressureAdjacency, VehicleError> {
+    adjacency
+        .iter()
+        .map(|edges| {
+            edges
+                .iter()
+                .map(|(neighbor, line)| {
+                    let Some(line) = line else {
+                        return Ok((*neighbor, f64::MAX, 0.0));
+                    };
+                    let drop_pa = match line.pressure_drop_pa(
+                        flow_kg_s,
+                        properties.density_kg_m3,
+                        properties.viscosity_pa_s,
+                    ) {
+                        Ok(drop_pa) if drop_pa.is_finite() => drop_pa,
+                        Ok(_) => {
+                            return Err(VehicleError::InvalidVehicle(
+                                "feed-line pressure drop is non-finite".into(),
+                            ));
+                        }
+                        // The line velocity gate is a hard model boundary.
+                        // Omitting this edge lets the outer bisection find a
+                        // pressure/flow-feasible operating point.
+                        Err(crate::PropulsionError::UnsupportedCombination(_)) => f64::INFINITY,
+                        Err(error) => return Err(VehicleError::Propulsion(error)),
+                    };
+                    Ok((*neighbor, line.rated_pressure_pa, drop_pa))
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn minimum_assembly_feed_pressure_drops(
+    adjacency: &FeedPressureAdjacency,
+    target_body: usize,
+    source_pressure_pa: f64,
+) -> Vec<f64> {
+    if target_body >= adjacency.len() {
+        return vec![f64::INFINITY; adjacency.len()];
+    }
+    let mut distance_pa = vec![f64::INFINITY; adjacency.len()];
+    let mut settled = vec![false; adjacency.len()];
+    let mut queue = BinaryHeap::new();
+    distance_pa[target_body] = 0.0;
+    queue.push(Reverse(FeedPressureQueueEntry {
+        drop_pa: 0.0,
+        body: target_body,
+    }));
+    while let Some(Reverse(FeedPressureQueueEntry {
+        drop_pa: current_drop_pa,
+        body,
+    })) = queue.pop()
+    {
+        if settled[body] || current_drop_pa > distance_pa[body] {
+            continue;
+        }
+        settled[body] = true;
+        for (neighbor, line_rating_pa, edge_drop_pa) in &adjacency[body] {
+            if settled[*neighbor] {
+                continue;
+            }
+            if source_pressure_pa > *line_rating_pa || !edge_drop_pa.is_finite() {
+                continue;
+            }
+            let candidate = current_drop_pa + *edge_drop_pa;
+            if candidate.is_finite() && candidate < distance_pa[*neighbor] {
+                distance_pa[*neighbor] = candidate;
+                queue.push(Reverse(FeedPressureQueueEntry {
+                    drop_pa: candidate,
+                    body: *neighbor,
+                }));
+            }
+        }
+    }
+    distance_pa
+}
+
 fn parallel_axis(mass_kg: f64, position_body_m: DVec3) -> DMat3 {
     mass_kg
         * (DMat3::IDENTITY * position_body_m.length_squared()
@@ -1041,9 +2616,10 @@ mod tests {
     use super::*;
     use crate::{
         AeroGeometry, AeroPanel, AssemblyEndpoint, AssemblyLinkState, ChamberMaterial, CoolingMode,
-        EngineCycle, EngineMount, LiquidEngineSpec, NamedAssemblyLink, NozzleContour, NtrFluid,
-        NuclearThermalSpec, RigidBodyProperties, SolidGrainGeometry, SolidMotorSpec, TankMount,
-        TankShape, TankSpec, VehicleAssembly,
+        EngineCycle, EngineMount, FeedLine, LiquidEngineSpec, NamedAssemblyLink,
+        NamedAssemblyResourceEdge, NozzleContour, NtrFluid, NuclearThermalSpec,
+        RigidBodyProperties, SolidGrainGeometry, SolidMotorSpec, TankMount, TankShape, TankSpec,
+        VehicleAssembly,
     };
 
     fn compiled_engine() -> CompiledEngine {
@@ -1123,6 +2699,714 @@ mod tests {
         vehicle.bake_engine_masses().expect("bake engines");
         vehicle.bake_tank_masses().expect("bake tanks");
         vehicle
+    }
+
+    #[test]
+    fn generic_multireactant_consumers_share_one_scale_and_update_mass_frame() {
+        let capacity_kg = std::f64::consts::PI / 6.0 * 0.5_f64.powi(3) * 1_000.0;
+        let deuterium = tank(
+            "deuterium",
+            TankResource::Stored(StoredPropellant::Deuterium),
+            1_000.0,
+            1.0,
+            DVec3::new(-1.0, 0.0, 0.0),
+        );
+        let mut tritium = tank(
+            "tritium",
+            TankResource::Stored(StoredPropellant::Tritium),
+            1_000.0,
+            1.0,
+            DVec3::new(1.0, 0.0, 0.0),
+        );
+        tritium.initial_propellant_kg = Some(0.3);
+        tritium.intrinsic_inertia_body_kg_m2 = tritium
+            .tank
+            .shape
+            .expect("test tank shape")
+            .intrinsic_inertia_body_kg_m2(tritium.tank.dry_mass_kg, 0.3)
+            .expect("filled-tank inertia");
+        assert!(0.3 < capacity_kg);
+
+        let mut vehicle = vehicle(vec![deuterium, tritium], 0);
+        let mut state = vehicle.initial_resource_state();
+        let initial_mass_kg = vehicle.mass_properties.mass_kg;
+        let plan = vehicle
+            .plan_resource_flows(
+                &state,
+                &[
+                    VehicleResourceDemand::new("fusion-core", StoredPropellant::Deuterium, 0.4),
+                    VehicleResourceDemand::new("fusion-core", StoredPropellant::Tritium, 0.6),
+                ],
+                1.0,
+            )
+            .expect("plan a paired isotope draw");
+
+        assert!(
+            (plan.consumers[0].scale - 0.5).abs() < 1.0e-12,
+            "consumer scale = {}",
+            plan.consumers[0].scale
+        );
+        assert!((plan.tank_consumption_kg[0] - 0.2).abs() < 1.0e-12);
+        assert!((plan.tank_consumption_kg[1] - 0.3).abs() < 1.0e-12);
+        let frame_shift = vehicle
+            .commit_resource_flows(&mut state, &plan)
+            .expect("commit resource mass change");
+        assert!((initial_mass_kg - vehicle.mass_properties.mass_kg - 0.5).abs() < 1.0e-9);
+        assert!((state.total_tank_propellant_kg() - (capacity_kg - 0.2)).abs() < 1.0e-9);
+        assert!(frame_shift.is_finite());
+        assert!(vehicle.mass_properties.inertia_body_kg_m2.is_finite());
+    }
+
+    #[test]
+    fn non_tree_resource_edge_crossfeeds_without_opening_the_structural_hatch() {
+        let vehicle = vehicle(
+            vec![tank(
+                "tank-body.reserve",
+                TankResource::Stored(StoredPropellant::Nitrogen),
+                1_000.0,
+                1.0,
+                DVec3::ZERO,
+            )],
+            0,
+        )
+        .with_assembly(VehicleAssembly {
+            root_body: 0,
+            body_names: vec!["tank-body".into(), "consumer-body".into()],
+            links: vec![NamedAssemblyLink {
+                name: "sealed-interface".into(),
+                state: AssemblyLinkState {
+                    a: 0,
+                    b: 1,
+                    hatch: true,
+                    open: false,
+                },
+                feed_line: None,
+            }],
+            resource_edges: vec![NamedAssemblyResourceEdge {
+                name: "nitrogen-crossfeed".into(),
+                a: 0,
+                b: 1,
+                open: true,
+                feed_line: None,
+            }],
+            joint_strengths: Vec::new(),
+            volumes: Vec::new(),
+            tanks: vec![AssemblyEndpoint {
+                name: "tank-body.reserve".into(),
+                body: 0,
+            }],
+            engine_ports: vec![AssemblyEndpoint {
+                name: "consumer-body.port".into(),
+                body: 1,
+            }],
+        })
+        .expect("crossfeed assembly");
+        let state = vehicle.initial_resource_state();
+        assert_eq!(
+            vehicle
+                .available_stored_resource_kg(
+                    &state,
+                    StoredPropellant::Nitrogen,
+                    Some("consumer-body.port")
+                )
+                .unwrap(),
+            state.tank_propellant_kg[0]
+        );
+
+        let mut closed = vehicle.clone();
+        closed
+            .assembly
+            .as_mut()
+            .unwrap()
+            .set_resource_edge_open("nitrogen-crossfeed", false)
+            .unwrap();
+        assert_eq!(
+            closed
+                .available_stored_resource_kg(
+                    &state,
+                    StoredPropellant::Nitrogen,
+                    Some("consumer-body.port")
+                )
+                .unwrap(),
+            0.0
+        );
+        assert!(!closed.assembly.as_ref().unwrap().links[0].state.open);
+    }
+
+    #[test]
+    fn feed_line_pressure_drop_throttles_the_shared_operating_point_flow() {
+        let resource = StoredPropellant::Nitrogen;
+        let feed_line = FeedLine {
+            diameter_m: 0.01,
+            length_m: 10.0,
+            bends: 1,
+            rated_pressure_pa: 1.0e6,
+            material: ChamberMaterial::nickel_superalloy(),
+        };
+        let vehicle = vehicle(
+            vec![tank(
+                "tank-body.reserve",
+                TankResource::Stored(resource),
+                1_000.0,
+                1.0,
+                DVec3::ZERO,
+            )],
+            0,
+        )
+        .with_assembly(VehicleAssembly {
+            root_body: 0,
+            body_names: vec!["tank-body".into(), "consumer-body".into()],
+            links: vec![NamedAssemblyLink {
+                name: "sealed-interface".into(),
+                state: AssemblyLinkState {
+                    a: 0,
+                    b: 1,
+                    hatch: true,
+                    open: false,
+                },
+                feed_line: None,
+            }],
+            resource_edges: vec![NamedAssemblyResourceEdge {
+                name: "nitrogen-umbilical".into(),
+                a: 0,
+                b: 1,
+                open: true,
+                feed_line: Some(feed_line),
+            }],
+            joint_strengths: Vec::new(),
+            volumes: Vec::new(),
+            tanks: vec![AssemblyEndpoint {
+                name: "tank-body.reserve".into(),
+                body: 0,
+            }],
+            engine_ports: vec![AssemblyEndpoint {
+                name: "consumer-body.port".into(),
+                body: 1,
+            }],
+        })
+        .expect("pressurized feed assembly")
+        .with_resource_feed_ports(vec![VehicleResourceFeedPort {
+            consumer_name: "nitrogen-pump".into(),
+            feed_port_name: "consumer-body.port".into(),
+            fluid_properties: vec![FeedResourceProperties {
+                resource,
+                density_kg_m3: 1_000.0,
+                viscosity_pa_s: 0.001,
+                source_pressure_pa: 500_000.0,
+                minimum_pressure_pa: 250_000.0,
+            }],
+        }])
+        .expect("routed fluid properties");
+        let state = vehicle.initial_resource_state();
+
+        let plan = vehicle
+            .plan_resource_flows(
+                &state,
+                &[VehicleResourceDemand::new("nitrogen-pump", resource, 1.0)],
+                0.1,
+            )
+            .expect("pressure-limited resource plan");
+
+        let scale = plan.consumers[0].scale;
+        assert!(
+            scale > 0.0 && scale < 1.0,
+            "expected pressure throttle, got {scale}"
+        );
+        let actual_flow_kg_s = plan.consumers[0].actual_mass_kg / plan.dt_s;
+        let pressure_drop_pa = feed_line
+            .pressure_drop_pa(actual_flow_kg_s, 1_000.0, 0.001)
+            .expect("actual flow remains within the line velocity gate");
+        let inlet_pressure_pa = 500_000.0 - pressure_drop_pa;
+        assert!(inlet_pressure_pa >= 250_000.0 - 1.0e-3);
+        // The 32-step flow bisection leaves less than 2^-32 of the
+        // one-kg/s request between the feasible and infeasible bracket.
+        let bracketed_drop_pa = feed_line
+            .pressure_drop_pa(actual_flow_kg_s + 1.0 / 2.0_f64.powi(32), 1_000.0, 0.001)
+            .expect("upper bracket remains below the velocity gate");
+        assert!(
+            (500_000.0 - bracketed_drop_pa - 250_000.0).abs() < 0.1,
+            "pressure root error exceeded the 32-step bracket"
+        );
+    }
+
+    #[test]
+    fn fuel_cell_draws_stoichiometric_hydrogen_and_lox_from_installed_tanks() {
+        let mut vehicle = vehicle(
+            vec![
+                tank(
+                    "fuel-cell-hydrogen",
+                    TankResource::Stored(StoredPropellant::LiquidHydrogen),
+                    71.0,
+                    1.0,
+                    DVec3::new(-0.5, 0.0, 0.0),
+                ),
+                tank(
+                    "fuel-cell-oxygen",
+                    TankResource::Stored(StoredPropellant::Lox),
+                    1_141.0,
+                    1.0,
+                    DVec3::new(0.5, 0.0, 0.0),
+                ),
+            ],
+            0,
+        )
+        .with_electrical_power(crate::ElectricalPowerSystem {
+            fuel_cells: vec![crate::FuelCellSpec {
+                name: "service-cell".into(),
+                rated_electrical_power_w: 1_000.0,
+                electrical_efficiency: 0.5,
+                dry_mass_kg: 20.0,
+                dimensions_body_m: DVec3::splat(0.5),
+                position_body_m: DVec3::ZERO,
+                feed_port_name: None,
+            }],
+            consumers: vec![crate::PowerConsumerSpec {
+                name: "life-support".into(),
+                rated_power_w: 500.0,
+                priority: crate::PowerPriority::LifeSupport,
+            }],
+            ..crate::ElectricalPowerSystem::default()
+        })
+        .expect("fuel cell system");
+        vehicle
+            .bake_electrical_power_masses()
+            .expect("fuel-cell mass");
+        let mut resource_state = vehicle.initial_resource_state();
+        let initial_inventory = resource_state.tank_propellant_kg.clone();
+        let initial_mass_kg = vehicle.mass_properties.mass_kg;
+        let power_state = vehicle.initial_electrical_power_state().unwrap();
+        let mut command = crate::ElectricalPowerCommand::idle_for(&vehicle.electrical_power, 1.0);
+        command.consumer_power_w = vec![500.0];
+        assert!(
+            vehicle
+                .advance_electrical_power(&power_state, &command)
+                .is_err()
+        );
+
+        let (_, telemetry, frame_shift) = vehicle
+            .advance_electrical_power_with_resources(&mut resource_state, &power_state, &command)
+            .expect("fuel cell and tank inventory share one transaction");
+        let cell = &telemetry.fuel_cells[0];
+        let hydrogen_draw = initial_inventory[0] - resource_state.tank_propellant_kg[0];
+        let oxygen_draw = initial_inventory[1] - resource_state.tank_propellant_kg[1];
+        assert!(telemetry.fuel_cell_output_power_w > 0.0);
+        assert!((hydrogen_draw - cell.hydrogen_flow_kg_s).abs() < 1.0e-12);
+        assert!((oxygen_draw - cell.oxygen_flow_kg_s).abs() < 1.0e-12);
+        assert!((oxygen_draw / hydrogen_draw - 8.0).abs() < 1.0e-8);
+        assert!(
+            (initial_mass_kg - vehicle.mass_properties.mass_kg - hydrogen_draw - oxygen_draw).abs()
+                < 1.0e-9
+        );
+        assert!(frame_shift.is_finite());
+    }
+
+    #[test]
+    fn fuel_cells_reserve_reactants_after_external_demands_in_one_mass_commit() {
+        let hydrogen_flow_for_full_cell = 1_000.0 / (0.5 * crate::FUEL_CELL_HYDROGEN_LHV_J_KG);
+        let mut hydrogen = tank(
+            "shared-hydrogen",
+            TankResource::Stored(StoredPropellant::LiquidHydrogen),
+            71.0,
+            1.0,
+            DVec3::new(-0.5, 0.0, 0.0),
+        );
+        hydrogen.initial_propellant_kg = Some(hydrogen_flow_for_full_cell * 1.5);
+        let mut oxygen = tank(
+            "fuel-cell-oxygen",
+            TankResource::Stored(StoredPropellant::Lox),
+            1_141.0,
+            1.0,
+            DVec3::new(0.5, 0.0, 0.0),
+        );
+        oxygen.initial_propellant_kg = Some(hydrogen_flow_for_full_cell * 8.0 * 2.0);
+        let mut vehicle = vehicle(vec![hydrogen, oxygen], 0)
+            .with_electrical_power(crate::ElectricalPowerSystem {
+                fuel_cells: vec![crate::FuelCellSpec {
+                    name: "service-cell".into(),
+                    rated_electrical_power_w: 1_000.0,
+                    electrical_efficiency: 0.5,
+                    dry_mass_kg: 20.0,
+                    dimensions_body_m: DVec3::splat(0.5),
+                    position_body_m: DVec3::ZERO,
+                    feed_port_name: None,
+                }],
+                consumers: vec![crate::PowerConsumerSpec {
+                    name: "life-support".into(),
+                    rated_power_w: 1_000.0,
+                    priority: crate::PowerPriority::LifeSupport,
+                }],
+                ..crate::ElectricalPowerSystem::default()
+            })
+            .expect("fuel-cell vehicle");
+        vehicle
+            .bake_electrical_power_masses()
+            .expect("fuel-cell mass");
+        let mut resources = vehicle.initial_resource_state();
+        let initial_tanks = resources.tank_propellant_kg.clone();
+        let initial_mass_kg = vehicle.mass_properties.mass_kg;
+        let power_state = vehicle.initial_electrical_power_state().unwrap();
+        let mut command = crate::ElectricalPowerCommand::idle_for(&vehicle.electrical_power, 1.0);
+        command.consumer_power_w = vec![1_000.0];
+        let external_hydrogen_flow = hydrogen_flow_for_full_cell;
+        let external_demands = [
+            VehicleResourceDemand::new(
+                "hydrogen-thruster",
+                StoredPropellant::LiquidHydrogen,
+                external_hydrogen_flow,
+            ),
+            VehicleResourceDemand::new(
+                "hydrogen-thruster",
+                StoredPropellant::Lox,
+                external_hydrogen_flow * 8.0,
+            ),
+        ];
+        let (_, telemetry, _) = vehicle
+            .advance_electrical_power_with_demands(
+                &mut resources,
+                &power_state,
+                &command,
+                &external_demands,
+            )
+            .expect("one shared reactant transaction");
+        let cell = &telemetry.fuel_cells[0];
+        assert!((cell.electrical_power_w - 500.0).abs() < 1.0e-8);
+        assert!((cell.hydrogen_flow_kg_s - hydrogen_flow_for_full_cell * 0.5).abs() < 1.0e-16);
+        let hydrogen_draw = initial_tanks[0] - resources.tank_propellant_kg[0];
+        let oxygen_draw = initial_tanks[1] - resources.tank_propellant_kg[1];
+        assert!((hydrogen_draw - external_hydrogen_flow - cell.hydrogen_flow_kg_s).abs() < 1.0e-16);
+        assert!(
+            (oxygen_draw - external_hydrogen_flow * 8.0 - cell.oxygen_flow_kg_s).abs() < 1.0e-15
+        );
+        assert!(
+            (initial_mass_kg - vehicle.mass_properties.mass_kg - hydrogen_draw - oxygen_draw).abs()
+                < 1.0e-9
+        );
+    }
+
+    #[test]
+    fn installed_apu_reports_actual_generator_power_and_consumes_reachable_jet_fuel() {
+        let unit = crate::AuxiliaryPowerUnitSpec {
+            name: "service-apu".into(),
+            engine: crate::AirbreathingSpec {
+                name: "service-apu-turbine".into(),
+                cycle: crate::AirCycle::Turbojet,
+                fuel: crate::JetFuel::Kerosene,
+                intake_area_m2: 0.2,
+                intake: crate::IntakeKind::Pitot,
+                compressor_ratio: 8.0,
+                bypass_ratio: 0.0,
+                fan_pressure_ratio: 1.0,
+                turbine_inlet_temp_k: 1_350.0,
+                afterburner: false,
+                reheat_temp_k: 0.0,
+                turbine_material: ChamberMaterial::nickel_superalloy(),
+                spool_tau_s: 3.0,
+                shaft: crate::ShaftSpec {
+                    generator: crate::GeneratorSpec {
+                        fitted: true,
+                        power_w: 5_000.0,
+                        efficiency: 0.9,
+                        efficiency_map: Vec::new(),
+                        thermal: None,
+                        attached_spool: crate::ShaftSpool::HighPressure,
+                        maximum_shaft_torque_nm: None,
+                        cut_in_spool_n: 0.5,
+                        mass_kg: 2.0,
+                    },
+                    ..crate::ShaftSpec::default()
+                },
+            },
+        }
+        .compile()
+        .expect("compiled APU");
+        let mut vehicle = vehicle(
+            vec![tank(
+                "apu-fuel",
+                TankResource::Stored(StoredPropellant::Rp1),
+                810.0,
+                1.0,
+                DVec3::X,
+            )],
+            0,
+        )
+        .with_auxiliary_power_units(vec![crate::AuxiliaryPowerUnitMount {
+            name: "service-apu".into(),
+            unit: unit.clone(),
+            position_body_m: DVec3::ZERO.to_array(),
+            thrust_axis_body: DVec3::X.to_array(),
+            feed_port_name: None,
+        }])
+        .expect("install APU");
+        vehicle
+            .bake_auxiliary_power_unit_masses()
+            .expect("APU mass");
+        let mut resources = vehicle.initial_resource_state();
+        let initial_mass_kg = vehicle.mass_properties.mass_kg;
+        let atmosphere = crate::AtmosphereConfig::default();
+        let sample = atmosphere.sample(0.0).expect("sea-level atmosphere");
+        let condition = crate::flight_condition(&sample, 0.0).expect("static condition");
+        let states = [crate::AuxiliaryPowerUnitState {
+            shaft: crate::JetShaftState::running(&unit.engine),
+        }];
+        let commands = [crate::AuxiliaryPowerUnitCommand {
+            throttle: 1.0,
+            starter_engaged: false,
+            generator_load_w: 5_000.0,
+            pneumatic_bleed_power_w: 0.0,
+            dt_s: 0.1,
+        }];
+        let step = vehicle
+            .plan_auxiliary_power_units(&resources, &states, &commands, &condition)
+            .expect("fuel-limited APU operating point");
+        assert!(step.generated_electrical_power_w > 0.0);
+        assert!(step.operating_points[0].fuel_flow_kg_s > 0.0);
+        assert_eq!(
+            step.generated_electrical_power_w,
+            step.operating_points[0].electrical_power_w
+        );
+        assert_eq!(step.resource_plan.consumers[0].scale, 1.0);
+        vehicle
+            .commit_resource_flows(&mut resources, &step.resource_plan)
+            .expect("commit actual APU fuel flow");
+        assert!(
+            (initial_mass_kg
+                - vehicle.mass_properties.mass_kg
+                - step.operating_points[0].fuel_flow_kg_s * commands[0].dt_s)
+                .abs()
+                < 1.0e-9
+        );
+        assert!(step.next_states[0].shaft.spool_n <= 1.0);
+    }
+
+    #[test]
+    fn named_feed_port_limits_a_consumer_to_its_reachable_tanks() {
+        let tanks = vec![
+            tank(
+                "core-hydrogen",
+                TankResource::Stored(StoredPropellant::LiquidHydrogen),
+                71.0,
+                1.0,
+                DVec3::ZERO,
+            ),
+            tank(
+                "booster-hydrogen",
+                TankResource::Stored(StoredPropellant::LiquidHydrogen),
+                71.0,
+                1.0,
+                DVec3::X,
+            ),
+        ];
+        let vehicle = vehicle(tanks, 0)
+            .with_assembly(VehicleAssembly {
+                root_body: 0,
+                body_names: vec!["core".into(), "booster".into()],
+                links: vec![NamedAssemblyLink {
+                    name: "closed-hatch".into(),
+                    state: AssemblyLinkState {
+                        a: 0,
+                        b: 1,
+                        hatch: true,
+                        open: false,
+                    },
+                    feed_line: None,
+                }],
+                resource_edges: Vec::new(),
+                joint_strengths: Vec::new(),
+                volumes: Vec::new(),
+                tanks: vec![
+                    AssemblyEndpoint {
+                        name: "core-hydrogen".into(),
+                        body: 0,
+                    },
+                    AssemblyEndpoint {
+                        name: "booster-hydrogen".into(),
+                        body: 1,
+                    },
+                ],
+                engine_ports: vec![
+                    AssemblyEndpoint {
+                        name: "core.feed".into(),
+                        body: 0,
+                    },
+                    AssemblyEndpoint {
+                        name: "booster.feed".into(),
+                        body: 1,
+                    },
+                ],
+            })
+            .expect("valid assembly")
+            .with_resource_feed_ports(vec![crate::VehicleResourceFeedPort {
+                consumer_name: "ntr-core".into(),
+                feed_port_name: "core.feed".into(),
+                fluid_properties: Vec::new(),
+            }])
+            .expect("named consumer route");
+        let state = vehicle.initial_resource_state();
+        let core_draw = vehicle
+            .plan_resource_flows(
+                &state,
+                &[VehicleResourceDemand::new(
+                    "ntr-core",
+                    StoredPropellant::LiquidHydrogen,
+                    0.1,
+                )],
+                0.1,
+            )
+            .expect("core feed allocation");
+        assert!(core_draw.tank_consumption_kg[0] > 0.0);
+        assert_eq!(core_draw.tank_consumption_kg[1], 0.0);
+
+        let booster_draw = vehicle
+            .plan_resource_flows(
+                &state,
+                &[VehicleResourceDemand::new(
+                    "booster-engine",
+                    StoredPropellant::LiquidHydrogen,
+                    0.1,
+                )
+                .through_feed_port("booster.feed")],
+                0.1,
+            )
+            .expect("booster feed allocation");
+        assert_eq!(booster_draw.tank_consumption_kg[0], 0.0);
+        assert!(booster_draw.tank_consumption_kg[1] > 0.0);
+    }
+
+    #[test]
+    fn overlapping_named_feed_ports_share_one_tank_proportionally() {
+        let mut shared = tank(
+            "shared-hydrogen",
+            TankResource::Stored(StoredPropellant::LiquidHydrogen),
+            71.0,
+            1.0,
+            DVec3::ZERO,
+        );
+        shared.initial_propellant_kg = Some(1.0);
+        let vehicle = vehicle(vec![shared], 0)
+            .with_assembly(VehicleAssembly {
+                root_body: 0,
+                body_names: vec!["core".into(), "upper".into()],
+                links: vec![NamedAssemblyLink {
+                    name: "open-stack".into(),
+                    state: AssemblyLinkState {
+                        a: 0,
+                        b: 1,
+                        hatch: false,
+                        open: true,
+                    },
+                    feed_line: None,
+                }],
+                resource_edges: Vec::new(),
+                joint_strengths: Vec::new(),
+                volumes: Vec::new(),
+                tanks: vec![AssemblyEndpoint {
+                    name: "shared-hydrogen".into(),
+                    body: 0,
+                }],
+                engine_ports: vec![
+                    AssemblyEndpoint {
+                        name: "core.feed".into(),
+                        body: 0,
+                    },
+                    AssemblyEndpoint {
+                        name: "upper.feed".into(),
+                        body: 1,
+                    },
+                ],
+            })
+            .expect("shared-feed assembly");
+        let state = vehicle.initial_resource_state();
+        let plan = vehicle
+            .plan_resource_flows(
+                &state,
+                &[
+                    VehicleResourceDemand::new(
+                        "core-engine",
+                        StoredPropellant::LiquidHydrogen,
+                        1.0,
+                    )
+                    .through_feed_port("core.feed"),
+                    VehicleResourceDemand::new(
+                        "upper-engine",
+                        StoredPropellant::LiquidHydrogen,
+                        1.0,
+                    )
+                    .through_feed_port("upper.feed"),
+                ],
+                1.0,
+            )
+            .expect("proportional allocation through overlapping ports");
+        assert!((plan.consumers[0].scale - 0.5).abs() < 1.0e-12);
+        assert!((plan.consumers[1].scale - 0.5).abs() < 1.0e-12);
+        assert!((plan.tank_consumption_kg[0] - 1.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn fusion_reactant_demands_preserve_stoichiometric_mass_fractions() {
+        let demands =
+            fusion_reactant_demands("torch", crate::FusionReaction::DeuteriumTritium, 1.0, None);
+        assert_eq!(demands.len(), 2);
+        assert_eq!(demands[0].resource, StoredPropellant::Deuterium);
+        assert_eq!(demands[1].resource, StoredPropellant::Tritium);
+        assert!((demands[0].mass_flow_kg_s + demands[1].mass_flow_kg_s - 1.0).abs() < 1.0e-15);
+        assert!((demands[0].mass_flow_kg_s / demands[1].mass_flow_kg_s - 2.0 / 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn mounted_cold_gas_pulse_commits_its_actual_propellant_mass() {
+        let rcs_mount = crate::RcsMount {
+            name: "translation-rcs".into(),
+            thruster: crate::RcsThruster::ColdGas(
+                crate::ColdGasThrusterSpec {
+                    name: "nitrogen-nozzle".into(),
+                    gas: Propellant::ColdGasNitrogen,
+                    storage_temp_k: 300.0,
+                    rated_pressure_pa: 2.0e6,
+                    throat_radius_m: 0.001,
+                    expansion_ratio: 10.0,
+                    nozzle_length_m: 0.02,
+                    contour: crate::NozzleContour::Conical,
+                    material: crate::ChamberMaterial::nickel_superalloy(),
+                    valve_rise_time_s: 0.005,
+                    min_on_time_s: 0.02,
+                }
+                .compile()
+                .expect("cold-gas thruster"),
+            ),
+            position_body_m: DVec3::X.to_array(),
+            direction_body: DVec3::Y.to_array(),
+        };
+        let mut nitrogen_tank = tank(
+            "rcs-nitrogen",
+            TankResource::Stored(StoredPropellant::Nitrogen),
+            25.0,
+            1.0,
+            -DVec3::X,
+        );
+        nitrogen_tank.initial_propellant_kg = Some(0.5);
+        let mut vehicle = vehicle(vec![nitrogen_tank], 0)
+            .with_rcs_mounts(vec![rcs_mount.clone()])
+            .expect("install RCS mount");
+        let mut state = vehicle.initial_resource_state();
+        let dt_s = 0.1;
+        let pulse = rcs_mount
+            .thruster
+            .pulse(dt_s, 2.0e6, 0.0)
+            .expect("finite RCS pulse");
+        let demands = VehicleResourceDemand::from_rcs_pulse(&rcs_mount, pulse, dt_s, None)
+            .expect("RCS pulse resource flow");
+        let plan = vehicle
+            .plan_resource_flows(&state, &demands, dt_s)
+            .expect("reachable nitrogen draw");
+        assert!((plan.total_consumption_kg - pulse.propellant_kg).abs() < 1.0e-15);
+        let initial_mass_kg = vehicle.mass_properties.mass_kg;
+        vehicle
+            .commit_resource_flows(&mut state, &plan)
+            .expect("commit mounted RCS pulse");
+        assert!((state.tank_propellant_kg[0] - (0.5 - pulse.propellant_kg)).abs() < 1.0e-15);
+        assert!(
+            (initial_mass_kg - vehicle.mass_properties.mass_kg - pulse.propellant_kg).abs() < 1e-9
+        );
     }
 
     #[test]
@@ -1255,7 +3539,10 @@ mod tests {
                     hatch: true,
                     open: false,
                 },
+                feed_line: None,
             }],
+            resource_edges: Vec::new(),
+            joint_strengths: Vec::new(),
             volumes: vec![],
             tanks: vec![AssemblyEndpoint {
                 name: "tank-body.main".into(),
@@ -1327,7 +3614,10 @@ mod tests {
                     hatch: true,
                     open: false,
                 },
+                feed_line: None,
             }],
+            resource_edges: Vec::new(),
+            joint_strengths: Vec::new(),
             volumes: vec![],
             tanks: vec![
                 AssemblyEndpoint {

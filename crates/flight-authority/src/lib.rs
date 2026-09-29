@@ -39,4 +39,5 @@ pub use runtime::{
     local_air_kinematics,
 };
 pub use thessa_collision::{ContactPartyKind, ContactSummary, JointId};
+pub use thessa_collision::{DynamicBodyConfig, ExternalWrench};
 pub use thessa_worldgen_rocky::field::{ObstacleReport, ObstacleWithstandProof};

@@ -18,6 +18,7 @@ pub(super) enum AutopilotEvent {
     Node,
     Alarm,
     Stage,
+    Separate,
     EngineReady,
 }
 
@@ -29,6 +30,7 @@ impl AutopilotEvent {
             Self::Node => "node",
             Self::Alarm => "alarm",
             Self::Stage => "stage",
+            Self::Separate => "separate",
             Self::EngineReady => "engine-ready",
         }
     }
@@ -56,6 +58,9 @@ pub(super) fn client_input_takes_over(previous: Option<&ClientInput>, input: &Cl
                 | Command::Reset
                 | Command::ExecuteManeuver { .. }
                 | Command::ExecuteBurnPlan { .. }
+                | Command::Separate { .. }
+                | Command::Dock { .. }
+                | Command::Undock { .. }
         )
     }) {
         return true;
@@ -75,9 +80,31 @@ pub(super) fn client_input_takes_over(previous: Option<&ClientInput>, input: &Cl
         || input.parachutes_armed != previous.parachutes_armed
 }
 
+pub(super) fn legacy_propulsion_echo_changed(
+    previous: Option<&ClientInput>,
+    input: &ClientInput,
+    has_engine_command: bool,
+) -> bool {
+    previous.is_none_or(|previous| {
+        input.throttle != previous.throttle
+            || (!has_engine_command && input.engine_active != previous.engine_active)
+    })
+}
+
 /// Driver around the authority: inputs in, snapshots out, warp accounting.
+///
+/// The primary vehicle keeps the single-vehicle fast path (`authority`).
+/// Separated clusters spawn additional [`FlightAuthority`] entries in
+/// `fleet` keyed by stable [`VehicleId`](thessa_sim_core::VehicleId)
+/// values; dock sessions and fixed-joint handles live in `dock_graph` and
+/// `dock_joints`. Secondaries fly passive (fresh default controls, no
+/// autopilot graphs); commanding them is a later slice.
 pub(super) struct Sim {
     pub(super) authority: FlightAuthority,
+    pub(super) fleet: std::collections::BTreeMap<u32, FlightAuthority>,
+    pub(super) next_vehicle_id: u32,
+    pub(super) dock_graph: DockGraph,
+    pub(super) dock_joints: std::collections::BTreeMap<(u32, u32), JointId>,
     pub(super) ephemeris: BakedEphemeris,
     pub(super) control_mode: ControlMode,
     /// Latest typed guidance command. Legacy ClientInput clears this so the
@@ -147,6 +174,10 @@ impl Sim {
         }
         Ok(Self {
             authority,
+            fleet: std::collections::BTreeMap::new(),
+            next_vehicle_id: 1,
+            dock_graph: DockGraph::new(),
+            dock_joints: std::collections::BTreeMap::new(),
             ephemeris,
             control_mode: ControlMode::Navball,
             guidance: None,
@@ -313,13 +344,11 @@ impl Sim {
         } else {
             input.engine_active
         };
-        let propulsion_echo_changed = previous.as_ref().is_none_or(|previous| {
-            input.throttle != previous.throttle
-                || (!has_engine_command && input.engine_active != previous.engine_active)
-        });
         // Engine/stage edges first clear current propulsion on manual takeover;
         // restore the coalesced legacy throttle for their resulting active state.
-        if propulsion_echo_changed || has_engine_command {
+        if legacy_propulsion_echo_changed(previous.as_ref(), input, has_engine_command)
+            || has_engine_command
+        {
             self.authority.set_legacy_propulsion(input.throttle, active);
         }
         // These legacy state echoes are applied only when the client changes
@@ -362,6 +391,23 @@ impl Sim {
         }
         let mut engine_command_seen = false;
         for command in &input.commands {
+            // A jointed stack has no combined control model yet: thrust and
+            // effector commands on a jointed primary fail closed instead of
+            // driving one side of the constraint.
+            if self.is_jointed(VehicleId::PRIMARY.0)
+                && matches!(
+                    command,
+                    Command::Stage
+                        | Command::Engine { .. }
+                        | Command::Part { .. }
+                        | Command::ExecuteManeuver { .. }
+                        | Command::ExecuteBurnPlan { .. }
+                )
+            {
+                self.authority.wake_notice =
+                    Some("jointed vehicles cannot thrust: separate or undock first".into());
+                continue;
+            }
             match command {
                 Command::SetWarp { factor } => {
                     if let Some(vote) = self.clients.get_mut(id) {
@@ -416,6 +462,52 @@ impl Sim {
                             Some(format!("part command rejected: {error}"));
                     }
                 }
+                Command::Separate {
+                    vehicle_id,
+                    link_name,
+                } => match self.separate_vehicle(vehicle_id.0, link_name) {
+                    Ok(spawned) => {
+                        force_snapshot = true;
+                        self.autopilot_events.push_back(AutopilotEvent::Separate);
+                        self.authority.wake_notice =
+                            Some(format!("separated into {} vehicles", spawned.len() + 1));
+                    }
+                    Err(error) => {
+                        self.authority.wake_notice = Some(format!("separate rejected: {error}"));
+                    }
+                },
+                Command::Dock {
+                    vehicle_id,
+                    port_id,
+                    target_vehicle_id,
+                    target_port_id,
+                } => match self.dock_vehicles(
+                    vehicle_id.0,
+                    port_id,
+                    target_vehicle_id.0,
+                    target_port_id,
+                ) {
+                    Ok(()) => {
+                        force_snapshot = true;
+                        self.authority.wake_notice =
+                            Some(format!("docking session opened: {port_id}"));
+                    }
+                    Err(error) => {
+                        self.authority.wake_notice = Some(format!("dock rejected: {error}"));
+                    }
+                },
+                Command::Undock {
+                    vehicle_id,
+                    port_id,
+                } => match self.undock_vehicle_port(vehicle_id.0, port_id) {
+                    Ok(()) => {
+                        force_snapshot = true;
+                        self.authority.wake_notice = Some(format!("undocked {port_id}"));
+                    }
+                    Err(error) => {
+                        self.authority.wake_notice = Some(format!("undock rejected: {error}"));
+                    }
+                },
                 Command::ExecuteManeuver { nodes } => {
                     // Wire cap: node vectors are unbounded on the transport.
                     let rejected = |sim: &mut Self, reason: String| {
@@ -603,30 +695,35 @@ impl Sim {
                 chunk_s = chunk_s.min((until.0 - now.0).max(0.0));
             }
         }
+        // Jointed scenes have a bounded per-frame service quantum. Keep the
+        // whole fleet on one simulation clock while that scene is active by
+        // applying the same cap to the primary and passive vehicles.
+        if !self.dock_joints.is_empty() {
+            chunk_s = chunk_s.min(JOINTED_SCENE_DEBT_CAP_S);
+        }
         let before = self.authority.flight_time_s;
         let started = Instant::now();
         let plan_demand = self.plan_demand;
         let guidance = self.guidance.clone();
-        let result = if let Some(demand) = plan_demand {
-            self.authority.advance_control_demand_with_budget(
-                &self.ephemeris,
-                demand,
-                chunk_s,
-                budget,
-            )
+        // A jointed primary rides the shared scene instead of its own
+        // stepper: exactly one integrator owns a body per tick.
+        let primary_pair = self.jointed_pair_with(VehicleId::PRIMARY.0);
+        let result: Result<(), String> = if let Some(pair) = primary_pair {
+            self.step_jointed_pair(pair, chunk_s)
+        } else if let Some(demand) = plan_demand {
+            self.authority
+                .advance_control_demand_with_budget(&self.ephemeris, demand, chunk_s, budget)
+                .map_err(|error| error.to_string())
         } else if let Some((intent, propulsion)) = guidance {
             // Typed guidance uses the same authoritative stepper; the legacy
             // mode is only the compatibility representation used by traces.
-            self.authority.advance_guidance_with_budget(
-                &self.ephemeris,
-                &intent,
-                propulsion,
-                chunk_s,
-                budget,
-            )
+            self.authority
+                .advance_guidance_with_budget(&self.ephemeris, &intent, propulsion, chunk_s, budget)
+                .map_err(|error| error.to_string())
         } else {
             self.authority
                 .advance_with_budget(&self.ephemeris, self.control_mode, chunk_s, budget)
+                .map_err(|error| error.to_string())
         };
         self.compute_s += started.elapsed().as_secs_f64();
         result.map_err(|e| {
@@ -647,6 +744,43 @@ impl Sim {
         self.advanced_s += advanced;
         self.steps += self.authority.steps_this_frame as u64;
         self.rails_s += self.authority.rails_advanced_this_frame;
+        // Jointed non-primary pairs ride their own scene ticks; every other
+        // secondary serves the same chunk through passive fixed steps.
+        // Secondary stepping is unbounded by the CPU budget (fleet sizes stay
+        // small); cooperative budgeting across the fleet is later work.
+        let jointed_pairs: Vec<(u32, u32)> = self.dock_joints.keys().copied().collect();
+        for pair in &jointed_pairs {
+            if pair.0 == VehicleId::PRIMARY.0 {
+                continue;
+            }
+            if let Err(error) = self.step_jointed_pair(*pair, advanced) {
+                eprintln!("[server] jointed pair {pair:?} failed: {error}");
+                self.authority.wake_notice = Some(format!("jointed pair failed: {error}"));
+            }
+        }
+        let secondary_ids: Vec<u32> = self.fleet.keys().copied().collect();
+        for id in secondary_ids {
+            if self.is_jointed(id) {
+                continue;
+            }
+            let Some(secondary) = self.fleet.get_mut(&id) else {
+                continue;
+            };
+            if secondary.flight_error.is_some() {
+                continue;
+            }
+            if let Err(error) =
+                secondary.advance_with_budget(&self.ephemeris, ControlMode::Direct, advanced, None)
+            {
+                secondary.engine_active = false;
+                secondary.flight_error = Some(error.to_string());
+                eprintln!("[server] secondary vehicle {id} failed: {error}");
+                continue;
+            }
+            self.steps += secondary.steps_this_frame as u64;
+            self.rails_s += secondary.rails_advanced_this_frame;
+        }
+        self.poll_dock_sessions(advanced);
         self.autopilot_events.extend(
             self.authority
                 .take_wake_events()
@@ -689,23 +823,674 @@ impl Sim {
     }
 
     pub(super) fn snapshot(&self) -> Snapshot {
-        let authority = &self.authority;
+        Self::snapshot_of(
+            &self.authority,
+            self.paused(),
+            self.effective_warp(),
+            self.compute_s,
+            self.wall_s(),
+        )
+    }
+
+    fn snapshot_of(
+        authority: &FlightAuthority,
+        paused: bool,
+        effective_warp: f64,
+        compute_s: f64,
+        wall_s: f64,
+    ) -> Snapshot {
         Snapshot {
             tick: authority.world_tick.0,
             flight_time_s: authority.flight_time_s,
             state: authority.state,
             throttle: authority.throttle,
             engine_active: authority.engine_active,
-            paused: self.paused(),
-            effective_warp: self.effective_warp(),
-            server_compute_s: self.compute_s,
-            server_wall_s: self.wall_s(),
+            paused,
+            effective_warp,
+            server_compute_s: compute_s,
+            server_wall_s: wall_s,
             steps_this_frame: authority.steps_this_frame,
             rails_advanced_s: authority.rails_advanced_this_frame,
             reaction_wheel_torque_body_nm: authority.reaction_wheel_telemetry().to_array(),
             parachutes: authority.parachute_telemetry().to_vec(),
             wake_notice: authority.wake_notice.clone(),
             flight_error: authority.flight_error.clone(),
+        }
+    }
+
+    /// Fleet snapshots for non-primary vehicles in ascending id order. The
+    /// primary keeps its dedicated snapshot path.
+    pub(super) fn fleet_snapshot(&self) -> FleetSnapshot {
+        let paused = self.paused();
+        let effective_warp = self.effective_warp();
+        let compute_s = self.compute_s;
+        let wall_s = self.wall_s();
+        FleetSnapshot {
+            vehicles: self
+                .fleet
+                .iter()
+                .map(|(id, authority)| FleetVehicleSnapshot {
+                    vehicle_id: VehicleId::new(*id),
+                    snapshot: Self::snapshot_of(
+                        authority,
+                        paused,
+                        effective_warp,
+                        compute_s,
+                        wall_s,
+                    ),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Fixed pressure-equalization interval for server dock sessions (s).
+/// Orifice/valve sizing is future work (`details/06`); the constant lives
+/// here explicitly instead of spread through call sites.
+pub(super) const DOCK_PRESSURE_EQUALIZATION_S: f64 = 30.0;
+/// Terrain-clearance hysteresis arming the shared dock scene. In orbit the
+/// scene stays armed-but-inactive so free flight is preserved; it only
+/// hosts dock-partner bodies and fixed joints.
+pub(super) const DOCK_SCENE_ENTER_M: f64 = 5_000.0;
+pub(super) const DOCK_SCENE_EXIT_M: f64 = 10_000.0;
+/// Per-tick cap for jointed-scene cruise debt (s). Unserved warp debt sheds
+/// exactly like the CPU work budget: effective warp reports the result.
+/// Fixed solver step for jointed-scene cruise (s).
+pub(super) const JOINTED_SCENE_DEBT_CAP_S: f64 = 0.25;
+pub(super) const JOINTED_SCENE_DT_S: f64 = 1.0 / 120.0;
+/// Upper bound on authoritative vehicles (primary plus spawned clusters).
+pub(super) const MAX_FLEET_VEHICLES: usize = 64;
+/// Solver body config for dock-partner sync: full CCD, never sleep, so a
+/// jointed pair cannot freeze mid-protocol.
+pub(super) const DOCK_BODY_CONFIG: DynamicBodyConfig = DynamicBodyConfig {
+    full_ccd: true,
+    can_sleep: false,
+};
+
+impl Sim {
+    pub(super) fn vehicle_authority(&self, id: u32) -> Result<&FlightAuthority, String> {
+        if id == VehicleId::PRIMARY.0 {
+            Ok(&self.authority)
+        } else {
+            self.fleet
+                .get(&id)
+                .ok_or_else(|| format!("unknown vehicle {id}"))
+        }
+    }
+
+    /// Jointed pair containing a vehicle, if any. Joints never outlive
+    /// their session: a pair is jointed exactly when stepping is shared.
+    pub(super) fn jointed_pair_with(&self, id: u32) -> Option<(u32, u32)> {
+        self.dock_joints
+            .keys()
+            .find(|pair| pair.0 == id || pair.1 == id)
+            .copied()
+    }
+
+    pub(super) fn is_jointed(&self, id: u32) -> bool {
+        self.jointed_pair_with(id).is_some()
+    }
+
+    /// Split one authoritative vehicle along a named structural link.
+    /// Returns the spawned vehicle ids. The cluster containing the source
+    /// root body keeps the source id with fresh default controls; every
+    /// other cluster spawns a passive secondary authority sharing the fleet
+    /// clock. Active dock sessions block the split: undock first.
+    pub(super) fn separate_vehicle(
+        &mut self,
+        vehicle_id: u32,
+        link_name: &str,
+    ) -> Result<Vec<u32>, String> {
+        if link_name.trim().is_empty() {
+            return Err("link name must be non-empty".into());
+        }
+        if self.dock_graph.has_vehicle(VehicleId::new(vehicle_id)) {
+            return Err(format!(
+                "vehicle {vehicle_id} must undock before it separates"
+            ));
+        }
+        let root_name = {
+            let authority = self.vehicle_authority(vehicle_id)?;
+            let assembly = authority
+                .vehicle
+                .assembly
+                .as_ref()
+                .ok_or_else(|| format!("vehicle {vehicle_id} has no part assembly graph"))?;
+            assembly.body_names[assembly.root_body].clone()
+        };
+        let reference_body = self.vehicle_authority(vehicle_id)?.reference_body;
+        let source_time = self.vehicle_authority(vehicle_id)?.flight_time_s;
+        let source_tick = self.vehicle_authority(vehicle_id)?.world_tick;
+        let definitions = {
+            let authority = self.vehicle_authority(vehicle_id)?;
+            authority
+                .vehicle
+                .split_definitions_after_link_failure(
+                    link_name,
+                    authority.state,
+                    &authority.resource_state,
+                )
+                .map_err(|error| error.to_string())?
+        };
+        if self.fleet.len() + definitions.len() > MAX_FLEET_VEHICLES {
+            return Err("fleet is full".into());
+        }
+        let keep_index = definitions
+            .iter()
+            .position(|(definition, _, _)| {
+                definition
+                    .assembly
+                    .as_ref()
+                    .is_some_and(|assembly| assembly.body_names.contains(&root_name))
+            })
+            .ok_or_else(|| "split lost the root body".to_string())?;
+        let mut prepared = Vec::with_capacity(definitions.len());
+        for (definition, state, resource_state) in definitions {
+            let mut authority =
+                FlightAuthority::new_with_vehicle(&self.ephemeris, reference_body, definition)
+                    .map_err(|error| format!("cluster authority: {error}"))?;
+            authority.state = state;
+            authority.resource_state = resource_state;
+            authority.flight_time_s = source_time;
+            authority.world_tick = source_tick;
+            prepared.push(authority);
+        }
+        if vehicle_id == VehicleId::PRIMARY.0 {
+            self.cancel_autopilot_tasks();
+            self.clear_autopilot_controls();
+            self.authority.flight_error = None;
+        }
+        let mut spawned = Vec::new();
+        for (index, authority) in prepared.into_iter().enumerate() {
+            if index == keep_index {
+                if vehicle_id == VehicleId::PRIMARY.0 {
+                    self.authority = authority;
+                } else {
+                    self.fleet.insert(vehicle_id, authority);
+                }
+            } else {
+                let id = self.next_vehicle_id;
+                self.next_vehicle_id += 1;
+                self.fleet.insert(id, authority);
+                spawned.push(id);
+            }
+        }
+        Ok(spawned)
+    }
+
+    /// Open a persisted docking session between two authored ports. Frames
+    /// resolve from server definitions; the protocol advances on later
+    /// ticks through [`poll_dock_sessions`](Self::poll_dock_sessions).
+    pub(super) fn dock_vehicles(
+        &mut self,
+        a: u32,
+        port_a: &str,
+        b: u32,
+        port_b: &str,
+    ) -> Result<(), String> {
+        let spec_a = {
+            let authority = self.vehicle_authority(a)?;
+            authority
+                .vehicle
+                .docking_ports
+                .iter()
+                .find(|port| port.id == port_a)
+                .cloned()
+                .ok_or_else(|| format!("vehicle {a} has no docking port '{port_a}'"))?
+        };
+        let spec_b = {
+            let authority = self.vehicle_authority(b)?;
+            authority
+                .vehicle
+                .docking_ports
+                .iter()
+                .find(|port| port.id == port_b)
+                .cloned()
+                .ok_or_else(|| format!("vehicle {b} has no docking port '{port_b}'"))?
+        };
+        self.dock_graph
+            .begin_session(
+                VehicleId::new(a),
+                spec_a,
+                VehicleId::new(b),
+                spec_b,
+                DOCK_PRESSURE_EQUALIZATION_S,
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    /// End the session holding a vehicle port, removing its fixed joint
+    /// first when one is installed. Both solved states survive.
+    pub(super) fn undock_vehicle_port(
+        &mut self,
+        vehicle_id: u32,
+        port_id: &str,
+    ) -> Result<(), String> {
+        let pair = self
+            .dock_graph
+            .pairs()
+            .into_iter()
+            .find(|pair| {
+                (pair.0 == vehicle_id || pair.1 == vehicle_id)
+                    && self
+                        .dock_graph
+                        .session(VehicleId::new(pair.0), VehicleId::new(pair.1))
+                        .is_ok_and(|session| {
+                            session.port_a.id == port_id || session.port_b.id == port_id
+                        })
+            })
+            .ok_or_else(|| format!("vehicle {vehicle_id} has no docking session on '{port_id}'"))?;
+        self.release_joint(pair, format!("undocked {port_id}"));
+        Ok(())
+    }
+
+    /// Remove a fixed joint and end its session. The pair returns to
+    /// independent exact flight; the reason surfaces on the primary notice.
+    pub(super) fn release_joint(&mut self, pair: (u32, u32), reason: String) {
+        if let Some(joint) = self.dock_joints.remove(&pair) {
+            let host: Option<&mut FlightAuthority> = if pair.0 == VehicleId::PRIMARY.0 {
+                Some(&mut self.authority)
+            } else {
+                self.fleet.get_mut(&pair.0)
+            };
+            if let Some(host) = host
+                && let Some(runtime) = host.contact_runtime_mut()
+            {
+                let _ = runtime.undock(joint);
+                let _ = runtime.remove_partner(pair.1 as u64);
+            }
+        }
+        let _ = self
+            .dock_graph
+            .end_session(VehicleId::new(pair.0), VehicleId::new(pair.1));
+        self.authority.wake_notice = Some(reason);
+    }
+
+    /// True vacuum for jointed cruise: sampled density at or below the same
+    /// cutoff the flight stepper uses for its exact-vacuum fast paths.
+    /// Unsampleable evidence fails closed (no joint).
+    pub(super) fn authority_is_vacuum(&self, authority: &FlightAuthority) -> bool {
+        let time = SimTime(authority.flight_time_s);
+        let Ok(body) = self.ephemeris.body(authority.reference_body) else {
+            return false;
+        };
+        let Ok(body_state) = self.ephemeris.body_state(authority.reference_body, time) else {
+            return false;
+        };
+        let altitude_m = (authority.state.position_inertial_m - body_state.position_inertial)
+            .length()
+            - body.radius_m;
+        let Ok(sample) = authority.atmosphere.sample(altitude_m) else {
+            return false;
+        };
+        sample.density_kg_m3 <= authority.atmosphere.vacuum_cutoff_density_kg_m3
+    }
+
+    /// Gravity-only wrench for jointed cruise. Exact in vacuum (the only
+    /// regime joints install in); thrust and aero while jointed are rejected
+    /// at the command boundary because the docked stack has no combined
+    /// control model yet.
+    /// Step one jointed pair through the host scene with gravity wrenches,
+    /// capped per-tick debt like the CPU work budget. Unserved warp debt
+    /// sheds; effective warp reports the result.
+    pub(super) fn step_jointed_pair(
+        &mut self,
+        pair: (u32, u32),
+        debt_s: f64,
+    ) -> Result<(), String> {
+        if debt_s <= 0.0 {
+            return Ok(());
+        }
+        let vacuum = self
+            .vehicle_authority(pair.0)
+            .is_ok_and(|authority| self.authority_is_vacuum(authority))
+            && self
+                .vehicle_authority(pair.1)
+                .is_ok_and(|authority| self.authority_is_vacuum(authority));
+        if !vacuum {
+            self.release_joint(pair, "joint released: atmosphere".into());
+            return Ok(());
+        }
+        let (
+            host_state,
+            host_props,
+            host_geom,
+            partner_state,
+            partner_props,
+            partner_geom,
+            host_time,
+            host_mass,
+        ) = {
+            let host = self.vehicle_authority(pair.0)?;
+            let partner = self.vehicle_authority(pair.1)?;
+            (
+                host.state,
+                host.vehicle.mass_properties,
+                host.vehicle.collision_geometry.clone(),
+                partner.state,
+                partner.vehicle.mass_properties,
+                partner.vehicle.collision_geometry.clone(),
+                host.flight_time_s,
+                host.vehicle.mass_properties.mass_kg,
+            )
+        };
+        let cap = debt_s.min(JOINTED_SCENE_DEBT_CAP_S);
+        let (served, partner_state) = {
+            let host: &mut FlightAuthority = if pair.0 == VehicleId::PRIMARY.0 {
+                &mut self.authority
+            } else {
+                self.fleet
+                    .get_mut(&pair.0)
+                    .ok_or_else(|| format!("joint host {} is gone", pair.0))?
+            };
+            let runtime = host
+                .contact_runtime_mut()
+                .ok_or_else(|| "dock scene is gone".to_string())?;
+            let host_id = runtime
+                .sync_body(host_state, host_props, &host_geom, DOCK_BODY_CONFIG)
+                .map_err(|error| error.to_string())?;
+            let tag = pair.1 as u64;
+            let partner_id = runtime
+                .sync_partner(
+                    tag,
+                    partner_state,
+                    partner_props,
+                    &partner_geom,
+                    DOCK_BODY_CONFIG,
+                )
+                .map_err(|error| error.to_string())?;
+            let field = GravityField::from_ephemeris(&self.ephemeris);
+            let partner_mass = partner_props.mass_kg;
+            let mut primary_state = host_state;
+            let mut secondary_state = partner_state;
+            let mut served = 0.0;
+            while served < cap {
+                let step = (cap - served).min(JOINTED_SCENE_DT_S);
+                let gravity_a = field
+                    .acceleration(
+                        primary_state.position_inertial_m,
+                        SimTime(host_time + served),
+                    )
+                    .map_err(|error| error.to_string())?;
+                let gravity_b = field
+                    .acceleration(
+                        secondary_state.position_inertial_m,
+                        SimTime(host_time + served),
+                    )
+                    .map_err(|error| error.to_string())?;
+                primary_state = runtime
+                    .step_many(
+                        step,
+                        &[
+                            (
+                                host_id,
+                                ExternalWrench {
+                                    force_inertial_n: gravity_a * host_mass,
+                                    torque_inertial_nm: DVec3::ZERO,
+                                },
+                            ),
+                            (
+                                partner_id,
+                                ExternalWrench {
+                                    force_inertial_n: gravity_b * partner_mass,
+                                    torque_inertial_nm: DVec3::ZERO,
+                                },
+                            ),
+                        ],
+                    )
+                    .map_err(|error| error.to_string())?;
+                secondary_state = runtime
+                    .partner_state(tag)
+                    .map_err(|error| error.to_string())?;
+                served += step;
+            }
+            host.state = primary_state;
+            host.flight_time_s = host_time + served;
+            host.rails.invalidate();
+            (served, secondary_state)
+        };
+        let mut partner = self
+            .fleet
+            .remove(&pair.1)
+            .ok_or_else(|| format!("joint partner {} is gone", pair.1))?;
+        partner.state = partner_state;
+        partner.flight_time_s += served;
+        partner.rails.invalidate();
+        self.fleet.insert(pair.1, partner);
+        Ok(())
+    }
+
+    /// Advance every persisted dock session in simulation time. Capture and
+    /// alignment gate on live port kinematics; the fixed joint installs only
+    /// in vacuum, and hard dock follows the installed joint (never the
+    /// reverse), so protocol truth cannot outrun the constraint.
+    pub(super) fn poll_dock_sessions(&mut self, step_s: f64) {
+        if step_s <= 0.0 {
+            return;
+        }
+        for pair in self.dock_graph.pairs() {
+            let snapshot = (|| -> Result<DockingPortState, String> {
+                let session = self
+                    .dock_graph
+                    .session(VehicleId::new(pair.0), VehicleId::new(pair.1))
+                    .map_err(|error| error.to_string())?;
+                Ok(session.state)
+            })();
+            let Ok(proto_state) = snapshot else {
+                continue;
+            };
+            match proto_state {
+                DockingPortState::Free | DockingPortState::SoftCapture => {
+                    self.poll_dock_approach(pair);
+                }
+                DockingPortState::Aligned => {
+                    self.poll_dock_install(pair);
+                }
+                DockingPortState::HardDock => {
+                    self.poll_dock_engage(pair);
+                }
+                DockingPortState::OuterStructureEngaged => {
+                    let advanced = (|| -> Result<bool, String> {
+                        let session = self
+                            .dock_graph
+                            .session_mut(VehicleId::new(pair.0), VehicleId::new(pair.1))
+                            .map_err(|error| error.to_string())?;
+                        session
+                            .advance_pressure_equalization(step_s)
+                            .map_err(|error| error.to_string())?;
+                        Ok(session.state == DockingPortState::PressureEqualized)
+                    })();
+                    match advanced {
+                        Ok(true) => {
+                            self.authority.wake_notice = Some("docking pressure equalized".into());
+                        }
+                        Err(error) => {
+                            self.authority.wake_notice =
+                                Some(format!("docking equalization failed: {error}"));
+                        }
+                        Ok(false) => {}
+                    }
+                }
+                DockingPortState::PressureEqualized => {
+                    let vacuum = self
+                        .vehicle_authority(pair.0)
+                        .is_ok_and(|authority| self.authority_is_vacuum(authority))
+                        && self
+                            .vehicle_authority(pair.1)
+                            .is_ok_and(|authority| self.authority_is_vacuum(authority));
+                    if !vacuum {
+                        self.release_joint(pair, "joint released: atmosphere".into());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Gate capture and alignment on live port kinematics. Out-of-tolerance
+    /// evidence retries silently on later ticks; corrupt evidence surfaces.
+    fn poll_dock_approach(&mut self, pair: (u32, u32)) {
+        let kinematics = (|| -> Result<(DockingKinematics, DockingPortState), String> {
+            let session = self
+                .dock_graph
+                .session(VehicleId::new(pair.0), VehicleId::new(pair.1))
+                .map_err(|error| error.to_string())?;
+            let host = self.vehicle_authority(pair.0)?;
+            let partner = self.vehicle_authority(pair.1)?;
+            let kinematics = DockingKinematics::between(
+                host.state,
+                &session.port_a,
+                partner.state,
+                &session.port_b,
+            )
+            .map_err(|error| error.to_string())?;
+            Ok((kinematics, session.state))
+        })();
+        let Ok((kinematics, proto_state)) = kinematics else {
+            return;
+        };
+        let outcome = (|| -> Result<(), String> {
+            let session = self
+                .dock_graph
+                .session_mut(VehicleId::new(pair.0), VehicleId::new(pair.1))
+                .map_err(|error| error.to_string())?;
+            match proto_state {
+                DockingPortState::Free => session
+                    .begin_soft_capture(kinematics.relative_velocity_mps().length())
+                    .map_err(|error| error.to_string()),
+                DockingPortState::SoftCapture => {
+                    session.align(kinematics).map_err(|error| error.to_string())
+                }
+                _ => Ok(()),
+            }
+        })();
+        if let Err(error) = outcome {
+            // Gate misses retry silently; structural failures surface.
+            if error.contains("non-finite") || error.contains("unknown") {
+                self.authority.wake_notice = Some(format!("docking approach failed: {error}"));
+            }
+        }
+    }
+
+    /// Install the fixed joint for an aligned pair, then hard-dock. Vacuum
+    /// gates the install; the joint handle is recorded before the protocol
+    /// advances so truth never outruns the constraint.
+    fn poll_dock_install(&mut self, pair: (u32, u32)) {
+        let vacuum = self
+            .vehicle_authority(pair.0)
+            .is_ok_and(|authority| self.authority_is_vacuum(authority))
+            && self
+                .vehicle_authority(pair.1)
+                .is_ok_and(|authority| self.authority_is_vacuum(authority));
+        if !vacuum {
+            return;
+        }
+        let install = (|| -> Result<JointId, String> {
+            let (
+                host_state,
+                host_props,
+                host_geom,
+                partner_state,
+                partner_props,
+                partner_geom,
+                spec_a,
+                spec_b,
+            ) = {
+                let session = self
+                    .dock_graph
+                    .session(VehicleId::new(pair.0), VehicleId::new(pair.1))
+                    .map_err(|error| error.to_string())?;
+                let host = self.vehicle_authority(pair.0)?;
+                let partner = self.vehicle_authority(pair.1)?;
+                (
+                    host.state,
+                    host.vehicle.mass_properties,
+                    host.vehicle.collision_geometry.clone(),
+                    partner.state,
+                    partner.vehicle.mass_properties,
+                    partner.vehicle.collision_geometry.clone(),
+                    session.port_a.clone(),
+                    session.port_b.clone(),
+                )
+            };
+            let host: &mut FlightAuthority = if pair.0 == VehicleId::PRIMARY.0 {
+                &mut self.authority
+            } else {
+                self.fleet
+                    .get_mut(&pair.0)
+                    .ok_or_else(|| format!("joint host {} is gone", pair.0))?
+            };
+            if host.contact_runtime().is_none() {
+                host.enable_contact_mode(DOCK_SCENE_ENTER_M, DOCK_SCENE_EXIT_M)
+                    .map_err(|error| error.to_string())?;
+            }
+            let runtime = host
+                .contact_runtime_mut()
+                .ok_or_else(|| "dock scene is gone".to_string())?;
+            let tag = pair.1 as u64;
+            runtime
+                .sync_body(host_state, host_props, &host_geom, DOCK_BODY_CONFIG)
+                .map_err(|error| error.to_string())?;
+            runtime
+                .sync_partner(
+                    tag,
+                    partner_state,
+                    partner_props,
+                    &partner_geom,
+                    DOCK_BODY_CONFIG,
+                )
+                .map_err(|error| error.to_string())?;
+            runtime
+                .dock_partner(
+                    tag,
+                    spec_a.local_position_m,
+                    spec_a.local_orientation,
+                    spec_b.local_position_m,
+                    spec_b.local_orientation,
+                )
+                .map_err(|error| error.to_string())
+        })();
+        match install {
+            Ok(joint) => {
+                self.dock_joints.insert(pair, joint);
+                let outcome = (|| -> Result<(), String> {
+                    let session = self
+                        .dock_graph
+                        .session_mut(VehicleId::new(pair.0), VehicleId::new(pair.1))
+                        .map_err(|error| error.to_string())?;
+                    session.hard_dock().map_err(|error| error.to_string())?;
+                    session
+                        .engage_outer_structure()
+                        .map_err(|error| error.to_string())
+                })();
+                match outcome {
+                    Ok(()) => {
+                        self.authority.wake_notice = Some("hard dock".into());
+                    }
+                    Err(error) => {
+                        self.release_joint(pair, format!("docking protocol failed: {error}"));
+                    }
+                }
+            }
+            Err(error) => {
+                self.authority.wake_notice = Some(format!("docking install failed: {error}"));
+            }
+        }
+    }
+
+    /// Retry outer-structure engagement for a hard-docked pair.
+    fn poll_dock_engage(&mut self, pair: (u32, u32)) {
+        let outcome = (|| -> Result<(), String> {
+            let session = self
+                .dock_graph
+                .session_mut(VehicleId::new(pair.0), VehicleId::new(pair.1))
+                .map_err(|error| error.to_string())?;
+            session
+                .engage_outer_structure()
+                .map_err(|error| error.to_string())
+        })();
+        if let Err(error) = outcome {
+            self.authority.wake_notice = Some(format!("docking engage failed: {error}"));
         }
     }
 }

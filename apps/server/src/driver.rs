@@ -49,6 +49,25 @@ impl Driver {
             }
             accepted
         });
+        if self.sim.fleet.is_empty() {
+            return;
+        }
+        let fleet = self.sim.fleet_snapshot();
+        let frame = match thessa_flight_net::encode_fleet_snapshot(&fleet) {
+            Ok(frame) => frame,
+            Err(error) => {
+                eprintln!("[server] fleet snapshot encode error: {error}");
+                return;
+            }
+        };
+        let frame = Arc::new(frame);
+        self.subscribers.retain(|(_, mailbox)| {
+            let accepted = mailbox.replace_fleet_snapshot(frame.clone());
+            if !accepted {
+                mailbox.close();
+            }
+            accepted
+        });
     }
 
     /// Drain a bounded ingress slice. The limit only prevents a hot producer

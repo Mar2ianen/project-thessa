@@ -286,6 +286,10 @@ pub(crate) struct TankAsset {
     /// required so tank fill mass stays physical).
     #[serde(default)]
     propellant: Option<Propellant>,
+    /// Explicit pure-fluid inventory identity for non-pair consumers such as
+    /// fuel cells, electric thrusters, and the auxiliary generator.
+    #[serde(default)]
+    stored_propellant: Option<StoredPropellant>,
     #[serde(default)]
     bulk_density_kg_m3: Option<f64>,
 }
@@ -314,9 +318,34 @@ impl TankAsset {
         if !self.pressure_mpa.is_finite() || self.pressure_mpa <= 0.0 {
             return Err("tank pressure_mpa must be finite and > 0".into());
         }
-        let density = match (self.propellant, self.bulk_density_kg_m3) {
-            (_, Some(density)) if density.is_finite() && density > 0.0 => density,
-            (Some(propellant), None) => propellant.thermo().bulk_density_kg_m3,
+        if self.propellant.is_some() && self.stored_propellant.is_some() {
+            return Err(format!(
+                "tank {} cannot specify both propellant and stored_propellant",
+                self.name
+            )
+            .into());
+        }
+        let density = match (
+            self.propellant,
+            self.stored_propellant,
+            self.bulk_density_kg_m3,
+        ) {
+            (Some(_), None, Some(density)) => {
+                if !density.is_finite() || density <= 0.0 {
+                    return Err("tank bulk_density_kg_m3 must be finite and > 0".into());
+                }
+                density
+            }
+            (Some(propellant), None, None) => propellant.thermo().bulk_density_kg_m3,
+            (None, Some(_), Some(density)) if density.is_finite() && density > 0.0 => density,
+            (None, Some(_), _) => {
+                return Err(format!(
+                    "tank {} with stored_propellant needs bulk_density_kg_m3",
+                    self.name
+                )
+                .into());
+            }
+            (None, None, Some(density)) if density.is_finite() && density > 0.0 => density,
             _ => {
                 return Err(
                     format!("tank {} needs propellant or bulk_density_kg_m3", self.name).into(),
@@ -349,7 +378,11 @@ impl TankAsset {
             position_body_m: self.position_body_m,
             intrinsic_inertia_body_kg_m2,
             initial_propellant_kg: Some(initial_propellant_kg),
-            resource: self.propellant.map(TankResource::Pair).unwrap_or_default(),
+            resource: self
+                .stored_propellant
+                .map(TankResource::Stored)
+                .or_else(|| self.propellant.map(TankResource::Pair))
+                .unwrap_or_default(),
         })
     }
 }
@@ -696,6 +729,40 @@ impl JetAsset {
             thrust_axis_body: self.thrust_axis_body,
             gimbal_range_rad: self.gimbal_range_rad,
         })
+    }
+}
+
+/// Installed fuel-burning auxiliary gas-turbine generator. The nested
+/// `engine` reuses the ordinary airbreather authoring contract, including its
+/// physical shaft starter and fitted generator.
+#[derive(Debug, Deserialize)]
+pub(crate) struct AuxiliaryPowerUnitAsset {
+    name: String,
+    engine: AirbreathingSpec,
+    #[serde(default = "mount_position_default")]
+    mount_position_body_m: [f64; 3],
+    #[serde(default = "thrust_axis_default")]
+    thrust_axis_body: [f64; 3],
+    #[serde(default)]
+    feed_port_name: Option<String>,
+}
+
+impl AuxiliaryPowerUnitAsset {
+    pub(crate) fn bake(self) -> Result<AuxiliaryPowerUnitMount, Box<dyn Error>> {
+        let unit = AuxiliaryPowerUnitSpec {
+            name: self.name.clone(),
+            engine: self.engine,
+        }
+        .compile()?;
+        let mount = AuxiliaryPowerUnitMount {
+            name: self.name,
+            unit,
+            position_body_m: self.mount_position_body_m,
+            thrust_axis_body: self.thrust_axis_body,
+            feed_port_name: self.feed_port_name,
+        };
+        mount.validate()?;
+        Ok(mount)
     }
 }
 

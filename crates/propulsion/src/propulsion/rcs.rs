@@ -502,6 +502,24 @@ impl RcsThruster {
                 .unwrap_or(0.0),
         }
     }
+
+    /// Design inlet pressure for force allocation. Monopropellant thrusters
+    /// are regulated and ignore this value; cold-gas mounts use their rated
+    /// storage pressure until a more detailed blowdown model is authored.
+    pub fn rated_inlet_pressure_pa(&self) -> f64 {
+        match self {
+            Self::Monoprop(_) => 0.0,
+            Self::ColdGas(thruster) => thruster.rated_pressure_pa,
+        }
+    }
+
+    /// Installed dry hardware mass for vehicle mass-property aggregation.
+    pub fn dry_mass_kg(&self) -> f64 {
+        match self {
+            Self::Monoprop(thruster) => thruster.engine.dry_mass_kg,
+            Self::ColdGas(thruster) => thruster.dry_mass_kg,
+        }
+    }
 }
 
 /// One thruster installed on the airframe.

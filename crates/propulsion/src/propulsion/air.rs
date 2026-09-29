@@ -351,6 +351,11 @@ impl AirbreathingSpec {
         require_positive(self.spool_tau_s, "spool tau")?;
         self.turbine_material.validate()?;
         self.shaft.validate(self.cycle)?;
+        if self.shaft.multi_spool.is_some() && self.bypass_ratio <= 0.0 {
+            return Err(PropulsionError::UnsupportedCombination(
+                "the LP/HP turbofan shaft train requires a positive bypass ratio".into(),
+            ));
+        }
         match self.cycle {
             AirCycle::Ramjet | AirCycle::Scramjet => {
                 if self.compressor_ratio != 1.0 {
@@ -507,6 +512,8 @@ struct CycleState {
     /// Compressor + fan power the shaft must supply at this spool speed
     /// (W): the shaft-side demand of the evaluated state.
     shaft_demand_w: f64,
+    compressor_demand_w: f64,
+    fan_demand_w: f64,
     combustor_heat_release_w: f64,
     core_gamma: f64,
     core_gas_constant_j_kg_k: f64,
@@ -540,6 +547,8 @@ pub(super) struct AirCycleConditioning {
 #[derive(Debug, Clone, Copy)]
 struct CycleDriveInput {
     spool_n: f64,
+    fan_spool_n: Option<f64>,
+    fan_gear_efficiency: f64,
     ignition: bool,
     corrected_flow_kg_s: Option<f64>,
     power_takeoff_w: f64,
@@ -569,6 +578,8 @@ fn run_cycle(
 ) -> Result<CycleState, PropulsionError> {
     let CycleDriveInput {
         spool_n,
+        fan_spool_n,
+        fan_gear_efficiency,
         ignition,
         corrected_flow_kg_s,
         power_takeoff_w,
@@ -598,6 +609,14 @@ fn run_cycle(
     let is_passive = spec.cycle.is_passive();
     let scramjet_limited = spec.cycle == AirCycle::Scramjet && condition.mach <= 1.0;
     let spool_n = spool_n.clamp(0.0, 1.0);
+    let fan_spool_n = fan_spool_n.unwrap_or(spool_n).clamp(0.0, 1.0);
+    if !fan_gear_efficiency.is_finite()
+        || !(0.0 < fan_gear_efficiency && fan_gear_efficiency <= 1.0)
+    {
+        return Err(PropulsionError::InvalidCommand(
+            "fan gearbox efficiency must be finite in (0, 1]".into(),
+        ));
+    }
     // Ram conditions with recovery.
     let t_ram =
         condition.ambient_temp_k * (1.0 + (gamma_a - 1.0) / 2.0 * condition.mach * condition.mach);
@@ -628,12 +647,26 @@ fn run_cycle(
     // atmosphere R differs from the 287 J/(kg·K) dry-air constant by
     // hundreds of percent, so a hardcoded constant would desynchronize
     // the inlet from the O2 budget, which already reads composition.
+    let bypass = match spec.cycle {
+        AirCycle::Turbofan => spec.bypass_ratio,
+        _ => 0.0,
+    };
     let sound = condition.speed_of_sound_mps();
     let rho_0 = condition.density_kg_m3();
+    // In a two-spool turbofan, LP fan suction supplies the bypass stream
+    // while the HP compressor still ingests core flow when the fan is stopped.
+    // The design bypass ratio weights those two capture speeds; at the
+    // design point and on legacy single-spool assets this reduces exactly to
+    // the existing normalized spool speed.
+    let intake_spool_n = if bypass > 0.0 {
+        (bypass * fan_spool_n + spool_n) / (1.0 + bypass)
+    } else {
+        spool_n
+    };
     let suction = if is_passive {
         0.0
     } else {
-        INTAKE_DESIGN_CAPTURE_MACH * sound * spool_n
+        INTAKE_DESIGN_CAPTURE_MACH * sound * intake_spool_n
     };
     let available_kg_s = rho_0 * spec.intake_area_m2 * condition.airspeed_mps.max(suction);
     // Corrected-flow part-power schedule follows spool speed (passive-cycle
@@ -641,7 +674,7 @@ fn run_cycle(
     let flow_factor = if is_passive {
         1.0
     } else {
-        0.35 + 0.65 * spool_n
+        0.35 + 0.65 * intake_spool_n
     };
     let demanded_kg_s = match corrected_flow_kg_s {
         Some(wc) => wc * (p_ram / 101_325.0) / (t_ram / 288.15).sqrt() * flow_factor,
@@ -655,10 +688,6 @@ fn run_cycle(
     // atmosphere may be perfectly oxygenated.
     let air_starved = demanded_kg_s > available_kg_s + 1e-9;
     // Core/bypass split (passive cycles: all core, no machinery).
-    let bypass = match spec.cycle {
-        AirCycle::Turbofan => spec.bypass_ratio,
-        _ => 0.0,
-    };
     let mdot_core_kg_s = mdot_air_kg_s / (1.0 + bypass);
     // Compression (passive cycles: ram only). Turbomachinery pressure ratio
     // follows spool^2: no rotation, no pressure rise.
@@ -670,7 +699,7 @@ fn run_cycle(
     let t_comp_exit = compressor_inlet_total_temp_k * tau_c;
     let p_comp_exit = p_ram * compressor_pressure_recovery * pi_c;
     let pi_f = if bypass > 0.0 {
-        1.0 + (spec.fan_pressure_ratio - 1.0) * spool_n * spool_n
+        1.0 + (spec.fan_pressure_ratio - 1.0) * fan_spool_n * fan_spool_n
     } else {
         1.0
     };
@@ -687,7 +716,9 @@ fn run_cycle(
     } else {
         0.0
     };
-    let shaft_demand_w = mdot_core_kg_s * (work_comp + work_fan);
+    let compressor_demand_w = mdot_core_kg_s * work_comp;
+    let fan_demand_w = mdot_core_kg_s * work_fan;
+    let shaft_demand_w = compressor_demand_w + fan_demand_w / fan_gear_efficiency;
     // Combustion with O2 gating: fuel capped by available oxygen, TIT
     // follows energy (oxygen-limited operation derates TIT, documented).
     // Passive cycles carry no turbine cooling bleed (dump combustor).
@@ -836,6 +867,8 @@ fn run_cycle(
             fan_total_temp_k: t_fan_exit,
             fan_total_pressure_pa: p_fan_exit,
             shaft_demand_w,
+            compressor_demand_w,
+            fan_demand_w,
             combustor_heat_release_w: 0.0,
             core_gamma,
             core_gas_constant_j_kg_k,
@@ -856,7 +889,7 @@ fn run_cycle(
     // bleed bypasses the rotor and mixes downstream at rotor-exit
     // pressure (documented mixing loss: the bleed carries no work).
     let rotor_flow_ratio = (1.0 - bleed - CUSTOMER_BLEED_FRACTION) * (1.0 + fuel_air);
-    let delta_t_rotor = (work_comp + work_fan) / (core_cp * rotor_flow_ratio);
+    let delta_t_rotor = (work_comp + work_fan / fan_gear_efficiency) / (core_cp * rotor_flow_ratio);
     // Feasibility: the turbine must supply compression work with margin.
     if delta_t_rotor >= turbine_temp_eff * 0.95 && mdot_core_kg_s > 0.0 {
         if power_takeoff_w > 0.0 {
@@ -876,6 +909,8 @@ fn run_cycle(
             fan_total_temp_k: t_fan_exit,
             fan_total_pressure_pa: p_fan_exit,
             shaft_demand_w,
+            compressor_demand_w,
+            fan_demand_w,
             combustor_heat_release_w: 0.0,
             core_gamma,
             core_gas_constant_j_kg_k,
@@ -983,6 +1018,8 @@ fn run_cycle(
         fan_total_temp_k: t_fan_exit,
         fan_total_pressure_pa: p_fan_exit,
         shaft_demand_w,
+        compressor_demand_w,
+        fan_demand_w,
         combustor_heat_release_w,
         core_gamma,
         core_gas_constant_j_kg_k,
@@ -1256,6 +1293,10 @@ pub struct AirOperatingPoint {
     /// `propulsion::shaft::advance_jet_shaft`).
     #[serde(default)]
     pub spool_n: f64,
+    /// Solved normalized LP/fan speed for a two-spool turbofan; absent on
+    /// legacy single-spool engines and shaftless cycles.
+    #[serde(default)]
+    pub low_pressure_spool_n: Option<f64>,
     /// True when the core is actually burning in this point (fuel flow
     /// positive with air present). A commanded-but-unlit engine — failed
     /// light-off, anoxic air, or an unsustained shaft — reports false
@@ -1357,6 +1398,11 @@ impl AirbreathingSpec {
             self.turbine_inlet_temp_k,
             CycleDriveInput {
                 spool_n: 1.0,
+                fan_spool_n: None,
+                fan_gear_efficiency: self
+                    .shaft
+                    .multi_spool
+                    .map_or(1.0, |spools| spools.fan_gear_efficiency),
                 ignition: true,
                 corrected_flow_kg_s: Some(design_corrected_flow_kg_s),
                 power_takeoff_w: 0.0,
@@ -1408,6 +1454,31 @@ impl AirbreathingSpec {
             }
             (frac, capacity_raw_w)
         };
+        if let Some(spools) = self.shaft.multi_spool {
+            let high_turbine_w = shaft_turbine_frac
+                * shaft_reference_power_w
+                * spools.high_pressure_turbine_power_fraction;
+            let low_turbine_w = shaft_turbine_frac
+                * shaft_reference_power_w
+                * (1.0 - spools.high_pressure_turbine_power_fraction);
+            let high_friction_w = SHAFT_FRICTION_FRACTION
+                * shaft_reference_power_w
+                * spools.high_pressure_turbine_power_fraction;
+            let low_friction_w = SHAFT_FRICTION_FRACTION
+                * shaft_reference_power_w
+                * (1.0 - spools.high_pressure_turbine_power_fraction);
+            let high_margin_w = high_turbine_w - high_friction_w - state.compressor_demand_w;
+            let low_margin_w =
+                low_turbine_w - low_friction_w - state.fan_demand_w / spools.fan_gear_efficiency;
+            let tolerance_w = 1.0e-6 * shaft_reference_power_w.max(1.0);
+            if high_margin_w.abs() > tolerance_w || low_margin_w.abs() > tolerance_w {
+                return Err(PropulsionError::UnsupportedCombination(format!(
+                    "LP/HP turbine work split does not match design shaft loads (HP error {:.2} kW, LP error {:.2} kW)",
+                    high_margin_w / 1000.0,
+                    low_margin_w / 1000.0,
+                )));
+            }
+        }
         // Reheat must clear the solved design turbine-exit temperature
         // (spec-level TIT comparison would reject valid targets between
         // turbine exit and TIT).
@@ -1602,6 +1673,23 @@ impl CompiledAirbreather {
         spool_n: f64,
         ignition: bool,
     ) -> Result<ShaftBalance, PropulsionError> {
+        self.lean_shaft_balance_at_spools(condition, throttle, spool_n, None, ignition)
+    }
+
+    fn lean_shaft_balance_at_spools(
+        &self,
+        condition: &FlightCondition,
+        throttle: f64,
+        high_pressure_spool_n: f64,
+        low_pressure_spool_n: Option<f64>,
+        ignition: bool,
+    ) -> Result<ShaftBalance, PropulsionError> {
+        if self.shaft.multi_spool.is_some() && low_pressure_spool_n.is_none() {
+            return Err(PropulsionError::InvalidCommand(
+                "a multi-spool balance requires independent HP and LP spool speeds".into(),
+            ));
+        }
+        let fan_spool_n = low_pressure_spool_n.unwrap_or(high_pressure_spool_n);
         let fuel = self.fuel.properties();
         let (spec_eff, tit, _) = self.effective_spec(throttle);
         let state = run_cycle(
@@ -1610,7 +1698,12 @@ impl CompiledAirbreather {
             condition,
             tit,
             CycleDriveInput {
-                spool_n,
+                spool_n: high_pressure_spool_n,
+                fan_spool_n: Some(fan_spool_n),
+                fan_gear_efficiency: self
+                    .shaft
+                    .multi_spool
+                    .map_or(1.0, |spools| spools.fan_gear_efficiency),
                 ignition,
                 corrected_flow_kg_s: Some(self.design_corrected_flow_kg_s),
                 power_takeoff_w: 0.0,
@@ -1618,27 +1711,65 @@ impl CompiledAirbreather {
                 conditioning: None,
             },
         )?;
-        Ok(self.balance_from_state(&state, spool_n, ignition))
+        Ok(self.balance_from_state(&state, high_pressure_spool_n, fan_spool_n, ignition))
     }
 
     /// Balance view of an already-evaluated cycle state (shared by the
     /// operating-point path and [`Self::shaft_balance`]).
-    fn balance_from_state(&self, state: &CycleState, spool_n: f64, ignition: bool) -> ShaftBalance {
+    fn balance_from_state(
+        &self,
+        state: &CycleState,
+        high_pressure_spool_n: f64,
+        low_pressure_spool_n: f64,
+        ignition: bool,
+    ) -> ShaftBalance {
+        let friction_w = if let Some(spools) = self.shaft.multi_spool {
+            let high_share = spools.high_pressure_turbine_power_fraction;
+            SHAFT_FRICTION_FRACTION
+                * self.shaft_reference_power_w
+                * (high_share * high_pressure_spool_n.powi(3)
+                    + (1.0 - high_share) * low_pressure_spool_n.powi(3))
+        } else {
+            SHAFT_FRICTION_FRACTION * self.shaft_reference_power_w * high_pressure_spool_n.powi(3)
+        };
+        let capacity_w = if ignition {
+            self.shaft_turbine_frac * TURBINE_SHAFT_HEAT_FRACTION * state.combustor_heat_release_w
+        } else {
+            0.0
+        };
+        let (high_pressure_net_w, low_pressure_net_w) = if let Some(spools) = self.shaft.multi_spool
+        {
+            let hp_share = spools.high_pressure_turbine_power_fraction;
+            let hp_friction_w = SHAFT_FRICTION_FRACTION
+                * self.shaft_reference_power_w
+                * hp_share
+                * high_pressure_spool_n.powi(3);
+            let lp_friction_w = SHAFT_FRICTION_FRACTION
+                * self.shaft_reference_power_w
+                * (1.0 - hp_share)
+                * low_pressure_spool_n.powi(3);
+            (
+                capacity_w * hp_share - state.compressor_demand_w - hp_friction_w,
+                capacity_w * (1.0 - hp_share)
+                    - state.fan_demand_w / spools.fan_gear_efficiency
+                    - lp_friction_w,
+            )
+        } else {
+            (capacity_w - state.shaft_demand_w - friction_w, 0.0)
+        };
         ShaftBalance {
             demand_w: state.shaft_demand_w,
-            capacity_w: if ignition {
-                self.shaft_turbine_frac
-                    * TURBINE_SHAFT_HEAT_FRACTION
-                    * state.combustor_heat_release_w
-            } else {
-                0.0
-            },
+            high_pressure_demand_w: state.compressor_demand_w,
+            low_pressure_fan_demand_w: state.fan_demand_w,
+            high_pressure_net_w,
+            low_pressure_net_w,
+            capacity_w,
             power_takeoff_capacity_w: if ignition {
                 state.power_takeoff_capacity_w
             } else {
                 0.0
             },
-            friction_w: SHAFT_FRICTION_FRACTION * self.shaft_reference_power_w * spool_n.powi(3),
+            friction_w,
         }
     }
 
@@ -1658,6 +1789,11 @@ impl CompiledAirbreather {
         spool_n: f64,
         ignition: bool,
     ) -> Result<(AirOperatingPoint, ShaftBalance), PropulsionError> {
+        if self.shaft.multi_spool.is_some() {
+            return Err(PropulsionError::InvalidCommand(
+                "a multi-spool engine requires independent HP and LP spool speeds".into(),
+            ));
+        }
         self.operating_point_at_spool_loaded(condition, throttle, spool_n, ignition, 0.0)
     }
 
@@ -1681,7 +1817,58 @@ impl CompiledAirbreather {
             ignition,
             power_takeoff_w,
             None,
+            None,
         )
+    }
+
+    /// Evaluate a two-spool turbofan with the HP spool driving core
+    /// compression and the LP spool driving fan compression/intake suction.
+    /// For single-spool engines this method is rejected so the legacy API
+    /// remains the sole interpretation of their state.
+    pub fn operating_point_at_spools(
+        &self,
+        condition: &FlightCondition,
+        throttle: f64,
+        high_pressure_spool_n: f64,
+        low_pressure_spool_n: f64,
+        ignition: bool,
+    ) -> Result<(AirOperatingPoint, ShaftBalance), PropulsionError> {
+        let spools = self.shaft.multi_spool.ok_or_else(|| {
+            PropulsionError::InvalidCommand(
+                "two-spool operating point requested for a single-spool engine".into(),
+            )
+        })?;
+        self.operating_point_at_spool_internal(
+            condition,
+            throttle,
+            high_pressure_spool_n,
+            ignition,
+            0.0,
+            None,
+            Some((low_pressure_spool_n, spools.fan_gear_efficiency)),
+        )
+    }
+
+    /// Shaft balance at independently specified HP and LP speeds. This is
+    /// the lean, no-nozzle-matching form used by the two-rotor equilibrium
+    /// solver and by diagnostics.
+    pub fn shaft_balance_at_spools(
+        &self,
+        condition: &FlightCondition,
+        throttle: f64,
+        high_pressure_spool_n: f64,
+        low_pressure_spool_n: f64,
+        ignition: bool,
+    ) -> Result<ShaftBalance, PropulsionError> {
+        Ok(self
+            .operating_point_at_spools(
+                condition,
+                throttle,
+                high_pressure_spool_n,
+                low_pressure_spool_n,
+                ignition,
+            )?
+            .1)
     }
 
     pub(super) fn operating_point_at_spool_conditioned(
@@ -1699,9 +1886,11 @@ impl CompiledAirbreather {
             ignition,
             0.0,
             Some(conditioning),
+            None,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn operating_point_at_spool_internal(
         &self,
         condition: &FlightCondition,
@@ -1710,6 +1899,7 @@ impl CompiledAirbreather {
         ignition: bool,
         power_takeoff_w: f64,
         conditioning: Option<AirCycleConditioning>,
+        fan_spool: Option<(f64, f64)>,
     ) -> Result<(AirOperatingPoint, ShaftBalance), PropulsionError> {
         condition.validate()?;
         if !throttle.is_finite() || !(0.0..=1.0).contains(&throttle) {
@@ -1720,6 +1910,22 @@ impl CompiledAirbreather {
         if !spool_n.is_finite() || !(0.0..=1.0).contains(&spool_n) {
             return Err(PropulsionError::InvalidCommand(
                 "spool must be finite in [0, 1]".into(),
+            ));
+        }
+        let (fan_spool_n, fan_gear_efficiency) = fan_spool.unwrap_or((
+            spool_n,
+            self.shaft
+                .multi_spool
+                .map_or(1.0, |spools| spools.fan_gear_efficiency),
+        ));
+        if self.shaft.multi_spool.is_some() && fan_spool.is_none() {
+            return Err(PropulsionError::InvalidCommand(
+                "a multi-spool engine requires independent HP and LP spool speeds".into(),
+            ));
+        }
+        if !fan_spool_n.is_finite() || !(0.0..=1.0).contains(&fan_spool_n) {
+            return Err(PropulsionError::InvalidCommand(
+                "LP/fan spool must be finite in [0, 1]".into(),
             ));
         }
         let off = AirOperatingPoint {
@@ -1737,6 +1943,7 @@ impl CompiledAirbreather {
             precooler_heat_flow_w: 0.0,
             precooler_wall_heat_flow_w: 0.0,
             spool_n,
+            low_pressure_spool_n: self.shaft.multi_spool.map(|_| fan_spool_n),
             lit: false,
             air_limited: false,
             oxygen_limited: false,
@@ -1758,6 +1965,8 @@ impl CompiledAirbreather {
             tit,
             CycleDriveInput {
                 spool_n,
+                fan_spool_n: Some(fan_spool_n),
+                fan_gear_efficiency,
                 ignition,
                 corrected_flow_kg_s: Some(self.design_corrected_flow_kg_s),
                 power_takeoff_w,
@@ -1799,6 +2008,8 @@ impl CompiledAirbreather {
                     tit,
                     CycleDriveInput {
                         spool_n,
+                        fan_spool_n: Some(fan_spool_n),
+                        fan_gear_efficiency,
                         ignition,
                         corrected_flow_kg_s: Some(self.design_corrected_flow_kg_s),
                         power_takeoff_w,
@@ -1808,7 +2019,7 @@ impl CompiledAirbreather {
                 )?;
             }
         }
-        let balance = self.balance_from_state(&state, spool_n, ignition);
+        let balance = self.balance_from_state(&state, spool_n, fan_spool_n, ignition);
         // Static-suction label: air above ram-only capture at low speed
         // runs on the steady-running assumption, scaled by the actual
         // spool speed this point was evaluated at. Both the suction
@@ -1819,7 +2030,7 @@ impl CompiledAirbreather {
         let suction_floor_mps = if self.cycle.is_passive() {
             0.0
         } else {
-            INTAKE_DESIGN_CAPTURE_MACH * sound_speed_mps * spool_n
+            INTAKE_DESIGN_CAPTURE_MACH * sound_speed_mps * fan_spool_n
         };
         let ram_only_kg_s =
             condition.density_kg_m3() * self.intake_area_m2 * condition.airspeed_mps;
@@ -1963,6 +2174,7 @@ impl CompiledAirbreather {
                 precooler_heat_flow_w: state.precooler_heat_flow_w * scale,
                 precooler_wall_heat_flow_w: state.precooler_wall_heat_flow_w * scale,
                 spool_n,
+                low_pressure_spool_n: self.shaft.multi_spool.map(|_| fan_spool_n),
                 lit: fuel_total > 0.0,
                 air_limited: state.air_starved,
                 oxygen_limited: state.oxygen_limited,
@@ -2021,6 +2233,96 @@ impl CompiledAirbreather {
         Ok(0.5 * (lo + hi))
     }
 
+    /// Coupled steady equilibrium for the HP compressor rotor and LP fan
+    /// rotor. The two power balances share corrected airflow and combustor
+    /// work, so solve each monotone rotor balance by bisection while
+    /// alternating against the other rotor's current operating speed.
+    fn solve_steady_spools(
+        &self,
+        condition: &FlightCondition,
+        throttle: f64,
+    ) -> Result<(f64, f64), PropulsionError> {
+        if self.shaft.multi_spool.is_none() {
+            return Err(PropulsionError::InvalidCommand(
+                "two-spool equilibrium requested for a single-spool engine".into(),
+            ));
+        }
+        let hp_min = self.shaft.light_off_n;
+        let solve_hp = |lp_n: f64| -> Result<f64, PropulsionError> {
+            let net = |hp_n| {
+                Ok(self
+                    .lean_shaft_balance_at_spools(condition, throttle, hp_n, Some(lp_n), true)?
+                    .high_pressure_net_w)
+            };
+            let mut lo = hp_min;
+            if net(lo)? <= 0.0 {
+                return Ok(0.0);
+            }
+            if net(1.0)? >= 0.0 {
+                return Ok(1.0);
+            }
+            let mut hi = 1.0;
+            for _ in 0..36 {
+                let mid = 0.5 * (lo + hi);
+                if net(mid)? > 0.0 {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            Ok(0.5 * (lo + hi))
+        };
+        let solve_lp = |hp_n: f64| -> Result<f64, PropulsionError> {
+            let net = |lp_n| {
+                Ok(self
+                    .lean_shaft_balance_at_spools(condition, throttle, hp_n, Some(lp_n), true)?
+                    .low_pressure_net_w)
+            };
+            let mut lo = 0.0;
+            if net(lo)? <= 0.0 {
+                return Ok(0.0);
+            }
+            if net(1.0)? >= 0.0 {
+                return Ok(1.0);
+            }
+            let mut hi = 1.0;
+            for _ in 0..36 {
+                let mid = 0.5 * (lo + hi);
+                if net(mid)? > 0.0 {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            Ok(0.5 * (lo + hi))
+        };
+
+        let mut hp_n = 1.0;
+        let mut lp_n = 1.0;
+        // Bounded Gauss-Seidel iterations; each inner root is bracketed to
+        // <1.5e-11 normalized speed. The known design point is exact at the
+        // upper bound, while off-design coupling converges to this explicit
+        // tolerance rather than relying on an unbounded iterative solve.
+        for _ in 0..32 {
+            let next_hp = solve_hp(lp_n)?;
+            if next_hp == 0.0 {
+                return Ok((0.0, 0.0));
+            }
+            let next_lp = solve_lp(next_hp)?;
+            if next_lp == 0.0 {
+                return Ok((0.0, 0.0));
+            }
+            if (next_hp - hp_n).abs().max((next_lp - lp_n).abs()) < 1.0e-9 {
+                return Ok((next_hp, next_lp));
+            }
+            hp_n = next_hp;
+            lp_n = next_lp;
+        }
+        Err(PropulsionError::InvalidCommand(
+            "coupled LP/HP spool equilibrium did not converge within 32 bounded iterations".into(),
+        ))
+    }
+
     /// Steady operating point at a flight condition and effective
     /// (post-spool) throttle: solve the sustainable shaft equilibrium
     /// first, then evaluate the cycle there (part-power TIT and reheat
@@ -2061,6 +2363,7 @@ impl CompiledAirbreather {
                 precooler_heat_flow_w: 0.0,
                 precooler_wall_heat_flow_w: 0.0,
                 spool_n: 0.0,
+                low_pressure_spool_n: self.shaft.multi_spool.map(|_| 0.0),
                 lit: false,
                 air_limited: false,
                 oxygen_limited: false,
@@ -2073,6 +2376,19 @@ impl CompiledAirbreather {
                 reheat_active: false,
                 reheat_limited: false,
             });
+        }
+        if self.shaft.multi_spool.is_some() {
+            let (solved_hp, solved_lp) = self.solve_steady_spools(condition, throttle)?;
+            let (eval_hp, eval_lp) = if solved_hp > 0.0 {
+                (solved_hp, solved_lp)
+            } else {
+                (1.0, 1.0)
+            };
+            let (mut point, _) =
+                self.operating_point_at_spools(condition, throttle, eval_hp, eval_lp, true)?;
+            point.spool_n = solved_hp;
+            point.low_pressure_spool_n = Some(solved_lp);
+            return Ok(point);
         }
         let solved = if !self.cycle.has_shaft() {
             1.0
@@ -2431,6 +2747,10 @@ mod tests {
                         kind: super::super::StarterKind::Electric,
                         power_w: 1_000.0,
                         charge_j: 10_000.0,
+                        resource: None,
+                        attached_spool: super::super::ShaftSpool::HighPressure,
+                        specific_energy_j_kg: 0.0,
+                        maximum_shaft_torque_nm: None,
                         mass_kg: 1.0,
                     },
                     ..ShaftSpec::default()

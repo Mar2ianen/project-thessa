@@ -11,7 +11,7 @@ use thessa_autopilot::{AutopilotGraph, PlanDeoptimizationReason, TrajectoryPlan}
 use thessa_flight_authority::ControlMode;
 use thessa_flight_control::{GuidanceIntent, PropulsionDemand};
 use thessa_protocol::{CodecError, Envelope, kind};
-use thessa_sim_core::{ParachuteLoad, RigidBodyState, VehiclePartCommand};
+use thessa_sim_core::{ParachuteLoad, RigidBodyState, VehicleId, VehiclePartCommand};
 
 /// Client handshake: version check happens on [`Envelope`], this carries
 /// the human-readable identity for logs and the admin surface.
@@ -88,7 +88,35 @@ pub enum Command {
     Part {
         command: VehiclePartCommand,
     },
+    /// Split one authoritative vehicle along a named structural assembly
+    /// link. The server rebuilds independent cluster definitions from baked
+    /// per-body ownership and spawns new vehicle ids; the root-body cluster
+    /// keeps the source id. Event-like (ordered, never coalesced).
+    Separate {
+        vehicle_id: VehicleId,
+        link_name: String,
+    },
+    /// Open a persisted docking session between two authoritative vehicles'
+    /// authored ports. The server resolves port frames from its own
+    /// definitions and advances the D1 protocol; clients never send world
+    /// state. Event-like (ordered, never coalesced).
+    Dock {
+        vehicle_id: VehicleId,
+        port_id: String,
+        target_vehicle_id: VehicleId,
+        target_port_id: String,
+    },
+    /// Close a persisted docking session and remove its fixed joint, keeping
+    /// both solved body states. Event-like (ordered, never coalesced).
+    Undock {
+        vehicle_id: VehicleId,
+        port_id: String,
+    },
 }
+
+/// Maximum wire length for link/port names on fleet commands. Names are
+/// authored hardware addresses, never bulk data.
+pub const MAX_FLEET_NAME_LEN: usize = 256;
 
 /// Steering direction of one burn segment on the wire: extensible enum so
 /// new frames (RTN and beyond) never break the transport schema.
@@ -300,8 +328,35 @@ impl ClientInput {
                 } if name.trim().is_empty() => {
                     return Err("named part command needs a non-empty component name".into());
                 }
+                Command::Separate { link_name, .. } => {
+                    Self::validate_fleet_name(link_name, "assembly link")?;
+                }
+                Command::Dock {
+                    vehicle_id,
+                    port_id,
+                    target_vehicle_id,
+                    target_port_id,
+                } => {
+                    if vehicle_id == target_vehicle_id {
+                        return Err("docking needs two distinct vehicles".into());
+                    }
+                    Self::validate_fleet_name(port_id, "docking port")?;
+                    Self::validate_fleet_name(target_port_id, "docking port")?;
+                }
+                Command::Undock { port_id, .. } => {
+                    Self::validate_fleet_name(port_id, "docking port")?;
+                }
                 _ => {}
             }
+        }
+        Ok(())
+    }
+
+    fn validate_fleet_name(name: &str, what: &str) -> Result<(), String> {
+        if name.trim().is_empty() || name.len() > MAX_FLEET_NAME_LEN {
+            return Err(format!(
+                "{what} name must be non-empty and at most {MAX_FLEET_NAME_LEN} bytes"
+            ));
         }
         Ok(())
     }
@@ -465,6 +520,25 @@ pub fn encode_snapshot(snapshot: &Snapshot) -> Result<Vec<u8>, CodecError> {
     encode_frame(kind::SNAPSHOT, snapshot)
 }
 
+/// Authoritative fleet snapshot: the primary snapshot keeps its dedicated
+/// kind and fast path; every additional vehicle rides one shared frame as
+/// `(vehicle id, snapshot)` pairs in ascending id order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FleetSnapshot {
+    pub vehicles: Vec<FleetVehicleSnapshot>,
+}
+
+/// One non-primary vehicle snapshot on the wire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FleetVehicleSnapshot {
+    pub vehicle_id: VehicleId,
+    pub snapshot: Snapshot,
+}
+
+pub fn encode_fleet_snapshot(snapshot: &FleetSnapshot) -> Result<Vec<u8>, CodecError> {
+    encode_frame(kind::FLEET_SNAPSHOT, snapshot)
+}
+
 pub fn encode_autopilot(input: &AutopilotInput) -> Result<Vec<u8>, CodecError> {
     encode_frame(kind::AUTOPILOT_COMMAND, input)
 }
@@ -542,6 +616,79 @@ mod tests {
             },
         }];
         assert!(input.validate().is_err());
+    }
+
+    #[test]
+    fn fleet_commands_validate_names_and_reject_self_dock() {
+        let mut input = sample_input();
+        input.commands = vec![Command::Separate {
+            vehicle_id: VehicleId::PRIMARY,
+            link_name: "stack".into(),
+        }];
+        assert!(input.validate().is_ok());
+
+        input.commands = vec![Command::Separate {
+            vehicle_id: VehicleId::PRIMARY,
+            link_name: "  ".into(),
+        }];
+        assert!(input.validate().is_err());
+
+        input.commands = vec![Command::Dock {
+            vehicle_id: VehicleId::PRIMARY,
+            port_id: "a.d1".into(),
+            target_vehicle_id: VehicleId::new(1),
+            target_port_id: "b.d1".into(),
+        }];
+        assert!(input.validate().is_ok());
+
+        input.commands = vec![Command::Dock {
+            vehicle_id: VehicleId::PRIMARY,
+            port_id: "a.d1".into(),
+            target_vehicle_id: VehicleId::PRIMARY,
+            target_port_id: "b.d1".into(),
+        }];
+        assert!(input.validate().is_err());
+
+        input.commands = vec![Command::Undock {
+            vehicle_id: VehicleId::new(1),
+            port_id: String::new(),
+        }];
+        assert!(input.validate().is_err());
+    }
+
+    #[test]
+    fn fleet_snapshot_round_trips_behind_its_own_kind() {
+        let snapshot = Snapshot {
+            tick: 7,
+            flight_time_s: 1.5,
+            state: RigidBodyState::stationary(DVec3::ZERO),
+            throttle: 0.0,
+            engine_active: false,
+            paused: false,
+            effective_warp: 1.0,
+            server_compute_s: 0.0,
+            server_wall_s: 0.0,
+            steps_this_frame: 0,
+            rails_advanced_s: 0.0,
+            reaction_wheel_torque_body_nm: [0.0; 3],
+            parachutes: Vec::new(),
+            wake_notice: None,
+            flight_error: None,
+        };
+        let fleet = FleetSnapshot {
+            vehicles: vec![FleetVehicleSnapshot {
+                vehicle_id: VehicleId::new(2),
+                snapshot: snapshot.clone(),
+            }],
+        };
+        let frame = encode_fleet_snapshot(&fleet).expect("encode");
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.push(&frame).expect("split");
+        assert_eq!(frames.len(), 1);
+        let envelope = decode_frame(&frames[0]).expect("envelope");
+        assert_eq!(envelope.kind, kind::FLEET_SNAPSHOT);
+        let decoded: FleetSnapshot = decode_payload(&envelope).expect("payload");
+        assert_eq!(decoded, fleet);
     }
 
     #[test]

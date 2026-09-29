@@ -10,6 +10,7 @@ pub(crate) struct ElectricalPowerAsset {
     ultracapacitors: Vec<UltracapacitorAsset>,
     solar_arrays: Vec<SolarArrayAsset>,
     reactors: Vec<ReactorAsset>,
+    fuel_cells: Vec<FuelCellAsset>,
     consumers: Vec<PowerConsumerAsset>,
 }
 
@@ -28,6 +29,11 @@ impl ElectricalPowerAsset {
                 .map(SolarArrayAsset::bake)
                 .collect(),
             reactors: self.reactors.into_iter().map(ReactorAsset::bake).collect(),
+            fuel_cells: self
+                .fuel_cells
+                .into_iter()
+                .map(FuelCellAsset::bake)
+                .collect(),
             consumers: self
                 .consumers
                 .into_iter()
@@ -207,6 +213,32 @@ impl ReactorAsset {
             dry_mass_kg: self.dry_mass_kg,
             dimensions_body_m: vector(self.dimensions_body_m),
             position_body_m: vector(self.position_body_m),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct FuelCellAsset {
+    name: String,
+    rated_electrical_power_w: f64,
+    electrical_efficiency: f64,
+    dry_mass_kg: f64,
+    dimensions_body_m: [f64; 3],
+    position_body_m: [f64; 3],
+    #[serde(default)]
+    feed_port_name: Option<String>,
+}
+
+impl FuelCellAsset {
+    fn bake(self) -> FuelCellSpec {
+        FuelCellSpec {
+            name: self.name,
+            rated_electrical_power_w: self.rated_electrical_power_w,
+            electrical_efficiency: self.electrical_efficiency,
+            dry_mass_kg: self.dry_mass_kg,
+            dimensions_body_m: vector(self.dimensions_body_m),
+            position_body_m: vector(self.position_body_m),
+            feed_port_name: self.feed_port_name,
         }
     }
 }

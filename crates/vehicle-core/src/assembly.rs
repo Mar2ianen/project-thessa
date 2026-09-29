@@ -129,6 +129,48 @@ impl NamedAssemblyResourceEdge {
     }
 }
 
+/// Authored physical strength rating for one structural assembly link.
+///
+/// Limits are hardware ratings (force and moment magnitudes the joint
+/// tolerates), not game coefficients: the solver reports constraint loads,
+/// this record states what the hardware withstands, and
+/// [`VehicleAssembly::find_failed_joint`] compares the two. Links without a
+/// rating never fail by load and are documented as unrated.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NamedAssemblyJointStrength {
+    pub link_name: String,
+    pub failure_force_n: f64,
+    pub failure_moment_nm: f64,
+}
+
+impl NamedAssemblyJointStrength {
+    pub fn validate(&self) -> Result<(), AssemblyError> {
+        if self.link_name.trim().is_empty()
+            || !self.failure_force_n.is_finite()
+            || self.failure_force_n <= 0.0
+            || !self.failure_moment_nm.is_finite()
+            || self.failure_moment_nm <= 0.0
+        {
+            return Err(AssemblyError::InvalidLink(format!(
+                "invalid joint strength for link '{}'",
+                self.link_name
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Measured solver load on one structural link: resultant constraint force
+/// and moment magnitudes from the collision backend
+/// (`CollisionWorld::joint_loads`). Non-finite or negative magnitudes fail
+/// closed at assessment time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssemblyJointLoad {
+    pub link_name: String,
+    pub force_n: f64,
+    pub moment_nm: f64,
+}
+
 /// Interior region address in one assembled part.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssemblyVolume {
@@ -188,6 +230,10 @@ pub struct VehicleAssembly {
     /// Runtime crossfeed edges outside the structural part tree.
     #[serde(default)]
     pub resource_edges: Vec<NamedAssemblyResourceEdge>,
+    /// Authored physical strength ratings per structural link. Empty keeps
+    /// legacy assets valid; unrated links never fail by solver load.
+    #[serde(default)]
+    pub joint_strengths: Vec<NamedAssemblyJointStrength>,
     pub volumes: Vec<AssemblyVolume>,
     pub tanks: Vec<AssemblyEndpoint>,
     pub engine_ports: Vec<AssemblyEndpoint>,
@@ -263,6 +309,26 @@ impl VehicleAssembly {
                 return Err(AssemblyError::InvalidLink(format!(
                     "duplicate resource edge name '{}'",
                     edge.name
+                )));
+            }
+        }
+        let mut strength_names = std::collections::HashSet::new();
+        for strength in &self.joint_strengths {
+            strength.validate()?;
+            if !strength_names.insert(strength.link_name.as_str()) {
+                return Err(AssemblyError::InvalidLink(format!(
+                    "duplicate joint strength for link '{}'",
+                    strength.link_name
+                )));
+            }
+            if !self
+                .links
+                .iter()
+                .any(|link| link.name == strength.link_name)
+            {
+                return Err(AssemblyError::InvalidLink(format!(
+                    "joint strength references unknown link '{}'",
+                    strength.link_name
                 )));
             }
         }
@@ -342,6 +408,68 @@ impl VehicleAssembly {
         Ok(())
     }
 
+    /// Compare measured solver loads against authored joint strength
+    /// ratings and return the first failed link in authored link order.
+    ///
+    /// Loads carry resultant force/moment magnitudes from the collision
+    /// backend; ratings carry what the hardware withstands. A link fails
+    /// when either magnitude strictly exceeds its rating. Links without a
+    /// rating never fail here. Unknown or duplicate link names, and
+    /// non-finite or negative magnitudes, fail closed. Missing loads mean
+    /// no evidence and never fail.
+    pub fn find_failed_joint(
+        &self,
+        loads: &[AssemblyJointLoad],
+    ) -> Result<Option<String>, AssemblyError> {
+        self.validate()?;
+        let mut seen = std::collections::HashSet::new();
+        let mut by_link = std::collections::HashMap::new();
+        for load in loads {
+            if load.link_name.trim().is_empty()
+                || !load.force_n.is_finite()
+                || load.force_n < 0.0
+                || !load.moment_nm.is_finite()
+                || load.moment_nm < 0.0
+            {
+                return Err(AssemblyError::InvalidLink(format!(
+                    "invalid joint load for link '{}'",
+                    load.link_name
+                )));
+            }
+            if !seen.insert(load.link_name.as_str()) {
+                return Err(AssemblyError::InvalidLink(format!(
+                    "duplicate joint load for link '{}'",
+                    load.link_name
+                )));
+            }
+            if !self.links.iter().any(|link| link.name == load.link_name) {
+                return Err(AssemblyError::InvalidLink(format!(
+                    "joint load references unknown link '{}'",
+                    load.link_name
+                )));
+            }
+            by_link.insert(load.link_name.as_str(), load);
+        }
+        for link in &self.links {
+            let Some(strength) = self
+                .joint_strengths
+                .iter()
+                .find(|strength| strength.link_name == link.name)
+            else {
+                continue;
+            };
+            let Some(load) = by_link.get(link.name.as_str()) else {
+                continue;
+            };
+            if load.force_n > strength.failure_force_n
+                || load.moment_nm > strength.failure_moment_nm
+            {
+                return Ok(Some(link.name.clone()));
+            }
+        }
+        Ok(None)
+    }
+
     /// Partition structural bodies if one named assembly joint fails.
     /// Non-structural resource edges are deliberately ignored: they may keep
     /// fluid reachability but never keep two structural clusters together.
@@ -410,7 +538,7 @@ impl VehicleAssembly {
                     self.body_names[*original].clone()
                 })
                 .collect::<Vec<_>>();
-            let links = self
+            let links: Vec<NamedAssemblyLink> = self
                 .links
                 .iter()
                 .filter_map(|link| {
@@ -441,11 +569,21 @@ impl VehicleAssembly {
                     })
                 })
                 .collect();
+            let joint_strengths: Vec<NamedAssemblyJointStrength> = self
+                .joint_strengths
+                .iter()
+                .filter(|strength| {
+                    strength.link_name != failed_link_name
+                        && links.iter().any(|link| link.name == strength.link_name)
+                })
+                .cloned()
+                .collect();
             let mut assembly = Self {
                 root_body: remap[self.root_body].unwrap_or(0),
                 body_names,
                 links,
                 resource_edges,
+                joint_strengths,
                 volumes: self
                     .volumes
                     .iter()
@@ -1381,6 +1519,7 @@ mod tests {
                     feed_line: None,
                 },
             ],
+            joint_strengths: Vec::new(),
             volumes: Vec::new(),
             tanks: Vec::new(),
             engine_ports: Vec::new(),
@@ -1525,6 +1664,134 @@ mod tests {
     }
 
     #[test]
+    fn joint_loads_fail_the_first_overrated_link_in_authored_order() {
+        let assembly = VehicleAssembly {
+            root_body: 0,
+            body_names: vec!["core".into(), "booster".into(), "fairing".into()],
+            links: vec![
+                NamedAssemblyLink {
+                    name: "core-booster".into(),
+                    state: link(0, 1, false, true),
+                    feed_line: None,
+                },
+                NamedAssemblyLink {
+                    name: "booster-fairing".into(),
+                    state: link(1, 2, false, true),
+                    feed_line: None,
+                },
+            ],
+            resource_edges: Vec::new(),
+            joint_strengths: vec![
+                NamedAssemblyJointStrength {
+                    link_name: "core-booster".into(),
+                    failure_force_n: 1_000.0,
+                    failure_moment_nm: 100.0,
+                },
+                NamedAssemblyJointStrength {
+                    link_name: "booster-fairing".into(),
+                    failure_force_n: 2_000.0,
+                    failure_moment_nm: 200.0,
+                },
+            ],
+            volumes: Vec::new(),
+            tanks: Vec::new(),
+            engine_ports: Vec::new(),
+        };
+        let load = |link: &str, force_n: f64, moment_nm: f64| AssemblyJointLoad {
+            link_name: link.into(),
+            force_n,
+            moment_nm,
+        };
+        // Below both ratings: no failure.
+        assert_eq!(
+            assembly
+                .find_failed_joint(&[
+                    load("core-booster", 999.0, 99.0),
+                    load("booster-fairing", 1_999.0, 199.0),
+                ])
+                .unwrap(),
+            None
+        );
+        // Exactly at the rating holds; strictly above fails.
+        assert_eq!(
+            assembly
+                .find_failed_joint(&[load("core-booster", 1_000.0, 100.0)])
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            assembly
+                .find_failed_joint(&[load("core-booster", 1_000.5, 10.0)])
+                .unwrap(),
+            Some("core-booster".to_string())
+        );
+        assert_eq!(
+            assembly
+                .find_failed_joint(&[load("booster-fairing", 10.0, 200.5)])
+                .unwrap(),
+            Some("booster-fairing".to_string())
+        );
+        // Both over rating: authored link order wins, not load order.
+        assert_eq!(
+            assembly
+                .find_failed_joint(&[
+                    load("booster-fairing", 9_999.0, 9_999.0),
+                    load("core-booster", 9_999.0, 9_999.0),
+                ])
+                .unwrap(),
+            Some("core-booster".to_string())
+        );
+        // Missing loads are no evidence; unrated links never fail.
+        let mut unrated = assembly.clone();
+        unrated.joint_strengths.clear();
+        assert_eq!(
+            unrated
+                .find_failed_joint(&[load("core-booster", 1.0e12, 1.0e12)])
+                .unwrap(),
+            None
+        );
+        // Split topologies retain the surviving ratings.
+        let split = assembly.split_after_link_failure("core-booster").unwrap();
+        assert!(split[0].joint_strengths.is_empty());
+        assert_eq!(split[1].joint_strengths.len(), 1);
+        assert_eq!(split[1].joint_strengths[0].link_name, "booster-fairing");
+        // Fail-closed inputs.
+        assert!(
+            assembly
+                .find_failed_joint(&[load("missing-link", 1.0, 1.0)])
+                .is_err()
+        );
+        assert!(
+            assembly
+                .find_failed_joint(&[
+                    load("core-booster", 1.0, 1.0),
+                    load("core-booster", 2.0, 2.0),
+                ])
+                .is_err()
+        );
+        assert!(
+            assembly
+                .find_failed_joint(&[load("core-booster", f64::NAN, 1.0)])
+                .is_err()
+        );
+        assert!(
+            assembly
+                .find_failed_joint(&[load("core-booster", 1.0, -1.0)])
+                .is_err()
+        );
+        let mut bad = assembly.clone();
+        bad.joint_strengths.push(NamedAssemblyJointStrength {
+            link_name: "core-booster".into(),
+            failure_force_n: 5.0,
+            failure_moment_nm: 5.0,
+        });
+        assert!(bad.validate().is_err());
+        bad = assembly.clone();
+        bad.joint_strengths[0].link_name = "missing-link".into();
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
     fn vehicle_assembly_hatch_toggles_crew_air_and_feed_domains() {
         let mut assembly = VehicleAssembly {
             root_body: 0,
@@ -1535,6 +1802,7 @@ mod tests {
                 feed_line: None,
             }],
             resource_edges: Vec::new(),
+            joint_strengths: Vec::new(),
             volumes: vec![
                 AssemblyVolume {
                     name: "stage.service-bay".into(),
@@ -1636,6 +1904,7 @@ mod tests {
                 feed_line: None,
             }],
             resource_edges: Vec::new(),
+            joint_strengths: Vec::new(),
             volumes: vec![
                 AssemblyVolume {
                     name: "cabin".into(),
@@ -1688,6 +1957,7 @@ mod tests {
                 feed_line: None,
             }],
             resource_edges: Vec::new(),
+            joint_strengths: Vec::new(),
             volumes: Vec::new(),
             tanks: Vec::new(),
             engine_ports: Vec::new(),

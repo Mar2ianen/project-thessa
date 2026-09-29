@@ -278,6 +278,7 @@ fn split_definitions_fixture() -> (VehicleDefinition, RigidBodyState) {
         jet_bodies: Vec::new(),
         rcs_bodies: Vec::new(),
         heat_shield_bodies: Vec::new(),
+        docking_port_bodies: Vec::new(),
         body_masses,
     });
     vehicle.validate().expect("fixture validates");

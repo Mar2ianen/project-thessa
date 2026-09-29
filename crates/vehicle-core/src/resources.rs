@@ -2753,6 +2753,7 @@ mod tests {
                 open: true,
                 feed_line: None,
             }],
+            joint_strengths: Vec::new(),
             volumes: Vec::new(),
             tanks: vec![AssemblyEndpoint {
                 name: "tank-body.reserve".into(),
@@ -2836,6 +2837,7 @@ mod tests {
                 open: true,
                 feed_line: Some(feed_line),
             }],
+            joint_strengths: Vec::new(),
             volumes: Vec::new(),
             tanks: vec![AssemblyEndpoint {
                 name: "tank-body.reserve".into(),
@@ -3173,6 +3175,7 @@ mod tests {
                     feed_line: None,
                 }],
                 resource_edges: Vec::new(),
+                joint_strengths: Vec::new(),
                 volumes: Vec::new(),
                 tanks: vec![
                     AssemblyEndpoint {
@@ -3258,6 +3261,7 @@ mod tests {
                     feed_line: None,
                 }],
                 resource_edges: Vec::new(),
+                joint_strengths: Vec::new(),
                 volumes: Vec::new(),
                 tanks: vec![AssemblyEndpoint {
                     name: "shared-hydrogen".into(),
@@ -3502,6 +3506,7 @@ mod tests {
                 feed_line: None,
             }],
             resource_edges: Vec::new(),
+            joint_strengths: Vec::new(),
             volumes: vec![],
             tanks: vec![AssemblyEndpoint {
                 name: "tank-body.main".into(),
@@ -3576,6 +3581,7 @@ mod tests {
                 feed_line: None,
             }],
             resource_edges: Vec::new(),
+            joint_strengths: Vec::new(),
             volumes: vec![],
             tanks: vec![
                 AssemblyEndpoint {

@@ -314,6 +314,8 @@ fn assembled_vehicle_bakes_transforms_and_runtime_connectivity() {
             child: "capsule.base".into(),
             hatch_open: true,
             feed_line: None,
+            failure_force_n: None,
+            failure_moment_nm: None,
         }])
         .is_err()
     );

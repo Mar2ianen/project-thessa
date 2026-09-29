@@ -64,6 +64,7 @@ fn make_vehicle() -> VehicleDefinition {
         body_names,
         links,
         resource_edges: Vec::new(),
+        joint_strengths: Vec::new(),
         volumes,
         tanks: Vec::new(),
         engine_ports: Vec::new(),

@@ -4886,6 +4886,7 @@ mod cabin_authority_tests {
                 feed_line: None,
             }],
             resource_edges: Vec::new(),
+            joint_strengths: Vec::new(),
             volumes: vec![
                 AssemblyVolume {
                     name: "service.cabin".into(),

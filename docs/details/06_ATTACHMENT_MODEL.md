@@ -197,7 +197,15 @@ body-index components after removing a named structural edge, and
 `split_after_link_failure` returns independently validated assembly graphs
 with local indices and no resource edge crossing the physical split. These
 operations deliberately ignore cross-cluster umbilicals when determining
-structure. `reconstruct_clusters_after_link_failure` additionally takes one
+structure. Strength ratings ride the same path: `joint_strengths` holds one
+authored force/moment rating per structural link (populated from optional
+`failure_force_n`/`failure_moment_nm` assembly TOML fields, which must be
+rated together or omitted together), `split_after_link_failure` retains the
+ratings whose links survive in each cluster, and `find_failed_joint`
+compares measured solver loads (`AssemblyJointLoad` magnitudes from
+`CollisionWorld::joint_loads`) against the ratings, returning the first
+failed link in authored order. Unrated links never fail by load; unknown,
+duplicate, non-finite, or negative loads fail closed. `reconstruct_clusters_after_link_failure` additionally takes one
 complete `AssemblyBodyMassProperties` record per authored body, aggregates
 centroidal inertia with the parallel-axis theorem, and recenters each
 `RigidBodyState`. Released clusters inherit the original orientation and
@@ -229,7 +237,7 @@ inventory ownership to instantiate these results as independent authorities.
 
 ## 8. Next slices
 
-- Internal assembly-joint load paths, per-link strength ratings, baked
+- Internal assembly-joint load paths, baked
   per-part ownership, and complete aero/collision/subsystem migration when
   constructing independent vehicle clusters.
 - Server-level docking/separation ownership and persistence across independent

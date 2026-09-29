@@ -250,6 +250,30 @@ For `rcbt` and future reusable GPU subsystems:
 - the performance target may be more aggressive than the reference implementation; observable semantics matter more than internal compatibility;
 - see `docs/22_RCBT_GPU_TERRAIN.md`.
 
+### RCBT comparison boundary
+
+Keep three layers separate when discussing CBT performance or parity:
+
+- `libcbt` is the original CBT/rank-tree reference and a benchmark/oracle target;
+- Intel `large_cbt` is a broader GPU terrain-topology system: persistent
+  bisector allocation, neighbor-linked conforming split/merge propagation,
+  GPU update passes, indexation, and indirect rendering;
+- Thessa's `PackedTree`, sparse/dirty-path OCBT updates, and related CPU/GPU
+  microbenchmarks currently establish state-maintenance semantics and
+  performance only for the workloads they actually measure.
+
+`microstore` is orthogonal to that topology boundary. It optimizes surface
+storage, residency, precision, filtering, and dirty uploads; it does not by
+itself replace the bisector topology/update pipeline of `large_cbt`.
+
+Do not turn a `libcbt`/OCBT microbenchmark win into a claim that Thessa has
+replaced or outperformed `large_cbt` as a complete renderer. A whole-system
+parity/replacement claim requires, at minimum, a production persistent GPU
+bisector pool, neighbor/conformity propagation, bounded allocation/exhaustion
+behavior, equivalent live refinement/update semantics, and end-to-end
+same-workload measurements under the same error/quality target. Until then,
+state claims at the layer that was actually verified.
+
 ## 11. Licenses
 
 Until the project license decision changes:

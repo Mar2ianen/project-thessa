@@ -245,6 +245,7 @@ pub(super) fn step(
     mut demo: ResMut<DockingDemoState>,
     mut visuals: Query<(&DockingDemoVisual, &mut Transform)>,
     mut hud: Query<&mut Text, With<DockingDemoHud>>,
+    mut audio: MessageWriter<crate::audio::AudioCue>,
 ) {
     if demo.finished {
         return;
@@ -286,6 +287,9 @@ pub(super) fn step(
             && relative_position.length() <= 0.025
             && demo.session.align(kinematics).is_ok()
         {
+            audio.write(crate::audio::AudioCue::DockingImpact {
+                relative_speed_mps: kinematics.relative_velocity_mps().length(),
+            });
             demo.session.hard_dock().expect("demo hard dock transition");
             demo.joint = Some(
                 demo.world

@@ -71,7 +71,7 @@ do not update in place).
 | `41_MICROSCALED_SURFACE_STORAGE.md` | 🟡 experimental | codec A–E, allocator/residency, GPU LOD/mip/aniso path, game + render-world A/B measured; compact path pre-decodes to RGBA and raw remains default | packed material-shader sampling, crack-free geometry, baked-format adoption, production height pages |
 | `43_AERO_COEFFICIENT_RESIDUAL_STORAGE.md` | 🟡 experimental | scalar adaptive residual codec with force/moment error bounds and direct panel sampling; 257×257 run is 1.77× smaller but 1.58× slower to sample; canonical tables remain the default | fused SIMD decode, channel-specific budgets, real VLM/CFD fields, production acceptance |
 | `45_CAD_RCBT_GEOMETRY.md` | 🔵 design baseline | D1 STEP/BRep fixture audited; existing RCBT + mesh-shader terrain path reused architecturally | CAD importer, normalized BRep runtime, crack-free adaptive face meshing, editor integration |
-| `46_AUDIO_AND_ACOUSTIC_PROPAGATION.md` | 🔵 design baseline | current Bevy host only; no dedicated semantic audio layer yet | backend-neutral events/sources, atmosphere/cabin/structure/suit/radio paths, delayed sonic boom, backend migration |
+| `46_AUDIO_AND_ACOUSTIC_PROPAGATION.md` | 🟡 first slice | `audio-core` path semantics, exact-vacuum gating, structural/direct paths, Mach-cone arrival; `audio-synth` live procedural engine DSP; temporary Bevy RCS/GPWS/docking/demo adapter | calibrated physical engine telemetry/spectra, procedural one-shot mechanisms, structural attenuation graph, real IVA listener, occlusion/reverb/HRTF, post-Bevy backend |
 
 ## Autopilot and roadmap
 

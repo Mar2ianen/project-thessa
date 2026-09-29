@@ -226,6 +226,47 @@ The FFI wrapper must be small and isolated. Bindgen does not have to become a bu
 
 The main goal of performance work is not "don't lose to C". **If a new representation can be faster, compatibility with the original's internal layout is not a goal.**
 
+### 6.1 Scope boundary versus Intel `large_cbt`
+
+The current Thessa work does **not** claim to replace Intel `large_cbt` as a
+complete GPU terrain-topology/rendering system.
+
+The directly comparable layer today is narrower:
+
+- CBT/OCBT observable state, leaf/rank semantics, and allocation-state decoding;
+- sparse/incremental split/merge maintenance in `PackedTree` and the OCBT
+  dirty-path mirror;
+- parity checks where Thessa intentionally reproduces reference logical state or
+  OCBT buffer contents;
+- microbenchmarks that replay identical operation streams and report only the
+  measured state-maintenance cost.
+
+Those results may justify statements such as "the sparse/incremental Thessa
+state-maintenance path beats the measured reference path on this workload".
+They do **not** justify "Thessa replaces/beats `large_cbt`" as a renderer.
+
+`large_cbt` also owns work that the current production Thessa path does not
+yet reproduce as one equivalent system:
+
+- a persistent GPU bisector pool used as live render topology;
+- neighbor-linked conforming split/merge propagation;
+- live GPU allocation and exhaustion behavior during refinement;
+- the full classify/allocate/bisect-or-simplify/propagate/reduce/index pipeline;
+- an indirect rendering path whose end-to-end frame cost and visual/error
+  target can be compared on the same scene and hardware.
+
+Thessa's microscaled surface storage is a separate axis. `microstore` reduces
+material/height storage, precision, filtering, residency, and dirty-upload cost;
+it is intentionally orthogonal to CBT topology and is not evidence of
+`large_cbt` topology parity.
+
+A future whole-system replacement/parity claim requires those missing topology
+semantics to be present in the production GPU path and validated with equivalent
+fixtures, capacity/exhaustion cases, and end-to-end measurements at the same
+quality/error target. Until then, comparisons must name the layer actually
+measured: tree/rank maintenance, allocator state, storage/residency, or full
+renderer.
+
 ---
 
 ## 7. Performance philosophy: beat the reference, not port it

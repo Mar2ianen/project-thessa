@@ -213,6 +213,8 @@ pub struct AssemblyOwnership {
     pub rcs_bodies: Vec<usize>,
     #[serde(default)]
     pub heat_shield_bodies: Vec<usize>,
+    #[serde(default)]
+    pub docking_port_bodies: Vec<usize>,
     /// Complete per-body mass (structure, mounts, inventories, shared-system
     /// hardware attributed to the root body) in the source vehicle COM
     /// frame. Splits validate these against the source mass properties
@@ -240,6 +242,7 @@ impl AssemblyOwnership {
         jets: usize,
         rcs_mounts: usize,
         heat_shields: usize,
+        docking_ports: usize,
     ) -> Result<(), AssemblyError> {
         let counts = [
             ("panel", self.panel_bodies.len(), panels),
@@ -264,6 +267,11 @@ impl AssemblyOwnership {
             ("jet", self.jet_bodies.len(), jets),
             ("rcs", self.rcs_bodies.len(), rcs_mounts),
             ("heat-shield", self.heat_shield_bodies.len(), heat_shields),
+            (
+                "docking-port",
+                self.docking_port_bodies.len(),
+                docking_ports,
+            ),
         ];
         for (what, got, want) in counts {
             if got != want {
@@ -287,6 +295,7 @@ impl AssemblyOwnership {
             &self.jet_bodies,
             &self.rcs_bodies,
             &self.heat_shield_bodies,
+            &self.docking_port_bodies,
         ] {
             if bodies.iter().any(|body| *body >= body_count) {
                 return Err(AssemblyError::InvalidLink(

@@ -42,13 +42,13 @@ use thessa_autopilot::{
 use thessa_autopilot::{GraphNode, NodeKind, WaitCondition};
 use thessa_autopilot_js::{ScriptResult, ScriptSchedulerStep};
 use thessa_flight_authority::{
-    ControlMode, FlightAuthority, FlightPolicy, GuidanceIntent, ObstacleReport, PropulsionDemand,
-    canonical_launch_setup,
+    ControlMode, DynamicBodyConfig, ExternalWrench, FlightAuthority, FlightPolicy, GuidanceIntent,
+    JointId, ObstacleReport, PropulsionDemand, canonical_launch_setup,
 };
 use thessa_flight_control::{ControlDemand, DirectionFrame, DirectionTarget, RollPolicy};
 use thessa_flight_net::{
-    AutopilotCommand, AutopilotInput, BurnDirectionCommand, ClientInput, Command, GuidanceInput,
-    Snapshot,
+    AutopilotCommand, AutopilotInput, BurnDirectionCommand, ClientInput, Command, FleetSnapshot,
+    FleetVehicleSnapshot, GuidanceInput, Snapshot,
 };
 use thessa_maneuver::{
     BurnSegment, EngineSpec, FiniteBurnPlan, ManeuverPlan, NodeExecutor, PlanValidation,
@@ -56,7 +56,10 @@ use thessa_maneuver::{
 };
 #[cfg(test)]
 use thessa_protocol::{FrameDecoder, kind};
-use thessa_sim_core::{BakedEphemeris, BodyId, BodyState, ScheduledKind, SimTime, SystemConfig};
+use thessa_sim_core::{
+    BakedEphemeris, BodyId, BodyState, DockGraph, DockingKinematics, DockingPortState,
+    GravityField, ScheduledKind, SimTime, SystemConfig, VehicleId,
+};
 use thread_bake::ThreadBakeQueue;
 #[cfg(test)]
 use transport::{DecodedClientMessage, decode_client_message};

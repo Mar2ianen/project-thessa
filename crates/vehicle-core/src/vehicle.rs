@@ -8,20 +8,20 @@ use crate::{
     AuthorityReason, AuxiliaryPowerUnitMount, CabinError, CabinExit, CabinMonument, CabinSeat,
     CollisionAxis, CollisionError, CollisionGeometry, CollisionMaterial, CollisionPart,
     CollisionShape, CompiledEngine, CompiledLandingLeg, CompiledWheelChassis, ControlAuthority,
-    ControlCore, ControlStation, CrewSuitMode, ElectricThrusterCommand, ElectricThrusterMount,
-    ElectricThrusterPoint, ElectricalPowerCommand, ElectricalPowerError, ElectricalPowerState,
-    ElectricalPowerSystem, ElectricalPowerTelemetry, EngineMount, EstocPoint, FlightCondition,
-    FlightError, FusionTorchCommand, FusionTorchMount, FusionTorchOperatingPoint, HeatShieldMount,
-    JetCommand, JetMount, LandingGearError, LandingLegMassProperties, LandingLegSpec,
-    ParachuteError, ParachuteSpec, PressurizedCabin, PropDrivePoint, PropellerDriveCommand,
-    PropellerDriveMount, PropulsionError, PulsedFusionCommand, PulsedFusionMount,
-    PulsedFusionOperatingPoint, PulsedFusionState, RcsMount, ReactionWheelBankSpec,
-    ReactionWheelError, RigidBodyProperties, RigidBodyState, ShieldError, SolarOccluder,
-    StoredPropellant, SystemMount, TankMount, ThermalCommand, ThermalError, ThermalState,
-    ThermalSystem, ThermalTelemetry, TurbopropCommand, TurbopropMount, TurbopropOperatingPoint,
-    VehicleAssembly, VehicleResourceDemand, VehicleResourceFeedPort, VehicleResourceState,
-    WheelBodyMassProperties, WheelChassisMassProperties, WheelChassisSpec, WheelChassisState,
-    control_authority,
+    ControlCore, ControlStation, CrewSuitMode, DockingError, DockingPortSpec,
+    ElectricThrusterCommand, ElectricThrusterMount, ElectricThrusterPoint, ElectricalPowerCommand,
+    ElectricalPowerError, ElectricalPowerState, ElectricalPowerSystem, ElectricalPowerTelemetry,
+    EngineMount, EstocPoint, FlightCondition, FlightError, FusionTorchCommand, FusionTorchMount,
+    FusionTorchOperatingPoint, HeatShieldMount, JetCommand, JetMount, LandingGearError,
+    LandingLegMassProperties, LandingLegSpec, ParachuteError, ParachuteSpec, PressurizedCabin,
+    PropDrivePoint, PropellerDriveCommand, PropellerDriveMount, PropulsionError,
+    PulsedFusionCommand, PulsedFusionMount, PulsedFusionOperatingPoint, PulsedFusionState,
+    RcsMount, ReactionWheelBankSpec, ReactionWheelError, RigidBodyProperties, RigidBodyState,
+    ShieldError, SolarOccluder, StoredPropellant, SystemMount, TankMount, ThermalCommand,
+    ThermalError, ThermalState, ThermalSystem, ThermalTelemetry, TurbopropCommand, TurbopropMount,
+    TurbopropOperatingPoint, VehicleAssembly, VehicleResourceDemand, VehicleResourceFeedPort,
+    VehicleResourceState, WheelBodyMassProperties, WheelChassisMassProperties, WheelChassisSpec,
+    WheelChassisState, control_authority,
 };
 
 pub type StatefulTurbopropWrench = (
@@ -451,6 +451,11 @@ pub struct VehicleDefinition {
     /// never re-add mass. Empty keeps legacy assets valid.
     #[serde(default)]
     pub heat_shields: Vec<HeatShieldMount>,
+    /// Authored docking-port inventory with body-local frames. Empty keeps
+    /// legacy assets valid; the server resolves Dock/Undock commands against
+    /// these ids and never accepts client-supplied world geometry.
+    #[serde(default)]
+    pub docking_ports: Vec<DockingPortSpec>,
     /// Fold joints compiled from procedural surfaces (hinge placement in
     /// the compiled mechanism state). The force solver ignores them; the
     /// records and panel ownership are retained for mechanism integration,
@@ -813,6 +818,7 @@ impl VehicleDefinition {
             reaction_wheels: Vec::new(),
             parachutes: Vec::new(),
             heat_shields: Vec::new(),
+            docking_ports: Vec::new(),
             fold_joints: Vec::new(),
             cabins: Vec::new(),
             cabin_exits: Vec::new(),
@@ -1602,6 +1608,17 @@ impl VehicleDefinition {
                     heat_shields.push(shield);
                 }
             }
+            let mut docking_ports = Vec::new();
+            for (index, port) in self.docking_ports.iter().enumerate() {
+                if cluster
+                    .body_indices
+                    .contains(&ownership.docking_port_bodies[index])
+                {
+                    let mut port = port.clone();
+                    port.local_position_m = shift_point(port.local_position_m);
+                    docking_ports.push(port);
+                }
+            }
             let mut cabins = Vec::new();
             for (index, cabin) in self.cabins.iter().enumerate() {
                 if cluster
@@ -1748,6 +1765,7 @@ impl VehicleDefinition {
                 jet_bodies: localize(&ownership.jet_bodies),
                 rcs_bodies: localize(&ownership.rcs_bodies),
                 heat_shield_bodies: localize(&ownership.heat_shield_bodies),
+                docking_port_bodies: localize(&ownership.docking_port_bodies),
                 body_masses: cluster
                     .body_indices
                     .iter()
@@ -1781,6 +1799,7 @@ impl VehicleDefinition {
                 reaction_wheels: Vec::new(),
                 parachutes: Vec::new(),
                 heat_shields,
+                docking_ports,
                 fold_joints: Vec::new(),
                 cabins,
                 cabin_exits,
@@ -2450,12 +2469,25 @@ impl VehicleDefinition {
                     self.jets.len(),
                     self.rcs_mounts.len(),
                     self.heat_shields.len(),
+                    self.docking_ports.len(),
                 )
                 .map_err(|error| {
                     VehicleError::InvalidVehicle(format!("invalid part ownership: {error}"))
                 })?;
         }
 
+        {
+            let mut port_ids = std::collections::HashSet::new();
+            for port in &self.docking_ports {
+                port.validate().map_err(VehicleError::Docking)?;
+                if !port_ids.insert(port.id.as_str()) {
+                    return Err(VehicleError::InvalidVehicle(format!(
+                        "duplicate docking port id '{}'",
+                        port.id
+                    )));
+                }
+            }
+        }
         let mut claimed_panels = std::collections::HashSet::new();
         for (surface_index, surface) in self.control_surfaces.iter().enumerate() {
             surface.validate(self.aero_geometry.panels.len())?;
@@ -2718,6 +2750,28 @@ impl VehicleDefinition {
             }
         }
         self.heat_shields = heat_shields;
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Attach authored docking-port inventory (baker path). Port ids must be
+    /// unique; frames are body-local hardware addresses the server resolves
+    /// Dock commands against.
+    pub fn with_docking_ports(
+        mut self,
+        docking_ports: Vec<DockingPortSpec>,
+    ) -> Result<Self, VehicleError> {
+        let mut names = std::collections::HashSet::new();
+        for port in &docking_ports {
+            port.validate().map_err(VehicleError::Docking)?;
+            if !names.insert(port.id.as_str()) {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "duplicate docking port id '{}'",
+                    port.id
+                )));
+            }
+        }
+        self.docking_ports = docking_ports;
         self.validate()?;
         Ok(self)
     }
@@ -4095,6 +4149,7 @@ pub enum VehicleError {
     ElectricalPower(ElectricalPowerError),
     Thermal(ThermalError),
     HeatShield(ShieldError),
+    Docking(DockingError),
     InvalidControlSurface(String),
     InvalidControlCommand { surface: String, command: f64 },
     ControlCount { expected: usize, actual: usize },
@@ -4132,6 +4187,9 @@ impl fmt::Display for VehicleError {
             }
             Self::HeatShield(error) => {
                 write!(formatter, "vehicle heat-shield error: {error}")
+            }
+            Self::Docking(error) => {
+                write!(formatter, "vehicle docking error: {error}")
             }
             Self::InvalidControlSurface(message) => {
                 write!(formatter, "invalid control surface: {message}")
@@ -5428,6 +5486,7 @@ mod cabin_authority_tests {
             jet_bodies: Vec::new(),
             rcs_bodies: Vec::new(),
             heat_shield_bodies: Vec::new(),
+            docking_port_bodies: Vec::new(),
             body_masses,
         };
         let mut vehicle = VehicleDefinition::new("split-ship", geometry, properties, controls)

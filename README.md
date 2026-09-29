@@ -55,8 +55,11 @@ The checked-in vertical slice currently contains:
   Lambert, plane change, velocity matching) plus candidate search. Planning
   approximations are revalidated through the exact field before execution;
 - `thessa-flight-net` and `thessa-protocol`: versioned framed input/snapshot
-  transport with strict validation and ordered typed part commands;
-- `apps/server`: headless authoritative simulation over stdio or TCP;
+  transport (wire v6) with strict validation, ordered typed part commands,
+  and fleet Separate/Dock/Undock commands plus fleet snapshots;
+- `apps/server`: headless authoritative simulation over stdio or TCP, with a
+  server-owned vehicle fleet (separation spawning, dock sessions with fixed
+  joints, fleet snapshots);
 - `apps/client`: Bevy 0.19 map, pilot HUD, atmospheric and field-first plume
   rendering, terrain streaming, a temporary audio adapter, and an embedded
   authoritative-server path;
@@ -76,8 +79,9 @@ The checked-in vertical slice currently contains:
 - isolated validation harnesses for orbital and aerodynamic reference checks.
 
 Factory gameplay, general three-spool/clutched and free-power-turbine dynamics,
-physical structural fracture and vehicle-cluster rebuilding, server-level
-docking ownership, branched fluid networks, full electrical networks, shield thermal
+combined control of jointed stacks, commanding non-primary vehicles, client
+fleet rendering, vehicle despawn policy, physical structural fracture beyond
+rated-joint assessment, branched fluid networks, full electrical networks, shield thermal
 protection/ablation, save persistence, and production multiplayer remain future
 work. Vehicle thermal nodes and the
 ideal shared power bus are implemented slices; they are not full thermal,

@@ -14,6 +14,7 @@ mod assembly;
 mod cabin;
 mod collision;
 mod docking;
+mod fleet;
 mod flight;
 mod landing_gear;
 mod parachute;
@@ -46,6 +47,7 @@ pub use docking::{
     DockingError, DockingKinematics, DockingPortClass, DockingPortSpec, DockingPortState,
     DockingSession,
 };
+pub use fleet::{DockGraph, FleetError, VehicleId};
 pub use flight::{
     FlightError, FlightForces, FlightStepInput, RigidBodyProperties, RigidBodyState,
     constant_spin_orientation, evaluate_flight_forces, evaluate_flight_forces_soa,

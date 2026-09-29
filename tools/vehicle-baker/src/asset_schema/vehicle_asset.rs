@@ -257,6 +257,7 @@ impl VehicleAsset {
         // auto-mounting from ports is future work.
         let mut body_tank_mounts = Vec::new();
         let mut body_heat_shield_mounts = Vec::new();
+        let mut body_docking_ports = Vec::new();
         let mut body_contact_parts = Vec::new();
         let mut body_cabins = Vec::new();
         let mut body_cabin_exits = Vec::new();
@@ -282,6 +283,7 @@ impl VehicleAsset {
         let mut ownership_control_station_bodies: Vec<usize> = Vec::new();
         let mut ownership_tank_bodies: Vec<usize> = Vec::new();
         let mut ownership_heat_shield_bodies: Vec<usize> = Vec::new();
+        let mut ownership_docking_port_bodies: Vec<usize> = Vec::new();
         // Per-body (mass, first moment, origin-frame inertia) in the
         // authoring frame; finalized into centroidal records after COM.
         let mut ownership_masses: Vec<(f64, DVec3, DMat3)> =
@@ -331,6 +333,7 @@ impl VehicleAsset {
             let ob_station_base = body_stations.len();
             let ob_tank_base = body_tank_mounts.len();
             let ob_shield_base = body_heat_shield_mounts.len();
+            let ob_dock_base = body_docking_ports.len();
             println!(
                 "body '{}': assembled at {:?} (rotation {:?})",
                 body.name, transform.translation_body_m, transform.rotation_body
@@ -566,6 +569,19 @@ impl VehicleAsset {
                     "body '{}': port '{}' ({:?}) at {:?} along {:?}",
                     body.name, port.name, port.kind, port.position_body_m, port.axis_body_m
                 );
+                if port.kind == PortKind::Docking {
+                    // Port +X is the outward docking normal by convention.
+                    let orientation =
+                        DQuat::from_rotation_arc(DVec3::X, port.axis_body_m.normalize());
+                    body_docking_ports.push(
+                        DockingPortSpec::d1(
+                            format!("{}.{}", body.name, port.name),
+                            port.position_body_m,
+                            orientation,
+                        )
+                        .map_err(|error| format!("body '{}': {error}", body.name))?,
+                    );
+                }
             }
             let panel_base = panels.len();
             let control_base = controls.len();
@@ -653,6 +669,10 @@ impl VehicleAsset {
                 ownership_heat_shield_bodies.extend(std::iter::repeat_n(
                     body_index,
                     body_heat_shield_mounts.len() - ob_shield_base,
+                ));
+                ownership_docking_port_bodies.extend(std::iter::repeat_n(
+                    body_index,
+                    body_docking_ports.len() - ob_dock_base,
                 ));
             }
         }
@@ -1036,6 +1056,7 @@ impl VehicleAsset {
             .with_reaction_wheels(reaction_wheel_banks)?
             .with_parachutes(parachutes)?
             .with_heat_shields(body_heat_shield_mounts)?
+            .with_docking_ports(body_docking_ports)?
             .with_electrical_power(electrical_power)?
             .with_thermal(thermal)?;
         vehicle = vehicle.with_resource_feed_ports(resource_feed_ports)?;
@@ -1078,6 +1099,7 @@ impl VehicleAsset {
                 jet_bodies: Vec::new(),
                 rcs_bodies: Vec::new(),
                 heat_shield_bodies: ownership_heat_shield_bodies,
+                docking_port_bodies: ownership_docking_port_bodies,
                 body_masses,
             })
         });
@@ -1199,6 +1221,9 @@ impl VehicleAsset {
         }
         for shield in &mut vehicle.heat_shields {
             shield.position_body_m = shift_point(shield.position_body_m);
+        }
+        for port in &mut vehicle.docking_ports {
+            port.local_position_m = shift_point(port.local_position_m);
         }
         for battery in &mut vehicle.electrical_power.batteries {
             battery.position_body_m = shift_point(battery.position_body_m);

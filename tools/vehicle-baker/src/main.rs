@@ -22,7 +22,7 @@ use thessa_sim_core::{
     CabinSeatRole as RuntimeCabinSeatRole, CabinSeatStyle, CabinSuitType, ChamberMaterial,
     ChamberSpec, ColdGasThrusterSpec, CollisionAxis, CollisionGeometry, CollisionMaterial,
     CollisionPart, CollisionShape, CompiledEngine, CompiledJet, ControlCore, ControlMixing,
-    ControlStation, ControlSurfaceDefinition, CoolingMode, ElectricPropellant,
+    ControlStation, ControlSurfaceDefinition, CoolingMode, DockingPortSpec, ElectricPropellant,
     ElectricThrusterDesign, ElectricThrusterMount, ElectricThrusterSpec, ElectricalPowerSystem,
     EngineCycle, EngineMount, EstocEjectorSpec, EstocPrecoolerSpec, EstocSpec, FeedLine,
     FeedResourceProperties, FoldJointRecord, FuelCellSpec, FusionReaction, FusionTorchMount,

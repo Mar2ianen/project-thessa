@@ -5,11 +5,12 @@ geometry/mass, validated topology, and runtime crew/air/feed connectivity
 are implemented. Named non-tree resource edges and pressure-limited
 `FeedLine` routing are implemented. Contact-scene docking now advances the
 persisted D1 protocol, installs/removes a fixed joint, and reports solver
-joint force/moment. A breakup reconstruction primitive now rebuilds component
-mass, inertia, COM position, and COM velocity from complete caller-supplied
-per-body mass records. The baker and server do not yet retain/migrate complete
-per-part subsystem ownership into separate authoritative vehicle clusters.
-Reference stays KSP: parts mate through explicit nodes into one craft tree.
+joint force/moment. Per-link strength ratings fail closed against measured
+joint loads. The baker retains per-body ownership and splits independent
+cluster definitions; the server owns a vehicle fleet with separation
+spawning, persisted dock sessions, vacuum-gated joints, and fleet
+snapshots. Reference stays KSP: parts mate through explicit nodes into one
+craft tree.
 
 ## 1. Goal
 
@@ -26,11 +27,11 @@ Separate parts assemble into one craft through authored interfaces:
   named engine-feed ports.
 
 Still outside this slice: internal assembly-joint load resolution,
-material-rated structural failure and physical cluster splitting,
-authoritative multi-vehicle ownership, finite-rate cabin flow, and airlock
-parts. Resource edges currently carry reachability plus optional feed-line
-pressure loss; they do not model distributed line pressure, line storage,
-transients, pumps, or flow sharing through a branched pipe network.
+material-rated structural failure beyond rated-joint assessment, combined
+jointed-stack control, finite-rate cabin flow, and airlock parts. Resource
+edges currently carry reachability plus optional feed-line pressure loss;
+they do not model distributed line pressure, line storage, transients,
+pumps, or flow sharing through a branched pipe network.
 
 ## 2. Nodes (hangar authoring)
 
@@ -187,10 +188,24 @@ time, report the latest joint solver impulse as average force/moment, and
 remove the joint while preserving both solved body states. The D1 contact test
 exercises that sequence under an applied load. `CollisionWorld` reports
 constraint loads only; it does not assign structural damage or infer ratings.
-This partner-scene path is not yet wired into the server: `apps/server::Sim`
-still owns one `FlightAuthority`, and the current client protocol has no
-vehicle-targeted docking, undocking, or separation commands. The server therefore
-does not yet transfer vehicle ownership or persist a dock graph.
+
+The server owns the fleet above that scene. `Sim` keeps the primary
+`FlightAuthority` on its fast path and spawns passive secondaries from
+`VehicleDefinition::split_definitions_after_link_failure` on a `Separate`
+command (root-body cluster keeps the source id, every authority shares one
+server clock and warp). `Dock`/`Undock` commands open and close persisted
+`DockGraph` sessions between authored `docking_ports` (baked from
+`BodyPort::Docking` as D1 with the port +X convention as outward normal);
+the protocol gates capture and alignment on live `DockingKinematics` every
+tick, installs the fixed joint only in sampled vacuum, and hard-docks after
+the installed joint (never before), so protocol truth cannot outrun the
+constraint. Jointed pairs cruise through the shared scene on gravity
+wrenches — exact in vacuum — with capped per-tick debt that sheds like the
+CPU work budget; thrust and effector commands on jointed vehicles fail
+closed for want of a combined stack model, and atmosphere ends the joint
+(and its session) rather than degrading physics. Fleet snapshots ride a
+dedicated wire kind (v6) behind the unchanged primary snapshot; the client
+still tracks the primary vehicle.
 
 `VehicleAssembly::body_components_after_link_failure` computes deterministic
 body-index components after removing a named structural edge, and
@@ -262,8 +277,9 @@ four-body/sixty-four-panel definition split on an AMD Ryzen 7 8745H
   pulsed, propeller, and turboprop drives, wheel/leg gear, reaction wheels,
   parachutes, fold joints, blunt discs, and power/thermal network partition
   across clusters.
-- Server-level docking/separation ownership and persistence across independent
-  vehicle authorities.
+- Combined control allocation and thrust for jointed stacks; commanding and
+  autopilot for non-primary vehicles; client multi-vehicle rendering;
+  vehicle despawn policy; jointed atmospheric cruise.
 - Branched feed-network pressure/flow solving, rate limits, and drain-order
   policy beyond the current least-drop path calculation.
 - Finite-rate hatch/orifice flow; airlock parts (cycled volume instead of

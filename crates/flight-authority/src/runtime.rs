@@ -1307,6 +1307,20 @@ impl FlightAuthority {
         self.contact.as_ref().is_some_and(ContactRuntime::is_active)
     }
 
+    /// Shared contact scene for fleet docking ticks. The server syncs dock
+    /// partners here and installs/removes fixed joints through it; the
+    /// single-vehicle advance path is unchanged. `None` until
+    /// `enable_contact_mode` arms the scene.
+    pub fn contact_runtime(&self) -> Option<&ContactRuntime> {
+        self.contact.as_ref()
+    }
+
+    /// Mutable shared contact scene for fleet docking ticks. See
+    /// [`contact_runtime`](Self::contact_runtime).
+    pub fn contact_runtime_mut(&mut self) -> Option<&mut ContactRuntime> {
+        self.contact.as_mut()
+    }
+
     /// Debug telemetry for the contact scene. Errors when contact mode is
     /// not enabled.
     pub fn contact_snapshot(&self) -> Result<CollisionDebugSnapshot, FlightError> {

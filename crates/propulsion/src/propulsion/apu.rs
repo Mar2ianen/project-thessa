@@ -185,12 +185,17 @@ impl CompiledAuxiliaryPowerUnit {
             command.dt_s,
             command.pneumatic_bleed_power_w,
         )?;
+        let effective_bleed_w = if shaft_state.lit {
+            command.pneumatic_bleed_power_w
+        } else {
+            0.0
+        };
         let (air, _) = self.engine.operating_point_at_spool_loaded(
             condition,
             command.throttle,
             shaft_state.spool_n,
             shaft_state.lit,
-            command.pneumatic_bleed_power_w,
+            effective_bleed_w,
         )?;
         let point = AuxiliaryPowerUnitOperatingPoint {
             shaft_state,

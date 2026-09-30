@@ -92,7 +92,9 @@ Volumes are non-tank regions; tanks are never crew volumes:
   fuel, RCS propellant, electric working fluid, fusion reactants, and fuel-cell
   hydrogen/oxygen all use compatible stored-resource identities. APUs and fuel
   cells may author their endpoint directly; `resource_feed_ports` maps other
-  consumer names to an engine-feed endpoint. Named compatible tanks may also
+  accessory consumer names to an engine-feed endpoint. Liquid and solid rocket
+  mounts currently use global tank allocation and ignore feed ports; routes
+  naming a rocket engine or system fail closed. Named compatible tanks may also
   be manually transferred across an open resource path.
 
 ## 5. Runtime connectivity (`thessa-vehicle-core::assembly`)
@@ -115,8 +117,12 @@ density, dynamic viscosity, regulated source pressure, and required consumer
 inlet pressure. The allocator evaluates the least-drop reachable path, enforces
 the line's pressure rating and hard velocity gate, and bisects a shared
 consumer flow to the largest pressure-feasible value before committing tank
-draw. Omitting fluid properties retains the ideal legacy route; a route through
-authored lines must provide them. This is a static path calculation, not a
+draw. Omitting fluid properties retains the ideal legacy route; only a route
+whose every reachable tank path crosses an authored feed line must provide
+them (an ideal-only path keeps the legacy behavior even when other parts of
+the assembly contain lines). Fluid properties are looked up per consumer, and
+consumers sharing one port/resource merge to the strictest minimum inlet
+pressure. This is a static path calculation, not a
 branched hydraulic network solver. Opening an exterior assembly hatch into a
 dry region refuses while
 its connected pressure domain contains air unless the caller explicitly
@@ -221,8 +227,11 @@ caller-mapped solver load magnitudes (`AssemblyJointLoad`) against the ratings,
 returning the first failed link in authored order. `CollisionWorld::joint_loads`
 supplies force/moment telemetry, but mapping its `JointId` values onto
 structural link names and committing a resulting failure/split are not
-integrated. Unrated links never fail by load; unknown, duplicate, non-finite,
-or negative loads fail closed. `reconstruct_clusters_after_link_failure`
+integrated: joint assessment is reporting-only, and server breakup stays
+explicit via `Separate` (no automatic load-driven separation). Unrated links
+never fail by load; unknown, duplicate, non-finite,
+or negative loads fail closed with the offending values in the error.
+`reconstruct_clusters_after_link_failure`
 additionally takes one
 complete `AssemblyBodyMassProperties` record per authored body, aggregates
 centroidal inertia with the parallel-axis theorem, and recenters each
@@ -239,7 +248,8 @@ For a body component with members `i`, reconstruction uses
 `I_c = sum(I_i + m_i (|d_i|^2 1 - d_i d_i^T))`, where `d_i = c_i - c`.
 It then maps the COM offset into inertial position and velocity with the source
 pose and `omega x r`. Source closure tolerances are `1e-10` relative mass,
-`1e-9 m` COM magnitude, and `1e-9` relative inertia; the known three-body
+`1e-9` relative COM (scaled by body extent, minimum 1 m), and `1e-9` relative
+inertia with measured deltas in the error; the known three-body
 regression pins component values to `1e-12`.
 
 The existing `assembly_air` benchmark now also measures a 64-body chain split
@@ -251,8 +261,9 @@ migration and authoritative fleet insertion.
 This is the physical rigid-body reconstruction contract, not yet a complete
 runtime vehicle reconstruction. The baker now retains per-body ownership
 for the subsystems it compiles per body: `AssemblyOwnership` records the
-owning body of every aero panel, collision part, cabin record, tank mount,
-and heat-shield mount, plus complete per-body masses in the final COM
+owning body of every aero panel, collision part, cabin, exit, seat, monument,
+core, station, engine, tank, system, jet, RCS, heat-shield, and docking-port
+entry, plus complete per-body masses in the final COM
 frame (structures, body tanks with loaded propellant and intrinsic
 inertia, cabin-air equilibrium deltas, and vehicle-level hand/power/
 thermal hardware attributed to the root body, which retains the shared
@@ -272,10 +283,14 @@ inventory. The server constructs
 and validates all resulting authorities before replacing the source vehicle.
 Stores without a migration path (auxiliary power, electric/fusion/
 pulsed/propeller/turboprop drives, wheel chassis, landing legs, reaction
-wheels, parachutes, fold joints, blunt discs) fail closed with a clear error.
+wheels, parachutes, fold joints) fail closed with a clear error. Body
+heat shields carry ownership but their baked blunt discs currently block
+the split (merged aero geometry has no per-shield migration yet).
 The shared power and thermal networks remain attributed to the root-body
 cluster, with their stations recentered into its local frame; independent
-per-cluster network ownership is future work. The baker regression
+per-cluster network ownership is future work. Fuel cells stay with the root
+bus, and a cell whose feed port leaves the root cluster fails the split
+instead of dangling. The baker regression
 bakes `example_assembly.toml`, splits the stack link, and checks
 partition coverage, mass conservation, route following, and cluster
 validation; the `assembly_air` benchmark measures 12.85 us per

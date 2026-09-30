@@ -1057,7 +1057,7 @@ where
             let from_charge = if dt_s > 0.0 {
                 state.starter_charge_j * efficiency / dt_s
             } else {
-                f64::INFINITY
+                0.0
             };
             let charge_shaft_w = remaining_starter_power_w.min(from_charge);
             starter_shaft_w += charge_shaft_w;

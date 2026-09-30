@@ -357,6 +357,18 @@ impl AssemblyOwnership {
                 self.body_masses.len()
             )));
         }
+        for (body, properties) in self.body_masses.iter().enumerate() {
+            if !properties.center_of_mass_body_m.is_finite() {
+                return Err(AssemblyError::InvalidBodyMass(format!(
+                    "body {body} has a non-finite center of mass"
+                )));
+            }
+            RigidBodyProperties::new(
+                properties.mass_kg,
+                properties.inertia_about_center_body_kg_m2,
+            )
+            .map_err(|error| AssemblyError::InvalidBodyMass(format!("body {body}: {error}")))?;
+        }
         Ok(())
     }
 }
@@ -566,6 +578,17 @@ impl VehicleAssembly {
                 )));
             }
         }
+        {
+            let mut endpoint_names = std::collections::HashSet::new();
+            for endpoint in self.tanks.iter().chain(&self.engine_ports) {
+                if !endpoint_names.insert(endpoint.name.as_str()) {
+                    return Err(AssemblyError::InvalidLink(format!(
+                        "duplicate assembly resource endpoint '{}'",
+                        endpoint.name
+                    )));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -622,8 +645,8 @@ impl VehicleAssembly {
                 || load.moment_nm < 0.0
             {
                 return Err(AssemblyError::InvalidLink(format!(
-                    "invalid joint load for link '{}'",
-                    load.link_name
+                    "invalid joint load for link '{}': force {} N, moment {} Nm",
+                    load.link_name, load.force_n, load.moment_nm
                 )));
             }
             if !seen.insert(load.link_name.as_str()) {
@@ -812,9 +835,32 @@ impl VehicleAssembly {
                     .collect(),
             };
             // The root remains the authored root when present; otherwise the
-            // first body of this independent cluster becomes its local root.
+            // detached cluster roots at its subtree-entry node (the unique
+            // zero-indegree body), not the smallest original index.
             if !component.contains(&self.root_body) {
-                assembly.root_body = 0;
+                let mut indegree = vec![0_usize; assembly.body_names.len()];
+                for link in &assembly.links {
+                    if link.state.b >= indegree.len() {
+                        return Err(AssemblyError::InvalidLink(format!(
+                            "split topology has out-of-range link '{}'",
+                            link.name
+                        )));
+                    }
+                    indegree[link.state.b] += 1;
+                }
+                let mut roots = Vec::new();
+                for (local, degree) in indegree.iter().enumerate() {
+                    if *degree == 0 {
+                        roots.push(local);
+                    }
+                }
+                if roots.len() != 1 {
+                    return Err(AssemblyError::InvalidLink(format!(
+                        "split cluster has {} candidate roots, expected exactly one",
+                        roots.len()
+                    )));
+                }
+                assembly.root_body = roots[0];
             }
             assembly.validate()?;
             split.push(assembly);
@@ -874,6 +920,12 @@ impl VehicleAssembly {
         let (source_center_of_mass, reconstructed_source_properties) =
             aggregate_cluster_mass(&all_bodies, body_mass_properties)?;
         let mass_tolerance_kg = source_mass_properties.mass_kg.max(1.0) * 1e-10;
+        let body_extent_m = body_mass_properties
+            .iter()
+            .map(|body| body.center_of_mass_body_m.length())
+            .fold(0.0_f64, f64::max)
+            .max(1.0);
+        let com_tolerance_m = 1e-9 * body_extent_m;
         let inertia_scale = source_mass_properties
             .inertia_body_kg_m2
             .x_axis
@@ -902,14 +954,20 @@ impl VehicleAssembly {
             .max_element()
             .max(inertia_error.y_axis.abs().max_element())
             .max(inertia_error.z_axis.abs().max_element());
-        if (reconstructed_source_properties.mass_kg - source_mass_properties.mass_kg).abs()
-            > mass_tolerance_kg
-            || source_center_of_mass.length() > 1e-9
+        let mass_error_kg =
+            (reconstructed_source_properties.mass_kg - source_mass_properties.mass_kg).abs();
+        let com_error_m = source_center_of_mass.length();
+        if mass_error_kg > mass_tolerance_kg
+            || com_error_m > com_tolerance_m
             || max_inertia_error > inertia_scale * 1e-9
         {
-            return Err(AssemblyError::InvalidBodyMass(
-                "body mass records do not conserve source mass, COM, and inertia".into(),
-            ));
+            return Err(AssemblyError::InvalidBodyMass(format!(
+                "body mass records do not conserve source mass, COM, and inertia: \
+                 mass error {mass_error_kg:.6e} kg (tolerance {mass_tolerance_kg:.6e} kg), \
+                 COM error {com_error_m:.6e} m (tolerance {com_tolerance_m:.6e} m), \
+                 inertia error {max_inertia_error:.6e} (tolerance {:.6e})",
+                inertia_scale * 1e-9
+            )));
         }
 
         let topologies = self.split_after_link_failure(failed_link_name)?;
@@ -2158,5 +2216,46 @@ mod tests {
         assert!(assembly.validate().is_err());
         assembly.links[0].state = link(0, 0, true, true);
         assert!(assembly.validate().is_err());
+    }
+
+    #[test]
+    fn split_roots_detached_cluster_at_subtree_entry() {
+        let assembly = VehicleAssembly {
+            root_body: 0,
+            body_names: vec!["core".into(), "payload".into(), "avionics".into()],
+            links: vec![
+                NamedAssemblyLink {
+                    name: "core-avionics".into(),
+                    state: link(0, 2, false, true),
+                    feed_line: None,
+                },
+                NamedAssemblyLink {
+                    name: "avionics-payload".into(),
+                    state: link(2, 1, false, true),
+                    feed_line: None,
+                },
+            ],
+            resource_edges: Vec::new(),
+            joint_strengths: Vec::new(),
+            volumes: Vec::new(),
+            tanks: Vec::new(),
+            engine_ports: Vec::new(),
+        };
+        assert!(assembly.validate().is_ok());
+        let split = assembly
+            .split_after_link_failure("core-avionics")
+            .expect("directed split");
+        assert_eq!(split.len(), 2);
+        let detached = split
+            .iter()
+            .find(|cluster| !cluster.body_names.contains(&"core".to_string()))
+            .expect("detached cluster");
+        assert_eq!(detached.body_names, vec!["payload", "avionics"]);
+        assert_eq!(
+            detached.body_names[detached.root_body],
+            "avionics".to_string(),
+            "detached root must be the subtree entry, not the smallest index"
+        );
+        assert!(detached.validate().is_ok());
     }
 }

@@ -933,9 +933,10 @@ impl Sim {
 
     /// Split one authoritative vehicle along a named structural link.
     /// Returns the spawned vehicle ids. The cluster containing the source
-    /// root body keeps the source id with fresh default controls; every
-    /// other cluster spawns a passive secondary authority sharing the fleet
-    /// clock. Active dock sessions block the split: undock first.
+    /// root body keeps the source id with preserved bus charge and controls;
+    /// every other cluster spawns a passive secondary authority sharing the
+    /// fleet clock. Active dock sessions and fixed joints block the split:
+    /// undock first.
     pub(super) fn separate_vehicle(
         &mut self,
         vehicle_id: u32,
@@ -947,6 +948,11 @@ impl Sim {
         if self.dock_graph.has_vehicle(VehicleId::new(vehicle_id)) {
             return Err(format!(
                 "vehicle {vehicle_id} must undock before it separates"
+            ));
+        }
+        if self.is_jointed(vehicle_id) {
+            return Err(format!(
+                "vehicle {vehicle_id} has an active fixed joint and must unjoint before it separates"
             ));
         }
         let root_name = {
@@ -961,6 +967,26 @@ impl Sim {
         let reference_body = self.vehicle_authority(vehicle_id)?.reference_body;
         let source_time = self.vehicle_authority(vehicle_id)?.flight_time_s;
         let source_tick = self.vehicle_authority(vehicle_id)?.world_tick;
+        let (
+            source_power_state,
+            source_power_command,
+            source_atmosphere,
+            source_throttle,
+            source_engine_active,
+            source_sas_enabled,
+            source_rcs_enabled,
+        ) = {
+            let authority = self.vehicle_authority(vehicle_id)?;
+            (
+                authority.electrical_power_state.clone(),
+                authority.electrical_power_command.clone(),
+                authority.atmosphere,
+                authority.throttle,
+                authority.engine_active,
+                authority.sas_enabled,
+                authority.rcs_enabled,
+            )
+        };
         let definitions = {
             let authority = self.vehicle_authority(vehicle_id)?;
             authority
@@ -972,7 +998,7 @@ impl Sim {
                 )
                 .map_err(|error| error.to_string())?
         };
-        if self.fleet.len() + definitions.len() > MAX_FLEET_VEHICLES {
+        if self.fleet.len() + definitions.len() - 1 > MAX_FLEET_VEHICLES {
             return Err("fleet is full".into());
         }
         let keep_index = definitions
@@ -985,7 +1011,7 @@ impl Sim {
             })
             .ok_or_else(|| "split lost the root body".to_string())?;
         let mut prepared = Vec::with_capacity(definitions.len());
-        for (definition, state, resource_state) in definitions {
+        for (index, (definition, state, resource_state)) in definitions.into_iter().enumerate() {
             let mut authority =
                 FlightAuthority::new_with_vehicle(&self.ephemeris, reference_body, definition)
                     .map_err(|error| format!("cluster authority: {error}"))?;
@@ -993,6 +1019,15 @@ impl Sim {
             authority.resource_state = resource_state;
             authority.flight_time_s = source_time;
             authority.world_tick = source_tick;
+            if index == keep_index {
+                authority.electrical_power_state = source_power_state.clone();
+                authority.electrical_power_command = source_power_command.clone();
+                authority.atmosphere = source_atmosphere;
+                authority.throttle = source_throttle;
+                authority.engine_active = source_engine_active;
+                authority.sas_enabled = source_sas_enabled;
+                authority.rcs_enabled = source_rcs_enabled;
+            }
             prepared.push(authority);
         }
         if vehicle_id == VehicleId::PRIMARY.0 {
@@ -1009,8 +1044,20 @@ impl Sim {
                     self.fleet.insert(vehicle_id, authority);
                 }
             } else {
-                let id = self.next_vehicle_id;
-                self.next_vehicle_id += 1;
+                let mut id = self.next_vehicle_id;
+                let mut guard = 0_u32;
+                while id == VehicleId::PRIMARY.0 || self.fleet.contains_key(&id) || id == vehicle_id
+                {
+                    id = id.wrapping_add(1);
+                    guard += 1;
+                    if guard > u32::MAX / 2 {
+                        return Err("vehicle id space is exhausted".into());
+                    }
+                }
+                self.next_vehicle_id = id.wrapping_add(1);
+                if self.next_vehicle_id == VehicleId::PRIMARY.0 {
+                    self.next_vehicle_id = self.next_vehicle_id.wrapping_add(1);
+                }
                 self.fleet.insert(id, authority);
                 spawned.push(id);
             }
@@ -1255,7 +1302,7 @@ impl Sim {
             .remove(&pair.1)
             .ok_or_else(|| format!("joint partner {} is gone", pair.1))?;
         partner.state = partner_state;
-        partner.flight_time_s += served;
+        partner.flight_time_s = host_time + served;
         partner.rails.invalidate();
         self.fleet.insert(pair.1, partner);
         Ok(())

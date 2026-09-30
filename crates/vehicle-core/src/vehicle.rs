@@ -916,6 +916,22 @@ impl VehicleDefinition {
                 "fuel-cell power must advance with installed resource inventory".into(),
             ));
         }
+        if command.auxiliary_generation_power_w > 0.0
+            && self.auxiliary_power_units.is_empty()
+            && !self.jets.iter().any(|mount| match &mount.engine {
+                crate::CompiledJet::Air(engine) => {
+                    engine.shaft.generator.fitted && engine.shaft.generator.power_w > 0.0
+                }
+                crate::CompiledJet::Estoc(engine) => {
+                    engine.air.shaft.generator.fitted && engine.air.shaft.generator.power_w > 0.0
+                }
+            })
+        {
+            return Err(VehicleError::InvalidVehicle(
+                "auxiliary generation needs an installed APU or a fitted jet-generator operating point; use advance_electrical_power_with_demands with plan_auxiliary_power_units"
+                    .into(),
+            ));
+        }
         self.electrical_power
             .advance(state, command)
             .map_err(VehicleError::ElectricalPower)
@@ -1554,14 +1570,15 @@ impl VehicleDefinition {
             }
             for (index, control) in self.control_surfaces.iter().enumerate() {
                 let Some(local) = control_remap[index] else {
-                    if in_cluster(
-                        &[ownership.panel_bodies[control.panel_indices[0]]],
-                        &cluster.body_indices,
-                    ) && control
+                    let here = control.panel_indices.iter().any(|panel| {
+                        panel_remap[*panel].is_some()
+                            || in_cluster(&[ownership.panel_bodies[*panel]], &cluster.body_indices)
+                    });
+                    let away = control
                         .panel_indices
                         .iter()
-                        .any(|panel| panel_remap[*panel].is_none())
-                    {
+                        .any(|panel| panel_remap[*panel].is_none());
+                    if here && away {
                         return Err(VehicleError::InvalidVehicle(format!(
                             "control surface '{}' spans the split",
                             control.name
@@ -1777,8 +1794,9 @@ impl VehicleDefinition {
                     continue;
                 }
                 // A route survives when its consumer rides this cluster:
-                // a migrated mount present here, or an external named
-                // consumer (fuel cells only where the root bus stays).
+                // a migrated mount present here, a generic external consumer
+                // following its surviving port, or a fuel cell where the
+                // root bus stays.
                 let consumer_rides = cluster_mount_names.contains(route.consumer_name.as_str())
                     || (!source_mount_names.contains(route.consumer_name.as_str())
                         && (keeps_root || !fuel_cell_names.contains(route.consumer_name.as_str())));
@@ -1873,6 +1891,16 @@ impl VehicleDefinition {
                 ElectricalPowerSystem::default()
             };
             if cluster.body_indices.contains(&assembly.root_body) {
+                for cell in &electrical_power.fuel_cells {
+                    if let Some(port) = cell.feed_port_name.as_deref()
+                        && !port_names.contains(port)
+                    {
+                        return Err(VehicleError::InvalidVehicle(format!(
+                            "fuel cell '{}' names feed port '{port}' outside its split cluster",
+                            cell.name
+                        )));
+                    }
+                }
                 for part in &mut electrical_power.batteries {
                     part.position_body_m += shift;
                 }
@@ -2349,11 +2377,29 @@ impl VehicleDefinition {
             }
         }
         let mut routed_consumers = std::collections::HashSet::new();
+        let engine_names: std::collections::HashSet<&str> = self
+            .engines
+            .iter()
+            .map(|mount| mount.name.as_str())
+            .collect();
+        let system_names: std::collections::HashSet<&str> = self
+            .systems
+            .iter()
+            .map(|mount| mount.name.as_str())
+            .collect();
         for route in &self.resource_feed_ports {
             if route.consumer_name.trim().is_empty() || route.feed_port_name.trim().is_empty() {
                 return Err(VehicleError::InvalidVehicle(
                     "resource feed routes need a consumer and feed-port name".into(),
                 ));
+            }
+            if engine_names.contains(route.consumer_name.as_str())
+                || system_names.contains(route.consumer_name.as_str())
+            {
+                return Err(VehicleError::InvalidVehicle(format!(
+                    "resource route for rocket '{}' is not yet wired: liquid/solid mounts use global tank allocation and ignore feed ports",
+                    route.consumer_name
+                )));
             }
             if !routed_consumers.insert(route.consumer_name.as_str()) {
                 return Err(VehicleError::InvalidVehicle(format!(
@@ -2368,6 +2414,59 @@ impl VehicleDefinition {
                     return Err(VehicleError::InvalidVehicle(format!(
                         "resource route '{}' has duplicate fluid properties for {:?}",
                         route.consumer_name, properties.resource
+                    )));
+                }
+            }
+        }
+        // Routes may be attached before the assembly during baker
+        // construction; port existence is checked below when an assembly is
+        // present and at plan time via feedable_tanks_for_port.
+        for cell in &self.electrical_power.fuel_cells {
+            if let Some(port) = cell.feed_port_name.as_deref() {
+                if port.trim().is_empty() {
+                    return Err(VehicleError::InvalidVehicle(
+                        "fuel-cell feed port name must not be empty".into(),
+                    ));
+                }
+                let Some(assembly) = &self.assembly else {
+                    return Err(VehicleError::InvalidVehicle(format!(
+                        "fuel cell '{}' names feed port '{port}' but the vehicle has no assembly",
+                        cell.name
+                    )));
+                };
+                if !assembly
+                    .engine_ports
+                    .iter()
+                    .any(|endpoint| endpoint.name == port)
+                {
+                    return Err(VehicleError::InvalidVehicle(format!(
+                        "fuel cell '{}' names missing assembly feed port '{port}'",
+                        cell.name
+                    )));
+                }
+            }
+        }
+        for mount in &self.auxiliary_power_units {
+            if let Some(port) = mount.feed_port_name.as_deref() {
+                if port.trim().is_empty() {
+                    return Err(VehicleError::InvalidVehicle(
+                        "APU feed port name must not be empty".into(),
+                    ));
+                }
+                let Some(assembly) = &self.assembly else {
+                    return Err(VehicleError::InvalidVehicle(format!(
+                        "APU '{}' names feed port '{port}' but the vehicle has no assembly",
+                        mount.name
+                    )));
+                };
+                if !assembly
+                    .engine_ports
+                    .iter()
+                    .any(|endpoint| endpoint.name == port)
+                {
+                    return Err(VehicleError::InvalidVehicle(format!(
+                        "APU '{}' names missing assembly feed port '{port}'",
+                        mount.name
                     )));
                 }
             }
@@ -6627,5 +6726,85 @@ mod cabin_authority_tests {
                 < 1e-12
         );
         assert!((vehicle.cabins[0].centroid_body_m - position).length() < 1e-12);
+    }
+
+    #[test]
+    fn rocket_feed_routes_fail_closed_until_ports_are_wired() {
+        let geometry = crate::AeroGeometry::new(vec![
+            crate::AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+        ])
+        .expect("geometry");
+        let properties =
+            crate::RigidBodyProperties::new(1_000.0, DMat3::IDENTITY * 1_000.0).expect("mass");
+        let engine = crate::CompiledEngine::Liquid(
+            crate::LiquidEngineSpec {
+                name: "route-test-engine".into(),
+                propellant: crate::Propellant::LoxRp1,
+                cycle: crate::EngineCycle::GasGenerator,
+                chamber_pressure_pa: 9.7e6,
+                throat_radius_m: 0.08,
+                expansion_ratio: 18.0,
+                nozzle_length_m: 0.9,
+                contour: crate::NozzleContour::Bell,
+                chamber_material: crate::ChamberMaterial::nickel_superalloy(),
+                cooling: crate::CoolingMode::Regenerative,
+                mixture_ratio: None,
+                characteristic_length_m: None,
+                gimbal_range_rad: 0.0,
+                min_throttle: Some(0.4),
+                restartable: true,
+            }
+            .compile()
+            .expect("engine"),
+        );
+        let vehicle = crate::VehicleDefinition::new("route-test", geometry, properties, vec![])
+            .expect("vehicle")
+            .with_engines(vec![crate::EngineMount {
+                name: "main".into(),
+                engine,
+                position_body_m: [0.0, 0.0, 0.0],
+                thrust_axis_body: [1.0, 0.0, 0.0],
+            }])
+            .expect("engine");
+        let routed = vehicle.with_resource_feed_ports(vec![crate::VehicleResourceFeedPort {
+            consumer_name: "main".into(),
+            feed_port_name: "stage.feed".into(),
+            fluid_properties: Vec::new(),
+        }]);
+        assert!(
+            routed.is_err(),
+            "rocket routes must fail closed while mounts use global allocation"
+        );
+    }
+
+    #[test]
+    fn auxiliary_generation_without_source_fails_closed() {
+        let geometry = crate::AeroGeometry::new(vec![
+            crate::AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+        ])
+        .expect("geometry");
+        let properties =
+            crate::RigidBodyProperties::new(1_000.0, DMat3::IDENTITY * 1_000.0).expect("mass");
+        let vehicle = crate::VehicleDefinition::new("bus-test", geometry, properties, vec![])
+            .expect("vehicle")
+            .with_electrical_power(crate::ElectricalPowerSystem {
+                consumers: vec![crate::PowerConsumerSpec {
+                    name: "load".into(),
+                    rated_power_w: 1_000.0,
+                    priority: crate::PowerPriority::Utility,
+                }],
+                ..crate::ElectricalPowerSystem::default()
+            })
+            .expect("bus");
+        let state = vehicle
+            .initial_electrical_power_state()
+            .expect("power state");
+        let mut command = crate::ElectricalPowerCommand::idle_for(&vehicle.electrical_power, 1.0);
+        command.consumer_power_w = vec![100.0];
+        command.auxiliary_generation_power_w = 500.0;
+        assert!(
+            vehicle.advance_electrical_power(&state, &command).is_err(),
+            "auxiliary generation with no APU or jet generator must fail closed"
+        );
     }
 }

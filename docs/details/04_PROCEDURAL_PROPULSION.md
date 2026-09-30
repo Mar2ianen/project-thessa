@@ -1836,11 +1836,19 @@ existing mass/inertia path.
   thruster feed, fusion working flow/charge, and shaft-drive output.
 - One tank transaction covers rocket/chamber flow, mounted jet/APU and
   propeller/turboprop fuel, RCS pulses, electric-thruster species, fusion
-  reactants/working fluid, and fuel-cell hydrogen/oxygen. Each installed
-  consumer's named port or generic `resource_feed_ports` route limits it to
-  compatible tanks reachable through the current assembly links. Consumers
+  reactants/working fluid, and fuel-cell hydrogen/oxygen. Each accessory
+  consumer's named port, direct mount `feed_port_name` (APUs and fuel cells),
+  or generic `resource_feed_ports` route limits it to compatible tanks
+  reachable through the current assembly links. Liquid and solid rocket mounts
+  use global allocation and ignore feed ports. Consumers
   have unique names and share one availability scale across multiple
   reactants; overlapping ports cannot overdraw shared tanks.
+- External accessory demands reserve shared inventory before fuel cells plan
+  on the remainder, so external consumers win deterministically under
+  contention; the merged plan stays feasible and commits once. Pressure
+  qualification evaluates each feed-line segment at the group's total requested
+  flow, a conservative bound that may throttle shared pipes earlier than a
+  per-path split-flow solve.
 - Resource limitation feeds back into throttle, flow, RCS duty, or pulse
   arming, then re-evaluates the affected operating point before its wrench or
   electrical output is accepted. Fuel cells share the transaction with other

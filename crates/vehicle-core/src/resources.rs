@@ -818,17 +818,37 @@ impl VehicleDefinition {
                 .feed_port_name
                 .as_deref()
                 .or_else(|| self.resource_feed_port(&demand.consumer_name));
-            let fluid_properties = self.feed_fluid_properties(resolved_port, demand.resource)?;
+            let fluid_properties = self.feed_fluid_properties(
+                &demand.consumer_name,
+                demand.feed_port_name.as_deref(),
+                resolved_port,
+                demand.resource,
+            )?;
 
             let group_index = groups.iter().position(|group| {
                 group.resource == demand.resource
                     && group.feed_port_name.as_deref() == resolved_port
             });
             if let Some(group_index) = group_index {
-                if groups[group_index].fluid_properties != fluid_properties {
-                    return Err(VehicleError::InvalidVehicle(
-                        "one feed-port/resource group has inconsistent fluid properties".into(),
-                    ));
+                match (groups[group_index].fluid_properties, fluid_properties) {
+                    (None, None) => {}
+                    (Some(existing), Some(incoming))
+                        if existing.density_kg_m3.to_bits() == incoming.density_kg_m3.to_bits()
+                            && existing.viscosity_pa_s.to_bits()
+                                == incoming.viscosity_pa_s.to_bits()
+                            && existing.source_pressure_pa.to_bits()
+                                == incoming.source_pressure_pa.to_bits()
+                            && existing.resource == incoming.resource =>
+                    {
+                        if incoming.minimum_pressure_pa > existing.minimum_pressure_pa {
+                            groups[group_index].fluid_properties = Some(incoming);
+                        }
+                    }
+                    _ => {
+                        return Err(VehicleError::InvalidVehicle(
+                            "one feed-port/resource group has inconsistent fluid properties".into(),
+                        ));
+                    }
                 }
                 groups[group_index].demand_indices.push(demand_index);
             } else {
@@ -1827,8 +1847,9 @@ impl VehicleDefinition {
         };
         let mut accessible = vec![false; self.tanks.len()];
         let Some(assembly) = &self.assembly else {
-            accessible.fill(true);
-            return Ok(accessible);
+            return Err(VehicleError::InvalidVehicle(format!(
+                "feed port '{port_name}' needs an assembly with a matching engine feed port"
+            )));
         };
         let endpoint = assembly
             .engine_ports
@@ -1894,51 +1915,145 @@ impl VehicleDefinition {
 
     fn feed_fluid_properties(
         &self,
-        feed_port_name: Option<&str>,
+        consumer_name: &str,
+        explicit_port_name: Option<&str>,
+        resolved_port_name: Option<&str>,
         resource: StoredPropellant,
     ) -> Result<Option<FeedResourceProperties>, VehicleError> {
-        let Some(port_name) = feed_port_name else {
+        let Some(port_name) = resolved_port_name else {
             return Ok(None);
         };
-        let Some(route) = self
+        let route = self
             .resource_feed_ports
             .iter()
-            .find(|route| route.feed_port_name == port_name)
-        else {
-            if self.assembly.as_ref().is_some_and(|assembly| {
-                assembly.links.iter().any(|link| link.feed_line.is_some())
-                    || assembly
-                        .resource_edges
-                        .iter()
-                        .any(|edge| edge.feed_line.is_some())
-            }) {
-                return Err(VehicleError::InvalidVehicle(format!(
-                    "feed port '{port_name}' needs a resource route with fluid properties because the assembly contains feed lines"
-                )));
-            }
-            return Ok(None);
+            .find(|route| route.consumer_name == consumer_name);
+        let using_authored_route = route
+            .is_some_and(|route| explicit_port_name.is_none() && route.feed_port_name == port_name);
+        if using_authored_route {
+            let route = route.expect("authored route for consumer");
+            let Some(properties) = route
+                .fluid_properties
+                .iter()
+                .find(|properties| properties.resource == resource)
+                .copied()
+            else {
+                if self.port_path_requires_feed_line(port_name)? {
+                    return Err(VehicleError::InvalidVehicle(format!(
+                        "feed port '{port_name}' needs density, viscosity, and minimum-pressure data for {resource:?} because every reachable tank path crosses an authored feed line"
+                    )));
+                }
+                return Ok(None);
+            };
+            properties.validate()?;
+            return Ok(Some(properties));
+        }
+        if self.port_path_requires_feed_line(port_name)? {
+            return Err(VehicleError::InvalidVehicle(format!(
+                "feed port '{port_name}' for consumer '{consumer_name}' needs a resource route with fluid properties because every reachable tank path crosses an authored feed line"
+            )));
+        }
+        Ok(None)
+    }
+
+    /// True when every reachable tank path to the named engine port crosses
+    /// at least one authored feed line. An ideal-only path keeps the legacy
+    /// ideal crossfeed valid, so fluid properties stay optional.
+    fn port_path_requires_feed_line(&self, port_name: &str) -> Result<bool, VehicleError> {
+        let Some(assembly) = &self.assembly else {
+            return Ok(false);
         };
-        let Some(properties) = route
-            .fluid_properties
+        let Some(port) = assembly
+            .engine_ports
             .iter()
-            .find(|properties| properties.resource == resource)
-            .copied()
+            .find(|endpoint| endpoint.name == port_name)
         else {
-            if self.assembly.as_ref().is_some_and(|assembly| {
-                assembly.links.iter().any(|link| link.feed_line.is_some())
-                    || assembly
-                        .resource_edges
-                        .iter()
-                        .any(|edge| edge.feed_line.is_some())
-            }) {
-                return Err(VehicleError::InvalidVehicle(format!(
-                    "feed port '{port_name}' needs density, viscosity, and minimum-pressure data for {resource:?} because the assembly contains feed lines"
-                )));
-            }
-            return Ok(None);
+            return Err(VehicleError::InvalidVehicle(format!(
+                "assembly has no engine feed port named '{port_name}'"
+            )));
         };
-        properties.validate()?;
-        Ok(Some(properties))
+        let reachable_all = self.reachable_bodies_from_port(assembly, port.body, false)?;
+        let mut any_tank_reachable = false;
+        let mut ideal_tank_reachable = false;
+        if reachable_all.iter().any(|reachable| *reachable) {
+            let reachable_ideal = self.reachable_bodies_from_port(assembly, port.body, true)?;
+            for tank_endpoint in &assembly.tanks {
+                if reachable_all[tank_endpoint.body] {
+                    if self
+                        .tanks
+                        .iter()
+                        .any(|tank| tank.name == tank_endpoint.name)
+                    {
+                        any_tank_reachable = true;
+                    }
+                    if reachable_ideal[tank_endpoint.body] {
+                        ideal_tank_reachable = true;
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(any_tank_reachable && !ideal_tank_reachable)
+    }
+
+    fn reachable_bodies_from_port(
+        &self,
+        assembly: &crate::VehicleAssembly,
+        port_body: usize,
+        ideal_only: bool,
+    ) -> Result<Vec<bool>, VehicleError> {
+        if port_body >= assembly.body_names.len() {
+            return Err(VehicleError::InvalidVehicle(
+                "engine feed port body is out of range".into(),
+            ));
+        }
+        let mut reachable = vec![false; assembly.body_names.len()];
+        let mut stack = vec![port_body];
+        reachable[port_body] = true;
+        while let Some(body) = stack.pop() {
+            for link in &assembly.links {
+                if !link.state.resource_open() {
+                    continue;
+                }
+                if ideal_only && link.feed_line.is_some() {
+                    continue;
+                }
+                let neighbor = if link.state.a == body {
+                    Some(link.state.b)
+                } else if link.state.b == body {
+                    Some(link.state.a)
+                } else {
+                    None
+                };
+                if let Some(neighbor) = neighbor
+                    && !reachable[neighbor]
+                {
+                    reachable[neighbor] = true;
+                    stack.push(neighbor);
+                }
+            }
+            for edge in &assembly.resource_edges {
+                if !edge.open {
+                    continue;
+                }
+                if ideal_only && edge.feed_line.is_some() {
+                    continue;
+                }
+                let neighbor = if edge.a == body {
+                    Some(edge.b)
+                } else if edge.b == body {
+                    Some(edge.a)
+                } else {
+                    None
+                };
+                if let Some(neighbor) = neighbor
+                    && !reachable[neighbor]
+                {
+                    reachable[neighbor] = true;
+                    stack.push(neighbor);
+                }
+            }
+        }
+        Ok(reachable)
     }
 
     fn pressure_qualified_tanks(
@@ -2927,6 +3042,170 @@ mod tests {
             (500_000.0 - bracketed_drop_pa - 250_000.0).abs() < 0.1,
             "pressure root error exceeded the 32-step bracket"
         );
+    }
+
+    #[test]
+    fn fluid_properties_are_consumer_specific_on_a_shared_port() {
+        let resource = StoredPropellant::Nitrogen;
+        let vehicle = vehicle(
+            vec![tank(
+                "tank-body.reserve",
+                TankResource::Stored(resource),
+                1_000.0,
+                1.0,
+                DVec3::ZERO,
+            )],
+            0,
+        )
+        .with_assembly(VehicleAssembly {
+            root_body: 0,
+            body_names: vec!["tank-body".into(), "consumer-body".into()],
+            links: vec![NamedAssemblyLink {
+                name: "open-stack".into(),
+                state: AssemblyLinkState {
+                    a: 0,
+                    b: 1,
+                    hatch: false,
+                    open: true,
+                },
+                feed_line: None,
+            }],
+            resource_edges: Vec::new(),
+            joint_strengths: Vec::new(),
+            volumes: Vec::new(),
+            tanks: vec![AssemblyEndpoint {
+                name: "tank-body.reserve".into(),
+                body: 0,
+            }],
+            engine_ports: vec![AssemblyEndpoint {
+                name: "shared.port".into(),
+                body: 1,
+            }],
+        })
+        .expect("shared-port assembly")
+        .with_resource_feed_ports(vec![
+            VehicleResourceFeedPort {
+                consumer_name: "pump-a".into(),
+                feed_port_name: "shared.port".into(),
+                fluid_properties: vec![FeedResourceProperties {
+                    resource,
+                    density_kg_m3: 1_000.0,
+                    viscosity_pa_s: 0.001,
+                    source_pressure_pa: 500_000.0,
+                    minimum_pressure_pa: 100_000.0,
+                }],
+            },
+            VehicleResourceFeedPort {
+                consumer_name: "pump-b".into(),
+                feed_port_name: "shared.port".into(),
+                fluid_properties: vec![FeedResourceProperties {
+                    resource,
+                    density_kg_m3: 1_000.0,
+                    viscosity_pa_s: 0.001,
+                    source_pressure_pa: 500_000.0,
+                    minimum_pressure_pa: 200_000.0,
+                }],
+            },
+        ])
+        .expect("consumer-specific routes");
+        let state = vehicle.initial_resource_state();
+        let plan = vehicle
+            .plan_resource_flows(
+                &state,
+                &[
+                    VehicleResourceDemand::new("pump-a", resource, 0.1),
+                    VehicleResourceDemand::new("pump-b", resource, 0.1),
+                ],
+                0.1,
+            )
+            .expect("shared-port plan uses per-consumer properties");
+        assert_eq!(plan.consumers.len(), 2);
+        assert_eq!(plan.consumers[0].scale, 1.0);
+        assert_eq!(plan.consumers[1].scale, 1.0);
+    }
+
+    #[test]
+    fn ideal_path_keeps_legacy_routing_when_other_branches_have_lines() {
+        let resource = StoredPropellant::Nitrogen;
+        let feed_line = FeedLine {
+            diameter_m: 0.01,
+            length_m: 10.0,
+            bends: 1,
+            rated_pressure_pa: 1.0e6,
+            material: ChamberMaterial::nickel_superalloy(),
+        };
+        let vehicle = vehicle(
+            vec![tank(
+                "tank-body.reserve",
+                TankResource::Stored(resource),
+                1_000.0,
+                1.0,
+                DVec3::ZERO,
+            )],
+            0,
+        )
+        .with_assembly(VehicleAssembly {
+            root_body: 0,
+            body_names: vec![
+                "tank-body".into(),
+                "ideal-consumer".into(),
+                "lined-consumer".into(),
+            ],
+            links: vec![
+                NamedAssemblyLink {
+                    name: "ideal-stack".into(),
+                    state: AssemblyLinkState {
+                        a: 0,
+                        b: 1,
+                        hatch: false,
+                        open: true,
+                    },
+                    feed_line: None,
+                },
+                NamedAssemblyLink {
+                    name: "lined-stack".into(),
+                    state: AssemblyLinkState {
+                        a: 0,
+                        b: 2,
+                        hatch: false,
+                        open: true,
+                    },
+                    feed_line: Some(feed_line),
+                },
+            ],
+            resource_edges: Vec::new(),
+            joint_strengths: Vec::new(),
+            volumes: Vec::new(),
+            tanks: vec![AssemblyEndpoint {
+                name: "tank-body.reserve".into(),
+                body: 0,
+            }],
+            engine_ports: vec![
+                AssemblyEndpoint {
+                    name: "ideal.port".into(),
+                    body: 1,
+                },
+                AssemblyEndpoint {
+                    name: "lined.port".into(),
+                    body: 2,
+                },
+            ],
+        })
+        .expect("branched assembly")
+        .with_resource_feed_ports(vec![VehicleResourceFeedPort {
+            consumer_name: "ideal-pump".into(),
+            feed_port_name: "ideal.port".into(),
+            fluid_properties: Vec::new(),
+        }])
+        .expect("ideal route without properties");
+        let state = vehicle.initial_resource_state();
+        vehicle
+            .plan_resource_flows(
+                &state,
+                &[VehicleResourceDemand::new("ideal-pump", resource, 0.5)],
+                0.1,
+            )
+            .expect("ideal path stays legacy despite lines elsewhere");
     }
 
     #[test]

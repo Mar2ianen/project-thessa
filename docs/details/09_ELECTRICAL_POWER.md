@@ -127,10 +127,13 @@ requested powers.
 
 Available solar, auxiliary-generator, reactor, and fuel-cell generation serve
 loads before storage discharges (in that source order).
-Unused solar generation charges storage first; unused requested reactor
-capacity can charge any remaining storage capacity. Charge and discharge are
-bounded by per-store limits, and excess generated solar power is reported as
-spill. Unsupplied requested power is reported per consumer and as a total.
+Unused generation charges storage in the same source order: solar surplus
+first, then auxiliary-generator surplus, then reactor surplus, then fuel-cell
+surplus. Each stage is bounded by remaining per-store charge limits. Excess
+generated solar and auxiliary power that cannot charge or serve load is
+reported as spill; fuel-cell and reactor output only burns fuel to serve load
+plus accepted charge, so unburned capacity is simply not burned. Unsupplied
+requested power is reported per consumer and as a total.
 Fold and sun-tracking actuators join the bus as utility loads with their
 authored power draws.
 
@@ -151,10 +154,15 @@ The optional `[electrical_power]` table contains `[[electrical_power.batteries]]
 `[[electrical_power.ultracapacitors]]`, `[[electrical_power.solar_arrays]]`,
 `[[electrical_power.reactors]]`, `[[electrical_power.fuel_cells]]`, and
 `[[electrical_power.consumers]]`. A fuel cell may specify `feed_port_name` to
-restrict hydrogen/LOX reachability; generic consumers can be routed through
-top-level `[[resource_feed_ports]]`. APUs are authored separately through
-top-level `[[auxiliary_power_units]]` and their actual generator output joins
-the same bus. A single-axis tracking drive is an optional
+restrict hydrogen/LOX reachability; an installed APU mount may specify
+`feed_port_name` for its jet-fuel reachability; generic consumers can be routed
+through top-level `[[resource_feed_ports]]`. APUs are authored separately
+through top-level `[[auxiliary_power_units]]` and their actual generator output
+joins the same bus only through the manual chain
+`plan_auxiliary_power_units` → `auxiliary_generation_power_w` →
+`advance_electrical_power_with_demands` plus `commit_resource_flows`; the bus
+never invents APU power on its own, and a positive auxiliary input with no
+installed APU or fitted jet generator fails closed. A single-axis tracking drive is an optional
 `[electrical_power.solar_arrays.tracking]`
 sub-table with rotation axis, angle limits, slew rate, actuator power, and
 initial angle; omitting it means fixed. The complete parameterized example is

@@ -5,6 +5,8 @@ use glam::DVec3;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::aero_residual::AeroResidualTable;
+
 const EPS_SPEED_MPS: f64 = 1.0e-9;
 
 /// Freestream properties expressed in the vehicle body frame.
@@ -906,19 +908,36 @@ impl AeroCoefficientTable {
         alpha_grid_rad: Vec<f64>,
         samples: Vec<AeroCoefficients>,
     ) -> Result<Self, AeroError> {
-        if mach_grid.is_empty() || alpha_grid_rad.is_empty() {
+        let table = Self {
+            mach_grid,
+            alpha_grid_rad,
+            samples,
+        };
+        table.validate()?;
+        Ok(table)
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), AeroError> {
+        if self.mach_grid.is_empty() || self.alpha_grid_rad.is_empty() {
             return Err(AeroError::InvalidModel(
                 "coefficient table needs non-empty Mach and alpha grids".into(),
             ));
         }
-        if samples.len() != mach_grid.len() * alpha_grid_rad.len() {
+        let expected_samples = self
+            .mach_grid
+            .len()
+            .checked_mul(self.alpha_grid_rad.len())
+            .ok_or_else(|| {
+                AeroError::InvalidModel("coefficient table grid extents overflow".into())
+            })?;
+        if self.samples.len() != expected_samples {
             return Err(AeroError::InvalidModel(
                 "coefficient table sample count does not match its grids".into(),
             ));
         }
-        validate_grid(&mach_grid, "Mach")?;
-        validate_grid(&alpha_grid_rad, "alpha")?;
-        if samples.iter().any(|sample| {
+        validate_grid(&self.mach_grid, "Mach")?;
+        validate_grid(&self.alpha_grid_rad, "alpha")?;
+        if self.samples.iter().any(|sample| {
             !sample.lift.is_finite()
                 || !sample.drag.is_finite()
                 || !sample.side_force.is_finite()
@@ -928,16 +947,12 @@ impl AeroCoefficientTable {
                 "coefficient table contains a non-finite sample".into(),
             ));
         }
-        if samples.iter().any(|sample| sample.drag < 0.0) {
+        if self.samples.iter().any(|sample| sample.drag < 0.0) {
             return Err(AeroError::InvalidModel(
                 "coefficient table contains negative drag".into(),
             ));
         }
-        Ok(Self {
-            mach_grid,
-            alpha_grid_rad,
-            samples,
-        })
+        Ok(())
     }
 
     pub fn sample(&self, mach: f64, alpha_rad: f64) -> AeroCoefficients {
@@ -1320,6 +1335,7 @@ fn parked_load(lane: &LaneFlow) -> AeroPanelLoad {
 pub struct PanelAeroModel {
     pub config: AeroConfig,
     pub coefficient_table: Option<AeroCoefficientTable>,
+    residual_coefficient_table: Option<AeroResidualTable>,
 }
 
 impl PanelAeroModel {
@@ -1328,6 +1344,7 @@ impl PanelAeroModel {
         Ok(Self {
             config,
             coefficient_table: None,
+            residual_coefficient_table: None,
         })
     }
 
@@ -1339,7 +1356,27 @@ impl PanelAeroModel {
         Ok(Self {
             config,
             coefficient_table: Some(coefficient_table),
+            residual_coefficient_table: None,
         })
+    }
+
+    /// Build a table-backed panel model that samples a bounded residual
+    /// coefficient field directly without expanding it back to f64 storage.
+    pub fn from_residual_table(
+        config: AeroConfig,
+        coefficient_table: AeroResidualTable,
+    ) -> Result<Self, AeroError> {
+        config.validate()?;
+        Ok(Self {
+            config,
+            coefficient_table: None,
+            residual_coefficient_table: Some(coefficient_table),
+        })
+    }
+
+    /// Borrow the packed coefficient table when this model uses one.
+    pub fn residual_coefficient_table(&self) -> Option<&AeroResidualTable> {
+        self.residual_coefficient_table.as_ref()
     }
 
     /// Evaluate panel forces and retain each panel load for mechanism and
@@ -1731,7 +1768,7 @@ impl PanelAeroModel {
         record_panel_loads: bool,
         scratch: &mut AeroSimdScratch,
     ) -> Result<AeroResult, AeroError> {
-        if self.coefficient_table.is_some() {
+        if self.coefficient_table.is_some() || self.residual_coefficient_table.is_some() {
             return self.evaluate_soa_parts(state, environment, panels, record_panel_loads);
         }
         state.validate()?;
@@ -2083,9 +2120,18 @@ impl PanelAeroModel {
         beta: f64,
         control_deflection: f64,
     ) -> AeroCoefficients {
-        if let Some(table) = &self.coefficient_table {
-            let alpha_eff = alpha + self.config.control_effectiveness * control_deflection;
-            let mut coefficients = table.sample(mach, alpha_eff);
+        let alpha_eff = alpha + self.config.control_effectiveness * control_deflection;
+        let table_coefficients = self
+            .residual_coefficient_table
+            .as_ref()
+            .map(|table| table.sample(mach, alpha_eff))
+            .or_else(|| {
+                self.coefficient_table
+                    .as_ref()
+                    .map(|table| table.sample(mach, alpha_eff))
+            });
+
+        if let Some(mut coefficients) = table_coefficients {
             coefficients.lift *= panel.lift_coefficient_sign;
             coefficients.side_force += self.config.side_force_slope_per_rad * beta;
             coefficients.side_force *= panel.side_force_scale;

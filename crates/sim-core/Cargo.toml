@@ -111,3 +111,7 @@ harness = false
 [[bench]]
 name = "resource_routing"
 harness = false
+
+[[bench]]
+name = "aero_residual"
+harness = false

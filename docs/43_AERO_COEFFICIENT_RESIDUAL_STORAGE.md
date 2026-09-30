@@ -1,6 +1,55 @@
 # 43 — Bounded residual storage for aerodynamic coefficient fields
 
-Status: **design / prototype target**.
+Status: **experimental scalar prototype; not the production default**.
+
+Implemented behavior:
+
+- scalar CPU reference `AeroResidualTable` implemented beside the canonical
+  `AeroCoefficientTable`;
+- 4x4 Mach/alpha tiles use a bilinear f64 corner predictor with independent
+  per-coefficient residual scales;
+- cheapest-first `Residual4 -> Residual6 -> Residual8 -> Residual16 -> Raw64`
+  selection is measured against explicit per-coefficient max-absolute-error
+  budgets;
+- payload is contiguous across tiles; edge-partial tiles and canonical
+  clamping/bilinear sampling semantics are covered;
+- encoding revalidates canonical table grids and samples (including tables
+  mutated through their public fields or deserialized), and non-finite Mach or
+  alpha queries clamp to the same low endpoint as canonical sampling;
+- decoded drag is clamped to the canonical table's non-negative domain before
+  interpolation; because source drag is non-negative, this projection cannot
+  increase its absolute coefficient error;
+- `sample_with_error` returns a local interpolation-safe coefficient envelope
+  from the four contributing tile bounds; `AeroCoefficientError::physical_bound`
+  converts it into conservative force and moment envelopes using
+  q/S/c/moment-arm inputs;
+- `AeroPhysicalBudget` provides a conservative first policy for encoding from
+  declared worst-case force/moment limits by deriving one uniform coefficient
+  epsilon, then reusing the adaptive codec ladder;
+- `PanelAeroModel::from_residual_table` samples the packed table directly; the
+  table-backed SIMD fast path correctly falls back to the scalar table oracle
+  instead of expanding the table;
+- unit tests cover adaptive selection, interpolation-space error, odd extents,
+  zero-budget fallback, malformed-table and non-finite-query guards,
+  non-negative decoded drag, physical error conversion, packed signed-code
+  round trips, and end-to-end panel force/moment bounds;
+- `aero_residual` benchmark reports storage density plus scalar
+  decode/interpolation overhead on a 257x257 synthetic stall/transonic field.
+
+The release benchmark on 2026-09-28 (AMD Ryzen 7 8745H, x86_64) measured
+2,064 KiB for the canonical table and 1,167 KiB logical resident storage for
+the residual table (1.77x smaller). That dated run measured scalar sampling at
+87.0 ns/sample versus 55.2 ns/sample for the canonical table (1.58x slower).
+Three single-pass reruns on 2026-09-30 reproduced the storage ratio and measured
+69.7–80.6 ns/sample for residual sampling versus 33.2–41.9 ns/sample canonical
+(1.77–2.10x slower). These timings are descriptive, not a stable performance
+baseline: the small number of one-pass runs is sensitive to execution order
+and machine load. They consistently show that scalar residual sampling is
+slower, so this demonstrates a storage tradeoff, not a runtime speedup. The
+residual path remains experimental and is not the default.
+
+Still open: channel-specific physical budget allocation, AVX2/AVX-512 fused
+decode, real VLM/CFD fixtures, and higher-dimensional coefficient fields.
 
 This document applies the same local-reference / bounded-residual principle used
 by surface microstorage and ephemeris residual storage to aerodynamic coefficient
@@ -499,14 +548,14 @@ The physical regression is the merge gate.
 
 ---
 
-## 13. Prototype plan
+## 13. Prototype implementation and remaining plan
 
-### Phase A — scalar storage transform
+### Phase A — scalar storage transform (implemented)
 
-Implement a reference `AeroResidualTable` beside the current
-`AeroCoefficientTable`.
+The reference `AeroResidualTable` lives beside the canonical
+`AeroCoefficientTable` in `thessa-aero-core`.
 
-Start with:
+It includes:
 
 - 4x4 Mach-alpha tiles;
 - bilinear predictor;
@@ -516,26 +565,26 @@ Start with:
 - deterministic encoding;
 - exact current table as the oracle.
 
-### Phase B — adaptive codec ladder
+### Phase B — adaptive codec ladder (implemented)
 
-Add:
+The encoder provides:
 
 - lower-bit candidate(s), initially R4/R6;
 - cheapest-first selection under declared coefficient error bounds;
 - tile statistics and byte accounting;
 - special coverage for stall/transonic tiles.
 
-### Phase C — physical error budgeting
+### Phase C — physical error budgeting (implemented baseline)
 
-For each tile/codec rung:
+For each tile/codec rung, the scalar reference:
 
-- convert coefficient error to force/moment bounds;
-- reject representations that exceed the configured physical envelope;
-- prove runtime interpolation does not exceed the stored/developed bound.
+- converts coefficient error to force/moment bounds;
+- rejects representations that exceed the configured physical envelope;
+- bounds runtime interpolation using the four contributing tile bounds.
 
-### Phase D — SIMD decode
+### Phase D — SIMD decode (future work)
 
-Implement:
+The future SIMD implementation must provide:
 
 - AVX2 baseline;
 - optional AVX-512 path;

@@ -7,9 +7,11 @@
 #![forbid(unsafe_code)]
 
 pub use thessa_aero_core::{
-    AeroBluntDisc, AeroCase, AeroCoefficientTable, AeroCoefficients, AeroConfig, AeroDiscLoad,
-    AeroEnvironment, AeroError, AeroForceBreakdown, AeroGeometry, AeroModel, AeroPanel,
-    AeroPanelLoad, AeroResult, AeroSimdScratch, AeroState, AtmosphereComposition, AtmosphereConfig,
+    AERO_RESIDUAL_TILE_EDGE, AeroBluntDisc, AeroCase, AeroCoefficientError, AeroCoefficientTable,
+    AeroCoefficients, AeroConfig, AeroDiscLoad, AeroEnvironment, AeroError, AeroForceBreakdown,
+    AeroGeometry, AeroModel, AeroPanel, AeroPanelLoad, AeroPhysicalBudget, AeroPhysicalErrorBound,
+    AeroResidualBudget, AeroResidualCodec, AeroResidualStats, AeroResidualTable, AeroResidualTile,
+    AeroResult, AeroSimdScratch, AeroState, AtmosphereComposition, AtmosphereConfig,
     AtmosphereError, AtmosphereSample, BOOM_ANCHOR_PSF, BOOM_OVERPRESSURE_GAIN, BakedAtmosphere,
     BoomCarpet, GasKind, HighSpeedError, PanelAeroModel, PanelSoA, boom_carpet, buffet_fluctuation,
     buffet_gain, diederich_lift_slope, evaluate_batch, vapor_cone_active,

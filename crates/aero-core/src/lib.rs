@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 mod aero;
+mod aero_residual;
 mod atmosphere;
 mod high_speed;
 
@@ -12,6 +13,10 @@ pub use aero::{
     AeroEnvironment, AeroError, AeroForceBreakdown, AeroGeometry, AeroModel, AeroPanel,
     AeroPanelLoad, AeroResult, AeroSimdScratch, AeroState, PanelAeroModel, PanelSoA,
     diederich_lift_slope, evaluate_batch,
+};
+pub use aero_residual::{
+    AERO_RESIDUAL_TILE_EDGE, AeroCoefficientError, AeroPhysicalBudget, AeroPhysicalErrorBound,
+    AeroResidualBudget, AeroResidualCodec, AeroResidualStats, AeroResidualTable, AeroResidualTile,
 };
 pub use atmosphere::{
     AtmosphereComposition, AtmosphereConfig, AtmosphereError, AtmosphereSample, BakedAtmosphere,

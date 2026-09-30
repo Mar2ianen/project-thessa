@@ -36,7 +36,9 @@ The checked-in vertical slice currently contains:
   and a lumped thermal-node network with conduction links and area radiators. The
   implementation is separated into `thessa-aero-core`,
   `thessa-celestial`, `thessa-trajectory`, `thessa-propulsion`, and
-  `thessa-vehicle-core`;
+  `thessa-vehicle-core`; `thessa-aero-core` also provides an experimental
+  packed residual table path with coefficient-to-force error bounds, while
+  canonical f64 tables and analytic aerodynamics remain available;
 - `thessa-aero-surfaces`, `thessa-fuselage`, and `thessa-vehicle-baker`:
   procedural lifting-surface/body compilers, interior-volume and mass
   properties, cabin layouts and presets, static exits, controls, and assembled

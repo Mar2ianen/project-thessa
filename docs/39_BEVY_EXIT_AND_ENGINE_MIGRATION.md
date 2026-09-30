@@ -2,7 +2,7 @@
 
 **Status:** Active migration  
 **Language:** English  
-**Updated:** 2026-09-18  
+**Updated:** 2026-09-18
 **Review snapshot:** repository architecture known through the full-stack merge (`main` past `40aed83`), plus renderer/RCBT/Vulkan decisions made through 2026-09-16.
 
 > This document is intentionally operational. The goal is to stop adding Bevy-specific work that will have to be rewritten during the engine extraction.

@@ -13,7 +13,7 @@
 //! the renderer supplies illumination. Rivers/lakes at texel scale are
 //! omitted; hydro data stays authoritative in baked reports.
 
-use crate::{appearance::surface_appearance, field::PlanetField, sphere::dir_from_latlon};
+use crate::{appearance::surface_appearance_filtered, field::PlanetField, sphere::dir_from_latlon};
 
 /// Render an equirect client texture (2:1) from the field.
 /// `min_wavelength_m` selects texture detail (erosion-free by design).
@@ -26,6 +26,19 @@ pub fn render_client_texture(
     height: usize,
     min_wavelength_m: f64,
 ) -> Result<(Vec<u8>, Vec<f64>), String> {
+    let (rgb, heights, _) = render_client_material(field, width, height, min_wavelength_m)?;
+    Ok((rgb, heights))
+}
+
+/// Packed sRGB, geometry-prefix heights and canonical material roughness.
+type ClientMaterialRaster = (Vec<u8>, Vec<f64>, Vec<u8>);
+
+fn render_client_material(
+    field: &PlanetField,
+    width: usize,
+    height: usize,
+    min_wavelength_m: f64,
+) -> Result<ClientMaterialRaster, String> {
     if width == 0 || height == 0 || width > 4096 || height > 2048 {
         return Err("in-memory render capped at 4096x2048; stream larger sizes".into());
     }
@@ -35,31 +48,18 @@ pub fn render_client_texture(
     // Pass 1: heights + biome colors.
     let mut heights = vec![0.0; width * height];
     let mut colors: Vec<(u8, u8, u8)> = vec![(0, 0, 0); width * height];
+    let mut roughness = vec![0; width * height];
     for r in 0..height {
-        let lat = 90.0 - (r as f64 + 0.5) * (180.0 / height as f64);
         for c in 0..width {
             // Bevy-sphere convention: u=0 at lon 0.
-            let lon = (c as f64 + 0.5) * (360.0 / width as f64);
-            let lon = if lon > 180.0 { lon - 360.0 } else { lon };
-            let dir = dir_from_latlon(lat, lon);
-            let s = field.sample_surface(dir, min_wavelength_m);
-            heights[r * width + c] = s.height_m;
-            colors[r * width + c] = texel_color(field, &s, dir);
+            let (h, rgb, alpha) = sample_texel(field, width, height, r, c, min_wavelength_m);
+            heights[r * width + c] = h;
+            colors[r * width + c] = rgb;
+            roughness[r * width + c] = alpha;
         }
     }
     let rgb = colors.into_iter().flat_map(|(r, g, b)| [r, g, b]).collect();
-    Ok((rgb, heights))
-}
-
-fn texel_color(
-    field: &PlanetField,
-    s: &crate::field::TerrainSample,
-    dir: [f64; 3],
-) -> (u8, u8, u8) {
-    let rgb = surface_appearance(field, s, dir)
-        .albedo_srgb
-        .map(|v| (v * 255.0).round() as u8);
-    (rgb[0], rgb[1], rgb[2])
+    Ok((rgb, heights, roughness))
 }
 
 /// Encode 8-bit RGB to PNG bytes (sRGB) via the streaming encoder.
@@ -84,6 +84,7 @@ mod tests {
     fn test_field() -> PlanetField {
         PlanetField::build(
             PlanetParams {
+                surface_climate: crate::climate::SurfaceClimate::default(),
                 name: "t".into(),
                 seed: 77,
                 radius_m: 3_200_000.0,
@@ -162,7 +163,7 @@ fn sample_texel(
     r: usize,
     c: usize,
     min_wavelength_m: f64,
-) -> (f64, (u8, u8, u8)) {
+) -> (f64, (u8, u8, u8), u8) {
     let lat = 90.0 - (r as f64 + 0.5) * (180.0 / height as f64);
     let lon_raw = (c as f64 + 0.5) * (360.0 / width as f64);
     let lon = if lon_raw > 180.0 {
@@ -171,8 +172,21 @@ fn sample_texel(
         lon_raw
     };
     let dir = dir_from_latlon(lat, lon);
-    let s = field.sample_surface(dir, min_wavelength_m);
-    (s.height_m, texel_color(field, &s, dir))
+    let (prefix, macro_h) = field.height_prefix_m(dir);
+    let h = field.height_from_prefix(dir, prefix, macro_h, min_wavelength_m);
+    // Classification uses the same canonical 32 m source as local pages.
+    // The map's representation scale filters appearance, not the coastline.
+    let mut sample = field.sample_surface_from_prefix(dir, prefix, macro_h, 32.0);
+    sample.slope_hint = field.slope_hint_from_macro(dir, 256.0, macro_h);
+    let texel_m = (std::f64::consts::PI * field.params.radius_m / height as f64)
+        .max(std::f64::consts::TAU * field.params.radius_m * lat.to_radians().cos() / width as f64);
+    let material = surface_appearance_filtered(field, &sample, dir, texel_m);
+    let rgb = material.albedo_srgb.map(|v| (v * 255.0).round() as u8);
+    (
+        h,
+        (rgb[0], rgb[1], rgb[2]),
+        (material.roughness * 255.0).round() as u8,
+    )
 }
 
 /// Stream albedo to the caller's writer with O(width) row storage plus a
@@ -222,7 +236,7 @@ impl Iterator for RowStream<'_> {
         }
         let mut row = Vec::with_capacity(self.width * 3);
         for c in 0..self.width {
-            let (_, (r, g, b)) = sample_texel(
+            let (_, (r, g, b), _) = sample_texel(
                 self.field,
                 self.width,
                 self.height,
@@ -246,7 +260,8 @@ pub fn write_client_maps(
     min_wl: f64,
     directory: &std::path::Path,
 ) -> Result<(), String> {
-    let (albedo, heights) = render_client_texture(field, width, height, min_wl)?;
+    let (albedo, heights, material_roughness) =
+        render_client_material(field, width, height, min_wl)?;
     let mut normals = vec![0_u8; width * height * 3];
     let mut roughness = vec![0_u8; width * height * 3];
     for r in 0..height {
@@ -277,7 +292,7 @@ pub fn write_client_maps(
             }
             // glTF/Bevy roughness is green, metallic blue. Non-metals throughout.
             roughness[o] = 255;
-            roughness[o + 1] = if h < 0.0 { 60 } else { 230 };
+            roughness[o + 1] = material_roughness[r * width + c];
             roughness[o + 2] = 0;
         }
     }
@@ -290,7 +305,9 @@ pub fn write_client_maps(
         let bytes = encode_png_rgb(width, height, &rgb)?;
         std::fs::write(directory.join(format!("{name}.png")), bytes).map_err(|e| e.to_string())?;
     }
-    let metadata = serde_json::json!({"generator":"Thessa rocky field v3", "seed":field.params.seed,
+    let metadata = serde_json::json!({"generator":"Thessa canonical field v4", "seed":field.params.seed,
+        "surface_climate":field.params.surface_climate,"material_classification_wavelength_m":32.0,
+        "appearance_filter":"physical_texel_spectral_cutoff","roughness":"canonical_surface_appearance",
         "radius_m":field.params.radius_m,"sea_offset_m":field.sea_offset_m,"width":width,"height":height,
         "min_wavelength_m":min_wl,"sunlight_baked":false,"license":"GPL-3.0-or-later"});
     std::fs::write(
@@ -309,6 +326,7 @@ mod map_tests {
     fn test_field() -> PlanetField {
         PlanetField::build(
             PlanetParams {
+                surface_climate: crate::climate::SurfaceClimate::default(),
                 name: "t".into(),
                 seed: 77,
                 radius_m: 3_200_000.0,
@@ -377,6 +395,25 @@ mod map_tests {
         let (b, _) = render_client_texture(&field, 48, 24, 4000.0).expect("b");
         assert_eq!(a, b);
     }
+
+    #[test]
+    fn global_material_does_not_reclassify_the_coast_at_geometry_wavelength() {
+        let field = test_field();
+        let (coarse, coarse_heights, coarse_roughness) =
+            render_client_material(&field, 72, 36, 8000.0).unwrap();
+        let (fine, fine_heights, fine_roughness) =
+            render_client_material(&field, 72, 36, 32.0).unwrap();
+        assert_eq!(coarse, fine);
+        assert_eq!(coarse_roughness, fine_roughness);
+        assert_ne!(
+            coarse_heights, fine_heights,
+            "geometry still retains its LOD prefix"
+        );
+        assert!(
+            coarse_roughness.iter().any(|v| *v > 100 && *v < 230),
+            "ice/coast roughness must not collapse to binary constants"
+        );
+    }
 }
 #[cfg(test)]
 mod stream_tests {
@@ -387,6 +424,7 @@ mod stream_tests {
     fn streaming_matches_in_memory_render() {
         let field = PlanetField::build(
             PlanetParams {
+                surface_climate: crate::climate::SurfaceClimate::default(),
                 name: "t".into(),
                 seed: 77,
                 radius_m: 3_200_000.0,

@@ -263,6 +263,22 @@ This is a design bias, not a hard rule.
 
 ## 9. Surface / geology language
 
+### Reconstruction clarification — 2026-10-02
+
+On this old water-bearing captured world, impact structures are inherited
+geology degraded by erosion, sediment infill, glaciation and flooding, not
+mandatory fresh-crater navigation landmarks. Do not move drowned craters to
+land just to make them prominent. Prioritize mountain arcs, rifts, plateaus,
+volcanic provinces, glaciated coasts and island chains. Complete wetlands,
+rivers, floodplains, deltas and sedimentary lowlands rather than removing them.
+Vegetation and inhabited-world infrastructure follow the terrain/hydrology
+contract in `tools/worldgen-rocky/README.md`, including the approximately
+150 million population design target. These are not yet completed city or
+vegetation render systems.
+
+The reconstruction checkpoint is recorded in doc 48. `data/system.toml`
+remains authoritative; the stellar proposal above is not applied.
+
 Thessa must remain recognizable when the global map is shrunk to 480×270.
 
 The planet should contain several enormous features deliberately, not only noise.
@@ -289,7 +305,7 @@ Generate at least:
 - 1 visually obvious rift/canyon system: `~600–1400 km`;
 - 1 dark volcanic province: `~400–900 km`;
 - 2–4 major shield/caldera complexes;
-- 5–12 very large recognizable craters;
+- 5–12 inherited impact structures, potentially eroded, buried or flooded;
 - 1 large dry plateau / salt-basin complex;
 - 1 highly glaciated mountain/coastal region;
 - multiple archipelagos.

@@ -19,6 +19,18 @@ pub enum WaterClass {
     Ice,
 }
 
+/// Regional wetland suitability, not a water surface or a local flood solver.
+/// Shallow retained water and convergent drainage favour saturation; steep
+/// slopes, deep lakes and dry climate suppress it. Inputs are terrain-derived.
+pub fn wetland_potential01(slope: f64, depression_m: f64, catchment_m2: f64, aridity: f64) -> f64 {
+    let smooth = crate::appearance::smooth;
+    let flat = 1.0 - smooth(0.002, 0.02, slope);
+    let shallow = smooth(0.5, 5.0, depression_m) * (1.0 - smooth(30.0, 60.0, depression_m));
+    let drainage = smooth(1.0e10, 1.0e11, catchment_m2);
+    let wet = 1.0 - smooth(0.35, 0.65, aridity);
+    flat * shallow.max(drainage) * wet
+}
+
 /// Simple height grid with geographic extent.
 #[derive(Debug, Clone)]
 pub struct HeightGrid {
@@ -277,6 +289,16 @@ fn trace_river(grid: &HeightGrid, out: &mut [Vec<WaterClass>], mut r: usize, mut
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wetland_support_requires_water_retention_or_drainage_and_gentle_wet_ground() {
+        assert_eq!(wetland_potential01(0.0, 0.0, 0.0, 0.2), 0.0);
+        assert_eq!(wetland_potential01(0.0, 10.0, 0.0, 0.2), 1.0);
+        assert_eq!(wetland_potential01(0.0, 0.0, 1.0e11, 0.2), 1.0);
+        assert_eq!(wetland_potential01(0.1, 10.0, 1.0e11, 0.2), 0.0);
+        assert_eq!(wetland_potential01(0.0, 10.0, 1.0e11, 0.9), 0.0);
+        assert_eq!(wetland_potential01(0.0, 100.0, 0.0, 0.2), 0.0);
+    }
 
     fn cone_grid() -> HeightGrid {
         // 7x7 cone peak at center, ocean ring outside.

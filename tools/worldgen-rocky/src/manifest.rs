@@ -19,6 +19,8 @@ pub struct Manifest {
     #[serde(default)]
     pub climate: ClimateRecipe,
     #[serde(default)]
+    pub geothermal: crate::geothermal::ProvinceRecipe,
+    #[serde(default)]
     pub readability: ReadabilityRecipe,
     /// Plate boundaries (tectonics-lite). Empty = no tectonic uplift.
     #[serde(default)]
@@ -93,6 +95,8 @@ impl Default for TerrainRecipe {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClimateRecipe {
+    #[serde(default)]
+    pub surface: crate::climate::SurfaceClimate,
     pub polar_extent: f64,
     pub aridity: f64,
     pub glaciation: f64,
@@ -107,6 +111,7 @@ pub struct ClimateRecipe {
 impl Default for ClimateRecipe {
     fn default() -> Self {
         Self {
+            surface: crate::climate::SurfaceClimate::default(),
             polar_extent: 0.15,
             aridity: 0.4,
             glaciation: 0.2,
@@ -165,6 +170,8 @@ pub const CANONICAL_LAYERS: [&str; 7] = [
 ];
 
 pub fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
+    manifest.geothermal.validate()?;
+    manifest.climate.surface.validate()?;
     if manifest.planet.kind.trim().to_lowercase() != "rocky" {
         return Err(format!(
             "planet kind must be \"rocky\" for this tool, got {:?}",

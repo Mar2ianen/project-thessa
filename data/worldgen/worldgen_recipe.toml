@@ -31,6 +31,8 @@ glaciation = 0.20
 roughness_macro = 0.42
 
 [climate_proxy]
+# Area-mean temperature of the static worldgen proxy, not flight atmosphere.
+target_mean_temperature_k = 278.0
 nereid_facing_ocean_bias = 0.22
 anti_nereid_continentality_bias = 0.18
 polar_cooling_strength = 0.70
@@ -108,6 +110,8 @@ count_min = 5
 count_max = 12
 diameter_km_min = 80.0
 diameter_km_max = 450.0
+depth_km_min = 1.0
+depth_km_max = 4.0
 central_peak_probability = 0.65
 ejecta = true
 
@@ -116,6 +120,8 @@ kind = "dry_plateau_salt_basin_complex"
 count = 1
 diameter_km_min = 400.0
 diameter_km_max = 1000.0
+height_km_min = 2.0
+height_km_max = 5.0
 prefer_anti_nereid = true
 aridity_bias = 0.9
 landmark_priority = 0.8

@@ -11,6 +11,52 @@
 
 use crate::hydro::{HeightGrid, WaterClass};
 
+/// Recipe-controlled climate proxy, not atmospheric flight physics or a GCM.
+/// Missing settings reproduce the legacy temperature field.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SurfaceClimate {
+    pub target_mean_temperature_k: Option<f64>,
+    pub polar_cooling_strength: f64,
+    pub elevation_cooling_strength: f64,
+    pub eclipse_cooling_strength: f64,
+    pub geothermal_local_warming_strength: f64,
+}
+
+impl Default for SurfaceClimate {
+    fn default() -> Self {
+        Self {
+            target_mean_temperature_k: None,
+            polar_cooling_strength: 1.0,
+            elevation_cooling_strength: 1.0,
+            eclipse_cooling_strength: 0.28,
+            geothermal_local_warming_strength: 0.0,
+        }
+    }
+}
+
+impl SurfaceClimate {
+    pub fn validate(self) -> Result<(), String> {
+        if self
+            .target_mean_temperature_k
+            .is_some_and(|v| !v.is_finite() || v <= 0.0)
+        {
+            return Err("climate target mean temperature must be finite and positive".into());
+        }
+        for strength in [
+            self.polar_cooling_strength,
+            self.elevation_cooling_strength,
+            self.eclipse_cooling_strength,
+            self.geothermal_local_warming_strength,
+        ] {
+            if !strength.is_finite() || !(0.0..=1.0).contains(&strength) {
+                return Err("climate proxy strengths must be finite within 0..=1".into());
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Sub-Nereid longitude for a synchronously rotating moon: faces the giant.
 /// Convention: lon 0 faces Nereid; anti-Nereid side is lon +/-180.
 pub const SUB_NEREID_LON_DEG: f64 = 0.0;

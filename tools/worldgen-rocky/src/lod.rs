@@ -709,6 +709,7 @@ pub fn build_gpu_material_page(field: &PlanetField, key: TileKey) -> GpuMaterial
     let cells = GPU_MATERIAL_PAGE_CELLS;
     let mut dirs = Vec::with_capacity(size * size);
     let mut samples = Vec::with_capacity(size * size);
+    let mut macro_heights = Vec::with_capacity(size * size);
     for y in 0..size {
         for x in 0..size {
             // Texture centres are x+0.5; inverting the shader transform puts
@@ -724,6 +725,7 @@ pub fn build_gpu_material_page(field: &PlanetField, key: TileKey) -> GpuMaterial
             // evaluations and does not run five full semantic samples.
             let (prefix, macro_h) = field.height_prefix_m(dir);
             dirs.push(dir);
+            macro_heights.push(macro_h);
             samples.push(field.sample_surface_from_prefix(
                 dir,
                 prefix,
@@ -737,7 +739,11 @@ pub fn build_gpu_material_page(field: &PlanetField, key: TileKey) -> GpuMaterial
     for y in 0..size {
         for x in 0..size {
             let index = y * size + x;
-            let slope = field.slope_hint(dirs[index], MATERIAL_SLOPE_WAVELENGTH_M);
+            let slope = field.slope_hint_from_macro(
+                dirs[index],
+                MATERIAL_SLOPE_WAVELENGTH_M,
+                macro_heights[index],
+            );
             let material = {
                 let sample = &mut samples[index];
                 sample.slope_hint = slope;

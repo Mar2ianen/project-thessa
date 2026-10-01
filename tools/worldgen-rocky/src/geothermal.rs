@@ -7,6 +7,62 @@
 
 use crate::rng;
 
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ProvinceRecipe {
+    pub major_min: u32,
+    pub major_max: u32,
+    pub secondary_min: u32,
+    pub secondary_max: u32,
+}
+
+impl Default for ProvinceRecipe {
+    fn default() -> Self {
+        Self {
+            major_min: 3,
+            major_max: 3,
+            secondary_min: 6,
+            secondary_max: 6,
+        }
+    }
+}
+
+impl ProvinceRecipe {
+    pub fn validate(self) -> Result<(), String> {
+        if self.major_min > self.major_max
+            || self.secondary_min > self.secondary_max
+            || self.major_max > 32
+            || self.secondary_max > 128
+        {
+            return Err(
+                "geothermal province counts need ordered ranges (major <= 32, secondary <= 128)"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn place(
+        self,
+        seed: u64,
+        hot_spots: &[(f64, f64)],
+    ) -> Result<Vec<GeothermalProvince>, String> {
+        self.validate()?;
+        let count = |min: u32, max: u32, channel| {
+            min + (rng::hash01(seed, channel, 0, 0) * f64::from(max - min + 1)) as u32
+        };
+        let lats: Vec<_> = hot_spots.iter().map(|p| p.0).collect();
+        let lons: Vec<_> = hot_spots.iter().map(|p| p.1).collect();
+        Ok(place_provinces(
+            seed,
+            count(self.major_min, self.major_max, 507),
+            count(self.secondary_min, self.secondary_max, 517),
+            &lats,
+            &lons,
+        ))
+    }
+}
+
 /// One geothermal province. Flux in W/m2 at the center.
 #[derive(Debug, Clone, Copy)]
 pub struct GeothermalProvince {
@@ -59,23 +115,30 @@ pub fn place_provinces(
     let mut out = Vec::new();
     for i in 0..major {
         let k = i as i64;
+        // A preferred site is a coordinate pair, not independently sampled
+        // latitude/longitude lists (which could move heat to another region).
+        let pair_count = prefer_lats.len().min(prefer_lons.len());
+        let site = (pair_count > 0)
+            .then(|| (rng::hash01(seed, 501, k, 0) * pair_count as f64) as usize % pair_count);
         let lat = if prefer_lats.is_empty() {
             rng::hash11(seed, 501, k, 0) * 50.0
         } else {
-            prefer_lats[(rng::hash01(seed, 501, k, 0) * prefer_lats.len() as f64) as usize
-                % prefer_lats.len()]
-                + rng::hash11(seed, 502, k, 0) * 12.0
+            prefer_lats[site.unwrap_or_else(|| {
+                (rng::hash01(seed, 501, k, 0) * prefer_lats.len() as f64) as usize
+                    % prefer_lats.len()
+            })] + rng::hash11(seed, 502, k, 0) * 12.0
         };
         let lon = if prefer_lons.is_empty() {
             rng::hash11(seed, 503, k, 1) * 150.0
         } else {
-            prefer_lons[(rng::hash01(seed, 503, k, 1) * prefer_lons.len() as f64) as usize
-                % prefer_lons.len()]
-                + rng::hash11(seed, 504, k, 1) * 15.0
+            prefer_lons[site.unwrap_or_else(|| {
+                (rng::hash01(seed, 503, k, 1) * prefer_lons.len() as f64) as usize
+                    % prefer_lons.len()
+            })] + rng::hash11(seed, 504, k, 1) * 15.0
         };
         out.push(GeothermalProvince {
             lat_deg: lat.clamp(-70.0, 70.0),
-            lon_deg: lon.rem_euclid(360.0) - 180.0,
+            lon_deg: (lon + 180.0).rem_euclid(360.0) - 180.0,
             radius_m: 250_000.0 + rng::hash01(seed, 505, k, 2) * 350_000.0,
             flux_w_m2: 2.0 + rng::hash01(seed, 506, k, 3) * 3.0,
         });
@@ -130,5 +193,20 @@ mod tests {
         assert_eq!(a[0].lat_deg, b[0].lat_deg);
         let c = place_provinces(8, 3, 6, &[], &[]);
         assert!((a[0].lat_deg - c[0].lat_deg).abs() > 1e-9);
+    }
+
+    #[test]
+    fn preferred_sites_keep_coordinate_pairs_and_do_not_flip_hemispheres() {
+        let sites = [(-40.0, -160.0), (40.0, 160.0)];
+        let provinces = place_provinces(7, 32, 0, &[-40.0, 40.0], &[-160.0, 160.0]);
+        for province in provinces {
+            assert!(
+                sites.iter().any(|&(lat, lon)| {
+                    let dlon = (province.lon_deg - lon + 180.0).rem_euclid(360.0) - 180.0;
+                    (province.lat_deg - lat).abs() <= 12.0 && dlon.abs() <= 15.0
+                }),
+                "displaced province: {province:?}"
+            );
+        }
     }
 }

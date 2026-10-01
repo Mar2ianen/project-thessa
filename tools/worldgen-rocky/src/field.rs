@@ -27,6 +27,8 @@ use crate::{
 /// Physical planet + recipe parameters (no raster anywhere).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanetParams {
+    #[serde(default)]
+    pub surface_climate: crate::climate::SurfaceClimate,
     pub name: String,
     pub seed: u64,
     pub radius_m: f64,
@@ -85,6 +87,8 @@ pub struct TerrainSample {
     /// Normalized geothermal flux, W/m2.
     pub geothermal_flux_w_m2: f64,
     pub moisture01: f64,
+    /// Terrain-derived regional saturation suitability, not local water depth.
+    pub wetland_potential01: f64,
     pub temperature_k: f64,
     pub continentality01: f64,
     pub eclipse_exposure01: f64,
@@ -101,6 +105,8 @@ pub struct PlanetField {
     context: ContextGrid,
     /// Datum calibration belongs to the canonical field, not just a preview.
     pub sea_offset_m: f64,
+    /// Static area-mean calibration of the recipe climate proxy only.
+    temperature_offset_k: f64,
 }
 
 #[derive(Default)]
@@ -110,6 +116,7 @@ struct ContextGrid {
     water: Vec<Vec<WaterClass>>,
     arid: Vec<Vec<f64>>,
     ocean_dist_m: Vec<Vec<f64>>,
+    wetland_support: Vec<Vec<f64>>,
 }
 
 impl PlanetField {
@@ -133,10 +140,24 @@ impl PlanetField {
             geo_norm,
             context: ContextGrid::default(),
             sea_offset_m: 0.0,
+            temperature_offset_k: 0.0,
         };
         let (context, offset) = build_context(&field);
         field.context = context;
         field.sea_offset_m = offset;
+        if let Some(target) = field.params.surface_climate.target_mean_temperature_k {
+            let mut sum = 0.0;
+            const N: usize = 4096;
+            for i in 0..N {
+                let y = 1.0 - 2.0 * (i as f64 + 0.5) / N as f64;
+                let r = (1.0 - y * y).sqrt();
+                let angle = i as f64 * 2.399963229728653;
+                sum += field
+                    .sample_surface([r * angle.cos(), y, r * angle.sin()], 32.0)
+                    .temperature_k;
+            }
+            field.temperature_offset_k = target - sum / N as f64;
+        }
         Ok(field)
     }
 
@@ -205,7 +226,7 @@ impl PlanetField {
             self.params.eclipse_strength,
             geo_w.min(1.0),
         );
-        let site = classify_with_context(&self.params, &self.features, lat, lon, height, flux);
+        let mut site = classify_with_context(&self.params, &self.features, lat, lon, height, flux);
         let regional = crate::rng::fbm3(
             self.params.seed,
             770,
@@ -217,11 +238,34 @@ impl PlanetField {
         let moisture = (drivers.moisture * 0.65 + 0.15 + regional * 0.45
             - self.params.aridity * 0.16)
             .clamp(0.0, 1.0);
-        let temperature_k = 294.0
-            - 38.0 * dir[1].powi(2)
-            - height.max(0.0) * 0.005
+        let climate = self.params.surface_climate;
+        let mut temperature_k = 294.0
+            - 38.0 * climate.polar_cooling_strength * dir[1].powi(2)
+            - height.max(0.0) * 0.005 * climate.elevation_cooling_strength
             - (1.0 - drivers.eclipse_exposure) * 12.0
             + regional * 3.0;
+        if climate.geothermal_local_warming_strength > 0.0 {
+            // Incremental local radiative-equilibrium warming from actual flux,
+            // not an arbitrary Kelvin multiplier on a saturated activity mask.
+            const SIGMA: f64 = 5.670374419e-8;
+            let warmed = (temperature_k.powi(4) + flux / SIGMA).sqrt().sqrt();
+            temperature_k += (warmed - temperature_k) * climate.geothermal_local_warming_strength;
+        }
+        temperature_k += self.temperature_offset_k;
+        // Bilinear regional support avoids painting nearest-cell rectangles.
+        // Ocean and highland samples cannot become wetlands through interpolation.
+        let wetland_potential01 = if height < 0.0 {
+            0.0
+        } else {
+            self.context_wetland_at(lat, lon)
+                * (1.0 - crate::appearance::smooth(150.0, 400.0, height))
+        };
+        if wetland_potential01 > 0.5
+            && matches!(site.biome, Biome::RockyPlain | Biome::SedimentaryPlain)
+        {
+            site.biome = Biome::Wetland;
+            site.geology = Geology::Sedimentary;
+        }
         TerrainSample {
             height_m: height,
             macro_height_m: macro_h,
@@ -233,6 +277,7 @@ impl PlanetField {
             slope_hint,
             geothermal_flux_w_m2: flux,
             moisture01: moisture,
+            wetland_potential01,
             temperature_k,
             continentality01: drivers.continentality,
             eclipse_exposure01: drivers.eclipse_exposure,
@@ -392,6 +437,18 @@ impl PlanetField {
     /// independent of the requesting tile makes biome transitions stable as
     /// a tile crosses an LOD boundary.
     pub(crate) fn slope_hint(&self, dir: [f64; 3], wavelength_m: f64) -> f64 {
+        let (lat, lon) = latlon_from_dir(dir);
+        let knobs: TerrainKnobs = self.params.knobs.into();
+        self.slope_hint_from_macro(dir, wavelength_m, self.macro_term_m(dir, lat, lon, knobs))
+    }
+
+    /// Same material slope, reusing a macro sample already computed by a page.
+    pub(crate) fn slope_hint_from_macro(
+        &self,
+        dir: [f64; 3],
+        wavelength_m: f64,
+        macro_h: f64,
+    ) -> f64 {
         // Offset along two orthonormal tangent axes by half a wavelength.
         // Latitude/longitude offsets are ill-conditioned near the poles:
         // longitude's metres-per-degree tends to zero there and used to make
@@ -420,7 +477,15 @@ impl PlanetField {
         let offset = |tangent: [f64; 3]| {
             std::array::from_fn(|i| dir[i] * cos_angle + tangent[i] * sin_angle)
         };
-        let h0 = self.base_height(dir);
+        let (lat, lon) = latlon_from_dir(dir);
+        let h0 = macro_h
+            + crate::terrain::eval_meso_m(
+                self.params.seed,
+                self.params.knobs.into(),
+                lat,
+                lon,
+                self.params.radius_m,
+            );
         let hx = self.base_height(offset(east));
         let hy = self.base_height(offset(north));
         let dx = (wavelength_m * 0.5).max(1.0);
@@ -435,6 +500,20 @@ impl PlanetField {
             self.context.arid[r][c],
             self.context.ocean_dist_m[r][c],
         )
+    }
+
+    fn context_wetland_at(&self, lat: f64, lon: f64) -> f64 {
+        let rows = self.context.lats.len();
+        let cols = self.context.lons.len();
+        let y = ((lat + 90.0) / 2.0).clamp(0.0, (rows - 1) as f64);
+        let x = (lon + 180.0).rem_euclid(360.0) / 2.0;
+        let (r, c) = (y.floor() as usize, x.floor() as usize);
+        let (fy, fx) = (y - r as f64, x - c as f64);
+        let blend = |row: usize| {
+            self.context.wetland_support[row][c] * (1.0 - fx)
+                + self.context.wetland_support[row][(c + 1) % cols] * fx
+        };
+        blend(r) * (1.0 - fy) + blend((r + 1).min(rows - 1)) * fy
     }
 }
 
@@ -461,6 +540,7 @@ fn hemi_bias(params: &PlanetParams, lon_deg: f64) -> f64 {
 }
 
 fn validate_params(params: &PlanetParams) -> Result<(), String> {
+    params.surface_climate.validate()?;
     if params
         .ocean_target
         .is_some_and(|t| !t.is_finite() || !(0.0..=1.0).contains(&t))
@@ -555,6 +635,36 @@ fn build_context(field: &PlanetField) -> (ContextGrid, f64) {
         }
     }
     let water = classify_water(&grid, &arid, params.glaciation);
+    let depressions = crate::hydro::depression_depth(&grid);
+    let catchments = crate::terrain_fields::flow_catchment_area_m2(&grid);
+    let mut wetland_support: Vec<Vec<f64>> = grid
+        .h
+        .iter()
+        .enumerate()
+        .map(|(r, row)| {
+            row.iter()
+                .enumerate()
+                .map(|(c, h)| {
+                    if *h < 0.0 {
+                        0.0
+                    } else {
+                        crate::hydro::wetland_potential01(
+                            crate::terrain_fields::slope_at(&grid, r, c),
+                            depressions[r][c],
+                            catchments[r][c],
+                            arid[r][c],
+                        )
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    // Each pole is one physical point, not distinct longitude sectors. Use
+    // the cap mean at the endpoints so interpolation converges consistently.
+    for r in [0, grid.rows() - 1] {
+        let mean = wetland_support[r].iter().sum::<f64>() / grid.cols() as f64;
+        wetland_support[r].fill(mean);
+    }
     (
         ContextGrid {
             lats,
@@ -562,6 +672,7 @@ fn build_context(field: &PlanetField) -> (ContextGrid, f64) {
             water,
             arid,
             ocean_dist_m,
+            wetland_support,
         },
         sea_offset_m,
     )
@@ -616,7 +727,9 @@ pub fn classify_with_context(
 
 /// Build a [`PlanetField`] from a dev manifest (provinces defaulted).
 pub fn field_from_manifest(manifest: &crate::manifest::Manifest) -> Result<PlanetField, String> {
+    crate::manifest::validate_manifest(manifest)?;
     let params = PlanetParams {
+        surface_climate: manifest.climate.surface,
         name: manifest.planet.name.clone(),
         seed: manifest.planet.seed,
         radius_m: manifest.planet.datum_radius_m,
@@ -637,7 +750,7 @@ pub fn field_from_manifest(manifest: &crate::manifest::Manifest) -> Result<Plane
         volcanism: manifest.terrain.volcanism,
         nereid_ocean_bias: manifest.climate.nereid_ocean_bias,
         anti_nereid_land_bias: manifest.climate.anti_nereid_land_bias,
-        eclipse_strength: 0.28,
+        eclipse_strength: manifest.climate.surface.eclipse_cooling_strength,
         nominal_flux_w_m2: 0.146,
         ocean_target: manifest.ocean_target,
     };
@@ -654,7 +767,9 @@ pub fn field_from_manifest(manifest: &crate::manifest::Manifest) -> Result<Plane
             }
         })
         .collect();
-    let provinces = crate::geothermal::default_provinces(manifest.planet.seed, &hot_spots);
+    let provinces = manifest
+        .geothermal
+        .place(manifest.planet.seed, &hot_spots)?;
     PlanetField::build(
         params,
         manifest.features.clone(),
@@ -675,6 +790,7 @@ mod tests {
 
     fn test_params() -> PlanetParams {
         PlanetParams {
+            surface_climate: crate::climate::SurfaceClimate::default(),
             name: "test".into(),
             seed: 77,
             radius_m: 3_200_000.0,
@@ -751,6 +867,62 @@ mod tests {
         let b = field.slope_hint(dir_from_latlon(90.0, 137.0), 256.0);
         assert!(a.is_finite() && b.is_finite());
         assert!((a - b).abs() < 1.0e-10, "a={a}, b={b}");
+    }
+
+    #[test]
+    fn material_slope_reuses_the_same_canonical_macro_sample() {
+        let field = test_field();
+        for (lat, lon) in [(0.0, 0.0), (25.0, 179.0), (-70.0, -179.0), (90.0, 0.0)] {
+            let dir = dir_from_latlon(lat, lon);
+            let (_, macro_h) = field.height_prefix_m(dir);
+            assert_eq!(
+                field.slope_hint(dir, 256.0),
+                field.slope_hint_from_macro(dir, 256.0, macro_h)
+            );
+        }
+    }
+
+    #[test]
+    fn wetland_context_is_interpolated_periodic_and_prefix_stable() {
+        let mut field = test_field();
+        for lat in [-90.0, 90.0] {
+            let pole = field.context_wetland_at(lat, 0.0);
+            for lon in [-180.0, -45.0, 75.0, 180.0] {
+                assert!((field.context_wetland_at(lat, lon) - pole).abs() < 1e-12);
+            }
+        }
+        let r = 45;
+        for row in &mut field.context.wetland_support {
+            row.fill(0.0);
+        }
+        field.context.wetland_support[r][179] = 1.0;
+        field.context.wetland_support[r][0] = 1.0;
+        assert_eq!(
+            field.context_wetland_at(0.0, -180.0),
+            field.context_wetland_at(0.0, 180.0)
+        );
+        assert!((field.context_wetland_at(0.0, -179.0) - 0.5).abs() < 1e-12);
+        assert!(
+            (field.context_wetland_at(0.0, -179.0 - 1e-6)
+                - field.context_wetland_at(0.0, -179.0 + 1e-6))
+            .abs()
+                < 2e-6
+        );
+        let dir = dir_from_latlon(0.0, -179.0);
+        let sample = field.sample_surface(dir, 32.0);
+        let (prefix, macro_h) = field.height_prefix_m(dir);
+        let reused = field.sample_surface_from_prefix(dir, prefix, macro_h, 32.0);
+        assert_eq!(sample.wetland_potential01, reused.wetland_potential01);
+        for i in 0..512 {
+            let y = 1.0 - 2.0 * (i as f64 + 0.5) / 512.0;
+            let a = i as f64 * 2.399963229728653;
+            let radius = (1.0 - y * y).sqrt();
+            let s = field.sample_surface([radius * a.cos(), y, radius * a.sin()], 32.0);
+            assert!((0.0..=1.0).contains(&s.wetland_potential01));
+            if s.height_m < 0.0 || s.height_m >= 400.0 {
+                assert_eq!(s.wetland_potential01, 0.0);
+            }
+        }
     }
 
     #[test]

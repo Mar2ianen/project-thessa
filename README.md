@@ -274,6 +274,12 @@ current implementation documents and source-level API comments.
 
 ## Rocky world generator
 
+Thessa reconstruction includes recipe-controlled climate, curved mountain arcs,
+branching rifts and regional drainage-driven wetlands. Local rivers, vegetation
+instances and inhabited-world infrastructure remain incomplete. See
+[doc 48](docs/48_THESSA_RECONSTRUCTION_2026_10_01.md) and the worldgen README;
+source validation is not visual acceptance.
+
 `thessa-worldgen-rocky` is part of the workspace. It generates deterministic
 rocky-world fields and exports client textures; the current runtime contact
 boundary remains spherical.

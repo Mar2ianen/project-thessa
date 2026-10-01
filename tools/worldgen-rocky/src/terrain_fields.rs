@@ -31,10 +31,54 @@ pub fn curvature_at(grid: &HeightGrid, r: usize, c: usize) -> f64 {
     if lap.is_finite() { lap } else { 0.0 }
 }
 
-/// Simple D8 flow accumulation (cell counts, deterministic order).
+/// Four-neighbour downhill flow accumulation (cell counts, deterministic order).
 /// Each cell routes all its water to the lowest neighbour; accumulation
 /// counts how many cells drain through it. Rivers = high accumulation.
 pub fn flow_accumulation(grid: &HeightGrid) -> Vec<Vec<u32>> {
+    accumulate_downhill(grid, vec![vec![1.0; grid.cols()]; grid.rows()], false)
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|v| v.min(u32::MAX as f64) as u32)
+                .collect()
+        })
+        .collect()
+}
+
+/// Land catchment area in SI, with latitude-dependent spherical cell area.
+/// Ocean cells terminate drainage and do not contribute fictitious runoff.
+pub fn flow_catchment_area_m2(grid: &HeightGrid) -> Vec<Vec<f64>> {
+    let half_lat = if grid.rows() > 1 {
+        (grid.lats[1] - grid.lats[0]).abs() * 0.5
+    } else {
+        0.5
+    };
+    let dlon = if grid.cols() > 1 {
+        (grid.lons[1] - grid.lons[0]).abs().to_radians()
+    } else {
+        1.0_f64.to_radians()
+    };
+    let area = grid
+        .h
+        .iter()
+        .enumerate()
+        .map(|(r, row)| {
+            let low = (grid.lats[r] - half_lat).max(-90.0).to_radians();
+            let high = (grid.lats[r] + half_lat).min(90.0).to_radians();
+            let cell_area = grid.datum_radius_m.powi(2) * dlon * (high.sin() - low.sin());
+            row.iter()
+                .map(|h| if *h >= 0.0 { cell_area } else { 0.0 })
+                .collect()
+        })
+        .collect();
+    accumulate_downhill(grid, area, true)
+}
+
+fn accumulate_downhill(
+    grid: &HeightGrid,
+    mut acc: Vec<Vec<f64>>,
+    stop_at_ocean: bool,
+) -> Vec<Vec<f64>> {
     let (rows, cols) = (grid.rows(), grid.cols());
     // Process cells highest-first so upstream accumulates before routing.
     let mut order: Vec<(usize, usize)> = (0..rows)
@@ -45,9 +89,11 @@ pub fn flow_accumulation(grid: &HeightGrid) -> Vec<Vec<u32>> {
             .partial_cmp(&grid.h[a.0][a.1])
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    let mut acc = vec![vec![1u32; cols]; rows];
     for (r, c) in order {
         let h = grid.h[r][c];
+        if stop_at_ocean && h < 0.0 {
+            continue;
+        }
         let mut best: Option<(usize, usize)> = None;
         let mut best_h = h;
         // Fixed scan order => deterministic ties.
@@ -64,7 +110,7 @@ pub fn flow_accumulation(grid: &HeightGrid) -> Vec<Vec<u32>> {
             }
         }
         if let Some((nr, nc)) = best {
-            acc[nr][nc] = acc[nr][nc].saturating_add(acc[r][c]);
+            acc[nr][nc] += acc[r][c];
         }
     }
     acc
@@ -98,9 +144,27 @@ mod tests {
     fn accumulation_collects_downhill() {
         let g = cone();
         let acc = flow_accumulation(&g);
-        // Edges receive drainage from the peak.
         assert!(acc[3][0] > acc[3][3]);
         assert!(acc.iter().flatten().all(|v| *v >= 1));
+    }
+
+    #[test]
+    fn catchments_use_spherical_area_and_stop_at_ocean() {
+        let mut g = HeightGrid::new(
+            vec![-60.0, 0.0, 60.0],
+            vec![0.0, 90.0, 180.0, 270.0],
+            1000.0,
+        );
+        g.h = vec![vec![100.0; 4]; 3];
+        let area = flow_catchment_area_m2(&g);
+        assert!(area[1][0] > area[0][0] * 1.9);
+        let total: f64 = area.iter().flatten().sum();
+        assert!((total - 4.0 * std::f64::consts::PI * 1.0e6).abs() < 1e-6);
+        let mut coast = HeightGrid::new(vec![0.0], vec![0.0, 90.0, 180.0, 270.0], 1000.0);
+        coast.h[0] = vec![-0.5, 20.0, -1.0, -2.0];
+        let acc = flow_catchment_area_m2(&coast);
+        assert!(acc[0][2] > 0.0);
+        assert_eq!(acc[0][3], 0.0, "ocean must not route catchments onward");
     }
 
     #[test]

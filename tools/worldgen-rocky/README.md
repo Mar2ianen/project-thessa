@@ -29,9 +29,10 @@ Raster resolution is mostly irrelevant to surface detail.
 Future consumers (adaptive cube-sphere renderer, collision mesher) sample the
 same field; tiles/chunks are cache units and never change the terrain.
 
-Pipeline: authored macrostructure (tectonic boundaries + landmark features)
-runs through deterministic erosion, then derives consistent geology/biome,
-hydrology, roughness, minerals and normals. GPT Image 2.5 maps are MACRO
+The bake pipeline applies deterministic erosion to authored macrostructure
+(tectonic boundaries + landmark features). The live analytic field does not
+yet consume that erosion result. It derives regional hydrology and material
+drivers; local river/wetland geometry remains incomplete. GPT Image 2.5 maps are MACRO
 style/region hints, never authoritative physics.
 
 ## Layers (`prompts/` hold color legends)
@@ -51,6 +52,12 @@ in metres (macro 100-2000 km, meso 5-200 km, micro cm-km). Regenerate GPT
 maps at any valid 2.5 size later without changing the manifest schema.
 
 ## Inhabited-world readability
+
+Implementation checkpoint: climate contract, curved mountain arcs, branching
+rifts, colocated plateau/basin uplift and regional drainage-driven wetlands are
+implemented. Settlement/infrastructure placement and close vegetation instances
+below remain design targets, not shipped rendering. See
+`docs/48_THESSA_RECONSTRUCTION_2026_10_01.md` for validation and limitations.
 
 Some rocky worlds are inhabited rather than pristine terrain. Civilization is
 a **derived world layer and visual/navigation context**, not a city-building

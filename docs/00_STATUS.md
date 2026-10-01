@@ -50,7 +50,8 @@ do not update in place).
 | `02C_FAR_COMPANION.md` | 🔵 design target | — (deliberately unbaked) | encounter geometry, cloud phase-space, travel benchmarks |
 | `02D_BIOSPHERE_CHIRALITY.md` | 🔵 future work | — | food-refinery progression, biosafety, narrative |
 | `03_INTERSTELLAR_SCOPE.md` | 🔵 design baseline | — | cloud model, phase-space, travel benchmarks, RSS egg |
-| `13_THESSA_V02_DESIGN.md` | 🟡 partial | bulk values, landmark/biome recipes | §2 stellar proposal, climate/clouds/tidal targets |
+| `13_THESSA_V02_DESIGN.md` | 🟡 partial reconstruction | bulk values, recipe-controlled climate, curved arcs, branching rifts, regional wetlands (doc 48) | local hydrology, erosion/infill, vegetation instances, cities/infrastructure, stellar proposal |
+| `48_THESSA_RECONSTRUCTION_2026_10_01.md` | 🟡 local reconstruction branch | climate/relief/wetland contract and equal-area audit | main promotion, rivers, vegetation, civilization and visual acceptance |
 | `02_GAMEPLAY.md` | 🔵 baseline | §2.5 and §2.7–2.8 describe current flight/automation slices, including vehicle part controls | surface transport, editor, economy, contracts, logistics blocks, certification |
 
 ## Client, render, terrain

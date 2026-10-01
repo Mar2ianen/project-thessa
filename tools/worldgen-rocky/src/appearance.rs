@@ -27,11 +27,21 @@ pub(crate) fn smooth(a: f64, b: f64, v: f64) -> f64 {
 ///
 /// Range is roughly [-1, 1] (sum of weighted value-noise octaves).
 pub fn surface_grain(field: &PlanetField, dir: [f64; 3]) -> f64 {
+    surface_grain_filtered(field, dir, 0.0)
+}
+
+fn band_weight(scale_m: f64, texel_m: f64) -> f64 {
+    1.0 - smooth(scale_m * 0.25, scale_m * 0.5, texel_m)
+}
+
+fn surface_grain_filtered(field: &PlanetField, dir: [f64; 3], texel_m: f64) -> f64 {
     [(8.0, 0.42), (32.0, 0.32), (128.0, 0.20), (512.0, 0.10)]
         .into_iter()
         .enumerate()
+        .filter(|(_, (scale, _))| band_weight(*scale, texel_m) > 0.0)
         .map(|(band, (scale, weight))| {
             weight
+                * band_weight(scale, texel_m)
                 * rng::value_noise3(
                     field.params.seed,
                     741 + band as u32 * 17,
@@ -68,7 +78,41 @@ pub fn surface_appearance(
     sample: &TerrainSample,
     dir: [f64; 3],
 ) -> SurfaceAppearance {
+    surface_appearance_filtered(field, sample, dir, 0.0)
+}
+
+/// Appearance-only spectral filtering; canonical height and semantics stay fixed.
+pub fn surface_appearance_filtered(
+    field: &PlanetField,
+    sample: &TerrainSample,
+    dir: [f64; 3],
+    texel_m: f64,
+) -> SurfaceAppearance {
     let noise = |channel, scale, octaves| {
+        if texel_m > 0.0 {
+            let mut sum = 0.0;
+            let mut norm = 0.0;
+            let (mut amplitude, mut frequency) = (1.0, 1.0);
+            for octave in 0..octaves {
+                let weight = band_weight(scale / frequency, texel_m);
+                if weight > 0.0 {
+                    let q = dir.map(|v| v * field.params.radius_m / scale * frequency);
+                    sum += amplitude
+                        * weight
+                        * rng::value_noise3(
+                            field.params.seed,
+                            channel + octave * 7919,
+                            q[0],
+                            q[1],
+                            q[2],
+                        );
+                }
+                norm += amplitude;
+                amplitude *= 0.5;
+                frequency *= 2.03;
+            }
+            return sum / norm;
+        }
         rng::fbm3(
             field.params.seed,
             channel,
@@ -84,7 +128,7 @@ pub fn surface_appearance(
     // the cover grain — sharing one signal for threshold patches and final
     // brightness partially cancels (opposite signs), muting both.
     let micro = noise(739, 24.0, 2);
-    let grain = surface_grain(field, dir);
+    let grain = surface_grain_filtered(field, dir, texel_m);
     let h = sample.height_m;
     // Snow cover breaks into drifts and thaw patches: the grain rides the
     // threshold (±0.7 grain ~= ±4 K) so a uniform sub-zero plain still reads
@@ -124,6 +168,11 @@ pub fn surface_appearance(
         smooth(0.50, 0.85, moisture),
     );
     let mut color = mix(dry, green, vegetation);
+    // Saturated lowland soil / vegetation, not invented pond geometry. The
+    // regional drainage source is continuous; local slopes reject cliff faces.
+    let wetland = sample.wetland_potential01 * (1.0 - smooth(0.02, 0.1, sample.slope_hint));
+    let wet_ground = mix([0.20, 0.23, 0.16], [0.10, 0.26, 0.16], vegetation);
+    color = mix(color, wet_ground, wetland);
     let rock = smooth(1900.0, 4400.0, h).max(smooth(0.35, 0.8, sample.slope_hint));
     color = mix(color, [0.36, 0.37, 0.36], rock);
     // Beach is a height band, not a circular feature footprint.
@@ -171,6 +220,40 @@ mod frost_tests {
             .unwrap()
     }
 
+    #[test]
+    fn coarse_appearance_filters_unresolved_grain_without_changing_semantics() {
+        let field = field();
+        let dir = crate::sphere::dir_from_latlon(20.0, 40.0);
+        let sample = field.sample_surface(dir, 32.0);
+        let fine = surface_appearance(&field, &sample, dir);
+        let zero = surface_appearance_filtered(&field, &sample, dir, 0.0);
+        assert_eq!(fine.albedo_srgb, zero.albedo_srgb);
+        assert_eq!(fine.roughness, zero.roughness);
+        assert_eq!(surface_grain_filtered(&field, dir, 1000.0), 0.0);
+        let before = (
+            sample.height_m,
+            sample.biome,
+            sample.geology,
+            sample.temperature_k,
+        );
+        let coarse = surface_appearance_filtered(&field, &sample, dir, 5000.0);
+        assert!(
+            coarse
+                .albedo_srgb
+                .iter()
+                .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+        );
+        assert_eq!(
+            before,
+            (
+                sample.height_m,
+                sample.biome,
+                sample.geology,
+                sample.temperature_k
+            )
+        );
+    }
+
     fn sample(temperature_k: f64, moisture01: f64) -> TerrainSample {
         TerrainSample {
             height_m: 500.0,
@@ -183,6 +266,7 @@ mod frost_tests {
             slope_hint: 0.1,
             geothermal_flux_w_m2: 0.08,
             moisture01,
+            wetland_potential01: 0.0,
             temperature_k,
             continentality01: 0.5,
             eclipse_exposure01: 1.0,

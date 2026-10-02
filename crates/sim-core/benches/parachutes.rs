@@ -23,8 +23,11 @@ fn parachute(index: usize) -> ParachuteSpec {
         max_deploy_dynamic_pressure_pa: 1_800.0,
         max_canopy_load_n: 180_000.0,
         pack_mass_kg: 24.0,
+        repack_time_s: 30.0,
         position_body_m: DVec3::new(-2.0 - index as f64 * 0.01, 0.0, 0.0),
         inertia_body_kg_m2: DMat3::IDENTITY * 4.0,
+        lines: None,
+        deformation: None,
     }
 }
 
@@ -48,6 +51,7 @@ fn main() {
                             ParachuteState {
                                 phase: ParachutePhase::Deployed,
                                 inflation_elapsed_s: 0.0,
+                                line_extension_m: 0.0,
                             },
                         )
                     })

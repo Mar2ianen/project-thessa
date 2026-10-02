@@ -804,11 +804,13 @@ mod tests {
                 state: ParachuteState {
                     phase: ParachutePhase::Reefed,
                     inflation_elapsed_s: 0.8,
+                    line_extension_m: 0.0,
                 },
                 deployment_fraction: 0.42,
                 dynamic_pressure_pa: 820.0,
                 force_body_n: [-4_200.0, 0.0, 0.0].into(),
                 moment_body_nm: [0.0, 8_400.0, 0.0].into(),
+                line_extension_m: 0.0,
             }],
             wake_notice: None,
             flight_error: None,

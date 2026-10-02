@@ -36,6 +36,7 @@ fn make_system(index: usize) -> ElectricalPowerSystem {
         specific_energy_j_kg: 36.0e3,
         dimensions_body_m: DVec3::new(0.5, 0.5, 0.4),
         position_body_m: DVec3::new(-0.7, 0.45, 0.0),
+        self_discharge_time_s: f64::INFINITY,
     };
     let solar = SolarArraySpec {
         name: format!("solar-{index}"),

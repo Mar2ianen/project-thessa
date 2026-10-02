@@ -102,6 +102,7 @@ fn make_system(index: usize) -> ThermalSystem {
                 areal_density_kg_m2: 5.0,
                 position_body_m: DVec3::new(0.8, 0.0, 0.8),
                 deployment: RadiatorDeployment::Fixed,
+                tracking: RadiatorTracking::Fixed,
             },
             RadiatorSpec {
                 name: format!("rad-b-{index}"),
@@ -117,9 +118,11 @@ fn make_system(index: usize) -> ThermalSystem {
                     actuator_power_w: 60.0,
                     initial_fraction: 0.5,
                 },
+                tracking: RadiatorTracking::Fixed,
             },
         ],
         convective_k: default_convective_k(),
+        heat_sources: vec![],
     }
 }
 

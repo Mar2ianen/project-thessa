@@ -15,6 +15,10 @@ fn bank(index: usize) -> ReactionWheelBankSpec {
         mass_kg: 24.0,
         position_body_m: DVec3::ZERO,
         inertia_body_kg_m2: DMat3::IDENTITY * 8.0,
+        idle_power_w: 0.0,
+        torque_power_w_per_nm: 0.0,
+        momentum_capacity_nms: None,
+        rotor_inertia_kg_m2: None,
     }
 }
 

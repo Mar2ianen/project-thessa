@@ -67,22 +67,25 @@ pub use landing_gear::{
     WheelStation, WheelStrutSpec, WheelTireSpec,
 };
 pub use parachute::{
-    MAX_PARACHUTES, ParachuteCommand, ParachuteEnvironment, ParachuteError, ParachuteLoad,
-    ParachutePhase, ParachuteSpec, ParachuteState,
+    CanopyDeformation, MAX_PARACHUTES, ParachuteCommand, ParachuteEnvironment, ParachuteError,
+    ParachuteLines, ParachuteLoad, ParachutePhase, ParachuteSpec, ParachuteState,
+    default_repack_time_s,
 };
 pub use part_command::VehiclePartCommand;
 pub use power::{
-    BatteryPowerTelemetry, BatterySpec, ElectricalPowerCommand, ElectricalPowerError,
+    BatteryPowerTelemetry, BatterySpec, DockedBusTie, ElectricalPowerCommand, ElectricalPowerError,
     ElectricalPowerState, ElectricalPowerSystem, ElectricalPowerTelemetry,
     FUEL_CELL_HYDROGEN_LHV_J_KG, FUEL_CELL_OXYGEN_HYDROGEN_RATIO, FuelCellPowerTelemetry,
     FuelCellSpec, PowerAllocation, PowerConsumerSpec, PowerPriority, PowerSystemMassProperties,
     ReactorPowerTelemetry, ReactorSpec, SolarArrayDeployment, SolarArrayPowerTelemetry,
     SolarArraySpec, SolarArrayTracking, SolarFluxSource, SolarOccluder,
-    UltracapacitorPowerTelemetry, UltracapacitorSpec,
+    UltracapacitorPowerTelemetry, UltracapacitorSpec, infinite_self_discharge_time_s,
 };
 pub use reaction_wheel::{
-    ReactionWheelAllocation, ReactionWheelBankSpec, ReactionWheelError, allocate_reaction_wheels,
-    allocate_reaction_wheels_with_enabled_banks,
+    ReactionWheelAllocation, ReactionWheelBankSpec, ReactionWheelBankTelemetry, ReactionWheelError,
+    ReactionWheelState, allocate_reaction_wheels, allocate_reaction_wheels_with_enabled_banks,
+    allocate_reaction_wheels_with_momentum, initial_reaction_wheel_states, momentum_unload_demand,
+    reaction_wheel_bank_telemetry, reaction_wheel_step_heat_w,
 };
 pub use resources::{
     ConsumerResourceAllocation, FeedResourceProperties, VehicleAuxiliaryPowerUnitStep,
@@ -91,9 +94,10 @@ pub use resources::{
 };
 pub use shield::{HeatShieldMount, ShieldError};
 pub use thermal::{
-    RadiatorDeployment, RadiatorSpec, RadiatorTelemetry, ThermalCommand, ThermalError,
-    ThermalFlowCondition, ThermalLinkSpec, ThermalMassProperties, ThermalNodeSpec,
-    ThermalNodeTelemetry, ThermalState, ThermalSystem, ThermalTelemetry, default_convective_k,
+    NamedWasteHeat, RadiatorDeployment, RadiatorSpec, RadiatorTelemetry, RadiatorTracking,
+    ThermalCommand, ThermalError, ThermalFlowCondition, ThermalHeatSource, ThermalHeatSourceKind,
+    ThermalLinkSpec, ThermalMassProperties, ThermalNodeSpec, ThermalNodeTelemetry, ThermalState,
+    ThermalSystem, ThermalTelemetry, default_convective_k, generator_waste_heat_w,
 };
 pub use vehicle::{
     ControlChannels, ControlHinge, ControlKind, ControlMixing, ControlSurfaceActuator,

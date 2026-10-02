@@ -6,6 +6,7 @@ struct InstalledResourceStep {
     propulsion: Option<VehiclePropulsionAllocation>,
     electrical_power_state: thessa_sim_core::ElectricalPowerState,
     electrical_power_telemetry: thessa_sim_core::ElectricalPowerTelemetry,
+    reaction_wheel_power_fraction: f64,
     auxiliary_power_unit_states: Vec<thessa_sim_core::AuxiliaryPowerUnitState>,
     jet_commands: Vec<thessa_sim_core::JetCommand>,
     pulsed_fusion_states: Vec<thessa_sim_core::PulsedFusionState>,
@@ -534,11 +535,19 @@ impl FlightAuthority {
     ) -> Result<(DVec3, Vec<f64>), FlightError> {
         let residual = requested_moment_nm - actual_aero_moment_nm;
         self.sync_reaction_wheel_runtime_state();
+        // The bus grant from the last installed-resource step scales the
+        // wheel request (explicit Euler: power is stepped after control
+        // allocation in the same tick). Starved wheels yield to RCS, which
+        // receives the unserved remainder below.
+        let wheel_request = residual * self.reaction_wheel_power_fraction.clamp(0.0, 1.0);
         let wheel = if self.reaction_wheels_enabled {
-            allocate_reaction_wheels_with_enabled_banks(
+            self.sync_reaction_wheel_runtime_state();
+            allocate_reaction_wheels_with_momentum(
                 &self.vehicle.reaction_wheels,
                 &self.reaction_wheel_bank_enabled,
-                residual,
+                &mut self.reaction_wheel_momentum,
+                wheel_request,
+                FLIGHT_STEP_S,
             )
             .map_err(|error| {
                 FlightError::InvalidInput(format!("reaction-wheel allocation failed: {error}"))
@@ -547,10 +556,28 @@ impl FlightAuthority {
             ReactionWheelAllocation {
                 delivered_torque_body_nm: DVec3::ZERO,
                 saturated: false,
+                momentum_saturated: false,
             }
         };
         self.reaction_wheel_torque_body_nm = wheel.delivered_torque_body_nm;
-        let rcs_request = residual - wheel.delivered_torque_body_nm;
+        // Momentum-saturated banks cannot take more load; ask RCS to carry
+        // the residual plus an unload demand that drives stored momentum
+        // back toward zero. Unlimited (legacy) banks never produce one.
+        let mut rcs_request = residual - wheel.delivered_torque_body_nm;
+        if wheel.momentum_saturated {
+            let unload = momentum_unload_demand(
+                &self.vehicle.reaction_wheels,
+                &self.reaction_wheel_momentum,
+                FLIGHT_STEP_S,
+                self.reaction_wheel_unload_authority_nm(),
+            )
+            .map_err(|error| {
+                FlightError::InvalidInput(format!(
+                    "reaction-wheel desaturation demand failed: {error}"
+                ))
+            })?;
+            rcs_request += unload;
+        }
         if !self.vehicle.rcs_mounts.is_empty() {
             let (duties, saturated) =
                 self.allocate_mounted_rcs(requested_force_body_n, rcs_request, ambient_pa)?;
@@ -1087,6 +1114,18 @@ impl FlightAuthority {
             power_command.dt_s = FLIGHT_STEP_S;
             power_command.auxiliary_generation_power_w =
                 apu_step.generated_electrical_power_w + jet_generated_power_w;
+            // Reaction wheels book their authored motor load (idle plus the
+            // marginal draw of the last tick's delivered torque) under the
+            // same-name consumer convention. Banks without a same-named
+            // consumer stay free, preserving legacy assets.
+            let wheel_power_demands = self.vehicle.reaction_wheel_power_demands(
+                self.reaction_wheels_enabled,
+                &self.reaction_wheel_bank_enabled,
+                self.reaction_wheel_torque_body_nm,
+            );
+            for (name, watts) in &wheel_power_demands {
+                set_named_power_load_request(&self.vehicle, &mut power_command, name, *watts);
+            }
             for (fraction, scale) in power_command
                 .fuel_cell_power_fraction
                 .iter_mut()
@@ -1173,6 +1212,27 @@ impl FlightAuthority {
                 .electrical_power
                 .advance(&self.electrical_power_state, &power_command)
                 .map_err(|error| FlightError::InvalidInput(error.to_string()))?;
+            // The granted wheel share scales the next tick's allocation.
+            // Only authored same-named consumers participate: without one the
+            // bank is unmetered and keeps full authority.
+            let mut wheel_power_fraction: f64 = 1.0;
+            for (name, requested_w) in &wheel_power_demands {
+                if *requested_w <= 0.0
+                    || !self
+                        .vehicle
+                        .electrical_power
+                        .consumers
+                        .iter()
+                        .any(|consumer| consumer.name == *name)
+                {
+                    continue;
+                }
+                wheel_power_fraction = wheel_power_fraction.min(delivered_power_fraction(
+                    &electrical_power_telemetry,
+                    name,
+                    *requested_w,
+                ));
+            }
             for (cell, output) in self
                 .vehicle
                 .electrical_power
@@ -1534,6 +1594,7 @@ impl FlightAuthority {
                 propulsion,
                 electrical_power_state,
                 electrical_power_telemetry,
+                reaction_wheel_power_fraction: wheel_power_fraction.clamp(0.0, 1.0),
                 auxiliary_power_unit_states: next_apu_states,
                 jet_commands: next_jet_commands,
                 pulsed_fusion_states: next_pulsed_fusion_states,
@@ -1769,6 +1830,7 @@ impl FlightAuthority {
         }
         self.electrical_power_state = installed_resource_step.electrical_power_state;
         self.electrical_power_telemetry = Some(installed_resource_step.electrical_power_telemetry);
+        self.reaction_wheel_power_fraction = installed_resource_step.reaction_wheel_power_fraction;
         self.auxiliary_power_unit_states = installed_resource_step.auxiliary_power_unit_states;
         self.jet_commands = installed_resource_step.jet_commands;
         self.pulsed_fusion_states = installed_resource_step.pulsed_fusion_states;

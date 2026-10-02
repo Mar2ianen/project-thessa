@@ -20,13 +20,20 @@ The phases are:
 ```text
 Stowed --arm--> Armed --descent + pressure + safe q--> Reefed --> Deployed
                   |                            |            |
-                  +--disarm--> Stowed          +--cut------+--> Cut
-                                               +--overload--> Failed
+                  +--disarm--> Stowed          +--cut------+--> Cut --repack--> Repacking --timer--> Stowed
+                                               +--overload--> Failed --repack--> Repacking --timer--> Stowed
 ```
 
-Cut and failed canopies are terminal for the current vehicle instance. An
-armed pack can be disarmed before extraction; once extraction has started,
-clearing the command cuts the canopy. Separate packs can use different pressure
+`Repack` is ignored outside the terminal phases; `Repacking` emits no force
+and stays rails-eligible (servicing is inert). An armed pack can be disarmed
+before extraction; once extraction has started, clearing the command cuts
+the canopy.
+
+Cut and failed canopies carry no load for the rest of the flight, but a spent
+pack is serviceable: `Repack` on a cut or failed canopy starts the authored
+`repack_time_s` servicing timer (`Repacking` phase, load-free), and completing
+it returns a flight-ready `Stowed` pack that arms and opens again. Separate
+packs can use different pressure
 triggers, so a drogue can open before the main canopy without a separate special
 case in the physics.
 
@@ -57,9 +64,23 @@ The static-pressure trigger makes altitude behavior adapt to each body's
 atmosphere instead of embedding a planet-specific altitude. Dynamic pressure
 gates the start of extraction; `max_canopy_load_n` limits the resulting
 aerodynamic force after extraction. An overloaded canopy tears away and stops
-contributing force. This first model treats a canopy as a drag-area actuator; it
-does not yet simulate line elasticity, canopy shape deformation, inflation
-shock, or packing/reuse.
+contributing force. An optional `[parachutes.lines]` block inserts a massless
+viscous-elastic suspension between mount and canopy: the canopy trails the
+mount along the drag axis, and the transmitted load follows the spring
+extension with first-order viscous lag (`dx/dt = (T − k·x)/c`, integrated
+backward-Euler so stiff lines stay stable at any step, extension clamped to
+`[0, line_length]`). The load ramps instead of stepping on opening (shock
+smoothing against `max_canopy_load_n`), settles to the rigid value `T/k`,
+and relaxes to zero with the canopy. The force application point shifts
+parallel to the force, so the moment is unchanged. Without the block the
+mount stays rigid. An optional `[parachutes.deformation]` block adds canopy
+breathing: effective area scales by `1 − reduction·min(q/q_ref, 1)` from
+authored reference pressure and fractional loss, so high-q streamlining is
+a fabric constitutive response rather than a whole-craft coefficient.
+Canopy shape deformation beyond this pressure response, and inflation shock
+beyond line compliance, are still future work. Servicing a spent pack back
+to flight-ready
+is covered by `Repack` (§1).
 
 ## 3. Asset format
 
@@ -80,6 +101,7 @@ deploy_pressure_pa = 9000.0
 max_deploy_dynamic_pressure_pa = 1800.0
 max_canopy_load_n = 180000.0
 pack_mass_kg = 24.0
+repack_time_s = 60.0
 position_body_m = [-2.0, 0.0, 0.0]
 inertia_body_kg_m2 = [
   [4.0, 0.0, 0.0],
@@ -94,18 +116,23 @@ See [`example_parachute_vehicle.toml`](../../data/vehicles/example_parachute_veh
 
 - `P` and the HUD `CHUTE` control arm/disarm all installed packs; disarming an
   already extracting/open canopy cuts it.
-- `ParachuteCommand::{Arm, Disarm, Cut}` and
+- `ParachuteCommand::{Arm, Disarm, Cut, Repack}` and
   `FlightAuthority::command_parachute(name, command)` provide a typed,
   per-pack API addressed by the authored parachute name. The same operation is
   available through `VehiclePartCommand::Parachute` on the flight input API. A
   future staging or action-group dispatcher can route commands through it;
   dispatch itself is not part of this feature slice.
+- `repack_time_s` (default 30 s) is authored per pack; servicing a cut canopy
+  back to `Stowed` takes three 10 s steps in the repack regression, and the
+  serviced pack re-arms and re-opens.
 - HUD orbit telemetry reports armed/open/failed pack counts, total canopy drag,
   and maximum sampled canopy dynamic pressure. Authoritative snapshots carry
   each canopy's phase, deployment fraction, pressure, force, and moment.
 - Regression tests pin the analytic drag equation, mount moment, pressure and
   dynamic-pressure gates, reefed-to-full timing, disarm/cut/failure behavior,
-  pack mass/inertia baking, and force composition in `FlightAuthority`.
+  pack mass/inertia baking, force composition in `FlightAuthority`, elastic
+  line ramp-to-steady-state with the `T/k` extension pin, and canopy
+  breathing (half area at the reference pressure, linear below it).
 - The known-flow test uses `ρ = 0.2 kg/m³`, `v = 100 m/s`, `Cd = 1.5`,
   `A = 20 m²`, and `f = 0.55`: `q = 1000 Pa` and `|F| = 16,500 N`; the
   analytic regression tolerance is `1e-9 N`.

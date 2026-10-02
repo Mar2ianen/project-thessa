@@ -123,7 +123,7 @@ impl BatterySpec {
 /// Same energy/power-bound bus model as [`BatterySpec`], kept as a separate
 /// authoring type so high-power/low-energy buffers for pulsed loads are
 /// explicit. Installed mass derives from capacity and specific energy;
-/// voltage dynamics, leakage/self-discharge, and cycle ageing are future work.
+/// voltage dynamics and cycle ageing are future work.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UltracapacitorSpec {
     pub name: String,
@@ -139,6 +139,16 @@ pub struct UltracapacitorSpec {
     /// Bank dimensions along craft body axes (m), for cuboid inertia.
     pub dimensions_body_m: DVec3,
     pub position_body_m: DVec3,
+    /// Self-discharge time constant (s): stored energy decays as
+    /// `E *= exp(-dt / tau)` after the charge/discharge integration.
+    /// `INFINITY` (the default) keeps older assets lossless.
+    #[serde(default = "infinite_self_discharge_time_s")]
+    pub self_discharge_time_s: f64,
+}
+
+/// Lossless default for assets authored before self-discharge existed.
+pub fn infinite_self_discharge_time_s() -> f64 {
+    f64::INFINITY
 }
 
 impl UltracapacitorSpec {
@@ -171,6 +181,14 @@ impl UltracapacitorSpec {
             self.discharge_efficiency,
             "ultracapacitor discharge efficiency",
         )?;
+        let self_discharge_time_s = self.self_discharge_time_s;
+        if !(self_discharge_time_s == f64::INFINITY
+            || (self_discharge_time_s.is_finite() && self_discharge_time_s > 0.0))
+        {
+            return Err(ElectricalPowerError::InvalidSpec(
+                "ultracapacitor self-discharge time must be finite and positive or infinite".into(),
+            ));
+        };
         validate_positive_vector(self.dimensions_body_m, "ultracapacitor dimensions")?;
         validate_finite_vector(self.position_body_m, "ultracapacitor position")
     }
@@ -229,9 +247,12 @@ pub struct SolarArraySpec {
 ///
 /// `Fixed` arrays never rotate. `SingleAxis` rotates the whole cell sheet
 /// about a body-frame axis (typical alpha-joint topology) at a bounded slew
-/// rate, drawing authored actuator power while moving. In automatic mode the
-/// drive slews toward the angle that maximizes instantaneous incident power
-/// over all supplied stellar sources; a manual angle target overrides it.
+/// rate, drawing authored actuator power while moving. `TwoAxis` chains two
+/// such joints (alpha + beta): the secondary axis rides in the
+/// primary-rotated frame, so the pair spans a two-dimensional pointing
+/// cone. In automatic mode the drive slews toward the angles that maximize
+/// instantaneous incident power over all supplied stellar sources; a manual
+/// angle target overrides it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum SolarArrayTracking {
@@ -246,46 +267,166 @@ pub enum SolarArrayTracking {
         actuator_power_w: f64,
         initial_angle_rad: f64,
     },
+    TwoAxis {
+        /// Unit primary (alpha-joint) rotation axis in body coordinates.
+        primary_rotation_axis_body: DVec3,
+        primary_minimum_angle_rad: f64,
+        primary_maximum_angle_rad: f64,
+        primary_slew_rate_rad_s: f64,
+        primary_actuator_power_w: f64,
+        primary_initial_angle_rad: f64,
+        /// Unit secondary (beta-joint) rotation axis, resolved in the
+        /// primary-rotated frame.
+        secondary_rotation_axis_body: DVec3,
+        secondary_minimum_angle_rad: f64,
+        secondary_maximum_angle_rad: f64,
+        secondary_slew_rate_rad_s: f64,
+        secondary_actuator_power_w: f64,
+        secondary_initial_angle_rad: f64,
+    },
+}
+
+/// Authored limits for one gimbal joint, shared by the single-axis drive
+/// and both joints of the two-axis drive.
+#[derive(Debug, Clone, Copy)]
+struct TrackingAxisLimits {
+    rotation_axis_body: DVec3,
+    minimum_angle_rad: f64,
+    maximum_angle_rad: f64,
+    slew_rate_rad_s: f64,
+    actuator_power_w: f64,
+    initial_angle_rad: f64,
+}
+
+fn validate_tracking_axis(
+    array_name: &str,
+    axis_label: &str,
+    limits: TrackingAxisLimits,
+) -> Result<(), ElectricalPowerError> {
+    let TrackingAxisLimits {
+        rotation_axis_body,
+        minimum_angle_rad,
+        maximum_angle_rad,
+        slew_rate_rad_s,
+        actuator_power_w,
+        initial_angle_rad,
+    } = limits;
+    validate_unit_vector(rotation_axis_body, "solar tracking axis")?;
+    for (value, label) in [
+        (minimum_angle_rad, "solar tracking minimum angle"),
+        (maximum_angle_rad, "solar tracking maximum angle"),
+        (initial_angle_rad, "initial solar tracking angle"),
+    ] {
+        if !value.is_finite() {
+            return Err(ElectricalPowerError::InvalidSpec(format!(
+                "solar array '{array_name}' {axis_label} {label} must be finite"
+            )));
+        }
+    }
+    if minimum_angle_rad > maximum_angle_rad {
+        return Err(ElectricalPowerError::InvalidSpec(format!(
+            "solar array '{array_name}' {axis_label} tracking limits must satisfy min <= max"
+        )));
+    }
+    if !(minimum_angle_rad..=maximum_angle_rad).contains(&initial_angle_rad) {
+        return Err(ElectricalPowerError::InvalidSpec(format!(
+            "solar array '{array_name}' {axis_label} initial tracking angle must lie within its limits"
+        )));
+    }
+    require_positive(slew_rate_rad_s, "solar tracking slew rate")?;
+    require_positive(actuator_power_w, "solar tracking actuator power")?;
+    Ok(())
 }
 
 impl SolarArrayTracking {
     fn validate(&self, array_name: &str) -> Result<(), ElectricalPowerError> {
-        let SolarArrayTracking::SingleAxis {
-            rotation_axis_body,
-            minimum_angle_rad,
-            maximum_angle_rad,
-            slew_rate_rad_s,
-            actuator_power_w,
-            initial_angle_rad,
-        } = self
-        else {
-            return Ok(());
-        };
-        validate_unit_vector(*rotation_axis_body, "solar tracking axis")?;
-        for (value, label) in [
-            (*minimum_angle_rad, "solar tracking minimum angle"),
-            (*maximum_angle_rad, "solar tracking maximum angle"),
-            (*initial_angle_rad, "initial solar tracking angle"),
-        ] {
-            if !value.is_finite() {
-                return Err(ElectricalPowerError::InvalidSpec(format!(
-                    "solar array '{array_name}' {label} must be finite"
-                )));
+        match self {
+            SolarArrayTracking::Fixed => Ok(()),
+            SolarArrayTracking::SingleAxis {
+                rotation_axis_body,
+                minimum_angle_rad,
+                maximum_angle_rad,
+                slew_rate_rad_s,
+                actuator_power_w,
+                initial_angle_rad,
+            } => validate_tracking_axis(
+                array_name,
+                "single-axis",
+                TrackingAxisLimits {
+                    rotation_axis_body: *rotation_axis_body,
+                    minimum_angle_rad: *minimum_angle_rad,
+                    maximum_angle_rad: *maximum_angle_rad,
+                    slew_rate_rad_s: *slew_rate_rad_s,
+                    actuator_power_w: *actuator_power_w,
+                    initial_angle_rad: *initial_angle_rad,
+                },
+            ),
+            SolarArrayTracking::TwoAxis {
+                primary_rotation_axis_body,
+                primary_minimum_angle_rad,
+                primary_maximum_angle_rad,
+                primary_slew_rate_rad_s,
+                primary_actuator_power_w,
+                primary_initial_angle_rad,
+                secondary_rotation_axis_body,
+                secondary_minimum_angle_rad,
+                secondary_maximum_angle_rad,
+                secondary_slew_rate_rad_s,
+                secondary_actuator_power_w,
+                secondary_initial_angle_rad,
+            } => {
+                validate_tracking_axis(
+                    array_name,
+                    "primary",
+                    TrackingAxisLimits {
+                        rotation_axis_body: *primary_rotation_axis_body,
+                        minimum_angle_rad: *primary_minimum_angle_rad,
+                        maximum_angle_rad: *primary_maximum_angle_rad,
+                        slew_rate_rad_s: *primary_slew_rate_rad_s,
+                        actuator_power_w: *primary_actuator_power_w,
+                        initial_angle_rad: *primary_initial_angle_rad,
+                    },
+                )?;
+                validate_tracking_axis(
+                    array_name,
+                    "secondary",
+                    TrackingAxisLimits {
+                        rotation_axis_body: *secondary_rotation_axis_body,
+                        minimum_angle_rad: *secondary_minimum_angle_rad,
+                        maximum_angle_rad: *secondary_maximum_angle_rad,
+                        slew_rate_rad_s: *secondary_slew_rate_rad_s,
+                        actuator_power_w: *secondary_actuator_power_w,
+                        initial_angle_rad: *secondary_initial_angle_rad,
+                    },
+                )?;
+                if primary_rotation_axis_body
+                    .cross(*secondary_rotation_axis_body)
+                    .length()
+                    < 1.0e-6
+                {
+                    return Err(ElectricalPowerError::InvalidSpec(format!(
+                        "solar array '{array_name}' two-axis gimbal axes must not be parallel"
+                    )));
+                }
+                Ok(())
             }
         }
-        if minimum_angle_rad > maximum_angle_rad {
-            return Err(ElectricalPowerError::InvalidSpec(format!(
-                "solar array '{array_name}' tracking limits must satisfy min <= max"
-            )));
+    }
+
+    /// Body-frame rotation axes this drive can slew about. Fixed arrays
+    /// expose none; single-axis one; two-axis both (primary first).
+    fn axes_body(&self) -> Vec<DVec3> {
+        match self {
+            SolarArrayTracking::Fixed => Vec::new(),
+            SolarArrayTracking::SingleAxis {
+                rotation_axis_body, ..
+            } => vec![*rotation_axis_body],
+            SolarArrayTracking::TwoAxis {
+                primary_rotation_axis_body,
+                secondary_rotation_axis_body,
+                ..
+            } => vec![*primary_rotation_axis_body, *secondary_rotation_axis_body],
         }
-        if !(*minimum_angle_rad..=*maximum_angle_rad).contains(initial_angle_rad) {
-            return Err(ElectricalPowerError::InvalidSpec(format!(
-                "solar array '{array_name}' initial tracking angle must lie within its limits"
-            )));
-        }
-        require_positive(*slew_rate_rad_s, "solar tracking slew rate")?;
-        require_positive(*actuator_power_w, "solar tracking actuator power")?;
-        Ok(())
     }
 
     fn initial_angle_rad(&self) -> f64 {
@@ -294,6 +435,26 @@ impl SolarArrayTracking {
             SolarArrayTracking::SingleAxis {
                 initial_angle_rad, ..
             } => *initial_angle_rad,
+            SolarArrayTracking::TwoAxis {
+                primary_initial_angle_rad,
+                ..
+            } => *primary_initial_angle_rad,
+        }
+    }
+
+    /// Initial (primary, secondary) angles. Fixed and single-axis drives
+    /// hold the secondary at zero.
+    fn initial_angles_rad(&self) -> (f64, f64) {
+        match self {
+            SolarArrayTracking::Fixed => (0.0, 0.0),
+            SolarArrayTracking::SingleAxis {
+                initial_angle_rad, ..
+            } => (*initial_angle_rad, 0.0),
+            SolarArrayTracking::TwoAxis {
+                primary_initial_angle_rad,
+                secondary_initial_angle_rad,
+                ..
+            } => (*primary_initial_angle_rad, *secondary_initial_angle_rad),
         }
     }
 }
@@ -336,18 +497,14 @@ impl SolarArraySpec {
         // A tracking axis parallel to the panel normal cannot change
         // incidence; reject the degenerate authoring instead of burning
         // actuator power for no effect.
-        if let SolarArrayTracking::SingleAxis {
-            rotation_axis_body, ..
-        } = self.tracking
-            && rotation_axis_body
-                .dot(self.panel_u_axis_body.cross(self.panel_v_axis_body))
-                .abs()
-                > 1.0 - 1.0e-6
-        {
-            return Err(ElectricalPowerError::InvalidSpec(format!(
-                "solar array '{}' tracking axis must not be parallel to the panel normal",
-                self.name
-            )));
+        let panel_normal = self.panel_u_axis_body.cross(self.panel_v_axis_body);
+        for axis in self.tracking.axes_body() {
+            if axis.dot(panel_normal).abs() > 1.0 - 1.0e-6 {
+                return Err(ElectricalPowerError::InvalidSpec(format!(
+                    "solar array '{}' tracking axis must not be parallel to the panel normal",
+                    self.name
+                )));
+            }
         }
         match self.deployment {
             SolarArrayDeployment::Fixed => {}
@@ -391,28 +548,64 @@ impl SolarArraySpec {
             .normalize()
     }
 
+    /// Reference-frame axes for a (primary, secondary) gimbal position.
+    /// Fixed arrays ignore both angles; single-axis arrays ignore the
+    /// secondary. The secondary axis rides in the primary-rotated frame,
+    /// matching the physical alpha/beta joint topology.
+    pub fn orientation_at_angles(
+        &self,
+        primary_angle_rad: f64,
+        secondary_angle_rad: f64,
+    ) -> (DVec3, DVec3, DVec3) {
+        let reference = (
+            self.panel_u_axis_body,
+            self.panel_v_axis_body,
+            self.normal_body(),
+        );
+        match self.tracking {
+            SolarArrayTracking::Fixed => reference,
+            SolarArrayTracking::SingleAxis {
+                rotation_axis_body, ..
+            } => {
+                let rotation = DQuat::from_axis_angle(rotation_axis_body, primary_angle_rad);
+                let u = rotation * self.panel_u_axis_body;
+                let v = rotation * self.panel_v_axis_body;
+                (u, v, u.cross(v).normalize())
+            }
+            SolarArrayTracking::TwoAxis {
+                primary_rotation_axis_body,
+                secondary_rotation_axis_body,
+                ..
+            } => {
+                let first = DQuat::from_axis_angle(primary_rotation_axis_body, primary_angle_rad);
+                let u = first * self.panel_u_axis_body;
+                let v = first * self.panel_v_axis_body;
+                let secondary_axis = first * secondary_rotation_axis_body;
+                let second = DQuat::from_axis_angle(secondary_axis, secondary_angle_rad);
+                let u = second * u;
+                let v = second * v;
+                (u, v, u.cross(v).normalize())
+            }
+        }
+    }
+
     /// Reference-frame axes rotated about the tracking axis by `angle_rad`.
     /// Fixed arrays ignore the angle and return the authored axes.
+    /// Two-axis arrays hold their secondary at zero here; the full pose
+    /// needs [`Self::orientation_at_angles`].
     pub fn orientation_at_angle(&self, angle_rad: f64) -> (DVec3, DVec3, DVec3) {
-        let SolarArrayTracking::SingleAxis {
-            rotation_axis_body, ..
-        } = self.tracking
-        else {
-            return (
-                self.panel_u_axis_body,
-                self.panel_v_axis_body,
-                self.normal_body(),
-            );
-        };
-        let rotation = DQuat::from_axis_angle(rotation_axis_body, angle_rad);
-        let u = rotation * self.panel_u_axis_body;
-        let v = rotation * self.panel_v_axis_body;
-        (u, v, u.cross(v).normalize())
+        self.orientation_at_angles(angle_rad, 0.0)
     }
 
     /// Active-side normal at the given tracking angle.
     pub fn normal_at_angle(&self, angle_rad: f64) -> DVec3 {
         self.orientation_at_angle(angle_rad).2
+    }
+
+    /// Active-side normal at the given (primary, secondary) gimbal position.
+    pub fn normal_at_angles(&self, primary_angle_rad: f64, secondary_angle_rad: f64) -> DVec3 {
+        self.orientation_at_angles(primary_angle_rad, secondary_angle_rad)
+            .2
     }
 
     pub fn mass_kg(&self) -> f64 {
@@ -1071,11 +1264,46 @@ impl ElectricalPowerSystem {
                 .iter()
                 .map(|array| array.tracking.initial_angle_rad())
                 .collect(),
+            solar_array_tracking_beta_angle_rad: self
+                .solar_arrays
+                .iter()
+                .map(|array| array.tracking.initial_angles_rad().1)
+                .collect(),
         })
     }
 
     pub fn mass_properties(&self) -> Result<PowerSystemMassProperties, ElectricalPowerError> {
         self.validate()?;
+        let initial_fuel: Vec<f64> = self
+            .reactors
+            .iter()
+            .map(|reactor| reactor.initial_fuel_mass_kg)
+            .collect();
+        self.mass_properties_with_reactor_fuel(&initial_fuel)
+    }
+
+    /// Installed mass with reactor fissile inventory at its live state value
+    /// instead of the authored initial load. Fuel burn therefore drifts vessel
+    /// mass/COM/inertia without a second bookkeeping path: call this after a
+    /// bus step when the caller recenters the vehicle frame.
+    pub fn live_mass_properties(
+        &self,
+        state: &ElectricalPowerState,
+    ) -> Result<PowerSystemMassProperties, ElectricalPowerError> {
+        self.validate()?;
+        state.validate_for(self)?;
+        self.mass_properties_with_reactor_fuel(&state.reactor_fuel_mass_kg)
+    }
+
+    fn mass_properties_with_reactor_fuel(
+        &self,
+        reactor_fuel_mass_kg: &[f64],
+    ) -> Result<PowerSystemMassProperties, ElectricalPowerError> {
+        if reactor_fuel_mass_kg.len() != self.reactors.len() {
+            return Err(ElectricalPowerError::InvalidState(
+                "reactor fuel inventory length does not match the authored power system".into(),
+            ));
+        }
         let mut mass_kg = 0.0;
         let mut first_moment = DVec3::ZERO;
         let mut inertia_about_origin = DMat3::ZERO;
@@ -1103,13 +1331,19 @@ impl ElectricalPowerSystem {
                     part.inertia_body_kg_m2(),
                 )
             }))
-            .chain(self.reactors.iter().map(|part| {
-                (
-                    part.installed_mass_kg(),
-                    part.position_body_m,
-                    part.inertia_body_kg_m2(),
-                )
-            }))
+            .chain(
+                self.reactors
+                    .iter()
+                    .zip(reactor_fuel_mass_kg)
+                    .map(|(part, fuel_kg)| {
+                        let live_mass_kg = part.dry_mass_kg + fuel_kg;
+                        (
+                            live_mass_kg,
+                            part.position_body_m,
+                            cuboid_inertia(live_mass_kg, part.dimensions_body_m),
+                        )
+                    }),
+            )
             .chain(self.fuel_cells.iter().map(|part| {
                 (
                     part.dry_mass_kg,
@@ -1217,37 +1451,97 @@ impl ElectricalPowerSystem {
         // target wins, otherwise the instantaneous optimum when enabled,
         // otherwise hold), then convert the rate-limited slew into a utility
         // motor load. Stowed arrays hold: no incidence, no reason to move.
+        // Two-axis arrays resolve both joints; their motor draws share one
+        // utility load slot and one granted fraction.
         let mut tracking_motor_request_w = vec![0.0; self.solar_arrays.len()];
         let mut tracking_targets_rad = state.solar_array_tracking_angle_rad.clone();
+        let mut tracking_beta_targets_rad = state.solar_array_tracking_beta_angle_rad.clone();
         for (index, array) in self.solar_arrays.iter().enumerate() {
-            let SolarArrayTracking::SingleAxis {
-                minimum_angle_rad,
-                maximum_angle_rad,
-                slew_rate_rad_s,
-                actuator_power_w,
-                ..
-            } = array.tracking
-            else {
-                continue;
-            };
             let current = state.solar_array_tracking_angle_rad[index];
+            let current_beta = state.solar_array_tracking_beta_angle_rad[index];
             let deployed = state.solar_array_deployed_fraction[index];
-            let desired = if let Some(manual) = command.solar_tracking_targets[index] {
-                manual.clamp(minimum_angle_rad, maximum_angle_rad)
-            } else if command.solar_tracking_auto[index] && deployed > 0.0 {
-                best_tracking_angle(array, current, &command.solar_flux, &source_weights_w_m2)
-            } else {
-                current
-            };
-            let maximum_delta = slew_rate_rad_s * command.dt_s;
-            let planned_delta = (desired - current).clamp(-maximum_delta, maximum_delta);
-            let duty = if maximum_delta > 0.0 {
-                (planned_delta.abs() / maximum_delta).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            tracking_targets_rad[index] = current + planned_delta;
-            tracking_motor_request_w[index] = actuator_power_w * duty;
+            match array.tracking {
+                SolarArrayTracking::Fixed => continue,
+                SolarArrayTracking::SingleAxis {
+                    minimum_angle_rad,
+                    maximum_angle_rad,
+                    slew_rate_rad_s,
+                    actuator_power_w,
+                    ..
+                } => {
+                    let desired = if let Some(manual) = command.solar_tracking_targets[index] {
+                        manual.clamp(minimum_angle_rad, maximum_angle_rad)
+                    } else if command.solar_tracking_auto[index] && deployed > 0.0 {
+                        best_tracking_angle(
+                            array,
+                            current,
+                            &command.solar_flux,
+                            &source_weights_w_m2,
+                        )
+                    } else {
+                        current
+                    };
+                    let maximum_delta = slew_rate_rad_s * command.dt_s;
+                    let planned_delta = (desired - current).clamp(-maximum_delta, maximum_delta);
+                    let duty = if maximum_delta > 0.0 {
+                        (planned_delta.abs() / maximum_delta).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    tracking_targets_rad[index] = current + planned_delta;
+                    tracking_motor_request_w[index] = actuator_power_w * duty;
+                }
+                SolarArrayTracking::TwoAxis {
+                    primary_minimum_angle_rad,
+                    primary_maximum_angle_rad,
+                    primary_slew_rate_rad_s,
+                    primary_actuator_power_w,
+                    secondary_minimum_angle_rad,
+                    secondary_maximum_angle_rad,
+                    secondary_slew_rate_rad_s,
+                    secondary_actuator_power_w,
+                    ..
+                } => {
+                    let (desired_primary, desired_beta) =
+                        if command.solar_tracking_auto[index] && deployed > 0.0 {
+                            best_tracking_angles(
+                                array,
+                                (current, current_beta),
+                                &command.solar_flux,
+                                &source_weights_w_m2,
+                            )
+                        } else {
+                            (current, current_beta)
+                        };
+                    let manual_primary = command.solar_tracking_targets[index].map(|target| {
+                        target.clamp(primary_minimum_angle_rad, primary_maximum_angle_rad)
+                    });
+                    let manual_beta = command.solar_tracking_beta_targets[index].map(|target| {
+                        target.clamp(secondary_minimum_angle_rad, secondary_maximum_angle_rad)
+                    });
+                    let target_primary = manual_primary.unwrap_or(desired_primary);
+                    let target_beta = manual_beta.unwrap_or(desired_beta);
+                    let max_primary = primary_slew_rate_rad_s * command.dt_s;
+                    let max_beta = secondary_slew_rate_rad_s * command.dt_s;
+                    let planned_primary =
+                        (target_primary - current).clamp(-max_primary, max_primary);
+                    let planned_beta = (target_beta - current_beta).clamp(-max_beta, max_beta);
+                    let duty_primary = if max_primary > 0.0 {
+                        (planned_primary.abs() / max_primary).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let duty_beta = if max_beta > 0.0 {
+                        (planned_beta.abs() / max_beta).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    tracking_targets_rad[index] = current + planned_primary;
+                    tracking_beta_targets_rad[index] = current_beta + planned_beta;
+                    tracking_motor_request_w[index] = primary_actuator_power_w * duty_primary
+                        + secondary_actuator_power_w * duty_beta;
+                }
+            }
         }
 
         // Explicit Euler uses exposed fraction and tracking angle at the
@@ -1257,8 +1551,19 @@ impl ElectricalPowerSystem {
             .iter()
             .zip(&state.solar_array_deployed_fraction)
             .zip(&state.solar_array_tracking_angle_rad)
-            .map(|((array, deployed), angle)| {
-                solar_array_power_w_at_angle(array, *deployed, *angle, &command.solar_flux)
+            .zip(&state.solar_array_tracking_beta_angle_rad)
+            .map(|(((array, deployed), angle), beta)| {
+                if matches!(array.tracking, SolarArrayTracking::TwoAxis { .. }) {
+                    solar_array_power_w_at_angles(
+                        array,
+                        *deployed,
+                        *angle,
+                        *beta,
+                        &command.solar_flux,
+                    )
+                } else {
+                    solar_array_power_w_at_angle(array, *deployed, *angle, &command.solar_flux)
+                }
             })
             .collect();
         let solar_available_power_w = finite_sum(&solar_available_by_array, "solar power")?;
@@ -1486,7 +1791,13 @@ impl ElectricalPowerSystem {
             let stored = initial_energy_j
                 + capacitor_charge[index] * capacitor.charge_efficiency * command.dt_s
                 - capacitor_discharge[index] * command.dt_s / capacitor.discharge_efficiency;
-            let final_energy_j = stored.clamp(0.0, capacitor.capacity_j);
+            let clamped_j = stored.clamp(0.0, capacitor.capacity_j);
+            // Self-discharge applies after the bus integration, so a parked
+            // buffer visibly leaks even with no loads attached. `tau = INF`
+            // recovers the legacy lossless factor of exactly 1.0.
+            let retention = (-command.dt_s / capacitor.self_discharge_time_s).exp();
+            let final_energy_j = (clamped_j * retention).clamp(0.0, capacitor.capacity_j);
+            let self_discharge_loss_j = (clamped_j - clamped_j * retention).max(0.0);
             next.capacitor_energy_j[index] = final_energy_j;
             capacitor_telemetry.push(UltracapacitorPowerTelemetry {
                 name: capacitor.name.clone(),
@@ -1494,6 +1805,7 @@ impl ElectricalPowerSystem {
                 final_energy_j,
                 charge_power_w: capacitor_charge[index],
                 discharge_power_w: capacitor_discharge[index],
+                self_discharge_loss_j,
             });
         }
 
@@ -1566,8 +1878,9 @@ impl ElectricalPowerSystem {
             } else {
                 0.0
             };
-            let final_angle = match array.tracking {
-                SolarArrayTracking::Fixed => 0.0,
+            let initial_beta = state.solar_array_tracking_beta_angle_rad[index];
+            let (final_angle, final_beta) = match array.tracking {
+                SolarArrayTracking::Fixed => (0.0, 0.0),
                 SolarArrayTracking::SingleAxis {
                     slew_rate_rad_s, ..
                 } => {
@@ -1575,10 +1888,28 @@ impl ElectricalPowerSystem {
                     let delta = target - initial_angle;
                     let actual_delta = delta.signum()
                         * (slew_rate_rad_s * command.dt_s * track_fraction).min(delta.abs());
-                    initial_angle + actual_delta
+                    (initial_angle + actual_delta, 0.0)
+                }
+                SolarArrayTracking::TwoAxis {
+                    primary_slew_rate_rad_s,
+                    secondary_slew_rate_rad_s,
+                    ..
+                } => {
+                    let target = tracking_targets_rad[index];
+                    let delta = target - initial_angle;
+                    let actual_primary = delta.signum()
+                        * (primary_slew_rate_rad_s * command.dt_s * track_fraction)
+                            .min(delta.abs());
+                    let beta_target = tracking_beta_targets_rad[index];
+                    let beta_delta = beta_target - initial_beta;
+                    let actual_beta = beta_delta.signum()
+                        * (secondary_slew_rate_rad_s * command.dt_s * track_fraction)
+                            .min(beta_delta.abs());
+                    (initial_angle + actual_primary, initial_beta + actual_beta)
                 }
             };
             next.solar_array_tracking_angle_rad[index] = final_angle;
+            next.solar_array_tracking_beta_angle_rad[index] = final_beta;
             let charged_power_w = solar_to_store[index];
             let spilled_power_w =
                 (solar_available_by_array[index] - solar_to_load[index] - charged_power_w).max(0.0);
@@ -1589,10 +1920,13 @@ impl ElectricalPowerSystem {
                 deployed_fraction: final_fraction,
                 tracking_angle_rad: final_angle,
                 tracking_target_rad: tracking_targets_rad[index],
+                tracking_beta_angle_rad: final_beta,
+                tracking_beta_target_rad: tracking_beta_targets_rad[index],
                 available_power_w: solar_available_by_array[index],
-                effective_incident_irradiance_w_m2: projected_irradiance_at_angle(
+                effective_incident_irradiance_w_m2: projected_irradiance_at_angles(
                     array,
                     initial_angle,
+                    initial_beta,
                     &command.solar_flux,
                 ),
                 power_to_load_w: solar_to_load[index],
@@ -1610,6 +1944,7 @@ impl ElectricalPowerSystem {
             .chain(&next.reactor_fuel_mass_kg)
             .chain(&next.solar_array_deployed_fraction)
             .chain(&next.solar_array_tracking_angle_rad)
+            .chain(&next.solar_array_tracking_beta_angle_rad)
             .any(|value| !value.is_finite())
         {
             return Err(ElectricalPowerError::InvalidState(
@@ -1695,6 +2030,10 @@ pub struct ElectricalPowerState {
     pub solar_array_deployed_fraction: Vec<f64>,
     #[serde(default)]
     pub solar_array_tracking_angle_rad: Vec<f64>,
+    /// Secondary (beta-joint) gimbal angle per array. Zero for fixed and
+    /// single-axis drives; only two-axis arrays slew it.
+    #[serde(default)]
+    pub solar_array_tracking_beta_angle_rad: Vec<f64>,
 }
 
 impl ElectricalPowerState {
@@ -1704,6 +2043,7 @@ impl ElectricalPowerState {
             || self.reactor_fuel_mass_kg.len() != system.reactors.len()
             || self.solar_array_deployed_fraction.len() != system.solar_arrays.len()
             || self.solar_array_tracking_angle_rad.len() != system.solar_arrays.len()
+            || self.solar_array_tracking_beta_angle_rad.len() != system.solar_arrays.len()
         {
             return Err(ElectricalPowerError::InvalidState(
                 "state array lengths do not match the authored power system".into(),
@@ -1733,11 +2073,12 @@ impl ElectricalPowerState {
                 )));
             }
         }
-        for ((array, deployed), angle) in system
+        for (((array, deployed), angle), beta) in system
             .solar_arrays
             .iter()
             .zip(&self.solar_array_deployed_fraction)
             .zip(&self.solar_array_tracking_angle_rad)
+            .zip(&self.solar_array_tracking_beta_angle_rad)
         {
             if !deployed.is_finite() || !(0.0..=1.0).contains(deployed) {
                 return Err(ElectricalPowerError::InvalidState(format!(
@@ -1775,6 +2116,30 @@ impl ElectricalPowerState {
                     array.name
                 )));
             }
+            if !beta.is_finite() {
+                return Err(ElectricalPowerError::InvalidState(format!(
+                    "solar array '{}' secondary tracking angle must be finite",
+                    array.name
+                )));
+            }
+            if let SolarArrayTracking::TwoAxis {
+                secondary_minimum_angle_rad,
+                secondary_maximum_angle_rad,
+                ..
+            } = array.tracking
+                && !(secondary_minimum_angle_rad..=secondary_maximum_angle_rad).contains(beta)
+            {
+                return Err(ElectricalPowerError::InvalidState(format!(
+                    "solar array '{}' secondary tracking angle is outside its limits",
+                    array.name
+                )));
+            }
+            if !matches!(array.tracking, SolarArrayTracking::TwoAxis { .. }) && *beta != 0.0 {
+                return Err(ElectricalPowerError::InvalidState(format!(
+                    "solar array '{}' secondary tracking angle must be zero without a two-axis drive",
+                    array.name
+                )));
+            }
         }
         Ok(())
     }
@@ -1804,6 +2169,10 @@ pub struct ElectricalPowerCommand {
     /// `None` holds (or auto-tracks); `Some(angle)` drives a single-axis
     /// array toward that body-frame angle in radians.
     pub solar_tracking_targets: Vec<Option<f64>>,
+    /// `None` holds (or auto-tracks with `solar_tracking_auto`); `Some`
+    /// drives a two-axis array's secondary joint. Must stay `None` for
+    /// fixed and single-axis arrays.
+    pub solar_tracking_beta_targets: Vec<Option<f64>>,
 }
 
 impl ElectricalPowerCommand {
@@ -1818,6 +2187,7 @@ impl ElectricalPowerCommand {
             solar_deployment_targets: vec![None; system.solar_arrays.len()],
             solar_tracking_auto: vec![false; system.solar_arrays.len()],
             solar_tracking_targets: vec![None; system.solar_arrays.len()],
+            solar_tracking_beta_targets: vec![None; system.solar_arrays.len()],
         }
     }
 
@@ -1833,6 +2203,7 @@ impl ElectricalPowerCommand {
             || self.solar_deployment_targets.len() != system.solar_arrays.len()
             || self.solar_tracking_auto.len() != system.solar_arrays.len()
             || self.solar_tracking_targets.len() != system.solar_arrays.len()
+            || self.solar_tracking_beta_targets.len() != system.solar_arrays.len()
         {
             return Err(ElectricalPowerError::InvalidCommand(
                 "command vector lengths do not match the authored power system".into(),
@@ -1895,6 +2266,26 @@ impl ElectricalPowerCommand {
                 )));
             }
         }
+        for (array, beta_target) in system
+            .solar_arrays
+            .iter()
+            .zip(&self.solar_tracking_beta_targets)
+        {
+            if let Some(beta_target) = beta_target {
+                if !beta_target.is_finite() {
+                    return Err(ElectricalPowerError::InvalidCommand(format!(
+                        "solar array '{}' secondary tracking target must be finite",
+                        array.name
+                    )));
+                }
+                if !matches!(array.tracking, SolarArrayTracking::TwoAxis { .. }) {
+                    return Err(ElectricalPowerError::InvalidCommand(format!(
+                        "solar array '{}' has no secondary gimbal axis",
+                        array.name
+                    )));
+                }
+            }
+        }
         for source in &self.solar_flux {
             source.validate_for_command()?;
         }
@@ -1916,6 +2307,11 @@ pub struct SolarArrayPowerTelemetry {
     pub deployed_fraction: f64,
     pub tracking_angle_rad: f64,
     pub tracking_target_rad: f64,
+    /// Secondary gimbal angle/target (rad); zero without a two-axis drive.
+    #[serde(default)]
+    pub tracking_beta_angle_rad: f64,
+    #[serde(default)]
+    pub tracking_beta_target_rad: f64,
     pub available_power_w: f64,
     /// Post-occlusion projected irradiance on the active side (W/m^2),
     /// before cell efficiency and exposed fraction.
@@ -1970,6 +2366,8 @@ pub struct UltracapacitorPowerTelemetry {
     pub charge_power_w: f64,
     /// Bus-side delivered power; stored energy falls by `P * dt / efficiency`.
     pub discharge_power_w: f64,
+    /// Energy lost to self-discharge this step (J, after bus integration).
+    pub self_discharge_loss_j: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2012,6 +2410,79 @@ impl ElectricalPowerTelemetry {
             .find(|allocation| allocation.name == consumer_name)
             .map(|allocation| allocation.supplied_power_w)
     }
+
+    /// Generation that found no load or storage this step (W): curtailed
+    /// solar plus unburned auxiliary headroom reported as spill. This is
+    /// the exportable surplus for a docked-bus tie.
+    pub fn spillable_power_w(&self) -> f64 {
+        (self.spilled_solar_power_w + self.spilled_auxiliary_power_w).max(0.0)
+    }
+}
+
+/// Power exchange across a docked interface: one vessel exports measured
+/// surplus to cover another vessel's deficit. The transfer resolves from
+/// last-step telemetry on both sides (explicit Euler, like every other
+/// cross-tick coupling): the exporter must have actually spilled the
+/// power, so the tie can neither invent energy nor double-serve a load.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct DockedBusTie {
+    /// Cable rating: maximum transfer rate (W).
+    pub max_transfer_power_w: f64,
+}
+
+impl DockedBusTie {
+    pub fn validate(&self) -> Result<(), ElectricalPowerError> {
+        if !self.max_transfer_power_w.is_finite() || self.max_transfer_power_w < 0.0 {
+            return Err(ElectricalPowerError::InvalidSpec(
+                "docked bus tie rating must be finite and non-negative".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Transferable power (W): the most the importer may book this step —
+    /// `min(exporter spill, importer unserved, rating)`. Non-finite or
+    /// negative telemetry fails closed instead of moving phantom power.
+    pub fn transfer_w(
+        &self,
+        exporter_spillable_w: f64,
+        importer_unserved_w: f64,
+    ) -> Result<f64, ElectricalPowerError> {
+        self.validate()?;
+        for (value, label) in [
+            (exporter_spillable_w, "exporter spill"),
+            (importer_unserved_w, "importer shortfall"),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(ElectricalPowerError::InvalidCommand(format!(
+                    "docked bus {label} must be finite and non-negative"
+                )));
+            }
+        }
+        Ok(exporter_spillable_w
+            .min(importer_unserved_w)
+            .min(self.max_transfer_power_w)
+            .max(0.0))
+    }
+
+    /// Book a resolved transfer into the importer's bus command as
+    /// auxiliary input, where it joins the normal source order
+    /// (solar → auxiliary → reactor → fuel cell → storage).
+    pub fn apply_to_importer(
+        &self,
+        command: &mut ElectricalPowerCommand,
+        transfer_w: f64,
+    ) -> Result<(), ElectricalPowerError> {
+        self.validate()?;
+        if !transfer_w.is_finite() || transfer_w < 0.0 {
+            return Err(ElectricalPowerError::InvalidCommand(
+                "docked bus transfer must be finite and non-negative".into(),
+            ));
+        }
+        command.auxiliary_generation_power_w =
+            (command.auxiliary_generation_power_w + transfer_w).max(0.0);
+        Ok(())
+    }
 }
 
 /// Post-occlusion irradiance projected onto the active side (W/m^2),
@@ -2021,7 +2492,18 @@ fn projected_irradiance_at_angle(
     angle_rad: f64,
     sources: &[SolarFluxSource],
 ) -> f64 {
-    let normal = array.normal_at_angle(angle_rad);
+    projected_irradiance_at_angles(array, angle_rad, 0.0, sources)
+}
+
+/// Post-occlusion irradiance projected onto the active side (W/m^2) at a
+/// (primary, secondary) gimbal position.
+fn projected_irradiance_at_angles(
+    array: &SolarArraySpec,
+    primary_angle_rad: f64,
+    secondary_angle_rad: f64,
+    sources: &[SolarFluxSource],
+) -> f64 {
+    let normal = array.normal_at_angles(primary_angle_rad, secondary_angle_rad);
     sources
         .iter()
         .map(|source| {
@@ -2042,6 +2524,23 @@ fn solar_array_power_w_at_angle(
         * deployed_fraction
 }
 
+fn solar_array_power_w_at_angles(
+    array: &SolarArraySpec,
+    deployed_fraction: f64,
+    primary_angle_rad: f64,
+    secondary_angle_rad: f64,
+    sources: &[SolarFluxSource],
+) -> f64 {
+    let normal = array.normal_at_angles(primary_angle_rad, secondary_angle_rad);
+    let projected: f64 = sources
+        .iter()
+        .map(|source| {
+            source.effective_irradiance_w_m2() * normal.dot(source.direction_body).max(0.0)
+        })
+        .sum();
+    projected * array.area_m2() * array.cell_efficiency * deployed_fraction
+}
+
 /// Objective maximized by sun tracking: post-occlusion projected
 /// irradiance (W/m^2) at a candidate angle.
 fn tracking_objective(
@@ -2056,6 +2555,85 @@ fn tracking_objective(
         .zip(weights_w_m2)
         .map(|(source, weight)| weight * normal.dot(source.direction_body).max(0.0))
         .sum()
+}
+
+/// Two-axis variant over a (primary, secondary) gimbal position.
+fn tracking_objective_at_angles(
+    array: &SolarArraySpec,
+    primary_angle_rad: f64,
+    secondary_angle_rad: f64,
+    sources: &[SolarFluxSource],
+    weights_w_m2: &[f64],
+) -> f64 {
+    let normal = array.normal_at_angles(primary_angle_rad, secondary_angle_rad);
+    sources
+        .iter()
+        .zip(weights_w_m2)
+        .map(|(source, weight)| weight * normal.dot(source.direction_body).max(0.0))
+        .sum()
+}
+
+/// Best two-axis gimbal position for the current stellar geometry.
+/// Coordinate descent alternating the proven single-axis scan per joint
+/// (two rounds): deterministic, bounded, and exact on single-axis
+/// hardware when the secondary stays parked.
+fn best_tracking_angles(
+    array: &SolarArraySpec,
+    current: (f64, f64),
+    sources: &[SolarFluxSource],
+    weights_w_m2: &[f64],
+) -> (f64, f64) {
+    let SolarArrayTracking::TwoAxis {
+        primary_minimum_angle_rad,
+        primary_maximum_angle_rad,
+        secondary_minimum_angle_rad,
+        secondary_maximum_angle_rad,
+        ..
+    } = array.tracking
+    else {
+        return (current.0, 0.0);
+    };
+    let total_weight: f64 = weights_w_m2.iter().sum();
+    if !total_weight.is_finite() || total_weight <= 0.0 {
+        return current;
+    }
+    let value_at = |(primary, secondary): (f64, f64)| {
+        tracking_objective_at_angles(array, primary, secondary, sources, weights_w_m2)
+    };
+    let scan_axis = |fixed: f64, secondary: bool, best: &mut (f64, f64), best_value: &mut f64| {
+        let (minimum, maximum) = if secondary {
+            (secondary_minimum_angle_rad, secondary_maximum_angle_rad)
+        } else {
+            (primary_minimum_angle_rad, primary_maximum_angle_rad)
+        };
+        const SAMPLES: usize = 24;
+        for sample in 0..=SAMPLES {
+            let angle = minimum + (maximum - minimum) * sample as f64 / SAMPLES as f64;
+            let candidate = if secondary {
+                (fixed, angle)
+            } else {
+                (angle, fixed)
+            };
+            let value = value_at(candidate);
+            if value > *best_value {
+                *best_value = value;
+                *best = candidate;
+            }
+        }
+    };
+    let mut best = current;
+    let mut best_value = value_at(current);
+    for _ in 0..2 {
+        scan_axis(best.1, false, &mut best, &mut best_value);
+        scan_axis(best.0, true, &mut best, &mut best_value);
+    }
+    // Hold position unless the gain exceeds numerical noise scaled by the
+    // incident scale; avoids wasteful eclipse hunting.
+    if best_value <= value_at(current) + 1.0e-9 * (1.0 + total_weight) {
+        current
+    } else {
+        best
+    }
 }
 
 /// Best single-axis angle in `[min, max]` for the current stellar geometry.
@@ -2314,6 +2892,7 @@ mod tests {
             specific_energy_j_kg: 20_000.0,
             dimensions_body_m: DVec3::splat(0.5),
             position_body_m: DVec3::ZERO,
+            self_discharge_time_s: f64::INFINITY,
         }
     }
 
@@ -2590,6 +3169,68 @@ mod tests {
     }
 
     #[test]
+    fn reactor_fuel_burn_drifts_live_installed_mass() {
+        let system = ElectricalPowerSystem {
+            batteries: vec![],
+            ultracapacitors: vec![],
+            solar_arrays: vec![],
+            reactors: vec![reactor()],
+            fuel_cells: vec![],
+            consumers: vec![consumer("life-support", 250.0, PowerPriority::LifeSupport)],
+        };
+        let state = system.initial_state().unwrap();
+        let at_bake = system.mass_properties().unwrap();
+        let live_at_bake = system.live_mass_properties(&state).unwrap();
+        assert!((at_bake.mass_kg - live_at_bake.mass_kg).abs() < 1.0e-12);
+        let mut command = ElectricalPowerCommand::idle_for(&system, 2.0);
+        command.consumer_power_w = vec![250.0];
+        let (next, report) = system.advance(&state, &command).expect("reactor step");
+        let live = system.live_mass_properties(&next).unwrap();
+        // The 12.5 mg burn leaves the bake; the drift equals the burn to the
+        // 50 kg dry-mass rounding quantum.
+        assert!(
+            (at_bake.mass_kg - live.mass_kg - report.reactors[0].fuel_consumed_kg).abs() < 1.0e-12
+        );
+        assert!((live.mass_kg - (50.0 + next.reactor_fuel_mass_kg[0])).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn ultracapacitor_self_discharge_decays_energy_exponentially() {
+        let mut bank = capacitor();
+        bank.self_discharge_time_s = 100.0;
+        let system = ElectricalPowerSystem {
+            batteries: vec![],
+            ultracapacitors: vec![bank],
+            solar_arrays: vec![],
+            reactors: vec![],
+            fuel_cells: vec![],
+            consumers: vec![],
+        };
+        let state = system.initial_state().unwrap();
+        assert_eq!(state.capacitor_energy_j[0], 100.0);
+        let command = ElectricalPowerCommand::idle_for(&system, 10.0);
+        let (next, report) = system.advance(&state, &command).expect("parked step");
+        let expected = 100.0 * (-0.1_f64).exp();
+        assert!((next.capacitor_energy_j[0] - expected).abs() < 1.0e-9);
+        assert!(
+            (report.ultracapacitors[0].self_discharge_loss_j - (100.0 - expected)).abs() < 1.0e-9
+        );
+    }
+
+    #[test]
+    fn ultracapacitor_self_discharge_rejects_bad_time_constants() {
+        for bad in [0.0, -5.0, f64::NAN, f64::NEG_INFINITY] {
+            let mut bank = capacitor();
+            bank.self_discharge_time_s = bad;
+            let system = ElectricalPowerSystem {
+                ultracapacitors: vec![bank],
+                ..ElectricalPowerSystem::default()
+            };
+            assert!(system.validate().is_err(), "tau {bad} must fail");
+        }
+    }
+
+    #[test]
     fn foldable_array_motion_is_rate_and_bus_power_limited() {
         let system = ElectricalPowerSystem {
             batteries: vec![],
@@ -2668,6 +3309,7 @@ mod tests {
             reactor_fuel_mass_kg: vec![0.01],
             solar_array_deployed_fraction: vec![],
             solar_array_tracking_angle_rad: vec![],
+            solar_array_tracking_beta_angle_rad: vec![],
         };
         let (charged, report) = system.advance(&empty, &charge).expect("charge step");
         assert!(report.capacitor_charge_power_w > 0.0);
@@ -2848,6 +3490,131 @@ mod tests {
         );
     }
 
+    fn two_axis_array() -> SolarArraySpec {
+        SolarArraySpec {
+            name: "two-axis-array".into(),
+            cell_count_x: 10,
+            cell_count_y: 10,
+            cell_size_x_m: 0.1,
+            cell_size_y_m: 0.1,
+            cell_efficiency: 0.25,
+            cell_areal_density_kg_m2: 4.0,
+            support_areal_density_kg_m2: 1.0,
+            panel_u_axis_body: DVec3::X,
+            panel_v_axis_body: DVec3::Y,
+            position_body_m: DVec3::ZERO,
+            deployment: SolarArrayDeployment::Fixed,
+            tracking: SolarArrayTracking::TwoAxis {
+                primary_rotation_axis_body: DVec3::X,
+                primary_minimum_angle_rad: -std::f64::consts::FRAC_PI_2,
+                primary_maximum_angle_rad: std::f64::consts::FRAC_PI_2,
+                primary_slew_rate_rad_s: 0.5,
+                primary_actuator_power_w: 60.0,
+                primary_initial_angle_rad: 0.0,
+                secondary_rotation_axis_body: DVec3::Y,
+                secondary_minimum_angle_rad: -std::f64::consts::FRAC_PI_2,
+                secondary_maximum_angle_rad: std::f64::consts::FRAC_PI_2,
+                secondary_slew_rate_rad_s: 0.5,
+                secondary_actuator_power_w: 40.0,
+                secondary_initial_angle_rad: 0.0,
+            },
+        }
+    }
+
+    #[test]
+    fn two_axis_gimbal_outperforms_single_axis_on_off_axis_sun() {
+        // Sun tilted in both X and Y: a single X-joint cannot bring the
+        // +X component into incidence, but the beta joint can.
+        let sun = DVec3::new(0.5, 0.5, 0.75).normalize();
+        let sources = vec![SolarFluxSource::new(1_000.0, sun, 1.0).unwrap()];
+        let weights = vec![1_000.0];
+        let single = tracking_array();
+        let dual = two_axis_array();
+        let single_best = best_tracking_angle(&single, 0.0, &sources, &weights);
+        let single_value = tracking_objective(&single, single_best, &sources, &weights);
+        let (primary, beta) = best_tracking_angles(&dual, (0.0, 0.0), &sources, &weights);
+        let dual_value = tracking_objective_at_angles(&dual, primary, beta, &sources, &weights);
+        // Beta joint moves off park and the pair captures nearly full sun.
+        assert!(beta.abs() > 0.1, "beta stayed parked: {beta}");
+        assert!(
+            dual_value > single_value + 50.0,
+            "dual {dual_value} vs single {single_value}"
+        );
+        assert!(
+            dual_value >= 0.995 * 1_000.0,
+            "dual should face the sun almost exactly: {dual_value}"
+        );
+    }
+
+    #[test]
+    fn two_axis_advance_slews_both_joints_and_books_both_motors() {
+        let system = ElectricalPowerSystem {
+            batteries: vec![],
+            ultracapacitors: vec![],
+            solar_arrays: vec![two_axis_array()],
+            reactors: vec![reactor()],
+            fuel_cells: vec![],
+            consumers: vec![consumer("avionics", 2_000.0, PowerPriority::FlightControl)],
+        };
+        let state = system.initial_state().unwrap();
+        assert_eq!(state.solar_array_tracking_beta_angle_rad[0], 0.0);
+        let sun = DVec3::new(0.5, 0.5, 0.75).normalize();
+        let mut command = ElectricalPowerCommand::idle_for(&system, 2.0);
+        command.solar_flux = vec![SolarFluxSource::new(1_600.0, sun, 1.0).unwrap()];
+        command.consumer_power_w = vec![200.0];
+        command.solar_tracking_auto = vec![true];
+        command.reactor_power_fraction = vec![0.0];
+        let (next, report) = system.advance(&state, &command).expect("track step");
+        assert!(
+            next.solar_array_tracking_angle_rad[0].abs() > 0.05,
+            "primary did not slew"
+        );
+        assert!(
+            next.solar_array_tracking_beta_angle_rad[0].abs() > 0.05,
+            "secondary did not slew"
+        );
+        assert!(report.solar_arrays[0].tracking_power_w > 0.0);
+        assert_eq!(
+            report.solar_arrays[0].tracking_beta_target_rad,
+            next.solar_array_tracking_beta_angle_rad[0]
+        );
+        // Manual beta target wins over automatic tracking.
+        let mut manual = ElectricalPowerCommand::idle_for(&system, 2.0);
+        manual.solar_flux = vec![SolarFluxSource::new(1_600.0, sun, 1.0).unwrap()];
+        manual.consumer_power_w = vec![0.0];
+        manual.solar_tracking_beta_targets = vec![Some(0.3)];
+        manual.reactor_power_fraction = vec![0.0];
+        let (posed, _) = system.advance(&state, &manual).expect("manual beta");
+        assert!(
+            (posed.solar_array_tracking_beta_angle_rad[0] - 0.3).abs() < 1.0e-12,
+            "beta target not reached: {:?}",
+            posed.solar_array_tracking_beta_angle_rad[0]
+        );
+    }
+
+    #[test]
+    fn degenerate_gimbal_authoring_fails_closed() {
+        // Parallel gimbal axes span no pointing cone.
+        let mut parallel = two_axis_array();
+        if let SolarArrayTracking::TwoAxis {
+            ref mut secondary_rotation_axis_body,
+            ..
+        } = parallel.tracking
+        {
+            *secondary_rotation_axis_body = DVec3::X;
+        }
+        assert!(parallel.validate().is_err());
+        // Beta targets on single-axis hardware are rejected.
+        let system = ElectricalPowerSystem {
+            solar_arrays: vec![tracking_array()],
+            ..ElectricalPowerSystem::default()
+        };
+        let state = system.initial_state().unwrap();
+        let mut command = ElectricalPowerCommand::idle_for(&system, 1.0);
+        command.solar_tracking_beta_targets = vec![Some(0.1)];
+        assert!(system.advance(&state, &command).is_err());
+    }
+
     #[test]
     fn tracking_optimum_matches_brute_force_within_envelope() {
         // Three fixed suns; compare the 72-sample search against a 3600-step
@@ -2892,5 +3659,74 @@ mod tests {
         assert!(system.advance(&state, &command).is_err());
         assert_eq!(state.battery_energy_j[0], 500.0);
         assert!(SolarFluxSource::from_luminosity(1.0, 0.0, DVec3::Z, 1.0).is_err());
+    }
+
+    fn solar_only_system() -> (ElectricalPowerSystem, ElectricalPowerState) {
+        let system = ElectricalPowerSystem {
+            solar_arrays: vec![array(SolarArrayDeployment::Fixed)],
+            consumers: vec![consumer("load", 2_000.0, PowerPriority::Utility)],
+            ..ElectricalPowerSystem::default()
+        };
+        let state = system.initial_state().unwrap();
+        (system, state)
+    }
+
+    #[test]
+    fn docked_bus_tie_moves_only_measured_surplus() {
+        // Exporter: 1 m² at 25% under 2000 W/m² face-on spills 400 W past
+        // a 100 W load. Importer: same array in darkness, 1000 W short.
+        let (exporter, export_state) = solar_only_system();
+        let mut export_cmd = ElectricalPowerCommand::idle_for(&exporter, 1.0);
+        export_cmd.consumer_power_w = vec![100.0];
+        export_cmd.solar_flux = vec![flux(2_000.0, DVec3::Z)];
+        let (_, export_report) = exporter
+            .advance(&export_state, &export_cmd)
+            .expect("export step");
+        assert!((export_report.spilled_solar_power_w - 400.0).abs() < 1.0e-9);
+        assert_eq!(export_report.spillable_power_w(), 400.0);
+
+        let (importer, import_state) = solar_only_system();
+        let mut import_cmd = ElectricalPowerCommand::idle_for(&importer, 1.0);
+        import_cmd.consumer_power_w = vec![1_000.0];
+        let (_, import_report) = importer
+            .advance(&import_state, &import_cmd)
+            .expect("import step");
+        assert_eq!(import_report.unserved_power_w, 1_000.0);
+
+        // Cable rating binds below both spill and shortfall.
+        let tie = DockedBusTie {
+            max_transfer_power_w: 250.0,
+        };
+        let transfer = tie
+            .transfer_w(
+                export_report.spillable_power_w(),
+                import_report.unserved_power_w,
+            )
+            .unwrap();
+        assert_eq!(transfer, 250.0);
+        // Booking the transfer as auxiliary input clears 250 W of shortfall.
+        tie.apply_to_importer(&mut import_cmd, transfer).unwrap();
+        let (_, relieved) = importer
+            .advance(&import_state, &import_cmd)
+            .expect("relieved step");
+        assert_eq!(relieved.unserved_power_w, 750.0);
+        assert_eq!(relieved.auxiliary_to_load_power_w, 250.0);
+
+        // Ratings and garbage fail closed; phantom power never moves.
+        assert!(tie.transfer_w(f64::NAN, 10.0).is_err());
+        assert!(tie.transfer_w(10.0, -1.0).is_err());
+        assert!(
+            DockedBusTie {
+                max_transfer_power_w: -5.0
+            }
+            .transfer_w(10.0, 10.0)
+            .is_err()
+        );
+        assert!(
+            tie.apply_to_importer(&mut import_cmd, f64::INFINITY)
+                .is_err()
+        );
+        // A dry exporter offers nothing even to a starving importer.
+        assert_eq!(tie.transfer_w(0.0, 1_000.0).unwrap(), 0.0);
     }
 }

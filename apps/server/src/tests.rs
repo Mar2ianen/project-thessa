@@ -233,7 +233,8 @@ fn maneuver_execution_flies_plan_to_completion() {
         )
         .unwrap();
         if with_execution {
-            sim.start_maneuver_execution(plan).expect("starts");
+            sim.start_maneuver_execution(plan, VehicleId::PRIMARY.0)
+                .expect("starts");
             assert!(!sim.authority.scheduler.is_empty());
         }
         let initial_vx = sim.authority.state.velocity_inertial_mps.x;
@@ -255,13 +256,13 @@ fn maneuver_execution_flies_plan_to_completion() {
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
             let t = sim.authority.flight_time_s;
-            if let Some((_, propulsion)) = &sim.guidance
+            if let Some((_, propulsion)) = &sim.primary_control().guidance
                 && propulsion.normalized > 0.5
             {
                 saw_burn = true;
             }
             max_thrust = max_thrust.max(sim.authority.thrust_n());
-            if with_execution && sim.maneuver_execution.is_none() {
+            if with_execution && sim.primary_control().maneuver_execution.is_none() {
                 break;
             }
             if let Some(until) = until_s
@@ -274,7 +275,7 @@ fn maneuver_execution_flies_plan_to_completion() {
             sim.authority.state.velocity_inertial_mps.x - initial_vx,
             saw_burn,
             max_thrust,
-            with_execution && sim.maneuver_execution.is_none(),
+            with_execution && sim.primary_control().maneuver_execution.is_none(),
             sim.authority.flight_time_s,
         )
     }
@@ -306,7 +307,10 @@ fn maneuver_execution_rejects_bad_plans() {
     let mut sim = Sim::new(ephemeris, reference_body, false, false).expect("sim");
     sim.register("pilot");
     let empty = ManeuverPlan::new(vec![], glam::DVec3::ZERO, glam::DVec3::X, SimTime(0.0)).unwrap();
-    assert!(sim.start_maneuver_execution(empty).is_err());
+    assert!(
+        sim.start_maneuver_execution(empty, VehicleId::PRIMARY.0)
+            .is_err()
+    );
     let stale = ManeuverPlan::new(
         vec![ManeuverNode::new(SimTime(5.0), glam::DVec3::X).unwrap()],
         glam::DVec3::ZERO,
@@ -317,8 +321,11 @@ fn maneuver_execution_rejects_bad_plans() {
     for _ in 0..10 {
         sim.advance_chunk(1.0).expect("advance");
     }
-    assert!(sim.start_maneuver_execution(stale).is_err());
-    assert!(sim.maneuver_execution.is_none());
+    assert!(
+        sim.start_maneuver_execution(stale, VehicleId::PRIMARY.0)
+            .is_err()
+    );
+    assert!(sim.primary_control().maneuver_execution.is_none());
 }
 
 #[test]
@@ -411,7 +418,7 @@ fn execute_maneuver_command_starts_and_rejects() {
         }],
     };
     assert!(sim.apply_input("pilot", &input(vec![command])));
-    assert!(sim.maneuver_execution.is_some());
+    assert!(sim.primary_control().maneuver_execution.is_some());
     assert!(!sim.authority.scheduler.is_empty());
     // Oversize is refused with a wake notice, nothing starts.
     // (apply_input returns its snapshot flag, not acceptance.)
@@ -430,7 +437,7 @@ fn execute_maneuver_command_starts_and_rejects() {
     malformed.throttle = 0.75;
     let controls_before = (sim.authority.control_input, sim.authority.throttle);
     assert!(!sim.apply_input("pilot", &malformed));
-    assert!(sim.maneuver_execution.is_none());
+    assert!(sim.primary_control().maneuver_execution.is_none());
     assert_eq!(
         (sim.authority.control_input, sim.authority.throttle),
         controls_before
@@ -449,7 +456,7 @@ fn execute_maneuver_command_starts_and_rejects() {
     malformed.throttle = 0.75;
     let controls_before = (sim.authority.control_input, sim.authority.throttle);
     assert!(!sim.apply_input("pilot", &malformed));
-    assert!(sim.maneuver_execution.is_none());
+    assert!(sim.primary_control().maneuver_execution.is_none());
     assert_eq!(
         (sim.authority.control_input, sim.authority.throttle),
         controls_before
@@ -493,7 +500,8 @@ fn burn_execution_flies_plan_to_completion() {
         )
         .unwrap();
         if with_execution {
-            sim.start_burn_execution(plan).expect("starts");
+            sim.start_burn_execution(plan, VehicleId::PRIMARY.0)
+                .expect("starts");
             assert!(!sim.authority.scheduler.is_empty());
         }
         let initial_vx = sim.authority.state.velocity_inertial_mps.x;
@@ -511,13 +519,13 @@ fn burn_execution_flies_plan_to_completion() {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
-            if let Some((_, propulsion)) = &sim.guidance
+            if let Some((_, propulsion)) = &sim.primary_control().guidance
                 && propulsion.normalized > 0.5
             {
                 saw_burn = true;
             }
             max_thrust = max_thrust.max(sim.authority.thrust_n());
-            if with_execution && sim.burn_execution.is_none() {
+            if with_execution && sim.primary_control().burn_execution.is_none() {
                 break;
             }
             if let Some(until) = until_s
@@ -530,7 +538,7 @@ fn burn_execution_flies_plan_to_completion() {
             sim.authority.state.velocity_inertial_mps.x - initial_vx,
             saw_burn,
             max_thrust,
-            with_execution && sim.burn_execution.is_none(),
+            with_execution && sim.primary_control().burn_execution.is_none(),
             sim.authority.flight_time_s,
         )
     }
@@ -577,7 +585,10 @@ fn burn_execution_rejects_bad_plans() {
         SimTime(0.0),
     )
     .unwrap();
-    assert!(sim.start_burn_execution(empty).is_err());
+    assert!(
+        sim.start_burn_execution(empty, VehicleId::PRIMARY.0)
+            .is_err()
+    );
     let stale = FiniteBurnPlan::new(
         vec![BurnSegment {
             start: SimTime(5.0),
@@ -593,8 +604,11 @@ fn burn_execution_rejects_bad_plans() {
     // Flight clock starts at 0: a plan starting at t=5 is... fresh
     // here; force staleness by advancing the clock past the segment.
     sim.authority.flight_time_s = 50.0;
-    assert!(sim.start_burn_execution(stale).is_err());
-    assert!(sim.burn_execution.is_none());
+    assert!(
+        sim.start_burn_execution(stale, VehicleId::PRIMARY.0)
+            .is_err()
+    );
+    assert!(sim.primary_control().burn_execution.is_none());
     // Mutual exclusion with node execution (both directions).
     sim.authority.flight_time_s = 0.0;
     let live = FiniteBurnPlan::new(
@@ -606,7 +620,8 @@ fn burn_execution_rejects_bad_plans() {
         SimTime(0.0),
     )
     .unwrap();
-    sim.start_burn_execution(live).expect("burn starts");
+    sim.start_burn_execution(live, VehicleId::PRIMARY.0)
+        .expect("burn starts");
     let node_plan = ManeuverPlan::new(
         vec![ManeuverNode::new(SimTime(40.0), glam::DVec3::X).unwrap()],
         sim.authority.state.position_inertial_m,
@@ -614,9 +629,12 @@ fn burn_execution_rejects_bad_plans() {
         SimTime(0.0),
     )
     .unwrap();
-    assert!(sim.start_maneuver_execution(node_plan).is_err());
-    sim.clear_autopilot_controls();
-    assert!(sim.burn_execution.is_none());
+    assert!(
+        sim.start_maneuver_execution(node_plan, VehicleId::PRIMARY.0)
+            .is_err()
+    );
+    sim.clear_autopilot_controls(VehicleId::PRIMARY.0);
+    assert!(sim.primary_control().burn_execution.is_none());
 }
 
 #[test]
@@ -663,7 +681,7 @@ fn execute_burn_plan_command_starts_and_rejects() {
         ],
     };
     assert!(sim.apply_input("pilot", &input(vec![command])));
-    assert!(sim.burn_execution.is_some());
+    assert!(sim.primary_control().burn_execution.is_some());
     assert!(!sim.authority.scheduler.is_empty());
     // Oversize is refused with a wake notice, nothing starts.
     let mut sim = fresh_sim();
@@ -674,7 +692,7 @@ fn execute_burn_plan_command_starts_and_rejects() {
         segments: vec![segment(30.0); 65],
     };
     assert!(!sim.apply_input("pilot", &input(vec![big])));
-    assert!(sim.burn_execution.is_none());
+    assert!(sim.primary_control().burn_execution.is_none());
     assert!(sim.last_client_inputs.is_empty());
     // Unknown RTN central and dead engine are refused the same way.
     let mut sim = fresh_sim();
@@ -693,7 +711,7 @@ fn execute_burn_plan_command_starts_and_rejects() {
         }],
     };
     let _ = sim.apply_input("pilot", &input(vec![lost]));
-    assert!(sim.burn_execution.is_none());
+    assert!(sim.primary_control().burn_execution.is_none());
     assert!(sim.authority.wake_notice.is_some());
     let mut sim = fresh_sim();
     let dead = Command::ExecuteBurnPlan {
@@ -703,7 +721,7 @@ fn execute_burn_plan_command_starts_and_rejects() {
         segments: vec![segment(30.0)],
     };
     assert!(!sim.apply_input("pilot", &input(vec![dead])));
-    assert!(sim.burn_execution.is_none());
+    assert!(sim.primary_control().burn_execution.is_none());
     assert!(sim.last_client_inputs.is_empty());
 }
 
@@ -717,6 +735,7 @@ fn typed_guidance_reaches_the_authoritative_stepper() {
     sim.register("pilot");
     let guidance = GuidanceInput {
         tick: 0,
+        vehicle_id: VehicleId::PRIMARY,
         intent: GuidanceIntent::Attitude {
             target_body_to_inertial: DQuat::from_rotation_y(0.05),
             roll_policy: thessa_flight_authority::RollPolicy::Hold,
@@ -725,7 +744,7 @@ fn typed_guidance_reaches_the_authoritative_stepper() {
     };
     assert!(sim.apply_guidance("pilot", &guidance));
     sim.advance_chunk(0.02).expect("advance typed guidance");
-    assert_eq!(sim.control_mode, ControlMode::Navball);
+    assert_eq!(sim.primary_control().control_mode, ControlMode::Navball);
     assert!(sim.authority.state.position_inertial_m.is_finite());
 }
 
@@ -747,19 +766,19 @@ fn server_owns_script_waits_and_wakes_them_on_sim_time() {
     };
     assert!(sim.apply_autopilot("pilot", &input, &mut host));
     assert_eq!(host.scheduler.pending(), 1);
-    assert!(sim.guidance.is_none());
+    assert!(sim.primary_control().guidance.is_none());
     assert_eq!(host.scheduler.next_time(), Some(SimTime(0.05)));
 
     sim.authority.flight_time_s = 0.05;
     assert!(sim.wake_autopilot(&mut host, &[]).expect("wake script"));
     assert!(matches!(
-        sim.guidance,
+        sim.primary_control().guidance,
         Some((
             GuidanceIntent::AngularRate { .. },
             PropulsionDemand { normalized: 0.0 }
         ))
     ));
-    assert_eq!(sim.control_mode, ControlMode::Rate);
+    assert_eq!(sim.primary_control().control_mode, ControlMode::Rate);
 }
 
 #[test]
@@ -784,12 +803,12 @@ fn neutral_input_and_warp_votes_do_not_cancel_a_waiting_script() {
     driver.apply_client_input("pilot", &input(vec![Command::SetWarp { factor: 128.0 }]));
     assert_eq!(driver.autopilot.scheduler.pending(), 1);
 
-    driver.sim.plan_demand = Some(ControlDemand {
+    driver.sim.primary_control_mut().plan_demand = Some(ControlDemand {
         force_body_n: DVec3::X * 100.0,
         moment_body_nm: DVec3::Y * 50.0,
         propulsion: PropulsionDemand::new(0.8).unwrap(),
     });
-    driver.sim.guidance = Some((
+    driver.sim.primary_control_mut().guidance = Some((
         GuidanceIntent::AngularRate {
             rate_body_rps: DVec3::X,
         },
@@ -804,8 +823,8 @@ fn neutral_input_and_warp_votes_do_not_cancel_a_waiting_script() {
     manual.control_input = [0.25, 0.0, 0.0];
     driver.apply_client_input("pilot", &manual);
     assert_eq!(driver.autopilot.scheduler.pending(), 0);
-    assert!(driver.sim.plan_demand.is_none());
-    assert!(driver.sim.guidance.is_none());
+    assert!(driver.sim.primary_control().plan_demand.is_none());
+    assert!(driver.sim.primary_control().guidance.is_none());
     assert_eq!(driver.sim.authority.thrust_n(), 0.0);
 }
 
@@ -843,7 +862,7 @@ fn cancel_and_graph_submit_drop_old_script_continuations() {
             .unwrap()
             .is_empty()
     );
-    assert!(driver.sim.guidance.is_none());
+    assert!(driver.sim.primary_control().guidance.is_none());
 
     assert!(
         driver
@@ -872,7 +891,7 @@ fn cancel_and_graph_submit_drop_old_script_continuations() {
             .unwrap()
             .is_empty()
     );
-    assert!(driver.sim.guidance.is_none());
+    assert!(driver.sim.primary_control().guidance.is_none());
 }
 
 #[test]
@@ -1026,8 +1045,8 @@ fn server_executes_and_deoptimizes_a_submitted_plan() {
     sim.authority.flight_time_s = 0.13;
     sim.poll_plan(None).expect("advance to guidance cursor");
     assert_eq!(sim.plan_runner.as_ref().unwrap().segment_index(), 2);
-    assert!(sim.plan_demand.is_none());
-    assert!(sim.guidance.is_some());
+    assert!(sim.primary_control().plan_demand.is_none());
+    assert!(sim.primary_control().guidance.is_some());
 
     let deoptimize = AutopilotInput {
         tick: 1,
@@ -1078,7 +1097,7 @@ fn server_wakes_a_plan_from_an_authoritative_event() {
     assert_eq!(events, vec![AutopilotEvent::Impact]);
     assert!(sim.poll_plan(Some("impact")).expect("wake plan"));
     assert_eq!(sim.plan_runner.as_ref().unwrap().segment_index(), 1);
-    assert_eq!(sim.control_mode, ControlMode::Rate);
+    assert_eq!(sim.primary_control().control_mode, ControlMode::Rate);
 }
 
 #[test]
@@ -1205,9 +1224,9 @@ fn server_applies_configured_graph_guidance_through_authority() {
         },
         &mut host,
     ));
-    assert_eq!(sim.control_mode, ControlMode::Rate);
+    assert_eq!(sim.primary_control().control_mode, ControlMode::Rate);
     assert!(matches!(
-        sim.guidance,
+        sim.primary_control().guidance,
         Some((
             GuidanceIntent::AngularRate { .. },
             PropulsionDemand { normalized: 0.0 }
@@ -1539,6 +1558,7 @@ fn first_client_owns_controls_and_disconnect_transfers_in_order() {
 
     let invalid_guidance = GuidanceInput {
         tick: 0,
+        vehicle_id: VehicleId::PRIMARY,
         intent: GuidanceIntent::AngularRate {
             rate_body_rps: DVec3::splat(f64::NAN),
         },
@@ -1755,6 +1775,7 @@ fn ingress_watermark_defers_latest_state_behind_a_second_event_slice() {
     driver.sim.register("pilot");
     let guidance = GuidanceInput {
         tick: 0,
+        vehicle_id: VehicleId::PRIMARY,
         intent: GuidanceIntent::AngularRate {
             rate_body_rps: DVec3::ZERO,
         },
@@ -2241,4 +2262,118 @@ fn jointed_pair_persists_partner_solver_state_and_synchronized_time() {
     assert!(
         (advanced_partner.state.position_inertial_m - initial_partner_position).length() > 1.0e-4
     );
+}
+
+fn input_for_vehicle(vehicle_id: VehicleId, commands: Vec<Command>) -> ClientInput {
+    let mut base = input(commands);
+    base.vehicle_id = vehicle_id;
+    base
+}
+
+#[test]
+fn pilot_commands_route_to_the_targeted_vehicle_only() {
+    let (mut driver, _) = test_driver();
+    driver.sim.register("pilot");
+    install_separable_vehicle(&mut driver.sim);
+    assert!(driver.sim.apply_input(
+        "pilot",
+        &input(vec![Command::Separate {
+            vehicle_id: VehicleId::PRIMARY,
+            link_name: "stack".into(),
+        }])
+    ));
+    assert_eq!(driver.sim.fleet.len(), 1);
+    let primary_throttle = driver.sim.authority.throttle;
+    // Throttle + engine on the secondary leaves the primary untouched.
+    let mut secondary_input =
+        input_for_vehicle(VehicleId::new(1), vec![Command::Engine { active: true }]);
+    secondary_input.throttle = 0.7;
+    assert!(driver.sim.apply_input("pilot", &secondary_input));
+    let secondary = driver.sim.fleet.get(&1).expect("secondary");
+    assert_eq!(secondary.throttle, 0.7);
+    assert!(secondary.engine_active);
+    assert_eq!(driver.sim.authority.throttle, primary_throttle);
+    assert!(!driver.sim.authority.engine_active);
+    // Unknown vehicles fail closed with a notice and no state change.
+    let before = driver.sim.authority.throttle;
+    let mut unknown = input_for_vehicle(VehicleId::new(7), vec![Command::Engine { active: true }]);
+    unknown.throttle = 0.9;
+    assert!(!driver.sim.apply_input("pilot", &unknown));
+    assert_eq!(driver.sim.authority.throttle, before);
+    assert_eq!(driver.sim.fleet.len(), 1);
+}
+
+#[test]
+fn guidance_and_maneuver_execution_are_per_vehicle() {
+    let (mut driver, _) = test_driver();
+    driver.sim.register("pilot");
+    install_separable_vehicle(&mut driver.sim);
+    assert!(driver.sim.apply_input(
+        "pilot",
+        &input(vec![Command::Separate {
+            vehicle_id: VehicleId::PRIMARY,
+            link_name: "stack".into(),
+        }])
+    ));
+    // Typed guidance targets the secondary alone.
+    let guidance = GuidanceInput {
+        tick: 1,
+        vehicle_id: VehicleId::new(1),
+        intent: GuidanceIntent::Attitude {
+            target_body_to_inertial: DQuat::from_rotation_y(0.1),
+            roll_policy: thessa_flight_authority::RollPolicy::Hold,
+        },
+        propulsion: PropulsionDemand::new(0.3).unwrap(),
+    };
+    assert!(driver.sim.apply_guidance("pilot", &guidance));
+    assert!(driver.sim.fleet.get(&1).expect("secondary").throttle >= 0.0);
+    assert!(
+        driver
+            .sim
+            .controls
+            .get(&1)
+            .expect("secondary control")
+            .guidance
+            .is_some()
+    );
+    assert!(driver.sim.primary_control().guidance.is_none());
+    // A maneuver plan arms on the secondary scheduler and polls there.
+    let now = driver.sim.fleet.get(&1).expect("secondary").flight_time_s;
+    let maneuver = Command::ExecuteManeuver {
+        nodes: vec![thessa_flight_net::ManeuverNodeCommand {
+            epoch_s: now + 100.0,
+            delta_v_mps: [10.0, 0.0, 0.0],
+        }],
+    };
+    assert!(driver.sim.apply_input(
+        "pilot",
+        &input_for_vehicle(VehicleId::new(1), vec![maneuver])
+    ));
+    assert!(
+        driver
+            .sim
+            .controls
+            .get(&1)
+            .expect("secondary control")
+            .maneuver_execution
+            .is_some()
+    );
+    assert!(driver.sim.primary_control().maneuver_execution.is_none());
+    // Stick takeover on the primary leaves the secondary execution intact.
+    let mut takeover = input(vec![]);
+    takeover.control_input = [0.5, 0.0, 0.0];
+    let _ = driver.sim.apply_input("pilot", &takeover);
+    assert!(
+        driver
+            .sim
+            .controls
+            .get(&1)
+            .expect("secondary control")
+            .maneuver_execution
+            .is_some()
+    );
+    // The secondary serves its own executors on the shared clock.
+    let t0 = driver.sim.fleet.get(&1).expect("secondary").flight_time_s;
+    driver.sim.advance_chunk(0.05).expect("advance");
+    assert!(driver.sim.fleet.get(&1).expect("secondary").flight_time_s > t0);
 }

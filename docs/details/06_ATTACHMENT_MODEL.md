@@ -196,10 +196,16 @@ exercises that sequence under an applied load. `CollisionWorld` reports
 constraint loads only; it does not assign structural damage or infer ratings.
 
 The server owns the fleet above that scene. `Sim` keeps the primary
-`FlightAuthority` on its fast path and spawns passive secondaries from
+`FlightAuthority` on its fast path and spawns secondaries from
 `VehicleDefinition::split_definitions_after_link_failure` on a `Separate`
 command (root-body cluster keeps the source id, every authority shares one
-server clock and warp). `Dock`/`Undock` commands open and close persisted
+server clock and warp). Every input packet and typed guidance command carries
+the targeted vehicle id (wire v7, primary by default): continuous controls,
+part/engine/stage commands, typed guidance, and maneuver/burn plans all route
+to the targeted vehicle, which keeps its own control mode, guidance, and
+maneuver/burn executors and serves them on the shared tick. Graphs, scripts,
+trajectory plans, and landing/impact declarations stay primary-only.
+`Dock`/`Undock` commands open and close persisted
 `DockGraph` sessions between authored `docking_ports` (baked from
 `BodyPort::Docking` as D1 with the port +X convention as outward normal);
 the protocol gates capture and alignment on live `DockingKinematics` every
@@ -210,7 +216,7 @@ wrenches — exact in vacuum — with capped per-tick debt that sheds like the
 CPU work budget; thrust and effector commands on jointed vehicles fail
 closed for want of a combined stack model, and atmosphere ends the joint
 (and its session) rather than degrading physics. Fleet snapshots ride a
-dedicated wire kind (v6) behind the unchanged primary snapshot; the client
+dedicated wire kind behind the unchanged primary snapshot; the client
 still tracks the primary vehicle.
 
 `VehicleAssembly::body_components_after_link_failure` computes deterministic
@@ -304,8 +310,8 @@ four-body/sixty-four-panel definition split on an AMD Ryzen 7 8745H
   pulsed, propeller, and turboprop drives, wheel/leg gear, reaction wheels,
   parachutes, fold joints, blunt discs, and power/thermal network partition
   across clusters.
-- Combined control allocation and thrust for jointed stacks; commanding and
-  autopilot for non-primary vehicles; client multi-vehicle rendering;
+- Combined control allocation and thrust for jointed stacks; per-vehicle
+  graphs, scripts, and trajectory plans; client multi-vehicle rendering;
   vehicle despawn policy; jointed atmospheric cruise.
 - Branched feed-network pressure/flow solving, rate limits, and drain-order
   policy beyond the current least-drop path calculation.

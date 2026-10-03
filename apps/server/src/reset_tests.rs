@@ -14,6 +14,7 @@ fn sim_with_terrain() -> Sim {
 fn input(commands: Vec<Command>) -> ClientInput {
     ClientInput {
         tick: 0,
+        vehicle_id: VehicleId::PRIMARY,
         control_input: [0.0; 3],
         control_mode: ControlMode::Direct,
         sas_target_xyzw: [0.0, 0.0, 0.0, 1.0],
@@ -141,7 +142,7 @@ fn ascent_graph_flies_to_orbit_through_phase_laws() {
             } else {
                 1.0
             };
-            let (cmd, nose_err) = match sim.guidance.as_ref().map(|(i, _)| i) {
+            let (cmd, nose_err) = match sim.primary_control().guidance.as_ref().map(|(i, _)| i) {
                 Some(thessa_flight_control::GuidanceIntent::VelocityDirection {
                     direction,
                     ..
@@ -180,7 +181,10 @@ fn ascent_graph_flies_to_orbit_through_phase_laws() {
                 thessa_autopilot::ascent::predict_periapsis_m(mu, rel, rel_vel)
                     .map(|p| (p - radius) / 1000.0)
                     .unwrap_or(-1.0),
-                sim.guidance.as_ref().map(|(_, p)| p.normalized),
+                sim.primary_control()
+                    .guidance
+                    .as_ref()
+                    .map(|(_, p)| p.normalized),
                 sim.authority.vehicle.mass_properties.mass_kg,
             );
         }

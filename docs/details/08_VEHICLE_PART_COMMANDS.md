@@ -28,6 +28,15 @@ resolve a stage definition into part commands. Future stage and action-group
 bindings should emit these same typed commands rather than implementing their
 own subsystem state changes.
 
+Every input packet and typed guidance command carries the targeted
+authoritative vehicle (`vehicle_id`, primary by default). The pilot flies one
+vehicle per packet and switches freely; continuous controls, part/engine/stage
+commands, typed guidance, and maneuver/burn plans all route to the targeted
+vehicle, which keeps its own control mode, guidance, and executors. Takeover
+and state echoes compare against the last packet for the same vehicle, so
+monitoring a secondary never cancels its automation. Graphs, scripts,
+trajectory plans, and landing/impact declarations stay primary-only.
+
 Subsystem state machines remain authoritative: gear actuators advance toward
 their deployment command, parachutes still wait for their authored opening
 conditions after arming, and all loads are evaluated by the physics runtime.

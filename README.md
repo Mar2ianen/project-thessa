@@ -57,8 +57,9 @@ The checked-in vertical slice currently contains:
   Lambert, plane change, velocity matching) plus candidate search. Planning
   approximations are revalidated through the exact field before execution;
 - `thessa-flight-net` and `thessa-protocol`: versioned framed input/snapshot
-  transport (wire v6) with strict validation, ordered typed part commands,
-  and fleet Separate/Dock/Undock commands plus fleet snapshots;
+  transport (wire v7) with strict validation, ordered typed part commands,
+  per-vehicle input/guidance targeting, and fleet Separate/Dock/Undock
+  commands plus fleet snapshots;
 - `apps/server`: headless authoritative simulation over stdio or TCP, with a
   server-owned vehicle fleet (separation spawning, dock sessions with fixed
   joints, live resource-state preservation across separation, fleet snapshots);
@@ -87,7 +88,7 @@ The checked-in vertical slice currently contains:
 - isolated validation harnesses for orbital and aerodynamic reference checks.
 
 Factory gameplay, general three-spool/clutched and free-power-turbine dynamics,
-combined control of jointed stacks, commanding non-primary vehicles, client
+combined control of jointed stacks, per-vehicle graphs/scripts/plans, client
 fleet rendering, vehicle despawn policy, physical structural fracture beyond
 rated-joint assessment, joint-to-link load mapping with authoritative
 failure/split commit, branched fluid networks, full electrical networks, shield thermal

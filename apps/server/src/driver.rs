@@ -240,7 +240,7 @@ impl Driver {
             Ok(changed) => force_snapshot |= changed,
             Err(error) => {
                 self.autopilot.scheduler.cancel_all();
-                force_snapshot |= self.sim.fail_autopilot(error);
+                force_snapshot |= self.sim.fail_autopilot(error, VehicleId::PRIMARY.0);
             }
         }
         let warp_after_inputs = self.sim.requested_warp();
@@ -321,7 +321,7 @@ impl Driver {
                 Ok(changed) => force_snapshot |= changed,
                 Err(error) => {
                     self.autopilot.scheduler.cancel_all();
-                    force_snapshot |= self.sim.fail_autopilot(error);
+                    force_snapshot |= self.sim.fail_autopilot(error, VehicleId::PRIMARY.0);
                 }
             }
             let lag_s = (self.pacing_target_s

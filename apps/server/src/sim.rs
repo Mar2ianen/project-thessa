@@ -99,36 +99,17 @@ pub(super) fn legacy_propulsion_echo_changed(
 /// values; dock sessions and fixed-joint handles live in `dock_graph` and
 /// `dock_joints`. Secondaries fly passive (fresh default controls, no
 /// autopilot graphs); commanding them is a later slice.
-pub(super) struct Sim {
-    pub(super) authority: FlightAuthority,
-    pub(super) fleet: std::collections::BTreeMap<u32, FlightAuthority>,
-    pub(super) next_vehicle_id: u32,
-    pub(super) dock_graph: DockGraph,
-    pub(super) dock_joints: std::collections::BTreeMap<(u32, u32), JointId>,
-    pub(super) ephemeris: BakedEphemeris,
+/// Per-vehicle pilot and flight-control automation state: manual control
+/// mode plus typed guidance, plan demand, and maneuver/burn executors.
+/// Graph-parked phases, scripts, trajectory plans, and landing/impact
+/// declarations stay Sim-global and primary-only; this record is what flies
+/// one vehicle, primary or secondary.
+pub(super) struct VehicleControl {
     pub(super) control_mode: ControlMode,
     /// Latest typed guidance command. Legacy ClientInput clears this so the
     /// two input protocols cannot fight over the same vehicle.
     pub(super) guidance: Option<(GuidanceIntent, PropulsionDemand)>,
     pub(super) plan_demand: Option<ControlDemand>,
-    pub(super) autopilot_graph: Option<AutopilotGraph>,
-    pub(super) graph_runner: Option<GraphRunner>,
-    /// Currently parked autopilot phase (node, name, config, park time).
-    /// The per-tick phase law steers from its IR parameters; completion
-    /// publishes the node-name event plus the domain event, the watchdog
-    /// fails the graph. Cleared on retire, takeover, and cancel.
-    pub(super) phase_park: Option<PhasePark>,
-    /// A parked Execute burn delegated to `maneuver_execution`: the
-    /// executor owns guidance until it clears, then the burn retires.
-    pub(super) burn_delegated: bool,
-    pub(super) graph_block: NativeGraphBlock,
-    /// Declared autopilot targets stay data-only until a later landing/
-    /// impact planner consumes them and asks the field for obstacle evidence.
-    pub(super) landing_site: Option<LandingSite>,
-    pub(super) landing_obstacles: Option<ObstacleReport>,
-    pub(super) impact_site: Option<ImpactSite>,
-    pub(super) impact_obstacles: Option<ObstacleReport>,
-    pub(super) plan_runner: Option<TrajectoryPlanRunner>,
     /// Active maneuver-plan execution (ExecuteManeuver block). Drives
     /// `guidance` through a `NodeExecutor`; cleared on completion/abort,
     /// after latching a zero-throttle hold so handoff is never abrupt.
@@ -138,6 +119,49 @@ pub(super) struct Sim {
     /// contract. Mutually exclusive with `maneuver_execution`: starting
     /// one refuses while the other is active rather than fighting it.
     pub(super) burn_execution: Option<SegmentExecutor>,
+}
+
+impl Default for VehicleControl {
+    fn default() -> Self {
+        Self {
+            control_mode: ControlMode::Navball,
+            guidance: None,
+            plan_demand: None,
+            maneuver_execution: None,
+            burn_execution: None,
+        }
+    }
+}
+
+pub(super) struct Sim {
+    pub(super) authority: FlightAuthority,
+    pub(super) fleet: std::collections::BTreeMap<u32, FlightAuthority>,
+    pub(super) next_vehicle_id: u32,
+    pub(super) dock_graph: DockGraph,
+    pub(super) dock_joints: std::collections::BTreeMap<(u32, u32), JointId>,
+    pub(super) ephemeris: BakedEphemeris,
+    /// Pilot and flight-automation state per vehicle id. Id 0 (primary)
+    /// always exists; separation spawns fresh default entries.
+    pub(super) controls: std::collections::BTreeMap<u32, VehicleControl>,
+    /// Currently parked autopilot phase (node, name, config, park time).
+    /// Graph-owned and primary-only: the per-tick phase law steers from its
+    /// IR parameters; completion publishes the node-name event plus the
+    /// domain event, the watchdog fails the graph. Cleared on retire,
+    /// primary takeover, and cancel.
+    pub(super) phase_park: Option<PhasePark>,
+    /// A parked Execute burn delegated to the primary `maneuver_execution`:
+    /// the executor owns guidance until it clears, then the burn retires.
+    pub(super) burn_delegated: bool,
+    pub(super) autopilot_graph: Option<AutopilotGraph>,
+    pub(super) graph_runner: Option<GraphRunner>,
+    pub(super) graph_block: NativeGraphBlock,
+    /// Declared autopilot targets stay data-only until a later landing/
+    /// impact planner consumes them and asks the field for obstacle evidence.
+    pub(super) landing_site: Option<LandingSite>,
+    pub(super) landing_obstacles: Option<ObstacleReport>,
+    pub(super) impact_site: Option<ImpactSite>,
+    pub(super) impact_obstacles: Option<ObstacleReport>,
+    pub(super) plan_runner: Option<TrajectoryPlanRunner>,
     pub(super) clients: std::collections::HashMap<String, ClientVote>,
     /// Connection-order pilot lease. The first registered client owns all
     /// vehicle controls; on departure the lease moves to the earliest client
@@ -179,21 +203,19 @@ impl Sim {
             dock_graph: DockGraph::new(),
             dock_joints: std::collections::BTreeMap::new(),
             ephemeris,
-            control_mode: ControlMode::Navball,
-            guidance: None,
-            plan_demand: None,
+            controls: [(VehicleId::PRIMARY.0, VehicleControl::default())]
+                .into_iter()
+                .collect(),
+            phase_park: None,
+            burn_delegated: false,
             autopilot_graph: None,
             graph_runner: None,
             graph_block: NativeGraphBlock::default(),
-            phase_park: None,
-            burn_delegated: false,
             landing_site: None,
             landing_obstacles: None,
             impact_site: None,
             impact_obstacles: None,
             plan_runner: None,
-            maneuver_execution: None,
-            burn_execution: None,
             clients: std::collections::HashMap::new(),
             pilot_owner: None,
             client_order: Vec::new(),
@@ -240,7 +262,12 @@ impl Sim {
         self.last_client_inputs.remove(id);
         if self.is_pilot(id) {
             self.cancel_autopilot_tasks();
-            self.clear_autopilot_controls();
+            let vehicle_ids: Vec<u32> = std::iter::once(VehicleId::PRIMARY.0)
+                .chain(self.fleet.keys().copied())
+                .collect();
+            for vehicle_id in vehicle_ids {
+                self.clear_autopilot_controls(vehicle_id);
+            }
             self.authority.flight_error = None;
             self.pilot_owner = self.client_order.first().cloned();
             if let Some(owner) = &self.pilot_owner {
@@ -309,9 +336,19 @@ impl Sim {
         let previous = self
             .last_client_inputs
             .insert(id.to_string(), input.clone());
+        // Takeover and state echoes compare against the last packet for the
+        // SAME vehicle: switching targets syncs full state to the new
+        // vehicle without cancelling its automation as a side effect, while
+        // stick edges still disengage whatever they touch.
+        let previous_same = previous
+            .as_ref()
+            .filter(|prev| prev.vehicle_id == input.vehicle_id);
+        let vid = input.vehicle_id.0;
         if client_input_takes_over(previous.as_ref(), input) {
-            self.cancel_autopilot_tasks();
-            self.clear_autopilot_controls();
+            if vid == VehicleId::PRIMARY.0 {
+                self.cancel_autopilot_tasks();
+            }
+            self.clear_autopilot_controls(vid);
         }
         let has_engine_command = input
             .commands
@@ -319,82 +356,95 @@ impl Sim {
             .any(|command| matches!(command, Command::Stage | Command::Engine { .. }));
         // Field-level borrows (no `let authority` alias): the Reset arm
         // below needs `&mut self.authority` together with `&self.ephemeris`,
-        // which an aliased borrow would not allow.
-        let control_input = DVec3::from_array(input.control_input);
-        if control_input.is_finite() {
-            self.authority.control_input = control_input.clamp(DVec3::splat(-1.0), DVec3::ONE);
-        }
-        self.control_mode = input.control_mode;
-        // A degenerate wire target must never reach the attitude law:
-        // keep the previous target unless the new one is finite nonzero.
-        let target = glam::DQuat::from_xyzw(
-            input.sas_target_xyzw[0],
-            input.sas_target_xyzw[1],
-            input.sas_target_xyzw[2],
-            input.sas_target_xyzw[3],
-        );
-        if target.is_finite() && target.length_squared() > 1e-12 {
-            self.authority.sas_target_orientation = target.normalize();
-        }
-        // A full input carries a last-value state, but an explicit staging or
-        // engine command is an edge. Do not let a coalesced stale state field
-        // overwrite the result of those preserved events.
-        let active = if has_engine_command {
-            self.authority.engine_active
-        } else {
-            input.engine_active
-        };
-        // Engine/stage edges first clear current propulsion on manual takeover;
-        // restore the coalesced legacy throttle for their resulting active state.
-        if legacy_propulsion_echo_changed(previous.as_ref(), input, has_engine_command)
-            || has_engine_command
+        // which an aliased borrow would not allow. Each section resolves a
+        // short-lived vehicle borrow so command arms can call helpers.
         {
-            self.authority.set_legacy_propulsion(input.throttle, active);
-        }
-        // These legacy state echoes are applied only when the client changes
-        // them. Otherwise a stale last-value packet could undo an intervening
-        // authoritative Part command (for example, one emitted by staging).
-        let changed = |current: bool, previous: Option<bool>| {
-            previous.is_none_or(|previous| current != previous)
-        };
-        if changed(
-            input.sas_enabled,
-            previous.as_ref().map(|previous| previous.sas_enabled),
-        ) {
-            self.authority.sas_enabled = input.sas_enabled;
-        }
-        if changed(
-            input.rcs_enabled,
-            previous.as_ref().map(|previous| previous.rcs_enabled),
-        ) {
-            self.authority.rcs_enabled = input.rcs_enabled;
-        }
-        if changed(
-            input.reaction_wheels_enabled,
-            previous
-                .as_ref()
-                .map(|previous| previous.reaction_wheels_enabled),
-        ) {
-            self.authority.reaction_wheels_enabled = input.reaction_wheels_enabled;
-        }
-        if changed(
-            input.gear_down,
-            previous.as_ref().map(|previous| previous.gear_down),
-        ) {
-            self.authority.set_gear_down(input.gear_down);
-        }
-        if changed(
-            input.parachutes_armed,
-            previous.as_ref().map(|previous| previous.parachutes_armed),
-        ) {
-            self.authority.set_parachutes_armed(input.parachutes_armed);
+            let vehicle = match self.vehicle_mut(vid) {
+                Ok(vehicle) => vehicle,
+                Err(error) => {
+                    self.authority.wake_notice = Some(format!("input rejected: {error}"));
+                    return false;
+                }
+            };
+            let control_input = DVec3::from_array(input.control_input);
+            if control_input.is_finite() {
+                vehicle.authority.control_input =
+                    control_input.clamp(DVec3::splat(-1.0), DVec3::ONE);
+            }
+            vehicle.control.control_mode = input.control_mode;
+            // A degenerate wire target must never reach the attitude law:
+            // keep the previous target unless the new one is finite nonzero.
+            let target = glam::DQuat::from_xyzw(
+                input.sas_target_xyzw[0],
+                input.sas_target_xyzw[1],
+                input.sas_target_xyzw[2],
+                input.sas_target_xyzw[3],
+            );
+            if target.is_finite() && target.length_squared() > 1e-12 {
+                vehicle.authority.sas_target_orientation = target.normalize();
+            }
+            // A full input carries a last-value state, but an explicit staging or
+            // engine command is an edge. Do not let a coalesced stale state field
+            // overwrite the result of those preserved events.
+            let active = if has_engine_command {
+                vehicle.authority.engine_active
+            } else {
+                input.engine_active
+            };
+            // Engine/stage edges first clear current propulsion on manual takeover;
+            // restore the coalesced legacy throttle for their resulting active state.
+            if legacy_propulsion_echo_changed(previous_same, input, has_engine_command)
+                || has_engine_command
+            {
+                vehicle
+                    .authority
+                    .set_legacy_propulsion(input.throttle, active);
+            }
+            // These legacy state echoes are applied only when the client changes
+            // them. Otherwise a stale last-value packet could undo an intervening
+            // authoritative Part command (for example, one emitted by staging).
+            let changed = |current: bool, previous: Option<bool>| {
+                previous.is_none_or(|previous| current != previous)
+            };
+            if changed(
+                input.sas_enabled,
+                previous_same.map(|previous| previous.sas_enabled),
+            ) {
+                vehicle.authority.sas_enabled = input.sas_enabled;
+            }
+            if changed(
+                input.rcs_enabled,
+                previous_same.map(|previous| previous.rcs_enabled),
+            ) {
+                vehicle.authority.rcs_enabled = input.rcs_enabled;
+            }
+            if changed(
+                input.reaction_wheels_enabled,
+                previous_same.map(|previous| previous.reaction_wheels_enabled),
+            ) {
+                vehicle.authority.reaction_wheels_enabled = input.reaction_wheels_enabled;
+            }
+            if changed(
+                input.gear_down,
+                previous_same.map(|previous| previous.gear_down),
+            ) {
+                vehicle.authority.set_gear_down(input.gear_down);
+            }
+            if changed(
+                input.parachutes_armed,
+                previous_same.map(|previous| previous.parachutes_armed),
+            ) {
+                vehicle
+                    .authority
+                    .set_parachutes_armed(input.parachutes_armed);
+            }
         }
         let mut engine_command_seen = false;
         for command in &input.commands {
             // A jointed stack has no combined control model yet: thrust and
-            // effector commands on a jointed primary fail closed instead of
+            // effector commands on a jointed vehicle fail closed instead of
             // driving one side of the constraint.
-            if self.is_jointed(VehicleId::PRIMARY.0)
+            if self.is_jointed(vid)
                 && matches!(
                     command,
                     Command::Stage
@@ -421,45 +471,72 @@ impl Sim {
                     }
                 }
                 // Slice semantics (matches the client): staging drives the
-                // engine cutoff for the single X-15 plant. Single-vehicle
-                // slice: no VehicleId branching yet (fleet/M5 future work).
-                // Emit domain events so `Wait(Event("stage"))` /
-                // `All(stage, engine-ready)` guards can resolve instead of
-                // parking forever.
+                // engine cutoff for the targeted plant. Stage and engine-ready
+                // domain events fire only for the primary: graph waits stay
+                // primary-owned while graphs are.
                 Command::Stage => {
                     // PendingInput preserves multiple edge commands from
                     // separate frames. Each such frame used to cut off the
                     // active autopilot before applying its edge; reproduce
                     // that cutoff between coalesced engine events without
                     // resetting the coalesced flight controls.
-                    if engine_command_seen {
-                        self.authority.stop_propulsion();
-                    }
-                    engine_command_seen = true;
-                    self.authority.engine_active = !self.authority.engine_active;
-                    self.autopilot_events.push_back(AutopilotEvent::Stage);
-                    if self.authority.engine_active {
-                        self.autopilot_events.push_back(AutopilotEvent::EngineReady);
+                    let staged_active = match self.vehicle_mut(vid) {
+                        Ok(vehicle) => {
+                            if engine_command_seen {
+                                vehicle.authority.stop_propulsion();
+                            }
+                            engine_command_seen = true;
+                            vehicle.authority.engine_active = !vehicle.authority.engine_active;
+                            vehicle.authority.engine_active
+                        }
+                        Err(error) => {
+                            self.authority.wake_notice = Some(format!("stage rejected: {error}"));
+                            continue;
+                        }
+                    };
+                    if vid == VehicleId::PRIMARY.0 {
+                        self.autopilot_events.push_back(AutopilotEvent::Stage);
+                        if staged_active {
+                            self.autopilot_events.push_back(AutopilotEvent::EngineReady);
+                        }
                     }
                     force_snapshot = true;
                 }
                 Command::Engine { active } => {
-                    if engine_command_seen {
-                        self.authority.stop_propulsion();
-                    }
-                    engine_command_seen = true;
-                    force_snapshot |= self.authority.engine_active != *active;
-                    let became_ready = *active && !self.authority.engine_active;
-                    self.authority.engine_active = *active;
-                    if became_ready {
+                    let (changed, became_ready) = match self.vehicle_mut(vid) {
+                        Ok(vehicle) => {
+                            if engine_command_seen {
+                                vehicle.authority.stop_propulsion();
+                            }
+                            engine_command_seen = true;
+                            let changed = vehicle.authority.engine_active != *active;
+                            let became_ready = *active && !vehicle.authority.engine_active;
+                            vehicle.authority.engine_active = *active;
+                            (changed, became_ready)
+                        }
+                        Err(error) => {
+                            self.authority.wake_notice = Some(format!("engine rejected: {error}"));
+                            continue;
+                        }
+                    };
+                    force_snapshot |= changed;
+                    if became_ready && vid == VehicleId::PRIMARY.0 {
                         self.autopilot_events.push_back(AutopilotEvent::EngineReady);
                     }
                 }
                 Command::Part { command } => {
                     force_snapshot = true;
-                    if let Err(error) = self.authority.apply_part_command(command) {
-                        self.authority.wake_notice =
-                            Some(format!("part command rejected: {error}"));
+                    match self.vehicle_mut(vid) {
+                        Ok(vehicle) => {
+                            if let Err(error) = vehicle.authority.apply_part_command(command) {
+                                vehicle.authority.wake_notice =
+                                    Some(format!("part command rejected: {error}"));
+                            }
+                        }
+                        Err(error) => {
+                            self.authority.wake_notice =
+                                Some(format!("part command rejected: {error}"));
+                        }
                     }
                 }
                 Command::Separate {
@@ -510,8 +587,13 @@ impl Sim {
                 },
                 Command::ExecuteManeuver { nodes } => {
                     // Wire cap: node vectors are unbounded on the transport.
+                    // The target validated before the loop, so a missing
+                    // vehicle here only skips the notice.
                     let rejected = |sim: &mut Self, reason: String| {
-                        sim.authority.wake_notice = Some(format!("maneuver rejected: {reason}"));
+                        if let Ok(vehicle) = sim.vehicle_mut(vid) {
+                            vehicle.authority.wake_notice =
+                                Some(format!("maneuver rejected: {reason}"));
+                        }
                     };
                     if nodes.len() > thessa_flight_net::MAX_MANEUVER_NODES {
                         rejected(
@@ -542,19 +624,25 @@ impl Sim {
                         rejected(self, "non-finite node".into());
                         continue;
                     }
-                    let plan = match ManeuverPlan::new(
-                        plan_nodes,
-                        self.authority.state.position_inertial_m,
-                        self.authority.state.velocity_inertial_mps,
-                        SimTime(self.authority.flight_time_s),
-                    ) {
+                    let (position, velocity, now) = match self.vehicle_authority(vid) {
+                        Ok(authority) => (
+                            authority.state.position_inertial_m,
+                            authority.state.velocity_inertial_mps,
+                            SimTime(authority.flight_time_s),
+                        ),
+                        Err(error) => {
+                            rejected(self, error);
+                            continue;
+                        }
+                    };
+                    let plan = match ManeuverPlan::new(plan_nodes, position, velocity, now) {
                         Ok(plan) => plan,
                         Err(error) => {
                             rejected(self, format!("invalid plan: {error}"));
                             continue;
                         }
                     };
-                    match self.start_maneuver_execution(plan) {
+                    match self.start_maneuver_execution(plan, vid) {
                         Ok(()) => {
                             force_snapshot = true;
                         }
@@ -570,7 +658,10 @@ impl Sim {
                     // Wire cap: segments are unbounded on the transport;
                     // scaled up from the node cap for split burns.
                     let rejected = |sim: &mut Self, reason: String| {
-                        sim.authority.wake_notice = Some(format!("burn plan rejected: {reason}"));
+                        if let Ok(vehicle) = sim.vehicle_mut(vid) {
+                            vehicle.authority.wake_notice =
+                                Some(format!("burn plan rejected: {reason}"));
+                        }
                     };
                     if segments.len() > thessa_flight_net::MAX_BURN_SEGMENTS {
                         rejected(
@@ -622,6 +713,17 @@ impl Sim {
                         rejected(self, "unknown rtn central body".into());
                         continue;
                     }
+                    let (position, velocity, now) = match self.vehicle_authority(vid) {
+                        Ok(authority) => (
+                            authority.state.position_inertial_m,
+                            authority.state.velocity_inertial_mps,
+                            SimTime(authority.flight_time_s),
+                        ),
+                        Err(error) => {
+                            rejected(self, error);
+                            continue;
+                        }
+                    };
                     let plan = match FiniteBurnPlan::new(
                         plan_segments,
                         EngineSpec {
@@ -629,9 +731,9 @@ impl Sim {
                             exhaust_velocity_mps: *engine_exhaust_velocity_mps,
                         },
                         *initial_mass_kg,
-                        self.authority.state.position_inertial_m,
-                        self.authority.state.velocity_inertial_mps,
-                        SimTime(self.authority.flight_time_s),
+                        position,
+                        velocity,
+                        now,
                     ) {
                         Ok(plan) => plan,
                         Err(error) => {
@@ -639,7 +741,7 @@ impl Sim {
                             continue;
                         }
                     };
-                    match self.start_burn_execution(plan) {
+                    match self.start_burn_execution(plan, vid) {
                         Ok(()) => {
                             force_snapshot = true;
                         }
@@ -656,8 +758,27 @@ impl Sim {
                 // the client survey derives it from). Reuses the client
                 // reset path verbatim: clock preserved, controls cleared,
                 // engine armed at zero throttle. No terrain, no relaunch.
+                // Targets the commanded vehicle; the global event queue is
+                // cleared because a relaunch retires every pending wait.
                 Command::Reset => {
-                    if self.authority.reset_to_launch_site(&self.ephemeris).is_ok() {
+                    // Direct field borrows: the reset needs the ephemeris
+                    // alongside the authority.
+                    let reset_ok = {
+                        let authority: &mut FlightAuthority = if vid == VehicleId::PRIMARY.0 {
+                            &mut self.authority
+                        } else {
+                            match self.fleet.get_mut(&vid) {
+                                Some(authority) => authority,
+                                None => {
+                                    self.authority.wake_notice =
+                                        Some("reset rejected: unknown vehicle".into());
+                                    continue;
+                                }
+                            }
+                        };
+                        authority.reset_to_launch_site(&self.ephemeris).is_ok()
+                    };
+                    if reset_ok {
                         self.autopilot_events.clear();
                         force_snapshot = true;
                     }
@@ -674,6 +795,47 @@ impl Sim {
         self.advance_chunk_with_budget(chunk_s, None)
     }
 
+    /// Step one free (non-jointed) vehicle through its own control state:
+    /// plan demand, typed guidance, or manual mode. Shared by the primary
+    /// fast path and every passive secondary.
+    pub(super) fn step_free_vehicle(
+        &mut self,
+        id: u32,
+        chunk_s: f64,
+        budget: Option<Duration>,
+    ) -> Result<(), String> {
+        let (plan_demand, guidance, control_mode) = {
+            let control = self.controls.entry(id).or_default();
+            (
+                control.plan_demand,
+                control.guidance.clone(),
+                control.control_mode,
+            )
+        };
+        let authority: &mut FlightAuthority = if id == VehicleId::PRIMARY.0 {
+            &mut self.authority
+        } else {
+            self.fleet
+                .get_mut(&id)
+                .ok_or_else(|| format!("unknown vehicle {id}"))?
+        };
+        if let Some(demand) = plan_demand {
+            authority
+                .advance_control_demand_with_budget(&self.ephemeris, demand, chunk_s, budget)
+                .map_err(|error| error.to_string())
+        } else if let Some((intent, propulsion)) = guidance {
+            // Typed guidance uses the same authoritative stepper; the legacy
+            // mode is only the compatibility representation used by traces.
+            authority
+                .advance_guidance_with_budget(&self.ephemeris, &intent, propulsion, chunk_s, budget)
+                .map_err(|error| error.to_string())
+        } else {
+            authority
+                .advance_with_budget(&self.ephemeris, control_mode, chunk_s, budget)
+                .map_err(|error| error.to_string())
+        }
+    }
+
     pub(super) fn advance_chunk_with_budget(
         &mut self,
         chunk_s: f64,
@@ -685,9 +847,30 @@ impl Sim {
         // Maneuver executions poll before stepping so commands ride the
         // freshest thrust measurement from the previous tick. Parked
         // autopilot phases steer the same way through their IR laws.
-        self.poll_maneuver_execution()?;
-        self.poll_burn_execution()?;
+        // Every free vehicle polls its own executors; jointed ones ride
+        // the scene and skip polling.
+        self.poll_maneuver_execution_for(VehicleId::PRIMARY.0)?;
+        self.poll_burn_execution_for(VehicleId::PRIMARY.0)?;
         self.poll_phase_law()?;
+        let secondary_poll_ids: Vec<u32> = self.fleet.keys().copied().collect();
+        for id in secondary_poll_ids {
+            if self.is_jointed(id) {
+                continue;
+            }
+            if self
+                .vehicle_authority(id)
+                .is_ok_and(|authority| authority.flight_error.is_some())
+            {
+                continue;
+            }
+            if let Err(error) = self.poll_maneuver_execution_for(id) {
+                self.record_secondary_failure(id, error);
+                continue;
+            }
+            if let Err(error) = self.poll_burn_execution_for(id) {
+                self.record_secondary_failure(id, error);
+            }
+        }
         let mut chunk_s = chunk_s;
         if self.plan_runner.is_some() {
             let now = SimTime(self.authority.flight_time_s);
@@ -703,36 +886,23 @@ impl Sim {
         }
         let before = self.authority.flight_time_s;
         let started = Instant::now();
-        let plan_demand = self.plan_demand;
-        let guidance = self.guidance.clone();
         // A jointed primary rides the shared scene instead of its own
         // stepper: exactly one integrator owns a body per tick.
         let primary_pair = self.jointed_pair_with(VehicleId::PRIMARY.0);
         let result: Result<(), String> = if let Some(pair) = primary_pair {
             self.step_jointed_pair(pair, chunk_s)
-        } else if let Some(demand) = plan_demand {
-            self.authority
-                .advance_control_demand_with_budget(&self.ephemeris, demand, chunk_s, budget)
-                .map_err(|error| error.to_string())
-        } else if let Some((intent, propulsion)) = guidance {
-            // Typed guidance uses the same authoritative stepper; the legacy
-            // mode is only the compatibility representation used by traces.
-            self.authority
-                .advance_guidance_with_budget(&self.ephemeris, &intent, propulsion, chunk_s, budget)
-                .map_err(|error| error.to_string())
         } else {
-            self.authority
-                .advance_with_budget(&self.ephemeris, self.control_mode, chunk_s, budget)
-                .map_err(|error| error.to_string())
+            self.step_free_vehicle(VehicleId::PRIMARY.0, chunk_s, budget)
         };
         self.compute_s += started.elapsed().as_secs_f64();
+        let primary_mode = self.primary_control().control_mode;
         result.map_err(|e| {
                 self.authority.engine_active = false;
                 self.authority.flight_error = Some(e.to_string());
                 eprintln!(
                     "[server] advance failed at t={:.1} mode={:?} thrust={:.0} thr={:.2} eng={} om={:.3}: {e}",
                     self.authority.flight_time_s,
-                    self.control_mode,
+                    primary_mode,
                     self.authority.thrust_n(),
                     self.authority.throttle,
                     self.authority.engine_active,
@@ -745,7 +915,7 @@ impl Sim {
         self.steps += self.authority.steps_this_frame as u64;
         self.rails_s += self.authority.rails_advanced_this_frame;
         // Jointed non-primary pairs ride their own scene ticks; every other
-        // secondary serves the same chunk through passive fixed steps.
+        // secondary serves the same chunk through its own control state.
         // Secondary stepping is unbounded by the CPU budget (fleet sizes stay
         // small); cooperative budgeting across the fleet is later work.
         let jointed_pairs: Vec<(u32, u32)> = self.dock_joints.keys().copied().collect();
@@ -763,22 +933,22 @@ impl Sim {
             if self.is_jointed(id) {
                 continue;
             }
-            let Some(secondary) = self.fleet.get_mut(&id) else {
-                continue;
-            };
-            if secondary.flight_error.is_some() {
-                continue;
-            }
-            if let Err(error) =
-                secondary.advance_with_budget(&self.ephemeris, ControlMode::Direct, advanced, None)
-            {
-                secondary.engine_active = false;
-                secondary.flight_error = Some(error.to_string());
-                eprintln!("[server] secondary vehicle {id} failed: {error}");
+            let failed = self
+                .vehicle_authority(id)
+                .is_ok_and(|authority| authority.flight_error.is_some());
+            if failed {
                 continue;
             }
-            self.steps += secondary.steps_this_frame as u64;
-            self.rails_s += secondary.rails_advanced_this_frame;
+            if let Err(error) = self.step_free_vehicle(id, advanced, None) {
+                self.record_secondary_failure(id, error);
+                continue;
+            }
+            if let Ok(secondary) = self.vehicle_authority(id) {
+                let steps = secondary.steps_this_frame as u64;
+                let rails = secondary.rails_advanced_this_frame;
+                self.steps += steps;
+                self.rails_s += rails;
+            }
         }
         self.poll_dock_sessions(advanced);
         self.autopilot_events.extend(
@@ -787,8 +957,30 @@ impl Sim {
                 .into_iter()
                 .map(|event| AutopilotEvent::from(event.kind)),
         );
+        let fleet_ids: Vec<u32> = self.fleet.keys().copied().collect();
+        for id in fleet_ids {
+            if let Some(secondary) = self.fleet.get_mut(&id) {
+                self.autopilot_events.extend(
+                    secondary
+                        .take_wake_events()
+                        .into_iter()
+                        .map(|event| AutopilotEvent::from(event.kind)),
+                );
+            }
+        }
         self.poll_graph(None)?;
         Ok(advanced)
+    }
+
+    /// Record a secondary execution/step failure on its own authority
+    /// without pausing the fleet: the primary error path stays global.
+    fn record_secondary_failure(&mut self, id: u32, error: String) {
+        if let Some(secondary) = self.fleet.get_mut(&id) {
+            secondary.engine_active = false;
+            secondary.flight_error = Some(error.clone());
+        }
+        eprintln!("[server] secondary vehicle {id} failed: {error}");
+        self.authority.wake_notice = Some(format!("secondary vehicle {id} failed: {error}"));
     }
 
     pub(super) fn effective_warp(&self) -> f64 {
@@ -907,6 +1099,14 @@ pub(super) const DOCK_BODY_CONFIG: DynamicBodyConfig = DynamicBodyConfig {
     can_sleep: false,
 };
 
+/// Paired mutable access to one vehicle's authority and control state.
+/// The two live in disjoint Sim fields so a single tick can steer and step
+/// the same vehicle without aliasing.
+pub(super) struct VehicleMut<'a> {
+    pub(super) authority: &'a mut FlightAuthority,
+    pub(super) control: &'a mut VehicleControl,
+}
+
 impl Sim {
     pub(super) fn vehicle_authority(&self, id: u32) -> Result<&FlightAuthority, String> {
         if id == VehicleId::PRIMARY.0 {
@@ -916,6 +1116,33 @@ impl Sim {
                 .get(&id)
                 .ok_or_else(|| format!("unknown vehicle {id}"))
         }
+    }
+
+    /// Primary control state. Graphs, scripts, and plans stay primary-only;
+    /// this is their control record as well as the pilot's.
+    pub(super) fn primary_control(&self) -> &VehicleControl {
+        self.controls
+            .get(&VehicleId::PRIMARY.0)
+            .expect("primary control always exists")
+    }
+
+    pub(super) fn primary_control_mut(&mut self) -> &mut VehicleControl {
+        self.controls.entry(VehicleId::PRIMARY.0).or_default()
+    }
+
+    /// Paired mutable access to one vehicle's authority and control state.
+    /// The two live in disjoint fields so a single tick can steer and step
+    /// the same vehicle without aliasing.
+    pub(super) fn vehicle_mut(&mut self, id: u32) -> Result<VehicleMut<'_>, String> {
+        let authority: &mut FlightAuthority = if id == VehicleId::PRIMARY.0 {
+            &mut self.authority
+        } else {
+            self.fleet
+                .get_mut(&id)
+                .ok_or_else(|| format!("unknown vehicle {id}"))?
+        };
+        let control = self.controls.entry(id).or_default();
+        Ok(VehicleMut { authority, control })
     }
 
     /// Jointed pair containing a vehicle, if any. Joints never outlive
@@ -1032,7 +1259,7 @@ impl Sim {
         }
         if vehicle_id == VehicleId::PRIMARY.0 {
             self.cancel_autopilot_tasks();
-            self.clear_autopilot_controls();
+            self.clear_autopilot_controls(VehicleId::PRIMARY.0);
             self.authority.flight_error = None;
         }
         let mut spawned = Vec::new();
@@ -1059,6 +1286,7 @@ impl Sim {
                     self.next_vehicle_id = self.next_vehicle_id.wrapping_add(1);
                 }
                 self.fleet.insert(id, authority);
+                self.controls.insert(id, VehicleControl::default());
                 spawned.push(id);
             }
         }

@@ -1,4 +1,7 @@
 /target/
+/tools/worldgen-rocky/target/
+/perf-*.csv
+/perf-*.json
 /validation/nyx-compare/target/
 /validation/aero-compare/target/
 /.venv-aero/

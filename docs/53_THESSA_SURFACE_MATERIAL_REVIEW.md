@@ -102,3 +102,33 @@ proper fine channels/shore surfaces and demonstrated close-up/surface-to-orbit
 acceptance. GGX alone does not repair uniform shapes or flat forest coverage.
 The accepted standard is the actual final frame, not a noisy texture swatch,
 an albedo histogram or a CPU-only material test.
+
+## Publication checkpoint — 2026-10-03
+
+At the owner's request, the reconstruction and earlier main-checkout renderer
+changes are combined on the current main history. Existing vehicle/resource/
+thermal/control changes remain byte-identical to the previously published
+`c6673a6` main for their source, assets and canonical subsystem documentation.
+Working-copy backups were saved before integration. Historical maps v4–v9,
+frozen global v2 and refined v3, and the earlier audits remain preserved; v10 is
+the active map set. Publishing this implementation does not accept the rejected
+frames or assert that the material revision has passed final visual review.
+
+Pre-push local gates on the combined tree passed:
+
+- workspace formatting;
+- workspace all-target/all-feature Clippy with warnings denied;
+- workspace library/binary tests: 1569 passed, 14 existing diagnostics/hardware
+  tests ignored in that default invocation;
+- workspace integration tests: 4 passed;
+- the explicit native terrain hardware run on the Radeon 880M: all 12 passed,
+  including the shared dielectric roughness/reflection regression.
+
+Logs are retained under `target/planet-biomes-audit/publication-gates-fixed/`.
+Initial merge validation failed because two identical ocean-bound tests had
+been carried by both working copies; the duplicates were removed without losing
+either assertion set. The new stable-toolchain single-element-loop lint in
+server asset lookup was fixed without changing lookup behavior. Earlier failed
+logs remain under `publication-gates/` and the substrate audit filenames.
+Local perf outputs and per-crate test scratch are ignored, not deleted; the
+unrelated main-checkout scratch file `x` is excluded from publication.

@@ -1,7 +1,7 @@
 //! Deterministic cube-sphere surface addresses and bounded camera LOD.
 //! Tiles cache the field; they never define the terrain or own its random seed.
 use crate::{
-    appearance::{surface_appearance, surface_grain_height},
+    appearance::{surface_appearance, surface_appearance_filtered, surface_grain_height},
     field::PlanetField,
 };
 use serde::{Deserialize, Serialize};
@@ -700,15 +700,19 @@ const MATERIAL_SLOPE_WAVELENGTH_M: f64 = 256.0;
 /// This deliberately shares the surface prefix path with
 /// [`build_surface_texture_for_mesh`], but does not build mesh positions,
 /// normals, residuals, or a second fine-field sample. A single canonical
-/// prefix sample per texel is paired with a fixed-scale material slope, so the
-/// result is independent of tile LOD. The border samples use the same field
+/// prefix sample per texel is paired with a fixed-scale material slope, so
+/// classification is independent of tile LOD. Appearance-only noise is filtered
+/// at the page's physical texel spacing instead of aliasing unresolved grain.
+/// The border samples use the same field
 /// coordinates as adjacent pages, so filtering across tile edges is
 /// continuous.
 pub fn build_gpu_material_page(field: &PlanetField, key: TileKey) -> GpuMaterialPage {
     let size = GPU_MATERIAL_PAGE_SIZE as usize;
     let cells = GPU_MATERIAL_PAGE_CELLS;
+    let texel_m = key.span_m(field.params.radius_m) / cells as f64;
     let mut dirs = Vec::with_capacity(size * size);
     let mut samples = Vec::with_capacity(size * size);
+    let mut prefixes = Vec::with_capacity(size * size);
     for y in 0..size {
         for x in 0..size {
             // Texture centres are x+0.5; inverting the shader transform puts
@@ -724,6 +728,7 @@ pub fn build_gpu_material_page(field: &PlanetField, key: TileKey) -> GpuMaterial
             // evaluations and does not run five full semantic samples.
             let (prefix, macro_h) = field.height_prefix_m(dir);
             dirs.push(dir);
+            prefixes.push((prefix, macro_h));
             samples.push(field.sample_surface_from_prefix(
                 dir,
                 prefix,
@@ -737,11 +742,17 @@ pub fn build_gpu_material_page(field: &PlanetField, key: TileKey) -> GpuMaterial
     for y in 0..size {
         for x in 0..size {
             let index = y * size + x;
-            let slope = field.slope_hint(dirs[index], MATERIAL_SLOPE_WAVELENGTH_M);
+            let (slope, curvature) = field.surface_geometry_from_prefix(
+                dirs[index],
+                prefixes[index].0,
+                prefixes[index].1,
+                MATERIAL_SLOPE_WAVELENGTH_M,
+            );
             let material = {
                 let sample = &mut samples[index];
                 sample.slope_hint = slope;
-                surface_appearance(field, sample, dirs[index])
+                sample.curvature_per_m = curvature;
+                surface_appearance_filtered(field, sample, dirs[index], texel_m)
             };
             rgba.extend(
                 material
@@ -872,19 +883,20 @@ pub fn build_surface_texture_for_mesh(
         for x in 0..size {
             let dir = dirs[y * size + x];
             let mut sample = samples[y * size + x].clone();
-            let dhx = (samples[y * size + (x + 1).min(size - 1)].height_m
-                - samples[y * size + x.saturating_sub(1)].height_m)
-                / (2.0 * wavelength);
-            let dhy = (samples[(y + 1).min(size - 1) * size + x].height_m
-                - samples[y.saturating_sub(1) * size + x].height_m)
-                / (2.0 * wavelength);
-            sample.slope_hint = dhx.hypot(dhy);
-            let material = surface_appearance(field, &sample, dir);
+            let (prefix, macro_h) = at(x, y);
+            let (slope, curvature) = field.surface_geometry_from_prefix(
+                dir,
+                prefix,
+                macro_h,
+                MATERIAL_SLOPE_WAVELENGTH_M,
+            );
+            sample.slope_hint = slope;
+            sample.curvature_per_m = curvature;
+            let material = surface_appearance_filtered(field, &sample, dir, wavelength);
             // Same interpolated prefix as the fine sample above: the shared
             // term cancels in the residual, isolating mesh-grid detail.
             // At or below the detail cutoff both sides run identical bands
             // and the residual is exactly zero (see above).
-            let (prefix, macro_h) = at(x, y);
             residual[y * size + x] = if flat_residual {
                 0.0
             } else {
@@ -1017,13 +1029,13 @@ mod surface_regressions {
     }
 
     #[test]
-    fn gpu_material_page_is_identical_on_parent_child_shared_edges() {
+    fn fully_resolved_material_pages_are_identical_on_parent_child_shared_edges() {
         let field = field();
         let parent = TileKey {
             face: 2,
-            level: 9,
-            x: 173,
-            y: 211,
+            level: 17,
+            x: 173 * 256,
+            y: 211 * 256,
         };
         let child = TileKey {
             face: parent.face,
@@ -1051,6 +1063,7 @@ mod surface_regressions {
         let page = build_gpu_material_page(&field, key);
         let size = page.size as usize;
         let cells = 125.0;
+        let texel_m = key.span_m(field.params.radius_m) / cells;
         let mut ocean = None;
         let mut land = None;
         for y in 1..127 {
@@ -1058,13 +1071,20 @@ mod surface_regressions {
                 let dir = key.direction((x as f64 - 1.0) / cells, (y as f64 - 1.0) / cells);
                 let mut sample = field.sample_surface(dir, TEXTURE_DETAIL_MIN_WL_M);
                 if sample.height_m < -100.0 {
-                    let material = surface_appearance(&field, &sample, dir);
+                    let material = surface_appearance_filtered(&field, &sample, dir, texel_m);
                     if material.roughness < 0.3 {
                         ocean = Some((x, y, material));
                     }
                 } else if sample.height_m > 1000.0 {
-                    sample.slope_hint = field.slope_hint(dir, MATERIAL_SLOPE_WAVELENGTH_M);
-                    land = Some((x, y, surface_appearance(&field, &sample, dir)));
+                    let (slope, curvature) =
+                        field.surface_geometry(dir, MATERIAL_SLOPE_WAVELENGTH_M);
+                    sample.slope_hint = slope;
+                    sample.curvature_per_m = curvature;
+                    land = Some((
+                        x,
+                        y,
+                        surface_appearance_filtered(&field, &sample, dir, texel_m),
+                    ));
                 }
             }
         }

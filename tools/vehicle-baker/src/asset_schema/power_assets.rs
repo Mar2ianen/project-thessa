@@ -86,6 +86,13 @@ struct UltracapacitorAsset {
     specific_energy_j_kg: f64,
     dimensions_body_m: [f64; 3],
     position_body_m: [f64; 3],
+    /// Self-discharge time constant (s); omitted means lossless.
+    #[serde(default = "infinite_self_discharge_time_asset")]
+    self_discharge_time_s: f64,
+}
+
+fn infinite_self_discharge_time_asset() -> f64 {
+    infinite_self_discharge_time_s()
 }
 
 impl UltracapacitorAsset {
@@ -101,6 +108,7 @@ impl UltracapacitorAsset {
             specific_energy_j_kg: self.specific_energy_j_kg,
             dimensions_body_m: vector(self.dimensions_body_m),
             position_body_m: vector(self.position_body_m),
+            self_discharge_time_s: self.self_discharge_time_s,
         }
     }
 }
@@ -134,13 +142,27 @@ struct SolarArrayAsset {
     actuator_power_w: f64,
     #[serde(default)]
     initial_deployment_fraction: f64,
-    /// Optional single-axis sun-tracking drive. Absent means fixed.
+    /// Optional sun-tracking drive. Absent means fixed. A `secondary_*`
+    /// block promotes the drive to a two-axis gimbal.
     #[serde(default)]
     tracking: Option<SolarTrackingAsset>,
 }
 
 #[derive(Debug, Deserialize)]
 struct SolarTrackingAsset {
+    rotation_axis_body: [f64; 3],
+    minimum_angle_rad: f64,
+    maximum_angle_rad: f64,
+    slew_rate_rad_s: f64,
+    actuator_power_w: f64,
+    initial_angle_rad: f64,
+    /// Optional secondary (beta-joint) axis block for a two-axis gimbal.
+    #[serde(default)]
+    secondary: Option<SolarTrackingAxisAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SolarTrackingAxisAsset {
     rotation_axis_body: [f64; 3],
     minimum_angle_rad: f64,
     maximum_angle_rad: f64,
@@ -159,17 +181,33 @@ impl SolarArrayAsset {
                 initial_fraction: self.initial_deployment_fraction,
             },
         };
-        let tracking = self
-            .tracking
-            .map(|drive| SolarArrayTracking::SingleAxis {
-                rotation_axis_body: vector(drive.rotation_axis_body),
-                minimum_angle_rad: drive.minimum_angle_rad,
-                maximum_angle_rad: drive.maximum_angle_rad,
-                slew_rate_rad_s: drive.slew_rate_rad_s,
-                actuator_power_w: drive.actuator_power_w,
-                initial_angle_rad: drive.initial_angle_rad,
-            })
-            .unwrap_or(SolarArrayTracking::Fixed);
+        let tracking = match self.tracking {
+            None => SolarArrayTracking::Fixed,
+            Some(drive) => match drive.secondary {
+                None => SolarArrayTracking::SingleAxis {
+                    rotation_axis_body: vector(drive.rotation_axis_body),
+                    minimum_angle_rad: drive.minimum_angle_rad,
+                    maximum_angle_rad: drive.maximum_angle_rad,
+                    slew_rate_rad_s: drive.slew_rate_rad_s,
+                    actuator_power_w: drive.actuator_power_w,
+                    initial_angle_rad: drive.initial_angle_rad,
+                },
+                Some(beta) => SolarArrayTracking::TwoAxis {
+                    primary_rotation_axis_body: vector(drive.rotation_axis_body),
+                    primary_minimum_angle_rad: drive.minimum_angle_rad,
+                    primary_maximum_angle_rad: drive.maximum_angle_rad,
+                    primary_slew_rate_rad_s: drive.slew_rate_rad_s,
+                    primary_actuator_power_w: drive.actuator_power_w,
+                    primary_initial_angle_rad: drive.initial_angle_rad,
+                    secondary_rotation_axis_body: vector(beta.rotation_axis_body),
+                    secondary_minimum_angle_rad: beta.minimum_angle_rad,
+                    secondary_maximum_angle_rad: beta.maximum_angle_rad,
+                    secondary_slew_rate_rad_s: beta.slew_rate_rad_s,
+                    secondary_actuator_power_w: beta.actuator_power_w,
+                    secondary_initial_angle_rad: beta.initial_angle_rad,
+                },
+            },
+        };
         SolarArraySpec {
             name: self.name,
             cell_count_x: self.cell_count_x,

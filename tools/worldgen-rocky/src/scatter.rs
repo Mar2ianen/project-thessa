@@ -11,7 +11,7 @@ use crate::{
     rng,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ScatterKind {
     SmallRock,
     Boulder,
@@ -20,6 +20,9 @@ pub enum ScatterKind {
     TalusField,
     VolcanicBlock,
     IceBlock,
+    FernClump,
+    ReedClump,
+    LycopsidTree,
 }
 
 /// One deterministic scatter item in tile-local metres.
@@ -85,6 +88,43 @@ pub fn base_density_per_km2(biome: Biome) -> f64 {
 /// Same inputs => byte-identical items, any tile order.
 pub fn scatter_tile(ctx: ScatterContext) -> Vec<ScatterItem> {
     let per_km2 = base_density_per_km2(ctx.biome) * (1.0 + 3.0 * ctx.rocky01);
+    scatter_distribution(ctx, per_km2, |seed, gx, gy| pick_kind(seed, ctx, gx, gy))
+}
+
+/// Carboniferous-inspired instance descriptors over the existing placement
+/// kernel. This does not render plants or bake them into the global map.
+pub fn scatter_vegetation(
+    ctx: ScatterContext,
+    cover: crate::ecology::VegetationCover,
+) -> Vec<ScatterItem> {
+    let total = cover.total();
+    if !total.is_finite()
+        || total <= 0.0
+        || total > 1.0
+        || [cover.ground01, cover.canopy01, cover.reeds01]
+            .iter()
+            .any(|v| !v.is_finite() || *v < 0.0)
+    {
+        return Vec::new();
+    }
+    // Density describes clumps/crowns, not individual grass blades.
+    scatter_distribution(ctx, total * 3000.0, |seed, gx, gy| {
+        let selection = rng::hash01(seed, 431, gx, gy) * total;
+        if selection < cover.reeds01 {
+            ScatterKind::ReedClump
+        } else if selection < cover.reeds01 + cover.canopy01 {
+            ScatterKind::LycopsidTree
+        } else {
+            ScatterKind::FernClump
+        }
+    })
+}
+
+fn scatter_distribution(
+    ctx: ScatterContext,
+    per_km2: f64,
+    kind_at: impl Fn(u64, i64, i64) -> ScatterKind,
+) -> Vec<ScatterItem> {
     let area_km2 = (ctx.tile_size_m / 1000.0).powi(2);
     let mut target = (per_km2 * area_km2).round() as usize;
     target = target.min(4000);
@@ -105,7 +145,7 @@ pub fn scatter_tile(ctx: ScatterContext) -> Vec<ScatterItem> {
             }
             let jx = rng::hash01(seed, 402, gx as i64, gy as i64);
             let jy = rng::hash01(seed, 403, gx as i64, gy as i64);
-            let kind = pick_kind(seed, ctx, gx as i64, gy as i64);
+            let kind = kind_at(seed, gx as i64, gy as i64);
             items.push(ScatterItem {
                 kind,
                 x_m: (gx as f64 + jx) * cell,
@@ -163,6 +203,43 @@ mod tests {
         let b = scatter_tile(ctx(Biome::RockyPlain));
         assert_eq!(a.len(), b.len());
         assert_eq!(a.first(), b.first());
+    }
+
+    #[test]
+    fn vegetation_descriptors_reuse_stable_placement_and_cover_types() {
+        let context = ctx(Biome::Wetland);
+        let cover = crate::ecology::VegetationCover {
+            ground01: 0.2,
+            canopy01: 0.2,
+            reeds01: 0.6,
+        };
+        let items = scatter_vegetation(context, cover);
+        assert_eq!(items, scatter_vegetation(context, cover));
+        assert!(items.len() <= 4000 && !items.is_empty());
+        for kind in [
+            ScatterKind::FernClump,
+            ScatterKind::LycopsidTree,
+            ScatterKind::ReedClump,
+        ] {
+            assert!(items.iter().any(|item| item.kind == kind));
+        }
+        assert!(
+            items
+                .iter()
+                .all(|item| (0.0..context.tile_size_m).contains(&item.x_m)
+                    && (0.0..context.tile_size_m).contains(&item.y_m))
+        );
+        assert!(
+            scatter_vegetation(
+                context,
+                crate::ecology::VegetationCover {
+                    ground01: 0.0,
+                    canopy01: 0.0,
+                    reeds01: 0.0
+                }
+            )
+            .is_empty()
+        );
     }
 
     #[test]

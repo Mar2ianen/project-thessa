@@ -8,6 +8,7 @@ pub(crate) struct ThermalAsset {
     nodes: Vec<ThermalNodeAsset>,
     links: Vec<ThermalLinkAsset>,
     radiators: Vec<RadiatorAsset>,
+    heat_sources: Vec<ThermalHeatSourceAsset>,
     convective_k: Option<f64>,
 }
 
@@ -20,6 +21,11 @@ impl ThermalAsset {
                 .radiators
                 .into_iter()
                 .map(RadiatorAsset::bake)
+                .collect(),
+            heat_sources: self
+                .heat_sources
+                .into_iter()
+                .map(ThermalHeatSourceAsset::bake)
                 .collect(),
             convective_k: self.convective_k.unwrap_or_else(default_convective_k),
         }
@@ -106,6 +112,19 @@ struct RadiatorAsset {
     actuator_power_w: f64,
     #[serde(default)]
     initial_deployment_fraction: f64,
+    /// Optional pointing gimbal. Absent means a fixed normal.
+    #[serde(default)]
+    tracking: Option<RadiatorTrackingAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RadiatorTrackingAsset {
+    rotation_axis_body: [f64; 3],
+    minimum_angle_rad: f64,
+    maximum_angle_rad: f64,
+    slew_rate_rad_s: f64,
+    actuator_power_w: f64,
+    initial_angle_rad: f64,
 }
 
 impl RadiatorAsset {
@@ -118,6 +137,17 @@ impl RadiatorAsset {
                 initial_fraction: self.initial_deployment_fraction,
             },
         };
+        let tracking = self
+            .tracking
+            .map(|drive| RadiatorTracking::SingleAxis {
+                rotation_axis_body: vector(drive.rotation_axis_body),
+                minimum_angle_rad: drive.minimum_angle_rad,
+                maximum_angle_rad: drive.maximum_angle_rad,
+                slew_rate_rad_s: drive.slew_rate_rad_s,
+                actuator_power_w: drive.actuator_power_w,
+                initial_angle_rad: drive.initial_angle_rad,
+            })
+            .unwrap_or(RadiatorTracking::Fixed);
         RadiatorSpec {
             name: self.name,
             attached_node: self.attached_node,
@@ -128,6 +158,29 @@ impl RadiatorAsset {
             areal_density_kg_m2: self.areal_density_kg_m2,
             position_body_m: vector(self.position_body_m),
             deployment,
+            tracking,
+        }
+    }
+}
+
+/// One authored waste-heat route from a named bus source to a thermal node.
+#[derive(Debug, Deserialize)]
+struct ThermalHeatSourceAsset {
+    source_name: String,
+    node: String,
+    fraction: f64,
+    /// `power` (reactor/fuel cell, default) or `generator` (APU/jet mount).
+    #[serde(default)]
+    kind: ThermalHeatSourceKind,
+}
+
+impl ThermalHeatSourceAsset {
+    fn bake(self) -> ThermalHeatSource {
+        ThermalHeatSource {
+            source_name: self.source_name,
+            node: self.node,
+            fraction: self.fraction,
+            kind: self.kind,
         }
     }
 }

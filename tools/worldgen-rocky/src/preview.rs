@@ -63,7 +63,8 @@ mod tests {
     fn preview_writes_valid_headers() {
         let toml = include_str!("../../../data/worldgen/example_rocky.toml");
         let manifest: Manifest = toml::from_str(toml).expect("parse");
-        let dir = std::env::temp_dir().join("thessa_preview_test");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-tmp/thessa_preview_test");
         let _ = std::fs::create_dir_all(&dir);
         let prefix = dir.join("pv").to_string_lossy().into_owned();
         let (h, b) = render_preview(&manifest, 10.0, &prefix).expect("render");
@@ -80,7 +81,8 @@ mod tests {
         // 1920x1080 runtime map: exact pixel dimensions, deterministic.
         let toml = include_str!("../../../data/worldgen/example_rocky.toml");
         let manifest: Manifest = toml::from_str(toml).expect("parse");
-        let dir = std::env::temp_dir().join("thessa_map_test");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-tmp/thessa_map_test");
         let _ = std::fs::create_dir_all(&dir);
         let prefix = dir.join("map").to_string_lossy().into_owned();
         let (h, b) =

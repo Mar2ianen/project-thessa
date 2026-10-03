@@ -13,10 +13,11 @@
 //! the renderer supplies illumination. Rivers/lakes at texel scale are
 //! omitted; hydro data stays authoritative in baked reports.
 
-use crate::{appearance::surface_appearance, field::PlanetField, sphere::dir_from_latlon};
+use crate::{appearance::surface_appearance_filtered, field::PlanetField, sphere::dir_from_latlon};
 
 /// Render an equirect client texture (2:1) from the field.
-/// `min_wavelength_m` selects texture detail (erosion-free by design).
+/// `min_wavelength_m` selects the geometry prefix. Attached frozen erosion is
+/// included; classification and appearance filtering follow their own scale.
 ///
 /// In-memory version: capped at 4096x2048, larger outputs must stream via
 /// [`write_client_texture_png`].
@@ -26,6 +27,19 @@ pub fn render_client_texture(
     height: usize,
     min_wavelength_m: f64,
 ) -> Result<(Vec<u8>, Vec<f64>), String> {
+    let (rgb, heights, _) = render_client_material(field, width, height, min_wavelength_m)?;
+    Ok((rgb, heights))
+}
+
+/// Packed sRGB, geometry-prefix heights and canonical material roughness.
+type ClientMaterialRaster = (Vec<u8>, Vec<f64>, Vec<u8>);
+
+fn render_client_material(
+    field: &PlanetField,
+    width: usize,
+    height: usize,
+    min_wavelength_m: f64,
+) -> Result<ClientMaterialRaster, String> {
     if width == 0 || height == 0 || width > 4096 || height > 2048 {
         return Err("in-memory render capped at 4096x2048; stream larger sizes".into());
     }
@@ -35,31 +49,18 @@ pub fn render_client_texture(
     // Pass 1: heights + biome colors.
     let mut heights = vec![0.0; width * height];
     let mut colors: Vec<(u8, u8, u8)> = vec![(0, 0, 0); width * height];
+    let mut roughness = vec![0; width * height];
     for r in 0..height {
-        let lat = 90.0 - (r as f64 + 0.5) * (180.0 / height as f64);
         for c in 0..width {
             // Bevy-sphere convention: u=0 at lon 0.
-            let lon = (c as f64 + 0.5) * (360.0 / width as f64);
-            let lon = if lon > 180.0 { lon - 360.0 } else { lon };
-            let dir = dir_from_latlon(lat, lon);
-            let s = field.sample_surface(dir, min_wavelength_m);
-            heights[r * width + c] = s.height_m;
-            colors[r * width + c] = texel_color(field, &s, dir);
+            let (h, rgb, alpha) = sample_texel(field, width, height, r, c, min_wavelength_m);
+            heights[r * width + c] = h;
+            colors[r * width + c] = rgb;
+            roughness[r * width + c] = alpha;
         }
     }
     let rgb = colors.into_iter().flat_map(|(r, g, b)| [r, g, b]).collect();
-    Ok((rgb, heights))
-}
-
-fn texel_color(
-    field: &PlanetField,
-    s: &crate::field::TerrainSample,
-    dir: [f64; 3],
-) -> (u8, u8, u8) {
-    let rgb = surface_appearance(field, s, dir)
-        .albedo_srgb
-        .map(|v| (v * 255.0).round() as u8);
-    (rgb[0], rgb[1], rgb[2])
+    Ok((rgb, heights, roughness))
 }
 
 /// Encode 8-bit RGB to PNG bytes (sRGB) via the streaming encoder.
@@ -84,6 +85,8 @@ mod tests {
     fn test_field() -> PlanetField {
         PlanetField::build(
             PlanetParams {
+                hydrology: crate::hydro::HydrologyRecipe::default(),
+                surface_climate: crate::climate::SurfaceClimate::default(),
                 name: "t".into(),
                 seed: 77,
                 radius_m: 3_200_000.0,
@@ -162,7 +165,7 @@ fn sample_texel(
     r: usize,
     c: usize,
     min_wavelength_m: f64,
-) -> (f64, (u8, u8, u8)) {
+) -> (f64, (u8, u8, u8), u8) {
     let lat = 90.0 - (r as f64 + 0.5) * (180.0 / height as f64);
     let lon_raw = (c as f64 + 0.5) * (360.0 / width as f64);
     let lon = if lon_raw > 180.0 {
@@ -171,8 +174,23 @@ fn sample_texel(
         lon_raw
     };
     let dir = dir_from_latlon(lat, lon);
-    let s = field.sample_surface(dir, min_wavelength_m);
-    (s.height_m, texel_color(field, &s, dir))
+    let (prefix, macro_h) = field.height_prefix_m(dir);
+    let h = field.height_from_prefix(dir, prefix, macro_h, min_wavelength_m);
+    // Classification uses the same canonical 32 m source as local pages.
+    // The map's representation scale filters appearance, not the coastline.
+    let mut sample = field.sample_surface_from_prefix(dir, prefix, macro_h, 32.0);
+    let (slope, curvature) = field.surface_geometry_from_prefix(dir, prefix, macro_h, 256.0);
+    sample.slope_hint = slope;
+    sample.curvature_per_m = curvature;
+    let texel_m = (std::f64::consts::PI * field.params.radius_m / height as f64)
+        .max(std::f64::consts::TAU * field.params.radius_m * lat.to_radians().cos() / width as f64);
+    let material = surface_appearance_filtered(field, &sample, dir, texel_m);
+    let rgb = material.albedo_srgb.map(|v| (v * 255.0).round() as u8);
+    (
+        h,
+        (rgb[0], rgb[1], rgb[2]),
+        (material.roughness * 255.0).round() as u8,
+    )
 }
 
 /// Stream albedo to the caller's writer with O(width) row storage plus a
@@ -222,7 +240,7 @@ impl Iterator for RowStream<'_> {
         }
         let mut row = Vec::with_capacity(self.width * 3);
         for c in 0..self.width {
-            let (_, (r, g, b)) = sample_texel(
+            let (_, (r, g, b), _) = sample_texel(
                 self.field,
                 self.width,
                 self.height,
@@ -246,7 +264,8 @@ pub fn write_client_maps(
     min_wl: f64,
     directory: &std::path::Path,
 ) -> Result<(), String> {
-    let (albedo, heights) = render_client_texture(field, width, height, min_wl)?;
+    let (albedo, heights, material_roughness) =
+        render_client_material(field, width, height, min_wl)?;
     let mut normals = vec![0_u8; width * height * 3];
     let mut roughness = vec![0_u8; width * height * 3];
     for r in 0..height {
@@ -277,7 +296,7 @@ pub fn write_client_maps(
             }
             // glTF/Bevy roughness is green, metallic blue. Non-metals throughout.
             roughness[o] = 255;
-            roughness[o + 1] = if h < 0.0 { 60 } else { 230 };
+            roughness[o + 1] = material_roughness[r * width + c];
             roughness[o + 2] = 0;
         }
     }
@@ -290,12 +309,36 @@ pub fn write_client_maps(
         let bytes = encode_png_rgb(width, height, &rgb)?;
         std::fs::write(directory.join(format!("{name}.png")), bytes).map_err(|e| e.to_string())?;
     }
-    let metadata = serde_json::json!({"generator":"Thessa rocky field v3", "seed":field.params.seed,
+    let metadata = serde_json::json!({"generator":"Thessa canonical field v10", "seed":field.params.seed,
+        "frozen_erosion_attached":field.has_frozen_erosion(),
+        "regional_erosion":field.regional_erosion().iter().map(|patch| &patch.recipe).collect::<Vec<_>>(),
+        "snow_cover":"annual_precipitation_depth_over_32m_source_roughness_proxy",
+        "fine_deposition":"finite_depth_relief_infill",
+        "substrate":"geological_rock_soil_and_ecological_cover_optical_proxies",
+        "material_geometry_scale_m":256.0,"curvature_sign":"positive_concave",
+        "geomorphology":"slope_curvature_regional_displacement_v1",
+        "hydrology":field.params.hydrology,"world_layer_schema":1,
+        "world_layers_file":"world_layers.json","ecology":"climate_hydrology_cover_v1",
+        "surface_climate":field.params.surface_climate,"material_classification_wavelength_m":32.0,
+        "appearance_filter":"physical_texel_spectral_cutoff","roughness":"canonical_surface_appearance",
         "radius_m":field.params.radius_m,"sea_offset_m":field.sea_offset_m,"width":width,"height":height,
         "min_wavelength_m":min_wl,"sunlight_baked":false,"license":"GPL-3.0-or-later"});
     std::fs::write(
         directory.join("manifest.json"),
         serde_json::to_vec_pretty(&metadata).unwrap(),
+    )
+    .map_err(|e| e.to_string())?;
+    let world_layers = serde_json::json!({
+        "schema":1,"seed":field.params.seed,"radius_m":field.params.radius_m,
+        "river_source_step_deg":field.hydrology_grid_step_deg(),"river_reaches":field.rivers(),
+        "lake_source_step_deg":field.hydrology_grid_step_deg(),"lake_basins":field.lake_basins(),
+        "inhabited_regions":field.inhabited_regions,
+        "population_total":field.inhabited_regions.iter().map(|r| r.population).sum::<u64>(),
+        "representation":"regional_descriptors_not_channel_or_building_geometry"
+    });
+    std::fs::write(
+        directory.join("world_layers.json"),
+        serde_json::to_vec_pretty(&world_layers).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -309,6 +352,8 @@ mod map_tests {
     fn test_field() -> PlanetField {
         PlanetField::build(
             PlanetParams {
+                hydrology: crate::hydro::HydrologyRecipe::default(),
+                surface_climate: crate::climate::SurfaceClimate::default(),
                 name: "t".into(),
                 seed: 77,
                 radius_m: 3_200_000.0,
@@ -377,6 +422,69 @@ mod map_tests {
         let (b, _) = render_client_texture(&field, 48, 24, 4000.0).expect("b");
         assert_eq!(a, b);
     }
+
+    #[test]
+    fn global_material_does_not_reclassify_the_coast_at_geometry_wavelength() {
+        let field = test_field();
+        let (coarse, coarse_heights, coarse_roughness) =
+            render_client_material(&field, 72, 36, 8000.0).unwrap();
+        let (fine, fine_heights, fine_roughness) =
+            render_client_material(&field, 72, 36, 32.0).unwrap();
+        assert_eq!(coarse, fine);
+        assert_eq!(coarse_roughness, fine_roughness);
+        assert_ne!(
+            coarse_heights, fine_heights,
+            "geometry still retains its LOD prefix"
+        );
+        assert!(
+            coarse_roughness.iter().any(|v| *v > 100 && *v < 230),
+            "ice/coast roughness must not collapse to binary constants"
+        );
+    }
+
+    #[test]
+    fn exported_world_layers_preserve_rivers_and_authored_population() {
+        let spec =
+            toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml")).unwrap();
+        let field = crate::field::field_from_manifest(
+            &crate::spec_recipe::manifest_from_spec(&spec).unwrap(),
+        )
+        .unwrap();
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-tmp")
+            .join(format!("thessa-world-layer-export-{}", std::process::id()));
+        write_client_maps(&field, 48, 24, 8000.0, &directory).unwrap();
+        let layers: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join("world_layers.json")).unwrap())
+                .unwrap();
+        assert_eq!(layers["population_total"], 150_000_000u64);
+        assert_eq!(
+            layers["river_reaches"].as_array().unwrap().len(),
+            field.rivers().len()
+        );
+        assert_eq!(
+            layers["lake_basins"].as_array().unwrap().len(),
+            field.lake_basins().len()
+        );
+        assert_eq!(
+            layers["inhabited_regions"].as_array().unwrap().len(),
+            field.inhabited_regions.len()
+        );
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join("manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(metadata["world_layers_file"], "world_layers.json");
+        for name in [
+            "world_layers.json",
+            "manifest.json",
+            "albedo.png",
+            "normal.png",
+            "roughness.png",
+        ] {
+            std::fs::remove_file(directory.join(name)).unwrap();
+        }
+        std::fs::remove_dir(directory).unwrap();
+    }
 }
 #[cfg(test)]
 mod stream_tests {
@@ -387,6 +495,8 @@ mod stream_tests {
     fn streaming_matches_in_memory_render() {
         let field = PlanetField::build(
             PlanetParams {
+                hydrology: crate::hydro::HydrologyRecipe::default(),
+                surface_climate: crate::climate::SurfaceClimate::default(),
                 name: "t".into(),
                 seed: 77,
                 radius_m: 3_200_000.0,

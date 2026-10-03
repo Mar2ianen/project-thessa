@@ -1,7 +1,7 @@
 # Bevy visual slice
 
-Status: implemented prototype (CPU fallback default; GPU-indexed CBT plus
-baked beauty/plume opt-in via `graphics.toml`).
+Status: implemented prototype (configured GPU-auto CBT with optional mesh draw,
+indexed GPU fallback and selectable CPU terrain; beauty/plume via `graphics.toml`).
 
 ## Status
 
@@ -23,9 +23,10 @@ path already consumes snapshots from an embedded authoritative server process.
 - atmosphere optics shared with the `thessa-atmosphere` crate;
 - pilot scene with X-15 visual asset, navball/PFD, flight HUD, terrain, water,
   performance overlay, and flight tracing;
-- streamed rocky terrain tiles with parent retention during refinement (CPU
-  fallback path; `terrain=gpu_indexed` selects the opt-in CBT raster with
-  material pages instead);
+- streamed rocky terrain tiles with parent retention during refinement;
+  `renderer.terrain = "gpu_auto"` prefers supported mesh shaders, otherwise
+  indexed GPU draw. `gpu_indexed` and `cpu` remain explicit alternatives;
+  both GPU consumers share classified triangles, skirts and material pages;
 - raster water reflection baseline and optional graphics-setting resolution;
 - baked beauty shells (cloud decks, gas-giant bands, aurora) and field-first
   engine plume, all gated by `graphics.toml`;

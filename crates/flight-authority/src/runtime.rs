@@ -38,14 +38,15 @@ use thessa_sim_core::{
     GravityField, JetCommand, LandingGearActuatorPoint, LandingLegState, OnRailsCache,
     PanelAeroModel, PanelSoA, ParachuteCommand, ParachuteEnvironment, ParachuteLoad,
     ParachutePhase, ParachuteState, PropellerDriveCommand, PulsedFusionCommand, PulsedFusionState,
-    ReactionWheelAllocation, RigidBodyState, ScheduledEvent, ScheduledKind, SimTime,
-    TestParticleState, TickIntegratorConfig, TurbopropCommand, VehicleDefinition,
+    ReactionWheelAllocation, ReactionWheelState, RigidBodyState, ScheduledEvent, ScheduledKind,
+    SimTime, TestParticleState, TickIntegratorConfig, TurbopropCommand, VehicleDefinition,
     VehiclePartCommand, VehiclePropulsionAllocation, VehicleResourceState, WORLD_TICK_S,
     WheelBrakeState, WheelChassisActuatorPoint, WheelChassisState, WheelDrivePoint,
-    X15StarterProfile, allocate_reaction_wheels_with_enabled_banks, control_surface_commands,
-    evaluate_flight_forces, evaluate_flight_forces_soa, evaluate_flight_forces_with_aero_result,
-    integrate_attitude_step, integrate_rigid_body_step_soa,
-    integrate_rigid_body_step_with_aero_result,
+    X15StarterProfile, allocate_reaction_wheels_with_enabled_banks,
+    allocate_reaction_wheels_with_momentum, control_surface_commands, evaluate_flight_forces,
+    evaluate_flight_forces_soa, evaluate_flight_forces_with_aero_result,
+    initial_reaction_wheel_states, integrate_attitude_step, integrate_rigid_body_step_soa,
+    integrate_rigid_body_step_with_aero_result, momentum_unload_demand,
 };
 use thessa_worldgen_rocky::field::{ObstacleReport, ObstacleTrackCertificate, PlanetField};
 
@@ -307,6 +308,15 @@ pub struct FlightAuthority {
     wheel_chassis_states: Vec<WheelChassisState>,
     landing_leg_states: Vec<LandingLegState>,
     reaction_wheel_bank_enabled: Vec<bool>,
+    /// Granted share of the wheel bus demand from the last installed-resource
+    /// step (0..=1, explicit Euler like solar tracking). Scales the next
+    /// tick's wheel allocation; 1.0 keeps the legacy free-wheel behavior for
+    /// assets without a same-named bus consumer.
+    reaction_wheel_power_fraction: f64,
+    /// Stored rotor momentum per bank, parallel to `vehicle.reaction_wheels`.
+    /// Integrated by the momentum-aware allocator; banks without an authored
+    /// capacity behave exactly like the legacy unlimited model.
+    reaction_wheel_momentum: Vec<ReactionWheelState>,
     wheel_chassis_deployment_commands: Vec<bool>,
     landing_leg_deployment_commands: Vec<bool>,
     parachute_states: Vec<ParachuteState>,
@@ -513,6 +523,9 @@ impl FlightAuthority {
         self.explicit_force_demand_body_n = None;
         self.explicit_moment_demand_nm = None;
         self.reaction_wheel_torque_body_nm = DVec3::ZERO;
+        self.reaction_wheel_power_fraction = 1.0;
+        self.reaction_wheel_momentum
+            .fill(ReactionWheelState::default());
         self.set_parachutes_armed(false);
         self.parachute_states.fill(ParachuteState::default());
         self.last_parachute_loads.fill(ParachuteLoad::default());
@@ -799,6 +812,8 @@ impl FlightAuthority {
             .map(|leg| leg.spec.initial_state())
             .collect();
         let reaction_wheel_bank_enabled = vec![true; vehicle.reaction_wheels.len()];
+        let reaction_wheel_momentum = initial_reaction_wheel_states(&vehicle.reaction_wheels)
+            .map_err(|error| format!("reaction-wheel momentum state is invalid: {error}"))?;
         let wheel_chassis_deployment_commands = vec![true; vehicle.wheel_chassis.len()];
         let landing_leg_deployment_commands = vec![true; vehicle.landing_legs.len()];
         let parachute_states = vec![ParachuteState::default(); vehicle.parachutes.len()];
@@ -877,6 +892,8 @@ impl FlightAuthority {
             rcs_enabled: true,
             reaction_wheels_enabled: true,
             reaction_wheel_torque_body_nm: DVec3::ZERO,
+            reaction_wheel_power_fraction: 1.0,
+            reaction_wheel_momentum,
             gear_down: true,
             parachutes_armed: false,
             wheel_brake_command: 0.0,
@@ -989,6 +1006,28 @@ impl FlightAuthority {
         self.landing_leg_deployment_commands.fill(deployed);
     }
 
+    /// Unload authority for momentum desaturation: summed motor ratings of
+    /// enabled banks that carry a momentum capacity. Bounds the RCS unload
+    /// demand by what the wheels themselves could produce — no separate
+    /// tuning constant.
+    fn reaction_wheel_unload_authority_nm(&self) -> f64 {
+        self.vehicle
+            .reaction_wheels
+            .iter()
+            .enumerate()
+            .filter(|(index, bank)| {
+                bank.momentum_capacity_nms.is_some()
+                    && self
+                        .reaction_wheel_bank_enabled
+                        .get(*index)
+                        .copied()
+                        .unwrap_or(self.reaction_wheels_enabled)
+            })
+            .map(|(_, bank)| bank.max_torque_body_nm.abs().max_element())
+            .sum::<f64>()
+            .max(0.0)
+    }
+
     /// Enable or disable one authored reaction-wheel bank without changing
     /// the state of other installed banks.
     pub fn set_reaction_wheel_bank_enabled(
@@ -1060,6 +1099,26 @@ impl FlightAuthority {
 
     pub fn reaction_wheel_telemetry(&self) -> DVec3 {
         self.reaction_wheel_torque_body_nm
+    }
+
+    /// Stored rotor momentum per bank, parallel to `vehicle.reaction_wheels`.
+    /// Banks without an authored capacity stay at zero.
+    pub fn reaction_wheel_momentum_telemetry(&self) -> Vec<DVec3> {
+        self.reaction_wheel_momentum
+            .iter()
+            .map(|state| state.stored_momentum_body_nms)
+            .collect()
+    }
+
+    /// Rotor angular velocity per bank (`None` entries lack authored rotor
+    /// inertia). Telemetry only — speeds never feed back into allocation.
+    pub fn reaction_wheel_rotor_speed_telemetry(&self) -> Vec<Option<DVec3>> {
+        self.vehicle
+            .reaction_wheels
+            .iter()
+            .zip(self.reaction_wheel_momentum.iter())
+            .map(|(spec, state)| spec.rotor_speed_body_rps(state))
+            .collect()
     }
 
     pub fn parachute_telemetry(&self) -> &[ParachuteLoad] {

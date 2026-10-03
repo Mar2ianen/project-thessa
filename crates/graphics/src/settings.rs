@@ -69,14 +69,17 @@ pub enum BackendRequest {
 ///
 /// The CPU path remains the portable default. The indexed GPU path consumes
 /// the same CBT pages without requiring experimental mesh-shader features;
-/// hardware mesh shaders stay an isolated crate-level experiment rather than
-/// a normal game setting.
+/// optional hardware mesh shaders share its geometry and material contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TerrainRenderRequest {
     #[default]
     Cpu,
     GpuIndexed,
+    /// Prefer mesh shaders when supported, otherwise use indexed GPU draw.
+    GpuAuto,
+    /// Request mesh draw; unsupported devices degrade with a note.
+    GpuMesh,
 }
 
 /// Material page storage for the CBT terrain path.
@@ -845,7 +848,7 @@ mod tests {
         let text = include_str!("../../../graphics.toml");
         let config = RequestedGraphics::from_toml(text).unwrap();
         assert_eq!(config.version, 1);
-        assert_eq!(config.renderer.terrain, TerrainRenderRequest::Cpu);
+        assert_eq!(config.renderer.terrain, TerrainRenderRequest::GpuAuto);
     }
 
     #[test]

@@ -8,11 +8,11 @@
 //! are area devices tied to a node. There is no ablation, no heat shields,
 //! and no automatic damage: overheating is reported, never auto-exploded.
 
-use glam::{DMat3, DVec3};
+use glam::{DMat3, DQuat, DVec3};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt};
 
-use crate::SolarFluxSource;
+use crate::{ElectricalPowerTelemetry, SolarFluxSource};
 
 const STEFAN_BOLTZMANN_W_M2_K4: f64 = 5.670_374_419e-8;
 const SPACE_BACKGROUND_TEMP_K: f64 = 2.725;
@@ -145,6 +145,80 @@ pub struct RadiatorSpec {
     pub position_body_m: DVec3,
     #[serde(default)]
     pub deployment: RadiatorDeployment,
+    /// Pointing gimbal for the panel normal. `Fixed` (default) keeps the
+    /// authored normal forever; `SingleAxis` steers it about a body-frame
+    /// axis to turn the panel edge-on to the sun.
+    #[serde(default)]
+    pub tracking: RadiatorTracking,
+}
+
+/// Pointing drive for a radiator panel. Unlike solar arrays the automatic
+/// mode *minimizes* incident sunlight (edge-on rejection) instead of
+/// maximizing it; a manual angle target overrides it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum RadiatorTracking {
+    #[default]
+    Fixed,
+    SingleAxis {
+        /// Unit rotation axis in body coordinates.
+        rotation_axis_body: DVec3,
+        minimum_angle_rad: f64,
+        maximum_angle_rad: f64,
+        slew_rate_rad_s: f64,
+        actuator_power_w: f64,
+        initial_angle_rad: f64,
+    },
+}
+
+impl RadiatorTracking {
+    fn validate(&self, radiator_name: &str) -> Result<(), ThermalError> {
+        let RadiatorTracking::SingleAxis {
+            rotation_axis_body,
+            minimum_angle_rad,
+            maximum_angle_rad,
+            slew_rate_rad_s,
+            actuator_power_w,
+            initial_angle_rad,
+        } = self
+        else {
+            return Ok(());
+        };
+        validate_unit_vector(*rotation_axis_body, "radiator tracking axis")?;
+        for (value, label) in [
+            (*minimum_angle_rad, "radiator tracking minimum angle"),
+            (*maximum_angle_rad, "radiator tracking maximum angle"),
+            (*initial_angle_rad, "initial radiator tracking angle"),
+        ] {
+            if !value.is_finite() {
+                return Err(ThermalError::InvalidSpec(format!(
+                    "radiator '{radiator_name}' {label} must be finite"
+                )));
+            }
+        }
+        if minimum_angle_rad > maximum_angle_rad {
+            return Err(ThermalError::InvalidSpec(format!(
+                "radiator '{radiator_name}' tracking limits must satisfy min <= max"
+            )));
+        }
+        if !(*minimum_angle_rad..=*maximum_angle_rad).contains(initial_angle_rad) {
+            return Err(ThermalError::InvalidSpec(format!(
+                "radiator '{radiator_name}' initial tracking angle must lie within its limits"
+            )));
+        }
+        require_positive(*slew_rate_rad_s, "radiator tracking slew rate")?;
+        require_positive(*actuator_power_w, "radiator tracking actuator power")?;
+        Ok(())
+    }
+
+    fn initial_angle_rad(&self) -> f64 {
+        match self {
+            RadiatorTracking::Fixed => 0.0,
+            RadiatorTracking::SingleAxis {
+                initial_angle_rad, ..
+            } => *initial_angle_rad,
+        }
+    }
 }
 
 /// Fixed radiators are permanently exposed. Foldable radiators change
@@ -192,6 +266,19 @@ impl RadiatorSpec {
         validate_unit_vector(self.normal_body, "radiator normal")?;
         require_positive(self.areal_density_kg_m2, "radiator areal density")?;
         validate_finite_vector(self.position_body_m, "radiator position")?;
+        self.tracking.validate(&self.name)?;
+        // A gimbal axis parallel to the panel normal cannot change
+        // incidence; reject the degenerate authoring.
+        if let RadiatorTracking::SingleAxis {
+            rotation_axis_body, ..
+        } = self.tracking
+            && rotation_axis_body.dot(self.normal_body).abs() > 1.0 - 1.0e-6
+        {
+            return Err(ThermalError::InvalidSpec(format!(
+                "radiator '{}' tracking axis must not be parallel to the panel normal",
+                self.name
+            )));
+        }
         match self.deployment {
             RadiatorDeployment::Fixed => Ok(()),
             RadiatorDeployment::Foldable {
@@ -214,6 +301,17 @@ impl RadiatorSpec {
 
     pub fn mass_kg(&self) -> f64 {
         self.area_m2 * self.areal_density_kg_m2
+    }
+
+    /// Panel normal at the given gimbal angle. Fixed panels ignore it.
+    pub fn normal_at_angle(&self, angle_rad: f64) -> DVec3 {
+        let RadiatorTracking::SingleAxis {
+            rotation_axis_body, ..
+        } = self.tracking
+        else {
+            return self.normal_body;
+        };
+        DQuat::from_axis_angle(rotation_axis_body, angle_rad) * self.normal_body
     }
 }
 
@@ -250,6 +348,99 @@ pub struct ThermalSystem {
     pub radiators: Vec<RadiatorSpec>,
     /// Sutton-Graves correlation constant for the operating atmosphere.
     pub convective_k: f64,
+    /// Authored waste-heat routing from the shared power bus (and shaft
+    /// generators, and wheel banks) into nodes. Replaces hand-rolled caller
+    /// mapping: each entry sends a fraction of one named reactor/fuel-cell
+    /// source's waste heat — or one named APU/jet generator mount's or
+    /// wheel bank's losses — to one node.
+    #[serde(default)]
+    pub heat_sources: Vec<ThermalHeatSource>,
+}
+
+/// One waste-heat route: a share of a named power source's rejected heat
+/// lands on a named thermal node as an internal load.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThermalHeatSource {
+    /// Reactor or fuel-cell name in the vessel power system (bus-wide unique).
+    /// For `Generator` routes, an APU or jet mount name carrying shaft
+    /// generator telemetry instead.
+    pub source_name: String,
+    /// Thermal node receiving the heat.
+    pub node: String,
+    /// Share of that source's waste heat in [0, 1].
+    pub fraction: f64,
+    /// Which inventory the source name resolves against. Defaults to the
+    /// power bus so older assets keep their meaning.
+    #[serde(default)]
+    pub kind: ThermalHeatSourceKind,
+}
+
+/// Waste-heat inventory a [`ThermalHeatSource`] route draws from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThermalHeatSourceKind {
+    /// Reactor or fuel-cell waste heat from `ElectricalPowerTelemetry`.
+    #[default]
+    Power,
+    /// Shaft-generator losses from an APU or jet mount, supplied by the
+    /// caller as [`NamedWasteHeat`] (generator shaft draw minus electrical
+    /// output — a measured loss, not a coefficient).
+    Generator,
+    /// Reaction-wheel motor losses by bank name, supplied by the caller as
+    /// [`NamedWasteHeat`] (bus draw minus rotor kinetic-energy rate via
+    /// `reaction_wheel_step_heat_w`).
+    ReactionWheel,
+}
+
+/// Named generator loss snapshot for one APU or jet mount (W). Build with
+/// [`generator_waste_heat_w`] from shaft telemetry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NamedWasteHeat {
+    pub name: String,
+    pub waste_heat_w: f64,
+}
+
+/// Generator loss from shaft telemetry: shaft power drawn to produce the
+/// electrical output, minus that output. Clamped at zero; non-finite or
+/// negative inputs fail closed.
+pub fn generator_waste_heat_w(
+    generator_shaft_draw_w: f64,
+    generator_electrical_w: f64,
+) -> Result<f64, ThermalError> {
+    if !generator_shaft_draw_w.is_finite() || !generator_electrical_w.is_finite() {
+        return Err(ThermalError::InvalidCommand(
+            "generator shaft draw and electrical output must be finite".into(),
+        ));
+    }
+    if generator_shaft_draw_w < 0.0 || generator_electrical_w < 0.0 {
+        return Err(ThermalError::InvalidCommand(
+            "generator shaft draw and electrical output must be non-negative".into(),
+        ));
+    }
+    Ok((generator_shaft_draw_w - generator_electrical_w).max(0.0))
+}
+
+impl ThermalHeatSource {
+    fn validate(&self, system_nodes: &[ThermalNodeSpec]) -> Result<(), ThermalError> {
+        if self.source_name.trim().is_empty() {
+            return Err(ThermalError::InvalidSpec(
+                "thermal heat source name must not be empty".into(),
+            ));
+        }
+        if !system_nodes.iter().any(|node| node.name == self.node) {
+            return Err(ThermalError::InvalidSpec(format!(
+                "thermal heat source '{}' targets unknown node '{}'",
+                self.source_name, self.node
+            )));
+        }
+        if !self.fraction.is_finite() || !(0.0..=1.0).contains(&self.fraction) {
+            return Err(ThermalError::InvalidSpec(format!(
+                "thermal heat source '{}' fraction must be in [0, 1]",
+                self.source_name
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl Default for ThermalSystem {
@@ -259,6 +450,7 @@ impl Default for ThermalSystem {
             links: Vec::new(),
             radiators: Vec::new(),
             convective_k: default_convective_k(),
+            heat_sources: Vec::new(),
         }
     }
 }
@@ -337,6 +529,20 @@ impl ThermalSystem {
         if !self.nodes.is_empty() {
             require_positive(self.convective_k, "thermal convective constant")?;
         }
+        let mut source_share = std::collections::HashMap::new();
+        for source in &self.heat_sources {
+            source.validate(&self.nodes)?;
+            let total = source_share
+                .entry((source.kind, source.source_name.as_str()))
+                .or_insert(0.0);
+            *total += source.fraction;
+            if *total > 1.0 + 1.0e-12 {
+                return Err(ThermalError::InvalidSpec(format!(
+                    "thermal heat routing for '{}' exceeds its waste heat",
+                    source.source_name
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -353,7 +559,121 @@ impl ThermalSystem {
                 .iter()
                 .map(|radiator| radiator.deployment.initial_fraction())
                 .collect(),
+            radiator_tracking_angle_rad: self
+                .radiators
+                .iter()
+                .map(|radiator| radiator.tracking.initial_angle_rad())
+                .collect(),
         })
+    }
+
+    /// Per-node internal loads (W, node order) routed from one power-bus
+    /// step's waste-heat telemetry through the authored [`ThermalHeatSource`]
+    /// table. Reactor and fuel-cell waste heat are matched by their bus-wide
+    /// unique source name; an unmapped source name fails closed so a renamed
+    /// power part cannot silently stop heating its node. Generator-kind
+    /// routes resolve against an empty inventory here — use
+    /// [`Self::waste_heat_loads_w_with_generators`] when mounts report.
+    pub fn waste_heat_loads_w(
+        &self,
+        power: &ElectricalPowerTelemetry,
+    ) -> Result<Vec<f64>, ThermalError> {
+        self.waste_heat_loads_w_with_generators(power, &[])
+    }
+
+    /// Same as [`Self::waste_heat_loads_w`], plus generator-kind routes
+    /// resolved against caller-supplied per-mount losses (APU/jet shaft
+    /// generators via [`generator_waste_heat_w`]).
+    pub fn waste_heat_loads_w_with_generators(
+        &self,
+        power: &ElectricalPowerTelemetry,
+        generators: &[NamedWasteHeat],
+    ) -> Result<Vec<f64>, ThermalError> {
+        self.validate()?;
+        let mut loads = vec![0.0; self.nodes.len()];
+        for route in &self.heat_sources {
+            let waste_w = match route.kind {
+                ThermalHeatSourceKind::Power => power
+                    .reactors
+                    .iter()
+                    .find(|source| source.name == route.source_name)
+                    .map(|source| source.waste_heat_w)
+                    .or_else(|| {
+                        power
+                            .fuel_cells
+                            .iter()
+                            .find(|source| source.name == route.source_name)
+                            .map(|source| source.waste_heat_w)
+                    })
+                    .ok_or_else(|| {
+                        ThermalError::InvalidCommand(format!(
+                            "thermal heat source '{}' matches no reactor or fuel cell",
+                            route.source_name
+                        ))
+                    })?,
+                ThermalHeatSourceKind::Generator | ThermalHeatSourceKind::ReactionWheel => {
+                    let inventory = match route.kind {
+                        ThermalHeatSourceKind::Generator => "reported generator mount",
+                        ThermalHeatSourceKind::ReactionWheel => "reported wheel bank",
+                        ThermalHeatSourceKind::Power => unreachable!(
+                            "power-kind routes resolve against the bus inventory above"
+                        ),
+                    };
+                    generators
+                        .iter()
+                        .find(|source| source.name == route.source_name)
+                        .map(|source| source.waste_heat_w)
+                        .ok_or_else(|| {
+                            ThermalError::InvalidCommand(format!(
+                                "thermal heat source '{}' matches no {inventory}",
+                                route.source_name
+                            ))
+                        })?
+                }
+            };
+            if !waste_w.is_finite() || waste_w < 0.0 {
+                return Err(ThermalError::InvalidCommand(format!(
+                    "thermal heat source '{}' reports non-physical waste heat",
+                    route.source_name
+                )));
+            }
+            let index = self
+                .node_index(&route.node)
+                .expect("validated heat-source node");
+            loads[index] += waste_w * route.fraction;
+        }
+        Ok(loads)
+    }
+
+    /// Add the routed waste heat into a thermal command's per-node internal
+    /// loads, keeping any caller-wired loads already present. This is the
+    /// single call site that replaces hand-rolled reactor/fuel-cell mapping.
+    pub fn apply_waste_heat(
+        &self,
+        command: &mut ThermalCommand,
+        power: &ElectricalPowerTelemetry,
+    ) -> Result<(), ThermalError> {
+        self.apply_waste_heat_with_generators(command, power, &[])
+    }
+
+    /// Same as [`Self::apply_waste_heat`], plus generator-kind routes
+    /// resolved against caller-supplied per-mount losses.
+    pub fn apply_waste_heat_with_generators(
+        &self,
+        command: &mut ThermalCommand,
+        power: &ElectricalPowerTelemetry,
+        generators: &[NamedWasteHeat],
+    ) -> Result<(), ThermalError> {
+        let routed = self.waste_heat_loads_w_with_generators(power, generators)?;
+        if command.internal_heat_w.len() != self.nodes.len() {
+            return Err(ThermalError::InvalidCommand(
+                "command vector lengths do not match the authored thermal system".into(),
+            ));
+        }
+        for (slot, routed_w) in command.internal_heat_w.iter_mut().zip(&routed) {
+            *slot += routed_w;
+        }
+        Ok(())
     }
 
     /// Point-mass aggregation (nodes + radiator panels at their stations).
@@ -443,6 +763,40 @@ impl ThermalSystem {
             }
         }
 
+        // Gimbal planning: manual target wins, otherwise the edge-on
+        // minimum when enabled, otherwise hold. The gimbal draw joins the
+        // same per-radiator motor request the caller books on the bus.
+        let mut radiator_tracking_targets_rad = state.radiator_tracking_angle_rad.clone();
+        for (index, radiator) in self.radiators.iter().enumerate() {
+            let RadiatorTracking::SingleAxis {
+                minimum_angle_rad,
+                maximum_angle_rad,
+                slew_rate_rad_s,
+                actuator_power_w,
+                ..
+            } = radiator.tracking
+            else {
+                continue;
+            };
+            let current = state.radiator_tracking_angle_rad[index];
+            let desired = if let Some(manual) = command.radiator_tracking_targets[index] {
+                manual.clamp(minimum_angle_rad, maximum_angle_rad)
+            } else if command.radiator_tracking_auto[index] {
+                best_radiator_angle(radiator, current, &command.solar_flux)
+            } else {
+                current
+            };
+            let maximum_delta = slew_rate_rad_s * command.dt_s;
+            let planned_delta = (desired - current).clamp(-maximum_delta, maximum_delta);
+            let duty = if maximum_delta > 0.0 {
+                (planned_delta.abs() / maximum_delta).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            radiator_tracking_targets_rad[index] = current + planned_delta;
+            radiator_motor_request_w[index] += actuator_power_w * duty;
+        }
+
         let link_edges: Vec<(usize, usize, f64)> = self
             .links
             .iter()
@@ -456,16 +810,19 @@ impl ThermalSystem {
             .collect();
         // Explicit Euler uses the exposed fraction at the beginning of the
         // step; a deploying radiator contributes from the following step.
-        let radiator_edges: Vec<(usize, &RadiatorSpec, f64)> = self
+        // The gimbal angle likewise applies from the next step.
+        let radiator_edges: Vec<(usize, &RadiatorSpec, f64, f64)> = self
             .radiators
             .iter()
             .zip(&state.radiator_deployed_fraction)
-            .map(|(radiator, deployed)| {
+            .zip(&state.radiator_tracking_angle_rad)
+            .map(|((radiator, deployed), angle)| {
                 (
                     self.node_index(&radiator.attached_node)
                         .expect("validated node"),
                     radiator,
                     *deployed,
+                    *angle,
                 )
             })
             .collect();
@@ -521,6 +878,19 @@ impl ThermalSystem {
                 }
             };
             next.radiator_deployed_fraction[index] = final_fraction;
+            let current_angle = state.radiator_tracking_angle_rad[index];
+            let final_angle = match radiator.tracking {
+                RadiatorTracking::Fixed => 0.0,
+                RadiatorTracking::SingleAxis {
+                    slew_rate_rad_s, ..
+                } => {
+                    let target = radiator_tracking_targets_rad[index];
+                    let delta = target - current_angle;
+                    let allowed = slew_rate_rad_s * command.dt_s * granted;
+                    current_angle + delta.signum() * delta.abs().min(allowed)
+                }
+            };
+            next.radiator_tracking_angle_rad[index] = final_angle;
             radiator_deployment_power_w += radiator_motor_request_w[index];
             radiator_telemetry.push(RadiatorTelemetry {
                 name: radiator.name.clone(),
@@ -528,6 +898,8 @@ impl ThermalSystem {
                 target_fraction: radiator_planned[index],
                 rejected_heat_w: acc.radiator_w[index] / command.dt_s,
                 deployment_power_w: radiator_motor_request_w[index],
+                tracking_angle_rad: final_angle,
+                tracking_target_rad: radiator_tracking_targets_rad[index],
             });
         }
 
@@ -535,6 +907,7 @@ impl ThermalSystem {
             .node_temp_k
             .iter()
             .chain(&next.radiator_deployed_fraction)
+            .chain(&next.radiator_tracking_angle_rad)
             .any(|value| !value.is_finite())
         {
             return Err(ThermalError::InvalidState(
@@ -584,7 +957,7 @@ impl ThermalSystem {
         &self,
         temps: &[f64],
         links: &[(usize, usize, f64)],
-        radiators: &[(usize, &RadiatorSpec, f64)],
+        radiators: &[(usize, &RadiatorSpec, f64, f64)],
         dt_s: f64,
     ) -> Result<usize, ThermalError> {
         let mut link_loss = vec![0.0; self.nodes.len()];
@@ -593,7 +966,7 @@ impl ThermalSystem {
             link_loss[*b] += conductance;
         }
         let mut radiator_loss = vec![0.0; self.nodes.len()];
-        for (index, radiator, deployed) in radiators {
+        for (index, radiator, deployed, _) in radiators {
             radiator_loss[*index] += radiator.emissivity * radiator.area_m2 * deployed;
         }
         let mut worst_dt = f64::INFINITY;
@@ -627,7 +1000,7 @@ impl ThermalSystem {
         &self,
         temps: &[f64],
         links: &[(usize, usize, f64)],
-        radiators: &[(usize, &RadiatorSpec, f64)],
+        radiators: &[(usize, &RadiatorSpec, f64, f64)],
         command: &ThermalCommand,
     ) -> StepRates {
         let mut solar = vec![0.0; self.nodes.len()];
@@ -666,7 +1039,9 @@ impl ThermalSystem {
                 * node.radiating_area_m2
                 * (temp4 - SPACE_BACKGROUND_TEMP_K.powi(4));
         }
-        for (radiator_index, (node_index, radiator, deployed)) in radiators.iter().enumerate() {
+        for (radiator_index, (node_index, radiator, deployed, angle)) in
+            radiators.iter().enumerate()
+        {
             let effective_area = radiator.area_m2 * deployed;
             let temp4 = temps[*node_index].max(0.0).powi(4);
             let rejected_heat_w = radiator.emissivity
@@ -676,12 +1051,13 @@ impl ThermalSystem {
             radiator_out[*node_index] += rejected_heat_w;
             radiator_by_device[radiator_index] = rejected_heat_w;
             if radiator.solar_absorptivity > 0.0 {
+                let normal = radiator.normal_at_angle(*angle);
                 let projected: f64 = command
                     .solar_flux
                     .iter()
                     .map(|source| {
                         source.effective_irradiance_w_m2()
-                            * radiator.normal_body.dot(source.direction_body).max(0.0)
+                            * normal.dot(source.direction_body).max(0.0)
                     })
                     .sum();
                 solar[*node_index] += radiator.solar_absorptivity * effective_area * projected;
@@ -733,12 +1109,16 @@ pub struct ThermalState {
     pub node_temp_k: Vec<f64>,
     #[serde(default)]
     pub radiator_deployed_fraction: Vec<f64>,
+    /// Gimbal angle per radiator. Zero for fixed panels.
+    #[serde(default)]
+    pub radiator_tracking_angle_rad: Vec<f64>,
 }
 
 impl ThermalState {
     pub fn validate_for(&self, system: &ThermalSystem) -> Result<(), ThermalError> {
         if self.node_temp_k.len() != system.nodes.len()
             || self.radiator_deployed_fraction.len() != system.radiators.len()
+            || self.radiator_tracking_angle_rad.len() != system.radiators.len()
         {
             return Err(ThermalError::InvalidState(
                 "state array lengths do not match the authored thermal system".into(),
@@ -770,6 +1150,36 @@ impl ThermalState {
                 )));
             }
         }
+        for (radiator, angle) in system
+            .radiators
+            .iter()
+            .zip(&self.radiator_tracking_angle_rad)
+        {
+            if !angle.is_finite() {
+                return Err(ThermalError::InvalidState(format!(
+                    "radiator '{}' tracking angle must be finite",
+                    radiator.name
+                )));
+            }
+            if let RadiatorTracking::SingleAxis {
+                minimum_angle_rad,
+                maximum_angle_rad,
+                ..
+            } = radiator.tracking
+                && !(minimum_angle_rad..=maximum_angle_rad).contains(angle)
+            {
+                return Err(ThermalError::InvalidState(format!(
+                    "radiator '{}' tracking angle is outside its limits",
+                    radiator.name
+                )));
+            }
+            if radiator.tracking == RadiatorTracking::Fixed && *angle != 0.0 {
+                return Err(ThermalError::InvalidState(format!(
+                    "fixed radiator '{}' tracking angle must be zero",
+                    radiator.name
+                )));
+            }
+        }
         Ok(())
     }
 }
@@ -790,6 +1200,11 @@ pub struct ThermalCommand {
     /// Granted share of each deployment motor's requested power (0..=1),
     /// booked by the caller on the electrical bus. `idle_for` grants full.
     pub radiator_power_fraction: Vec<f64>,
+    /// `None` holds (or auto-tracks); `Some(angle)` drives a gimballed
+    /// radiator toward that body-frame angle in radians.
+    pub radiator_tracking_targets: Vec<Option<f64>>,
+    /// `true` steers a gimballed radiator edge-on to the sun.
+    pub radiator_tracking_auto: Vec<bool>,
 }
 
 impl ThermalCommand {
@@ -801,6 +1216,8 @@ impl ThermalCommand {
             internal_heat_w: vec![0.0; system.nodes.len()],
             radiator_deployment_targets: vec![None; system.radiators.len()],
             radiator_power_fraction: vec![1.0; system.radiators.len()],
+            radiator_tracking_targets: vec![None; system.radiators.len()],
+            radiator_tracking_auto: vec![false; system.radiators.len()],
         }
     }
 
@@ -813,6 +1230,8 @@ impl ThermalCommand {
         if self.internal_heat_w.len() != system.nodes.len()
             || self.radiator_deployment_targets.len() != system.radiators.len()
             || self.radiator_power_fraction.len() != system.radiators.len()
+            || self.radiator_tracking_targets.len() != system.radiators.len()
+            || self.radiator_tracking_auto.len() != system.radiators.len()
         {
             return Err(ThermalError::InvalidCommand(
                 "command vector lengths do not match the authored thermal system".into(),
@@ -850,6 +1269,33 @@ impl ThermalCommand {
                 return Err(ThermalError::InvalidCommand(
                     "radiator power fraction must be in [0, 1]".into(),
                 ));
+            }
+        }
+        for ((radiator, target), auto) in system
+            .radiators
+            .iter()
+            .zip(&self.radiator_tracking_targets)
+            .zip(&self.radiator_tracking_auto)
+        {
+            if let Some(target) = target {
+                if !target.is_finite() {
+                    return Err(ThermalError::InvalidCommand(format!(
+                        "radiator '{}' tracking target must be finite",
+                        radiator.name
+                    )));
+                }
+                if radiator.tracking == RadiatorTracking::Fixed {
+                    return Err(ThermalError::InvalidCommand(format!(
+                        "fixed radiator '{}' cannot slew",
+                        radiator.name
+                    )));
+                }
+            }
+            if *auto && radiator.tracking == RadiatorTracking::Fixed {
+                return Err(ThermalError::InvalidCommand(format!(
+                    "fixed radiator '{}' cannot auto-track",
+                    radiator.name
+                )));
             }
         }
         if let Some(flow) = &self.flow {
@@ -913,6 +1359,81 @@ pub struct RadiatorTelemetry {
     pub rejected_heat_w: f64,
     /// Requested motor power this step (W, before the granted share).
     pub deployment_power_w: f64,
+    /// Gimbal angle/target (rad); zero without a tracking drive.
+    #[serde(default)]
+    pub tracking_angle_rad: f64,
+    #[serde(default)]
+    pub tracking_target_rad: f64,
+}
+
+/// Best gimbal angle in `[min, max]` for the current stellar geometry.
+/// Mirrors the solar search but *minimizes* incident sunlight (edge-on
+/// rejection); holds the current angle in darkness or when nothing
+/// improves on it, so the drive never burns power for zero gain.
+fn best_radiator_angle(
+    radiator: &RadiatorSpec,
+    current_angle_rad: f64,
+    sources: &[SolarFluxSource],
+) -> f64 {
+    let RadiatorTracking::SingleAxis {
+        minimum_angle_rad,
+        maximum_angle_rad,
+        ..
+    } = radiator.tracking
+    else {
+        return 0.0;
+    };
+    let load_at = |angle: f64| {
+        let normal = radiator.normal_at_angle(angle);
+        sources
+            .iter()
+            .map(|source| {
+                source.effective_irradiance_w_m2() * normal.dot(source.direction_body).max(0.0)
+            })
+            .sum::<f64>()
+    };
+    let total: f64 = sources
+        .iter()
+        .map(SolarFluxSource::effective_irradiance_w_m2)
+        .sum();
+    if !total.is_finite() || total <= 0.0 {
+        return current_angle_rad;
+    }
+    let current_value = load_at(current_angle_rad);
+    const SAMPLES: usize = 72;
+    let mut best_angle = current_angle_rad;
+    let mut best_value = current_value;
+    for sample in 0..=SAMPLES {
+        let angle = minimum_angle_rad
+            + (maximum_angle_rad - minimum_angle_rad) * sample as f64 / SAMPLES as f64;
+        let value = load_at(angle);
+        if value < best_value {
+            best_value = value;
+            best_angle = angle;
+        }
+    }
+    let mut step = (maximum_angle_rad - minimum_angle_rad) / SAMPLES as f64;
+    for _ in 0..6 {
+        step *= 0.5;
+        let mut improved = false;
+        for candidate in [best_angle - step, best_angle + step] {
+            let candidate = candidate.clamp(minimum_angle_rad, maximum_angle_rad);
+            let value = load_at(candidate);
+            if value < best_value {
+                best_value = value;
+                best_angle = candidate;
+                improved = true;
+            }
+        }
+        if !improved && step < 1.0e-9 {
+            break;
+        }
+    }
+    if best_value >= current_value - 1.0e-9 * (1.0 + total) {
+        current_angle_rad
+    } else {
+        best_angle
+    }
 }
 
 struct StepRates {
@@ -1049,8 +1570,10 @@ fn validate_unit_vector(value: DVec3, label: &str) -> Result<(), ThermalError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SolarFluxSource;
-
+    use crate::{
+        ElectricalPowerCommand, ElectricalPowerSystem, PowerConsumerSpec, PowerPriority,
+        ReactorSpec, SolarFluxSource,
+    };
     fn node(name: &str) -> ThermalNodeSpec {
         ThermalNodeSpec {
             name: name.into(),
@@ -1093,6 +1616,7 @@ mod tests {
             }],
             radiators: vec![],
             convective_k: default_convective_k(),
+            heat_sources: vec![],
         };
         let state = system.initial_state().unwrap();
         let command = ThermalCommand::idle_for(&system, 12_000.0);
@@ -1112,6 +1636,7 @@ mod tests {
             links: vec![],
             radiators: vec![],
             convective_k: default_convective_k(),
+            heat_sources: vec![],
         };
         let state = system.initial_state().unwrap();
         let mut command = ThermalCommand::idle_for(&system, 10.0);
@@ -1141,8 +1666,10 @@ mod tests {
                 areal_density_kg_m2: 5.0,
                 position_body_m: DVec3::ZERO,
                 deployment: RadiatorDeployment::Fixed,
+                tracking: RadiatorTracking::Fixed,
             }],
             convective_k: default_convective_k(),
+            heat_sources: vec![],
         };
         // Equilibrium at P_in = εσA(T^4 − T_bg^4) with P_in = 2000 W.
         let equilibrium_k = (2_000.0 / (0.9 * STEFAN_BOLTZMANN_W_M2_K4 * 5.0)
@@ -1163,6 +1690,7 @@ mod tests {
         let settled = ThermalState {
             node_temp_k: next.node_temp_k.clone(),
             radiator_deployed_fraction: vec![1.0],
+            radiator_tracking_angle_rad: vec![0.0],
         };
         let (_, report) = system
             .advance(&settled, &settled_command)
@@ -1195,6 +1723,7 @@ mod tests {
             areal_density_kg_m2: 1.0,
             position_body_m: DVec3::ZERO,
             deployment: RadiatorDeployment::Fixed,
+            tracking: RadiatorTracking::Fixed,
         })
         .collect();
         let system = ThermalSystem {
@@ -1202,6 +1731,7 @@ mod tests {
             links: vec![],
             radiators,
             convective_k: default_convective_k(),
+            heat_sources: vec![],
         };
         let state = system.initial_state().expect("initial state");
         let command = ThermalCommand::idle_for(&system, 1.0);
@@ -1239,6 +1769,7 @@ mod tests {
             links: vec![],
             radiators: vec![],
             convective_k: default_convective_k(),
+            heat_sources: vec![],
         };
         let state = system.initial_state().unwrap();
         let mut command = ThermalCommand::idle_for(&system, 1.0);
@@ -1273,6 +1804,7 @@ mod tests {
             }],
             radiators: vec![],
             convective_k: default_convective_k(),
+            heat_sources: vec![],
         };
         let mass = system.mass_properties().expect("mass");
         assert!((mass.mass_kg - 200.0).abs() < 1.0e-12);
@@ -1321,8 +1853,10 @@ mod tests {
                     actuator_power_w: 80.0,
                     initial_fraction: 0.0,
                 },
+                tracking: RadiatorTracking::Fixed,
             }],
             convective_k: default_convective_k(),
+            heat_sources: vec![],
         };
         let state = system.initial_state().unwrap();
         assert_eq!(state.radiator_deployed_fraction, vec![0.0]);
@@ -1348,6 +1882,118 @@ mod tests {
         assert!((next.radiator_deployed_fraction[0] - 1.0).abs() < 1.0e-12);
     }
 
+    fn gimballed_radiator() -> RadiatorSpec {
+        RadiatorSpec {
+            name: "gimbal-rad".into(),
+            attached_node: "block".into(),
+            area_m2: 5.0,
+            emissivity: 0.05,
+            solar_absorptivity: 1.0,
+            normal_body: DVec3::Z,
+            areal_density_kg_m2: 5.0,
+            position_body_m: DVec3::ZERO,
+            deployment: RadiatorDeployment::Fixed,
+            tracking: RadiatorTracking::SingleAxis {
+                rotation_axis_body: DVec3::X,
+                minimum_angle_rad: -std::f64::consts::FRAC_PI_2,
+                maximum_angle_rad: std::f64::consts::FRAC_PI_2,
+                slew_rate_rad_s: 0.5,
+                actuator_power_w: 120.0,
+                initial_angle_rad: 0.0,
+            },
+        }
+    }
+
+    fn gimbal_system() -> ThermalSystem {
+        let mut block = node("block");
+        block.radiating_area_m2 = 0.0;
+        block.solar_exposed_area_m2 = 0.0;
+        ThermalSystem {
+            nodes: vec![block],
+            links: vec![],
+            radiators: vec![gimballed_radiator()],
+            convective_k: default_convective_k(),
+            heat_sources: vec![],
+        }
+    }
+
+    #[test]
+    fn gimbal_auto_steers_edge_on_and_books_motor_power() {
+        let system = gimbal_system();
+        let state = system.initial_state().unwrap();
+        assert_eq!(state.radiator_tracking_angle_rad, vec![0.0]);
+        let mut command = ThermalCommand::idle_for(&system, 2.0);
+        command.solar_flux = vec![flux(1_000.0)];
+        command.radiator_tracking_auto = vec![true];
+        let (next, report) = system.advance(&state, &command).expect("track step");
+        // Edge-on optimum at ±90° (either side sheds the sun); slew
+        // 0.5 rad/s over 2 s moves 1.0 rad toward it.
+        assert!(
+            next.radiator_tracking_angle_rad[0].abs() - 1.0 < 1.0e-12,
+            "angle: {:?}",
+            next.radiator_tracking_angle_rad[0]
+        );
+        assert_eq!(
+            report.radiators[0].tracking_target_rad,
+            next.radiator_tracking_angle_rad[0]
+        );
+        assert_eq!(report.radiator_deployment_power_w, 120.0);
+        // First step still prices face-on sunlight (explicit Euler);
+        // the tipped panel pays off from the second step on.
+        // Explicit Euler prices sunlight at the beginning-of-step angle:
+        // the second step sees the tipped panel and absorbs less.
+        let (second, second_report) = system.advance(&next, &command).expect("second step");
+        assert!(second_report.total_solar_heat_w < 5_000.0);
+        assert!(second.radiator_tracking_angle_rad[0].abs() > 1.0);
+        // Manual target wins over automatic tracking.
+        let mut manual = ThermalCommand::idle_for(&system, 2.0);
+        manual.solar_flux = vec![flux(1_000.0)];
+        manual.radiator_tracking_targets = vec![Some(-0.5)];
+        let (posed, _) = system.advance(&state, &manual).expect("manual slew");
+        assert!((posed.radiator_tracking_angle_rad[0] + 0.5).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn gimbal_without_power_holds_but_reports_request() {
+        let system = gimbal_system();
+        let state = system.initial_state().unwrap();
+        let mut command = ThermalCommand::idle_for(&system, 2.0);
+        command.solar_flux = vec![flux(1_000.0)];
+        command.radiator_tracking_auto = vec![true];
+        command.radiator_power_fraction = vec![0.0];
+        let (held, report) = system.advance(&state, &command).expect("held step");
+        assert_eq!(held.radiator_tracking_angle_rad[0], 0.0);
+        assert_eq!(report.radiator_deployment_power_w, 120.0);
+    }
+
+    #[test]
+    fn degenerate_gimbal_authoring_fails_closed() {
+        let mut parallel = gimballed_radiator();
+        if let RadiatorTracking::SingleAxis {
+            ref mut rotation_axis_body,
+            ..
+        } = parallel.tracking
+        {
+            *rotation_axis_body = DVec3::Z;
+        }
+        assert!(parallel.validate().is_err());
+        let system = ThermalSystem {
+            nodes: vec![node("block")],
+            links: vec![],
+            radiators: vec![gimballed_radiator()],
+            convective_k: default_convective_k(),
+            heat_sources: vec![],
+        };
+        let state = system.initial_state().unwrap();
+        // Fixed panels reject tracking targets; gimballed panels accept them
+        // but a fixed panel behind the same command fails instead.
+        let mut fixed_system = system.clone();
+        fixed_system.radiators[0].tracking = RadiatorTracking::Fixed;
+        let mut command = ThermalCommand::idle_for(&fixed_system, 1.0);
+        command.radiator_tracking_targets = vec![Some(0.1)];
+        assert!(fixed_system.advance(&state, &command).is_err());
+    }
+
     #[test]
     fn bad_specs_commands_and_states_fail_closed() {
         let mut broken = node("x");
@@ -1357,6 +2003,7 @@ mod tests {
             links: vec![],
             radiators: vec![],
             convective_k: default_convective_k(),
+            heat_sources: vec![],
         };
         assert!(system.validate().is_err());
 
@@ -1369,6 +2016,7 @@ mod tests {
             }],
             radiators: vec![],
             convective_k: default_convective_k(),
+            heat_sources: vec![],
         };
         assert!(single.validate().is_err());
 
@@ -1377,6 +2025,7 @@ mod tests {
             links: vec![],
             radiators: vec![],
             convective_k: default_convective_k(),
+            heat_sources: vec![],
         };
         let state = good.initial_state().unwrap();
         let mut command = ThermalCommand::idle_for(&good, 1.0);
@@ -1386,5 +2035,164 @@ mod tests {
         command.internal_heat_w = vec![0.0];
         command.dt_s = -1.0;
         assert!(good.advance(&state, &command).is_err());
+    }
+
+    fn routed_system() -> ThermalSystem {
+        ThermalSystem {
+            nodes: vec![node("block"), node("shell")],
+            links: vec![],
+            radiators: vec![],
+            convective_k: default_convective_k(),
+            heat_sources: vec![ThermalHeatSource {
+                source_name: "rx".into(),
+                node: "block".into(),
+                fraction: 0.5,
+                kind: ThermalHeatSourceKind::Power,
+            }],
+        }
+    }
+
+    fn reactor_bus() -> ElectricalPowerSystem {
+        ElectricalPowerSystem {
+            reactors: vec![ReactorSpec {
+                name: "rx".into(),
+                rated_thermal_power_w: 1_000.0,
+                electric_efficiency: 0.5,
+                radiator_capacity_w: 10_000.0,
+                initial_fuel_mass_kg: 1.0,
+                fuel_specific_energy_j_kg: 1.0e9,
+                dry_mass_kg: 10.0,
+                dimensions_body_m: DVec3::splat(1.0),
+                position_body_m: DVec3::ZERO,
+            }],
+            consumers: vec![PowerConsumerSpec {
+                name: "life-support".into(),
+                rated_power_w: 1_000.0,
+                priority: PowerPriority::LifeSupport,
+            }],
+            ..ElectricalPowerSystem::default()
+        }
+    }
+
+    #[test]
+    fn authored_waste_heat_routes_reactor_losses_into_nodes() {
+        let bus = reactor_bus();
+        let power_state = bus.initial_state().unwrap();
+        let mut power_command = ElectricalPowerCommand::idle_for(&bus, 1.0);
+        power_command.consumer_power_w = vec![400.0];
+        let (_, power_report) = bus.advance(&power_state, &power_command).expect("bus step");
+        // 400 W electric at 50% efficiency rejects 400 W of waste heat.
+        assert_eq!(power_report.reactors[0].waste_heat_w, 400.0);
+
+        let thermal = routed_system();
+        let loads = thermal.waste_heat_loads_w(&power_report).unwrap();
+        assert_eq!(loads, vec![200.0, 0.0]);
+
+        // apply_waste_heat keeps caller-wired loads and adds the routed share;
+        // the step's internal-heat telemetry closes the balance exactly.
+        let state = thermal.initial_state().unwrap();
+        let mut command = ThermalCommand::idle_for(&thermal, 1.0);
+        command.internal_heat_w = vec![50.0, 0.0];
+        thermal
+            .apply_waste_heat(&mut command, &power_report)
+            .unwrap();
+        assert_eq!(command.internal_heat_w, vec![250.0, 0.0]);
+        let (_, report) = thermal.advance(&state, &command).expect("thermal step");
+        assert_eq!(report.total_internal_heat_w, 250.0);
+    }
+
+    #[test]
+    fn waste_heat_routing_fails_closed() {
+        let bus = reactor_bus();
+        let power_state = bus.initial_state().unwrap();
+        let power_command = ElectricalPowerCommand::idle_for(&bus, 1.0);
+        let (_, power_report) = bus.advance(&power_state, &power_command).expect("bus step");
+
+        // Unknown power source: renamed parts cannot silently stop heating.
+        let mut ghost = routed_system();
+        ghost.heat_sources[0].source_name = "ghost-reactor".into();
+        assert!(ghost.waste_heat_loads_w(&power_report).is_err());
+
+        // Unknown node and over-subscribed or out-of-range fractions: spec errors.
+        let mut bad_node = routed_system();
+        bad_node.heat_sources[0].node = "ghost-node".into();
+        assert!(bad_node.validate().is_err());
+        let mut over = routed_system();
+        over.heat_sources.push(ThermalHeatSource {
+            source_name: "rx".into(),
+            node: "shell".into(),
+            fraction: 0.6,
+            kind: ThermalHeatSourceKind::Power,
+        });
+        assert!(over.validate().is_err());
+        let mut negative = routed_system();
+        negative.heat_sources[0].fraction = -0.1;
+        assert!(negative.validate().is_err());
+    }
+
+    #[test]
+    fn generator_routes_draw_shaft_losses_into_nodes() {
+        // 150 W shaft draw for 120 W electrical output rejects 30 W.
+        assert_eq!(generator_waste_heat_w(150.0, 120.0).unwrap(), 30.0);
+        assert_eq!(generator_waste_heat_w(0.0, 0.0).unwrap(), 0.0);
+        assert!(generator_waste_heat_w(f64::NAN, 1.0).is_err());
+        assert!(generator_waste_heat_w(-1.0, 0.0).is_err());
+
+        let mut thermal = routed_system();
+        thermal.heat_sources.push(ThermalHeatSource {
+            source_name: "apu-1".into(),
+            node: "shell".into(),
+            fraction: 1.0,
+            kind: ThermalHeatSourceKind::Generator,
+        });
+        let bus = reactor_bus();
+        let power_state = bus.initial_state().unwrap();
+        let power_command = ElectricalPowerCommand::idle_for(&bus, 1.0);
+        let (_, power_report) = bus.advance(&power_state, &power_command).expect("bus step");
+        let generators = [NamedWasteHeat {
+            name: "apu-1".into(),
+            waste_heat_w: 30.0,
+        }];
+        let loads = thermal
+            .waste_heat_loads_w_with_generators(&power_report, &generators)
+            .unwrap();
+        // Reactor route lands 0 W (no load this step); generator route 30 W.
+        assert_eq!(loads, vec![0.0, 30.0]);
+
+        // Unknown generator mount fails closed; legacy entrypoint ignores
+        // generator routes only by failing on the unknown generator name.
+        let missing = [NamedWasteHeat {
+            name: "other-apu".into(),
+            waste_heat_w: 30.0,
+        }];
+        assert!(
+            thermal
+                .waste_heat_loads_w_with_generators(&power_report, &missing)
+                .is_err()
+        );
+        assert!(thermal.waste_heat_loads_w(&power_report).is_err());
+    }
+
+    #[test]
+    fn wheel_bank_losses_route_like_generator_mounts() {
+        let mut thermal = routed_system();
+        thermal.heat_sources.push(ThermalHeatSource {
+            source_name: "trim-wheel".into(),
+            node: "shell".into(),
+            fraction: 0.5,
+            kind: ThermalHeatSourceKind::ReactionWheel,
+        });
+        let bus = reactor_bus();
+        let power_state = bus.initial_state().unwrap();
+        let power_command = ElectricalPowerCommand::idle_for(&bus, 1.0);
+        let (_, power_report) = bus.advance(&power_state, &power_command).expect("bus step");
+        let inventory = [NamedWasteHeat {
+            name: "trim-wheel".into(),
+            waste_heat_w: 40.0,
+        }];
+        let loads = thermal
+            .waste_heat_loads_w_with_generators(&power_report, &inventory)
+            .unwrap();
+        assert_eq!(loads, vec![0.0, 20.0]);
     }
 }

@@ -11,6 +11,97 @@
 
 use crate::hydro::{HeightGrid, WaterClass};
 
+/// Recipe-controlled climate proxy, not atmospheric flight physics or a GCM.
+/// Missing settings reproduce the legacy temperature field.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SurfaceClimate {
+    pub target_mean_temperature_k: Option<f64>,
+    pub polar_cooling_strength: f64,
+    pub elevation_cooling_strength: f64,
+    pub eclipse_cooling_strength: f64,
+    pub geothermal_local_warming_strength: f64,
+    /// E-folding travel distance for ocean-supplied moisture, in metres.
+    pub moisture_transport_m: f64,
+    /// Cumulative ascent over which orographic condensation removes 1-1/e.
+    pub rainout_height_m: f64,
+    /// Facing-side cloud retention bias in the static climate proxy.
+    pub high_cloud_wet_region_bias: f64,
+    /// Annual water supply represented by unit moisture, in metres/year.
+    pub precipitation_m_yr: f64,
+    /// Open-water potential evaporation at 278 K, in metres/year.
+    pub evaporation_m_yr_at_278k: f64,
+}
+
+impl Default for SurfaceClimate {
+    fn default() -> Self {
+        Self {
+            target_mean_temperature_k: None,
+            polar_cooling_strength: 1.0,
+            elevation_cooling_strength: 1.0,
+            eclipse_cooling_strength: 0.28,
+            geothermal_local_warming_strength: 0.0,
+            moisture_transport_m: 1_200_000.0,
+            rainout_height_m: 1800.0,
+            high_cloud_wet_region_bias: 0.0,
+            precipitation_m_yr: 1.0,
+            evaporation_m_yr_at_278k: 0.6,
+        }
+    }
+}
+
+impl SurfaceClimate {
+    pub fn validate(self) -> Result<(), String> {
+        if self
+            .target_mean_temperature_k
+            .is_some_and(|v| !v.is_finite() || v <= 0.0)
+        {
+            return Err("climate target mean temperature must be finite and positive".into());
+        }
+        for strength in [
+            self.polar_cooling_strength,
+            self.elevation_cooling_strength,
+            self.eclipse_cooling_strength,
+            self.geothermal_local_warming_strength,
+            self.high_cloud_wet_region_bias,
+        ] {
+            if !strength.is_finite() || !(0.0..=1.0).contains(&strength) {
+                return Err("climate proxy strengths must be finite within 0..=1".into());
+            }
+        }
+        for length in [self.moisture_transport_m, self.rainout_height_m] {
+            if !length.is_finite() || length <= 0.0 {
+                return Err("climate moisture lengths must be finite and positive metres".into());
+            }
+        }
+        for flux in [self.precipitation_m_yr, self.evaporation_m_yr_at_278k] {
+            if !flux.is_finite() || flux < 0.0 {
+                return Err("climate annual water fluxes must be finite and nonnegative".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+impl SurfaceClimate {
+    /// Annual liquid-flow proxy, not measured weather or a water inventory.
+    pub fn runoff_m_yr(self, moisture01: f64, temperature_k: f64) -> f64 {
+        self.precipitation_m_yr
+            * moisture01.powi(2)
+            * crate::appearance::smooth(258.0, 278.0, temperature_k)
+    }
+
+    /// Saturation-vapour-pressure scaling (Clausius-Clapeyron). Persistent
+    /// freezing excludes a liquid evaporative playa; ice/sublimation is not modeled.
+    pub fn evaporation_m_yr(self, temperature_k: f64) -> f64 {
+        if temperature_k <= 273.15 {
+            return 0.0;
+        }
+        self.evaporation_m_yr_at_278k
+            * (45_000.0 / 8.314462618 * (1.0 / 278.0 - 1.0 / temperature_k)).exp()
+    }
+}
+
 /// Sub-Nereid longitude for a synchronously rotating moon: faces the giant.
 /// Convention: lon 0 faces Nereid; anti-Nereid side is lon +/-180.
 pub const SUB_NEREID_LON_DEG: f64 = 0.0;
@@ -109,6 +200,54 @@ pub fn continentality_metres(grid: &HeightGrid, water: &[Vec<WaterClass>]) -> Ve
     dist
 }
 
+/// Ocean-supplied moisture surviving travel and cumulative orographic ascent.
+/// Shortest attenuation paths can go around mountains; descent does not restore
+/// condensed water. This is a static, isotropic transport proxy, not a GCM or a
+/// precipitation inventory. The grid must contain datum-calibrated heights.
+pub fn moisture_grid(grid: &HeightGrid, recipe: SurfaceClimate) -> Vec<Vec<f64>> {
+    use std::{cmp::Reverse, collections::BinaryHeap};
+    let (rows, cols) = (grid.rows(), grid.cols());
+    let mut cost = vec![vec![f64::INFINITY; cols]; rows];
+    let mut heap = BinaryHeap::new();
+    for (r, row) in grid.h.iter().enumerate() {
+        for (c, h) in row.iter().enumerate() {
+            if *h < 0.0 {
+                cost[r][c] = 0.0;
+                heap.push(Reverse((0u64, r, c)));
+            }
+        }
+    }
+    while let Some(Reverse((bits, r, c))) = heap.pop() {
+        let here = f64::from_bits(bits);
+        if here != cost[r][c] {
+            continue;
+        }
+        let start = crate::sphere::dir_from_latlon(grid.lats[r], grid.lons[c]);
+        for (nr, nc) in [
+            (r.saturating_sub(1), c),
+            ((r + 1).min(rows - 1), c),
+            (r, (c + cols - 1) % cols),
+            (r, (c + 1) % cols),
+        ] {
+            let end = crate::sphere::dir_from_latlon(grid.lats[nr], grid.lons[nc]);
+            let distance = crate::sphere::great_circle_m(start, end, grid.datum_radius_m);
+            let retention =
+                1.0 + recipe.high_cloud_wet_region_bias * nereid_influence(grid.lons[nc]);
+            let ascent = (grid.h[nr][nc].max(0.0) - grid.h[r][c].max(0.0)).max(0.0);
+            let next = here
+                + distance / (recipe.moisture_transport_m * retention)
+                + ascent / recipe.rainout_height_m;
+            if next < cost[nr][nc] {
+                cost[nr][nc] = next;
+                heap.push(Reverse((next.to_bits(), nr, nc)));
+            }
+        }
+    }
+    cost.into_iter()
+        .map(|row| row.into_iter().map(|v| (-v).exp()).collect())
+        .collect()
+}
+
 /// Full driver bundle at one site. All 0..1 unless noted.
 #[derive(Debug, Clone, Copy)]
 pub struct ClimateDrivers {
@@ -155,6 +294,72 @@ pub fn drivers_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn moisture_transport_decays_in_metres_and_descent_does_not_restore_rainout() {
+        let mut grid = HeightGrid::new(vec![0.0], (0..12).map(|i| i as f64).collect(), 3_200_000.0);
+        grid.h[0].fill(0.0);
+        grid.h[0][0] = -100.0;
+        let recipe = SurfaceClimate {
+            moisture_transport_m: 300_000.0,
+            ..Default::default()
+        };
+        let flat = moisture_grid(&grid, recipe);
+        let distance = 3.0_f64.to_radians() * grid.datum_radius_m;
+        assert!((flat[0][3] - (-distance / recipe.moisture_transport_m).exp()).abs() < 1e-12);
+        // Both directions to the interior cross a ridge. A low basin behind
+        // them remains dry even though its elevation is back at sea level.
+        grid.h[0][1] = 4000.0;
+        grid.h[0][11] = 4000.0;
+        let shadow = moisture_grid(&grid, recipe);
+        assert!(
+            (shadow[0][3] / flat[0][3] - (-4000.0 / recipe.rainout_height_m).exp()).abs() < 1e-12
+        );
+        assert_eq!(shadow[0][0], 1.0);
+        assert_eq!(shadow, moisture_grid(&grid, recipe));
+        grid.h[0].fill(100.0);
+        assert!(
+            moisture_grid(&grid, recipe)
+                .iter()
+                .flatten()
+                .all(|m| *m == 0.0)
+        );
+    }
+
+    #[test]
+    fn moisture_proxy_preserves_seam_pole_identity_and_validates_si_lengths() {
+        let mut grid = HeightGrid::new(
+            vec![-90.0, 0.0, 90.0],
+            vec![-180.0, -90.0, 0.0, 90.0],
+            3_200_000.0,
+        );
+        grid.h = vec![vec![0.0; 4]; 3];
+        grid.h[1][0] = -1.0;
+        let moisture = moisture_grid(&grid, SurfaceClimate::default());
+        assert!((moisture[1][1] - moisture[1][3]).abs() < 1e-12);
+        assert!(moisture.iter().flatten().all(|m| (0.0..=1.0).contains(m)));
+        for row in [&moisture[0], &moisture[2]] {
+            assert!(row.iter().all(|m| (m - row[0]).abs() < 1e-12));
+        }
+        for length in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(
+                SurfaceClimate {
+                    moisture_transport_m: length,
+                    ..Default::default()
+                }
+                .validate()
+                .is_err()
+            );
+            assert!(
+                SurfaceClimate {
+                    rainout_height_m: length,
+                    ..Default::default()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn facing_side_gets_less_eclipse_more_nereid() {

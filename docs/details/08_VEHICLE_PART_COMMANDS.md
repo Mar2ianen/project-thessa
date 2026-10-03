@@ -18,7 +18,7 @@ Current commands cover:
 - landing-gear-group deploy/retract, plus per-leg and retractable wheel-chassis
   commands by authored name;
 - parachute-group arm/disarm;
-- one named parachute's arm, disarm, or cut transition;
+- one named parachute's arm, disarm, cut, or repack transition;
 - one named engine or chamber's throttle;
 - exact propellant transfer between compatible, connected tanks.
 

@@ -4,6 +4,60 @@ Status: partial implementation. Bulk values and landmark/biome recipes are
 built (`data/system.toml`, `data/worldgen/`); §2 stellar proposal (0.84 M☉
 track) is NOT applied — runtime star is 0.82 M☉ / 0.42 L☉.
 
+## Implementation checkpoint — 2026-10-01
+
+Later isolated-worktree reconstruction progress, measurements and validation
+are recorded in [doc 48](48_THESSA_RECONSTRUCTION_2026_10_01.md). That staged
+climate/relief/hydrology work has not yet been promoted into the main source
+tree. The first-repair notes below describe the earlier main-tree checkpoint.
+
+The live client and authority already use `worldgen_recipe.toml` through
+`canonical_world_field`; replacing `thessa_demo.toml` will not repair the live
+planet. Recipe conformance, surface representation and renderer correctness
+are separate acceptance gates. The matched coast audit in doc 47 fails material
+visual acceptance in both mesh and indexed rendering.
+
+First recipe repair: `SpecTerrain` now preserves and validates authored
+`ocean_fraction_target_min/max`; their midpoint reaches `Manifest.ocean_target`
+and canonical datum calibration. Omitted bounds retain 0.52/0.68 compatibility.
+This replaces a hard-coded 0.60 target, without changing the checked-in planet
+or claiming improved screenshots. Regression coverage uses equal-area sphere
+samples, not unweighted latitude/longitude pixels.
+
+Known source gaps to address next:
+
+- Climate proxy strengths for polar/elevation/eclipse cooling and local
+  geothermal warming are parsed but not all propagated to `PlanetParams`.
+  `finish_sample` uses a provisional 294 K base plus latitude/elevation terms;
+  the required area-weighted 276–280 K mean is not established.
+- `plateau_coverage` is parsed but not forwarded by `manifest_from_spec`.
+  Hydrology/detail/readability intent includes ignored recipe keys; their
+  presence in TOML is not proof of implementation.
+- `field_from_manifest` defaults geothermal provinces and flux instead of
+  consuming the full authored geothermal/body contract. Erosion settings in
+  the bake pipeline do not prove equivalent live-field erosion.
+- Global albedo and local material pages must share canonical classification
+  and physically filtered detail. Local grain must not become kilometre-scale
+  map patterns or shift coastline placement with page LOD.
+
+Refactor order (reuse existing generator; no second planet implementation):
+
+1. Measure an area-weighted canonical baseline: ocean area, relief distribution,
+   climate, geothermal flux and landmark dimensions; retain seed/provenance.
+2. Carry validated recipe intent through the existing manifest/field boundary.
+   Keep `data/system.toml` authoritative; do not silently apply §2's star proposal.
+3. Establish coherent macro relief and feature-linked climate/geology/hydrology
+   before adding finer appearance detail. Check landmark readability at 480×270
+   and surface-to-orbit agreement against the same physical field.
+4. Produce filtered baked/global and streamed/local representations of that
+   field. Preserve contact/query semantics, coordinate seams and LOD prefixes.
+5. Repair shared material residency/filtering and measure page-build latency,
+   queue age, time to usable detail and warm revisit. Keep debug/cold-cache,
+   aggregate debug and release measurements separate.
+6. Resume matched coast/highland/pilot/orbit and motion captures, then compare
+   with the real KSA/KSP2 references. A new planet is not permission to ignore
+   rectangular material transitions, nor evidence of visual superiority.
+
 ## 1. Identity
 
 Thessa is the habitable-ish starting moon of the gas giant Nereid. It should not look like
@@ -263,6 +317,32 @@ This is a design bias, not a hard rule.
 
 ## 9. Surface / geology language
 
+### Reconstruction clarification — 2026-10-02
+
+On this old water-bearing captured world, impact structures are inherited
+geology degraded by erosion, sediment infill, glaciation and flooding, not
+mandatory fresh-crater navigation landmarks. Do not move drowned craters to
+land just to make them prominent. Prioritize mountain arcs, rifts, plateaus,
+volcanic provinces, glaciated coasts and island chains. Complete wetlands,
+rivers, floodplains, deltas and sedimentary lowlands rather than removing them.
+Vegetation and inhabited-world infrastructure follow the terrain/hydrology
+contract in `tools/worldgen-rocky/README.md`, including the approximately
+150 million population design target. These are not yet completed city or
+vegetation render systems.
+
+The earlier reconstruction checkpoint is recorded in doc 48. Doc 49 describes
+the earlier disk-worktree ecological biomes and regional river/lake basin
+descriptors. Doc 50 adds causal moisture transport, annual basin balance and an
+explicit frozen-erosion bridge into the canonical field. Doc 51 connects the
+artifact to shared client/server launch, fixes residency-edge material filtering,
+and adds geometry-correlated material descriptors. Doc 52 adds three 256 m
+runoff-erosion refinements and precipitation-limited snow cover while preserving
+the global parent. Resolved water channels/shores, globally coupled local erosion
+and full visual acceptance remain incomplete. The user rejected the resulting
+survey frames; doc 53 tracks the geological/ecological material revision and
+native roughness consumer. It does not mark those frames visually accepted.
+`data/system.toml` remains authoritative; the stellar proposal above is not applied.
+
 Thessa must remain recognizable when the global map is shrunk to 480×270.
 
 The planet should contain several enormous features deliberately, not only noise.
@@ -289,7 +369,7 @@ Generate at least:
 - 1 visually obvious rift/canyon system: `~600–1400 km`;
 - 1 dark volcanic province: `~400–900 km`;
 - 2–4 major shield/caldera complexes;
-- 5–12 very large recognizable craters;
+- 5–12 inherited impact structures, potentially eroded, buried or flooded;
 - 1 large dry plateau / salt-basin complex;
 - 1 highly glaciated mountain/coastal region;
 - multiple archipelagos.

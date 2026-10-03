@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 thessa-rcbt-core = { path = "../../crates/rcbt-core" }
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 toml.workspace = true
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
@@ -23,6 +23,10 @@ harness = false
 
 [[bench]]
 name = "assets"
+harness = false
+
+[[bench]]
+name = "material_pages"
 harness = false
 
 [[bench]]

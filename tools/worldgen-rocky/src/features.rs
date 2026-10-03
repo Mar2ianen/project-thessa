@@ -300,6 +300,11 @@ fn rotate(x: f64, y: f64, rotation_rad: f64) -> (f64, f64) {
 
 /// Height contribution in metres. Pure function of inputs.
 pub fn eval_feature_height_m(pf: &PlacedFeature, lat_deg: f64, lon_deg: f64, radius_m: f64) -> f64 {
+    // Latitude separation is a lower bound on great-circle distance. Reject
+    // distant features before repeated trigonometry and seeded footprint warp.
+    if (lat_deg - pf.lat_deg).abs().to_radians() * radius_m > pf.reach_m() {
+        return 0.0;
+    }
     let (dx, dy) = local_xy_m(lat_deg, lon_deg, pf.lat_deg, pf.lon_deg, radius_m);
     if dx * dx + dy * dy > pf.reach_m().powi(2) {
         return 0.0;
@@ -317,22 +322,7 @@ pub fn eval_feature_height_m(pf: &PlacedFeature, lat_deg: f64, lon_deg: f64, rad
             width_m,
             height_m,
             branches,
-        } => {
-            // Elongated asymmetric uplift + seeded branching ridges.
-            let along = (-(x / (length_m * 0.5)).powi(2)).exp();
-            let across = (-(y / (width_m * 0.5)).powi(2)).exp();
-            let branch = 0.6
-                + 0.4
-                    * rng::fbm(
-                        pf.seed,
-                        21,
-                        x / width_m * (2.0 + f64::from(*branches)),
-                        y / width_m,
-                        3,
-                    );
-            let asym = 1.0 + 0.25 * (x / length_m).tanh();
-            height_m * along * across * branch.max(0.0) * asym
-        }
+        } => mountain_arc_height(pf.seed, x, y, *length_m, *width_m, *height_m, *branches),
         Feature::RidgeChain {
             length_m,
             width_m,
@@ -355,16 +345,7 @@ pub fn eval_feature_height_m(pf: &PlacedFeature, lat_deg: f64, lon_deg: f64, rad
             width_m,
             depth_m,
             tributaries,
-        } => {
-            let along = (-(x / (length_m * 0.5)).powi(2)).exp();
-            let wobble = 0.7 + 0.3 * rng::fbm(pf.seed, 22, x / length_m * 6.0, 0.0, 2);
-            let across = (-(y / (width_m * 0.5 * wobble)).powi(2)).exp();
-            let trib = 1.0
-                + 0.15
-                    * f64::from(*tributaries)
-                    * rng::fbm(pf.seed, 23, x / width_m, y / width_m, 2).max(0.0);
-            -depth_m * along * across * trib
-        }
+        } => rift_system_height(pf.seed, x, y, *length_m, *width_m, *depth_m, *tributaries),
         Feature::GlacierValley {
             length_m,
             width_m,
@@ -512,6 +493,68 @@ pub fn eval_feature_height_m(pf: &PlacedFeature, lat_deg: f64, lon_deg: f64, rad
     if out.is_finite() { out * feather } else { 0.0 }
 }
 
+/// Curved orogenic spine with tapered lateral ridges. Height is the maximum
+/// uplift, not a noise multiplier; branches change geometry, not peak height.
+fn mountain_arc_height(
+    seed: u64,
+    x: f64,
+    y: f64,
+    length_m: f64,
+    width_m: f64,
+    height_m: f64,
+    branches: u32,
+) -> f64 {
+    let centerline = |x: f64| {
+        let t = x / (length_m * 0.5);
+        width_m * (0.65 * t * t + 0.08 * rng::value_noise(seed, 21, t * 3.0, 0.0))
+    };
+    let along = 1.0 - smoothstep(0.65, 1.0, (x / (length_m * 0.5)).abs());
+    let cross = (y - centerline(x)) / (width_m * 0.5);
+    let mut ridge = (-cross * cross * 3.0).exp() * along;
+    for i in 0..branches {
+        let join = (f64::from(i + 1) / f64::from(branches + 1) - 0.5) * length_m * 0.75;
+        let side = if i % 2 == 0 { -1.0 } else { 1.0 };
+        let u = (y - centerline(join)) * side / (width_m * 0.8);
+        if !(0.0..=1.0).contains(&u) {
+            continue;
+        }
+        let branch_x = join + side * u * width_m * 0.4;
+        let distance = (x - branch_x) / (width_m * 0.12);
+        let branch = (-distance * distance).exp() * (1.0 - smoothstep(0.0, 1.0, u));
+        ridge = ridge.max(branch * (1.0 - smoothstep(0.65, 1.0, (join / (length_m * 0.5)).abs())));
+    }
+    height_m * ridge
+}
+
+/// Finite rift incision with connected tributary valleys. Max-composition
+/// avoids multiplying the main valley's depth at tributary intersections.
+fn rift_system_height(
+    seed: u64,
+    x: f64,
+    y: f64,
+    length_m: f64,
+    width_m: f64,
+    depth_m: f64,
+    tributaries: u32,
+) -> f64 {
+    let centerline = |x: f64| width_m * 0.35 * rng::fbm(seed, 22, x / length_m * 4.0, 0.0, 2);
+    let valley = |distance: f64| 1.0 - smoothstep(0.18, 1.0, distance.abs());
+    let along = 1.0 - smoothstep(0.7, 1.0, (x / (length_m * 0.5)).abs());
+    let mut incision = valley((y - centerline(x)) / (width_m * 0.5)) * along;
+    for i in 0..tributaries {
+        let join = (f64::from(i + 1) / f64::from(tributaries + 1) - 0.5) * length_m * 0.7;
+        let side = if i % 2 == 0 { -1.0 } else { 1.0 };
+        let u = (y - centerline(join)) * side / (width_m * 1.5);
+        if !(0.0..=1.0).contains(&u) {
+            continue;
+        }
+        let branch_x = join + u * width_m;
+        let branch = valley((x - branch_x) / (width_m * 0.18)) * (1.0 - smoothstep(0.0, 1.0, u));
+        incision = incision.max(branch);
+    }
+    -depth_m * incision
+}
+
 fn crater_profile(
     x: f64,
     y: f64,
@@ -591,6 +634,70 @@ mod tests {
         let a = eval_feature_height_m(&f, 0.2, 0.3, 3_200_000.0);
         assert_eq!(a, eval_feature_height_m(&f, 0.2, 0.3, 3_200_000.0));
         assert!(a.is_finite());
+    }
+
+    #[test]
+    fn mountain_arc_has_a_curved_spine_and_bounded_connected_branches() {
+        let (length, width, height) = (1_400_000.0, 240_000.0, 7000.0);
+        let x = length * 0.3;
+        let t: f64 = x / (length * 0.5);
+        let spine_y = width * (0.65 * t * t + 0.08 * rng::value_noise(7, 21, t * 3.0, 0.0));
+        let spine = mountain_arc_height(7, x, spine_y, length, width, height, 0);
+        let straight = mountain_arc_height(7, x, 0.0, length, width, height, 0);
+        assert!(spine > straight * 1.5, "arc {spine}, straight {straight}");
+        // Middle branch joins at x=0 and extends north (i=1).
+        let join_y = width * 0.08 * rng::value_noise(7, 21, 0.0, 0.0);
+        let (bx, by) = (width * 0.4 * 0.6, join_y + width * 0.8 * 0.6);
+        let branched = mountain_arc_height(7, bx, by, length, width, height, 3);
+        let unbranched = mountain_arc_height(7, bx, by, length, width, height, 0);
+        assert!(branched > unbranched + 500.0);
+        for ix in -25..=25 {
+            for iy in -12..=12 {
+                let h = mountain_arc_height(
+                    7,
+                    ix as f64 * length / 40.0,
+                    iy as f64 * width / 10.0,
+                    length,
+                    width,
+                    height,
+                    5,
+                );
+                assert!(h.is_finite() && (0.0..=height).contains(&h));
+            }
+        }
+    }
+
+    #[test]
+    fn rift_tributaries_are_valleys_not_a_depth_multiplier() {
+        let (length, width, depth) = (1_000_000.0, 80_000.0, 3000.0);
+        let join_y = width * 0.35 * rng::fbm(7, 22, 0.0, 0.0, 2);
+        // Three tributaries put the middle join at x=0 on the north bank.
+        let (x, y) = (width * 0.4, join_y + width * 1.5 * 0.4);
+        let plain = rift_system_height(7, x, y, length, width, depth, 0);
+        let branch = rift_system_height(7, x, y, length, width, depth, 3);
+        assert!(branch < plain - 1000.0, "branch {branch}, plain {plain}");
+        assert_eq!(
+            rift_system_height(7, 0.0, join_y, length, width, depth, 3),
+            -depth
+        );
+        assert_eq!(
+            rift_system_height(7, length, 0.0, length, width, depth, 3),
+            0.0
+        );
+        for ix in -25..=25 {
+            for iy in -20..=20 {
+                let h = rift_system_height(
+                    7,
+                    ix as f64 * length / 40.0,
+                    iy as f64 * width / 10.0,
+                    length,
+                    width,
+                    depth,
+                    6,
+                );
+                assert!(h.is_finite() && (-depth..=0.0).contains(&h));
+            }
+        }
     }
 
     #[test]

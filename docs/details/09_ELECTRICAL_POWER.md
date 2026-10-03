@@ -93,7 +93,10 @@ Ultracapacitor (ionistor/supercapacitor) banks use the same energy/power-bound
 bus model as a separate authoring type, so high-power/low-energy pulse buffers
 are explicit. Charge/discharge headroom pools across batteries and
 ultracapacitors in proportion to instantaneous limits — the ideal bus assigns
-no chemistry priority. Voltage dynamics, leakage/self-discharge, and cycle
+no chemistry priority. Stored energy additionally decays as
+`E *= exp(-dt / tau)` with the authored `self_discharge_time_s` (default
+infinite, i.e. legacy lossless); the step loss is reported as
+`self_discharge_loss_j`. Voltage dynamics and cycle
 ageing are future work.
 
 The runtime stores energy in joules. Charge and discharge are bounded by both
@@ -114,8 +117,9 @@ fuel_used = Pelectric × dt / (η × fuel_specific_energy)
 ```
 
 The reactor package and initial fuel inventory contribute installed mass. The
-runtime tracks fuel consumed and remaining; runtime vehicle mass/inertia are not
-yet recomputed as reactor fuel is consumed.
+runtime tracks fuel consumed and remaining; `live_mass_properties(state)`
+recomputes vessel mass/COM/inertia from the remaining inventory so fuel burn
+drifts the bake without a second bookkeeping path.
 
 ## 3. Load allocation
 
@@ -145,8 +149,22 @@ working fluids, and fuel-cell reactants are planned in the shared tank
 transaction; tank scarcity triggers a new operating-point evaluation and bus
 redispatch. An unconfigured consumer supplies no electric propulsion power.
 Other parts can use the generic consumer interface; automatic load extraction
-from landing-gear motors, reaction wheels, cabin equipment, and other actuators
-is future integration work.
+from landing-gear motors, cabin equipment, and other actuators
+is future integration work. Reaction-wheel banks already derive their demand
+automatically (see [`06_REACTION_WHEELS.md`](06_REACTION_WHEELS.md)).
+
+### 3.1 Docked bus exchange
+
+Two vessels on a shared docked interface exchange power through
+`DockedBusTie { max_transfer_power_w }` — the cable rating, the only
+authored number. The transfer resolves from last-step telemetry on both
+sides (explicit Euler, like every cross-tick coupling):
+`min(exporter spill, importer unserved, rating)`, booked into the
+importer's command as auxiliary input where it joins the normal source
+order. The exporter must have actually spilled the power, so the tie can
+neither invent energy nor double-serve a load; phantom inputs fail closed.
+In the regression a 400 W spill against a 1000 W shortfall through a 250 W
+tie clears 250 W of unserved load and reports it as auxiliary-to-load.
 
 ## 4. Vehicle TOML
 
@@ -165,9 +183,13 @@ never invents APU power on its own, and a positive auxiliary input with no
 installed APU or fitted jet generator fails closed. A single-axis tracking drive is an optional
 `[electrical_power.solar_arrays.tracking]`
 sub-table with rotation axis, angle limits, slew rate, actuator power, and
-initial angle; omitting it means fixed. The complete parameterized example is
+initial angle; omitting it means fixed. A nested
+`[electrical_power.solar_arrays.tracking.secondary]` block with the same
+fields promotes the drive to a two-axis gimbal: the secondary axis rides in
+the primary-rotated frame, both joints slew within their limits, and their
+motor draws share one utility load slot. The complete parameterized example is
 [`data/vehicles/example_powered_spacecraft.toml`](../../data/vehicles/example_powered_spacecraft.toml).
-It includes both a fixed array and a foldable single-axis-tracking array with
+It includes both a fixed array and a foldable two-axis-tracking array with
 cell-grid sizes, an energy store, an ultracapacitor pulse buffer, a fission
 source, and prioritized loads.
 [`data/vehicles/example_apu_fuel_cell.toml`](../../data/vehicles/example_apu_fuel_cell.toml)
@@ -188,15 +210,18 @@ near-tangent unions; fail-closed without a stellar disc), cell-area scaling,
 mass/inertia derivation, priority shedding, battery
 and ultracapacitor energy/efficiency bounds, reactor heat/fuel balance,
 fold-actuator power limits, fuel-cell stoichiometry/inventory, auxiliary APU
-generation, single-axis tracking toward the strongest of three suns, eclipse
-hold, and powered-thruster bus allocation. The tracking search
+generation, ultracapacitor self-discharge decay, reactor live-mass drift, single-axis tracking toward the strongest of three suns, eclipse
+hold, two-axis gimbal outperformance on an off-axis sun with both joints
+slewing and both motors booked, manual beta-target override, degenerate
+gimbal authoring rejected, and powered-thruster bus allocation. The tracking search
 (72-sample scan plus local refinement) recovers >= 99.5% of a 3600-step
 brute-force optimum on a three-sun fixture. The 64-vessel runtime benchmark is
 `cargo bench -p thessa-sim-core --bench electrical_power` (~187k vessel steps/s
 on this run, with tracking, two overlapping occluders, and storage pooling).
 
 The bus is a powered-load allocation model, not a complete electrical network.
-Voltage/current dynamics, ultracapacitor leakage, converters, short circuits,
-solar thermal behavior, reactor-inventory mass/COM drift, own-vehicle
-self-shadowing, multi-axis gimbals, automatic load extraction from nonpropulsive
-actuators, and power exchange across docked assemblies remain future work.
+Voltage/current dynamics, converters, short circuits,
+solar thermal behavior, own-vehicle
+self-shadowing, three-axis gimbals, automatic load extraction from nonpropulsive
+actuators past reaction wheels, and power exchange across docked assemblies
+remain future work.

@@ -87,6 +87,7 @@ pub(super) struct MaterialArray {
     pub view: TextureView,
     pub sampler: Sampler,
     pub slots: RawBufferVec<[u32; 4]>,
+    pub directory: RawBufferVec<[u32; 4]>,
     texture: Texture,
     cache: SlotCache,
     topology_generation: u64,
@@ -130,6 +131,7 @@ impl MaterialArray {
             view,
             sampler,
             slots: RawBufferVec::new(BufferUsages::STORAGE),
+            directory: RawBufferVec::new(BufferUsages::STORAGE),
             cache: SlotCache::new(layers as usize).expect("wgpu supports texture array layers"),
             topology_generation: u64::MAX,
             pages_generation: u64::MAX,
@@ -178,14 +180,12 @@ impl MaterialArray {
         } else {
             pages.priority.clone()
         };
-        let desired: Vec<_> = sources
-            .into_iter()
-            .filter_map(|id| {
-                let (source, _) =
-                    resolve_material_ancestor(id, |key| pages.pages.contains_key(&key))?;
-                Some((source, pages.pages[&source].0))
-            })
-            .collect();
+        let desired: Vec<_> = crate::material_cache::resident_material_hierarchy(sources, |key| {
+            pages.pages.contains_key(&key)
+        })
+        .into_iter()
+        .map(|id| (id, pages.pages[&id].0))
+        .collect();
         for change in self.cache.update_retaining(&desired) {
             let (_, page) = &pages.pages[&change.node_id];
             for (level, data) in page.mips.iter().enumerate() {
@@ -215,6 +215,17 @@ impl MaterialArray {
                 );
             }
         }
+        self.directory.clear();
+        self.directory
+            .extend(crate::material_cache::material_directory(
+                self.cache.iter().filter(|entry| {
+                    pages
+                        .pages
+                        .get(&entry.node_id)
+                        .is_some_and(|(generation, _)| *generation == entry.generation)
+                }),
+            ));
+        self.directory.write_buffer(device, queue);
         self.slots.clear();
         self.slots.extend(topology.records().iter().map(|r| {
             let id = u64::from(r[0]) | (u64::from(r[1]) << 32);

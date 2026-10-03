@@ -64,6 +64,12 @@ impl FlightAuthority {
         );
         self.reaction_wheel_bank_enabled
             .truncate(self.vehicle.reaction_wheels.len());
+        self.reaction_wheel_momentum.resize(
+            self.vehicle.reaction_wheels.len(),
+            ReactionWheelState::default(),
+        );
+        self.reaction_wheel_momentum
+            .truncate(self.vehicle.reaction_wheels.len());
     }
 
     pub(super) fn sync_gear_deployment_commands(&mut self) {

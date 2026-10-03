@@ -2906,6 +2906,49 @@ impl VehicleDefinition {
         Ok(())
     }
 
+    /// Per-bank electrical demand for the last delivered wheel torque, keyed
+    /// by bank name for the shared-bus same-name consumer convention (the
+    /// same pattern mounted electric thrusters use: a bank without a
+    /// same-named consumer books no load and stays free).
+    ///
+    /// The aggregate torque is split across enabled banks in proportion to
+    /// their per-axis ratings — the same proportional share the clamped
+    /// allocator realizes — plus each enabled bank's idle draw. Disabled
+    /// banks, or a globally disabled wheel system, demand nothing.
+    pub fn reaction_wheel_power_demands(
+        &self,
+        wheels_enabled: bool,
+        enabled_banks: &[bool],
+        delivered_torque_body_nm: glam::DVec3,
+    ) -> Vec<(String, f64)> {
+        if !wheels_enabled {
+            return Vec::new();
+        }
+        let total_rating: glam::DVec3 = self
+            .reaction_wheels
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| enabled_banks.get(*index).copied().unwrap_or(false))
+            .map(|(_, bank)| bank.max_torque_body_nm)
+            .sum();
+        self.reaction_wheels
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| enabled_banks.get(*index).copied().unwrap_or(false))
+            .map(|(_, bank)| {
+                let share = glam::DVec3::new(
+                    proportional_share(bank.max_torque_body_nm.x, total_rating.x),
+                    proportional_share(bank.max_torque_body_nm.y, total_rating.y),
+                    proportional_share(bank.max_torque_body_nm.z, total_rating.z),
+                );
+                (
+                    bank.name.clone(),
+                    bank.electrical_power_w(delivered_torque_body_nm * share),
+                )
+            })
+            .collect()
+    }
+
     /// Attach validated, named parachute assemblies.
     pub fn with_parachutes(mut self, parachutes: Vec<ParachuteSpec>) -> Result<Self, VehicleError> {
         if parachutes.len() > crate::MAX_PARACHUTES {
@@ -4474,6 +4517,16 @@ fn outer_product(a: DVec3, b: DVec3) -> glam::DMat3 {
     glam::DMat3::from_cols(a * b.x, a * b.y, a * b.z)
 }
 
+/// Proportional rating share for splitting an aggregate wheel torque across
+/// banks. A zero total rating carries no torque on that axis.
+fn proportional_share(rating: f64, total: f64) -> f64 {
+    if total > 0.0 && rating.is_finite() && total.is_finite() {
+        (rating / total).clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
 /// Point-mass inertia about the body-frame origin (parallel-axis term).
 fn parallel_axis(mass_kg: f64, center_body_m: DVec3) -> glam::DMat3 {
     (glam::DMat3::IDENTITY * center_body_m.length_squared()
@@ -4627,6 +4680,10 @@ mod tests {
             mass_kg: 20.0,
             position_body_m: DVec3::X,
             inertia_body_kg_m2: DMat3::from_diagonal(DVec3::splat(2.0)),
+            idle_power_w: 0.0,
+            torque_power_w_per_nm: 0.0,
+            momentum_capacity_nms: None,
+            rotor_inertia_kg_m2: None,
         };
         let mut vehicle = VehicleDefinition::new("reaction-wheel-bake", geometry, initial, vec![])
             .unwrap()
@@ -4641,6 +4698,48 @@ mod tests {
         let shift = DVec3::new(2.0, -3.0, 0.5);
         vehicle.shift_body_frame_origin(shift);
         assert_eq!(vehicle.reaction_wheels[0].position_body_m, DVec3::X + shift);
+    }
+
+    #[test]
+    fn reaction_wheel_bus_demands_split_torque_by_rating_share() {
+        use crate::ReactionWheelBankSpec;
+        let bank = |name: &str, rating_x: f64| ReactionWheelBankSpec {
+            name: name.into(),
+            max_torque_body_nm: DVec3::new(rating_x, 0.0, 0.0),
+            mass_kg: 10.0,
+            position_body_m: DVec3::ZERO,
+            inertia_body_kg_m2: DMat3::IDENTITY,
+            idle_power_w: 5.0,
+            torque_power_w_per_nm: 0.5,
+            momentum_capacity_nms: None,
+            rotor_inertia_kg_m2: None,
+        };
+        let geometry = AeroGeometry::new(vec![
+            AeroPanel::new(DVec3::ZERO, DVec3::X, DVec3::Z, 1.0, 1.0).expect("panel"),
+        ])
+        .expect("geometry");
+        let initial = RigidBodyProperties::new(1_000.0, DMat3::from_diagonal(DVec3::splat(100.0)))
+            .expect("base mass");
+        let vehicle = VehicleDefinition::new("wheel-power-test", geometry, initial, vec![])
+            .unwrap()
+            .with_reaction_wheels(vec![bank("small", 10.0), bank("large", 30.0)])
+            .expect("wheels");
+        // Aggregate 20 N·m on X splits 5/15 by rating; each bank adds idle.
+        let demands = vehicle.reaction_wheel_power_demands(true, &[true, true], DVec3::X * 20.0);
+        assert_eq!(demands.len(), 2);
+        assert_eq!(demands[0].0, "small");
+        assert!((demands[0].1 - (5.0 + 0.5 * 5.0)).abs() < 1.0e-12);
+        assert!((demands[1].1 - (5.0 + 0.5 * 15.0)).abs() < 1.0e-12);
+        // Disabled bank and globally disabled wheels demand nothing.
+        let partial = vehicle.reaction_wheel_power_demands(true, &[false, true], DVec3::X * 20.0);
+        assert_eq!(partial.len(), 1);
+        assert_eq!(partial[0].0, "large");
+        assert!((partial[0].1 - (5.0 + 0.5 * 20.0)).abs() < 1.0e-12);
+        assert!(
+            vehicle
+                .reaction_wheel_power_demands(false, &[true, true], DVec3::X * 20.0)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -4661,8 +4760,11 @@ mod tests {
             max_deploy_dynamic_pressure_pa: 1_500.0,
             max_canopy_load_n: 80_000.0,
             pack_mass_kg: 20.0,
+            repack_time_s: 30.0,
             position_body_m: DVec3::X,
             inertia_body_kg_m2: DMat3::from_diagonal(DVec3::splat(2.0)),
+            lines: None,
+            deformation: None,
         };
         let mut vehicle = VehicleDefinition::new("parachute-bake", geometry, initial, vec![])
             .unwrap()
@@ -6142,8 +6244,11 @@ mod cabin_authority_tests {
             max_deploy_dynamic_pressure_pa: 1_000.0,
             max_canopy_load_n: 10_000.0,
             pack_mass_kg: 2.0,
+            repack_time_s: 30.0,
             position_body_m: DVec3::new(2.0, 1.0, -0.5),
             inertia_body_kg_m2: DMat3::IDENTITY,
+            lines: None,
+            deformation: None,
         }
     }
 
@@ -6532,6 +6637,10 @@ mod cabin_authority_tests {
                 mass_kg: 2.0,
                 position_body_m: DVec3::new(0.5, -1.0, 0.5),
                 inertia_body_kg_m2: DMat3::IDENTITY,
+                idle_power_w: 0.0,
+                torque_power_w_per_nm: 0.0,
+                momentum_capacity_nms: None,
+                rotor_inertia_kg_m2: None,
             }])
             .expect("reaction wheel")
             .with_parachutes(vec![test_parachute()])

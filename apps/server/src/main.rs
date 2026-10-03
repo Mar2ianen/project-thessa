@@ -144,10 +144,9 @@ fn find_system(cli_path: Option<String>) -> Result<String, String> {
     if let Some(path) = cli_path {
         return Ok(path);
     }
-    for candidate in ["data/system.toml"] {
-        if std::path::Path::new(candidate).exists() {
-            return Ok(candidate.into());
-        }
+    let candidate = "data/system.toml";
+    if std::path::Path::new(candidate).exists() {
+        return Ok(candidate.into());
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     for ancestor in exe.ancestors().skip(1).take(4) {

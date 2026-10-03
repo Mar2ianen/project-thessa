@@ -31,11 +31,18 @@ glaciation = 0.20
 roughness_macro = 0.42
 
 [climate_proxy]
+# Area-mean temperature of the static worldgen proxy, not flight atmosphere.
+target_mean_temperature_k = 278.0
 nereid_facing_ocean_bias = 0.22
 anti_nereid_continentality_bias = 0.18
 polar_cooling_strength = 0.70
 elevation_cooling_strength = 0.65
 high_cloud_wet_region_bias = 0.55
+moisture_transport_m = 1200000.0
+rainout_height_m = 1800.0
+# Static annual water-budget proxies, not simulated weather.
+precipitation_m_yr = 1.0
+evaporation_m_yr_at_278k = 0.6
 eclipse_cooling_strength = 0.28
 geothermal_local_warming_strength = 0.25
 
@@ -108,6 +115,8 @@ count_min = 5
 count_max = 12
 diameter_km_min = 80.0
 diameter_km_max = 450.0
+depth_km_min = 1.0
+depth_km_max = 4.0
 central_peak_probability = 0.65
 ejecta = true
 
@@ -116,6 +125,10 @@ kind = "dry_plateau_salt_basin_complex"
 count = 1
 diameter_km_min = 400.0
 diameter_km_max = 1000.0
+height_km_min = 2.0
+height_km_max = 5.0
+depth_km_min = 2.0
+depth_km_max = 3.0
 prefer_anti_nereid = true
 aridity_bias = 0.9
 landmark_priority = 0.8
@@ -142,6 +155,8 @@ sea_level_m = 0.0
 derive_ocean_from_height = true
 allow_lakes = true
 route_rivers_downhill = true
+# Macro drainage threshold; local channels need a finer terrain-derived network.
+river_min_catchment_area_m2 = 100000000000.0
 closed_basin_salt_flats = true
 glacial_valley_bias = true
 
@@ -159,6 +174,33 @@ talus_later = true
 outcrops_later = true
 small_craters_later = true
 dune_ripples_later = true
+
+[civilization]
+# Population belongs to inhabited regions including surrounding settlements.
+total_population = 150000000
+region_count = 48
+candidate_samples = 8192
+min_separation_m = 250000.0
+max_water_distance_m = 200000.0
+max_slope = 0.05
+
+# Offline compiler only. Runtime consumers load the frozen artifact and pages;
+# they do not run erosion, drainage or plant placement.
+[offline]
+grid_step_deg = 0.5
+vegetation_tiles = [
+    { face = 0, level = 13, x = 5282, y = 1902 },
+    { face = 0, level = 13, x = 5283, y = 1902 },
+    { face = 0, level = 13, x = 5282, y = 1903 },
+    { face = 0, level = 13, x = 5283, y = 1903 },
+]
+
+[offline.runoff]
+iterations = 32
+# Geological evolution interval; water/sediment still follows terrain receivers.
+years_per_iteration = 100000.0
+erodibility = 0.00002
+sediment_transport_m = 50000.0
 
 [preview]
 export_height = true

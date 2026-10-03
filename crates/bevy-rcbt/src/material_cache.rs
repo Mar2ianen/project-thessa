@@ -8,6 +8,27 @@
 
 use std::fmt;
 
+/// Resident ancestors are explicit GPU demand, not cold opportunistic slots.
+/// Coarse levels come first under exhaustion so residency-edge filtering has
+/// shared fallback data; stable per-level order retains the caller's priority.
+pub fn resident_material_hierarchy(
+    demand: impl IntoIterator<Item = u64>,
+    mut resident: impl FnMut(u64) -> bool,
+) -> Vec<u64> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut ids = Vec::new();
+    for mut id in demand {
+        while id >= 8 {
+            if seen.insert(id) && resident(id) {
+                ids.push(id);
+            }
+            id >>= 2;
+        }
+    }
+    ids.sort_by_key(|id| 64 - id.leading_zeros());
+    ids
+}
+
 /// A page that should be (re)uploaded to one material-array layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlotChange {
@@ -22,6 +43,29 @@ pub struct SlotEntry {
     pub slot: u32,
     pub node_id: u64,
     pub generation: u64,
+}
+
+/// Sparse world-addressed material directory, independent of geometry ordinals.
+/// Same hash and linear probing as material_sample.wgsl; zero IDs are empty.
+pub fn material_directory(entries: impl IntoIterator<Item = SlotEntry>) -> Vec<[u32; 4]> {
+    let entries: Vec<_> = entries.into_iter().collect();
+    let size = (entries.len().max(1) * 4).next_power_of_two();
+    let mut table = vec![[0; 4]; size];
+    for entry in entries {
+        if entry.node_id == 0 {
+            continue;
+        }
+        let low = entry.node_id as u32;
+        let high = (entry.node_id >> 32) as u32;
+        let mut index =
+            (low.wrapping_mul(0x9e3779b9) ^ high.wrapping_mul(0x85ebca6b)) as usize & (size - 1);
+        while table[index][0] != 0 || table[index][1] != 0 {
+            index = (index + 1) & (size - 1);
+        }
+        let depth = 63 - entry.node_id.leading_zeros();
+        table[index] = [low, high, entry.slot, depth.saturating_sub(3) / 2];
+    }
+    table
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,6 +321,49 @@ impl SlotCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn material_hierarchy_keeps_shared_fallbacks_under_slot_exhaustion() {
+        let resident = [8, 9, 32, 33, 128, 132, 133];
+        let hierarchy =
+            resident_material_hierarchy([133, 128, 132, 9, 133], |id| resident.contains(&id));
+        assert_eq!(hierarchy, [8, 9, 33, 32, 133, 128, 132]);
+        let mut slots = SlotCache::new(4).unwrap();
+        slots.update_retaining(&hierarchy.into_iter().map(|id| (id, 1)).collect::<Vec<_>>());
+        assert!(slots.slot(8).is_some());
+        assert!(slots.slot(9).is_some());
+        assert!(slots.slot(32).is_some());
+        assert!(slots.slot(33).is_some());
+        assert!(
+            slots.slot(133).is_none(),
+            "detail falls back instead of evicting shared edges"
+        );
+    }
+
+    #[test]
+    fn material_directory_resolves_every_resident_including_deep_ids() {
+        let entries: Vec<_> = (0..512)
+            .map(|slot| SlotEntry {
+                slot,
+                node_id: (1u64 << 37) + u64::from(slot) * 64,
+                generation: 1,
+            })
+            .collect();
+        let table = material_directory(entries.iter().copied());
+        assert!(table.len().is_power_of_two());
+        for entry in entries {
+            let low = entry.node_id as u32;
+            let high = (entry.node_id >> 32) as u32;
+            let mut index = (low.wrapping_mul(0x9e3779b9) ^ high.wrapping_mul(0x85ebca6b)) as usize
+                & (table.len() - 1);
+            while table[index][..2] != [low, high] {
+                assert_ne!(table[index][..2], [0, 0]);
+                index = (index + 1) & (table.len() - 1);
+            }
+            assert_eq!(table[index][2..], [entry.slot, 17]);
+        }
+        assert_eq!(material_directory([]), vec![[0; 4]; 4]);
+    }
 
     #[test]
     fn stable_reuse_survives_priority_reordering() {

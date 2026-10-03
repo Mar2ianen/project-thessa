@@ -59,17 +59,19 @@ pub enum ResolvedTerrainRender {
     #[default]
     Cpu,
     GpuIndexed,
+    GpuMesh,
 }
 
 impl ResolvedTerrainRender {
     pub fn is_gpu(self) -> bool {
-        matches!(self, Self::GpuIndexed)
+        matches!(self, Self::GpuIndexed | Self::GpuMesh)
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Cpu => "cpu",
             Self::GpuIndexed => "gpu_indexed",
+            Self::GpuMesh => "gpu_mesh",
         }
     }
 }
@@ -105,6 +107,8 @@ impl ResolvedMaterialStorage {
 /// requests are kept and fail fast at device creation with a clear note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Capabilities {
+    /// Enabled mesh feature and sufficient terrain shader limits on the device.
+    pub terrain_mesh_supported: Option<bool>,
     /// `Some(true)` when the adapter exposes ray-query features.
     pub ray_query_supported: Option<bool>,
     /// `Some(true)` when the adapter is a discrete GPU.
@@ -116,6 +120,7 @@ impl Capabilities {
         Self {
             ray_query_supported: None,
             is_discrete_gpu: None,
+            terrain_mesh_supported: None,
         }
     }
 }
@@ -245,13 +250,24 @@ impl ResolvedGraphicsSettings {
             notes.push("RT participation flags ignored while ray tracing is off".to_string());
         }
 
+        let terrain = match requested.renderer.terrain {
+            TerrainRenderRequest::Cpu => ResolvedTerrainRender::Cpu,
+            TerrainRenderRequest::GpuIndexed => ResolvedTerrainRender::GpuIndexed,
+            TerrainRenderRequest::GpuAuto | TerrainRenderRequest::GpuMesh => {
+                if caps.terrain_mesh_supported == Some(true) {
+                    ResolvedTerrainRender::GpuMesh
+                } else {
+                    notes.push(
+                        "terrain mesh capability unknown/unavailable; using GPU indexed".into(),
+                    );
+                    ResolvedTerrainRender::GpuIndexed
+                }
+            }
+        };
         Self {
             preset_label: requested.effective_preset_label().to_string(),
             backend: ResolvedBackend { name: backend_name },
-            terrain: match requested.renderer.terrain {
-                TerrainRenderRequest::Cpu => ResolvedTerrainRender::Cpu,
-                TerrainRenderRequest::GpuIndexed => ResolvedTerrainRender::GpuIndexed,
-            },
+            terrain,
             terrain_mesh_cells: requested.renderer.terrain_mesh_cells.clamp(8, 64),
             material_storage: match requested.renderer.material_storage {
                 crate::settings::MaterialStorageRequest::RgbaArray => {
@@ -429,6 +445,7 @@ mod tests {
         let caps = Capabilities {
             ray_query_supported: Some(true),
             is_discrete_gpu: Some(true),
+            ..Default::default()
         };
         let resolved =
             ResolvedGraphicsSettings::from_requested(&RequestedGraphics::default(), &caps);
@@ -488,6 +505,36 @@ mod tests {
         assert!(resolved.terrain.is_gpu());
         assert_eq!(resolved.as_meta_map()["terrain"], "gpu_indexed");
         assert_eq!(resolved.as_meta_map()["terrain_mesh_cells"], "24");
+    }
+
+    #[test]
+    fn mesh_terrain_resolves_by_capability_with_indexed_fallback() {
+        for mode in [TerrainRenderRequest::GpuAuto, TerrainRenderRequest::GpuMesh] {
+            let mut requested = RequestedGraphics::default();
+            requested.renderer.terrain = mode;
+            for supported in [None, Some(false), Some(true)] {
+                let caps = Capabilities {
+                    terrain_mesh_supported: supported,
+                    ..Default::default()
+                };
+                let resolved = ResolvedGraphicsSettings::from_requested(&requested, &caps);
+                assert_eq!(
+                    resolved.terrain,
+                    if supported == Some(true) {
+                        ResolvedTerrainRender::GpuMesh
+                    } else {
+                        ResolvedTerrainRender::GpuIndexed
+                    }
+                );
+                assert_eq!(
+                    resolved
+                        .notes
+                        .iter()
+                        .any(|note| note.starts_with("terrain mesh capability")),
+                    supported != Some(true)
+                );
+            }
+        }
     }
 }
 

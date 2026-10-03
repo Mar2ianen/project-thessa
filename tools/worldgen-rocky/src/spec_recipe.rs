@@ -15,11 +15,17 @@ use crate::{
 pub struct SpecRecipe {
     pub planet: SpecPlanet,
     #[serde(default)]
+    pub offline: crate::offline::OfflineRecipe,
+    #[serde(default)]
     pub readability: SpecReadability,
     #[serde(default)]
     pub terrain: SpecTerrain,
     #[serde(default)]
     pub climate_proxy: SpecClimate,
+    #[serde(default)]
+    pub hydrology: crate::hydro::HydrologyRecipe,
+    #[serde(default)]
+    pub civilization: Option<crate::civilization::CivilizationRecipe>,
     #[serde(default)]
     pub geothermal: SpecGeothermal,
     #[serde(default)]
@@ -69,6 +75,11 @@ impl Default for SpecReadability {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SpecTerrain {
+    /// Omitted bounds retain the v0.2 ocean-area target, not a renderer setting.
+    #[serde(default)]
+    pub ocean_fraction_target_min: Option<f64>,
+    #[serde(default)]
+    pub ocean_fraction_target_max: Option<f64>,
     #[serde(default)]
     pub mountain_coverage: f64,
     #[serde(default)]
@@ -87,20 +98,106 @@ pub struct SpecTerrain {
     pub plateau_coverage: f64,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+impl SpecTerrain {
+    /// Datum calibration uses the midpoint of the authored ocean-area bounds.
+    pub fn ocean_fraction_target(&self) -> Result<f64, String> {
+        let min = self.ocean_fraction_target_min.unwrap_or(0.52);
+        let max = self.ocean_fraction_target_max.unwrap_or(0.68);
+        if !min.is_finite()
+            || !max.is_finite()
+            || !(0.05..=0.95).contains(&min)
+            || !(min..=0.95).contains(&max)
+        {
+            return Err(
+                "ocean fraction target needs ordered finite bounds within 0.05..=0.95".into(),
+            );
+        }
+        Ok((min + max) * 0.5)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct SpecClimate {
+    #[serde(default)]
+    pub target_mean_temperature_k: Option<f64>,
     #[serde(default)]
     pub nereid_facing_ocean_bias: f64,
     #[serde(default)]
     pub anti_nereid_continentality_bias: f64,
-    #[serde(default)]
+    #[serde(default = "default_cooling_strength")]
     pub polar_cooling_strength: f64,
-    #[serde(default)]
+    #[serde(default = "default_cooling_strength")]
     pub elevation_cooling_strength: f64,
-    #[serde(default)]
+    #[serde(default = "default_eclipse_strength")]
     pub eclipse_cooling_strength: f64,
     #[serde(default)]
     pub geothermal_local_warming_strength: f64,
+    #[serde(default = "default_moisture_transport")]
+    pub moisture_transport_m: f64,
+    #[serde(default = "default_rainout_height")]
+    pub rainout_height_m: f64,
+    #[serde(default)]
+    pub high_cloud_wet_region_bias: f64,
+    #[serde(default = "default_precipitation")]
+    pub precipitation_m_yr: f64,
+    #[serde(default = "default_evaporation")]
+    pub evaporation_m_yr_at_278k: f64,
+}
+
+fn default_moisture_transport() -> f64 {
+    crate::climate::SurfaceClimate::default().moisture_transport_m
+}
+fn default_rainout_height() -> f64 {
+    crate::climate::SurfaceClimate::default().rainout_height_m
+}
+fn default_precipitation() -> f64 {
+    crate::climate::SurfaceClimate::default().precipitation_m_yr
+}
+fn default_evaporation() -> f64 {
+    crate::climate::SurfaceClimate::default().evaporation_m_yr_at_278k
+}
+
+fn default_cooling_strength() -> f64 {
+    1.0
+}
+fn default_eclipse_strength() -> f64 {
+    0.28
+}
+
+impl Default for SpecClimate {
+    fn default() -> Self {
+        Self {
+            target_mean_temperature_k: None,
+            nereid_facing_ocean_bias: 0.0,
+            anti_nereid_continentality_bias: 0.0,
+            polar_cooling_strength: 1.0,
+            elevation_cooling_strength: 1.0,
+            eclipse_cooling_strength: 0.28,
+            geothermal_local_warming_strength: 0.0,
+            moisture_transport_m: default_moisture_transport(),
+            rainout_height_m: default_rainout_height(),
+            high_cloud_wet_region_bias: 0.0,
+            precipitation_m_yr: default_precipitation(),
+            evaporation_m_yr_at_278k: default_evaporation(),
+        }
+    }
+}
+
+impl SpecClimate {
+    pub fn surface_climate(&self) -> crate::climate::SurfaceClimate {
+        crate::climate::SurfaceClimate {
+            target_mean_temperature_k: self.target_mean_temperature_k,
+            polar_cooling_strength: self.polar_cooling_strength,
+            elevation_cooling_strength: self.elevation_cooling_strength,
+            eclipse_cooling_strength: self.eclipse_cooling_strength,
+            geothermal_local_warming_strength: self.geothermal_local_warming_strength,
+            moisture_transport_m: self.moisture_transport_m,
+            rainout_height_m: self.rainout_height_m,
+            high_cloud_wet_region_bias: self.high_cloud_wet_region_bias,
+            precipitation_m_yr: self.precipitation_m_yr,
+            evaporation_m_yr_at_278k: self.evaporation_m_yr_at_278k,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -210,6 +307,13 @@ pub struct BodyBlock {
 
 /// Validate recipe + body file agreement (radius, height range).
 pub fn validate_spec(recipe: &SpecRecipe, body: &BodyFile) -> Result<(), String> {
+    recipe.offline.validate()?;
+    recipe.hydrology.validate()?;
+    if let Some(civilization) = recipe.civilization {
+        civilization.validate()?;
+    }
+    recipe.climate_proxy.surface_climate().validate()?;
+    recipe.terrain.ocean_fraction_target()?;
     if recipe.planet.id.trim().is_empty() {
         return Err("planet id must not be empty".into());
     }
@@ -294,6 +398,31 @@ pub fn place_spec_features(recipe: &SpecRecipe) -> Result<Vec<PlacedFeature>, St
                 rotation_rad: rng::hash01(seed, 900, 0, 0) * std::f64::consts::TAU,
                 feature,
             });
+            if spec.kind == "dry_plateau_salt_basin_complex" {
+                // The complex needs an uplifted plateau, not only the negative
+                // salt-basin bowl that the previous recipe conversion emitted.
+                let basin = out.last().expect("placed basin");
+                let Feature::SaltBasin { radius_m, .. } = &basin.feature else {
+                    unreachable!("dry complex builds a salt basin");
+                };
+                out.push(PlacedFeature {
+                    id: format!("dry-plateau-{i}"),
+                    seed,
+                    lat_deg: lat,
+                    lon_deg: lon,
+                    rotation_rad: basin.rotation_rad,
+                    feature: Feature::Plateau {
+                        radius_m: radius_m * 1.5,
+                        height_m: km_range(
+                            seed,
+                            16,
+                            spec.height_km_min,
+                            spec.height_km_max,
+                            3500.0,
+                        ),
+                    },
+                });
+            }
         }
     }
     Ok(out)
@@ -310,7 +439,8 @@ fn pick_site(
         let mut lat = rng::hash11(seed ^ item_seed, ch, 1, 0) * 60.0;
         let mut lon = rng::hash11(seed ^ item_seed, ch, 0, 1) * 170.0;
         if spec.prefer_high_latitude {
-            lat = lat.signum().max(0.2) * (45.0 + rng::hash01(seed ^ item_seed, ch, 2, 2) * 30.0);
+            let hemisphere = if lat < 0.0 { -1.0 } else { 1.0 };
+            lat = hemisphere * (45.0 + rng::hash01(seed ^ item_seed, ch, 2, 2) * 30.0);
             let _ = &mut lon;
         }
         if spec.prefer_anti_nereid {
@@ -409,7 +539,7 @@ fn build_feature(spec: &SpecFeature, seed: u64) -> Result<Feature, String> {
             ) / 2.0;
             Feature::Crater {
                 rim_radius_m: rim,
-                depth_m: rim * 0.12,
+                depth_m: km_range(seed, 17, spec.depth_km_min, spec.depth_km_max, rim * 0.12),
                 central_peak: rng::hash01(seed, 13, 0, 0)
                     < spec.central_peak_probability.unwrap_or(0.65),
                 ejecta: true,
@@ -423,7 +553,7 @@ fn build_feature(spec: &SpecFeature, seed: u64) -> Result<Feature, String> {
                 spec.diameter_km_max,
                 600_000.0,
             ) / 2.0,
-            depth_m: 700.0,
+            depth_m: km_range(seed, 18, spec.depth_km_min, spec.depth_km_max, 700.0),
         },
         "archipelago" => {
             let chain = km_range(
@@ -475,6 +605,11 @@ use crate::manifest::{
 
 /// Build a runnable [`Manifest`] from the spec recipe.
 pub fn manifest_from_spec(recipe: &SpecRecipe) -> Result<Manifest, String> {
+    if let Some(civilization) = recipe.civilization {
+        civilization.validate()?;
+    }
+    recipe.hydrology.validate()?;
+    recipe.climate_proxy.surface_climate().validate()?;
     let features = place_spec_features(recipe)?;
     let layers = [
         "height",
@@ -517,12 +652,21 @@ pub fn manifest_from_spec(recipe: &SpecRecipe) -> Result<Manifest, String> {
             roughness: recipe.terrain.roughness_macro,
         },
         climate: ClimateRecipe {
+            surface: recipe.climate_proxy.surface_climate(),
             polar_extent: 0.12 + recipe.terrain.glaciation * 0.2,
             aridity: 0.35 + 0.6 * recipe.climate_proxy.anti_nereid_continentality_bias,
             glaciation: recipe.terrain.glaciation,
             nereid_ocean_bias: recipe.climate_proxy.nereid_facing_ocean_bias,
             anti_nereid_land_bias: recipe.climate_proxy.anti_nereid_continentality_bias,
         },
+        geothermal: crate::geothermal::ProvinceRecipe {
+            major_min: recipe.geothermal.major_provinces_min,
+            major_max: recipe.geothermal.major_provinces_max,
+            secondary_min: recipe.geothermal.secondary_fields_min,
+            secondary_max: recipe.geothermal.secondary_fields_max,
+        },
+        hydrology: recipe.hydrology,
+        civilization: recipe.civilization,
         readability: ReadabilityRecipe {
             macro_feature_strength: recipe.readability.macro_feature_strength,
             biome_min_scale_km: recipe.readability.major_region_min_scale_km,
@@ -535,8 +679,7 @@ pub fn manifest_from_spec(recipe: &SpecRecipe) -> Result<Manifest, String> {
             droplets: 4000,
             droplet_steps: 64,
         },
-        // Spec ocean target 0.52..0.68: calibrate datum to the midpoint.
-        ocean_target: Some(0.60),
+        ocean_target: Some(recipe.terrain.ocean_fraction_target()?),
         landmark_zones: Vec::new(),
         features,
     })
@@ -560,6 +703,25 @@ mod tests {
         let (recipe, body) = load();
         validate_spec(&recipe, &body).expect("spec valid");
         assert_eq!(recipe.feature.len(), 9);
+    }
+
+    #[test]
+    fn river_recipe_reaches_field_and_disabled_routing_produces_no_edges() {
+        let (mut recipe, body) = load();
+        let manifest = manifest_from_spec(&recipe).unwrap();
+        let field = crate::field::field_from_manifest(&manifest).unwrap();
+        assert!(!field.rivers().is_empty());
+        assert_eq!(
+            field.params.hydrology.river_min_catchment_area_m2,
+            recipe.hydrology.river_min_catchment_area_m2
+        );
+        recipe.hydrology.route_rivers_downhill = false;
+        let field =
+            crate::field::field_from_manifest(&manifest_from_spec(&recipe).unwrap()).unwrap();
+        assert!(field.rivers().is_empty());
+        recipe.hydrology.river_min_catchment_area_m2 = f64::NAN;
+        assert!(validate_spec(&recipe, &body).is_err());
+        assert!(manifest_from_spec(&recipe).is_err());
     }
 
     #[test]
@@ -627,5 +789,160 @@ mod tests {
             (0.50..=0.70).contains(&ocean_fraction),
             "ocean fraction {ocean_fraction}"
         );
+    }
+
+    #[test]
+    fn canonical_climate_target_is_area_weighted_and_independent_of_texture_resolution() {
+        let (recipe, _) = load();
+        let field =
+            crate::field::field_from_manifest(&manifest_from_spec(&recipe).unwrap()).unwrap();
+        assert_eq!(field.params.surface_climate.polar_cooling_strength, 0.70);
+        assert_eq!(
+            field.params.surface_climate.elevation_cooling_strength,
+            0.65
+        );
+        assert_eq!(
+            field.params.eclipse_strength,
+            recipe.climate_proxy.eclipse_cooling_strength
+        );
+        let mut sum = 0.0;
+        for i in 0..8192 {
+            let y = 1.0 - 2.0 * (i as f64 + 0.5) / 8192.0;
+            let r = (1.0 - y * y).sqrt();
+            let angle = i as f64 * 2.399963229728653;
+            sum += field
+                .sample_surface([r * angle.cos(), y, r * angle.sin()], 32.0)
+                .temperature_k;
+        }
+        assert!((sum / 8192.0 - 278.0).abs() < 0.1, "mean {}", sum / 8192.0);
+        let dir = crate::sphere::dir_from_latlon(25.0, 35.0);
+        let a = field.sample_surface(dir, 32.0);
+        let (prefix, macro_h) = field.height_prefix_m(dir);
+        let b = field.sample_surface_from_prefix(dir, prefix, macro_h, 32.0);
+        assert!((a.temperature_k - b.temperature_k).abs() < 1e-10);
+    }
+
+    #[test]
+    fn geothermal_recipe_counts_reach_the_canonical_field() {
+        let (mut recipe, _) = load();
+        recipe.geothermal.major_provinces_min = 2;
+        recipe.geothermal.major_provinces_max = 2;
+        recipe.geothermal.secondary_fields_min = 4;
+        recipe.geothermal.secondary_fields_max = 4;
+        let field =
+            crate::field::field_from_manifest(&manifest_from_spec(&recipe).unwrap()).unwrap();
+        assert_eq!(field.provinces.len(), 6);
+        recipe.geothermal.major_provinces_max = 33;
+        assert!(crate::field::field_from_manifest(&manifest_from_spec(&recipe).unwrap()).is_err());
+    }
+
+    #[test]
+    fn dry_plateau_complex_contains_colocated_uplift_and_basin() {
+        let (recipe, _) = load();
+        let features = place_spec_features(&recipe).unwrap();
+        let plateau = features.iter().find(|f| f.id == "dry-plateau-0").unwrap();
+        let basin = features
+            .iter()
+            .find(|f| f.id == "dry-plateau-salt-basin-complex-0")
+            .unwrap();
+        assert_eq!(
+            (plateau.lat_deg, plateau.lon_deg),
+            (basin.lat_deg, basin.lon_deg)
+        );
+        let Feature::Plateau { height_m, .. } = plateau.feature else {
+            panic!("plateau missing")
+        };
+        assert!((2000.0..=5000.0).contains(&height_m));
+        let rise = crate::features::eval_feature_height_m(
+            plateau,
+            plateau.lat_deg,
+            plateau.lon_deg,
+            recipe.planet.datum_radius_m,
+        );
+        assert!(rise > 1500.0, "uplift {rise}");
+    }
+
+    #[test]
+    fn glaciated_coasts_use_high_latitudes_in_both_hemispheres() {
+        let (recipe, _) = load();
+        let spec = recipe
+            .feature
+            .iter()
+            .find(|f| f.kind == "glaciated_mountain_coast")
+            .unwrap();
+        let mut hemispheres = [false; 2];
+        for seed in 0..64 {
+            let (lat, _) = pick_site(seed, seed + 100, spec, &[]).unwrap();
+            assert!((45.0..=75.0).contains(&lat.abs()), "latitude {lat}");
+            hemispheres[usize::from(lat > 0.0)] = true;
+        }
+        assert_eq!(hemispheres, [true, true]);
+    }
+
+    #[test]
+    fn canonical_large_craters_use_authored_depth_instead_of_simple_crater_aspect_ratio() {
+        let (recipe, _) = load();
+        for feature in place_spec_features(&recipe).unwrap() {
+            if feature.id.starts_with("large-crater-") {
+                let Feature::Crater { depth_m, .. } = feature.feature else {
+                    panic!("crater missing")
+                };
+                assert!((1000.0..=4000.0).contains(&depth_m));
+            }
+        }
+    }
+
+    #[test]
+    fn climate_conversion_rejects_nonphysical_settings() {
+        let (mut recipe, body) = load();
+        for target in [f64::NAN, f64::INFINITY, 0.0, -278.0] {
+            recipe.climate_proxy.target_mean_temperature_k = Some(target);
+            assert!(validate_spec(&recipe, &body).is_err());
+            assert!(manifest_from_spec(&recipe).is_err());
+        }
+        recipe.climate_proxy.target_mean_temperature_k = None;
+        recipe.climate_proxy.polar_cooling_strength = 1.1;
+        assert!(manifest_from_spec(&recipe).is_err());
+    }
+
+    #[test]
+    fn authored_ocean_bounds_reach_the_canonical_field() {
+        let (mut recipe, _) = load();
+        assert!((recipe.terrain.ocean_fraction_target().unwrap() - 0.6).abs() < 1e-12);
+        recipe.terrain.ocean_fraction_target_min = Some(0.40);
+        recipe.terrain.ocean_fraction_target_max = Some(0.50);
+        let manifest = manifest_from_spec(&recipe).unwrap();
+        assert_eq!(manifest.ocean_target, Some(0.45));
+        let field = crate::field::field_from_manifest(&manifest).unwrap();
+        assert_eq!(field.params.ocean_target, manifest.ocean_target);
+        let ocean = (0..4096)
+            .filter(|&i| {
+                let y = 1.0 - 2.0 * (i as f64 + 0.5) / 4096.0;
+                let angle = i as f64 * 2.399963229728653;
+                let radius = (1.0 - y * y).sqrt();
+                field.height_m([radius * angle.cos(), y, radius * angle.sin()], 1.0) < 0.0
+            })
+            .count();
+        let fraction = ocean as f64 / 4096.0;
+        assert!((fraction - 0.45).abs() < 0.025, "ocean area {fraction}");
+    }
+
+    #[test]
+    fn ocean_bounds_validate_in_both_spec_and_runtime_conversion() {
+        let (mut recipe, body) = load();
+        for (min, max) in [
+            (0.7, 0.5),
+            (f64::NAN, 0.6),
+            (0.4, f64::INFINITY),
+            (0.0, 0.6),
+            (0.4, 1.0),
+        ] {
+            recipe.terrain.ocean_fraction_target_min = Some(min);
+            recipe.terrain.ocean_fraction_target_max = Some(max);
+            assert!(validate_spec(&recipe, &body).is_err());
+            assert!(manifest_from_spec(&recipe).is_err());
+        }
+        let default = SpecTerrain::default();
+        assert!((default.ocean_fraction_target().unwrap() - 0.6).abs() < 1e-12);
     }
 }

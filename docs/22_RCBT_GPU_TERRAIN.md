@@ -1,6 +1,7 @@
 # 22 — `rcbt`: GPU-driven adaptive terrain and baked surface hierarchy
 
-Status: architecture baseline (§§1–18) normative; §19 baseline and §20
+Status: architecture baseline (§§1–18) normative; current mesh/indexed consumer
+integration is tracked in `47_RCBT_RENDER_AUDIT_2026_10_01.md`; §19 baseline and §20
 follow-ups archival as of 2026-09-15 — indexed raster, page provider,
 extraction, and indirect draw shipped opt-in; persistent GPU topology and
 neighbor propagation remain future.

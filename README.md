@@ -68,7 +68,9 @@ The checked-in vertical slice currently contains:
 - `thessa-audio-core` and `thessa-audio-synth`: backend-neutral propagation
   semantics and procedural engine DSP, consumed by the temporary Bevy adapter;
 - `thessa-worldgen-rocky`: deterministic rocky-world fields, geology, climate,
-  landmarks, LOD, obstacle reports, and client texture export;
+  landmarks, LOD, obstacle reports, and client texture export. Recipe conformance
+  is partial; authored ocean bounds now reach canonical datum calibration.
+  The remaining planet refactor is tracked in doc 13;
 - `thessa-rcbt-core`, `thessa-rcbt-ffi`, `thessa-rcbt-large-ffi`,
   `thessa-bevy-rcbt`, and `thessa-rcbt-wgpu`:
   backend-neutral adaptive terrain topology, a fast pure Rust implementation,
@@ -76,9 +78,12 @@ The checked-in vertical slice currently contains:
   universal Bevy frame scheduling, compact height pages, and a portable GPU
   adapter. An experimental microscaled material-page codec and LOD/mip path is
   available for render-world A/B; it currently pre-decodes to RGBA and raw
-  storage remains the default. The client supports native GPU indexed terrain
-  with streamed height/material pages and a CPU/PBR terrain fallback; the current
-  worktree's graphics fixture requests GPU indexed rendering;
+  storage remains the default. The configured client uses GPU-auto terrain
+  (optional mesh shaders with indexed GPU fallback); CPU terrain remains
+  selectable. Both GPU draws share LOD, skirts, scene lighting and
+  world-addressed material sampling independent of geometry LOD. Docs 47–53
+  track historical failures and current work; visual acceptance is incomplete.
+  Persistent conforming GPU bisector topology remains future work;
 - isolated validation harnesses for orbital and aerodynamic reference checks.
 
 Factory gameplay, general three-spool/clutched and free-power-turbine dynamics,
@@ -303,6 +308,13 @@ source validation is not visual acceptance.
 rocky-world fields and exports client textures. Launch-site and configured
 terrain-contact queries use the shared canonical height field; detailed water
 contacts and surface transport remain future work.
+
+Thessa's reconstruction follows the captured-world design, retaining wetlands
+and other lowland relief rather than making fresh craters the main landmarks.
+Climate, arc/rift and regional hydrology changes are staged in an isolated
+worktree; [doc 48](docs/48_THESSA_RECONSTRUCTION_2026_10_01.md) records the exact
+source boundary, measurements and open acceptance gates. They are not yet the
+main-tree planet or evidence of improved gameplay rendering.
 
 ```bash
 cargo run -p thessa-worldgen-rocky -- \

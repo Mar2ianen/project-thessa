@@ -41,6 +41,18 @@ pub(super) struct ReactionWheelAsset {
     position_body_m: [f64; 3],
     /// Matrix is authored as rows for readability.
     inertia_body_kg_m2: [[f64; 3]; 3],
+    /// Quiescent bus draw while enabled (W); omitted means free wheels.
+    #[serde(default)]
+    idle_power_w: f64,
+    /// Marginal draw per N·m delivered (W/N·m).
+    #[serde(default)]
+    torque_power_w_per_nm: f64,
+    /// Rotor momentum capacity per axis (N·m·s); omitted means unlimited.
+    #[serde(default)]
+    momentum_capacity_nms: Option<[f64; 3]>,
+    /// Rotor spin inertia per axis (kg·m²) for speed telemetry.
+    #[serde(default)]
+    rotor_inertia_kg_m2: Option<[f64; 3]>,
 }
 
 impl ReactionWheelAsset {
@@ -51,6 +63,10 @@ impl ReactionWheelAsset {
             mass_kg: self.mass_kg,
             position_body_m: vector(self.position_body_m),
             inertia_body_kg_m2: rows_to_matrix(self.inertia_body_kg_m2),
+            idle_power_w: self.idle_power_w,
+            torque_power_w_per_nm: self.torque_power_w_per_nm,
+            momentum_capacity_nms: self.momentum_capacity_nms.map(vector),
+            rotor_inertia_kg_m2: self.rotor_inertia_kg_m2.map(vector),
         }
     }
 }
@@ -66,9 +82,55 @@ pub(super) struct ParachuteAsset {
     max_deploy_dynamic_pressure_pa: f64,
     max_canopy_load_n: f64,
     pack_mass_kg: f64,
+    /// Servicing time to repack a spent canopy; defaults to the runtime
+    /// constant so older TOMLs stay valid.
+    #[serde(default = "default_repack_time_asset")]
+    repack_time_s: f64,
     position_body_m: [f64; 3],
     /// Matrix is authored as rows for readability.
     inertia_body_kg_m2: [[f64; 3]; 3],
+    /// Optional suspension-line elasticity; omitted means a rigid mount.
+    #[serde(default)]
+    lines: Option<ParachuteLinesAsset>,
+    /// Optional canopy breathing under load; omitted keeps full area.
+    #[serde(default)]
+    deformation: Option<CanopyDeformationAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ParachuteLinesAsset {
+    line_length_m: f64,
+    stiffness_n_per_m: f64,
+    damping_n_s_per_m: f64,
+}
+
+impl ParachuteLinesAsset {
+    fn bake(self) -> ParachuteLines {
+        ParachuteLines {
+            line_length_m: self.line_length_m,
+            stiffness_n_per_m: self.stiffness_n_per_m,
+            damping_n_s_per_m: self.damping_n_s_per_m,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct CanopyDeformationAsset {
+    reference_dynamic_pressure_pa: f64,
+    area_reduction_fraction: f64,
+}
+
+impl CanopyDeformationAsset {
+    fn bake(self) -> CanopyDeformation {
+        CanopyDeformation {
+            reference_dynamic_pressure_pa: self.reference_dynamic_pressure_pa,
+            area_reduction_fraction: self.area_reduction_fraction,
+        }
+    }
+}
+
+fn default_repack_time_asset() -> f64 {
+    default_repack_time_s()
 }
 
 impl ParachuteAsset {
@@ -83,8 +145,11 @@ impl ParachuteAsset {
             max_deploy_dynamic_pressure_pa: self.max_deploy_dynamic_pressure_pa,
             max_canopy_load_n: self.max_canopy_load_n,
             pack_mass_kg: self.pack_mass_kg,
+            repack_time_s: self.repack_time_s,
             position_body_m: vector(self.position_body_m),
             inertia_body_kg_m2: rows_to_matrix(self.inertia_body_kg_m2),
+            lines: self.lines.map(ParachuteLinesAsset::bake),
+            deformation: self.deformation.map(CanopyDeformationAsset::bake),
         }
     }
 }

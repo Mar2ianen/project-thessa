@@ -183,12 +183,14 @@ mod tests {
     fn unique_test_directory() -> PathBuf {
         static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
 
+        // Repo-local scratch, not std::env::temp_dir(): the shared /tmp on
+        // dev hosts is small and quota-limited, while the workspace disk
+        // has room. `target/` is already git-ignored build scratch.
+        let root_base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-tmp");
+        let _ = fs::create_dir_all(&root_base);
         loop {
             let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "thessa-vehicle-baker-debug-mesh-{}-{id}",
-                process::id()
-            ));
+            let path = root_base.join(format!("debug-mesh-{}-{id}", process::id()));
             match fs::create_dir(&path) {
                 Ok(()) => return path,
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,

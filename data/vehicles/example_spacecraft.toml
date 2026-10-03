@@ -19,6 +19,10 @@ name = "service-module-wheel-box"
 max_torque_body_nm = [250.0, 250.0, 180.0]
 mass_kg = 28.0
 position_body_m = [-0.4, 0.0, 0.0]
+idle_power_w = 12.0
+torque_power_w_per_nm = 0.4
+momentum_capacity_nms = [900.0, 900.0, 650.0]
+rotor_inertia_kg_m2 = [2.5, 2.5, 1.8]
 inertia_body_kg_m2 = [
   [8.0, 0.0, 0.0],
   [0.0, 8.0, 0.0],

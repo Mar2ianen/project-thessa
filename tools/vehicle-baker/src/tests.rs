@@ -216,13 +216,19 @@ fn electrical_power_asset_bakes_cell_arrays_sources_loads_and_center_of_mass() {
     );
     assert_eq!(
         vehicle.electrical_power.solar_arrays[1].tracking,
-        SolarArrayTracking::SingleAxis {
-            rotation_axis_body: DVec3::X,
-            minimum_angle_rad: -std::f64::consts::FRAC_PI_2,
-            maximum_angle_rad: std::f64::consts::FRAC_PI_2,
-            slew_rate_rad_s: 0.05,
-            actuator_power_w: 120.0,
-            initial_angle_rad: 0.0,
+        SolarArrayTracking::TwoAxis {
+            primary_rotation_axis_body: DVec3::X,
+            primary_minimum_angle_rad: -std::f64::consts::FRAC_PI_2,
+            primary_maximum_angle_rad: std::f64::consts::FRAC_PI_2,
+            primary_slew_rate_rad_s: 0.05,
+            primary_actuator_power_w: 120.0,
+            primary_initial_angle_rad: 0.0,
+            secondary_rotation_axis_body: DVec3::Y,
+            secondary_minimum_angle_rad: -std::f64::consts::FRAC_PI_2,
+            secondary_maximum_angle_rad: std::f64::consts::FRAC_PI_2,
+            secondary_slew_rate_rad_s: 0.05,
+            secondary_actuator_power_w: 80.0,
+            secondary_initial_angle_rad: 0.0,
         }
     );
 

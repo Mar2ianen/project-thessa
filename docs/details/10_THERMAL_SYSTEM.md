@@ -5,7 +5,9 @@ Vehicle assets can install thermal nodes, conduction links, and area
 radiators. Nodes absorb sunlight through the same occluded stellar inputs as
 the power bus, pick up Sutton-Graves stagnation aero heating, accept explicit
 internal loads (engine/reactor waste heat wired by the caller), and reject
-heat to the cold background directly or through radiators. Shield-specific
+heat to the cold background directly or through radiators. Reactor and
+fuel-cell waste heat can additionally be routed by authoring instead of
+caller code (see §2.4). Shield-specific
 thermal protection and ablation are not coupled yet, and there is no automatic
 damage: overheating is reported, never auto-exploded.
 
@@ -67,7 +69,51 @@ granted share (`radiator_power_fraction`, same pattern as electric-thruster
 available power). Rejected-heat telemetry is reported for each radiator as
 well as aggregated by its attached thermal node.
 
-### 2.3 Integration
+An optional `[thermal.radiators.tracking]` block adds a single-axis pointing
+gimbal: the panel normal steers about the authored body-frame axis within
+limits at the authored slew rate, drawing its own actuator power through the
+same per-radiator motor request the caller books on the bus. Automatic mode
+minimizes incident sunlight (edge-on rejection — the opposite objective of
+solar tracking); a manual angle target wins. Rejection is orientation-free
+(diffuse `εσA(T⁴−T_bg⁴)`), so the gimbal only changes the solar load, priced
+at the beginning-of-step angle like every other mechanism.
+
+### 2.3 Authored waste-heat routing
+`[[thermal.heat_sources]]` replaces hand-rolled caller mapping from the power
+bus into thermal nodes. Each entry names a source, a target node, and a
+fraction of that source's waste heat in [0, 1]; per-source fractions must not
+exceed 1. `kind = "power"` (default) matches a reactor or fuel cell
+(bus-wide unique, as the power validator enforces); `kind = "generator"`
+matches an APU or jet mount name against caller-supplied shaft-generator
+losses (`NamedWasteHeat`, built with `generator_waste_heat_w` from shaft
+draw minus electrical output); `kind = "reaction-wheel"` matches a wheel
+bank name against caller-supplied motor losses (bus draw minus rotor
+kinetic-energy rate via `reaction_wheel_step_heat_w`):
+
+```toml
+[[thermal.heat_sources]]
+source_name = "compact-fission-reactor"
+node = "reactor-block"
+fraction = 1.0
+
+[[thermal.heat_sources]]
+source_name = "apu-1"
+node = "service-module"
+fraction = 1.0
+kind = "generator"
+```
+
+`waste_heat_loads_w(power_telemetry)` resolves the routes to per-node loads
+(an unmapped source name fails closed so a renamed power part cannot silently
+stop heating), `waste_heat_loads_w_with_generators` additionally resolves
+generator routes, and `apply_waste_heat(&mut command, telemetry)` adds them on
+top of any caller-wired loads. The routed energy closes the balance exactly:
+in the routing regression a 400 W reactor waste stream (400 W electric at 50%
+efficiency) lands 200 W on its node at fraction 0.5, and the thermal step
+reports the same total internal heat; a 30 W generator loss routes in full
+at fraction 1.0.
+
+### 2.4 Integration
 
 Explicit Euler with internal stability substepping. The step is split from a
 conservative linearized bound (radiation slope at `max(current, rated)`
@@ -80,17 +126,20 @@ to integration precision and is pinned by regression.
 ## 3. Vehicle TOML
 
 The optional `[thermal]` table contains `[[thermal.nodes]]`,
-`[[thermal.links]]`, and `[[thermal.radiators]]` (fixed by default;
+`[[thermal.links]]`, `[[thermal.radiators]]` (fixed by default;
 `deployment = "foldable"` plus rate/actuator/initial-fraction fields for a
-deploying wing), plus an optional
+deploying wing), and `[[thermal.heat_sources]]` (waste-heat routes, §2.3),
+plus an optional
 `convective_k` (Sutton-Graves constant for the operating atmosphere, Earth
 air by default). The powered-spacecraft example
 [`data/vehicles/example_powered_spacecraft.toml`](../../data/vehicles/example_powered_spacecraft.toml)
-carries a service-module node, a reactor-block node, their link, and a
-radiator wing.
+carries a service-module node, a reactor-block node, their link, a
+radiator wing, and a full-fraction route from the fission reactor into the
+reactor-block node.
 
 The baker validates unique names, positive masses/capacities, temperature
-ordering, unit normals, known link/radiator endpoints, and positive
+ordering, unit normals, known link/radiator/heat-source endpoints, heat-source
+fractions in [0, 1] with per-source totals at most 1, and positive
 conductance. Node and radiator masses join the final vehicle center-of-mass
 bake with body-frame recentering. Older assets without the table remain valid
 with an empty thermal system.
@@ -108,6 +157,9 @@ energy-balance closure, overheat margins, and fail-closed specs/commands/
 states. The 64-vessel runtime benchmark is
 `cargo bench -p thessa-sim-core --bench thermal` (~1.3M vessel
 steps/s for a 4-node/3-link/2-radiator graph with one deploying wing).
+Gimbal regressions pin edge-on auto-tracking (a face-on 5000 W panel load
+falls once the panel tips), slew-limited manual targets, hold-without-power
+with the request still reported, and degenerate authoring rejected.
 
 Not modeled: shield-specific thermal protection and ablation (see
 `details/11_HEAT_SHIELDS.md`; shield aerodynamics are implemented through the
@@ -115,5 +167,6 @@ shared force pipeline), temperature-dependent material strength, phase change,
 convective cooling to airflow,
 own-vehicle self-shadowing beyond the collision-part ray query (silhouette
 penumbra of near misses), multi-axis radiator gimbals, and automatic
-engine-to-node heat wiring (the caller maps waste-heat telemetry onto node
-loads explicitly).
+engine-to-node heat wiring past the authored reactor/fuel-cell/generator
+routes (other callers still map waste-heat telemetry onto node loads
+explicitly).

@@ -778,6 +778,47 @@ mod tests {
     }
 
     #[test]
+    fn authored_ocean_bounds_reach_the_canonical_field() {
+        let (mut recipe, _) = load();
+        assert!((recipe.terrain.ocean_fraction_target().unwrap() - 0.6).abs() < 1e-12);
+        recipe.terrain.ocean_fraction_target_min = Some(0.40);
+        recipe.terrain.ocean_fraction_target_max = Some(0.50);
+        let manifest = manifest_from_spec(&recipe).unwrap();
+        assert_eq!(manifest.ocean_target, Some(0.45));
+        let field = crate::field::field_from_manifest(&manifest).unwrap();
+        assert_eq!(field.params.ocean_target, manifest.ocean_target);
+        let ocean = (0..4096)
+            .filter(|&i| {
+                let y = 1.0 - 2.0 * (i as f64 + 0.5) / 4096.0;
+                let angle = i as f64 * 2.399963229728653;
+                let radius = (1.0 - y * y).sqrt();
+                field.height_m([radius * angle.cos(), y, radius * angle.sin()], 1.0) < 0.0
+            })
+            .count();
+        let fraction = ocean as f64 / 4096.0;
+        assert!((fraction - 0.45).abs() < 0.025, "ocean area {fraction}");
+    }
+
+    #[test]
+    fn ocean_bounds_validate_in_both_spec_and_runtime_conversion() {
+        let (mut recipe, body) = load();
+        for (min, max) in [
+            (0.7, 0.5),
+            (f64::NAN, 0.6),
+            (0.4, f64::INFINITY),
+            (0.0, 0.6),
+            (0.4, 1.0),
+        ] {
+            recipe.terrain.ocean_fraction_target_min = Some(min);
+            recipe.terrain.ocean_fraction_target_max = Some(max);
+            assert!(validate_spec(&recipe, &body).is_err());
+            assert!(manifest_from_spec(&recipe).is_err());
+        }
+        let default = SpecTerrain::default();
+        assert!((default.ocean_fraction_target().unwrap() - 0.6).abs() < 1e-12);
+    }
+
+    #[test]
     fn spec_ocean_fraction_within_target() {
         let (recipe, body) = load();
         crate::spec_recipe::validate_spec(&recipe, &body).expect("valid");

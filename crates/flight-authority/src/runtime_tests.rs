@@ -4,14 +4,14 @@ use thessa_sim_core::{
     AuxiliaryPowerUnitMount, AuxiliaryPowerUnitSpec, ChamberMaterial, ColdGasThrusterSpec,
     CompiledJet, ControlHinge, ControlSurfaceActuator, CoolingMode, ElectricMotorSpec,
     ElectricPropellant, ElectricThrusterDesign, ElectricThrusterMount, ElectricThrusterSpec,
-    ElectricalPowerSystem, EngineCycle, EngineMount, FuelCellSpec, GeneratorSpec, IntakeKind,
-    JetFuel, JetMount, JetShaftState, LandingLegSpec, LandingShockAbsorberSpec, LiquidEngineSpec,
-    NozzleContour, ParachuteCommand, ParachutePhase, ParachuteSpec, PowerConsumerSpec,
-    PowerPriority, Propellant, RcsMount, RcsThruster, ReactionWheelBankSpec, RigidBodyProperties,
-    ShaftSpec, ShaftSpool, StarterKind, StarterSpec, StoredPropellant, SystemConfig, TankMount,
-    TankResource, TankShape, TankSpec, TireConstruction, VehiclePartCommand, WheelBrakeSpec,
-    WheelChassisRetractionSpec, WheelChassisSpec, WheelDriveSpec, WheelLayout, WheelStrutSpec,
-    WheelTireSpec,
+    ElectricalPowerCommand, ElectricalPowerSystem, EngineCycle, EngineMount, FuelCellSpec,
+    GeneratorSpec, IntakeKind, JetFuel, JetMount, JetShaftState, LandingLegSpec,
+    LandingShockAbsorberSpec, LiquidEngineSpec, NozzleContour, ParachuteCommand, ParachutePhase,
+    ParachuteSpec, PowerConsumerSpec, PowerPriority, Propellant, RcsMount, RcsThruster,
+    ReactionWheelBankSpec, RigidBodyProperties, ShaftSpec, ShaftSpool, StarterKind, StarterSpec,
+    StoredPropellant, SystemConfig, TankMount, TankResource, TankShape, TankSpec, TireConstruction,
+    VehiclePartCommand, WheelBrakeSpec, WheelChassisRetractionSpec, WheelChassisSpec,
+    WheelDriveSpec, WheelLayout, WheelStrutSpec, WheelTireSpec,
 };
 
 struct NeverReadyBakeQueue {
@@ -1864,8 +1864,11 @@ fn terrain_contact_stops_before_committing_an_underground_pose() {
             max_deploy_dynamic_pressure_pa: 1.0e9,
             max_canopy_load_n: 1.0e9,
             pack_mass_kg: 12.0,
+            repack_time_s: 30.0,
             position_body_m: DVec3::ZERO,
             inertia_body_kg_m2: DMat3::IDENTITY,
+            lines: None,
+            deformation: None,
         }])
         .expect("install parachute");
     flight.set_parachutes_armed(true);
@@ -1955,6 +1958,10 @@ fn reaction_wheels_keep_torque_authority_and_rcs_covers_excess_demand() {
         mass_kg: 10.0,
         position_body_m: DVec3::ZERO,
         inertia_body_kg_m2: DMat3::IDENTITY,
+        idle_power_w: 0.0,
+        torque_power_w_per_nm: 0.0,
+        momentum_capacity_nms: None,
+        rotor_inertia_kg_m2: None,
     }];
     flight.reaction_wheels_enabled = true;
     flight.rcs_enabled = false;
@@ -2002,6 +2009,107 @@ fn reaction_wheels_keep_torque_authority_and_rcs_covers_excess_demand() {
 }
 
 #[test]
+fn starved_wheel_bus_sheds_wheels_and_reports_unserved_load() {
+    let (ephemeris, mut flight) = fixture();
+    flight.vehicle.reaction_wheels = vec![ReactionWheelBankSpec {
+        name: "bus-wheel".into(),
+        max_torque_body_nm: DVec3::splat(100.0),
+        mass_kg: 10.0,
+        position_body_m: DVec3::ZERO,
+        inertia_body_kg_m2: DMat3::IDENTITY,
+        idle_power_w: 10.0,
+        torque_power_w_per_nm: 0.0,
+        momentum_capacity_nms: None,
+        rotor_inertia_kg_m2: None,
+    }];
+    // A metered utility consumer with no generation or storage behind it:
+    // the booked idle sheds to zero on the first installed-resource step.
+    flight.vehicle.electrical_power = ElectricalPowerSystem {
+        consumers: vec![PowerConsumerSpec {
+            name: "bus-wheel".into(),
+            rated_power_w: 100.0,
+            priority: PowerPriority::Utility,
+        }],
+        ..ElectricalPowerSystem::default()
+    };
+    flight.electrical_power_state = flight
+        .vehicle
+        .initial_electrical_power_state()
+        .expect("power state");
+    flight.electrical_power_command =
+        ElectricalPowerCommand::idle_for(&flight.vehicle.electrical_power, FLIGHT_STEP_S);
+    flight.reaction_wheels_enabled = true;
+    flight.rcs_enabled = false;
+    flight
+        .step(
+            &ephemeris,
+            &GravityField::from_ephemeris(&ephemeris),
+            ControlMode::Direct,
+        )
+        .expect("step with metered wheels");
+    assert_eq!(flight.reaction_wheel_power_fraction, 0.0);
+    let telemetry = flight
+        .electrical_power_telemetry
+        .as_ref()
+        .expect("bus telemetry");
+    assert!((telemetry.unserved_power_w - 10.0).abs() < 1.0e-9);
+    // The next tick's starved wheels stay silent and flag saturation.
+    let delivered = flight
+        .allocate_reaction_wheel_residual(DVec3::X * 60.0, DVec3::ZERO)
+        .expect("starved allocation");
+    assert_eq!(delivered, DVec3::ZERO);
+    assert!(flight.actuator_saturated);
+}
+
+#[test]
+fn sustained_demand_fills_wheel_momentum_then_yields_to_rcs() {
+    let (_, mut flight) = fixture();
+    flight.vehicle.reaction_wheels = vec![ReactionWheelBankSpec {
+        name: "momentum-wheel".into(),
+        max_torque_body_nm: DVec3::splat(100.0),
+        mass_kg: 10.0,
+        position_body_m: DVec3::ZERO,
+        inertia_body_kg_m2: DMat3::IDENTITY,
+        idle_power_w: 0.0,
+        torque_power_w_per_nm: 0.0,
+        momentum_capacity_nms: Some(DVec3::splat(2.0)),
+        rotor_inertia_kg_m2: Some(DVec3::splat(0.5)),
+    }];
+    flight.reaction_wheels_enabled = true;
+    flight.rcs_enabled = false;
+    // 60 N·m per tick at 120 Hz stores 0.5 N·m·s; capacity 2.0 fills in 4.
+    for step in 0..4 {
+        let delivered = flight
+            .allocate_reaction_wheel_residual(DVec3::X * 60.0, DVec3::ZERO)
+            .expect("momentum allocation");
+        assert!(
+            (delivered.x - 60.0).abs() < 1.0e-9,
+            "step {step}: {delivered:?}"
+        );
+    }
+    let stored: f64 = flight
+        .reaction_wheel_momentum_telemetry()
+        .iter()
+        .map(|momentum| momentum.x)
+        .sum();
+    assert!((stored - 2.0).abs() < 1.0e-9, "stored momentum: {stored}");
+    // Reservoir full: wheels go quiet, residual is unserved without RCS.
+    let quiet = flight
+        .allocate_reaction_wheel_residual(DVec3::X * 60.0, DVec3::ZERO)
+        .expect("saturated allocation");
+    assert!(quiet.x.abs() < 1.0e-9, "saturated wheels: {quiet:?}");
+    assert!(flight.actuator_saturated);
+    // Rotor inertia 0.5 with 2.0 stored: 4 rad/s on X, rest parked.
+    let speeds = flight.reaction_wheel_rotor_speed_telemetry();
+    assert_eq!(speeds.len(), 1);
+    let speed = speeds[0].expect("rotor inertia is authored");
+    assert!(
+        (speed - DVec3::new(4.0, 0.0, 0.0)).length() < 1.0e-9,
+        "rotor speeds: {speeds:?}"
+    );
+}
+
+#[test]
 fn parachute_commands_target_one_named_vehicle_part() {
     let (_, mut flight) = fixture();
     let parachute = |name: &str| ParachuteSpec {
@@ -2014,8 +2122,11 @@ fn parachute_commands_target_one_named_vehicle_part() {
         max_deploy_dynamic_pressure_pa: 2_000.0,
         max_canopy_load_n: 100_000.0,
         pack_mass_kg: 12.0,
+        repack_time_s: 30.0,
         position_body_m: DVec3::ZERO,
         inertia_body_kg_m2: DMat3::IDENTITY,
+        lines: None,
+        deformation: None,
     };
     flight.vehicle.parachutes = vec![parachute("drogue"), parachute("main")];
 
@@ -2040,6 +2151,10 @@ fn shared_part_command_api_routes_installed_subsystem_controls() {
         mass_kg: 5.0,
         position_body_m: DVec3::ZERO,
         inertia_body_kg_m2: DMat3::IDENTITY,
+        idle_power_w: 0.0,
+        torque_power_w_per_nm: 0.0,
+        momentum_capacity_nms: None,
+        rotor_inertia_kg_m2: None,
     }];
     flight.vehicle.parachutes = vec![ParachuteSpec {
         name: "main".into(),
@@ -2051,8 +2166,11 @@ fn shared_part_command_api_routes_installed_subsystem_controls() {
         max_deploy_dynamic_pressure_pa: 2_000.0,
         max_canopy_load_n: 100_000.0,
         pack_mass_kg: 12.0,
+        repack_time_s: 30.0,
         position_body_m: DVec3::ZERO,
         inertia_body_kg_m2: DMat3::IDENTITY,
+        lines: None,
+        deformation: None,
     }];
 
     for command in [
@@ -2101,8 +2219,11 @@ fn parachute_drag_enters_the_authoritative_rigid_body_force_step() {
         max_deploy_dynamic_pressure_pa: 2_000.0,
         max_canopy_load_n: 100_000.0,
         pack_mass_kg: 12.0,
+        repack_time_s: 30.0,
         position_body_m: DVec3::new(-2.0, 0.0, 0.0),
         inertia_body_kg_m2: DMat3::IDENTITY,
+        lines: None,
+        deformation: None,
     }];
     flight.set_parachutes_armed(true);
     flight.sas_enabled = false;

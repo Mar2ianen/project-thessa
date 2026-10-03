@@ -458,7 +458,7 @@ preset = "high"
 [renderer]
 backend = "auto"            # auto | vulkan | metal | webgpu
 ray_tracing = "auto"        # off | local | full | auto
-terrain = "cpu"             # cpu | gpu_indexed
+terrain = "gpu_auto"        # cpu | gpu_indexed | gpu_auto | gpu_mesh
 terrain_mesh_cells = 24      # CPU middle-field density; adaptive per tile, 8..64
 resolution_scale = 1.0
 vsync = true

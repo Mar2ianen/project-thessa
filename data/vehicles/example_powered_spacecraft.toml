@@ -39,6 +39,7 @@ discharge_efficiency = 0.97
 specific_energy_j_kg = 36000.0
 dimensions_body_m = [0.5, 0.5, 0.4]
 position_body_m = [-0.8, 0.5, 0.0]
+self_discharge_time_s = 86400.0
 
 [[electrical_power.solar_arrays]]
 name = "fixed-service-cells"
@@ -77,6 +78,14 @@ minimum_angle_rad = -1.5707963267948966
 maximum_angle_rad = 1.5707963267948966
 slew_rate_rad_s = 0.05
 actuator_power_w = 120.0
+initial_angle_rad = 0.0
+
+[electrical_power.solar_arrays.tracking.secondary]
+rotation_axis_body = [0.0, 1.0, 0.0]
+minimum_angle_rad = -1.5707963267948966
+maximum_angle_rad = 1.5707963267948966
+slew_rate_rad_s = 0.05
+actuator_power_w = 80.0
 initial_angle_rad = 0.0
 
 [[electrical_power.reactors]]
@@ -142,6 +151,11 @@ node_a = "service-module"
 node_b = "reactor-block"
 conductance_w_k = 25.0
 
+[[thermal.heat_sources]]
+source_name = "compact-fission-reactor"
+node = "reactor-block"
+fraction = 1.0
+
 [[thermal.radiators]]
 name = "main-radiator-wing"
 attached_node = "reactor-block"
@@ -155,3 +169,11 @@ deployment = "foldable"
 deployment_rate_per_s = 0.05
 actuator_power_w = 120.0
 initial_deployment_fraction = 1.0
+
+[thermal.radiators.tracking]
+rotation_axis_body = [1.0, 0.0, 0.0]
+minimum_angle_rad = -1.5707963267948966
+maximum_angle_rad = 1.5707963267948966
+slew_rate_rad_s = 0.05
+actuator_power_w = 60.0
+initial_angle_rad = 0.0

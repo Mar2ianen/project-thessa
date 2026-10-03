@@ -143,6 +143,70 @@ struct ContextGrid {
     lakes: Vec<crate::hydro::LakeBasin>,
 }
 
+/// Absolute tolerance comparing the two calibrated datum offsets inside a
+/// frozen-source signature (metres and Kelvins respectively). Both offsets
+/// are evaluated through transcendental sampling, whose last-ulp results
+/// differ across system libm implementations; 1e-6 sits orders of magnitude
+/// above that noise and orders below any physically meaningful datum shift,
+/// so recipe/artifact skew still fails closed.
+pub const SOURCE_OFFSET_TOLERANCE: f64 = 1e-6;
+
+/// Compare a baked frozen-source signature against a live one. Everything
+/// matches exactly except the top-level calibrated datum offsets
+/// (`sea_offset_m`, `temperature_offset_k`), which use
+/// [`SOURCE_OFFSET_TOLERANCE`]. NaN on either side never matches.
+pub fn source_signatures_match(baked: &serde_json::Value, live: &serde_json::Value) -> bool {
+    const OFFSET_KEYS: [&str; 2] = ["sea_offset_m", "temperature_offset_k"];
+    match (baked, live) {
+        (serde_json::Value::Object(baked_map), serde_json::Value::Object(live_map)) => {
+            if baked_map.len() != live_map.len() {
+                return false;
+            }
+            baked_map.iter().all(|(key, baked_value)| {
+                let Some(live_value) = live_map.get(key) else {
+                    return false;
+                };
+                if OFFSET_KEYS.contains(&key.as_str()) {
+                    match (baked_value.as_f64(), live_value.as_f64()) {
+                        (Some(a), Some(b)) => (a - b).abs() <= SOURCE_OFFSET_TOLERANCE,
+                        _ => false,
+                    }
+                } else {
+                    source_signatures_match_exact(baked_value, live_value)
+                }
+            })
+        }
+        _ => source_signatures_match_exact(baked, live),
+    }
+}
+
+/// Exact structural comparison for signature subtrees that carry no
+/// calibrated offsets.
+fn source_signatures_match_exact(baked: &serde_json::Value, live: &serde_json::Value) -> bool {
+    match (baked, live) {
+        (serde_json::Value::Object(baked_map), serde_json::Value::Object(live_map)) => {
+            baked_map.len() == live_map.len()
+                && baked_map.iter().all(|(key, baked_value)| {
+                    live_map.get(key).is_some_and(|live_value| {
+                        source_signatures_match_exact(baked_value, live_value)
+                    })
+                })
+        }
+        (serde_json::Value::Array(baked_items), serde_json::Value::Array(live_items)) => {
+            baked_items.len() == live_items.len()
+                && baked_items
+                    .iter()
+                    .zip(live_items.iter())
+                    .all(|(a, b)| source_signatures_match_exact(a, b))
+        }
+        (serde_json::Value::Number(a), serde_json::Value::Number(b)) => a == b,
+        (serde_json::Value::String(a), serde_json::Value::String(b)) => a == b,
+        (serde_json::Value::Bool(a), serde_json::Value::Bool(b)) => a == b,
+        (serde_json::Value::Null, serde_json::Value::Null) => true,
+        _ => false,
+    }
+}
+
 impl PlanetField {
     pub fn has_frozen_erosion(&self) -> bool {
         self.frozen_erosion.is_some()
@@ -180,11 +244,17 @@ impl PlanetField {
         // the client while the offline CLI uses sorted maps. Object ordering
         // and whitespace are not source semantics; numbers/arrays still match
         // exactly, without tolerating a changed recipe or calibrated datum.
+        // The two calibrated datum offsets compare with an absolute epsilon
+        // instead: both are evaluated through transcendental sampling
+        // (latitude weighting, area-mean temperature), whose last-ulp
+        // results differ across system libm implementations (macOS/Windows
+        // vs Linux). The epsilon sits orders of magnitude above that noise
+        // and orders below any physically meaningful datum shift.
         let baked_signature: serde_json::Value = serde_json::from_str(&source.signature)
             .map_err(|e| format!("invalid frozen source identity: {e}"))?;
         let live_signature: serde_json::Value = serde_json::from_str(&self.source_signature()?)
             .map_err(|e| format!("invalid live source identity: {e}"))?;
-        if baked_signature != live_signature
+        if !source_signatures_match(&baked_signature, &live_signature)
             || world.seed != self.params.seed
             || world.radius_m != self.params.radius_m
         {
@@ -1181,6 +1251,40 @@ mod tests {
         sphere::dir_from_latlon,
         terrain::{MESO_BANDS_M, MICRO_BANDS_M, eval_band_m, micro_amp},
     };
+
+    #[test]
+    fn source_signature_match_tolerates_only_libm_noise_on_offsets() {
+        let base = serde_json::json!({
+            "contract": "thessa-analytic-source-v1",
+            "params": {"seed": 7},
+            "sea_offset_m": 1.5,
+            "temperature_offset_k": -0.25,
+        });
+        // Identical matches.
+        assert!(source_signatures_match(&base, &base.clone()));
+        // Last-ulp libm noise on either offset matches.
+        for (key, delta) in [("sea_offset_m", 1e-9), ("temperature_offset_k", -1e-9)] {
+            let mut noisy = base.clone();
+            noisy[key] = serde_json::json!(noisy[key].as_f64().unwrap() + delta);
+            assert!(source_signatures_match(&base, &noisy), "{key}");
+            assert!(source_signatures_match(&noisy, &base), "{key} reversed");
+        }
+        // A physically meaningful datum shift fails closed.
+        let mut shifted = base.clone();
+        shifted["sea_offset_m"] = serde_json::json!(1.5 + 1e-3);
+        assert!(!source_signatures_match(&base, &shifted));
+        // Any other field stays exact: seed, nested params, and offsets
+        // of the wrong JSON type.
+        let mut reseeded = base.clone();
+        reseeded["params"]["seed"] = serde_json::json!(8);
+        assert!(!source_signatures_match(&base, &reseeded));
+        let mut unoffset = base.clone();
+        unoffset["sea_offset_m"] = serde_json::json!("1.5");
+        assert!(!source_signatures_match(&base, &unoffset));
+        let mut dropped = base.clone();
+        dropped.as_object_mut().unwrap().remove("contract");
+        assert!(!source_signatures_match(&base, &dropped));
+    }
 
     fn test_params() -> PlanetParams {
         PlanetParams {

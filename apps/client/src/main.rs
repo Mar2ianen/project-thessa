@@ -154,23 +154,17 @@ fn main() {
         "webgpu" => Some(Backends::BROWSER_WEBGPU),
         _ => None,
     };
-    if rt_active || requested_backends.is_some() {
+    {
         // `WgpuSettings` travels inside `RenderPlugin::render_creation` in
-        // Bevy 0.19. The normal client only requests explicit backend and RT
-        // settings from graphics.toml; experimental mesh features are not
-        // part of this production path.
+        // Bevy Functionality priority negotiates supported optional features.
+        // Do not force mesh features on incapable adapters. Disable them when
+        // policy selects CPU/indexed so plugin registration has no hidden cost.
         default_plugins = default_plugins.set(RenderPlugin {
-            render_creation: RenderCreation::Automatic(Box::new({
-                let mut features = WgpuFeatures::default();
-                if rt_active {
-                    features |= SolariPlugins::required_wgpu_features();
-                }
-                WgpuSettings {
-                    backends: requested_backends,
-                    features,
-                    ..default()
-                }
-            })),
+            render_creation: RenderCreation::Automatic(Box::new(terrain_wgpu_settings(
+                requested_backends,
+                rt_active,
+                requested.renderer.terrain,
+            ))),
             ..default()
         });
     }
@@ -237,6 +231,33 @@ fn main() {
             .add_systems(Update, docking_demo::step);
     }
     app.run();
+}
+
+fn terrain_wgpu_settings(
+    backends: Option<Backends>,
+    rt_active: bool,
+    terrain: thessa_graphics::TerrainRenderRequest,
+) -> WgpuSettings {
+    let mut settings = WgpuSettings::default();
+    // None disables RenderApp in Bevy. Auto keeps default/env-selected backends.
+    if let Some(backends) = backends {
+        settings.backends = Some(backends);
+    }
+    if rt_active {
+        settings.features |= SolariPlugins::required_wgpu_features();
+    }
+    if !matches!(
+        terrain,
+        thessa_graphics::TerrainRenderRequest::GpuAuto
+            | thessa_graphics::TerrainRenderRequest::GpuMesh
+    ) {
+        settings.disabled_features = Some(
+            WgpuFeatures::EXPERIMENTAL_MESH_SHADER
+                | WgpuFeatures::EXPERIMENTAL_MESH_SHADER_MULTIVIEW
+                | WgpuFeatures::EXPERIMENTAL_MESH_SHADER_POINTS,
+        );
+    }
+    settings
 }
 
 /// Maximum time-warp factor (2^17). High warp only sustains on rails:
@@ -1122,6 +1143,37 @@ fn next_unit(seed: &mut u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_backend_keeps_renderer_and_mesh_policy_is_optional() {
+        use thessa_graphics::TerrainRenderRequest as Terrain;
+        for mode in [
+            Terrain::Cpu,
+            Terrain::GpuIndexed,
+            Terrain::GpuAuto,
+            Terrain::GpuMesh,
+        ] {
+            let settings = terrain_wgpu_settings(None, false, mode);
+            assert!(
+                settings.backends.is_some(),
+                "auto must not disable RenderApp"
+            );
+            assert!(
+                !settings
+                    .features
+                    .contains(WgpuFeatures::EXPERIMENTAL_MESH_SHADER),
+                "unsupported mesh features must never be forced"
+            );
+            assert_eq!(
+                settings.disabled_features.is_some(),
+                matches!(mode, Terrain::Cpu | Terrain::GpuIndexed)
+            );
+        }
+        assert_eq!(
+            terrain_wgpu_settings(Some(Backends::VULKAN), false, Terrain::GpuMesh).backends,
+            Some(Backends::VULKAN)
+        );
+    }
 
     #[test]
     fn render_frame_preserves_distance_and_maps_orbital_normal_up() {

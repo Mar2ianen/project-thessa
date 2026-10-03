@@ -116,16 +116,39 @@ const GPU_SURFACE_TRIANGLE_COUNT_PER_PATCH: usize = (GPU_GRID_SIZE - 1) * (GPU_G
 const GPU_SKIRT_TRIANGLE_COUNT_PER_PATCH: usize = (GPU_GRID_SIZE - 1) * 4 * 2;
 const GPU_TRIANGLE_COUNT_PER_PATCH: usize =
     GPU_SURFACE_TRIANGLE_COUNT_PER_PATCH + GPU_SKIRT_TRIANGLE_COUNT_PER_PATCH;
+// Keep in sync with mesh.wgsl and the classifier's indirect finalizer.
 #[cfg(feature = "mesh-shaders")]
-const MESHLET_CELLS: u32 = 8;
+const MESHLET_VERTEX_COUNT: u32 = 96;
 #[cfg(feature = "mesh-shaders")]
-const MESHLET_GRID_SIZE: u32 = MESHLET_CELLS + 1;
+const MESHLET_PRIMITIVE_COUNT: u32 = 32;
 #[cfg(feature = "mesh-shaders")]
-const MESHLET_VERTEX_COUNT: u32 = MESHLET_GRID_SIZE * MESHLET_GRID_SIZE;
+const MESH_DISPATCH_WIDTH: u32 = 256;
+
+/// Enabled mesh feature and sufficient limits, independent of GPU vendor.
 #[cfg(feature = "mesh-shaders")]
-const MESHLET_PRIMITIVE_COUNT: u32 = MESHLET_CELLS * MESHLET_CELLS * 2;
+pub fn mesh_shader_supported(device: &RenderDevice) -> bool {
+    let limits = device.limits();
+    device
+        .features()
+        .contains(WgpuFeatures::EXPERIMENTAL_MESH_SHADER)
+        && limits.max_mesh_output_vertices >= MESHLET_VERTEX_COUNT
+        && limits.max_mesh_output_primitives >= MESHLET_PRIMITIVE_COUNT
+        && limits.max_mesh_invocations_per_workgroup >= 32
+        && limits.max_mesh_invocations_per_dimension >= 32
+        && limits.max_storage_buffers_per_shader_stage >= 7
+        && mesh_dispatch_supported(&limits, 1)
+}
+
 #[cfg(feature = "mesh-shaders")]
-const MESHLETS_PER_PATCH: u32 = 4 * 4;
+fn mesh_dispatch_supported(limits: &wgpu::Limits, leaves: u32) -> bool {
+    let groups = (u64::from(leaves) * GPU_TRIANGLE_COUNT_PER_PATCH as u64)
+        .div_ceil(u64::from(MESHLET_PRIMITIVE_COUNT));
+    let width = groups.min(u64::from(MESH_DISPATCH_WIDTH));
+    let height = groups.div_ceil(u64::from(MESH_DISPATCH_WIDTH)).max(1);
+    width <= u64::from(limits.max_task_mesh_workgroups_per_dimension)
+        && height <= u64::from(limits.max_task_mesh_workgroups_per_dimension)
+        && width * height <= u64::from(limits.max_task_mesh_workgroup_total_count)
+}
 
 impl ExtractResource for CbtRenderTopology {
     type Source = Self;
@@ -246,6 +269,8 @@ struct RasterBindKey {
     lighting: BufferId,
     frames: BufferId,
     material_slots: BufferId,
+    draw: BufferId,
+    material_directory: BufferId,
     albedo_view: TextureViewId,
     albedo_sampler: SamplerId,
     roughness_view: TextureViewId,
@@ -265,7 +290,8 @@ pub struct CbtGpuBuffers {
     page_metadata: RawBufferVec<[u32; 4]>,
     page_residuals: RawBufferVec<u32>,
     vertices: RawBufferVec<[f32; 8]>,
-    draw_list: RawBufferVec<[u32; 4]>,
+    // Raster arguments at byte 0; mesh dispatch arguments at byte 16.
+    draw_list: RawBufferVec<[u32; 8]>,
     active_triangles: RawBufferVec<[u32; 4]>,
     active_count: RawBufferVec<[u32; 4]>,
     grid_history: RawBufferVec<[u32; 4]>,
@@ -495,8 +521,6 @@ struct CbtGpuRasterPipeline {
 #[cfg(feature = "mesh-shaders")]
 #[derive(Resource)]
 struct CbtGpuMeshPipeline {
-    bind_group_layout: BindGroupLayout,
-    view_bind_group_layout: BindGroupLayout,
     pipeline_layout: PipelineLayout,
     shader: ShaderModule,
     pipelines: HashMap<TextureFormat, RenderPipeline>,
@@ -515,13 +539,6 @@ struct Params {
     vertices_per_patch: u32,
     radius_bits: u32,
     dirty_count: u32,
-};
-
-struct DrawCommand {
-    vertex_count: u32,
-    instance_count: u32,
-    first_vertex: u32,
-    first_instance: u32,
 };
 
 @group(0) @binding(0) var<storage, read> leaves: array<vec4<u32>>;
@@ -592,6 +609,10 @@ struct DrawCommand {
     instance_count: u32,
     first_vertex: u32,
     first_instance: u32,
+    mesh_x: u32,
+    mesh_y: u32,
+    mesh_z: u32,
+    _padding: u32,
 };
 
 struct ViewUniforms {
@@ -706,7 +727,7 @@ fn skirt_index(local: u32) -> u32 {
 fn reset_active(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x == 0u) {
         atomicStore(&active_count[0], 0u);
-        draw_list[0] = DrawCommand(0u, 1u, 0u, 0u);
+        draw_list[0] = DrawCommand(0u, 1u, 0u, 0u, 0u, 1u, 1u, 0u);
     }
 }
 
@@ -784,10 +805,17 @@ fn classify_active(
 @compute @workgroup_size(1)
 fn finalize_active(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x == 0u) {
+        let triangles = atomicLoad(&active_count[0]);
+        let groups = (triangles + 31u) / 32u;
+        let width = min(groups, 256u);
         draw_list[0] = DrawCommand(
-            atomicLoad(&active_count[0]) * 3u,
+            triangles * 3u,
             1u,
             0u,
+            0u,
+            width,
+            max((groups + 255u) / 256u, 1u),
+            1u,
             0u,
         );
     }
@@ -802,6 +830,7 @@ const CBT_RASTER_WGSL: &str = concat!(
     include_str!("precision.wgsl"),
     include_str!("tile_frame.wgsl"),
     include_str!("ocean.wgsl"),
+    include_str!("material_sample.wgsl"),
     r#"
 struct Params {
     leaf_count: u32,
@@ -876,6 +905,11 @@ fn surface_uv(position: vec3<f32>) -> vec2<f32> {
 fn vertex(
     @builtin(vertex_index) vertex_index: u32,
 ) -> VertexOutput {
+    return cbt_vertex(vertex_index);
+}
+
+// Both draw backends use the exact same geometry, skirt and material IO.
+fn cbt_vertex(vertex_index: u32) -> VertexOutput {
     var output: VertexOutput;
     let triangle = active_triangles[vertex_index / 3u];
     let corner = vertex_index % 3u;
@@ -937,22 +971,35 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     var dy = dpdy(uv);
     dx.x -= round(dx.x);
     dy.x -= round(dy.x);
-    // Pages resolve material bands down to 32 m. Once a pixel spans that
-    // scale, use the continuous planet map rather than aliasing those bands
-    // into different colours in each geometry LOD. The blend follows the
-    // physical footprint, never a flat per-tile level or residency flag.
+    // Keep local pages until the globe map actually resolves a screen pixel.
+    // The old 16-32 m transition magnified kilometre-scale globe texels and
+    // replaced a detailed coast with stair-stepped blurry blocks in one view.
+    // World-addressed page LOD/mips now filter the intervening scales.
     let direction = normalize(input.body_direction);
     let footprint = max(length(dpdx(direction)), length(dpdy(direction)));
     let footprint_m = footprint * bitcast<f32>(params.radius_bits);
-    var detail_weight = 1.0 - smoothstep(16.0, 32.0, footprint_m);
-    if (input.material_slot == 0xffffffffu) { detail_weight = 0.0; }
+    let globe_texel_m = 3.14159265 * bitcast<f32>(params.radius_bits)
+        / f32(textureDimensions(albedo_texture).y);
+    var detail_weight = 1.0 - smoothstep(globe_texel_m, globe_texel_m * 2.0, footprint_m);
+    let address = material_address(direction);
+    // Project both derivatives in this fragment's face. A derivative across
+    // a face-number switch must not become an enormous false mip footprint.
+    let address_dx = material_face_uv(direction + dpdx(direction), address.face) - address.uv;
+    let address_dy = material_face_uv(direction + dpdy(direction), address.face) - address.uv;
+    // A material texel must cover the same physical footprint regardless of
+    // which geometry leaf happens to rasterize it. Trilinear page levels are
+    // chosen in screen space rather than inheriting a coarse mesh page.
+    let material_lod = clamp(log2(2.0 * bitcast<f32>(params.radius_bits)
+        / (125.0 * max(footprint_m, 0.001))), 0.0, 17.0);
+    let coarse = material_at_level(address, address_dx, address_dy, u32(floor(material_lod)));
+    let fine = material_at_level(address, address_dx, address_dy, u32(ceil(material_lod)));
+    var detail = coarse;
+    if (fine.a >= 0.0 && coarse.a >= 0.0) { detail = mix(coarse, fine, fract(material_lod)); }
+    else if (fine.a >= 0.0) { detail = fine; }
+    if (detail.a < 0.0) { detail_weight = 0.0; }
     var albedo = vec3(0.0);
     var roughness = 0.0;
-    let page_dx = dpdx(input.material_uv);
-    let page_dy = dpdy(input.material_uv);
     if (detail_weight > 0.0) {
-        let detail = textureSampleGrad(material_texture, material_sampler,
-            input.material_uv, i32(input.material_slot), page_dx, page_dy);
         albedo = detail.rgb * detail_weight;
         roughness = detail.a * detail_weight;
     }
@@ -998,112 +1045,14 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
 "#
 );
 
-/// Hardware mesh-shader consumer for the same quantized CBT pages. A 33x33
-/// patch is emitted as sixteen 8x8 meshlets, so the shader stays within the
-/// recommended 256-vertex / 256-primitive minimum while preserving exact page
-/// sampling. There is deliberately no task shader yet: a single direct mesh
-/// dispatch covers all leaves and the page metadata turns missing pages into
-/// zero-output workgroups.
+/// The native consumer adds only mesh-stage IO to the portable material shader.
 #[cfg(feature = "mesh-shaders")]
-const CBT_MESH_WGSL: &str = concat!(
-    "enable wgpu_mesh_shader;\n",
-    include_str!("precision.wgsl"),
-    include_str!("tile_frame.wgsl"),
-    include_str!("surface_sample.wgsl"),
-    r#"
-
-struct Params {
-    leaf_count: u32,
-    vertices_per_patch: u32,
-    radius_bits: u32,
-    _padding: u32,
-};
-
-struct ViewUniforms {
-    clip_from_world: mat4x4<f32>,
-};
-
-struct MeshVertex {
-    @builtin(position) clip_position: vec4<f32>,
-    @location(0) normal: vec3<f32>,
-};
-
-struct MeshPrimitive {
-    @builtin(triangle_indices) indices: vec3<u32>,
-};
-
-struct MeshOutput {
-    @builtin(vertex_count) vertex_count: u32,
-    @builtin(primitive_count) primitive_count: u32,
-    @builtin(vertices) vertices: array<MeshVertex, 81>,
-    @builtin(primitives) primitives: array<MeshPrimitive, 128>,
-};
-
-@group(0) @binding(0) var<storage, read> leaves: array<vec4<u32>>;
-@group(0) @binding(2) var<storage, read> page_metadata: array<vec4<u32>>;
-@group(0) @binding(3) var<storage, read> page_residuals: array<u32>;
-@group(0) @binding(6) var<uniform> params: Params;
-@group(0) @binding(4) var<storage, read> tile_frames: array<CbtTileFrame>;
-@group(1) @binding(0) var<uniform> view: ViewUniforms;
-@group(1) @binding(1) var<uniform> render_from_body: mat4x4<f32>;
-
-var<workgroup> mesh_output: MeshOutput;
-
-@mesh(mesh_output) @workgroup_size(64)
-fn build_mesh(
-    @builtin(local_invocation_index) invocation: u32,
-    @builtin(workgroup_id) workgroup: vec3<u32>,
-) {
-    let leaf = workgroup.y;
-    let meshlet = workgroup.x;
-    let page = page_metadata[leaf];
-    let valid = page.z != 0u;
-    if (invocation == 0u) {
-        mesh_output.vertex_count = select(0u, 81u, valid);
-        mesh_output.primitive_count = select(0u, 128u, valid);
-    }
-    if (!valid) {
-        return;
-    }
-
-    let frame = tile_frames[leaf];
-    for (var i = invocation; i < 81u; i += 64u) {
-        let local_x = i % 9u;
-        let local_y = i / 9u;
-        let patch_x = (meshlet % 4u) * 8u + local_x;
-        let patch_y = (meshlet / 4u) * 8u + local_y;
-        let uv = vec2(f32(patch_x) / 32.0, f32(patch_y) / 32.0);
-        let sample = cbt_surface_sample(frame.geometry, page, uv);
-        mesh_output.vertices[i].clip_position =
-            view.clip_from_world * cbt_render_position(frame, sample.local_position, render_from_body);
-        mesh_output.vertices[i].normal =
-            normalize((render_from_body * vec4(sample.normal, 0.0)).xyz);
-    }
-    for (var i = invocation; i < 128u; i += 64u) {
-        let cell = i / 2u;
-        let triangle = i & 1u;
-        let cell_x = cell % 8u;
-        let cell_y = cell / 8u;
-        let base = cell_y * 9u + cell_x;
-        let right = base + 1u;
-        let down = base + 9u;
-        let diagonal = down + 1u;
-        mesh_output.primitives[i].indices = select(
-            vec3(base, right, down),
-            vec3(right, diagonal, down),
-            triangle == 1u,
-        );
-    }
+fn cbt_mesh_wgsl() -> String {
+    format!(
+        "enable wgpu_mesh_shader;\n{CBT_RASTER_WGSL}\n{}",
+        include_str!("mesh.wgsl")
+    )
 }
-
-@fragment
-fn fragment(input: MeshVertex) -> @location(0) vec4<f32> {
-    let light = normalize(vec3(0.35, 0.8, 0.45));
-    let diffuse = 0.24 + 0.76 * max(dot(normalize(input.normal), light), 0.0);
-    return vec4(vec3(0.20, 0.34, 0.17) * diffuse, 1.0);
-}
-"#
-);
 
 /// Installs extraction and GPU preparation for the universal CBT plugin.
 pub(super) struct CbtRenderPlugin;
@@ -1142,13 +1091,6 @@ impl Plugin for CbtRenderPlugin {
                 render_app.add_systems(
                     bevy_core_pipeline::Core3d,
                     draw_cbt_geometry
-                        .after(bevy_core_pipeline::core_3d::main_opaque_pass_3d)
-                        .before(bevy_core_pipeline::core_3d::main_transparent_pass_3d),
-                );
-                #[cfg(feature = "mesh-shaders")]
-                render_app.add_systems(
-                    bevy_core_pipeline::Core3d,
-                    draw_cbt_mesh_geometry
                         .after(bevy_core_pipeline::core_3d::main_opaque_pass_3d)
                         .before(bevy_core_pipeline::core_3d::main_transparent_pass_3d),
                 );
@@ -1274,155 +1216,182 @@ fn init_cbt_gpu_pipeline(mut commands: bevy::prelude::Commands, device: Res<Rend
             compilation_options: Default::default(),
             cache: None,
         });
-    let raster_bind_group_layout = device.create_bind_group_layout(
-        "thessa-cbt-raster-layout",
-        &[
-            BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
-                    min_binding_size: None,
-                },
-                count: None,
+    let mut raster_entries = vec![
+        BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
+                has_dynamic_offset: true,
+                min_binding_size: None,
             },
-            BindGroupLayoutEntry {
-                binding: 1,
-                visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 1,
+            visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
-            BindGroupLayoutEntry {
-                binding: 2,
-                visibility: ShaderStages::VERTEX,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 2,
+            visibility: ShaderStages::VERTEX,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
-            BindGroupLayoutEntry {
-                binding: 3,
-                visibility: ShaderStages::VERTEX,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 3,
+            visibility: ShaderStages::VERTEX,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
-            BindGroupLayoutEntry {
-                binding: 4,
-                // The fragment stage uses radius_bits to convert the
-                // direction derivative into a physical material footprint.
-                visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 4,
+            // The fragment stage uses radius_bits to convert the
+            // direction derivative into a physical material footprint.
+            visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
-            BindGroupLayoutEntry {
-                binding: 5,
-                visibility: ShaderStages::VERTEX,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 5,
+            visibility: ShaderStages::VERTEX,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
-            BindGroupLayoutEntry {
-                binding: 8,
-                visibility: ShaderStages::VERTEX,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 8,
+            visibility: ShaderStages::VERTEX,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
-            BindGroupLayoutEntry {
-                binding: 6,
-                visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
-                ty: BindingType::Texture {
-                    sample_type: TextureSampleType::Float { filterable: true },
-                    view_dimension: TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 6,
+            visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+            ty: BindingType::Texture {
+                sample_type: TextureSampleType::Float { filterable: true },
+                view_dimension: TextureViewDimension::D2,
+                multisampled: false,
             },
-            BindGroupLayoutEntry {
-                binding: 7,
-                visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
-                ty: BindingType::Sampler(SamplerBindingType::Filtering),
-                count: None,
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 7,
+            visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+            ty: BindingType::Sampler(SamplerBindingType::Filtering),
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 11,
+            visibility: ShaderStages::VERTEX,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
-            BindGroupLayoutEntry {
-                binding: 11,
-                visibility: ShaderStages::VERTEX,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 10,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Texture {
+                sample_type: TextureSampleType::Float { filterable: true },
+                view_dimension: TextureViewDimension::D2,
+                multisampled: false,
             },
-            BindGroupLayoutEntry {
-                binding: 10,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Texture {
-                    sample_type: TextureSampleType::Float { filterable: true },
-                    view_dimension: TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 9,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
-            BindGroupLayoutEntry {
-                binding: 9,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 12,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Texture {
+                sample_type: TextureSampleType::Float { filterable: true },
+                view_dimension: TextureViewDimension::D2Array,
+                multisampled: false,
             },
-            BindGroupLayoutEntry {
-                binding: 12,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Texture {
-                    sample_type: TextureSampleType::Float { filterable: true },
-                    view_dimension: TextureViewDimension::D2Array,
-                    multisampled: false,
-                },
-                count: None,
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 13,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Sampler(SamplerBindingType::Filtering),
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 14,
+            visibility: ShaderStages::VERTEX,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
-            BindGroupLayoutEntry {
-                binding: 13,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Sampler(SamplerBindingType::Filtering),
-                count: None,
-            },
-            BindGroupLayoutEntry {
-                binding: 14,
-                visibility: ShaderStages::VERTEX,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-        ],
-    );
+            count: None,
+        },
+    ];
+    #[cfg(feature = "mesh-shaders")]
+    if mesh_shader_supported(&device) {
+        for entry in &mut raster_entries {
+            if entry.visibility.contains(ShaderStages::VERTEX) {
+                entry.visibility |= ShaderStages::MESH;
+            }
+        }
+    }
+    raster_entries.push(BindGroupLayoutEntry {
+        binding: 15,
+        visibility: raster_entries[0].visibility,
+        ty: BindingType::Buffer {
+            ty: BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    });
+    raster_entries.push(BindGroupLayoutEntry {
+        binding: 16,
+        visibility: ShaderStages::FRAGMENT,
+        ty: BindingType::Buffer {
+            ty: BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    });
+    let raster_bind_group_layout =
+        device.create_bind_group_layout("thessa-cbt-raster-layout", &raster_entries);
     let raster_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("thessa-cbt-raster-pipeline-layout"),
         bind_group_layouts: &[Some(&raster_bind_group_layout)],
@@ -1434,105 +1403,17 @@ fn init_cbt_gpu_pipeline(mut commands: bevy::prelude::Commands, device: Res<Rend
     });
 
     #[cfg(feature = "mesh-shaders")]
-    if device
-        .features()
-        .contains(WgpuFeatures::EXPERIMENTAL_MESH_SHADER)
-    {
-        let mesh_bind_group_layout = device.create_bind_group_layout(
-            "thessa-cbt-mesh-layout",
-            &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::MESH,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: ShaderStages::MESH,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: ShaderStages::MESH,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: ShaderStages::MESH,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: ShaderStages::MESH,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        );
-        let mesh_view_bind_group_layout = device.create_bind_group_layout(
-            "thessa-cbt-mesh-view-layout",
-            &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::MESH,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: ShaderStages::MESH,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        );
+    if mesh_shader_supported(&device) {
         let mesh_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("thessa-cbt-mesh-pipeline-layout"),
-            bind_group_layouts: &[
-                Some(&mesh_bind_group_layout),
-                Some(&mesh_view_bind_group_layout),
-            ],
+            bind_group_layouts: &[Some(&raster_bind_group_layout)],
             immediate_size: 0,
         });
         let mesh_shader = device.create_and_validate_shader_module(ShaderModuleDescriptor {
             label: Some("thessa-cbt-mesh-shader"),
-            source: ShaderSource::Wgsl(Cow::Borrowed(CBT_MESH_WGSL)),
+            source: ShaderSource::Wgsl(Cow::Owned(cbt_mesh_wgsl())),
         });
         commands.insert_resource(CbtGpuMeshPipeline {
-            bind_group_layout: mesh_bind_group_layout,
-            view_bind_group_layout: mesh_view_bind_group_layout,
             pipeline_layout: mesh_pipeline_layout,
             shader: mesh_shader,
             pipelines: HashMap::default(),
@@ -1997,16 +1878,15 @@ fn prepare_cbt_gpu_buffers(
     gpu.page_metadata.extend(metadata);
     gpu.page_metadata.write_buffer(&device, &queue);
 
-    if !surface.gpu_mesh_enabled() {
-        gpu.vertices
-            .reserve((records.len() * GPU_VERTEX_COUNT_PER_PATCH).max(1), &device);
-        gpu.draw_list.reserve(1, &device);
-        gpu.active_triangles.reserve(
-            (records.len() * GPU_TRIANGLE_COUNT_PER_PATCH).max(1),
-            &device,
-        );
-        gpu.active_count.reserve(1, &device);
-    }
+    // Both consumers share the generated grid and classified triangle stream.
+    gpu.vertices
+        .reserve((records.len() * GPU_VERTEX_COUNT_PER_PATCH).max(1), &device);
+    gpu.draw_list.reserve(1, &device);
+    gpu.active_triangles.reserve(
+        (records.len() * GPU_TRIANGLE_COUNT_PER_PATCH).max(1),
+        &device,
+    );
+    gpu.active_count.reserve(1, &device);
 
     gpu.params.clear();
     let dirty_count = gpu.dirty_count;
@@ -2036,7 +1916,7 @@ fn dispatch_cbt_geometry(
     let (Some(surface), Some(pipeline)) = (surface, pipeline) else {
         return;
     };
-    if surface.gpu_mesh_enabled() {
+    if !surface.gpu_raster_enabled() {
         return;
     }
     if gpu.leaf_count == 0
@@ -2164,6 +2044,7 @@ fn draw_cbt_geometry(
     gpu: Option<Res<CbtGpuBuffers>>,
     classifier: Option<ResMut<CbtGpuClassifier>>,
     raster: Option<ResMut<CbtGpuRasterPipeline>>,
+    #[cfg(feature = "mesh-shaders")] mesh: Option<ResMut<CbtGpuMeshPipeline>>,
     view: ViewQuery<(
         &ExtractedCamera,
         &ExtractedView,
@@ -2181,11 +2062,7 @@ fn draw_cbt_geometry(
     else {
         return;
     };
-    if !surface.gpu_raster_enabled()
-        || !surface.gpu_surface_ready()
-        || surface.gpu_mesh_enabled()
-        || gpu.leaf_count() == 0
-    {
+    if !surface.gpu_raster_enabled() || !surface.gpu_surface_ready() || gpu.leaf_count() == 0 {
         return;
     }
     let mut draw_attempt = presentation.attempt(&surface, material.as_deref());
@@ -2276,6 +2153,13 @@ fn draw_cbt_geometry(
         .get(&format)
         .cloned()
         .expect("CBT raster pipeline inserted above");
+    #[cfg(feature = "mesh-shaders")]
+    let mesh_pipeline = mesh
+        .filter(|_| {
+            surface.gpu_mesh_enabled()
+                && mesh_dispatch_supported(&context.render_device().limits(), gpu.leaf_count())
+        })
+        .map(|mut mesh| mesh_pipeline(&mut mesh, context.render_device(), format));
     // Do not submit grey fallback-textured CBT patches while the canonical
     // albedo is still loading. Main-world visibility waits for the successful
     // draw acknowledgement below, not merely for the CPU image asset.
@@ -2303,6 +2187,9 @@ fn draw_cbt_geometry(
     let Some(material_slots) = material_array.slots.buffer() else {
         return;
     };
+    let Some(material_directory) = material_array.directory.buffer() else {
+        return;
+    };
     let Some(view_uniform_id) = view_uniform_buffer_id(&view_uniforms) else {
         return;
     };
@@ -2317,6 +2204,8 @@ fn draw_cbt_geometry(
         lighting: lighting_buffer.id(),
         frames: frames_buffer.id(),
         material_slots: material_slots.id(),
+        draw: draw_buffer.id(),
+        material_directory: material_directory.id(),
         albedo_view: albedo_image.texture_view.id(),
         albedo_sampler: albedo_image.sampler.id(),
         roughness_view: roughness_image.texture_view.id(),
@@ -2392,6 +2281,16 @@ fn draw_cbt_geometry(
                 BindGroupEntry {
                     binding: 14,
                     resource: BindingResource::Buffer(material_slots.as_entire_buffer_binding()),
+                },
+                BindGroupEntry {
+                    binding: 15,
+                    resource: BindingResource::Buffer(draw_buffer.as_entire_buffer_binding()),
+                },
+                BindGroupEntry {
+                    binding: 16,
+                    resource: BindingResource::Buffer(
+                        material_directory.as_entire_buffer_binding(),
+                    ),
                 },
             ],
         ));
@@ -2563,6 +2462,40 @@ fn draw_cbt_geometry(
         );
     }
     let color_attachments = [Some(target.get_color_attachment())];
+    #[cfg(feature = "mesh-shaders")]
+    if let Some(pipeline) = mesh_pipeline {
+        let mut pass = context
+            .command_encoder()
+            .begin_render_pass(&RenderPassDescriptor {
+                label: Some("thessa-cbt-mesh-pass"),
+                color_attachments: &color_attachments,
+                depth_stencil_attachment: Some(depth.get_attachment(StoreOp::Store)),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        let span = diagnostics
+            .as_ref()
+            .map(|d| d.pass_span(&mut pass, "terrain"));
+        if let Some(viewport) = camera.viewport.as_ref() {
+            pass.set_viewport(
+                viewport.physical_position.x as f32,
+                viewport.physical_position.y as f32,
+                viewport.physical_size.x as f32,
+                viewport.physical_size.y as f32,
+                viewport.depth.start,
+                viewport.depth.end,
+            );
+        }
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &*bind_group, &[view_uniform_offset.offset]);
+        pass.draw_mesh_tasks_indirect(draw_buffer, 16);
+        draw_attempt.submitted = true;
+        if let Some(span) = span {
+            span.end(&mut pass);
+        }
+        return;
+    }
     let mut pass = context.begin_tracked_render_pass(RenderPassDescriptor {
         label: Some("thessa-cbt-raster-pass"),
         color_attachments: &color_attachments,
@@ -2589,82 +2522,11 @@ fn draw_cbt_geometry(
 }
 
 #[cfg(feature = "mesh-shaders")]
-#[allow(clippy::too_many_arguments)]
-fn draw_cbt_mesh_geometry(
-    presentation: Res<CbtGpuPresentation>,
-    material: Option<Res<CbtRenderMaterial>>,
-    surface: Option<Res<CbtRenderSurface>>,
-    gpu: Option<Res<CbtGpuBuffers>>,
-    mesh: Option<ResMut<CbtGpuMeshPipeline>>,
-    view: ViewQuery<(
-        &ExtractedCamera,
-        &ExtractedView,
-        &ViewTarget,
-        &ViewDepthTexture,
-        &ViewUniformOffset,
-    )>,
-    view_uniforms: Res<ViewUniforms>,
-    mut context: RenderContext,
-) {
-    let (Some(surface), Some(gpu), Some(mut mesh)) = (surface, gpu, mesh) else {
-        return;
-    };
-    if !surface.gpu_raster_enabled()
-        || !surface.gpu_surface_ready()
-        || !surface.gpu_mesh_enabled()
-        || gpu.leaf_count() == 0
-    {
-        return;
-    }
-
-    let mut draw_attempt = presentation.attempt(&surface, material.as_deref());
-    if !gpu.complete_pages {
-        return;
-    }
-    let device = context.render_device();
-    if !device
-        .features()
-        .contains(WgpuFeatures::EXPERIMENTAL_MESH_SHADER)
-    {
-        return;
-    }
-    let limits = device.limits();
-    if MESHLET_VERTEX_COUNT > limits.max_mesh_output_vertices
-        || MESHLET_PRIMITIVE_COUNT > limits.max_mesh_output_primitives
-        || 64 > limits.max_mesh_invocations_per_workgroup
-        || 64 > limits.max_mesh_invocations_per_dimension
-        || MESHLETS_PER_PATCH > limits.max_task_mesh_workgroups_per_dimension
-        || gpu.leaf_count() > limits.max_task_mesh_workgroups_per_dimension
-        || u64::from(gpu.leaf_count()) * u64::from(MESHLETS_PER_PATCH)
-            > u64::from(limits.max_task_mesh_workgroup_total_count)
-    {
-        return;
-    }
-
-    let (camera, extracted_view, target, depth, view_uniform_offset) = view.into_inner();
-    let (
-        Some(leaf_buffer),
-        Some(metadata_buffer),
-        Some(residual_buffer),
-        Some(params_buffer),
-        Some(surface_buffer),
-        Some(frames_buffer),
-    ) = (
-        gpu.leaf_buffer(),
-        gpu.page_metadata_buffer(),
-        gpu.page_residual_buffer(),
-        gpu.params_buffer(),
-        gpu.surface_transform_buffer(),
-        gpu.tile_frames.buffer(),
-    )
-    else {
-        return;
-    };
-    let Some(view_binding) = view_uniforms.uniforms.binding() else {
-        return;
-    };
-
-    let format = extracted_view.target_format;
+fn mesh_pipeline(
+    mesh: &mut CbtGpuMeshPipeline,
+    device: &RenderDevice,
+    format: TextureFormat,
+) -> RenderPipeline {
     if !mesh.pipelines.contains_key(&format) {
         let color_targets = [Some(ColorTargetState {
             format,
@@ -2711,77 +2573,10 @@ fn draw_cbt_mesh_geometry(
         mesh.pipelines
             .insert(format, RenderPipeline::from(pipeline));
     }
-    let pipeline = mesh
-        .pipelines
+    mesh.pipelines
         .get(&format)
-        .expect("CBT mesh pipeline inserted above");
-    let bind_group = device.create_bind_group(
-        "thessa-cbt-mesh-bind-group",
-        &mesh.bind_group_layout,
-        &[
-            BindGroupEntry {
-                binding: 0,
-                resource: BindingResource::Buffer(leaf_buffer.as_entire_buffer_binding()),
-            },
-            BindGroupEntry {
-                binding: 2,
-                resource: BindingResource::Buffer(metadata_buffer.as_entire_buffer_binding()),
-            },
-            BindGroupEntry {
-                binding: 3,
-                resource: BindingResource::Buffer(residual_buffer.as_entire_buffer_binding()),
-            },
-            BindGroupEntry {
-                binding: 4,
-                resource: BindingResource::Buffer(frames_buffer.as_entire_buffer_binding()),
-            },
-            BindGroupEntry {
-                binding: 6,
-                resource: BindingResource::Buffer(params_buffer.as_entire_buffer_binding()),
-            },
-        ],
-    );
-    let view_bind_group = device.create_bind_group(
-        "thessa-cbt-mesh-view-bind-group",
-        &mesh.view_bind_group_layout,
-        &[
-            BindGroupEntry {
-                binding: 0,
-                resource: view_binding,
-            },
-            BindGroupEntry {
-                binding: 1,
-                resource: BindingResource::Buffer(surface_buffer.as_entire_buffer_binding()),
-            },
-        ],
-    );
-
-    let color_attachments = [Some(target.get_color_attachment())];
-    let mut pass = context
-        .command_encoder()
-        .begin_render_pass(&RenderPassDescriptor {
-            label: Some("thessa-cbt-mesh-pass"),
-            color_attachments: &color_attachments,
-            depth_stencil_attachment: Some(depth.get_attachment(StoreOp::Store)),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-    if let Some(viewport) = camera.viewport.as_ref() {
-        pass.set_viewport(
-            viewport.physical_position.x as f32,
-            viewport.physical_position.y as f32,
-            viewport.physical_size.x as f32,
-            viewport.physical_size.y as f32,
-            viewport.depth.start,
-            viewport.depth.end,
-        );
-    }
-    pass.set_pipeline(pipeline);
-    pass.set_bind_group(0, &*bind_group, &[]);
-    pass.set_bind_group(1, &*view_bind_group, &[view_uniform_offset.offset]);
-    pass.draw_mesh_tasks(MESHLETS_PER_PATCH, gpu.leaf_count(), 1);
-    draw_attempt.submitted = true;
+        .cloned()
+        .expect("CBT mesh pipeline inserted above")
 }
 
 #[cfg(test)]
@@ -2818,11 +2613,27 @@ mod tests {
     #[cfg(feature = "mesh-shaders")]
     #[test]
     fn mesh_shader_is_validated_with_explicit_native_capability() {
-        let module = naga::front::wgsl::parse_str(CBT_MESH_WGSL)
+        let module = naga::front::wgsl::parse_str(&cbt_mesh_wgsl())
             .expect("CBT mesh shader must parse with wgpu_mesh_shader enabled");
         naga::valid::Validator::new(Default::default(), naga::valid::Capabilities::MESH_SHADER)
             .validate(&module)
             .expect("CBT mesh shader must validate with mesh capability");
+    }
+
+    #[cfg(feature = "mesh-shaders")]
+    #[test]
+    fn mesh_dispatch_limits_preserve_indexed_fallback() {
+        let mut limits = wgpu::Limits::default();
+        assert!(!mesh_dispatch_supported(&limits, 1));
+        limits.max_task_mesh_workgroups_per_dimension = 256;
+        limits.max_task_mesh_workgroup_total_count = 65_536;
+        assert!(mesh_dispatch_supported(&limits, 1));
+        assert!(mesh_dispatch_supported(&limits, 910));
+        assert!(!mesh_dispatch_supported(&limits, 911));
+        limits.max_task_mesh_workgroup_total_count = 71;
+        assert!(!mesh_dispatch_supported(&limits, 1));
+        limits.max_task_mesh_workgroup_total_count = 72;
+        assert!(mesh_dispatch_supported(&limits, 1));
     }
 
     #[test]

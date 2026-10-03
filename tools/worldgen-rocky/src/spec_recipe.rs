@@ -69,6 +69,11 @@ impl Default for SpecReadability {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SpecTerrain {
+    /// Omitted bounds retain the v0.2 ocean-area target, not a renderer setting.
+    #[serde(default)]
+    pub ocean_fraction_target_min: Option<f64>,
+    #[serde(default)]
+    pub ocean_fraction_target_max: Option<f64>,
     #[serde(default)]
     pub mountain_coverage: f64,
     #[serde(default)]
@@ -85,6 +90,24 @@ pub struct SpecTerrain {
     pub roughness_macro: f64,
     #[serde(default)]
     pub plateau_coverage: f64,
+}
+
+impl SpecTerrain {
+    /// Datum calibration uses the midpoint of the authored ocean-area bounds.
+    pub fn ocean_fraction_target(&self) -> Result<f64, String> {
+        let min = self.ocean_fraction_target_min.unwrap_or(0.52);
+        let max = self.ocean_fraction_target_max.unwrap_or(0.68);
+        if !min.is_finite()
+            || !max.is_finite()
+            || !(0.05..=0.95).contains(&min)
+            || !(min..=0.95).contains(&max)
+        {
+            return Err(
+                "ocean fraction target needs ordered finite bounds within 0.05..=0.95".into(),
+            );
+        }
+        Ok((min + max) * 0.5)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -210,6 +233,7 @@ pub struct BodyBlock {
 
 /// Validate recipe + body file agreement (radius, height range).
 pub fn validate_spec(recipe: &SpecRecipe, body: &BodyFile) -> Result<(), String> {
+    recipe.terrain.ocean_fraction_target()?;
     if recipe.planet.id.trim().is_empty() {
         return Err("planet id must not be empty".into());
     }
@@ -535,8 +559,7 @@ pub fn manifest_from_spec(recipe: &SpecRecipe) -> Result<Manifest, String> {
             droplets: 4000,
             droplet_steps: 64,
         },
-        // Spec ocean target 0.52..0.68: calibrate datum to the midpoint.
-        ocean_target: Some(0.60),
+        ocean_target: Some(recipe.terrain.ocean_fraction_target()?),
         landmark_zones: Vec::new(),
         features,
     })
@@ -613,6 +636,47 @@ mod tests {
         recipe.planet.seed = 999;
         let b = place_spec_features(&recipe).expect("b");
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn authored_ocean_bounds_reach_the_canonical_field() {
+        let (mut recipe, _) = load();
+        assert!((recipe.terrain.ocean_fraction_target().unwrap() - 0.6).abs() < 1e-12);
+        recipe.terrain.ocean_fraction_target_min = Some(0.40);
+        recipe.terrain.ocean_fraction_target_max = Some(0.50);
+        let manifest = manifest_from_spec(&recipe).unwrap();
+        assert_eq!(manifest.ocean_target, Some(0.45));
+        let field = crate::field::field_from_manifest(&manifest).unwrap();
+        assert_eq!(field.params.ocean_target, manifest.ocean_target);
+        let ocean = (0..4096)
+            .filter(|&i| {
+                let y = 1.0 - 2.0 * (i as f64 + 0.5) / 4096.0;
+                let angle = i as f64 * 2.399963229728653;
+                let radius = (1.0 - y * y).sqrt();
+                field.height_m([radius * angle.cos(), y, radius * angle.sin()], 1.0) < 0.0
+            })
+            .count();
+        let fraction = ocean as f64 / 4096.0;
+        assert!((fraction - 0.45).abs() < 0.025, "ocean area {fraction}");
+    }
+
+    #[test]
+    fn ocean_bounds_validate_in_both_spec_and_runtime_conversion() {
+        let (mut recipe, body) = load();
+        for (min, max) in [
+            (0.7, 0.5),
+            (f64::NAN, 0.6),
+            (0.4, f64::INFINITY),
+            (0.0, 0.6),
+            (0.4, 1.0),
+        ] {
+            recipe.terrain.ocean_fraction_target_min = Some(min);
+            recipe.terrain.ocean_fraction_target_max = Some(max);
+            assert!(validate_spec(&recipe, &body).is_err());
+            assert!(manifest_from_spec(&recipe).is_err());
+        }
+        let default = SpecTerrain::default();
+        assert!((default.ocean_fraction_target().unwrap() - 0.6).abs() < 1e-12);
     }
 
     #[test]

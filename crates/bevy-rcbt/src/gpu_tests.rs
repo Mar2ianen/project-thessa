@@ -478,7 +478,7 @@ fn gpu_classifier_uses_position_stride_for_every_leaf() {
     let vertices = gpu.buffer(&positions, false);
     let triangles = gpu.buffer(&vec![0; 3 * GPU_TRIANGLE_COUNT_PER_PATCH * 4], false);
     let count = gpu.buffer(&[0; 4], false);
-    let draw = gpu.buffer(&[0; 4], false);
+    let draw = gpu.buffer(&[0; 8], false);
     let identity = [
         1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.,
     ]
@@ -507,8 +507,36 @@ fn gpu_classifier_uses_position_stride_for_every_leaf() {
         &[2, 3, 4, 10],
     );
     // A zero-span patch uses step 8: 4x4x2 surface + 4x4x2 skirt triangles.
-    assert_eq!(gpu.read(&draw), [192, 1, 0, 0]);
+    assert_eq!(gpu.read(&draw), [192, 1, 0, 0, 2, 1, 1, 0]);
     assert_eq!(gpu.read(&count)[0], 64);
+    // Mesh arguments fan out at 256 groups/row, including an empty draw.
+    for total in [0u32, 1, 31, 32, 33, 8192, 8193] {
+        gpu.queue.write_buffer(&count, 0, &total.to_le_bytes());
+        gpu.dispatch(
+            CBT_CLASSIFY_WGSL,
+            &[("finalize_active", 1)],
+            &[
+                &metadata, &vertices, &triangles, &count, &draw, &view, &transform, &params,
+                &leaves, &frames, &history,
+            ],
+            &[5, 6, 7],
+            &[2, 3, 4, 10],
+        );
+        let groups = total.div_ceil(32);
+        assert_eq!(
+            gpu.read(&draw),
+            [
+                total * 3,
+                1,
+                0,
+                0,
+                groups.min(256),
+                groups.div_ceil(256).max(1),
+                1,
+                0
+            ]
+        );
+    }
     let triangles = gpu.read(&triangles);
     for record in triangles[..64 * 4].as_chunks::<4>().0.iter() {
         assert_eq!(record[0], 1, "only the middle leaf is visible");
@@ -563,7 +591,7 @@ fn gpu_classifier_grid_step_history_has_hysteresis_and_identity_reset() {
         let leaves = gpu.buffer(&[leaf_id, 0, 3, 0], false);
         let triangles = gpu.buffer(&vec![0; 3 * GPU_TRIANGLE_COUNT_PER_PATCH * 4], false);
         let count = gpu.buffer(&[0; 4], false);
-        let draw = gpu.buffer(&[0; 4], false);
+        let draw = gpu.buffer(&[0; 8], false);
         gpu.dispatch(
             CBT_CLASSIFY_WGSL,
             &[
@@ -768,11 +796,22 @@ fn check() { result[0] = cbt_render_position(frames[0], vec3(12.25, -2.125, 33.0
 #[ignore = "requires a wgpu adapter; run with --include-ignored"]
 fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
     let gpu = Gpu::new();
-    let mut shader = CBT_MESH_WGSL.split("@fragment").next().unwrap().to_owned();
+    let mut shader = format!(
+        "{}\n{}",
+        CBT_RASTER_WGSL.split("@fragment").next().unwrap(),
+        include_str!("mesh.wgsl")
+    );
+    shader = shader.replace(include_str!("material_sample.wgsl"), "");
     shader = shader.replace("enable wgpu_mesh_shader;", "");
     for attribute in [
         "@builtin(position)",
         "@location(0)",
+        "@location(1)",
+        "@location(2)",
+        "@location(3)",
+        "@location(4)",
+        "@location(5)",
+        "@interpolate(flat)",
         "@builtin(triangle_indices)",
         "@builtin(vertex_count)",
         "@builtin(primitive_count)",
@@ -785,14 +824,29 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
         .replace("@mesh(mesh_output)", "@compute")
         .replace(
             "var<workgroup> mesh_output: MeshOutput;",
-            "@group(0) @binding(7) var<storage, read_write> mesh_output: MeshOutput;",
+            "@group(0) @binding(16) var<storage, read_write> mesh_output: MeshOutput;",
         )
-        .replace("@group(1) @binding(0)", "@group(0) @binding(1)")
-        .replace("@group(1) @binding(1)", "@group(0) @binding(5)")
+        .replace("@vertex\nfn vertex(\n    @builtin(vertex_index) vertex_index: u32,\n) -> VertexOutput {\n    return cbt_vertex(vertex_index);\n}", "")
         .replace(
-            "let meshlet = workgroup.x;",
-            "let meshlet = params._padding;",
+            "let first = (group.y * 256u + group.x) * 32u;",
+            "let first = params._padding * 32u;",
         );
+    // Remove unused fragment bindings, then densely remap the buffer layout.
+    shader = shader
+        .lines()
+        .filter(|line| {
+            ![6, 7, 9, 10, 12, 13]
+                .iter()
+                .any(|binding| line.contains(&format!("@group(0) @binding({binding})")))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    for (binding, dense) in [(8, 6), (11, 7), (14, 8), (15, 9), (16, 10)] {
+        shader = shader.replace(
+            &format!("@binding({binding})"),
+            &format!("@binding({dense})"),
+        );
+    }
     let radius = 6_371_000.0f32;
     let anchor = crate::precision::TileAnchor::new(
         crate::precision::TileKey::new(4, 17, 65537, 65539).unwrap(),
@@ -816,11 +870,38 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
     .map(f32::to_bits);
     let matrix = gpu.buffer(&identity, true);
     let leaves = gpu.buffer(&[0; 4], false);
-    let residuals = gpu.buffer(&[0; 2], false);
+    let mut generated = Vec::new();
+    for y in 0..33 {
+        for x in 0..33 {
+            let p = bevy::math::DVec3::from_array(
+                anchor.project_body_m([x as f64 / 32., y as f64 / 32.], 120.),
+            ) - bevy::math::DVec3::from_array(anchor.anchor_body_m);
+            generated.extend(
+                [p.x as f32, p.y as f32, p.z as f32, 1., 0., 1., 0., 120.].map(f32::to_bits),
+            );
+        }
+    }
+    let vertices = gpu.buffer(&generated, false);
+    let mut view_words = vec![0; 116];
+    view_words[..16].copy_from_slice(&identity);
+    let view = gpu.buffer(&view_words, true);
+    let triangle_words: Vec<u32> = (0..513)
+        .flat_map(|i| {
+            let base = (i / 2 / 32) * 33 + i / 2 % 32;
+            if i % 2 == 0 {
+                [0, base, base + 1, base + 33]
+            } else {
+                [0, base + 1, base + 34, base + 33]
+            }
+        })
+        .collect();
+    let triangles = gpu.buffer(&triangle_words, false);
+    let slots = gpu.buffer(&[11, 1.0f32.to_bits(), 0, 0], false);
+    let draw = gpu.buffer(&[512 * 3, 1, 0, 0, 16, 1, 1, 0], false);
     let metadata = gpu.buffer(&[120.0f32.to_bits(), 1.0f32.to_bits(), 2, 0], false);
-    // vec3 members align to 16 bytes: header16, vertex32, primitive16.
+    // vec3 members align to 16 bytes: header16, shared vertex80, primitive16.
     let sentinel = 0x7fc00001;
-    let words = 4 + 81 * 8 + 128 * 4;
+    let words = 4 + 96 * 20 + 32 * 4;
     for meshlet in 0..16 {
         let output = gpu.buffer(&vec![sentinel; words], false);
         let params = gpu.buffer(&[1, 1089, radius.to_bits(), meshlet], true);
@@ -828,24 +909,23 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
             &shader,
             &[("build_mesh", 1)],
             &[
-                &leaves, &matrix, &metadata, &residuals, &frames, &matrix, &params, &output,
+                &view, &matrix, &vertices, &metadata, &params, &triangles, &leaves, &frames,
+                &slots, &draw, &output,
             ],
-            &[1, 5, 6],
-            &[7],
+            &[0, 1, 4],
+            &[10],
         );
         let result = gpu.read(&output);
-        assert_eq!(&result[..2], &[81, 128]);
-        for i in 0..81 {
-            let vertex: Vec<_> = result[4 + i * 8..4 + i * 8 + 7]
+        assert_eq!(&result[..2], &[96, 32]);
+        for i in 0..96 {
+            let vertex: Vec<_> = result[4 + i * 20..4 + i * 20 + 7]
                 .iter()
                 .copied()
                 .map(f32::from_bits)
                 .collect();
             assert!(vertex.iter().all(|v| v.is_finite()), "unwritten vertex {i}");
-            let uv = [
-                ((meshlet % 4) * 8 + i as u32 % 9) as f64 / 32.,
-                ((meshlet / 4) * 8 + i as u32 / 9) as f64 / 32.,
-            ];
+            let local = triangle_words[(meshlet as usize * 32 + i / 3) * 4 + 1 + i % 3];
+            let uv = [(local % 33) as f64 / 32., (local / 33) as f64 / 32.];
             let expected = anchor.project_body_m(uv, 120.0);
             for axis in 0..3 {
                 assert!(
@@ -857,38 +937,174 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
             }
             assert!((vertex[4..7].iter().map(|v| v * v).sum::<f32>() - 1.).abs() < 1e-5);
         }
-        let mut area = 0.;
-        for i in 0..128 {
-            let tri = &result[4 + 81 * 8 + i * 4..4 + 81 * 8 + i * 4 + 3];
-            assert!(
-                tri.iter().all(|v| *v < 81),
-                "unwritten primitive {i}: {tri:?}"
-            );
-            let xy: Vec<_> = tri
-                .iter()
-                .map(|v| [(v % 9) as f32, (v / 9) as f32])
-                .collect();
-            let signed = (xy[1][0] - xy[0][0]) * (xy[2][1] - xy[0][1])
-                - (xy[1][1] - xy[0][1]) * (xy[2][0] - xy[0][0]);
-            assert_eq!(signed, 1.);
-            area += signed * 0.5;
+        for i in 0..32 {
+            let tri = &result[4 + 96 * 20 + i * 4..4 + 96 * 20 + i * 4 + 3];
+            assert_eq!(tri, [i as u32 * 3, i as u32 * 3 + 1, i as u32 * 3 + 2]);
         }
-        assert_eq!(area, 64.);
     }
-    // Missing height data must emit zero counts rather than partially valid IO.
-    let absent = gpu.buffer(&[0; 4], false);
+    // An empty classified stream must emit zero counts, not stale geometry.
+    let absent = gpu.buffer(&[0; 8], false);
     let output = gpu.buffer(&vec![sentinel; words], false);
     let params = gpu.buffer(&[1, 1089, radius.to_bits(), 0], true);
     gpu.dispatch(
         &shader,
         &[("build_mesh", 1)],
         &[
-            &leaves, &matrix, &absent, &residuals, &frames, &matrix, &params, &output,
+            &view, &matrix, &vertices, &metadata, &params, &triangles, &leaves, &frames, &slots,
+            &absent, &output,
         ],
-        &[1, 5, 6],
-        &[7],
+        &[0, 1, 4],
+        &[10],
     );
     assert_eq!(&gpu.read(&output)[..2], &[0, 0]);
+
+    // A partial final meshlet must never emit its uninitialized tail.
+    let tail_draw = gpu.buffer(&[513 * 3, 1, 0, 0, 17, 1, 1, 0], false);
+    let tail_params = gpu.buffer(&[1, 1089, radius.to_bits(), 16], true);
+    gpu.dispatch(
+        &shader,
+        &[("build_mesh", 1)],
+        &[
+            &view,
+            &matrix,
+            &vertices,
+            &metadata,
+            &tail_params,
+            &triangles,
+            &leaves,
+            &frames,
+            &slots,
+            &tail_draw,
+            &output,
+        ],
+        &[0, 1, 4],
+        &[10],
+    );
+    let result = gpu.read(&output);
+    assert_eq!(&result[..2], &[3, 1]);
+    assert_eq!(&result[4 + 96 * 20..4 + 96 * 20 + 3], &[0, 1, 2]);
+    assert_eq!(
+        result[4 + 18],
+        11,
+        "shared material slot must survive mesh IO"
+    );
+
+    // Skirts use the same radial offset and exclude ocean shading by height.
+    let mut skirt_words = triangle_words.clone();
+    skirt_words[512 * 4 + 2] |= 0x80000000;
+    let skirt_triangles = gpu.buffer(&skirt_words, false);
+    gpu.dispatch(
+        &shader,
+        &[("build_mesh", 1)],
+        &[
+            &view,
+            &matrix,
+            &vertices,
+            &metadata,
+            &tail_params,
+            &skirt_triangles,
+            &leaves,
+            &frames,
+            &slots,
+            &tail_draw,
+            &output,
+        ],
+        &[0, 1, 4],
+        &[10],
+    );
+    let skirt = gpu.read(&output);
+    assert_eq!(f32::from_bits(skirt[4 + 20 + 15]), 1e9);
+    let distance = (0..3)
+        .map(|axis| {
+            let delta =
+                f32::from_bits(skirt[4 + 20 + axis]) - f32::from_bits(result[4 + 20 + axis]);
+            delta * delta
+        })
+        .sum::<f32>()
+        .sqrt();
+    assert!(
+        (distance - 256.).abs() < 0.001,
+        "bounded skirt depth: {distance}"
+    );
+}
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored"]
+fn gpu_material_directory_uses_world_addresses_on_all_cube_faces() {
+    let gpu = Gpu::new();
+    let mut inputs = Vec::new();
+    let mut entries = Vec::new();
+    for face in 0..6 {
+        for level in [0, 17] {
+            let (x, y) = if level == 0 { (0, 0) } else { (65537, 65539) };
+            let key = crate::precision::TileKey::new(face, level, x, y).unwrap();
+            let anchor = crate::precision::TileAnchor::new(key, 3_200_000.).unwrap();
+            let d = anchor.project_body_m([0.25, 0.75], 0.);
+            inputs.extend(
+                [
+                    d[0] as f32 / 3_200_000.,
+                    d[1] as f32 / 3_200_000.,
+                    d[2] as f32 / 3_200_000.,
+                ]
+                .map(f32::to_bits),
+            );
+            inputs.push(level as u32);
+            let mut id = 8u64 + u64::from(face);
+            for bit in (0..level).rev() {
+                id = (id << 2) | u64::from(((x >> bit) & 1) * 2 + ((y >> bit) & 1));
+            }
+            entries.push(crate::material_cache::SlotEntry {
+                node_id: id,
+                slot: entries.len() as u32,
+                generation: 1,
+            });
+        }
+    }
+    let words: Vec<_> = crate::material_cache::material_directory(entries.iter().copied())
+        .into_iter()
+        .flatten()
+        .collect();
+    let directory = gpu.buffer(&words, false);
+    let input = gpu.buffer(&inputs, false);
+    let output = gpu.buffer(&vec![0; entries.len() * 4], false);
+    let shader = format!(
+        "{}\n{}",
+        include_str!("material_sample.wgsl")
+            .split("// Gradients")
+            .next()
+            .unwrap()
+            .replace("@binding(16)", "@binding(0)"),
+        r#"
+@group(0) @binding(1) var<storage, read> points: array<vec4<u32>>;
+@group(0) @binding(2) var<storage, read_write> result: array<vec4<u32>>;
+@compute @workgroup_size(64)
+fn check(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= arrayLength(&points)) { return; }
+    let point = points[gid.x];
+    let address = material_address(bitcast<vec3<f32>>(point.xyz));
+    let id = material_node(address.face, vec2<u32>(address.uv * exp2(f32(point.w))), point.w);
+    result[gid.x] = vec4(address.face, id, material_layer(id));
+}
+"#
+    );
+    gpu.dispatch(
+        &shader,
+        &[("check", 1)],
+        &[&directory, &input, &output],
+        &[],
+        &[2],
+    );
+    for (i, record) in gpu.read(&output).as_chunks::<4>().0.iter().enumerate() {
+        assert_eq!(
+            *record,
+            [
+                (i / 2) as u32,
+                entries[i].node_id as u32,
+                (entries[i].node_id >> 32) as u32,
+                i as u32
+            ]
+        );
+    }
 }
 
 /// Full game-data roundtrip on hardware: a real `CbtMaterialPage` (linear-

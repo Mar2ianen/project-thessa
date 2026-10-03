@@ -27,11 +27,21 @@ pub(crate) fn smooth(a: f64, b: f64, v: f64) -> f64 {
 ///
 /// Range is roughly [-1, 1] (sum of weighted value-noise octaves).
 pub fn surface_grain(field: &PlanetField, dir: [f64; 3]) -> f64 {
+    surface_grain_filtered(field, dir, 0.0)
+}
+
+fn band_weight(scale_m: f64, texel_m: f64) -> f64 {
+    1.0 - smooth(scale_m * 0.25, scale_m * 0.5, texel_m)
+}
+
+fn surface_grain_filtered(field: &PlanetField, dir: [f64; 3], texel_m: f64) -> f64 {
     [(8.0, 0.42), (32.0, 0.32), (128.0, 0.20), (512.0, 0.10)]
         .into_iter()
         .enumerate()
+        .filter(|(_, (scale, _))| band_weight(*scale, texel_m) > 0.0)
         .map(|(band, (scale, weight))| {
             weight
+                * band_weight(scale, texel_m)
                 * rng::value_noise3(
                     field.params.seed,
                     741 + band as u32 * 17,
@@ -68,7 +78,41 @@ pub fn surface_appearance(
     sample: &TerrainSample,
     dir: [f64; 3],
 ) -> SurfaceAppearance {
+    surface_appearance_filtered(field, sample, dir, 0.0)
+}
+
+/// Appearance-only spectral filtering; canonical height and semantics stay fixed.
+pub fn surface_appearance_filtered(
+    field: &PlanetField,
+    sample: &TerrainSample,
+    dir: [f64; 3],
+    texel_m: f64,
+) -> SurfaceAppearance {
     let noise = |channel, scale, octaves| {
+        if texel_m > 0.0 {
+            let mut sum = 0.0;
+            let mut norm = 0.0;
+            let (mut amplitude, mut frequency) = (1.0, 1.0);
+            for octave in 0..octaves {
+                let weight = band_weight(scale / frequency, texel_m);
+                if weight > 0.0 {
+                    let q = dir.map(|v| v * field.params.radius_m / scale * frequency);
+                    sum += amplitude
+                        * weight
+                        * rng::value_noise3(
+                            field.params.seed,
+                            channel + octave * 7919,
+                            q[0],
+                            q[1],
+                            q[2],
+                        );
+                }
+                norm += amplitude;
+                amplitude *= 0.5;
+                frequency *= 2.03;
+            }
+            return sum / norm;
+        }
         rng::fbm3(
             field.params.seed,
             channel,
@@ -84,7 +128,7 @@ pub fn surface_appearance(
     // the cover grain — sharing one signal for threshold patches and final
     // brightness partially cancels (opposite signs), muting both.
     let micro = noise(739, 24.0, 2);
-    let grain = surface_grain(field, dir);
+    let grain = surface_grain_filtered(field, dir, texel_m);
     let h = sample.height_m;
     // Snow cover breaks into drifts and thaw patches: the grain rides the
     // threshold (±0.7 grain ~= ±4 K) so a uniform sub-zero plain still reads

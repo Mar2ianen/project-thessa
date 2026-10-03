@@ -24,6 +24,29 @@ pub struct SlotEntry {
     pub generation: u64,
 }
 
+/// Sparse world-addressed material directory, independent of geometry ordinals.
+/// Same hash and linear probing as material_sample.wgsl; zero IDs are empty.
+pub fn material_directory(entries: impl IntoIterator<Item = SlotEntry>) -> Vec<[u32; 4]> {
+    let entries: Vec<_> = entries.into_iter().collect();
+    let size = (entries.len().max(1) * 4).next_power_of_two();
+    let mut table = vec![[0; 4]; size];
+    for entry in entries {
+        if entry.node_id == 0 {
+            continue;
+        }
+        let low = entry.node_id as u32;
+        let high = (entry.node_id >> 32) as u32;
+        let mut index =
+            (low.wrapping_mul(0x9e3779b9) ^ high.wrapping_mul(0x85ebca6b)) as usize & (size - 1);
+        while table[index][0] != 0 || table[index][1] != 0 {
+            index = (index + 1) & (size - 1);
+        }
+        let depth = 63 - entry.node_id.leading_zeros();
+        table[index] = [low, high, entry.slot, depth.saturating_sub(3) / 2];
+    }
+    table
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Occupied {
     node_id: u64,
@@ -277,6 +300,31 @@ impl SlotCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn material_directory_resolves_every_resident_including_deep_ids() {
+        let entries: Vec<_> = (0..512)
+            .map(|slot| SlotEntry {
+                slot,
+                node_id: (1u64 << 37) + u64::from(slot) * 64,
+                generation: 1,
+            })
+            .collect();
+        let table = material_directory(entries.iter().copied());
+        assert!(table.len().is_power_of_two());
+        for entry in entries {
+            let low = entry.node_id as u32;
+            let high = (entry.node_id >> 32) as u32;
+            let mut index = (low.wrapping_mul(0x9e3779b9) ^ high.wrapping_mul(0x85ebca6b)) as usize
+                & (table.len() - 1);
+            while table[index][..2] != [low, high] {
+                assert_ne!(table[index][..2], [0, 0]);
+                index = (index + 1) & (table.len() - 1);
+            }
+            assert_eq!(table[index][2..], [entry.slot, 17]);
+        }
+        assert_eq!(material_directory([]), vec![[0; 4]; 4]);
+    }
 
     #[test]
     fn stable_reuse_survives_priority_reordering() {

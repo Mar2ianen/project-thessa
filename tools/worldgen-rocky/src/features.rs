@@ -300,6 +300,11 @@ fn rotate(x: f64, y: f64, rotation_rad: f64) -> (f64, f64) {
 
 /// Height contribution in metres. Pure function of inputs.
 pub fn eval_feature_height_m(pf: &PlacedFeature, lat_deg: f64, lon_deg: f64, radius_m: f64) -> f64 {
+    // Latitude separation is a lower bound on great-circle distance. Reject
+    // distant features before repeated trigonometry and seeded footprint warp.
+    if (lat_deg - pf.lat_deg).abs().to_radians() * radius_m > pf.reach_m() {
+        return 0.0;
+    }
     let (dx, dy) = local_xy_m(lat_deg, lon_deg, pf.lat_deg, pf.lon_deg, radius_m);
     if dx * dx + dy * dy > pf.reach_m().powi(2) {
         return 0.0;

@@ -49,6 +49,8 @@ pub(super) struct WorldTerrain {
     cache: BTreeMap<TileKey, CachedTile>,
     jobs: BTreeMap<TileKey, JobHandle<TerrainBuildOutput>>,
     material_jobs: BTreeMap<TileKey, JobHandle<thessa_bevy_rcbt::CbtMaterialPage>>,
+    material_wanted: Vec<TileKey>,
+    material_selection_epoch: u64,
     wanted: Vec<TileKey>,
     fine_selection: Vec<TileKey>,
     selection_epoch: u64,
@@ -119,7 +121,10 @@ impl Plugin for TerrainPlugin {
         app.init_resource::<SurfaceSurvey>()
             .init_resource::<thessa_bevy_rcbt::CbtRenderMaterialPages>()
             .register_type::<SurfaceSurvey>()
-            .add_systems(Startup, setup_terrain)
+            .add_systems(
+                Startup,
+                (resolve_terrain_capabilities, setup_terrain).chain(),
+            )
             .add_systems(PostStartup, initialize_launch_site)
             .add_systems(
                 PostUpdate,
@@ -186,6 +191,32 @@ fn sync_cbt_lighting(
     }
 }
 
+fn resolve_terrain_capabilities(
+    device: Option<Res<bevy::render::renderer::RenderDevice>>,
+    requested: Option<Res<GraphicsRequested>>,
+    graphics: Option<ResMut<GraphicsResolved>>,
+) {
+    let (Some(device), Some(requested), Some(mut graphics)) = (device, requested, graphics) else {
+        return;
+    };
+    let caps = Capabilities {
+        terrain_mesh_supported: Some(thessa_bevy_rcbt::mesh_shader_supported(&device)),
+        ..Capabilities::unknown()
+    };
+    let resolved = ResolvedGraphicsSettings::from_requested(&requested.0, &caps);
+    graphics.0.terrain = resolved.terrain;
+    graphics
+        .0
+        .notes
+        .retain(|note| !note.starts_with("terrain mesh capability"));
+    graphics.0.notes.extend(
+        resolved
+            .notes
+            .into_iter()
+            .filter(|note| note.starts_with("terrain mesh capability")),
+    );
+}
+
 fn setup_terrain(
     mut commands: Commands,
     mut survey: ResMut<SurfaceSurvey>,
@@ -199,18 +230,15 @@ fn setup_terrain(
     let gpu_raster = graphics
         .as_deref()
         .is_some_and(|settings| settings.0.terrain.is_gpu());
-    // Hardware mesh shaders are intentionally not part of the normal client
-    // path. The optional crate feature remains available for isolated adapter
-    // experiments, while the game uses CPU or portable indexed raster here.
-    cbt_surface.set_gpu_mesh_enabled(false);
+    cbt_surface.set_gpu_mesh_enabled(graphics.as_deref().is_some_and(|settings| {
+        settings.0.terrain == thessa_graphics::ResolvedTerrainRender::GpuMesh
+    }));
     cbt_surface.set_gpu_raster_enabled(gpu_raster);
     info!(
         "CBT terrain raster mode: {}",
-        if gpu_raster {
-            "GPU indexed"
-        } else {
-            "CPU fallback"
-        }
+        graphics
+            .as_deref()
+            .map_or("cpu", |settings| settings.0.terrain.as_str())
     );
     let albedo = load_albedo_image(&assets, "worlds/thessa-v3/albedo.png");
     let normal = load_linear_image(&assets, "worlds/thessa-v3/normal.png");
@@ -291,6 +319,8 @@ fn setup_terrain(
         cache: BTreeMap::new(),
         jobs: BTreeMap::new(),
         material_jobs: BTreeMap::new(),
+        material_wanted: Vec::new(),
+        material_selection_epoch: u64::MAX,
         wanted: vec![],
         fine_selection: Vec::new(),
         selection_epoch: 0,
@@ -368,6 +398,12 @@ fn survey_input(
     mut survey: ResMut<SurfaceSurvey>,
     mut pilot: ResMut<PilotHudState>,
 ) {
+    if std::env::var_os("THESSA_AUTOBENCH").is_some()
+        && std::env::var_os("THESSA_AUTOBENCH_STATIC").is_some()
+    {
+        wheel.clear();
+        return;
+    }
     let mut selected = buttons.iter().find_map(|(interaction, button)| {
         (*interaction == Interaction::Pressed).then_some(button.0)
     });
@@ -1403,6 +1439,32 @@ fn spawn_height_jobs(
     }
 }
 
+/// Refine the existing view selection for material texel coverage, not mesh
+/// curvature. A 128px colour page can require more refinement than its mesh.
+fn material_view_selection(base: &[TileKey], view: &FrameView, pixel_angle: f64) -> Vec<TileKey> {
+    let mut cover: BTreeSet<_> = base.iter().copied().collect();
+    let error = |key: TileKey| {
+        let center = DVec3::from_array(key.direction(0.5, 0.5)) * view.radius;
+        let distance = ((center - view.eye).length() - key.span_m(view.radius) * 0.75).max(1.0);
+        key.span_m(view.radius) / 125.0 / (distance * pixel_angle).max(0.001)
+    };
+    while cover.len() + 3 <= 512 {
+        let candidate = cover
+            .iter()
+            .copied()
+            .filter(|key| key.level < 17)
+            .max_by(|a, b| error(*a).total_cmp(&error(*b)));
+        let Some(key) = candidate.filter(|key| error(*key) > 1.0) else {
+            break;
+        };
+        cover.remove(&key);
+        cover.extend(key.children());
+    }
+    let mut pages: Vec<_> = cover.into_iter().collect();
+    pages.sort_by(|a, b| error(*b).total_cmp(&error(*a)).then(a.cmp(b)));
+    pages
+}
+
 /// Streaming stage for material pages (GPU path only): poll finished pages,
 /// refresh the wanted set and spawn builds through the
 /// [`spawn_material_job`] executor seam. Height/cover jobs never wait for
@@ -1412,6 +1474,7 @@ fn run_material_streaming(
     material_pages: &mut thessa_bevy_rcbt::CbtRenderMaterialPages,
     gpu_raster: bool,
     view: &FrameView,
+    pixel_angle: f64,
 ) {
     if !gpu_raster {
         return;
@@ -1439,25 +1502,29 @@ fn run_material_streaming(
         let Some(page) = maybe_page else {
             continue;
         };
-        if world.cache.contains_key(&key)
-            && let Some(node) = lod::cbt_node_for_tile(key)
-        {
+        if let Some(node) = lod::cbt_node_for_tile(key) {
             ready_material_pages.push((node.id(), page));
         }
     }
     if !ready_material_pages.is_empty() {
         material_pages.set_pages(ready_material_pages);
     }
+    if world.material_selection_epoch != world.selection_epoch {
+        world.material_wanted = material_view_selection(&world.fine_selection, view, pixel_angle);
+        world.material_selection_epoch = world.selection_epoch;
+    }
     let mut material_wanted: Vec<_> = world
-        .visible
+        .material_wanted
         .iter()
         .copied()
         .chain(
-            world
-                .wanted
-                .iter()
-                .copied()
-                .filter(|key| world.cache.contains_key(key)),
+            world.visible.iter().copied().chain(
+                world
+                    .wanted
+                    .iter()
+                    .copied()
+                    .filter(|key| world.cache.contains_key(key)),
+            ),
         )
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -1466,12 +1533,12 @@ fn run_material_streaming(
         let delta = DVec3::from_array(key.direction(0.5, 0.5)) * radius - eye;
         (
             delta.normalize_or_zero().dot(forward_body) < -0.15,
-            std::cmp::Reverse(key.level),
             delta.length_squared().to_bits(),
+            std::cmp::Reverse(key.level),
             *key,
         )
     });
-    material_wanted.truncate(256);
+    material_wanted.truncate(512);
     // Guard the mutable borrow: `set_priority(&mut self)` via `ResMut`
     // marks the resource changed (Bevy `DerefMut`) even when the Vec is
     // identical, forcing an extract snapshot every frame. The `priority()`
@@ -1483,6 +1550,7 @@ fn run_material_streaming(
     if material_pages.priority() != wanted_ids.as_slice() {
         material_pages.set_priority(wanted_ids);
     }
+    material_pages.trim_to_budget(1024);
     for key in material_wanted {
         // One coarse material can cover four children while fine pages
         // bake. Produce that shared source first when no ancestor exists.
@@ -1492,9 +1560,7 @@ fn run_material_streaming(
             })
             .is_none()
         }) {
-            key.parent()
-                .filter(|parent| world.cache.contains_key(parent))
-                .unwrap_or(key)
+            key.parent().unwrap_or(key)
         } else {
             key
         };
@@ -1853,10 +1919,11 @@ fn update_terrain(
                 Without<pilot::PilotPlanetVisual>,
             ),
         >,
+        Query<&Window, With<bevy::window::PrimaryWindow>>,
     ),
     sky: Option<Res<water::WaterSky>>,
 ) {
-    let (mut readout, mut backdrop) = display;
+    let (mut readout, mut backdrop, windows) = display;
     let started = Instant::now();
     let terrain_mesh_cells = cbt
         .graphics
@@ -1957,7 +2024,23 @@ fn update_terrain(
         &view,
     );
     // Material streaming stage (GPU path only).
-    run_material_streaming(&mut world, &mut cbt.material_pages, gpu_raster, &view);
+    let pixel_angle = match &*camera.1 {
+        Projection::Perspective(projection) => {
+            let height = windows
+                .iter()
+                .next()
+                .map_or(720.0, |window| f64::from(window.physical_height()));
+            2.0 * f64::from(projection.fov * 0.5).tan() / height.max(1.0)
+        }
+        _ => 1.0,
+    };
+    run_material_streaming(
+        &mut world,
+        &mut cbt.material_pages,
+        gpu_raster,
+        &view,
+        pixel_angle,
+    );
     // CPU-fallback presentation bridge: entities, backdrop, transforms.
     sync_tile_entities(
         &mut commands,
@@ -2163,6 +2246,37 @@ fn update_local_sky(
 mod streaming_tests {
     use super::*;
     use thessa_rcbt_core::{FrameBudget, plan_frame};
+
+    #[test]
+    fn material_demand_refines_coarse_geometry_without_changing_its_cover() {
+        let base = [TileKey {
+            face: 0,
+            level: 8,
+            x: 128,
+            y: 128,
+        }];
+        let radius = 3_200_000.;
+        let view = FrameView {
+            origin: DVec3::ZERO,
+            rotation: DQuat::IDENTITY,
+            eye: DVec3::from_array(base[0].direction(0.5, 0.5)) * (radius + 2000.),
+            forward_body: DVec3::NEG_X,
+            frustum: None,
+            radius,
+        };
+        let pages = material_view_selection(&base, &view, 0.001);
+        assert!(pages.len() <= 512);
+        assert!(pages.iter().all(|key| key.level > base[0].level));
+        let area: f64 = pages
+            .iter()
+            .map(|key| 4.0_f64.powi(-i32::from(key.level - base[0].level)))
+            .sum();
+        assert!((area - 1.).abs() < 1e-10);
+        assert_eq!(
+            base[0].level, 8,
+            "material demand must not refine geometry authority"
+        );
+    }
 
     #[test]
     fn mixed_lod_cover_preserves_parent_area_and_fine_detail() {

@@ -1,7 +1,8 @@
 # 21 — Terrain streaming throughput and representation split
 
 Status: design baseline; invariants normative. Throughput phasing is archival:
-GPU-indexed CBT is implemented opt-in (`terrain=gpu_indexed`); the CPU baking
+GPU CBT has indexed/optional mesh consumers (`terrain=gpu_auto` in the checked-in
+configuration; see doc 47 for capability fallback); the CPU baking
 description below applies to the fallback path only.
 
 Status: **design target / performance follow-up**.

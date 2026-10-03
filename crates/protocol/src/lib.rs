@@ -16,9 +16,12 @@ impl ProtocolVersion {
     // (v4) relaunches at the canonical site. Typed installed-part commands
     // (v5) extend ClientInput::Command. Fleet Separate/Dock/Undock commands
     // plus fleet snapshots (v6) add server-owned multi-vehicle lifecycle.
+    // Per-vehicle input/guidance targeting (v7) lets the pilot command
+    // secondaries; old peers fail the handshake instead of decoding a
+    // partially compatible payload.
     // Postcard structs are not a negotiated schema, so old peers must fail
     // the handshake instead of decoding a partially compatible payload.
-    pub const CURRENT: Self = Self(6);
+    pub const CURRENT: Self = Self(7);
 }
 
 /// Numeric message kind. Game payloads assign their own registry in the

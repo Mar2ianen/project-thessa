@@ -163,6 +163,11 @@ pub struct ClientInput {
     /// only: the server applies the latest received state on its next
     /// available simulation step and does not schedule or replay by this tick.
     pub tick: u64,
+    /// Targeted authoritative vehicle. The pilot flies one vehicle per
+    /// packet and switches freely; unowned ids fail closed server-side.
+    /// Defaults to the primary for legacy peers.
+    #[serde(default)]
+    pub vehicle_id: VehicleId,
     /// Manual body-axis command: pitch, yaw, roll in normalized units.
     pub control_input: [f64; 3],
     /// Assist mode selecting the server-side control law.
@@ -369,6 +374,9 @@ impl ClientInput {
 pub struct GuidanceInput {
     /// Client-observed authority tick; advisory, not a scheduling request.
     pub tick: u64,
+    /// Targeted authoritative vehicle, like [`ClientInput::vehicle_id`].
+    #[serde(default)]
+    pub vehicle_id: VehicleId,
     pub intent: GuidanceIntent,
     pub propulsion: PropulsionDemand,
 }
@@ -561,6 +569,7 @@ mod tests {
     fn sample_input() -> ClientInput {
         ClientInput {
             tick: 7200,
+            vehicle_id: VehicleId::PRIMARY,
             control_input: [0.1, -0.2, 0.0],
             control_mode: ControlMode::Navball,
             sas_target_xyzw: [0.0, 0.0, 0.0, 1.0],
@@ -892,6 +901,7 @@ mod tests {
     fn typed_guidance_input_roundtrips_alongside_legacy_input() {
         let input = GuidanceInput {
             tick: 12,
+            vehicle_id: VehicleId::PRIMARY,
             intent: GuidanceIntent::ManualAxes(Default::default()),
             propulsion: PropulsionDemand::new(1.0).unwrap(),
         };
@@ -993,6 +1003,7 @@ mod reset_command_tests {
     fn reset_command_roundtrips_and_preserves_order() {
         let input = ClientInput {
             tick: 99,
+            vehicle_id: VehicleId::PRIMARY,
             control_input: [0.0; 3],
             control_mode: ControlMode::Direct,
             sas_target_xyzw: [0.0, 0.0, 0.0, 1.0],

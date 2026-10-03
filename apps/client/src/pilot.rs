@@ -16,7 +16,7 @@ use bevy::{
 
 use thessa_flight_net::{ClientInput, Command, Snapshot};
 use thessa_sim_core::{
-    BakedEphemeris, BodyId, OnRailsCache, SimTime, VehiclePartCommand, WorldTick,
+    BakedEphemeris, BodyId, OnRailsCache, SimTime, VehicleId, VehiclePartCommand, WorldTick,
 };
 
 const HUD_TEXT: Color = Color::srgb(0.91, 0.95, 0.98);
@@ -866,6 +866,7 @@ fn client_input_for_server(
     commands.extend(extra_commands);
     ClientInput {
         tick: runtime.world_tick.0,
+        vehicle_id: VehicleId::PRIMARY,
         control_input: runtime.control_input.to_array(),
         control_mode: state.control_mode,
         sas_target_xyzw: [target.x, target.y, target.z, target.w],

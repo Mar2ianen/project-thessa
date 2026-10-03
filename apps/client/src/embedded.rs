@@ -620,6 +620,7 @@ mod tests {
         };
         let mut input = ClientInput {
             tick: 0,
+            vehicle_id: thessa_sim_core::VehicleId::PRIMARY,
             control_input: [0.0; 3],
             control_mode: thessa_flight_authority::ControlMode::Direct,
             sas_target_xyzw: [0.0, 0.0, 0.0, 1.0],

@@ -13,6 +13,7 @@ use thessa_sim_core::{
 fn input(commands: Vec<Command>) -> ClientInput {
     ClientInput {
         tick: 0,
+        vehicle_id: VehicleId::PRIMARY,
         control_input: [0.0; 3],
         control_mode: ControlMode::Direct,
         sas_target_xyzw: [0.0, 0.0, 0.0, 1.0],
@@ -44,6 +45,7 @@ fn ingress_dispatch_decodes_one_payload_selected_by_envelope_kind() {
 
     let guidance = GuidanceInput {
         tick: 7,
+        vehicle_id: VehicleId::PRIMARY,
         intent: GuidanceIntent::Attitude {
             target_body_to_inertial: DQuat::from_rotation_y(0.05),
             roll_policy: RollPolicy::Hold,

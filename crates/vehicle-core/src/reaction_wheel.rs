@@ -1,9 +1,12 @@
 //! Backend-neutral internal reaction-wheel actuators.
 //!
 //! Wheel banks are game-oriented moment actuators: their authored torque
-//! ratings are available continuously, without rotor-momentum saturation.
-//! Contact, renderer and power-system backends are intentionally outside this
-//! module.
+//! ratings are available continuously up to the motor rating. Banks with an
+//! authored momentum capacity integrate stored rotor momentum, saturate per
+//! axis when the reservoir fills, and drain continuously through biased
+//! wheel output (RCS carries the external compensation); banks without one
+//! keep the legacy unlimited model. Contact, renderer and power-system
+//! backends are intentionally outside this module.
 
 use std::{error::Error, fmt};
 
@@ -370,11 +373,20 @@ pub fn allocate_reaction_wheels_with_momentum(
             "enable mask and momentum states must match the installed banks".into(),
         ));
     }
-    for spec in specs {
+    for (spec, state) in specs.iter().zip(states.iter()) {
         spec.validate()?;
-    }
-    for state in states.iter() {
         state.validate()?;
+        // Fail closed on over-capacity momentum (reachable via deserialized
+        // state or a capacity-lowering asset edit): without this, the
+        // reservoir clamp below would emit uncommanded torque up to |H|/dt.
+        if let Some(capacity) = spec.momentum_capacity_nms {
+            let stored = state.stored_momentum_body_nms.abs();
+            if stored.x > capacity.x || stored.y > capacity.y || stored.z > capacity.z {
+                return Err(ReactionWheelError::InvalidState(
+                    "stored momentum exceeds bank capacity".into(),
+                ));
+            }
+        }
     }
     // Rating clamp on the aggregate first (same motor authority as the
     // stateless path), then split across enabled banks in proportion to
@@ -421,7 +433,20 @@ pub fn allocate_reaction_wheels_with_momentum(
             if limited != bank_torque {
                 momentum_saturated = true;
             }
-            bank_torque = limited;
+            // The reservoir clamp can push outside motor authority when the
+            // state sits at the wall; re-clamp so delivered torque never
+            // exceeds the per-axis rating.
+            bank_torque = DVec3::new(
+                limited
+                    .x
+                    .clamp(-spec.max_torque_body_nm.x, spec.max_torque_body_nm.x),
+                limited
+                    .y
+                    .clamp(-spec.max_torque_body_nm.y, spec.max_torque_body_nm.y),
+                limited
+                    .z
+                    .clamp(-spec.max_torque_body_nm.z, spec.max_torque_body_nm.z),
+            );
         }
         if !bank_torque.is_finite() {
             return Err(ReactionWheelError::InvalidState(
@@ -450,10 +475,13 @@ fn share_of(rating: f64, total: f64) -> f64 {
 }
 
 /// Desaturation demand: body torque that would drive stored rotor momentum
-/// toward zero, limited to `max_unload_torque_nm` per axis (L-inf). Only
-/// banks with a momentum capacity participate; unlimited banks never need
-/// dumping. The caller routes this through RCS — wheels cannot desaturate
-/// themselves without an external moment.
+/// toward zero. The caller biases the WHEEL target by this demand (so the
+/// reservoir drains through the wheels) and routes the remaining residual
+/// through RCS; net vehicle torque stays as commanded. Only banks with a
+/// momentum capacity participate; unlimited banks never need dumping.
+/// `max_unload_torque_nm` bounds the TOTAL unload authority per axis: it is
+/// split evenly across participating banks so multi-bank totals cannot
+/// exceed the caller's bound.
 pub fn momentum_unload_demand(
     specs: &[ReactionWheelBankSpec],
     states: &[ReactionWheelState],
@@ -476,6 +504,17 @@ pub fn momentum_unload_demand(
         ));
     }
     let mut demand = DVec3::ZERO;
+    let participants = specs
+        .iter()
+        .filter(|spec| spec.momentum_capacity_nms.is_some())
+        .count();
+    // Split the total unload authority across participating banks so the
+    // summed demand respects the caller's bound on every axis.
+    let per_bank_limit = if participants > 0 {
+        max_unload_torque_nm / participants as f64
+    } else {
+        0.0
+    };
     for (spec, state) in specs.iter().zip(states.iter()) {
         spec.validate()?;
         state.validate()?;
@@ -484,11 +523,11 @@ pub fn momentum_unload_demand(
         }
         let stored = state.stored_momentum_body_nms;
         // Torque opposing the stored momentum, sized to zero it in one
-        // step but capped at the authored unload authority.
+        // step but capped at this bank's share of the unload authority.
         let axis_demand = DVec3::new(
-            (-stored.x / dt_s).clamp(-max_unload_torque_nm, max_unload_torque_nm),
-            (-stored.y / dt_s).clamp(-max_unload_torque_nm, max_unload_torque_nm),
-            (-stored.z / dt_s).clamp(-max_unload_torque_nm, max_unload_torque_nm),
+            (-stored.x / dt_s).clamp(-per_bank_limit, per_bank_limit),
+            (-stored.y / dt_s).clamp(-per_bank_limit, per_bank_limit),
+            (-stored.z / dt_s).clamp(-per_bank_limit, per_bank_limit),
         );
         demand += axis_demand;
     }
@@ -686,6 +725,55 @@ mod tests {
         assert_eq!(demand, DVec3::new(-50.0, 50.0, 0.0));
         let gentle = momentum_unload_demand(&specs, &states, 2.0, 50.0).unwrap();
         assert_eq!(gentle, DVec3::new(-2.0, 0.5, 0.0));
+    }
+
+    #[test]
+    fn unload_authority_is_split_across_capped_banks() {
+        let mut first = bank("fore", DVec3::splat(100.0));
+        first.momentum_capacity_nms = Some(DVec3::splat(10.0));
+        let mut second = bank("aft", DVec3::splat(100.0));
+        second.momentum_capacity_nms = Some(DVec3::splat(10.0));
+        let specs = [first, second];
+        let states = [
+            ReactionWheelState {
+                stored_momentum_body_nms: DVec3::new(4.0, 0.0, 0.0),
+            },
+            ReactionWheelState {
+                stored_momentum_body_nms: DVec3::new(4.0, 0.0, 0.0),
+            },
+        ];
+        // Each bank wants -200 N·m on X; the 50 N·m total authority splits
+        // 25/25 instead of summing to 100.
+        let demand = momentum_unload_demand(&specs, &states, 0.02, 50.0).unwrap();
+        assert_eq!(demand, DVec3::new(-50.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn over_capacity_momentum_and_wall_torque_fail_closed() {
+        let mut spec = bank("main", DVec3::splat(100.0));
+        spec.momentum_capacity_nms = Some(DVec3::splat(10.0));
+        let specs = [spec];
+        // Over-capacity state (reachable via deserialization) fails closed
+        // instead of emitting uncommanded torque up to |H|/dt.
+        let mut states = [ReactionWheelState {
+            stored_momentum_body_nms: DVec3::new(12.0, 0.0, 0.0),
+        }];
+        assert!(
+            allocate_reaction_wheels_with_momentum(&specs, &[true], &mut states, DVec3::ZERO, 0.02)
+                .is_err()
+        );
+        // At exactly the wall, delivered torque never exceeds the rating.
+        states[0].stored_momentum_body_nms = DVec3::new(10.0, 0.0, 0.0);
+        let pinned = allocate_reaction_wheels_with_momentum(
+            &specs,
+            &[true],
+            &mut states,
+            DVec3::X * 1_000.0,
+            0.02,
+        )
+        .unwrap();
+        assert!(pinned.momentum_saturated);
+        assert!(pinned.delivered_torque_body_nm.x.abs() <= 100.0);
     }
 
     #[test]

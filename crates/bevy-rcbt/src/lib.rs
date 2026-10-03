@@ -729,6 +729,16 @@ use render::CbtRenderPlugin;
 #[cfg(feature = "mesh-shaders")]
 pub use render::mesh_shader_supported;
 
+/// Graceful fallback when the crate is built without `mesh-shaders` (or
+/// without `render`): mesh hardware is reported as unsupported so callers
+/// resolve to the indexed path instead of failing to compile. The client
+/// currently enables `mesh-shaders`, but capability probing must not rely
+/// on that.
+#[cfg(not(feature = "mesh-shaders"))]
+pub fn mesh_shader_supported(_device: &bevy::render::renderer::RenderDevice) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

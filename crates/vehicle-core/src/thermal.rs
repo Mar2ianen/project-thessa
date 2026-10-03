@@ -12,7 +12,7 @@ use glam::{DMat3, DQuat, DVec3};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt};
 
-use crate::{ElectricalPowerTelemetry, SolarFluxSource};
+use crate::{ElectricalPowerSystem, ElectricalPowerTelemetry, SolarFluxSource};
 
 const STEFAN_BOLTZMANN_W_M2_K4: f64 = 5.670_374_419e-8;
 const SPACE_BACKGROUND_TEMP_K: f64 = 2.725;
@@ -441,6 +441,43 @@ impl ThermalHeatSource {
         }
         Ok(())
     }
+}
+
+/// Cross-check heat-source names against installed inventories at vehicle
+/// validation time, so a typo fails at bake instead of erroring every
+/// runtime step. Power-kind routes resolve against bus reactors and fuel
+/// cells; generator-kind routes against shaft-generator mounts (APU/jet);
+/// wheel-kind routes against reaction-wheel banks.
+pub fn validate_heat_source_names(
+    sources: &[ThermalHeatSource],
+    power: &ElectricalPowerSystem,
+    generator_mounts: &[&str],
+    wheel_banks: &[&str],
+) -> Result<(), ThermalError> {
+    for source in sources {
+        let known = match source.kind {
+            ThermalHeatSourceKind::Power => {
+                power.reactors.iter().any(|r| r.name == source.source_name)
+                    || power
+                        .fuel_cells
+                        .iter()
+                        .any(|c| c.name == source.source_name)
+            }
+            ThermalHeatSourceKind::Generator => generator_mounts
+                .iter()
+                .any(|name| *name == source.source_name),
+            ThermalHeatSourceKind::ReactionWheel => {
+                wheel_banks.iter().any(|name| *name == source.source_name)
+            }
+        };
+        if !known {
+            return Err(ThermalError::InvalidSpec(format!(
+                "thermal heat source '{}' matches no installed {:?} inventory",
+                source.source_name, source.kind
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl Default for ThermalSystem {

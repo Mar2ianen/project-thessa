@@ -222,6 +222,9 @@ on this run, with tracking, two overlapping occluders, and storage pooling).
 The bus is a powered-load allocation model, not a complete electrical network.
 Voltage/current dynamics, converters, short circuits,
 solar thermal behavior, own-vehicle
-self-shadowing, three-axis gimbals, automatic load extraction from nonpropulsive
-actuators past reaction wheels, and power exchange across docked assemblies
-remain future work.
+self-shadowing, three-axis gimbals, and automatic load extraction from nonpropulsive
+actuators past reaction wheels
+remain future work. Docked power exchange ships as `DockedBusTie`: transfers
+resolve from measured spill against unserved load, book into the importer as
+auxiliary input, and fleet aggregation must use `exporter_net_spill_w` for
+the exporter so the moved joule never counts on both vessels.

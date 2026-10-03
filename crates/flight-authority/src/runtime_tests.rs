@@ -2093,18 +2093,33 @@ fn sustained_demand_fills_wheel_momentum_then_yields_to_rcs() {
         .map(|momentum| momentum.x)
         .sum();
     assert!((stored - 2.0).abs() < 1.0e-9, "stored momentum: {stored}");
-    // Reservoir full: wheels go quiet, residual is unserved without RCS.
-    let quiet = flight
+    // Reservoir full: the second pass re-serves with the drain bias, so
+    // wheels output against the wall (-40 N·m: 60 requested minus the
+    // 100 N·m capped unload) instead of going quiet, stored momentum
+    // drains, and RCS (disabled here) leaves the residual unserved.
+    let draining = flight
         .allocate_reaction_wheel_residual(DVec3::X * 60.0, DVec3::ZERO)
         .expect("saturated allocation");
-    assert!(quiet.x.abs() < 1.0e-9, "saturated wheels: {quiet:?}");
+    assert!(
+        (draining.x + 40.0).abs() < 1.0e-9,
+        "draining wheels: {draining:?}"
+    );
     assert!(flight.actuator_saturated);
-    // Rotor inertia 0.5 with 2.0 stored: 4 rad/s on X, rest parked.
+    let stored: f64 = flight
+        .reaction_wheel_momentum_telemetry()
+        .iter()
+        .map(|momentum| momentum.x)
+        .sum();
+    assert!(
+        (stored - (2.0 - 40.0 / 120.0)).abs() < 1.0e-9,
+        "drained: {stored}"
+    );
+    // Rotor inertia 0.5 with drained momentum: speed follows H/I.
     let speeds = flight.reaction_wheel_rotor_speed_telemetry();
     assert_eq!(speeds.len(), 1);
     let speed = speeds[0].expect("rotor inertia is authored");
     assert!(
-        (speed - DVec3::new(4.0, 0.0, 0.0)).length() < 1.0e-9,
+        (speed - DVec3::new((2.0 - 40.0 / 120.0) / 0.5, 0.0, 0.0)).length() < 1.0e-9,
         "rotor speeds: {speeds:?}"
     );
 }

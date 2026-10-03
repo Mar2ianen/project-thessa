@@ -167,9 +167,19 @@ fn main() {
     };
     {
         // `WgpuSettings` travels inside `RenderPlugin::render_creation` in
-        // Bevy Functionality priority negotiates supported optional features.
-        // Do not force mesh features on incapable adapters. Disable them when
-        // policy selects CPU/indexed so plugin registration has no hidden cost.
+        // Bevy. With the default `Functionality` priority Bevy seeds
+        // `required_features` from the adapter's supported set before device
+        // creation, then ORs `settings.features` and removes
+        // `disabled_features`. That negotiation is the pre-creation
+        // capability check for `GpuAuto`: mesh stays available when the
+        // adapter supports it and silently drops otherwise (resolve falls
+        // back to indexed in `thessa-graphics`). Explicit `GpuMesh` instead
+        // forces the feature so an incapable adapter fails fast at device
+        // creation rather than silently rendering indexed. CPU/indexed
+        // disables mesh features so plugin registration has no hidden cost.
+        // This must match `mesh_shader_supported` in bevy-rcbt/render.rs,
+        // which requires the created device to already contain
+        // `EXPERIMENTAL_MESH_SHADER` plus sufficient mesh limits.
         default_plugins = default_plugins.set(RenderPlugin {
             render_creation: RenderCreation::Automatic(Box::new(terrain_wgpu_settings(
                 requested_backends,
@@ -257,16 +267,24 @@ fn terrain_wgpu_settings(
     if rt_active {
         settings.features |= SolariPlugins::required_wgpu_features();
     }
-    if !matches!(
-        terrain,
-        thessa_graphics::TerrainRenderRequest::GpuAuto
-            | thessa_graphics::TerrainRenderRequest::GpuMesh
-    ) {
-        settings.disabled_features = Some(
-            WgpuFeatures::EXPERIMENTAL_MESH_SHADER
-                | WgpuFeatures::EXPERIMENTAL_MESH_SHADER_MULTIVIEW
-                | WgpuFeatures::EXPERIMENTAL_MESH_SHADER_POINTS,
-        );
+    match terrain {
+        thessa_graphics::TerrainRenderRequest::Cpu
+        | thessa_graphics::TerrainRenderRequest::GpuIndexed => {
+            settings.disabled_features = Some(
+                WgpuFeatures::EXPERIMENTAL_MESH_SHADER
+                    | WgpuFeatures::EXPERIMENTAL_MESH_SHADER_MULTIVIEW
+                    | WgpuFeatures::EXPERIMENTAL_MESH_SHADER_POINTS,
+            );
+        }
+        // Explicit mesh: fail fast at device creation on incapable adapters.
+        thessa_graphics::TerrainRenderRequest::GpuMesh => {
+            settings.features |= WgpuFeatures::EXPERIMENTAL_MESH_SHADER;
+        }
+        // Auto: neither force nor disable. Bevy `Functionality` priority
+        // enables the mesh feature pre-creation iff the adapter supports it;
+        // post-init `resolve_terrain_capabilities` then resolves GpuMesh vs
+        // GpuIndexed honestly from the created device.
+        thessa_graphics::TerrainRenderRequest::GpuAuto => {}
     }
     settings
 }
@@ -1159,8 +1177,17 @@ mod tests {
     fn development_assets_resolve_without_cargo_runtime_environment() {
         let path = std::path::PathBuf::from(client_asset_directory());
         assert!(path.is_absolute());
-        assert!(path.join("worlds/thessa-v10/manifest.json").is_file());
-        assert!(path.join("worlds/thessa-v10/albedo.png").is_file());
+        // Packaged layout must contain every canonical map consumed by the
+        // globe material, the terrain tiles and the backdrop sphere: a
+        // missing file leaves a pending handle and silently skips GPU draws.
+        for rel in [
+            "worlds/thessa-v10/manifest.json",
+            "worlds/thessa-v10/albedo.png",
+            "worlds/thessa-v10/normal.png",
+            "worlds/thessa-v10/roughness.png",
+        ] {
+            assert!(path.join(rel).is_file(), "packaged asset missing: {rel}");
+        }
     }
 
     #[test]
@@ -1177,11 +1204,18 @@ mod tests {
                 settings.backends.is_some(),
                 "auto must not disable RenderApp"
             );
-            assert!(
-                !settings
+            // Policy mirrors bevy-rcbt `mesh_shader_supported` (device must
+            // contain EXPERIMENTAL_MESH_SHADER): explicit GpuMesh forces it
+            // (fail fast on incapable adapters); Cpu/Indexed disables mesh
+            // features; Auto neither forces nor disables so Bevy
+            // `Functionality` negotiation enables it pre-creation iff the
+            // adapter supports it.
+            assert_eq!(
+                settings
                     .features
                     .contains(WgpuFeatures::EXPERIMENTAL_MESH_SHADER),
-                "unsupported mesh features must never be forced"
+                matches!(mode, Terrain::GpuMesh),
+                "mesh feature request policy for {mode:?}"
             );
             assert_eq!(
                 settings.disabled_features.is_some(),

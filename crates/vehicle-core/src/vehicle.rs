@@ -21,7 +21,7 @@ use crate::{
     ThermalError, ThermalState, ThermalSystem, ThermalTelemetry, TurbopropCommand, TurbopropMount,
     TurbopropOperatingPoint, VehicleAssembly, VehicleResourceDemand, VehicleResourceFeedPort,
     VehicleResourceState, WheelBodyMassProperties, WheelChassisMassProperties, WheelChassisSpec,
-    WheelChassisState, control_authority,
+    WheelChassisState, control_authority, validate_heat_source_names,
 };
 
 pub type StatefulTurbopropWrench = (
@@ -2333,6 +2333,22 @@ impl VehicleDefinition {
             .validate()
             .map_err(VehicleError::ElectricalPower)?;
         self.thermal.validate().map_err(VehicleError::Thermal)?;
+        validate_heat_source_names(
+            &self.thermal.heat_sources,
+            &self.electrical_power,
+            &self
+                .auxiliary_power_units
+                .iter()
+                .map(|mount| mount.name.as_str())
+                .chain(self.jets.iter().map(|mount| mount.name.as_str()))
+                .collect::<Vec<_>>(),
+            &self
+                .reaction_wheels
+                .iter()
+                .map(|bank| bank.name.as_str())
+                .collect::<Vec<_>>(),
+        )
+        .map_err(VehicleError::Thermal)?;
         let mut resource_consumer_names = std::collections::HashSet::new();
         for name in self
             .engines
@@ -2924,17 +2940,22 @@ impl VehicleDefinition {
         if !wheels_enabled {
             return Vec::new();
         }
+        // A short mask follows the global enable (same convention as the
+        // unload authority): power booking overestimates rather than
+        // silently dropping banks, so the bus never browns out on a ragged
+        // input.
+        let enabled = |index: usize| enabled_banks.get(index).copied().unwrap_or(wheels_enabled);
         let total_rating: glam::DVec3 = self
             .reaction_wheels
             .iter()
             .enumerate()
-            .filter(|(index, _)| enabled_banks.get(*index).copied().unwrap_or(false))
+            .filter(|(index, _)| enabled(*index))
             .map(|(_, bank)| bank.max_torque_body_nm)
             .sum();
         self.reaction_wheels
             .iter()
             .enumerate()
-            .filter(|(index, _)| enabled_banks.get(*index).copied().unwrap_or(false))
+            .filter(|(index, _)| enabled(*index))
             .map(|(_, bank)| {
                 let share = glam::DVec3::new(
                     proportional_share(bank.max_torque_body_nm.x, total_rating.x),

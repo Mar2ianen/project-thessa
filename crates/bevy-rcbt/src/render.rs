@@ -2051,6 +2051,10 @@ fn dispatch_cbt_geometry(
     gpu.generated_surface_generation = gpu.surface_generation;
 }
 
+#[cfg(feature = "mesh-shaders")]
+#[derive(Default)]
+struct MeshFallbackNotice(Option<bool>);
+
 #[allow(clippy::too_many_arguments)]
 fn draw_cbt_geometry(
     presentation: Res<CbtGpuPresentation>,
@@ -2060,6 +2064,7 @@ fn draw_cbt_geometry(
     classifier: Option<ResMut<CbtGpuClassifier>>,
     raster: Option<ResMut<CbtGpuRasterPipeline>>,
     #[cfg(feature = "mesh-shaders")] mesh: Option<ResMut<CbtGpuMeshPipeline>>,
+    #[cfg(feature = "mesh-shaders")] mut fallback_notice: bevy::prelude::Local<MeshFallbackNotice>,
     view: ViewQuery<(
         &ExtractedCamera,
         &ExtractedView,
@@ -2175,6 +2180,25 @@ fn draw_cbt_geometry(
                 && mesh_dispatch_supported(&context.render_device().limits(), gpu.leaf_count())
         })
         .map(|mut mesh| mesh_pipeline(&mut mesh, context.render_device(), format));
+    // Startup resolves `gpu_mesh` from a 1-leaf dispatch check, but the draw
+    // re-checks with the real leaf count: log the effective per-frame
+    // fallback on transition so the startup line never silently disagrees.
+    #[cfg(feature = "mesh-shaders")]
+    {
+        let mesh_active = mesh_pipeline.is_some();
+        if surface.gpu_mesh_enabled() && !mesh_active {
+            if fallback_notice.0 != Some(false) {
+                fallback_notice.0 = Some(false);
+                bevy::log::warn!(
+                    "CBT mesh requested but dispatch limits reject {} leaves; drawing indexed",
+                    gpu.leaf_count()
+                );
+            }
+        } else if mesh_active && fallback_notice.0 != Some(true) {
+            fallback_notice.0 = Some(true);
+            bevy::log::info!("CBT mesh path active ({} leaves)", gpu.leaf_count());
+        }
+    }
     // Do not submit grey fallback-textured CBT patches while the canonical
     // albedo is still loading. Main-world visibility waits for the successful
     // draw acknowledgement below, not merely for the CPU image asset.

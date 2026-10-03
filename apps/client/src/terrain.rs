@@ -200,6 +200,8 @@ fn resolve_terrain_capabilities(
         return;
     };
     let caps = Capabilities {
+        // Always available: without the `mesh-shaders` crate feature this
+        // reports false and terrain resolves to the indexed path.
         terrain_mesh_supported: Some(thessa_bevy_rcbt::mesh_shader_supported(&device)),
         ..Capabilities::unknown()
     };
@@ -215,6 +217,28 @@ fn resolve_terrain_capabilities(
             .into_iter()
             .filter(|note| note.starts_with("terrain mesh capability")),
     );
+}
+
+/// Loud startup check for the canonical terrain maps. The tile raster,
+/// the backdrop sphere and the globe material all consume the same three
+/// `worlds/thessa-v10` images; a missing file leaves a pending asset handle
+/// which silently skips every GPU draw, so missing files must scream here
+/// instead of presenting an empty planet.
+fn check_terrain_map_assets() {
+    let dir = std::path::PathBuf::from(client_asset_directory());
+    for rel in [
+        "worlds/thessa-v10/manifest.json",
+        "worlds/thessa-v10/albedo.png",
+        "worlds/thessa-v10/normal.png",
+        "worlds/thessa-v10/roughness.png",
+    ] {
+        if !dir.join(rel).is_file() {
+            error!(
+                "[terrain] required map missing: {} (GPU terrain falls back to globe/empty; check packaged assets)",
+                dir.join(rel).display()
+            );
+        }
+    }
 }
 
 fn setup_terrain(
@@ -234,12 +258,18 @@ fn setup_terrain(
         settings.0.terrain == thessa_graphics::ResolvedTerrainRender::GpuMesh
     }));
     cbt_surface.set_gpu_raster_enabled(gpu_raster);
+    // Resolved mode at startup. The mesh path re-checks dispatch limits per
+    // frame against the real leaf count (see bevy-rcbt `draw_cbt_geometry`,
+    // which logs when it falls back); a `gpu_mesh` line here means "mesh
+    // attempted, indexed fallback when dispatch limits exceed", never a
+    // promise that every frame draws mesh.
     info!(
         "CBT terrain raster mode: {}",
         graphics
             .as_deref()
             .map_or("cpu", |settings| settings.0.terrain.as_str())
     );
+    check_terrain_map_assets();
     let albedo = load_albedo_image(&assets, "worlds/thessa-v10/albedo.png");
     let normal = load_linear_image(&assets, "worlds/thessa-v10/normal.png");
     commands.insert_resource(CbtRenderMaterial {
@@ -1451,11 +1481,34 @@ fn material_view_selection(base: &[TileKey], view: &FrameView, pixel_angle: f64)
         let distance = ((center - view.eye).length() - key.span_m(view.radius) * 0.75).max(1.0);
         key.span_m(view.radius) / 125.0 / (distance * pixel_angle).max(0.001)
     };
+    // Cheap broad-phase before the expensive scoring: skip splitting tiles
+    // outside the selection frustum (or clearly behind the camera). Scoring
+    // for surviving tiles is unchanged; culled tiles simply stay coarse and
+    // fall back to resident ancestors or the globe map.
+    let split_candidate = |key: &TileKey| {
+        if key.level >= 17 {
+            return false;
+        }
+        let Some(frustum) = &view.frustum else {
+            return true;
+        };
+        let center = DVec3::from_array(key.direction(0.5, 0.5)) * view.radius;
+        let delta = center - view.eye;
+        let dist = delta.length();
+        if dist <= 0.0 {
+            return true;
+        }
+        let cos = (delta / dist).dot(DVec3::from_array(frustum.forward));
+        // Tile angular radius margin: a tile straddling the frustum edge
+        // still refines instead of popping at the screen border.
+        let margin = (key.span_m(view.radius) / dist).clamp(0.0, 0.5);
+        cos >= frustum.cos_limit - margin
+    };
     while cover.len() + 3 <= 512 {
         let candidate = cover
             .iter()
             .copied()
-            .filter(|key| key.level < 17)
+            .filter(split_candidate)
             .max_by(|a, b| error(*a).total_cmp(&error(*b)));
         let Some(key) = candidate.filter(|key| error(*key) > 1.0) else {
             break;
@@ -1528,6 +1581,13 @@ fn run_material_streaming(
         let Some(page) = maybe_page else {
             continue;
         };
+        // Drop pages whose height tile was evicted while the material baked:
+        // publishing them would retain material residency for geometry that
+        // can no longer draw, growing the directory without user-visible
+        // benefit.
+        if !world.cache.contains_key(&key) {
+            continue;
+        }
         if let Some(node) = lod::cbt_node_for_tile(key) {
             ready_material_pages.push((node.id(), page));
         }
@@ -1801,15 +1861,29 @@ fn evict_stale_tiles(
     }
 }
 
-/// Exact-page deficits in the bounded, effective material streaming demand.
-fn missing_material_demand(pages: &thessa_bevy_rcbt::CbtRenderMaterialPages) -> u32 {
-    // The refined view candidates are merged with the live geometry cover and
-    // capped before scheduling. Count that effective demand, not candidates
-    // deliberately excluded from the bounded streaming queue.
-    pages
-        .priority()
+/// User-visible material holes: visible-cover tiles with no resident
+/// material page at any level (exact or ancestor), so their fragments fall
+/// back to the globe map. This deliberately ignores the 512-entry bounded
+/// streaming queue: under pressure the queue truncates demand and a
+/// priority∩¬resident count reads low while the screen still shows globe
+/// fallback. No autobench gate consumes this counter (verified: only
+/// telemetry plumbed through `WorldCounters`); it is a holes gauge, not a
+/// queue-saturation gauge.
+fn missing_material_holes(
+    visible: &BTreeSet<TileKey>,
+    pages: &thessa_bevy_rcbt::CbtRenderMaterialPages,
+) -> u32 {
+    visible
         .iter()
-        .filter(|id| !pages.contains_page(**id))
+        .filter(|key| {
+            let Some(node) = lod::cbt_node_for_tile(**key) else {
+                return false;
+            };
+            thessa_bevy_rcbt::material_cache::resolve_material_ancestor(node.id(), |id| {
+                pages.contains_page(id)
+            })
+            .is_none()
+        })
         .count() as u32
 }
 
@@ -1827,7 +1901,8 @@ fn record_terrain_counters(
     world.counters.terrain_cache_entries = world.cache.len() as u32;
     world.counters.terrain_material_jobs = world.material_jobs.len() as u32;
     world.counters.terrain_selection_changes = world.selection_epoch;
-    world.counters.terrain_material_missing = missing_material_demand(material_pages);
+    world.counters.terrain_material_missing =
+        missing_material_holes(&world.visible, material_pages);
     world.counters.assets_loaded = world.cache.len() as u32 * 5;
     world.counters.assets_pending = world.jobs.len() as u32 * 5;
     world.counters.terrain_patches_visible = world.visible.len() as u32;
@@ -2055,6 +2130,20 @@ fn update_terrain(
                 .map_or(720.0, |window| f64::from(window.physical_height()));
             2.0 * f64::from(projection.fov * 0.5).tan() / height.max(1.0)
         }
+        // Map/ortho views have no angular pixel: derive the equivalent from
+        // the orthographic frustum height so they refine instead of sitting
+        // on permanent coarse pages. `world_per_pixel / eye_dist` keeps the
+        // `distance * pixel_angle` footprint math in `material_view_selection`
+        // correct for nadir tiles; limb tiles only over-refine slightly.
+        Projection::Orthographic(projection) => {
+            let height = windows
+                .iter()
+                .next()
+                .map_or(720.0, |window| f64::from(window.physical_height()));
+            let frustum_h = (projection.area.max.y - projection.area.min.y) as f64;
+            let world_per_pixel = frustum_h / height.max(1.0);
+            (world_per_pixel / view.eye.length().max(1.0)).clamp(1e-6, 1.0)
+        }
         _ => 1.0,
     };
     run_material_streaming(
@@ -2271,25 +2360,63 @@ mod streaming_tests {
     use thessa_rcbt_core::{FrameBudget, plan_frame};
 
     #[test]
-    fn material_missing_counts_effective_streaming_priority_only() {
+    fn material_missing_counts_visible_holes_not_queue_saturation() {
+        use thessa_worldgen_rocky::lod::TileKey;
+        // Two visible tiles: one with an exact resident page, one with only
+        // a resident ancestor (covered, not a hole), plus one with nothing.
+        let visible = BTreeSet::from([
+            TileKey {
+                face: 0,
+                level: 2,
+                x: 0,
+                y: 0,
+            },
+            TileKey {
+                face: 0,
+                level: 2,
+                x: 1,
+                y: 0,
+            },
+            TileKey {
+                face: 1,
+                level: 1,
+                x: 0,
+                y: 0,
+            },
+        ]);
         let mut pages = thessa_bevy_rcbt::CbtRenderMaterialPages::default();
-        assert_eq!(missing_material_demand(&pages), 0);
-        pages.set_priority(vec![8, 9]);
-        assert_eq!(missing_material_demand(&pages), 2);
+        assert_eq!(missing_material_holes(&visible, &pages), 3);
+        // Exact page for the first tile.
         let page = thessa_bevy_rcbt::CbtMaterialPage::from_decoded_mips(vec![vec![
             128;
             (lod::GPU_MATERIAL_PAGE_SIZE.pow(2) * 4)
                 as usize
         ]])
         .unwrap();
-        pages.set_pages([(8, page.clone()), (12, page)]);
-        assert_eq!(missing_material_demand(&pages), 1);
-        pages.set_priority(vec![8]);
-        assert_eq!(missing_material_demand(&pages), 0);
-        assert!(
-            !pages.contains_page(9),
-            "excluded candidates are not pending work"
-        );
+        let first = lod::cbt_node_for_tile(TileKey {
+            face: 0,
+            level: 2,
+            x: 0,
+            y: 0,
+        })
+        .unwrap();
+        pages.set_pages([(first.id(), page.clone())]);
+        assert_eq!(missing_material_holes(&visible, &pages), 2);
+        // Resident ancestor covers the second tile without an exact page:
+        // not a user-visible hole (globe fallback is not used).
+        let parent = lod::cbt_node_for_tile(TileKey {
+            face: 0,
+            level: 1,
+            x: 0,
+            y: 0,
+        })
+        .unwrap();
+        pages.set_pages([(parent.id(), page)]);
+        assert_eq!(missing_material_holes(&visible, &pages), 1);
+        // Queue truncation must not move the holes gauge: priority may hold
+        // hundreds of pending ids while the visible cover is unaffected.
+        pages.set_priority(vec![8, 9]);
+        assert_eq!(missing_material_holes(&visible, &pages), 1);
     }
 
     #[test]

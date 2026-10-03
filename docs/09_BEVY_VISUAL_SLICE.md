@@ -25,7 +25,11 @@ path already consumes snapshots from an embedded authoritative server process.
   performance overlay, and flight tracing;
 - streamed rocky terrain tiles with parent retention during refinement;
   `renderer.terrain = "gpu_auto"` prefers supported mesh shaders, otherwise
-  indexed GPU draw. `gpu_indexed` and `cpu` remain explicit alternatives;
+  indexed GPU draw. Explicit `gpu_mesh` requests the mesh-shader feature and
+  fails fast on incapable adapters; `gpu_auto` negotiates via Bevy
+  functionality and falls back per frame (logged on transition), so the
+  startup `gpu_mesh` log means "attempted", not "active". `gpu_indexed`
+  and `cpu` remain explicit alternatives;
   both GPU consumers share classified triangles, skirts and material pages;
 - raster water reflection baseline and optional graphics-setting resolution;
 - baked beauty shells (cloud decks, gas-giant bands, aurora) and field-first

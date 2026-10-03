@@ -2367,6 +2367,7 @@ pub struct UltracapacitorPowerTelemetry {
     /// Bus-side delivered power; stored energy falls by `P * dt / efficiency`.
     pub discharge_power_w: f64,
     /// Energy lost to self-discharge this step (J, after bus integration).
+    #[serde(default)]
     pub self_discharge_loss_j: f64,
 }
 
@@ -2482,6 +2483,30 @@ impl DockedBusTie {
         command.auxiliary_generation_power_w =
             (command.auxiliary_generation_power_w + transfer_w).max(0.0);
         Ok(())
+    }
+
+    /// Exporter-side spill after a booked transfer. Telemetry keeps
+    /// reporting raw spill (it is measured output, not a command input),
+    /// so fleet-level aggregation MUST use this net value for the exporter
+    /// once a transfer is booked — otherwise the same joule counts on both
+    /// vessels. Pure and total: never negative, never above raw spill.
+    pub fn exporter_net_spill_w(
+        &self,
+        exporter_spillable_w: f64,
+        booked_transfer_w: f64,
+    ) -> Result<f64, ElectricalPowerError> {
+        self.validate()?;
+        for (value, label) in [
+            (exporter_spillable_w, "exporter spill"),
+            (booked_transfer_w, "booked transfer"),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(ElectricalPowerError::InvalidCommand(format!(
+                    "docked bus {label} must be finite and non-negative"
+                )));
+            }
+        }
+        Ok((exporter_spillable_w - booked_transfer_w).clamp(0.0, exporter_spillable_w))
     }
 }
 
@@ -3728,5 +3753,15 @@ mod tests {
         );
         // A dry exporter offers nothing even to a starving importer.
         assert_eq!(tie.transfer_w(0.0, 1_000.0).unwrap(), 0.0);
+        // Fleet aggregation must book the exporter net of the transfer:
+        // raw spill would double-count the moved joule on both vessels.
+        assert_eq!(
+            tie.exporter_net_spill_w(export_report.spillable_power_w(), transfer)
+                .unwrap(),
+            150.0
+        );
+        assert_eq!(tie.exporter_net_spill_w(100.0, 250.0).unwrap(), 0.0);
+        assert!(tie.exporter_net_spill_w(f64::NAN, 10.0).is_err());
+        assert!(tie.exporter_net_spill_w(10.0, -1.0).is_err());
     }
 }

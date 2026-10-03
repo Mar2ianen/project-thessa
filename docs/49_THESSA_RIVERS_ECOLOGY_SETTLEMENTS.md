@@ -18,7 +18,11 @@ acceptance of the planet or renderer.
   slopes or millimetre-quantized heap ordering. Connected submerged land cells
   at the same spill level form a `LakeBasin`; longitude is periodic. Basins
   with maximum depth greater than 60 m include their shallow margins. Area and
-  capacity use spherical SI cell areas. Basin-mean aridity selects fresh-water
+  capacity use spherical SI cell areas. The grouping contract is load-bearing
+  for baked artifacts: exact float-level flood equality plus the 60 m
+  reporting threshold, pinned by regression test. `RunoffErosion` rejects
+  `iterations == 0` and non-positive `years_per_iteration`; zero-displacement
+  fixtures use `iterations: 1` with `erodibility: 0.0`. Basin-mean aridity selects fresh-water
   suitability versus salt-flat suitability, not a water balance simulation.
 - `PlanetField::lake_basins()` and `world_layers.json` expose these regional
   descriptors. Capacity is a geometric capacity at spill level, not an actual

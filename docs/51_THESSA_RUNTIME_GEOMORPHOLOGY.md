@@ -50,12 +50,14 @@ used as current close-range material pages.
   Fixed-scale classification is preserved; filtered colours at different page
   levels are intentionally allowed to differ. Fully resolved shared samples
   and same-resolution page borders remain regression-tested.
-- `terrain_material_missing` counts exact-page deficits in the effective
-  material priority after merging view candidates with the live cover and
-  applying the 512-page demand cap. It does not count excluded candidates or
-  geometry leaves whose colour footprint can be different. Zero describes CPU
-  page availability for scheduled demand, not proof of fully uploaded GPU slots
-  or a satisfied visual error target.
+- `terrain_material_missing` counts user-visible holes: visible-cover tiles
+  with no resident page at any level (ancestor walk), independent of the
+  512-page demand-queue truncation. Under streaming pressure it stays up
+  while the queue truncates. No autobench gate consumes it; any future gate
+  must key on holes, not priority backlog. It does not count excluded
+  candidates or geometry leaves whose colour footprint can be different.
+  Zero describes CPU page availability for scheduled demand, not proof of
+  fully uploaded GPU slots or a satisfied visual error target.
 
 ## Geometry-correlated material contract
 

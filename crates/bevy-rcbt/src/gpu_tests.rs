@@ -804,7 +804,18 @@ fn check() { result[0] = cbt_render_position(frames[0], vec3(12.25, -2.125, 33.0
 }
 
 /// Execute the actual mesh entry body as compute, replacing only its stage IO.
-/// This tests all lanes/outputs even on adapters without native mesh shaders.
+///
+/// The shim keeps every production binding number (0..16) and the 256-wide
+/// fan-out `(group.y * 256u + group.x) * 32u` verbatim, so a production
+/// binding renumber or fan-out change breaks this test instead of being
+/// masked by a rewritten shader. Only mesh/vertex stage attributes (invalid
+/// in compute), the `enable wgpu_mesh_shader` directive (needs native mesh
+/// support), the `@mesh` entry attribute and the workgroup-only output
+/// variable are adapted: per-workgroup outputs move to a NEW storage array
+/// at binding 17, indexed by the same fan-out id. Unused fragment bindings
+/// (textures, lighting, directory) keep their production numbers with dummy
+/// contents; the mesh path never samples them. This tests all lanes/outputs
+/// even on adapters without native mesh shaders.
 #[cfg(feature = "mesh-shaders")]
 #[test]
 #[ignore = "requires a wgpu adapter; run with --include-ignored"]
@@ -815,8 +826,11 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
         CBT_RASTER_WGSL.split("@fragment").next().unwrap(),
         include_str!("mesh.wgsl")
     );
-    shader = shader.replace(include_str!("material_sample.wgsl"), "");
+    // Compute adapters reject the mesh enable directive; the `build_mesh`
+    // body under test does not depend on it.
     shader = shader.replace("enable wgpu_mesh_shader;", "");
+    // Strip mesh/vertex-only attributes, which are invalid in a compute
+    // entry. Stage IO only: member order and binding numbers are unchanged.
     for attribute in [
         "@builtin(position)",
         "@location(0)",
@@ -838,29 +852,28 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
         .replace("@mesh(mesh_output)", "@compute")
         .replace(
             "var<workgroup> mesh_output: MeshOutput;",
-            "@group(0) @binding(16) var<storage, read_write> mesh_output: MeshOutput;",
+            "@group(0) @binding(17) var<storage, read_write> mesh_outputs: array<MeshOutput>;",
         )
         .replace("@vertex\nfn vertex(\n    @builtin(vertex_index) vertex_index: u32,\n) -> VertexOutput {\n    return cbt_vertex(vertex_index);\n}", "")
-        .replace(
-            "let first = (group.y * 256u + group.x) * 32u;",
-            "let first = params._padding * 32u;",
-        );
-    // Remove unused fragment bindings, then densely remap the buffer layout.
-    shader = shader
-        .lines()
-        .filter(|line| {
-            ![6, 7, 9, 10, 12, 13]
-                .iter()
-                .any(|binding| line.contains(&format!("@group(0) @binding({binding})")))
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    for (binding, dense) in [(8, 6), (11, 7), (14, 8), (15, 9), (16, 10)] {
-        shader = shader.replace(
-            &format!("@binding({binding})"),
-            &format!("@binding({dense})"),
+        // Fan-out kept verbatim; per-workgroup outputs are indexed by the
+        // same meshlet id (`first / 32u`) instead of workgroup memory.
+        .replace("mesh_output.", "mesh_outputs[first / 32u].");
+    // Pin the production contract: every buffer/texture binding and the
+    // fan-out must survive the shim, so a production renumber fails here.
+    for binding in 0..=16 {
+        assert!(
+            shader.contains(&format!("@binding({binding})")),
+            "production binding {binding} must survive the compute shim"
         );
     }
+    assert!(
+        shader.contains("(group.y * 256u + group.x) * 32u"),
+        "production mesh fan-out must survive the compute shim"
+    );
+    assert!(
+        shader.contains("material_directory"),
+        "production material bindings must survive the compute shim"
+    );
     let radius = 6_371_000.0f32;
     let anchor = crate::precision::TileAnchor::new(
         crate::precision::TileKey::new(4, 17, 65537, 65539).unwrap(),
@@ -913,32 +926,241 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
     let slots = gpu.buffer(&[11, 1.0f32.to_bits(), 0, 0], false);
     let draw = gpu.buffer(&[512 * 3, 1, 0, 0, 16, 1, 1, 0], false);
     let metadata = gpu.buffer(&[120.0f32.to_bits(), 1.0f32.to_bits(), 2, 0], false);
+    // `_padding` is unused padding in production; the meshlet id comes only
+    // from the workgroup id via the production fan-out above.
+    let params = gpu.buffer(&[1, 1089, radius.to_bits(), 0], true);
+    // Dummy contents for fragment-only production bindings the mesh path
+    // never samples. Binding numbers stay production-exact.
+    let lighting = gpu.buffer(&[0; 40], true);
+    let directory = gpu.buffer(&[0; 4], false);
+    let dummy_texture = |array_layers: u32| {
+        gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("mesh-test-dummy"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: array_layers,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+    };
+    let albedo_texture = dummy_texture(1);
+    let albedo_view = albedo_texture.create_view(&Default::default());
+    let roughness_texture = dummy_texture(1);
+    let roughness_view = roughness_texture.create_view(&Default::default());
+    let material_texture = dummy_texture(1);
+    let material_view = material_texture.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
+    let sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    });
+    // Explicit layout at production binding numbers (0..16 buffers/textures
+    // plus the shim output at 17). Compute visibility: the test entry is
+    // compute even though production raster uses vertex/fragment stages.
+    let storage = |binding: u32, read_only: bool| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    };
+    let uniform = |binding: u32| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    };
+    let texture =
+        |binding: u32, dimension: wgpu::TextureViewDimension| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: dimension,
+                multisampled: false,
+            },
+            count: None,
+        };
+    let sampler_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    };
+    let bind_layout = gpu
+        .device
+        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("mesh-production-bindings"),
+            entries: &[
+                uniform(0),
+                uniform(1),
+                storage(2, true),
+                storage(3, true),
+                uniform(4),
+                storage(5, true),
+                texture(6, wgpu::TextureViewDimension::D2),
+                sampler_entry(7),
+                storage(8, true),
+                uniform(9),
+                texture(10, wgpu::TextureViewDimension::D2),
+                storage(11, true),
+                texture(12, wgpu::TextureViewDimension::D2Array),
+                sampler_entry(13),
+                storage(14, true),
+                storage(15, true),
+                storage(16, true),
+                storage(17, false),
+            ],
+        });
+    let module = gpu
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("cbt-production-mesh-shim"),
+            source: wgpu::ShaderSource::Wgsl(shader.into()),
+        });
+    let pipeline_layout = gpu
+        .device
+        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&bind_layout)],
+            immediate_size: 0,
+        });
+    let pipeline = gpu
+        .device
+        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("build_mesh"),
+            layout: Some(&pipeline_layout),
+            module: &module,
+            entry_point: Some("build_mesh"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
     // vec3 members align to 16 bytes: header16, shared vertex80, primitive16.
     let sentinel = 0x7fc00001;
     let words = 4 + 96 * 20 + 32 * 4;
-    for meshlet in 0..16 {
-        let output = gpu.buffer(&vec![sentinel; words], false);
-        let params = gpu.buffer(&[1, 1089, radius.to_bits(), meshlet], true);
-        gpu.dispatch(
-            &shader,
-            &[("build_mesh", 1)],
-            &[
-                &view, &matrix, &vertices, &metadata, &params, &triangles, &leaves, &frames,
-                &slots, &draw, &output,
+    // One dispatch per draw case with the production fan-out workgroup
+    // count (16 meshlets for 512 triangles, 17 with the tail). Each
+    // workgroup writes its own `mesh_outputs[meshlet]` slice.
+    let run_meshlets = |triangles: &wgpu::Buffer, draw: &wgpu::Buffer, meshlets: u32| -> Vec<u32> {
+        let output = gpu.buffer(&vec![sentinel; meshlets as usize * words], false);
+        let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &bind_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: view.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: matrix.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: vertices.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: metadata.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: triangles.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&albedo_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: leaves.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: lighting.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(&roughness_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: frames.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: wgpu::BindingResource::TextureView(&material_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: slots.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: draw.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 16,
+                    resource: directory.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 17,
+                    resource: output.as_entire_binding(),
+                },
             ],
-            &[0, 1, 4],
-            &[10],
-        );
-        let result = gpu.read(&output);
-        assert_eq!(&result[..2], &[96, 32]);
+        });
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(meshlets, 1, 1);
+        }
+        gpu.queue.submit([encoder.finish()]);
+        gpu.read(&output)
+    };
+    let check_meshlet = |all: &[u32], meshlet: usize, triangles: usize| {
+        let result = &all[meshlet * words..(meshlet + 1) * words];
+        assert_eq!(&result[..2], &[96, 32], "meshlet {meshlet} header");
         for i in 0..96 {
             let vertex: Vec<_> = result[4 + i * 20..4 + i * 20 + 7]
                 .iter()
                 .copied()
                 .map(f32::from_bits)
                 .collect();
-            assert!(vertex.iter().all(|v| v.is_finite()), "unwritten vertex {i}");
-            let local = triangle_words[(meshlet as usize * 32 + i / 3) * 4 + 1 + i % 3];
+            assert!(
+                vertex.iter().all(|v| v.is_finite()),
+                "unwritten meshlet {meshlet} vertex {i}"
+            );
+            let local = triangle_words[(meshlet * 32 + i / 3) * 4 + 1 + i % 3];
             let uv = [(local % 33) as f64 / 32., (local / 33) as f64 / 32.];
             let expected = anchor.project_body_m(uv, 120.0);
             for axis in 0..3 {
@@ -955,46 +1177,28 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
             let tri = &result[4 + 96 * 20 + i * 4..4 + 96 * 20 + i * 4 + 3];
             assert_eq!(tri, [i as u32 * 3, i as u32 * 3 + 1, i as u32 * 3 + 2]);
         }
+        let _ = triangles;
+    };
+    let full = run_meshlets(&triangles, &draw, 16);
+    for meshlet in 0..16 {
+        check_meshlet(&full, meshlet, 512);
     }
     // An empty classified stream must emit zero counts, not stale geometry.
     let absent = gpu.buffer(&[0; 8], false);
-    let output = gpu.buffer(&vec![sentinel; words], false);
-    let params = gpu.buffer(&[1, 1089, radius.to_bits(), 0], true);
-    gpu.dispatch(
-        &shader,
-        &[("build_mesh", 1)],
-        &[
-            &view, &matrix, &vertices, &metadata, &params, &triangles, &leaves, &frames, &slots,
-            &absent, &output,
-        ],
-        &[0, 1, 4],
-        &[10],
-    );
-    assert_eq!(&gpu.read(&output)[..2], &[0, 0]);
+    let empty = run_meshlets(&triangles, &absent, 1);
+    assert_eq!(&empty[..2], &[0, 0]);
 
     // A partial final meshlet must never emit its uninitialized tail.
     let tail_draw = gpu.buffer(&[513 * 3, 1, 0, 0, 17, 1, 1, 0], false);
-    let tail_params = gpu.buffer(&[1, 1089, radius.to_bits(), 16], true);
-    gpu.dispatch(
-        &shader,
-        &[("build_mesh", 1)],
-        &[
-            &view,
-            &matrix,
-            &vertices,
-            &metadata,
-            &tail_params,
-            &triangles,
-            &leaves,
-            &frames,
-            &slots,
-            &tail_draw,
-            &output,
-        ],
-        &[0, 1, 4],
-        &[10],
-    );
-    let result = gpu.read(&output);
+    let tailed = run_meshlets(&triangles, &tail_draw, 17);
+    for meshlet in 0..16 {
+        assert_eq!(
+            &tailed[meshlet * words..meshlet * words + 2],
+            &[96, 32],
+            "full meshlet {meshlet} beside the tail"
+        );
+    }
+    let result = &tailed[16 * words..17 * words];
     assert_eq!(&result[..2], &[3, 1]);
     assert_eq!(&result[4 + 96 * 20..4 + 96 * 20 + 3], &[0, 1, 2]);
     assert_eq!(
@@ -1007,26 +1211,8 @@ fn gpu_mesh_emission_initializes_every_vertex_and_primitive() {
     let mut skirt_words = triangle_words.clone();
     skirt_words[512 * 4 + 2] |= 0x80000000;
     let skirt_triangles = gpu.buffer(&skirt_words, false);
-    gpu.dispatch(
-        &shader,
-        &[("build_mesh", 1)],
-        &[
-            &view,
-            &matrix,
-            &vertices,
-            &metadata,
-            &tail_params,
-            &skirt_triangles,
-            &leaves,
-            &frames,
-            &slots,
-            &tail_draw,
-            &output,
-        ],
-        &[0, 1, 4],
-        &[10],
-    );
-    let skirt = gpu.read(&output);
+    let skirted = run_meshlets(&skirt_triangles, &tail_draw, 17);
+    let skirt = &skirted[16 * words..17 * words];
     assert_eq!(f32::from_bits(skirt[4 + 20 + 15]), 1e9);
     let distance = (0..3)
         .map(|axis| {

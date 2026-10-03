@@ -1307,7 +1307,8 @@ mod tests {
             spacing_m: 256.0,
             cells: 16,
             runoff: crate::erosion::RunoffErosion {
-                iterations: 0,
+                iterations: 1,
+                erodibility: 0.0,
                 ..Default::default()
             },
         };

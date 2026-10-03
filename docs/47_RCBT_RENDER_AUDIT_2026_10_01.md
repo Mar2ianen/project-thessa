@@ -125,9 +125,10 @@ world-addressed repair and later globe-footprint/face-derivative changes do NOT
 yet satisfy visual acceptance. Native draw succeeds without GPU validation
 errors; that does not imply acceptable image quality.
 
-`terrain_material_missing` counts visible geometry leaves without an EXACT CPU
-material page. It does not measure missing fragment sources, GPU directory
-residency, ancestor coverage or independently refined material-demand backlog.
+`terrain_material_missing` counts user-visible holes: visible geometry leaves
+with no resident page at any level (ancestor walk), independent of demand-
+queue truncation. It does not measure missing fragment sources, GPU directory
+residency, or independently refined material-demand backlog.
 In particular, `missing > 0` with `jobs = 0` is not sufficient evidence of a
 wedged scheduler. Long-running four-job occupancy is observed, but page-build
 latency and time to usable detail have not been isolated yet.

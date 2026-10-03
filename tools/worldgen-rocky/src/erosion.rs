@@ -36,9 +36,18 @@ impl Default for RunoffErosion {
 
 impl RunoffErosion {
     pub fn validate(self) -> Result<(), String> {
-        if self.iterations > 256
+        // iterations == 0 and years_per_iteration <= 0 silently produce
+        // zero erosion (a no-op loop / zero take); reject them so recipes
+        // state their intent. NOTE: tools/worldgen-rocky/src/offline.rs
+        // `regional_coordinates_and_sampling_cross_dateline_without_wrap_shortcuts`
+        // currently uses `iterations: 0` and must move to an explicit
+        // positive count (e.g. `iterations: 1` with `erodibility: 0.0` for a
+        // no-erosion coordinate check) — that file is owned concurrently.
+        if self.iterations == 0
+            || self.iterations > 256
             || !self.years_per_iteration.is_finite()
-            || !(0.0..=100_000.0).contains(&self.years_per_iteration)
+            || self.years_per_iteration <= 0.0
+            || self.years_per_iteration > 100_000.0
             || !self.erodibility.is_finite()
             || !(0.0..=0.01).contains(&self.erodibility)
             || !self.sediment_transport_m.is_finite()
@@ -317,6 +326,35 @@ fn droplet(grid: &mut HeightGrid, mut r: usize, mut c: usize, max_steps: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runoff_recipe_rejects_non_positive_time_and_zero_iterations() {
+        assert!(RunoffErosion::default().validate().is_ok());
+        for recipe in [
+            RunoffErosion {
+                iterations: 0,
+                ..Default::default()
+            },
+            RunoffErosion {
+                years_per_iteration: 0.0,
+                ..Default::default()
+            },
+            RunoffErosion {
+                years_per_iteration: -1.0,
+                ..Default::default()
+            },
+            RunoffErosion {
+                years_per_iteration: f64::NAN,
+                ..Default::default()
+            },
+            RunoffErosion {
+                years_per_iteration: f64::INFINITY,
+                ..Default::default()
+            },
+        ] {
+            assert!(recipe.validate().is_err(), "must reject {recipe:?}");
+        }
+    }
 
     #[test]
     fn regional_runoff_preserves_edges_and_accounts_for_exported_volume() {

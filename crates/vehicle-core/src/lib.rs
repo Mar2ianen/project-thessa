@@ -98,6 +98,7 @@ pub use thermal::{
     ThermalCommand, ThermalError, ThermalFlowCondition, ThermalHeatSource, ThermalHeatSourceKind,
     ThermalLinkSpec, ThermalMassProperties, ThermalNodeSpec, ThermalNodeTelemetry, ThermalState,
     ThermalSystem, ThermalTelemetry, default_convective_k, generator_waste_heat_w,
+    validate_heat_source_names,
 };
 pub use vehicle::{
     ControlChannels, ControlHinge, ControlKind, ControlMixing, ControlSurfaceActuator,

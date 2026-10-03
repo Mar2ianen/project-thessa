@@ -40,13 +40,18 @@ generator routes.
 
 ## 1.2 Momentum saturation and desaturation
 
-When a momentum-saturated bank cannot take more load, the runtime adds an
-unload demand to the RCS request: body torque opposing the stored momentum,
-sized to zero it over one step but capped at the summed motor ratings of the
-momentum-capped banks (no separate tuning constant). Wheels never desaturate
-themselves — the external moment comes from RCS, and with RCS disabled a
-saturated bank simply stays quiet until opposite demand drains it. Stored
-momentum is reported per bank via `reaction_wheel_momentum_telemetry()`.
+Saturation is resolved in two passes so net vehicle torque always stays as
+commanded. The first pass serves the pilot/autopilot request against the
+reservoir clamp; when no bank hits the wall it stands. When a bank does,
+the runtime re-serves with an unload-biased target — body torque opposing
+the stored momentum, with the total authority split across capped banks —
+so the reservoir drains through the wheels while RCS carries the external
+compensation (the residual). Unsaturated commands keep full priority; only
+the saturating excess is rebalanced. With RCS disabled the residual goes
+unserved and the drain still proceeds. Over-capacity stored momentum (only
+reachable via deserialized state or a capacity-lowering asset edit) fails
+closed at allocation instead of emitting unbounded torque. Stored momentum
+is reported per bank via `reaction_wheel_momentum_telemetry()`.
 
 ## 1.1 Electrical load coupling
 

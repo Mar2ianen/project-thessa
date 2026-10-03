@@ -255,6 +255,10 @@ impl ParachuteSpec {
             if state.inflation_elapsed_s >= self.repack_time_s {
                 state.phase = ParachutePhase::Stowed;
                 state.inflation_elapsed_s = 0.0;
+                // A serviced pack restows with slack lines: clear the
+                // decayed extension residue so the next extraction starts
+                // from a defined zero state.
+                state.line_extension_m = 0.0;
             }
         }
 

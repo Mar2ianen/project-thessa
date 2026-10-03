@@ -510,7 +510,8 @@ impl FlightAuthority {
     /// Allocate the post-aerodynamic attitude demand to internal wheels first,
     /// then use RCS for any remaining moment. This preserves the physical
     /// moment interface while giving KSP-style wheels continuous authority at
-    /// their configured motor torque, with no rotor-speed saturation.
+    /// their configured motor torque; capped banks integrate stored momentum,
+    /// saturate at the reservoir wall, and drain through biased output.
     #[cfg(test)]
     pub(super) fn allocate_reaction_wheel_residual(
         &mut self,
@@ -535,13 +536,31 @@ impl FlightAuthority {
     ) -> Result<(DVec3, Vec<f64>), FlightError> {
         let residual = requested_moment_nm - actual_aero_moment_nm;
         self.sync_reaction_wheel_runtime_state();
+        // Continuous momentum management: compute the unload demand from
+        // current stored momentum BEFORE allocating, and bias the wheel
+        // target by it so the reservoir drains through the wheels. RCS
+        // carries the remaining residual, so net vehicle torque stays as
+        // commanded while stored momentum converges toward zero. Zero
+        // stored momentum (or unlimited banks) yields zero bias, exactly
+        // the legacy path.
+        let unload = momentum_unload_demand(
+            &self.vehicle.reaction_wheels,
+            &self.reaction_wheel_momentum,
+            FLIGHT_STEP_S,
+            self.reaction_wheel_unload_authority_nm(),
+        )
+        .map_err(|error| {
+            FlightError::InvalidInput(format!(
+                "reaction-wheel desaturation demand failed: {error}"
+            ))
+        })?;
         // The bus grant from the last installed-resource step scales the
         // wheel request (explicit Euler: power is stepped after control
         // allocation in the same tick). Starved wheels yield to RCS, which
         // receives the unserved remainder below.
         let wheel_request = residual * self.reaction_wheel_power_fraction.clamp(0.0, 1.0);
-        let wheel = if self.reaction_wheels_enabled {
-            self.sync_reaction_wheel_runtime_state();
+        let saved_momentum = self.reaction_wheel_momentum.clone();
+        let mut wheel = if self.reaction_wheels_enabled {
             allocate_reaction_wheels_with_momentum(
                 &self.vehicle.reaction_wheels,
                 &self.reaction_wheel_bank_enabled,
@@ -559,25 +578,26 @@ impl FlightAuthority {
                 momentum_saturated: false,
             }
         };
-        self.reaction_wheel_torque_body_nm = wheel.delivered_torque_body_nm;
-        // Momentum-saturated banks cannot take more load; ask RCS to carry
-        // the residual plus an unload demand that drives stored momentum
-        // back toward zero. Unlimited (legacy) banks never produce one.
-        let mut rcs_request = residual - wheel.delivered_torque_body_nm;
-        if wheel.momentum_saturated {
-            let unload = momentum_unload_demand(
+        if self.reaction_wheels_enabled && wheel.momentum_saturated {
+            // Restore pre-allocation momentum and re-serve with the drain
+            // bias: the reservoir state below reflects actual output, and
+            // net vehicle torque stays as commanded through the residual.
+            self.reaction_wheel_momentum = saved_momentum;
+            wheel = allocate_reaction_wheels_with_momentum(
                 &self.vehicle.reaction_wheels,
-                &self.reaction_wheel_momentum,
+                &self.reaction_wheel_bank_enabled,
+                &mut self.reaction_wheel_momentum,
+                wheel_request + unload,
                 FLIGHT_STEP_S,
-                self.reaction_wheel_unload_authority_nm(),
             )
             .map_err(|error| {
                 FlightError::InvalidInput(format!(
-                    "reaction-wheel desaturation demand failed: {error}"
+                    "reaction-wheel desaturation allocation failed: {error}"
                 ))
             })?;
-            rcs_request += unload;
         }
+        self.reaction_wheel_torque_body_nm = wheel.delivered_torque_body_nm;
+        let rcs_request = residual - wheel.delivered_torque_body_nm;
         if !self.vehicle.rcs_mounts.is_empty() {
             let (duties, saturated) =
                 self.allocate_mounted_rcs(requested_force_body_n, rcs_request, ambient_pa)?;

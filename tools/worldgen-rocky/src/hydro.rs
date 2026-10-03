@@ -41,6 +41,16 @@ pub struct LakeBasin {
 
 /// Connected depressions share one level water surface. Longitude wraps.
 /// Area and capacity use spherical SI cell areas, not raster-cell counts.
+///
+/// Grouping contract (baked artifacts depend on it — do not change grouping
+/// without rebaking): a basin is the exact-level flood region from
+/// [`filled_dem`] — neighbours join only when `filled[nr][nc] == level` with
+/// f64 equality and `grid.h < level`. Two depressions at the same spill
+/// height merge into one basin; a hairline spill difference splits them.
+/// Only basins deeper than 60 m (`max_depth_m > 60.0`) are reported; shallower
+/// depressions keep their geometry but are not lake basins. The flood order
+/// is deterministic (height-ordered heap with position tiebreak), so repeated
+/// runs group identically.
 pub fn lake_basins(grid: &HeightGrid, arid: &[Vec<f64>]) -> Vec<LakeBasin> {
     let filled = filled_dem(grid);
     let mut visited = vec![vec![false; grid.cols()]; grid.rows()];
@@ -165,6 +175,9 @@ impl HydrologyRecipe {
     }
 }
 
+/// Flood-fill one exact-level basin. See [`lake_basins`] for the grouping
+/// contract: membership is `filled == level` (f64 equality), never an
+/// epsilon band, so grouping is bit-deterministic for a given grid.
 fn collect_basin(
     grid: &HeightGrid,
     arid: &[Vec<f64>],
@@ -577,6 +590,35 @@ pub fn depression_depth(grid: &HeightGrid) -> Vec<Vec<f64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn basin_grouping_contract_pins_exact_level_equality_and_depth_threshold() {
+        // Fixture: two deep pits at the same spill level merge; a shallow
+        // pit below the 60 m threshold is excluded; grouping is deterministic.
+        let mut g = HeightGrid::new(vec![-2.0, 0.0, 2.0], vec![-180.0, -90.0, 0.0, 90.0], 1000.0);
+        g.h = vec![vec![500.0; 4]; 3];
+        // Same spill level (500 m rim): cells join across the seam.
+        g.h[1] = vec![100.0, 500.0, 500.0, 200.0];
+        let wet = vec![vec![0.1; 4]; 3];
+        let basins = lake_basins(&g, &wet);
+        assert_eq!(basins.len(), 1, "same-level pits merge: {basins:?}");
+        assert_eq!(basins[0].cells, vec![[1, 0], [1, 3]]);
+        assert_eq!(basins[0].surface_height_m, 500.0);
+        assert_eq!(basins, lake_basins(&g, &wet), "grouping is deterministic");
+        // Shallow depression (30 m < 60 m threshold): geometry exists in
+        // `depression_depth` but no basin is reported.
+        let mut shallow =
+            HeightGrid::new(vec![-2.0, 0.0, 2.0], vec![-180.0, -90.0, 0.0, 90.0], 1000.0);
+        shallow.h = vec![vec![500.0; 4]; 3];
+        shallow.h[1][0] = 470.0;
+        assert_eq!(depression_depth(&shallow)[1][0], 30.0);
+        assert!(
+            lake_basins(&shallow, &wet).is_empty(),
+            "sub-60 m depressions are not basins"
+        );
+        // Deep pit (400 m > 60 m): reported with exact spill geometry.
+        assert_eq!(basins[0].max_depth_m, 400.0);
+    }
 
     #[test]
     fn lake_balance_counts_catchment_inflow_once_and_rejects_frozen_salt_playas() {

@@ -4,7 +4,10 @@ Status: architecture baseline (§§1–18) normative; current mesh/indexed consu
 integration is tracked in `47_RCBT_RENDER_AUDIT_2026_10_01.md`; §19 baseline and §20
 follow-ups archival as of 2026-09-15 — indexed raster, page provider,
 extraction, and indirect draw shipped opt-in; persistent GPU topology and
-neighbor propagation remain future.
+neighbor propagation remain future. The mesh-shader GPU test pins production
+bindings 0–16 and the 256-wide fan-out (any renumber fails it); GPU tests are
+`#[ignore]`d without hardware runners, so the mesh path has no default-CI
+signal yet.
 
 Status: **implementation baseline / performance target**.
 

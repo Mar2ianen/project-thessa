@@ -17,22 +17,33 @@ spectral terrain bands (stable physical wavelengths)
    |
 authored landmark overrides
    |
+frozen global erosion + finer regional runoff displacement/infill
+   |
    v
 sample(direction, min_wavelength_m)
 ```
 
 **GLOBAL RASTER != COMPLETE TERRAIN.** PNG/PGM previews (480x270,
 1920x1080) are orbit-preview/debug caches. Close surface detail always comes
-from sampling the field at shorter wavelengths, never from upscaling raster.
-Raster resolution is mostly irrelevant to surface detail.
+from the canonical field's physical-scale source and frozen erosion hierarchy,
+not enlarged preview pixels. Frozen DEM spacing bounds the resolved erosion;
+analytic detail below it is not a substitute for resolved channel geometry.
 
-Future consumers (adaptive cube-sphere renderer, collision mesher) sample the
+Native adaptive terrain and configured contact consumers sample the
 same field; tiles/chunks are cache units and never change the terrain.
 
-The bake pipeline applies deterministic erosion to authored macrostructure
-(tectonic boundaries + landmark features). The live analytic field does not
-yet consume that erosion result. It derives regional hydrology and material
-drivers; local river/wetland geometry remains incomplete. GPT Image 2.5 maps are MACRO
+The offline compiler applies runoff-driven, volume-conserving erosion to the
+canonical source. `PlanetField::with_frozen_erosion` explicitly consumes its
+final-minus-source displacement, checks the source contract, and preserves fine
+incised source detail, native height/prefix paths and the source datum. Fine
+regional deposits apply finite-depth infill rather than fresh detail on top.
+Loading does
+not run erosion. The shared client/server launch setup now bundles and checks
+`data/worldgen/thessa-erosion-v3.surface.json.gz`; failure is explicit, with no
+silent analytic fallback. Runtime material consumers use the attached field,
+not the historical artifact's regional material/tile caches.
+It derives regional hydrology and material drivers; local river/wetland geometry
+remains incomplete. GPT Image 2.5 maps are MACRO
 style/region hints, never authoritative physics.
 
 ## Layers (`prompts/` hold color legends)
@@ -55,9 +66,20 @@ maps at any valid 2.5 size later without changing the manifest schema.
 
 Implementation checkpoint: climate contract, curved mountain arcs, branching
 rifts, colocated plateau/basin uplift and regional drainage-driven wetlands are
-implemented. Settlement/infrastructure placement and close vegetation instances
-below remain design targets, not shipped rendering. See
-`docs/48_THESSA_RECONSTRUCTION_2026_10_01.md` for validation and limitations.
+implemented. The uncommitted disk worktree additionally derives ecological
+biomes, catchment-threshold river reaches, connected lake/salt basin descriptors,
+ecological scatter and inhabited regions conserving 150 million population.
+Continuous ocean-distance drivers are interpolated, not nearest-cell sampled.
+Local water geometry, vegetation rendering and infrastructure remain incomplete.
+Ocean-supplied moisture decays with travel distance and cumulative ascent;
+lake salt suitability compares routed annual liquid inflow with temperature-
+dependent potential evaporation. Both are static proxies, not weather or actual
+lake water inventory. Frozen schema 4 adds bounded, disjoint finer erosion
+regions, with open-edge sediment accounting. Schema 3 records the pre-erosion reference; schema 2
+remains readable but cannot be attached as an erosion delta without that reference.
+See `docs/52_THESSA_LOCAL_EROSION_REFINEMENT.md` for local erosion/snow supply and
+`docs/53_THESSA_SURFACE_MATERIAL_REVIEW.md` for rejected frames and current
+geological/ecological material changes. None establishes full visual acceptance.
 
 Some rocky worlds are inhabited rather than pristine terrain. Civilization is
 a **derived world layer and visual/navigation context**, not a city-building
@@ -98,6 +120,56 @@ art direction, with dense wet lowlands/floodplains and sparser vegetation where
 climate, elevation or substrate suppress it.
 
 ## Usage
+
+Offline surface compilation (never overwrites a completed artifact):
+
+```bash
+cargo run --release -p thessa-worldgen-rocky -- bake-world \
+  --recipe data/worldgen/worldgen_recipe.toml --out target/thessa.surface.json.gz
+cargo run --release -p thessa-worldgen-rocky --example canonical_audit -- \
+  --frozen target/thessa.surface.json.gz
+```
+
+The second command audits existing data without regenerating maps or running
+erosion. The frozen global DEM is regional (0.5 degrees, about 28 km), not a
+metre-scale shoreline/channel mesh. Plant prototypes and instances are baked
+renderer-neutral data, not an integrated vegetation renderer.
+The bundled v3 artifact reuses the global v2 parent and adds three 256 m grids;
+this still does not establish metre-scale water surfaces or a globally coupled
+sediment budget. To refine an existing parent without repeating its bake:
+
+```bash
+cargo run --release -p thessa-worldgen-rocky -- refine-world \
+  --recipe data/worldgen/worldgen_recipe.toml \
+  --frozen data/worldgen/thessa-erosion-v2.surface.json.gz \
+  --regions data/worldgen/thessa-regional-erosion.toml \
+  --out target/local-refinement.surface.json.gz
+```
+
+Export matching globe fallback maps from existing data (no erosion rerun):
+
+```bash
+cargo run --release -p thessa-worldgen-rocky -- export-client-maps \
+  --recipe data/worldgen/worldgen_recipe.toml \
+  --frozen data/worldgen/thessa-erosion-v3.surface.json.gz \
+  --out target/frozen-client-maps --width 2048 --height 1024
+cargo bench -p thessa-worldgen-rocky --bench material_pages
+```
+
+`TerrainSample::erosion_displacement_m` combines frozen global/local displacement;
+`local_deposition_m` keeps positive local displacement separately. Materials
+distinguish `SurfaceAppearance::snow` (cold suitability) and `snow_cover`
+(one-year precipitation/roughness-limited cover proxy, not a seasonal inventory)
+and `frost_cover` (isolated optical frost weight). Geological stone/soil and
+ground/canopy/reeds use distinct optical proxies with physical-texel filtering;
+these are not rendered vegetation or measured spectral material textures.
+`PlanetField::regional_parent_sample` is for stable survey scoring/debugging,
+never contact/launch height.
+`PlanetField::surface_geometry(direction, scale_m)` returns a central-difference
+rise/run and tangent height Laplacian in 1/m (positive in hollows), including
+landmarks and frozen erosion. Material consumers request a fixed 256 m scale;
+`curvature_per_m` stays zero in samples without a requested geometry stencil.
+This is a representation descriptor, not a local sediment or snow inventory.
 
 ```bash
 cargo run -p thessa-worldgen-rocky -- check --manifest data/worldgen/thessa_demo.toml

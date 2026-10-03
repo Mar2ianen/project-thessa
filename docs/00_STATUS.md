@@ -1,6 +1,6 @@
 # 00 — Documentation status: implemented vs future
 
-Status: living index, reviewed 2026-09-28. Each row states what is merged
+Status: living index, worldgen rows reviewed 2026-10-03. Each row states what is merged
 reality and what is still design. Per-file `Status:` headers agree with this
 table; open decisions live in `docs/06_OPEN_QUESTIONS.md`. Regenerate
 `data/system.baked.json` via `thessa-system-baker` after any `data/system.toml`
@@ -50,8 +50,13 @@ do not update in place).
 | `02C_FAR_COMPANION.md` | 🔵 design target | — (deliberately unbaked) | encounter geometry, cloud phase-space, travel benchmarks |
 | `02D_BIOSPHERE_CHIRALITY.md` | 🔵 future work | — | food-refinery progression, biosafety, narrative |
 | `03_INTERSTELLAR_SCOPE.md` | 🔵 design baseline | — | cloud model, phase-space, travel benchmarks, RSS egg |
-| `13_THESSA_V02_DESIGN.md` | 🟡 partial reconstruction | bulk values, recipe-controlled climate, curved arcs, branching rifts, regional wetlands (doc 48) | local hydrology, erosion/infill, vegetation instances, cities/infrastructure, stellar proposal |
-| `48_THESSA_RECONSTRUCTION_2026_10_01.md` | 🟡 local reconstruction branch | climate/relief/wetland contract and equal-area audit | main promotion, rivers, vegetation, civilization and visual acceptance |
+| `13_THESSA_V02_DESIGN.md` | 🟡 partial reconstruction | bulk values, climate, curved arcs, branching rifts, wetlands; ecological biomes, dry regions, basin balance and bundled frozen-erosion launch field (docs 49–51) | local water geometry, middle-scale erosion refinement, vegetation rendering, infrastructure, stellar proposal |
+| `48_THESSA_RECONSTRUCTION_2026_10_01.md` | 🕰️ reconstruction checkpoint | earlier climate/relief/wetland audit | current uncommitted slice is documented in doc 49 |
+| `49_THESSA_RIVERS_ECOLOGY_SETTLEMENTS.md` | 🕰️ earlier isolated checkpoint | ecological biomes, continuous ocean-distance drivers, regional river/lake descriptors, ecological cover/scatter, 150-million inhabited-region descriptors | continuation in doc 50; historical audit retained |
+| `50_THESSA_MOISTURE_EROSION_BRIDGE.md` | 🕰️ isolated erosion checkpoint | causal moisture attenuation, routed annual lake balance, offline runoff/infill, source-checked frozen delta | runtime continuation in doc 51 |
+| `51_THESSA_RUNTIME_GEOMORPHOLOGY.md` | 🕰️ isolated runtime/material checkpoint | bundled client/server erosion field, semantic source matching, matching globe maps, residency-edge filtering, coarse-first material loading, fixed-scale geometry/displacement appearance | continuation in doc 52 |
+| `52_THESSA_LOCAL_EROSION_REFINEMENT.md` | 🟡 partial refinement checkpoint | preserved global parent plus three 256 m runoff-erosion regions, open sediment export/budget, shared final height/prefix/sample/contact paths, finite-depth fine infill and precipitation-limited snow | resolved water channels/shores/deltas, global sediment coupling, landscape/apron convergence, GPU shadow parity, vegetation/infrastructure rendering, loading and surface-to-orbit acceptance |
+| `53_THESSA_SURFACE_MATERIAL_REVIEW.md` | 🟡 rejected frames; material continuation | geological rock/soil reflectance, distinct ground/canopy/reed optical proxies, physically filtered intermediate material patterns, native land roughness shading, corrected volcanic bookmark | material-normal detail, cast shadows, canopy geometry, geological/transport continuity, final visual acceptance |
 | `02_GAMEPLAY.md` | 🔵 baseline | §2.5 and §2.7–2.8 describe current flight/automation slices, including vehicle part controls | surface transport, editor, economy, contracts, logistics blocks, certification |
 
 ## Client, render, terrain

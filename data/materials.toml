@@ -18,9 +18,9 @@ perceptual_roughness = 0.82
 
 [materials.thessa]
 base_color_srgb = [1.0, 1.0, 1.0]
-albedo_texture = "worlds/thessa-v3/albedo.png"
-normal_texture = "worlds/thessa-v3/normal.png"
-metallic_roughness_texture = "worlds/thessa-v3/roughness.png"
+albedo_texture = "worlds/thessa-v10/albedo.png"
+normal_texture = "worlds/thessa-v10/normal.png"
+metallic_roughness_texture = "worlds/thessa-v10/roughness.png"
 perceptual_roughness = 0.92
 
 [materials.pelagos]

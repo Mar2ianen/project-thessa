@@ -55,6 +55,29 @@ pub fn great_circle_m(a: [f64; 3], b: [f64; 3], radius_m: f64) -> f64 {
     angular_distance(a, b) * radius_m
 }
 
+/// Distance to a finite minor great-circle arc, including endpoints. Coincident
+/// or antipodal endpoints have no unique arc and fall back to endpoint distance.
+pub fn distance_to_arc_m(point: [f64; 3], a: [f64; 3], b: [f64; 3], radius_m: f64) -> f64 {
+    let mut distance = angular_distance(point, a).min(angular_distance(point, b));
+    let normal = cross(a, b);
+    if dot(normal, normal) < 1e-20 {
+        return distance * radius_m;
+    }
+    let normal = normalize(normal);
+    let projection = std::array::from_fn(|i| point[i] - normal[i] * dot(point, normal));
+    if dot(projection, projection) < 1e-20 {
+        return distance * radius_m;
+    }
+    let projection = normalize(projection);
+    let arc = angular_distance(a, b);
+    for candidate in [projection, projection.map(|v| -v)] {
+        if angular_distance(a, candidate) + angular_distance(candidate, b) <= arc + 1e-10 {
+            distance = distance.min(angular_distance(point, candidate));
+        }
+    }
+    distance * radius_m
+}
+
 /// Local east-north-up basis at a direction. All unit, right-handed.
 pub fn enu_basis(dir: [f64; 3]) -> ([f64; 3], [f64; 3], [f64; 3]) {
     let up = normalize(dir);
@@ -106,6 +129,33 @@ pub fn enu_to_dir(enu_m: [f64; 3], center: [f64; 3], radius_m: f64) -> [f64; 3] 
 
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+#[cfg(test)]
+mod arc_tests {
+    use super::*;
+    #[test]
+    fn finite_arc_distance_respects_seams_poles_and_endpoints() {
+        let (a, b) = (dir_from_latlon(0.0, 170.0), dir_from_latlon(0.0, -170.0));
+        assert!(distance_to_arc_m(dir_from_latlon(0.0, 180.0), a, b, 1000.0) < 1e-8);
+        assert!(
+            (distance_to_arc_m(dir_from_latlon(10.0, 180.0), a, b, 1000.0)
+                - 10.0_f64.to_radians() * 1000.0)
+                .abs()
+                < 1e-8
+        );
+        let point = dir_from_latlon(0.0, 150.0);
+        assert!(
+            (distance_to_arc_m(point, a, b, 1000.0) - great_circle_m(point, a, 1000.0)).abs()
+                < 1e-8
+        );
+        let (a, b) = (dir_from_latlon(80.0, 0.0), dir_from_latlon(80.0, 180.0));
+        assert!(distance_to_arc_m(dir_from_latlon(90.0, 40.0), a, b, 1000.0) < 1e-8);
+        assert_eq!(
+            distance_to_arc_m(point, a, a, 1000.0),
+            great_circle_m(point, a, 1000.0)
+        );
+    }
 }
 
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {

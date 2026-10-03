@@ -100,6 +100,18 @@ struct MapState {
     selected: BodyId,
 }
 
+fn client_asset_directory() -> String {
+    let packaged = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.join("assets")));
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    packaged
+        .filter(|path| path.is_dir())
+        .unwrap_or(source)
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn main() {
     let docking_demo_enabled = docking_demo::requested();
     // Requested graphics first: the RT decision below must happen before
@@ -123,9 +135,8 @@ fn main() {
     let benchmark_fullscreen = std::env::var_os("THESSA_AUTOBENCH_FULLSCREEN").is_some();
     let mut default_plugins = DefaultPlugins
         .set(AssetPlugin {
-            // Bevy resolves the asset root relative to this package's
-            // manifest directory: apps/client -> workspace/assets.
-            file_path: "../../assets".into(),
+            // Standalone binaries have no Cargo runtime manifest variable.
+            file_path: client_asset_directory(),
             ..default()
         })
         .set(WindowPlugin {
@@ -154,23 +165,17 @@ fn main() {
         "webgpu" => Some(Backends::BROWSER_WEBGPU),
         _ => None,
     };
-    if rt_active || requested_backends.is_some() {
+    {
         // `WgpuSettings` travels inside `RenderPlugin::render_creation` in
-        // Bevy 0.19. The normal client only requests explicit backend and RT
-        // settings from graphics.toml; experimental mesh features are not
-        // part of this production path.
+        // Bevy Functionality priority negotiates supported optional features.
+        // Do not force mesh features on incapable adapters. Disable them when
+        // policy selects CPU/indexed so plugin registration has no hidden cost.
         default_plugins = default_plugins.set(RenderPlugin {
-            render_creation: RenderCreation::Automatic(Box::new({
-                let mut features = WgpuFeatures::default();
-                if rt_active {
-                    features |= SolariPlugins::required_wgpu_features();
-                }
-                WgpuSettings {
-                    backends: requested_backends,
-                    features,
-                    ..default()
-                }
-            })),
+            render_creation: RenderCreation::Automatic(Box::new(terrain_wgpu_settings(
+                requested_backends,
+                rt_active,
+                requested.renderer.terrain,
+            ))),
             ..default()
         });
     }
@@ -237,6 +242,33 @@ fn main() {
             .add_systems(Update, docking_demo::step);
     }
     app.run();
+}
+
+fn terrain_wgpu_settings(
+    backends: Option<Backends>,
+    rt_active: bool,
+    terrain: thessa_graphics::TerrainRenderRequest,
+) -> WgpuSettings {
+    let mut settings = WgpuSettings::default();
+    // None disables RenderApp in Bevy. Auto keeps default/env-selected backends.
+    if let Some(backends) = backends {
+        settings.backends = Some(backends);
+    }
+    if rt_active {
+        settings.features |= SolariPlugins::required_wgpu_features();
+    }
+    if !matches!(
+        terrain,
+        thessa_graphics::TerrainRenderRequest::GpuAuto
+            | thessa_graphics::TerrainRenderRequest::GpuMesh
+    ) {
+        settings.disabled_features = Some(
+            WgpuFeatures::EXPERIMENTAL_MESH_SHADER
+                | WgpuFeatures::EXPERIMENTAL_MESH_SHADER_MULTIVIEW
+                | WgpuFeatures::EXPERIMENTAL_MESH_SHADER_POINTS,
+        );
+    }
+    settings
 }
 
 /// Maximum time-warp factor (2^17). High warp only sustains on rails:
@@ -674,9 +706,9 @@ fn builtin_material_params() -> std::collections::HashMap<String, MaterialParams
         (
             "thessa",
             MaterialParams::new([1.0, 1.0, 1.0], 0.92)
-                .albedo("worlds/thessa-v3/albedo.png")
-                .normal("worlds/thessa-v3/normal.png")
-                .metallic_roughness("worlds/thessa-v3/roughness.png"),
+                .albedo("worlds/thessa-v10/albedo.png")
+                .normal("worlds/thessa-v10/normal.png")
+                .metallic_roughness("worlds/thessa-v10/roughness.png"),
         ),
         (
             "pelagos",
@@ -1124,6 +1156,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn development_assets_resolve_without_cargo_runtime_environment() {
+        let path = std::path::PathBuf::from(client_asset_directory());
+        assert!(path.is_absolute());
+        assert!(path.join("worlds/thessa-v10/manifest.json").is_file());
+        assert!(path.join("worlds/thessa-v10/albedo.png").is_file());
+    }
+
+    #[test]
+    fn auto_backend_keeps_renderer_and_mesh_policy_is_optional() {
+        use thessa_graphics::TerrainRenderRequest as Terrain;
+        for mode in [
+            Terrain::Cpu,
+            Terrain::GpuIndexed,
+            Terrain::GpuAuto,
+            Terrain::GpuMesh,
+        ] {
+            let settings = terrain_wgpu_settings(None, false, mode);
+            assert!(
+                settings.backends.is_some(),
+                "auto must not disable RenderApp"
+            );
+            assert!(
+                !settings
+                    .features
+                    .contains(WgpuFeatures::EXPERIMENTAL_MESH_SHADER),
+                "unsupported mesh features must never be forced"
+            );
+            assert_eq!(
+                settings.disabled_features.is_some(),
+                matches!(mode, Terrain::Cpu | Terrain::GpuIndexed)
+            );
+        }
+        assert_eq!(
+            terrain_wgpu_settings(Some(Backends::VULKAN), false, Terrain::GpuMesh).backends,
+            Some(Backends::VULKAN)
+        );
+    }
+
+    #[test]
     fn render_frame_preserves_distance_and_maps_orbital_normal_up() {
         let point = bevy::math::DVec3::new(3.0, 4.0, 12.0) * DISTANCE_UNIT_M;
         assert_eq!(render_position(point), Vec3::new(3.0, 12.0, -4.0));
@@ -1229,7 +1300,7 @@ mod tests {
         let thessa = &file.materials["thessa"];
         assert_eq!(
             thessa.albedo_texture.as_deref(),
-            Some("worlds/thessa-v3/albedo.png")
+            Some("worlds/thessa-v10/albedo.png")
         );
         assert_eq!(
             file.materials["volcanic"].emissive_linear_rgb,

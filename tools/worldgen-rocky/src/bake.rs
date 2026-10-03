@@ -10,10 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     biomes::{Biome, Geology, SiteClass, parse_biome},
-    climate::{continentality_metres, nereid_influence},
     erosion::{ErosionKnobs, erode},
     height::encode_height_01,
-    hydro::{HeightGrid, WaterClass, classify_water},
+    hydro::{HeightGrid, WaterClass},
     manifest::Manifest,
     minerals::{MineralRichness, sample_minerals},
     terrain::TerrainKnobs,
@@ -58,7 +57,6 @@ pub fn classify_for_field(
     features: &[crate::features::PlacedFeature],
     radius_m: f64,
 ) -> SiteClass {
-    let _ = lon_deg;
     let polar = lat_deg.abs() / 90.0;
     if height_m < 0.0 {
         let shelf = height_m > -800.0;
@@ -69,37 +67,31 @@ pub fn classify_for_field(
         };
         return SiteClass::new(biome, Geology::OceanicCrust);
     }
-    if polar > 1.0 - polar_extent || (polar > 0.6 && glaciation > 0.55) {
-        return SiteClass::new(Biome::PolarIceCap, Geology::GlacialTill);
-    }
-    if height_m > 6000.0 {
-        return SiteClass::new(Biome::AlpinePeaks, Geology::ContinentalCrust);
-    }
-    if height_m > 2500.0 {
+    let mut site = if polar > 1.0 - polar_extent || (polar > 0.6 && glaciation > 0.55) {
+        SiteClass::new(Biome::PolarIceCap, Geology::GlacialTill)
+    } else if height_m > 6000.0 {
+        SiteClass::new(Biome::AlpinePeaks, Geology::ContinentalCrust)
+    } else if height_m > 2500.0 {
         let volcanic = volcanism > 0.5 && ((lat_deg * 3.7 + height_m * 0.001).sin() > 0.3);
         if volcanic {
-            return SiteClass::new(Biome::VolcanicField, Geology::Basaltic);
+            SiteClass::new(Biome::VolcanicField, Geology::Basaltic)
+        } else {
+            SiteClass::new(Biome::MountainRange, Geology::ContinentalCrust)
         }
-        return SiteClass::new(Biome::MountainRange, Geology::ContinentalCrust);
-    }
-    if aridity > 0.6 && polar < 0.5 && height_m < 1500.0 {
-        return SiteClass::new(Biome::SandDesert, Geology::Sedimentary);
-    }
-    let mut site = SiteClass::new(Biome::RockyPlain, Geology::Regolith);
+    } else if aridity > 0.6 && polar < 0.5 && height_m < 1500.0 {
+        SiteClass::new(Biome::SandDesert, Geology::Sedimentary)
+    } else {
+        SiteClass::new(Biome::RockyPlain, Geology::Regolith)
+    };
     // Landmark override: strongest in-reach feature wins the biome.
     let mut best = 0.0;
     for feature in features {
         let reach = feature.reach_m();
-        let dlat_m = (lat_deg - feature.lat_deg).to_radians() * radius_m;
-        let mut dlon = (lon_deg - feature.lon_deg).to_radians();
-        if dlon > std::f64::consts::PI {
-            dlon -= 2.0 * std::f64::consts::PI;
-        }
-        if dlon < -std::f64::consts::PI {
-            dlon += 2.0 * std::f64::consts::PI;
-        }
-        let dlon_m = dlon * radius_m * lat_deg.to_radians().cos().max(0.05);
-        let dist = (dlat_m.powi(2) + dlon_m.powi(2)).sqrt();
+        let dist = crate::sphere::great_circle_m(
+            crate::sphere::dir_from_latlon(lat_deg, lon_deg),
+            crate::sphere::dir_from_latlon(feature.lat_deg, feature.lon_deg),
+            radius_m,
+        );
         if dist < reach {
             let weight = 1.0 - dist / reach;
             if weight > best {
@@ -147,7 +139,8 @@ fn feature_site(feature: &crate::features::PlacedFeature) -> SiteClass {
         Feature::Escarpment { .. } => SiteClass::new(Biome::Escarpment, Geology::Sedimentary),
         Feature::Archipelago { .. } => SiteClass::new(Biome::Archipelago, Geology::Basaltic),
         Feature::VolcanicProvince { .. } => SiteClass::new(Biome::VolcanicField, Geology::Basaltic),
-        Feature::SaltBasin { .. } => SiteClass::new(Biome::SaltFlat, Geology::Evaporite),
+        // The feature supplies a depression, not proof of an evaporite deposit.
+        Feature::SaltBasin { .. } => SiteClass::new(Biome::DryBasin, Geology::Sedimentary),
     }
 }
 
@@ -262,28 +255,39 @@ pub fn derive_normal(grid: &HeightGrid, r: usize, c: usize) -> (f64, f64, f64) {
     (-hx * inv, -hy * inv, inv)
 }
 
-/// Two-pass water classification with driver-based local dryness:
-/// ocean mask first, then continentality => per-cell aridity for lakes/salt.
+/// Water classification with the shared ocean-supply/orographic moisture proxy.
 pub fn classify_water_driven(grid: &HeightGrid, manifest: &Manifest) -> Vec<Vec<WaterClass>> {
-    let arid0 = vec![vec![0.5; grid.cols()]; grid.rows()];
-    let water0 = classify_water(grid, &arid0, manifest.climate.glaciation);
-    // Physical ocean distance in metres (spherical Dijkstra).
-    let dist_m = continentality_metres(grid, &water0);
-    let arid: Vec<Vec<f64>> = dist_m
+    let moisture = crate::climate::moisture_grid(grid, manifest.climate.surface);
+    let field = crate::field::field_from_manifest(manifest).expect("validated bake manifest");
+    let temperatures: Vec<Vec<f64>> = grid
+        .lats
         .iter()
-        .map(|row| {
-            row.iter()
+        .enumerate()
+        .map(|(r, lat)| {
+            grid.lons
+                .iter()
                 .enumerate()
-                .map(|(c, d)| {
-                    let continentality = (d / 2_500_000.0).clamp(0.0, 1.0);
-                    let facing = nereid_influence(grid.lons[c]);
-                    (0.5 * manifest.climate.aridity + 0.6 * continentality - 0.35 * facing)
-                        .clamp(0.0, 1.0)
+                .map(|(c, lon)| {
+                    let dir = crate::sphere::dir_from_latlon(*lat, *lon);
+                    let flux = field.sample_surface(dir, 32.0).geothermal_flux_w_m2;
+                    field.temperature_for_height(dir, grid.h[r][c], flux)
                 })
                 .collect()
         })
         .collect();
-    classify_water(grid, &arid, manifest.climate.glaciation)
+    let basins = crate::hydro::lake_basins_with_balance(
+        grid,
+        &moisture,
+        &temperatures,
+        manifest.climate.surface,
+    )
+    .expect("matching bake climate grids");
+    crate::hydro::classify_water_with_basins(
+        grid,
+        &basins,
+        manifest.climate.glaciation,
+        manifest.hydrology,
+    )
 }
 /// Consistency report: derived layers must agree with height.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -478,6 +482,32 @@ mod tests {
 mod landmark_tests {
     use super::*;
     use crate::features::{Feature, PlacedFeature};
+
+    #[test]
+    fn elevation_does_not_discard_inherited_basin_geology_or_invent_evaporites() {
+        let mut manifest: Manifest =
+            toml::from_str(include_str!("../../../data/worldgen/example_rocky.toml")).unwrap();
+        manifest.features.push(PlacedFeature {
+            id: "high-basin".into(),
+            seed: 1,
+            lat_deg: 40.0,
+            lon_deg: 179.0,
+            rotation_rad: 0.0,
+            feature: Feature::SaltBasin {
+                radius_m: 200_000.0,
+                depth_m: 2000.0,
+            },
+        });
+        let at = classify_site_coarse(&manifest, 40.0, 179.0, 3500.0);
+        assert_eq!(at.biome, Biome::DryBasin);
+        assert_eq!(at.geology, Geology::Sedimentary);
+        let seam = classify_site_coarse(&manifest, 40.0, -179.0, 3500.0);
+        assert_eq!(seam, at);
+        assert_ne!(
+            classify_site_coarse(&manifest, 40.0, 100.0, 3500.0).geology,
+            Geology::Evaporite
+        );
+    }
 
     #[test]
     fn landmark_overrides_plain_biome() {

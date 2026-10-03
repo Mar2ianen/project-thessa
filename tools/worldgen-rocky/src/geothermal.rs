@@ -64,7 +64,7 @@ impl ProvinceRecipe {
 }
 
 /// One geothermal province. Flux in W/m2 at the center.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct GeothermalProvince {
     pub lat_deg: f64,
     pub lon_deg: f64,

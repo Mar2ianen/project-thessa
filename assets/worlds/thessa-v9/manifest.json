@@ -1,0 +1,82 @@
+{
+  "appearance_filter": "physical_texel_spectral_cutoff",
+  "curvature_sign": "positive_concave",
+  "ecology": "climate_hydrology_cover_v1",
+  "fine_deposition": "finite_depth_relief_infill",
+  "frozen_erosion_attached": true,
+  "generator": "Thessa canonical field v9",
+  "geomorphology": "slope_curvature_regional_displacement_v1",
+  "height": 1024,
+  "hydrology": {
+    "allow_lakes": true,
+    "closed_basin_salt_flats": true,
+    "river_min_catchment_area_m2": 100000000000.0,
+    "route_rivers_downhill": true
+  },
+  "license": "GPL-3.0-or-later",
+  "material_classification_wavelength_m": 32.0,
+  "material_geometry_scale_m": 256.0,
+  "min_wavelength_m": 2000.0,
+  "radius_m": 3200000.0,
+  "regional_erosion": [
+    {
+      "cells": 512,
+      "center_lat_deg": 38.0,
+      "center_lon_deg": -171.0,
+      "id": "dry-highland-plateau",
+      "runoff": {
+        "erodibility": 0.00002,
+        "iterations": 128,
+        "sediment_transport_m": 2000.0,
+        "years_per_iteration": 10000.0
+      },
+      "spacing_m": 256.0
+    },
+    {
+      "cells": 512,
+      "center_lat_deg": 23.0,
+      "center_lon_deg": 165.0,
+      "id": "humid-coastal-lowland",
+      "runoff": {
+        "erodibility": 0.00002,
+        "iterations": 128,
+        "sediment_transport_m": 2000.0,
+        "years_per_iteration": 10000.0
+      },
+      "spacing_m": 256.0
+    },
+    {
+      "cells": 512,
+      "center_lat_deg": -16.0,
+      "center_lon_deg": 159.0,
+      "id": "volcanic-upland",
+      "runoff": {
+        "erodibility": 0.00002,
+        "iterations": 128,
+        "sediment_transport_m": 2000.0,
+        "years_per_iteration": 10000.0
+      },
+      "spacing_m": 256.0
+    }
+  ],
+  "roughness": "canonical_surface_appearance",
+  "sea_offset_m": 535.8754401220891,
+  "seed": 7,
+  "snow_cover": "annual_precipitation_depth_over_32m_source_roughness_proxy",
+  "sunlight_baked": false,
+  "surface_climate": {
+    "eclipse_cooling_strength": 0.28,
+    "elevation_cooling_strength": 0.65,
+    "evaporation_m_yr_at_278k": 0.6,
+    "geothermal_local_warming_strength": 0.25,
+    "high_cloud_wet_region_bias": 0.55,
+    "moisture_transport_m": 1200000.0,
+    "polar_cooling_strength": 0.7,
+    "precipitation_m_yr": 1.0,
+    "rainout_height_m": 1800.0,
+    "target_mean_temperature_k": 278.0
+  },
+  "width": 2048,
+  "world_layer_schema": 1,
+  "world_layers_file": "world_layers.json"
+}

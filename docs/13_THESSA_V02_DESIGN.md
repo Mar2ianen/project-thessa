@@ -276,8 +276,18 @@ contract in `tools/worldgen-rocky/README.md`, including the approximately
 150 million population design target. These are not yet completed city or
 vegetation render systems.
 
-The reconstruction checkpoint is recorded in doc 48. `data/system.toml`
-remains authoritative; the stellar proposal above is not applied.
+The earlier reconstruction checkpoint is recorded in doc 48. Doc 49 describes
+the uncommitted disk-worktree ecological biomes and regional river/lake basin
+descriptors. Doc 50 adds causal moisture transport, annual basin balance and an
+explicit frozen-erosion bridge into the canonical field. Doc 51 connects the
+artifact to shared client/server launch, fixes residency-edge material filtering,
+and adds geometry-correlated material descriptors. Doc 52 adds three 256 m
+runoff-erosion refinements and precipitation-limited snow cover while preserving
+the global parent. Resolved water channels/shores, globally coupled local erosion
+and full visual acceptance remain incomplete. The user rejected the resulting
+survey frames; doc 53 tracks the geological/ecological material revision and
+native roughness consumer. It does not mark those frames visually accepted.
+`data/system.toml` remains authoritative; the stellar proposal above is not applied.
 
 Thessa must remain recognizable when the global map is shrunk to 480×270.
 

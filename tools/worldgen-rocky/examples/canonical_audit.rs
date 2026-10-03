@@ -6,7 +6,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let recipe: spec_recipe::SpecRecipe =
         toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml"))?;
     let started = Instant::now();
-    let planet = field::field_from_manifest(&spec_recipe::manifest_from_spec(&recipe)?)?;
+    let mut planet = field::field_from_manifest(&spec_recipe::manifest_from_spec(&recipe)?)?;
+    let source_build_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let mut args = std::env::args().skip(1);
+    let mut image_path = None;
+    let mut frozen_report = None;
+    while let Some(arg) = args.next() {
+        if arg == "--frozen" {
+            let path = args.next().ok_or("--frozen requires a surface path")?;
+            let load_started = Instant::now();
+            let surface =
+                thessa_worldgen_rocky::offline::FrozenSurface::load(std::path::Path::new(&path))?;
+            let load_ms = load_started.elapsed().as_secs_f64() * 1000.0;
+            let attach_started = Instant::now();
+            planet = planet.with_frozen_erosion(&surface)?;
+            frozen_report = Some(serde_json::json!({
+                "path": path, "schema": surface.schema, "load_ms": load_ms,
+                "attach_and_context_refresh_ms": attach_started.elapsed().as_secs_f64() * 1000.0,
+                "sediment_volume_residual_m3": surface.sediment_volume_error_m3,
+                "resolution_is_regional_not_local_water_geometry": true,
+            }));
+        } else {
+            image_path = Some(arg);
+        }
+    }
     let build_ms = started.elapsed().as_secs_f64() * 1000.0;
     let mut heights = Vec::new();
     let (mut temperature, mut flux, mut snow, mut vegetation) = (0.0, 0.0, 0.0, 0.0);
@@ -37,6 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|feature| {
             let center =
                 thessa_worldgen_rocky::sphere::dir_from_latlon(feature.lat_deg, feature.lon_deg);
+            let center_sample = planet.sample_surface(center, 32.0);
             let (east, north, _) = thessa_worldgen_rocky::sphere::enu_basis(center);
             let mut min_h = f64::INFINITY;
             let mut max_h = f64::NEG_INFINITY;
@@ -75,6 +99,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "id": feature.id, "seed": feature.seed,
                 "center_lat_lon_deg": [feature.lat_deg, feature.lon_deg],
                 "shape": feature.feature,
+                "center_height_m": center_sample.height_m,
+                "center_temperature_k": center_sample.temperature_k,
+                "center_moisture01": center_sample.moisture01,
+                "center_biome": format!("{:?}", center_sample.biome),
                 "survey_grid": [49, 49], "survey_half_extent_m": half_extent,
                 "sampled_height_min_max_m": [min_h, max_h],
                 "sampled_feature_delta_min_max_m": [min_delta, max_delta],
@@ -97,10 +125,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let report = serde_json::json!({
         "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
         "measurement_kind": "single_run_cpu_field_audit_not_renderer_benchmark",
+        "frozen_erosion": frozen_report,
+        "river_reach_count": planet.rivers().len(),
+        "regional_hydrology_grid_step_deg": planet.hydrology_grid_step_deg(),
+        "river_ocean_outlets": planet.rivers().iter().filter(|r| r.ocean_outlet).count(),
+        "river_reaches": planet.rivers(),
+        "lake_basin_count": planet.lake_basins().len(),
+        "lake_basins": planet.lake_basins(),
+        "inhabited_regions": planet.inhabited_regions,
+        "inhabited_region_population_total": planet.inhabited_regions.iter().map(|r| r.population).sum::<u64>(),
         "recipe_source": "data/worldgen/worldgen_recipe.toml",
         "landmarks": landmarks,
         "seed": recipe.planet.seed, "equal_area_samples": N, "min_wavelength_m": 32.0,
-        "build_ms": build_ms, "ocean_fraction": heights.iter().filter(|h| **h < 0.0).count() as f64 / N as f64,
+        "build_ms": build_ms, "source_build_ms": source_build_ms,
+        "ocean_fraction": heights.iter().filter(|h| **h < 0.0).count() as f64 / N as f64,
         "height_min_p10_p50_p90_p99_max_m": [heights[0], heights[N/10], heights[N/2], heights[N*9/10], heights[N*99/100], heights[N-1]],
         "temperature_mean_k": temperature / N as f64, "geothermal_mean_w_m2": flux / N as f64,
         "snow_coverage_mean": snow / N as f64, "vegetation_coverage_mean": vegetation / N as f64,
@@ -108,7 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "biome_counts": biomes, "material_page_level_build_ms": pages_ms,
     });
     println!("{}", serde_json::to_string_pretty(&report)?);
-    if let Some(path) = std::env::args().nth(1) {
+    if let Some(path) = image_path {
         let (rgb, _) = client_export::render_client_texture(&planet, 480, 270, 4000.0)?;
         std::fs::write(path, client_export::encode_png_rgb(480, 270, &rgb)?)?;
     }

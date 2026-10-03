@@ -19,6 +19,11 @@ pub struct Manifest {
     #[serde(default)]
     pub climate: ClimateRecipe,
     #[serde(default)]
+    pub hydrology: crate::hydro::HydrologyRecipe,
+    /// Omitted on uninhabited worlds. No implicit universal population.
+    #[serde(default)]
+    pub civilization: Option<crate::civilization::CivilizationRecipe>,
+    #[serde(default)]
     pub geothermal: crate::geothermal::ProvinceRecipe,
     #[serde(default)]
     pub readability: ReadabilityRecipe,
@@ -170,6 +175,10 @@ pub const CANONICAL_LAYERS: [&str; 7] = [
 ];
 
 pub fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
+    if let Some(civilization) = manifest.civilization {
+        civilization.validate()?;
+    }
+    manifest.hydrology.validate()?;
     manifest.geothermal.validate()?;
     manifest.climate.surface.validate()?;
     if manifest.planet.kind.trim().to_lowercase() != "rocky" {

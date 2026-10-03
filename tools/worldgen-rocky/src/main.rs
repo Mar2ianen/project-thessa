@@ -47,6 +47,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         "preview" => cmd_preview(args),
         "bake" => cmd_bake(args),
         "bake-spec" => cmd_bake_spec(args),
+        "bake-world" => cmd_bake_world(args),
+        "refine-world" => cmd_refine_world(args),
         "export-client-texture" => cmd_export_client_texture(args, false),
         "export-client-maps" => cmd_export_client_texture(args, true),
         "--help" | "-h" | "help" => {
@@ -75,17 +77,86 @@ fn print_help() {
     println!("  thessa-worldgen-rocky list-landmarks --manifest <TOML>");
     println!("  thessa-worldgen-rocky check-landmarks --manifest <TOML>");
     println!(
-        "  thessa-worldgen-rocky export-client-texture --manifest <TOML> --out <PNG> [--width 2048 --min-wavelength-m 2000]"
+        "  thessa-worldgen-rocky export-client-texture --manifest <TOML> --out <PNG> [--width 2048 --min-wavelength-m 2000 --frozen <surface.json.gz>]"
     );
     println!(
         "  thessa-worldgen-rocky export-client-texture --recipe <TOML> --body-file <TOML> --out <PNG>"
     );
     println!("  thessa-worldgen-rocky list-prompts");
+    println!(
+        "  thessa-worldgen-rocky bake-world --recipe <TOML> --out <surface.json.gz> [--step-deg 0.5]"
+    );
+    println!(
+        "  thessa-worldgen-rocky refine-world --recipe <TOML> --frozen <parent.surface.json.gz> --regions <TOML> --out <surface.json.gz>"
+    );
     println!("  thessa-worldgen-rocky preview --manifest <TOML> --step-deg 2 --out /tmp/pv");
     println!("  thessa-worldgen-rocky bake --manifest <TOML> --step-deg 2 [--out report.json]");
     println!(
         "  thessa-worldgen-rocky bake-spec --recipe <TOML> --body <TOML> --out-dir /tmp/spec [--map 1920x1080]"
     );
+}
+
+fn cmd_refine_world(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+    let (mut recipe, mut parent, mut regions, mut out) = (None, None, None, None);
+    while let Some(arg) = args.next() {
+        let slot = match arg.as_str() {
+            "--recipe" => &mut recipe,
+            "--frozen" => &mut parent,
+            "--regions" => &mut regions,
+            "--out" => &mut out,
+            unknown => return Err(fail(format!("unknown argument {unknown}"))),
+        };
+        *slot = Some(PathBuf::from(
+            args.next()
+                .ok_or_else(|| fail(format!("{arg} requires a value")))?,
+        ));
+    }
+    #[derive(serde::Deserialize)]
+    struct Regions {
+        region: Vec<thessa_worldgen_rocky::offline::RegionalErosionRecipe>,
+    }
+    let spec: spec_recipe::SpecRecipe = toml::from_str(&fs::read_to_string(
+        recipe.ok_or_else(|| fail("--recipe is required"))?,
+    )?)?;
+    let regions: Regions = toml::from_str(&fs::read_to_string(
+        regions.ok_or_else(|| fail("--regions is required"))?,
+    )?)?;
+    let mut world = thessa_worldgen_rocky::offline::FrozenSurface::load(
+        &parent.ok_or_else(|| fail("--frozen is required"))?,
+    )
+    .map_err(fail)?;
+    let source = field::field_from_manifest(&spec_recipe::manifest_from_spec(&spec).map_err(fail)?)
+        .map_err(fail)?;
+    let field = source.with_frozen_erosion(&world).map_err(fail)?;
+    let started = std::time::Instant::now();
+    thessa_worldgen_rocky::offline::refine_regions(&field, &mut world, &regions.region)
+        .map_err(fail)?;
+    world
+        .write(&out.ok_or_else(|| fail("--out is required"))?)
+        .map_err(fail)?;
+    for patch in &world.regional_erosion {
+        let min = patch
+            .displacement_m
+            .iter()
+            .flatten()
+            .copied()
+            .fold(f64::INFINITY, f64::min);
+        let max = patch
+            .displacement_m
+            .iter()
+            .flatten()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+        println!(
+            "{}",
+            serde_json::json!({"region":patch.recipe.id,"center_deg":[patch.recipe.center_lat_deg,patch.recipe.center_lon_deg],"spacing_m":patch.recipe.spacing_m,"cells":patch.recipe.cells,"displacement_min_max_m":[min,max],"exported_sediment_m3":patch.exported_sediment_m3,"sediment_volume_error_m3":patch.sediment_volume_error_m3})
+        );
+    }
+    println!(
+        "refinement and publication: {:.3} s; reused global parent",
+        started.elapsed().as_secs_f64()
+    );
+    Ok(())
 }
 
 fn load_manifest(path: &PathBuf) -> Result<Manifest, Box<dyn Error>> {
@@ -373,6 +444,53 @@ fn cmd_bake(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>
         println!("wrote: {}", path.display());
     }
     println!("bake ok");
+    Ok(())
+}
+
+fn cmd_bake_world(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+    let mut recipe_path = PathBuf::from("data/worldgen/worldgen_recipe.toml");
+    let mut out = None;
+    let mut step = None;
+    while let Some(arg) = args.next() {
+        let value = args
+            .next()
+            .ok_or_else(|| fail(format!("{arg} requires a value")))?;
+        match arg.as_str() {
+            "--recipe" => recipe_path = PathBuf::from(value),
+            "--out" => out = Some(PathBuf::from(value)),
+            "--step-deg" => step = Some(value.parse::<f64>()?),
+            _ => return Err(fail(format!("unknown argument {arg}"))),
+        }
+    }
+    let out = out.ok_or_else(|| fail("bake-world requires --out"))?;
+    if out.exists() {
+        return Err(fail("bake-world will not overwrite an existing artifact"));
+    }
+    let mut spec: spec_recipe::SpecRecipe = toml::from_str(&fs::read_to_string(recipe_path)?)?;
+    if let Some(step) = step {
+        spec.offline.grid_step_deg = step;
+    }
+    spec.offline.validate().map_err(fail)?;
+    let manifest = spec_recipe::manifest_from_spec(&spec).map_err(fail)?;
+    let field = field::field_from_manifest(&manifest).map_err(fail)?;
+    let started = std::time::Instant::now();
+    let world = thessa_worldgen_rocky::offline::compile(&field, spec.offline).map_err(fail)?;
+    if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
+    world.write(&out).map_err(fail)?;
+    println!(
+        "baked {}x{} heights, {} rivers, {} lake basins, {} shore segments, {} plants in {:.3}s; sediment volume residual {:.3e} m3",
+        world.lons.len(),
+        world.lats.len(),
+        world.rivers.len(),
+        world.lakes.len(),
+        world.shore_segments.len(),
+        world.vegetation.len(),
+        started.elapsed().as_secs_f64(),
+        world.sediment_volume_error_m3
+    );
+    println!("wrote: {}", out.display());
     Ok(())
 }
 
@@ -724,6 +842,7 @@ fn cmd_export_client_texture(
     maps: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut manifest_path: Option<PathBuf> = None;
+    let mut frozen_path: Option<PathBuf> = None;
     let mut recipe_path: Option<PathBuf> = None;
     let mut body_path = PathBuf::from("data/worldgen/thessa_v02.toml");
     let mut out: Option<PathBuf> = None;
@@ -749,6 +868,12 @@ fn cmd_export_client_texture(
                     args.next()
                         .ok_or_else(|| fail("--body-file requires a value"))?,
                 );
+            }
+            "--frozen" => {
+                frozen_path = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| fail("--frozen requires a value"))?,
+                ));
             }
             "--out" => {
                 out = Some(PathBuf::from(
@@ -789,6 +914,12 @@ fn cmd_export_client_texture(
     };
     validate_manifest(&manifest).map_err(fail)?;
     let field = field::field_from_manifest(&manifest).map_err(fail)?;
+    let field = if let Some(path) = frozen_path {
+        let frozen = thessa_worldgen_rocky::offline::FrozenSurface::load(&path).map_err(fail)?;
+        field.with_frozen_erosion(&frozen).map_err(fail)?
+    } else {
+        field
+    };
     if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }

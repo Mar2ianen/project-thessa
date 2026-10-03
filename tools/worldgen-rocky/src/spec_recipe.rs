@@ -15,11 +15,17 @@ use crate::{
 pub struct SpecRecipe {
     pub planet: SpecPlanet,
     #[serde(default)]
+    pub offline: crate::offline::OfflineRecipe,
+    #[serde(default)]
     pub readability: SpecReadability,
     #[serde(default)]
     pub terrain: SpecTerrain,
     #[serde(default)]
     pub climate_proxy: SpecClimate,
+    #[serde(default)]
+    pub hydrology: crate::hydro::HydrologyRecipe,
+    #[serde(default)]
+    pub civilization: Option<crate::civilization::CivilizationRecipe>,
     #[serde(default)]
     pub geothermal: SpecGeothermal,
     #[serde(default)]
@@ -126,6 +132,29 @@ pub struct SpecClimate {
     pub eclipse_cooling_strength: f64,
     #[serde(default)]
     pub geothermal_local_warming_strength: f64,
+    #[serde(default = "default_moisture_transport")]
+    pub moisture_transport_m: f64,
+    #[serde(default = "default_rainout_height")]
+    pub rainout_height_m: f64,
+    #[serde(default)]
+    pub high_cloud_wet_region_bias: f64,
+    #[serde(default = "default_precipitation")]
+    pub precipitation_m_yr: f64,
+    #[serde(default = "default_evaporation")]
+    pub evaporation_m_yr_at_278k: f64,
+}
+
+fn default_moisture_transport() -> f64 {
+    crate::climate::SurfaceClimate::default().moisture_transport_m
+}
+fn default_rainout_height() -> f64 {
+    crate::climate::SurfaceClimate::default().rainout_height_m
+}
+fn default_precipitation() -> f64 {
+    crate::climate::SurfaceClimate::default().precipitation_m_yr
+}
+fn default_evaporation() -> f64 {
+    crate::climate::SurfaceClimate::default().evaporation_m_yr_at_278k
 }
 
 fn default_cooling_strength() -> f64 {
@@ -145,6 +174,11 @@ impl Default for SpecClimate {
             elevation_cooling_strength: 1.0,
             eclipse_cooling_strength: 0.28,
             geothermal_local_warming_strength: 0.0,
+            moisture_transport_m: default_moisture_transport(),
+            rainout_height_m: default_rainout_height(),
+            high_cloud_wet_region_bias: 0.0,
+            precipitation_m_yr: default_precipitation(),
+            evaporation_m_yr_at_278k: default_evaporation(),
         }
     }
 }
@@ -157,6 +191,11 @@ impl SpecClimate {
             elevation_cooling_strength: self.elevation_cooling_strength,
             eclipse_cooling_strength: self.eclipse_cooling_strength,
             geothermal_local_warming_strength: self.geothermal_local_warming_strength,
+            moisture_transport_m: self.moisture_transport_m,
+            rainout_height_m: self.rainout_height_m,
+            high_cloud_wet_region_bias: self.high_cloud_wet_region_bias,
+            precipitation_m_yr: self.precipitation_m_yr,
+            evaporation_m_yr_at_278k: self.evaporation_m_yr_at_278k,
         }
     }
 }
@@ -268,6 +307,11 @@ pub struct BodyBlock {
 
 /// Validate recipe + body file agreement (radius, height range).
 pub fn validate_spec(recipe: &SpecRecipe, body: &BodyFile) -> Result<(), String> {
+    recipe.offline.validate()?;
+    recipe.hydrology.validate()?;
+    if let Some(civilization) = recipe.civilization {
+        civilization.validate()?;
+    }
     recipe.climate_proxy.surface_climate().validate()?;
     recipe.terrain.ocean_fraction_target()?;
     if recipe.planet.id.trim().is_empty() {
@@ -509,7 +553,7 @@ fn build_feature(spec: &SpecFeature, seed: u64) -> Result<Feature, String> {
                 spec.diameter_km_max,
                 600_000.0,
             ) / 2.0,
-            depth_m: 700.0,
+            depth_m: km_range(seed, 18, spec.depth_km_min, spec.depth_km_max, 700.0),
         },
         "archipelago" => {
             let chain = km_range(
@@ -561,6 +605,10 @@ use crate::manifest::{
 
 /// Build a runnable [`Manifest`] from the spec recipe.
 pub fn manifest_from_spec(recipe: &SpecRecipe) -> Result<Manifest, String> {
+    if let Some(civilization) = recipe.civilization {
+        civilization.validate()?;
+    }
+    recipe.hydrology.validate()?;
     recipe.climate_proxy.surface_climate().validate()?;
     let features = place_spec_features(recipe)?;
     let layers = [
@@ -617,6 +665,8 @@ pub fn manifest_from_spec(recipe: &SpecRecipe) -> Result<Manifest, String> {
             secondary_min: recipe.geothermal.secondary_fields_min,
             secondary_max: recipe.geothermal.secondary_fields_max,
         },
+        hydrology: recipe.hydrology,
+        civilization: recipe.civilization,
         readability: ReadabilityRecipe {
             macro_feature_strength: recipe.readability.macro_feature_strength,
             biome_min_scale_km: recipe.readability.major_region_min_scale_km,
@@ -653,6 +703,25 @@ mod tests {
         let (recipe, body) = load();
         validate_spec(&recipe, &body).expect("spec valid");
         assert_eq!(recipe.feature.len(), 9);
+    }
+
+    #[test]
+    fn river_recipe_reaches_field_and_disabled_routing_produces_no_edges() {
+        let (mut recipe, body) = load();
+        let manifest = manifest_from_spec(&recipe).unwrap();
+        let field = crate::field::field_from_manifest(&manifest).unwrap();
+        assert!(!field.rivers().is_empty());
+        assert_eq!(
+            field.params.hydrology.river_min_catchment_area_m2,
+            recipe.hydrology.river_min_catchment_area_m2
+        );
+        recipe.hydrology.route_rivers_downhill = false;
+        let field =
+            crate::field::field_from_manifest(&manifest_from_spec(&recipe).unwrap()).unwrap();
+        assert!(field.rivers().is_empty());
+        recipe.hydrology.river_min_catchment_area_m2 = f64::NAN;
+        assert!(validate_spec(&recipe, &body).is_err());
+        assert!(manifest_from_spec(&recipe).is_err());
     }
 
     #[test]

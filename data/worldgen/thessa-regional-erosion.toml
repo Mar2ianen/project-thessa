@@ -1,0 +1,41 @@
+# Physical local refinement of the existing global erosion artifact.
+# The 128 km domains include an outer context apron around each survey site.
+# Open edges retain parent height and report exported sediment explicitly.
+[[region]]
+id = "dry-highland-plateau"
+center_lat_deg = 38.0
+center_lon_deg = -171.0
+spacing_m = 256.0
+cells = 512
+[region.runoff]
+iterations = 128
+years_per_iteration = 10000.0
+erodibility = 0.00002
+sediment_transport_m = 2000.0
+
+[[region]]
+id = "humid-coastal-lowland"
+center_lat_deg = 23.0
+center_lon_deg = 165.0
+spacing_m = 256.0
+cells = 512
+[region.runoff]
+iterations = 128
+years_per_iteration = 10000.0
+erodibility = 0.00002
+sediment_transport_m = 2000.0
+
+[[region]]
+# Historical volcanic bookmark: later substrate audit identifies this as a
+# geothermal sedimentary canyon. Preserve its domain/id in the v3 artifact;
+# the corrected volcanic camera does not move or rebuild this refinement.
+id = "volcanic-upland"
+center_lat_deg = -16.0
+center_lon_deg = 159.0
+spacing_m = 256.0
+cells = 512
+[region.runoff]
+iterations = 128
+years_per_iteration = 10000.0
+erodibility = 0.00002
+sediment_transport_m = 2000.0

@@ -16,7 +16,8 @@
 use crate::{appearance::surface_appearance_filtered, field::PlanetField, sphere::dir_from_latlon};
 
 /// Render an equirect client texture (2:1) from the field.
-/// `min_wavelength_m` selects texture detail (erosion-free by design).
+/// `min_wavelength_m` selects the geometry prefix. Attached frozen erosion is
+/// included; classification and appearance filtering follow their own scale.
 ///
 /// In-memory version: capped at 4096x2048, larger outputs must stream via
 /// [`write_client_texture_png`].
@@ -84,6 +85,7 @@ mod tests {
     fn test_field() -> PlanetField {
         PlanetField::build(
             PlanetParams {
+                hydrology: crate::hydro::HydrologyRecipe::default(),
                 surface_climate: crate::climate::SurfaceClimate::default(),
                 name: "t".into(),
                 seed: 77,
@@ -177,7 +179,9 @@ fn sample_texel(
     // Classification uses the same canonical 32 m source as local pages.
     // The map's representation scale filters appearance, not the coastline.
     let mut sample = field.sample_surface_from_prefix(dir, prefix, macro_h, 32.0);
-    sample.slope_hint = field.slope_hint_from_macro(dir, 256.0, macro_h);
+    let (slope, curvature) = field.surface_geometry_from_prefix(dir, prefix, macro_h, 256.0);
+    sample.slope_hint = slope;
+    sample.curvature_per_m = curvature;
     let texel_m = (std::f64::consts::PI * field.params.radius_m / height as f64)
         .max(std::f64::consts::TAU * field.params.radius_m * lat.to_radians().cos() / width as f64);
     let material = surface_appearance_filtered(field, &sample, dir, texel_m);
@@ -305,7 +309,16 @@ pub fn write_client_maps(
         let bytes = encode_png_rgb(width, height, &rgb)?;
         std::fs::write(directory.join(format!("{name}.png")), bytes).map_err(|e| e.to_string())?;
     }
-    let metadata = serde_json::json!({"generator":"Thessa canonical field v4", "seed":field.params.seed,
+    let metadata = serde_json::json!({"generator":"Thessa canonical field v10", "seed":field.params.seed,
+        "frozen_erosion_attached":field.has_frozen_erosion(),
+        "regional_erosion":field.regional_erosion().iter().map(|patch| &patch.recipe).collect::<Vec<_>>(),
+        "snow_cover":"annual_precipitation_depth_over_32m_source_roughness_proxy",
+        "fine_deposition":"finite_depth_relief_infill",
+        "substrate":"geological_rock_soil_and_ecological_cover_optical_proxies",
+        "material_geometry_scale_m":256.0,"curvature_sign":"positive_concave",
+        "geomorphology":"slope_curvature_regional_displacement_v1",
+        "hydrology":field.params.hydrology,"world_layer_schema":1,
+        "world_layers_file":"world_layers.json","ecology":"climate_hydrology_cover_v1",
         "surface_climate":field.params.surface_climate,"material_classification_wavelength_m":32.0,
         "appearance_filter":"physical_texel_spectral_cutoff","roughness":"canonical_surface_appearance",
         "radius_m":field.params.radius_m,"sea_offset_m":field.sea_offset_m,"width":width,"height":height,
@@ -313,6 +326,19 @@ pub fn write_client_maps(
     std::fs::write(
         directory.join("manifest.json"),
         serde_json::to_vec_pretty(&metadata).unwrap(),
+    )
+    .map_err(|e| e.to_string())?;
+    let world_layers = serde_json::json!({
+        "schema":1,"seed":field.params.seed,"radius_m":field.params.radius_m,
+        "river_source_step_deg":field.hydrology_grid_step_deg(),"river_reaches":field.rivers(),
+        "lake_source_step_deg":field.hydrology_grid_step_deg(),"lake_basins":field.lake_basins(),
+        "inhabited_regions":field.inhabited_regions,
+        "population_total":field.inhabited_regions.iter().map(|r| r.population).sum::<u64>(),
+        "representation":"regional_descriptors_not_channel_or_building_geometry"
+    });
+    std::fs::write(
+        directory.join("world_layers.json"),
+        serde_json::to_vec_pretty(&world_layers).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -326,6 +352,7 @@ mod map_tests {
     fn test_field() -> PlanetField {
         PlanetField::build(
             PlanetParams {
+                hydrology: crate::hydro::HydrologyRecipe::default(),
                 surface_climate: crate::climate::SurfaceClimate::default(),
                 name: "t".into(),
                 seed: 77,
@@ -414,6 +441,50 @@ mod map_tests {
             "ice/coast roughness must not collapse to binary constants"
         );
     }
+
+    #[test]
+    fn exported_world_layers_preserve_rivers_and_authored_population() {
+        let spec =
+            toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml")).unwrap();
+        let field = crate::field::field_from_manifest(
+            &crate::spec_recipe::manifest_from_spec(&spec).unwrap(),
+        )
+        .unwrap();
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-tmp")
+            .join(format!("thessa-world-layer-export-{}", std::process::id()));
+        write_client_maps(&field, 48, 24, 8000.0, &directory).unwrap();
+        let layers: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join("world_layers.json")).unwrap())
+                .unwrap();
+        assert_eq!(layers["population_total"], 150_000_000u64);
+        assert_eq!(
+            layers["river_reaches"].as_array().unwrap().len(),
+            field.rivers().len()
+        );
+        assert_eq!(
+            layers["lake_basins"].as_array().unwrap().len(),
+            field.lake_basins().len()
+        );
+        assert_eq!(
+            layers["inhabited_regions"].as_array().unwrap().len(),
+            field.inhabited_regions.len()
+        );
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join("manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(metadata["world_layers_file"], "world_layers.json");
+        for name in [
+            "world_layers.json",
+            "manifest.json",
+            "albedo.png",
+            "normal.png",
+            "roughness.png",
+        ] {
+            std::fs::remove_file(directory.join(name)).unwrap();
+        }
+        std::fs::remove_dir(directory).unwrap();
+    }
 }
 #[cfg(test)]
 mod stream_tests {
@@ -424,6 +495,7 @@ mod stream_tests {
     fn streaming_matches_in_memory_render() {
         let field = PlanetField::build(
             PlanetParams {
+                hydrology: crate::hydro::HydrologyRecipe::default(),
                 surface_climate: crate::climate::SurfaceClimate::default(),
                 name: "t".into(),
                 seed: 77,

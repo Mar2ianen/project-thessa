@@ -1,0 +1,21 @@
+{
+  "appearance_filter": "physical_texel_spectral_cutoff",
+  "generator": "Thessa canonical field v4",
+  "height": 2048,
+  "license": "GPL-3.0-or-later",
+  "material_classification_wavelength_m": 32.0,
+  "min_wavelength_m": 8000.0,
+  "radius_m": 3200000.0,
+  "roughness": "canonical_surface_appearance",
+  "sea_offset_m": 542.719485274137,
+  "seed": 7,
+  "sunlight_baked": false,
+  "surface_climate": {
+    "eclipse_cooling_strength": 0.28,
+    "elevation_cooling_strength": 0.65,
+    "geothermal_local_warming_strength": 0.25,
+    "polar_cooling_strength": 0.7,
+    "target_mean_temperature_k": 278.0
+  },
+  "width": 4096
+}

@@ -124,6 +124,31 @@ impl CbtRenderMaterialPages {
     pub fn contains_page(&self, node_id: u64) -> bool {
         self.pages.contains_key(&node_id)
     }
+    /// Bound independent material residency, retaining demand's nearest
+    /// resident source and its next resident ancestor for level blending.
+    /// Generation is the deterministic cold-page eviction order.
+    pub fn trim_to_budget(&mut self, budget: usize) {
+        if self.pages.len() <= budget {
+            return;
+        }
+        let pinned: std::collections::BTreeSet<_> =
+            crate::material_cache::resident_material_hierarchy(
+                self.priority.iter().copied(),
+                |id| self.pages.contains_key(&id),
+            )
+            .into_iter()
+            .take(budget)
+            .collect();
+        let mut cold: Vec<_> = self
+            .pages
+            .iter()
+            .filter(|(id, _)| !pinned.contains(*id))
+            .map(|(&id, &(generation, _))| (generation, id))
+            .collect();
+        cold.sort_unstable();
+        let count = self.pages.len().saturating_sub(budget);
+        self.remove_pages(cold.into_iter().take(count).map(|(_, id)| id));
+    }
     pub fn set_page(&mut self, node_id: u64, page: CbtMaterialPage) {
         self.set_pages(std::iter::once((node_id, page)));
     }
@@ -167,6 +192,21 @@ impl CbtRenderMaterialPages {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn independent_material_residency_retains_demand_and_ancestors() {
+        let page = CbtMaterialPage::from_rgba8(vec![128; 128 * 128 * 4]).unwrap();
+        let mut pages = CbtRenderMaterialPages::default();
+        pages.set_page(8, page.clone());
+        for id in 32..48 {
+            pages.set_page(id, page.clone());
+        }
+        pages.set_priority(vec![32]);
+        pages.trim_to_budget(4);
+        assert_eq!(pages.pages.len(), 4);
+        assert!(pages.contains_page(8));
+        assert!(pages.contains_page(32));
+    }
 
     #[test]
     fn mips_average_color_in_linear_light_and_keep_roughness_linear() {

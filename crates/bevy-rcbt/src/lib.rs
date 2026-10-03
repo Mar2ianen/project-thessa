@@ -454,9 +454,9 @@ impl CbtRenderSurface {
     }
 
     /// Opt into the experimental hardware mesh-shader consumer. This is a
-    /// separate switch from the indexed GPU raster path because wgpu requires
-    /// requesting the experimental mesh feature before the device is created.
-    /// The caller must set the matching `WgpuSettings` feature at startup.
+    /// separate switch from the indexed GPU raster path. The device must enable
+    /// the mesh feature; unsupported limits fall back to indexed draw with the
+    /// shared classifier, material and presentation fence.
     pub fn set_gpu_mesh_enabled(&mut self, enabled: bool) {
         self.gpu_mesh_enabled = enabled;
     }
@@ -726,6 +726,8 @@ mod render;
 pub use render::CbtGpuBuffers;
 #[cfg(feature = "render")]
 use render::CbtRenderPlugin;
+#[cfg(feature = "mesh-shaders")]
+pub use render::mesh_shader_supported;
 
 #[cfg(test)]
 mod tests {

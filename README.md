@@ -76,8 +76,9 @@ The checked-in vertical slice currently contains:
   universal Bevy frame scheduling, compact height pages, and a portable GPU
   adapter. An experimental microscaled material-page codec and LOD/mip path is
   available for render-world A/B; it currently pre-decodes to RGBA and raw
-  storage remains the default. The client keeps the CPU terrain renderer as the
-  visual fallback while CBT topology is exercised against live terrain selection;
+  storage remains the default. The client supports native GPU indexed terrain
+  with streamed height/material pages and a CPU/PBR terrain fallback; the current
+  worktree's graphics fixture requests GPU indexed rendering;
 - isolated validation harnesses for orbital and aerodynamic reference checks.
 
 Factory gameplay, general three-spool/clutched and free-power-turbine dynamics,
@@ -275,14 +276,33 @@ current implementation documents and source-level API comments.
 ## Rocky world generator
 
 Thessa reconstruction includes recipe-controlled climate, curved mountain arcs,
-branching rifts and regional drainage-driven wetlands. Local rivers, vegetation
-instances and inhabited-world infrastructure remain incomplete. See
-[doc 48](docs/48_THESSA_RECONSTRUCTION_2026_10_01.md) and the worldgen README;
+branching rifts and regional drainage-driven wetlands. The runtime continuation
+adds ecological biomes, catchment-driven river reaches, connected lake
+basin descriptors and inhabited regions. Ocean-supply/orographic moisture,
+routed annual lake budgets, and an explicit frozen-erosion adapter now share the
+canonical field path (doc 50). Client and server now bundle the same source-checked
+erosion artifact; default launch/contact consumers share an immutable field.
+The preserved global bake now has three 256 m runoff-erosion refinements (doc 52)
+shared by height/material/contact consumers. Depositional regions reduce fine
+source relief; snow cover is limited by the existing precipitation proxy.
+The rejected survey frames are tracked in doc 53; geological substrates and
+ecological optical cover are now distinct, and native land shading consumes
+roughness. These changes do not establish visual acceptance.
+Material pages use fixed-scale slope/curvature and displacement, with
+residency-edge filtering and physical-texel appearance filtering (docs 51–52).
+Local water geometry,
+vegetation rendering and infrastructure remain incomplete. See
+[doc 50](docs/50_THESSA_MOISTURE_EROSION_BRIDGE.md),
+[doc 51](docs/51_THESSA_RUNTIME_GEOMORPHOLOGY.md),
+[doc 52](docs/52_THESSA_LOCAL_EROSION_REFINEMENT.md),
+[doc 53](docs/53_THESSA_SURFACE_MATERIAL_REVIEW.md),
+[doc 49](docs/49_THESSA_RIVERS_ECOLOGY_SETTLEMENTS.md) and the worldgen README;
 source validation is not visual acceptance.
 
 `thessa-worldgen-rocky` is part of the workspace. It generates deterministic
-rocky-world fields and exports client textures; the current runtime contact
-boundary remains spherical.
+rocky-world fields and exports client textures. Launch-site and configured
+terrain-contact queries use the shared canonical height field; detailed water
+contacts and surface transport remain future work.
 
 ```bash
 cargo run -p thessa-worldgen-rocky -- \

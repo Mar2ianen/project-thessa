@@ -2298,9 +2298,24 @@ fn pilot_commands_route_to_the_targeted_vehicle_only() {
     let before = driver.sim.authority.throttle;
     let mut unknown = input_for_vehicle(VehicleId::new(7), vec![Command::Engine { active: true }]);
     unknown.throttle = 0.9;
+    // Stick deflection would take over a real vehicle; an unknown id must
+    // not even plant a control entry.
+    unknown.control_input = [0.5, 0.0, 0.0];
     assert!(!driver.sim.apply_input("pilot", &unknown));
     assert_eq!(driver.sim.authority.throttle, before);
     assert_eq!(driver.sim.fleet.len(), 1);
+    assert!(!driver.sim.controls.contains_key(&7));
+    let unknown_guidance = GuidanceInput {
+        tick: 2,
+        vehicle_id: VehicleId::new(7),
+        intent: GuidanceIntent::Attitude {
+            target_body_to_inertial: DQuat::IDENTITY,
+            roll_policy: thessa_flight_authority::RollPolicy::Hold,
+        },
+        propulsion: PropulsionDemand::new(0.0).unwrap(),
+    };
+    assert!(!driver.sim.apply_guidance("pilot", &unknown_guidance));
+    assert!(!driver.sim.controls.contains_key(&7));
 }
 
 #[test]

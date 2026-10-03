@@ -344,7 +344,8 @@ impl Sim {
             .as_ref()
             .filter(|prev| prev.vehicle_id == input.vehicle_id);
         let vid = input.vehicle_id.0;
-        if client_input_takes_over(previous.as_ref(), input) {
+        if client_input_takes_over(previous.as_ref(), input) && self.vehicle_authority(vid).is_ok()
+        {
             if vid == VehicleId::PRIMARY.0 {
                 self.cancel_autopilot_tasks();
             }

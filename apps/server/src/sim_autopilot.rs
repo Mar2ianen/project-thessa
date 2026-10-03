@@ -12,6 +12,10 @@ impl Sim {
             return false;
         }
         let vid = input.vehicle_id.0;
+        if self.vehicle_authority(vid).is_err() {
+            self.authority.wake_notice = Some("guidance rejected: unknown vehicle".into());
+            return false;
+        }
         if vid == VehicleId::PRIMARY.0 {
             self.cancel_autopilot_tasks();
         }

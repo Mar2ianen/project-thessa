@@ -283,6 +283,14 @@ pub fn surface_appearance_filtered(
             [0.80, 0.77, 0.70],
             (sample.salt01 * 0.5).clamp(0.0, 1.0),
         );
+        // Damp saline mud mottles the crust in patches instead of one flat
+        // fill; real playas are never a uniform polygon.
+        let damp_patch = smooth(-0.1, 0.25, variation) * sample.salt01.clamp(0.0, 1.0);
+        color = mix(
+            color,
+            [0.45, 0.47, 0.35],
+            (damp_patch * 0.5).clamp(0.0, 1.0),
+        );
     }
     // Beach is a height band, not a circular feature footprint. The band
     // itself carries sand texture and moisture darkening so tidal flats do

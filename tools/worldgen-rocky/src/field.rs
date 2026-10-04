@@ -908,10 +908,36 @@ impl PlanetField {
             }
         }
         if weight > 0.0 {
-            Some(sum / weight)
-        } else {
-            None
+            return Some(sum / weight);
         }
+        // Outside the lake-cell mask the spill level still applies: the
+        // shoreline is the height contour at spill level, not the mask
+        // staircase. Without this fallback the affinity drops 1 -> 0 in a
+        // single pixel along grid lines (razor-straight playa edges).
+        // The height comparison keeps it honest: above spill the affinity
+        // below evaluates to zero anyway.
+        let (ir0, ic0) = (y.round() as usize, x.round() as usize);
+        for ring in 1..=2 {
+            let mut ring_sum = 0.0;
+            let mut ring_n = 0;
+            for dr in -(ring as isize)..=(ring as isize) {
+                for dc in -(ring as isize)..=(ring as isize) {
+                    if dr.abs().max(dc.abs()) != ring as isize {
+                        continue;
+                    }
+                    let r = (ir0 as isize + dr).clamp(0, rows as isize - 1) as usize;
+                    let c = (ic0 as isize + dc).clamp(0, cols as isize - 1) as usize;
+                    if let Some(spill) = grid[r][c] {
+                        ring_sum += spill;
+                        ring_n += 1;
+                    }
+                }
+            }
+            if ring_n > 0 {
+                return Some(ring_sum / ring_n as f64);
+            }
+        }
+        None
     }
 }
 

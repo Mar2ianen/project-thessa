@@ -28,8 +28,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     90.0 - (r as f64 + 0.5) * step_lat,
                     -180.0 + (c as f64 + 0.5) * step_lon,
                 );
-                let sample = planet.sample_surface(dir, 32.0);
-                let mat = appearance::surface_appearance_filtered(&planet, &sample, dir, 16000.0);
+                let sample = planet.sample_surface(dir, 40000.0);
+                let mat = appearance::surface_appearance_filtered(&planet, &sample, dir, 40000.0);
                 ppm.extend_from_slice(&[
                     (mat.albedo_srgb[0].clamp(0.0, 1.0) * 255.0) as u8,
                     (mat.albedo_srgb[1].clamp(0.0, 1.0) * 255.0) as u8,
@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     lat0 + (h as f64 / 2.0 - r as f64) * step,
                     lon0 + (c as f64 - w as f64 / 2.0) * step,
                 );
-                let sample = planet.sample_surface(dir, 32.0);
+                let sample = planet.sample_surface(dir, texel);
                 let mat = appearance::surface_appearance_filtered(&planet, &sample, dir, texel);
                 ppm.extend_from_slice(&[
                     (mat.albedo_srgb[0].clamp(0.0, 1.0) * 255.0) as u8,

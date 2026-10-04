@@ -12,11 +12,31 @@ fn dir_from_latlon(lat_deg: f64, lon_deg: f64) -> [f64; 3] {
 }
 
 /// Surface normal in local east/north/up from height central differences.
-fn normal_enu(planet: &field::PlanetField, lat_deg: f64, lon_deg: f64, step_deg: f64) -> [f64; 3] {
-    let h_e = planet.height_m(dir_from_latlon(lat_deg, lon_deg + step_deg), 32.0);
-    let h_w = planet.height_m(dir_from_latlon(lat_deg, lon_deg - step_deg), 32.0);
-    let h_n = planet.height_m(dir_from_latlon(lat_deg + step_deg, lon_deg), 32.0);
-    let h_s = planet.height_m(dir_from_latlon(lat_deg - step_deg, lon_deg), 32.0);
+/// `min_wavelength_m` must match the render texel: sub-texel relief in the
+/// endpoints would alias into per-pixel normal noise (checkerboard shading).
+fn normal_enu(
+    planet: &field::PlanetField,
+    lat_deg: f64,
+    lon_deg: f64,
+    step_deg: f64,
+    min_wavelength_m: f64,
+) -> [f64; 3] {
+    let h_e = planet.height_m(
+        dir_from_latlon(lat_deg, lon_deg + step_deg),
+        min_wavelength_m,
+    );
+    let h_w = planet.height_m(
+        dir_from_latlon(lat_deg, lon_deg - step_deg),
+        min_wavelength_m,
+    );
+    let h_n = planet.height_m(
+        dir_from_latlon(lat_deg + step_deg, lon_deg),
+        min_wavelength_m,
+    );
+    let h_s = planet.height_m(
+        dir_from_latlon(lat_deg - step_deg, lon_deg),
+        min_wavelength_m,
+    );
     let m_per_deg = planet.params.radius_m * std::f64::consts::PI / 180.0;
     let dhdx = (h_e - h_w) / (2.0 * step_deg * m_per_deg);
     let dhdy = (h_n - h_s) / (2.0 * step_deg * m_per_deg);
@@ -133,8 +153,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     c[1] * z + right[1] * x + up[1] * y,
                     c[2] * z + right[2] * x + up[2] * y,
                 ];
-                let sample = planet.sample_surface(dir, 32.0);
-                let mat = appearance::surface_appearance_filtered(&planet, &sample, dir, 8000.0);
+                // Disc-center pixel footprint: 2*68 deg over 480 px, ~30 km.
+                // Sampling and appearance share one texel so discrete
+                // classification follows the rendered surface, not 32 m noise.
+                let sample = planet.sample_surface(dir, 30000.0);
+                let mat = appearance::surface_appearance_filtered(&planet, &sample, dir, 30000.0);
                 // World-space normal from local ENU gradient is overkill per
                 // disc pixel; use radial normal with terminator shading.
                 let cos_inc = dir[0] * sun_w[0] + dir[1] * sun_w[1] + dir[2] * sun_w[2];
@@ -161,9 +184,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let lat = lat0 + (h as f64 / 2.0 - r as f64) * step;
                 let lon = lon0 + (c as f64 - w as f64 / 2.0) * step;
                 let dir = dir_from_latlon(lat, lon);
-                let sample = planet.sample_surface(dir, 32.0);
+                // Crop pixel footprint at 0.15 deg/px is ~16 km. Sample the
+                // field at the render texel: finer detail would alias into
+                // per-pixel classification speckle (salt/desert/rock flips).
+                let sample = planet.sample_surface(dir, 16000.0);
                 let mat = appearance::surface_appearance_filtered(&planet, &sample, dir, 16000.0);
-                let n = normal_enu(&planet, lat, lon, 0.15);
+                let n = normal_enu(&planet, lat, lon, 0.15, 16000.0);
                 ppm.extend_from_slice(&shade(mat.albedo_srgb, n, sun_el, sun_az));
             }
             if r % 80 == 0 {

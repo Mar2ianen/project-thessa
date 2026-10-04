@@ -203,8 +203,23 @@ pub fn surface_appearance_filtered(
         sample.temperature_k + regional * 5.0 + variation * 2.0 + grain * 2.0,
     );
     if h < 0.0 {
-        let shelf = (-h / 500.0).clamp(0.0, 1.0).sqrt();
-        let c = mix([0.12, 0.42, 0.43], [0.018, 0.095, 0.19], shelf);
+        // Shelf width varies along the coast (sediment supply and slope
+        // really do vary); a fixed-depth contour would ring every continent
+        // with a uniform sticker line. The linear profile spreads the
+        // shallows transition instead of front-loading it into one pixel.
+        let shelf_depth_m = 700.0 * (1.0 + regional * 0.6).max(0.4);
+        let shelf = (-h / shelf_depth_m).clamp(0.0, 1.0);
+        // Deep water is not a single paint fill: gyre-scale tonal drift.
+        // Shallow water takes lagoon-to-sediment tints that vary by reach;
+        // `regional` (360 km) survives coarse-texel filtering where the
+        // finer drivers wash out.
+        let drift = 1.0 + regional * 0.08 + variation * 0.05;
+        let shallow = mix(
+            [0.16 * drift, 0.40 * drift, 0.38 * drift],
+            [0.38 * drift, 0.44 * drift, 0.29 * drift],
+            ((regional * 0.5 + 0.5) * 0.6).clamp(0.0, 1.0),
+        );
+        let c = mix(shallow, [0.018 * drift, 0.095 * drift, 0.19 * drift], shelf);
         let c = mix(c, [0.014, 0.044, 0.11], smooth(600.0, 6000.0, -h));
         let ice = smooth(263.0, 253.0, sample.temperature_k + regional * 6.0);
         return SurfaceAppearance {
@@ -252,6 +267,23 @@ pub fn surface_appearance_filtered(
     // steep convex outcrops retain the underlying rock. No slope-independent
     // white salt overlay is introduced.
     color = mix(color, soil, loose_cover * (1.0 - vegetation) * 0.55);
+    // Salt fringe: the outer playa ring (above the 50 m core depth) keeps
+    // its plants while the crust washes over it, instead of a hard playa
+    // polygon. Inside the core the crust zones from damp margin to dry
+    // center, the desiccation gradient real playas show.
+    if sample.geology != Geology::Evaporite && sample.salt01 > 0.0 {
+        let crust = substrate_albedo(Geology::Evaporite)
+            .1
+            .map(|c| c * (1.0 + weathering * 0.18));
+        color = mix(color, crust, (sample.salt01 / 0.25 * 0.55).clamp(0.0, 1.0));
+    }
+    if sample.geology == Geology::Evaporite {
+        color = mix(
+            color,
+            [0.80, 0.77, 0.70],
+            (sample.salt01 * 0.5).clamp(0.0, 1.0),
+        );
+    }
     // Beach is a height band, not a circular feature footprint. The band
     // itself carries sand texture and moisture darkening so tidal flats do
     // not render as one flat paint fill.
@@ -475,6 +507,7 @@ mod frost_tests {
             geothermal_flux_w_m2: 0.08,
             moisture01,
             wetland_potential01: 0.0,
+            salt01: 0.0,
             temperature_k,
             continentality01: 0.5,
             eclipse_exposure01: 1.0,

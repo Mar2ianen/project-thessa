@@ -99,6 +99,12 @@ pub struct TerrainSample {
     pub moisture01: f64,
     /// Terrain-derived regional saturation suitability, not local water depth.
     pub wetland_potential01: f64,
+    /// Salt-flat affinity: depth below the depression spill level over a
+    /// 200 m desiccation scale, clamped to [0, 1]. The geology enum flips
+    /// to Evaporite at 0.25 (50 m deep, the playa core); the outer ring
+    /// keeps its ecological site while appearance washes the crust over it,
+    /// and the core zones from damp margin to dry center.
+    pub salt01: f64,
     pub temperature_k: f64,
     pub continentality01: f64,
     pub eclipse_exposure01: f64,
@@ -457,11 +463,13 @@ impl PlanetField {
         // circular reach of an authored plateau or a generic high-altitude site.
         // Bilinear spill support: the shoreline follows the height contour,
         // never the spill-grid cells (nearest lookup painted rectangles).
-        if height >= 0.0
-            && self
-                .salt_spill_at(lat, lon)
-                .is_some_and(|spill| height < spill)
-        {
+        // The enum flips at the core (affinity >= 0.5); the margin keeps its
+        // ecological site and appearance washes the crust over it.
+        let salt01 = self
+            .salt_spill_at(lat, lon)
+            .map(|spill| ((spill - height) / 200.0).clamp(0.0, 1.0))
+            .unwrap_or(0.0);
+        if height >= 0.0 && salt01 >= 0.25 {
             site = SiteClass::new(Biome::SaltFlat, Geology::Evaporite);
         }
         site = crate::ecology::classify_ecological_site(
@@ -496,6 +504,7 @@ impl PlanetField {
             geothermal_flux_w_m2: flux,
             moisture01: moisture,
             wetland_potential01,
+            salt01,
             temperature_k,
             continentality01: drivers.continentality,
             eclipse_exposure01: drivers.eclipse_exposure,

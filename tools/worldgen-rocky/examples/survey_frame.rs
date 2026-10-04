@@ -16,6 +16,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml"))?;
     let manifest = spec_recipe::manifest_from_spec(&recipe)?;
     let planet = field::field_from_manifest(&manifest)?;
+    // Global 960x480 equirect overview, north-up.
+    {
+        let (gw, gh) = (960_usize, 480_usize);
+        let step_lon = 360.0 / gw as f64;
+        let step_lat = 180.0 / gh as f64;
+        let mut ppm = format!("P6\n{gw} {gh}\n255\n").into_bytes();
+        for r in 0..gh {
+            for c in 0..gw {
+                let dir = dir_from_latlon(
+                    90.0 - (r as f64 + 0.5) * step_lat,
+                    -180.0 + (c as f64 + 0.5) * step_lon,
+                );
+                let sample = planet.sample_surface(dir, 32.0);
+                let mat = appearance::surface_appearance_filtered(&planet, &sample, dir, 16000.0);
+                ppm.extend_from_slice(&[
+                    (mat.albedo_srgb[0].clamp(0.0, 1.0) * 255.0) as u8,
+                    (mat.albedo_srgb[1].clamp(0.0, 1.0) * 255.0) as u8,
+                    (mat.albedo_srgb[2].clamp(0.0, 1.0) * 255.0) as u8,
+                ]);
+            }
+        }
+        let path = format!("{prefix}_global.ppm");
+        std::fs::write(&path, ppm)?;
+        println!("wrote: {path}");
+    }
     // Bookmark crops: 240x240 windows, ~0.15 deg/px (hires: 0.02 deg/px).
     for (name, lat0, lon0) in [
         ("coast", 23.0, 165.0),

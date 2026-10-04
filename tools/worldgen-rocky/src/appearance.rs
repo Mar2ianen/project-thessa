@@ -9,17 +9,21 @@ use crate::{
 
 /// Approximate unlit substrate reflectance, not the biome/debug colour legend.
 /// Weathered loose cover and exposed rock remain separate optical materials.
+/// Authored substrate reflectance pairs `(exposed stone, weathered soil)`.
+/// Soils keep pairwise distance above ~0.09 so distinct geologies never
+/// collapse into one mud mixture; same for stones. Adjust with the
+/// `substrate_palettes_stay_distinguishable` regression, not by eye.
 fn substrate_albedo(geology: Geology) -> ([f64; 3], [f64; 3]) {
     match geology {
-        Geology::Basaltic | Geology::OceanicCrust => ([0.20, 0.21, 0.22], [0.32, 0.29, 0.25]),
-        Geology::FelsicHighland => ([0.56, 0.54, 0.49], [0.51, 0.46, 0.37]),
-        Geology::ContinentalCrust => ([0.42, 0.43, 0.42], [0.43, 0.36, 0.27]),
-        Geology::Sedimentary => ([0.48, 0.43, 0.35], [0.49, 0.40, 0.28]),
-        Geology::ImpactBreccia => ([0.34, 0.32, 0.30], [0.40, 0.34, 0.28]),
+        Geology::Basaltic | Geology::OceanicCrust => ([0.20, 0.21, 0.22], [0.27, 0.26, 0.24]),
+        Geology::FelsicHighland => ([0.56, 0.54, 0.49], [0.54, 0.45, 0.37]),
+        Geology::ContinentalCrust => ([0.43, 0.42, 0.40], [0.47, 0.36, 0.26]),
+        Geology::Sedimentary => ([0.50, 0.42, 0.33], [0.58, 0.44, 0.28]),
+        Geology::ImpactBreccia => ([0.31, 0.28, 0.27], [0.38, 0.29, 0.25]),
         Geology::Evaporite => ([0.77, 0.75, 0.69], [0.64, 0.59, 0.47]),
-        Geology::GlacialTill => ([0.40, 0.43, 0.44], [0.48, 0.46, 0.40]),
-        Geology::Regolith => ([0.35, 0.34, 0.31], [0.44, 0.37, 0.28]),
-        Geology::Hydrothermal => ([0.39, 0.35, 0.29], [0.48, 0.37, 0.22]),
+        Geology::GlacialTill => ([0.37, 0.43, 0.48], [0.45, 0.47, 0.43]),
+        Geology::Regolith => ([0.36, 0.35, 0.33], [0.40, 0.38, 0.33]),
+        Geology::Hydrothermal => ([0.42, 0.34, 0.26], [0.55, 0.33, 0.16]),
     }
 }
 
@@ -299,6 +303,46 @@ pub fn surface_appearance_filtered(
         snow: snow as f32,
         snow_cover: snow_cover as f32,
         frost_cover: (frost * 0.75).clamp(0.0, 1.0) as f32,
+    }
+}
+
+#[cfg(test)]
+mod palette_tests {
+    use super::*;
+    use crate::biomes::Geology;
+
+    fn dist(a: [f64; 3], b: [f64; 3]) -> f64 {
+        ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+    }
+
+    #[test]
+    fn substrate_palettes_stay_distinguishable() {
+        // OceanicCrust shares the basaltic pair (same volcanic material
+        // family); every other geology must stand apart in both channels.
+        let geologies = [
+            Geology::Basaltic,
+            Geology::FelsicHighland,
+            Geology::ContinentalCrust,
+            Geology::Sedimentary,
+            Geology::ImpactBreccia,
+            Geology::Evaporite,
+            Geology::GlacialTill,
+            Geology::Regolith,
+            Geology::Hydrothermal,
+        ];
+        for (i, a) in geologies.iter().enumerate() {
+            for b in &geologies[i + 1..] {
+                let (stone_a, soil_a) = substrate_albedo(*a);
+                let (stone_b, soil_b) = substrate_albedo(*b);
+                let stone_d = dist(stone_a, stone_b);
+                let soil_d = dist(soil_a, soil_b);
+                assert!(
+                    stone_d >= 0.09,
+                    "stones {a:?}/{b:?} collide at {stone_d:.3}"
+                );
+                assert!(soil_d >= 0.09, "soils {a:?}/{b:?} collide at {soil_d:.3}");
+            }
+        }
     }
 }
 

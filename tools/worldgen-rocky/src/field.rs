@@ -455,21 +455,13 @@ impl PlanetField {
         };
         // Salinity suitability belongs to a dry closed depression, not the
         // circular reach of an authored plateau or a generic high-altitude site.
-        let r = regular_index(
-            lat,
-            -90.0,
-            self.context.hydrology_step_deg,
-            self.context.salt_spill_m.len(),
-            false,
-        );
-        let c = regular_index(
-            lon,
-            -180.0,
-            self.context.hydrology_step_deg,
-            self.context.salt_spill_m[0].len(),
-            true,
-        );
-        if height >= 0.0 && self.context.salt_spill_m[r][c].is_some_and(|spill| height < spill) {
+        // Bilinear spill support: the shoreline follows the height contour,
+        // never the spill-grid cells (nearest lookup painted rectangles).
+        if height >= 0.0
+            && self
+                .salt_spill_at(lat, lon)
+                .is_some_and(|spill| height < spill)
+        {
             site = SiteClass::new(Biome::SaltFlat, Geology::Evaporite);
         }
         site = crate::ecology::classify_ecological_site(
@@ -875,6 +867,43 @@ impl PlanetField {
         let blend = |row: usize| lerp_context(values[row][c], values[row][(c + 1) % cols], fx);
         lerp_context(blend(r), blend((r + 1).min(rows - 1)), fy)
     }
+
+    /// Bilinear salt-spill support over the hydrology grid, ignoring dry
+    /// cells: shorelines follow the interpolated spill contour instead of
+    /// painting nearest-cell rectangles. Returns `None` where no corner of
+    /// the enclosing stencil holds spill.
+    fn salt_spill_at(&self, lat: f64, lon: f64) -> Option<f64> {
+        let grid = &self.context.salt_spill_m;
+        if grid.is_empty() || grid[0].is_empty() {
+            return None;
+        }
+        let (rows, cols) = (grid.len(), grid[0].len());
+        let step = self.context.hydrology_step_deg;
+        if !step.is_finite() || step <= 0.0 {
+            return None;
+        }
+        let y = ((lat + 90.0) / step).clamp(0.0, (rows - 1) as f64);
+        let x = (lon + 180.0).rem_euclid(360.0) / step;
+        let (r0, c0) = (y.floor() as usize, x.floor() as usize);
+        let (fy, fx) = (y - r0 as f64, x - c0 as f64);
+        let r1 = (r0 + 1).min(rows - 1);
+        let c1 = (c0 + 1) % cols;
+        let mut sum = 0.0;
+        let mut weight = 0.0;
+        for (r, wy) in [(r0, 1.0 - fy), (r1, fy)] {
+            for (c, wx) in [(c0, 1.0 - fx), (c1, fx)] {
+                if let Some(spill) = grid[r][c] {
+                    sum += spill * wx * wy;
+                    weight += wx * wy;
+                }
+            }
+        }
+        if weight > 0.0 {
+            Some(sum / weight)
+        } else {
+            None
+        }
+    }
 }
 
 fn stencil_geometry(h: [f64; 5], distance_m: f64) -> (f64, f64) {
@@ -894,20 +923,6 @@ fn lerp_context(a: f64, b: f64, t: f64) -> f64 {
         b
     } else {
         a * (1.0 - t) + b * t
-    }
-}
-
-fn regular_index(value: f64, start: f64, step: f64, count: usize, wrap: bool) -> usize {
-    let position = if wrap {
-        (value - start).rem_euclid(step * count as f64) / step
-    } else {
-        (value - start) / step
-    };
-    let nearest = (position - 0.5).ceil();
-    if wrap {
-        (nearest as i64).rem_euclid(count as i64) as usize
-    } else {
-        nearest.clamp(0.0, (count - 1) as f64) as usize
     }
 }
 
@@ -1565,20 +1580,6 @@ mod tests {
         let fraction = ocean as f64 / 4096.0;
         assert!((fraction - 0.6).abs() < 0.025, "ocean area {fraction}");
     }
-    #[test]
-    fn context_arithmetic_wraps_seam_and_clamps_poles() {
-        assert_eq!(regular_index(180.0, -180.0, 2.0, 180, true), 0);
-        assert_eq!(regular_index(-540.0, -180.0, 2.0, 180, true), 0);
-        assert_eq!(regular_index(90.0, -90.0, 2.0, 91, false), 90);
-        assert_eq!(regular_index(-90.0, -90.0, 2.0, 91, false), 0);
-        for n in 0..180 {
-            assert_eq!(
-                regular_index(-180.0 + n as f64 * 2.0, -180.0, 2.0, 180, true),
-                n
-            );
-        }
-    }
-
     #[test]
     fn continuous_ocean_driver_does_not_jump_at_context_cell_boundaries() {
         let mut field = test_field();

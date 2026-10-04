@@ -186,15 +186,17 @@ pub fn surface_appearance_filtered(
     let outcrop_texture = noise(757, 96.0, 3);
     let cover_texture = noise(761, 192.0, 3);
     let h = sample.height_m;
-    // Snow cover breaks into drifts and thaw patches: the grain rides the
-    // threshold (±0.7 grain ~= ±4 K) so a uniform sub-zero plain still reads
-    // as structured snow instead of a flat fill. Classification inputs
-    // (height/moisture/temperature/slope) are untouched — only the visual
-    // coverage and the final albedo carry the pattern.
+    // Snow cover breaks into drifts and thaw patches: low-frequency drift
+    // signals ride the threshold (±2 K) so a uniform sub-zero plain still
+    // reads as structured snow instead of a flat fill, while pixel-scale
+    // grain only textures decided snow instead of flipping coverage.
+    // Classification inputs (height/moisture/temperature/slope) are
+    // untouched — only the visual coverage and the final albedo carry
+    // the pattern.
     let snow = smooth(
         276.0,
         264.0,
-        sample.temperature_k + regional * 5.0 + variation * 2.0 + grain * 6.0,
+        sample.temperature_k + regional * 5.0 + variation * 2.0 + grain * 2.0,
     );
     if h < 0.0 {
         let shelf = (-h / 500.0).clamp(0.0, 1.0).sqrt();
@@ -246,9 +248,16 @@ pub fn surface_appearance_filtered(
     // steep convex outcrops retain the underlying rock. No slope-independent
     // white salt overlay is introduced.
     color = mix(color, soil, loose_cover * (1.0 - vegetation) * 0.55);
-    // Beach is a height band, not a circular feature footprint.
-    color = mix([0.66, 0.64, 0.48], color, smooth(3.0, 45.0, h));
+    // Beach is a height band, not a circular feature footprint. The band
+    // itself carries sand texture and moisture darkening so tidal flats do
+    // not render as one flat paint fill.
+    let beach_albedo = [0.66, 0.64, 0.48].map(|c| c * (1.0 + cover_texture * 0.12 - damp * 0.18));
+    color = mix(beach_albedo, color, smooth(3.0, 45.0, h));
     color = color.map(|c| c * (1.0 + variation * 0.14 + regional * 0.08 + grain * 0.24));
+    // Bare ground (little vegetation to carry the cover texture) gets its
+    // own large-scale tonal structure so deserts and dry plains are not a
+    // single flat fill at survey resolution.
+    color = color.map(|c| c * (1.0 + cover_texture * 0.10 * (1.0 - vegetation)));
     // A cold dry plateau cannot acquire the same thick cover as a snowy wet
     // mountain. One annual precipitation budget, converted from water to
     // settled snow (300 kg/m³), provides a static availability proxy. The

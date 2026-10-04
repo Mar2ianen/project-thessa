@@ -18,7 +18,10 @@ consumers. Filesystem cwd and external renderer settings cannot select another
 authority surface.
 
 Source identity compares parsed JSON values exactly, not object member ordering
-or whitespace. Client dependency feature unification enables serde_json's
+or whitespace, except the two calibrated datum offsets (`sea_offset_m`,
+`temperature_offset_k`), which compare within 1e-6 absolute: both are
+evaluated through transcendental sampling whose last-ulp results differ
+across system libm implementations. Client dependency feature unification enables serde_json's
 `preserve_order`, whereas the offline CLI normally sorts object keys. Numerical
 parameters and array order remain exact; changed parameters still fail.
 The new `FrozenSurface::read_gzip` stream loader retains the filesystem loader's

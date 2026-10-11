@@ -308,6 +308,18 @@ pub(crate) const CLOUD_SHADOW_DECK_HEIGHT_M: f64 = 3000.0;
 /// Deep-core shadow depth; thin skirts fade out through the alpha shaping.
 pub(crate) const CLOUD_SHADOW_STRENGTH: f32 = 0.45;
 
+/// Deck relief heights as FRACTIONS of the mesh radius: the shell meshes
+/// are unit spheres later scaled by the planet radius, so a metre value
+/// here would dome by thousands of radii (screenshot-proven giant sheets).
+/// 0.00125 rides ~4 km over Thessa; other worlds scale proportionally.
+pub(crate) const CLOUD_RELIEF_LOW_FRAC: f32 = 0.00125;
+pub(crate) const CLOUD_RELIEF_HIGH_FRAC: f32 = 0.00078;
+
+/// Alpha channel grid out of an interleaved RGBA8 bake.
+fn alpha_grid(px: &[u8]) -> Vec<u8> {
+    px.chunks_exact(4).map(|c| c[3]).collect()
+}
+
 /// Deck placement shared by the shell spawner, the follower, and the shadow
 /// samplers: (body, deck, shell scale factor, differential spin rad/s).
 /// Single source of truth; the spawn loop below reads this table.
@@ -404,6 +416,66 @@ pub(crate) fn shadow_factor_from_alpha(alpha: f32) -> f32 {
     let t = ((alpha - 0.05) / 0.55).clamp(0.0, 1.0);
     let s = t * t * (3.0 - 2.0 * t);
     1.0 - CLOUD_SHADOW_STRENGTH * s
+}
+
+// ---------------------------------------------------------------------------
+// Shell relief: radial domes from deck coverage.
+
+/// Radial relief for a shell mesh from a deck coverage grid: dense cores
+/// become domes, thin skirts stay low, so decks read as puffy volumes
+/// with true silhouettes and parallax instead of painted spheres. Heights
+/// sample the same bake the shell shows (u wraps the seam, so the two
+/// UV-seam vertex columns displace identically). `relief` is in mesh units
+/// (the shells are unit spheres!); domes stay gentle, so the sphere's
+/// smooth normals remain valid without recomputation.
+pub(crate) fn displace_shell_by_coverage(
+    mesh: &mut Mesh,
+    alpha: &[u8],
+    w: u32,
+    h: u32,
+    relief_m: f32,
+) {
+    use bevy::mesh::VertexAttributeValues;
+    assert_eq!(alpha.len(), (w * h) as usize);
+    let height_at = |u: f32, v: f32| {
+        let uu = (u.fract() + 1.0).fract() * w as f32 - 0.5;
+        let vv = (v.clamp(0.0, 1.0) * h as f32 - 0.5).clamp(0.0, h as f32 - 1.0);
+        let x0 = uu.floor().max(0.0) as u32;
+        let y0 = vv.floor().max(0.0) as u32;
+        let x1 = (x0 + 1).min(w - 1);
+        let y1 = (y0 + 1).min(h - 1);
+        let fx = (uu - x0 as f32).clamp(0.0, 1.0);
+        let fy = (vv - y0 as f32).clamp(0.0, 1.0);
+        let s = |x: u32, y: u32| alpha[(y * w + x) as usize] as f32 / 255.0;
+        let top = s(x0, y0) * (1.0 - fx) + s(x1, y0) * fx;
+        let bot = s(x0, y1) * (1.0 - fx) + s(x1, y1) * fx;
+        top * (1.0 - fy) + bot * fy
+    };
+    if mesh.attribute(Mesh::ATTRIBUTE_POSITION).is_none() {
+        return;
+    }
+    let uv: Vec<[f32; 2]> = match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
+        Some(VertexAttributeValues::Float32x2(uv)) => uv.clone(),
+        _ => return,
+    };
+    let lifts: Vec<f32> = uv
+        .iter()
+        .map(|t| {
+            let h = height_at(t[0], t[1]);
+            // Smoothstepped lift: only real cores dome up, skirts stay put.
+            h * h * (3.0 - 2.0 * h) * relief_m
+        })
+        .collect();
+    if let Some(VertexAttributeValues::Float32x3(out)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+    {
+        for (p, lift) in out.iter_mut().zip(lifts.iter()) {
+            let dir = Vec3::new(p[0], p[1], p[2]).normalize_or_zero();
+            p[0] += dir.x * lift;
+            p[1] += dir.y * lift;
+            p[2] += dir.z * lift;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -621,8 +693,26 @@ fn setup_beauty(
 
     // --- Clouds.
     let low_px = bake_clouds(0xC10D, cw, ch, r.clouds_coverage, r.clouds_opacity);
+    // Shell meshes: one unit sphere per deck so relief displacement follows
+    // each deck's own coverage (a shared mesh would dome all decks alike).
+    // Bevy's UV sphere puts its texture poles on local +Z (see
+    // SPHERE_POLE_TO_WORLD_UP in main): every pole-ring vertex shares the pole
+    // position but spans the full u range, so each pole triangle smears an
+    // entire texture row across the sky. From inside the shell (any low
+    // flight) that reads as giant white wedges with hard triangle edges
+    // (measured on a 30 km maneuver frame). Collapsing pole u to the middle
+    // column reduces the wedge to a single texel.
+    let mut make_shell = |alpha: Option<(Vec<u8>, u32, u32, f32)>| {
+        let mut sphere = Sphere::new(1.0).mesh().uv(96, 48);
+        if let Some((grid, w, h, relief)) = alpha {
+            displace_shell_by_coverage(&mut sphere, &grid, w, h, relief);
+        }
+        collapse_shell_pole_uvs(&mut sphere);
+        meshes.add(sphere)
+    };
+    let low_mesh = make_shell(Some((alpha_grid(&low_px), cw, ch, CLOUD_RELIEF_LOW_FRAC)));
     let cloud_low = images.add(rgba_image(cw, ch, low_px));
-    let cloud_high = if r.clouds_layers >= 2 {
+    let (cloud_high, high_mesh) = if r.clouds_layers >= 2 {
         // Cirrus stays a thin veil over the low deck: a small coverage
         // offset lands it far down the shaping curve (measured).
         let hi_px = bake_clouds(
@@ -632,10 +722,20 @@ fn setup_beauty(
             (r.clouds_coverage + 0.08).min(0.95),
             r.clouds_opacity * 0.7,
         );
-        Some(images.add(rgba_image(cw / 2, ch / 2, hi_px)))
+        let hi_mesh = make_shell(Some((
+            alpha_grid(&hi_px),
+            cw / 2,
+            ch / 2,
+            CLOUD_RELIEF_HIGH_FRAC,
+        )));
+        (
+            Some(images.add(rgba_image(cw / 2, ch / 2, hi_px))),
+            Some(hi_mesh),
+        )
     } else {
-        None
+        (None, None)
     };
+    let plain_mesh = make_shell(None);
 
     // --- Aurora curtain base.
     let (aw, ah) = match r.aurora_quality {
@@ -656,26 +756,21 @@ fn setup_beauty(
         aurora_size: (aw, ah),
     });
 
-    // Shell meshes share one unit sphere; per-shell scale follows the planet.
-    // Bevy's UV sphere puts its texture poles on local +Z (see
-    // SPHERE_POLE_TO_WORLD_UP in main): every pole-ring vertex shares the pole
-    // position but spans the full u range, so each pole triangle smears an
-    // entire texture row across the sky. From inside the shell (any low
-    // flight) that reads as giant white wedges with hard triangle edges
-    // (measured on a 30 km maneuver frame). Collapsing pole u to the middle
-    // column reduces the wedge to a single texel.
-    let mut shell_sphere = Sphere::new(1.0).mesh().uv(96, 48);
-    collapse_shell_pole_uvs(&mut shell_sphere);
-    let shell_mesh = meshes.add(shell_sphere);
-
     // Cloud shells for the three ocean worlds (map + pilot follow logic
     // below copies planet transforms; no hierarchy parenting). Placement
     // comes from CLOUD_DECKS so shadow samplers share the exact table.
     for (body, deck, scale, spin) in CLOUD_DECKS.iter().copied().filter(|(body, deck, _, _)| {
         *deck == 0 || (*body == "thessa" && (*deck as u32) < r.clouds_layers)
     }) {
+        // Relief follows the deck's own bake (deck 1 falls back to the low
+        // mesh when cirrus is off, but then it never spawns either).
+        let mesh = if deck == 0 {
+            low_mesh.clone()
+        } else {
+            high_mesh.clone().unwrap_or_else(|| low_mesh.clone())
+        };
         commands.spawn((
-            Mesh3d(shell_mesh.clone()),
+            Mesh3d(mesh),
             MeshMaterial3d(materials.add(StandardMaterial::default())),
             Transform::default(),
             Visibility::Hidden,
@@ -696,7 +791,7 @@ fn setup_beauty(
     // falloff instead of a painted band. Gains sum near the main shell.
     for (scale, gain) in [(1.038, 0.45), (1.045, 1.0), (1.052, 0.5)] {
         commands.spawn((
-            Mesh3d(shell_mesh.clone()),
+            Mesh3d(plain_mesh.clone()),
             MeshMaterial3d(materials.add(StandardMaterial::default())),
             Transform::default(),
             Visibility::Hidden,
@@ -1239,6 +1334,59 @@ mod tests {
             .filter(|c| c[0] > 200 && c[0].saturating_sub(c[1]) > 40)
             .count();
         assert!(warm > 0, "storm core missing");
+    }
+
+    #[test]
+    fn shell_relief_domes_cores_and_seals_the_seam() {
+        use bevy::mesh::VertexAttributeValues;
+        // Single overcast texel on an 8x4 grid: only neighbors dome up.
+        let mut alpha = vec![0u8; 8 * 4];
+        alpha[2 * 8 + 3] = 255;
+        let mut mesh = Sphere::new(1.0).mesh().uv(8, 4);
+        displace_shell_by_coverage(&mut mesh, &alpha, 8, 4, 0.01);
+        let pos = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+            Some(VertexAttributeValues::Float32x3(p)) => p.clone(),
+            _ => panic!("positions lost"),
+        };
+        let radii: Vec<f32> = pos
+            .iter()
+            .map(|p| (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt())
+            .collect();
+        let peak = radii.iter().cloned().fold(0.0f32, f32::max);
+        // Texel centers sit half a texel off the vertex grid, so the dome
+        // undershoots full relief but must clearly rise above the sphere.
+        assert!(peak > 1.0005 && peak <= 1.011, "peak {peak}");
+        // Far side stays on the unit sphere.
+        let low = radii.iter().cloned().fold(f32::INFINITY, f32::min);
+        assert!((low - 1.0).abs() < 1e-4, "low {low}");
+        // UV-seam columns (u = 0 vs u = 1, same positions) displace equally.
+        let uv = match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
+            Some(VertexAttributeValues::Float32x2(uv)) => uv.clone(),
+            _ => panic!("uvs lost"),
+        };
+        for (i, t) in uv.iter().enumerate() {
+            if t[0] == 0.0 {
+                let mate = uv
+                    .iter()
+                    .position(|o| o[0] == 1.0 && (o[1] - t[1]).abs() < 1e-6)
+                    .expect("seam mate");
+                assert!(
+                    (radii[i] - radii[mate]).abs() < 1e-3,
+                    "seam radii {} vs {}",
+                    radii[i],
+                    radii[mate]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shell_relief_stays_mesh_fractional() {
+        // Unit-sphere meshes scale by the planet radius at draw time: metre
+        // relief values here would dome by thousands of radii (measured as
+        // sky-filling sheets). This pins the fractional contract.
+        assert!(CLOUD_RELIEF_LOW_FRAC < 0.1);
+        assert!(CLOUD_RELIEF_HIGH_FRAC < 0.1);
     }
 
     #[test]

@@ -34,6 +34,14 @@ path already consumes snapshots from an embedded authoritative server process.
 - raster water reflection baseline and optional graphics-setting resolution;
 - baked beauty shells (cloud decks, gas-giant bands, aurora) and field-first
   engine plume, all gated by `graphics.toml`;
+- low-deck cloud shadows on terrain (`clouds.cast_shadows`): the GPU surface
+  samples the deck bake the shells show (sun-parallax offset, soft alpha
+  shaping, direct sun only); CPU-streamed tiles apply the same deck as a
+  per-tile factor. Cirrus casts no shadow (thin, diffuse);
+- night-side city lights (`[night_lights]`): warm emissive clusters baked
+  once at startup from the world's inhabited regions, gated by the
+  terminator in-shader on the GPU path (the CPU fallback has no emissive
+  slot and stays dark);
 - render-local anchoring so large barycentric coordinates do not jitter.
 
 ## Coordinate contract

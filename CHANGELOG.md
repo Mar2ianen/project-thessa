@@ -9,6 +9,15 @@ APIs, data formats, and save files are not stable before `0.1.0`.
 
 ### Added
 
+- Low-deck cloud shadows on terrain (`clouds.cast_shadows`, on for High/Ultra
+  presets): the GPU surface samples the deck bake the shells show, offset by
+  sun parallax for the physical deck height with soft alpha shaping over the
+  direct sun only (skylight/ambient stay); CPU-streamed tiles apply the same
+  deck as a per-tile factor. Cirrus casts no shadow.
+- Night-side city lights (`[night_lights]`, bake resolution by quality):
+  warm emissive clusters baked once at startup from the world's inhabited
+  regions, gated by the terminator in the GPU terrain shader; the CPU
+  fallback path has no emissive slot and stays dark.
 - A shared baked free-flight trajectory for the map and flight view, an
   ephemeris table, and a simulation-time event scheduler; baking runs in a
   compute worker.

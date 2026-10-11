@@ -1503,3 +1503,21 @@ fn microstore_compact_levels_match_gpu_decode() {
     eprintln!("compact storage on hardware: {wire} B wire vs {raw} B raw, worst {worst_vs_orig}");
     assert!(wire < raw, "compact must beat raw RGBA");
 }
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+fn raster_surface_shader_validates_on_hardware() {
+    let gpu = Gpu::new();
+    // Full raster module (vertex + fragment), including the cloud-shadow
+    // and city-lights blocks. wgpu reports naga validation failures
+    // through the error scope, so pop it and fail closed.
+    let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let _module = gpu
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("cbt-raster-surface-validation"),
+            source: wgpu::ShaderSource::Wgsl(super::CBT_RASTER_WGSL.into()),
+        });
+    let err = pollster::block_on(scope.pop());
+    assert!(err.is_none(), "raster WGSL validation failed: {err:?}");
+}

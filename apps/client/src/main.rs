@@ -12,6 +12,7 @@ use atmosphere::{
     AtmospherePlugin, GraphicsRequested, GraphicsResolved, PrimaryStarLight, RayTracingActive,
 };
 mod beauty;
+mod night_lights;
 mod plume;
 mod terrain;
 mod water;
@@ -227,6 +228,7 @@ fn main() {
         .add_plugins(terrain::TerrainPlugin)
         .add_plugins(water::WaterPlugin)
         .add_plugins(beauty::BeautyPlugin)
+        .add_plugins(night_lights::NightLightsPlugin)
         .add_plugins(plume::PlumePlugin)
         .add_plugins(BrpExtrasPlugin::default())
         .insert_resource(SimulationClock::default())

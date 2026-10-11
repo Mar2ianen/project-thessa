@@ -290,6 +290,119 @@ fn bake_clouds(seed: u64, w: u32, h: u32, coverage: f32, opacity: f32) -> Vec<u8
 }
 
 // ---------------------------------------------------------------------------
+// Cloud shadows: analytic sampling of the deck bake.
+//
+// The shells are ordinary textured spheres, so a ground point's shadow UV is
+// just the bake texel the shell renderer samples for the same direction.
+// Shadows align with the visible clouds by construction; the only model
+// inputs are the deck rotation (shared with the follower below) and a sun
+// parallax offset for the physical deck height (the impostor shell rides an
+// exaggerated radius, never used here).
+
+/// Physical low-deck altitude for the shadow parallax (metres).
+pub(crate) const CLOUD_SHADOW_DECK_HEIGHT_M: f64 = 3000.0;
+/// Deep-core shadow depth; thin skirts fade out through the alpha shaping.
+pub(crate) const CLOUD_SHADOW_STRENGTH: f32 = 0.45;
+
+/// Deck placement shared by the shell spawner, the follower, and the shadow
+/// samplers: (body, deck, shell scale factor, differential spin rad/s).
+/// Single source of truth; the spawn loop below reads this table.
+pub(crate) const CLOUD_DECKS: &[(&str, u8, f32, f32)] = &[
+    ("thessa", 0, 1.012, 0.004),
+    ("thessa", 1, 1.020, 0.0064),
+    ("pelagos", 0, 1.010, 0.003),
+    ("borea", 0, 1.010, 0.002),
+];
+
+/// Inverse of the Bevy Sphere mesh mapping (poles on local +Z, u from +X
+/// toward +Y, v = 0 at the +Z pole): bake-texel coordinates for a shell-local
+/// unit direction. Mirrored in the GPU terrain shader (`shell_mesh_uv`);
+/// keep the two in sync.
+pub(crate) fn shell_mesh_uv(local_dir: Vec3) -> Vec2 {
+    let u = (local_dir.y.atan2(local_dir.x) / std::f32::consts::TAU).fract();
+    let u = if u < 0.0 { u + 1.0 } else { u };
+    let v = 0.5 - local_dir.z.clamp(-1.0, 1.0).asin() / std::f32::consts::PI;
+    Vec2::new(u, v.clamp(0.0, 1.0))
+}
+
+/// Differential spin for a deck, if the shell table carries it.
+pub(crate) fn deck_spin_rad_s(body: &str, deck: u8) -> Option<f32> {
+    CLOUD_DECKS
+        .iter()
+        .find(|(b, d, _, _)| *b == body && *d == deck)
+        .map(|(_, _, _, spin)| *spin)
+}
+
+/// Deck world rotation shared with the follower: differential spin on top of
+/// the planet rotation. When animation is off the deck is planet-fixed.
+pub(crate) fn deck_world_rotation(
+    planet_rotation: Quat,
+    spin_rad_s: f32,
+    sim_seconds: f64,
+    animate: bool,
+) -> Quat {
+    if !animate {
+        return planet_rotation;
+    }
+    Quat::from_rotation_y((sim_seconds as f32) * spin_rad_s) * planet_rotation
+}
+
+/// Body frame -> shell-local bake frame for shadow sampling: the shader
+/// applies this to the parallax-corrected body direction. Static decks are
+/// the identity (same frame as the planet).
+pub(crate) fn shadow_relative_rotation(
+    planet_rotation: Quat,
+    spin_rad_s: f32,
+    sim_seconds: f64,
+    animate: bool,
+) -> Quat {
+    deck_world_rotation(planet_rotation, spin_rad_s, sim_seconds, animate).inverse()
+        * planet_rotation
+}
+
+/// Sun direction in the planet-fixed frame for body-space shadow math.
+pub(crate) fn shadow_sun_body(planet_rotation: Quat, sun_world_dir: Vec3) -> Vec3 {
+    planet_rotation.inverse() * sun_world_dir.normalize_or_zero()
+}
+
+/// Parallax-corrected sample direction: the deck point whose shadow falls on
+/// `ground_dir` (unit) given unit `sun_dir` (toward the sun). Walk from the
+/// ground toward the sun to the deck plane: overhead sun samples straight
+/// down, low sun reaches sunward (the cloud east of you shadows you at
+/// sunset, not the one overhead).
+pub(crate) fn shadow_sample_dir(
+    ground_dir: Vec3,
+    sun_dir: Vec3,
+    radius_m: f32,
+    deck_height_m: f32,
+) -> Vec3 {
+    let up = ground_dir.normalize_or_zero();
+    let sun = sun_dir.normalize_or_zero();
+    let cos_z = up.dot(sun).max(0.15);
+    (up * radius_m + sun * (deck_height_m / cos_z)).normalize_or_zero()
+}
+
+/// Nearest cloud alpha (0 = clear, 1 = overcast core) from a bake made by
+/// [`bake_clouds`]: row-major RGBA8, v = 0 at the first row.
+pub(crate) fn cloud_alpha_at(data: &[u8], w: u32, h: u32, uv: Vec2) -> f32 {
+    if w == 0 || h == 0 || data.len() < (w * h * 4) as usize {
+        return 0.0;
+    }
+    let x = ((uv.x.fract() + 1.0).fract() * w as f32).floor() as u32 % w;
+    let y = ((uv.y.clamp(0.0, 1.0) * h as f32).floor() as u32).min(h - 1);
+    data[((y * w + x) * 4 + 3) as usize] as f32 / 255.0
+}
+
+/// Shadow factor from deck alpha: clear sky stays 1.0, overcast cores dim
+/// toward `1 - CLOUD_SHADOW_STRENGTH`. Skirts fade smoothly, never a hard
+/// blob edge.
+pub(crate) fn shadow_factor_from_alpha(alpha: f32) -> f32 {
+    let t = ((alpha - 0.05) / 0.55).clamp(0.0, 1.0);
+    let s = t * t * (3.0 - 2.0 * t);
+    1.0 - CLOUD_SHADOW_STRENGTH * s
+}
+
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // Aurora.
 
@@ -386,19 +499,19 @@ fn rgba_image(w: u32, h: u32, pixels: Vec<u8>) -> Image {
 }
 
 #[derive(Resource)]
-struct BeautyImages {
+pub(crate) struct BeautyImages {
     nereid: Handle<Image>,
     vesper: Handle<Image>,
     nereid_size: (u32, u32),
     vesper_size: (u32, u32),
-    cloud_low: Handle<Image>,
+    pub(crate) cloud_low: Handle<Image>,
     cloud_high: Option<Handle<Image>>,
     aurora: Handle<Image>,
     aurora_size: (u32, u32),
 }
 
 #[derive(Component)]
-struct CloudShell {
+pub(crate) struct CloudShell {
     body: &'static str,
     deck: u8,
     spin_rad_s: f32,
@@ -406,7 +519,7 @@ struct CloudShell {
 }
 
 #[derive(Component)]
-struct AuroraShell {
+pub(crate) struct AuroraShell {
     body: &'static str,
     scale_factor: f32,
 }
@@ -529,28 +642,24 @@ fn setup_beauty(
     let shell_mesh = meshes.add(shell_sphere);
 
     // Cloud shells for the three ocean worlds (map + pilot follow logic
-    // below copies planet transforms; no hierarchy parenting).
-    for (body, scale, spin) in [
-        ("thessa", 1.012f32, 0.004),
-        ("pelagos", 1.010f32, 0.003),
-        ("borea", 1.010f32, 0.002),
-    ] {
-        let decks = if body == "thessa" { r.clouds_layers } else { 1 };
-        for deck in 0..decks {
-            commands.spawn((
-                Mesh3d(shell_mesh.clone()),
-                MeshMaterial3d(materials.add(StandardMaterial::default())),
-                Transform::default(),
-                Visibility::Hidden,
-                Name::new(format!("beauty cloud {body} deck{deck}")),
-                CloudShell {
-                    body,
-                    deck: deck as u8,
-                    spin_rad_s: spin * (1.0 + deck as f32 * 0.6),
-                    scale_factor: scale + deck as f32 * 0.008,
-                },
-            ));
-        }
+    // below copies planet transforms; no hierarchy parenting). Placement
+    // comes from CLOUD_DECKS so shadow samplers share the exact table.
+    for (body, deck, scale, spin) in CLOUD_DECKS.iter().copied().filter(|(body, deck, _, _)| {
+        *deck == 0 || (*body == "thessa" && (*deck as u32) < r.clouds_layers)
+    }) {
+        commands.spawn((
+            Mesh3d(shell_mesh.clone()),
+            MeshMaterial3d(materials.add(StandardMaterial::default())),
+            Transform::default(),
+            Visibility::Hidden,
+            Name::new(format!("beauty cloud {body} deck{deck}")),
+            CloudShell {
+                body,
+                deck,
+                spin_rad_s: spin,
+                scale_factor: scale,
+            },
+        ));
     }
 
     // Aurora shell (Thessa only).
@@ -711,6 +820,29 @@ fn live_planet_transform(
     )
 }
 
+/// Planet frame shared by shell followers and effect samplers (e.g. cloud
+/// shadows): the visible entity match wins, otherwise the live terrain
+/// streamer owns the flown world's placement. Single source of truth so
+/// shadows track the shells they shade.
+#[allow(clippy::type_complexity)]
+pub(crate) fn planet_frame_for_body(
+    body: &str,
+    visuals: &Query<
+        (&Name, &Transform, &InheritedVisibility),
+        (Without<CloudShell>, Without<AuroraShell>),
+    >,
+    terrain: Option<&terrain::WorldTerrain>,
+    sim_seconds: f64,
+) -> Option<Transform> {
+    // Entity match is only trusted when visible; otherwise the live terrain
+    // streamer owns the flown world's placement (pilot/survey).
+    let (planet, planet_visible) = planet_transform(body, visuals)?;
+    if planet_visible {
+        return Some(planet);
+    }
+    terrain.and_then(|w| live_planet_transform(body, w, sim_seconds))
+}
+
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn follow_cloud_shells(
     imgs: Option<Res<BeautyImages>>,
@@ -750,28 +882,10 @@ fn follow_cloud_shells(
             *vis = Visibility::Hidden;
             continue;
         }
-        let Some((planet, planet_visible)) = planet_transform(shell.body, &visuals) else {
+        let Some(planet) = planet_frame_for_body(shell.body, &visuals, terrain.as_deref(), t)
+        else {
             if log_now {
-                info!("[beauty] cloud {}: planet NOT FOUND", shell.body);
-            }
-            *vis = Visibility::Hidden;
-            continue;
-        };
-        // Entity match is only trusted when visible; otherwise the live
-        // terrain streamer owns the flown world's placement (pilot/survey).
-        let planet = if planet_visible {
-            planet
-        } else if let Some(live) = terrain
-            .as_deref()
-            .and_then(|w| live_planet_transform(shell.body, w, t))
-        {
-            if log_now {
-                info!("[beauty] cloud {}: live-terrain fallback", shell.body);
-            }
-            live
-        } else {
-            if log_now {
-                info!("[beauty] cloud {}: planet hidden", shell.body);
+                info!("[beauty] cloud {}: no planet frame", shell.body);
             }
             *vis = Visibility::Hidden;
             continue;
@@ -799,12 +913,7 @@ fn follow_cloud_shells(
         let s = planet.scale.x * shell.scale_factor;
         st.scale = Vec3::splat(s);
         // Differential drift: own slow spin on top of the planet rotation.
-        let spin = if r.clouds_animate {
-            Quat::from_rotation_y(t as f32 * shell.spin_rad_s)
-        } else {
-            Quat::IDENTITY
-        };
-        st.rotation = spin * planet.rotation;
+        st.rotation = deck_world_rotation(planet.rotation, shell.spin_rad_s, t, r.clouds_animate);
         *vis = Visibility::Visible;
     }
 }
@@ -955,6 +1064,123 @@ mod tests {
         assert_eq!(fbm(7, 0.31, 0.77, 6.0), fbm(7, 0.31, 0.77, 6.0));
         assert_ne!(fbm(7, 0.31, 0.77, 6.0), fbm(8, 0.31, 0.77, 6.0));
         assert!((0.0..=1.0).contains(&fbm(7, 0.31, 0.77, 6.0)));
+    }
+
+    #[test]
+    fn shell_mesh_uv_matches_sphere_mapping() {
+        // +X equator (sector 0) is u = 0; going toward +Y wraps u up.
+        let uv = shell_mesh_uv(Vec3::X);
+        assert!(uv.x.abs() < 1e-6, "{uv:?}");
+        assert!((uv.y - 0.5).abs() < 1e-6, "{uv:?}");
+        let uv = shell_mesh_uv(Vec3::Y);
+        assert!((uv.x - 0.25).abs() < 1e-6, "{uv:?}");
+        // Poles (local +Z) sit at v = 0, antipode at v = 1.
+        assert!(shell_mesh_uv(Vec3::Z).y.abs() < 1e-6);
+        assert!((shell_mesh_uv(-Vec3::Z).y - 1.0).abs() < 1e-6);
+        // Seam wraps instead of clamping: -X is u = 0.5 from both sides.
+        let a = shell_mesh_uv(Vec3::new(-1.0, 1e-4, 0.0));
+        let b = shell_mesh_uv(Vec3::new(-1.0, -1e-4, 0.0));
+        assert!((a.x - b.x).abs() < 1e-3, "{a:?} vs {b:?}");
+    }
+
+    #[test]
+    fn deck_rotation_is_identity_without_animation() {
+        let q = Quat::from_rotation_y(0.7);
+        assert_eq!(deck_world_rotation(q, 0.004, 1234.0, false), q);
+        // Animated deck advances with sim time, deterministically.
+        let a = deck_world_rotation(Quat::IDENTITY, 0.004, 100.0, true);
+        let b = deck_world_rotation(Quat::IDENTITY, 0.004, 100.0, true);
+        assert_eq!(a, b);
+        // Chord 2·sin(θ/2) recovers the 0.4 rad advance.
+        let chord = (a * Vec3::X - Vec3::X).length();
+        let angle = 2.0 * (chord / 2.0).asin();
+        assert!((angle - 0.4).abs() < 1e-5, "{angle}");
+    }
+
+    #[test]
+    fn shadow_parallax_samples_straight_down_at_noon() {
+        let up = Vec3::Y;
+        let d = shadow_sample_dir(up, Vec3::Y, 3_200_000.0, 3000.0);
+        assert!((d - up).length() < 1e-6, "{d:?}");
+    }
+
+    #[test]
+    fn shadow_parallax_reaches_sunward_at_low_sun() {
+        let up = Vec3::Y;
+        // Sun 30 deg above the eastern horizon: the cloud east of overhead
+        // casts onto us, so the sample shifts east (+X).
+        let sun = Vec3::new(0.866, 0.5, 0.0).normalize();
+        let d = shadow_sample_dir(up, sun, 3_200_000.0, 3000.0);
+        assert!(d.x > 1e-3, "{d:?}");
+        assert!(d.y > 0.0 && d.y < 1.0);
+        // Grazing sun clamps instead of running to the horizon.
+        let flat = shadow_sample_dir(up, Vec3::X, 3_200_000.0, 3000.0);
+        assert!(flat.is_finite(), "{flat:?}");
+        assert!(flat.x > d.x, "{flat:?} vs {d:?}");
+    }
+
+    #[test]
+    fn shadow_relative_rotation_matches_deck_spin() {
+        // Static deck: body and bake frames coincide.
+        let q = Quat::from_rotation_y(0.7) * Quat::from_rotation_x(0.2);
+        let rel = shadow_relative_rotation(q, 0.004, 999.0, false);
+        assert!((rel - Quat::IDENTITY).length() < 1e-6, "{rel:?}");
+        // Animated: undoes exactly the deck spin the follower applies, even
+        // under a tilted planet rotation.
+        let spin = deck_world_rotation(q, 0.004, 100.0, true);
+        let rel = shadow_relative_rotation(q, 0.004, 100.0, true);
+        let d = Vec3::new(0.3, 0.8, 0.5).normalize();
+        let roundtrip = spin * (rel * d);
+        assert!((roundtrip - q * d).length() < 1e-5, "{roundtrip:?}");
+    }
+
+    #[test]
+    fn shadow_sun_body_inverts_planet_rotation() {
+        let q = Quat::from_rotation_y(1.1);
+        let sun = Vec3::new(0.2, 0.9, 0.3).normalize();
+        let body = shadow_sun_body(q, sun);
+        assert!((body.length() - 1.0).abs() < 1e-6);
+        assert!(((q * body) - sun).length() < 1e-6, "{body:?}");
+    }
+
+    #[test]
+    fn shadow_factor_shapes_alpha_without_hard_edges() {
+        assert_eq!(shadow_factor_from_alpha(0.0), 1.0);
+        assert_eq!(shadow_factor_from_alpha(0.04), 1.0);
+        let core = shadow_factor_from_alpha(1.0);
+        assert!((core - (1.0 - CLOUD_SHADOW_STRENGTH)).abs() < 1e-6);
+        // Monotone: denser deck never brightens the ground.
+        let mut prev = 2.0;
+        for i in 0..=20 {
+            let f = shadow_factor_from_alpha(i as f32 / 20.0);
+            assert!(f <= prev + 1e-6, "{f} after {prev}");
+            prev = f;
+        }
+    }
+
+    #[test]
+    fn cloud_alpha_samples_bake_texels() {
+        // 2x1 bake: clear texel then overcast texel.
+        let data = vec![255, 255, 255, 0, 255, 255, 255, 255];
+        assert_eq!(cloud_alpha_at(&data, 2, 1, Vec2::new(0.1, 0.5)), 0.0);
+        assert_eq!(cloud_alpha_at(&data, 2, 1, Vec2::new(0.9, 0.5)), 1.0);
+        // u wraps the seam; empty images read clear.
+        assert_eq!(cloud_alpha_at(&data, 2, 1, Vec2::new(1.1, 0.5)), 0.0);
+        assert_eq!(cloud_alpha_at(&[], 0, 0, Vec2::ZERO), 0.0);
+    }
+
+    #[test]
+    fn cloud_deck_table_covers_every_shell_body() {
+        // Spawn path and samplers share CLOUD_DECKS; every deck-0 body that
+        // the follower can place must be present exactly once here.
+        for body in ["thessa", "pelagos", "borea"] {
+            let decks: Vec<u8> = CLOUD_DECKS
+                .iter()
+                .filter(|(b, _, _, _)| *b == body)
+                .map(|(_, d, _, _)| *d)
+                .collect();
+            assert!(decks.contains(&0), "{body}");
+        }
     }
 
     #[test]

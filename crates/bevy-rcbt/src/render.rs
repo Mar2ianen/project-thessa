@@ -277,6 +277,8 @@ struct RasterBindKey {
     roughness_sampler: SamplerId,
     material_view: TextureViewId,
     material_sampler: SamplerId,
+    cloud_view: TextureViewId,
+    city_view: TextureViewId,
 }
 
 fn view_uniform_buffer_id(view_uniforms: &ViewUniforms) -> Option<BufferId> {
@@ -859,6 +861,13 @@ struct Lighting {
     ocean_wave: vec4<f32>,
     ocean_appearance: vec4<f32>,
     ocean_phase: vec4<f32>,
+    // Cloud-deck shadow sampler: bake-local rotation, sun in planet frame,
+    // (deck height m, strength, enabled, -).
+    shadow_quat: vec4<f32>,
+    shadow_sun: vec4<f32>,
+    shadow_params: vec4<f32>,
+    // Night city lights: (intensity, enabled, -, -).
+    city_params: vec4<f32>,
 };
 @group(0) @binding(9) var<uniform> lighting: Lighting;
 
@@ -887,6 +896,8 @@ struct VertexOutput {
 @group(0) @binding(12) var material_texture: texture_2d_array<f32>;
 @group(0) @binding(13) var material_sampler: sampler;
 @group(0) @binding(14) var<storage, read> material_slots: array<vec4<u32>>;
+@group(0) @binding(17) var cloud_texture: texture_2d<f32>;
+@group(0) @binding(18) var city_texture: texture_2d<f32>;
 
 
 fn surface_uv(position: vec3<f32>) -> vec2<f32> {
@@ -899,6 +910,20 @@ fn surface_uv(position: vec3<f32>) -> vec2<f32> {
     }
     let latitude = 0.5 - asin(clamp(direction.y, -1.0, 1.0)) / 3.14159265;
     return vec2(fract(longitude), clamp(latitude, 0.001, 0.999));
+}
+
+fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
+    let t = 2.0 * cross(q.xyz, v);
+    return v + q.w * t + cross(q.xyz, t);
+}
+
+// Inverse of the Bevy Sphere mesh mapping (poles on local +Z, u from +X
+// toward +Y, v = 0 at the +Z pole): bake-texel coordinates for a shell-local
+// direction. Mirrors the CPU sampler in the client; keep the two in sync.
+fn shell_mesh_uv(local_dir: vec3<f32>) -> vec2<f32> {
+    let u = fract(atan2(local_dir.y, local_dir.x) / 6.2831853);
+    let v = 0.5 - asin(clamp(local_dir.z, -1.0, 1.0)) / 3.14159265;
+    return vec2(u, clamp(v, 0.0, 1.0));
 }
 
 @vertex
@@ -960,10 +985,28 @@ fn cbt_vertex(vertex_index: u32) -> VertexOutput {
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let normal = normalize(input.normal);
-    var illuminance = lighting.ambient_lux.rgb;
+    let direction = normalize(input.body_direction);
+    var direct = vec3(0.0);
     for (var i = 0u; i < 3u; i = i + 1u) {
-        illuminance += lighting.colors_lux[i].rgb * max(dot(normal, lighting.directions[i].xyz), 0.0);
+        direct += lighting.colors_lux[i].rgb * max(dot(normal, lighting.directions[i].xyz), 0.0);
     }
+    // Cloud-deck shadows dim the direct sun only; skylight and ambient stay.
+    // The deck bake is what the shell impostors show, sampled in shell-local
+    // coordinates with a sun-parallax offset for the physical deck height.
+    var shadow = 1.0;
+    if (lighting.shadow_params.z > 0.5) {
+        let sun_body = lighting.shadow_sun.xyz;
+        let deck_h = lighting.shadow_params.x;
+        let radius = bitcast<f32>(params.radius_bits);
+        // Walk from the ground toward the sun to the deck plane (mirrors the
+        // CPU sampler): overhead sun samples straight down.
+        let t = deck_h / max(dot(sun_body, direction), 0.15);
+        let deck_point = normalize(direction * radius + sun_body * t);
+        let local = quat_rotate(lighting.shadow_quat, deck_point);
+        let cloud_alpha = textureSample(cloud_texture, surface_sampler, shell_mesh_uv(local)).a;
+        shadow = 1.0 - lighting.shadow_params.y * smoothstep(0.05, 0.6, cloud_alpha);
+    }
+    var illuminance = lighting.ambient_lux.rgb + direct * shadow;
     // Project after interpolation so a triangle crossing longitude zero
     // cannot interpolate through the opposite side of the planet's map.
     let uv = surface_uv(input.body_direction);
@@ -975,7 +1018,6 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     // The old 16-32 m transition magnified kilometre-scale globe texels and
     // replaced a detailed coast with stair-stepped blurry blocks in one view.
     // World-addressed page LOD/mips now filter the intervening scales.
-    let direction = normalize(input.body_direction);
     let footprint = max(length(dpdx(direction)), length(dpdy(direction)));
     let footprint_m = footprint * bitcast<f32>(params.radius_bits);
     let globe_texel_m = 3.14159265 * bitcast<f32>(params.radius_bits)
@@ -1053,6 +1095,21 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
             sky * vec3(0.10, 0.19, 0.38), sky * vec3(0.42, 0.52, 0.60),
             sky * vec3(0.015, 0.018, 0.015)) * fresnel;
         radiance = mix(radiance, diffuse * (1.0 - fresnel) + reflection, water);
+    }
+    // Night city lights: warm emissive mask over inhabited land, gated by
+    // the terminator. Day diffuse outshines it by orders of magnitude, so no
+    // day-side masking is needed.
+    if (lighting.city_params.y > 0.5) {
+        let sun_dir = lighting.directions[0].xyz;
+        let night = 1.0 - smoothstep(-0.15, 0.12, dot(normal, sun_dir));
+        if (night > 0.001) {
+            let mask = textureSample(city_texture, surface_sampler, uv).r;
+            // Warm sodium/LED street mix (1.0, 0.72, 0.42) at a pre-exposure
+            // gain of 60.0 for mask = 1: reads clearly after dark (night
+            // ambient is O(100) lux here), vanishes by day (diffuse O(10^4)).
+            // Blind-tuned; revisit against screenshots.
+            radiance += vec3(1.0, 0.72, 0.42) * (mask * night * lighting.city_params.x * 60.0);
+        }
     }
     // Same pre-exposed linear HDR convention as Bevy PBR.
     return vec4(radiance * view.exposure, 1.0);
@@ -1373,6 +1430,26 @@ fn init_cbt_gpu_pipeline(mut commands: bevy::prelude::Commands, device: Res<Rend
                 ty: BufferBindingType::Storage { read_only: true },
                 has_dynamic_offset: false,
                 min_binding_size: None,
+            },
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 17,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Texture {
+                sample_type: TextureSampleType::Float { filterable: true },
+                view_dimension: TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 18,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Texture {
+                sample_type: TextureSampleType::Float { filterable: true },
+                view_dimension: TextureViewDimension::D2,
+                multisampled: false,
             },
             count: None,
         },
@@ -1763,6 +1840,21 @@ fn prepare_cbt_gpu_buffers(
                         0.0,
                     ],
                 ]
+            })
+            .chain({
+                let (quat, sun, params) = match material.cloud_shadow.as_ref() {
+                    Some(shadow) => (
+                        shadow.relative_rotation,
+                        shadow.sun_body_dir,
+                        [shadow.deck_height_m, shadow.strength, 1.0, 0.0],
+                    ),
+                    None => ([0.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 0.0], [0.0; 4]),
+                };
+                let city = match material.night_lights.as_ref() {
+                    Some(lights) => [lights.intensity, 1.0, 0.0, 0.0],
+                    None => [0.0; 4],
+                };
+                [quat, sun, params, city]
             })
             .collect();
         if values
@@ -2212,11 +2304,22 @@ fn draw_cbt_geometry(
         Some(map) => match images.get(map) {
             Some(image) => image,
             None => return,
-        },
-        // A valid placeholder keeps the optional material binding portable.
+        }, // A valid placeholder keeps the optional material binding portable.
         // The material uniform disables ocean shading when no map is supplied.
         None => albedo_image,
     };
+    // Effect textures fall back to the albedo image when absent or still
+    // loading; the uniforms gate the effects to zero, so the bind is inert.
+    let cloud_image = material
+        .cloud_shadow
+        .as_ref()
+        .and_then(|shadow| images.get(&shadow.texture))
+        .unwrap_or(albedo_image);
+    let city_image = material
+        .night_lights
+        .as_ref()
+        .and_then(|lights| images.get(&lights.texture))
+        .unwrap_or(albedo_image);
     let Some(lighting_buffer) = gpu.lighting.buffer() else {
         return;
     };
@@ -2251,6 +2354,8 @@ fn draw_cbt_geometry(
         roughness_sampler: roughness_image.sampler.id(),
         material_view: material_array.view.id(),
         material_sampler: material_array.sampler.id(),
+        cloud_view: cloud_image.texture_view.id(),
+        city_view: city_image.texture_view.id(),
     };
     // Camera motion flows through the dynamic view offset; rebuild only on
     // buffer/texture identity change (realloc or residency turnover).
@@ -2330,6 +2435,14 @@ fn draw_cbt_geometry(
                     resource: BindingResource::Buffer(
                         material_directory.as_entire_buffer_binding(),
                     ),
+                },
+                BindGroupEntry {
+                    binding: 17,
+                    resource: BindingResource::TextureView(&cloud_image.texture_view),
+                },
+                BindGroupEntry {
+                    binding: 18,
+                    resource: BindingResource::TextureView(&city_image.texture_view),
                 },
             ],
         ));

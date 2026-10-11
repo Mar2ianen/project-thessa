@@ -15,8 +15,8 @@ use std::{
     time::Instant,
 };
 use thessa_bevy_rcbt::{
-    CbtFrameInput, CbtRenderMaterial, CbtRenderPages, CbtRenderState, CbtRenderSurface,
-    CbtRenderTopology, RenderView,
+    CbtCloudShadow, CbtFrameInput, CbtNightLights, CbtRenderMaterial, CbtRenderPages,
+    CbtRenderState, CbtRenderSurface, CbtRenderTopology, RenderView,
 };
 use thessa_rcbt_core::{
     CandidateAction, HeightPage, LeafCandidate, Node as CbtNode, Tree, WorkClass,
@@ -130,6 +130,8 @@ impl Plugin for TerrainPlugin {
                 PostUpdate,
                 sync_cbt_lighting.after(bevy::transform::TransformSystems::Propagate),
             )
+            .add_systems(PostUpdate, sync_cbt_effects.after(sync_cbt_lighting))
+            .add_systems(Update, update_tile_cloud_shadows.in_set(TerrainUpdate))
             .add_systems(
                 Update,
                 survey_input.after(pilot::PilotUpdate).before(update_camera),
@@ -188,6 +190,145 @@ fn sync_cbt_lighting(
         material.light_directions = directions;
         material.light_colors_lux = colors;
         material.ambient_lux = ambient_lux;
+    }
+}
+
+/// Cloud-deck shadows and night city lights for the GPU terrain surface.
+/// Same deck math as the shell follower (shared helpers in `beauty`), packed
+/// as uniforms; the fragment shader samples the deck bake the shells show.
+/// Disabled flags pack as zeros (static layout, no shader variants) and the
+/// texture binds fall back to the albedo image.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn sync_cbt_effects(
+    mut material: ResMut<CbtRenderMaterial>,
+    graphics: Option<Res<GraphicsResolved>>,
+    beauty: Option<Res<beauty::BeautyImages>>,
+    night: Option<Res<crate::night_lights::NightLights>>,
+    clock: Option<Res<SimulationClock>>,
+    terrain: Option<Res<WorldTerrain>>,
+    sun: Query<&GlobalTransform, With<PrimaryStarLight>>,
+    visuals: Query<
+        (&Name, &Transform, &InheritedVisibility),
+        (Without<beauty::CloudShell>, Without<beauty::AuroraShell>),
+    >,
+) {
+    let r = graphics.as_deref().map(|g| g.0.clone()).unwrap_or_default();
+    let t = clock.as_deref().map(|c| c.sim_seconds).unwrap_or(0.0);
+    let planet = terrain
+        .as_deref()
+        .and_then(|w| beauty::planet_frame_for_body("thessa", &visuals, Some(w), t));
+    let sun_dir = sun
+        .single()
+        .map(|tf| {
+            let d = tf.back();
+            Vec3::new(d.x, d.y, d.z)
+        })
+        .unwrap_or(Vec3::Y);
+    let spin = beauty::deck_spin_rad_s("thessa", 0).unwrap_or(0.004);
+    let cloud_shadow = match (&beauty, &planet) {
+        (Some(images), Some(planet)) if r.clouds_cast_shadows => {
+            let relative =
+                beauty::shadow_relative_rotation(planet.rotation, spin, t, r.clouds_animate);
+            let sun_body = beauty::shadow_sun_body(planet.rotation, sun_dir);
+            Some(CbtCloudShadow {
+                texture: images.cloud_low.clone(),
+                relative_rotation: relative.to_array(),
+                sun_body_dir: [sun_body.x, sun_body.y, sun_body.z, 0.0],
+                deck_height_m: beauty::CLOUD_SHADOW_DECK_HEIGHT_M as f32,
+                strength: beauty::CLOUD_SHADOW_STRENGTH,
+            })
+        }
+        _ => None,
+    };
+    let night_lights = match &night {
+        Some(lights) if r.night_lights_enabled => Some(CbtNightLights {
+            texture: lights.image.clone(),
+            intensity: r.night_lights_intensity,
+        }),
+        _ => None,
+    };
+    if material.cloud_shadow != cloud_shadow {
+        material.cloud_shadow = cloud_shadow;
+    }
+    if material.night_lights != night_lights {
+        material.night_lights = night_lights;
+    }
+}
+
+/// Cloud-deck shadows for CPU-streamed tiles: the same deck bake sampled on
+/// the CPU, applied as a per-tile base-color factor at 5 Hz. The GPU surface
+/// samples in-shader (`sync_cbt_effects`); this covers the CPU fallback path
+/// with no shader change. Skipped entirely when the flag is off.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn update_tile_cloud_shadows(
+    time: Res<Time>,
+    mut acc: Local<f32>,
+    graphics: Option<Res<GraphicsResolved>>,
+    beauty: Option<Res<beauty::BeautyImages>>,
+    images: Res<Assets<Image>>,
+    clock: Option<Res<SimulationClock>>,
+    terrain: Option<Res<WorldTerrain>>,
+    sun: Query<&GlobalTransform, With<PrimaryStarLight>>,
+    visuals: Query<
+        (&Name, &Transform, &InheritedVisibility),
+        (Without<beauty::CloudShell>, Without<beauty::AuroraShell>),
+    >,
+    tiles: Query<(
+        &SurfaceTile,
+        &GlobalTransform,
+        &MeshMaterial3d<StandardMaterial>,
+    )>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    *acc += time.delta_secs();
+    if *acc < 0.2 {
+        return;
+    }
+    *acc = 0.0;
+    let r = graphics.as_deref().map(|g| g.0.clone()).unwrap_or_default();
+    if !r.clouds_cast_shadows {
+        return;
+    }
+    let (Some(images_res), Some(clock), Some(world)) =
+        (beauty.as_deref(), clock.as_deref(), terrain.as_deref())
+    else {
+        return;
+    };
+    let t = clock.sim_seconds;
+    let Some(planet) = beauty::planet_frame_for_body("thessa", &visuals, Some(world), t) else {
+        return;
+    };
+    let Ok(sun_tf) = sun.single() else {
+        return;
+    };
+    let back = sun_tf.back();
+    let sun_dir = Vec3::new(back.x, back.y, back.z);
+    let Some(cloud) = images.get(&images_res.cloud_low) else {
+        return;
+    };
+    let (Some(data), w, h) = (cloud.data.as_ref(), cloud.width(), cloud.height()) else {
+        return;
+    };
+    let spin = beauty::deck_spin_rad_s("thessa", 0).unwrap_or(0.004);
+    let shell_rot = beauty::deck_world_rotation(planet.rotation, spin, t, r.clouds_animate);
+    let inv_shell = shell_rot.inverse();
+    let radius = world.field.params.radius_m as f32;
+    for (_, transform, mat3d) in &tiles {
+        let up = (transform.translation() - planet.translation).normalize_or_zero();
+        if up.length_squared() < 0.5 {
+            continue;
+        }
+        let sample = beauty::shadow_sample_dir(
+            up,
+            sun_dir,
+            radius,
+            beauty::CLOUD_SHADOW_DECK_HEIGHT_M as f32,
+        );
+        let alpha = beauty::cloud_alpha_at(data, w, h, beauty::shell_mesh_uv(inv_shell * sample));
+        let f = beauty::shadow_factor_from_alpha(alpha);
+        if let Some(mut mat) = materials.get_mut(&mat3d.0) {
+            mat.base_color = Color::srgb(f, f, f);
+        }
     }
 }
 

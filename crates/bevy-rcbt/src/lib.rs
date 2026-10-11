@@ -61,6 +61,41 @@ pub struct CbtRenderMaterial {
     pub light_directions: [[f32; 4]; 3],
     pub light_colors_lux: [[f32; 4]; 3],
     pub ambient_lux: [f32; 4],
+    /// Low-deck cloud shadows sampled from the deck bake the shells show.
+    /// Same data and deck math as the shell follower; the shader offsets by
+    /// sun parallax and shapes the alpha. Absent = full sun (free).
+    pub cloud_shadow: Option<CbtCloudShadow>,
+    /// Night-side city emissive mask (planet-fixed equirect). Absent = dark.
+    pub night_lights: Option<CbtNightLights>,
+}
+
+/// Cloud-deck shadow sampler for the GPU terrain surface. All directions are
+/// unit; quaternions are (x, y, z, w).
+#[cfg(feature = "render")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct CbtCloudShadow {
+    /// Low-deck bake (alpha = coverage), shared with the shell impostor.
+    pub texture: Handle<Image>,
+    /// Shell-relative rotation: bake-local dir = rotate(body_dir) by this.
+    /// Already composes planet and differential deck spin on the CPU.
+    pub relative_rotation: [f32; 4],
+    /// Sun direction toward the sun, in planet-fixed frame.
+    pub sun_body_dir: [f32; 4],
+    /// Physical deck altitude for the parallax (metres).
+    pub deck_height_m: f32,
+    /// Deep-core shadow depth (0 = no shadow, 1 = black cores).
+    pub strength: f32,
+}
+
+/// Night city-lights sampler: warm emissive clusters over inhabited land,
+/// gated by the terminator in-shader.
+#[cfg(feature = "render")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct CbtNightLights {
+    /// R8 mask in the globe equirect mapping (`surface_uv`).
+    pub texture: Handle<Image>,
+    /// Emissive gain over the mask.
+    pub intensity: f32,
 }
 
 /// Low-cost visual ocean controls. These affect normals/reflection only;

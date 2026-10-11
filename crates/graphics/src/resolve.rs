@@ -163,6 +163,10 @@ pub struct ResolvedGraphicsSettings {
     pub clouds_coverage: f32,
     pub clouds_opacity: f32,
     pub clouds_animate: bool,
+    pub clouds_cast_shadows: bool,
+    pub night_lights_enabled: bool,
+    pub night_lights_quality: Quality,
+    pub night_lights_intensity: f32,
     pub gas_giant_enabled: bool,
     pub gas_giant_quality: Quality,
     pub gas_giant_animate: bool,
@@ -306,6 +310,10 @@ impl ResolvedGraphicsSettings {
             clouds_coverage: requested.clouds.coverage.clamp(0.0, 1.0),
             clouds_opacity: requested.clouds.opacity.clamp(0.0, 1.0),
             clouds_animate: requested.clouds.animate,
+            clouds_cast_shadows: requested.clouds.cast_shadows && requested.clouds.enabled,
+            night_lights_enabled: requested.night_lights.enabled,
+            night_lights_quality: requested.night_lights.quality,
+            night_lights_intensity: requested.night_lights.intensity.clamp(0.0, 2.0),
             gas_giant_enabled: requested.gas_giant.enabled,
             gas_giant_quality: requested.gas_giant.quality,
             gas_giant_animate: requested.gas_giant.animate_bands,
@@ -399,6 +407,14 @@ impl ResolvedGraphicsSettings {
         );
         map.insert("clouds".to_string(), self.clouds_enabled.to_string());
         map.insert("cloud_layers".to_string(), self.clouds_layers.to_string());
+        map.insert(
+            "cloud_shadows".to_string(),
+            self.clouds_cast_shadows.to_string(),
+        );
+        map.insert(
+            "night_lights".to_string(),
+            self.night_lights_enabled.to_string(),
+        );
         map.insert("gas_giant".to_string(), self.gas_giant_enabled.to_string());
         map.insert("plume".to_string(), self.plume_enabled.to_string());
         map.insert("aurora".to_string(), self.aurora_shell.to_string());

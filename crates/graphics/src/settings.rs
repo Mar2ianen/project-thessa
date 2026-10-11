@@ -311,6 +311,34 @@ impl Default for CloudSettings {
     }
 }
 
+/// Night-side city lights: warm emissive clusters over inhabited land,
+/// gated by the terminator in-shader. Bake resolution only; the mask is a
+/// static optical proxy, never simulated activity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NightLightsSettings {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub quality: Quality,
+    /// Emissive gain over the city mask (0 = dark, 2 = bright metro cores).
+    #[serde(default = "default_night_lights_intensity")]
+    pub intensity: f32,
+}
+
+fn default_night_lights_intensity() -> f32 {
+    1.0
+}
+
+impl Default for NightLightsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            quality: Quality::Medium,
+            intensity: default_night_lights_intensity(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AuroraQuality {
@@ -522,6 +550,8 @@ pub struct RequestedGraphics {
     #[serde(default)]
     pub clouds: CloudSettings,
     #[serde(default)]
+    pub night_lights: NightLightsSettings,
+    #[serde(default)]
     pub upper_atmosphere: UpperAtmosphereSettings,
     #[serde(default)]
     pub raytracing: RaytracingParticipation,
@@ -547,6 +577,7 @@ impl Default for RequestedGraphics {
             renderer: RendererSettings::default(),
             atmosphere: AtmosphereSettings::default(),
             clouds: CloudSettings::default(),
+            night_lights: NightLightsSettings::default(),
             upper_atmosphere: UpperAtmosphereSettings::default(),
             raytracing: RaytracingParticipation::default(),
             shadows: ShadowSettings::default(),
@@ -650,6 +681,12 @@ impl RequestedGraphics {
                 detail: format!("expected 0..=1, got {}", self.clouds.opacity),
             });
         }
+        if !(0.0..=2.0).contains(&self.night_lights.intensity) {
+            return Err(ConfigError::InvalidValue {
+                path: "night_lights.intensity",
+                detail: format!("expected 0..=2, got {}", self.night_lights.intensity),
+            });
+        }
         if !(0.0..=4.0).contains(&self.upper_atmosphere.aurora_intensity) {
             return Err(ConfigError::InvalidValue {
                 path: "upper_atmosphere.aurora_intensity",
@@ -719,6 +756,9 @@ impl RequestedGraphics {
                 self.clouds.enabled = false;
                 self.clouds.layers = 1;
                 self.clouds.animate = false;
+                self.clouds.cast_shadows = false;
+                self.night_lights.enabled = true;
+                self.night_lights.quality = Quality::Low;
                 self.gas_giant.quality = Quality::Low;
                 self.gas_giant.animate_bands = false;
                 self.engine_plume.quality = Quality::Low;
@@ -743,6 +783,9 @@ impl RequestedGraphics {
                 self.clouds.enabled = false;
                 self.clouds.layers = 1;
                 self.clouds.animate = true;
+                self.clouds.cast_shadows = false;
+                self.night_lights.enabled = true;
+                self.night_lights.quality = Quality::Medium;
                 self.gas_giant.quality = Quality::Medium;
                 self.gas_giant.animate_bands = true;
                 self.engine_plume.quality = Quality::Medium;
@@ -766,6 +809,9 @@ impl RequestedGraphics {
                 self.clouds.enabled = false;
                 self.clouds.layers = 1;
                 self.clouds.animate = true;
+                self.clouds.cast_shadows = true;
+                self.night_lights.enabled = true;
+                self.night_lights.quality = Quality::Medium;
                 self.gas_giant.quality = Quality::High;
                 self.gas_giant.animate_bands = true;
                 self.engine_plume.quality = Quality::High;
@@ -791,6 +837,9 @@ impl RequestedGraphics {
                 self.clouds.enabled = false;
                 self.clouds.layers = 2;
                 self.clouds.animate = true;
+                self.clouds.cast_shadows = true;
+                self.night_lights.enabled = true;
+                self.night_lights.quality = Quality::High;
                 self.gas_giant.quality = Quality::High;
                 self.gas_giant.animate_bands = true;
                 self.engine_plume.quality = Quality::High;

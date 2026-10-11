@@ -57,11 +57,20 @@ enabled = true
 quality = "medium" # low = 512px, medium = 1024px, high = 2048px bake
 volumetric = false # reserved; shell path ignores it
 ray_steps = 16
-cast_shadows = false
+cast_shadows = true # low-deck shadows on terrain: sampled from the same bake
+# the shells show (sun-parallax offset, soft alpha shaping); off = free
 layers = 2 # 1 = low deck, 2 = low + cirrus (Earth-like high thin ice over cumulus)
 coverage = 0.45 # 0 overcast .. 1 clear
 opacity = 0.9
 animate = true # differential deck drift; off = static
+
+[night_lights]
+# Warm emissive city clusters over inhabited land, gated by the terminator
+# in-shader. The mask bakes once at startup from the world's inhabited
+# regions (bake resolution only, never simulated activity); off = free.
+enabled = true
+quality = "medium" # low = 128x64, medium = 256x128, high = 512x256 mask
+intensity = 1.0 # 0..2 emissive gain over the mask
 
 [upper_atmosphere]
 airglow = true

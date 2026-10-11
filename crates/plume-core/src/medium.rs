@@ -192,27 +192,30 @@ mod probe_tests {
     use crate::source::tests::{sample_env_sea_level, sample_source};
 
     #[test]
-    fn probe_low_throttle_oracle() {
+    fn low_throttle_field_stays_faint() {
+        // Contract the volume renderer relies on: at part throttle the
+        // mean field is long but optically thin, so the march must fade it
+        // out instead of rendering an opaque balloon (screenshot-proven).
         let mut source = sample_source();
         source.throttle = 0.3;
         let env = sample_env_sea_level();
         let profile = crate::profile::build_axial_profile(&source, &env, 32).unwrap();
-        eprintln!(
-            "PROBE len={:.1}m stations={} regime={:?}",
-            profile.length_m,
-            profile.stations.len(),
-            profile.regime
+        assert!(
+            profile.length_m > 5.0,
+            "long but thin, len={}",
+            profile.length_m
         );
-        // End-on (down the axis at the nozzle plane) and side-on chords.
         let r0 = source.exit_radius_m;
-        for (name, z, half) in [("endon", 0.5, profile.length_m / 2.0), ("side-mid", profile.length_m * 0.3, r0 * 2.0), ("side-tail", profile.length_m * 0.8, r0 * 3.0)] {
-            let (t, rgb) = integrate_ray(&profile, z, half, 64);
-            eprintln!(
-                "PROBE {name}: alpha={:.3} rgb=[{:.2},{:.2},{:.2}]",
-                1.0 - t,
-                rgb[0],
-                rgb[1],
-                rgb[2]
+        for (z, half) in [
+            (0.5, profile.length_m / 2.0),
+            (profile.length_m * 0.3, r0 * 2.0),
+            (profile.length_m * 0.8, r0 * 3.0),
+        ] {
+            let (t, _) = integrate_ray(&profile, z, half, 64);
+            assert!(
+                1.0 - t < 0.15,
+                "thin field at 30% throttle, z={z} alpha={}",
+                1.0 - t
             );
         }
     }

@@ -185,3 +185,35 @@ mod tests {
         assert!(a.extinction_per_m.is_finite());
     }
 }
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+    use crate::source::tests::{sample_env_sea_level, sample_source};
+
+    #[test]
+    fn probe_low_throttle_oracle() {
+        let mut source = sample_source();
+        source.throttle = 0.3;
+        let env = sample_env_sea_level();
+        let profile = crate::profile::build_axial_profile(&source, &env, 32).unwrap();
+        eprintln!(
+            "PROBE len={:.1}m stations={} regime={:?}",
+            profile.length_m,
+            profile.stations.len(),
+            profile.regime
+        );
+        // End-on (down the axis at the nozzle plane) and side-on chords.
+        let r0 = source.exit_radius_m;
+        for (name, z, half) in [("endon", 0.5, profile.length_m / 2.0), ("side-mid", profile.length_m * 0.3, r0 * 2.0), ("side-tail", profile.length_m * 0.8, r0 * 3.0)] {
+            let (t, rgb) = integrate_ray(&profile, z, half, 64);
+            eprintln!(
+                "PROBE {name}: alpha={:.3} rgb=[{:.2},{:.2},{:.2}]",
+                1.0 - t,
+                rgb[0],
+                rgb[1],
+                rgb[2]
+            );
+        }
+    }
+}

@@ -11,3 +11,6 @@ description = "Safe Rust binding to the vendored large_cbt OCBT CPU layout"
 
 [build-dependencies]
 cc = "1.2"
+
+[dev-dependencies]
+sha2 = "0.10"

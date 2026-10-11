@@ -41,6 +41,16 @@ Current examples:
 
 - `nyx-space` (AGPL): validation/reference by default, not an engine runtime dependency;
 - `avian_fdm` (LGPL): reference/spike pending explicit dependency decision.
+- `large_cbt` (AnisB, NO license upstream): vendored OCBT sources under
+  `third_party/large_cbt` are quarantined as a dev-time benchmark oracle
+  only (see `third_party/large_cbt.REVISION` for provenance, the recorded
+  file fingerprints, and the compliance posture). The compiled objects link
+  exclusively into dev-dependencies of `thessa-rcbt-core` and
+  `thessa-rcbt-wgpu` (benches and hardware tests); no runtime library,
+  binary, or asset links them, and Cargo never propagates a dev-dependency
+  downstream. No large_cbt code is copied into the project. If upstream
+  publishes a license, adopt it there immediately; if upstream objects,
+  remove the vendor directory and the ffi binding the same day.
 
 The current `validation/nyx-compare` package is an isolated AGPL
 reference-only Cargo workspace. It is intentionally excluded from the root

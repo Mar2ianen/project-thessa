@@ -235,4 +235,82 @@ mod tests {
         let tree = LargeOcbt::new(Variant::Ocbt128k).unwrap();
         tree.heap_element(1usize << (tree.max_depth() as usize + 1));
     }
+
+    #[test]
+    fn vendored_sources_match_recorded_fingerprint() {
+        // Tamper-evidence for third_party/large_cbt (see large_cbt.REVISION):
+        // the vendored tree is unlicensed upstream code under quarantine as
+        // a dev-time benchmark oracle. Any content drift must be a deliberate
+        // update of both the tree and the recorded hashes.
+        use sha2::{Digest, Sha256};
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../third_party/large_cbt");
+        let expected: &[(&str, &str)] = &[
+            (
+                "cbt.h",
+                "f1371328957f13f31910b8efe28114aea4e25f01e8c0831b6c3d94f2be4813ba",
+            ),
+            (
+                "cbt_utility.h",
+                "5157346bb10e695dc5a4fa88191eabf13759e53e711a07e4daeec43f356e2b36",
+            ),
+            (
+                "ocbt_128k.h",
+                "2c8d1a44e6356ece7d3d3eb2754e92c6c1ec7a41aeb99922cc0950b06e9222e1",
+            ),
+            (
+                "ocbt_128k.cpp",
+                "f2b7cf0aa1fe66b0d737df6c4b365b4c34e4345148dfdfefe4940603aa421c2e",
+            ),
+            (
+                "ocbt_256k.h",
+                "1ab89ab746db5194cdd2e961a61b22390cecebacb137c89183cd8de7cb2697db",
+            ),
+            (
+                "ocbt_256k.cpp",
+                "9bf2b3e4aa6592543013356e9adc6d1d7ce5698717e72a0910d7ee4b2aa2584d",
+            ),
+            (
+                "ocbt_512k.h",
+                "57e8f46001b0b500623cb9c83bf98d1922768e50be7ca6220edcbeed8f50cd3b",
+            ),
+            (
+                "ocbt_512k.cpp",
+                "ed3b2a24a9c6f72768c4875e54d4fc2abbecd50acaf5e76857f91619974c70d7",
+            ),
+            (
+                "ocbt_1m.h",
+                "280b2c5e0e7103870f6e4087812ef08707ae74788869f98dbbb029ed321bcd85",
+            ),
+            (
+                "ocbt_1m.cpp",
+                "d39a03780669c0e539d18cd8c07763e1deadf161ad31745f68c5fbac4e890422",
+            ),
+            (
+                "ocbt_generic.h",
+                "948e5167f3b2a3f25626dda6c26e2f3606defdf5689982a7716f854e815525a9",
+            ),
+            (
+                "graphics/types.h",
+                "ebdbc96b9d727fc04f715cf86940c58d4b2f4876f4d83a984da1a513a8d7fd9b",
+            ),
+            (
+                "math/operators.h",
+                "6cfd7efc04c4fb94f1fd69552a340d069f2ea5281678e97a17b8c7a50cbb23b5",
+            ),
+            (
+                "tools/security.h",
+                "f9e07421fadcf533ba813bc75d36e5add790400a5d88a5937c1dadb3a06e89b8",
+            ),
+        ];
+        for (file, hash) in expected {
+            let bytes = std::fs::read(root.join(file))
+                .unwrap_or_else(|_| panic!("missing vendored file {file}"));
+            let digest = format!("{:x}", Sha256::digest(&bytes));
+            assert_eq!(
+                &digest, hash,
+                "drift in third_party/large_cbt/{file}: update the tree and large_cbt.REVISION deliberately"
+            );
+        }
+    }
 }

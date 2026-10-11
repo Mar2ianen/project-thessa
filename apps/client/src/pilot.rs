@@ -140,8 +140,7 @@ impl PilotFlightRuntime {
                 .body_state(self.reference_body, SimTime(self.flight_time_s))
                 .map_err(|error| error.to_string())?;
             let rel_p = rot * self.authority.relative_position_m;
-            let rel_v = rot
-                * (self.authority.state.velocity_inertial_mps - body.velocity_inertial);
+            let rel_v = rot * (self.authority.state.velocity_inertial_mps - body.velocity_inertial);
             self.authority.relative_position_m = rel_p;
             self.authority.state.position_inertial_m = body.position_inertial + rel_p;
             self.authority.state.velocity_inertial_mps = body.velocity_inertial + rel_v;
@@ -574,12 +573,9 @@ fn engage_flyby(
     let alt = (runtime.relative_position_m.length() - runtime.planet_radius_m).max(0.0);
     flyby.target_alt_datum_m = (alt + 250.0).clamp(400.0, 900.0);
     flyby.target_speed_mps = 200.0;
-    flyby.target_heading_rad = runtime
-        .terrain_field
-        .as_deref()
-        .and_then(|field| {
-            coastal_heading(field, runtime.terrain_spin(), runtime.relative_position_m)
-        });
+    flyby.target_heading_rad = runtime.terrain_field.as_deref().and_then(|field| {
+        coastal_heading(field, runtime.terrain_spin(), runtime.relative_position_m)
+    });
     runtime.sas_enabled = true;
     runtime.input_engine_active = true;
     runtime.engine_active = true;
@@ -766,9 +762,7 @@ pub(crate) fn flyby_roll_leg(
         return 0.0;
     }
     match (target_heading_rad, track_rad) {
-        (Some(target), Some(track)) => {
-            flyby_bank_cmd(wrap_angle_err_rad(target - track), bank_rad)
-        }
+        (Some(target), Some(track)) => flyby_bank_cmd(wrap_angle_err_rad(target - track), bank_rad),
         _ => {
             if alt_err_abs_m < 150.0 {
                 0.10
@@ -1448,10 +1442,9 @@ fn pilot_input(
         // hands off: legacy stick input preempts an in-flight execution.
         if !*maneuver_sent && link.is_some() && runtime.flight_error.is_none() {
             if let Some(dv) = maneuver_kick_mps()
-                && let Ok(body_state) = ephemeris.ephemeris.body_state(
-                    runtime.reference_body,
-                    SimTime(clock.sim_seconds),
-                )
+                && let Ok(body_state) = ephemeris
+                    .ephemeris
+                    .body_state(runtime.reference_body, SimTime(clock.sim_seconds))
             {
                 let rel = runtime.state.velocity_inertial_mps - body_state.velocity_inertial;
                 if rel.length() > 1.0 {
@@ -1624,8 +1617,7 @@ fn pilot_input(
         let throttle_up = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         let throttle_down =
             keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-        let throttle_preset =
-            keys.just_pressed(KeyCode::KeyX) || keys.just_pressed(KeyCode::KeyZ);
+        let throttle_preset = keys.just_pressed(KeyCode::KeyX) || keys.just_pressed(KeyCode::KeyZ);
         if flyby.active && (throttle_up || throttle_down || throttle_preset) {
             flyby.active = false;
         }
@@ -2236,14 +2228,10 @@ mod tests {
         flat.control_input = DVec3::ZERO;
         for _ in 0..5 {
             up.advance(&ephemeris, ControlMode::Navball, 1.0).unwrap();
-            flat
-                .advance(&ephemeris, ControlMode::Navball, 1.0)
-                .unwrap();
+            flat.advance(&ephemeris, ControlMode::Navball, 1.0).unwrap();
         }
         assert!(up.flight_error.is_none(), "mild pull-up must not stall");
-        let alt = |f: &PilotFlightRuntime| {
-            f.relative_position_m.length() - f.planet_radius_m
-        };
+        let alt = |f: &PilotFlightRuntime| f.relative_position_m.length() - f.planet_radius_m;
         assert!(
             alt(&up) > alt(&flat) + 5.0,
             "nose-up stick must climb: up={:.1} flat={:.1}",
@@ -2369,14 +2357,11 @@ mod tests {
         flight.initialize_world_site(field.clone(), sites[0], &ephemeris);
         let spin = flight.terrain_spin();
         let rel = flight.relative_position_m;
-        let heading = coastal_heading(&field, spin, rel)
-            .expect("coast site must admit a shoreline");
+        let heading =
+            coastal_heading(&field, spin, rel).expect("coast site must admit a shoreline");
         assert!(heading.is_finite());
         // Deterministic: same state, same heading.
-        assert_eq!(
-            coastal_heading(&field, spin, rel),
-            Some(heading)
-        );
+        assert_eq!(coastal_heading(&field, spin, rel), Some(heading));
         let along = shore_trace_score(&field, spin, rel, heading).unwrap();
         let across =
             shore_trace_score(&field, spin, rel, heading + std::f64::consts::FRAC_PI_2).unwrap();
@@ -2408,19 +2393,18 @@ mod tests {
             let surf = flight.state.velocity_inertial_mps
                 - body_vel
                 - rot.cross(flight.relative_position_m);
-            track_angle_rad(
-                flight.terrain_spin(),
-                flight.relative_position_m,
-                surf,
-            )
-            .unwrap()
+            track_angle_rad(flight.terrain_spin(), flight.relative_position_m, surf).unwrap()
         };
         flight.control_input = DVec3::new(0.0, 0.0, 0.2);
-        flight.advance(&ephemeris, ControlMode::Navball, 1.0).unwrap();
+        flight
+            .advance(&ephemeris, ControlMode::Navball, 1.0)
+            .unwrap();
         let before = track_of(&flight);
         for _ in 0..4 {
             flight.control_input = DVec3::new(0.0, 0.0, 0.2);
-            flight.advance(&ephemeris, ControlMode::Navball, 1.0).unwrap();
+            flight
+                .advance(&ephemeris, ControlMode::Navball, 1.0)
+                .unwrap();
         }
         let after = track_of(&flight);
         let delta = wrap_angle_err_rad(after - before);
@@ -2446,15 +2430,9 @@ mod tests {
         assert_eq!(flyby_bank_cmd(5.0, 0.0), 0.35);
         assert_eq!(flyby_bank_cmd(f64::NAN, 0.0), 0.0);
         // Level wings read zero bank.
-        assert_eq!(
-            craft_bank_rad(DQuat::IDENTITY, DVec3::Z),
-            0.0
-        );
+        assert_eq!(craft_bank_rad(DQuat::IDENTITY, DVec3::Z), 0.0);
         // Legacy arc through the shared leg helper.
-        assert_eq!(
-            flyby_roll_leg(None, Some(1.0), 0.0, 400.0, 100.0),
-            0.10
-        );
+        assert_eq!(flyby_roll_leg(None, Some(1.0), 0.0, 400.0, 100.0), 0.10);
         assert_eq!(flyby_roll_leg(None, Some(1.0), 0.0, 200.0, 100.0), 0.0);
         assert_eq!(flyby_roll_leg(Some(0.0), None, 0.0, 400.0, 100.0), 0.10);
     }

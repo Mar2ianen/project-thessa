@@ -362,9 +362,7 @@ fn collapse_shell_pole_uvs(mesh: &mut Mesh) {
     if poles.is_empty() {
         return;
     }
-    if let Some(VertexAttributeValues::Float32x2(uv)) =
-        mesh.attribute_mut(Mesh::ATTRIBUTE_UV_0)
-    {
+    if let Some(VertexAttributeValues::Float32x2(uv)) = mesh.attribute_mut(Mesh::ATTRIBUTE_UV_0) {
         for i in poles {
             if let Some(tex) = uv.get_mut(i) {
                 tex[0] = 0.5;
@@ -373,7 +371,8 @@ fn collapse_shell_pole_uvs(mesh: &mut Mesh) {
     }
 }
 
-fn rgba_image(w: u32, h: u32, pixels: Vec<u8>) -> Image {    Image::new(
+fn rgba_image(w: u32, h: u32, pixels: Vec<u8>) -> Image {
+    Image::new(
         Extent3d {
             width: w,
             height: h,
@@ -702,8 +701,9 @@ fn live_planet_transform(
     if radius <= 0.0 {
         return None;
     }
-    let spin = Quat::from_rotation_y((sim_seconds * std::f64::consts::TAU / (80.0 * 3600.0)) as f32)
-        * SPHERE_POLE_TO_WORLD_UP;
+    let spin =
+        Quat::from_rotation_y((sim_seconds * std::f64::consts::TAU / (80.0 * 3600.0)) as f32)
+            * SPHERE_POLE_TO_WORLD_UP;
     Some(
         Transform::from_translation(center)
             .with_scale(Vec3::splat(radius))
@@ -787,9 +787,7 @@ fn follow_cloud_shells(
         // and true-scale pilot views share one rule.
         let cam_frac = cameras
             .single()
-            .map(|c| {
-                (c.translation - planet.translation).length() / planet.scale.x.max(1e-6) - 1.0
-            })
+            .map(|c| (c.translation - planet.translation).length() / planet.scale.x.max(1e-6) - 1.0)
             .unwrap_or(f32::INFINITY);
         let fade = cloud_shell_fade(cam_frac, shell.scale_factor - 1.0);
         if fade <= 0.01 {
@@ -1041,7 +1039,10 @@ mod tests {
         assert_eq!(cloud_shell_fade(0.024, 0.012), 0.0);
         // Fade band between 2x and 4x deck height.
         let mid = cloud_shell_fade(0.036, 0.012);
-        assert!(mid > 0.0 && mid < 1.0, "mid fade must be partial, got {mid}");
+        assert!(
+            mid > 0.0 && mid < 1.0,
+            "mid fade must be partial, got {mid}"
+        );
         assert_eq!(cloud_shell_fade(0.048, 0.012), 1.0);
         assert_eq!(cloud_shell_fade(10.0, 0.012), 1.0);
         // Degenerate inputs never hide the deck (fail visible, not invisible).
@@ -1113,9 +1114,9 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let row = row_at(256, 0.0);
-        let (lo, hi) = row.iter().fold((255.0f64, 0.0f64), |(lo, hi), &v| {
-            (lo.min(v), hi.max(v))
-        });
+        let (lo, hi) = row
+            .iter()
+            .fold((255.0f64, 0.0f64), |(lo, hi), &v| (lo.min(v), hi.max(v)));
         assert!(hi > 150.0, "ray peaks must stay bright, hi={hi}");
         assert!(
             hi - lo > 120.0,

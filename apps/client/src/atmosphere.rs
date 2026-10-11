@@ -601,12 +601,10 @@ fn atmosphere_startup(
         if !resolved.atmosphere_enabled {
             continue;
         }
-        commands
-            .entity(camera)
-            .insert(atmosphere_settings(
-                resolved.atmosphere_quality,
-                resolved.aerial_perspective,
-            ));
+        commands.entity(camera).insert(atmosphere_settings(
+            resolved.atmosphere_quality,
+            resolved.aerial_perspective,
+        ));
         if resolved.auto_exposure {
             commands.entity(camera).insert(AutoExposure {
                 // Meter the HDR buffer after physical camera exposure.

@@ -226,7 +226,11 @@ pub fn surface_appearance_filtered(
         // (ISS shallow reefs): bright rim only where water is thin.
         let turq = 1.0 - smooth(8.0, 60.0, -h);
         let shelf_break = 0.6 + 0.4 * grain.clamp(-1.0, 1.0);
-        let mut c = mix(c, [0.16, 0.55, 0.55], (turq * 0.35 * shelf_break).clamp(0.0, 1.0));
+        let mut c = mix(
+            c,
+            [0.16, 0.55, 0.55],
+            (turq * 0.35 * shelf_break).clamp(0.0, 1.0),
+        );
         // Surf foam: narrow band around the datum, broken into streaks
         // by the independent grain + micro signals. Classification inputs
         // (height/moisture/temperature/slope) are untouched.
@@ -732,7 +736,10 @@ mod shoreline_tests {
         deep_lum /= 16.0;
         deep_rough /= 16.0;
         assert!(deep_lum < 0.25, "deep ocean stays dark, got {deep_lum:.3}");
-        assert!(deep_rough < 0.25, "deep ocean stays glossy, got {deep_rough:.3}");
+        assert!(
+            deep_rough < 0.25,
+            "deep ocean stays glossy, got {deep_rough:.3}"
+        );
     }
 
     #[test]
@@ -743,8 +750,7 @@ mod shoreline_tests {
         for dir in dirs(16) {
             shallow_g +=
                 surface_appearance(&field, &ocean_sample(-20.0), dir).albedo_srgb[1] as f64;
-            deep_g +=
-                surface_appearance(&field, &ocean_sample(-3000.0), dir).albedo_srgb[1] as f64;
+            deep_g += surface_appearance(&field, &ocean_sample(-3000.0), dir).albedo_srgb[1] as f64;
         }
         shallow_g /= 16.0;
         deep_g /= 16.0;
@@ -770,7 +776,10 @@ mod shoreline_tests {
         }
         wet /= 16.0;
         dry /= 16.0;
-        assert!(wet < dry, "waterline sand darker, wet={wet:.3} dry={dry:.3}");
+        assert!(
+            wet < dry,
+            "waterline sand darker, wet={wet:.3} dry={dry:.3}"
+        );
     }
 }
 
@@ -849,8 +858,17 @@ mod lod_fade_tests {
             pairs
                 .iter()
                 .map(|(a, b)| {
-                    (lum(surface_appearance_filtered(&field, &warm_land(500.0), *a, texel))
-                        - lum(surface_appearance_filtered(&field, &warm_land(500.0), *b, texel)))
+                    (lum(surface_appearance_filtered(
+                        &field,
+                        &warm_land(500.0),
+                        *a,
+                        texel,
+                    )) - lum(surface_appearance_filtered(
+                        &field,
+                        &warm_land(500.0),
+                        *b,
+                        texel,
+                    )))
                     .abs()
                 })
                 .sum::<f64>()

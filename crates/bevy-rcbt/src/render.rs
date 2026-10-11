@@ -1105,10 +1105,11 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         if (night > 0.001) {
             let mask = textureSample(city_texture, surface_sampler, uv).r;
             // Warm sodium/LED street mix (1.0, 0.72, 0.42) at a pre-exposure
-            // gain of 60.0 for mask = 1: reads clearly after dark (night
-            // ambient is O(100) lux here), vanishes by day (diffuse O(10^4)).
-            // Blind-tuned; revisit against screenshots.
-            radiance += vec3(1.0, 0.72, 0.42) * (mask * night * lighting.city_params.x * 60.0);
+            // gain of 500.0 for mask = 1: night terrain sits near O(100) lux
+            // under the pilot ambient, day diffuse is O(10^4), so this reads
+            // clearly after dark and still vanishes by day. Measured against
+            // EV100 13 screenshots (gain 60 was 7 stops under and invisible).
+            radiance += vec3(1.0, 0.72, 0.42) * (mask * night * lighting.city_params.x * 500.0);
         }
     }
     // Same pre-exposed linear HDR convention as Bevy PBR.

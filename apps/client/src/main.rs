@@ -883,12 +883,15 @@ fn spawn_starfield(
 ) {
     let dim_star_material = materials.add(StandardMaterial {
         base_color: Color::srgb(0.52, 0.63, 0.82),
-        emissive: LinearRgba::rgb(5.0, 8.0, 18.0),
+        emissive: LinearRgba::rgb(1500.0, 2000.0, 4200.0),
         unlit: true,
         ..default()
     });
     let mut seed = 0x5EED_2026_u32;
-    for index in 0..220 {
+    // Hundreds of points: sub-pixel quads stay invisible no matter how hot,
+    // so sizes cover ~1-3 px at both pilot (5 Mm shell) and map (500 m)
+    // ranges with the shared radius-relative scaling below.
+    for index in 0..500 {
         let direction = loop {
             let candidate = Vec3::new(
                 next_unit(&mut seed) * 2.0 - 1.0,
@@ -900,7 +903,7 @@ fn spawn_starfield(
             }
         };
         let distance = 52.0 + next_unit(&mut seed) * 12.0;
-        let size = 0.014 + next_unit(&mut seed) * 0.035;
+        let size = 0.035 + next_unit(&mut seed) * 0.085;
         let material = match index % 11 {
             0 => star_material.clone(),
             1 => blue_star_material.clone(),
@@ -910,6 +913,7 @@ fn spawn_starfield(
             Mesh3d(sphere_mesh.clone()),
             MeshMaterial3d(material),
             Transform::from_translation(direction * distance).with_scale(Vec3::splat(size)),
+            Visibility::Visible,
             StarMarker {
                 direction,
                 radius_factor: distance / 60.0,
@@ -929,7 +933,12 @@ fn update_starfield(
     let started = std::time::Instant::now();
     // Local stars must lie behind terrain, not 500 metres in front of it.
     let local = survey.active || pilot.view_mode == ClientViewMode::Pilot;
-    let radius = if local { 5_000_000.0 } else { 500.0 };
+    // Fixed shell comfortably inside the camera far plane (measured
+    // far = 1 Mm in orbit views): larger radii silently stop rendering
+    // past a few hundred kilometres (unresolved driver-level far fade;
+    // revisit with a capture). 100 km keeps stellar parallax negligible
+    // (subpixel per frame at flight speeds) while staying well clear.
+    let radius = if local { 100_000.0 } else { 500.0 };
     for (mut transform, star, mut visibility) in &mut stars {
         *visibility = if survey.active {
             Visibility::Hidden

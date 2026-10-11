@@ -390,7 +390,11 @@ fn resolve_star_lights(
 /// a linear HDR emissive at map-symbol brightness (not physics). Hues come
 /// from data; the ×25 scale only matches the established map look.
 pub(super) fn star_mesh_colors(temperature_k: f64) -> (Color, LinearRgba) {
-    const EMISSIVE_SCALE: f32 = 25.0;
+    // Stellar surfaces must read against a fixed manual exposure (EV100 13):
+    // daylight diffuse runs O(10^4), night ground O(10^2) reads near-black,
+    // so star points need O(10^3) to register at all. Suns clip white, as
+    // they should; star points read as bright dots.
+    const EMISSIVE_SCALE: f32 = 4000.0;
     let tint = blackbody_rgb(temperature_k);
     let srgb = |c: f64| c.clamp(0.0, 1.0).powf(1.0 / 2.2) as f32;
     (

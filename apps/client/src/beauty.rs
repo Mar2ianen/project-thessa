@@ -21,7 +21,7 @@ use super::*;
 use bevy::{
     asset::RenderAssetUsages,
     image::Image,
-    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+    render::render_resource::{Extent3d, Face, TextureDimension, TextureFormat},
 };
 use thessa_graphics::Quality;
 use thessa_worldgen_rocky::lod::{TileKey, cbt_node_for_tile, tile_for_cbt_node};
@@ -265,24 +265,28 @@ fn bake_clouds(seed: u64, w: u32, h: u32, coverage: f32, opacity: f32) -> Vec<u8
             let swirl = fbm(seed ^ 0x51AB, u * 3.0 + d * 1.5, v * 6.0, 3.0);
             // Billow octave: small cells riding the large field so decks read
             // as structured tops instead of smooth blobs. Bake-time only.
+            // Faded toward the poles: the meridional pinch squeezes this
+            // octave into coherent ringing arches there (measured).
+            let polar = (v * std::f64::consts::PI).sin().powf(0.7);
             let billow = fbm(
                 seed ^ 0xB110,
                 u * 12.0 + d * 2.0,
                 v * 24.0 * stretch + 9.7,
                 12.0,
-            );
+            ) * (0.25 + 0.75 * polar);
             let field = (d * 0.50 + swirl * 0.28 + billow * 0.22) as f32;
             let a = ((field - edge0) / (1.0 - edge0).max(1e-3)).clamp(0.0, 1.0);
             let a = (a * (1.6 - 0.6 * a)).clamp(0.0, 1.0) * opacity;
-            // Density shading: cores white, skirts cool shadow-blue. The sun
-            // side stays warm white; only the thin translucent edge cools.
+            // Density shading: white cores, steel-grey body, cool thin skirts.
+            // The full 0.55..1.0 span keeps structure under minification:
+            // an all-0.9 wash reads as cream from orbit, not cloud.
             let core = a.clamp(0.0, 1.0);
-            let shade = 0.88 + 0.12 * core;
-            let cool = (1.0 - core) * 0.10;
-            // R warm, B cool: thin edges go slightly steel-blue, cores white.
-            let r = (255.0 * shade).clamp(0.0, 255.0) as u8;
-            let g = (255.0 * (shade - cool * 0.4)).clamp(0.0, 255.0) as u8;
-            let b = (255.0 * (shade - cool * 0.1)).clamp(0.0, 255.0).min(255.0) as u8;
+            let brightness = 0.55 + 0.45 * core;
+            let cool = (1.0 - core) * 0.25;
+            // R warm, B cool: thin edges go steel-blue, cores white.
+            let r = (255.0 * brightness).clamp(0.0, 255.0) as u8;
+            let g = (255.0 * (brightness - cool * 0.35)).clamp(0.0, 255.0) as u8;
+            let b = (255.0 * (brightness - cool * 0.05)).clamp(0.0, 255.0) as u8;
             px.extend_from_slice(&[r, g, b, (a.clamp(0.0, 1.0) * 255.0) as u8]);
         }
     }
@@ -616,11 +620,13 @@ fn setup_beauty(
     let low_px = bake_clouds(0xC10D, cw, ch, r.clouds_coverage, r.clouds_opacity);
     let cloud_low = images.add(rgba_image(cw, ch, low_px));
     let cloud_high = (r.clouds_layers >= 2).then(|| {
+        // Cirrus stays a thin veil over the low deck: a small coverage
+        // offset lands it far down the shaping curve (measured).
         let hi_px = bake_clouds(
             0xC1225,
             cw / 2,
             ch / 2,
-            (r.clouds_coverage + 0.25).min(0.9),
+            (r.clouds_coverage + 0.08).min(0.95),
             r.clouds_opacity * 0.7,
         );
         images.add(rgba_image(cw / 2, ch / 2, hi_px))
@@ -783,7 +789,11 @@ fn cloud_material(
             mat.base_color = Color::WHITE;
             mat.base_color_texture = Some(tex);
             mat.alpha_mode = AlphaMode::Blend;
-            mat.cull_mode = None;
+            // Back-face cull: the deck is only ever viewed from outside
+            // (the impostor fade hides inside views), so the far hemisphere
+            // must not double the alpha. No-cull rendered every ray twice
+            // and washed the disc to cream from orbit.
+            mat.cull_mode = Some(Face::Back);
             mat.perceptual_roughness = 1.0;
             mat.metallic = 0.0;
         }
@@ -1214,6 +1224,24 @@ mod tests {
     }
 
     #[test]
+    fn cloud_cover_tracks_coverage_knob() {
+        // Calibrated shaping curve (visible fraction with alpha > 40):
+        // 0.45 -> ~0.7, 0.55 -> ~0.37, 0.6 -> ~0.2, 0.7 -> ~0.03.
+        // The default 0.55 reads as broken deck, not overcast.
+        let frac = |coverage: f32| {
+            bake_clouds(0xC10D, 96, 48, coverage, 1.0)
+                .chunks_exact(4)
+                .filter(|p| p[3] > 40)
+                .count() as f64
+                / (96.0 * 48.0)
+        };
+        let mid = frac(0.55);
+        assert!((0.25..=0.50).contains(&mid), "low deck {mid:.3}");
+        let cirrus = frac(0.63);
+        assert!(cirrus < mid * 0.7, "cirrus {cirrus:.3} vs low {mid:.3}");
+    }
+
+    #[test]
     fn cloud_alpha_tracks_coverage() {
         let clear = bake_clouds(1, 64, 32, 0.95, 1.0);
         let overcast = bake_clouds(1, 64, 32, 0.05, 1.0);
@@ -1226,21 +1254,24 @@ mod tests {
     #[test]
     fn cloud_cores_stay_white_skirts_cool() {
         let px = bake_clouds(1, 128, 64, 0.45, 0.9);
-        // Opaque cores must be near-white; translucent skirts cool gray-blue.
-        let mut core = 0;
+        // Dense cores bright; translucent skirts cool gray-blue.
+        let mut brightest = 0u8;
         let mut skirt_cool = 0;
         let mut max_a = 0u8;
         for c in px.chunks(4) {
             let (r, g, b, a) = (c[0], c[1], c[2], c[3]);
             max_a = max_a.max(a);
-            if a > 150 && r > 225 && g > 220 && b > 220 {
-                core += 1;
+            if a > 140 {
+                brightest = brightest.max(r).max(g).max(b);
             }
             if (20..120).contains(&a) && b as i16 >= r as i16 - 8 {
                 skirt_cool += 1;
             }
         }
-        assert!(core > 0, "dense cores must stay white, max_a={max_a}");
+        assert!(
+            brightest > 200,
+            "dense cores must stay bright, max_a={max_a}"
+        );
         assert!(skirt_cool > 0, "thin skirts must cool, not stay warm gray");
     }
 

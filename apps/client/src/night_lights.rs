@@ -109,10 +109,12 @@ pub(crate) fn bake_city_mask(
             } else {
                 0.0
             };
-            // Speckled blocks inside the settled envelope, dark lanes out.
+            // City blocks fill the settled envelope densely (ISS metros read
+            // near-solid in the cores with dark lanes out), brightness
+            // following the envelope with per-block variation.
             let speckle = hash01(x, y, 0xC17E);
-            let lit = if speckle < gate * 0.6 {
-                gate * (0.55 + 0.45 * hash01(x, y, 0x51E))
+            let lit = if speckle < gate {
+                gate * (0.6 + 0.4 * hash01(x, y, 0x51E))
             } else {
                 0.0
             };

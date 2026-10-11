@@ -288,7 +288,7 @@ fn default_cloud_layers() -> u32 {
 }
 
 fn default_cloud_coverage() -> f32 {
-    0.45
+    0.55
 }
 
 fn default_cloud_opacity() -> f32 {

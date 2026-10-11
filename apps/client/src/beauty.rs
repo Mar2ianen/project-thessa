@@ -294,6 +294,51 @@ fn bake_clouds(seed: u64, w: u32, h: u32, coverage: f32, opacity: f32) -> Vec<u8
 }
 
 // ---------------------------------------------------------------------------
+// Cloud relief: tangent-space normals from the deck coverage.
+
+/// Relief strength for deck normal maps (tangent-space slope gain).
+/// Cloud tops are soft: enough for sun modeling on puffs, below noisy.
+pub(crate) const CLOUD_NORMAL_STRENGTH: f32 = 6.0;
+
+/// Alpha channel grid out of an interleaved RGBA8 bake.
+fn alpha_grid(px: &[u8]) -> Vec<u8> {
+    px.chunks_exact(4).map(|c| c[3]).collect()
+}
+
+/// Tangent-space normal map from a deck alpha grid (row-major alpha bytes).
+/// Height = coverage: dense cores read as domes, thin skirts fall away, so
+/// directional sun shades puffy tops and dark crevices instead of a flat
+/// decal. Same orientation convention as the globe normal bake
+/// (`client_export`: nx from east gradient, ny from row gradient), mirrored
+/// by the mikktspace tangents Bevy generates for the shell mesh — keep the
+/// baker, the mesh tangents, and this function in sync.
+pub(crate) fn bake_cloud_normals(alpha: &[u8], w: u32, h: u32, strength: f32) -> Vec<u8> {
+    assert_eq!(alpha.len(), (w * h) as usize);
+    let height = |x: i64, y: i64| {
+        let xx = x.rem_euclid(w as i64) as u32;
+        let yy = y.clamp(0, h as i64 - 1) as u32;
+        alpha[(yy * w + xx) as usize] as f32 / 255.0
+    };
+    let mut px = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h as i64 {
+        for x in 0..w as i64 {
+            // Central differences with u-wrap; v clamps at the poles.
+            let gx = (height(x + 1, y) - height(x - 1, y)) * 0.5 * strength;
+            let gy = (height(x, y + 1) - height(x, y - 1)) * 0.5 * strength;
+            let inv = 1.0 / (gx * gx + gy * gy + 1.0).sqrt();
+            let n = [-gx * inv, -gy * inv, inv];
+            px.extend_from_slice(&[
+                ((n[0] * 0.5 + 0.5) * 255.0) as u8,
+                ((n[1] * 0.5 + 0.5) * 255.0) as u8,
+                ((n[2] * 0.5 + 0.5) * 255.0) as u8,
+                255,
+            ]);
+        }
+    }
+    px
+}
+
+// ---------------------------------------------------------------------------
 // Cloud shadows: analytic sampling of the deck bake.
 //
 // The shells are ordinary textured spheres, so a ground point's shadow UV is
@@ -502,6 +547,21 @@ fn rgba_image(w: u32, h: u32, pixels: Vec<u8>) -> Image {
     )
 }
 
+/// Linear normal-map image: normals are direction data, never sRGB.
+fn normal_image(w: u32, h: u32, pixels: Vec<u8>) -> Image {
+    Image::new(
+        Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        pixels,
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::default(),
+    )
+}
+
 #[derive(Resource)]
 pub(crate) struct BeautyImages {
     nereid: Handle<Image>,
@@ -510,6 +570,8 @@ pub(crate) struct BeautyImages {
     vesper_size: (u32, u32),
     pub(crate) cloud_low: Handle<Image>,
     cloud_high: Option<Handle<Image>>,
+    pub(crate) cloud_low_nrm: Handle<Image>,
+    cloud_high_nrm: Option<Handle<Image>>,
     aurora: Handle<Image>,
     aurora_size: (u32, u32),
 }
@@ -524,6 +586,8 @@ impl BeautyImages {
             vesper_size: (0, 0),
             cloud_low,
             cloud_high: None,
+            cloud_low_nrm: Handle::default(),
+            cloud_high_nrm: None,
             aurora: Handle::default(),
             aurora_size: (0, 0),
         }
@@ -542,6 +606,9 @@ pub(crate) struct CloudShell {
 pub(crate) struct AuroraShell {
     body: &'static str,
     scale_factor: f32,
+    /// Curtain layer weight: the stack shares one bake and rotation so rays
+    /// stay field-aligned coherent while parallax separates the layers.
+    gain: f32,
 }
 
 #[derive(Resource, Default)]
@@ -618,8 +685,12 @@ fn setup_beauty(
 
     // --- Clouds.
     let low_px = bake_clouds(0xC10D, cw, ch, r.clouds_coverage, r.clouds_opacity);
-    let cloud_low = images.add(rgba_image(cw, ch, low_px));
-    let cloud_high = (r.clouds_layers >= 2).then(|| {
+    let cloud_low = images.add(rgba_image(cw, ch, low_px.clone()));
+    // Relief for sun modeling on puffy tops: normals from the same alpha
+    // field the shells show, so lighting and coverage never disagree.
+    let low_nrm = bake_cloud_normals(&alpha_grid(&low_px), cw, ch, CLOUD_NORMAL_STRENGTH);
+    let cloud_low_nrm = images.add(normal_image(cw, ch, low_nrm));
+    let (cloud_high, cloud_high_nrm) = if r.clouds_layers >= 2 {
         // Cirrus stays a thin veil over the low deck: a small coverage
         // offset lands it far down the shaping curve (measured).
         let hi_px = bake_clouds(
@@ -629,8 +700,14 @@ fn setup_beauty(
             (r.clouds_coverage + 0.08).min(0.95),
             r.clouds_opacity * 0.7,
         );
-        images.add(rgba_image(cw / 2, ch / 2, hi_px))
-    });
+        let hi_nrm = bake_cloud_normals(&alpha_grid(&hi_px), cw / 2, ch / 2, CLOUD_NORMAL_STRENGTH);
+        (
+            Some(images.add(rgba_image(cw / 2, ch / 2, hi_px))),
+            Some(images.add(normal_image(cw / 2, ch / 2, hi_nrm))),
+        )
+    } else {
+        (None, None)
+    };
 
     // --- Aurora curtain base.
     let (aw, ah) = match r.aurora_quality {
@@ -647,6 +724,8 @@ fn setup_beauty(
         vesper_size: (vw, vh),
         cloud_low,
         cloud_high,
+        cloud_low_nrm,
+        cloud_high_nrm,
         aurora,
         aurora_size: (aw, ah),
     });
@@ -660,6 +739,11 @@ fn setup_beauty(
     // (measured on a 30 km maneuver frame). Collapsing pole u to the middle
     // column reduces the wedge to a single texel.
     let mut shell_sphere = Sphere::new(1.0).mesh().uv(96, 48);
+    // Tangents before the pole collapse (degenerate pole UVs would poison
+    // mikktspace); the collapse only rewrites UVs afterward.
+    shell_sphere
+        .generate_tangents()
+        .expect("shell sphere has positions, normals and uvs");
     collapse_shell_pole_uvs(&mut shell_sphere);
     let shell_mesh = meshes.add(shell_sphere);
 
@@ -685,17 +769,24 @@ fn setup_beauty(
     }
 
     // Aurora shell (Thessa only).
-    commands.spawn((
-        Mesh3d(shell_mesh.clone()),
-        MeshMaterial3d(materials.add(StandardMaterial::default())),
-        Transform::default(),
-        Visibility::Hidden,
-        Name::new("beauty aurora thessa"),
-        AuroraShell {
-            body: "thessa",
-            scale_factor: 1.045,
-        },
-    ));
+    // Aurora curtain stack (thessa only): three concentric shells sharing
+    // one bake and rotation keep rays field-aligned coherent, while the
+    // radial separation gives curtains parallax depth and a soft vertical
+    // falloff instead of a painted band. Gains sum near the main shell.
+    for (scale, gain) in [(1.038, 0.45), (1.045, 1.0), (1.052, 0.5)] {
+        commands.spawn((
+            Mesh3d(shell_mesh.clone()),
+            MeshMaterial3d(materials.add(StandardMaterial::default())),
+            Transform::default(),
+            Visibility::Hidden,
+            Name::new("beauty aurora thessa"),
+            AuroraShell {
+                body: "thessa",
+                scale_factor: scale,
+                gain,
+            },
+        ));
+    }
 }
 
 /// Swap procedural band textures onto the map planet entities once they exist.
@@ -782,6 +873,7 @@ fn cloud_material(
     materials: &mut Assets<StandardMaterial>,
     handle: &Handle<StandardMaterial>,
     tex: Handle<Image>,
+    nrm: Option<Handle<Image>>,
     opacity: f32,
 ) {
     if let Some(mut mat) = materials.get_mut(handle) {
@@ -796,6 +888,8 @@ fn cloud_material(
             mat.cull_mode = Some(Face::Back);
             mat.perceptual_roughness = 1.0;
             mat.metallic = 0.0;
+            // Relief from the same coverage field: sun models puffy tops.
+            mat.normal_map_texture = nrm;
         }
         // Per-frame: the orbit-impostor fade below drives this, not setup.
         mat.base_color.set_alpha(opacity);
@@ -900,6 +994,11 @@ fn follow_cloud_shells(
         } else {
             imgs.cloud_high.clone()
         };
+        let nrm = if shell.deck == 0 {
+            Some(imgs.cloud_low_nrm.clone())
+        } else {
+            imgs.cloud_high_nrm.clone()
+        };
         let Some(tex) = tex else {
             *vis = Visibility::Hidden;
             continue;
@@ -934,7 +1033,7 @@ fn follow_cloud_shells(
             *vis = Visibility::Hidden;
             continue;
         }
-        cloud_material(&mut materials, &mat3d.0, tex, r.clouds_opacity * fade);
+        cloud_material(&mut materials, &mat3d.0, tex, nrm, r.clouds_opacity * fade);
         st.translation = planet.translation;
         let s = planet.scale.x * shell.scale_factor;
         st.scale = Vec3::splat(s);
@@ -1012,7 +1111,7 @@ fn follow_aurora_shell(
                 mat.emissive = LinearRgba::BLACK;
                 mat.emissive_texture = None;
             }
-            let i = r.aurora_intensity;
+            let i = r.aurora_intensity * shell.gain;
             mat.base_color = Color::LinearRgba(LinearRgba::new(i, i, i, 1.0));
         }
         st.translation = planet.translation;
@@ -1221,6 +1320,47 @@ mod tests {
             .filter(|c| c[0] > 200 && c[0].saturating_sub(c[1]) > 40)
             .count();
         assert!(warm > 0, "storm core missing");
+    }
+
+    #[test]
+    fn cloud_normals_are_unit_tangent_and_seamless() {
+        // Flat field: straight-up normals.
+        let flat = vec![200u8; 16 * 8];
+        let px = bake_cloud_normals(&flat, 16, 8, 3.0);
+        assert_eq!(px.len(), 16 * 8 * 4);
+        for c in px.chunks_exact(4) {
+            assert_eq!((c[0], c[1], c[2], c[3]), (127, 127, 255, 255));
+            let n = [
+                c[0] as f32 / 255.0 * 2.0 - 1.0,
+                c[1] as f32 / 255.0 * 2.0 - 1.0,
+                c[2] as f32 / 255.0 * 2.0 - 1.0,
+            ];
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            assert!((len - 1.0).abs() < 0.02, "{n:?}");
+        }
+        // East ramp (alpha grows with +u): normals tilt toward -u, matching
+        // the globe-bake convention (nx from the east gradient, negated).
+        let mut ramp = vec![0u8; 16 * 8];
+        for y in 0..8 {
+            for x in 0..16 {
+                ramp[y * 16 + x] = (x * 16) as u8;
+            }
+        }
+        let px = bake_cloud_normals(&ramp, 16, 8, 3.0);
+        let mid = &px[(4 * 16 + 8) * 4..][..4];
+        assert!(mid[0] < 128, "east ramp tilts -u, got {mid:?}");
+        assert!((mid[1] as i16 - 128).abs() <= 2, "no v tilt, got {mid:?}");
+        assert!(mid[2] > 200, "mostly up, got {mid:?}");
+        // u-wrap: the seam columns sample wrapped neighbors, so a linear
+        // ramp yields identical normals on both sides (no visible seam).
+        let left = &px[(4 * 16) * 4..][..4];
+        let right = &px[(4 * 16 + 15) * 4..][..4];
+        for i in 0..3 {
+            assert!(
+                (left[i] as i16 - right[i] as i16).abs() <= 1,
+                "seam {left:?} vs {right:?}"
+            );
+        }
     }
 
     #[test]

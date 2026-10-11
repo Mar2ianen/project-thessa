@@ -203,9 +203,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let alpha = clamp(1.0 - transmittance, 0.0, 1.0);
-    // Premultiplied-style HDR output for the Add blend path: the blend adds
-    // source RGB straight over the frame, so a faint wisp must contribute a
-    // faint summand. Without the alpha weight every march leaves full Color
-    // and low throttle renders as an opaque balloon.
-    return vec4<f32>(rgb * alpha * near_fade, alpha * near_fade);
+    // Premultiplied-style HDR output for the Add blend path: Bevy maps
+    // AlphaMode::Add to premultiplied blending (src + dst * (1 - a)), so
+    // rgb must already be the emission integral and alpha the occlusion.
+    // Do NOT premultiply rgb by alpha here: that double-counts absorption
+    // and kills bright cores. Faint throttle reads faint because the field
+    // itself is thin (pinned by the oracle test), not via output scaling.
+    return vec4<f32>(rgb * near_fade, alpha * near_fade);
 }

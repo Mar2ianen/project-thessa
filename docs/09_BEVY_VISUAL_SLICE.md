@@ -42,6 +42,9 @@ path already consumes snapshots from an embedded authoritative server process.
   once at startup from the world's inhabited regions, gated by the
   terminator in-shader on the GPU path (the CPU fallback has no emissive
   slot and stays dark);
+- cloud-deck relief (tangent-space normals from the coverage field, so sun
+  models puffy tops) and aurora as a three-shell curtain stack with
+  parallax depth instead of a painted band;
 - render-local anchoring so large barycentric coordinates do not jitter.
 
 ## Coordinate contract

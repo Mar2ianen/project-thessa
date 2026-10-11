@@ -18,6 +18,8 @@ APIs, data formats, and save files are not stable before `0.1.0`.
   warm emissive clusters baked once at startup from the world's inhabited
   regions, gated by the terminator in the GPU terrain shader; the CPU
   fallback path has no emissive slot and stays dark.
+- Cloud-deck relief (tangent-space normals from the coverage field),
+  three-shell aurora curtains, and stars placed for the manual exposure.
 - A shared baked free-flight trajectory for the map and flight view, an
   ephemeris table, and a simulation-time event scheduler; baking runs in a
   compute worker.

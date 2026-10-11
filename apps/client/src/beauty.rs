@@ -510,6 +510,22 @@ pub(crate) struct BeautyImages {
     aurora_size: (u32, u32),
 }
 
+#[cfg(test)]
+impl BeautyImages {
+    pub(crate) fn test_with_clouds(cloud_low: Handle<Image>) -> Self {
+        Self {
+            nereid: Handle::default(),
+            vesper: Handle::default(),
+            nereid_size: (0, 0),
+            vesper_size: (0, 0),
+            cloud_low,
+            cloud_high: None,
+            aurora: Handle::default(),
+            aurora_size: (0, 0),
+        }
+    }
+}
+
 #[derive(Component)]
 pub(crate) struct CloudShell {
     body: &'static str,

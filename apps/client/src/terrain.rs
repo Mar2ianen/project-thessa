@@ -214,9 +214,8 @@ fn sync_cbt_effects(
 ) {
     let r = graphics.as_deref().map(|g| g.0.clone()).unwrap_or_default();
     let t = clock.as_deref().map(|c| c.sim_seconds).unwrap_or(0.0);
-    let planet = terrain
-        .as_deref()
-        .and_then(|w| beauty::planet_frame_for_body("thessa", &visuals, Some(w), t));
+    // The entity match needs no terrain; the live fallback does.
+    let planet = beauty::planet_frame_for_body("thessa", &visuals, terrain.as_deref(), t);
     let sun_dir = sun
         .single()
         .map(|tf| {
@@ -267,7 +266,6 @@ fn update_tile_cloud_shadows(
     beauty: Option<Res<beauty::BeautyImages>>,
     images: Res<Assets<Image>>,
     clock: Option<Res<SimulationClock>>,
-    terrain: Option<Res<WorldTerrain>>,
     sun: Query<&GlobalTransform, With<PrimaryStarLight>>,
     visuals: Query<
         (&Name, &Transform, &InheritedVisibility),
@@ -289,13 +287,11 @@ fn update_tile_cloud_shadows(
     if !r.clouds_cast_shadows {
         return;
     }
-    let (Some(images_res), Some(clock), Some(world)) =
-        (beauty.as_deref(), clock.as_deref(), terrain.as_deref())
-    else {
+    let (Some(images_res), Some(clock)) = (beauty.as_deref(), clock.as_deref()) else {
         return;
     };
     let t = clock.sim_seconds;
-    let Some(planet) = beauty::planet_frame_for_body("thessa", &visuals, Some(world), t) else {
+    let Some(planet) = beauty::planet_frame_for_body("thessa", &visuals, None, t) else {
         return;
     };
     let Ok(sun_tf) = sun.single() else {
@@ -312,7 +308,9 @@ fn update_tile_cloud_shadows(
     let spin = beauty::deck_spin_rad_s("thessa", 0).unwrap_or(0.004);
     let shell_rot = beauty::deck_world_rotation(planet.rotation, spin, t, r.clouds_animate);
     let inv_shell = shell_rot.inverse();
-    let radius = world.field.params.radius_m as f32;
+    // Planet scale carries the body radius (entity match and live fallback
+    // both scale by it), so no terrain field is needed here.
+    let radius = planet.scale.x.max(1.0);
     for (_, transform, mat3d) in &tiles {
         let up = (transform.translation() - planet.translation).normalize_or_zero();
         if up.length_squared() < 0.5 {
@@ -2713,5 +2711,134 @@ mod streaming_tests {
             plan.updates()[0],
             thessa_rcbt_core::Update::Split(CbtNode::new(8, 3).unwrap())
         );
+    }
+
+    fn overcast_image() -> Image {
+        use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+        Image::new(
+            Extent3d {
+                width: 8,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            vec![200u8; 8 * 4 * 4],
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::RENDER_WORLD,
+        )
+    }
+
+    /// Minimal world for the effect systems: visible planet, sun, overcast
+    /// deck, one CPU tile. No terrain field needed (the entity match wins).
+    fn effect_world(shadows: bool, cities: bool) -> World {
+        let mut world = World::new();
+        world.insert_resource(CbtRenderMaterial::default());
+        world.insert_resource(GraphicsResolved(ResolvedGraphicsSettings {
+            clouds_cast_shadows: shadows,
+            night_lights_enabled: cities,
+            night_lights_intensity: 1.0,
+            ..Default::default()
+        }));
+        world.insert_resource(SimulationClock::default());
+        world.insert_resource(Time::<()>::default());
+        let mut images = Assets::<Image>::default();
+        let cloud = images.add(overcast_image());
+        world.insert_resource(beauty::BeautyImages::test_with_clouds(cloud));
+        world.insert_resource(images);
+        world.insert_resource(Assets::<StandardMaterial>::default());
+        world.spawn((
+            Name::new("thessa"),
+            Transform {
+                translation: Vec3::ZERO,
+                rotation: Quat::IDENTITY,
+                scale: Vec3::splat(3_200_000.0),
+            },
+            InheritedVisibility::VISIBLE,
+        ));
+        world.spawn((GlobalTransform::IDENTITY, PrimaryStarLight));
+        world
+    }
+
+    #[test]
+    fn effect_sync_publishes_shadow_and_city_samplers() {
+        let mut world = effect_world(true, true);
+        let city = {
+            let mut lights = world.resource_mut::<Assets<Image>>();
+            lights.add(overcast_image())
+        };
+        world.insert_resource(crate::night_lights::NightLights { image: city });
+        let mut schedule = Schedule::default();
+        schedule.add_systems(sync_cbt_effects);
+        schedule.run(&mut world);
+        let material = world.resource::<CbtRenderMaterial>();
+        let shadow = material.cloud_shadow.as_ref().expect("shadow sampler");
+        // Unit rotation and sun direction (valid shader uniforms).
+        let qlen = (shadow.relative_rotation.iter().map(|v| v * v).sum::<f32>()).sqrt();
+        assert!((qlen - 1.0).abs() < 1e-5, "{qlen}");
+        let slen = (shadow.sun_body_dir[0].powi(2)
+            + shadow.sun_body_dir[1].powi(2)
+            + shadow.sun_body_dir[2].powi(2))
+        .sqrt();
+        assert!((slen - 1.0).abs() < 1e-5, "{slen}");
+        assert_eq!(
+            shadow.deck_height_m,
+            beauty::CLOUD_SHADOW_DECK_HEIGHT_M as f32
+        );
+        assert!(material.night_lights.is_some());
+    }
+
+    #[test]
+    fn effect_sync_clears_samplers_when_disabled() {
+        let mut world = effect_world(false, false);
+        let mut schedule = Schedule::default();
+        schedule.add_systems(sync_cbt_effects);
+        schedule.run(&mut world);
+        let material = world.resource::<CbtRenderMaterial>();
+        assert!(material.cloud_shadow.is_none());
+        assert!(material.night_lights.is_none());
+    }
+
+    #[test]
+    fn tile_shadows_darken_under_overcast_and_hold_when_off() {
+        for enabled in [true, false] {
+            let mut world = effect_world(enabled, false);
+            let mat = {
+                let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+                materials.add(StandardMaterial {
+                    base_color: Color::WHITE,
+                    ..Default::default()
+                })
+            };
+            world.spawn((
+                SurfaceTile(TileKey {
+                    face: 0,
+                    level: 10,
+                    x: 0,
+                    y: 0,
+                }),
+                GlobalTransform::from_translation(Vec3::new(3_200_000.0, 0.0, 0.0)),
+                MeshMaterial3d(mat.clone()),
+            ));
+            world
+                .resource_mut::<Time>()
+                .advance_by(std::time::Duration::from_secs_f32(0.5));
+            let mut schedule = Schedule::default();
+            schedule.add_systems(update_tile_cloud_shadows);
+            schedule.run(&mut world);
+            let materials = world.resource::<Assets<StandardMaterial>>();
+            let got = materials.get(&mat).unwrap().base_color.to_linear();
+            if enabled {
+                // Overcast alpha 200/255 must land exactly on the analytic
+                // shadow factor (through sRGB, as the material stores it).
+                let f = beauty::shadow_factor_from_alpha(200.0 / 255.0);
+                let expected = Color::srgb(f, f, f).to_linear().red;
+                assert!(
+                    (got.red - expected).abs() < 0.02,
+                    "shadowed tile {got:?} vs {expected}"
+                );
+            } else {
+                assert_eq!(got, LinearRgba::WHITE);
+            }
+        }
     }
 }

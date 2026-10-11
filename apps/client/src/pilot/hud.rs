@@ -1270,7 +1270,35 @@ pub(super) fn update_pilot_hud(
                 heading_cardinal(flight.heading_deg)
             ),
             Readout::Help => format!(
-                "{}\n\nW / S   Nose down / up\nA / D   Yaw left / right     Q / E   Roll\nShift / Ctrl   Throttle     Z / X   Full / zero\nSpace   Engine     G   Gear     R   RCS\nP   Arm / cut parachutes     Y   Reaction wheels\nT   Toggle SAS     Hold F   Invert SAS\nCaps Lock   Precision controls\n\nRMB drag   Free orbit     MMB drag   Pan\nWheel   Zoom     `   Reset camera\nV   Free / chase camera     M   Orbital map\nEsc / F8   Pause     F2   Hide interface\nF3   Extra telemetry     F1   This layout\n\nClick speed: surface / air / orbit / target\nClick altimeter: datum / AGL\nMode button beside navball: control scheme\nSAS / RCS / WHEELS / GEAR / CHUTE lamps\nshow enabled controls. Icons to the left: camera,\ndata, precision, pause, map, help. + / −: throttle.\n\nFuel is unlimited; contact and gear forces\nare not yet simulated. F4: performance; Shift+F4: capture.\nF6: surface survey; M: return to map.\nSurvey: Shift+RMB look around; RMB orbit.\nShift+F12: RT / raster (supported GPUs).",
+                "{}
+
+W / S   Nose down / up
+A / D   Yaw left / right     Q / E   Roll
+Shift / Ctrl   Throttle     Z / X   Full / zero
+Space   Engine     G   Gear     R   RCS
+P   Arm / cut parachutes     Y   Reaction wheels
+T   Toggle SAS     Hold F   Invert SAS
+Caps Lock   Precision controls
+
+RMB drag   Free orbit     MMB drag   Pan
+Wheel   Zoom     `   Reset camera
+V   Free / chase camera     M   Orbital map
+Esc / F8   Pause     F2   Hide interface
+F3   Extra telemetry     F1   This layout
+
+Click speed: surface / air / orbit / target
+Click altimeter: datum / AGL
+Mode button beside navball: control scheme
+SAS / RCS / WHEELS / GEAR / CHUTE lamps
+show enabled controls. Icons to the left: camera,
+data, precision, pause, map, help. + / −: throttle.
+
+Fuel is unlimited; contact and gear forces
+are not yet simulated. F4: performance; Shift+F4: capture.
+F6: surface survey; M: return to map.
+F7: coastal beauty flyby (live craft, low pass; any stick/throttle key takes over, best at 1x warp).
+Survey: Shift+RMB look around; RMB orbit.
+Shift+F12: RT / raster (supported GPUs).",
                 state.control_mode.description()
             ),
         };

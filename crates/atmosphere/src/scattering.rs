@@ -326,6 +326,29 @@ mod tests {
         assert!(b > g && g > r, "noon zenith must be blue: [{r}, {g}, {b}]");
     }
 
+    /// Regression pin for the mid-range haze budget: straight down from
+    /// 60 km the column stays mostly transparent (the 60 km mint veil was a
+    /// GPU-path artifact, never the model — this test keeps the model
+    /// honest so the two cannot be confused again).
+    #[test]
+    fn aerial_60km_down_stays_mostly_transparent() {
+        let optics = thessa_optics();
+        let sun = noon_light();
+        for alt_km in [0.8, 30.0, 60.0, 200.0, 800.0] {
+            let cam = DVec3::new(0.0, 3_200_000.0 + alt_km * 1000.0, 0.0);
+            let ground = DVec3::new(0.0, 3_200_000.0, 0.0);
+            let (t, ins) = aerial_perspective(&optics, cam, ground, &sun, 64);
+            assert!(
+                t[1] > 0.5,
+                "60 km column must stay transparent, alt={alt_km} T={t:?}"
+            );
+            assert!(
+                ins[1] < 50.0,
+                "60 km inscatter must stay modest, alt={alt_km} ins={ins:?}"
+            );
+        }
+    }
+
     #[test]
     fn sunset_horizon_shifts_red() {
         // Sun 2 degrees above the horizon, looking toward it.

@@ -257,6 +257,12 @@ impl Iterator for RowStream<'_> {
 
 /// Bake albedo, tangent normals and perceptual roughness from one height field.
 /// Sunlight is deliberately absent from all three maps.
+///
+/// Albedo AND roughness come from the same appearance model the tiles
+/// and GPU material pages use (slope at 256 m, like the pages), LOD-faded at
+/// the map texel so sub-texel grain cannot alias into noise, so the far
+/// globe matches the near field instead of popping between a flat fill and
+/// structured ground. Normals stay height-derived (water flat for glint).
 pub fn write_client_maps(
     field: &PlanetField,
     width: usize,
@@ -269,7 +275,7 @@ pub fn write_client_maps(
     let mut normals = vec![0_u8; width * height * 3];
     let mut roughness = vec![0_u8; width * height * 3];
     for r in 0..height {
-        let lat = (90.0 - (r as f64 + 0.5) * 180.0 / height as f64).to_radians();
+        let lat = (90.0 - (r as f64 + 0.5) * (180.0 / height as f64)).to_radians();
         let dx =
             std::f64::consts::TAU * field.params.radius_m / width as f64 * lat.cos().max(0.001);
         let dy = std::f64::consts::PI * field.params.radius_m / height as f64;

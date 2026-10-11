@@ -30,6 +30,9 @@ simulation state. Contact debug visualization lives in
 | `F1` | control and icon legend |
 | `F2` | hide/show UI |
 | `F3` | extra telemetry |
+| `F4` (`Shift+F4`) | performance overlay (capture) |
+| `F6` | surface survey (`M` returns to map) |
+| `F7` | coastal beauty flyby on the live craft (any stick/throttle key takes over) |
 | RMB / MMB / wheel | orbit/pan/zoom |
 
 The UI also exposes buttons for SAS, RCS, reaction wheels, gear, parachutes,

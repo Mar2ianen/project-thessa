@@ -603,7 +603,10 @@ fn atmosphere_startup(
         }
         commands
             .entity(camera)
-            .insert(atmosphere_settings(resolved.atmosphere_quality));
+            .insert(atmosphere_settings(
+                resolved.atmosphere_quality,
+                resolved.aerial_perspective,
+            ));
         if resolved.auto_exposure {
             commands.entity(camera).insert(AutoExposure {
                 // Meter the HDR buffer after physical camera exposure.
@@ -716,8 +719,10 @@ fn atmosphere_startup(
 
 /// Camera atmosphere quality: LUT budgets by preset quality (budgets only,
 /// never physics). Raymarched rendering stays reserved for debugging.
+/// `aerial` wires the graphics.toml switch to the renderer: disabled collapses
+/// the aerial LUT to a minimal no-haze range instead of leaving a dead toggle.
 #[allow(clippy::field_reassign_with_default)]
-fn atmosphere_settings(quality: Quality) -> AtmosphereSettings {
+fn atmosphere_settings(quality: Quality, aerial: bool) -> AtmosphereSettings {
     let mut settings = AtmosphereSettings::default();
     settings.rendering_method = AtmosphereMode::LookupTexture;
     match quality {
@@ -738,6 +743,13 @@ fn atmosphere_settings(quality: Quality) -> AtmosphereSettings {
         Quality::High => {
             settings.aerial_view_lut_size = UVec3::new(32, 32, 64);
         }
+    }
+    if !aerial {
+        // Honest off: minimal LUT + near-zero range (see per-frame max_distance
+        // below). No hidden prepass cost, no haze contribution.
+        settings.aerial_view_lut_size = UVec3::new(4, 4, 4);
+        settings.aerial_view_lut_samples = 1;
+        settings.aerial_view_lut_max_distance = 1.0;
     }
     settings
 }
@@ -1377,6 +1389,16 @@ mod tests {
     fn render_frame_maps_directions() {
         let d = render_direction(DVec3::Z);
         assert!((d - Vec3::Y).length() < 1e-6);
+    }
+
+    #[test]
+    fn aerial_toggle_collapses_lut_and_range() {
+        let on = atmosphere_settings(Quality::High, true);
+        let off = atmosphere_settings(Quality::High, false);
+        assert!(on.aerial_view_lut_max_distance > 1000.0);
+        assert_eq!(off.aerial_view_lut_size, UVec3::new(4, 4, 4));
+        assert_eq!(off.aerial_view_lut_samples, 1);
+        assert!(off.aerial_view_lut_max_distance < 10.0);
     }
 
     fn separation_deg(

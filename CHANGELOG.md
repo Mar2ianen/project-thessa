@@ -90,6 +90,22 @@ APIs, data formats, and save files are not stable before `0.1.0`.
   the round cross-section and Beer-Lambert-integrates the `plume-core` mean
   field. Cone impostor kept for Low; pilot-view gating kept. The point-light
   proxy intensity is derived from the field's integrated radiant power.
+  field. Cone impostor kept for Low; pilot-view gating kept.
+- Coastal beauty flyby (F7 in pilot view, `THESSA_FLYBY=1` for unattended):  the live X-15 flies a low pass on honest stick/throttle intents through the
+  normal input wire (no teleports, no survey scenes), holding datum altitude
+  and 200 m/s with a bank-hold leg along the shoreline (heading searched from
+  field geometry, turned with SAS-captured banks) and a hard safety climb
+  below 300 m. Surface kinematics subtract the reference body's ephemeris
+  velocity (using raw inertial speed opens the governor at orbital velocity
+  and stalls the wing — measured terrain impact, pinned by a 30 s closed-loop
+  test). Any stick/throttle key, M, or an error disengages instantly;
+  engaging switches to chase camera. Tuned for 1x warp; high warp may
+  porpoise (it recovers).
+- Fixed chase camera looking at the sky: `-craft_orientation * Vec3::X`
+  negates the quaternion (unary minus binds tighter), and -q is the same
+  rotation as q, so the sign vanished and the basis became a reflection that
+  `from_mat3` turned into garbage. Parenthesized vector negation; camera
+  framing against spawn and level attitudes is now pinned by tests.
 
 ### Changed
 
@@ -107,6 +123,33 @@ APIs, data formats, and save files are not stable before `0.1.0`.
   retains old coverage until replacement tiles are ready.
 - The default visual `density_scale` changed from `0.55` to `0.3`; simulation
   pressure was not changed.
+- Thessa shoreline beauty pass (visual only, heights/classification untouched):
+  surf-foam waterline, turquoise shallow shelf, wet-sand rim; the far
+  `assets/worlds/thessa-v3` globe is rebaked with the same appearance model as
+  tiles/GPU pages so orbit and surface agree (ocean glossy for sun glint,
+  foam/ice matte). Clouds bake white cores with cool gray-blue skirts and run
+  two decks (low + cirrus); `aerial_perspective` is on and honestly wired
+  (off collapses the aerial LUT instead of a dead toggle).
+- Pilot-view sky actually has clouds now: beauty followers read computed
+  visibility (the PFD planet only inherits it, so the old explicit check never
+  matched and shells stayed hidden), fall back to the live terrain streamer
+  placement when the entity match is hidden, and fade whole-sphere decks out
+  until well above deck altitude (near/inside they are giant soap blobs — a
+  full-screen veil measured at 60 km). The 60 km column stays nearly clear
+  per physics (pinned by a 60 km oracle regression test on the scattering
+  model); the merged renderer follows the upstream aerial-LUT range for
+  horizon coverage — re-measure the mid-altitude veil against it if haze
+  looks wrong.
+- Cloud decks bake billow cells plus cool-skirt shading instead of smooth
+  blobs; aurora bakes field-aligned curtain rays over the intact oval.
+  Shell pole UVs collapse to one column (a full texture row smeared over
+  each pole triangle read as giant white wedges from inside).
+- LOD-faded surface grain/micro (`surface_appearance_filtered`): coarse texels no
+  longer alias sub-texel octaves into random per-tile means (the far-view
+  quilt); mesh vertices and LOD-independent GPU pages keep full detail.
+- Cloud/aurora shell pole fix: Bevy's UV sphere spans a full texture row over
+  each pole triangle, which reads as giant white wedges from inside the shell
+  (measured on a 30 km maneuver frame). Pole UVs collapse to one column.
 - Safe SIMD wrappers, zero-gravity bodies, cache extension rollback, and SAS
   handling in coast batches were hardened.
 - Angular stepping uses an implicit midpoint/Cayley rotation so free rotation

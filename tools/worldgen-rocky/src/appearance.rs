@@ -221,11 +221,29 @@ pub fn surface_appearance_filtered(
         );
         let c = mix(shallow, [0.018 * drift, 0.095 * drift, 0.19 * drift], shelf);
         let c = mix(c, [0.014, 0.044, 0.11], smooth(600.0, 6000.0, -h));
+        // Shallow scatter: turquoise lift in the first ~60 m, broken by grain
+        // so the coast reads as a shelf, not a flat cyan disk. Earth-ref
+        // (ISS shallow reefs): bright rim only where water is thin.
+        let turq = 1.0 - smooth(8.0, 60.0, -h);
+        let shelf_break = 0.6 + 0.4 * grain.clamp(-1.0, 1.0);
+        let mut c = mix(c, [0.16, 0.55, 0.55], (turq * 0.35 * shelf_break).clamp(0.0, 1.0));
+        // Surf foam: narrow band around the datum, broken into streaks
+        // by the independent grain + micro signals. Classification inputs
+        // (height/moisture/temperature/slope) are untouched.
+        let foam_band = 1.0 - smooth(0.5, 4.0, h.abs());
+        let foam_noise = smooth(0.05, 0.55, grain * 0.5 + micro * 0.5 + 0.3);
         let ice = smooth(263.0, 253.0, sample.temperature_k + regional * 6.0);
+        let foam = (foam_band * foam_noise * (1.0 - ice)).clamp(0.0, 1.0);
+        c = mix(c, [0.92, 0.95, 0.94], foam * 0.85);
+        // Open-water sun glitter variation: micro sparkle on top of the grain
+        // so large swells do not render as a mirror-flat fill at glancing sun.
+        let sparkle = 1.0 + grain * 0.10 + micro * 0.06;
+        let base = mix(c, [0.75, 0.84, 0.86], ice).map(|x| (x * sparkle).clamp(0.0, 1.0) as f32);
         return SurfaceAppearance {
-            albedo_srgb: mix(c, [0.75, 0.84, 0.86], ice)
-                .map(|x| (x * (1.0 + grain * 0.10)).clamp(0.0, 1.0) as f32),
-            roughness: (0.16 + 0.58 * ice) as f32,
+            albedo_srgb: base,
+            // Foam is matte (kills the glint in the surf, like real white water);
+            // ice stays rough; open water keeps the sun-glint roughness.
+            roughness: (0.16 + 0.58 * ice + 0.49 * foam * (1.0 - ice)) as f32,
             vegetation: 0.0,
             snow: ice as f32,
             snow_cover: ice as f32,
@@ -297,6 +315,10 @@ pub fn surface_appearance_filtered(
     // not render as one flat paint fill.
     let beach_albedo = [0.66, 0.64, 0.48].map(|c| c * (1.0 + cover_texture * 0.12 - damp * 0.18));
     color = mix(beach_albedo, color, smooth(3.0, 45.0, h));
+    // Wet-sand rim: capillary water darkens the waterline band, fading by
+    // ~3 m above datum. Visual only; heights and classification are untouched.
+    let wet_rim = 1.0 - smooth(0.0, 3.0, h);
+    color = color.map(|c| c * (1.0 - wet_rim * 0.18));
     color = color.map(|c| c * (1.0 + variation * 0.14 + regional * 0.08 + grain * 0.24));
     // Bare ground (little vegetation to carry the cover texture) gets its
     // own large-scale tonal structure so deserts and dry plains are not a
@@ -610,5 +632,279 @@ mod frost_tests {
                 assert!(land_roughness(vegetation, exposed, 0.7, 0.2, 0.8) <= baseline);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod shoreline_tests {
+    use super::*;
+    use crate::biomes::{Biome, Geology};
+
+    fn field() -> PlanetField {
+        let recipe =
+            toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml")).unwrap();
+        crate::field::field_from_manifest(&crate::spec_recipe::manifest_from_spec(&recipe).unwrap())
+            .unwrap()
+    }
+
+    fn ocean_sample(height_m: f64) -> TerrainSample {
+        TerrainSample {
+            height_m,
+            macro_height_m: height_m,
+            procedural_height_m: 0.0,
+            biome: Biome::ShallowSea,
+            geology: Geology::OceanicCrust,
+            tag0: None,
+            tag1: None,
+            slope_hint: 0.02,
+            salt01: 0.0,
+            curvature_per_m: 0.0,
+            erosion_displacement_m: 0.0,
+            local_deposition_m: 0.0,
+            geothermal_flux_w_m2: 0.08,
+            moisture01: 1.0,
+            wetland_potential01: 0.0,
+            temperature_k: 290.0,
+            continentality01: 0.0,
+            eclipse_exposure01: 1.0,
+        }
+    }
+
+    fn land_sample(height_m: f64) -> TerrainSample {
+        TerrainSample {
+            height_m,
+            macro_height_m: height_m,
+            procedural_height_m: 0.0,
+            biome: Biome::RockyPlain,
+            geology: Geology::ContinentalCrust,
+            tag0: None,
+            tag1: None,
+            slope_hint: 0.05,
+            salt01: 0.0,
+            curvature_per_m: 0.0,
+            erosion_displacement_m: 0.0,
+            local_deposition_m: 0.0,
+            geothermal_flux_w_m2: 0.08,
+            moisture01: 0.5,
+            wetland_potential01: 0.0,
+            temperature_k: 285.0,
+            continentality01: 0.5,
+            eclipse_exposure01: 1.0,
+        }
+    }
+
+    fn dirs(n: usize) -> Vec<[f64; 3]> {
+        (0..n)
+            .map(|i| {
+                let a = i as f64 * std::f64::consts::TAU / n as f64;
+                [a.cos(), 0.15, a.sin()]
+            })
+            .map(|d| {
+                let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                [d[0] / l, d[1] / l, d[2] / l]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn surf_foam_whitens_the_waterline_and_kills_the_glint() {
+        let field = field();
+        // At least one shoreline texel must foam: white + matte.
+        let mut foamed = 0;
+        for dir in dirs(32) {
+            let out = surface_appearance(&field, &ocean_sample(-1.5), dir);
+            let lum = (out.albedo_srgb[0] + out.albedo_srgb[1] + out.albedo_srgb[2]) / 3.0;
+            if lum > 0.55 && out.roughness > 0.35 {
+                foamed += 1;
+            }
+            // Foam never darkens below open water.
+            assert!(out.albedo_srgb[0] >= 0.0 && out.albedo_srgb[0] <= 1.0);
+        }
+        assert!(foamed > 0, "surf foam must fire near h=-1.5 m");
+        // Deep water stays dark and glossy (sun glint preserved).
+        let mut deep_lum = 0.0;
+        let mut deep_rough = 0.0;
+        for dir in dirs(16) {
+            let out = surface_appearance(&field, &ocean_sample(-3000.0), dir);
+            deep_lum += (out.albedo_srgb[0] + out.albedo_srgb[1] + out.albedo_srgb[2]) as f64 / 3.0;
+            deep_rough += out.roughness as f64;
+        }
+        deep_lum /= 16.0;
+        deep_rough /= 16.0;
+        assert!(deep_lum < 0.25, "deep ocean stays dark, got {deep_lum:.3}");
+        assert!(deep_rough < 0.25, "deep ocean stays glossy, got {deep_rough:.3}");
+    }
+
+    #[test]
+    fn shallow_shelf_lifts_turquoise_without_becoming_sky() {
+        let field = field();
+        let mut shallow_g = 0.0;
+        let mut deep_g = 0.0;
+        for dir in dirs(16) {
+            shallow_g +=
+                surface_appearance(&field, &ocean_sample(-20.0), dir).albedo_srgb[1] as f64;
+            deep_g +=
+                surface_appearance(&field, &ocean_sample(-3000.0), dir).albedo_srgb[1] as f64;
+        }
+        shallow_g /= 16.0;
+        deep_g /= 16.0;
+        assert!(
+            shallow_g > deep_g + 0.03,
+            "shelf must lift green, shallow={shallow_g:.3} deep={deep_g:.3}"
+        );
+        assert!(shallow_g < 0.65, "shelf stays water, got {shallow_g:.3}");
+    }
+
+    #[test]
+    fn wet_sand_rims_the_beach() {
+        let field = field();
+        // Both inside the beach band (smooth(3,45,h)=0 there), so the only
+        // difference is the wet rim fading by ~3 m.
+        let mut wet = 0.0;
+        let mut dry = 0.0;
+        for dir in dirs(16) {
+            let w = surface_appearance(&field, &land_sample(1.0), dir);
+            let d = surface_appearance(&field, &land_sample(10.0), dir);
+            wet += (w.albedo_srgb[0] + w.albedo_srgb[1] + w.albedo_srgb[2]) as f64 / 3.0;
+            dry += (d.albedo_srgb[0] + d.albedo_srgb[1] + d.albedo_srgb[2]) as f64 / 3.0;
+        }
+        wet /= 16.0;
+        dry /= 16.0;
+        assert!(wet < dry, "waterline sand darker, wet={wet:.3} dry={dry:.3}");
+    }
+}
+
+#[cfg(test)]
+mod lod_fade_tests {
+    use super::*;
+    use crate::biomes::{Biome, Geology};
+
+    fn field() -> PlanetField {
+        let recipe =
+            toml::from_str(include_str!("../../../data/worldgen/worldgen_recipe.toml")).unwrap();
+        crate::field::field_from_manifest(&crate::spec_recipe::manifest_from_spec(&recipe).unwrap())
+            .unwrap()
+    }
+
+    fn warm_land(height_m: f64) -> TerrainSample {
+        TerrainSample {
+            height_m,
+            macro_height_m: height_m,
+            procedural_height_m: 0.0,
+            biome: Biome::RockyPlain,
+            geology: Geology::ContinentalCrust,
+            tag0: None,
+            tag1: None,
+            slope_hint: 0.05,
+            salt01: 0.0,
+            curvature_per_m: 0.0,
+            erosion_displacement_m: 0.0,
+            local_deposition_m: 0.0,
+            geothermal_flux_w_m2: 0.08,
+            moisture01: 0.5,
+            wetland_potential01: 0.0,
+            temperature_k: 290.0,
+            continentality01: 0.5,
+            eclipse_exposure01: 1.0,
+        }
+    }
+
+    fn dirs(n: usize) -> Vec<[f64; 3]> {
+        (0..n)
+            .map(|i| {
+                let a = i as f64 * std::f64::consts::TAU / n as f64;
+                [a.cos(), 0.15, a.sin()]
+            })
+            .map(|d| {
+                let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                [d[0] / l, d[1] / l, d[2] / l]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn coarse_texels_lose_grain_but_keep_large_scale_structure() {
+        let field = field();
+        // Adjacent directions ~200 m apart: inside one tile's texel, where
+        // aliasing used to flip the per-tile mean (the 510 km quilt).
+        let pairs: Vec<([f64; 3], [f64; 3])> = (0..16)
+            .map(|i| {
+                let a = i as f64 * std::f64::consts::TAU / 16.0;
+                let norm = |d: [f64; 3]| {
+                    let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                    [d[0] / l, d[1] / l, d[2] / l]
+                };
+                // 200 m at 3200 km radius ~= 6.25e-5 rad.
+                let e = 6.25e-5;
+                (
+                    norm([a.cos(), 0.15, a.sin()]),
+                    norm([(a + e).cos(), 0.15, (a + e).sin()]),
+                )
+            })
+            .collect();
+        let lum = |o: SurfaceAppearance| {
+            (o.albedo_srgb[0] + o.albedo_srgb[1] + o.albedo_srgb[2]) as f64 / 3.0
+        };
+        let mean_gap = |texel: f64| {
+            pairs
+                .iter()
+                .map(|(a, b)| {
+                    (lum(surface_appearance_filtered(&field, &warm_land(500.0), *a, texel))
+                        - lum(surface_appearance_filtered(&field, &warm_land(500.0), *b, texel)))
+                    .abs()
+                })
+                .sum::<f64>()
+                / pairs.len() as f64
+        };
+        let full = mean_gap(0.0);
+        let coarse = mean_gap(5000.0);
+        assert!(full > 1e-3, "full detail must vary sub-texel, {full:.5}");
+        assert!(
+            coarse < full * 0.2,
+            "coarse texel must agree locally, full={full:.5} coarse={coarse:.5}"
+        );
+        // Fine texels keep full detail exactly.
+        for dir in dirs(8) {
+            let a = surface_appearance(&field, &warm_land(500.0), dir);
+            let b = surface_appearance_filtered(&field, &warm_land(500.0), dir, 1.0);
+            assert_eq!(a.albedo_srgb, b.albedo_srgb);
+            assert_eq!(a.roughness, b.roughness);
+        }
+    }
+
+    #[test]
+    fn vegetation_breaks_into_patches_but_stays_smooth_when_coarse() {
+        let field = field();
+        // Moist warm plain: vegetation gate open, only the patch factor
+        // differs per direction. Patchiness rides the albedo (cover/grain
+        // texture over the sample-local vegetation gate), so measure the
+        // luminance spread, not the gate value itself.
+        let lum = |o: SurfaceAppearance| {
+            (o.albedo_srgb[0] + o.albedo_srgb[1] + o.albedo_srgb[2]) as f64 / 3.0
+        };
+        let green_gap = |texel: f64| {
+            dirs(16)
+                .iter()
+                .map(|dir| {
+                    let mut s = warm_land(500.0);
+                    s.moisture01 = 0.65;
+                    s.temperature_k = 285.0;
+                    lum(surface_appearance_filtered(&field, &s, *dir, texel))
+                })
+                .collect::<Vec<_>>()
+        };
+        let spread = |vals: &[f64]| {
+            let mean = vals.iter().sum::<f64>() / vals.len() as f64;
+            vals.iter().map(|v| (v - mean).abs()).sum::<f64>() / vals.len() as f64
+        };
+        let full = spread(&green_gap(0.0));
+        let coarse = spread(&green_gap(5000.0));
+        // Absolute scale is albedo luminance here (measured 0.016 on the
+        // deterministic test field), not the old vegetation-gate units.
+        assert!(full > 0.008, "patches must vary cover, {full:.3}");
+        assert!(
+            coarse < full * 0.5,
+            "coarse cover must even out, full={full:.3} coarse={coarse:.3}"
+        );
     }
 }

@@ -37,7 +37,7 @@ exposure_ev100 = 13.0 # manual EV100 when auto_exposure = false
 [atmosphere]
 enabled = true
 quality = "high" # low | medium | high (budgets only, never physics)
-aerial_perspective = false
+aerial_perspective = true # horizon haze on: distance fades blue like ISS photos; budgets only
 density_scale = 0.3 # visual optical-depth gain; simulation pressure is unchanged
 # (0.55 washed terrain contrast: measured +100 shadow lift vs no-atmosphere
 # reference; 0.3 keeps the blue sky while restoring ground contrast. Revisit
@@ -58,7 +58,7 @@ quality = "medium" # low = 512px, medium = 1024px, high = 2048px bake
 volumetric = false # reserved; shell path ignores it
 ray_steps = 16
 cast_shadows = false
-layers = 1 # 1 = low deck, 2 = low + cirrus
+layers = 2 # 1 = low deck, 2 = low + cirrus (Earth-like high thin ice over cumulus)
 coverage = 0.45 # 0 overcast .. 1 clear
 opacity = 0.9
 animate = true # differential deck drift; off = static

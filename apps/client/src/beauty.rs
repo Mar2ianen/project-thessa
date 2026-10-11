@@ -250,6 +250,8 @@ fn bake_gas_giant(style: GiantStyle, w: u32, h: u32, drift: f64, limb: bool) -> 
 
 /// Single deck bake. Alpha = coverage-shaped fBm; RGB near-white with slight
 /// density shading so decks read as thick KSP2-style cloud, not haze.
+/// Earth-ref (ISS daytime): dense cores pure white, thin skirts cool gray-blue
+/// with a warm sun side — baked once, still one alpha-blend shell.
 fn bake_clouds(seed: u64, w: u32, h: u32, coverage: f32, opacity: f32) -> Vec<u8> {
     let mut px = Vec::with_capacity((w * h * 4) as usize);
     // Widen the transition: decks keep hard cores but grow bright skirts.
@@ -261,16 +263,27 @@ fn bake_clouds(seed: u64, w: u32, h: u32, coverage: f32, opacity: f32) -> Vec<u8
             let u = x as f64 / w as f64;
             let d = fbm(seed, u * 6.0, v * 12.0 * stretch + 3.1, 6.0);
             let swirl = fbm(seed ^ 0x51AB, u * 3.0 + d * 1.5, v * 6.0, 3.0);
-            let field = (d * 0.65 + swirl * 0.35) as f32;
+            // Billow octave: small cells riding the large field so decks read
+            // as structured tops instead of smooth blobs. Bake-time only.
+            let billow = fbm(
+                seed ^ 0xB110,
+                u * 12.0 + d * 2.0,
+                v * 24.0 * stretch + 9.7,
+                12.0,
+            );
+            let field = (d * 0.50 + swirl * 0.28 + billow * 0.22) as f32;
             let a = ((field - edge0) / (1.0 - edge0).max(1e-3)).clamp(0.0, 1.0);
             let a = (a * (1.6 - 0.6 * a)).clamp(0.0, 1.0) * opacity;
-            let shade = 0.93 + 0.07 * field;
-            px.extend_from_slice(&[
-                (255.0 * shade) as u8,
-                (255.0 * shade) as u8,
-                (255.0 * shade.min(1.0)) as u8,
-                (a.clamp(0.0, 1.0) * 255.0) as u8,
-            ]);
+            // Density shading: cores white, skirts cool shadow-blue. The sun
+            // side stays warm white; only the thin translucent edge cools.
+            let core = a.clamp(0.0, 1.0);
+            let shade = 0.88 + 0.12 * core;
+            let cool = (1.0 - core) * 0.10;
+            // R warm, B cool: thin edges go slightly steel-blue, cores white.
+            let r = (255.0 * shade).clamp(0.0, 255.0) as u8;
+            let g = (255.0 * (shade - cool * 0.4)).clamp(0.0, 255.0) as u8;
+            let b = (255.0 * (shade - cool * 0.1)).clamp(0.0, 255.0).min(255.0) as u8;
+            px.extend_from_slice(&[r, g, b, (a.clamp(0.0, 1.0) * 255.0) as u8]);
         }
     }
     px
@@ -281,7 +294,10 @@ fn bake_clouds(seed: u64, w: u32, h: u32, coverage: f32, opacity: f32) -> Vec<u8
 // Aurora.
 
 /// Aurora curtain bake over lat/lon. Intensity = oval gaussian x altitude
-/// colour mix x curtain octaves; caller scales by `intensity` setting.
+/// colour mix x curtain octaves x field-aligned rays; caller scales by
+/// `intensity` setting. The rays (fine longitude striations, sharpened and
+/// irregular) are what reads as curtains instead of a painted band: from
+/// orbit or the ground the eye keys on ray structure, not the smooth oval.
 fn bake_aurora(
     w: u32,
     h: u32,
@@ -302,7 +318,13 @@ fn bake_aurora(
             let band = (-d * d * 0.5).exp();
             let curtain =
                 0.6 + 0.25 * (3.0 * lon + t * 0.05).sin() + 0.15 * (7.0 * lon - t * 0.11).sin();
-            let k = (band * curtain.max(0.0)) as f32;
+            // Curtain rays: two incommensurate longitude combs, sharpened so
+            // most of the oval stays dark lanes between bright rays. The slow
+            // phase rides sim time (frozen when not animating: deterministic).
+            let comb = 0.5 + 0.5 * (53.0 * lon + t * 0.23).sin();
+            let comb2 = 0.5 + 0.5 * (31.0 * lon + 1.7 - t * 0.14).sin();
+            let rays = 0.30 + 0.70 * (comb.powf(1.6) * 0.65 + comb2.powf(1.6) * 0.35);
+            let k = (band * curtain.max(0.0) * rays) as f32;
             // Green 557.7nm bottom -> red/violet top; bake mixes by |lat| offset.
             let top = ((lat.abs() - oval) / width * 0.5 + 0.5).clamp(0.0, 1.0) as f32;
             let r = (0.20 * (1.0 - top) + 0.90 * top) * k;
@@ -322,8 +344,36 @@ fn bake_aurora(
 // ---------------------------------------------------------------------------
 // Bevy resources / entities.
 
-fn rgba_image(w: u32, h: u32, pixels: Vec<u8>) -> Image {
-    Image::new(
+/// Collapse UV-sphere pole columns: pole-ring vertices share one position
+/// but span all of u, smearing a full texture row over each pole triangle.
+/// Sampling the middle column instead shrinks the wedge to one texel.
+/// Bevy puts the UV poles on local +Z; v (latitude) is left alone.
+fn collapse_shell_pole_uvs(mesh: &mut Mesh) {
+    use bevy::mesh::VertexAttributeValues;
+    let poles: Vec<usize> = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+        Some(VertexAttributeValues::Float32x3(pos)) => pos
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p[2].abs() >= 1.0 - 1e-6)
+            .map(|(i, _)| i)
+            .collect(),
+        _ => return,
+    };
+    if poles.is_empty() {
+        return;
+    }
+    if let Some(VertexAttributeValues::Float32x2(uv)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_UV_0)
+    {
+        for i in poles {
+            if let Some(tex) = uv.get_mut(i) {
+                tex[0] = 0.5;
+            }
+        }
+    }
+}
+
+fn rgba_image(w: u32, h: u32, pixels: Vec<u8>) -> Image {    Image::new(
         Extent3d {
             width: w,
             height: h,
@@ -468,7 +518,16 @@ fn setup_beauty(
     });
 
     // Shell meshes share one unit sphere; per-shell scale follows the planet.
-    let shell_mesh = meshes.add(Sphere::new(1.0).mesh().uv(96, 48));
+    // Bevy's UV sphere puts its texture poles on local +Z (see
+    // SPHERE_POLE_TO_WORLD_UP in main): every pole-ring vertex shares the pole
+    // position but spans the full u range, so each pole triangle smears an
+    // entire texture row across the sky. From inside the shell (any low
+    // flight) that reads as giant white wedges with hard triangle edges
+    // (measured on a 30 km maneuver frame). Collapsing pole u to the middle
+    // column reduces the wedge to a single texel.
+    let mut shell_sphere = Sphere::new(1.0).mesh().uv(96, 48);
+    collapse_shell_pole_uvs(&mut shell_sphere);
+    let shell_mesh = meshes.add(shell_sphere);
 
     // Cloud shells for the three ocean worlds (map + pilot follow logic
     // below copies planet transforms; no hierarchy parenting).
@@ -551,17 +610,23 @@ fn swap_gas_giant_materials(
 }
 
 /// Find a planet visual transform by body name (map view) or PFD name (pilot).
+/// Uses computed [`InheritedVisibility`]: the PFD planet carries no explicit
+/// `Visibility` (it inherits the preview scene's), so an explicit-visibility
+/// query never matches it and pilot flight silently loses every follower.
 #[allow(clippy::type_complexity)]
 fn planet_transform(
     body: &str,
-    visuals: &Query<(&Name, &Transform, &Visibility), (Without<CloudShell>, Without<AuroraShell>)>,
+    visuals: &Query<
+        (&Name, &Transform, &InheritedVisibility),
+        (Without<CloudShell>, Without<AuroraShell>),
+    >,
 ) -> Option<(Transform, bool)> {
     // Map view entity. Prefer a VISIBLE match: in pilot mode the map visual
     // still exists but is hidden while the PFD planet shows the same world.
     let mut fallback: Option<(Transform, bool)> = None;
     for (name, t, v) in visuals {
         if name.as_str() == body {
-            let entry = (*t, *v != Visibility::Hidden);
+            let entry = (*t, v.get());
             if entry.1 {
                 return Some(entry);
             }
@@ -572,7 +637,7 @@ fn planet_transform(
     if body == "thessa" {
         for (name, t, v) in visuals {
             if name.as_str().starts_with("PFD Thessa planet") {
-                let entry = (*t, *v != Visibility::Hidden);
+                let entry = (*t, v.get());
                 if entry.1 {
                     return Some(entry);
                 }
@@ -589,26 +654,75 @@ fn cloud_material(
     tex: Handle<Image>,
     opacity: f32,
 ) {
-    if let Some(mut mat) = materials.get_mut(handle)
-        && mat.base_color_texture.is_none()
-    {
-        mat.base_color = Color::WHITE;
-        mat.base_color_texture = Some(tex);
-        mat.alpha_mode = AlphaMode::Blend;
-        mat.cull_mode = None;
-        mat.perceptual_roughness = 1.0;
-        mat.metallic = 0.0;
+    if let Some(mut mat) = materials.get_mut(handle) {
+        if mat.base_color_texture.is_none() {
+            mat.base_color = Color::WHITE;
+            mat.base_color_texture = Some(tex);
+            mat.alpha_mode = AlphaMode::Blend;
+            mat.cull_mode = None;
+            mat.perceptual_roughness = 1.0;
+            mat.metallic = 0.0;
+        }
+        // Per-frame: the orbit-impostor fade below drives this, not setup.
         mat.base_color.set_alpha(opacity);
     }
 }
 
-#[allow(clippy::type_complexity)]
+/// Orbit-impostor fade for whole-sphere shells (~20 km texels at medium).
+/// They only read as clouds from WELL above the deck. Near, inside, or just
+/// above it (low flight, climb corridor, deck-skimming orbit) they are giant
+/// soap blobs — or, at deck altitude, a full-screen mint veil (measured at
+/// 60 km inside the cirrus layer). So the deck stays hidden until the camera
+/// clears twice its height and fades in by four times. Orbit and map views
+/// keep the full deck; low flight keeps a crisp sky.
+fn cloud_shell_fade(cam_frac: f32, deck_frac: f32) -> f32 {
+    if !cam_frac.is_finite() || deck_frac <= 0.0 {
+        return 1.0;
+    }
+    let t = ((cam_frac / deck_frac - 2.0) / 2.0).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Live-terrain fallback for the flown world: when the map/PFD entity match
+/// fails (or is hidden mid-transition), place the follower at the true-scale
+/// planet the terrain streamer is actually rendering. Uses authoritative
+/// terrain state (render center + field radius + sim-time spin), never a
+/// debug scene. Only the flown world (`thessa`) has a render center; other
+/// bodies keep the entity path (in pilot view they stay hidden with the map).
+fn live_planet_transform(
+    body: &str,
+    world: &terrain::WorldTerrain,
+    sim_seconds: f64,
+) -> Option<Transform> {
+    if body != "thessa" {
+        return None;
+    }
+    let center = world.render_center?;
+    let radius = world.field.params.radius_m as f32;
+    if radius <= 0.0 {
+        return None;
+    }
+    let spin = Quat::from_rotation_y((sim_seconds * std::f64::consts::TAU / (80.0 * 3600.0)) as f32)
+        * SPHERE_POLE_TO_WORLD_UP;
+    Some(
+        Transform::from_translation(center)
+            .with_scale(Vec3::splat(radius))
+            .with_rotation(spin),
+    )
+}
+
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn follow_cloud_shells(
     imgs: Option<Res<BeautyImages>>,
     graphics: Option<Res<GraphicsResolved>>,
     clock: Option<Res<SimulationClock>>,
+    terrain: Option<Res<terrain::WorldTerrain>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    visuals: Query<(&Name, &Transform, &Visibility), (Without<CloudShell>, Without<AuroraShell>)>,
+    visuals: Query<
+        (&Name, &Transform, &InheritedVisibility),
+        (Without<CloudShell>, Without<AuroraShell>),
+    >,
+    cameras: Query<&Transform, (With<Camera3d>, Without<CloudShell>, Without<AuroraShell>)>,
     mut shells: Query<(
         &CloudShell,
         &mut Transform,
@@ -643,20 +757,46 @@ fn follow_cloud_shells(
             *vis = Visibility::Hidden;
             continue;
         };
-        if !planet_visible {
+        // Entity match is only trusted when visible; otherwise the live
+        // terrain streamer owns the flown world's placement (pilot/survey).
+        let planet = if planet_visible {
+            planet
+        } else if let Some(live) = terrain
+            .as_deref()
+            .and_then(|w| live_planet_transform(shell.body, w, t))
+        {
+            if log_now {
+                info!("[beauty] cloud {}: live-terrain fallback", shell.body);
+            }
+            live
+        } else {
             if log_now {
                 info!("[beauty] cloud {}: planet hidden", shell.body);
             }
             *vis = Visibility::Hidden;
             continue;
-        }
+        };
         if log_now {
             info!(
                 "[beauty] cloud {}: following planet scale={:.3}",
                 shell.body, planet.scale.x
             );
         }
-        cloud_material(&mut materials, &mat3d.0, tex, r.clouds_opacity);
+        // Impostor fade: no giant soap blobs over low flight. The camera
+        // altitude is measured in followed-planet radii, so map exaggeration
+        // and true-scale pilot views share one rule.
+        let cam_frac = cameras
+            .single()
+            .map(|c| {
+                (c.translation - planet.translation).length() / planet.scale.x.max(1e-6) - 1.0
+            })
+            .unwrap_or(f32::INFINITY);
+        let fade = cloud_shell_fade(cam_frac, shell.scale_factor - 1.0);
+        if fade <= 0.01 {
+            *vis = Visibility::Hidden;
+            continue;
+        }
+        cloud_material(&mut materials, &mat3d.0, tex, r.clouds_opacity * fade);
         st.translation = planet.translation;
         let s = planet.scale.x * shell.scale_factor;
         st.scale = Vec3::splat(s);
@@ -671,12 +811,17 @@ fn follow_cloud_shells(
     }
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn follow_aurora_shell(
     imgs: Option<Res<BeautyImages>>,
     graphics: Option<Res<GraphicsResolved>>,
+    clock: Option<Res<SimulationClock>>,
+    terrain: Option<Res<terrain::WorldTerrain>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    visuals: Query<(&Name, &Transform, &Visibility), (Without<CloudShell>, Without<AuroraShell>)>,
+    visuals: Query<
+        (&Name, &Transform, &InheritedVisibility),
+        (Without<CloudShell>, Without<AuroraShell>),
+    >,
     mut shells: Query<(
         &AuroraShell,
         &mut Transform,
@@ -694,20 +839,24 @@ fn follow_aurora_shell(
             *vis = Visibility::Hidden;
             continue;
         }
-        let Some((planet, planet_visible)) = planet_transform(shell.body, &visuals) else {
-            if log_now {
-                info!("[beauty] aurora {}: planet NOT FOUND", shell.body);
+        let t = clock.as_deref().map(|c| c.sim_seconds).unwrap_or(0.0);
+        let planet = match planet_transform(shell.body, &visuals) {
+            Some((planet, true)) => planet,
+            _ => {
+                if let Some(live) = terrain
+                    .as_deref()
+                    .and_then(|w| live_planet_transform(shell.body, w, t))
+                {
+                    live
+                } else {
+                    if log_now {
+                        info!("[beauty] aurora {}: planet hidden", shell.body);
+                    }
+                    *vis = Visibility::Hidden;
+                    continue;
+                }
             }
-            *vis = Visibility::Hidden;
-            continue;
         };
-        if !planet_visible {
-            if log_now {
-                info!("[beauty] aurora {}: planet hidden", shell.body);
-            }
-            *vis = Visibility::Hidden;
-            continue;
-        }
         if log_now {
             info!(
                 "[beauty] aurora {}: following planet scale={:.3}",
@@ -835,6 +984,110 @@ mod tests {
     }
 
     #[test]
+    fn cloud_cores_stay_white_skirts_cool() {
+        let px = bake_clouds(1, 128, 64, 0.45, 0.9);
+        // Opaque cores must be near-white; translucent skirts cool gray-blue.
+        let mut core = 0;
+        let mut skirt_cool = 0;
+        let mut max_a = 0u8;
+        for c in px.chunks(4) {
+            let (r, g, b, a) = (c[0], c[1], c[2], c[3]);
+            max_a = max_a.max(a);
+            if a > 150 && r > 225 && g > 220 && b > 220 {
+                core += 1;
+            }
+            if (20..120).contains(&a) && b as i16 >= r as i16 - 8 {
+                skirt_cool += 1;
+            }
+        }
+        assert!(core > 0, "dense cores must stay white, max_a={max_a}");
+        assert!(skirt_cool > 0, "thin skirts must cool, not stay warm gray");
+    }
+
+    #[test]
+    fn cloud_deck_carries_billow_contrast() {
+        // The billow octave must put small-scale edges inside decks: mean
+        // neighbor alpha steps stay well above a smooth fill. (Global std
+        // is dominated by the coverage curve, not the cells.)
+        let px = bake_clouds(1, 128, 64, 0.45, 0.9);
+        let w = 128usize;
+        let mut edge = 0.0;
+        let mut n = 0;
+        for y in 0..64 {
+            for x in 0..w {
+                let a = px[(y * w + x) * 4 + 3] as f64 / 255.0;
+                if x + 1 < w {
+                    let b = px[(y * w + x + 1) * 4 + 3] as f64 / 255.0;
+                    if a > 0.15 || b > 0.15 {
+                        edge += (a - b).abs();
+                        n += 1;
+                    }
+                }
+            }
+        }
+        let mean_edge = edge / n.max(1) as f64;
+        assert!(
+            mean_edge > 0.012,
+            "billows must edge the deck, mean step={mean_edge:.4}"
+        );
+    }
+
+    #[test]
+    fn cloud_shell_fade_hides_deck_until_well_above_it() {
+        // Deck at 1.2% of planet radius (Thessa low deck): hidden on the
+        // ground, inside, and just above it; full only from 4x up.
+        assert_eq!(cloud_shell_fade(0.0, 0.012), 0.0);
+        assert_eq!(cloud_shell_fade(0.011, 0.012), 0.0);
+        assert_eq!(cloud_shell_fade(0.024, 0.012), 0.0);
+        // Fade band between 2x and 4x deck height.
+        let mid = cloud_shell_fade(0.036, 0.012);
+        assert!(mid > 0.0 && mid < 1.0, "mid fade must be partial, got {mid}");
+        assert_eq!(cloud_shell_fade(0.048, 0.012), 1.0);
+        assert_eq!(cloud_shell_fade(10.0, 0.012), 1.0);
+        // Degenerate inputs never hide the deck (fail visible, not invisible).
+        assert_eq!(cloud_shell_fade(f32::NAN, 0.012), 1.0);
+        assert_eq!(cloud_shell_fade(0.5, 0.0), 1.0);
+    }
+
+    #[test]
+    fn shell_pole_uvs_collapse_to_one_column() {
+        use bevy::mesh::VertexAttributeValues;
+        let mut mesh = Sphere::new(1.0).mesh().uv(96, 48);
+        let pole_count = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+            Some(VertexAttributeValues::Float32x3(pos)) => {
+                pos.iter().filter(|p| p[2].abs() >= 1.0 - 1e-6).count()
+            }
+            _ => panic!("sphere has positions"),
+        };
+        assert!(pole_count > 0, "test needs real pole verts");
+        collapse_shell_pole_uvs(&mut mesh);
+        match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
+            Some(VertexAttributeValues::Float32x2(uv)) => {
+                let pos = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+                    Some(VertexAttributeValues::Float32x3(pos)) => pos.clone(),
+                    _ => panic!("sphere has positions"),
+                };
+                for (p, t) in pos.iter().zip(uv.iter()) {
+                    if p[2].abs() >= 1.0 - 1e-6 {
+                        assert_eq!(t[0], 0.5, "pole u must collapse");
+                    }
+                }
+                // Non-pole UVs untouched: equator still spans u.
+                let (eq_min, eq_max) = uv
+                    .iter()
+                    .zip(pos.iter())
+                    .filter(|(_, p)| p[2].abs() < 0.5)
+                    .map(|(t, _)| t[0])
+                    .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), u| {
+                        (lo.min(u), hi.max(u))
+                    });
+                assert!(eq_max - eq_min > 0.9, "equator u must still span");
+            }
+            _ => panic!("sphere has uvs"),
+        }
+    }
+
+    #[test]
     fn aurora_oval_emits_and_equator_does_not_bake() {
         let px = bake_aurora(128, 64, 67.0, 3.0, 0.0, false);
         let at = |lat_deg: f64| {
@@ -843,6 +1096,38 @@ mod tests {
             row.chunks(4).map(|c| c[1] as u32).sum::<u32>() as f64 / 128.0
         };
         assert!(at(67.0) > at(0.0) + 20.0);
+    }
+
+    #[test]
+    fn aurora_oval_carries_curtain_rays() {
+        // Rays = longitude contrast along the oval row: bright rays between
+        // dark lanes. Peaks must stay bright (rays never dim the maxima).
+        let row_at = |lon_cells: u32, t: f64| {
+            let px = bake_aurora(256, 64, 67.0, 3.0, t, true);
+            let y = (((67.0 + 90.0) / 180.0 * 64.0) as u32).min(63);
+            (0..lon_cells)
+                .map(|x| {
+                    let i = (y * 256 * 4 + x * 4) as usize;
+                    px[i + 1] as f64
+                })
+                .collect::<Vec<_>>()
+        };
+        let row = row_at(256, 0.0);
+        let (lo, hi) = row.iter().fold((255.0f64, 0.0f64), |(lo, hi), &v| {
+            (lo.min(v), hi.max(v))
+        });
+        assert!(hi > 150.0, "ray peaks must stay bright, hi={hi}");
+        assert!(
+            hi - lo > 120.0,
+            "rays must carve dark lanes, range={}..{hi}",
+            lo
+        );
+        // Deterministic at fixed time; animated time differs (drift).
+        assert_eq!(bake_aurora(64, 32, 67.0, 3.0, 5.0, true).len(), 64 * 32 * 4);
+        assert_ne!(
+            bake_aurora(64, 32, 67.0, 3.0, 5.0, true),
+            bake_aurora(64, 32, 67.0, 3.0, 9.0, true)
+        );
     }
 
     #[test]

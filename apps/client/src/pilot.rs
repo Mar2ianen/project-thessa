@@ -14,7 +14,7 @@ use bevy::{
     world_serialization::{WorldAsset, WorldAssetRoot},
 };
 
-use thessa_flight_net::{ClientInput, Command, Snapshot};
+use thessa_flight_net::{ClientInput, Command, ManeuverNodeCommand, Snapshot};
 use thessa_sim_core::{
     BakedEphemeris, BodyId, OnRailsCache, SimTime, VehicleId, VehiclePartCommand, WorldTick,
 };
@@ -126,6 +126,30 @@ impl PilotFlightRuntime {
         self.authority
             .initialize_circular_orbit(ephemeris, altitude_m, DVec3::Y)
             .map_err(|error| error.to_string())?;
+        // Optional anomaly phase for dev screenshots: rigidly rotate the
+        // circular state about the orbit normal (Y here). Preserves
+        // circularity exactly; default 0 keeps the legacy phase. Used to
+        // start over the day side instead of wherever the anomaly falls.
+        if let Some(deg) = std::env::var("THESSA_AUTOBENCH_ORBIT_PHASE_DEG")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+        {
+            let rot = DQuat::from_rotation_y(deg.to_radians());
+            let body = ephemeris
+                .body_state(self.reference_body, SimTime(self.flight_time_s))
+                .map_err(|error| error.to_string())?;
+            let rel_p = rot * self.authority.relative_position_m;
+            let rel_v = rot
+                * (self.authority.state.velocity_inertial_mps - body.velocity_inertial);
+            self.authority.relative_position_m = rel_p;
+            self.authority.state.position_inertial_m = body.position_inertial + rel_p;
+            self.authority.state.velocity_inertial_mps = body.velocity_inertial + rel_v;
+            self.authority.state.orientation_body_to_inertial =
+                rot * self.authority.state.orientation_body_to_inertial;
+            self.authority.sas_target_orientation =
+                self.authority.state.orientation_body_to_inertial;
+        }
         self.input_throttle = 0.0;
         self.input_engine_active = false;
         self.sync_view();
@@ -505,6 +529,256 @@ struct PilotCraftVisual;
 #[derive(Component)]
 struct PilotEngineFlame;
 
+/// Low coastal beauty pass flown by the live craft, never by a debug scene.
+///
+/// The assist only writes the same stick/throttle intents a pilot would
+/// (they cross the normal client->server input wire, embedded or local).
+/// No teleports, no survey bookmarks, no world-state writes: the terrain,
+/// water glint and clouds are exercised purely by displacing the apparatus.
+/// Any stick key (WASDQE) takes over instantly; F7 toggles, M/Backspace
+/// disengages.
+#[derive(Debug, Clone, Resource)]
+pub(super) struct FlybyAssist {
+    pub active: bool,
+    pub target_alt_datum_m: f64,
+    pub target_speed_mps: f64,
+    /// Unattended engage already fired (THESSA_FLYBY); manual takeover sticks.
+    pub auto_engaged: bool,
+    /// Shore-parallel heading (rad, clockwise from north). None keeps the
+    /// legacy gentle arc (polar site, missing field, ...).
+    pub target_heading_rad: Option<f64>,
+}
+
+impl Default for FlybyAssist {
+    fn default() -> Self {
+        Self {
+            active: false,
+            target_alt_datum_m: 700.0,
+            target_speed_mps: 200.0,
+            auto_engaged: false,
+            target_heading_rad: None,
+        }
+    }
+}
+
+/// Capture the current datum altitude as the flyby photo altitude and arm
+/// the assist. Stick/throttle intents only; the craft keeps flying itself.
+/// The photo leg runs along the shoreline when the field provides one.
+fn engage_flyby(
+    state: &mut PilotHudState,
+    runtime: &mut PilotFlightRuntime,
+    flyby: &mut FlybyAssist,
+) {
+    flyby.active = true;
+    flyby.auto_engaged = true;
+    let alt = (runtime.relative_position_m.length() - runtime.planet_radius_m).max(0.0);
+    flyby.target_alt_datum_m = (alt + 250.0).clamp(400.0, 900.0);
+    flyby.target_speed_mps = 200.0;
+    flyby.target_heading_rad = runtime
+        .terrain_field
+        .as_deref()
+        .and_then(|field| {
+            coastal_heading(field, runtime.terrain_spin(), runtime.relative_position_m)
+        });
+    runtime.sas_enabled = true;
+    runtime.input_engine_active = true;
+    runtime.engine_active = true;
+    state.pilot_camera_chase = true;
+}
+
+/// Pitch stick for the flyby: control_input.x > 0 is stick-back = nose up
+/// (S key, pinned by `flyby_pitch_sign_climbs...` against the 6-DoF
+/// authority). P-law on datum-altitude error with vertical-speed damping, a
+/// deadband so SAS holds attitude instead of dithering, and a low-speed
+/// governor: at launch energy the wing has no pull-up margin at all — even a
+/// moderate pull mushes into terrain (measured impacts), while the proven
+/// baseline (SAS hold, zero stick, full thrust) climbs away on thrust alone.
+/// So the law stays fully off until 300 m/s and ramps in above it.
+pub(crate) fn flyby_pitch_cmd(alt_err_m: f64, vspeed_mps: f64, speed_mps: f64) -> f64 {
+    if !alt_err_m.is_finite() || !vspeed_mps.is_finite() {
+        return 0.0;
+    }
+    let governor = if speed_mps.is_finite() {
+        ((speed_mps - 300.0) / 60.0).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    if governor <= 0.0 {
+        return 0.0;
+    }
+    let cmd = (0.003 * alt_err_m - 0.025 * vspeed_mps) * governor;
+    if cmd.abs() < 0.08 {
+        0.0
+    } else {
+        cmd.clamp(-0.25, 0.25)
+    }
+}
+
+/// Throttle slew direction (-1/0/+1) with a ±5 m/s deadband around target.
+pub(crate) fn flyby_throttle_slew(speed_mps: f64, target_mps: f64) -> f64 {
+    if !speed_mps.is_finite() || !target_mps.is_finite() {
+        return 0.0;
+    }
+    if speed_mps < target_mps - 5.0 {
+        1.0
+    } else if speed_mps > target_mps + 5.0 {
+        -1.0
+    } else {
+        0.0
+    }
+}
+
+/// Bank angle (radians, + = right wing down) of the craft about its nose
+/// axis, from body orientation and planet-up. Pure geometry for the
+/// bank-hold law below.
+pub(crate) fn craft_bank_rad(
+    orientation_body_to_inertial: DQuat,
+    radial_up_inertial: DVec3,
+) -> f64 {
+    let right = orientation_body_to_inertial * DVec3::Y;
+    (-right.dot(radial_up_inertial)).clamp(-1.0, 1.0).asin()
+}
+
+/// Shore-frame basis at the sub-craft point, in the body-fixed spin frame
+/// (the frame where the spin axis is +Z). Inverse of the `frame()`
+/// convention in flight-authority launch_site
+/// (`frame(d) = [d0, -d2, d1]`, swept by Rz(spin)); `None` near the poles.
+/// Returns (up, north, east), all unit.
+fn shore_basis(spin_rad: f64, rel_m: DVec3) -> Option<(DVec3, DVec3, DVec3)> {
+    let up = rel_m.try_normalize()?;
+    // Field direction -> spin frame; pole is +Z there by construction.
+    let dir = DQuat::from_rotation_z(-spin_rad) * up;
+    let pole = DVec3::Z;
+    let north = (pole - dir * dir.dot(pole)).try_normalize()?;
+    let east = north.cross(dir);
+    Some((dir, north, east))
+}
+
+/// Spin-frame vector back to a field direction for height queries.
+fn unframe(f: DVec3) -> [f64; 3] {
+    [f.x, f.z, -f.y]
+}
+
+/// Mean-|height| score of a 12 km probe along `heading` (radians, clockwise
+/// from north). Low score hugs the shoreline; cross-shore traces plunge
+/// into deep water or high land and score badly.
+fn shore_trace_score(
+    field: &thessa_worldgen_rocky::field::PlanetField,
+    spin_rad: f64,
+    rel_m: DVec3,
+    heading_rad: f64,
+) -> Option<f64> {
+    let (dir, north, east) = shore_basis(spin_rad, rel_m)?;
+    let radius_m = rel_m.length().max(1.0);
+    let (sin_h, cos_h) = heading_rad.sin_cos();
+    let mut mean_abs: f64 = 0.0;
+    let mut max_abs: f64 = 0.0;
+    for step in 1..=8 {
+        let arc = step as f64 * 1500.0 / radius_m;
+        let probe = dir * arc.cos() + (north * cos_h + east * sin_h) * arc.sin();
+        let l = probe.length();
+        if l < 1e-9 {
+            return None;
+        }
+        let h = field.height_m(unframe(probe / l), 32.0).abs();
+        if !h.is_finite() {
+            return None;
+        }
+        mean_abs += h;
+        max_abs = max_abs.max(h);
+    }
+    Some(mean_abs / 8.0 + 0.2 * max_abs)
+}
+
+/// Shore-parallel heading (radians, clockwise from north) at the sub-craft
+/// point: the best of 16 candidate traces. Visual flight path only — field
+/// geometry in, heading out, never physics. `None` (poles, missing field)
+/// keeps the legacy gentle arc.
+pub(crate) fn coastal_heading(
+    field: &thessa_worldgen_rocky::field::PlanetField,
+    spin_rad: f64,
+    rel_m: DVec3,
+) -> Option<f64> {
+    let mut best: Option<(f64, f64)> = None;
+    for i in 0..16 {
+        let heading = i as f64 * std::f64::consts::TAU / 16.0;
+        let score = shore_trace_score(field, spin_rad, rel_m, heading)?;
+        if best.is_none_or(|(_, s)| score < s) {
+            best = Some((heading, score));
+        }
+    }
+    best.map(|(heading, _)| heading)
+}
+
+/// Geographic track angle (radians, clockwise from north) of the surface
+/// velocity. Same basis convention as the search above.
+pub(crate) fn track_angle_rad(
+    spin_rad: f64,
+    rel_m: DVec3,
+    surf_vel_inertial_mps: DVec3,
+) -> Option<f64> {
+    let (dir, north, east) = shore_basis(spin_rad, rel_m)?;
+    let vf = DQuat::from_rotation_z(-spin_rad) * surf_vel_inertial_mps;
+    let vh = vf - dir * vf.dot(dir);
+    if vh.length() < 0.5 {
+        return None;
+    }
+    Some(east.dot(vh).atan2(north.dot(vh)))
+}
+
+/// Wrap an angle error to [-PI, PI].
+pub(crate) fn wrap_angle_err_rad(err: f64) -> f64 {
+    (err + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
+}
+
+/// Bank-to-turn roll stick: hold a bank proportional to the heading error
+/// instead of rolling blindly. A sustained rate command would barrel-roll;
+/// SAS captures and holds the bank once the stick returns to zero, so this
+/// pulses toward the target bank and rests. On course and wings-level the
+/// stick stays at zero and SAS holds.
+pub(crate) fn flyby_bank_cmd(heading_err_rad: f64, bank_rad: f64) -> f64 {
+    if !heading_err_rad.is_finite() || !bank_rad.is_finite() {
+        return 0.0;
+    }
+    if heading_err_rad.abs() < 0.05 && bank_rad.abs() < 0.05 {
+        return 0.0;
+    }
+    let bank_target = heading_err_rad.clamp(-0.45, 0.45);
+    let d = bank_target - bank_rad;
+    if d.abs() < 0.03 {
+        0.0
+    } else {
+        (2.0 * d).clamp(-0.35, 0.35)
+    }
+}
+
+/// Roll stick for the photo leg: shore-parallel bank-hold when a heading and
+/// a track fix exist and the wing is fast, legacy arc otherwise. Pure so the
+/// closed-loop test flies the identical law.
+pub(crate) fn flyby_roll_leg(
+    target_heading_rad: Option<f64>,
+    track_rad: Option<f64>,
+    bank_rad: f64,
+    speed_mps: f64,
+    alt_err_abs_m: f64,
+) -> f64 {
+    if speed_mps <= 300.0 {
+        return 0.0;
+    }
+    match (target_heading_rad, track_rad) {
+        (Some(target), Some(track)) => {
+            flyby_bank_cmd(wrap_angle_err_rad(target - track), bank_rad)
+        }
+        _ => {
+            if alt_err_abs_m < 150.0 {
+                0.10
+            } else {
+                0.0
+            }
+        }
+    }
+}
+
 pub(super) struct PilotHudPlugin;
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -512,6 +786,7 @@ pub(super) struct PilotUpdate;
 impl Plugin for PilotHudPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PilotHudState>()
+            .init_resource::<FlybyAssist>()
             .add_systems(Startup, spawn_pilot_hud)
             .add_systems(
                 Update,
@@ -554,6 +829,10 @@ pub(super) fn spawn_pilot_preview(
                 MeshMaterial3d(planet_material),
                 Transform::from_xyz(0.0, -(planet_radius + PILOT_START_ALTITUDE_M as f32), 0.0)
                     .with_scale(Vec3::splat(planet_radius)),
+                // Explicit inherit (Mesh3d already requires it): the beauty
+                // followers query computed visibility, so the PFD planet must
+                // participate in propagation rather than rely on defaults.
+                Visibility::Inherited,
                 Name::new(format!("PFD Thessa planet R={planet_radius_m:.0} m")),
             ));
             preview
@@ -996,6 +1275,19 @@ fn render_orientation(orientation: DQuat) -> Quat {
     Quat::from_mat3(&Mat3::from_cols(lateral, forward, -up))
 }
 
+/// Requested autopilot kick (m/s prograde) via `THESSA_AUTO_MANEUVER_DV_MPS`.
+/// Bounds keep it a sane suborbital hop for the starter vehicle, never an
+/// orbital insertion the executor cannot realize.
+fn maneuver_kick_mps() -> Option<f64> {
+    static DV: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
+    *DV.get_or_init(|| {
+        std::env::var("THESSA_AUTO_MANEUVER_DV_MPS")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 1.0 && *v <= 2000.0)
+    })
+}
+
 pub(super) fn pilot_render_offset(relative_delta_m: DVec3) -> Vec3 {
     // Pilot mode deliberately uses metres around the launch site. The map
     // uses a compressed astronomical unit; reusing that conversion here was
@@ -1016,9 +1308,14 @@ fn pilot_camera_transform(
     // vertical crossings. Panning uses camera axes, not fixed world axes.
     let forward = craft_orientation * Vec3::Y;
     let basis = if state.pilot_camera_chase {
+        // NOTE: parenthesize the negation! `-craft_orientation * v` negates
+        // the QUATERNION (unary minus binds tighter), and -q is the same
+        // rotation as q — the sign silently vanishes and the basis becomes
+        // a reflection that from_mat3 turns into a garbage orientation
+        // (measured: sky instead of planet in chase view).
         Quat::from_mat3(&Mat3::from_cols(
-            -craft_orientation * Vec3::X,
-            -craft_orientation * Vec3::Z,
+            -(craft_orientation * Vec3::X),
+            -(craft_orientation * Vec3::Z),
             -forward,
         ))
     } else {
@@ -1055,8 +1352,10 @@ fn pilot_input(
     mut mouse_wheel: MessageReader<MouseWheel>,
     mut state: ResMut<PilotHudState>,
     mut runtime: ResMut<PilotFlightRuntime>,
+    mut flyby: ResMut<FlybyAssist>,
     ephemeris: Res<RuntimeEphemeris>,
     link: Option<Res<crate::embedded::EmbeddedLink>>,
+    mut maneuver_sent: Local<bool>,
 ) {
     let mut scroll = 0.0;
 
@@ -1091,6 +1390,7 @@ fn pilot_input(
 
     if keys.just_pressed(KeyCode::KeyM) {
         runtime.control_input = DVec3::ZERO;
+        flyby.active = false;
         state.view_mode = match state.view_mode {
             ClientViewMode::Map => ClientViewMode::Pilot,
             ClientViewMode::Pilot => ClientViewMode::Map,
@@ -1117,6 +1417,63 @@ fn pilot_input(
         if keys.just_pressed(KeyCode::F1) {
             state.show_help = !state.show_help;
             state.ui_hidden = false;
+        }
+        // Beauty flyby: the live craft flies a low coastal pass on honest
+        // stick/throttle intents (same wire as a pilot). Any stick key takes
+        // over instantly; M/Backspace disengage elsewhere. THESSA_FLYBY=1
+        // engages once unattended (benchmarks/demos); it is still just
+        // intents, and takeover still sticks (no re-engage).
+        static FLYBY_AUTO: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let auto_engage = *FLYBY_AUTO.get_or_init(|| std::env::var_os("THESSA_FLYBY").is_some())
+            && !flyby.active
+            && !flyby.auto_engaged;
+        if keys.just_pressed(KeyCode::F7) && runtime.flight_error.is_none() {
+            if flyby.active {
+                flyby.active = false;
+                runtime.control_input = DVec3::ZERO;
+            } else {
+                engage_flyby(&mut state, &mut runtime, &mut flyby);
+            }
+        } else if auto_engage && runtime.flight_error.is_none() {
+            engage_flyby(&mut state, &mut runtime, &mut flyby);
+        }
+        if flyby.active && runtime.flight_error.is_some() {
+            flyby.active = false;
+        }
+        // Autopilot maneuver (real ExecuteManeuver block, server-executed):
+        // one prograde kick to fly a high suborbital arc for visual coverage
+        // across regimes. Fires once when the send succeeds; a rejected plan
+        // surfaces server-side in the wake notice, never as client state.
+        // Embedded wire only — local mode has no executor. Keep Navball with
+        // hands off: legacy stick input preempts an in-flight execution.
+        if !*maneuver_sent && link.is_some() && runtime.flight_error.is_none() {
+            if let Some(dv) = maneuver_kick_mps()
+                && let Ok(body_state) = ephemeris.ephemeris.body_state(
+                    runtime.reference_body,
+                    SimTime(clock.sim_seconds),
+                )
+            {
+                let rel = runtime.state.velocity_inertial_mps - body_state.velocity_inertial;
+                if rel.length() > 1.0 {
+                    let node = ManeuverNodeCommand {
+                        epoch_s: clock.sim_seconds + 20.0,
+                        delta_v_mps: (rel.normalize() * dv).to_array(),
+                    };
+                    let sent = link.as_deref().map(|l| {
+                        l.send_input(&client_input_for_server(
+                            &runtime,
+                            &state,
+                            &clock,
+                            vec![Command::ExecuteManeuver { nodes: vec![node] }],
+                        ))
+                    });
+                    if sent == Some(true) {
+                        *maneuver_sent = true;
+                    }
+                }
+            } else if maneuver_kick_mps().is_none() {
+                *maneuver_sent = true;
+            }
         }
         if keys.just_pressed(KeyCode::F8)
             || keys.just_pressed(KeyCode::Pause)
@@ -1166,6 +1523,10 @@ fn pilot_input(
         }
 
         let keyboard_input = keyboard_control_input(&keys);
+        // Stick takeover: any manual axis input instantly returns the craft.
+        if flyby.active && keyboard_input.length_squared() > 1.0e-8 {
+            flyby.active = false;
+        }
         // Orbit/pan gestures belong exclusively to the camera. They must not
         // simultaneously command Mouse Aim, otherwise dragging the view also
         // deflects the aircraft and makes the controls feel broken.
@@ -1180,11 +1541,79 @@ fn pilot_input(
                 0.0,
             ) * 0.85
         };
-        let command_input = match state.control_mode {
+        let manual_input = match state.control_mode {
             ControlMode::MouseAim if keyboard_input.length_squared() < 1.0e-8 => mouse_input,
             _ => keyboard_input,
         }
         .clamp_length(0.0, 1.0);
+        // Flyby guidance from live craft state: datum-altitude P-law with
+        // vertical-speed damping, a low-speed governor (no stall yanks off
+        // the launch rail), and a gentle survey arc once settled. SAS holds
+        // attitude inside the deadband; the safety floor climbs wings-level
+        // at full throttle. All values are stick intents, never teleports.
+        // Surface kinematics are computed once and shared with the throttle
+        // slew below. NOTE: inertial velocity includes the reference body's
+        // ~50 km/s orbital motion — surface speed must subtract the body's
+        // own ephemeris velocity first, or the governor sees orbital speed
+        // and every gain is wrong (measured crash).
+        let (flyby_alt, flyby_vspeed, flyby_speed, flyby_surf_vel) = {
+            let r = runtime.relative_position_m.length().max(1.0);
+            let up = runtime.relative_position_m / r;
+            let body_vel = ephemeris
+                .ephemeris
+                .body_state(runtime.reference_body, SimTime(clock.sim_seconds))
+                .map(|s| s.velocity_inertial)
+                .unwrap_or(DVec3::ZERO);
+            let rot = runtime.atmosphere.body_rotation_rad_s;
+            let surface_vel = runtime.state.velocity_inertial_mps
+                - body_vel
+                - rot.cross(runtime.relative_position_m);
+            (
+                (r - runtime.planet_radius_m).max(0.0),
+                surface_vel.dot(up),
+                surface_vel.length(),
+                surface_vel,
+            )
+        };
+        let flyby_input = if flyby.active {
+            if flyby_alt < 300.0 {
+                DVec3::new(0.3, 0.0, 0.0)
+            } else {
+                let pitch = flyby_pitch_cmd(
+                    flyby.target_alt_datum_m - flyby_alt,
+                    flyby_vspeed,
+                    flyby_speed,
+                );
+                // Shore-parallel leg when the search provided one, banked
+                // only when fast (banking while slow trades lift for a turn
+                // into the ground). Otherwise the legacy gentle arc.
+                let track = track_angle_rad(
+                    runtime.terrain_spin(),
+                    runtime.relative_position_m,
+                    flyby_surf_vel,
+                );
+                let r_bank = runtime.relative_position_m.length().max(1.0);
+                let bank = craft_bank_rad(
+                    runtime.state.orientation_body_to_inertial,
+                    runtime.relative_position_m / r_bank,
+                );
+                let roll = flyby_roll_leg(
+                    flyby.target_heading_rad,
+                    track,
+                    bank,
+                    flyby_speed,
+                    (flyby.target_alt_datum_m - flyby_alt).abs(),
+                );
+                DVec3::new(pitch, 0.0, roll)
+            }
+        } else {
+            DVec3::ZERO
+        };
+        let command_input = if flyby.active {
+            flyby_input.clamp_length(0.0, 1.0)
+        } else {
+            manual_input
+        };
         runtime.control_input = if clock.paused || !window.focused || state.show_help {
             DVec3::ZERO
         } else {
@@ -1195,9 +1624,23 @@ fn pilot_input(
         let throttle_up = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         let throttle_down =
             keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-        runtime.input_throttle = (runtime.input_throttle
-            + (throttle_up as i8 - throttle_down as i8) as f64 * dt * 0.55)
-            .clamp(0.0, 1.0);
+        let throttle_preset =
+            keys.just_pressed(KeyCode::KeyX) || keys.just_pressed(KeyCode::KeyZ);
+        if flyby.active && (throttle_up || throttle_down || throttle_preset) {
+            flyby.active = false;
+        }
+        if flyby.active {
+            let slew = if flyby_alt < 300.0 {
+                1.0
+            } else {
+                flyby_throttle_slew(flyby_speed, flyby.target_speed_mps)
+            };
+            runtime.input_throttle = (runtime.input_throttle + slew * dt * 0.55).clamp(0.0, 1.0);
+        } else {
+            runtime.input_throttle = (runtime.input_throttle
+                + (throttle_up as i8 - throttle_down as i8) as f64 * dt * 0.55)
+                .clamp(0.0, 1.0);
+        }
         if keys.just_pressed(KeyCode::KeyX) {
             runtime.input_throttle = 0.0;
         }
@@ -1690,11 +2133,362 @@ mod tests {
     }
 
     #[test]
+    fn chase_camera_frames_the_planet_below_level_flight() {
+        // End-to-end layout math (no renderer): level flight with the nose
+        // along render +Y. Render +Z points DOWN (see render_orientation),
+        // so planet-up is -Z and the planet center sits at +Z * R.
+        // The planet below must land inside the chase camera frustum. If
+        // this fails, the chase camera — not streaming, materials, or
+        // shells — hides the world.
+        let hud = PilotHudState {
+            pilot_camera_chase: true,
+            ..PilotHudState::default()
+        };
+        let craft_orientation = Quat::IDENTITY;
+        let camera = pilot_camera_transform(&hud, craft_orientation, Vec3::NEG_Z);
+        assert!(camera.translation.is_finite());
+        assert!(camera.rotation.is_finite() && camera.rotation.is_normalized());
+        // Camera looks along its -Z; up must stay world-up (no 180 roll).
+        let cam_forward = (camera.rotation * Vec3::NEG_Z).normalize();
+        let cam_up = (camera.rotation * Vec3::Y).normalize();
+        assert!(
+            cam_up.dot(Vec3::NEG_Z) > 0.9,
+            "chase camera rolled: up={cam_up:?}"
+        );
+        // Camera sits behind-above the craft (nose +Y, down +Z).
+        assert!(
+            (camera.translation - Vec3::new(0.0, -31.5, -5.7)).length() < 3.0,
+            "chase camera misplaced: {:?}",
+            camera.translation
+        );
+        // Planet center straight down must be in front of the camera and
+        // below its view axis (a 3200 km sphere fills the lower frame;
+        // only the direction matters, not the angle to its center).
+        let to_planet = (Vec3::new(0.0, 0.0, 3_200_000.0) - camera.translation).normalize();
+        assert!(
+            cam_forward.dot(to_planet) > 0.0,
+            "planet behind chase camera: forward={cam_forward:?}"
+        );
+        assert!(
+            cam_forward.z > 0.15,
+            "chase camera must look down-forward, forward={cam_forward:?}"
+        );
+    }
+
+    #[test]
+    fn chase_camera_frames_spawn_attitude_planet() {
+        // Same as above but with the REAL spawn orientation (not identity):
+        // COAST site, east/north/up basis with -8 deg pitch offset. Catches
+        // orientation-dependent basis bugs that identity never exercises.
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).unwrap();
+        let ephemeris = config.bake().unwrap();
+        let reference_body = ephemeris.body_id("thessa").unwrap();
+        let mut flight = PilotFlightRuntime::new(&ephemeris, reference_body).unwrap();
+        let (field, sites) = thessa_flight_authority::canonical_launch_setup(&ephemeris).unwrap();
+        flight.initialize_world_site(field, sites[0], &ephemeris);
+        flight.sync_view();
+        let hud = PilotHudState {
+            pilot_camera_chase: true,
+            ..PilotHudState::default()
+        };
+        let up = pilot_render_offset(flight.render_relative_position_m).normalize();
+        let camera = pilot_camera_transform(&hud, flight.render_orientation, up);
+        let cam_forward = (camera.rotation * Vec3::NEG_Z).normalize();
+        let cam_up = (camera.rotation * Vec3::Y).normalize();
+        // Camera near the craft (32 m setting), finite, unrolled.
+        assert!(camera.translation.length() < 200.0);
+        assert!(cam_up.dot(up) > 0.9, "chase camera rolled: up={cam_up:?}");
+        // Planet straight below must be ahead-below the view axis.
+        let to_planet = (-up).normalize();
+        assert!(
+            cam_forward.dot(to_planet) > 0.0,
+            "planet behind spawn chase camera: forward={cam_forward:?}"
+        );
+        // And the craft itself must be roughly centered (it is the target).
+        let to_craft = (-camera.translation).normalize();
+        assert!(
+            cam_forward.dot(to_craft) > 0.95,
+            "craft off-center: forward={cam_forward:?}"
+        );
+    }
+
+    #[test]
     fn control_modes_cycle_forward_and_backward() {
         assert_eq!(ControlMode::MouseAim.next(), ControlMode::Navball);
         assert_eq!(ControlMode::Direct.next(), ControlMode::MouseAim);
         assert_eq!(ControlMode::MouseAim.previous(), ControlMode::Direct);
         assert_eq!(ControlMode::Navball.previous(), ControlMode::MouseAim);
+    }
+
+    #[test]
+    fn flyby_pitch_sign_climbs_and_small_inputs_do_not_stall() {
+        // Pins the stick sign against the real 6-DoF authority: sustained
+        // nose-up stick must gain datum altitude over wings-level SAS hold,
+        // without stalling into the ground from launch energy.
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).unwrap();
+        let ephemeris = config.bake().unwrap();
+        let reference_body = ephemeris.body_id("thessa").unwrap();
+        let mut up = PilotFlightRuntime::new(&ephemeris, reference_body).unwrap();
+        let mut flat = PilotFlightRuntime::new(&ephemeris, reference_body).unwrap();
+        up.control_input = DVec3::new(0.2, 0.0, 0.0);
+        flat.control_input = DVec3::ZERO;
+        for _ in 0..5 {
+            up.advance(&ephemeris, ControlMode::Navball, 1.0).unwrap();
+            flat
+                .advance(&ephemeris, ControlMode::Navball, 1.0)
+                .unwrap();
+        }
+        assert!(up.flight_error.is_none(), "mild pull-up must not stall");
+        let alt = |f: &PilotFlightRuntime| {
+            f.relative_position_m.length() - f.planet_radius_m
+        };
+        assert!(
+            alt(&up) > alt(&flat) + 5.0,
+            "nose-up stick must climb: up={:.1} flat={:.1}",
+            alt(&up),
+            alt(&flat)
+        );
+    }
+
+    #[test]
+    fn flyby_closed_loop_from_launch_holds_altitude() {
+        // Regression: the first governor-less law pulled full stick at launch
+        // energy, stalled, and hit terrain ~10 s after engage (measured in a
+        // real autobench flight). The shipped law closed over the same
+        // authority must still be flying after 30 s.
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).unwrap();
+        let ephemeris = config.bake().unwrap();
+        let reference_body = ephemeris.body_id("thessa").unwrap();
+        let mut flight = PilotFlightRuntime::new(&ephemeris, reference_body).unwrap();
+        // True launch state like the live client (PostStartup
+        // initialize_launch_site): COAST site, 500 m over terrain, 180 m/s.
+        // The bare authority default flies a different regime and would prove
+        // nothing about the game.
+        let (field, sites) = thessa_flight_authority::canonical_launch_setup(&ephemeris).unwrap();
+        flight.initialize_world_site(field, sites[0], &ephemeris);
+        let alt0 = flight.relative_position_m.length() - flight.planet_radius_m;
+        let target = (alt0 + 250.0).clamp(400.0, 900.0);
+        // Shore-parallel leg like engage_flyby: heading searched once from
+        // the field, then the identical per-frame law as the live system.
+        let heading = flight.terrain_field.as_deref().and_then(|field| {
+            coastal_heading(field, flight.terrain_spin(), flight.relative_position_m)
+        });
+        // Turning progress: with a large initial error the track must close
+        // on the shore-parallel heading, not diverge from it.
+        let track_of = |flight: &PilotFlightRuntime| {
+            let r = flight.relative_position_m.length().max(1.0);
+            let up = flight.relative_position_m / r;
+            let body_vel = ephemeris
+                .body_state(flight.reference_body, SimTime(flight.flight_time_s))
+                .map(|s| s.velocity_inertial)
+                .unwrap_or(DVec3::ZERO);
+            let rot = flight.atmosphere.body_rotation_rad_s;
+            let surf = flight.state.velocity_inertial_mps
+                - body_vel
+                - rot.cross(flight.relative_position_m);
+            let _ = up;
+            track_angle_rad(flight.terrain_spin(), flight.relative_position_m, surf)
+        };
+        let err0 = match (heading, track_of(&flight)) {
+            (Some(h), Some(t)) => wrap_angle_err_rad(h - t).abs(),
+            _ => 0.0,
+        };
+        let mut trace = Vec::new();
+        for step in 0..30 {
+            let r = flight.relative_position_m.length().max(1.0);
+            let up = flight.relative_position_m / r;
+            let body_vel = ephemeris
+                .body_state(flight.reference_body, SimTime(flight.flight_time_s))
+                .map(|s| s.velocity_inertial)
+                .unwrap_or(DVec3::ZERO);
+            let rot = flight.atmosphere.body_rotation_rad_s;
+            let surface_vel = flight.state.velocity_inertial_mps
+                - body_vel
+                - rot.cross(flight.relative_position_m);
+            let alt = (r - flight.planet_radius_m).max(0.0);
+            let speed = surface_vel.length();
+            let pitch = flyby_pitch_cmd(target - alt, surface_vel.dot(up), speed);
+            let track = track_angle_rad(
+                flight.terrain_spin(),
+                flight.relative_position_m,
+                surface_vel,
+            );
+            let bank = craft_bank_rad(
+                flight.state.orientation_body_to_inertial,
+                flight.relative_position_m / r,
+            );
+            let roll = flyby_roll_leg(heading, track, bank, speed, (target - alt).abs());
+            flight.control_input = DVec3::new(pitch, 0.0, roll);
+            trace.push((step, alt, speed, pitch));
+            if flight
+                .advance(&ephemeris, ControlMode::Navball, 1.0)
+                .is_err()
+            {
+                break;
+            }
+            if flight.flight_error.is_some() {
+                break;
+            }
+        }
+        assert!(
+            flight.flight_error.is_none(),
+            "flyby must not stall out of launch: {:?} trace={trace:.0?}",
+            flight.flight_error
+        );
+        let alt = flight.relative_position_m.length() - flight.planet_radius_m;
+        assert!(
+            alt > 400.0,
+            "flyby must hold photo altitude, got {alt:.0} m vs target {target:.0} m trace={trace:.1?}"
+        );
+        if err0 > 0.5 {
+            let errn = match (heading, track_of(&flight)) {
+                (Some(h), Some(t)) => wrap_angle_err_rad(h - t).abs(),
+                _ => 0.0,
+            };
+            assert!(
+                errn <= err0 + 0.15,
+                "track must close on shore heading: {err0:.2} -> {errn:.2} rad"
+            );
+        }
+    }
+
+    #[test]
+    fn coastal_heading_hugs_the_shore() {
+        // At the COAST launch site the search must return a heading whose
+        // 12 km trace stays near the waterline, decisively better than
+        // heading cross-shore (which plunges inland or out to sea).
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).unwrap();
+        let ephemeris = config.bake().unwrap();
+        let reference_body = ephemeris.body_id("thessa").unwrap();
+        let mut flight = PilotFlightRuntime::new(&ephemeris, reference_body).unwrap();
+        let (field, sites) = thessa_flight_authority::canonical_launch_setup(&ephemeris).unwrap();
+        flight.initialize_world_site(field.clone(), sites[0], &ephemeris);
+        let spin = flight.terrain_spin();
+        let rel = flight.relative_position_m;
+        let heading = coastal_heading(&field, spin, rel)
+            .expect("coast site must admit a shoreline");
+        assert!(heading.is_finite());
+        // Deterministic: same state, same heading.
+        assert_eq!(
+            coastal_heading(&field, spin, rel),
+            Some(heading)
+        );
+        let along = shore_trace_score(&field, spin, rel, heading).unwrap();
+        let across =
+            shore_trace_score(&field, spin, rel, heading + std::f64::consts::FRAC_PI_2).unwrap();
+        assert!(
+            along <= across,
+            "along-shore must beat cross-shore: {along:.0} vs {across:.0} m"
+        );
+    }
+
+    #[test]
+    fn flyby_roll_turns_right() {
+        // Pins the roll sign against the 6-DoF authority: sustained +roll
+        // must increase the clockwise-from-north track (right turn). If the
+        // body-axis mapping ever changes, this fails loudly instead of
+        // silently orbiting the wrong way.
+        let config: SystemConfig =
+            toml::from_str(include_str!("../../../data/system.toml")).unwrap();
+        let ephemeris = config.bake().unwrap();
+        let reference_body = ephemeris.body_id("thessa").unwrap();
+        let mut flight = PilotFlightRuntime::new(&ephemeris, reference_body).unwrap();
+        let (field, sites) = thessa_flight_authority::canonical_launch_setup(&ephemeris).unwrap();
+        flight.initialize_world_site(field.clone(), sites[0], &ephemeris);
+        let track_of = |flight: &PilotFlightRuntime| {
+            let body_vel = ephemeris
+                .body_state(flight.reference_body, SimTime(flight.flight_time_s))
+                .map(|s| s.velocity_inertial)
+                .unwrap_or(DVec3::ZERO);
+            let rot = flight.atmosphere.body_rotation_rad_s;
+            let surf = flight.state.velocity_inertial_mps
+                - body_vel
+                - rot.cross(flight.relative_position_m);
+            track_angle_rad(
+                flight.terrain_spin(),
+                flight.relative_position_m,
+                surf,
+            )
+            .unwrap()
+        };
+        flight.control_input = DVec3::new(0.0, 0.0, 0.2);
+        flight.advance(&ephemeris, ControlMode::Navball, 1.0).unwrap();
+        let before = track_of(&flight);
+        for _ in 0..4 {
+            flight.control_input = DVec3::new(0.0, 0.0, 0.2);
+            flight.advance(&ephemeris, ControlMode::Navball, 1.0).unwrap();
+        }
+        let after = track_of(&flight);
+        let delta = wrap_angle_err_rad(after - before);
+        assert!(
+            delta > 0.002,
+            "+roll must turn the track right (increase): delta={delta:.4} rad"
+        );
+    }
+
+    #[test]
+    fn flyby_bank_cmd_holds_bank_and_rests() {
+        // Need a right turn, wings level: establish positive (right) bank.
+        assert!(flyby_bank_cmd(0.5, 0.0) > 0.2);
+        // Need a left turn, wings level: negative.
+        assert!(flyby_bank_cmd(-0.5, 0.0) < -0.2);
+        // On course and level: hands off, SAS holds.
+        assert_eq!(flyby_bank_cmd(0.0, 0.0), 0.0);
+        assert_eq!(flyby_bank_cmd(0.01, 0.01), 0.0);
+        // Banked past target: counter-roll, then rest at capture.
+        assert!(flyby_bank_cmd(0.0, 0.3) < -0.2);
+        assert_eq!(flyby_bank_cmd(0.3, 0.29), 0.0);
+        // Saturates, never exceeds stick range; NaN is neutral.
+        assert_eq!(flyby_bank_cmd(5.0, 0.0), 0.35);
+        assert_eq!(flyby_bank_cmd(f64::NAN, 0.0), 0.0);
+        // Level wings read zero bank.
+        assert_eq!(
+            craft_bank_rad(DQuat::IDENTITY, DVec3::Z),
+            0.0
+        );
+        // Legacy arc through the shared leg helper.
+        assert_eq!(
+            flyby_roll_leg(None, Some(1.0), 0.0, 400.0, 100.0),
+            0.10
+        );
+        assert_eq!(flyby_roll_leg(None, Some(1.0), 0.0, 200.0, 100.0), 0.0);
+        assert_eq!(flyby_roll_leg(Some(0.0), None, 0.0, 400.0, 100.0), 0.10);
+    }
+
+    #[test]
+    fn flyby_pitch_climbs_when_low_and_holds_in_deadband() {
+        // Below target, level, fast: nose up (capped, governor open).
+        assert!(flyby_pitch_cmd(100.0, 0.0, 400.0) > 0.2);
+        // Above target, level: nose down.
+        assert!(flyby_pitch_cmd(-100.0, 0.0, 400.0) < -0.2);
+        // On target, level: SAS holds (deadband).
+        assert_eq!(flyby_pitch_cmd(0.0, 0.0, 400.0), 0.0);
+        assert_eq!(flyby_pitch_cmd(5.0, 0.0, 400.0), 0.0);
+        // Fast climb toward a close target: push over before overshoot.
+        assert!(flyby_pitch_cmd(10.0, 20.0, 400.0) < 0.0);
+        // Governor: fully off at launch energy (SAS holds while thrust
+        // builds speed), ramping past 300, fully on at cruise.
+        assert_eq!(flyby_pitch_cmd(250.0, 0.0, 170.0), 0.0);
+        assert_eq!(flyby_pitch_cmd(250.0, 0.0, 300.0), 0.0);
+        assert_eq!(flyby_pitch_cmd(250.0, 0.0, 400.0), 0.25);
+        // Stuck extremes saturate, never exceed stick range; NaN is neutral.
+        assert_eq!(flyby_pitch_cmd(5000.0, 0.0, 400.0), 0.25);
+        assert_eq!(flyby_pitch_cmd(-5000.0, 0.0, 400.0), -0.25);
+        assert_eq!(flyby_pitch_cmd(f64::NAN, 0.0, 400.0), 0.0);
+        assert_eq!(flyby_pitch_cmd(100.0, 0.0, f64::NAN), 0.0);
+    }
+
+    #[test]
+    fn flyby_throttle_holds_speed_with_deadband() {
+        assert_eq!(flyby_throttle_slew(180.0, 200.0), 1.0);
+        assert_eq!(flyby_throttle_slew(220.0, 200.0), -1.0);
+        assert_eq!(flyby_throttle_slew(200.0, 200.0), 0.0);
+        assert_eq!(flyby_throttle_slew(203.0, 200.0), 0.0);
+        assert_eq!(flyby_throttle_slew(f64::NAN, 200.0), 0.0);
     }
 
     #[test]

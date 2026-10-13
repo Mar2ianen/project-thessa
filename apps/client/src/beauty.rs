@@ -747,16 +747,42 @@ fn setup_beauty(
         r.aurora_animate,
     );
 
-    // --- Gas giants: bake band textures now, swap onto planet entities later
-    // (swap system runs every frame until both swaps land, so order with the
-    // map setup does not matter).
-    let (nw, nh) = gas_giant_size(r.gas_giant_quality, true);
-    let (vw, vh) = gas_giant_size(r.gas_giant_quality, false);
-    let (cw, ch) = cloud_size(r.clouds_quality);
-    // Impostor bakes share the terrain CBT address space: the chosen widths
-    // must round-trip through a TileKey <-> Node mapping.
-    for w in [nw, vw, cw] {
-        let level = cbt_level_for_width(w);
+    // --- Gas giants: bake band textures now if enabled, swap onto planet entities later.
+    let (nereid, vesper, nw, nh, vw, vh) = if r.gas_giant_enabled {
+        let (nw, nh) = gas_giant_size(r.gas_giant_quality, true);
+        let (vw, vh) = gas_giant_size(r.gas_giant_quality, false);
+        for w in [nw, vw] {
+            let level = cbt_level_for_width(w);
+            let key = TileKey {
+                face: 0,
+                level,
+                x: 0,
+                y: 0,
+            };
+            debug_assert_eq!(
+                cbt_node_for_tile(key).and_then(tile_for_cbt_node),
+                Some(key)
+            );
+        }
+        let nereid_px = bake_gas_giant(NEREID_STYLE, nw, nh, 0.0, r.gas_giant_limb);
+        let vesper_px = bake_gas_giant(VESPER_STYLE, vw, vh, 0.0, r.gas_giant_limb);
+        (
+            images.add(rgba_image(nw, nh, nereid_px)),
+            images.add(rgba_image(vw, vh, vesper_px)),
+            nw,
+            nh,
+            vw,
+            vh,
+        )
+    } else {
+        let dummy = images.add(rgba_image(1, 1, vec![0, 0, 0, 0]));
+        (dummy.clone(), dummy, 1, 1, 1, 1)
+    };
+
+    // --- Clouds: only allocate textures and displaced shell meshes if enabled.
+    let (cloud_low, cloud_high, low_mesh, high_mesh) = if r.clouds_enabled {
+        let (cw, ch) = cloud_size(r.clouds_quality);
+        let level = cbt_level_for_width(cw);
         let key = TileKey {
             face: 0,
             level,
@@ -767,74 +793,68 @@ fn setup_beauty(
             cbt_node_for_tile(key).and_then(tile_for_cbt_node),
             Some(key)
         );
-    }
-    let nereid_px = bake_gas_giant(NEREID_STYLE, nw, nh, 0.0, r.gas_giant_limb);
-    let vesper_px = bake_gas_giant(VESPER_STYLE, vw, vh, 0.0, r.gas_giant_limb);
-    let nereid = images.add(rgba_image(nw, nh, nereid_px));
-    let vesper = images.add(rgba_image(vw, vh, vesper_px));
-
-    // --- Clouds.
-    let low_px = bake_clouds(
-        0xC10D,
-        cw,
-        ch,
-        r.clouds_coverage,
-        r.clouds_opacity,
-        (1.0, 1.0),
-    );
-    // Shell meshes: one unit sphere per deck so relief displacement follows
-    // each deck's own coverage (a shared mesh would dome all decks alike).
-    // Bevy's UV sphere puts its texture poles on local +Z (see
-    // SPHERE_POLE_TO_WORLD_UP in main): every pole-ring vertex shares the pole
-    // position but spans the full u range, so each pole triangle smears an
-    // entire texture row across the sky. From inside the shell (any low
-    // flight) that reads as giant white wedges with hard triangle edges
-    // (measured on a 30 km maneuver frame). Collapsing pole u to the middle
-    // column reduces the wedge to a single texel.
-    let mut make_shell = |alpha: Option<(Vec<u8>, u32, u32, f32)>| {
-        let mut sphere = Sphere::new(1.0).mesh().uv(96, 48);
-        if let Some((grid, w, h, relief)) = alpha {
-            displace_shell_by_coverage(&mut sphere, &grid, w, h, relief);
-        }
-        collapse_shell_pole_uvs(&mut sphere);
-        meshes.add(sphere)
-    };
-    let low_mesh = make_shell(Some((alpha_grid(&low_px), cw, ch, CLOUD_RELIEF_LOW_FRAC)));
-    let cloud_low = images.add(rgba_image(cw, ch, low_px));
-    let (cloud_high, high_mesh) = if r.clouds_layers >= 2 {
-        // Cirrus stays a thin streaky veil over the low deck: coverage well
-        // down the shaping curve (measured) plus vertical tightening for
-        // streaks instead of puffs. Kept faint so it never dulls the deck.
-        let hi_px = bake_clouds(
-            0xC1225,
-            cw / 2,
-            ch / 2,
-            (r.clouds_coverage + 0.12).min(0.95),
-            r.clouds_opacity * 0.5,
-            (1.0, 2.0),
+        let low_px = bake_clouds(
+            0xC10D,
+            cw,
+            ch,
+            r.clouds_coverage,
+            r.clouds_opacity,
+            (1.0, 1.0),
         );
-        let hi_mesh = make_shell(Some((
-            alpha_grid(&hi_px),
-            cw / 2,
-            ch / 2,
-            CLOUD_RELIEF_HIGH_FRAC,
-        )));
-        (
-            Some(images.add(rgba_image(cw / 2, ch / 2, hi_px))),
-            Some(hi_mesh),
-        )
+        let mut make_shell = |alpha: Option<(Vec<u8>, u32, u32, f32)>| {
+            let mut sphere = Sphere::new(1.0).mesh().uv(96, 48);
+            if let Some((grid, w, h, relief)) = alpha {
+                displace_shell_by_coverage(&mut sphere, &grid, w, h, relief);
+            }
+            collapse_shell_pole_uvs(&mut sphere);
+            meshes.add(sphere)
+        };
+        let low_mesh = make_shell(Some((alpha_grid(&low_px), cw, ch, CLOUD_RELIEF_LOW_FRAC)));
+        let cloud_low = images.add(rgba_image(cw, ch, low_px));
+        let (cloud_high, high_mesh) = if r.clouds_layers >= 2 {
+            let hi_px = bake_clouds(
+                0xC1225,
+                cw / 2,
+                ch / 2,
+                (r.clouds_coverage + 0.12).min(0.95),
+                r.clouds_opacity * 0.5,
+                (1.0, 2.0),
+            );
+            let hi_mesh = make_shell(Some((
+                alpha_grid(&hi_px),
+                cw / 2,
+                ch / 2,
+                CLOUD_RELIEF_HIGH_FRAC,
+            )));
+            (
+                Some(images.add(rgba_image(cw / 2, ch / 2, hi_px))),
+                Some(hi_mesh),
+            )
+        } else {
+            (None, None)
+        };
+        (cloud_low, cloud_high, Some(low_mesh), high_mesh)
     } else {
-        (None, None)
+        let dummy = images.add(rgba_image(1, 1, vec![0, 0, 0, 0]));
+        (dummy, None, None, None)
     };
-    let plain_mesh = make_shell(None);
 
-    // --- Aurora curtain base.
-    let (aw, ah) = match r.aurora_quality {
-        thessa_graphics::AuroraQuality::Low => (256, 128),
-        thessa_graphics::AuroraQuality::High => (512, 256),
+    // --- Aurora curtain base: only allocate textures and meshes if enabled.
+    let (aurora, aw, ah, plain_mesh) = if r.aurora_shell {
+        let (aw, ah) = match r.aurora_quality {
+            thessa_graphics::AuroraQuality::Low => (256, 128),
+            thessa_graphics::AuroraQuality::High => (512, 256),
+        };
+        let aurora_px = bake_aurora(aw, ah, 67.0, 3.0, 0.0, false);
+        let aurora = images.add(rgba_image(aw, ah, aurora_px));
+        let mut sphere = Sphere::new(1.0).mesh().uv(96, 48);
+        collapse_shell_pole_uvs(&mut sphere);
+        let plain_mesh = meshes.add(sphere);
+        (aurora, aw, ah, Some(plain_mesh))
+    } else {
+        let dummy = images.add(rgba_image(1, 1, vec![0, 0, 0, 0]));
+        (dummy, 1, 1, None)
     };
-    let aurora_px = bake_aurora(aw, ah, 67.0, 3.0, 0.0, false);
-    let aurora = images.add(rgba_image(aw, ah, aurora_px));
 
     commands.insert_resource(BeautyImages {
         nereid,
@@ -847,38 +867,34 @@ fn setup_beauty(
         aurora_size: (aw, ah),
     });
 
-    // Cloud shells for the three ocean worlds (map + pilot follow logic
-    // below copies planet transforms; no hierarchy parenting). Placement
-    // comes from CLOUD_DECKS so shadow samplers share the exact table.
-    for (body, deck, scale, spin) in CLOUD_DECKS.iter().copied().filter(|(body, deck, _, _)| {
-        *deck == 0 || (*body == "thessa" && (*deck as u32) < r.clouds_layers)
-    }) {
-        // Relief follows the deck's own bake (deck 1 falls back to the low
-        // mesh when cirrus is off, but then it never spawns either).
-        let mesh = if deck == 0 {
-            low_mesh.clone()
-        } else {
-            high_mesh.clone().unwrap_or_else(|| low_mesh.clone())
-        };
-        commands.spawn((
-            Mesh3d(mesh),
-            MeshMaterial3d(materials.add(StandardMaterial::default())),
-            Transform::default(),
-            Visibility::Hidden,
-            Name::new(format!("beauty cloud {body} deck{deck}")),
-            CloudShell {
-                body,
-                deck,
-                spin_rad_s: spin,
-                scale_factor: scale,
-            },
-        ));
+    // Cloud shells: only spawned when clouds are enabled.
+    if r.clouds_enabled {
+        let low_m = low_mesh.as_ref().expect("low_mesh present when clouds_enabled");
+        for (body, deck, scale, spin) in CLOUD_DECKS.iter().copied().filter(|(body, deck, _, _)| {
+            *deck == 0 || (*body == "thessa" && (*deck as u32) < r.clouds_layers)
+        }) {
+            let mesh = if deck == 0 {
+                low_m.clone()
+            } else {
+                high_mesh.clone().unwrap_or_else(|| low_m.clone())
+            };
+            commands.spawn((
+                Mesh3d(mesh),
+                MeshMaterial3d(materials.add(StandardMaterial::default())),
+                Transform::default(),
+                Visibility::Hidden,
+                Name::new(format!("beauty cloud {body} deck{deck}")),
+                CloudShell {
+                    body,
+                    deck,
+                    spin_rad_s: spin,
+                    scale_factor: scale,
+                },
+            ));
+        }
     }
 
-    // Volume decks share meshes and bakes with the shells above (same
-    // coverage by construction); one material per deck carries its slab and
-    // texture. Low cumulus deck marches volumetrically; cirrus stays a thin shell
-    // in both paths (see docs/14_VISUAL_ATMOSPHERE.md).
+    // Volume decks: only spawned when clouds are enabled.
     if r.clouds_enabled {
         let volume_mesh = meshes.add(Sphere::new(1.0).mesh().uv(96, 48));
         for (body, deck, _, spin) in CLOUD_DECKS.iter().copied().filter(|(_, deck, _, _)| *deck == 0) {
@@ -919,24 +935,23 @@ fn setup_beauty(
         }
     }
 
-    // Aurora shell (Thessa only).
-    // Aurora curtain stack (thessa only): three concentric shells sharing
-    // one bake and rotation keep rays field-aligned coherent, while the
-    // radial separation gives curtains parallax depth and a soft vertical
-    // falloff instead of a painted band. Gains sum near the main shell.
-    for (scale, gain) in [(1.038, 0.45), (1.045, 1.0), (1.052, 0.5)] {
-        commands.spawn((
-            Mesh3d(plain_mesh.clone()),
-            MeshMaterial3d(materials.add(StandardMaterial::default())),
-            Transform::default(),
-            Visibility::Hidden,
-            Name::new("beauty aurora thessa"),
-            AuroraShell {
-                body: "thessa",
-                scale_factor: scale,
-                gain,
-            },
-        ));
+    // Aurora curtain stack: only spawned when aurora_shell is enabled.
+    if r.aurora_shell {
+        let plain = plain_mesh.expect("plain_mesh present when aurora_shell");
+        for (scale, gain) in [(1.038, 0.45), (1.045, 1.0), (1.052, 0.5)] {
+            commands.spawn((
+                Mesh3d(plain.clone()),
+                MeshMaterial3d(materials.add(StandardMaterial::default())),
+                Transform::default(),
+                Visibility::Hidden,
+                Name::new("beauty aurora thessa"),
+                AuroraShell {
+                    body: "thessa",
+                    scale_factor: scale,
+                    gain,
+                },
+            ));
+        }
     }
 }
 
@@ -1177,6 +1192,7 @@ impl EffectiveCloudBackend {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::March => "march",
@@ -2237,5 +2253,51 @@ mod tests {
             resolve_effective_cloud_backend(CloudIntegratorRequest::Stochastic, Some("nonsense")),
             EffectiveCloudBackend::Stochastic
         );
+    }
+
+    #[test]
+    fn setup_beauty_with_disabled_features_spawns_zero_entities_and_allocates_dummy_images() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<CloudVolumeMaterial>>();
+
+        let mut requested = thessa_graphics::RequestedGraphics::default();
+        requested.clouds.enabled = false;
+        requested.upper_atmosphere.aurora = false;
+        requested.gas_giant.enabled = false;
+        let resolved = thessa_graphics::ResolvedGraphicsSettings::from_requested(
+            &requested,
+            &thessa_graphics::Capabilities::unknown(),
+        );
+        app.insert_resource(GraphicsResolved(resolved));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(setup_beauty);
+        schedule.run(app.world_mut());
+
+        // Verify zero CloudShell entities spawned:
+        let mut cloud_shells = app.world_mut().query::<&CloudShell>();
+        assert_eq!(cloud_shells.iter(app.world()).count(), 0);
+
+        // Verify zero CloudVolume entities spawned:
+        let mut cloud_volumes = app.world_mut().query::<&CloudVolume>();
+        assert_eq!(cloud_volumes.iter(app.world()).count(), 0);
+
+        // Verify zero AuroraShell entities spawned:
+        let mut aurora_shells = app.world_mut().query::<&AuroraShell>();
+        assert_eq!(aurora_shells.iter(app.world()).count(), 0);
+
+        // Verify BeautyImages holds 1x1 dummy textures, NOT heavy multi-megabyte bakes:
+        let images = app.world().resource::<Assets<Image>>();
+        let beauty = app.world().resource::<BeautyImages>();
+        let low_img = images.get(&beauty.cloud_low).expect("dummy image exists");
+        assert_eq!(low_img.texture_descriptor.size.width, 1);
+        assert_eq!(low_img.texture_descriptor.size.height, 1);
+        assert_eq!(beauty.cloud_high, None);
+        assert_eq!(beauty.aurora_size, (1, 1));
+        assert_eq!(beauty.nereid_size, (1, 1));
+        assert_eq!(beauty.vesper_size, (1, 1));
     }
 }

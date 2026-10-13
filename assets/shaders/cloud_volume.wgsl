@@ -183,28 +183,28 @@ fn billow_cubic(p: vec3<f32>) -> f32 {
 }
 
 // Hierarchical cauliflower billow field with rotational scrambling & fluid advection:
-// Step-footprint filtered: higher octaves fade out when step_km cannot resolve their spatial frequency.
-// Note: Dynamic branch on w1/w2 skips Perlin evaluations for unresolved octaves; wavefront SIMD
-// divergence across varying ray chords executes active branches across the wave. Primarily an
-// image-quality anti-aliasing / bandlimiting filter to eliminate sub-step Nyquist aliasing.
+// Step-footprint filtered: higher octaves fade out to expectation/mean (0.42) when step_km cannot resolve
+// their spatial frequency, conserving energy without aliasing or brightness shifts.
 fn cauliflower_fbm(p: vec3<f32>, step_km: f32) -> f32 {
-    let b0 = billow_cubic(p * 0.072);
     // Bandlimiting against raymarch step: periods are ~14.0 km (b0), ~6.2 km (b1), ~2.8 km (b2)
+    let w0 = smoothstep(14.0, 4.0, step_km);
+    let b0 = mix(0.42, billow_cubic(p * 0.072), w0);
+
     let w1 = smoothstep(3.5, 0.8, step_km);
-    var b1 = 0.0;
-    var b2 = 0.0;
-    var w2 = 0.0;
+    var b1 = 0.42;
+    var b2 = 0.42;
     if (w1 > 0.01) {
         let p1 = ROT_OCTAVE * (p * 0.162) + vec3<f32>(1.73, 4.29, 8.11);
-        b1 = billow_cubic(p1);
-        w2 = smoothstep(1.8, 0.4, step_km);
+        b1 = mix(0.42, billow_cubic(p1), w1);
+        let w2 = smoothstep(1.8, 0.4, step_km);
         if (w2 > 0.01) {
             let p2 = ROT_OCTAVE_2 * (p1 * 2.21) + vec3<f32>(5.19, 1.87, 3.63);
-            b2 = billow_cubic(p2);
+            b2 = mix(0.42, billow_cubic(p2), w2);
         }
     }
-    let denom = max(0.40 + 0.38 * w1 + 0.22 * w2, 0.01);
-    return (b0 * 0.40 + b1 * (0.38 * w1) + b2 * (0.22 * w2)) / denom;
+    // Energy conservation: weights sum to 1.0 (0.40 + 0.38 + 0.22 = 1.00), and unresolvable octaves
+    // fade towards their statistical expectation (0.42), maintaining constant expected energy across LODs:
+    return b0 * 0.40 + b1 * 0.38 + b2 * 0.22;
 }
 
 // Sub-kilometer organic wispy turbulence bandlimited to ray step:
@@ -356,13 +356,21 @@ fn slab_density(
     }
 
     // Multi-scale convective fluid domain warp (curl-advected streamlines):
+    // Bandlimit small vortex turbulence when step_km cannot resolve the sub-5km scale:
+    let w_curl = smoothstep(5.0, 1.5, step_km);
     let warp_large = curl_warp3d(p_drift * 0.022) * 4.2;
-    let warp_turb = curl_warp3d(p_drift * 0.085 + warp_large * 0.3) * 1.6;
+    let warp_turb = curl_warp3d(p_drift * 0.085 + warp_large * 0.3) * (1.6 * w_curl);
     let p_w = p_drift + warp_large + warp_turb;
 
     // 1. Continuous continental cloud mass (Perlin macro connectivity, periods ~60 km and ~26 km):
     let p0 = perlin3d(p_w * 0.016) * 0.60 + 0.50;
-    let p1 = perlin3d(p_w * 0.038 + vec3<f32>(2.4, 5.1, 8.9)) * 0.50 + 0.50;
+    // Bandlimit p1 (period ~26 km, Nyquist ~13 km) to its expectation (0.50) when step_km > 10 km:
+    let w_macro = smoothstep(12.0, 4.0, step_km);
+    var p1 = 0.50;
+    if (w_macro > 0.01) {
+        let p1_raw = perlin3d(p_w * 0.038 + vec3<f32>(2.4, 5.1, 8.9)) * 0.50 + 0.50;
+        p1 = mix(0.50, p1_raw, w_macro);
+    }
     let macro_perlin = p0 * 0.70 + p1 * 0.30;
 
     // 2. Hierarchical 3-octave cauliflower billow field with irrational rotations:
@@ -609,7 +617,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     } else {
         // ====================================================================
-        // BACKEND A: Real-Time Stratified Ray Marching (60+ FPS iGPU / Radeon 880M)
+        // BACKEND A: Real-Time Stratified Ray Marching (bounded real-time budget on iGPU / Radeon 880M)
         // Midpoint numerical integration with space-skipping and Nyquist-bandlimited detail
         // ====================================================================
         let dt = chord / f32(steps);

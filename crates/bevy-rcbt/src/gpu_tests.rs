@@ -1521,3 +1521,139 @@ fn raster_surface_shader_validates_on_hardware() {
     let err = pollster::block_on(scope.pop());
     assert!(err.is_none(), "raster WGSL validation failed: {err:?}");
 }
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+fn cloud_optical_kernel_matches_cpu_reference_on_hardware() {
+    let gpu = Gpu::new();
+
+    let shader = r#"
+@group(0) @binding(0) var<storage, read> in_params: array<f32>;
+@group(0) @binding(1) var<storage, read_write> out_results: array<f32>;
+
+fn hg_phase(g: f32, cos_theta: f32) -> f32 {
+    let g2 = g * g;
+    let denom = max(1.0 + g2 - 2.0 * g * cos_theta, 1e-4);
+    return 0.07957747 * (1.0 - g2) / pow(denom, 1.5);
+}
+
+fn dual_lobe_phase(cos_theta: f32) -> f32 {
+    return 0.70 * hg_phase(0.76, cos_theta) + 0.30 * hg_phase(-0.30, cos_theta);
+}
+
+fn beer_powder(d: f32) -> f32 {
+    let b = exp(-d);
+    let p = 1.0 - exp(-d * 2.0);
+    return max(b, 2.0 * b * p);
+}
+
+fn powder_scatter_term(d: f32) -> f32 {
+    return 1.0 - exp(-d * 2.0);
+}
+
+fn convective_cumulus_gradient(h01: f32) -> f32 {
+    let base_lcl = smoothstep(0.065, 0.082, h01);
+    let dome_top = 1.0 - smoothstep(0.72, 0.98, h01);
+    let updraft = 1.0 + 0.40 * sin(clamp((h01 - 0.065) / 0.915, 0.0, 1.0) * 3.14159265);
+    return base_lcl * dome_top * updraft;
+}
+
+@compute @workgroup_size(64)
+fn test_optical_kernel(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if (idx >= arrayLength(&in_params)) {
+        return;
+    }
+    let param = in_params[idx];
+    let bp = beer_powder(param);
+    let ps = powder_scatter_term(param);
+    let phase = dual_lobe_phase(param * 0.2 - 1.0);
+    let hgrad = convective_cumulus_gradient(param * 0.1);
+
+    let base_out = idx * 4u;
+    out_results[base_out + 0u] = bp;
+    out_results[base_out + 1u] = ps;
+    out_results[base_out + 2u] = phase;
+    out_results[base_out + 3u] = hgrad;
+}
+"#;
+
+    let num_samples = 256;
+    let inputs: Vec<f32> = (0..num_samples)
+        .map(|i| (i as f32) / ((num_samples - 1) as f32) * 10.0)
+        .collect();
+    let in_words: Vec<u32> = inputs.iter().map(|&x| x.to_bits()).collect();
+    let out_words: Vec<u32> = vec![0u32; num_samples * 4];
+
+    let in_buf = gpu.buffer(&in_words, false);
+    let out_buf = gpu.buffer(&out_words, false);
+
+    gpu.dispatch(
+        shader,
+        &[("test_optical_kernel", 4)],
+        &[&in_buf, &out_buf],
+        &[],
+        &[1],
+    );
+
+    let readback_words = gpu.read(&out_buf);
+    let readback_floats: Vec<f32> = readback_words
+        .iter()
+        .map(|&w| f32::from_bits(w))
+        .collect();
+
+    let cpu_smoothstep = |e0: f32, e1: f32, x: f32| {
+        let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    let cpu_hg = |g: f32, c: f32| {
+        let g2 = g * g;
+        let denom = (1.0 + g2 - 2.0 * g * c).max(1e-4).powf(1.5);
+        0.07957747 * (1.0 - g2) / denom
+    };
+
+    for (i, &param) in inputs.iter().enumerate() {
+        let base = i * 4;
+        let gpu_bp = readback_floats[base];
+        let gpu_ps = readback_floats[base + 1];
+        let gpu_phase = readback_floats[base + 2];
+        let gpu_hgrad = readback_floats[base + 3];
+
+        // 1. Beer-powder
+        let cpu_b = (-param).exp();
+        let cpu_p = 1.0 - (-param * 2.0).exp();
+        let cpu_bp = cpu_b.max(2.0 * cpu_b * cpu_p);
+        assert!(
+            (gpu_bp - cpu_bp).abs() < 1e-5,
+            "sample {i} param {param}: gpu_bp {gpu_bp} vs cpu_bp {cpu_bp}"
+        );
+
+        // 2. Powder scatter
+        let cpu_ps = 1.0 - (-param * 2.0).exp();
+        assert!(
+            (gpu_ps - cpu_ps).abs() < 1e-5,
+            "sample {i} param {param}: gpu_ps {gpu_ps} vs cpu_ps {cpu_ps}"
+        );
+
+        // 3. Dual-lobe phase
+        let cos_theta = param * 0.2 - 1.0;
+        let cpu_phase = 0.70 * cpu_hg(0.76, cos_theta) + 0.30 * cpu_hg(-0.30, cos_theta);
+        assert!(
+            (gpu_phase - cpu_phase).abs() < 1e-4,
+            "sample {i} cos_theta {cos_theta}: gpu_phase {gpu_phase} vs cpu_phase {cpu_phase}"
+        );
+
+        // 4. Convective gradient
+        let h01 = param * 0.1;
+        let base_lcl = cpu_smoothstep(0.065, 0.082, h01);
+        let dome_top = 1.0 - cpu_smoothstep(0.72, 0.98, h01);
+        let updraft = 1.0
+            + 0.40
+                * (((h01 - 0.065) / 0.915).clamp(0.0, 1.0) * std::f32::consts::PI).sin();
+        let cpu_hgrad = base_lcl * dome_top * updraft;
+        assert!(
+            (gpu_hgrad - cpu_hgrad).abs() < 1e-5,
+            "sample {i} h01 {h01}: gpu_hgrad {gpu_hgrad} vs cpu_hgrad {cpu_hgrad}"
+        );
+    }
+}

@@ -256,7 +256,7 @@ impl Default for AtmosphereSettings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CloudIntegratorRequest {
-    /// Real-time stratified ray marching with space skipping (tuned for 60+ FPS iGPU / Radeon 880M).
+    /// Real-time stratified ray marching with space skipping (bounded real-time budget on iGPU / Radeon 880M).
     #[default]
     March,
     /// Stochastic scattering approximation with 1-sample Woodcock free-flight estimator.
@@ -267,7 +267,9 @@ impl CloudIntegratorRequest {
     pub fn from_str_name(name: &str) -> Option<Self> {
         match name.to_ascii_lowercase().as_str() {
             "march" | "raymarch" | "0" => Some(Self::March),
-            "stochastic" | "pathtrace" | "pt" | "1" => Some(Self::Stochastic),
+            "stochastic" | "1" => Some(Self::Stochastic),
+            // Deprecated legacy aliases for Stochastic:
+            "pathtrace" | "pt" => Some(Self::Stochastic),
             _ => None,
         }
     }

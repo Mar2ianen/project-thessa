@@ -933,10 +933,20 @@ fn stop_capture(
         metadata.graphics.preset = resolved.0.preset_label.clone();
         metadata.graphics.ray_tracing = resolved.0.ray_tracing.as_str().to_string();
         metadata.graphics.resolved = resolved.0.as_meta_map();
-        let effective_backend = crate::beauty::effective_cloud_backend(&resolved.0);
+        let active_repr = resolved.0.active_cloud_representation();
+        let effective_backend = match active_repr {
+            thessa_graphics::ActiveCloudRepresentation::Disabled => "disabled",
+            thessa_graphics::ActiveCloudRepresentation::Shell => "shell",
+            thessa_graphics::ActiveCloudRepresentation::VolumeMarch => "march",
+            thessa_graphics::ActiveCloudRepresentation::VolumeStochastic => "stochastic",
+        };
         metadata.graphics.resolved.insert(
             "effective_cloud_backend".to_string(),
-            effective_backend.as_str().to_string(),
+            effective_backend.to_string(),
+        );
+        metadata.graphics.resolved.insert(
+            "active_cloud_representation".to_string(),
+            active_repr.as_str().to_string(),
         );
     } else {
         metadata.graphics.preset = "unknown".to_string();

@@ -7,6 +7,14 @@ APIs, data formats, and save files are not stable before `0.1.0`.
 
 ## [Unreleased]
 
+### Fixed
+
+- False effective cloud telemetry: introduced `ActiveCloudRepresentation` (`Disabled`, `Shell`, `VolumeMarch`, `VolumeStochastic`) in `thessa-graphics` and report truth in `perf.rs`.
+- Disabled feature resource allocation in `setup_beauty`: multi-megabyte texture bakes, mesh displacements, and entity spawning are bypassed when clouds, gas giants, or aurora are disabled, using 1x1 dummy images (saving 10+ MiB RAM and startup latency).
+- Nyquist bandlimiting across the cloud volume pipeline in `cloud_volume.wgsl`: octaves fade to their mathematical expectation/mean (0.42 for billow, 0.50 for macro Perlin) to strictly conserve field energy across varying view step chords.
+- Convergence and parity verification: replaced clamped integration test with unclamped Simpson 1/3 solver and exact GPU boundary-reset trapezoidal model in `thessa-atmosphere`, plus genuine hardware compute readback testing on AMD Radeon 880M in `thessa-bevy-rcbt`.
+- Documented physical ($h \approx 3\text{ km}$) vs presentation ($h \in [25.6, 44.8]\text{ km}$) cloud altitude mapping and scene-depth limitation in `docs/14_VISUAL_ATMOSPHERE.md`.
+
 ### Added
 
 - Low-deck volumetric cloud march (`[clouds] volumetric`, Medium/High; Low

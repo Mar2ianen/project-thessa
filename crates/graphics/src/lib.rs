@@ -16,8 +16,8 @@ mod settings;
 
 pub use metadata::{SettingKind, SettingMeta, describe};
 pub use resolve::{
-    Capabilities, ResolvedBackend, ResolvedGraphicsSettings, ResolvedMaterialStorage,
-    ResolvedRayTracing, ResolvedTerrainRender,
+    ActiveCloudRepresentation, Capabilities, ResolvedBackend, ResolvedGraphicsSettings,
+    ResolvedMaterialStorage, ResolvedRayTracing, ResolvedTerrainRender,
 };
 pub use settings::{
     AtmosphereSettings, AuroraQuality, BackendRequest, CloudIntegratorRequest, CloudSettings,

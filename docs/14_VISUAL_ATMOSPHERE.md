@@ -299,6 +299,17 @@ Nyquist bandlimited noise octaves. Low = shells, `enabled = false` hides every
 deck (free). Low-deck terrain shadows sample the deck bake using physical
 cumulus deck altitude (~3 km), distinct from the exaggerated orbital slab radius.
 
+### 10.1 Physical vs Presentation Altitude Coordinate Mapping
+
+The cloud system deliberately decouples physical ground coordinates from presentation-space volumetric shell geometry:
+
+- **Physical Ground Shadows ($h \approx 3\text{ km}$):**
+  Surface terrain shadow projection (`CLOUD_SHADOW_DECK_HEIGHT_M = 3000.0` in `beauty.rs` and `apps/client/src/terrain.rs`) uses true tropospheric altitude (~3 km above sea level) for sun-shadow parallax displacement across mountains, valleys, and coastlines.
+- **Orbital Presentation Volume Slab ($h \in [25.6, 44.8]\text{ km}$):**
+  The volumetric raymarch slab (`CLOUD_SLAB_LOW = (1.008, 1.014)` in `beauty.rs`, mapping on Thessa to $h \in [25.6, 44.8]\text{ km}$) uses an exaggerated radial altitude and slab thickness (~19.2 km). At planetary scale ($R \approx 3200\text{ km}$), a 3 km physical deck is sub-pixel from orbital and regional camera altitudes, flattening the silhouette and losing cloud deck presence against planetary curvature. Exaggerated presentation coordinates provide prominent cauliflower limb profiles, clear parallax depth, and visible crepuscular terminator shading.
+- **Scene-Depth Buffer Limitation:**
+  Because the volume deck is rendered as a bounding sphere shell with analytical ray-sphere slab intersection in presentation coordinates, it does not currently bind or sample the raster G-buffer scene depth buffer for early ray termination on occluding terrain geometry. True per-pixel G-buffer depth composition is reserved for the unified engine migration (`docs/39`).
+
 Future cloud rendering may use the atmosphere's lighting/transmittance queries, but cloud state should remain separate.
 
 The intended cloud model is warp-safe and deterministic:

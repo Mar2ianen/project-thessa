@@ -253,6 +253,83 @@ pub fn march_step_m(slab: CloudSlab, steps: u32) -> f64 {
     slab.thickness_m() / steps.clamp(1, 256) as f64
 }
 
+/// Unclamped high-precision reference integrator using composite Simpson's 1/3 rule.
+/// Evaluates at an even number of intervals without clamp limits for ground-truth convergence testing.
+pub fn integrate_slab_unclamped_simpson(
+    density_at: impl Fn(f64) -> f64,
+    t0: f64,
+    t1: f64,
+    intervals: usize,
+    extinction_per_m: f64,
+) -> (f64, f64) {
+    if !t0.is_finite() || !t1.is_finite() || t1 <= t0 || intervals == 0 {
+        return (1.0, 0.0);
+    }
+    let k = extinction_per_m.max(0.0);
+    if k == 0.0 {
+        return (1.0, 0.0);
+    }
+    let n = (intervals.max(2) / 2) * 2;
+    let dt = (t1 - t0) / n as f64;
+    let mut sum = density_at(t0).clamp(0.0, 10.0) + density_at(t1).clamp(0.0, 10.0);
+    for i in 1..n {
+        let t = t0 + i as f64 * dt;
+        let d = density_at(t).clamp(0.0, 10.0);
+        let weight = if i % 2 == 1 { 4.0 } else { 2.0 };
+        sum += weight * d;
+    }
+    let optical_depth = (sum * dt / 3.0) * k;
+    let transmittance = (-optical_depth).exp();
+    (transmittance, optical_depth)
+}
+
+/// Exact numerical mirror of the GPU numerical quadrature scheme in WGSL Backend A:
+/// - Sample position at step midpoint: `t = t0 + (i + 0.5) * dt`
+/// - Boundary-reset trapezoidal weighting: `select((d + prev) * 0.5, d, prev < 0)`
+/// - Clamps transmittance to 0.0 when below 1e-4 threshold
+pub fn integrate_slab_gpu_trapezoidal_model(
+    density_at: impl Fn(f64) -> f64,
+    t0: f64,
+    t1: f64,
+    steps: usize,
+    extinction_per_m: f64,
+) -> (f64, f64) {
+    if !t0.is_finite() || !t1.is_finite() || t1 <= t0 || steps == 0 {
+        return (1.0, 0.0);
+    }
+    let k = extinction_per_m.max(0.0);
+    if k == 0.0 {
+        return (1.0, 0.0);
+    }
+    let dt = (t1 - t0) / steps as f64;
+    let mut transmittance = 1.0;
+    let mut optical_depth = 0.0;
+    let mut prev_density = -1.0;
+
+    for i in 0..steps {
+        let t = t0 + (i as f64 + 0.5) * dt;
+        let d = density_at(t);
+        if !d.is_finite() || d <= 0.001 {
+            prev_density = -1.0;
+            continue;
+        }
+        let integ_density = if prev_density < 0.0 {
+            d
+        } else {
+            (d + prev_density) * 0.5
+        };
+        prev_density = d;
+        let step_tau = integ_density * k * dt;
+        transmittance *= (-step_tau).exp();
+        optical_depth += step_tau;
+        if transmittance < 1e-4 {
+            transmittance = 0.0;
+            break;
+        }
+    }
+    (transmittance, optical_depth)
+}
+
 // ---------------------------------------------------------------------------
 // Schneider-style shaping (Horizon Zero Dawn cloudscapes): coverage remap,
 // type-dependent height gradient, Beer-Powder lighting, dual-lobe phase.
@@ -671,12 +748,18 @@ mod tests {
         assert!(deep[0] < shallow[0] * 0.6);
     }
 
+    // -----------------------------------------------------------------------
+    // Pure CPU Analytical Identity Tests:
+    // Verify that CPU formulas in `thessa-atmosphere` are algebraically identical
+    // to the mathematical definitions authored for the GPU WGSL shaders.
+    // NOTE: These are CPU-side equation checks in f64, NOT GPU execution readbacks.
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn differential_parity_beer_powder_and_scatter() {
-        // Evaluate across a dense grid of 1,000 optical depths [0.0, 10.0]:
+    fn analytical_identity_beer_powder_and_scatter() {
+        // Evaluate across 1,000 optical depths [0.0, 10.0]:
         for i in 0..=1000 {
             let d = (i as f64) * 0.01;
-            // WGSL GPU exact formulas from cloud_volume.wgsl:
             let wgsl_beer = (-d).exp();
             let wgsl_powder = 1.0 - (-d * 2.0).exp();
             let wgsl_beer_powder = wgsl_beer.max(2.0 * wgsl_beer * wgsl_powder);
@@ -697,12 +780,9 @@ mod tests {
     }
 
     #[test]
-    fn differential_parity_dual_lobe_phase() {
-        // Evaluate across 200 cos_theta angles in [-1.0, 1.0]:
+    fn analytical_identity_dual_lobe_phase() {
         for i in 0..=200 {
             let cos_theta = -1.0 + (i as f64) * 0.01;
-            // WGSL GPU exact formulation from cloud_volume.wgsl:
-            // phase = 0.70 * hg_phase(0.76, cos_theta) + 0.30 * hg_phase(-0.30, cos_theta)
             let wgsl_hg = |g: f64, c: f64| {
                 let g2 = g * g;
                 let denom = (1.0 + g2 - 2.0 * g * c).max(1e-4).powf(1.5);
@@ -719,7 +799,7 @@ mod tests {
     }
 
     #[test]
-    fn differential_parity_convective_gradient() {
+    fn analytical_identity_convective_gradient() {
         for i in 0..=200 {
             let h01 = (i as f64) * 0.005;
             let wgsl_sm = |e0: f64, e1: f64, x: f64| {
@@ -742,34 +822,135 @@ mod tests {
         }
     }
 
-    #[test]
-    fn convergence_test_trapezoidal_slab_quadrature() {
-        // Test convergence on smooth continuous pulse density profile rho(t) = exp(-((t - 0.5)/0.2)^2)
-        // High-resolution reference (N = 8192 steps):
-        let profile = |t: f64| (-((t - 0.5) / 0.2).powi(2)).exp();
-        let (ref_trans, ref_depth) = integrate_slab(profile, 0.0, 1.0, 8192, 2.0);
+    // -----------------------------------------------------------------------
+    // Rigorous Numerical Quadrature Tests for the GPU Algorithm Model:
+    // Tests the exact numerical scheme used in WGSL Backend A:
+    // `select((d + prev) * 0.5, d, prev < 0)`
+    // against exact analytical integrals and an independent unclamped Simpson solver.
+    // -----------------------------------------------------------------------
 
-        // Verify monotonic reduction of quadrature error as step budget increases:
+    #[test]
+    fn convergence_gpu_trapezoidal_constant_density_matches_analytic() {
+        // For a constant density rho(t) = C = 1.5, k = 2.0 on [0, 1]:
+        // Exact analytic optical depth = C * k = 3.0.
+        // Exact analytic transmittance = exp(-3.0) = 0.049787068367863944...
+        let c = 1.5;
+        let k = 2.0;
+        let exact_depth: f64 = c * k;
+        let exact_trans = (-exact_depth).exp();
+
+        // The GPU boundary-reset trapezoidal scheme must reproduce the EXACT analytic
+        // solution for any step count >= 2, because on step 0: integ = c, on steps 1..N:
+        // integ = (c + c)/2 = c, so sum = c * N * dt = c.
+        for steps in [2, 4, 8, 16, 24, 32, 64, 128] {
+            let (trans, depth) =
+                integrate_slab_gpu_trapezoidal_model(|_| c, 0.0, 1.0, steps, k);
+            assert!(
+                (depth - exact_depth).abs() < 1e-12,
+                "steps={steps}: depth={depth}, exact={exact_depth}"
+            );
+            assert!(
+                (trans - exact_trans).abs() < 1e-12,
+                "steps={steps}: trans={trans}, exact={exact_trans}"
+            );
+        }
+    }
+
+    #[test]
+    fn convergence_gpu_trapezoidal_linear_density_converges_to_analytic() {
+        // For linear density rho(t) = 2.0 * t, k = 1.5 on [0, 1]:
+        // Exact analytic integral of rho(t) is 2.0 * [t^2 / 2]_0^1 = 1.0.
+        // Exact analytic depth = 1.0 * k = 1.5.
+        // Exact analytic transmittance = exp(-1.5) = 0.22313016014842982...
+        let k = 1.5;
+        let exact_depth: f64 = 1.5;
+        let exact_trans = (-exact_depth).exp();
+
         let mut prev_depth_err = f64::MAX;
         let mut prev_trans_err = f64::MAX;
+
+        for steps in [4, 8, 16, 32, 64, 128, 256] {
+            let (trans, depth) =
+                integrate_slab_gpu_trapezoidal_model(|t| 2.0 * t, 0.0, 1.0, steps, k);
+            let depth_err = (depth - exact_depth).abs();
+            let trans_err = (trans - exact_trans).abs();
+
+            assert!(
+                depth_err < prev_depth_err,
+                "steps={steps}: depth_err {depth_err} >= prev {prev_depth_err}"
+            );
+            assert!(
+                trans_err < prev_trans_err,
+                "steps={steps}: trans_err {trans_err} >= prev {prev_trans_err}"
+            );
+
+            prev_depth_err = depth_err;
+            prev_trans_err = trans_err;
+        }
+
+        // At 256 steps, first-order boundary error is < 0.006 (exact formula error is 1.5/256 ≈ 0.00586):
+        assert!(prev_depth_err < 0.006);
+        assert!(prev_trans_err < 0.002);
+    }
+
+    #[test]
+    fn convergence_gpu_trapezoidal_step_discontinuity_enters_cleanly() {
+        // Step discontinuity: cloud deck entered at t = 0.30:
+        // rho(t) = 0 for t < 0.30, rho(t) = 1.2 for t >= 0.30.
+        // Exact analytic integral on [0, 1] is (1.0 - 0.30) * 1.2 = 0.84.
+        let k = 2.0;
+        let exact_depth: f64 = 0.84 * k; // 1.68
+        let _exact_trans = (-exact_depth).exp();
+
+        let density = |t: f64| if t >= 0.30 { 1.2 } else { 0.0 };
+
         for steps in [8, 16, 32, 64, 128, 256] {
-            let (trans, depth) = integrate_slab(profile, 0.0, 1.0, steps, 2.0);
+            let (trans, depth) =
+                integrate_slab_gpu_trapezoidal_model(density, 0.0, 1.0, steps, k);
+            let depth_err = (depth - exact_depth).abs();
+
+            // Numerical integration of a discontinuous step function has discrete boundary
+            // error bounded by the cell width dt = 1.0 / steps * (jump height * k):
+            let max_cell_error = 1.2 * k / steps as f64;
+            assert!(
+                depth_err <= max_cell_error,
+                "steps={steps}: depth_err {depth_err} exceeded cell bound {max_cell_error}"
+            );
+
+            // Transmittance must remain strictly in [0, 1]:
+            assert!(trans > 0.0 && trans < 1.0);
+        }
+    }
+
+    #[test]
+    fn convergence_gpu_trapezoidal_smooth_pulse_vs_unclamped_simpson() {
+        // Gaussian pulse rho(t) = exp(-((t - 0.5)/0.15)^2), k = 3.0 on [0, 1].
+        // Reference computed via unclamped Simpson's 1/3 rule with 16,384 intervals:
+        let profile = |t: f64| (-((t - 0.5) / 0.15).powi(2)).exp();
+        let k = 3.0;
+        let (ref_trans, ref_depth) =
+            integrate_slab_unclamped_simpson(profile, 0.0, 1.0, 16384, k);
+
+        // The numerical error relative to the unclamped 16,384-step Simpson reference
+        // is strictly bounded by the 0.001 procedural density floor cutoff tail (< 3e-4):
+        for steps in [16, 32, 64, 128, 256] {
+            let (trans, depth) =
+                integrate_slab_gpu_trapezoidal_model(profile, 0.0, 1.0, steps, k);
             let depth_err = (depth - ref_depth).abs();
             let trans_err = (trans - ref_trans).abs();
 
             assert!(
-                depth_err < prev_depth_err,
-                "steps={steps}: depth error {depth_err} did not decrease vs {prev_depth_err}"
+                depth_err < 3e-4,
+                "steps={steps}: depth_err {depth_err} exceeded bound 3e-4"
             );
             assert!(
-                trans_err < prev_trans_err,
-                "steps={steps}: trans error {trans_err} did not decrease vs {prev_trans_err}"
+                trans_err < 3e-4,
+                "steps={steps}: trans_err {trans_err} exceeded bound 3e-4"
             );
-            prev_depth_err = depth_err;
-            prev_trans_err = trans_err;
         }
-        // At 256 steps, error is < 1e-4:
-        assert!(prev_depth_err < 1e-4);
-        assert!(prev_trans_err < 1e-4);
+
+        let (_, final_depth) = integrate_slab_gpu_trapezoidal_model(profile, 0.0, 1.0, 256, k);
+        let diff = (final_depth - ref_depth).abs();
+        assert!(diff < 3e-4, "diff={diff}");
     }
 }

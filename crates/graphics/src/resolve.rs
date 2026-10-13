@@ -99,6 +99,28 @@ impl ResolvedMaterialStorage {
     }
 }
 
+/// Active representation used for rendering clouds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActiveCloudRepresentation {
+    #[default]
+    Disabled,
+    Shell,
+    VolumeMarch,
+    VolumeStochastic,
+}
+
+impl ActiveCloudRepresentation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Shell => "shell",
+            Self::VolumeMarch => "volume_march",
+            Self::VolumeStochastic => "volume_stochastic",
+        }
+    }
+}
+
 /// Runtime capability input for resolution.
 ///
 /// Adapter details are only known after renderer init, which happens after
@@ -393,6 +415,26 @@ impl ResolvedGraphicsSettings {
         }
     }
 
+    /// Evaluates the true runtime representation selected for clouds:
+    /// Disabled when clouds are off, Shell when volumetric is off,
+    /// and VolumeMarch / VolumeStochastic when volume marching.
+    pub fn active_cloud_representation(&self) -> ActiveCloudRepresentation {
+        if !self.clouds_enabled {
+            ActiveCloudRepresentation::Disabled
+        } else if !self.clouds_volumetric {
+            ActiveCloudRepresentation::Shell
+        } else {
+            match self.cloud_integrator {
+                crate::settings::CloudIntegratorRequest::March => {
+                    ActiveCloudRepresentation::VolumeMarch
+                }
+                crate::settings::CloudIntegratorRequest::Stochastic => {
+                    ActiveCloudRepresentation::VolumeStochastic
+                }
+            }
+        }
+    }
+
     /// Flat string map for perf capture metadata (`resolved` section).
     pub fn as_meta_map(&self) -> BTreeMap<String, String> {
         let mut map = BTreeMap::new();
@@ -447,6 +489,10 @@ impl ResolvedGraphicsSettings {
             self.shadow_map_size.to_string(),
         );
         map.insert("clouds".to_string(), self.clouds_enabled.to_string());
+        map.insert(
+            "active_cloud_representation".to_string(),
+            self.active_cloud_representation().as_str().to_string(),
+        );
         map.insert(
             "clouds_volumetric".to_string(),
             self.clouds_volumetric.to_string(),
@@ -677,6 +723,63 @@ mod storage_tests {
                 .get("material_storage")
                 .map(String::as_str),
             Some("microstore_compact")
+        );
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn active_cloud_representation_truth_matrix() {
+        let mut r = ResolvedGraphicsSettings::default();
+
+        // 1. Clouds disabled -> Disabled representation regardless of volume/integrator:
+        r.clouds_enabled = false;
+        r.clouds_volumetric = true;
+        r.cloud_integrator = crate::settings::CloudIntegratorRequest::March;
+        assert_eq!(
+            r.active_cloud_representation(),
+            ActiveCloudRepresentation::Disabled
+        );
+        assert_eq!(r.active_cloud_representation().as_str(), "disabled");
+        assert_eq!(
+            r.as_meta_map()
+                .get("active_cloud_representation")
+                .map(String::as_str),
+            Some("disabled")
+        );
+
+        // 2. Clouds enabled, volumetric false -> Shell representation:
+        r.clouds_enabled = true;
+        r.clouds_volumetric = false;
+        assert_eq!(
+            r.active_cloud_representation(),
+            ActiveCloudRepresentation::Shell
+        );
+        assert_eq!(r.active_cloud_representation().as_str(), "shell");
+        assert_eq!(
+            r.as_meta_map()
+                .get("active_cloud_representation")
+                .map(String::as_str),
+            Some("shell")
+        );
+
+        // 3. Clouds enabled, volumetric true, March -> VolumeMarch:
+        r.clouds_volumetric = true;
+        r.cloud_integrator = crate::settings::CloudIntegratorRequest::March;
+        assert_eq!(
+            r.active_cloud_representation(),
+            ActiveCloudRepresentation::VolumeMarch
+        );
+        assert_eq!(r.active_cloud_representation().as_str(), "volume_march");
+
+        // 4. Clouds enabled, volumetric true, Stochastic -> VolumeStochastic:
+        r.cloud_integrator = crate::settings::CloudIntegratorRequest::Stochastic;
+        assert_eq!(
+            r.active_cloud_representation(),
+            ActiveCloudRepresentation::VolumeStochastic
+        );
+        assert_eq!(
+            r.active_cloud_representation().as_str(),
+            "volume_stochastic"
         );
     }
 }

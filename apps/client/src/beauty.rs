@@ -339,8 +339,9 @@ fn bake_clouds(
 // parallax offset for the physical deck height (the impostor shell rides an
 // exaggerated radius, never used here).
 
-/// Physical low-deck altitude for the shadow parallax (metres).
-pub(crate) const CLOUD_SHADOW_DECK_HEIGHT_M: f64 = 3000.0;
+/// Physical low-deck altitude for the shadow parallax (metres):
+/// Matches the mid-slab height of [`CLOUD_SLAB_LOW`] ((1.008 + 1.014)/2 - 1.0 = 0.011 * 3200 km = 35.2 km).
+pub(crate) const CLOUD_SHADOW_DECK_HEIGHT_M: f64 = 35_200.0;
 /// Deep-core shadow depth; thin skirts fade out through the alpha shaping.
 pub(crate) const CLOUD_SHADOW_STRENGTH: f32 = 0.45;
 
@@ -1154,13 +1155,13 @@ pub(crate) fn volume_steps(steps: u32) -> f32 {
 }
 
 /// Cloud backend selection encoded in `shape.w`:
-/// 0.0 = Real-time adaptive closed-form quadrature (60+ FPS, tuned for Radeon 880M)
-/// 1.0 = Volumetric Path Tracing with Woodcock / Delta tracking (unbiased PT / RT discrete GPU mode)
+/// 0.0 = Real-time stratified ray marching (Backend A, tuned for Radeon 880M)
+/// 1.0 = Stochastic scattering approximation (Backend B, candidate real-time integrator)
 pub(crate) fn cloud_backend_mode(r: &ResolvedGraphicsSettings) -> f32 {
     static BACKEND_OVERRIDE: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
     let override_val = BACKEND_OVERRIDE.get_or_init(|| {
         std::env::var("THESSA_CLOUD_BACKEND").ok().and_then(|val| {
-            if val.eq_ignore_ascii_case("pt") || val == "1" || val.eq_ignore_ascii_case("pathtrace") {
+            if val.eq_ignore_ascii_case("pt") || val == "1" || val.eq_ignore_ascii_case("pathtrace") || val.eq_ignore_ascii_case("stochastic") {
                 Some(1.0)
             } else if val.eq_ignore_ascii_case("march") || val == "0" || val.eq_ignore_ascii_case("raymarch") {
                 Some(0.0)
@@ -1172,10 +1173,15 @@ pub(crate) fn cloud_backend_mode(r: &ResolvedGraphicsSettings) -> f32 {
     if let Some(mode) = *override_val {
         return mode;
     }
-    if r.rt_clouds {
-        1.0
-    } else {
-        0.0
+    match r.cloud_integrator {
+        thessa_graphics::CloudIntegratorRequest::Stochastic => 1.0,
+        thessa_graphics::CloudIntegratorRequest::March => {
+            if r.rt_clouds {
+                1.0
+            } else {
+                0.0
+            }
+        }
     }
 }
 

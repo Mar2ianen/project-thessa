@@ -166,8 +166,8 @@ const ROT_OCTAVE_2 = mat3x3<f32>(
     vec3<f32>( 0.585501,  0.000000, -0.810672)
 );
 
-// Incompressible (divergence-free) 3D curl warp field:
-// Transforms rigid Cartesian coordinates into swirling aerodynamic atmospheric vortices:
+// Procedural atmospheric domain warp (swirl turbulence):
+// Empirical coordinate displacement (not mathematically divergence-free):
 fn curl_warp3d(p: vec3<f32>) -> vec3<f32> {
     let w0 = perlin3d(p);
     let w1 = perlin3d(p + vec3<f32>(3.71, 1.29, 5.87));
@@ -183,24 +183,32 @@ fn billow_cubic(p: vec3<f32>) -> f32 {
 }
 
 // Hierarchical cauliflower billow field with rotational scrambling & fluid advection:
-// Strictly bandlimited below the Nyquist frequency of the march (periods ~14.0 km, ~6.2 km, ~2.8 km)
-fn cauliflower_fbm(p: vec3<f32>) -> f32 {
+// Step-footprint filtered: higher octaves fade out when step_km cannot resolve their spatial frequency
+fn cauliflower_fbm(p: vec3<f32>, step_km: f32) -> f32 {
     let b0 = billow_cubic(p * 0.072);
     let p1 = ROT_OCTAVE * (p * 0.162) + vec3<f32>(1.73, 4.29, 8.11);
     let b1 = billow_cubic(p1);
     let p2 = ROT_OCTAVE_2 * (p1 * 2.21) + vec3<f32>(5.19, 1.87, 3.63);
     let b2 = billow_cubic(p2);
-    return b0 * 0.40 + b1 * 0.38 + b2 * 0.22;
+    // Bandlimiting against raymarch step: periods are ~14.0 km (b0), ~6.2 km (b1), ~2.8 km (b2)
+    let w1 = smoothstep(3.5, 0.8, step_km);
+    let w2 = smoothstep(1.8, 0.4, step_km);
+    let denom = max(0.40 + 0.38 * w1 + 0.22 * w2, 0.01);
+    return (b0 * 0.40 + b1 * (0.38 * w1) + b2 * (0.22 * w2)) / denom;
 }
 
-// Sub-kilometer organic wispy turbulence strictly bandlimited to Nyquist:
-fn edge_wisps(p: vec3<f32>) -> f32 {
+// Sub-kilometer organic wispy turbulence bandlimited to ray step:
+fn edge_wisps(p: vec3<f32>, step_km: f32) -> f32 {
+    let w = smoothstep(1.5, 0.3, step_km);
+    if (w <= 0.01) {
+        return 0.50; // Neutral midpoint when unresolved
+    }
     let q = p * 0.38 + vec3<f32>(2.31, 7.14, 4.43);
     let warp = curl_warp3d(q * 0.8) * 0.45;
     let n0 = perlin3d(q + warp) * 0.50 + 0.50;
     let q2 = ROT_OCTAVE_2 * (q + warp) * 1.85 + vec3<f32>(4.17, 9.31, 1.73);
     let n1 = perlin3d(q2) * 0.50 + 0.50;
-    return n0 * 0.70 + n1 * 0.30;
+    return mix(0.50, n0 * 0.70 + n1 * 0.30, w);
 }
 
 // Jorge Jimenez's Interleaved Gradient Noise (Call of Duty):
@@ -348,11 +356,12 @@ fn slab_density(
     let macro_perlin = p0 * 0.70 + p1 * 0.30;
 
     // 2. Hierarchical 3-octave cauliflower billow field with irrational rotations:
-    let cauli = cauliflower_fbm(p_w);
+    let cauli = cauliflower_fbm(p_w, step_km);
 
-    // 3. Convective cauliflower sculpting:
+    // 3. Convective cauliflower sculpting (modulated by cloud.params.w DETAIL_AMP):
     // Solid flat macro foundation at the base; buoyant cauliflower plumes bubbling upward
-    let billow_lift = mix(0.12, 0.60, smoothstep(0.08, 0.65, h01));
+    let detail_amp = max(cloud.params.w, 0.1);
+    let billow_lift = mix(0.12, 0.60, smoothstep(0.08, 0.65, h01)) * detail_amp;
     let shape_body = macro_perlin * (1.0 - billow_lift) + cauli * billow_lift;
 
     // 4. Coverage remap (Schneider):
@@ -369,12 +378,12 @@ fn slab_density(
 
     let base_cloud = (shape_body - threshold) / max(1.0 - threshold, 0.04);
 
-    // 5. Edge-only Schneider erosion:
+    // 5. Edge-only Schneider erosion (bandlimited to step_km, modulated by detail_amp):
     // Crucial: erosion is suppressed at the condensation base (h01 < 0.12) to preserve a razor-flat horizontal shelf!
-    let wisps = edge_wisps(p_w);
+    let wisps = edge_wisps(p_w, step_km);
     let edge_factor = 1.0 - clamp(base_cloud, 0.0, 1.0);
     let base_erosion = smoothstep(0.09, 0.28, h01);
-    let erosion = (1.0 - wisps) * (0.35 * base_erosion * edge_factor);
+    let erosion = (1.0 - wisps) * (0.35 * base_erosion * edge_factor * detail_amp);
     let final_shape = max(base_cloud - erosion, 0.0);
 
     // 6. C^1 Continuous boundary power curve (crisp droplet boundary):
@@ -477,19 +486,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
 
-    // Coarse clear-sky gate: entry/mid/exit base taps.
-    let e0 = base_at(ro + rd * t0);
-    let e1 = base_at(ro + rd * (t0 + (t1 - t0) * 0.5));
-    let e2 = base_at(ro + rd * max(t1 - 1e-4, t0));
-    if (e0 < 0.02 && e1 < 0.02 && e2 < 0.02) {
-        discard;
-    }
-
     let sun_dir = normalize(cloud.sun.xyz + vec3<f32>(1e-9, 0.0, 0.0));
     let sun_vis = clamp(cloud.sun.w, 0.0, 1.0);
     let cos_theta = dot(rd, sun_dir);
     let thick = max(top - bot, 1e-6);
     let inv_radius = 1.0 / radius;
+    let shadow_span = max(cloud.params.z, 0.01) * 2.0;
 
     let chord = max(t1 - t0, 1e-5);
     let w_entry = weather_at(ro + rd * t0, drift);
@@ -503,8 +505,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     if (use_pathtrace) {
         // ====================================================================
-        // BACKEND B: Standalone Volumetric Path Tracer (FastRT from Scratch)
-        // Zero bevy_solari! Closed-form primary RTE + Secondary Woodcock Delta Tracking
+        // BACKEND B: Stochastic Volumetric Scattering Approximation
+        // Candidate Real-Time Integrator (Zero Solari Dependency)
+        // Evaluates single-scatter RTE with 1-sample Woodcock free-flight estimator
+        // for higher-order multiple scattering; not an unbiased reference PT.
         // ====================================================================
         let dt = chord / f32(steps);
         let step_km = dt * radius_km;
@@ -536,9 +540,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let step_trans = exp(-step_tau);
 
             // 1. Next-Event Estimation towards star (micro-shadow tap for crisp crevices):
-            let shadow_d0 = 180.0 * inv_radius;
-            let shadow_d1 = 650.0 * inv_radius;
-            let shadow_d2 = 1800.0 * inv_radius;
+            let shadow_d0 = 180.0 * inv_radius * shadow_span;
+            let shadow_d1 = 650.0 * inv_radius * shadow_span;
+            let shadow_d2 = 1800.0 * inv_radius * shadow_span;
             let s0 = slab_density(p_sample + sun_dir * shadow_d0, drift, weather, 0.80, false);
             let s1 = slab_density(p_sample + sun_dir * shadow_d1, drift, weather, 2.20, false);
             let s2 = slab_density(p_sample + sun_dir * shadow_d2, drift, weather, 5.00, false);
@@ -553,8 +557,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let phase_direct = 0.70 * hg_phase(0.76, cos_theta) + 0.30 * hg_phase(-0.30, cos_theta);
 
             // 2. Secondary Woodcock Delta Tracking for Higher-Order Participating Medium Scatter:
-            // Samples secondary free flight in medium to evaluate local diffuse radiance
-            let max_majorant = max(ext * cloud.params.x * 5.0, 0.1);
+            // Conservative extinction majorant: max procedural density is 6.2 * params.x,
+            // so 6.5 * ext * params.x guarantees sigma_t(x) <= sigma_bar analytically.
+            let max_majorant = max(ext * cloud.params.x * 6.5, 0.1);
             rng_seed = rng_seed * 1664525u + 1013904223u;
             let xi1 = max(f32((rng_seed >> 8u) & 0x00FFFFFFu) * (1.0 / 16777216.0), 1e-5);
             let dt_woodcock = -log(xi1) / max_majorant;
@@ -586,13 +591,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     } else {
         // ====================================================================
-        // BACKEND A: Real-Time Adaptive Closed-Form Quadrature (60+ FPS 880M)
-        // Continuous, stratified, zero-tearing numerical integration
+        // BACKEND A: Real-Time Stratified Ray Marching (60+ FPS iGPU / Radeon 880M)
+        // Midpoint numerical integration with space-skipping and Nyquist-bandlimited detail
         // ====================================================================
         let dt = chord / f32(steps);
         let step_km = dt * radius_km;
         let dither = ign(in.position.xy);
-        var prev_density = 0.0;
+        var prev_density = -1.0;
 
         for (var i = 0; i < CLOUD_MARCH_MAX; i += 1) {
             let t_current = t0 + (f32(i) + dither) * dt;
@@ -606,7 +611,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
             // Coarse space-skip: empty air in weather bake
             if (base_peek < 0.02) {
-                prev_density = 0.0;
+                prev_density = -1.0;
                 continue;
             }
 
@@ -616,20 +621,20 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
             let density = slab_density(p, drift, weather, step_km, true);
             if (density <= 0.001) {
-                prev_density = 0.0;
+                prev_density = -1.0;
                 continue;
             }
 
-            // Continuous trapezoidal integration:
-            let integ_density = (density + prev_density) * 0.5;
+            // Trapezoidal integration with unbiased entry handling:
+            let integ_density = select((density + prev_density) * 0.5, density, prev_density < 0.0);
             prev_density = density;
 
             let h01 = clamp((length(p) - bot) / thick, 0.0, 1.0);
 
             // Sun self-shadowing: sample along sun direction with micro-shadow tap for crisp crevices
-            let shadow_d0 = 180.0 * inv_radius;
-            let shadow_d1 = 650.0 * inv_radius;
-            let shadow_d2 = 1800.0 * inv_radius;
+            let shadow_d0 = 180.0 * inv_radius * shadow_span;
+            let shadow_d1 = 650.0 * inv_radius * shadow_span;
+            let shadow_d2 = 1800.0 * inv_radius * shadow_span;
 
             let s0 = slab_density(p + sun_dir * shadow_d0, drift, weather, 0.80, false);
             let s1 = slab_density(p + sun_dir * shadow_d1, drift, weather, 2.20, false);

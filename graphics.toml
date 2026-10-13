@@ -58,6 +58,7 @@ ray_steps = 24 # view-march steps for CPU queries (4..128)
 enabled = true
 quality = "high" # low = 512px bake + shell fallback; medium = 1024px; high = 2048px
 volumetric = true # true = march the low deck (medium/high); false = shell impostors
+integrator = "march" # "march" = real-time stratified march; "stochastic" = scattering approximation
 ray_steps = 24 # view-march steps for the volume path (4..24 used, more capped); shells ignore it
 cast_shadows = true # low-deck shadows on terrain: sampled from the same bake
 # the shells show (sun-parallax offset, soft alpha shaping); off = free

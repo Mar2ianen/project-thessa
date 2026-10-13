@@ -159,6 +159,8 @@ pub struct ResolvedGraphicsSettings {
     pub aurora_animate: bool,
     pub clouds_enabled: bool,
     pub clouds_quality: Quality,
+    /// Numerical integrator for the volume path (March vs Stochastic).
+    pub cloud_integrator: crate::settings::CloudIntegratorRequest,
     /// Volume-march the low-deck slab (false = shell impostors). Resolved
     /// from `volumetric && enabled`, with Low quality falling back to shells.
     pub clouds_volumetric: bool,
@@ -311,6 +313,7 @@ impl ResolvedGraphicsSettings {
             aurora_animate: requested.upper_atmosphere.aurora_animate,
             clouds_enabled: requested.clouds.enabled,
             clouds_quality: requested.clouds.quality,
+            cloud_integrator: requested.clouds.integrator,
             clouds_volumetric: Self::resolve_cloud_volume(requested, &mut notes),
             clouds_steps: Self::resolve_cloud_steps(requested, &mut notes),
             clouds_layers: requested.clouds.layers.clamp(1, 2),
@@ -447,6 +450,10 @@ impl ResolvedGraphicsSettings {
         map.insert(
             "clouds_volumetric".to_string(),
             self.clouds_volumetric.to_string(),
+        );
+        map.insert(
+            "cloud_integrator".to_string(),
+            format!("{:?}", self.cloud_integrator).to_lowercase(),
         );
         map.insert("cloud_steps".to_string(), self.clouds_steps.to_string());
         map.insert("cloud_layers".to_string(), self.clouds_layers.to_string());

@@ -253,12 +253,35 @@ impl Default for AtmosphereSettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CloudIntegratorRequest {
+    /// Real-time stratified ray marching with space skipping (tuned for 60+ FPS iGPU / Radeon 880M).
+    #[default]
+    March,
+    /// Stochastic scattering approximation with 1-sample Woodcock free-flight estimator.
+    Stochastic,
+}
+
+impl CloudIntegratorRequest {
+    pub fn from_str_name(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "march" | "raymarch" | "0" => Some(Self::March),
+            "stochastic" | "pathtrace" | "pt" | "1" => Some(Self::Stochastic),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CloudSettings {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
     pub quality: Quality,
+    /// Numerical integrator for the volume path: stratified ray march or stochastic scattering.
+    #[serde(default)]
+    pub integrator: CloudIntegratorRequest,
     /// March view rays through the low-deck slab instead of alpha-blending
     /// shell impostors. Low quality keeps the shell fallback; Medium/High
     /// march with `ray_steps`. The cirrus deck stays a shell in both paths.
@@ -303,6 +326,7 @@ impl Default for CloudSettings {
         Self {
             enabled: false,
             quality: Quality::Medium,
+            integrator: CloudIntegratorRequest::default(),
             volumetric: false,
             ray_steps: 16,
             cast_shadows: false,

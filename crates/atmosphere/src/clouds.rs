@@ -314,23 +314,36 @@ pub fn erode_density(density01: f64, erosion01: f64) -> f64 {
     ((d - e) / (1.0 - e).max(1e-6)).clamp(0.0, 1.0)
 }
 
-/// Beer-Powder sun throughput for light depth `ld` (extinction-scaled):
-/// Beer attenuates through the volume, Powder peaks at mid depth so puff
-/// sides facing the sun glow while deep cores stay dark and thin edges go
-/// to the ambient term. Zero at zero depth by construction.
+/// Canonical Beer-Powder sun throughput for light depth `ld` (extinction-scaled):
+/// Physical direct transmission (Beer's law `exp(-d)`) boosted at forward-scattering
+/// rims by the powder term `2 * exp(-d) * (1 - exp(-2d))`.
+/// At zero optical depth (clear sky), transmission is exactly 1.0 (unattenuated direct sunlight).
+/// Deep cores attenuate to 0.0.
 pub fn beer_powder(light_depth: f64) -> f64 {
     if !light_depth.is_finite() {
         return 0.0;
     }
-    let ld = light_depth.max(0.0);
-    (-ld).exp() * (1.0 - (-ld * 2.0).exp())
+    let d = light_depth.max(0.0);
+    let beer = (-d).exp();
+    let powder = 1.0 - (-d * 2.0).exp();
+    beer.max(2.0 * beer * powder)
+}
+
+/// Pure powder forward-scattering component: peaks at mid-depth, zero at zero depth.
+pub fn powder_scatter_term(light_depth: f64) -> f64 {
+    if !light_depth.is_finite() {
+        return 0.0;
+    }
+    let d = light_depth.max(0.0);
+    (-d).exp() * (1.0 - (-d * 2.0).exp())
 }
 
 /// Dual-lobe scattering phase: strong forward lobe (silver lining around
-/// the sun) plus a weak backward fill. Wraps [`crate::scattering::hg_phase`].
+/// the sun, g1 = 0.76) plus a weak backward fill (g2 = -0.30).
+/// Mirrors `cloud_volume.wgsl`.
 pub fn dual_lobe_phase(cos_theta: f64) -> f64 {
     let c = cos_theta.clamp(-1.0, 1.0);
-    0.75 * crate::scattering::hg_phase(0.55, c) + 0.25 * crate::scattering::hg_phase(-0.3, c)
+    0.70 * crate::scattering::hg_phase(0.76, c) + 0.30 * crate::scattering::hg_phase(-0.30, c)
 }
 
 /// Height-graded ambient: dark blue-grey base to bright top, scaled by
@@ -598,15 +611,22 @@ mod tests {
     }
 
     #[test]
-    fn beer_powder_peaks_mid_depth() {
-        assert_eq!(beer_powder(0.0), 0.0);
+    fn beer_powder_transmits_clear_and_boosts_powder_rim() {
+        assert_eq!(beer_powder(0.0), 1.0);
         assert_eq!(beer_powder(f64::NAN), 0.0);
-        let edge = beer_powder(0.15);
+        let clear = beer_powder(0.0);
         let mid = beer_powder(0.6);
         let core = beer_powder(4.0);
-        // Puff sides glow, deep cores and clear air do not.
-        assert!(mid > edge && mid > core, "{edge} {mid} {core}");
+        // Direct light attenuates monotonically in cores
+        assert!(clear > mid && mid > core, "{clear} {mid} {core}");
         assert!(core < 0.05, "{core}");
+
+        // Pure powder scattering peaks at mid-depth:
+        assert_eq!(powder_scatter_term(0.0), 0.0);
+        let p_edge = powder_scatter_term(0.15);
+        let p_mid = powder_scatter_term(0.6);
+        let p_core = powder_scatter_term(4.0);
+        assert!(p_mid > p_edge && p_mid > p_core);
     }
 
     #[test]

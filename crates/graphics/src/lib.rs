@@ -20,8 +20,8 @@ pub use resolve::{
     ResolvedRayTracing, ResolvedTerrainRender,
 };
 pub use settings::{
-    AtmosphereSettings, AuroraQuality, BackendRequest, CloudSettings, ConfigError, DebugSettings,
-    EnginePlumeSettings, GasGiantSettings, MaterialStorageRequest, Preset, Quality,
-    RayTracingRequest, RaytracingParticipation, RendererSettings, RequestedGraphics,
-    ShadowSettings, TerrainRenderRequest, UpperAtmosphereSettings,
+    AtmosphereSettings, AuroraQuality, BackendRequest, CloudIntegratorRequest, CloudSettings,
+    ConfigError, DebugSettings, EnginePlumeSettings, GasGiantSettings, MaterialStorageRequest,
+    Preset, Quality, RayTracingRequest, RaytracingParticipation, RendererSettings,
+    RequestedGraphics, ShadowSettings, TerrainRenderRequest, UpperAtmosphereSettings,
 };

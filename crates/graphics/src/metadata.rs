@@ -298,7 +298,7 @@ pub fn describe() -> Vec<SettingMeta> {
             unit: "-",
             advanced: true,
             restart_required: false,
-            description: "Use volume marching rather than a shell representation when available.",
+            description: "March view rays through the low-deck slab (Beer-Lambert over the deck bake plus shader detail) instead of alpha-blending shell impostors. Low quality falls back to shells; cirrus stays a shell in both paths.",
         },
         SettingMeta {
             path: "clouds.ray_steps",
@@ -309,7 +309,7 @@ pub fn describe() -> Vec<SettingMeta> {
             unit: "steps",
             advanced: true,
             restart_required: false,
-            description: "View-march budget for volumetric cloud queries.",
+            description: "View-march steps for the volume path (capped at 24 by the shader loop bound); shell decks ignore it.",
         },
         SettingMeta {
             path: "clouds.cast_shadows",
@@ -331,7 +331,7 @@ pub fn describe() -> Vec<SettingMeta> {
             unit: "shells",
             advanced: false,
             restart_required: false,
-            description: "Cheap shell decks: one low deck, or low plus cirrus.",
+            description: "One low deck, or low plus cirrus. The volume path marches the low deck; cirrus stays a shell in both paths.",
         },
         SettingMeta {
             path: "clouds.coverage",

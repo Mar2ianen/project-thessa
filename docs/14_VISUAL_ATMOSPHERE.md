@@ -1,8 +1,9 @@
 # Visual Atmosphere Architecture
 
 Status: implemented raster/LUT plus baked shells (cloud decks, gas-giant bands,
-aurora oval/curtains) plus field-first engine plume; volumetric clouds,
-weather coupling, and full Solari remain future. The TOML example in §15 is
+aurora oval/curtains) plus field-first engine plume and a low-deck cloud
+volume march behind `[clouds] volumetric`; weather coupling and full Solari
+remain future. The TOML example in §15 is
 archival — normative values live in `graphics.toml` + `crates/graphics`.
 
 Current source of truth: `crates/atmosphere`, `crates/graphics`,
@@ -272,8 +273,27 @@ Do not implement an eclipse by only darkening the surface while leaving a noon-b
 
 ## 10. Clouds are a separate subsystem
 
-Shell-deck clouds have shipped (`beauty.rs`, `[clouds] enabled=true`);
-volumetric ray-marched clouds are not part of the implementation.
+Shell-deck clouds have shipped (`beauty.rs`, `[clouds] enabled=true`); the
+low deck additionally marches volumetrically behind `[clouds]
+volumetric=true` (Medium/High; Low keeps the shell fallback). The march
+integrates one spherical slab per view ray in planet radii over a
+domain-warped weather bake (EVE-style coverage map) plus fully GPU-side
+weather sampled per pixel — cloud family (stratus sheets, cumulus, towers)
+and deck-height levels from low-frequency procedural noise, wind shear with
+altitude — with Schneider (Horizon Zero Dawn) shaping (coverage remap,
+type-dependent height gradient, five-octave ridged billow-detail erosion
+with footprint fade) and Beer-Powder
+lighting with a dual-lobe phase, elevation-tinted sun, and height-graded
+ambient driven by the shared eclipse factor, so coverage agrees between
+paths while the volume adds puffy tops,
+parallax, and terminator shading. Cirrus stays a thin shell in both paths.
+
+The backend-neutral march math lives in `thessa-atmosphere::clouds`
+(slab interval, planet clip, `integrate_slab` CPU oracle, warp-safe by
+construction); `assets/shaders/cloud_volume.wgsl` is its raster consumer and
+must agree with the oracle within representation error. Budgets:
+`clouds.ray_steps` view steps (4..24 marched, more capped with a note),
+Low = shells, `enabled = false` hides every deck (free).
 
 Future cloud rendering may use the atmosphere's lighting/transmittance queries, but cloud state should remain separate.
 
@@ -690,9 +710,9 @@ The first rocky-atmosphere visual slice is complete when Thessa can show all of 
 9. visual state evaluates directly from current simulation time and geometry;
 10. graphics settings can configure the subsystem through TOML.
 
-Clouds (shell decks), animated aurora curtains on High, and the experimental
-conditional Solari companion have shipped; volumetric clouds, coupled
-weather, and full Solari integration may follow incrementally.
+Clouds (shell decks plus the low-deck volume march), animated aurora curtains on High, and the experimental
+conditional Solari companion have shipped; coupled
+weather and full Solari integration may follow incrementally.
 
 ---
 

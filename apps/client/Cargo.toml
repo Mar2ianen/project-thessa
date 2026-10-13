@@ -27,3 +27,6 @@ glam.workspace = true
 rayon.workspace = true
 serde.workspace = true
 toml.workspace = true
+
+[dev-dependencies]
+naga = { version = "29.0.4", features = ["wgsl-in"] }

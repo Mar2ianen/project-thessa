@@ -9,6 +9,32 @@ APIs, data formats, and save files are not stable before `0.1.0`.
 
 ### Added
 
+- Low-deck volumetric cloud march (`[clouds] volumetric`, Medium/High; Low
+  keeps the shell fallback, `enabled = false` stays free): per-pixel
+  Beer-Lambert march through a planet-radii slab over a domain-warped
+  EVE-style weather bake plus fully GPU-side per-pixel weather (cloud
+  family, deck-height levels, wind shear), Schneider (Horizon Zero Dawn) shaping and lighting —
+  coverage remap, type-dependent height gradient, five-octave ridged
+  billow-detail erosion with footprint fade,
+  Beer-Powder sun through-scatter, dual-lobe phase with forward
+  silver lining, height-graded ambient (dark base, bright top) fed by the
+  shared eclipse visibility. Decks read as puffy volume from orbit, inside
+  the slab, and from the surface instead of painted alpha. Backend-neutral
+  slab math + CPU oracle in `thessa-atmosphere::clouds` (interval/planet-clip/
+  shaping/lighting tests, error envelope, `cloud_slab` bench); raster
+  consumer in `assets/shaders/cloud_volume.wgsl` (max 24 view steps from
+  `ray_steps`, coarse clear-sky discard, transmittance early-out, tiled GPU
+  noise lattices + differential fine-octave lean with height, turret-scale
+  sun taps with half-step self term). Cirrus
+  stays a streaky shell; cloud shadows keep sampling the deck bake.
+- Physical cloud-deck winds (was: 12 km/s hurricane drift): decks co-rotate
+  with the planet plus zonal breezes (~15 m/s low deck, ~40 m/s cirrus jet)
+  about the planet pole axis, with an f64-folded phase that never jitters
+  under warp; shader detail advects at matching speed with a seamless
+  pre-wrapped UV phase. Far-hemisphere volume fragments are culled in-shader
+  (they smeared a white sheet past the limb where terrain wrote no depth).
+  The CPU per-tile cloud-shadow path no longer runs under GPU raster (its
+  constants printed tile-edged quads over the smooth per-pixel field).
 - Low-deck cloud shadows on terrain (`clouds.cast_shadows`, on for High/Ultra
   presets): the GPU surface samples the deck bake the shells show, offset by
   sun parallax for the physical deck height with soft alpha shaping over the

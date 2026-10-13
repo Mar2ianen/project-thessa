@@ -21,7 +21,14 @@ use super::*;
 use bevy::{
     asset::RenderAssetUsages,
     image::Image,
-    render::render_resource::{Extent3d, Face, TextureDimension, TextureFormat},
+    mesh::MeshVertexBufferLayoutRef,
+    pbr::{Material, MaterialPipeline, MaterialPipelineKey, MaterialPlugin},
+    reflect::TypePath,
+    render::render_resource::{
+        AsBindGroup, Extent3d, Face, RenderPipelineDescriptor, ShaderType,
+        SpecializedMeshPipelineError, TextureDimension, TextureFormat,
+    },
+    shader::ShaderRef,
 };
 use thessa_graphics::Quality;
 use thessa_worldgen_rocky::lod::{TileKey, cbt_node_for_tile, tile_for_cbt_node};
@@ -248,21 +255,50 @@ fn bake_gas_giant(style: GiantStyle, w: u32, h: u32, drift: f64, limb: bool) -> 
 // ---------------------------------------------------------------------------
 // Clouds.
 
-/// Single deck bake. Alpha = coverage-shaped fBm; RGB near-white with slight
-/// density shading so decks read as thick KSP2-style cloud, not haze.
-/// Earth-ref (ISS daytime): dense cores pure white, thin skirts cool gray-blue
-/// with a warm sun side — baked once, still one alpha-blend shell.
-fn bake_clouds(seed: u64, w: u32, h: u32, coverage: f32, opacity: f32) -> Vec<u8> {
+/// Single deck bake. Alpha = coverage-shaped domain-warped fBm (EVE-style
+/// weather map); RGB near-white with slight density shading so decks read
+/// as thick cloud, not haze. Earth-ref (ISS daytime): dense cores pure
+/// white, thin skirts cool gray-blue with a warm sun side.
+/// `aniso`: (u, v) frequency multipliers — cirrus passes a vertically
+/// tightened pair for streaks instead of puffs. The u multiplier must stay
+/// integral (the wrap period only tiles integer spans); v is unwarped at
+/// the poles and free.
+fn bake_clouds(
+    seed: u64,
+    w: u32,
+    h: u32,
+    coverage: f32,
+    opacity: f32,
+    aniso: (f64, f64),
+) -> Vec<u8> {
     let mut px = Vec::with_capacity((w * h * 4) as usize);
     // Widen the transition: decks keep hard cores but grow bright skirts.
-    let edge0 = (coverage * 0.82).clamp(0.0, 0.95);
+    // Calibrated so coverage 0.55 reads ~40% broken deck (warp biases the
+    // field low, hence the below-unity gain).
+    let edge0 = (coverage * 0.76).clamp(0.0, 0.95);
+    let (au, av) = aniso;
     for y in 0..h {
         let v = y as f64 / h as f64;
         let stretch = 1.0 - 0.35 * (1.0 - (v * std::f64::consts::PI).sin()); // polar pinch
         for x in 0..w {
             let u = x as f64 / w as f64;
-            let d = fbm(seed, u * 6.0, v * 12.0 * stretch + 3.1, 6.0);
-            let swirl = fbm(seed ^ 0x51AB, u * 3.0 + d * 1.5, v * 6.0, 3.0);
+            // Domain warp: a low-frequency offset field bends the main
+            // octaves into natural swirls instead of blobby lattice cells.
+            // Warp periods (2, 4) divide the base frequencies, so the seam
+            // still tiles.
+            let wx = fbm(seed ^ 0x9E9, u * 2.0, v * 4.0, 2.0) - 0.5;
+            let wy = fbm(seed ^ 0xBEE, u * 2.0 + 5.2, v * 4.0 + 1.3, 2.0) - 0.5;
+            // Slanted fronts: shearing u by latitude breaks the zonal
+            // banding that pure lat/long octaves print (gas-giant look).
+            // Shear is v-only, so the u seam still tiles.
+            let us = u + 0.35 * (v - 0.5);
+            let d = fbm(
+                seed,
+                (us * 10.0 + wx * 1.8) * au,
+                (v * 20.0 * stretch + wy * 1.8 + 3.1) * av,
+                10.0,
+            );
+            let swirl = fbm(seed ^ 0x51AB, us * 4.0 * au + d * 1.5, v * 8.0 * av, 4.0);
             // Billow octave: small cells riding the large field so decks read
             // as structured tops instead of smooth blobs. Bake-time only.
             // Faded toward the poles: the meridional pinch squeezes this
@@ -270,11 +306,11 @@ fn bake_clouds(seed: u64, w: u32, h: u32, coverage: f32, opacity: f32) -> Vec<u8
             let polar = (v * std::f64::consts::PI).sin().powf(0.7);
             let billow = fbm(
                 seed ^ 0xB110,
-                u * 12.0 + d * 2.0,
-                v * 24.0 * stretch + 9.7,
-                12.0,
+                (us * 24.0 + d * 2.0) * au,
+                (v * 40.0 * stretch + 9.7) * av,
+                24.0,
             ) * (0.25 + 0.75 * polar);
-            let field = (d * 0.50 + swirl * 0.28 + billow * 0.22) as f32;
+            let field = (d * 0.46 + swirl * 0.28 + billow * 0.26) as f32;
             let a = ((field - edge0) / (1.0 - edge0).max(1e-3)).clamp(0.0, 1.0);
             let a = (a * (1.6 - 0.6 * a)).clamp(0.0, 1.0) * opacity;
             // Density shading: white cores, steel-grey body, cool thin skirts.
@@ -315,19 +351,49 @@ pub(crate) const CLOUD_SHADOW_STRENGTH: f32 = 0.45;
 pub(crate) const CLOUD_RELIEF_LOW_FRAC: f32 = 0.00125;
 pub(crate) const CLOUD_RELIEF_HIGH_FRAC: f32 = 0.00078;
 
+/// Volume-march slab as FRACTIONS of the planet radius (same unit-sphere
+/// contract as relief): the low deck marches a ~19 km slab over Thessa,
+/// the cirrus a thinner veil. Centered on the impostor shell scales in
+/// [`CLOUD_DECKS`] so the volume and fallback shells coincide on screen.
+pub(crate) const CLOUD_SLAB_LOW: (f32, f32) = (1.008, 1.014);
+pub(crate) const CLOUD_SLAB_HIGH: (f32, f32) = (1.018, 1.022);
+/// Visual extinction per planet radius inside the slab (appearance only,
+/// like `density_scale`): cores go near-opaque with modeled crevices, skirts
+/// stay translucent. Column-bench calibrated (thin edges glow, dense tops run
+/// hot white); lower values wash the disc flat grey (screenshot-measured).
+pub(crate) const CLOUD_EXT_LOW: f32 = 1000.0;
+pub(crate) const CLOUD_EXT_HIGH: f32 = 350.0;
+/// Sun self-shadow taps span a fraction of the slab thickness: turret
+/// scale, not system scale. Long taps average whole cloud systems and the
+/// local light-and-shadow modeling vanishes (flat white stickers); short
+/// taps let bump tops catch sun while crevices shadow.
+pub(crate) const CLOUD_SUN_SPAN_FRAC: f32 = 0.8;
+/// Billow-detail amplitude perturbing the weather field before the floor
+/// clean (Schneider): detail swings the field and carves organic edges plus
+/// interior turrets and crevices. Too low reverts to smooth stickers.
+pub(crate) const CLOUD_DETAIL_AMP: f32 = 1.6;
+/// Coverage floor in the march: the bake carries the coverage shaping,
+/// this only cuts the skirt noise so thin haze never films the disc.
+pub(crate) const CLOUD_COVERAGE_FLOOR: f32 = 0.08;
+
 /// Alpha channel grid out of an interleaved RGBA8 bake.
 fn alpha_grid(px: &[u8]) -> Vec<u8> {
-    px.chunks_exact(4).map(|c| c[3]).collect()
+    let (chunks, _) = px.as_chunks::<4>();
+    chunks.iter().map(|c| c[3]).collect()
 }
 
 /// Deck placement shared by the shell spawner, the follower, and the shadow
 /// samplers: (body, deck, shell scale factor, differential spin rad/s).
 /// Single source of truth; the spawn loop below reads this table.
+///
+/// Spins are physical zonal breezes on top of co-rotation (prograde +):
+/// ~15 m/s low-deck drift, ~40 m/s cirrus jet. The old 0.004 rad/s spun the
+/// deck at 12 km/s ground speed — visibly absurd minute-to-minute drift.
 pub(crate) const CLOUD_DECKS: &[(&str, u8, f32, f32)] = &[
-    ("thessa", 0, 1.012, 0.004),
-    ("thessa", 1, 1.020, 0.0064),
-    ("pelagos", 0, 1.010, 0.003),
-    ("borea", 0, 1.010, 0.002),
+    ("thessa", 0, 1.012, 5.0e-6),
+    ("thessa", 1, 1.020, 1.25e-5),
+    ("pelagos", 0, 1.010, 5.0e-6),
+    ("borea", 0, 1.010, 5.0e-6),
 ];
 
 /// Inverse of the Bevy Sphere mesh mapping (poles on local +Z, u from +X
@@ -349,8 +415,11 @@ pub(crate) fn deck_spin_rad_s(body: &str, deck: u8) -> Option<f32> {
         .map(|(_, _, _, spin)| *spin)
 }
 
-/// Deck world rotation shared with the follower: differential spin on top of
-/// the planet rotation. When animation is off the deck is planet-fixed.
+/// Deck world rotation shared with the follower: the deck co-rotates with
+/// the planet plus a zonal breeze about the planet's own pole axis (sphere
+/// poles sit on local +Z, so latitude lines are the drift direction —
+/// trade winds, not a world-Y tumble). When animation is off the deck is
+/// planet-fixed. Phase folds in f64 so millennia of warp never jitter f32.
 pub(crate) fn deck_world_rotation(
     planet_rotation: Quat,
     spin_rad_s: f32,
@@ -360,7 +429,8 @@ pub(crate) fn deck_world_rotation(
     if !animate {
         return planet_rotation;
     }
-    Quat::from_rotation_y((sim_seconds as f32) * spin_rad_s) * planet_rotation
+    let phase = ((sim_seconds * spin_rad_s as f64) % std::f64::consts::TAU) as f32;
+    planet_rotation * Quat::from_rotation_z(phase)
 }
 
 /// Body frame -> shell-local bake frame for shadow sampling: the shader
@@ -629,13 +699,15 @@ pub struct BeautyPlugin;
 
 impl Plugin for BeautyPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<BeautyTimers>()
+        app.add_plugins(MaterialPlugin::<CloudVolumeMaterial>::default())
+            .init_resource::<BeautyTimers>()
             .add_systems(PostStartup, setup_beauty)
             .add_systems(
                 Update,
                 (
                     swap_gas_giant_materials,
                     follow_cloud_shells,
+                    follow_cloud_volume,
                     follow_aurora_shell,
                     rebake_animated,
                 ),
@@ -648,13 +720,16 @@ fn setup_beauty(
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut volume_materials: ResMut<Assets<CloudVolumeMaterial>>,
     graphics: Option<Res<GraphicsResolved>>,
 ) {
     let r = graphics.as_deref().map(|g| g.0.clone()).unwrap_or_default();
     info!(
-        "[beauty] resolved: gas={} clouds={}(layers={} cov={:.2} op={:.2} anim={}) aurora={}(q={:?} i={:.2} anim={})",
+        "[beauty] resolved: gas={} clouds={}(vol={} steps={} layers={} cov={:.2} op={:.2} anim={}) aurora={}(q={:?} i={:.2} anim={})",
         r.gas_giant_enabled,
         r.clouds_enabled,
+        r.clouds_volumetric,
+        r.clouds_steps,
         r.clouds_layers,
         r.clouds_coverage,
         r.clouds_opacity,
@@ -692,7 +767,14 @@ fn setup_beauty(
     let vesper = images.add(rgba_image(vw, vh, vesper_px));
 
     // --- Clouds.
-    let low_px = bake_clouds(0xC10D, cw, ch, r.clouds_coverage, r.clouds_opacity);
+    let low_px = bake_clouds(
+        0xC10D,
+        cw,
+        ch,
+        r.clouds_coverage,
+        r.clouds_opacity,
+        (1.0, 1.0),
+    );
     // Shell meshes: one unit sphere per deck so relief displacement follows
     // each deck's own coverage (a shared mesh would dome all decks alike).
     // Bevy's UV sphere puts its texture poles on local +Z (see
@@ -713,14 +795,16 @@ fn setup_beauty(
     let low_mesh = make_shell(Some((alpha_grid(&low_px), cw, ch, CLOUD_RELIEF_LOW_FRAC)));
     let cloud_low = images.add(rgba_image(cw, ch, low_px));
     let (cloud_high, high_mesh) = if r.clouds_layers >= 2 {
-        // Cirrus stays a thin veil over the low deck: a small coverage
-        // offset lands it far down the shaping curve (measured).
+        // Cirrus stays a thin streaky veil over the low deck: coverage well
+        // down the shaping curve (measured) plus vertical tightening for
+        // streaks instead of puffs. Kept faint so it never dulls the deck.
         let hi_px = bake_clouds(
             0xC1225,
             cw / 2,
             ch / 2,
-            (r.clouds_coverage + 0.08).min(0.95),
-            r.clouds_opacity * 0.7,
+            (r.clouds_coverage + 0.12).min(0.95),
+            r.clouds_opacity * 0.5,
+            (1.0, 2.0),
         );
         let hi_mesh = make_shell(Some((
             alpha_grid(&hi_px),
@@ -750,8 +834,8 @@ fn setup_beauty(
         vesper,
         nereid_size: (nw, nh),
         vesper_size: (vw, vh),
-        cloud_low,
-        cloud_high,
+        cloud_low: cloud_low.clone(),
+        cloud_high: cloud_high.clone(),
         aurora,
         aurora_size: (aw, ah),
     });
@@ -782,6 +866,50 @@ fn setup_beauty(
                 scale_factor: scale,
             },
         ));
+    }
+
+    // Volume decks share meshes and bakes with the shells above (same
+    // coverage by construction); one material per deck carries its slab and
+    // texture. Low cumulus deck marches volumetrically; cirrus stays a thin shell
+    // in both paths (see docs/14_VISUAL_ATMOSPHERE.md).
+    if r.clouds_enabled {
+        let volume_mesh = meshes.add(Sphere::new(1.0).mesh().uv(96, 48));
+        for (body, deck, _, spin) in CLOUD_DECKS.iter().copied().filter(|(_, deck, _, _)| *deck == 0) {
+            let tex = cloud_low.clone();
+            let (bottom, top, ext) = volume_slab_for_deck(deck);
+            commands.spawn((
+                Mesh3d(volume_mesh.clone()),
+                MeshMaterial3d(volume_materials.add(CloudVolumeMaterial {
+                    uniforms: CloudUniforms {
+                        center_radius: Vec4::ZERO,
+                        slab: Vec4::new(bottom, top, ext, volume_steps(r.clouds_steps)),
+                        sun: Vec4::Y,
+                        deck_to_local: Vec4::W,
+                        params: Vec4::new(
+                            r.clouds_opacity,
+                            0.0,
+                            CLOUD_SUN_SPAN_FRAC,
+                            CLOUD_DETAIL_AMP,
+                        ),
+                        shape: Vec4::new(
+                            deck as f32,
+                            CLOUD_COVERAGE_FLOOR,
+                            volume_mesh_scale_for_deck(deck),
+                            cloud_backend_mode(&r),
+                        ),
+                    },
+                    coverage: tex,
+                })),
+                Transform::default(),
+                Visibility::Hidden,
+                Name::new(format!("beauty cloud volume {body} deck{deck}")),
+                CloudVolume {
+                    body,
+                    deck,
+                    spin_rad_s: spin,
+                },
+            ));
+        }
     }
 
     // Aurora shell (Thessa only).
@@ -855,7 +983,11 @@ fn planet_transform(
     body: &str,
     visuals: &Query<
         (&Name, &Transform, &InheritedVisibility),
-        (Without<CloudShell>, Without<AuroraShell>),
+        (
+            Without<CloudShell>,
+            Without<AuroraShell>,
+            Without<CloudVolume>,
+        ),
     >,
 ) -> Option<(Transform, bool)> {
     // Map view entity. Prefer a VISIBLE match: in pilot mode the map visual
@@ -930,6 +1062,138 @@ fn cloud_shell_fade(cam_frac: f32, deck_frac: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+// ---------------------------------------------------------------------------
+// Cloud volume march (volumetric path; shells stay the fallback).
+//
+// One [`CloudVolumeMaterial`] per volume deck: the unit-sphere mesh is
+// coverage only, every pixel marches the planet-normalized slab in
+// `assets/shaders/cloud_volume.wgsl` (Beer-Lambert over the deck bake the
+// shells show, so both paths agree on coverage). Sun self-shadowing,
+// forward-lobe silver lining, and eclipse-aware day factor run in-shader;
+// per-frame uniforms carry planet frame, sun, and march budget.
+
+/// Packed uniforms mirroring `assets/shaders/cloud_volume.wgsl`.
+#[derive(Debug, Clone, Copy, ShaderType)]
+pub struct CloudUniforms {
+    center_radius: Vec4,
+    slab: Vec4,
+    sun: Vec4,
+    deck_to_local: Vec4,
+    params: Vec4,
+    shape: Vec4,
+}
+
+#[derive(Debug, Clone, Asset, TypePath, AsBindGroup)]
+pub struct CloudVolumeMaterial {
+    #[uniform(0)]
+    pub uniforms: CloudUniforms,
+    #[texture(1)]
+    #[sampler(2)]
+    pub coverage: Handle<Image>,
+}
+
+impl Material for CloudVolumeMaterial {
+    fn fragment_shader() -> ShaderRef {
+        "shaders/cloud_volume.wgsl".into()
+    }
+
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Premultiplied
+    }
+
+    fn specialize(
+        _pipeline: &MaterialPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        // No culling: the camera flies through the slab (surface views look
+        // up from below it, climb corridors cross it). The march itself is
+        // front-interval based, so far-hemisphere fragments cost one slab
+        // march each instead of corrupting the image.
+        descriptor.primitive.cull_mode = None;
+        Ok(())
+    }
+}
+
+#[derive(Component)]
+pub(crate) struct CloudVolume {
+    body: &'static str,
+    deck: u8,
+    spin_rad_s: f32,
+}
+
+/// Volume path active when the effect is enabled and resolved to march
+/// (single source of truth shared by setup/followers; shells hide then).
+pub(crate) fn use_cloud_volume(r: &ResolvedGraphicsSettings) -> bool {
+    r.clouds_enabled && r.clouds_volumetric
+}
+
+/// Slab (bottom/top fracs) and extinction for a deck index: 0 marches the
+/// low deck, 1 the thin cirrus veil.
+pub(crate) fn volume_slab_for_deck(deck: u8) -> (f32, f32, f32) {
+    if deck == 0 {
+        (CLOUD_SLAB_LOW.0, CLOUD_SLAB_LOW.1, CLOUD_EXT_LOW)
+    } else {
+        (CLOUD_SLAB_HIGH.0, CLOUD_SLAB_HIGH.1, CLOUD_EXT_HIGH)
+    }
+}
+
+/// Impostor mesh scale for a volume deck: must cover the slab top plus the
+/// per-pixel top variation (0.6..1.4 thicknesses), or rasterization clips
+/// tower tops into a flat ring. The shell fallback keeps riding mid-slab.
+pub(crate) fn volume_mesh_scale_for_deck(deck: u8) -> f32 {
+    let (bottom, top, _) = volume_slab_for_deck(deck);
+    top + (top - bottom) * 0.5 + 1e-4
+}
+
+/// March steps actually issued: user budget clamped to the shader loop
+/// bound (`CLOUD_MARCH_MAX` in WGSL, capped with a note in resolve).
+pub(crate) fn volume_steps(steps: u32) -> f32 {
+    steps.clamp(4, 24) as f32
+}
+
+/// Cloud backend selection encoded in `shape.w`:
+/// 0.0 = Real-time adaptive closed-form quadrature (60+ FPS, tuned for Radeon 880M)
+/// 1.0 = Volumetric Path Tracing with Woodcock / Delta tracking (unbiased PT / RT discrete GPU mode)
+pub(crate) fn cloud_backend_mode(r: &ResolvedGraphicsSettings) -> f32 {
+    static BACKEND_OVERRIDE: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+    let override_val = BACKEND_OVERRIDE.get_or_init(|| {
+        std::env::var("THESSA_CLOUD_BACKEND").ok().and_then(|val| {
+            if val.eq_ignore_ascii_case("pt") || val == "1" || val.eq_ignore_ascii_case("pathtrace") {
+                Some(1.0)
+            } else if val.eq_ignore_ascii_case("march") || val == "0" || val.eq_ignore_ascii_case("raymarch") {
+                Some(0.0)
+            } else {
+                None
+            }
+        })
+    });
+    if let Some(mode) = *override_val {
+        return mode;
+    }
+    if r.rt_clouds {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// Equatorial breeze advecting the shader detail: ~15 m/s over a ~20 000 km
+/// circumference. The old 0.004 UV/s scrolled noise at 80 km/s — the crawl
+/// visible frame to frame.
+pub(crate) const CLOUD_WIND_UV_PER_S: f64 = 7.5e-7;
+
+/// Detail-drift clock as a pre-wrapped UV phase: computed in f64, seamless
+/// across the wrap (integer UV cycles, no popping), f32-safe at any warp.
+/// Deterministic in sim time, therefore warp-safe. Frozen when not animating.
+pub(crate) fn wind_phase_uv(sim_seconds: f64, animate: bool) -> f32 {
+    if !animate {
+        return 0.0;
+    }
+    (sim_seconds * CLOUD_WIND_UV_PER_S % 1.0) as f32
+}
+
 /// Live-terrain fallback for the flown world: when the map/PFD entity match
 /// fails (or is hidden mid-transition), place the follower at the true-scale
 /// planet the terrain streamer is actually rendering. Uses authoritative
@@ -968,7 +1232,11 @@ pub(crate) fn planet_frame_for_body(
     body: &str,
     visuals: &Query<
         (&Name, &Transform, &InheritedVisibility),
-        (Without<CloudShell>, Without<AuroraShell>),
+        (
+            Without<CloudShell>,
+            Without<AuroraShell>,
+            Without<CloudVolume>,
+        ),
     >,
     terrain: Option<&terrain::WorldTerrain>,
     sim_seconds: f64,
@@ -991,7 +1259,11 @@ fn follow_cloud_shells(
     mut materials: ResMut<Assets<StandardMaterial>>,
     visuals: Query<
         (&Name, &Transform, &InheritedVisibility),
-        (Without<CloudShell>, Without<AuroraShell>),
+        (
+            Without<CloudShell>,
+            Without<AuroraShell>,
+            Without<CloudVolume>,
+        ),
     >,
     cameras: Query<&Transform, (With<Camera3d>, Without<CloudShell>, Without<AuroraShell>)>,
     mut shells: Query<(
@@ -1018,6 +1290,13 @@ fn follow_cloud_shells(
             continue;
         };
         if !r.clouds_enabled {
+            *vis = Visibility::Hidden;
+            continue;
+        }
+        // The volume path owns the low cumulus deck (deck 0) when resolved:
+        // that shell stays hidden so both representations never double-draw.
+        // Cirrus (deck 1) stays a thin shell in both paths (docs/14_VISUAL_ATMOSPHERE.md).
+        if shell.deck == 0 && use_cloud_volume(&r) {
             *vis = Visibility::Hidden;
             continue;
         }
@@ -1057,6 +1336,106 @@ fn follow_cloud_shells(
     }
 }
 
+/// March-path follower: the same planet frame as the shells (visible entity
+/// match, else the live terrain streamer), no impostor fade — the march is
+/// valid from the surface (looking up), inside the slab, and from orbit.
+/// Disabled or shell-resolved configurations hide every volume deck, so the
+/// effect costs nothing when off.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn follow_cloud_volume(
+    graphics: Option<Res<GraphicsResolved>>,
+    clock: Option<Res<SimulationClock>>,
+    terrain: Option<Res<terrain::WorldTerrain>>,
+    eclipse: Option<Res<crate::atmosphere::EclipseFactor>>,
+    sun: Query<&GlobalTransform, With<PrimaryStarLight>>,
+    visuals: Query<
+        (&Name, &Transform, &InheritedVisibility),
+        (
+            Without<CloudShell>,
+            Without<AuroraShell>,
+            Without<CloudVolume>,
+        ),
+    >,
+    mut volume_materials: ResMut<Assets<CloudVolumeMaterial>>,
+    mut volumes: Query<(
+        &CloudVolume,
+        &mut Transform,
+        &mut Visibility,
+        &MeshMaterial3d<CloudVolumeMaterial>,
+    )>,
+    mut dbg: Local<u32>,
+) {
+    let r = graphics.as_deref().map(|g| g.0.clone()).unwrap_or_default();
+    let t = clock.as_deref().map(|c| c.sim_seconds).unwrap_or(0.0);
+    let log_now = *dbg < 3;
+    *dbg += 1;
+    let active = use_cloud_volume(&r);
+    let sun_dir = sun
+        .single()
+        .map(|tf| {
+            let d = tf.back();
+            Vec3::new(d.x, d.y, d.z)
+        })
+        .unwrap_or(Vec3::Y);
+    let sun_vis = eclipse.as_deref().map(|e| e.0).unwrap_or(1.0);
+    for (deck, mut st, mut vis, mat3d) in &mut volumes {
+        if !active {
+            *vis = Visibility::Hidden;
+            continue;
+        }
+        let Some(planet) = planet_frame_for_body(deck.body, &visuals, terrain.as_deref(), t) else {
+            if log_now {
+                info!("[beauty] cloud volume {}: no planet frame", deck.body);
+            }
+            *vis = Visibility::Hidden;
+            continue;
+        };
+        if planet.scale.x <= 1e-6 {
+            *vis = Visibility::Hidden;
+            continue;
+        }
+        if log_now {
+            info!(
+                "[beauty] cloud volume {}: following planet scale={:.3}",
+                deck.body, planet.scale.x
+            );
+        }
+        st.translation = planet.translation;
+        // Impostor mesh covers the slab top (not the mid-slab shell scale),
+        // so rasterization never clips tower tops; the march itself is analytic.
+        let mesh_scale = volume_mesh_scale_for_deck(deck.deck);
+        st.scale = Vec3::splat(planet.scale.x * mesh_scale);
+        let deck_world = deck_world_rotation(planet.rotation, deck.spin_rad_s, t, r.clouds_animate);
+        st.rotation = deck_world;
+        let (bottom, top, ext) = volume_slab_for_deck(deck.deck);
+        if let Some(mut mat) = volume_materials.get_mut(&mat3d.0) {
+            let to_local = deck_world.inverse();
+            mat.uniforms.center_radius = Vec4::new(
+                planet.translation.x,
+                planet.translation.y,
+                planet.translation.z,
+                planet.scale.x,
+            );
+            mat.uniforms.slab = Vec4::new(bottom, top, ext, volume_steps(r.clouds_steps));
+            mat.uniforms.sun = Vec4::new(sun_dir.x, sun_dir.y, sun_dir.z, sun_vis);
+            mat.uniforms.deck_to_local = Vec4::new(to_local.x, to_local.y, to_local.z, to_local.w);
+            mat.uniforms.params = Vec4::new(
+                r.clouds_opacity,
+                wind_phase_uv(t, r.clouds_animate),
+                CLOUD_SUN_SPAN_FRAC,
+                CLOUD_DETAIL_AMP,
+            );
+            mat.uniforms.shape = Vec4::new(
+                deck.deck as f32,
+                CLOUD_COVERAGE_FLOOR,
+                volume_mesh_scale_for_deck(deck.deck),
+                cloud_backend_mode(&r),
+            );
+        }
+        *vis = Visibility::Visible;
+    }
+}
+
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn follow_aurora_shell(
     imgs: Option<Res<BeautyImages>>,
@@ -1066,7 +1445,11 @@ fn follow_aurora_shell(
     mut materials: ResMut<Assets<StandardMaterial>>,
     visuals: Query<
         (&Name, &Transform, &InheritedVisibility),
-        (Without<CloudShell>, Without<AuroraShell>),
+        (
+            Without<CloudShell>,
+            Without<AuroraShell>,
+            Without<CloudVolume>,
+        ),
     >,
     mut shells: Query<(
         &AuroraShell,
@@ -1225,7 +1608,7 @@ mod tests {
     #[test]
     fn deck_rotation_is_identity_without_animation() {
         let q = Quat::from_rotation_y(0.7);
-        assert_eq!(deck_world_rotation(q, 0.004, 1234.0, false), q);
+        assert_eq!(deck_world_rotation(q, 5.0e-6, 1234.0, false), q);
         // Animated deck advances with sim time, deterministically.
         let a = deck_world_rotation(Quat::IDENTITY, 0.004, 100.0, true);
         let b = deck_world_rotation(Quat::IDENTITY, 0.004, 100.0, true);
@@ -1234,6 +1617,25 @@ mod tests {
         let chord = (a * Vec3::X - Vec3::X).length();
         let angle = 2.0 * (chord / 2.0).asin();
         assert!((angle - 0.4).abs() < 1e-5, "{angle}");
+    }
+
+    #[test]
+    fn deck_drift_runs_zonal_and_stays_physical() {
+        // Drift spins about the planet pole (local +Z: the sphere poles),
+        // so an equator point slides along its latitude line instead of
+        // tumbling off it (the old world-Y spin did exactly that).
+        let a = deck_world_rotation(Quat::IDENTITY, 0.01, 10.0, true);
+        let p = (a * Vec3::X - Vec3::X).length();
+        assert!(p > 0.05, "drift must visibly advance, {p}");
+        assert!((a * Vec3::X).z.abs() < 1e-6, "zonal drift keeps z");
+        // Table spins are breezes (tens of m/s), never km/s jets: even the
+        // cirrus jet must stay two orders below the old 0.004 rad/s bug.
+        for (body, deck, _, spin) in CLOUD_DECKS.iter().copied() {
+            assert!(
+                spin < 1.0e-4,
+                "{body} deck{deck}: spin {spin} rad/s is a jet, not a breeze"
+            );
+        }
     }
 
     #[test]
@@ -1385,8 +1787,10 @@ mod tests {
         // Unit-sphere meshes scale by the planet radius at draw time: metre
         // relief values here would dome by thousands of radii (measured as
         // sky-filling sheets). This pins the fractional contract.
-        assert!(CLOUD_RELIEF_LOW_FRAC < 0.1);
-        assert!(CLOUD_RELIEF_HIGH_FRAC < 0.1);
+        const {
+            assert!(CLOUD_RELIEF_LOW_FRAC < 0.1);
+            assert!(CLOUD_RELIEF_HIGH_FRAC < 0.1);
+        }
     }
 
     #[test]
@@ -1395,11 +1799,9 @@ mod tests {
         // 0.45 -> ~0.7, 0.55 -> ~0.37, 0.6 -> ~0.2, 0.7 -> ~0.03.
         // The default 0.55 reads as broken deck, not overcast.
         let frac = |coverage: f32| {
-            bake_clouds(0xC10D, 96, 48, coverage, 1.0)
-                .chunks_exact(4)
-                .filter(|p| p[3] > 40)
-                .count() as f64
-                / (96.0 * 48.0)
+            let px = bake_clouds(0xC10D, 96, 48, coverage, 1.0, (1.0, 1.0));
+            let (chunks, _) = px.as_chunks::<4>();
+            chunks.iter().filter(|p| p[3] > 40).count() as f64 / (96.0 * 48.0)
         };
         let mid = frac(0.55);
         assert!((0.25..=0.50).contains(&mid), "low deck {mid:.3}");
@@ -1409,8 +1811,8 @@ mod tests {
 
     #[test]
     fn cloud_alpha_tracks_coverage() {
-        let clear = bake_clouds(1, 64, 32, 0.95, 1.0);
-        let overcast = bake_clouds(1, 64, 32, 0.05, 1.0);
+        let clear = bake_clouds(1, 64, 32, 0.95, 1.0, (1.0, 1.0));
+        let overcast = bake_clouds(1, 64, 32, 0.05, 1.0, (1.0, 1.0));
         let mean = |px: &[u8]| {
             px.chunks(4).map(|c| c[3] as f64 / 255.0).sum::<f64>() / (px.len() / 4) as f64
         };
@@ -1419,7 +1821,7 @@ mod tests {
 
     #[test]
     fn cloud_cores_stay_white_skirts_cool() {
-        let px = bake_clouds(1, 128, 64, 0.45, 0.9);
+        let px = bake_clouds(1, 128, 64, 0.45, 0.9, (1.0, 1.0));
         // Dense cores bright; translucent skirts cool gray-blue.
         let mut brightest = 0u8;
         let mut skirt_cool = 0;
@@ -1446,7 +1848,7 @@ mod tests {
         // The billow octave must put small-scale edges inside decks: mean
         // neighbor alpha steps stay well above a smooth fill. (Global std
         // is dominated by the coverage curve, not the cells.)
-        let px = bake_clouds(1, 128, 64, 0.45, 0.9);
+        let px = bake_clouds(1, 128, 64, 0.45, 0.9, (1.0, 1.0));
         let w = 128usize;
         let mut edge = 0.0;
         let mut n = 0;
@@ -1467,6 +1869,135 @@ mod tests {
             mean_edge > 0.012,
             "billows must edge the deck, mean step={mean_edge:.4}"
         );
+    }
+
+    #[test]
+    fn volume_path_needs_enabled_volumetric() {
+        let on = ResolvedGraphicsSettings {
+            clouds_enabled: true,
+            clouds_volumetric: true,
+            ..ResolvedGraphicsSettings::default()
+        };
+        assert!(use_cloud_volume(&on));
+        let shells = ResolvedGraphicsSettings {
+            clouds_enabled: true,
+            clouds_volumetric: false,
+            ..ResolvedGraphicsSettings::default()
+        };
+        assert!(!use_cloud_volume(&shells));
+        // Disabled is free: no march even when requested.
+        let off = ResolvedGraphicsSettings {
+            clouds_enabled: false,
+            clouds_volumetric: true,
+            ..ResolvedGraphicsSettings::default()
+        };
+        assert!(!use_cloud_volume(&off));
+    }
+
+    #[test]
+    fn volume_mesh_covers_the_tallest_towers() {
+        // Per-pixel tops reach bottom + 1.4 thicknesses (hvar = 1); the mesh
+        // must cover that plus margin, or rasterization rings the deck.
+        for deck in [0u8, 1] {
+            let (bottom, top, _) = volume_slab_for_deck(deck);
+            let mesh = volume_mesh_scale_for_deck(deck);
+            assert!(
+                mesh > bottom + 1.4 * (top - bottom),
+                "deck{deck}: mesh {mesh} must clear tower tops"
+            );
+        }
+    }
+
+    #[test]
+    fn volume_slabs_bracket_their_shells() {
+        // March slabs stay centered on the impostor shell scales in
+        // CLOUD_DECKS so volume and fallback coincide on screen.
+        for (body, deck, scale, _) in CLOUD_DECKS.iter().copied() {
+            let (bottom, top, ext) = volume_slab_for_deck(deck);
+            assert!(bottom < scale && scale < top, "{body} deck{deck}");
+            assert!(ext > 0.0);
+        }
+        let (low_b, low_t, _) = volume_slab_for_deck(0);
+        let (high_b, high_t, high_ext) = volume_slab_for_deck(1);
+        assert!(high_b > low_t - 0.01, "cirrus rides above the low deck");
+        assert!(
+            high_t - high_b < low_t - low_b,
+            "cirrus is the thinner veil"
+        );
+        let _ = high_ext;
+        // Low deck is the optically thicker slab.
+        assert!(volume_slab_for_deck(0).2 > volume_slab_for_deck(1).2);
+    }
+
+    #[test]
+    fn volume_steps_and_wind_phase_stay_in_range() {
+        assert_eq!(volume_steps(0), 4.0);
+        assert_eq!(volume_steps(12), 12.0);
+        assert_eq!(volume_steps(128), 24.0);
+        assert_eq!(wind_phase_uv(123.0, false), 0.0);
+        let a = wind_phase_uv(100.0, true);
+        assert!((0.0..1.0).contains(&a), "{a}");
+        // Pre-wrapped UV phase: a year of warp stays f32-exact and seamless
+        // (integer cycles, no popping at the wrap).
+        let year = wind_phase_uv(31_556_952.0, true);
+        assert!((0.0..1.0).contains(&year), "{year}");
+        let cycle = wind_phase_uv(1.0 / CLOUD_WIND_UV_PER_S, true);
+        assert!(
+            cycle.abs() < 1e-3,
+            "full wind cycle must re-phase, got {cycle}"
+        );
+    }
+
+    #[test]
+    fn cloud_volume_wgsl_parses() {
+        // The Bevy `#import` prologue (view + vertex IO) is resolved by the
+        // asset pipeline at runtime; stub the two bindings this shader
+        // consumes so naga validates everything else (helpers, march loop,
+        // bindings). Catches syntax/type errors without a GPU.
+        let src = include_str!("../../../assets/shaders/cloud_volume.wgsl");
+        let (_, body) = src
+            .split_once("struct CloudUniforms")
+            .expect("shader keeps its uniforms block");
+        let stub = "struct BevyView { world_position: vec4<f32> }\n\
+            @group(0) @binding(0) var<uniform> view: BevyView;\n\
+            struct VertexOutput {\n\
+            \t@builtin(position) position: vec4<f32>,\n\
+            \t@location(5) world_position: vec3<f32>,\n\
+            \t@location(6) uv: vec2<f32>,\n\
+            }\nstruct CloudUniforms";
+        let assembled = format!("{stub}{body}");
+        let module = naga::front::wgsl::parse_str(&assembled)
+            .map_err(|e| format!("cloud_volume.wgsl must parse: {e:?}"))
+            .unwrap();
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("cloud_volume.wgsl must validate");
+    }
+
+    #[test]
+    fn cloud_bake_tiles_the_longitude_seam() {
+        // The u=0/u=1 columns are adjacent texels on the sphere: their worst
+        // step must look like an interior neighbor step, not a cliff (a far
+        // visible seam reads as a painted wall from orbit).
+        for aniso in [(1.0, 1.0), (1.0, 2.0)] {
+            let px = bake_clouds(0xC10D, 96, 48, 0.55, 0.9, aniso);
+            let at = |x: u32, y: u32| px[((y * 96 + x) * 4 + 3) as usize] as f64 / 255.0;
+            let mut seam = 0.0f64;
+            let mut inner = 0.0f64;
+            for y in 0..48 {
+                seam = seam.max((at(0, y) - at(95, y)).abs());
+                for x in 0..95 {
+                    inner = inner.max((at(x, y) - at(x + 1, y)).abs());
+                }
+            }
+            assert!(
+                seam <= inner + 0.05,
+                "aniso {aniso:?}: seam step {seam:.3} vs interior {inner:.3}"
+            );
+        }
     }
 
     #[test]

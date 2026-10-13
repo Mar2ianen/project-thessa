@@ -125,12 +125,27 @@ struct EclipseState {
     eclipsed: bool,
 }
 
+/// Continuous primary-star visibility (1 = clear, 0 = total eclipse) shared
+/// with volumetric consumers that shade themselves (cloud march): one
+/// geometric factor feeds direct light, sky scattering, and clouds together
+/// (spec `docs/14` section 9). Defaults to clear sky; the updater writes it
+/// every frame it resolves stars.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct EclipseFactor(pub f32);
+
+impl Default for EclipseFactor {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
 pub struct AtmospherePlugin;
 
 impl Plugin for AtmospherePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(AutoExposurePlugin)
             .init_resource::<EclipseState>()
+            .init_resource::<EclipseFactor>()
             .add_systems(Update, configure_solari_precision)
             .add_systems(
                 Update,
@@ -853,7 +868,7 @@ fn update_atmosphere_visuals(
     catalog: Option<Res<StellarCatalog>>,
     tuning: Option<Res<ThessaOptics>>,
     resolved: Option<Res<GraphicsResolved>>,
-    mut eclipse: ResMut<EclipseState>,
+    mut eclipse: (ResMut<EclipseState>, ResMut<EclipseFactor>),
     mut primary: Query<
         (&mut DirectionalLight, &mut Transform, &mut SunDisk),
         (
@@ -996,16 +1011,17 @@ fn update_atmosphere_visuals(
     // Ingress/egress markers on the primary with hysteresis so penumbra
     // grazing does not spam.
     if let Some(top) = stars.first() {
-        if !eclipse.eclipsed && top.light.visibility < 0.02 {
-            eclipse.eclipsed = true;
+        if !eclipse.0.eclipsed && top.light.visibility < 0.02 {
+            eclipse.0.eclipsed = true;
             monitor.push_event(
                 "eclipse ingress",
                 Some(format!("{} behind {}", top.name, occluder_name)),
             );
-        } else if eclipse.eclipsed && top.light.visibility > 0.98 {
-            eclipse.eclipsed = false;
+        } else if eclipse.0.eclipsed && top.light.visibility > 0.98 {
+            eclipse.0.eclipsed = false;
             monitor.push_event("eclipse egress", None);
         }
+        eclipse.1.0 = top.light.visibility.clamp(0.0, 1.0) as f32;
     }
 
     // --- direct lights: raw-sun scale so the atmosphere LUT does the filtering ---

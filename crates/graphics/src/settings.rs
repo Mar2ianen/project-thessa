@@ -259,6 +259,9 @@ pub struct CloudSettings {
     pub enabled: bool,
     #[serde(default)]
     pub quality: Quality,
+    /// March view rays through the low-deck slab instead of alpha-blending
+    /// shell impostors. Low quality keeps the shell fallback; Medium/High
+    /// march with `ray_steps`. The cirrus deck stays a shell in both paths.
     #[serde(default)]
     pub volumetric: bool,
     #[serde(default = "default_cloud_steps")]

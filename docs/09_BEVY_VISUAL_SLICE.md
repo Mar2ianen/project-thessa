@@ -32,7 +32,8 @@ path already consumes snapshots from an embedded authoritative server process.
   and `cpu` remain explicit alternatives;
   both GPU consumers share classified triangles, skirts and material pages;
 - raster water reflection baseline and optional graphics-setting resolution;
-- baked beauty shells (cloud decks, gas-giant bands, aurora) and field-first
+- baked beauty shells (cloud cirrus, gas-giant bands, aurora) plus a marched
+  low-deck cloud volume, and field-first
   engine plume, all gated by `graphics.toml`;
 - low-deck cloud shadows on terrain (`clouds.cast_shadows`): the GPU surface
   samples the deck bake the shells show (sun-parallax offset, soft alpha
@@ -84,8 +85,10 @@ in the normal HUD.
 - the authoritative terrain contact boundary is spherical/sampled even though
   the client can render richer generated terrain;
 - atmosphere, water, clouds, and RT effects are visual reduced-order systems;
-  clouds/aurora/gas-giants use shell approximations, while the plume has a Low
-  impostor and Medium/High field-integrated volume ribbon. Volumetric clouds and
+  cirrus/aurora/gas-giants use shell approximations, the low cloud deck
+  marches volumetrically behind `[clouds] volumetric` (Low keeps shells),
+  while the plume has a Low
+  impostor and Medium/High field-integrated volume ribbon. Coupled weather and
   full RT remain future work;
 - rendering backends for the current client must continue to go through
   Bevy/wgpu abstractions (see `docs/39` for the longer-term migration plan);

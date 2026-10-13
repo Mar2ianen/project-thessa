@@ -102,7 +102,9 @@ impl Plugin for PerfMonitorPlugin {
             .add_systems(Update, perf_handle_keys)
             .add_systems(Update, perf_autobench.after(perf_handle_keys))
             .add_systems(Last, perf_end_frame);
-        if std::env::var_os("THESSA_AUTOBENCH").is_some() {
+        if std::env::var_os("THESSA_AUTOBENCH").is_some()
+            || std::env::var_os("THESSA_SCREENSHOT_PATH").is_some()
+        {
             app.insert_resource(Autobench::default());
         }
     }
@@ -275,7 +277,9 @@ fn perf_autobench(
         return;
     };
     if !bench.view_initialized {
-        match std::env::var("THESSA_AUTOBENCH_VIEW").as_deref() {
+        let view_mode =
+            std::env::var("THESSA_AUTOBENCH_VIEW").or_else(|_| std::env::var("THESSA_VIEW"));
+        match view_mode.as_deref() {
             Ok("pilot") => {
                 pilot.view_mode = ClientViewMode::Pilot;
             }
@@ -400,17 +404,30 @@ fn perf_autobench(
             .observe(save_to_disk(path));
         bench.screenshot_step += 1;
     }
-    if boot.elapsed().as_secs_f64() < AUTOBENCH_WARMUP_S {
-        return;
-    }
-    if !bench.screenshot_requested && boot.elapsed().as_secs_f64() >= 25.0 {
+    let screenshot_target = std::env::var_os("THESSA_SCREENSHOT_PATH")
+        .or_else(|| std::env::var_os("THESSA_AUTOBENCH_SCREENSHOT"));
+    let screenshot_at = std::env::var("THESSA_SCREENSHOT_AT_S")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(25.0);
+    if !bench.screenshot_requested && boot.elapsed().as_secs_f64() >= screenshot_at {
         bench.screenshot_requested = true;
-        if let Some(path) = std::env::var_os("THESSA_AUTOBENCH_SCREENSHOT") {
+        if let Some(path) = screenshot_target {
             use bevy::render::view::screenshot::{Screenshot, save_to_disk};
             commands
                 .spawn(Screenshot::primary_window())
                 .observe(save_to_disk(std::path::PathBuf::from(path)));
         }
+    }
+    if bench.screenshot_requested
+        && std::env::var_os("THESSA_SCREENSHOT_PATH").is_some()
+        && boot.elapsed().as_secs_f64() >= screenshot_at + 1.0
+    {
+        app_exit.write(AppExit::Success);
+        return;
+    }
+    if boot.elapsed().as_secs_f64() < AUTOBENCH_WARMUP_S {
+        return;
     }
     if bench.rung >= AUTOBENCH_LADDER.len() {
         if monitor.capturing {

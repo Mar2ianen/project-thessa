@@ -50,18 +50,20 @@ sky_dome = true
 ray_steps = 24 # view-march steps for CPU queries (4..128)
 
 [clouds]
-# Cheap shell decks (spec section 10, first slice): procedural RGBA baked once
-# on CPU, 1-2 transparent shells, no volumetrics. CBT tile keys share the
-# terrain LOD address space (see tools/worldgen-rocky lod::cbt_node_for_tile).
+# Low-deck volume march + cirrus shell (spec section 10): procedural RGBA
+# baked once on CPU; the low deck is marched per-pixel (Beer-Lambert over the
+# bake + shader detail, sun self-shadow), cirrus stays a thin shell in both
+# paths. CBT tile keys share the terrain LOD address space
+# (see tools/worldgen-rocky lod::cbt_node_for_tile).
 enabled = true
-quality = "medium" # low = 512px, medium = 1024px, high = 2048px bake
-volumetric = false # reserved; shell path ignores it
-ray_steps = 16
+quality = "high" # low = 512px bake + shell fallback; medium = 1024px; high = 2048px
+volumetric = true # true = march the low deck (medium/high); false = shell impostors
+ray_steps = 24 # view-march steps for the volume path (4..24 used, more capped); shells ignore it
 cast_shadows = true # low-deck shadows on terrain: sampled from the same bake
 # the shells show (sun-parallax offset, soft alpha shaping); off = free
 layers = 2 # 1 = low deck, 2 = low + cirrus (Earth-like high thin ice over cumulus)
-coverage = 0.55 # 0 overcast .. 1 clear (shaped: 0.55 reads ~40% broken deck)
-opacity = 0.9
+coverage = 0.55 # 0 overcast .. 1 clear (shaped: 0.55 reads broken deck with open ocean)
+opacity = 0.95
 animate = true # differential deck drift; off = static
 
 [night_lights]

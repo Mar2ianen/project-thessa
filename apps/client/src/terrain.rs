@@ -209,7 +209,11 @@ fn sync_cbt_effects(
     sun: Query<&GlobalTransform, With<PrimaryStarLight>>,
     visuals: Query<
         (&Name, &Transform, &InheritedVisibility),
-        (Without<beauty::CloudShell>, Without<beauty::AuroraShell>),
+        (
+            Without<beauty::CloudShell>,
+            Without<beauty::AuroraShell>,
+            Without<beauty::CloudVolume>,
+        ),
     >,
 ) {
     let r = graphics.as_deref().map(|g| g.0.clone()).unwrap_or_default();
@@ -223,7 +227,7 @@ fn sync_cbt_effects(
             Vec3::new(d.x, d.y, d.z)
         })
         .unwrap_or(Vec3::Y);
-    let spin = beauty::deck_spin_rad_s("thessa", 0).unwrap_or(0.004);
+    let spin = beauty::deck_spin_rad_s("thessa", 0).unwrap_or(5.0e-6);
     let cloud_shadow = match (&beauty, &planet) {
         (Some(images), Some(planet)) if r.clouds_cast_shadows => {
             let relative =
@@ -269,7 +273,11 @@ fn update_tile_cloud_shadows(
     sun: Query<&GlobalTransform, With<PrimaryStarLight>>,
     visuals: Query<
         (&Name, &Transform, &InheritedVisibility),
-        (Without<beauty::CloudShell>, Without<beauty::AuroraShell>),
+        (
+            Without<beauty::CloudShell>,
+            Without<beauty::AuroraShell>,
+            Without<beauty::CloudVolume>,
+        ),
     >,
     tiles: Query<(
         &SurfaceTile,
@@ -285,6 +293,13 @@ fn update_tile_cloud_shadows(
     *acc = 0.0;
     let r = graphics.as_deref().map(|g| g.0.clone()).unwrap_or_default();
     if !r.clouds_cast_shadows {
+        return;
+    }
+    // CPU tiles only: the GPU surface shades the same deck per-pixel
+    // in-shader (`sync_cbt_effects`). Running both double-dims, and the
+    // per-tile constant prints hard tile-edged quads over the smooth field
+    // (screenshot-caught on orbit).
+    if r.terrain.is_gpu() {
         return;
     }
     let (Some(images_res), Some(clock)) = (beauty.as_deref(), clock.as_deref()) else {
@@ -305,7 +320,7 @@ fn update_tile_cloud_shadows(
     let (Some(data), w, h) = (cloud.data.as_ref(), cloud.width(), cloud.height()) else {
         return;
     };
-    let spin = beauty::deck_spin_rad_s("thessa", 0).unwrap_or(0.004);
+    let spin = beauty::deck_spin_rad_s("thessa", 0).unwrap_or(5.0e-6);
     let shell_rot = beauty::deck_world_rotation(planet.rotation, spin, t, r.clouds_animate);
     let inv_shell = shell_rot.inverse();
     // Planet scale carries the body radius (entity match and live fallback
@@ -457,7 +472,9 @@ fn setup_terrain(
         .collect();
     survey.distance = 5000.0;
     survey.orbit = Quat::IDENTITY;
-    if std::env::var_os("THESSA_AUTOBENCH").is_some() {
+    if std::env::var_os("THESSA_AUTOBENCH").is_some()
+        || std::env::var_os("THESSA_SCREENSHOT_PATH").is_some()
+    {
         survey.site = std::env::var("THESSA_AUTOBENCH_SITE")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
@@ -2194,9 +2211,14 @@ fn update_terrain(
         });
     // Presentation advances ready families independently of planning-tree
     // convergence. Every published partition still covers the requested area.
+    let stage_started = Instant::now();
     if active && gpu_raster && gpu_albedo_ready {
         publish_resident_cover(&mut world, &mut cbt.topology, &cbt.pages);
     }
+    perf.record_scope(
+        "world.terrain_publish",
+        stage_started.elapsed().as_secs_f64(),
+    );
     // Keep the last complete draw snapshot and its pages while workers and
     // the planning tree converge. Never flash the bootstrap on each LOD change.
     let cpu_cover_ready = gpu_raster && gpu_albedo_ready && !world.visible.is_empty();
@@ -2217,17 +2239,25 @@ fn update_terrain(
         );
         return;
     }
-    let view = update_frame_camera(
-        &mut world,
-        &mut cbt.surface,
-        &survey,
-        &runtime,
-        &mut camera,
-        &mut readout,
-        &mut backdrop,
-        gpu_raster,
-        gpu_cover_ready,
-    );
+    let view = {
+        let stage_started = Instant::now();
+        let view = update_frame_camera(
+            &mut world,
+            &mut cbt.surface,
+            &survey,
+            &runtime,
+            &mut camera,
+            &mut readout,
+            &mut backdrop,
+            gpu_raster,
+            gpu_cover_ready,
+        );
+        perf.record_scope(
+            "world.terrain_frame_camera",
+            stage_started.elapsed().as_secs_f64(),
+        );
+        view
+    };
     let now_s = time.elapsed_secs_f64();
     // Selection stage: movement trigger -> tile demand -> CBT planning.
     let (selection_changed, detail_bias) = run_tile_selection(
@@ -2242,6 +2272,7 @@ fn update_terrain(
         &view,
     );
     // Streaming stage: poll finished builds, publish ready pages.
+    let stage_started = Instant::now();
     poll_finished_pages(
         &mut world,
         &mut cbt.pages,
@@ -2250,8 +2281,10 @@ fn update_terrain(
         &mut materials,
         &mut perf,
     );
+    perf.record_scope("world.terrain_poll", stage_started.elapsed().as_secs_f64());
     // Requests stage: order the demand cover, spawn height builds.
     // The same demand set pins warm pages in the eviction stage below.
+    let stage_started = Instant::now();
     let dependencies = compute_spawn_dependencies(&world, gpu_raster);
     spawn_height_jobs(
         &mut world,
@@ -2260,6 +2293,7 @@ fn update_terrain(
         gpu_raster,
         &view,
     );
+    perf.record_scope("world.terrain_spawn", stage_started.elapsed().as_secs_f64());
     // Material streaming stage (GPU path only).
     let pixel_angle = match &*camera.1 {
         Projection::Perspective(projection) => {
@@ -2285,12 +2319,17 @@ fn update_terrain(
         }
         _ => 1.0,
     };
+    let stage_started = Instant::now();
     run_material_streaming(
         &mut world,
         &mut cbt.material_pages,
         gpu_raster,
         &view,
         pixel_angle,
+    );
+    perf.record_scope(
+        "world.terrain_material_stream",
+        stage_started.elapsed().as_secs_f64(),
     );
     // CPU-fallback presentation bridge: entities, backdrop, transforms.
     sync_tile_entities(
@@ -2308,6 +2347,7 @@ fn update_terrain(
         &mut perf,
     );
     // Cache stage: pin the live set, evict the oldest excess.
+    let stage_started = Instant::now();
     evict_stale_tiles(
         &mut world,
         &mut cbt.pages,
@@ -2318,6 +2358,7 @@ fn update_terrain(
         &dependencies,
         gpu_raster,
     );
+    perf.record_scope("world.terrain_evict", stage_started.elapsed().as_secs_f64());
     // Telemetry stage: counters for this frame.
     record_terrain_counters(
         &mut world,
@@ -2840,5 +2881,41 @@ mod streaming_tests {
                 assert_eq!(got, LinearRgba::WHITE);
             }
         }
+    }
+
+    #[test]
+    fn tile_shadows_hold_when_gpu_draws_terrain() {
+        // GPU raster shades the deck per-pixel in-shader; the CPU per-tile
+        // path must not touch materials there (its constants print
+        // tile-edged quads over the smooth field, screenshot-caught).
+        let mut world = effect_world(true, false);
+        world.resource_mut::<GraphicsResolved>().0.terrain =
+            thessa_graphics::ResolvedTerrainRender::GpuIndexed;
+        let mat = {
+            let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+            materials.add(StandardMaterial {
+                base_color: Color::WHITE,
+                ..Default::default()
+            })
+        };
+        world.spawn((
+            SurfaceTile(TileKey {
+                face: 0,
+                level: 10,
+                x: 0,
+                y: 0,
+            }),
+            GlobalTransform::from_translation(Vec3::new(3_200_000.0, 0.0, 0.0)),
+            MeshMaterial3d(mat.clone()),
+        ));
+        world
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(0.5));
+        let mut schedule = Schedule::default();
+        schedule.add_systems(update_tile_cloud_shadows);
+        schedule.run(&mut world);
+        let materials = world.resource::<Assets<StandardMaterial>>();
+        let got = materials.get(&mat).unwrap().base_color.to_linear();
+        assert_eq!(got, LinearRgba::WHITE);
     }
 }

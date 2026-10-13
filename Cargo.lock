@@ -5732,6 +5732,7 @@ dependencies = [
  "bevy",
  "bevy_brp_extras",
  "glam 0.32.1",
+ "naga",
  "rayon",
  "serde",
  "thessa-atmosphere",

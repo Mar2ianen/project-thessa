@@ -66,7 +66,7 @@ do not update in place).
 | `04_RUNTIME_ARCHITECTURE.md` | 🟡 prototype | process split, 120 Hz authority, warp/rails, single-pass ingress dispatch, Arc-shared outbound snapshots, f64→render-local | editor/graphs, persistence, WASM, non-promises |
 | `09_BEVY_VISUAL_SLICE.md` | 🟡 prototype | map/pilot/CPU terrain/water/atmosphere + configured GPU-auto CBT, optional shared-material mesh draw with indexed fallback + beauty/plume | multiplayer/auth/persistence, WASM |
 | `10_PILOT_INTERFACE.md` | ✅ prototype | HUD/navball/camera, RCS/reaction-wheel/gear/parachute controls, typed part commands, telemetry/snapshot boundary | — |
-| `14_VISUAL_ATMOSPHERE.md` | 🟡 partial | raster/LUT + shell clouds + gas-giant bands + aurora + field-first plume volume | volumetric clouds, weather coupling, full Solari |
+| `14_VISUAL_ATMOSPHERE.md` | 🟡 partial | raster/LUT + shell clouds + low-deck cloud volume march + gas-giant bands + aurora + field-first plume volume | weather coupling, full Solari |
 | `19_ALERTING_AND_FLIGHT_PHASES.md` | 🔵 design target | background only (regime/mode inputs) | `FlightPhase`, alerts, arbitration, Slices A–D |
 | `21_TERRAIN_STREAMING_THROUGHPUT.md` | 🔵 baseline | invariants normative | scheduler, geomorph, UMA fast path |
 | `22_RCBT_GPU_TERRAIN.md` | 🟡 baseline | §§1–18 normative, Arc-shared extraction snapshots, batched COW page streaming, stable height slots, dirty-ordinal geometry dispatch | GPU bisector pool, native Vulkan, compressed pages |

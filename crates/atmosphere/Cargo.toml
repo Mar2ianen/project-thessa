@@ -10,3 +10,7 @@ description = "Shared visual-atmosphere optics for Project Thessa (spec docs/14_
 [dependencies]
 glam.workspace = true
 serde.workspace = true
+
+[[bench]]
+name = "cloud_slab"
+harness = false

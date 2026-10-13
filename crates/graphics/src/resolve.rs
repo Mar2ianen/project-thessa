@@ -159,6 +159,11 @@ pub struct ResolvedGraphicsSettings {
     pub aurora_animate: bool,
     pub clouds_enabled: bool,
     pub clouds_quality: Quality,
+    /// Volume-march the low-deck slab (false = shell impostors). Resolved
+    /// from `volumetric && enabled`, with Low quality falling back to shells.
+    pub clouds_volumetric: bool,
+    /// View-march steps for the volume path (shells ignore it).
+    pub clouds_steps: u32,
     pub clouds_layers: u32,
     pub clouds_coverage: f32,
     pub clouds_opacity: f32,
@@ -306,6 +311,8 @@ impl ResolvedGraphicsSettings {
             aurora_animate: requested.upper_atmosphere.aurora_animate,
             clouds_enabled: requested.clouds.enabled,
             clouds_quality: requested.clouds.quality,
+            clouds_volumetric: Self::resolve_cloud_volume(requested, &mut notes),
+            clouds_steps: Self::resolve_cloud_steps(requested, &mut notes),
             clouds_layers: requested.clouds.layers.clamp(1, 2),
             clouds_coverage: requested.clouds.coverage.clamp(0.0, 1.0),
             clouds_opacity: requested.clouds.opacity.clamp(0.0, 1.0),
@@ -335,6 +342,37 @@ impl ResolvedGraphicsSettings {
             shadow_map_size: requested.shadows.map_size.clamp(512, 8192),
             shadow_normal_bias_m: requested.shadows.normal_bias_m.clamp(0.0, 50.0),
             notes,
+        }
+    }
+
+    /// Volume path needs the same shader loop bound as
+    /// `assets/shaders/cloud_volume.wgsl` (`CLOUD_MARCH_MAX`).
+    const CLOUD_MARCH_STEP_CAP: u32 = 24;
+
+    fn resolve_cloud_volume(requested: &RequestedGraphics, notes: &mut Vec<String>) -> bool {
+        if !requested.clouds.volumetric || !requested.clouds.enabled {
+            return false;
+        }
+        if requested.clouds.quality == Quality::Low {
+            notes.push(
+                "volumetric clouds requested at low quality; using shell decks (low = shell fallback)"
+                    .to_string(),
+            );
+            return false;
+        }
+        true
+    }
+
+    fn resolve_cloud_steps(requested: &RequestedGraphics, notes: &mut Vec<String>) -> u32 {
+        let steps = requested.clouds.ray_steps.clamp(4, 128);
+        if steps > Self::CLOUD_MARCH_STEP_CAP {
+            notes.push(format!(
+                "cloud ray_steps {steps} capped at {} for the volume march",
+                Self::CLOUD_MARCH_STEP_CAP
+            ));
+            Self::CLOUD_MARCH_STEP_CAP
+        } else {
+            steps
         }
     }
 
@@ -406,6 +444,11 @@ impl ResolvedGraphicsSettings {
             self.shadow_map_size.to_string(),
         );
         map.insert("clouds".to_string(), self.clouds_enabled.to_string());
+        map.insert(
+            "clouds_volumetric".to_string(),
+            self.clouds_volumetric.to_string(),
+        );
+        map.insert("cloud_steps".to_string(), self.clouds_steps.to_string());
         map.insert("cloud_layers".to_string(), self.clouds_layers.to_string());
         map.insert(
             "cloud_shadows".to_string(),
@@ -521,6 +564,44 @@ mod tests {
         assert!(resolved.terrain.is_gpu());
         assert_eq!(resolved.as_meta_map()["terrain"], "gpu_indexed");
         assert_eq!(resolved.as_meta_map()["terrain_mesh_cells"], "24");
+    }
+
+    #[test]
+    fn cloud_volume_resolves_with_low_fallback_and_step_cap() {
+        use crate::settings::Quality;
+        let caps = Capabilities::unknown();
+        // Off by default (requested default is shell decks).
+        let resolved =
+            ResolvedGraphicsSettings::from_requested(&RequestedGraphics::default(), &caps);
+        assert!(!resolved.clouds_volumetric);
+        // Requested volume on Medium survives with user steps.
+        let mut requested = RequestedGraphics::default();
+        requested.clouds.enabled = true;
+        requested.clouds.volumetric = true;
+        requested.clouds.quality = Quality::Medium;
+        requested.clouds.ray_steps = 12;
+        let resolved = ResolvedGraphicsSettings::from_requested(&requested, &caps);
+        assert!(resolved.clouds_volumetric);
+        assert_eq!(resolved.clouds_steps, 12);
+        // Low quality falls back to shells with a note.
+        requested.clouds.quality = Quality::Low;
+        let resolved = ResolvedGraphicsSettings::from_requested(&requested, &caps);
+        assert!(!resolved.clouds_volumetric);
+        assert!(resolved.notes.iter().any(|n| n.contains("shell fallback")));
+        // Disabled clouds never march, even when requested.
+        requested.clouds.enabled = false;
+        requested.clouds.quality = Quality::High;
+        let resolved = ResolvedGraphicsSettings::from_requested(&requested, &caps);
+        assert!(!resolved.clouds_volumetric);
+        // Huge step counts cap at the shader loop bound with a note.
+        requested.clouds.enabled = true;
+        requested.clouds.ray_steps = 128;
+        let resolved = ResolvedGraphicsSettings::from_requested(&requested, &caps);
+        assert_eq!(resolved.clouds_steps, 24);
+        assert!(resolved.notes.iter().any(|n| n.contains("capped at 24")));
+        let meta = resolved.as_meta_map();
+        assert_eq!(meta["clouds_volumetric"], "true");
+        assert_eq!(meta["cloud_steps"], "24");
     }
 
     #[test]

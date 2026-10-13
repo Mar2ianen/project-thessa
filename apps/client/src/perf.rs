@@ -933,6 +933,11 @@ fn stop_capture(
         metadata.graphics.preset = resolved.0.preset_label.clone();
         metadata.graphics.ray_tracing = resolved.0.ray_tracing.as_str().to_string();
         metadata.graphics.resolved = resolved.0.as_meta_map();
+        let effective_backend = crate::beauty::effective_cloud_backend(&resolved.0);
+        metadata.graphics.resolved.insert(
+            "effective_cloud_backend".to_string(),
+            effective_backend.as_str().to_string(),
+        );
     } else {
         metadata.graphics.preset = "unknown".to_string();
         metadata.graphics.ray_tracing = "unknown".to_string();

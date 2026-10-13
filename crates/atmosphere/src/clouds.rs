@@ -293,6 +293,25 @@ pub fn height_gradient(h01: f64, high_deck: bool) -> f64 {
     type_gradient(h01, if high_deck { 0.15 } else { 0.5 })
 }
 
+/// Convective cumulus height gradient (Schneider / LCL physics) matching WGSL:
+/// - Sharp lifting condensation base (flat cumulus bottoms)
+/// - Convective updraft chimney through troposphere
+/// - Rounded dome tops
+pub fn convective_cumulus_gradient(h01: f64) -> f64 {
+    if !h01.is_finite() || h01 <= 0.0 || h01 >= 1.0 {
+        return 0.0;
+    }
+    let base_lcl = smoothstep(0.065, 0.082, h01);
+    let dome_top = 1.0 - smoothstep(0.72, 0.98, h01);
+    let updraft = 1.0 + 0.40 * (((h01 - 0.065) / 0.915).clamp(0.0, 1.0) * std::f64::consts::PI).sin();
+    let hgrad = base_lcl * dome_top * updraft;
+    if hgrad <= 0.001 {
+        0.0
+    } else {
+        hgrad
+    }
+}
+
 fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -650,5 +669,107 @@ mod tests {
         let shallow = ambient_rgb(0.5, 1.0, bottom, top);
         let deep = ambient_rgb(0.5, 0.1, bottom, top);
         assert!(deep[0] < shallow[0] * 0.6);
+    }
+
+    #[test]
+    fn differential_parity_beer_powder_and_scatter() {
+        // Evaluate across a dense grid of 1,000 optical depths [0.0, 10.0]:
+        for i in 0..=1000 {
+            let d = (i as f64) * 0.01;
+            // WGSL GPU exact formulas from cloud_volume.wgsl:
+            let wgsl_beer = (-d).exp();
+            let wgsl_powder = 1.0 - (-d * 2.0).exp();
+            let wgsl_beer_powder = wgsl_beer.max(2.0 * wgsl_beer * wgsl_powder);
+            let wgsl_scatter = wgsl_beer * wgsl_powder;
+
+            let cpu_beer_powder = beer_powder(d);
+            let cpu_scatter = powder_scatter_term(d);
+
+            assert!(
+                (cpu_beer_powder - wgsl_beer_powder).abs() < 1e-12,
+                "d={d}: cpu={cpu_beer_powder}, wgsl={wgsl_beer_powder}"
+            );
+            assert!(
+                (cpu_scatter - wgsl_scatter).abs() < 1e-12,
+                "d={d}: cpu={cpu_scatter}, wgsl={wgsl_scatter}"
+            );
+        }
+    }
+
+    #[test]
+    fn differential_parity_dual_lobe_phase() {
+        // Evaluate across 200 cos_theta angles in [-1.0, 1.0]:
+        for i in 0..=200 {
+            let cos_theta = -1.0 + (i as f64) * 0.01;
+            // WGSL GPU exact formulation from cloud_volume.wgsl:
+            // phase = 0.70 * hg_phase(0.76, cos_theta) + 0.30 * hg_phase(-0.30, cos_theta)
+            let wgsl_hg = |g: f64, c: f64| {
+                let g2 = g * g;
+                let denom = (1.0 + g2 - 2.0 * g * c).max(1e-4).powf(1.5);
+                (1.0 - g2) / (4.0 * std::f64::consts::PI * denom)
+            };
+            let wgsl_phase = 0.70 * wgsl_hg(0.76, cos_theta) + 0.30 * wgsl_hg(-0.30, cos_theta);
+            let cpu_phase = dual_lobe_phase(cos_theta);
+
+            assert!(
+                (cpu_phase - wgsl_phase).abs() < 1e-12,
+                "cos_theta={cos_theta}: cpu={cpu_phase}, wgsl={wgsl_phase}"
+            );
+        }
+    }
+
+    #[test]
+    fn differential_parity_convective_gradient() {
+        for i in 0..=200 {
+            let h01 = (i as f64) * 0.005;
+            let wgsl_sm = |e0: f64, e1: f64, x: f64| {
+                let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+                t * t * (3.0 - 2.0 * t)
+            };
+            let base_lcl = wgsl_sm(0.065, 0.082, h01);
+            let dome_top = 1.0 - wgsl_sm(0.72, 0.98, h01);
+            let updraft =
+                1.0 + 0.40 * (((h01 - 0.065) / 0.915).clamp(0.0, 1.0) * std::f64::consts::PI).sin();
+            let mut expected = base_lcl * dome_top * updraft;
+            if expected <= 0.001 {
+                expected = 0.0;
+            }
+            let cpu = convective_cumulus_gradient(h01);
+            assert!(
+                (cpu - expected).abs() < 1e-12,
+                "h01={h01}: cpu={cpu}, expected={expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn convergence_test_trapezoidal_slab_quadrature() {
+        // Test convergence on smooth continuous pulse density profile rho(t) = exp(-((t - 0.5)/0.2)^2)
+        // High-resolution reference (N = 8192 steps):
+        let profile = |t: f64| (-((t - 0.5) / 0.2).powi(2)).exp();
+        let (ref_trans, ref_depth) = integrate_slab(profile, 0.0, 1.0, 8192, 2.0);
+
+        // Verify monotonic reduction of quadrature error as step budget increases:
+        let mut prev_depth_err = f64::MAX;
+        let mut prev_trans_err = f64::MAX;
+        for steps in [8, 16, 32, 64, 128, 256] {
+            let (trans, depth) = integrate_slab(profile, 0.0, 1.0, steps, 2.0);
+            let depth_err = (depth - ref_depth).abs();
+            let trans_err = (trans - ref_trans).abs();
+
+            assert!(
+                depth_err < prev_depth_err,
+                "steps={steps}: depth error {depth_err} did not decrease vs {prev_depth_err}"
+            );
+            assert!(
+                trans_err < prev_trans_err,
+                "steps={steps}: trans error {trans_err} did not decrease vs {prev_trans_err}"
+            );
+            prev_depth_err = depth_err;
+            prev_trans_err = trans_err;
+        }
+        // At 256 steps, error is < 1e-4:
+        assert!(prev_depth_err < 1e-4);
+        assert!(prev_trans_err < 1e-4);
     }
 }

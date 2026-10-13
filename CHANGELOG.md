@@ -22,11 +22,13 @@ APIs, data formats, and save files are not stable before `0.1.0`.
   the slab, and from the surface instead of painted alpha. Backend-neutral
   slab math + CPU oracle in `thessa-atmosphere::clouds` (interval/planet-clip/
   shaping/lighting tests, error envelope, `cloud_slab` bench); raster
-  consumer in `assets/shaders/cloud_volume.wgsl` (max 24 view steps from
-  `ray_steps`, coarse clear-sky discard, transmittance early-out, tiled GPU
-  noise lattices + differential fine-octave lean with height, turret-scale
-  sun taps with half-step self term). Cirrus
-  stays a streaky shell; cloud shadows keep sampling the deck bake.
+  consumer in `assets/shaders/cloud_volume.wgsl` (dual integrators selectable via
+  `[clouds] integrator`: Backend A real-time stratified ray marching, Backend B
+  stochastic volumetric scattering approximation; max 24 view steps from
+  `ray_steps`, discrete per-step weather-bake evaluation, transmittance early-out,
+  step-aware Nyquist bandlimited noise octaves, turret-scale sun taps). Cirrus
+  stays a streaky shell; cloud shadows sample the deck bake with physical
+  cumulus deck parallax (~3 km).
 - Physical cloud-deck winds (was: 12 km/s hurricane drift): decks co-rotate
   with the planet plus zonal breezes (~15 m/s low deck, ~40 m/s cirrus jet)
   about the planet pole axis, with an f64-folded phase that never jitters

@@ -22,10 +22,10 @@
 // map view and true-scale pilot views: extinction is per radii, appearance
 // only, like `density_scale`.
 //
-// Cost (worst case, all steps resident): 3 coarse clear-sky taps + N view
-// steps x (1 bake tap + 2 sun taps). Clear sky discards after the coarse
-// taps; dense cores early-out on transmittance. N <= CLOUD_MARCH_MAX (24),
-// resolved from `clouds.ray_steps` (`crates/graphics` caps + notes).
+// Cost (worst case, all steps resident): N view steps x (1 2D weather bake tap +
+// 3 sun shadow taps when occupied). Dense cores early-out on transmittance (< 1e-4).
+// Per-step weather bake test (< 0.02) skips expensive 3D procedural noise on clear steps.
+// N <= CLOUD_MARCH_MAX (24), resolved from `clouds.ray_steps` (`crates/graphics`).
 
 #import bevy_pbr::{
     mesh_view_bindings::view,
@@ -183,16 +183,26 @@ fn billow_cubic(p: vec3<f32>) -> f32 {
 }
 
 // Hierarchical cauliflower billow field with rotational scrambling & fluid advection:
-// Step-footprint filtered: higher octaves fade out when step_km cannot resolve their spatial frequency
+// Step-footprint filtered: higher octaves fade out when step_km cannot resolve their spatial frequency.
+// Note: Dynamic branch on w1/w2 skips Perlin evaluations for unresolved octaves; wavefront SIMD
+// divergence across varying ray chords executes active branches across the wave. Primarily an
+// image-quality anti-aliasing / bandlimiting filter to eliminate sub-step Nyquist aliasing.
 fn cauliflower_fbm(p: vec3<f32>, step_km: f32) -> f32 {
     let b0 = billow_cubic(p * 0.072);
-    let p1 = ROT_OCTAVE * (p * 0.162) + vec3<f32>(1.73, 4.29, 8.11);
-    let b1 = billow_cubic(p1);
-    let p2 = ROT_OCTAVE_2 * (p1 * 2.21) + vec3<f32>(5.19, 1.87, 3.63);
-    let b2 = billow_cubic(p2);
     // Bandlimiting against raymarch step: periods are ~14.0 km (b0), ~6.2 km (b1), ~2.8 km (b2)
     let w1 = smoothstep(3.5, 0.8, step_km);
-    let w2 = smoothstep(1.8, 0.4, step_km);
+    var b1 = 0.0;
+    var b2 = 0.0;
+    var w2 = 0.0;
+    if (w1 > 0.01) {
+        let p1 = ROT_OCTAVE * (p * 0.162) + vec3<f32>(1.73, 4.29, 8.11);
+        b1 = billow_cubic(p1);
+        w2 = smoothstep(1.8, 0.4, step_km);
+        if (w2 > 0.01) {
+            let p2 = ROT_OCTAVE_2 * (p1 * 2.21) + vec3<f32>(5.19, 1.87, 3.63);
+            b2 = billow_cubic(p2);
+        }
+    }
     let denom = max(0.40 + 0.38 * w1 + 0.22 * w2, 0.01);
     return (b0 * 0.40 + b1 * (0.38 * w1) + b2 * (0.22 * w2)) / denom;
 }
@@ -359,8 +369,9 @@ fn slab_density(
     let cauli = cauliflower_fbm(p_w, step_km);
 
     // 3. Convective cauliflower sculpting (modulated by cloud.params.w DETAIL_AMP):
-    // Solid flat macro foundation at the base; buoyant cauliflower plumes bubbling upward
-    let detail_amp = max(cloud.params.w, 0.1);
+    // Solid flat macro foundation at the base; buoyant cauliflower plumes bubbling upward.
+    // Normalized by 1.6 baseline constant so default CLOUD_DETAIL_AMP yields 1.0 multiplier:
+    let detail_amp = max(cloud.params.w / 1.6, 0.05);
     let billow_lift = mix(0.12, 0.60, smoothstep(0.08, 0.65, h01)) * detail_amp;
     let shape_body = macro_perlin * (1.0 - billow_lift) + cauli * billow_lift;
 
@@ -491,7 +502,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let cos_theta = dot(rd, sun_dir);
     let thick = max(top - bot, 1e-6);
     let inv_radius = 1.0 / radius;
-    let shadow_span = max(cloud.params.z, 0.01) * 2.0;
+    // Sun shadow tap span: normalized by 0.8 baseline constant so default
+    // CLOUD_SUN_SPAN_FRAC yields 1.0 multiplier (180 m / 650 m / 1800 m base taps):
+    let shadow_span = max(cloud.params.z / 0.8, 0.05);
 
     let chord = max(t1 - t0, 1e-5);
     let w_entry = weather_at(ro + rd * t0, drift);
@@ -523,6 +536,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
             let p_sample = ro + rd * t_sample;
             let uv_peek = deck_uv(p_sample);
+            // Discrete weather-bake skip: skips 3D procedural noise when the weather bake
+            // at this sample point has low coverage (< 0.02).
+            // Note: removed non-conservative whole-ray rejection; remaining integration
+            // is discrete point sampling and can miss sub-step features. textureSampleLevel
+            // incurs a non-zero texture fetch cost.
             if (base_at_uv(uv_peek) < 0.02) {
                 continue;
             }
@@ -609,7 +627,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let uv_peek = deck_uv(p);
             let base_peek = base_at_uv(uv_peek);
 
-            // Coarse space-skip: empty air in weather bake
+            // Discrete weather-bake skip: skips 3D procedural noise when the weather bake
+            // at this sample point has low coverage (< 0.02).
+            // Note: removed non-conservative whole-ray rejection; remaining integration
+            // is discrete point sampling and can miss sub-step features. textureSampleLevel
+            // incurs a non-zero texture fetch cost.
             if (base_peek < 0.02) {
                 prev_density = -1.0;
                 continue;
@@ -625,7 +647,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
                 continue;
             }
 
-            // Trapezoidal integration with unbiased entry handling:
+            // Trapezoidal quadrature with boundary reset on slab entry / clear air:
+            // Resets boundary sample so entering an occupied interval does not halve the first step weight.
+            // Note: this is a discrete numerical quadrature approximation, not an unbiased Monte Carlo estimator.
             let integ_density = select((density + prev_density) * 0.5, density, prev_density < 0.0);
             prev_density = density;
 

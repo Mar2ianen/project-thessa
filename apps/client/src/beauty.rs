@@ -339,9 +339,15 @@ fn bake_clouds(
 // parallax offset for the physical deck height (the impostor shell rides an
 // exaggerated radius, never used here).
 
-/// Physical low-deck altitude for the shadow parallax (metres):
-/// Matches the mid-slab height of [`CLOUD_SLAB_LOW`] ((1.008 + 1.014)/2 - 1.0 = 0.011 * 3200 km = 35.2 km).
-pub(crate) const CLOUD_SHADOW_DECK_HEIGHT_M: f64 = 35_200.0;
+/// Physical low-deck altitude for the shadow parallax (metres): cumulus
+/// base rides ~3 km above the reference geoid; cirrus is not cast into
+/// shadows (thin, high, diffuse).
+///
+/// Distinct from [`CLOUD_SLAB_LOW`]: the volume-march slab (1.008..1.014 radii,
+/// ~25..45 km) and shell impostors ride an exaggerated orbital radius to clear
+/// planetary terrain relief and avoid z-fighting from orbit, but ground-level
+/// shadow parallax on terrain must use physical cumulus base altitude (3,000 m).
+pub(crate) const CLOUD_SHADOW_DECK_HEIGHT_M: f64 = 3000.0;
 /// Deep-core shadow depth; thin skirts fade out through the alpha shaping.
 pub(crate) const CLOUD_SHADOW_STRENGTH: f32 = 0.45;
 
@@ -1154,35 +1160,70 @@ pub(crate) fn volume_steps(steps: u32) -> f32 {
     steps.clamp(4, 24) as f32
 }
 
-/// Cloud backend selection encoded in `shape.w`:
-/// 0.0 = Real-time stratified ray marching (Backend A, tuned for Radeon 880M)
-/// 1.0 = Stochastic scattering approximation (Backend B, candidate real-time integrator)
-pub(crate) fn cloud_backend_mode(r: &ResolvedGraphicsSettings) -> f32 {
-    static BACKEND_OVERRIDE: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
-    let override_val = BACKEND_OVERRIDE.get_or_init(|| {
-        std::env::var("THESSA_CLOUD_BACKEND").ok().and_then(|val| {
-            if val.eq_ignore_ascii_case("pt") || val == "1" || val.eq_ignore_ascii_case("pathtrace") || val.eq_ignore_ascii_case("stochastic") {
-                Some(1.0)
-            } else if val.eq_ignore_ascii_case("march") || val == "0" || val.eq_ignore_ascii_case("raymarch") {
-                Some(0.0)
-            } else {
-                None
-            }
-        })
-    });
-    if let Some(mode) = *override_val {
-        return mode;
-    }
-    match r.cloud_integrator {
-        thessa_graphics::CloudIntegratorRequest::Stochastic => 1.0,
-        thessa_graphics::CloudIntegratorRequest::March => {
-            if r.rt_clouds {
-                1.0
-            } else {
-                0.0
-            }
+/// Effective runtime cloud backend for rendering and telemetry:
+/// - `March`: Real-time stratified ray marching (Backend A, tuned for Radeon 880M / iGPU)
+/// - `Stochastic`: Stochastic volumetric scattering approximation (Backend B, candidate real-time integrator)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EffectiveCloudBackend {
+    March,
+    Stochastic,
+}
+
+impl EffectiveCloudBackend {
+    pub(crate) fn as_f32(self) -> f32 {
+        match self {
+            Self::March => 0.0,
+            Self::Stochastic => 1.0,
         }
     }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::March => "march",
+            Self::Stochastic => "stochastic",
+        }
+    }
+}
+
+/// Pure resolution of effective cloud backend from requested integrator and optional dev environment override.
+///
+/// CRITICAL: `CloudIntegratorRequest::March` strictly resolves to `March`, completely decoupled
+/// from `rt_clouds` or other global RT participation settings.
+pub(crate) fn resolve_effective_cloud_backend(
+    integrator: thessa_graphics::CloudIntegratorRequest,
+    env_override: Option<&str>,
+) -> EffectiveCloudBackend {
+    if let Some(val) = env_override {
+        if val.eq_ignore_ascii_case("pt")
+            || val == "1"
+            || val.eq_ignore_ascii_case("pathtrace")
+            || val.eq_ignore_ascii_case("stochastic")
+        {
+            return EffectiveCloudBackend::Stochastic;
+        } else if val.eq_ignore_ascii_case("march")
+            || val == "0"
+            || val.eq_ignore_ascii_case("raymarch")
+        {
+            return EffectiveCloudBackend::March;
+        }
+    }
+    match integrator {
+        thessa_graphics::CloudIntegratorRequest::Stochastic => EffectiveCloudBackend::Stochastic,
+        thessa_graphics::CloudIntegratorRequest::March => EffectiveCloudBackend::March,
+    }
+}
+
+/// Cloud backend selection encoded in `shape.w`:
+/// 0.0 = Real-time stratified ray marching (Backend A)
+/// 1.0 = Stochastic scattering approximation (Backend B)
+pub(crate) fn effective_cloud_backend(r: &ResolvedGraphicsSettings) -> EffectiveCloudBackend {
+    static BACKEND_OVERRIDE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let override_val = BACKEND_OVERRIDE.get_or_init(|| std::env::var("THESSA_CLOUD_BACKEND").ok());
+    resolve_effective_cloud_backend(r.cloud_integrator, override_val.as_deref())
+}
+
+pub(crate) fn cloud_backend_mode(r: &ResolvedGraphicsSettings) -> f32 {
+    effective_cloud_backend(r).as_f32()
 }
 
 /// Equatorial breeze advecting the shader detail: ~15 m/s over a ~20 000 km
@@ -2137,5 +2178,64 @@ mod tests {
             };
             assert!(cbt_node_for_tile(key).is_some(), "w={w}");
         }
+    }
+
+    #[test]
+    fn effective_cloud_backend_strictly_decoupled_from_rt_clouds() {
+        use thessa_graphics::CloudIntegratorRequest;
+
+        // March requested: MUST resolve to March (0.0) regardless of rt_clouds.
+        assert_eq!(
+            resolve_effective_cloud_backend(CloudIntegratorRequest::March, None),
+            EffectiveCloudBackend::March
+        );
+        assert_eq!(
+            resolve_effective_cloud_backend(CloudIntegratorRequest::March, None).as_f32(),
+            0.0
+        );
+        assert_eq!(
+            resolve_effective_cloud_backend(CloudIntegratorRequest::March, None).as_str(),
+            "march"
+        );
+
+        // Stochastic requested: MUST resolve to Stochastic (1.0).
+        assert_eq!(
+            resolve_effective_cloud_backend(CloudIntegratorRequest::Stochastic, None),
+            EffectiveCloudBackend::Stochastic
+        );
+        assert_eq!(
+            resolve_effective_cloud_backend(CloudIntegratorRequest::Stochastic, None).as_f32(),
+            1.0
+        );
+        assert_eq!(
+            resolve_effective_cloud_backend(CloudIntegratorRequest::Stochastic, None).as_str(),
+            "stochastic"
+        );
+
+        // Dev environment override overrides request:
+        for val in ["march", "0", "raymarch", "MARCH"] {
+            assert_eq!(
+                resolve_effective_cloud_backend(CloudIntegratorRequest::Stochastic, Some(val)),
+                EffectiveCloudBackend::March,
+                "override {val} should force March"
+            );
+        }
+        for val in ["pt", "1", "stochastic", "pathtrace", "STOCHASTIC"] {
+            assert_eq!(
+                resolve_effective_cloud_backend(CloudIntegratorRequest::March, Some(val)),
+                EffectiveCloudBackend::Stochastic,
+                "override {val} should force Stochastic"
+            );
+        }
+
+        // Invalid override string ignored, falls back to requested integrator:
+        assert_eq!(
+            resolve_effective_cloud_backend(CloudIntegratorRequest::March, Some("nonsense")),
+            EffectiveCloudBackend::March
+        );
+        assert_eq!(
+            resolve_effective_cloud_backend(CloudIntegratorRequest::Stochastic, Some("nonsense")),
+            EffectiveCloudBackend::Stochastic
+        );
     }
 }

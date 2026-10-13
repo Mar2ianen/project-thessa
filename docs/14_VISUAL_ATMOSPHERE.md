@@ -291,9 +291,13 @@ parallax, and terminator shading. Cirrus stays a thin shell in both paths.
 The backend-neutral march math lives in `thessa-atmosphere::clouds`
 (slab interval, planet clip, `integrate_slab` CPU oracle, warp-safe by
 construction); `assets/shaders/cloud_volume.wgsl` is its raster consumer and
-must agree with the oracle within representation error. Budgets:
-`clouds.ray_steps` view steps (4..24 marched, more capped with a note),
-Low = shells, `enabled = false` hides every deck (free).
+supports dual integrators configured via `[clouds] integrator` (`march` for
+real-time stratified ray marching, `stochastic` for volumetric scattering
+approximation). Budgets: `clouds.ray_steps` view steps (4..24 marched, more
+capped with a note), discrete per-step weather-bake checks with step-aware
+Nyquist bandlimited noise octaves. Low = shells, `enabled = false` hides every
+deck (free). Low-deck terrain shadows sample the deck bake using physical
+cumulus deck altitude (~3 km), distinct from the exaggerated orbital slab radius.
 
 Future cloud rendering may use the atmosphere's lighting/transmittance queries, but cloud state should remain separate.
 

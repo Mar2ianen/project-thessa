@@ -507,7 +507,9 @@ mod tests {
                         assert!(
                             p[k] >= min[k] - 1e-4 && p[k] <= max[k] + 1e-4,
                             "sample at u={u}, v={v}, h={h} must fall inside AABB: p[{k}]={}, min={}, max={}",
-                            p[k], min[k], max[k]
+                            p[k],
+                            min[k],
+                            max[k]
                         );
                     }
                 }

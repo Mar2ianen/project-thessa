@@ -20,10 +20,7 @@ fn slab_intersection_is_invariant_under_positive_ray_direction_scaling() {
     let scaled = ray_intersect_slab(MIN, MAX, [0.0, 0.0, 25.0], [scale, 0.0, 0.0])
         .expect("small nonzero direction must still hit");
 
-    for (actual, expected) in [
-        (scaled.0 * scale, unit.0),
-        (scaled.1 * scale, unit.1),
-    ] {
+    for (actual, expected) in [(scaled.0 * scale, unit.0), (scaled.1 * scale, unit.1)] {
         assert!(
             (actual - expected).abs() < 1e-10,
             "ray direction scaling changed the physical intersection: {actual} != {expected}"

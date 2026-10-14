@@ -430,10 +430,7 @@ pub fn resolve_cloud_integrator(
         {
             return crate::settings::CloudIntegratorRequest::Stochastic;
         }
-        if val.eq_ignore_ascii_case("march")
-            || val == "0"
-            || val.eq_ignore_ascii_case("raymarch")
-        {
+        if val.eq_ignore_ascii_case("march") || val == "0" || val.eq_ignore_ascii_case("raymarch") {
             return crate::settings::CloudIntegratorRequest::March;
         }
     }

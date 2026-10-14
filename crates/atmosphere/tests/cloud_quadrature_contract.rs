@@ -31,15 +31,15 @@ fn homogeneous_cloud_has_exact_beer_lambert_transmission() {
     let expected_tau: f64 = sigma * rho * distance;
 
     for steps in [1_usize, 8, 24, 64] {
-        let (transmission, optical_depth) = integrate_slab_gpu_trapezoidal_model(
-            |_| rho,
-            0.0,
-            distance,
-            steps,
-            sigma,
-        );
+        let (transmission, optical_depth) =
+            integrate_slab_gpu_trapezoidal_model(|_| rho, 0.0, distance, steps, sigma);
         assert_close(optical_depth, expected_tau, 1e-12, "uniform optical depth");
-        assert_close(transmission, (-expected_tau).exp(), 1e-12, "uniform transmission");
+        assert_close(
+            transmission,
+            (-expected_tau).exp(),
+            1e-12,
+            "uniform transmission",
+        );
     }
 }
 
@@ -53,16 +53,16 @@ fn affine_cloud_density_must_preserve_its_analytic_column_integral() {
     let expected_tau: f64 = extinction * 0.5;
 
     for steps in [4_usize, 8, 16, 24, 64] {
-        let (transmission, depth) = integrate_slab_gpu_trapezoidal_model(
-            |t| 0.2 + 0.6 * t,
-            0.0,
-            1.0,
-            steps,
-            extinction,
-        );
+        let (transmission, depth) =
+            integrate_slab_gpu_trapezoidal_model(|t| 0.2 + 0.6 * t, 0.0, 1.0, steps, extinction);
 
         assert_close(depth, expected_tau, 1e-12, "affine optical depth");
-        assert_close(transmission, (-expected_tau).exp(), 1e-12, "affine transmission");
+        assert_close(
+            transmission,
+            (-expected_tau).exp(),
+            1e-12,
+            "affine transmission",
+        );
     }
 }
 
@@ -83,6 +83,11 @@ fn affine_integral_is_invariant_under_translation_of_ray_parameter() {
             extinction,
         );
         assert_close(depth, expected_tau, 1e-9, "shifted affine optical depth");
-        assert_close(transmission, (-expected_tau).exp(), 1e-9, "shifted affine transmission");
+        assert_close(
+            transmission,
+            (-expected_tau).exp(),
+            1e-9,
+            "shifted affine transmission",
+        );
     }
 }

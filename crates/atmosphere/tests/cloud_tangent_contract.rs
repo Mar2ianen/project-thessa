@@ -13,7 +13,7 @@
 //! `disc_bot > 0.0`; a zero-discriminant tangent is not a hollow-core crossing.
 
 use glam::DVec3;
-use thessa_atmosphere::clouds::{clip_to_planet, intersect_shell, CloudSlab};
+use thessa_atmosphere::clouds::{CloudSlab, clip_to_planet, intersect_shell};
 
 fn slab() -> CloudSlab {
     CloudSlab::new(1.0, 5.0, 6.0).expect("well-formed concentric volume")
@@ -67,7 +67,6 @@ fn exact_tangent_is_invariant_under_translation_of_world_origin() {
     assert_near(exit, 10.0 + 11.0_f64.sqrt(), "translated far exit");
 }
 
-
 #[test]
 fn thessa_scale_exact_tangent_preserves_entire_visible_cloud_chord() {
     // Canonical Thessa radius and low-cloud envelope in metres. All integer
@@ -90,13 +89,8 @@ fn ray_just_outside_inner_sphere_keeps_complete_outer_interval() {
     // Control: a nearby ray that MISSES r=5 by 0.01 does not hit the
     // hollow core, hence the expected full outer interval is visible.
     let x = 5.01_f64;
-    let (entry, exit) = intersect_shell(
-        DVec3::new(x, -10.0, 0.0),
-        DVec3::Y,
-        DVec3::ZERO,
-        slab(),
-    )
-    .unwrap();
+    let (entry, exit) =
+        intersect_shell(DVec3::new(x, -10.0, 0.0), DVec3::Y, DVec3::ZERO, slab()).unwrap();
     let half_chord = (36.0 - x * x).sqrt();
 
     assert_near(entry, 10.0 - half_chord, "missed-core near entry");
@@ -107,13 +101,8 @@ fn ray_just_outside_inner_sphere_keeps_complete_outer_interval() {
 fn ray_crossing_actual_hollow_core_still_stops_at_near_core_entry() {
     // Control: x=4 penetrates the r=5 hollow sphere. A single-segment
     // renderer intentionally stops before the near hollow boundary.
-    let (entry, exit) = intersect_shell(
-        DVec3::new(4.0, -10.0, 0.0),
-        DVec3::Y,
-        DVec3::ZERO,
-        slab(),
-    )
-    .unwrap();
+    let (entry, exit) =
+        intersect_shell(DVec3::new(4.0, -10.0, 0.0), DVec3::Y, DVec3::ZERO, slab()).unwrap();
 
     assert_near(entry, 10.0 - 20.0_f64.sqrt(), "core-crossing outer entry");
     assert_near(exit, 7.0, "core-crossing inner entry");

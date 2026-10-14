@@ -810,7 +810,9 @@ fn setup_beauty(
 
     // Cloud shells: only spawned when clouds are enabled.
     if r.clouds_enabled {
-        let low_m = low_mesh.as_ref().expect("low_mesh present when clouds_enabled");
+        let low_m = low_mesh
+            .as_ref()
+            .expect("low_mesh present when clouds_enabled");
         for (body, deck, scale, spin) in CLOUD_DECKS.iter().copied().filter(|(body, deck, _, _)| {
             *deck == 0 || (*body == "thessa" && (*deck as u32) < r.clouds_layers)
         }) {
@@ -838,7 +840,11 @@ fn setup_beauty(
     // Volume decks: only spawned when volumetric clouds are enabled.
     if r.clouds_enabled && r.clouds_volumetric {
         let volume_mesh = meshes.add(Sphere::new(1.0).mesh().uv(96, 48));
-        for (body, deck, _, spin) in CLOUD_DECKS.iter().copied().filter(|(_, deck, _, _)| *deck == 0) {
+        for (body, deck, _, spin) in CLOUD_DECKS
+            .iter()
+            .copied()
+            .filter(|(_, deck, _, _)| *deck == 0)
+        {
             let tex = cloud_low.clone();
             let (bottom, top, ext) = volume_slab_for_deck(deck);
             commands.spawn((

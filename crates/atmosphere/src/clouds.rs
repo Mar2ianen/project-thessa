@@ -394,13 +394,10 @@ pub fn convective_cumulus_gradient(h01: f64) -> f64 {
     }
     let base_lcl = smoothstep(0.065, 0.082, h01);
     let dome_top = 1.0 - smoothstep(0.72, 0.98, h01);
-    let updraft = 1.0 + 0.40 * (((h01 - 0.065) / 0.915).clamp(0.0, 1.0) * std::f64::consts::PI).sin();
+    let updraft =
+        1.0 + 0.40 * (((h01 - 0.065) / 0.915).clamp(0.0, 1.0) * std::f64::consts::PI).sin();
     let hgrad = base_lcl * dome_top * updraft;
-    if hgrad <= 0.001 {
-        0.0
-    } else {
-        hgrad
-    }
+    if hgrad <= 0.001 { 0.0 } else { hgrad }
 }
 
 fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
@@ -998,8 +995,7 @@ mod tests {
         // solution for any step count >= 2, because on step 0: integ = c, on steps 1..N:
         // integ = (c + c)/2 = c, so sum = c * N * dt = c.
         for steps in [2, 4, 8, 16, 24, 32, 64, 128] {
-            let (trans, depth) =
-                integrate_slab_gpu_trapezoidal_model(|_| c, 0.0, 1.0, steps, k);
+            let (trans, depth) = integrate_slab_gpu_trapezoidal_model(|_| c, 0.0, 1.0, steps, k);
             assert!(
                 (depth - exact_depth).abs() < 1e-12,
                 "steps={steps}: depth={depth}, exact={exact_depth}"
@@ -1050,8 +1046,7 @@ mod tests {
         let density = |t: f64| if t >= 0.30 { 1.2 } else { 0.0 };
 
         for steps in [8, 16, 32, 64, 128, 256] {
-            let (trans, depth) =
-                integrate_slab_gpu_trapezoidal_model(density, 0.0, 1.0, steps, k);
+            let (trans, depth) = integrate_slab_gpu_trapezoidal_model(density, 0.0, 1.0, steps, k);
             let depth_err = (depth - exact_depth).abs();
 
             // Numerical integration of a discontinuous step function has discrete boundary
@@ -1073,14 +1068,12 @@ mod tests {
         // Reference computed via unclamped Simpson's 1/3 rule with 16,384 intervals:
         let profile = |t: f64| (-((t - 0.5) / 0.15).powi(2)).exp();
         let k = 3.0;
-        let (ref_trans, ref_depth) =
-            integrate_slab_unclamped_simpson(profile, 0.0, 1.0, 16384, k);
+        let (ref_trans, ref_depth) = integrate_slab_unclamped_simpson(profile, 0.0, 1.0, 16384, k);
 
         // The numerical error relative to the unclamped 16,384-step Simpson reference
         // is strictly bounded by the 0.001 procedural density floor cutoff tail (< 3e-4):
         for steps in [16, 32, 64, 128, 256] {
-            let (trans, depth) =
-                integrate_slab_gpu_trapezoidal_model(profile, 0.0, 1.0, steps, k);
+            let (trans, depth) = integrate_slab_gpu_trapezoidal_model(profile, 0.0, 1.0, steps, k);
             let depth_err = (depth - ref_depth).abs();
             let trans_err = (trans - ref_trans).abs();
 
@@ -1170,12 +1163,8 @@ mod tests {
             let mut q = (p * glam::Vec3::new(0.1031, 0.1030, 0.0973)).fract_gl();
             let dot_val = q.dot(glam::Vec3::new(q.y, q.z, q.x) + glam::Vec3::splat(33.33));
             q += glam::Vec3::splat(dot_val);
-            let val = (glam::Vec3::new(
-                (q.x + q.y) * q.z,
-                (q.x + q.z) * q.y,
-                (q.y + q.z) * q.x,
-            ))
-            .fract_gl();
+            let val = (glam::Vec3::new((q.x + q.y) * q.z, (q.x + q.z) * q.y, (q.y + q.z) * q.x))
+                .fract_gl();
             val * 2.0 - glam::Vec3::ONE
         }
 
@@ -1259,12 +1248,8 @@ mod tests {
             let mut q = (p * glam::Vec3::new(0.1031, 0.1030, 0.0973)).fract_gl();
             let dot_val = q.dot(glam::Vec3::new(q.y, q.z, q.x) + glam::Vec3::splat(33.33));
             q += glam::Vec3::splat(dot_val);
-            let val = (glam::Vec3::new(
-                (q.x + q.y) * q.z,
-                (q.x + q.z) * q.y,
-                (q.y + q.z) * q.x,
-            ))
-            .fract_gl();
+            let val = (glam::Vec3::new((q.x + q.y) * q.z, (q.x + q.z) * q.y, (q.y + q.z) * q.x))
+                .fract_gl();
             val * 2.0 - glam::Vec3::ONE
         }
 
@@ -1406,4 +1391,3 @@ mod tests {
         }
     }
 }
-

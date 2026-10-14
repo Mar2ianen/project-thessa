@@ -13,7 +13,7 @@
 
 use glam::DVec3;
 use thessa_atmosphere::clouds::{
-    clip_to_planet, integrate_slab_gpu_trapezoidal_model, intersect_shell, CloudSlab,
+    CloudSlab, clip_to_planet, integrate_slab_gpu_trapezoidal_model, intersect_shell,
 };
 
 const PLANET_M: f64 = 3_200_000.0;
@@ -81,8 +81,18 @@ fn orbital_nadir_must_keep_only_frontside_cloud_interval() {
         .expect("orbiter above clouds must see its near-side deck");
 
     // Purely radial distances, no numerical sphere-intersection oracle.
-    near(t0, altitude_m - (TOP_M - PLANET_M), 1e-5, "orbital front entry");
-    near(t1, altitude_m - (BOT_M - PLANET_M), 1e-5, "orbital front exit");
+    near(
+        t0,
+        altitude_m - (TOP_M - PLANET_M),
+        1e-5,
+        "orbital front entry",
+    );
+    near(
+        t1,
+        altitude_m - (BOT_M - PLANET_M),
+        1e-5,
+        "orbital front exit",
+    );
 }
 
 #[test]
@@ -108,15 +118,15 @@ fn descending_affine_density_integrates_to_analytic_optical_depth() {
     let extinction = 0.25_f64;
     let expected_tau = 0.6 * extinction;
     for n in [2_usize, 8, 24, 64] {
-        let (t, tau) = integrate_slab_gpu_trapezoidal_model(
-            |x| 0.9 - 0.6 * x,
-            0.0,
-            1.0,
-            n,
-            extinction,
-        );
+        let (t, tau) =
+            integrate_slab_gpu_trapezoidal_model(|x| 0.9 - 0.6 * x, 0.0, 1.0, n, extinction);
         near(tau, expected_tau, 1e-12, "descending affine tau");
-        near(t, (-expected_tau).exp(), 1e-12, "descending affine transmission");
+        near(
+            t,
+            (-expected_tau).exp(),
+            1e-12,
+            "descending affine transmission",
+        );
     }
 }
 
@@ -137,6 +147,11 @@ fn oscillating_density_has_analytic_mean_at_every_tested_step_budget() {
             extinction,
         );
         near(tau, expected_tau, 1e-12, "periodic density tau");
-        near(t, (-expected_tau).exp(), 1e-12, "periodic density transmission");
+        near(
+            t,
+            (-expected_tau).exp(),
+            1e-12,
+            "periodic density transmission",
+        );
     }
 }

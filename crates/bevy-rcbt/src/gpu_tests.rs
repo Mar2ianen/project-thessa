@@ -14,12 +14,14 @@ impl Gpu {
         let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
             .expect("GPU regression tests require a wgpu adapter");
         eprintln!("CBT regression adapter: {:?}", adapter.get_info());
-        let features = adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES);
+        let features = adapter.features()
+            & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("thessa-test-device"),
             required_features: features,
             ..Default::default()
-        })).unwrap();
+        }))
+        .unwrap();
         Self { device, queue }
     }
 
@@ -818,11 +820,7 @@ fn gpu_precision_wgsl_ray_intersect_aabb_accuracy() {
     let ray_dir = [1.0_f32, 0.0, 0.0, 0.0];
 
     let aabb_buf = gpu.buffer(
-        &[
-            aabb_min.map(|x| x.to_bits()),
-            aabb_max.map(|x| x.to_bits()),
-        ]
-        .concat(),
+        &[aabb_min.map(|x| x.to_bits()), aabb_max.map(|x| x.to_bits())].concat(),
         false,
     );
     let ray_buf = gpu.buffer(
@@ -864,10 +862,56 @@ fn check() {
     // branchless WGSL helper; its NaN behavior is not portable across GPUs.
     // This test exercises the *compute* intersection helper, NOT hardware RT.
     for (origin, direction, expected) in [
-        ([0.0_f32, 5.0, 25.0, 0.0], [1.0_f32, 0.0, 0.0, 0.0], [10.0, 15.0]),
-        ([0.0_f32, -5.0, 25.0, 0.0], [1.0_f32, 0.0, 0.0, 0.0], [10.0, 15.0]),
-        ([0.0_f32, 6.0, 25.0, 0.0], [1.0_f32, 0.0, 0.0, 0.0], [-1.0, -1.0]),
-        ([12.0_f32, 0.0, 25.0, 0.0], [1.0_f32, 0.0, 0.0, 0.0], [0.0, 3.0]),
+        (
+            [0.0_f32, 5.0, 25.0, 0.0],
+            [1.0_f32, 0.0, 0.0, 0.0],
+            [10.0, 15.0],
+        ),
+        (
+            [0.0_f32, -5.0, 25.0, 0.0],
+            [1.0_f32, 0.0, 0.0, 0.0],
+            [10.0, 15.0],
+        ),
+        (
+            [0.0_f32, 6.0, 25.0, 0.0],
+            [1.0_f32, 0.0, 0.0, 0.0],
+            [-1.0, -1.0],
+        ),
+        (
+            [12.0_f32, 0.0, 25.0, 0.0],
+            [1.0_f32, 0.0, 0.0, 0.0],
+            [0.0, 3.0],
+        ),
+        (
+            [12.0_f32, 0.0, 25.0, 0.0],
+            [0.0_f32, 0.0, 0.0, 0.0],
+            [-1.0, -1.0],
+        ),
+        (
+            [0.0_f32, 0.0, 25.0, 0.0],
+            [0.0_f32, 0.0, 0.0, 0.0],
+            [-1.0, -1.0],
+        ),
+        (
+            [f32::NAN, 0.0, 25.0, 0.0],
+            [1.0_f32, 0.0, 0.0, 0.0],
+            [-1.0, -1.0],
+        ),
+        (
+            [0.0_f32, 0.0, 25.0, 0.0],
+            [f32::NAN, 0.0, 0.0, 0.0],
+            [-1.0, -1.0],
+        ),
+        (
+            [0.0_f32, 0.0, 25.0, 0.0],
+            [f32::INFINITY, 0.0, 0.0, 0.0],
+            [-1.0, -1.0],
+        ),
+        (
+            [f32::INFINITY, 0.0, 25.0, 0.0],
+            [-1.0_f32, 0.0, 0.0, 0.0],
+            [-1.0, -1.0],
+        ),
     ] {
         let ray_case = gpu.buffer(
             &[origin.map(f32::to_bits), direction.map(f32::to_bits)].concat(),
@@ -1672,10 +1716,7 @@ fn test_optical_kernel(@builtin(global_invocation_id) gid: vec3<u32>) {{
     );
 
     let readback_words = gpu.read(&out_buf);
-    let readback_floats: Vec<f32> = readback_words
-        .iter()
-        .map(|&w| f32::from_bits(w))
-        .collect();
+    let readback_floats: Vec<f32> = readback_words.iter().map(|&w| f32::from_bits(w)).collect();
 
     // Verify GPU hardware results directly against production Rust oracle functions in thessa_atmosphere::clouds:
     for (i, &param) in inputs.iter().enumerate() {
@@ -1763,12 +1804,8 @@ fn test_noise_kernel(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let mut q = (p * glam::Vec3::new(0.1031, 0.1030, 0.0973)).fract_gl();
         let dot_val = q.dot(glam::Vec3::new(q.y, q.z, q.x) + glam::Vec3::splat(33.33));
         q += glam::Vec3::splat(dot_val);
-        let val = (glam::Vec3::new(
-            (q.x + q.y) * q.z,
-            (q.x + q.z) * q.y,
-            (q.y + q.z) * q.x,
-        ))
-        .fract_gl();
+        let val =
+            (glam::Vec3::new((q.x + q.y) * q.z, (q.x + q.z) * q.y, (q.y + q.z) * q.x)).fract_gl();
         val * 2.0 - glam::Vec3::ONE
     }
 
@@ -1839,10 +1876,7 @@ fn test_noise_kernel(@builtin(global_invocation_id) gid: vec3<u32>) {{
     );
 
     let readback_words = gpu.read(&out_buf);
-    let readback_floats: Vec<f32> = readback_words
-        .iter()
-        .map(|&w| f32::from_bits(w))
-        .collect();
+    let readback_floats: Vec<f32> = readback_words.iter().map(|&w| f32::from_bits(w)).collect();
 
     let mut max_diff_perlin = 0.0f32;
     let mut max_diff_hash = 0.0f32;
@@ -1865,15 +1899,27 @@ fn test_noise_kernel(@builtin(global_invocation_id) gid: vec3<u32>) {{
             readback_floats[base + 6],
         );
 
-        assert!(gpu_perlin.is_finite(), "sample {i} point {p:?}: GPU perlin is non-finite {gpu_perlin}");
-        assert!(gpu_hash.is_finite(), "sample {i} point {p:?}: GPU hash is non-finite {gpu_hash:?}");
-        assert!(gpu_grad.is_finite(), "sample {i} point {p:?}: GPU grad is non-finite {gpu_grad:?}");
+        assert!(
+            gpu_perlin.is_finite(),
+            "sample {i} point {p:?}: GPU perlin is non-finite {gpu_perlin}"
+        );
+        assert!(
+            gpu_hash.is_finite(),
+            "sample {i} point {p:?}: GPU hash is non-finite {gpu_hash:?}"
+        );
+        assert!(
+            gpu_grad.is_finite(),
+            "sample {i} point {p:?}: GPU grad is non-finite {gpu_grad:?}"
+        );
 
         let cpu_perlin = cpu_perlin3d(p);
         let cpu_hash = cpu_hash33(p);
         let cpu_grad = cpu_hash_grad(p);
 
-        assert!(cpu_perlin.is_finite(), "sample {i} point {p:?}: CPU perlin is non-finite {cpu_perlin}");
+        assert!(
+            cpu_perlin.is_finite(),
+            "sample {i} point {p:?}: CPU perlin is non-finite {cpu_perlin}"
+        );
 
         let diff_p = (gpu_perlin - cpu_perlin).abs();
         let diff_h = (gpu_hash - cpu_hash).abs().max_element();
@@ -1992,12 +2038,30 @@ fn pack_cloud_uniform_words(
 ) -> Vec<u32> {
     let mut words = vec![0u32; 64];
     let floats: [f32; 24] = [
-        0.0, 0.0, 0.0, planet_radius_m,
-        bot_radius, top_radius, extinction, steps,
-        sun_dir.x, sun_dir.y, sun_dir.z, sun_vis,
-        0.0, 0.0, 0.0, 1.0,
-        opacity, drift, sun_span, detail_amp,
-        0.0, 0.05, march_top, if pathtrace { 1.0 } else { 0.0 },
+        0.0,
+        0.0,
+        0.0,
+        planet_radius_m,
+        bot_radius,
+        top_radius,
+        extinction,
+        steps,
+        sun_dir.x,
+        sun_dir.y,
+        sun_dir.z,
+        sun_vis,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        opacity,
+        drift,
+        sun_span,
+        detail_amp,
+        0.0,
+        0.05,
+        march_top,
+        if pathtrace { 1.0 } else { 0.0 },
     ];
     for (i, &f) in floats.iter().enumerate() {
         words[i] = f.to_bits();
@@ -2122,7 +2186,10 @@ fn create_cloud_pipeline(
             cache: None,
         });
 
-    CloudComputePipeline { pipeline, bind_group }
+    CloudComputePipeline {
+        pipeline,
+        bind_group,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2509,7 +2576,14 @@ fn synthetic_fixture_slab_density_and_lod_characterization_on_hardware() {
     let num_samples = samples.len();
     let in_words: Vec<u32> = samples
         .iter()
-        .flat_map(|s| [s[0].to_bits(), s[1].to_bits(), s[2].to_bits(), s[3].to_bits()])
+        .flat_map(|s| {
+            [
+                s[0].to_bits(),
+                s[1].to_bits(),
+                s[2].to_bits(),
+                s[3].to_bits(),
+            ]
+        })
         .collect();
     let out_words = vec![0u32; num_samples * 4];
 
@@ -2537,7 +2611,10 @@ fn synthetic_fixture_slab_density_and_lod_characterization_on_hardware() {
     for i in 0..(step_sizes.len() * h_steps) {
         let sample_idx = group_b_offset + i;
         let d_full = readback_floats[sample_idx * 4];
-        assert_eq!(d_full, 0.0, "Clear sky sample {sample_idx} must have strictly zero density");
+        assert_eq!(
+            d_full, 0.0,
+            "Clear sky sample {sample_idx} must have strictly zero density"
+        );
     }
 
     // Quadrature analysis of Group A:
@@ -2584,25 +2661,43 @@ fn synthetic_fixture_slab_density_and_lod_characterization_on_hardware() {
             "Step {:>4.1} km | Active: {:>2}/{} | Dens Integral: {:>7.4} km | Tau: {:.4} | Transmittance: {:.4} | Alpha: {:.4}",
             step_km, active_count, h_steps, density_integral_km, tau, transmittance, alpha
         );
-        assert!(tau > 0.1, "Column optical depth must be non-zero in cloud core");
-        assert!(active_count >= 10, "Cloud body must span significant height range");
+        assert!(
+            tau > 0.1,
+            "Column optical depth must be non-zero in cloud core"
+        );
+        assert!(
+            active_count >= 10,
+            "Cloud body must span significant height range"
+        );
     }
 
     let int_0_5 = column_dens_integrals[0];
     let int_12 = column_dens_integrals[3];
     let rel_var = (int_12 - int_0_5).abs() / int_0_5;
-    eprintln!("Density line integral variation across 24x step span: {:.2}%", rel_var * 100.0);
-    assert!(rel_var < 0.20, "Filter response variation ({rel_var:.3}) must be < 20%");
+    eprintln!(
+        "Density line integral variation across 24x step span: {:.2}%",
+        rel_var * 100.0
+    );
+    assert!(
+        rel_var < 0.20,
+        "Filter response variation ({rel_var:.3}) must be < 20%"
+    );
 
     for (step_idx, (&tau, &tau_f)) in column_tau.iter().zip(&column_tau_fast).enumerate() {
         let shadow_err = (tau_f - tau).abs() / tau;
         eprintln!(
             "Step {:>4.1} km | Shadow fast-path optical depth discrepancy: {:.2}%",
-            step_sizes[step_idx], shadow_err * 100.0
+            step_sizes[step_idx],
+            shadow_err * 100.0
         );
-        assert!(shadow_err < 0.25, "Shadow fast-path error {shadow_err:.3} exceeds 25%");
+        assert!(
+            shadow_err < 0.25,
+            "Shadow fast-path error {shadow_err:.3} exceeds 25%"
+        );
     }
-    eprintln!("[GPU FUNCTION TESTED] synthetic_fixture_slab_density_and_lod_characterization_on_hardware: PASSED\n");
+    eprintln!(
+        "[GPU FUNCTION TESTED] synthetic_fixture_slab_density_and_lod_characterization_on_hardware: PASSED\n"
+    );
 }
 
 #[test]
@@ -2634,15 +2729,19 @@ fn localized_cloud_boundary_contour_stability_on_hardware() {
     let r_mid = r_bottom + 0.40 * (r_top - r_bottom);
 
     // Profile: Diagnostic equatorial sweep across boundary contour:
-    let profiles = [
-        ("Equatorial Profile (z = 0.0)", 0.0f32),
-    ];
+    let profiles = [("Equatorial Profile (z = 0.0)", 0.0f32)];
 
     let shader = build_cloud_test_wgsl();
 
-    eprintln!("\n=== [GPU FUNCTION TESTED] Localized Cloud Boundary Contour Stability (30 km sweeps, dx ≈ 236 m) ===");
-    eprintln!("Diagnostic scope: Evaluates localized boundary contour shift across LODs on specific 30 km profiles.");
-    eprintln!("Limitation disclosure: Proves localized boundary stability; does NOT claim global silhouette topology or area invariance.");
+    eprintln!(
+        "\n=== [GPU FUNCTION TESTED] Localized Cloud Boundary Contour Stability (30 km sweeps, dx ≈ 236 m) ==="
+    );
+    eprintln!(
+        "Diagnostic scope: Evaluates localized boundary contour shift across LODs on specific 30 km profiles."
+    );
+    eprintln!(
+        "Limitation disclosure: Proves localized boundary stability; does NOT claim global silhouette topology or area invariance."
+    );
 
     for (name, z_val) in profiles {
         let r_xy = (r_mid * r_mid - z_val * z_val).sqrt();
@@ -2653,13 +2752,21 @@ fn localized_cloud_boundary_contour_stability_on_hardware() {
         let u_probe_end = 0.72f32;
         let mut probe_samples = Vec::new();
         for i in 0..n_probe {
-            let u = u_probe_start + (u_probe_end - u_probe_start) * (i as f32) / ((n_probe - 1) as f32);
+            let u =
+                u_probe_start + (u_probe_end - u_probe_start) * (i as f32) / ((n_probe - 1) as f32);
             let theta = u * std::f32::consts::TAU;
             probe_samples.push([theta.cos() * r_xy, theta.sin() * r_xy, z_val, 0.5]);
         }
         let probe_in_words: Vec<u32> = probe_samples
             .iter()
-            .flat_map(|s| [s[0].to_bits(), s[1].to_bits(), s[2].to_bits(), s[3].to_bits()])
+            .flat_map(|s| {
+                [
+                    s[0].to_bits(),
+                    s[1].to_bits(),
+                    s[2].to_bits(),
+                    s[3].to_bits(),
+                ]
+            })
             .collect();
         let probe_out_words = vec![0u32; n_probe * 4];
         let probe_in_buf = gpu.buffer(&probe_in_words, false);
@@ -2691,7 +2798,10 @@ fn localized_cloud_boundary_contour_stability_on_hardware() {
                 break;
             }
         }
-        assert!(u_seg_end > u_seg_start, "coarse probe must locate cloud boundary segment for {name}");
+        assert!(
+            u_seg_end > u_seg_start,
+            "coarse probe must locate cloud boundary segment for {name}"
+        );
 
         // Stage 2: Refinement probe to accurately locate u_edge:
         let n_refine = 32;
@@ -2703,7 +2813,14 @@ fn localized_cloud_boundary_contour_stability_on_hardware() {
         }
         let refine_in_words: Vec<u32> = refine_samples
             .iter()
-            .flat_map(|s| [s[0].to_bits(), s[1].to_bits(), s[2].to_bits(), s[3].to_bits()])
+            .flat_map(|s| {
+                [
+                    s[0].to_bits(),
+                    s[1].to_bits(),
+                    s[2].to_bits(),
+                    s[3].to_bits(),
+                ]
+            })
             .collect();
         let refine_out_words = vec![0u32; n_refine * 4];
         let refine_in_buf = gpu.buffer(&refine_in_words, false);
@@ -2755,7 +2872,14 @@ fn localized_cloud_boundary_contour_stability_on_hardware() {
         }
         let in_words: Vec<u32> = fine_samples
             .iter()
-            .flat_map(|s| [s[0].to_bits(), s[1].to_bits(), s[2].to_bits(), s[3].to_bits()])
+            .flat_map(|s| {
+                [
+                    s[0].to_bits(),
+                    s[1].to_bits(),
+                    s[2].to_bits(),
+                    s[3].to_bits(),
+                ]
+            })
             .collect();
         let out_words = vec![0u32; fine_samples.len() * 4];
         let in_buf = gpu.buffer(&in_words, false);
@@ -2791,17 +2915,29 @@ fn localized_cloud_boundary_contour_stability_on_hardware() {
             }
             let cross = crossing_km.expect("contour crossing rho=0.05 must exist in 30 km sweep");
             boundary_positions_km.push(cross);
-            eprintln!("  Step {:>4.1} km | Boundary position x = {:>6.3} km", step_km, cross);
+            eprintln!(
+                "  Step {:>4.1} km | Boundary position x = {:>6.3} km",
+                step_km, cross
+            );
         }
 
         let ref_cross = boundary_positions_km[0];
         for (step_idx, &cross) in boundary_positions_km.iter().enumerate().skip(1) {
             let shift_km = (cross - ref_cross).abs();
-            eprintln!("  Step {:>4.1} km | Physical Boundary Shift: {:>6.3} km (<= 1.5 km required)", step_sizes[step_idx], shift_km);
-            assert!(shift_km <= 1.5, "Boundary shift {shift_km:.3} km exceeds 1.5 km tolerance at step {}", step_sizes[step_idx]);
+            eprintln!(
+                "  Step {:>4.1} km | Physical Boundary Shift: {:>6.3} km (<= 1.5 km required)",
+                step_sizes[step_idx], shift_km
+            );
+            assert!(
+                shift_km <= 1.5,
+                "Boundary shift {shift_km:.3} km exceeds 1.5 km tolerance at step {}",
+                step_sizes[step_idx]
+            );
         }
     }
-    eprintln!("[GPU FUNCTION TESTED] localized_cloud_boundary_contour_stability_on_hardware: PASSED\n");
+    eprintln!(
+        "[GPU FUNCTION TESTED] localized_cloud_boundary_contour_stability_on_hardware: PASSED\n"
+    );
 }
 
 #[test]
@@ -2835,24 +2971,17 @@ fn production_thessa_fixture_cloud_render_and_quadrature_on_hardware() {
     // Physically set the sun at 15.0 degrees elevation above the local horizon at dir_peak:
     let up = dir_peak;
     let tangent = right;
-    let sun_15 = (up * 15.0_f32.to_radians().sin() + tangent * 15.0_f32.to_radians().cos()).normalize();
+    let sun_15 =
+        (up * 15.0_f32.to_radians().sin() + tangent * 15.0_f32.to_radians().cos()).normalize();
     let elev_deg = (up.dot(sun_15)).clamp(-1.0, 1.0).asin().to_degrees();
-    assert!((elev_deg - 15.0).abs() < 0.01, "Sun elevation must be physically 15.0 deg: {elev_deg}");
+    assert!(
+        (elev_deg - 15.0).abs() < 0.01,
+        "Sun elevation must be physically 15.0 deg: {elev_deg}"
+    );
 
     let uniform_words = pack_cloud_uniform_words(
-        r_planet,
-        bot,
-        top,
-        ext,
-        steps,
-        sun_15, // PASS THE ACTUAL 15 DEGREE SUN!
-        1.0,
-        1.0,
-        0.0,
-        0.8,
-        1.6,
-        march_top,
-        false,
+        r_planet, bot, top, ext, steps, sun_15, // PASS THE ACTUAL 15 DEGREE SUN!
+        1.0, 1.0, 0.0, 0.8, 1.6, march_top, false,
     );
     let uniform_buf = gpu.buffer(&uniform_words, true);
 
@@ -2872,7 +3001,8 @@ fn production_thessa_fixture_cloud_render_and_quadrature_on_hardware() {
     let in_cloud_ro = dir_peak * 1.011;
     let scat_ro = dir_peak * (bot + 0.80 * (top - bot));
     let rd_fwd = sun_15; // cos_theta = 1.0
-    let rd_back = (up * 15.0_f32.to_radians().sin() - tangent * 15.0_f32.to_radians().cos()).normalize();
+    let rd_back =
+        (up * 15.0_f32.to_radians().sin() - tangent * 15.0_f32.to_radians().cos()).normalize();
 
     let r_cam = 1.080f32;
     let r_graze = (bot + top) * 0.5;
@@ -2884,21 +3014,16 @@ fn production_thessa_fixture_cloud_render_and_quadrature_on_hardware() {
     let ray_data: Vec<[f32; 4]> = vec![
         [dir_peak.x, dir_peak.y, dir_peak.z, 0.0],
         [dir_peak.x, dir_peak.y, dir_peak.z, 0.0],
-
         [dir_clear.x, dir_clear.y, dir_clear.z, 0.0],
         [dir_clear.x, dir_clear.y, dir_clear.z, 0.0],
-
         [in_cloud_ro.x, in_cloud_ro.y, in_cloud_ro.z, 0.0],
         [right.x, right.y, right.z, 0.0],
-
         // Regime 3: Forward scatter (towards 15° sun, cos_theta = 1.0):
         [scat_ro.x, scat_ro.y, scat_ro.z, 0.0],
         [rd_fwd.x, rd_fwd.y, rd_fwd.z, 0.0],
-
         // Regime 4: Back scatter (away from 15° sun at +15° elevation, cos_theta = -0.866):
         [scat_ro.x, scat_ro.y, scat_ro.z, 0.0],
         [rd_back.x, rd_back.y, rd_back.z, 0.0],
-
         // Orbital limb tangent:
         [orb_ro.x, orb_ro.y, orb_ro.z, 0.0],
         [orb_rd.x, orb_rd.y, orb_rd.z, 0.0],
@@ -2907,7 +3032,14 @@ fn production_thessa_fixture_cloud_render_and_quadrature_on_hardware() {
     let num_rays = ray_data.len() / 2;
     let in_words: Vec<u32> = ray_data
         .iter()
-        .flat_map(|r| [r[0].to_bits(), r[1].to_bits(), r[2].to_bits(), r[3].to_bits()])
+        .flat_map(|r| {
+            [
+                r[0].to_bits(),
+                r[1].to_bits(),
+                r[2].to_bits(),
+                r[3].to_bits(),
+            ]
+        })
         .collect();
     let out_words = vec![0u32; num_rays * 8];
 
@@ -2930,7 +3062,9 @@ fn production_thessa_fixture_cloud_render_and_quadrature_on_hardware() {
     let readback_words = gpu.read(&out_buf);
     let readback_floats: Vec<f32> = readback_words.iter().map(|&w| f32::from_bits(w)).collect();
 
-    eprintln!("\n=== [GPU COMPUTE SURROGATE TESTED] Production Thessa Fixture across 6 Viewing Regimes ===");
+    eprintln!(
+        "\n=== [GPU COMPUTE SURROGATE TESTED] Production Thessa Fixture across 6 Viewing Regimes ==="
+    );
     let regime_names = [
         "Surface Zenith (Overcast Core)",
         "Surface Zenith (Clear Air)",
@@ -2942,14 +3076,21 @@ fn production_thessa_fixture_cloud_render_and_quadrature_on_hardware() {
 
     for (idx, &name) in regime_names.iter().enumerate().take(num_rays) {
         let base = idx * 8;
-        let scat = glam::Vec3::new(readback_floats[base], readback_floats[base + 1], readback_floats[base + 2]);
+        let scat = glam::Vec3::new(
+            readback_floats[base],
+            readback_floats[base + 1],
+            readback_floats[base + 2],
+        );
         let alpha = readback_floats[base + 3];
         let chord_km = readback_floats[base + 6];
         let step_km = readback_floats[base + 7];
 
         assert!(scat.is_finite(), "regime {idx} scat non-finite: {scat:?}");
         assert!(alpha.is_finite(), "regime {idx} alpha non-finite: {alpha}");
-        assert!((0.0..=1.0).contains(&alpha), "regime {idx} alpha out of [0, 1]: {alpha}");
+        assert!(
+            (0.0..=1.0).contains(&alpha),
+            "regime {idx} alpha out of [0, 1]: {alpha}"
+        );
 
         eprintln!(
             "Regime {}: {:<32} | Chord: {:>6.2} km | Step: {:>5.2} km | Alpha: {:>6.4} | Scat: ({:.3}, {:.3}, {:.3})",
@@ -2959,34 +3100,68 @@ fn production_thessa_fixture_cloud_render_and_quadrature_on_hardware() {
 
     // Regime 0: Surface Zenith Overcast:
     let r0_alpha = readback_floats[3];
-    assert!(r0_alpha > 0.95, "Overcast core must be opaque (alpha > 0.95, got {r0_alpha:.4})");
+    assert!(
+        r0_alpha > 0.95,
+        "Overcast core must be opaque (alpha > 0.95, got {r0_alpha:.4})"
+    );
 
     // Regime 1: Surface Zenith Clear Sky:
     let r1_alpha = readback_floats[8 + 3];
-    assert_eq!(r1_alpha, 0.0, "Clear sky zenith must have strictly zero opacity");
+    assert_eq!(
+        r1_alpha, 0.0,
+        "Clear sky zenith must have strictly zero opacity"
+    );
 
     // Regime 2: In-Cloud Observer:
     let r2_t0 = readback_floats[16 + 4];
-    assert_eq!(r2_t0, 0.0, "In-cloud observer must start raymarch immediately at t0=0");
+    assert_eq!(
+        r2_t0, 0.0,
+        "In-cloud observer must start raymarch immediately at t0=0"
+    );
 
     // Regime 3 vs 4: Forward Silver Lining vs Back Scattering (identical geometric chord through cloud slab):
-    let r3_scat = glam::Vec3::new(readback_floats[24], readback_floats[25], readback_floats[26]);
-    let r4_scat = glam::Vec3::new(readback_floats[32], readback_floats[33], readback_floats[34]);
+    let r3_scat = glam::Vec3::new(
+        readback_floats[24],
+        readback_floats[25],
+        readback_floats[26],
+    );
+    let r4_scat = glam::Vec3::new(
+        readback_floats[32],
+        readback_floats[33],
+        readback_floats[34],
+    );
     let r3_chord = readback_floats[24 + 6];
     let r4_chord = readback_floats[32 + 6];
-    assert!((r3_chord - r4_chord).abs() < 1e-2, "Forward and back scatter rays must have identical geometric chord: got {r3_chord} vs {r4_chord}");
-    assert!(r3_chord > 20.0, "Chord must be substantial through slab: got {r3_chord}");
+    assert!(
+        (r3_chord - r4_chord).abs() < 1e-2,
+        "Forward and back scatter rays must have identical geometric chord: got {r3_chord} vs {r4_chord}"
+    );
+    assert!(
+        r3_chord > 20.0,
+        "Chord must be substantial through slab: got {r3_chord}"
+    );
     let fwd_len = r3_scat.length();
     let back_len = r4_scat.length();
     let ratio = fwd_len / back_len.max(1e-4);
-    eprintln!("Forward Scattering (cos theta=1.0): {:.4} | Back Scattering (cos theta=-0.866): {:.4} (Ratio: {:.2}x)", fwd_len, back_len, ratio);
-    assert!(fwd_len > 1.2 * back_len, "Forward silver-lining scattering must exceed back-scattering: got {fwd_len:.4} vs {back_len:.4}");
+    eprintln!(
+        "Forward Scattering (cos theta=1.0): {:.4} | Back Scattering (cos theta=-0.866): {:.4} (Ratio: {:.2}x)",
+        fwd_len, back_len, ratio
+    );
+    assert!(
+        fwd_len > 1.2 * back_len,
+        "Forward silver-lining scattering must exceed back-scattering: got {fwd_len:.4} vs {back_len:.4}"
+    );
 
     // Regime 5: Orbital Insertion:
     let r5_chord_km = readback_floats[40 + 6];
-    assert!(r5_chord_km > 300.0, "Orbital horizon tangent chord must be long (> 300 km, got {r5_chord_km:.1} km)");
+    assert!(
+        r5_chord_km > 300.0,
+        "Orbital horizon tangent chord must be long (> 300 km, got {r5_chord_km:.1} km)"
+    );
 
-    eprintln!("[GPU COMPUTE SURROGATE TESTED] production_thessa_fixture_cloud_render_and_quadrature_on_hardware: PASSED\n");
+    eprintln!(
+        "[GPU COMPUTE SURROGATE TESTED] production_thessa_fixture_cloud_render_and_quadrature_on_hardware: PASSED\n"
+    );
 }
 
 #[test]
@@ -3036,11 +3211,31 @@ fn production_raymarch_quadrature_convergence_on_hardware() {
         probe_data.push([r_dir.x, r_dir.y, r_dir.z, 1.0]);
         probe_data.push([r_dir.x, r_dir.y, r_dir.z, 64.0]);
     }
-    let p_in_words: Vec<u32> = probe_data.iter().flat_map(|r| [r[0].to_bits(), r[1].to_bits(), r[2].to_bits(), r[3].to_bits()]).collect();
+    let p_in_words: Vec<u32> = probe_data
+        .iter()
+        .flat_map(|r| {
+            [
+                r[0].to_bits(),
+                r[1].to_bits(),
+                r[2].to_bits(),
+                r[3].to_bits(),
+            ]
+        })
+        .collect();
     let p_out_words = vec![0u32; n_probe * 8];
     let p_in_buf = gpu.buffer(&p_in_words, false);
     let p_out_buf = gpu.buffer(&p_out_words, false);
-    execute_cloud_compute(&gpu, &shader, "test_raymarch", &uniform_buf, &view, &sampler, &p_in_buf, &p_out_buf, (n_probe as u32).div_ceil(64));
+    execute_cloud_compute(
+        &gpu,
+        &shader,
+        "test_raymarch",
+        &uniform_buf,
+        &view,
+        &sampler,
+        &p_in_buf,
+        &p_out_buf,
+        (n_probe as u32).div_ceil(64),
+    );
     let p_readback = gpu.read(&p_out_buf);
     let p_floats: Vec<f32> = p_readback.iter().map(|&w| f32::from_bits(w)).collect();
 
@@ -3056,7 +3251,10 @@ fn production_raymarch_quadrature_convergence_on_hardware() {
             break;
         }
     }
-    eprintln!("Boundary crossing segment: f in [{:.5}, {:.5}]", f_low, f_high);
+    eprintln!(
+        "Boundary crossing segment: f in [{:.5}, {:.5}]",
+        f_low, f_high
+    );
 
     // Stage 2: Fine probe along crossing segment to isolate semi-transparent boundary:
     let n_fine = 32;
@@ -3067,11 +3265,31 @@ fn production_raymarch_quadrature_convergence_on_hardware() {
         fine_data.push([r_dir.x, r_dir.y, r_dir.z, 1.0]);
         fine_data.push([r_dir.x, r_dir.y, r_dir.z, 64.0]);
     }
-    let f_in_words: Vec<u32> = fine_data.iter().flat_map(|r| [r[0].to_bits(), r[1].to_bits(), r[2].to_bits(), r[3].to_bits()]).collect();
+    let f_in_words: Vec<u32> = fine_data
+        .iter()
+        .flat_map(|r| {
+            [
+                r[0].to_bits(),
+                r[1].to_bits(),
+                r[2].to_bits(),
+                r[3].to_bits(),
+            ]
+        })
+        .collect();
     let f_out_words = vec![0u32; n_fine * 8];
     let f_in_buf = gpu.buffer(&f_in_words, false);
     let f_out_buf = gpu.buffer(&f_out_words, false);
-    execute_cloud_compute(&gpu, &shader, "test_raymarch", &uniform_buf, &view, &sampler, &f_in_buf, &f_out_buf, (n_fine as u32).div_ceil(64));
+    execute_cloud_compute(
+        &gpu,
+        &shader,
+        "test_raymarch",
+        &uniform_buf,
+        &view,
+        &sampler,
+        &f_in_buf,
+        &f_out_buf,
+        (n_fine as u32).div_ceil(64),
+    );
     let f_readback = gpu.read(&f_out_buf);
     let f_floats: Vec<f32> = f_readback.iter().map(|&w| f32::from_bits(w)).collect();
 
@@ -3081,7 +3299,10 @@ fn production_raymarch_quadrature_convergence_on_hardware() {
         let f = f_low + (f_high - f_low) * (i as f32) / ((n_fine - 1) as f32);
         let alpha = f_floats[i * 8 + 3];
         let t = 1.0 - alpha;
-        eprintln!("Fine Probe {:02} | f={:.5} | alpha={:.4} | T={:.4}", i, f, alpha, t);
+        eprintln!(
+            "Fine Probe {:02} | f={:.5} | alpha={:.4} | T={:.4}",
+            i, f, alpha, t
+        );
         if t > 0.05 && t < 0.95 {
             let dist = (t - 0.5).abs();
             if dist < best_t_dist {
@@ -3090,7 +3311,10 @@ fn production_raymarch_quadrature_convergence_on_hardware() {
             }
         }
     }
-    eprintln!("Selected semi-transparent edge fraction: {:.5}", chosen_frac);
+    eprintln!(
+        "Selected semi-transparent edge fraction: {:.5}",
+        chosen_frac
+    );
 
     let edge_ro = (dir_peak * chosen_frac + dir_clear * (1.0 - chosen_frac)).normalize();
     let edge_rd = edge_ro; // zenith ray through semi-transparent cloud edge
@@ -3109,7 +3333,14 @@ fn production_raymarch_quadrature_convergence_on_hardware() {
     let num_rays = step_counts.len();
     let in_words: Vec<u32> = ray_data
         .iter()
-        .flat_map(|r| [r[0].to_bits(), r[1].to_bits(), r[2].to_bits(), r[3].to_bits()])
+        .flat_map(|r| {
+            [
+                r[0].to_bits(),
+                r[1].to_bits(),
+                r[2].to_bits(),
+                r[3].to_bits(),
+            ]
+        })
         .collect();
     let out_words = vec![0u32; num_rays * 8];
 
@@ -3129,14 +3360,20 @@ fn production_raymarch_quadrature_convergence_on_hardware() {
     let readback_words = gpu.read(&out_buf);
     let readback_floats: Vec<f32> = readback_words.iter().map(|&w| f32::from_bits(w)).collect();
 
-    eprintln!("\n=== [GPU COMPUTE SURROGATE TESTED] Raymarch Quadrature Convergence (Frozen Density LOD = 1.0 km) ===");
+    eprintln!(
+        "\n=== [GPU COMPUTE SURROGATE TESTED] Raymarch Quadrature Convergence (Frozen Density LOD = 1.0 km) ==="
+    );
     let mut transmittances = Vec::new();
     let mut radiances = Vec::new();
     let mut scat_vecs = Vec::new();
 
     for (idx, &n_steps) in step_counts.iter().enumerate() {
         let base = idx * 8;
-        let scat = glam::Vec3::new(readback_floats[base], readback_floats[base + 1], readback_floats[base + 2]);
+        let scat = glam::Vec3::new(
+            readback_floats[base],
+            readback_floats[base + 1],
+            readback_floats[base + 2],
+        );
         let alpha = readback_floats[base + 3];
         let chord_km = readback_floats[base + 6];
         let step_km = readback_floats[base + 7];
@@ -3147,16 +3384,29 @@ fn production_raymarch_quadrature_convergence_on_hardware() {
 
         eprintln!(
             "Steps: {:>3} (ds = {:>4.2} km) | Chord: {:>5.2} km | Transmittance: {:.4} | Alpha: {:.4} | Scat RGB: ({:.4}, {:.4}, {:.4}) (norm: {:.4})",
-            n_steps as u32, step_km, chord_km, trans, alpha, scat.x, scat.y, scat.z, scat.length()
+            n_steps as u32,
+            step_km,
+            chord_km,
+            trans,
+            alpha,
+            scat.x,
+            scat.y,
+            scat.z,
+            scat.length()
         );
     }
 
     let ref_scat = scat_vecs[0]; // N=128 reference
     let ref_trans = transmittances[0];
     let ref_rad = radiances[0];
-    eprintln!("Reference N=128: Transmittance = {:.4}, Radiance = ({:.4}, {:.4}, {:.4}) (norm = {:.4})",
-        ref_trans, ref_scat.x, ref_scat.y, ref_scat.z, ref_rad);
-    assert!(ref_trans > 0.05 && ref_trans < 0.95, "Test ray must be semi-transparent: got T = {ref_trans:.4}");
+    eprintln!(
+        "Reference N=128: Transmittance = {:.4}, Radiance = ({:.4}, {:.4}, {:.4}) (norm = {:.4})",
+        ref_trans, ref_scat.x, ref_scat.y, ref_scat.z, ref_rad
+    );
+    assert!(
+        ref_trans > 0.05 && ref_trans < 0.95,
+        "Test ray must be semi-transparent: got T = {ref_trans:.4}"
+    );
 
     for (idx, &n_steps) in step_counts.iter().enumerate().skip(1) {
         let trans_err = (transmittances[idx] - ref_trans).abs();
@@ -3169,23 +3419,49 @@ fn production_raymarch_quadrature_convergence_on_hardware() {
         );
         eprintln!(
             "Steps {:>3} | T err: {:.4} | L rel: {:>5.2}% | RGB abs: ({:.4}, {:.4}, {:.4}) | RGB rel: ({:>5.1}%, {:>5.1}%, {:>5.1}%)",
-            n_steps as u32, trans_err, rad_err * 100.0,
-            rgb_abs_err.x, rgb_abs_err.y, rgb_abs_err.z,
-            rgb_rel_err.x * 100.0, rgb_rel_err.y * 100.0, rgb_rel_err.z * 100.0
+            n_steps as u32,
+            trans_err,
+            rad_err * 100.0,
+            rgb_abs_err.x,
+            rgb_abs_err.y,
+            rgb_abs_err.z,
+            rgb_rel_err.x * 100.0,
+            rgb_rel_err.y * 100.0,
+            rgb_rel_err.z * 100.0
         );
         if n_steps >= 64.0 {
-            assert!(trans_err < 0.05, "N={n_steps} T error {trans_err:.4} exceeds 0.05 tolerance");
-            assert!(rad_err < 0.10, "N={n_steps} L error {rad_err:.4} exceeds 0.10 tolerance");
+            assert!(
+                trans_err < 0.05,
+                "N={n_steps} T error {trans_err:.4} exceeds 0.05 tolerance"
+            );
+            assert!(
+                rad_err < 0.10,
+                "N={n_steps} L error {rad_err:.4} exceeds 0.10 tolerance"
+            );
         } else if n_steps >= 24.0 {
             // Explicitly characterising production budget N=24 truncation error (ds = 1.21 km on 29.12 km chord):
-            assert!(trans_err < 0.15, "N={n_steps} T error {trans_err:.4} exceeds 0.15 tolerance");
-            assert!(rad_err < 0.35, "N={n_steps} L error {rad_err:.4} exceeds 0.35 tolerance");
+            assert!(
+                trans_err < 0.15,
+                "N={n_steps} T error {trans_err:.4} exceeds 0.15 tolerance"
+            );
+            assert!(
+                rad_err < 0.35,
+                "N={n_steps} L error {rad_err:.4} exceeds 0.35 tolerance"
+            );
         } else if n_steps >= 16.0 {
-            assert!(trans_err < 0.20, "N={n_steps} T error {trans_err:.4} exceeds 0.20 tolerance");
-            assert!(rad_err < 0.40, "N={n_steps} L error {rad_err:.4} exceeds 0.40 tolerance");
+            assert!(
+                trans_err < 0.20,
+                "N={n_steps} T error {trans_err:.4} exceeds 0.20 tolerance"
+            );
+            assert!(
+                rad_err < 0.40,
+                "N={n_steps} L error {rad_err:.4} exceeds 0.40 tolerance"
+            );
         }
     }
-    eprintln!("[GPU COMPUTE SURROGATE TESTED] production_raymarch_quadrature_convergence_on_hardware: PASSED\n");
+    eprintln!(
+        "[GPU COMPUTE SURROGATE TESTED] production_raymarch_quadrature_convergence_on_hardware: PASSED\n"
+    );
 }
 
 #[test]
@@ -3264,7 +3540,14 @@ fn production_solar_shadow_attenuation_and_reference_error_on_hardware() {
     let num_samples = sample_data.len() / 2;
     let in_words: Vec<u32> = sample_data
         .iter()
-        .flat_map(|r| [r[0].to_bits(), r[1].to_bits(), r[2].to_bits(), r[3].to_bits()])
+        .flat_map(|r| {
+            [
+                r[0].to_bits(),
+                r[1].to_bits(),
+                r[2].to_bits(),
+                r[3].to_bits(),
+            ]
+        })
         .collect();
     let out_words = vec![0u32; num_samples * 8];
     let in_buf = gpu.buffer(&in_words, false);
@@ -3286,8 +3569,12 @@ fn production_solar_shadow_attenuation_and_reference_error_on_hardware() {
     let readback_words = gpu.read(&out_buf);
     let readback_floats: Vec<f32> = readback_words.iter().map(|&w| f32::from_bits(w)).collect();
 
-    eprintln!("\n=== [GPU COMPUTE SURROGATE TESTED] Solar Shadow 3-Tap Heuristic vs 64-Step Reference ===");
-    eprintln!("Reference ceiling: cloud.shape.z (march_top = 54.72 km, covering convective towers)");
+    eprintln!(
+        "\n=== [GPU COMPUTE SURROGATE TESTED] Solar Shadow 3-Tap Heuristic vs 64-Step Reference ==="
+    );
+    eprintln!(
+        "Reference ceiling: cloud.shape.z (march_top = 54.72 km, covering convective towers)"
+    );
     let angles = ["Noon (90 deg)", "Afternoon (45 deg)", "Sunset (15 deg)"];
 
     eprintln!("\n-- Semi-Transparent Cloud Boundary Point --");
@@ -3310,14 +3597,21 @@ fn production_solar_shadow_attenuation_and_reference_error_on_hardware() {
     }
     // Verify that the chosen boundary point exercises non-saturated moderate optical depth (0.1 < T < 0.9):
     let has_moderate_t = boundary_tmarch.iter().any(|&t| (0.10..=0.90).contains(&t));
-    assert!(has_moderate_t, "Boundary points must exercise non-saturated optical depth (0.10 <= T <= 0.90)");
+    assert!(
+        has_moderate_t,
+        "Boundary points must exercise non-saturated optical depth (0.10 <= T <= 0.90)"
+    );
 
     // Verify monotonic physical agreement between 3-tap heuristic and line-integral reference:
     // As optical depth decreases, both heuristic A_3tap and reference T_march monotonically increase:
-    assert!(boundary_tmarch[0] <= boundary_tmarch[1] && boundary_tmarch[1] <= boundary_tmarch[2],
-        "Line-integral T_march must monotonically increase as tau decreases");
-    assert!(boundary_atten[0] <= boundary_atten[1] && boundary_atten[1] <= boundary_atten[2],
-        "3-tap heuristic A_3tap must monotonically increase as tau decreases");
+    assert!(
+        boundary_tmarch[0] <= boundary_tmarch[1] && boundary_tmarch[1] <= boundary_tmarch[2],
+        "Line-integral T_march must monotonically increase as tau decreases"
+    );
+    assert!(
+        boundary_atten[0] <= boundary_atten[1] && boundary_atten[1] <= boundary_atten[2],
+        "3-tap heuristic A_3tap must monotonically increase as tau decreases"
+    );
 
     eprintln!("\n-- Deep Cloud Core Point --");
     for (idx, angle) in angles.iter().enumerate() {
@@ -3332,10 +3626,18 @@ fn production_solar_shadow_attenuation_and_reference_error_on_hardware() {
             "Angle: {:<18} | Dist: {:>5.2} km | A_3tap: {:.4} (depth {:.2}) | T_march: {:.4} (tau {:.2})",
             angle, march_dist_km, atten_3tap, sun_depth, t_march, tau_march
         );
-        assert!(t_march <= 0.05, "Deep core reference transmittance must be <= 0.05");
-        assert!(atten_3tap <= 0.05, "Deep core 3-tap heuristic attenuation must be <= 0.05");
+        assert!(
+            t_march <= 0.05,
+            "Deep core reference transmittance must be <= 0.05"
+        );
+        assert!(
+            atten_3tap <= 0.05,
+            "Deep core 3-tap heuristic attenuation must be <= 0.05"
+        );
     }
-    eprintln!("[GPU COMPUTE SURROGATE TESTED] production_solar_shadow_attenuation_and_reference_error_on_hardware: PASSED\n");
+    eprintln!(
+        "[GPU COMPUTE SURROGATE TESTED] production_solar_shadow_attenuation_and_reference_error_on_hardware: PASSED\n"
+    );
 }
 
 #[test]
@@ -3458,7 +3760,14 @@ fn production_camera_ascent_continuity_across_full_transition_on_hardware() {
     let total_rays = ray_data.len() / 2;
     let in_words: Vec<u32> = ray_data
         .iter()
-        .flat_map(|r| [r[0].to_bits(), r[1].to_bits(), r[2].to_bits(), r[3].to_bits()])
+        .flat_map(|r| {
+            [
+                r[0].to_bits(),
+                r[1].to_bits(),
+                r[2].to_bits(),
+                r[3].to_bits(),
+            ]
+        })
         .collect();
     let out_words = vec![0u32; total_rays * 8];
     let in_buf = gpu.buffer(&in_words, false);
@@ -3488,14 +3797,30 @@ fn production_camera_ascent_continuity_across_full_transition_on_hardware() {
         geom_chords.push(readback_floats[base + 6]);
         geom_steps.push(readback_floats[base + 7]);
     }
-    assert!((geom_chords[0] - 80.0).abs() < 0.1, "At alt 50 km, chord must be actively capped to 80 km: got {}", geom_chords[0]);
-    assert!(geom_chords[n_geom - 1] > 700.0, "At alt 220 km, chord must reach orbital tangent length: got {}", geom_chords[n_geom - 1]);
+    assert!(
+        (geom_chords[0] - 80.0).abs() < 0.1,
+        "At alt 50 km, chord must be actively capped to 80 km: got {}",
+        geom_chords[0]
+    );
+    assert!(
+        geom_chords[n_geom - 1] > 700.0,
+        "At alt 220 km, chord must reach orbital tangent length: got {}",
+        geom_chords[n_geom - 1]
+    );
     for i in 0..(n_geom - 1) {
         let dh = geom_alts[i + 1] - geom_alts[i];
         let d_chord = (geom_chords[i + 1] - geom_chords[i]).abs() / dh;
         let d_step = (geom_steps[i + 1] - geom_steps[i]).abs() / dh;
-        assert!(d_chord <= 8.0, "Discrete chord rate {d_chord:.2} km/km at alt {} km exceeds limit 8.0", geom_alts[i]);
-        assert!(d_step <= 0.35, "Discrete step rate {d_step:.3} km/km at alt {} km exceeds limit 0.35", geom_alts[i]);
+        assert!(
+            d_chord <= 8.0,
+            "Discrete chord rate {d_chord:.2} km/km at alt {} km exceeds limit 8.0",
+            geom_alts[i]
+        );
+        assert!(
+            d_step <= 0.35,
+            "Discrete step rate {d_step:.3} km/km at alt {} km exceeds limit 0.35",
+            geom_alts[i]
+        );
     }
 
     // Verify Part 1B (Radiometric frame-to-frame continuity on active march cap):
@@ -3504,22 +3829,43 @@ fn production_camera_ascent_continuity_across_full_transition_on_hardware() {
     let mut frame_scats = Vec::new();
     for (i, &alt) in frame_alts.iter().enumerate() {
         let base = (frame_offset + i) * 8;
-        let scat = glam::Vec3::new(readback_floats[base], readback_floats[base + 1], readback_floats[base + 2]);
+        let scat = glam::Vec3::new(
+            readback_floats[base],
+            readback_floats[base + 1],
+            readback_floats[base + 2],
+        );
         let alpha = readback_floats[base + 3];
         let chord = readback_floats[base + 6];
         frame_alphas.push(alpha);
         frame_scats.push(scat);
-        eprintln!("Active-Cap Frame [{:02}] h={:6.2} km | chord={:>6.2} km | alpha={:.4} | L={:.4}",
-            i, alt, chord, alpha, scat.length());
+        eprintln!(
+            "Active-Cap Frame [{:02}] h={:6.2} km | chord={:>6.2} km | alpha={:.4} | L={:.4}",
+            i,
+            alt,
+            chord,
+            alpha,
+            scat.length()
+        );
     }
     for i in 0..(n_frames - 1) {
         let d_alpha = (frame_alphas[i + 1] - frame_alphas[i]).abs();
         let d_scat = (frame_scats[i + 1] - frame_scats[i]).length();
         let rel_scat = d_scat / frame_scats[i].length().max(1.0);
-        assert!(d_alpha < 0.02, "Frame alpha jump {d_alpha:.4} at alt {:.2} km exceeds 0.02 tolerance", frame_alts[i]);
-        assert!(rel_scat < 0.20, "Frame radiance relative jump {:.1}% (delta L {d_scat:.4}) at alt {:.2} km exceeds 20% tolerance", rel_scat * 100.0, frame_alts[i]);
+        assert!(
+            d_alpha < 0.02,
+            "Frame alpha jump {d_alpha:.4} at alt {:.2} km exceeds 0.02 tolerance",
+            frame_alts[i]
+        );
+        assert!(
+            rel_scat < 0.20,
+            "Frame radiance relative jump {:.1}% (delta L {d_scat:.4}) at alt {:.2} km exceeds 20% tolerance",
+            rel_scat * 100.0,
+            frame_alts[i]
+        );
     }
-    eprintln!("Active march cap frame-to-frame continuity: all Delta alpha < 0.02, all relative Delta L < 20%");
+    eprintln!(
+        "Active march cap frame-to-frame continuity: all Delta alpha < 0.02, all relative Delta L < 20%"
+    );
 
     // Verify Part 2 (Nadir column across lower boundary 54.72 km):
     let nadir_offset = n_geom + n_frames;
@@ -3527,22 +3873,44 @@ fn production_camera_ascent_continuity_across_full_transition_on_hardware() {
     let mut nadir_scats = Vec::new();
     for i in 0..n_nadir {
         let base = (nadir_offset + i) * 8;
-        let scat = glam::Vec3::new(readback_floats[base], readback_floats[base + 1], readback_floats[base + 2]);
+        let scat = glam::Vec3::new(
+            readback_floats[base],
+            readback_floats[base + 1],
+            readback_floats[base + 2],
+        );
         let alpha = readback_floats[base + 3];
         nadir_alphas.push(alpha);
         nadir_scats.push(scat);
     }
     for i in 0..n_nadir {
-        eprintln!("Nadir [{:02}] h={:5.1} km | alpha={:.4} | scat=({:.4}, {:.4}, {:.4}) L={:.4}",
-            i, nadir_alts[i], nadir_alphas[i], nadir_scats[i].x, nadir_scats[i].y, nadir_scats[i].z, nadir_scats[i].length());
+        eprintln!(
+            "Nadir [{:02}] h={:5.1} km | alpha={:.4} | scat=({:.4}, {:.4}, {:.4}) L={:.4}",
+            i,
+            nadir_alts[i],
+            nadir_alphas[i],
+            nadir_scats[i].x,
+            nadir_scats[i].y,
+            nadir_scats[i].z,
+            nadir_scats[i].length()
+        );
     }
     for i in 0..(n_nadir - 1) {
         let d_alpha = (nadir_alphas[i + 1] - nadir_alphas[i]).abs();
         let d_scat = (nadir_scats[i + 1] - nadir_scats[i]).length();
-        assert!(d_alpha < 0.02, "Nadir alpha jump {d_alpha:.4} at alt {:.1} km exceeds 0.02 tolerance", nadir_alts[i]);
-        assert!(d_scat < 0.05, "Nadir radiance jump {d_scat:.4} at alt {:.1} km exceeds 0.05 tolerance", nadir_alts[i]);
+        assert!(
+            d_alpha < 0.02,
+            "Nadir alpha jump {d_alpha:.4} at alt {:.1} km exceeds 0.02 tolerance",
+            nadir_alts[i]
+        );
+        assert!(
+            d_scat < 0.05,
+            "Nadir radiance jump {d_scat:.4} at alt {:.1} km exceeds 0.05 tolerance",
+            nadir_alts[i]
+        );
     }
-    eprintln!("Nadir column ascent crossing lower boundary 54.72 km: all Delta alpha < 0.02, all Delta L < 0.05 (verified continuous)");
+    eprintln!(
+        "Nadir column ascent crossing lower boundary 54.72 km: all Delta alpha < 0.02, all Delta L < 0.05 (verified continuous)"
+    );
 
     // Verify Part 3 (Upper boundary 214.72 km):
     let high_offset = n_geom + n_frames + n_nadir;
@@ -3550,7 +3918,11 @@ fn production_camera_ascent_continuity_across_full_transition_on_hardware() {
     let mut high_scats = Vec::new();
     for i in 0..n_high {
         let base = (high_offset + i) * 8;
-        let scat = glam::Vec3::new(readback_floats[base], readback_floats[base + 1], readback_floats[base + 2]);
+        let scat = glam::Vec3::new(
+            readback_floats[base],
+            readback_floats[base + 1],
+            readback_floats[base + 2],
+        );
         let alpha = readback_floats[base + 3];
         high_alphas.push(alpha);
         high_scats.push(scat);
@@ -3558,11 +3930,23 @@ fn production_camera_ascent_continuity_across_full_transition_on_hardware() {
     for i in 0..(n_high - 1) {
         let d_alpha = (high_alphas[i + 1] - high_alphas[i]).abs();
         let d_scat = (high_scats[i + 1] - high_scats[i]).length();
-        assert!(d_alpha < 0.01, "Upper boundary alpha jump {d_alpha:.4} at alt {:.1} km exceeds 0.01 tolerance", high_alts[i]);
-        assert!(d_scat < 0.02, "Upper boundary radiance jump {d_scat:.4} at alt {:.1} km exceeds 0.02 tolerance", high_alts[i]);
+        assert!(
+            d_alpha < 0.01,
+            "Upper boundary alpha jump {d_alpha:.4} at alt {:.1} km exceeds 0.01 tolerance",
+            high_alts[i]
+        );
+        assert!(
+            d_scat < 0.02,
+            "Upper boundary radiance jump {d_scat:.4} at alt {:.1} km exceeds 0.02 tolerance",
+            high_alts[i]
+        );
     }
-    eprintln!("Nadir column ascent crossing upper boundary 214.72 km: all Delta alpha < 0.01, all Delta L < 0.02 (verified continuous)");
-    eprintln!("[GPU COMPUTE SURROGATE TESTED] production_camera_ascent_continuity_across_full_transition_on_hardware: PASSED\n");
+    eprintln!(
+        "Nadir column ascent crossing upper boundary 214.72 km: all Delta alpha < 0.01, all Delta L < 0.02 (verified continuous)"
+    );
+    eprintln!(
+        "[GPU COMPUTE SURROGATE TESTED] production_camera_ascent_continuity_across_full_transition_on_hardware: PASSED\n"
+    );
 }
 
 #[test]
@@ -3617,37 +4001,39 @@ fn custom_cloud_graphics_harness_rasterizes_and_blends_on_hardware() {
     });
     let target_view = target_tex.create_view(&Default::default());
 
-    let bind_layout = gpu.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("cloud-material-bind-layout"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+    let bind_layout = gpu
+        .device
+        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("cloud-material-bind-layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
                 },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
-    });
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
 
     let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("cloud-material-bind-group"),
@@ -3718,48 +4104,59 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
-    let shader_module = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("cloud-raster-pipeline-shader"),
-        source: wgpu::ShaderSource::Wgsl(raster_shader_source.into()),
-    });
+    let shader_module = gpu
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("cloud-raster-pipeline-shader"),
+            source: wgpu::ShaderSource::Wgsl(raster_shader_source.into()),
+        });
 
-    let pipeline_layout = gpu.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("cloud-raster-layout"),
-        bind_group_layouts: &[Some(&bind_layout)],
-        immediate_size: 0,
-    });
+    let pipeline_layout = gpu
+        .device
+        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("cloud-raster-layout"),
+            bind_group_layouts: &[Some(&bind_layout)],
+            immediate_size: 0,
+        });
 
-    let pipeline = gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("cloud-render-pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader_module,
-            entry_point: Some("vs_main"),
-            buffers: &[],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader_module,
-            entry_point: Some("fs_main"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: target_format,
-                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            ..Default::default()
-        },
-        depth_stencil: None,
-        multisample: Default::default(),
-        multiview_mask: None,
-        cache: None,
-    });
+    let pipeline = gpu
+        .device
+        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("cloud-render-pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader_module,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader_module,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
 
     // Clear with semi-transparent background alpha (a_dst = 0.5):
-    let clear_color = wgpu::Color { r: 0.2, g: 0.4, b: 0.8, a: 0.5 };
+    let clear_color = wgpu::Color {
+        r: 0.2,
+        g: 0.4,
+        b: 0.8,
+        a: 0.5,
+    };
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
     {
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -3816,18 +4213,30 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     gpu.queue.submit([encoder.finish()]);
 
     let (tx, rx) = std::sync::mpsc::channel();
-    staging_buf.slice(..).map_async(wgpu::MapMode::Read, move |res| tx.send(res).unwrap());
-    gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    staging_buf
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |res| tx.send(res).unwrap());
+    gpu.device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .unwrap();
     rx.recv().unwrap().unwrap();
 
-    let mapped = staging_buf.slice(..).get_mapped_range().expect("staging range mapped");
+    let mapped = staging_buf
+        .slice(..)
+        .get_mapped_range()
+        .expect("staging range mapped");
     let get_pixel = |x: u32, y: u32| -> [u8; 4] {
         let offset = (y * padded_bytes_per_row + x * 4) as usize;
-        [mapped[offset], mapped[offset + 1], mapped[offset + 2], mapped[offset + 3]]
+        [
+            mapped[offset],
+            mapped[offset + 1],
+            mapped[offset + 2],
+            mapped[offset + 3],
+        ]
     };
 
     let test_cases = [
-        (6u32,  0.0f32,  "Zone 0: Alpha 0.00 (Discard)"),
+        (6u32, 0.0f32, "Zone 0: Alpha 0.00 (Discard)"),
         (19u32, 0.25f32, "Zone 1: Alpha 0.25 (Semi-transparent)"),
         (32u32, 0.50f32, "Zone 2: Alpha 0.50 (Semi-transparent)"),
         (45u32, 0.75f32, "Zone 3: Alpha 0.75 (Semi-transparent)"),
@@ -3838,7 +4247,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let c_dst = glam::Vec3::new(0.2, 0.4, 0.8);
     let a_dst = 0.5f32;
 
-    eprintln!("\n=== [CUSTOM GRAPHICS HARNESS TESTED] Premultiplied Alpha Blending across 5 Transparency Zones ===");
+    eprintln!(
+        "\n=== [CUSTOM GRAPHICS HARNESS TESTED] Premultiplied Alpha Blending across 5 Transparency Zones ==="
+    );
     eprintln!("Clear Color (Dst): R=0.2 (51), G=0.4 (102), B=0.8 (204), A=0.5 (128)");
     eprintln!("Source Unpremul Color: R=0.8, G=0.6, B=0.4");
 
@@ -3869,12 +4280,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             assert!(
                 diff <= 1,
                 "{name}: channel {c} mismatch: actual {} vs analytical {} (diff {diff} exceeds 1 LSB)",
-                px[c], exp_u8[c]
+                px[c],
+                exp_u8[c]
             );
         }
     }
 
-    eprintln!("[CUSTOM GRAPHICS HARNESS TESTED] custom_cloud_graphics_harness_rasterizes_and_blends_on_hardware: PASSED (wgpu standalone rasterization harness)\n");
+    eprintln!(
+        "[CUSTOM GRAPHICS HARNESS TESTED] custom_cloud_graphics_harness_rasterizes_and_blends_on_hardware: PASSED (wgpu standalone rasterization harness)\n"
+    );
 }
 
 #[test]
@@ -3884,7 +4298,11 @@ fn production_cloud_high_resolution_bake_and_settings_snapshot_on_hardware() {
 
     // High quality preset bake resolution: 2048x1024 (from canonical Quality::cloud_size)
     let (tex_w, tex_h) = thessa_graphics::Quality::High.cloud_size();
-    assert_eq!((tex_w, tex_h), (2048, 1024), "High preset must be canonically 2048x1024");
+    assert_eq!(
+        (tex_w, tex_h),
+        (2048, 1024),
+        "High preset must be canonically 2048x1024"
+    );
     let tex_bytes = thessa_atmosphere::clouds::bake_clouds(
         0xC10D_0000_0000_0001,
         tex_w,
@@ -3950,7 +4368,14 @@ fn production_cloud_high_resolution_bake_and_settings_snapshot_on_hardware() {
 
     let in_words: Vec<u32> = ray_data
         .iter()
-        .flat_map(|r| [r[0].to_bits(), r[1].to_bits(), r[2].to_bits(), r[3].to_bits()])
+        .flat_map(|r| {
+            [
+                r[0].to_bits(),
+                r[1].to_bits(),
+                r[2].to_bits(),
+                r[3].to_bits(),
+            ]
+        })
         .collect();
     let out_words = vec![0u32; n_rays * 8];
     let in_buf = gpu.buffer(&in_words, false);
@@ -3971,17 +4396,30 @@ fn production_cloud_high_resolution_bake_and_settings_snapshot_on_hardware() {
     let readback_words = gpu.read(&out_buf);
     let readback_floats: Vec<f32> = readback_words.iter().map(|&w| f32::from_bits(w)).collect();
 
-    eprintln!("\n=== [GPU COMPUTE SURROGATE TESTED] High-Resolution 2048x1024 Production Texture Bake on Hardware ===");
+    eprintln!(
+        "\n=== [GPU COMPUTE SURROGATE TESTED] High-Resolution 2048x1024 Production Texture Bake on Hardware ==="
+    );
     for idx in 0..n_rays {
         let base = idx * 8;
-        let scat = glam::Vec3::new(readback_floats[base], readback_floats[base + 1], readback_floats[base + 2]);
+        let scat = glam::Vec3::new(
+            readback_floats[base],
+            readback_floats[base + 1],
+            readback_floats[base + 2],
+        );
         let alpha = readback_floats[base + 3];
         assert!(scat.is_finite(), "Ray {idx} scat non-finite: {scat:?}");
         assert!(alpha.is_finite(), "Ray {idx} alpha non-finite: {alpha}");
-        assert!((0.0..=1.0).contains(&alpha), "Ray {idx} alpha out of [0, 1]: {alpha}");
+        assert!(
+            (0.0..=1.0).contains(&alpha),
+            "Ray {idx} alpha out of [0, 1]: {alpha}"
+        );
     }
-    eprintln!("Successfully validated 64 rays across high-resolution 2048x1024 bake texture without texture aliasing or UV faults.");
-    eprintln!("[GPU COMPUTE SURROGATE TESTED] production_cloud_high_resolution_bake_and_settings_snapshot_on_hardware: PASSED\n");
+    eprintln!(
+        "Successfully validated 64 rays across high-resolution 2048x1024 bake texture without texture aliasing or UV faults."
+    );
+    eprintln!(
+        "[GPU COMPUTE SURROGATE TESTED] production_cloud_high_resolution_bake_and_settings_snapshot_on_hardware: PASSED\n"
+    );
 }
 
 #[test]
@@ -4025,13 +4463,25 @@ fn cloud_raymarch_dispatch_hardware_benchmark() {
     for i in 0..n_rays {
         let u = (i as f32) / (n_rays as f32);
         let rd = (dir_peak + right * (u * 0.4 - 0.2)).normalize();
-        ray_data.push([dir_peak.x * 1.0001, dir_peak.y * 1.0001, dir_peak.z * 1.0001, 0.0]);
+        ray_data.push([
+            dir_peak.x * 1.0001,
+            dir_peak.y * 1.0001,
+            dir_peak.z * 1.0001,
+            0.0,
+        ]);
         ray_data.push([rd.x, rd.y, rd.z, 24.0]);
     }
 
     let in_words: Vec<u32> = ray_data
         .iter()
-        .flat_map(|r| [r[0].to_bits(), r[1].to_bits(), r[2].to_bits(), r[3].to_bits()])
+        .flat_map(|r| {
+            [
+                r[0].to_bits(),
+                r[1].to_bits(),
+                r[2].to_bits(),
+                r[3].to_bits(),
+            ]
+        })
         .collect();
     let out_words = vec![0u32; n_rays * 8];
     let in_buf = gpu.buffer(&in_words, false);
@@ -4117,11 +4567,18 @@ fn cloud_raymarch_dispatch_hardware_benchmark() {
 
         let readback_start = std::time::Instant::now();
         let (tx, rx) = std::sync::mpsc::channel();
-        read_buf.slice(..).map_async(wgpu::MapMode::Read, move |res| tx.send(res).unwrap());
-        gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        read_buf
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |res| tx.send(res).unwrap());
+        gpu.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
         rx.recv().unwrap().unwrap();
 
-        let mapped = read_buf.slice(..).get_mapped_range().expect("readback range mapped");
+        let mapped = read_buf
+            .slice(..)
+            .get_mapped_range()
+            .expect("readback range mapped");
         let mut raw = [0u8; 16];
         raw.copy_from_slice(&mapped);
         drop(mapped);
@@ -4151,22 +4608,37 @@ fn cloud_raymarch_dispatch_hardware_benchmark() {
 
     eprintln!("\n=== [BENCHMARKED] Cloud Raymarch Hardware Performance Profile ===");
     eprintln!("Hardware: AMD Radeon 880M Graphics (RADV STRIX1, Vulkan 1.3, Mesa 26.2.4-arch1.1)");
-    eprintln!("Workload: 10,000 rays x 24 march steps (with procedural noise, domain warps, shadow taps)");
-    eprintln!("Iterations: {} isolated dispatches (one-time pipeline creation)", iterations);
+    eprintln!(
+        "Workload: 10,000 rays x 24 march steps (with procedural noise, domain warps, shadow taps)"
+    );
+    eprintln!(
+        "Iterations: {} isolated dispatches (one-time pipeline creation)",
+        iterations
+    );
     eprintln!("Pipeline Creation (one-time): {:.2} ms", pipeline_ms);
-    eprintln!("GPU Execution Duration (hardware TIMESTAMP_QUERY, period = {:.2} ns):", ts_period);
+    eprintln!(
+        "GPU Execution Duration (hardware TIMESTAMP_QUERY, period = {:.2} ns):",
+        ts_period
+    );
     eprintln!("  p50 (median): {:.3} ms", p50);
     eprintln!("  p95:          {:.3} ms", p95);
     eprintln!("  min:          {:.3} ms", min_gpu);
     eprintln!("  max:          {:.3} ms", max_gpu);
-    eprintln!("  avg:          {:.3} ms ({:.4} µs / ray)", avg_gpu, us_per_ray);
+    eprintln!(
+        "  avg:          {:.3} ms ({:.4} µs / ray)",
+        avg_gpu, us_per_ray
+    );
     eprintln!("Host Overhead:");
     eprintln!("  CPU Submit Latency:     avg {:.3} ms", avg_submit);
     eprintln!("  Readback Sync Latency:  avg {:.3} ms", avg_readback);
 
-    assert!(avg_gpu > 0.0 && avg_gpu < 50.0, "Average GPU duration must be within sane bounds: got {avg_gpu:.3} ms");
-    assert!(p95 < 50.0, "p95 GPU duration must be within sane bounds: got {p95:.3} ms");
+    assert!(
+        avg_gpu > 0.0 && avg_gpu < 50.0,
+        "Average GPU duration must be within sane bounds: got {avg_gpu:.3} ms"
+    );
+    assert!(
+        p95 < 50.0,
+        "p95 GPU duration must be within sane bounds: got {p95:.3} ms"
+    );
     eprintln!("[BENCHMARKED] cloud_raymarch_dispatch_hardware_benchmark: PASSED\n");
 }
-
-

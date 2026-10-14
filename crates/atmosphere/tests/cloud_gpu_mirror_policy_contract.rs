@@ -57,8 +57,18 @@ fn density_above_gpu_skip_boundary_remains_absorbing() {
     let expected_tau = density * extinction;
 
     let (transmittance, optical_depth) = march_constant(density, extinction, 1.0, 24);
-    near(optical_depth, expected_tau, 1e-12, "above-boundary optical depth");
-    near(transmittance, (-expected_tau).exp(), 1e-12, "above-boundary transmission");
+    near(
+        optical_depth,
+        expected_tau,
+        1e-12,
+        "above-boundary optical depth",
+    );
+    near(
+        transmittance,
+        (-expected_tau).exp(),
+        1e-12,
+        "above-boundary transmission",
+    );
 }
 
 #[test]
@@ -78,6 +88,16 @@ fn optically_thin_cloud_retains_analytic_beer_lambert_transmission() {
     let expected_tau: f64 = 0.5 * 0.4 * 1.0;
     let (transmittance, optical_depth) = march_constant(0.5, 0.4, 1.0, 24);
 
-    near(optical_depth, expected_tau, 1e-12, "thin-cloud optical depth");
-    near(transmittance, (-expected_tau).exp(), 1e-12, "thin-cloud transmission");
+    near(
+        optical_depth,
+        expected_tau,
+        1e-12,
+        "thin-cloud optical depth",
+    );
+    near(
+        transmittance,
+        (-expected_tau).exp(),
+        1e-12,
+        "thin-cloud transmission",
+    );
 }

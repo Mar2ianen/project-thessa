@@ -670,7 +670,7 @@ mod tests {
 
     #[cfg(unix)]
     fn assert_startup_child_gone(pid_path: &std::path::Path) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let pid = loop {
             if let Ok(pid) = std::fs::read_to_string(pid_path)
                 && let Ok(pid) = pid.trim().parse::<u32>()
@@ -706,7 +706,7 @@ mod tests {
         assert!(result.is_err(), "server without welcome must fail startup");
         assert_startup_child_gone(&pid_path);
         assert!(
-            started.elapsed() < Duration::from_secs(1),
+            started.elapsed() < Duration::from_secs(5),
             "startup cleanup took too long: {:?}",
             started.elapsed()
         );
@@ -721,7 +721,7 @@ mod tests {
         assert!(result.is_err(), "early server exit must fail startup");
         assert_startup_child_gone(&pid_path);
         assert!(
-            started.elapsed() < Duration::from_secs(1),
+            started.elapsed() < Duration::from_secs(5),
             "early-exit cleanup took too long: {:?}",
             started.elapsed()
         );

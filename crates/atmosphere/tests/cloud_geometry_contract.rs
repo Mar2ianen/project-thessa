@@ -12,17 +12,13 @@
 //! Do not remove or weaken them to obtain a green test run.
 
 use glam::DVec3;
-use thessa_atmosphere::clouds::{bake_clouds, clip_to_planet, intersect_shell, CloudSlab};
+use thessa_atmosphere::clouds::{CloudSlab, bake_clouds, clip_to_planet, intersect_shell};
 
 const RADIUS_M: f64 = 3_200_000.0;
 
 fn thessa_deck() -> CloudSlab {
-    CloudSlab::new(
-        RADIUS_M,
-        RADIUS_M + 25_600.0,
-        RADIUS_M + 54_720.0,
-    )
-    .expect("physically valid Thessa cloud envelope")
+    CloudSlab::new(RADIUS_M, RADIUS_M + 25_600.0, RADIUS_M + 54_720.0)
+        .expect("physically valid Thessa cloud envelope")
 }
 
 fn visible_segment(origin: DVec3, direction: DVec3, center: DVec3) -> Option<(f64, f64)> {
@@ -87,8 +83,14 @@ fn outward_surface_ray_keeps_the_near_cloud_deck() {
 
     let (t0, t1) = visible_segment(origin, outward, center)
         .expect("outward-looking surface observer must see the near cloud deck");
-    assert!((t0 - 25_600.0).abs() < 1e-5, "unexpected near cloud entry {t0}");
-    assert!((t1 - 54_720.0).abs() < 1e-5, "unexpected near cloud exit {t1}");
+    assert!(
+        (t0 - 25_600.0).abs() < 1e-5,
+        "unexpected near cloud entry {t0}"
+    );
+    assert!(
+        (t1 - 54_720.0).abs() < 1e-5,
+        "unexpected near cloud exit {t1}"
+    );
 }
 
 #[test]

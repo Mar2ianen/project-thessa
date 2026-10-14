@@ -61,7 +61,10 @@ fn camera_altitude_budget_geometry_policy_is_continuous_across_full_transition()
 
         // Intersection with cloud ceiling sphere (radius = march_top):
         let disc_top = b * b - (r_cam * r_cam - march_top * march_top);
-        assert!(disc_top > 0.0, "grazing ray must intersect march_top sphere");
+        assert!(
+            disc_top > 0.0,
+            "grazing ray must intersect march_top sphere"
+        );
         let sq_top = disc_top.sqrt();
         let t_top0 = -b - sq_top;
         let t_top1 = -b + sq_top;
@@ -132,13 +135,22 @@ fn camera_altitude_budget_geometry_policy_is_continuous_across_full_transition()
         "{:>8} | {:>12} | {:>12} | {:>12} | {:>8} | {:>8} | {:>10}",
         "Alt (km)", "Chord (km)", "Step (km)", "Opt Depth", "Trans", "Alpha", "Radiance"
     );
-    eprintln!("{:-<8}-+-{:-<12}-+-{:-<12}-+-{:-<12}-+-{:-<8}-+-{:-<8}-+-{:-<10}", "", "", "", "", "", "", "");
+    eprintln!(
+        "{:-<8}-+-{:-<12}-+-{:-<12}-+-{:-<12}-+-{:-<8}-+-{:-<8}-+-{:-<10}",
+        "", "", "", "", "", "", ""
+    );
 
     for s in &samples {
         if (s.altitude_km as i32) % 10 == 0 {
             eprintln!(
                 "{:>8.1} | {:>12.2} | {:>12.2} | {:>12.4} | {:>8.4} | {:>8.4} | {:>10.4}",
-                s.altitude_km, s.max_chord_km, s.mean_step_km, s.optical_depth, s.transmittance, s.alpha, s.radiance
+                s.altitude_km,
+                s.max_chord_km,
+                s.mean_step_km,
+                s.optical_depth,
+                s.transmittance,
+                s.alpha,
+                s.radiance
             );
         }
     }
@@ -169,4 +181,3 @@ fn camera_altitude_budget_geometry_policy_is_continuous_across_full_transition()
         );
     }
 }
-

@@ -357,7 +357,11 @@ fn resolve_terrain_capabilities(
     let is_discrete = adapter
         .as_ref()
         .map(|a| a.get_info().device_type == wgpu::DeviceType::DiscreteGpu);
-    let ray_query = Some(device.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY));
+    let ray_query = Some(
+        device
+            .features()
+            .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY),
+    );
     let caps = Capabilities {
         // Always available: without the `mesh-shaders` crate feature this
         // reports false and terrain resolves to the indexed path.
@@ -368,16 +372,15 @@ fn resolve_terrain_capabilities(
     let resolved = ResolvedGraphicsSettings::from_requested(&requested.0, &caps);
     graphics.0.terrain = resolved.terrain;
     graphics.0.ray_tracing = resolved.ray_tracing;
+    graphics.0.notes.retain(|note| {
+        !note.starts_with("terrain mesh capability") && !note.starts_with("auto: ray-query")
+    });
     graphics
         .0
         .notes
-        .retain(|note| !note.starts_with("terrain mesh capability") && !note.starts_with("auto: ray-query"));
-    graphics.0.notes.extend(
-        resolved
-            .notes
-            .into_iter()
-            .filter(|note| note.starts_with("terrain mesh capability") || note.starts_with("auto: ray-query")),
-    );
+        .extend(resolved.notes.into_iter().filter(|note| {
+            note.starts_with("terrain mesh capability") || note.starts_with("auto: ray-query")
+        }));
 }
 
 /// Loud startup check for the canonical terrain maps. The tile raster,

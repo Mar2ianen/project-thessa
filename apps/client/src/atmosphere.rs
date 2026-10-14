@@ -224,7 +224,8 @@ fn configure_solari_precision(mut shaders: ResMut<Assets<Shader>>, mut done: Loc
     }
     let target = shaders.iter().find_map(|(id, shader)| {
         let path = &shader.path;
-        (path.contains("bindings.wesl") || path.contains("raytracing_scene_bindings.wgsl")).then_some(id)
+        (path.contains("bindings.wesl") || path.contains("raytracing_scene_bindings.wgsl"))
+            .then_some(id)
     });
     let Some(id) = target else {
         return;

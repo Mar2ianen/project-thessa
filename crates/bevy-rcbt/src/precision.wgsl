@@ -43,9 +43,25 @@ struct CbtAabb {
     max_point: vec3<f32>,
 };
 
+fn cbt_is_finite_f32(v: f32) -> bool {
+    return (v == v) && (abs(v) <= 3.402823466e+38);
+}
+
+fn cbt_is_finite_vec3(v: vec3<f32>) -> bool {
+    return cbt_is_finite_f32(v.x) && cbt_is_finite_f32(v.y) && cbt_is_finite_f32(v.z);
+}
+
 // Slab ray-AABB intersection for portable WGSL ray query / bounding volume acceleration.
 // Returns vec2<f32>(t_enter, t_exit) if hit (with t_exit >= 0.0 and t_enter <= t_exit), or vec2<f32>(-1.0, -1.0) on miss.
 fn cbt_ray_intersect_aabb(aabb_min: vec3<f32>, aabb_max: vec3<f32>, ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec2<f32> {
+    if (!cbt_is_finite_vec3(aabb_min) || !cbt_is_finite_vec3(aabb_max) ||
+        !cbt_is_finite_vec3(ray_origin) || !cbt_is_finite_vec3(ray_dir)) {
+        return vec2<f32>(-1.0, -1.0);
+    }
+    if (ray_dir.x == 0.0 && ray_dir.y == 0.0 && ray_dir.z == 0.0) {
+        return vec2<f32>(-1.0, -1.0);
+    }
+
     var t_min: f32 = -3.402823466e+38;
     var t_max: f32 = 3.402823466e+38;
 

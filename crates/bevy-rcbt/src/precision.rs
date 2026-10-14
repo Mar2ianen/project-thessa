@@ -527,6 +527,38 @@ mod tests {
         assert_eq!(away, None);
     }
 
+    #[test]
+    fn tile_aabb_slab_is_invariant_to_direction_scale() {
+        let lo = [10.0, -5.0, 20.0];
+        let hi = [15.0, 5.0, 30.0];
+        let origin = [0.0, 0.0, 25.0];
+        let baseline = TileAnchor::ray_intersect_aabb(lo, hi, origin, [1.0, 0.0, 0.0])
+            .expect("baseline must hit");
+        let scale = 1.0e-13;
+        let small = TileAnchor::ray_intersect_aabb(lo, hi, origin, [scale, 0.0, 0.0])
+            .expect("a nonzero direction still intersects the box");
+        assert!((small.0 * scale - baseline.0).abs() < 1e-10);
+        assert!((small.1 * scale - baseline.1).abs() < 1e-10);
+    }
+
+    #[test]
+    fn tile_aabb_slab_rejects_nan_and_infinite_ray_coordinates() {
+        let lo = [10.0, -5.0, 20.0];
+        let hi = [15.0, 5.0, 30.0];
+        for (origin, dir) in [
+            ([f64::NAN, 0.0, 25.0], [1.0, 0.0, 0.0]),
+            ([0.0, 0.0, 25.0], [f64::NAN, 0.0, 0.0]),
+            ([0.0, 0.0, 25.0], [f64::INFINITY, 0.0, 0.0]),
+        ] {
+            assert_eq!(
+                TileAnchor::ray_intersect_aabb(lo, hi, origin, dir),
+                None,
+                "invalid ray must not return a hit: origin={origin:?}, dir={dir:?}",
+            );
+        }
+    }
+
+    #[test]
     fn direct_body_projection(frame: &TileAnchor, uv: [f64; 2], height_m: f64) -> [f64; 3] {
         let delta = add(
             scale_vec(frame.raw_axis_u, 2.0 * (uv[0] - 0.5) * frame.half_extent),

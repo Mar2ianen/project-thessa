@@ -145,6 +145,73 @@ impl TileAnchor {
         add(self.anchor_body_m, offset)
     }
 
+    /// Axis-Aligned Bounding Box (AABB) of the tile in body metres over a given height range:
+    /// returns `([min_x, min_y, min_z], [max_x, max_y, max_z])`.
+    pub fn aabb_body_m(&self, min_height_m: f64, max_height_m: f64) -> ([f64; 3], [f64; 3]) {
+        let mut min = [f64::INFINITY; 3];
+        let mut max = [f64::NEG_INFINITY; 3];
+        // 9 grid points (4 corners, 4 edge midpoints, 1 center) across min and max height
+        for &u in &[0.0, 0.5, 1.0] {
+            for &v in &[0.0, 0.5, 1.0] {
+                for &h in &[min_height_m, max_height_m] {
+                    let p = self.project_body_m([u, v], h);
+                    for i in 0..3 {
+                        min[i] = min[i].min(p[i]);
+                        max[i] = max[i].max(p[i]);
+                    }
+                }
+            }
+        }
+        (min, max)
+    }
+
+    /// Axis-Aligned Bounding Box (AABB) in camera-relative coordinates:
+    /// returns `([min_x, min_y, min_z], [max_x, max_y, max_z])`.
+    pub fn aabb_camera_m(
+        &self,
+        camera_body_m: [f64; 3],
+        min_height_m: f64,
+        max_height_m: f64,
+    ) -> Option<([f64; 3], [f64; 3])> {
+        if camera_body_m.iter().any(|value| !value.is_finite()) {
+            return None;
+        }
+        let (b_min, b_max) = self.aabb_body_m(min_height_m, max_height_m);
+        Some((sub(b_min, camera_body_m), sub(b_max, camera_body_m)))
+    }
+
+    /// Ray intersection against the tile AABB (Slab method).
+    /// Returns `Some((t_enter, t_exit))` along the ray `origin + t * dir`, or `None` on miss.
+    pub fn ray_intersect_aabb(
+        aabb_min: [f64; 3],
+        aabb_max: [f64; 3],
+        origin: [f64; 3],
+        dir: [f64; 3],
+    ) -> Option<(f64, f64)> {
+        let mut t_min = f64::NEG_INFINITY;
+        let mut t_max = f64::INFINITY;
+        for i in 0..3 {
+            if dir[i].abs() < 1e-12 {
+                if origin[i] < aabb_min[i] || origin[i] > aabb_max[i] {
+                    return None;
+                }
+            } else {
+                let inv_d = 1.0 / dir[i];
+                let mut t0 = (aabb_min[i] - origin[i]) * inv_d;
+                let mut t1 = (aabb_max[i] - origin[i]) * inv_d;
+                if t0 > t1 {
+                    std::mem::swap(&mut t0, &mut t1);
+                }
+                t_min = t_min.max(t0);
+                t_max = t_max.min(t1);
+                if t_max < t_min {
+                    return None;
+                }
+            }
+        }
+        (t_max >= 0.0).then_some((t_min.max(0.0), t_max))
+    }
+
     /// Build the camera-relative transport record.  The subtraction happens
     /// in f64 before either word is converted to f32.
     pub fn to_gpu(&self, camera_body_m: [f64; 3]) -> Option<GpuTileFrame> {
@@ -410,6 +477,54 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn tile_aabb_encloses_all_interior_samples() {
+        let radius = 3_200_000.0;
+        let tile = TileKey::new(1, 10, 512, 512).unwrap();
+        let frame = TileAnchor::new(tile, radius).unwrap();
+        let (min, max) = frame.aabb_body_m(-500.0, 8000.0);
+
+        // Verify that random interior grid samples are strictly enclosed in the AABB:
+        for i in 0..=20 {
+            let u = i as f64 / 20.0;
+            for j in 0..=20 {
+                let v = j as f64 / 20.0;
+                for &h in &[-500.0, 0.0, 3500.0, 8000.0] {
+                    let p = frame.project_body_m([u, v], h);
+                    for k in 0..3 {
+                        assert!(
+                            p[k] >= min[k] - 1e-4 && p[k] <= max[k] + 1e-4,
+                            "sample at u={u}, v={v}, h={h} must fall inside AABB: p[{k}]={}, min={}, max={}",
+                            p[k], min[k], max[k]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tile_aabb_ray_query_intersection_slab_accuracy() {
+        let aabb_min = [10.0, -5.0, 20.0];
+        let aabb_max = [15.0, 5.0, 30.0];
+
+        // Ray hitting the AABB head-on along X:
+        let origin = [0.0, 0.0, 25.0];
+        let dir = [1.0, 0.0, 0.0];
+        let hit = TileAnchor::ray_intersect_aabb(aabb_min, aabb_max, origin, dir);
+        assert_eq!(hit, Some((10.0, 15.0)));
+
+        // Ray missing the AABB:
+        let miss_origin = [0.0, 10.0, 25.0];
+        let miss = TileAnchor::ray_intersect_aabb(aabb_min, aabb_max, miss_origin, dir);
+        assert_eq!(miss, None);
+
+        // Ray pointing away:
+        let away_dir = [-1.0, 0.0, 0.0];
+        let away = TileAnchor::ray_intersect_aabb(aabb_min, aabb_max, origin, away_dir);
+        assert_eq!(away, None);
     }
 
     fn direct_body_projection(frame: &TileAnchor, uv: [f64; 2], height_m: f64) -> [f64; 3] {

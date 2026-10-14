@@ -44,6 +44,25 @@ impl PlumeBound {
     pub fn is_degenerate(self) -> bool {
         !(self.length_m > 0.0) || !(self.max_radius_m > 0.0)
     }
+
+    /// Procedural Axis-Aligned Bounding Box (AABB) in plume-local metres:
+    /// returns `([min_x, min_y, min_z], [max_x, max_y, max_z])`.
+    /// Coordinates: +Z downstream, X and Y radial from nozzle axis.
+    pub fn aabb_local_m(self) -> ([f64; 3], [f64; 3]) {
+        let r = self.max_radius_m.max(0.0);
+        let l = self.length_m.max(0.0);
+        ([-r, -r, 0.0], [r, r, l])
+    }
+
+    /// Ray intersection against the procedural plume AABB (Slab method).
+    /// Returns `Some((t_enter, t_exit))` along `origin + t * dir`, or `None` on miss.
+    pub fn ray_intersect_aabb(self, origin: [f64; 3], dir: [f64; 3]) -> Option<(f64, f64)> {
+        if self.is_degenerate() {
+            return None;
+        }
+        let (min, max) = self.aabb_local_m();
+        ray_intersect_slab(min, max, origin, dir)
+    }
 }
 
 /// One binary subregion: axial span × radial span (a hollow-cylinder shell
@@ -90,6 +109,51 @@ impl PlumeRegion {
             [Self { r1_m: mid, ..self }, Self { r0_m: mid, ..self }]
         }
     }
+
+    /// Subregion Axis-Aligned Bounding Box (AABB) in plume-local metres:
+    /// returns `([min_x, min_y, min_z], [max_x, max_y, max_z])`.
+    pub fn aabb_local_m(self) -> ([f64; 3], [f64; 3]) {
+        let r = self.r1_m.max(0.0);
+        ([-r, -r, self.z0_m], [r, r, self.z1_m])
+    }
+
+    /// Ray intersection against this subregion's AABB (Slab method).
+    pub fn ray_intersect_aabb(self, origin: [f64; 3], dir: [f64; 3]) -> Option<(f64, f64)> {
+        let (min, max) = self.aabb_local_m();
+        ray_intersect_slab(min, max, origin, dir)
+    }
+}
+
+/// Generic slab ray-AABB intersection method.
+/// Returns `Some((t_enter, t_exit))` along the ray `origin + t * dir`, or `None` on miss.
+pub fn ray_intersect_slab(
+    aabb_min: [f64; 3],
+    aabb_max: [f64; 3],
+    origin: [f64; 3],
+    dir: [f64; 3],
+) -> Option<(f64, f64)> {
+    let mut t_min = f64::NEG_INFINITY;
+    let mut t_max = f64::INFINITY;
+    for i in 0..3 {
+        if dir[i].abs() < 1e-12 {
+            if origin[i] < aabb_min[i] || origin[i] > aabb_max[i] {
+                return None;
+            }
+        } else {
+            let inv_d = 1.0 / dir[i];
+            let mut t0 = (aabb_min[i] - origin[i]) * inv_d;
+            let mut t1 = (aabb_max[i] - origin[i]) * inv_d;
+            if t0 > t1 {
+                std::mem::swap(&mut t0, &mut t1);
+            }
+            t_min = t_min.max(t0);
+            t_max = t_max.min(t1);
+            if t_max < t_min {
+                return None;
+            }
+        }
+    }
+    (t_max >= 0.0).then_some((t_min.max(0.0), t_max))
 }
 
 /// Region addressed by a binary CBT node: descend from the root, taking the
@@ -210,5 +274,42 @@ mod tests {
         let child_error = residual_error_estimate(&profile, left);
         assert!(child_error <= root_error);
         assert!(root_error >= 0.0);
+    }
+
+    #[test]
+    fn plume_procedural_aabb_and_ray_query_slab_intersection() {
+        let bound = PlumeBound {
+            length_m: 25.0,
+            max_radius_m: 3.0,
+        };
+        let (min, max) = bound.aabb_local_m();
+        assert_eq!(min, [-3.0, -3.0, 0.0]);
+        assert_eq!(max, [3.0, 3.0, 25.0]);
+
+        // Ray traveling straight down nozzle axis from z = -5 to +Z:
+        let origin = [0.0, 0.0, -5.0];
+        let dir = [0.0, 0.0, 1.0];
+        let hit = bound.ray_intersect_aabb(origin, dir);
+        assert_eq!(hit, Some((5.0, 30.0)));
+
+        // Transverse ray across plume at z = 10:
+        let origin = [-10.0, 0.0, 10.0];
+        let dir = [1.0, 0.0, 0.0];
+        let hit = bound.ray_intersect_aabb(origin, dir);
+        assert_eq!(hit, Some((7.0, 13.0)));
+
+        // Missed ray parallel to plume:
+        let miss_origin = [5.0, 0.0, -5.0];
+        assert_eq!(bound.ray_intersect_aabb(miss_origin, dir), None);
+
+        // Subregion AABB check:
+        let root_reg = PlumeRegion::root(bound);
+        let [left, right] = root_reg.split();
+        let (l_min, l_max) = left.aabb_local_m();
+        let (r_min, r_max) = right.aabb_local_m();
+        assert_eq!(l_min[2], 0.0);
+        assert_eq!(l_max[2], 12.5);
+        assert_eq!(r_min[2], 12.5);
+        assert_eq!(r_max[2], 25.0);
     }
 }

@@ -808,6 +808,58 @@ fn check() { result[0] = cbt_render_position(frames[0], vec3(12.25, -2.125, 33.0
     );
 }
 
+#[test]
+#[ignore = "requires a wgpu adapter; run with --include-ignored"]
+fn gpu_precision_wgsl_ray_intersect_aabb_accuracy() {
+    let gpu = Gpu::new();
+    let aabb_min = [10.0_f32, -5.0, 20.0, 0.0];
+    let aabb_max = [15.0_f32, 5.0, 30.0, 0.0];
+    let ray_origin = [0.0_f32, 0.0, 25.0, 0.0];
+    let ray_dir = [1.0_f32, 0.0, 0.0, 0.0];
+
+    let aabb_buf = gpu.buffer(
+        &[
+            aabb_min.map(|x| x.to_bits()),
+            aabb_max.map(|x| x.to_bits()),
+        ]
+        .concat(),
+        false,
+    );
+    let ray_buf = gpu.buffer(
+        &[
+            ray_origin.map(|x| x.to_bits()),
+            ray_dir.map(|x| x.to_bits()),
+        ]
+        .concat(),
+        false,
+    );
+    let out_buf = gpu.buffer(&[0; 4], false);
+    let shader = format!(
+        "{}\n{}",
+        include_str!("precision.wgsl"),
+        r#"
+@group(0) @binding(0) var<storage, read> aabb: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> ray: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read_write> result: array<vec4<f32>>;
+@compute @workgroup_size(1)
+fn check() {
+    let hit = cbt_ray_intersect_aabb(aabb[0].xyz, aabb[1].xyz, ray[0].xyz, ray[1].xyz);
+    result[0] = vec4<f32>(hit.x, hit.y, 0.0, 0.0);
+}
+"#
+    );
+    gpu.dispatch(
+        &shader,
+        &[("check", 1)],
+        &[&aabb_buf, &ray_buf, &out_buf],
+        &[],
+        &[2],
+    );
+    let values: Vec<_> = gpu.read(&out_buf).into_iter().map(f32::from_bits).collect();
+    assert_eq!(values[0], 10.0);
+    assert_eq!(values[1], 15.0);
+}
+
 /// Execute the actual mesh entry body as compute, replacing only its stage IO.
 ///
 /// The shim keeps every production binding number (0..16) and the 256-wide

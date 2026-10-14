@@ -347,29 +347,36 @@ fn update_tile_cloud_shadows(
 
 fn resolve_terrain_capabilities(
     device: Option<Res<bevy::render::renderer::RenderDevice>>,
+    adapter: Option<Res<bevy::render::renderer::RenderAdapter>>,
     requested: Option<Res<GraphicsRequested>>,
     graphics: Option<ResMut<GraphicsResolved>>,
 ) {
     let (Some(device), Some(requested), Some(mut graphics)) = (device, requested, graphics) else {
         return;
     };
+    let is_discrete = adapter
+        .as_ref()
+        .map(|a| a.get_info().device_type == wgpu::DeviceType::DiscreteGpu);
+    let ray_query = Some(device.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY));
     let caps = Capabilities {
         // Always available: without the `mesh-shaders` crate feature this
         // reports false and terrain resolves to the indexed path.
         terrain_mesh_supported: Some(thessa_bevy_rcbt::mesh_shader_supported(&device)),
-        ..Capabilities::unknown()
+        ray_query_supported: ray_query,
+        is_discrete_gpu: is_discrete,
     };
     let resolved = ResolvedGraphicsSettings::from_requested(&requested.0, &caps);
     graphics.0.terrain = resolved.terrain;
+    graphics.0.ray_tracing = resolved.ray_tracing;
     graphics
         .0
         .notes
-        .retain(|note| !note.starts_with("terrain mesh capability"));
+        .retain(|note| !note.starts_with("terrain mesh capability") && !note.starts_with("auto: ray-query"));
     graphics.0.notes.extend(
         resolved
             .notes
             .into_iter()
-            .filter(|note| note.starts_with("terrain mesh capability")),
+            .filter(|note| note.starts_with("terrain mesh capability") || note.starts_with("auto: ray-query")),
     );
 }
 

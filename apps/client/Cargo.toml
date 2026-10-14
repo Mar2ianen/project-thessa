@@ -22,6 +22,7 @@ thessa-plume-core = { path = "../../crates/plume-core" }
 thessa-bevy-rcbt = { path = "../../crates/bevy-rcbt", features = ["mesh-shaders"] }
 thessa-rcbt-core = { path = "../../crates/rcbt-core" }
 bevy = { workspace = true, features = ["bevy_solari"] }
+wgpu.workspace = true
 bevy_brp_extras = "0.23.0"
 glam.workspace = true
 rayon.workspace = true

@@ -37,3 +37,24 @@ fn cbt_local_offset(frame: CbtPrecisionFrame, uv: vec2<f32>, height: f32) -> vec
     return tangent * ((radius + height) / q_length)
         + normal * (height + (radius + height) * bend);
 }
+
+struct CbtAabb {
+    min_point: vec3<f32>,
+    max_point: vec3<f32>,
+};
+
+// Slab ray-AABB intersection for portable WGSL ray query / bounding volume acceleration.
+// Returns vec2<f32>(t_enter, t_exit) if hit (with t_exit >= 0.0 and t_enter <= t_exit), or vec2<f32>(-1.0, -1.0) on miss.
+fn cbt_ray_intersect_aabb(aabb_min: vec3<f32>, aabb_max: vec3<f32>, ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> vec2<f32> {
+    let inv_d = 1.0 / ray_dir;
+    let t0 = (aabb_min - ray_origin) * inv_d;
+    let t1 = (aabb_max - ray_origin) * inv_d;
+    let t_smaller = min(t0, t1);
+    let t_bigger = max(t0, t1);
+    let t_min = max(max(t_smaller.x, t_smaller.y), t_smaller.z);
+    let t_max = min(min(t_bigger.x, t_bigger.y), t_bigger.z);
+    if (t_max < max(t_min, 0.0)) {
+        return vec2<f32>(-1.0, -1.0);
+    }
+    return vec2<f32>(max(t_min, 0.0), t_max);
+}

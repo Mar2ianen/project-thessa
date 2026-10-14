@@ -29,7 +29,9 @@ pub mod optics;
 pub mod profile;
 pub mod source;
 
-pub use cbt_volume::{PlumeBound, PlumeRegion, region_for_node, residual_error_estimate};
+pub use cbt_volume::{
+    PlumeBound, PlumeRegion, ray_intersect_slab, region_for_node, residual_error_estimate,
+};
 pub use medium::{MediumSample, integrate_ray, radial_weight, radiant_power, sample_medium};
 pub use optics::{OpticalMaterial, hue_divisor, optical_material, ramp_rgb};
 pub use profile::{

@@ -223,23 +223,24 @@ fn configure_solari_precision(mut shaders: ResMut<Assets<Shader>>, mut done: Loc
         return;
     }
     let target = shaders.iter().find_map(|(id, shader)| {
-        shader
-            .path
-            .contains("raytracing_scene_bindings.wgsl")
-            .then_some(id)
+        let path = &shader.path;
+        (path.contains("bindings.wesl") || path.contains("raytracing_scene_bindings.wgsl")).then_some(id)
     });
     let Some(id) = target else {
         return;
     };
     let mut shader = shaders.get_mut(id).expect("loaded shader");
-    if let bevy::shader::Source::Wgsl(source) = &mut shader.source {
-        const FROM: &str = "const RAY_T_MIN = 0.001f;";
-        if source.contains(FROM) {
-            *source = source.replace(FROM, "const RAY_T_MIN = 0.1f;").into();
-            eprintln!("[solari] terrain ray epsilon: 0.1 m (Bevy 0.19 precision adapter)");
-        } else {
-            eprintln!("[solari] shader epsilon contract changed; precision adapter skipped");
+    const FROM: &str = "const RAY_T_MIN = 0.001f;";
+    match &mut shader.source {
+        bevy::shader::Source::Wgsl(source) | bevy::shader::Source::Wesl(source) => {
+            if source.contains(FROM) {
+                *source = source.replace(FROM, "const RAY_T_MIN = 0.1f;").into();
+                eprintln!("[solari] terrain ray epsilon: 0.1 m (Bevy 0.20 precision adapter)");
+            } else {
+                eprintln!("[solari] shader epsilon contract changed; precision adapter skipped");
+            }
         }
+        _ => {}
     }
     *done = true;
 }
@@ -840,6 +841,7 @@ fn ensure_rt_mesh_compatible(meshes: &mut Assets<Mesh>, handle: &Handle<Mesh>) -
     let Some(mut mesh) = meshes.get_mut(handle) else {
         return false;
     };
+    mesh.enable_raytracing = true;
     if !mesh.contains_attribute(Mesh::ATTRIBUTE_UV_0) {
         let count = mesh.count_vertices();
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0, 0.0]; count]);

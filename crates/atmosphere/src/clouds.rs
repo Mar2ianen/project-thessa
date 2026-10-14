@@ -310,13 +310,13 @@ pub fn integrate_slab_gpu_trapezoidal_model(
     for i in 0..steps {
         let t = t0 + (i as f64 + 0.5) * dt;
         let d = density_at(t);
-        if !d.is_finite() || d <= 0.0 {
+        if !d.is_finite() || d <= 0.001 {
             continue;
         }
         let step_tau = d * k * dt;
         transmittance *= (-step_tau).exp();
         optical_depth += step_tau;
-        if transmittance < 1e-4 {
+        if transmittance < 0.01 {
             transmittance = 0.0;
             break;
         }

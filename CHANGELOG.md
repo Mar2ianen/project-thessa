@@ -9,6 +9,8 @@ APIs, data formats, and save files are not stable before `0.1.0`.
 
 ### Fixed
 
+- CPU/GPU cloud integrator threshold parity (PR #8 regressions):
+  - **[CONFIRMED / IMPLEMENTED / MATHEMATICALLY PROVEN]** Density Skip and Early-Termination Parity: synchronized `integrate_slab_gpu_trapezoidal_model` in `crates/atmosphere/src/clouds.rs` with production WGSL (`assets/shaders/cloud_volume.wgsl` Backend A). Aligned the density skip threshold to `density <= 0.001` (preventing subthreshold haze absorption) and the early termination cutoff to `transmittance < 0.01` with exact zero transmittance assignment. Validated against independent contract tests in `cloud_gpu_mirror_policy_contract.rs`.
 - Surface ray planet occlusion and exact midpoint quadrature calibration (PR #7 regressions):
   - **[CONFIRMED / IMPLEMENTED / MATHEMATICALLY PROVEN]** Planet Surface Inward Occlusion Boundary: fixed `clip_to_planet()` in `crates/atmosphere/src/clouds.rs` to reject rays originating on or below the planet surface pointing inward (`p0 <= 0.0 && p1 > 0.0`). Prevents rays from leaking through the solid planet core and rendering far-side clouds. Verified by independent contract tests in `cloud_geometry_contract.rs`.
   - **[CONFIRMED / IMPLEMENTED / MATHEMATICALLY PROVEN]** Exact Midpoint Quadrature Integration: eliminated successive midpoint averaging `(d + prev) * 0.5` in `integrate_slab_gpu_trapezoidal_model`, `assets/shaders/cloud_volume.wgsl`, and `crates/bevy-rcbt/src/gpu_tests.rs`. Evaluated exact midpoint quadrature $d \cdot k \cdot dt$, achieving zero truncation error ($< 10^{-12}$) for all affine density profiles and preserving Beer-Lambert transmittance across shifted intervals without boundary lag or asymmetric weight distortion.

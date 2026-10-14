@@ -858,6 +858,36 @@ fn check() {
     let values: Vec<_> = gpu.read(&out_buf).into_iter().map(f32::from_bits).collect();
     assert_eq!(values[0], 10.0);
     assert_eq!(values[1], 15.0);
+
+    // Edge cases omitted by the original test. In particular an exactly
+    // parallel ray lying on a slab plane evaluates 0 * infinity in the
+    // branchless WGSL helper; its NaN behavior is not portable across GPUs.
+    // This test exercises the *compute* intersection helper, NOT hardware RT.
+    for (origin, direction, expected) in [
+        ([0.0_f32, 5.0, 25.0, 0.0], [1.0_f32, 0.0, 0.0, 0.0], [10.0, 15.0]),
+        ([0.0_f32, -5.0, 25.0, 0.0], [1.0_f32, 0.0, 0.0, 0.0], [10.0, 15.0]),
+        ([0.0_f32, 6.0, 25.0, 0.0], [1.0_f32, 0.0, 0.0, 0.0], [-1.0, -1.0]),
+        ([12.0_f32, 0.0, 25.0, 0.0], [1.0_f32, 0.0, 0.0, 0.0], [0.0, 3.0]),
+    ] {
+        let ray_case = gpu.buffer(
+            &[origin.map(f32::to_bits), direction.map(f32::to_bits)].concat(),
+            false,
+        );
+        let output = gpu.buffer(&[0; 4], false);
+        gpu.dispatch(
+            &shader,
+            &[("check", 1)],
+            &[&aabb_buf, &ray_case, &output],
+            &[],
+            &[2],
+        );
+        let actual: Vec<_> = gpu.read(&output).into_iter().map(f32::from_bits).collect();
+        assert_eq!(
+            [actual[0], actual[1]],
+            expected,
+            "WGSL slab intersection differs for origin={origin:?} direction={direction:?}",
+        );
+    }
 }
 
 /// Execute the actual mesh entry body as compute, replacing only its stage IO.

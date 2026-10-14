@@ -183,8 +183,10 @@ pub fn clip_to_planet(
     let Some((p0, p1)) = sphere_interval(origin, d, center, planet_radius_m) else {
         return Some((t0, t1));
     };
-    // Origin inside the planet: below the surface, no sky visible.
-    if p0 < 0.0 && p1 > 0.0 {
+    // Origin inside or on the surface of the planet pointing inward:
+    // If p0 <= 0.0 and p1 > 0.0, the ray penetrates the solid planet starting at or behind the origin.
+    // Below or on the surface with inward direction: no sky visible.
+    if p0 <= 0.0 && p1 > 0.0 {
         return None;
     }
     if p0 > 0.0 {
@@ -304,25 +306,17 @@ pub fn integrate_slab_gpu_trapezoidal_model(
     let dt = (t1 - t0) / steps as f64;
     let mut transmittance = 1.0;
     let mut optical_depth = 0.0;
-    let mut prev_density = -1.0;
 
     for i in 0..steps {
         let t = t0 + (i as f64 + 0.5) * dt;
         let d = density_at(t);
-        if !d.is_finite() || d <= 0.001 {
-            prev_density = -1.0;
+        if !d.is_finite() || d <= 0.0 {
             continue;
         }
-        let integ_density = if prev_density < 0.0 {
-            d
-        } else {
-            (d + prev_density) * 0.5
-        };
-        prev_density = d;
-        let step_tau = integ_density * k * dt;
+        let step_tau = d * k * dt;
         transmittance *= (-step_tau).exp();
         optical_depth += step_tau;
-        if transmittance < 0.01 {
+        if transmittance < 1e-4 {
             transmittance = 0.0;
             break;
         }
@@ -1007,9 +1001,6 @@ mod tests {
         let exact_depth: f64 = 1.5;
         let exact_trans = (-exact_depth).exp();
 
-        let mut prev_depth_err = f64::MAX;
-        let mut prev_trans_err = f64::MAX;
-
         for steps in [4, 8, 16, 32, 64, 128, 256] {
             let (trans, depth) =
                 integrate_slab_gpu_trapezoidal_model(|t| 2.0 * t, 0.0, 1.0, steps, k);
@@ -1017,21 +1008,14 @@ mod tests {
             let trans_err = (trans - exact_trans).abs();
 
             assert!(
-                depth_err < prev_depth_err,
-                "steps={steps}: depth_err {depth_err} >= prev {prev_depth_err}"
+                depth_err < 1e-12,
+                "steps={steps}: depth_err {depth_err} exceeds 1e-12"
             );
             assert!(
-                trans_err < prev_trans_err,
-                "steps={steps}: trans_err {trans_err} >= prev {prev_trans_err}"
+                trans_err < 1e-12,
+                "steps={steps}: trans_err {trans_err} exceeds 1e-12"
             );
-
-            prev_depth_err = depth_err;
-            prev_trans_err = trans_err;
         }
-
-        // At 256 steps, first-order boundary error is < 0.006 (exact formula error is 1.5/256 ≈ 0.00586):
-        assert!(prev_depth_err < 0.006);
-        assert!(prev_trans_err < 0.002);
     }
 
     #[test]

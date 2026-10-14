@@ -666,7 +666,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let dt = chord / f32(steps);
         let step_km = dt * radius_km;
         let dither = ign(in.position.xy);
-        var prev_density = -1.0;
 
         for (var i = 0; i < CLOUD_MARCH_MAX; i += 1) {
             let t_current = t0 + (f32(i) + dither) * dt;
@@ -681,15 +680,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
             let density = slab_density(p, drift, weather, step_km, true);
             if (density <= 0.001) {
-                prev_density = -1.0;
                 continue;
             }
-
-            // Trapezoidal quadrature with boundary reset on slab entry / clear air:
-            // Resets boundary sample so entering an occupied interval does not halve the first step weight.
-            // Note: this is a discrete numerical quadrature approximation, not an unbiased Monte Carlo estimator.
-            let integ_density = select((density + prev_density) * 0.5, density, prev_density < 0.0);
-            prev_density = density;
 
             let h01 = clamp((length(p) - bot) / thick, 0.0, 1.0);
 
@@ -726,7 +718,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let amb_occ = (0.20 + 0.80 * height_occ) * (0.12 + 0.88 * core_occ);
             let ambient_radiance = mix(ground_amb, sky_amb, h01 * 0.75 + 0.25) * amb_occ * 0.45;
 
-            let step_ext = integ_density * ext * dt;
+            let step_ext = density * ext * dt;
             let step_trans = exp(-step_ext);
             let point_light = sun_radiance + ambient_radiance;
             scat += transmittance * point_light * (1.0 - step_trans);

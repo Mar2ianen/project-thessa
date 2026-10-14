@@ -352,8 +352,8 @@ pub fn describe() -> Vec<SettingMeta> {
             step: "0.05",
             unit: "-",
             advanced: false,
-            restart_required: false,
-            description: "Alpha gain over the baked deck texture.",
+            restart_required: true,
+            description: "Alpha gain baked into the deck texture at startup.",
         },
         SettingMeta {
             path: "clouds.animate",
@@ -699,6 +699,8 @@ mod tests {
         assert!(cloud_lay.restart_required);
         let cloud_cov = metas.iter().find(|m| m.path == "clouds.coverage").unwrap();
         assert!(cloud_cov.restart_required);
+        let cloud_op = metas.iter().find(|m| m.path == "clouds.opacity").unwrap();
+        assert!(cloud_op.restart_required);
         let aurora_q = metas
             .iter()
             .find(|m| m.path == "upper_atmosphere.aurora_quality")

@@ -1202,10 +1202,7 @@ impl EffectiveCloudBackend {
 }
 
 pub(crate) fn cloud_backend_override_env() -> Option<&'static str> {
-    static BACKEND_OVERRIDE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    BACKEND_OVERRIDE
-        .get_or_init(|| std::env::var("THESSA_CLOUD_BACKEND").ok())
-        .as_deref()
+    thessa_graphics::cloud_backend_override_env()
 }
 
 /// Pure resolution of effective cloud backend from requested integrator and optional dev environment override.

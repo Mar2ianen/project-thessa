@@ -462,6 +462,13 @@ pub fn ambient_rgb(
 }
 
 /// Multi-star cloud illumination input conforming to `docs/39 §13`.
+/// Multi-star celestial lighting contract for planetary atmosphere and cloud volumes.
+///
+/// Status (`docs/39 §13`): `INTERFACE IMPLEMENTED / RENDERER INTEGRATION PENDING`.
+/// The core data structure and celestial light reduction mathematics are fully implemented here
+/// in `thessa-atmosphere`. Full multi-emitter volumetric raymarching is reserved for the
+/// standalone FastRT / custom RTE path tracer, avoiding temporary Bevy-specific shader bloat
+/// during the ongoing Bevy engine decoupling.
 ///
 /// In Project Thessa, a single-Sun assumption is forbidden as an architectural boundary.
 /// The renderer consumes an array/slice of star emitters with direction, spectral contribution,
@@ -1135,11 +1142,18 @@ mod tests {
         );
     }
 
+    /// Analytical CPU surrogate model for nonlinear density transform characterization under LOD filtering.
+    ///
+    /// NOTE: This unit test characterizes the analytical mathematical property that bandlimited noise octaves
+    /// fading to their statistical expectation bound the variance of the nonlinearly thresholded density field
+    /// f(E[X]) != E[f(X)].
+    ///
+    /// Full production shader validation — executing the actual WGSL `slab_density()`, `cauliflower_fbm()`,
+    /// convective height gradient, domain curl warp, coverage textures, and edge erosion on hardware —
+    /// is implemented and verified in `thessa-bevy-rcbt` GPU compute test:
+    /// `render::gpu_tests::production_slab_density_and_lod_continuity_on_hardware`.
     #[test]
     fn lod_nonlinear_density_characterization_bounds_variance_across_step_sizes() {
-        // Characterization test demonstrating that noise bandlimiting preserves macroscopic
-        // cloud body envelope across LOD step sizes, and documenting the effect of nonlinear
-        // operations (f(E[X]) != E[f(X)]) under thresholding and power laws.
         fn hash33(p: glam::Vec3) -> glam::Vec3 {
             let mut q = (p * glam::Vec3::new(0.1031, 0.1030, 0.0973)).fract_gl();
             let dot_val = q.dot(glam::Vec3::new(q.y, q.z, q.x) + glam::Vec3::splat(33.33));

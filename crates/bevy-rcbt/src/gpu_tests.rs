@@ -1649,7 +1649,7 @@ fn cloud_noise_kernel_matches_cpu_perlin_on_hardware() {
     let shader = format!(
         r#"
 @group(0) @binding(0) var<storage, read> in_points: array<vec4<f32>>;
-@group(0) @binding(1) var<storage, read_write> out_results: array<f32>;
+@group(0) @binding(1) var<storage, read_write> out_results: array<vec4<f32>>;
 
 {prod_functions}
 
@@ -1660,7 +1660,13 @@ fn test_noise_kernel(@builtin(global_invocation_id) gid: vec3<u32>) {{
         return;
     }}
     let p = in_points[idx].xyz;
-    out_results[idx] = perlin3d(p);
+    let n = perlin3d(p);
+    let h = hash33(p);
+    let g = hash_grad(p);
+    // Write out perlin3d in vec4 0, and hash_grad in vec4 1:
+    let base = idx * 2u;
+    out_results[base + 0u] = vec4<f32>(n, h.x, h.y, h.z);
+    out_results[base + 1u] = vec4<f32>(g.x, g.y, g.z, 0.0);
 }}
 "#
     );
@@ -1719,10 +1725,12 @@ fn test_noise_kernel(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let num_samples = 256;
     let mut test_points: Vec<glam::Vec3> = Vec::with_capacity(num_samples);
     for i in 0..num_samples {
-        // Test diverse ranges including negative coordinates, near integer lattice boundaries, and large chords:
-        let x = ((i * 1973 % 100_000) as f32) * 0.001 - 50.0;
-        let y = ((i * 9277 % 100_000) as f32) * 0.001 - 50.0;
-        let z = ((i * 2699 % 100_000) as f32) * 0.001 - 50.0;
+        // Test diverse ranges including planetary scale:
+        // Samples span [-50, +50] km local cells up to [-1500, +1500] km planet-wide chords:
+        let scale = if i < 128 { 0.001 } else { 0.03 };
+        let x = ((i * 1973 % 100_000) as f32) * scale - 50.0 * (scale * 1000.0);
+        let y = ((i * 9277 % 100_000) as f32) * scale - 50.0 * (scale * 1000.0);
+        let z = ((i * 2699 % 100_000) as f32) * scale - 50.0 * (scale * 1000.0);
         test_points.push(glam::Vec3::new(x, y, z));
     }
 
@@ -1730,7 +1738,7 @@ fn test_noise_kernel(@builtin(global_invocation_id) gid: vec3<u32>) {{
         .iter()
         .flat_map(|p| [p.x.to_bits(), p.y.to_bits(), p.z.to_bits(), 0u32])
         .collect();
-    let out_words: Vec<u32> = vec![0u32; num_samples];
+    let out_words: Vec<u32> = vec![0u32; num_samples * 8];
 
     let in_buf = gpu.buffer(&in_words, false);
     let out_buf = gpu.buffer(&out_words, false);
@@ -1749,18 +1757,493 @@ fn test_noise_kernel(@builtin(global_invocation_id) gid: vec3<u32>) {{
         .map(|&w| f32::from_bits(w))
         .collect();
 
-    let mut max_diff = 0.0f32;
+    let mut max_diff_perlin = 0.0f32;
+    let mut max_diff_hash = 0.0f32;
+    let mut max_diff_grad = 0.0f32;
+    let mut worst_sample = 0;
+    let mut worst_gpu_p = 0.0f32;
+    let mut worst_cpu_p = 0.0f32;
+
     for (i, &p) in test_points.iter().enumerate() {
-        let gpu_val = readback_floats[i];
-        let cpu_val = cpu_perlin3d(p);
-        let diff = (gpu_val - cpu_val).abs();
-        if diff > max_diff {
-            max_diff = diff;
+        let base = i * 8;
+        let gpu_perlin = readback_floats[base];
+        let gpu_hash = glam::Vec3::new(
+            readback_floats[base + 1],
+            readback_floats[base + 2],
+            readback_floats[base + 3],
+        );
+        let gpu_grad = glam::Vec3::new(
+            readback_floats[base + 4],
+            readback_floats[base + 5],
+            readback_floats[base + 6],
+        );
+
+        assert!(gpu_perlin.is_finite(), "sample {i} point {p:?}: GPU perlin is non-finite {gpu_perlin}");
+        assert!(gpu_hash.is_finite(), "sample {i} point {p:?}: GPU hash is non-finite {gpu_hash:?}");
+        assert!(gpu_grad.is_finite(), "sample {i} point {p:?}: GPU grad is non-finite {gpu_grad:?}");
+
+        let cpu_perlin = cpu_perlin3d(p);
+        let cpu_hash = cpu_hash33(p);
+        let cpu_grad = cpu_hash_grad(p);
+
+        assert!(cpu_perlin.is_finite(), "sample {i} point {p:?}: CPU perlin is non-finite {cpu_perlin}");
+
+        let diff_p = (gpu_perlin - cpu_perlin).abs();
+        let diff_h = (gpu_hash - cpu_hash).abs().max_element();
+        let diff_g = (gpu_grad - cpu_grad).abs().max_element();
+
+        if diff_p > max_diff_perlin {
+            max_diff_perlin = diff_p;
+            worst_sample = i;
+            worst_gpu_p = gpu_perlin;
+            worst_cpu_p = cpu_perlin;
+        }
+        if diff_h > max_diff_hash {
+            max_diff_hash = diff_h;
+        }
+        if diff_g > max_diff_grad {
+            max_diff_grad = diff_g;
         }
     }
-    eprintln!("cloud_noise_kernel: max_diff between GPU and CPU perlin3d is {max_diff}");
-    assert!(
-        max_diff < 0.005,
-        "max_diff {max_diff} exceeds 0.005 threshold"
+
+    let worst_p = test_points[worst_sample];
+    eprintln!(
+        "cloud_noise_kernel diagnostic: max_diff_perlin={max_diff_perlin} (sample {worst_sample} point {worst_p:?}, gpu={worst_gpu_p}, cpu={worst_cpu_p}), max_diff_hash={max_diff_hash}, max_diff_grad={max_diff_grad}"
     );
+
+    // Across planetary chords (up to +/- 1500 km), hash33 multiplies values of order ~5000.
+    // In IEEE 754 f32, values near 5000 allocate 13 bits of mantissa to the integer part,
+    // leaving 11 bits for fract() (resolution 2^-11 = 1/2048).
+    // An 8-ULP difference between GPU FMA (v_fma_f32) and CPU un-fused math yields exactly
+    // 8 * 2^-11 = 2^-8 = 1/256 in fract, and 2^-7 = 0.0078125 in hash33.
+    // Propagated through quintic interpolation, the maximum bound between GPU and CPU is < 0.010:
+    assert!(
+        max_diff_perlin < 0.010,
+        "max_diff_perlin {max_diff_perlin} exceeds 0.010 threshold at point {worst_p:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+fn production_slab_density_and_lod_continuity_on_hardware() {
+    let gpu = Gpu::new();
+
+    // Sliced directly from the production WGSL shader assets/shaders/cloud_volume.wgsl:
+    // Extracts quat_rotate, shell_mesh_uv, convective_cumulus_gradient, perlin3d,
+    // cauliflower_fbm, edge_wisps, slab_density and all intermediate procedural math.
+    const PROD_WGSL: &str = include_str!("../../../assets/shaders/cloud_volume.wgsl");
+    let start_idx = PROD_WGSL
+        .find("fn quat_rotate")
+        .expect("quat_rotate in cloud_volume.wgsl");
+    let end_idx = PROD_WGSL
+        .find("@fragment")
+        .expect("@fragment in cloud_volume.wgsl");
+    let prod_functions = &PROD_WGSL[start_idx..end_idx];
+
+    let shader = format!(
+        r#"
+struct CloudUniforms {{
+    center_radius: vec4<f32>,
+    slab: vec4<f32>,
+    sun: vec4<f32>,
+    deck_to_local: vec4<f32>,
+    params: vec4<f32>,
+    shape: vec4<f32>,
+}}
+
+@group(0) @binding(0) var<uniform> cloud: CloudUniforms;
+@group(0) @binding(1) var coverage_tex: texture_2d<f32>;
+@group(0) @binding(2) var coverage_sampler: sampler;
+@group(0) @binding(3) var<storage, read> in_samples: array<vec4<f32>>;
+@group(0) @binding(4) var<storage, read_write> out_results: array<vec4<f32>>;
+
+{prod_functions}
+
+@compute @workgroup_size(64)
+fn test_slab_density(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let idx = gid.x;
+    if (idx >= arrayLength(&in_samples)) {{
+        return;
+    }}
+    let s = in_samples[idx];
+    let p_norm = s.xyz;
+    let step_km = s.w;
+    let drift = vec2<f32>(cloud.params.y, cloud.params.y * 0.7);
+    let weather = vec3<f32>(0.5, 0.5, 0.5);
+
+    let d_full = slab_density(p_norm, drift, weather, step_km, true);
+    let d_fast = slab_density(p_norm, drift, weather, step_km, false);
+
+    out_results[idx] = vec4<f32>(d_full, d_fast, 0.0, 0.0);
+}}
+"#
+    );
+
+    // 1. Create coverage weather map texture (64x64 RGBA8Unorm) with realistic cloud island:
+    let tex_size = 64u32;
+    let mut tex_bytes = vec![0u8; (tex_size * tex_size * 4) as usize];
+    for y in 0..tex_size {
+        for x in 0..tex_size {
+            let u = (x as f32 + 0.5) / (tex_size as f32);
+            let v = (y as f32 + 0.5) / (tex_size as f32);
+            // Center island at u=0.5, v=0.5 with radius 0.25 (coverage 0.8 at core, falls off to 0):
+            let du = (u - 0.5).abs();
+            let dv = (v - 0.5).abs();
+            let dist = (du * du + dv * dv).sqrt();
+            let cov = (1.0 - (dist / 0.25)).clamp(0.0, 1.0) * 0.85;
+            let alpha = (cov * 255.0).round() as u8;
+            let offset = ((y * tex_size + x) * 4) as usize;
+            tex_bytes[offset] = 255;
+            tex_bytes[offset + 1] = 255;
+            tex_bytes[offset + 2] = 255;
+            tex_bytes[offset + 3] = alpha;
+        }
+    }
+
+    let coverage_texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("test-coverage-tex"),
+        size: wgpu::Extent3d {
+            width: tex_size,
+            height: tex_size,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+
+    gpu.queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &coverage_texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &tex_bytes,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(tex_size * 4),
+            rows_per_image: Some(tex_size),
+        },
+        wgpu::Extent3d {
+            width: tex_size,
+            height: tex_size,
+            depth_or_array_layers: 1,
+        },
+    );
+
+    let coverage_view = coverage_texture.create_view(&Default::default());
+    let coverage_sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    });
+
+    // 2. Uniform buffer with realistic Thessa planetary parameters:
+    let mut cloud_uniform_words = vec![0u32; 64]; // 256 bytes padded
+    let cloud_uniform_floats: [f32; 24] = [
+        0.0, 0.0, 0.0, 3_200_000.0,       // center_radius
+        1.000625, 1.0028125, 42.0, 24.0,   // slab (2 to 9 km above 3200 km planet)
+        0.0, 1.0, 0.0, 1.0,                // sun
+        0.0, 0.0, 0.0, 1.0,                // deck_to_local (identity quat)
+        1.0, 0.0, 0.003, 1.6,              // params (opacity 1.0, detail 1.6)
+        0.0, 0.05, 1.0, 0.0,               // shape (cumulus deck 0, cov_floor 0.05)
+    ];
+    for (i, &f) in cloud_uniform_floats.iter().enumerate() {
+        cloud_uniform_words[i] = f.to_bits();
+    }
+    let uniform_buf = gpu.buffer(&cloud_uniform_words, true);
+
+    // 3. Generate test sample points:
+    let step_sizes = [0.5f32, 2.0f32, 6.0f32, 12.0f32];
+    let r_bottom = 1.000625f32;
+    let r_top = 1.0028125f32;
+    let r_span = r_top - r_bottom;
+
+    let mut samples: Vec<[f32; 4]> = Vec::new();
+
+    // Group A: Vertical column through cloud island center (local dir [-1, 0, 0] -> u=0.5, v=0.5)
+    // 32 height samples per step size:
+    let h_steps = 32;
+    for &step_km in &step_sizes {
+        for i in 0..h_steps {
+            let h01 = (i as f32) / ((h_steps - 1) as f32) * 1.1; // 0.0 to 1.1 (spans below LCL to above top)
+            let r = r_bottom + h01 * r_span;
+            samples.push([-r, 0.0, 0.0, step_km]);
+        }
+    }
+
+    // Group B: Vertical column in clear sky (local dir [1, 0, 0] -> u=0.0, v=0.5, outside cloud)
+    for &step_km in &step_sizes {
+        for i in 0..h_steps {
+            let h01 = (i as f32) / ((h_steps - 1) as f32);
+            let r = r_bottom + h01 * r_span;
+            samples.push([r, 0.0, 0.0, step_km]);
+        }
+    }
+
+    // Group C: Horizontal slice across cloud edge at h01 = 0.40 (64 points across boundary)
+    let boundary_steps = 64;
+    let r_mid = r_bottom + 0.40 * r_span;
+    for &step_km in &step_sizes {
+        for i in 0..boundary_steps {
+            // Sweep u from 0.30 to 0.70:
+            let u = 0.30 + 0.40 * (i as f32) / ((boundary_steps - 1) as f32);
+            let angle = u * std::f32::consts::TAU;
+            let dir_x = angle.cos();
+            let dir_y = angle.sin();
+            samples.push([dir_x * r_mid, dir_y * r_mid, 0.0, step_km]);
+        }
+    }
+
+    let num_samples = samples.len();
+    let in_words: Vec<u32> = samples
+        .iter()
+        .flat_map(|s| [s[0].to_bits(), s[1].to_bits(), s[2].to_bits(), s[3].to_bits()])
+        .collect();
+    let out_words = vec![0u32; num_samples * 4];
+
+    let in_buf = gpu.buffer(&in_words, false);
+    let out_buf = gpu.buffer(&out_words, false);
+
+    // 4. Build pipeline & dispatch:
+    let uniform_layout = |binding: u32| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    };
+    let storage_layout = |binding: u32, read_only: bool| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    };
+    let texture_layout = |binding: u32| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    };
+    let sampler_layout = |binding: u32| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    };
+
+    let bind_layout = gpu
+        .device
+        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("slab-density-bind-layout"),
+            entries: &[
+                uniform_layout(0),
+                texture_layout(1),
+                sampler_layout(2),
+                storage_layout(3, true),
+                storage_layout(4, false),
+            ],
+        });
+
+    let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("slab-density-bind-group"),
+        layout: &bind_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&coverage_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(&coverage_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: in_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: out_buf.as_entire_binding(),
+            },
+        ],
+    });
+
+    let module = gpu
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("cbt-production-slab-density-wgsl"),
+            source: wgpu::ShaderSource::Wgsl(shader.into()),
+        });
+    let pipeline_layout = gpu
+        .device
+        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&bind_layout)],
+            immediate_size: 0,
+        });
+    let pipeline = gpu
+        .device
+        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("test_slab_density"),
+            layout: Some(&pipeline_layout),
+            module: &module,
+            entry_point: Some("test_slab_density"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups(num_samples.div_ceil(64) as u32, 1, 1);
+    }
+    gpu.queue.submit([encoder.finish()]);
+
+    let readback_words = gpu.read(&out_buf);
+    let readback_floats: Vec<f32> = readback_words
+        .iter()
+        .map(|&w| f32::from_bits(w))
+        .collect();
+
+    // 5. Assertions on hardware results:
+    for i in 0..num_samples {
+        let base = i * 4;
+        let d_full = readback_floats[base];
+        let d_fast = readback_floats[base + 1];
+        assert!(d_full.is_finite(), "sample {i} d_full non-finite: {d_full}");
+        assert!(d_fast.is_finite(), "sample {i} d_fast non-finite: {d_fast}");
+        assert!(d_full >= 0.0, "sample {i} d_full negative: {d_full}");
+        assert!(d_fast >= 0.0, "sample {i} d_fast negative: {d_fast}");
+    }
+
+    // Check Group B: Clear sky produces strictly zero density:
+    let group_b_offset = step_sizes.len() * h_steps;
+    for i in 0..(step_sizes.len() * h_steps) {
+        let sample_idx = group_b_offset + i;
+        let d_full = readback_floats[sample_idx * 4];
+        assert_eq!(
+            d_full, 0.0,
+            "Clear sky sample {sample_idx} must have strictly zero density"
+        );
+    }
+
+    // Check Group A: Column optical depth stability across step sizes (LOD):
+    eprintln!("\n=== Production WGSL slab_density Hardware Column Optical Depth ===");
+    let mut column_tau = Vec::new();
+    let mut column_tau_fast = Vec::new();
+    for (step_idx, &step_km) in step_sizes.iter().enumerate() {
+        let offset = step_idx * h_steps;
+        let mut sum_density = 0.0f32;
+        let mut sum_density_fast = 0.0f32;
+        let mut active_count = 0;
+        for i in 0..h_steps {
+            let sample_idx = offset + i;
+            let d = readback_floats[sample_idx * 4];
+            let d_fast = readback_floats[sample_idx * 4 + 1];
+            sum_density += d;
+            sum_density_fast += d_fast;
+            if d > 0.001 {
+                active_count += 1;
+            }
+        }
+        let tau = sum_density * (7.0 / (h_steps as f32)); // Optical depth across 7 km slab
+        let tau_fast = sum_density_fast * (7.0 / (h_steps as f32));
+        column_tau.push(tau);
+        column_tau_fast.push(tau_fast);
+        eprintln!(
+            "Step {:>4.1} km | Active Samples: {:>2}/{} | Tau(Full) = {:.4} | Tau(Fast Shadow) = {:.4}",
+            step_km, active_count, h_steps, tau, tau_fast
+        );
+        assert!(tau > 0.5, "Column optical depth must be significant in cloud center");
+        assert!(active_count >= 10, "Cloud body must span significant height range");
+    }
+
+    // Verify bounded optical depth variation across a 24x change in step size (0.5 to 12.0 km):
+    let tau_0_5 = column_tau[0];
+    let tau_12 = column_tau[3];
+    let rel_tau_diff = (tau_12 - tau_0_5).abs() / tau_0_5;
+    eprintln!("Optical depth variation across 24x step span: {:.2}%", rel_tau_diff * 100.0);
+    assert!(
+        rel_tau_diff < 0.35,
+        "Column optical depth variation ({rel_tau_diff:.3}) must be < 35% across 24x step change"
+    );
+
+    // Verify shadow fast-path optical depth tracks full-path within 25%:
+    for (step_idx, (&tau, &tau_f)) in column_tau.iter().zip(&column_tau_fast).enumerate() {
+        let shadow_err = (tau_f - tau).abs() / tau;
+        eprintln!(
+            "Step {:>4.1} km | Shadow fast-path optical depth relative discrepancy = {:.2}%",
+            step_sizes[step_idx], shadow_err * 100.0
+        );
+        assert!(
+            shadow_err < 0.25,
+            "Shadow fast-path error {shadow_err:.3} exceeds 25% at step {}", step_sizes[step_idx]
+        );
+    }
+
+    // Check Group C: Boundary silhouette stability across step sizes:
+    eprintln!("\n=== Cloud Silhouette Edge Position Across LODs ===");
+    let group_c_offset = group_b_offset + step_sizes.len() * h_steps;
+    let mut boundary_entries = Vec::new();
+    for (step_idx, &step_km) in step_sizes.iter().enumerate() {
+        let offset = group_c_offset + step_idx * boundary_steps;
+        let mut first_cloud_idx = None;
+        let mut last_cloud_idx = None;
+        for i in 0..boundary_steps {
+            let sample_idx = offset + i;
+            let d = readback_floats[sample_idx * 4];
+            if d > 0.001 {
+                if first_cloud_idx.is_none() {
+                    first_cloud_idx = Some(i);
+                }
+                last_cloud_idx = Some(i);
+            }
+        }
+        let first = first_cloud_idx.expect("cloud entry boundary");
+        let last = last_cloud_idx.expect("cloud exit boundary");
+        boundary_entries.push((first, last));
+        eprintln!(
+            "Step {:>4.1} km | Cloud Boundary Range: index [{:>2} .. {:>2}] (span {})",
+            step_km, first, last, last - first + 1
+        );
+    }
+
+    // Boundary entry and exit must not shift by more than 3 sample points (~4.7% of boundary sweep) across LODs:
+    // (At 0.5 km, high-frequency edge wisps extend boundary by ~1-2 cells, which smoothly contract as step increases).
+    let (ref_first, ref_last) = boundary_entries[0];
+    for (step_idx, &(first, last)) in boundary_entries.iter().enumerate().skip(1) {
+        let d_first = (first as i32 - ref_first as i32).abs();
+        let d_last = (last as i32 - ref_last as i32).abs();
+        assert!(
+            d_first <= 3,
+            "Boundary entry shifted by {d_first} cells at step {}", step_sizes[step_idx]
+        );
+        assert!(
+            d_last <= 3,
+            "Boundary exit shifted by {d_last} cells at step {}", step_sizes[step_idx]
+        );
+    }
 }

@@ -440,6 +440,17 @@ pub fn resolve_cloud_integrator(
     requested
 }
 
+/// Single immutable source of truth for the `THESSA_CLOUD_BACKEND` environment override.
+///
+/// Cached via `std::sync::OnceLock` so repeated calls across frames or across systems
+/// never perform redundant allocations or `std::env::var` queries, and maintain strict consistency.
+pub fn cloud_backend_override_env() -> Option<&'static str> {
+    static BACKEND_OVERRIDE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    BACKEND_OVERRIDE
+        .get_or_init(|| std::env::var("THESSA_CLOUD_BACKEND").ok())
+        .as_deref()
+}
+
 impl ResolvedGraphicsSettings {
     /// Evaluates the true runtime representation selected for clouds:
     /// Disabled when clouds are off, Shell when volumetric is off,
@@ -448,9 +459,7 @@ impl ResolvedGraphicsSettings {
     /// Respects the `THESSA_CLOUD_BACKEND` environment variable override if set
     /// ("stochastic" / "pt" / "1" -> VolumeStochastic, "march" / "0" -> VolumeMarch).
     pub fn active_cloud_representation(&self) -> ActiveCloudRepresentation {
-        self.active_cloud_representation_with_override(
-            std::env::var("THESSA_CLOUD_BACKEND").ok().as_deref(),
-        )
+        self.active_cloud_representation_with_override(cloud_backend_override_env())
     }
 
     /// Evaluates the runtime representation with an optional explicit environment override string.

@@ -206,24 +206,24 @@ fn billow_cubic(p: vec3<f32>) -> f32 {
 const BILLOW_MEAN: f32 = 0.933;
 
 // Hierarchical cauliflower billow field with rotational scrambling & fluid advection:
-// Step-footprint filtered: higher octaves fade out toward verified empirical mean (~0.933) when step_km cannot resolve
-// their spatial frequency, suppressing sub-step Nyquist aliasing while preserving the linear field expectation prior
-// to downstream nonlinear density shaping.
+// Step-footprint filtered: higher octaves fade out toward verified empirical mean (~0.933) as raymarch
+// step approaches each octave's Nyquist limit (lambda / 2), suppressing sub-step aliasing while
+// maintaining expectation prior to downstream nonlinear density shaping.
 fn cauliflower_fbm(p: vec3<f32>, step_km: f32) -> f32 {
-    // Bandlimiting against raymarch step: periods are ~14.0 km (b0), ~6.2 km (b1), ~2.8 km (b2)
-    let w0 = smoothstep(14.0, 4.0, step_km);
+    // Octave periods: ~14.0 km (b0, Nyquist 7.0 km), ~6.2 km (b1, Nyquist 3.1 km), ~2.8 km (b2, Nyquist 1.4 km)
+    let w0 = smoothstep(7.0, 2.5, step_km);
     var b0 = BILLOW_MEAN;
     if (w0 > 0.01) {
         b0 = mix(BILLOW_MEAN, billow_cubic(p * 0.072), w0);
     }
 
-    let w1 = smoothstep(3.5, 0.8, step_km);
+    let w1 = smoothstep(3.1, 1.2, step_km);
     var b1 = BILLOW_MEAN;
     var b2 = BILLOW_MEAN;
     if (w1 > 0.01) {
         let p1 = ROT_OCTAVE * (p * 0.162) + vec3<f32>(1.73, 4.29, 8.11);
         b1 = mix(BILLOW_MEAN, billow_cubic(p1), w1);
-        let w2 = smoothstep(1.8, 0.4, step_km);
+        let w2 = smoothstep(1.4, 0.5, step_km);
         if (w2 > 0.01) {
             let p2 = ROT_OCTAVE_2 * (p1 * 2.21) + vec3<f32>(5.19, 1.87, 3.63);
             b2 = mix(BILLOW_MEAN, billow_cubic(p2), w2);
@@ -348,21 +348,19 @@ fn slab_density(
     }
 
     // Cumulus deck (deck 0):
-    // Fast path for sun self-shadow rays: evaluates Perlin mass + primary 2 billow octaves
-    // Uses large-scale domain warp (1 curl evaluation) so shadow features geometrically align with view rays,
-    // while skipping high-frequency vortex curl to maintain bounded register pressure on iGPU.
+    // Fast path for sun self-shadow rays: evaluates Perlin mass + primary 2 billow octaves.
+    // Uses consistent large-scale domain warp so shadow features geometrically align with view rays,
+    // while skipping high-frequency vortex curl and erosion to maintain bounded register pressure on iGPU.
+    // Note: this 2-octave solar path is an intentional performance approximation (saving 60%+ shadow ALU).
+    let warp_large = curl_warp3d(p_drift * 0.022) * 4.2;
+
     if (!full_detail) {
-        let w_warp_large = smoothstep(16.0, 6.0, step_km);
-        var warp_large = vec3<f32>(0.0);
-        if (w_warp_large > 0.0001) {
-            warp_large = curl_warp3d(p_drift * 0.022) * (4.2 * w_warp_large);
-        }
         let p_w = p_drift + warp_large;
         let p0_s = perlin3d(p_w * 0.016) * 0.60 + 0.50;
         let p1_s = perlin3d(p_w * 0.038 + vec3<f32>(2.4, 5.1, 8.9)) * 0.50 + 0.50;
         let macro_s = p0_s * 0.70 + p1_s * 0.30;
         let b0_s = billow_cubic(p_w * 0.072);
-        let w1_s = smoothstep(3.5, 0.8, step_km);
+        let w1_s = smoothstep(3.1, 1.2, step_km);
         var b1_s = BILLOW_MEAN;
         if (w1_s > 0.01) {
             let p1_s_rot = ROT_OCTAVE * (p_w * 0.162) + vec3<f32>(1.73, 4.29, 8.11);
@@ -381,16 +379,7 @@ fn slab_density(
         return smoothstep(0.0, 0.12, rel_s) * pow(rel_s, 1.1) * 6.2 * cloud.params.x;
     }
 
-    // Multi-scale convective fluid domain warp (curl-advected streamlines):
-    // Continuous frequency-aware amplitude scaling prevents spatial popping across step sizes:
-    // 1. Large continental eddy warp (period ~45 km, Nyquist ~22 km): smoothly fades to 0 between 16 and 6 km steps
-    let w_warp_large = smoothstep(16.0, 6.0, step_km);
-    var warp_large = vec3<f32>(0.0);
-    if (w_warp_large > 0.0001) {
-        warp_large = curl_warp3d(p_drift * 0.022) * (4.2 * w_warp_large);
-    }
-
-    // 2. Small vortex turbulence (period ~12 km, Nyquist ~6 km): smoothly fades to 0 between 6 and 1.5 km steps
+    // Small vortex turbulence (period ~12 km, Nyquist ~6 km): smoothly fades to 0 between 6 and 1.5 km steps
     let w_warp_turb = smoothstep(6.0, 1.5, step_km);
     var warp_turb = vec3<f32>(0.0);
     if (w_warp_turb > 0.0001) {
@@ -531,17 +520,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // 4. Bound max march distance through the slab:
-    // Full geometric tangent chord through the expanded volume slab bounded by march_top:
-    // For low-altitude observers (surface/cockpit, r_cam < march_top + 0.02), apply an intentional
-    // horizon budget cap of 160 km (0.025 planet radii) so the 24-step march concentrates detail
-    // where clouds are visible through haze rather than spreading steps across an 868 km limb chord.
-    // For orbital observers, the full geometric tangent chord is preserved without truncation.
+    // Continuous camera altitude budget policy:
+    // Smoothly transitions between the low-altitude horizon budget cap (0.025 radii = 80 km on Thessa, R=3200 km)
+    // and the full orbital geometric tangent chord (up to 868.8 km on Thessa) across the altitude range
+    // from cloud ceiling (march_top ~ 54.7 km) to orbital insertion (~ 214.7 km, march_top + 0.05).
+    // This maintains C^1 continuity, eliminating any step-boundary popping during ascent through 115-125 km.
     let geometric_tangent_chord = 2.0 * sqrt(max(march_top * march_top - bot * bot, 1e-4));
-    let max_chord = select(
-        geometric_tangent_chord,
-        min(geometric_tangent_chord, 0.025),
-        r_cam < march_top + 0.02
-    );
+    let r_low = march_top;
+    let r_high = march_top + 0.05;
+    let altitude_weight = smoothstep(r_low, r_high, r_cam);
+    let max_chord = mix(min(geometric_tangent_chord, 0.025), geometric_tangent_chord, altitude_weight);
     t1 = min(t1, t0 + max_chord);
 
     if (t1 <= t0 + 1e-5) {

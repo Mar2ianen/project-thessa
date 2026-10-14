@@ -208,20 +208,20 @@ const BILLOW_MEAN: f32 = 0.933;
 // step approaches each octave's Nyquist limit (lambda / 2), suppressing sub-step aliasing while
 // maintaining expectation prior to downstream nonlinear density shaping.
 fn cauliflower_fbm(p: vec3<f32>, step_km: f32) -> f32 {
-    // Octave periods: ~14.0 km (b0, Nyquist 7.0 km), ~6.2 km (b1, Nyquist 3.1 km), ~2.8 km (b2, Nyquist 1.4 km)
-    let w0 = smoothstep(7.0, 2.5, step_km);
+    // Octave periods: ~14.0 km (b0), ~6.2 km (b1), ~2.8 km (b2)
+    let w0 = smoothstep(8.0, 3.0, step_km);
     var b0 = BILLOW_MEAN;
     if (w0 > 0.01) {
         b0 = mix(BILLOW_MEAN, billow_cubic(p * 0.072), w0);
     }
 
-    let w1 = smoothstep(3.1, 1.2, step_km);
+    let w1 = smoothstep(4.5, 1.8, step_km);
     var b1 = BILLOW_MEAN;
     var b2 = BILLOW_MEAN;
     if (w1 > 0.01) {
         let p1 = ROT_OCTAVE * (p * 0.162) + vec3<f32>(1.73, 4.29, 8.11);
         b1 = mix(BILLOW_MEAN, billow_cubic(p1), w1);
-        let w2 = smoothstep(1.4, 0.5, step_km);
+        let w2 = smoothstep(3.5, 1.5, step_km);
         if (w2 > 0.01) {
             let p2 = ROT_OCTAVE_2 * (p1 * 2.21) + vec3<f32>(5.19, 1.87, 3.63);
             b2 = mix(BILLOW_MEAN, billow_cubic(p2), w2);
@@ -234,7 +234,7 @@ fn cauliflower_fbm(p: vec3<f32>, step_km: f32) -> f32 {
 
 // Sub-kilometer organic wispy turbulence bandlimited to ray step:
 fn edge_wisps(p: vec3<f32>, step_km: f32) -> f32 {
-    let w = smoothstep(1.5, 0.3, step_km);
+    let w = smoothstep(3.2, 0.8, step_km);
     if (w <= 0.01) {
         return 0.50; // Neutral midpoint when unresolved
     }
@@ -377,12 +377,12 @@ fn slab_density(
             p1_s = mix(0.50, p1_raw, w_macro_s);
         }
         let macro_s = p0_s * 0.70 + p1_s * 0.30;
-        let w0_s = smoothstep(7.0, 2.5, step_km);
+        let w0_s = smoothstep(8.0, 3.0, step_km);
         var b0_s = BILLOW_MEAN;
         if (w0_s > 0.01) {
             b0_s = mix(BILLOW_MEAN, billow_cubic(p_w * 0.072), w0_s);
         }
-        let w1_s = smoothstep(3.1, 1.2, step_km);
+        let w1_s = smoothstep(4.5, 1.8, step_km);
         var b1_s = BILLOW_MEAN;
         if (w1_s > 0.01) {
             let p1_s_rot = ROT_OCTAVE * (p_w * 0.162) + vec3<f32>(1.73, 4.29, 8.11);
@@ -580,7 +580,15 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let radius_km = radius * 0.001;
     let p0_deck = quat_rotate(cloud.deck_to_local, ro + rd * t0) * radius_km;
-    let use_pathtrace = (cloud.shape.w >= 0.5);
+
+    // Diagnostic Mode 2: Coverage Bake
+    if (cloud.shape.w >= 1.5 && cloud.shape.w < 2.5) {
+        let uv = deck_uv(ro + rd * t0) + WIND_SHEAR * 0.5;
+        let base = base_at_uv(uv);
+        return vec4<f32>(vec3<f32>(base), 1.0);
+    }
+
+    let use_pathtrace = (cloud.shape.w >= 0.5 && cloud.shape.w < 1.5);
 
     if (use_pathtrace) {
         // ====================================================================
@@ -704,8 +712,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let sun_depth = (s0 * 0.65 + s1 * 0.90 + s2 * 1.50) * 2.8;
 
             let direct_attenuation = beer_powder(sun_depth);
-            let ms1 = exp(-sun_depth * 0.32) * 0.35;
-            let ms2 = exp(-sun_depth * 0.10) * 0.12;
+            let ms1 = exp(-sun_depth * 0.20) * 0.50;
+            let ms2 = exp(-sun_depth * 0.05) * 0.28;
 
             let up = p / max(length(p), 1e-6);
             let elev = dot(up, sun_dir);
@@ -715,16 +723,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let phase_direct = dual_lobe_phase(cos_theta);
             let phase_bounce = 0.50 * hg_phase(0.35, cos_theta) + 0.50 * 0.079577;
 
-            let sun_scatter = direct_attenuation * (0.85 + 4.2 * phase_direct) + ms1 * (0.50 + 1.6 * phase_bounce) + ms2 * 0.22;
+            let sun_scatter = direct_attenuation * (0.85 + 4.2 * phase_direct) + ms1 * (0.50 + 1.6 * phase_bounce) + ms2 * 0.28;
             let sun_radiance = tint * (day * sun_scatter * 2.8);
 
             let sky_amb = vec3<f32>(0.34, 0.50, 0.84) * (0.08 + 0.92 * day);
             let ground_amb = vec3<f32>(0.16, 0.20, 0.15) * (0.08 + 0.92 * day);
             let height_occ = smoothstep(0.04, 0.40, h01);
             let core_occ = transmittance * transmittance;
-            let dens_occ = clamp(1.0 - (density / max(6.2 * cloud.params.x, 1e-3)) * 0.40, 0.35, 1.0);
-            let amb_occ = (0.20 + 0.80 * height_occ) * (0.12 + 0.88 * core_occ) * dens_occ;
-            let ambient_radiance = mix(ground_amb, sky_amb, h01 * 0.75 + 0.25) * amb_occ * 0.45;
+            let dens_occ = clamp(1.0 - (density / max(6.2 * cloud.params.x, 1e-3)) * 0.35, 0.40, 1.0);
+            let amb_occ = (0.30 + 0.70 * height_occ) * (0.20 + 0.80 * core_occ) * dens_occ;
+            let ambient_radiance = mix(ground_amb, sky_amb, h01 * 0.75 + 0.25) * amb_occ * 0.55;
 
             let step_ext = density * ext * dt;
             let step_trans = exp(-step_ext);
@@ -740,21 +748,49 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let alpha = clamp(1.0 - transmittance, 0.0, 1.0);
+
+    // Diagnostic Mode 3: Optical Depth / Raw 3D Density
+    if (cloud.shape.w >= 2.5 && cloud.shape.w < 3.5) {
+        let tau = -log(max(transmittance, 1e-4));
+        let norm_vis = clamp(tau / 8.0, 0.0, 1.0);
+        return vec4<f32>(vec3<f32>(norm_vis), 1.0);
+    }
+
+    // Diagnostic Mode 4: Shading / In-Scattered Lighting
+    if (cloud.shape.w >= 3.5 && cloud.shape.w < 4.5) {
+        return vec4<f32>(scat, 1.0);
+    }
+
+    // Diagnostic Mode 5: Cloud-Only Mask
+    if (cloud.shape.w >= 4.5) {
+        let mask = select(0.0, 1.0, alpha > 0.005);
+        return vec4<f32>(vec3<f32>(mask), 1.0);
+    }
+
     if (alpha < 0.001) {
         discard;
     }
 
-    // Atmospheric aerial perspective for distant horizon clouds:
+    // Atmospheric aerial perspective with physically consistent premultiplied radiance:
     let r_cam_len = length(ro);
     let up_cam = select(vec3<f32>(0.0, 1.0, 0.0), ro / r_cam_len, r_cam_len > 1e-6);
     let elev_cam = dot(rd, up_cam);
     let march_dist_km = t0 * radius * 0.001;
-    let haze_amount = 1.0 - exp(-march_dist_km * 0.012);
-    let haze_color = vec3<f32>(0.55, 0.70, 0.92);
-    let haze_mix = clamp(haze_amount * (1.0 - smoothstep(-0.02, 0.35, elev_cam)), 0.0, 0.92);
-    let horizon_soften = 1.0 - smoothstep(120.0, 350.0, march_dist_km) * clamp(1.0 - smoothstep(0.0, 0.12, elev_cam), 0.0, 0.85);
-    let alpha_out = alpha * horizon_soften;
-    let out_rgb = mix(scat, haze_color * alpha_out, haze_mix);
+    let air_trans = exp(-march_dist_km * 0.006);
+    let haze_mix = clamp((1.0 - air_trans) * (1.0 - smoothstep(0.0, 0.35, elev_cam)), 0.0, 0.95);
 
-    return vec4<f32>(clamp(out_rgb, vec3<f32>(0.0), vec3<f32>(16.0)), alpha_out);
+    // Dynamic horizon haze color matched to sun elevation and day/night state:
+    let up_sun = dot(up_cam, sun_dir);
+    let day_sky = smoothstep(-0.06, 0.16, up_sun) * sun_vis;
+    let sky_amb_horiz = vec3<f32>(0.34, 0.50, 0.84) * (0.08 + 0.92 * day_sky);
+    let tint_horiz = mix(vec3<f32>(1.0, 0.45, 0.18), vec3<f32>(1.0, 0.98, 0.92), smoothstep(-0.02, 0.35, up_sun));
+    let haze_color = mix(sky_amb_horiz * 1.5, tint_horiz * 0.8, pow(max(cos_theta, 0.0), 4.0) * 0.25);
+
+    // In AlphaMode::Premultiplied:
+    // Attenuate cloud source radiance by air transmittance and add in-scattered sky light proportional to alpha:
+    let scat_atten = scat * (1.0 - haze_mix);
+    let haze_inscatter = haze_color * (haze_mix * alpha);
+    let out_rgb = scat_atten + haze_inscatter;
+
+    return vec4<f32>(clamp(out_rgb, vec3<f32>(0.0), vec3<f32>(16.0)), alpha);
 }

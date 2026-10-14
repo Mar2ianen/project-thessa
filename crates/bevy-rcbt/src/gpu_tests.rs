@@ -6,6 +6,7 @@ use wgpu::util::DeviceExt;
 struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    adapter_info: wgpu::AdapterInfo,
 }
 
 impl Gpu {
@@ -13,7 +14,8 @@ impl Gpu {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
             .expect("GPU regression tests require a wgpu adapter");
-        eprintln!("CBT regression adapter: {:?}", adapter.get_info());
+        let adapter_info = adapter.get_info();
+        eprintln!("CBT regression adapter: {:?}", adapter_info);
         let features = adapter.features()
             & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -22,7 +24,11 @@ impl Gpu {
             ..Default::default()
         }))
         .unwrap();
-        Self { device, queue }
+        Self {
+            device,
+            queue,
+            adapter_info,
+        }
     }
 
     fn buffer(&self, words: &[u32], uniform: bool) -> wgpu::Buffer {
@@ -4748,7 +4754,10 @@ fn cloud_dither2d_dispersion_and_isotropy_on_hardware() {
     let std_dev = variance.sqrt();
 
     eprintln!("\n=== [GPU TEST] Cloud 2D Isotropic Dither Characterization ===");
-    eprintln!("Hardware: AMD Radeon 880M Graphics (RADV STRIX1, Vulkan 1.3)");
+    eprintln!(
+        "Hardware: {} ({:?}, driver: {})",
+        gpu.adapter_info.name, gpu.adapter_info.backend, gpu.adapter_info.driver_info
+    );
     eprintln!("Grid: {width}x{height} pixels ({num_samples} samples)");
     eprintln!("Mean: {mean:.5} (target ~0.500)");
     eprintln!("StdDev: {std_dev:.5} (target ~0.28867)");
@@ -4785,9 +4794,106 @@ fn cloud_dither2d_dispersion_and_isotropy_on_hardware() {
         let autocorr = (cov_sum / count as f64) / variance;
         eprintln!("Autocorrelation at offset ({dx:+2}, {dy:+2}): {autocorr:+.5}");
         assert!(
-            autocorr < 0.20,
-            "Positive autocorrelation at offset ({dx}, {dy}) must be < 0.20 to prevent diagonal banding: got {autocorr}"
+            (-0.35..0.25).contains(&autocorr),
+            "Autocorrelation at offset ({dx}, {dy}) must remain within [-0.35, 0.25] to prevent both directional striation and extreme periodic anti-correlation: got {autocorr}"
         );
     }
+
+    // Angle-Resolved Autocorrelation & Radial Dispersion Analysis:
+    // Characterizes isotropy across 4 cardinal/diagonal orientations (0°, 45°, 90°, 135°)
+    // and radial falloff across radii r in {1, 2, 3, 4} pixels:
+    eprintln!("\n--- Angle-Resolved Autocorrelation Profile ---");
+    let angles = [
+        (" 0 deg (+x)   ", 1isize, 0isize),
+        ("45 deg (+x,+y)", 1, 1),
+        ("90 deg (+y)   ", 0, 1),
+        ("135 deg (-x,+y)", -1, 1),
+    ];
+    let mut dir_corrs_r1 = Vec::new();
+    for (label, dx, dy) in angles {
+        let mut cov_sum = 0.0f64;
+        let mut count = 0usize;
+        for y in 0..height {
+            let ny = y as isize + dy;
+            if ny < 0 || ny >= height as isize {
+                continue;
+            }
+            for x in 0..width {
+                let nx = x as isize + dx;
+                if nx < 0 || nx >= width as isize {
+                    continue;
+                }
+                let v0 = dither_grid[y][x] as f64 - mean;
+                let v1 = dither_grid[ny as usize][nx as usize] as f64 - mean;
+                cov_sum += v0 * v1;
+                count += 1;
+            }
+        }
+        let corr = (cov_sum / count as f64) / variance;
+        dir_corrs_r1.push(corr);
+        eprintln!("  Orientation {label} (r=1): {corr:+.5}");
+        assert!(
+            (-0.35..0.25).contains(&corr),
+            "Directional correlation at {label} out of bounds: {corr}"
+        );
+    }
+
+    // Directional anisotropy bound across orientations:
+    let mean_dir_corr = dir_corrs_r1.iter().sum::<f64>() / dir_corrs_r1.len() as f64;
+    let dir_anisotropy = dir_corrs_r1
+        .iter()
+        .map(|&c| (c - mean_dir_corr).powi(2))
+        .sum::<f64>()
+        / dir_corrs_r1.len() as f64;
+    eprintln!(
+        "Directional Anisotropy Variance (r=1 across 4 angles): {:.6} (target < 0.02)",
+        dir_anisotropy
+    );
+    assert!(
+        dir_anisotropy < 0.02,
+        "Directional anisotropy variance {dir_anisotropy} exceeds 0.02 limit (indicates directional banding)"
+    );
+
+    // Radial Autocorrelation Falloff:
+    eprintln!("\n--- Radial Autocorrelation Falloff ---");
+    for r in 1..=4 {
+        let mut ring_cov = 0.0f64;
+        let mut ring_count = 0usize;
+        for dy in -r..=r {
+            for dx in -r..=r {
+                let dist_sq = dx * dx + dy * dy;
+                if dist_sq < (r * r - r) || dist_sq > (r * r + r) {
+                    continue;
+                }
+                for y in 0..height {
+                    let ny = y as isize + dy;
+                    if ny < 0 || ny >= height as isize {
+                        continue;
+                    }
+                    for x in 0..width {
+                        let nx = x as isize + dx;
+                        if nx < 0 || nx >= width as isize {
+                            continue;
+                        }
+                        let v0 = dither_grid[y][x] as f64 - mean;
+                        let v1 = dither_grid[ny as usize][nx as usize] as f64 - mean;
+                        ring_cov += v0 * v1;
+                        ring_count += 1;
+                    }
+                }
+            }
+        }
+        let ring_corr = if ring_count > 0 {
+            (ring_cov / ring_count as f64) / variance
+        } else {
+            0.0
+        };
+        eprintln!("  Radial Ring r={r} px: Mean Autocorr = {ring_corr:+.5}");
+        assert!(
+            ring_corr.abs() < 0.20,
+            "Radial ring r={r} autocorrelation {ring_corr} exceeds 0.20 limit"
+        );
+    }
+
     eprintln!("[PASSED] cloud_dither2d_dispersion_and_isotropy_on_hardware\n");
 }

@@ -209,19 +209,19 @@ const BILLOW_MEAN: f32 = 0.933;
 // maintaining expectation prior to downstream nonlinear density shaping.
 fn cauliflower_fbm(p: vec3<f32>, step_km: f32) -> f32 {
     // Octave periods: ~14.0 km (b0), ~6.2 km (b1), ~2.8 km (b2)
-    let w0 = smoothstep(8.0, 3.0, step_km);
+    let w0 = smoothstep(7.0, 2.5, step_km);
     var b0 = BILLOW_MEAN;
     if (w0 > 0.01) {
         b0 = mix(BILLOW_MEAN, billow_cubic(p * 0.072), w0);
     }
 
-    let w1 = smoothstep(4.5, 1.8, step_km);
+    let w1 = smoothstep(3.1, 1.2, step_km);
     var b1 = BILLOW_MEAN;
     var b2 = BILLOW_MEAN;
     if (w1 > 0.01) {
         let p1 = ROT_OCTAVE * (p * 0.162) + vec3<f32>(1.73, 4.29, 8.11);
         b1 = mix(BILLOW_MEAN, billow_cubic(p1), w1);
-        let w2 = smoothstep(3.5, 1.5, step_km);
+        let w2 = smoothstep(1.4, 0.5, step_km);
         if (w2 > 0.01) {
             let p2 = ROT_OCTAVE_2 * (p1 * 2.21) + vec3<f32>(5.19, 1.87, 3.63);
             b2 = mix(BILLOW_MEAN, billow_cubic(p2), w2);
@@ -234,7 +234,7 @@ fn cauliflower_fbm(p: vec3<f32>, step_km: f32) -> f32 {
 
 // Sub-kilometer organic wispy turbulence bandlimited to ray step:
 fn edge_wisps(p: vec3<f32>, step_km: f32) -> f32 {
-    let w = smoothstep(3.2, 0.8, step_km);
+    let w = smoothstep(1.5, 0.3, step_km);
     if (w <= 0.01) {
         return 0.50; // Neutral midpoint when unresolved
     }
@@ -377,12 +377,12 @@ fn slab_density(
             p1_s = mix(0.50, p1_raw, w_macro_s);
         }
         let macro_s = p0_s * 0.70 + p1_s * 0.30;
-        let w0_s = smoothstep(8.0, 3.0, step_km);
+        let w0_s = smoothstep(7.0, 2.5, step_km);
         var b0_s = BILLOW_MEAN;
         if (w0_s > 0.01) {
             b0_s = mix(BILLOW_MEAN, billow_cubic(p_w * 0.072), w0_s);
         }
-        let w1_s = smoothstep(4.5, 1.8, step_km);
+        let w1_s = smoothstep(3.1, 1.2, step_km);
         var b1_s = BILLOW_MEAN;
         if (w1_s > 0.01) {
             let p1_s_rot = ROT_OCTAVE * (p_w * 0.162) + vec3<f32>(1.73, 4.29, 8.11);
@@ -577,6 +577,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let w_exit = weather_at(ro + rd * t1, drift);
     var transmittance = 1.0;
     var scat = vec3<f32>(0.0);
+    var unsaturated_tau: f32 = 0.0;
+    var steps_taken: f32 = 0.0;
 
     let radius_km = radius * 0.001;
     let p0_deck = quat_rotate(cloud.deck_to_local, ro + rd * t0) * radius_km;
@@ -682,6 +684,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let dither_raw = dither2d(in.position.xy);
         let dither = (dither_raw - 0.5) * 0.70 + 0.5;
 
+        let is_diag_tau = (cloud.shape.w >= 2.5 && cloud.shape.w < 3.5);
+
         for (var i = 0; i < CLOUD_MARCH_MAX; i += 1) {
             let t_current = t0 + (f32(i) + dither) * dt;
             if (t_current >= t1) {
@@ -694,9 +698,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let weather = vec3<f32>(w2.x, 0.0, w2.y);
 
             let density = slab_density(p, drift, weather, step_km, true);
+            steps_taken += 1.0;
             if (density <= 0.001) {
                 continue;
             }
+
+            let step_ext = density * ext * dt;
+            unsaturated_tau += step_ext;
 
             let h01 = clamp((length(p) - bot) / thick, 0.0, 1.0);
 
@@ -734,13 +742,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let amb_occ = (0.30 + 0.70 * height_occ) * (0.20 + 0.80 * core_occ) * dens_occ;
             let ambient_radiance = mix(ground_amb, sky_amb, h01 * 0.75 + 0.25) * amb_occ * 0.55;
 
-            let step_ext = density * ext * dt;
             let step_trans = exp(-step_ext);
             let point_light = sun_radiance + ambient_radiance;
             scat += transmittance * point_light * (1.0 - step_trans);
             transmittance *= step_trans;
 
-            if (transmittance < 0.01) {
+            // In diagnostic Mode 3, bypass early-out to accumulate the entire unsaturated column optical depth:
+            if (!is_diag_tau && transmittance < 0.01) {
                 transmittance = 0.0;
                 break;
             }
@@ -749,10 +757,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let alpha = clamp(1.0 - transmittance, 0.0, 1.0);
 
-    // Diagnostic Mode 3: Optical Depth / Raw 3D Density
+    // Diagnostic Mode 3: Unsaturated Integrated Optical Depth (tau = sum sigma_ext * dt)
     if (cloud.shape.w >= 2.5 && cloud.shape.w < 3.5) {
-        let tau = -log(max(transmittance, 1e-4));
-        let norm_vis = clamp(tau / 8.0, 0.0, 1.0);
+        let norm_vis = clamp(unsaturated_tau / 16.0, 0.0, 1.0);
         return vec4<f32>(vec3<f32>(norm_vis), 1.0);
     }
 
@@ -762,9 +769,26 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // Diagnostic Mode 5: Cloud-Only Mask
-    if (cloud.shape.w >= 4.5) {
+    if (cloud.shape.w >= 4.5 && cloud.shape.w < 5.5) {
         let mask = select(0.0, 1.0, alpha > 0.005);
         return vec4<f32>(vec3<f32>(mask), 1.0);
+    }
+
+    // Diagnostic Mode 6: March Step Count / Early-Out Heatmap
+    if (cloud.shape.w >= 5.5 && cloud.shape.w < 6.5) {
+        let step_ratio = clamp(steps_taken / f32(steps), 0.0, 1.0);
+        return vec4<f32>(vec3<f32>(step_ratio), 1.0);
+    }
+
+    // Diagnostic Mode 7: Mid-Slab Raw 3D Density Cross-Section
+    if (cloud.shape.w >= 6.5) {
+        let t_mid = (t0 + t1) * 0.5;
+        let p_mid = ro + rd * t_mid;
+        let w_mid = mix(w_entry, w_exit, 0.5);
+        let weather_mid = vec3<f32>(w_mid.x, 0.0, w_mid.y);
+        let d_raw = slab_density(p_mid, drift, weather_mid, 1.0, true);
+        let d_norm = clamp(d_raw / max(6.2 * cloud.params.x, 1e-3), 0.0, 1.0);
+        return vec4<f32>(vec3<f32>(d_norm), 1.0);
     }
 
     if (alpha < 0.001) {

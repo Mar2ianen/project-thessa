@@ -4861,6 +4861,9 @@ fn cloud_dither2d_dispersion_and_isotropy_on_hardware() {
         let mut ring_count = 0usize;
         for dy in -r..=r {
             for dx in -r..=r {
+                if dx == 0 && dy == 0 {
+                    continue;
+                }
                 let dist_sq = dx * dx + dy * dy;
                 if dist_sq < (r * r - r) || dist_sq > (r * r + r) {
                     continue;

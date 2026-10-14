@@ -32,7 +32,7 @@ pub struct OpticalMaterial {
 /// hues downstream. `axial_01` is 0 at the nozzle, 1 at the visible tail.
 /// The steep core falloff is deliberate: references show a white-blue core
 /// confined to the first diameters, not a gradual wash. Constants are
-/// mirrored in `assets/shaders/plume_volume.wgsl`.
+/// mirrored in `assets/shaders/plume_volume.wesl`.
 pub fn ramp_rgb(material: OpticalMaterial, axial_01: f64) -> [f64; 3] {
     let zn = axial_01.clamp(0.0, 1.0);
     let core_bias = (-6.0 * zn).exp();

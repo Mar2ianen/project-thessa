@@ -163,7 +163,7 @@ pub fn readback_pairs_reused(
         .expect("device poll");
     rx.recv().expect("map callback").expect("map success");
     let out = {
-        let view = slice.get_mapped_range();
+        let view = slice.get_mapped_range().expect("staging range mapped");
         let (_, words, _) = unsafe { view.align_to::<u32>() };
         words
             .as_chunks::<2>()

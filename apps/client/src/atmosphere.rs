@@ -631,7 +631,7 @@ fn atmosphere_startup(
                 // Meter to 18% middle gray, not unit-white HDR luminance.
                 compensation_curve: exposure_curves.add(
                     AutoExposureCompensationCurve::from_curve(
-                        bevy::math::cubic_splines::LinearSpline::new([
+                        bevy::curve::cubic_splines::LinearSpline::new([
                             Vec2::new(-8.0, -2.47),
                             Vec2::new(8.0, -2.47),
                         ]),

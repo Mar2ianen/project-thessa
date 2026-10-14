@@ -1,6 +1,6 @@
 //! Camera Altitude Budget Geometry Policy Verification across Full Transition (50–220 km).
 //!
-//! Verifies that the continuous camera altitude budget policy in `cloud_volume.wgsl`:
+//! Verifies that the continuous camera altitude budget policy in `cloud_volume.wesl`:
 //!   `altitude_weight = smoothstep(march_top, march_top + 0.05, r_cam)`
 //!   `max_chord = mix(min(geometric_tangent_chord, 0.025), geometric_tangent_chord, altitude_weight)`
 //! exhibits smooth, continuous transition across the full range [50.0, 220.0] km,
@@ -78,7 +78,7 @@ fn camera_altitude_budget_geometry_policy_is_continuous_across_full_transition()
             }
         }
 
-        // Continuous camera altitude budget policy (matching cloud_volume.wgsl):
+        // Continuous camera altitude budget policy (matching cloud_volume.wesl):
         let altitude_weight = smoothstep(r_low, r_high, r_cam);
         let low_budget_cap: f64 = 0.025; // 80 km on Thessa (0.025 * 3200 km)
         let max_chord = low_budget_cap.min(geometric_tangent_chord) * (1.0 - altitude_weight)

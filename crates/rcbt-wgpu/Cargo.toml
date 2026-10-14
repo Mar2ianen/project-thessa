@@ -13,7 +13,7 @@ thessa-rcbt-core = { path = "../rcbt-core" }
 wgpu.workspace = true
 
 [dev-dependencies]
-naga = { version = "29.0.4", features = ["wgsl-in"] }
+naga = { version = "30", features = ["wgsl-in"] }
 pollster = "0.4"
 thessa-rcbt-ffi = { path = "../rcbt-ffi" }
 thessa-rcbt-large-ffi = { path = "../rcbt-large-ffi" }

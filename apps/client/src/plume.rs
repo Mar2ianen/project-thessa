@@ -110,7 +110,7 @@ const PROVISIONAL_LUMEN_SCALE: f64 = 12.0;
 // ---------------------------------------------------------------------------
 // Volume material (Medium/High path).
 
-/// Packed uniforms mirroring `assets/shaders/plume_volume.wgsl`.
+/// Packed uniforms mirroring `assets/shaders/plume_volume.wesl`.
 #[derive(Debug, Clone, Copy, ShaderType)]
 pub struct PlumeUniforms {
     origin_len: Vec4,
@@ -130,7 +130,7 @@ pub struct PlumeVolumeMaterial {
 
 impl Material for PlumeVolumeMaterial {
     fn fragment_shader() -> ShaderRef {
-        "shaders/plume_volume.wgsl".into()
+        "shaders/plume_volume.wesl".into()
     }
 
     fn alpha_mode(&self) -> AlphaMode {
@@ -697,6 +697,20 @@ fn drive_cone(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plume_volume_wesl_prologue_uses_render_paths() {
+        // Bevy 0.20 removed the naga_oil `#import` dialect: the asset must
+        // use WESL imports with the `render::` module paths, or the material
+        // fails to load at runtime (no compile error points at it).
+        let src = include_str!("../../../assets/shaders/plume_volume.wesl");
+        assert!(src.contains("import bevy_pbr::render::mesh_view_bindings::view;"));
+        assert!(src.contains("import bevy_pbr::render::forward_io::VertexOutput;"));
+        assert!(
+            !src.contains("#import"),
+            "naga_oil prologue must not survive WESL conversion"
+        );
+    }
 
     #[test]
     fn plume_input_contract_inactive_hides() {

@@ -2,7 +2,7 @@
 //!
 //! Backend-neutral core for the `[clouds] volumetric` path: a low-deck
 //! spherical slab around a planet, marched in SI metres with `f64`. The same
-//! functions validate the WGSL approximation (`assets/shaders/cloud_volume.wgsl`)
+//! functions validate the WGSL approximation (`assets/shaders/cloud_volume.wesl`)
 //! and answer CPU queries (tests, benchmarks). No Bevy, wgpu, or texture
 //! types here: density sampling is a caller-provided closure, so the GPU
 //! samples its coverage bake while the CPU oracle samples an analytic field.
@@ -450,7 +450,7 @@ pub fn powder_scatter_term(light_depth: f64) -> f64 {
 
 /// Dual-lobe scattering phase: strong forward lobe (silver lining around
 /// the sun, g1 = 0.76) plus a weak backward fill (g2 = -0.30).
-/// Mirrors `cloud_volume.wgsl`.
+/// Mirrors `cloud_volume.wesl`.
 pub fn dual_lobe_phase(cos_theta: f64) -> f64 {
     let c = cos_theta.clamp(-1.0, 1.0);
     0.70 * crate::scattering::hg_phase(0.76, c) + 0.30 * crate::scattering::hg_phase(-0.30, c)

@@ -5,13 +5,13 @@
 //! balance (white tops? dark cores? glowing thin edges?) numerically instead
 //! of guessing from screenshots. If this column is grey, the shader is grey.
 //!
-//! Constants marked SYNC must match `assets/shaders/cloud_volume.wgsl`.
+//! Constants marked SYNC must match `assets/shaders/cloud_volume.wesl`.
 
 use thessa_atmosphere::clouds::{
     ambient_rgb, beer_powder, dual_lobe_phase, remap_coverage, type_gradient,
 };
 
-// SYNC with cloud_volume.wgsl.
+// SYNC with cloud_volume.wesl.
 const EXT_PER_RADII: f64 = 900.0;
 const SUN_GAIN: f64 = 5.0;
 const PHASE_AMBIENT: f64 = 0.4;

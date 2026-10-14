@@ -778,6 +778,26 @@ pub fn mesh_shader_supported(_device: &bevy::render::renderer::RenderDevice) -> 
 mod tests {
     use super::*;
     use bevy::app::App;
+
+    /// Bevy 0.20 made extraction generic over worlds: every render-bound
+    /// resource must implement `ExtractResource<RenderApp>`, and the plugin
+    /// registrations in `render.rs` rely on that impl for type inference.
+    /// This test pins the impl set so a dropped/renamed impl fails here
+    /// instead of deep inside plugin registration errors.
+    #[cfg(feature = "render")]
+    #[test]
+    fn extraction_targets_render_app() {
+        use bevy::render::{RenderApp, extract_resource::ExtractResource};
+
+        fn assert_extract<R: ExtractResource<RenderApp>>() {}
+        assert_extract::<CbtRenderTopology>();
+        assert_extract::<CbtRenderPages>();
+        assert_extract::<CbtRenderSurface>();
+        assert_extract::<CbtRenderMaterial>();
+        assert_extract::<CbtRenderMaterialPages>();
+        assert_extract::<CbtGpuPresentation>();
+        assert_extract::<MaterialStorageSetting>();
+    }
     use thessa_rcbt_core::{CandidateAction, Node, WorkClass};
 
     fn split_root() -> LeafCandidate {

@@ -28,6 +28,7 @@ naga = { version = "29.0.4", features = ["wgsl-in"] }
 wgpu.workspace = true
 pollster = "0.4"
 thessa-rcbt-wgpu = { path = "../rcbt-wgpu" }
+thessa-atmosphere = { path = "../atmosphere" }
 
 [[bench]]
 name = "material_storage"

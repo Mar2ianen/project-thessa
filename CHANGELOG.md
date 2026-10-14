@@ -9,10 +9,13 @@ APIs, data formats, and save files are not stable before `0.1.0`.
 
 ### Fixed
 
-- False effective cloud telemetry: introduced `ActiveCloudRepresentation` (`Disabled`, `Shell`, `VolumeMarch`, `VolumeStochastic`) in `thessa-graphics` and report truth in `perf.rs`.
-- Disabled feature resource allocation in `setup_beauty`: multi-megabyte texture bakes, mesh displacements, and entity spawning are bypassed when clouds, gas giants, or aurora are disabled, using 1x1 dummy images (saving 10+ MiB RAM and startup latency).
-- Nyquist bandlimiting across the cloud volume pipeline in `cloud_volume.wgsl`: octaves fade to their mathematical expectation/mean (0.42 for billow, 0.50 for macro Perlin) to strictly conserve field energy across varying view step chords.
-- Convergence and parity verification: replaced clamped integration test with unclamped Simpson 1/3 solver and exact GPU boundary-reset trapezoidal model in `thessa-atmosphere`, plus genuine hardware compute readback testing on AMD Radeon 880M in `thessa-bevy-rcbt`.
+- False effective cloud telemetry: harmonized `active_cloud_representation()` to respect `THESSA_CLOUD_BACKEND` environment overrides across `thessa-graphics`, `perf.rs`, and `beauty.rs`.
+- Disabled feature resource allocation in `setup_beauty`: multi-megabyte texture bakes, mesh displacements, and entity spawning are bypassed when clouds, gas giants, or aurora are disabled, using 1x1 dummy images (saving 10+ MiB RAM and startup latency); volume meshes and materials are only allocated when `clouds_volumetric` is true; marked `clouds.enabled`, `clouds.volumetric`, `upper_atmosphere.aurora`, and `gas_giant.enabled` with `restart_required: true`.
+- Nyquist bandlimiting across the cloud volume pipeline in `cloud_volume.wgsl`: octaves fade to their verified empirical/analytical expectation/mean (0.933 for `billow_cubic`, confirmed by 50,000-sample test) to strictly conserve field energy across varying view step chords without coarse LOD density loss.
+- Space-skipping peek coordinate sync: removed out-of-sync `deck_uv(p)` peek without wind shear in favor of single-source evaluation in `slab_density`, eliminating redundant texture fetches and edge culling artifacts.
+- Exact extinction parity: removed arbitrary `0.95` multiplier on extinction in Backend A, restoring exact Beer-Lambert parity with Backend B and analytical integrals.
+- Raymarch tower bounds: expanded analytical ray-sphere ceiling to `cloud.shape.z` ($1.5\times$ slab thickness) preventing clipping of cloud towers up to $1.35\times$ thickness.
+- Convergence and parity verification: replaced clamped integration test with unclamped Simpson 1/3 solver and exact GPU boundary-reset trapezoidal model in `thessa-atmosphere`, plus genuine hardware compute readback testing on AMD Radeon 880M in `thessa-bevy-rcbt` directly slicing production WGSL and evaluating against production Rust functions in `thessa_atmosphere::clouds`.
 - Documented physical ($h \approx 3\text{ km}$) vs presentation ($h \in [25.6, 44.8]\text{ km}$) cloud altitude mapping and scene-depth limitation in `docs/14_VISUAL_ATMOSPHERE.md`.
 
 ### Added

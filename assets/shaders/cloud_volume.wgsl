@@ -75,20 +75,41 @@ fn shell_mesh_uv(local_dir: vec3<f32>) -> vec2<f32> {
     return vec2(u, clamp(v, 0.0, 1.0));
 }
 
+// Forward-scattering powder component matching Rust thessa-atmosphere::clouds:
+fn powder_scatter_term(ld: f32) -> f32 {
+    let d = max(ld, 0.0);
+    return exp(-d) * (1.0 - exp(-d * 2.0));
+}
+
 // Physical transmission with forward-scattering powder rim:
 // Beer attenuates through the volume, while powder scattering boosts forward
 // rims so sunlit cauliflower tops glow brilliantly and deep cores model dark.
 fn beer_powder(ld: f32) -> f32 {
     let d = max(ld, 0.0);
     let beer = exp(-d);
-    let powder = 1.0 - exp(-d * 2.0);
-    return max(beer, 2.0 * beer * powder);
+    return max(beer, 2.0 * powder_scatter_term(d));
 }
 
 fn hg_phase(g: f32, cos_theta: f32) -> f32 {
     let g2 = g * g;
-    let denom = pow(max(1.0 + g2 - 2.0 * g * cos_theta, 1e-3), 1.5);
+    let denom = pow(max(1.0 + g2 - 2.0 * g * cos_theta, 1e-4), 1.5);
     return (1.0 - g2) / (12.566371 * denom);
+}
+
+fn dual_lobe_phase(cos_theta: f32) -> f32 {
+    return 0.70 * hg_phase(0.76, cos_theta) + 0.30 * hg_phase(-0.30, cos_theta);
+}
+
+// Convective cumulus height gradient (Schneider / LCL physics) matching Rust:
+fn convective_cumulus_gradient(h01: f32) -> f32 {
+    let base_lcl = smoothstep(0.065, 0.082, h01);
+    let dome_top = 1.0 - smoothstep(0.72, 0.98, h01);
+    let updraft = 1.0 + 0.40 * sin(clamp((h01 - 0.065) / 0.915, 0.0, 1.0) * 3.14159265);
+    let hgrad = base_lcl * dome_top * updraft;
+    if (hgrad <= 0.001) {
+        return 0.0;
+    }
+    return hgrad;
 }
 
 fn hash12(p: vec2<f32>) -> f32 {
@@ -182,28 +203,33 @@ fn billow_cubic(p: vec3<f32>) -> f32 {
     return clamp(1.0 - 1.85 * n * n, 0.0, 1.0);
 }
 
+const BILLOW_MEAN: f32 = 0.933;
+
 // Hierarchical cauliflower billow field with rotational scrambling & fluid advection:
-// Step-footprint filtered: higher octaves fade out to expectation/mean (0.42) when step_km cannot resolve
+// Step-footprint filtered: higher octaves fade out to verified empirical mean (0.933) when step_km cannot resolve
 // their spatial frequency, conserving energy without aliasing or brightness shifts.
 fn cauliflower_fbm(p: vec3<f32>, step_km: f32) -> f32 {
     // Bandlimiting against raymarch step: periods are ~14.0 km (b0), ~6.2 km (b1), ~2.8 km (b2)
     let w0 = smoothstep(14.0, 4.0, step_km);
-    let b0 = mix(0.42, billow_cubic(p * 0.072), w0);
+    var b0 = BILLOW_MEAN;
+    if (w0 > 0.01) {
+        b0 = mix(BILLOW_MEAN, billow_cubic(p * 0.072), w0);
+    }
 
     let w1 = smoothstep(3.5, 0.8, step_km);
-    var b1 = 0.42;
-    var b2 = 0.42;
+    var b1 = BILLOW_MEAN;
+    var b2 = BILLOW_MEAN;
     if (w1 > 0.01) {
         let p1 = ROT_OCTAVE * (p * 0.162) + vec3<f32>(1.73, 4.29, 8.11);
-        b1 = mix(0.42, billow_cubic(p1), w1);
+        b1 = mix(BILLOW_MEAN, billow_cubic(p1), w1);
         let w2 = smoothstep(1.8, 0.4, step_km);
         if (w2 > 0.01) {
             let p2 = ROT_OCTAVE_2 * (p1 * 2.21) + vec3<f32>(5.19, 1.87, 3.63);
-            b2 = mix(0.42, billow_cubic(p2), w2);
+            b2 = mix(BILLOW_MEAN, billow_cubic(p2), w2);
         }
     }
     // Energy conservation: weights sum to 1.0 (0.40 + 0.38 + 0.22 = 1.00), and unresolvable octaves
-    // fade towards their statistical expectation (0.42), maintaining constant expected energy across LODs:
+    // fade towards their statistical expectation (0.933), maintaining constant expected energy across LODs:
     return b0 * 0.40 + b1 * 0.38 + b2 * 0.22;
 }
 
@@ -300,19 +326,8 @@ fn slab_density(
         return 0.0;
     }
 
-    // Height gradient shapes convective cumulus profile (Schneider / LCL physics):
-    // - Sharp lifting condensation base (flat, razor-crisp cumulus bottoms across the horizon)
-    // - Pronounced convective updraft chimney through troposphere
-    // - Rounded cauliflower dome tops
-    // Height gradient shapes convective cumulus profile (Schneider / LCL physics):
-    // - Sharp lifting condensation base (flat, razor-crisp cumulus bottoms across the horizon)
-    // - Pronounced convective updraft chimney through troposphere
-    // - Rounded cauliflower dome tops
-    let base_lcl = smoothstep(0.065, 0.082, h01);
-    let dome_top = 1.0 - smoothstep(0.72, 0.98, h01);
-    let updraft = 1.0 + 0.40 * sin(clamp((h01 - 0.065) / 0.915, 0.0, 1.0) * 3.14159265);
-    let hgrad = base_lcl * dome_top * updraft;
-    if (hgrad <= 0.001) {
+    let hgrad = convective_cumulus_gradient(h01);
+    if (hgrad <= 0.0) {
         return 0.0;
     }
 
@@ -358,8 +373,12 @@ fn slab_density(
     // Multi-scale convective fluid domain warp (curl-advected streamlines):
     // Bandlimit small vortex turbulence when step_km cannot resolve the sub-5km scale:
     let w_curl = smoothstep(5.0, 1.5, step_km);
-    let warp_large = curl_warp3d(p_drift * 0.022) * 4.2;
-    let warp_turb = curl_warp3d(p_drift * 0.085 + warp_large * 0.3) * (1.6 * w_curl);
+    var warp_large = vec3<f32>(0.0);
+    var warp_turb = vec3<f32>(0.0);
+    if (w_curl > 0.01) {
+        warp_large = curl_warp3d(p_drift * 0.022) * 4.2;
+        warp_turb = curl_warp3d(p_drift * 0.085 + warp_large * 0.3) * (1.6 * w_curl);
+    }
     let p_w = p_drift + warp_large + warp_turb;
 
     // 1. Continuous continental cloud mass (Perlin macro connectivity, periods ~60 km and ~26 km):
@@ -439,7 +458,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let bot = cloud.slab.x;
     let top = cloud.slab.y;
-    let march_top = top;
+    let march_top = cloud.shape.z;
     let ext = max(cloud.slab.z, 0.0);
     let steps = max(i32(cloud.slab.w + 0.5), 1);
     let drift = vec2<f32>(cloud.params.y, cloud.params.y * 0.32);
@@ -543,16 +562,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             }
 
             let p_sample = ro + rd * t_sample;
-            let uv_peek = deck_uv(p_sample);
-            // Discrete weather-bake skip: skips 3D procedural noise when the weather bake
-            // at this sample point has low coverage (< 0.02).
-            // Note: removed non-conservative whole-ray rejection; remaining integration
-            // is discrete point sampling and can miss sub-step features. textureSampleLevel
-            // incurs a non-zero texture fetch cost.
-            if (base_at_uv(uv_peek) < 0.02) {
-                continue;
-            }
-
             let f = clamp((t_sample - t0) / chord, 0.0, 1.0);
             let w2 = mix(w_entry, w_exit, f);
             let weather = vec3<f32>(w2.x, 0.0, w2.y);
@@ -580,7 +589,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let day = smoothstep(-0.06, 0.16, elev) * sun_vis;
             let tint = mix(vec3<f32>(1.0, 0.45, 0.18), vec3<f32>(1.0, 0.98, 0.92), smoothstep(-0.02, 0.35, elev));
 
-            let phase_direct = 0.70 * hg_phase(0.76, cos_theta) + 0.30 * hg_phase(-0.30, cos_theta);
+            let phase_direct = dual_lobe_phase(cos_theta);
 
             // 2. Secondary Woodcock Delta Tracking for Higher-Order Participating Medium Scatter:
             // Conservative extinction majorant: max procedural density is 6.2 * params.x,
@@ -632,19 +641,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             }
 
             let p = ro + rd * t_current;
-            let uv_peek = deck_uv(p);
-            let base_peek = base_at_uv(uv_peek);
-
-            // Discrete weather-bake skip: skips 3D procedural noise when the weather bake
-            // at this sample point has low coverage (< 0.02).
-            // Note: removed non-conservative whole-ray rejection; remaining integration
-            // is discrete point sampling and can miss sub-step features. textureSampleLevel
-            // incurs a non-zero texture fetch cost.
-            if (base_peek < 0.02) {
-                prev_density = -1.0;
-                continue;
-            }
-
             let f = clamp((t_current - t0) / chord, 0.0, 1.0);
             let w2 = mix(w_entry, w_exit, f);
             let weather = vec3<f32>(w2.x, 0.0, w2.y);
@@ -683,7 +679,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let day = smoothstep(-0.06, 0.16, elev) * sun_vis;
             let tint = mix(vec3<f32>(1.0, 0.45, 0.18), vec3<f32>(1.0, 0.98, 0.92), smoothstep(-0.02, 0.35, elev));
 
-            let phase_direct = 0.70 * hg_phase(0.76, cos_theta) + 0.30 * hg_phase(-0.30, cos_theta);
+            let phase_direct = dual_lobe_phase(cos_theta);
             let phase_bounce = 0.50 * hg_phase(0.35, cos_theta) + 0.50 * 0.079577;
 
             let sun_scatter = direct_attenuation * (0.85 + 4.2 * phase_direct) + ms1 * (0.50 + 1.6 * phase_bounce) + ms2 * 0.22;
@@ -696,7 +692,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let amb_occ = (0.20 + 0.80 * height_occ) * (0.12 + 0.88 * core_occ);
             let ambient_radiance = mix(ground_amb, sky_amb, h01 * 0.75 + 0.25) * amb_occ * 0.45;
 
-            let step_ext = integ_density * ext * dt * 0.95;
+            let step_ext = integ_density * ext * dt;
             let step_trans = exp(-step_ext);
             let point_light = sun_radiance + ambient_radiance;
             scat += transmittance * point_light * (1.0 - step_trans);

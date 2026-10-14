@@ -894,8 +894,8 @@ fn setup_beauty(
         }
     }
 
-    // Volume decks: only spawned when clouds are enabled.
-    if r.clouds_enabled {
+    // Volume decks: only spawned when volumetric clouds are enabled.
+    if r.clouds_enabled && r.clouds_volumetric {
         let volume_mesh = meshes.add(Sphere::new(1.0).mesh().uv(96, 48));
         for (body, deck, _, spin) in CLOUD_DECKS.iter().copied().filter(|(_, deck, _, _)| *deck == 0) {
             let tex = cloud_low.clone();
@@ -1209,33 +1209,25 @@ pub(crate) fn resolve_effective_cloud_backend(
     integrator: thessa_graphics::CloudIntegratorRequest,
     env_override: Option<&str>,
 ) -> EffectiveCloudBackend {
-    if let Some(val) = env_override {
-        if val.eq_ignore_ascii_case("pt")
-            || val == "1"
-            || val.eq_ignore_ascii_case("pathtrace")
-            || val.eq_ignore_ascii_case("stochastic")
-        {
-            return EffectiveCloudBackend::Stochastic;
-        } else if val.eq_ignore_ascii_case("march")
-            || val == "0"
-            || val.eq_ignore_ascii_case("raymarch")
-        {
-            return EffectiveCloudBackend::March;
+    let r = ResolvedGraphicsSettings {
+        clouds_enabled: true,
+        clouds_volumetric: true,
+        cloud_integrator: integrator,
+        ..Default::default()
+    };
+    match r.active_cloud_representation_with_override(env_override) {
+        thessa_graphics::ActiveCloudRepresentation::VolumeStochastic => {
+            EffectiveCloudBackend::Stochastic
         }
-    }
-    match integrator {
-        thessa_graphics::CloudIntegratorRequest::Stochastic => EffectiveCloudBackend::Stochastic,
-        thessa_graphics::CloudIntegratorRequest::March => EffectiveCloudBackend::March,
+        _ => EffectiveCloudBackend::March,
     }
 }
 
-/// Cloud backend selection encoded in `shape.w`:
-/// 0.0 = Real-time stratified ray marching (Backend A)
-/// 1.0 = Stochastic scattering approximation (Backend B)
 pub(crate) fn effective_cloud_backend(r: &ResolvedGraphicsSettings) -> EffectiveCloudBackend {
-    static BACKEND_OVERRIDE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    let override_val = BACKEND_OVERRIDE.get_or_init(|| std::env::var("THESSA_CLOUD_BACKEND").ok());
-    resolve_effective_cloud_backend(r.cloud_integrator, override_val.as_deref())
+    resolve_effective_cloud_backend(
+        r.cloud_integrator,
+        std::env::var("THESSA_CLOUD_BACKEND").ok().as_deref(),
+    )
 }
 
 pub(crate) fn cloud_backend_mode(r: &ResolvedGraphicsSettings) -> f32 {

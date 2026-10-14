@@ -275,7 +275,7 @@ pub fn describe() -> Vec<SettingMeta> {
             step: "-",
             unit: "-",
             advanced: false,
-            restart_required: false,
+            restart_required: true,
             description: "Enable the separate cloud subsystem when implemented for the active world.",
         },
         SettingMeta {
@@ -297,7 +297,7 @@ pub fn describe() -> Vec<SettingMeta> {
             step: "-",
             unit: "-",
             advanced: true,
-            restart_required: false,
+            restart_required: true,
             description: "March view rays through the low-deck slab (Beer-Lambert over the deck bake plus shader detail) instead of alpha-blending shell impostors. Low quality falls back to shells; cirrus stays a shell in both paths.",
         },
         SettingMeta {
@@ -385,7 +385,7 @@ pub fn describe() -> Vec<SettingMeta> {
             step: "-",
             unit: "-",
             advanced: true,
-            restart_required: false,
+            restart_required: true,
             description: "Auroral emission shell, independent of scattering.",
         },
         SettingMeta {
@@ -440,7 +440,7 @@ pub fn describe() -> Vec<SettingMeta> {
             step: "-",
             unit: "-",
             advanced: false,
-            restart_required: false,
+            restart_required: true,
             description: "Procedural band textures for Nereid/Vesper baked once on CPU.",
         },
         SettingMeta {
@@ -676,6 +676,23 @@ mod tests {
             .find(|m| m.path == "renderer.ray_tracing")
             .unwrap();
         assert!(rt.restart_required);
+        let cloud_en = metas.iter().find(|m| m.path == "clouds.enabled").unwrap();
+        assert!(cloud_en.restart_required);
+        let cloud_vol = metas
+            .iter()
+            .find(|m| m.path == "clouds.volumetric")
+            .unwrap();
+        assert!(cloud_vol.restart_required);
+        let aurora = metas
+            .iter()
+            .find(|m| m.path == "upper_atmosphere.aurora")
+            .unwrap();
+        assert!(aurora.restart_required);
+        let gas_giant = metas
+            .iter()
+            .find(|m| m.path == "gas_giant.enabled")
+            .unwrap();
+        assert!(gas_giant.restart_required);
         let steps = metas
             .iter()
             .find(|m| m.path == "atmosphere.ray_steps")

@@ -418,12 +418,40 @@ impl ResolvedGraphicsSettings {
     /// Evaluates the true runtime representation selected for clouds:
     /// Disabled when clouds are off, Shell when volumetric is off,
     /// and VolumeMarch / VolumeStochastic when volume marching.
+    ///
+    /// Respects the `THESSA_CLOUD_BACKEND` environment variable override if set
+    /// ("stochastic" / "pt" / "1" -> VolumeStochastic, "march" / "0" -> VolumeMarch).
     pub fn active_cloud_representation(&self) -> ActiveCloudRepresentation {
+        self.active_cloud_representation_with_override(
+            std::env::var("THESSA_CLOUD_BACKEND").ok().as_deref(),
+        )
+    }
+
+    /// Evaluates the runtime representation with an optional explicit environment override string.
+    pub fn active_cloud_representation_with_override(
+        &self,
+        override_env: Option<&str>,
+    ) -> ActiveCloudRepresentation {
         if !self.clouds_enabled {
             ActiveCloudRepresentation::Disabled
         } else if !self.clouds_volumetric {
             ActiveCloudRepresentation::Shell
         } else {
+            if let Some(val) = override_env {
+                if val.eq_ignore_ascii_case("pt")
+                    || val.eq_ignore_ascii_case("stochastic")
+                    || val == "1"
+                    || val.eq_ignore_ascii_case("pathtrace")
+                {
+                    return ActiveCloudRepresentation::VolumeStochastic;
+                }
+                if val.eq_ignore_ascii_case("march")
+                    || val == "0"
+                    || val.eq_ignore_ascii_case("raymarch")
+                {
+                    return ActiveCloudRepresentation::VolumeMarch;
+                }
+            }
             match self.cloud_integrator {
                 crate::settings::CloudIntegratorRequest::March => {
                     ActiveCloudRepresentation::VolumeMarch
@@ -774,12 +802,26 @@ mod storage_tests {
         // 4. Clouds enabled, volumetric true, Stochastic -> VolumeStochastic:
         r.cloud_integrator = crate::settings::CloudIntegratorRequest::Stochastic;
         assert_eq!(
-            r.active_cloud_representation(),
+            r.active_cloud_representation_with_override(None),
             ActiveCloudRepresentation::VolumeStochastic
         );
         assert_eq!(
-            r.active_cloud_representation().as_str(),
+            r.active_cloud_representation_with_override(None).as_str(),
             "volume_stochastic"
+        );
+
+        // 5. Explicit overrides via THESSA_CLOUD_BACKEND env values:
+        // "pt" forces VolumeStochastic even when settings specify March:
+        r.cloud_integrator = crate::settings::CloudIntegratorRequest::March;
+        assert_eq!(
+            r.active_cloud_representation_with_override(Some("pt")),
+            ActiveCloudRepresentation::VolumeStochastic
+        );
+        // "march" forces VolumeMarch even when settings specify Stochastic:
+        r.cloud_integrator = crate::settings::CloudIntegratorRequest::Stochastic;
+        assert_eq!(
+            r.active_cloud_representation_with_override(Some("march")),
+            ActiveCloudRepresentation::VolumeMarch
         );
     }
 }

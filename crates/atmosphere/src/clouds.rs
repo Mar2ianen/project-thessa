@@ -286,7 +286,7 @@ pub fn integrate_slab_unclamped_simpson(
 /// Exact numerical mirror of the GPU numerical quadrature scheme in WGSL Backend A:
 /// - Sample position at step midpoint: `t = t0 + (i + 0.5) * dt`
 /// - Boundary-reset trapezoidal weighting: `select((d + prev) * 0.5, d, prev < 0)`
-/// - Clamps transmittance to 0.0 when below 1e-4 threshold
+/// - Clamps transmittance to 0.0 when below 0.01 (1%) threshold matching WGSL early exit
 pub fn integrate_slab_gpu_trapezoidal_model(
     density_at: impl Fn(f64) -> f64,
     t0: f64,
@@ -322,7 +322,7 @@ pub fn integrate_slab_gpu_trapezoidal_model(
         let step_tau = integ_density * k * dt;
         transmittance *= (-step_tau).exp();
         optical_depth += step_tau;
-        if transmittance < 1e-4 {
+        if transmittance < 0.01 {
             transmittance = 0.0;
             break;
         }
@@ -952,5 +952,84 @@ mod tests {
         let (_, final_depth) = integrate_slab_gpu_trapezoidal_model(profile, 0.0, 1.0, 256, k);
         let diff = (final_depth - ref_depth).abs();
         assert!(diff < 3e-4, "diff={diff}");
+    }
+
+    #[test]
+    fn billow_noise_empirical_mean_matches_shader_lod_constant() {
+        // Verification of WGSL billow_cubic noise expectation used in cauliflower_fbm LOD:
+        // Replicates the exact WGSL hash33, hash_grad, and quintic Perlin noise equations.
+        fn hash33(p: glam::Vec3) -> glam::Vec3 {
+            let mut q = (p * glam::Vec3::new(0.1031, 0.1030, 0.0973)).fract();
+            let dot_val = q.dot(glam::Vec3::new(q.y, q.z, q.x) + glam::Vec3::splat(33.33));
+            q += glam::Vec3::splat(dot_val);
+            let val = (glam::Vec3::new(
+                (q.x + q.y) * q.z,
+                (q.x + q.z) * q.y,
+                (q.y + q.z) * q.x,
+            ))
+            .fract();
+            val * 2.0 - glam::Vec3::ONE
+        }
+
+        fn hash_grad(p: glam::Vec3) -> glam::Vec3 {
+            let h = hash33(p);
+            (h + glam::Vec3::splat(1e-5)).normalize()
+        }
+
+        fn perlin3d(p: glam::Vec3) -> f32 {
+            let i = p.floor();
+            let f = p.fract();
+            let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+
+            let g000 = hash_grad(i + glam::Vec3::new(0.0, 0.0, 0.0));
+            let g100 = hash_grad(i + glam::Vec3::new(1.0, 0.0, 0.0));
+            let g010 = hash_grad(i + glam::Vec3::new(0.0, 1.0, 0.0));
+            let g110 = hash_grad(i + glam::Vec3::new(1.0, 1.0, 0.0));
+            let g001 = hash_grad(i + glam::Vec3::new(0.0, 0.0, 1.0));
+            let g101 = hash_grad(i + glam::Vec3::new(1.0, 0.0, 1.0));
+            let g011 = hash_grad(i + glam::Vec3::new(0.0, 1.0, 1.0));
+            let g111 = hash_grad(i + glam::Vec3::new(1.0, 1.0, 1.0));
+
+            let v000 = g000.dot(f - glam::Vec3::new(0.0, 0.0, 0.0));
+            let v100 = g100.dot(f - glam::Vec3::new(1.0, 0.0, 0.0));
+            let v010 = g010.dot(f - glam::Vec3::new(0.0, 1.0, 0.0));
+            let v110 = g110.dot(f - glam::Vec3::new(1.0, 1.0, 0.0));
+            let v001 = g001.dot(f - glam::Vec3::new(0.0, 0.0, 1.0));
+            let v101 = g101.dot(f - glam::Vec3::new(1.0, 0.0, 1.0));
+            let v011 = g011.dot(f - glam::Vec3::new(0.0, 1.0, 1.0));
+            let v111 = g111.dot(f - glam::Vec3::new(1.0, 1.0, 1.0));
+
+            let vx00 = v000 + u.x * (v100 - v000);
+            let vx10 = v010 + u.x * (v110 - v010);
+            let vx01 = v001 + u.x * (v101 - v001);
+            let vx11 = v011 + u.x * (v111 - v011);
+            let vxy0 = vx00 + u.y * (vx10 - vx00);
+            let vxy1 = vx01 + u.y * (vx11 - vx01);
+            vxy0 + u.z * (vxy1 - vxy0)
+        }
+
+        fn billow_cubic(p: glam::Vec3) -> f32 {
+            let n = perlin3d(p);
+            (1.0 - 1.85 * n * n).clamp(0.0, 1.0)
+        }
+
+        let n_samples = 50_000;
+        let mut sum = 0.0f64;
+        for i in 0..n_samples {
+            let x = ((i * 1973 % 100_000) as f32) * 0.01;
+            let y = ((i * 9277 % 100_000) as f32) * 0.01;
+            let z = ((i * 2699 % 100_000) as f32) * 0.01;
+            let p = glam::Vec3::new(x, y, z) * 0.072;
+            let val = billow_cubic(p);
+            sum += val as f64;
+        }
+        let mean = sum / (n_samples as f64);
+        // The empirical mean of billow_cubic is ~0.933 (analytically 1.0 - 1.85 * Var(n) ≈ 0.9328),
+        // confirming that substituting 0.42 was an error (> 50% deviation) and that 0.933 strictly
+        // conserves expected energy across raymarch step footprints:
+        assert!(
+            (mean - 0.933).abs() < 0.005,
+            "mean {mean} deviates from BILLOW_MEAN 0.933"
+        );
     }
 }

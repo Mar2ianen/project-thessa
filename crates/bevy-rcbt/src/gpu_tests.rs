@@ -2264,6 +2264,18 @@ fn test_slab_density(@builtin(global_invocation_id) gid: vec3<u32>) {{
 }}
 
 @compute @workgroup_size(64)
+fn test_cloud_dither(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let idx = gid.x;
+    if (idx >= arrayLength(&in_samples)) {{
+        return;
+    }}
+    let pos = in_samples[idx].xy;
+    let val_dither = dither2d(pos);
+    let val_ign = ign(pos);
+    out_results[idx] = vec4<f32>(val_dither, val_ign, 0.0, 0.0);
+}}
+
+@compute @workgroup_size(64)
 fn test_raymarch(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let idx = gid.x;
     let total_rays = arrayLength(&in_samples) / 2u;
@@ -4641,4 +4653,141 @@ fn cloud_raymarch_dispatch_hardware_benchmark() {
         "p95 GPU duration must be within sane bounds: got {p95:.3} ms"
     );
     eprintln!("[BENCHMARKED] cloud_raymarch_dispatch_hardware_benchmark: PASSED\n");
+}
+
+#[test]
+#[ignore = "requires a wgpu adapter; run with --ignored --nocapture"]
+#[allow(clippy::needless_range_loop)]
+fn cloud_dither2d_dispersion_and_isotropy_on_hardware() {
+    let gpu = Gpu::new();
+    let (tex_size, tex_bytes) = make_synthetic_island_tex();
+    let (_tex, view, sampler) = create_gpu_coverage_texture(&gpu, tex_size, tex_size, &tex_bytes);
+
+    let uniform_words = pack_cloud_uniform_words(
+        3_200_000.0,
+        1.008,
+        1.014,
+        1000.0,
+        24.0,
+        glam::Vec3::new(0.0, 1.0, 0.5).normalize(),
+        1.0,
+        1.0,
+        0.0,
+        0.8,
+        1.6,
+        1.0171,
+        false,
+    );
+    let uniform_buf = gpu.buffer(&uniform_words, true);
+
+    let width = 64usize;
+    let height = 64usize;
+    let num_samples = width * height;
+
+    let mut samples: Vec<[f32; 4]> = Vec::with_capacity(num_samples);
+    for y in 0..height {
+        for x in 0..width {
+            samples.push([x as f32, y as f32, 0.0, 0.0]);
+        }
+    }
+
+    let in_words: Vec<u32> = samples
+        .iter()
+        .flat_map(|s| {
+            [
+                s[0].to_bits(),
+                s[1].to_bits(),
+                s[2].to_bits(),
+                s[3].to_bits(),
+            ]
+        })
+        .collect();
+    let out_words = vec![0u32; num_samples * 4];
+
+    let in_buf = gpu.buffer(&in_words, false);
+    let out_buf = gpu.buffer(&out_words, false);
+
+    let shader = build_cloud_test_wgsl();
+    let workgroups = (num_samples as u32).div_ceil(64);
+    execute_cloud_compute(
+        &gpu,
+        &shader,
+        "test_cloud_dither",
+        &uniform_buf,
+        &view,
+        &sampler,
+        &in_buf,
+        &out_buf,
+        workgroups,
+    );
+
+    let readback_words = gpu.read(&out_buf);
+    let readback_floats: Vec<f32> = readback_words.iter().map(|&w| f32::from_bits(w)).collect();
+
+    let mut dither_grid = vec![vec![0.0f32; width]; height];
+    let mut sum = 0.0f64;
+    let mut sum_sq = 0.0f64;
+
+    for y in 0..height {
+        for x in 0..width {
+            let idx = y * width + x;
+            let val = readback_floats[idx * 4];
+            assert!(
+                val.is_finite() && (0.0..1.0).contains(&val),
+                "dither value must be strictly in [0, 1): got {val}"
+            );
+            dither_grid[y][x] = val;
+            sum += val as f64;
+            sum_sq += (val as f64) * (val as f64);
+        }
+    }
+
+    let n = num_samples as f64;
+    let mean = sum / n;
+    let variance = (sum_sq / n) - (mean * mean);
+    let std_dev = variance.sqrt();
+
+    eprintln!("\n=== [GPU TEST] Cloud 2D Isotropic Dither Characterization ===");
+    eprintln!("Hardware: AMD Radeon 880M Graphics (RADV STRIX1, Vulkan 1.3)");
+    eprintln!("Grid: {width}x{height} pixels ({num_samples} samples)");
+    eprintln!("Mean: {mean:.5} (target ~0.500)");
+    eprintln!("StdDev: {std_dev:.5} (target ~0.28867)");
+
+    assert!(
+        (mean - 0.50).abs() < 0.03,
+        "dither mean must be balanced near 0.50: got {mean}"
+    );
+    assert!(
+        (std_dev - 0.28867).abs() < 0.03,
+        "dither standard deviation must match uniform distribution: got {std_dev}"
+    );
+
+    let offsets = [(1isize, 0isize), (0, 1), (1, 1), (-1, 11), (1, 11)];
+    for &(dx, dy) in &offsets {
+        let mut cov_sum = 0.0f64;
+        let mut count = 0usize;
+        for y in 0..height {
+            let ny = y as isize + dy;
+            if ny < 0 || ny >= height as isize {
+                continue;
+            }
+            for x in 0..width {
+                let nx = x as isize + dx;
+                if nx < 0 || nx >= width as isize {
+                    continue;
+                }
+                let v0 = dither_grid[y][x] as f64 - mean;
+                let v1 = dither_grid[ny as usize][nx as usize] as f64 - mean;
+                cov_sum += v0 * v1;
+                count += 1;
+            }
+        }
+        let autocorr = (cov_sum / count as f64) / variance;
+        eprintln!("Autocorrelation at offset ({dx:+2}, {dy:+2}): {autocorr:+.5}");
+        assert!(
+            autocorr < 0.20,
+            "Positive autocorrelation at offset ({dx}, {dy}) must be < 0.20 to prevent diagonal banding: got {autocorr}"
+        );
+    }
+    eprintln!("[PASSED] cloud_dither2d_dispersion_and_isotropy_on_hardware\n");
 }

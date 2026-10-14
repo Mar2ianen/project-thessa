@@ -590,6 +590,30 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(vec3<f32>(base), 1.0);
     }
 
+    // Diagnostic Mode 7: Production-LOD Ray-Chord Midpoint Density Slice (evaluated at actual march step_km)
+    if (cloud.shape.w >= 6.5 && cloud.shape.w < 7.5) {
+        let t_mid = (t0 + t1) * 0.5;
+        let p_mid = ro + rd * t_mid;
+        let w_mid = mix(w_entry, w_exit, 0.5);
+        let weather_mid = vec3<f32>(w_mid.x, 0.0, w_mid.y);
+        let dt = chord / f32(steps);
+        let step_km = dt * radius_km;
+        let d_raw = slab_density(p_mid, drift, weather_mid, step_km, true);
+        let d_norm = clamp(d_raw / max(6.2 * cloud.params.x, 1e-3), 0.0, 1.0);
+        return vec4<f32>(vec3<f32>(d_norm), 1.0);
+    }
+
+    // Diagnostic Mode 8: High-Detail (1.0 km) Ray-Chord Midpoint Density Slice
+    if (cloud.shape.w >= 7.5) {
+        let t_mid = (t0 + t1) * 0.5;
+        let p_mid = ro + rd * t_mid;
+        let w_mid = mix(w_entry, w_exit, 0.5);
+        let weather_mid = vec3<f32>(w_mid.x, 0.0, w_mid.y);
+        let d_raw = slab_density(p_mid, drift, weather_mid, 1.0, true);
+        let d_norm = clamp(d_raw / max(6.2 * cloud.params.x, 1e-3), 0.0, 1.0);
+        return vec4<f32>(vec3<f32>(d_norm), 1.0);
+    }
+
     let use_pathtrace = (cloud.shape.w >= 0.5 && cloud.shape.w < 1.5);
 
     if (use_pathtrace) {
@@ -778,17 +802,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if (cloud.shape.w >= 5.5 && cloud.shape.w < 6.5) {
         let step_ratio = clamp(steps_taken / f32(steps), 0.0, 1.0);
         return vec4<f32>(vec3<f32>(step_ratio), 1.0);
-    }
-
-    // Diagnostic Mode 7: Mid-Slab Raw 3D Density Cross-Section
-    if (cloud.shape.w >= 6.5) {
-        let t_mid = (t0 + t1) * 0.5;
-        let p_mid = ro + rd * t_mid;
-        let w_mid = mix(w_entry, w_exit, 0.5);
-        let weather_mid = vec3<f32>(w_mid.x, 0.0, w_mid.y);
-        let d_raw = slab_density(p_mid, drift, weather_mid, 1.0, true);
-        let d_norm = clamp(d_raw / max(6.2 * cloud.params.x, 1e-3), 0.0, 1.0);
-        return vec4<f32>(vec3<f32>(d_norm), 1.0);
     }
 
     if (alpha < 0.001) {

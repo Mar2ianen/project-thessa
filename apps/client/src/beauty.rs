@@ -1174,7 +1174,8 @@ pub(crate) fn cloud_debug_mode_env() -> Option<f32> {
         Ok("lighting") | Ok("shading") | Ok("4") => Some(4.0),
         Ok("mask") | Ok("5") => Some(5.0),
         Ok("steps") | Ok("early_out") | Ok("step_count") | Ok("6") => Some(6.0),
-        Ok("slice") | Ok("raw_density") | Ok("7") => Some(7.0),
+        Ok("slice") | Ok("slice_prod") | Ok("raw_density") | Ok("7") => Some(7.0),
+        Ok("slice_detail") | Ok("raw_detail") | Ok("8") => Some(8.0),
         _ => None,
     })
 }
